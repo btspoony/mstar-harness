@@ -225,6 +225,51 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
     });
   });
 
+  test("incomplete-and-misordered fence (PM repro): appends missing entries AND relocates .mstar/** before every re-include", () => {
+    withRoot((root) => {
+      // PM-verified repro: the fence is missing !.mstar/knowledge/ and
+      // !.mstar/specs/ (directory re-includes) AND the broad rule sits after
+      // !.mstar/knowledge/** — gitignore last-match-wins would shadow
+      // .mstar/knowledge/<file>. The append branch must ALSO repair order.
+      const reproLines = [
+        "!.mstar/knowledge/**",
+        ".mstar/**",
+        "!.mstar/AGENTS.md",
+        "!.mstar/specs/**",
+        ".mstarc",
+      ];
+      writeFileSync(join(root, ".gitignore"), `${reproLines.join("\n")}\n`, "utf8");
+
+      const first = runScaffold([root]);
+      expect(first.exitCode).toBe(0);
+      expect(first.stdout).toContain("created: .gitignore (canonical harness snippet)");
+      expect(first.stdout).toContain("created: .gitignore (canonical harness snippet reordered)");
+
+      const gitignore = readFileSync(join(root, ".gitignore"), "utf8");
+      const lines = gitignore.split(/\r?\n/);
+      const broadIndex = lines.findIndex((line) => line.trim() === ".mstar/**");
+      const negationIndexes = lines
+        .map((line, index) => (line.trim().startsWith("!.mstar/") ? index : -1))
+        .filter((index) => index !== -1);
+      expect(broadIndex).toBeGreaterThan(-1);
+      // Broad rule precedes EVERY re-include.
+      for (const negationIndex of negationIndexes) expect(broadIndex).toBeLessThan(negationIndex);
+      // Exactly one broad rule; all canonical entries present.
+      expect(gitignore.split(".mstar/**").length - 1).toBe(1);
+      for (const entry of MSTAR_FENCE_ENTRIES) expect(gitignore).toContain(entry);
+      // Unrelated pre-existing lines preserved byte-for-byte, in order.
+      for (const line of reproLines) expect(gitignore).toContain(line);
+      expect(gitignore.indexOf("!.mstar/AGENTS.md")).toBeGreaterThan(gitignore.indexOf(".mstar/**"));
+      expect(gitignore.indexOf(".mstarc")).toBeGreaterThan(gitignore.indexOf(".mstar/**"));
+
+      // Idempotent: second run changes nothing.
+      const second = runScaffold([root]);
+      expect(second.exitCode).toBe(0);
+      expect(second.stdout).toContain("skipped: .gitignore (canonical harness snippet already present)");
+      expect(readFileSync(join(root, ".gitignore"), "utf8")).toBe(gitignore);
+    });
+  });
+
   test(".mstarc harness_dir=.custom: files land in .custom/, .gitignore untouched", () => {
     withRoot((root) => {
       writeFileSync(join(root, ".mstarc"), "[config]\nharness_dir=.custom\n", "utf8");

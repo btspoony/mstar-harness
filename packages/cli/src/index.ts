@@ -304,10 +304,11 @@ const HARNESS_AGENTS_TEMPLATE = `# AGENTS.md \u2014 .mstar/ (harness layer)
  * own ignore rules), and a minimal {HARNESS_DIR}/AGENTS.md harness-layer
  * rules template when absent. Prints the resolved harness/project dirs plus
  * a created/skipped summary. Idempotent: re-running on an initialized tree
- * is a no-op except creating missing pieces. A complete-but-misordered fence
- * (`.mstar/**` after `!.mstar/…` re-includes, which gitignore's last-match-
- * wins would shadow) is repaired by relocating the broad rule before the
- * first re-include.
+ * is a no-op except creating missing pieces. Ordering is normalized as the
+ * final step of the gitignore routine: a misplaced `.mstar/**` (after
+ * `!.mstar/…` re-includes, which gitignore's last-match-wins would shadow)
+ * is relocated before the first re-include — whether the fence was complete
+ * or just appended.
  */
 function runScaffold(pathArg: string | undefined) {
   const root = pathArg ? path.resolve(pathArg) : process.cwd();
@@ -357,22 +358,23 @@ function runScaffold(pathArg: string | undefined) {
         fs.appendFileSync(gitignorePath, `${prefix}${[...missingComments, ...missing].join("\n")}\n`, "utf8");
       }
       created.push(".gitignore (canonical harness snippet)");
-    } else {
-      // All canonical entries present — but gitignore is last-match-wins, so
-      // a misplaced `.mstar/**` (appearing after one or more `!.mstar/…`
-      // re-includes) would shadow them. Relocate the broad rule to just
-      // before the first re-include; every other line stays byte-for-byte.
-      const currentLines = current.split(/\r?\n/);
-      const broadIndex = currentLines.findIndex((line) => line.trim() === ".mstar/**");
-      const firstNegationIndex = currentLines.findIndex((line) => line.trim().startsWith("!.mstar/"));
-      if (broadIndex !== -1 && firstNegationIndex !== -1 && broadIndex > firstNegationIndex) {
-        const [broadLine] = currentLines.splice(broadIndex, 1);
-        currentLines.splice(firstNegationIndex, 0, broadLine);
-        fs.writeFileSync(gitignorePath, currentLines.join("\n"), "utf8");
-        created.push(".gitignore (canonical harness snippet reordered)");
-      } else {
-        skipped.push(".gitignore (canonical harness snippet already present)");
-      }
+    }
+
+    // Unconditional final normalization — gitignore is last-match-wins, so a
+    // misplaced `.mstar/**` (appearing after one or more `!.mstar/…`
+    // re-includes, whether pre-existing or just appended) would shadow them.
+    // Relocate the broad rule to just before the first re-include; every
+    // other line stays byte-for-byte. Runs after EVERY branch above.
+    const finalLines = fs.readFileSync(gitignorePath, "utf8").split(/\r?\n/);
+    const broadIndex = finalLines.findIndex((line) => line.trim() === ".mstar/**");
+    const firstNegationIndex = finalLines.findIndex((line) => line.trim().startsWith("!.mstar/"));
+    if (broadIndex !== -1 && firstNegationIndex !== -1 && broadIndex > firstNegationIndex) {
+      const [broadLine] = finalLines.splice(broadIndex, 1);
+      finalLines.splice(firstNegationIndex, 0, broadLine);
+      fs.writeFileSync(gitignorePath, finalLines.join("\n"), "utf8");
+      created.push(".gitignore (canonical harness snippet reordered)");
+    } else if (missing.length === 0) {
+      skipped.push(".gitignore (canonical harness snippet already present)");
     }
   } else {
     skipped.push(".gitignore (canonical harness snippet) — custom harness layout manages its own ignore rules");
