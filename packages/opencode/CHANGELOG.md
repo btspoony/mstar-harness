@@ -6,6 +6,18 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [3.3.0] - 2026-08-25
+
+### Harness
+
+- `mstar-audit` review-process hardening: `pr-review.md` gains **input modes** for uncommitted working-tree and single-commit reviews, **sizing bands** with change-shape **escalation** (schema/API/framework/performance/security surfaces), **originating-spec discovery** (score every acceptance criterion against the diff), a **standards precedence** and twelve-smell **baseline** with binding rules, **presumptive-structural** merge classes, and a matter-of-fact tone contract; `audit-playbook.md` gains **Chesterton's Fence** / over-simplification guards and **dependency add/upgrade discipline**; `codebase-audit.md` requires **behavior-preservation gates** on simplification plans; `finding-format.md` gains **remedy-named** Fix sketches (structural remedies).
+- `mstar-roles` role references are now **identity-first**: mission, scope, and NEVER rules lead each leaf role file; topic `mstar-*` skills moved from top-of-file "Required Skill Dependencies" into a trailing **Skill Preset (PM-Activated)** section. Skills are presets the PM controls via a new canonical Assignment `Skill presets:` field — omitted on an implementation / QC / QA round defaults to the role's `standard` preset; explicit `none` (or a trivial route) runs identity-only without topic skills. QC/QA role-owned procedure files (`references/qc-specialist/*`, `acceptance-gate.md`) are never preset-gated. `project-manager` keeps its required-reading list unchanged as core orchestrator.
+- **dsh plugin**: the fallbacks seed mandatory-load line now matches the preset model — `Load mstar-roles (references/<role-id>.md) first — identity comes before skills; load topic skills only when the Assignment activates them via its Skill presets field.` (mirrored in `tests/fallbacks-seeds.spec.ts` and both READMEs; pairing hashes re-recorded).
+
+- Version alignment with harness **3.3.0** (no OpenCode package API change).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **3.3.0**.
+
 ## [3.2.6] - 2026-08-24
 
 ### Bundled harness skills (`harness-skills/` at publish)
