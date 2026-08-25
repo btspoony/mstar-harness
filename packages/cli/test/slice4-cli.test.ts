@@ -590,6 +590,16 @@ describe("mstar audit scaffold — plan directory from findings JSON", () => {
     });
   });
 
+  test("empty JSON object without findings → usage, exit 2", () => {
+    withTempDir((dir) => {
+      const findingsFile = join(dir, "findings.json");
+      writeFileSync(findingsFile, "{}");
+      const result = runCli(["audit", "scaffold", findingsFile, "--dir", join(dir, "out")]);
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain("must be a JSON array or an object with a findings array");
+    });
+  });
+
   test("object with findings: null → usage, exit 2", () => {
     withTempDir((dir) => {
       const findingsFile = join(dir, "findings.json");
