@@ -19,8 +19,7 @@ Method behind the Security category. Load when the category focus is `security`,
 - **Likelihood is judged from the repo's reality:** an endpoint behind a corporate VPN with no external callers is lower likelihood than the same shape on a public API; the code evidence stays the same, the rating does not.
 - **Impact is judged on the data, not the class:** SQL injection into a read-only lookup table is MEDIUM; the same class on a payment mutation is HIGH. Name what the attacker actually gains.
 - **HIGH vs MEDIUM discriminator:** the flaw defeats an explicit security boundary (authentication, authorization, tenant isolation, sandbox, trust boundary between components) → HIGH. It needs privileged access, a confined blast radius, or uncommon preconditions → MEDIUM.
-- **A defense-in-depth gap where another layer already prevents exploitation is a hardening note in the audit index, not a findings row** — never severity-inflate it.
-- **Effort follows the bar:** HIGH findings get fix sketches with verification gates; MEDIUM findings get scoped plans; hardening notes get one index line and no plan unless the user asks.
+- **A defense-in-depth gap where another layer already prevents exploitation is a Hardening note in the audit index's "Hardening & checked notes" section, not a findings row** — never severity-inflate it. Hardening notes get one index line and no plan unless the user asks.
 - **Confidence is per-claim, not per-category:** a repo with one sloppy auth check is not "insecure" — each row stands on its own evidence.
 - A finding needs both halves: the vulnerable pattern at `file:line` *and* a confirmed attacker-controlled input reaching it (§4). Either half unproven → keep researching (§3) or park it in the audit index's **Needs verification** section (§12).
 
@@ -30,7 +29,7 @@ Method behind the Security category. Load when the category focus is `security`,
 - Check the upstream protections: middleware/decorators, input schemas, config ownership, framework defaults (§5), CSP headers, and callers other than the first entrypoint found.
 - Report only **HIGH-confidence findings** (vulnerable pattern + confirmed attacker-controlled input, both verified at `file:line`). MEDIUM-confidence items go to the audit index's **Needs verification** section (template in `references/codebase-audit.md` § Output format) — not the findings table.
 - A finding with multiple callers or config-dependent behavior requires reading the call graph first; a finding mis-attributed to a file that does not own the flow is a refuted finding.
-- **Negative evidence counts:** a sink you traced and cleared is worth recording in the audit index as a checked-and-clean note — it prevents the next pass from re-flagging the same shape.
+- **Negative evidence counts:** a sink you traced and cleared goes to the audit index's "Hardening & checked notes" section as a Checked-and-clean line — it prevents the next pass from re-flagging the same shape.
 - **Sanitization is a contract, not a fact:** a validator applied at one entry does not protect a second entry; re-verify per entry point even when a shared schema exists.
 
 ## 4. Input-source triage

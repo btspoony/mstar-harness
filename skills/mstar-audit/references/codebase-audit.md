@@ -70,6 +70,13 @@ If an audit directory from a previous run exists, **reconcile, don't duplicate**
 
 - <lead>: what to verify, how (the exact check), evidence so far (`file:line`).
 
+## Hardening & checked notes
+
+[Security-pass leftovers, one line each, no plan unless the user asks. Not findings and not rejected findings — they stay visible so the next run doesn't redo them:]
+
+- Hardening: <gap> — why it is not a finding (another layer already prevents exploitation; dev-only posture).
+- Checked and clean: <sink or shape> traced and cleared because <one line> (`file:line`).
+
 ## Execution order & status
 
 | Plan | Title | Priority | Effort | Depends on | Status |
