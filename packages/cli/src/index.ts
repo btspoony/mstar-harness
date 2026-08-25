@@ -507,6 +507,33 @@ function runScaffold(pathArg: string | undefined) {
           normalized = true;
         }
       }
+      // Ownership invariant, final pass: every canonical negation must
+      // occur at least once AFTER the last `.mstar/**` line. A retained
+      // secondary broad rule sitting between canonical re-inclusions would
+      // otherwise shadow them under last-match-wins even though the fence
+      // was reported as installed. Canonical negation lines are ours to
+      // place; duplicate negation lines are harmless in gitignore, so the
+      // guarantee is satisfied by appending missing occurrences at the end.
+      const broadAfter = finalLines
+        .map((line, index) => (line.trim() === ".mstar/**" ? index : -1))
+        .filter((index) => index !== -1);
+      if (broadAfter.length > 0) {
+        const lastBroadIndex = broadAfter[broadAfter.length - 1];
+        let appended = false;
+        for (const negation of Object.keys(CANONICAL_NEGATIONS)) {
+          const covered = finalLines.some(
+            (line, index) => index > lastBroadIndex && line.trim() === negation,
+          );
+          if (!covered) {
+            finalLines.push(negation);
+            appended = true;
+            normalized = true;
+          }
+        }
+        // Preserve a trailing newline when appends landed after the one the
+        // original file already had.
+        if (appended && finalLines[finalLines.length - 1] !== "") finalLines.push("");
+      }
     }
     if (normalized) {
       fs.writeFileSync(gitignorePath, finalLines.join("\n"), "utf8");
