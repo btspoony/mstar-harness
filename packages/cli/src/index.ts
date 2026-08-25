@@ -295,7 +295,7 @@ const HARNESS_AGENTS_TEMPLATE = `# AGENTS.md \u2014 .mstar/ (harness layer)
 `;
 
 /**
- * Run `mstar scaffold [path]`: one-shot harness bootstrap — engine
+ * Run `mstar harness scaffold [path]`: one-shot harness bootstrap — engine
  * `scaffoldHarness` (dirs + v2 status.json + projects/_default/), the
  * canonical `.gitignore` snippet appended when absent, and a minimal
  * `.mstar/AGENTS.md` harness-layer rules template when absent. Prints a
@@ -375,7 +375,11 @@ program
     await runInit({ ...options, noFallbacks: options.fallbacks === false });
   });
 
-program
+const harnessCommand = program
+  .command("harness")
+  .description("harness bootstrap / dir-resolution helpers (engine-backed)");
+
+harnessCommand
   .command("scaffold")
   .description(
     "One-shot harness bootstrap: create .mstar/ (dirs + v2 status.json + projects/_default/), " +
@@ -427,7 +431,7 @@ pathCommand
       // .plans/|plans/ anywhere up the tree — harness not enabled from here.
       const guidance =
         "no harness dir found \u2014 the bounded probe (.mstar/, .agents/, .plans/, plans/) walked up from " +
-        `${startDir} only within the workspace root (git top-level of the start dir; non-git start probes only itself) \u2014 run \`mstar scaffold\` to bootstrap, or pass a start dir inside a harness-enabled project`;
+        `${startDir} only within the workspace root (git top-level of the start dir; non-git start probes only itself) \u2014 run \`mstar harness scaffold\` to bootstrap, or pass a start dir inside a harness-enabled project`;
       if (options.json) {
         console.log(JSON.stringify({ ok: false, startDir, harnessDir: null, specsDir: null, workflowDir: null, projectDir: null, guidance }));
       } else {

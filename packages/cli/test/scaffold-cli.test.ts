@@ -1,5 +1,5 @@
 /**
- * CLI `mstar scaffold` — one-shot harness bootstrap wrapper.
+ * CLI `mstar harness scaffold` — one-shot harness bootstrap wrapper.
  *
  * Thin wrapper over engine `path.scaffoldHarness` + `path.emitGitignoreSnippet`
  * (plan-conventions § 初始化 Plan 目录 / § Git 跟踪策略; mstar-project-governance
@@ -41,7 +41,7 @@ function cliEnv(): Record<string, string> {
 }
 
 function runScaffold(args: string[]): RunResult {
-  const proc = Bun.spawnSync([process.execPath, "run", "src/index.ts", "scaffold", ...args], {
+  const proc = Bun.spawnSync([process.execPath, "run", "src/index.ts", "harness", "scaffold", ...args], {
     cwd: CLI_ROOT,
     env: cliEnv(),
     stdout: "pipe",
@@ -70,7 +70,7 @@ const MSTAR_FENCE_ENTRIES = [
   "!.mstar/specs/**",
 ];
 
-describe("mstar scaffold — one-shot harness bootstrap", () => {
+describe("mstar harness scaffold — one-shot harness bootstrap", () => {
   test("creates .mstar/ with dirs, v2 status.json, projects/_default/, .gitignore snippet, and .mstar/AGENTS.md", () => {
     withRoot((root) => {
       const result = runScaffold([root]);
@@ -152,7 +152,7 @@ describe("mstar scaffold — one-shot harness bootstrap", () => {
 
   test("defaults to cwd when [path] is omitted", () => {
     withRoot((root) => {
-      const proc = Bun.spawnSync([process.execPath, "run", join(CLI_ROOT, "src/index.ts"), "scaffold"], {
+      const proc = Bun.spawnSync([process.execPath, "run", join(CLI_ROOT, "src/index.ts"), "harness", "scaffold"], {
         cwd: root,
         env: cliEnv(),
         stdout: "pipe",

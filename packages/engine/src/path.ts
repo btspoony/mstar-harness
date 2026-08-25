@@ -306,7 +306,7 @@ function resolveHarnessSubdir(
   const harness = resolveHarnessDir(startDir, opts);
   if (harness === null) {
     throw new Error(
-      `harness dir not found from ${resolve(startDir)} \u2014 cannot resolve the ${fallback} dir (run \`mstar scaffold\`, pass opts.harnessDir, or set MSTAR_HARNESS_DIR)`,
+      `harness dir not found from ${resolve(startDir)} \u2014 cannot resolve the ${fallback} dir (run \`mstar harness scaffold\`, pass opts.harnessDir, or set MSTAR_HARNESS_DIR)`,
     );
   }
   const declared = mstarcDirOverride(harness, key);
