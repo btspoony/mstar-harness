@@ -75,6 +75,8 @@ Deep PR review is a **three-stage pipeline**: collect → domain review → synt
 - Inspect adjacent behavior when risk leaks past the named diff (importers, callers, dependent contracts).
 - When the diff touches tests, read the tests before the implementation — they carry intent.
 - Verification claims in the PR description must be reproducible from the diff/CI; a claim that cannot be checked is an `unverified` lead, not evidence.
+- **Domains** — review is split by domain (**business domain / change surface / tech stack**; § Review pipeline). Each domain seat concludes **only on its own domain**.
+- Cross-domain boundary issues (importers / callers reaching outside the seat's domain) → record to the evidence file `- notes:`; the main agent decides whether an additional cross-domain seat is warranted.
 
 ## Sizing & change shape
 
@@ -133,6 +135,7 @@ Three binding rules: repo-documented standards override the baseline — a stand
 - Mark unverified explicitly — a claim without verification is a lead, not a finding.
 - Mock-heavy tests around risky behavior = a finding (no real-surface proof), not proof of correctness.
 - A "doesn't follow repo conventions / should use an existing abstraction" finding must cite the exemplar the diff should have followed (`file:line`); the simplest acceptable implementation is not a style finding (lint-covered cosmetics are already ignored by the `general` lens).
+- **Scout / collector evidence = leads** — source-seat evidence files and domain-seat observations are **leads, not findings**; only a domain seat (Stage 2) or the main agent (Stage 3) that **re-opened the cited code itself** may upgrade a lead into a formal finding. A finding that cites a collector's relay without its own self-check is disqualified (same discipline as full-audit "excerpts come from your own reads").
 - What disqualifies a finding (no evidence, by-design, secret values, ungrounded suggestions) → **`references/finding-format.md`** § What disqualifies a finding.
 
 ## Attack and vet
@@ -143,7 +146,9 @@ Before writing a finding, run the three-way attack from `mstar-audit`:
 2. **Simpler explanation** — does a simpler explanation cover the same evidence?
 3. **Evidence verifiability** — open the cited lines and check they actually support the claim.
 
-Then open cited code yourself and dispose by-design / mis-attributed / duplicate. Subagents over-report; vet before presenting.
+Each **domain seat** runs the three-way attack on its own findings, opens the cited code itself, and disposes by-design / mis-attributed / duplicate before presenting.
+
+The **main agent** is the final vet layer: at synthesis it dedupes **all** findings across domains (cross-domain duplicates, mis-attribution), applies the same by-design / duplicate disposition with the `cited code yourself` discipline, and records every rejection in the report's **Considered & rejected** section. Subagents over-report; vet before presenting.
 
 ## Verdict synthesis
 
