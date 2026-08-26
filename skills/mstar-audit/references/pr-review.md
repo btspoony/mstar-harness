@@ -266,128 +266,22 @@ Check base-vs-branch before blaming the diff for CI failures. A red build that p
 ## Batch sibling PRs
 
 - **one session = one PR** (HARD): a `pr-deep-review` session deep-reviews exactly **one** PR. When multiple PRs are passed in, only the **first** — the first PR in the caller's argument / mention order, never sorted by PR number or recency — runs the three-stage pipeline (§ Review pipeline); the rest are **not** processed in this session.
-- **Register the rest as audit todos** — before the review starts, register every unprocessed PR in `{PROJECT_DIR}/<project-id>/residuals.json` (project-less reviews use `_default`):
-  - `entries[<plan-id>]` — `<plan-id>` is the batch identifier, `pr-deep-review-<YYYY-MM-DD>` for the first same-day session; a later session on the same calendar date bumps the key (ids included) to `pr-deep-review-<YYYY-MM-DD>-2`, `-3`, … — `validateProjectRegister` has **no duplicate-key detection**, so reusing a key would silently merge rows.
-  - One entry per PR: `id: pr-deep-review-<YYYY-MM-DD>-<n>` (unique within the key), `title: "pr-deep-review <owner>/<repo>#<n>"`, `severity: low`, `source: pr-deep-review batch input`, `scope: "deep review of <owner>/<repo>#<n> in a new pr-deep-review session"`, `decision: defer`, `owner: project-manager`, `target: next session`, `tracking: pr-deep-review backlog`, `source_plan: <entries key>`, `registered_at: <YYYY-MM-DD>`.
-  - **Entry-id uniqueness**: the `id` must be unique within the key — a batch containing same-numbered PRs from different repos would collide on `pr-deep-review-<YYYY-MM-DD>-<n>`; append a per-batch sequence suffix (e.g. `-<owner>-<repo>` or `-2`, `-3`) to keep ids distinct, keeping the recoverable `<owner>/<repo>#<n>` identity in `title`/`scope`.
+- **Register the rest as audit todos** — before the review starts, register every unprocessed PR in `{PROJECT_DIR}/<project-id>/residuals.json` (project-less reviews use `_default`) via the engine-backed CLI, one `--entry` per deferred PR:
+  ```
+  mstar status backlog-register --project <project-id> --key <plan-key> --entry '<entry json>' ...
+  ```
+  - `--project` defaults to `_default`; `--key` is the **base** batch key, `pr-deep-review-<YYYY-MM-DD>` for the first same-day session — the CLI selects the first free same-day key (`pr-deep-review-<YYYY-MM-DD>`, then `-2`, `-3`, …) inside the engine's status write lock and prints the key actually used; never compute the bumped key yourself.
+  - Each `--entry` is a JSON object with the nine residual fields for one deferred PR: `id` (unique within the batch, e.g. `pr-deep-review-<YYYY-MM-DD>-<n>`), `title: "pr-deep-review <owner>/<repo>#<n>"`, `severity: low`, `source: pr-deep-review batch input`, `scope: "deep review of <owner>/<repo>#<n> in a new pr-deep-review session"`, `decision: defer`, `owner: project-manager`, `target: next session`, `tracking: pr-deep-review backlog`. The CLI fills the provenance fields (`source_plan` = the used key, `registered_at` = today).
+  - Entry-id uniqueness is **enforced in code** (B-9 ②): the engine rejects a duplicate `id` within the key — fail-loud, register unchanged — so ids only need to stay distinct within the batch.
   - `<n>` is the GitHub PR number; `title`/`scope` carry the recoverable PR identity (`<owner>/<repo>#<n>` or the PR URL) so a later session can open the exact deferred PR from the register alone.
-  - **Write protocol**: python3 read-modify-write — read the whole file, preserve every other `entries` key, **append** to the day's array, never overwrite; never use `jq`/`jaq` `select` inside `|=` (jaq 2.3.0 deletes non-matching elements on update-with-empty — see `{KNOWLEDGE_DIR}/config-errors/jaq-jq-status-write-pattern.md`).
-  - Registration of deferred PRs MUST run as **one executable python3 sequence** — lock acquisition through release in a single script, so the main agent can copy-run it directly (the engine's `withStatusWriteLock` is an in-process TS callback API; the register mutation is a python3 read-modify-write, so the lock contract is spelled out as runnable python below). The script (a) acquires the lockdir `<register dir>/.status-write.lockdir/` via atomic `os.mkdir` (EEXIST → another writer holds it; bounded wait ~30 s / 10 ms poll, then timeout → rename-based stale reclamation (below)), writing `holder.pid` (its own pid) immediately after acquisition; (b) on timeout applies **rename-based stale reclamation** — only an aged lockdir (mtime > 10 min) is a candidate; a live owner is never touched (never decide by PID liveness alone — pid-file hazard). `os.rename` the lockdir to a `.stale-<ts>` name (atomic takeover — never delete at the live pathname, so the aged owner's eventual release re-stats `(dev, ino)` and can never remove the new owner's lock), re-stat the renamed dir and rename it straight back if it turns out fresh (rename preserves `(dev, ino)`; closes the stat→rename gap), otherwise `shutil.rmtree` it, then retry acquisition once; (c) runs the **read-check-replace-verify** critical section (read the register, pick the next free same-date batch key, append to the day's array preserving every other `entries` key, write **atomically — temp file + `os.replace`, never `open(REG, "w")`**, `validateProjectRegister`); (d) releases **child-first** — remove `holder.pid`, then `rmdir` the lockdir, only when `(dev, ino)` is still the one acquired (never remove another writer's lock). Full protocol → `{KNOWLEDGE_DIR}/architecture-patterns/shared-lifecycle-lockdir-pattern.md`. Concurrent same-date sessions serialize on the lock; never blind-overwrite.
-
-    ```python
-    #!/usr/bin/env python3
-    # Register deferred batch PRs under the same-host exclusive write lock.
-    # Usage (from the harness repo root):
-    #   python3 register-deferred-prs.py <register.json> <base-key> <entry.json>
-    # One critical section: acquire lockdir -> read-check-replace-verify -> release.
-    import json, os, shutil, subprocess, sys, time
-
-    REG, BASE, ENTRY = sys.argv[1], sys.argv[2], json.load(open(sys.argv[3]))
-    LOCK = os.path.join(os.path.dirname(REG), ".status-write.lockdir")
-    DEADLINE, POLL, STALE = 30.0, 0.01, 600.0  # 30s bounded wait / 10ms poll / 10min stale
-
-    def acquire():
-        end = time.monotonic() + DEADLINE
-        while True:
-            try:
-                os.mkdir(LOCK)  # atomic: EEXIST -> another writer holds it
-                st = os.stat(LOCK)
-                open(os.path.join(LOCK, "holder.pid"), "w").write(str(os.getpid()))
-                return (st.st_dev, st.st_ino)
-            except FileExistsError:
-                if time.monotonic() >= end:
-                    return None  # timeout -> rename-based reclamation below
-                time.sleep(POLL)
-
-    def reclaim():
-        # Rename-based reclamation — never delete a lockdir at its live
-        # pathname. Only an AGED lockdir (mtime > 10 min) is a candidate; a
-        # live owner is never touched. rename is atomic: either this session
-        # takes the pathname, or the owner already released (FileNotFoundError
-        # -> plain retry below). The aged owner's later release re-stats
-        # (dev, ino) and can never remove the new owner's lock.
-        for _ in range(3):
-            try:
-                if time.time() - os.stat(LOCK).st_mtime <= STALE:
-                    return  # fresh owner — not ours to reclaim
-            except FileNotFoundError:
-                return  # owner already released
-            stale = LOCK + ".stale-" + str(int(time.time() * 1000))
-            try:
-                os.rename(LOCK, stale)  # atomic takeover of the pathname
-            except FileNotFoundError:
-                return  # owner released in the stat->rename gap
-            except FileExistsError:
-                continue  # leftover stale dir with that name; new suffix
-            # verify what we actually took: a fresh replacement (the aged
-            # owner released + a new owner acquired in the stat->rename gap)
-            # is renamed straight back — rename preserves (dev, ino), so the
-            # owner's release still matches and no live lock is ever stolen.
-            try:
-                fresh = time.time() - os.stat(stale).st_mtime <= STALE
-            except FileNotFoundError:
-                fresh = False
-            if fresh:
-                try:
-                    os.rename(stale, LOCK)  # restore — never steal a live owner
-                except FileExistsError:
-                    shutil.rmtree(stale, ignore_errors=True)  # L re-taken; drop parked dir
-                return
-            shutil.rmtree(stale, ignore_errors=True)  # drop renamed dir + holder.pid
-            return
-
-    def release(ident):
-        try:
-            st = os.stat(LOCK)
-            if (st.st_dev, st.st_ino) == ident:  # never remove another writer's lock
-                os.unlink(os.path.join(LOCK, "holder.pid"))  # child-first
-                os.rmdir(LOCK)
-        except FileNotFoundError:
-            pass
-
-    ident = acquire()
-    if ident is None:  # aged lockdir (mtime > 10 min): rename-based reclamation
-        reclaim()  # atomic takeover; never delete at the live pathname
-        ident = acquire()  # retry acquisition once
-    if ident is None:
-        sys.exit("Blocked: lockdir held by a recent writer (mtime < 10 min); remove only if no writer is alive (holder.pid)")
-    try:
-        doc = json.load(open(REG))  # read
-        key = BASE
-        i = 2
-        while key in doc.setdefault("entries", {}):  # pick next free same-date batch key
-            key = f"{BASE}-{i}"
-            i += 1
-        ENTRY["source_plan"] = key  # provenance must match the entries key
-        doc["entries"][key] = doc["entries"].get(key, []) + [ENTRY]  # append, preserve others
-        tmp = REG + ".tmp"  # atomic replace: the live register survives until rename
-        try:
-            with open(tmp, "w") as f:
-                json.dump(doc, f, indent=2, ensure_ascii=False)
-                f.flush()
-            os.replace(tmp, REG)  # never open the live register with "w"
-        except BaseException:
-            try:
-                os.unlink(tmp)
-            except FileNotFoundError:
-                pass
-            raise
-        r = subprocess.run(  # validateProjectRegister (engine)
-            ["bun", "-e",
-             "import{validateProjectRegister as v}from'./packages/engine/dist/engine.js';"
-             "import{readFileSync as f}from'node:fs';"
-             "const g=v(JSON.parse(f(process.argv[1])));"
-             "console.log(JSON.stringify(g));process.exit(g.ok?0:1)",
-             REG], capture_output=True, text=True)
-        if r.returncode:
-            sys.exit(f"validateProjectRegister failed: {r.stdout}{r.stderr}")
-        print(f"registered {key} -> {REG}; validate ok")
-    finally:
-        release(ident)
-    ```
-  - Validate before writing: `validateResidual` / `validateProjectRegister` must pass (fail-loud — rewrite on violation, never write silently).
-- **Registration failure halts the session**: if validation still fails after retries, stop and report `Blocked` — never start the first-PR review while deferred PRs are unregistered (they would be neither reviewed nor tracked).
-- **Backlog close**: when a session starts deep review of a PR that was previously deferred, it MUST look up the matching register entry (`tracking: pr-deep-review backlog`, identity `<owner>/<repo>#<n>` in `title`/`scope`) and close it **in place** at review completion — `lifecycle: resolved` + `closed_at: <YYYY-MM-DD>` + `closure_note` (no `closed` enum) — per the register lifecycle contract in `mstar-project-governance`; never leave a stale open entry for a reviewed PR.
+  - **Concurrency/crash safety is engine-tested** (`packages/engine/test/backlog-register.test.ts`): registration runs inside `withStatusWriteLock` with atomic temp+rename writes — never hand-edit the register with python/jq.
+  - Lock-semantics delta vs. the old hand-rolled protocol: `withStatusWriteLock` has **no stale-lockdir auto-reclamation** — a crash-leaked lockdir ⇒ 30s timeout ⇒ `Blocked` with the `holder.pid` recovery hint (remove the lockdir only when no writer is alive).
+- **Registration failure halts the session**: if the CLI exits non-zero (fail-loud validation, register unchanged), stop and report `Blocked` — never start the first-PR review while deferred PRs are unregistered (they would be neither reviewed nor tracked).
+- **Backlog close**: when a session starts deep review of a PR that was previously deferred, it MUST look up the matching register entry (`tracking: pr-deep-review backlog`, identity `<owner>/<repo>#<n>` in `title`/`scope`) and close it in place at review completion:
+  ```
+  mstar status backlog-close --project <project-id> --key <used-key> --id <entry-id>
+  ```
+  (`--project` defaults to `_default`; `--key` is the key the entry was registered under — the one `backlog-register` printed; `--id` is the entry id; `--note` is optional, default `"closed by backlog close"`) — sets `lifecycle: resolved` + `closed_at: <YYYY-MM-DD>` + `closure_note` (no `closed` enum), per the register lifecycle contract in `mstar-project-governance`; never leave a stale open entry for a reviewed PR.
 - **Suggest one session per PR**: the report's `- notes:` states that each remaining PR gets its own `pr-deep-review` session and is tracked in the `_default` residuals backlog (`tracking: pr-deep-review backlog`).
 - **Concurrency stays inside the single PR**: for the one PR under review, create the worktree first, then fan out the Stage 1 collect seats in one batch (§ Review pipeline). Deferred PRs get **no** review worktree and **no** review seats — backlog registration only. The old "all worktrees first, all reviewers in one batch" model no longer applies to N PRs.
 - Sibling interactions are **noted, not fixed** — interactions with deferred sibling PRs go to the report's `- notes:`, unless the ticket says so.
