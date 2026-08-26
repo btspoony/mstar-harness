@@ -135,7 +135,7 @@ Three binding rules: repo-documented standards override the baseline — a stand
 - Mark unverified explicitly — a claim without verification is a lead, not a finding.
 - Mock-heavy tests around risky behavior = a finding (no real-surface proof), not proof of correctness.
 - A "doesn't follow repo conventions / should use an existing abstraction" finding must cite the exemplar the diff should have followed (`file:line`); the simplest acceptable implementation is not a style finding (lint-covered cosmetics are already ignored by the `general` lens).
-- **Scout / collector evidence = leads** — source-seat evidence files and domain-seat observations are **leads, not findings**; only a domain seat (Stage 2) or the main agent (Stage 3) that **re-opened the cited code itself** may upgrade a lead into a formal finding. A finding that cites a collector's relay without its own self-check is disqualified (same discipline as full-audit "excerpts come from your own reads").
+- **Scout / collector evidence = leads** — collect-seat evidence files and domain-seat observations are **leads, not findings**; only a domain seat (Stage 2) or the main agent (Stage 3) that **re-opened the cited code itself** may upgrade a lead into a formal finding. A finding that cites a collector's relay without its own self-check is disqualified (same discipline as full-audit "excerpts come from your own reads").
 - What disqualifies a finding (no evidence, by-design, secret values, ungrounded suggestions) → **`references/finding-format.md`** § What disqualifies a finding.
 
 ## Attack and vet
@@ -278,13 +278,15 @@ Review findings that need fixing can become plans for the normal Prepare → Exe
 
 ## Comment posting
 
-Posting the GitHub Review is a **mandatory deliverable** of the `pr` variant — chat-only output is incomplete when a PR exists. The review seat that owns the PR posts it; PM only reports the URL.
+Posting the GitHub Review is a **mandatory deliverable** of the `pr` variant — chat-only output is incomplete when a PR exists. The main agent (the command's orchestrator) posts the review; review seats never post.
 
 - **Before anything else:** synthesize the verdict first, then post **before** worktree cleanup (see § Worktree isolation — cleanup happens after the comment is posted).
 - **No PR number** (bare branch / arbitrary diff): set `comments: n/a-no-pr` and skip the API. Chat output still required; this is not a Blocked review.
 - **Auth / API failure:** deliver the chat verdict anyway; Completion Report status `Partial`/`Blocked` with the `gh` error. Do not claim `Done` — comments are mandatory when a PR exists. **The local report is still saved** (§ Local report archive — posting failure does not skip archival).
 
 ### Procedure
+
+Executed by the main agent at Stage 3 — review seats never run this procedure.
 
 1. Resolve the target — the **base** `owner/repo` (the repository that owns the PR number), PR number, head SHA:
    ```
@@ -303,7 +305,6 @@ Posting the GitHub Review is a **mandatory deliverable** of the `pr` variant —
    (payload on stdin).
 4. **Line fallback:** if GitHub rejects some inline comments (e.g. 422 — line not in the diff), retry the review **without** those entries and fold them into the summary body. Do not loop more than once.
 5. Save the local report (§ Local report archive) — **mandatory in all three branches**: POST succeeded (record `html_url` / review id for `comments:` first), POST failed, or `n/a-no-pr` (archive the chat display content). Only then clean up the worktree; bare branch/diff reviews have no worktree, but the save still happens.
-6. **Batch:** each reviewer posts on **their own PRs** only. No second PM summary comment unless the Assignment says so.
 
 ### Report template (GitHub Review `body`)
 
@@ -384,11 +385,12 @@ Never dump full plan files.
 
 ### Local report archive
 
-The posted PR comment is the deliverable; the local report is the durable reference copy — the PR thread may be buried, locked, or deleted, and bare-branch/diff reviews have no thread at all. The review seat saves **one markdown file per reviewed PR** (or branch/diff) as part of the mandatory deliverable, before worktree cleanup:
+The posted PR comment is the deliverable; the local report is the durable reference copy — the PR thread may be buried, locked, or deleted, and bare-branch/diff reviews have no thread at all. The main agent saves **one markdown file per reviewed PR** (or branch/diff) at Stage 3 — the report it published — as part of the mandatory deliverable, before worktree cleanup:
 
 - **Path**: `{PROJECT_DIR}/<project-id>/reports/pr-review/` — `<project-id>` from the Assignment / project context, `_default` when the review runs outside any project flow (same id convention as `projects/<id>/residuals.json`). Gitignored local SSOT, same posture as residuals; a finding that must survive across clones gets promoted to tracked `{KNOWLEDGE_DIR}` / `{SPECS_DIR}`, not by tracking this directory.
 - **Write via the primary checkout, never the worktree**: harness discovery must not start from the review worktree — its root has no gitignored `.mstar/`, and anything written there is destroyed by `git worktree remove` (§ Worktree isolation). Record the primary repository's absolute path **before** creating the worktree and write the report under it. Never create a `.mstar/` inside the review worktree to "host" the report.
 - **Filename**: `<YYYY-MM-DD>-pr<N>.md`; bare branch → `<YYYY-MM-DD>-<branch-slug>.md`; arbitrary diff → `<YYYY-MM-DD>-diff-<short-head-sha>.md`, or `<YYYY-MM-DD>-diff.md` when no head SHA was provided with the changeset (never invent one). Same target twice in one day → append `-r2`, `-r3`, … (never overwrite a prior report).
+- **Scout evidence files**: each collect seat (Stage 1) and domain seat (Stage 2) writes its own evidence file in the same `reports/pr-review/` directory — `<YYYY-MM-DD>-pr<N>-stage1-<slug>.md` (Stage 1) / `<YYYY-MM-DD>-pr<N>-stage2-<slug>.md` (Stage 2 findings draft), `<slug>` being the seat id. This is the **only write** a read-only seat performs; the main report is written by the main agent, never by a seat. Same gitignored directory and same **write via primary checkout, never the worktree** discipline (an evidence file written in the review worktree is destroyed by `git worktree remove`, § Worktree isolation).
 - **Frontmatter** (machine-readable metadata):
   ```yaml
   ---
@@ -402,6 +404,7 @@ The posted PR comment is the deliverable; the local report is the durable refere
   tally: { must-fix: <n>, should-fix: <n>, nit: <n>, unverified: <n> }
   review_url: <posted review html_url>   # n/a-no-pr when skipped; failed: <gh error summary> when POST failed
   generated_at: <YYYY-MM-DD>
+  pipeline: {stages: 3, seats: [<seat ids>]}   # optional — omit when the review did not run the three-stage pipeline
   ---
   ```
 
