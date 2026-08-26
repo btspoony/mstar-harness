@@ -54,7 +54,7 @@ The ladder reuses the existing ~100 / ~300 / ~1000 sizing bands — no second se
 - **Never cut (any tier)**: the verdict-from-tally formula (one formula, all tiers), merge-class assignment + three-way vet, posting ownership (sole main agent), evidence discipline (`file:line` + self-check), Hard Rules 4/5, seats read-only, worktree isolation, the batch contract (first-only + backlog register), the local report archive contract incl. frontmatter, linked-issue AC counting.
 - **Stage 3 is never skipped in any tier** — `quick` just feeds it the smallest input; one verdict / one Review / main-agent posting is the product contract.
 
-**Report `tier` declaration**: report frontmatter gains an optional `tier: quick | default | deep` (absent = `default` semantics, valid — old reports stay valid). `quick` MUST declare its reduced coverage under `- notes:` (what did not run: independent security seat / Stage 1 wave / domain split); any announced upgrade or downgrade (e.g. PM announces deep-upgrade, or a downgraded cut happens) is declared the same way. Report template structure, tally counts, and the display contract are unchanged; tier never enters the report filename.
+**Report `tier` declaration**: report frontmatter gains an optional `tier: quick | default | deep` (absent = `default` semantics, valid — old reports stay valid). Every reduced tier MUST declare its cut surfaces under `- notes:` (what did not run): `quick` — independent security seat / Stage 1 wave / domain split; `default` — independent cross-domain security seat / Stage 1 as a separate wave / finer domain split. Any announced upgrade or downgrade (e.g. PM announces deep-upgrade, or a downgraded cut happens) is declared the same way. Report template structure, tally counts, and the display contract are unchanged; tier never enters the report filename.
 
 ## Worktree isolation
 
@@ -295,7 +295,7 @@ Check base-vs-branch before blaming the diff for CI failures. A red build that p
 
 ## Batch sibling PRs
 
-- **one session = one PR** (HARD): an `amazing-pr-review` session deep-reviews exactly **one** PR. When multiple PRs are passed in, only the **first** — the first PR in the caller's argument / mention order, never sorted by PR number or recency — runs the three-stage pipeline (§ Review pipeline); the rest are **not** processed in this session.
+- **one session = one PR** (HARD): an `amazing-pr-review` session reviews exactly **one** PR. When multiple PRs are passed in, only the **first** — the first PR in the caller's argument / mention order, never sorted by PR number or recency — runs the review at its resolved tier (§ Review depth; `deep` = the full three-stage pipeline); the rest are **not** processed in this session.
 - **Register the rest as audit todos** — before the review starts, register every unprocessed PR in `{PROJECT_DIR}/<project-id>/residuals.json` (project-less reviews use `_default`) via the engine-backed CLI, one `--entry` per deferred PR:
   ```
   mstar status backlog-register --project <project-id> --key <plan-key> --entry '<entry json>' ...
