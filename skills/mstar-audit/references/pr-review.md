@@ -263,12 +263,14 @@ Check base-vs-branch before blaming the diff for CI failures. A red build that p
 
 ## Batch sibling PRs
 
-- One worktree + one reviewer per PR.
-- All worktrees created **first**; all reviewers dispatched in **one batch**.
-- PM 按 PR 业务信息（业务域 / 变更面 / 技术栈）将 batch **平均**分配到四个席位（`code-reviewer` general、`fullstack-dev`、`fullstack-dev-2`、`frontend-dev`），每席位约 N/4 个 PR —— 摊薄同模型并发，降低 rate-limit。
-- Implementer seats (`fullstack-dev` / `fullstack-dev-2` / `frontend-dev`) run under **Audit Mode** (shared contract → `mstar-roles` `references/_shared/leaf-executor-core.md`) — same read-only contract as `code-reviewer`.
-- Each reviewer owns review + comment for that PR only.
-- Sibling interactions are **noted, not fixed**, unless the ticket says so.
+- **one session = one PR** (HARD): a `pr-deep-review` session deep-reviews exactly **one** PR. When multiple PRs are passed in, only the **first** runs the three-stage pipeline (§ Review pipeline); the rest are **not** processed in this session.
+- **Register the rest as audit todos** — before the review starts, register every unprocessed PR in `{PROJECT_DIR}/_default/residuals.json` (project-less reviews always use `_default`):
+  - `entries[<plan-id>]` — `<plan-id>` is the batch identifier, e.g. `pr-deep-review-<YYYY-MM-DD>`.
+  - One entry per PR: `id: pr-deep-review-<YYYY-MM-DD>-<n>` (unique within the key), `title: "pr-deep-review #<n>"`, `severity: low`, `source: pr-deep-review batch input`, `scope: "deep review of PR <n> in a new pr-deep-review session"`, `decision: defer`, `owner: project-manager`, `target: next session`, `tracking: pr-deep-review backlog`, `source_plan: <entries key>`, `registered_at: <YYYY-MM-DD>`.
+  - Validate before writing: `validateResidual` / `validateProjectRegister` must pass (fail-loud — rewrite on violation, never write silently).
+- **Suggest one session per PR**: the report's `- notes:` states that each remaining PR gets its own `pr-deep-review` session and is tracked in the `_default` residuals backlog (`tracking: pr-deep-review backlog`).
+- **Concurrency stays inside the single PR**: for the one PR under review, create the worktree first, then fan out the Stage 1 collect seats in one batch (§ Review pipeline). Deferred PRs get **no** review worktree and **no** review seats — backlog registration only. The old "all worktrees first, all reviewers in one batch" model no longer applies to N PRs.
+- Sibling interactions are **noted, not fixed** — interactions with deferred sibling PRs go to the report's `- notes:`, unless the ticket says so.
 
 ## Plan output（handoff to execution）
 
