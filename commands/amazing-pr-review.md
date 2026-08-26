@@ -21,12 +21,13 @@ The verdict is **computed from the finding tally** (`must-fix` / `should-fix` / 
 4. `mstar-branch-worktree` (worktree isolation)
 5. `mstar-host` → active host reference (invoke capability for parallel subagents)
 6. 多 PR 输入的 batch 语义 → `references/pr-review.md` § Batch（one session = one PR；first-only + audit todos）
+7. 档位解析后 → 按 `references/pr-review.md` § Review depth (tiers) 确认 seat 计划（quick 1 席 / default 2 席 / deep 三阶段）
 
 ## Routing（谁执行 review）
 
-**档位解析** — 显式关键字优先；无 flag 时按推断阶梯（自上而下，首个命中即定档）：
+**档位解析** — 显式档位 token 优先；无 flag 时按推断阶梯（自上而下，首个命中即定档）：
 
-1. **显式关键字**（`quick` / `default` / `deep`，亦认 `--quick` / `--deep` 拼写）→ 直接定档（用户意图 > 一切启发式）。`quick` 与 `deep` 同现 → **硬停止冲突**：报告冲突，请用户二选一，不静默取优先级。
+1. **显式档位 token**（仅认专用 token 形式：`--quick` / `--default` / `--deep` flag，或参数末尾独立档位词；绝不匹配 `[pr|branch|scope]` 参数中的子串）→ 直接定档（用户意图 > 一切启发式）。任意两个档位 token 同现（`quick` / `default` / `deep` 任取其二）→ **硬停止冲突**：报告冲突，请用户二选一，不静默取优先级。
 2. **too-large**（> ~1000 变更行）→ advise split（既有规则不变）；坚持审 → `deep`。
 3. **敏感面**（`security-review.md` §9 扩展面出现在 diff：auth / LLM / 供应链 / 数据面）→ `deep`（任何尺寸；安全敏感不打薄）。
 4. **large**（> ~300 变更行 / 跨多变更面）→ `deep`（大 PR 不静默降档）。
