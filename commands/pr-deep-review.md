@@ -20,13 +20,14 @@ The verdict is **computed from the finding tally** (`must-fix` / `should-fix` / 
 3. `mstar-coding-behavior` (evidence discipline)
 4. `mstar-branch-worktree` (worktree isolation)
 5. `mstar-host` → active host reference (invoke capability for parallel subagents)
+6. 多 PR 输入的 batch 语义 → `references/pr-review.md` § Batch（one session = one PR；first-only + audit todos）
 
 ## Routing（谁执行 review）
 
 | Context | Who runs the review |
 |---------|-------------------|
 | **Single PR** | PM 解析 base/diff（§ Worktree isolation）→ **Stage 1** 按领域扇出轻量只读收集 agents（host scout/explorer/general）→ **Stage 2** 按同一领域派 mstar 内置角色（`code-reviewer` / `fullstack-dev` / `frontend-dev`）做 code+security review（大 PR/安全敏感面加独立 security 席）→ **Stage 3** 主代理合成：dedupe + three-way vet → tally/verdict → 报告 + 发布 GitHub Review |
-| **Batch of sibling PRs** | PM 按 PR 业务信息（业务域 / 变更面 / 技术栈）**平均分配**到四个席位：`@code-reviewer`（general）、`@fullstack-dev`、`@fullstack-dev-2`、`@frontend-dev` — 每个席位承载约 N/4 个 PR，摊薄同模型并发，降低 rate-limit。All worktrees created first, then all reviewers dispatched in one batch; each reviewer owns review + comment for its PRs only |
+| **Multiple PRs** | 只对**第一个** PR 走三阶段 deep review（同 Single PR 行）；其余 PR 登记为 audit todos（`{PROJECT_DIR}/_default/residuals.json`，`decision: defer`、`target: next session`、`tracking: pr-deep-review backlog`），并建议每个 PR 开独立 session |
 
 All review seats are **read-only** in this flow: never edit the reviewed worktree, never merge, never approve-as-merge. **Stage 1** collect seats are the host's lightweight read-only agents (`scout` / `explorer` / `general`); **Stage 2** domain seats are mstar built-in roles (`code-reviewer` / `fullstack-dev` / `frontend-dev`). Implementer seats run in **Audit Mode** (shared contract → `mstar-roles` `references/_shared/leaf-executor-core.md`). PM dispatches; domain seats run **Stage 2** of § Review pipeline and return findings + evidence-file paths — no verdict token, no posting; the main agent (PM / command thread) synthesizes and publishes.
 
