@@ -26,6 +26,36 @@ Deep PR review is a **three-stage pipeline**: collect → domain review → synt
 - **Stage 1 collect seats**: the absolute path to `references/pr-review.md` and the sections of it to read, the review worktree absolute path (the worktree where the PR head is checked out — § Worktree isolation), recon facts (language / framework / directories / what was skipped), decided tradeoffs, and **Hard Rules 4/5 verbatim**. No findings table, no verdict.
 - **Stage 2 domain / security seats** additionally load the **findings contract**: the absolute path to `references/pr-review.md` and the sections of it to read, the review worktree absolute path (the worktree where the PR head is checked out — § Worktree isolation), the finding-format contract at `references/finding-format.md`, `references/security-review.md` (security seats), recon facts, decided tradeoffs, **Hard Rules 4/5 verbatim**, and the instruction to produce findings with **Merge class** (§ Merge class), return them in the result payload (write-blocked-safe; writable seats may **best-effort** write the Stage 2 evidence file directly — the main agent merges — § Local report archive), and return only findings — no fixes; never post.
 
+## Review depth (tiers)
+
+PR review runs at one of three tiers — `quick` / `default` / `deep` — chosen by an explicit keyword or inferred from the change shape (§ Inference ladder). `deep` is the current three-stage pipeline verbatim; `default` is the no-flag landing tier for small code PRs; `quick` serves explicit intent and tiny-mechanical diffs. Every tier keeps the same verdict contract: one verdict derived from the tally, one GitHub Review, posted by the main agent (§ Verdict synthesis / § Comment posting).
+
+| Tier | Seats | Domain split | Security coverage | Synthesis | Relative seat-time | Boundary |
+| --- | --- | --- | --- | --- | --- | --- |
+| `deep` | 4–7 (2–3 collect + 2–3 domain + 0–1 independent security) | 2–3 by domain | in-domain lens **+ independent cross-domain security seat** | main agent, all three stages | longest (= current) | = current three-stage pipeline, verbatim |
+| `default` | 2 (two domain seats; collection folded in = seat reuse) | 2 seats by dominant surface (code/tests, backend/frontend); single-surface PR → second seat = dedicated same-domain security-lens seat | both seats carry the in-domain security lens; **no independent cross-domain seat** (cross-domain boundary issues still go to `- notes:`; the main agent may announce an upgrade to deep) | main agent (kept) | medium (≈ ½ of deep) | typical ≤~300 changed lines; PM may announce an upgrade to deep by risk shape and declare it in the report (`- notes:`); downgraded cuts are declared likewise |
+| `quick` | 1 (single domain seat; collect + review in one pass) | none (one seat, one pass) | in-domain security lens in the same seat (§2/§3 discipline); **no independent seat**; sensitive surface + explicit quick → lens still runs, report declares reduced coverage under `- notes:` | main agent (kept, smallest input) | shortest (≈ ¼) | recommended ≤~300 / mechanical shape; report must declare tier |
+
+**Inference ladder** (no flag given — first hit wins):
+1. **Explicit tier token** — matched **only** as a dedicated flag token (`--quick` / `--default` / `--deep`) or a trailing standalone tier word (the `[quick|default|deep]` argument position), **never** as a substring of the `[pr|branch|scope]` argument (a branch/PR title containing `quick` or `default` does not set a tier) → that tier; user intent beats every heuristic.
+2. **Too large** (>~1000 changed lines) → advise a split (existing rule); if the user insists on reviewing anyway → `deep`.
+3. **Sensitive surface** (`security-review.md` §9 extended surfaces — auth / LLM / supply chain / data — present in the diff) → `deep` at any size; security-sensitive surfaces are never thinned.
+4. **Large** (>~300 changed lines, or spanning multiple change surfaces/domains) → `deep`; large PRs never silently fall back to reduced coverage.
+5. **Small** (≤~300, single surface):
+   - tiny-mechanical shape (docs-only / rename / formatting / pure deletion — the existing "tiny mechanical → general only" shape test) → `quick`;
+   - anything else (real code change) → `default`.
+
+The ladder reuses the existing ~100 / ~300 / ~1000 sizing bands — no second set of numbers: ~100 is quick's recommended domain, ~300 is default's upper bound (above = large → deep), ~1000 keeps its too-large meaning. Quick's typical lower band ~100 is operational guidance, not a separate trigger — small real-code PRs near that boundary still default to `default` to preserve evidence depth.
+
+**Conflict rule**: at most **one** tier keyword may be given. Any two of `quick` / `default` / `deep` appearing together → **hard-stop conflict error** — report the conflict and ask the user to pick one; never silently take a priority. Explicit `quick` on a security-sensitive surface is respected (trust + transparency), but the seat must still run its in-domain security lens and the report must declare `- notes:` "quick tier — reduced coverage on a security-sensitive surface".
+
+**Cuttable vs never-cut**:
+- **Cuttable by tier**: seat count, stage-as-wave (Stage 1 as a separate wave), domain-split granularity, the independent security seat, the lens set, the seat-prompt ingredient set.
+- **Never cut (any tier)**: the verdict-from-tally formula (one formula, all tiers), merge-class assignment + three-way vet, posting ownership (sole main agent), evidence discipline (`file:line` + self-check), Hard Rules 4/5, seats read-only, worktree isolation, the batch contract (first-only + backlog register), the local report archive contract incl. frontmatter, linked-issue AC counting.
+- **Stage 3 is never skipped in any tier** — `quick` just feeds it the smallest input; one verdict / one Review / main-agent posting is the product contract.
+
+**Report `tier` declaration**: report frontmatter gains an optional `tier: quick | default | deep` (absent = `default` semantics, valid — old reports stay valid). `quick` MUST declare its reduced coverage under `- notes:` (what did not run: independent security seat / Stage 1 wave / domain split); any announced upgrade or downgrade (e.g. PM announces deep-upgrade, or a downgraded cut happens) is declared the same way. Report template structure, tally counts, and the display contract are unchanged; tier never enters the report filename.
+
 ## Worktree isolation
 
 - **Resolve the real base first** — never assume `main`:
@@ -265,25 +295,25 @@ Check base-vs-branch before blaming the diff for CI failures. A red build that p
 
 ## Batch sibling PRs
 
-- **one session = one PR** (HARD): a `pr-deep-review` session deep-reviews exactly **one** PR. When multiple PRs are passed in, only the **first** — the first PR in the caller's argument / mention order, never sorted by PR number or recency — runs the three-stage pipeline (§ Review pipeline); the rest are **not** processed in this session.
+- **one session = one PR** (HARD): an `amazing-pr-review` session reviews exactly **one** PR. When multiple PRs are passed in, only the **first** — the first PR in the caller's argument / mention order, never sorted by PR number or recency — runs the review at its resolved tier (§ Review depth (tiers) for tier resolution → § Review pipeline for stage steps; `deep` = the full three-stage pipeline); the rest are **not** processed in this session.
 - **Register the rest as audit todos** — before the review starts, register every unprocessed PR in `{PROJECT_DIR}/<project-id>/residuals.json` (project-less reviews use `_default`) via the engine-backed CLI, one `--entry` per deferred PR:
   ```
   mstar status backlog-register --project <project-id> --key <plan-key> --entry '<entry json>' ...
   ```
   - `--project` defaults to `_default`; `--key` is the **base** batch key, `pr-deep-review-<YYYY-MM-DD>` for the first same-day session — the CLI selects the first free same-day key (`pr-deep-review-<YYYY-MM-DD>`, then `-2`, `-3`, …) inside the engine's status write lock and prints the key actually used; never compute the bumped key yourself.
-  - Each `--entry` is a JSON object with the nine residual fields for one deferred PR: `id` (unique within the batch, e.g. `pr-deep-review-<YYYY-MM-DD>-<n>`), `title: "pr-deep-review <owner>/<repo>#<n>"`, `severity: low`, `source: pr-deep-review batch input`, `scope: "deep review of <owner>/<repo>#<n> in a new pr-deep-review session"`, `decision: defer`, `owner: project-manager`, `target: next session`, `tracking: pr-deep-review backlog`. The CLI fills the provenance fields (`source_plan` = the used key, `registered_at` = today).
+  - Each `--entry` is a JSON object with the nine residual fields for one deferred PR: `id` (unique within the batch, e.g. `pr-deep-review-<YYYY-MM-DD>-<n>`), `title: "pr-deep-review <owner>/<repo>#<n>"`, `severity: low`, `source: pr-deep-review batch input`, `scope: "deep review of <owner>/<repo>#<n> in a new amazing-pr-review session"`, `decision: defer`, `owner: project-manager`, `target: next session`, `tracking: pr-deep-review backlog`. The CLI fills the provenance fields (`source_plan` = the used key, `registered_at` = today).
   - Entry-id uniqueness is **enforced in code** (B-9 ②): the engine rejects a duplicate `id` within the key — fail-loud, register unchanged — so ids only need to stay distinct within the batch.
   - `<n>` is the GitHub PR number; `title`/`scope` carry the recoverable PR identity (`<owner>/<repo>#<n>` or the PR URL) so a later session can open the exact deferred PR from the register alone.
   - **Concurrency/crash safety is engine-tested** (`packages/engine/test/backlog-register.test.ts`): registration runs inside `withStatusWriteLock` with atomic temp+rename writes — never hand-edit the register with python/jq.
   - Lock-semantics delta vs. the old hand-rolled protocol: `withStatusWriteLock` has **no stale-lockdir auto-reclamation** — a crash-leaked lockdir ⇒ 30s timeout ⇒ `Blocked` with the `holder.pid` recovery hint (remove the lockdir only when no writer is alive).
 - **Registration failure halts the session**: if the CLI exits non-zero (fail-loud validation, register unchanged), stop and report `Blocked` — never start the first-PR review while deferred PRs are unregistered (they would be neither reviewed nor tracked).
-- **Backlog close**: when a session starts deep review of a PR that was previously deferred, it MUST look up the matching register entry (`tracking: pr-deep-review backlog`, identity `<owner>/<repo>#<n>` in `title`/`scope`) and close it in place at review completion:
+- **Backlog close**: when a session completes review of a PR that was previously deferred — at its resolved tier (`quick` / `default` / `deep` per § Review depth), it MUST look up the matching register entry (`tracking: pr-deep-review backlog`, identity `<owner>/<repo>#<n>` in `title`/`scope`) and close it in place at review completion:
   ```
   mstar status backlog-close --project <project-id> --key <used-key> --id <entry-id>
   ```
   (`--project` defaults to `_default`; `--key` is the key the entry was registered under — the one `backlog-register` printed; `--id` is the entry id; `--note` is optional, default `"closed by backlog close"`) — sets `lifecycle: resolved` + `closed_at: <YYYY-MM-DD>` + `closure_note` (no `closed` enum), per the register lifecycle contract in `mstar-project-governance`; never leave a stale open entry for a reviewed PR.
-- **Suggest one session per PR**: the report's `- notes:` states that each remaining PR gets its own `pr-deep-review` session and is tracked in the `_default` residuals backlog (`tracking: pr-deep-review backlog`).
-- **Concurrency stays inside the single PR**: for the one PR under review, create the worktree first, then fan out the Stage 1 collect seats in one batch (§ Review pipeline). Deferred PRs get **no** review worktree and **no** review seats — backlog registration only. The old "all worktrees first, all reviewers in one batch" model no longer applies to N PRs.
+- **Suggest one session per PR**: the report's `- notes:` states that each remaining PR gets its own `amazing-pr-review` session and is tracked in the `_default` residuals backlog (`tracking: pr-deep-review backlog`).
+- **Concurrency stays inside the single PR**: for the one PR under review, create the worktree first, then fan out per the resolved tier's seat plan (§ Review depth (tiers)) — `deep` fans out the Stage 1 collect seats in one batch (§ Review pipeline); `default` folds collection into the two domain seats; `quick` is a single pass. Deferred PRs get **no** review worktree and **no** review seats — backlog registration only. The old "all worktrees first, all reviewers in one batch" model no longer applies to N PRs.
 - Sibling interactions are **noted, not fixed** — interactions with deferred sibling PRs go to the report's `- notes:`, unless the ticket says so.
 
 ## Plan output（handoff to execution）
@@ -412,6 +442,7 @@ The posted PR comment is the deliverable; the local report is the durable refere
   ```yaml
   ---
   type: pr-review
+  tier: quick | default | deep   # optional — absent = default semantics (§ Review depth)
   pr: <n>                # omit for bare branch / diff
   url: <pr url>          # omit for bare branch / diff
   head: <head sha>
