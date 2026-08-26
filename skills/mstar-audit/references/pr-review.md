@@ -2,6 +2,28 @@
 
 Read-only, evidence-first review of a pull request / branch / diff, producing exactly one verdict: `ship it` / `needs fixes` / `blocked`. Runs under `mstar-audit` § `pr` variant, reusing the Recon → Audit → Vet discipline (recon = PR scope + repo guidance; vet = three-way attack). The reviewer never edits the worktree, never merges, and never approves-as-merge.
 
+## Review pipeline (three-stage)
+
+Deep PR review is a **three-stage pipeline**: collect → domain review → synthesis. One PR gets multi-seat coverage (code + security, split by domain) but exactly **one verdict and one GitHub Review**, synthesized and published by the main agent. Every seat is a read-only audit seat; only the main agent posts.
+
+- **Stage 1 — Collect**: PM fans out lightweight read-only agents by **domain** — business domain / change surface / tech stack; use the host's lightest read-only agent (`scout` / `explorer` / `general` — whatever the host offers). Each collect seat reads the changed files in its domain plus related context and produces an **evidence file** (contract → § Local report archive): `file:line` observations, potential issue surfaces, and security-surface observations (the seat carries a security lens per `security-review.md` §2/§3 **research** discipline — trace origin, never invent an attacker, never record secret values — and still records MEDIUM / unverified items as **leads** in the evidence file; the HIGH-only filter applies to formal findings, not leads). Collect seats produce **no** findings table, compute **no** verdict, and publish **nothing**.
+- **Stage 2 — Domain review**: mstar built-in roles (`code-reviewer` / `fullstack-dev` / `frontend-dev`) split along the same domain framing, each reviewing code + security in its domain (security via the `security-review.md` lens) and producing findings with **Merge class** (§ Merge class). A large PR (>~300 changed lines, or spanning multiple change surfaces/domains) or a security-sensitive surface (auth, LLM, supply chain, data — `security-review.md` §9 extended surfaces) adds an **independent cross-domain security seat**.
+- **Stage 3 — Synthesis (main agent)**: the main agent (the command's orchestrator) collects all domain findings + evidence files → **dedupe** → **three-way vet** (open each cited file yourself; `file:line` must genuinely support the claim) → **tally** (§ Tally and derived score — formula unchanged) → **verdict** → report + **publish GitHub Review** (§ Comment posting — publishing authority belongs to the main agent). The main agent does not backfill uncollected / unreviewed domains — a missing domain is declared in the report under `- unverified:` / `- notes:`.
+- A domain whose seat produced **no evidence file** (crashed / Blocked / empty output) is an **uncollected domain**, declared the same way under `- unverified:` / `- notes:`.
+
+**Scale-driven fan-out** (reuses the existing sizing bands — no new thresholds): Stage 1 collect seats scale with PR size; the extra security seat stays in Stage 2:
+
+| Size | Stage 1 collect seats | Extra Stage 2 |
+| --- | --- | --- |
+| Small (~≤300 / single surface) | 2 (code + security) | independent cross-domain security seat only if security-sensitive (`security-review.md` §9) |
+| Large (>~300 / multi-domain) | 2–3 by domain | cross-domain security seat as needed |
+
+- The ~1000 band of § Sizing & change shape is unchanged (too large → advise split); the pipeline fan-out threshold **is** the ~300 band — there is no second set of numbers.
+
+**Fan-out discipline**: every collect / domain seat is a **read-only audit seat** (shared contract → `mstar-roles` `references/_shared/leaf-executor-core.md` Audit Mode). PM creates the worktree and resolves the diff basis **first** (§ Worktree isolation), then fans out. Domain-seat Assignments may carry `Delegation: allowed (scout/explore only, read-only)` (reusing the full-audit pattern). **For three-stage seats, "never post" overrides the Audit Mode / Hard Rule 2 / Mode C POST carve-out** — posting is Stage 3 only, by the main agent, until SP3 syncs the shared contracts.
+
+**Seat prompts**: each domain / security seat prompt must include — the absolute path to `references/pr-review.md` and the sections of `pr-review.md` to read, the finding-format contract at `references/finding-format.md`, `references/security-review.md` (security seats), recon facts (language / framework / directories / what was skipped), decided tradeoffs, **Hard Rules 4/5 verbatim**, the **primary-checkout absolute path and the seat's evidence-file filename template** (evidence files are written via the primary checkout, never the worktree — § Local report archive), and the instruction to return only findings — no fixes.
+
 ## Worktree isolation
 
 - **Resolve the real base first** — never assume `main`:
@@ -45,7 +67,7 @@ Read-only, evidence-first review of a pull request / branch / diff, producing ex
 - **Single-commit input** (commit SHA / short hash): changeset = `git show <sha>`; verify provenance, no worktree — but read file context **at that commit** (`git show <sha>:<path>`), not the current checkout; the two diverge whenever HEAD ≠ `<sha>` or the file changed since (direct reads are equivalent only when HEAD == `<sha>` and the tree is clean).
 - **Pre-flight (all modes):** before fanning out lenses, confirm any named refs resolve (in modes that have refs) and the changeset is non-empty (in all modes) — an empty changeset reports "no changes to review" and stops; never spawn lenses on an empty changeset (for working-tree input, untracked-only changes are a non-empty changeset).
 - Record before computing: review cwd, `<review-branch>`, HEAD sha, merge-base.
-- Clean up after the review (and after the comment is posted): `git worktree remove <path>` + `git worktree prune`, then delete **exactly** the recorded `<review-branch>` — it was verified not to exist before the fetch created it, so it is provably this review's own branch; never delete a pre-existing branch. Never remove other harness worktrees.
+- Clean up **once the local report is saved** — the save runs in all three posting branches (`posted: yes` / `n/a-no-pr` / `failed`), so cleanup does not wait on POST success (§ Local report archive): `git worktree remove <path>` + `git worktree prune`, then delete **exactly** the recorded `<review-branch>` — it was verified not to exist before the fetch created it, so it is provably this review's own branch; never delete a pre-existing branch. Never remove other harness worktrees.
 
 ## Scoping
 
@@ -54,6 +76,8 @@ Read-only, evidence-first review of a pull request / branch / diff, producing ex
 - Inspect adjacent behavior when risk leaks past the named diff (importers, callers, dependent contracts).
 - When the diff touches tests, read the tests before the implementation — they carry intent.
 - Verification claims in the PR description must be reproducible from the diff/CI; a claim that cannot be checked is an `unverified` lead, not evidence.
+- **Domains** — review is split by domain (**business domain / change surface / tech stack**; § Review pipeline). Each domain seat concludes **only on its own domain**.
+- Cross-domain boundary issues (importers / callers reaching outside the seat's domain) → record to the evidence file `- notes:`; the main agent decides whether an additional cross-domain seat is warranted.
 
 ## Sizing & change shape
 
@@ -112,6 +136,7 @@ Three binding rules: repo-documented standards override the baseline — a stand
 - Mark unverified explicitly — a claim without verification is a lead, not a finding.
 - Mock-heavy tests around risky behavior = a finding (no real-surface proof), not proof of correctness.
 - A "doesn't follow repo conventions / should use an existing abstraction" finding must cite the exemplar the diff should have followed (`file:line`); the simplest acceptable implementation is not a style finding (lint-covered cosmetics are already ignored by the `general` lens).
+- **Scout / collector evidence = leads** — collect-seat evidence files and unchecked domain-seat notes are **leads, not findings**; a domain seat's Stage 2 output **after it opened the cited code itself** (`file:line`) is a formal finding, and the main agent (Stage 3) may still reject it during vet. A finding that cites a collector's relay without its own self-check is disqualified (same discipline as full-audit "excerpts come from your own reads").
 - What disqualifies a finding (no evidence, by-design, secret values, ungrounded suggestions) → **`references/finding-format.md`** § What disqualifies a finding.
 
 ## Attack and vet
@@ -122,7 +147,9 @@ Before writing a finding, run the three-way attack from `mstar-audit`:
 2. **Simpler explanation** — does a simpler explanation cover the same evidence?
 3. **Evidence verifiability** — open the cited lines and check they actually support the claim.
 
-Then open cited code yourself and dispose by-design / mis-attributed / duplicate. Subagents over-report; vet before presenting.
+Each **domain seat** runs the three-way attack on its own findings, opens the cited code itself, and disposes by-design / mis-attributed / duplicate before presenting.
+
+The **main agent** is the final vet layer: at synthesis it dedupes **all** findings across domains (cross-domain duplicates, mis-attribution), applies the same by-design / duplicate disposition with the `cited code yourself` discipline, and records every rejection in the report's **Considered & rejected** section. Subagents over-report; vet before presenting.
 
 ## Verdict synthesis
 
@@ -232,7 +259,7 @@ Check base-vs-branch before blaming the diff for CI failures. A red build that p
 ## Comment triage
 
 - Judge the validity of bot/peer review comments before acting on them.
-- The reviewer seat is read-only — never edit the reviewed worktree. For valid comments, fold the minimal fix suggestion into the finding/plan (plan output) for the Prepare → Execute flow. For invalid comments, disagree on the PR comment with clear reasoning. Never gold-plate.
+- **Comment-triage replies are the main agent's job at Stage 3** — seats never post or reply. For valid comments, the main agent folds the minimal fix suggestion into the finding/plan (plan output) for the Prepare → Execute flow. For invalid comments, the main agent disagrees on the PR comment with clear reasoning. Never gold-plate.
 
 ## Batch sibling PRs
 
@@ -252,13 +279,15 @@ Review findings that need fixing can become plans for the normal Prepare → Exe
 
 ## Comment posting
 
-Posting the GitHub Review is a **mandatory deliverable** of the `pr` variant — chat-only output is incomplete when a PR exists. The review seat that owns the PR posts it; PM only reports the URL.
+Posting the GitHub Review is a **mandatory deliverable** of the `pr` variant — chat-only output is incomplete when a PR exists. The main agent (the command's orchestrator) posts the review; review seats never post — **for single-PR Stage 1/2 seats this overrides the Audit Mode / Hard Rule 2 / Mode C POST carve-out** (posting is Stage 3 only, by the main agent).
 
-- **Before anything else:** synthesize the verdict first, then post **before** worktree cleanup (see § Worktree isolation — cleanup happens after the comment is posted).
+- **Before anything else:** synthesize the verdict first, then post **before** worktree cleanup (see § Worktree isolation — cleanup happens after the local report is saved).
 - **No PR number** (bare branch / arbitrary diff): set `comments: n/a-no-pr` and skip the API. Chat output still required; this is not a Blocked review.
 - **Auth / API failure:** deliver the chat verdict anyway; Completion Report status `Partial`/`Blocked` with the `gh` error. Do not claim `Done` — comments are mandatory when a PR exists. **The local report is still saved** (§ Local report archive — posting failure does not skip archival).
 
 ### Procedure
+
+Executed by the main agent at Stage 3 — review seats never run this procedure.
 
 1. Resolve the target — the **base** `owner/repo` (the repository that owns the PR number), PR number, head SHA:
    ```
@@ -277,7 +306,6 @@ Posting the GitHub Review is a **mandatory deliverable** of the `pr` variant —
    (payload on stdin).
 4. **Line fallback:** if GitHub rejects some inline comments (e.g. 422 — line not in the diff), retry the review **without** those entries and fold them into the summary body. Do not loop more than once.
 5. Save the local report (§ Local report archive) — **mandatory in all three branches**: POST succeeded (record `html_url` / review id for `comments:` first), POST failed, or `n/a-no-pr` (archive the chat display content). Only then clean up the worktree; bare branch/diff reviews have no worktree, but the save still happens.
-6. **Batch:** each reviewer posts on **their own PRs** only. No second PM summary comment unless the Assignment says so.
 
 ### Report template (GitHub Review `body`)
 
@@ -358,11 +386,12 @@ Never dump full plan files.
 
 ### Local report archive
 
-The posted PR comment is the deliverable; the local report is the durable reference copy — the PR thread may be buried, locked, or deleted, and bare-branch/diff reviews have no thread at all. The review seat saves **one markdown file per reviewed PR** (or branch/diff) as part of the mandatory deliverable, before worktree cleanup:
+The posted PR comment is the deliverable; the local report is the durable reference copy — the PR thread may be buried, locked, or deleted, and bare-branch/diff reviews have no thread at all. The main agent saves **one markdown file per reviewed PR** (or branch/diff) at Stage 3 — the report it published — as part of the mandatory deliverable, before worktree cleanup:
 
 - **Path**: `{PROJECT_DIR}/<project-id>/reports/pr-review/` — `<project-id>` from the Assignment / project context, `_default` when the review runs outside any project flow (same id convention as `projects/<id>/residuals.json`). Gitignored local SSOT, same posture as residuals; a finding that must survive across clones gets promoted to tracked `{KNOWLEDGE_DIR}` / `{SPECS_DIR}`, not by tracking this directory.
 - **Write via the primary checkout, never the worktree**: harness discovery must not start from the review worktree — its root has no gitignored `.mstar/`, and anything written there is destroyed by `git worktree remove` (§ Worktree isolation). Record the primary repository's absolute path **before** creating the worktree and write the report under it. Never create a `.mstar/` inside the review worktree to "host" the report.
 - **Filename**: `<YYYY-MM-DD>-pr<N>.md`; bare branch → `<YYYY-MM-DD>-<branch-slug>.md`; arbitrary diff → `<YYYY-MM-DD>-diff-<short-head-sha>.md`, or `<YYYY-MM-DD>-diff.md` when no head SHA was provided with the changeset (never invent one). Same target twice in one day → append `-r2`, `-r3`, … (never overwrite a prior report).
+- **Scout evidence files**: each collect seat (Stage 1) and domain seat (Stage 2) writes its own evidence file in the same `reports/pr-review/` directory — `<YYYY-MM-DD>-pr<N>-stage1-<slug>.md` (Stage 1) / `<YYYY-MM-DD>-pr<N>-stage2-<slug>.md` (Stage 2 findings draft). `<slug>` is **domain-derived and unique per seat** — `<domain>-<seat>` — and is mandated in the seat Assignment, so two seats in the same pipeline can never collide. Bare branch / diff mirror the main-report forms: `<YYYY-MM-DD>-<branch-slug>-stage{1,2}-<slug>.md`, `<YYYY-MM-DD>-diff-<short-head-sha>-stage{1,2}-<slug>.md`, or `-diff-` alone when no head SHA was provided (never invent one). Same target re-reviewed twice in one day → append `-r2`, `-r3`, … (never overwrite a prior evidence file). This is the **only write** a read-only seat performs; the main report is written by the main agent, never by a seat. Same gitignored directory and same **write via primary checkout, never the worktree** discipline (an evidence file written in the review worktree is destroyed by `git worktree remove`, § Worktree isolation).
 - **Frontmatter** (machine-readable metadata):
   ```yaml
   ---
@@ -376,6 +405,7 @@ The posted PR comment is the deliverable; the local report is the durable refere
   tally: { must-fix: <n>, should-fix: <n>, nit: <n>, unverified: <n> }
   review_url: <posted review html_url>   # n/a-no-pr when skipped; failed: <gh error summary> when POST failed
   generated_at: <YYYY-MM-DD>
+  pipeline: {stages: 3, seats: [<seat ids>]}   # optional — omit when the review did not run the three-stage pipeline
   ---
   ```
 
