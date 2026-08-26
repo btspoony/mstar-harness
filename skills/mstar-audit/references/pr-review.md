@@ -2,6 +2,20 @@
 
 Read-only, evidence-first review of a pull request / branch / diff, producing exactly one verdict: `ship it` / `needs fixes` / `blocked`. Runs under `mstar-audit` § `pr` variant, reusing the Recon → Audit → Vet discipline (recon = PR scope + repo guidance; vet = three-way attack). The reviewer never edits the worktree, never merges, and never approves-as-merge.
 
+## Review pipeline (three-stage)
+
+Deep PR review is a **three-stage pipeline**: collect → domain review → synthesis. One PR gets multi-seat coverage (code + security, split by domain) but exactly **one verdict and one GitHub Review**, synthesized and published by the main agent. Every seat is a read-only audit seat; only the main agent posts.
+
+- **Stage 1 — Collect**: PM fans out lightweight read-only agents by **domain** — business domain / change surface / tech stack; use the host's lightest read-only agent (`scout` / `explorer` / `general` — whatever the host offers). Each collect seat reads the changed files in its domain plus related context and produces an **evidence file** (contract → § Local report archive): `file:line` observations, potential issue surfaces, and security-surface observations (the seat carries a security lens per `security-review.md` §2/§3 discipline). Collect seats produce **no** findings table, compute **no** verdict, and publish **nothing**.
+- **Stage 2 — Domain review**: mstar built-in roles (`code-reviewer` / `fullstack-dev` / `frontend-dev`) split along the same domain framing, each reviewing code + security in its domain (security via the `security-review.md` lens) and producing findings with **Merge class** (§ Merge class). A large PR (>~300 changed lines, or spanning multiple change surfaces/domains) or a security-sensitive surface (auth, LLM, supply chain, data — `security-review.md` §9 extended surfaces) adds an **independent cross-domain security seat**.
+- **Stage 3 — Synthesis (main agent)**: the main agent (the command's orchestrator) collects all domain findings + evidence files → **dedupe** → **three-way vet** (open each cited file yourself; `file:line` must genuinely support the claim) → **tally** (§ Tally and derived score — formula unchanged) → **verdict** → report + **publish GitHub Review** (§ Comment posting — publishing authority belongs to the main agent). The main agent does not backfill domains nobody reviewed — a missing domain is declared in the report under `- unverified:` / `- notes:`.
+
+**Scale-driven fan-out** (reuses the existing sizing bands — no new thresholds): a small PR (~≤300 changed lines / single change surface — the § Sizing & change shape "~300 → acceptable as one logical change" upper edge) gets the 2-seat baseline — code surface + security surface. A large PR (>~300 changed lines or across multiple domains) splits 2–3 seats by domain, plus a cross-domain security seat as needed. The ~1000 band of § Sizing & change shape is unchanged (too large → advise split); the pipeline fan-out threshold **is** the ~300 band — there is no second set of numbers.
+
+**Fan-out discipline**: every collect / domain seat is a **read-only audit seat** (shared contract → `mstar-roles` `references/_shared/leaf-executor-core.md` Audit Mode). PM creates the worktree and resolves the diff basis **first** (§ Worktree isolation), then fans out. Domain-seat Assignments may carry `Delegation: allowed (scout/explore only, read-only)` (reusing the full-audit pattern).
+
+**Seat prompts**: each domain / security seat prompt must include — the absolute path to `references/pr-review.md` and the sections to read (including the finding-format contract in `references/finding-format.md`), `references/security-review.md` (security seats), recon facts (language / framework / directories / what was skipped), decided tradeoffs, **Hard Rules 4/5 verbatim**, and the instruction to return only findings — no fixes.
+
 ## Worktree isolation
 
 - **Resolve the real base first** — never assume `main`:
