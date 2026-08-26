@@ -409,6 +409,11 @@ export type CloseProjectRegisterEntryOpts = {
 export async function appendProjectRegisterEntries(
   opts: AppendProjectRegisterEntriesOpts,
 ): Promise<{ ok: true; key: string }> {
+  // An empty batch is a caller error — fail loud instead of writing an empty
+  // key that would pass validateProjectRegister (Task-1 review minor 3).
+  if (opts.entries.length === 0) {
+    throw new Error("refusing to append residual entries: entries must not be empty");
+  }
   const registerPath = resolve(join(opts.projectDir, PROJECT_REGISTER_FILE));
   // The lockdir lands inside the project dir (dirname of the register); create
   // it up front (mirrors writeWorkflowSnapshot) so a first-time project dir
@@ -420,7 +425,7 @@ export async function appendProjectRegisterEntries(
     // Port of the python next-free-key loop (pr-review.md): first free
     // same-day key — basePlanKey, then basePlanKey-2, basePlanKey-3, …
     let key = opts.basePlanKey;
-    for (let i = 2; key in entriesMap; i += 1) {
+    for (let i = 2; Object.hasOwn(entriesMap, key); i += 1) {
       key = `${opts.basePlanKey}-${i}`;
     }
     for (const entry of opts.entries) {
@@ -435,6 +440,12 @@ export async function appendProjectRegisterEntries(
     // validateResidual is per-entry and validateProjectRegister has no
     // duplicate-id detection.
     const seen = new Set<string>();
+    // Seed from the selected key's existing entries (Task-1 review minor 3) —
+    // the occupancy loop guarantees a free key today, but the seed keeps the
+    // check correct if occupancy is ever relaxed to append into an existing key.
+    for (const existing of Object.hasOwn(entriesMap, key) ? (entriesMap[key] ?? []) : []) {
+      if (typeof existing.id === "string") seen.add(existing.id);
+    }
     for (const entry of opts.entries) {
       if (typeof entry.id === "string") {
         if (seen.has(entry.id)) {
