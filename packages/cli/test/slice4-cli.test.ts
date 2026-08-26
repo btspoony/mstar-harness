@@ -15,7 +15,7 @@ import { describe, expect, test } from "bun:test";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { readJson, scaffoldAuditPlan, validateAuditStatusBlocks } from "@mstar-harness/engine";
+import { readJson, scaffoldAuditPlan, validateAuditStatusBlocks, validateProjectRegister } from "@mstar-harness/engine";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
 const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
@@ -1621,6 +1621,135 @@ describe("mstar status findings-cleanup — project-register cleanup-mode gate (
   });
 });
 
+// ---------------------------------------------------------------------------
+// mstar status backlog-register / backlog-close — project-register backlog
+// (plan 20260826-backlog-register-cli Task 3; engine APIs from Task 1)
+// ---------------------------------------------------------------------------
+
+/** Local calendar date YYYY-MM-DD — same convention as the CLI's `registered_at` fill. */
+function todayLocal(): string {
+  const now = new Date();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${now.getFullYear()}-${month}-${day}`;
+}
+
+/** One deferred-PR residual JSON string (nine fields; provenance is CLI-filled). */
+function backlogEntryJson(id: string, pr: string): string {
+  return JSON.stringify({
+    id,
+    title: `pr-deep-review ${pr}`,
+    severity: "low",
+    source: "pr-deep-review batch input",
+    scope: `deep review of ${pr} in a new pr-deep-review session`,
+    decision: "defer",
+    owner: "project-manager",
+    target: "next session",
+    tracking: "pr-deep-review backlog",
+  });
+}
+
+/** Read `projects/<id>/residuals.json` under `dir` as a parsed object. */
+function readRegister(dir: string, projectId = "_default"): Record<string, unknown> {
+  return JSON.parse(readFileSync(join(dir, "projects", projectId, "residuals.json"), "utf8")) as Record<string, unknown>;
+}
+
+describe("mstar status backlog-register — project-register backlog append (engine-backed)", () => {
+  test("valid --entry JSON registers entries under the used key, prints the key, exit 0", () => {
+    withTempDir((dir) => {
+      const key = "pr-deep-review-2026-08-26";
+      const result = runCli([
+        "status", "backlog-register", "--harness", dir, "--key", key,
+        "--entry", backlogEntryJson(`${key}-1`, "owner/repo#123"),
+        "--entry", backlogEntryJson(`${key}-2`, "owner/repo#456"),
+      ]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain(`under key ${key}`);
+      expect(result.stderr).toBe("");
+
+      const register = readRegister(dir);
+      const entries = (register.entries as Record<string, unknown[]>)[key] as Array<Record<string, unknown>>;
+      expect(entries).toHaveLength(2);
+      for (const entry of entries) {
+        for (const field of ["id", "title", "severity", "source", "scope", "decision", "owner", "target", "tracking", "source_plan", "registered_at"]) {
+          expect(entry).toHaveProperty(field);
+        }
+        expect(entry.source_plan).toBe(key);
+        expect(entry.registered_at).toBe(todayLocal());
+      }
+      expect(validateProjectRegister(register).ok).toBe(true);
+    });
+  });
+
+  test("missing --project defaults to _default", () => {
+    withTempDir((dir) => {
+      const key = "pr-deep-review-2026-08-26";
+      const result = runCli([
+        "status", "backlog-register", "--harness", dir, "--key", key,
+        "--entry", backlogEntryJson(`${key}-1`, "owner/repo#123"),
+      ]);
+      expect(result.exitCode).toBe(0);
+      const register = readRegister(dir, "_default");
+      expect((register.entries as Record<string, unknown[]>)[key]).toHaveLength(1);
+    });
+  });
+
+  test("no --entry is rejected with a clear error (exit 1)", () => {
+    withTempDir((dir) => {
+      const result = runCli(["status", "backlog-register", "--harness", dir, "--key", "k1"]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("at least one --entry is required");
+    });
+  });
+
+  test("invalid --entry JSON is rejected (exit 1)", () => {
+    withTempDir((dir) => {
+      const result = runCli(["status", "backlog-register", "--harness", dir, "--key", "k1", "--entry", "{not json"]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("not valid JSON");
+    });
+  });
+});
+
+describe("mstar status backlog-close — project-register backlog close (engine-backed)", () => {
+  test("closes the entry in place (lifecycle resolved + closed_at + closure_note), exit 0", () => {
+    withTempDir((dir) => {
+      const key = "pr-deep-review-2026-08-26";
+      const id = `${key}-1`;
+      const registerResult = runCli([
+        "status", "backlog-register", "--harness", dir, "--key", key,
+        "--entry", backlogEntryJson(id, "owner/repo#123"),
+      ]);
+      expect(registerResult.exitCode).toBe(0);
+
+      const result = runCli(["status", "backlog-close", "--harness", dir, "--key", key, "--id", id]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain(`resolved entry ${id}`);
+
+      const register = readRegister(dir);
+      const entry = ((register.entries as Record<string, unknown[]>)[key] as Array<Record<string, unknown>>)[0];
+      expect(entry.lifecycle).toBe("resolved");
+      expect(entry.closed_at).toBe(todayLocal());
+      expect(entry.closure_note).toBe("closed by backlog close");
+      expect(validateProjectRegister(register).ok).toBe(true);
+    });
+  });
+
+  test("absent entry id fails loud (exit 1)", () => {
+    withTempDir((dir) => {
+      const key = "pr-deep-review-2026-08-26";
+      const registerResult = runCli([
+        "status", "backlog-register", "--harness", dir, "--key", key,
+        "--entry", backlogEntryJson(`${key}-1`, "owner/repo#123"),
+      ]);
+      expect(registerResult.exitCode).toBe(0);
+
+      const result = runCli(["status", "backlog-close", "--harness", dir, "--key", key, "--id", "no-such-id"]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("not found");
+    });
+  });
+});
 // ---------------------------------------------------------------------------
 // mstar status archive-residuals — removed in v3 (audit-004 cutover)
 // ---------------------------------------------------------------------------

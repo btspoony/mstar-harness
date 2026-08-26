@@ -17,6 +17,8 @@ import {
   AUDIT_EFFORTS,
   AUDIT_PRIORITIES,
   AUDIT_RISKS,
+  appendProjectRegisterEntries,
+  closeProjectRegisterEntry,
   completenessLevel,
   detectHarnessKind,
   detectHost,
@@ -916,6 +918,94 @@ statusCommand
       process.exitCode = 1;
     } catch (error) {
       console.error(pc.red(`status findings-cleanup failed: ${(error as Error).message}`));
+      process.exitCode = 1;
+    }
+  });
+
+/** Local calendar date `YYYY-MM-DD` (provenance `registered_at` — same convention as the engine's register dates). */
+function todayString(): string {
+  const now = new Date();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${now.getFullYear()}-${month}-${day}`;
+}
+
+/** Commander collector for the repeatable `--entry <json>` option. */
+function collectEntries(value: string, previous: string[]): string[] {
+  previous.push(value);
+  return previous;
+}
+
+statusCommand
+  .command("backlog-register")
+  .description(
+    "Register deferred-PR backlog entries in a project register under the status write lock " +
+      "(engine-backed: same-day key bump + entry-id uniqueness inside withStatusWriteLock; " +
+      "each --entry is one residual JSON \u2014 source_plan/registered_at are filled by the CLI)",
+  )
+  .option("--project <id>", "Project id whose register is written (default: _default)")
+  .option("--harness <path>", "Harness dir override (default: resolved {HARNESS_DIR})")
+  .requiredOption("--key <plan-key>", "Base entries key (<plan-id>); the first free same-day key (base, base-2, \u2026) is used")
+  .option("--entry <json>", "Residual entry JSON (nine fields; source_plan/registered_at filled by the CLI) \u2014 repeatable", collectEntries, [])
+  .action(async (options: { project?: string; harness?: string; key: string; entry?: string[] }) => {
+    try {
+      const entriesRaw = options.entry ?? [];
+      if (entriesRaw.length === 0) {
+        throw new Error("at least one --entry is required \u2014 refusing to register an empty backlog");
+      }
+      const projectId = options.project ?? _DEFAULT_PROJECT;
+      const projectRoot = resolveProjectDir(process.cwd(), options.harness ? { harnessDir: options.harness } : {});
+      const projectDir = path.join(projectRoot, projectId);
+      const registeredAt = todayString();
+      const entries = entriesRaw.map((raw, index) => {
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(raw);
+        } catch (error) {
+          throw new Error(`--entry ${index + 1} is not valid JSON: ${(error as Error).message}`);
+        }
+        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+          throw new Error(`--entry ${index + 1} must be a JSON object`);
+        }
+        // Provenance is CLI-owned: source_plan = the used key (the engine sets
+        // the bumped key per B-9 ①), registered_at = today (plan Task 3 contract).
+        return { ...(parsed as Record<string, unknown>), source_plan: options.key, registered_at: registeredAt };
+      });
+      const result = await appendProjectRegisterEntries({ projectDir, basePlanKey: options.key, entries });
+      console.log(
+        pc.green(`backlog-register: registered ${entries.length} entr${entries.length === 1 ? "y" : "ies"} under key ${result.key}`),
+      );
+    } catch (error) {
+      console.error(pc.red(`status backlog-register failed: ${(error as Error).message}`));
+      process.exitCode = 1;
+    }
+  });
+
+statusCommand
+  .command("backlog-close")
+  .description(
+    "Close one project-register backlog entry in place under the status write lock " +
+      "(lifecycle: resolved + closed_at: <today> + closure_note; absent id/key fails loud, exit 1)",
+  )
+  .option("--project <id>", "Project id whose register is updated (default: _default)")
+  .option("--harness <path>", "Harness dir override (default: resolved {HARNESS_DIR})")
+  .requiredOption("--key <plan-key>", "Entries key (<plan-id>) holding the entry to close")
+  .requiredOption("--id <entry-id>", "id of the entry to close")
+  .option("--note <text>", "Closure note (default: \"closed by backlog close\")")
+  .action(async (options: { project?: string; harness?: string; key: string; id: string; note?: string }) => {
+    try {
+      const projectId = options.project ?? _DEFAULT_PROJECT;
+      const projectRoot = resolveProjectDir(process.cwd(), options.harness ? { harnessDir: options.harness } : {});
+      const projectDir = path.join(projectRoot, projectId);
+      await closeProjectRegisterEntry({
+        projectDir,
+        planKey: options.key,
+        entryId: options.id,
+        closureNote: options.note ?? "closed by backlog close",
+      });
+      console.log(pc.green(`backlog-close: resolved entry ${options.id} under key ${options.key}`));
+    } catch (error) {
+      console.error(pc.red(`status backlog-close failed: ${(error as Error).message}`));
       process.exitCode = 1;
     }
   });
