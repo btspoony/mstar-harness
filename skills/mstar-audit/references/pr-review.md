@@ -272,7 +272,7 @@ Check base-vs-branch before blaming the diff for CI failures. A red build that p
   - **Entry-id uniqueness**: the `id` must be unique within the key — a batch containing same-numbered PRs from different repos would collide on `pr-deep-review-<YYYY-MM-DD>-<n>`; append a per-batch sequence suffix (e.g. `-<owner>-<repo>` or `-2`, `-3`) to keep ids distinct, keeping the recoverable `<owner>/<repo>#<n>` identity in `title`/`scope`.
   - `<n>` is the GitHub PR number; `title`/`scope` carry the recoverable PR identity (`<owner>/<repo>#<n>` or the PR URL) so a later session can open the exact deferred PR from the register alone.
   - **Write protocol**: python3 read-modify-write — read the whole file, preserve every other `entries` key, **append** to the day's array, never overwrite; never use `jq`/`jaq` `select` inside `|=` (jaq 2.3.0 deletes non-matching elements on update-with-empty — see `{KNOWLEDGE_DIR}/config-errors/jaq-jq-status-write-pattern.md`).
-  - Registration of deferred PRs MUST run as **one executable python3 sequence** — lock acquisition through release in a single script, so the main agent can copy-run it directly (the engine's `withStatusWriteLock` is an in-process TS callback API; the register mutation is a python3 read-modify-write, so the lock contract is spelled out as runnable python below). The script (a) acquires the lockdir `<register dir>/.status-write.lockdir/` via atomic `os.mkdir` (EEXIST → another writer holds it; bounded wait ~30 s / 10 ms poll, then timeout → `Blocked`), writing `holder.pid` (its own pid) immediately after acquisition; (b) on timeout applies **age-based stale recovery** — if the lockdir mtime is older than 10 min, re-stat `(dev, ino)` and remove the lockdir ONLY if the identity is unchanged (never a fresh owner's lock; never decide by PID liveness alone — pid-file hazard), then retry acquisition once; (c) runs the **read-check-replace-verify** critical section (read the register, pick the next free same-date batch key, append to the day's array preserving every other `entries` key, write, `validateProjectRegister`); (d) releases **child-first** — remove `holder.pid`, then `rmdir` the lockdir, only when `(dev, ino)` is still the one acquired (never remove another writer's lock). Full protocol → `{KNOWLEDGE_DIR}/architecture-patterns/shared-lifecycle-lockdir-pattern.md`. Concurrent same-date sessions serialize on the lock; never blind-overwrite.
+  - Registration of deferred PRs MUST run as **one executable python3 sequence** — lock acquisition through release in a single script, so the main agent can copy-run it directly (the engine's `withStatusWriteLock` is an in-process TS callback API; the register mutation is a python3 read-modify-write, so the lock contract is spelled out as runnable python below). The script (a) acquires the lockdir `<register dir>/.status-write.lockdir/` via atomic `os.mkdir` (EEXIST → another writer holds it; bounded wait ~30 s / 10 ms poll, then timeout → rename-based stale reclamation (below)), writing `holder.pid` (its own pid) immediately after acquisition; (b) on timeout applies **rename-based stale reclamation** — only an aged lockdir (mtime > 10 min) is a candidate; a live owner is never touched (never decide by PID liveness alone — pid-file hazard). `os.rename` the lockdir to a `.stale-<ts>` name (atomic takeover — never delete at the live pathname, so the aged owner's eventual release re-stats `(dev, ino)` and can never remove the new owner's lock), re-stat the renamed dir and rename it straight back if it turns out fresh (rename preserves `(dev, ino)`; closes the stat→rename gap), otherwise `shutil.rmtree` it, then retry acquisition once; (c) runs the **read-check-replace-verify** critical section (read the register, pick the next free same-date batch key, append to the day's array preserving every other `entries` key, write **atomically — temp file + `os.replace`, never `open(REG, "w")`**, `validateProjectRegister`); (d) releases **child-first** — remove `holder.pid`, then `rmdir` the lockdir, only when `(dev, ino)` is still the one acquired (never remove another writer's lock). Full protocol → `{KNOWLEDGE_DIR}/architecture-patterns/shared-lifecycle-lockdir-pattern.md`. Concurrent same-date sessions serialize on the lock; never blind-overwrite.
 
     ```python
     #!/usr/bin/env python3
@@ -280,7 +280,7 @@ Check base-vs-branch before blaming the diff for CI failures. A red build that p
     # Usage (from the harness repo root):
     #   python3 register-deferred-prs.py <register.json> <base-key> <entry.json>
     # One critical section: acquire lockdir -> read-check-replace-verify -> release.
-    import json, os, subprocess, sys, time
+    import json, os, shutil, subprocess, sys, time
 
     REG, BASE, ENTRY = sys.argv[1], sys.argv[2], json.load(open(sys.argv[3]))
     LOCK = os.path.join(os.path.dirname(REG), ".status-write.lockdir")
@@ -296,8 +296,45 @@ Check base-vs-branch before blaming the diff for CI failures. A red build that p
                 return (st.st_dev, st.st_ino)
             except FileExistsError:
                 if time.monotonic() >= end:
-                    return None  # timeout -> stale recovery below
+                    return None  # timeout -> rename-based reclamation below
                 time.sleep(POLL)
+
+    def reclaim():
+        # Rename-based reclamation — never delete a lockdir at its live
+        # pathname. Only an AGED lockdir (mtime > 10 min) is a candidate; a
+        # live owner is never touched. rename is atomic: either this session
+        # takes the pathname, or the owner already released (FileNotFoundError
+        # -> plain retry below). The aged owner's later release re-stats
+        # (dev, ino) and can never remove the new owner's lock.
+        for _ in range(3):
+            try:
+                if time.time() - os.stat(LOCK).st_mtime <= STALE:
+                    return  # fresh owner — not ours to reclaim
+            except FileNotFoundError:
+                return  # owner already released
+            stale = LOCK + ".stale-" + str(int(time.time() * 1000))
+            try:
+                os.rename(LOCK, stale)  # atomic takeover of the pathname
+            except FileNotFoundError:
+                return  # owner released in the stat->rename gap
+            except FileExistsError:
+                continue  # leftover stale dir with that name; new suffix
+            # verify what we actually took: a fresh replacement (the aged
+            # owner released + a new owner acquired in the stat->rename gap)
+            # is renamed straight back — rename preserves (dev, ino), so the
+            # owner's release still matches and no live lock is ever stolen.
+            try:
+                fresh = time.time() - os.stat(stale).st_mtime <= STALE
+            except FileNotFoundError:
+                fresh = False
+            if fresh:
+                try:
+                    os.rename(stale, LOCK)  # restore — never steal a live owner
+                except FileExistsError:
+                    shutil.rmtree(stale, ignore_errors=True)  # L re-taken; drop parked dir
+                return
+            shutil.rmtree(stale, ignore_errors=True)  # drop renamed dir + holder.pid
+            return
 
     def release(ident):
         try:
@@ -309,20 +346,11 @@ Check base-vs-branch before blaming the diff for CI failures. A red build that p
             pass
 
     ident = acquire()
-    if ident is None:  # age-based stale recovery: lockdir mtime older than 10 min
-        try:
-            st = os.stat(LOCK)
-            if time.time() - st.st_mtime > STALE:
-                before = (st.st_dev, st.st_ino)
-                st2 = os.stat(LOCK)  # re-stat: identity unchanged?
-                if (st2.st_dev, st2.st_ino) == before:  # never a fresh owner's lock
-                    os.unlink(os.path.join(LOCK, "holder.pid"))
-                    os.rmdir(LOCK)
-        except FileNotFoundError:
-            pass
+    if ident is None:  # aged lockdir (mtime > 10 min): rename-based reclamation
+        reclaim()  # atomic takeover; never delete at the live pathname
         ident = acquire()  # retry acquisition once
     if ident is None:
-        sys.exit("Blocked: lockdir held; remove only if no writer is alive (holder.pid)")
+        sys.exit("Blocked: lockdir held by a recent writer (mtime < 10 min); remove only if no writer is alive (holder.pid)")
     try:
         doc = json.load(open(REG))  # read
         key = BASE
@@ -332,7 +360,18 @@ Check base-vs-branch before blaming the diff for CI failures. A red build that p
             i += 1
         ENTRY["source_plan"] = key  # provenance must match the entries key
         doc["entries"][key] = doc["entries"].get(key, []) + [ENTRY]  # append, preserve others
-        json.dump(doc, open(REG, "w"), indent=2, ensure_ascii=False)  # replace
+        tmp = REG + ".tmp"  # atomic replace: the live register survives until rename
+        try:
+            with open(tmp, "w") as f:
+                json.dump(doc, f, indent=2, ensure_ascii=False)
+                f.flush()
+            os.replace(tmp, REG)  # never open the live register with "w"
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except FileNotFoundError:
+                pass
+            raise
         r = subprocess.run(  # validateProjectRegister (engine)
             ["bun", "-e",
              "import{validateProjectRegister as v}from'./packages/engine/dist/engine.js';"
