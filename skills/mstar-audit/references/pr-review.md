@@ -20,7 +20,7 @@ Deep PR review is a **three-stage pipeline**: collect → domain review → synt
 
 - The ~1000 band of § Sizing & change shape is unchanged (too large → advise split); the pipeline fan-out threshold **is** the ~300 band — there is no second set of numbers.
 
-**Fan-out discipline**: every collect / domain seat is a **read-only audit seat** (shared contract → `mstar-roles` `references/_shared/leaf-executor-core.md` Audit Mode). PM creates the worktree and resolves the diff basis **first** (§ Worktree isolation), then fans out. Domain-seat Assignments may carry `Delegation: allowed (scout/explore only, read-only)` (reusing the full-audit pattern). **For three-stage seats, "never post" overrides the Audit Mode / Hard Rule 2 / Mode C POST carve-out** — posting is Stage 3 only, by the main agent, and the override is permanent: seats never post.
+**Fan-out discipline**: every collect / domain seat is a **read-only audit seat** (shared contract → `mstar-roles` `references/_shared/leaf-executor-core.md` Audit Mode). PM creates the worktree and resolves the diff basis **first** (§ Worktree isolation), then fans out. Domain-seat Assignments may carry `Delegation: allowed (scout/explore only, read-only)` (reusing the full-audit pattern). **For three-stage seats, never-post is the permanent contract** — posting is Stage 3 only, by the main agent: the main agent (the command's orchestrator) posts the review; review seats never post. Audit Mode, Hard Rule 2, and Mode C are aligned; no seat-level POST carve-out exists.
 
 **Seat prompts**: each domain / security seat prompt must include — the absolute path to `references/pr-review.md` and the sections of `pr-review.md` to read, the finding-format contract at `references/finding-format.md`, `references/security-review.md` (security seats), recon facts (language / framework / directories / what was skipped), decided tradeoffs, **Hard Rules 4/5 verbatim**, the **primary-checkout absolute path and the seat's evidence-file filename template** (evidence files are written via the primary checkout, never the worktree — § Local report archive), and the instruction to return only findings — no fixes.
 
@@ -285,7 +285,7 @@ Review findings that need fixing can become plans for the normal Prepare → Exe
 
 ## Comment posting
 
-Posting the GitHub Review is a **mandatory deliverable** of the `pr` variant — chat-only output is incomplete when a PR exists. The main agent (the command's orchestrator) posts the review; review seats never post — **for single-PR Stage 1/2 seats this overrides the Audit Mode / Hard Rule 2 / Mode C POST carve-out** (posting is Stage 3 only, by the main agent).
+Posting the GitHub Review is a **mandatory deliverable** of the `pr` variant — chat-only output is incomplete when a PR exists. The main agent (the command's orchestrator) posts the review; review seats never post — posting is Stage 3 only, by the main agent, and the seat-level carve-out is gone — Audit Mode, Hard Rule 2, and Mode C are aligned.
 
 - **Before anything else:** synthesize the verdict first, then post **before** worktree cleanup (see § Worktree isolation — cleanup happens after the local report is saved).
 - **No PR number** (bare branch / arbitrary diff): set `comments: n/a-no-pr` and skip the API. Chat output still required; this is not a Blocked review.
