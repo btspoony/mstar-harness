@@ -1709,6 +1709,46 @@ describe("mstar status backlog-register — project-register backlog append (eng
       expect(result.stderr).toContain("not valid JSON");
     });
   });
+
+  test("explicit --project <non-_default> registers + validates under the given project id (exit 0)", () => {
+    withTempDir((dir) => {
+      const key = "pr-deep-review-2026-08-26";
+      const result = runCli([
+        "status", "backlog-register", "--harness", dir, "--project", "myproj", "--key", key,
+        "--entry", backlogEntryJson(`${key}-1`, "owner/repo#123"),
+      ]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain(`under key ${key}`);
+      expect(result.stderr).toBe("");
+
+      const register = readRegister(dir, "myproj");
+      const entries = (register.entries as Record<string, unknown[]>)[key] as Array<Record<string, unknown>>;
+      expect(entries).toHaveLength(1);
+      expect(validateProjectRegister(register).ok).toBe(true);
+    });
+  });
+
+  test("--project ../evil is rejected by the id sanitizer (exit 1, no write)", () => {
+    withTempDir((dir) => {
+      const result = runCli([
+        "status", "backlog-register", "--harness", dir, "--project", "../evil", "--key", "k1",
+        "--entry", backlogEntryJson("k1-1", "owner/repo#123"),
+      ]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("invalid project id");
+    });
+  });
+
+  test("--project /abs is rejected by the id sanitizer (exit 1, no write)", () => {
+    withTempDir((dir) => {
+      const result = runCli([
+        "status", "backlog-register", "--harness", dir, "--project", "/abs", "--key", "k1",
+        "--entry", backlogEntryJson("k1-1", "owner/repo#123"),
+      ]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("invalid project id");
+    });
+  });
 });
 
 describe("mstar status backlog-close — project-register backlog close (engine-backed)", () => {
@@ -1747,6 +1787,40 @@ describe("mstar status backlog-close — project-register backlog close (engine-
       const result = runCli(["status", "backlog-close", "--harness", dir, "--key", key, "--id", "no-such-id"]);
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("not found");
+    });
+  });
+
+  test("closing an already-resolved entry is a no-op re-stamp (exit 0, stays resolved) — engine behavior", () => {
+    withTempDir((dir) => {
+      const key = "pr-deep-review-2026-08-26";
+      const id = `${key}-1`;
+      const registerResult = runCli([
+        "status", "backlog-register", "--harness", dir, "--key", key,
+        "--entry", backlogEntryJson(id, "owner/repo#123"),
+      ]);
+      expect(registerResult.exitCode).toBe(0);
+
+      const first = runCli(["status", "backlog-close", "--harness", dir, "--key", key, "--id", id]);
+      expect(first.exitCode).toBe(0);
+
+      const second = runCli(["status", "backlog-close", "--harness", dir, "--key", key, "--id", id]);
+      expect(second.exitCode).toBe(0);
+      expect(second.stdout).toContain(`resolved entry ${id}`);
+
+      const register = readRegister(dir);
+      const entry = ((register.entries as Record<string, unknown[]>)[key] as Array<Record<string, unknown>>)[0];
+      expect(entry.lifecycle).toBe("resolved");
+      expect(validateProjectRegister(register).ok).toBe(true);
+    });
+  });
+
+  test("backlog-close --project ../evil is rejected by the id sanitizer (exit 1)", () => {
+    withTempDir((dir) => {
+      const result = runCli([
+        "status", "backlog-close", "--harness", dir, "--project", "../evil", "--key", "k1", "--id", "x",
+      ]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("invalid project id");
     });
   });
 });

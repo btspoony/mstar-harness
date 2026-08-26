@@ -936,6 +936,36 @@ function collectEntries(value: string, previous: string[]): string[] {
   return previous;
 }
 
+/**
+ * Single-component project-id guard for the `--project` write commands
+ * (backlog-register / backlog-close). The id is joined onto `{PROJECT_DIR}`
+ * and both commands WRITE `residuals.json` + `.status-write.lockdir/` there —
+ * an absolute or `..`-containing id would escape the projects dir (qc2 F-003;
+ * same class as the workflow-id guard in resolveSnapshotPath). Accept only one
+ * safe path component: an alnum first char, then `[A-Za-z0-9._-]`. The built-in
+ * `_default` project id (project-less flows) is a constant single-component
+ * name that cannot escape, so it is allowed explicitly.
+ */
+const PROJECT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+function sanitizeProjectId(projectId: string): string {
+  if (projectId === _DEFAULT_PROJECT) {
+    return projectId;
+  }
+  if (
+    projectId === "" ||
+    projectId === "." ||
+    projectId === ".." ||
+    path.isAbsolute(projectId) ||
+    !PROJECT_ID_RE.test(projectId)
+  ) {
+    throw new Error(
+      `invalid project id ${JSON.stringify(projectId)} \u2014 expected one path component ` +
+        `([A-Za-z0-9][A-Za-z0-9._-]*); "." / ".." / absolute / separator-containing ids would escape {PROJECT_DIR}`,
+    );
+  }
+  return projectId;
+}
+
 statusCommand
   .command("backlog-register")
   .description(
@@ -953,7 +983,7 @@ statusCommand
       if (entriesRaw.length === 0) {
         throw new Error("at least one --entry is required \u2014 refusing to register an empty backlog");
       }
-      const projectId = options.project ?? _DEFAULT_PROJECT;
+      const projectId = sanitizeProjectId(options.project ?? _DEFAULT_PROJECT);
       const projectRoot = resolveProjectDir(process.cwd(), options.harness ? { harnessDir: options.harness } : {});
       const projectDir = path.join(projectRoot, projectId);
       const registeredAt = todayString();
@@ -994,7 +1024,7 @@ statusCommand
   .option("--note <text>", "Closure note (default: \"closed by backlog close\")")
   .action(async (options: { project?: string; harness?: string; key: string; id: string; note?: string }) => {
     try {
-      const projectId = options.project ?? _DEFAULT_PROJECT;
+      const projectId = sanitizeProjectId(options.project ?? _DEFAULT_PROJECT);
       const projectRoot = resolveProjectDir(process.cwd(), options.harness ? { harnessDir: options.harness } : {});
       const projectDir = path.join(projectRoot, projectId);
       await closeProjectRegisterEntry({
