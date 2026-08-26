@@ -271,7 +271,80 @@ Check base-vs-branch before blaming the diff for CI failures. A red build that p
   - One entry per PR: `id: pr-deep-review-<YYYY-MM-DD>-<n>` (unique within the key), `title: "pr-deep-review <owner>/<repo>#<n>"`, `severity: low`, `source: pr-deep-review batch input`, `scope: "deep review of <owner>/<repo>#<n> in a new pr-deep-review session"`, `decision: defer`, `owner: project-manager`, `target: next session`, `tracking: pr-deep-review backlog`, `source_plan: <entries key>`, `registered_at: <YYYY-MM-DD>`.
   - `<n>` is the GitHub PR number; `title`/`scope` carry the recoverable PR identity (`<owner>/<repo>#<n>` or the PR URL) so a later session can open the exact deferred PR from the register alone.
   - **Write protocol**: python3 read-modify-write — read the whole file, preserve every other `entries` key, **append** to the day's array, never overwrite; never use `jq`/`jaq` `select` inside `|=` (jaq 2.3.0 deletes non-matching elements on update-with-empty — see `{KNOWLEDGE_DIR}/config-errors/jaq-jq-status-write-pattern.md`).
-  - Registration of deferred PRs MUST run inside the engine's **same-host exclusive write lock** — `withStatusWriteLock` (`packages/engine/src/lease.ts`; the status-write lockdir pattern, `<register dir>/.status-write.lockdir/`) — covering the full **read-check-replace-verify** sequence (read the register, pick the next free same-date batch key, write, `validateProjectRegister`) as ONE critical section. Do NOT hand-roll a lockdir protocol: the engine helper owns acquisition (atomic mkdir + immediate `holder.pid` write), guaranteed release (child-first: remove `holder.pid`, then `rmdir` the lockdir, only when the `(dev, ino)` identity is unchanged — never another writer's lock), bounded wait + timeout → halt and report `Blocked`, and stale-lock recovery (crash diagnosis via `holder.pid`; never decide by PID liveness alone — pid-file hazard). Full protocol → `{KNOWLEDGE_DIR}/architecture-patterns/shared-lifecycle-lockdir-pattern.md`. Concurrent same-date sessions serialize on the lock; never blind-overwrite.
+  - Registration of deferred PRs MUST run as **one executable python3 sequence** — lock acquisition through release in a single script, so the main agent can copy-run it directly (the engine's `withStatusWriteLock` is an in-process TS callback API; the register mutation is a python3 read-modify-write, so the lock contract is spelled out as runnable python below). The script (a) acquires the lockdir `<register dir>/.status-write.lockdir/` via atomic `os.mkdir` (EEXIST → another writer holds it; bounded wait ~30 s / 10 ms poll, then timeout → `Blocked`), writing `holder.pid` (its own pid) immediately after acquisition; (b) on timeout applies **age-based stale recovery** — if the lockdir mtime is older than 10 min, re-stat `(dev, ino)` and remove the lockdir ONLY if the identity is unchanged (never a fresh owner's lock; never decide by PID liveness alone — pid-file hazard), then retry acquisition once; (c) runs the **read-check-replace-verify** critical section (read the register, pick the next free same-date batch key, append to the day's array preserving every other `entries` key, write, `validateProjectRegister`); (d) releases **child-first** — remove `holder.pid`, then `rmdir` the lockdir, only when `(dev, ino)` is still the one acquired (never remove another writer's lock). Full protocol → `{KNOWLEDGE_DIR}/architecture-patterns/shared-lifecycle-lockdir-pattern.md`. Concurrent same-date sessions serialize on the lock; never blind-overwrite.
+
+    ```python
+    #!/usr/bin/env python3
+    # Register deferred batch PRs under the same-host exclusive write lock.
+    # Usage (from the harness repo root):
+    #   python3 register-deferred-prs.py <register.json> <base-key> <entry.json>
+    # One critical section: acquire lockdir -> read-check-replace-verify -> release.
+    import json, os, subprocess, sys, time
+
+    REG, BASE, ENTRY = sys.argv[1], sys.argv[2], json.load(open(sys.argv[3]))
+    LOCK = os.path.join(os.path.dirname(REG), ".status-write.lockdir")
+    DEADLINE, POLL, STALE = 30.0, 0.01, 600.0  # 30s bounded wait / 10ms poll / 10min stale
+
+    def acquire():
+        end = time.monotonic() + DEADLINE
+        while True:
+            try:
+                os.mkdir(LOCK)  # atomic: EEXIST -> another writer holds it
+                st = os.stat(LOCK)
+                open(os.path.join(LOCK, "holder.pid"), "w").write(str(os.getpid()))
+                return (st.st_dev, st.st_ino)
+            except FileExistsError:
+                if time.monotonic() >= end:
+                    return None  # timeout -> stale recovery below
+                time.sleep(POLL)
+
+    def release(ident):
+        try:
+            st = os.stat(LOCK)
+            if (st.st_dev, st.st_ino) == ident:  # never remove another writer's lock
+                os.unlink(os.path.join(LOCK, "holder.pid"))  # child-first
+                os.rmdir(LOCK)
+        except FileNotFoundError:
+            pass
+
+    ident = acquire()
+    if ident is None:  # age-based stale recovery: lockdir mtime older than 10 min
+        try:
+            st = os.stat(LOCK)
+            if time.time() - st.st_mtime > STALE:
+                before = (st.st_dev, st.st_ino)
+                st2 = os.stat(LOCK)  # re-stat: identity unchanged?
+                if (st2.st_dev, st2.st_ino) == before:  # never a fresh owner's lock
+                    os.unlink(os.path.join(LOCK, "holder.pid"))
+                    os.rmdir(LOCK)
+        except FileNotFoundError:
+            pass
+        ident = acquire()  # retry acquisition once
+    if ident is None:
+        sys.exit("Blocked: lockdir held; remove only if no writer is alive (holder.pid)")
+    try:
+        doc = json.load(open(REG))  # read
+        key = BASE
+        i = 2
+        while key in doc.setdefault("entries", {}):  # pick next free same-date batch key
+            key = f"{BASE}-{i}"
+            i += 1
+        ENTRY["source_plan"] = key  # provenance must match the entries key
+        doc["entries"][key] = doc["entries"].get(key, []) + [ENTRY]  # append, preserve others
+        json.dump(doc, open(REG, "w"), indent=2, ensure_ascii=False)  # replace
+        r = subprocess.run(  # validateProjectRegister (engine)
+            ["bun", "-e",
+             "import{validateProjectRegister as v}from'./packages/engine/dist/engine.js';"
+             "import{readFileSync as f}from'node:fs';"
+             "const g=v(JSON.parse(f(process.argv[1])));"
+             "console.log(JSON.stringify(g));process.exit(g.ok?0:1)",
+             REG], capture_output=True, text=True)
+        if r.returncode:
+            sys.exit(f"validateProjectRegister failed: {r.stdout}{r.stderr}")
+        print(f"registered {key} -> {REG}; validate ok")
+    finally:
+        release(ident)
+    ```
   - Validate before writing: `validateResidual` / `validateProjectRegister` must pass (fail-loud — rewrite on violation, never write silently).
 - **Registration failure halts the session**: if validation still fails after retries, stop and report `Blocked` — never start the first-PR review while deferred PRs are unregistered (they would be neither reviewed nor tracked).
 - **Backlog close**: a future session that picks up a deferred todo closes it **in place** — `lifecycle: resolved` + `closed_at: <YYYY-MM-DD>` + `closure_note` (no `closed` enum) — per the register lifecycle contract in `mstar-project-governance`.
