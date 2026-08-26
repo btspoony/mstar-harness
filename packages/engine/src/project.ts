@@ -38,10 +38,11 @@
  *   module cycle (status.ts no longer imports this module; public names stay
  *   exported from the package index for compile compatibility).
  */
-import { existsSync, readFileSync, readdirSync, type Dirent } from "node:fs";
-import { join } from "node:path";
-import { readJson, SEVERITY_ORDER, type GateResult, type Severity, type ValidationResult } from "./core.js";
+import { existsSync, mkdirSync, readFileSync, readdirSync, type Dirent } from "node:fs";
+import { join, resolve } from "node:path";
+import { readJson, SEVERITY_ORDER, writeJson, type GateResult, type Severity, type ValidationResult } from "./core.js";
 import { parseCompassFrontmatterText } from "./iteration.js";
+import { withStatusWriteLock } from "./lease.js";
 import { isOpenResidual, normalizeSeverity, validateResidual, type ResidualEntry } from "./status.js";
 
 /** Roadmap file name inside `projects/<id>/` (plan Task 4 — writer contract). */
@@ -136,6 +137,13 @@ export type TechDebtRollup = {
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const ROLLUP_FIELDS = ["total_open", "by_severity", "by_target", "by_plan"] as const;
+/** Local calendar date `YYYY-MM-DD` (register `closed_at`/`registered_at` dates are local). */
+function todayString(): string {
+  const now = new Date();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${now.getFullYear()}-${month}-${day}`;
+}
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -352,6 +360,154 @@ export function validateProjectRegister(doc: unknown): GateResult {
   }
 
   return { ok: violations.length === 0, violations };
+}
+
+/** Options for `appendProjectRegisterEntries` (plan 20260826-backlog-register-cli Task 1 + B-9). */
+export type AppendProjectRegisterEntriesOpts = {
+  /** Absolute path to the per-project directory (`<harness>/projects/<id>`; `_default` for project-less flows). */
+  projectDir: string;
+  /**
+   * Base entries key (`<plan-id>`), e.g. `pr-deep-review-2026-08-26`. The
+   * first free same-day key (`basePlanKey`, `basePlanKey-2`, `-3`, …) is
+   * selected INSIDE the status write lock — a caller-computed key would be a
+   * cross-lock TOCTOU (B-9 correction ①).
+   */
+  basePlanKey: string;
+  /** Residual entries to append — nine required fields + provenance. `source_plan` is overwritten with the used key; `registered_at` is required and must be set by the caller. */
+  entries: ResidualEntry[];
+};
+
+/** Options for `closeProjectRegisterEntry` (plan 20260826-backlog-register-cli Task 1). */
+export type CloseProjectRegisterEntryOpts = {
+  /** Absolute path to the per-project directory (`<harness>/projects/<id>`; `_default` for project-less flows). */
+  projectDir: string;
+  /** Entries key (`<plan-id>`) holding the entry to close. */
+  planKey: string;
+  /** `id` of the entry to close (absent → throw). */
+  entryId: string;
+  /** Closure note written verbatim; `closed_at` is today's local date. */
+  closureNote: string;
+};
+
+/**
+ * Append residual entries to a project register (plan 20260826-backlog-register-cli
+ * Task 1 + B-9): resolve `<projectDir>/residuals.json` and run the WHOLE
+ * critical section inside `withStatusWriteLock(registerPath, ...)` (lease.ts —
+ * the `<register dir>/.status-write.lockdir/` lock is reused, never
+ * reimplemented). Read the register (absent → empty doc), select the first
+ * free same-day key (`basePlanKey`, `basePlanKey-2`, `-3`, … — port of the
+ * python next-free-key loop, pr-review.md) INSIDE the lock, validate every
+ * entry with `validateResidual`, enforce entry-id uniqueness within the
+ * selected key (B-9 correction ② — `validateProjectRegister` has no
+ * duplicate-id detection), set each entry's `source_plan` to the used key
+ * (provenance must match the entries key; the caller cannot know the bumped
+ * key beforehand), append preserving every other key, validate the whole
+ * register with `validateProjectRegister`, then `writeJson` (atomic
+ * temp+rename — never `open(w)`). Fail-loud: any validation failure throws
+ * and the register is left untouched. Returns the key actually used.
+ */
+export async function appendProjectRegisterEntries(
+  opts: AppendProjectRegisterEntriesOpts,
+): Promise<{ ok: true; key: string }> {
+  const registerPath = resolve(join(opts.projectDir, PROJECT_REGISTER_FILE));
+  // The lockdir lands inside the project dir (dirname of the register); create
+  // it up front (mirrors writeWorkflowSnapshot) so a first-time project dir
+  // does not fail the lock acquisition with ENOENT.
+  mkdirSync(opts.projectDir, { recursive: true });
+  return withStatusWriteLock(registerPath, () => {
+    const doc = readJson(registerPath) as ProjectRegisterDoc;
+    const entriesMap = doc.entries ?? {};
+    // Port of the python next-free-key loop (pr-review.md): first free
+    // same-day key — basePlanKey, then basePlanKey-2, basePlanKey-3, …
+    let key = opts.basePlanKey;
+    for (let i = 2; key in entriesMap; i += 1) {
+      key = `${opts.basePlanKey}-${i}`;
+    }
+    for (const entry of opts.entries) {
+      const gate = validateResidual(entry);
+      if (!gate.ok) {
+        throw new Error(
+          `refusing to append invalid residual entry: ${gate.violations.map((v) => v.message).join("; ")}`,
+        );
+      }
+    }
+    // Entry ids must be unique within the selected key (B-9 correction ②):
+    // validateResidual is per-entry and validateProjectRegister has no
+    // duplicate-id detection.
+    const seen = new Set<string>();
+    for (const entry of opts.entries) {
+      if (typeof entry.id === "string") {
+        if (seen.has(entry.id)) {
+          throw new Error(
+            `refusing to append residual entries: duplicate entry id ${JSON.stringify(entry.id)} in key ${JSON.stringify(key)}`,
+          );
+        }
+        seen.add(entry.id);
+      }
+    }
+    // source_plan must match the entries key (validateProjectRegister); the
+    // caller cannot know the bumped key, so it is set here (pr-review.md).
+    const appended = opts.entries.map((entry) => ({ ...entry, source_plan: key })) as ProjectRegisterEntry[];
+    const register: ProjectRegisterDoc = {
+      ...doc,
+      entries: { ...entriesMap, [key]: [...(entriesMap[key] ?? []), ...appended] },
+    };
+    const gate = validateProjectRegister(register);
+    if (!gate.ok) {
+      throw new Error(
+        `refusing to write invalid project register: ${gate.violations.map((v) => v.message).join("; ")}`,
+      );
+    }
+    writeJson(registerPath, register);
+    return { ok: true as const, key };
+  });
+}
+
+/**
+ * Close one project-register entry in place (plan 20260826-backlog-register-cli
+ * Task 1): under `withStatusWriteLock(registerPath, ...)`, find `entryId` in
+ * `entries[planKey]` (absent → throw), set `lifecycle: resolved` +
+ * `closed_at: <today YYYY-MM-DD>` + `closure_note`, validate the whole
+ * register with `validateProjectRegister`, then `writeJson` (atomic
+ * temp+rename). Fail-loud: an invalid register throws and nothing is written.
+ */
+export async function closeProjectRegisterEntry(opts: CloseProjectRegisterEntryOpts): Promise<{ ok: true }> {
+  const registerPath = resolve(join(opts.projectDir, PROJECT_REGISTER_FILE));
+  // See appendProjectRegisterEntries — the lockdir needs its parent to exist.
+  mkdirSync(opts.projectDir, { recursive: true });
+  return withStatusWriteLock(registerPath, () => {
+    const doc = readJson(registerPath) as ProjectRegisterDoc;
+    const planEntries = doc.entries?.[opts.planKey];
+    if (!Array.isArray(planEntries)) {
+      throw new Error(
+        `refusing to close residual entry: no entries for key ${JSON.stringify(opts.planKey)} in ${registerPath}`,
+      );
+    }
+    if (!planEntries.some((entry) => entry.id === opts.entryId)) {
+      throw new Error(
+        `refusing to close residual entry: entry id ${JSON.stringify(opts.entryId)} not found in key ${JSON.stringify(opts.planKey)}`,
+      );
+    }
+    const register: ProjectRegisterDoc = {
+      ...doc,
+      entries: {
+        ...doc.entries,
+        [opts.planKey]: planEntries.map((entry) =>
+          entry.id === opts.entryId
+            ? { ...entry, lifecycle: "resolved", closed_at: todayString(), closure_note: opts.closureNote }
+            : entry,
+        ),
+      },
+    };
+    const gate = validateProjectRegister(register);
+    if (!gate.ok) {
+      throw new Error(
+        `refusing to write invalid project register: ${gate.violations.map((v) => v.message).join("; ")}`,
+      );
+    }
+    writeJson(registerPath, register);
+    return { ok: true as const };
+  });
 }
 
 /**
