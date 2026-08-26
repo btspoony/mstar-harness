@@ -38,4 +38,4 @@ Execute **`mstar-audit`** § `pr` variant end to end（SKILL.md common core：re
 
 Review findings that need fixing can be turned into self-contained plans for the normal Prepare → Execute flow (reusing `mstar-audit` SKILL.md **`## Plan output (all variants)`** — same contract as the `pr` variant).
 
-Output verdict + findings to the user, with the posted GitHub Review URL. Posting procedure (when a PR number exists) → **`references/pr-review.md`** § Comment posting; the main agent saves the Stage 3 report — each seat writes its own Stage 1 / Stage 2 evidence file via the primary checkout (never the worktree) → **`references/pr-review.md`** § Local report archive. Never auto-approve or merge.
+Output verdict + findings to the user, with the posted GitHub Review URL. Posting procedure (when a PR number exists) → **`references/pr-review.md`** § Comment posting; the main agent saves the Stage 3 report and writes/consolidates the evidence files — collect seats return evidence in their result payload (write-blocked), writable domain seats may write files or return payload → **`references/pr-review.md`** § Local report archive. Never auto-approve or merge.
