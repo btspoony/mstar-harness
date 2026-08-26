@@ -281,7 +281,7 @@ Review findings that need fixing can become plans for the normal Prepare → Exe
 
 Posting the GitHub Review is a **mandatory deliverable** of the `pr` variant — chat-only output is incomplete when a PR exists. The main agent (the command's orchestrator) posts the review; review seats never post — **for single-PR Stage 1/2 seats this overrides the Audit Mode / Hard Rule 2 / Mode C POST carve-out** (posting is Stage 3 only, by the main agent).
 
-- **Before anything else:** synthesize the verdict first, then post **before** worktree cleanup (see § Worktree isolation — cleanup happens after the comment is posted).
+- **Before anything else:** synthesize the verdict first, then post **before** worktree cleanup (see § Worktree isolation — cleanup happens after the local report is saved).
 - **No PR number** (bare branch / arbitrary diff): set `comments: n/a-no-pr` and skip the API. Chat output still required; this is not a Blocked review.
 - **Auth / API failure:** deliver the chat verdict anyway; Completion Report status `Partial`/`Blocked` with the `gh` error. Do not claim `Done` — comments are mandatory when a PR exists. **The local report is still saved** (§ Local report archive — posting failure does not skip archival).
 
