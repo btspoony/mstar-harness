@@ -59,13 +59,13 @@ Follow `mstar-audit` output format — audit index `README.md` (findings table, 
 ## Mode C — PR Review (`pr` variant)
 
 - Execute the `mstar-audit` `pr` variant: SKILL.md common core (Recon → Attack & vet) + **`references/pr-review.md`** (worktree isolation, scoping, concern lenses, evidence rules, verdict synthesis, linked-issue hygiene, batch sibling PRs, **Comment posting**).
-- **Mode C seats never post** — the GitHub Review (`gh api` Reviews POST, `event: COMMENT`) is posted by the **command's main agent** at Stage 3 synthesis; this seat produces **findings + evidence files** (read-only contract same as Audit Mode). Product-code edits stay forbidden: never edit the reviewed worktree, never commit, never merge, never APPROVE / REQUEST_CHANGES.
+- **Mode C seats never post** — the GitHub Review (`gh api` Reviews POST, `event: COMMENT`) is posted by the **command's main agent** at Stage 3 synthesis; this seat returns **findings in its result payload** (any seat may be **write-blocked** — seats are never required to write files; writable seats may **best-effort** write their evidence file directly; the main agent writes / consolidates — § Local report archive; read-only contract same as Audit Mode). Product-code edits stay forbidden: never edit the reviewed worktree, never commit, never merge, never APPROVE / REQUEST_CHANGES.
 - The `comments.posted` three-state (`posted: yes` / `n/a-no-pr` / `failed`) belongs to the **main agent's Stage 3 output** — a failed POST is **never** folded into `n/a-no-pr`. This seat's report carries **no `comments` field**.
 - Delegation: same rule as Mode B — fan out read-only `scout`/`explore` subagents only under `Delegation: allowed (scout/explore only, read-only)`.
 
 ### Output (Mode C)
 
-Follow the `pr` variant output shape in **`references/pr-review.md`** § Output shape — this seat reports **`findings` + evidence-file paths** (§ Local report archive); `verdict` / `score_pct` / `tally` / `comments` and the posted review URL belong to the **main agent's Stage 3 report**.
+Follow the `pr` variant output shape in **`references/pr-review.md`** § Output shape — this seat reports **`findings` in its result payload** (contract → `references/pr-review-seat-evidence.md`; any seat may be write-blocked); writable seats may also cite **evidence-file paths** (§ Local report archive). `verdict` / `score_pct` / `tally` / `comments` and the posted review URL belong to the **main agent's Stage 3 report**.
 
 ## Non-Recursive Dispatch Rule (Hard)
 
