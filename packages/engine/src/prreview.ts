@@ -311,6 +311,61 @@ export function validateMstarReviewV1(doc: unknown): GateResult {
 }
 
 // ---------------------------------------------------------------------------
+// synthesizeReview — SP3 review-json-kind § synthesizeReview
+// ---------------------------------------------------------------------------
+
+/**
+ * Deterministic short Markdown summary for {@link synthesizeReview} when the
+ * caller omits `summary_md` (SP3 § synthesizeReview — template locked in the
+ * engine test; no LLM). Tally line mirrors the chat display contract; each
+ * finding contributes one `- <mergeClass>: <title>` bullet.
+ */
+function defaultReviewSummary(tally: PrTallyResult, findings: MstarReviewV1["findings"]): string {
+  const lines = [
+    `## Verdict: ${tally.verdict} \u00b7 ${tally.scorePct}%`,
+    "",
+    `must-fix=${tally.tally.mustFix} should-fix=${tally.tally.shouldFix} nit=${tally.tally.nit} unverified=${tally.tally.unverified}`,
+  ];
+  if (findings.length > 0) {
+    lines.push("");
+    for (const finding of findings) {
+      lines.push(`- ${finding.mergeClass}: ${finding.title}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+/**
+ * Fold already-vetted findings into a complete `mstar.review/v1` envelope
+ * (SP3 § synthesizeReview). Pure and synchronous — verdict/tally come ONLY
+ * from {@link computePrTally}; no I/O, no GitHub, no store, no seat
+ * dispatch. `findings` pass through untouched; `target` is carried when
+ * provided. When `summary_md` is omitted, {@link defaultReviewSummary}
+ * builds the locked deterministic template.
+ */
+export function synthesizeReview(input: {
+  findings: MstarReviewV1["findings"];
+  summary_md?: string;
+  unverifiedCount?: number;
+  unmetAc?: PrTallyInput["unmetAc"];
+  target?: MstarReviewV1["target"];
+}): MstarReviewV1 {
+  const tally = computePrTally({
+    findings: input.findings,
+    unverifiedCount: input.unverifiedCount,
+    unmetAc: input.unmetAc,
+  });
+  return {
+    schema: "mstar.review/v1",
+    verdict: tally.verdict,
+    summary_md: input.summary_md ?? defaultReviewSummary(tally, input.findings),
+    tally,
+    findings: input.findings,
+    ...(input.target !== undefined ? { target: input.target } : {}),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // prReviewReportPath — § Local report archive naming contract
 // ---------------------------------------------------------------------------
 

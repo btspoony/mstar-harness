@@ -866,3 +866,108 @@ describe("validateMstarReviewV1 — mstar.review/v1 envelope (SP3 review-json-ki
     expect(codes(gate)).toContain("review.verdict-tally-mismatch");
   });
 });
+
+// ---------------------------------------------------------------------------
+// synthesizeReview — mstar.review/v1 envelope (SP3 review-json-kind)
+// ---------------------------------------------------------------------------
+import { synthesizeReview } from "../src/prreview.js";
+import type { MstarReviewFinding } from "../src/prreview.js";
+
+/** CHECK_TABLE findings carry only mergeClass; synthesizeReview needs full
+ * findings (title/body required) — map each row's classes to full findings
+ * so the 9-row table drives the envelope verdict/score assertions. */
+function fullFindings(findings: PrTallyInput["findings"]): MstarReviewFinding[] {
+  return findings.map((finding, index) => ({
+    mergeClass: finding.mergeClass,
+    title: `Finding ${index + 1}`,
+    body: `Body for finding ${index + 1}.`,
+  }));
+}
+
+/** The locked deterministic summary template (SP3-AC4) — exact bytes for
+ * {1 should-fix, 1 nit} ⇒ 82, needs fixes. */
+const LOCKED_SUMMARY = `## Verdict: needs fixes \u00b7 82%
+
+must-fix=0 should-fix=1 nit=1 unverified=0
+
+- should-fix: Unhandled null deref
+- nit: Typo in comment`;
+
+describe("synthesizeReview — mstar.review/v1 envelope (SP3 review-json-kind)", () => {
+  test("9-row check table: same verdict/score/tally as computePrTally (SP3-AC4)", () => {
+    for (const row of CHECK_TABLE) {
+      const synthesized = synthesizeReview({
+        findings: fullFindings(row.input.findings),
+        unverifiedCount: row.input.unverifiedCount,
+        unmetAc: row.input.unmetAc,
+      });
+      const direct = computePrTally(row.input);
+      expect(synthesized.verdict).toBe(direct.verdict);
+      expect(synthesized.tally).toEqual(direct);
+      expect(synthesized.verdict).toBe(row.expected.verdict);
+      expect(synthesized.tally?.scorePct).toBe(row.expected.scorePct);
+      expect(synthesized.tally?.tally).toEqual(row.expected.tally);
+      // The synthesized envelope is a valid mstar.review/v1 document.
+      expect(validateMstarReviewV1(synthesized).ok).toBe(true);
+    }
+  });
+
+  test("omitted summary_md uses the locked deterministic template (SP3-AC4)", () => {
+    const findings: MstarReviewFinding[] = [
+      {
+        mergeClass: "should-fix",
+        category: "correctness",
+        file_path: "src/foo.ts",
+        line_start: 10,
+        line_end: 12,
+        title: "Unhandled null deref",
+        body: "foo() can return null before the call site dereferences it.",
+        fingerprint_hint: "abc123",
+      },
+      {
+        mergeClass: "nit",
+        title: "Typo in comment",
+        body: "s/recieve/receive/",
+      },
+    ];
+    const synthesized = synthesizeReview({ findings });
+    expect(synthesized.summary_md).toBe(LOCKED_SUMMARY);
+  });
+
+  test("empty findings lock the no-findings summary form", () => {
+    const synthesized = synthesizeReview({ findings: [] });
+    expect(synthesized.summary_md).toBe(`## Verdict: ship it \u00b7 100%
+
+must-fix=0 should-fix=0 nit=0 unverified=0`);
+  });
+
+  test("explicit summary_md is preserved verbatim", () => {
+    const summary_md = "Custom prose summary from the main agent.";
+    const synthesized = synthesizeReview({ findings: [], summary_md });
+    expect(synthesized.summary_md).toBe(summary_md);
+  });
+
+  test("findings pass through untouched (SP3-AC4)", () => {
+    const findings: MstarReviewFinding[] = [
+      { mergeClass: "must-fix", title: "Auth bypass", body: "Token check is skipped on the retry path." },
+      { mergeClass: "nit", title: "Typo", body: "s/recieve/receive/", file_path: "src/a.ts", line_start: 3, line_end: 3 },
+    ];
+    const synthesized = synthesizeReview({ findings });
+    expect(synthesized.findings).toBe(findings);
+    expect(synthesized.findings).toEqual(findings);
+  });
+
+  test("target is carried through when provided, omitted otherwise", () => {
+    const target = { owner: "example", repo: "repo", pr: 134, head_sha: "abc123" };
+    expect(synthesizeReview({ findings: [], target }).target).toEqual(target);
+    expect(synthesizeReview({ findings: [] }).target).toBeUndefined();
+  });
+
+  test("synchronous and deterministic — same input, same envelope (SP3-AC5)", () => {
+    const findings = fullFindings([{ mergeClass: "must-fix" }, { mergeClass: "nit" }]);
+    const first = synthesizeReview({ findings });
+    const second = synthesizeReview({ findings });
+    expect(first).not.toBeInstanceOf(Promise);
+    expect(second).toEqual(first);
+  });
+});

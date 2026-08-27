@@ -357,6 +357,7 @@ export {
   prReviewSeatPrompt,
   prReviewSizing,
   resolvePrReviewTier,
+  synthesizeReview,
   validateFindingDoc,
   validateMstarReviewV1,
   validatePrReviewReport,
