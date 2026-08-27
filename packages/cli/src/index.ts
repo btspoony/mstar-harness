@@ -77,6 +77,7 @@ import {
   validateAssignmentFields,
   validateDesignTokenFrontmatter,
   validateIntegrationMergeLease,
+  validateMstarReviewV1,
   validateProjectRegister,
   validateRoleMapping,
   validateSchemaYaml,
@@ -1157,13 +1158,15 @@ function readPersistPayload(options: { file?: string; stdin?: boolean }): string
 
 /** Run the kind's existing validator before put (structure-only: the store
  * may not be FS-backed, so no harness-dir snapshot-existence checks).
- * kind=review is JSON-parse-only until SP3 wires validateMstarReviewV1. */
+ * kind=review runs validateMstarReviewV1 (no opaque JSON once SP3 lands);
+ * json remains parse-only (arbitrary payloads). */
 function validatePersistPayload(kind: ArtifactKind, payload: unknown): void {
   let gate: GateResult;
   if (kind === "status") gate = validateStatusV2(payload as StatusV2Doc);
   else if (kind === "snapshot") gate = validateWorkflowSnapshot(payload);
   else if (kind === "residuals") gate = validateProjectRegister(payload);
-  else return; // review / json \u2014 parse-only this iteration
+  else if (kind === "review") gate = validateMstarReviewV1(payload);
+  else return; // json \u2014 arbitrary payload, parse-only
   if (gate.ok) return;
   const detail = gate.violations.map((v) => `[${v.severity}] ${v.code}: ${v.message}`).join("; ");
   throw new Error(`refusing to persist invalid ${kind} document: ${detail}`);

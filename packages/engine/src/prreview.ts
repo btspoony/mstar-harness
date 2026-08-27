@@ -119,6 +119,253 @@ export function computePrTally(input: PrTallyInput): PrTallyResult {
 }
 
 // ---------------------------------------------------------------------------
+// validateMstarReviewV1 — mstar.review/v1 envelope (SP3 review-json-kind)
+// ---------------------------------------------------------------------------
+
+/** The one schema id the envelope validator accepts (SP3 § Schema). */
+const REVIEW_SCHEMA_ID = "mstar.review/v1";
+
+/** Inspector M1 verdict tokens (mstar-inspector v0.4) — rejected with an
+ * explicit code; harness verdict vocab is PR_VERDICTS only. */
+const INSPECTOR_VERDICTS = ["comment", "request_changes", "approve"] as const;
+
+/** Inspector M1 severity tokens — rejected with an explicit code; harness
+ * merge-class vocab is MERGE_CLASSES only. */
+const INSPECTOR_SEVERITIES = ["critical", "warning", "suggestion", "info"] as const;
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * One accepted PR-review finding in the `mstar.review/v1` envelope (SP3 §
+ * Schema). `mergeClass` is harness vocab (MERGE_CLASSES); `title`/`body`
+ * are non-empty strings; the rest are optional.
+ */
+export type MstarReviewFinding = {
+  mergeClass: MergeClass;
+  category?: string;
+  file_path?: string | null;
+  line_start?: number | null;
+  line_end?: number | null;
+  title: string;
+  body: string;
+  fingerprint_hint?: string;
+};
+
+/**
+ * The `mstar.review/v1` envelope (SP3 § Schema) — a parseable review
+ * document with harness vocab, sibling to the Markdown pr-review report.
+ * `verdict` is PR_VERDICTS; `tally` (when present) is a PrTallyResult whose
+ * `verdict` must equal the top-level `verdict` (consistency rule).
+ */
+export type MstarReviewV1 = {
+  schema: "mstar.review/v1";
+  verdict: PrVerdict;
+  summary_md: string;
+  tally?: PrTallyResult;
+  findings: MstarReviewFinding[];
+  target?: { owner?: string; repo?: string; pr?: number; head_sha?: string };
+};
+
+/**
+ * Validate a `mstar.review/v1` envelope (SP3 § Schema). Fail-loud sibling
+ * of {@link validatePrReviewReport} (the Markdown report validator) —
+ * shares PR_VERDICTS / MERGE_CLASSES only, never reuses the Markdown
+ * parser. Inspector M1 vocab (`comment|request_changes|approve`,
+ * `critical|warning|suggestion|info`, or a stray `severity` key) is
+ * rejected with `review.inspector-vocab`; a `tally` whose `verdict`
+ * disagrees with the top-level `verdict` is rejected with
+ * `review.verdict-tally-mismatch` (consistency rule, architect-locked).
+ */
+export function validateMstarReviewV1(doc: unknown): GateResult {
+  const violations: ValidationResult[] = [];
+  if (!isPlainObject(doc)) {
+    return {
+      ok: false,
+      violations: [violation("high", "review.not-object", "review document must be a JSON object")],
+    };
+  }
+
+  if (doc.schema === undefined) {
+    violations.push(violation("high", "review.missing-schema", "missing required field: schema"));
+  } else if (doc.schema !== REVIEW_SCHEMA_ID) {
+    violations.push(violation("high", "review.invalid-schema", `schema "${String(doc.schema)}" is not "${REVIEW_SCHEMA_ID}"`));
+  }
+
+  if (doc.verdict === undefined) {
+    violations.push(violation("high", "review.missing-verdict", "missing required field: verdict"));
+  } else if (typeof doc.verdict !== "string") {
+    violations.push(violation("high", "review.invalid-verdict", `verdict must be a string - got ${typeof doc.verdict}`));
+  } else if ((INSPECTOR_VERDICTS as readonly string[]).includes(doc.verdict)) {
+    violations.push(violation(
+      "high",
+      "review.inspector-vocab",
+      `verdict "${doc.verdict}" is inspector M1 vocab - harness verdicts are ${JSON.stringify(PR_VERDICTS)}`,
+      `use one of: ${PR_VERDICTS.join(" | ")}`,
+    ));
+  } else if (!(PR_VERDICTS as readonly string[]).includes(doc.verdict)) {
+    violations.push(violation(
+      "high",
+      "review.invalid-verdict",
+      `verdict "${doc.verdict}" is not one of ${JSON.stringify(PR_VERDICTS)}`,
+      `use one of: ${PR_VERDICTS.join(" | ")}`,
+    ));
+  }
+
+  if (doc.summary_md === undefined || typeof doc.summary_md !== "string" || doc.summary_md.trim() === "") {
+    violations.push(violation("high", "review.missing-summary", "summary_md must be a non-empty string"));
+  }
+
+  if (doc.findings === undefined || !Array.isArray(doc.findings)) {
+    violations.push(violation("high", "review.findings-not-array", "findings must be an array"));
+  } else {
+    doc.findings.forEach((finding, index) => {
+      if (!isPlainObject(finding)) {
+        violations.push(violation("high", "review.invalid-finding", `findings[${index}] must be an object`));
+        return;
+      }
+      if (finding.severity !== undefined) {
+        violations.push(violation(
+          "high",
+          "review.inspector-vocab",
+          `findings[${index}] carries inspector M1 field "severity" - harness merge classes are ${JSON.stringify(MERGE_CLASSES)}`,
+          "use mergeClass: must-fix | should-fix | nit",
+        ));
+      }
+      if (finding.mergeClass === undefined) {
+        violations.push(violation("high", "review.missing-merge-class", `findings[${index}] missing required field: mergeClass`));
+      } else if (typeof finding.mergeClass !== "string") {
+        violations.push(violation("high", "review.invalid-merge-class", `findings[${index}].mergeClass must be a string - got ${typeof finding.mergeClass}`));
+      } else if ((INSPECTOR_SEVERITIES as readonly string[]).includes(finding.mergeClass)) {
+        violations.push(violation(
+          "high",
+          "review.inspector-vocab",
+          `findings[${index}].mergeClass "${finding.mergeClass}" is inspector M1 severity vocab - harness merge classes are ${JSON.stringify(MERGE_CLASSES)}`,
+          `use one of: ${MERGE_CLASSES.join(" | ")}`,
+        ));
+      } else if (!(MERGE_CLASSES as readonly string[]).includes(finding.mergeClass)) {
+        violations.push(violation(
+          "high",
+          "review.invalid-merge-class",
+          `findings[${index}].mergeClass "${finding.mergeClass}" is not one of ${JSON.stringify(MERGE_CLASSES)}`,
+          `use one of: ${MERGE_CLASSES.join(" | ")}`,
+        ));
+      }
+      if (finding.title === undefined || typeof finding.title !== "string" || finding.title.trim() === "") {
+        violations.push(violation("high", "review.empty-title", `findings[${index}].title must be a non-empty string`));
+      }
+      if (finding.body === undefined || typeof finding.body !== "string" || finding.body.trim() === "") {
+        violations.push(violation("high", "review.empty-body", `findings[${index}].body must be a non-empty string`));
+      }
+      if (finding.category !== undefined && typeof finding.category !== "string") {
+        violations.push(violation("high", "review.invalid-category", `findings[${index}].category must be a string`));
+      }
+      if (finding.file_path !== undefined && finding.file_path !== null && typeof finding.file_path !== "string") {
+        violations.push(violation("high", "review.invalid-file-path", `findings[${index}].file_path must be a string or null`));
+      }
+      if (finding.line_start !== undefined && finding.line_start !== null && typeof finding.line_start !== "number") {
+        violations.push(violation("high", "review.invalid-line-start", `findings[${index}].line_start must be a number or null`));
+      }
+      if (finding.line_end !== undefined && finding.line_end !== null && typeof finding.line_end !== "number") {
+        violations.push(violation("high", "review.invalid-line-end", `findings[${index}].line_end must be a number or null`));
+      }
+      if (finding.fingerprint_hint !== undefined && typeof finding.fingerprint_hint !== "string") {
+        violations.push(violation("high", "review.invalid-fingerprint-hint", `findings[${index}].fingerprint_hint must be a string`));
+      }
+    });
+  }
+
+  if (doc.tally !== undefined) {
+    if (!isPlainObject(doc.tally)) {
+      violations.push(violation("high", "review.invalid-tally", "tally must be a PrTallyResult object"));
+    } else if (doc.tally.verdict !== doc.verdict) {
+      violations.push(violation(
+        "high",
+        "review.verdict-tally-mismatch",
+        `tally.verdict "${String(doc.tally.verdict)}" does not equal the top-level verdict "${String(doc.verdict)}" - the envelope verdict and tally must agree (consistency rule)`,
+      ));
+    }
+  }
+
+  if (doc.target !== undefined) {
+    if (!isPlainObject(doc.target)) {
+      violations.push(violation("high", "review.invalid-target", "target must be an object"));
+    } else {
+      if (doc.target.owner !== undefined && typeof doc.target.owner !== "string") {
+        violations.push(violation("high", "review.invalid-target", "target.owner must be a string"));
+      }
+      if (doc.target.repo !== undefined && typeof doc.target.repo !== "string") {
+        violations.push(violation("high", "review.invalid-target", "target.repo must be a string"));
+      }
+      if (doc.target.pr !== undefined && typeof doc.target.pr !== "number") {
+        violations.push(violation("high", "review.invalid-target", "target.pr must be a number"));
+      }
+      if (doc.target.head_sha !== undefined && typeof doc.target.head_sha !== "string") {
+        violations.push(violation("high", "review.invalid-target", "target.head_sha must be a string"));
+      }
+    }
+  }
+
+  return { ok: violations.length === 0, violations };
+}
+
+// ---------------------------------------------------------------------------
+// synthesizeReview — SP3 review-json-kind § synthesizeReview
+// ---------------------------------------------------------------------------
+
+/**
+ * Deterministic short Markdown summary for {@link synthesizeReview} when the
+ * caller omits `summary_md` (SP3 § synthesizeReview — template locked in the
+ * engine test; no LLM). Tally line mirrors the chat display contract; each
+ * finding contributes one `- <mergeClass>: <title>` bullet.
+ */
+function defaultReviewSummary(tally: PrTallyResult, findings: MstarReviewV1["findings"]): string {
+  const lines = [
+    `## Verdict: ${tally.verdict} \u00b7 ${tally.scorePct}%`,
+    "",
+    `must-fix=${tally.tally.mustFix} should-fix=${tally.tally.shouldFix} nit=${tally.tally.nit} unverified=${tally.tally.unverified}`,
+  ];
+  if (findings.length > 0) {
+    lines.push("");
+    for (const finding of findings) {
+      lines.push(`- ${finding.mergeClass}: ${finding.title}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+/**
+ * Fold already-vetted findings into a complete `mstar.review/v1` envelope
+ * (SP3 § synthesizeReview). Pure and synchronous — verdict/tally come ONLY
+ * from {@link computePrTally}; no I/O, no GitHub, no store, no seat
+ * dispatch. `findings` pass through untouched; `target` is carried when
+ * provided. When `summary_md` is omitted, {@link defaultReviewSummary}
+ * builds the locked deterministic template.
+ */
+export function synthesizeReview(input: {
+  findings: MstarReviewV1["findings"];
+  summary_md?: string;
+  unverifiedCount?: number;
+  unmetAc?: PrTallyInput["unmetAc"];
+  target?: MstarReviewV1["target"];
+}): MstarReviewV1 {
+  const tally = computePrTally({
+    findings: input.findings,
+    unverifiedCount: input.unverifiedCount,
+    unmetAc: input.unmetAc,
+  });
+  return {
+    schema: "mstar.review/v1",
+    verdict: tally.verdict,
+    summary_md: input.summary_md ?? defaultReviewSummary(tally, input.findings),
+    tally,
+    findings: input.findings,
+    ...(input.target !== undefined ? { target: input.target } : {}),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // prReviewReportPath — § Local report archive naming contract
 // ---------------------------------------------------------------------------
 
