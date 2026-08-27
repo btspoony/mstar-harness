@@ -34,9 +34,10 @@
  */
 import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
-import { readJson, writeJson, SEVERITY_ORDER, type GateResult, type Severity, type ValidationResult } from "./core.js";
+import { readJson, SEVERITY_ORDER, type GateResult, type Severity, type ValidationResult } from "./core.js";
 import { resolveIterationDir } from "./path.js";
 import { withStatusWriteLock } from "./lease.js";
+import { getArtifactStore } from "./store.js";
 import { parseEnforcementFlag, type EnforcementFlag } from "./dispatch.js";
 import { loadMstarc } from "./mstarc.js";
 // Call-time-only cycle with workflow.ts (workflow.ts imports validatePlanRow
@@ -684,8 +685,12 @@ export const validateStatus = validateStatusV2;
  * acquiring the lock; this helper asserts it as a safety net (cheap —
  * an invalid entry would fail `validateStatusV2` anyway, but the explicit
  * gate keeps the pre-lock fail-fast contract of `registerWorkflow`).
+ *
+ * Async-only (architect-locked 2026-08-27): the durable write goes through
+ * `getArtifactStore().put({ kind: "status", key: "root", ... })` inside the
+ * caller's lock — the store is the persist backend, never a second lock.
  */
-export function registerWorkflowEntryLocked(statusPath: string, entry: WorkflowEntry): StatusV2Doc {
+export async function registerWorkflowEntryLocked(statusPath: string, entry: WorkflowEntry): Promise<StatusV2Doc> {
   // simplify: full-doc validation (incl. per-snapshot reads of the whole
   // active set) under the root lock is O(active workflows) per root write.
   // Realistic active-set size is 1–3 (microseconds); correctness-preserving.
@@ -712,7 +717,7 @@ export function registerWorkflowEntryLocked(statusPath: string, entry: WorkflowE
   if (!gate.ok) {
     throw new Error(`refusing to write invalid status.json: ${gate.violations.map((v) => v.message).join("; ")}`);
   }
-  writeJson(statusPath, doc);
+  await getArtifactStore().put({ kind: "status", key: "root", payload: doc });
   return doc;
 }
 
@@ -754,7 +759,7 @@ export async function unregisterWorkflow(root: string, id: string): Promise<Stat
   }
   const statusPath = resolve(root);
   const harnessDir = dirname(statusPath);
-  return withStatusWriteLock(statusPath, () => {
+  return withStatusWriteLock(statusPath, async () => {
     // simplify: same O(active) full-doc validation as registerWorkflow (qc3 S-002).
     const current = readJson(statusPath) as Record<string, unknown>;
     if (Object.keys(current).length === 0) {
@@ -777,7 +782,7 @@ export async function unregisterWorkflow(root: string, id: string): Promise<Stat
     if (!gate.ok) {
       throw new Error(`refusing to write invalid status.json: ${gate.violations.map((v) => v.message).join("; ")}`);
     }
-    writeJson(statusPath, doc);
+    await getArtifactStore().put({ kind: "status", key: "root", payload: doc });
     return doc;
   });
 }

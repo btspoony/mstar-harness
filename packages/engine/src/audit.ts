@@ -1291,7 +1291,7 @@ export async function promoteAuditPlans(
   // own snapshot-dir lock would split the serialization point; nesting that
   // second lock is technically safe (different lockdir) but would let the
   // re-promote guard and the snapshot write serialize separately.
-  await withStatusWriteLock(statusPath, () => {
+  await withStatusWriteLock(statusPath, async () => {
     if (existsSync(snapshotPath)) {
       throw new Error(
         `refusing to promote audit plans: workflow ${JSON.stringify(workflowId)} already exists ` +
@@ -1302,7 +1302,7 @@ export async function promoteAuditPlans(
     mkdirSync(workflowDir, { recursive: true });
     try {
       writeJson(snapshotPath, snapshot);
-      registerWorkflowEntryLocked(statusPath, entry);
+      await registerWorkflowEntryLocked(statusPath, entry);
     } catch (error) {
       rmSync(snapshotPath, { force: true });
       try {

@@ -39,10 +39,11 @@
  *   exported from the package index for compile compatibility).
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, type Dirent } from "node:fs";
-import { join, resolve } from "node:path";
-import { readJson, SEVERITY_ORDER, writeJson, type GateResult, type Severity, type ValidationResult } from "./core.js";
+import { basename, join, resolve } from "node:path";
+import { readJson, SEVERITY_ORDER, type GateResult, type Severity, type ValidationResult } from "./core.js";
 import { parseCompassFrontmatterText } from "./iteration.js";
 import { withStatusWriteLock } from "./lease.js";
+import { getArtifactStore } from "./store.js";
 import { isOpenResidual, normalizeSeverity, validateResidual, type ResidualEntry } from "./status.js";
 
 /** Roadmap file name inside `projects/<id>/` (plan Task 4 — writer contract). */
@@ -419,7 +420,7 @@ export async function appendProjectRegisterEntries(
   // it up front (mirrors writeWorkflowSnapshot) so a first-time project dir
   // does not fail the lock acquisition with ENOENT.
   mkdirSync(opts.projectDir, { recursive: true });
-  return withStatusWriteLock(registerPath, () => {
+  return withStatusWriteLock(registerPath, async () => {
     const doc = readJson(registerPath) as ProjectRegisterDoc;
     const entriesMap = doc.entries ?? {};
     // Port of the python next-free-key loop (pr-review.md): first free
@@ -469,7 +470,7 @@ export async function appendProjectRegisterEntries(
         `refusing to write invalid project register: ${gate.violations.map((v) => v.message).join("; ")}`,
       );
     }
-    writeJson(registerPath, register);
+    await getArtifactStore().put({ kind: "residuals", key: basename(resolve(opts.projectDir)), payload: register });
     return { ok: true as const, key };
   });
 }
@@ -486,7 +487,7 @@ export async function closeProjectRegisterEntry(opts: CloseProjectRegisterEntryO
   const registerPath = resolve(join(opts.projectDir, PROJECT_REGISTER_FILE));
   // See appendProjectRegisterEntries — the lockdir needs its parent to exist.
   mkdirSync(opts.projectDir, { recursive: true });
-  return withStatusWriteLock(registerPath, () => {
+  return withStatusWriteLock(registerPath, async () => {
     const doc = readJson(registerPath) as ProjectRegisterDoc;
     const planEntries = doc.entries?.[opts.planKey];
     if (!Array.isArray(planEntries)) {
@@ -516,7 +517,7 @@ export async function closeProjectRegisterEntry(opts: CloseProjectRegisterEntryO
         `refusing to write invalid project register: ${gate.violations.map((v) => v.message).join("; ")}`,
       );
     }
-    writeJson(registerPath, register);
+    await getArtifactStore().put({ kind: "residuals", key: basename(resolve(opts.projectDir)), payload: register });
     return { ok: true as const };
   });
 }

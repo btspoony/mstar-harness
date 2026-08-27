@@ -19,6 +19,7 @@ import {
   supplyChainChecks,
   validateAuditStatusBlocks,
 } from "../src/audit.js";
+import { createFsStore, setArtifactStore } from "../src/store.js";
 import { readJson } from "../src/core.js";
 import { validateStatus } from "../src/status.js";
 import { WORKFLOW_SNAPSHOT_FILE, validateWorkflowSnapshot } from "../src/workflow.js";
@@ -802,7 +803,18 @@ describe("scaffoldAuditPlan", () => {
 
 describe("promoteAuditPlans", () => {
   const tmp = mkdtempSync(join(tmpdir(), "engine-audit-promote-"));
-  afterAll(() => rmSync(tmp, { recursive: true, force: true }));
+  afterAll(() => {
+    setArtifactStore(undefined);
+    rmSync(tmp, { recursive: true, force: true });
+  });
+  /** Per-test harness root with the active ArtifactStore pointed at it (Task
+   * 2: the promote path's root upsert persists via `registerWorkflowEntryLocked`
+   * → `getArtifactStore().put`; the store must resolve to this harness). */
+  function promoteHarnessDir(name: string): string {
+    const harnessDir = join(tmp, name);
+    setArtifactStore(createFsStore(harnessDir));
+    return harnessDir;
+  }
 
   /** Scaffold the standard 2-plan audit dir used by the error-path tests. */
   function mkPlanAudit(outDir: string, date: string): void {
@@ -835,7 +847,7 @@ describe("promoteAuditPlans", () => {
   }
 
   test("writes a plan workflow snapshot + registers it (type plan, matching started_at)", async () => {
-    const harnessDir = join(tmp, "harness");
+    const harnessDir = promoteHarnessDir("harness");
     const outDir = join(harnessDir, "plans", "audit-2026-08-08");
     scaffoldAuditPlan(
       outDir,
@@ -909,7 +921,7 @@ describe("promoteAuditPlans", () => {
   });
 
   test("re-promote with the same workflow id refuses and leaves the first rows intact", async () => {
-    const harnessDir = join(tmp, "harness-clobber");
+    const harnessDir = promoteHarnessDir("harness-clobber");
     const outDir = join(harnessDir, "plans", "audit-2026-08-09");
     scaffoldAuditPlan(
       outDir,
@@ -966,7 +978,7 @@ describe("promoteAuditPlans", () => {
   });
 
   test("two concurrent promotes of the same audit dir: exactly one wins, the other refuses (TOCTOU)", async () => {
-    const harnessDir = join(tmp, "harness-concurrent");
+    const harnessDir = promoteHarnessDir("harness-concurrent");
     const outDir = join(harnessDir, "plans", "audit-2026-08-12");
     mkPlanAudit(outDir, "2026-08-12");
 
@@ -1040,7 +1052,7 @@ describe("promoteAuditPlans", () => {
   });
 
   test("register failure rolls back the snapshot so a retry converges (W-001)", async () => {
-    const harnessDir = join(tmp, "harness-register-failure");
+    const harnessDir = promoteHarnessDir("harness-register-failure");
     const outDir = join(harnessDir, "plans", "audit-2026-08-10");
     mkPlanAudit(outDir, "2026-08-10");
 
@@ -1080,7 +1092,7 @@ describe("promoteAuditPlans", () => {
   });
 
   test("promotes a selected subset only (multi-id, out-of-selection rows absent)", async () => {
-    const harnessDir = join(tmp, "harness-subset");
+    const harnessDir = promoteHarnessDir("harness-subset");
     const outDir = join(harnessDir, "plans", "audit-2026-08-11");
     mkPlanAudit(outDir, "2026-08-11");
 
@@ -1099,7 +1111,7 @@ describe("promoteAuditPlans", () => {
     // Manual duplicate `001-*.md` files: selecting bare `001` must promote
     // the lowest filename (`001-a.md`), never the highest — the pre-fix
     // `byNum.set` loop let later entries overwrite earlier ones.
-    const harnessDir = join(tmp, "harness-dup-prefix");
+    const harnessDir = promoteHarnessDir("harness-dup-prefix");
     const outDir = join(harnessDir, "plans", "audit-2026-08-22");
     mkdirSync(outDir, { recursive: true });
     writeFileSync(join(outDir, "001-a.md"), "# Plan A\n");
@@ -1121,7 +1133,7 @@ describe("promoteAuditPlans", () => {
   });
 
   test("error paths: empty selected / missing harnessDir / unknown plan id / hostile workflow id", async () => {
-    const harnessDir = join(tmp, "harness-errors");
+    const harnessDir = promoteHarnessDir("harness-errors");
     const outDir = join(harnessDir, "plans", "audit-2026-08-11");
     mkPlanAudit(outDir, "2026-08-11");
 

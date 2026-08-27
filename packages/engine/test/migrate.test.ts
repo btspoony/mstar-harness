@@ -36,10 +36,11 @@
  *   (commit point — a failed run leaves v1 intact); v2 root -> no-op;
  *   dry-run -> steps only, zero writes.
  */
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createFsStore, setArtifactStore } from "../src/store.js";
 import { readJson, writeJson } from "../src/core.js";
 import { parseCompassFrontmatterText } from "../src/iteration.js";
 import { withStatusWriteLock } from "../src/lease.js";
@@ -58,11 +59,18 @@ const FIXTURES = join(import.meta.dir, "fixtures", "migrate-real");
 function tmpRoot(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix));
 }
+afterEach(() => {
+  setArtifactStore(undefined);
+});
 
 /** Copy the committed real-tree fixture into a fresh tmp harness dir. */
 function fixtureTree(): string {
   const root = tmpRoot("migrate-fixture-");
   cpSync(FIXTURES, root, { recursive: true });
+  // Task 2: the apply loop routes snapshot writes through the active
+  // ArtifactStore — point it at the migrated root so the store resolves the
+  // same paths the plan writes to.
+  setArtifactStore(createFsStore(root));
   return root;
 }
 
@@ -1105,6 +1113,9 @@ describe("Phase-5 F1 — custom workflow_dir/project_dir layout (Bugbot b1f402ec
     try {
       cpSync(FIXTURES, root, { recursive: true });
       writeFileSync(join(outer, ".mstarc"), "[config]\nworkflow_dir=repo-wf\nproject_dir=repo-pj\n", "utf8");
+      // The harness root here is `root` (`.mstarc` lives at its parent); the
+      // store must resolve the same custom layout via that parent config.
+      setArtifactStore(createFsStore(root));
       const plan = migrateHarnessTree(root);
       expect(plan.workflowDir).toBe(join(outer, "repo-wf"));
       expect(plan.projectDir).toBe(join(outer, "repo-pj"));
