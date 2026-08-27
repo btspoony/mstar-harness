@@ -28,7 +28,7 @@
  *   missing / corrupt / bin-less manifests each return one explicit
  *   failure row (never a silent skip that would flood every citation).
  * - checkEngineCallouts real-corpus pin (F-S3) — the shipped skills corpus
- *   yields exactly 34 Engine-check callouts / 31 CLI citations against the
+ *   yields exactly 44 Engine-check callouts / 42 CLI citations against the
  *   live CLI inventory + declared bins (4 lease/seats callouts consolidated
  *   to canonical pointers by plan 20260822-skill-pointer-hygiene Task 2);
  *   corpus drift goes red.
@@ -264,7 +264,7 @@ describe("checkEngineCallouts — Guard 1 CLI citation binary-prefix check", () 
     expect(failures).toEqual([]);
   });
 
-  test("real corpus pins 34 Engine-check callouts / 31 CLI citations (F-S3, drift goes red)", () => {
+  test("real corpus pins 44 Engine-check callouts / 42 CLI citations (F-S3, drift goes red)", () => {
     const REPO_ROOT = join(import.meta.dir, "..");
     const SKILLS_ROOT = join(REPO_ROOT, "skills");
 
@@ -305,8 +305,8 @@ describe("checkEngineCallouts — Guard 1 CLI citation binary-prefix check", () 
       engineExports,
       binNames,
     });
-    expect(calloutsChecked).toBe(34);
-    expect(cliCitationsChecked).toBe(31);
+    expect(calloutsChecked).toBe(44);
+    expect(cliCitationsChecked).toBe(42);
     expect(failures).toEqual([]);
   });
 });
