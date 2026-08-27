@@ -40,7 +40,12 @@ function installTimeoutMs(): number {
  */
 export function defaultDetectVersion(): string | null {
   try {
-    const out = execFileSync(CLI_NAME, ["--version"], { encoding: "utf8" });
+    // env: process.env — bun 1.2.x resolves bare command names against the
+    // PATH captured at process startup unless env is passed explicitly, so
+    // a mid-process PATH change (tests) would be invisible. Explicit
+    // inheritance is the documented execFileSync default; same pattern as
+    // adapters/dsh.ts runDsh.
+    const out = execFileSync(CLI_NAME, ["--version"], { encoding: "utf8", env: process.env });
     return out.trim();
   } catch {
     return null;

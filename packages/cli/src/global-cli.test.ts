@@ -9,7 +9,7 @@
  * - an install throw is converted to `action: "failed"`, never rethrown.
  * All runners are injected — no live npm registry calls.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -18,6 +18,23 @@ import { defaultDetectVersion, ensureGlobalCli, formatCliDoctorNote } from "./gl
 import { readHarnessVersion } from "./utils";
 
 const BASE = { version: "3.4.0", dryRun: false, noGlobalCli: false };
+
+// One file-scoped fake-bin dir for EVERY fake binary in this file
+// (`mstar-harness`, `npm`, `dsh`). Created once and removed once: each
+// fake's absolute path never changes, so a bare-name spawn resolution
+// cached by any bun runtime always points at a live file, and per-test
+// variants overwrite the SAME file in place (content is re-read on every
+// exec). Tests that need "CLI missing on PATH" write an `exit 127` body —
+// they must never delete files from this dir mid-run.
+const FAKE_BIN_DIR = path.join(tmpdir(), `mstar-cli-test-bin-${process.pid}`);
+
+beforeAll(() => {
+  mkdirSync(FAKE_BIN_DIR, { recursive: true });
+});
+
+afterAll(() => {
+  rmSync(FAKE_BIN_DIR, { recursive: true, force: true });
+});
 
 describe("ensureGlobalCli", () => {
   test("skips entirely when --no-global-cli is set (reason: flag)", () => {
@@ -129,36 +146,39 @@ describe("formatCliDoctorNote", () => {
 
 // ---------------------------------------------------------------------------
 // Version-format pin (F-202): `defaultDetectVersion` must return the
-// trimmed single-line version string. A fake `mstar-harness` on PATH emits
-// "3.4.0" with and without a trailing newline; both must yield "3.4.0".
-// No v-prefix normalization this iteration (F-102 deferred).
+// trimmed single-line version string. The file-scoped fake-bin dir holds a
+// fake `mstar-harness` emitting "3.4.0" with and without a trailing
+// newline (same file overwritten in place); both must yield "3.4.0".
 // ---------------------------------------------------------------------------
 
 describe("defaultDetectVersion", () => {
   test("returns the trimmed single-line version with and without a trailing newline (F-202)", () => {
-    const binDir = mkdtempSync(path.join(tmpdir(), "mstar-detect-"));
     const oldPath = process.env.PATH;
     try {
-      writeFakeBin(binDir, "mstar-harness", 'printf "3.4.0"');
-      process.env.PATH = `${binDir}:${oldPath ?? ""}`;
+      // PATH prepended once, before the first spawn; the newline variant
+      // overwrites the SAME absolute file in place — no dir is created or
+      // deleted mid-test, so no spawn depends on re-resolving a moved
+      // fake (CI bun 1.2.x determinism).
+      writeFakeBin("mstar-harness", 'printf "3.4.0"');
+      process.env.PATH = `${FAKE_BIN_DIR}:${oldPath ?? ""}`;
       expect(defaultDetectVersion()).toBe("3.4.0");
-      writeFakeBin(binDir, "mstar-harness", 'echo "3.4.0"');
+      writeFakeBin("mstar-harness", 'echo "3.4.0"');
       expect(defaultDetectVersion()).toBe("3.4.0");
     } finally {
       process.env.PATH = oldPath;
-      rmSync(binDir, { recursive: true, force: true });
     }
   });
 });
 
 // ---------------------------------------------------------------------------
 // Task 2 wiring — end-to-end `init` harness. Spawns the real CLI entry
-// (src/index.ts) in a sandboxed temp dir with fake `npm` / `dsh` /
-// `mstar-harness` binaries on PATH, so the commander `--no-global-cli`
-// boundary and both runInit return paths (install-mode + config-mode) are
-// exercised without touching a real registry, adapter install, or user
-// config. The fake `mstar-harness` reports a non-matching version so the
-// install path is always taken deterministically.
+// (src/index.ts) in a sandboxed temp dir with the file-scoped fake-bin dir
+// (fake `npm` / `dsh` / `mstar-harness` binaries, prepended to the child
+// PATH) so the commander `--no-global-cli` boundary and both runInit return
+// paths (install-mode + config-mode) are exercised without touching a real
+// registry, adapter install, or user config. The fake `mstar-harness`
+// reports a non-matching version so the install path is always taken
+// deterministically.
 // ---------------------------------------------------------------------------
 
 const CLI_ENTRY = path.join(import.meta.dir, "index.ts");
@@ -180,23 +200,20 @@ function runInitCli(args: string[], env: Record<string, string>): CliResult {
   }
 }
 
-/** Write an executable sh script into binDir. */
-function writeFakeBin(binDir: string, name: string, body: string): void {
-  const file = path.join(binDir, name);
+/** Write an executable sh script into the file-scoped fake-bin dir. */
+function writeFakeBin(name: string, body: string): void {
+  const file = path.join(FAKE_BIN_DIR, name);
   writeFileSync(file, `#!/bin/sh\n${body}\n`);
   chmodSync(file, 0o755);
 }
 
 describe("init wiring (end-to-end CLI harness)", () => {
   let tmp: string;
-  let binDir: string;
   let npmLog: string;
   let dshLog: string;
 
   beforeEach(() => {
     tmp = mkdtempSync(path.join(tmpdir(), "mstar-init-"));
-    binDir = path.join(tmp, "bin");
-    mkdirSync(binDir, { recursive: true });
     npmLog = path.join(tmp, "npm.log");
     dshLog = path.join(tmp, "dsh.log");
   });
@@ -209,28 +226,28 @@ describe("init wiring (end-to-end CLI harness)", () => {
     return {
       MSTAR_CLI_PROJECT_ROOT: tmp,
       DSH_HOME: path.join(tmp, "dsh-home"),
-      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      PATH: `${FAKE_BIN_DIR}:${process.env.PATH ?? ""}`,
     };
   }
 
   function fakeNpm(exitCode: number): void {
-    writeFakeBin(binDir, "npm", `printf '%s\\n' "$*" >> "${npmLog}"\nexit ${exitCode}`);
+    writeFakeBin("npm", `printf '%s\\n' "$*" >> "${npmLog}"\nexit ${exitCode}`);
   }
 
   function fakeDsh(): void {
-    writeFakeBin(binDir, "dsh", `printf '%s\\n' "$*" >> "${dshLog}"\nexit 0`);
+    writeFakeBin("dsh", `printf '%s\\n' "$*" >> "${dshLog}"\nexit 0`);
   }
 
   /** Fake mstar-harness reporting a version; default non-matching so the
    * install path is always taken deterministically. */
   function fakeMstarHarness(version = "0.0.0-test"): void {
-    writeFakeBin(binDir, "mstar-harness", `echo "${version}"\nexit 0`);
+    writeFakeBin("mstar-harness", `echo "${version}"\nexit 0`);
   }
 
   /** Fake npm that logs its args, then hangs (used with a tiny install
    * timeout to exercise the kill path). */
   function fakeNpmHang(): void {
-    writeFakeBin(binDir, "npm", `printf '%s\\n' "$*" >> "${npmLog}"\nexec sleep 10`);
+    writeFakeBin("npm", `printf '%s\\n' "$*" >> "${npmLog}"\nexec sleep 10`);
   }
 
   test("dry-run prints the exact npm command and never spawns npm (SP1-AC3)", () => {
