@@ -9,8 +9,13 @@
  * - an install throw is converted to `action: "failed"`, never rethrown.
  * All runners are injected — no live npm registry calls.
  */
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { ensureGlobalCli } from "./global-cli";
+import { readHarnessVersion } from "./utils";
 
 const BASE = { version: "3.4.0", dryRun: false, noGlobalCli: false };
 
@@ -81,5 +86,144 @@ describe("ensureGlobalCli", () => {
       spec: "@mstar-harness/cli@3.4.0",
       message: "EACCES: permission denied",
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 2 wiring — end-to-end `init` harness. Spawns the real CLI entry
+// (src/index.ts) in a sandboxed temp dir with fake `npm` / `dsh` /
+// `mstar-harness` binaries on PATH, so the commander `--no-global-cli`
+// boundary and both runInit return paths (install-mode + config-mode) are
+// exercised without touching a real registry, adapter install, or user
+// config. The fake `mstar-harness` reports a non-matching version so the
+// install path is always taken deterministically.
+// ---------------------------------------------------------------------------
+
+const CLI_ENTRY = path.join(import.meta.dir, "index.ts");
+const PACKAGE_VERSION = readHarnessVersion();
+
+type CliResult = { status: number; stdout: string; stderr: string };
+
+function runInitCli(args: string[], env: Record<string, string>): CliResult {
+  try {
+    const stdout = execFileSync(process.execPath, [CLI_ENTRY, "init", ...args], {
+      env: { ...process.env, ...env },
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    return { status: 0, stdout, stderr: "" };
+  } catch (error) {
+    const e = error as { status?: number; stdout?: string; stderr?: string };
+    return { status: e.status ?? 1, stdout: e.stdout ?? "", stderr: e.stderr ?? "" };
+  }
+}
+
+/** Write an executable sh script into binDir. */
+function writeFakeBin(binDir: string, name: string, body: string): void {
+  const file = path.join(binDir, name);
+  writeFileSync(file, `#!/bin/sh\n${body}\n`);
+  chmodSync(file, 0o755);
+}
+
+describe("init wiring (end-to-end CLI harness)", () => {
+  let tmp: string;
+  let binDir: string;
+  let npmLog: string;
+  let dshLog: string;
+
+  beforeEach(() => {
+    tmp = mkdtempSync(path.join(tmpdir(), "mstar-init-"));
+    binDir = path.join(tmp, "bin");
+    mkdirSync(binDir, { recursive: true });
+    npmLog = path.join(tmp, "npm.log");
+    dshLog = path.join(tmp, "dsh.log");
+  });
+
+  afterEach(() => {
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  function cliEnv(): Record<string, string> {
+    return {
+      MSTAR_CLI_PROJECT_ROOT: tmp,
+      DSH_HOME: path.join(tmp, "dsh-home"),
+      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+    };
+  }
+
+  function fakeNpm(exitCode: number): void {
+    writeFakeBin(binDir, "npm", `printf '%s\\n' "$*" >> "${npmLog}"\nexit ${exitCode}`);
+  }
+
+  function fakeDsh(): void {
+    writeFakeBin(binDir, "dsh", `printf '%s\\n' "$*" >> "${dshLog}"\nexit 0`);
+  }
+
+  /** Non-matching PATH version so the install path is always taken. */
+  function fakeMstarHarness(): void {
+    writeFakeBin(binDir, "mstar-harness", 'echo "0.0.0-test"\nexit 0');
+  }
+
+  test("dry-run prints the exact npm command and never spawns npm (SP1-AC3)", () => {
+    fakeNpm(0);
+    const configPath = path.join(tmp, "opencode.json");
+    const result = runInitCli(["--dry-run", "--yes", "--target", "opencode", "--output", configPath], cliEnv());
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(`Would run: npm i -g @mstar-harness/cli@${PACKAGE_VERSION}`);
+    expect(result.stdout).toContain("Status: ready (dry-run)");
+    expect(existsSync(npmLog)).toBe(false);
+    expect(existsSync(configPath)).toBe(false);
+  });
+
+  test("config-mode success installs the exact pinned spec (SP1-AC5)", () => {
+    fakeNpm(0);
+    fakeMstarHarness();
+    const configPath = path.join(tmp, "opencode.json");
+    const result = runInitCli(["--yes", "--target", "opencode", "--output", configPath], cliEnv());
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(`Installed @mstar-harness/cli@${PACKAGE_VERSION} globally.`);
+    expect(result.stdout).toContain("Status: configured");
+    expect(readFileSync(npmLog, "utf8").trim()).toBe(`i -g @mstar-harness/cli@${PACKAGE_VERSION}`);
+    expect(existsSync(configPath)).toBe(true);
+  });
+
+  test("config-mode stays exit 0 when the global install fails (SP1-AC4)", () => {
+    fakeNpm(1);
+    fakeMstarHarness();
+    const configPath = path.join(tmp, "opencode.json");
+    const result = runInitCli(["--yes", "--target", "opencode", "--output", configPath], cliEnv());
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Global CLI install failed:");
+    expect(result.stdout).toContain("Status: configured");
+  });
+
+  test("install-mode success installs the exact pinned spec (SP1-AC5)", () => {
+    fakeNpm(0);
+    fakeMstarHarness();
+    fakeDsh();
+    const result = runInitCli(["--yes", "--target", "dsh"], cliEnv());
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(`Installed @mstar-harness/cli@${PACKAGE_VERSION} globally.`);
+    expect(result.stdout).toContain("Status: configured");
+    expect(readFileSync(npmLog, "utf8").trim()).toBe(`i -g @mstar-harness/cli@${PACKAGE_VERSION}`);
+  });
+
+  test("install-mode stays exit 0 when the global install fails (SP1-AC4)", () => {
+    fakeNpm(1);
+    fakeMstarHarness();
+    fakeDsh();
+    const result = runInitCli(["--yes", "--target", "dsh"], cliEnv());
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Global CLI install failed:");
+    expect(result.stdout).toContain("Status: configured");
+  });
+
+  test("--no-global-cli skips the global install entirely (SP1-AC2)", () => {
+    fakeNpm(0);
+    const configPath = path.join(tmp, "opencode.json");
+    const result = runInitCli(["--yes", "--target", "opencode", "--output", configPath, "--no-global-cli"], cliEnv());
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Skipping global CLI install (--no-global-cli).");
+    expect(existsSync(npmLog)).toBe(false);
   });
 });
