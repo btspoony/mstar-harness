@@ -286,12 +286,26 @@ describe("mstar pr-review seat-prompt", () => {
 // mstar pr-review size
 // ---------------------------------------------------------------------------
 
-/** Build a repo with one commit carrying `lines` added lines on HEAD~1..HEAD. */
-function repoWithAddedLines(root: string, lines: number): void {
+/**
+ * Hermetic temp git repo: fixed `main` default branch (CI has no
+ * init.defaultBranch), local identity, and no gpg signing regardless of the
+ * ambient config — so commits/fetches never depend on the host git config.
+ * `remote` pre-wires a local origin so fetch-expectation tests stay offline.
+ */
+function initTestRepo(root: string, opts: { remote?: string } = {}): void {
   mkdirSync(root, { recursive: true });
-  git(["init", "-q"], root);
+  git(["init", "-q", "-b", "main"], root);
   git(["config", "user.email", "t@t.io"], root);
   git(["config", "user.name", "T"], root);
+  git(["config", "commit.gpgsign", "false"], root);
+  if (opts.remote !== undefined) {
+    git(["remote", "add", "origin", opts.remote], root);
+  }
+}
+
+/** Build a repo with one commit carrying `lines` added lines on HEAD~1..HEAD. */
+function repoWithAddedLines(root: string, lines: number): void {
+  initTestRepo(root);
   writeFileSync(join(root, "a.txt"), "base\n");
   git(["add", "-A"], root);
   git(["commit", "-q", "-m", "base"], root);
@@ -376,10 +390,7 @@ describe("mstar pr-review size", () => {
       // Fixture: a renamed-only diff base..head where the file is BIG at the
       // head ref but does NOT exist at checkout HEAD (which sits elsewhere).
       const repo = join(dir, "repo");
-      mkdirSync(repo, { recursive: true });
-      git(["init", "-q"], repo);
-      git(["config", "user.email", "t@t.io"], repo);
-      git(["config", "user.name", "T"], repo);
+      initTestRepo(repo);
       writeFileSync(join(repo, "a.txt"), "base\n");
       git(["add", "-A"], repo);
       git(["commit", "-q", "-m", "base"], repo);
@@ -412,10 +423,7 @@ describe("mstar pr-review size", () => {
   test("numstat counting handles +/- prefixed content and empty added lines (~100 semantics)", () => {
     withTempDir((dir) => {
       const repo = join(dir, "repo");
-      mkdirSync(repo, { recursive: true });
-      git(["init", "-q"], repo);
-      git(["config", "user.email", "t@t.io"], repo);
-      git(["config", "user.name", "T"], repo);
+      initTestRepo(repo);
       writeFileSync(join(repo, "a.txt"), "base\n");
       git(["add", "-A"], repo);
       git(["commit", "-q", "-m", "base"], repo);
@@ -748,16 +756,13 @@ describe("mstar pr-review worktree-setup — explicit base refspec fetch (fix ro
       const gitBin = realGit();
       const g = (args: string[], cwd: string): string =>
         execFileSync(gitBin, args, { cwd, encoding: "utf8" }).trim();
-      mkdirSync(join(dir, "seed"), { recursive: true });
       const seed = join(dir, "seed");
-      g(["init"], seed);
-      g(["config", "user.email", "t@t.io"], seed);
-      g(["config", "user.name", "T"], seed);
+      initTestRepo(seed);
       writeFileSync(join(seed, "a.txt"), "base\n");
       g(["add", "-A"], seed);
       g(["commit", "-q", "-m", "base"], seed);
       const remote = join(dir, "remote.git");
-      g(["init", "--bare", remote], seed);
+      g(["init", "--bare", "-b", "main", remote], seed);
       g(["remote", "add", "origin", remote], seed);
       g(["push", "-q", "origin", "HEAD:refs/heads/main"], seed);
       g(["checkout", "-q", "-b", "feature"], seed);
@@ -769,11 +774,7 @@ describe("mstar pr-review worktree-setup — explicit base refspec fetch (fix ro
       // Narrow single-branch clone WITHOUT any origin/main tracking ref —
       // short-name base must still get the explicit refspec fetch.
       const clone = join(dir, "clone");
-      mkdirSync(clone, { recursive: true });
-      g(["init"], clone);
-      g(["config", "user.email", "t@t.io"], clone);
-      g(["config", "user.name", "T"], clone);
-      g(["remote", "add", "origin", remote], clone);
+      initTestRepo(clone, { remote });
       g(["config", "remote.origin.fetch", "+refs/heads/feature:refs/remotes/origin/feature"], clone);
       g(["fetch", "-q", "origin"], clone);
       try {
