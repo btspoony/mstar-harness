@@ -6,6 +6,21 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [3.3.1] - 2026-08-27
+
+### Harness
+
+- Renamed `/pr-deep-review` → `/amazing-pr-review` with a clean cutover (no alias) and added three review strengths: `quick` (single-pass, 1 seat, collect + review in one pass) / `default` (the no-flag landing tier — 2 domain seats, collection folded in, reduced seats) / `deep` (the former full three-stage pipeline: collect → domain review → main-agent synthesis, 4–7 seats). The tier is chosen by an explicit keyword or inferred from the change shape; the default tier no longer fans out the full seat plan.
+- Reworked `amazing-pr-review` batch semantics to **one session = one PR**: when multiple PRs are passed in, only the **first** runs the full three-stage deep review; the rest are registered as audit todos in `{PROJECT_DIR}/_default/residuals.json` (`decision: defer`, `target: next session`, `tracking: pr-deep-review backlog`) and the report suggests opening one session per remaining PR. The old four-seat N/4 batch fan-out is removed.
+- Reworked single-PR deep review into a **three-stage pipeline** (collect → domain review → synthesis): lightweight read-only collect seats fan out by domain, mstar built-in roles review code + security per domain, and the main agent dedupes, three-way vets, and publishes the single GitHub Review. Posting ownership moved to the main agent — review seats never post. Fan-out is scale-driven, reusing the existing ~300-line sizing band.
+- Synced the **three-stage pipeline** and **one session = one PR** semantics across skill core, roles, and user-facing docs: `mstar-audit` SKILL.md (`pr` variant dispatch + Hard Rule 2), `mstar-roles` shared Audit Mode and `code-reviewer.md` Mode C (every seat — collect or domain — returns evidence / findings in its result payload: any seat may be write-blocked, and the main agent writes / consolidates the evidence files; seats produce no verdict, never post), and README.md / README_CN.md / docs/cli.md. Posting ownership is unified on the **main agent** across all surfaces — review seats never post.
+- **Role references:** Add a shared coding-philosophy line to dev-role Role Missions (`fullstack-dev`, `fullstack-dev-2`, `frontend-dev`): "YAGNI is your coding philosophy; PDCA is your behavioral discipline."
+- **Role references:** Unify executor Role Mission phrasing to the second-person "You are …" convention (`qa-engineer`, `prompt-engineer`, `ops-engineer`, `fullstack-dev-shared`); `project-manager` keeps its Identity section as orchestrator exception.
+
+- Version alignment with harness **3.3.1** (no OpenCode package API change).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **3.3.1**.
+
 ## [3.3.0] - 2026-08-25
 
 ### Harness
