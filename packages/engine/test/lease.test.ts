@@ -46,7 +46,7 @@
  * `"claimed_at": "2026-08-08"` and MUST pass `mstar lease verify`.
  */
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { PlanRow } from "../src/status.js";
@@ -643,6 +643,10 @@ describe("withStatusWriteLock", () => {
     try {
       const statusPath = join(dir, "status.json");
       mkdirSync(join(dir, ".status-write.lockdir"));
+      // Live-holder fixture: an empty lockdir would now be auto-reclaimed as
+      // crash-leaked, so pin a live holder pid (our own process) to exercise
+      // the blocking path.
+      writeFileSync(join(dir, ".status-write.lockdir", "holder.pid"), String(process.pid));
       await expect(withStatusWriteLock(statusPath, () => "never", { timeoutMs: 120 })).rejects.toThrow(
         /another writer holds/i,
       );
@@ -786,9 +790,92 @@ describe("withStatusWriteLock", () => {
     try {
       const statusPath = join(dir, "status.json");
       mkdirSync(join(dir, ".status-write.lockdir"));
+      // Live-holder fixture: an empty lockdir would now be auto-reclaimed as
+      // crash-leaked instead of timing out.
+      writeFileSync(join(dir, ".status-write.lockdir", "holder.pid"), String(process.pid));
       await expect(withStatusWriteLock(statusPath, () => "never", { timeoutMs: 120 })).rejects.toThrow(
         /remove .*\.status-write\.lockdir if no writer is alive/,
       );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("auto-reclaims a crash-leaked lockdir whose holder pid is dead", async () => {
+    const dir = makeDir();
+    try {
+      const statusPath = join(dir, "status.json");
+      const lockDir = join(dir, ".status-write.lockdir");
+      mkdirSync(lockDir);
+      // A pid that cannot exist on this host (beyond pid_max on macOS and
+      // Linux) — verified dead with the same signal-0 probe the engine uses.
+      const deadPid = 4_194_303;
+      expect(() => process.kill(deadPid, 0)).toThrow();
+      writeFileSync(join(lockDir, "holder.pid"), String(deadPid));
+      const value = await withStatusWriteLock(statusPath, () => "acquired", { timeoutMs: 500 });
+      expect(value).toBe("acquired");
+      // The stale lockdir was renamed away (and removed); the new lock was
+      // released normally after fn.
+      expect(existsSync(lockDir)).toBe(false);
+      expect(readdirSync(dir).filter((n) => n.startsWith(".status-write.lockdir.stale-"))).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("auto-reclaims a crash-leaked lockdir without holder.pid (crashed acquire)", async () => {
+    const dir = makeDir();
+    try {
+      const statusPath = join(dir, "status.json");
+      const lockDir = join(dir, ".status-write.lockdir");
+      // Acquisition writes holder.pid immediately after mkdir, so a lockdir
+      // with no pid file is by construction a crash between mkdir and the write.
+      mkdirSync(lockDir);
+      const value = await withStatusWriteLock(statusPath, () => "acquired", { timeoutMs: 500 });
+      expect(value).toBe("acquired");
+      expect(existsSync(lockDir)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("does not reclaim a lockdir whose holder pid is our own live process", async () => {
+    const dir = makeDir();
+    try {
+      const statusPath = join(dir, "status.json");
+      const lockDir = join(dir, ".status-write.lockdir");
+      mkdirSync(lockDir);
+      writeFileSync(join(lockDir, "holder.pid"), String(process.pid));
+      await expect(withStatusWriteLock(statusPath, () => "never", { timeoutMs: 120 })).rejects.toThrow(
+        /another writer holds/i,
+      );
+      // A self-held lockdir is never stolen from.
+      expect(existsSync(lockDir)).toBe(true);
+      expect(readFileSync(join(lockDir, "holder.pid"), "utf8")).toBe(String(process.pid));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("reclamation backs off to a counter suffix when the .stale-* target name collides", async () => {
+    const dir = makeDir();
+    try {
+      const statusPath = join(dir, "status.json");
+      const lockDir = join(dir, ".status-write.lockdir");
+      mkdirSync(lockDir);
+      const deadPid = 4_194_303;
+      expect(() => process.kill(deadPid, 0)).toThrow();
+      writeFileSync(join(lockDir, "holder.pid"), String(deadPid));
+      // Pre-seed the rename targets the reclaim will attempt (its stamp is
+      // Date.now() at reclaim time, milliseconds after this seeding): the
+      // first `.stale-<ts>` rename hits EEXIST and must back off to a
+      // counter-suffixed name. The 100ms window covers any stall between
+      // these two statements.
+      const stamp = Date.now();
+      for (let i = 0; i <= 100; i++) mkdirSync(`${lockDir}.stale-${stamp + i}`);
+      const value = await withStatusWriteLock(statusPath, () => "ok", { timeoutMs: 500 });
+      expect(value).toBe("ok");
+      expect(existsSync(lockDir)).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
