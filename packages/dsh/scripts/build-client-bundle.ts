@@ -47,8 +47,8 @@ export const CLIENT_EXTERNALS: readonly string[] = [
   '@deepseek-ai/dsh-client-runtime/client',
 ]
 
-/** Wire/type layers with no shared runtime identity that may inline (snapshot tsdown.client.ts mirror). */
-const INLINE_SAFE = /^@deepseek-ai\/dsh-(host-apiproxy|session|llm|tools|brand)(\/|$)/
+/** Wire/type layers with no shared runtime identity that may inline (snapshot tsdown.client.ts mirror). Remote cutover: proxy RPC no longer inlines here — remaining remotes are generated `/remote` contributions matched by GENERATED_REMOTE below (e.g. `@deepseek-ai/dsh-api-remotes/remote`). */
+const INLINE_SAFE = /^@deepseek-ai\/dsh-(session|llm|tools|brand)(\/|$)/
 /** Generated descriptor/codec contribution with no shared runtime identity. */
 const GENERATED_REMOTE = /^@deepseek-ai\/dsh-[a-z0-9]+(?:-[a-z0-9]+)*\/remote$/
 
