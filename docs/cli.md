@@ -204,6 +204,39 @@ Exit codes:
 - `0` — OK: prints `roles validate (mapping): OK` and `roles validate (load order): OK`, then the summary `roles validate: OK` with the violation, sibling-skill-scanned, and load-order-checked counts (the load-order count excludes `mstar-harness-core`, exempt by design)
 - `1` — violations: prints a FAIL header plus one violation row per mapping / load-order violation on stderr (same stream split as the other `printChecklist` commands); the `roles validate: FAIL (N violations, …)` summary line stays on stdout
 
+### `mstar-harness persist`
+
+Persist one JSON coordination doc through the pluggable **ArtifactStore** (engine `@mstar-harness/engine` — `ArtifactStore` / `ArtifactKind` / `createFsStore` / `setArtifactStore` / `getArtifactStore` / `loadStoreModule`). The default `FsStore` maps kinds to the existing `{HARNESS_DIR}` paths and keeps the atomic temp+rename write semantics; integrations can mount their own store in-process (`setArtifactStore`) or per-command via `--store` / `MSTAR_STORE_MODULE`.
+
+- `mstar-harness persist <kind> --key <key> [--file <path>|--stdin] [--store <module>] [--schema <id>]`
+- `mstar-harness persist get <kind> --key <key> [--store <module>]`
+
+`<kind>` is one of `status` | `snapshot` | `residuals` | `review` | `json` (an unknown kind is a usage error, exit 2).
+
+Payload source: `--file <path>` reads a JSON file; `--stdin` (or no flag) reads stdin; the two flags are mutually exclusive. `--key` is required: `status` always uses the key `root`; `json` takes an absolute file path (relative or `..`-containing keys are rejected); the other kinds take a stable id (workflow id, project id, or review id). `--schema <id>` optionally records a schema id (e.g. `mstar.review/v1`) on the stored doc.
+
+Validators run before put: `status` / `snapshot` / `residuals` payloads are checked with the existing `validateStatusV2` / `validateWorkflowSnapshot` / `validateProjectRegister` and an invalid document is refused (exit 1, nothing written). `review` is JSON-parse-only this iteration (schema validation lands with `mstar.review/v1`); `json` is an escape hatch.
+
+Store selection: `--store <module>` wins over `MSTAR_STORE_MODULE`; with neither, the default `FsStore` resolves the harness dir from the cwd / `MSTAR_HARNESS_DIR`. The module is a filesystem path to an ESM/CJS file exporting `createArtifactStore()`, a default factory, or a default store object with `put()` + `get()` functions — **filesystem paths only**: empty values and any URI scheme (`http:`, `https:`, `file:`, `data:`, `node:`, …) are rejected before `import()` (no remote loader).
+
+Default `FsStore` path table:
+
+| kind | path |
+|------|------|
+| `status` | `{HARNESS_DIR}/status.json` (key must be `root`) |
+| `snapshot` | `{WORKFLOW_DIR}/<key>/snapshot.json` |
+| `residuals` | `{PROJECT_DIR}/<key>/residuals.json` |
+| `review` | plan-shaped key (`^[0-9]{8}-[a-z0-9-]+$`) → `{HARNESS_DIR}/sdd/<key>/review/report.json`; other keys → `{HARNESS_DIR}/sdd/_reviews/<key>.json` |
+| `json` | the absolute `key` path itself |
+
+`persist get` prints the stored payload JSON (pretty-printed) and exits 0; a missing document exits 1.
+
+Exit codes:
+
+- `0` — put OK (`persist <kind>/<key>: OK`) or get printed the stored payload
+- `1` — invalid payload refused, missing payload file, missing stored document, store-module load/verification failure, harness dir not found
+- `2` — usage: unknown kind, missing `--key`, `--file` + `--stdin` together
+
 ## Maintainer Commands
 
 Engine-backed harness checks for maintainers (thin wrappers — business logic lives in `@mstar-harness/engine`). Each command mirrors an engine validator that skill engine-check callouts cite; exit codes follow the CLI convention (0 = OK, 1 = violations/data errors, 2 = usage).

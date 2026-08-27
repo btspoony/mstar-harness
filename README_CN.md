@@ -29,6 +29,7 @@ Harness Workflow Engine · Agent Plugin
 - **判断留在 `mstar-*` skills** —— skills 仍是角色、门禁与工作流判断的唯一事实来源（SSOT）
 - **一个引擎跨宿主** —— 同一引擎 + skills 驱动 dsh（DeepSeek Harness）、omp、OpenCode、Cursor、Kimi Code、ZCode、Codex
 - **Agent Plugin 打包** —— 一条命令安装；可移植到任意 Agent Plugins v1.0.0 客户端
+- **可插拔 JSON 持久化** —— 协调文档（`status.json`、workflow snapshots、project residuals）经 `ArtifactStore` 持久化；默认 `FsStore` 保持既有 `.mstar/` 路径，集成方可经 `MSTAR_STORE_MODULE` / `--store` / 进程内 `setArtifactStore` 挂载自有存储
 - **推荐宿主**（最佳 → 可用）：**dsh = omp ≥ OpenCode ≥ Cursor > Kimi = ZCode > Codex**
 
 **交付内容**
