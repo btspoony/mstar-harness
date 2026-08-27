@@ -104,6 +104,7 @@ import { runMigrateCommand, type MigrateCliOptions } from "./commands/migrate";
 import { validateAgentPlugin } from "./agent-plugins";
 import { buildModelAssignments } from "./assignment";
 import { getAdapter } from "./adapters";
+import { defaultDetectVersion, ensureGlobalCli, formatCliDoctorNote } from "./global-cli";
 import type { DoctorOptions, InitOptions, PluginValidateOptions, Target } from "./types";
 import { SUPPORTED_TARGETS } from "./types";
 import { parseCsv, readJson, writeJson, readHarnessVersion, resolveCliPath, resolveProjectRoot } from "./utils";
@@ -175,6 +176,7 @@ async function runInit(options: InitOptions) {
     for (const note of installResult.notes) {
       console.log(`  - ${note}`);
     }
+    ensureGlobalCli({ version: packageVersion, dryRun: !!options.dryRun, noGlobalCli: !!options.noGlobalCli });
     return;
   }
 
@@ -219,6 +221,7 @@ async function runInit(options: InitOptions) {
       console.log(`  - ${roleId}: ${modelId}`);
     }
   }
+  ensureGlobalCli({ version: packageVersion, dryRun: !!options.dryRun, noGlobalCli: !!options.noGlobalCli });
 }
 
 function runDoctor(options: DoctorOptions) {
@@ -226,6 +229,9 @@ function runDoctor(options: DoctorOptions) {
   const adapter = getAdapter(target);
   const scope = options.scope || "project";
   console.log(`Target: ${target}`);
+  // CLI-on-PATH note (SP1-AC6): informational for every target, never part
+  // of doctor errors and never affects the exit code.
+  console.log(formatCliDoctorNote(defaultDetectVersion(), packageVersion));
 
   if (adapter.mode === "install") {
     const result = adapter.runInstallDoctor?.(scope);
@@ -735,15 +741,22 @@ program
   .option("--output <path>", "Config file path override, relative to project root")
   .option("--dry-run", "Preview result without writing config")
   .option("--no-fallbacks", "Skip installing the dsh-llm-fallbacks plugin (dsh target only)")
+  .option("--no-global-cli", "Skip installing the matching-version @mstar-harness/cli globally after init")
   .option("--pm-model <model>", "Optional: model for project-manager (advanced override)")
   .option("--strategic-models <a,b,c>", "Optional: models for architect/product-manager/prompt-engineer")
   .option("--dev-models <a,b,c>", "Optional: models for fullstack-dev/fullstack-dev-2/frontend-dev")
   .option("--qc-models <a,b,c>", "Optional: models for qc trio")
   .option("--other-models <a,b,c>", "Optional: models for remaining roles")
-  .action(async (options: InitOptions & { fallbacks?: boolean }) => {
+  .action(async (options: InitOptions & { fallbacks?: boolean; globalCli?: boolean }) => {
     // commander's negation `--no-fallbacks` parses as `fallbacks: false`
     // (default true); map to the canonical `noFallbacks` name at the boundary.
-    await runInit({ ...options, noFallbacks: options.fallbacks === false });
+    // `--no-global-cli` likewise parses as `globalCli: false` (default true);
+    // map to the canonical `noGlobalCli` name the same way.
+    await runInit({
+      ...options,
+      noFallbacks: options.fallbacks === false,
+      noGlobalCli: options.globalCli === false,
+    });
   });
 
 const harnessCommand = program

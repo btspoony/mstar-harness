@@ -112,6 +112,8 @@ Optional role-model overrides (advanced; skips live model discovery):
 
 - `npx @mstar-harness/cli init --yes --target opencode --pm-model openai/gpt-5.5 --strategic-models openai/gpt-5.5 --dev-models openai/gpt-5.3-codex --qc-models openai/gpt-5.5,openai/gpt-5.4,openai/gpt-5.3-codex --other-models openai/gpt-5.5`
 
+After a successful init, the CLI auto-installs the **matching-version** `@mstar-harness/cli` globally (`npm i -g @mstar-harness/cli@<same version>`) so the `mstar-harness` binary lands on PATH for engine-check commands. The install is skipped when the version on PATH already matches, and it is fail-soft: if npm cannot write the global prefix, init still succeeds and prints a doctor hint. Pass `--no-global-cli` to skip the global install; `--dry-run` prints the would-run `npm i -g` command without executing it.
+
 Cursor install:
 
 - Global install (git checkout at `~/.cursor/plugins/local/morning-star-harness`; shared Codex/OpenCode checkout at `~/.mstar/harness`):
@@ -171,6 +173,8 @@ Check an existing config:
 - `npx @mstar-harness/cli doctor --target dsh`
 
 If validation fails, `doctor` exits with a non-zero status code. For the dsh target, each plugin row is reported as `uninstalled` / `disabled` / `mounted`; rows that are uninstalled or disabled are issues (exit 1), `mounted` is healthy.
+
+`doctor` also prints a non-fatal CLI-on-PATH note for every target — `mstar-harness` missing, present with a different version, or present and matching — without affecting the exit code.
 
 ### `mstar-harness plugin validate`
 
@@ -379,6 +383,7 @@ Or re-run `npx @mstar-harness/cli init --target cursor --scope global`.
 - `--scope <global|project>` (default: `project`)
 - `--dry-run`
 - `--no-fallbacks`: skip installing the `dsh-llm-fallbacks` plugin row (dsh target only; ignored for other targets)
+- `--no-global-cli`: skip installing the matching-version `@mstar-harness/cli` globally after init
 - `--pm-model <model>` (optional advanced override)
 - `--strategic-models <a,b,c>` (optional)
 - `--dev-models <a,b,c>` (optional)
