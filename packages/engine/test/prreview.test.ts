@@ -749,3 +749,120 @@ describe("prReviewSeatPrompt — collect-wave is deep-only, tiers differ (fix ro
     expect(prReviewSeatPrompt({ ...base, tier: "deep" })).toContain(securitySeatLine);
   });
 });
+
+// ---------------------------------------------------------------------------
+// validateMstarReviewV1 — mstar.review/v1 envelope (SP3 review-json-kind)
+// ---------------------------------------------------------------------------
+import { validateMstarReviewV1 } from "../src/prreview.js";
+
+/** Minimal valid `mstar.review/v1` fixture; each test corrupts one facet.
+ * Tally {1 should-fix, 1 nit} ⇒ 100-15-3=82, needs fixes — consistent. */
+function reviewDoc(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    schema: "mstar.review/v1",
+    verdict: "needs fixes",
+    summary_md: "2 findings: 1 should-fix, 1 nit.",
+    findings: [
+      {
+        mergeClass: "should-fix",
+        category: "correctness",
+        file_path: "src/foo.ts",
+        line_start: 10,
+        line_end: 12,
+        title: "Unhandled null deref",
+        body: "foo() can return null before the call site dereferences it.",
+        fingerprint_hint: "abc123",
+      },
+      {
+        mergeClass: "nit",
+        title: "Typo in comment",
+        body: "s/recieve/receive/",
+      },
+    ],
+    tally: {
+      verdict: "needs fixes",
+      scorePct: 82,
+      tally: { mustFix: 0, shouldFix: 1, nit: 1, unverified: 0 },
+      chatHeader: "needs fixes \u00b7 82%\nmust-fix=0 should-fix=1 nit=1 unverified=0",
+    },
+    target: { owner: "example", repo: "repo", pr: 134, head_sha: "abc123" },
+    ...overrides,
+  };
+}
+
+describe("validateMstarReviewV1 — mstar.review/v1 envelope (SP3 review-json-kind)", () => {
+  test("valid envelope with harness vocab passes (SP3-AC1)", () => {
+    const gate = validateMstarReviewV1(reviewDoc());
+    expect(gate.ok).toBe(true);
+    expect(gate.violations).toEqual([]);
+  });
+
+  test("missing schema and wrong schema id fail-loud (SP3-AC3)", () => {
+    const missing = reviewDoc();
+    delete missing.schema;
+    expect(codes(validateMstarReviewV1(missing))).toContain("review.missing-schema");
+
+    const wrong = reviewDoc({ schema: "mstar.review/v2" });
+    expect(codes(validateMstarReviewV1(wrong))).toContain("review.invalid-schema");
+  });
+
+  test("unknown verdict rejected (SP3-AC3)", () => {
+    const gate = validateMstarReviewV1(reviewDoc({ verdict: "maybe" }));
+    expect(gate.ok).toBe(false);
+    expect(codes(gate)).toContain("review.invalid-verdict");
+  });
+
+  test("inspector M1 verdict vocab rejected with review.inspector-vocab (SP3-AC2)", () => {
+    for (const verdict of ["comment", "request_changes", "approve"]) {
+      const gate = validateMstarReviewV1(reviewDoc({ verdict }));
+      expect(gate.ok).toBe(false);
+      expect(codes(gate)).toContain("review.inspector-vocab");
+    }
+  });
+
+  test("inspector M1 severity vocab in mergeClass rejected with review.inspector-vocab (SP3-AC2)", () => {
+    for (const mergeClass of ["critical", "warning", "suggestion", "info"]) {
+      const doc = reviewDoc();
+      (doc.findings as Record<string, unknown>[])[0].mergeClass = mergeClass;
+      const gate = validateMstarReviewV1(doc);
+      expect(gate.ok).toBe(false);
+      expect(codes(gate)).toContain("review.inspector-vocab");
+    }
+  });
+
+  test("stray inspector M1 severity key on a finding rejected with review.inspector-vocab (SP3-AC2)", () => {
+    const doc = reviewDoc();
+    (doc.findings as Record<string, unknown>[])[0].severity = "critical";
+    const gate = validateMstarReviewV1(doc);
+    expect(gate.ok).toBe(false);
+    expect(codes(gate)).toContain("review.inspector-vocab");
+  });
+
+  test("missing or empty title/body rejected (SP3-AC3)", () => {
+    const missingTitle = reviewDoc();
+    delete (missingTitle.findings as Record<string, unknown>[])[0].title;
+    expect(codes(validateMstarReviewV1(missingTitle))).toContain("review.empty-title");
+
+    const emptyTitle = reviewDoc();
+    (emptyTitle.findings as Record<string, unknown>[])[0].title = "   ";
+    expect(codes(validateMstarReviewV1(emptyTitle))).toContain("review.empty-title");
+
+    const emptyBody = reviewDoc();
+    (emptyBody.findings as Record<string, unknown>[])[0].body = "";
+    expect(codes(validateMstarReviewV1(emptyBody))).toContain("review.empty-body");
+  });
+
+  test("non-array findings rejected (SP3-AC3)", () => {
+    const gate = validateMstarReviewV1(reviewDoc({ findings: "none" }));
+    expect(gate.ok).toBe(false);
+    expect(codes(gate)).toContain("review.findings-not-array");
+  });
+
+  test("tally verdict disagreeing with top-level verdict rejected (consistency rule)", () => {
+    const doc = reviewDoc();
+    (doc.tally as Record<string, unknown>).verdict = "ship it";
+    const gate = validateMstarReviewV1(doc);
+    expect(gate.ok).toBe(false);
+    expect(codes(gate)).toContain("review.verdict-tally-mismatch");
+  });
+});
