@@ -25,6 +25,7 @@ Use this document as the primary maintenance contract for contributors and agent
   - `AGENTS.md` describes repository maintenance policy.
 - **Surgical edits**: only change what the task requires; avoid opportunistic refactors.
 - **Read before edit**: inspect current content before patching; verify after patching.
+- **Worktree-only development**: all feature/plan development happens in git worktrees under `.worktrees/`; the primary checkout stays on `main` at all times. Never check out a working branch in the primary checkout — skills/commands may be symlinked into this directory, so a feature branch checked out here would break linked consumers. Local `main` receives no direct feature commits (changes land via PRs/merges).
 - **README = developer consumer docs** (`README.md` / `README_CN.md`):
   - Audience is developers who install and run the harness — not a concept tutorial.
   - Prefer commands, tables, and links. Do **not** write chatty “How to use” prose.
@@ -170,7 +171,7 @@ If one of these checks fails, stop and report why.
 统一本地布局约定（gitignored，用完即清）：
 
 - 临时文件（一次性探针、日志、浏览器 profile、验证脚本等）→ 仓库根 **`.tmp/*`**，用完即清，不跨轮次残留
-- Git feature worktrees → **`.worktrees/*`**（每 plan 一个子目录，如 `.worktrees/<plan-id>-<slug>`，`git worktree add .worktrees/<slug> -b feature/<plan-slug>`）；合并后 `git worktree remove` 并 `git worktree prune`
+- **开发必须基于 worktree**：任何 feature/plan 开发一律在 **`.worktrees/*`** 中进行（每 plan 一个子目录，如 `.worktrees/<plan-id>-<slug>`，`git worktree add .worktrees/<slug> -b feature/<plan-slug>`）；主 checkout **永远停留在 `main`**——技能/命令可能软链接到本目录，主 checkout 检出工作分支会破坏链接消费者的文件可见性；本地 `main` 不直接提交 feature 改动（经 PR 合并进入）；合并后 `git worktree remove` 并 `git worktree prune`
 
 ## Local maintenance workspace (`.mstar/`, gitignored)
 
