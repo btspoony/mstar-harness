@@ -156,8 +156,9 @@ export type MstarReviewFinding = {
 /**
  * The `mstar.review/v1` envelope (SP3 § Schema) — a parseable review
  * document with harness vocab, sibling to the Markdown pr-review report.
- * `verdict` is PR_VERDICTS; `tally` (when present) is a PrTallyResult whose
- * `verdict` must equal the top-level `verdict` (consistency rule).
+ * `verdict` is PR_VERDICTS; `tally` (when present) must be a full
+ * `PrTallyResult` (shape-checked) whose `verdict` must equal the top-level
+ * `verdict` (consistency rule).
  */
 export type MstarReviewV1 = {
   schema: "mstar.review/v1";
@@ -168,15 +169,82 @@ export type MstarReviewV1 = {
   target?: { owner?: string; repo?: string; pr?: number; head_sha?: string };
 };
 
+/** The four count keys inside a `PrTallyResult` (pr-review.md § Tally and
+ * derived score — must/should/nit/unverified, no fourth class). */
+const TALLY_COUNT_KEYS = ["mustFix", "shouldFix", "nit", "unverified"] as const;
+
+/**
+ * Shape-check an envelope-provided `tally` against the `PrTallyResult`
+ * shape {@link computePrTally} produces (Greptile P1 on PR #159): the
+ * persist gate's threat model includes hand-authored envelopes, so a
+ * present tally must carry the full produced field set — `verdict` in
+ * PR_VERDICTS, `scorePct` an integer in [0, 100], all four class counts
+ * non-negative integers, `chatHeader` a string. Shape only — no
+ * arithmetic consistency (the locked formula and `computePrTally` are
+ * untouched); the verdict-equality rule stays a separate violation
+ * (`review.verdict-tally-mismatch`).
+ */
+function checkProvidedTallyShape(tally: Record<string, unknown>, violations: ValidationResult[]): void {
+  if (typeof tally.verdict !== "string" || !(PR_VERDICTS as readonly string[]).includes(tally.verdict)) {
+    violations.push(violation(
+      "high",
+      "review.tally-malformed",
+      `tally.verdict "${String(tally.verdict)}" is not one of ${JSON.stringify(PR_VERDICTS)}`,
+      `use one of: ${PR_VERDICTS.join(" | ")}`,
+    ));
+  }
+  if (
+    typeof tally.scorePct !== "number" ||
+    !Number.isInteger(tally.scorePct) ||
+    tally.scorePct < 0 ||
+    tally.scorePct > 100
+  ) {
+    violations.push(violation(
+      "high",
+      "review.tally-malformed",
+      `tally.scorePct must be an integer in [0, 100] - got ${String(tally.scorePct)}`,
+    ));
+  }
+  if (!isPlainObject(tally.tally)) {
+    violations.push(violation(
+      "high",
+      "review.tally-malformed",
+      "tally.tally must be an object carrying the four class counts",
+    ));
+  } else {
+    for (const key of TALLY_COUNT_KEYS) {
+      const count = tally.tally[key];
+      if (typeof count !== "number" || !Number.isInteger(count) || count < 0) {
+        violations.push(violation(
+          "high",
+          "review.tally-malformed",
+          `tally.tally.${key} must be a non-negative integer - got ${String(count)}`,
+        ));
+      }
+    }
+  }
+  if (typeof tally.chatHeader !== "string") {
+    violations.push(violation(
+      "high",
+      "review.tally-malformed",
+      `tally.chatHeader must be a string - got ${typeof tally.chatHeader}`,
+    ));
+  }
+}
+
 /**
  * Validate a `mstar.review/v1` envelope (SP3 § Schema). Fail-loud sibling
  * of {@link validatePrReviewReport} (the Markdown report validator) —
  * shares PR_VERDICTS / MERGE_CLASSES only, never reuses the Markdown
  * parser. Inspector M1 vocab (`comment|request_changes|approve`,
  * `critical|warning|suggestion|info`, or a stray `severity` key) is
- * rejected with `review.inspector-vocab`; a `tally` whose `verdict`
- * disagrees with the top-level `verdict` is rejected with
- * `review.verdict-tally-mismatch` (consistency rule, architect-locked).
+ * rejected with `review.inspector-vocab`; a provided `tally` is
+ * shape-checked against the `PrTallyResult` {@link computePrTally} produces
+ * (verdict vocab, integer `scorePct` in [0, 100], four non-negative-integer
+ * counts, string `chatHeader`) and a malformed one is rejected with
+ * `review.tally-malformed` (shape only — no arithmetic consistency); a
+ * `tally.verdict` disagreeing with the top-level `verdict` is rejected
+ * with `review.verdict-tally-mismatch` (consistency rule, architect-locked).
  */
 export function validateMstarReviewV1(doc: unknown): GateResult {
   const violations: ValidationResult[] = [];
@@ -279,12 +347,18 @@ export function validateMstarReviewV1(doc: unknown): GateResult {
   if (doc.tally !== undefined) {
     if (!isPlainObject(doc.tally)) {
       violations.push(violation("high", "review.invalid-tally", "tally must be a PrTallyResult object"));
-    } else if (doc.tally.verdict !== doc.verdict) {
-      violations.push(violation(
-        "high",
-        "review.verdict-tally-mismatch",
-        `tally.verdict "${String(doc.tally.verdict)}" does not equal the top-level verdict "${String(doc.verdict)}" - the envelope verdict and tally must agree (consistency rule)`,
-      ));
+    } else {
+      // Shape gate (Greptile P1): a provided tally must match the
+      // PrTallyResult computePrTally produces — hand-authored envelopes
+      // must not persist a doctored/malformed tally.
+      checkProvidedTallyShape(doc.tally, violations);
+      if (doc.tally.verdict !== doc.verdict) {
+        violations.push(violation(
+          "high",
+          "review.verdict-tally-mismatch",
+          `tally.verdict "${String(doc.tally.verdict)}" does not equal the top-level verdict "${String(doc.verdict)}" - the envelope verdict and tally must agree (consistency rule)`,
+        ));
+      }
     }
   }
 

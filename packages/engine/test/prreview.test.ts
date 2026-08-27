@@ -865,6 +865,79 @@ describe("validateMstarReviewV1 — mstar.review/v1 envelope (SP3 review-json-ki
     expect(gate.ok).toBe(false);
     expect(codes(gate)).toContain("review.verdict-tally-mismatch");
   });
+
+  test("provided tally missing scorePct / counts / chatHeader rejected with review.tally-malformed (greptile P1)", () => {
+    const noScore = reviewDoc();
+    delete (noScore.tally as Record<string, unknown>).scorePct;
+    const noScoreGate = validateMstarReviewV1(noScore);
+    expect(noScoreGate.ok).toBe(false);
+    expect(codes(noScoreGate)).toContain("review.tally-malformed");
+
+    const noCounts = reviewDoc();
+    delete (noCounts.tally as Record<string, unknown>).tally;
+    const noCountsGate = validateMstarReviewV1(noCounts);
+    expect(noCountsGate.ok).toBe(false);
+    expect(codes(noCountsGate)).toContain("review.tally-malformed");
+
+    const noHeader = reviewDoc();
+    delete (noHeader.tally as Record<string, unknown>).chatHeader;
+    const noHeaderGate = validateMstarReviewV1(noHeader);
+    expect(noHeaderGate.ok).toBe(false);
+    expect(codes(noHeaderGate)).toContain("review.tally-malformed");
+  });
+
+  test("provided tally with wrong field types rejected with review.tally-malformed (greptile P1)", () => {
+    const stringScore = reviewDoc();
+    (stringScore.tally as Record<string, unknown>).scorePct = "82";
+    expect(codes(validateMstarReviewV1(stringScore))).toContain("review.tally-malformed");
+
+    const fractionalScore = reviewDoc();
+    (fractionalScore.tally as Record<string, unknown>).scorePct = 82.5;
+    expect(codes(validateMstarReviewV1(fractionalScore))).toContain("review.tally-malformed");
+
+    const outOfRangeScore = reviewDoc();
+    (outOfRangeScore.tally as Record<string, unknown>).scorePct = 120;
+    expect(codes(validateMstarReviewV1(outOfRangeScore))).toContain("review.tally-malformed");
+
+    const countsNotObject = reviewDoc();
+    (countsNotObject.tally as Record<string, unknown>).tally = "0/1/1/0";
+    expect(codes(validateMstarReviewV1(countsNotObject))).toContain("review.tally-malformed");
+
+    const negativeCount = reviewDoc();
+    ((negativeCount.tally as Record<string, unknown>).tally as Record<string, unknown>).mustFix = -1;
+    expect(codes(validateMstarReviewV1(negativeCount))).toContain("review.tally-malformed");
+
+    const fractionalCount = reviewDoc();
+    ((fractionalCount.tally as Record<string, unknown>).tally as Record<string, unknown>).nit = 1.5;
+    expect(codes(validateMstarReviewV1(fractionalCount))).toContain("review.tally-malformed");
+
+    const numericHeader = reviewDoc();
+    (numericHeader.tally as Record<string, unknown>).chatHeader = 82;
+    expect(codes(validateMstarReviewV1(numericHeader))).toContain("review.tally-malformed");
+  });
+
+  test("provided tally with unknown verdict rejected with review.tally-malformed (greptile P1)", () => {
+    const doc = reviewDoc();
+    (doc.tally as Record<string, unknown>).verdict = "maybe";
+    const gate = validateMstarReviewV1(doc);
+    expect(gate.ok).toBe(false);
+    expect(codes(gate)).toContain("review.tally-malformed");
+  });
+
+  test("genuine computePrTally output round-trips for every 9-row fixture (greptile P1)", () => {
+    for (const row of CHECK_TABLE) {
+      const direct = computePrTally(row.input);
+      const gate = validateMstarReviewV1({
+        schema: "mstar.review/v1",
+        verdict: direct.verdict,
+        summary_md: direct.chatHeader,
+        tally: direct,
+        findings: [],
+      });
+      expect(gate.ok).toBe(true);
+      expect(gate.violations).toEqual([]);
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

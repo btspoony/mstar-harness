@@ -15,6 +15,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { synthesizeReview } from "@mstar-harness/engine";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
 const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
@@ -340,6 +341,41 @@ describe("mstar persist review — validateMstarReviewV1 before put (SP3-AC6)", 
       expect(r.stderr).toContain("refusing to persist invalid review document");
       expect(r.stderr).toContain("review.verdict-tally-mismatch");
       expect(existsSync(join(dir, "sdd", "_reviews", "pr-42.json"))).toBe(false);
+    });
+  });
+
+  test("rejects a hand-authored tally missing fields (exit 1, no write)", () => {
+    withTempDir((dir) => {
+      const doctored = {
+        ...REVIEW_PAYLOAD,
+        tally: { verdict: "needs fixes" }, // no scorePct / counts / chatHeader
+      };
+      const payloadFile = writePayload(dir, "doctored-tally.json", doctored);
+      const r = runCli(["persist", "review", "--key", "pr-42", "--file", payloadFile], { env: harnessEnv(dir) });
+      expect(r.exitCode).toBe(1);
+      expect(r.stderr).toContain("refusing to persist invalid review document");
+      expect(r.stderr).toContain("review.tally-malformed");
+      expect(existsSync(join(dir, "sdd", "_reviews", "pr-42.json"))).toBe(false);
+    });
+  });
+
+  test("persists a genuine synthesizeReview product end-to-end (exit 0)", () => {
+    withTempDir((dir) => {
+      const synthesized = synthesizeReview({
+        findings: [
+          {
+            mergeClass: "should-fix",
+            title: "Unhandled null deref",
+            body: "foo() can return null before the call site dereferences it.",
+          },
+          { mergeClass: "nit", title: "Typo in comment", body: "s/recieve/receive/" },
+        ],
+      });
+      const payloadFile = writePayload(dir, "synthesized-review.json", synthesized);
+      const r = runCli(["persist", "review", "--key", "pr-7", "--file", payloadFile], { env: harnessEnv(dir) });
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout).toContain("persist review/pr-7: OK");
+      expect(existsSync(join(dir, "sdd", "_reviews", "pr-7.json"))).toBe(true);
     });
   });
 

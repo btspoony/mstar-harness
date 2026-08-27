@@ -269,7 +269,7 @@ mstar-harness persist review --key 20260827-review-json --stdin <<'JSON'
 JSON
 ```
 
-`persist review/<key>: OK` on success; `persist get review --key <key>` prints the stored envelope. An invalid envelope is refused before any write — e.g. inspector M1 vocab `"verdict": "approve"` fails with `refusing to persist invalid review document: [high] review.inspector-vocab: ...` (exit 1), and a `tally.verdict` that disagrees with the top-level `verdict` fails with `review.verdict-tally-mismatch`.
+`persist review/<key>: OK` on success; `persist get review --key <key>` prints the stored envelope. An invalid envelope is refused before any write — e.g. inspector M1 vocab `"verdict": "approve"` fails with `refusing to persist invalid review document: [high] review.inspector-vocab: ...` (exit 1), a `tally.verdict` that disagrees with the top-level `verdict` fails with `review.verdict-tally-mismatch`, and a provided `tally` that is not the full `computePrTally` shape (missing `scorePct`, counts, or `chatHeader`; wrong types; unknown verdict) fails with `review.tally-malformed`.
 
 ## Maintainer Commands
 
