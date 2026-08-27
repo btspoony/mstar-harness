@@ -31,7 +31,7 @@
  *   flock (`flockSync` undefined), so this module implements the documented
  *   mkdir alternative.
  */
-import { mkdirSync, readFileSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -531,78 +531,6 @@ const LOCKDIR_HOLDER_PID = "holder.pid";
 const heldLockDirs = new AsyncLocalStorage<Set<string>>();
 
 /**
- * True when the lockdir at `lockDir` is crash-leaked and safe to reclaim:
- * the `holder.pid` file is missing/unreadable (acquisition writes it
- * synchronously right after `mkdirSync`, so a lockdir without a readable
- * pid file is by construction a crashed acquire) or names a pid that
- * provably no longer exists (signal-0 probe → ESRCH). A live holder (probe
- * ok / EPERM) and our own process are never classified stale — a live
- * writer keeps its lock indefinitely, so it is never stolen from.
- */
-function isStaleLockDir(lockDir: string): boolean {
-  let pidText: string;
-  try {
-    pidText = readFileSync(join(lockDir, LOCKDIR_HOLDER_PID), "utf8");
-  } catch {
-    // Missing/unreadable holder.pid — crashed acquire by construction.
-    return true;
-  }
-  const pid = Number(pidText.trim());
-  if (!Number.isInteger(pid) || pid <= 0) {
-    // A torn/foreign pid file can only come from a crashed acquire — a live
-    // holder writes a single valid integer right after mkdir.
-    return true;
-  }
-  if (pid === process.pid) {
-    // This process itself holds the lockdir elsewhere (the reentrancy guard
-    // covers the same async context) — never reclaim from self.
-    return false;
-  }
-  try {
-    process.kill(pid, 0);
-    return false; // alive
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ESRCH") return true; // provably dead
-    // EPERM (alive, signal denied) or an unexpected probe error — assume alive.
-    return false;
-  }
-}
-
-/**
- * Atomically reclaim a stale lockdir: rename it off the lock pathname (one
- * atomic step — no check-then-delete race on the pathname itself) and
- * remove the renamed directory best-effort. When the `.stale-<ts>` target
- * name collides with a leftover stale directory, back off with a counter
- * suffix and retry. Returns true when the lock pathname is free (renamed
- * away, or already gone — e.g. the holder released between probe and
- * rename), so the acquisition loop retries mkdir immediately. The surviving
- * original owner's finally-release re-stats the path: absent/changed
- * identity ⇒ it skips removal (ownership guard), so it never deletes the
- * new lockdir.
- */
-function reclaimStaleLockDir(lockDir: string): boolean {
-  const stamp = Date.now();
-  for (let attempt = 0; ; attempt++) {
-    const stale = attempt === 0 ? `${lockDir}.stale-${stamp}` : `${lockDir}.stale-${stamp}-${attempt}`;
-    try {
-      renameSync(lockDir, stale);
-      try {
-        rmSync(stale, { recursive: true, force: true });
-      } catch {
-        // best-effort: a leftover .stale-* dir is inert and never blocks a
-        // future acquisition (rename targets carry fresh timestamps)
-      }
-      return true;
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code === "EEXIST" || code === "ENOTEMPTY") continue; // target name collision — bump the counter
-      if (code === "ENOENT") return true; // already gone — the pathname is free
-      return false; // exotic FS state — keep waiting; the deadline still bounds the wait
-    }
-  }
-}
-
-/**
  * Same-host exclusive write lock around coordination writes — the root
  * `status.json` AND `workflows/<id>/snapshot.json` (status-and-residuals.md
  * § "Same-host exclusive write lock (control status.json)";
@@ -613,7 +541,7 @@ function reclaimStaleLockDir(lockDir: string): boolean {
  * Acquires by atomic `mkdir` on `<status dir>/.status-write.lockdir/`
  * (success acquires; existing dir → another writer holds the lock). While
  * another writer holds it, wait up to `timeoutMs` (default 30s) and then
- * throw (Blocked) — a live holder's lockdir is never removed.
+ * throw (Blocked) — the lockdir is never removed for another holder.
  *
  * Ownership guard (double-unlock safety): the lockdir's `(dev, ino)` is
  * captured at acquisition; `finally` re-stats the path and removes the
@@ -626,16 +554,11 @@ function reclaimStaleLockDir(lockDir: string): boolean {
  * async context (i.e. `fn` calling `withStatusWriteLock` on the same
  * status.json) throws immediately instead of waiting out the timeout.
  *
- * Crash diagnosis + auto-reclamation: a `holder.pid` file (acquiring
- * process id) is written inside the lockdir on acquisition and removed on
- * release. A hard crash between `mkdirSync` and release leaks the lockdir;
- * while waiting, the waiter probes the leaked holder once per poll
- * (missing/unreadable `holder.pid` — a crashed acquire by construction —
- * or a holder pid that provably no longer exists: signal-0 probe → ESRCH)
- * and reclaims it atomically — the lockdir is renamed to a `.stale-<ts>`
- * name and removed, then acquisition retries immediately. A live holder
- * (probe ok / EPERM) and our own pid are never reclaimed; manual recovery
- * remains only for exotic filesystem states.
+ * Crash diagnosis: a `holder.pid` file (acquiring process id) is written
+ * inside the lockdir on acquisition and removed on release. A hard crash
+ * between `mkdirSync` and release leaks the lockdir; the timeout error
+ * message names the recovery step (remove the lockdir when no writer is
+ * alive).
  *
  * simplify: mkdir lockdir is the SSOT-documented alternative to `flock`
  * (`{HARNESS_DIR}/.status-write.lock`) — Bun 1.2 exposes no `node:fs`
@@ -672,14 +595,6 @@ export async function withStatusWriteLock<T>(
           `${lockDir} already exists \u2014 another writer holds the status write lock; Blocked (same-host exclusive lock; status-and-residuals.md \u00a7 Same-host exclusive write lock). ` +
             `Recovery: remove ${lockDir} if no writer is alive (holder.pid inside names the acquiring process)`,
         );
-      }
-      // A crash-leaked lockdir is reclaimed within the wait budget: probe the
-      // holder once per poll and rename it away when provably dead, then
-      // retry mkdir immediately (no need to sleep through a poll cadence).
-      // When reclamation itself hits an exotic FS state (returns false) the
-      // bounded wait continues and ends in the Blocked error below.
-      if (isStaleLockDir(lockDir) && reclaimStaleLockDir(lockDir)) {
-        continue;
       }
       await sleep(pollMs);
     }
