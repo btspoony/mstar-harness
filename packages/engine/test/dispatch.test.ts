@@ -981,8 +981,8 @@ describe("composeDispatchGate — shared host dispatch-gate composition (qc1 F-0
 **Task category**: logic
 `;
 
-  test("shaped writable assignment with a non-matching binding → shaped true, ok, no violations", () => {
-    const result = composeDispatchGate(VALID_ASSIGNMENT, { agent: "qc-specialist" });
+  test("shaped writable assignment, no caller binding (target-only host) → shaped true, ok, no violations", () => {
+    const result = composeDispatchGate(VALID_ASSIGNMENT);
     expect(result.shaped).toBe(true);
     expect(result.ok).toBe(true);
     expect(result.violations).toEqual([]);
@@ -990,20 +990,41 @@ describe("composeDispatchGate — shared host dispatch-gate composition (qc1 F-0
     expect(result.enforcement).toEqual({ hard: false, source: "none" });
   });
 
-  test("omitted agent → critical dispatch.anti-recursion.empty-binding (fail closed)", () => {
+  test("issue #156: no caller + no callerRequired → anti-recursion leg SKIPPED (omp/opencode compliant dispatch never self-flags)", () => {
+    // The omp/opencode/cursor binding field carries the spawn TARGET, which
+    // equals `Execute as` on every compliant dispatch (mstar-host omp.md C5).
+    // Without a caller binding the precheck must not run at all.
     const result = composeDispatchGate(VALID_ASSIGNMENT);
-    expect(result.shaped).toBe(true);
+    expect(result.ok).toBe(true);
+    expect(result.violations.some((v) => v.code.startsWith("dispatch.anti-recursion."))).toBe(false);
+  });
+
+  test("caller == Execute as → critical dispatch.anti-recursion.self-type", () => {
+    const result = composeDispatchGate(VALID_ASSIGNMENT, { caller: "fullstack-dev" });
     expect(result.ok).toBe(false);
-    const anti = result.violations.find((v) => v.code === "dispatch.anti-recursion.empty-binding");
+    const anti = result.violations.find((v) => v.code === "dispatch.anti-recursion.self-type");
     expect(anti?.severity).toBe("critical");
   });
 
-  test("empty / whitespace agent → critical dispatch.anti-recursion.empty-binding", () => {
-    for (const agent of ["", "   "]) {
-      const result = composeDispatchGate(VALID_ASSIGNMENT, { agent });
+  test("caller != Execute as → no anti-recursion violation", () => {
+    const result = composeDispatchGate(VALID_ASSIGNMENT, { caller: "project-manager" });
+    expect(result.ok).toBe(true);
+    expect(result.violations).toEqual([]);
+  });
+
+  test("callerRequired + empty/missing caller → critical dispatch.anti-recursion.empty-binding (dsh fail-closed)", () => {
+    for (const opts of [{ callerRequired: true } as const, { caller: "   ", callerRequired: true } as const]) {
+      const result = composeDispatchGate(VALID_ASSIGNMENT, opts);
       expect(result.ok).toBe(false);
-      expect(result.violations.some((v) => v.code === "dispatch.anti-recursion.empty-binding")).toBe(true);
+      const anti = result.violations.find((v) => v.code === "dispatch.anti-recursion.empty-binding");
+      expect(anti?.severity).toBe("critical");
     }
+  });
+
+  test("callerRequired + set caller → normal self-type semantics (no empty-binding)", () => {
+    const result = composeDispatchGate(VALID_ASSIGNMENT, { caller: "project-manager", callerRequired: true });
+    expect(result.ok).toBe(true);
+    expect(result.violations).toEqual([]);
   });
 
   test("non-shaped text → silent shaped false result (no violations, ok)", () => {
@@ -1023,31 +1044,18 @@ describe("composeDispatchGate — shared host dispatch-gate composition (qc1 F-0
     expect(result.violations.some((v) => v.code === "assignment.field.branch-missing")).toBe(true);
   });
 
-  test("read-only (writable: false) with a non-matching binding → no branch-form or default-branch violations", () => {
-    const result = composeDispatchGate(noBranchText, { writable: false, agent: "qc-specialist" });
+  test("read-only (writable: false), no caller → no branch-form, default-branch, or anti-recursion violations", () => {
+    const result = composeDispatchGate(noBranchText, { writable: false });
     expect(result.shaped).toBe(true);
     expect(result.ok).toBe(true);
     expect(result.violations).toEqual([]);
   });
 
-  test("read-only (writable: false) with omitted agent → empty-binding fires (no read-only carve-out)", () => {
-    const result = composeDispatchGate(noBranchText, { writable: false });
+  test("read-only (writable: false) + callerRequired + no caller → empty-binding fires (no read-only carve-out)", () => {
+    const result = composeDispatchGate(noBranchText, { writable: false, callerRequired: true });
     expect(result.shaped).toBe(true);
     expect(result.ok).toBe(false);
     expect(result.violations.some((v) => v.code === "dispatch.anti-recursion.empty-binding")).toBe(true);
-  });
-
-  test("agent == Execute as → critical anti-recursion violation", () => {
-    const result = composeDispatchGate(VALID_ASSIGNMENT, { agent: "fullstack-dev" });
-    expect(result.ok).toBe(false);
-    const anti = result.violations.find((v) => v.code === "dispatch.anti-recursion.self-type");
-    expect(anti?.severity).toBe("critical");
-  });
-
-  test("different agent binding → no anti-recursion violation", () => {
-    const result = composeDispatchGate(VALID_ASSIGNMENT, { agent: "qc-specialist" });
-    expect(result.ok).toBe(true);
-    expect(result.violations).toEqual([]);
   });
 
   test("MSTAR_WORKING_BRANCH env fallback supplies the gate branch (set/unset, restored)", () => {
@@ -1107,7 +1115,7 @@ An example Assignment template line: **Enforcement**: hard
 **Working branch**: feature/foo
 **Enforcement**: hard
 `;
-    const result = composeDispatchGate(text, { agent: "qc-specialist" });
+    const result = composeDispatchGate(text, { caller: "project-manager" });
     expect(result.enforcement).toEqual({ hard: true, source: "assignment" });
     expect(result.ok).toBe(true);
     expect(result.hardBlocked).toBe(false);

@@ -636,10 +636,14 @@ function validateDocByKind(doc: unknown, kind: HarnessDocKind, newValidators: Ne
  * core-field violations (single parser — no local presence parser, qc1
  * F-002). Read-only roles (scout/explore) pass `writable: false` so no
  * spurious `branch-missing` fires (qc3 F-1 / qc2 S-5).
- * (3) Anti-recursion NEVER red line — when the task tool's role binding
- * (`args.subagent` / `args.subagent_type`) equals the Assignment's
- * `Execute as`, a critical-severity violation is logged (qc1 F-004 /
- * qc2 S-2).
+ * (3) Anti-recursion NEVER red line — CALLER-scoped (issue #156): the
+ * engine precheck compares the DISPATCHING agent's own role against
+ * `Execute as`, and OpenCode's `tool.execute.before` event cannot report
+ * the dispatching agent's identity, so this host SKIPS the leg (the
+ * pre-#156 wiring compared the spawn-TARGET `args.subagent` /
+ * `args.subagent_type` against `Execute as` — equality is the documented
+ * compliant pattern, so every correct dispatch self-flagged). The red
+ * line stays prompt-level here (mstar-dispatch-gates).
  * (4) The default-branch gate — the checked branch comes from the
  * Assignment's own branch forms (create-form name / Working branch /
  * Branch policy branch), else `$MSTAR_WORKING_BRANCH`; a well-formed
@@ -647,9 +651,11 @@ function validateDocByKind(doc: unknown, kind: HarnessDocKind, newValidators: Ne
  * when its branch is the one being checked. Skipped entirely for read-only
  * roles (no writable work on a branch).
  *
- * Enforcement (roadmap §8.5 C4/D2, Slice 5) — the Assignment's OWN flag
- * decides (engine `dispatch.parseEnforcementFlag` via
- * `composeDispatchGate`; per-Assignment, never global):
+ * Enforcement (roadmap §8.5 C4/D2, Slice 5) — the Assignment's OWN header
+ * flag (engine `dispatch.parseEnforcementFlag` via `composeDispatchGate`)
+ * or the repo-level setting (`.mstarc` → compass, engine
+ * `status.resolveRepoEnforcement` — dsh `resolveDispatchHard` and the
+ * omp/status-write gates parity) decides:
  * - **Warn mode (default)** — no `Enforcement: hard` on the Assignment: one
  *   `warn` line per violation through the `[mstar-harness]` channel;
  *   `hardBlocked` is false. Unchanged v1 behavior.
@@ -677,7 +683,7 @@ function validateDocByKind(doc: unknown, kind: HarnessDocKind, newValidators: Ne
  */
 export function validateDispatchAssignment(
   assignmentText: string,
-  opts: { log?: StatusLogger; subagentType?: string } = {},
+  opts: { log?: StatusLogger } = {},
 ): GateResult | null {
   const log = opts.log ?? defaultStatusLogger;
   try {
@@ -690,12 +696,17 @@ export function validateDispatchAssignment(
     // Read-only roles (scout/explore) skip the branch-form/default-branch
     // gates — the engine composition's `writable` flag.
     const writable = isReadOnlyAssignmentRole(parseAssignmentFields(assignmentText).executeAs ?? "") ? false : undefined;
-    const composed = composeDispatchGate(assignmentText, { agent: opts.subagentType ?? "", writable });
+    const composed = composeDispatchGate(assignmentText, { writable });
+    // Header flag, else repo-level hard (`.mstarc` → compass) — the same
+    // precedence the status-write gate and dsh dispatches honor.
+    const harnessDir = resolveHarnessDir();
+    const hard = composed.enforcement.hard || (harnessDir !== null && resolveRepoEnforcement(harnessDir).hard);
+    const gated: GateResult = applyEnforcement(composed, { hard });
 
-    if (!composed.ok) {
-      for (const violation of composed.violations) {
+    if (!gated.ok) {
+      for (const violation of gated.violations) {
         const fix = violation.fix ? ` (fix: ${violation.fix})` : "";
-        if (composed.enforcement.hard) {
+        if (hard) {
           log(
             "error",
             `assignment validation (hard gate): [${violation.severity}] ${violation.code}: ${violation.message}${fix} — hardBlocked per Enforcement: hard; refusal requires a host refusal channel (skill: mstar-dispatch-gates)`,
@@ -708,7 +719,7 @@ export function validateDispatchAssignment(
         }
       }
     }
-    return composed;
+    return gated;
   } catch (error) {
     // Never throw, never block unexpectedly: unexpected errors degrade to a
     // single `error` log and a `null` return in BOTH modes (hard gates are
@@ -776,22 +787,17 @@ export const MorningStarHarnessPlugin: Plugin = async () => {
       // validation on subagent dispatch. OpenCode's `task` tool carries the
       // subagent prompt — the harness Assignment markdown — in `args.prompt`;
       // missing core fields (Execute as / Delegation / Task category),
-      // branch-form violations, default-protected-branch work and
-      // self-recursion (binding == Execute as) surface per the Assignment's
-      // own enforcement flag: warn lines by default, error lines +
-      // `hardBlocked` result under `Enforcement: hard`. Never modifies args
-      // and never throws in either mode; `tool.execute.before` returns void
-      // on this host (`@opencode-ai/plugin` 1.4.8 — no refusal channel), so a
-      // hard gate degrades to the explicit refusal-channel log below. The
-      // role binding key is `subagent` (OpenCode) / `subagent_type` (Cursor).
+      // branch-form violations and default-protected-branch work surface per
+      // the Assignment's own enforcement flag (or the repo-level setting):
+      // warn lines by default, error lines + `hardBlocked` result under
+      // `Enforcement: hard`. The anti-recursion leg is caller-scoped and
+      // this host cannot observe the dispatching agent (issue #156), so it
+      // does not run here. Never modifies args and never throws in either
+      // mode; `tool.execute.before` returns void on this host
+      // (`@opencode-ai/plugin` 1.4.8 — no refusal channel), so a hard gate
+      // degrades to the explicit refusal-channel log below.
       if (input.tool === "task" && typeof prompt === "string") {
-        const subagentType =
-          typeof args.subagent === "string"
-            ? args.subagent
-            : typeof args.subagent_type === "string"
-              ? args.subagent_type
-              : "";
-        const gate = validateDispatchAssignment(prompt, { subagentType });
+        const gate = validateDispatchAssignment(prompt);
         if (gate?.hardBlocked) {
           defaultStatusLogger(
             "error",

@@ -4,10 +4,13 @@
  *
  * Composition is the engine's single shared `dispatch.composeDispatchGate`
  * (qc1 F-001/F-006 — the same composition the opencode adapter and the omp
- * blocking hook use): field validation, anti-recursion precheck (an empty
- * `agent` fails closed with `dispatch.anti-recursion.empty-binding`), the
- * default-branch gate (incl. the `$MSTAR_WORKING_BRANCH`
- * env fallback) and the header-region enforcement flag. Read-only roles
+ * blocking hook use): field validation, the default-branch gate (incl. the
+ * `$MSTAR_WORKING_BRANCH` env fallback) and the header-region enforcement
+ * flag. The anti-recursion precheck is CALLER-scoped (issue #156): pass
+ * `caller` = the DISPATCHING agent's own role to check it against the
+ * Assignment's `Execute as`; omit it when the caller identity is unknown
+ * (the spawn-target `agent` field never fed this check — target ==
+ * `Execute as` is the documented compliant pattern). Read-only roles
  * (scout/explore, or the `readOnlyRole` flag) skip the branch-form and
  * default-branch gates. No local rule logic — every check is an engine call.
  *
@@ -22,7 +25,7 @@ import { isReadOnlyAssignmentRole, parseAssignmentFields } from "@mstar-harness/
 import type { ValidationResult } from "@mstar-harness/engine";
 import type { AgentToolResult, CustomTool, CustomToolAPI } from "@oh-my-pi/pi-coding-agent";
 
-type Params = { assignmentText: string; agent?: string; readOnlyRole?: boolean };
+type Params = { assignmentText: string; caller?: string; readOnlyRole?: boolean };
 
 /**
  * Engine-version compat (parity with the omp hook): `composeDispatchGate`
@@ -32,7 +35,7 @@ type Params = { assignmentText: string; agent?: string; readOnlyRole?: boolean }
  * becomes the upgrade isError, a real import failure (`error`) becomes
  * `mstar_dispatch_validate failed: …` (parity with `mstar_iteration_gate`).
  */
-type DispatchGateFn = (text: string, options?: { agent?: string; writable?: boolean }) => {
+type DispatchGateFn = (text: string, options?: { caller?: string; callerRequired?: boolean; writable?: boolean }) => {
   ok: boolean;
   shaped: boolean;
   enforcement: { hard: boolean };
@@ -81,13 +84,13 @@ export default function mstarDispatchValidate(pi: CustomToolAPI): CustomTool {
     name: "mstar_dispatch_validate",
     label: "Validate dispatch assignment",
     description:
-      "Validate a Morning Star Assignment document before dispatch (engine gates: required Execute as / Delegation / Task category fields, exactly-one branch form for writable roles, default-branch protection, and the anti-recursion NEVER red line). " +
-      "Pass the full Assignment markdown as `assignmentText`; `agent` is the host role-binding field (subagent_type / agent / subagent) checked against Execute as for self-recursion; set `readOnlyRole` when the dispatch target is a read-only orientation role. " +
+      "Validate a Morning Star Assignment document before dispatch (engine gates: required Execute as / Delegation / Task category fields, exactly-one branch form for writable roles, default-branch protection, and the caller-scoped anti-recursion NEVER red line). " +
+      "Pass the full Assignment markdown as `assignmentText`; `caller` is the DISPATCHING agent's own harness role, checked against Execute as for self-recursion (omit when unknown — never pass the spawn-target role); set `readOnlyRole` when the dispatch target is a read-only orientation role. " +
       "Use before any task/subagent dispatch. Returns one line per violation as [severity] code: message (fix: …).",
     parameters: pi.zod
       .object({
         assignmentText: pi.zod.string(),
-        agent: pi.zod.string().optional(),
+        caller: pi.zod.string().optional(),
         readOnlyRole: pi.zod.boolean().optional(),
       }),
     async execute(_toolCallId: string, params: Params, _onUpdate, _ctx, _signal): Promise<AgentToolResult> {
@@ -121,7 +124,7 @@ export default function mstarDispatchValidate(pi: CustomToolAPI): CustomTool {
         const fields = parseAssignmentFields(text);
         const readOnly = params?.readOnlyRole === true || isReadOnlyAssignmentRole(fields.executeAs ?? "");
         const composed = composeDispatchGate(text, {
-          agent: params?.agent ?? "",
+          caller: params?.caller ?? "",
           writable: readOnly ? false : undefined,
         });
         return result(
@@ -133,7 +136,7 @@ export default function mstarDispatchValidate(pi: CustomToolAPI): CustomTool {
             violations: composed.violations,
             execute_as: fields.executeAs ?? null,
             read_only: readOnly,
-            agent: (params?.agent ?? "").trim() !== "" ? params?.agent : null,
+            caller: (params?.caller ?? "").trim() !== "" ? params?.caller : null,
           },
           !composed.ok,
         );

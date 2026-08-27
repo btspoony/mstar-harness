@@ -20,8 +20,13 @@
  *   `mstar-dispatch-gates` SKILL.md § "QC tri-review（SDD 强制）" / "QC
  *   单席（例外）" / "QC targeted re-review" + `mstar-roles` SKILL.md
  *   "QC reviewer" 参数表.
- * - Anti-recursion NEVER red line (role binding == `Execute as`): `mstar-dispatch-gates`
- *   SKILL.md § "承接方反递归红线（NEVER / DO NOT；leaf executor 必读）".
+ * - Anti-recursion NEVER red line (dispatching agent's OWN role == the
+ *   dispatch's `Execute as`): `mstar-dispatch-gates` SKILL.md § "承接方反递归红线
+ *   （NEVER / DO NOT；leaf executor 必读）". The precheck compares the CALLER
+ *   identity against the target role; hosts that can only observe the spawn
+ *   TARGET (omp `agent` / opencode `subagent` / cursor `subagent_type` carry
+ *   the target, never the caller) cannot run it — see
+ *   {@link ComposeDispatchGateOptions.caller}.
  * - Hard-gate enforcement (`Enforcement: hard` flag — per Assignment/compass,
  *   never global; rollback = unset flag): roadmap §8.5 C4 + decision D2.
  */
@@ -554,13 +559,24 @@ function isAssignmentShaped(assignmentText: string): boolean {
  */
 export type ComposeDispatchGateOptions = {
   /**
-   * Host role-binding field (omp task entry `agent` / opencode `subagent` /
-   * cursor `subagent_type` / dsh `dispatchBinding`). The anti-recursion
-   * precheck runs for EVERY Assignment-shaped text: an empty or omitted
-   * binding fails closed (`dispatch.anti-recursion.empty-binding`) — the
-   * host cannot prove the dispatching agent is not recursing.
+   * Dispatching agent's OWN harness role (dsh `Config.dispatchBinding`).
+   * When non-empty, the anti-recursion precheck compares it against the
+   * Assignment's `Execute as` — equality is self-recursion
+   * (`dispatch.anti-recursion.self-type`, critical). Leave unset on hosts
+   * whose tool-call event cannot report the dispatching agent's identity
+   * (omp/opencode/cursor): the precheck is skipped there and the NEVER red
+   * line stays prompt-level (mstar-dispatch-gates).
    */
-  agent?: string;
+  caller?: string;
+  /**
+   * True on hosts whose contract declares the caller binding mandatory
+   * (dsh): an empty/missing `caller` then fails closed with
+   * `dispatch.anti-recursion.empty-binding` (critical) — the host could
+   * have declared the binding, so an absent one proves nothing and the
+   * dispatch must not proceed as if the NEVER red line held. Default
+   * `false`: the precheck is skipped entirely when `caller` is empty.
+   */
+  callerRequired?: boolean;
   /**
    * `false` for read-only roles (scout/explore) — skips the branch-form and
    * default-branch gates. Default: `true` (writable).
@@ -590,10 +606,14 @@ export type ComposeDispatchGateResult = GateResult & {
  *    Assignment-shaped passes silently (`shaped: false`).
  * 2. `validateAssignmentFields` with `writable: false` when `opts.writable
  *    === false` (read-only roles), else the writable default.
- * 3. Anti-recursion precheck — runs for every Assignment-shaped text; an
- *    empty/omitted host binding fails closed (`dispatch.anti-recursion.
- *    empty-binding`), a binding equal to `Execute as` is the existing
- *    `dispatch.anti-recursion.self-type` critical.
+ * 3. Anti-recursion precheck — CALLER semantics (issue #156): runs only
+ *    when the host supplies its own role binding (`caller`), or fails
+ *    closed on an empty one when the host contract requires it
+ *    (`callerRequired`, dsh). A caller equal to `Execute as` is the
+ *    `dispatch.anti-recursion.self-type` critical; a required-but-empty
+ *    caller is `dispatch.anti-recursion.empty-binding`. Target-only hosts
+ *    (omp/opencode/cursor) skip the leg — their binding field carries the
+ *    spawn TARGET, which equals `Execute as` on every compliant dispatch.
  * 4. Default-branch gate for writable text: the branch comes from the
  *    Assignment's own branch forms (create-form name / Working branch /
  *    Branch policy branch), else `$MSTAR_WORKING_BRANCH`; a well-formed
@@ -621,12 +641,16 @@ export function composeDispatchGate(text: string, opts: ComposeDispatchGateOptio
     // (2) Engine full field validation — read-only roles skip the branch-form gate.
     violations.push(...validateAssignmentFields(text, { writable }).violations);
 
-    // (3) Anti-recursion NEVER red line (engine gate; warn/error in adapters).
-    // Runs for EVERY Assignment-shaped text — an empty/omitted host binding
-    // is a violation (fail closed), not a skip: the host cannot prove the
-    // dispatching agent is not recursing.
-    const agent = opts.agent ?? "";
-    violations.push(...antiRecursionPrecheck(agent, parseAssignmentFields(text).executeAs ?? "").violations);
+    // (3) Anti-recursion NEVER red line — CALLER identity vs the dispatch's
+    // `Execute as` (issue #156: the spawn-target binding omp/opencode/cursor
+    // carry can never run this check soundly — target == `Execute as` is the
+    // documented compliant pattern, so those hosts skip the leg). Runs when
+    // the host supplies its own role (`caller`), or fails closed when the
+    // host contract makes that binding mandatory (`callerRequired`, dsh).
+    const caller = opts.caller ?? "";
+    if (caller.trim() !== "" || opts.callerRequired === true) {
+      violations.push(...antiRecursionPrecheck(caller, parseAssignmentFields(text).executeAs ?? "").violations);
+    }
 
     // (4) Default-branch gate for writable text — branch from the
     // Assignment's own forms, else $MSTAR_WORKING_BRANCH (env fallback
@@ -653,14 +677,18 @@ export function composeDispatchGate(text: string, opts: ComposeDispatchGateOptio
 
 /**
  * Anti-recursion precheck (NEVER red line, mstar-dispatch-gates § 承接方反递归
- * 红线): a leaf executor MUST NOT invoke a Task/subagent whose role-binding
- * field (`subagent_type` / `agent` / `subagent`) equals its own `Execute as`.
- * Comparison is case-insensitive after trim. An EMPTY binding fails closed
- * (`dispatch.anti-recursion.empty-binding`, critical): the host cannot
- * report which agent is calling, so anti-recursion cannot be proven — the
- * dispatch must not proceed as if the NEVER red line held. An empty
- * `executeAs` with a set binding stays ok (field presence is
- * `validateAssignmentFields`' job, not this precheck).
+ * 红线): a leaf executor MUST NOT dispatch a Task/subagent whose target role
+ * (the new Assignment's `Execute as`) equals its OWN role. `subagentType`
+ * is therefore the DISPATCHING agent's own role binding (dsh
+ * `Config.dispatchBinding`) — never the spawn-target field (omp `agent` /
+ * opencode `subagent`), which equals `Execute as` on every compliant
+ * dispatch (issue #156). Comparison is case-insensitive after trim. An
+ * EMPTY binding fails closed (`dispatch.anti-recursion.empty-binding`,
+ * critical): the host cannot report which agent is calling, so
+ * anti-recursion cannot be proven — the dispatch must not proceed as if
+ * the NEVER red line held. An empty `executeAs` with a set binding stays
+ * ok (field presence is `validateAssignmentFields`' job, not this
+ * precheck).
  */
 export function antiRecursionPrecheck(subagentType: string, executeAs: string): GateResult {
   const binding = subagentType.trim().toLowerCase();
@@ -673,8 +701,8 @@ export function antiRecursionPrecheck(subagentType: string, executeAs: string): 
         violation(
           "critical",
           "dispatch.anti-recursion.empty-binding",
-          `empty host role binding \u2014 the host cannot report which agent is calling, so anti-recursion cannot be proven (a dispatch could silently recurse)`,
-          "set the host role-binding field (omp task entry `agent` / opencode `subagent` / cursor `subagent_type` / dsh `dispatchBinding`) before dispatching",
+          `empty caller role binding \u2014 the host cannot report which agent is calling, so anti-recursion cannot be proven (a dispatch could silently recurse)`,
+          "declare the dispatching agent's own role binding (dsh Config `dispatchBinding`) before dispatching",
         ),
       ],
     };
