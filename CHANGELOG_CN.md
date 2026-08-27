@@ -6,6 +6,30 @@
 
 ## [Unreleased]
 
+## [3.4.0] - 2026-08-27
+
+### Harness
+
+- 将 `/pr-deep-review` 改名为 `/amazing-pr-review`（干净切换，无 alias），并落地三档强度：`quick`（单趟 1 席，收集 + 审查同席）/ `default`（无 flag 默认档——2 个领域席，收集合入领域席，席位精简）/ `deep`（原完整三阶段流水线：collect → domain review → main-agent synthesis，4–7 席）。档位由显式关键字或变更形状推断；默认档不再全量扇出完整席位计划。
+- 审查安全评审中的确定性静态检查现为机械化的 engine 代码并提供 CLI 入口：`mstar audit secret-scan [path]` 以只读方式遍历 git 追踪文件，经 `scanSecrets` 打印 `{file, line, type}` findings（绝不打印值），命中即 exit 1；pattern 覆盖 provider key 形状（AKIA/ASIA、sk-ant-、ghp_/github_pat_、sk_live_、sk-、xox[baprs]-、JWT、私钥块）、never-commit 文件名（`.env*`、`*.pem`、`*.key`、`id_rsa`、credentials/service-account JSON、git-credentials）、CI/IaC 泄漏形状（Actions 明文 `env:` 块条目与同行赋值、Docker `ENV`/`ARG`、Terraform `password =`），并排除安全占位符（`${ENV_VAR}`、`process.env.X`）。`mstar audit supply-chain [path]` 执行 `supplyChainChecks`：跨已知 lockfile 集合的 lockfile-missing / lockfile-duplicate、`action-unpinned`（`@main`/`@latest`，容忍行尾注释，SHA 锁定视为干净）与 `pull_request_target-head` 的 PR head checkout；可达性 triage 仍留给 reviewer。
+- 凭证 pattern 现有单一事实来源：`packages/engine/src/audit.ts` 的 `WHOLE_MATCH_PATTERNS` / `VALUE_PATTERNS` 同时支撑 `redactSecrets` 与 `scanSecrets`，完成 engine 与 prose 双表漂移的对账——engine 表补入细粒度 GitHub PAT（`github_pat_`）与 Stripe live key（`sk_live_`）。`scaffoldAuditPlan` 对 finding 的 evidence/description 统一 wire `redactSecrets`，使脚手架产物兑现 redaction 承诺；`security-review.md` §6 将重复的 pattern 列表缩为指向 `mstar audit secret-scan` 的 engine-check pointer，仅保留纪律性散文。
+- 将 deferred-PR backlog 注册程序化：`mstar status backlog-register` / `mstar status backlog-close` 取代 `skills/mstar-audit/references/pr-review.md` 中手写的 python 锁协议。engine `appendProjectRegisterEntries` / `closeProjectRegisterEntry` 在 `withStatusWriteLock` 内执行原子 temp+rename 写入（崩溃安全、fail-loud 校验）；同日 key bump（`-2`、`-3`…）与 entry-id 唯一性在锁内强制（B-9）。
+- **角色参考：** 为开发角色（`fullstack-dev`、`fullstack-dev-2`、`frontend-dev`）的 Role Mission 增加一句共享编码哲学：“YAGNI 是你的编程哲学，PDCA 是你的行为规范。”
+- **角色参考：** 将执行角色 Role Mission 统一为第二人称 “You are …” 写法（`qa-engineer`、`prompt-engineer`、`ops-engineer`、`fullstack-dev-shared`）；`project-manager` 作为主控保留 Identity 段例外。
+- 在 README 徽章行（Last commit 之前）新增 `@mstar-harness/cli`、`@mstar-harness/dsh`、`@mstar-harness/opencode` 三个 **npm 总下载量** 徽章。
+- 重构 `amazing-pr-review` 批量语义为**一个 session = 一个 PR**：传入多个 PR 时只对**第一个**执行完整三阶段深审；其余 PR 登记为 `{PROJECT_DIR}/_default/residuals.json` 中的 audit todos（`decision: defer`、`target: next session`、`tracking: pr-deep-review backlog`），并在报告中建议为每个剩余 PR 开独立 session。移除旧的四坐席 N/4 批量扇出模型。
+- 将单 PR 深审重构为**三阶段流水线**（收集 → 领域审查 → 主代理合成）：轻量只读收集席按领域扇出，mstar 内置角色按领域做 code+security 审查，主代理去重、三路核验并发布唯一一条 GitHub Review。发布权移交主代理，领域席/收集席不发布。扇出规模驱动，复用既有 ~300 行规模带。
+- 将**三阶段流水线**与 **one session = one PR** 语义同步到 skill core、角色契约与用户可见文档：`mstar-audit` SKILL.md（`pr` 变体分派、Hard Rule 2）、`mstar-roles` 共享 Audit Mode 与 `code-reviewer.md` Mode C（每个席位——collect 或 domain——都在 result payload 中返回证据/findings：任何席位可能写阻断，证据文件由主代理代写/汇总；席不产出 verdict、永不发布），以及 README.md / README_CN.md / docs/cli.md。发布权在全部表面统一归**主代理**——评审席永不发布。
+- PR 审查的确定性算术与命名契约从 LLM 手算迁入经测试的 engine 代码，并以新的 `mstar pr-review` 命令组暴露：`tally`（由已采纳 findings JSON 计算锁定公式的 tally/verdict/score 并输出逐字两行 chat header）、`report-path`（本地报告/证据文件名解析器，含同日 `-r2`/`-r3` 碰撞递增、绝不捏造 SHA）、`validate-report`（已存报告 frontmatter 校验：verdict 由 tally 推导、score 公式重算、comments 三态）。`mstar-audit/references/pr-review.md` 的 § Tally / § 本地报告命名 / § Output shape 现带有指向这些命令的 engine-check callout。
+- PR 审查的外部副作用改为经测试的 engine 代码，并通过新的 `mstar pr-review` 命令组暴露：`post`（由 `planReviewPost` 构建 GitHub Review 计划——owner/repo 只从 PR url 解析、绝不取自 `headRepository`；`event` 锁定为字面量 `COMMENT`；`commit_id = headRefOid`；422 回退至多一次，将被拒的 inline 评论恰好折叠进正文）、`worktree-setup` / `worktree-cleanup`（`pickReviewBranchName` 无碰撞命名循环、显式 refspec fetch、untracked-only 也算非空 changeset 的 `preflightChangeset` 门禁、sidecar 守护的清理——移除树、prune 并只删除被记录的审查分支，受 report-saved 门禁约束）、`size`（`prReviewSizing` ~100/~300/~1000 分档 + 阶段一席位计划、拆分建议、文件体积关注）与 `seat-prompt`（`prReviewSeatPrompt` 骨架：Hard Rules 4/5 原文、payload 返回契约、no-verdict/no-post 条款、`<domain>-<seat>` slug）。Finding 文档新增程序化钩子：`mstar lint --type finding` 由 `validateFindingDoc` 支撑（`### [CATEGORY-NN]` 编号、category/effort/risk/confidence 枚举、证据 `path:line` 形状；`--pr-variant` 下校验 Merge class 的存在/枚举/位置）。
+- The SP-A review-tier inference ladder is deterministic engine code: `resolvePrReviewTier` walks explicit keyword → too-large advise-split → sensitive surface → large → small (tiny-mechanical → quick, otherwise default) and throws a conflict error on any two distinct tier keywords; `prReviewSeatPrompt` takes a `tier` so quick/default drop deep-only ingredients (the independent cross-domain security seat, collect-wave fan-out wording; quick additionally shrinks its read-first set), and `mstar pr-review size` prints band + inferred tier + seat plan. `mstar-audit/references/pr-review.md` sections carry engine-check callouts pointing at these commands instead of duplicated never-prose.
+- SP-A 审查档位推断梯成为确定性 engine 代码：`resolvePrReviewTier` 按显式关键字 → 过大建议拆分 → 敏感面 → 大改动 → 小改动（tiny-mechanical → quick，否则 default）的顺序判定，出现任意两个不同档位关键字即抛出冲突错误；`prReviewSeatPrompt` 接受 `tier` 参数，quick/default 省略 deep 专属成分（独立跨域安全席、收集波次扇出表述；quick 另会收缩 read-first 清单），`mstar pr-review size` 输出分档 + 推断档位 + 席位计划。`mstar-audit/references/pr-review.md` 各节现带有指向这些命令的 engine-check callout，取代重复的 never 式散文。
+- 移除根 `package.json` 的 `postinstall` 钩子（`opencode:bundle-assets` && `dsh:bundle-assets`）——静态安全扫描将其标记为安装期代码执行面（[high] R10）。资产镜像仅在显式运行 `bun run <pkg>:bundle-assets` 或各包 build/prepublish 链时同步。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单及便携式 Agent Plugins 清单：**→ 3.4.0**。
+
 ## [3.3.0] - 2026-08-25
 
 ### Harness
