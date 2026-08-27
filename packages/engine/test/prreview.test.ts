@@ -21,9 +21,9 @@
  * tally-only.
  */
 import { describe, expect, test } from "bun:test";
-import { computePrTally } from "../src/prreview.js";
+import { computePrTally, synthesizeReview } from "../src/prreview.js";
 import type { GateResult } from "../src/core.js";
-import type { PrTallyInput, PrTallyResult, PrVerdict } from "../src/prreview.js";
+import type { MstarReviewFinding, PrTallyInput, PrTallyResult, PrVerdict } from "../src/prreview.js";
 
 /**
  * The 9-row worked-example check table from pr-review.md § Worked examples,
@@ -870,8 +870,6 @@ describe("validateMstarReviewV1 — mstar.review/v1 envelope (SP3 review-json-ki
 // ---------------------------------------------------------------------------
 // synthesizeReview — mstar.review/v1 envelope (SP3 review-json-kind)
 // ---------------------------------------------------------------------------
-import { synthesizeReview } from "../src/prreview.js";
-import type { MstarReviewFinding } from "../src/prreview.js";
 
 /** CHECK_TABLE findings carry only mergeClass; synthesizeReview needs full
  * findings (title/body required) — map each row's classes to full findings
