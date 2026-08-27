@@ -191,7 +191,7 @@ mstar 技能通过 dsh skill-filesystem 提供者以**单一规范挂载**接入
 
 | 路径 | 机制 | 时机 |
 | --- | --- | --- |
-| Bundled 默认 | `bundledSkillDir` 默认取包内自带的 `harness-skills/` 镜像——仓库根 `skills/`（19 个 `mstar-*` + `pm`）由 `bundle-assets` 在构建/postinstall 时同步（gitignore），按**包相对路径**解析（非 cwd 锚定——任意启动 cwd 都可用） | 发布包 / 无覆盖的任何部署 |
+| Bundled 默认 | `bundledSkillDir` 默认取包内自带的 `harness-skills/` 镜像——仓库根 `skills/`（19 个 `mstar-*` + `pm`）由 `bundle-assets` 在构建时同步（gitignore），按**包相对路径**解析（非 cwd 锚定——任意启动 cwd 都可用） | 发布包 / 无覆盖的任何部署 |
 | 自定义根 | `skillRoots` / 显式 `bundledSkillDir` → skill-filesystem `customSkillDirs` / `bundledSkillDir` 条目（显式值优先） | 本地开发 / 测试 / 使用不同镜像的部署 |
 
 打包镜像是**单一规范挂载**：技能内容只在仓库根 `skills/` 镜像中存一份并同步进包（与 opencode 的 `harness-skills/` 相同），mstar 技能在任何地方都保持可独立使用。不重复加载：opencode 插件在自己的包里携带同一批技能，因此 dsh 只能通过这条 skill-filesystem 路径挂载它们。
@@ -200,7 +200,7 @@ mstar 技能通过 dsh skill-filesystem 提供者以**单一规范挂载**接入
 
 ## Commands
 
-插件把 bundled 的 mstar 命令（omp/opencode 对齐面）注册到 `ctx.commands`：`harness-commands/*.md`——仓库根 `commands/` 镜像（`iteration-start`、`iteration-drive`、`iteration-loop`、`codebase-audit`）由 `bundle-assets` 在构建/postinstall 时同步（gitignore）。每条注册读取命令的 `name`/`description`/`input` frontmatter；声明了 `input` hint 的注册会将其作为 `input.hint` 公布，使 dsh web 客户端的决策表从「脱离式裸执行」翻转为 leadingInput **claim**——菜单点选后把 `/name ` 插入输入框（命令色 token + ghost hint），按 Enter 才提交，用户可以键入后续参数（与 `/plan`、`/goal`、`/advisor` 相同的交互）。handler 把**命令正文以 USER source 消息 steer 进接收 agent**（dsh-plan-mode 命令先例——`source: { kind: 'user' }`，模型把正文当作要执行的任务而非注入上下文；即 dsh-commands 的「经接收 Agent 显式调度模型可见工作」路径），用户键入的参数以 `## User input` 小节追加在正文后，返回成功结果。注册以 `ctx.inject(['commands'], …)` 延迟进行——与工具注册相同的可选单元模式——插件在无 commands 服务时也能启动；镜像缺失（未跑 `bundle-assets`）则不注册任何命令。
+插件把 bundled 的 mstar 命令（omp/opencode 对齐面）注册到 `ctx.commands`：`harness-commands/*.md`——仓库根 `commands/` 镜像（`iteration-start`、`iteration-drive`、`iteration-loop`、`codebase-audit`）由 `bundle-assets` 在构建时同步（gitignore）。每条注册读取命令的 `name`/`description`/`input` frontmatter；声明了 `input` hint 的注册会将其作为 `input.hint` 公布，使 dsh web 客户端的决策表从「脱离式裸执行」翻转为 leadingInput **claim**——菜单点选后把 `/name ` 插入输入框（命令色 token + ghost hint），按 Enter 才提交，用户可以键入后续参数（与 `/plan`、`/goal`、`/advisor` 相同的交互）。handler 把**命令正文以 USER source 消息 steer 进接收 agent**（dsh-plan-mode 命令先例——`source: { kind: 'user' }`，模型把正文当作要执行的任务而非注入上下文；即 dsh-commands 的「经接收 Agent 显式调度模型可见工作」路径），用户键入的参数以 `## User input` 小节追加在正文后，返回成功结果。注册以 `ctx.inject(['commands'], …)` 延迟进行——与工具注册相同的可选单元模式——插件在无 commands 服务时也能启动；镜像缺失（未跑 `bundle-assets`）则不注册任何命令。
 
 ## Engine seam mapping
 
@@ -327,7 +327,7 @@ catalog 行在委托之后追加到组合步骤消息的**末尾**——请求�
 - **`<root>/mstar-roles/SKILL.md` 上 skill-lint × roles seam 双重触发**——当某个已配置技能根包含 `mstar-roles` 目录（开发期的仓库根镜像情形，以及发布形态的打包镜像）时，对 `mstar-roles/SKILL.md` 的一次写入会同时触发技能撰写 lint 闸门与 roles seam 闸门（hard 下两条咨询 / 两条修复逃生日志）。两个校验器都合理适用——双重 lint 仅为咨询，并非正确性破坏；「作用域互不重叠」的性质只在四个 seam 之间成立，不跨技能闸门。
 - **内容盲的 skill-lint 盲区**——`fs/write-intent` 槽位只携带 `(target, actor)`：首次创建的传入内容不被 lint，合法→非法覆盖在监听器路径上无法检出（它只 lint 写入前的磁盘文档）。告警/hard 咨询只呈现**已存在**的磁盘违规——与状态闸门同类限制。
 - **显式相对 `bundledSkillDir` 覆盖锚定 cwd**——skill-filesystem 对相对打包根按普通 `join()` 语义解析到 dsh **进程 cwd**。插件的**默认**打包根是包内自带的 `harness-skills/` 镜像，按包相对路径解析（**非** cwd 锚定——任意启动 cwd 都可用）；只有显式的**相对**覆盖继承 cwd 锚定，因此覆盖默认的部署应在 **profile 层传绝对路径**（见 `bundle/README.md`）。
-- **Bundled 镜像是构建期同步**——`harness-skills/` + `harness-commands/` 由 `bundle-assets` 在构建/postinstall 时产出（仓库根 `skills/` + `commands/` 镜像；gitignore）。未跑 `bundle-assets` 的检出不挂载 bundled 技能、不注册命令（默认挂载惰性，而非报错）。
+- **Bundled 镜像是构建期同步**——`harness-skills/` + `harness-commands/` 由 `bundle-assets` 在构建时产出（仓库根 `skills/` + `commands/` 镜像；gitignore）。未跑 `bundle-assets` 的检出不挂载 bundled 技能、不注册命令（默认挂载惰性，而非报错）。
 - **profile-bundle 安装到 `web` profile：registry 与 local checkout**——`dsh plugin --profile web add @mstar-harness/dsh`（registry）与 `add <本地检出>` 为受支持途径，均走同一 pnpm + reconcile 机制（reconcile 步骤把 `@mstar-harness/dsh` 并入 `dsh.profile.bundles`）。local checkout 需要先执行 `bun run build`——本包没有 `prepare` 脚本（monorepo 显式构建各包），未构建的检出会装入空的 `dist/`。
 - **`lintSkillWrite` 类型化否决尚未接入生产**——传入文档分支的 hard 否决（`SkillLintVetoError`，码 `skill-lint.veto`）已导出并测试覆盖，但尚无生产调用方：engine `HostAdapter` 没有携带内容的技能写入钩子（只有 `beforeStatusWrite`/`beforeDispatch`/`beforeMerge`），且 fs intent 槽位内容盲。接线随未来携带内容的钩子落地；在此之前监听器路径只通过修复逃生咨询执行（从不否决）。
 - **CLI `HOST_SIGNALS` 缺少 `subagent` token**——engine `ToolSignal` 联合已包含它且 `detectHost` 能处理，但 `packages/cli` 的 `HOST_SIGNALS` 尚未更新，`mstar host detect --signals subagent` 会拒绝，直到上游化时更新 CLI 列表。

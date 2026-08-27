@@ -111,8 +111,9 @@ jobs:
         run: bun run --cwd packages/opencode test
 
       # The dsh test imports @mstar-harness/engine dist (built above) and
-      # needs the harness-skills/harness-commands mirrors (synced by
-      # postinstall's dsh:bundle-assets) — use the package script. The
+      # needs the harness-skills/harness-commands mirrors (synced by the
+      # earlier "Build OpenCode" / "Build dsh" steps — each package build
+      # runs bundle-assets first) — use the package script. The
       # @deepseek-ai/dsh-* seam packages are peers resolved from the public
       # npm registry (bun auto-installs peers) — no local dsh source tree
       # needed (the rc.7 link farm is gone). The install e2e specs skip

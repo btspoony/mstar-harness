@@ -2,7 +2,7 @@
  * MorningStarHarness plugin for OpenCode.
  *
  * - Injects one-time harness bootstrap into first user message.
- * - Registers skill paths only inside this package: `harness-skills/` (synced at build / repo postinstall; includes `mstar-host`).
+ * - Registers skill paths only inside this package: `harness-skills/` (synced by `bundle-assets` at build time; includes `mstar-host`).
  * - Loads agents from `harness-agents/` only (same sync). Does not use `process.cwd()` so OpenCode project cwd does not matter.
  * - Loads custom commands from `harness-commands/` only (same sync).
  * - Dual-mode harness coordination-document write lint (roadmap §8.5

@@ -29,9 +29,7 @@ Restart OpenCode. The plugin installs from npm and registers Morning Star runtim
 
 ## Monorepo / git checkout of this repository
 
-After `bun install` or `npm install` at the repo root, **`postinstall`** runs `packages/opencode`’s `bundle-assets` so `harness-skills/` and `harness-agents/` exist for the plugin entry `main` → `packages/opencode/src/mstar.ts`.
-
-If you use `npm install --ignore-scripts`, run once manually:
+After `bun install` or `npm install` at the repo root, run once so `harness-skills/` and `harness-agents/` exist for the plugin entry `main` → `packages/opencode/src/mstar.ts`:
 
 `bun run opencode:bundle-assets`
 
@@ -69,4 +67,4 @@ The `@mstar-harness/cli` package (`npx @mstar-harness/cli init`) migrates that e
 
 1. Use `skill` tool to list what's discovered
 2. Check that the plugin is loading (see above)
-3. For **npm** installs, use a published build (tarball includes `harness-skills`). For **git** checkout, ensure install scripts ran (`postinstall` / `bun run opencode:bundle-assets`)
+3. For **npm** installs, use a published build (tarball includes `harness-skills`). For **git** checkout, run `bun run opencode:bundle-assets` once after install

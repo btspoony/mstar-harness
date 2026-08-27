@@ -61,8 +61,8 @@ Entry skill: **`mstar-harness-core`** (loaded before other `mstar-*` skills).
 From the repository root:
 
 ```bash
-bun install          # postinstall bundles harness-skills/ + harness-agents/
-bun run opencode:bundle-assets   # if you used --ignore-scripts
+bun install
+bun run opencode:bundle-assets   # syncs harness-skills/ + harness-agents/
 ```
 
 Plugin entry: `packages/opencode/src/mstar.ts` → `dist/mstar.js`.

@@ -219,7 +219,7 @@ declare module '@deepseek-ai/cordis' {
 
 /**
  * The plugin package's own `harness-commands/` mirror (synced from the repo
- * root by `bundle-assets` at build/postinstall; gitignored). Package-relative
+ * root by `bundle-assets` at build time; gitignored). Package-relative
  * like {@link packagedSkillsDir}. Returns undefined when absent.
  */
 function packagedCommandsDir(): string | undefined {
