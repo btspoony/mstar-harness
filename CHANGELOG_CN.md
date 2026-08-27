@@ -6,6 +6,20 @@
 
 ## [Unreleased]
 
+## [3.4.1] - 2026-08-27
+
+### Harness
+
+- **反递归预检改为 caller 语义（修复 #156）**：`composeDispatchGate` 不再把宿主角色绑定字段当作派发方身份送入 `antiRecursionPrecheck`——在 omp/OpenCode/Cursor 上该字段（`agent` / `subagent` / `subagent_type`）携带的是派发**目标**，而目标 == `Execute as` 正是文档规定的 C5 合规派发模式，导致 `Enforcement: hard` 下每个正确派发都被 `dispatch.anti-recursion.self-type` 硬阻断、省略字段又被 `empty-binding` 硬阻断（不存在合规绑定）。组合现接受 `caller`（派发方自身角色）+ `callerRequired`：仅在有 caller 绑定时运行预检，仅在宿主契约强制该绑定（dsh）时对空绑定 fail-closed。`agent` 选项已移除——调用方迁移到 `caller`。
+- **omp 插件**：Gate 2（任务派发）不再运行反递归分支（omp `tool_call` 事件无 caller 身份；NEVER 红线经 `mstar-dispatch-gates` 保持 prompt 级），文档规定的 `agent: "<Execute as role-id>"` 模式在 hard 下不再被阻断。派发 gate 现同时遵从仓库级 `.mstarc` / compass `enforcement: hard`（此前仅读 header flag——hard compass 不会加固 Gate 2，与 Gate 1 及 dsh `resolveDispatchHard` 分叉）；soft 模式派发违规改为经 extension logger warn 输出而非静默丢弃（与 opencode 对齐；静默丢弃正是 #156 钳制潜伏五个迭代的原因）。
+- **OpenCode 侧**：`validateDispatchAssignment` 移除 `subagentType` 管线（派发目标不是反递归信号），并在 Assignment header flag 之下叠加仓库级 `.mstarc`/compass hard 设置，与 status 写入 gate 及 dsh 对齐。合规派发不再产生 `self-type` / `empty-binding` 告警；hard 仓库现在会把无 flag 的派发违规升级为 error 级 + `hardBlocked`。
+- **dsh 侧**：`dispatchGateCore` 传入 `caller: config.dispatchBinding ?? ''` + `callerRequired: true`——行为不变（自我递归 critical；未设置绑定在 hard 下 fail-closed）。`mstar_dispatch_validate` 的 `agent` 参数更名为 `caller`（派发方自身角色；未知时省略）。
+- **文档**：`mstar-dispatch-gates` 记录 caller-vs-target 的 engine 执行范围；`mstar-host/references/omp.md` 新增 Gate 2 反递归范围说明；修正 dsh `dispatchBinding` 过时的「跳过预检」描述为 fail-closed 契约。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单及便携式 Agent Plugins 清单：**→ 3.4.1**。
+
 ## [3.4.0] - 2026-08-27
 
 ### Harness
