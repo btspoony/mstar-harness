@@ -15,7 +15,10 @@
  * secrets and scaffolds audit-<date>/ plan dirs, and `compound` validates
  * knowledge-doc schema, reference existence, index rows and the
  * compound-refresh scope. `roles` validates the role reference mapping +
- * parameter tables and the load-order contract, `host` detects the active
+ * parameter tables and the load-order contract, `prreview` implements the
+ * PR-review tally/score/verdict arithmetic and the merge-class/verdict
+ * constants (mstar-audit pr-review.md § Tally and derived score), `host`
+ * detects the active
  * host from tool shapes, resolves skill roots and defines the type-only
  * `HostAdapter` contract, and `skill-authoring` lints frontmatter +
  * 5-question bodies and resolves skill-relative asset paths.
@@ -178,6 +181,8 @@ export {
   validateCompassFrontmatter,
 } from "./iteration.js";
 export type {
+  AppendProjectRegisterEntriesOpts,
+  CloseProjectRegisterEntryOpts,
   FindingsCleanupMode,
   ProjectRegisterDoc,
   ProjectRegisterEntry,
@@ -194,6 +199,8 @@ export {
   PROJECT_ROADMAP_FILE,
   ROADMAP_STATUSES,
   _DEFAULT_PROJECT,
+  appendProjectRegisterEntries,
+  closeProjectRegisterEntry,
   findingsCleanupGate,
   listProjectReferenceFiles,
   techDebtRollup,
@@ -233,6 +240,7 @@ export {
 } from "./design-md.js";
 export type {
   AuditCategory,
+  AuditConfidence,
   AuditEffort,
   AuditFinding,
   AuditPriority,
@@ -241,18 +249,24 @@ export type {
   RedactResult,
   ScaffoldAuditPlanOptions,
   ScaffoldAuditPlanResult,
+  ScannedSecret,
   SecretFinding,
+  SupplyChainFinding,
+  SupplyChainFindingKind,
+  SupplyChainResult,
 } from "./audit.js";
 export {
   AUDIT_CATEGORIES,
+  AUDIT_CONFIDENCES,
   AUDIT_EFFORTS,
   AUDIT_PRIORITIES,
   AUDIT_RISKS,
   promoteAuditPlans,
   scaffoldAuditPlan,
+  scanSecrets,
+  supplyChainChecks,
   validateAuditStatusBlocks,
 } from "./audit.js";
-export type { ReferenceCheckResult } from "./compound.js";
 export {
   KNOWLEDGE_BUG_PROBLEM_TYPES,
   KNOWLEDGE_CATEGORY_MAP,
@@ -267,6 +281,7 @@ export {
   scopeGuard,
   validateSchemaYaml,
 } from "./compound.js";
+export type { ReferenceCheckResult } from "./compound.js";
 
 export type {
   EphemeralCitation,
@@ -311,3 +326,35 @@ export {
   resolveAssetPath,
   stripFrontmatter,
 } from "./skill-authoring.js";
+export type {
+  MergeClass,
+  PrReportTarget,
+  PrReviewSeatPromptOptions,
+  PrReviewSizing,
+  PrReviewTier,
+  PrTierKeyword,
+  PrSizeBand,
+  PrTallyInput,
+  PrTallyResult,
+  PrVerdict,
+  ResolvePrReviewTierInput,
+  ReviewChangesetMode,
+  ReviewInlineComment,
+  ReviewPostPlan,
+  ValidateFindingDocOptions,
+} from "./prreview.js";
+export {
+  MERGE_CLASSES,
+  PR_VERDICTS,
+  REVIEW_EMOJI,
+  computePrTally,
+  pickReviewBranchName,
+  planReviewPost,
+  preflightChangeset,
+  prReviewReportPath,
+  prReviewSeatPrompt,
+  prReviewSizing,
+  resolvePrReviewTier,
+  validateFindingDoc,
+  validatePrReviewReport,
+} from "./prreview.js";

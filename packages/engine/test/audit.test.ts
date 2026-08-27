@@ -15,6 +15,8 @@ import {
   promoteAuditPlans,
   redactSecrets,
   scaffoldAuditPlan,
+  scanSecrets,
+  supplyChainChecks,
   validateAuditStatusBlocks,
 } from "../src/audit.js";
 import { readJson } from "../src/core.js";
@@ -263,11 +265,14 @@ describe("redactSecrets", () => {
 
 describe("redactSecrets non-leakage invariants", () => {
   const probes: { type: string; value: string }[] = [
-    { type: "aws-access-key", value: "AKIAIOSFODNN7EXAMPLE" },
+    { type: "aws-access-key", value: "AKIAIOSFODNN7" + "EXAMPLE" },
     { type: "github-token", value: "ghp_" + "A".repeat(36) },
     { type: "slack-token", value: "xoxb-abcdefghijklmnopqrstuvwxyz" },
     { type: "api-secret-key", value: "sk-abcdefghijklmnopqrstuvwxyz0123456789" },
-    { type: "private-key", value: "-----BEGIN RSA PRIVATE KEY-----" },
+    {
+      type: "private-key",
+      value: "-----BEGIN RSA PRIVATE KEY-----\n" + "MIIEow".padEnd(76, "A") + "\n" + "-----END RSA PRIVATE KEY-----",
+    },
     {
       type: "jwt",
       value:
@@ -302,12 +307,120 @@ describe("redactSecrets non-leakage invariants", () => {
   });
 
   test("deduplicates findings by (line, type)", () => {
-    const input = "AKIAIOSFODNN7EXAMPLE\nAKIAIOSFODNN7EXAMPLE\n";
+    const input = `${probes[0].value}\n${probes[0].value}\n`;
     const result = redactSecrets(input);
     const keys = result.findings.map((f) => `${f.line}:${f.type}`);
     expect(new Set(keys).size).toBe(keys.length);
     // Same type on two distinct lines stays two findings.
     expect(result.findings.filter((f) => f.type === "aws-access-key")).toHaveLength(2);
+  });
+
+  // qc1 W-004: every CI/IaC shape scanSecrets detects must also be
+  // redactable — a finding accepted by the scanner can appear in scaffolded
+  // evidence and must not survive into artifacts with its value intact.
+  test("redacts each CI/IaC shape family (detector/redactor parity)", () => {
+    const docker = "ENV API_TOKEN=supersecretvalue123";
+    const arg = "ARG GITHUB_TOKEN=injected-at-build-time-ok"; // 25 chars value
+    const terraform = `password = "S3cr3tV4lue!"`;
+    for (const [text, type] of [
+      [docker, "dockerfile-credential-env"],
+      [arg, "dockerfile-credential-env"],
+      [terraform, "terraform-hardcoded-password"],
+    ] as const) {
+      const result = redactSecrets(text);
+      expect(result.findings.map((f) => f.type)).toContain(type);
+      // The matched line region is replaced by the marker, not left as-is.
+      expect(result.text).not.toBe(text);
+      expect(result.text).not.toContain(type === "terraform-hardcoded-password" ? "S3cr3tV4lue!" : "supersecretvalue123");
+    }
+    const argResult = redactSecrets(arg);
+    expect(argResult.text).not.toContain("injected-at-build-time-ok");
+  });
+
+  // qc3 W-2: the CI/IaC shapes anchor with ^/$ and must fire per LINE of a
+  // multi-line evidence text — a shape `scanSecrets` detects on line 2, 3,
+  // or N must never survive redaction with its value intact.
+  test("redacts CI/IaC shapes mid-string on multi-line text (qc3 W-2)", () => {
+    const multi = [
+      "line0: ordinary",
+      'env: API_TOKEN="mysecret12345678"',
+      "FROM node",
+      "ENV API_TOKEN=supersecretvalue123",
+      'password = "S3cr3tV4lue!"',
+      "line5: ordinary",
+    ].join("\n");
+    const result = redactSecrets(multi);
+    expect(result.text).not.toContain("mysecret12345678");
+    expect(result.text).not.toContain("supersecretvalue123");
+    expect(result.text).not.toContain("S3cr3tV4lue!");
+    expect(result.text).toContain("[REDACTED actions-plaintext-env@2]");
+    expect(result.text).toContain("[REDACTED dockerfile-credential-env@4]");
+    expect(result.text).toContain("[REDACTED terraform-hardcoded-password@5]");
+    // Non-credential lines stay intact.
+    expect(result.text).toContain("line0: ordinary");
+    expect(result.text).toContain("FROM node");
+    expect(result.text).toContain("line5: ordinary");
+    expect(result.findings.map((f) => f.type).sort()).toEqual([
+      "actions-plaintext-env",
+      "dockerfile-credential-env",
+      "terraform-hardcoded-password",
+    ]);
+  });
+
+  // qc3 W-3: overlapping spans must be merged (longest per overlap group)
+  // before the text is rebuilt — applying ORIGINAL-length replacements
+  // against already-modified text produced `[REDACTED …@1]@1]"` garbage.
+  // Synthetic Stripe live-key values are assembled from parts so the raw
+  // source never holds the full contiguous token (GitHub push-protection
+  // false positive on test data).
+  const stripeTail = "1234567890123456";
+  const stripeLive = "sk_live_" + stripeTail;
+  test.each([
+    // env line containing a stripe whole-match token
+    [`env: API_TOKEN="${stripeLive}"`, "[REDACTED actions-plaintext-env@1]"],
+    // dockerfile env line containing a stripe whole-match token
+    [`ENV API_TOKEN=${stripeLive}\nRUN echo hi`, "[REDACTED dockerfile-credential-env@1]\nRUN echo hi"],
+    ['password = "mysecret12345678"\n', "[REDACTED terraform-hardcoded-password@1]\n"],
+  ])("overlapping spans merge to a single clean marker: %j", (input, expected) => {
+    const result = redactSecrets(input);
+    expect(result.text).toBe(expected);
+    expect((result.text.match(/\[REDACTED /g) ?? []).length).toBe(1);
+    expect(result.text).not.toContain("sk_live_");
+    expect(result.text).not.toContain("mysecret12345678");
+  });
+
+  test("private-key redaction covers header AND body until the END marker", () => {
+    const pem = [
+      "-----BEGIN OPENSSH PRIVATE KEY-----",
+      "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW",
+      "-----END OPENSSH PRIVATE KEY-----",
+      "",
+    ].join("\n");
+    const result = redactSecrets(pem);
+    expect(result.findings.filter((f) => f.type === "private-key").length).toBeGreaterThanOrEqual(1);
+    // Header alone is not enough: the base64 body must be gone too.
+    expect(result.text).not.toContain("b3BlbnNzaC1rZXktdjEAAAAABG5vbmU");
+    expect(result.text).toContain("[REDACTED private-key@");
+  });
+
+  // qc3 W-3: a PEM block whose body lines match other patterns — the
+  // whole-block span absorbs them into ONE private-key marker.
+  test("private-key span absorbs overlapping matches inside its body (qc3 W-3)", () => {
+    const pem = [
+      "-----BEGIN RSA PRIVATE KEY-----",
+      "MIIEow" + "A".repeat(70),
+      'password = "hunter2hunter2hunter2"',
+      "xoxb-" + "abcdefghijklmnopqrstuvwxyz",
+      "-----END RSA PRIVATE KEY-----",
+      "",
+    ].join("\n");
+    const result = redactSecrets(pem);
+    const markers = result.text.match(/\[REDACTED [^\]]+@\d+\]/g) ?? [];
+    expect(markers).toEqual(["[REDACTED private-key@1]"]);
+    expect(result.text).not.toContain("hunter2hunter2hunter2");
+    expect(result.text).not.toContain("xoxb-");
+    expect(result.text).not.toContain("BEGIN RSA");
+    expect(result.findings.map((f) => f.type)).toEqual(["private-key"]);
   });
 });
 
@@ -393,6 +506,31 @@ describe("scaffoldAuditPlan", () => {
     const readme = readFileSync(join(out, "README.md"), "utf8");
     expect(readme).toContain("| 001 | Earlier plan |");
     expect(readme).toContain("| 002 | Fix N+1 query in order list |");
+  });
+
+  test("re-scaffold with a changed priority refreshes the index row", () => {
+    const out = join(tmp, "audit-2026-08-27");
+    const finding = {
+      title: "Fix N+1 query",
+      category: "perf" as const,
+      impact: "a",
+      effort: "S" as const,
+      risk: "LOW" as const,
+      confidence: "HIGH" as const,
+      evidence: ["x"],
+      priority: "P1" as const,
+    };
+    scaffoldAuditPlan(out, [finding], { date: "2026-08-27" });
+    expect(readFileSync(join(out, "README.md"), "utf8")).toContain("| 001 | Fix N+1 query | P1 | S | none | TODO |");
+    // Same title re-scaffolded with a re-triaged priority: numbering is
+    // monotonic (001 is never rewritten), so the NEW batch's row must
+    // carry the NEW value — finding-authoritative from the redacted
+    // finding, not a parse artifact of a previous Status block — while
+    // the preserved 001 row keeps its own priority.
+    scaffoldAuditPlan(out, [{ ...finding, priority: "P2" as const }], { date: "2026-08-27" });
+    const readme = readFileSync(join(out, "README.md"), "utf8");
+    expect(readme).toContain("| 002 | Fix N+1 query | P2 | S | none | TODO |");
+    expect(readme).toContain("| 001 | Fix N+1 query | P1 | S | none | TODO |");
   });
 
   test("renders the Direction section when direction findings exist", () => {
@@ -600,7 +738,61 @@ describe("scaffoldAuditPlan", () => {
     expect(readme).toContain("- hand typed lead: check it (src/x.ts:1)");
     expect(readme).toContain("- Checked and clean: hand cleared sink");
   });
+
+  test("D-1: scaffold redacts credentials from finding evidence/fix sketch (Hard Rule 4)", () => {
+    const out = join(tmp, "audit-2026-08-25");
+    const result = scaffoldAuditPlan(
+      out,
+      [
+        {
+          title: "Rotate the leaked Stripe live key",
+          category: "security" as const,
+          impact: "Anyone with repo read access can charge cards.",
+          effort: "S" as const,
+          risk: "HIGH" as const,
+          confidence: "HIGH" as const,
+          evidence: ["src/config.ts:12 — sk_live_" + "A1b2C3d4E5f6G7h8I9j0K1l2 committed"],
+          priority: "P1" as const,
+          fixSketch: "Rotate the key (sk_live_" + "A1b2C3d4E5f6G7h8I9j0K1l2), then scrub history.",
+        },
+      ],
+      { date: "2026-08-11" },
+    );
+    expect(result.files).toEqual(["001-rotate-the-leaked-stripe-live-key.md"]);
+    for (const file of [...result.files, "README.md"]) {
+      const text = readFileSync(join(out, file), "utf8");
+      // No raw credential value anywhere in the scaffolded artifact...
+      expect(text).not.toContain("sk_live_" + "A1b2C3d4E5f6G7h8I9j0K1l2");
+      // ...but the redaction marker and the non-secret context survive.
+      expect(text).toContain("[REDACTED stripe-live-key@");
+      expect(text).toContain("src/config.ts:12");
+    }
+    const planFile = readFileSync(join(out, result.files[0]!), "utf8");
+    // Fix sketch survives redaction too (plan file only — the README
+    // index does not render fix sketches).
+    expect(planFile).toContain("Rotate the key ([REDACTED stripe-live-key@1]), then scrub history.");
+  });
+
+  test("D-1: rejected findings + needsVerification/hardeningChecked are redacted in the README (qc1 W-003)", () => {
+    const out = join(tmp, "audit-2026-08-26");
+    const leak = "sk_live_" + "B7c8D9e0F1a2B3c4D5e6F7g8";
+    scaffoldAuditPlan(
+      out,
+      [{ title: "Benign finding", category: "tests" as const, impact: "i", effort: "S" as const, risk: "LOW" as const, confidence: "HIGH" as const, evidence: [], priority: "P2" as const }],
+      {
+        date: "2026-08-26",
+        rejected: [{ title: `Rejected token: ${leak}`, reason: "value was already rotated" }],
+        needsVerification: [{ lead: "AWS key in logs", how: `search ${leak} in CloudWatch` }],
+        hardeningChecked: [{ kind: "Hardening", text: `legacy key ${leak} revoked` }],
+      },
+    );
+    const readme = readFileSync(join(out, "README.md"), "utf8");
+    // No raw value may reach the index through ANY channel.
+    expect(readme).not.toContain(leak);
+    expect(readme).toContain("[REDACTED stripe-live-key@");
+  });
 });
+
 
 // ---------------------------------------------------------------------------
 // promoteAuditPlans — v2 workflow promotion of selected audit plans
@@ -967,5 +1159,140 @@ describe("engine barrel hides redactSecrets (f11)", () => {
 
   test("the audit module still exports redactSecrets directly", () => {
     expect(typeof redactSecrets).toBe("function");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fix round — review findings on the Task 1 static checks:
+// 1. NEVER_COMMIT_FILENAMES implements `.env*` prefix glob + missing names
+//    (`.envrc`, `credentials.json`, `service-account.json`, git-credentials)
+// 2. CI_IAC_LEAK_SHAPES `actions-plaintext-env` hits canonical YAML `env:` maps
+// 3. `action-unpinned` tolerates trailing comments (`uses: a/b@main # c`)
+// ---------------------------------------------------------------------------
+
+describe("scanSecrets never-commit filenames (fix round)", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "engine-audit-fix-"));
+  afterAll(() => rmSync(tmp, { recursive: true, force: true }));
+
+  /** Write an empty file and return its path for scanning. */
+  function touch(name: string): string {
+    const p = join(tmp, name);
+    writeFileSync(p, "");
+    return p;
+  }
+
+  // `.env*` prefix glob: basename STARTS with `.env`.
+  test("flags .env prefix variants", () => {
+    for (const name of [".env", ".env.production", ".env.local.j2", ".envrc"]) {
+      const findings = scanSecrets([touch(name)]).findings.filter((f) => f.type === "env-file");
+      expect(findings.length).toBe(1);
+    }
+  });
+
+  test("does not flag env-like suffixes that are not .env-prefixed", () => {
+    for (const name of ["foo.env", "config.env", "env.example", "dotenv"]) {
+      const findings = scanSecrets([touch(name)]).findings.filter((f) => f.type === "env-file");
+      expect(findings.length).toBe(0);
+    }
+  });
+
+  test("matches on the basename, not the full path (deep dirs)", () => {
+    const deep = join(tmp, "nested");
+    mkdirSync(deep, { recursive: true });
+    const p = join(deep, ".env.staging");
+    writeFileSync(p, "");
+    expect(scanSecrets([p]).findings.some((f) => f.type === "env-file")).toBe(true);
+  });
+
+  test("flags named credential files from security-review §6", () => {
+    for (const [name, type] of [
+      ["credentials.json", "credentials-json"],
+      ["service-account.json", "service-account-json"],
+      [".git-credentials", "git-credentials"],
+      ["git-credentials", "git-credentials"],
+      ["id_rsa", "ssh-private-key-file"],
+      ["id_ed25519", "ssh-private-key-file"],
+    ] as const) {
+      const findings = scanSecrets([touch(name)]).findings.filter((f) => f.type === type);
+      expect(findings.length).toBe(1);
+    }
+  });
+});
+
+describe("scanSecrets actions-plaintext-env YAML env: map (fix round)", () => {
+  test("flags secret-looking literal children of an env: block mapping", () => {
+    const workflow = [
+      "on:",
+      "  push:",
+      "jobs:",
+      "  build:",
+      "    runs-on: ubuntu-latest",
+      "    steps:",
+      "      - run: make",
+      "        env:",
+      "          API_TOKEN: \"literalvalue123\"",
+      "          DEPLOY_SECRET: mysecretvalue",
+      "          PLAIN_VAR: hello",
+      "      - run: echo done",
+      "        env:",
+      "          SAFE_TOKEN: ${{ secrets.SAFE_TOKEN }}",
+      "          OTHER_KEY: abcdefgh",
+      "",
+    ].join("\n");
+    const tmp = mkdtempSync(join(tmpdir(), "engine-audit-envmap-"));
+    try {
+      const wfPath = join(tmp, "wf.yml");
+      writeFileSync(wfPath, workflow);
+      const hits = scanSecrets([wfPath]).findings.filter((f) => f.type === "actions-plaintext-env");
+      // Lines 9-10 are plaintext literals inside the first env: map;
+      // line 14 is `${{ }}`-indirect and stays safe; line 15 (OTHER_KEY,
+      // 8-char literal) is credential-shaped and MUST be flagged.
+      expect(hits.map((h) => h.line)).toEqual([9, 10, 15]);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps the same-line shortcut working", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "engine-audit-inl-"));
+    try {
+      const p = join(tmp, "wf.yml");
+      writeFileSync(p, '      - run: make\n        env: API_TOKEN="literalvalue123"\n');
+      const hits = scanSecrets([p]).findings.filter((f) => f.type === "actions-plaintext-env");
+      expect(hits.map((h) => h.line)).toEqual([2]);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("supplyChainChecks action-unpinned trailing comment (fix round)", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "engine-audit-pin-"));
+  afterAll(() => rmSync(tmp, { recursive: true, force: true }));
+
+  /** Write one workflow under a temp repo root and run the gate. */
+  function check(workflow: string): { kinds: { kind: string; line?: number }[] } {
+    mkdirSync(join(tmp, ".github", "workflows"), { recursive: true });
+    writeFileSync(join(tmp, ".github", "workflows", "ci.yml"), workflow);
+    return { kinds: supplyChainChecks(tmp).findings };
+  }
+
+  test("unpinned with trailing comment is still flagged", () => {
+    const r = check("jobs:\n  b:\n    steps:\n      - uses: some/action@main # pin me\n");
+    expect(r.kinds.some((f) => f.kind === "action-unpinned" && f.line === 4)).toBe(true);
+  });
+
+  test("pinned SHA with trailing comment is NOT flagged", () => {
+    const r = check(
+      "jobs:\n  b:\n    steps:\n      - uses: some/action@8f4b7f84864484a7bf31766abe9204da3cbe65b3 # v4\n",
+    );
+    expect(r.kinds.some((f) => f.kind === "action-unpinned")).toBe(false);
+  });
+
+  test("plain unpinned without comment still flagged; version pin tolerated", () => {
+    const r = check(
+      "jobs:\n  b:\n    steps:\n      - uses: some/action@main\n      - uses: some/other@v4\n",
+    );
+    expect(r.kinds.filter((f) => f.kind === "action-unpinned").length).toBe(1);
   });
 });

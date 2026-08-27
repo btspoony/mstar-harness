@@ -2,7 +2,7 @@
  * CLI Slice-4 subcommands — thin engine-backed wrappers:
  *   mstar lint <target>, mstar design-md validate <dir>,
  *   mstar audit scaffold <findings-file> [--dir <out-dir>], mstar audit promote
- *   <audit-dir> --plans <ids>, mstar compound validate
+ *   <audit-dir> --plans <ids>, mstar audit secret-scan [path], mstar audit supply-chain [path],
  *   <doc-path> [--knowledge-dir <dir>], mstar host detect --signals <list>,
  *   mstar skill lint <skill-dir>, mstar roles validate [--roles-dir <dir>]
  *   [--skills-dir <dir>].
@@ -12,10 +12,11 @@
  * subprocess against /tmp fixtures and asserts exit code + reported codes.
  */
 import { describe, expect, test } from "bun:test";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { readJson, scaffoldAuditPlan, validateAuditStatusBlocks } from "@mstar-harness/engine";
+import { readJson, scaffoldAuditPlan, validateAuditStatusBlocks, validateProjectRegister } from "@mstar-harness/engine";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
 const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
@@ -689,6 +690,159 @@ describe("mstar audit scaffold — plan directory from findings JSON", () => {
 
 // ---------------------------------------------------------------------------
 // mstar audit promote
+
+// ---------------------------------------------------------------------------
+// mstar audit secret-scan / supply-chain — deterministic static checks
+// ---------------------------------------------------------------------------
+
+describe("mstar audit secret-scan — tracked-file credential scan", () => {
+  test("seeded secret in a tracked file → finding JSON + exit 1", () => {
+    withTempDir((dir) => {
+      execFileSync("git", ["init", "-q"], { cwd: dir });
+      mkdirSync(join(dir, "sub"), { recursive: true });
+      // Inert filler matching the AWS whole-match shape (AKIA + 16 alnum).
+      // Split literal: keep the raw source free of the full contiguous token
+      // (GitHub push protection treats test values as live credentials).
+      const awsKey = "AKIAIOSFODNN7" + "EXAMPLE";
+      writeFileSync(join(dir, "sub", "config.ts"), `token = "${awsKey}"\n`);
+      writeFileSync(join(dir, ".env.production"), "SECRET=placeholder\n");
+      execFileSync("git", ["add", "-A"], { cwd: dir });
+      const result = runCli(["audit", "secret-scan", dir]);
+      expect(result.exitCode).toBe(1);
+      // 3 hits: the whole-match AWS shape + the VALUE_PATTERNS `token` row on
+      // the same line, plus the never-commit `.env.production` filename.
+      expect(result.stderr).toContain("secret-scan: 3 findings");
+      // Finding shape: {file, line, type} only — Hard Rule 4, never a value.
+      const aws = result.stdout.split("\n").find((l) => l.startsWith("{") && l.includes("aws-access-key"));
+      expect(aws).toBeDefined();
+      expect(JSON.parse(aws!)).toEqual({ file: join(dir, "sub", "config.ts"), line: 1, type: "aws-access-key" });
+      const envHit = result.stdout.split("\n").find((l) => l.startsWith("{") && l.includes("env-file"));
+      expect(envHit).toBeDefined();
+      expect(JSON.parse(envHit!).line).toBe(1);
+      for (const line of result.stdout.split("\n").filter((l) => l.startsWith("{"))) {
+        expect(JSON.parse(line).file).toBeDefined();
+        expect(JSON.parse(line).line).toBeGreaterThan(0);
+        expect(JSON.parse(line).type).toBeDefined();
+      }
+      // Hard Rule 4 at the shipped boundary: the seeded raw values must be
+      // absent from BOTH output streams (qc1 W-006).
+      expect(result.stdout + result.stderr).not.toContain(awsKey);
+      expect(result.stdout + result.stderr).not.toContain("SECRET=placeholder");
+    });
+  });
+
+  test("clean repo → exit 0, no finding lines", () => {
+    withTempDir((dir) => {
+      execFileSync("git", ["init", "-q"], { cwd: dir });
+      writeFileSync(join(dir, "main.ts"), `const key = process.env.API_KEY;\n`);
+      execFileSync("git", ["add", "-A"], { cwd: dir });
+      const result = runCli(["audit", "secret-scan", dir]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("secret-scan: clean");
+      expect(result.stdout).not.toContain("{\"file\"");
+    });
+  });
+
+  test("untracked files are not scanned; path argument must be a directory → exit 2", () => {
+    withTempDir((dir) => {
+      execFileSync("git", ["init", "-q"], { cwd: dir });
+      writeFileSync(join(dir, "leak.ts"), `token = "xoxb-123456789-abcdefghij"
+`);
+      // NOT staged → not tracked → not scanned
+      const result = runCli(["audit", "secret-scan", dir]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("clean");
+      const bad = runCli(["audit", "secret-scan", join(dir, "no-such-dir")]);
+      expect(bad.exitCode).toBe(2);
+      expect(bad.stderr).toContain("not a directory");
+    });
+  });
+
+  test("nested path argument resolves tracked files under it (qc1 W-001)", () => {
+    withTempDir((dir) => {
+      execFileSync("git", ["init", "-q"], { cwd: dir });
+      // Leak lives in a NESTED package dir; scan target is that dir.
+      const pkg = join(dir, "packages", "engine");
+      mkdirSync(pkg, { recursive: true });
+      // Synthetic Stripe live-key, split so the raw source never holds the
+      // full contiguous token (GitHub push-protection false positive).
+      const stripeKey = "sk_live_" + "Z9y8X7W6V5U4T3S2R1Q0P9O8N7";
+      writeFileSync(join(pkg, "leak.ts"), `token = "${stripeKey}"\n`);
+      writeFileSync(join(dir, "readme.md"), "harmless\n");
+      execFileSync("git", ["add", "-A"], { cwd: dir });
+      const result = runCli(["audit", "secret-scan", pkg]);
+      expect(result.exitCode).toBe(1);
+      const stripe = result.stdout.split("\n").find((l) => l.startsWith("{") && l.includes("stripe-live-key"));
+      expect(stripe).toBeDefined();
+      expect(JSON.parse(stripe!)).toEqual({ file: join(pkg, "leak.ts"), line: 1, type: "stripe-live-key" });
+    });
+  });
+
+  test("non-git directory → exit 2, not a clean exit 0 (qc1 W-002 / qc3 W-1)", () => {
+    withTempDir((dir) => {
+      writeFileSync(join(dir, "main.ts"), `const ok = 1;\n`);
+      const result = runCli(["audit", "secret-scan", dir]);
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain("not a git repository or git unavailable");
+    });
+  });
+
+  test("unreadable tracked file forces non-zero even with no findings (qc1 W-002)", () => {
+    withTempDir((dir) => {
+      execFileSync("git", ["init", "-q"], { cwd: dir });
+      const locked = join(dir, "locked.txt");
+      writeFileSync(locked, "benign content\n");
+      execFileSync("git", ["add", "-A"], { cwd: dir });
+      chmodSync(locked, 0o000);
+      try {
+        const result = runCli(["audit", "secret-scan", dir]);
+        expect(result.exitCode).not.toBe(0);
+        expect(result.stderr).toContain("failed to read");
+        expect(result.stderr).toContain("1 tracked file");
+      } finally {
+        chmodSync(locked, 0o644);
+      }
+    });
+  });
+});
+
+describe("mstar audit supply-chain — lockfile + workflow checks", () => {
+  test("lockfile missing at root → lockfile-missing finding + exit 1", () => {
+    withTempDir((dir) => {
+      const result = runCli(["audit", "supply-chain", dir]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("audit.supply.lockfile-missing");
+      expect(result.stdout).toContain('"kind":"lockfile-missing"');
+    });
+  });
+
+  test("two root lockfiles → lockfile-duplicate finding + exit 1", () => {
+    withTempDir((dir) => {
+      for (const name of ["package-lock.json", "yarn.lock"]) writeFileSync(join(dir, name), "{}\n");
+      const result = runCli(["audit", "supply-chain", dir]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toContain('"kind":"lockfile-duplicate"');
+    });
+  });
+
+  test("single lockfile + SHA-pinned workflow → clean, exit 0", () => {
+    withTempDir((dir) => {
+      writeFileSync(join(dir, "bun.lock"), "{}\n");
+      mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+      const sha = "a".repeat(40);
+      writeFileSync(
+        join(dir, ".github", "workflows", "ci.yml"),
+        ["name: ci", "on:", "  push:", "jobs:", "  build:", "    steps:", `      - uses: actions/checkout@${sha}`].join("\n") + "\n",
+      );
+      const result = runCli(["audit", "supply-chain", dir]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("supply-chain: OK");
+      expect(result.stdout).toContain("supply-chain: OK");
+      expect(result.stdout).not.toContain('{"kind"');
+    });
+  });
+});
+
 // ---------------------------------------------------------------------------
 
 describe("mstar audit promote — v2 workflow registration for selected plans", () => {
@@ -1621,6 +1775,209 @@ describe("mstar status findings-cleanup — project-register cleanup-mode gate (
   });
 });
 
+// ---------------------------------------------------------------------------
+// mstar status backlog-register / backlog-close — project-register backlog
+// (plan 20260826-backlog-register-cli Task 3; engine APIs from Task 1)
+// ---------------------------------------------------------------------------
+
+/** Local calendar date YYYY-MM-DD — same convention as the CLI's `registered_at` fill. */
+function todayLocal(): string {
+  const now = new Date();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${now.getFullYear()}-${month}-${day}`;
+}
+
+/** One deferred-PR residual JSON string (nine fields; provenance is CLI-filled). */
+function backlogEntryJson(id: string, pr: string): string {
+  return JSON.stringify({
+    id,
+    title: `pr-deep-review ${pr}`,
+    severity: "low",
+    source: "pr-deep-review batch input",
+    scope: `deep review of ${pr} in a new pr-deep-review session`,
+    decision: "defer",
+    owner: "project-manager",
+    target: "next session",
+    tracking: "pr-deep-review backlog",
+  });
+}
+
+/** Read `projects/<id>/residuals.json` under `dir` as a parsed object. */
+function readRegister(dir: string, projectId = "_default"): Record<string, unknown> {
+  return JSON.parse(readFileSync(join(dir, "projects", projectId, "residuals.json"), "utf8")) as Record<string, unknown>;
+}
+
+describe("mstar status backlog-register — project-register backlog append (engine-backed)", () => {
+  test("valid --entry JSON registers entries under the used key, prints the key, exit 0", () => {
+    withTempDir((dir) => {
+      const key = "pr-deep-review-2026-08-26";
+      const result = runCli([
+        "status", "backlog-register", "--harness", dir, "--key", key,
+        "--entry", backlogEntryJson(`${key}-1`, "owner/repo#123"),
+        "--entry", backlogEntryJson(`${key}-2`, "owner/repo#456"),
+      ]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain(`under key ${key}`);
+      expect(result.stderr).toBe("");
+
+      const register = readRegister(dir);
+      const entries = (register.entries as Record<string, unknown[]>)[key] as Array<Record<string, unknown>>;
+      expect(entries).toHaveLength(2);
+      for (const entry of entries) {
+        for (const field of ["id", "title", "severity", "source", "scope", "decision", "owner", "target", "tracking", "source_plan", "registered_at"]) {
+          expect(entry).toHaveProperty(field);
+        }
+        expect(entry.source_plan).toBe(key);
+        expect(entry.registered_at).toBe(todayLocal());
+      }
+      expect(validateProjectRegister(register).ok).toBe(true);
+    });
+  });
+
+  test("missing --project defaults to _default", () => {
+    withTempDir((dir) => {
+      const key = "pr-deep-review-2026-08-26";
+      const result = runCli([
+        "status", "backlog-register", "--harness", dir, "--key", key,
+        "--entry", backlogEntryJson(`${key}-1`, "owner/repo#123"),
+      ]);
+      expect(result.exitCode).toBe(0);
+      const register = readRegister(dir, "_default");
+      expect((register.entries as Record<string, unknown[]>)[key]).toHaveLength(1);
+    });
+  });
+
+  test("no --entry is rejected with a clear error (exit 1)", () => {
+    withTempDir((dir) => {
+      const result = runCli(["status", "backlog-register", "--harness", dir, "--key", "k1"]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("at least one --entry is required");
+    });
+  });
+
+  test("invalid --entry JSON is rejected (exit 1)", () => {
+    withTempDir((dir) => {
+      const result = runCli(["status", "backlog-register", "--harness", dir, "--key", "k1", "--entry", "{not json"]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("not valid JSON");
+    });
+  });
+
+  test("explicit --project <non-_default> registers + validates under the given project id (exit 0)", () => {
+    withTempDir((dir) => {
+      const key = "pr-deep-review-2026-08-26";
+      const result = runCli([
+        "status", "backlog-register", "--harness", dir, "--project", "myproj", "--key", key,
+        "--entry", backlogEntryJson(`${key}-1`, "owner/repo#123"),
+      ]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain(`under key ${key}`);
+      expect(result.stderr).toBe("");
+
+      const register = readRegister(dir, "myproj");
+      const entries = (register.entries as Record<string, unknown[]>)[key] as Array<Record<string, unknown>>;
+      expect(entries).toHaveLength(1);
+      expect(validateProjectRegister(register).ok).toBe(true);
+    });
+  });
+
+  test("--project ../evil is rejected by the id sanitizer (exit 1, no write)", () => {
+    withTempDir((dir) => {
+      const result = runCli([
+        "status", "backlog-register", "--harness", dir, "--project", "../evil", "--key", "k1",
+        "--entry", backlogEntryJson("k1-1", "owner/repo#123"),
+      ]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("invalid project id");
+    });
+  });
+
+  test("--project /abs is rejected by the id sanitizer (exit 1, no write)", () => {
+    withTempDir((dir) => {
+      const result = runCli([
+        "status", "backlog-register", "--harness", dir, "--project", "/abs", "--key", "k1",
+        "--entry", backlogEntryJson("k1-1", "owner/repo#123"),
+      ]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("invalid project id");
+    });
+  });
+});
+
+describe("mstar status backlog-close — project-register backlog close (engine-backed)", () => {
+  test("closes the entry in place (lifecycle resolved + closed_at + closure_note), exit 0", () => {
+    withTempDir((dir) => {
+      const key = "pr-deep-review-2026-08-26";
+      const id = `${key}-1`;
+      const registerResult = runCli([
+        "status", "backlog-register", "--harness", dir, "--key", key,
+        "--entry", backlogEntryJson(id, "owner/repo#123"),
+      ]);
+      expect(registerResult.exitCode).toBe(0);
+
+      const result = runCli(["status", "backlog-close", "--harness", dir, "--key", key, "--id", id]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain(`resolved entry ${id}`);
+
+      const register = readRegister(dir);
+      const entry = ((register.entries as Record<string, unknown[]>)[key] as Array<Record<string, unknown>>)[0];
+      expect(entry.lifecycle).toBe("resolved");
+      expect(entry.closed_at).toBe(todayLocal());
+      expect(entry.closure_note).toBe("closed by backlog close");
+      expect(validateProjectRegister(register).ok).toBe(true);
+    });
+  });
+
+  test("absent entry id fails loud (exit 1)", () => {
+    withTempDir((dir) => {
+      const key = "pr-deep-review-2026-08-26";
+      const registerResult = runCli([
+        "status", "backlog-register", "--harness", dir, "--key", key,
+        "--entry", backlogEntryJson(`${key}-1`, "owner/repo#123"),
+      ]);
+      expect(registerResult.exitCode).toBe(0);
+
+      const result = runCli(["status", "backlog-close", "--harness", dir, "--key", key, "--id", "no-such-id"]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("not found");
+    });
+  });
+
+  test("closing an already-resolved entry is a no-op re-stamp (exit 0, stays resolved) — engine behavior", () => {
+    withTempDir((dir) => {
+      const key = "pr-deep-review-2026-08-26";
+      const id = `${key}-1`;
+      const registerResult = runCli([
+        "status", "backlog-register", "--harness", dir, "--key", key,
+        "--entry", backlogEntryJson(id, "owner/repo#123"),
+      ]);
+      expect(registerResult.exitCode).toBe(0);
+
+      const first = runCli(["status", "backlog-close", "--harness", dir, "--key", key, "--id", id]);
+      expect(first.exitCode).toBe(0);
+
+      const second = runCli(["status", "backlog-close", "--harness", dir, "--key", key, "--id", id]);
+      expect(second.exitCode).toBe(0);
+      expect(second.stdout).toContain(`resolved entry ${id}`);
+
+      const register = readRegister(dir);
+      const entry = ((register.entries as Record<string, unknown[]>)[key] as Array<Record<string, unknown>>)[0];
+      expect(entry.lifecycle).toBe("resolved");
+      expect(validateProjectRegister(register).ok).toBe(true);
+    });
+  });
+
+  test("backlog-close --project ../evil is rejected by the id sanitizer (exit 1)", () => {
+    withTempDir((dir) => {
+      const result = runCli([
+        "status", "backlog-close", "--harness", dir, "--project", "../evil", "--key", "k1", "--id", "x",
+      ]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("invalid project id");
+    });
+  });
+});
 // ---------------------------------------------------------------------------
 // mstar status archive-residuals — removed in v3 (audit-004 cutover)
 // ---------------------------------------------------------------------------

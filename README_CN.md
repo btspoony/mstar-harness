@@ -109,7 +109,7 @@ npm i -g @mstar-harness/cli
 | 命令 | 何时 |
 |------|------|
 | `/codebase-audit [关键词]` | 只读扫描代码库里值得做的事 —— 产出按优先级排序、可直接执行的改进计划；可按类别聚焦（`bug`、`security`、`perf`、`tech-debt`、…）做定向深扫。 |
-| `/pr-deep-review [pr\|branch\|scope]` | 合并前对 PR / 分支 / diff 做深度审查 → 给出唯一结论（`ship it` / `needs fixes` / `blocked`）与全部发现；有 PR 编号时自动发布 GitHub Review。 |
+| `/amazing-pr-review [pr\|branch\|scope] [quick\|default\|deep]` | 合并前对 PR / 分支 / diff 做深度审查，三档强度：`quick`（单趟 1 席）/ `default`（无 flag 默认档，席位精简）/ `deep`（完整三阶段流水线）→ 给出唯一结论（`ship it` / `needs fixes` / `blocked`）与全部发现；有 PR 编号时由命令主代理在 Stage 3 合成阶段发布 GitHub Review。`deep` 档走完整三阶段流水线（collect → domain review → main-agent synthesis；one verdict / one GitHub Review）；`default` / `quick` 为更轻量的单/双席通道。多 PR 输入 → 仅审查第一个 PR；其余 PR 登记为审计待办（下一次会话）；建议一个会话只审一个 PR。 |
 
 ## Harness Workflow（统一流程）
 

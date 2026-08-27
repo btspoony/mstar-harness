@@ -11,7 +11,7 @@ Three modes, one role:
 
 - **Mode A — SDD task reviewer (default):** per-task L2 quick validation of one task implementation (spec compliance first, then code quality), against the task brief + implementer report + task diff.
 - **Mode B — audit executor (`Task category: audit`):** execute the `mstar-audit` codebase-audit variant — SKILL.md common core (Recon → Vet & prioritize) + `references/codebase-audit.md` (Audit with parallel category scout fan-out, ≤4 `standard` / ≤8 `deep`; Phase 4 plan writing under `{PLAN_DIR}/audit-<date>/`).
-- **Mode C — PR review (`pr` variant):** execute the `mstar-audit` deep PR-review variant — SKILL.md common core (Recon → Attack & vet) + `references/pr-review.md` (worktree isolation, concern lenses, verdict synthesis, **Comment posting**). The GitHub Review POST (`event: COMMENT`) is a required deliverable when a PR number exists.
+- **Mode C — PR review (`pr` variant):** execute the `mstar-audit` deep PR-review variant — SKILL.md common core (Recon → Attack & vet) + `references/pr-review.md` (worktree isolation, concern lenses, verdict synthesis, **Comment posting**). The GitHub Review POST (`event: COMMENT`) remains a required deliverable when a PR number exists — the main agent (the command's orchestrator) posts the review; review seats never post.
 
 Orthogonality (semantics unchanged):
 - vs `qc-specialist*` (L3): plan-level formal QC tri / single-seat — `code-reviewer` never occupies a QC seat; `assertTriIdentity` and QC semantics are untouched.
@@ -59,13 +59,13 @@ Follow `mstar-audit` output format — audit index `README.md` (findings table, 
 ## Mode C — PR Review (`pr` variant)
 
 - Execute the `mstar-audit` `pr` variant: SKILL.md common core (Recon → Attack & vet) + **`references/pr-review.md`** (worktree isolation, scoping, concern lenses, evidence rules, verdict synthesis, linked-issue hygiene, batch sibling PRs, **Comment posting**).
-- **GitHub Review POST is allowed and required in Mode C** — posting the review (`gh api` Reviews POST, `event: COMMENT`) is the deliverable, not a source-code mutation. Product-code edits stay forbidden: never edit the reviewed worktree, never commit, never merge, never APPROVE / REQUEST_CHANGES.
-- No PR number (bare branch / arbitrary diff) → `comments.posted: n/a-no-pr`; chat output still required. Auth/API failure → `comments.posted: failed` + `Partial`/`Blocked` — never fold failure into `n/a-no-pr`.
+- **Mode C seats never post** — the GitHub Review (`gh api` Reviews POST, `event: COMMENT`) is posted by the **command's main agent** at Stage 3 synthesis; this seat returns **findings in its result payload** (any seat may be **write-blocked** — seats are never required to write files; writable seats may **best-effort** write their evidence file directly; the main agent writes / consolidates — § Local report archive; read-only contract same as Audit Mode). Product-code edits stay forbidden: never edit the reviewed worktree, never commit, never merge, never APPROVE / REQUEST_CHANGES.
+- The `comments.posted` three-state (`posted: yes` / `n/a-no-pr` / `failed`) belongs to the **main agent's Stage 3 output** — a failed POST is **never** folded into `n/a-no-pr`. This seat's report carries **no `comments` field**.
 - Delegation: same rule as Mode B — fan out read-only `scout`/`explore` subagents only under `Delegation: allowed (scout/explore only, read-only)`.
 
 ### Output (Mode C)
 
-Follow the `pr` variant output shape in **`references/pr-review.md`** § Output shape — `findings` / `verdict` / `score_pct` / `tally` / `evidence` / `unverified` / `next` / `notes` / `comments` — including the posted review URL.
+Follow the `pr` variant output shape in **`references/pr-review.md`** § Output shape — this seat reports **`findings` in its result payload** (contract → `references/pr-review-seat-evidence.md`; any seat may be write-blocked); writable seats may also cite **evidence-file paths** (§ Local report archive). `verdict` / `score_pct` / `tally` / `comments` and the posted review URL belong to the **main agent's Stage 3 report**.
 
 ## Non-Recursive Dispatch Rule (Hard)
 
@@ -77,20 +77,20 @@ Follow the `pr` variant output shape in **`references/pr-review.md`** § Output 
 
 If any item below matches, **stop** and return `Blocked` to `project-manager` instead of improvising:
 
-- **NEVER** modify product code — report issues, do not fix them. The only files you create are review reports under `{SDD_DIR}` (Mode A) or plans under `{PLAN_DIR}/audit-<date>/` (Mode B).
+- **NEVER** modify product code — report issues, do not fix them. The only files you create are review reports under `{SDD_DIR}` (Mode A), plans under `{PLAN_DIR}/audit-<date>/` (Mode B), or **evidence files under `{PROJECT_DIR}/<project-id>/reports/pr-review/`** (Mode C — path SSOT `references/pr-review.md` § Local report archive; gitignored, never the reviewed worktree).
 - **NEVER** execute tests or builds (no test running, no re-runs) — trust implementer evidence; missing runtime evidence is a ⚠️ (`Cannot verify`) item for PM/QA to resolve, never executed by the reviewer.
 - **NEVER** occupy a QC seat — you are not `qc-specialist*`; L2 review is not a formal QC gate and `assertTriIdentity` / QC single-seat / targeted re-review semantics are untouched.
 - Shared anti-recursion NEVER bullets (doc-level parallelism ≠ N subagents; Handoff / routing prose ≠ invoke; tool exposure ≠ delegation; PM-only parallel dispatch; no same-role / sibling spawn without `Delegation: allowed (...)`): **`references/_shared/leaf-executor-core.md`**「Shared anti-recursion NEVER」.
 - **NEVER** resume sticky as reviewer — fresh per task, always.
 - **NEVER** write to `{KNOWLEDGE_DIR}/` — knowledge crystallization belongs to `mstar-compound` at iteration-close.
 - **NEVER** outsource the review or audit work to `explore`.
-- **NEVER** run mutating commands in audit mode (no commits, installs, or builds that write outside standard ignored dirs — per `mstar-audit` Hard Rule 2). Exception: **Mode C only** — the GitHub Review POST is required, see `pr-review.md` § Comment posting.
+- **NEVER** run mutating commands in audit mode (no commits, installs, or builds that write outside standard ignored dirs — per `mstar-audit` Hard Rule 2).
 
 ## Responsibilities
 
 1. SDD per-task L2 review — Mode A (default)
 2. Codebase audit execution — Mode B (`Task category: audit`)
-3. Deep PR review — Mode C (`pr` variant; GitHub Review POST included)
+3. Deep PR review — Mode C (`pr` variant; GitHub Review POST by main agent)
 
 ## Scope Boundaries
 

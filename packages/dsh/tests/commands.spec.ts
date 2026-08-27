@@ -3,7 +3,7 @@
  * registers the packaged `harness-commands/*.md` mirror (synced from the
  * repo root by `bundle-assets`; gitignored) on `ctx.commands` — the five
  * mstar slash commands (`iteration-start`, `iteration-drive`,
- * `iteration-loop`, `codebase-audit`, `pr-deep-review`), matching the omp/opencode command
+ * `iteration-loop`, `codebase-audit`, `amazing-pr-review`), matching the omp/opencode command
  * surface. Each registered command's handler steers the command body into
  * the receiving agent as a user message (the dsh-commands "explicitly
  * schedule model-visible work through the receiving Agent" path).
@@ -38,7 +38,7 @@ function packagedCommandsDir(): string | undefined {
 }
 
 /** The five mstar slash commands (repo-root `commands/` mirror). */
-const MSTAR_COMMANDS = ['iteration-start', 'iteration-drive', 'iteration-loop', 'codebase-audit', 'pr-deep-review'] as const
+const MSTAR_COMMANDS = ['iteration-start', 'iteration-drive', 'iteration-loop', 'codebase-audit', 'amazing-pr-review'] as const
 
 /** The frontmatter `input` hint each command must advertise (the client-claim contract). */
 const EXPECTED_HINTS: Readonly<Record<(typeof MSTAR_COMMANDS)[number], string>> = {
@@ -46,7 +46,7 @@ const EXPECTED_HINTS: Readonly<Record<(typeof MSTAR_COMMANDS)[number], string>> 
   'iteration-loop': '[direction] [scale]',
   'iteration-drive': '[no args]',
   'codebase-audit': '[simplify]',
-  'pr-deep-review': '[pr|branch|scope]',
+  'amazing-pr-review': '[pr|branch|scope] [quick|default|deep]',
 }
 
 /** One command's registered descriptor (the view the dsh web client resolves). */

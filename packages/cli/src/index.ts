@@ -17,6 +17,8 @@ import {
   AUDIT_EFFORTS,
   AUDIT_PRIORITIES,
   AUDIT_RISKS,
+  appendProjectRegisterEntries,
+  closeProjectRegisterEntry,
   completenessLevel,
   detectHarnessKind,
   detectHost,
@@ -49,6 +51,8 @@ import {
   resolveWorkflowDir,
   reviewPackage,
   scaffoldAuditPlan,
+  scanSecrets,
+  supplyChainChecks,
   scaffoldHarness,
   scopeGuard,
   SddScriptError,
@@ -56,6 +60,16 @@ import {
   stripFrontmatter,
   taskBrief,
   techDebtRollup,
+  computePrTally,
+  prReviewReportPath,
+  validatePrReviewReport,
+  pickReviewBranchName,
+  planReviewPost,
+  preflightChangeset,
+  prReviewSeatPrompt,
+  prReviewSizing,
+  resolvePrReviewTier,
+  validateFindingDoc,
   validateAssignmentFields,
   validateDesignTokenFrontmatter,
   validateIntegrationMergeLease,
@@ -74,8 +88,13 @@ import {
   type GateResult,
   type HostId,
   type L1PreDispatchInput,
+  type PrReportTarget,
   type ProjectRegisterDoc,
   type QcAlignmentAssignment,
+  type MergeClass,
+  type PrSizeBand,
+  type ReviewChangesetMode,
+  type ReviewPostPlan,
   type ToolSignal,
   type ValidationResult,
   type WorktreeTrack,
@@ -114,7 +133,7 @@ function hasExplicitModelFlags(options: InitOptions): boolean {
   );
 }
 
-/** Advanced override only — never calls `opencode models` (avoids silent hangs). */
+/** Advanced override only \u2014 never calls `opencode models` (avoids silent hangs). */
 function resolveExplicitModelAssignments(options: InitOptions) {
   // Trust caller-supplied ids; do not discover/validate against a live model list.
   const allow = (label: string, values: string[] | undefined, max: number, required: boolean) => {
@@ -215,7 +234,7 @@ function runDoctor(options: DoctorOptions) {
     }
     console.log(`Install location: ${result.location}`);
     // Capability word lines (install-mode doctor notes, e.g. dsh
-    // uninstalled/disabled/mounted) print on every run, healthy included —
+    // uninstalled/disabled/mounted) print on every run, healthy included \u2014
     // a `mounted` state must not be implied only by exit code 0 (AC-2).
     for (const note of result.notes ?? []) {
       console.log(`  - ${note}`);
@@ -296,24 +315,24 @@ const HARNESS_AGENTS_TEMPLATE = `# AGENTS.md \u2014 .mstar/ (harness layer)
 `;
 
 /**
- * Run `mstar harness scaffold [path]`: one-shot harness bootstrap — engine
+ * Run `mstar harness scaffold [path]`: one-shot harness bootstrap \u2014 engine
  * `scaffoldHarness` (dirs + v2 status.json + projects/_default/ under the
  * resolved harness/project dirs; `.mstarc` `harness_dir` / `project_dir`
  * honored), the canonical `.gitignore` snippet appended when absent (only
- * for the default `.mstar/` layout — custom harness layouts manage their
+ * for the default `.mstar/` layout \u2014 custom harness layouts manage their
  * own ignore rules), and a minimal {HARNESS_DIR}/AGENTS.md harness-layer
  * rules template when absent. Prints the resolved harness/project dirs plus
  * a created/skipped summary. Idempotent: re-running on an initialized tree
  * is a no-op except creating missing pieces. Ordering is normalized as the
  * final step of the gitignore routine: duplicate `.mstar/**` rules are
- * deduped segment-wise — a trailing duplicate is dropped only when no
+ * deduped segment-wise \u2014 a trailing duplicate is dropped only when no
  * un-crossable line lies strictly between it and the previously retained
  * broad rule (a custom `!.mstar/…` re-inclusion between two broad rules
  * makes the trailing broad semantically load-bearing: last-match-wins
  * re-ignores the custom path), and a misplaced `.mstar/**` (after one
  * or more canonical `!.mstar/…` re-includes, which gitignore's
  * last-match-wins would shadow) is relocated to sit immediately before the
- * first canonical re-include — but only when the move crosses no line
+ * first canonical re-include \u2014 but only when the move crosses no line
  * whose semantics we do not own. The broad rule may cross blank/comment
  * lines, other exact `.mstar/**` duplicates, the 5 canonical negations,
  * and our own `.mstarc` entry; every other line (custom `!.mstar/…`
@@ -334,7 +353,7 @@ const CANONICAL_NEGATIONS: Record<string, true> = {
 
 /**
  * Git top-level of `startDir` (lexical, symlink-safe): mirrors the engine's
- * `defaultWorkspaceRoot` — `git rev-parse --show-cdup` returns the relative
+ * `defaultWorkspaceRoot` \u2014 `git rev-parse --show-cdup` returns the relative
  * upward path to the work-tree top, so the result stays comparable with
  * `resolve()`-based paths even when `startDir` sits under a symlinked mount
  * (macOS /var → /private/var), where `--show-toplevel` would answer with
@@ -355,7 +374,7 @@ function gitWorkspaceRoot(startDir: string): string {
     }
     return path.resolve(boundary);
   } catch {
-    // not a git work tree (or git unavailable) — fall through to startDir
+    // not a git work tree (or git unavailable) \u2014 fall through to startDir
   }
   return startDir;
 }
@@ -401,7 +420,7 @@ function runScaffold(pathArg: string | undefined) {
         // after existing `!.mstar/…` re-includes would shadow them. Splice
         // the canonical block start (comments + broad rule + missing
         // re-includes) BEFORE the first negation so the re-includes stay
-        // effective. `.mstarc` is a plain ignore (no negations) — appended
+        // effective. `.mstarc` is a plain ignore (no negations) \u2014 appended
         // at the end when missing.
         const blockStart = [...missingComments, broadRule, ...missing.filter((entry) => entry.startsWith("!.mstar/"))];
         currentLines.splice(firstNegation, 0, ...blockStart);
@@ -410,23 +429,23 @@ function runScaffold(pathArg: string | undefined) {
         fs.writeFileSync(gitignorePath, next, "utf8");
       } else {
         // Broad rule present (append missing entries after it) or no
-        // negations to shadow (append the whole block) — both safe.
+        // negations to shadow (append the whole block) \u2014 both safe.
         const prefix = current && !current.endsWith("\n") ? "\n" : "";
         fs.appendFileSync(gitignorePath, `${prefix}${[...missingComments, ...missing].join("\n")}\n`, "utf8");
       }
       created.push(".gitignore (canonical harness snippet)");
     }
 
-    // Unconditional final normalization — gitignore is last-match-wins, so a
+    // Unconditional final normalization \u2014 gitignore is last-match-wins, so a
     // misplaced `.mstar/**` (appearing after one or more canonical
     // `!.mstar/…` re-includes, whether pre-existing or just appended) would
     // shadow them. Dedupe is SEGMENTED: a duplicate `.mstar/**` is dropped
     // only when no un-crossable line lies strictly between it and the
-    // previously retained broad rule — a custom `!.mstar/…` re-inclusion
+    // previously retained broad rule \u2014 a custom `!.mstar/…` re-inclusion
     // between two broad rules makes the trailing broad semantically
     // load-bearing (last-match-wins re-ignores the custom path), so it is
     // retained exactly where it is. The kept (earliest) broad rule is then
-    // relocated to sit immediately before the first canonical re-include —
+    // relocated to sit immediately before the first canonical re-include \u2014
     // but only when the move crosses no line whose semantics we do not own.
     // The broad rule may cross blank/comment lines, other exact
     // `.mstar/**` duplicates, the 5 canonical negations, and our own
@@ -451,7 +470,7 @@ function runScaffold(pathArg: string | undefined) {
       // un-crossable line lies strictly between it and the previously
       // retained broad rule. A custom `!.mstar/…` re-inclusion (or any
       // other un-owned line) between two broad rules makes the trailing
-      // broad semantically load-bearing — gitignore's last-match-wins
+      // broad semantically load-bearing \u2014 gitignore's last-match-wins
       // re-ignores the custom path, and deleting the broad would flip
       // that line's meaning. Retained secondary broads stay exactly
       // where they are.
@@ -480,15 +499,15 @@ function runScaffold(pathArg: string | undefined) {
       }
       const keptIndex = finalLines.findIndex((line) => line.trim() === ".mstar/**");
       // A broad rule already before every canonical negation is correctly
-      // placed — never move it, regardless of surrounding custom lines.
+      // placed \u2014 never move it, regardless of surrounding custom lines.
       // Only a broad rule AFTER the first canonical negation is misplaced.
       if (firstCanonicalNegationIndex !== -1 && keptIndex > firstCanonicalNegationIndex) {
         // Feasibility: the move may only cross lines whose semantics we own
-        // — blank/comment lines, other exact `.mstar/**` duplicates, the 5
+        // \u2014 blank/comment lines, other exact `.mstar/**` duplicates, the 5
         // canonical negations, and our own `.mstarc` entry. Any other line
         // (custom `!.mstar/…` negation, custom `.mstar/<path>` ignore, or
         // anything else) between the first canonical negation and the kept
-        // rule makes the relocation infeasible — the file keeps its
+        // rule makes the relocation infeasible \u2014 the file keeps its
         // user-authored order.
         let feasible = true;
         for (let i = firstCanonicalNegationIndex; i < keptIndex; i++) {
@@ -509,20 +528,20 @@ function runScaffold(pathArg: string | undefined) {
       }
       // Ownership invariant, final pass. Pipeline order matters for
       // one-run convergence:
-      // 1. PARTITION — user-authored targeted `.mstar/…` rules always speak
+      // 1. PARTITION \u2014 user-authored targeted `.mstar/…` rules always speak
       //    LAST: relocate every targeted user rule (non-canonical
-      //    `!.mstar/…` re-inclusions and `.mstar/<path>` ignores — never
+      //    `!.mstar/…` re-inclusions and `.mstar/<path>` ignores \u2014 never
       //    the bare broad rule, canonical negations, or our own
       //    `.mstarc`) to after the fence, preserving their relative order.
       //    Gitignore's last-match-wins then resolves every overlap in the
       //    user's favor while our tracked results stay re-included.
-      // 2. DEDUPE — after the partition no un-owned line can sit between
+      // 2. DEDUPE \u2014 after the partition no un-owned line can sit between
       //    two broad rules, so any extra `.mstar/**` is redundant: keep
       //    the first only.
-      // 3. RELOCATE — a broad rule sitting after the first canonical
+      // 3. RELOCATE \u2014 a broad rule sitting after the first canonical
       //    negation is moved before it when only owned lines lie in
       //    between.
-      // 4. GUARANTEE — every canonical negation occurs at least once after
+      // 4. GUARANTEE \u2014 every canonical negation occurs at least once after
       //    the last broad rule (append missing occurrences; duplicates are
       //    harmless in gitignore).
       const isTargetedUserMstarRule = (line: string): boolean => {
@@ -543,7 +562,7 @@ function runScaffold(pathArg: string | undefined) {
         const ownedBody = hadTrailingNewline ? owned.slice(0, -1) : owned;
         // A contents-level negation like `!.mstar/custom/**` cannot take
         // effect while its parent directory stays excluded by
-        // `.mstar/**` — git prunes excluded directories without descending
+        // `.mstar/**` \u2014 git prunes excluded directories without descending
         // (this is why the canonical fence pairs `!.mstar/knowledge/` with
         // `!.mstar/knowledge/**`). Synthesize the missing
         // ancestor-directory re-inclusions so the relocated user rule keeps
@@ -649,7 +668,7 @@ function runScaffold(pathArg: string | undefined) {
       if (broadIndexesLast.length > 0) {
         const lastBroadIndex = broadIndexesLast[broadIndexesLast.length - 1];
         // Insert missing negations BEFORE the partitioned user tail (the
-        // first targeted user rule, if any) — appending after it would put
+        // first targeted user rule, if any) \u2014 appending after it would put
         // our negations past the user's rules, and the next run's partition
         // would move the user rules again (flip-flop).
         let insertIndex = finalLines.findIndex((line) => isTargetedUserMstarRule(line));
@@ -781,7 +800,7 @@ pathCommand
     const harnessDir = resolveHarnessDir(startDir);
     if (!harnessDir) {
       // plan-conventions § {HARNESS_DIR} 解析顺序: no .mstar/ → .agents/ →
-      // .plans/|plans/ anywhere up the tree — harness not enabled from here.
+      // .plans/|plans/ anywhere up the tree \u2014 harness not enabled from here.
       const guidance =
         "no harness dir found \u2014 the bounded probe (.mstar/, .agents/, .plans/, plans/) walked up from " +
         `${startDir} only within the workspace root (git top-level of the start dir; non-git start probes only itself) \u2014 run \`mstar harness scaffold\` to bootstrap, or pass a start dir inside a harness-enabled project`;
@@ -920,6 +939,124 @@ statusCommand
     }
   });
 
+/** Local calendar date `YYYY-MM-DD` (provenance `registered_at` \u2014 same convention as the engine's register dates). */
+function todayString(): string {
+  const now = new Date();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${now.getFullYear()}-${month}-${day}`;
+}
+
+/** Commander collector for the repeatable `--entry <json>` option. */
+function collectEntries(value: string, previous: string[]): string[] {
+  previous.push(value);
+  return previous;
+}
+
+/**
+ * Single-component project-id guard for the `--project` write commands
+ * (backlog-register / backlog-close). The id is joined onto `{PROJECT_DIR}`
+ * and both commands WRITE `residuals.json` + `.status-write.lockdir/` there \u2014
+ * an absolute or `..`-containing id would escape the projects dir (qc2 F-003;
+ * same class as the workflow-id guard in resolveSnapshotPath). Accept only one
+ * safe path component: an alnum first char, then `[A-Za-z0-9._-]`. The built-in
+ * `_default` project id (project-less flows) is a constant single-component
+ * name that cannot escape, so it is allowed explicitly.
+ */
+const PROJECT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+function sanitizeProjectId(projectId: string): string {
+  if (projectId === _DEFAULT_PROJECT) {
+    return projectId;
+  }
+  if (
+    projectId === "" ||
+    projectId === "." ||
+    projectId === ".." ||
+    path.isAbsolute(projectId) ||
+    !PROJECT_ID_RE.test(projectId)
+  ) {
+    throw new Error(
+      `invalid project id ${JSON.stringify(projectId)} \u2014 expected one path component ` +
+        `([A-Za-z0-9][A-Za-z0-9._-]*); "." / ".." / absolute / separator-containing ids would escape {PROJECT_DIR}`,
+    );
+  }
+  return projectId;
+}
+
+statusCommand
+  .command("backlog-register")
+  .description(
+    "Register deferred-PR backlog entries in a project register under the status write lock " +
+      "(engine-backed: same-day key bump + entry-id uniqueness inside withStatusWriteLock; " +
+      "each --entry is one residual JSON \u2014 source_plan/registered_at are filled by the CLI)",
+  )
+  .option("--project <id>", "Project id whose register is written (default: _default)")
+  .option("--harness <path>", "Harness dir override (default: resolved {HARNESS_DIR})")
+  .requiredOption("--key <plan-key>", "Base entries key (<plan-id>); the first free same-day key (base, base-2, \u2026) is used")
+  .option("--entry <json>", "Residual entry JSON (nine fields; source_plan/registered_at filled by the CLI) \u2014 repeatable", collectEntries, [])
+  .action(async (options: { project?: string; harness?: string; key: string; entry?: string[] }) => {
+    try {
+      const entriesRaw = options.entry ?? [];
+      if (entriesRaw.length === 0) {
+        throw new Error("at least one --entry is required \u2014 refusing to register an empty backlog");
+      }
+      const projectId = sanitizeProjectId(options.project ?? _DEFAULT_PROJECT);
+      const projectRoot = resolveProjectDir(process.cwd(), options.harness ? { harnessDir: options.harness } : {});
+      const projectDir = path.join(projectRoot, projectId);
+      const registeredAt = todayString();
+      const entries = entriesRaw.map((raw, index) => {
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(raw);
+        } catch (error) {
+          throw new Error(`--entry ${index + 1} is not valid JSON: ${(error as Error).message}`);
+        }
+        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+          throw new Error(`--entry ${index + 1} must be a JSON object`);
+        }
+        // Provenance is CLI-owned: source_plan = the used key (the engine sets
+        // the bumped key per B-9 ①), registered_at = today (plan Task 3 contract).
+        return { ...(parsed as Record<string, unknown>), source_plan: options.key, registered_at: registeredAt };
+      });
+      const result = await appendProjectRegisterEntries({ projectDir, basePlanKey: options.key, entries });
+      console.log(
+        pc.green(`backlog-register: registered ${entries.length} entr${entries.length === 1 ? "y" : "ies"} under key ${result.key}`),
+      );
+    } catch (error) {
+      console.error(pc.red(`status backlog-register failed: ${(error as Error).message}`));
+      process.exitCode = 1;
+    }
+  });
+
+statusCommand
+  .command("backlog-close")
+  .description(
+    "Close one project-register backlog entry in place under the status write lock " +
+      "(lifecycle: resolved + closed_at: <today> + closure_note; absent id/key fails loud, exit 1)",
+  )
+  .option("--project <id>", "Project id whose register is updated (default: _default)")
+  .option("--harness <path>", "Harness dir override (default: resolved {HARNESS_DIR})")
+  .requiredOption("--key <plan-key>", "Entries key (<plan-id>) holding the entry to close")
+  .requiredOption("--id <entry-id>", "id of the entry to close")
+  .option("--note <text>", "Closure note (default: \"closed by backlog close\")")
+  .action(async (options: { project?: string; harness?: string; key: string; id: string; note?: string }) => {
+    try {
+      const projectId = sanitizeProjectId(options.project ?? _DEFAULT_PROJECT);
+      const projectRoot = resolveProjectDir(process.cwd(), options.harness ? { harnessDir: options.harness } : {});
+      const projectDir = path.join(projectRoot, projectId);
+      await closeProjectRegisterEntry({
+        projectDir,
+        planKey: options.key,
+        entryId: options.id,
+        closureNote: options.note ?? "closed by backlog close",
+      });
+      console.log(pc.green(`backlog-close: resolved entry ${options.id} under key ${options.key}`));
+    } catch (error) {
+      console.error(pc.red(`status backlog-close failed: ${(error as Error).message}`));
+      process.exitCode = 1;
+    }
+  });
+
 statusCommand
   .command("archive-residuals")
   .description(
@@ -964,10 +1101,10 @@ function resolveLeaseHarnessDir(harnessArg?: string): string {
 /**
  * Resolve `{WORKFLOW_DIR}/<id>/snapshot.json` for the v2 `--workflow <id>`
  * inputs (lease verify / verify-integration / iteration gate / worktree
- * check). The id is a single path component — reject separators and `..`
+ * check). The id is a single path component \u2014 reject separators and `..`
  * so a hostile id cannot escape the workflows dir. The workflow dir comes
  * from the engine resolver (Phase-5 F1): a `.mstarc` `[config]
- * workflow_dir` declaration wins, else `{HARNESS_DIR}/workflows` — so a
+ * workflow_dir` declaration wins, else `{HARNESS_DIR}/workflows` \u2014 so a
  * custom layout is READ at the same location it is written.
  */
 function resolveSnapshotPath(workflowId: string, harnessArg?: string): string {
@@ -995,7 +1132,7 @@ function solePlanRow(
 
 /**
  * Run the engine execution-lease gate on one snapshot plan row and print the
- * verdict (SSOT rules live in lease-verify.ts / the engine — row-level
+ * verdict (SSOT rules live in lease-verify.ts / the engine \u2014 row-level
  * `plans[].execution_lease` is the only location in v3; metadata-only and
  * dual-write were deleted with the v1 read path).
  */
@@ -1122,7 +1259,7 @@ sddCommand
     try {
       // Optional args + explicit count check: commander's own
       // missing-argument error exits 1, which would bypass the usage
-      // contract (exit 2) — validate in-handler instead (qc2 F-005).
+      // contract (exit 2) \u2014 validate in-handler instead (qc2 F-005).
       if (!planId) {
         throw new SddScriptError(
           "usage: mstar sdd workspace PLAN_ID [CONTROL_ROOT]\n" +
@@ -1278,7 +1415,7 @@ dispatchCommand
       const text = fs.readFileSync(file, "utf8");
 
       // Read-only orientation roles (scout/explore, engine SSOT) skip the
-      // branch-form gate AND the default-branch gate — no writable work on a
+      // branch-form gate AND the default-branch gate \u2014 no writable work on a
       // branch (qc3 F-1 / qc2 S-5): `mstar dispatch validate` on a scout
       // Assignment without a Working branch exits 0.
       const readOnly = isReadOnlyAssignmentRole(parseAssignmentFields(text).executeAs ?? "");
@@ -1286,13 +1423,13 @@ dispatchCommand
 
       if (!readOnly) {
         // Default-branch gate: the checked branch is derived FROM THE
-        // ASSIGNMENT — create-form → the created branch, existing form → the
-        // branch, `Branch policy` → the exception branch — so the documented
+        // ASSIGNMENT \u2014 create-form → the created branch, existing form → the
+        // branch, `Branch policy` → the exception branch \u2014 so the documented
         // preflight invocation (`dispatch validate <assignment-file>`, no
         // --branch) actually gates (qc2 W-1). `--branch` / $MSTAR_WORKING_BRANCH
         // are context fallbacks for assignments without a branch form (qc3
         // F-2: "create feature/x from main" checks feature/x, not main). A
-        // well-formed `Branch policy: direct on <branch> — <reason>` exception
+        // well-formed `Branch policy: direct on <branch> \u2014 <reason>` exception
         // is honored only when its branch is the one being checked.
         const forms = parseAssignmentBranchForms(text);
         const branch =
@@ -1557,11 +1694,14 @@ reviewCommand
 
 // ---------------------------------------------------------------------------
 // Slice 4: lint / design-md / audit / compound / host / skill (engine-backed
-// thin wrappers — business logic lives in @mstar-harness/engine)
+// thin wrappers \u2014 business logic lives in @mstar-harness/engine)
 // ---------------------------------------------------------------------------
 
 /** Content types `mstar lint` knows, mapped 1:1 to engine lint.* checks. */
-type LintTargetType = "plan" | "skill" | "strategy" | "report" | "code";
+/** Content types `mstar lint` knows, mapped 1:1 to engine lint.* checks.
+ * `finding` is explicit-only (`--type finding`) \u2014 finding docs carry no
+ * classifiable name/location, so inference never selects it. */
+type LintTargetType = "plan" | "skill" | "strategy" | "report" | "code" | "finding";
 
 /** Build a static string-keyed membership lookup from an enum array. */
 function lookupTable(values: readonly string[]): Record<string, true> {
@@ -1590,7 +1730,7 @@ const LINT_CODE_EXTENSIONS: Record<string, true> = {
 /**
  * Classify a lint target by content type (basename first, then plan-location
  * heuristics, then code extensions). Unclassifiable files (DESIGN.md, task
- * briefs, prose docs, ...) return `null` — `mstar lint` skips them in dir
+ * briefs, prose docs, ...) return `null` \u2014 `mstar lint` skips them in dir
  * walks and rejects them as usage errors when named explicitly.
  */
 function lintTargetType(filePath: string): LintTargetType | null {
@@ -1623,12 +1763,13 @@ function collectLintTargets(dir: string): string[] {
 
 /** Run the content-type engine checks for one lint target. Markers are
  * advisory info (stdout); violations gate the exit code (stderr). */
-function lintOneFile(filePath: string): { violations: ValidationResult[]; markers: string[] } {
+function lintOneFile(filePath: string, forcedType?: LintTargetType, prVariant?: boolean): { violations: ValidationResult[]; markers: string[] } {
   const abs = path.resolve(filePath);
   const text = fs.readFileSync(abs, "utf8");
   const violations: ValidationResult[] = [];
   const markers: string[] = [];
-  switch (lintTargetType(abs)) {
+  const effective = forcedType ?? lintTargetType(abs);
+  switch (effective) {
     case "plan":
       violations.push(...planQualityBar(text).violations);
       break;
@@ -1653,6 +1794,9 @@ function lintOneFile(filePath: string): { violations: ValidationResult[]; marker
       violations.push(...temporary.violations);
       break;
     }
+    case "finding":
+      violations.push(...validateFindingDoc(text, { ...(prVariant ? { prVariant: true } : {}) }).violations);
+      break;
     default:
       throw new SddScriptError(
         `usage: lint <target> \u2014 unsupported file type "${path.basename(abs)}" (lintable: plan files, SKILL.md, STRATEGY.md, task-N-report.md, code files)`,
@@ -1670,11 +1814,25 @@ const lintCommand = program
   );
 
 lintCommand
-  .description("Lint <target> (file or dir) \u2014 exit 1 on violations, 2 on usage")
+  .description(
+    "Lint <target> (file or dir) \u2014 exit 1 on violations, 2 on usage. --type forces one content type " +
+      "(plan | skill | strategy | report | code | finding); finding docs are explicit-only",
+  )
   .argument("[target]", "File or directory to lint")
-  .action((target?: string) => {
+  .option("--type <type>", "Force the content type (plan | skill | strategy | report | code | finding)")
+  .option("--pr-variant", "With --type finding: enforce the PR-only Merge class contract (presence, enum, placement after Confidence)")
+  .action((target: string | undefined, options: { type?: string; prVariant?: boolean }) => {
     try {
       if (!target) throw new SddScriptError("usage: lint <target> (file or dir)", 2);
+      let forcedType: LintTargetType | null = null;
+      if (options.type !== undefined) {
+        const forced = options.type.trim().toLowerCase();
+        const KNOWN: readonly string[] = ["plan", "skill", "strategy", "report", "code", "finding"];
+        if (!KNOWN.includes(forced)) {
+          throw new SddScriptError(`usage: lint --type must be one of ${KNOWN.join(" | ")}, got ${JSON.stringify(options.type)}`, 2);
+        }
+        forcedType = forced as LintTargetType;
+      }
       const abs = resolveCliPath(target);
       if (!fs.existsSync(abs)) throw new Error(`lint target not found: ${abs}`);
       const targets = fs.statSync(abs).isDirectory() ? collectLintTargets(abs) : [abs];
@@ -1687,7 +1845,7 @@ lintCommand
         const label = `lint ${file}`;
         let result: { violations: ValidationResult[]; markers: string[] };
         try {
-          result = lintOneFile(file);
+          result = lintOneFile(file, forcedType ?? undefined, options.prVariant === true);
         } catch (error) {
           if (error instanceof SddScriptError) throw error;
           console.error(pc.red(`${label}: ERROR \u2014 ${(error as Error).message}`));
@@ -1763,7 +1921,7 @@ designMdCommand
  * `dependsOn` is validated against the Status-block contract and normalized:
  * `"none"` / `plans/NNN-*.md` pass through, a bare plan number (`002`) from
  * the scaffolded numbering scheme is rendered as `plans/002-*.md`, anything
- * else is a usage error — so every scaffolded plan round-trips through
+ * else is a usage error \u2014 so every scaffolded plan round-trips through
  * `validateAuditStatusBlocks` (qc2 F-001 / qc3 F-002).
  */
 type AuditScaffoldInput = {
@@ -1833,7 +1991,7 @@ function parseAuditScaffoldInput(text: string): AuditScaffoldInput {
     }
     const dependsOn =
       rawDependsOn === undefined ? undefined : /^\d{3}$/.test(rawDependsOn) ? `plans/${rawDependsOn}-*.md` : rawDependsOn;
-    // Enum memberships were validated above — cast the narrowed unions.
+    // Enum memberships were validated above \u2014 cast the narrowed unions.
     return {
       title,
       category: category as AuditCategory,
@@ -1894,13 +2052,13 @@ function parseHardeningChecked(raw: unknown): AuditScaffoldInput["hardeningCheck
 
 const auditCommand = program
   .command("audit")
-  .description("audit plan scaffold (engine-backed)");
+  .description("audit planning operations and static security checks (engine-backed)");
 
 /**
  * Resolve the short repo SHA for the scaffolded `Planned at` field:
  * `--sha` override wins; otherwise `git rev-parse --short HEAD` from the
  * current working directory; `unknown` only when the cwd is not inside a
- * git repo (the documented validator fallback — qc2 F-001 / qc3 F-002).
+ * git repo (the documented validator fallback \u2014 qc2 F-001 / qc3 F-002).
  */
 function resolveAuditShortSha(cwd: string, override?: string): string {
   if (override !== undefined && override !== "") return override;
@@ -1972,7 +2130,7 @@ auditCommand
     try {
       // Optional flag + explicit check (same as `lease verify-integration`):
       // commander's own missing-requiredOption error exits 1, which would
-      // bypass the usage contract (exit 2) — validate in-handler instead.
+      // bypass the usage contract (exit 2) \u2014 validate in-handler instead.
       if (!auditDir) {
         throw new SddScriptError("usage: audit promote <audit-dir> --plans <ids> [--workflow <id>] [--harness <dir>]", 2);
       }
@@ -1995,6 +2153,101 @@ auditCommand
       failScript(error, "audit promote");
     }
   });
+
+/**
+ * Tracked-file walk for `audit secret-scan`: `git -C <root> ls-files -z -- .`
+ * (index = the tracked file set; untracked scratch is not scanned). The
+ * pathspec runs ROOT-RELATIVE (`.` from cwd=root) so emitted names are
+ * already root-scoped \u2014 joining them to `root` is exact. A repository-
+ * relative pathspec (`-- <root>`) would double-prefix nested roots
+ * (`<root>/packages/engine/packages/engine/…`) and silently scan nothing
+ * (qc1 W-001).
+ *
+ * Fail-closed (qc1 W-002 / qc3 W-1): a git failure (not a repository,
+ * missing executable, permission error) throws a usage-class error \u2014 it
+ * must never masquerade as "clean". Read failures during the scan itself
+ * are counted by {@link scanSecrets} via the returned reads result.
+ */
+function listTrackedFiles(root: string): string[] {
+  let out: string;
+  try {
+    out = execFileSync("git", ["ls-files", "-z", "--", "."], {
+      cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch {
+    throw new SddScriptError("not a git repository or git unavailable \u2014 refusing to report an empty scan as clean", 2);
+  }
+  return out.split("\0").filter((f) => f !== "").map((f) => path.join(root, f));
+}
+auditCommand
+  .command("secret-scan")
+  .description(
+    "Read-only credential-pattern scan over git-tracked files under [path] " +
+      "(default cwd): prints {file, line, type} findings; never prints values. " +
+      "Exit 1 on findings, 0 when clean, 2 when the tracked-file walk or reads fail",
+  )
+  .argument("[path]", "Directory to scan (default: cwd)")
+.action((scanPath: string | undefined) => {
+    try {
+      const root = scanPath !== undefined ? resolveCliPath(scanPath) : process.cwd();
+      if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) {
+        throw new SddScriptError(`usage: audit secret-scan [path] \u2014 not a directory: ${root}`, 2);
+      }
+      const files = listTrackedFiles(root);
+      const { findings, unreadableFiles } = scanSecrets(files);
+      // Fail closed (qc1 W-002): selected-but-unreadable tracked files mean
+      // the scan did NOT see the full tree \u2014 exit non-zero even when the
+      // readable portion is clean. Findings are still printed first.
+      if (unreadableFiles > 0) {
+        console.error(pc.red(`secret-scan: failed to read ${unreadableFiles} tracked file${unreadableFiles === 1 ? "" : "s"} under ${root} \u2014 refusing to report clean`));
+        for (const f of findings) console.log(JSON.stringify({ file: f.file, line: f.line, type: f.type }));
+        process.exitCode = 1;
+        return;
+      }
+      if (findings.length === 0) {
+        console.log(pc.green(`secret-scan: clean \u2014 ${files.length} tracked file${files.length === 1 ? "" : "s"} scanned under ${root}`));
+        return;
+      }
+      console.error(pc.red(`secret-scan: ${findings.length} finding${findings.length === 1 ? "" : "s"} under ${root}`));
+      for (const f of findings) console.log(JSON.stringify({ file: f.file, line: f.line, type: f.type }));
+      // Hard Rule 4 shape only \u2014 no secret value is ever printed.
+      process.exitCode = 1;
+    } catch (error) {
+      failScript(error, "audit secret-scan");
+    }
+  });
+
+auditCommand
+  .command("supply-chain")
+  .description(
+    "Supply-chain checks over a repo root (read-only): root lockfile presence/duplication, " +
+      "unpinned GitHub Actions refs, pull_request_target PR-head checkout. " +
+      "Exit 1 on findings, 0 when clean",
+  )
+  .argument("[path]", "Repository root (default: cwd)")
+.action((repoPath: string | undefined) => {
+    try {
+      const root = repoPath !== undefined ? resolveCliPath(repoPath) : process.cwd();
+      if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) {
+        throw new SddScriptError(`usage: audit supply-chain [path] \u2014 not a directory: ${root}`, 2);
+      }
+      const result = supplyChainChecks(root);
+      if (result.ok) {
+        console.log(pc.green(`supply-chain: OK \u2014 no findings in ${root}`));
+        return;
+      }
+      console.error(pc.red(`supply-chain: ${result.findings.length} finding${result.findings.length === 1 ? "" : "s"} in ${root}`));
+      for (const v of result.violations) {
+        console.error(pc.red(`  ${v.code}: ${v.message}`));
+        if (v.fix) console.error(pc.red(`    fix: ${v.fix}`));
+      }
+      for (const f of result.findings) console.log(JSON.stringify(f));
+      process.exitCode = 1;
+    } catch (error) {
+      failScript(error, "audit supply-chain");
+    }
+  });
+
 
 const compoundCommand = program
   .command("compound")
@@ -2033,7 +2286,7 @@ compoundCommand
     }
   });
 
-/** Audit enum membership lookups (engine enum arrays — no drift). */
+/** Audit enum membership lookups (engine enum arrays \u2014 no drift). */
 const AUDIT_PRIORITY_LOOKUP = lookupTable(AUDIT_PRIORITIES);
 const AUDIT_EFFORT_LOOKUP = lookupTable(AUDIT_EFFORTS);
 const AUDIT_RISK_LOOKUP = lookupTable(AUDIT_RISKS);
@@ -2062,7 +2315,7 @@ const HOST_SIGNALS: readonly ToolSignal[] = [
 /** Membership lookup for the signal list above. */
 const HOST_SIGNAL_LOOKUP = lookupTable(HOST_SIGNALS);
 
-/** Valid `host skill-root --host` ids (engine HostId union — no drift). */
+/** Valid `host skill-root --host` ids (engine HostId union \u2014 no drift). */
 const HOST_IDS: readonly HostId[] = ["opencode", "omp", "pi", "dsh", "cursor", "codex", "kimi", "zcode"];
 
 /** Membership lookup for the host ids above. */
@@ -2157,7 +2410,7 @@ skillCommand
       // skills (locked alias table), authoring / strict for
       // `mstar-skill-authoring` (the standard's own definition) and for
       // non-`mstar-*` skills. `mstar-harness-core` is exempt by design
-      // (hub headings) — print an explicit exempt row; frontmatter and
+      // (hub headings) \u2014 print an explicit exempt row; frontmatter and
       // ephemeral-citation checks still run.
       const skillBase = path.basename(path.dirname(skillFile));
       const isCore = skillBase === "mstar-harness-core";
@@ -2171,7 +2424,7 @@ skillCommand
         violations.push(...fiveQuestion.violations);
       }
       // findEphemeralCitations is a discovery finder (array, no GateResult);
-      // wrap into a GateResult like the other skill lint checklists — empty
+      // wrap into a GateResult like the other skill lint checklists \u2014 empty
       // array passes, each citation is one violation (codes
       // skill.ephemeral.<kind>, knowledge conventions §3).
       const ephemeral = findEphemeralCitations(text);
@@ -2229,7 +2482,7 @@ rolesCommand
         try {
           skillTexts[entry.name] = fs.readFileSync(skillFile, "utf8");
         } catch {
-          // skip unreadable sibling — the mapping checks still stand
+          // skip unreadable sibling \u2014 the mapping checks still stand
         }
       }
       const loadOrder = lintLoadOrder(skillTexts);
@@ -2238,7 +2491,7 @@ rolesCommand
       const total = violations.length;
       // Two distinct counts for the same corpus: siblings scanned (all
       // readable mstar-* dirs, incl. mstar-harness-core) vs skills actually
-      // load-order-linted (core is exempt inside the engine) — keep the
+      // load-order-linted (core is exempt inside the engine) \u2014 keep the
       // labels distinct so 18-vs-17 is not misread as a discrepancy.
       const siblingCount = Object.keys(skillTexts).length;
       const loadOrderChecked = Object.keys(skillTexts).filter((name) => name !== "mstar-harness-core").length;
@@ -2251,6 +2504,825 @@ rolesCommand
       if (total > 0) process.exitCode = 1;
     } catch (error) {
       failScript(error, "roles validate");
+    }
+  });
+
+const prReviewCommand = program
+  .command("pr-review")
+  .description(
+    "PR-review deterministic arithmetic and naming contracts (engine-backed): tally computation, " +
+      "local-report path resolution, saved-report validation (pr-review.md \u00a7 Tally / \u00a7 Local report archive / \u00a7 Output shape)",
+  );
+
+/** Parse `--target pr:<n>|branch:<slug>|diff:<sha>|diff` into a PrReportTarget (exit 2 on a bad form). */
+function parsePrReviewTarget(raw: string): PrReportTarget {
+  const kind = raw.slice(0, raw.indexOf(":") === -1 ? raw.length : raw.indexOf(":"));
+  const rest = kind.length + 1 <= raw.length ? raw.slice(kind.length + 1) : "";
+  if (kind === "pr") {
+    const n = Number(rest);
+    if (!/^[0-9]+$/.test(rest) || !Number.isInteger(n) || n < 1) {
+      throw new SddScriptError(`usage: pr-review report-path \u2014 --target pr requires a positive integer PR number, got ${JSON.stringify(raw)}`, 2);
+    }
+    return { kind: "pr", n };
+  }
+  if (kind === "branch") {
+    if (rest === "") throw new SddScriptError(`usage: pr-review report-path \u2014 --target branch requires the branch slug, got ${JSON.stringify(raw)}`, 2);
+    return { kind: "branch", slug: rest };
+  }
+  if (kind === "diff" && rest === "") return { kind: "diff" };
+  if (kind === "diff") return { kind: "diff", headSha: rest };
+  throw new SddScriptError(
+    `usage: pr-review report-path \u2014 --target must be pr:<n> | branch:<slug> | diff:<sha> | diff, got ${JSON.stringify(raw)}`,
+    2,
+  );
+}
+
+prReviewCommand
+  .command("tally")
+  .description(
+    "Compute the locked-formula tally, verdict and score from accepted findings JSON ([{mergeClass}]) plus the " +
+      "leftover unmet-AC / unverified counts; prints the two-line chat header + structured result (pr-review.md \u00a7 Tally)",
+  )
+  .requiredOption("--findings <file.json>", "Accepted findings JSON \u2014 array of {mergeClass: must-fix|should-fix|nit}")
+  .option("--unverified <n>", "Count of residual - unverified: items (default 0)")
+  .option("--unmet-ac-unsafe <n>", "Leftover unmet ACs that are unsafe-to-ship (each \u2192 must_fix + 1)")
+  .option("--unmet-ac-safe <n>", "Leftover unmet ACs that are ship-safe (each \u2192 should_fix + 1)")
+  .action((options: { findings: string; unverified?: string; unmetAcUnsafe?: string; unmetAcSafe?: string }) => {
+    try {
+      const findingsPath = resolveCliPath(options.findings);
+      if (!fs.existsSync(findingsPath)) throw new Error(`findings file not found: ${findingsPath}`);
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(fs.readFileSync(findingsPath, "utf8"));
+      } catch (error) {
+        throw new Error(`--findings is not valid JSON: ${(error as Error).message}`);
+      }
+      if (!Array.isArray(parsed)) {
+        throw new Error("findings file must be a JSON array of {mergeClass} objects");
+      }
+      const MERGE_CLASS_SET: readonly string[] = ["must-fix", "should-fix", "nit"];
+      const findings = parsed.map((entry, index) => {
+        if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+          throw new Error(`findings[${index}] must be an object with a mergeClass field`);
+        }
+        const mergeClass = (entry as Record<string, unknown>).mergeClass;
+        if (typeof mergeClass !== "string" || !MERGE_CLASS_SET.includes(mergeClass)) {
+          throw new Error(
+            `findings[${index}].mergeClass ${JSON.stringify(String(mergeClass))} must be one of ${MERGE_CLASS_SET.join(" | ")}`,
+          );
+        }
+        return { mergeClass: mergeClass as MergeClass };
+      });
+      // Plain decimal digits only (plan-QC F-004) \u2014 same integer grammar as
+      // parsePrReviewTarget and the validator's tally parser; Number() would
+      // accept `1e2`, `0x10` or `1.0`.
+      // Cap at the engine's TALLY_CAP (plan-QC S-02): absurd counts would
+      // materialize that many unmetAc objects before computePrTally.
+      const TALLY_COUNT_CAP = 50;
+      const countOption = (flag: string, raw: string | undefined): number | undefined => {
+        if (raw === undefined) return undefined;
+        if (!/^\d+$/.test(raw)) {
+          throw new Error(`${flag} must be a non-negative integer, got ${JSON.stringify(raw)}`);
+        }
+        const n = Number(raw);
+        if (n > TALLY_COUNT_CAP) {
+          throw new Error(`too many ${flag} values (cap ${TALLY_COUNT_CAP}) - got ${JSON.stringify(raw)}`);
+        }
+        return n;
+      };
+      const unverifiedCount = countOption("--unverified", options.unverified);
+      const unmetUnsafe = countOption("--unmet-ac-unsafe", options.unmetAcUnsafe) ?? 0;
+      const unmetSafe = countOption("--unmet-ac-safe", options.unmetAcSafe) ?? 0;
+      const result = computePrTally({
+        findings,
+        ...(unverifiedCount !== undefined ? { unverifiedCount } : {}),
+        unmetAc: [
+          ...Array.from({ length: unmetUnsafe }, () => ({ unsafeToShip: true })),
+          ...Array.from({ length: unmetSafe }, () => ({ unsafeToShip: false })),
+        ],
+      });
+      console.log(result.chatHeader);
+      console.log(JSON.stringify({ verdict: result.verdict, scorePct: result.scorePct, tally: result.tally }, null, 2));
+    } catch (error) {
+      failScript(error, "pr-review tally");
+    }
+  });
+
+prReviewCommand
+  .command("report-path")
+  .description(
+    "Resolve the local-report (or evidence-file) path for a reviewed target per pr-review.md \u00a7 Local report archive \u2014 " +
+      "pure resolver, prints the path and never writes; appends -r2/-r3 on same-day collisions",
+  )
+  .requiredOption("--reports-dir <dir>", "Reports directory ({PROJECT_DIR}/<project-id>/reports/pr-review); created on demand by the caller, scanned read-only here")
+  .requiredOption("--target <spec>", "Reviewed target: pr:<n> | branch:<slug> | diff:<short-sha> | diff")
+  .option("--stage <1|2>", "Evidence-file stage (requires --slug)")
+  .option("--slug <domain-seat>", "Seat slug <domain>-<seat> (required with --stage)")
+  .option("--date <YYYY-MM-DD>", "Archive date (default: today)")
+  .action((options: { reportsDir: string; target: string; stage?: string; slug?: string; date?: string }) => {
+    try {
+      let stage: 1 | 2 | undefined;
+      if (options.stage !== undefined) {
+        if (options.stage !== "1" && options.stage !== "2") {
+          throw new SddScriptError(`usage: pr-review report-path \u2014 --stage must be 1 or 2, got ${JSON.stringify(options.stage)}`, 2);
+        }
+        stage = options.stage === "1" ? 1 : 2;
+      }
+      if ((stage !== undefined) !== (options.slug !== undefined)) {
+        throw new SddScriptError("usage: pr-review report-path \u2014 --stage and --slug go together (--slug <domain-seat> required with --stage)", 2);
+      }
+      if (options.date !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(options.date)) {
+        throw new SddScriptError(`usage: pr-review report-path \u2014 --date must be YYYY-MM-DD, got ${JSON.stringify(options.date)}`, 2);
+      }
+      const resolved = prReviewReportPath({
+        reportsDir: resolveCliPath(options.reportsDir),
+        target: parsePrReviewTarget(options.target),
+        ...(stage !== undefined ? { stage } : {}),
+        ...(options.slug !== undefined ? { slug: options.slug } : {}),
+        ...(options.date !== undefined ? { date: options.date } : {}),
+      });
+      console.log(resolved);
+    } catch (error) {
+      failScript(error, "pr-review report-path");
+    }
+  });
+
+prReviewCommand
+  .command("validate-report")
+  .description(
+    "Validate a saved local PR-review report against the machine-readable contract (frontmatter fields, verdict-from-tally, " +
+      "locked-formula score recompute, comments tri-state; exit 1 with violations printed)",
+  )
+  .argument("<file.md>", "Saved report markdown file")
+  .action((reportFile: string) => {
+    try {
+      const abs = resolveCliPath(reportFile);
+      if (!fs.existsSync(abs)) throw new Error(`report file not found: ${abs}`);
+      const gate = validatePrReviewReport(fs.readFileSync(abs, "utf8"));
+      printChecklist(abs, gate);
+      if (!gate.ok) process.exitCode = 1;
+    } catch (error) {
+      failScript(error, "pr-review validate-report");
+    }
+  });
+
+// ---------------------------------------------------------------------------
+// Task 3 (20260826-prreview-execution): pr-review post / worktree-setup /
+// worktree-cleanup / size / seat-prompt \u2014 thin CLI wrappers; the
+// deterministic part lives in @mstar-harness/engine prreview.ts, the CLI owns
+// process/git/gh side effects only.
+// ---------------------------------------------------------------------------
+
+/** Run a git command in `cwd`, returning trimmed stdout. Throws on failure. */
+function gitSync(args: string[], cwd: string): string {
+  return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+}
+
+/** Run `gh` with `input` on stdin, returning parsed stdout. Throws on failure. */
+function ghSync(args: string[], input?: string): string {
+  return execFileSync("gh", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], ...(input !== undefined ? { input } : {}) }).trim();
+}
+
+/** Local calendar date YYYY-MM-DD (branch-collision loop date segment). */
+function cliToday(): string {
+  const iso = new Date().toISOString();
+  return iso.slice(0, 10);
+}
+
+/** All local branch names (`git for-await --format=%(refname:short)`) minus the "heads/" prefix. */
+function listLocalBranches(cwd: string): Set<string> {
+  const out = execFileSync("git", ["for-each-ref", "--format=%(refname:short)", "refs/heads"], {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  return new Set(out.split(/\r?\n/).map((line) => line.trim()).filter((line) => line !== ""));
+}
+
+/** True when `ref` resolves (`git rev-parse --verify --quiet`). */
+function refResolves(ref: string, cwd: string): boolean {
+  try {
+    execFileSync("git", ["rev-parse", "--verify", "--quiet", ref], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Changeset non-emptiness probe per mode (pr-review.md § Worktree isolation):
+ * - working-tree: `git diff` + `git diff --cached`, FOLDED WITH untracked
+ *   output from `git ls-files --others --exclude-standard` (untracked-only
+ *   counts as a non-empty changeset)
+ * - every other mode: the recorded diffCmd must produce at least one line
+ */
+function probeChangesetEmpty(diffCmdArgs: string[], cwd: string, worktreePath: string): boolean {
+  if (diffCmdArgs[0] === "__working_tree__") {
+    const dirty = gitIf(["diff"], worktreePath).length > 0 || gitIf(["diff", "--cached"], worktreePath).length > 0;
+    if (dirty) return false;
+    let untracked = "";
+    try {
+      untracked = execFileSync("git", ["ls-files", "--others", "--exclude-standard"], {
+        cwd: worktreePath, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+      });
+    } catch { /* read-only failure counts as empty */ }
+    return untracked.trim() === "";
+  }
+  // commit mode (`git show <sha>`): git always emits the commit header even
+  // for an empty commit \u2014 only hunks count as a changeset. Probe a header-free
+  // diff instead: parent→commit where a parent resolves, otherwise (history
+  // root) the canonical empty tree → commit.
+  if (diffCmdArgs[0] === "show") {
+    const sha = diffCmdArgs[1]!;
+    const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+    const diffFrom = refResolves(`${sha}^`, worktreePath) ? `${sha}^` : EMPTY_TREE;
+    return gitIf(["diff", diffFrom, sha], worktreePath).trim().length === 0;
+  }
+  return gitIf(diffCmdArgs, worktreePath).length === 0;
+}
+
+/** Like {@link gitSync} but returns "" instead of throwing (probe paths). */
+function gitIf(args: string[], cwd: string): string {
+  try {
+    return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Changeset emptiness probe BEFORE the worktree exists (setup pre-gate):
+ * working-tree probes the live checkout (tracked + staged + untracked);
+ * `--diff` is the caller's contract (the CLI never sees its contents);
+ * ref-carrying modes cannot know emptiness until the worktree exists, so
+ * the pre-gate reports not-empty and the post-`worktree add` probe decides.
+ */
+function probeChangesetEmptyPreworktree(mode: ReviewChangesetMode, headSpec: string, cwd: string): boolean {
+  if (mode === "working-tree") return probeChangesetEmpty(["__working_tree__"], cwd, cwd);
+  if (mode === "diff") return false;
+  void headSpec;
+  return false;
+}
+
+/** Validate one findings-file entry shape; returns normalized inline comment. */
+function parseFindingEntry(entry: unknown, index: number): ReviewPostPlan["inlineComments"][number] | null {
+  if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return null;
+  const rec = entry as Record<string, unknown>;
+  if (rec.path === undefined && rec.body === undefined && rec.line === undefined) return null;
+  const path = typeof rec.path === "string" ? rec.path : "";
+  const body = typeof rec.body === "string" ? rec.body : "";
+  const line = typeof rec.line === "number" ? rec.line : Number.NaN;
+  if (!path.trim() || !body.trim() || !Number.isInteger(line) || line < 1) {
+    throw new Error(
+      `findings[${index}] must be an object {path: string, line: number >= 1, body: string} - got ${JSON.stringify(entry)}`,
+    );
+  }
+  return { path, line, side: "RIGHT", body };
+}
+
+prReviewCommand
+  .command("post")
+  .description(
+    "Build and POST the GitHub Review per pr-review.md \u00a7 Comment posting procedure: resolves the BASE owner/repo " +
+      "from the PR url only (never headRepository), event is always COMMENT, posts via gh api with the payload on stdin, " +
+      "applies the at-most-once 422 fallback (drop rejected inline entries and fold them into the body); prints review_url " +
+      "(exit 1 = auth/API failure -> comments: failed)",
+  )
+  .requiredOption("--pr <n>", "PR number")
+  .requiredOption("--body-file <path>", "Review body markdown file")
+  .option("--findings <file.json>", "Optional inline comments JSON \u2014 array of {path, line, body} entries")
+  .action((options: { pr: string; bodyFile: string; findings?: string }) => {
+    try {
+      if (!/^\d+$/.test(options.pr)) {
+        throw new SddScriptError(`usage: pr-review post \u2014 --pr requires a positive integer PR number, got ${JSON.stringify(options.pr)}`, 2);
+      }
+      const prNumber = Number(options.pr);
+      const bodyPath = resolveCliPath(options.bodyFile);
+      if (!fs.existsSync(bodyPath)) throw new Error(`body file not found: ${bodyPath}`);
+      const body = fs.readFileSync(bodyPath, "utf8");
+      let comments: ReviewPostPlan["inlineComments"] = [];
+      if (options.findings !== undefined) {
+        const findingsPath = resolveCliPath(options.findings);
+        if (!fs.existsSync(findingsPath)) throw new Error(`findings file not found: ${findingsPath}`);
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(fs.readFileSync(findingsPath, "utf8"));
+        } catch (error) {
+          throw new Error(`--findings is not valid JSON: ${(error as Error).message}`);
+        }
+        if (!Array.isArray(parsed)) throw new Error("findings file must be a JSON array of {path, line, body} objects");
+        // File may also carry folded plan entries or section notes \u2014 only
+        // well-shaped {path,line,body} objects become inline comments.
+        comments = parsed.flatMap((entry, index) => {
+          const parsedEntry = parseFindingEntry(entry, index);
+          return parsedEntry === null ? [] : [parsedEntry];
+        });
+        if (parsed.length > 0 && comments.length === 0) {
+          console.error(pc.yellow("pr-review post \u2014 no valid inline comment entries found in --findings (array is non-empty but every entry lacks path/line/body); posting the summary body with zero inline comments"));
+        }
+      }
+
+      // Step 1 \u2014 resolve target: base owner/repo comes from url ONLY.
+      // planReviewPost IGNORES prView.headRepository by contract (fork-PR
+      // data must never feed owner/repo \u2014 see planReviewPost JSDoc); do not
+      // add `headRepository` to this fetch or pass it downstream.
+      const viewJson = ghSync(["pr", "view", String(prNumber), "--json", "url,headRefOid"]);
+      let prView: { url?: string; headRepository?: unknown; headRefOid?: string };
+      try {
+        prView = JSON.parse(viewJson) as typeof prView;
+      } catch (error) {
+        throw new Error(`gh pr view returned invalid JSON: ${(error as Error).message}`);
+      }
+      const plan = planReviewPost(prView, { body, comments });
+
+      // Step 2+3 \u2014 POST with payload on stdin; step 4 = at-most-ONE fallback retry.
+      const apiPath = `repos/${plan.ownerRepo}/pulls/${plan.pr}/reviews`;
+      const buildPayload = (kept: ReviewPostPlan["inlineComments"], dropped: ReviewPostPlan["inlineComments"]): string =>
+        JSON.stringify({
+          commit_id: plan.commitId,
+          event: plan.event,
+          body: dropped.length === 0 ? plan.body : foldIntoBody(plan.body, dropped),
+          ...(kept.length > 0 ? { comments: kept.map((comment) => ({ path: comment.path, line: comment.line, side: comment.side, body: comment.body })) } : {}),
+        });
+
+      // gh prints its API-error line to STDERR (`gh: HTTP 422: ...`), and
+      // GitHub's 422 JSON body typically carries no `"status"` field \u2014 scan
+      // stderr, then stdout, then the process exit status for the code.
+      type GhApiError = Error & { status?: number; stderr?: Buffer | string; stdout?: Buffer | string };
+      const errorStreamText = (value?: Buffer | string): string => (typeof value === "string" ? value : value?.toString() ?? "");
+      let reviewResponse: string;
+      let remaining = plan.inlineComments;
+      try {
+        reviewResponse = ghApi(apiPath, buildPayload(remaining, []));
+      } catch (error) {
+        const ghError = error as GhApiError;
+        const combinedErrorText = `${errorStreamText(ghError.stderr)}\n${errorStreamText(ghError.stdout)}${typeof ghError.status === "number" ? `\nexit status ${ghError.status}` : ""}`;
+        const statusMatch = /HTTP\s+(\d{3})/.exec(combinedErrorText) ?? /"status":\s*(\d{3})/.exec(combinedErrorText);
+        const rejectedStatus = statusMatch?.[1];
+        if (rejectedStatus !== "422" && ghError.status !== 422) throw error;
+        if (remaining.length === 0) throw error;
+        const dropped = remaining;
+        console.error(pc.yellow(`${dropped.length} inline comment(s) rejected (HTTP 422) - dropping inline comments and folding them into the body, retrying once`));
+        remaining = [];
+        reviewResponse = ghApi(apiPath, buildPayload(remaining, dropped));
+      }
+      let reviewUrl = "";
+      try {
+        const parsedReview = JSON.parse(reviewResponse) as { html_url?: unknown };
+        reviewUrl = typeof parsedReview.html_url === "string" ? parsedReview.html_url : "";
+      } catch {
+        // keep stdout text as the url line content \u2014 never fail after a good POST
+        reviewUrl = reviewResponse;
+      }
+      console.log(JSON.stringify({ posted: true, comments: "posted", review_url: reviewUrl || "(gh response)" }, null, 2));
+    } catch (error) {
+      if (error instanceof SddScriptError) {
+        failScript(error, "pr-review post");
+        return;
+      }
+      console.error(pc.red(`pr-review post failed: ${(error as Error).message}`));
+      console.error(JSON.stringify({ posted: false, comments: "failed" }, null, 2));
+      process.exitCode = 1;
+    }
+  });
+
+/** Fold dropped inline entries into the summary body (\u00a7 Procedure step 4). */
+function foldIntoBody(body: string, entries: ReviewPostPlan["inlineComments"]): string {
+  if (entries.length === 0) return body;
+  const lines = [
+    ...body.split(/\r?\n/),
+    "",
+    "## Inline comments folded into this summary",
+    "",
+    ...entries.map((entry) => `- \`${entry.path}:${entry.line}\` \u2014 ${entry.body}`),
+  ];
+  return lines.join("\n");
+}
+
+/** POST to the Reviews API through gh; throws with gh's stderr on failure. */
+function ghApi(apiPath: string, payload: string): string {
+  return execFileSync("gh", ["api", "--method", "POST", apiPath, "--input", "-"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    input: payload,
+  });
+}
+
+/** Sidecar state recorded by `worktree-setup`, consumed by `worktree-cleanup`. */
+type ReviewWorktreeSidecar = {
+  reviewBranch: string;
+  worktreePath: string;
+  base: string;
+  mergeBase: string;
+  diffCmd: string;
+  reportSaved: boolean;
+  createdAt: string;
+  /** Git repo root that created this sidecar \u2014 every cleanup git command runs from here. */
+  repoRoot: string;
+};
+
+prReviewCommand
+  .command("worktree-setup")
+  .description(
+    "Create the isolated review worktree per pr-review.md \u00a7 Worktree isolation: resolves the real base, picks a " +
+      "collision-free branch name, fetches with explicit refspecs, creates the worktree, computes the diff basis INSIDE it, " +
+      "and records a sidecar json consumed by worktree-cleanup; prints {reviewBranch, worktreePath, base, mergeBase, diffCmd} " +
+      "(input modes: --pr <n> | --branch <b> | --diff | --working-tree | --commit <sha>)",
+  )
+  .option("--pr <n>", "PR number input mode (pull/<n>/head via gh)")
+  .option("--branch <name>", "Bare remote-branch input mode")
+  .option("--diff", "Arbitrary diff input mode \u2014 no worktree, no refs")
+  .option("--working-tree", "Uncommitted working-tree input mode \u2014 no worktree, no refs")
+  .option("--commit <sha>", "Single-commit input mode")
+  .option("--path <dir>", "Worktree target directory (default: ../<repo-name>.review-pr<N> beside the repo)")
+  .action((options: { pr?: string; branch?: string; diff?: boolean; workingTree?: boolean; commit?: string; path?: string }) => {
+    try {
+      const modesDeclared = [
+        options.pr !== undefined,
+        options.branch !== undefined,
+        options.diff === true,
+        options.workingTree === true,
+        options.commit !== undefined,
+      ].filter(Boolean).length;
+      if (modesDeclared === 0) {
+        throw new SddScriptError("usage: pr-review worktree-setup \u2014 one of --pr <n> | --branch <b> | --diff | --working-tree | --commit <sha> is required", 2);
+      }
+      if (modesDeclared > 1) {
+        throw new SddScriptError("usage: pr-review worktree-setup \u2014 the five input modes are mutually exclusive", 2);
+      }
+      // The review target is whatever git repo contains the cwd the user
+      // invoked us from \u2014 resolve BEFORE any other command (an ambient repo,
+      // like the harness checkout itself, must never be mistaken for it).
+      const startDir = process.cwd();
+      if (!fs.existsSync(path.join(startDir, ".git")) && gitIf(["rev-parse", "--git-dir"], startDir) === "") {
+        throw new Error(`not a git repository: ${startDir}`);
+      }
+      const repoRoot = gitSync(["rev-parse", "--show-toplevel"], startDir);
+      let mode: ReviewChangesetMode;
+      if (options.pr !== undefined) {
+        if (!/^\d+$/.test(options.pr)) {
+          throw new SddScriptError(`usage: pr-review worktree-setup \u2014 --pr requires a positive integer PR number, got ${JSON.stringify(options.pr)}`, 2);
+        }
+        mode = "pr";
+      } else if (options.branch !== undefined) mode = "branch";
+      else if (options.diff === true) mode = "diff";
+      else if (options.workingTree === true) mode = "working-tree";
+      else mode = "commit";
+
+      // No-worktree modes: preflight the changeset BEFORE reporting success \u2014
+      // pr-review.md § Worktree isolation Pre-flight applies in ALL modes, and
+      // an empty changeset must stop before any lens fan-out. `--diff` has no
+      // CLI-owned file contents to probe (the caller hands over a changeset),
+      // so its emptiness is the caller's contract; working-tree is probeable.
+      if (mode === "diff" || mode === "working-tree") {
+        if (mode === "working-tree" && probeChangesetEmpty(["__working_tree__"], repoRoot, repoRoot)) {
+          printChecklist("pr-review worktree-setup preflight", preflightChangeset(mode, { refsResolve: true, changesetEmpty: true }));
+          process.exitCode = 1;
+          return;
+        }
+        console.log(JSON.stringify({ reviewBranch: null, worktreePath: repoRoot, base: null, mergeBase: null, diffCmd: mode === "diff" ? "(provided changeset)" : "git diff + git diff --cached + ls-files --others" }, null, 2));
+        return;
+      }
+
+      // Resolve the real base first \u2014 never assume main.
+      let prNumber = 0;
+      let baseRef = "";
+      let headSpec = "";
+      if (mode === "pr") {
+        prNumber = Number(options.pr);
+        baseRef = execFileSync("gh", ["pr", "view", String(prNumber), "--json", "baseRefName", "--jq", ".baseRefName"], {
+          encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+        }).trim();
+        if (baseRef === "") throw new Error(`gh pr view returned an empty base ref for PR ${prNumber}`);
+        headSpec = `pull/${prNumber}/head`;
+      } else if (mode === "branch") {
+        const branchName = options.branch!;
+        // Real base first \u2014 git symbolic-ref origin/HEAD, then a remote-ls
+        // probe, then origin/main only when it genuinely resolves.
+        let originDefault = gitIf(["symbolic-ref", "refs/remotes/origin/HEAD"], repoRoot).replace("refs/remotes/origin/", "").trim();
+        if (originDefault === "") {
+          const remoteHeads = gitIf(["ls-remote", "--symref", "origin", "HEAD"], repoRoot);
+          const symrefMatch = /ref: refs\/heads\/(\S+)\s+HEAD/.exec(remoteHeads);
+          originDefault = symrefMatch !== null ? symrefMatch[1]! : "";
+        }
+        if (originDefault === "" && refResolves("origin/main", repoRoot)) originDefault = "main";
+        if (originDefault === "") {
+          printChecklist("pr-review worktree-setup preflight", preflightChangeset(mode, { refsResolve: false, changesetEmpty: false }));
+          process.exitCode = 1;
+          return;
+        }
+        baseRef = originDefault;
+        headSpec = branchName;
+      } else {
+        const commitSha = options.commit!;
+        if (!refResolves(commitSha, repoRoot)) {
+          printChecklist("pr-review worktree-setup preflight", preflightChangeset(mode, { refsResolve: false, changesetEmpty: true }));
+          process.exitCode = 1;
+          return;
+        }
+        let originDefault = gitIf(["symbolic-ref", "refs/remotes/origin/HEAD"], repoRoot).replace("refs/remotes/origin/", "").trim();
+        if (originDefault !== "" && !refResolves(`origin/${originDefault}`, repoRoot)) originDefault = "";
+        baseRef = originDefault !== "" ? `origin/${originDefault}` : `${commitSha}^`;
+        headSpec = commitSha;
+      }
+
+      // Collision-free branch name BEFORE any fetch.
+      const existing = listLocalBranches(repoRoot);
+      // pr-<n> naming only applies to PR input; non-PR modes still want a
+      // collision-free name \u2014 derive it from the head spec with the same
+      // date-suffix loop semantics (n=0 never reaches the engine, which
+      // requires a positive integer).
+      const namePrNumber = prNumber >= 1 ? prNumber : 1;
+      const baseCandidate =
+        mode === "pr" ? namePrNumber
+        : Number(String(Math.abs([...headSpec].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) % 1_000_003, 7))));
+      const reviewBranch = pickReviewBranchName(existing, baseCandidate === 0 ? 1 : baseCandidate, cliToday().replace(/-/g, ""));
+      const branchSuffix = mode === "pr" ? "" : `-${headSpec.slice(0, 8)}`;
+      const worktreePath = path.resolve(options.path ?? joinDirnameBeside(repoRoot, `.review-${reviewBranch}${branchSuffix}`));
+
+      // Establish named refs with explicit refspecs FIRST (pr-review.md §
+      // Worktree isolation: "+refs/heads/<base>:refs/remotes/origin/<base>
+      // updates the remote-tracking ref even on narrowed fetch configs"),
+      // THEN run the pre-flight re-probe before creating anything.
+      const originUrl = gitIf(["remote", "get-url", "origin"], repoRoot);
+      let fetched = true;
+      try {
+        if (originUrl !== "") {
+          // ALWAYS refresh the base's remote-tracking ref explicitly \u2014
+          // baseRef is usually a SHORT name (`gh pr view --json baseRefName`
+          // → "main"), and the stale-or-missing case is exactly what the
+          // explicit refspec exists to prevent.
+          const baseShort = baseRef.replace(/^origin\//, "");
+          gitSync(["fetch", "origin", `+refs/heads/${baseShort}:refs/remotes/origin/${baseShort}`], repoRoot);
+          if (mode === "pr") {
+            gitSync(["fetch", "origin", `+${headSpec}:${reviewBranch}`], repoRoot);
+          } else if (mode === "branch") {
+            gitSync(["fetch", "origin", `+refs/heads/${headSpec}:refs/remotes/origin/${headSpec}`], repoRoot);
+          }
+        }
+      } catch {
+        fetched = false; // resolution gate below reports it
+      }
+
+      /** Remove a just-created worktree + branch when setup fails late. */
+      const rollbackNewWorktree = (branchToDelete: string): void => {
+        try {
+          if (fs.existsSync(worktreePath)) gitSync(["worktree", "remove", "--force", worktreePath], repoRoot);
+          gitSync(["worktree", "prune"], repoRoot);
+          if (branchToDelete !== "" && !existing.has(branchToDelete)) {
+            gitSync(["branch", "-D", branchToDelete], repoRoot);
+          }
+        } catch {
+          // rollback best-effort; the preflight FAIL below still exits non-zero
+        }
+      };
+
+      const fetchedHeadResolves =
+        mode === "pr" ? refResolves(reviewBranch, repoRoot)
+        : mode === "branch" ? originUrl !== "" && refResolves(`origin/${options.branch}`, repoRoot)
+        : mode === "commit" ? Boolean(gitIf(["rev-parse", "--verify", "--quiet", `${headSpec}^{commit}`], repoRoot).trim())
+        : refResolves(headSpec, repoRoot);
+      const gate = preflightChangeset(mode, { refsResolve: fetchedHeadResolves && fetched, changesetEmpty: probeChangesetEmptyPreworktree(mode, headSpec, repoRoot) });
+      if (!gate.ok) {
+        printChecklist("pr-review worktree-setup preflight", gate);
+        process.exitCode = 1;
+        return;
+      }
+
+      if (mode === "pr") {
+        gitSync(["worktree", "add", worktreePath, reviewBranch], repoRoot);
+      } else if (mode === "branch") {
+        gitSync(["worktree", "add", "--detach", worktreePath, `origin/${options.branch}`], repoRoot);
+      } else {
+        gitSync(["worktree", "add", "--detach", worktreePath, headSpec], repoRoot);
+      }
+
+      // Diff basis computed INSIDE the worktree against recorded refs.
+      let mergeBase = "";
+      let diffArgs: string[];
+      if (mode === "pr") {
+        mergeBase = gitSync(["merge-base", `origin/${baseRef}`, reviewBranch], worktreePath);
+        diffArgs = ["diff", `origin/${baseRef}...${reviewBranch}`];
+      } else if (mode === "branch") {
+        mergeBase = gitSync(["merge-base", `origin/${baseRef}`, `origin/${options.branch}`], worktreePath);
+        diffArgs = ["diff", `origin/${baseRef}...origin/${options.branch}`];
+      } else {
+        mergeBase = gitIf(["merge-base", baseRef, headSpec], worktreePath);
+        diffArgs = ["show", headSpec];
+      }
+      const diffCmd = `git ${diffArgs.join(" ")}`;
+
+      const changesetEmpty = probeChangesetEmpty(diffArgs, worktreePath, worktreePath);
+      const emptyGate = preflightChangeset(mode, { refsResolve: true, changesetEmpty });
+      if (changesetEmpty) {
+        // Discovered only AFTER the worktree exists \u2014 roll it back so a FAIL
+        // never leaves an orphaned worktree + freshly created branch behind.
+        rollbackNewWorktree(mode === "pr" ? reviewBranch : "");
+      }
+      if (!emptyGate.ok && emptyGate.violations.some((v) => v.code === "prreview.preflight.changeset-empty")) {
+        printChecklist("pr-review worktree-setup preflight", emptyGate);
+        process.exitCode = 1;
+        return;
+      }
+
+      const recordedBase =
+        mode === "pr" || (mode !== "commit" && !baseRef.startsWith("origin/")) ? `origin/${baseRef}` : baseRef;
+      const sidecar: ReviewWorktreeSidecar = {
+        reviewBranch: mode === "pr" ? reviewBranch : "",
+        worktreePath,
+        base: recordedBase,
+        mergeBase,
+        diffCmd,
+        reportSaved: false,
+        createdAt: new Date().toISOString(),
+        repoRoot,
+      };
+      fs.writeFileSync(sidecarPathFor(worktreePath), JSON.stringify(sidecar, null, 2));
+      console.log(JSON.stringify({
+        reviewBranch: sidecar.reviewBranch === "" ? null : sidecar.reviewBranch,
+        worktreePath: sidecar.worktreePath,
+        base: sidecar.base,
+        mergeBase: sidecar.mergeBase === "" ? null : sidecar.mergeBase,
+        diffCmd: sidecar.diffCmd,
+      }, null, 2));
+    } catch (error) {
+      failScript(error, "pr-review worktree-setup");
+    }
+  });
+
+/** Sidecar path: <parent-of-worktree>/.<worktree-dirname>.prreview.json */
+function sidecarPathFor(worktreePath: string): string {
+  const parent = path.dirname(path.resolve(worktreePath));
+  const name = path.basename(path.resolve(worktreePath));
+  return path.join(parent, `.${name}.prreview.json`);
+}
+
+/** Default worktree location: a sibling directory beside the repo root. */
+function joinDirnameBeside(repoRoot: string, leaf: string): string {
+  return path.join(path.dirname(path.resolve(repoRoot)), leaf);
+}
+
+prReviewCommand
+  .command("worktree-cleanup")
+  .description(
+    "Remove the review worktree per pr-review.md \u00a7 Worktree isolation cleanup: refuses unless --report-saved is given OR the " +
+      "setup sidecar records report-saved; removes the worktree, prunes, and deletes EXACTLY the recorded review branch \u2014 a " +
+      "--branch argument that disagrees with the sidecar is refused (never delete a foreign/pre-existing branch)",
+  )
+  .requiredOption("--path <dir>", "Worktree directory created by worktree-setup")
+  .requiredOption("--branch <name>", "The recorded review branch (must match the setup sidecar for PR mode)")
+  .option("--report-saved", "Assert the local report has been saved before removal")
+  .action((options: { path: string; branch: string; reportSaved?: boolean }) => {
+    try {
+      const worktreePath = path.resolve(resolveCliPath(options.path));
+      const sidecarPath = sidecarPathFor(worktreePath);
+      if (!fs.existsSync(sidecarPath)) {
+        throw new Error(`no setup sidecar found at ${sidecarPath} - run pr-review worktree-setup first (foreign worktrees are never cleaned here)`);
+      }
+      let sidecar: ReviewWorktreeSidecar;
+      try {
+        sidecar = JSON.parse(fs.readFileSync(sidecarPath, "utf8")) as ReviewWorktreeSidecar;
+      } catch (error) {
+        throw new Error(`setup sidecar at ${sidecarPath} is not valid JSON: ${(error as Error).message}`);
+      }
+      // All git below runs from the REPO ROOT recorded at setup \u2014 never the
+      // worktree being removed, never the user's cwd (which may even be
+      // deleted after a successful remove). Legacy sidecars without the field
+      // fall back to the worktree's parent directory.
+      const gitRoot = typeof sidecar.repoRoot === "string" && sidecar.repoRoot !== ""
+        ? sidecar.repoRoot
+        : path.dirname(worktreePath);
+      if (sidecar.reviewBranch === "") {
+        // Detached review worktree (branch / commit mode): nothing to delete,
+        // and any claimed --branch is by definition foreign.
+        if (options.branch !== "") {
+          throw new Error(
+            `this setup recorded no review branch (detached review) - refusing ${JSON.stringify(options.branch)} as a foreign branch`,
+          );
+        }
+      } else if (options.branch !== sidecar.reviewBranch) {
+        throw new Error(
+          `--branch ${JSON.stringify(options.branch)} does not match the recorded review branch ${JSON.stringify(sidecar.reviewBranch)} - refusing to delete a foreign branch`,
+        );
+      }
+      const savedOk = options.reportSaved === true || sidecar.reportSaved === true;
+      if (!savedOk) {
+        throw new Error("refusing cleanup: the local report is not saved yet - save it first or pass --report-saved (\u00a7 Local report archive)");
+      }
+      if (fs.existsSync(worktreePath)) {
+        gitSync(["worktree", "remove", worktreePath], gitRoot);
+      }
+      gitSync(["worktree", "prune"], gitRoot);
+      if (sidecar.reviewBranch !== "") {
+        if (!refResolves(`refs/heads/${sidecar.reviewBranch}`, gitRoot)) {
+          throw new Error(`recorded review branch ${sidecar.reviewBranch} no longer resolves - refusing ambiguous cleanup`);
+        }
+        gitSync(["branch", "-D", sidecar.reviewBranch], gitRoot);
+      }
+      fs.rmSync(sidecarPath, { force: true });
+      console.log(pc.green(`worktree-cleanup: removed ${worktreePath}${sidecar.reviewBranch !== "" ? ` + deleted ${sidecar.reviewBranch}` : " (no local branch to delete)"}`));
+    } catch (error) {
+      failScript(error, "pr-review worktree-cleanup");
+    }
+  });
+
+/** Count changed lines for `size`: added + deleted taken straight from a
+ * `git diff --numstat` run (exact counts \u2014 handles lines whose CONTENT
+ * starts with +/- markers and empty added lines; binary rows skipped). */
+function countChangedLines(numstatOutput: string): number {
+  let changed = 0;
+  for (const line of numstatOutput.split(/\r?\n/)) {
+    const entry = /^(\d+)\t(\d+)\t/.exec(line);
+    if (entry === null) continue;
+    changed += Number(entry[1]!) + Number(entry[2]!);
+  }
+  return changed;
+}
+
+prReviewCommand
+  .command("size")
+  .description(
+    "Classify a changeset into the sizing bands (~100 / ~300 / ~1000 \u2014 single set of numbers) and derive the Stage-1 seat plan, " +
+      "split advice and file-size watch, plus the SP-A inferred tier; prints band + seats + adviseSplit (+ tier)",
+  )
+  .requiredOption("--base <ref>", "Base ref (three-dot diff side A)")
+  .requiredOption("--head <ref>", "Head ref (three-dot diff side B)")
+  .option("--largest-file-total <n>", "Override the largest touched file's TOTAL line count (default: measured at the --head ref)")
+  .action((options: { base: string; head: string; largestFileTotal?: string }) => {
+    try {
+      const repoRoot = gitSync(["rev-parse", "--show-toplevel"], process.cwd());
+      const diffOutput = gitSync(["diff", `${options.base}...${options.head}`], repoRoot);
+      const changedLines = countChangedLines(gitSync(["diff", "--numstat", `${options.base}...${options.head}`], repoRoot));
+      let largestTouchedFileTotal: number | undefined;
+      if (options.largestFileTotal !== undefined) {
+        if (!/^\d+$/.test(options.largestFileTotal)) {
+          throw new SddScriptError(`usage: pr-review size \u2014 --largest-file-total requires a non-negative integer, got ${JSON.stringify(options.largestFileTotal)}`, 2);
+        }
+        largestTouchedFileTotal = Number(options.largestFileTotal);
+      } else {
+        largestTouchedFileTotal = measureLargestTouchedTotal(diffOutput, options.head, repoRoot);
+      }
+      const sizing = prReviewSizing({ changedLines, ...(largestTouchedFileTotal !== undefined ? { largestTouchedFileTotal } : {}) });
+      const tier = resolvePrReviewTier({ band: sizing.band });
+      console.log(JSON.stringify({ ...sizing, tier, changedLines }, null, 2));
+    } catch (error) {
+      failScript(error, "pr-review size");
+    }
+  });
+
+/** Measure the largest diff-touched file's TOTAL lines, read from the
+ * `--head` ref's tree (`git show <headRef>:<file>`) so the file-size watch
+ * always reflects the reviewed tip \u2014 never the checkout HEAD. */
+function measureLargestTouchedTotal(diffOutput: string, headRef: string, cwd: string): number | undefined {
+  const files = [...new Set([...diffOutput.matchAll(/^\+\+\+ b\/(.+)$/gm)].map((m) => m[1]!))];
+  let maxTotal: number | undefined;
+  for (const file of files) {
+    const content = gitIf(["show", `${headRef}:${file}`], cwd);
+    const total = content === "" ? 0 : content.split("\n").length;
+    if (maxTotal === undefined || total > maxTotal) maxTotal = total;
+  }
+  return maxTotal;
+}
+
+prReviewCommand
+  .command("seat-prompt")
+  .description(
+    "Generate the read-only audit-seat prompt per pr-review.md \u00a7 Seat prompts (Hard Rules 4/5 verbatim, payload-return contract, " +
+      "no-verdict/no-post clauses, slug <domain>-<seat>, Merge-class instruction on stage 2); prints the prompt",
+  )
+  .requiredOption("--stage <1|2>", "Pipeline stage (1 = collect, 2 = domain/security)")
+  .requiredOption("--domain <d>", "Review domain for this seat")
+  .requiredOption("--seat <id>", "Seat id (slug becomes <domain>-<seat>)")
+  .requiredOption("--worktree <path>", "Absolute review worktree path")
+  .option("--security", "Mark this seat as the security-lens seat (stage 2)")
+  .option("--skill-root <dir>", "Skill root containing references/pr-review.md (default: resolved skills/mstar-audit)")
+  .option("--recon <facts...>", "Recon facts (variadic: --recon fact1 fact2 ...)")
+  .option("--tier <quick|default|deep>", "Prompt tier (SP-A): quick shrinks read-first + folds the security lens in-seat; deep adds cross-domain security seat + stage-as-wave (default: default)")
+  .action((options: { stage: string; domain: string; seat: string; worktree: string; security?: boolean; skillRoot?: string; recon?: string[]; tier?: string }) => {
+    try {
+      if (options.stage !== "1" && options.stage !== "2") {
+        throw new SddScriptError(`usage: pr-review seat-prompt \u2014 --stage must be 1 or 2, got ${JSON.stringify(options.stage)}`, 2);
+      }
+      const tier = options.tier;
+      if (tier !== undefined && tier !== "quick" && tier !== "default" && tier !== "deep") {
+        throw new SddScriptError(`usage: pr-review seat-prompt \u2014 --tier must be quick | default | deep, got ${JSON.stringify(tier)}`, 2);
+      }
+      const auditSkillRoot = options.skillRoot !== undefined
+        ? path.resolve(resolveCliPath(options.skillRoot))
+        : path.resolve(resolveCliPath("skills/mstar-audit"));
+      const prompt = prReviewSeatPrompt({
+        stage: options.stage === "1" ? 1 : 2,
+        domain: options.domain,
+        seat: options.seat,
+        skillRoot: auditSkillRoot,
+        worktreePath: path.resolve(options.worktree),
+        reconFacts: options.recon ?? [],
+        ...(options.security === true ? { securitySeat: true } : {}),
+        ...(tier !== undefined ? { tier } : {}),
+      });
+      console.log(prompt);
+    } catch (error) {
+      failScript(error, "pr-review seat-prompt");
     }
   });
 

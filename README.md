@@ -108,7 +108,7 @@ Two read-only, advisory commands under one roof — they never edit source; find
 | Command | When |
 |---------|------|
 | `/codebase-audit [keywords]` | Read-only survey of what's worth doing — prioritized, ready-to-execute plans; narrow it with category focus (`bug`, `security`, `perf`, `tech-debt`, …) when you want a targeted pass. |
-| `/pr-deep-review [pr\|branch\|scope]` | Deep pre-merge review of a PR / branch / diff → one verdict (`ship it` / `needs fixes` / `blocked`) and every finding, posted to GitHub when a PR number is given. |
+| `/amazing-pr-review [pr\|branch\|scope] [quick\|default\|deep]` | Deep pre-merge review of a PR / branch / diff at three strengths — `quick` (single-pass, 1 seat) / `default` (no-flag landing tier, reduced seats) / `deep` (full three-stage pipeline) — one verdict (`ship it` / `needs fixes` / `blocked`) and every finding, posted to GitHub by the command's main agent at Stage 3 synthesis when a PR number is given. `deep` runs the full three-stage pipeline (collect → domain review → main-agent synthesis; one verdict / one GitHub Review); `default` / `quick` are lighter single/dual-seat passes. Multi-PR input → first PR only; remaining PRs queued as audit todos (next session); suggest one session per PR. |
 
 ## Harness Workflow
 
