@@ -2,7 +2,7 @@
  * CLI Slice-4 subcommands — thin engine-backed wrappers:
  *   mstar lint <target>, mstar design-md validate <dir>,
  *   mstar audit scaffold <findings-file> [--dir <out-dir>], mstar audit promote
- *   <audit-dir> --plans <ids>, mstar compound validate
+ *   <audit-dir> --plans <ids>, mstar audit secret-scan [path], mstar audit supply-chain [path],
  *   <doc-path> [--knowledge-dir <dir>], mstar host detect --signals <list>,
  *   mstar skill lint <skill-dir>, mstar roles validate [--roles-dir <dir>]
  *   [--skills-dir <dir>].
@@ -12,7 +12,8 @@
  * subprocess against /tmp fixtures and asserts exit code + reported codes.
  */
 import { describe, expect, test } from "bun:test";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { readJson, scaffoldAuditPlan, validateAuditStatusBlocks, validateProjectRegister } from "@mstar-harness/engine";
@@ -689,6 +690,159 @@ describe("mstar audit scaffold — plan directory from findings JSON", () => {
 
 // ---------------------------------------------------------------------------
 // mstar audit promote
+
+// ---------------------------------------------------------------------------
+// mstar audit secret-scan / supply-chain — deterministic static checks
+// ---------------------------------------------------------------------------
+
+describe("mstar audit secret-scan — tracked-file credential scan", () => {
+  test("seeded secret in a tracked file → finding JSON + exit 1", () => {
+    withTempDir((dir) => {
+      execFileSync("git", ["init", "-q"], { cwd: dir });
+      mkdirSync(join(dir, "sub"), { recursive: true });
+      // Inert filler matching the AWS whole-match shape (AKIA + 16 alnum).
+      // Split literal: keep the raw source free of the full contiguous token
+      // (GitHub push protection treats test values as live credentials).
+      const awsKey = "AKIAIOSFODNN7" + "EXAMPLE";
+      writeFileSync(join(dir, "sub", "config.ts"), `token = "${awsKey}"\n`);
+      writeFileSync(join(dir, ".env.production"), "SECRET=placeholder\n");
+      execFileSync("git", ["add", "-A"], { cwd: dir });
+      const result = runCli(["audit", "secret-scan", dir]);
+      expect(result.exitCode).toBe(1);
+      // 3 hits: the whole-match AWS shape + the VALUE_PATTERNS `token` row on
+      // the same line, plus the never-commit `.env.production` filename.
+      expect(result.stderr).toContain("secret-scan: 3 findings");
+      // Finding shape: {file, line, type} only — Hard Rule 4, never a value.
+      const aws = result.stdout.split("\n").find((l) => l.startsWith("{") && l.includes("aws-access-key"));
+      expect(aws).toBeDefined();
+      expect(JSON.parse(aws!)).toEqual({ file: join(dir, "sub", "config.ts"), line: 1, type: "aws-access-key" });
+      const envHit = result.stdout.split("\n").find((l) => l.startsWith("{") && l.includes("env-file"));
+      expect(envHit).toBeDefined();
+      expect(JSON.parse(envHit!).line).toBe(1);
+      for (const line of result.stdout.split("\n").filter((l) => l.startsWith("{"))) {
+        expect(JSON.parse(line).file).toBeDefined();
+        expect(JSON.parse(line).line).toBeGreaterThan(0);
+        expect(JSON.parse(line).type).toBeDefined();
+      }
+      // Hard Rule 4 at the shipped boundary: the seeded raw values must be
+      // absent from BOTH output streams (qc1 W-006).
+      expect(result.stdout + result.stderr).not.toContain(awsKey);
+      expect(result.stdout + result.stderr).not.toContain("SECRET=placeholder");
+    });
+  });
+
+  test("clean repo → exit 0, no finding lines", () => {
+    withTempDir((dir) => {
+      execFileSync("git", ["init", "-q"], { cwd: dir });
+      writeFileSync(join(dir, "main.ts"), `const key = process.env.API_KEY;\n`);
+      execFileSync("git", ["add", "-A"], { cwd: dir });
+      const result = runCli(["audit", "secret-scan", dir]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("secret-scan: clean");
+      expect(result.stdout).not.toContain("{\"file\"");
+    });
+  });
+
+  test("untracked files are not scanned; path argument must be a directory → exit 2", () => {
+    withTempDir((dir) => {
+      execFileSync("git", ["init", "-q"], { cwd: dir });
+      writeFileSync(join(dir, "leak.ts"), `token = "xoxb-123456789-abcdefghij"
+`);
+      // NOT staged → not tracked → not scanned
+      const result = runCli(["audit", "secret-scan", dir]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("clean");
+      const bad = runCli(["audit", "secret-scan", join(dir, "no-such-dir")]);
+      expect(bad.exitCode).toBe(2);
+      expect(bad.stderr).toContain("not a directory");
+    });
+  });
+
+  test("nested path argument resolves tracked files under it (qc1 W-001)", () => {
+    withTempDir((dir) => {
+      execFileSync("git", ["init", "-q"], { cwd: dir });
+      // Leak lives in a NESTED package dir; scan target is that dir.
+      const pkg = join(dir, "packages", "engine");
+      mkdirSync(pkg, { recursive: true });
+      // Synthetic Stripe live-key, split so the raw source never holds the
+      // full contiguous token (GitHub push-protection false positive).
+      const stripeKey = "sk_live_" + "Z9y8X7W6V5U4T3S2R1Q0P9O8N7";
+      writeFileSync(join(pkg, "leak.ts"), `token = "${stripeKey}"\n`);
+      writeFileSync(join(dir, "readme.md"), "harmless\n");
+      execFileSync("git", ["add", "-A"], { cwd: dir });
+      const result = runCli(["audit", "secret-scan", pkg]);
+      expect(result.exitCode).toBe(1);
+      const stripe = result.stdout.split("\n").find((l) => l.startsWith("{") && l.includes("stripe-live-key"));
+      expect(stripe).toBeDefined();
+      expect(JSON.parse(stripe!)).toEqual({ file: join(pkg, "leak.ts"), line: 1, type: "stripe-live-key" });
+    });
+  });
+
+  test("non-git directory → exit 2, not a clean exit 0 (qc1 W-002 / qc3 W-1)", () => {
+    withTempDir((dir) => {
+      writeFileSync(join(dir, "main.ts"), `const ok = 1;\n`);
+      const result = runCli(["audit", "secret-scan", dir]);
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain("not a git repository or git unavailable");
+    });
+  });
+
+  test("unreadable tracked file forces non-zero even with no findings (qc1 W-002)", () => {
+    withTempDir((dir) => {
+      execFileSync("git", ["init", "-q"], { cwd: dir });
+      const locked = join(dir, "locked.txt");
+      writeFileSync(locked, "benign content\n");
+      execFileSync("git", ["add", "-A"], { cwd: dir });
+      chmodSync(locked, 0o000);
+      try {
+        const result = runCli(["audit", "secret-scan", dir]);
+        expect(result.exitCode).not.toBe(0);
+        expect(result.stderr).toContain("failed to read");
+        expect(result.stderr).toContain("1 tracked file");
+      } finally {
+        chmodSync(locked, 0o644);
+      }
+    });
+  });
+});
+
+describe("mstar audit supply-chain — lockfile + workflow checks", () => {
+  test("lockfile missing at root → lockfile-missing finding + exit 1", () => {
+    withTempDir((dir) => {
+      const result = runCli(["audit", "supply-chain", dir]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("audit.supply.lockfile-missing");
+      expect(result.stdout).toContain('"kind":"lockfile-missing"');
+    });
+  });
+
+  test("two root lockfiles → lockfile-duplicate finding + exit 1", () => {
+    withTempDir((dir) => {
+      for (const name of ["package-lock.json", "yarn.lock"]) writeFileSync(join(dir, name), "{}\n");
+      const result = runCli(["audit", "supply-chain", dir]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toContain('"kind":"lockfile-duplicate"');
+    });
+  });
+
+  test("single lockfile + SHA-pinned workflow → clean, exit 0", () => {
+    withTempDir((dir) => {
+      writeFileSync(join(dir, "bun.lock"), "{}\n");
+      mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+      const sha = "a".repeat(40);
+      writeFileSync(
+        join(dir, ".github", "workflows", "ci.yml"),
+        ["name: ci", "on:", "  push:", "jobs:", "  build:", "    steps:", `      - uses: actions/checkout@${sha}`].join("\n") + "\n",
+      );
+      const result = runCli(["audit", "supply-chain", dir]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("supply-chain: OK");
+      expect(result.stdout).toContain("supply-chain: OK");
+      expect(result.stdout).not.toContain('{"kind"');
+    });
+  });
+});
+
 // ---------------------------------------------------------------------------
 
 describe("mstar audit promote — v2 workflow registration for selected plans", () => {

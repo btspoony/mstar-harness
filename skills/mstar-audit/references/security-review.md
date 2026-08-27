@@ -79,11 +79,9 @@ Classify every value before flagging:
 
 Scan committed configs, CI workflows, Dockerfiles, and IaC for credential *patterns* — never values (Hard Rule 4).
 
-- **Provider key shapes:** `AKIA[0-9A-Z]{16}` (AWS), `sk-ant-...` (Anthropic), `ghp_...` / `github_pat_...` (GitHub), `sk_live_...` (Stripe), `sk-...` (OpenAI), `xox[baprs]-...` (Slack).
-- **Entropy heuristic:** an assignment context (`=`, `:`, `KEY = value`) holding a 20+ character high-variety string — verified by context, entropy alone is noise.
-- **Never-commit file list:** `.env*`, `*.pem`, `*.key`, `id_rsa`, `credentials.json`, `service-account.json`, `git credentials` files. Presence in git history counts even if a later commit deleted the file.
-- **CI/IaC leak shapes:** GitHub Actions plaintext `env:` values or `echo ${{ secrets.X }}`; Docker `ENV` / `ARG` secrets persisting in image layers; Terraform hardcoded `password =`.
-- **Safe-placeholder exclusions — do NOT flag:** `"your-api-key-here"`, `<YOUR_API_KEY>`, `${ENV_VAR}` indirection, `os.environ.get(...)`, `process.env.X`.
+- **Provider key shapes, never-commit file list, CI/IaC leak shapes, safe-placeholder exclusions — mechanical scan:**
+> **Engine check (when available):** run `mstar audit secret-scan [path]` (or `import { scanSecrets } from "@mstar-harness/engine"` in a host hook) to scan git-tracked files under a path for credential patterns — it prints `{file, line, type}` findings and exits 1 on any hit. The engine pattern tables (`WHOLE_MATCH_PATTERNS` / `VALUE_PATTERNS` / `NEVER_COMMIT_FILENAMES` / `CI_IAC_LEAK_SHAPES` in `packages/engine/src/audit.ts`) are the SSOT; do not re-enumerate patterns here. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+- **Entropy heuristic (reviewer judgment):** an assignment context (`=`, `:`, `KEY = value`) holding a 20+ character high-variety string — verify by context; entropy alone is noise.
 - Findings cite `file:line` + credential type only ("Stripe live key at `config.ts:12`"); the fix sketch always includes rotation, never just removal.
 
 ## 7. Cross-file data-flow sweep

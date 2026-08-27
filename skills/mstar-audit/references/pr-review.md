@@ -22,9 +22,9 @@ Deep PR review is a **three-stage pipeline**: collect → domain review → synt
 
 **Fan-out discipline**: every collect / domain seat is a **read-only audit seat** (shared contract → `mstar-roles` `references/_shared/leaf-executor-core.md` Audit Mode). PM creates the worktree and resolves the diff basis **first** (§ Worktree isolation), then fans out. Domain-seat Assignments may carry `Delegation: allowed (scout/explore only, read-only)` (reusing the full-audit pattern). **For three-stage seats, never-post is the permanent contract** — posting is Stage 3 only, by the main agent: the main agent (the command's orchestrator) posts the review; review seats never post. Audit Mode, Hard Rule 2, and Mode C are aligned; no seat-level POST carve-out exists.
 
-**Seat prompts** — every seat loads the **seat evidence contract** at `references/pr-review-seat-evidence.md` (return evidence / findings in the result payload — any seat may be **write-blocked**; the main agent writes the evidence files — § Local report archive) plus stage-specific additions:
-- **Stage 1 collect seats**: the absolute path to `references/pr-review.md` and the sections of it to read, the review worktree absolute path (the worktree where the PR head is checked out — § Worktree isolation), recon facts (language / framework / directories / what was skipped), decided tradeoffs, and **Hard Rules 4/5 verbatim**. No findings table, no verdict.
-- **Stage 2 domain / security seats** additionally load the **findings contract**: the absolute path to `references/pr-review.md` and the sections of it to read, the review worktree absolute path (the worktree where the PR head is checked out — § Worktree isolation), the finding-format contract at `references/finding-format.md`, `references/security-review.md` (security seats), recon facts, decided tradeoffs, **Hard Rules 4/5 verbatim**, and the instruction to produce findings with **Merge class** (§ Merge class), return them in the result payload (write-blocked-safe; writable seats may **best-effort** write the Stage 2 evidence file directly — the main agent merges — § Local report archive), and return only findings — no fixes; never post.
+**Seat prompts** — every seat loads the **seat evidence contract** at `references/pr-review-seat-evidence.md` (return evidence / findings in the result payload — any seat may be **write-blocked**; the main agent writes the evidence files — § Local report archive). Stage 1 collect seats get: the absolute path to `references/pr-review.md` and the sections to read, the review worktree absolute path, recon facts (language / framework / directories / what was skipped), decided tradeoffs, and **Hard Rules 4/5 verbatim** — no findings table, no verdict. Stage 2 domain / security seats additionally load the **findings contract**: `references/finding-format.md`, `references/security-review.md` (security seats), and the instruction to produce findings with **Merge class** (§ Merge class), return them in the result payload (writable seats may **best-effort** write the Stage 2 evidence file directly — the main agent merges — § Local report archive), and return only findings — no fixes; never post.
+
+> **Engine check (when available):** run `mstar pr-review seat-prompt --stage 1|2 --domain <d> --seat <id> --worktree <path> [--security] [--recon <fact> ...]` (or `import { prReviewSeatPrompt } from "@mstar-harness/engine"` in a host hook) to generate the prompt skeleton — Hard Rules 4/5 verbatim, payload-return contract, no-verdict/no-post clauses, slug `<domain>-<seat>`, Merge-class instruction on stage 2. Judgment stays with the PM/agent: domain selection, which tradeoffs are decided, and whether the surface warrants the security lens. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 ## Review depth (tiers)
 
@@ -57,49 +57,17 @@ The ladder reuses the existing ~100 / ~300 / ~1000 sizing bands — no second se
 **Report `tier` declaration**: report frontmatter gains an optional `tier: quick | default | deep` (absent = `default` semantics, valid — old reports stay valid). `quick` MUST declare its reduced coverage under `- notes:` (what did not run: independent security seat / Stage 1 wave / domain split); any announced upgrade or downgrade (e.g. PM announces deep-upgrade, or a downgraded cut happens) is declared the same way. Report template structure, tally counts, and the display contract are unchanged; tier never enters the report filename.
 
 ## Worktree isolation
+- All git mechanics — real-base resolution (never assume `main`), collision-free branch naming (`pr-<n>` → `pr-<n>-<date>-<i>` loop before **any** fetch), explicit-refspec fetches (single-branch/narrowed fetch configs stay correct; do **not** substitute `gh pr checkout <n>` — it lands on the PR-head name instead of the recorded branch, bypassing the ownership protocol), worktree creation, changeset pre-flight (untracked-only working-tree changes count as non-empty), diff-basis computation, sidecar recording, removal + prune + exact-branch deletion — execute mechanically:
 
-- **Resolve the real base first** — never assume `main`:
-  - Reviewing a PR: `gh pr view N --json baseRefName --jq .baseRefName` → `<base>`.
-  - Reviewing a bare branch/diff: resolve the remote default via `git symbolic-ref refs/remotes/origin/HEAD` (fall back to `origin/main` only when it genuinely is the default).
-- Choose the local branch name **before any fetch** — `pr-<n>` may already exist (a stale review, another reviewer's branch, the user's own branch); the fallback must also be collision-free, so loop until the recorded name is provably fresh:
-  ```
-  review_branch=pr-<n>
-  i=1
-  while git rev-parse --verify --quiet refs/heads/$review_branch; do
-    review_branch=pr-<n>-$(date +%Y%m%d)-$((i++))
-  done
-  ```
-  Record the final name as `<review-branch>` — it did not exist before this review created it.
-- Establish the refs **with explicit refspecs**, then create the dedicated worktree — never the primary repo cwd, never another harness worktree:
-  ```
-  git fetch origin +refs/heads/<base>:refs/remotes/origin/<base>
-  git fetch origin pull/<n>/head:<review-branch>
-  git worktree add <path> <review-branch>
-  cd <path>   # review from here — a new linked worktree, cannot touch the primary checkout
-  ```
-  The explicit `+refs/heads/<base>:refs/remotes/origin/<base>` refspec updates the remote-tracking ref even on single-branch/narrowed `fetch` configs, so `origin/<base>` is never stale or missing. Do **not** use `gh pr checkout <n>` as an alternative: it switches to the PR-head branch name (not the recorded `<review-branch>`) and bypasses the ownership protocol. If you only have a PR ref, fetch it into the recorded name and `git worktree add` exactly as above.
-- Compute the diff basis **inside the worktree, against the recorded refs — never the primary `HEAD`** (the primary checkout may sit on a different branch):
-  ```
-  cd <path>
-  git diff origin/<base>...<review-branch>   # three-dot: changes on the reviewed branch since the merge-base
-  ```
-- **Bare branch input** (no PR number) — review the remote branch directly; no local ownership protocol needed:
-  ```
-  git fetch origin +refs/heads/<branch>:refs/remotes/origin/<branch>
-  git worktree add --detach <path> origin/<branch>   # detached worktree; creates no local branch
-  cd <path>
-  git diff origin/<base>...origin/<branch>   # three-dot against the fetched remote-tracking ref
-  ```
-  Cleanup: `git worktree remove <path>` + `git worktree prune` only — there is no local branch to delete.
-- **Arbitrary diff input** (a changeset handed to the review, no ref attached) — review the provided diff as-is:
-  - Verify its provenance first (stated base/head SHAs when present); do not invent a checkout or substitute a different ref.
-  - Read the changed files in the current directory for context; the diff itself is the isolated changeset under review.
-  - No worktree, no branch, no fetch — nothing to clean up.
-- **Uncommitted / working-tree input** ("review my changes", no ref): changeset = `git diff` + `git diff --cached`, plus untracked files via `git ls-files --others --exclude-standard`, in the current checkout (read new files in full — the diff cannot see them); no worktree, no fetch, no branch; the review is still read-only (no fixes, no stash); `comments: n/a-no-pr`.
-- **Single-commit input** (commit SHA / short hash): changeset = `git show <sha>`; verify provenance, no worktree — but read file context **at that commit** (`git show <sha>:<path>`), not the current checkout; the two diverge whenever HEAD ≠ `<sha>` or the file changed since (direct reads are equivalent only when HEAD == `<sha>` and the tree is clean).
-- **Pre-flight (all modes):** before fanning out lenses, confirm any named refs resolve (in modes that have refs) and the changeset is non-empty (in all modes) — an empty changeset reports "no changes to review" and stops; never spawn lenses on an empty changeset (for working-tree input, untracked-only changes are a non-empty changeset).
+> **Engine check (when available):** run `mstar pr-review worktree-setup --pr <n> | --branch <b> | --diff | --working-tree | --commit <sha> [--path <dir>]` (or `import { pickReviewBranchName, preflightChangeset } from "@mstar-harness/engine"` in a host hook) to create the isolated review worktree, compute the diff basis inside it, record a sidecar json, and print `{reviewBranch, worktreePath, base, mergeBase, diffCmd}`; clean up with `mstar pr-review worktree-cleanup --path <dir> --branch <name> --report-saved` — removes the tree, prunes, deletes **exactly** the recorded branch (a foreign/unrecorded branch is refused) and refuses removal while the local report is unsaved. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+
+Discipline that stays with the agent (behavior, not git mechanics):
+
+- Review from a dedicated linked worktree — **never the primary repo cwd, never another harness worktree** — and compute the diff basis inside it against the recorded refs, three-dot style: **never the primary `HEAD`** (the primary checkout may sit on a different branch).
+- Input-mode shape: bare branch reviews use a detached worktree against the fetched remote-tracking ref (no local ownership protocol, no local branch to delete); arbitrary-diff inputs verify stated provenance and read changed files locally — no worktree, no branch, nothing to clean up; working-tree inputs take tracked + staged + untracked changes read in full (the review stays read-only — no fixes, no stash; `comments: n/a-no-pr`); single-commit inputs verify provenance but read file context **at that commit** (`git show <sha>:<path>`), which diverges from the current checkout whenever HEAD ≠ `<sha>` or the file changed since.
+- **Pre-flight before fanning out lenses** (every mode): named refs resolve (in modes that have refs) and the changeset is non-empty — an empty changeset reports "no changes to review" and stops; never spawn lenses on an empty changeset.
 - Record before computing: review cwd, `<review-branch>`, HEAD sha, merge-base.
-- Clean up **once the local report is saved** — the save runs in all three posting branches (`posted: yes` / `n/a-no-pr` / `failed`), so cleanup does not wait on POST success (§ Local report archive): `git worktree remove <path>` + `git worktree prune`, then delete **exactly** the recorded `<review-branch>` — it was verified not to exist before the fetch created it, so it is provably this review's own branch; never delete a pre-existing branch. Never remove other harness worktrees.
+- Clean up **once the local report is saved** — the save runs in all three posting branches (`posted: yes` / `n/a-no-pr` / `failed`; § Local report archive), so cleanup never waits on POST success — then delete **exactly** the recorded `<review-branch>` (provably this review's own branch); never delete a pre-existing branch. Never remove other harness worktrees.
 
 ## Scoping
 
@@ -125,6 +93,8 @@ The ladder reuses the existing ~100 / ~300 / ~1000 sizing bands — no second se
 | New framework/library adoption | widen scrutiny |
 | Performance-critical path | widen scrutiny — playbook §3 Performance depth |
 | Security-sensitive surface | widen scrutiny — load `references/security-review.md` |
+
+> **Engine check (when available):** run `mstar pr-review size --base <ref> --head <ref>` (or `import { prReviewSizing, resolvePrReviewTier } from "@mstar-harness/engine"` in a host hook) to classify the changeset into the bands above — it prints the band, the inferred tier, the Stage-1 seat plan, split advice and the file-size watch, so band and fan-out decisions are never hand-derived. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 These shapes get deeper review, not automatic severity — name the escalation in the review body.
 
@@ -209,6 +179,8 @@ Presumptive-structural classes: a refactor that relocates complexity instead of 
 
 Field placement: on each finding, `- **Merge class**: must-fix | should-fix | nit`, immediately after `Confidence` (before `Fix sketch`). The shared finding template (`references/finding-format.md`) is unchanged — this field is PR-review-only.
 
+> **Engine check (when available):** run `mstar lint <file.md>` with `--type finding` (add `--pr-variant` for the PR Merge-class contract) — or `import { validateFindingDoc } from "@mstar-harness/engine"` in a host hook — to machine-check a findings document: `### [CATEGORY-NN]` numbering, category / effort / risk / confidence enums, evidence `path:line` shape, and the Merge-class presence/enum/placement rule. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+
 ## Tally and derived score
 
 Verbatim, applied after the three-way vet to **accepted** findings, then leftover unmet ACs:
@@ -250,6 +222,8 @@ ship it + score_pct < 100    → allowed (nits and/or unverified deducted)
 High score_pct never means APPROVE. Low score_pct never means REQUEST_CHANGES.
 ```
 
+> **Engine check (when available):** the invariant is enforced structurally — `computePrTally` derives the verdict from the tally before the score is computed, and `mstar pr-review validate-report` flags a `verdict` that does not follow from the report's own tally (`prreview.report.verdict-mismatch`, severity high). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+
 ### Worked examples (check table)
 
 | must / should / nit / unverified | score_pct | verdict | Display line |
@@ -264,7 +238,9 @@ High score_pct never means APPROVE. Low score_pct never means REQUEST_CHANGES.
 | 1 / 2 / 1 / 1 | 17 | `blocked` | `blocked · 17%` |
 | 3 / 0 / 0 / 0 | 0 (floor) | `blocked` | `blocked · 0%` |
 
-`blocked · 60%` is still not shippable. `needs fixes · 85%` still means address findings.
+`blocked · 60%` is still not shippable. `needs fixes · 85%` still means address findings. This table is mirrored row-for-row as the engine test fixture (`packages/engine/test/prreview.test.ts`) — the table text is kept here as the historical SSOT anchor.
+
+> **Engine check (when available):** run `mstar pr-review tally --findings <file.json> [--unverified <n>] [--unmet-ac-unsafe <n>] [--unmet-ac-safe <n>]` (or `import { computePrTally } from "@mstar-harness/engine"` in a host hook) to compute this tally, verdict and score from the accepted findings JSON — the check table above is the SSOT the engine fixture mirrors (`packages/engine/test/prreview.test.ts`); never hand-compute when the CLI is available. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 ## Originating spec discovery
 
@@ -333,25 +309,14 @@ Posting the GitHub Review is a **mandatory deliverable** of the `pr` variant —
 
 ### Procedure
 
-Executed by the main agent at Stage 3 — review seats never run this procedure.
+Executed by the main agent at Stage 3 — review seats never run this procedure. The following are the binding contracts, independent of who executes:
 
-1. Resolve the target — the **base** `owner/repo` (the repository that owns the PR number), PR number, head SHA:
-   ```
-   gh pr view <n> --json url,headRefOid
-   ```
-   `headRefOid` is the `commit_id`. Parse `owner/repo` from `url` (`https://github.com/{owner}/{repo}/pull/{n}`) — that is the **base** repo. **Never** use `headRepository` (a fork's owner/name); Reviews API paths are scoped to the repo that owns the PR.
-2. Build one review payload:
-   - `event`: `COMMENT` — **never** `APPROVE`, **never** `REQUEST_CHANGES`, never a merge.
-   - `commit_id`: the PR head SHA.
-   - `body`: follow **§ Report template (below)** — three sections (Verdict → Review → Plan to fix). `event` stays `COMMENT` — **never** `APPROVE`, **never** `REQUEST_CHANGES`, never a merge.
-   - `comments[]`: one entry per finding whose `path` + `line` is in the three-dot diff, `side: RIGHT`. Finding body = title + evidence + impact + fix sketch — not the whole plan.
-3. Post it:
-   ```
-   gh api --method POST repos/{owner}/{repo}/pulls/<n>/reviews --input -
-   ```
-   (payload on stdin).
-4. **Line fallback:** if GitHub rejects some inline comments (e.g. 422 — line not in the diff), retry the review **without** those entries and fold them into the summary body. Do not loop more than once.
-5. Save the local report (§ Local report archive) — **mandatory in all three branches**: POST succeeded (record `html_url` / review id for `comments:` first), POST failed, or `n/a-no-pr` (archive the chat display content). Only then clean up the worktree; bare branch/diff reviews have no worktree, but the save still happens.
+1. **Target resolution** — the **base** repo is `owner/repo` parsed from the PR `url` (`https://github.com/{owner}/{repo}/pull/{n}`); `commit_id` is `headRefOid`. **Never** derive the repo from `headRepository` (the fork view) — Reviews API paths are scoped to the repository that owns the PR number.
+2. **Payload** — `event` is the fixed literal `COMMENT` (**never** `APPROVE`, **never** `REQUEST_CHANGES`, never a merge — the engine's literal type admits no other value); `body` follows **§ Report template (below)**; `comments[]`: one entry per finding whose `path` + `line` sits in the three-dot diff, `side: RIGHT` — finding body = title + evidence + impact + fix sketch, not the whole plan.
+3. **Line fallback** — if GitHub rejects some inline comments (e.g. 422 — line outside the diff), retry the review **once**, without exactly the rejected entries and with them folded into the summary body; never loop a second time.
+4. **Save the local report (§ Local report archive) — mandatory in all three branches**: POST succeeded (record `html_url` / review id for `comments:` first), POST failed, or `n/a-no-pr` (archive the chat display content). Only then clean up the worktree (§ Worktree isolation); bare branch/diff reviews have no worktree, but the save still happens.
+
+> **Engine check (when available):** run `mstar pr-review post --pr <n> --body-file <path> [--findings <file.json>]` (or `import { planReviewPost } from "@mstar-harness/engine"` in a host hook) to execute these contracts mechanically — url-based repo resolution, the `COMMENT` literal, payload POST via stdin, and the at-most-once 422 fallback printing `review_url`; auth/API failure exits 1 (`comments: failed`). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 ### Report template (GitHub Review `body`)
 
@@ -450,6 +415,7 @@ The posted PR comment is the deliverable; the local report is the durable refere
   verdict: ship it | needs fixes | blocked
   score_pct: <n>
   tally: { must-fix: <n>, should-fix: <n>, nit: <n>, unverified: <n> }
+  comments: posted | n/a-no-pr | failed   # posting tri-state — never collapse failed into n/a-no-pr ("yes" = posted alias)
   review_url: <posted review html_url>   # n/a-no-pr when skipped; failed: <gh error summary> when POST failed
   generated_at: <YYYY-MM-DD>
   pipeline: {stages: 3, seats: [<seat ids>]}   # optional — omit when the review did not run the three-stage pipeline
@@ -459,6 +425,8 @@ The posted PR comment is the deliverable; the local report is the durable refere
 `head:` / `base:` are omitted when genuinely unknown (arbitrary diff without stated provenance) — never fabricate identifiers.
 
 **Posting failure does not skip archival.** The report is saved regardless of the POST outcome: on failure it archives the chat display content plus the `gh` error summary, so a failed POST still leaves the durable copy.
+
+> **Engine check (when available):** run `mstar pr-review report-path --reports-dir <dir> --target pr:<n>|branch:<slug>|diff:<sha>|diff [--stage 1|2 --slug <domain-seat>] [--date <YYYY-MM-DD>]` (or `import { prReviewReportPath } from "@mstar-harness/engine"` in a host hook) to resolve the Filename / Evidence-file names above — including the same-day `-r2`/`-r3` escalation, which the resolver scans for instead of the agent eyeballing the directory. Pure resolution: it never writes; the main agent still writes the file content. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 - **Body**: the exact text posted as the GitHub Review body — verbatim, not a paraphrase. When `comments: n/a-no-pr` or posting failed, the body is the chat display content instead (§ Display contract two lines + ranked findings + leftover AC), so the local copy is still complete.
 - Fix plans referenced by the Plan-to-fix section keep living in `{PLAN_DIR}/audit-<date>/` when written — the report links them, never duplicates them.
 
@@ -483,6 +451,8 @@ The posted PR comment is the deliverable; the local report is the durable refere
   - `plans_folded: yes` | `no`
 
 - `- report:` — local archive path (§ Local report archive), e.g. `{PROJECT_DIR}/<project-id>/reports/pr-review/2026-08-24-pr134.md` (`_default` when project-less); `n/a` only when the harness dir is undiscoverable.
+
+> **Engine check (when available):** run `mstar pr-review validate-report <file.md>` (or `import { validatePrReviewReport } from "@mstar-harness/engine"` in a host hook) to machine-check a saved local report against the Frontmatter + Output-shape contract above — verdict-from-tally consistency, the locked-formula `score_pct` recompute, the comments tri-state (a failed POST is `failed`, never `n/a-no-pr`), the required-field set (`type`, `verdict`, `score_pct`, `tally`, `comments`, `review_url`, `generated_at`) and `generated_at` format. Exit 1 with violations; run it before worktree cleanup. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 ### Display contract (chat output)
 
