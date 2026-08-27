@@ -28,7 +28,7 @@
  *   missing / corrupt / bin-less manifests each return one explicit
  *   failure row (never a silent skip that would flood every citation).
  * - checkEngineCallouts real-corpus pin (F-S3) — the shipped skills corpus
- *   yields exactly 44 Engine-check callouts / 42 CLI citations against the
+ *   yields exactly 45 Engine-check callouts / 43 CLI citations against the
  *   live CLI inventory + declared bins (4 lease/seats callouts consolidated
  *   to canonical pointers by plan 20260822-skill-pointer-hygiene Task 2);
  *   corpus drift goes red.
@@ -269,7 +269,7 @@ describe("checkEngineCallouts — Guard 1 CLI citation binary-prefix check", () 
     const SKILLS_ROOT = join(REPO_ROOT, "skills");
 
     /** Every `.md` file under skills/ with the repo-relative `rel` Guard 1
-     * sees in main — the 34/31 counts are a regression pin: adding or
+     * sees in main — the 45/43 counts are a regression pin: adding or
      * removing a backticked CLI citation inside an Engine-check callout
      * (or adding a callout) fails this test loudly. */
     const realCorpus = () => {
@@ -305,9 +305,55 @@ describe("checkEngineCallouts — Guard 1 CLI citation binary-prefix check", () 
       engineExports,
       binNames,
     });
-    expect(calloutsChecked).toBe(44);
-    expect(cliCitationsChecked).toBe(42);
+    expect(calloutsChecked).toBe(45);
+    expect(cliCitationsChecked).toBe(43);
     expect(failures).toEqual([]);
+  });
+});
+
+describe("buildCliCommandInventory — enumerated .argument composites (SP3 fix wave 1)", () => {
+  test("enumerated <kind> argument registers `parent <token>` composites on the command and its subcommand", () => {
+    const { cliCommands, failures } = buildCliCommandInventory(
+      [
+        'const persistCommand = program\n  .command("persist");',
+        'persistCommand\n  .argument("<kind>", "status | snapshot | residuals | review | json");',
+        'persistCommand\n  .command("get")\n  .argument("<kind>", "status | snapshot | residuals | review | json");',
+      ].join("\n"),
+    );
+    expect(failures).toEqual([]);
+    for (const cmd of [
+      "persist",
+      "persist status",
+      "persist snapshot",
+      "persist residuals",
+      "persist review",
+      "persist json",
+      "persist get",
+      "persist get status",
+      "persist get review",
+      "persist get json",
+    ]) {
+      expect(cliCommands.has(cmd)).toBe(true);
+    }
+  });
+
+  test("non-enumeration argument descriptions register no composites", () => {
+    const { cliCommands, failures } = buildCliCommandInventory(
+      'const harnessCommand = program\n  .command("harness");\n' +
+        'harnessCommand\n  .command("scaffold")\n  .argument("[path]", "Root to scaffold (default: cwd)");',
+    );
+    expect(failures).toEqual([]);
+    expect(cliCommands.has("harness")).toBe(true);
+    expect(cliCommands.has("harness scaffold")).toBe(true);
+    expect(cliCommands.has("harness scaffold path")).toBe(false);
+    expect([...cliCommands].some((c) => c.includes("default: cwd"))).toBe(false);
+  });
+
+  test("argument on an unknown command var fails loud", () => {
+    const { failures } = buildCliCommandInventory('mysteryCommand\n  .argument("<kind>", "status | review");');
+    expect(failures).toEqual([
+      expect.stringContaining('CLI parent of "mysteryCommand.argument("<kind>")" is not a known command var'),
+    ]);
   });
 });
 

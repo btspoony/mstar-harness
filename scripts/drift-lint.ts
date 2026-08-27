@@ -409,7 +409,10 @@ export function buildEngineExportNames(engineIndex: string): Set<string> {
 }
 
 /** CLI command inventory from `packages/cli/src/index.ts` — every
- * `.command("name")` path (single tokens plus `parent child` composites). */
+ * `.command("name")` path (single tokens plus `parent child` composites)
+ * and every enumerated `.argument("<name>", "tok1 | tok2 | ...")` token as a
+ * `parent tok` composite (e.g. `persist review` from `persist <kind>` with
+ * kind = "status | snapshot | residuals | review | json"). */
 export function buildCliCommandInventory(cliSrc: string): {
   cliCommands: Set<string>;
   failures: string[];
@@ -417,22 +420,78 @@ export function buildCliCommandInventory(cliSrc: string): {
   const cliCommands = new Set<string>();
   const varPaths = new Map<string, string>();
   const failures: string[] = [];
-  const commandRe = /(?:const\s+(\w+)\s*=\s*program\s*|(\w+)\s*)\.command\(\s*"([a-z-]+)"\s*\)/g;
+  // One pass keeps document order: `.command` advances the current chain
+  // path (`const X = program.command("p")` or `X.command("sub")`), a
+  // receiver-less `.command`/`.argument` hangs off that chain, and `.action`
+  // closes it (a fresh statement re-resolves parents from varPaths).
+  const chainRe =
+    /(?:const\s+(\w+)\s*=\s*program\s*|(\w+)\s*)?\.(?:command\(\s*"([a-z-]+)"\s*\)|argument\(\s*"([^"]+)"\s*,\s*"((?:[^"\\]|\\.)*)"\s*\)|action\(\s*(?:async\s*)?)/g;
+  // Enumerated argument descriptions: an all-lowercase `a-z-`-token list.
+  const enumRe = /^[a-z-]+(?:\s*\|\s*[a-z-]+)+$/;
+  // Current chain: the command path a receiver-less call hangs off.
+  let chainVar: string | null = null;
+  let chainPath: string | null = null;
   let m: RegExpExecArray | null;
-  while ((m = commandRe.exec(cliSrc))) {
-    const [, declared, receiver, name] = m;
-    if (declared) {
-      varPaths.set(declared, name);
-      cliCommands.add(name);
-    } else if (receiver === "program") {
-      cliCommands.add(name);
-    } else {
-      const parent = varPaths.get(receiver);
-      if (parent === undefined) {
-        failures.push(`CLI parent of "${receiver}.command("${name}")" is not a known command var`);
+  while ((m = chainRe.exec(cliSrc))) {
+    const declared = m[1];
+    const receiver = m[2];
+    const commandName = m[3];
+    const argName = m[4];
+    const argDesc = m[5];
+    if (commandName !== undefined) {
+      if (declared) {
+        varPaths.set(declared, commandName);
+        cliCommands.add(commandName);
+        chainVar = declared;
+        chainPath = commandName;
         continue;
       }
-      cliCommands.add(parent ? `${parent} ${name}` : name);
+      if (receiver === "program") {
+        cliCommands.add(commandName);
+        chainVar = "program";
+        chainPath = commandName;
+        continue;
+      }
+      const parent =
+        receiver === undefined
+          ? chainPath
+          : chainVar === receiver && chainPath !== null
+            ? chainPath
+            : varPaths.get(receiver);
+      if (parent === undefined) {
+        failures.push(
+          receiver === undefined
+            ? `CLI subcommand "${commandName}" is not attached to a known command chain`
+            : `CLI parent of "${receiver}.command("${commandName}")" is not a known command var`,
+        );
+        continue;
+      }
+      const path = parent ? `${parent} ${commandName}` : commandName;
+      cliCommands.add(path);
+      if (receiver !== undefined) chainVar = receiver;
+      chainPath = path;
+    } else if (argName !== undefined) {
+      const parent =
+        receiver !== undefined && (chainVar !== receiver || chainPath === null)
+          ? varPaths.get(receiver)
+          : chainPath;
+      if (parent === undefined) {
+        failures.push(
+          receiver !== undefined
+            ? `CLI parent of "${receiver}.argument("${argName}")" is not a known command var`
+            : `CLI argument "${argName}" is not attached to a known command chain`,
+        );
+        continue;
+      }
+      const desc = argDesc.trim();
+      if (!enumRe.test(desc)) continue;
+      for (const token of desc.split("|").map((t) => t.trim())) {
+        cliCommands.add(`${parent} ${token}`);
+      }
+    } else {
+      // `.action(...)` — the command chain ends here.
+      chainVar = null;
+      chainPath = null;
     }
   }
   return { cliCommands, failures };
