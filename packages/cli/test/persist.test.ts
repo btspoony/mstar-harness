@@ -111,7 +111,27 @@ const SNAPSHOT_PAYLOAD = {
   plans: [],
 };
 const RESIDUALS_PAYLOAD = { entries: {} };
-const REVIEW_PAYLOAD = { verdict: "approve" };
+/** Minimal valid `mstar.review/v1` envelope (SP3-AC1 shape; tally consistent
+ * — {1 should-fix, 1 nit} ⇒ 100-15-3=82, needs fixes). */
+const REVIEW_PAYLOAD = {
+  schema: "mstar.review/v1",
+  verdict: "needs fixes",
+  summary_md: "2 findings: 1 should-fix, 1 nit.",
+  findings: [
+    {
+      mergeClass: "should-fix",
+      title: "Unhandled null deref",
+      body: "foo() can return null before the call site dereferences it.",
+    },
+    { mergeClass: "nit", title: "Typo in comment", body: "s/recieve/receive/" },
+  ],
+  tally: {
+    verdict: "needs fixes",
+    scorePct: 82,
+    tally: { mustFix: 0, shouldFix: 1, nit: 1, unverified: 0 },
+    chatHeader: "needs fixes \u00b7 82%\nmust-fix=0 should-fix=1 nit=1 unverified=0",
+  },
+};
 
 /** Self-contained store module (plain factory — no engine import): put/get
  * over a single JSON file whose path comes from `envVar`. */
@@ -128,6 +148,22 @@ function storeModuleSource(envVar: string): string {
     '      const stored = JSON.parse(readFileSync(file, "utf8"));',
     "      return stored.key === ref.key ? stored.payload : undefined;",
     "    },",
+    "  };",
+    "}",
+  ].join("\n");
+}
+
+/** Self-contained recording store module: writes {kind, key, payload} so a
+ * test can assert the kind that reached the store's put (SP3-AC6). */
+function recordingStoreModuleSource(envVar: string): string {
+  return [
+    'import { writeFileSync } from "node:fs";',
+    `const file = process.env.${envVar};`,
+    `if (!file) throw new Error("${envVar} is required");`,
+    "export function createArtifactStore() {",
+    "  return {",
+    "    async put(doc) { writeFileSync(file, JSON.stringify({ kind: doc.kind, key: doc.key, payload: doc.payload })); },",
+    "    async get() { return undefined; },",
     "  };",
     "}",
   ].join("\n");
@@ -262,6 +298,66 @@ describe("mstar persist — validators run before put (SP2-AC5)", () => {
       });
       expect(r.exitCode).toBe(1);
       expect(r.stderr).toContain("not valid JSON");
+    });
+  });
+});
+
+describe("mstar persist review — validateMstarReviewV1 before put (SP3-AC6)", () => {
+  test("rejects an inspector M1 vocab envelope (exit 1, no write)", () => {
+    withTempDir((dir) => {
+      const payloadFile = writePayload(dir, "m1-review.json", { verdict: "approve" });
+      const r = runCli(["persist", "review", "--key", "20260827-review-json", "--file", payloadFile], {
+        env: harnessEnv(dir),
+      });
+      expect(r.exitCode).toBe(1);
+      expect(r.stderr).toContain("refusing to persist invalid review document");
+      expect(r.stderr).toContain("review.inspector-vocab");
+      expect(existsSync(join(dir, "sdd", "20260827-review-json", "review", "report.json"))).toBe(false);
+    });
+  });
+
+  test("rejects a missing-schema envelope (exit 1, no write)", () => {
+    withTempDir((dir) => {
+      const payloadFile = writePayload(dir, "no-schema.json", {
+        verdict: "needs fixes",
+        summary_md: "summary",
+        findings: [],
+      });
+      const r = runCli(["persist", "review", "--key", "review-abc", "--file", payloadFile], { env: harnessEnv(dir) });
+      expect(r.exitCode).toBe(1);
+      expect(r.stderr).toContain("refusing to persist invalid review document");
+      expect(r.stderr).toContain("review.missing-schema");
+      expect(existsSync(join(dir, "sdd", "_reviews", "review-abc.json"))).toBe(false);
+    });
+  });
+
+  test("rejects a verdict/tally mismatch (exit 1, no write)", () => {
+    withTempDir((dir) => {
+      const mismatched = { ...REVIEW_PAYLOAD, verdict: "ship it" };
+      const payloadFile = writePayload(dir, "mismatch.json", mismatched);
+      const r = runCli(["persist", "review", "--key", "pr-42", "--file", payloadFile], { env: harnessEnv(dir) });
+      expect(r.exitCode).toBe(1);
+      expect(r.stderr).toContain("refusing to persist invalid review document");
+      expect(r.stderr).toContain("review.verdict-tally-mismatch");
+      expect(existsSync(join(dir, "sdd", "_reviews", "pr-42.json"))).toBe(false);
+    });
+  });
+
+  test("recording store receives kind: review for a valid envelope (SP3-AC6)", () => {
+    withTempDir((dir) => {
+      const moduleFile = join(dir, "recording-store.ts");
+      writeFileSync(moduleFile, recordingStoreModuleSource("RECORDING_STORE_FILE"), "utf8");
+      const outFile = join(dir, "recorded.json");
+      const payloadFile = writePayload(dir, "review.json", REVIEW_PAYLOAD);
+
+      const put = runCli(["persist", "review", "--key", "pr-134", "--file", payloadFile, "--store", moduleFile], {
+        env: { RECORDING_STORE_FILE: outFile },
+      });
+      expect(put.exitCode).toBe(0);
+      const recorded = JSON.parse(readFileSync(outFile, "utf8"));
+      expect(recorded.kind).toBe("review");
+      expect(recorded.key).toBe("pr-134");
+      expect(recorded.payload).toEqual(REVIEW_PAYLOAD);
     });
   });
 });
