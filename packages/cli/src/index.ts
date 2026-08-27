@@ -104,7 +104,7 @@ import { runMigrateCommand, type MigrateCliOptions } from "./commands/migrate";
 import { validateAgentPlugin } from "./agent-plugins";
 import { buildModelAssignments } from "./assignment";
 import { getAdapter } from "./adapters";
-import { ensureGlobalCli } from "./global-cli";
+import { defaultDetectVersion, ensureGlobalCli, formatCliDoctorNote } from "./global-cli";
 import type { DoctorOptions, InitOptions, PluginValidateOptions, Target } from "./types";
 import { SUPPORTED_TARGETS } from "./types";
 import { parseCsv, readJson, writeJson, readHarnessVersion, resolveCliPath, resolveProjectRoot } from "./utils";
@@ -229,6 +229,9 @@ function runDoctor(options: DoctorOptions) {
   const adapter = getAdapter(target);
   const scope = options.scope || "project";
   console.log(`Target: ${target}`);
+  // CLI-on-PATH note (SP1-AC6): informational for every target, never part
+  // of doctor errors and never affects the exit code.
+  console.log(formatCliDoctorNote(defaultDetectVersion(), packageVersion));
 
   if (adapter.mode === "install") {
     const result = adapter.runInstallDoctor?.(scope);

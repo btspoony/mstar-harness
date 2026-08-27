@@ -14,7 +14,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { ensureGlobalCli } from "./global-cli";
+import { ensureGlobalCli, formatCliDoctorNote } from "./global-cli";
 import { readHarnessVersion } from "./utils";
 
 const BASE = { version: "3.4.0", dryRun: false, noGlobalCli: false };
@@ -86,6 +86,26 @@ describe("ensureGlobalCli", () => {
       spec: "@mstar-harness/cli@3.4.0",
       message: "EACCES: permission denied",
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 3 doctor note — pure three-state formatter (SP1-AC6). The detected
+// value is injected (a literal here): no PATH probing, no subprocesses, no
+// dependence on the machine's PATH.
+// ---------------------------------------------------------------------------
+
+describe("formatCliDoctorNote", () => {
+  test("missing on PATH names the expected version", () => {
+    expect(formatCliDoctorNote(null, "3.4.0")).toBe("CLI on PATH: mstar-harness not found (expected version 3.4.0)");
+  });
+
+  test("version mismatch shows both versions", () => {
+    expect(formatCliDoctorNote("2.1.0", "3.4.0")).toBe("CLI on PATH: mstar-harness 2.1.0 (expected 3.4.0)");
+  });
+
+  test("matching version", () => {
+    expect(formatCliDoctorNote("3.4.0", "3.4.0")).toBe("CLI on PATH: mstar-harness 3.4.0 (matching)");
   });
 });
 

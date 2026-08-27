@@ -19,8 +19,12 @@ export type EnsureGlobalCliResult =
 
 const CLI_NAME = "mstar-harness";
 
-/** Spawn `mstar-harness --version`; any failure (missing binary, non-zero) means not on PATH. */
-function defaultDetectVersion(): string | null {
+/**
+ * Spawn `mstar-harness --version`; any failure (missing binary, non-zero)
+ * means not on PATH. Shared default for `ensureGlobalCli` and the doctor
+ * CLI-on-PATH note — one probe, no duplicated spawn code.
+ */
+export function defaultDetectVersion(): string | null {
   try {
     const out = execFileSync(CLI_NAME, ["--version"], { encoding: "utf8" });
     return out.trim();
@@ -69,4 +73,21 @@ export function ensureGlobalCli(opts: EnsureGlobalCliOpts): EnsureGlobalCliResul
     log(`Global CLI install failed: ${message}`);
     return { action: "failed", spec, message };
   }
+}
+
+/**
+ * One-line doctor note about the mstar-harness CLI on PATH (SP1-AC6).
+ * Informational only: `runDoctor` prints it for every target without adding
+ * it to doctor errors and without changing the exit code. Three states:
+ * missing on PATH, present with a different version (both versions shown),
+ * present and matching.
+ */
+export function formatCliDoctorNote(detected: string | null, expected: string): string {
+  if (detected === null) {
+    return `CLI on PATH: mstar-harness not found (expected version ${expected})`;
+  }
+  if (detected !== expected) {
+    return `CLI on PATH: mstar-harness ${detected} (expected ${expected})`;
+  }
+  return `CLI on PATH: mstar-harness ${detected} (matching)`;
 }
