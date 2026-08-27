@@ -383,3 +383,43 @@ describe("appendProjectRegisterEntries — fail-loud rejection (Task 2 contract 
     }
   });
 });
+
+describe("fail-loud path agreement (qc3 F-201) — register writers vs the active store root", () => {
+  test("appendProjectRegisterEntries fails loud when projectDir lies outside the store root; nothing written", async () => {
+    const root = tmpRoot("backlog-append-outside-");
+    const other = tmpRoot("backlog-outside-");
+    setArtifactStore(createFsStore(root));
+    try {
+      const projectDir = join(other, "projects", "test-project");
+      await expect(
+        appendProjectRegisterEntries({
+          projectDir,
+          basePlanKey: "pr-deep-review-2026-08-26",
+          entries: [residualEntry({ id: "R-1" })],
+        }),
+      ).rejects.toThrow(/routed writer path mismatch/);
+      expect(existsSync(join(projectDir, PROJECT_REGISTER_FILE))).toBe(false);
+      expect(existsSync(join(root, "projects", "test-project", PROJECT_REGISTER_FILE))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(other, { recursive: true, force: true });
+    }
+  });
+
+  test("closeProjectRegisterEntry fails loud when projectDir lies outside the store root; nothing written", async () => {
+    const root = tmpRoot("backlog-close-outside-");
+    const other = tmpRoot("backlog-outside-");
+    setArtifactStore(createFsStore(root));
+    try {
+      const projectDir = join(other, "projects", "test-project");
+      await expect(
+        closeProjectRegisterEntry({ projectDir, planKey: "pr-deep-review-2026-08-26", entryId: "R-1", closureNote: "x" }),
+      ).rejects.toThrow(/routed writer path mismatch/);
+      expect(existsSync(join(projectDir, PROJECT_REGISTER_FILE))).toBe(false);
+      expect(existsSync(join(root, "projects", "test-project", PROJECT_REGISTER_FILE))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(other, { recursive: true, force: true });
+    }
+  });
+});

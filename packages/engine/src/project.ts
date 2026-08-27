@@ -43,7 +43,7 @@ import { basename, join, resolve } from "node:path";
 import { readJson, SEVERITY_ORDER, type GateResult, type Severity, type ValidationResult } from "./core.js";
 import { parseCompassFrontmatterText } from "./iteration.js";
 import { withStatusWriteLock } from "./lease.js";
-import { getArtifactStore } from "./store.js";
+import { assertFsStorePath, getArtifactStore } from "./store.js";
 import { isOpenResidual, normalizeSeverity, validateResidual, type ResidualEntry } from "./status.js";
 
 /** Roadmap file name inside `projects/<id>/` (plan Task 4 — writer contract). */
@@ -403,9 +403,13 @@ export type CloseProjectRegisterEntryOpts = {
  * duplicate-id detection), set each entry's `source_plan` to the used key
  * (provenance must match the entries key; the caller cannot know the bumped
  * key beforehand), append preserving every other key, validate the whole
- * register with `validateProjectRegister`, then `writeJson` (atomic
- * temp+rename — never `open(w)`). Fail-loud: any validation failure throws
- * and the register is left untouched. Returns the key actually used.
+ * register with `validateProjectRegister`, then `ArtifactStore.put`
+ * (FsStore uses `writeJson` — atomic temp+rename; never `open(w)`).
+ * Fails loud (qc3 F-201) when the active FsStore would resolve a register
+ * path other than `<projectDir>/residuals.json` — callers whose target root
+ * differs from the active store's root MUST
+ * `setArtifactStore(createFsStore(root))` first. Fail-loud: any validation
+ * failure throws and the register is left untouched. Returns the key used.
  */
 export async function appendProjectRegisterEntries(
   opts: AppendProjectRegisterEntriesOpts,
@@ -416,6 +420,12 @@ export async function appendProjectRegisterEntries(
     throw new Error("refusing to append residual entries: entries must not be empty");
   }
   const registerPath = resolve(join(opts.projectDir, PROJECT_REGISTER_FILE));
+  const projectKey = basename(resolve(opts.projectDir));
+  const store = getArtifactStore();
+  // Fail-loud path agreement (qc3 F-201): the lockdir serializes
+  // `registerPath`; the store put must land on that same file. A divergence
+  // throws before the project dir or lockdir is created.
+  assertFsStorePath(store, { kind: "residuals", key: projectKey }, registerPath);
   // The lockdir lands inside the project dir (dirname of the register); create
   // it up front (mirrors writeWorkflowSnapshot) so a first-time project dir
   // does not fail the lock acquisition with ENOENT.
@@ -470,7 +480,7 @@ export async function appendProjectRegisterEntries(
         `refusing to write invalid project register: ${gate.violations.map((v) => v.message).join("; ")}`,
       );
     }
-    await getArtifactStore().put({ kind: "residuals", key: basename(resolve(opts.projectDir)), payload: register });
+    await store.put({ kind: "residuals", key: projectKey, payload: register });
     return { ok: true as const, key };
   });
 }
@@ -480,11 +490,18 @@ export async function appendProjectRegisterEntries(
  * Task 1): under `withStatusWriteLock(registerPath, ...)`, find `entryId` in
  * `entries[planKey]` (absent → throw), set `lifecycle: resolved` +
  * `closed_at: <today YYYY-MM-DD>` + `closure_note`, validate the whole
- * register with `validateProjectRegister`, then `writeJson` (atomic
- * temp+rename). Fail-loud: an invalid register throws and nothing is written.
+ * register with `validateProjectRegister`, then `ArtifactStore.put`
+ * (FsStore uses `writeJson` — atomic temp+rename).
+ * Fails loud (qc3 F-201) when the active FsStore would resolve a register
+ * path other than `<projectDir>/residuals.json`. Fail-loud: an invalid
+ * register throws and nothing is written.
  */
 export async function closeProjectRegisterEntry(opts: CloseProjectRegisterEntryOpts): Promise<{ ok: true }> {
   const registerPath = resolve(join(opts.projectDir, PROJECT_REGISTER_FILE));
+  const projectKey = basename(resolve(opts.projectDir));
+  const store = getArtifactStore();
+  // Fail-loud path agreement (qc3 F-201): see appendProjectRegisterEntries.
+  assertFsStorePath(store, { kind: "residuals", key: projectKey }, registerPath);
   // See appendProjectRegisterEntries — the lockdir needs its parent to exist.
   mkdirSync(opts.projectDir, { recursive: true });
   return withStatusWriteLock(registerPath, async () => {
@@ -517,7 +534,7 @@ export async function closeProjectRegisterEntry(opts: CloseProjectRegisterEntryO
         `refusing to write invalid project register: ${gate.violations.map((v) => v.message).join("; ")}`,
       );
     }
-    await getArtifactStore().put({ kind: "residuals", key: basename(resolve(opts.projectDir)), payload: register });
+    await store.put({ kind: "residuals", key: projectKey, payload: register });
     return { ok: true as const };
   });
 }

@@ -25,6 +25,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  assertFsStorePath,
   createFsStore,
   getArtifactStore,
   loadStoreModule,
@@ -39,6 +40,13 @@ function tmpRoot(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix));
 }
 
+/**
+ * Run `fn` with `MSTAR_HARNESS_DIR` set to `value` (undefined deletes it),
+ * restoring the previous env in all paths. Caller rule (qc1 S-003): `fn`
+ * must read `process.env` synchronously before its first `await` — the env
+ * window closes as soon as `fn` returns, which for an async callback is
+ * immediately.
+ */
 function withEnv<T>(value: string | undefined, fn: () => T): T {
 	const previous = process.env[ENV_KEY];
 	if (value === undefined) delete process.env[ENV_KEY];
@@ -367,7 +375,47 @@ describe("setArtifactStore / getArtifactStore", () => {
     }
   });
 });
+
 // ---------------------------------------------------------------------------
+// assertFsStorePath — fail-loud path agreement (qc3 F-201)
+// ---------------------------------------------------------------------------
+
+describe("assertFsStorePath — fail-loud path agreement (qc3 F-201)", () => {
+  test("FsStore with the store-resolved path equal to the expected path passes", () => {
+    const root = tmpRoot("store-assert-ok-");
+    try {
+      const store = createFsStore(root);
+      expect(() => assertFsStorePath(store, { kind: "status", key: "root" }, join(root, "status.json"))).not.toThrow();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("FsStore with a diverging expected path throws naming both paths", () => {
+    const root = tmpRoot("store-assert-mismatch-");
+    const other = tmpRoot("store-assert-other-");
+    try {
+      const store = createFsStore(root);
+      const target = join(other, "status.json");
+      let caught: Error | undefined;
+      try {
+        assertFsStorePath(store, { kind: "status", key: "root" }, target);
+      } catch (error) {
+        caught = error as Error;
+      }
+      expect(caught?.message).toMatch(/routed writer path mismatch: the active FsStore resolves status\/"root"/);
+      expect(caught?.message).toContain(target);
+      expect(caught?.message).toContain(join(root, "status.json"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(other, { recursive: true, force: true });
+    }
+  });
+
+  test("custom (non-FS) stores are skipped — the caller owns the mapping", () => {
+    expect(() => assertFsStorePath(recordingStore(), { kind: "status", key: "root" }, "/anywhere/status.json")).not.toThrow();
+  });
+});
 // loadStoreModule — SP2 § Injection 2–3 + SP2-AC6 / SP2-AC7 (trust boundary)
 // ---------------------------------------------------------------------------
 

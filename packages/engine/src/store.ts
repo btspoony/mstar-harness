@@ -49,8 +49,9 @@ const PLAN_SHAPED_KEY_RE = /^[0-9]{8}-[a-z0-9-]+$/;
 
 /** Map an artifact ref to its file path under `harnessRoot` (spec SP2
  * FsStore path table — the single kind→path mapping, shared with SP3;
- * SP3 never re-implements or extends it). */
-function resolveArtifactPath(harnessRoot: string, ref: ArtifactRef): string {
+ * SP3 never re-implements or extends it). Exported (qc1 S-002) so SP3
+ * imports the contract instead of re-deriving it textually. */
+export function resolveArtifactPath(harnessRoot: string, ref: ArtifactRef): string {
   const { kind, key } = ref;
   if (kind === "json") {
     // Escape hatch: caller-supplied absolute path. Not a user-facing AC.
@@ -89,10 +90,14 @@ function resolveArtifactPath(harnessRoot: string, ref: ArtifactRef): string {
  * `put` uses the sync `writeJson` (atomic temp+rename unchanged) and
  * returns a resolved Promise; locks stay with callers (architect-locked
  * 2026-08-27). `get` mirrors `readJson`: missing file → `undefined`,
- * malformed JSON → throw with the path in the message. */
-export function createFsStore(harnessRoot: string): ArtifactStore {
+ * malformed JSON → throw with the path in the message. The returned store
+ * also exposes its resolved `root` so the routed writers can fail loud
+ * when a caller's explicit target path diverges from the store-resolved
+ * path (qc3 F-201); `root` is not part of the `ArtifactStore` contract. */
+export function createFsStore(harnessRoot: string): ArtifactStore & { root: string } {
   const root = resolve(harnessRoot);
   return {
+    root,
     async put(doc: ArtifactDoc): Promise<void> {
       writeJson(resolveArtifactPath(root, doc), doc.payload);
     },
@@ -130,6 +135,29 @@ export function getArtifactStore(): ArtifactStore {
   }
   return createFsStore(root);
 }
+
+/**
+ * Fail-loud path-agreement guard for the routed writers (qc3 F-201): when
+ * `store` is an FsStore, resolve the path the store would compute for
+ * `ref` and require it to equal `expectedPath` (the caller's explicit
+ * target). A divergence means the caller's path lives outside the active
+ * store's root — the lockdir would serialize the parameter path while the
+ * put lands at the store root (silent decoupling / split-brain window).
+ * Custom (non-FS) stores own their mapping by design and are skipped.
+ * Cheap: pure path resolution, no I/O.
+ */
+export function assertFsStorePath(store: ArtifactStore, ref: ArtifactRef, expectedPath: string): void {
+  const root = (store as ArtifactStore & { root?: unknown }).root;
+  if (typeof root !== "string") return; // custom store — the caller's contract
+  const storePath = resolveArtifactPath(root, ref);
+  const expected = resolve(expectedPath);
+  if (storePath !== expected) {
+    throw new Error(
+      `routed writer path mismatch: the active FsStore resolves ${ref.kind}/${JSON.stringify(ref.key)} to ${JSON.stringify(storePath)} but the caller's target is ${JSON.stringify(expected)} \u2014 call setArtifactStore(createFsStore(<root>)) first when the write target differs from the active store's root`,
+    );
+  }
+}
+
 /** Trust boundary (architect-locked 2026-08-27): `loadStoreModule` accepts
  * filesystem paths only. Any URI scheme (`http:`, `https:`, `file:`,
  * `data:`, `node:`, ...) is rejected before `import()` — no remote loader. */

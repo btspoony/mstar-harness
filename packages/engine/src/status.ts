@@ -37,7 +37,7 @@ import { dirname, join, resolve, sep } from "node:path";
 import { readJson, SEVERITY_ORDER, type GateResult, type Severity, type ValidationResult } from "./core.js";
 import { resolveIterationDir } from "./path.js";
 import { withStatusWriteLock } from "./lease.js";
-import { getArtifactStore } from "./store.js";
+import { assertFsStorePath, getArtifactStore } from "./store.js";
 import { parseEnforcementFlag, type EnforcementFlag } from "./dispatch.js";
 import { loadMstarc } from "./mstarc.js";
 // Call-time-only cycle with workflow.ts (workflow.ts imports validatePlanRow
@@ -689,6 +689,10 @@ export const validateStatus = validateStatusV2;
  * Async-only (architect-locked 2026-08-27): the durable write goes through
  * `getArtifactStore().put({ kind: "status", key: "root", ... })` inside the
  * caller's lock — the store is the persist backend, never a second lock.
+ * Fails loud (qc3 F-201) when the active FsStore would resolve its
+ * `status.json` to a path other than `statusPath` — callers whose root
+ * differs from the active store's root MUST
+ * `setArtifactStore(createFsStore(root))` first.
  */
 export async function registerWorkflowEntryLocked(statusPath: string, entry: WorkflowEntry): Promise<StatusV2Doc> {
   // simplify: full-doc validation (incl. per-snapshot reads of the whole
@@ -696,6 +700,11 @@ export async function registerWorkflowEntryLocked(statusPath: string, entry: Wor
   // Realistic active-set size is 1–3 (microseconds); correctness-preserving.
   // Upgrade path: scope the on-disk invariant to the touched entry (qc3 S-002).
   const harnessDir = dirname(statusPath);
+  const store = getArtifactStore();
+  // Fail-loud path agreement (qc3 F-201): the caller's lock serializes
+  // `statusPath`; the store put must land on that same file. A divergence
+  // throws before any read-modify-write — nothing is written anywhere.
+  assertFsStorePath(store, { kind: "status", key: "root" }, statusPath);
   const current = readJson(statusPath) as Record<string, unknown>;
   const fresh = Object.keys(current).length === 0;
   const doc: StatusV2Doc = fresh
@@ -717,7 +726,7 @@ export async function registerWorkflowEntryLocked(statusPath: string, entry: Wor
   if (!gate.ok) {
     throw new Error(`refusing to write invalid status.json: ${gate.violations.map((v) => v.message).join("; ")}`);
   }
-  await getArtifactStore().put({ kind: "status", key: "root", payload: doc });
+  await store.put({ kind: "status", key: "root", payload: doc });
   return doc;
 }
 
@@ -752,12 +761,21 @@ export async function registerWorkflow(root: string, entry: WorkflowEntry): Prom
  * actually removed. The final document is validated (removal-at-terminal
  * invariant included) before the write — a v1 root is refused with the
  * `mstar migrate` hint.
+ *
+ * Fails loud (qc3 F-201) when the active FsStore would resolve its
+ * `status.json` to a path other than the caller's root — the no-op branches
+ * below never mask a store/path mismatch.
  */
 export async function unregisterWorkflow(root: string, id: string): Promise<StatusV2Doc> {
   if (typeof id !== "string" || id.trim() === "") {
     throw new Error("refusing to unregister workflow: id must be a non-empty string");
   }
   const statusPath = resolve(root);
+  const store = getArtifactStore();
+  // Fail-loud path agreement (qc3 F-201): the lockdir serializes
+  // `statusPath`; the store put must land on that same file. A divergence
+  // throws before the lockdir is created — nothing is written anywhere.
+  assertFsStorePath(store, { kind: "status", key: "root" }, statusPath);
   const harnessDir = dirname(statusPath);
   return withStatusWriteLock(statusPath, async () => {
     // simplify: same O(active) full-doc validation as registerWorkflow (qc3 S-002).
@@ -782,7 +800,7 @@ export async function unregisterWorkflow(root: string, id: string): Promise<Stat
     if (!gate.ok) {
       throw new Error(`refusing to write invalid status.json: ${gate.violations.map((v) => v.message).join("; ")}`);
     }
-    await getArtifactStore().put({ kind: "status", key: "root", payload: doc });
+    await store.put({ kind: "status", key: "root", payload: doc });
     return doc;
   });
 }

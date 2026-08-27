@@ -403,4 +403,22 @@ describe("writeWorkflowSnapshot — whole-rewrite under withStatusWriteLock", ()
       rmSync(root, { recursive: true, force: true });
     }
   });
+  test("fails loud when dir lies outside the active store root (qc3 F-201); nothing written anywhere", async () => {
+    const root = tmpRoot("workflow-writer-");
+    const other = tmpRoot("workflow-outside-");
+    setArtifactStore(createFsStore(root));
+    try {
+      const dir = join(other, "workflows", "20260819-workflow-engine-core");
+      const snapshot = validSnapshot();
+      await expect(writeWorkflowSnapshot(snapshot as never, dir)).rejects.toThrow(/routed writer path mismatch/);
+      // The guard fires before mkdir/lockdir creation — neither the caller's
+      // target nor the store-resolved path receives a snapshot file.
+      expect(existsSync(join(dir, WORKFLOW_SNAPSHOT_FILE))).toBe(false);
+      expect(existsSync(join(root, "workflows", "20260819-workflow-engine-core", WORKFLOW_SNAPSHOT_FILE))).toBe(false);
+      expect(existsSync(join(dir, ".status-write.lockdir"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(other, { recursive: true, force: true });
+    }
+  });
 });

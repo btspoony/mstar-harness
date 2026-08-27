@@ -717,6 +717,37 @@ describe("registerWorkflow / unregisterWorkflow (root writers under the root-fil
       rmSync(dir, { recursive: true, force: true });
     }
   });
+  test("registerWorkflow fails loud when the root file lies outside the store root (qc3 F-201); nothing written", async () => {
+    const root = tmpRoot("status-register-outside-");
+    const other = tmpRoot("status-outside-");
+    setArtifactStore(createFsStore(root));
+    try {
+      const statusPath = join(other, "status.json");
+      await expect(registerWorkflow(statusPath, entry)).rejects.toThrow(/routed writer path mismatch/);
+      expect(existsSync(statusPath)).toBe(false);
+      expect(existsSync(join(root, "status.json"))).toBe(false);
+      expect(existsSync(join(other, ".status-write.lockdir"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(other, { recursive: true, force: true });
+    }
+  });
+
+  test("unregisterWorkflow fails loud when the root file lies outside the store root (qc3 F-201); nothing written", async () => {
+    const root = tmpRoot("status-unregister-outside-");
+    const other = tmpRoot("status-outside-");
+    setArtifactStore(createFsStore(root));
+    try {
+      const statusPath = join(other, "status.json");
+      await expect(unregisterWorkflow(statusPath, "wf-1")).rejects.toThrow(/routed writer path mismatch/);
+      expect(existsSync(statusPath)).toBe(false);
+      expect(existsSync(join(root, "status.json"))).toBe(false);
+      expect(existsSync(join(other, ".status-write.lockdir"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(other, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("findingsCleanupGate — project register input (v3 relocation, QC wave-1 W-E array schema)", () => {
