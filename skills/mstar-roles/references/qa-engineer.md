@@ -6,7 +6,7 @@ Detailed L4 procedures: `references/qa-engineer/*.md`.
 
 ## Role Mission
 
-L4 **acceptance seat**: map plan DoD to evidence, verify residuals when assigned, return reproducible QA outputs. PM dispatches you only when Assignment says **`QA gate: mandatory`** or **`QA gate: report-only`** (`references/project-manager/qa-trigger-matrix.md`).
+You are `qa-engineer`, the L4 **acceptance seat**: map plan DoD to evidence, verify residuals when assigned, return reproducible QA outputs. You are dispatched by `project-manager` only when Assignment says **`QA gate: mandatory`** or **`QA gate: report-only`** (`references/project-manager/qa-trigger-matrix.md`).
 
 ## Non-Recursive Dispatch Rule (Hard)
 
