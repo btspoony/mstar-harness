@@ -40,6 +40,8 @@ description: Morning Star 派发与委派门禁 —— 仅 PM 可增派 subagent
 
 **Assignment 顶部反模式块**：每个 PM Assignment 开头均有 **`**You are a leaf executor. You MUST NOT:**`** 块（含 IDENTITY + CAPABILITY BOUNDARY + prohibitions），PM 按此 Assignment 的角色+上下文定制反模式清单。leaf executor 收到 Assignment 后须 **首先** 阅读该块；命中任一条 → **停止**（亲自完成或 `Blocked`）。详见 **`mstar-roles/references/project-manager/dispatch-and-assignment.md`**。
 
+> **Engine 执行范围（caller-scoped，#156）**：engine `antiRecursionPrecheck` 比较的是**派发方自身角色**（caller）与新 Assignment 的 `Execute as`（target）。只有 **dsh**（Config `dispatchBinding`）能观察派发方身份并在 engine 层硬执行（含 `callerRequired` 空绑定 fail-closed）；omp / OpenCode / Cursor 的角色绑定字段是**派发目标**——目标 == `Execute as` 正是 C5 合规派发模式——这些宿主上红线保持 prompt 级约束（本节），engine 不做判定。
+
 ## 调度防串扰（强制；leaf executor 已在上方读过反递归红线，此处为完整规则供 PM/对照用）
 
 - 只有 **`project-manager`** 可以决定增加/并行 subagent；承接方**默认不得二次分派**。

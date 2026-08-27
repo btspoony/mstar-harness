@@ -6,9 +6,13 @@
  * one handler — registration order within a module is stable). The factory
  * registers exactly ONE `tool_call` handler; the handler returns
  * `{ block: true, reason }` ONLY when `Enforcement: hard` governs the event
- * (compass `enforcement: hard` for coordination writes, Assignment-header
+ * (repo-level `.mstarc`/compass `enforcement: hard`, or the Assignment-header
  * `Enforcement: hard` per dispatch entry) AND engine validation produced
- * violations. Everything else returns `undefined` — silent pass.
+ * violations. Soft-mode dispatch violations are warn-logged through the
+ * extension logger (opencode parity — the pre-#156 silent drop is why the
+ * self-type/empty-binding pincer stayed latent for five iterations); soft
+ * coordination-write violations stay a silent pass. Everything else returns
+ * `undefined`.
  *
  * Gate 1 (writes) targets the three v3 coordination documents (compass
  * ruling 7 — hard cutover): the v2 root `{HARNESS_DIR}/status.json`
@@ -543,7 +547,7 @@ async function gateStatusWrite(
  * failure (`error`): Gate 2 skips itself either way (see `gateTaskDispatch`),
  * but the two produce different one-time warnings.
  */
-type DispatchGateFn = (text: string, options?: { agent?: string; writable?: boolean }) => {
+type DispatchGateFn = (text: string, options?: { caller?: string; callerRequired?: boolean; writable?: boolean }) => {
   ok: boolean;
   shaped: boolean;
   enforcement: { hard: boolean };
@@ -617,8 +621,12 @@ function warnDispatchGateDegraded(logger: unknown, reason: "missing" | "error", 
  * opencode `validateDispatchAssignment` and `mstar_dispatch_validate` use,
  * incl. the `$MSTAR_WORKING_BRANCH` env fallback, qc1 F-002 / qc2 F-007 /
  * qc3 F-008): field validation with `writable: false` for read-only roles,
- * anti-recursion precheck against the host role binding (`entry.agent`),
- * and the default-branch gate for writable roles. Returns the entry's
+ * and the default-branch gate for writable roles. NO anti-recursion leg on
+ * omp (issue #156): `entry.agent` is the spawn TARGET, and omp's
+ * `tool_call` event carries no caller identity (ToolCallEvent =
+ * { toolName, toolCallId, input }), so the precheck cannot run soundly —
+ * target == `Execute as` is the documented C5 pattern, not recursion. The
+ * NEVER red line stays prompt-level on this host. Returns the entry's
  * violations and its OWN header enforcement flag (an example
  * `**Enforcement**: hard` line in the task body never hardens).
  */
@@ -629,14 +637,19 @@ function validateDispatchEntry(
   const text = entry.task;
   // Read-only roles (scout/explore) skip the branch-form/default-branch gates.
   const writable = isReadOnlyAssignmentRole(parseAssignmentFields(text).executeAs ?? "") ? false : undefined;
-  const composed = composeDispatchGate(text, { agent: entry.agent, writable });
+  const composed = composeDispatchGate(text, { writable });
   return { violations: composed.violations, hard: composed.enforcement.hard };
 }
 
 /**
- * Block a `task` tool_call when any Assignment-shaped entry carries
- * `Enforcement: hard` in its header AND has violations. Per-entry violations
- * only — soft entries never block; no hard violations → silent pass.
+ * Block a `task` tool_call when any Assignment-shaped entry has violations
+ * AND hard enforcement governs it: the entry's OWN header
+ * `Enforcement: hard`, or the repo-level setting (`.mstarc` → compass via
+ * `resolveRepoEnforcement`, resolved once per event from the session cwd —
+ * Gate 1 and dsh `resolveDispatchHard` parity; the pre-#156 header-only
+ * read let a hard compass leave Gate 2 unhardened). Soft-governed
+ * violations never block but ARE warn-logged through `logSoft` (opencode
+ * warn-channel parity — silent drops hide gate/model drift).
  *
  * When the engine build lacks `composeDispatchGate` (predating the export)
  * or the engine import itself fails, Gate 2 is SKIPPED entirely — no
@@ -646,6 +659,7 @@ function validateDispatchEntry(
 async function gateTaskDispatch(
   eventInput: unknown,
   warnDegraded: (reason: "missing" | "error", error?: unknown) => void,
+  logSoft: (line: string) => void,
 ): Promise<{ block: true; reason: string } | undefined> {
   const load = await dispatchGateLoader.load();
   if (load.status !== "ok") {
@@ -653,11 +667,22 @@ async function gateTaskDispatch(
     return undefined;
   }
   const composeDispatchGate = load.gate;
+  // Repo-level hard (`.mstarc` wins, else compass) hardens flag-less
+  // entries — same source Gate 1 uses for coordination writes.
+  const harnessDir = resolveHarnessDir();
+  const repoHard = harnessDir !== null && resolveRepoEnforcement(harnessDir).hard;
   const blocked: string[] = [];
   for (const entry of taskDispatchEntries(eventInput)) {
     const { violations, hard } = validateDispatchEntry(entry, composeDispatchGate);
-    if (!hard || violations.length === 0) continue;
+    if (violations.length === 0) continue;
     const label = entry.name !== "" ? `"${entry.name}"` : entry.agent !== "" ? `agent "${entry.agent}"` : "(unnamed)";
+    if (!hard && !repoHard) {
+      // Soft mode: never block, but surface the violations (opencode parity).
+      for (const violation of violations) {
+        logSoft(`task dispatch entry ${label}: ${violationLine(violation)} (${DISPATCH_SKILL_POINTER})`);
+      }
+      continue;
+    }
     for (const violation of violations) {
       blocked.push(`task dispatch entry ${label}: ${violationLine(violation)} (${DISPATCH_SKILL_POINTER})`);
     }
@@ -682,7 +707,17 @@ export default function mstarGates(pi: ExtensionAPI): void {
       if (toolName === "write" || toolName === "edit") {
         block = await gateStatusWrite(event?.input, warnValidatorsDegraded);
       } else if (toolName === "task") {
-        block = await gateTaskDispatch(event?.input, warnDegraded);
+        block = await gateTaskDispatch(event?.input, warnDegraded, (line) => {
+          try {
+            (
+              pi.logger as
+                | { warn?: (message: string, context?: Record<string, unknown>) => void }
+                | undefined
+            )?.warn?.(line);
+          } catch {
+            // the warn channel must never throw into the fail-closed host path
+          }
+        });
       }
       return block;
     } catch {

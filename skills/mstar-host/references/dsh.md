@@ -472,7 +472,9 @@ The dsh web client resolves slash commands against a client-side lexicon driven 
 - The dispatch gate needs the dispatching agent's own role for the
   anti-recursion precheck: declare it via Config **`dispatchBinding`** (dsh
   exposes no per-agent role on the tool-execution context). Under hard
-  enforcement with no binding, the plugin logs the absence.
+  enforcement with no binding, the plugin logs the absence AND every
+  Assignment-shaped dispatch fails closed (`dispatch.anti-recursion.
+  empty-binding` → deny) until the binding is set.
 
 ## Files, shell, and approvals
 

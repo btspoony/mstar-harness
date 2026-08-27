@@ -672,12 +672,16 @@ export function dispatchGateCore(
   // Read-only roles (scout/explore) skip the branch-form gate entirely.
   const writable = isReadOnlyAssignmentRole(parseAssignmentFields(header).executeAs ?? '') ? false : undefined
   // Engine single composition: shape guard + validateAssignmentFields
-  // (writable) + antiRecursionPrecheck (agent = the dispatching agent's own
-  // type, Config-declared — dsh exposes no agent role on the execution
-  // context) + default-branch gate (Assignment branch forms, else
+  // (writable) + antiRecursionPrecheck (caller = the dispatching agent's own
+  // role, Config-declared — dsh exposes no agent role on the execution
+  // context; callerRequired keeps the 3.1.2 fail-closed contract: an unset
+  // dispatchBinding emits dispatch.anti-recursion.empty-binding) +
+  // default-branch gate (Assignment branch forms, else
   // $MSTAR_WORKING_BRANCH; direct-on exception only when its branch is the
   // one being checked) + header-region enforcement. Never throws.
-  violations.push(...composeDispatchGate(header, { agent: config.dispatchBinding ?? '', writable }).violations)
+  violations.push(
+    ...composeDispatchGate(header, { caller: config.dispatchBinding ?? '', callerRequired: true, writable }).violations,
+  )
   return { violations, writable }
 }
 

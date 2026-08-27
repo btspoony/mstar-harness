@@ -454,8 +454,132 @@ describe("tools v2 smoke (S-g)", () => {
       "Read-only survey of the repo.",
       "",
     ].join("\n");
-    const res = await runTool(mstarDispatchValidate, root, { assignmentText: assignment, agent: "general" });
+    const res = await runTool(mstarDispatchValidate, root, { assignmentText: assignment });
     expect(res.isError).not.toBe(true);
+  });
+});
+
+describe("omp hook Gate 2 — task dispatch (issue #156: caller-scoped anti-recursion)", () => {
+  const ENV_KEY = "MSTAR_HARNESS_DIR";
+
+  /** Register the hook's tool_call handler with a warnings collector. */
+  const registerHandler = (warnings: string[]): ((event: unknown) => Promise<unknown>) => {
+    let handler: ((event: unknown) => Promise<unknown>) | undefined;
+    mstarGates({
+      on: (_event: string, fn: (event: unknown) => Promise<unknown>) => {
+        handler = fn;
+      },
+      logger: { warn: (m: string) => warnings.push(m), error: () => undefined },
+    } as never);
+    if (handler === undefined) throw new Error("mstarGates did not register a tool_call handler");
+    return handler;
+  };
+
+  /** Pin the repo-hard resolution (session-cwd probe) for one call. */
+  const withHarnessDir = async <T>(dir: string, run: () => Promise<T>): Promise<T> => {
+    const previous = process.env[ENV_KEY];
+    process.env[ENV_KEY] = dir;
+    try {
+      return await run();
+    } finally {
+      if (previous === undefined) delete process.env[ENV_KEY];
+      else process.env[ENV_KEY] = previous;
+    }
+  };
+
+  /** The issue #156 repro: minimal valid Phase-1 Review-&-Edit Assignment. */
+  const VALID_HARD_ASSIGNMENT = [
+    "## Assignment",
+    "",
+    "**Enforcement**: hard",
+    "**Execute as**: product-manager",
+    "**Delegation**: forbidden",
+    "**Task category**: docs",
+    "**Branch policy**: direct on main — docs-only plan review",
+    "",
+    "# Task",
+    "",
+    "Review and edit the plan document.",
+    "",
+  ].join("\n");
+
+  const MISSING_DELEGATION_HARD = VALID_HARD_ASSIGNMENT.replace("**Delegation**: forbidden\n", "");
+  const MISSING_DELEGATION_SOFT = MISSING_DELEGATION_HARD.replace("**Enforcement**: hard\n", "");
+  const VALID_SOFT_ASSIGNMENT = VALID_HARD_ASSIGNMENT.replace("**Enforcement**: hard\n", "");
+
+  test("C5-compliant dispatch (entry agent == Execute as) under header hard → NOT blocked, no warnings", async () => {
+    const warnings: string[] = [];
+    const handler = registerHandler(warnings);
+    const res = await handler({
+      toolName: "task",
+      input: { tasks: [{ name: "ReviewEdit", agent: "product-manager", task: VALID_HARD_ASSIGNMENT }] },
+    });
+    expect(res).toBeUndefined();
+    expect(warnings).toEqual([]);
+  });
+
+  test("omitted agent under header hard → NOT blocked (no empty-binding pincer)", async () => {
+    const warnings: string[] = [];
+    const handler = registerHandler(warnings);
+    const res = await handler({
+      toolName: "task",
+      input: { tasks: [{ name: "ReviewEdit", task: VALID_HARD_ASSIGNMENT }] },
+    });
+    expect(res).toBeUndefined();
+    expect(warnings).toEqual([]);
+  });
+
+  test("a REAL violation (missing Delegation) under header hard → blocked with the field code", async () => {
+    const warnings: string[] = [];
+    const handler = registerHandler(warnings);
+    const res = await handler({
+      toolName: "task",
+      input: { tasks: [{ name: "Bad", agent: "product-manager", task: MISSING_DELEGATION_HARD }] },
+    });
+    const blocked = res as { block: boolean; reason: string } | undefined;
+    expect(blocked?.block).toBe(true);
+    expect(blocked?.reason).toContain("assignment.field.missing-delegation");
+  });
+
+  test("soft mode + violations → warn-logged, never blocked (the pre-#156 silent drop, closed)", async () => {
+    const warnings: string[] = [];
+    const handler = registerHandler(warnings);
+    const emptyHarness = mkdtempSync(join(tmpdir(), "tools-smoke-soft-"));
+    const res = await withHarnessDir(emptyHarness, () =>
+      handler({
+        toolName: "task",
+        input: { tasks: [{ name: "Soft", agent: "product-manager", task: MISSING_DELEGATION_SOFT }] },
+      }),
+    );
+    expect(res).toBeUndefined();
+    expect(warnings.some((w) => w.includes("assignment.field.missing-delegation"))).toBe(true);
+  });
+
+  test("repo-level hard compass hardens a flag-less dispatch (Gate 1 / dsh resolveDispatchHard parity)", async () => {
+    const warnings: string[] = [];
+    const handler = registerHandler(warnings);
+    const res = await withHarnessDir(repo!.harness, () =>
+      handler({
+        toolName: "task",
+        input: { tasks: [{ name: "RepoHard", agent: "product-manager", task: MISSING_DELEGATION_SOFT }] },
+      }),
+    );
+    const blocked = res as { block: boolean; reason: string } | undefined;
+    expect(blocked?.block).toBe(true);
+    expect(blocked?.reason).toContain("assignment.field.missing-delegation");
+  });
+
+  test("repo-level hard compass + compliant flag-less dispatch → NOT blocked", async () => {
+    const warnings: string[] = [];
+    const handler = registerHandler(warnings);
+    const res = await withHarnessDir(repo!.harness, () =>
+      handler({
+        toolName: "task",
+        input: { tasks: [{ name: "RepoHardOk", agent: "product-manager", task: VALID_SOFT_ASSIGNMENT }] },
+      }),
+    );
+    expect(res).toBeUndefined();
+    expect(warnings).toEqual([]);
   });
 });
 
