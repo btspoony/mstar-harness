@@ -31,7 +31,7 @@
  *   flock (`flockSync` undefined), so this module implements the documented
  *   mkdir alternative.
  */
-import { mkdirSync, readFileSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -531,26 +531,34 @@ const LOCKDIR_HOLDER_PID = "holder.pid";
 const heldLockDirs = new AsyncLocalStorage<Set<string>>();
 
 /**
- * True when the lockdir at `lockDir` is crash-leaked and safe to reclaim:
- * the `holder.pid` file is missing/unreadable (acquisition writes it
- * synchronously right after `mkdirSync`, so a lockdir without a readable
- * pid file is by construction a crashed acquire) or names a pid that
- * provably no longer exists (signal-0 probe → ESRCH). A live holder (probe
- * ok / EPERM) and our own process are never classified stale — a live
- * writer keeps its lock indefinitely, so it is never stolen from.
+ * True when the lockdir at `lockDir` is crash-leaked and safe to reclaim.
+ * The acquire publishes the lockdir atomically — `holder.pid` is written
+ * inside a unique private temp dir that is only then renamed onto the lock
+ * pathname (`tryAcquireStatusWriteLock`), so a live holder always presents
+ * a lockdir containing its readable pid. The predicate is therefore exact:
+ * - missing/unreadable `holder.pid` → stale — an acquire that crashed
+ *   before its publish became visible (a live holder can never show a
+ *   pid-less lockdir);
+ * - malformed pid content → stale (same crash-only origin);
+ * - pid === our own process → held by this process elsewhere — skip;
+ * - signal-0 probe ok, or non-ESRCH error (incl. EPERM = alive) → alive,
+ *   skip;
+ * - signal-0 probe → ESRCH → provably dead → stale.
+ * A live holder is never classified stale, so its lock is never stolen.
  */
 function isStaleLockDir(lockDir: string): boolean {
   let pidText: string;
   try {
     pidText = readFileSync(join(lockDir, LOCKDIR_HOLDER_PID), "utf8");
   } catch {
-    // Missing/unreadable holder.pid — crashed acquire by construction.
+    // Missing/unreadable holder.pid — a publish that crashed before it
+    // became visible (a live holder publishes atomically, pid first).
     return true;
   }
   const pid = Number(pidText.trim());
   if (!Number.isInteger(pid) || pid <= 0) {
-    // A torn/foreign pid file can only come from a crashed acquire — a live
-    // holder writes a single valid integer right after mkdir.
+    // A torn/foreign pid file can only come from a crashed publish — a live
+    // holder writes a single valid integer before the lockdir is visible.
     return true;
   }
   if (pid === process.pid) {
@@ -569,20 +577,112 @@ function isStaleLockDir(lockDir: string): boolean {
 }
 
 /**
- * Atomically reclaim a stale lockdir: rename it off the lock pathname (one
- * atomic step — no check-then-delete race on the pathname itself) and
- * remove the renamed directory best-effort. When the `.stale-<ts>` target
- * name collides with a leftover stale directory, back off with a counter
- * suffix and retry. Returns true when the lock pathname is free (renamed
- * away, or already gone — e.g. the holder released between probe and
- * rename), so the acquisition loop retries mkdir immediately. The surviving
- * original owner's finally-release re-stats the path: absent/changed
- * identity ⇒ it skips removal (ownership guard), so it never deletes the
- * new lockdir.
+ * Atomically publish the lockdir: create a unique private temp dir
+ * (`<lockDir>.acquire-<pid>-<counter>`), stamp `holder.pid` BEFORE the
+ * lockdir becomes visible on the lock pathname, then `renameSync` the whole
+ * directory onto it. Waiters can therefore never observe a live holder
+ * without a readable pid file — a pid-less lockdir is by construction a
+ * crash leak.
+ *
+ * Returns the published lockdir's `(dev, ino)` identity (statted AFTER the
+ * rename), or `null` when another writer holds the lock (rename
+ * EEXIST/ENOTEMPTY against a non-empty dir — the normal contended path; the
+ * caller waits and probes). An EMPTY (pid-less) leftover is atomically
+ * replaced by the rename — the crashed-publish takeover; a non-empty dir is
+ * never replaced, so a publish cannot steal a live holder's slot. The pid
+ * write is mandatory, not best-effort: on failure the temp dir is removed
+ * and the error propagates — publishing a pid-less lockdir would recreate
+ * the C1 steal window. A leftover temp name collision (EEXIST on mkdir, from
+ * a previous crash of this pid) bumps the counter suffix; the per-pid name
+ * space makes this converge.
  */
+function tryAcquireStatusWriteLock(lockDir: string): { dev: number; ino: number } | null {
+  for (let counter = 0; ; counter++) {
+    const tmp = `${lockDir}.acquire-${process.pid}-${counter}`;
+    try {
+      mkdirSync(tmp);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      // A leftover temp dir from a previous crash of this pid — next suffix.
+      continue;
+    }
+    try {
+      writeFileSync(join(tmp, LOCKDIR_HOLDER_PID), String(process.pid), "utf8");
+    } catch (error) {
+      rmSync(tmp, { recursive: true, force: true });
+      // Publish is all-or-nothing: a pid-less lockdir would let a waiter
+      // misclassify this live acquire as a crashed one (C1).
+      throw error;
+    }
+    try {
+      // renameSync atomically REPLACES an empty (pid-less) leftover — the
+      // crashed-publish takeover — and fails EEXIST/ENOTEMPTY against a
+      // live holder's non-empty dir. A non-empty dir is therefore never
+      // replaced: it is handled by the waiter path (probe → reclaim).
+      renameSync(tmp, lockDir);
+      const st = statSync(lockDir);
+      return { dev: st.dev, ino: st.ino };
+    } catch (error) {
+      rmSync(tmp, { recursive: true, force: true });
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "EEXIST" || code === "ENOTEMPTY") return null; // another writer published first
+      throw error;
+    }
+  }
+}
+
+/**
+ * Reclaim a stale lockdir — decide at the INSTANT of the mutation, never on
+ * the loop's earlier probe (the dir at the path can change between the probe
+ * and here: a live holder may have just published into the slot). The rename
+ * is performed ONLY on dirs that are stable — that cannot be swapped for a
+ * live claim underneath the rename:
+ * - dir absent → the pathname is already free (a live publisher may fill it
+ *   at any moment — never rename it away);
+ * - empty dir (exists, pid file missing) → NEVER renamed here: the next
+ *   publish takes it over atomically (rename-replace of an empty dir), and
+ *   a publisher's replace can land between this decision and a rename —
+ *   which would move a live holder's dir away;
+ * - dead/malformed pid → stable: a live publisher cannot replace a non-empty
+ *   dir (rename → ENOTEMPTY), so the dir cannot turn live before the rename
+ *   lands;
+ * - live pid / our own pid / unprobeable pid → never reclaimed.
+ * A live holder is therefore never displaced, and two writers never hold the
+ * lock concurrently (cross-process exclusivity regression-tested).
+ */
+const MAX_STALE_RENAME_ATTEMPTS = 5;
+
 function reclaimStaleLockDir(lockDir: string): boolean {
+  if (!existsSync(lockDir)) return true; // already free — publish retries immediately
+  let pidText: string;
+  try {
+    pidText = readFileSync(join(lockDir, LOCKDIR_HOLDER_PID), "utf8");
+  } catch {
+    // Empty (pid-less) leftover — never renamed here: a publisher's
+    // rename-replace may have just landed, and renaming would move a live
+    // holder's dir away. The next publish takes the empty dir over
+    // atomically.
+    return false;
+  }
+  const pid = Number(pidText.trim());
+  if (!Number.isInteger(pid) || pid <= 0) {
+    // Malformed content — crash-only origin — the dir is stable (non-empty).
+    return renameStaleAway(lockDir);
+  }
+  if (pid === process.pid) return false; // this process holds it elsewhere — never steal
+  try {
+    process.kill(pid, 0);
+    return false; // alive — never steal
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ESRCH") return false; // EPERM etc. — assume alive
+  }
+  return renameStaleAway(lockDir); // provably dead — safe to reclaim
+}
+
+/** Rename the current lockdir off the pathname (bounded counter backoff). */
+function renameStaleAway(lockDir: string): boolean {
   const stamp = Date.now();
-  for (let attempt = 0; ; attempt++) {
+  for (let attempt = 0; attempt < MAX_STALE_RENAME_ATTEMPTS; attempt++) {
     const stale = attempt === 0 ? `${lockDir}.stale-${stamp}` : `${lockDir}.stale-${stamp}-${attempt}`;
     try {
       renameSync(lockDir, stale);
@@ -600,6 +700,9 @@ function reclaimStaleLockDir(lockDir: string): boolean {
       return false; // exotic FS state — keep waiting; the deadline still bounds the wait
     }
   }
+  // Every counter-suffixed name collided with a leftover — leave the stale
+  // dir in place; the bounded wait ends in the Blocked error (manual hint).
+  return false;
 }
 
 /**
@@ -610,32 +713,37 @@ function reclaimStaleLockDir(lockDir: string): boolean {
  * mutations and plan-status transitions that touch leases MUST run inside
  * this lock for the full read-check-replace-verify sequence.
  *
- * Acquires by atomic `mkdir` on `<status dir>/.status-write.lockdir/`
- * (success acquires; existing dir → another writer holds the lock). While
- * another writer holds it, wait up to `timeoutMs` (default 30s) and then
- * throw (Blocked) — a live holder's lockdir is never removed.
+ * Acquires by atomic publish (`tryAcquireStatusWriteLock`): `holder.pid` is
+ * written inside a unique private temp dir that is then renamed onto
+ * `<status dir>/.status-write.lockdir/` — the lockdir never exists without
+ * its pid, so waiters can unambiguously tell "another live writer" from "a
+ * publish that crashed". The publish atomically REPLACES an empty (pid-less)
+ * leftover — the crashed-publish takeover — and fails EEXIST/ENOTEMPTY
+ * against a live holder's non-empty dir (which is handled by the waiter's
+ * probe → reclaim path). While another writer holds it, wait up to
+ * `timeoutMs` (default 30s) and then throw (Blocked) — a live holder's
+ * lockdir is never removed.
  *
  * Ownership guard (double-unlock safety): the lockdir's `(dev, ino)` is
- * captured at acquisition; `finally` re-stats the path and removes the
- * directory ONLY when the identity is unchanged. When `fn` itself removed
- * the lockdir (e.g. explicit rollback), or another writer replaced it with
- * a fresh lockdir before this writer's `finally` ran, the removal is
- * skipped — a second writer's lock is never destroyed.
+ * captured at acquisition and `finally` re-stats the path; release only
+ * runs when the identity is unchanged. Release is atomic — the lockdir is
+ * renamed to a private `.released-<pid>-<n>` tomb (the path never shows an
+ * empty dir mid-release) and then removed best-effort. When `fn` itself
+ * removed the lockdir (e.g. explicit rollback), or another writer replaced
+ * it with a fresh lockdir before this writer's `finally` ran, the release
+ * is skipped — a second writer's lock is never destroyed.
  *
- * Reentrancy: a nested acquisition on the same lockdir within the same
- * async context (i.e. `fn` calling `withStatusWriteLock` on the same
- * status.json) throws immediately instead of waiting out the timeout.
- *
- * Crash diagnosis + auto-reclamation: a `holder.pid` file (acquiring
- * process id) is written inside the lockdir on acquisition and removed on
- * release. A hard crash between `mkdirSync` and release leaks the lockdir;
- * while waiting, the waiter probes the leaked holder once per poll
- * (missing/unreadable `holder.pid` — a crashed acquire by construction —
- * or a holder pid that provably no longer exists: signal-0 probe → ESRCH)
- * and reclaims it atomically — the lockdir is renamed to a `.stale-<ts>`
- * name and removed, then acquisition retries immediately. A live holder
- * (probe ok / EPERM) and our own pid are never reclaimed; manual recovery
- * remains only for exotic filesystem states.
+ * Crash diagnosis + auto-reclamation: the publish stamps `holder.pid`
+ * (acquiring process id) before the lockdir becomes visible; release
+ * removes it. A hard crash between publish and release leaks the lockdir;
+ * while waiting, the waiter polls the leaked holder once per poll
+ * (missing/unreadable `holder.pid` — impossible for a live holder since
+ * publish is atomic, hence a crashed publish by construction — or a holder
+ * pid that provably no longer exists: signal-0 probe → ESRCH) and reclaims
+ * it — re-verifying the dir at the instant of the mutation (bounded counter
+ * backoff, see `reclaimStaleLockDir`) — then acquisition retries
+ * immediately. A live holder (probe ok / EPERM) and our own pid are never
+ * reclaimed; manual recovery remains only for exotic filesystem states.
  *
  * simplify: mkdir lockdir is the SSOT-documented alternative to `flock`
  * (`{HARNESS_DIR}/.status-write.lock`) — Bun 1.2 exposes no `node:fs`
@@ -660,34 +768,28 @@ export async function withStatusWriteLock<T>(
   const deadline = Date.now() + timeoutMs;
   let acquired: { dev: number; ino: number } | null = null;
   for (;;) {
-    try {
-      mkdirSync(lockDir);
-      const st = statSync(lockDir);
-      acquired = { dev: st.dev, ino: st.ino };
-      break;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      if (Date.now() >= deadline) {
-        throw new Error(
-          `${lockDir} already exists \u2014 another writer holds the status write lock; Blocked (same-host exclusive lock; status-and-residuals.md \u00a7 Same-host exclusive write lock). ` +
-            `Recovery: remove ${lockDir} if no writer is alive (holder.pid inside names the acquiring process)`,
-        );
-      }
-      // A crash-leaked lockdir is reclaimed within the wait budget: probe the
-      // holder once per poll and rename it away when provably dead, then
-      // retry mkdir immediately (no need to sleep through a poll cadence).
-      // When reclamation itself hits an exotic FS state (returns false) the
-      // bounded wait continues and ends in the Blocked error below.
-      if (isStaleLockDir(lockDir) && reclaimStaleLockDir(lockDir)) {
-        continue;
-      }
-      await sleep(pollMs);
+    // Atomic publish: a unique private tmp dir is stamped with holder.pid
+    // and renamed onto the lock pathname, so the lockdir is never visible
+    // without its pid. A non-empty existing lockdir → another writer holds
+    // the lock (tryAcquire returns null → wait/probe below); an empty
+    // leftover (crashed publish) is replaced by our own publish.
+    acquired = tryAcquireStatusWriteLock(lockDir);
+    if (acquired !== null) break;
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `${lockDir} already exists \u2014 another writer holds the status write lock; Blocked (same-host exclusive lock; status-and-residuals.md \u00a7 Same-host exclusive write lock). ` +
+          `Recovery: remove ${lockDir} if no writer is alive (holder.pid inside names the acquiring process)`,
+      );
     }
-  }
-  try {
-    writeFileSync(join(lockDir, LOCKDIR_HOLDER_PID), String(process.pid), "utf8");
-  } catch {
-    // pid file is best-effort diagnosis only — a failed write must not abort the lock
+    // A crash-leaked lockdir is reclaimed within the wait budget: probe the
+    // holder once per poll and rename it away when provably stale, then
+    // retry publishing immediately (no need to sleep through a poll
+    // cadence). When reclamation itself fails (returns false) the bounded
+    // wait continues and ends in the Blocked error below.
+    if (isStaleLockDir(lockDir) && reclaimStaleLockDir(lockDir)) {
+      continue;
+    }
+    await sleep(pollMs);
   }
   const owns = held ?? new Set<string>();
   owns.add(lockDir);
@@ -700,12 +802,28 @@ export async function withStatusWriteLock<T>(
       // Remove only our own lockdir: absent (fn rolled back) or a different
       // (dev, ino) (another writer acquired after fn removed ours) ⇒ skip.
       if (acquired !== null && current.dev === acquired.dev && current.ino === acquired.ino) {
-        try {
-          unlinkSync(join(lockDir, LOCKDIR_HOLDER_PID));
-        } catch {
-          // pid file already removed by fn — proceed to remove the directory
+        // Atomic release: rename the lockdir off the pathname FIRST (one
+        // step), then remove the renamed tomb best-effort. The path thus
+        // never shows an empty dir during release — the old
+        // unlink-then-rmdir left an empty dir visible that a concurrent
+        // waiter's reclaim could rename as "stale" while this holder was
+        // still finishing (cross-process overlap).
+        for (let attempt = 0; ; attempt++) {
+          const tomb = `${lockDir}.released-${process.pid}-${attempt}`;
+          try {
+            renameSync(lockDir, tomb);
+            try {
+              rmSync(tomb, { recursive: true, force: true });
+            } catch {
+              // best-effort: an inert .released-* tomb never blocks anything
+            }
+            break;
+          } catch (error) {
+            const code = (error as NodeJS.ErrnoException).code;
+            if (code === "EEXIST" || code === "ENOTEMPTY") continue; // tomb name collision — bump
+            break; // already gone — nothing to clean
+          }
         }
-        rmdirSync(lockDir);
       }
     } catch {
       // lockdir already removed (e.g. explicit rollback) — nothing to clean
