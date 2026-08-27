@@ -26,9 +26,9 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { GateResult, Severity, ValidationResult } from "./core.js";
-import { writeJson } from "./core.js";
 import { validateExecutionLease, validateIntegrationMergeLease, withStatusWriteLock, type IntegrationMergeLease } from "./lease.js";
 import { validatePlanRow, type PlanRow } from "./status.js";
+import { assertFsStorePath, getArtifactStore } from "./store.js";
 
 /** Snapshot file name inside `workflows/<id>/` (plan Task 2 — writer contract). */
 export const WORKFLOW_SNAPSHOT_FILE = "snapshot.json";
@@ -304,7 +304,15 @@ export function validateWorkflowSnapshot(doc: unknown): GateResult {
  * `withStatusWriteLock(snapshotPath)` (plan Task 2 — the `.status-write.lockdir`
  * lands inside `workflows/<id>/`, dirname of the snapshot; no harness-root
  * pollution). The snapshot is validated first — an invalid snapshot throws
- * and nothing is written. `dir` is created recursively.
+ * and nothing is written. `dir` is created recursively. The durable write
+ * routes through the active `ArtifactStore` (spec SP2: snapshot →
+ * `{ kind: "snapshot", key: <workflow id> }`) inside the existing lock — the
+ * default FsStore resolves `{WORKFLOW_DIR}/<key>/snapshot.json`, identical
+ * to `join(dir, WORKFLOW_SNAPSHOT_FILE)` for canonical callers. The write
+ * fails loud when the active FsStore would resolve a different path than
+ * the caller's `join(dir, WORKFLOW_SNAPSHOT_FILE)` (qc3 F-201) — callers
+ * whose target root differs from the active store's root MUST
+ * `setArtifactStore(createFsStore(root))` first.
  */
 export async function writeWorkflowSnapshot(snapshot: WorkflowSnapshot, dir: string): Promise<void> {
   const gate = validateWorkflowSnapshot(snapshot);
@@ -313,6 +321,12 @@ export async function writeWorkflowSnapshot(snapshot: WorkflowSnapshot, dir: str
     throw new Error(`refusing to write invalid workflow snapshot: ${detail}`);
   }
   const snapshotPath = join(dir, WORKFLOW_SNAPSHOT_FILE);
+  // Fail-loud path agreement (qc3 F-201): the lockdir serializes
+  // `snapshotPath`; the store put must land on that same file. A divergence
+  // (caller target outside the active FsStore root) throws before the dir or
+  // lockdir is created — nothing is written anywhere.
+  const store = getArtifactStore();
+  assertFsStorePath(store, { kind: "snapshot", key: snapshot.id }, snapshotPath);
   // simplify: whole-rewrite snapshot on every state change (temp+rename via
   // writeJson under the workflow lockdir) — the ceiling is O(plans[] × row
   // payload) per write; unbounded inputs already divert to notes.jsonl at
@@ -321,7 +335,9 @@ export async function writeWorkflowSnapshot(snapshot: WorkflowSnapshot, dir: str
   // The lockdir mkdir is non-recursive — the snapshot dir must exist before
   // acquisition (the lockdir lands inside `dir`, dirname of the snapshot).
   mkdirSync(dir, { recursive: true });
-  await withStatusWriteLock(snapshotPath, () => {
-    writeJson(snapshotPath, snapshot);
+  // The store put is the durable write inside the lock; the store is never a
+  // second lock (architect-locked 2026-08-27: locks stay with callers).
+  await withStatusWriteLock(snapshotPath, async () => {
+    await store.put({ kind: "snapshot", key: snapshot.id, payload: snapshot });
   });
 }
