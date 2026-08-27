@@ -4,8 +4,7 @@
  * Spec sources (each test cites the section it enforces; roadmap §8.5 C2
  * — engine unit tests cite the source section as spec):
  * - Contract + FsStore path table + key discipline + async-only store:
- *   `iter-20260827-cli-artifact-store` SP2 (primary spec
- *   `.mstar/iterations/iter-20260827-cli-artifact-store/specs/artifact-store.md`)
+ *   `iter-20260827-cli-artifact-store` SP2 (iteration spec `artifact-store`)
  *   § Default FsStore (local IDE adapter) + § Architecture decisions
  *   1–5 (async-only, locks stay with callers, single path table, key
  *   discipline, default store resolution).
@@ -17,6 +16,9 @@
  * - Default store resolution (`setArtifactStore(undefined)` resets; a
  *   `null` harness-dir resolution throws fail-loud, never a silent cwd
  *   fallback): SP2 § Architecture decisions 5.
+ * - Module loader (`loadStoreModule` — named export / default factory /
+ *   default object; URI-scheme rejection before import; missing file and
+ *   non-store shape throw): SP2 § Injection 2–3 + SP2-AC6 / SP2-AC7.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -25,6 +27,7 @@ import { join } from "node:path";
 import {
   createFsStore,
   getArtifactStore,
+  loadStoreModule,
   setArtifactStore,
   type ArtifactDoc,
   type ArtifactStore,
@@ -361,6 +364,162 @@ describe("setArtifactStore / getArtifactStore", () => {
       expect(() => getArtifactStore()).toThrow(/harness dir not found from .* cannot create the default FsStore/);
     } finally {
       process.chdir(previousCwd);
+    }
+  });
+});
+// ---------------------------------------------------------------------------
+// loadStoreModule — SP2 § Injection 2–3 + SP2-AC6 / SP2-AC7 (trust boundary)
+// ---------------------------------------------------------------------------
+
+describe("loadStoreModule", () => {
+  test("loads a module with a createArtifactStore named export", async () => {
+    const dir = tmpRoot("store-module-named-");
+    try {
+      const filePath = join(dir, "store-mod.ts");
+      writeFileSync(
+        filePath,
+        [
+          "export function createArtifactStore() {",
+          "  const docs = new Map();",
+          "  return {",
+          "    async put(doc) { docs.set(doc.key, doc.payload); },",
+          "    async get(ref) { return docs.get(ref.key); },",
+          "  };",
+          "}",
+        ].join("\n"),
+        "utf8",
+      );
+      const store = await loadStoreModule(filePath);
+      const payload = { version: 2, updated_at: "2026-08-27", workflows: [] };
+      await store.put({ kind: "status", key: "root", payload });
+      // Intermediate variable: a nested `expect(await store.get(...))` lets
+      // TS infer get<T> from the expect overload (never) — assign first.
+      const gotStatus = await store.get({ kind: "status", key: "root" });
+      expect(gotStatus).toEqual(payload);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("loads a module with a default-exported factory", async () => {
+    const dir = tmpRoot("store-module-default-fn-");
+    try {
+      const filePath = join(dir, "store-mod.ts");
+      writeFileSync(
+        filePath,
+        [
+          "export default function createArtifactStore() {",
+          "  const docs = new Map();",
+          "  return {",
+          "    async put(doc) { docs.set(doc.key, doc.payload); },",
+          "    async get(ref) { return docs.get(ref.key); },",
+          "  };",
+          "}",
+        ].join("\n"),
+        "utf8",
+      );
+      const store = await loadStoreModule(filePath);
+      const payload = { note: "default factory" };
+      await store.put({ kind: "snapshot", key: "wf-1", payload });
+      const gotSnapshot = await store.get({ kind: "snapshot", key: "wf-1" });
+      expect(gotSnapshot).toEqual(payload);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("loads a module with a default-exported store object", async () => {
+    const dir = tmpRoot("store-module-default-obj-");
+    try {
+      const filePath = join(dir, "store-mod.ts");
+      writeFileSync(
+        filePath,
+        [
+          "const docs = new Map();",
+          "export default {",
+          "  async put(doc) { docs.set(doc.key, doc.payload); },",
+          "  async get(ref) { return docs.get(ref.key); },",
+          "};",
+        ].join("\n"),
+        "utf8",
+      );
+      const store = await loadStoreModule(filePath);
+      const payload = { note: "default object" };
+      await store.put({ kind: "residuals", key: "proj-1", payload });
+      const gotResiduals = await store.get({ kind: "residuals", key: "proj-1" });
+      expect(gotResiduals).toEqual(payload);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("loads a CommonJS module via the default interop (module.exports)", async () => {
+    const dir = tmpRoot("store-module-cjs-");
+    try {
+      const filePath = join(dir, "store-mod.cjs");
+      writeFileSync(
+        filePath,
+        [
+          "module.exports = {",
+          "  async put(doc) {},",
+          "  async get() { return undefined; },",
+          "};",
+        ].join("\n"),
+        "utf8",
+      );
+      const store = await loadStoreModule(filePath);
+      expect(typeof store.put).toBe("function");
+      expect(typeof store.get).toBe("function");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects an empty module path", async () => {
+    await expect(loadStoreModule("")).rejects.toThrow(/module path must not be empty/);
+  });
+
+  test("rejects URI schemes before import (http / https / file / data / node)", async () => {
+    for (const modulePath of [
+      "http://example.com/store.mjs",
+      "https://example.com/store.mjs",
+      "file:///tmp/store.mjs",
+      "data:text/javascript,export default {}",
+      "node:fs",
+    ]) {
+      await expect(loadStoreModule(modulePath)).rejects.toThrow(/only filesystem paths are allowed/);
+    }
+  });
+
+  test("throws when the module file is missing", async () => {
+    const dir = tmpRoot("store-module-missing-");
+    try {
+      const missing = join(dir, "does-not-exist.ts");
+      await expect(loadStoreModule(missing)).rejects.toThrow(/module file not found/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("throws when the module has no store export", async () => {
+    const dir = tmpRoot("store-module-noexport-");
+    try {
+      const filePath = join(dir, "store-mod.ts");
+      writeFileSync(filePath, "export const unrelated = 42;\n", "utf8");
+      await expect(loadStoreModule(filePath)).rejects.toThrow(/does not export an ArtifactStore/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("throws when the default export is not a store shape", async () => {
+    const dir = tmpRoot("store-module-shape-");
+    try {
+      const filePath = join(dir, "store-mod.ts");
+      writeFileSync(filePath, "export default { put: \"not a function\" };\n", "utf8");
+      await expect(loadStoreModule(filePath)).rejects.toThrow(/does not export an ArtifactStore/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });

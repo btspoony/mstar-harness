@@ -130,3 +130,55 @@ export function getArtifactStore(): ArtifactStore {
   }
   return createFsStore(root);
 }
+/** Trust boundary (architect-locked 2026-08-27): `loadStoreModule` accepts
+ * filesystem paths only. Any URI scheme (`http:`, `https:`, `file:`,
+ * `data:`, `node:`, ...) is rejected before `import()` — no remote loader. */
+const URI_SCHEME_RE = /^[A-Za-z][A-Za-z0-9+.-]*:/;
+
+/** Structural check: the loaded value must implement `put` + `get` as
+ * functions (spec SP2 § Injection 3 / Architecture decision 6). */
+function isArtifactStore(value: unknown): value is ArtifactStore {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as ArtifactStore).put === "function" &&
+    typeof (value as ArtifactStore).get === "function"
+  );
+}
+
+/** Load a store module from a filesystem path (spec SP2 § Injection 2–3,
+ * SP2-AC6 / SP2-AC7). Resolves against cwd; rejects empty values and any
+ * URI scheme before `import()`; throws when the file is missing. Accepts a
+ * `createArtifactStore` named export, a default-exported factory, or a
+ * default-exported object; the result is structurally verified (`put` +
+ * `get` functions) before use.
+ *
+ * CJS interop: `import()` of a CommonJS module surfaces `module.exports`
+ * as `default` (plus statically detected named exports on the namespace);
+ * the `?? mod` fallback covers loaders that surface `module.exports`
+ * directly as the namespace. No loader protocol beyond `import()`. */
+export async function loadStoreModule(modulePath: string): Promise<ArtifactStore> {
+  if (modulePath === "") {
+    throw new Error("loadStoreModule: module path must not be empty");
+  }
+  if (URI_SCHEME_RE.test(modulePath)) {
+    throw new Error(
+      `loadStoreModule: only filesystem paths are allowed \u2014 got ${JSON.stringify(modulePath)} (URI schemes such as http:/https:/file: are rejected)`,
+    );
+  }
+  const resolved = resolve(modulePath);
+  if (!existsSync(resolved)) {
+    throw new Error(`loadStoreModule: module file not found \u2014 ${JSON.stringify(resolved)}`);
+  }
+  // The module path is runtime-selected (CLI --store / MSTAR_STORE_MODULE),
+  // so a static import cannot name it; dynamic import() is the loader.
+  const mod = (await import(resolved)) as Record<string, unknown>;
+  const candidate = mod.createArtifactStore ?? mod.default ?? mod;
+  const store = typeof candidate === "function" ? await (candidate as () => unknown)() : candidate;
+  if (!isArtifactStore(store)) {
+    throw new Error(
+      `loadStoreModule: module ${JSON.stringify(resolved)} does not export an ArtifactStore \u2014 expected a createArtifactStore named export, a default factory, or a default object with put() and get() functions`,
+    );
+  }
+  return store;
+}
