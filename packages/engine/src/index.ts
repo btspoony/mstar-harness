@@ -358,3 +358,5 @@ export {
   validateFindingDoc,
   validatePrReviewReport,
 } from "./prreview.js";
+export type { ArtifactDoc, ArtifactKind, ArtifactRef, ArtifactStore } from "./store.js";
+export { createFsStore, getArtifactStore, setArtifactStore } from "./store.js";
