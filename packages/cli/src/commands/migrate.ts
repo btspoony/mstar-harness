@@ -23,8 +23,10 @@
  */
 import {
   applyMigratePlan,
+  createFsStore,
   migrateHarnessTree,
   resolveHarnessDir,
+  setArtifactStore,
   validateProjectRegister,
   validateWorkflowSnapshot,
   type MigratePlan,
@@ -71,6 +73,11 @@ export async function runMigrateCommand(options: MigrateCliOptions): Promise<voi
   // Fix-wave S-a: default to harness-dir discovery (like every other
   // command), keep the cwd fallback for a bare harness-root directory.
   const root = options.path ? resolve(options.path) : resolveHarnessDir() ?? process.cwd();
+
+  // Store-root pinning (plan Task 4 Part B): applyMigratePlan's snapshot
+  // writes put through getArtifactStore() — pin it to the resolved root so
+  // a non-cwd --path target is written, never the cwd-resolved default store.
+  setArtifactStore(createFsStore(root));
 
   let plan: MigratePlan;
   try {
