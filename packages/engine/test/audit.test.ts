@@ -508,6 +508,31 @@ describe("scaffoldAuditPlan", () => {
     expect(readme).toContain("| 002 | Fix N+1 query in order list |");
   });
 
+  test("re-scaffold with a changed priority refreshes the index row", () => {
+    const out = join(tmp, "audit-2026-08-27");
+    const finding = {
+      title: "Fix N+1 query",
+      category: "perf" as const,
+      impact: "a",
+      effort: "S" as const,
+      risk: "LOW" as const,
+      confidence: "HIGH" as const,
+      evidence: ["x"],
+      priority: "P1" as const,
+    };
+    scaffoldAuditPlan(out, [finding], { date: "2026-08-27" });
+    expect(readFileSync(join(out, "README.md"), "utf8")).toContain("| 001 | Fix N+1 query | P1 | S | none | TODO |");
+    // Same title re-scaffolded with a re-triaged priority: numbering is
+    // monotonic (001 is never rewritten), so the NEW batch's row must
+    // carry the NEW value — finding-authoritative from the redacted
+    // finding, not a parse artifact of a previous Status block — while
+    // the preserved 001 row keeps its own priority.
+    scaffoldAuditPlan(out, [{ ...finding, priority: "P2" as const }], { date: "2026-08-27" });
+    const readme = readFileSync(join(out, "README.md"), "utf8");
+    expect(readme).toContain("| 002 | Fix N+1 query | P2 | S | none | TODO |");
+    expect(readme).toContain("| 001 | Fix N+1 query | P1 | S | none | TODO |");
+  });
+
   test("renders the Direction section when direction findings exist", () => {
     const out = join(tmp, "audit-2026-08-10");
     const result = scaffoldAuditPlan(

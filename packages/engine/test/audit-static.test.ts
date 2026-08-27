@@ -22,7 +22,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
-import { scanSecrets, supplyChainChecks } from "../src/audit.js";
+import { scanSecrets, supplyChainChecks, WHOLE_MATCH_PATTERNS } from "../src/audit.js";
 
 // ---------------------------------------------------------------------------
 // Fixtures — synthetic provider tokens (inert filler tails, right-shaped)
@@ -102,6 +102,24 @@ describe("scanSecrets provider key shapes", () => {
     const { findings } = scanSecrets([fixture("id_server", pem)]);
     expect(findings.map((f) => f.type)).toEqual(["private-key"]);
     expect(findings[0]?.line).toBe(1);
+  });
+
+  test("scanSecrets' PEM pass derives from the WHOLE_MATCH_PATTERNS private-key row (D-2 SSOT)", () => {
+    const row = WHOLE_MATCH_PATTERNS.find((p) => p.type === "private-key");
+    expect(row).toBeDefined();
+    const pem = [
+      "-----BEGIN OPENSSH PRIVATE KEY-----",
+      "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW",
+      "-----END OPENSSH PRIVATE KEY-----",
+    ].join("\n");
+    // Not a *.pem/*.key basename: the never-commit filename list must not
+    // add a private-key-file finding on top of the content detection.
+    const file = fixture("ssot-key.txt", pem);
+    // The table row is the single authority: it matches the whole block
+    // exactly once, and the scan reports precisely that row's type at the
+    // header line — no second copy of the pattern to drift.
+    expect([...pem.matchAll(row!.re)]).toHaveLength(1);
+    expect(scanSecrets([file]).findings).toEqual([{ file, line: 1, type: row!.type }]);
   });
 });
 
@@ -455,6 +473,91 @@ describe("supplyChainChecks — isolated kinds", () => {
         { kind: "pull_request_target-head", file: ".github/workflows/risk.yml", line: 7 },
       ]);
       expect(r.violations[0]?.code).toBe("audit.supply.pull_request_target-head");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("inline scalar on: pull_request_target + PR-head checkout reports pull_request_target-head", () => {
+    const root = mkdtempSync(join(tmpdir(), "engine-supply-prt-inline-scalar-"));
+    try {
+      mkdirSync(join(root, ".github", "workflows"), { recursive: true });
+      writeFileSync(join(root, "package-lock.json"), "{}");
+      writeFileSync(
+        join(root, ".github", "workflows", "risk-inline.yml"),
+        [
+          "on: pull_request_target",
+          "jobs:",
+          "  risky:",
+          "    runs-on: ubuntu-latest",
+          "    steps:",
+          "      - uses: actions/checkout@v4",
+          "        with:",
+          "          ref: ${{ github.event.pull_request.head.sha }}",
+          "",
+        ].join("\n"),
+      );
+      const r = supplyChainChecks(root);
+      expect(r.ok).toBe(false);
+      expect(r.findings).toEqual([
+        { kind: "pull_request_target-head", file: ".github/workflows/risk-inline.yml", line: 6 },
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("inline flow-sequence on: [push, pull_request_target] + PR-head checkout is flagged", () => {
+    const root = mkdtempSync(join(tmpdir(), "engine-supply-prt-inline-flow-"));
+    try {
+      mkdirSync(join(root, ".github", "workflows"), { recursive: true });
+      writeFileSync(join(root, "package-lock.json"), "{}");
+      writeFileSync(
+        join(root, ".github", "workflows", "risk-flow.yml"),
+        [
+          "on: [push, pull_request_target]",
+          "jobs:",
+          "  risky:",
+          "    runs-on: ubuntu-latest",
+          "    steps:",
+          "      - uses: actions/checkout@v4",
+          "        with:",
+          "          ref: ${{ github.event.pull_request.head.sha }}",
+          "",
+        ].join("\n"),
+      );
+      const r = supplyChainChecks(root);
+      expect(r.ok).toBe(false);
+      expect(r.findings).toEqual([
+        { kind: "pull_request_target-head", file: ".github/workflows/risk-flow.yml", line: 6 },
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("non-target inline on: pull_request + PR-head checkout is NOT flagged", () => {
+    const root = mkdtempSync(join(tmpdir(), "engine-supply-prt-nontarget-"));
+    try {
+      mkdirSync(join(root, ".github", "workflows"), { recursive: true });
+      writeFileSync(join(root, "package-lock.json"), "{}");
+      writeFileSync(
+        join(root, ".github", "workflows", "safe-pull-request.yml"),
+        [
+          "on: pull_request",
+          "jobs:",
+          "  safe:",
+          "    runs-on: ubuntu-latest",
+          "    steps:",
+          "      - uses: actions/checkout@v4",
+          "        with:",
+          "          ref: ${{ github.event.pull_request.head.sha }}",
+          "",
+        ].join("\n"),
+      );
+      const r = supplyChainChecks(root);
+      expect(r.ok).toBe(true);
+      expect(r.findings).toEqual([]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

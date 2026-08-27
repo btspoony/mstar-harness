@@ -566,6 +566,14 @@ function scanActionsEnvMap(lines: readonly string[]): number[] {
 export function scanSecrets(files: readonly string[]): ScanSecretsResult {
   const findings: ScannedSecret[] = [];
   let unreadableFiles = 0;
+  // D-2 SSOT: the private-key row spans the whole PEM block, so it needs a
+  // full-file pass (the per-line loop below can never see it). The regex
+  // comes from the exported table — the same row redactSecrets uses — so
+  // table edits propagate instead of drifting from a second copy.
+  const privateKeyRow = WHOLE_MATCH_PATTERNS.find((pattern) => pattern.type === "private-key");
+  if (privateKeyRow === undefined) {
+    throw new Error("scanSecrets: WHOLE_MATCH_PATTERNS is missing its private-key row (full-text PEM pass)");
+  }
   for (const file of files) {
     let text: string;
     try {
@@ -582,13 +590,12 @@ export function scanSecrets(files: readonly string[]): ScanSecretsResult {
       if (entry.re.test(base)) findings.push({ file, line: 1, type: entry.type });
     }
     const starts = buildLineStarts(text);
-    // The private-key WHOLE_MATCH row spans the whole PEM block (header
-    // through END marker), so it needs full-text matching — the per-line
-    // loop below can never see it. Reported once at the header line.
-    const pem = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g;
-    for (const match of text.matchAll(pem)) {
+    // Full-text pass for the private-key row: a PEM block spans multiple
+    // lines, so the per-line loop below can never see it. Reported once at
+    // the header line. Pattern and type both come from the SSOT row above.
+    for (const match of text.matchAll(privateKeyRow.re)) {
       if (match.index === undefined) continue;
-      findings.push({ file, line: lineAt(starts, match.index), type: "private-key" });
+      findings.push({ file, line: lineAt(starts, match.index), type: privateKeyRow.type });
     }
     const lines = text.split("\n");
     // Canonical YAML block mapping — `env:` opener + indented children —
@@ -743,7 +750,13 @@ export function supplyChainChecks(repoRoot: string): SupplyChainResult {
     // (`ref: github.event.pull_request.head.sha|ref`) it runs untrusted
     // code with those secrets. Plain checkout under pull_request_target
     // defaults to the base ref — that safe shape is NOT flagged.
-    const hasPrt = /(?:^|\n)\s*(?:-\s+)?pull_request_target\b/.test(text);
+    const hasPrt =
+      // Trigger forms of the `on:` key: block (trigger on its own indented
+      // line under `on:`, with or without a `- ` marker), inline scalar
+      // (`on: pull_request_target`) and inline flow sequence
+      // (`on: [push, pull_request_target]`). Inline forms stay anchored to
+      // the line start so comments or differently-named keys do not fire.
+      /(?:^|\n)\s*(?:(?:-\s+)?pull_request_target\b|on:\s*(?:\[[^\]]*\s*)?pull_request_target\b)/.test(text);
     // qc2 F-002: pair each checkout step with its OWN `with:` map (scanned
     // until the map dedents) instead of a fixed ±6-line window — a verbose
     // `with:` block places the head ref far below the `uses:` line. A step
@@ -1113,6 +1126,12 @@ export function scaffoldAuditPlan(
       row.risk = finding.risk;
       row.confidence = finding.confidence;
       row.evidence = finding.evidence[0] ?? "";
+      // priority/dependsOn are finding-authoritative too (regression from
+      // the D-1 redaction wave: these two were dropped from the override,
+      // leaving the row dependent on re-parsing the just-written Status
+      // block instead of the redacted finding).
+      row.priority = finding.priority;
+      row.dependsOn = finding.dependsOn ?? "none";
     }
   });
 
