@@ -215,7 +215,7 @@ Persist one JSON coordination doc through the pluggable **ArtifactStore** (engin
 
 Payload source: `--file <path>` reads a JSON file; `--stdin` (or no flag) reads stdin; the two flags are mutually exclusive. `--key` is required: `status` always uses the key `root`; `json` takes an absolute file path (relative or `..`-containing keys are rejected); the other kinds take a stable id (workflow id, project id, or review id). `--schema <id>` optionally records a schema id (e.g. `mstar.review/v1`) on the stored doc.
 
-Validators run before put: `status` / `snapshot` / `residuals` payloads are checked with the existing `validateStatusV2` / `validateWorkflowSnapshot` / `validateProjectRegister` and an invalid document is refused (exit 1, nothing written). `review` is JSON-parse-only this iteration (schema validation lands with `mstar.review/v1`); `json` is an escape hatch.
+Validators run before put: `status` / `snapshot` / `residuals` payloads are checked with the existing `validateStatusV2` / `validateWorkflowSnapshot` / `validateProjectRegister` and an invalid document is refused (exit 1, nothing written). `review` payloads must be a valid `mstar.review/v1` envelope (`validateMstarReviewV1` — harness verdicts `ship it` / `needs fixes` / `blocked` and merge classes `must-fix` / `should-fix` / `nit`; inspector M1 vocab such as `approve` / `critical` is rejected with `review.inspector-vocab`); `json` is an escape hatch.
 
 Store selection: `--store <module>` wins over `MSTAR_STORE_MODULE`; with neither, the default `FsStore` resolves the harness dir from the cwd / `MSTAR_HARNESS_DIR`. The module is a filesystem path to an ESM/CJS file exporting `createArtifactStore()`, a default factory, or a default store object with `put()` + `get()` functions — **filesystem paths only**: empty values and any URI scheme (`http:`, `https:`, `file:`, `data:`, `node:`, …) are rejected before `import()` (no remote loader).
 
@@ -236,6 +236,40 @@ Exit codes:
 - `0` — put OK (`persist <kind>/<key>: OK`) or get printed the stored payload
 - `1` — invalid payload refused, missing payload file, missing stored document, store-module load/verification failure, harness dir not found
 - `2` — usage: unknown kind, missing `--key`, `--file` + `--stdin` together
+
+#### Persist a review envelope
+
+`kind: review` stores a validated `mstar.review/v1` envelope — the machine-readable review document that `pr-deep-review` / `amazing-pr-review` Stage 3 must persist after synthesis (the Markdown report is the optional human copy, not a substitute). Plan-shaped keys (`^[0-9]{8}-[a-z0-9-]+$`) land at `{HARNESS_DIR}/sdd/<key>/review/report.json`; other keys (PR ids, review ids) at `{HARNESS_DIR}/sdd/_reviews/<key>.json`.
+
+```sh
+mstar-harness persist review --key 20260827-review-json --stdin <<'JSON'
+{
+  "schema": "mstar.review/v1",
+  "verdict": "needs fixes",
+  "summary_md": "## Verdict: needs fixes · 85%\n\nmust-fix=0 should-fix=1 nit=0 unverified=0\n\n- should-fix: Retry loop swallows the last error",
+  "tally": {
+    "verdict": "needs fixes",
+    "scorePct": 85,
+    "tally": { "mustFix": 0, "shouldFix": 1, "nit": 0, "unverified": 0 },
+    "chatHeader": "needs fixes · 85%\nmust-fix=0 should-fix=1 nit=0 unverified=0"
+  },
+  "findings": [
+    {
+      "mergeClass": "should-fix",
+      "category": "correctness",
+      "file_path": "src/retry.ts",
+      "line_start": 12,
+      "line_end": 18,
+      "title": "Retry loop swallows the last error",
+      "body": "The final attempt's error is discarded before the fallback path."
+    }
+  ],
+  "target": { "owner": "acme", "repo": "widget", "pr": 134, "head_sha": "abc1234" }
+}
+JSON
+```
+
+`persist review/<key>: OK` on success; `persist get review --key <key>` prints the stored envelope. An invalid envelope is refused before any write — e.g. inspector M1 vocab `"verdict": "approve"` fails with `refusing to persist invalid review document: [high] review.inspector-vocab: ...` (exit 1), and a `tally.verdict` that disagrees with the top-level `verdict` fails with `review.verdict-tally-mismatch`.
 
 ## Maintainer Commands
 
