@@ -14,7 +14,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { ensureGlobalCli, formatCliDoctorNote } from "./global-cli";
+import { defaultDetectVersion, ensureGlobalCli, formatCliDoctorNote } from "./global-cli";
 import { readHarnessVersion } from "./utils";
 
 const BASE = { version: "3.4.0", dryRun: false, noGlobalCli: false };
@@ -87,6 +87,24 @@ describe("ensureGlobalCli", () => {
       message: "EACCES: permission denied",
     });
   });
+
+  test("fail-soft log classifies the failure and prints the retry spec + doctor hint (F-101)", () => {
+    const lines: string[] = [];
+    const result = ensureGlobalCli({
+      ...BASE,
+      detectVersion: () => null,
+      install: () => {
+        throw new Error("EACCES: permission denied");
+      },
+      log: (line) => lines.push(line),
+    });
+    expect(result.action).toBe("failed");
+    const out = lines.join("\n");
+    expect(out).toContain("Global CLI install failed: EACCES: permission denied");
+    expect(out).toContain("Failure kind: permission");
+    expect(out).toContain("npm i -g @mstar-harness/cli@3.4.0");
+    expect(out).toContain("mstar-harness doctor");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -106,6 +124,30 @@ describe("formatCliDoctorNote", () => {
 
   test("matching version", () => {
     expect(formatCliDoctorNote("3.4.0", "3.4.0")).toBe("CLI on PATH: mstar-harness 3.4.0 (matching)");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Version-format pin (F-202): `defaultDetectVersion` must return the
+// trimmed single-line version string. A fake `mstar-harness` on PATH emits
+// "3.4.0" with and without a trailing newline; both must yield "3.4.0".
+// No v-prefix normalization this iteration (F-102 deferred).
+// ---------------------------------------------------------------------------
+
+describe("defaultDetectVersion", () => {
+  test("returns the trimmed single-line version with and without a trailing newline (F-202)", () => {
+    const binDir = mkdtempSync(path.join(tmpdir(), "mstar-detect-"));
+    const oldPath = process.env.PATH;
+    try {
+      writeFakeBin(binDir, "mstar-harness", 'printf "3.4.0"');
+      process.env.PATH = `${binDir}:${oldPath ?? ""}`;
+      expect(defaultDetectVersion()).toBe("3.4.0");
+      writeFakeBin(binDir, "mstar-harness", 'echo "3.4.0"');
+      expect(defaultDetectVersion()).toBe("3.4.0");
+    } finally {
+      process.env.PATH = oldPath;
+      rmSync(binDir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -179,9 +221,16 @@ describe("init wiring (end-to-end CLI harness)", () => {
     writeFakeBin(binDir, "dsh", `printf '%s\\n' "$*" >> "${dshLog}"\nexit 0`);
   }
 
-  /** Non-matching PATH version so the install path is always taken. */
-  function fakeMstarHarness(): void {
-    writeFakeBin(binDir, "mstar-harness", 'echo "0.0.0-test"\nexit 0');
+  /** Fake mstar-harness reporting a version; default non-matching so the
+   * install path is always taken deterministically. */
+  function fakeMstarHarness(version = "0.0.0-test"): void {
+    writeFakeBin(binDir, "mstar-harness", `echo "${version}"\nexit 0`);
+  }
+
+  /** Fake npm that logs its args, then hangs (used with a tiny install
+   * timeout to exercise the kill path). */
+  function fakeNpmHang(): void {
+    writeFakeBin(binDir, "npm", `printf '%s\\n' "$*" >> "${npmLog}"\nexec sleep 10`);
   }
 
   test("dry-run prints the exact npm command and never spawns npm (SP1-AC3)", () => {
@@ -244,6 +293,32 @@ describe("init wiring (end-to-end CLI harness)", () => {
     const result = runInitCli(["--yes", "--target", "opencode", "--output", configPath, "--no-global-cli"], cliEnv());
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("Skipping global CLI install (--no-global-cli).");
+    expect(existsSync(npmLog)).toBe(false);
+  });
+
+  test("a stalled npm install times out and fail-softs with exit 0 (F-201)", () => {
+    fakeNpmHang();
+    fakeMstarHarness();
+    const configPath = path.join(tmp, "opencode.json");
+    const result = runInitCli(["--yes", "--target", "opencode", "--output", configPath], {
+      ...cliEnv(),
+      MSTAR_CLI_INSTALL_TIMEOUT_MS: "500",
+    });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Global CLI install failed:");
+    expect(result.stdout).toContain("Failure kind: npm");
+    expect(result.stdout).toContain("Status: configured");
+    expect(existsSync(npmLog)).toBe(true);
+  });
+
+  test("a matching PATH version skips the install (repeated-init idempotency, F-203)", () => {
+    fakeNpm(0);
+    fakeMstarHarness(PACKAGE_VERSION);
+    const configPath = path.join(tmp, "opencode.json");
+    const result = runInitCli(["--yes", "--target", "opencode", "--output", configPath], cliEnv());
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("already on PATH");
+    expect(result.stdout).toContain("Status: configured");
     expect(existsSync(npmLog)).toBe(false);
   });
 });

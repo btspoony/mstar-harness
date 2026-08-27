@@ -18,6 +18,20 @@ export type EnsureGlobalCliResult =
   | { action: "failed"; spec: string; message: string };
 
 const CLI_NAME = "mstar-harness";
+/** npm install timeout (ms): a stalled registry must surface as an error
+ * instead of hanging init without output. Mirrors the dsh adapter's
+ * DSH_ADD_TIMEOUT_MS convention; overridable via env so tests can shrink
+ * it to exercise the kill path. */
+const NPM_INSTALL_TIMEOUT_MS = 300_000;
+const NPM_INSTALL_TIMEOUT_ENV = "MSTAR_CLI_INSTALL_TIMEOUT_MS";
+
+/** Install-path timeout: env override wins, else the conservative default. */
+function installTimeoutMs(): number {
+  const raw = process.env[NPM_INSTALL_TIMEOUT_ENV];
+  if (raw === undefined || raw.trim() === "") return NPM_INSTALL_TIMEOUT_MS;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : NPM_INSTALL_TIMEOUT_MS;
+}
 
 /**
  * Spawn `mstar-harness --version`; any failure (missing binary, non-zero)
@@ -33,9 +47,10 @@ export function defaultDetectVersion(): string | null {
   }
 }
 
-/** Architect-locked 2026-08-27: runCliCommand already wraps execFileSync with dry-run/timeout/env handling. */
+/** npm install spawn, bounded by a timeout so a stalled registry surfaces
+ * as `action: "failed"` instead of hanging init without output. */
 function defaultInstall(spec: string): void {
-  runCliCommand(["npm", "i", "-g", spec]);
+  runCliCommand(["npm", "i", "-g", spec], { timeoutMs: installTimeoutMs() });
 }
 
 /**
@@ -70,7 +85,10 @@ export function ensureGlobalCli(opts: EnsureGlobalCliOpts): EnsureGlobalCliResul
     return { action: "installed", spec };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    const kind = /EACCES|EPERM/.test(message) ? "permission" : "npm";
     log(`Global CLI install failed: ${message}`);
+    log(`Failure kind: ${kind} (retry: npm i -g ${spec})`);
+    log(`Hint: run \`mstar-harness doctor\` to check the CLI on PATH.`);
     return { action: "failed", spec, message };
   }
 }
@@ -84,10 +102,10 @@ export function ensureGlobalCli(opts: EnsureGlobalCliOpts): EnsureGlobalCliResul
  */
 export function formatCliDoctorNote(detected: string | null, expected: string): string {
   if (detected === null) {
-    return `CLI on PATH: mstar-harness not found (expected version ${expected})`;
+    return `CLI on PATH: ${CLI_NAME} not found (expected version ${expected})`;
   }
   if (detected !== expected) {
-    return `CLI on PATH: mstar-harness ${detected} (expected ${expected})`;
+    return `CLI on PATH: ${CLI_NAME} ${detected} (expected ${expected})`;
   }
-  return `CLI on PATH: mstar-harness ${detected} (matching)`;
+  return `CLI on PATH: ${CLI_NAME} ${detected} (matching)`;
 }
