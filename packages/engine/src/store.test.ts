@@ -380,7 +380,7 @@ describe("setArtifactStore / getArtifactStore", () => {
 // assertFsStorePath — fail-loud path agreement (qc3 F-201)
 // ---------------------------------------------------------------------------
 
-describe("assertFsStorePath — fail-loud path agreement (qc3 F-201)", () => {
+describe("assertFsStorePath - fail-loud path agreement (qc3 F-201)", () => {
   test("FsStore with the store-resolved path equal to the expected path passes", () => {
     const root = tmpRoot("store-assert-ok-");
     try {
@@ -412,7 +412,7 @@ describe("assertFsStorePath — fail-loud path agreement (qc3 F-201)", () => {
     }
   });
 
-  test("custom (non-FS) stores are skipped — the caller owns the mapping", () => {
+  test("custom (non-FS) stores are skipped - the caller owns the mapping", () => {
     expect(() => assertFsStorePath(recordingStore(), { kind: "status", key: "root" }, "/anywhere/status.json")).not.toThrow();
   });
 });
