@@ -10,6 +10,8 @@ export type InitOptions = {
   dryRun?: boolean;
   /** Skip installing the dsh-llm-fallbacks plugin row (dsh target only). */
   noFallbacks?: boolean;
+  /** Skip installing the matching-version @mstar-harness/cli globally after init. */
+  noGlobalCli?: boolean;
   pmModel?: string;
   strategicModels?: string;
   devModels?: string;
