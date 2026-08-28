@@ -99,6 +99,16 @@ export function createFsStore(harnessRoot: string): ArtifactStore & { root: stri
   return {
     root,
     async put(doc: ArtifactDoc): Promise<void> {
+      // D3 schema fail-loud: FsStore writes only `doc.payload`, so it
+      // cannot persist the envelope schema id honestly — refuse instead of
+      // silently dropping it. `doc.schema` ≠ `payload.schema`: a review
+      // envelope's inner "schema" is payload data and stays unaffected.
+      // Canonical message (single home: spec store-contract-completion D3).
+      if (doc.schema !== undefined) {
+        throw new Error(
+          "FsStore does not persist schema ids \u2014 omit --schema or inject a store module that persists it",
+        );
+      }
       writeJson(resolveArtifactPath(root, doc), doc.payload);
     },
     async get<T = unknown>(ref: ArtifactRef): Promise<T | undefined> {

@@ -19,6 +19,9 @@
  * - Module loader (`loadStoreModule` — named export / default factory /
  *   default object; URI-scheme rejection before import; missing file and
  *   non-store shape throw): SP2 § Injection 2–3 + SP2-AC6 / SP2-AC7.
+ * - `put` schema guard (throw on `doc.schema !== undefined`, canonical
+ *   message; `payload.schema` unaffected): `iter-20260828-store-completeness`
+ *   spec `store-contract-completion` § D3.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -29,6 +32,7 @@ import {
   createFsStore,
   getArtifactStore,
   loadStoreModule,
+  resolveArtifactPath,
   setArtifactStore,
   type ArtifactDoc,
   type ArtifactStore,
@@ -239,6 +243,63 @@ describe("FsStore round-trip", () => {
       expect(await store.get({ kind: "status", key: "root" })).toBeUndefined();
       // deleting a missing artifact is a no-op
       await store.delete?.({ kind: "status", key: "root" });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Schema guard — store-contract-completion D3 (fail-loud on doc.schema)
+// ---------------------------------------------------------------------------
+
+/** Canonical rejection message (single home: spec store-contract-completion
+ * § D3 — do not reword). Source escapes the em-dash per lint:ascii-literals. */
+const SCHEMA_GUARD_MESSAGE =
+  "FsStore does not persist schema ids \u2014 omit --schema or inject a store module that persists it";
+
+describe("FsStore schema guard (D3)", () => {
+  test("doc carrying an envelope schema is rejected with the canonical message and no file is written", async () => {
+    const root = tmpRoot("store-schema-guard-");
+    try {
+      const store = createFsStore(root);
+      const doc: ArtifactDoc = {
+        kind: "review",
+        key: "r-1",
+        payload: { verdict: "approve" },
+        schema: "mstar.review/v1",
+      };
+      await expect(store.put(doc)).rejects.toThrow(SCHEMA_GUARD_MESSAGE);
+      // Fail-loud means refuse-before-write: nothing may land on disk.
+      expect(existsSync(resolveArtifactPath(root, doc))).toBe(false);
+      expect(await store.get({ kind: "review", key: "r-1" })).toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("doc without schema puts unchanged (payload written verbatim)", async () => {
+    const root = tmpRoot("store-schema-absent-");
+    try {
+      const store = createFsStore(root);
+      const payload = { version: 2, updated_at: "2026-08-28", workflows: [] };
+      await store.put({ kind: "status", key: "root", payload });
+      const got = await store.get({ kind: "status", key: "root" });
+      expect(got).toEqual(payload);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("review payload with inner schema field still writes (payload.schema is data, not doc.schema)", async () => {
+    const root = tmpRoot("store-payload-schema-");
+    try {
+      const store = createFsStore(root);
+      const ref = { kind: "review", key: "20260828-store-engine-contract" } as const;
+      const payload = { schema: "mstar.review/v1", verdict: "approve", findings: [] };
+      await store.put({ ...ref, payload });
+      const got = await store.get(ref);
+      expect(got).toEqual(payload);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
