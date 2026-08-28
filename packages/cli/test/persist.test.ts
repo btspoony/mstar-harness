@@ -609,3 +609,92 @@ describe("mstar persist — --schema under the D3 fail-loud store contract", () 
     });
   });
 });
+
+describe("mstar persist list — D4/D5 enumeration face (plan 20260828-store-cli-faces T1)", () => {
+  test("snapshot keys print one per line ascending, no header (D5)", () => {
+    withTempDir((dir) => {
+      const payloadFile = writePayload(dir, "snapshot.json", SNAPSHOT_PAYLOAD);
+      for (const key of ["wf-2", "wf-10", "wf-1"]) {
+        const put = runCli(["persist", "snapshot", "--key", key, "--file", payloadFile], {
+          env: harnessEnv(dir),
+        });
+        expect(put.exitCode).toBe(0);
+      }
+      const list = runCli(["persist", "list", "snapshot"], { env: harnessEnv(dir) });
+      expect(list.exitCode).toBe(0);
+      expect(list.stdout).toBe("wf-1\nwf-10\nwf-2\n");
+    });
+  });
+
+  test("review union: plan-shaped dir keys + _reviews flat keys (D4)", () => {
+    withTempDir((dir) => {
+      const payloadFile = writePayload(dir, "review.json", REVIEW_PAYLOAD);
+      const planShaped = runCli(
+        ["persist", "review", "--key", "20260828-store-cli-faces", "--file", payloadFile],
+        { env: harnessEnv(dir) },
+      );
+      expect(planShaped.exitCode).toBe(0);
+      const flat = runCli(["persist", "review", "--key", "review-abc", "--file", payloadFile], {
+        env: harnessEnv(dir),
+      });
+      expect(flat.exitCode).toBe(0);
+      const list = runCli(["persist", "list", "review"], { env: harnessEnv(dir) });
+      expect(list.exitCode).toBe(0);
+      expect(list.stdout).toBe("20260828-store-cli-faces\nreview-abc\n");
+    });
+  });
+
+  test("status lists root only when status.json exists; empty stdout + exit 0 when absent (D4 exists-conditional)", () => {
+    withTempDir((dir) => {
+      const missing = runCli(["persist", "list", "status"], { env: harnessEnv(dir) });
+      expect(missing.exitCode).toBe(0);
+      expect(missing.stdout).toBe("");
+
+      const payloadFile = writePayload(dir, "status.json", STATUS_PAYLOAD);
+      const put = runCli(["persist", "status", "--key", "root", "--file", payloadFile], {
+        env: harnessEnv(dir),
+      });
+      expect(put.exitCode).toBe(0);
+      const list = runCli(["persist", "list", "status"], { env: harnessEnv(dir) });
+      expect(list.exitCode).toBe(0);
+      expect(list.stdout).toBe("root\n");
+    });
+  });
+
+  test("empty kind → empty stdout, exit 0 (D5)", () => {
+    withTempDir((dir) => {
+      const list = runCli(["persist", "list", "snapshot"], { env: harnessEnv(dir) });
+      expect(list.exitCode).toBe(0);
+      expect(list.stdout).toBe("");
+    });
+  });
+
+  test("json kind → usage error exit 2 before calling list (D5)", () => {
+    withTempDir((dir) => {
+      const list = runCli(["persist", "list", "json"], { env: harnessEnv(dir) });
+      expect(list.exitCode).toBe(2);
+      expect(list.stderr).toContain("json keys are absolute paths and cannot be listed");
+      expect(list.stdout).toBe("");
+    });
+  });
+
+  test("unknown kind → usage, exit 2", () => {
+    withTempDir((dir) => {
+      const list = runCli(["persist", "list", "bogus"], { env: harnessEnv(dir) });
+      expect(list.exitCode).toBe(2);
+      expect(list.stderr).toContain("unknown kind");
+    });
+  });
+
+  test("injected store without list → usage error exit 2, not TypeError exit 1 (D4 probe)", () => {
+    withTempDir((dir) => {
+      const moduleFile = join(dir, "store-mod.ts");
+      writeFileSync(moduleFile, storeModuleSource("PERSIST_MODULE_FILE"), "utf8");
+      const list = runCli(["persist", "list", "snapshot", "--store", moduleFile], {
+        env: { ...harnessEnv(dir), PERSIST_MODULE_FILE: join(dir, "recording.json") },
+      });
+      expect(list.exitCode).toBe(2);
+      expect(list.stderr).toContain("store does not support list");
+    });
+  });
+});

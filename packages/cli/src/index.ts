@@ -1127,6 +1127,7 @@ function parsePersistKind(kind: string): ArtifactKind {
   throw new SddScriptError(
     "usage: persist <kind> --key <key> [--file <path>|--stdin] [--store <module>] [--schema <id>]\n" +
       "       persist get <kind> --key <key> [--store <module>]\n" +
+      "       persist list <kind> [--store <module>]\n" +
       `  unknown kind ${JSON.stringify(kind)} \u2014 expected status | snapshot | residuals | review | json`,
     2,
   );
@@ -1240,6 +1241,41 @@ persistCommand
       console.log(JSON.stringify(payload, null, 2));
     } catch (error) {
       failScript(error, "persist get");
+    }
+  });
+
+persistCommand
+  .command("list")
+  .description("Print the stored keys for <kind>, one per line, ascending, no header (json is not listable)")
+  .argument("<kind>", "status | snapshot | residuals | review | json")
+  // --store is parsed by the parent `persist` command (same commander
+  // dispatch constraint as `get` — see the note there).
+  .action(async (kind: string, _options: object, command: Command) => {
+    try {
+      const parsedKind = parsePersistKind(kind);
+      // D5: json keys are absolute paths — usage error exit 2 BEFORE
+      // calling list (engine list("json") still throws for in-process
+      // callers).
+      if (parsedKind === "json") {
+        throw new SddScriptError("ArtifactStore json keys are absolute paths and cannot be listed", 2);
+      }
+      const parentOpts = command.parent?.opts() ?? {};
+      const store = typeof parentOpts.store === "string" ? parentOpts.store : undefined;
+      await resolvePersistStore(store);
+      const artifactStore = getArtifactStore();
+      // D4: probe the optional method — an injected store without list is a
+      // usage error exit 2, never a TypeError mapped to exit 1.
+      if (typeof artifactStore.list !== "function") {
+        throw new SddScriptError("store does not support list", 2);
+      }
+      const refs = await artifactStore.list(parsedKind);
+      // Keys only, ascending, no header — pipe-friendly (D5). Sort here so
+      // the contract holds for injected stores too, not just FsStore.
+      for (const key of refs.map((ref) => ref.key).sort()) {
+        console.log(key);
+      }
+    } catch (error) {
+      failScript(error, "persist list");
     }
   });
 
