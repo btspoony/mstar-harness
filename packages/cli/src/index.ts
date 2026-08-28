@@ -1115,6 +1115,7 @@ const persistCommand = program
   .command("persist")
   .description(
     "Persist one JSON coordination doc through the ArtifactStore (status / snapshot / residuals / review / json). " +
+      "Faces: put (default), get [--validate], list (keys only, no header), delete (idempotent). " +
       "The default FsStore resolves the harness dir from the cwd / MSTAR_HARNESS_DIR; --store <module> or " +
       "MSTAR_STORE_MODULE injects a module-backed store (filesystem paths only) for the process.",
   );
@@ -1126,7 +1127,9 @@ function parsePersistKind(kind: string): ArtifactKind {
   if (PERSIST_KINDS.includes(kind)) return kind as ArtifactKind;
   throw new SddScriptError(
     "usage: persist <kind> --key <key> [--file <path>|--stdin] [--store <module>] [--schema <id>]\n" +
-      "       persist get <kind> --key <key> [--store <module>]\n" +
+      "       persist get <kind> --key <key> [--validate] [--store <module>]\n" +
+      "       persist list <kind> [--store <module>]\n" +
+      "       persist delete <kind> --key <key> [--store <module>]\n" +
       `  unknown kind ${JSON.stringify(kind)} \u2014 expected status | snapshot | residuals | review | json`,
     2,
   );
@@ -1182,7 +1185,7 @@ persistCommand
   .option("--file <path>", "Payload JSON file (default: read stdin)")
   .option("--stdin", "Read the payload JSON from stdin")
   .option("--store <module>", "Store module path (filesystem only; overrides MSTAR_STORE_MODULE)")
-  .option("--schema <id>", "Optional schema id stored on the artifact doc (e.g. mstar.review/v1)")
+  .option("--schema <id>", "Optional schema id stored on the artifact doc (e.g. mstar.review/v1); stored only by store modules that persist it \u2014 the default FsStore rejects it (exit 1)")
   .action(
     async (kind: string, options: { key?: string; file?: string; stdin?: boolean; store?: string; schema?: string }) => {
       try {
@@ -1223,6 +1226,77 @@ persistCommand
   // commander parses a parent's options from the whole arg list, so a
   // subcommand's same-named declaration would never see the value. The get
   // action reads the values the parent parsed (probe-verified).
+  // --validate has no parent twin, so it is declared here and read from the
+  // action's own options.
+  .option("--validate", "Run the kind's validator on the fetched payload (notes on stderr; invalid \u2192 exit 1)")
+  .action(async (kind: string, options: { validate?: boolean }, command: Command) => {
+    try {
+      const parsedKind = parsePersistKind(kind);
+      const parentOpts = command.parent?.opts() ?? {};
+      const key = typeof parentOpts.key === "string" ? parentOpts.key : undefined;
+      const store = typeof parentOpts.store === "string" ? parentOpts.store : undefined;
+      if (key === undefined) {
+        throw new SddScriptError("usage: persist get <kind> --key <key> [--validate] [--store <module>]", 2);
+      }
+      await resolvePersistStore(store);
+      const payload = await getArtifactStore().get({ kind: parsedKind, key });
+      if (payload === undefined) {
+        throw new Error(`persist get ${parsedKind}/${key}: no stored document`);
+      }
+      if (options.validate === true) {
+        // D1: reuse the put-gate validator (no second validator home). An
+        // invalid doc throws BEFORE stdout is written, so stdout stays
+        // payload-JSON-only and stderr carries the same violations list as
+        // put. json is parse-only — the helper returns without validating.
+        validatePersistPayload(parsedKind, payload);
+        console.error(parsedKind === "json" ? "json: parse-only" : "validation: ok");
+      }
+      console.log(JSON.stringify(payload, null, 2));
+    } catch (error) {
+      failScript(error, "persist get");
+    }
+  });
+
+persistCommand
+  .command("list")
+  .description("Print the stored keys for <kind>, one per line, ascending, no header (json is not listable)")
+  .argument("<kind>", "status | snapshot | residuals | review | json")
+  // --store is parsed by the parent `persist` command (same commander
+  // dispatch constraint as `get` — see the note there).
+  .action(async (kind: string, _options: object, command: Command) => {
+    try {
+      const parsedKind = parsePersistKind(kind);
+      // D5: json keys are absolute paths — usage error exit 2 BEFORE
+      // calling list (engine list("json") still throws for in-process
+      // callers).
+      if (parsedKind === "json") {
+        throw new SddScriptError("ArtifactStore json keys are absolute paths and cannot be listed", 2);
+      }
+      const parentOpts = command.parent?.opts() ?? {};
+      const store = typeof parentOpts.store === "string" ? parentOpts.store : undefined;
+      await resolvePersistStore(store);
+      const artifactStore = getArtifactStore();
+      // D4: probe the optional method — an injected store without list is a
+      // usage error exit 2, never a TypeError mapped to exit 1.
+      if (typeof artifactStore.list !== "function") {
+        throw new SddScriptError("store does not support list", 2);
+      }
+      const refs = await artifactStore.list(parsedKind);
+      // Keys only, ascending, no header — pipe-friendly (D5). Sort here so
+      // the contract holds for injected stores too, not just FsStore.
+      for (const key of refs.map((ref) => ref.key).sort()) {
+        console.log(key);
+      }
+    } catch (error) {
+      failScript(error, "persist list");
+    }
+  });
+persistCommand
+  .command("delete")
+  .description("Delete the stored document for <kind>/<key> (idempotent: absent is a no-op; no prompt)")
+  .argument("<kind>", "status | snapshot | residuals | review | json")
+  // --key / --store are parsed by the parent `persist` command (same
+  // commander dispatch constraint as `get` — see the note there).
   .action(async (kind: string, _options: object, command: Command) => {
     try {
       const parsedKind = parsePersistKind(kind);
@@ -1230,16 +1304,19 @@ persistCommand
       const key = typeof parentOpts.key === "string" ? parentOpts.key : undefined;
       const store = typeof parentOpts.store === "string" ? parentOpts.store : undefined;
       if (key === undefined) {
-        throw new SddScriptError("usage: persist get <kind> --key <key> [--store <module>]", 2);
+        throw new SddScriptError("usage: persist delete <kind> --key <key> [--store <module>]", 2);
       }
       await resolvePersistStore(store);
-      const payload = await getArtifactStore().get({ kind: parsedKind, key });
-      if (payload === undefined) {
-        throw new Error(`persist get ${parsedKind}/${key}: no stored document`);
+      const artifactStore = getArtifactStore();
+      // D2: probe the optional method — an injected store without delete is
+      // a usage error exit 2, never a TypeError mapped to exit 1.
+      if (typeof artifactStore.delete !== "function") {
+        throw new SddScriptError("store does not support delete", 2);
       }
-      console.log(JSON.stringify(payload, null, 2));
+      await artifactStore.delete({ kind: parsedKind, key });
+      console.log(`deleted ${parsedKind}/${key}`);
     } catch (error) {
-      failScript(error, "persist get");
+      failScript(error, "persist delete");
     }
   });
 

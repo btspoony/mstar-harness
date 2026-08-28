@@ -209,7 +209,9 @@ Exit codes:
 Persist one JSON coordination doc through the pluggable **ArtifactStore** (engine `@mstar-harness/engine` — `ArtifactStore` / `ArtifactKind` / `createFsStore` / `setArtifactStore` / `getArtifactStore` / `loadStoreModule`). The default `FsStore` maps kinds to the existing `{HARNESS_DIR}` paths and keeps the atomic temp+rename write semantics; integrations can mount their own store in-process (`setArtifactStore`) or per-command via `--store` / `MSTAR_STORE_MODULE`.
 
 - `mstar-harness persist <kind> --key <key> [--file <path>|--stdin] [--store <module>] [--schema <id>]`
-- `mstar-harness persist get <kind> --key <key> [--store <module>]`
+- `mstar-harness persist get <kind> --key <key> [--validate] [--store <module>]`
+- `mstar-harness persist list <kind> [--store <module>]`
+- `mstar-harness persist delete <kind> --key <key> [--store <module>]`
 
 `<kind>` is one of `status` | `snapshot` | `residuals` | `review` | `json` (an unknown kind is a usage error, exit 2).
 
@@ -229,13 +231,21 @@ Default `FsStore` path table:
 | `review` | plan-shaped key (`^[0-9]{8}-[a-z0-9-]+$`) → `{HARNESS_DIR}/sdd/<key>/review/report.json`; other keys → `{HARNESS_DIR}/sdd/_reviews/<key>.json` |
 | `json` | the absolute `key` path itself |
 
-`persist get` prints the stored payload JSON (pretty-printed) and exits 0; a missing document exits 1.
+`persist get` prints the stored payload JSON (pretty-printed) on stdout and exits 0; a missing document exits 1 (`persist get <kind>/<key>: no stored document` on stderr). Stdout is payload JSON only — notes and violations never mix into it, so agents can pipe the output. With `--validate`, the same per-kind validator as the put gate runs on the fetched payload (no second validator): a valid document exits 0 with the payload on stdout and `validation: ok` on stderr; `json` accepts `--validate` as a parse-only no-op (`json: parse-only` on stderr); an invalid document exits 1 with stdout empty and the same violations list as put on stderr. FsStore persists payloads verbatim; integrity checks live at the write gate and at `persist get --validate`.
 
-Exit codes:
+`persist list` prints the stored keys only — one per line, ascending, with **no header** (the kind is already the argv; pipe-friendly). An empty kind prints nothing and exits 0. Enumeration reports what exists: a missing backing file or directory yields an empty list, and every listed key round-trips through `persist get` — `status` lists `root` iff `{HARNESS_DIR}/status.json` exists; `review` is the union of `{HARNESS_DIR}/sdd/_reviews/*.json` keys and plan-shaped `{HARNESS_DIR}/sdd/<key>/review/report.json` directories. `json` keys are absolute paths and cannot be listed — a usage error (exit 2) raised before enumeration.
 
-- `0` — put OK (`persist <kind>/<key>: OK`) or get printed the stored payload
-- `1` — invalid payload refused, missing payload file, missing stored document, store-module load/verification failure, harness dir not found
-- `2` — usage: unknown kind, missing `--key`, `--file` + `--stdin` together
+`persist delete` removes the stored document and prints `deleted <kind>/<key>`. Deleting an absent document is an idempotent no-op (same output, exit 0) and there is no confirmation prompt. `status` deletes `{HARNESS_DIR}/status.json` — allowed; it is a normal store doc, not privileged.
+
+All three faces go through the same `--store` / `MSTAR_STORE_MODULE` injection path as put/get. An injected store without the optional `list` or `delete` member is a usage error (exit 2, probed before the call) — never a TypeError.
+
+Exit codes (binding):
+
+| Code | When |
+|------|------|
+| `0` | put OK (`persist <kind>/<key>: OK`); get printed the payload (with or without `--validate`); delete succeeded or no-op; list printed keys (including none) |
+| `1` | get miss; get `--validate` invalid; put invalid payload; put payload file missing / not valid JSON; stored file unparseable JSON on get; FsStore `doc.schema` rejection; store-module load failure; harness dir not found |
+| `2` | usage: unknown kind; missing `--key`; `--file` + `--stdin` together; `persist list json`; injected store missing `list` / `delete` |
 
 #### Persist a review envelope
 
