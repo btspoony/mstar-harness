@@ -328,6 +328,8 @@ export {
 } from "./skill-authoring.js";
 export type {
   MergeClass,
+  MstarReviewFinding,
+  MstarReviewV1,
   PrReportTarget,
   PrReviewSeatPromptOptions,
   PrReviewSizing,
@@ -355,6 +357,10 @@ export {
   prReviewSeatPrompt,
   prReviewSizing,
   resolvePrReviewTier,
+  synthesizeReview,
   validateFindingDoc,
+  validateMstarReviewV1,
   validatePrReviewReport,
 } from "./prreview.js";
+export type { ArtifactDoc, ArtifactKind, ArtifactRef, ArtifactStore } from "./store.js";
+export { assertFsStorePath, createFsStore, getArtifactStore, loadStoreModule, resolveArtifactPath, setArtifactStore } from "./store.js";

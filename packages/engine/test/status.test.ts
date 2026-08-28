@@ -30,10 +30,11 @@
  * - `ValidationResult`/`GateResult` shapes + severity machine SSOT:
  *   `packages/engine/src/core.ts` (roadmap §8.5 C2/C4).
  */
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { createFsStore, setArtifactStore } from "../src/store.js";
 import {
   normalizeSeverity,
   registerWorkflow,
@@ -62,6 +63,19 @@ const REAL_SHAPE = join(FIXTURES, "status.real-shape.json");
 function tmpRoot(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix));
 }
+
+/** Temp harness root with the active ArtifactStore pointed at it (Task 2:
+ * the routed writers persist via `getArtifactStore().put`; tests inject an
+ * FsStore over the root they read back from). */
+function harnessRoot(prefix: string): string {
+  const root = tmpRoot(prefix);
+  setArtifactStore(createFsStore(root));
+  return root;
+}
+
+afterEach(() => {
+  setArtifactStore(undefined);
+});
 
 function violationsOf(result: GateResult): string[] {
   return result.violations.map((v) => v.code);
@@ -427,7 +441,7 @@ describe("validateStatusV2", () => {
   });
 
   test("malformed JSON file yields a violation, not a throw", () => {
-    const dir = tmpRoot("status-v2-invalid-json-");
+    const dir = harnessRoot("status-v2-invalid-json-");
     const file = join(dir, "status.json");
     writeFileSync(file, "{ not json", "utf8");
     const result = validateStatusV2(file);
@@ -438,7 +452,7 @@ describe("validateStatusV2", () => {
 
   describe("removal-at-terminal invariant (no listed id resolves to a terminal/missing snapshot)", () => {
     test("path input: listed entry whose snapshot is missing is a violation", () => {
-      const dir = tmpRoot("status-v2-snapshot-missing-");
+      const dir = harnessRoot("status-v2-snapshot-missing-");
       try {
         const statusPath = join(dir, "status.json");
         writeJson(statusPath, v2doc({ workflows: [wfEntry()] }));
@@ -450,7 +464,7 @@ describe("validateStatusV2", () => {
     });
 
     test("path input: listed entry resolving to a terminal snapshot is a violation", async () => {
-      const dir = tmpRoot("status-v2-terminal-");
+      const dir = harnessRoot("status-v2-terminal-");
       try {
         await writeTerminalSnapshot(dir, "wf-1");
         const statusPath = join(dir, "status.json");
@@ -463,7 +477,7 @@ describe("validateStatusV2", () => {
     });
 
     test("path input: listed entry resolving to an active (running) snapshot validates clean", async () => {
-      const dir = tmpRoot("status-v2-active-");
+      const dir = harnessRoot("status-v2-active-");
       try {
         await writeRunningSnapshot(dir, "wf-1");
         const statusPath = join(dir, "status.json");
@@ -477,7 +491,7 @@ describe("validateStatusV2", () => {
     });
 
     test("root entry type/started_at are cross-checked against the snapshot (QC wave-1 S-c)", async () => {
-      const dir = tmpRoot("status-v2-mismatch-");
+      const dir = harnessRoot("status-v2-mismatch-");
       try {
         await writeRunningSnapshot(dir, "wf-1"); // snapshot type plan, started_at 2026-08-19T08:00:00Z
         const statusPath = join(dir, "status.json");
@@ -499,7 +513,7 @@ describe("validateStatusV2", () => {
     });
 
     test("explicit harnessDir opts enable the invariant check for doc input", () => {
-      const dir = tmpRoot("status-v2-doc-harness-");
+      const dir = harnessRoot("status-v2-doc-harness-");
       try {
         const result = validateStatusV2(v2doc({ workflows: [wfEntry()] }), { harnessDir: dir });
         expect(violationsOf(result)).toContain("status.workflow.snapshot-missing");
@@ -509,8 +523,8 @@ describe("validateStatusV2", () => {
     });
 
     test("path input: listed entry whose snapshot is a symlink escaping the harness is a violation (QC wave-1 S-f)", async () => {
-      const dir = tmpRoot("status-v2-symlink-escape-");
-      const outside = tmpRoot("status-v2-symlink-outside-");
+      const dir = harnessRoot("status-v2-symlink-escape-");
+      const outside = harnessRoot("status-v2-symlink-outside-");
       try {
         // Real snapshot physically OUTSIDE the harness; `workflows/wf-1` is
         // a symlink to it. The lexical path is harness-relative and exists,
@@ -529,7 +543,7 @@ describe("validateStatusV2", () => {
     });
 
     test("path input: a symlink resolving INSIDE the harness still validates clean (location, not symlink presence, is the invariant)", async () => {
-      const dir = tmpRoot("status-v2-symlink-inside-");
+      const dir = harnessRoot("status-v2-symlink-inside-");
       try {
         // `workflows/wf-1` is a symlink to `workflows/real-wf-1` — the
         // resolved snapshot still physically lives under the harness, so
@@ -569,7 +583,7 @@ describe("registerWorkflow / unregisterWorkflow (root writers under the root-fil
   const entry: WorkflowEntry = { id: "wf-1", type: "plan", started_at: "2026-08-19T08:00:00Z", dir: "workflows/wf-1" };
 
   async function harnessWithRunningSnapshot(prefix: string): Promise<string> {
-    const dir = tmpRoot(prefix);
+    const dir = harnessRoot(prefix);
     await writeRunningSnapshot(dir, "wf-1");
     return dir;
   }
@@ -630,7 +644,7 @@ describe("registerWorkflow / unregisterWorkflow (root writers under the root-fil
   });
 
   test("registerWorkflow refuses an entry whose snapshot is missing (invariant at write time, nothing written)", async () => {
-    const dir = tmpRoot("status-register-no-snapshot-");
+    const dir = harnessRoot("status-register-no-snapshot-");
     try {
       const statusPath = join(dir, "status.json");
       await expect(registerWorkflow(statusPath, entry)).rejects.toThrow(/snapshot/);
@@ -641,7 +655,7 @@ describe("registerWorkflow / unregisterWorkflow (root writers under the root-fil
   });
 
   test("registerWorkflow refuses to modify a v1 root (migration hint, root untouched)", async () => {
-    const dir = tmpRoot("status-register-v1-");
+    const dir = harnessRoot("status-register-v1-");
     try {
       const statusPath = join(dir, "status.json");
       const v1 = '{\n  "version": 1,\n  "updated_at": "2026-08-08",\n  "plans": [],\n  "residual_findings": {},\n  "metadata": {}\n}\n';
@@ -693,7 +707,7 @@ describe("registerWorkflow / unregisterWorkflow (root writers under the root-fil
   });
 
   test("unregisterWorkflow on a missing root is a no-op that never creates the file", async () => {
-    const dir = tmpRoot("status-unregister-missing-");
+    const dir = harnessRoot("status-unregister-missing-");
     try {
       const statusPath = join(dir, "status.json");
       const after = await unregisterWorkflow(statusPath, "wf-1");
@@ -701,6 +715,37 @@ describe("registerWorkflow / unregisterWorkflow (root writers under the root-fil
       expect(existsSync(statusPath)).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+  test("registerWorkflow fails loud when the root file lies outside the store root (qc3 F-201); nothing written", async () => {
+    const root = tmpRoot("status-register-outside-");
+    const other = tmpRoot("status-outside-");
+    setArtifactStore(createFsStore(root));
+    try {
+      const statusPath = join(other, "status.json");
+      await expect(registerWorkflow(statusPath, entry)).rejects.toThrow(/routed writer path mismatch/);
+      expect(existsSync(statusPath)).toBe(false);
+      expect(existsSync(join(root, "status.json"))).toBe(false);
+      expect(existsSync(join(other, ".status-write.lockdir"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(other, { recursive: true, force: true });
+    }
+  });
+
+  test("unregisterWorkflow fails loud when the root file lies outside the store root (qc3 F-201); nothing written", async () => {
+    const root = tmpRoot("status-unregister-outside-");
+    const other = tmpRoot("status-outside-");
+    setArtifactStore(createFsStore(root));
+    try {
+      const statusPath = join(other, "status.json");
+      await expect(unregisterWorkflow(statusPath, "wf-1")).rejects.toThrow(/routed writer path mismatch/);
+      expect(existsSync(statusPath)).toBe(false);
+      expect(existsSync(join(root, "status.json"))).toBe(false);
+      expect(existsSync(join(other, ".status-write.lockdir"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(other, { recursive: true, force: true });
     }
   });
 });
@@ -822,7 +867,7 @@ describe("techDebtRollup — project register aggregation (v3 relocation, QC wav
   }
 
   test("computed aggregates match jq semantics (warning→low, null/''→medium, closed excluded, unspecified target)", () => {
-    const dir = tmpRoot("status-rollup-register-");
+    const dir = harnessRoot("status-rollup-register-");
     try {
       writeRegister(dir, "_default", {
         "plan-a": [entry({ id: "R1", severity: "warning", target: "V1.0" })],
@@ -844,7 +889,7 @@ describe("techDebtRollup — project register aggregation (v3 relocation, QC wav
   });
 
   test("every open entry of a plan counts (array schema — multi-residual plans aggregate per plan)", () => {
-    const dir = tmpRoot("status-rollup-multi-");
+    const dir = harnessRoot("status-rollup-multi-");
     try {
       writeRegister(dir, "_default", {
         "plan-a": [
@@ -866,7 +911,7 @@ describe("techDebtRollup — project register aggregation (v3 relocation, QC wav
   });
 
   test("aggregates across multiple project registers (by_plan keyed by plan id)", () => {
-    const dir = tmpRoot("status-rollup-multiproj-");
+    const dir = harnessRoot("status-rollup-multiproj-");
     try {
       writeRegister(dir, "_default", { "plan-a": [entry({ id: "R1", severity: "low" })] });
       writeRegister(dir, "acme", { "plan-b": [entry({ id: "R2", severity: "high" })] });
@@ -880,7 +925,7 @@ describe("techDebtRollup — project register aggregation (v3 relocation, QC wav
   });
 
   test("no registers / missing project dir → empty rollup", () => {
-    const dir = tmpRoot("status-rollup-empty-");
+    const dir = harnessRoot("status-rollup-empty-");
     try {
       const rollup = techDebtRollup(join(dir, "does-not-exist"));
       expect(rollup.computed).toEqual({
@@ -899,7 +944,7 @@ describe("techDebtRollup — project register aggregation (v3 relocation, QC wav
     // project register is the source of truth. The retained
     // stored/checks/overall fields keep the exported TechDebtRollup shape
     // (compile-compat for the P2 CLI cutover) and always report DRIFT.
-    const dir = tmpRoot("status-rollup-drift-");
+    const dir = harnessRoot("status-rollup-drift-");
     try {
       writeRegister(dir, "_default", { "plan-a": [entry()] });
       const rollup = techDebtRollup(dir);
@@ -912,7 +957,7 @@ describe("techDebtRollup — project register aggregation (v3 relocation, QC wav
   });
 
   test("entry lifecycle: false counts as OPEN (jq `//` defaults false)", () => {
-    const dir = tmpRoot("status-rollup-false-");
+    const dir = harnessRoot("status-rollup-false-");
     try {
       writeRegister(dir, "_default", { "plan-a": [entry({ id: "R1", severity: "low", target: "V1", lifecycle: false })] });
       const rollup = techDebtRollup(dir);
@@ -939,7 +984,7 @@ describe("resolveCompassEnforcement — repo compass enforcement: hard (Slice 5,
   };
 
   test("no harness/iterations dir → { hard: false, source: none }", () => {
-    const root = tmpRoot("mstar-compass-enf-");
+    const root = harnessRoot("mstar-compass-enf-");
     try {
       expect(resolveCompassEnforcement(join(root, "no-harness"))).toEqual({ hard: false, source: "none" });
       const harness = join(root, "h");
@@ -951,7 +996,7 @@ describe("resolveCompassEnforcement — repo compass enforcement: hard (Slice 5,
   });
 
   test("compass frontmatter enforcement: hard → { hard: true, source: compass }", () => {
-    const root = tmpRoot("mstar-compass-enf-");
+    const root = harnessRoot("mstar-compass-enf-");
     try {
       const harness = join(root, "h");
       mkdirSync(harness, { recursive: true });
@@ -963,7 +1008,7 @@ describe("resolveCompassEnforcement — repo compass enforcement: hard (Slice 5,
   });
 
   test("compass without enforcement → none (warn-only)", () => {
-    const root = tmpRoot("mstar-compass-enf-");
+    const root = harnessRoot("mstar-compass-enf-");
     try {
       const harness = join(root, "h");
       mkdirSync(harness, { recursive: true });
@@ -975,7 +1020,7 @@ describe("resolveCompassEnforcement — repo compass enforcement: hard (Slice 5,
   });
 
   test("compass enforcement: soft → none (flag inert unless hard)", () => {
-    const root = tmpRoot("mstar-compass-enf-");
+    const root = harnessRoot("mstar-compass-enf-");
     try {
       const harness = join(root, "h");
       mkdirSync(harness, { recursive: true });
@@ -987,7 +1032,7 @@ describe("resolveCompassEnforcement — repo compass enforcement: hard (Slice 5,
   });
 
   test("iterations dir without any delivery-compass.md → none", () => {
-    const root = tmpRoot("mstar-compass-enf-");
+    const root = harnessRoot("mstar-compass-enf-");
     try {
       const harness = join(root, "h");
       mkdirSync(join(harness, "iterations", "20260808-demo"), { recursive: true });
@@ -998,7 +1043,7 @@ describe("resolveCompassEnforcement — repo compass enforcement: hard (Slice 5,
   });
 
   test("multiple iterations — only ACTIVE/LOCKED compasses count: completed hard is ignored, active hard wins", () => {
-    const root = tmpRoot("mstar-compass-enf-");
+    const root = harnessRoot("mstar-compass-enf-");
     try {
       const harness = join(root, "h");
       mkdirSync(harness, { recursive: true });
@@ -1013,7 +1058,7 @@ describe("resolveCompassEnforcement — repo compass enforcement: hard (Slice 5,
   });
 
   test("completed compass with enforcement: hard → none (D2 rollback works across iterations)", () => {
-    const root = tmpRoot("mstar-compass-enf-");
+    const root = harnessRoot("mstar-compass-enf-");
     try {
       const harness = join(root, "h");
       mkdirSync(harness, { recursive: true });
@@ -1026,7 +1071,7 @@ describe("resolveCompassEnforcement — repo compass enforcement: hard (Slice 5,
   });
 
   test("active + completed — the ACTIVE compass wins: completed hard + active soft → none", () => {
-    const root = tmpRoot("mstar-compass-enf-");
+    const root = harnessRoot("mstar-compass-enf-");
     try {
       const harness = join(root, "h");
       mkdirSync(harness, { recursive: true });
@@ -1039,7 +1084,7 @@ describe("resolveCompassEnforcement — repo compass enforcement: hard (Slice 5,
   });
 
   test("locked compass with enforcement: hard → hard (locked still steers the repo)", () => {
-    const root = tmpRoot("mstar-compass-enf-");
+    const root = harnessRoot("mstar-compass-enf-");
     try {
       const harness = join(root, "h");
       mkdirSync(harness, { recursive: true });
@@ -1051,7 +1096,7 @@ describe("resolveCompassEnforcement — repo compass enforcement: hard (Slice 5,
   });
 
   test("status-less compass with enforcement: hard → none (fail-soft — no status, no hardening)", () => {
-    const root = tmpRoot("mstar-compass-enf-");
+    const root = harnessRoot("mstar-compass-enf-");
     try {
       const harness = join(root, "h");
       mkdirSync(harness, { recursive: true });
@@ -1063,7 +1108,7 @@ describe("resolveCompassEnforcement — repo compass enforcement: hard (Slice 5,
   });
 
   test("hard declaration in compass body prose is not honored — frontmatter only", () => {
-    const root = tmpRoot("mstar-compass-enf-");
+    const root = harnessRoot("mstar-compass-enf-");
     try {
       const harness = join(root, "h");
       mkdirSync(harness, { recursive: true });
@@ -1083,7 +1128,7 @@ describe("resolveCompassEnforcement — repo compass enforcement: hard (Slice 5,
 
 describe("resolveMstarcEnforcement / resolveRepoEnforcement — `.mstarc` [config] enforcement (plan-conventions § `.mstarc` 格式)", () => {
   test("enforcement=hard → { hard: true, source: mstarc } from a repo-root .mstarc", () => {
-    const root = tmpRoot("mstar-rc-enf-");
+    const root = harnessRoot("mstar-rc-enf-");
     try {
       writeFileSync(join(root, ".mstarc"), "[config]\nenforcement=hard\n");
       expect(resolveMstarcEnforcement(join(root, ".mstar"))).toEqual({ hard: true, source: "mstarc" });
@@ -1093,7 +1138,7 @@ describe("resolveMstarcEnforcement / resolveRepoEnforcement — `.mstarc` [confi
   });
 
   test("enforcement=soft → { hard: false, source: mstarc } (local rollback)", () => {
-    const root = tmpRoot("mstar-rc-enf-");
+    const root = harnessRoot("mstar-rc-enf-");
     try {
       writeFileSync(join(root, ".mstarc"), "[config]\nenforcement=soft\n");
       expect(resolveMstarcEnforcement(join(root, ".mstar"))).toEqual({ hard: false, source: "mstarc" });
@@ -1103,7 +1148,7 @@ describe("resolveMstarcEnforcement / resolveRepoEnforcement — `.mstarc` [confi
   });
 
   test("no .mstarc / no enforcement key → none", () => {
-    const root = tmpRoot("mstar-rc-enf-");
+    const root = harnessRoot("mstar-rc-enf-");
     try {
       expect(resolveMstarcEnforcement(join(root, ".mstar"))).toEqual({ hard: false, source: "none" });
       writeFileSync(join(root, ".mstarc"), "[config]\nplan_dir=plans\n");
@@ -1114,7 +1159,7 @@ describe("resolveMstarcEnforcement / resolveRepoEnforcement — `.mstarc` [confi
   });
 
   test("a .mstarc above the repo root is never adopted", () => {
-    const root = tmpRoot("mstar-rc-enf-");
+    const root = harnessRoot("mstar-rc-enf-");
     try {
       mkdirSync(join(root, "proj"), { recursive: true });
       writeFileSync(join(root, ".mstarc"), "[config]\nenforcement=hard\n");
@@ -1125,7 +1170,7 @@ describe("resolveMstarcEnforcement / resolveRepoEnforcement — `.mstarc` [confi
   });
 
   test("resolveRepoEnforcement: .mstarc beats a hard compass; compass applies when no .mstarc", () => {
-    const root = tmpRoot("mstar-rc-enf-");
+    const root = harnessRoot("mstar-rc-enf-");
     try {
       const harness = join(root, "h");
       mkdirSync(harness, { recursive: true });

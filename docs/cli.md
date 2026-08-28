@@ -112,6 +112,8 @@ Optional role-model overrides (advanced; skips live model discovery):
 
 - `npx @mstar-harness/cli init --yes --target opencode --pm-model openai/gpt-5.5 --strategic-models openai/gpt-5.5 --dev-models openai/gpt-5.3-codex --qc-models openai/gpt-5.5,openai/gpt-5.4,openai/gpt-5.3-codex --other-models openai/gpt-5.5`
 
+After a successful init, the CLI auto-installs the **matching-version** `@mstar-harness/cli` globally (`npm i -g @mstar-harness/cli@<same version>`) so the `mstar-harness` binary lands on PATH for engine-check commands. The install is skipped when the version on PATH already matches, and it is fail-soft: if npm cannot write the global prefix, init still succeeds and prints a doctor hint. Pass `--no-global-cli` to skip the global install; `--dry-run` prints the would-run `npm i -g` command without executing it.
+
 Cursor install:
 
 - Global install (git checkout at `~/.cursor/plugins/local/morning-star-harness`; shared Codex/OpenCode checkout at `~/.mstar/harness`):
@@ -172,6 +174,8 @@ Check an existing config:
 
 If validation fails, `doctor` exits with a non-zero status code. For the dsh target, each plugin row is reported as `uninstalled` / `disabled` / `mounted`; rows that are uninstalled or disabled are issues (exit 1), `mounted` is healthy.
 
+`doctor` also prints a non-fatal CLI-on-PATH note for every target — `mstar-harness` missing, present with a different version, or present and matching — without affecting the exit code.
+
 ### `mstar-harness plugin validate`
 
 Validate a plugin package against the [Agent Plugins v1.0.0](https://agent-plugins.org/specification) portable format. The root `plugin.json` is checked against the closed manifest schema (required `$schema` and `name`, metadata types, plugin name rules, `extensions`), `mcp.json` per §7.2.1 if present (closed `$schema` + `mcpServers`, stdio/streamable-http/sse server variants, `env`/`cwd`/`url`/`headers` rules), and `skills/` discovery per §6.1 (immediate child directories with `SKILL.md`; frontmatter `name` must equal the directory name and `description` must be non-empty). No schemas are fetched at runtime. Without `--root`, the command starts at the project root and walks up to the nearest ancestor containing `plugin.json`; use `--root` for an unambiguous target.
@@ -199,6 +203,73 @@ Exit codes:
 
 - `0` — OK: prints `roles validate (mapping): OK` and `roles validate (load order): OK`, then the summary `roles validate: OK` with the violation, sibling-skill-scanned, and load-order-checked counts (the load-order count excludes `mstar-harness-core`, exempt by design)
 - `1` — violations: prints a FAIL header plus one violation row per mapping / load-order violation on stderr (same stream split as the other `printChecklist` commands); the `roles validate: FAIL (N violations, …)` summary line stays on stdout
+
+### `mstar-harness persist`
+
+Persist one JSON coordination doc through the pluggable **ArtifactStore** (engine `@mstar-harness/engine` — `ArtifactStore` / `ArtifactKind` / `createFsStore` / `setArtifactStore` / `getArtifactStore` / `loadStoreModule`). The default `FsStore` maps kinds to the existing `{HARNESS_DIR}` paths and keeps the atomic temp+rename write semantics; integrations can mount their own store in-process (`setArtifactStore`) or per-command via `--store` / `MSTAR_STORE_MODULE`.
+
+- `mstar-harness persist <kind> --key <key> [--file <path>|--stdin] [--store <module>] [--schema <id>]`
+- `mstar-harness persist get <kind> --key <key> [--store <module>]`
+
+`<kind>` is one of `status` | `snapshot` | `residuals` | `review` | `json` (an unknown kind is a usage error, exit 2).
+
+Payload source: `--file <path>` reads a JSON file; `--stdin` (or no flag) reads stdin; the two flags are mutually exclusive. `--key` is required: `status` always uses the key `root`; `json` takes an absolute file path (relative or `..`-containing keys are rejected); the other kinds take a stable id (workflow id, project id, or review id). `--schema <id>` optionally records a schema id (e.g. `mstar.review/v1`) on the stored doc.
+
+Validators run before put: `status` / `snapshot` / `residuals` payloads are checked with the existing `validateStatusV2` / `validateWorkflowSnapshot` / `validateProjectRegister` and an invalid document is refused (exit 1, nothing written). `review` payloads must be a valid `mstar.review/v1` envelope (`validateMstarReviewV1` — harness verdicts `ship it` / `needs fixes` / `blocked` and merge classes `must-fix` / `should-fix` / `nit`; inspector M1 vocab such as `approve` / `critical` is rejected with `review.inspector-vocab`); `json` is an escape hatch.
+
+Store selection: `--store <module>` wins over `MSTAR_STORE_MODULE`; with neither, the default `FsStore` resolves the harness dir from the cwd / `MSTAR_HARNESS_DIR`. The module is a filesystem path to an ESM/CJS file exporting `createArtifactStore()`, a default factory, or a default store object with `put()` + `get()` functions — **filesystem paths only**: empty values and any URI scheme (`http:`, `https:`, `file:`, `data:`, `node:`, …) are rejected before `import()` (no remote loader).
+
+Default `FsStore` path table:
+
+| kind | path |
+|------|------|
+| `status` | `{HARNESS_DIR}/status.json` (key must be `root`) |
+| `snapshot` | `{WORKFLOW_DIR}/<key>/snapshot.json` |
+| `residuals` | `{PROJECT_DIR}/<key>/residuals.json` |
+| `review` | plan-shaped key (`^[0-9]{8}-[a-z0-9-]+$`) → `{HARNESS_DIR}/sdd/<key>/review/report.json`; other keys → `{HARNESS_DIR}/sdd/_reviews/<key>.json` |
+| `json` | the absolute `key` path itself |
+
+`persist get` prints the stored payload JSON (pretty-printed) and exits 0; a missing document exits 1.
+
+Exit codes:
+
+- `0` — put OK (`persist <kind>/<key>: OK`) or get printed the stored payload
+- `1` — invalid payload refused, missing payload file, missing stored document, store-module load/verification failure, harness dir not found
+- `2` — usage: unknown kind, missing `--key`, `--file` + `--stdin` together
+
+#### Persist a review envelope
+
+`kind: review` stores a validated `mstar.review/v1` envelope — the machine-readable review document that `pr-deep-review` / `amazing-pr-review` Stage 3 must persist after synthesis (the Markdown report is the optional human copy, not a substitute). Plan-shaped keys (`^[0-9]{8}-[a-z0-9-]+$`) land at `{HARNESS_DIR}/sdd/<key>/review/report.json`; other keys (PR ids, review ids) at `{HARNESS_DIR}/sdd/_reviews/<key>.json`.
+
+```sh
+mstar-harness persist review --key 20260827-review-json --stdin <<'JSON'
+{
+  "schema": "mstar.review/v1",
+  "verdict": "needs fixes",
+  "summary_md": "## Verdict: needs fixes · 85%\n\nmust-fix=0 should-fix=1 nit=0 unverified=0\n\n- should-fix: Retry loop swallows the last error",
+  "tally": {
+    "verdict": "needs fixes",
+    "scorePct": 85,
+    "tally": { "mustFix": 0, "shouldFix": 1, "nit": 0, "unverified": 0 },
+    "chatHeader": "needs fixes · 85%\nmust-fix=0 should-fix=1 nit=0 unverified=0"
+  },
+  "findings": [
+    {
+      "mergeClass": "should-fix",
+      "category": "correctness",
+      "file_path": "src/retry.ts",
+      "line_start": 12,
+      "line_end": 18,
+      "title": "Retry loop swallows the last error",
+      "body": "The final attempt's error is discarded before the fallback path."
+    }
+  ],
+  "target": { "owner": "acme", "repo": "widget", "pr": 134, "head_sha": "abc1234" }
+}
+JSON
+```
+
+`persist review/<key>: OK` on success; `persist get review --key <key>` prints the stored envelope. An invalid envelope is refused before any write — e.g. inspector M1 vocab `"verdict": "approve"` fails with `refusing to persist invalid review document: [high] review.inspector-vocab: ...` (exit 1), a `tally.verdict` that disagrees with the top-level `verdict` fails with `review.verdict-tally-mismatch`, and a provided `tally` that is not the full `computePrTally` shape (missing `scorePct`, counts, or `chatHeader`; wrong types; unknown verdict) fails with `review.tally-malformed`.
 
 ## Maintainer Commands
 
@@ -379,6 +450,7 @@ Or re-run `npx @mstar-harness/cli init --target cursor --scope global`.
 - `--scope <global|project>` (default: `project`)
 - `--dry-run`
 - `--no-fallbacks`: skip installing the `dsh-llm-fallbacks` plugin row (dsh target only; ignored for other targets)
+- `--no-global-cli`: skip installing the matching-version `@mstar-harness/cli` globally after init
 - `--pm-model <model>` (optional advanced override)
 - `--strategic-models <a,b,c>` (optional)
 - `--dev-models <a,b,c>` (optional)

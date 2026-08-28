@@ -20,6 +20,7 @@ import {
   appendProjectRegisterEntries,
   closeProjectRegisterEntry,
   completenessLevel,
+  createFsStore,
   detectHarnessKind,
   detectHost,
   emitGitignoreSnippet,
@@ -29,6 +30,7 @@ import {
   findSimplifyMarkers,
   findTemporaryMarkers,
   findingsCleanupGate,
+  getArtifactStore,
   isReadOnlyAssignmentRole,
   l1PreDispatchCheck,
   l2PreDispatchCheck,
@@ -36,6 +38,7 @@ import {
   lintFrontmatter,
   lintLoadOrder,
   lintStrategySections,
+  loadStoreModule,
   parseAssignmentBranchForms,
   parseAssignmentFields,
   parseBranchPolicyDirectOnBranch,
@@ -52,6 +55,7 @@ import {
   reviewPackage,
   scaffoldAuditPlan,
   scanSecrets,
+  setArtifactStore,
   supplyChainChecks,
   scaffoldHarness,
   scopeGuard,
@@ -73,12 +77,16 @@ import {
   validateAssignmentFields,
   validateDesignTokenFrontmatter,
   validateIntegrationMergeLease,
+  validateMstarReviewV1,
+  validateProjectRegister,
   validateRoleMapping,
   validateSchemaYaml,
   validateStatus,
+  validateStatusV2,
   validateWorkflowSnapshot,
   WORKFLOW_SNAPSHOT_FILE,
   _DEFAULT_PROJECT,
+  type ArtifactKind,
   type AuditCategory,
   type AuditEffort,
   type AuditFinding,
@@ -104,6 +112,7 @@ import { runMigrateCommand, type MigrateCliOptions } from "./commands/migrate";
 import { validateAgentPlugin } from "./agent-plugins";
 import { buildModelAssignments } from "./assignment";
 import { getAdapter } from "./adapters";
+import { defaultDetectVersion, ensureGlobalCli, formatCliDoctorNote } from "./global-cli";
 import type { DoctorOptions, InitOptions, PluginValidateOptions, Target } from "./types";
 import { SUPPORTED_TARGETS } from "./types";
 import { parseCsv, readJson, writeJson, readHarnessVersion, resolveCliPath, resolveProjectRoot } from "./utils";
@@ -175,6 +184,7 @@ async function runInit(options: InitOptions) {
     for (const note of installResult.notes) {
       console.log(`  - ${note}`);
     }
+    ensureGlobalCli({ version: packageVersion, dryRun: !!options.dryRun, noGlobalCli: !!options.noGlobalCli });
     return;
   }
 
@@ -219,6 +229,7 @@ async function runInit(options: InitOptions) {
       console.log(`  - ${roleId}: ${modelId}`);
     }
   }
+  ensureGlobalCli({ version: packageVersion, dryRun: !!options.dryRun, noGlobalCli: !!options.noGlobalCli });
 }
 
 function runDoctor(options: DoctorOptions) {
@@ -226,6 +237,9 @@ function runDoctor(options: DoctorOptions) {
   const adapter = getAdapter(target);
   const scope = options.scope || "project";
   console.log(`Target: ${target}`);
+  // CLI-on-PATH note (SP1-AC6): informational for every target, never part
+  // of doctor errors and never affects the exit code.
+  console.log(formatCliDoctorNote(defaultDetectVersion(), packageVersion));
 
   if (adapter.mode === "install") {
     const result = adapter.runInstallDoctor?.(scope);
@@ -735,15 +749,22 @@ program
   .option("--output <path>", "Config file path override, relative to project root")
   .option("--dry-run", "Preview result without writing config")
   .option("--no-fallbacks", "Skip installing the dsh-llm-fallbacks plugin (dsh target only)")
+  .option("--no-global-cli", "Skip installing the matching-version @mstar-harness/cli globally after init")
   .option("--pm-model <model>", "Optional: model for project-manager (advanced override)")
   .option("--strategic-models <a,b,c>", "Optional: models for architect/product-manager/prompt-engineer")
   .option("--dev-models <a,b,c>", "Optional: models for fullstack-dev/fullstack-dev-2/frontend-dev")
   .option("--qc-models <a,b,c>", "Optional: models for qc trio")
   .option("--other-models <a,b,c>", "Optional: models for remaining roles")
-  .action(async (options: InitOptions & { fallbacks?: boolean }) => {
+  .action(async (options: InitOptions & { fallbacks?: boolean; globalCli?: boolean }) => {
     // commander's negation `--no-fallbacks` parses as `fallbacks: false`
     // (default true); map to the canonical `noFallbacks` name at the boundary.
-    await runInit({ ...options, noFallbacks: options.fallbacks === false });
+    // `--no-global-cli` likewise parses as `globalCli: false` (default true);
+    // map to the canonical `noGlobalCli` name the same way.
+    await runInit({
+      ...options,
+      noFallbacks: options.fallbacks === false,
+      noGlobalCli: options.globalCli === false,
+    });
   });
 
 const harnessCommand = program
@@ -1002,6 +1023,10 @@ statusCommand
       }
       const projectId = sanitizeProjectId(options.project ?? _DEFAULT_PROJECT);
       const projectRoot = resolveProjectDir(process.cwd(), options.harness ? { harnessDir: options.harness } : {});
+      // Store-root pinning (plan Task 4 Part B): the engine writers put
+      // through getArtifactStore(), whose default root is the cwd-resolved
+      // harness \u2014 an explicit --harness must pin the store to that root.
+      if (options.harness) setArtifactStore(createFsStore(options.harness));
       const projectDir = path.join(projectRoot, projectId);
       const registeredAt = todayString();
       const entries = entriesRaw.map((raw, index) => {
@@ -1043,6 +1068,8 @@ statusCommand
     try {
       const projectId = sanitizeProjectId(options.project ?? _DEFAULT_PROJECT);
       const projectRoot = resolveProjectDir(process.cwd(), options.harness ? { harnessDir: options.harness } : {});
+      // Store-root pinning (plan Task 4 Part B): see backlog-register.
+      if (options.harness) setArtifactStore(createFsStore(options.harness));
       const projectDir = path.join(projectRoot, projectId);
       await closeProjectRegisterEntry({
         projectDir,
@@ -1082,6 +1109,138 @@ const migrateCommand = program
   .option("--json", "Machine-readable JSON output")
   .action(async (options: MigrateCliOptions) => {
     await runMigrateCommand(options);
+  });
+
+const persistCommand = program
+  .command("persist")
+  .description(
+    "Persist one JSON coordination doc through the ArtifactStore (status / snapshot / residuals / review / json). " +
+      "The default FsStore resolves the harness dir from the cwd / MSTAR_HARNESS_DIR; --store <module> or " +
+      "MSTAR_STORE_MODULE injects a module-backed store (filesystem paths only) for the process.",
+  );
+
+/** Persist kinds (unknown kind is a usage error, exit 2). */
+const PERSIST_KINDS: readonly string[] = ["status", "snapshot", "residuals", "review", "json"];
+
+function parsePersistKind(kind: string): ArtifactKind {
+  if (PERSIST_KINDS.includes(kind)) return kind as ArtifactKind;
+  throw new SddScriptError(
+    "usage: persist <kind> --key <key> [--file <path>|--stdin] [--store <module>] [--schema <id>]\n" +
+      "       persist get <kind> --key <key> [--store <module>]\n" +
+      `  unknown kind ${JSON.stringify(kind)} \u2014 expected status | snapshot | residuals | review | json`,
+    2,
+  );
+}
+
+/** Inject the store module from --store (wins) or MSTAR_STORE_MODULE; no
+ * value keeps the default FsStore (cwd / MSTAR_HARNESS_DIR). */
+async function resolvePersistStore(storeFlag: string | undefined): Promise<void> {
+  const modulePath = storeFlag ?? process.env.MSTAR_STORE_MODULE;
+  if (modulePath === undefined) return;
+  setArtifactStore(await loadStoreModule(modulePath));
+}
+
+/** Read the payload JSON source: --file wins, --stdin and no flag read stdin
+ * (CLI transform convention); both flags together is a usage error. */
+function readPersistPayload(options: { file?: string; stdin?: boolean }): string {
+  if (options.file !== undefined && options.stdin === true) {
+    throw new SddScriptError("usage: persist --file <path> and --stdin are mutually exclusive", 2);
+  }
+  if (options.file !== undefined) {
+    const filePath = path.resolve(options.file);
+    if (!fs.existsSync(filePath)) {
+      throw new Error(`persist payload file not found: ${filePath}`);
+    }
+    return fs.readFileSync(filePath, "utf8");
+  }
+  return fs.readFileSync(0, "utf8");
+}
+
+/** Run the kind's existing validator before put (structure-only: the store
+ * may not be FS-backed, so no harness-dir snapshot-existence checks).
+ * kind=review runs validateMstarReviewV1 (no opaque JSON once SP3 lands);
+ * json remains parse-only (arbitrary payloads). */
+function validatePersistPayload(kind: ArtifactKind, payload: unknown): void {
+  let gate: GateResult;
+  if (kind === "status") gate = validateStatusV2(payload as StatusV2Doc);
+  else if (kind === "snapshot") gate = validateWorkflowSnapshot(payload);
+  else if (kind === "residuals") gate = validateProjectRegister(payload);
+  else if (kind === "review") gate = validateMstarReviewV1(payload);
+  else return; // json \u2014 arbitrary payload, parse-only
+  if (gate.ok) return;
+  const detail = gate.violations.map((v) => `[${v.severity}] ${v.code}: ${v.message}`).join("; ");
+  throw new Error(`refusing to persist invalid ${kind} document: ${detail}`);
+}
+
+persistCommand
+  .argument("<kind>", "status | snapshot | residuals | review | json")
+  // Not a commander requiredOption: the `get` subcommand declares the same
+  // flag, and a parent requiredOption would be validated before subcommand
+  // dispatch — `persist get ... --key k` would fail the parent's check.
+  // Validated in-handler below (usage, exit 2).
+  .option("--key <key>", 'Stable key inside the kind (status: "root"; json: absolute file path)')
+  .option("--file <path>", "Payload JSON file (default: read stdin)")
+  .option("--stdin", "Read the payload JSON from stdin")
+  .option("--store <module>", "Store module path (filesystem only; overrides MSTAR_STORE_MODULE)")
+  .option("--schema <id>", "Optional schema id stored on the artifact doc (e.g. mstar.review/v1)")
+  .action(
+    async (kind: string, options: { key?: string; file?: string; stdin?: boolean; store?: string; schema?: string }) => {
+      try {
+        const parsedKind = parsePersistKind(kind);
+        if (options.key === undefined) {
+          throw new SddScriptError(
+            "usage: persist <kind> --key <key> [--file <path>|--stdin] [--store <module>] [--schema <id>]",
+            2,
+          );
+        }
+        const raw = readPersistPayload(options);
+        let payload: unknown;
+        try {
+          payload = JSON.parse(raw);
+        } catch (error) {
+          throw new Error(`persist payload is not valid JSON: ${(error as Error).message}`);
+        }
+        validatePersistPayload(parsedKind, payload);
+        await resolvePersistStore(options.store);
+        await getArtifactStore().put({
+          kind: parsedKind,
+          key: options.key,
+          payload,
+          ...(options.schema !== undefined ? { schema: options.schema } : {}),
+        });
+        console.log(pc.green(`persist ${parsedKind}/${options.key}: OK`));
+      } catch (error) {
+        failScript(error, "persist");
+      }
+    },
+  );
+
+persistCommand
+  .command("get")
+  .description("Print the stored payload JSON for <kind>/<key>, or exit 1 when absent")
+  .argument("<kind>", "status | snapshot | residuals | review | json")
+  // --key / --store are declared on the parent `persist` command only:
+  // commander parses a parent's options from the whole arg list, so a
+  // subcommand's same-named declaration would never see the value. The get
+  // action reads the values the parent parsed (probe-verified).
+  .action(async (kind: string, _options: object, command: Command) => {
+    try {
+      const parsedKind = parsePersistKind(kind);
+      const parentOpts = command.parent?.opts() ?? {};
+      const key = typeof parentOpts.key === "string" ? parentOpts.key : undefined;
+      const store = typeof parentOpts.store === "string" ? parentOpts.store : undefined;
+      if (key === undefined) {
+        throw new SddScriptError("usage: persist get <kind> --key <key> [--store <module>]", 2);
+      }
+      await resolvePersistStore(store);
+      const payload = await getArtifactStore().get({ kind: parsedKind, key });
+      if (payload === undefined) {
+        throw new Error(`persist get ${parsedKind}/${key}: no stored document`);
+      }
+      console.log(JSON.stringify(payload, null, 2));
+    } catch (error) {
+      failScript(error, "persist get");
+    }
   });
 
 const leaseCommand = program
@@ -2143,6 +2302,10 @@ auditCommand
         throw new Error(`audit dir not found: ${outDir}`);
       }
       const harnessDir = resolveLeaseHarnessDir(options.harness);
+      // Store-root pinning (plan Task 4 Part B): the root upsert inside
+      // promoteAuditPlans puts through getArtifactStore() \u2014 pin it to the
+      // resolved harness root (identical to the default when --harness is absent).
+      setArtifactStore(createFsStore(harnessDir));
       const result = await promoteAuditPlans(outDir, selected, {
         harnessDir,
         ...(options.workflow !== undefined ? { workflowId: options.workflow } : {}),
