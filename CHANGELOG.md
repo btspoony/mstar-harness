@@ -8,6 +8,21 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ## [Unreleased]
 
+## [3.5.0] - 2026-08-28
+
+### Harness
+
+- Added a pluggable **ArtifactStore** for JSON coordination docs: `status.json`, workflow snapshots, and project residuals now persist through `ArtifactStore.put` / `get` (default `FsStore` keeps the existing `{HARNESS_DIR}` paths and atomic-write semantics). Integrations can mount their own store in-process via `setArtifactStore` or per-command via `MSTAR_STORE_MODULE` / `--store` — filesystem paths only, URI schemes are rejected before `import()`.
+- Added `mstar-harness persist <kind> --key <key> [--file <path>|--stdin] [--store <module>] [--schema <id>]` and `mstar-harness persist get <kind> --key <key> [--store <module>]` for `status` / `snapshot` / `residuals` / `review` / `json`, running the existing kind validators before put.
+- `mstar-harness init` now auto-installs the **matching-version** `@mstar-harness/cli` globally after a successful run, so the `mstar-harness` binary lands on PATH for engine-check commands. The install is skipped when the PATH version already matches, is fail-soft on npm errors (init still exits 0), and can be opted out with `--no-global-cli`; `--dry-run` prints the would-run `npm i -g` command without executing it.
+- `mstar-harness doctor` now prints a non-fatal CLI-on-PATH note (missing / mismatch / match) for every target.
+- mstar-dispatch-gates: role-binding field check now resolves the host column via `mstar-host` §Detect active host tool-shape detection; config paths and repo content are explicitly forbidden as host signals (prevents applying another host's dispatch key, e.g. OpenCode `subagent`, to an omp session whose task tool schema uses `agent`).
+- Added a first-class **review JSON kind** (`mstar.review/v1`): `synthesizeReview` folds vetted findings into a validated envelope (verdict/tally from `computePrTally`), `mstar-harness persist review` validates the envelope before put (inspector M1 vocab rejected), and `pr-deep-review` / `amazing-pr-review` Stage 3 must persist the envelope — the Markdown report is the optional human copy.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, and the portable Agent Plugins manifest: **→ 3.5.0**.
+
 ## [3.4.1] - 2026-08-27
 
 ### Harness
