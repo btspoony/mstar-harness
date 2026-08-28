@@ -128,7 +128,7 @@ jobs:
         run: bun run --cwd packages/dsh typecheck:tests
 
       - name: Test scripts
-        run: bun test scripts/ascii-literal-utils.test.ts scripts/ci-dep-guard.test.ts scripts/drift-lint.test.ts scripts/escape-dist-literals.test.ts scripts/lint-ascii-literals.test.ts scripts/prepare-release.test.ts
+        run: bun test scripts/ascii-literal-utils.test.ts scripts/ci-dep-guard.test.ts scripts/ci-packed-manifest-guard.test.ts scripts/drift-lint.test.ts scripts/escape-dist-literals.test.ts scripts/lint-ascii-literals.test.ts scripts/prepare-release.test.ts
 
       # spec §7.4: src code literals must stay pure ASCII — bun 1.2.17
       # misdecodes raw multi-byte UTF-8 in literals of the 366KB CLI bundle.
@@ -140,6 +140,12 @@ jobs:
 
       - name: Pack OpenCode tarball
         run: bun run opencode:pack
+      # The root package.json is the manifest git/hosted installs resolve
+      # (`omp plugin install github:…`, `bun add github:…`): a `workspace:`
+      # spec in a shipped dependency section breaks every hosted install at
+      # resolve time (20260829 hotfix). Guard raw + packed root manifests.
+      - name: "Packed manifest guard (no workspace: in shipped deps)"
+        run: bun run ci:packed-manifest-guard
 
   # Roadmap §8.7 item 2 (risk R2): skills must load without the engine.
   # Deliberately NO `bun install` — this job runs in a checkout where
