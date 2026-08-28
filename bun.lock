@@ -5,7 +5,7 @@
     "": {
       "name": "morning-star",
       "dependencies": {
-        "@mstar-harness/engine": "workspace:*",
+        "@mstar-harness/engine": "^3.5.0",
       },
       "devDependencies": {
         "@oh-my-pi/pi-coding-agent": "^17.2.11",
