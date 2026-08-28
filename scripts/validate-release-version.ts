@@ -69,6 +69,26 @@ if (installVersion !== version) {
   console.log(`OK INSTALL.md ZCode marketplace example: ${installVersion}`);
 }
 
+// The root manifest is what git/hosted installs (`omp plugin install
+// github:…`, `bun add github:…`) resolve, so its runtime engine dependency
+// must be the plain semver range `^<version>` — never `workspace:*`, which is
+// unresolvable outside the declaring workspace. The engine version itself is
+// a VERSION_SURFACES entry (packages/engine/package.json) checked above, so
+// the root range must track the release tag.
+const rootPkg = (await Bun.file("package.json").json()) as {
+  dependencies?: Record<string, string>;
+};
+const engineSpec = rootPkg.dependencies?.["@mstar-harness/engine"];
+const expectedSpec = `^${version}`;
+if (engineSpec !== expectedSpec) {
+  console.error(
+    `MISMATCH root engine dependency (package.json): expected dependencies["@mstar-harness/engine"] = "${expectedSpec}", found ${engineSpec ?? "<missing>"}`,
+  );
+  failed = true;
+} else {
+  console.log(`OK root engine dependency: ${engineSpec}`);
+}
+
 if (failed) {
   console.error(`\nRelease tag ${tag} does not match all surface versions.`);
   process.exit(1);

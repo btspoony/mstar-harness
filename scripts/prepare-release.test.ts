@@ -2,7 +2,7 @@
  * scripts/prepare-release.ts — fragment `packages:` token validation.
  */
 import { describe, expect, test } from "bun:test";
-import { parseFragment, validateFragmentPackages } from "./prepare-release.ts";
+import { parseFragment, syncRootEngineSpec, validateFragmentPackages } from "./prepare-release.ts";
 
 describe("validateFragmentPackages (release packages enum)", () => {
   test("cli, root (comma+space, mixed case 'CLI, Root') is valid and normalized lowercase", () => {
@@ -47,5 +47,36 @@ packages: root, , cli,
 - bullet`);
     expect(ws.packages).toEqual(["root", "cli"]);
     expect(validateFragmentPackages(ws.packages, "ws.md")).toEqual([]);
+  });
+});
+
+describe("syncRootEngineSpec (root manifest engine dependency)", () => {
+  const manifest = (spec: string) => `{
+  "name": "morning-star",
+  "dependencies": {
+    "@mstar-harness/engine": "${spec}"
+  },
+  "devDependencies": {
+    "@mstar-harness/engine": "workspace:*"
+  }
+}
+`;
+
+  test("rewrites workspace:* to the release range, devDependencies untouched", () => {
+    const out = syncRootEngineSpec(manifest("workspace:*"), "3.5.0");
+    expect(out).toContain('"dependencies": {\n    "@mstar-harness/engine": "^3.5.0"\n  }');
+    expect(out).toContain('"devDependencies": {\n    "@mstar-harness/engine": "workspace:*"\n  }');
+  });
+
+  test("rewrites a stale semver range to the new release range", () => {
+    const out = syncRootEngineSpec(manifest("^3.4.0"), "3.5.0");
+    expect(out).toContain('"@mstar-harness/engine": "^3.5.0"');
+    expect(out).not.toContain("^3.4.0");
+  });
+
+  test("throws when the root manifest has no engine runtime dependency", () => {
+    expect(() =>
+      syncRootEngineSpec(`{ "dependencies": { "zod": "^4.0.0" } }`, "3.5.0"),
+    ).toThrow('could not find dependencies["@mstar-harness/engine"]');
   });
 });
