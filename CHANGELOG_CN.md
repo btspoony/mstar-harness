@@ -6,6 +6,16 @@
 
 ## [Unreleased]
 
+## [3.5.1] - 2026-08-28
+
+### Harness
+
+- 修复 git/托管安装（`omp plugin install github:btspoony/mstar-harness`、`bun add github:…`）在依赖解析阶段失败的问题：根清单的 `@mstar-harness/engine` 依赖使用了仅在打包期可用的 `workspace:*` 协议，脱离 monorepo 无法解析。现改为 `^3.5.0`，托管安装从 npm 拉取；本地开发检出仍链接 workspace 成员。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单及便携式 Agent Plugins 清单：**→ 3.5.1**。
+
 ## [3.5.0] - 2026-08-28
 
 ### Harness

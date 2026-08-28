@@ -8,6 +8,16 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ## [Unreleased]
 
+## [3.5.1] - 2026-08-28
+
+### Harness
+
+- Fixed git/hosted installs (`omp plugin install github:btspoony/mstar-harness`, `bun add github:…`) failing at dependency resolution: the root manifest's `@mstar-harness/engine` dependency used the pack-time-only `workspace:*` protocol, unresolvable outside the monorepo. It is now `^3.5.0`, fetched from npm on hosted installs, while dev checkouts still link the workspace member.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, and the portable Agent Plugins manifest: **→ 3.5.1**.
+
 ## [3.5.0] - 2026-08-28
 
 ### Harness
