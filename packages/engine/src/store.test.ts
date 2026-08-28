@@ -406,6 +406,35 @@ describe("FsStore list (D4)", () => {
     }
   });
 
+  test("snapshot: a stray unsafe dir name is skipped without throwing, never advertised (qc1-S/qc3-S)", async () => {
+    const root = tmpRoot("store-list-unsafe-dir-");
+    try {
+      const store = createFsStore(root);
+      await store.put({ kind: "snapshot", key: "wf-1", payload: { id: "wf-1" } });
+      // Unsafe name (space) WITH a backing snapshot.json: skipped for the
+      // name itself — a get on such a key would throw, so list must not
+      // advertise it (and must not throw either).
+      mkdirSync(join(root, "workflows", "bad name"), { recursive: true });
+      writeFileSync(join(root, "workflows", "bad name", "snapshot.json"), "{}", "utf8");
+      expect(await store.list!("snapshot")).toEqual([{ kind: "snapshot", key: "wf-1" }]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("review: an unsafe _reviews filename is skipped without throwing, never advertised (qc1-S/qc3-S)", async () => {
+    const root = tmpRoot("store-list-unsafe-review-");
+    try {
+      const store = createFsStore(root);
+      await store.put({ kind: "review", key: "review-inline", payload: { verdict: "approve" } });
+      // Garbage flat filename: advertised pre-fix, then get threw.
+      writeFileSync(join(root, "sdd", "_reviews", "bad name.json"), "{}", "utf8");
+      expect(await store.list!("review")).toEqual([{ kind: "review", key: "review-inline" }]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("every listed key across kinds round-trips through get (D4 uniform rule)", async () => {
     const root = tmpRoot("store-list-roundtrip-");
     try {

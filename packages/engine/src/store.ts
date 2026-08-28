@@ -111,6 +111,19 @@ function listJsonKeys(dir: string): string[] {
     .map((entry) => entry.name.slice(0, -".json".length));
 }
 
+/** Resolve the get-path for `key` through the single path table, or
+ * `undefined` when the name is outside the safe path-component charset.
+ * Enumeration probes every discovered name through this guard (qc1-S /
+ * qc3-S): a stray unsafe name is skipped — never thrown, never advertised —
+ * so every listed key round-trips through `get`. */
+function tryResolveGetPath(root: string, kind: ArtifactKind, key: string): string | undefined {
+  try {
+    return resolveArtifactPath(root, { kind, key });
+  } catch {
+    return undefined;
+  }
+}
+
 /** Default local adapter: maps kinds to the existing `.mstar/` paths.
  * `put` uses the sync `writeJson` (atomic temp+rename unchanged) and
  * returns a resolved Promise; locks stay with callers (architect-locked
@@ -167,7 +180,8 @@ export function createFsStore(harnessRoot: string): ArtifactStore & { root: stri
         for (const name of listDirNames(baseDir)) {
           // Round-trip guard through the single path table: list the dir
           // only when its exact get-path (<dir>/<name>/<file>) exists.
-          if (existsSync(resolveArtifactPath(root, { kind, key: name }))) keys.push(name);
+          const getPath = tryResolveGetPath(root, kind, name);
+          if (getPath !== undefined && existsSync(getPath)) keys.push(name);
         }
       } else {
         // kind === "review" — union enumeration (D4), single detector
@@ -177,15 +191,17 @@ export function createFsStore(harnessRoot: string): ArtifactStore & { root: stri
         // excluded: get routes such a key to <key>/review/report.json, so
         // listing the _reviews file would advertise an unreachable key.
         for (const key of listJsonKeys(join(sddDir, "_reviews"))) {
-          if (!PLAN_SHAPED_KEY_RE.test(key)) keys.push(key);
+          if (!PLAN_SHAPED_KEY_RE.test(key) && tryResolveGetPath(root, kind, key) !== undefined) {
+            keys.push(key);
+          }
         }
         // (b) plan-shaped dirs carrying <dir>/review/report.json.
         for (const name of listDirNames(sddDir)) {
-          if (
-            PLAN_SHAPED_KEY_RE.test(name) &&
-            existsSync(resolveArtifactPath(root, { kind, key: name }))
-          ) {
-            keys.push(name);
+          if (PLAN_SHAPED_KEY_RE.test(name)) {
+            // PLAN_SHAPED_KEY_RE is a subset of the safe charset, so this
+            // probe never throws — same uniform guard as the other arms.
+            const getPath = tryResolveGetPath(root, kind, name);
+            if (getPath !== undefined && existsSync(getPath)) keys.push(name);
           }
         }
       }
