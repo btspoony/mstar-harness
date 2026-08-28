@@ -1115,6 +1115,7 @@ const persistCommand = program
   .command("persist")
   .description(
     "Persist one JSON coordination doc through the ArtifactStore (status / snapshot / residuals / review / json). " +
+      "Faces: put (default), get [--validate], list (keys only, no header), delete (idempotent). " +
       "The default FsStore resolves the harness dir from the cwd / MSTAR_HARNESS_DIR; --store <module> or " +
       "MSTAR_STORE_MODULE injects a module-backed store (filesystem paths only) for the process.",
   );
@@ -1184,7 +1185,7 @@ persistCommand
   .option("--file <path>", "Payload JSON file (default: read stdin)")
   .option("--stdin", "Read the payload JSON from stdin")
   .option("--store <module>", "Store module path (filesystem only; overrides MSTAR_STORE_MODULE)")
-  .option("--schema <id>", "Optional schema id stored on the artifact doc (e.g. mstar.review/v1)")
+  .option("--schema <id>", "Optional schema id stored on the artifact doc (e.g. mstar.review/v1); stored only by store modules that persist it \u2014 the default FsStore rejects it (exit 1)")
   .action(
     async (kind: string, options: { key?: string; file?: string; stdin?: boolean; store?: string; schema?: string }) => {
       try {
