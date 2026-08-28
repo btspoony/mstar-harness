@@ -321,7 +321,7 @@ describe("FsStore schema guard (D3)", () => {
 const LIST_JSON_MESSAGE = "ArtifactStore json keys are absolute paths and cannot be listed";
 
 describe("FsStore list (D4)", () => {
-  test("status lists [root] iff status.json exists; absent file → []", async () => {
+  test("status lists [root] iff status.json exists; absent file \u2192 []", async () => {
     const root = tmpRoot("store-list-status-");
     try {
       const store = createFsStore(root);
@@ -334,7 +334,7 @@ describe("FsStore list (D4)", () => {
     }
   });
 
-  test("snapshot lists workflow dirs with snapshot.json, ascending; stray dirs/files excluded; missing backing → []", async () => {
+  test("snapshot lists workflow dirs with snapshot.json, ascending; stray dirs/files excluded; missing backing \u2192 []", async () => {
     const root = tmpRoot("store-list-snapshot-");
     try {
       const store = createFsStore(root);
@@ -354,7 +354,7 @@ describe("FsStore list (D4)", () => {
     }
   });
 
-  test("residuals lists project dirs with residuals.json, ascending; stray dirs excluded; missing backing → []", async () => {
+  test("residuals lists project dirs with residuals.json, ascending; stray dirs excluded; missing backing \u2192 []", async () => {
     const root = tmpRoot("store-list-residuals-");
     try {
       const store = createFsStore(root);
@@ -391,7 +391,7 @@ describe("FsStore list (D4)", () => {
     }
   });
 
-  test("review: a plan-shaped _reviews file is not listed (get would route elsewhere) until the plan dir exists — then exactly once", async () => {
+  test("review: a plan-shaped _reviews file is not listed (get would route elsewhere) until the plan dir exists \u2014 then exactly once", async () => {
     const root = tmpRoot("store-list-review-guard-");
     try {
       const store = createFsStore(root);
@@ -423,7 +423,11 @@ describe("FsStore list (D4)", () => {
       await store.put({ kind: "review", key: "review-inline", payload: payloads.review });
       for (const kind of ["status", "snapshot", "residuals", "review"] as const) {
         for (const ref of await store.list!(kind)) {
-          expect(await store.get(ref)).toEqual(payloads[kind]);
+          // Intermediate variable: a nested `expect(await store.get(...))` lets
+          // TS infer the get<T> type parameter from the expect overload (never)
+          // — assign first, then assert.
+          const got = await store.get(ref);
+          expect(got).toEqual(payloads[kind]);
         }
       }
     } finally {

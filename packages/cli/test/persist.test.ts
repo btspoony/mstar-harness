@@ -549,16 +549,63 @@ describe("mstar persist — --store / MSTAR_STORE_MODULE module injection (SP2-A
   });
 });
 
-describe("mstar persist — --schema is accepted as doc metadata", () => {
-  test("--schema id is accepted and the put still lands", () => {
+describe("mstar persist — --schema under the D3 fail-loud store contract", () => {
+  test("--schema + default FsStore is a store refusal: exit 1 with the canonical message", () => {
     withTempDir((dir) => {
       const payloadFile = writePayload(dir, "review.json", REVIEW_PAYLOAD);
       const r = runCli(
         ["persist", "review", "--key", "20260827-artifact-store", "--file", payloadFile, "--schema", "mstar.review/v1"],
         { env: harnessEnv(dir) },
       );
+      expect(r.exitCode).toBe(1);
+      expect(r.stderr).toContain("FsStore does not persist schema ids");
+      expect(existsSync(join(dir, "sdd", "20260827-artifact-store", "review", "report.json"))).toBe(false);
+    });
+  });
+
+  test("--schema lands through an injected store module that persists it", () => {
+    withTempDir((dir) => {
+      const module = join(dir, "schema-store.ts");
+      writeFileSync(
+        module,
+        [
+          'import { writeFileSync, readFileSync, existsSync } from "node:fs";',
+          "const file = process.env.PERSIST_SCHEMA_FILE;",
+          'if (!file) throw new Error("PERSIST_SCHEMA_FILE is required");',
+          "export function createArtifactStore() {",
+          "  return {",
+          "    async put(doc) {",
+          "      writeFileSync(file, JSON.stringify({ key: doc.key, schema: doc.schema, payload: doc.payload }));",
+          "    },",
+          "    async get(ref) {",
+          "      if (!existsSync(file)) return undefined;",
+          '      const stored = JSON.parse(readFileSync(file, "utf8"));',
+          "      return stored.key === ref.key ? stored.payload : undefined;",
+          "    },",
+          "  };",
+          "}",
+        ].join("\n"),
+        "utf8",
+      );
+      const payloadFile = writePayload(dir, "review.json", REVIEW_PAYLOAD);
+      const out = join(dir, "schema-store.json");
+      const r = runCli(
+        [
+          "persist",
+          "review",
+          "--key",
+          "20260827-artifact-store",
+          "--file",
+          payloadFile,
+          "--schema",
+          "mstar.review/v1",
+          "--store",
+          module,
+        ],
+        { env: { ...harnessEnv(dir), PERSIST_SCHEMA_FILE: out } },
+      );
       expect(r.exitCode).toBe(0);
-      expect(existsSync(join(dir, "sdd", "20260827-artifact-store", "review", "report.json"))).toBe(true);
+      expect(JSON.parse(readFileSync(out, "utf8")).schema).toBe("mstar.review/v1");
     });
   });
 });
