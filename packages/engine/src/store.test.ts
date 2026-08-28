@@ -474,6 +474,32 @@ describe("FsStore list (D4)", () => {
     }
   });
 
+  test("a readdir ENOENT/ENOTDIR 'path gone' race maps to [], never throws out of list (greptile P1)", async () => {
+    const root = tmpRoot("store-list-race-");
+    try {
+      const store = createFsStore(root);
+      // Deterministic stand-in for the existsSync→readdirSync race: a
+      // regular file where the backing dir is expected makes readdirSync
+      // throw ENOTDIR — the same "path gone" class as ENOENT when the dir
+      // vanishes between check and read. Pre-fix list threw; post-fix [].
+      writeFileSync(join(root, "workflows"), "not a dir", "utf8");
+      expect(await store.list!("snapshot")).toEqual([]);
+      writeFileSync(join(root, "projects"), "not a dir", "utf8");
+      expect(await store.list!("residuals")).toEqual([]);
+      // Same for the review union: sdd/_reviews as a file.
+      mkdirSync(join(root, "sdd"), { recursive: true });
+      writeFileSync(join(root, "sdd", "_reviews"), "not a dir", "utf8");
+      expect(await store.list!("review")).toEqual([]);
+      // ENOENT proper: the whole backing tree removed after store
+      // creation — readdirSync throws ENOENT with no existsSync pre-check.
+      rmSync(root, { recursive: true, force: true });
+      expect(await store.list!("snapshot")).toEqual([]);
+      expect(await store.list!("review")).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("optional-member absence: a store with only put/get stays a valid ArtifactStore (D1-adapter class declines)", () => {
     const store = recordingStore();
     setArtifactStore(store);

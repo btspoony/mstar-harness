@@ -7,6 +7,7 @@
  * package (roadmap §8.4 discipline).
  */
 import { existsSync, readdirSync, unlinkSync } from "node:fs";
+import type { Dirent } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { readJson, writeJson } from "./core.js";
 import {
@@ -96,8 +97,7 @@ export function resolveArtifactPath(harnessRoot: string, ref: ArtifactRef): stri
 /** Directory names directly under `dir` — `[]` when the backing dir is
  * missing (D4 uniform rule: enumerate what exists, never throw). */
 function listDirNames(dir: string): string[] {
-  if (!existsSync(dir)) return [];
-  return readdirSync(dir, { withFileTypes: true })
+  return readDirEntries(dir)
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name);
 }
@@ -105,10 +105,24 @@ function listDirNames(dir: string): string[] {
 /** Keys for the `*.json` files directly under `dir` (extension stripped) —
  * `[]` when the backing dir is missing. */
 function listJsonKeys(dir: string): string[] {
-  if (!existsSync(dir)) return [];
-  return readdirSync(dir, { withFileTypes: true })
+  return readDirEntries(dir)
     .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
     .map((entry) => entry.name.slice(0, -".json".length));
+}
+
+/** Read dir entries, or `[]` when the path is gone (ENOENT) or not a
+ * directory (ENOTDIR). No `existsSync` pre-check: a dir removed between
+ * check and readdir would throw ENOENT out of `list`, breaking the D4
+ * "missing backing → `[]`" rule (greptile P1) — catch it instead. Other
+ * errors (EACCES, …) still throw. */
+function readDirEntries(dir: string): Dirent[] {
+  try {
+    return readdirSync(dir, { withFileTypes: true });
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return [];
+    throw error;
+  }
 }
 
 /** Resolve the get-path for `key` through the single path table, or
