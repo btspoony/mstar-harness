@@ -22,6 +22,7 @@
     "release:prepare": "bun run scripts/prepare-release.ts",
     "release:validate": "bun run scripts/validate-release-version.ts",
     "ci:dep-guard": "bun scripts/ci-dep-guard.ts",
+    "ci:packed-manifest-guard": "bun scripts/ci-packed-manifest-guard.ts",
     "validation:standalone": "bun run scripts/standalone-smoke.ts",
     "validation:drift": "bun run scripts/drift-lint.ts",
     "lint:ascii-literals": "bun scripts/lint-ascii-literals.ts"
