@@ -213,7 +213,7 @@ Persist one JSON coordination doc through the pluggable **ArtifactStore** (engin
 
 `<kind>` is one of `status` | `snapshot` | `residuals` | `review` | `json` (an unknown kind is a usage error, exit 2).
 
-Payload source: `--file <path>` reads a JSON file; `--stdin` (or no flag) reads stdin; the two flags are mutually exclusive. `--key` is required: `status` always uses the key `root`; `json` takes an absolute file path (relative or `..`-containing keys are rejected); the other kinds take a stable id (workflow id, project id, or review id). `--schema <id>` optionally records a schema id (e.g. `mstar.review/v1`) on the stored doc.
+Payload source: `--file <path>` reads a JSON file; `--stdin` (or no flag) reads stdin; the two flags are mutually exclusive. `--key` is required: `status` always uses the key `root`; `json` takes an absolute file path (relative or `..`-containing keys are rejected); the other kinds take a stable id (workflow id, project id, or review id). `--schema <id>` optionally records a schema id (e.g. `mstar.review/v1`) on the artifact doc — stored only by store modules that persist it; the default `FsStore` rejects it (exit 1, nothing written).
 
 Validators run before put: `status` / `snapshot` / `residuals` payloads are checked with the existing `validateStatusV2` / `validateWorkflowSnapshot` / `validateProjectRegister` and an invalid document is refused (exit 1, nothing written). `review` payloads must be a valid `mstar.review/v1` envelope (`validateMstarReviewV1` — harness verdicts `ship it` / `needs fixes` / `blocked` and merge classes `must-fix` / `should-fix` / `nit`; inspector M1 vocab such as `approve` / `critical` is rejected with `review.inspector-vocab`); `json` is an escape hatch.
 
