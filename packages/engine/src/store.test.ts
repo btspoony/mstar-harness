@@ -19,6 +19,15 @@
  * - Module loader (`loadStoreModule` — named export / default factory /
  *   default object; URI-scheme rejection before import; missing file and
  *   non-store shape throw): SP2 § Injection 2–3 + SP2-AC6 / SP2-AC7.
+ * - `put` schema guard (throw on `doc.schema !== undefined`, canonical
+ *   message; `payload.schema` unaffected): `iter-20260828-store-completeness`
+ *   spec `store-contract-completion` § D3.
+ * - `list?` interface + FsStore enumeration (exists-conditional status,
+ *   snapshot/residuals dir scans through the single path table, review
+ *   union with the one PLAN_SHAPED_KEY_RE detector, json non-enumerable,
+ *   `[]` on missing backing, sorted ascending, listed keys round-trip
+ *   through `get`): `iter-20260828-store-completeness` spec
+ *   `store-contract-completion` § D4 + § Architecture lock 4.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -29,6 +38,7 @@ import {
   createFsStore,
   getArtifactStore,
   loadStoreModule,
+  resolveArtifactPath,
   setArtifactStore,
   type ArtifactDoc,
   type ArtifactStore,
@@ -242,6 +252,261 @@ describe("FsStore round-trip", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Schema guard — store-contract-completion D3 (fail-loud on doc.schema)
+// ---------------------------------------------------------------------------
+
+/** Canonical rejection message (single home: spec store-contract-completion
+ * § D3 — do not reword). Source escapes the em-dash per lint:ascii-literals. */
+const SCHEMA_GUARD_MESSAGE =
+  "FsStore does not persist schema ids \u2014 omit --schema or inject a store module that persists it";
+
+describe("FsStore schema guard (D3)", () => {
+  test("doc carrying an envelope schema is rejected with the canonical message and no file is written", async () => {
+    const root = tmpRoot("store-schema-guard-");
+    try {
+      const store = createFsStore(root);
+      const doc: ArtifactDoc = {
+        kind: "review",
+        key: "r-1",
+        payload: { verdict: "approve" },
+        schema: "mstar.review/v1",
+      };
+      await expect(store.put(doc)).rejects.toThrow(SCHEMA_GUARD_MESSAGE);
+      // Fail-loud means refuse-before-write: nothing may land on disk.
+      expect(existsSync(resolveArtifactPath(root, doc))).toBe(false);
+      expect(await store.get({ kind: "review", key: "r-1" })).toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("doc without schema puts unchanged (payload written verbatim)", async () => {
+    const root = tmpRoot("store-schema-absent-");
+    try {
+      const store = createFsStore(root);
+      const payload = { version: 2, updated_at: "2026-08-28", workflows: [] };
+      await store.put({ kind: "status", key: "root", payload });
+      const got = await store.get({ kind: "status", key: "root" });
+      expect(got).toEqual(payload);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("review payload with inner schema field still writes (payload.schema is data, not doc.schema)", async () => {
+    const root = tmpRoot("store-payload-schema-");
+    try {
+      const store = createFsStore(root);
+      const ref = { kind: "review", key: "20260828-store-engine-contract" } as const;
+      const payload = { schema: "mstar.review/v1", verdict: "approve", findings: [] };
+      await store.put({ ...ref, payload });
+      const got = await store.get(ref);
+      expect(got).toEqual(payload);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// list? enumeration — store-contract-completion D4 (FsStore per-kind table)
+// ---------------------------------------------------------------------------
+
+/** Canonical json non-enumerable message (single home: spec
+ * store-contract-completion § D4 — do not reword). */
+const LIST_JSON_MESSAGE = "ArtifactStore json keys are absolute paths and cannot be listed";
+
+describe("FsStore list (D4)", () => {
+  test("status lists [root] iff status.json exists; absent file \u2192 []", async () => {
+    const root = tmpRoot("store-list-status-");
+    try {
+      const store = createFsStore(root);
+      expect(await store.list!("status")).toEqual([]);
+      const payload = { version: 2, updated_at: "2026-08-28", workflows: [] };
+      await store.put({ kind: "status", key: "root", payload });
+      expect(await store.list!("status")).toEqual([{ kind: "status", key: "root" }]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("snapshot lists workflow dirs with snapshot.json, ascending; stray dirs/files excluded; missing backing \u2192 []", async () => {
+    const root = tmpRoot("store-list-snapshot-");
+    try {
+      const store = createFsStore(root);
+      expect(await store.list!("snapshot")).toEqual([]);
+      await store.put({ kind: "snapshot", key: "wf-2", payload: { id: "wf-2" } });
+      await store.put({ kind: "snapshot", key: "wf-10", payload: { id: "wf-10" } });
+      // Stray subdir without snapshot.json and a loose file: never listed.
+      mkdirSync(join(root, "workflows", "wf-empty"));
+      writeFileSync(join(root, "workflows", "stray.json"), "{}", "utf8");
+      // Ascending means lexicographic by key (wf-10 < wf-2), never numeric.
+      expect(await store.list!("snapshot")).toEqual([
+        { kind: "snapshot", key: "wf-10" },
+        { kind: "snapshot", key: "wf-2" },
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("residuals lists project dirs with residuals.json, ascending; stray dirs excluded; missing backing \u2192 []", async () => {
+    const root = tmpRoot("store-list-residuals-");
+    try {
+      const store = createFsStore(root);
+      expect(await store.list!("residuals")).toEqual([]);
+      await store.put({ kind: "residuals", key: "proj-1", payload: { entries: [] } });
+      await store.put({ kind: "residuals", key: "_default", payload: { entries: [] } });
+      mkdirSync(join(root, "projects", "no-register"));
+      expect(await store.list!("residuals")).toEqual([
+        { kind: "residuals", key: "_default" },
+        { kind: "residuals", key: "proj-1" },
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("review union lists _reviews flat keys + plan-shaped dirs with report.json, ascending; non-qualifying entries excluded", async () => {
+    const root = tmpRoot("store-list-review-");
+    try {
+      const store = createFsStore(root);
+      expect(await store.list!("review")).toEqual([]); // missing sdd backing
+      await store.put({ kind: "review", key: "review-inline", payload: { verdict: "approve" } });
+      await store.put({ kind: "review", key: "20260828-store-engine", payload: { verdict: "approve" } });
+      // Plan-shaped dir without report.json: not listed (no backing).
+      mkdirSync(join(root, "sdd", "20260828-empty-plan"), { recursive: true });
+      // Non-plan-shaped dir directly under sdd: not part of the union.
+      mkdirSync(join(root, "sdd", "scratch"));
+      expect(await store.list!("review")).toEqual([
+        { kind: "review", key: "20260828-store-engine" },
+        { kind: "review", key: "review-inline" },
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("review: a plan-shaped _reviews file is not listed (get would route elsewhere) until the plan dir exists \u2014 then exactly once", async () => {
+    const root = tmpRoot("store-list-review-guard-");
+    try {
+      const store = createFsStore(root);
+      mkdirSync(join(root, "sdd", "_reviews"), { recursive: true });
+      writeFileSync(join(root, "sdd", "_reviews", "20260828-orphan.json"), "{}", "utf8");
+      // Empty case: existing but non-qualifying backing → [].
+      expect(await store.list!("review")).toEqual([]);
+      await store.put({ kind: "review", key: "20260828-orphan", payload: { verdict: "approve" } });
+      expect(await store.list!("review")).toEqual([{ kind: "review", key: "20260828-orphan" }]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("snapshot: a stray unsafe dir name is skipped without throwing, never advertised (qc1-S/qc3-S)", async () => {
+    const root = tmpRoot("store-list-unsafe-dir-");
+    try {
+      const store = createFsStore(root);
+      await store.put({ kind: "snapshot", key: "wf-1", payload: { id: "wf-1" } });
+      // Unsafe name (space) WITH a backing snapshot.json: skipped for the
+      // name itself — a get on such a key would throw, so list must not
+      // advertise it (and must not throw either).
+      mkdirSync(join(root, "workflows", "bad name"), { recursive: true });
+      writeFileSync(join(root, "workflows", "bad name", "snapshot.json"), "{}", "utf8");
+      expect(await store.list!("snapshot")).toEqual([{ kind: "snapshot", key: "wf-1" }]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("review: an unsafe _reviews filename is skipped without throwing, never advertised (qc1-S/qc3-S)", async () => {
+    const root = tmpRoot("store-list-unsafe-review-");
+    try {
+      const store = createFsStore(root);
+      await store.put({ kind: "review", key: "review-inline", payload: { verdict: "approve" } });
+      // Garbage flat filename: advertised pre-fix, then get threw.
+      writeFileSync(join(root, "sdd", "_reviews", "bad name.json"), "{}", "utf8");
+      expect(await store.list!("review")).toEqual([{ kind: "review", key: "review-inline" }]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("every listed key across kinds round-trips through get (D4 uniform rule)", async () => {
+    const root = tmpRoot("store-list-roundtrip-");
+    try {
+      const store = createFsStore(root);
+      const payloads: Record<string, unknown> = {
+        status: { version: 2, updated_at: "2026-08-28", workflows: [] },
+        snapshot: { id: "wf-1" },
+        residuals: { entries: [] },
+        review: { verdict: "approve" },
+      };
+      await store.put({ kind: "status", key: "root", payload: payloads.status });
+      await store.put({ kind: "snapshot", key: "wf-1", payload: payloads.snapshot });
+      await store.put({ kind: "residuals", key: "proj-1", payload: payloads.residuals });
+      await store.put({ kind: "review", key: "20260828-store-engine", payload: payloads.review });
+      await store.put({ kind: "review", key: "review-inline", payload: payloads.review });
+      for (const kind of ["status", "snapshot", "residuals", "review"] as const) {
+        for (const ref of await store.list!(kind)) {
+          // Intermediate variable: a nested `expect(await store.get(...))` lets
+          // TS infer the get<T> type parameter from the expect overload (never)
+          // — assign first, then assert.
+          const got = await store.get(ref);
+          expect(got).toEqual(payloads[kind]);
+        }
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("json kind throws the canonical usage error", async () => {
+    const root = tmpRoot("store-list-json-");
+    try {
+      const store = createFsStore(root);
+      await expect(store.list!("json")).rejects.toThrow(LIST_JSON_MESSAGE);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a readdir ENOENT/ENOTDIR 'path gone' race maps to [], never throws out of list (greptile P1)", async () => {
+    const root = tmpRoot("store-list-race-");
+    try {
+      const store = createFsStore(root);
+      // Deterministic stand-in for the existsSync→readdirSync race: a
+      // regular file where the backing dir is expected makes readdirSync
+      // throw ENOTDIR — the same "path gone" class as ENOENT when the dir
+      // vanishes between check and read. Pre-fix list threw; post-fix [].
+      writeFileSync(join(root, "workflows"), "not a dir", "utf8");
+      expect(await store.list!("snapshot")).toEqual([]);
+      writeFileSync(join(root, "projects"), "not a dir", "utf8");
+      expect(await store.list!("residuals")).toEqual([]);
+      // Same for the review union: sdd/_reviews as a file.
+      mkdirSync(join(root, "sdd"), { recursive: true });
+      writeFileSync(join(root, "sdd", "_reviews"), "not a dir", "utf8");
+      expect(await store.list!("review")).toEqual([]);
+      // ENOENT proper: the whole backing tree removed after store
+      // creation — readdirSync throws ENOENT with no existsSync pre-check.
+      rmSync(root, { recursive: true, force: true });
+      expect(await store.list!("snapshot")).toEqual([]);
+      expect(await store.list!("review")).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("optional-member absence: a store with only put/get stays a valid ArtifactStore (D1-adapter class declines)", () => {
+    const store = recordingStore();
+    setArtifactStore(store);
+    const active = getArtifactStore();
+    expect(active).toBe(store);
+    expect(active.delete).toBeUndefined();
+    expect(active.list).toBeUndefined();
   });
 });
 

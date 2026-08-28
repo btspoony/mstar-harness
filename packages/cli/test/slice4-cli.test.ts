@@ -25,7 +25,13 @@ const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
  * CLI suites — engine dir resolution must not leak into fixtures).
  * MSTAR_CLI_PROJECT_ROOT / INIT_CWD are pinned too: `resolveCliPath`
  * (audit-002) reads them ahead of PWD, so an ambient value would redirect
- * every relative-path fixture spuriously. */
+ * every relative-path fixture spuriously. TZ is pinned to the test process's
+ * own frame (residual 20260827-qa-tzflake-cli-slice4): `bun test` runs this
+ * process in UTC when TZ is unset, while a bare subprocess would fall back to
+ * the system zone — the two frames diverge across the local calendar-day
+ * boundary (00:00–08:00 in positive-offset zones), breaking the backlog
+ * `registered_at`/`closed_at` date assertions. An explicit ambient TZ is
+ * propagated so both sides always share one frame. */
 function cliEnv(): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
@@ -41,6 +47,7 @@ function cliEnv(): Record<string, string> {
     }
     if (value !== undefined) env[key] = value;
   }
+  env.TZ = process.env.TZ ?? "UTC";
   return env;
 }
 
