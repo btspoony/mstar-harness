@@ -6,6 +6,21 @@
 
 ## [Unreleased]
 
+## [3.5.0] - 2026-08-28
+
+### Harness
+
+- 新增可插拔 **ArtifactStore** 用于 JSON 协调文档持久化：`status.json`、workflow snapshots 与 project residuals 现经 `ArtifactStore.put` / `get` 落盘（默认 `FsStore` 保持既有 `{HARNESS_DIR}` 路径与原子写语义）。集成方可经 `setArtifactStore` 在进程内挂载自有存储，或经 `MSTAR_STORE_MODULE` / `--store` 按命令挂载——仅限文件系统路径，URI scheme 在 `import()` 前一律拒绝。
+- 新增 `mstar-harness persist <kind> --key <key> [--file <path>|--stdin] [--store <module>] [--schema <id>]` 与 `mstar-harness persist get <kind> --key <key> [--store <module>]`，支持 `status` / `snapshot` / `residuals` / `review` / `json`，put 前先运行既有 kind 校验器。
+- `mstar-harness init` 成功运行后会自动全局安装**匹配版本**的 `@mstar-harness/cli`，使 `mstar-harness` 二进制进入 PATH 供引擎校验命令使用。PATH 上版本已匹配时跳过安装；npm 出错时 fail-soft（init 仍以 0 退出）；可用 `--no-global-cli` 跳过；`--dry-run` 只打印将执行的 `npm i -g` 命令而不执行。
+- `mstar-harness doctor` 现在会对每个 target 打印一条非致命 CLI-on-PATH 提示（缺失 / 版本不匹配 / 匹配）。
+- mstar-dispatch-gates：角色绑定字段自检的宿主列改由 `mstar-host` §Detect active host 的 tool-shape 检测裁决，明确禁止以 config 路径/仓库内容判定宿主（防止把其他宿主的派发键名——如 OpenCode 的 `subagent`——误用到 task 工具 schema 为 `agent` 的 omp 会话）。
+- 新增一等公民 **review JSON kind**（`mstar.review/v1`）：`synthesizeReview` 将已核验 findings 折叠为可校验的 envelope（verdict/tally 来自 `computePrTally`），`mstar-harness persist review` 在写入前校验 envelope（拒绝 inspector M1 词汇），`pr-deep-review` / `amazing-pr-review` Stage 3 必须持久化该 envelope —— Markdown 报告仅为可选的人工副本。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单及便携式 Agent Plugins 清单：**→ 3.5.0**。
+
 ## [3.4.1] - 2026-08-27
 
 ### Harness
