@@ -423,10 +423,11 @@ export function apply(ctx: Context, config: Config): void {
   // Harness-rules system-prompt injection (plan `20260816-dsh-nb1-systemprompt`
   // Task 2): the global-layer `mstar:harness-rules` pointer section + the
   // `mstar:engine-status` runtime-context summary (visible to the root
-  // session AND dispatched children; the child-scoped `mstar:role-persona`
-  // is untouched). The module sink is bound to the dsh logger (decoration
-  // pattern); the registration itself is optional-unit — a composition
-  // without dsh-system-prompt keeps boot unaffected (one debug log,
+  // session AND dispatched children; child persona delivery rides the
+  // native subagent persona channel — mstar owns no child-scoped section).
+  // The module sink is bound to the dsh logger (module-sink pattern); the
+  // registration itself is optional-unit — a composition without
+  // dsh-system-prompt keeps boot unaffected (one debug log,
   // `registerHarnessPrompt` returns false).
   setHarnessPromptLogger((level, message) => {
     const logger = ctx.logger(HARNESS_PROMPT_LOGGER)
@@ -451,7 +452,8 @@ export function apply(ctx: Context, config: Config): void {
   // One-shot latch: the pass is attempted at apply (profiles that declare
   // the fallbacks row before dsh) and — when unmounted at boot — at the
   // first `subagent/start` decision point (the loader mounts entries
-  // concurrently; the same decision-point probe pattern as the decoration).
+  // concurrently; the same decision-point probe pattern as the persona
+  // channel's service-read interception).
   // The latch is RE-ARMED when the `llm-fallbacks` service disappears (the
   // seeds inject child below returns a teardown resetting it): after an HMR
   // fiber swap the fresh seed registry needs a new decision-point pass to
@@ -710,9 +712,10 @@ export function apply(ctx: Context, config: Config): void {
 
   // Native-first role-persona channel (plan
   // `20260831-dsh-alpha2-optional-fallbacks` Task 3): an `internal/get`
-  // waterfall listener wraps `ctx.subagents` reads so a role-matched
-  // one-shot start merges the persona into the request's NATIVE `persona`
-  // slot (`@deepseek-ai/dsh-subagent` `SubagentStartRequest.persona` — the
+  // waterfall listener wraps `ctx.subagents` reads so a role-matched start
+  // — one-shot `start` AND the opt-in continuable `startContinuable` —
+  // merges the persona into the request's NATIVE `persona` slot
+  // (`@deepseek-ai/dsh-subagent` `SubagentStartRequest.persona` — the
   // service composes it as the scoped shadowing `deployment:persona`
   // section, persists it in the child descriptor, and reapplies it on
   // resume). The additive `mstar:role-persona` system-prompt section is

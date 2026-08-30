@@ -112,7 +112,7 @@ const RICH_COMPASS = [
   'body',
 ].join('\n')
 
-/** Capture harness-prompt logs through the module sink (decoration test pattern). */
+/** Capture harness-prompt logs through the module sink (role-persona test pattern). */
 function captureLogs(): { captured: Array<[HarnessPromptLogLevel, string]>; restore: () => void } {
   const captured: Array<[HarnessPromptLogLevel, string]> = []
   const prior = setHarnessPromptLogger((level, message) => { captured.push([level, message]) })

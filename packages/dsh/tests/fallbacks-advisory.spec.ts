@@ -110,7 +110,7 @@ function ctxWithLoader(entries: LoaderEntryView[]): Context {
   return ctx
 }
 
-/** Capture advisory logs through the module sink (decoration test pattern). */
+/** Capture advisory logs through the module sink (role-persona test pattern). */
 function captureLogs(): { captured: Array<[AdvisoryLogLevel, string]>; restore: () => void } {
   const captured: Array<[AdvisoryLogLevel, string]> = []
   const prior = setAdvisoryLogger((level, message) => { captured.push([level, message]) })

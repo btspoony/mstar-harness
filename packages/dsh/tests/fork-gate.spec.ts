@@ -5,9 +5,9 @@
  * The fork tool is the subagent delegation tool's fork sibling: fork
  * dispatches carry the SAME Assignment-shaped `{ description, prompt }` args
  * and ride the SAME seams — `tools/pre-execute` (dispatch gate),
- * `tools/post-execute` (settle pairing, dispatchTools-matched), and
- * `subagent/start` (persona decoration). This spec proves all three compose
- * on `subagent_fork` once the tool joins `DEFAULT_DISPATCH_TOOLS`:
+ * `tools/post-execute` (settle pairing, dispatchTools-matched), and the
+ * native persona channel on the child start. This spec proves all three
+ * compose on `subagent_fork` once the tool joins `DEFAULT_DISPATCH_TOOLS`:
  *
  * - (a) a fork dispatch with an invalid Assignment under `Enforcement: hard`
  *   → PreToolDecision { kind: 'deny' } — gate coverage on the fork tool;
@@ -20,9 +20,10 @@
  *   covers fork (verify, no code change beyond `DEFAULT_DISPATCH_TOOLS`),
  *   plus the bare-context foreground pairing probe with an EMPTY config
  *   (the DEFAULT tool set alone matches `subagent_fork`);
- * - (d) a fork child (Assignment-seeded, same prompt shape) receiving
- *   `subagent/start` → the `mstar:role-persona` section — decoration composes
- *   on the fork tool through the shared seam (no fork-specific code).
+ * - (d) a fork child (Assignment-seeded, same prompt shape) whose start
+ *   merges the role persona via the native subagent persona channel — the
+ *   channel keys on the request prompt, so a fork start gets the same merge
+ *   with no fork-specific code.
  *
  * Harness: the SAME real-composition boot as dispatch-gate.spec.ts / the
  * agent-flow upstream seam probes; the fork tool is registered like the

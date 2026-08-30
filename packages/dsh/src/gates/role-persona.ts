@@ -8,19 +8,30 @@
  * `DEPLOYMENT_PERSONA` = 0) on the child, SHADOWING the deployment persona
  * for that child alone, is persisted in the child descriptor, and is
  * reapplied on resume — delivery, persistence, and resume replay all belong
- * to dsh.
+ * to dsh. BOTH start surfaces are wrapped: the one-shot `start` AND the
+ * opt-in continuable `startContinuable` (tool-subagent
+ * `backgroundMode: 'continuable'` routes its background run through
+ * `ContinuableStartSpec.request`) — the old `subagent/start` emit
+ * decoration covered continuable children too, and this channel must not
+ * regress that.
  *
  * Interception seam: the cordis service-read waterfall
  * (`Events['internal/get']`, `@deepseek-ai/cordis` 4.0.2
  * `lib/types/events.d.ts`) — the framework's documented interception hook
  * for values read through the context proxy. The listener wraps the
  * `subagents` service VALUE on read (a prototype-delegating wrapper whose
- * `start` merges the role persona into the request before delegating); the
- * real `SubagentRuntime` object is never mutated — readers of
- * `ctx.subagents` (the tool-subagent reads it per call through a
+ * `start`/`startContinuable` merge the role persona into the request before
+ * delegating); the real `SubagentRuntime` object is never mutated — readers
+ * of `ctx.subagents` (the tool-subagent reads it per call through a
  * plugin-fiber context) transparently receive the wrapper. The listener is
  * owned by the applying fiber (cordis listener effects), so an HMR fiber
  * swap unwinds and restores it like every other registration.
+ *
+ * The continuable request has no earlier seam: `registerContinuableSetup`
+ * contributions are child-scope installers (`(childCtx) => () => void` —
+ * no per-start data slot), so the earliest point where the continuable
+ * request exists is the `startContinuable(spec)` call itself, which the
+ * wrapper owns.
  *
  * Role identity uses the engine Assignment header grammar — the SAME
  * parsers the dispatch gate uses (`assignmentHeaderRegion` +
@@ -35,13 +46,18 @@
  * `packagedAgentsDir()`), package-relative so the shipped bundle works from
  * any launch cwd.
  *
- * Capability gate (native fail-loud contract): `SubagentRuntime.start`
- * REJECTS a request carrying `persona` for a provider whose
- * `SubagentCapabilities.persona` is false (e.g. out-of-process providers) —
- * "rejected rather than accepted-then-ignored". The merge therefore checks
- * `getProvider(name).capabilities.persona` FIRST: without the capability the
- * persona is skipped with one contained debug log and the start proceeds
- * unchanged — the contained degrade, never a failed dispatch.
+ * Capability gates (native fail-loud contracts, per surface): one-shot
+ * `SubagentRuntime.start` REJECTS a request carrying `persona` for a
+ * provider whose `SubagentCapabilities.persona` is false (e.g.
+ * out-of-process providers) — "rejected rather than accepted-then-ignored"
+ * — so the one-shot merge checks `getProvider(name).capabilities.persona`
+ * first. Continuable children are composed by the continuation manager
+ * itself and are gated by `SubagentProvider.prepareContinuable` instead
+ * (upstream `SubagentCapabilities` doc: the flags "describe the ONE-SHOT
+ * path"), so the continuable merge checks `prepareContinuable` — the
+ * manager applies a merged persona unconditionally. Either way: gate miss →
+ * the persona is skipped with one contained debug log and the start
+ * proceeds unchanged — the contained degrade, never a failed dispatch.
  *
  * Precedence: an explicit `request.persona` (e.g. tool-subagent's own
  * `Config.persona`) is caller intent and WINS — the role persona fills the
@@ -90,7 +106,9 @@ interface PromptBlockView {
  * target). The wrapper forwards the request object SPREAD, so every
  * non-consumed field (`label`, `parent`, `signal`, `agentOptions`, …)
  * reaches the service unchanged at runtime; the view types only what this
- * module reads.
+ * module reads. The continuable surface merges into the SAME view
+ * (`ContinuableStartSpec.request` is `Omit<SubagentStartRequest, 'label' |
+ * 'signal' | 'outputSchema'>` — same `prompt`/`persona` shape).
  */
 export interface SubagentStartRequestView {
   /** Content delivered as the child's user message (the Assignment carrier). */
@@ -100,31 +118,55 @@ export interface SubagentStartRequestView {
 }
 
 /**
+ * Structural view of the continuable start spec the channel merges into
+ * (`@deepseek-ai/dsh-subagent` `ContinuableStartSpec` — consumed fields
+ * only). The wrapper forwards the spec object SPREAD, so every
+ * non-consumed field (`label`, `childId`, `signal`) reaches the service
+ * unchanged at runtime; the view types only what this module reads.
+ */
+export interface ContinuableStartSpecView {
+  /** The `ctx.subagents` provider whose continuable creation establishes the child. */
+  readonly provider: string
+  /** The delegation request (the merge target: same view as the one-shot request). */
+  readonly request: SubagentStartRequestView
+}
+
+/**
  * Structural view of the capability set the channel gates on
  * (`@deepseek-ai/dsh-subagent` `SubagentCapabilities` — only `persona` is
- * consumed: the native fail-loud contract rejects a persona request for a
- * provider without it, so the channel must pre-check).
+ * consumed: the ONE-SHOT fail-loud contract rejects a persona request for a
+ * provider without it, so the one-shot merge must pre-check).
  */
 interface SubagentCapabilitiesView {
   readonly persona?: boolean
 }
 
-/** Structural view of one registered provider (`SubagentProvider` consumed surface). */
+/**
+ * Structural view of one registered provider (`SubagentProvider` consumed
+ * surface). `prepareContinuable` is the NATIVE continuable gate (upstream:
+ * continuable children "are composed by the continuation manager itself
+ * and are gated by `SubagentProvider.prepareContinuable` instead") — its
+ * presence, not the one-shot `persona` flag, decides whether a merged
+ * persona can be honored on the continuable surface.
+ */
 interface SubagentProviderView {
   readonly capabilities: SubagentCapabilitiesView
+  readonly prepareContinuable?: unknown
 }
 
 /**
  * Structural view of the `subagents` runtime the wrapper delegates to
  * (`@deepseek-ai/dsh-subagent` `SubagentRuntime` consumed surface:
- * capability reads + one-shot starts). `start` returns the service's own
- * run promise — opaque here, forwarded untouched.
+ * capability reads + one-shot and continuable starts). Start methods
+ * return the service's own promises/ids — opaque here, forwarded untouched.
  */
 export interface SubagentsServiceView {
   /** Look up a provider by name (the capability-gate read). */
   getProvider(name: string): SubagentProviderView | undefined
-  /** Establish one published child on the named provider (the delegated start). */
+  /** Establish one published child on the named provider (the delegated one-shot start). */
   start(name: string, request: SubagentStartRequestView): unknown
+  /** Establish one durable continuable child (the delegated continuable start). */
+  startContinuable(spec: ContinuableStartSpecView): unknown
 }
 
 /** Role-persona log levels the module sink understands. */
@@ -174,8 +216,14 @@ export function setRolePersonaAgentsDir(dir: string | undefined): string | undef
   return prior
 }
 
-/** Wrapper identity cache — one wrapper per underlying service value, so repeated reads agree. */
-const wrapperCache = new WeakMap<object, unknown>()
+/**
+ * Wrapper identity cache — one wrapper per (service value, persona-config
+ * generation). Repeated reads of the same service under the same
+ * registration agree on one wrapper; an HMR re-apply binds a NEW validated
+ * Config object, so the identity check re-wraps with the fresh binding
+ * (the old fiber's listener is gone by then — its wrapper is unreachable).
+ */
+const wrapperCache = new WeakMap<object, { rolePersonas: Config['rolePersonas']; wrapper: unknown }>()
 
 /**
  * Register the native persona channel on the plugin's context: an
@@ -193,10 +241,11 @@ const wrapperCache = new WeakMap<object, unknown>()
  *   only payload source; `roleMap` is never consulted for the merge).
  */
 export function registerRolePersonaChannel(ctx: Context, config: Config): void {
-  // The persona payload source is bound at registration (the apply-scoped
-  // validated Config) — the merge reads it without a config parameter so the
-  // wrapper's `start` signature stays the service's own.
-  config_rolePersonas = config.rolePersonas
+  // The persona payload source is closed over from THIS apply's validated
+  // Config — never a process global (two applies must not cross-talk), and
+  // the wrapper's `start`/`startContinuable` signatures stay the service's
+  // own (the closure carries the binding).
+  const rolePersonas = config.rolePersonas
   // Waterfall listener: `(ctx, name, error, next)` — calling `next()` runs
   // the remaining chain (finally the built-in resolution) and its return is
   // the value readers receive. Dispatch carries no `this`, so no context
@@ -206,7 +255,7 @@ export function registerRolePersonaChannel(ctx: Context, config: Config): void {
     const value: unknown = next()
     if (name !== SUBAGENTS_SERVICE) return value
     try {
-      return wrapSubagentsService(value)
+      return wrapSubagentsService(value, rolePersonas)
     } catch (error) {
       // Contained: an internal wrap error degrades to the raw service —
       // persona delivery is skipped, the runtime is untouched.
@@ -219,22 +268,25 @@ export function registerRolePersonaChannel(ctx: Context, config: Config): void {
 /**
  * Wrap one `ctx.subagents` read value: non-objects and non-runtime shapes
  * (the service is absent) pass through untouched. The wrapper is a
- * prototype-delegating object whose OWN `start` merges the role persona
- * into the request before delegating — the underlying service object is
- * never mutated (no monkey-patching). Identity is cached per underlying
- * value so repeated reads agree.
+ * prototype-delegating object whose OWN `start`/`startContinuable` merge
+ * the role persona into the request before delegating — the underlying
+ * service object is never mutated (no monkey-patching), and no surface the
+ * service does not carry is invented (a runtime without `startContinuable`
+ * keeps answering `typeof service.startContinuable === 'undefined'`).
+ * Identity is cached per (service value, persona-config generation) so
+ * repeated reads agree and re-applies re-bind.
  */
-function wrapSubagentsService(value: unknown): unknown {
+function wrapSubagentsService(value: unknown, rolePersonas: Config['rolePersonas']): unknown {
   if (typeof value !== 'object' || value === null) return value
   const service = value as SubagentsServiceView
   if (typeof service.start !== 'function' || typeof service.getProvider !== 'function') return value
   const cached = wrapperCache.get(value)
-  if (cached !== undefined) return cached
+  if (cached !== undefined && cached.rolePersonas === rolePersonas) return cached.wrapper
   const wrapper: SubagentsServiceView = Object.create(value)
   wrapper.start = (name: string, request: SubagentStartRequestView) => {
     let merged = request
     try {
-      merged = withRolePersona(service, name, request)
+      merged = withRolePersona(service, name, request, rolePersonas, 'one-shot')
     } catch (error) {
       // Contained like the gate's degrade path: the merge aborts, the
       // ORIGINAL request reaches the service — the start is never affected.
@@ -242,15 +294,30 @@ function wrapSubagentsService(value: unknown): unknown {
     }
     return service.start(name, merged)
   }
-  wrapperCache.set(value, wrapper)
+  if (typeof service.startContinuable === 'function') {
+    wrapper.startContinuable = (spec: ContinuableStartSpecView) => {
+      let merged = spec
+      try {
+        const mergedRequest = withRolePersona(service, spec.provider, spec.request, rolePersonas, 'continuable')
+        if (mergedRequest !== spec.request) merged = { ...spec, request: mergedRequest }
+      } catch (error) {
+        // Contained like the one-shot path: the merge aborts, the ORIGINAL
+        // spec reaches the service — the continuable start is never affected.
+        log('warn', `role persona merge degraded to pass-through (continuable subagent start unaffected): ${errorMessage(error)}`)
+      }
+      return service.startContinuable(merged)
+    }
+  }
+  wrapperCache.set(value, { rolePersonas, wrapper })
   return wrapper
 }
 
 /**
  * Resolve the role persona for one start request and merge it into the
- * native `persona` slot. Pure decision function — returns the request
- * UNCHANGED on every skip path (no-op is silent unless a debug log is
- * explicitly part of the contract below):
+ * native `persona` slot (one-shot AND continuable — the decision chain is
+ * shared, only the terminal capability gate differs). Pure decision
+ * function — returns the request UNCHANGED on every skip path (no-op is
+ * silent unless a debug log is explicitly part of the contract below):
  *
  * 1. request already carries `persona` → caller intent wins (silent).
  * 2. perf guard: no `rolePersonas` AND no mirror → nothing to resolve
@@ -261,21 +328,31 @@ function wrapSubagentsService(value: unknown): unknown {
  *    latch); mirror present → silent (no eligible shell).
  * 6. provider unknown → silent (the service fails loud its own way —
  *    `NO_PROVIDER` — the channel must not shadow that).
- * 7. provider lacks the persona capability (out-of-process) → one debug
- *    log, request unchanged — the native contract rejects a persona for
- *    such a provider, so merging would fail the start (never acceptable).
- * 8. hit → merge + one debug log naming the source.
+ * 7. surface capability gate (see below) → one debug log, request
+ *    unchanged — merging what the runtime would reject is never acceptable.
+ * 8. hit → merge + one debug log naming the surface and the source.
+ *
+ * The gate per surface (native fail-loud contracts): one-shot
+ * `SubagentRuntime.start` rejects a persona for a provider without
+ * `SubagentCapabilities.persona` ("fail loud, no silent degradation");
+ * continuable children are composed by the continuation manager itself and
+ * gated by `provider.prepareContinuable` instead (upstream
+ * `SubagentCapabilities` doc — the flags describe the ONE-SHOT path), and a
+ * provider without it rejects the continuable start loud regardless of any
+ * persona, so the merge is skipped there.
  */
 function withRolePersona(
   service: SubagentsServiceView,
   providerName: string,
   request: SubagentStartRequestView,
+  rolePersonas: Config['rolePersonas'],
+  surface: 'one-shot' | 'continuable',
 ): SubagentStartRequestView {
   // (1) Explicit caller persona wins — mstar never overrides caller intent.
   if (request.persona !== undefined) return request
   // (2) Perf guard: with `rolePersonas` unset (or empty) AND no persona
   // mirror there is nothing to resolve — skip the Assignment parse entirely.
-  const personas = config_rolePersonas
+  const personas = rolePersonas
   const agentsDir = rolePersonaAgentsDir
   if ((personas == null || Object.keys(personas).length === 0) && agentsDir === undefined) return request
   // (3) The prompt text: text blocks joined with newlines (the same
@@ -307,23 +384,27 @@ function withRolePersona(
   // (`NO_PROVIDER`), and the channel must not shadow that contract.
   const provider = service.getProvider(providerName)
   if (provider === undefined) return request
-  // (7) Capability gate: the native contract REJECTS a persona request for
-  // a provider without the capability ("fail loud, no silent degradation")
+  // (7) Surface capability gate: the native contracts reject a merged
+  // persona the runtime cannot honor ("fail loud, no silent degradation")
   // — merging would fail the start, so the persona is skipped instead and
   // the start proceeds unchanged (the contained degrade).
-  if (provider.capabilities?.persona !== true) {
-    log('debug', `subagent provider '${providerName}' lacks the persona capability — role persona for '${executeAs}' skipped (start proceeds unchanged)`)
+  if (surface === 'one-shot' ? provider.capabilities?.persona !== true : typeof provider.prepareContinuable !== 'function') {
+    log(
+      'debug',
+      surface === 'one-shot'
+        ? `subagent provider '${providerName}' lacks the persona capability — role persona for '${executeAs}' skipped (start proceeds unchanged)`
+        : `subagent provider '${providerName}' does not support continuable children — role persona for '${executeAs}' skipped (the native continuable start fails loud its own way)`,
+    )
     return request
   }
   // (8) Hit — merge into the native slot. dsh composes it as the scoped
   // `deployment:persona` section (SHADOWING the deployment persona for this
-  // child), persists it in the child descriptor, and reapplies it on resume.
-  log('debug', `role persona delivered via the native subagent persona channel for role '${executeAs}' (source: ${persona.source === 'config' ? 'mstar Config' : 'harness-agents default'})`)
+  // child), persists it in the child descriptor, and reapplies it on resume
+  // (one-shot via the resolved provider request; continuable via the
+  // manager's descriptor + composition).
+  log('debug', `role persona delivered via the native subagent persona channel for role '${executeAs}' (${surface} start, source: ${persona.source === 'config' ? 'mstar Config' : 'harness-agents default'})`)
   return { ...request, persona: persona.text }
 }
-
-/** The `rolePersonas` config the channel reads (bound at registration). */
-let config_rolePersonas: Config['rolePersonas']
 
 /** Best-effort human-readable message from an arbitrary thrown value (agent-flow `errorMessage` pattern). */
 function errorMessage(error: unknown): string {

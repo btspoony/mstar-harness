@@ -26,7 +26,7 @@ import { MessageId } from '@deepseek-ai/dsh-llm'
 import type { JobDoneListener, JobSnapshot } from '@deepseek-ai/dsh-jobs'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { LoaderEntryView } from '../src/gates/fallbacks-probe.ts'
-import type { SubagentsServiceView } from '../src/gates/role-persona.ts'
+import type { SubagentsServiceView, ContinuableStartSpecView } from '../src/gates/role-persona.ts'
 import * as plugin from '../src/index.ts'
 
 /**
@@ -133,6 +133,12 @@ export interface SubagentStartPayload {
  * The one-shot run handle is the minimal contract `observeRun` consumes
  * (`id`, `localAgent`, `result`); it resolves `completed` with no output so
  * the lifecycle pair emits and settles without fixtures.
+ *
+ * Continuable support is opt-in (`continuable: true`): the provider then
+ * carries `prepareContinuable` (the NATIVE continuable gate — the runtime
+ * rejects continuable starts loud without it) and records each prepared
+ * request. Without the option the provider is one-shot-only, which is how
+ * the continuable gate's skip branch is exercised.
  */
 export class FakeSubagentProvider {
   /** Unique registry name (the `SubagentProvider.name` contract). */
@@ -149,12 +155,30 @@ export class FakeSubagentProvider {
   readonly inheritsParentContext = false
   /** The resolved requests, in start order (post-merge, post-gate). */
   readonly starts: Array<{ request: { persona?: string; descriptor?: { provider?: string; mode?: string } } }> = []
+  /** Continuable-creation requests, in order (post-merge — the manager's detached creation call). */
+  readonly continuablePrepares: unknown[] = []
+  /** Whether the provider declares continuable-creation support. */
+  readonly continuable: boolean
+  /**
+   * The detached continuable-creation hook (`SubagentProvider.prepareContinuable`
+   * contract) — present ONLY when `continuable: true` (its presence is the
+   * NATIVE continuable gate; the runtime rejects continuable starts loud
+   * without it). Records the request and resolves an empty creation spec
+   * (the manager consumes only `seed` before handing off to `agents.create`).
+   */
+  prepareContinuable: ((request: unknown) => Promise<Record<string, never>>) | undefined = undefined
 
-  constructor(name: string, options: { personaCapability?: boolean } = {}) {
+  constructor(name: string, options: { personaCapability?: boolean; continuable?: boolean } = {}) {
     this.name = name
     this.capabilities.persona = options.personaCapability ?? false
+    this.continuable = options.continuable ?? false
+    if (this.continuable) {
+      this.prepareContinuable = (request: unknown) => {
+        this.continuablePrepares.push(request)
+        return Promise.resolve({})
+      }
+    }
   }
-
   /**
    * Record the resolved request and resolve a settled run (the provider
    * contract: `provider.start(resolved)` — ONE argument, the request with
@@ -177,7 +201,8 @@ export class FakeSubagentProvider {
  * runs in a plugin-fiber context, so the `ctx.subagents` read goes through
  * the cordis context proxy (plugin fibers carry a runtime) and reaches the
  * channel's `internal/get` wrapper — the same read path the real
- * tool-subagent's per-call `runtimeCtx.subagents.start(...)` takes.
+ * tool-subagent's per-call `runtimeCtx.subagents.start(...)` /
+ * `.startContinuable(...)` takes.
  */
 export function startViaNativeChannel(
   app: BootResult,
@@ -195,20 +220,55 @@ export function startViaNativeChannel(
   })
   return promise
 }
+/**
+ * Start one CONTINUABLE child through the NATIVE channel: the same plugin-
+ * fiber read path as {@link startViaNativeChannel}, calling the wrapper's
+ * own `startContinuable` — the surface the real tool-subagent's
+ * `backgroundMode: 'continuable'` background run takes
+ * (`runtimeCtx.subagents.startContinuable({ provider, label, request, signal })`).
+ */
+export function startContinuableViaNativeChannel(
+  app: BootResult,
+  spec: ContinuableStartSpecView,
+): Promise<unknown> {
+  const { promise, resolve, reject } = Promise.withResolvers<unknown>()
+  void app.ctx.inject(['subagents'], (sctx) => {
+    const service = sctx.subagents as unknown as SubagentsServiceView | undefined
+    if (service === undefined) {
+      reject(new Error('subagents service unavailable in the inject scope'))
+      return
+    }
+    Promise.resolve(service.startContinuable(spec)).then(resolve, reject)
+  })
+  return promise
+}
 
 /**
- * Minimal in-memory `agents` service for the subagent-decoration tests (plan
- * `20260814-dsh-fallbacks-integration` Task 2): implements the ONE contract
- * the decoration consumes — `get(id)` child resolution at `subagent/start`
- * emit time (documented in the `@deepseek-ai/dsh-subagent` event contract) —
- * plus `register(agent)` so a test can fake-register a child agent (the
+ * Minimal in-memory `agents` service (plan `20260814-dsh-fallbacks-integration`
+ * Task 2): implements the contracts the plugin's seams consume — `get(id)`
+ * child resolution (documented in the `@deepseek-ai/dsh-subagent` event
+ * contract; the real registry's own admission boundary) — plus
+ * `register(agent)` so a test can fake-register a child agent (the
  * hooks-claude-code coverage pattern). Mounted as the
  * `@deepseek-ai/dsh-agent-fake` module row (`bootApp({ agentsService: 'fake' })`).
  * The real `AgentRegistry` additionally owns factory/loop wiring and emits
- * `agent/created` / `agent/disposed` — none of it consumed by the decoration.
+ * `agent/created` / `agent/disposed` — none of it consumed by the plugin.
+ *
+ * `create(inputs)` supports the CONTINUABLE persona-channel tests (plan
+ * `20260831-dsh-alpha2-optional-fallbacks` Task 3 fix round): the real
+ * continuation manager materializes every continuable child through
+ * `agents.create({ sessionId, meta, seed, agentOptions, signal, setup })`.
+ * This fake RECORDS the creation inputs and THROWS — the earliest real
+ * observation point for the resolved continuable request (the creation
+ * `seed` carries the `subagent/descriptor` event with the snapshot persona,
+ * so the merged persona is observable without a live agent runtime). A
+ * rejection here is the documented rollback boundary (creation owns
+ * rollback before handle transfer), so the start call rejects cleanly.
  */
 export class FakeAgentRegistry extends Service {
   private readonly live = new Map<string, Agent>()
+  /** Recorded `agents.create` inputs (the continuable materialization observation point). */
+  readonly createCalls: Array<{ sessionId: unknown; meta?: { parentSession?: string }; seed?: Array<{ type: string; data?: Record<string, unknown> }>; agentOptions?: unknown }> = []
 
   constructor(ctx: Context) {
     super(ctx, 'agents')
@@ -222,9 +282,15 @@ export class FakeAgentRegistry extends Service {
     }
   }
 
-  /** Look up a live agent by id (the decoration's ONE consumed surface). */
+  /** Look up a live agent by id (the registry's ONE consumed surface). */
   get(id: string): Agent | undefined {
     return this.live.get(id)
+  }
+
+  /** Record the creation inputs and reject — capture-only (see class doc). */
+  create(inputs: { sessionId: unknown; meta?: { parentSession?: string }; seed?: Array<{ type: string; data?: Record<string, unknown> }> }): never {
+    this.createCalls.push(inputs)
+    throw new Error('fake agents create: capture-only harness (continuable materialization stops here)')
   }
 }
 
@@ -283,6 +349,22 @@ export class FakeSessionsRegistry extends Service {
     this.app.events.emit({}, 'session/event', session, event)
   }
 }
+/**
+ * Minimal in-memory `sessionPersistence` service for the CONTINUABLE
+ * persona-channel tests (plan `20260831-dsh-alpha2-optional-fallbacks`
+ * Task 3 fix round): the real continuation manager's `startContinuable`
+ * requires the service to EXIST (`requirePersistence()` →
+ * `PERSISTENCE_UNAVAILABLE` otherwise) but, for a fresh child without a
+ * caller-reserved id, reads nothing from it before handing off to
+ * `agents.create` (the capture-only boundary the agents fake provides).
+ * Mounted as the `@deepseek-ai/dsh-session-persistence-fake` module row
+ * (`bootApp({ sessionPersistence: 'fake' })`).
+ */
+export class FakeSessionPersistence extends Service {
+  constructor(ctx: Context) {
+    super(ctx, 'sessionPersistence')
+  }
+}
 
 /**
  * Minimal in-memory `settings` service for the REAL-fallbacks composition
@@ -320,8 +402,9 @@ let fakeChildSeq = 0
 
 /**
  * Seed a detached session carrying one `user/message` with `prompt` text —
- * the shape the decoration's `seededTaskPrompt` reads from the child's event
- * log at `subagent/start` emit time.
+ * the Assignment carrier shape the real tool-subagent hands to the subagent
+ * runtime as the child's user message (and what the persona channel's role
+ * parse reads through the start request's prompt blocks).
  */
 export function seededSession(id: SessionId, prompt: string): Session {
   return Session.create(id, [{
@@ -341,8 +424,10 @@ export function seededSession(id: SessionId, prompt: string): Session {
 /**
  * Build a fake registered child around a caller-provided session: an
  * agent-scoped ctx (`createScope`, the dsh-scope primitive the agent runtime
- * uses) with `systemPrompt` injected, wrapped as the structural `Agent` the
- * decoration resolves via `ctx.get('agents')?.get(info.id)`. The
+ * uses) with `systemPrompt` injected, wrapped as the structural `Agent` a
+ * test registers with the fake agents registry (the continuable persona
+ * tests register it as the delegating parent; the real registry's
+ * admission boundary is the same `agents.get(id)` identity read). The
  * `subagent/start` seam is driven directly (the hooks-claude-code coverage
  * pattern); the child's prompt assembly is viewed through `scopeKey`.
  */
@@ -352,10 +437,14 @@ export async function fakeChildWithSession(ctx: Context, session: Session): Prom
   await ctx.inject(['systemPrompt'], (scoped) => {
     childCtx = createScope(scoped, scopeKey).ctx
   })
+  // `options` is part of the structural Agent surface the real runtime's
+  // delegation-depth read consumes (`delegationDepthOf` /
+  // `parentAgentOptionsForDelegation` read `agent.options.subagentDepth`).
   const agent = {
     id: session.id,
     ctx: childCtx!,
     session,
+    options: {},
   } as unknown as Agent
   return { agent, scopeKey }
 }
@@ -392,18 +481,22 @@ export interface BootOptions {
   jobsService?: 'fake'
   /**
    * Mount the {@link FakeAgentRegistry} as the `agents` service (the
-   * `@deepseek-ai/dsh-agent-fake` row + module map) so the `subagent/start`
-   * decoration resolves fake-registered children via
-   * `ctx.get('agents')?.get(info.id)` (plan
+   * `@deepseek-ai/dsh-agent-fake` row + module map) so the seams that read
+   * live agents resolve fake-registered children via
+   * `ctx.get('agents')?.get(id)` (plan
    * `20260814-dsh-fallbacks-integration` Task 2 — the real dsh app always
-   * composes dsh-agent before the subagent seam).
+   * composes dsh-agent before the subagent seam). The REAL subagents row
+   * also requires it: the runtime's constructor injects `agents` for its
+   * continuation manager, and the continuable persona tests observe the
+   * materialization through the fake's capture-only `create`.
    */
   agentsService?: 'fake'
   /**
    * Mount the REAL `@deepseek-ai/dsh-subagent` row (the `ctx.subagents`
    * runtime seam — plan `20260831-dsh-alpha2-optional-fallbacks` Task 3):
    * the native persona-channel tests register a {@link FakeSubagentProvider}
-   * on it and drive starts through {@link startViaNativeChannel}. Requires
+   * on it and drive starts through {@link startViaNativeChannel} /
+   * {@link startContinuableViaNativeChannel}. Requires
    * `agentsService: 'fake'` — the runtime's constructor injects `agents`
    * for its continuation manager (the real dsh app always composes
    * dsh-agent before the subagent seam).
@@ -417,6 +510,16 @@ export interface BootOptions {
    * Task 4; the real dsh app always composes dsh-session before the plugin).
    */
   sessionsService?: 'fake'
+  /**
+   * Mount the {@link FakeSessionPersistence} as the `sessionPersistence`
+   * service (the `@deepseek-ai/dsh-session-persistence-fake` row + module
+   * map): the REAL runtime's `startContinuable` requires the service to
+   * exist (`PERSISTENCE_UNAVAILABLE` otherwise) — the continuable
+   * persona-channel tests opt in (plan `20260831-dsh-alpha2-optional-fallbacks`
+   * Task 3 fix round; the real dsh app composes a persistence backend
+   * before continuable children are addressable).
+   */
+  sessionPersistence?: 'fake'
   /** Taxonomy bridge (Config `roleMap`): mstar role id → fallbacks role id. */
   roleMap?: Record<string, string>
   /** Persona map (Config `rolePersonas`): mstar role id → persona text. */
@@ -672,7 +775,7 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
     ...(options.jobsService !== undefined ? [{ name: '@deepseek-ai/dsh-jobs-fake' }] : []),
     // The fake agents service row (only when requested — plan
     // `20260814-dsh-fallbacks-integration` Task 2): provides `ctx.get('agents')`
-    // so the `subagent/start` decoration can resolve fake-registered children.
+    // so the seams that read live agents resolve fake-registered children.
     ...(options.agentsService !== undefined ? [{ name: '@deepseek-ai/dsh-agent-fake' }] : []),
     // The REAL subagents runtime row (only when requested — plan
     // `20260831-dsh-alpha2-optional-fallbacks` Task 3): provides
@@ -686,6 +789,12 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
     // so the plugin's `registerWorkflowLedger` consumer registers (W-B2 run
     // rows + the P-c answer observation e2e).
     ...(options.sessionsService !== undefined ? [{ name: '@deepseek-ai/dsh-session-fake' }] : []),
+    // The fake session-persistence row (only when requested — plan
+    // `20260831-dsh-alpha2-optional-fallbacks` Task 3 fix round): satisfies
+    // the REAL runtime's `requirePersistence()` so `startContinuable`
+    // proceeds past its persistence precondition (the continuable
+    // persona-channel tests).
+    ...(options.sessionPersistence !== undefined ? [{ name: '@deepseek-ai/dsh-session-persistence-fake' }] : []),
     // The fake settings service row (only when requested — plan
     // `20260817-dsh-roles-e2e` Task 1): mounted BEFORE the plugin layers
     // so the real fallbacks plugin's `ctx.inject(['settings'])` child
@@ -785,6 +894,12 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
     // a `{ default }` module so the seam unwrap resolves the class.
     ...(options.sessionsService !== undefined
       ? [['@deepseek-ai/dsh-session-fake', { default: FakeSessionsRegistry }] as const]
+      : []),
+    // The fake `sessionPersistence` service (plan
+    // `20260831-dsh-alpha2-optional-fallbacks` Task 3 fix round): a
+    // `{ default }` module so the seam unwrap resolves the class.
+    ...(options.sessionPersistence !== undefined
+      ? [['@deepseek-ai/dsh-session-persistence-fake', { default: FakeSessionPersistence }] as const]
       : []),
     // The fake `settings` service (plan `20260817-dsh-roles-e2e` Task 1):
     // a `{ default }` module so the seam unwrap resolves the class.

@@ -339,7 +339,7 @@ describe.skipIf(skipReason !== undefined)('installed-deployment e2e (plan 202608
     })
 
     // 11. Effective-taxonomy assertions: every derived id seeded, persona
-    //     non-empty (same source as the decoration), defaults not
+    //     non-empty (same source as the persona channel), defaults not
     //     overridden.
     const readback = fallbacksService(booted!.ctx)!.getEffectiveRoles()
     const byId = new Map(readback.roles.map((row) => [row.id, row]))

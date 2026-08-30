@@ -51,8 +51,8 @@ dsh plugin --profile web add dsh-llm-fallbacks
 | `enforcement` | `'hard' \| 'soft'` | compass，否则仅告警 | 按部署覆盖。优先级：Config 优先；否则取 Assignment 自身的 `**Enforcement**: hard` 头字段（仅派发闸门）；否则取仓库 `.mstarc` `[config] enforcement`；否则取迭代 compass frontmatter；否则仅告警。Config / `.mstarc` `soft` 是仅有的本地回滚——Assignment 级 `soft` 不能覆盖 hard compass。 |
 | `dispatchTools` | `string[]` | `['subagent', 'subagent_fork']` | 派发闸门匹配的委派工具名——dsh preset 的**两个**委派工具：`subagent` 及其 fork 兄弟 `subagent_fork`（两者都携带 Assignment 形态的 `{ description, prompt }` 参数；`toolName` 配置可重命名实例）。 |
 | `dispatchBinding` | `string` | 未设置 → hard 下 fail-closed `empty-binding` | 派发方 agent 自身的 harness 角色（反递归 caller）；Assignment 的 `Execute as` 等于它即自我递归。 |
-| `roleMap` | `Record<string, string>` | 未设置 | mstar 角色 id（`Execute as`）→ dsh-llm-fallbacks 角色 id。**仅**作日志与未来规则驱动互操作的分类桥——装饰从不读取它（见 LLM fallbacks integration）。 |
-| `rolePersonas` | `Record<string, string>` | 未设置（打包镜像默认） | mstar 角色 id（`Execute as`）→ persona 文本；基于角色的 subagent 装饰的**覆盖**来源——角色匹配的一次性 start 会把 persona 合入原生请求的 `persona` 槽（子会话体现角色 persona 而**非**部署 persona；持久化并在 resume 时重放）；某角色未设置时使用打包的 `harness-agents/` 镜像默认值（见 LLM fallbacks integration）。 |
+| `roleMap` | `Record<string, string>` | 未设置 | mstar 角色 id（`Execute as`）→ dsh-llm-fallbacks 角色 id。**仅**作日志与未来规则驱动互操作的分类桥——persona 通道从不读取它（见 LLM fallbacks integration）。 |
+| `rolePersonas` | `Record<string, string>` | 未设置（打包镜像默认） | mstar 角色 id（`Execute as`）→ persona 文本；原生 subagent persona 通道的**覆盖**来源——角色匹配的 start（一次性 `start` 或可选的 continuable `startContinuable`）会把 persona 合入原生请求的 `persona` 槽（子会话体现角色 persona 而**非**部署 persona；持久化并在 resume 时重放）；某角色未设置时使用打包的 `harness-agents/` 镜像默认值（见 LLM fallbacks integration）。 |
 | `skillRoots` | `string[]` | 未设置（不注册自定义根） | 向 dsh skill-filesystem 提供者注册的额外技能根（`customSkillDirs` 语义——先于用户根扫描）。开发期：镜像 `<repo-root>/skills` 的绝对路径。 |
 | `bundledSkillDir` | `string` | 打包的 `harness-skills/` 镜像（包相对路径） | 向 dsh skill-filesystem 提供者注册的打包技能根（`bundledSkillDir` 语义——最后扫描、受信任）。默认取包内自带的 `harness-skills/` 镜像（`bundle-assets` 同步；gitignore）——包相对路径，**非** cwd 锚定。显式值优先。 |
 | `catalogTtlMs` | `number` | `60000` | pre-step catalog 缓存刷新间隔（毫秒）：按工作区缓存的统一 `mstar-engine-status` 行（水印 + 迭代闸门 + 工作区摘要）多久重读一次 `status.json` / compass / 知识索引。刷新间隔之间热路径只是时间戳比较 + Map 命中；会话中 plan/compass/residual 的变化会在一个间隔内落地。 |
@@ -146,9 +146,11 @@ profile bundle 组合出以下行——注册表行来自 `@deepseek-ai/dsh-base
 
 ### 角色 persona 交付（原生 subagent persona 通道）
 
-persona 交付走 dsh 原生的 `SubagentStartRequest.persona` 槽（`@deepseek-ai/dsh-subagent`）：插件经 cordis `internal/get` waterfall——框架文档化的服务读取拦截钩子——拦截 `ctx.subagents` 的服务读取并包装运行时值，使角色匹配的一次性 `start` 在提供者组装子会话之前把 persona 合入请求。底层 `SubagentRuntime` 对象绝不被改动（无 monkey-patching），包装监听器归 apply fiber 所有（HMR 重挂载会先卸载再恢复）。原生语义（dsh `0.1.2-alpha.2`）：请求 persona 会以作用域化的 `deployment:persona` 段（order 0）注册到子会话上，对该子会话**遮蔽**部署 persona——子会话**体现**角色 persona 而非与其共存——并持久化进子会话描述符、在 resume 时重放。角色身份使用与派发闸门相同的 engine Assignment 头语法。persona 查找是单一 `personaFor` 链——`rolePersonas[executeAs]` → 打包镜像默认 → 跳过——**从不以 `roleMap` 或 fallbacks 挂载状态为前提**（persona 交付与 fallbacks 无关）。显式的请求 persona（tool-subagent 自身的 `Config.persona`）优先于角色 persona——绝不覆盖调用方意图。
+persona 交付走 dsh 原生的 `SubagentStartRequest.persona` 槽（`@deepseek-ai/dsh-subagent`）：插件经 cordis `internal/get` waterfall——框架文档化的服务读取拦截钩子——拦截 `ctx.subagents` 的服务读取并包装运行时值，使角色匹配的 start 在子会话组装之前把 persona 合入请求——**同时覆盖两个启动面**：一次性 `start` 与可选的 continuable `startContinuable`（tool-subagent `backgroundMode: 'continuable'`；其 `ContinuableStartSpec.request` 携带同一个 `persona` 槽）。底层 `SubagentRuntime` 对象绝不被改动（无 monkey-patching），包装监听器归 apply fiber 所有（HMR 重挂载会先卸载再恢复，并重新绑定新 Config）。原生语义（dsh `0.1.2-alpha.2`）：请求 persona 会以作用域化的 `deployment:persona` 段（order 0）注册到子会话上，对该子会话**遮蔽**部署 persona——子会话**体现**角色 persona 而非与其共存——并持久化进子会话描述符、在 resume 时重放。角色身份使用与派发闸门相同的 engine Assignment 头语法。persona 查找是单一 `personaFor` 链——`rolePersonas[executeAs]` → 打包镜像默认 → 跳过——**从不以 `roleMap` 或 fallbacks 挂载状态为前提**（persona 交付与 fallbacks 无关）。显式的请求 persona（tool-subagent 自身的 `Config.persona`）优先于角色 persona——绝不覆盖调用方意图。
 
-**能力闸门**：`SubagentRuntime.start` 会对不具备原生 `persona` 能力的提供者直接拒绝 persona 请求（fail loud、绝不静默降级——进程外提供者即无此能力）。通道先检查 `getProvider(name).capabilities.persona`：对这类提供者跳过合并并记录一条受控 debug 日志，启动原样继续——绝不导致派发失败。
+**能力闸门（按启动面）**：一次性 `SubagentRuntime.start` 会对不具备原生 `persona` 能力的提供者直接拒绝 persona 请求（fail loud、绝不静默降级——进程外提供者即无此能力），因此该启动面通道先检查 `getProvider(name).capabilities.persona`。continuable 启动面改按**原生 continuable 契约**闸门——`SubagentCapabilities` 文档仅限一次性路径，continuable 子会话由延续管理器自行组装、以 `provider.prepareContinuable` 为闸门；通道检查该字段，对不支持 continuable 的提供者跳过合并（原生 start 会自行 fail loud——绝不会在会被拒绝的 start 上把 persona 记为已交付）。两种情况都以一条受控 debug 日志跳过合并、启动原样继续——通道绝不因此使派发失败。
+
+**零配置默认值**：当 `rolePersonas` 未为某角色配置条目时，persona 取自打包的 `harness-agents/` 镜像——构建时由 `bundle-assets` 从仓库根 `agents/` 同步（随发布 tarball 携带；包相对路径解析，任意启动 cwd 均可用）。镜像文件名主干即角色 id；默认值为其 frontmatter `description` 块标量。镜像 shell 在 frontmatter `mode` 缺失或为 `subagent` 时才有资格——`primary` shell（`project-manager`）绝不作为 subagent persona 默认值。默认值 description 若含插值风险（配对的 `{{`/`}}`）则在提取时告警并跳过（绝非启动抛错）；shell 改动（mtime 变化）会在下一次决策点读取时重新提取。镜像缺失（未运行 `bundle-assets`）时查找仅走配置，配置也未命中时每次 apply 记一条 debug。
 
 ### 角色 seeds 与采纳建议（Adoption advisory）
 
@@ -168,8 +170,8 @@ loader 回退路径（无服务）保留结构化 `roles.list` 读取（缺失 i
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `roleMap` | `Record<string, string>` | 未设置 | mstar 角色 id → fallbacks 角色 id。**仅**作日志与未来规则驱动互操作的分类桥——装饰按设计不使用（persona 注入以 `rolePersonas`/镜像为源）。 |
-| `rolePersonas` | `Record<string, string>` | 未设置（打包镜像默认） | mstar 角色 id → persona 文本；装饰的**覆盖**来源——某角色无条目时使用镜像默认值。 |
+| `roleMap` | `Record<string, string>` | 未设置 | mstar 角色 id → fallbacks 角色 id。**仅**作日志与未来规则驱动互操作的分类桥——persona 通道按设计不使用（persona 交付以 `rolePersonas`/镜像为源）。 |
+| `rolePersonas` | `Record<string, string>` | 未设置（打包镜像默认） | mstar 角色 id → persona 文本；persona 通道的**覆盖**来源——某角色无条目时使用镜像默认值。 |
 
 ## Service
 
@@ -327,13 +329,13 @@ catalog 行在委托之后追加到组合步骤消息的**末尾**——请求�
 - **profile-bundle 安装到 `web` profile：registry 与 local checkout**——`dsh plugin --profile web add @mstar-harness/dsh`（registry）与 `add <本地检出>` 为受支持途径，均走同一 pnpm + reconcile 机制（reconcile 步骤把 `@mstar-harness/dsh` 并入 `dsh.profile.bundles`）。local checkout 需要先执行 `bun run build`——本包没有 `prepare` 脚本（monorepo 显式构建各包），未构建的检出会装入空的 `dist/`。
 - **`lintSkillWrite` 类型化否决尚未接入生产**——传入文档分支的 hard 否决（`SkillLintVetoError`，码 `skill-lint.veto`）已导出并测试覆盖，但尚无生产调用方：engine `HostAdapter` 没有携带内容的技能写入钩子（只有 `beforeStatusWrite`/`beforeDispatch`/`beforeMerge`），且 fs intent 槽位内容盲。接线随未来携带内容的钩子落地；在此之前监听器路径只通过修复逃生咨询执行（从不否决）。
 - **CLI `HOST_SIGNALS` 缺少 `subagent` token**——engine `ToolSignal` 联合已包含它且 `detectHost` 能处理，但 `packages/cli` 的 `HOST_SIGNALS` 尚未更新，`mstar host detect --signals subagent` 会拒绝，直到上游化时更新 CLI 列表。
-- **入口是 `src/gates/*` 之上的模块索引**——拆分已交付：`src/index.ts`（371 行）从各 gate 模块（`_shared` / `status` / `skill-lint` / `seams` / `dispatch` / `catalog` / `tools` / `adapter`）原样 re-export 冻结的 47 名导出面（28 值导出 + 19 type-only 名；`Config` 计一次），并保留插件 manifest、单一 cordis augmentation 点、命令注册与 `apply()` 启动接线。导出面由 `tests/export-surface.spec.ts` 冻结——运行时值导出集 + `typecheck:tests`（`bunx tsc --noEmit -p tests/tsconfig.json`）下的值命名空间恒等与逐名类型探测。
+- **入口是 `src/gates/*` 之上的模块索引**——拆分已交付：`src/index.ts` 从各 gate 模块（`_shared` / `status` / `skill-lint` / `seams` / `dispatch` / `catalog` / `tools` / `adapter`）原样 re-export 冻结的 56 名导出面（31 值导出 + 25 type-only 名；`Config` 计一次），并保留插件 manifest、单一 cordis augmentation 点、命令注册与 `apply()` 启动接线。导出面由 `tests/export-surface.spec.ts` 冻结——运行时值导出集 + `typecheck:tests`（`bunx tsc --noEmit -p tests/tsconfig.json`）下的值命名空间恒等与逐名类型探测。
 - **engine dsh 行待上游化**——engine `host.ts` 的 dsh 改动（`DetectResult`、`ToolSignal`、`resolveSkillRoot`）位于 mstar-workflow engine 镜像，计划经用户授权的上游 PR 合入 mstar-harness；`mstar-host` 技能镜像（§ Detect / § Resolve loaded skill root / `references/dsh.md`）随之一并更新。
 - **迭代 stepper：Step 1 为 compass 驱动，Step 5 为 schema 驱动**——zone dashboard 的 Step 1（iteration-start）在 steering compass `status: active`（Phase 1 进行中）时为当前步（无 gate 判定 → 无 PASS/FAIL 徽标）；Step 5（merge-ready）是 engine 闸门永不点亮为当前的 schema 常量（transition 只覆盖 Phase 2→3→4，merge-ready 从不是 gate transition）；仅当 Step 4 为当前步时作为 `next` 渲染，其余为 idle——已记录于迭代 guide，非缺陷。完整面板限制清单见 Web 客户端插件一节。
 - **`dsh-llm-fallbacks` 为可选的开发期依赖**——dsh `0.1.2-alpha.2` 原生覆盖 subagent 定制，fallbacks 因此严格可选：`src/` 对其零导入（运行时与类型——被消费面是本地结构镜像 `fallbacks-structural.ts`，由探测的 exact-keys 漂移闸门 + `typecheck:tests` 的 real → view 可赋值检查保持同步），`package.json` 仅在 `devDependencies` 携带它（类型镜像 + 真实包测试 harness），`dist/` 无导入也无类型引用（仅 1 处命名该包的字符串字面量——探测的 loader 条目匹配；建议日志写作 `fallbacks`）。激活是**单独显式安装**（双命令契约），绝不传递；不再有 `--external` 护栏——未来的值导入必须按设计重新加入运行时依赖。
 - **本批次未交付角色→模型覆盖**——把角色路由到 fallbacks `model`（或经 fallbacks 规则路由 persona）需要改写启动请求上的子会话 `agentOptions`，但启动请求选项由调用方控制（tool-subagent 自己的 Config；调用参数仅为 `description`/`prompt`/`run_in_background`，且深度冻结）。等待上游 `fallbacks-explicit-role-tool` 或 N-B1 systemPrompt 采纳（roadmap §10.4）。
-- **persona 交付为 dsh 原生——不再有附加段**——角色 persona 合入 `SubagentStartRequest.persona`，对角色匹配的子会话**遮蔽**部署 persona（子会话体现角色；持久化并在 resume 时重放）。`mstar:role-persona` system-prompt 段已不复存在（plan 20260831-dsh-alpha2-optional-fallbacks）。
-- **persona 注入与 fallbacks 无关**——`dsh-llm-fallbacks` 只路由 LLM 失败；persona 交付从不依赖它。未挂载 → 同一 persona 经原生通道交付，仅一条交付 debug 日志（AC-4）。不具备原生 `persona` 能力的提供者（进程外）以一条受控 debug 日志跳过 persona——绝不因此使 start 失败。
+- **persona 交付为 dsh 原生——不再有附加段**——角色 persona 合入 `SubagentStartRequest.persona`（一次性 `start` 与可选的 continuable `startContinuable` 两个启动面），对角色匹配的子会话**遮蔽**部署 persona（子会话体现角色；持久化并在 resume 时重放）。`mstar:role-persona` system-prompt 段已不复存在（plan 20260831-dsh-alpha2-optional-fallbacks）。
+- **persona 注入与 fallbacks 无关**——`dsh-llm-fallbacks` 只路由 LLM 失败；persona 交付从不依赖它。未挂载 → 同一 persona 经原生通道交付，仅一条交付 debug 日志（AC-4）。一次性 start 中不具备原生 `persona` 能力的提供者（进程外）以一条受控 debug 日志跳过 persona；continuable start 中不具备 `prepareContinuable` 的提供者同样跳过（原生 start 会自行 fail loud）——通道绝不因两者使 start 失败。
 - **fork 门禁仅默认开启；显式 `dispatchTools` 可省略 `subagent_fork`**——自定义 `dispatchTools` 列表整体覆盖默认（既有重命名模式），因此自行声明列表的部署须包含 `subagent_fork` 才能继续门禁 fork 派发。
 - **persona 值绝不能包含 `{{...}}`**——dsh system-prompt 以严格 `{{variable}}` 插值渲染 persona 文本，对与后文 `}}` 配对的 `{{`（未知/畸形/未定义引用）直接抛错，会破坏每一次角色匹配派发的子会话提示组装。Config schema 在插件挂载时以清晰报错拒绝此类 `rolePersonas` 值；转义规则是改用单花括号或改写措辞（不带后续 `}}` 的孤立 `{{` 按字面散文渲染）。
 - **fallbacks HMR 重挂后的 seeds 再收敛受 seeded-only preservation 设计边界限制**——seed registry 是每次 apply 的内存态，纤程切换（HMR / 设置编辑）会丢弃它并让双方 declarer 从头重放。mstar re-declare 只合并保留**已 seeded** 的 id（seeded-only，设计使然），因此在 preset-last 提交顺序下，preset 行的 seeded 注记不会被 re-declare 恢复——它们在下一次 fallbacks apply 时恢复（上游 preset 自声明重新播种）。`llm-fallbacks` 服务消失时 advisory 一次性 latch 会重新武装（inject teardown），因此下一个决策点会重新收敛 mstar 侧；preset 侧是 seeded-only preservation 设计的有文档说明的暂时现象。

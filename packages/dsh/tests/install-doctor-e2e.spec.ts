@@ -12,15 +12,15 @@
  *   - dsh plugin advisory (runtime): missing / seeded / overridden
  * This spec closes the first end to end; the second is pinned by the
  * src-level specs (fallbacks-advisory.spec.ts (f)/(f2),
- * fallbacks-decoration.spec.ts (c)) and Task 1's installed-deployment e2e
+ * role-persona.spec.ts (c)) and Task 1's installed-deployment e2e
  * (13 mstar roles seeded — the cell-3 runtime half, cited here).
  *
  * Matrix:
  *   Cell 1 (uninstalled): `init --target dsh --no-fallbacks` → doctor exit 1
  *     `dsh-llm-fallbacks: uninstalled`; dsh side — installed artifact boots
  *     WITHOUT the fallbacks row: fallbacksMounted false, advisory not
- *     invoked (false, zero logs), decoration still injects the persona from
- *     Config (degradation path does not crash).
+ *     invoked (false, zero logs), the native persona channel still merges
+ *     the persona from Config (degradation path does not crash).
  *   Cell 2 (disabled): fallbacks row added, disabled via the REAL
  *     `cordis.patch.yml` mechanism → doctor exit 1 `dsh-llm-fallbacks:
  *     disabled`; dsh side — loader entry present (dump carries the disabled
@@ -140,7 +140,7 @@ const installedMstarDir = (dshHome: string) => join(profileDir(dshHome), 'node_m
 /** The seeds surface marker (Task 1 pattern): the bundled seeds wiring in
  * `dist/index.js` + the packaged `harness-agents` mirror. The doctor itself
  * reads only loader rows, but the dsh-side boots exercise the bundled
- * probe/advisory/decoration gates — pin the FULL shipped surface so the
+ * probe/advisory/persona-channel gates — pin the FULL shipped surface so the
  * boot evidence never runs against a seeds-less stale version. */
 function hasSeedsSurface(mstarPkgDir: string): boolean {
   const distIndex = join(mstarPkgDir, 'dist/index.js')
@@ -173,7 +173,7 @@ async function hostCopyInstalledMstar(dshHome: string): Promise<string> {
   return root
 }
 
-/** One mstar-style Assignment prompt (decoration fixture pattern). */
+/** One mstar-style Assignment prompt (persona-channel fixture pattern). */
 const ASSIGNMENT_PROMPT = [
   '**Execute as**: fullstack-dev',
   '**Delegation**: forbidden',
@@ -256,8 +256,8 @@ describe.skipIf(skipReason !== undefined)('install-surface doctor three-state e2
 
       // dsh side — the `--no-fallbacks` deployment boots WITHOUT the
       // fallbacks row: fallbacksMounted false, the advisory is NOT invoked
-      // (false, zero logs), and the decoration still injects the persona
-      // from the Config source (degradation path never crashes).
+      // (false, zero logs), and the native persona channel still merges the
+      // persona from the Config source (degradation path never crashes).
       hostCopyRoot = await hostCopyInstalledMstar(dshHome)
       // Dynamic import exception (runtime-selected specifier): the installed
       // dist path is only known after the REAL install — static imports

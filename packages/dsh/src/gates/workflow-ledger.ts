@@ -197,7 +197,7 @@ function log(level: WorkflowLedgerLogLevel, message: string): void {
   try {
     workflowLedgerLogSink(level, message)
   } catch {
-    // Never-throws invariant (decoration `log` pattern): a throwing log sink
+    // Never-throws invariant (module log-sink pattern): a throwing log sink
     // must not escape the consumer — the workflow run is never affected.
   }
 }
@@ -211,7 +211,7 @@ function errorMessage(error: unknown): string {
  * Minimal structural view of the `sessions` service the consumer reads
  * (`@deepseek-ai/dsh-session` `SessionStore` contract — the runtime read is
  * `ctx.get('sessions')` without the inject requirement, narrowed onto the
- * ONE consumed surface, same pattern as the decoration's `agents` view; the
+ * ONE consumed surface, same pattern as the persona channel's structural views; the
  * real `get` takes a branded `SessionId` while the events carry a plain
  * string childId, so the structural surface types the read the consumer
  * performs).

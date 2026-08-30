@@ -36,7 +36,7 @@
  * dispatch/apply flow is never affected).
  *
  * Module boundary: no barrel — the entry imports this module by explicit
- * relative path (the decoration-module pattern).
+ * relative path (the role-persona module pattern).
  */
 import type { Context } from '@deepseek-ai/cordis'
 import type { EffectiveRolesReadbackView, FallbacksServiceView } from './fallbacks-structural.ts'
@@ -50,7 +50,7 @@ export const ADVISORY_LOGGER = 'mstar/fallbacks-advisory'
 /** Advisory log levels the module sink understands. */
 export type AdvisoryLogLevel = 'debug' | 'warn'
 
-/** Module-level advisory log sink — bound by `apply` to `ctx.logger(ADVISORY_LOGGER)` (decoration-module pattern). */
+/** Module-level advisory log sink — bound by `apply` to `ctx.logger(ADVISORY_LOGGER)` (role-persona module pattern). */
 export type AdvisoryLogSink = (level: AdvisoryLogLevel, message: string) => void
 
 let advisoryLogSink: AdvisoryLogSink = () => {}

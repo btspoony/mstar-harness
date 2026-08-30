@@ -54,7 +54,7 @@
  *   re-read status.json / the compass / the ledger on every prompt
  *   assembly (the catalog's documented staleness tradeoff).
  *
- * Degradation (boot is never affected — the decoration's contained-degrade
+ * Degradation (boot is never affected — the persona channel's contained-degrade
  * discipline):
  * - Structural existence check via `ctx.get('systemPrompt')` — the
  *   `ctx.get('agents')` precedent: a DIRECT `ctx.systemPrompt` property
@@ -106,7 +106,7 @@ export const ENGINE_STATUS_CONTEXT_ORDER = 100
 /** Harness-prompt log levels the module sink understands. */
 export type HarnessPromptLogLevel = 'debug' | 'warn'
 
-/** Module-level harness-prompt log sink — bound by `apply` to `ctx.logger(HARNESS_PROMPT_LOGGER)` (decoration precedent). */
+/** Module-level harness-prompt log sink — bound by `apply` to `ctx.logger(HARNESS_PROMPT_LOGGER)` (module-sink precedent). */
 export type HarnessPromptLogSink = (level: HarnessPromptLogLevel, message: string) => void
 
 let harnessPromptLogSink: HarnessPromptLogSink = () => {}
@@ -390,7 +390,7 @@ function engineStatusSummary(source: MstarEngineStatusSource): string {
   return lines.join('\n')
 }
 
-/** Best-effort human-readable message from an arbitrary thrown value (decoration `errorMessage` pattern). */
+/** Best-effort human-readable message from an arbitrary thrown value (shared `errorMessage` pattern). */
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
@@ -399,7 +399,7 @@ function log(level: HarnessPromptLogLevel, message: string): void {
   try {
     harnessPromptLogSink(level, message)
   } catch {
-    // Never-throws invariant (decoration F-002 pattern): a throwing log
+    // Never-throws invariant (plan QC F-002): a throwing log
     // sink must not escape the registration path — boot is never affected.
   }
 }

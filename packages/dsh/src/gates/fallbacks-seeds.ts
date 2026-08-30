@@ -14,7 +14,7 @@
  *    registry, so without preservation a mstar-only batch would strip
  *    preset/companion ids of their seeded annotations (rows remain — R2).
  * 2. `subagentRoleIds()` × `personaFor()` resolve the mstar personas from
- *    the `harness-agents/` mirror (the decoration's existing lookup surface;
+ *    the `harness-agents/` mirror (the persona channel's existing lookup surface;
  *    `mode: primary` shells like `project-manager` are excluded).
  * 3. Interpolation gate (HARD): any persona carrying the dsh system-prompt
  *    STRICT `{{...}}` hazard is skipped + warned BEFORE `declareSeeds` —
@@ -153,7 +153,7 @@ export async function declareMstarSeeds(
     }
     preservedCandidates.push({ id, persona: row.seedPersona })
   }
-  // 4. Mstar personas — the decoration's existing lookup; extraction-time
+  // 4. Mstar personas — the persona channel's existing lookup; extraction-time
   //    hazard warns are forwarded to the module log (aligned semantics).
   const declared: SeedDeclarationView[] = []
   const skipped: SeedSkipView[] = []

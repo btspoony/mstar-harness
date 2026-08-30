@@ -44,7 +44,7 @@ const MISSING_EXECUTE_AS = `## Assignment
 Do the thing.
 `
 
-/** The mstar role id the decoration test Assignment declares + persona key. */
+/** The mstar role id the persona-channel test Assignment declares + persona key. */
 const EXECUTE_AS = 'fullstack-dev'
 
 /** The configured persona text for `fullstack-dev`. */
