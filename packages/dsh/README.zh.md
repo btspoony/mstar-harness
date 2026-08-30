@@ -133,7 +133,7 @@ profile bundle 组合出以下行——注册表行来自 `@deepseek-ai/dsh-base
 
 ## LLM fallbacks integration
 
-可选的 `dsh-llm-fallbacks` 插件（以第二条命令安装——见 Install paths）驱动**基于角色的 subagent 配置**：角色匹配的 subagent 派发会把配置的 persona 注入子会话的 system prompt。mstar 插件将其声明为 registry `dependencies` 条目并**仅作类型导入**——`dist/` 对该包**无打包运行时导入**（仅 3 处命名该包的字符串字面量——探测的 loader 条目匹配与两条装饰日志——绝非导入；构建中的 `--external dsh-llm-fallbacks` 仍是对未来库形态导入的护栏）；互操作是决策点**能力探测**，绝不读取其他插件的模块内部。
+可选的 `dsh-llm-fallbacks` 插件（以第二条命令安装——见 Install paths）驱动**基于角色的 subagent 配置**：角色匹配的 subagent 派发会把配置的 persona 注入子会话的 system prompt。mstar 插件对该包携带**零运行时与零类型引用**——`src/` 无任何导入（运行时或类型）；被消费的服务面由 `src/gates/fallbacks-structural.ts` 的本地结构类型镜像，该包仅是 mstar 插件的**开发期依赖**（类型镜像 + 真实包测试 harness）。`dist/` 仅在 3 处字符串字面量中命名该包——探测的 loader 条目匹配与两条装饰日志——绝非导入或类型引用；互操作是决策点**能力探测**，绝不读取其他插件的模块内部。
 
 ### 能力探测
 
@@ -280,7 +280,7 @@ dsh web                     # 启动 → 服务 /plugins/@mstar-harness/dsh/clie
 
 ## Development
 
-命令（在 `packages/dsh` 下执行）：覆盖率门禁为 `src/` 逐文件 100%（dsh 测试策略）；构建命令把 src 条目 bun 打包进 `dist/`（内联 engine 与 schemastery；`@deepseek-ai/cordis` 与运行时 seam 导入——`@deepseek-ai/dsh-skill-filesystem`、`@deepseek-ai/dsh-tools`（`defineTool`）、`@deepseek-ai/dsh-llm`——保持外部，外加仅类型导入的 `dsh-llm-fallbacks`），运行 `build-client`（`scripts/build-client-bundle.ts`——按 spec §6.2 产出的 closure-factory CJS 浏览器 bundle `dist/client.js`）并输出 tsc 声明。
+命令（在 `packages/dsh` 下执行）：覆盖率门禁为 `src/` 逐文件 100%（dsh 测试策略）；构建命令把 src 条目 bun 打包进 `dist/`（内联 engine 与 schemastery；`@deepseek-ai/cordis` 与运行时 seam 导入——`@deepseek-ai/dsh-skill-filesystem`、`@deepseek-ai/dsh-tools`（`defineTool`）、`@deepseek-ai/dsh-llm`——保持外部），运行 `build-client`（`scripts/build-client-bundle.ts`——按 spec §6.2 产出的 closure-factory CJS 浏览器 bundle `dist/client.js`）并输出 tsc 声明。
 
 ```sh
 bun test --coverage
@@ -334,7 +334,7 @@ catalog 行在委托之后追加到组合步骤消息的**末尾**——请求�
 - **入口是 `src/gates/*` 之上的模块索引**——拆分已交付：`src/index.ts`（371 行）从各 gate 模块（`_shared` / `status` / `skill-lint` / `seams` / `dispatch` / `catalog` / `tools` / `adapter`）原样 re-export 冻结的 47 名导出面（28 值导出 + 19 type-only 名；`Config` 计一次），并保留插件 manifest、单一 cordis augmentation 点、命令注册与 `apply()` 启动接线。导出面由 `tests/export-surface.spec.ts` 冻结——运行时值导出集 + `typecheck:tests`（`bunx tsc --noEmit -p tests/tsconfig.json`）下的值命名空间恒等与逐名类型探测。
 - **engine dsh 行待上游化**——engine `host.ts` 的 dsh 改动（`DetectResult`、`ToolSignal`、`resolveSkillRoot`）位于 mstar-workflow engine 镜像，计划经用户授权的上游 PR 合入 mstar-harness；`mstar-host` 技能镜像（§ Detect / § Resolve loaded skill root / `references/dsh.md`）随之一并更新。
 - **迭代 stepper：Step 1 为 compass 驱动，Step 5 为 schema 驱动**——zone dashboard 的 Step 1（iteration-start）在 steering compass `status: active`（Phase 1 进行中）时为当前步（无 gate 判定 → 无 PASS/FAIL 徽标）；Step 5（merge-ready）是 engine 闸门永不点亮为当前的 schema 常量（transition 只覆盖 Phase 2→3→4，merge-ready 从不是 gate transition）；仅当 Step 4 为当前步时作为 `next` 渲染，其余为 idle——已记录于迭代 guide，非缺陷。完整面板限制清单见 Web 客户端插件一节。
-- **`dsh-llm-fallbacks` 为 registry `dependencies` 条目且仅类型导入**——caret 范围写在 `package.json`（探测形状断言测试是可执行的漂移闸门）并在构建中 `--external`，因此 `dist/` 无打包运行时导入（仅 3 处命名该包的字符串字面量——探测的 loader 条目匹配与两条装饰日志；建议日志写作 `fallbacks`）；激活是**单独显式安装**（双命令契约），绝不传递。库形态依赖存在是为未来值导入无需改 manifest 即可解析；`--external` 仍是护栏。
+- **`dsh-llm-fallbacks` 为可选的开发期依赖**——dsh `0.1.2-alpha.2` 原生覆盖 subagent 定制，fallbacks 因此严格可选：`src/` 对其零导入（运行时与类型——被消费面是本地结构镜像 `fallbacks-structural.ts`，由探测的 exact-keys 漂移闸门 + `typecheck:tests` 的 real → view 可赋值检查保持同步），`package.json` 仅在 `devDependencies` 携带它（类型镜像 + 真实包测试 harness），`dist/` 无导入也无类型引用（仅 3 处命名该包的字符串字面量——探测的 loader 条目匹配与两条装饰日志；建议日志写作 `fallbacks`）。激活是**单独显式安装**（双命令契约），绝不传递；不再有 `--external` 护栏——未来的值导入必须按设计重新加入运行时依赖。
 - **本批次未交付角色→模型覆盖**——把角色路由到 fallbacks `model`（或经 fallbacks 规则路由 persona）需要改写启动请求上的子会话 `agentOptions`，但启动请求选项由调用方控制（tool-subagent 自己的 Config；调用参数仅为 `description`/`prompt`/`run_in_background`，且深度冻结）。等待上游 `fallbacks-explicit-role-tool` 或 N-B1 systemPrompt 采纳（roadmap §10.4）。
 - **装饰是最小化的每子会话段，而非 N-B1 systemPrompt 采纳**——`mstar:role-persona` 是子上下文上的一个 agent 作用域段；无 harness 规则段、无 PromptContext、无变量。N-B1（roadmap §10.4）日后可吸收或替换该通道而不改变可观察行为（AC-3）。
 - **persona 注入与 fallbacks 无关**——`dsh-llm-fallbacks` 只路由 LLM 失败；装饰从不依赖它。未挂载 → 同一 persona 经同一通道来自 mstar Config，仅多一条 debug 日志（AC-4）。若组合中缺 `ctx.get('agents')`（无 dsh-agent），装饰以一条 debug 日志跳过。

@@ -2,11 +2,17 @@
  * Capability probes for the OPTIONAL `dsh-llm-fallbacks` plugin (plan
  * `20260814-dsh-fallbacks-integration` Task 1 — probe foundation).
  *
- * The fallbacks plugin is registry-declared (`dependencies`) and external in
- * the build, and every import here is TYPE-ONLY: `dist/index.js` must carry
- * ZERO runtime references to `dsh-llm-fallbacks`. The package's
+ * The fallbacks plugin is an optional SEPARATE install (two-command
+ * contract) and a dev-time-only dependency of this package: src carries
+ * ZERO imports of it (runtime and type) — the consumed service surface is
+ * the local structural mirror in `fallbacks-structural.ts`, so `dist/`
+ * carries zero runtime AND zero type references to `dsh-llm-fallbacks`.
+ * When the dev dependency is installed, the package's
  * `declare module '@deepseek-ai/cordis'` augmentation types
- * `ctx.get('llm-fallbacks')` for importers.
+ * `ctx.get('llm-fallbacks')` for importers — under `typecheck:tests` the
+ * uncast return in {@link fallbacksService} is the compile-time real →
+ * view assignability gate (the published build never loads the
+ * augmentation; the untyped string overload applies there).
  *
  * Two views:
  * - {@link fallbacksService} — the named cordis service while the plugin is
@@ -19,7 +25,7 @@
  *   concurrently (plugin-inventory philosophy).
  */
 import type { Context } from '@deepseek-ai/cordis'
-import type { FallbacksService } from 'dsh-llm-fallbacks'
+import type { FallbacksServiceView } from './fallbacks-structural.ts'
 
 /** Loader entry name of the `dsh-llm-fallbacks` plugin row. */
 export const FALLBACKS_ENTRY_NAME = 'dsh-llm-fallbacks'
@@ -52,7 +58,12 @@ interface LoaderView {
 }
 
 /** Service view: the named `llm-fallbacks` cordis service while applied. */
-export function fallbacksService(ctx: Context): FallbacksService | undefined {
+export function fallbacksService(ctx: Context): FallbacksServiceView | undefined {
+  // Uncast on purpose: with the dev dependency installed, the package's
+  // cordis augmentation types this `get` as the REAL `FallbacksService` —
+  // the return is then a compile-time real → view assignability gate under
+  // `typecheck:tests`. Without it (published build) the untyped string
+  // overload returns `any`.
   return ctx.get('llm-fallbacks')
 }
 

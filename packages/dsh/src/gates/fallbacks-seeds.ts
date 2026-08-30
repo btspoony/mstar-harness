@@ -25,9 +25,10 @@
  *
  * The upstream `SeedDeclareOutcome` is passed through verbatim; the
  * structured `SeedOutcomeView` is this module's own view (the service is a
- * structural parameter — fake-testable, no runtime value import; the type
- * imports are type-only, mirroring `fallbacks-probe.ts` — the bundle keeps
- * ZERO runtime references to `dsh-llm-fallbacks`).
+ * structural parameter — fake-testable, no runtime value import). The
+ * upstream shapes are the local structural mirrors from
+ * `fallbacks-structural.ts` (mirroring `fallbacks-probe.ts`) — this module
+ * carries ZERO imports of `dsh-llm-fallbacks`, runtime or type.
  *
  * Failure semantics: a throwing readback is contained (skip + one warn —
  * probe semantics); a rejecting `declareSeeds` PROPAGATES to the caller —
@@ -37,7 +38,7 @@
  * Module boundary: no barrel — the entry imports this module by explicit
  * relative path; the entry does not re-export it.
  */
-import type { EffectiveRolesReadback, SeedDeclaration, SeedDeclareOutcome } from 'dsh-llm-fallbacks'
+import type { EffectiveRolesReadbackView, SeedDeclarationView, SeedDeclareOutcomeView } from './fallbacks-structural.ts'
 import { PERSONA_INTERPOLATION_HAZARD } from './_shared.ts'
 import { personaFor, subagentRoleIds, type PersonaWarnSink } from './agent-personas.ts'
 
@@ -52,15 +53,16 @@ export type SeedsLogSink = (level: SeedsLogLevel, message: string) => void
 
 /**
  * The consumed service surface — a structural subset of the upstream
- * `FallbacksService` (the two seed methods the declaration flow uses).
+ * `FallbacksService` (the two seed methods the declaration flow uses),
+ * typed over the local mirrors in `fallbacks-structural.ts`.
  * Fake-testable: tests pass a spy object; the real service is assignable
  * (structural typing anchors the contract against the installed `.d.ts`).
  */
 export interface SeedsServiceView {
   /** (a) Declare the companion's FULL current seed set (replacement semantics). */
-  declareSeeds(seeds: readonly SeedDeclaration[]): Promise<SeedDeclareOutcome>
+  declareSeeds(seeds: readonly SeedDeclarationView[]): Promise<SeedDeclareOutcomeView>
   /** (b) Sync readback — effective taxonomy with seed annotations. */
-  getEffectiveRoles(): EffectiveRolesReadback
+  getEffectiveRoles(): EffectiveRolesReadbackView
 }
 
 /** Options for {@link declareMstarSeeds}. */
@@ -86,17 +88,17 @@ export interface PreservedSeedView {
 /** Structured result of one {@link declareMstarSeeds} call — this module's own view. */
 export interface SeedOutcomeView {
   /** The full declaration batch handed to `declareSeeds` (mstar personas + preserved ids). */
-  declared: SeedDeclaration[]
+  declared: SeedDeclarationView[]
   /** Locally skipped ids (interpolation gate / no usable default) — never declared. */
   skipped: SeedSkipView[]
   /** The seeded non-mstar ids preserved from the readback into the batch. */
   preserved: PreservedSeedView[]
   /** The upstream `SeedDeclareOutcome` — passed through verbatim. */
-  outcome: SeedDeclareOutcome
+  outcome: SeedDeclareOutcomeView
 }
 
 /** The empty upstream outcome used for contained-failure views (readback threw). */
-const EMPTY_OUTCOME: SeedDeclareOutcome = { applied: [], skipped: [], conflicts: [] }
+const EMPTY_OUTCOME: SeedDeclareOutcomeView = { applied: [], skipped: [], conflicts: [] }
 
 /** Best-effort human-readable message from an arbitrary thrown value (agent-flow `errorMessage` pattern). */
 function errorMessage(error: unknown): string {
@@ -126,7 +128,7 @@ export async function declareMstarSeeds(
   const { agentsDir, log } = options
   // 1. Readback — probe semantics: a throwing readback degrades to skip +
   //    one warn (never throws out of the decision point).
-  let readback: EffectiveRolesReadback
+  let readback: EffectiveRolesReadbackView
   try {
     readback = service.getEffectiveRoles()
   } catch (error) {
@@ -153,7 +155,7 @@ export async function declareMstarSeeds(
   }
   // 4. Mstar personas — the decoration's existing lookup; extraction-time
   //    hazard warns are forwarded to the module log (aligned semantics).
-  const declared: SeedDeclaration[] = []
+  const declared: SeedDeclarationView[] = []
   const skipped: SeedSkipView[] = []
   const forwardWarn: PersonaWarnSink = (message) => log('warn', message)
   for (const roleId of mstarIds) {
