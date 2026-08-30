@@ -244,6 +244,40 @@ export function asRecord(value: unknown): Record<string, unknown> | undefined {
     ? (value as Record<string, unknown>)
     : undefined
 }
+
+/**
+ * Cap on the plan / lease rows joined into the `<mstar_engine_status>`
+ * catalog state lines (plan `20260830-dsh-catalog-cap` D1): ONE catalog-owned
+ * constant shared by the `plans:` and `leases:` joins so an oversized
+ * workflow snapshot cannot balloon the single-line catalog state section.
+ * Numeric precedent: `DIGEST_PLAN_CAP` in `system-prompt.ts` (digest-side,
+ * non-Done-only — intentionally NOT reused here; the catalog renders the
+ * full, unfiltered snapshot rows).
+ */
+export const CATALOG_STATE_JOIN_LIMIT = 8
+
+/**
+ * Join the screened projection of `items` in catalog-array order, capped at
+ * `cap`: when `items.length > cap` the FIRST `cap` items render followed by
+ * a final `+N more` overflow marker (`N = items.length - cap`) as the last
+ * join element; at or under the cap the full join renders with no marker.
+ * The `render` callback owns any per-item `stripInterpolationHazard`
+ * screening (before the join, same as the uncapped code); the marker is an
+ * engine-derived literal and stays unscreened. Callers guard the empty case
+ * (`length === 0` → `none` / `none registered` / `none active`) — this
+ * helper is never reached for empty arrays.
+ *
+ * Hoisted from `system-prompt.ts` (plan `20260830-dsh-catalog-cap` D3) so
+ * the GLOBAL digest and the catalog state lines share ONE join-capping
+ * implementation; `_shared.ts` imports no gates-local module, so no import
+ * cycle is introduced.
+ */
+export function joinCapped<T>(items: readonly T[], cap: number, separator: string, render: (item: T) => string): string {
+  const visible = items.slice(0, cap).map(render)
+  if (items.length > cap) visible.push(`+${items.length - cap} more`)
+  return visible.join(separator)
+}
+
 /**
  * Resolve the hard-enforcement flag for the artifact gates: explicit
  * Config override wins, else the repo `.mstarc` `[config] enforcement`,

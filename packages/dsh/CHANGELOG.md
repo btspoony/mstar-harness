@@ -6,6 +6,10 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+### Changed
+
+- **Catalog state plans/leases join cap**: the `<mstar_engine_status>` catalog state section (`renderEngineStatusCatalog`, `packages/dsh/src/gates/catalog.ts`) now caps the `plans:` / `leases:` joined rendering at `CATALOG_STATE_JOIN_LIMIT = 8` (exported from `packages/dsh/src/gates/_shared.ts` and shared by both joins via `joinCapped`), appending a final `+N more` overflow marker when a list is longer. At or under the cap the rendering is byte-identical to the previous unbounded output, and the empty `none registered` / `none active` copy is unchanged. Sparse-lease visibility: plans hidden behind the `plans:` overflow marker may still appear in the `leases:` line when the lease count is at or under the cap.
+
 ## [3.5.1] - 2026-08-28
 
 ### Changed

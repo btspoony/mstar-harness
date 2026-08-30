@@ -43,29 +43,33 @@ Canonical vs legacy residual definitions → **`mstar-artifacts` SKILL.md**（"`
 ```json
 {
   "schema_version": 1,
-  "id": "<plan-id-or-iteration-id>",
-  "type": "plan | iteration",
-  "status": "running | paused | completed | failed | stopped",
-  "started_at": "YYYY-MM-DD",
-  "ended_at": null,
-  "updated_at": "YYYY-MM-DD",
+  "id": "iter-demo",
+  "type": "iteration",
+  "status": "running",
+  "started_at": "2026-08-30",
+  "updated_at": "2026-08-30",
   "phase": "phase-2-execute",
   "plans": [
     {
       "id": "plan-id",
       "title": "Plan title",
       "file": "{PLAN_DIR}/plan-id-feature-name.md",
-      "status": "Todo | InProgress | InReview | Blocked | Done",
+      "status": "InProgress",
       "owner": "@project-manager",
       "agents": ["@fullstack-dev"],
       "progress": 0,
       "tags": [],
-      "created_at": "YYYY-MM-DD",
-      "updated_at": "YYYY-MM-DD",
+      "created_at": "2026-08-29",
+      "updated_at": "2026-08-30",
       "done_at": null,
       "notes": [],
       "metadata": {},
-      "execution_lease": {}
+      "execution_lease": {
+        "holder": "omp:demo-session",
+        "claimed_at": "2026-08-30T02:30:00Z",
+        "worktree_path": "/tmp/worktrees/demo-plan",
+        "working_branch": "feature/demo-plan"
+      }
     }
   ],
   "execution_policy": {
@@ -73,13 +77,21 @@ Canonical vs legacy residual definitions → **`mstar-artifacts` SKILL.md**（"`
     "worktree_mode": "",
     "push_policy": ""
   },
-  "integration_merge_lease": {},
-  "branch": { "base": "", "integration": "", "target": "" },
+  "integration_merge_lease": {
+    "holder": "omp:demo-session",
+    "claimed_at": "2026-08-30T03:00:00Z",
+    "plan_id": "plan-id",
+    "source_branch": "feature/demo-plan",
+    "target_branch": "iteration/iter-demo"
+  },
+  "branch": { "base": "main", "integration": "iteration/iter-demo", "target": "main" },
   "control_worktree_path": "/abs/repo/root",
   "legacy_metadata": {},
-  "compass_ref": "iterations/<iteration-id>/delivery-compass.md"
+  "compass_ref": "iterations/iter-demo/delivery-compass.md"
 }
 ```
+
+- The example above depicts the **held** state (both leases populated, illustrative placeholder values) and passes `validateWorkflowSnapshot`; the released state is **key absence** (delete-key-on-release below), never `null` or `{}`, and enum scalars (`type` / `status` / plan-row `status`) are always single values — the full enum sets are `type`: `plan | iteration`, snapshot `status`: `running | paused | completed | failed | stopped`, plan-row `status`: `Todo | InProgress | InReview | Blocked | Done`.
 
 - `plans[]` rows are the **legacy PlanRow shape verbatim** (unknown row fields preserved, never re-bucketed). Per-row `execution_lease` stays on the row; `integration_merge_lease` is **top-level** (the v1 root-`metadata` home is gone).
 - Terminal statuses (`completed` / `failed` / `stopped`) require `ended_at` and no dangling leases.

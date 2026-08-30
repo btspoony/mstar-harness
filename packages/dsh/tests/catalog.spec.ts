@@ -854,6 +854,112 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation (plan 202
   })
 })
 
+describe('mstar-engine-status catalog — state plans/leases join cap (plan 20260830-dsh-catalog-cap Task 2, spec D4)', () => {
+  /** The pinned cap value (spec D1) — intentionally hardcoded, NOT imported,
+   * so a drift of `CATALOG_STATE_JOIN_LIMIT` fails this matrix. */
+  const CAP = 8
+  /** The fixture plan-row shape (snapshot `plans[]` entry with an execution lease). */
+  interface CapRow {
+    id: string
+    title: string
+    status: string
+    execution_lease: {
+      holder: string
+      claimed_at: string
+      worktree_path: string
+      working_branch: string
+    }
+  }
+  /** One snapshot plan row carrying an execution lease (feeds BOTH joins). */
+  const capRow = (index: number): CapRow => ({
+    id: `plan-${index}`,
+    title: `Plan ${index}`,
+    status: 'InProgress',
+    execution_lease: {
+      holder: `holder-${index}`,
+      claimed_at: '2026-08-30',
+      worktree_path: `/worktrees/plan-${index}`,
+      working_branch: `feature/plan-${index}`,
+    },
+  })
+  /** The pre-cap (legacy) plans rendering — the byte-identical reference for ≤ CAP rows (separator `' '`). */
+  const uncappedPlans = (rows: CapRow[]): string => rows.map((row) => `${row.id}(${row.status})`).join(' ')
+  /** The pre-cap (legacy) leases rendering — the byte-identical reference for ≤ CAP rows (separator `'; '`). */
+  const uncappedLeases = (rows: CapRow[]): string =>
+    rows.map((row) => `${row.id} → ${row.execution_lease.holder} (${row.execution_lease.worktree_path})`).join('; ')
+  /** The exact `plans:` / `leases:` line of the catalog model text (byte-identity assertions, not substring). */
+  const lineOf = (text: string, prefix: 'plans:' | 'leases:'): string => {
+    const line = text.split('\n').find((l) => l.startsWith(`${prefix} `))
+    if (line === undefined) throw new Error(`missing ${prefix} line`)
+    return line
+  }
+  /** Boot a one-workflow tree whose snapshot carries `count` leased plans; return the catalog text + state. */
+  const catalogFor = async (count: number) => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-cap-'))
+    const harnessDir = join(root, 'harness')
+    await mkdir(harnessDir, { recursive: true })
+    const plans = Array.from({ length: count }, (_, index) => capRow(index))
+    await seedHarness(harnessDir, {
+      'status.json': v2Root([v2WorkflowEntry('wf-cap')]),
+      'workflows/wf-cap/snapshot.json': v2Snapshot('wf-cap', { plans }),
+    })
+    const app = booted = await bootApp({ root })
+    const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
+    const { row, source } = catalogRowOf(decision)
+    const state = source.state
+    if (state === null) throw new Error('missing state')
+    return { text: textOf(row), state }
+  }
+
+  it('empty (0) → caller ternary copy `none registered` / `none active` (joinCapped never reached)', async () => {
+    const { text, state } = await catalogFor(0)
+    expect(lineOf(text, 'plans:')).toBe('plans: none registered')
+    expect(lineOf(text, 'leases:')).toBe('leases: none active')
+    expect(state.plans).toEqual([])
+    expect(state.leases).toEqual([])
+  })
+
+  it('singleton (1) → full join, no overflow token, byte-identical to the uncapped rendering', async () => {
+    const rows = [capRow(0)]
+    const { text } = await catalogFor(1)
+    expect(lineOf(text, 'plans:')).toBe(`plans: ${uncappedPlans(rows)}`)
+    expect(lineOf(text, 'leases:')).toBe(`leases: ${uncappedLeases(rows)}`)
+  })
+
+  it('exactly at the limit (8) → full join, no overflow token, byte-identical to the uncapped rendering', async () => {
+    const rows = Array.from({ length: CAP }, (_, index) => capRow(index))
+    const { text, state } = await catalogFor(CAP)
+    expect(lineOf(text, 'plans:')).toBe(`plans: ${uncappedPlans(rows)}`)
+    expect(lineOf(text, 'leases:')).toBe(`leases: ${uncappedLeases(rows)}`)
+    expect(state.plans).toHaveLength(CAP)
+    expect(state.leases).toHaveLength(CAP)
+  })
+
+  it('limit+1 (9) → first 8 rows + final `+1 more` join element (plans ` ` separator, leases `; `)', async () => {
+    const rows = Array.from({ length: CAP + 1 }, (_, index) => capRow(index))
+    const { text, state } = await catalogFor(CAP + 1)
+    // The overflow token is the LAST join element (it carries no leading
+    // space of its own — it lands after the separator).
+    expect(lineOf(text, 'plans:')).toBe(`plans: ${uncappedPlans(rows.slice(0, CAP))} +1 more`)
+    expect(lineOf(text, 'leases:')).toBe(`leases: ${uncappedLeases(rows.slice(0, CAP))}; +1 more`)
+    // The capped row renders nowhere on the line.
+    expect(lineOf(text, 'plans:')).not.toContain('plan-8')
+    expect(lineOf(text, 'leases:')).not.toContain('plan-8')
+    // The aggregates stay full — the cap touches the text join only (D5).
+    expect(state.plans).toHaveLength(CAP + 1)
+    expect(state.leases).toHaveLength(CAP + 1)
+  })
+
+  it('double-limit (16) → `+8 more` pins the D2 overflow wording', async () => {
+    const rows = Array.from({ length: 2 * CAP }, (_, index) => capRow(index))
+    const { text } = await catalogFor(2 * CAP)
+    expect(lineOf(text, 'plans:')).toBe(`plans: ${uncappedPlans(rows.slice(0, CAP))} +8 more`)
+    expect(lineOf(text, 'leases:')).toBe(`leases: ${uncappedLeases(rows.slice(0, CAP))}; +8 more`)
+    expect(lineOf(text, 'plans:')).not.toContain('plan-15')
+    expect(lineOf(text, 'leases:')).not.toContain('plan-15')
+  })
+})
+
 describe('catalog teardown — fiber.dispose removes the pre-step listener (HMR-safe)', () => {
   it('disposes the listener on fiber.dispose and a reloaded fiber restores it', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-'))
