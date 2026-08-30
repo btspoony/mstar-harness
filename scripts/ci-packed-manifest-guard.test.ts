@@ -92,12 +92,16 @@ describe("guard process boundary (exit codes)", () => {
         dependencies: { "@mstar-harness/engine": "workspace:*" },
       });
       const result = runGuard(cwd);
-      // Exit-code-only: the violation trips `bun pm pack` (unresolvable
-      // workspace: spec) before the guard's failure banner is reachable.
+      // Raw violations fail fast: the guard prints its own banner and exits 1
+      // before `bun pm pack` runs, so these assertions pin the guard's own
+      // rejection path (a regression to pack-throws-first would lose the
+      // banner and surface pack's error instead).
       // Fail closed: a spawn timeout yields `exitCode: null`, which must not
       // satisfy this assertion.
       expect(result.exitCode).not.toBeNull();
-      expect(result.exitCode).toBeGreaterThan(0);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("workspace: protocol is unresolvable");
+      expect(result.stderr).toContain('dependencies["@mstar-harness/engine"] = "workspace:*"');
     },
     60_000,
   );
