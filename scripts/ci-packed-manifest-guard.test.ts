@@ -94,7 +94,10 @@ describe("guard process boundary (exit codes)", () => {
       const result = runGuard(cwd);
       // Exit-code-only: the violation trips `bun pm pack` (unresolvable
       // workspace: spec) before the guard's failure banner is reachable.
-      expect(result.exitCode).not.toBe(0);
+      // Fail closed: a spawn timeout yields `exitCode: null`, which must not
+      // satisfy this assertion.
+      expect(result.exitCode).not.toBeNull();
+      expect(result.exitCode).toBeGreaterThan(0);
     },
     60_000,
   );
