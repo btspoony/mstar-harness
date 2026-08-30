@@ -56,7 +56,7 @@ import type {
   ResidualFindingView,
   WorkflowSelectionView,
 } from '../types.ts'
-import { STATUS_FILE, asRecord, sessionCwdOf, HarnessResolver, iterationViolationView, iterationGateView } from './_shared.ts'
+import { STATUS_FILE, CATALOG_STATE_JOIN_LIMIT, asRecord, joinCapped, sessionCwdOf, HarnessResolver, iterationViolationView, iterationGateView } from './_shared.ts'
 import { readAgentFlow, AGENT_FLOW_DEFAULT_LIMIT } from './agent-flow.ts'
 import { resolveReadWorkflow } from './workflow-selection.ts'
 /** Logger label for the engine-status catalog (dsh logger naming: `<scope>/<subject>`). */
@@ -285,7 +285,7 @@ function renderEngineStatusCatalog(source: MstarEngineStatusSource): string {
       if (state.selection.kind === 'active' && state.selection.warning !== undefined) {
         lines.push(`workflow warning: ${state.selection.warning.code} ${state.selection.warning.message}`)
       }
-      lines.push(`plans: ${state.plans.length === 0 ? 'none registered' : state.plans.map((p) => `${p.id}(${p.status})`).join(' ')}`)
+      lines.push(`plans: ${state.plans.length === 0 ? 'none registered' : joinCapped(state.plans, CATALOG_STATE_JOIN_LIMIT, ' ', (p) => `${p.id}(${p.status})`)}`)
       lines.push(`residuals: ${state.residuals.length === 0 ? 'none open' : state.residuals.map((r) => `${r.severity} ${r.count}`).join(', ')}`)
       if (state.iterationBaseBranch !== null && state.targetBranch !== null) {
         const integration = state.specIntegrationBranch !== null ? ` (spec integration: ${state.specIntegrationBranch})` : ''
@@ -297,7 +297,7 @@ function renderEngineStatusCatalog(source: MstarEngineStatusSource): string {
         state.controlWorktreePath !== null ? `control ${state.controlWorktreePath}` : null,
       ].filter((part): part is string => part !== null).join('; ')
       if (policy !== '') lines.push(`policy: ${policy}`)
-      lines.push(`leases: ${state.leases.length === 0 ? 'none active' : state.leases.map((l) => `${l.planId} → ${l.holder}${l.worktreePath !== null ? ` (${l.worktreePath})` : ''}`).join('; ')}`)
+      lines.push(`leases: ${state.leases.length === 0 ? 'none active' : joinCapped(state.leases, CATALOG_STATE_JOIN_LIMIT, '; ', (l) => `${l.planId} → ${l.holder}${l.worktreePath !== null ? ` (${l.worktreePath})` : ''}`)}`)
       if (state.knowledge !== null) {
         lines.push(`knowledge: ${state.knowledge.docCount} doc${state.knowledge.docCount === 1 ? '' : 's'} (${state.knowledge.categories.join(', ')})`)
       }
