@@ -8,12 +8,13 @@
  * `buildCatalogSources` source — never the full status.json), visible to
  * the root session AND every dispatched child. The structural existence
  * check degrades (missing `ctx.systemPrompt` → `false` + one debug log;
- * boot unaffected), and the child-scoped `mstar:role-persona` section
- * (fallbacks-decoration) stays byte-stable alongside the new global section
- * (regression — plan HARD constraint "不撤销 mstar:role-persona"). Task 3:
- * the section's enforcement word is LIVE — a text provider re-reads the
- * compass per assembly (soft/hard), so a mid-session enforcement flip lands
- * on the next assembly without re-registration (h/i). Plan QC fix wave:
+ * boot unaffected), and the child persona is delivered through the NATIVE
+ * subagent persona channel since plan `20260831-dsh-alpha2-optional-fallbacks`
+ * Task 3 — NO child-scoped `mstar:role-persona` section exists anymore (g
+ * pins the cutover). Task 3 (nb1): the section's enforcement word is LIVE —
+ * a text provider re-reads the compass per assembly (soft/hard), so a
+ * mid-session enforcement flip lands on the next assembly without
+ * re-registration (h/i). Plan QC fix wave:
  * per-assembly harness-dir resolution from the assembly context's agent
  * (zero-config deployments resolve per session workspace — W-2, k), and
  * disposer collection on the inject child so an HMR re-apply disposes the
@@ -37,7 +38,6 @@ import * as plugin from '../src/index.ts'
 import { bootApp, fakeChild, FakeLoaderRegistry, seedHarness, v2Root, v2Snapshot, v2WorkflowEntry, type BootResult } from './harness.ts'
 import { PERSONA_INTERPOLATION_HAZARD, stripInterpolationHazard } from '../src/gates/_shared.ts'
 import { HarnessResolver } from '../src/index.ts'
-import { PERSONA_SECTION_NAME } from '../src/gates/fallbacks-decoration.ts'
 import {
   ENGINE_STATUS_CONTEXT_NAME,
   HARNESS_PROMPT_LOGGER,
@@ -248,7 +248,12 @@ describe('mstar:harness-rules global section + mstar:engine-status context (plan
     }
   })
 
-  it('(g) child persona coexistence regression — mstar:role-persona stays byte-stable alongside the global harness-rules section', async () => {
+  it('(g) persona-channel cutover — NO child-scoped mstar:role-persona section exists; the global harness-rules section still reaches children', async () => {
+    // Plan `20260831-dsh-alpha2-optional-fallbacks` Task 3: the child persona
+    // moved to the NATIVE subagent persona channel (`SubagentStartRequest.persona`,
+    // role-persona.ts) — the old additive section is GONE. The global
+    // harness-rules section must keep reaching dispatched children (the
+    // regression this case originally pinned, minus the removed section).
     const app = booted = await bootApp({ agentsService: 'fake', rolePersonas: { 'fullstack-dev': 'You are a fullstack-dev executor for the Morning Star harness.' } })
     const { agent, scopeKey } = await fakeChild(app.ctx, '**Execute as**: fullstack-dev\n\nImplement the assigned work.')
     app.ctx.get('agents')!.register(agent)
@@ -256,11 +261,10 @@ describe('mstar:harness-rules global section + mstar:engine-status context (plan
     app.ctx.events.emit('subagent/start', { runId: `run-${agent.id}`, provider: 'in-process', id: agent.id, local: true })
 
     const assembly = await agent.ctx.systemPrompt.assemble({ scope: scopeKey })
-    // The child keeps its scoped persona section, byte-identical to the
-    // configured persona text (HARD regression constraint).
-    const persona = assembly.sections.find((s) => s.name === PERSONA_SECTION_NAME)
-    expect(persona).toBeDefined()
-    expect(persona!.text).toBe('You are a fullstack-dev executor for the Morning Star harness.')
+    // The additive persona section no longer exists anywhere in the child
+    // assembly (the cutover regression — persona delivery does not touch
+    // the system-prompt layer).
+    expect(assembly.sections.find((s) => s.name === 'mstar:role-persona')).toBeUndefined()
     // The global harness-rules section is visible to the child assembly too
     // (global layer — root AND children).
     expect(assembly.sections.find((s) => s.name === HARNESS_RULES_SECTION_NAME)).toBeDefined()

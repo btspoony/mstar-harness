@@ -37,16 +37,12 @@ import { Context } from '@deepseek-ai/cordis'
 import { defineTool, type PreToolDecision, type ToolExecution, type ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 import type { CallId } from '@deepseek-ai/dsh-llm'
 import { JobId } from '@deepseek-ai/dsh-jobs'
-import { createScope } from '@deepseek-ai/dsh-scope'
-import type { Agent } from '@deepseek-ai/dsh-agent'
-import { Session, SessionId } from '@deepseek-ai/dsh-session'
-import { MessageId } from '@deepseek-ai/dsh-llm'
 import { readAgentFlow, recordDispatch, SETTLE_SEAM } from '../src/index.ts'
 import type { AgentFlowView } from '../src/index.ts'
+import type { SubagentStartRequest, SubagentRuntime } from '@deepseek-ai/dsh-subagent'
 import { registerSettleListener, setAgentFlowLogger } from '../src/gates/agent-flow.ts'
 import type { AgentFlowPairing } from '../src/gates/agent-flow.ts'
-import { PERSONA_SECTION_NAME } from '../src/gates/fallbacks-decoration.ts'
-import { bootApp, FakeJobRegistry, seedV2Tree, type BootResult } from './harness.ts'
+import { FakeJobRegistry, FakeSubagentProvider, bootApp, seedV2Tree, startViaNativeChannel, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
 
@@ -163,49 +159,6 @@ function forkDispatchExec(callId: string, agent: string, prompt: string): ToolEx
   } as unknown as ToolExecution
 }
 
-let childSeq = 0
-
-/** A structural `subagent/start` payload (the plugin's consumed surface). */
-function forkStartInfo(id: string): { runId: string; provider: string; id: string; local: boolean } {
-  return { runId: `fork-run-${id}`, provider: 'in-process', id, local: true }
-}
-
-/** Seed a detached session carrying one `user/message` with `prompt` text. */
-function seededSession(id: SessionId, prompt: string): Session {
-  return Session.create(id, [{
-    type: 'user/message',
-    seq: 0,
-    time: 1_700_000_000_000,
-    data: {
-      id: MessageId(`seed-${id}`),
-      role: 'user',
-      content: [{ type: 'text', text: prompt }],
-      source: { kind: 'user' },
-    },
-    surfaceOp: 'append',
-  }])
-}
-
-/**
- * Build a fake registered fork child: a REAL session seeded with `prompt`
- * plus an agent-scoped ctx (`createScope`, the dsh-scope primitive the agent
- * runtime uses) with `systemPrompt` injected — the same child shape the
- * `subagent/start` decoration resolves for BOTH tool families.
- */
-async function fakeForkChild(ctx: Context, prompt: string): Promise<{ agent: Agent; scopeKey: object }> {
-  const id = SessionId(`fork-child-${childSeq++}`)
-  const scopeKey = { id }
-  let childCtx: Context | undefined
-  await ctx.inject(['systemPrompt'], (scoped) => {
-    childCtx = createScope(scoped, scopeKey).ctx
-  })
-  const agent = {
-    id,
-    ctx: childCtx!,
-    session: seededSession(id, prompt),
-  } as unknown as Agent
-  return { agent, scopeKey }
-}
 
 /* ---------------------------------- (a)+(b) gate coverage ---------------------------------- */
 
@@ -367,19 +320,29 @@ describe('fork settle — ledger records fork dispatch + settle (dispatchTools-d
   })
 })
 
-/* ---------------------------------- (d) decoration cross-check ---------------------------------- */
+/* ------------------------- (d) native persona channel cross-check ------------------------- */
 
-describe('fork decoration — the subagent/start seam composes on fork children', () => {
-  it('(d) a fork child seeded with a role-matched Assignment prompt receives the mstar:role-persona section', async () => {
-    booted = await bootApp({ agentsService: 'fake', rolePersonas: { [EXECUTE_AS]: PERSONA } })
-    const { agent, scopeKey } = await fakeForkChild(booted.ctx, FORK_ASSIGNMENT_PROMPT)
-    booted.ctx.get('agents')!.register(agent)
+describe('fork persona — the native channel composes on fork dispatches', () => {
+  it('(d) a fork Assignment start merges the role persona into the native request persona', async () => {
+    // Fork dispatches carry the SAME Assignment-shaped prompt as `subagent`
+    // starts, and both ride `ctx.subagents.start` — the native persona
+    // channel (role-persona.ts) keys on the prompt, so a fork start gets the
+    // same merge with no fork-specific code.
+    const app = booted = await bootApp({
+      agentsService: 'fake',
+      subagents: 'real',
+      rolePersonas: { [EXECUTE_AS]: PERSONA },
+    })
+    const provider = new FakeSubagentProvider('fake-spawn', { personaCapability: true })
+    ;(app.ctx.subagents as unknown as SubagentRuntime).registerProvider(provider as never)
 
-    booted.ctx.events.emit('subagent/start', forkStartInfo(agent.id))
+    await startViaNativeChannel(app, 'fake-spawn', {
+      prompt: [{ type: 'text', text: FORK_ASSIGNMENT_PROMPT }],
+      parent: { id: 'parent-fake', session: { id: 'parent-fake' } },
+      signal: new AbortController().signal,
+    } as unknown as SubagentStartRequest)
 
-    const assembly = await agent.ctx.systemPrompt.assemble({ scope: scopeKey })
-    const section = assembly.sections.find((s) => s.name === PERSONA_SECTION_NAME)
-    expect(section).toBeDefined()
-    expect(section!.text).toBe(PERSONA)
+    expect(provider.starts).toHaveLength(1)
+    expect(provider.starts[0]!.request.persona).toBe(PERSONA)
   })
 })

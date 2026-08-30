@@ -50,17 +50,21 @@ const FROZEN_VALUE_EXPORTS = [
   'AGENT_FLOW_FILE',
   'AGENT_FLOW_MAX_EVENTS',
   'Config',
-  'DECORATION_LOGGER',
   'DshHostAdapter',
   'DshMstar',
   'HarnessResolver',
-  'PERSONA_SECTION_NAME',
-  'PERSONA_SECTION_ORDER',
+  // Deliberate replacement for plan `20260831-dsh-alpha2-optional-fallbacks`
+  // Task 3: the native persona-channel surface (logger label, the channel
+  // registration, and the apply-bound sink/mirror setters) replaces the
+  // removed `subagent/start` decoration exports (DECORATION_LOGGER,
+  // PERSONA_SECTION_NAME, PERSONA_SECTION_ORDER, decorateSubagentStart,
+  // setDecorationAgentsDir, setDecorationLogger).
+  'ROLE_PERSONA_LOGGER',
   'SETTLE_SEAM',
   'SeamVetoError',
   'SkillLintVetoError',
   'apply',
-  'decorateSubagentStart',
+  'registerRolePersonaChannel',
   'inject',
   'lintAuditWrite',
   'lintCompoundWrite',
@@ -78,12 +82,14 @@ const FROZEN_VALUE_EXPORTS = [
   // the ledger plan's record path; the `workflow-verdict` kind).
   'recordWorkflowVerdict',
   'runFallbacksAdvisory',
-  // Deliberate addition for plan `20260815-dsh-fallbacks-personas` Task 3:
-  // the persona-defaults mirror-root binding (mirror of setDecorationLogger
-  // — apply binds it, tests restore it).
+  // Deliberate replacement for plan `20260831-dsh-alpha2-optional-fallbacks`
+  // Task 3: the persona-defaults mirror-root binding and the channel log
+  // sink (apply binds both; tests restore them) — `setRolePersonaAgentsDir`
+  // + `setRolePersonaLogger` replace `setDecorationAgentsDir` +
+  // `setDecorationLogger`.
   'setAdvisoryLogger',
-  'setDecorationAgentsDir',
-  'setDecorationLogger',
+  'setRolePersonaAgentsDir',
+  'setRolePersonaLogger',
   'skillLocalConfig',
 ] as const
 
@@ -95,8 +101,14 @@ const FROZEN_TYPE_ONLY_EXPORTS = [
   'AgentFlowEventView',
   'AgentFlowSummaryRow',
   'AgentFlowView',
-  'DecorationLogLevel',
-  'DecorationLogSink',
+  // Deliberate replacement for plan `20260831-dsh-alpha2-optional-fallbacks`
+  // Task 3: the native persona-channel vocabulary (log levels/sink + the
+  // structural runtime/request views) replaces the removed decoration types
+  // (DecorationLogLevel, DecorationLogSink, SubagentRunInfoView).
+  'RolePersonaLogLevel',
+  'RolePersonaLogSink',
+  'SubagentStartRequestView',
+  'SubagentsServiceView',
   'DispatchGateAdvisory',
   'DispatchVerdict',
   'DshHostAdapterOptions',
@@ -109,7 +121,6 @@ const FROZEN_TYPE_ONLY_EXPORTS = [
   'SettleOutcome',
   'SkillLintAdvisory',
   'StatusGateAdvisory',
-  'SubagentRunInfoView',
   // Deliberate additions for plan `20260815-dsh-workflow-gate` Task 4: the
   // `workflow-verdict` ledger vocabulary (verdict + mode + record input —
   // the adapter's public `recordWorkflowVerdict` method types).
@@ -160,8 +171,8 @@ describe('src/index.ts export surface (frozen — plan 20260810-dsh-entry-split 
       AgentFlowEventView: null as unknown as EntryTypes.AgentFlowEventView,
       AgentFlowSummaryRow: null as unknown as EntryTypes.AgentFlowSummaryRow,
       AgentFlowView: null as unknown as EntryTypes.AgentFlowView,
-      DecorationLogLevel: null as unknown as EntryTypes.DecorationLogLevel,
-      DecorationLogSink: null as unknown as EntryTypes.DecorationLogSink,
+      RolePersonaLogLevel: null as unknown as EntryTypes.RolePersonaLogLevel,
+      RolePersonaLogSink: null as unknown as EntryTypes.RolePersonaLogSink,
       DispatchGateAdvisory: null as unknown as EntryTypes.DispatchGateAdvisory,
       DispatchVerdict: null as unknown as EntryTypes.DispatchVerdict,
       DshHostAdapterOptions: null as unknown as EntryTypes.DshHostAdapterOptions,
@@ -174,7 +185,8 @@ describe('src/index.ts export surface (frozen — plan 20260810-dsh-entry-split 
       SettleOutcome: null as unknown as EntryTypes.SettleOutcome,
       SkillLintAdvisory: null as unknown as EntryTypes.SkillLintAdvisory,
       StatusGateAdvisory: null as unknown as EntryTypes.StatusGateAdvisory,
-      SubagentRunInfoView: null as unknown as EntryTypes.SubagentRunInfoView,
+      SubagentStartRequestView: null as unknown as EntryTypes.SubagentStartRequestView,
+      SubagentsServiceView: null as unknown as EntryTypes.SubagentsServiceView,
       WorkflowGateMode: null as unknown as EntryTypes.WorkflowGateMode,
       WorkflowVerdict: null as unknown as EntryTypes.WorkflowVerdict,
       WorkflowVerdictInput: null as unknown as EntryTypes.WorkflowVerdictInput,

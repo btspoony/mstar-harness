@@ -26,7 +26,7 @@ import { MessageId } from '@deepseek-ai/dsh-llm'
 import type { JobDoneListener, JobSnapshot } from '@deepseek-ai/dsh-jobs'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { LoaderEntryView } from '../src/gates/fallbacks-probe.ts'
-import type { SubagentRunInfoView } from '../src/gates/fallbacks-decoration.ts'
+import type { SubagentsServiceView } from '../src/gates/role-persona.ts'
 import * as plugin from '../src/index.ts'
 
 /**
@@ -107,6 +107,93 @@ export class FakeJobRegistry extends Service {
     const listener = this.listener
     if (listener !== undefined) void listener(snapshot, owner)
   }
+}
+
+/**
+ * Structural `subagent/start` payload (the advisory decision-point
+ * listener's shape — the payload itself is no longer consumed by the
+ * plugin; the event drives the one-pass advisory latch in tests).
+ */
+export interface SubagentStartPayload {
+  /** Unique identity shared with the paired terminal event. */
+  readonly runId: unknown
+  /** Provider name recorded when the child was first created. */
+  readonly provider: string
+  /** The child agent's id. */
+  readonly id: string
+  /** Snapshot of whether the run's local agent was present when start fulfilled. */
+  readonly local: boolean
+}
+
+/**
+ * Recording subagent provider for the NATIVE persona-channel tests (plan
+ * `20260831-dsh-alpha2-optional-fallbacks` Task 3): registers on the REAL
+ * `@deepseek-ai/dsh-subagent` runtime and records the RESOLVED request each
+ * `start` receives — after the channel's persona merge and capability gate.
+ * The one-shot run handle is the minimal contract `observeRun` consumes
+ * (`id`, `localAgent`, `result`); it resolves `completed` with no output so
+ * the lifecycle pair emits and settles without fixtures.
+ */
+export class FakeSubagentProvider {
+  /** Unique registry name (the `SubagentProvider.name` contract). */
+  readonly name: string
+  /** Start-time capabilities; only `persona` is test-drivable. */
+  readonly capabilities = {
+    agentOptions: false,
+    outputSchema: false,
+    depthLimit: false,
+    toolFilter: false,
+    persona: false,
+  }
+  /** Descriptive-only flag (`SubagentProvider.inheritsParentContext`). */
+  readonly inheritsParentContext = false
+  /** The resolved requests, in start order (post-merge, post-gate). */
+  readonly starts: Array<{ request: { persona?: string; descriptor?: { provider?: string; mode?: string } } }> = []
+
+  constructor(name: string, options: { personaCapability?: boolean } = {}) {
+    this.name = name
+    this.capabilities.persona = options.personaCapability ?? false
+  }
+
+  /**
+   * Record the resolved request and resolve a settled run (the provider
+   * contract: `provider.start(resolved)` — ONE argument, the request with
+   * the service's `descriptor` already attached).
+   */
+  start(request: { persona?: string; descriptor?: { provider?: string; mode?: string } }): unknown {
+    this.starts.push({ request })
+    const id = SessionId(`fake-run-${this.starts.length}`)
+    return {
+      id,
+      localAgent: undefined,
+      result: Promise.resolve({ output: [], stopReason: 'completed' as const }),
+      dispose: () => Promise.resolve(),
+    }
+  }
+}
+
+/**
+ * Start one run through the NATIVE channel: `ctx.inject(['subagents'])`
+ * runs in a plugin-fiber context, so the `ctx.subagents` read goes through
+ * the cordis context proxy (plugin fibers carry a runtime) and reaches the
+ * channel's `internal/get` wrapper — the same read path the real
+ * tool-subagent's per-call `runtimeCtx.subagents.start(...)` takes.
+ */
+export function startViaNativeChannel(
+  app: BootResult,
+  providerName: string,
+  request: Parameters<SubagentsServiceView['start']>[1],
+): Promise<unknown> {
+  const { promise, resolve, reject } = Promise.withResolvers<unknown>()
+  void app.ctx.inject(['subagents'], (sctx) => {
+    const service = sctx.subagents as unknown as SubagentsServiceView | undefined
+    if (service === undefined) {
+      reject(new Error('subagents service unavailable in the inject scope'))
+      return
+    }
+    Promise.resolve(service.start(providerName, request)).then(resolve, reject)
+  })
+  return promise
 }
 
 /**
@@ -279,12 +366,10 @@ export async function fakeChild(ctx: Context, prompt: string): Promise<{ agent: 
   return fakeChildWithSession(ctx, seededSession(id, prompt))
 }
 
-/** A structural `subagent/start` payload (the decoration's consumed surface). */
-export function startInfo(id: string, provider = 'in-process'): SubagentRunInfoView {
+/** A structural `subagent/start` payload (the advisory decision-point listener's ignored shape). */
+export function startInfo(id: string, provider = 'in-process'): SubagentStartPayload {
   return { runId: `run-${id}`, provider, id, local: true }
 }
-
-/** Boot options for {@link bootApp}. */
 export interface BootOptions {
   /** `Enforcement` override for the plugin Config (`hard` | `soft`). */
   enforcement?: 'hard' | 'soft'
@@ -314,6 +399,16 @@ export interface BootOptions {
    * composes dsh-agent before the subagent seam).
    */
   agentsService?: 'fake'
+  /**
+   * Mount the REAL `@deepseek-ai/dsh-subagent` row (the `ctx.subagents`
+   * runtime seam — plan `20260831-dsh-alpha2-optional-fallbacks` Task 3):
+   * the native persona-channel tests register a {@link FakeSubagentProvider}
+   * on it and drive starts through {@link startViaNativeChannel}. Requires
+   * `agentsService: 'fake'` — the runtime's constructor injects `agents`
+   * for its continuation manager (the real dsh app always composes
+   * dsh-agent before the subagent seam).
+   */
+  subagents?: 'real'
   /**
    * Mount the {@link FakeSessionsRegistry} as the `sessions` service (the
    * `@deepseek-ai/dsh-session-fake` row + module map) so the plugin's
@@ -540,6 +635,12 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
   // ACTIVE workflow — tests that exercise the ledger opt in to the seeded
   // v2 tree (root status.json + one active workflow snapshot).
   if (options.seedV2 === true) await seedV2Tree(harnessDir)
+  // The REAL subagents row needs the agents service (the runtime's
+  // constructor injects `agents` for its continuation manager) — fail the
+  // boot fast instead of hanging the row fiber.
+  if (options.subagents !== undefined && options.agentsService === undefined) {
+    throw new Error('subagents: "real" requires agentsService: "fake" (the runtime injects agents)')
+  }
 
   // The dsh skill registry row mounts first (real dsh app layout): the
   // `@mstar-harness/dsh` plugin mounts skill-filesystem as a child, which injects
@@ -573,6 +674,13 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
     // `20260814-dsh-fallbacks-integration` Task 2): provides `ctx.get('agents')`
     // so the `subagent/start` decoration can resolve fake-registered children.
     ...(options.agentsService !== undefined ? [{ name: '@deepseek-ai/dsh-agent-fake' }] : []),
+    // The REAL subagents runtime row (only when requested — plan
+    // `20260831-dsh-alpha2-optional-fallbacks` Task 3): provides
+    // `ctx.subagents` so the native persona-channel tests can register a
+    // fake provider and drive starts through the channel. Mounted BEFORE
+    // the mstar row (the real dsh app composes the subagent seam before the
+    // plugin layers).
+    ...(options.subagents !== undefined ? [{ name: '@deepseek-ai/dsh-subagent' }] : []),
     // The fake sessions service row (only when requested — plan
     // `20260815-dsh-workflow-gate` Task 4): provides `ctx.get('sessions')`
     // so the plugin's `registerWorkflowLedger` consumer registers (W-B2 run
@@ -651,6 +759,11 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
     // default export provides the ToolRegistry service (the host app provides
     // it at runtime via peerDependencies).
     ['@deepseek-ai/dsh-tools', await import('@deepseek-ai/dsh-tools')],
+    // The `ctx.subagents` runtime seam — the REAL package (npm registry;
+    // only mounted when `subagents: 'real'` is set, see the row list).
+    ...(options.subagents !== undefined
+      ? [['@deepseek-ai/dsh-subagent', await import('@deepseek-ai/dsh-subagent')] as const]
+      : []),
     // The `ctx.commands` registry seam — the REAL package (npm registry) whose
     // named exports provide the CommandRuntime (the host app provides it at
     // runtime via peerDependencies).

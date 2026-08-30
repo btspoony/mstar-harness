@@ -3,9 +3,11 @@
  * Task 2): the root session's ONE `mstar:harness-rules` pointer section plus
  * the `mstar:engine-status` runtime-context summary, both registered on the
  * GLOBAL prompt layer — visible to the root session AND every dispatched
- * child — without touching the child-scoped `mstar:role-persona` section
- * (fallbacks-decoration; distinct name, distinct layer — duplicate-name
- * throws are per name per layer, verified `scope/src/store.ts`).
+ * child — on their own names and layers (the child persona rides the NATIVE
+ * subagent persona channel since plan
+ * `20260831-dsh-alpha2-optional-fallbacks` Task 3 — no child-scoped
+ * `mstar:role-persona` section exists anymore; duplicate-name throws remain
+ * per name per layer, verified `scope/src/store.ts`).
  *
  * Content discipline:
  * - The section is a POINTER block (presence / enforcement word / resolved

@@ -25,13 +25,14 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import SystemPromptPlugin from '@deepseek-ai/dsh-system-prompt'
+import SubagentRuntimePlugin, { type SubagentRuntime } from '@deepseek-ai/dsh-subagent'
 import type { FsTarget } from '@deepseek-ai/dsh-fs'
 import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import * as plugin from '../src/index.ts'
 import type { SkillLintAdvisory, StatusGateAdvisory } from '../src/index.ts'
-import { FakeAgentRegistry, FakeLoaderRegistry, INVALID_STATUS, fakeChild, seedHarness, startInfo } from './harness.ts'
+import { FakeAgentRegistry, FakeLoaderRegistry, FakeSubagentProvider, INVALID_STATUS, seedHarness } from './harness.ts'
 
 /** Violating writable Assignment (missing Execute as — the field-gate case). */
 const MISSING_EXECUTE_AS = `## Assignment
@@ -211,45 +212,51 @@ describe('HMR safety — fiber.dispose removes every gate contribution', () => {
     }
   })
 
-  it('disposes the subagent/start decoration listener on fiber.dispose; a reloaded fiber restores it', async () => {
+  it('disposes the native persona channel on fiber.dispose; a reloaded fiber restores it', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-hmr-'))
     const harnessDir = join(root, 'harness')
     const ctx = new Context()
     // The plugin's top-level `inject: ['loader']` (Task 1) must resolve
     // before apply — same loader-guarantee the real dsh app provides.
     new FakeLoaderRegistry(ctx)
-    // The decoration registers the persona through the child's agent-scoped
-    // `systemPrompt` and resolves children via the `agents` service — mount
-    // the same real registry seam + fake agents row `bootApp` composes.
-    await ctx.plugin(SystemPromptPlugin)
+    // The REAL subagents runtime + a recording provider — the channel's
+    // target surface (`ctx.subagents.start` reads go through the
+    // `internal/get` wrapper; the runtime injects `agents`, so the fake
+    // agents row must mount first).
     new FakeAgentRegistry(ctx)
+    await ctx.plugin(SubagentRuntimePlugin as Parameters<Context['plugin']>[0])
+    const provider = new FakeSubagentProvider('fake-spawn', { personaCapability: true })
+    ;(ctx.subagents as unknown as SubagentRuntime).registerProvider(provider as never)
+    const startOnce = async (): Promise<void> => {
+      const { promise, resolve, reject } = Promise.withResolvers<void>()
+      void ctx.inject(['subagents'], (sctx) => {
+        ;(sctx.subagents as unknown as SubagentRuntime)
+          .start('fake-spawn', {
+            prompt: [{ type: 'text', text: ASSIGNMENT_PROMPT }],
+            parent: { id: 'parent-fake', session: { id: 'parent-fake' } },
+            signal: new AbortController().signal,
+          } as unknown as Parameters<SubagentRuntime['start']>[1])
+          .then(() => resolve(), reject)
+      })
+      return promise
+    }
     try {
-      // Mount 1 — the decoration is live: a role-matched subagent/start
-      // registers the mstar:role-persona section on the child.
+      // Mount 1 — the channel is live: a role-matched start merges the
+      // persona into the request.
       const fiber = await ctx.plugin(plugin, { harnessDir, rolePersonas: { [EXECUTE_AS]: PERSONA } })
-      const live = await fakeChild(ctx, ASSIGNMENT_PROMPT)
-      ctx.get('agents')!.register(live.agent)
-      ctx.events.emit('subagent/start', startInfo(live.agent.id))
-      const liveAssembly = await live.agent.ctx.systemPrompt.assemble({ scope: live.scopeKey })
-      expect(liveAssembly.sections.find((s) => s.name === plugin.PERSONA_SECTION_NAME)?.text).toBe(PERSONA)
+      await startOnce()
+      expect(provider.starts[0]!.request.persona).toBe(PERSONA)
 
-      // Dispose — the decoration listener is unwound: a NEW child emitted
-      // after dispose receives no persona section (the listener is gone, not
-      // merely silent on this child).
+      // Dispose — the `internal/get` listener is unwound: a NEW start after
+      // dispose is NOT merged (the channel is gone, not merely silent).
       await fiber.dispose()
-      const after = await fakeChild(ctx, ASSIGNMENT_PROMPT)
-      ctx.get('agents')!.register(after.agent)
-      ctx.events.emit('subagent/start', startInfo(after.agent.id))
-      const afterAssembly = await after.agent.ctx.systemPrompt.assemble({ scope: after.scopeKey })
-      expect(afterAssembly.sections.find((s) => s.name === plugin.PERSONA_SECTION_NAME)).toBeUndefined()
+      await startOnce()
+      expect(provider.starts[1]!.request.persona).toBeUndefined()
 
-      // HMR reload — a fresh fiber restores the decoration.
+      // HMR reload — a fresh fiber restores the channel.
       const reloaded = await ctx.plugin(plugin, { harnessDir, rolePersonas: { [EXECUTE_AS]: PERSONA } })
-      const revived = await fakeChild(ctx, ASSIGNMENT_PROMPT)
-      ctx.get('agents')!.register(revived.agent)
-      ctx.events.emit('subagent/start', startInfo(revived.agent.id))
-      const revivedAssembly = await revived.agent.ctx.systemPrompt.assemble({ scope: revived.scopeKey })
-      expect(revivedAssembly.sections.find((s) => s.name === plugin.PERSONA_SECTION_NAME)?.text).toBe(PERSONA)
+      await startOnce()
+      expect(provider.starts[2]!.request.persona).toBe(PERSONA)
       await reloaded.dispose()
     } finally {
       await ctx.fiber.dispose().catch(() => {})
