@@ -4,7 +4,7 @@
  * (spec §4/§5/§6.4), pinned to dsh-private commit 347a99b (2026-08-07).
  *
  * Coverage:
- * - subpath imports (`@deepseek-ai/dsh-client-runtime/client` etc.) resolve
+ * - subpath imports (`@deepseek-ai/dsh-client-ui-renderer/client` etc.) resolve
  *   through the stub `exports` maps (module load fails otherwise);
  * - the ui-conversation SlotMap merge makes `'conversation.view'` a valid
  *   register target and `ConvViewProps` carries the session standard kit;
@@ -14,7 +14,7 @@
  *   id/order/label (label thunk re-read per projection), `inject` declaration
  *   waiting, disposer cascade;
  * - catalog reading: latest `kind==='context' && form==='catalog' &&
- *   source.kind==='mstar-engine-status'` node over `ConversationSnapshot.nodes`,
+ *   source.kind==='mstar-engine-status'` node over `ChatSnapshot.legacy.nodes`,
  *   driven by the `createSnapshotStore` test double.
  */
 
@@ -22,7 +22,11 @@ import { describe, expect, it } from 'bun:test'
 import { Context } from '@deepseek-ai/cordis'
 import { clientExports } from './client-bundles.ts'
 import { resolveSlotLabel, SlotCore } from '@deepseek-ai/dsh-client-ui-slots'
-import type { ContextMessageNode, ConversationNode, ConversationSnapshot, SessionId, SlotRegistry } from '@deepseek-ai/dsh-client-runtime/client'
+import type { ContextMessageNode, ConversationNode } from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type { ChatSnapshot } from '@deepseek-ai/dsh-client-ui-chat/client'
+import type { SessionId } from '@deepseek-ai/dsh-session'
+import type { SlotRegistry } from '@deepseek-ai/dsh-client-ui-renderer/client'
+import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
 import type { ConvViewProps, ViewTab } from '@deepseek-ai/dsh-client-ui-conversation/client'
 // The plugin's OWN `LocaleNamespaceMap` augmentation (src/client/panel/locale.ts)
@@ -32,14 +36,14 @@ import type { ConvViewProps, ViewTab } from '@deepseek-ai/dsh-client-ui-conversa
 // under `typecheck:tests`).
 import { NS, type PanelKey } from '../src/client/panel/locale.ts'
 
-// The REAL client service values — loaded from the browser bundles through the
-// loader shim (tests/client-bundles.ts): the `/client` subpath entries are
-// `window.__ModuleLoader__` browser bundles, not Node ESM modules. The real
-// SlotRegistry / LocaleRuntime are cordis services (constructed with a
-// Context), unlike the removed peer-stub stand-ins.
-type RuntimeClientExports = typeof import('@deepseek-ai/dsh-client-runtime/client')
-const { createSnapshotStore, SlotRegistry: SlotRegistryCtor } = clientExports('@deepseek-ai/dsh-client-runtime') as unknown as
-  Pick<RuntimeClientExports, 'createSnapshotStore' | 'SlotRegistry'>
+// The REAL client service values — the store is a plain Node-ESM module
+// (direct import); SlotRegistry / LocaleRuntime are cordis services loaded
+// from the browser bundles through the loader shim (tests/client-bundles.ts):
+// the `/client` subpath entries are `window.__ModuleLoader__` browser bundles,
+// not Node ESM modules.
+type RendererClientExports = typeof import('@deepseek-ai/dsh-client-ui-renderer/client')
+const { SlotRegistry: SlotRegistryCtor } = clientExports('@deepseek-ai/dsh-client-ui-renderer') as unknown as
+  Pick<RendererClientExports, 'SlotRegistry'>
 type LocaleClientExports = typeof import('@deepseek-ai/dsh-client-locale/client')
 const { LocaleRuntime: LocaleRuntimeCtor } = clientExports('@deepseek-ai/dsh-client-locale') as unknown as
   Pick<LocaleClientExports, 'LocaleRuntime'>
@@ -169,33 +173,35 @@ describe('dsh client-seam peer stubs — catalog reading (spec §5)', () => {
     )
 
   it('reads the latest mstar-engine-status catalog row from the snapshot nodes', () => {
-    const store = createSnapshotStore<ConversationSnapshot>({
-      sessionId,
-      nodes: [
-        { kind: 'user', seq: 1, time: 1_719_999_000_000, content: [], source: null },
-        engineRow,
-      ],
-      running: false,
-      openState: 'open',
-      composerPhase: 'active',
-      blank: false,
-    } as unknown as ConversationSnapshot)
-    // useSession-shaped selector over the test double (the framework hook is a
+    const store = createSnapshotStore<ChatSnapshot>({
+      legacy: {
+        nodes: [
+          { kind: 'user', seq: 1, time: 1_719_999_000_000, content: [], source: null },
+          engineRow,
+        ],
+        turnTimings: new Map(),
+        turnEnds: new Map(),
+        partial: null,
+        runningCalls: [],
+      },
+    } as unknown as ChatSnapshot)
+    // useChat-shaped selector over the test double (the framework hook is a
     // uSES selector over the same bare source).
-    const nodes = store.getSnapshot().nodes
+    const nodes = store.getSnapshot().legacy.nodes
     expect(latestEngineStatus(nodes)).toBe(engineRow)
   })
 
   it('returns undefined while no catalog row exists (empty state) and on a later re-emission returns the newest', () => {
-    const store = createSnapshotStore<ConversationSnapshot>({
-      sessionId,
-      nodes: [{ kind: 'user', seq: 1, time: 1_719_999_000_000, content: [], source: null }],
-      running: false,
-      openState: 'open',
-      composerPhase: 'active',
-      blank: false,
-    } as unknown as ConversationSnapshot)
-    expect(latestEngineStatus(store.getSnapshot().nodes)).toBeUndefined()
+    const store = createSnapshotStore<ChatSnapshot>({
+      legacy: {
+        nodes: [{ kind: 'user', seq: 1, time: 1_719_999_000_000, content: [], source: null }],
+        turnTimings: new Map(),
+        turnEnds: new Map(),
+        partial: null,
+        runningCalls: [],
+      },
+    } as unknown as ChatSnapshot)
+    expect(latestEngineStatus(store.getSnapshot().legacy.nodes)).toBeUndefined()
 
     const newer: ContextMessageNode = {
       ...engineRow,
@@ -204,17 +210,18 @@ describe('dsh client-seam peer stubs — catalog reading (spec §5)', () => {
       source: { kind: 'mstar-engine-status', form: 'catalog', version: '2.0.4', harnessDir: '/proj/.mstar', state: null },
     }
     store.set({
-      sessionId,
-      nodes: [
-        { kind: 'user', seq: 1, time: 1_719_999_000_000, content: [], source: null },
-        engineRow,
-        newer,
-      ],
-      running: false,
-      openState: 'open',
-      composerPhase: 'active',
-      blank: false,
-    } as unknown as ConversationSnapshot)
-    expect(latestEngineStatus(store.getSnapshot().nodes)).toBe(newer)
+      legacy: {
+        nodes: [
+          { kind: 'user', seq: 1, time: 1_719_999_000_000, content: [], source: null },
+          engineRow,
+          newer,
+        ],
+        turnTimings: new Map(),
+        turnEnds: new Map(),
+        partial: null,
+        runningCalls: [],
+      },
+    } as unknown as ChatSnapshot)
+    expect(latestEngineStatus(store.getSnapshot().legacy.nodes)).toBe(newer)
   })
 })

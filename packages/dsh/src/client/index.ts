@@ -9,8 +9,9 @@
  * `ctx.locale.bind(NS)` so a locale switch flips it without re-registering.
  */
 
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import { en, NS, zh } from './panel/locale.ts'
 import { PanelView } from './panel/PanelView.tsx'
 

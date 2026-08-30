@@ -4,7 +4,7 @@
  * `window.__ModuleLoader__.load({ id: '@mstar-harness/dsh', factory:
  * (require) => { … return module.exports; } })`. Externals resolve through the
  * loader module table (the platform seed entries + the documented
- * `@deepseek-ai/dsh-client-runtime/client` exemption); everything else inlines.
+ * `@deepseek-ai/dsh-client-store` exemption); everything else inlines.
  *
  * Two build plugins enforce the bundle contract:
  * - CSS Modules (`*.module.css`) are compiled to a hashed class map plus an
@@ -44,11 +44,11 @@ export const CLIENT_EXTERNALS: readonly string[] = [
   '@deepseek-ai/dsh-client-web-react',
   '@deepseek-ai/dsh-client-ui-primitives',
   '@deepseek-ai/dsh-client-schema-form',
-  '@deepseek-ai/dsh-client-runtime/client',
+  '@deepseek-ai/dsh-client-store',
 ]
 
 /** Wire/type layers with no shared runtime identity that may inline (snapshot tsdown.client.ts mirror). */
-const INLINE_SAFE = /^@deepseek-ai\/dsh-(host-apiproxy|session|llm|tools|brand)(\/|$)/
+const INLINE_SAFE = /^@deepseek-ai\/dsh-(session|llm|tools|brand)(\/|$)/
 /** Generated descriptor/codec contribution with no shared runtime identity. */
 const GENERATED_REMOTE = /^@deepseek-ai\/dsh-[a-z0-9]+(?:-[a-z0-9]+)*\/remote$/
 
