@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+## [3.6.0-alpha.1] - 2026-08-31
+
+### Harness
+
+- `mstar-harness-core` 新增「核心研发守则」：七条全局工程不变量 —— 不留向后兼容层（删除废弃路径）、最简实现、拒绝投机抽象/配置/间接层、分层生长（永远在可工作产品之上叠加，不用未完成的复杂度换可工作的产品）、组件模块化且关注点分离、优先成熟维护良好的库、先复用项目内依赖再考虑新包、架构决策面向长期（不接受注定被替换的权宜之计）。注入强制入口 skill，所有角色统一加载；实现级操作细节仍在 `mstar-coding-behavior`，其 Simplicity First 节已回链守则，防止两层漂移。
+- 守则出处已记入 `ATTRIBUTION.md`（来源：Marcos Hernanz 的 X 帖子）。
+- 预发布版本（`X.Y.Z-suffix`，如 `3.6.0-alpha.1`）现可完整走通 `release:prepare` / `release:validate` / 发布流程：npm 以 `alpha` dist-tag 发布（绝不触碰 `latest`），GitHub Release 标记为预发布，INSTALL.md 市场示例保持在上一个稳定版本。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单及便携式 Agent Plugins 清单：**→ 3.6.0-alpha.1**。
+
 ## [3.5.1] - 2026-08-28
 
 ### Harness

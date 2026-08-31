@@ -6,6 +6,20 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [3.6.0-alpha.1] - 2026-08-31
+
+### dsh
+
+- Bump `@deepseek-ai/dsh-*` host peers to `^0.1.2-alpha.2` and migrate the client half off the removed `dsh-client-runtime` onto `dsh-client-store` / `dsh-client-ui-conversation` / `dsh-client-ui-renderer` / `dsh-client-ui-chat` (alpha.2 Remote/store seams). Drop `host-apiproxy` from the client-bundle INLINE_SAFE allowlist. Badge `0.1.2-alpha.2`.
+- Bump `dsh-llm-fallbacks` to `^0.4.0-alpha.1`: its 25 peers re-anchor to `^0.1.2-alpha.2` (and `dsh-client-runtime` is dropped upstream), so the lock collapses to a single `0.1.2-alpha.2` dsh line.
+- Demote `dsh-llm-fallbacks` to a dev-time-only dependency: dsh `0.1.2-alpha.2` natively covers subagent customization, so the fallbacks capability is strictly optional. `src/` carries zero imports of the package (runtime and type — the consumed surface is mirrored by local structural types kept in sync by the probe's exact-keys gate), `package.json` keeps it only under `devDependencies`, and `dist/` carries no import and no type reference. The activation contract is unchanged (separate second-command install).
+- Refresh `@deepseek-ai/cordis` to `4.0.2` in the lock (host peers `^4.0.2`; the stale `4.0.1` pin predated the alpha.2 graph).
+- Deliver role persona through dsh's NATIVE subagent persona channel: a role-matched start — the one-shot `start` AND the opt-in continuable `startContinuable` (`backgroundMode: 'continuable'`) — now merges the persona into `SubagentStartRequest.persona` (intercepted via the cordis `internal/get` service-read waterfall — the runtime object is never mutated), so dsh composes it as the scoped `deployment:persona` section that SHADOWS the deployment persona for role-matched children — the child embodies the role persona instead of coexisting with it — and persists + reapplies it on resume. The additive `mstar:role-persona` system-prompt section is removed. Capability-gated per surface: one-shot starts for providers without the native `persona` capability (out-of-process) skip the persona with one contained debug log; continuable starts gate on the native `prepareContinuable` contract instead; the start is never failed. Fallbacks stays enhancement-only (seeds + advisory); persona delivery is fallbacks-independent.
+
+- Version alignment with harness **3.6.0-alpha.1**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **3.6.0-alpha.1**.
+
 ### Changed
 
 - **Catalog state plans/leases join cap**: the `<mstar_engine_status>` catalog state section (`renderEngineStatusCatalog`, `packages/dsh/src/gates/catalog.ts`) now caps the `plans:` / `leases:` joined rendering at `CATALOG_STATE_JOIN_LIMIT = 8` (exported from `packages/dsh/src/gates/_shared.ts` and shared by both joins via `joinCapped`), appending a final `+N more` overflow marker when a list is longer. At or under the cap the rendering is byte-identical to the previous unbounded output, and the empty `none registered` / `none active` copy is unchanged. Sparse-lease visibility: plans hidden behind the `plans:` overflow marker may still appear in the `leases:` line when the lease count is at or under the cap.

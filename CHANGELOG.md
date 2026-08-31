@@ -8,6 +8,18 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ## [Unreleased]
 
+## [3.6.0-alpha.1] - 2026-08-31
+
+### Harness
+
+- `mstar-harness-core` now carries a "核心研发守则" (core engineering rules) section: seven global engineering invariants — no backward-compatibility layers (remove obsolete paths), simplest implementation over speculative abstraction/configuration/indirection, grow the system in layers on top of a working product, modular components with separated concerns, prefer established well-maintained libraries, lean on existing project dependencies before adding packages, and make architectural decisions for the long term (no intended-to-be-replaced stopgaps). Injected into the mandatory entry skill so every role loads them; operational detail remains in `mstar-coding-behavior`, whose Simplicity First section now links up to these invariants to keep the two layers drift-free.
+- Rules provenance recorded in `ATTRIBUTION.md` (source: a post by Marcos Hernanz on X).
+- Prerelease versions (`X.Y.Z-suffix`, e.g. `3.6.0-alpha.1`) now flow through `release:prepare` / `release:validate` / publish: npm publishes under the dist-tag `alpha` (never `latest`), the GitHub Release is flagged prerelease, and the INSTALL.md marketplace example stays on the last stable release.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, and the portable Agent Plugins manifest: **→ 3.6.0-alpha.1**.
+
 ## [3.5.1] - 2026-08-28
 
 ### Harness
