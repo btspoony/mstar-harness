@@ -75,8 +75,19 @@ function parseArgs(argv: string[]): { version?: string; bump: "patch" | "minor" 
   return { version, bump };
 }
 
-function bumpVersion(v: string, kind: "patch" | "minor"): string {
+/**
+ * Auto-bump the next version from a current version. A current version
+ * carrying a prerelease suffix graduates instead of bumping: `patch`/default
+ * returns the same-core stable (`3.6.0-alpha.1` -> `3.6.0`), `minor` returns
+ * the next minor stable (`3.7.0`). Stable inputs bump as before. Exported for
+ * tests.
+ */
+export function bumpVersion(v: string, kind: "patch" | "minor"): string {
   const [maj, min, pat] = v.split(".").map((n) => parseInt(n, 10));
+  if (isPrereleaseVersion(v)) {
+    if (kind === "minor") return `${maj}.${min + 1}.0`;
+    return `${maj}.${min}.${pat}`;
+  }
   if (kind === "minor") return `${maj}.${min + 1}.0`;
   return `${maj}.${min}.${pat + 1}`;
 }
