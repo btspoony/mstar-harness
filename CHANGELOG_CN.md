@@ -6,6 +6,16 @@
 
 ## [Unreleased]
 
+## [3.6.0-alpha.3] - 2026-08-31
+
+### CLI
+
+- Codex 安装改为仓库自带 marketplace：仓库新增 `.agents/plugins/marketplace.json`（marketplace 名 `mstar-repo`，插件根 = 仓库根），`npx @mstar-harness/cli init --target codex` 通过 `codex plugin marketplace add btspoony/mstar-harness --ref main` 注册 git marketplace（本地条目路径由 `~/.agents/plugins/marketplace.json` 迁移到仓库 marketplace）。安装命令为 `codex plugin add morning-star-harness@mstar-repo`；`codex plugin marketplace upgrade` 可刷新快照。`doctor --target codex` 通过 codex CLI 校验 marketplace 注册，旧 `personal` 条目以迁移提示展示；Codex 自定义 agent `.toml` 软链接仍来自共享 `~/.mstar/harness` checkout。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单及便携式 Agent Plugins 清单：**→ 3.6.0-alpha.3**。
+
 ## [3.6.0-alpha.2] - 2026-08-31
 
 ### Harness

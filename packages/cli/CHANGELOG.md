@@ -6,6 +6,16 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [3.6.0-alpha.3] - 2026-08-31
+
+### CLI
+
+- Codex installs now use a repo-bundled marketplace: the harness repo ships `.agents/plugins/marketplace.json` (name `mstar-repo`, plugin root = repo root), and `npx @mstar-harness/cli init --target codex` registers it via `codex plugin marketplace add btspoony/mstar-harness --ref main`. Install with `codex plugin add morning-star-harness@mstar-repo`; refresh snapshots with `codex plugin marketplace upgrade`. `doctor --target codex` validates the marketplace registration via the codex CLI and reports legacy `personal` marketplace entries as a migration note; Codex custom-agent `.toml` symlinks continue to come from the shared `~/.mstar/harness` checkout.
+
+- Version alignment with harness **3.6.0-alpha.3**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **3.6.0-alpha.3**.
+
 ## [3.6.0-alpha.2] - 2026-08-31
 
 ### Changed
