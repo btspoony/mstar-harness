@@ -66,20 +66,29 @@ Restart Cursor or run **Developer: Reload Window** after install.
 
 ### Codex
 
-Global marketplace + custom agents:
+The harness repo ships its own Codex marketplace catalog at `.agents/plugins/marketplace.json` (marketplace name `mstar-repo`, plugin root = repo root). `init --target codex` registers that repo as a git marketplace under the `mstar-repo` name:
+
+Global (custom agents linked from `~/.mstar/harness`):
 
 ```bash
 npx @mstar-harness/cli init --target codex --scope global
-codex plugin add morning-star-harness --marketplace personal
+codex plugin add morning-star-harness@mstar-repo
 npx @mstar-harness/cli doctor --target codex
 ```
 
-Project marketplace + custom agents:
+Project (iteration commands additionally linked under `.agents/skills/`):
 
 ```bash
 npx @mstar-harness/cli init --target codex --scope project
-codex plugin add morning-star-harness --marketplace personal
+codex plugin add morning-star-harness@mstar-repo
 npx @mstar-harness/cli doctor --target codex --scope project
+```
+
+Without the CLI (direct marketplace registration):
+
+```bash
+codex plugin marketplace add btspoony/mstar-harness --ref main
+codex plugin add morning-star-harness@mstar-repo
 ```
 
 #### Codex: project vs global scope
@@ -236,44 +245,22 @@ npx @mstar-harness/cli init --target cursor --scope global
 
 ### Codex
 
-Personal marketplace (without the CLI):
+Register the repo marketplace directly:
+
+```bash
+codex plugin marketplace add btspoony/mstar-harness --ref main
+codex plugin add morning-star-harness@mstar-repo
+```
+
+Link custom agents (Codex discovers agents from `~/.codex/agents/`):
 
 ```bash
 git clone https://github.com/btspoony/mstar-harness.git ~/.mstar/harness
-```
-
-Create or update `~/.agents/plugins/marketplace.json`:
-
-```json
-{
-  "name": "personal",
-  "interface": {
-    "displayName": "Personal"
-  },
-  "plugins": [
-    {
-      "name": "morning-star-harness",
-      "source": {
-        "source": "local",
-        "path": "./.mstar/harness"
-      },
-      "policy": {
-        "installation": "AVAILABLE",
-        "authentication": "ON_INSTALL"
-      },
-      "category": "Productivity"
-    }
-  ]
-}
-```
-
-Install and link agents:
-
-```bash
-codex plugin add morning-star-harness --marketplace personal
 mkdir -p ~/.codex/agents
 ln -s ~/.mstar/harness/codex/agents/*.toml ~/.codex/agents/
 ```
+
+Migrating from the legacy personal marketplace: remove the `morning-star-harness` entry from `~/.agents/plugins/marketplace.json`, then install from the repo marketplace (`codex plugin remove morning-star-harness@personal` if previously installed).
 
 Codex plugin source in this repository:
 

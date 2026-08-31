@@ -1,0 +1,20 @@
+{
+  "name": "mstar-repo",
+  "interface": {
+    "displayName": "Morning Star"
+  },
+  "plugins": [
+    {
+      "name": "morning-star-harness",
+      "source": {
+        "source": "local",
+        "path": "./"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
