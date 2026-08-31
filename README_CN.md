@@ -53,7 +53,7 @@ Harness Workflow Engine · Agent Plugin
 | Cursor | `npx @mstar-harness/cli init --target cursor` |
 | Kimi | Kimi TUI：`/plugins install https://github.com/btspoony/mstar-harness`<br>→ `/plugins reload` |
 | ZCode | `npx @mstar-harness/cli init --target zcode`<br>然后在 ZCode → 设置 → 插件管理安装 **morning-star-harness** |
-| Codex | `npx @mstar-harness/cli init --target codex`<br>然后 `codex plugin add morning-star-harness --marketplace personal` |
+| Codex | `npx @mstar-harness/cli init --target codex`<br>然后 `codex plugin add morning-star-harness@mstar-repo`（仓库自带 marketplace） |
 | Generic（Agent Plugins v1） | 任意 Agent Plugins v1.0.0 兼容客户端直接指向本仓库根<br>（`plugin.json` + `skills/` 即便携包） |
 
 ### 引擎门禁校验（推荐）

@@ -2,11 +2,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { AgentAdapter, Scope } from "../types";
-import { ensureObject, readJson, writeJson } from "../utils";
 import { resolveProjectRoot } from "../utils";
+import { runCliCommand } from "../exec";
 import {
   HARNESS_REPO_PATH,
   PLUGIN_NAME,
+  REPO_URL,
   ensureLocalHarnessRepo,
   ensureSymlink,
   validateLocalHarnessRepo,
@@ -14,14 +15,45 @@ import {
   appendGitignore,
   appendHarnessProjectGitignore,
   missingHarnessProcessGitignoreEntries,
-  homeRelativeSourcePath,
 } from "./shared-install";
 
-const MARKETPLACE_NAME = "personal";
-const MARKETPLACE_DISPLAY_NAME = "Personal";
-const GLOBAL_MARKETPLACE_PATH = path.join(os.homedir(), ".agents", "plugins", "marketplace.json");
-const PLUGIN_CATEGORY = "Productivity";
-const CODEX_PLUGIN_LINK = ".codex/plugins/mstar-harness";
+/**
+ * Codex install flow (repo-marketplace, probed 2026-08-31 on codex-cli 0.144.1):
+ *
+ * The harness repo ships its own marketplace catalog at
+ * `.agents/plugins/marketplace.json` (repo root = marketplace root; the plugin
+ * root is the repo root, so the single entry points at `source.path: "./"`).
+ * Codex does NOT implicitly discover repo marketplaces from the CWD — the
+ * marketplace must be registered once via `codex plugin marketplace add`.
+ * Git-sourced marketplaces are cloned by codex into its own snapshot cache
+ * (`marketplace upgrade` refreshes), so users no longer need a personal
+ * `~/.agents/plugins/marketplace.json` or a CLI-maintained checkout for the
+ * marketplace itself.
+ *
+ * - init: probe for the codex CLI, then `codex plugin marketplace add
+ *   <owner/repo> --ref main` (idempotent — an already-added marketplace is a
+ *   no-op). Custom-agent symlinks still come from the shared local checkout at
+ *   `~/.mstar/harness` (codex only discovers agents from `~/.codex/agents/`,
+ *   not from plugin packages).
+ * - doctor: validate the local checkout + agent symlinks (as before), then
+ *   check the marketplace is registered and the plugin resolvable via
+ *   `codex plugin marketplace list --json` / `codex plugin list --json`.
+ *   The repo-bundled `.agents/plugins/marketplace.json` is a release asset of
+ *   the harness repo itself; the CLI does not validate its entry shape.
+ * - Legacy `~/.agents/plugins/marketplace.json` entries (pre-3.7 "personal"
+ *   marketplace) surface as doctor notes, not errors.
+ */
+
+const CODEX_BIN = "codex";
+const CODEX_LOCAL_TIMEOUT_MS = 10_000;
+const CODEX_MARKETPLACE_TIMEOUT_MS = 300_000;
+/** GitHub shorthand accepted by `codex plugin marketplace add <SOURCE>`. */
+const MARKETPLACE_GIT_SOURCE = "btspoony/mstar-harness";
+/** Marketplace name = upstream repo's bundled `.agents/plugins/marketplace.json` `name`. */
+export const MARKETPLACE_NAME = "mstar-repo";
+const CODEX_INSTALL_HINT =
+  "Install the Codex CLI (https://github.com/openai/codex), e.g. `npm install -g @openai/codex`, then re-run init.";
+
 const CODEX_AGENT_NAMES = [
   "product-manager",
   "architect",
@@ -48,25 +80,75 @@ const CODEX_PROJECT_COMMAND_NAMES = [
 const GLOBAL_ITERATION_SKILLS_WARNING =
   "Codex project-scoped commands (iteration-start / iteration-drive / iteration-loop / codebase-audit / amazing-pr-review) are installed as project-local skills under .agents/skills/ only. Global install skips them to avoid polluting other code agents. Re-run with --scope project to enable.";
 
-type MarketplaceEntry = {
-  name: string;
-  source: {
-    source: "local";
-    path: string;
-  };
-  policy: {
-    installation: "AVAILABLE";
-    authentication: "ON_INSTALL";
-  };
-  category: string;
-};
-
-function globalMarketplacePath() {
-  return GLOBAL_MARKETPLACE_PATH;
+/** Run codex with args; dry-run never spawns a subprocess. env is spread so
+ * the binary resolves from PATH (same contract as the dsh adapter). */
+function runCodex(args: string[], dryRun: boolean, timeoutMs: number): string {
+  return runCliCommand([CODEX_BIN, ...args], { dryRun, timeoutMs, env: process.env });
 }
 
-function projectMarketplacePath() {
-  return path.join(resolveProjectRoot(), ".agents", "plugins", "marketplace.json");
+function codexAvailable(): boolean {
+  try {
+    runCodex(["--version"], false, CODEX_LOCAL_TIMEOUT_MS);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Parse `codex plugin marketplace list --json` → marketplace names. */
+function configuredMarketplaceNames(dryRun: boolean): string[] {
+  if (dryRun) return [];
+  const dump = runCodex(["plugin", "marketplace", "list", "--json"], false, CODEX_LOCAL_TIMEOUT_MS);
+  const parsed = JSON.parse(dump) as {
+    marketplaces?: Array<{ name?: unknown }>;
+  };
+  const list = Array.isArray(parsed.marketplaces) ? parsed.marketplaces : [];
+  return list
+    .map((entry) => (entry && typeof entry.name === "string" ? entry.name : ""))
+    .filter((name) => name !== "");
+}
+
+/** Parse `codex plugin list --json` → installed plugin ids (`name@marketplace`). */
+function installedPluginIds(dryRun: boolean): string[] {
+  if (dryRun) return [];
+  const dump = runCodex(["plugin", "list", "--json"], false, CODEX_LOCAL_TIMEOUT_MS);
+  const parsed = JSON.parse(dump) as {
+    installed?: Array<{ pluginId?: unknown }>;
+  };
+  const list = Array.isArray(parsed.installed) ? parsed.installed : [];
+  return list
+    .map((entry) => (entry && typeof entry.pluginId === "string" ? entry.pluginId : ""))
+    .filter((pluginId) => pluginId !== "");
+}
+
+/**
+ * Read the legacy personal marketplace (`~/.agents/plugins/marketplace.json`),
+ * if it exists, and surface a migration note when it still carries a harness
+ * entry. Never throws — the file is user-owned and optional post-cutover.
+ */
+function legacyPersonalMarketplaceNote(): string | null {
+  const legacyPath = path.join(os.homedir(), ".agents", "plugins", "marketplace.json");
+  let raw: string;
+  try {
+    raw = fs.readFileSync(legacyPath, "utf8");
+  } catch {
+    // Absent or unreadable: the legacy file is user-owned and optional.
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(raw) as { plugins?: unknown };
+    const plugins = Array.isArray(parsed.plugins) ? parsed.plugins : [];
+    const hasMstar = plugins.some(
+      (entry) =>
+        entry !== null && typeof entry === "object" && !Array.isArray(entry) && "name" in entry && entry.name === PLUGIN_NAME,
+    );
+    if (hasMstar) {
+      return `Legacy personal marketplace entry found at ${legacyPath} \u2014 the ${PLUGIN_NAME} plugin now installs from the repo marketplace (${MARKETPLACE_GIT_SOURCE}). Remove the entry, then install: codex plugin add ${PLUGIN_NAME}@${MARKETPLACE_NAME}`;
+    }
+  } catch {
+    // Unparseable user config: leave it alone.
+  }
+  return null;
 }
 
 function agentSourcePath(agentName: string) {
@@ -79,90 +161,6 @@ function globalAgentLinkPath(agentName: string) {
 
 function projectAgentLinkPath(agentName: string) {
   return path.join(resolveProjectRoot(), ".codex", "agents", `${agentName}.toml`);
-}
-
-function mstarEntry(scope: Scope): MarketplaceEntry {
-  const sourcePath =
-    scope === "global"
-      ? homeRelativeSourcePath(HARNESS_REPO_PATH)
-      : `./${CODEX_PLUGIN_LINK}`;
-  return {
-    name: PLUGIN_NAME,
-    source: {
-      source: "local",
-      path: sourcePath,
-    },
-    policy: {
-      installation: "AVAILABLE",
-      authentication: "ON_INSTALL",
-    },
-    category: PLUGIN_CATEGORY,
-  };
-}
-
-function normalizeMarketplace(raw: Record<string, unknown>) {
-  const next = ensureObject(raw);
-  next.name = MARKETPLACE_NAME;
-  const iface = ensureObject(next.interface);
-  if (typeof iface.displayName !== "string" || !iface.displayName.trim()) {
-    iface.displayName = MARKETPLACE_DISPLAY_NAME;
-  }
-  next.interface = iface;
-  if (!Array.isArray(next.plugins)) {
-    next.plugins = [];
-  }
-  return next;
-}
-
-function upsertEntry(raw: Record<string, unknown>, scope: Scope) {
-  const next = normalizeMarketplace(raw);
-  const plugins = (next.plugins as unknown[]).filter((entry) => {
-    return !(
-      entry &&
-      typeof entry === "object" &&
-      !Array.isArray(entry) &&
-      (entry as { name?: unknown }).name === PLUGIN_NAME
-    );
-  });
-  plugins.push(mstarEntry(scope));
-  next.plugins = plugins;
-  return next;
-}
-
-function findEntry(raw: Record<string, unknown>) {
-  const plugins = Array.isArray(raw.plugins) ? raw.plugins : [];
-  return plugins.find((entry) => {
-    return (
-      entry &&
-      typeof entry === "object" &&
-      !Array.isArray(entry) &&
-      (entry as { name?: unknown }).name === PLUGIN_NAME
-    );
-  }) as Record<string, unknown> | undefined;
-}
-
-function validateEntryShape(entry: Record<string, unknown> | undefined, scope: Scope, marketplacePath: string) {
-  const errors: string[] = [];
-  if (!entry) {
-    errors.push(`Missing ${PLUGIN_NAME} entry in ${marketplacePath}.`);
-    return errors;
-  }
-  const source = ensureObject(entry.source);
-  const expectedSourcePath = mstarEntry(scope).source.path;
-  if (source.source !== "local") errors.push("Codex marketplace entry source.source must be `local`.");
-  if (source.path !== expectedSourcePath) {
-    errors.push(`Codex marketplace entry source.path must be ${expectedSourcePath}.`);
-  }
-  const policy = ensureObject(entry.policy);
-  if (policy.installation !== "AVAILABLE") errors.push("Codex marketplace entry policy.installation must be AVAILABLE.");
-  if (policy.authentication !== "ON_INSTALL") errors.push("Codex marketplace entry policy.authentication must be ON_INSTALL.");
-  if (entry.category !== PLUGIN_CATEGORY) errors.push(`Codex marketplace entry category must be ${PLUGIN_CATEGORY}.`);
-  return errors;
-}
-
-function marketplacePath(scope: Scope) {
-  if (scope === "global") return globalMarketplacePath();
-  return projectMarketplacePath();
 }
 
 function ensureAgentLinks(scope: Scope, dryRun: boolean) {
@@ -230,57 +228,88 @@ function validateIterationSkillLinks() {
 }
 
 function runInit(scope: Scope, dryRun: boolean) {
-  const pathToMarketplace = marketplacePath(scope);
-  const current = readJson(pathToMarketplace);
-  const next = upsertEntry(current, scope);
-  const existingEntry = findEntry(current);
-  const notes = ensureLocalHarnessRepo(dryRun);
+  const notes: string[] = [];
+
+  // The shared local checkout stays: codex agent .toml symlinks (and the Cursor
+  // / omp adapters) materialize from it.
+  notes.push(...ensureLocalHarnessRepo(dryRun));
+
+  const marketplaceArgs = ["plugin", "marketplace", "add", REPO_URL, "--ref", "main"];
+  if (dryRun) {
+    notes.push(`Would run: ${CODEX_BIN} ${marketplaceArgs.join(" ")}`);
+  } else {
+    if (!codexAvailable()) {
+      throw new Error(`${CODEX_BIN} CLI not found on PATH. ${CODEX_INSTALL_HINT}`);
+    }
+    // Idempotent: re-adding an already-configured marketplace is a no-op
+    // (verified locally — output carries alreadyAdded=true, exit 0).
+    try {
+      const already = configuredMarketplaceNames(false).includes(MARKETPLACE_NAME);
+      if (already) {
+        notes.push(`Marketplace ${MARKETPLACE_NAME} already configured.`);
+      } else {
+        runCodex(marketplaceArgs, false, CODEX_MARKETPLACE_TIMEOUT_MS);
+        notes.push(`Added marketplace ${MARKETPLACE_NAME} from ${REPO_URL} (ref main).`);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Failed to add marketplace via ${CODEX_BIN}: ${message}`);
+    }
+    notes.push(`Next: codex plugin add ${PLUGIN_NAME}@${MARKETPLACE_NAME}`);
+  }
+
   if (scope === "project") {
     const projectRoot = resolveProjectRoot();
-    notes.push(ensureSymlink(HARNESS_REPO_PATH, path.join(projectRoot, CODEX_PLUGIN_LINK), dryRun));
-    notes.push(...appendGitignore(projectRoot, [CODEX_PLUGIN_LINK, ".codex/agents/*.toml"], dryRun));
+    notes.push(...appendGitignore(projectRoot, [".codex/agents/*.toml"], dryRun));
     notes.push(...appendHarnessProjectGitignore(projectRoot, dryRun));
     notes.push(...ensureIterationSkillLinks(dryRun));
   } else {
     notes.push(GLOBAL_ITERATION_SKILLS_WARNING);
   }
   notes.push(...ensureAgentLinks(scope, dryRun));
-  if (!dryRun) writeJson(pathToMarketplace, next);
-  notes.push(existingEntry ? `Updated ${PLUGIN_NAME} local marketplace entry.` : `Added ${PLUGIN_NAME} local marketplace entry.`);
-  notes.push(`Source path: ${mstarEntry(scope).source.path}`);
-  notes.push(`Install after init: codex plugin add ${PLUGIN_NAME} --marketplace ${MARKETPLACE_NAME}`);
+
   return {
-    location: pathToMarketplace,
+    location: `${CODEX_BIN} marketplaces (config.toml)`,
     notes,
   };
 }
 
 function runDoctor(scope: Scope) {
-  const pathToMarketplace = marketplacePath(scope);
   const errors = validateLocalHarnessRepo();
-  if (!fs.existsSync(pathToMarketplace)) {
-    return { location: pathToMarketplace, errors: [...errors, `Missing Codex marketplace: ${pathToMarketplace}`] };
+  const notes: string[] = [];
+  const legacyNote = legacyPersonalMarketplaceNote();
+  if (legacyNote) notes.push(legacyNote);
+
+  if (!codexAvailable()) {
+    errors.push(`${CODEX_BIN} CLI not found on PATH. ${CODEX_INSTALL_HINT}`);
+    return { location: `${CODEX_BIN} marketplaces (config.toml)`, errors, notes };
   }
-  const marketplace = readJson(pathToMarketplace);
-  if (marketplace.name !== MARKETPLACE_NAME) {
-    errors.push(`Codex personal marketplace name must be ${MARKETPLACE_NAME}.`);
+  try {
+    const marketplaces = configuredMarketplaceNames(false);
+    if (!marketplaces.includes(MARKETPLACE_NAME)) {
+      errors.push(`Marketplace ${MARKETPLACE_NAME} not configured (run init, or: ${CODEX_BIN} plugin marketplace add ${REPO_URL} --ref main).`);
+    }
+    const installed = installedPluginIds(false);
+    const pluginId = `${PLUGIN_NAME}@${MARKETPLACE_NAME}`;
+    if (marketplaces.includes(MARKETPLACE_NAME) && !installed.includes(pluginId)) {
+      notes.push(`Plugin not installed yet: ${CODEX_BIN} plugin add ${pluginId}`);
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    errors.push(`Could not query ${CODEX_BIN} plugin marketplace list: ${message}`);
   }
-  errors.push(...validateEntryShape(findEntry(marketplace), scope, pathToMarketplace));
+
   if (scope === "project") {
     const projectRoot = resolveProjectRoot();
-    errors.push(...validateSymlink(HARNESS_REPO_PATH, path.join(projectRoot, CODEX_PLUGIN_LINK)));
     const gitignorePath = path.join(projectRoot, ".gitignore");
     const gitignore = fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, "utf8") : "";
-    const lines = gitignore.split(/\r?\n/);
-    if (!lines.includes(CODEX_PLUGIN_LINK)) errors.push(`Missing .gitignore entry: ${CODEX_PLUGIN_LINK}`);
-    if (!lines.includes(".codex/agents/*.toml")) errors.push("Missing .gitignore entry: .codex/agents/*.toml");
     for (const entry of missingHarnessProcessGitignoreEntries(gitignore)) {
       errors.push(`Missing .gitignore entry: ${entry}`);
     }
     errors.push(...validateIterationSkillLinks());
   }
   errors.push(...validateAgentLinks(scope));
-  return { location: pathToMarketplace, errors };
+  return { location: `${CODEX_BIN} marketplaces (config.toml)`, errors, notes };
 }
 
 export const codexAdapter: AgentAdapter = {
