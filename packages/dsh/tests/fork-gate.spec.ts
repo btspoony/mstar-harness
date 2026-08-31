@@ -36,7 +36,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import { defineTool, type PreToolDecision, type ToolExecution, type ToolExecutionToken } from '@deepseek-ai/dsh-tools'
-import type { CallId } from '@deepseek-ai/dsh-llm'
+import type { ToolCallId } from '@deepseek-ai/dsh-llm'
 import { JobId } from '@deepseek-ai/dsh-jobs'
 import { readAgentFlow, recordDispatch, SETTLE_SEAM } from '../src/index.ts'
 import type { AgentFlowView } from '../src/index.ts'
@@ -238,7 +238,7 @@ describe('fork settle — ledger records fork dispatch + settle (dispatchTools-d
     }))
 
     const result = await app.ctx.tools.execute({
-      callId: 'fork-1' as CallId,
+      callId: 'fork-1' as ToolCallId,
       name: 'subagent_fork',
       arguments: { description: 'fork probe', prompt: VALID_FORK },
       agent: { id: 'fork-session' } as never,

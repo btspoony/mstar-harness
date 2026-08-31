@@ -39,7 +39,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import { defineTool, type PreToolDecision, type ToolExecution, type ToolExecutionToken } from '@deepseek-ai/dsh-tools'
-import type { CallId } from '@deepseek-ai/dsh-llm'
+import type { ToolCallId } from '@deepseek-ai/dsh-llm'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import { JobId } from '@deepseek-ai/dsh-jobs'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
@@ -1345,7 +1345,7 @@ describe('upstream seam probe — real dsh-tools registry emits tools/post-execu
       execute: async () => 'probe result',
     }))
     const result = await app.ctx.tools.execute({
-      callId: 'probe-1' as CallId,
+      callId: 'probe-1' as ToolCallId,
       name: 'probe-tool',
       arguments: { input: 'x' },
       signal: new AbortController().signal,
@@ -1390,7 +1390,7 @@ describe('upstream seam probe — ctx.inject([\'jobs\']) onJobDone wiring (T1 St
     }))
 
     const result = await app.ctx.tools.execute({
-      callId: 'bg-1' as CallId,
+      callId: 'bg-1' as ToolCallId,
       name: 'subagent',
       arguments: { description: 'probe', prompt: VALID_PLANNED },
       agent: { id: 'probe-agent' } as never,

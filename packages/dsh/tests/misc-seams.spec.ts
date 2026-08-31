@@ -17,7 +17,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import type { FsTarget } from '@deepseek-ai/dsh-fs'
-import type { CallId } from '@deepseek-ai/dsh-llm'
+import type { ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { ToolCallView, ToolExecutionResult } from '@deepseek-ai/dsh-tools'
 import * as plugin from '../src/index.ts'
 import {
@@ -804,7 +804,7 @@ describe('shared envelope', () => {
 // ---------------------------------------------------------------------------
 
 /** Branded call identity for registry executes. */
-const callId = 'misc-seams.spec' as CallId
+const callId = 'misc-seams.spec' as ToolCallId
 /** Test signal (never aborted). */
 const signal = new AbortController().signal
 
