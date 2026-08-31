@@ -90,10 +90,13 @@ PM 打印 **iteration-close exit checklist**；全部为 `[x]` 后方可 `git co
 
 ```bash
 git branch --show-current   # must print <spec_integration_branch> — mismatch → STOP, see above
-git add {ITERATION_DIR}/<id>/ {ITERATION_DIR}/README.md {KNOWLEDGE_DIR}/ CONCEPTS.md
+git add {ITERATION_DIR}/<id>/ {ITERATION_DIR}/README.md {KNOWLEDGE_DIR}/ {SPECS_DIR}/ CONCEPTS.md
+git add STRATEGY.md   # only if updated in §3.3 (tracked root file); skip line otherwise
 git commit -m "chore(iteration): close <iteration-id> — compound round, roadmap update"
 git push origin <spec_integration_branch>
 ```
+
+Staging 说明：`{SPECS_DIR}` 为解析后的实际 specs 目录（候选链见 `mstar-conventions`，如 `{HARNESS_DIR}/specs/`、`docs/specs/`、`specs/`）；本轮更新过才加入。§3.3 更新过的 tracked 项目层 roadmap tracker 若为 tracked 文件，一并 stage（gitignored 的 process 产物不进 commit）。
 
 PR 目标使用 snapshot `branch.target`；缺失时停止并补齐，不得默认 `main`。
 
