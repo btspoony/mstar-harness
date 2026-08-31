@@ -8,6 +8,16 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ## [Unreleased]
 
+## [3.6.0-alpha.2] - 2026-08-31
+
+### Harness
+
+- Fixed **iteration-close (Phase 3) commit anchor**: the §3.5 close commit is now **branch-anchored and fail-closed** — before any `git add`, PM must verify `git branch --show-current` equals `spec_integration_branch` (from snapshot `branch.integration` / compass); on mismatch STOP and redo tracked writes (`knowledge/`, `specs/`, `CONCEPTS.md`) on the integration checkout, instead of committing compound products onto the control branch (`main`). Engine `iteration gate` branch probes (`--branch` / `--integration` / `--target`) wired into the §3.5 pre-commit verification.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, and the portable Agent Plugins manifest: **→ 3.6.0-alpha.2**.
+
 ## [3.6.0-alpha.1] - 2026-08-31
 
 ### Harness

@@ -6,6 +6,16 @@
 
 ## [Unreleased]
 
+## [3.6.0-alpha.2] - 2026-08-31
+
+### Harness
+
+- 修复 **iteration-close（Phase 3）递交锚点**：§3.5 close commit 现为**分支锚定 + fail-closed**——任何 `git add` 之前必须校验 `git branch --show-current` 等于 `spec_integration_branch`（来自 snapshot `branch.integration` / compass）；mismatch 即 STOP，tracked 产物（`knowledge/`、`specs/`、`CONCEPTS.md`）改在集成分支检出上重写，不再把 compound 产物递交到控制分支（如 `main`）。引擎 `iteration gate` 分支探针（`--branch` / `--integration` / `--target`）接入 §3.5 提交前校验。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单及便携式 Agent Plugins 清单：**→ 3.6.0-alpha.2**。
+
 ## [3.6.0-alpha.1] - 2026-08-31
 
 ### Harness
