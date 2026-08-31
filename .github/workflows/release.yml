@@ -6,6 +6,10 @@ name: Release
 # first — cli/opencode depend on it) -> create+push the `vX.Y.Z` tag -> GitHub
 # Release.
 #
+# Prereleases: a `release vX.Y.Z-alpha.N` PR publishes under the npm dist-tag
+# `alpha` (never `latest`) and creates a GitHub Release flagged prerelease.
+# INSTALL.md stays on the last stable release for prerelease lines.
+#
 # No secrets are required for the default flow (the tag is pushed with the
 # workflow's GITHUB_TOKEN). Releases are PR-driven by design: a manual
 # `git tag && git push --tags` no longer auto-publishes.
@@ -57,6 +61,14 @@ jobs:
         id: ver
         run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
 
+      - name: Resolve npm dist-tag
+        id: disttag
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          if [[ "$VERSION" == *-* ]]; then TAG="alpha"; else TAG="latest"; fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Publishing ${VERSION} under dist-tag ${TAG}"
+
       - name: Validate release versions
         env:
           VERSION: ${{ steps.ver.outputs.version }}
@@ -83,16 +95,16 @@ jobs:
       # are self-contained — no registry ordering constraint. Keep engine first
       # for tidy publication history.
       - name: Publish @mstar-harness/engine
-        run: npm publish --workspace @mstar-harness/engine --access public
+        run: npm publish --workspace @mstar-harness/engine --access public --tag ${{ steps.disttag.outputs.tag }}
 
       - name: Publish @mstar-harness/cli
-        run: npm publish --workspace @mstar-harness/cli --access public
+        run: npm publish --workspace @mstar-harness/cli --access public --tag ${{ steps.disttag.outputs.tag }}
 
       - name: Publish @mstar-harness/opencode
-        run: npm publish --workspace @mstar-harness/opencode --access public
+        run: npm publish --workspace @mstar-harness/opencode --access public --tag ${{ steps.disttag.outputs.tag }}
 
       - name: Publish @mstar-harness/dsh
-        run: npm publish --workspace @mstar-harness/dsh --access public
+        run: npm publish --workspace @mstar-harness/dsh --access public --tag ${{ steps.disttag.outputs.tag }}
 
       - name: Configure git identity
         run: |
@@ -128,4 +140,4 @@ jobs:
           name: v${{ steps.ver.outputs.version }}
           body_path: ${{ steps.changelog.outputs.notes_file }}
           draft: false
-          prerelease: false
+          prerelease: ${{ contains(steps.ver.outputs.version, '-') }}

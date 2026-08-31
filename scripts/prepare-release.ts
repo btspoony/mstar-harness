@@ -33,8 +33,10 @@ import { existsSync, mkdirSync, readdirSync, renameSync } from "node:fs";
 import {
   CHANGELOGS,
   INSTALL_REF,
+  RELEASE_VERSION_RE,
   VERSION_SURFACES,
   compareSemver,
+  isPrereleaseVersion,
 } from "./release-surfaces.ts";
 
 type Fragment = {
@@ -274,8 +276,8 @@ async function main(): Promise<void> {
   const version = explicit ?? bumpVersion(current, bump);
   const date = new Date().toISOString().slice(0, 10);
 
-  if (!/^\d+\.\d+\.\d+$/.test(version)) {
-    throw new Error(`Invalid version "${version}". Expected X.Y.Z.`);
+  if (!RELEASE_VERSION_RE.test(version)) {
+    throw new Error(`Invalid version "${version}". Expected X.Y.Z or X.Y.Z-<prerelease>.`);
   }
   if (compareSemver(version, current) <= 0) {
     throw new Error(`Version ${version} must be greater than current ${current}.`);
@@ -313,8 +315,12 @@ async function main(): Promise<void> {
     await Bun.write(rootPath, syncRootEngineSpec(text, version));
     console.log(`sync: ${rootPath} dependencies["@mstar-harness/engine"] -> ^${version}`);
   }
-  await bumpInstall(current, version);
-  console.log(`bump: ${INSTALL_REF.path}`);
+  if (isPrereleaseVersion(version)) {
+    console.log(`skip: ${INSTALL_REF.path} (prerelease — stays at last stable)`);
+  } else {
+    await bumpInstall(current, version);
+    console.log(`bump: ${INSTALL_REF.path}`);
+  }
 
   archiveFragments(version, frags);
 

@@ -45,7 +45,34 @@ export const CHANGELOGS: readonly ChangelogTarget[] = [
 /** INSTALL.md ZCode marketplace example carries a quoted version field. */
 export const INSTALL_REF = { path: "INSTALL.md" } as const;
 
+/**
+ * Release version regex — `X.Y.Z` with an optional semver prerelease suffix
+ * (`-alpha.1`). Anchored; no `+build` metadata support (not needed for
+ * releases). Shared by prepare (version gate) and validate (tag gate).
+ */
+export const RELEASE_VERSION_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+
+/** True iff the version carries a prerelease suffix (contains `-`). */
+export function isPrereleaseVersion(v: string): boolean {
+  return v.includes("-");
+}
+
 export function compareSemver(a: string, b: string): number {
+  const [coreA, preA] = splitVersion(a);
+  const [coreB, preB] = splitVersion(b);
+  const coreDiff = compareCore(coreA, coreB);
+  if (coreDiff !== 0) return coreDiff;
+  return comparePrerelease(preA, preB);
+}
+
+/** Split `X.Y.Z[-pre]` into its core and optional prerelease parts. */
+function splitVersion(v: string): [string, string | undefined] {
+  const dash = v.indexOf("-");
+  if (dash === -1) return [v, undefined];
+  return [v.slice(0, dash), v.slice(dash + 1)];
+}
+
+function compareCore(a: string, b: string): number {
   const pa = a.split(".").map((n) => parseInt(n, 10) || 0);
   const pb = b.split(".").map((n) => parseInt(n, 10) || 0);
   for (let i = 0; i < 3; i++) {
@@ -53,6 +80,39 @@ export function compareSemver(a: string, b: string): number {
     if (d !== 0) return d;
   }
   return 0;
+}
+
+/**
+ * Semver 2.0.0 §11 prerelease precedence: identifiers compared left-to-right,
+ * numeric numerically, alphanumeric ASCII-lexically, numeric < alphanumeric,
+ * shorter identifier list < longer with the same prefix. A version without a
+ * prerelease outranks any prerelease of the same core.
+ */
+function comparePrerelease(a: string | undefined, b: string | undefined): number {
+  if (a === undefined && b === undefined) return 0;
+  if (a === undefined) return 1;
+  if (b === undefined) return -1;
+  const ia = a.split(".");
+  const ib = b.split(".");
+  const n = Math.min(ia.length, ib.length);
+  for (let i = 0; i < n; i++) {
+    const d = compareIdentifier(ia[i], ib[i]);
+    if (d !== 0) return d;
+  }
+  return ia.length - ib.length;
+}
+
+function compareIdentifier(a: string, b: string): number {
+  const aNum = /^\d+$/.test(a);
+  const bNum = /^\d+$/.test(b);
+  if (aNum && bNum) {
+    const na = BigInt(a);
+    const nb = BigInt(b);
+    return na < nb ? -1 : na > nb ? 1 : 0;
+  }
+  if (aNum) return -1; // numeric identifiers sort before alphanumeric
+  if (bNum) return 1;
+  return a < b ? -1 : a > b ? 1 : 0; // ASCII lexicographic
 }
 
 // Release note: v2.0.0 first release attempt failed at install (engine runtime-dep 404);

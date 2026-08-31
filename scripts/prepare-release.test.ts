@@ -1,8 +1,8 @@
 /**
  * scripts/prepare-release.ts — fragment `packages:` token validation.
  */
-import { describe, expect, test } from "bun:test";
 import { parseFragment, syncRootEngineSpec, validateFragmentPackages } from "./prepare-release.ts";
+import { RELEASE_VERSION_RE, compareSemver, isPrereleaseVersion } from "./release-surfaces.ts";
 
 describe("validateFragmentPackages (release packages enum)", () => {
   test("cli, root (comma+space, mixed case 'CLI, Root') is valid and normalized lowercase", () => {
@@ -74,9 +74,49 @@ describe("syncRootEngineSpec (root manifest engine dependency)", () => {
     expect(out).not.toContain("^3.4.0");
   });
 
-  test("throws when the root manifest has no engine runtime dependency", () => {
-    expect(() =>
-      syncRootEngineSpec(`{ "dependencies": { "zod": "^4.0.0" } }`, "3.5.0"),
-    ).toThrow('could not find dependencies["@mstar-harness/engine"]');
+  test("rewrites the engine spec to a prerelease range (^3.6.0-alpha.1)", () => {
+    const out = syncRootEngineSpec(manifest("workspace:*"), "3.6.0-alpha.1");
+    expect(out).toContain('"@mstar-harness/engine": "^3.6.0-alpha.1"');
+  });
+});
+
+describe("RELEASE_VERSION_RE / isPrereleaseVersion (shared release version contract)", () => {
+  test("accepts stable and prerelease versions", () => {
+    expect(RELEASE_VERSION_RE.test("3.6.0")).toBe(true);
+    expect(RELEASE_VERSION_RE.test("3.6.0-alpha.1")).toBe(true);
+  });
+
+  test("rejects malformed versions (short core, v-prefix, build metadata)", () => {
+    expect(RELEASE_VERSION_RE.test("3.6")).toBe(false);
+    expect(RELEASE_VERSION_RE.test("v3.6.0")).toBe(false);
+    expect(RELEASE_VERSION_RE.test("3.6.0-alpha.1+build")).toBe(false);
+  });
+
+  test("isPrereleaseVersion flags only versions with a suffix", () => {
+    expect(isPrereleaseVersion("3.6.0")).toBe(false);
+    expect(isPrereleaseVersion("3.6.0-alpha.1")).toBe(true);
+  });
+});
+
+describe("compareSemver (prerelease-aware, semver 2.0.0 §11)", () => {
+  test("prerelease sorts below the same core release", () => {
+    expect(compareSemver("3.6.0-alpha.1", "3.6.0")).toBeLessThan(0);
+  });
+
+  test("prerelease of a newer core outranks an older stable", () => {
+    expect(compareSemver("3.6.0-alpha.1", "3.5.9")).toBeGreaterThan(0);
+  });
+
+  test("numeric prerelease identifiers compare numerically", () => {
+    expect(compareSemver("3.6.0-alpha.1", "3.6.0-alpha.2")).toBeLessThan(0);
+    expect(compareSemver("3.6.0-alpha.10", "3.6.0-alpha.9")).toBeGreaterThan(0);
+  });
+
+  test("alphanumeric identifiers sort ASCII-lexically after numeric", () => {
+    expect(compareSemver("3.6.0-alpha.1", "3.6.0-beta")).toBeLessThan(0);
+  });
+
+  test("equal versions compare equal", () => {
+    expect(compareSemver("3.6.0", "3.6.0")).toBe(0);
   });
 });

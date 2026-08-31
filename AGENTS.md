@@ -113,6 +113,10 @@ Merging a `release vX.Y.Z` PR runs the **Release** workflow **inline on the `pul
 
 > npm trusted publishing / provenance now runs on the `pull_request` event (previously `push:tags`); the workflow filename is unchanged. If the first release via this flow fails publish, revert the trigger to `push:tags` and switch to a PAT-pushed auto-tag model.
 
+### Prereleases (alpha)
+
+Prerelease lines use the same PR flow with a suffixed version: `bun run release:prepare -- 3.6.0-alpha.1`, then merge the `release v3.6.0-alpha.1` PR. The Release workflow publishes under the npm dist-tag `alpha` (never `latest`) and flags the GitHub Release as prerelease. `INSTALL.md` / README examples stay on the last stable release — `release:prepare` skips the INSTALL bump and `release:validate` skips the INSTALL check for prerelease versions. Stable `X.Y.Z` releases are unchanged.
+
 ### Conventions
 
 - Never invent a skipped tag (e.g. do not create `v1.8.4` to fill a historical gap).
