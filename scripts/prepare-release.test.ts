@@ -1,7 +1,7 @@
 /**
  * scripts/prepare-release.ts — fragment `packages:` token validation.
  */
-import { parseFragment, syncRootEngineSpec, validateFragmentPackages } from "./prepare-release.ts";
+import { bumpVersion, parseFragment, syncRootEngineSpec, validateFragmentPackages } from "./prepare-release.ts";
 import { RELEASE_VERSION_RE, compareSemver, isPrereleaseVersion } from "./release-surfaces.ts";
 
 describe("validateFragmentPackages (release packages enum)", () => {
@@ -128,5 +128,20 @@ describe("compareSemver (prerelease-aware, semver 2.0.0 §11)", () => {
 
   test("equal versions compare equal", () => {
     expect(compareSemver("3.6.0", "3.6.0")).toBe(0);
+  });
+});
+
+describe("bumpVersion (auto-bump, prerelease graduation)", () => {
+  test("stable current bumps patch/minor as before", () => {
+    expect(bumpVersion("3.5.1", "patch")).toBe("3.5.2");
+    expect(bumpVersion("3.5.1", "minor")).toBe("3.6.0");
+  });
+
+  test("prerelease current graduates to the same-core stable on patch/default", () => {
+    expect(bumpVersion("3.6.0-alpha.1", "patch")).toBe("3.6.0");
+  });
+
+  test("prerelease current graduates to the next minor stable on minor", () => {
+    expect(bumpVersion("3.6.0-alpha.1", "minor")).toBe("3.7.0");
   });
 });
