@@ -80,9 +80,16 @@ PM 打印 **iteration-close exit checklist**；全部为 `[x]` 后方可 `git co
 - [ ] 当前分支是 `spec_integration_branch`
 - [ ] PR base = snapshot `branch.target`（`target_branch`，与 compass frontmatter 一致）；**不是**未记录的 `main`
 
-**Commit 到 integration 分支**：
+**Commit 前提（HARD — branch-anchored，防递交到控制分支）**：§3.5 的 commit 是 **branch 锚定**的——`git commit` 落在**当前检出分支**，`<spec_integration_branch>` 只出现在 push 参数里。当控制 worktree（或任一检出）不在 integration 分支时，未经下述核对直接执行本配方，compound 会把 tracked 的 `{KNOWLEDGE_DIR}/`、`{SPECS_DIR}/`、`CONCEPTS.md` 递交到控制分支（如 `main`），integration 分支的 PR 永远带不上这些 shared 产物。因此 **任何 `git add` 之前**必须先验分支；mismatch → **STOP**（不得 commit、不得 push、不得「先提交后挪」），改在正确检出上重做（见下）。
+
+1. 解析 `<spec_integration_branch>`：snapshot `branch.integration`（workflows/<id>/snapshot.json）→ 缺失时 compass frontmatter `spec_integration_branch`；仍缺 → STOP 补齐，不得默认 `main`。
+2. **先验后提交**（在执行 commit 的检出处）：`git branch --show-current` === `<spec_integration_branch>`，且工作树干净。engine 可用 → 在 add/commit **前**运行 `mstar iteration gate --workflow <id> --compass <delivery-compass.md> --branch <current> --integration <spec_integration_branch> --target <target_branch>` 并确认 exit 无 `EXIT_BRANCH_MISMATCH` / `EXIT_PR_BASE_MISMATCH`（Phase-3 窗口预期的其它 exit-1 除外，见 Phase transition gates 注）。
+3. **mismatch 时**：不产生任何提交。tracked 子树（`{KNOWLEDGE_DIR}/`、`{SPECS_DIR}/`、`CONCEPTS.md`、迭代 package 中 tracked 部分）在**检出 `<spec_integration_branch>` 的 worktree** 重新写入或在 commit 前恢复（它们默认 tracked、随 Git 分支走；进程产物 plans/iterations/status/sdd 经 control 绝对路径不受影响）。然后重跑本 checklist。
+
+**在 `<spec_integration_branch>` 检出上执行**：
 
 ```bash
+git branch --show-current   # must print <spec_integration_branch> — mismatch → STOP, see above
 git add {ITERATION_DIR}/<id>/ {ITERATION_DIR}/README.md {KNOWLEDGE_DIR}/ CONCEPTS.md
 git commit -m "chore(iteration): close <iteration-id> — compound round, roadmap update"
 git push origin <spec_integration_branch>
