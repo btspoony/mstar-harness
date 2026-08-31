@@ -33,8 +33,10 @@ import { existsSync, mkdirSync, readdirSync, renameSync } from "node:fs";
 import {
   CHANGELOGS,
   INSTALL_REF,
+  RELEASE_VERSION_RE,
   VERSION_SURFACES,
   compareSemver,
+  isPrereleaseVersion,
 } from "./release-surfaces.ts";
 
 type Fragment = {
@@ -73,8 +75,19 @@ function parseArgs(argv: string[]): { version?: string; bump: "patch" | "minor" 
   return { version, bump };
 }
 
-function bumpVersion(v: string, kind: "patch" | "minor"): string {
+/**
+ * Auto-bump the next version from a current version. A current version
+ * carrying a prerelease suffix graduates instead of bumping: `patch`/default
+ * returns the same-core stable (`3.6.0-alpha.1` -> `3.6.0`), `minor` returns
+ * the next minor stable (`3.7.0`). Stable inputs bump as before. Exported for
+ * tests.
+ */
+export function bumpVersion(v: string, kind: "patch" | "minor"): string {
   const [maj, min, pat] = v.split(".").map((n) => parseInt(n, 10));
+  if (isPrereleaseVersion(v)) {
+    if (kind === "minor") return `${maj}.${min + 1}.0`;
+    return `${maj}.${min}.${pat}`;
+  }
   if (kind === "minor") return `${maj}.${min + 1}.0`;
   return `${maj}.${min}.${pat + 1}`;
 }
@@ -230,14 +243,23 @@ async function bumpJsonVersion(path: string, oldV: string, newV: string): Promis
   await Bun.write(path, text.replace(re, `$1${newV}$2`));
 }
 
-async function bumpInstall(oldV: string, newV: string): Promise<void> {
+/**
+ * Bump the INSTALL.md marketplace example to `newV`. The old version is
+ * derived from INSTALL.md's own quoted `"version"` field — never from the
+ * release `current` — because after a prerelease the surfaces carry a
+ * suffixed version while INSTALL.md stays on the last stable; passing that
+ * suffixed `current` here would find no match and silently leave INSTALL.md
+ * stale (and `release:validate` would then hard-fail the stable release).
+ * Fails fast if the file or its version field is missing (validate would
+ * fail later anyway).
+ */
+async function bumpInstall(newV: string): Promise<void> {
   const text = await Bun.file(INSTALL_REF.path).text();
-  const re = new RegExp(`("version"\\s*:\\s*")${oldV.replace(/\./g, "\\.")}(")`);
-  if (!re.test(text)) {
-    console.warn(`warn: ${INSTALL_REF.path}: no quoted "version" field matching ${oldV} (skipped)`);
-    return;
+  const m = text.match(/"version"\s*:\s*"(\d+\.\d+\.\d+)"/);
+  if (!m) {
+    throw new Error(`${INSTALL_REF.path}: could not find quoted "version" field (expected X.Y.Z)`);
   }
-  await Bun.write(INSTALL_REF.path, text.replace(re, `$1${newV}$2`));
+  await Bun.write(INSTALL_REF.path, text.replace(m[0], `"version": "${newV}"`));
 }
 
 /**
@@ -274,8 +296,8 @@ async function main(): Promise<void> {
   const version = explicit ?? bumpVersion(current, bump);
   const date = new Date().toISOString().slice(0, 10);
 
-  if (!/^\d+\.\d+\.\d+$/.test(version)) {
-    throw new Error(`Invalid version "${version}". Expected X.Y.Z.`);
+  if (!RELEASE_VERSION_RE.test(version)) {
+    throw new Error(`Invalid version "${version}". Expected X.Y.Z or X.Y.Z-<prerelease>.`);
   }
   if (compareSemver(version, current) <= 0) {
     throw new Error(`Version ${version} must be greater than current ${current}.`);
@@ -313,8 +335,12 @@ async function main(): Promise<void> {
     await Bun.write(rootPath, syncRootEngineSpec(text, version));
     console.log(`sync: ${rootPath} dependencies["@mstar-harness/engine"] -> ^${version}`);
   }
-  await bumpInstall(current, version);
-  console.log(`bump: ${INSTALL_REF.path}`);
+  if (isPrereleaseVersion(version)) {
+    console.log(`skip: ${INSTALL_REF.path} (prerelease — stays at last stable)`);
+  } else {
+    await bumpInstall(version);
+    console.log(`bump: ${INSTALL_REF.path}`);
+  }
 
   archiveFragments(version, frags);
 

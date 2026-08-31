@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Target version (e.g. 1.8.7). Leave empty for an auto patch bump."
+        description: "Target version (e.g. 1.8.7, or a prerelease like 1.9.0-alpha.0). Leave empty for an auto patch bump."
         required: false
         type: string
 

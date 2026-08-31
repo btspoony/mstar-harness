@@ -17,7 +17,7 @@
  * 0 MISSING / all-MISMATCH is the expected pre-release state, not a gate
  * failure.
  */
-import { INSTALL_REF, VERSION_SURFACES } from "./release-surfaces.ts";
+import { INSTALL_REF, RELEASE_VERSION_RE, VERSION_SURFACES, isPrereleaseVersion } from "./release-surfaces.ts";
 
 const tag = process.argv[2] ?? process.env.GITHUB_REF_NAME;
 
@@ -29,8 +29,8 @@ if (!tag) {
 
 const version = tag.startsWith("v") ? tag.slice(1) : tag;
 
-if (!/^\d+\.\d+\.\d+/.test(version)) {
-  console.error(`Invalid release tag "${tag}". Expected format: vX.Y.Z`);
+if (!RELEASE_VERSION_RE.test(version)) {
+  console.error(`Invalid release tag "${tag}". Expected format: vX.Y.Z or vX.Y.Z-<prerelease>`);
   process.exit(1);
 }
 
@@ -55,18 +55,21 @@ for (const { label, path } of VERSION_SURFACES) {
   }
 }
 
-// INSTALL.md is the 12th compared entry (11 VERSION_SURFACES + INSTALL.md):
-// its ZCode marketplace example must also reflect the release version.
-const install = await Bun.file(INSTALL_REF.path).text();
-const installMatch = install.match(installVersionRe);
-const installVersion = installMatch?.[1];
-if (installVersion !== version) {
-  console.error(
-    `MISMATCH INSTALL.md (${INSTALL_REF.path}): expected ${version}, found ${installVersion ?? "<missing>"}`,
-  );
-  failed = true;
+// Prereleases skip it — INSTALL.md stays on the last stable release.
+if (isPrereleaseVersion(version)) {
+  console.log(`SKIP INSTALL.md (prerelease)`);
 } else {
-  console.log(`OK INSTALL.md ZCode marketplace example: ${installVersion}`);
+  const install = await Bun.file(INSTALL_REF.path).text();
+  const installMatch = install.match(installVersionRe);
+  const installVersion = installMatch?.[1];
+  if (installVersion !== version) {
+    console.error(
+      `MISMATCH INSTALL.md (${INSTALL_REF.path}): expected ${version}, found ${installVersion ?? "<missing>"}`,
+    );
+    failed = true;
+  } else {
+    console.log(`OK INSTALL.md ZCode marketplace example: ${installVersion}`);
+  }
 }
 
 // The root manifest is what git/hosted installs (`omp plugin install
