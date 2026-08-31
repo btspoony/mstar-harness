@@ -92,6 +92,16 @@ describe("RELEASE_VERSION_RE / isPrereleaseVersion (shared release version contr
     expect(RELEASE_VERSION_RE.test("3.6.0-alpha.1+build")).toBe(false);
   });
 
+  test("rejects prerelease identifiers violating semver §9 grammar", () => {
+    expect(RELEASE_VERSION_RE.test("3.6.0-alpha..1")).toBe(false);
+    expect(RELEASE_VERSION_RE.test("3.6.0-alpha.01")).toBe(false);
+    expect(RELEASE_VERSION_RE.test("3.6.0-.alpha")).toBe(false);
+  });
+
+  test("accepts a bare numeric prerelease identifier", () => {
+    expect(RELEASE_VERSION_RE.test("3.6.0-0")).toBe(true);
+  });
+
   test("isPrereleaseVersion flags only versions with a suffix", () => {
     expect(isPrereleaseVersion("3.6.0")).toBe(false);
     expect(isPrereleaseVersion("3.6.0-alpha.1")).toBe(true);

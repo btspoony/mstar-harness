@@ -49,8 +49,15 @@ export const INSTALL_REF = { path: "INSTALL.md" } as const;
  * Release version regex — `X.Y.Z` with an optional semver prerelease suffix
  * (`-alpha.1`). Anchored; no `+build` metadata support (not needed for
  * releases). Shared by prepare (version gate) and validate (tag gate).
+ *
+ * Prerelease identifiers follow semver 2.0.0 §9: dot-separated, each either
+ * a numeric identifier without leading zeros (`0` or `[1-9]\d*`) or an
+ * alphanumeric identifier containing at least one non-digit. Empty
+ * identifiers (`alpha..1`), leading-zero numerics (`alpha.01`), and
+ * identifiers starting with `.` (`-.alpha`) are rejected.
  */
-export const RELEASE_VERSION_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+export const RELEASE_VERSION_RE =
+  /^\d+\.\d+\.\d+(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?$/;
 
 /** True iff the version carries a prerelease suffix (contains `-`). */
 export function isPrereleaseVersion(v: string): boolean {
