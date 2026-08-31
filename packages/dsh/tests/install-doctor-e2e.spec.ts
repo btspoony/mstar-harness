@@ -12,15 +12,15 @@
  *   - dsh plugin advisory (runtime): missing / seeded / overridden
  * This spec closes the first end to end; the second is pinned by the
  * src-level specs (fallbacks-advisory.spec.ts (f)/(f2),
- * fallbacks-decoration.spec.ts (c)) and Task 1's installed-deployment e2e
+ * role-persona.spec.ts (c)) and Task 1's installed-deployment e2e
  * (13 mstar roles seeded — the cell-3 runtime half, cited here).
  *
  * Matrix:
  *   Cell 1 (uninstalled): `init --target dsh --no-fallbacks` → doctor exit 1
  *     `dsh-llm-fallbacks: uninstalled`; dsh side — installed artifact boots
  *     WITHOUT the fallbacks row: fallbacksMounted false, advisory not
- *     invoked (false, zero logs), decoration still injects the persona from
- *     Config (degradation path does not crash).
+ *     invoked (false, zero logs), the native persona channel still merges
+ *     the persona from Config (degradation path does not crash).
  *   Cell 2 (disabled): fallbacks row added, disabled via the REAL
  *     `cordis.patch.yml` mechanism → doctor exit 1 `dsh-llm-fallbacks:
  *     disabled`; dsh side — loader entry present (dump carries the disabled
@@ -34,10 +34,10 @@ import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { bootApp, fakeChild, startInfo, type BootResult, type FakeLoaderRegistry } from './harness.ts'
+import { FakeSubagentProvider, bootApp, startViaNativeChannel, type BootResult, type FakeLoaderRegistry } from './harness.ts'
 import { FALLBACKS_ENTRY_NAME, fallbacksMounted } from '../src/gates/fallbacks-probe.ts'
 import { setAdvisoryLogger, runFallbacksAdvisory, type AdvisoryLogLevel } from '../src/gates/fallbacks-advisory.ts'
-import { PERSONA_SECTION_NAME } from '../src/gates/fallbacks-decoration.ts'
+import type { SubagentRuntime, SubagentStartRequest } from '@deepseek-ai/dsh-subagent'
 import { packageRoot } from '../scripts/bundle-harness-assets.ts'
 
 /** Repo root (packages/dsh/tests → up three levels). */
@@ -140,7 +140,7 @@ const installedMstarDir = (dshHome: string) => join(profileDir(dshHome), 'node_m
 /** The seeds surface marker (Task 1 pattern): the bundled seeds wiring in
  * `dist/index.js` + the packaged `harness-agents` mirror. The doctor itself
  * reads only loader rows, but the dsh-side boots exercise the bundled
- * probe/advisory/decoration gates — pin the FULL shipped surface so the
+ * probe/advisory/persona-channel gates — pin the FULL shipped surface so the
  * boot evidence never runs against a seeds-less stale version. */
 function hasSeedsSurface(mstarPkgDir: string): boolean {
   const distIndex = join(mstarPkgDir, 'dist/index.js')
@@ -173,7 +173,7 @@ async function hostCopyInstalledMstar(dshHome: string): Promise<string> {
   return root
 }
 
-/** One mstar-style Assignment prompt (decoration fixture pattern). */
+/** One mstar-style Assignment prompt (persona-channel fixture pattern). */
 const ASSIGNMENT_PROMPT = [
   '**Execute as**: fullstack-dev',
   '**Delegation**: forbidden',
@@ -184,6 +184,15 @@ const ASSIGNMENT_PROMPT = [
 
 /** The configured persona for `fullstack-dev` (Config source). */
 const PERSONA = 'You are a fullstack-dev executor for the Morning Star harness.'
+
+/** A real start request whose prompt text carries `text` (role-persona.spec pattern). */
+function startRequest(text: string): SubagentStartRequest {
+  return {
+    prompt: [{ type: 'text', text }],
+    parent: { id: 'parent-fake', session: { id: 'parent-fake' } },
+    signal: new AbortController().signal,
+  } as unknown as SubagentStartRequest
+}
 
 /** A DISABLED fallbacks loader entry (the real profile's loader view for a
  * patched-out row: entry present, `disabled: true`, no service). */
@@ -247,14 +256,14 @@ describe.skipIf(skipReason !== undefined)('install-surface doctor three-state e2
 
       // dsh side — the `--no-fallbacks` deployment boots WITHOUT the
       // fallbacks row: fallbacksMounted false, the advisory is NOT invoked
-      // (false, zero logs), and the decoration still injects the persona
-      // from the Config source (degradation path never crashes).
+      // (false, zero logs), and the native persona channel still merges the
+      // persona from the Config source (degradation path never crashes).
       hostCopyRoot = await hostCopyInstalledMstar(dshHome)
       // Dynamic import exception (runtime-selected specifier): the installed
       // dist path is only known after the REAL install — static imports
       // cannot name it (Task 1 pattern).
       const pluginModule = await import(pathToFileURL(join(hostCopyRoot, 'dsh/dist/index.js')).href)
-      booted = await bootApp({ pluginModule, agentsService: 'fake', rolePersonas: { 'fullstack-dev': PERSONA } })
+      booted = await bootApp({ pluginModule, agentsService: 'fake', subagents: 'real', rolePersonas: { 'fullstack-dev': PERSONA } })
       const app = booted
       expect(fallbacksMounted(app.ctx)).toBe(false)
       const advisoryLogs: Array<[AdvisoryLogLevel, string]> = []
@@ -265,12 +274,14 @@ describe.skipIf(skipReason !== undefined)('install-surface doctor three-state e2
       } finally {
         setAdvisoryLogger(priorAdvisory)
       }
-      const { agent, scopeKey } = await fakeChild(app.ctx, ASSIGNMENT_PROMPT)
-      app.ctx.get('agents')!.register(agent)
-      expect(() => app.ctx.events.emit('subagent/start', startInfo(agent.id))).not.toThrow()
-      const assembly = await agent.ctx.systemPrompt.assemble({ scope: scopeKey })
-      expect(assembly.sections.find((s) => s.name === PERSONA_SECTION_NAME)?.text).toBe(PERSONA)
-      console.log('install-doctor-e2e: cell1 dsh-side — fallbacksMounted false, advisory false (0 logs), persona injected from Config (no crash)')
+      // Native persona channel: the installed dist registers the
+      // `internal/get` wrapper — a role-matched start through a plugin-fiber
+      // context merges the persona into the request's `persona` slot.
+      const provider = new FakeSubagentProvider('fake-spawn', { personaCapability: true })
+      ;(app.ctx.subagents as unknown as SubagentRuntime).registerProvider(provider as never)
+      await startViaNativeChannel(app, 'fake-spawn', startRequest(ASSIGNMENT_PROMPT))
+      expect(provider.starts[0]!.request.persona).toBe(PERSONA)
+      console.log('install-doctor-e2e: cell1 dsh-side — fallbacksMounted false, advisory false (0 logs), persona merged via the native channel (no crash)')
       await app.dispose()
       booted = undefined
       await rm(hostCopyRoot, { recursive: true, force: true })

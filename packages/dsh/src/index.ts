@@ -62,11 +62,11 @@ import {
 } from './gates/agent-flow.ts'
 import type { AgentFlowPairing, TaskDoneSnapshot } from './gates/agent-flow.ts'
 import {
-  DECORATION_LOGGER,
-  decorateSubagentStart,
-  setDecorationAgentsDir,
-  setDecorationLogger,
-} from './gates/fallbacks-decoration.ts'
+  ROLE_PERSONA_LOGGER,
+  registerRolePersonaChannel,
+  setRolePersonaAgentsDir,
+  setRolePersonaLogger,
+} from './gates/role-persona.ts'
 import {
   WORKFLOW_LEDGER_LOGGER,
   registerWorkflowLedger,
@@ -82,7 +82,6 @@ import {
   registerPlanModeBridge,
   setPlanModeBridgeLogger,
 } from './gates/plan-mode-bridge.ts'
-import type { SubagentRunInfoView } from './gates/fallbacks-decoration.ts'
 import {
   ADVISORY_LOGGER,
   runFallbacksAdvisory,
@@ -139,14 +138,12 @@ export { SeamVetoError, lintSeamWrite, lintDesignMdWrite, lintAuditWrite, lintCo
 export type { SeamId, SeamLintAdvisory } from './gates/seams.ts'
 export type { DispatchGateAdvisory } from './gates/dispatch.ts'
 export {
-  DECORATION_LOGGER,
-  PERSONA_SECTION_NAME,
-  PERSONA_SECTION_ORDER,
-  decorateSubagentStart,
-  setDecorationAgentsDir,
-  setDecorationLogger,
-} from './gates/fallbacks-decoration.ts'
-export type { DecorationLogLevel, DecorationLogSink, SubagentRunInfoView } from './gates/fallbacks-decoration.ts'
+  ROLE_PERSONA_LOGGER,
+  registerRolePersonaChannel,
+  setRolePersonaAgentsDir,
+  setRolePersonaLogger,
+} from './gates/role-persona.ts'
+export type { RolePersonaLogLevel, RolePersonaLogSink, SubagentStartRequestView, SubagentsServiceView } from './gates/role-persona.ts'
 export { ADVISORY_LOGGER, runFallbacksAdvisory, setAdvisoryLogger } from './gates/fallbacks-advisory.ts'
 export type { AdvisoryLogLevel, AdvisoryLogSink } from './gates/fallbacks-advisory.ts'
 export { DshHostAdapter } from './gates/adapter.ts'
@@ -408,29 +405,29 @@ export function apply(ctx: Context, config: Config): void {
     else if (level === 'error') logger.error(message)
     else logger.info(message)
   })
-  // Subagent-decoration logger sink (plan `20260814-dsh-fallbacks-integration`
-  // Task 2 — the `subagent/start` decoration logs through the same
-  // module-sink pattern as the agent-flow ledger).
-  setDecorationLogger((level, message) => {
-    const logger = ctx.logger(DECORATION_LOGGER)
+  // Role-persona logger sink (plan `20260831-dsh-alpha2-optional-fallbacks`
+  // Task 3 — the native persona channel logs through the same module-sink
+  // pattern as the agent-flow ledger).
+  setRolePersonaLogger((level, message) => {
+    const logger = ctx.logger(ROLE_PERSONA_LOGGER)
     if (level === 'debug') logger.debug(message)
-    else if (level === 'info') logger.info(message)
     else logger.warn(message)
   })
   // Persona-defaults mirror root (plan `20260815-dsh-fallbacks-personas`
   // Task 3): the packaged `harness-agents/` mirror (synced from the repo
-  // root by `bundle-assets`; gitignored) — bound at apply so the
-  // decoration's zero-config default lookup is package-relative (dist-depth)
-  // regardless of launch cwd; absent when `bundle-assets` has not run
-  // (config-only decoration).
-  setDecorationAgentsDir(packagedAgentsDir())
+  // root by `bundle-assets`; gitignored) — bound at apply so the channel's
+  // zero-config default lookup is package-relative (dist-depth) regardless
+  // of launch cwd; absent when `bundle-assets` has not run (config-only
+  // lookups).
+  setRolePersonaAgentsDir(packagedAgentsDir())
   // Harness-rules system-prompt injection (plan `20260816-dsh-nb1-systemprompt`
   // Task 2): the global-layer `mstar:harness-rules` pointer section + the
   // `mstar:engine-status` runtime-context summary (visible to the root
-  // session AND dispatched children; the child-scoped `mstar:role-persona`
-  // is untouched). The module sink is bound to the dsh logger (decoration
-  // pattern); the registration itself is optional-unit — a composition
-  // without dsh-system-prompt keeps boot unaffected (one debug log,
+  // session AND dispatched children; child persona delivery rides the
+  // native subagent persona channel — mstar owns no child-scoped section).
+  // The module sink is bound to the dsh logger (module-sink pattern); the
+  // registration itself is optional-unit — a composition without
+  // dsh-system-prompt keeps boot unaffected (one debug log,
   // `registerHarnessPrompt` returns false).
   setHarnessPromptLogger((level, message) => {
     const logger = ctx.logger(HARNESS_PROMPT_LOGGER)
@@ -455,7 +452,8 @@ export function apply(ctx: Context, config: Config): void {
   // One-shot latch: the pass is attempted at apply (profiles that declare
   // the fallbacks row before dsh) and — when unmounted at boot — at the
   // first `subagent/start` decision point (the loader mounts entries
-  // concurrently; the same decision-point probe pattern as the decoration).
+  // concurrently; the same decision-point probe pattern as the persona
+  // channel's service-read interception).
   // The latch is RE-ARMED when the `llm-fallbacks` service disappears (the
   // seeds inject child below returns a teardown resetting it): after an HMR
   // fiber swap the fresh seed registry needs a new decision-point pass to
@@ -712,24 +710,28 @@ export function apply(ctx: Context, config: Config): void {
   // regardless of order" holds only once the listener is reached.
   ctx.on('tools/pre-execute', (exec, next) => preExecuteListener(ctx, resolver, config, adapter, exec, next), { prepend: true })
 
-  // Role-based subagent decoration — `subagent/start` emit (plan
-  // `20260814-dsh-fallbacks-integration` Task 2): the SYNCHRONOUS listener
-  // resolves the published child via `ctx.get('agents')?.get(info.id)` and
-  // registers the configured persona as the child's agent-scoped
-  // `mstar:role-persona` system-prompt section (before the child's first
-  // LLM call). Plain emit-mode registration — no `prepend`, no `next()`.
-  // The dispatch gate is NOT modified by the decoration (exec args are
-  // deep-frozen; persona never flows through call args). `ctx.events.on`
-  // (the untyped `EventsService.on` — same registration path as the
-  // mixined `ctx.on`) because `subagent/start` is declared by
-  // `@deepseek-ai/dsh-subagent`, which this plugin deliberately does not
-  // depend on — the payload is consumed structurally.
-  ctx.events.on('subagent/start', (info: SubagentRunInfoView) => {
-    // Adoption advisory decision point: the loader has settled by the first
-    // dispatch, so an advisory skipped at apply (fallbacks row mounted after
-    // dsh) runs its ONE pass here instead — never more than once per apply.
+  // Native-first role-persona channel (plan
+  // `20260831-dsh-alpha2-optional-fallbacks` Task 3): an `internal/get`
+  // waterfall listener wraps `ctx.subagents` reads so a role-matched start
+  // — one-shot `start` AND the opt-in continuable `startContinuable` —
+  // merges the persona into the request's NATIVE `persona` slot
+  // (`@deepseek-ai/dsh-subagent` `SubagentStartRequest.persona` — the
+  // service composes it as the scoped shadowing `deployment:persona`
+  // section, persists it in the child descriptor, and reapplies it on
+  // resume). The additive `mstar:role-persona` system-prompt section is
+  // GONE. The underlying `SubagentRuntime` object is never mutated; the
+  // listener is owned by this fiber (HMR-safe). Persona delivery is
+  // fallbacks-independent and capability-gated — see `role-persona.ts`.
+  registerRolePersonaChannel(ctx, config)
+
+  // Adoption-advisory decision point — `subagent/start` emit (plan
+  // `20260814-dsh-fallbacks-integration` Task 2, listener narrowed by Task 3
+  // to the advisory only): the loader has settled by the first dispatch, so
+  // an advisory skipped at apply (fallbacks row mounted after dsh) runs its
+  // ONE pass here instead — never more than once per apply. The payload is
+  // not consumed (persona delivery no longer rides this seam).
+  ctx.events.on('subagent/start', () => {
     runAdvisoryPass()
-    decorateSubagentStart(ctx, config, info)
   })
 
   // Engine-status catalog — advisory `agent/pre-step` waterfall listener

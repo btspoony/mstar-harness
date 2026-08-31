@@ -35,7 +35,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { FsTarget } from '@deepseek-ai/dsh-fs'
-import type { CallId } from '@deepseek-ai/dsh-llm'
+import type { ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { PreToolDecision, ToolExecution, ToolExecutionResult, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
@@ -72,7 +72,7 @@ function fixture(rel: string): string {
 /* --------------------------------- helpers --------------------------------- */
 
 /** Branded call identity for registry executes. */
-const callId = 'e2e-session.spec' as CallId
+const callId = 'e2e-session.spec' as ToolCallId
 /** Test signal (never aborted). */
 const signal = new AbortController().signal
 

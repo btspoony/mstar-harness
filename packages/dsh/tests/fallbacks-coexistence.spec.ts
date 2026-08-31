@@ -158,7 +158,7 @@ function ctxWithService(service: SeedRegistryFake, cfg: Record<string, unknown>)
   return ctx
 }
 
-/** Capture advisory logs through the module sink (decoration test pattern). */
+/** Capture advisory logs through the module sink (role-persona test pattern). */
 function captureAdvisoryLogs(): { captured: Array<[AdvisoryLogLevel, string]>; restore: () => void } {
   const captured: Array<[AdvisoryLogLevel, string]> = []
   const prior = setAdvisoryLogger((level, message) => { captured.push([level, message]) })

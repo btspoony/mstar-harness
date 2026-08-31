@@ -1,8 +1,8 @@
 /**
  * Data hook for the workflow panel (spec §5): subscribes to the active
- * session's conversation snapshot through the session standard kit
- * (`useSession`, a uSES selector hook) and scans the log for the latest
- * `mstar-engine-status` catalog row.
+ * session's conversation log through the session standard kit's chat target
+ * (`useChat`, a uSES selector hook over the `chat` conversation view target)
+ * and scans the log for the latest `mstar-engine-status` catalog row.
  *
  * Node discriminator (spec §2.4): `kind === 'context'` + `form === 'catalog'`
  * + `source.kind === 'mstar-engine-status'`; the LATEST row wins (snapshot
@@ -19,7 +19,8 @@
  * slot normally guarantees a session — the guard is belt-and-suspenders).
  */
 
-import type { ConversationNode, ConversationSnapshot, ContextMessageNode } from '@deepseek-ai/dsh-client-runtime/client'
+import type { ConversationNode, ContextMessageNode } from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type { ChatSnapshot } from '@deepseek-ai/dsh-client-ui-chat/client'
 import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
 import type { MstarEngineStatusSource } from '../../types.ts'
 
@@ -54,9 +55,9 @@ function sameView(a: MstarEngineStatusView, b: MstarEngineStatusView): boolean {
  * Degradation: any snapshot the selection cannot read yields the empty view
  * (never a throw — spec §5).
  */
-function selectEngineStatus(snapshot: ConversationSnapshot): MstarEngineStatusView {
+function selectEngineStatus(snapshot: ChatSnapshot): MstarEngineStatusView {
   try {
-    const row = latestEngineStatusRow(snapshot.nodes)
+    const row = latestEngineStatusRow(snapshot.legacy.nodes)
     if (row === null) return EMPTY
     // `kind` discrimination is the only narrowing the client does; field-level
     // degradation happens at render time (spec §2.4).
@@ -67,10 +68,10 @@ function selectEngineStatus(snapshot: ConversationSnapshot): MstarEngineStatusVi
 }
 
 /**
- * `useMstarEngineStatus(useSession): MstarEngineStatusView` — the panel's data
- * hook (spec §5). The session standard kit's `useSession` is passed in (the
+ * `useMstarEngineStatus(useChat): MstarEngineStatusView` — the panel's data
+ * hook (spec §5). The session standard kit's `useChat` is passed in (the
  * view ring hands it to every `conversation.view` entry); the hook rides it as
- * a selector over the conversation snapshot, so a snapshot bump (new catalog
+ * a selector over the chat target snapshot, so a snapshot bump (new catalog
  * row) re-runs the selection and refreshes the panel.
  *
  * The hook never throws (spec §5 degradation path; Task 3 contract): a
@@ -78,9 +79,9 @@ function selectEngineStatus(snapshot: ConversationSnapshot): MstarEngineStatusVi
  * signal instead of bubbling a crash — the strict-session slot normally
  * guarantees a session, the guard is belt-and-suspenders.
  */
-export function useMstarEngineStatus(useSession: SnapshotSelectorHook<ConversationSnapshot>): MstarEngineStatusView {
+export function useMstarEngineStatus(useChat: SnapshotSelectorHook<ChatSnapshot>): MstarEngineStatusView {
   try {
-    const view = useSession(selectEngineStatus, sameView)
+    const view = useChat(selectEngineStatus, sameView)
     // Absent session face → explicit empty signal (spec §3 maps the no-session
     // case to the shell; this guard keeps the panel from crashing regardless).
     return view ?? EMPTY

@@ -22,9 +22,12 @@ import { readFileSync } from 'node:fs'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
-import type { ConversationNode, ConversationSnapshot, SessionId } from '@deepseek-ai/dsh-client-runtime/client'
+import type { ConversationNode } from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type { ChatSnapshot } from '@deepseek-ai/dsh-client-ui-chat/client'
+import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
+import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import { clientExports } from './client-bundles.ts'
 import { Context } from '@deepseek-ai/cordis'
 import type { MstarEngineStatusSource } from '../src/types'
@@ -32,14 +35,12 @@ import type { EnforcementSource } from '@mstar-harness/engine'
 import { en, NS, zh } from '../src/client/panel/locale'
 import { PanelView } from '../src/client/panel/PanelView'
 
-// The REAL client service values — loaded from the browser bundles through the
-// loader shim (tests/client-bundles.ts).
+// The REAL client service values — the store is a plain Node-ESM module
+// (direct import); LocaleRuntime is a cordis service loaded from the browser
+// bundle through the loader shim (tests/client-bundles.ts).
 type LocaleClientExports = typeof import('@deepseek-ai/dsh-client-locale/client')
 const { LocaleRuntime: LocaleRuntimeCtor } = clientExports('@deepseek-ai/dsh-client-locale') as unknown as
   Pick<LocaleClientExports, 'LocaleRuntime'>
-type RuntimeClientExports = typeof import('@deepseek-ai/dsh-client-runtime/client')
-const { createSnapshotStore } = clientExports('@deepseek-ai/dsh-client-runtime') as unknown as
-  Pick<RuntimeClientExports, 'createSnapshotStore'>
 
 /** One real LocaleRuntime over a fresh cordis context. */
 function newLocale(): LocaleRuntime {
@@ -92,23 +93,22 @@ const harnessSource: MstarEngineStatusSource = {
 function kitProps(overrides?: Partial<ConvViewProps>): ConvViewProps {
   return {
     sessionId: 's-1' as SessionId,
-    useSession: (() => null) as never,
-    useProjection: (() => null) as never,
-    useSessions: (() => null) as never,
+    useChat: (() => null) as never,
+    useConversation: (() => null) as never,
     useWorkspaces: (() => null) as never,
     ...overrides,
   } as unknown as ConvViewProps
 }
 
 /** Plain selector binding over the stub snapshot store (dev-time twin of the real uSES binding). */
-function bindUseSession(store: { getSnapshot(): ConversationSnapshot }): SnapshotSelectorHook<ConversationSnapshot> {
-  return function useSelector<S>(sel: (s: ConversationSnapshot) => S): S {
+function bindUseChat(store: { getSnapshot(): ChatSnapshot }): SnapshotSelectorHook<ChatSnapshot> {
+  return function useSelector<S>(sel: (s: ChatSnapshot) => S): S {
     return sel(store.getSnapshot())
   }
 }
 
-/** Build a conversation snapshot carrying the fixture source as the newest catalog row (spec §5 data path). */
-function snapshotFor(source: MstarEngineStatusSource | null, lastUpdated: number | null): ConversationSnapshot {
+/** Build a chat-target snapshot carrying the fixture source as the newest catalog row (spec §5 data path). */
+function snapshotFor(source: MstarEngineStatusSource | null, lastUpdated: number | null): ChatSnapshot {
   const nodes: ConversationNode[] = [
     { kind: 'user', seq: 1, time: 1_719_999_000_000, content: [], source: null },
   ]
@@ -123,16 +123,17 @@ function snapshotFor(source: MstarEngineStatusSource | null, lastUpdated: number
     } as unknown as ConversationNode)
   }
   return {
-    sessionId: 's-1' as SessionId,
-    nodes,
-    running: false,
-    openState: 'open',
-    composerPhase: 'active',
-    blank: false,
-  } as unknown as ConversationSnapshot
+    legacy: {
+      nodes,
+      turnTimings: new Map(),
+      turnEnds: new Map(),
+      partial: null,
+      runningCalls: [],
+    },
+  } as unknown as ChatSnapshot
 }
 
-/** Render the panel to static HTML through the real data path: snapshot store → useSession → hook → PanelView. */
+/** Render the panel to static HTML through the real data path: snapshot store → useChat → hook → PanelView. */
 function panelHtml(
   source: MstarEngineStatusSource | null,
   lang: 'en' | 'zh' = 'en',
@@ -143,7 +144,7 @@ function panelHtml(
   locale.setLocale(lang)
   const store = createSnapshotStore(snapshotFor(source, lastUpdated))
   return renderToStaticMarkup(createElement(PanelView, {
-    ...kitProps({ useSession: bindUseSession(store) }),
+    ...kitProps({ useChat: bindUseChat(store) }),
     t: locale.bind(NS),
   }))
 }

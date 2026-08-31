@@ -1,6 +1,6 @@
 /**
  * Task 3 — persona defaults from the bundled `harness-agents/` mirror (plan
- * `20260815-dsh-fallbacks-personas`): `personaFor` is the decoration's single
+ * `20260815-dsh-fallbacks-personas`): `personaFor` is the persona channel's single
  * lookup — `Config.rolePersonas[role]` wins, then the mirror default (shell
  * file stem = role id; frontmatter `description` block scalar; the shell is
  * eligible when frontmatter `mode` is absent or `subagent`), with a
@@ -44,7 +44,7 @@ async function seedShell(roleId: string, frontmatter: string[]): Promise<void> {
   await writeFile(join(mirror, `${roleId}.md`), shell(frontmatter))
 }
 
-describe('personaFor — the decoration single lookup (config → mirror default → undefined)', () => {
+describe('personaFor — the channel single lookup (config → mirror default → undefined)', () => {
   it('(a) config persona wins over the mirror default', async () => {
     await seedShell(ROLE, ['description: |-', '  Mirror default text.', 'mode: subagent'])
     const result = personaFor(ROLE, { rolePersonas: { [ROLE]: CONFIG_PERSONA }, agentsDir: mirror })
@@ -75,7 +75,7 @@ describe('personaFor — the decoration single lookup (config → mirror default
     // No mirror at all → the lookup is config-only.
     expect(personaFor(ROLE, { agentsDir: undefined })).toBeUndefined()
     expect(personaFor(ROLE, { rolePersonas: undefined })).toBeUndefined()
-    // An empty-string configured persona is treated as absent (decoration parity).
+    // An empty-string configured persona is treated as absent (channel parity).
     expect(personaFor('qa-engineer', { rolePersonas: { 'qa-engineer': '' }, agentsDir: mirror })).toBeUndefined()
   })
 

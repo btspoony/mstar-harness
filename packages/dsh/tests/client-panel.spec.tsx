@@ -28,8 +28,8 @@
  * - partial source degradation: missing version → `unknown`;
  *   null knowledge / empty lists → `none` without crashing;
  * - data wiring (Task 3, spec §5): the component reads the catalog row
- *   through `useMstarEngineStatus(useSession)` — the fixture source rides a
- *   stub conversation snapshot (`createSnapshotStore`), and a snapshot bump
+ *   through `useMstarEngineStatus(useChat)` — the fixture source rides a
+ *   stub chat-target snapshot (`createSnapshotStore`), and a snapshot bump
  *   (new catalog row) re-renders the panel with fresh data + freshness;
  * - plugin entry: `apply(ctx)` registers the `mstar-panel` dictionaries and
  *   the `conversation.view` tab (`id: 'mstar-workflow'`, `order: 20`,
@@ -96,8 +96,12 @@ import { readFileSync } from 'node:fs'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
-import type { ClientContext, ConversationNode, ConversationSnapshot, SessionId, SlotRegistry } from '@deepseek-ai/dsh-client-runtime/client'
+import type { ConversationNode } from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type { ChatSnapshot } from '@deepseek-ai/dsh-client-ui-chat/client'
+import type { SessionId } from '@deepseek-ai/dsh-session'
+import type { SlotRegistry } from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
+import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import { resolveSlotLabel } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { clientExports } from './client-bundles.ts'
@@ -119,11 +123,12 @@ import {
   type PanState,
 } from '../src/client/panel/pages/AgentCanvasPage'
 
-// The REAL client service values — loaded from the browser bundles through the
-// loader shim; SlotRegistry / LocaleRuntime are cordis services (ctx).
-type RuntimeClientExports = typeof import('@deepseek-ai/dsh-client-runtime/client')
-const { createSnapshotStore, SlotRegistry: SlotRegistryCtor } = clientExports('@deepseek-ai/dsh-client-runtime') as unknown as
-  Pick<RuntimeClientExports, 'createSnapshotStore' | 'SlotRegistry'>
+// The REAL client service values — the store is a plain Node-ESM module
+// (direct import); SlotRegistry / LocaleRuntime are cordis services loaded
+// from the browser bundles through the loader shim (ctx).
+type RendererClientExports = typeof import('@deepseek-ai/dsh-client-ui-renderer/client')
+const { SlotRegistry: SlotRegistryCtor } = clientExports('@deepseek-ai/dsh-client-ui-renderer') as unknown as
+  Pick<RendererClientExports, 'SlotRegistry'>
 type LocaleClientExports = typeof import('@deepseek-ai/dsh-client-locale/client')
 const { LocaleRuntime: LocaleRuntimeCtor } = clientExports('@deepseek-ai/dsh-client-locale') as unknown as
   Pick<LocaleClientExports, 'LocaleRuntime'>
@@ -285,9 +290,8 @@ const degradedSource = {
 function kitProps(overrides?: Partial<ConvViewProps>): ConvViewProps {
   return {
     sessionId: 's-1' as SessionId,
-    useSession: (() => null) as never,
-    useProjection: (() => null) as never,
-    useSessions: (() => null) as never,
+    useChat: (() => null) as never,
+    useConversation: (() => null) as never,
     useWorkspaces: (() => null) as never,
     ...overrides,
   } as unknown as ConvViewProps
@@ -299,14 +303,14 @@ function kitProps(overrides?: Partial<ConvViewProps>): ConvViewProps {
  * to the store's current snapshot; a `store.set` bump is picked up on the next
  * render, mirroring the snapshot-bump refresh semantics (spec §5).
  */
-function bindUseSession(store: { getSnapshot(): ConversationSnapshot }): SnapshotSelectorHook<ConversationSnapshot> {
-  return function useSelector<S>(sel: (s: ConversationSnapshot) => S): S {
+function bindUseChat(store: { getSnapshot(): ChatSnapshot }): SnapshotSelectorHook<ChatSnapshot> {
+  return function useSelector<S>(sel: (s: ChatSnapshot) => S): S {
     return sel(store.getSnapshot())
   }
 }
 
-/** Build a conversation snapshot carrying the fixture source as the newest catalog row (spec §5 data path). */
-function snapshotFor(source: MstarEngineStatusSource | null, lastUpdated: number | null): ConversationSnapshot {
+/** Build a chat-target snapshot carrying the fixture source as the newest catalog row (spec §5 data path). */
+function snapshotFor(source: MstarEngineStatusSource | null, lastUpdated: number | null): ChatSnapshot {
   const nodes: ConversationNode[] = [
     { kind: 'user', seq: 1, time: 1_719_999_000_000, content: [], source: null },
   ]
@@ -321,16 +325,17 @@ function snapshotFor(source: MstarEngineStatusSource | null, lastUpdated: number
     } as unknown as ConversationNode)
   }
   return {
-    sessionId: 's-1' as SessionId,
-    nodes,
-    running: false,
-    openState: 'open',
-    composerPhase: 'active',
-    blank: false,
-  } as unknown as ConversationSnapshot
+    legacy: {
+      nodes,
+      turnTimings: new Map(),
+      turnEnds: new Map(),
+      partial: null,
+      runningCalls: [],
+    },
+  } as unknown as ChatSnapshot
 }
 
-/** Render the panel to static HTML through the real data path: snapshot store → useSession → hook → PanelView (default copy pinned to en). */
+/** Render the panel to static HTML through the real data path: snapshot store → useChat → hook → PanelView (default copy pinned to en). */
 function panelHtml(
   source: MstarEngineStatusSource | null,
   locale: LocaleRuntime = newLocale(),
@@ -341,7 +346,7 @@ function panelHtml(
   locale.setLocale(lang)
   const store = createSnapshotStore(snapshotFor(source, lastUpdated))
   return renderToStaticMarkup(createElement(PanelView, {
-    ...kitProps({ useSession: bindUseSession(store) }),
+    ...kitProps({ useChat: bindUseChat(store) }),
     t: locale.bind(NS),
   }))
 }
@@ -635,26 +640,27 @@ describe('workflow panel — FAIL gate verdict and zh body (spec §2.2, §4.3)',
 
 describe('workflow panel — data wiring through the hook (spec §5)', () => {
   /** Render the panel against a live snapshot store (real PanelView + useMstarEngineStatus path). */
-  function renderAgainst(store: { getSnapshot(): ConversationSnapshot }, locale: LocaleRuntime): string {
+  function renderAgainst(store: { getSnapshot(): ChatSnapshot }, locale: LocaleRuntime): string {
     return renderToStaticMarkup(createElement(PanelView, {
-      ...kitProps({ useSession: bindUseSession(store) }),
+      ...kitProps({ useChat: bindUseChat(store) }),
       t: locale.bind(NS),
     }))
   }
 
   it('renders the LATEST catalog row when the snapshot carries several (spec §2.4)', () => {
-    const store = createSnapshotStore<ConversationSnapshot>({
-      sessionId: 's-1' as SessionId,
-      nodes: [
-        { kind: 'user', seq: 1, time: 1_719_999_000_000, content: [], source: null },
-        { kind: 'context', seq: 2, time: 1_720_000_000_000, content: [], source: { ...fullSource, version: '2.0.3' }, form: 'catalog' } as unknown as ConversationNode,
-        { kind: 'context', seq: 4, time: 1_720_001_000_000, content: [], source: fullSource, form: 'catalog' } as unknown as ConversationNode,
-      ],
-      running: false,
-      openState: 'open',
-      composerPhase: 'active',
-      blank: false,
-    } as unknown as ConversationSnapshot)
+    const store = createSnapshotStore<ChatSnapshot>({
+      legacy: {
+        nodes: [
+          { kind: 'user', seq: 1, time: 1_719_999_000_000, content: [], source: null },
+          { kind: 'context', seq: 2, time: 1_720_000_000_000, content: [], source: { ...fullSource, version: '2.0.3' }, form: 'catalog' } as unknown as ConversationNode,
+          { kind: 'context', seq: 4, time: 1_720_001_000_000, content: [], source: fullSource, form: 'catalog' } as unknown as ConversationNode,
+        ],
+        turnTimings: new Map(),
+        turnEnds: new Map(),
+        partial: null,
+        runningCalls: [],
+      },
+    } as unknown as ChatSnapshot)
     const locale = newLocale()
     locale.register(NS, { zh, en })
     locale.setLocale('en')
@@ -687,8 +693,8 @@ describe('workflow panel — data wiring through the hook (spec §5)', () => {
 
 describe('workflow panel — plugin entry registers locale + conversation.view tab (spec §4)', () => {
   /** Real cordis context over the real services (slots + locale + sessions faces). */
-  function makeCtx(): { ctx: ClientContext; slots: SlotRegistry; locale: LocaleRuntime } {
-    const ctx = new Context() as unknown as ClientContext
+  function makeCtx(): { ctx: Context; slots: SlotRegistry; locale: LocaleRuntime } {
+    const ctx = new Context()
     const slots = new SlotRegistryCtor(ctx)
     const locale = new LocaleRuntimeCtor(ctx)
     // LocaleRuntime is a plain class (not a cordis Service) — attach the
@@ -1764,12 +1770,12 @@ describe('workflow panel — T7 data projection integration (spec panel-tabs §3
   const html = panelHtml(fullSource)
 
   /** Render the panel against a live snapshot store (same helper shape as the data-wiring block). */
-  function renderStore(store: { getSnapshot(): ConversationSnapshot }, lang: 'en' | 'zh' = 'en'): string {
+  function renderStore(store: { getSnapshot(): ChatSnapshot }, lang: 'en' | 'zh' = 'en'): string {
     const locale = newLocale()
     locale.register(NS, { zh, en })
     locale.setLocale(lang)
     return renderToStaticMarkup(createElement(PanelView, {
-      ...kitProps({ useSession: bindUseSession(store) }),
+      ...kitProps({ useChat: bindUseChat(store) }),
       t: locale.bind(NS),
     }))
   }

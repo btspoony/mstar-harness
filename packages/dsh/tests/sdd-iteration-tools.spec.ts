@@ -15,7 +15,7 @@ import { describe, expect, it, afterEach } from 'bun:test'
 import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { CallId } from '@deepseek-ai/dsh-llm'
+import type { ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { ToolCallView, ToolExecutionResult } from '@deepseek-ai/dsh-tools'
 import { bootApp, seedHarness, valueOf, v2RootWithWorkflow, v2SnapshotWithPlans, v2Register, v2ResidualEntry, type BootResult } from './harness.ts'
 
@@ -27,7 +27,7 @@ afterEach(async () => {
 })
 
 /** Branded call identity for registry executes. */
-const callId = 'sdd-iteration-tools.spec' as CallId
+const callId = 'sdd-iteration-tools.spec' as ToolCallId
 /** Test signal (never aborted). */
 const signal = new AbortController().signal
 

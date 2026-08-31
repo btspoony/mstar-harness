@@ -6,7 +6,7 @@
  * and the autonomous loop is bounded.
  *
  * The goals service is consumed STRUCTURALLY over `ctx.get('goals')` (no new
- * peer dependency — the decoration's structural-cast precedent; the service
+ * peer dependency — the persona channel's structural-cast precedent; the service
  * is agent-scoped: every method takes `(agent, …)`). The bridge resolves the
  * per-workspace `{HARNESS_DIR}` via the shared resolver, scans for the
  * steering iteration compass (`status: active|locked` — resolveCompassEnforcement
@@ -510,7 +510,7 @@ export function rootAgentOf(agent: unknown, agents: AgentsView): unknown | undef
  * Register the goal bridge: an `agent/session-start` listener (root filter
  * inside the mirror — root and children alike fire, `runtime-types.ts:217`)
  * plus a decision-point re-evaluation on `subagent/start` (the existing
- * decision point — index.ts decoration slot), resolving the delegating ROOT
+ * decision point — index.ts advisory slot), resolving the delegating ROOT
  * via the `parentSession` walk — the two mirror edges are idempotent (get +
  * compare when the mirror is in place — no churn) — plus a THIRD, advisory
  * listener on the `session/event` firehose (Task 3): a `goal/change`

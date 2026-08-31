@@ -14,9 +14,9 @@
  *   drift (removal, rename, or accidental addition);
  * - type layer (enforced by `typecheck:tests` — `bunx tsc --noEmit -p
  *   tests/tsconfig.json`): the exact VALUE export namespace (`keyof typeof
- *   entry` vs the frozen 28-name value union — type-only names never appear
+ *   entry` vs the frozen 31-name value union — type-only names never appear
  *   on the module namespace object, so a `keyof` union cannot carry them),
- *   the 19 type-only names pinned individually (`EntryTypes.X` probes — each
+ *   the 25 type-only names pinned individually (`EntryTypes.X` probes — each
  *   reference fails typecheck if the export disappears), plus the cordis
  *   `Context` / `Events` augmentation probes.
  *
@@ -44,23 +44,27 @@ import type * as EntryTypes from '../src/index.ts'
 const FROZEN_VALUE_EXPORTS = [
   // Deliberate addition for plan `20260815-dsh-fallbacks-personas` Task 4:
   // the warn-only adoption advisory surface (logger label, the one-pass
-  // entry, and the apply-bound sink setter — mirror of the decoration's
+  // entry, and the apply-bound sink setter — mirror of the role-persona
   // logger pattern).
   'ADVISORY_LOGGER',
   'AGENT_FLOW_FILE',
   'AGENT_FLOW_MAX_EVENTS',
   'Config',
-  'DECORATION_LOGGER',
   'DshHostAdapter',
   'DshMstar',
   'HarnessResolver',
-  'PERSONA_SECTION_NAME',
-  'PERSONA_SECTION_ORDER',
+  // Deliberate replacement for plan `20260831-dsh-alpha2-optional-fallbacks`
+  // Task 3: the native persona-channel surface (logger label, the channel
+  // registration, and the apply-bound sink/mirror setters) replaces the
+  // removed `subagent/start` decoration exports (DECORATION_LOGGER,
+  // PERSONA_SECTION_NAME, PERSONA_SECTION_ORDER, decorateSubagentStart,
+  // setDecorationAgentsDir, setDecorationLogger).
+  'ROLE_PERSONA_LOGGER',
   'SETTLE_SEAM',
   'SeamVetoError',
   'SkillLintVetoError',
   'apply',
-  'decorateSubagentStart',
+  'registerRolePersonaChannel',
   'inject',
   'lintAuditWrite',
   'lintCompoundWrite',
@@ -78,12 +82,14 @@ const FROZEN_VALUE_EXPORTS = [
   // the ledger plan's record path; the `workflow-verdict` kind).
   'recordWorkflowVerdict',
   'runFallbacksAdvisory',
-  // Deliberate addition for plan `20260815-dsh-fallbacks-personas` Task 3:
-  // the persona-defaults mirror-root binding (mirror of setDecorationLogger
-  // — apply binds it, tests restore it).
+  // Deliberate replacement for plan `20260831-dsh-alpha2-optional-fallbacks`
+  // Task 3: the persona-defaults mirror-root binding and the channel log
+  // sink (apply binds both; tests restore them) — `setRolePersonaAgentsDir`
+  // + `setRolePersonaLogger` replace `setDecorationAgentsDir` +
+  // `setDecorationLogger`.
   'setAdvisoryLogger',
-  'setDecorationAgentsDir',
-  'setDecorationLogger',
+  'setRolePersonaAgentsDir',
+  'setRolePersonaLogger',
   'skillLocalConfig',
 ] as const
 
@@ -95,8 +101,14 @@ const FROZEN_TYPE_ONLY_EXPORTS = [
   'AgentFlowEventView',
   'AgentFlowSummaryRow',
   'AgentFlowView',
-  'DecorationLogLevel',
-  'DecorationLogSink',
+  // Deliberate replacement for plan `20260831-dsh-alpha2-optional-fallbacks`
+  // Task 3: the native persona-channel vocabulary (log levels/sink + the
+  // structural runtime/request views) replaces the removed decoration types
+  // (DecorationLogLevel, DecorationLogSink, SubagentRunInfoView).
+  'RolePersonaLogLevel',
+  'RolePersonaLogSink',
+  'SubagentStartRequestView',
+  'SubagentsServiceView',
   'DispatchGateAdvisory',
   'DispatchVerdict',
   'DshHostAdapterOptions',
@@ -109,7 +121,6 @@ const FROZEN_TYPE_ONLY_EXPORTS = [
   'SettleOutcome',
   'SkillLintAdvisory',
   'StatusGateAdvisory',
-  'SubagentRunInfoView',
   // Deliberate additions for plan `20260815-dsh-workflow-gate` Task 4: the
   // `workflow-verdict` ledger vocabulary (verdict + mode + record input —
   // the adapter's public `recordWorkflowVerdict` method types).
@@ -124,8 +135,8 @@ type Assert<T extends true> = T
  * Exact VALUE export-namespace identity: `keyof typeof entry` exposes only the
  * runtime-visible (value) exports — type-only exports never appear on the
  * module namespace object, so they cannot join a `keyof` union. The exact-set
- * check therefore runs against the frozen VALUE names (28, `Config` once),
- * and the 19 type-only names are pinned individually by the `EntryTypes.X`
+ * check therefore runs against the frozen VALUE names (31, `Config` once),
+ * and the 25 type-only names are pinned individually by the `EntryTypes.X`
  * probes below (each reference fails typecheck if the export disappears).
  * Fails typecheck on ANY value-export drift — removal, rename, or addition.
  */
@@ -160,8 +171,8 @@ describe('src/index.ts export surface (frozen — plan 20260810-dsh-entry-split 
       AgentFlowEventView: null as unknown as EntryTypes.AgentFlowEventView,
       AgentFlowSummaryRow: null as unknown as EntryTypes.AgentFlowSummaryRow,
       AgentFlowView: null as unknown as EntryTypes.AgentFlowView,
-      DecorationLogLevel: null as unknown as EntryTypes.DecorationLogLevel,
-      DecorationLogSink: null as unknown as EntryTypes.DecorationLogSink,
+      RolePersonaLogLevel: null as unknown as EntryTypes.RolePersonaLogLevel,
+      RolePersonaLogSink: null as unknown as EntryTypes.RolePersonaLogSink,
       DispatchGateAdvisory: null as unknown as EntryTypes.DispatchGateAdvisory,
       DispatchVerdict: null as unknown as EntryTypes.DispatchVerdict,
       DshHostAdapterOptions: null as unknown as EntryTypes.DshHostAdapterOptions,
@@ -174,7 +185,8 @@ describe('src/index.ts export surface (frozen — plan 20260810-dsh-entry-split 
       SettleOutcome: null as unknown as EntryTypes.SettleOutcome,
       SkillLintAdvisory: null as unknown as EntryTypes.SkillLintAdvisory,
       StatusGateAdvisory: null as unknown as EntryTypes.StatusGateAdvisory,
-      SubagentRunInfoView: null as unknown as EntryTypes.SubagentRunInfoView,
+      SubagentStartRequestView: null as unknown as EntryTypes.SubagentStartRequestView,
+      SubagentsServiceView: null as unknown as EntryTypes.SubagentsServiceView,
       WorkflowGateMode: null as unknown as EntryTypes.WorkflowGateMode,
       WorkflowVerdict: null as unknown as EntryTypes.WorkflowVerdict,
       WorkflowVerdictInput: null as unknown as EntryTypes.WorkflowVerdictInput,

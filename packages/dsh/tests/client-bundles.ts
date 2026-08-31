@@ -2,7 +2,7 @@
  * Loader shim for the REAL dsh client packages' browser bundles in the bun
  * test runtime.
  *
- * The real `@deepseek-ai/dsh-client-runtime/client` and
+ * The real `@deepseek-ai/dsh-client-ui-renderer/client` and
  * `@deepseek-ai/dsh-client-locale/client` subpath entries are
  * `window.__ModuleLoader__.load({ id, factory })` BROWSER bundles (the dsh
  * web loader module-table format) — they are not Node/bun ESM modules, so a
@@ -57,7 +57,7 @@ if ((globalThis as unknown as Record<string, unknown>).localStorage === undefine
 
 /**
  * Execute one captured browser bundle factory with the resolve shim. The
- * bundles declare their PACKAGE id (`@deepseek-ai/dsh-client-runtime`,
+ * bundles declare their PACKAGE id (`@deepseek-ai/dsh-client-ui-renderer`,
  * `@deepseek-ai/dsh-client-locale`) — the same keys the dsh web loader's
  * module table uses — not the `/client` subpath.
  */
@@ -78,5 +78,5 @@ function bundleRequire(id: string): unknown {
 
 // Self-registering browser bundles (the /client subpath files run
 // `window.__ModuleLoader__.load(...)` at import time).
-await import('@deepseek-ai/dsh-client-runtime/client')
+await import('@deepseek-ai/dsh-client-ui-renderer/client')
 await import('@deepseek-ai/dsh-client-locale/client')

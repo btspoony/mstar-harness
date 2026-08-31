@@ -46,7 +46,7 @@ const pkg = JSON.parse(readFileSync(join(PKG_DIR, 'package.json'), 'utf8')) as R
 
 /** The inject faces the boot graph wires as edges — documented contract (plan Task 1). */
 const EXPECTED_INJECT = [
-  '@deepseek-ai/dsh-client-runtime',
+  '@deepseek-ai/dsh-client-store',
   '@deepseek-ai/dsh-client-ui-conversation',
   '@deepseek-ai/dsh-client-locale',
 ]

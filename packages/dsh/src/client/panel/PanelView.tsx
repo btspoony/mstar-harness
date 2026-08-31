@@ -4,7 +4,7 @@
  *
  * Inputs: the session standard kit (`ConvViewProps`) and the typed `t` seat
  * (`locale: 'mstar-panel'`). The catalog row + message time come from the
- * `useMstarEngineStatus()` hook riding the kit's `useSession` selector (spec
+ * `useMstarEngineStatus()` hook riding the kit's `useChat` selector (spec
  * §5) — the render body is a pure function of (source, lastUpdated, t).
  *
  * Layout (spec panel-tabs §2, plan 20260811-panel-tabs-shell): root grid
@@ -92,8 +92,8 @@ export function PanelContent({ tab, source, t }: PanelContentProps) {
   return <IterationTaskPage view={projectGraph(source)} t={t} />
 }
 
-export function PanelView({ t, useSession }: MstarPanelViewProps) {
-  const { source, lastUpdated } = useMstarEngineStatus(useSession)
+export function PanelView({ t, useChat }: MstarPanelViewProps) {
+  const { source, lastUpdated } = useMstarEngineStatus(useChat)
   // Tab state (spec §6.2): local, default 'tasks' (D1), no routing. Called
   // before every early return (hooks rule) — the empty branches never render
   // the tab nav.

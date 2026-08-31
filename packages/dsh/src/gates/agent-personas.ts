@@ -1,12 +1,12 @@
 /**
  * Role-persona defaults from the packaged `harness-agents/` mirror (plan
- * `20260815-dsh-fallbacks-personas` Task 3) — the subagent decoration's
- * single lookup surface.
+ * `20260815-dsh-fallbacks-personas` Task 3) — the native subagent persona
+ * channel's single lookup surface.
  *
  * Lookup chain: `Config.rolePersonas[roleId]` wins; a mirror shell whose
  * file stem equals the role id (`<agentsDir>/<roleId>.md`) supplies the
  * default persona from its frontmatter `description` block scalar; nothing
- * else → undefined (decoration skips). A shell is eligible when its
+ * else → undefined (the channel skips). A shell is eligible when its
  * frontmatter `mode` is absent or `subagent` — a `primary` shell (e.g.
  * `project-manager`) is never offered as a subagent persona default.
  *
@@ -27,8 +27,8 @@
  * is the hot-path cost, and an in-place edit (mtime bump) re-extracts on
  * the next lookup, so the cache never serves stale defaults.
  *
- * Module boundary: no barrel — the decoration imports this module by
- * explicit relative path; the entry does not re-export it (the decoration
+ * Module boundary: no barrel — the persona channel imports this module by
+ * explicit relative path; the entry does not re-export it (the channel
  * is the only consumer; its public surface is `personaFor`).
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs'
@@ -59,7 +59,7 @@ export interface PersonaLookup {
   agentsDir?: string
 }
 
-/** Warn sink for extraction-time hazards (bound by the decoration to its warn channel). */
+/** Warn sink for extraction-time hazards (bound by the persona channel to its warn sink). */
 export type PersonaWarnSink = (message: string) => void
 
 /** One shell default-cache entry: the file mtime the extraction is valid for. */
@@ -77,9 +77,9 @@ interface DefaultCacheEntry {
 const defaultCache = new Map<string, DefaultCacheEntry>()
 
 /**
- * The decoration's single persona lookup: `rolePersonas[roleId]` → mirror
+ * The persona channel's single lookup: `rolePersonas[roleId]` → mirror
  * default → undefined. Pure — the mirror root is passed explicitly (the
- * decoration supplies the apply-bound packaged root; tests supply fixtures).
+ * channel supplies the apply-bound packaged root; tests supply fixtures).
  *
  * @param roleId - the mstar role id (Assignment `Execute as`).
  * @param lookup - the config override map and the mirror root.
@@ -87,8 +87,8 @@ const defaultCache = new Map<string, DefaultCacheEntry>()
  */
 export function personaFor(roleId: string, lookup: PersonaLookup, warn?: PersonaWarnSink): PersonaResult | undefined {
   const configured = lookup.rolePersonas?.[roleId]
-  // `''` parity with the decoration's pre-task config check: an empty
-  // configured persona is treated as absent (falls through to the default).
+  // An empty configured persona is treated as absent (falls through to the
+  // default — parity with the pre-channel decoration's config check).
   if (configured !== undefined && configured !== '') return { text: configured, source: 'config' }
   if (lookup.agentsDir === undefined) return undefined
   const text = defaultFromMirror(lookup.agentsDir, roleId, warn)
@@ -162,7 +162,7 @@ function defaultFromMirror(agentsDir: string, roleId: string, warn: PersonaWarnS
   if (hit !== undefined && hit.mtimeMs === stat.mtimeMs) return hit.text
   // S-004: the read is individually guarded (stat is only the cache key) — a
   // delete/perm race between stat and read degrades THIS file to undefined
-  // instead of aborting the whole decoration for the emit.
+  // instead of aborting the whole lookup for the start.
   let content: string
   try {
     content = readFileSync(file, 'utf8')

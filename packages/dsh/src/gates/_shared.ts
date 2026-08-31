@@ -92,22 +92,26 @@ export interface Config {
   /**
    * Taxonomy bridge: mstar role id → fallbacks role id (the
    * `dsh-llm-fallbacks` role taxonomy). Logging + future rule-driven
-   * interop only — NOT required for persona injection (`rolePersonas` is
-   * the decoration's only payload source). Absent → no bridge mapping.
+   * interop only — NOT required for persona delivery (`rolePersonas` is
+   * the channel's only payload source). Absent → no bridge mapping.
    */
   roleMap?: Record<string, string>
   /**
-   * mstar role id → persona text — the subagent decoration's only payload
-   * source (plan `20260814-dsh-fallbacks-integration` Task 2). A
-   * role-matched `subagent/start` registers the persona as the child's
-   * `mstar:role-persona` system-prompt section (agent-scoped on
-   * `Agent.ctx`, unwinds on disposal). Lookup is DIRECT — never gated on
-   * `roleMap` or on the fallbacks mounted state (unmounted → same
-   * injection from Config + one debug log). Absent → no decoration.
+   * mstar role id → persona text — the native persona channel's only
+   * payload source (plan `20260814-dsh-fallbacks-integration` Task 2;
+   * channel reworked onto the native `SubagentStartRequest.persona` slot by
+   * plan `20260831-dsh-alpha2-optional-fallbacks` Task 3). A role-matched
+   * one-shot start merges the persona into the request's native `persona`
+   * slot — dsh composes it as the scoped shadowing `deployment:persona`
+   * section on the child, persists it in the child descriptor, and reapplies
+   * it on resume. Lookup is DIRECT — never gated on `roleMap` or on the
+   * fallbacks mounted state (persona delivery is fallbacks-independent).
+   * Absent → no merge.
    *
-   * INTERPOLATION CONSTRAINT: dsh system-prompt renders section text with
-   * STRICT `{{variable}}` interpolation and throws on any `{{` paired with a
-   * later `}}` (unknown/malformed/undefined reference), so persona values
+   * INTERPOLATION CONSTRAINT: dsh renders persona text with STRICT
+   * `{{variable}}` interpolation (the native persona has the same template
+   * semantics as the deployment persona) and throws on any `{{` paired with
+   * a later `}}` (unknown/malformed/undefined reference), so persona values
    * MUST NOT contain that pattern — a violating persona would break child
    * prompt assembly at the child's first render, for EVERY role-matched
    * dispatch. The Config schema rejects such values at plugin mount with a
@@ -150,7 +154,8 @@ export interface Config {
  * (`renderPrompt` → `interpolate` in `@deepseek-ai/dsh-system-prompt`) scans
  * section text for `{{` and THROWS on any `{{` paired with a later `}}` in
  * the same text (unknown variable, malformed group, or undefined value).
- * Persona text lands in the `mstar:role-persona` section verbatim, so a
+ * Persona text lands in the native request `persona` slot verbatim (the
+ * same STRICT `{{...}}` template semantics as the deployment persona), so a
  * persona containing this pattern breaks child prompt assembly at the
  * child's first render — every role-matched dispatch. The Config schema
  * rejects such values at validation (plugin mount) with a clear error. The
@@ -187,7 +192,7 @@ export function stripInterpolationHazard(text: string): string {
   }
 }
 
-/** Schemastery configuration schema for the plugin consumer. Object keys are optional by default (`.optional()` is a vendored-fork addition not present in npm schemastery); omitted ARRAY keys would materialize as `[]` (schemastery empty-value default — the tool-subagent `toolFilter` pitfall) and omitted DICT keys would materialize as `{}`, so the dispatch keys and the decoration keys all preserve omission via `.default(undefined)`. */
+/** Schemastery configuration schema for the plugin consumer. Object keys are optional by default (`.optional()` is a vendored-fork addition not present in npm schemastery); omitted ARRAY keys would materialize as `[]` (schemastery empty-value default — the tool-subagent `toolFilter` pitfall) and omitted DICT keys would materialize as `{}`, so the dispatch keys and the persona keys all preserve omission via `.default(undefined)`. */
 export const Config: z<Config> = z.object({
   harnessDir: z.string(),
   enforcement: z.union(['hard', 'soft']),
@@ -224,7 +229,7 @@ export const Config: z<Config> = z.object({
   // omission via `.default(undefined)` (schemastery empty-value default
   // would materialize an omitted array as `[]` — which IS the documented
   // "every name unknown" semantics, but keep the same explicit pattern as
-  // the dispatch/decoration array keys so absence stays observable).
+  // the dispatch/persona array keys so absence stays observable).
   workflowGate: z.union(['off', 'warn', 'ask', 'hard']).default('warn'),
   workflowNames: z.array(z.string()).default(undefined as unknown as string[]),
   // Goal-bridge round cap (plan `20260816-dsh-nb2-goal-bridge` Task 2):

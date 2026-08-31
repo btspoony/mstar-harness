@@ -36,10 +36,10 @@
  * dispatch/apply flow is never affected).
  *
  * Module boundary: no barrel — the entry imports this module by explicit
- * relative path (the decoration-module pattern).
+ * relative path (the role-persona module pattern).
  */
 import type { Context } from '@deepseek-ai/cordis'
-import type { EffectiveRolesReadback, FallbacksService } from 'dsh-llm-fallbacks'
+import type { EffectiveRolesReadbackView, FallbacksServiceView } from './fallbacks-structural.ts'
 import { subagentRoleIds } from './agent-personas.ts'
 import { declareMstarSeeds, type SeedOutcomeView, type SeedsLogSink } from './fallbacks-seeds.ts'
 import { fallbacksEntry, fallbacksMounted, fallbacksService } from './fallbacks-probe.ts'
@@ -50,7 +50,7 @@ export const ADVISORY_LOGGER = 'mstar/fallbacks-advisory'
 /** Advisory log levels the module sink understands. */
 export type AdvisoryLogLevel = 'debug' | 'warn'
 
-/** Module-level advisory log sink — bound by `apply` to `ctx.logger(ADVISORY_LOGGER)` (decoration-module pattern). */
+/** Module-level advisory log sink — bound by `apply` to `ctx.logger(ADVISORY_LOGGER)` (role-persona module pattern). */
 export type AdvisoryLogSink = (level: AdvisoryLogLevel, message: string) => void
 
 let advisoryLogSink: AdvisoryLogSink = () => {}
@@ -135,7 +135,7 @@ export async function runFallbacksAdvisory(ctx: Context, agentsDir: string | und
  * single consolidated `reportDeclareOutcome` line).
  */
 async function runSeedsAdvisory(
-  service: FallbacksService,
+  service: FallbacksServiceView,
   config: Record<string, unknown>,
   agentsDir: string | undefined,
 ): Promise<boolean> {
@@ -172,7 +172,7 @@ async function runSeedsAdvisory(
   const view = await declareMstarSeeds(service, { agentsDir, log: seedsLog })
   // Readback — sync (probe semantics: a throwing readback degrades to skip +
   // one warn; the adoption state is unavailable, never guessed).
-  let readback: EffectiveRolesReadback
+  let readback: EffectiveRolesReadbackView
   try {
     readback = service.getEffectiveRoles()
   } catch (error) {
@@ -237,8 +237,8 @@ function runStructuralAdvisory(config: Record<string, unknown>, agentsDir: strin
  * Three-state report per mstar id over the effective readback + the (iv)
  * empty-persona filter (bounded: ≤1 warn per category).
  */
-function reportEffectiveState(mstarIds: string[], readback: EffectiveRolesReadback): void {
-  const byId = new Map<string, EffectiveRolesReadback['roles'][number]>()
+function reportEffectiveState(mstarIds: string[], readback: EffectiveRolesReadbackView): void {
+  const byId = new Map<string, EffectiveRolesReadbackView['roles'][number]>()
   for (const row of readback.roles) {
     const key = row.id.trim()
     // Plan QC fix wave S-byid: upstream tolerates duplicate ids (materialize

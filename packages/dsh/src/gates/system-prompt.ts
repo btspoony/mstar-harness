@@ -3,9 +3,11 @@
  * Task 2): the root session's ONE `mstar:harness-rules` pointer section plus
  * the `mstar:engine-status` runtime-context summary, both registered on the
  * GLOBAL prompt layer — visible to the root session AND every dispatched
- * child — without touching the child-scoped `mstar:role-persona` section
- * (fallbacks-decoration; distinct name, distinct layer — duplicate-name
- * throws are per name per layer, verified `scope/src/store.ts`).
+ * child — on their own names and layers (the child persona rides the NATIVE
+ * subagent persona channel since plan
+ * `20260831-dsh-alpha2-optional-fallbacks` Task 3 — no child-scoped
+ * `mstar:role-persona` section exists anymore; duplicate-name throws remain
+ * per name per layer, verified `scope/src/store.ts`).
  *
  * Content discipline:
  * - The section is a POINTER block (presence / enforcement word / resolved
@@ -52,7 +54,7 @@
  *   re-read status.json / the compass / the ledger on every prompt
  *   assembly (the catalog's documented staleness tradeoff).
  *
- * Degradation (boot is never affected — the decoration's contained-degrade
+ * Degradation (boot is never affected — the persona channel's contained-degrade
  * discipline):
  * - Structural existence check via `ctx.get('systemPrompt')` — the
  *   `ctx.get('agents')` precedent: a DIRECT `ctx.systemPrompt` property
@@ -104,7 +106,7 @@ export const ENGINE_STATUS_CONTEXT_ORDER = 100
 /** Harness-prompt log levels the module sink understands. */
 export type HarnessPromptLogLevel = 'debug' | 'warn'
 
-/** Module-level harness-prompt log sink — bound by `apply` to `ctx.logger(HARNESS_PROMPT_LOGGER)` (decoration precedent). */
+/** Module-level harness-prompt log sink — bound by `apply` to `ctx.logger(HARNESS_PROMPT_LOGGER)` (module-sink precedent). */
 export type HarnessPromptLogSink = (level: HarnessPromptLogLevel, message: string) => void
 
 let harnessPromptLogSink: HarnessPromptLogSink = () => {}
@@ -373,7 +375,7 @@ function engineStatusSummary(source: MstarEngineStatusSource): string {
   return lines.join('\n')
 }
 
-/** Best-effort human-readable message from an arbitrary thrown value (decoration `errorMessage` pattern). */
+/** Best-effort human-readable message from an arbitrary thrown value (shared `errorMessage` pattern). */
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
@@ -382,7 +384,7 @@ function log(level: HarnessPromptLogLevel, message: string): void {
   try {
     harnessPromptLogSink(level, message)
   } catch {
-    // Never-throws invariant (decoration F-002 pattern): a throwing log
+    // Never-throws invariant (plan QC F-002): a throwing log
     // sink must not escape the registration path — boot is never affected.
   }
 }
