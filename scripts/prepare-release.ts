@@ -232,14 +232,23 @@ async function bumpJsonVersion(path: string, oldV: string, newV: string): Promis
   await Bun.write(path, text.replace(re, `$1${newV}$2`));
 }
 
-async function bumpInstall(oldV: string, newV: string): Promise<void> {
+/**
+ * Bump the INSTALL.md marketplace example to `newV`. The old version is
+ * derived from INSTALL.md's own quoted `"version"` field — never from the
+ * release `current` — because after a prerelease the surfaces carry a
+ * suffixed version while INSTALL.md stays on the last stable; passing that
+ * suffixed `current` here would find no match and silently leave INSTALL.md
+ * stale (and `release:validate` would then hard-fail the stable release).
+ * Fails fast if the file or its version field is missing (validate would
+ * fail later anyway).
+ */
+async function bumpInstall(newV: string): Promise<void> {
   const text = await Bun.file(INSTALL_REF.path).text();
-  const re = new RegExp(`("version"\\s*:\\s*")${oldV.replace(/\./g, "\\.")}(")`);
-  if (!re.test(text)) {
-    console.warn(`warn: ${INSTALL_REF.path}: no quoted "version" field matching ${oldV} (skipped)`);
-    return;
+  const m = text.match(/"version"\s*:\s*"(\d+\.\d+\.\d+)"/);
+  if (!m) {
+    throw new Error(`${INSTALL_REF.path}: could not find quoted "version" field (expected X.Y.Z)`);
   }
-  await Bun.write(INSTALL_REF.path, text.replace(re, `$1${newV}$2`));
+  await Bun.write(INSTALL_REF.path, text.replace(m[0], `"version": "${newV}"`));
 }
 
 /**
@@ -318,7 +327,7 @@ async function main(): Promise<void> {
   if (isPrereleaseVersion(version)) {
     console.log(`skip: ${INSTALL_REF.path} (prerelease — stays at last stable)`);
   } else {
-    await bumpInstall(current, version);
+    await bumpInstall(version);
     console.log(`bump: ${INSTALL_REF.path}`);
   }
 
