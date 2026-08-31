@@ -63,8 +63,9 @@ jobs:
 
       - name: Resolve npm dist-tag
         id: disttag
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
         run: |
-          VERSION="${{ steps.ver.outputs.version }}"
           if [[ "$VERSION" == *-* ]]; then TAG="alpha"; else TAG="latest"; fi
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "Publishing ${VERSION} under dist-tag ${TAG}"
