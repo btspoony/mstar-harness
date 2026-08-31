@@ -31,6 +31,8 @@ The failure mode: "correct" code that is alien to the codebase — works but loo
 
 ## 2) Simplicity First
 
+**Upstream invariants**: the global engineering rules live in `mstar-harness-core`（核心研发守则）——no backward-compat layers, simplest implementation, layered growth, modularity, dependency discipline, long-term architecture; this section is their implementation-level playbook.
+
 Implement the smallest durable slice that satisfies the request and acceptance criteria.
 
 **The Ladder.** A reflex hierarchy for every decision — stop at the first rung that holds:

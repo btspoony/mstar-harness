@@ -1,6 +1,6 @@
 ---
 name: mstar-harness-core
-description: Morning Star (启明星) harness **强制全局入口** —— 信息源优先级、最小交付循环、状态机与 Done 权限、Task category 路由（含 quick 禁豁免）、@explore 边界、长任务纪律、护栏不变量、反模式索引、Morning Star Skill 索引与宿主入口。**任何**非平凡任务开始前必须先 Read 本 skill；再按角色与任务 **按需** Read 其它 `mstar-*` 专题（勿默认通读全部）。`@project-manager` 开轮必读 + `mstar-dispatch-gates` / `mstar-phase-gates` / `mstar-conventions` 等；实现/审查/QA 必读本 skill + `mstar-coding-behavior` 及角色清单（见 `mstar-roles`）。Prepare/派发/Git/residual/QC 细则在专题 skill，不在此重复。
+description: Morning Star (启明星) harness **强制全局入口** —— 信息源优先级、最小交付循环、状态机与 Done 权限、Task category 路由（含 quick 禁豁免）、@explore 边界、长任务纪律、核心研发守则、护栏不变量、反模式索引、Morning Star Skill 索引与宿主入口。**任何**非平凡任务开始前必须先 Read 本 skill；再按角色与任务 **按需** Read 其它 `mstar-*` 专题（勿默认通读全部）。`@project-manager` 开轮必读 + `mstar-dispatch-gates` / `mstar-phase-gates` / `mstar-conventions` 等；实现/审查/QA 必读本 skill + `mstar-coding-behavior` 及角色清单（见 `mstar-roles`）。Prepare/派发/Git/residual/QC 细则在专题 skill，不在此重复。
 ---
 
 # Morning Star Harness Core（启明星核心）
@@ -120,6 +120,18 @@ Read **`mstar-host`** after this skill; detect host per its table, then Read the
 | Codex | plugin skills、sandbox/apply_patch/tool discovery；无 invoke 工具时不声称 subagent dispatch → `references/codex.md` |
 | Kimi | `Agent`/`AgentSwarm`（仅 `coder`/`explore`/`plan`）；角色绑定在 prompt（C5b）；Plan 双写 → `references/kimi.md` · `kimi-plan-mode-bridge.md` |
 | 其它 | 同 `mstar-host` skill；按工具信号选 reference |
+
+## 核心研发守则
+
+全局工程不变量，适用于所有角色；实现级操作细节（The Ladder、surgical、debugging 等）→ **`mstar-coding-behavior`**。
+
+- Do not preserve backward compatibility. Remove obsolete paths instead of adding compatibility layers, fallbacks, or migrations.
+- Choose the simplest implementation that fully meets the current requirements. Avoid speculative abstractions, configuration, and indirection.
+- Grow the system in layers. Start from the smallest version that works end to end, and add each new capability on top of a product that already works. Never trade a working product for unfinished complexity.
+- Keep components modular and concerns clearly separated.
+- Prefer established, well-maintained libraries when they reduce overall complexity or improve reliability. Do not reimplement common functionality without a clear reason.
+- Lean on the dependencies already in the project before writing your own implementation or adding packages. Do not assume a library lacks a capability without checking its documentation and types.
+- Make architectural decisions for the long term. Do not accept a stopgap that only works for now and is meant to be replaced later.
 
 ## 护栏（不变量）
 

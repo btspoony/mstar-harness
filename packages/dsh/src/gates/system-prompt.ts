@@ -86,7 +86,7 @@ import { resolveRepoEnforcement } from '@mstar-harness/engine'
 import type { EnforcementFlag } from '@mstar-harness/engine'
 import type { MstarEngineStatusSource } from '../types.ts'
 import { DEFAULT_CATALOG_TTL_MS, buildCatalogSources } from './catalog.ts'
-import { stripInterpolationHazard, type HarnessResolver } from './_shared.ts'
+import { joinCapped, stripInterpolationHazard, type HarnessResolver } from './_shared.ts'
 
 /** Logger label for the harness-prompt injection (dsh logger naming: `<scope>/<subject>`). */
 export const HARNESS_PROMPT_LOGGER = 'mstar/harness-prompt'
@@ -324,27 +324,12 @@ function engineStatusProvider(ctx: Context, resolver: HarnessResolver, bootHarne
  * `20260820-dsh-digest-bounds` Task 1, now applied to the non-Done-filtered
  * join of the active workflow's plans). Module-level and intentionally NOT
  * re-exported — `catalog.ts` must not import it (a reverse import would
- * close a `system-prompt.ts ↔ catalog.ts` cycle); `renderEngineStatusCatalog`
- * stays uncapped (sibling surface, documented in the fragment).
+ * close a `system-prompt.ts ↔ catalog.ts` cycle). The sibling catalog state
+ * lines cap with their OWN constant (`CATALOG_STATE_JOIN_LIMIT`,
+ * plan `20260830-dsh-catalog-cap`); the shared `joinCapped` implementation
+ * now lives in `_shared.ts`.
  */
 const DIGEST_PLAN_CAP = 8
-
-/**
- * Join the screened projection of `items` in catalog-array order, capped at
- * `cap`: when `items.length > cap` the FIRST `cap` items render followed by
- * a final `+N more` overflow marker (`N = items.length - cap`) as the last
- * join element; at or under the cap the full join renders with no marker.
- * The `render` callback owns the per-item `stripInterpolationHazard`
- * screening (before the join, same as the uncapped code); the marker is an
- * engine-derived literal and stays unscreened. Callers guard the empty case
- * (`length === 0` → `none` / `none active`) — this helper is never reached
- * for empty arrays.
- */
-function joinCapped<T>(items: readonly T[], cap: number, separator: string, render: (item: T) => string): string {
-  const visible = items.slice(0, cap).map(render)
-  if (items.length > cap) visible.push(`+${items.length - cap} more`)
-  return visible.join(separator)
-}
 
 /**
  * The slim `mstar:engine-status` digest (plan `20260820-dsh-engine-status-slim`
