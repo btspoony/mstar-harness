@@ -1,13 +1,13 @@
 /**
  * Local structural mirrors of the consumed `dsh-llm-fallbacks` surface
- * (plan `20260831-dsh-alpha2-optional-fallbacks` Task 2). dsh
- * `0.1.2-alpha.2` natively covers subagent customization, so the fallbacks
+ * (plan `20260831-dsh-alpha2-optional-fallbacks` Task 2). dsh natively
+ * covers subagent customization, so the fallbacks
  * plugin is an OPTIONAL capability activated by the unchanged two-command
  * install contract — and a dev-time-only dependency of this package (type
  * mirroring here + the real-package test harness). The published package
  * carries ZERO runtime AND ZERO type references to `dsh-llm-fallbacks`.
  *
- * Shapes mirror `dsh-llm-fallbacks@0.4.0-alpha.1` `dist/index.d.ts`
+ * Shapes mirror `dsh-llm-fallbacks` `dist/index.d.ts`
  * (`FallbacksService`) and `dist/seeds.d.ts` (`SeedDeclaration`,
  * `SeedSkipReason`, `SeedConflict`, `SeedDeclareOutcome`, `EffectiveRole`,
  * `EffectiveRolesReadback`). Drift gates keeping the mirrors in sync:
