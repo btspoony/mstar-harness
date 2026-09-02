@@ -37,11 +37,11 @@ interface RunResult {
   stderr: string;
 }
 
-/** Run the real CLI entry as a subprocess. */
-function runCli(args: string[], opts: { cwd?: string } = {}): RunResult {
+/** Run the real CLI entry as a subprocess. `env` overrides the pinned env. */
+function runCli(args: string[], opts: { cwd?: string; env?: Record<string, string> } = {}): RunResult {
   const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, ...args], {
     cwd: opts.cwd ?? CLI_ROOT,
-    env: cliEnv(),
+    env: opts.env ?? cliEnv(),
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -609,6 +609,37 @@ describe("mstar pr-review worktree-setup — detached modes with real temp repos
       mkdirSync(join(dir, ".rev-wt.prreview.diff"));
       const result = runCli(["pr-review", "worktree-setup", "--commit", sha, "--path", wtPath], { cwd: repo });
       expect(result.exitCode).toBe(1);
+      expect(existsSync(wtPath)).toBe(false);
+      expect(existsSync(join(dir, ".rev-wt.prreview.json"))).toBe(false);
+      // Rollback clears the blocker dir too (recursive rmSync of the snapshot path).
+      expect(existsSync(join(dir, ".rev-wt.prreview.diff"))).toBe(false);
+      const listed = git(["worktree", "list"], repo);
+      expect(listed).not.toContain(wtPath);
+    });
+  });
+
+  test("snapshot capture failure rolls back the new worktree (no orphan, no sidecar)", () => {
+    withTempDir((dir) => {
+      const repo = join(dir, "repo");
+      repoWithAddedLines(repo, 10);
+      const sha = git(["rev-parse", "HEAD"], repo);
+      const wtPath = join(dir, "rev-wt");
+      // Fake `git` in PATH: delegates every command to the real git but
+      // fails `git show` — the snapshot capture command — so the capture
+      // throws AFTER the worktree exists. The FAIL must roll the new
+      // worktree back instead of leaving an orphan + no sidecar.
+      const fakeBin = join(dir, "fakebin");
+      mkdirSync(fakeBin);
+      const fakeGit = join(fakeBin, "git");
+      writeFileSync(
+        fakeGit,
+        `#!/bin/sh\nif [ "$1" = "show" ]; then\n  echo "fatal: simulated capture failure" >&2\n  exit 128\nfi\nexec "${realGit()}" "$@"\n`,
+      );
+      chmodSync(fakeGit, 0o755);
+      const env = { ...cliEnv(), PATH: `${fakeBin}:${cliEnv().PATH ?? ""}` };
+      const result = runCli(["pr-review", "worktree-setup", "--commit", sha, "--path", wtPath], { cwd: repo, env });
+      expect(result.exitCode).toBe(1);
+      expect(both(result)).toContain("fatal: simulated capture failure");
       expect(existsSync(wtPath)).toBe(false);
       expect(existsSync(join(dir, ".rev-wt.prreview.json"))).toBe(false);
       const listed = git(["worktree", "list"], repo);

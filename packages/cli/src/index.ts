@@ -3333,7 +3333,10 @@ prReviewCommand
           }
           // A FAILing setup must not leave the review artifact behind either
           // (the snapshot lives beside the sidecar, outside the worktree).
-          fs.rmSync(diffSnapshotPathFor(worktreePath), { force: true });
+          // recursive: the snapshot path may be a leftover directory (e.g. an
+          // EISDIR fixture) — clear whatever sits there, still guarded to the
+          // sidecar parent dir.
+          fs.rmSync(diffSnapshotPathFor(worktreePath), { force: true, recursive: true });
         } catch {
           // rollback best-effort; the preflight FAIL below still exits non-zero
         }
@@ -3392,33 +3395,33 @@ prReviewCommand
       // mechanics (Buffer parts + 64 MiB maxBuffer); commit mode has no
       // range, so its Commits section is the single commit line.
       const diffFile = diffSnapshotPathFor(worktreePath);
-      const snapshotParts: Buffer[] = [];
-      if (mode === "commit") {
-        snapshotParts.push(
-          Buffer.from(`# Review package: ${baseRef} (single commit)\n\n## Commits\n`),
-          gitRaw(["log", "--oneline", "-1", headSpec], worktreePath),
-          Buffer.from("\n## Files changed\n"),
-          gitRaw(["show", "--stat", headSpec], worktreePath),
-          Buffer.from("\n## Diff\n"),
-          gitRaw(["show", "-U10", headSpec], worktreePath),
-        );
-      } else {
-        const range = diffArgs[1]!;
-        const [rangeBase, rangeHead] = range.split("...");
-        snapshotParts.push(
-          Buffer.from(`# Review package: ${baseRef}..${headSpec}\n\n## Commits\n`),
-          gitRaw(["log", "--oneline", `${rangeBase}..${rangeHead}`], worktreePath),
-          Buffer.from("\n## Files changed\n"),
-          gitRaw(["diff", "--stat", range], worktreePath),
-          Buffer.from("\n## Diff\n"),
-          gitRaw(["diff", "-U10", range], worktreePath),
-        );
-      }
-      // Snapshot capture/write and the sidecar write are the last failure
+      // Snapshot capture, write, and the sidecar write are the last failure
       // points after the worktree exists — a FAIL here must roll the new
       // worktree back (never an orphaned worktree + no sidecar), then fail.
       let sidecar: ReviewWorktreeSidecar;
       try {
+        const snapshotParts: Buffer[] = [];
+        if (mode === "commit") {
+          snapshotParts.push(
+            Buffer.from(`# Review package: ${baseRef} (single commit)\n\n## Commits\n`),
+            gitRaw(["log", "--oneline", "-1", headSpec], worktreePath),
+            Buffer.from("\n## Files changed\n"),
+            gitRaw(["show", "--stat", headSpec], worktreePath),
+            Buffer.from("\n## Diff\n"),
+            gitRaw(["show", "-U10", headSpec], worktreePath),
+          );
+        } else {
+          const range = diffArgs[1]!;
+          const [rangeBase, rangeHead] = range.split("...");
+          snapshotParts.push(
+            Buffer.from(`# Review package: ${baseRef}..${headSpec}\n\n## Commits\n`),
+            gitRaw(["log", "--oneline", `${rangeBase}..${rangeHead}`], worktreePath),
+            Buffer.from("\n## Files changed\n"),
+            gitRaw(["diff", "--stat", range], worktreePath),
+            Buffer.from("\n## Diff\n"),
+            gitRaw(["diff", "-U10", range], worktreePath),
+          );
+        }
         fs.writeFileSync(diffFile, Buffer.concat(snapshotParts));
         const recordedBase =
           mode === "pr" || (mode !== "commit" && !baseRef.startsWith("origin/")) ? `origin/${baseRef}` : baseRef;
