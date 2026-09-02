@@ -2,7 +2,7 @@
 
 [English](README.md) | 中文
 
-![dsh](https://img.shields.io/badge/dsh-0.1.2--alpha.4-4B32C3.svg)
+![dsh](https://img.shields.io/badge/dsh-0.1.2--alpha.5-4B32C3.svg)
 
 让 [Morning Star](https://github.com/btspoony/mstar-harness) 成为一等公民的 dsh（DeepSeek Harness）宿主——一个 cordis 函数插件，将 mstar engine 进程内挂载，实现 engine `HostAdapter`（`host: 'dsh'`），守护 `{HARNESS_DIR}/status.json` 写入（校验 + 咨询；hard 下按修复逃生放行），在 `Enforcement: hard` 开启时阻止被禁止的 subagent 派发，对挂载技能根下的 `SKILL.md` 写入执行技能撰写 lint，通过 dsh skill-filesystem 提供者挂载 mstar `skills/` 镜像（单一规范挂载），并向每个组合后的 agent 步骤追加一条持久化的 `mstar-engine-status` catalog 行。随 dsh Loader 应用启动；一切均通过 seam 的拒绝/咨询通道行使职责，从不改动工具本身。
 
