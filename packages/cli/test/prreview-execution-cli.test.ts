@@ -597,7 +597,7 @@ describe("mstar pr-review worktree-setup — detached modes with real temp repos
     });
   });
 
-  test("snapshot write failure rolls back the new worktree (no orphan, no sidecar)", () => {
+  test("snapshot write failure rolls back the new worktree (no orphan, no sidecar, blocker dir untouched)", () => {
     withTempDir((dir) => {
       const repo = join(dir, "repo");
       repoWithAddedLines(repo, 10);
@@ -605,14 +605,15 @@ describe("mstar pr-review worktree-setup — detached modes with real temp repos
       const wtPath = join(dir, "rev-wt");
       // Pre-create a DIRECTORY at the snapshot path so the snapshot write
       // fails (EISDIR) AFTER the worktree exists — the FAIL must roll the
-      // new worktree back instead of leaving an orphan + no sidecar.
+      // new worktree back instead of leaving an orphan + no sidecar, and
+      // must NOT delete the unowned directory occupying the snapshot path.
       mkdirSync(join(dir, ".rev-wt.prreview.diff"));
       const result = runCli(["pr-review", "worktree-setup", "--commit", sha, "--path", wtPath], { cwd: repo });
       expect(result.exitCode).toBe(1);
       expect(existsSync(wtPath)).toBe(false);
       expect(existsSync(join(dir, ".rev-wt.prreview.json"))).toBe(false);
-      // Rollback clears the blocker dir too (recursive rmSync of the snapshot path).
-      expect(existsSync(join(dir, ".rev-wt.prreview.diff"))).toBe(false);
+      // The blocker dir is unowned — rollback leaves it in place.
+      expect(existsSync(join(dir, ".rev-wt.prreview.diff"))).toBe(true);
       const listed = git(["worktree", "list"], repo);
       expect(listed).not.toContain(wtPath);
     });
@@ -642,6 +643,38 @@ describe("mstar pr-review worktree-setup — detached modes with real temp repos
       expect(both(result)).toContain("fatal: simulated capture failure");
       expect(existsSync(wtPath)).toBe(false);
       expect(existsSync(join(dir, ".rev-wt.prreview.json"))).toBe(false);
+      const listed = git(["worktree", "list"], repo);
+      expect(listed).not.toContain(wtPath);
+    });
+  });
+
+  test("capture failure leaves a pre-existing file at the snapshot path untouched (unowned)", () => {
+    withTempDir((dir) => {
+      const repo = join(dir, "repo");
+      repoWithAddedLines(repo, 10);
+      const sha = git(["rev-parse", "HEAD"], repo);
+      const wtPath = join(dir, "rev-wt");
+      // Pre-existing REGULAR FILE at the snapshot path. The capture fails
+      // (git show shim) BEFORE any write, so the file is unowned — rollback
+      // must leave it in place with its original contents.
+      const snapshotPath = join(dir, ".rev-wt.prreview.diff");
+      writeFileSync(snapshotPath, "pre-existing contents\n");
+      const fakeBin = join(dir, "fakebin");
+      mkdirSync(fakeBin);
+      const fakeGit = join(fakeBin, "git");
+      writeFileSync(
+        fakeGit,
+        `#!/bin/sh\nif [ "$1" = "show" ]; then\n  echo "fatal: simulated capture failure" >&2\n  exit 128\nfi\nexec "${realGit()}" "$@"\n`,
+      );
+      chmodSync(fakeGit, 0o755);
+      const env = { ...cliEnv(), PATH: `${fakeBin}:${cliEnv().PATH ?? ""}` };
+      const result = runCli(["pr-review", "worktree-setup", "--commit", sha, "--path", wtPath], { cwd: repo, env });
+      expect(result.exitCode).toBe(1);
+      expect(both(result)).toContain("fatal: simulated capture failure");
+      expect(existsSync(wtPath)).toBe(false);
+      expect(existsSync(join(dir, ".rev-wt.prreview.json"))).toBe(false);
+      expect(existsSync(snapshotPath)).toBe(true);
+      expect(readFileSync(snapshotPath, "utf8")).toBe("pre-existing contents\n");
       const listed = git(["worktree", "list"], repo);
       expect(listed).not.toContain(wtPath);
     });
@@ -885,6 +918,26 @@ describe("mstar pr-review worktree-cleanup — report gate + exactly-recorded br
       expect(existsSync(wtPath)).toBe(false);
       expect(existsSync(join(dir, ".rev-wt.prreview.json"))).toBe(false);
       expect(existsSync(diffFile)).toBe(false);
+    });
+  });
+
+  test("cleanup leaves an unowned directory at the snapshot path in place", () => {
+    withTempDir((dir) => {
+      const { repo, wtPath } = commitModeFixture(dir);
+      // Replace the snapshot file this flow wrote with a DIRECTORY at the
+      // same computed path — unowned (cleanup only unlinks regular files).
+      // Cleanup must succeed and leave the directory in place, never
+      // recursive-rm it.
+      rmSync(join(dir, ".rev-wt.prreview.diff"), { force: true });
+      mkdirSync(join(dir, ".rev-wt.prreview.diff"));
+      const ok = runCli(
+        ["pr-review", "worktree-cleanup", "--path", wtPath, "--branch", "", "--report-saved"],
+        { cwd: repo },
+      );
+      expect(ok.exitCode).toBe(0);
+      expect(existsSync(wtPath)).toBe(false);
+      expect(existsSync(join(dir, ".rev-wt.prreview.json"))).toBe(false);
+      expect(existsSync(join(dir, ".rev-wt.prreview.diff"))).toBe(true); // unowned dir untouched
     });
   });
 

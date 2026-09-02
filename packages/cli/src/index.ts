@@ -3343,6 +3343,12 @@ prReviewCommand
         fetched = false; // resolution gate below reports it
       }
 
+      // Ownership gate for the diff snapshot: set only after THIS process
+      // successfully wrote the snapshot file. Rollback must never unlink a
+      // pre-existing file or directory at the deterministic snapshot path
+      // (empty-changeset rollback, capture throw, EISDIR write failure).
+      let wroteSnapshot = false;
+
       /** Remove a just-created worktree + branch when setup fails late. */
       const cleanupOnFailure = (branchToDelete: string): void => {
         try {
@@ -3352,11 +3358,10 @@ prReviewCommand
             gitSync(["branch", "-D", branchToDelete], repoRoot);
           }
           // A FAILing setup must not leave the review artifact behind either
-          // (the snapshot lives beside the sidecar, outside the worktree).
-          // recursive: the snapshot path may be a leftover directory (e.g. an
-          // EISDIR fixture) — clear whatever sits there, still guarded to the
-          // sidecar parent dir.
-          fs.rmSync(prReviewArtifactPathFor(worktreePath, "diff"), { force: true, recursive: true });
+          // (the snapshot lives beside the sidecar, outside the worktree) \u2014
+          // but ONLY the snapshot this process wrote. Anything pre-existing
+          // at the path is unowned and stays untouched (never recursive).
+          if (wroteSnapshot) removeOwnedSnapshotFile(worktreePath);
         } catch {
           // rollback best-effort; the preflight FAIL below still exits non-zero
         }
@@ -3439,6 +3444,7 @@ prReviewCommand
           );
         }
         fs.writeFileSync(diffFile, Buffer.concat(snapshotParts));
+        wroteSnapshot = true; // the file at diffFile is now owned by this process
         const recordedBase =
           mode === "pr" || (mode !== "commit" && !baseRef.startsWith("origin/")) ? `origin/${baseRef}` : baseRef;
         const sidecar: ReviewWorktreeSidecar = {
@@ -3483,6 +3489,23 @@ function prReviewArtifactPathFor(worktreePath: string, suffix: "json" | "diff"):
   const parent = path.dirname(path.resolve(worktreePath));
   const name = path.basename(path.resolve(worktreePath));
   return path.join(parent, `.${name}.prreview.${suffix}`);
+}
+
+/**
+ * Remove the diff snapshot at the computed artifact path ONLY if it is a
+ * regular file \u2014 a snapshot this flow wrote. Directories, symlinks, and
+ * other non-regular entries at the deterministic path are unowned and left
+ * in place; missing is a no-op. Never recursive.
+ */
+function removeOwnedSnapshotFile(worktreePath: string): void {
+  const snapshotPath = prReviewArtifactPathFor(worktreePath, "diff");
+  let stat: fs.Stats;
+  try {
+    stat = fs.lstatSync(snapshotPath);
+  } catch {
+    return; // missing \u2192 no-op
+  }
+  if (stat.isFile()) fs.unlinkSync(snapshotPath);
 }
 
 /** Default worktree location: a sibling directory beside the repo root. */
@@ -3551,8 +3574,10 @@ prReviewCommand
       // BEFORE the sidecar (a snapshot-rm failure must not strand an orphan a
       // retry can't reach: once the sidecar is gone, cleanup refuses). Use the
       // SAME computed path the rollback uses \u2014 immune to doctored sidecar
-      // fields and symlink-spelled paths (macOS /tmp vs /private/tmp).
-      fs.rmSync(prReviewArtifactPathFor(worktreePath, "diff"), { force: true, recursive: true });
+      // fields and symlink-spelled paths (macOS /tmp vs /private/tmp). Only a
+      // regular file at that path is a snapshot this flow wrote; directories /
+      // symlinks / other entries are unowned and left in place (never recursive).
+      removeOwnedSnapshotFile(worktreePath);
       fs.rmSync(sidecarPath, { force: true });
       console.log(pc.green(`worktree-cleanup: removed ${worktreePath}${sidecar.reviewBranch !== "" ? ` + deleted ${sidecar.reviewBranch}` : " (no local branch to delete)"}`));
     } catch (error) {
