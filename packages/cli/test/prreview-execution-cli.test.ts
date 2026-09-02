@@ -1556,3 +1556,113 @@ describe("mstar pr-review worktree-cleanup — fd-bound snapshot ownership (roun
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Fix-round tests (round 8: interrupted-sidecar adoption by computed-path
+// proof — no deletion anywhere; link-based never-overwrite restore)
+// ---------------------------------------------------------------------------
+
+describe("mstar pr-review worktree-setup — interrupted-sidecar adoption (round 8)", () => {
+  test("matching interrupted sidecar (no snapshot) is adopted: setup exit 0, extras preserved", () => {
+    withTempDir((dir) => {
+      const repo = join(dir, "repo");
+      repoWithAddedLines(repo, 10);
+      const sha = git(["rev-parse", "HEAD"], repo);
+      const wtPath = join(dir, "rev-wt");
+      // Interrupted-setup state: sidecar written, crash before the snapshot.
+      // The sidecar's reviewBranch / worktreePath / diffFile match the values
+      // THIS setup computes (commit mode records reviewBranch ""), and the
+      // snapshot path is absent — adoption must let the retry proceed without
+      // manual cleanup, rewriting the sidecar in place (unknown keys from the
+      // parsed file preserved, nothing unlinked).
+      const sidecarPath = join(dir, ".rev-wt.prreview.json");
+      const pre = {
+        reviewBranch: "",
+        worktreePath: wtPath,
+        repoRoot: repo,
+        reportSaved: false,
+        diffFile: join(dir, ".rev-wt.prreview.diff"),
+        extraUnknownKey: "preserved",
+      };
+      writeFileSync(sidecarPath, JSON.stringify(pre, null, 2));
+      const result = runCli(["pr-review", "worktree-setup", "--commit", sha, "--path", wtPath], { cwd: repo });
+      expect(result.exitCode).toBe(0);
+      const diffFile = join(dir, ".rev-wt.prreview.diff");
+      expect(existsSync(diffFile)).toBe(true); // fresh snapshot written
+      const sidecar = JSON.parse(readFileSync(sidecarPath, "utf8")) as Record<string, unknown>;
+      expect(sidecar.extraUnknownKey).toBe("preserved"); // unknown keys survive adoption
+      expect(sidecar.diffFile).toBe(diffFile);
+      expect(typeof sidecar.diffFileIno).toBe("string");
+      expect(typeof sidecar.diffFileDev).toBe("number");
+      expect(typeof sidecar.diffFileMtimeMs).toBe("number");
+      expect(sidecar.diffFileSha256).toBe(createHash("sha256").update(readFileSync(diffFile, "utf8")).digest("hex"));
+    });
+  });
+
+  test("adoption refuses on reviewBranch mismatch: exit 1, cleanup hint, sidecar byte-identical, worktree gone", () => {
+    withTempDir((dir) => {
+      const repo = join(dir, "repo");
+      repoWithAddedLines(repo, 10);
+      const sha = git(["rev-parse", "HEAD"], repo);
+      const wtPath = join(dir, "rev-wt");
+      const sidecarPath = join(dir, ".rev-wt.prreview.json");
+      const sidecarBytes = JSON.stringify({
+        reviewBranch: "pr-999", // differs from the recorded "" this setup computes
+        worktreePath: wtPath,
+        repoRoot: repo,
+        reportSaved: false,
+        diffFile: join(dir, ".rev-wt.prreview.diff"),
+      });
+      writeFileSync(sidecarPath, sidecarBytes);
+      const result = runCli(["pr-review", "worktree-setup", "--commit", sha, "--path", wtPath], { cwd: repo });
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("worktree-cleanup");
+      expect(existsSync(wtPath)).toBe(false); // the fresh worktree was rolled back
+      expect(readFileSync(sidecarPath, "utf8")).toBe(sidecarBytes); // byte-identical
+    });
+  });
+
+  test("adoption refuses on complete pair (matching sidecar + snapshot): both byte-identical", () => {
+    withTempDir((dir) => {
+      const repo = join(dir, "repo");
+      repoWithAddedLines(repo, 10);
+      const sha = git(["rev-parse", "HEAD"], repo);
+      const wtPath = join(dir, "rev-wt");
+      const sidecarPath = join(dir, ".rev-wt.prreview.json");
+      const sidecarBytes = JSON.stringify({
+        reviewBranch: "",
+        worktreePath: wtPath,
+        repoRoot: repo,
+        reportSaved: false,
+        diffFile: join(dir, ".rev-wt.prreview.diff"),
+      });
+      writeFileSync(sidecarPath, sidecarBytes);
+      const snapshotPath = join(dir, ".rev-wt.prreview.diff");
+      const snapshotBytes = "# Review package: deadbeef..cafebabe\n## Commits\nabc1234 some commit\n";
+      writeFileSync(snapshotPath, snapshotBytes);
+      const result = runCli(["pr-review", "worktree-setup", "--commit", sha, "--path", wtPath], { cwd: repo });
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("worktree-cleanup");
+      expect(existsSync(wtPath)).toBe(false);
+      expect(readFileSync(sidecarPath, "utf8")).toBe(sidecarBytes); // byte-identical
+      expect(readFileSync(snapshotPath, "utf8")).toBe(snapshotBytes); // byte-identical
+    });
+  });
+
+  test("adoption refuses on unparseable sidecar: exit 1, byte-identical", () => {
+    withTempDir((dir) => {
+      const repo = join(dir, "repo");
+      repoWithAddedLines(repo, 10);
+      const sha = git(["rev-parse", "HEAD"], repo);
+      const wtPath = join(dir, "rev-wt");
+      const sidecarPath = join(dir, ".rev-wt.prreview.json");
+      const sidecarBytes = "{ not valid json";
+      writeFileSync(sidecarPath, sidecarBytes);
+      const result = runCli(["pr-review", "worktree-setup", "--commit", sha, "--path", wtPath], { cwd: repo });
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("worktree-cleanup");
+      expect(existsSync(wtPath)).toBe(false);
+      expect(readFileSync(sidecarPath, "utf8")).toBe(sidecarBytes); // byte-identical
+    });
+  });
+});
