@@ -212,6 +212,22 @@ describe("mstar pr-review seat-prompt", () => {
     });
   });
 
+  test("--diff-file adds the pinned diff snapshot read-first ingredient", () => {
+    withTempDir(() => {
+      const result = runCli([
+        "pr-review", "seat-prompt",
+        "--stage", "1",
+        "--domain", "backend",
+        "--seat", "7",
+        "--worktree", "/abs/wt",
+        "--diff-file", "/abs/x.diff",
+      ]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("/abs/x.diff");
+      expect(result.stdout).toContain("Read the pinned diff snapshot FIRST");
+    });
+  });
+
   test("stage 2 security seat adds security lens path + Merge class instruction", () => {
     withTempDir(() => {
       const result = runCli([
@@ -472,6 +488,28 @@ describe("mstar pr-review worktree-setup — detached modes with real temp repos
     });
   });
 
+  test("commit mode writes the diff snapshot beside the sidecar + records diffFile", () => {
+    withTempDir((dir) => {
+      const repo = join(dir, "repo");
+      repoWithAddedLines(repo, 10);
+      const sha = git(["rev-parse", "HEAD"], repo);
+      const wtPath = join(dir, "rev-wt");
+      const result = runCli(["pr-review", "worktree-setup", "--commit", sha, "--path", wtPath], { cwd: repo });
+      expect(result.exitCode).toBe(0);
+      const printed = JSON.parse(result.stdout) as Record<string, unknown>;
+      const diffFile = join(dir, ".rev-wt.prreview.diff");
+      expect(printed.diffFile).toBe(diffFile);
+      expect(existsSync(diffFile)).toBe(true);
+      const content = readFileSync(diffFile, "utf8");
+      expect(content.startsWith("# Review package: ")).toBe(true);
+      expect(content).toContain("## Commits");
+      expect(content).toContain("## Files changed");
+      expect(content).toContain("## Diff");
+      const sidecar = JSON.parse(readFileSync(join(dir, ".rev-wt.prreview.json"), "utf8")) as Record<string, unknown>;
+      expect(sidecar.diffFile).toBe(diffFile);
+    });
+  });
+
   test("working-tree mode reports the live checkout without creating anything", () => {
     withTempDir((dir) => {
       const repo = join(dir, "repo");
@@ -481,6 +519,20 @@ describe("mstar pr-review worktree-setup — detached modes with real temp repos
       expect(result.exitCode).toBe(0);
       const printed = JSON.parse(result.stdout) as Record<string, unknown>;
       expect(printed.worktreePath).toBe(realpathSync(repo));
+    });
+  });
+
+  test("working-tree mode reports diffFile null and writes no snapshot", () => {
+    withTempDir((dir) => {
+      const repo = join(dir, "repo");
+      repoWithAddedLines(repo, 3);
+      writeFileSync(join(repo, "untracked.txt"), "untracked\n"); // untracked-only changeset must pass preflight
+      const result = runCli(["pr-review", "worktree-setup", "--working-tree"], { cwd: repo });
+      expect(result.exitCode).toBe(0);
+      const printed = JSON.parse(result.stdout) as Record<string, unknown>;
+      expect(printed.diffFile).toBeNull();
+      // No snapshot anywhere beside the repo (working-tree mode never writes one).
+      expect(existsSync(join(dir, ".repo.prreview.diff"))).toBe(false);
     });
   });
 
@@ -553,6 +605,22 @@ describe("mstar pr-review worktree-cleanup — report gate + exactly-recorded br
       expect(existsSync(join(dir, ".rev-wt.prreview.json"))).toBe(false);
       const listed = git(["worktree", "list"], repo);
       expect(listed).not.toContain(wtPath);
+    });
+  });
+
+  test("cleanup deletes the diff snapshot along with the worktree + sidecar", () => {
+    withTempDir((dir) => {
+      const { repo, wtPath } = commitModeFixture(dir);
+      const diffFile = join(dir, ".rev-wt.prreview.diff");
+      expect(existsSync(diffFile)).toBe(true); // fixture setup wrote it
+      const ok = runCli(
+        ["pr-review", "worktree-cleanup", "--path", wtPath, "--branch", "", "--report-saved"],
+        { cwd: repo },
+      );
+      expect(ok.exitCode).toBe(0);
+      expect(existsSync(wtPath)).toBe(false);
+      expect(existsSync(join(dir, ".rev-wt.prreview.json"))).toBe(false);
+      expect(existsSync(diffFile)).toBe(false);
     });
   });
 

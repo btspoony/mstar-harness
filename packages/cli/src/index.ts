@@ -2918,6 +2918,11 @@ function gitSync(args: string[], cwd: string): string {
   return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 
+/** Run a git command in `cwd`, returning UNTRIMMED stdout (snapshot bytes). */
+function gitRaw(args: string[], cwd: string): string {
+  return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+}
+
 /** Run `gh` with `input` on stdin, returning parsed stdout. Throws on failure. */
 function ghSync(args: string[], input?: string): string {
   return execFileSync("gh", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], ...(input !== undefined ? { input } : {}) }).trim();
@@ -3159,6 +3164,8 @@ type ReviewWorktreeSidecar = {
   createdAt: string;
   /** Git repo root that created this sidecar \u2014 every cleanup git command runs from here. */
   repoRoot: string;
+  /** Absolute path to the pinned diff snapshot (review artifact beside the sidecar). */
+  diffFile?: string;
 };
 
 prReviewCommand
@@ -3220,7 +3227,7 @@ prReviewCommand
           process.exitCode = 1;
           return;
         }
-        console.log(JSON.stringify({ reviewBranch: null, worktreePath: repoRoot, base: null, mergeBase: null, diffCmd: mode === "diff" ? "(provided changeset)" : "git diff + git diff --cached + ls-files --others" }, null, 2));
+        console.log(JSON.stringify({ reviewBranch: null, worktreePath: repoRoot, base: null, mergeBase: null, diffCmd: mode === "diff" ? "(provided changeset)" : "git diff + git diff --cached + ls-files --others", diffFile: null }, null, 2));
         return;
       }
 
@@ -3365,6 +3372,34 @@ prReviewCommand
         return;
       }
 
+      // Diff snapshot: review artifact beside the sidecar (never inside the
+      // worktree). Mirrors SDD reviewPackage section layout; commit mode has
+      // no range, so its Commits section is the single commit line.
+      const diffFile = diffSnapshotPathFor(worktreePath);
+      const snapshotParts: string[] = [];
+      if (mode === "commit") {
+        snapshotParts.push(
+          `# Review package: ${baseRef} (single commit)\n\n## Commits\n`,
+          gitRaw(["log", "--oneline", "-1", headSpec], worktreePath),
+          "\n## Files changed\n",
+          gitRaw(["show", "--stat", headSpec], worktreePath),
+          "\n## Diff\n",
+          gitRaw(["show", "-U10", headSpec], worktreePath),
+        );
+      } else {
+        const range = diffArgs[1]!;
+        const [rangeBase, rangeHead] = range.split("...");
+        snapshotParts.push(
+          `# Review package: ${baseRef}..${headSpec}\n\n## Commits\n`,
+          gitRaw(["log", "--oneline", `${rangeBase}..${rangeHead}`], worktreePath),
+          "\n## Files changed\n",
+          gitRaw(["diff", "--stat", range], worktreePath),
+          "\n## Diff\n",
+          gitRaw(["diff", "-U10", range], worktreePath),
+        );
+      }
+      fs.writeFileSync(diffFile, snapshotParts.join(""));
+
       const recordedBase =
         mode === "pr" || (mode !== "commit" && !baseRef.startsWith("origin/")) ? `origin/${baseRef}` : baseRef;
       const sidecar: ReviewWorktreeSidecar = {
@@ -3376,6 +3411,7 @@ prReviewCommand
         reportSaved: false,
         createdAt: new Date().toISOString(),
         repoRoot,
+        diffFile,
       };
       fs.writeFileSync(sidecarPathFor(worktreePath), JSON.stringify(sidecar, null, 2));
       console.log(JSON.stringify({
@@ -3384,6 +3420,7 @@ prReviewCommand
         base: sidecar.base,
         mergeBase: sidecar.mergeBase === "" ? null : sidecar.mergeBase,
         diffCmd: sidecar.diffCmd,
+        diffFile: sidecar.diffFile,
       }, null, 2));
     } catch (error) {
       failScript(error, "pr-review worktree-setup");
@@ -3395,6 +3432,13 @@ function sidecarPathFor(worktreePath: string): string {
   const parent = path.dirname(path.resolve(worktreePath));
   const name = path.basename(path.resolve(worktreePath));
   return path.join(parent, `.${name}.prreview.json`);
+}
+
+/** Diff snapshot path: <parent-of-worktree>/.<worktree-dirname>.prreview.diff */
+function diffSnapshotPathFor(worktreePath: string): string {
+  const parent = path.dirname(path.resolve(worktreePath));
+  const name = path.basename(path.resolve(worktreePath));
+  return path.join(parent, `.${name}.prreview.diff`);
 }
 
 /** Default worktree location: a sibling directory beside the repo root. */
@@ -3460,6 +3504,15 @@ prReviewCommand
         gitSync(["branch", "-D", sidecar.reviewBranch], gitRoot);
       }
       fs.rmSync(sidecarPath, { force: true });
+      // The diff snapshot is a review artifact beside the sidecar \u2014 remove it
+      // too, but only when it actually lives beside the sidecar (a doctored
+      // sidecar path must never escape the sidecar's parent dir).
+      if (typeof sidecar.diffFile === "string" && sidecar.diffFile !== "") {
+        const diffFile = path.resolve(sidecar.diffFile);
+        if (path.dirname(diffFile) === path.dirname(sidecarPath)) {
+          fs.rmSync(diffFile, { force: true });
+        }
+      }
       console.log(pc.green(`worktree-cleanup: removed ${worktreePath}${sidecar.reviewBranch !== "" ? ` + deleted ${sidecar.reviewBranch}` : " (no local branch to delete)"}`));
     } catch (error) {
       failScript(error, "pr-review worktree-cleanup");
@@ -3538,7 +3591,8 @@ prReviewCommand
   .option("--skill-root <dir>", "Skill root containing references/pr-review.md (default: resolved skills/mstar-audit)")
   .option("--recon <facts...>", "Recon facts (variadic: --recon fact1 fact2 ...)")
   .option("--tier <quick|default|deep>", "Prompt tier (SP-A): quick shrinks read-first + folds the security lens in-seat; deep adds cross-domain security seat + stage-as-wave (default: default)")
-  .action((options: { stage: string; domain: string; seat: string; worktree: string; security?: boolean; skillRoot?: string; recon?: string[]; tier?: string }) => {
+  .option("--diff-file <path>", "Absolute path to the pinned diff snapshot written by worktree-setup (read-first ingredient)")
+  .action((options: { stage: string; domain: string; seat: string; worktree: string; security?: boolean; skillRoot?: string; recon?: string[]; tier?: string; diffFile?: string }) => {
     try {
       if (options.stage !== "1" && options.stage !== "2") {
         throw new SddScriptError(`usage: pr-review seat-prompt \u2014 --stage must be 1 or 2, got ${JSON.stringify(options.stage)}`, 2);
@@ -3559,6 +3613,7 @@ prReviewCommand
         reconFacts: options.recon ?? [],
         ...(options.security === true ? { securitySeat: true } : {}),
         ...(tier !== undefined ? { tier } : {}),
+        ...(options.diffFile !== undefined && options.diffFile !== "" ? { diffFile: path.resolve(resolveCliPath(options.diffFile)) } : {}),
       });
       console.log(prompt);
     } catch (error) {
