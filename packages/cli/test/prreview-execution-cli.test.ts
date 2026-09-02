@@ -1666,3 +1666,49 @@ describe("mstar pr-review worktree-setup — interrupted-sidecar adoption (round
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Fix-round tests (round 10: adopted-sidecar rollback restores original bytes
+// — never unlink a pre-existing file; snapshot tmp deletion bound to the
+// verified inode via an unguessable name + pre/post inode checks)
+// ---------------------------------------------------------------------------
+
+describe("mstar pr-review worktree-setup — adopted-sidecar rollback restores original (round 10)", () => {
+  test("adopted sidecar is restored byte-identical when setup fails after adoption (never unlinked)", () => {
+    withTempDir((dir) => {
+      const repo = join(dir, "repo");
+      repoWithAddedLines(repo, 10);
+      const sha = git(["rev-parse", "HEAD"], repo);
+      const wtPath = join(dir, "rev-wt");
+      // Interrupted-setup state that adoption accepts: sidecar with matching
+      // reviewBranch / worktreePath / diffFile, no snapshot. The sidecar
+      // carries an extra unknown key + distinctive original fields — the
+      // round-9 P1: after adoption, a FAILing setup must restore these exact
+      // bytes, never unlink the pre-existing file.
+      const sidecarPath = join(dir, ".rev-wt.prreview.json");
+      const originalSidecar = JSON.stringify({
+        reviewBranch: "",
+        worktreePath: wtPath,
+        repoRoot: repo,
+        reportSaved: false,
+        diffFile: join(dir, ".rev-wt.prreview.diff"),
+        extraUnknownKey: "preserved",
+        originalMarker: "distinctive-original-field",
+      }, null, 2);
+      writeFileSync(sidecarPath, originalSidecar);
+      // Make the snapshot path a DIRECTORY so the snapshot exclusive write
+      // fails (EISDIR) AFTER adoption — the FAIL must roll the worktree back
+      // and restore the adopted sidecar's original bytes.
+      mkdirSync(join(dir, ".rev-wt.prreview.diff"));
+      const result = runCli(["pr-review", "worktree-setup", "--commit", sha, "--path", wtPath], { cwd: repo });
+      expect(result.exitCode).toBe(1);
+      expect(existsSync(wtPath)).toBe(false); // the fresh worktree was rolled back
+      // The adopted sidecar was NOT unlinked: it exists and is byte-identical
+      // to the pre-setup text (extra key + original fields present).
+      expect(existsSync(sidecarPath)).toBe(true);
+      expect(readFileSync(sidecarPath, "utf8")).toBe(originalSidecar);
+      // The blocker dir is unowned — rollback leaves it in place.
+      expect(existsSync(join(dir, ".rev-wt.prreview.diff"))).toBe(true);
+    });
+  });
+});

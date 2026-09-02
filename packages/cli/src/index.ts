@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { select } from "@inquirer/prompts";
@@ -3378,6 +3378,11 @@ prReviewCommand
       // The in-memory sidecar (with the snapshot's inode identity) once the
       // snapshot write succeeded \u2014 lets rollback verify ownership by inode.
       let pendingSidecar: ReviewWorktreeSidecar | undefined;
+      // Adoption state: when the sidecar path held a PRE-EXISTING interrupted
+      // sidecar that THIS setup adopted, rollback must restore its exact
+      // pre-setup bytes \u2014 never unlink a pre-existing file.
+      let adoptedSidecar = false;
+      let adoptedRaw: string | undefined;
 
       /** Remove a just-created worktree + branch when setup fails late. */
       const cleanupOnFailure = (branchToDelete: string): void => {
@@ -3390,11 +3395,27 @@ prReviewCommand
           // A FAILing setup must not leave the review artifacts it wrote
           // behind either (they live beside the worktree, outside it) \u2014 but
           // ONLY this process's artifacts: the sidecar only when THIS setup
-          // wrote it (exclusive create \u2014 a pre-existing sidecar is foreign
+          // created it (exclusive create \u2014 a pre-existing sidecar is foreign
           // and stays), the snapshot only when THIS setup wrote it (inode
           // verified). Anything pre-existing at the paths is unowned and
           // stays untouched (never recursive).
-          if (wroteSidecar) fs.rmSync(prReviewArtifactPathFor(worktreePath, "json"), { force: true });
+          if (wroteSidecar) {
+            if (adoptedSidecar) {
+              // The sidecar at the path is a PRE-EXISTING file this setup
+              // adopted \u2014 rollback restores its exact pre-setup bytes (plain
+              // write to the path we already rewrote; no unlink anywhere), so
+              // a later worktree-cleanup still recognizes the interrupted
+              // review. A restore failure is loud \u2014 never leave the adopted
+              // content silently replaced.
+              try {
+                fs.writeFileSync(prReviewArtifactPathFor(worktreePath, "json"), adoptedRaw);
+              } catch (restoreError) {
+                console.error(pc.red(`pr-review worktree-setup: FAILED to restore the adopted sidecar at ${prReviewArtifactPathFor(worktreePath, "json")} (${(restoreError as Error).message}) - it holds the rewritten content, not the original`));
+              }
+            } else {
+              fs.rmSync(prReviewArtifactPathFor(worktreePath, "json"), { force: true });
+            }
+          }
           if (wroteSnapshot && pendingSidecar !== undefined) removeOwnedSnapshotFile(worktreePath, pendingSidecar);
         } catch {
           // rollback best-effort; the preflight FAIL below still exits non-zero
@@ -3509,10 +3530,21 @@ prReviewCommand
           fs.writeFileSync(sidecarPath, JSON.stringify(sidecar, null, 2), { flag: "wx" });
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== "EEXIST" && (error as NodeJS.ErrnoException).code !== "EISDIR") throw error;
+          // Keep the adopted sidecar's exact pre-setup bytes BEFORE
+          // adoptInterruptedSidecar rewrites it \u2014 a FAILing setup must
+          // restore them, never unlink a pre-existing file. An unreadable
+          // file leaves adoptedRaw undefined and adoption below also fails
+          // (it reads the same file), so the refusal path is unchanged.
+          try {
+            adoptedRaw = fs.readFileSync(sidecarPath, "utf8");
+          } catch {
+            adoptedRaw = undefined;
+          }
           const adopted = adoptInterruptedSidecar(sidecarPath, sidecar);
           if (adopted === undefined) {
             throw new Error(`cannot record setup sidecar at ${sidecarPath} - run mstar pr-review worktree-cleanup first (never cleaning a foreign review)`);
           }
+          adoptedSidecar = true;
           // The final identity rewrite below must keep the adopted sidecar's
           // unknown/extra keys — copy only keys the fresh sidecar does not
           // define (fresh values always win).
@@ -3597,6 +3629,17 @@ function prReviewArtifactPathFor(worktreePath: string, suffix: "json" | "diff"):
  * snapshot \u2014 a replacement swapped in between open and rename is
  * restored via hard link (never overwriting a concurrent occupant of the
  * path; EEXIST leaves both files in place, nothing deleted).
+ *
+ * The tmp name is unguessable (`<snapshot>.cleanup.<pid>.<randomUUID>`), so
+ * a pre-swapped entry at a predictable name can no longer be targeted, and
+ * the unlink itself is bound to the verified inode twice: immediately
+ * before it, the fd must still hold exactly its tmp link (fstat `nlink ===
+ * 1`) AND `lstat(tmp)` must show the same `ino`/`dev` with `nlink === 1`;
+ * immediately after it, `fstat(fd).nlink === 0` must hold \u2014 proof the
+ * unlink detached OUR inode. A post-unlink nlink > 0 means a pathname
+ * replacement was detached instead (best-effort detection \u2014 POSIX/Node
+ * has no fd-bound unlink; the window is a microsecond-scale lstat\u2192unlink
+ * gap on an unguessable name): a loud yellow error names both paths.
  */
 function removeOwnedSnapshotFile(worktreePath: string, sidecar: ReviewWorktreeSidecar): void {
   const snapshotPath = prReviewArtifactPathFor(worktreePath, "diff");
@@ -3634,11 +3677,13 @@ function removeOwnedSnapshotFile(worktreePath: string, sidecar: ReviewWorktreeSi
       return;
     }
     // The verified inode's only link is the path we created it at. Detach it
-    // to a unique sibling name, then re-check the fd: the inode now at tmp
-    // must BE the inode we opened \u2014 only then is unlinking tmp removing
-    // exactly our snapshot. Anything else at tmp is a replacement swapped in
-    // between open and rename \u2014 restore it byte-identical, never delete.
-    const tmp = `${snapshotPath}.cleanup.${process.pid}.${Date.now()}`;
+    // to an UNGUESSABLE sibling name (pid + randomUUID \u2014 a pre-swapped
+    // entry at a predictable name can no longer be targeted), then re-check
+    // the fd: the inode now at tmp must BE the inode we opened \u2014 only
+    // then is unlinking tmp removing exactly our snapshot. Anything else at
+    // tmp is a replacement swapped in between open and rename \u2014 restore
+    // it byte-identical, never delete.
+    const tmp = `${snapshotPath}.cleanup.${process.pid}.${randomUUID()}`;
     try {
       fs.renameSync(snapshotPath, tmp);
     } catch (error) {
@@ -3652,8 +3697,21 @@ function removeOwnedSnapshotFile(worktreePath: string, sidecar: ReviewWorktreeSi
     } catch {
       tmpStat = undefined;
     }
-    if (tmpStat !== undefined && tmpStat.ino === st2.ino && tmpStat.dev === st2.dev) {
+    // Pre-unlink binding: the inode at tmp must BE the inode we opened AND
+    // still hold exactly its tmp link (fstat nlink === 1 AND lstat tmp
+    // nlink === 1) \u2014 only then does unlinking tmp remove exactly our
+    // snapshot. Any mismatch (a replacement swapped in between open and
+    // rename, or a hardlink added) takes the restore branch below.
+    if (tmpStat !== undefined && tmpStat.ino === st2.ino && tmpStat.dev === st2.dev && st2.nlink === 1 && tmpStat.nlink === 1) {
       fs.unlinkSync(tmp);
+      // Post-unlink verification: the unlink must have detached OUR verified
+      // inode (nlink 1 \u2192 0). If the fd still has a link, the unlink
+      // detached a pathname replacement \u2014 detection is best-effort
+      // (POSIX/Node has no fd-bound unlink); name both paths loudly.
+      const st3 = fs.fstatSync(fd);
+      if (st3.nlink !== 0) {
+        console.error(pc.yellow(`worktree-cleanup: unlink at ${tmp} detached a pathname replacement, not the verified snapshot inode (${snapshotPath} still holds ${st3.nlink} link(s)) - the replacement is gone, the verified snapshot was NOT deleted`));
+      }
     } else {
       // The inode at tmp is NOT the one we opened — a replacement was
       // swapped in between open and rename. Restore it to the snapshot
