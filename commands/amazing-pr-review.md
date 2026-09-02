@@ -24,7 +24,7 @@ Procedure SSOT → **`mstar-audit` SKILL.md**（common core）+ **`references/pr
 Execute **`mstar-audit` § `pr` variant end to end**（`references/pr-review.md`）：
 
 1. **Tier first** — resolve `quick` / `default` / `deep` per **§ Review depth (tiers)**（显式 token > too-large > 敏感面 > large > small 推断阶梯；两 token 同现 → hard-stop 请用户二选一）→ 按 tier seat 计划执行（quick 1 席 / default 2 席 / deep 三阶段）。
-2. **Isolate** — create the review worktree per **§ Worktree isolation**（real base，never assume `main`；empty changeset → stop）→ fan out seats per **§ Review pipeline**（seats read-only，evidence/findings in result payload，never post；seat prompts → `mstar pr-review seat-prompt`）.
+2. **Isolate** — create the review worktree per **§ Worktree isolation**（real base，never assume `main`；empty changeset → stop；diff snapshot pinned at setup）→ fan out seats per **§ Review pipeline**（seats read-only，evidence/findings in result payload，never post；seat prompts get `--diff-file` via `mstar pr-review seat-prompt`）.
 3. **Synthesize (main agent)** — dedupe + three-way vet → tally/verdict（**§ Tally and derived score**）→ persist the **`mstar.review/v1` envelope**（mandatory）→ report + GitHub Review POST per **§ Comment posting**（`posted: yes` / `n/a-no-pr` / `failed`；event fixed `COMMENT`）→ save local report + evidence files per **§ Local report archive**（all three posting branches）→ **then** worktree cleanup（`mstar pr-review worktree-cleanup`）.
 4. **Batch** — one session = one PR per **§ Batch sibling PRs**；其余 PR → `mstar status backlog-register` 登记为 audit todos，建议各自独立 session.
 
