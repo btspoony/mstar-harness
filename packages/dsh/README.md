@@ -43,6 +43,23 @@ The **two-command install is the contract** — folding a `dsh-llm-fallbacks` ro
 
 > **Fresh-publish age window**: pnpm's `minimumReleaseAge` gate can make a `dsh plugin add <spec>` range resolution pick an older published version (without the seeds surface) for up to ~24h after a fresh publish — re-run `npx @mstar-harness/cli init --target dsh` after the window (or pin the version) to converge on the latest surface.
 
+### Headless profile (one-shot runs)
+
+The plugin is not web-bound: it also mounts in the dsh **headless** profile (`dsh --profile headless "<task>"` — the one-shot, no-GUI/no-port mode). The install path is identical, one command:
+
+```sh
+dsh plugin --profile headless add @mstar-harness/dsh
+```
+
+The shipped headless template auto-initializes on first use (`@deepseek-ai/dsh-base` + `@deepseek-ai/dsh-headless`), and the reconcile step appends the mstar row to the bundle stack (`dsh-base → dsh-headless → @mstar-harness/dsh`). Every plugin capability rides a `dsh-base` seam that headless inherits — status/dispatch/lease/worktree gates, the skill mount, the engine-status catalog, the harness-rules system-prompt injection, the 7 model-facing tools — so the harness is fully live in a one-shot run. **Launch from the repo working directory** (the runner writes `meta.cwd = process.cwd()` and the per-workspace harness-dir probe starts there). The browser client half is web-profile-only and simply does not load.
+
+**Headless usage caveats** (dsh 0.1.0-rc.6 verified):
+
+- **One-shot turn model** — the runner submits the task as one user message and exits when the agent goes idle (`whenIdle()`); it does NOT await `run_in_background` children. Foreground subagent dispatch works (a child session is created and its result reaches the parent); background QC-tri-style parallelism does NOT complete in-process — either dispatch QC seats foreground (serial wall time) or have the agent collect background results with `tool-subagent-control` BEFORE ending the turn.
+- **No interaction channel** — `ask_user_question` and approval prompts fail closed (there is no answerer). Use `DSH_PERMISSION_MODE=danger-full-access` for unattended runs (sandbox `danger-full-access` + approval `never`); interactive Prepare flows (grill-me) belong on the web profile.
+- **Default model resolution** — headless composes no fallbacks row, so an `agent-default-model` settings pin of `FallbacksChain` fails with `NO_ADAPTER` (the web-profile artifact). Point the default model at a real provider, or install `dsh-llm-fallbacks` into the headless profile too (note: on the published dsh 0.1.0-rc.6 the fallbacks settings integration predates the `SettingsProvider.installSection` API, so the virtual adapter does not register — this resolves with dsh ≥ 0.1.2-alpha).
+- **Config via the profile user layer** — profile-level `cordis.patch.yml` overrides work as documented (e.g. `enforcement: hard` + `dispatchBinding` on the mstar row); the mstar row's own `config: {}` stays neutral.
+
 ### Configuration
 
 | Key | Type | Default | Meaning |

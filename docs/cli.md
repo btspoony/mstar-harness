@@ -163,6 +163,24 @@ cd <repo>/packages/dsh && dsh plugin --profile web add .
 ```
 `dsh web` then boots the harness: in-process engine gates (status/dispatch/lease/worktree/seams), the bundled `mstar-*` skills mount, and the bundled slash commands (`/iteration-start`, `/iteration-drive`, `/iteration-loop`, `/codebase-audit`, `/amazing-pr-review`). Host behavior (tools, gates, enforcement, PM dispatch) → **`mstar-host`** → `references/dsh.md`; package docs → [`packages/dsh/README.md`](../packages/dsh/README.md).
 
+#### Headless profile usage
+
+The dsh target also works with the **headless** profile — the one-shot, no-GUI/no-port mode (`dsh --profile headless "<task>"`): one task, the final assistant message on stdout, exit 0 on completion / 1 on failure. The plugin install is the same command pointed at the headless profile:
+
+```sh
+dsh plugin --profile headless add @mstar-harness/dsh
+dsh --profile headless --dump-config   # verify the mstar row joined the layer stack
+```
+
+Every harness capability rides a `dsh-base` seam that headless inherits (gates, skill mount, catalog, system-prompt injection, the 7 `mstar_*` tools), so mstar runs fully in a one-shot run. Always launch from the repo working directory — the runner writes `meta.cwd = process.cwd()` and the harness-dir probe starts there.
+
+**Caveats when using handles (background children) in headless** — the one-shot runner's completion contract is `whenIdle()` on the foreground agent, and background subagent handles do NOT hold the process open:
+
+- `run_in_background: true` dispatches return a task id immediately and the runner treats the agent as idle once the foreground turn ends — the process exits while the children are still running (verified on dsh 0.1.0-rc.6: a background child's settlement notice lands in a turn that never executes). Exit 0 does not imply background children finished.
+- Foreground subagent dispatch works end to end and is the reliable one-shot pattern; parallelism is still available inside a turn by dispatching N children in one message and collecting all of them via `tool-subagent-control` (list/`send`) BEFORE the final message.
+- If you need fire-and-forget children, make the prompt require the agent to wait for every settlement and fold all results into the final message; otherwise run separate headless invocations per job and orchestrate from your script/cron.
+- Leaf subagents must return their completion report in the closing message (not the `report` tool) — the report tool routes into the parent's next-step queue, which strands when the parent's turn has ended (the dsh leaf-delivery discipline, `mstar-host` → `references/dsh.md`).
+
 ### `mstar-harness doctor`
 
 Check an existing config:
