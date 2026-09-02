@@ -3383,6 +3383,10 @@ prReviewCommand
       // pre-setup bytes \u2014 never unlink a pre-existing file.
       let adoptedSidecar = false;
       let adoptedRaw: string | undefined;
+      // Identity of the adopted sidecar at capture time \u2014 rollback restores
+      // through the verified inode (dev/ino), never by pathname.
+      let adoptedDev: number | undefined;
+      let adoptedIno: string | undefined;
 
       /** Remove a just-created worktree + branch when setup fails late. */
       const cleanupOnFailure = (branchToDelete: string): void => {
@@ -3402,15 +3406,48 @@ prReviewCommand
           if (wroteSidecar) {
             if (adoptedSidecar) {
               // The sidecar at the path is a PRE-EXISTING file this setup
-              // adopted \u2014 rollback restores its exact pre-setup bytes (plain
-              // write to the path we already rewrote; no unlink anywhere), so
-              // a later worktree-cleanup still recognizes the interrupted
-              // review. A restore failure is loud \u2014 never leave the adopted
-              // content silently replaced.
+              // adopted \u2014 rollback restores its exact pre-setup bytes
+              // through the verified inode (never by pathname), so a later
+              // worktree-cleanup still recognizes the interrupted review. A
+              // restore failure is loud \u2014 never leave the adopted content
+              // silently replaced.
+              const sidecarPath = prReviewArtifactPathFor(worktreePath, "json");
+              let fd: number | undefined;
+              // "r+" (not "r"): ftruncate/write through the fd require a
+              // writable descriptor \u2014 POSIX rejects ftruncate on O_RDONLY
+              // with EINVAL. "r+" never truncates on open, so the occupant
+              // stays byte-untouched until verification passes.
               try {
-                fs.writeFileSync(prReviewArtifactPathFor(worktreePath, "json"), adoptedRaw);
-              } catch (restoreError) {
-                console.error(pc.red(`pr-review worktree-setup: FAILED to restore the adopted sidecar at ${prReviewArtifactPathFor(worktreePath, "json")} (${(restoreError as Error).message}) - it holds the rewritten content, not the original`));
+                fd = fs.openSync(sidecarPath, "r+");
+              } catch { /* ENOENT or unreadable -> cannot verify */ }
+              if (fd === undefined) {
+                console.error(pc.red(`worktree-setup rollback: adopted sidecar at ${sidecarPath} could not be restored (path was replaced concurrently)`));
+              } else {
+                let verified = false;
+                try {
+                  const st = fs.fstatSync(fd);
+                  verified = st.isFile()
+                    && st.dev === adoptedDev && String(st.ino) === adoptedIno
+                    && st.nlink === 1;   // the path still names the sidecar we rewrote
+                } catch { verified = false; }
+                if (!verified || adoptedRaw === undefined) {
+                  // The pathname was replaced after adoption: the sidecar we
+                  // rewrote is gone and the current occupant is not ours.
+                  // Never touch it.
+                  fs.closeSync(fd);
+                  console.error(pc.red(`worktree-setup rollback: adopted sidecar at ${sidecarPath} could not be restored (path was replaced concurrently)`));
+                } else {
+                  try {
+                    // Both ops go through fd \u2014 bound to the verified inode,
+                    // independent of the pathname's current state.
+                    fs.ftruncateSync(fd, 0);
+                    let written = 0;
+                    const buf = Buffer.from(adoptedRaw, "utf8");
+                    while (written < buf.length) written += fs.writeSync(fd, buf, written);
+                  } finally {
+                    fs.closeSync(fd);
+                  }
+                }
               }
             } else {
               fs.rmSync(prReviewArtifactPathFor(worktreePath, "json"), { force: true });
@@ -3535,10 +3572,17 @@ prReviewCommand
           // restore them, never unlink a pre-existing file. An unreadable
           // file leaves adoptedRaw undefined and adoption below also fails
           // (it reads the same file), so the refusal path is unchanged.
+          // The file's identity (dev/ino) is captured in the same instant \u2014
+          // rollback restores through the verified inode, never by pathname.
           try {
             adoptedRaw = fs.readFileSync(sidecarPath, "utf8");
+            const adoptedStat = fs.lstatSync(sidecarPath);
+            adoptedDev = adoptedStat.dev;
+            adoptedIno = String(adoptedStat.ino);
           } catch {
             adoptedRaw = undefined;
+            adoptedDev = undefined;
+            adoptedIno = undefined;
           }
           const adopted = adoptInterruptedSidecar(sidecarPath, sidecar);
           if (adopted === undefined) {
@@ -3703,6 +3747,10 @@ function removeOwnedSnapshotFile(worktreePath: string, sidecar: ReviewWorktreeSi
     // snapshot. Any mismatch (a replacement swapped in between open and
     // rename, or a hardlink added) takes the restore branch below.
     if (tmpStat !== undefined && tmpStat.ino === st2.ino && tmpStat.dev === st2.dev && st2.nlink === 1 && tmpStat.nlink === 1) {
+      // Portable ceiling: Node has no fd-bound unlink, so the unlink below is
+      // pathname-based. The unguessable tmp name + the pre-unlink nlink/inode
+      // checks above + the post-unlink nlink === 0 verification below
+      // minimize the lstat\u2192unlink window to microseconds.
       fs.unlinkSync(tmp);
       // Post-unlink verification: the unlink must have detached OUR verified
       // inode (nlink 1 \u2192 0). If the fd still has a link, the unlink

@@ -1673,8 +1673,8 @@ describe("mstar pr-review worktree-setup — interrupted-sidecar adoption (round
 // verified inode via an unguessable name + pre/post inode checks)
 // ---------------------------------------------------------------------------
 
-describe("mstar pr-review worktree-setup — adopted-sidecar rollback restores original (round 10)", () => {
-  test("adopted sidecar is restored byte-identical when setup fails after adoption (never unlinked)", () => {
+describe("mstar pr-review worktree-setup — pre-existing sidecar survives a FAILing setup (round 10)", () => {
+  test("pre-existing sidecar stays byte-identical when an occupied snapshot path refuses adoption (never unlinked)", () => {
     withTempDir((dir) => {
       const repo = join(dir, "repo");
       repoWithAddedLines(repo, 10);
@@ -1696,15 +1696,22 @@ describe("mstar pr-review worktree-setup — adopted-sidecar rollback restores o
         originalMarker: "distinctive-original-field",
       }, null, 2);
       writeFileSync(sidecarPath, originalSidecar);
-      // Make the snapshot path a DIRECTORY so the snapshot exclusive write
-      // fails (EISDIR) AFTER adoption — the FAIL must roll the worktree back
-      // and restore the adopted sidecar's original bytes.
+      // Make the snapshot path a DIRECTORY: adoption requires the snapshot
+      // path to be ABSENT (an occupied path is a foreign/complete review), so
+      // the EEXIST handler refuses and the sidecar is never adopted or
+      // rewritten — the FAIL must roll the worktree back and leave the
+      // pre-existing sidecar byte-untouched (never unlinked, never restored
+      // over). The adopted-restore branch itself (adoption succeeds, a LATER
+      // step fails) is only reachable through a concurrent pathname swap and
+      // is not deterministically testable from the subprocess CLI — see the
+      // round-11 report.
       mkdirSync(join(dir, ".rev-wt.prreview.diff"));
       const result = runCli(["pr-review", "worktree-setup", "--commit", sha, "--path", wtPath], { cwd: repo });
       expect(result.exitCode).toBe(1);
       expect(existsSync(wtPath)).toBe(false); // the fresh worktree was rolled back
-      // The adopted sidecar was NOT unlinked: it exists and is byte-identical
-      // to the pre-setup text (extra key + original fields present).
+      // The pre-existing sidecar was never adopted (occupied snapshot path
+      // refuses adoption): it exists and is byte-identical to the pre-setup
+      // text (extra key + original fields present).
       expect(existsSync(sidecarPath)).toBe(true);
       expect(readFileSync(sidecarPath, "utf8")).toBe(originalSidecar);
       // The blocker dir is unowned — rollback leaves it in place.
