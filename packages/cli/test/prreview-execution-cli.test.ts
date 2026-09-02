@@ -557,6 +557,127 @@ describe("mstar pr-review worktree-setup — detached modes with real temp repos
       expect(both(result)).toContain("refs-unresolved");
     });
   });
+
+  test("commit mode locks the review-package header text (single-commit form + SHA)", () => {
+    withTempDir((dir) => {
+      const repo = join(dir, "repo");
+      repoWithAddedLines(repo, 10);
+      const sha = git(["rev-parse", "HEAD"], repo);
+      const shortSha = git(["rev-parse", "--short", sha], repo);
+      const wtPath = join(dir, "rev-wt");
+      const result = runCli(["pr-review", "worktree-setup", "--commit", sha, "--path", wtPath], { cwd: repo });
+      expect(result.exitCode).toBe(0);
+      const content = readFileSync(join(dir, ".rev-wt.prreview.diff"), "utf8");
+      // Commit mode has no range: header is the single-commit form and the
+      // Commits section is exactly the one commit line (short SHA + subject).
+      expect(content.startsWith(`# Review package: ${sha}^ (single commit)\n\n## Commits\n${shortSha} bulk`)).toBe(true);
+    });
+  });
+
+  test("commit mode captures diffs beyond Node's default 1 MiB maxBuffer", () => {
+    withTempDir((dir) => {
+      const repo = join(dir, "repo");
+      initTestRepo(repo);
+      writeFileSync(join(repo, "a.txt"), "base\n");
+      git(["add", "-A"], repo);
+      git(["commit", "-q", "-m", "base"], repo);
+      // ~1.3 MB of added lines — the snapshot diff exceeds the 1 MiB default
+      // maxBuffer; the 64 MiB capture ceiling must keep the setup green.
+      const big = Array.from({ length: 120_000 }, (_, i) => `line-${i}`).join("\n") + "\n";
+      writeFileSync(join(repo, "big.txt"), big);
+      git(["add", "-A"], repo);
+      git(["commit", "-q", "-m", "bulk"], repo);
+      const sha = git(["rev-parse", "HEAD"], repo);
+      const wtPath = join(dir, "rev-wt");
+      const result = runCli(["pr-review", "worktree-setup", "--commit", sha, "--path", wtPath], { cwd: repo });
+      expect(result.exitCode).toBe(0);
+      const content = readFileSync(join(dir, ".rev-wt.prreview.diff"), "utf8");
+      expect(content).toContain("## Diff");
+      expect(content).toContain("+line-119999"); // the >1 MiB tail made it through
+    });
+  });
+
+  test("snapshot write failure rolls back the new worktree (no orphan, no sidecar)", () => {
+    withTempDir((dir) => {
+      const repo = join(dir, "repo");
+      repoWithAddedLines(repo, 10);
+      const sha = git(["rev-parse", "HEAD"], repo);
+      const wtPath = join(dir, "rev-wt");
+      // Pre-create a DIRECTORY at the snapshot path so the snapshot write
+      // fails (EISDIR) AFTER the worktree exists — the FAIL must roll the
+      // new worktree back instead of leaving an orphan + no sidecar.
+      mkdirSync(join(dir, ".rev-wt.prreview.diff"));
+      const result = runCli(["pr-review", "worktree-setup", "--commit", sha, "--path", wtPath], { cwd: repo });
+      expect(result.exitCode).toBe(1);
+      expect(existsSync(wtPath)).toBe(false);
+      expect(existsSync(join(dir, ".rev-wt.prreview.json"))).toBe(false);
+      const listed = git(["worktree", "list"], repo);
+      expect(listed).not.toContain(wtPath);
+    });
+  });
+
+  test("--diff mode reports diffFile null and writes no snapshot", () => {
+    withTempDir((dir) => {
+      const repo = join(dir, "repo");
+      repoWithAddedLines(repo, 3);
+      const result = runCli(["pr-review", "worktree-setup", "--diff"], { cwd: repo });
+      expect(result.exitCode).toBe(0);
+      const printed = JSON.parse(result.stdout) as Record<string, unknown>;
+      expect(printed.diffFile).toBeNull();
+      // No snapshot anywhere beside the repo (--diff mode never writes one).
+      expect(existsSync(join(dir, ".repo.prreview.diff"))).toBe(false);
+    });
+  });
+});
+
+describe("mstar pr-review worktree-setup — branch mode snapshot (three-dot range split)", () => {
+  test("branch mode writes the snapshot from the three-dot range split (header main..feature)", () => {
+    withTempDir((dir) => {
+      // "Remote" repo with main + feature ahead of it; local origin wired so
+      // the setup stays offline (same fixture shape as the refspec-fetch test).
+      const gitBin = realGit();
+      const g = (args: string[], cwd: string): string =>
+        execFileSync(gitBin, args, { cwd, encoding: "utf8" }).trim();
+      const seed = join(dir, "seed");
+      initTestRepo(seed);
+      writeFileSync(join(seed, "a.txt"), "base\n");
+      g(["add", "-A"], seed);
+      g(["commit", "-q", "-m", "base"], seed);
+      const remote = join(dir, "remote.git");
+      g(["init", "--bare", "-b", "main", remote], seed);
+      g(["remote", "add", "origin", remote], seed);
+      g(["push", "-q", "origin", "HEAD:refs/heads/main"], seed);
+      g(["checkout", "-q", "-b", "feature"], seed);
+      writeFileSync(join(seed, "feat.txt"), "feat\n");
+      g(["add", "-A"], seed);
+      g(["commit", "-q", "-m", "feature work"], seed);
+      g(["push", "-q", "origin", "feature"], seed);
+
+      const clone = join(dir, "clone");
+      initTestRepo(clone, { remote });
+      g(["fetch", "-q", "origin"], clone);
+
+      const wtPath = join(dir, "wt");
+      const result = runCli(["pr-review", "worktree-setup", "--branch", "feature", "--path", wtPath], { cwd: clone });
+      expect(result.exitCode).toBe(0);
+      const printed = JSON.parse(result.stdout) as Record<string, unknown>;
+      const diffFile = join(dir, ".wt.prreview.diff");
+      expect(printed.diffFile).toBe(diffFile);
+      expect(existsSync(diffFile)).toBe(true);
+      const content = readFileSync(diffFile, "utf8");
+      // Three-dot range split: header uses the short base..head names, the
+      // Commits section the two-dot range, Files changed / Diff the three-dot
+      // diffArgs range verbatim.
+      expect(content.startsWith("# Review package: main..feature\n\n## Commits\n")).toBe(true);
+      expect(content).toContain("feature work"); // the feature commit in ## Commits
+      expect(content).toContain("## Files changed");
+      expect(content).toContain("feat.txt");
+      expect(content).toContain("## Diff");
+      expect(content).toContain("+feat");
+      const sidecar = JSON.parse(readFileSync(join(dir, ".wt.prreview.json"), "utf8")) as Record<string, unknown>;
+      expect(sidecar.diffFile).toBe(diffFile);
+    });
+  });
 });
 
 describe("mstar pr-review worktree-cleanup — report gate + exactly-recorded branch", () => {

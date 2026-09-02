@@ -2918,9 +2918,18 @@ function gitSync(args: string[], cwd: string): string {
   return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 
-/** Run a git command in `cwd`, returning UNTRIMMED stdout (snapshot bytes). */
-function gitRaw(args: string[], cwd: string): string {
-  return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+/**
+ * Git capture ceiling for snapshot bytes — mirrors the engine's
+ * `GIT_CAPTURE_MAX_BYTES` (packages/engine/src/sdd.ts, the same 64 MiB
+ * ceiling `reviewPackage` uses): Node's default 1 MiB `maxBuffer` ENOBUFS'd
+ * on large review ranges. Captures beyond that fail the setup.
+ */
+const GIT_CAPTURE_MAX_BYTES = 64 * 1024 * 1024;
+
+/** Run a git command in `cwd`, returning UNTRIMMED stdout bytes (snapshot
+ * capture — same maxBuffer ceiling as the engine's `reviewPackage`). */
+function gitRaw(args: string[], cwd: string): Buffer {
+  return execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"], maxBuffer: GIT_CAPTURE_MAX_BYTES });
 }
 
 /** Run `gh` with `input` on stdin, returning parsed stdout. Throws on failure. */
@@ -2986,10 +2995,13 @@ function probeChangesetEmpty(diffCmdArgs: string[], cwd: string, worktreePath: s
   return gitIf(diffCmdArgs, worktreePath).length === 0;
 }
 
-/** Like {@link gitSync} but returns "" instead of throwing (probe paths). */
+/** Like {@link gitSync} but returns "" instead of throwing (probe paths).
+ * Carries the same 64 MiB capture ceiling as the engine's `gitOut` — a
+ * changeset-emptiness probe on a large diff must not ENOBUFS into a false
+ * "empty" verdict. */
 function gitIf(args: string[], cwd: string): string {
   try {
-    return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: GIT_CAPTURE_MAX_BYTES });
   } catch {
     return "";
   }
@@ -3173,7 +3185,7 @@ prReviewCommand
   .description(
     "Create the isolated review worktree per pr-review.md \u00a7 Worktree isolation: resolves the real base, picks a " +
       "collision-free branch name, fetches with explicit refspecs, creates the worktree, computes the diff basis INSIDE it, " +
-      "and records a sidecar json consumed by worktree-cleanup; prints {reviewBranch, worktreePath, base, mergeBase, diffCmd} " +
+      "and records a sidecar json consumed by worktree-cleanup; prints {reviewBranch, worktreePath, base, mergeBase, diffCmd, diffFile} " +
       "(input modes: --pr <n> | --branch <b> | --diff | --working-tree | --commit <sha>)",
   )
   .option("--pr <n>", "PR number input mode (pull/<n>/head via gh)")
@@ -3319,6 +3331,9 @@ prReviewCommand
           if (branchToDelete !== "" && !existing.has(branchToDelete)) {
             gitSync(["branch", "-D", branchToDelete], repoRoot);
           }
+          // A FAILing setup must not leave the review artifact behind either
+          // (the snapshot lives beside the sidecar, outside the worktree).
+          fs.rmSync(diffSnapshotPathFor(worktreePath), { force: true });
         } catch {
           // rollback best-effort; the preflight FAIL below still exits non-zero
         }
@@ -3373,47 +3388,56 @@ prReviewCommand
       }
 
       // Diff snapshot: review artifact beside the sidecar (never inside the
-      // worktree). Mirrors SDD reviewPackage section layout; commit mode has
-      // no range, so its Commits section is the single commit line.
+      // worktree). Mirrors SDD reviewPackage section layout AND its capture
+      // mechanics (Buffer parts + 64 MiB maxBuffer); commit mode has no
+      // range, so its Commits section is the single commit line.
       const diffFile = diffSnapshotPathFor(worktreePath);
-      const snapshotParts: string[] = [];
+      const snapshotParts: Buffer[] = [];
       if (mode === "commit") {
         snapshotParts.push(
-          `# Review package: ${baseRef} (single commit)\n\n## Commits\n`,
+          Buffer.from(`# Review package: ${baseRef} (single commit)\n\n## Commits\n`),
           gitRaw(["log", "--oneline", "-1", headSpec], worktreePath),
-          "\n## Files changed\n",
+          Buffer.from("\n## Files changed\n"),
           gitRaw(["show", "--stat", headSpec], worktreePath),
-          "\n## Diff\n",
+          Buffer.from("\n## Diff\n"),
           gitRaw(["show", "-U10", headSpec], worktreePath),
         );
       } else {
         const range = diffArgs[1]!;
         const [rangeBase, rangeHead] = range.split("...");
         snapshotParts.push(
-          `# Review package: ${baseRef}..${headSpec}\n\n## Commits\n`,
+          Buffer.from(`# Review package: ${baseRef}..${headSpec}\n\n## Commits\n`),
           gitRaw(["log", "--oneline", `${rangeBase}..${rangeHead}`], worktreePath),
-          "\n## Files changed\n",
+          Buffer.from("\n## Files changed\n"),
           gitRaw(["diff", "--stat", range], worktreePath),
-          "\n## Diff\n",
+          Buffer.from("\n## Diff\n"),
           gitRaw(["diff", "-U10", range], worktreePath),
         );
       }
-      fs.writeFileSync(diffFile, snapshotParts.join(""));
-
-      const recordedBase =
-        mode === "pr" || (mode !== "commit" && !baseRef.startsWith("origin/")) ? `origin/${baseRef}` : baseRef;
-      const sidecar: ReviewWorktreeSidecar = {
-        reviewBranch: mode === "pr" ? reviewBranch : "",
-        worktreePath,
-        base: recordedBase,
-        mergeBase,
-        diffCmd,
-        reportSaved: false,
-        createdAt: new Date().toISOString(),
-        repoRoot,
-        diffFile,
-      };
-      fs.writeFileSync(sidecarPathFor(worktreePath), JSON.stringify(sidecar, null, 2));
+      // Snapshot capture/write and the sidecar write are the last failure
+      // points after the worktree exists — a FAIL here must roll the new
+      // worktree back (never an orphaned worktree + no sidecar), then fail.
+      let sidecar: ReviewWorktreeSidecar;
+      try {
+        fs.writeFileSync(diffFile, Buffer.concat(snapshotParts));
+        const recordedBase =
+          mode === "pr" || (mode !== "commit" && !baseRef.startsWith("origin/")) ? `origin/${baseRef}` : baseRef;
+        sidecar = {
+          reviewBranch: mode === "pr" ? reviewBranch : "",
+          worktreePath,
+          base: recordedBase,
+          mergeBase,
+          diffCmd,
+          reportSaved: false,
+          createdAt: new Date().toISOString(),
+          repoRoot,
+          diffFile,
+        };
+        fs.writeFileSync(sidecarPathFor(worktreePath), JSON.stringify(sidecar, null, 2));
+      } catch (error) {
+        rollbackNewWorktree(mode === "pr" ? reviewBranch : "");
+        throw error;
+      }
       console.log(JSON.stringify({
         reviewBranch: sidecar.reviewBranch === "" ? null : sidecar.reviewBranch,
         worktreePath: sidecar.worktreePath,
