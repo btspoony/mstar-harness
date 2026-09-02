@@ -21,7 +21,7 @@ import { pathToFileURL } from 'node:url'
 import { Context, Service, type Fiber } from '@deepseek-ai/cordis'
 import { load as parseYaml } from 'js-yaml'
 import { createScope } from '@deepseek-ai/dsh-scope'
-import { Session, SessionId } from '@deepseek-ai/dsh-session'
+import { Session, SessionId, SessionSeq } from '@deepseek-ai/dsh-session'
 import { MessageId } from '@deepseek-ai/dsh-llm'
 import type { JobDoneListener, JobSnapshot } from '@deepseek-ai/dsh-jobs'
 import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -409,7 +409,7 @@ let fakeChildSeq = 0
 export function seededSession(id: SessionId, prompt: string): Session {
   return Session.create(id, [{
     type: 'user/message',
-    seq: 0,
+    seq: SessionSeq(0),
     time: 1_700_000_000_000,
     data: {
       id: MessageId(`seed-${id}`),
