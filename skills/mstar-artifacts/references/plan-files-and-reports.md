@@ -76,7 +76,7 @@ The durable summary is not a paste of raw reports. It is a small gate record suf
 - **并行 vs 串行**：不同 `plan_id` **相互独立**时，可 **并行**派发多组三审（每组各自的 Assignment 与 `{SDD_DIR}/review/`）；若 PM 选择串行，须在 Status Update 写明顺序——**每组仍须完整三审 + QA**，不是「一个大 QC」混审。
 - **读 skill**：书写或派发 QC 相关 Assignment 前，PM **必须** Read **`mstar-review-qc`**（编排与 residual）；leaf `qc-specialist*` → **`mstar-roles/references/qc-specialist/`**。见 `mstar-conventions` SKILL.md **QC pre-dispatch gate**。
 
-**QC 落盘与宿主权限**：`qc-specialist` / `qc-specialist-2` / `qc-specialist-3` 在支持路径白名单的宿主上（如 OpenCode 的 **`permission.edit`**），默认 **仅可** Write/Edit Assignment 指定的 **`{SDD_DIR}/review/`** 下 **`.md`**。全局 agent 提示词应允许 `.mstar/sdd/**`、`.agents/sdd/**` 及 worktree 下对应路径。报告文件**必须**以 YAML **frontmatter** 开头（键见各 QC agent 提示词）。
+**QC 落盘与宿主权限**：`qc-specialist` / `qc-specialist-2` / `qc-specialist-3` 在支持路径白名单的宿主上（如 OpenCode 的 **`permission.edit`**），默认 **仅可** Write/Edit Assignment 指定的 **`{SDD_DIR}/review/`** 下 **`.md`**。全局 agent 提示词应允许 `.mstar/sdd/**`、`.agents/sdd/**` 及 `.worktrees/**`。报告文件**必须**以 YAML **frontmatter** 开头（键见各 QC agent 提示词）。
 
 **QC 报告与 Git**：默认 raw QC/QA bundle **不**执行 `git add` / `git commit`。PM 将 durable gate summary 写入主 plan（本地会话 SSOT；默认 gitignored）并在当轮更新 project register 的 open residuals（本地 SSOT，默认 gitignored）。**跨 clone 须持久的** residual 或决策须提升入 tracked `{KNOWLEDGE_DIR}/` / `{SPECS_DIR}/` 或 `{HARNESS_DIR}/AGENTS.md`（见 `mstar-conventions`「Git 跟踪策略」）— **勿**默认 `git add` `status.json` / `workflows/` / `projects/` / `plans/`。若项目显式 opt-in 跟踪审计报告，在 Assignment 写 `Review archive mode: tracked reports` 并使用项目 allow rules。
 

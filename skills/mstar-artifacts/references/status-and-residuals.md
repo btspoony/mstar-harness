@@ -67,7 +67,7 @@ Canonical vs legacy residual definitions → **`mstar-artifacts` SKILL.md**（"`
       "execution_lease": {
         "holder": "omp:demo-session",
         "claimed_at": "2026-08-30T02:30:00Z",
-        "worktree_path": "/tmp/worktrees/demo-plan",
+        "worktree_path": ".worktrees/demo-plan",
         "working_branch": "feature/demo-plan"
       }
     }

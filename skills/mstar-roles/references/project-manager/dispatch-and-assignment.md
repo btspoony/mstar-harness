@@ -96,7 +96,7 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 **Review cwd / Worktree path**: <absolute path or N/A>
 **plan_id**: <plan-id or N/A + scope label>
 **Review range / Diff basis**: <reproducible basis; merge-base = `metadata.target_branch` or PM-specified ref — not assumed `origin/main`>
-**Worktree path**: <absolute feature implementer path when L1/L2 isolation used; must ≠ control_worktree_path>
+**Worktree path**: <absolute feature implementer path when L1/L2 isolation used; default `<repoRoot>/.worktrees/<plan-id>-<slug>` (L2 tracks: `<track-slug>`); must ≠ control_worktree_path>
 **QA gate**: mandatory | pm-acceptance | report-only — see `references/project-manager/qa-trigger-matrix.md`
 **QA gate reason**: <tier label, e.g. hotfix-inline | small-feature-clean-qc | mandatory-medium-feature>
 **QA mode**: acceptance-only | full | report-only | N/A — required when `QA gate: mandatory` or `report-only`

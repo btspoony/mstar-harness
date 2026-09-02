@@ -38,7 +38,7 @@ A Phase 2 session **MUST** claim before moving a plan from `Todo`/`Blocked` to `
 2. **Resume (not steal):** if `execution_lease` exists and `holder` **equals this session** → verify-held: confirm `worktree_path` and `working_branch` match the Assignment; continue (not Blocked, not a new claim).
 3. **Blocked:** if `execution_lease` exists and `holder` **differs** → stop. No timestamp, TTL, or inactivity makes it stealable.
 4. **Orphan:** if `status` is `InProgress` but `execution_lease` is absent → **STOP** (see Orphan recovery). Do not writable-dispatch or invent a lease.
-5. Create or verify the dedicated feature worktree and branch (`worktree_path` ≠ `control_worktree_path`).
+5. Create or verify the dedicated feature worktree and branch (default `<repoRoot>/.worktrees/<plan-id>-<slug>`; `worktree_path` ≠ `control_worktree_path`).
 6. Acquire the same-host write lock (above); re-read the coordination file; if row/status/lease changed, restart from step 1.
 7. In **one complete-file update** (under lock), set `status: "InProgress"` and write the full `execution_lease` object. Use a temp file in the same directory + atomic replace; never expose partial JSON.
 8. Re-read the stored row; verify `holder`, `worktree_path`, `working_branch` exactly match the attempted claim. Writable dispatch is forbidden until verification succeeds.
