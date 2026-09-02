@@ -3199,8 +3199,12 @@ type ReviewWorktreeSidecar = {
   repoRoot: string;
   /** Absolute path to the pinned diff snapshot (review artifact beside the sidecar). */
   diffFile?: string;
-  /** sha-256 of the diff snapshot this setup wrote \u2014 content-addressed ownership for cleanup. */
+  /** sha-256 of the diff snapshot this setup wrote - informational only, never an ownership gate. */
   diffFileSha256?: string;
+  /** Device id of the snapshot file this setup wrote - inode identity for cleanup ownership. */
+  diffFileDev?: number;
+  /** Inode number of the snapshot file this setup wrote (string - ino can exceed JSON number safety). */
+  diffFileIno?: string;
 };
 
 prReviewCommand
@@ -3351,11 +3355,11 @@ prReviewCommand
       // file or directory at the deterministic artifact paths (empty-changeset
       // rollback, capture throw, EEXIST/EISDIR write failure) \u2014 the sidecar
       // only when THIS setup created it, the snapshot only when THIS setup
-      // created it (content-addressed via the in-memory sidecar).
+      // created it (inode-identified via the in-memory sidecar).
       let wroteSnapshot = false;
       let wroteSidecar = false;
-      // The in-memory sidecar (with the snapshot's sha-256) once the snapshot
-      // write succeeded \u2014 lets rollback verify ownership content-addressed.
+      // The in-memory sidecar (with the snapshot's inode identity) once the
+      // snapshot write succeeded \u2014 lets rollback verify ownership by inode.
       let pendingSidecar: ReviewWorktreeSidecar | undefined;
 
       /** Remove a just-created worktree + branch when setup fails late. */
@@ -3370,7 +3374,7 @@ prReviewCommand
           // behind either (they live beside the worktree, outside it) \u2014 but
           // ONLY this process's artifacts: the sidecar only when THIS setup
           // wrote it (exclusive create \u2014 a pre-existing sidecar is foreign
-          // and stays), the snapshot only when THIS setup wrote it (sha-256
+          // and stays), the snapshot only when THIS setup wrote it (inode
           // verified). Anything pre-existing at the paths is unowned and
           // stays untouched (never recursive).
           if (wroteSidecar) fs.rmSync(prReviewArtifactPathFor(worktreePath, "json"), { force: true });
@@ -3475,15 +3479,54 @@ prReviewCommand
         // Sidecar FIRST, exclusive create (O_CREAT|O_EXCL). Ownership of the
         // deterministic artifact paths is established by creation order, never
         // by content sniffing: a pre-existing sidecar is by definition foreign
-        // (an earlier review never cleaned, or an interrupted run) — refuse
-        // and point at the documented cleanup path; never clean a foreign
-        // review. On EEXIST/EISDIR this throws with wroteSidecar still false,
-        // so rollback leaves the occupant byte-untouched.
+        // (an earlier review never cleaned) — refuse and point at the
+        // documented cleanup path; never clean a foreign review. The one
+        // exception is an INTERRUPTED setup: a sidecar whose paired snapshot
+        // is not a regular file (crash between the two writes) is incomplete,
+        // not foreign — clear it and retry the exclusive create once, so a
+        // crash never blocks the next setup on operator cleanup. On EISDIR
+        // (or EEXIST on a non-regular entry) this throws with wroteSidecar
+        // still false, so rollback leaves the occupant byte-untouched.
         try {
           fs.writeFileSync(sidecarPath, JSON.stringify(sidecar, null, 2), { flag: "wx" });
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== "EEXIST" && (error as NodeJS.ErrnoException).code !== "EISDIR") throw error;
-          throw new Error(`cannot record setup sidecar at ${sidecarPath} - run mstar pr-review worktree-cleanup first (never cleaning a foreign review)`);
+          if ((error as NodeJS.ErrnoException).code === "EISDIR") {
+            throw new Error(`cannot record setup sidecar at ${sidecarPath} - run mstar pr-review worktree-cleanup first (never cleaning a foreign review)`);
+          }
+          // EEXIST: a regular file occupies the sidecar path. If the paired
+          // snapshot is NOT a regular file, this pair is an interrupted setup
+          // (sidecar written, snapshot never recorded) — clear the incomplete
+          // sidecar and retry the exclusive create once. If the snapshot IS
+          // a regular file, the pair is foreign/complete — refuse and leave
+          // both byte-untouched.
+          let sidecarStat: fs.Stats | undefined;
+          try {
+            sidecarStat = fs.lstatSync(sidecarPath);
+          } catch {
+            sidecarStat = undefined;
+          }
+          if (sidecarStat === undefined || !sidecarStat.isFile()) {
+            throw new Error(`cannot record setup sidecar at ${sidecarPath} - run mstar pr-review worktree-cleanup first (never cleaning a foreign review)`);
+          }
+          let snapshotStat: fs.Stats | undefined;
+          try {
+            snapshotStat = fs.lstatSync(diffFile);
+          } catch {
+            snapshotStat = undefined;
+          }
+          if (snapshotStat !== undefined && snapshotStat.isFile()) {
+            throw new Error(`cannot record setup sidecar at ${sidecarPath} - run mstar pr-review worktree-cleanup first (never cleaning a foreign review)`);
+          }
+          // Incomplete pair: the sidecar has no snapshot. Clear it and retry
+          // the exclusive create once — setup must then succeed.
+          fs.unlinkSync(sidecarPath);
+          try {
+            fs.writeFileSync(sidecarPath, JSON.stringify(sidecar, null, 2), { flag: "wx" });
+          } catch (retryError) {
+            if ((retryError as NodeJS.ErrnoException).code !== "EEXIST" && (retryError as NodeJS.ErrnoException).code !== "EISDIR") throw retryError;
+            throw new Error(`cannot record setup sidecar at ${sidecarPath} - run mstar pr-review worktree-cleanup first (never cleaning a foreign review)`);
+          }
         }
         wroteSidecar = true; // the sidecar at sidecarPath is now owned by this process
         // Snapshot SECOND, exclusive create. Our own sidecar was JUST created
@@ -3497,7 +3540,15 @@ prReviewCommand
           throw new Error(`refusing to overwrite pre-existing non-snapshot path ${diffFile}`);
         }
         wroteSnapshot = true; // the file at diffFile is now owned by this process
+        // Record the snapshot's inode identity on the in-memory sidecar and
+        // rewrite the sidecar we just created (plain write — we own it).
+        // Cleanup proves ownership by inode, never by content: identical
+        // bytes on a new inode are a replacement, not our snapshot.
+        const snapshotStat = fs.lstatSync(diffFile);
+        sidecar.diffFileDev = snapshotStat.dev;
+        sidecar.diffFileIno = String(snapshotStat.ino);
         pendingSidecar = sidecar;
+        fs.writeFileSync(sidecarPath, JSON.stringify(sidecar, null, 2));
         return sidecar;
       };
       // Snapshot capture, write, and the sidecar write are the last failure
@@ -3532,11 +3583,13 @@ function prReviewArtifactPathFor(worktreePath: string, suffix: "json" | "diff"):
 
 /**
  * Remove the diff snapshot at the computed artifact path ONLY when it is
- * provably this flow's snapshot: a regular file whose sha-256 equals the
- * sidecar's recorded `diffFileSha256`. A replacement file, a legacy sidecar
- * without the field, and any non-regular entry at the deterministic path are
- * unowned and left in place (with a note); missing is a no-op. Never
- * recursive; always the computed path (never `sidecar.diffFile`).
+ * provably this flow's snapshot: a regular file whose inode identity equals
+ * the sidecar's recorded `diffFileDev` / `diffFileIno`. Identical bytes are
+ * not identity \u2014 a replacement file with the same contents (new inode)
+ * is unowned. A replacement file, a sidecar without recorded inode identity,
+ * and any non-regular entry at the deterministic path are left in place
+ * (with a note); missing is a no-op. Never recursive; always the computed
+ * path (never `sidecar.diffFile`).
  */
 function removeOwnedSnapshotFile(worktreePath: string, sidecar: ReviewWorktreeSidecar): void {
   const snapshotPath = prReviewArtifactPathFor(worktreePath, "diff");
@@ -3547,14 +3600,16 @@ function removeOwnedSnapshotFile(worktreePath: string, sidecar: ReviewWorktreeSi
     return; // missing \u2192 no-op
   }
   if (!stat.isFile()) return; // non-regular \u2192 unowned, leave in place
-  const recorded = sidecar.diffFileSha256;
-  const owned = typeof recorded === "string" && recorded !== ""
-    && createHash("sha256").update(fs.readFileSync(snapshotPath)).digest("hex") === recorded;
+  const recordedIno = sidecar.diffFileIno;
+  const recordedDev = sidecar.diffFileDev;
+  const owned = typeof recordedIno === "string" && recordedIno !== ""
+    && typeof recordedDev === "number" && Number.isFinite(recordedDev)
+    && String(stat.ino) === recordedIno && stat.dev === recordedDev;
   if (!owned) {
-    // Replacement file, or a legacy sidecar without the recorded hash:
-    // ownership cannot be verified \u2014 leave the path in place, never unlink
-    // by inference (P1-3).
-    console.error(pc.yellow(`worktree-cleanup: snapshot at ${snapshotPath} left in place (content does not match the recorded snapshot)`));
+    // Replacement file (new inode), or a sidecar without recorded inode
+    // identity: ownership cannot be proven \u2014 leave the path in place,
+    // never unlink by content (identical bytes are not identity).
+    console.error(pc.yellow(`worktree-cleanup: snapshot at ${snapshotPath} left in place (inode does not match the recorded snapshot)`));
     return;
   }
   fs.unlinkSync(snapshotPath);
