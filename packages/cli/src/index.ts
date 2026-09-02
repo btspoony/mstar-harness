@@ -3205,6 +3205,8 @@ type ReviewWorktreeSidecar = {
   diffFileDev?: number;
   /** Inode number of the snapshot file this setup wrote (string - ino can exceed JSON number safety). */
   diffFileIno?: string;
+  /** mtime (ms) of the snapshot file this setup wrote - closes the ext4 inode-reuse hole (a replacement can inherit dev+ino, never the mtime). */
+  diffFileMtimeMs?: number;
 };
 
 prReviewCommand
@@ -3220,7 +3222,7 @@ prReviewCommand
   .option("--diff", "Arbitrary diff input mode \u2014 no worktree, no refs")
   .option("--working-tree", "Uncommitted working-tree input mode \u2014 no worktree, no refs")
   .option("--commit <sha>", "Single-commit input mode")
-  .option("--path <dir>", "Worktree target directory (default: ../<repo-name>.review-pr<N> beside the repo)")
+  .option("--path <dir>", "Worktree target directory (default: <repo>/.worktrees/review-<branch>)")
   .action((options: { pr?: string; branch?: string; diff?: boolean; workingTree?: boolean; commit?: string; path?: string }) => {
     try {
       const modesDeclared = [
@@ -3324,7 +3326,22 @@ prReviewCommand
         : Number(String(Math.abs([...headSpec].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) % 1_000_003, 7))));
       const reviewBranch = pickReviewBranchName(existing, baseCandidate === 0 ? 1 : baseCandidate, cliToday().replace(/-/g, ""));
       const branchSuffix = mode === "pr" ? "" : `-${headSpec.slice(0, 8)}`;
-      const worktreePath = path.resolve(options.path ?? joinDirnameBeside(repoRoot, `.review-${reviewBranch}${branchSuffix}`));
+      const worktreePath = path.resolve(options.path ?? path.join(repoRoot, ".worktrees", `review-${reviewBranch}${branchSuffix}`));
+      // Default review worktrees live under <repoRoot>/.worktrees/ per the
+      // mstar-branch-worktree convention. The target repo may not gitignore
+      // that directory — ensure it exists and, when the repo does not already
+      // ignore it, add `.worktrees/` to .git/info/exclude (idempotent,
+      // local-only; never touch a tracked .gitignore).
+      if (options.path === undefined) {
+        fs.mkdirSync(path.join(repoRoot, ".worktrees"), { recursive: true });
+        if (gitIf(["check-ignore", ".worktrees/"], repoRoot) === "") {
+          const excludePath = path.join(repoRoot, ".git", "info", "exclude");
+          const existing = fs.existsSync(excludePath) ? fs.readFileSync(excludePath, "utf8") : "";
+          if (!existing.split("\n").some((line) => line.trim() === ".worktrees/")) {
+            fs.appendFileSync(excludePath, `${existing === "" || existing.endsWith("\n") ? "" : "\n"}.worktrees/\n`);
+          }
+        }
+      }
 
       // Establish named refs with explicit refspecs FIRST (pr-review.md §
       // Worktree isolation: "+refs/heads/<base>:refs/remotes/origin/<base>
@@ -3480,53 +3497,18 @@ prReviewCommand
         // deterministic artifact paths is established by creation order, never
         // by content sniffing: a pre-existing sidecar is by definition foreign
         // (an earlier review never cleaned) — refuse and point at the
-        // documented cleanup path; never clean a foreign review. The one
-        // exception is an INTERRUPTED setup: a sidecar whose paired snapshot
-        // is not a regular file (crash between the two writes) is incomplete,
-        // not foreign — clear it and retry the exclusive create once, so a
-        // crash never blocks the next setup on operator cleanup. On EISDIR
-        // (or EEXIST on a non-regular entry) this throws with wroteSidecar
-        // still false, so rollback leaves the occupant byte-untouched.
+        // documented cleanup path; never clean a foreign review. Absence of
+        // the paired snapshot is NOT ownership either: an interrupted setup
+        // (sidecar written, crash before the snapshot) is recovered by the
+        // operator running `mstar pr-review worktree-cleanup` (which removes
+        // the sidecar), never by setup deleting a pre-existing file. On
+        // EEXIST / EISDIR this throws with wroteSidecar still false, so
+        // rollback leaves the occupant byte-untouched.
         try {
           fs.writeFileSync(sidecarPath, JSON.stringify(sidecar, null, 2), { flag: "wx" });
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== "EEXIST" && (error as NodeJS.ErrnoException).code !== "EISDIR") throw error;
-          if ((error as NodeJS.ErrnoException).code === "EISDIR") {
-            throw new Error(`cannot record setup sidecar at ${sidecarPath} - run mstar pr-review worktree-cleanup first (never cleaning a foreign review)`);
-          }
-          // EEXIST: a regular file occupies the sidecar path. If the paired
-          // snapshot is NOT a regular file, this pair is an interrupted setup
-          // (sidecar written, snapshot never recorded) — clear the incomplete
-          // sidecar and retry the exclusive create once. If the snapshot IS
-          // a regular file, the pair is foreign/complete — refuse and leave
-          // both byte-untouched.
-          let sidecarStat: fs.Stats | undefined;
-          try {
-            sidecarStat = fs.lstatSync(sidecarPath);
-          } catch {
-            sidecarStat = undefined;
-          }
-          if (sidecarStat === undefined || !sidecarStat.isFile()) {
-            throw new Error(`cannot record setup sidecar at ${sidecarPath} - run mstar pr-review worktree-cleanup first (never cleaning a foreign review)`);
-          }
-          let snapshotStat: fs.Stats | undefined;
-          try {
-            snapshotStat = fs.lstatSync(diffFile);
-          } catch {
-            snapshotStat = undefined;
-          }
-          if (snapshotStat !== undefined && snapshotStat.isFile()) {
-            throw new Error(`cannot record setup sidecar at ${sidecarPath} - run mstar pr-review worktree-cleanup first (never cleaning a foreign review)`);
-          }
-          // Incomplete pair: the sidecar has no snapshot. Clear it and retry
-          // the exclusive create once — setup must then succeed.
-          fs.unlinkSync(sidecarPath);
-          try {
-            fs.writeFileSync(sidecarPath, JSON.stringify(sidecar, null, 2), { flag: "wx" });
-          } catch (retryError) {
-            if ((retryError as NodeJS.ErrnoException).code !== "EEXIST" && (retryError as NodeJS.ErrnoException).code !== "EISDIR") throw retryError;
-            throw new Error(`cannot record setup sidecar at ${sidecarPath} - run mstar pr-review worktree-cleanup first (never cleaning a foreign review)`);
-          }
+          throw new Error(`cannot record setup sidecar at ${sidecarPath} - run mstar pr-review worktree-cleanup first (never cleaning a foreign review)`);
         }
         wroteSidecar = true; // the sidecar at sidecarPath is now owned by this process
         // Snapshot SECOND, exclusive create. Our own sidecar was JUST created
@@ -3540,13 +3522,16 @@ prReviewCommand
           throw new Error(`refusing to overwrite pre-existing non-snapshot path ${diffFile}`);
         }
         wroteSnapshot = true; // the file at diffFile is now owned by this process
-        // Record the snapshot's inode identity on the in-memory sidecar and
-        // rewrite the sidecar we just created (plain write — we own it).
-        // Cleanup proves ownership by inode, never by content: identical
-        // bytes on a new inode are a replacement, not our snapshot.
+        // Record the snapshot's identity on the in-memory sidecar and rewrite
+        // the sidecar we just created (plain write — we own it). Cleanup
+        // proves ownership by identity, never by content: identical bytes on a
+        // new inode are a replacement, not our snapshot. The mtime closes the
+        // ext4 inode-reuse hole — a replacement can inherit dev+ino, never
+        // the mtime of the file this setup wrote.
         const snapshotStat = fs.lstatSync(diffFile);
         sidecar.diffFileDev = snapshotStat.dev;
         sidecar.diffFileIno = String(snapshotStat.ino);
+        sidecar.diffFileMtimeMs = snapshotStat.mtimeMs;
         pendingSidecar = sidecar;
         fs.writeFileSync(sidecarPath, JSON.stringify(sidecar, null, 2));
         return sidecar;
@@ -3583,41 +3568,92 @@ function prReviewArtifactPathFor(worktreePath: string, suffix: "json" | "diff"):
 
 /**
  * Remove the diff snapshot at the computed artifact path ONLY when it is
- * provably this flow's snapshot: a regular file whose inode identity equals
- * the sidecar's recorded `diffFileDev` / `diffFileIno`. Identical bytes are
- * not identity \u2014 a replacement file with the same contents (new inode)
- * is unowned. A replacement file, a sidecar without recorded inode identity,
- * and any non-regular entry at the deterministic path are left in place
- * (with a note); missing is a no-op. Never recursive; always the computed
- * path (never `sidecar.diffFile`).
+ * provably this flow's snapshot: a regular file whose identity equals the
+ * sidecar's recorded `diffFileDev` / `diffFileIno` / `diffFileMtimeMs`.
+ * Identical bytes are not identity \u2014 a replacement file with the same
+ * contents (new inode) is unowned. A replacement file, a sidecar without
+ * recorded identity, and any non-regular entry at the deterministic path are
+ * left in place (with a note); missing is a no-op. Never recursive; always
+ * the computed path (never `sidecar.diffFile`).
+ *
+ * The check and the deletion are bound to ONE filesystem object via an open
+ * fd: `lstat(path)` then `unlink(path)` is a TOCTOU pair (the path can be
+ * swapped between the two calls), and a dev+ino match alone is unsound on
+ * filesystems that reuse inode numbers (ext4) \u2014 a replacement can
+ * inherit the recorded dev+ino. The mtime check closes that hole (a
+ * replacement is written at a different time), and the post-rename fd check
+ * proves the rename detached the inode we verified: the inode now at tmp
+ * must BE the inode we opened, so unlinking tmp removes exactly our
+ * snapshot \u2014 a replacement swapped in between open and rename is
+ * restored byte-identical, never deleted.
  */
 function removeOwnedSnapshotFile(worktreePath: string, sidecar: ReviewWorktreeSidecar): void {
   const snapshotPath = prReviewArtifactPathFor(worktreePath, "diff");
-  let stat: fs.Stats;
+  let fd: number;
   try {
-    stat = fs.lstatSync(snapshotPath);
-  } catch {
-    return; // missing \u2192 no-op
-  }
-  if (!stat.isFile()) return; // non-regular \u2192 unowned, leave in place
-  const recordedIno = sidecar.diffFileIno;
-  const recordedDev = sidecar.diffFileDev;
-  const owned = typeof recordedIno === "string" && recordedIno !== ""
-    && typeof recordedDev === "number" && Number.isFinite(recordedDev)
-    && String(stat.ino) === recordedIno && stat.dev === recordedDev;
-  if (!owned) {
-    // Replacement file (new inode), or a sidecar without recorded inode
-    // identity: ownership cannot be proven \u2014 leave the path in place,
-    // never unlink by content (identical bytes are not identity).
-    console.error(pc.yellow(`worktree-cleanup: snapshot at ${snapshotPath} left in place (inode does not match the recorded snapshot)`));
+    fd = fs.openSync(snapshotPath, "r");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return; // missing \u2192 no-op
+    console.error(pc.yellow(`worktree-cleanup: snapshot at ${snapshotPath} left in place (cannot open: ${(error as Error).message})`));
     return;
   }
-  fs.unlinkSync(snapshotPath);
-}
-
-/** Default worktree location: a sibling directory beside the repo root. */
-function joinDirnameBeside(repoRoot: string, leaf: string): string {
-  return path.join(path.dirname(path.resolve(repoRoot)), leaf);
+  try {
+    const st = fs.fstatSync(fd);
+    if (!st.isFile()) return; // non-regular \u2192 unowned, leave in place
+    const recordedIno = sidecar.diffFileIno;
+    const recordedDev = sidecar.diffFileDev;
+    const recordedMtimeMs = sidecar.diffFileMtimeMs;
+    const owned = typeof recordedIno === "string" && recordedIno !== ""
+      && typeof recordedDev === "number" && Number.isFinite(recordedDev)
+      && typeof recordedMtimeMs === "number" && Number.isFinite(recordedMtimeMs)
+      && String(st.ino) === recordedIno && st.dev === recordedDev
+      && st.mtimeMs === recordedMtimeMs;
+    if (!owned) {
+      // Replacement file (new inode \u2014 even with a reused inode number,
+      // the mtime differs), or a sidecar without recorded identity:
+      // ownership cannot be proven \u2014 leave the path in place, never
+      // unlink by content (identical bytes are not identity).
+      console.error(pc.yellow(`worktree-cleanup: snapshot at ${snapshotPath} left in place (file identity does not match the recorded snapshot)`));
+      return;
+    }
+    if (st.nlink !== 1) {
+      // 0 = our inode was already unlinked (the path holds a replacement);
+      // >1 = unexpected hardlink. Either way ownership is not provable.
+      console.error(pc.yellow(`worktree-cleanup: snapshot at ${snapshotPath} left in place (link count does not match the recorded snapshot)`));
+      return;
+    }
+    // The verified inode's only link is the path we created it at. Detach it
+    // to a unique sibling name, then re-check the fd: the inode now at tmp
+    // must BE the inode we opened \u2014 only then is unlinking tmp removing
+    // exactly our snapshot. Anything else at tmp is a replacement swapped in
+    // between open and rename \u2014 restore it byte-identical, never delete.
+    const tmp = `${snapshotPath}.cleanup.${process.pid}.${Date.now()}`;
+    try {
+      fs.renameSync(snapshotPath, tmp);
+    } catch (error) {
+      console.error(pc.yellow(`worktree-cleanup: snapshot at ${snapshotPath} left in place (cannot detach: ${(error as Error).message})`));
+      return;
+    }
+    const st2 = fs.fstatSync(fd);
+    let tmpStat: fs.Stats | undefined;
+    try {
+      tmpStat = fs.lstatSync(tmp);
+    } catch {
+      tmpStat = undefined;
+    }
+    if (tmpStat !== undefined && tmpStat.ino === st2.ino && tmpStat.dev === st2.dev) {
+      fs.unlinkSync(tmp);
+    } else {
+      try {
+        fs.renameSync(tmp, snapshotPath);
+      } catch (error) {
+        throw new Error(`worktree-cleanup: snapshot replacement at ${tmp} could not be restored to ${snapshotPath}: ${(error as Error).message}`);
+      }
+      console.error(pc.yellow(`worktree-cleanup: snapshot at ${snapshotPath} was replaced during cleanup - restored the replacement, never deleted`));
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 prReviewCommand

@@ -13,7 +13,7 @@
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, realpathSync, chmodSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, realpathSync, chmodSync, lstatSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -486,6 +486,36 @@ describe("mstar pr-review worktree-setup — detached modes with real temp repos
       const sidecar = JSON.parse(readFileSync(sidecarFile, "utf8")) as Record<string, unknown>;
       expect(sidecar.reviewBranch).toBe("");
       expect(sidecar.reportSaved).toBe(false);
+    });
+  });
+
+  test("default worktree lands under <repo>/.worktrees/ and the repo stays clean", () => {
+    withTempDir((dir) => {
+      const repo = join(dir, "repo");
+      repoWithAddedLines(repo, 10);
+      const sha = git(["rev-parse", "HEAD"], repo);
+      // No --path: the review worktree must default to <repo>/.worktrees/
+      // per the mstar-branch-worktree convention, and the target repo (which
+      // has no .gitignore) must stay clean — setup appends .worktrees/ to
+      // .git/info/exclude when the repo does not already ignore it.
+      const result = runCli(["pr-review", "worktree-setup", "--commit", sha], { cwd: repo });
+      expect(result.exitCode).toBe(0);
+      const printed = JSON.parse(result.stdout) as Record<string, unknown>;
+      const wtPath = String(printed.worktreePath);
+      // git resolves the toplevel to the real path (macOS /tmp → /private/tmp),
+      // so compare against the realpath of the repo.
+      expect(wtPath.startsWith(join(realpathSync(repo), ".worktrees", "review-"))).toBe(true);
+      expect(wtPath.endsWith(`-${sha.slice(0, 8)}`)).toBe(true);
+      expect(existsSync(wtPath)).toBe(true);
+      expect(git(["status", "--porcelain"], repo)).toBe("");
+      // Cleanup removes the worktree + sidecar + snapshot and stays clean.
+      const ok = runCli(
+        ["pr-review", "worktree-cleanup", "--path", wtPath, "--branch", "", "--report-saved"],
+        { cwd: repo },
+      );
+      expect(ok.exitCode).toBe(0);
+      expect(existsSync(wtPath)).toBe(false);
+      expect(git(["status", "--porcelain"], repo)).toBe("");
     });
   });
 
@@ -1303,10 +1333,11 @@ describe("mstar pr-review worktree-setup — changeset preflight + rollback (fix
 });
 
 // ---------------------------------------------------------------------------
-// Fix-round tests (round 4: sidecar-first, no shape-based reclaim)
+// Fix-round tests (round 4: sidecar-first, no shape-based reclaim; round 6:
+// a pre-existing sidecar is ALWAYS foreign — never auto-cleared)
 // ---------------------------------------------------------------------------
 
-describe("mstar pr-review worktree-setup — sidecar-first, incomplete-pair auto-clear (round 5)", () => {
+describe("mstar pr-review worktree-setup — sidecar-first, foreign sidecar never auto-cleared (round 6)", () => {
   test("crafted review-package header at the snapshot path is never reclaimed (P1)", () => {
     withTempDir((dir) => {
       const repo = join(dir, "repo");
@@ -1340,31 +1371,43 @@ describe("mstar pr-review worktree-setup — sidecar-first, incomplete-pair auto
     });
   });
 
-  test("incomplete sidecar auto-clears on retry (interrupted setup does not block)", () => {
+  test("pre-existing sidecar without a snapshot refuses setup (interrupted setup needs operator cleanup)", () => {
     withTempDir((dir) => {
       const repo = join(dir, "repo");
       repoWithAddedLines(repo, 10);
       const sha = git(["rev-parse", "HEAD"], repo);
       const wtPath = join(dir, "rev-wt");
       // Interrupted run in the sidecar-first order: sidecar written, snapshot
-      // never recorded. The pair is INCOMPLETE (no snapshot file at the
-      // reserved path) — setup must clear the stale sidecar itself and
-      // succeed, with no operator cleanup.
+      // never recorded. The sidecar is a pre-existing file — absence of the
+      // paired snapshot is NOT ownership, so setup must refuse with the
+      // cleanup hint, roll back its own worktree, and leave the sidecar
+      // byte-identical (never auto-clear a foreign file).
       const sidecarPath = join(dir, ".rev-wt.prreview.json");
-      writeFileSync(
-        sidecarPath,
-        JSON.stringify({ reviewBranch: "", worktreePath: wtPath, repoRoot: repo, reportSaved: false }),
-      );
+      const sidecarBytes = JSON.stringify({ reviewBranch: "", worktreePath: wtPath, repoRoot: repo, reportSaved: false });
+      writeFileSync(sidecarPath, sidecarBytes);
       const result = runCli(["pr-review", "worktree-setup", "--commit", sha, "--path", wtPath], { cwd: repo });
-      expect(result.exitCode).toBe(0);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("worktree-cleanup");
+      expect(existsSync(wtPath)).toBe(false); // the fresh worktree was rolled back
+      expect(readFileSync(sidecarPath, "utf8")).toBe(sidecarBytes); // byte-identical
+      // Operator cleanup: explicit worktree-cleanup removes the stale sidecar.
+      const ok = runCli(
+        ["pr-review", "worktree-cleanup", "--path", wtPath, "--branch", "", "--report-saved"],
+        { cwd: repo },
+      );
+      expect(ok.exitCode).toBe(0);
+      expect(existsSync(sidecarPath)).toBe(false);
+      // Retry succeeds.
+      const retry = runCli(["pr-review", "worktree-setup", "--commit", sha, "--path", wtPath], { cwd: repo });
+      expect(retry.exitCode).toBe(0);
       const diffFile = join(dir, ".rev-wt.prreview.diff");
       expect(existsSync(diffFile)).toBe(true); // fresh snapshot written
-      expect(existsSync(sidecarPath)).toBe(true); // fresh sidecar replaced the stale one
       const content = readFileSync(diffFile, "utf8");
       const sidecar = JSON.parse(readFileSync(sidecarPath, "utf8")) as Record<string, unknown>;
       expect(sidecar.diffFileSha256).toBe(createHash("sha256").update(content).digest("hex"));
       expect(typeof sidecar.diffFileIno).toBe("string");
       expect(typeof sidecar.diffFileDev).toBe("number");
+      expect(typeof sidecar.diffFileMtimeMs).toBe("number");
     });
   });
 
@@ -1393,7 +1436,7 @@ describe("mstar pr-review worktree-setup — sidecar-first, incomplete-pair auto
   });
 });
 
-describe("mstar pr-review worktree-cleanup — inode-identity snapshot ownership (round 5)", () => {
+describe("mstar pr-review worktree-cleanup — fd-bound snapshot ownership (round 6)", () => {
   test("cleanup leaves a replaced snapshot file in place (P1-3)", () => {
     withTempDir((dir) => {
       const { repo, wtPath } = commitModeFixture(dir);
@@ -1436,6 +1479,80 @@ describe("mstar pr-review worktree-cleanup — inode-identity snapshot ownership
       expect(existsSync(snapshotPath)).toBe(true); // replacement file still exists
       expect(readFileSync(snapshotPath, "utf8")).toBe(original);
       expect(both(ok)).toContain("left in place");
+    });
+  });
+
+  test("replacement with a reused inode number is still left in place (mtime gate)", () => {
+    withTempDir((dir) => {
+      const { repo, wtPath } = commitModeFixture(dir);
+      const snapshotPath = join(dir, ".rev-wt.prreview.diff");
+      // Simulate the ext4 inode-reuse case portably: replace the snapshot and
+      // hand-edit the sidecar so dev+ino match the NEW file — only the mtime
+      // still differs. The mtime gate must refuse deletion (a replacement is
+      // written at a different time than the snapshot this setup wrote).
+      rmSync(snapshotPath, { force: true });
+      writeFileSync(snapshotPath, "replacement\n");
+      const st = lstatSync(snapshotPath);
+      const sidecarPath = join(dir, ".rev-wt.prreview.json");
+      const sidecar = JSON.parse(readFileSync(sidecarPath, "utf8")) as Record<string, unknown>;
+      sidecar.diffFileIno = String(st.ino);
+      sidecar.diffFileDev = st.dev;
+      sidecar.diffFileMtimeMs = st.mtimeMs - 1000; // stale — not the mtime this setup recorded
+      writeFileSync(sidecarPath, JSON.stringify(sidecar, null, 2));
+      const ok = runCli(
+        ["pr-review", "worktree-cleanup", "--path", wtPath, "--branch", "", "--report-saved"],
+        { cwd: repo },
+      );
+      expect(ok.exitCode).toBe(0);
+      expect(existsSync(wtPath)).toBe(false);
+      expect(existsSync(sidecarPath)).toBe(false);
+      expect(existsSync(snapshotPath)).toBe(true); // replacement survives
+      expect(readFileSync(snapshotPath, "utf8")).toBe("replacement\n");
+      expect(both(ok)).toContain("left in place");
+    });
+  });
+
+  test("cleanup with a sidecar lacking identity fields leaves the snapshot (yellow note)", () => {
+    withTempDir((dir) => {
+      const { repo, wtPath } = commitModeFixture(dir);
+      const snapshotPath = join(dir, ".rev-wt.prreview.diff");
+      const sidecarPath = join(dir, ".rev-wt.prreview.json");
+      const sidecar = JSON.parse(readFileSync(sidecarPath, "utf8")) as Record<string, unknown>;
+      delete sidecar.diffFileIno;
+      delete sidecar.diffFileDev;
+      delete sidecar.diffFileMtimeMs;
+      writeFileSync(sidecarPath, JSON.stringify(sidecar, null, 2));
+      const ok = runCli(
+        ["pr-review", "worktree-cleanup", "--path", wtPath, "--branch", "", "--report-saved"],
+        { cwd: repo },
+      );
+      expect(ok.exitCode).toBe(0);
+      expect(existsSync(wtPath)).toBe(false);
+      expect(existsSync(sidecarPath)).toBe(false);
+      expect(existsSync(snapshotPath)).toBe(true); // unproven ownership → left in place
+      expect(both(ok)).toContain("left in place");
+    });
+  });
+
+  test("worktree-cleanup removes a stale sidecar when the worktree dir is already gone", () => {
+    withTempDir((dir) => {
+      const repo = join(dir, "repo");
+      repoWithAddedLines(repo, 10);
+      const wtPath = join(dir, "rev-wt");
+      // Interrupted-setup state: sidecar written, worktree never created (or
+      // already removed). Cleanup must tolerate the missing worktree dir,
+      // skip the removal gracefully, and still drop the sidecar.
+      const sidecarPath = join(dir, ".rev-wt.prreview.json");
+      writeFileSync(
+        sidecarPath,
+        JSON.stringify({ reviewBranch: "", worktreePath: wtPath, repoRoot: repo, reportSaved: false }),
+      );
+      const ok = runCli(
+        ["pr-review", "worktree-cleanup", "--path", wtPath, "--branch", "", "--report-saved"],
+        { cwd: repo },
+      );
+      expect(ok.exitCode).toBe(0);
+      expect(existsSync(sidecarPath)).toBe(false);
     });
   });
 });
