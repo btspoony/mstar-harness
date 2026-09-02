@@ -12,6 +12,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, realpathSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -882,17 +883,18 @@ describe("mstar pr-review worktree-setup — pr mode snapshot (mock gh)", () => 
   });
 });
 
-describe("mstar pr-review worktree-cleanup — report gate + exactly-recorded branch", () => {
-  function commitModeFixture(dir: string): { repo: string; wtPath: string } {
-    const repo = join(dir, "repo");
-    repoWithAddedLines(repo, 10);
-    const sha = git(["rev-parse", "HEAD"], repo);
-    const wtPath = join(dir, "rev-wt");
-    const setup = runCli(["pr-review", "worktree-setup", "--commit", sha, "--path", wtPath], { cwd: repo });
-    if (setup.exitCode !== 0) throw new Error(`fixture setup failed: ${setup.stderr}`);
-    return { repo, wtPath };
-  }
+/** Fixture: a real commit-mode setup (worktree + snapshot + sidecar) in `dir`. */
+function commitModeFixture(dir: string): { repo: string; wtPath: string } {
+  const repo = join(dir, "repo");
+  repoWithAddedLines(repo, 10);
+  const sha = git(["rev-parse", "HEAD"], repo);
+  const wtPath = join(dir, "rev-wt");
+  const setup = runCli(["pr-review", "worktree-setup", "--commit", sha, "--path", wtPath], { cwd: repo });
+  if (setup.exitCode !== 0) throw new Error(`fixture setup failed: ${setup.stderr}`);
+  return { repo, wtPath };
+}
 
+describe("mstar pr-review worktree-cleanup — report gate + exactly-recorded branch", () => {
   test("refuses cleanup while the local report is not saved (exit 1)", () => {
     withTempDir((dir) => {
       const { repo, wtPath } = commitModeFixture(dir);
@@ -1296,6 +1298,91 @@ describe("mstar pr-review worktree-setup — changeset preflight + rollback (fix
       expect(existsSync(wtPath)).toBe(false);
       const listed = git(["worktree", "list"], repo);
       expect(listed).not.toContain(wtPath);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fix-round tests (round 3: content-addressed snapshot ownership)
+// ---------------------------------------------------------------------------
+
+describe("mstar pr-review worktree-setup — interrupted-run snapshot reclaim (round 3)", () => {
+  test("stale snapshot in review-package shape without a sidecar is reclaimed (P1-4)", () => {
+    withTempDir((dir) => {
+      const repo = join(dir, "repo");
+      repoWithAddedLines(repo, 10);
+      const sha = git(["rev-parse", "HEAD"], repo);
+      const wtPath = join(dir, "rev-wt");
+      // Interrupted run: snapshot written, sidecar never recorded. The stale
+      // file has the review-package shape (header + the three section
+      // markers in order) — setup must reclaim it (unlink + retry the
+      // exclusive create) and succeed with a FRESH snapshot.
+      const stale = [
+        "# Review package: deadbeef..cafebabe",
+        "",
+        "## Commits",
+        "abc1234 some commit",
+        "## Files changed",
+        " a.txt | 1 +",
+        "## Diff",
+        "diff --git a/a.txt b/a.txt",
+      ].join("\n") + "\n";
+      writeFileSync(join(dir, ".rev-wt.prreview.diff"), stale);
+      const result = runCli(["pr-review", "worktree-setup", "--commit", sha, "--path", wtPath], { cwd: repo });
+      expect(result.exitCode).toBe(0);
+      const printed = JSON.parse(result.stdout) as Record<string, unknown>;
+      const diffFile = join(dir, ".rev-wt.prreview.diff");
+      expect(printed.diffFile).toBe(diffFile);
+      const content = readFileSync(diffFile, "utf8");
+      expect(content.startsWith(`# Review package: ${sha}^ (single commit)`)).toBe(true);
+      expect(content).not.toContain("deadbeef"); // fresh snapshot, not the stale one
+      const sidecar = JSON.parse(readFileSync(join(dir, ".rev-wt.prreview.json"), "utf8")) as Record<string, unknown>;
+      expect(sidecar.diffFileSha256).toBe(createHash("sha256").update(content).digest("hex"));
+    });
+  });
+
+  test("setup refuses when a setup sidecar already exists (earlier review never cleaned)", () => {
+    withTempDir((dir) => {
+      const { repo, wtPath } = commitModeFixture(dir);
+      // Remove the worktree but leave the sidecar + snapshot: the "earlier
+      // review never cleaned" state. A fresh setup must refuse at the
+      // snapshot write (EEXIST + sidecar present) — never reclaim, never
+      // overwrite — and roll back its own new worktree.
+      git(["worktree", "remove", wtPath], repo);
+      git(["worktree", "prune"], repo);
+      const snapshotPath = join(dir, ".rev-wt.prreview.diff");
+      const sidecarPath = join(dir, ".rev-wt.prreview.json");
+      const snapshotBefore = readFileSync(snapshotPath);
+      const sidecarBefore = readFileSync(sidecarPath);
+      const sha = git(["rev-parse", "HEAD"], repo);
+      const result = runCli(["pr-review", "worktree-setup", "--commit", sha, "--path", wtPath], { cwd: repo });
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("worktree-cleanup");
+      expect(readFileSync(snapshotPath)).toEqual(snapshotBefore); // byte-untouched
+      expect(readFileSync(sidecarPath)).toEqual(sidecarBefore); // byte-untouched
+      expect(existsSync(wtPath)).toBe(false); // the fresh worktree was rolled back
+    });
+  });
+});
+
+describe("mstar pr-review worktree-cleanup — content-addressed snapshot ownership (round 3)", () => {
+  test("cleanup leaves a replaced snapshot file in place (P1-3)", () => {
+    withTempDir((dir) => {
+      const { repo, wtPath } = commitModeFixture(dir);
+      // Overwrite the snapshot with a user file: its content no longer
+      // matches the recorded sha-256, so cleanup must NOT unlink it.
+      const snapshotPath = join(dir, ".rev-wt.prreview.diff");
+      writeFileSync(snapshotPath, "replaced by user\n");
+      const ok = runCli(
+        ["pr-review", "worktree-cleanup", "--path", wtPath, "--branch", "", "--report-saved"],
+        { cwd: repo },
+      );
+      expect(ok.exitCode).toBe(0);
+      expect(existsSync(wtPath)).toBe(false);
+      expect(existsSync(join(dir, ".rev-wt.prreview.json"))).toBe(false);
+      expect(existsSync(snapshotPath)).toBe(true); // replacement file still exists
+      expect(readFileSync(snapshotPath, "utf8")).toBe("replaced by user\n");
+      expect(both(ok)).toContain("left in place");
     });
   });
 });

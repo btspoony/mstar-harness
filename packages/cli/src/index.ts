@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { select } from "@inquirer/prompts";
@@ -3198,6 +3199,8 @@ type ReviewWorktreeSidecar = {
   repoRoot: string;
   /** Absolute path to the pinned diff snapshot (review artifact beside the sidecar). */
   diffFile?: string;
+  /** sha-256 of the diff snapshot this setup wrote \u2014 content-addressed ownership for cleanup. */
+  diffFileSha256?: string;
 };
 
 prReviewCommand
@@ -3348,6 +3351,9 @@ prReviewCommand
       // pre-existing file or directory at the deterministic snapshot path
       // (empty-changeset rollback, capture throw, EISDIR write failure).
       let wroteSnapshot = false;
+      // The in-memory sidecar (with the snapshot's sha-256) once the snapshot
+      // write succeeded \u2014 lets rollback verify ownership content-addressed.
+      let pendingSidecar: ReviewWorktreeSidecar | undefined;
 
       /** Remove a just-created worktree + branch when setup fails late. */
       const cleanupOnFailure = (branchToDelete: string): void => {
@@ -3361,7 +3367,7 @@ prReviewCommand
           // (the snapshot lives beside the sidecar, outside the worktree) \u2014
           // but ONLY the snapshot this process wrote. Anything pre-existing
           // at the path is unowned and stays untouched (never recursive).
-          if (wroteSnapshot) removeOwnedSnapshotFile(worktreePath);
+          if (wroteSnapshot && pendingSidecar !== undefined) removeOwnedSnapshotFile(worktreePath, pendingSidecar);
         } catch {
           // rollback best-effort; the preflight FAIL below still exits non-zero
         }
@@ -3447,7 +3453,17 @@ prReviewCommand
         // file, directory, symlink, anything — must never be truncated then
         // claimed as owned. On EEXIST this throws with wroteSnapshot still
         // false, so rollback leaves the pre-existing path byte-untouched.
-        fs.writeFileSync(diffFile, Buffer.concat(snapshotParts), { flag: "wx" });
+        // The one exception: a stale snapshot from an interrupted run
+        // (snapshot written, sidecar never recorded) is reclaimed by
+        // content-addressed proof — see reclaimStaleSnapshot.
+        const snapshot = Buffer.concat(snapshotParts);
+        try {
+          fs.writeFileSync(diffFile, snapshot, { flag: "wx" });
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+          reclaimStaleSnapshot(worktreePath);
+          fs.writeFileSync(diffFile, snapshot, { flag: "wx" }); // retry the exclusive create once
+        }
         wroteSnapshot = true; // the file at diffFile is now owned by this process
         const recordedBase =
           mode === "pr" || (mode !== "commit" && !baseRef.startsWith("origin/")) ? `origin/${baseRef}` : baseRef;
@@ -3461,7 +3477,9 @@ prReviewCommand
           createdAt: new Date().toISOString(),
           repoRoot,
           diffFile,
+          diffFileSha256: createHash("sha256").update(snapshot).digest("hex"),
         };
+        pendingSidecar = sidecar;
         fs.writeFileSync(prReviewArtifactPathFor(worktreePath, "json"), JSON.stringify(sidecar, null, 2));
         return sidecar;
       };
@@ -3496,12 +3514,14 @@ function prReviewArtifactPathFor(worktreePath: string, suffix: "json" | "diff"):
 }
 
 /**
- * Remove the diff snapshot at the computed artifact path ONLY if it is a
- * regular file \u2014 a snapshot this flow wrote. Directories, symlinks, and
- * other non-regular entries at the deterministic path are unowned and left
- * in place; missing is a no-op. Never recursive.
+ * Remove the diff snapshot at the computed artifact path ONLY when it is
+ * provably this flow's snapshot: a regular file whose sha-256 equals the
+ * sidecar's recorded `diffFileSha256`. A replacement file, a legacy sidecar
+ * without the field, and any non-regular entry at the deterministic path are
+ * unowned and left in place (with a note); missing is a no-op. Never
+ * recursive; always the computed path (never `sidecar.diffFile`).
  */
-function removeOwnedSnapshotFile(worktreePath: string): void {
+function removeOwnedSnapshotFile(worktreePath: string, sidecar: ReviewWorktreeSidecar): void {
   const snapshotPath = prReviewArtifactPathFor(worktreePath, "diff");
   let stat: fs.Stats;
   try {
@@ -3509,7 +3529,85 @@ function removeOwnedSnapshotFile(worktreePath: string): void {
   } catch {
     return; // missing \u2192 no-op
   }
-  if (stat.isFile()) fs.unlinkSync(snapshotPath);
+  if (!stat.isFile()) return; // non-regular \u2192 unowned, leave in place
+  const recorded = sidecar.diffFileSha256;
+  const owned = typeof recorded === "string" && recorded !== ""
+    && createHash("sha256").update(fs.readFileSync(snapshotPath)).digest("hex") === recorded;
+  if (!owned) {
+    // Replacement file, or a legacy sidecar without the recorded hash:
+    // ownership cannot be verified \u2014 leave the path in place, never unlink
+    // by inference (P1-3).
+    console.error(pc.yellow(`worktree-cleanup: snapshot at ${snapshotPath} left in place (content does not match the recorded snapshot)`));
+    return;
+  }
+  fs.unlinkSync(snapshotPath);
+}
+
+/**
+ * Reclaim a stale diff snapshot at the deterministic path after an
+ * interrupted setup (snapshot written, sidecar never recorded \u2014 the P1-4
+ * signature). Ownership is PROVEN, not inferred: the path must be a regular
+ * file whose content has the review-package shape, and no setup sidecar may
+ * exist (a sidecar means an earlier review never cleaned \u2014 refuse). Any
+ * other occupant is unowned and left byte-untouched.
+ */
+function reclaimStaleSnapshot(worktreePath: string): void {
+  const snapshotPath = prReviewArtifactPathFor(worktreePath, "diff");
+  const sidecarPath = prReviewArtifactPathFor(worktreePath, "json");
+  let stat: fs.Stats;
+  try {
+    stat = fs.lstatSync(snapshotPath);
+  } catch {
+    throw new Error(`refusing to overwrite pre-existing non-snapshot path ${snapshotPath}`);
+  }
+  const sidecarExists = fs.existsSync(sidecarPath);
+  if (stat.isFile() && !sidecarExists) {
+    let head: string;
+    try {
+      head = readSnapshotHead(snapshotPath);
+    } catch {
+      throw new Error(`refusing to overwrite pre-existing non-snapshot path ${snapshotPath}`);
+    }
+    if (looksLikeReviewPackage(head)) {
+      fs.unlinkSync(snapshotPath);
+      return;
+    }
+  }
+  if (sidecarExists) {
+    throw new Error(`snapshot path occupied and a setup sidecar exists at ${sidecarPath} - run mstar pr-review worktree-cleanup first`);
+  }
+  throw new Error(`refusing to overwrite pre-existing non-snapshot path ${snapshotPath}`);
+}
+
+/**
+ * Read the head of the file at the snapshot path for the review-package
+ * shape check. The header plus the three section markers always sit in the
+ * first 1 MiB of a real snapshot (the sections before `## Diff` are the
+ * commit list and the stat output); a bounded head keeps a huge unowned file
+ * from being slurped into memory.
+ */
+function readSnapshotHead(snapshotPath: string, limit = 1024 * 1024): string {
+  const fd = fs.openSync(snapshotPath, "r");
+  try {
+    const buf = Buffer.alloc(limit);
+    const bytes = fs.readSync(fd, buf, 0, limit, 0);
+    return buf.subarray(0, bytes).toString("utf8");
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/**
+ * Review-package shape: `# Review package: ` header plus the three section
+ * markers in order \u2014 the exact layout every setup snapshot writes.
+ */
+function looksLikeReviewPackage(content: string): boolean {
+  if (!content.startsWith("# Review package: ")) return false;
+  const commits = content.indexOf("\n## Commits\n");
+  if (commits === -1) return false;
+  const files = content.indexOf("\n## Files changed\n", commits);
+  if (files === -1) return false;
+  return content.indexOf("\n## Diff\n", files) !== -1;
 }
 
 /** Default worktree location: a sibling directory beside the repo root. */
@@ -3581,7 +3679,7 @@ prReviewCommand
       // fields and symlink-spelled paths (macOS /tmp vs /private/tmp). Only a
       // regular file at that path is a snapshot this flow wrote; directories /
       // symlinks / other entries are unowned and left in place (never recursive).
-      removeOwnedSnapshotFile(worktreePath);
+      removeOwnedSnapshotFile(worktreePath, sidecar);
       fs.rmSync(sidecarPath, { force: true });
       console.log(pc.green(`worktree-cleanup: removed ${worktreePath}${sidecar.reviewBranch !== "" ? ` + deleted ${sidecar.reviewBranch}` : " (no local branch to delete)"}`));
     } catch (error) {
