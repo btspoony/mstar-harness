@@ -3346,11 +3346,14 @@ prReviewCommand
         fetched = false; // resolution gate below reports it
       }
 
-      // Ownership gate for the diff snapshot: set only after THIS process
-      // successfully wrote the snapshot file. Rollback must never unlink a
-      // pre-existing file or directory at the deterministic snapshot path
-      // (empty-changeset rollback, capture throw, EISDIR write failure).
+      // Ownership gates for the review artifacts: set only after THIS process
+      // successfully wrote the file. Rollback must never unlink a pre-existing
+      // file or directory at the deterministic artifact paths (empty-changeset
+      // rollback, capture throw, EEXIST/EISDIR write failure) \u2014 the sidecar
+      // only when THIS setup created it, the snapshot only when THIS setup
+      // created it (content-addressed via the in-memory sidecar).
       let wroteSnapshot = false;
+      let wroteSidecar = false;
       // The in-memory sidecar (with the snapshot's sha-256) once the snapshot
       // write succeeded \u2014 lets rollback verify ownership content-addressed.
       let pendingSidecar: ReviewWorktreeSidecar | undefined;
@@ -3363,10 +3366,14 @@ prReviewCommand
           if (branchToDelete !== "" && !existing.has(branchToDelete)) {
             gitSync(["branch", "-D", branchToDelete], repoRoot);
           }
-          // A FAILing setup must not leave the review artifact behind either
-          // (the snapshot lives beside the sidecar, outside the worktree) \u2014
-          // but ONLY the snapshot this process wrote. Anything pre-existing
-          // at the path is unowned and stays untouched (never recursive).
+          // A FAILing setup must not leave the review artifacts it wrote
+          // behind either (they live beside the worktree, outside it) \u2014 but
+          // ONLY this process's artifacts: the sidecar only when THIS setup
+          // wrote it (exclusive create \u2014 a pre-existing sidecar is foreign
+          // and stays), the snapshot only when THIS setup wrote it (sha-256
+          // verified). Anything pre-existing at the paths is unowned and
+          // stays untouched (never recursive).
+          if (wroteSidecar) fs.rmSync(prReviewArtifactPathFor(worktreePath, "json"), { force: true });
           if (wroteSnapshot && pendingSidecar !== undefined) removeOwnedSnapshotFile(worktreePath, pendingSidecar);
         } catch {
           // rollback best-effort; the preflight FAIL below still exits non-zero
@@ -3427,6 +3434,7 @@ prReviewCommand
       // range, so its Commits section is the single commit line.
       const captureAndRecordSnapshot = (): ReviewWorktreeSidecar => {
         const diffFile = prReviewArtifactPathFor(worktreePath, "diff");
+        const sidecarPath = prReviewArtifactPathFor(worktreePath, "json");
         const snapshotParts: Buffer[] = [];
         if (mode === "commit") {
           snapshotParts.push(
@@ -3449,22 +3457,7 @@ prReviewCommand
             gitRaw(["diff", "-U10", range], worktreePath),
           );
         }
-        // Exclusive create (O_CREAT|O_EXCL): a pre-existing path — regular
-        // file, directory, symlink, anything — must never be truncated then
-        // claimed as owned. On EEXIST this throws with wroteSnapshot still
-        // false, so rollback leaves the pre-existing path byte-untouched.
-        // The one exception: a stale snapshot from an interrupted run
-        // (snapshot written, sidecar never recorded) is reclaimed by
-        // content-addressed proof — see reclaimStaleSnapshot.
         const snapshot = Buffer.concat(snapshotParts);
-        try {
-          fs.writeFileSync(diffFile, snapshot, { flag: "wx" });
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-          reclaimStaleSnapshot(worktreePath);
-          fs.writeFileSync(diffFile, snapshot, { flag: "wx" }); // retry the exclusive create once
-        }
-        wroteSnapshot = true; // the file at diffFile is now owned by this process
         const recordedBase =
           mode === "pr" || (mode !== "commit" && !baseRef.startsWith("origin/")) ? `origin/${baseRef}` : baseRef;
         const sidecar: ReviewWorktreeSidecar = {
@@ -3479,8 +3472,32 @@ prReviewCommand
           diffFile,
           diffFileSha256: createHash("sha256").update(snapshot).digest("hex"),
         };
+        // Sidecar FIRST, exclusive create (O_CREAT|O_EXCL). Ownership of the
+        // deterministic artifact paths is established by creation order, never
+        // by content sniffing: a pre-existing sidecar is by definition foreign
+        // (an earlier review never cleaned, or an interrupted run) — refuse
+        // and point at the documented cleanup path; never clean a foreign
+        // review. On EEXIST/EISDIR this throws with wroteSidecar still false,
+        // so rollback leaves the occupant byte-untouched.
+        try {
+          fs.writeFileSync(sidecarPath, JSON.stringify(sidecar, null, 2), { flag: "wx" });
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "EEXIST" && (error as NodeJS.ErrnoException).code !== "EISDIR") throw error;
+          throw new Error(`cannot record setup sidecar at ${sidecarPath} - run mstar pr-review worktree-cleanup first (never cleaning a foreign review)`);
+        }
+        wroteSidecar = true; // the sidecar at sidecarPath is now owned by this process
+        // Snapshot SECOND, exclusive create. Our own sidecar was JUST created
+        // above, so any occupant at the snapshot path is by definition not
+        // ours — refuse and leave it byte-untouched (never truncate, never
+        // unlink, never shape-sniff).
+        try {
+          fs.writeFileSync(diffFile, snapshot, { flag: "wx" });
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "EEXIST" && (error as NodeJS.ErrnoException).code !== "EISDIR") throw error;
+          throw new Error(`refusing to overwrite pre-existing non-snapshot path ${diffFile}`);
+        }
+        wroteSnapshot = true; // the file at diffFile is now owned by this process
         pendingSidecar = sidecar;
-        fs.writeFileSync(prReviewArtifactPathFor(worktreePath, "json"), JSON.stringify(sidecar, null, 2));
         return sidecar;
       };
       // Snapshot capture, write, and the sidecar write are the last failure
@@ -3541,73 +3558,6 @@ function removeOwnedSnapshotFile(worktreePath: string, sidecar: ReviewWorktreeSi
     return;
   }
   fs.unlinkSync(snapshotPath);
-}
-
-/**
- * Reclaim a stale diff snapshot at the deterministic path after an
- * interrupted setup (snapshot written, sidecar never recorded \u2014 the P1-4
- * signature). Ownership is PROVEN, not inferred: the path must be a regular
- * file whose content has the review-package shape, and no setup sidecar may
- * exist (a sidecar means an earlier review never cleaned \u2014 refuse). Any
- * other occupant is unowned and left byte-untouched.
- */
-function reclaimStaleSnapshot(worktreePath: string): void {
-  const snapshotPath = prReviewArtifactPathFor(worktreePath, "diff");
-  const sidecarPath = prReviewArtifactPathFor(worktreePath, "json");
-  let stat: fs.Stats;
-  try {
-    stat = fs.lstatSync(snapshotPath);
-  } catch {
-    throw new Error(`refusing to overwrite pre-existing non-snapshot path ${snapshotPath}`);
-  }
-  const sidecarExists = fs.existsSync(sidecarPath);
-  if (stat.isFile() && !sidecarExists) {
-    let head: string;
-    try {
-      head = readSnapshotHead(snapshotPath);
-    } catch {
-      throw new Error(`refusing to overwrite pre-existing non-snapshot path ${snapshotPath}`);
-    }
-    if (looksLikeReviewPackage(head)) {
-      fs.unlinkSync(snapshotPath);
-      return;
-    }
-  }
-  if (sidecarExists) {
-    throw new Error(`snapshot path occupied and a setup sidecar exists at ${sidecarPath} - run mstar pr-review worktree-cleanup first`);
-  }
-  throw new Error(`refusing to overwrite pre-existing non-snapshot path ${snapshotPath}`);
-}
-
-/**
- * Read the head of the file at the snapshot path for the review-package
- * shape check. The header plus the three section markers always sit in the
- * first 1 MiB of a real snapshot (the sections before `## Diff` are the
- * commit list and the stat output); a bounded head keeps a huge unowned file
- * from being slurped into memory.
- */
-function readSnapshotHead(snapshotPath: string, limit = 1024 * 1024): string {
-  const fd = fs.openSync(snapshotPath, "r");
-  try {
-    const buf = Buffer.alloc(limit);
-    const bytes = fs.readSync(fd, buf, 0, limit, 0);
-    return buf.subarray(0, bytes).toString("utf8");
-  } finally {
-    fs.closeSync(fd);
-  }
-}
-
-/**
- * Review-package shape: `# Review package: ` header plus the three section
- * markers in order \u2014 the exact layout every setup snapshot writes.
- */
-function looksLikeReviewPackage(content: string): boolean {
-  if (!content.startsWith("# Review package: ")) return false;
-  const commits = content.indexOf("\n## Commits\n");
-  if (commits === -1) return false;
-  const files = content.indexOf("\n## Files changed\n", commits);
-  if (files === -1) return false;
-  return content.indexOf("\n## Diff\n", files) !== -1;
 }
 
 /** Default worktree location: a sibling directory beside the repo root. */

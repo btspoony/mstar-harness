@@ -1303,21 +1303,22 @@ describe("mstar pr-review worktree-setup — changeset preflight + rollback (fix
 });
 
 // ---------------------------------------------------------------------------
-// Fix-round tests (round 3: content-addressed snapshot ownership)
+// Fix-round tests (round 4: sidecar-first, no shape-based reclaim)
 // ---------------------------------------------------------------------------
 
-describe("mstar pr-review worktree-setup — interrupted-run snapshot reclaim (round 3)", () => {
-  test("stale snapshot in review-package shape without a sidecar is reclaimed (P1-4)", () => {
+describe("mstar pr-review worktree-setup — sidecar-first, no shape-based reclaim (round 4)", () => {
+  test("crafted review-package header at the snapshot path is never reclaimed (P1)", () => {
     withTempDir((dir) => {
       const repo = join(dir, "repo");
       repoWithAddedLines(repo, 10);
       const sha = git(["rev-parse", "HEAD"], repo);
       const wtPath = join(dir, "rev-wt");
-      // Interrupted run: snapshot written, sidecar never recorded. The stale
-      // file has the review-package shape (header + the three section
-      // markers in order) — setup must reclaim it (unlink + retry the
-      // exclusive create) and succeed with a FRESH snapshot.
-      const stale = [
+      // The P1: a regular file at the deterministic snapshot path with a
+      // PERFECT fake review-package header + markers, no sidecar. Shape
+      // sniffing cannot prove ownership — setup must refuse at the
+      // exclusive snapshot create, roll back its own worktree + sidecar,
+      // and leave the crafted file byte-identical.
+      const crafted = [
         "# Review package: deadbeef..cafebabe",
         "",
         "## Commits",
@@ -1327,40 +1328,54 @@ describe("mstar pr-review worktree-setup — interrupted-run snapshot reclaim (r
         "## Diff",
         "diff --git a/a.txt b/a.txt",
       ].join("\n") + "\n";
-      writeFileSync(join(dir, ".rev-wt.prreview.diff"), stale);
+      const snapshotPath = join(dir, ".rev-wt.prreview.diff");
+      writeFileSync(snapshotPath, crafted);
       const result = runCli(["pr-review", "worktree-setup", "--commit", sha, "--path", wtPath], { cwd: repo });
-      expect(result.exitCode).toBe(0);
-      const printed = JSON.parse(result.stdout) as Record<string, unknown>;
-      const diffFile = join(dir, ".rev-wt.prreview.diff");
-      expect(printed.diffFile).toBe(diffFile);
-      const content = readFileSync(diffFile, "utf8");
-      expect(content.startsWith(`# Review package: ${sha}^ (single commit)`)).toBe(true);
-      expect(content).not.toContain("deadbeef"); // fresh snapshot, not the stale one
-      const sidecar = JSON.parse(readFileSync(join(dir, ".rev-wt.prreview.json"), "utf8")) as Record<string, unknown>;
-      expect(sidecar.diffFileSha256).toBe(createHash("sha256").update(content).digest("hex"));
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("refusing to overwrite pre-existing non-snapshot path");
+      expect(existsSync(wtPath)).toBe(false); // the fresh worktree was rolled back
+      expect(existsSync(join(dir, ".rev-wt.prreview.json"))).toBe(false); // our sidecar removed by rollback
+      expect(existsSync(snapshotPath)).toBe(true);
+      expect(readFileSync(snapshotPath, "utf8")).toBe(crafted); // byte-identical
     });
   });
 
-  test("setup refuses when a setup sidecar already exists (earlier review never cleaned)", () => {
+  test("interrupted-run stale sidecar refuses setup, worktree-cleanup unblocks, retry succeeds", () => {
     withTempDir((dir) => {
-      const { repo, wtPath } = commitModeFixture(dir);
-      // Remove the worktree but leave the sidecar + snapshot: the "earlier
-      // review never cleaned" state. A fresh setup must refuse at the
-      // snapshot write (EEXIST + sidecar present) — never reclaim, never
-      // overwrite — and roll back its own new worktree.
-      git(["worktree", "remove", wtPath], repo);
-      git(["worktree", "prune"], repo);
-      const snapshotPath = join(dir, ".rev-wt.prreview.diff");
-      const sidecarPath = join(dir, ".rev-wt.prreview.json");
-      const snapshotBefore = readFileSync(snapshotPath);
-      const sidecarBefore = readFileSync(sidecarPath);
+      const repo = join(dir, "repo");
+      repoWithAddedLines(repo, 10);
       const sha = git(["rev-parse", "HEAD"], repo);
+      const wtPath = join(dir, "rev-wt");
+      // Interrupted run in the sidecar-first order: sidecar written, snapshot
+      // never recorded. The stale sidecar is foreign — setup must refuse at
+      // the exclusive sidecar create (never clean a foreign review), roll
+      // back its own worktree, and leave the sidecar untouched.
+      const sidecarPath = join(dir, ".rev-wt.prreview.json");
+      writeFileSync(
+        sidecarPath,
+        JSON.stringify({ reviewBranch: "", worktreePath: wtPath, repoRoot: repo, reportSaved: false }),
+      );
       const result = runCli(["pr-review", "worktree-setup", "--commit", sha, "--path", wtPath], { cwd: repo });
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("worktree-cleanup");
-      expect(readFileSync(snapshotPath)).toEqual(snapshotBefore); // byte-untouched
-      expect(readFileSync(sidecarPath)).toEqual(sidecarBefore); // byte-untouched
-      expect(existsSync(wtPath)).toBe(false); // the fresh worktree was rolled back
+      expect(existsSync(wtPath)).toBe(false);
+      expect(existsSync(sidecarPath)).toBe(true); // foreign sidecar untouched
+      // The documented unblock: worktree-cleanup removes the stale sidecar.
+      const ok = runCli(
+        ["pr-review", "worktree-cleanup", "--path", wtPath, "--branch", "", "--report-saved"],
+        { cwd: repo },
+      );
+      expect(ok.exitCode).toBe(0);
+      expect(existsSync(sidecarPath)).toBe(false);
+      // Retry now succeeds end to end with a fresh snapshot + sidecar.
+      const retry = runCli(["pr-review", "worktree-setup", "--commit", sha, "--path", wtPath], { cwd: repo });
+      expect(retry.exitCode).toBe(0);
+      const diffFile = join(dir, ".rev-wt.prreview.diff");
+      expect(existsSync(diffFile)).toBe(true);
+      expect(existsSync(sidecarPath)).toBe(true);
+      const content = readFileSync(diffFile, "utf8");
+      const sidecar = JSON.parse(readFileSync(sidecarPath, "utf8")) as Record<string, unknown>;
+      expect(sidecar.diffFileSha256).toBe(createHash("sha256").update(content).digest("hex"));
     });
   });
 });
