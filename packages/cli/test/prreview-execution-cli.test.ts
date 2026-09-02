@@ -647,6 +647,34 @@ describe("mstar pr-review worktree-setup — detached modes with real temp repos
     });
   });
 
+  test("probe git failure is NOT read as an empty changeset (no false changeset-empty)", () => {
+    withTempDir((dir) => {
+      const repo = join(dir, "repo");
+      repoWithAddedLines(repo, 10);
+      const sha = git(["rev-parse", "HEAD"], repo);
+      const wtPath = join(dir, "rev-wt");
+      // Fake `git` in PATH: delegates every command to the real git but
+      // fails `git diff` — the changeset-emptiness probe command. A probe
+      // failure must NOT read as "empty changeset" (that would report
+      // "no changes to review" on a real changeset); the setup proceeds
+      // and the snapshot capture (git show) still succeeds.
+      const fakeBin = join(dir, "fakebin");
+      mkdirSync(fakeBin);
+      const fakeGit = join(fakeBin, "git");
+      writeFileSync(
+        fakeGit,
+        `#!/bin/sh\nif [ "$1" = "diff" ]; then\n  echo "fatal: simulated probe failure" >&2\n  exit 128\nfi\nexec "${realGit()}" "$@"\n`,
+      );
+      chmodSync(fakeGit, 0o755);
+      const env = { ...cliEnv(), PATH: `${fakeBin}:${cliEnv().PATH ?? ""}` };
+      const result = runCli(["pr-review", "worktree-setup", "--commit", sha, "--path", wtPath], { cwd: repo, env });
+      expect(result.exitCode).toBe(0);
+      expect(both(result)).not.toContain("changeset-empty");
+      expect(both(result)).not.toContain("no changes to review");
+      expect(existsSync(join(dir, ".rev-wt.prreview.diff"))).toBe(true);
+    });
+  });
+
   test("--diff mode reports diffFile null and writes no snapshot", () => {
     withTempDir((dir) => {
       const repo = join(dir, "repo");
@@ -707,6 +735,90 @@ describe("mstar pr-review worktree-setup — branch mode snapshot (three-dot ran
       expect(content).toContain("+feat");
       const sidecar = JSON.parse(readFileSync(join(dir, ".wt.prreview.json"), "utf8")) as Record<string, unknown>;
       expect(sidecar.diffFile).toBe(diffFile);
+    });
+  });
+});
+
+describe("mstar pr-review worktree-setup — pr mode snapshot (mock gh)", () => {
+  /** Run the CLI with a mock gh bin dir on PATH, from a chosen cwd. */
+  function runCliWithMockGhCwd(args: string[], mockBinDir: string, cwd: string, extraEnv: Record<string, string> = {}): RunResult {
+    const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, ...args], {
+      cwd,
+      env: { ...cliEnv(), PATH: `${mockBinDir}:${process.env.PATH ?? ""}`, ...extraEnv },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
+  }
+
+  test("pr mode writes the snapshot with the pr-mode range form (header main..pull/9/head)", () => {
+    withTempDir((dir) => {
+      const gitBin = realGit();
+      const g = (args: string[], cwd: string): string =>
+        execFileSync(gitBin, args, { cwd, encoding: "utf8" }).trim();
+      const seed = join(dir, "seed");
+      initTestRepo(seed);
+      writeFileSync(join(seed, "a.txt"), "base\n");
+      g(["add", "-A"], seed);
+      g(["commit", "-q", "-m", "base"], seed);
+      const remote = join(dir, "remote.git");
+      g(["init", "--bare", "-b", "main", remote], seed);
+      g(["remote", "add", "origin", remote], seed);
+      g(["push", "-q", "origin", "HEAD:refs/heads/main"], seed);
+      // PR head: a commit ahead of main, stored at refs/pull/9/head (the
+      // ref the pr flow fetches via +pull/9/head:<review-branch>).
+      g(["checkout", "-q", "-b", "pr-work"], seed);
+      writeFileSync(join(seed, "feat.txt"), "feat\n");
+      g(["add", "-A"], seed);
+      g(["commit", "-q", "-m", "pr work"], seed);
+      g(["push", "-q", "origin", "HEAD:refs/pull/9/head"], seed);
+
+      const clone = join(dir, "clone");
+      initTestRepo(clone, { remote });
+      g(["fetch", "-q", "origin"], clone);
+
+      // gh mock: answers `gh pr view 9 --json baseRefName --jq .baseRefName`
+      // with the base ref the pr flow reads.
+      const mockBin = join(dir, "mockbin");
+      mkdirSync(mockBin, { recursive: true });
+      writeFileSync(
+        join(mockBin, "gh"),
+        [
+          "#!/bin/sh",
+          'if [ "$1" = "pr" ] && [ "$2" = "view" ]; then',
+          '  printf \'main\'',
+          "  exit 0",
+          "fi",
+          'echo "unexpected gh call: $@" >&2',
+          "exit 1",
+        ].join("\n"),
+      );
+      chmodSync(join(mockBin, "gh"), 0o755);
+
+      const wtPath = join(dir, "wt");
+      const result = runCliWithMockGhCwd(
+        ["pr-review", "worktree-setup", "--pr", "9", "--path", wtPath],
+        mockBin,
+        clone,
+      );
+      expect(result.exitCode).toBe(0);
+      const printed = JSON.parse(result.stdout) as Record<string, unknown>;
+      const diffFile = String(printed.diffFile);
+      expect(diffFile).toBe(join(dir, ".wt.prreview.diff"));
+      expect(existsSync(diffFile)).toBe(true);
+      const content = readFileSync(diffFile, "utf8");
+      // pr-mode range form: header uses the short base..head names
+      // (main..pull/9/head), Commits the two-dot range, Files changed / Diff
+      // the three-dot diffArgs range verbatim.
+      expect(content.startsWith("# Review package: main..pull/9/head\n\n## Commits\n")).toBe(true);
+      expect(content).toContain("pr work");
+      expect(content).toContain("## Files changed");
+      expect(content).toContain("feat.txt");
+      expect(content).toContain("## Diff");
+      expect(content).toContain("+feat");
+      const sidecar = JSON.parse(readFileSync(join(dir, ".wt.prreview.json"), "utf8")) as Record<string, unknown>;
+      expect(sidecar.diffFile).toBe(diffFile);
+      expect(sidecar.reviewBranch).toBe("pr-9");
     });
   });
 });
@@ -773,6 +885,31 @@ describe("mstar pr-review worktree-cleanup — report gate + exactly-recorded br
       expect(existsSync(wtPath)).toBe(false);
       expect(existsSync(join(dir, ".rev-wt.prreview.json"))).toBe(false);
       expect(existsSync(diffFile)).toBe(false);
+    });
+  });
+
+  test("doctored sidecar diffFile pointing outside the sidecar parent is never deleted (escape guard)", () => {
+    withTempDir((dir) => {
+      const { repo, wtPath } = commitModeFixture(dir);
+      // Doctored sidecar: diffFile points at a sibling temp file OUTSIDE the
+      // sidecar parent dir. Cleanup must succeed, delete the computed snapshot
+      // (beside the sidecar), and NEVER touch the outside file.
+      const outside = join(dir, "outside", "victim.txt");
+      mkdirSync(join(dir, "outside"), { recursive: true });
+      writeFileSync(outside, "do not delete\n");
+      const sidecarPath = join(dir, ".rev-wt.prreview.json");
+      const sidecar = JSON.parse(readFileSync(sidecarPath, "utf8")) as Record<string, unknown>;
+      sidecar.diffFile = outside;
+      writeFileSync(sidecarPath, JSON.stringify(sidecar, null, 2));
+      const ok = runCli(
+        ["pr-review", "worktree-cleanup", "--path", wtPath, "--branch", "", "--report-saved"],
+        { cwd: repo },
+      );
+      expect(ok.exitCode).toBe(0);
+      expect(existsSync(wtPath)).toBe(false);
+      expect(existsSync(sidecarPath)).toBe(false);
+      expect(existsSync(outside)).toBe(true); // outside file untouched
+      expect(existsSync(join(dir, ".rev-wt.prreview.diff"))).toBe(false); // computed snapshot deleted
     });
   });
 

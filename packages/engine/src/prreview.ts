@@ -1133,6 +1133,9 @@ export function prReviewSeatPrompt(opts: PrReviewSeatPromptOptions): string {
   if (!isAbsolute(worktreePath)) {
     throw new TypeError(`prReviewSeatPrompt: worktreePath must be an absolute path - got ${JSON.stringify(opts.worktreePath)}`);
   }
+  if (opts.diffFile !== undefined && opts.diffFile !== "" && !isAbsolute(opts.diffFile)) {
+    throw new TypeError(`prReviewSeatPrompt: diffFile must be an absolute path - got ${JSON.stringify(opts.diffFile)}`);
+  }
   const slug = `${domain}-${seat}`;
   const lines: string[] = [];
   lines.push(`# PR review audit seat \u2014 Stage ${opts.stage}${opts.securitySeat === true ? " (security)" : ""}`);

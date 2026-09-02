@@ -30,6 +30,7 @@ import {
   findSimplifyMarkers,
   findTemporaryMarkers,
   findingsCleanupGate,
+  GIT_CAPTURE_MAX_BYTES,
   getArtifactStore,
   isReadOnlyAssignmentRole,
   l1PreDispatchCheck,
@@ -2919,12 +2920,11 @@ function gitSync(args: string[], cwd: string): string {
 }
 
 /**
- * Git capture ceiling for snapshot bytes — mirrors the engine's
- * `GIT_CAPTURE_MAX_BYTES` (packages/engine/src/sdd.ts, the same 64 MiB
- * ceiling `reviewPackage` uses): Node's default 1 MiB `maxBuffer` ENOBUFS'd
- * on large review ranges. Captures beyond that fail the setup.
+ * Git capture ceiling for snapshot bytes — imported from the engine
+ * (packages/engine/src/sdd.ts, the same 64 MiB ceiling `reviewPackage`
+ * uses): Node's default 1 MiB `maxBuffer` ENOBUFS'd on large review
+ * ranges. Captures beyond that fail the setup.
  */
-const GIT_CAPTURE_MAX_BYTES = 64 * 1024 * 1024;
 
 /** Run a git command in `cwd`, returning UNTRIMMED stdout bytes (snapshot
  * capture — same maxBuffer ceiling as the engine's `reviewPackage`). */
@@ -2972,7 +2972,13 @@ function refResolves(ref: string, cwd: string): boolean {
  */
 function probeChangesetEmpty(diffCmdArgs: string[], cwd: string, worktreePath: string): boolean {
   if (diffCmdArgs[0] === "__working_tree__") {
-    const dirty = gitIf(["diff"], worktreePath).length > 0 || gitIf(["diff", "--cached"], worktreePath).length > 0;
+    // A probe that cannot run (broken git / >64 MiB overflow) must NOT read
+    // as "empty changeset" — null → not empty → proceed; the snapshot
+    // capture then fails loudly at the same ceiling and rolls back.
+    const diffOut = gitProbe(["diff"], worktreePath);
+    const cachedOut = gitProbe(["diff", "--cached"], worktreePath);
+    if (diffOut === null || cachedOut === null) return false;
+    const dirty = diffOut.length > 0 || cachedOut.length > 0;
     if (dirty) return false;
     let untracked = "";
     try {
@@ -2990,9 +2996,11 @@ function probeChangesetEmpty(diffCmdArgs: string[], cwd: string, worktreePath: s
     const sha = diffCmdArgs[1]!;
     const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
     const diffFrom = refResolves(`${sha}^`, worktreePath) ? `${sha}^` : EMPTY_TREE;
-    return gitIf(["diff", diffFrom, sha], worktreePath).trim().length === 0;
+    const probe = gitProbe(["diff", diffFrom, sha], worktreePath);
+    return probe === null ? false : probe.trim().length === 0;
   }
-  return gitIf(diffCmdArgs, worktreePath).length === 0;
+  const probe = gitProbe(diffCmdArgs, worktreePath);
+  return probe === null ? false : probe.length === 0;
 }
 
 /** Like {@link gitSync} but returns "" instead of throwing (probe paths).
@@ -3004,6 +3012,18 @@ function gitIf(args: string[], cwd: string): string {
     return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: GIT_CAPTURE_MAX_BYTES });
   } catch {
     return "";
+  }
+}
+
+/** Like {@link gitIf} but returns null instead of "" when git fails — a
+ * probe that cannot run must NOT read as an empty changeset (a broken-git
+ * or >64 MiB-overflow probe would otherwise false-empty the preflight and
+ * report "no changes to review" on a real changeset). */
+function gitProbe(args: string[], cwd: string): string | null {
+  try {
+    return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: GIT_CAPTURE_MAX_BYTES });
+  } catch {
+    return null;
   }
 }
 
@@ -3324,7 +3344,7 @@ prReviewCommand
       }
 
       /** Remove a just-created worktree + branch when setup fails late. */
-      const rollbackNewWorktree = (branchToDelete: string): void => {
+      const cleanupOnFailure = (branchToDelete: string): void => {
         try {
           if (fs.existsSync(worktreePath)) gitSync(["worktree", "remove", "--force", worktreePath], repoRoot);
           gitSync(["worktree", "prune"], repoRoot);
@@ -3336,7 +3356,7 @@ prReviewCommand
           // recursive: the snapshot path may be a leftover directory (e.g. an
           // EISDIR fixture) — clear whatever sits there, still guarded to the
           // sidecar parent dir.
-          fs.rmSync(diffSnapshotPathFor(worktreePath), { force: true, recursive: true });
+          fs.rmSync(prReviewArtifactPathFor(worktreePath, "diff"), { force: true, recursive: true });
         } catch {
           // rollback best-effort; the preflight FAIL below still exits non-zero
         }
@@ -3382,7 +3402,7 @@ prReviewCommand
       if (changesetEmpty) {
         // Discovered only AFTER the worktree exists \u2014 roll it back so a FAIL
         // never leaves an orphaned worktree + freshly created branch behind.
-        rollbackNewWorktree(mode === "pr" ? reviewBranch : "");
+        cleanupOnFailure(mode === "pr" ? reviewBranch : "");
       }
       if (!emptyGate.ok && emptyGate.violations.some((v) => v.code === "prreview.preflight.changeset-empty")) {
         printChecklist("pr-review worktree-setup preflight", emptyGate);
@@ -3394,12 +3414,8 @@ prReviewCommand
       // worktree). Mirrors SDD reviewPackage section layout AND its capture
       // mechanics (Buffer parts + 64 MiB maxBuffer); commit mode has no
       // range, so its Commits section is the single commit line.
-      const diffFile = diffSnapshotPathFor(worktreePath);
-      // Snapshot capture, write, and the sidecar write are the last failure
-      // points after the worktree exists — a FAIL here must roll the new
-      // worktree back (never an orphaned worktree + no sidecar), then fail.
-      let sidecar: ReviewWorktreeSidecar;
-      try {
+      const captureAndRecordSnapshot = (): ReviewWorktreeSidecar => {
+        const diffFile = prReviewArtifactPathFor(worktreePath, "diff");
         const snapshotParts: Buffer[] = [];
         if (mode === "commit") {
           snapshotParts.push(
@@ -3425,7 +3441,7 @@ prReviewCommand
         fs.writeFileSync(diffFile, Buffer.concat(snapshotParts));
         const recordedBase =
           mode === "pr" || (mode !== "commit" && !baseRef.startsWith("origin/")) ? `origin/${baseRef}` : baseRef;
-        sidecar = {
+        const sidecar: ReviewWorktreeSidecar = {
           reviewBranch: mode === "pr" ? reviewBranch : "",
           worktreePath,
           base: recordedBase,
@@ -3436,9 +3452,17 @@ prReviewCommand
           repoRoot,
           diffFile,
         };
-        fs.writeFileSync(sidecarPathFor(worktreePath), JSON.stringify(sidecar, null, 2));
+        fs.writeFileSync(prReviewArtifactPathFor(worktreePath, "json"), JSON.stringify(sidecar, null, 2));
+        return sidecar;
+      };
+      // Snapshot capture, write, and the sidecar write are the last failure
+      // points after the worktree exists — a FAIL here must roll the new
+      // worktree back (never an orphaned worktree + no sidecar), then fail.
+      let sidecar: ReviewWorktreeSidecar;
+      try {
+        sidecar = captureAndRecordSnapshot();
       } catch (error) {
-        rollbackNewWorktree(mode === "pr" ? reviewBranch : "");
+        cleanupOnFailure(mode === "pr" ? reviewBranch : "");
         throw error;
       }
       console.log(JSON.stringify({
@@ -3454,18 +3478,11 @@ prReviewCommand
     }
   });
 
-/** Sidecar path: <parent-of-worktree>/.<worktree-dirname>.prreview.json */
-function sidecarPathFor(worktreePath: string): string {
+/** Review artifact path beside the worktree: <parent-of-worktree>/.<worktree-dirname>.prreview.<suffix> */
+function prReviewArtifactPathFor(worktreePath: string, suffix: "json" | "diff"): string {
   const parent = path.dirname(path.resolve(worktreePath));
   const name = path.basename(path.resolve(worktreePath));
-  return path.join(parent, `.${name}.prreview.json`);
-}
-
-/** Diff snapshot path: <parent-of-worktree>/.<worktree-dirname>.prreview.diff */
-function diffSnapshotPathFor(worktreePath: string): string {
-  const parent = path.dirname(path.resolve(worktreePath));
-  const name = path.basename(path.resolve(worktreePath));
-  return path.join(parent, `.${name}.prreview.diff`);
+  return path.join(parent, `.${name}.prreview.${suffix}`);
 }
 
 /** Default worktree location: a sibling directory beside the repo root. */
@@ -3486,7 +3503,7 @@ prReviewCommand
   .action((options: { path: string; branch: string; reportSaved?: boolean }) => {
     try {
       const worktreePath = path.resolve(resolveCliPath(options.path));
-      const sidecarPath = sidecarPathFor(worktreePath);
+      const sidecarPath = prReviewArtifactPathFor(worktreePath, "json");
       if (!fs.existsSync(sidecarPath)) {
         throw new Error(`no setup sidecar found at ${sidecarPath} - run pr-review worktree-setup first (foreign worktrees are never cleaned here)`);
       }
@@ -3530,16 +3547,13 @@ prReviewCommand
         }
         gitSync(["branch", "-D", sidecar.reviewBranch], gitRoot);
       }
-      fs.rmSync(sidecarPath, { force: true });
       // The diff snapshot is a review artifact beside the sidecar \u2014 remove it
-      // too, but only when it actually lives beside the sidecar (a doctored
-      // sidecar path must never escape the sidecar's parent dir).
-      if (typeof sidecar.diffFile === "string" && sidecar.diffFile !== "") {
-        const diffFile = path.resolve(sidecar.diffFile);
-        if (path.dirname(diffFile) === path.dirname(sidecarPath)) {
-          fs.rmSync(diffFile, { force: true });
-        }
-      }
+      // BEFORE the sidecar (a snapshot-rm failure must not strand an orphan a
+      // retry can't reach: once the sidecar is gone, cleanup refuses). Use the
+      // SAME computed path the rollback uses \u2014 immune to doctored sidecar
+      // fields and symlink-spelled paths (macOS /tmp vs /private/tmp).
+      fs.rmSync(prReviewArtifactPathFor(worktreePath, "diff"), { force: true, recursive: true });
+      fs.rmSync(sidecarPath, { force: true });
       console.log(pc.green(`worktree-cleanup: removed ${worktreePath}${sidecar.reviewBranch !== "" ? ` + deleted ${sidecar.reviewBranch}` : " (no local branch to delete)"}`));
     } catch (error) {
       failScript(error, "pr-review worktree-cleanup");
