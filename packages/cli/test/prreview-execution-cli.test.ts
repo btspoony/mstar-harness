@@ -680,6 +680,32 @@ describe("mstar pr-review worktree-setup — detached modes with real temp repos
     });
   });
 
+  test("pre-existing file at the snapshot path is never truncated (exclusive create, unowned)", () => {
+    withTempDir((dir) => {
+      const repo = join(dir, "repo");
+      repoWithAddedLines(repo, 10);
+      const sha = git(["rev-parse", "HEAD"], repo);
+      const wtPath = join(dir, "rev-wt");
+      // Pre-existing REGULAR FILE at the snapshot path with unique contents.
+      // The capture would otherwise WRITE this path (real commit-mode setup,
+      // no PATH shim — all git commands succeed). Exclusive create must throw
+      // EEXIST instead of truncating the file in place and claiming
+      // ownership: rollback the new worktree, write no sidecar, and leave
+      // the pre-existing path byte-identical.
+      const snapshotPath = join(dir, ".rev-wt.prreview.diff");
+      const payload = "unowned pre-existing payload\nsecond line\n";
+      writeFileSync(snapshotPath, payload);
+      const result = runCli(["pr-review", "worktree-setup", "--commit", sha, "--path", wtPath], { cwd: repo });
+      expect(result.exitCode).toBe(1);
+      expect(existsSync(wtPath)).toBe(false);
+      expect(existsSync(join(dir, ".rev-wt.prreview.json"))).toBe(false);
+      expect(existsSync(snapshotPath)).toBe(true);
+      expect(readFileSync(snapshotPath)).toEqual(Buffer.from(payload)); // byte-identical
+      const listed = git(["worktree", "list"], repo);
+      expect(listed).not.toContain(wtPath);
+    });
+  });
+
   test("probe git failure is NOT read as an empty changeset (no false changeset-empty)", () => {
     withTempDir((dir) => {
       const repo = join(dir, "repo");

@@ -3443,7 +3443,11 @@ prReviewCommand
             gitRaw(["diff", "-U10", range], worktreePath),
           );
         }
-        fs.writeFileSync(diffFile, Buffer.concat(snapshotParts));
+        // Exclusive create (O_CREAT|O_EXCL): a pre-existing path — regular
+        // file, directory, symlink, anything — must never be truncated then
+        // claimed as owned. On EEXIST this throws with wroteSnapshot still
+        // false, so rollback leaves the pre-existing path byte-untouched.
+        fs.writeFileSync(diffFile, Buffer.concat(snapshotParts), { flag: "wx" });
         wroteSnapshot = true; // the file at diffFile is now owned by this process
         const recordedBase =
           mode === "pr" || (mode !== "commit" && !baseRef.startsWith("origin/")) ? `origin/${baseRef}` : baseRef;
