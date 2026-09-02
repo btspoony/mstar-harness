@@ -43,6 +43,22 @@ dsh plugin --profile web add dsh-llm-fallbacks
 
 > **fresh publish 年龄窗口提示**：pnpm 的 `minimumReleaseAge` 门禁可能让 `dsh plugin add <spec>` 的 range 解析在全新发布后约 24h 内选中旧版本（不含 seeds surface）——窗口过后重跑 `npx @mstar-harness/cli init --target dsh`（或显式 pin 版本）即可收敛到最新 surface。
 
+### Headless profile（一次性运行）
+
+本插件并非 web 专属：它同样可以挂载进 dsh **headless** profile（`dsh --profile headless "<task>"`——一次性、无 GUI/无端口模式）。安装路径完全一致，一条命令：
+
+```sh
+dsh plugin --profile headless add @mstar-harness/dsh
+```
+
+出厂 headless 模板在首次使用时自动初始化（`@deepseek-ai/dsh-base` + `@deepseek-ai/dsh-headless`），reconcile 步骤把 mstar 行追加进 bundle 层栈（`dsh-base → dsh-headless → @mstar-harness/dsh`）。插件的所有能力都落在 headless 继承的 `dsh-base` seam 上——status/dispatch/lease/worktree 闸门、技能挂载、engine-status catalog、harness-rules system-prompt 注入、7 个模型面工具——因此在一次性运行中 harness 完整生效。**必须从仓库工作目录启动**（runner 写入 `meta.cwd = process.cwd()`，按工作区的 harness 目录探测从这里开始）。浏览器客户端半体仅属于 web profile，headless 下自然不加载。
+
+**Headless 使用注意事项**（已在 dsh 0.1.0-rc.6 上验证）：
+
+- **一次性 turn 模型**——runner 把任务作为一条 user message 提交，agent 转入 idle（`whenIdle()`）后即退出；它**不会**等待 `run_in_background` 子任务。前台 subagent 派发可用（创建子会话、结果回到父会话）；后台 QC-tri 式并行在进程内不会完成——要么前台派发 QC 席（串行墙钟时间），要么让 agent 在结束 turn **之前**用 `tool-subagent-control` 收集完后台结果。
+- **无交互通道**——`ask_user_question` 与审批提示 fail-closed（没有应答者）。无人值守运行用 `DSH_PERMISSION_MODE=danger-full-access`（sandbox `danger-full-access` + approval `never`）；交互式 Prepare 流程（grill-me）属于 web profile。
+- **默认模型解析**——headless 不组合 fallbacks 行，因此 settings 里 `agent-default-model` 钉在 `FallbacksChain` 会以 `NO_ADAPTER` 失败（web profile 的产物）。把默认模型指向真实 provider，或同样把 `dsh-llm-fallbacks` 装进 headless profile（注意：已发布的 dsh 0.1.0-rc.6 上，fallbacks 的 settings 集成早于 `SettingsProvider.installSection` API，虚拟适配器不会注册——随 dsh ≥ 0.1.2-alpha 解决）。
+
 ### Configuration
 
 | Key | Type | Default | Meaning |
