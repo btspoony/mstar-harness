@@ -15,9 +15,13 @@ import {
   validateLocalHarnessRepo,
 } from "./shared-install";
 
-const OMP_PLUGIN_MARKER = ".omp-plugin/plugin.json";
-const CLAUDE_PLUGIN_MARKER = ".claude-plugin/plugin.json";
-const PACKAGE_NAMES = new Set(["morning-star", PLUGIN_NAME, "github:btspoony/mstar-harness"]);
+// The omp plugin tree is the built `packages/omp` package (repo-root
+// `hooks/`/`tools/` moved into it 2026-09-03) — link/doctor target
+// `<repo>/packages/omp`, whose package-root `plugin.json` + bundled
+// `skills/`/`commands/`/`agents/`/`hooks/`/`tools/` mirrors are produced by
+// `bun run --cwd packages/omp build`.
+const OMP_PACKAGE_REL = path.join("packages", "omp");
+const PACKAGE_NAMES = new Set(["morning-star", PLUGIN_NAME, "github:btspoony/mstar-harness", "@mstar-harness/omp"]);
 const SKILL_SMOKE = ["mstar-host", "mstar-harness-core", "pm"];
 const COMMAND_SMOKE = ["iteration-start", "iteration-drive", "iteration-loop", "codebase-audit"];
 
@@ -87,11 +91,12 @@ function findInstalledPlugin(plugins: Array<Record<string, unknown>>) {
 
 function validatePluginTree(pluginRoot: string) {
   const errors: string[] = [];
-  for (const marker of [OMP_PLUGIN_MARKER, CLAUDE_PLUGIN_MARKER]) {
-    const markerPath = path.join(pluginRoot, marker);
-    if (!fs.existsSync(markerPath)) {
-      errors.push(`Missing omp plugin marker: ${markerPath}`);
-    }
+  // The omp package ships a package-root `plugin.json` (Agent Plugins
+  // format) — the repo-root `.omp-plugin/`/`.claude-plugin/` markers are not
+  // part of the linked package tree.
+  const markerPath = path.join(pluginRoot, "plugin.json");
+  if (!fs.existsSync(markerPath)) {
+    errors.push(`Missing omp plugin marker: ${markerPath}`);
   }
   for (const skill of SKILL_SMOKE) {
     const skillPath = path.join(pluginRoot, "skills", skill, "SKILL.md");
@@ -130,10 +135,41 @@ function runInit(scope: Scope, dryRun: boolean) {
 
   if (!ompAvailable()) {
     notes.push(
-      "omp CLI not found on PATH. Install Oh My Pi (`omp`), then re-run init or manually: omp plugin install github:btspoony/mstar-harness",
+      "omp CLI not found on PATH. Install Oh My Pi (`omp`), then re-run init or manually: omp plugin install @mstar-harness/omp",
     );
   } else {
-    const linkArgs = ["plugin", "link", HARNESS_REPO_PATH];
+    const ompPackagePath = path.join(HARNESS_REPO_PATH, OMP_PACKAGE_REL);
+    // The linked tree's plugin.json/skills/hooks/tools mirrors are gitignored
+    // build outputs — without a build the link succeeds with an empty plugin
+    // and doctor then fails on the same tree. Build before linking; fall back
+    // to the npm install when the build is impossible (e.g. no bun on PATH).
+    if (!dryRun && !fs.existsSync(path.join(ompPackagePath, "plugin.json"))) {
+      try {
+        runCliCommand(["bun", "install"], { cwd: HARNESS_REPO_PATH, dryRun });
+        runCliCommand(["bun", "run", "engine:build"], { cwd: HARNESS_REPO_PATH, dryRun });
+        runCliCommand(["bun", "run", "omp:build"], { cwd: HARNESS_REPO_PATH, dryRun });
+        notes.push("Built the omp package (engine dist + discovery mirrors) before linking.");
+      } catch (buildError) {
+        const buildMessage = buildError instanceof Error ? buildError.message : String(buildError);
+        notes.push(
+          `Warning: could not build packages/omp (${buildMessage}). Falling back to: omp plugin install @mstar-harness/omp`,
+        );
+        const installArgs = ["plugin", "install", "@mstar-harness/omp"];
+        if (scope === "project") installArgs.push("--scope", "project");
+        try {
+          runOmp(installArgs, dryRun);
+          notes.push(`Installed @mstar-harness/omp via omp plugin install (${scope}).`);
+        } catch (installError) {
+          notes.push(`omp plugin install also failed: ${installError instanceof Error ? installError.message : String(installError)}`);
+        }
+        notes.push(...postInstallNotes(scope, dryRun, projectRoot));
+        return { location: HARNESS_REPO_PATH, notes };
+      }
+    }
+    notes.push(
+      `Linked omp plugin tree resolved via the workspace engine member; dist + root mirrors are gitignored build outputs (rebuilt automatically above when absent)`,
+    );
+    const linkArgs = ["plugin", "link", ompPackagePath];
     if (scope === "project") linkArgs.push("--scope", "project");
     if (dryRun) {
       notes.push(`Would run: omp ${linkArgs.join(" ")}`);
@@ -141,16 +177,16 @@ function runInit(scope: Scope, dryRun: boolean) {
       try {
         runOmp(linkArgs, dryRun);
         notes.push(
-          `Linked local harness into omp plugins (${scope}): omp plugin link ${HARNESS_REPO_PATH}${scope === "project" ? " --scope project" : ""}`,
+          `Linked local harness omp package into omp plugins (${scope}): omp plugin link ${ompPackagePath}${scope === "project" ? " --scope project" : ""}`,
         );
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        notes.push(`omp plugin link failed (${message}). Falling back guidance: omp plugin install github:btspoony/mstar-harness`);
+        notes.push(`omp plugin link failed (${message}). Falling back guidance: omp plugin install @mstar-harness/omp`);
         try {
-          const installArgs = ["plugin", "install", "github:btspoony/mstar-harness"];
+          const installArgs = ["plugin", "install", "@mstar-harness/omp"];
           if (scope === "project") installArgs.push("--scope", "project");
           runOmp(installArgs, dryRun);
-          notes.push(`Installed github:btspoony/mstar-harness via omp plugin install (${scope}).`);
+          notes.push(`Installed @mstar-harness/omp via omp plugin install (${scope}).`);
         } catch (installError) {
           const installMessage = installError instanceof Error ? installError.message : String(installError);
           notes.push(`omp plugin install also failed: ${installMessage}`);
@@ -173,7 +209,7 @@ function runInit(scope: Scope, dryRun: boolean) {
   notes.push("Verify with: omp plugin list");
   notes.push("Enter PM with /skill:pm ; commands: /iteration-start /iteration-drive /iteration-loop /codebase-audit");
   notes.push(`Host adapter: mstar-host \u2192 references/omp.md (skill://mstar-host/references/omp.md)`);
-  notes.push(`Alternate install without CLI link: omp plugin install ${REPO_URL.replace("https://github.com/", "github:").replace(/\.git$/, "")}`);
+  notes.push(`Alternate install without CLI link: omp plugin install @mstar-harness/omp`);
 
   return {
     location: HARNESS_REPO_PATH,
@@ -181,10 +217,34 @@ function runInit(scope: Scope, dryRun: boolean) {
   };
 }
 
+/**
+ * Shared tail notes for the runInit install-fallback path (npm install taken
+ * instead of the link) — mirrors the post-link section of `runInit` so both
+ * exits produce the same guidance set.
+ */
+function postInstallNotes(scope: Scope, dryRun: boolean, projectRoot: string): string[] {
+  const notes: string[] = [];
+  if (scope === "project") {
+    notes.push(...appendHarnessProjectGitignore(projectRoot, dryRun));
+    notes.push(
+      ...appendGitignore(
+        projectRoot,
+        [".omp/plugins/", ".omp/plugin-overrides.json", ".omp/plugins/installed_plugins.json"],
+        dryRun,
+      ),
+    );
+  }
+  notes.push("Verify with: omp plugin list");
+  notes.push("Enter PM with /skill:pm ; commands: /iteration-start /iteration-drive /iteration-loop /codebase-audit");
+  notes.push(`Host adapter: mstar-host \u2192 references/omp.md (skill://mstar-host/references/omp.md)`);
+  notes.push(`Alternate install without CLI link: omp plugin install @mstar-harness/omp`);
+  return notes;
+}
+
 function runDoctor(scope: Scope) {
   const errors: string[] = [];
   errors.push(...validateLocalHarnessRepo());
-  errors.push(...validatePluginTree(HARNESS_REPO_PATH));
+  errors.push(...validatePluginTree(path.join(HARNESS_REPO_PATH, OMP_PACKAGE_REL)));
 
   if (!ompAvailable()) {
     errors.push("omp CLI not found on PATH (required for omp target doctor checks).");

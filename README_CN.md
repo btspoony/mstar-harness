@@ -48,7 +48,7 @@ Harness Workflow Engine · Agent Plugin
 | 宿主 | 命令 |
 |------|------|
 | dsh（DeepSeek Harness） | `npx @mstar-harness/cli init --target dsh`<br>（一条 CLI 命令编排两条**独立** `dsh plugin --profile web add` 安装：<br>`@mstar-harness/dsh` + `dsh-llm-fallbacks`；`--no-fallbacks` 可跳过后者）<br>或 `dsh plugin --profile web add @mstar-harness/dsh`<br>+ `dsh plugin --profile web add dsh-llm-fallbacks` |
-| omp | `npx @mstar-harness/cli init --target omp`<br>（链接 `~/.mstar/harness`）<br>或 `omp plugin install github:btspoony/mstar-harness` |
+| omp | `npx @mstar-harness/cli init --target omp`<br>（链接 `~/.mstar/harness/packages/omp`）<br>或 `omp plugin install @mstar-harness/omp` |
 | OpenCode | `npx @mstar-harness/cli init --target opencode` |
 | Cursor | `npx @mstar-harness/cli init --target cursor` |
 | Kimi | Kimi TUI：`/plugins install https://github.com/btspoony/mstar-harness`<br>→ `/plugins reload` |

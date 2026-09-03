@@ -76,7 +76,7 @@ See [INSTALL.md](../INSTALL.md#kimi) and **`mstar-host`** → `references/kimi.m
 
 Alternate without the CLI:
 
-- `omp plugin install github:btspoony/mstar-harness`
+- `omp plugin install @mstar-harness/omp`
 - or `omp plugin link ~/.mstar/harness`
 
 See [INSTALL.md](../INSTALL.md#omp) and **`mstar-host`** → `references/omp.md` for host behavior (`/skill:pm`, filename `/iteration-*` commands, live-schema role `task.agent` preference + C5b skill load).

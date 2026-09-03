@@ -48,7 +48,7 @@ Release notes: [CHANGELOG.md](CHANGELOG.md) / [CHANGELOG_CN.md](CHANGELOG_CN.md)
 | Host | Command |
 |------|---------|
 | dsh (DeepSeek Harness) | `npx @mstar-harness/cli init --target dsh`<br>(one CLI command that runs two **independent** `dsh plugin --profile web add` installs:<br>`@mstar-harness/dsh` + `dsh-llm-fallbacks`; `--no-fallbacks` skips the latter)<br>or `dsh plugin --profile web add @mstar-harness/dsh`<br>+ `dsh plugin --profile web add dsh-llm-fallbacks` |
-| omp | `npx @mstar-harness/cli init --target omp`<br>(links `~/.mstar/harness`)<br>or `omp plugin install github:btspoony/mstar-harness` |
+| omp | `npx @mstar-harness/cli init --target omp`<br>(links `~/.mstar/harness/packages/omp`)<br>or `omp plugin install @mstar-harness/omp` |
 | OpenCode | `npx @mstar-harness/cli init --target opencode` |
 | Cursor | `npx @mstar-harness/cli init --target cursor` |
 | Kimi | Kimi TUI: `/plugins install https://github.com/btspoony/mstar-harness`<br>→ `/plugins reload` |

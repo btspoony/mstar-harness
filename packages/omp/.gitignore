@@ -1,0 +1,11 @@
+dist/
+harness-skills/
+harness-commands/
+harness-agents/
+hooks/
+tools/
+skills/
+commands/
+agents/
+assets/
+plugin.json

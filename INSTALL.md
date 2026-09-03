@@ -148,9 +148,10 @@ npx @mstar-harness/cli doctor --target omp
 Or install/link directly:
 
 ```bash
-omp plugin install github:btspoony/mstar-harness
-# maintainer / local checkout:
-# omp plugin link ~/.mstar/harness
+omp plugin install @mstar-harness/omp
+# maintainer / local checkout (needs a local build first):
+# omp plugin link ~/.mstar/harness/packages/omp
+#   (run `bun install && bun run engine:build && bun run --cwd packages/omp build` in the checkout)
 ```
 
 Project scope: `npx @mstar-harness/cli init --target omp --scope project`.
@@ -343,9 +344,10 @@ npx @mstar-harness/cli doctor --target omp
 Or install/link directly with the omp CLI:
 
 ```bash
-omp plugin install github:btspoony/mstar-harness
-# local checkout / maintainer link:
-# omp plugin link ~/.mstar/harness
+omp plugin install @mstar-harness/omp
+# local checkout / maintainer link (needs a local build first):
+# omp plugin link ~/.mstar/harness/packages/omp
+#   (run `bun install && bun run engine:build && bun run --cwd packages/omp build` in the checkout)
 omp plugin list
 ```
 

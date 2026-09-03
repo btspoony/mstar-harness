@@ -75,6 +75,13 @@
         "typescript": "^5.9.3",
       },
     },
+    "packages/omp": {
+      "name": "@mstar-harness/omp",
+      "version": "3.6.0-alpha.4",
+      "devDependencies": {
+        "@mstar-harness/engine": "workspace:*",
+      },
+    },
     "packages/opencode": {
       "name": "@mstar-harness/opencode",
       "version": "3.6.0-alpha.4",
@@ -360,6 +367,8 @@
     "@mstar-harness/dsh": ["@mstar-harness/dsh@workspace:packages/dsh"],
 
     "@mstar-harness/engine": ["@mstar-harness/engine@workspace:packages/engine"],
+
+    "@mstar-harness/omp": ["@mstar-harness/omp@workspace:packages/omp"],
 
     "@mstar-harness/opencode": ["@mstar-harness/opencode@workspace:packages/opencode"],
 

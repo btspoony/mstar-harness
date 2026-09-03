@@ -8,7 +8,7 @@
  * Defaults to `{harness}/status.json` resolved from the session cwd
  * (`resolveHarnessDir(pi.cwd)`); pass `path` to target another file.
  * Classification follows the Gate 1 layout rules (fix-wave W-C, parity
- * with `harnessDocKindOfTarget` in hooks/pre/mstar-gates.ts and
+ * with `harnessDocKindOfTarget` in ../hooks/pre/mstar-gates.ts and
  * packages/opencode/src/mstar.ts): a document is only validated when its
  * harness-relative location is canonical — `status.json` at the harness
  * root, `snapshot.json` under `workflows/<id>/`, `residuals.json` under

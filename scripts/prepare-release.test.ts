@@ -17,7 +17,7 @@ packages: CLI, Root
   test("single unknown token produces one error naming file + token", () => {
     const errors = validateFragmentPackages(["root", "scripts"], "typo.md");
     expect(errors).toEqual([
-      'typo.md: unknown packages token "scripts" (expected one of root|cli|opencode|engine|dsh)',
+      'typo.md: unknown packages token "scripts" (expected one of root|cli|opencode|engine|dsh|omp)',
     ]);
   });
 
@@ -27,9 +27,9 @@ packages: CLI, Root
       ...validateFragmentPackages(["engine", "dshh"], "b.md"),
     ];
     expect(errors).toEqual([
-      'a.md: unknown packages token "clii" (expected one of root|cli|opencode|engine|dsh)',
-      'a.md: unknown packages token "scripts" (expected one of root|cli|opencode|engine|dsh)',
-      'b.md: unknown packages token "dshh" (expected one of root|cli|opencode|engine|dsh)',
+      'a.md: unknown packages token "clii" (expected one of root|cli|opencode|engine|dsh|omp)',
+      'a.md: unknown packages token "scripts" (expected one of root|cli|opencode|engine|dsh|omp)',
+      'b.md: unknown packages token "dshh" (expected one of root|cli|opencode|engine|dsh|omp)',
     ]);
   });
 

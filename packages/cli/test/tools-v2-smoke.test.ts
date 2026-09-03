@@ -27,19 +27,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { zod } from "@oh-my-pi/pi-coding-agent";
 import type { CustomTool, CustomToolAPI } from "@oh-my-pi/pi-coding-agent";
-import mstarDispatchValidate from "../../../tools/mstar_dispatch_validate/index";
+import mstarDispatchValidate from "../../omp/src/tools/mstar_dispatch_validate/index";
 import mstarIterationGate, {
   workflowDirResolverLoader as iterationGateDirResolverLoader,
-} from "../../../tools/mstar_iteration_gate/index";
+} from "../../omp/src/tools/mstar_iteration_gate/index";
 import mstarLeaseVerify, {
   workflowDirResolverLoader as leaseVerifyDirResolverLoader,
-} from "../../../tools/mstar_lease_verify/index";
-import mstarPathResolve from "../../../tools/mstar_path_resolve/index";
-import mstarStatusValidate from "../../../tools/mstar_status_validate/index";
+} from "../../omp/src/tools/mstar_lease_verify/index";
+import mstarPathResolve from "../../omp/src/tools/mstar_path_resolve/index";
+import mstarStatusValidate from "../../omp/src/tools/mstar_status_validate/index";
 import mstarWorktreeCheck, {
   workflowDirResolverLoader as worktreeCheckDirResolverLoader,
-} from "../../../tools/mstar_worktree_check/index";
-import mstarGates, { dirResolversLoader, loadNewValidators, newValidatorsLoader } from "../../../hooks/pre/mstar-gates";
+} from "../../omp/src/tools/mstar_worktree_check/index";
+import mstarGates, { dirResolversLoader, loadNewValidators, newValidatorsLoader } from "../../omp/src/hooks/pre/mstar-gates";
 
 const FIXTURE = join(import.meta.dir, "fixtures", "tools-v2-smoke", "repo");
 const SNAPSHOT_REL = join("plans", "workflows", "wf-smoke", "snapshot.json");

@@ -1,0 +1,45 @@
+{
+  "name": "@mstar-harness/omp",
+  "version": "3.6.0-alpha.4",
+  "description": "Morning Star harness omp (Oh My Pi) plugin — engine-backed runtime gates (status/dispatch/lease) + mstar-* skills, commands, and agents for omp.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/btspoony/mstar-harness.git",
+    "directory": "packages/omp"
+  },
+  "type": "module",
+  "files": [
+    "dist",
+    "harness-skills",
+    "harness-commands",
+    "harness-agents",
+    "hooks",
+    "tools",
+    "skills",
+    "commands",
+    "agents",
+    "assets",
+    "plugin.json",
+    "README.md"
+  ],
+  "scripts": {
+    "bundle-assets": "bun run scripts/bundle-harness-assets.ts",
+    "build": "bun run bundle-assets && rm -rf dist hooks tools && bun build src/hooks/pre/mstar-gates.ts --target node --outfile dist/hooks/pre/mstar-gates.js && bun build src/tools/mstar_status_validate/index.ts --target node --outfile dist/tools/mstar_status_validate/index.js && bun build src/tools/mstar_worktree_check/index.ts --target node --outfile dist/tools/mstar_worktree_check/index.js && bun build src/tools/mstar_dispatch_validate/index.ts --target node --outfile dist/tools/mstar_dispatch_validate/index.js && bun build src/tools/mstar_iteration_gate/index.ts --target node --outfile dist/tools/mstar_iteration_gate/index.js && bun build src/tools/mstar_lease_verify/index.ts --target node --outfile dist/tools/mstar_lease_verify/index.js && bun build src/tools/mstar_path_resolve/index.ts --target node --outfile dist/tools/mstar_path_resolve/index.js && bunx tsc && cp -R dist/hooks hooks && mkdir -p tools && cp dist/tools/mstar_status_validate/index.js tools/mstar_status_validate.js && cp dist/tools/mstar_worktree_check/index.js tools/mstar_worktree_check.js && cp dist/tools/mstar_dispatch_validate/index.js tools/mstar_dispatch_validate.js && cp dist/tools/mstar_iteration_gate/index.js tools/mstar_iteration_gate.js && cp dist/tools/mstar_lease_verify/index.js tools/mstar_lease_verify.js && cp dist/tools/mstar_path_resolve/index.js tools/mstar_path_resolve.js",
+    "test": "bun test",
+    "prepublishOnly": "bun run build"
+  },
+  "engines": {
+    "bun": ">=1.2.17"
+  },
+  "omp": {
+    "name": "morning-star-harness",
+    "description": "Morning Star multi-agent harness skills and iteration commands for omp."
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "@mstar-harness/engine": "workspace:*"
+  }
+}
