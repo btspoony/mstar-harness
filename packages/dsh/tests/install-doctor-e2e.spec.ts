@@ -49,7 +49,7 @@ const DSH_PROFILE = 'web'
 /** The mstar plugin spec (doctor capability words). */
 const MSTAR_SPEC = '@mstar-harness/dsh'
 /** The fallbacks plugin spec (doctor capability words). */
-const FALLBACKS_SPEC = 'dsh-llm-fallbacks'
+const FALLBACKS_SPEC = 'dsh-llm-fallbacks@0.4.1'
 
 /** Skip-guard probe (Task 1 pattern): `dsh` bin on PATH + registry
  * reachability. A missing prerequisite SKIPS with the reason printed —
@@ -137,15 +137,20 @@ const profileDir = (dshHome: string) => join(dshHome, 'profiles', DSH_PROFILE)
 /** The installed mstar package dir under the hoisted profile node_modules. */
 const installedMstarDir = (dshHome: string) => join(profileDir(dshHome), 'node_modules/@mstar-harness/dsh')
 
-/** The seeds surface marker (Task 1 pattern): the bundled seeds wiring in
- * `dist/index.js` + the packaged `harness-agents` mirror. The doctor itself
- * reads only loader rows, but the dsh-side boots exercise the bundled
+/** The shipped-surface marker (Task 1 pattern): the bundled seeds wiring +
+ * the NATIVE persona channel (rc.1 `internal/get` + `request.persona` merge,
+ * not the pre-rc.1 `mstar:role-persona` additive section) in `dist/index.js`,
+ * plus the packaged `harness-agents` mirror. The doctor itself reads only
+ * loader rows, but the dsh-side boots exercise the bundled
  * probe/advisory/persona-channel gates — pin the FULL shipped surface so the
- * boot evidence never runs against a seeds-less stale version. */
-function hasSeedsSurface(mstarPkgDir: string): boolean {
+ * boot evidence never runs against a stale version whose persona merge
+ * targets a superseded subagent surface (3.5.1 was published on the old
+ * additive-section path and its merge is invisible to the rc.1 channel). */
+function hasShippedSurface(mstarPkgDir: string): boolean {
   const distIndex = join(mstarPkgDir, 'dist/index.js')
   if (!existsSync(distIndex) || !existsSync(join(mstarPkgDir, 'harness-agents'))) return false
-  return readFileSync(distIndex, 'utf8').includes('mstar seeds declared')
+  const dist = readFileSync(distIndex, 'utf8')
+  return dist.includes('mstar seeds declared') && dist.includes('internal/get') && dist.includes('request.persona')
 }
 
 /** Read the `version` field of a package.json (Task 1 pattern). */
@@ -230,9 +235,9 @@ describe.skipIf(skipReason !== undefined)('install-surface doctor three-state e2
     // the default add on a seeds-less version. The doctor reads loader rows
     // only, but the dsh-side boots exercise the bundled gates — pin the
     // repo-shipped version when the surface is missing.
-    if (!hasSeedsSurface(installedMstarDir(dshHome))) {
+    if (!hasShippedSurface(installedMstarDir(dshHome))) {
       const repoVersion = await readVersion(join(packageRoot, 'package.json'))
-      console.log(`install-doctor-e2e: default add lacks the seeds surface — re-adding pinned @${repoVersion} (Task 1 deviation)`)
+      console.log(`install-doctor-e2e: default add lacks the shipped surface (native persona channel) — re-adding pinned @${repoVersion} (Task 1 deviation)`)
       runDsh(dshHome, ['plugin', '--profile', DSH_PROFILE, 'add', `${MSTAR_SPEC}@${repoVersion}`], 300_000)
       // Post-pin dump probe (fix wave S-002 belt-and-suspenders): the
       // re-add must not duplicate the mstar loader row (the --no-fallbacks

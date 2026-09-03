@@ -164,7 +164,7 @@ function expectNote(notes: string[], marker: string): void {
 }
 
 const MSTAR_SPEC = "@mstar-harness/dsh";
-const FALLBACKS_SPEC = "dsh-llm-fallbacks";
+const FALLBACKS_SPEC = "dsh-llm-fallbacks@0.4.1";
 
 /** Empty loader tree: nothing installed. */
 const DUMP_EMPTY = "";

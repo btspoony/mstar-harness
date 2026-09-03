@@ -32,7 +32,7 @@ afterEach(async () => {
 const SERVICE_KEYS = ['name', 'version', 'resolveRole', 'resolveChain', 'validateFallbacksConfig', 'detectLegacyKeys', 'declareSeeds', 'getEffectiveRoles', 'revertSeededPersona'] as const
 
 /** The resolved registry version the caret range must land on (drift STOP gate). */
-const RESOLVED_VERSION = '0.4.0-alpha.1'
+const RESOLVED_VERSION = '0.4.1'
 
 /** A live, enabled loader entry for the fallbacks row. */
 const liveEntry = (): LoaderEntryView => ({ options: { name: FALLBACKS_ENTRY_NAME }, disabled: false, fiber: {} })

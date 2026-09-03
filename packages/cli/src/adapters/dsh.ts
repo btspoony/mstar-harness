@@ -51,9 +51,24 @@ function addTimeoutMs(): number {
  * second (reconcile append order — the fallbacks row lands after the
  * dsh-base/llm-retry layers). The lines are never folded into any patch.
  * Default profile is fixed to `web` (dsh-tui not verified); centralized so a
- * future profile flag changes exactly one place. */
-const DSH_PLUGIN_SPECS: readonly string[] = ["@mstar-harness/dsh", "dsh-llm-fallbacks"];
+ * future profile flag changes exactly one place.
+ *
+ * The fallbacks spec is an EXACT version: `dsh plugin add` forwards to pnpm
+ * with the dsh CLI's own manifest spec (`^0.3.5`), whose dist re-exports
+ * `installSettingsSection` from `@deepseek-ai/dsh-settings` — an export the
+ * rc.1 line removed — so an unpinned add breaks the installed-artifact boot
+ * against the single-line peer graph. 0.4.1+ is the line adapted to
+ * `@deepseek-ai/dsh-*` `^0.1.2-rc.1` (no dsh-settings re-export at runtime).
+ * Bump this constant with the repo's own `dsh-llm-fallbacks` devDependency. */
+const DSH_FALLBACKS_VERSION = "0.4.1";
+const DSH_PLUGIN_SPECS: readonly string[] = ["@mstar-harness/dsh", `dsh-llm-fallbacks@${DSH_FALLBACKS_VERSION}`];
 const DSH_FALLBACKS_SPEC = DSH_PLUGIN_SPECS[1];
+
+/** Spec → loader-row name: strip a trailing `@<version>` (none in mstar's
+ * spec; fallbacks carries the pinned one). */
+function dshLoaderName(spec: string): string {
+  return spec.includes("@") ? spec.slice(0, spec.lastIndexOf("@")) : spec;
+}
 
 const DSH_INSTALL_HINT =
   "Install the DeepSeek Harness CLI (@deepseek-ai/dsh), e.g. `pnpm add -g @deepseek-ai/dsh` or `npm install -g @deepseek-ai/dsh`, then re-run init.";
@@ -186,7 +201,7 @@ function runInit(scope: Scope, dryRun: boolean, initFlags?: InstallInitFlags) {
       notes.push(`skipped-by-flag: ${spec} (--no-fallbacks)`);
       continue;
     }
-    if (!dryRun && installed.has(spec)) {
+    if (!dryRun && (installed.has(spec) || installed.has(dshLoaderName(spec)))) {
       notes.push(`skipped-existing: ${spec} (already installed in profile ${DSH_PROFILE})`);
       continue;
     }
@@ -252,7 +267,7 @@ function runDoctor(scope: Scope): { location: string; errors: string[]; notes: s
 
   const byName = new Map(entries.map((entry) => [entry.name, entry]));
   for (const spec of DSH_PLUGIN_SPECS) {
-    const entry = byName.get(spec);
+    const entry = byName.get(spec) ?? byName.get(dshLoaderName(spec));
     const state = !entry ? "uninstalled" : entry.enabled ? "mounted" : "disabled";
     notes.push(`${spec}: ${state}`);
     if (state === "mounted") continue;
