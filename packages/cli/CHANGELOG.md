@@ -6,6 +6,17 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [3.6.1] - 2026-09-03
+
+### Changed
+
+- Shipped repo-side ZCode marketplace manifests (`.claude-plugin/marketplace.json`, with root `marketplace.json` as fallback) so ZCode's `github`-source marketplace refresh can discover the catalog in-repo — previously refresh failed with `Marketplace manifest not found in GitHub repo`. Plugin entries use the `github` source with no pinned version; install-time versions come from `.zcode-plugin/plugin.json`.
+- Aligned the `zcode` adapter: the local marketplace snapshot written by `init` no longer pins a plugin version, and `doctor` accepts version-less plugin entries (a successful ZCode refresh overwrites the snapshot with the repo manifest).
+
+- Version alignment with harness **3.6.1**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **3.6.1**.
+
 ## [3.6.0] - 2026-09-03
 
 ### dsh

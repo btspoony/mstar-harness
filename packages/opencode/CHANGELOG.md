@@ -6,6 +6,17 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [3.6.1] - 2026-09-03
+
+### Bundled harness skills (`harness-skills/` at publish)
+
+- Converted all 14 repo-root agent shells (`agents/*.md`) to **single-line quoted English `description` frontmatter**. ZCode's flat agent frontmatter parser does not support `|-` block scalars — it parsed the literal string `|-` as the description and silently dropped the nested `tools`/`permission` maps, leaving plugin agent entries with a broken trigger description. Wording is unchanged (the existing English line is reused verbatim); `mode`/`tools`/`permission` are preserved for OpenCode semantics.
+- Corrected the ZCode host contract (`mstar-host`): current ZCode **does** register Morning Star role agents (`agents/*.md`) as callable `subagent_type` values — dispatch now prefers the **bare role id** (e.g. `fullstack-dev`), keeps `general-purpose` as the universal fallback, keeps C5b prompt + skill-load binding required because the role shells are thin, and carries its own C5/C5b SSOT (the shared role-binding doc is re-scoped to Kimi-only; `zcode.md` no longer loads it). Documents the ZCode frontmatter constraint (single-line quoted English `description`; `|-` blocks and nested `tools`/`permission` are silently mangled/dropped) and that direct marketplace add works now that the repo ships `.claude-plugin/marketplace.json`.
+
+- Version alignment with harness **3.6.1** (no OpenCode package API change).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **3.6.1**.
+
 ## [3.6.0] - 2026-09-03
 
 ### Bundled harness skills (`harness-skills/` at publish)

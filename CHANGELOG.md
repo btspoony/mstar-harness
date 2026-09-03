@@ -8,6 +8,20 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ## [Unreleased]
 
+## [3.6.1] - 2026-09-03
+
+### Harness
+
+- Removed the INSTALL.md marketplace version anchor and its release tooling: `release:prepare` no longer bumps a quoted `"version"` field in INSTALL.md and `release:validate` no longer requires one — the ZCode marketplace example (and the marketplace catalogs) are version-less; install-time versions come from `.zcode-plugin/plugin.json`. Follow-up to #183/#184: the anchor's only purpose was being bumped by the release tooling, so it was removed together with the tooling instead of restored.
+- Converted all 14 repo-root agent shells (`agents/*.md`) to **single-line quoted English `description` frontmatter**. ZCode's flat agent frontmatter parser does not support `|-` block scalars — it parsed the literal string `|-` as the description and silently dropped the nested `tools`/`permission` maps, leaving plugin agent entries with a broken trigger description. Wording is unchanged (the existing English line is reused verbatim); `mode`/`tools`/`permission` are preserved for OpenCode semantics.
+- Corrected the ZCode host contract (`mstar-host`): current ZCode **does** register Morning Star role agents (`agents/*.md`) as callable `subagent_type` values — dispatch now prefers the **bare role id** (e.g. `fullstack-dev`), keeps `general-purpose` as the universal fallback, keeps C5b prompt + skill-load binding required because the role shells are thin, and carries its own C5/C5b SSOT (the shared role-binding doc is re-scoped to Kimi-only; `zcode.md` no longer loads it). Documents the ZCode frontmatter constraint (single-line quoted English `description`; `|-` blocks and nested `tools`/`permission` are silently mangled/dropped) and that direct marketplace add works now that the repo ships `.claude-plugin/marketplace.json`.
+- Shipped repo-side ZCode marketplace manifests (`.claude-plugin/marketplace.json`, with root `marketplace.json` as fallback) so ZCode's `github`-source marketplace refresh can discover the catalog in-repo — previously refresh failed with `Marketplace manifest not found in GitHub repo`. Plugin entries use the `github` source with no pinned version; install-time versions come from `.zcode-plugin/plugin.json`.
+- Aligned the `zcode` adapter: the local marketplace snapshot written by `init` no longer pins a plugin version, and `doctor` accepts version-less plugin entries (a successful ZCode refresh overwrites the snapshot with the repo manifest).
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, and the portable Agent Plugins manifest: **→ 3.6.1**.
+
 ## [3.6.0] - 2026-09-03
 
 ### Harness
