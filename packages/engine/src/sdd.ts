@@ -82,7 +82,7 @@ function isFile(file: string): boolean {
  * realistic iteration-close ranges working while bounding memory; captures
  * beyond that fail as SddScriptError via the CLI.
  */
-const GIT_CAPTURE_MAX_BYTES = 64 * 1024 * 1024;
+export const GIT_CAPTURE_MAX_BYTES = 64 * 1024 * 1024;
 
 /** Run git, returning trimmed stdout or null on failure. */
 function gitOut(cwd: string, args: string[]): string | null {

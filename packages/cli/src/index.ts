@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import { execFileSync } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { select } from "@inquirer/prompts";
@@ -30,6 +31,7 @@ import {
   findSimplifyMarkers,
   findTemporaryMarkers,
   findingsCleanupGate,
+  GIT_CAPTURE_MAX_BYTES,
   getArtifactStore,
   isReadOnlyAssignmentRole,
   l1PreDispatchCheck,
@@ -2918,6 +2920,19 @@ function gitSync(args: string[], cwd: string): string {
   return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 
+/**
+ * Git capture ceiling for snapshot bytes — imported from the engine
+ * (packages/engine/src/sdd.ts, the same 64 MiB ceiling `reviewPackage`
+ * uses): Node's default 1 MiB `maxBuffer` ENOBUFS'd on large review
+ * ranges. Captures beyond that fail the setup.
+ */
+
+/** Run a git command in `cwd`, returning UNTRIMMED stdout bytes (snapshot
+ * capture — same maxBuffer ceiling as the engine's `reviewPackage`). */
+function gitRaw(args: string[], cwd: string): Buffer {
+  return execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"], maxBuffer: GIT_CAPTURE_MAX_BYTES });
+}
+
 /** Run `gh` with `input` on stdin, returning parsed stdout. Throws on failure. */
 function ghSync(args: string[], input?: string): string {
   return execFileSync("gh", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], ...(input !== undefined ? { input } : {}) }).trim();
@@ -2958,7 +2973,13 @@ function refResolves(ref: string, cwd: string): boolean {
  */
 function probeChangesetEmpty(diffCmdArgs: string[], cwd: string, worktreePath: string): boolean {
   if (diffCmdArgs[0] === "__working_tree__") {
-    const dirty = gitIf(["diff"], worktreePath).length > 0 || gitIf(["diff", "--cached"], worktreePath).length > 0;
+    // A probe that cannot run (broken git / >64 MiB overflow) must NOT read
+    // as "empty changeset" — null → not empty → proceed; the snapshot
+    // capture then fails loudly at the same ceiling and rolls back.
+    const diffOut = gitProbe(["diff"], worktreePath);
+    const cachedOut = gitProbe(["diff", "--cached"], worktreePath);
+    if (diffOut === null || cachedOut === null) return false;
+    const dirty = diffOut.length > 0 || cachedOut.length > 0;
     if (dirty) return false;
     let untracked = "";
     try {
@@ -2976,17 +2997,34 @@ function probeChangesetEmpty(diffCmdArgs: string[], cwd: string, worktreePath: s
     const sha = diffCmdArgs[1]!;
     const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
     const diffFrom = refResolves(`${sha}^`, worktreePath) ? `${sha}^` : EMPTY_TREE;
-    return gitIf(["diff", diffFrom, sha], worktreePath).trim().length === 0;
+    const probe = gitProbe(["diff", diffFrom, sha], worktreePath);
+    return probe === null ? false : probe.trim().length === 0;
   }
-  return gitIf(diffCmdArgs, worktreePath).length === 0;
+  const probe = gitProbe(diffCmdArgs, worktreePath);
+  return probe === null ? false : probe.length === 0;
 }
 
-/** Like {@link gitSync} but returns "" instead of throwing (probe paths). */
+/** Like {@link gitSync} but returns "" instead of throwing (probe paths).
+ * Carries the same 64 MiB capture ceiling as the engine's `gitOut` — a
+ * changeset-emptiness probe on a large diff must not ENOBUFS into a false
+ * "empty" verdict. */
 function gitIf(args: string[], cwd: string): string {
   try {
-    return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: GIT_CAPTURE_MAX_BYTES });
   } catch {
     return "";
+  }
+}
+
+/** Like {@link gitIf} but returns null instead of "" when git fails — a
+ * probe that cannot run must NOT read as an empty changeset (a broken-git
+ * or >64 MiB-overflow probe would otherwise false-empty the preflight and
+ * report "no changes to review" on a real changeset). */
+function gitProbe(args: string[], cwd: string): string | null {
+  try {
+    return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: GIT_CAPTURE_MAX_BYTES });
+  } catch {
+    return null;
   }
 }
 
@@ -3159,6 +3197,16 @@ type ReviewWorktreeSidecar = {
   createdAt: string;
   /** Git repo root that created this sidecar \u2014 every cleanup git command runs from here. */
   repoRoot: string;
+  /** Absolute path to the pinned diff snapshot (review artifact beside the sidecar). */
+  diffFile?: string;
+  /** sha-256 of the diff snapshot this setup wrote - informational only, never an ownership gate. */
+  diffFileSha256?: string;
+  /** Device id of the snapshot file this setup wrote - inode identity for cleanup ownership. */
+  diffFileDev?: number;
+  /** Inode number of the snapshot file this setup wrote (string - ino can exceed JSON number safety). */
+  diffFileIno?: string;
+  /** mtime (ms) of the snapshot file this setup wrote - closes the ext4 inode-reuse hole (a replacement can inherit dev+ino, never the mtime). */
+  diffFileMtimeMs?: number;
 };
 
 prReviewCommand
@@ -3166,7 +3214,7 @@ prReviewCommand
   .description(
     "Create the isolated review worktree per pr-review.md \u00a7 Worktree isolation: resolves the real base, picks a " +
       "collision-free branch name, fetches with explicit refspecs, creates the worktree, computes the diff basis INSIDE it, " +
-      "and records a sidecar json consumed by worktree-cleanup; prints {reviewBranch, worktreePath, base, mergeBase, diffCmd} " +
+      "and records a sidecar json consumed by worktree-cleanup; prints {reviewBranch, worktreePath, base, mergeBase, diffCmd, diffFile} " +
       "(input modes: --pr <n> | --branch <b> | --diff | --working-tree | --commit <sha>)",
   )
   .option("--pr <n>", "PR number input mode (pull/<n>/head via gh)")
@@ -3174,7 +3222,7 @@ prReviewCommand
   .option("--diff", "Arbitrary diff input mode \u2014 no worktree, no refs")
   .option("--working-tree", "Uncommitted working-tree input mode \u2014 no worktree, no refs")
   .option("--commit <sha>", "Single-commit input mode")
-  .option("--path <dir>", "Worktree target directory (default: ../<repo-name>.review-pr<N> beside the repo)")
+  .option("--path <dir>", "Worktree target directory (default: <repo>/.worktrees/review-<branch>)")
   .action((options: { pr?: string; branch?: string; diff?: boolean; workingTree?: boolean; commit?: string; path?: string }) => {
     try {
       const modesDeclared = [
@@ -3220,7 +3268,7 @@ prReviewCommand
           process.exitCode = 1;
           return;
         }
-        console.log(JSON.stringify({ reviewBranch: null, worktreePath: repoRoot, base: null, mergeBase: null, diffCmd: mode === "diff" ? "(provided changeset)" : "git diff + git diff --cached + ls-files --others" }, null, 2));
+        console.log(JSON.stringify({ reviewBranch: null, worktreePath: repoRoot, base: null, mergeBase: null, diffCmd: mode === "diff" ? "(provided changeset)" : "git diff + git diff --cached + ls-files --others", diffFile: null }, null, 2));
         return;
       }
 
@@ -3278,7 +3326,22 @@ prReviewCommand
         : Number(String(Math.abs([...headSpec].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) % 1_000_003, 7))));
       const reviewBranch = pickReviewBranchName(existing, baseCandidate === 0 ? 1 : baseCandidate, cliToday().replace(/-/g, ""));
       const branchSuffix = mode === "pr" ? "" : `-${headSpec.slice(0, 8)}`;
-      const worktreePath = path.resolve(options.path ?? joinDirnameBeside(repoRoot, `.review-${reviewBranch}${branchSuffix}`));
+      const worktreePath = path.resolve(options.path ?? path.join(repoRoot, ".worktrees", `review-${reviewBranch}${branchSuffix}`));
+      // Default review worktrees live under <repoRoot>/.worktrees/ per the
+      // mstar-branch-worktree convention. The target repo may not gitignore
+      // that directory — ensure it exists and, when the repo does not already
+      // ignore it, add `.worktrees/` to .git/info/exclude (idempotent,
+      // local-only; never touch a tracked .gitignore).
+      if (options.path === undefined) {
+        fs.mkdirSync(path.join(repoRoot, ".worktrees"), { recursive: true });
+        if (gitIf(["check-ignore", ".worktrees/"], repoRoot) === "") {
+          const excludePath = path.join(repoRoot, ".git", "info", "exclude");
+          const existing = fs.existsSync(excludePath) ? fs.readFileSync(excludePath, "utf8") : "";
+          if (!existing.split("\n").some((line) => line.trim() === ".worktrees/")) {
+            fs.appendFileSync(excludePath, `${existing === "" || existing.endsWith("\n") ? "" : "\n"}.worktrees/\n`);
+          }
+        }
+      }
 
       // Establish named refs with explicit refspecs FIRST (pr-review.md §
       // Worktree isolation: "+refs/heads/<base>:refs/remotes/origin/<base>
@@ -3304,14 +3367,52 @@ prReviewCommand
         fetched = false; // resolution gate below reports it
       }
 
+      // Ownership gates for the review artifacts: set only after THIS process
+      // successfully wrote the file. Rollback must never unlink a pre-existing
+      // file or directory at the deterministic artifact paths (empty-changeset
+      // rollback, capture throw, EEXIST/EISDIR write failure) \u2014 the sidecar
+      // only when THIS setup created it, the snapshot only when THIS setup
+      // created it (inode-identified via the in-memory sidecar).
+      let wroteSnapshot = false;
+      let wroteSidecar = false;
+      // The in-memory sidecar (with the snapshot's inode identity) once the
+      // snapshot write succeeded \u2014 lets rollback verify ownership by inode.
+      let pendingSidecar: ReviewWorktreeSidecar | undefined;
+      // ONE fd held from exclusive creation through the final identity
+      // rewrite: every sidecar write targets this verified inode, never the
+      // pathname, so a concurrent replacement of the path cannot be
+      // truncated. The fd IS the identity - rollback proves ownership by
+      // fstat on it, never by a pathname read a replacement could spoof.
+      // Closed by the final rewrite (success); a failure leaves it open for
+      // removeOwnedFreshSidecarFile to close on every rollback path.
+      let sidecarFd: number | undefined;
+
       /** Remove a just-created worktree + branch when setup fails late. */
-      const rollbackNewWorktree = (branchToDelete: string): void => {
+      const cleanupOnFailure = (branchToDelete: string): void => {
         try {
           if (fs.existsSync(worktreePath)) gitSync(["worktree", "remove", "--force", worktreePath], repoRoot);
           gitSync(["worktree", "prune"], repoRoot);
           if (branchToDelete !== "" && !existing.has(branchToDelete)) {
             gitSync(["branch", "-D", branchToDelete], repoRoot);
           }
+          // A FAILing setup must not leave the review artifacts it wrote
+          // behind either (they live beside the worktree, outside it) \u2014 but
+          // ONLY this process's artifacts: the sidecar only when THIS setup
+          // created it (exclusive create \u2014 a pre-existing sidecar is foreign
+          // and stays), the snapshot only when THIS setup wrote it (inode
+          // verified). Anything pre-existing at the paths is unowned and
+          // stays untouched (never recursive).
+          if (wroteSidecar && sidecarFd !== undefined) {
+            // Verified detach-unlink through the held fd - the accepted
+            // removeOwnedSnapshotFile doctrine, second application: identity
+            // is proven by fstat on the fd (never by a pathname read), the
+            // verified inode's only name is detached to an unguessable tmp,
+            // and a replacement swapped in between is restored without ever
+            // overwriting. The helper closes the fd on every rollback path.
+            removeOwnedFreshSidecarFile(sidecarFd, worktreePath);
+            sidecarFd = undefined;
+          }
+          if (wroteSnapshot && pendingSidecar !== undefined) removeOwnedSnapshotFile(worktreePath, pendingSidecar);
         } catch {
           // rollback best-effort; the preflight FAIL below still exits non-zero
         }
@@ -3357,7 +3458,7 @@ prReviewCommand
       if (changesetEmpty) {
         // Discovered only AFTER the worktree exists \u2014 roll it back so a FAIL
         // never leaves an orphaned worktree + freshly created branch behind.
-        rollbackNewWorktree(mode === "pr" ? reviewBranch : "");
+        cleanupOnFailure(mode === "pr" ? reviewBranch : "");
       }
       if (!emptyGate.ok && emptyGate.violations.some((v) => v.code === "prreview.preflight.changeset-empty")) {
         printChecklist("pr-review worktree-setup preflight", emptyGate);
@@ -3365,41 +3466,361 @@ prReviewCommand
         return;
       }
 
-      const recordedBase =
-        mode === "pr" || (mode !== "commit" && !baseRef.startsWith("origin/")) ? `origin/${baseRef}` : baseRef;
-      const sidecar: ReviewWorktreeSidecar = {
-        reviewBranch: mode === "pr" ? reviewBranch : "",
-        worktreePath,
-        base: recordedBase,
-        mergeBase,
-        diffCmd,
-        reportSaved: false,
-        createdAt: new Date().toISOString(),
-        repoRoot,
+      // Diff snapshot: review artifact beside the sidecar (never inside the
+      // worktree). Mirrors SDD reviewPackage section layout AND its capture
+      // mechanics (Buffer parts + 64 MiB maxBuffer); commit mode has no
+      // range, so its Commits section is the single commit line.
+      const captureAndRecordSnapshot = (): ReviewWorktreeSidecar => {
+        const diffFile = prReviewArtifactPathFor(worktreePath, "diff");
+        const sidecarPath = prReviewArtifactPathFor(worktreePath, "json");
+        const snapshotParts: Buffer[] = [];
+        if (mode === "commit") {
+          snapshotParts.push(
+            Buffer.from(`# Review package: ${baseRef} (single commit)\n\n## Commits\n`),
+            gitRaw(["log", "--oneline", "-1", headSpec], worktreePath),
+            Buffer.from("\n## Files changed\n"),
+            gitRaw(["show", "--stat", headSpec], worktreePath),
+            Buffer.from("\n## Diff\n"),
+            gitRaw(["show", "-U10", headSpec], worktreePath),
+          );
+        } else {
+          const range = diffArgs[1]!;
+          const [rangeBase, rangeHead] = range.split("...");
+          snapshotParts.push(
+            Buffer.from(`# Review package: ${baseRef}..${headSpec}\n\n## Commits\n`),
+            gitRaw(["log", "--oneline", `${rangeBase}..${rangeHead}`], worktreePath),
+            Buffer.from("\n## Files changed\n"),
+            gitRaw(["diff", "--stat", range], worktreePath),
+            Buffer.from("\n## Diff\n"),
+            gitRaw(["diff", "-U10", range], worktreePath),
+          );
+        }
+        const snapshot = Buffer.concat(snapshotParts);
+        const recordedBase =
+          mode === "pr" || (mode !== "commit" && !baseRef.startsWith("origin/")) ? `origin/${baseRef}` : baseRef;
+        const sidecar: ReviewWorktreeSidecar = {
+          reviewBranch: mode === "pr" ? reviewBranch : "",
+          worktreePath,
+          base: recordedBase,
+          mergeBase,
+          diffCmd,
+          reportSaved: false,
+          createdAt: new Date().toISOString(),
+          repoRoot,
+          diffFile,
+          diffFileSha256: createHash("sha256").update(snapshot).digest("hex"),
+        };
+        // Sidecar FIRST, exclusive create through ONE held fd ("wx+" =
+        // O_CREAT|O_EXCL|O_RDWR). Ownership of the deterministic artifact
+        // paths is established by creation order, never by content sniffing:
+        // a pre-existing sidecar is by definition foreign (an earlier review
+        // never cleaned) — refuse and point at the documented cleanup path;
+        // never clean a foreign review. On EEXIST / EISDIR this throws with
+        // wroteSidecar still false, so rollback leaves the occupant
+        // byte-untouched. The fd stays open through setup — every later
+        // sidecar write (the initial JSON here, the identity rewrite after
+        // the snapshot) targets this verified inode, never the pathname.
+        try {
+          sidecarFd = fs.openSync(sidecarPath, "wx+");
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "EEXIST" && (error as NodeJS.ErrnoException).code !== "EISDIR") throw error;
+          throw new Error(`cannot record setup sidecar at ${sidecarPath} - run mstar pr-review worktree-cleanup first (never cleaning a foreign review)`);
+        }
+        // No recorded identity snapshot needed: the held fd IS the identity
+        // (rollback verifies through it, see removeOwnedFreshSidecarFile).
+        writeFdSync(sidecarFd, Buffer.from(JSON.stringify(sidecar, null, 2), "utf8"));
+        wroteSidecar = true; // the sidecar at sidecarPath is now owned by this process
+        // Snapshot SECOND, exclusive create. Our own sidecar was JUST created
+        // above, so any occupant at the snapshot path is by definition not
+        // ours — refuse and leave it byte-untouched (never truncate, never
+        // unlink, never shape-sniff).
+        try {
+          fs.writeFileSync(diffFile, snapshot, { flag: "wx" });
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "EEXIST" && (error as NodeJS.ErrnoException).code !== "EISDIR") throw error;
+          throw new Error(`refusing to overwrite pre-existing non-snapshot path ${diffFile}`);
+        }
+        wroteSnapshot = true; // the file at diffFile is now owned by this process
+        // Record the snapshot's identity on the in-memory sidecar, then
+        // rewrite the sidecar through the SAME held fd (ftruncate + full
+        // write, positional from offset 0) — no pathname write anywhere after
+        // creation, so a concurrent replacement of the path cannot be
+        // truncated. Cleanup proves ownership by identity, never by content:
+        // identical bytes on a new inode are a replacement, not our snapshot.
+        // The mtime closes the ext4 inode-reuse hole — a replacement can
+        // inherit dev+ino, never the mtime of the file this setup wrote.
+        const snapshotStat = fs.lstatSync(diffFile);
+        sidecar.diffFileDev = snapshotStat.dev;
+        sidecar.diffFileIno = String(snapshotStat.ino);
+        sidecar.diffFileMtimeMs = snapshotStat.mtimeMs;
+        pendingSidecar = sidecar;
+        // Close here; a failure before this close leaves the fd to rollback,
+        // which closes it before the verified unlink.
+        fs.ftruncateSync(sidecarFd, 0);
+        writeFdSync(sidecarFd, Buffer.from(JSON.stringify(sidecar, null, 2), "utf8"));
+        fs.closeSync(sidecarFd);
+        sidecarFd = undefined;
+        return sidecar;
       };
-      fs.writeFileSync(sidecarPathFor(worktreePath), JSON.stringify(sidecar, null, 2));
+      // Snapshot capture, write, and the sidecar write are the last failure
+      // points after the worktree exists — a FAIL here must roll the new
+      // worktree back (never an orphaned worktree + no sidecar), then fail.
+      let sidecar: ReviewWorktreeSidecar;
+      try {
+        sidecar = captureAndRecordSnapshot();
+      } catch (error) {
+        cleanupOnFailure(mode === "pr" ? reviewBranch : "");
+        throw error;
+      }
       console.log(JSON.stringify({
         reviewBranch: sidecar.reviewBranch === "" ? null : sidecar.reviewBranch,
         worktreePath: sidecar.worktreePath,
         base: sidecar.base,
         mergeBase: sidecar.mergeBase === "" ? null : sidecar.mergeBase,
         diffCmd: sidecar.diffCmd,
+        diffFile: sidecar.diffFile,
       }, null, 2));
     } catch (error) {
       failScript(error, "pr-review worktree-setup");
     }
   });
 
-/** Sidecar path: <parent-of-worktree>/.<worktree-dirname>.prreview.json */
-function sidecarPathFor(worktreePath: string): string {
+/** Review artifact path beside the worktree: <parent-of-worktree>/.<worktree-dirname>.prreview.<suffix> */
+function prReviewArtifactPathFor(worktreePath: string, suffix: "json" | "diff"): string {
   const parent = path.dirname(path.resolve(worktreePath));
   const name = path.basename(path.resolve(worktreePath));
-  return path.join(parent, `.${name}.prreview.json`);
+  return path.join(parent, `.${name}.prreview.${suffix}`);
 }
 
-/** Default worktree location: a sibling directory beside the repo root. */
-function joinDirnameBeside(repoRoot: string, leaf: string): string {
-  return path.join(path.dirname(path.resolve(repoRoot)), leaf);
+/**
+ * Write a whole buffer through an fd as ONE file image: looped `writeSync`,
+ * positional from offset 0 (writeSync may write partially; the explicit
+ * position keeps the file offset irrelevant, so an ftruncate-then-rewrite
+ * never leaves a hole from a stale offset).
+ */
+function writeFdSync(fd: number, buf: Buffer): void {
+  let written = 0;
+  while (written < buf.length) written += fs.writeSync(fd, buf, written, buf.length - written, written);
+}
+
+/**
+ * Remove the diff snapshot at the computed artifact path ONLY when it is
+ * provably this flow's snapshot: a regular file whose identity equals the
+ * sidecar's recorded `diffFileDev` / `diffFileIno` / `diffFileMtimeMs`.
+ * Identical bytes are not identity \u2014 a replacement file with the same
+ * contents (new inode) is unowned. A replacement file, a sidecar without
+ * recorded identity, and any non-regular entry at the deterministic path are
+ * left in place (with a note); missing is a no-op. Never recursive; always
+ * the computed path (never `sidecar.diffFile`).
+ *
+ * The check and the deletion are bound to ONE filesystem object via an open
+ * fd: `lstat(path)` then `unlink(path)` is a TOCTOU pair (the path can be
+ * swapped between the two calls), and a dev+ino match alone is unsound on
+ * filesystems that reuse inode numbers (ext4) \u2014 a replacement can
+ * inherit the recorded dev+ino. The mtime check closes that hole (a
+ * replacement is written at a different time), and the post-rename fd check
+ * proves the rename detached the inode we verified: the inode now at tmp
+ * must BE the inode we opened, so unlinking tmp removes exactly our
+ * snapshot \u2014 a replacement swapped in between open and rename is
+ * restored via hard link (never overwriting a concurrent occupant of the
+ * path; EEXIST leaves both files in place, nothing deleted).
+ *
+ * The tmp name is unguessable (`<snapshot>.cleanup.<pid>.<randomUUID>`), so
+ * a pre-swapped entry at a predictable name can no longer be targeted, and
+ * the unlink itself is bound to the verified inode twice: immediately
+ * before it, the fd must still hold exactly its tmp link (fstat `nlink ===
+ * 1`) AND `lstat(tmp)` must show the same `ino`/`dev` with `nlink === 1`;
+ * immediately after it, `fstat(fd).nlink === 0` must hold \u2014 proof the
+ * unlink detached OUR inode. A post-unlink nlink > 0 means a pathname
+ * replacement was detached instead (best-effort detection \u2014 POSIX/Node
+ * has no fd-bound unlink; the window is a microsecond-scale lstat\u2192unlink
+ * gap on an unguessable name): a loud yellow error names both paths.
+ */
+function removeOwnedSnapshotFile(worktreePath: string, sidecar: ReviewWorktreeSidecar): void {
+  const snapshotPath = prReviewArtifactPathFor(worktreePath, "diff");
+  let fd: number;
+  try {
+    fd = fs.openSync(snapshotPath, "r");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return; // missing \u2192 no-op
+    console.error(pc.yellow(`worktree-cleanup: snapshot at ${snapshotPath} left in place (cannot open: ${(error as Error).message})`));
+    return;
+  }
+  try {
+    const st = fs.fstatSync(fd);
+    if (!st.isFile()) return; // non-regular \u2192 unowned, leave in place
+    const recordedIno = sidecar.diffFileIno;
+    const recordedDev = sidecar.diffFileDev;
+    const recordedMtimeMs = sidecar.diffFileMtimeMs;
+    const owned = typeof recordedIno === "string" && recordedIno !== ""
+      && typeof recordedDev === "number" && Number.isFinite(recordedDev)
+      && typeof recordedMtimeMs === "number" && Number.isFinite(recordedMtimeMs)
+      && String(st.ino) === recordedIno && st.dev === recordedDev
+      && st.mtimeMs === recordedMtimeMs;
+    if (!owned) {
+      // Replacement file (new inode \u2014 even with a reused inode number,
+      // the mtime differs), or a sidecar without recorded identity:
+      // ownership cannot be proven \u2014 leave the path in place, never
+      // unlink by content (identical bytes are not identity).
+      console.error(pc.yellow(`worktree-cleanup: snapshot at ${snapshotPath} left in place (file identity does not match the recorded snapshot)`));
+      return;
+    }
+    if (st.nlink !== 1) {
+      // 0 = our inode was already unlinked (the path holds a replacement);
+      // >1 = unexpected hardlink. Either way ownership is not provable.
+      console.error(pc.yellow(`worktree-cleanup: snapshot at ${snapshotPath} left in place (link count does not match the recorded snapshot)`));
+      return;
+    }
+    // The verified inode's only link is the path we created it at. Detach it
+    // to an UNGUESSABLE sibling name (pid + randomUUID \u2014 a pre-swapped
+    // entry at a predictable name can no longer be targeted), then re-check
+    // the fd: the inode now at tmp must BE the inode we opened \u2014 only
+    // then is unlinking tmp removing exactly our snapshot. Anything else at
+    // tmp is a replacement swapped in between open and rename \u2014 restore
+    // it byte-identical, never delete.
+    const tmp = `${snapshotPath}.cleanup.${process.pid}.${randomUUID()}`;
+    try {
+      fs.renameSync(snapshotPath, tmp);
+    } catch (error) {
+      console.error(pc.yellow(`worktree-cleanup: snapshot at ${snapshotPath} left in place (cannot detach: ${(error as Error).message})`));
+      return;
+    }
+    const st2 = fs.fstatSync(fd);
+    let tmpStat: fs.Stats | undefined;
+    try {
+      tmpStat = fs.lstatSync(tmp);
+    } catch {
+      tmpStat = undefined;
+    }
+    // Pre-unlink binding: the inode at tmp must BE the inode we opened AND
+    // still hold exactly its tmp link (fstat nlink === 1 AND lstat tmp
+    // nlink === 1) \u2014 only then does unlinking tmp remove exactly our
+    // snapshot. Any mismatch (a replacement swapped in between open and
+    // rename, or a hardlink added) takes the restore branch below.
+    if (tmpStat !== undefined && tmpStat.ino === st2.ino && tmpStat.dev === st2.dev && st2.nlink === 1 && tmpStat.nlink === 1) {
+      // Portable ceiling: Node has no fd-bound unlink, so the unlink below is
+      // pathname-based. The unguessable tmp name + the pre-unlink nlink/inode
+      // checks above + the post-unlink nlink === 0 verification below
+      // minimize the lstat\u2192unlink window to microseconds.
+      fs.unlinkSync(tmp);
+      // Post-unlink verification: the unlink must have detached OUR verified
+      // inode (nlink 1 \u2192 0). If the fd still has a link, the unlink
+      // detached a pathname replacement \u2014 detection is best-effort
+      // (POSIX/Node has no fd-bound unlink); name both paths loudly.
+      const st3 = fs.fstatSync(fd);
+      if (st3.nlink !== 0) {
+        console.error(pc.yellow(`worktree-cleanup: unlink at ${tmp} detached a pathname replacement, not the verified snapshot inode (${snapshotPath} still holds ${st3.nlink} link(s)) - the replacement is gone, the verified snapshot was NOT deleted`));
+      }
+    } else {
+      // The inode at tmp is NOT the one we opened — a replacement was
+      // swapped in between open and rename. Restore it to the snapshot
+      // path WITHOUT overwriting: link() fails with EEXIST if a concurrent
+      // creator took the path (POSIX rename would silently replace it).
+      // Only tmp (our own unique name) is ever unlinked, and only after
+      // link() proved it now shares the inode with the path.
+      try {
+        fs.linkSync(tmp, snapshotPath); // EEXIST if a concurrent creator took the path — never overwrites
+        fs.unlinkSync(tmp); // inode is back at the snapshot path; drop the tmp name
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+          console.error(pc.yellow(`worktree-cleanup: snapshot replacement left at ${tmp} (snapshot path was recreated concurrently)`));
+          // tmp keeps the earlier replacement; path keeps the concurrent file. Nothing deleted.
+        } else {
+          console.error(pc.yellow(`worktree-cleanup: snapshot replacement left at ${tmp} (restore failed: ${(error as Error).message})`));
+        }
+      }
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/**
+ * Remove the fresh setup sidecar through the held file descriptor - the
+ * accepted `removeOwnedSnapshotFile` doctrine applied to the setup-rollback
+ * ownership proof. `fd` stays open from exclusive creation, so identity is
+ * proven by fstat on the fd, never by a pathname read a concurrent
+ * replacement could spoof. When the inode still holds exactly one link (the
+ * sidecar path), its only name is detached to an UNGUESSABLE sibling (pid +
+ * randomUUID - a pre-swapped entry at a predictable name can no longer be
+ * targeted), re-verified through the fd, and only then unlinked. A
+ * replacement that swapped the path between rename and verify is restored
+ * byte-identical via link (never overwriting) or left under the tmp name.
+ * Closes the fd on every path.
+ */
+function removeOwnedFreshSidecarFile(sidecarFd: number, worktreePath: string): void {
+  const sidecarPath = prReviewArtifactPathFor(worktreePath, "json");
+  try {
+    const st = fs.fstatSync(sidecarFd);
+    if (!st.isFile() || st.nlink !== 1) {
+      // nlink 0 = our inode is already detached (the path holds a
+      // replacement); >1 = unexpected hardlink. Either way the path occupant
+      // is not exclusively ours - never touch it.
+      console.error(pc.yellow(`worktree-setup rollback: sidecar at ${sidecarPath} left in place (identity no longer held)`));
+      return;
+    }
+    // The verified inode's only link is the sidecar path this setup created
+    // it at. Detach it to an unguessable sibling name, then re-check the fd:
+    // the inode now at tmp must BE the inode we opened - only then is
+    // unlinking tmp removing exactly our sidecar. Anything else at tmp is a
+    // replacement swapped in between creation and rename - restore it
+    // byte-identical, never delete.
+    const tmp = `${sidecarPath}.cleanup.${process.pid}.${randomUUID()}`;
+    try {
+      fs.renameSync(sidecarPath, tmp);
+    } catch (error) {
+      console.error(pc.yellow(`worktree-setup rollback: sidecar at ${sidecarPath} left in place (cannot detach: ${(error as Error).message})`));
+      return;
+    }
+    const st2 = fs.fstatSync(sidecarFd);
+    let tmpStat: fs.Stats | undefined;
+    try {
+      tmpStat = fs.lstatSync(tmp);
+    } catch {
+      tmpStat = undefined; // ENOENT -> nothing at tmp
+    }
+    // Pre-unlink binding: the inode at tmp must BE the inode this setup
+    // created (fstat on the held fd) - only then does unlinking tmp remove
+    // exactly our sidecar. Any mismatch (a replacement swapped in before the
+    // rename) takes the restore branch below.
+    if (tmpStat !== undefined && tmpStat.ino === st2.ino && tmpStat.dev === st2.dev) {
+      // Portable ceiling: Node has no fd-bound unlink, so the unlink below is
+      // pathname-based. The unguessable tmp name + the pre-unlink fd/lstat
+      // identity check above + the post-unlink nlink === 0 verification below
+      // minimize the lstat->unlink window to microseconds.
+      fs.unlinkSync(tmp);
+      // Post-unlink verification: the unlink must have detached OUR verified
+      // inode (nlink 1 -> 0). If the fd still has a link, the unlink detached
+      // a pathname replacement - detection is best-effort (POSIX/Node has no
+      // fd-bound unlink); name both paths loudly.
+      const st3 = fs.fstatSync(sidecarFd);
+      if (st3.nlink !== 0) {
+        console.error(pc.yellow(`worktree-setup rollback: unlink at ${tmp} detached a pathname replacement, not the verified sidecar inode (${sidecarPath} still holds ${st3.nlink} link(s)) - the replacement is gone, the verified sidecar was NOT deleted`));
+      }
+    } else {
+      // The inode at tmp is NOT the one this setup created - a replacement
+      // was swapped in between the fd's creation and the rename. Restore it
+      // to the sidecar path WITHOUT overwriting: link() fails with EEXIST if
+      // a concurrent creator took the path (POSIX rename would silently
+      // replace it). Only tmp (our own unique name) is ever unlinked, and
+      // only after link() proved it now shares the inode with the path.
+      try {
+        fs.linkSync(tmp, sidecarPath); // EEXIST if a concurrent creator took the path - never overwrites
+        fs.unlinkSync(tmp); // inode is back at the sidecar path; drop the tmp name
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+          console.error(pc.yellow(`worktree-setup rollback: sidecar replacement left at ${tmp} (sidecar path was recreated concurrently)`));
+          // tmp keeps the earlier replacement; path keeps the concurrent file. Nothing deleted.
+        } else {
+          console.error(pc.yellow(`worktree-setup rollback: sidecar replacement left at ${tmp} (restore failed: ${(error as Error).message})`));
+        }
+      }
+    }
+  } finally {
+    try {
+      fs.closeSync(sidecarFd);
+    } catch { /* already closed - rollback is best-effort */ }
+  }
 }
 
 prReviewCommand
@@ -3415,7 +3836,7 @@ prReviewCommand
   .action((options: { path: string; branch: string; reportSaved?: boolean }) => {
     try {
       const worktreePath = path.resolve(resolveCliPath(options.path));
-      const sidecarPath = sidecarPathFor(worktreePath);
+      const sidecarPath = prReviewArtifactPathFor(worktreePath, "json");
       if (!fs.existsSync(sidecarPath)) {
         throw new Error(`no setup sidecar found at ${sidecarPath} - run pr-review worktree-setup first (foreign worktrees are never cleaned here)`);
       }
@@ -3459,6 +3880,14 @@ prReviewCommand
         }
         gitSync(["branch", "-D", sidecar.reviewBranch], gitRoot);
       }
+      // The diff snapshot is a review artifact beside the sidecar \u2014 remove it
+      // BEFORE the sidecar (a snapshot-rm failure must not strand an orphan a
+      // retry can't reach: once the sidecar is gone, cleanup refuses). Use the
+      // SAME computed path the rollback uses \u2014 immune to doctored sidecar
+      // fields and symlink-spelled paths (macOS /tmp vs /private/tmp). Only a
+      // regular file at that path is a snapshot this flow wrote; directories /
+      // symlinks / other entries are unowned and left in place (never recursive).
+      removeOwnedSnapshotFile(worktreePath, sidecar);
       fs.rmSync(sidecarPath, { force: true });
       console.log(pc.green(`worktree-cleanup: removed ${worktreePath}${sidecar.reviewBranch !== "" ? ` + deleted ${sidecar.reviewBranch}` : " (no local branch to delete)"}`));
     } catch (error) {
@@ -3538,7 +3967,8 @@ prReviewCommand
   .option("--skill-root <dir>", "Skill root containing references/pr-review.md (default: resolved skills/mstar-audit)")
   .option("--recon <facts...>", "Recon facts (variadic: --recon fact1 fact2 ...)")
   .option("--tier <quick|default|deep>", "Prompt tier (SP-A): quick shrinks read-first + folds the security lens in-seat; deep adds cross-domain security seat + stage-as-wave (default: default)")
-  .action((options: { stage: string; domain: string; seat: string; worktree: string; security?: boolean; skillRoot?: string; recon?: string[]; tier?: string }) => {
+  .option("--diff-file <path>", "Absolute path to the pinned diff snapshot written by worktree-setup (read-first ingredient)")
+  .action((options: { stage: string; domain: string; seat: string; worktree: string; security?: boolean; skillRoot?: string; recon?: string[]; tier?: string; diffFile?: string }) => {
     try {
       if (options.stage !== "1" && options.stage !== "2") {
         throw new SddScriptError(`usage: pr-review seat-prompt \u2014 --stage must be 1 or 2, got ${JSON.stringify(options.stage)}`, 2);
@@ -3559,6 +3989,7 @@ prReviewCommand
         reconFacts: options.recon ?? [],
         ...(options.security === true ? { securitySeat: true } : {}),
         ...(tier !== undefined ? { tier } : {}),
+        ...(options.diffFile !== undefined && options.diffFile !== "" ? { diffFile: path.resolve(resolveCliPath(options.diffFile)) } : {}),
       });
       console.log(prompt);
     } catch (error) {

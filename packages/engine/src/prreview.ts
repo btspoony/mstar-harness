@@ -1086,6 +1086,10 @@ export type PrReviewSeatPromptOptions = {
   decidedTradeoffs?: readonly string[];
   securitySeat?: boolean;
   tier?: PrReviewTier;
+  /** Absolute path to the pinned diff snapshot written by `worktree-setup`
+   * (review artifact beside the sidecar). Non-empty → the prompt gains a
+   * read-first ingredient line pointing at it. */
+  diffFile?: string;
 };
 
 /**
@@ -1129,6 +1133,9 @@ export function prReviewSeatPrompt(opts: PrReviewSeatPromptOptions): string {
   if (!isAbsolute(worktreePath)) {
     throw new TypeError(`prReviewSeatPrompt: worktreePath must be an absolute path - got ${JSON.stringify(opts.worktreePath)}`);
   }
+  if (opts.diffFile !== undefined && opts.diffFile !== "" && !isAbsolute(opts.diffFile)) {
+    throw new TypeError(`prReviewSeatPrompt: diffFile must be an absolute path - got ${JSON.stringify(opts.diffFile)}`);
+  }
   const slug = `${domain}-${seat}`;
   const lines: string[] = [];
   lines.push(`# PR review audit seat \u2014 Stage ${opts.stage}${opts.securitySeat === true ? " (security)" : ""}`);
@@ -1162,6 +1169,9 @@ export function prReviewSeatPrompt(opts: PrReviewSeatPromptOptions): string {
       : "Merge class, Attack and vet, Evidence rules, Sizing & change shape";
   lines.push(`1. \`${prReviewRef}\` \u2014 read at least these sections: ${sections}.`);
   lines.push(`2. The review worktree: \`${worktreePath}\` \u2014 your ONLY working directory this session; read-only (no edits, no fixes, no stash, no commits, no posts).`);
+  if (opts.diffFile) {
+    lines.push(`- Read the pinned diff snapshot FIRST: \`${opts.diffFile}\` \u2014 it is the review's diff basis (already computed at setup); read it before opening files.`);
+  }
   if (opts.stage === 2) {
     lines.push(`3. \`${join(skillRoot, "references", "finding-format.md")}\` \u2014 the template every finding follows.`);
     if (opts.securitySeat === true) {

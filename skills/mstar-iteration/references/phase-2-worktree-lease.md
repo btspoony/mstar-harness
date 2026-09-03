@@ -111,7 +111,7 @@ Lives on the snapshot plan row — `{WORKFLOW_DIR}/<id>/snapshot.json` → `plan
    - **Same `holder` as this session** → **resume**: verify `worktree_path` and
      `working_branch` match the Assignment; continue (not steal/block).
    - **Different `holder`** → **Blocked** (no timestamp makes it stealable).
-3. Create or verify dedicated feature worktree + branch.
+3. Create or verify dedicated feature worktree + branch (default `<repoRoot>/.worktrees/<plan-id>-<slug>`).
 4. Re-read the snapshot under write lock; if row/status/lease changed, restart claim.
 5. One complete-file update (still under lock): `status: "InProgress"` + full `execution_lease`.
    Use temp file + atomic replace; never expose partial JSON.

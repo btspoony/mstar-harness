@@ -298,7 +298,7 @@ SSOT = `{WORKFLOW_DIR}/<id>/snapshot.json` + `{PLAN_DIR}/`。todos 只追踪本�
    - 若 `execution_lease` 存在且 `holder` **不同** → **Blocked**
    - 若 `status: InProgress` 但 **无** `execution_lease` → **STOP** 升级（孤儿状态恢复 → **`mstar-artifacts`**；本 skill 不自行补 lease）
    - 否则按 **`references/phase-2-worktree-lease.md`** claim：`Todo`/`Blocked` → `InProgress` + 写入完整 `execution_lease`；verify 通过前 **禁止**可写派发
-2. **Plan start — feature worktree + branch**：创建/校验 dedicated feature worktree；Assignment 须含绝对 `Worktree path` + `Working branch`（与 lease 一致）。plan 内多可写并行轨 → **`mstar-branch-worktree`** **`references/parallel-writable-pre-dispatch.md`**
+2. **Plan start — feature worktree + branch**：创建/校验 dedicated feature worktree（默认 `<repoRoot>/.worktrees/<plan-id>-<slug>`）；Assignment 须含绝对 `Worktree path` + `Working branch`（与 lease 一致）。plan 内多可写并行轨 → **`mstar-branch-worktree`** **`references/parallel-writable-pre-dispatch.md`**
 3. **Implement → InReview**（`§ 2.5`；产品编辑在 feature worktree；plans / snapshot / iterations / SDD 经 control 绝对路径）：
    - **默认 `Execution mode: sdd`**（多 task plan；hotfix 可 `inline`）。
    - PM 载入 **`mstar-sdd`** 后，按 plan task 顺序 **串行** per-task 循环（**不是**一次派发 dev 做全部 tasks）：

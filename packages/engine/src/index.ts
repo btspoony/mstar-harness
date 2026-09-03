@@ -157,6 +157,7 @@ export type {
   TaskBriefOptions,
 } from "./sdd.js";
 export {
+  GIT_CAPTURE_MAX_BYTES,
   SddScriptError,
   assertBaseSha,
   implementerSessionStickyRules,

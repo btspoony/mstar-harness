@@ -748,6 +748,27 @@ describe("prReviewSeatPrompt — collect-wave is deep-only, tiers differ (fix ro
     expect(prReviewSeatPrompt({ ...base, tier: "default" })).not.toContain(securitySeatLine);
     expect(prReviewSeatPrompt({ ...base, tier: "deep" })).toContain(securitySeatLine);
   });
+
+  test("diffFile ingredient: absolute path + read-first wording appear when provided", () => {
+    const prompt = prReviewSeatPrompt({ ...base, diffFile: "/abs/wt/review-diff.txt" });
+    expect(prompt).toContain("Read the pinned diff snapshot FIRST:");
+    expect(prompt).toContain("/abs/wt/review-diff.txt");
+    expect(prompt).toContain("it is the review's diff basis (already computed at setup); read it before opening files.");
+  });
+
+  test("no diffFile → prompt has no pinned-diff-snapshot ingredient", () => {
+    expect(prReviewSeatPrompt(base)).not.toContain("pinned diff snapshot");
+  });
+
+  test("relative diffFile throws TypeError (absolute-path contract, qc3 F-002)", () => {
+    expect(() => prReviewSeatPrompt({ ...base, diffFile: "relative/review-diff.txt" })).toThrow(TypeError);
+    expect(() => prReviewSeatPrompt({ ...base, diffFile: "relative/review-diff.txt" })).toThrow(/diffFile must be an absolute path/);
+  });
+
+  test("absent or empty diffFile stays fine (no throw, no ingredient)", () => {
+    expect(() => prReviewSeatPrompt({ ...base, diffFile: "" })).not.toThrow();
+    expect(prReviewSeatPrompt({ ...base, diffFile: "" })).not.toContain("pinned diff snapshot");
+  });
 });
 
 // ---------------------------------------------------------------------------

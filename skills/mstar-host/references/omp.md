@@ -229,7 +229,7 @@ Cannot emit required **N** → **`Blocked`**.
 ## Git and final evidence
 
 - Git work follows `mstar-branch-worktree` and Assignment **Working branch** / **Branch policy**.
-- omp may offer task isolation / worktrees (`task.isolation`, `~/.omp/wt`) — still record Morning Star **Worktree path** / leases when L1 gates apply.
+- omp may offer task isolation / worktrees (`task.isolation`, `~/.omp/wt`) — that is **host-level** task isolation **outside** the Morning Star convention; Morning Star **`Worktree path`** stays `<repoRoot>/.worktrees/` (record it + leases when L1 gates apply).
 - Completion reports cite concrete commands, artifacts, and commit lines when required.
 
 ## Gotchas
