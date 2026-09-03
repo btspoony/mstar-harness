@@ -71,6 +71,7 @@
     "@deepseek-ai/dsh-client-store": "^0.1.2-rc.1",
     "@deepseek-ai/dsh-client-ui-chat": "^0.1.2-rc.1",
     "@deepseek-ai/dsh-client-ui-conversation": "^0.1.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-primitives": "^0.1.2-rc.1",
     "@deepseek-ai/dsh-client-ui-renderer": "^0.1.2-rc.1",
     "@deepseek-ai/dsh-client-ui-slots": "^0.1.2-rc.1",
     "@deepseek-ai/dsh-commands": "^0.1.2-rc.1",
