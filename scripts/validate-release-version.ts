@@ -17,7 +17,7 @@
  * 0 MISSING / all-MISMATCH is the expected pre-release state, not a gate
  * failure.
  */
-import { INSTALL_REF, RELEASE_VERSION_RE, VERSION_SURFACES, isPrereleaseVersion } from "./release-surfaces.ts";
+import { RELEASE_VERSION_RE, VERSION_SURFACES } from "./release-surfaces.ts";
 
 const tag = process.argv[2] ?? process.env.GITHUB_REF_NAME;
 
@@ -34,7 +34,6 @@ if (!RELEASE_VERSION_RE.test(version)) {
   process.exit(1);
 }
 
-const installVersionRe = /"version"\s*:\s*"(\d+\.\d+\.\d+)"/;
 let failed = false;
 
 for (const { label, path } of VERSION_SURFACES) {
@@ -52,23 +51,6 @@ for (const { label, path } of VERSION_SURFACES) {
     failed = true;
   } else {
     console.log(`OK ${label}: ${json.version}`);
-  }
-}
-
-// Prereleases skip it — INSTALL.md stays on the last stable release.
-if (isPrereleaseVersion(version)) {
-  console.log(`SKIP INSTALL.md (prerelease)`);
-} else {
-  const install = await Bun.file(INSTALL_REF.path).text();
-  const installMatch = install.match(installVersionRe);
-  const installVersion = installMatch?.[1];
-  if (installVersion !== version) {
-    console.error(
-      `MISMATCH INSTALL.md (${INSTALL_REF.path}): expected ${version}, found ${installVersion ?? "<missing>"}`,
-    );
-    failed = true;
-  } else {
-    console.log(`OK INSTALL.md ZCode marketplace example: ${installVersion}`);
   }
 }
 

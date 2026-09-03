@@ -44,9 +44,6 @@ export const CHANGELOGS: readonly ChangelogTarget[] = [
   { path: "packages/omp/CHANGELOG.md", lang: "en", pkg: "omp" },
 ] as const;
 
-/** INSTALL.md ZCode marketplace example carries a quoted version field. */
-export const INSTALL_REF = { path: "INSTALL.md" } as const;
-
 /**
  * Release version regex — `X.Y.Z` with an optional semver prerelease suffix
  * (`-alpha.1`). Anchored; no `+build` metadata support (not needed for

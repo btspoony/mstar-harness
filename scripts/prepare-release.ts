@@ -32,7 +32,6 @@
 import { existsSync, mkdirSync, readdirSync, renameSync } from "node:fs";
 import {
   CHANGELOGS,
-  INSTALL_REF,
   RELEASE_VERSION_RE,
   VERSION_SURFACES,
   compareSemver,
@@ -245,25 +244,6 @@ async function bumpJsonVersion(path: string, oldV: string, newV: string): Promis
 }
 
 /**
- * Bump the INSTALL.md marketplace example to `newV`. The old version is
- * derived from INSTALL.md's own quoted `"version"` field — never from the
- * release `current` — because after a prerelease the surfaces carry a
- * suffixed version while INSTALL.md stays on the last stable; passing that
- * suffixed `current` here would find no match and silently leave INSTALL.md
- * stale (and `release:validate` would then hard-fail the stable release).
- * Fails fast if the file or its version field is missing (validate would
- * fail later anyway).
- */
-async function bumpInstall(newV: string): Promise<void> {
-  const text = await Bun.file(INSTALL_REF.path).text();
-  const m = text.match(/"version"\s*:\s*"(\d+\.\d+\.\d+)"/);
-  if (!m) {
-    throw new Error(`${INSTALL_REF.path}: could not find quoted "version" field (expected X.Y.Z)`);
-  }
-  await Bun.write(INSTALL_REF.path, text.replace(m[0], `"version": "${newV}"`));
-}
-
-/**
  * Rewrite the root manifest's runtime dependency on `@mstar-harness/engine`
  * to `^<version>`. The root package.json is the manifest git/hosted installs
  * resolve (`omp plugin install github:…`, `bun add github:…`), where the
@@ -335,12 +315,6 @@ async function main(): Promise<void> {
     const text = await Bun.file(rootPath).text();
     await Bun.write(rootPath, syncRootEngineSpec(text, version));
     console.log(`sync: ${rootPath} dependencies["@mstar-harness/engine"] -> ^${version}`);
-  }
-  if (isPrereleaseVersion(version)) {
-    console.log(`skip: ${INSTALL_REF.path} (prerelease — stays at last stable)`);
-  } else {
-    await bumpInstall(version);
-    console.log(`bump: ${INSTALL_REF.path}`);
   }
 
   archiveFragments(version, frags);
