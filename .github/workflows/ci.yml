@@ -52,7 +52,7 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.2.17
+          bun-version: 1.4.0
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -176,7 +176,7 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.2.17
+          bun-version: 1.4.0
 
       - name: Standalone smoke (engine + cli uninstalled)
         run: bun run validation:standalone
@@ -199,7 +199,7 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.2.17
+          bun-version: 1.4.0
 
       - name: Pointer drift lint (callouts ↔ engine exports + CLI commands)
         run: bun run validation:drift

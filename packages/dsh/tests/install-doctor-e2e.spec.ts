@@ -163,7 +163,7 @@ async function readVersion(pkgJsonPath: string): Promise<string> {
  * physical instances the test process loaded. The cordis cross-check pins
  * the invariant for THIS copy. Returns the copy root (parent of `dsh/`). */
 async function hostCopyInstalledMstar(dshHome: string): Promise<string> {
-  const root = join(REPO_ROOT, 'node_modules/.mstar-e2e', `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
+  const root = join(packageRoot, 'node_modules/.mstar-e2e', `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
   const copy = join(root, 'dsh')
   await mkdir(copy, { recursive: true })
   await cp(installedMstarDir(dshHome), copy, { recursive: true })

@@ -44,7 +44,7 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.2.17
+          bun-version: 1.4.0
 
       # Node 24 ships npm with working Trusted Publishing / provenance (sigstore).
       # Do not `npm install -g npm@latest` on Node 22 — that breaks provenance with MODULE_NOT_FOUND: sigstore.

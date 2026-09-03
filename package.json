@@ -30,7 +30,7 @@
     "validation:drift": "bun run scripts/drift-lint.ts",
     "lint:ascii-literals": "bun scripts/lint-ascii-literals.ts"
   },
-  "packageManager": "bun@1.2.17",
+  "packageManager": "bun@1.4.0",
   "dependencies": {
     "@mstar-harness/engine": "^3.6.0-alpha.4"
   },

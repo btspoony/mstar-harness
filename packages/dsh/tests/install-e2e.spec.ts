@@ -254,7 +254,7 @@ describe.skipIf(skipReason !== undefined)('installed-deployment e2e (plan 202608
     // 5. Single-instance resolution: copy the installed packages into the
     //    host module graph (real dirs, NOT symlinks — see header comment)
     //    so their bare imports resolve to the test-process instances.
-    hostCopyRoot = join(REPO_ROOT, 'node_modules/.mstar-e2e', `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
+    hostCopyRoot = join(packageRoot, 'node_modules/.mstar-e2e', `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
     const mstarCopy = join(hostCopyRoot, 'dsh')
     const fallbacksCopy = join(hostCopyRoot, 'fallbacks')
     await mkdir(mstarCopy, { recursive: true })
