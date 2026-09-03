@@ -6,6 +6,17 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [3.6.0-alpha.4] - 2026-09-03
+
+### Changed
+
+- **PR review diff snapshot**: `mstar pr-review worktree-setup` now pins the review diff basis to a snapshot file beside the sidecar (`<parent-of-worktree>/.<wt-dirname>.prreview.diff`, printed as `diffFile` in setup output; `null` for `--diff` / `--working-tree` modes) so every Stage 1/2 seat reads one pinned diff instead of re-running git — `mstar pr-review seat-prompt` passes it through as `--diff-file` and the prompt gains a "read the pinned diff snapshot FIRST" ingredient; cleanup removes the snapshot with the sidecar, and snapshot capture is wrapped in the worktree rollback so a failed setup never orphans a worktree.
+- **Worktree convention + ownership**: review worktrees now default under `<repoRoot>/.worktrees/review-…` (the `mstar-branch-worktree` convention; `.worktrees/` is added to `.git/info/exclude` when the target repo does not ignore it) instead of a sibling directory beside the repo, and `worktree-cleanup` only deletes files whose identity (dev/ino/mtime, link count) matches the snapshot recorded at setup — a replaced or foreign file at the snapshot path is left in place, and a pre-existing sidecar makes setup refuse with a `worktree-cleanup` hint instead of deleting it.
+
+- Version alignment with harness **3.6.0-alpha.4**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **3.6.0-alpha.4**.
+
 ## [3.6.0-alpha.3] - 2026-08-31
 
 ### CLI

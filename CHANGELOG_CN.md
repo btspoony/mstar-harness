@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+## [3.6.0-alpha.4] - 2026-09-03
+
+### Harness
+
+- **PR review diff 快照**：`mstar pr-review worktree-setup` 现在把 review diff 基准固定为 sidecar 旁的快照文件（`<parent-of-worktree>/.<wt-dirname>.prreview.diff`，setup 输出以 `diffFile` 打印；`--diff` / `--working-tree` 模式为 `null`），使每个 Stage 1/2 seat 读取同一份固定 diff 而非重跑 git —— `mstar pr-review seat-prompt` 以 `--diff-file` 透传，prompt 增加「先读 pinned diff 快照」ingredient；cleanup 随 sidecar 一并删除快照，快照捕获纳入 worktree rollback，失败的 setup 不会遗留孤儿 worktree。
+- **Worktree 约定与所有权**：review worktree 默认落在 `<repoRoot>/.worktrees/review-…`（`mstar-branch-worktree` 约定；目标仓库未忽略 `.worktrees/` 时自动写入 `.git/info/exclude`），不再用 repo 根的兄弟目录；`worktree-cleanup` 只删除身份（dev/ino/mtime、链接数）与 setup 记录一致的快照——路径上的替换文件或外来文件一律原地保留，已存在的 sidecar 会让 setup 拒绝并提示 `worktree-cleanup`，而不是删除它。
+- 将 `amazing-pr-review` command 精简为瘦启动器：全部流程契约收敛到 `mstar-audit/references/pr-review.md`（tier 阶梯、三阶段流水线、worktree isolation、posting、report archive、batch），消除 command 正文中的重复规则文本。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单及便携式 Agent Plugins 清单：**→ 3.6.0-alpha.4**。
+
 ## [3.6.0-alpha.3] - 2026-08-31
 
 ### CLI
