@@ -1,8 +1,6 @@
 ---
 name: prompt-engineer
-description: |-
-  提示词工程师 - 设计与优化 Agent 提示词与技能。
-  Prompt Engineer - design and optimize prompts and skills for agents, including refactoring and debugging prompt systems.
+description: "Prompt Engineer - design and optimize prompts and skills for agents, including refactoring and debugging prompt systems."
 mode: subagent
 tools:
   write: true

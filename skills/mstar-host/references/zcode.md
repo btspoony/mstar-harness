@@ -11,9 +11,9 @@ Parallel PM dispatch: read **`parallel-dispatch.md`** when dispatching **N ≥ 2
 - Plugin manifest: **`.zcode-plugin/plugin.json`** (plugin root is the **repo root**; paths stay `./skills/`, `./commands/`, `./agents/`).
 - Runtime skills: repo `skills/` mounted by the plugin (`"skills": "./skills/"`).
 - Plugin commands: repo `commands/` → `/morning-star-harness:<name>` (e.g. `/morning-star-harness:iteration-start`).
-- Plugin agents: repo `agents/*.md` (role frontmatter `name` + `description`); ZCode reads them as subagent definitions but **does not** expose custom named `subagent_type` values for Morning Star roles (see C5).
+- Plugin agents: repo `agents/*.md` (role frontmatter `name` + **single-line quoted English `description`** — ZCode's flat frontmatter parser cannot read `|-` block scalars and silently drops nested `tools`/`permission` maps). ZCode registers them as callable `subagent_type`s in both bare (`fullstack-dev`) and plugin-qualified (`morning-star-harness:fullstack-dev`) forms (see C5).
 - **No `sessionStart.skill`** (ZCode has no Kimi-style session auto-load) — enter PM manually via **`/morning-star-harness:pm`** or the **`pm`** skill, then **Read next** → `mstar-harness-core` → `project-manager.md`.
-- Install (user-scoped, recommended): `npx @mstar-harness/cli init --target zcode --scope global`, then in ZCode **Settings → Plugin Management → Discover** install **morning-star-harness** from the **mstar-local** marketplace (or add `github:btspoony/mstar-harness` as a marketplace directly).
+- Install (user-scoped, recommended): `npx @mstar-harness/cli init --target zcode --scope global`, then in ZCode **Settings → Plugin Management → Discover** install **morning-star-harness** from the **mstar-local** marketplace. Direct-add also works without the CLI: the repo ships `.claude-plugin/marketplace.json` (root `marketplace.json` fallback), which ZCode discovers when refreshing a `github`-source marketplace.
 - Plugins are **user-scoped** (all projects); managed copy lives under `~/.zcode/cli/plugins/` after install.
 - Project `.agents/skills/` symlinks are **not** required when using the plugin — commands and skills come from the plugin mount.
 
@@ -31,7 +31,7 @@ Use skill names in prompts and references. Avoid absolute local paths unless mai
 
 | ZCode tool | Harness use |
 |------------|-------------|
-| **Agent** | Primary dispatch — delegate one subagent task (`subagent_type`: built-in profiles such as `general-purpose` / `Explore`) |
+| **Agent** | Primary dispatch — delegate one subagent task (`subagent_type`: bare Morning Star role id, e.g. `fullstack-dev`; `general-purpose` fallback; `Explore` read-only) |
 | **AskUserQuestion** | Structured clarify (1–4 questions, 2–4 options each); prefer over free-form when choices are known |
 | **EnterPlanMode** / **ExitPlanMode** | Plan mode entry/approval → **`zcode-plan-mode-bridge.md`** |
 | **TodoWrite** | Session UX only; mirror to SSOT plan / workflow snapshot (`{WORKFLOW_DIR}/<id>/snapshot.json`) when durable |
@@ -40,34 +40,62 @@ Use skill names in prompts and references. Avoid absolute local paths unless mai
 | **Edit** / **Write** | Edits |
 | **Glob** / **Grep** | Search (prefer over shell find/grep) |
 | **WebSearch** / **WebFetch** | External docs / facts |
+| **Skill** | Invoke bundled skills (`/morning-star-harness:pm`, `mstar-harness-core`, …) |
 | **TaskOutput** / **TaskStop** | Long-running task management when present |
 
 OpenCode-style `question`/`task`, Cursor **Task**, and Kimi **AgentSwarm** are **not** ZCode tools — do not assume them.
 
-## Role agents (C5 — hard constraint)
+## Role agents (C5)
 
-ZCode ships **built-in subagent types only** (e.g. `general-purpose`, `Explore`). Valid **`subagent_type`** values are the host's built-in profiles:
+ZCode registers the plugin's Morning Star agents (`agents/*.md`) as callable **`subagent_type`** values alongside the built-in profiles, in both **bare role id** (`fullstack-dev`) and **plugin-qualified** (`morning-star-harness:fullstack-dev`) forms. Prefer the **bare role id** (verified on ZCode 0.16.5: the bare form loads the role shell body; the qualified form can silently fall back to the default prompt):
 
 | `subagent_type` | ZCode profile | Harness mapping |
 |-----------------|---------------|-----------------|
-| `Explore` | Read-only exploration | Orientation, codebase survey, Prepare explore passes |
-| `general-purpose` | General implementation / research | **All other Morning Star roles** (`product-manager`, `fullstack-dev`, `qc-specialist`, …) |
+| `<role-id>` (bare, e.g. `fullstack-dev`, `qc-specialist`) | Registered plugin agent | **Preferred** for the matching Morning Star role |
+| `Explore` | Built-in read-only exploration | Orientation, codebase survey, Prepare explore passes |
+| `general-purpose` | Built-in general profile | **Universal fallback** when a role id is not exposed |
 
-Morning Star role ids (`project-manager`, `fullstack-dev`, `qc-specialist`, …) are **not** valid `subagent_type` values. Although `agents/*.md` are read by ZCode, the host does not register them as callable named agent types the way Codex TOML or Cursor `subagent_type` role ids do.
+Role shells are thin — each body only states the role identity and points at the `mstar-roles` skill — so C5b prompt binding stays **required** on every dispatch regardless of `subagent_type`.
 
 ### Role binding in prompt (C5b — required)
 
-Role-binding contract + Assignment template → **`_shared/host-role-binding-core.md`** (C5/C5b). ZCode-specific invoke shapes, same turn:
+ZCode C5/C5b SSOT is **this file** — do **not** load `_shared/host-role-binding-core.md` (that file is Kimi only). Role shells are thin (identity + skill pointer, not the full role prompt), so every role dispatch must carry:
+
+1. **`Execute as: <role-id>`** in Assignment (harness routing SSOT).
+2. **`Act as <role-id>`** (or equivalent) at the top of the invoke prompt.
+3. **Skill load list** — instruct the subagent to read `mstar-roles` → `references/<role-id>.md` (or shared reference + parameters) and topic skills per that reference.
+4. **`subagent_type`** — bare Morning Star role id per C5; `general-purpose` fallback.
+
+Paste-only Assignment **without** an invoke call is **not** dispatch. Anti-recursion NEVER: leaf executors are already `Execute as` — no recursive invoke of the same role; Assignment wins (`Delegation: forbidden` unless stated). **Never** multiple implementer invokes in one message for the same plan (SDD serial → **`parallel-dispatch.md`** § SDD implement).
+
+ZCode invoke shape (same turn):
 
 ```text
 Agent(
-  subagent_type: "general-purpose",
+  subagent_type: "fullstack-dev",
   description: "<short task label>",
-  prompt: "<full Assignment body including Act as + skill load>"
+  prompt: "<full Assignment body including Execute as + Act as + skill load>"
 )
 ```
 
-For **`Explore`** orientation:
+Assignment / prompt template:
+
+```markdown
+## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Working branch**: feat/example
+**Plan Path**: .mstar/plans/20260717-example.md
+
+**IDENTITY:** You ARE `fullstack-dev`. Act as `fullstack-dev` for this task.
+
+Load: `mstar-harness-core` → `mstar-host` → `zcode.md` → `mstar-roles` → `references/fullstack-dev-shared.md` → topic skills per that reference.
+
+<task body>
+```
+
+Role id not exposed (older ZCode) → `subagent_type: "general-purpose"` with the same body. For **`Explore`** orientation:
 
 ```text
 Agent(subagent_type: "Explore", description: "...", prompt: "... Act as explore-only orientation; Execute as: n/a ...")
@@ -75,24 +103,24 @@ Agent(subagent_type: "Explore", description: "...", prompt: "... Act as explore-
 
 ## PM dispatch (`Agent`)
 
-Harness **dispatch** on ZCode = **one or more `Agent` tool calls** with correct **`subagent_type`** and role-bound prompts (C5b → **`_shared/host-role-binding-core.md`**). N-parallel / 1-Assignment-1-invoke / paste-only mechanics → **`parallel-dispatch.md`**.
+Harness **dispatch** on ZCode = **one or more `Agent` tool calls** with correct **`subagent_type`** and role-bound prompts (C5b — this file). N-parallel / 1-Assignment-1-invoke / paste-only mechanics → **`parallel-dispatch.md`**.
 
 | Harness | ZCode |
 |---------|-------|
 | `Execute as: <role-id>` | Role id in Assignment + **Act as** + skill load in **Agent** prompt (C5b) |
-| `subagent_type` for invoke | built-in profiles only (typically `general-purpose`; `Explore` for read-only) |
+| `subagent_type` for invoke | bare role id (e.g. `fullstack-dev`, `qc-specialist`); `general-purpose` fallback; `Explore` for read-only |
 | Parallel batch **N** | **N `Agent`** calls in **one assistant message** |
 
 ### QC default
 
-- **`Execution mode: sdd`**: **N=3** `Agent` calls (`qc-specialist`, `qc-specialist-2`, `qc-specialist-3`) — each prompt **Act as** the respective QC role, all `subagent_type: "general-purpose"` (N rules → `parallel-dispatch.md`).
+- **`Execution mode: sdd`**: **N=3** `Agent` calls (`qc-specialist`, `qc-specialist-2`, `qc-specialist-3`) — each prompt **Act as** the respective QC role, all via bare `subagent_type: "qc-specialist"` / `"qc-specialist-2"` / `"qc-specialist-3"` (`general-purpose` fallback; N rules → `parallel-dispatch.md`).
 - **`inline`**: **N=1** per `parallel-dispatch.md`.
 
 Cannot emit required **N** → **`Blocked`**.
 
 ### SDD implement (serial)
 
-- **`Execution mode: sdd`**: one implementer **`Agent`** per task id; task reviewer = new **`Agent`** with **Act as `code-reviewer`** (ZCode L2 review; not qc-specialist*), always via generic fallback `subagent_type: "general-purpose"` per C5 — no sticky resume unless host adds it later. Serial rule → **`parallel-dispatch.md`** § SDD implement.
+- **`Execution mode: sdd`**: one implementer **`Agent`** per task id (bare role id per C5, `general-purpose` fallback); task reviewer = new **`Agent`** with **Act as `code-reviewer`** (`subagent_type: "code-reviewer"`, `general-purpose` fallback; ZCode L2 review; not qc-specialist*), always with C5b prompt binding — no sticky resume unless host adds it later. Serial rule → **`parallel-dispatch.md`** § SDD implement.
 - **Never** multiple implementer Agents in one message for the same plan.
 
 ## Clarify
@@ -125,5 +153,5 @@ Cannot emit required **N** → **`Blocked`**.
 
 - Plugin install materializes source under `~/.zcode/cli/plugins/` — edit the harness checkout + reinstall to pick up harness changes.
 - Session todos (`TodoWrite`) are not durable SSOT unless mirrored to `{HARNESS_DIR}`.
-- No custom ZCode agent profiles for Morning Star roles — role binding is **always** prompt + skill load (C5b).
+- Morning Star roles **are** registered as ZCode subagent types from `agents/*.md` — but the shells are thin, so role binding is **still always** prompt + skill load (C5b); prefer bare role ids, the qualified form can fall back to the default prompt.
 - ZCode has no `sessionStart.skill`; new sessions do **not** auto-load PM — invoke `/morning-star-harness:pm` or `/skill:pm` manually.

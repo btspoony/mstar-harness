@@ -1,6 +1,6 @@
 ---
 name: mstar-host
-description: Morning Star host adapter (OpenCode, Cursor, Codex, Kimi, ZCode, omp, dsh). Use after mstar-harness-core whenever host entry, clarify, dispatch, or plan UX differs by platform - OpenCode question/task-tool subagent invoke, Cursor /pm and CreatePlan/SwitchMode dual-write and Task parallel QC, Codex plugin skills plus Plan/Goal Mode, Kimi Agent/AgentSwarm with built-in subagent types only (coder/explore/plan) and role-in-prompt binding, ZCode Agent/AskUserQuestion/EnterPlanMode with built-in subagent types and role-in-prompt binding, omp task/ask/hub preferring live-schema role agents (agents/*.md) with C5b skill-load binding (generic task/scout only as fallback), dsh (DeepSeek Harness) subagent tool with in-process engine gates and bundled mstar commands, sandboxed tools, and tool discovery. Auto-detect host from session tools; then Read references/<host>.md. Always load after mstar-harness-core.
+description: Morning Star host adapter for OpenCode, Cursor, Codex, Kimi, ZCode, omp, and dsh. Use after mstar-harness-core whenever host entry, clarify, dispatch, plan mode, or tool UX differs by platform - per-host subagent invoke, plan-mode bridge, parallel dispatch, and skill/command loading. Auto-detect the host from session tools, then Read references/<host>.md. Always load after mstar-harness-core.
 ---
 
 # Morning Star Host Adapter

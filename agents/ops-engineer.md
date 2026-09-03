@@ -1,8 +1,6 @@
 ---
 name: ops-engineer
-description: |-
-  运维工程师 - 部署、监控和基础设施。
-  Ops Engineer - deployment, monitoring, and infrastructure operations, including CI/CD and observability.
+description: "Ops Engineer - deployment, monitoring, and infrastructure operations, including CI/CD and observability."
 mode: subagent
 tools:
   write: true

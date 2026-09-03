@@ -1,0 +1,16 @@
+{
+  "name": "mstar-local",
+  "description": "Morning Star harness marketplace (GitHub source).",
+  "owner": {
+    "name": "Bohao Tang",
+    "url": "https://github.com/btspoony"
+  },
+  "plugins": [
+    {
+      "name": "morning-star-harness",
+      "source": { "source": "github", "repo": "btspoony/mstar-harness", "ref": "main" },
+      "description": "Multi-agent code harness framework with unified skills for OpenCode, Cursor, Codex, Kimi Code, and ZCode.",
+      "category": "Productivity"
+    }
+  ]
+}

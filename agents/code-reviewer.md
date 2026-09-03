@@ -1,8 +1,6 @@
 ---
 name: code-reviewer
-description: |-
-  代码审查员 - SDD 任务级审查（L2）+ 代码库审计执行（audit）。只读席位：不实现、不修代码、不占 QC 席。
-  Code Reviewer - SDD per-task review (L2) + codebase audit execution (audit). Read-only seat: does not implement, fix, or occupy a QC seat.
+description: "Code Reviewer - SDD per-task review (L2) + codebase audit execution (audit). Read-only seat: does not implement, fix, or occupy a QC seat."
 mode: subagent
 tools:
   write: true
