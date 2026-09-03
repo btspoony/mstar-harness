@@ -77,7 +77,7 @@ When a change affects shared harness behavior, treat OpenCode, Cursor, Codex, Ki
 
 ## Release Process
 
-Releases are PR-driven and mostly automated. Every release ships one version across all 12 version surfaces (root + 4 npm packages + 7 plugin manifests [6 host + portable Agent Plugins]); also bump the INSTALL.md marketplace example.
+Releases are PR-driven and mostly automated. Every release ships one version across all 12 version surfaces (root + 4 npm packages + 7 plugin manifests [6 host + portable Agent Plugins]).
 
 ### 1. During development — add a changelog fragment
 
@@ -115,7 +115,7 @@ Merging a `release vX.Y.Z` PR runs the **Release** workflow **inline on the `pul
 
 ### Prereleases (alpha)
 
-Prerelease lines use the same PR flow with a suffixed version: `bun run release:prepare -- 3.6.0-alpha.1`, then merge the `release v3.6.0-alpha.1` PR. The Release workflow publishes under the npm dist-tag `alpha` (never `latest`) and flags the GitHub Release as prerelease. `INSTALL.md` / README examples stay on the last stable release — `release:prepare` skips the INSTALL bump and `release:validate` skips the INSTALL check for prerelease versions. Stable `X.Y.Z` releases are unchanged.
+Prerelease lines use the same PR flow with a suffixed version: `bun run release:prepare -- 3.6.0-alpha.1`, then merge the `release v3.6.0-alpha.1` PR. The Release workflow publishes under the npm dist-tag `alpha` (never `latest`) and flags the GitHub Release as prerelease. `release:prepare` and `release:validate` touch version surfaces only — `INSTALL.md` is not a release surface.
 
 ### Conventions
 
