@@ -106,7 +106,7 @@ Single-task shorthand may exist depending on host version — always match the l
 
 ### Role binding in prompt (C5b — required)
 
-omp C5/C5b SSOT is **this file** — do **not** use `_shared/host-role-binding-core.md` (that file is Kimi only; ZCode carries its C5/C5b in `zcode.md`). Even when `agent` already matches the role id, still bind Morning Star process in the Assignment / `task` body (agent shell ≠ full role prompt; skill load is not automatic).
+omp C5/C5b SSOT is **this file**. Even when `agent` already matches the role id, still bind Morning Star process in the Assignment / `task` body (agent shell ≠ full role prompt; skill load is not automatic).
 
 Required in every role dispatch:
 
