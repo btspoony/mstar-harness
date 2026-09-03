@@ -10,6 +10,7 @@
   "scripts": {
     "opencode:bundle-assets": "bun run --cwd packages/opencode bundle-assets",
     "dsh:bundle-assets": "bun run --cwd packages/dsh bundle-assets",
+    "omp:bundle-assets": "bun run --cwd packages/omp bundle-assets",
     "typecheck": "bunx tsc --pretty false",
     "engine:build": "bun run --cwd packages/engine build",
     "engine:pack": "npm pack --workspace @mstar-harness/engine",
@@ -19,6 +20,8 @@
     "opencode:build": "bun run --cwd packages/opencode build",
     "opencode:pack": "npm pack --workspace @mstar-harness/opencode",
     "dsh:build": "bun run --cwd packages/dsh build",
+    "omp:build": "bun run --cwd packages/omp build",
+    "omp:pack": "npm pack --workspace @mstar-harness/omp",
     "release:prepare": "bun run scripts/prepare-release.ts",
     "release:validate": "bun run scripts/validate-release-version.ts",
     "ci:dep-guard": "bun scripts/ci-dep-guard.ts",

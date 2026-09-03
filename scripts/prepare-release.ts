@@ -52,7 +52,7 @@ const UNRELEASED_DIR = `${CHANGES_DIR}/unreleased`;
 const ARCHIVE_DIR = `${CHANGES_DIR}/archive`;
 
 // Valid `packages:` tokens for changelog fragments (.changes/README.md).
-const FRAGMENT_PACKAGES = ["root", "cli", "opencode", "engine", "dsh"];
+const FRAGMENT_PACKAGES = ["root", "cli", "opencode", "engine", "dsh", "omp"];
 
 const DEFAULT_CATEGORY: Record<string, string> = {
   root: "Harness",
@@ -60,6 +60,7 @@ const DEFAULT_CATEGORY: Record<string, string> = {
   opencode: "Bundled harness skills (`harness-skills/` at publish)",
   engine: "Changed",
   dsh: "Changed",
+  omp: "Changed",
 };
 
 function parseArgs(argv: string[]): { version?: string; bump: "patch" | "minor" } {

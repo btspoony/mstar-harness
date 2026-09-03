@@ -8,17 +8,17 @@ Parallel PM dispatch: read **`parallel-dispatch.md`** when dispatching **N ≥ 2
 
 ## omp-only context
 
-- Plugin markers: **`.omp-plugin/plugin.json`** (Morning Star host marker) and **`.claude-plugin/plugin.json`** (Claude-compatible marketplace discovery). Plugin root is the **repo root**; paths stay `./skills/`, `./commands/`, `./agents/`.
-- Runtime skills: repo `skills/` discovered after `omp plugin install` / `omp plugin link` (OMP extension-package sub-discovery) or Claude marketplace install.
-- Plugin commands: repo `commands/<name>.md` → slash **`/<name>`** (e.g. `/iteration-start`). omp uses the **filename** as the command name (no `morning-star-harness:` prefix).
-- Plugin agents: repo **`agents/*.md`** are discovered into the live **`task.agent`** list after install/link + reload. Morning Star **subagent** role ids (`product-manager`, `architect`, `fullstack-dev`, `qc-specialist`, …) are valid `agent` values **when listed** — see C5. `project-manager` is **`mode: primary`** (orchestration seat), not a typical `task` dispatch target.
+- Plugin markers: **`.omp-plugin/plugin.json`** (Morning Star host marker) and **`.claude-plugin/plugin.json`** (Claude-compatible marketplace discovery). The **npm package** (`@mstar-harness/omp`) ships its own package-root `plugin.json` + `skills/` + `commands/` + `agents/` + `hooks/` + `tools/` mirrors; the **maintainer link path** is now `<repo>/packages/omp` (built) — hooks/tools moved into the package (2026-09-03), so linking the repo root provides skills/commands/agents only, with NO runtime gates.
+- Runtime skills: package `skills/` (or repo `skills/` on the link path) discovered after `omp plugin install` / `omp plugin link` (OMP extension-package sub-discovery) or Claude marketplace install.
+- Plugin commands: `commands/<name>.md` → slash **`/<name>`** (e.g. `/iteration-start`). omp uses the **filename** as the command name (no `morning-star-harness:` prefix).
+- Plugin agents: **`agents/*.md`** are discovered into the live **`task.agent`** list after install/link + reload. Morning Star **subagent** role ids (`product-manager`, `architect`, `fullstack-dev`, `qc-specialist`, …) are valid `agent` values **when listed** — see C5. `project-manager` is **`mode: primary`** (orchestration seat), not a typical `task` dispatch target.
 - **No Kimi-style `sessionStart.skill`** — enter PM manually via **`/skill:pm`** (or the `pm` skill), then **Read next** → `mstar-harness-core` → `project-manager.md`.
 - Install (user-scoped, recommended):
-  - `omp plugin install github:btspoony/mstar-harness`
+  - `omp plugin install @mstar-harness/omp`
   - or CLI: `npx @mstar-harness/cli init --target omp --scope global` (links `~/.mstar/harness`)
-- Project scope: `omp plugin install github:btspoony/mstar-harness --scope project` or `npx @mstar-harness/cli init --target omp --scope project`.
-- Local maintainers: `omp plugin link /path/to/mstar-harness` (or the CLI-managed `~/.mstar/harness` checkout).
-- After install/link: `omp plugin list` should show package **`morning-star`** (root `package.json` name). Reload / new session to pick up skills, commands, and agents.
+- Project scope: `omp plugin install @mstar-harness/omp --scope project` or `npx @mstar-harness/cli init --target omp --scope project`.
+- Local maintainers: `omp plugin link /path/to/mstar-harness/packages/omp` (or the CLI-managed `~/.mstar/harness/packages/omp` checkout) — the linked package tree resolves the engine via the workspace member, so run `bun install && bun run engine:build && bun run --cwd packages/omp build` in the checkout first. Linking the repo root no longer provides the runtime gates (hooks/tools moved into the package); the npm install stays the primary path.
+- After install/link: `omp plugin list` should show package **`@mstar-harness/omp`** (npm) or **`morning-star`** (root `package.json` name, link path). Reload / new session to pick up skills, commands, and agents.
 
 ## Skill loading
 
@@ -210,10 +210,10 @@ Cannot emit required **N** → **`Blocked`**.
 
 ## In-process engine binding (omp ≥ 17.2.11)
 
-- **Surfaces** (repo root = plugin root): `hooks/pre/mstar-gates.ts` — one `tool_call` pre-hook that returns `{ block: true, reason }` (structured refusal the model sees as the tool error) or `undefined` (pass); `tools/mstar_{status_validate,dispatch_validate,lease_verify,path_resolve,iteration_gate,worktree_check}/index.ts` — six model-callable validator tools (engine validators only, Zod params via `pi.zod`).
+- **Surfaces** (npm package root = plugin root; sources live in `packages/omp/src/`): `hooks/pre/mstar-gates.js` — one `tool_call` pre-hook that returns `{ block: true, reason }` (structured refusal the model sees as the tool error) or `undefined` (pass); `tools/mstar_{status_validate,dispatch_validate,lease_verify,path_resolve,iteration_gate,worktree_check}.js` — six model-callable validator tools (engine validators only, Zod params via `pi.zod`). omp discovers these by convention from the installed package root (`<pkg>/hooks/pre/` any file, `<pkg>/tools/` direct `*.js` files — the sub-directory scan only accepts `tools/<name>/index.ts`), not from `dist/`.
 |- **Enforcement semantics**: block ONLY under `Enforcement: hard`. Both gates read the repo `.mstarc` `[config] enforcement`, else the harness compass frontmatter (`enforcement: hard`, active/locked iterations only); the dispatch gate ALSO honors each Assignment's own header flag (`assignmentHeaderRegion` — a body example never hardens). A hard repo setting therefore hardens flag-less dispatches (Gate 1 / dsh `resolveDispatchHard` parity). Soft-mode dispatch violations are warn-logged through the extension logger (never blocked); soft status-write violations stay a silent pass. Rollback = unset the flag (or `.mstarc` `soft`). Never global.
 - **Anti-recursion scope (issue #156)**: the engine's `antiRecursionPrecheck` is **caller-scoped** — it compares the DISPATCHING agent's own role against the new Assignment's `Execute as`. omp's `tool_call` event carries no caller identity and the task entry `agent` is the spawn TARGET, which equals `Execute as` on every compliant dispatch (C5 above) — so Gate 2 does NOT run the precheck on omp (the pre-#156 wiring hard-blocked every compliant hard-mode dispatch on `self-type`, or on `empty-binding` when `agent` was omitted). The NEVER red line stays prompt-level on this host (`mstar-dispatch-gates`); dsh enforces it in-engine via Config `dispatchBinding`.
-- **Engine dependency**: the adapters import the published engine package (root `package.json` `dependencies` entry). omp git/npm plugin installs run `bun install <spec>` in the plugins tree → declared deps installed; a bare `-l` / `omp plugin link` symlink install without `node_modules` cannot resolve the modules.
+- **Engine dependency**: the npm package (`@mstar-harness/omp`) **bundles the engine inline** into every hook/tool bundle at build time — zero runtime `@mstar-harness/engine` resolution, so module link can never fail on a missing package (the 2026-09-03 hotfix for `Cannot find package '@mstar-harness/engine'`). The maintainer `omp plugin link` path (now `<repo>/packages/omp`) still resolves the engine via the workspace member — run `bun install && bun run engine:build && bun run --cwd packages/omp build` in the checkout first (the member's `dist/` and the package's generated mirrors are gitignored).
 - **Graceful degradation (explicit)**: module load failure → `mstar_*` tools skipped, hook absent (no blocking), `commands/*.md` shell-out fallback intact. Caveat: a partial failure is SILENT — no in-band signal that gates are off; verify with `omp -p '/extensions'`.
 |- **`MSTAR_HARNESS_DIR` override / `.mstarc`**: the hook and tools discover `{HARNESS_DIR}` via `resolveHarnessDir` — a repo `.mstarc` `[config] harness_dir` (gitignored local config) first, then the probe `.mstar/` → `.agents/` → `.plans/`/`plans/`. Repos using a non-standard harness root can declare it in `.mstarc` or MUST export `MSTAR_HARNESS_DIR` (absolute path) in the omp session env — without either the status gate does not cover those roots and tools like `mstar_path_resolve` / `mstar_lease_verify` error out (parity with the opencode binding).
 - **Edit-path limitation**: the status gate validates the on-disk file for `edit` events (pre-edit state) — a corrupting edit is caught by the next write or `mstar_status_validate` (known v1 limitation, parity with opencode).
@@ -234,7 +234,7 @@ Cannot emit required **N** → **`Blocked`**.
 
 ## Gotchas
 
-- Installed npm/git plugin package name is root **`morning-star`** (`package.json`); Morning Star display name remains **morning-star-harness**.
+- Installed npm plugin package name is **`@mstar-harness/omp`** (git/link path: root **`morning-star`**); Morning Star display name remains **morning-star-harness**.
 - Marketplace (Claude) installs and `omp plugin install` are different discovery providers — prefer one install path per machine to avoid duplicate skill listings.
 - Session plan UI / todos are not durable SSOT unless mirrored to `{HARNESS_DIR}`.
 - After install/link, **reload / new session** so `agents/*.md` appear in the live `task.agent` list — stale sessions may only show host generics and wrongly push you to `agent: "task"`.
