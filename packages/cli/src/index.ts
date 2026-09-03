@@ -3378,15 +3378,16 @@ prReviewCommand
       // The in-memory sidecar (with the snapshot's inode identity) once the
       // snapshot write succeeded \u2014 lets rollback verify ownership by inode.
       let pendingSidecar: ReviewWorktreeSidecar | undefined;
-      // Adoption state: when the sidecar path held a PRE-EXISTING interrupted
-      // sidecar that THIS setup adopted, rollback must restore its exact
-      // pre-setup bytes \u2014 never unlink a pre-existing file.
-      let adoptedSidecar = false;
-      let adoptedRaw: string | undefined;
-      // Identity of the adopted sidecar at capture time \u2014 rollback restores
-      // through the verified inode (dev/ino), never by pathname.
-      let adoptedDev: number | undefined;
-      let adoptedIno: string | undefined;
+      // Identity of the sidecar THIS setup created (fstat on the held fd) \u2014
+      // rollback unlinks ONLY when the path still names this exact inode.
+      let sidecarDev: number | undefined;
+      let sidecarIno: string | undefined;
+      // ONE fd held from exclusive creation through the final identity
+      // rewrite: every sidecar write targets this verified inode, never the
+      // pathname, so a concurrent replacement of the path cannot be
+      // truncated. Closed by the final rewrite; rollback closes a still-open
+      // fd before the verified unlink.
+      let sidecarFd: number | undefined;
 
       /** Remove a just-created worktree + branch when setup fails late. */
       const cleanupOnFailure = (branchToDelete: string): void => {
@@ -3404,53 +3405,29 @@ prReviewCommand
           // verified). Anything pre-existing at the paths is unowned and
           // stays untouched (never recursive).
           if (wroteSidecar) {
-            if (adoptedSidecar) {
-              // The sidecar at the path is a PRE-EXISTING file this setup
-              // adopted \u2014 rollback restores its exact pre-setup bytes
-              // through the verified inode (never by pathname), so a later
-              // worktree-cleanup still recognizes the interrupted review. A
-              // restore failure is loud \u2014 never leave the adopted content
-              // silently replaced.
-              const sidecarPath = prReviewArtifactPathFor(worktreePath, "json");
-              let fd: number | undefined;
-              // "r+" (not "r"): ftruncate/write through the fd require a
-              // writable descriptor \u2014 POSIX rejects ftruncate on O_RDONLY
-              // with EINVAL. "r+" never truncates on open, so the occupant
-              // stays byte-untouched until verification passes.
+            // Close the held fd first \u2014 the file is unlinked below, and the
+            // fd must not outlive the failure path.
+            if (sidecarFd !== undefined) {
               try {
-                fd = fs.openSync(sidecarPath, "r+");
-              } catch { /* ENOENT or unreadable -> cannot verify */ }
-              if (fd === undefined) {
-                console.error(pc.red(`worktree-setup rollback: adopted sidecar at ${sidecarPath} could not be restored (path was replaced concurrently)`));
-              } else {
-                let verified = false;
-                try {
-                  const st = fs.fstatSync(fd);
-                  verified = st.isFile()
-                    && st.dev === adoptedDev && String(st.ino) === adoptedIno
-                    && st.nlink === 1;   // the path still names the sidecar we rewrote
-                } catch { verified = false; }
-                if (!verified || adoptedRaw === undefined) {
-                  // The pathname was replaced after adoption: the sidecar we
-                  // rewrote is gone and the current occupant is not ours.
-                  // Never touch it.
-                  fs.closeSync(fd);
-                  console.error(pc.red(`worktree-setup rollback: adopted sidecar at ${sidecarPath} could not be restored (path was replaced concurrently)`));
-                } else {
-                  try {
-                    // Both ops go through fd \u2014 bound to the verified inode,
-                    // independent of the pathname's current state.
-                    fs.ftruncateSync(fd, 0);
-                    let written = 0;
-                    const buf = Buffer.from(adoptedRaw, "utf8");
-                    while (written < buf.length) written += fs.writeSync(fd, buf, written);
-                  } finally {
-                    fs.closeSync(fd);
-                  }
-                }
-              }
+                fs.closeSync(sidecarFd);
+              } catch { /* already closed \u2014 rollback is best-effort */ }
+              sidecarFd = undefined;
+            }
+            // Verified unlink: only a regular file whose dev/ino match the
+            // inode THIS setup created (recorded from the held fd) is ours.
+            // Anything else at the path \u2014 a concurrent replacement, a
+            // directory, a sidecar without recorded identity \u2014 is foreign
+            // and stays, never unlinked by the wroteSidecar boolean alone.
+            const sidecarPath = prReviewArtifactPathFor(worktreePath, "json");
+            let owned = false;
+            try {
+              const st = fs.lstatSync(sidecarPath);
+              owned = st.isFile() && st.dev === sidecarDev && String(st.ino) === sidecarIno;
+            } catch { owned = false; /* ENOENT -> nothing to unlink */ }
+            if (owned) {
+              fs.unlinkSync(sidecarPath);
             } else {
-              fs.rmSync(prReviewArtifactPathFor(worktreePath, "json"), { force: true });
+              console.error(pc.yellow(`worktree-setup rollback: sidecar at ${sidecarPath} left in place (file identity does not match this setup's sidecar)`));
             }
           }
           if (wroteSnapshot && pendingSidecar !== undefined) removeOwnedSnapshotFile(worktreePath, pendingSidecar);
@@ -3551,51 +3528,29 @@ prReviewCommand
           diffFile,
           diffFileSha256: createHash("sha256").update(snapshot).digest("hex"),
         };
-        // Sidecar FIRST, exclusive create (O_CREAT|O_EXCL). Ownership of the
-        // deterministic artifact paths is established by creation order, never
-        // by content sniffing: a pre-existing sidecar is by definition foreign
-        // (an earlier review never cleaned) — refuse and point at the
-        // documented cleanup path; never clean a foreign review. EXCEPTION:
-        // an interrupted setup of THIS very worktree (sidecar written, crash
-        // before the snapshot) is adopted so a retry proceeds without manual
-        // cleanup — see adoptInterruptedSidecar; every adoption condition is
-        // computed by THIS setup, never read from the file as authority, and
-        // nothing is ever unlinked or truncated blindly. On EEXIST / EISDIR
-        // this throws with wroteSidecar still false, so rollback leaves the
-        // occupant byte-untouched.
+        // Sidecar FIRST, exclusive create through ONE held fd ("wx+" =
+        // O_CREAT|O_EXCL|O_RDWR). Ownership of the deterministic artifact
+        // paths is established by creation order, never by content sniffing:
+        // a pre-existing sidecar is by definition foreign (an earlier review
+        // never cleaned) — refuse and point at the documented cleanup path;
+        // never clean a foreign review. On EEXIST / EISDIR this throws with
+        // wroteSidecar still false, so rollback leaves the occupant
+        // byte-untouched. The fd stays open through setup — every later
+        // sidecar write (the initial JSON here, the identity rewrite after
+        // the snapshot) targets this verified inode, never the pathname.
         try {
-          fs.writeFileSync(sidecarPath, JSON.stringify(sidecar, null, 2), { flag: "wx" });
+          sidecarFd = fs.openSync(sidecarPath, "wx+");
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== "EEXIST" && (error as NodeJS.ErrnoException).code !== "EISDIR") throw error;
-          // Keep the adopted sidecar's exact pre-setup bytes BEFORE
-          // adoptInterruptedSidecar rewrites it \u2014 a FAILing setup must
-          // restore them, never unlink a pre-existing file. An unreadable
-          // file leaves adoptedRaw undefined and adoption below also fails
-          // (it reads the same file), so the refusal path is unchanged.
-          // The file's identity (dev/ino) is captured in the same instant \u2014
-          // rollback restores through the verified inode, never by pathname.
-          try {
-            adoptedRaw = fs.readFileSync(sidecarPath, "utf8");
-            const adoptedStat = fs.lstatSync(sidecarPath);
-            adoptedDev = adoptedStat.dev;
-            adoptedIno = String(adoptedStat.ino);
-          } catch {
-            adoptedRaw = undefined;
-            adoptedDev = undefined;
-            adoptedIno = undefined;
-          }
-          const adopted = adoptInterruptedSidecar(sidecarPath, sidecar);
-          if (adopted === undefined) {
-            throw new Error(`cannot record setup sidecar at ${sidecarPath} - run mstar pr-review worktree-cleanup first (never cleaning a foreign review)`);
-          }
-          adoptedSidecar = true;
-          // The final identity rewrite below must keep the adopted sidecar's
-          // unknown/extra keys — copy only keys the fresh sidecar does not
-          // define (fresh values always win).
-          for (const key of Object.keys(adopted)) {
-            if (!(key in sidecar)) (sidecar as Record<string, unknown>)[key] = adopted[key];
-          }
+          throw new Error(`cannot record setup sidecar at ${sidecarPath} - run mstar pr-review worktree-cleanup first (never cleaning a foreign review)`);
         }
+        // Record the created inode's identity NOW (fstat on the held fd) —
+        // rollback verifies the path still names this exact inode before any
+        // unlink.
+        const sidecarStat = fs.fstatSync(sidecarFd);
+        sidecarDev = sidecarStat.dev;
+        sidecarIno = String(sidecarStat.ino);
+        writeFdSync(sidecarFd, Buffer.from(JSON.stringify(sidecar, null, 2), "utf8"));
         wroteSidecar = true; // the sidecar at sidecarPath is now owned by this process
         // Snapshot SECOND, exclusive create. Our own sidecar was JUST created
         // above, so any occupant at the snapshot path is by definition not
@@ -3608,18 +3563,25 @@ prReviewCommand
           throw new Error(`refusing to overwrite pre-existing non-snapshot path ${diffFile}`);
         }
         wroteSnapshot = true; // the file at diffFile is now owned by this process
-        // Record the snapshot's identity on the in-memory sidecar and rewrite
-        // the sidecar we just created (plain write — we own it). Cleanup
-        // proves ownership by identity, never by content: identical bytes on a
-        // new inode are a replacement, not our snapshot. The mtime closes the
-        // ext4 inode-reuse hole — a replacement can inherit dev+ino, never
-        // the mtime of the file this setup wrote.
+        // Record the snapshot's identity on the in-memory sidecar, then
+        // rewrite the sidecar through the SAME held fd (ftruncate + full
+        // write, positional from offset 0) — no pathname write anywhere after
+        // creation, so a concurrent replacement of the path cannot be
+        // truncated. Cleanup proves ownership by identity, never by content:
+        // identical bytes on a new inode are a replacement, not our snapshot.
+        // The mtime closes the ext4 inode-reuse hole — a replacement can
+        // inherit dev+ino, never the mtime of the file this setup wrote.
         const snapshotStat = fs.lstatSync(diffFile);
         sidecar.diffFileDev = snapshotStat.dev;
         sidecar.diffFileIno = String(snapshotStat.ino);
         sidecar.diffFileMtimeMs = snapshotStat.mtimeMs;
         pendingSidecar = sidecar;
-        fs.writeFileSync(sidecarPath, JSON.stringify(sidecar, null, 2));
+        // Close here; a failure before this close leaves the fd to rollback,
+        // which closes it before the verified unlink.
+        fs.ftruncateSync(sidecarFd, 0);
+        writeFdSync(sidecarFd, Buffer.from(JSON.stringify(sidecar, null, 2), "utf8"));
+        fs.closeSync(sidecarFd);
+        sidecarFd = undefined;
         return sidecar;
       };
       // Snapshot capture, write, and the sidecar write are the last failure
@@ -3650,6 +3612,17 @@ function prReviewArtifactPathFor(worktreePath: string, suffix: "json" | "diff"):
   const parent = path.dirname(path.resolve(worktreePath));
   const name = path.basename(path.resolve(worktreePath));
   return path.join(parent, `.${name}.prreview.${suffix}`);
+}
+
+/**
+ * Write a whole buffer through an fd as ONE file image: looped `writeSync`,
+ * positional from offset 0 (writeSync may write partially; the explicit
+ * position keeps the file offset irrelevant, so an ftruncate-then-rewrite
+ * never leaves a hole from a stale offset).
+ */
+function writeFdSync(fd: number, buf: Buffer): void {
+  let written = 0;
+  while (written < buf.length) written += fs.writeSync(fd, buf, written, buf.length - written, written);
 }
 
 /**
@@ -3782,50 +3755,6 @@ function removeOwnedSnapshotFile(worktreePath: string, sidecar: ReviewWorktreeSi
   } finally {
     fs.closeSync(fd);
   }
-}
-
-/**
- * Adopt a pre-existing sidecar ONLY when it is provably an interrupted
- * setup of THIS worktree: the snapshot path is absent (a complete pair
- * still refuses), the sidecar parses as JSON, and its `reviewBranch` /
- * `worktreePath` / `diffFile` equal the values THIS setup just computed
- * (never read from the file as authority). On adoption the sidecar is
- * rewritten in place with the fresh fields merged over the parsed ones
- * (plain write at our reserved path — no unlink anywhere; unknown/extra
- * keys from the parsed file are preserved), then the caller proceeds to
- * the snapshot exclusive write. Any condition fails → undefined — the
- * caller keeps the existing refusal and the file stays byte-untouched.
- * Returns the parsed record on success so the caller can fold its
- * unknown/extra keys into the in-memory sidecar (the final identity
- * rewrite must not drop them).
- */
-function adoptInterruptedSidecar(sidecarPath: string, freshSidecar: ReviewWorktreeSidecar): Record<string, unknown> | undefined {
-  // 1. The snapshot path must be absent (ENOENT) — the interrupted state.
-  //    A complete pair (sidecar + any snapshot occupant) is a
-  //    foreign/complete review: refuse.
-  const snapshotPath = prReviewArtifactPathFor(freshSidecar.worktreePath, "diff");
-  try {
-    fs.lstatSync(snapshotPath);
-    return undefined; // snapshot exists (regular file, dir, symlink, …)
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") return undefined;
-  }
-  // 2. The existing sidecar must parse as JSON.
-  let parsed: Record<string, unknown>;
-  try {
-    parsed = JSON.parse(fs.readFileSync(sidecarPath, "utf8")) as Record<string, unknown>;
-  } catch {
-    return undefined;
-  }
-  // 3. Every compared value is computed by THIS setup, never read from the
-  //    file as authority.
-  if (parsed.reviewBranch !== freshSidecar.reviewBranch) return undefined;
-  if (parsed.worktreePath !== freshSidecar.worktreePath) return undefined;
-  if (parsed.diffFile !== freshSidecar.diffFile) return undefined;
-  // Adopt: same-schema overwrite at our reserved path — no unlink anywhere;
-  // unknown/extra keys from the parsed file are preserved.
-  fs.writeFileSync(sidecarPath, JSON.stringify({ ...parsed, ...freshSidecar }, null, 2));
-  return parsed;
 }
 
 prReviewCommand
