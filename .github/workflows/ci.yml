@@ -21,6 +21,8 @@ on:
       - "bun.lockb"
       - "tsconfig.json"
       - ".github/workflows/ci.yml"
+      - ".omp-plugin/**"
+      - "assets/**"
   pull_request:
     paths:
       - "packages/engine/**"
@@ -37,6 +39,8 @@ on:
       - "bun.lockb"
       - "tsconfig.json"
       - ".github/workflows/ci.yml"
+      - ".omp-plugin/**"
+      - "assets/**"
 
 jobs:
   validate:
