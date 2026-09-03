@@ -6,6 +6,20 @@
 
 ## [Unreleased]
 
+## [3.6.1] - 2026-09-03
+
+### Harness
+
+- 移除 INSTALL.md marketplace 版本锚点及其发布工具链:`release:prepare` 不再 bump INSTALL.md 中带引号的 `"version"` 字段,`release:validate` 也不再要求它——ZCode marketplace 示例与各 marketplace catalog 均无版本字段,安装时版本取自 `.zcode-plugin/plugin.json`。作为 #183/#184 的后续:该锚点唯一的用途就是被发布工具 bump,因此连同工具一起移除,而非恢复。
+- 将 14 个仓库根 agent 壳文件(`agents/*.md`)的 frontmatter 统一改为**单行带引号的英文 `description`**。ZCode 的平铺 agent frontmatter 解析器不支持 `|-` 块标量——会把字面量 `|-` 解析成 description,并静默丢弃嵌套的 `tools`/`permission` 映射,导致插件 agent 条目的触发描述损坏。措辞不变(逐字复用现有英文行);`mode`/`tools`/`permission` 为 OpenCode 语义,保持原样。
+- 修正 `mstar-host` 的 ZCode 宿主契约:当前 ZCode **会**把 Morning Star 角色 agents(`agents/*.md`)注册为可调用的 `subagent_type`——派发改为优先**裸角色 id**(如 `fullstack-dev`),保留 `general-purpose` 作为通用回退,且因角色壳很薄仍强制 C5b prompt + skill-load 绑定;`zcode.md` 自带 C5/C5b SSOT(共享角色绑定文档收归 Kimi 专用,ZCode 不再加载)。同时记录 ZCode frontmatter 约束(单行带引号英文 `description`;`|-` 块与嵌套 `tools`/`permission` 会被静默破坏/丢弃),以及仓库内置 `.claude-plugin/marketplace.json` 后 marketplace 可直接添加。
+- 仓库内置 ZCode marketplace manifest(`.claude-plugin/marketplace.json`,根 `marketplace.json` 作回退),ZCode 刷新 `github` 源 marketplace 时可直接在仓库内发现目录——此前刷新会报 `Marketplace manifest not found in GitHub repo`。插件条目使用 `github` source 且不钉版本,安装时版本取自 `.zcode-plugin/plugin.json`。
+- 对齐 `zcode` 适配器:`init` 写入的本地 marketplace 快照不再钉插件版本,`doctor` 接受无版本条目(ZCode 刷新成功后会用仓库 manifest 覆盖该快照)。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单及便携式 Agent Plugins 清单：**→ 3.6.1**。
+
 ## [3.6.0] - 2026-09-03
 
 ### Harness
