@@ -304,11 +304,14 @@ To register it by hand (without the CLI) instead, create `~/.zcode/cli/plugins/m
       "name": "morning-star-harness",
       "source": { "source": "github", "repo": "btspoony/mstar-harness", "ref": "main" },
       "description": "Multi-agent code harness framework with unified skills for OpenCode, Cursor, Codex, Kimi Code, and ZCode.",
+      "version": "3.6.0",
       "category": "Productivity"
     }
   ]
 }
 ```
+
+The quoted `"version"` field above is the release-maintained marketplace example: `release:prepare` bumps it every release, so leave it in place when editing this snippet by hand.
 
 Append the marketplace to `~/.zcode/cli/plugins/known_marketplaces.json` (`marketplaces[]`):
 
