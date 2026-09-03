@@ -59,17 +59,43 @@ Role shells are thin — each body only states the role identity and points at t
 
 ### Role binding in prompt (C5b — required)
 
-Role-binding contract + Assignment template → **`_shared/host-role-binding-core.md`** (C5/C5b). ZCode-specific invoke shapes, same turn:
+ZCode C5/C5b SSOT is **this file** — do **not** load `_shared/host-role-binding-core.md` (that file is Kimi only). Role shells are thin (identity + skill pointer, not the full role prompt), so every role dispatch must carry:
+
+1. **`Execute as: <role-id>`** in Assignment (harness routing SSOT).
+2. **`Act as <role-id>`** (or equivalent) at the top of the invoke prompt.
+3. **Skill load list** — instruct the subagent to read `mstar-roles` → `references/<role-id>.md` (or shared reference + parameters) and topic skills per that reference.
+4. **`subagent_type`** — bare Morning Star role id per C5; `general-purpose` fallback.
+
+Paste-only Assignment **without** an invoke call is **not** dispatch. Anti-recursion NEVER: leaf executors are already `Execute as` — no recursive invoke of the same role; Assignment wins (`Delegation: forbidden` unless stated). **Never** multiple implementer invokes in one message for the same plan (SDD serial → **`parallel-dispatch.md`** § SDD implement).
+
+ZCode invoke shape (same turn):
 
 ```text
 Agent(
   subagent_type: "fullstack-dev",
   description: "<short task label>",
-  prompt: "<full Assignment body including Act as + skill load>"
+  prompt: "<full Assignment body including Execute as + Act as + skill load>"
 )
 ```
 
-Role id not exposed (older ZCode) → fall back to `subagent_type: "general-purpose"`. For **`Explore`** orientation:
+Assignment / prompt template:
+
+```markdown
+## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Working branch**: feat/example
+**Plan Path**: .mstar/plans/20260717-example.md
+
+**IDENTITY:** You ARE `fullstack-dev`. Act as `fullstack-dev` for this task.
+
+Load: `mstar-harness-core` → `mstar-host` → `zcode.md` → `mstar-roles` → `references/fullstack-dev-shared.md` → topic skills per that reference.
+
+<task body>
+```
+
+Role id not exposed (older ZCode) → `subagent_type: "general-purpose"` with the same body. For **`Explore`** orientation:
 
 ```text
 Agent(subagent_type: "Explore", description: "...", prompt: "... Act as explore-only orientation; Execute as: n/a ...")
@@ -77,7 +103,7 @@ Agent(subagent_type: "Explore", description: "...", prompt: "... Act as explore-
 
 ## PM dispatch (`Agent`)
 
-Harness **dispatch** on ZCode = **one or more `Agent` tool calls** with correct **`subagent_type`** and role-bound prompts (C5b → **`_shared/host-role-binding-core.md`**). N-parallel / 1-Assignment-1-invoke / paste-only mechanics → **`parallel-dispatch.md`**.
+Harness **dispatch** on ZCode = **one or more `Agent` tool calls** with correct **`subagent_type`** and role-bound prompts (C5b — this file). N-parallel / 1-Assignment-1-invoke / paste-only mechanics → **`parallel-dispatch.md`**.
 
 | Harness | ZCode |
 |---------|-------|
