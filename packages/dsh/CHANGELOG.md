@@ -6,6 +6,19 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [3.6.0] - 2026-09-03
+
+### dsh
+
+- **`dsh-llm-fallbacks` upgraded to `0.4.1`** (the line adapted to `@deepseek-ai/dsh-*` `^0.1.2-rc.1`): the repo's devDependency and the dsh adapter's install spec are now the EXACT `0.4.1` (no caret). The unpinned add previously forwarded the dsh CLI's own manifest spec (`^0.3.5`), whose dist re-exports `installSettingsSection` from `@deepseek-ai/dsh-settings` — an export the rc.1 line removed — breaking the installed-artifact boot; the installed dsh e2e specs now also pin the fallbacks add and extend the shipped-surface probe to the native persona channel (`internal/get` + `request.persona`), so a published dist built on the superseded additive-section path is re-added pinned to the repo version instead of silently booting stale.
+- Both dsh install e2e specs run green end to end against the real registry (previously failing on the `^0.3.5` re-export break).
+- Bump `@deepseek-ai/dsh-*` host peers to `^0.1.2-rc.1` and refresh the lock against the `0.1.2-rc.1` line (badge `0.1.2-rc.1`). Alpha.3 already removed the optional SQLite session persistence upstream — nothing to migrate, and no `dsh-session-persistence-sqlite` / `dsh-client-runtime` pin is added (neither is published at `0.1.2-rc.1`). Remote / `dsh-api-remotes` stays; `host-apiproxy` stays out of the client-bundle INLINE_SAFE allowlist; `SessionEvent.ignorable` usage is kept.
+- Lock converges to a single `0.1.2-rc.1` dsh line. `dsh-llm-fallbacks@0.4.0-alpha.1` (dev-time-only) still peers `^0.1.2-alpha.3`, and bun pins a prerelease range to the exact published version, so the three fallbacks-only peer-resident packages (`@deepseek-ai/dsh-api-session-controller`, `dsh-util-time`, `dsh-util-workspace-path`) are declared as `@mstar-harness/dsh` peers at `^0.1.2-rc.1` — all three are published at that tag and carry zero mstar imports, keeping the resolved graph on one line (the `peer-deps.spec.ts` single-line guard).
+
+- Version alignment with harness **3.6.0**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **3.6.0**.
+
 ## [3.6.0-alpha.4] - 2026-09-03
 
 ### Changed

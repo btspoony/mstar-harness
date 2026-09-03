@@ -6,6 +6,19 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [3.6.0] - 2026-09-03
+
+### dsh
+
+- **`dsh-llm-fallbacks` upgraded to `0.4.1`** (the line adapted to `@deepseek-ai/dsh-*` `^0.1.2-rc.1`): the repo's devDependency and the dsh adapter's install spec are now the EXACT `0.4.1` (no caret). The unpinned add previously forwarded the dsh CLI's own manifest spec (`^0.3.5`), whose dist re-exports `installSettingsSection` from `@deepseek-ai/dsh-settings` — an export the rc.1 line removed — breaking the installed-artifact boot; the installed dsh e2e specs now also pin the fallbacks add and extend the shipped-surface probe to the native persona channel (`internal/get` + `request.persona`), so a published dist built on the superseded additive-section path is re-added pinned to the repo version instead of silently booting stale.
+- Both dsh install e2e specs run green end to end against the real registry (previously failing on the `^0.3.5` re-export break).
+- **New `@mstar-harness/omp` npm package**: `omp plugin install @mstar-harness/omp` now works without any local build — the omp hook + six `mstar_*` tools are bundled with the engine **inlined** (zero runtime `@mstar-harness/engine` resolution), fixing `Cannot find package '@mstar-harness/engine'` on third-party installs. Docs (`INSTALL.md`, `README.md`/`README_CN.md`, `mstar-host` omp reference) and the CLI omp adapter now prefer the npm install path; the maintainer `omp plugin link` path is `<repo>/packages/omp` (needs `bun install && bun run engine:build && bun run --cwd packages/omp build` in the checkout).
+- **BREAKING (intended)**: repo-root `hooks/` and `tools/` moved into `packages/omp/src/` — the omp hook/tools are now omp-only package surfaces. Anyone relying on repo-root `hooks/pre/mstar-gates.ts` / `tools/mstar_*` paths must use the package (`packages/omp/src/…` sources, `<pkg>/hooks/` + `<pkg>/tools/` in the installed npm tree). The maintainer `omp plugin link` path is now `<repo>/packages/omp` (built) — linking the repo root no longer provides the runtime gates.
+
+- Version alignment with harness **3.6.0**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **3.6.0**.
+
 ## [3.6.0-alpha.4] - 2026-09-03
 
 ### Changed
