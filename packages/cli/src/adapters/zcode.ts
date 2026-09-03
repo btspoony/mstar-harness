@@ -39,7 +39,6 @@ type MarketplacePluginEntry = {
   name: string;
   source: GithubSource;
   description: string;
-  version: string;
   category: string;
 };
 
@@ -64,7 +63,6 @@ function marketplacePluginEntry(): MarketplacePluginEntry {
     name: PLUGIN_NAME,
     source: { ...GITHUB_SOURCE },
     description: PLUGIN_DESCRIPTION,
-    version: readHarnessVersion(),
     category: PLUGIN_CATEGORY,
   };
 }
@@ -156,7 +154,10 @@ function validateMarketplaceJson() {
     errors.push(`ZCode marketplace plugin source.repo must be ${expected.source.repo}.`);
   }
   const expectedVersion = readHarnessVersion();
-  if (entry.version !== expectedVersion) {
+  // After a successful marketplace refresh, ZCode overwrites this snapshot with the
+  // repo-shipped manifest (`.claude-plugin/marketplace.json`), which pins no version —
+  // install-time versions come from `.zcode-plugin/plugin.json`.
+  if (entry.version !== undefined && entry.version !== expectedVersion) {
     errors.push(`ZCode marketplace plugin version must be ${expectedVersion}.`);
   }
   return errors;

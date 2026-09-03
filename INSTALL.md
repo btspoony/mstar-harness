@@ -120,6 +120,8 @@ npx @mstar-harness/cli doctor --target zcode --scope project
 
 **Layout note:** the CLI registers a `mstar-local` marketplace in `~/.zcode/cli/plugins/known_marketplaces.json` pointing at the **`github:btspoony/mstar-harness`** repo (same source shape ZCode uses for built-in marketplaces). Project scope additionally keeps a real git checkout under `.zcode/plugin-checkout` (gitignored) for local agent-file smoke checks; the registered marketplace always points at the github repo so installs work across machines.
 
+The repo itself ships the marketplace catalog ZCode looks for when refreshing a `github` source: `.claude-plugin/marketplace.json` (probed first), with root `marketplace.json` as fallback. The CLI-written local snapshot is a bootstrap so **Discover** works before the first refresh; after a successful refresh ZCode replaces it with the repo manifest.
+
 ### Kimi
 
 Install the plugin in Kimi TUI (user-scoped — all projects):
@@ -290,7 +292,9 @@ Kimi plugin source in this repository:
 
 ### ZCode
 
-Register the harness as a marketplace (without the CLI). Create `~/.zcode/cli/plugins/marketplaces/mstar-local/marketplace.json`:
+The repo is directly discoverable: when ZCode refreshes a `github`-source marketplace it probes `.claude-plugin/marketplace.json` first (root `marketplace.json` as fallback), and this repo ships both. Adding the repo from **Plugin Management → marketplaces** is enough — no manual files needed.
+
+To register it by hand (without the CLI) instead, create `~/.zcode/cli/plugins/marketplaces/mstar-local/marketplace.json`:
 
 ```json
 {
@@ -300,7 +304,6 @@ Register the harness as a marketplace (without the CLI). Create `~/.zcode/cli/pl
       "name": "morning-star-harness",
       "source": { "source": "github", "repo": "btspoony/mstar-harness", "ref": "main" },
       "description": "Multi-agent code harness framework with unified skills for OpenCode, Cursor, Codex, Kimi Code, and ZCode.",
-      "version": "3.6.0",
       "category": "Productivity"
     }
   ]
