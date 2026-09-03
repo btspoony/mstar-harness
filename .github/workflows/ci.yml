@@ -11,6 +11,7 @@ on:
       - "packages/cli/**"
       - "packages/opencode/**"
       - "packages/dsh/**"
+      - "packages/omp/**"
       - "scripts/**"
       - "skills/**"
       - "agents/**"
@@ -26,6 +27,7 @@ on:
       - "packages/cli/**"
       - "packages/opencode/**"
       - "packages/dsh/**"
+      - "packages/omp/**"
       - "scripts/**"
       - "skills/**"
       - "agents/**"
@@ -96,6 +98,12 @@ jobs:
       - name: Build dsh
         run: bun run dsh:build
 
+      # The omp package build bundles the engine inline (devDependency) and
+      # regenerates the gitignored discovery mirrors (hooks/, tools/, skills/)
+      # its convention-scan smoke test asserts on.
+      - name: Build omp
+        run: bun run omp:build
+
       - name: CLI smoke check
         run: bun run --cwd packages/cli check
 
@@ -109,6 +117,9 @@ jobs:
 
       - name: Test OpenCode
         run: bun run --cwd packages/opencode test
+
+      - name: Test omp
+        run: bun run --cwd packages/omp test
 
       # The dsh test imports @mstar-harness/engine dist (built above) and
       # needs the harness-skills/harness-commands mirrors (synced by the

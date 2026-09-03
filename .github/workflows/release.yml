@@ -90,11 +90,12 @@ jobs:
           bun run cli:build
           bun run opencode:build
           bun run dsh:build
+          bun run omp:build
 
-      # Engine is published standalone for direct consumers; cli/opencode/dsh
-      # BUNDLE it at build time (devDependency), so their published artifacts
-      # are self-contained — no registry ordering constraint. Keep engine first
-      # for tidy publication history.
+      # Engine is published standalone for direct consumers; cli/opencode/dsh/
+      # omp BUNDLE it at build time (devDependency), so their published
+      # artifacts are self-contained — no registry ordering constraint. Keep
+      # engine first for tidy publication history.
       - name: Publish @mstar-harness/engine
         run: npm publish --workspace @mstar-harness/engine --access public --tag ${{ steps.disttag.outputs.tag }}
 
@@ -106,6 +107,9 @@ jobs:
 
       - name: Publish @mstar-harness/dsh
         run: npm publish --workspace @mstar-harness/dsh --access public --tag ${{ steps.disttag.outputs.tag }}
+
+      - name: Publish @mstar-harness/omp
+        run: npm publish --workspace @mstar-harness/omp --access public --tag ${{ steps.disttag.outputs.tag }}
 
       - name: Configure git identity
         run: |
