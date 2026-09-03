@@ -1,8 +1,6 @@
 ---
 name: writing-specialist
-description: |-
-  写作专家 - 文档写作、小说写作、文案写作与脚本写作。
-  Writing Specialist - documentation, fiction, copywriting, and script writing.
+description: "Writing Specialist - documentation, fiction, copywriting, and script writing."
 mode: subagent
 tools:
   write: true

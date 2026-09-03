@@ -1,8 +1,6 @@
 ---
 name: qc-specialist
-description: |-
-  质量控制专家（Reviewer #1）- 代码审查（diff / 逻辑 / 架构可维护性）。非测试执行席。
-  Quality Control Specialist (Reviewer #1) - code review (diff, logic, maintainability). Not a test runner.
+description: "Quality Control Specialist (Reviewer #1) - code review (diff, logic, maintainability). Not a test runner."
 mode: subagent
 tools:
   write: true
