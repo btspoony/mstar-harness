@@ -67,7 +67,9 @@ const DSH_FALLBACKS_SPEC = DSH_PLUGIN_SPECS[1];
 /** Spec → loader-row name: strip a trailing `@<version>` (none in mstar's
  * spec; fallbacks carries the pinned one). */
 function dshLoaderName(spec: string): string {
-  return spec.includes("@") ? spec.slice(0, spec.lastIndexOf("@")) : spec;
+  const at = spec.lastIndexOf("@");
+  // Scoped names (`@scope/pkg`) carry an `@` at index 0 — only strip a TRAILING `@version`.
+  return at > 0 ? spec.slice(0, at) : spec;
 }
 
 const DSH_INSTALL_HINT =
