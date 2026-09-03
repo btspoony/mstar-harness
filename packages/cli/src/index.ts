@@ -3378,15 +3378,13 @@ prReviewCommand
       // The in-memory sidecar (with the snapshot's inode identity) once the
       // snapshot write succeeded \u2014 lets rollback verify ownership by inode.
       let pendingSidecar: ReviewWorktreeSidecar | undefined;
-      // Identity of the sidecar THIS setup created (fstat on the held fd) \u2014
-      // rollback unlinks ONLY when the path still names this exact inode.
-      let sidecarDev: number | undefined;
-      let sidecarIno: string | undefined;
       // ONE fd held from exclusive creation through the final identity
       // rewrite: every sidecar write targets this verified inode, never the
       // pathname, so a concurrent replacement of the path cannot be
-      // truncated. Closed by the final rewrite; rollback closes a still-open
-      // fd before the verified unlink.
+      // truncated. The fd IS the identity - rollback proves ownership by
+      // fstat on it, never by a pathname read a replacement could spoof.
+      // Closed by the final rewrite (success); a failure leaves it open for
+      // removeOwnedFreshSidecarFile to close on every rollback path.
       let sidecarFd: number | undefined;
 
       /** Remove a just-created worktree + branch when setup fails late. */
@@ -3404,31 +3402,15 @@ prReviewCommand
           // and stays), the snapshot only when THIS setup wrote it (inode
           // verified). Anything pre-existing at the paths is unowned and
           // stays untouched (never recursive).
-          if (wroteSidecar) {
-            // Close the held fd first \u2014 the file is unlinked below, and the
-            // fd must not outlive the failure path.
-            if (sidecarFd !== undefined) {
-              try {
-                fs.closeSync(sidecarFd);
-              } catch { /* already closed \u2014 rollback is best-effort */ }
-              sidecarFd = undefined;
-            }
-            // Verified unlink: only a regular file whose dev/ino match the
-            // inode THIS setup created (recorded from the held fd) is ours.
-            // Anything else at the path \u2014 a concurrent replacement, a
-            // directory, a sidecar without recorded identity \u2014 is foreign
-            // and stays, never unlinked by the wroteSidecar boolean alone.
-            const sidecarPath = prReviewArtifactPathFor(worktreePath, "json");
-            let owned = false;
-            try {
-              const st = fs.lstatSync(sidecarPath);
-              owned = st.isFile() && st.dev === sidecarDev && String(st.ino) === sidecarIno;
-            } catch { owned = false; /* ENOENT -> nothing to unlink */ }
-            if (owned) {
-              fs.unlinkSync(sidecarPath);
-            } else {
-              console.error(pc.yellow(`worktree-setup rollback: sidecar at ${sidecarPath} left in place (file identity does not match this setup's sidecar)`));
-            }
+          if (wroteSidecar && sidecarFd !== undefined) {
+            // Verified detach-unlink through the held fd - the accepted
+            // removeOwnedSnapshotFile doctrine, second application: identity
+            // is proven by fstat on the fd (never by a pathname read), the
+            // verified inode's only name is detached to an unguessable tmp,
+            // and a replacement swapped in between is restored without ever
+            // overwriting. The helper closes the fd on every rollback path.
+            removeOwnedFreshSidecarFile(sidecarFd, worktreePath);
+            sidecarFd = undefined;
           }
           if (wroteSnapshot && pendingSidecar !== undefined) removeOwnedSnapshotFile(worktreePath, pendingSidecar);
         } catch {
@@ -3544,12 +3526,8 @@ prReviewCommand
           if ((error as NodeJS.ErrnoException).code !== "EEXIST" && (error as NodeJS.ErrnoException).code !== "EISDIR") throw error;
           throw new Error(`cannot record setup sidecar at ${sidecarPath} - run mstar pr-review worktree-cleanup first (never cleaning a foreign review)`);
         }
-        // Record the created inode's identity NOW (fstat on the held fd) —
-        // rollback verifies the path still names this exact inode before any
-        // unlink.
-        const sidecarStat = fs.fstatSync(sidecarFd);
-        sidecarDev = sidecarStat.dev;
-        sidecarIno = String(sidecarStat.ino);
+        // No recorded identity snapshot needed: the held fd IS the identity
+        // (rollback verifies through it, see removeOwnedFreshSidecarFile).
         writeFdSync(sidecarFd, Buffer.from(JSON.stringify(sidecar, null, 2), "utf8"));
         wroteSidecar = true; // the sidecar at sidecarPath is now owned by this process
         // Snapshot SECOND, exclusive create. Our own sidecar was JUST created
@@ -3754,6 +3732,94 @@ function removeOwnedSnapshotFile(worktreePath: string, sidecar: ReviewWorktreeSi
     }
   } finally {
     fs.closeSync(fd);
+  }
+}
+
+/**
+ * Remove the fresh setup sidecar through the held file descriptor - the
+ * accepted `removeOwnedSnapshotFile` doctrine applied to the setup-rollback
+ * ownership proof. `fd` stays open from exclusive creation, so identity is
+ * proven by fstat on the fd, never by a pathname read a concurrent
+ * replacement could spoof. When the inode still holds exactly one link (the
+ * sidecar path), its only name is detached to an UNGUESSABLE sibling (pid +
+ * randomUUID - a pre-swapped entry at a predictable name can no longer be
+ * targeted), re-verified through the fd, and only then unlinked. A
+ * replacement that swapped the path between rename and verify is restored
+ * byte-identical via link (never overwriting) or left under the tmp name.
+ * Closes the fd on every path.
+ */
+function removeOwnedFreshSidecarFile(sidecarFd: number, worktreePath: string): void {
+  const sidecarPath = prReviewArtifactPathFor(worktreePath, "json");
+  try {
+    const st = fs.fstatSync(sidecarFd);
+    if (!st.isFile() || st.nlink !== 1) {
+      // nlink 0 = our inode is already detached (the path holds a
+      // replacement); >1 = unexpected hardlink. Either way the path occupant
+      // is not exclusively ours - never touch it.
+      console.error(pc.yellow(`worktree-setup rollback: sidecar at ${sidecarPath} left in place (identity no longer held)`));
+      return;
+    }
+    // The verified inode's only link is the sidecar path this setup created
+    // it at. Detach it to an unguessable sibling name, then re-check the fd:
+    // the inode now at tmp must BE the inode we opened - only then is
+    // unlinking tmp removing exactly our sidecar. Anything else at tmp is a
+    // replacement swapped in between creation and rename - restore it
+    // byte-identical, never delete.
+    const tmp = `${sidecarPath}.cleanup.${process.pid}.${randomUUID()}`;
+    try {
+      fs.renameSync(sidecarPath, tmp);
+    } catch (error) {
+      console.error(pc.yellow(`worktree-setup rollback: sidecar at ${sidecarPath} left in place (cannot detach: ${(error as Error).message})`));
+      return;
+    }
+    const st2 = fs.fstatSync(sidecarFd);
+    let tmpStat: fs.Stats | undefined;
+    try {
+      tmpStat = fs.lstatSync(tmp);
+    } catch {
+      tmpStat = undefined; // ENOENT -> nothing at tmp
+    }
+    // Pre-unlink binding: the inode at tmp must BE the inode this setup
+    // created (fstat on the held fd) - only then does unlinking tmp remove
+    // exactly our sidecar. Any mismatch (a replacement swapped in before the
+    // rename) takes the restore branch below.
+    if (tmpStat !== undefined && tmpStat.ino === st2.ino && tmpStat.dev === st2.dev) {
+      // Portable ceiling: Node has no fd-bound unlink, so the unlink below is
+      // pathname-based. The unguessable tmp name + the pre-unlink fd/lstat
+      // identity check above + the post-unlink nlink === 0 verification below
+      // minimize the lstat->unlink window to microseconds.
+      fs.unlinkSync(tmp);
+      // Post-unlink verification: the unlink must have detached OUR verified
+      // inode (nlink 1 -> 0). If the fd still has a link, the unlink detached
+      // a pathname replacement - detection is best-effort (POSIX/Node has no
+      // fd-bound unlink); name both paths loudly.
+      const st3 = fs.fstatSync(sidecarFd);
+      if (st3.nlink !== 0) {
+        console.error(pc.yellow(`worktree-setup rollback: unlink at ${tmp} detached a pathname replacement, not the verified sidecar inode (${sidecarPath} still holds ${st3.nlink} link(s)) - the replacement is gone, the verified sidecar was NOT deleted`));
+      }
+    } else {
+      // The inode at tmp is NOT the one this setup created - a replacement
+      // was swapped in between the fd's creation and the rename. Restore it
+      // to the sidecar path WITHOUT overwriting: link() fails with EEXIST if
+      // a concurrent creator took the path (POSIX rename would silently
+      // replace it). Only tmp (our own unique name) is ever unlinked, and
+      // only after link() proved it now shares the inode with the path.
+      try {
+        fs.linkSync(tmp, sidecarPath); // EEXIST if a concurrent creator took the path - never overwrites
+        fs.unlinkSync(tmp); // inode is back at the sidecar path; drop the tmp name
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+          console.error(pc.yellow(`worktree-setup rollback: sidecar replacement left at ${tmp} (sidecar path was recreated concurrently)`));
+          // tmp keeps the earlier replacement; path keeps the concurrent file. Nothing deleted.
+        } else {
+          console.error(pc.yellow(`worktree-setup rollback: sidecar replacement left at ${tmp} (restore failed: ${(error as Error).message})`));
+        }
+      }
+    }
+  } finally {
+    try {
+      fs.closeSync(sidecarFd);
+    } catch { /* already closed - rollback is best-effort */ }
   }
 }
 
