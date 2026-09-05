@@ -6,6 +6,26 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [3.6.2] - 2026-09-05
+
+### Changed
+
+- Added a **`collectFolded` seat-prompt option** to `prReviewSeatPrompt` (Stage-2 only; a Stage 1 seat combined with it throws): one fold bullet after the `## Budget` block tells a deep-tier domain seat to do its own collection — pinned diff pack first, then in-domain changed files, within the budget block; reachable from the CLI via the new `mstar pr-review seat-prompt --collect-folded` flag (engine guards surface as command errors).
+- Deep PR review now runs **two waves by default when the pinned diff pack exists** — the Stage 1 collect wave folds into the Stage 2 domain seats (`collectFolded`), and the collect wave is kept only in the exceptions (no `diffFile` snapshot, PM judgment), declared in the report `- notes:` as `collect wave folded (pack)` / `collect wave kept (no pack / PM judgment: <reason>)`; the independent cross-domain security seat is never folded.
+- Tightened **pack-first bounded seat reads**: seats read the pinned diff pack first, then targeted in-domain opens within `fileOpenCap`, and `deep` fan-out wording stays consistent across the `mstar-audit` prose and the `/amazing-pr-review` command.
+- Hardened **`collectFolded` fail-loud guards** (mirroring the Stage-1 contradiction guard): `collectFolded` now requires a pinned diff snapshot (`diffFile`) and is refused on the independent cross-domain security seat (never folded) — both throw `TypeError`; `prReviewSizing.collectSeats` / `mstar pr-review size` docs carry the kept-wave qualifier (collect seats apply only when the deep collect wave is kept), and the deep-tier glosses in `pr-review.md` were reconciled with the fold default.
+- PR review synthesis now uses a **tiered three-way vet**: must-fix / should-fix findings get the full attack (counter-example, simpler explanation, evidence verifiability); nits get evidence-verify only (open the cited file, confirm `file:line` supports the claim). Domain seats keep their full three-way attack — tiering applies to the main-agent synthesis pass only.
+- Stage 2 domain seats now return a **fixed findings block per finding** in the result payload — field names verbatim from `finding-format.md`, `Merge class` immediately after `Confidence` (lint-enforced), a one-line `Fix sketch` — staying lint-compatible with the single validator (`mstar lint --type finding --pr-variant` → `validateFindingDoc`), and declare truncated coverage in the payload tail when a budget cap stopped expansion.
+- The posted review body gains a **soft cap (~150 lines)** triggering degradation ③ of the time-budget ladder: past the cap, nits fold into the summary body (display only — findings are never dropped) and the fold is declared in the report `- notes:`.
+- Added an **optional `elapsed` field** to the PR-review report frontmatter: `validatePrReviewReport` accepts a non-negative integer minutes value (absent = valid for legacy reports; malformed = violation), and the `/amazing-pr-review` command records the start time at worktree-setup and writes the measured wall-clock minutes into the frontmatter.
+- Added a **PR review time-budget system**: engine constant table `PR_REVIEW_TIER_BUDGETS` (wall-clock target + per-seat caps per tier) is the numeric SSOT, rendered as a budget block in `prReviewSeatPrompt` seat prompts.
+- Added a **`mstar pr-review budget`** CLI command printing the per-tier budget table (`quick`/`default`/`deep`) for humans and drift checks.
+- Added a **Budget column and a time-budget degradation ladder** (①read-depth ②seat topology ③display, with a never-degrade list) to `mstar-audit` PR-review prose and the `/amazing-pr-review` command.
+
+- Version alignment with harness **3.6.2**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **3.6.2**.
+
 ## [3.6.1] - 2026-09-03
 
 ### Changed

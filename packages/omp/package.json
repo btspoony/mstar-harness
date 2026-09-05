@@ -1,6 +1,6 @@
 {
   "name": "@mstar-harness/omp",
-  "version": "3.6.1",
+  "version": "3.6.2",
   "description": "Morning Star harness omp (Oh My Pi) plugin — engine-backed runtime gates (status/dispatch/lease) + mstar-* skills, commands, and agents for omp.",
   "license": "MIT",
   "repository": {
