@@ -394,7 +394,7 @@ The posted review body is a three-section report. Section order fixed; omit a su
 **Slot rules (guidance — not part of the posted body):**
 
 - **What this PR does**: from the PR description plus your own read of the changed files, not copied marketing text.
-- **Findings**: ranked by impact-if-shipped (§ Verdict synthesis); every accepted finding listed, nothing truncated; repeat the `#### <class-emoji> <title>` block per finding.
+- **Findings**: ranked by impact-if-shipped (§ Verdict synthesis); every accepted finding listed, nothing truncated; repeat the `#### <class-emoji> <title>` block per finding. **Body soft cap ~150 lines**: past the cap, take degradation ③ (§ Time budget & degradation ladder) — nits fold into the summary body (display only: findings are never dropped — every accepted finding stays listed in some form), and the fold is declared in the report under `- notes:`.
 - **Linked-issue AC**: fill only when § Linked-issue hygiene applied; otherwise a bare `none`.
 - **Verified**: the smallest runtime checks actually run and what they showed; unverified leads as `❓` lines here, never in the findings table.
 - **Considered & rejected**: one bullet per rejected candidate from the three-way attack / vet pass (§ Attack and vet), so the next reviewer does not re-chase it; bare `none` when nothing was rejected.
@@ -426,6 +426,7 @@ The posted PR comment is the deliverable; the local report is the durable refere
   ---
   type: pr-review
   tier: quick | default | deep   # optional — absent = default semantics (§ Review depth)
+  elapsed: <minutes>     # optional — non-negative integer minutes; wall-clock measured worktree-setup → report saved by the main agent; absent = valid
   pr: <n>                # omit for bare branch / diff
   url: <pr url>          # omit for bare branch / diff
   head: <head sha>
@@ -460,6 +461,7 @@ The posted PR comment is the deliverable; the local report is the durable refere
   - `- unverified: <n>`
 - `- evidence:` — concise what-checks-proved summary.
 - `- unverified:` — residual unverified claims, or `none`.
+- `- elapsed:` — measured wall-clock minutes, worktree-setup → report saved by the main agent; mirrors the report frontmatter `elapsed` (§ Local report archive).
 - `- next:` — one of `implementation` / `verify` / `docs`.
 - `- notes:` — only out-of-scope state the user must act on.
 - `- comments:` — GitHub Review posting status (see § Comment posting):
