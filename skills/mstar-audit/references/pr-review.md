@@ -32,11 +32,13 @@ Deep PR review is a **three-stage pipeline**: collect → domain review → synt
 
 PR review runs at one of three tiers — `quick` / `default` / `deep` — chosen by an explicit keyword or inferred from the change shape (§ Inference ladder). `deep` is the current three-stage pipeline verbatim; `default` is the no-flag landing tier for small code PRs; `quick` serves explicit intent and tiny-mechanical diffs. Every tier keeps the same verdict contract: one verdict derived from the tally, one GitHub Review, posted by the main agent (§ Verdict synthesis / § Comment posting).
 
-| Tier | Seats | Domain split | Security coverage | Synthesis | Relative seat-time | Boundary |
-| --- | --- | --- | --- | --- | --- | --- |
-| `deep` | 4–7 (2–3 collect + 2–3 domain + 0–1 independent security) | 2–3 by domain | in-domain lens **+ independent cross-domain security seat** | main agent, all three stages | longest (= current) | = current three-stage pipeline, verbatim |
-| `default` | 2 (two domain seats; collection folded in = seat reuse) | 2 seats by dominant surface (code/tests, backend/frontend); single-surface PR → second seat = dedicated same-domain security-lens seat | both seats carry the in-domain security lens; **no independent cross-domain seat** (cross-domain boundary issues still go to `- notes:`; the main agent may announce an upgrade to deep) | main agent (kept) | medium (≈ ½ of deep) | typical ≤~300 changed lines; PM may announce an upgrade to deep by risk shape and declare it in the report (`- notes:`); downgraded cuts are declared likewise |
-| `quick` | 1 (single domain seat; collect + review in one pass) | none (one seat, one pass) | in-domain security lens in the same seat (§2/§3 discipline); **no independent seat**; sensitive surface + explicit quick → lens still runs, report declares reduced coverage under `- notes:` | main agent (kept, smallest input) | shortest (≈ ¼) | recommended ≤~300 / mechanical shape; report must declare tier |
+| Tier | Seats | Domain split | Security coverage | Synthesis | Relative seat-time | Budget | Boundary |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `deep` | 4–7 (2–3 collect + 2–3 domain + 0–1 independent security) | 2–3 by domain | in-domain lens **+ independent cross-domain security seat** | main agent, all three stages | longest (= current) | 15 min | = current three-stage pipeline, verbatim |
+| `default` | 2 (two domain seats; collection folded in = seat reuse) | 2 seats by dominant surface (code/tests, backend/frontend); single-surface PR → second seat = dedicated same-domain security-lens seat | both seats carry the in-domain security lens; **no independent cross-domain seat** (cross-domain boundary issues still go to `- notes:`; the main agent may announce an upgrade to deep) | main agent (kept) | medium (≈ ½ of deep) | 10 min | typical ≤~300 changed lines; PM may announce an upgrade to deep by risk shape and declare it in the report (`- notes:`); downgraded cuts are declared likewise |
+| `quick` | 1 (single domain seat; collect + review in one pass) | none (one seat, one pass) | in-domain security lens in the same seat (§2/§3 discipline); **no independent seat**; sensitive surface + explicit quick → lens still runs, report declares reduced coverage under `- notes:` | main agent (kept, smallest input) | shortest (≈ ¼) | 5 min | recommended ≤~300 / mechanical shape; report must declare tier |
+
+**Budget column** — wall-clock minutes only; the per-seat caps live in the engine constant table (`PR_REVIEW_TIER_BUDGETS`) and are never restated in prose. Baseline: 100 tok/s output assumption; wall-clock measured worktree-setup → report saved by the main agent; budgets are prompt-discipline targets with report-declared overruns (`- notes:`), not host-level kills. When a budget runs tight, degrade per **§ Time budget & degradation ladder**.
 
 **Inference ladder** (no flag given — first hit wins):
 1. **Explicit tier token** — matched **only** as a dedicated flag token (`--quick` / `--default` / `--deep`) or a trailing standalone tier word (the `[quick|default|deep]` argument position), **never** as a substring of the `[pr|branch|scope]` argument (a branch/PR title containing `quick` or `default` does not set a tier) → that tier; user intent beats every heuristic.
@@ -57,6 +59,18 @@ The ladder reuses the existing ~100 / ~300 / ~1000 sizing bands — no second se
 - **Stage 3 is never skipped in any tier** — `quick` just feeds it the smallest input; one verdict / one Review / main-agent posting is the product contract.
 
 **Report `tier` declaration**: report frontmatter gains an optional `tier: quick | default | deep` (absent = `default` semantics, valid — old reports stay valid). `quick` MUST declare its reduced coverage under `- notes:` (what did not run: independent security seat / Stage 1 wave / domain split); any announced upgrade or downgrade (e.g. PM announces deep-upgrade, or a downgraded cut happens) is declared the same way. Report template structure, tally counts, and the display contract are unchanged; tier never enters the report filename.
+
+## Time budget & degradation ladder
+
+Each tier carries a wall-clock budget (§ Review depth (tiers) **Budget** column; the engine constant table `PR_REVIEW_TIER_BUDGETS` is the numeric SSOT — per-seat caps are never restated in prose). When a budget runs tight, degrade **in ladder order** — each rung trades review depth, never the verdict contract:
+
+1. **① Read-depth** — cut adjacent-context follow-up reads first (§ Scoping: the changed files are still read in full; only how far past the named diff you trace shrinks).
+2. **② Seat topology** — collect fold (Stage 1 folds into the domain seats, the `default` shape) and/or merge the independent cross-domain security seat into the domain seats. **NEVER on a security-sensitive surface** (`security-review.md` §9 extended surfaces — Inference ladder step 3: sensitive surfaces are never thinned; there the overrun is declared instead).
+3. **③ Display** — nits fold into the review summary body (display only — every accepted finding stays listed; § Verdict synthesis).
+
+**Never degradable** (any tier, any rung): verdict-from-tally, posting ownership (sole main agent), evidence `file:line` + self-check, local report archival, the batch contract — the ladder-relevant core of the § Review depth (tiers) never-cut list. **Every degradation taken is declared** in the report under `- notes:` (rung + what was cut).
+
+> **Engine check (when available):** run `mstar pr-review budget` (or `import { PR_REVIEW_TIER_BUDGETS } from "@mstar-harness/engine"` in a host hook) to print the per-tier time-budget table (wall-clock target + per-seat caps) — seat prompts interpolate their budget block from the same constant table; never hand-copy per-seat cap numbers. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 ## Worktree isolation
 - All git mechanics — real-base resolution (never assume `main`), collision-free branch naming (`pr-<n>` → `pr-<n>-<date>-<i>` loop before **any** fetch), explicit-refspec fetches (single-branch/narrowed fetch configs stay correct; do **not** substitute `gh pr checkout <n>` — it lands on the PR-head name instead of the recorded branch, bypassing the ownership protocol), worktree creation, changeset pre-flight (untracked-only working-tree changes count as non-empty), diff-basis computation, sidecar recording, removal + prune + exact-branch deletion — execute mechanically:
