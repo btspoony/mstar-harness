@@ -1138,6 +1138,9 @@ export type PrReviewSeatPromptOptions = {
  *
  * - Absolute path to `references/pr-review.md` under `skillRoot` + the
  *   sections to read; absolute review `worktreePath`.
+ * - Per-seat budget block (`## Budget`, SP1 tier time-budget): findings /
+ *   evidence-token / file-open caps interpolated from `PR_REVIEW_TIER_BUDGETS`
+ *   — expansion stops for the seat, never a host-level hard stop.
  * - Recon facts + decided tradeoffs.
  * - Hard Rules 4/5 VERBATIM.
  * - Payload-return contract (write-blocked-safe; main agent writes files).
@@ -1216,6 +1219,14 @@ export function prReviewSeatPrompt(opts: PrReviewSeatPromptOptions): string {
       lines.push(`4. \`${join(skillRoot, "references", "security-review.md")}\` \u2014 the security lens.`);
     }
   }
+  const budget = PR_REVIEW_TIER_BUDGETS[tier];
+  lines.push("");
+  lines.push("## Budget");
+  lines.push("");
+  lines.push(`- At most ${budget.perSeatFindingsCap} findings.`);
+  lines.push(`- Evidence payload \u2248 ${budget.evidenceTokensCap} tokens.`);
+  lines.push(`- Open at most ${budget.fileOpenCap} files (the pinned diff snapshot read does not count).`);
+  lines.push("- Caps are expansion stops for this seat \u2014 when a cap is reached, stop expanding and return what you have; declare truncated coverage in the payload tail.");
   lines.push("");
   lines.push("## Recon facts");
   lines.push("");

@@ -757,7 +757,9 @@ describe("prReviewSeatPrompt — collect-wave is deep-only, tiers differ (fix ro
   });
 
   test("no diffFile → prompt has no pinned-diff-snapshot ingredient", () => {
-    expect(prReviewSeatPrompt(base)).not.toContain("pinned diff snapshot");
+    // Anchor on the ingredient line itself - the ## Budget block legitimately
+    // mentions that the pinned diff snapshot read does not count.
+    expect(prReviewSeatPrompt(base)).not.toContain("Read the pinned diff snapshot FIRST:");
   });
 
   test("relative diffFile throws TypeError (absolute-path contract, qc3 F-002)", () => {
@@ -767,7 +769,7 @@ describe("prReviewSeatPrompt — collect-wave is deep-only, tiers differ (fix ro
 
   test("absent or empty diffFile stays fine (no throw, no ingredient)", () => {
     expect(() => prReviewSeatPrompt({ ...base, diffFile: "" })).not.toThrow();
-    expect(prReviewSeatPrompt({ ...base, diffFile: "" })).not.toContain("pinned diff snapshot");
+    expect(prReviewSeatPrompt({ ...base, diffFile: "" })).not.toContain("Read the pinned diff snapshot FIRST:");
   });
 });
 
@@ -1135,5 +1137,81 @@ describe("PR_REVIEW_TIER_BUDGETS — per-tier time budgets (pr-review.md § Revi
       // strict mode throws on frozen assignment - equally acceptable
     }
     expect(PR_REVIEW_TIER_BUDGETS.quick.wallClockMinutes).toBe(5);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// prReviewSeatPrompt — per-seat ## Budget block (SP1 tier time-budget, task 2)
+// Rendered from PR_REVIEW_TIER_BUDGETS[tier] — never literals in the prompt
+// body; every tier (incl. omitted → default) ships the block.
+// ---------------------------------------------------------------------------
+import { readFileSync } from "node:fs";
+
+describe("prReviewSeatPrompt — per-seat ## Budget block (SP1 tier time-budget)", () => {
+  const base = {
+    stage: 2 as const,
+    domain: "backend",
+    seat: "api",
+    skillRoot: "/tmp/engine-seat-skill",
+    worktreePath: "/tmp/engine-seat-worktree",
+    reconFacts: [],
+  };
+  const expansionStopClause =
+    "- Caps are expansion stops for this seat \u2014 when a cap is reached, stop expanding and return what you have; declare truncated coverage in the payload tail.";
+
+  test("stage-2 deep prompt carries ## Budget with the deep caps", () => {
+    const prompt = prReviewSeatPrompt({ ...base, tier: "deep" });
+    expect(prompt).toContain("## Budget");
+    expect(prompt).toContain("- At most 8 findings.");
+    expect(prompt).toContain("- Evidence payload \u2248 1200 tokens.");
+    expect(prompt).toContain("- Open at most 30 files (the pinned diff snapshot read does not count).");
+    expect(prompt).toContain(expansionStopClause);
+  });
+
+  test("stage-2 quick prompt carries the quick caps", () => {
+    const prompt = prReviewSeatPrompt({ ...base, tier: "quick" });
+    expect(prompt).toContain("## Budget");
+    expect(prompt).toContain("- At most 5 findings.");
+    expect(prompt).toContain("- Evidence payload \u2248 600 tokens.");
+    expect(prompt).toContain("- Open at most 12 files (the pinned diff snapshot read does not count).");
+  });
+
+  test("omitted tier renders the default-row caps (no tier ships without a budget)", () => {
+    const prompt = prReviewSeatPrompt(base);
+    expect(prompt).toContain("## Budget");
+    expect(prompt).toContain("- At most 6 findings.");
+    expect(prompt).toContain("- Evidence payload \u2248 900 tokens.");
+    expect(prompt).toContain("- Open at most 20 files (the pinned diff snapshot read does not count).");
+    expect(prompt).toContain(expansionStopClause);
+  });
+
+  test("## Budget sits between ## Read first and ## Recon facts in every tier (incl. omitted → default)", () => {
+    const prompts = [
+      prReviewSeatPrompt({ ...base, tier: "quick" }),
+      prReviewSeatPrompt({ ...base, tier: "default" }),
+      prReviewSeatPrompt({ ...base, tier: "deep" }),
+      prReviewSeatPrompt(base), // omitted tier → default row
+    ];
+    for (const prompt of prompts) {
+      const readFirst = prompt.indexOf("## Read first");
+      const budget = prompt.indexOf("## Budget");
+      const recon = prompt.indexOf("## Recon facts");
+      expect(readFirst).toBeGreaterThanOrEqual(0);
+      expect(budget).toBeGreaterThan(readFirst);
+      expect(recon).toBeGreaterThan(budget);
+    }
+  });
+
+  test("budget cap numbers are interpolated from PR_REVIEW_TIER_BUDGETS — never literals in the prReviewSeatPrompt body", () => {
+    const source = readFileSync(new URL("../src/prreview.ts", import.meta.url), "utf8");
+    const start = source.indexOf("export function prReviewSeatPrompt");
+    expect(start).toBeGreaterThanOrEqual(0);
+    const body = source.slice(start, source.indexOf("\n// ---", start));
+    expect(body).toContain("PR_REVIEW_TIER_BUDGETS");
+    for (const row of Object.values(PR_REVIEW_TIER_BUDGETS)) {
+      for (const cap of [row.perSeatFindingsCap, row.evidenceTokensCap, row.fileOpenCap]) {
+        expect(body).not.toMatch(new RegExp(`\\b${cap}\\b`));
+      }
+    }
   });
 });
