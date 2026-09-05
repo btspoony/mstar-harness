@@ -1011,7 +1011,10 @@ export type PrReviewSizing = {
   band: PrSizeBand;
   /** True for too-large (>~1000) — advise a split, never auto-blocked. */
   adviseSplit: boolean;
-  /** Stage 1 collect seats (§ Scale-driven fan-out table). */
+  /** Stage 1 collect seats (§ Scale-driven fan-out table). Kept-wave
+   * qualifier: these seats apply only when the deep collect wave is KEPT —
+   * by default (pinned diff pack present) the fold dispatches none
+   * (pr-review.md § Review pipeline fold default). */
   collectSeats: 2 | 3;
   /** File-size watch fired → advise extract/decompose ("decompose, then
    * add"). Independent of the diff size. */
@@ -1064,8 +1067,9 @@ export function prReviewSizing(input: { changedLines: number; largestTouchedFile
 /** Seat prompt tier (SP-A amendment): quick omits the cross-domain /
  * independent-security-seat block, the collect-wave wording AND shrinks
  * the lens/prompt-ingredient set; default also omits both (SSOT pr-review.md
- * § Review depth: default "folds collection in = seat reuse", no separate
- * Stage-1 wave — collect-wave wording is deep-only); deep includes everything. */
+ * § Review depth, default-tier row: "collection folded in = seat reuse" —
+ * no separate Stage-1 wave — collect-wave wording is deep-only); deep
+ * includes everything. */
 export type PrReviewTier = "quick" | "default" | "deep";
 
 /**
@@ -1129,9 +1133,13 @@ export type PrReviewSeatPromptOptions = {
    * read-first ingredient line pointing at it. */
   diffFile?: string;
   /** Stage-2 only (`true` + `stage: 1` throws): the collect wave was folded
-   * onto this domain seat (SSOT pr-review.md § Review depth — "folds
-   * collection in = seat reuse"). The prompt gains one bullet after the
-   * `## Budget` block telling the seat to do its own collection, staying
+   * onto this domain seat — the deep-tier fold default (pinned diff pack
+   * present; SSOT pr-review.md § Review pipeline; prose "collection folded
+   * in = seat reuse" = § Review depth default-tier row). Kept-wave
+   * exceptions dispatch collect seats instead. Requires a non-empty
+   * `diffFile`, and the independent cross-domain security seat is never
+   * folded — either contradiction throws. The prompt gains one bullet after
+   * the `## Budget` block telling the seat to do its own collection, staying
    * within the budget block. Omitted/`false` → no line. */
   collectFolded?: boolean;
 };
@@ -1147,10 +1155,11 @@ export type PrReviewSeatPromptOptions = {
  * - Per-seat budget block (`## Budget`, SP1 tier time-budget): findings /
  *   evidence-token / file-open caps interpolated from `PR_REVIEW_TIER_BUDGETS`
  *   — expansion stops for the seat, never a host-level hard stop.
- * - `collectFolded: true` (stage 2 only; with stage 1 it throws): one bullet
- *   after the `## Budget` block — the collect wave folded onto this seat,
- *   so it collects itself (pinned diff snapshot/pack first, then in-domain
- *   changed files) within the budget block.
+ * - `collectFolded: true` (stage 2 only; stage 1, a missing `diffFile`, or
+ *   the security seat throws): one bullet after the `## Budget` block — the
+ *   collect wave folded onto this seat, so it collects itself (pinned diff
+ *   snapshot/pack first, then in-domain changed files) within the budget
+ *   block.
  * - Recon facts + decided tradeoffs.
  * - Hard Rules 4/5 VERBATIM.
  * - Payload-return contract (write-blocked-safe; main agent writes files).
@@ -1161,8 +1170,8 @@ export type PrReviewSeatPromptOptions = {
  * - Tier cuts (SP-A amendment): quick drops the cross-domain /
  *   independent-security block, the collect-wave wording AND shrinks the
  *   lens/prompt-ingredient set; default drops the same blocks (SSOT
- *   pr-review.md § Review depth: default "folds collection in = seat
- *   reuse" — no separate Stage-1 wave, so collect-wave wording is
+ *   pr-review.md § Review depth, default-tier row: "collection folded in =
+ *   seat reuse" — no separate Stage-1 wave, so collect-wave wording is
  *   deep-only); deep keeps everything.
  *   Tier omitted → `default` (pr-review.md § Review depth: the no-flag
  *   landing tier).
@@ -1175,6 +1184,18 @@ export function prReviewSeatPrompt(opts: PrReviewSeatPromptOptions): string {
     // A Stage 1 collect seat IS the collect wave - folding it onto itself is
     // a contradiction, so fail loud instead of rendering a nonsense line.
     throw new TypeError("prReviewSeatPrompt: collectFolded requires stage 2 - a Stage 1 seat with a folded collect wave is a contradiction");
+  }
+  if (opts.collectFolded === true && !opts.diffFile) {
+    // The fold bullet tells the seat to start from the pinned diff
+    // snapshot/pack; without a pack that instruction is self-contradictory -
+    // fail loud (mirrors the stage-1 contradiction guard above).
+    throw new TypeError("prReviewSeatPrompt: collectFolded requires a pinned diff snapshot (diffFile) - folding without a pack contradicts the fold line");
+  }
+  if (opts.collectFolded === true && opts.securitySeat === true) {
+    // The independent cross-domain security seat survives every fold (prose
+    // SSOT pr-review.md § Review pipeline) - refuse the impossible combo
+    // like the guards above.
+    throw new TypeError("prReviewSeatPrompt: the independent cross-domain security seat is never folded - collectFolded applies to domain seats only");
   }
   const domain = opts.domain.trim();
   const seat = opts.seat.trim();

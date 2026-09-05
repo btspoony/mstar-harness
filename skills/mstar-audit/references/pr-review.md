@@ -30,11 +30,11 @@ Deep PR review is a **three-stage pipeline**: collect → domain review → synt
 
 ## Review depth (tiers)
 
-PR review runs at one of three tiers — `quick` / `default` / `deep` — chosen by an explicit keyword or inferred from the change shape (§ Inference ladder). `deep` is the current three-stage pipeline verbatim; `default` is the no-flag landing tier for small code PRs; `quick` serves explicit intent and tiny-mechanical diffs. Every tier keeps the same verdict contract: one verdict derived from the tally, one GitHub Review, posted by the main agent (§ Verdict synthesis / § Comment posting).
+PR review runs at one of three tiers — `quick` / `default` / `deep` — chosen by an explicit keyword or inferred from the change shape (§ Inference ladder). `deep` follows § Review pipeline: two waves by default when the pinned diff pack exists (collect folded into the domain seats — `collectFolded`), with the full three-stage pipeline as the kept-wave exception; `default` is the no-flag landing tier for small code PRs; `quick` serves explicit intent and tiny-mechanical diffs. Every tier keeps the same verdict contract: one verdict derived from the tally, one GitHub Review, posted by the main agent (§ Verdict synthesis / § Comment posting).
 
 | Tier | Seats | Domain split | Security coverage | Synthesis | Relative seat-time | Budget | Boundary |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `deep` | 4–7 (2–3 collect + 2–3 domain + 0–1 independent security) | 2–3 by domain | in-domain lens **+ independent cross-domain security seat** | main agent, all three stages | longest (= current) | 15 min | = current three-stage pipeline, verbatim |
+| `deep` | 2–4 (2–3 domain + 0–1 independent security; collect folded — kept-wave exceptions add 2–3 collect → 4–7) | 2–3 by domain | in-domain lens **+ independent cross-domain security seat** | main agent, all stages (two waves by default; three in kept-wave exceptions) | longest (longer still in kept-wave exceptions) | 15 min | § Review pipeline fold default — two waves when the pack exists, three-stage kept-wave exceptions |
 | `default` | 2 (two domain seats; collection folded in = seat reuse) | 2 seats by dominant surface (code/tests, backend/frontend); single-surface PR → second seat = dedicated same-domain security-lens seat | both seats carry the in-domain security lens; **no independent cross-domain seat** (cross-domain boundary issues still go to `- notes:`; the main agent may announce an upgrade to deep) | main agent (kept) | medium (≈ ½ of deep) | 10 min | typical ≤~300 changed lines; PM may announce an upgrade to deep by risk shape and declare it in the report (`- notes:`); downgraded cuts are declared likewise |
 | `quick` | 1 (single domain seat; collect + review in one pass) | none (one seat, one pass) | in-domain security lens in the same seat (§2/§3 discipline); **no independent seat**; sensitive surface + explicit quick → lens still runs, report declares reduced coverage under `- notes:` | main agent (kept, smallest input) | shortest (≈ ¼) | 5 min | recommended ≤~300 / mechanical shape; report must declare tier |
 
@@ -65,7 +65,7 @@ The ladder reuses the existing ~100 / ~300 / ~1000 sizing bands — no second se
 Each tier carries a wall-clock budget (§ Review depth (tiers) **Budget** column; the engine constant table `PR_REVIEW_TIER_BUDGETS` is the numeric SSOT — per-seat caps are never restated in prose). When a budget runs tight, degrade **in ladder order** — each rung trades review depth, never the verdict contract:
 
 1. **① Read-depth** — cut adjacent-context follow-up reads first (§ Scoping: the changed files are still read in full; only how far past the named diff you trace shrinks).
-2. **② Seat topology** — collect fold (Stage 1 folds into the domain seats, the `default` shape) and/or merge the independent cross-domain security seat into the domain seats. **NEVER on a security-sensitive surface** (`security-review.md` §9 extended surfaces — Inference ladder step 3: sensitive surfaces are never thinned; there the overrun is declared instead).
+2. **② Seat topology** — collect fold (Stage 1 folds into the domain seats — the default shape for `default`, and for `deep` when the pack exists; kept-wave `deep` folds here under budget pressure) and/or merge the independent cross-domain security seat into the domain seats. **NEVER on a security-sensitive surface** (`security-review.md` §9 extended surfaces — Inference ladder step 3: sensitive surfaces are never thinned; there the overrun is declared instead).
 3. **③ Display** — nits fold into the review summary body (display only — every accepted finding stays listed; § Verdict synthesis).
 
 **Never degradable** (any tier, any rung): verdict-from-tally, posting ownership (sole main agent), evidence `file:line` + self-check, local report archival, the batch contract — the ladder-relevant core of the § Review depth (tiers) never-cut list. **Every degradation taken is declared** in the report under `- notes:` (rung + what was cut).
@@ -289,7 +289,7 @@ Check base-vs-branch before blaming the diff for CI failures. A red build that p
 
 ## Batch sibling PRs
 
-- **one session = one PR** (HARD): an `amazing-pr-review` session reviews exactly **one** PR. When multiple PRs are passed in, only the **first** — the first PR in the caller's argument / mention order, never sorted by PR number or recency — runs the review at its resolved tier (§ Review depth (tiers) for tier resolution → § Review pipeline for stage steps; `deep` = the full three-stage pipeline); the rest are **not** processed in this session.
+- **one session = one PR** (HARD): an `amazing-pr-review` session reviews exactly **one** PR. When multiple PRs are passed in, only the **first** — the first PR in the caller's argument / mention order, never sorted by PR number or recency — runs the review at its resolved tier (§ Review depth (tiers) for tier resolution → § Review pipeline for stage steps; `deep` = the three-stage pipeline with the collect wave folded by default when the pack exists — § Review pipeline); the rest are **not** processed in this session.
 - **Register the rest as audit todos** — before the review starts, register every unprocessed PR in `{PROJECT_DIR}/<project-id>/residuals.json` (project-less reviews use `_default`) via the engine-backed CLI, one `--entry` per deferred PR:
   ```
   mstar status backlog-register --project <project-id> --key <plan-key> --entry '<entry json>' ...
@@ -436,7 +436,7 @@ The posted PR comment is the deliverable; the local report is the durable refere
   comments: posted | n/a-no-pr | failed   # posting tri-state — never collapse failed into n/a-no-pr ("yes" = posted alias)
   review_url: <posted review html_url>   # n/a-no-pr when skipped; failed: <gh error summary> when POST failed
   generated_at: <YYYY-MM-DD>
-  pipeline: {stages: 3, seats: [<seat ids>]}   # optional — omit when the review did not run the three-stage pipeline
+  pipeline: {stages: 3, seats: [<seat ids>]}   # optional — omit when the review did not run the three-stage pipeline; a folded deep review still declares stages: 3 (the fold merges waves, not stages — § Review pipeline)
   ---
   ```
 

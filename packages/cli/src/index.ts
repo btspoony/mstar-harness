@@ -3912,7 +3912,8 @@ function countChangedLines(numstatOutput: string): number {
 prReviewCommand
   .command("size")
   .description(
-    "Classify a changeset into the sizing bands (~100 / ~300 / ~1000 \u2014 single set of numbers) and derive the Stage-1 seat plan, " +
+    "Classify a changeset into the sizing bands (~100 / ~300 / ~1000 \u2014 single set of numbers) and derive the kept-wave Stage-1 seat plan " +
+      "(collect seats apply only when the deep collect wave is kept \u2014 the default fold dispatches none; pr-review.md \u00a7 Review pipeline), " +
       "split advice and file-size watch, plus the SP-A inferred tier; prints band + seats + adviseSplit (+ tier)",
   )
   .requiredOption("--base <ref>", "Base ref (three-dot diff side A)")

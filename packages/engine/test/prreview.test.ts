@@ -1242,11 +1242,14 @@ describe("prReviewSeatPrompt — per-seat ## Budget block (SP1 tier time-budget)
 // ---------------------------------------------------------------------------
 // prReviewSeatPrompt — collectFolded seat option (SP2 context-pack, task 1)
 // When the collect wave folds onto the Stage-2 domain seats (SSOT
-// pr-review.md § Review depth "folds collection in = seat reuse"), the seat
-// prompt says so in ONE bullet, placed after the ## Budget block it tells
-// the seat to stay within (block order: Read first -> Budget -> fold line
-// -> Recon facts). Stage 1 + collectFolded is a contradiction (a collect
-// seat IS the collect wave) - TypeError, fail loud. Omitted/false: no line.
+// pr-review.md § Review pipeline fold default; prose "collection folded in
+// = seat reuse" is the § Review depth default-tier row), the seat prompt
+// says so in ONE bullet, placed after the ## Budget block it tells the seat
+// to stay within (block order: Read first -> Budget -> fold line -> Recon
+// facts). Contradictions throw TypeError, fail loud: stage 1 (a collect
+// seat IS the collect wave), a missing diffFile (the fold bullet starts
+// from the pinned pack - no pack contradicts it), and the independent
+// cross-domain security seat (never folded). Omitted/false: no line.
 // ---------------------------------------------------------------------------
 
 describe("prReviewSeatPrompt — collectFolded option (SP2 collect-wave fold)", () => {
@@ -1257,12 +1260,16 @@ describe("prReviewSeatPrompt — collectFolded option (SP2 collect-wave fold)", 
     skillRoot: "/tmp/engine-seat-skill",
     worktreePath: "/tmp/engine-seat-worktree",
     reconFacts: [],
+    // The fold default requires the pinned diff pack - base is pack-present.
+    diffFile: "/tmp/engine-seat-diff.patch",
   };
   const foldLine =
     "- Collect wave folded \u2014 you do your own collection: start from the pinned diff snapshot/pack, then open changed files in your domain directly (stay within the budget block); record `file:line` observations as you go.";
 
-  test("stage 2 + collectFolded renders the fold bullet verbatim", () => {
-    expect(prReviewSeatPrompt({ ...base, collectFolded: true })).toContain(foldLine);
+  test("stage 2 + collectFolded renders the fold bullet verbatim (pack present)", () => {
+    const prompt = prReviewSeatPrompt({ ...base, collectFolded: true });
+    expect(prompt).toContain(foldLine);
+    expect(prompt).toContain("Read the pinned diff snapshot FIRST");
   });
 
   test("stage 2 without collectFolded has no fold line (omitted and false both)", () => {
@@ -1273,6 +1280,19 @@ describe("prReviewSeatPrompt — collectFolded option (SP2 collect-wave fold)", 
   test("stage 1 + collectFolded throws TypeError (collect seat IS the collect wave)", () => {
     expect(() => prReviewSeatPrompt({ ...base, stage: 1, collectFolded: true })).toThrow(TypeError);
     expect(() => prReviewSeatPrompt({ ...base, stage: 1, collectFolded: true })).toThrow(/collectFolded requires stage 2/);
+  });
+
+  test("stage 2 + collectFolded without diffFile throws TypeError (folding without a pack contradicts the fold line)", () => {
+    expect(() => prReviewSeatPrompt({ ...base, collectFolded: true, diffFile: undefined })).toThrow(TypeError);
+    expect(() => prReviewSeatPrompt({ ...base, collectFolded: true, diffFile: undefined })).toThrow(
+      /collectFolded requires a pinned diff snapshot/,
+    );
+    expect(() => prReviewSeatPrompt({ ...base, collectFolded: true, diffFile: "" })).toThrow(/collectFolded requires a pinned diff snapshot/);
+  });
+
+  test("collectFolded + securitySeat throws TypeError (the security seat is never folded)", () => {
+    expect(() => prReviewSeatPrompt({ ...base, collectFolded: true, securitySeat: true })).toThrow(TypeError);
+    expect(() => prReviewSeatPrompt({ ...base, collectFolded: true, securitySeat: true })).toThrow(/never folded/);
   });
 
   test("fold bullet sits after the ## Budget block and before ## Recon facts", () => {
