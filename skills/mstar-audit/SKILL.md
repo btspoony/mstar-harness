@@ -32,7 +32,7 @@ Two entry families, one skill:
 | Entry | Load |
 |-------|------|
 | Full codebase audit — bare / `quick` / `deep` / category focus (`security`, `perf`, `tests`, ...) / `branch` / `next` / `roadmap` / `simplify` | **`references/codebase-audit.md`** (Phase 2 categories + effort table, scope variants, Phase 4 excerpt & reconcile rules, audit index output templates) — shared plan output → **`## Plan output (all variants)`** |
-| PR / branch / diff deep review (`pr`) | **`references/pr-review.md`**（三阶段流水线：领域收集 → 领域审查 → 主代理合成；多 PR 单会话语义见 `references/pr-review.md` § Review pipeline / § Batch sibling PRs） |
+| PR / branch / diff deep review (`pr`) | **`references/pr-review.md`**（三阶段流水线：领域收集 → 领域审查 → 主代理合成；存在 pinned diff pack 时 collect 波默认折入领域席位（`collectFolded`），kept 例外与 `- notes:` 声明见 § Review pipeline；多 PR 单会话语义见 `references/pr-review.md` § Review pipeline / § Batch sibling PRs） |
 
 ## Workflow
 

@@ -229,6 +229,38 @@ describe("mstar pr-review seat-prompt", () => {
     });
   });
 
+  test("--collect-folded on a stage-2 domain seat renders the fold bullet", () => {
+    withTempDir(() => {
+      const result = runCli([
+        "pr-review", "seat-prompt",
+        "--stage", "2",
+        "--domain", "backend",
+        "--seat", "7",
+        "--worktree", "/abs/wt",
+        "--diff-file", "/abs/x.diff",
+        "--collect-folded",
+      ]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Collect wave folded");
+      expect(result.stdout).toContain("you do your own collection");
+    });
+  });
+
+  test("--collect-folded on stage 1 surfaces the engine contradiction error (exit 1)", () => {
+    withTempDir(() => {
+      const result = runCli([
+        "pr-review", "seat-prompt",
+        "--stage", "1",
+        "--domain", "backend",
+        "--seat", "7",
+        "--worktree", "/abs/wt",
+        "--collect-folded",
+      ]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("collectFolded requires stage 2");
+    });
+  });
+
   test("stage 2 security seat adds security lens path + Merge class instruction", () => {
     withTempDir(() => {
       const result = runCli([

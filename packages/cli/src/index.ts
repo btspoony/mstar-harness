@@ -71,6 +71,7 @@ import {
   validatePrReviewReport,
   pickReviewBranchName,
   planReviewPost,
+  PR_REVIEW_TIER_BUDGETS,
   preflightChangeset,
   prReviewSeatPrompt,
   prReviewSizing,
@@ -3911,7 +3912,8 @@ function countChangedLines(numstatOutput: string): number {
 prReviewCommand
   .command("size")
   .description(
-    "Classify a changeset into the sizing bands (~100 / ~300 / ~1000 \u2014 single set of numbers) and derive the Stage-1 seat plan, " +
+    "Classify a changeset into the sizing bands (~100 / ~300 / ~1000 \u2014 single set of numbers) and derive the kept-wave Stage-1 seat plan " +
+      "(collect seats apply only when the deep collect wave is kept \u2014 the default fold dispatches none; pr-review.md \u00a7 Review pipeline), " +
       "split advice and file-size watch, plus the SP-A inferred tier; prints band + seats + adviseSplit (+ tier)",
   )
   .requiredOption("--base <ref>", "Base ref (three-dot diff side A)")
@@ -3968,7 +3970,8 @@ prReviewCommand
   .option("--recon <facts...>", "Recon facts (variadic: --recon fact1 fact2 ...)")
   .option("--tier <quick|default|deep>", "Prompt tier (SP-A): quick shrinks read-first + folds the security lens in-seat; deep adds cross-domain security seat + stage-as-wave (default: default)")
   .option("--diff-file <path>", "Absolute path to the pinned diff snapshot written by worktree-setup (read-first ingredient)")
-  .action((options: { stage: string; domain: string; seat: string; worktree: string; security?: boolean; skillRoot?: string; recon?: string[]; tier?: string; diffFile?: string }) => {
+  .option("--collect-folded", "Fold the collect wave onto this stage-2 domain seat: the prompt gains a self-collection bullet after the budget block (requires --diff-file; refused on stage 1 and security seats)")
+  .action((options: { stage: string; domain: string; seat: string; worktree: string; security?: boolean; skillRoot?: string; recon?: string[]; tier?: string; diffFile?: string; collectFolded?: boolean }) => {
     try {
       if (options.stage !== "1" && options.stage !== "2") {
         throw new SddScriptError(`usage: pr-review seat-prompt \u2014 --stage must be 1 or 2, got ${JSON.stringify(options.stage)}`, 2);
@@ -3990,10 +3993,27 @@ prReviewCommand
         ...(options.security === true ? { securitySeat: true } : {}),
         ...(tier !== undefined ? { tier } : {}),
         ...(options.diffFile !== undefined && options.diffFile !== "" ? { diffFile: path.resolve(resolveCliPath(options.diffFile)) } : {}),
+        ...(options.collectFolded === true ? { collectFolded: true } : {}),
       });
       console.log(prompt);
     } catch (error) {
       failScript(error, "pr-review seat-prompt");
+    }
+  });
+
+prReviewCommand
+  .command("budget")
+  .description(
+    "Print the per-tier time-budget table (wall-clock target + per-seat caps) from PR_REVIEW_TIER_BUDGETS \u2014 " +
+      "for humans and drift checks (pr-review.md \u00a7 Review depth Budget column)",
+  )
+  .action(() => {
+    for (const [tier, budget] of Object.entries(PR_REVIEW_TIER_BUDGETS)) {
+      console.log(
+        `${tier}: <=${budget.wallClockMinutes}min wall-clock, max ${budget.maxSeats} review seats (kept-wave collect seats extra), ` +
+          `<=${budget.perSeatFindingsCap} findings/seat, ~${budget.evidenceTokensCap} tokens evidence/seat, ` +
+          `<=${budget.fileOpenCap} file opens/seat (baseline 100 tok/s)`,
+      );
     }
   });
 

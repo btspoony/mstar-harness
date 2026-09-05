@@ -14,6 +14,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { PR_REVIEW_TIER_BUDGETS } from "@mstar-harness/engine";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
 const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
@@ -304,5 +305,21 @@ describe("mstar pr-review validate-report", () => {
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("prreview.report.missing-frontmatter");
     });
+  });
+});
+
+describe("mstar pr-review budget", () => {
+  test("prints one line per tier with the engine numbers (exit 0)", () => {
+    const result = runCli(["pr-review", "budget"]);
+    expect(result.exitCode).toBe(0);
+    // Numbers come from the engine export — a cap change must not break the test shape.
+    const expected = Object.entries(PR_REVIEW_TIER_BUDGETS).map(([tier, budget]) =>
+      `${tier}: <=${budget.wallClockMinutes}min wall-clock, max ${budget.maxSeats} review seats (kept-wave collect seats extra), ` +
+      `<=${budget.perSeatFindingsCap} findings/seat, ~${budget.evidenceTokensCap} tokens evidence/seat, ` +
+      `<=${budget.fileOpenCap} file opens/seat (baseline 100 tok/s)`,
+    );
+    expect(result.stdout.trim().split("\n")).toEqual(expected);
+    // Global constraint: the drift-check output is ASCII-only (no Unicode <= / ~).
+    expect(/^[\x20-\x7E\n]*$/.test(result.stdout)).toBe(true);
   });
 });

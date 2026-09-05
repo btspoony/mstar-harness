@@ -17,8 +17,8 @@
  * - Display contract: pr-review.md § Display contract (chat output) — the
  *   two-line chat header, verbatim.
  *
- * Report-path tests (`prReviewReportPath`) arrive with Task 3 — this file is
- * tally-only.
+ * prreview engine unit tests — tally, report path, seat prompts, tier
+ * budgets, finding lint.
  */
 import { describe, expect, test } from "bun:test";
 import { computePrTally, synthesizeReview } from "../src/prreview.js";
@@ -667,6 +667,35 @@ describe("validatePrReviewReport — structure checks", () => {
   });
 });
 
+describe("validatePrReviewReport - optional elapsed minutes", () => {
+  test("elapsed: 12 (non-negative integer minutes) passes", () => {
+    const gate = validatePrReviewReport(report("elapsed: 12\n"));
+    expect(gate.ok).toBe(true);
+    expect(gate.violations).toEqual([]);
+  });
+
+  test("elapsed: 0 (zero minutes) passes", () => {
+    expect(validatePrReviewReport(report("elapsed: 0\n")).ok).toBe(true);
+  });
+
+  test("absent elapsed is valid (legacy reports without elapsed still pass)", () => {
+    const gate = validatePrReviewReport(VALID_MINIMAL);
+    expect(gate.ok).toBe(true);
+    expect(codes(gate)).toEqual([]);
+  });
+
+  test.each(["elapsed: -1", 'elapsed: "12m"', "elapsed: 12.5"])(
+    "invalid elapsed flagged: %s",
+    (line) => {
+      const gate = validatePrReviewReport(report(`${line}\n`));
+      expect(gate.ok).toBe(false);
+      const elapsed = gate.violations.find((v) => v.code === "prreview.report.invalid-elapsed");
+      expect(elapsed).toBeDefined();
+      expect(elapsed?.message).toBe("elapsed must be a non-negative integer (minutes)");
+    },
+  );
+});
+
 import { prReviewSeatPrompt, validateFindingDoc } from "../src/prreview.js";
 
 /**
@@ -757,7 +786,9 @@ describe("prReviewSeatPrompt — collect-wave is deep-only, tiers differ (fix ro
   });
 
   test("no diffFile → prompt has no pinned-diff-snapshot ingredient", () => {
-    expect(prReviewSeatPrompt(base)).not.toContain("pinned diff snapshot");
+    // Anchor on the ingredient line itself - the ## Budget block legitimately
+    // mentions that the pinned diff snapshot read does not count.
+    expect(prReviewSeatPrompt(base)).not.toContain("Read the pinned diff snapshot FIRST:");
   });
 
   test("relative diffFile throws TypeError (absolute-path contract, qc3 F-002)", () => {
@@ -767,7 +798,7 @@ describe("prReviewSeatPrompt — collect-wave is deep-only, tiers differ (fix ro
 
   test("absent or empty diffFile stays fine (no throw, no ingredient)", () => {
     expect(() => prReviewSeatPrompt({ ...base, diffFile: "" })).not.toThrow();
-    expect(prReviewSeatPrompt({ ...base, diffFile: "" })).not.toContain("pinned diff snapshot");
+    expect(prReviewSeatPrompt({ ...base, diffFile: "" })).not.toContain("Read the pinned diff snapshot FIRST:");
   });
 });
 
@@ -1061,5 +1092,244 @@ must-fix=0 should-fix=0 nit=0 unverified=0`);
     const second = synthesizeReview({ findings });
     expect(first).not.toBeInstanceOf(Promise);
     expect(second).toEqual(first);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PR_REVIEW_TIER_BUDGETS — per-tier wall-clock budgets + per-seat caps
+// (SP1 tier time-budget; prose SSOT: pr-review.md § Review depth)
+// ---------------------------------------------------------------------------
+import { PR_REVIEW_TIER_BUDGETS } from "../src/prreview.js";
+
+describe("PR_REVIEW_TIER_BUDGETS — per-tier time budgets (pr-review.md § Review depth)", () => {
+  const TIERS = ["quick", "default", "deep"] as const;
+
+  test("table covers exactly the three review tiers", () => {
+    expect(Object.keys(PR_REVIEW_TIER_BUDGETS).sort()).toEqual([...TIERS].sort());
+  });
+
+  test("wall-clock budget: quick=5 / default=10 / deep=15 minutes", () => {
+    expect(PR_REVIEW_TIER_BUDGETS.quick.wallClockMinutes).toBe(5);
+    expect(PR_REVIEW_TIER_BUDGETS.default.wallClockMinutes).toBe(10);
+    expect(PR_REVIEW_TIER_BUDGETS.deep.wallClockMinutes).toBe(15);
+  });
+
+  test("every tier row matches the ratified budget table (quick 1 seat / default 2 / deep 4)", () => {
+    expect(PR_REVIEW_TIER_BUDGETS.quick).toEqual({
+      wallClockMinutes: 5,
+      maxSeats: 1,
+      perSeatFindingsCap: 5,
+      evidenceTokensCap: 600,
+      fileOpenCap: 12,
+    });
+    expect(PR_REVIEW_TIER_BUDGETS.default).toEqual({
+      wallClockMinutes: 10,
+      maxSeats: 2,
+      perSeatFindingsCap: 6,
+      evidenceTokensCap: 900,
+      fileOpenCap: 20,
+    });
+    expect(PR_REVIEW_TIER_BUDGETS.deep).toEqual({
+      wallClockMinutes: 15,
+      maxSeats: 4,
+      perSeatFindingsCap: 8,
+      evidenceTokensCap: 1200,
+      fileOpenCap: 30,
+    });
+  });
+
+  test("all budget fields are positive integers in every tier row", () => {
+    for (const tier of TIERS) {
+      const row = PR_REVIEW_TIER_BUDGETS[tier];
+      for (const value of [
+        row.wallClockMinutes,
+        row.maxSeats,
+        row.perSeatFindingsCap,
+        row.evidenceTokensCap,
+        row.fileOpenCap,
+      ]) {
+        expect(Number.isInteger(value)).toBe(true);
+        expect(value).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  test("rows are frozen — mutation attempts no-op (as-const-style immutability)", () => {
+    expect(Object.isFrozen(PR_REVIEW_TIER_BUDGETS)).toBe(true);
+    for (const tier of TIERS) {
+      expect(Object.isFrozen(PR_REVIEW_TIER_BUDGETS[tier])).toBe(true);
+    }
+    const mutable = PR_REVIEW_TIER_BUDGETS.quick as { wallClockMinutes: number };
+    try {
+      mutable.wallClockMinutes = 99;
+    } catch {
+      // strict mode throws on frozen assignment - equally acceptable
+    }
+    expect(PR_REVIEW_TIER_BUDGETS.quick.wallClockMinutes).toBe(5);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// prReviewSeatPrompt — per-seat ## Budget block (SP1 tier time-budget, task 2)
+// Rendered from PR_REVIEW_TIER_BUDGETS[tier] — never literals in the prompt
+// body; every tier (incl. omitted → default) ships the block.
+// ---------------------------------------------------------------------------
+
+describe("prReviewSeatPrompt — per-seat ## Budget block (SP1 tier time-budget)", () => {
+  const base = {
+    stage: 2 as const,
+    domain: "backend",
+    seat: "api",
+    skillRoot: "/tmp/engine-seat-skill",
+    worktreePath: "/tmp/engine-seat-worktree",
+    reconFacts: [],
+  };
+  const expansionStopClause =
+    "- Caps are expansion stops for this seat \u2014 when a cap is reached, stop expanding and return what you have; declare truncated coverage in the payload tail.";
+
+  test("stage-2 deep prompt carries ## Budget with the deep caps", () => {
+    const prompt = prReviewSeatPrompt({ ...base, tier: "deep" });
+    expect(prompt).toContain("## Budget");
+    expect(prompt).toContain("- At most 8 findings.");
+    expect(prompt).toContain("- Evidence payload \u2248 1200 tokens.");
+    expect(prompt).toContain("- Open at most 30 files (the pinned diff snapshot read does not count).");
+    expect(prompt).toContain(expansionStopClause);
+  });
+
+  test("stage-2 quick prompt carries the quick caps", () => {
+    const prompt = prReviewSeatPrompt({ ...base, tier: "quick" });
+    expect(prompt).toContain("## Budget");
+    expect(prompt).toContain("- At most 5 findings.");
+    expect(prompt).toContain("- Evidence payload \u2248 600 tokens.");
+    expect(prompt).toContain("- Open at most 12 files (the pinned diff snapshot read does not count).");
+  });
+
+  test("omitted tier renders the default-row caps (no tier ships without a budget)", () => {
+    const prompt = prReviewSeatPrompt(base);
+    expect(prompt).toContain("## Budget");
+    expect(prompt).toContain("- At most 6 findings.");
+    expect(prompt).toContain("- Evidence payload \u2248 900 tokens.");
+    expect(prompt).toContain("- Open at most 20 files (the pinned diff snapshot read does not count).");
+    expect(prompt).toContain(expansionStopClause);
+  });
+
+  test("stage-1 budget block drops the findings cap, keeps the binding caps (every tier incl. omitted -> default)", () => {
+    const variants = [
+      { tier: "quick" as const, row: PR_REVIEW_TIER_BUDGETS.quick },
+      { tier: "default" as const, row: PR_REVIEW_TIER_BUDGETS.default },
+      { tier: "deep" as const, row: PR_REVIEW_TIER_BUDGETS.deep },
+      { tier: undefined, row: PR_REVIEW_TIER_BUDGETS.default }, // omitted tier -> default row
+    ];
+    for (const { tier, row } of variants) {
+      const prompt =
+        tier === undefined ? prReviewSeatPrompt({ ...base, stage: 1 }) : prReviewSeatPrompt({ ...base, stage: 1, tier });
+      expect(prompt).toContain("## Budget");
+      // Stage-1 collect seats' contract is "NO findings table" - the findings
+      // cap line must not render against it (fix wave 1, F-002/S-1).
+      expect(prompt).not.toContain(`- At most ${row.perSeatFindingsCap} findings.`);
+      expect(prompt).toContain(`- Open at most ${row.fileOpenCap} files (the pinned diff snapshot read does not count).`);
+      expect(prompt).toContain(`- Evidence payload \u2248 ${row.evidenceTokensCap} tokens.`);
+      expect(prompt).toContain(expansionStopClause);
+      expect(prompt).toContain("NO findings table. NO verdict. Collect evidence only.");
+    }
+    // Stage 2 unchanged: the findings cap still renders for domain seats.
+    const stage2 = prReviewSeatPrompt({ ...base, tier: "deep" });
+    expect(stage2).toContain(`- At most ${PR_REVIEW_TIER_BUDGETS.deep.perSeatFindingsCap} findings.`);
+  });
+
+  test("## Budget sits between ## Read first and ## Recon facts in every tier (incl. omitted → default)", () => {
+    const prompts = [
+      prReviewSeatPrompt({ ...base, tier: "quick" }),
+      prReviewSeatPrompt({ ...base, tier: "default" }),
+      prReviewSeatPrompt({ ...base, tier: "deep" }),
+      prReviewSeatPrompt(base), // omitted tier → default row
+    ];
+    for (const prompt of prompts) {
+      const readFirst = prompt.indexOf("## Read first");
+      const budget = prompt.indexOf("## Budget");
+      const recon = prompt.indexOf("## Recon facts");
+      expect(readFirst).toBeGreaterThanOrEqual(0);
+      expect(budget).toBeGreaterThan(readFirst);
+      expect(recon).toBeGreaterThan(budget);
+    }
+  });
+
+  test("budget cap numbers are interpolated from PR_REVIEW_TIER_BUDGETS — never literals in the prReviewSeatPrompt body", () => {
+    const source = readFileSync(new URL("../src/prreview.ts", import.meta.url), "utf8");
+    const start = source.indexOf("export function prReviewSeatPrompt");
+    expect(start).toBeGreaterThanOrEqual(0);
+    const body = source.slice(start, source.indexOf("\n// ---", start));
+    expect(body).toContain("PR_REVIEW_TIER_BUDGETS");
+    for (const row of Object.values(PR_REVIEW_TIER_BUDGETS)) {
+      for (const cap of [row.perSeatFindingsCap, row.evidenceTokensCap, row.fileOpenCap]) {
+        expect(body).not.toMatch(new RegExp(`\\b${cap}\\b`));
+      }
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// prReviewSeatPrompt — collectFolded seat option (SP2 context-pack, task 1)
+// When the collect wave folds onto the Stage-2 domain seats (SSOT
+// pr-review.md § Review pipeline fold default; prose "collection folded in
+// = seat reuse" is the § Review depth default-tier row), the seat prompt
+// says so in ONE bullet, placed after the ## Budget block it tells the seat
+// to stay within (block order: Read first -> Budget -> fold line -> Recon
+// facts). Contradictions throw TypeError, fail loud: stage 1 (a collect
+// seat IS the collect wave), a missing diffFile (the fold bullet starts
+// from the pinned pack - no pack contradicts it), and the independent
+// cross-domain security seat (never folded). Omitted/false: no line.
+// ---------------------------------------------------------------------------
+
+describe("prReviewSeatPrompt — collectFolded option (SP2 collect-wave fold)", () => {
+  const base = {
+    stage: 2 as const,
+    domain: "backend",
+    seat: "api",
+    skillRoot: "/tmp/engine-seat-skill",
+    worktreePath: "/tmp/engine-seat-worktree",
+    reconFacts: [],
+    // The fold default requires the pinned diff pack - base is pack-present.
+    diffFile: "/tmp/engine-seat-diff.patch",
+  };
+  const foldLine =
+    "- Collect wave folded \u2014 you do your own collection: start from the pinned diff snapshot/pack, then open changed files in your domain directly (stay within the budget block); record `file:line` observations as you go.";
+
+  test("stage 2 + collectFolded renders the fold bullet verbatim (pack present)", () => {
+    const prompt = prReviewSeatPrompt({ ...base, collectFolded: true });
+    expect(prompt).toContain(foldLine);
+    expect(prompt).toContain("Read the pinned diff snapshot FIRST");
+  });
+
+  test("stage 2 without collectFolded has no fold line (omitted and false both)", () => {
+    expect(prReviewSeatPrompt(base)).not.toContain("Collect wave folded");
+    expect(prReviewSeatPrompt({ ...base, collectFolded: false })).not.toContain("Collect wave folded");
+  });
+
+  test("stage 1 + collectFolded throws TypeError (collect seat IS the collect wave)", () => {
+    expect(() => prReviewSeatPrompt({ ...base, stage: 1, collectFolded: true })).toThrow(TypeError);
+    expect(() => prReviewSeatPrompt({ ...base, stage: 1, collectFolded: true })).toThrow(/collectFolded requires stage 2/);
+  });
+
+  test("stage 2 + collectFolded without diffFile throws TypeError (folding without a pack contradicts the fold line)", () => {
+    expect(() => prReviewSeatPrompt({ ...base, collectFolded: true, diffFile: undefined })).toThrow(TypeError);
+    expect(() => prReviewSeatPrompt({ ...base, collectFolded: true, diffFile: undefined })).toThrow(
+      /collectFolded requires a pinned diff snapshot/,
+    );
+    expect(() => prReviewSeatPrompt({ ...base, collectFolded: true, diffFile: "" })).toThrow(/collectFolded requires a pinned diff snapshot/);
+  });
+
+  test("collectFolded + securitySeat throws TypeError (the security seat is never folded)", () => {
+    expect(() => prReviewSeatPrompt({ ...base, collectFolded: true, securitySeat: true })).toThrow(TypeError);
+    expect(() => prReviewSeatPrompt({ ...base, collectFolded: true, securitySeat: true })).toThrow(/never folded/);
+  });
+
+  test("fold bullet sits after the ## Budget block and before ## Recon facts", () => {
+    const prompt = prReviewSeatPrompt({ ...base, collectFolded: true });
+    const budget = prompt.indexOf("## Budget");
+    const fold = prompt.indexOf("- Collect wave folded");
+    const recon = prompt.indexOf("## Recon facts");
+    expect(fold).toBeGreaterThan(budget);
+    expect(recon).toBeGreaterThan(fold);
   });
 });
