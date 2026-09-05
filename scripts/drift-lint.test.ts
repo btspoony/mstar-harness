@@ -264,12 +264,12 @@ describe("checkEngineCallouts — Guard 1 CLI citation binary-prefix check", () 
     expect(failures).toEqual([]);
   });
 
-  test("real corpus pins 44 Engine-check callouts / 42 CLI citations (F-S3, drift goes red)", () => {
+  test("real corpus pins 46 Engine-check callouts / 44 CLI citations (F-S3, drift goes red)", () => {
     const REPO_ROOT = join(import.meta.dir, "..");
     const SKILLS_ROOT = join(REPO_ROOT, "skills");
 
     /** Every `.md` file under skills/ with the repo-relative `rel` Guard 1
-     * sees in main — the 45/43 counts are a regression pin: adding or
+     * sees in main — the 46/44 counts are a regression pin: adding or
      * removing a backticked CLI citation inside an Engine-check callout
      * (or adding a callout) fails this test loudly. */
     const realCorpus = () => {
@@ -305,8 +305,8 @@ describe("checkEngineCallouts — Guard 1 CLI citation binary-prefix check", () 
       engineExports,
       binNames,
     });
-    expect(calloutsChecked).toBe(45);
-    expect(cliCitationsChecked).toBe(43);
+    expect(calloutsChecked).toBe(46);
+    expect(cliCitationsChecked).toBe(44);
     expect(failures).toEqual([]);
   });
 });

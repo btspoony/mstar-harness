@@ -3970,7 +3970,8 @@ prReviewCommand
   .option("--recon <facts...>", "Recon facts (variadic: --recon fact1 fact2 ...)")
   .option("--tier <quick|default|deep>", "Prompt tier (SP-A): quick shrinks read-first + folds the security lens in-seat; deep adds cross-domain security seat + stage-as-wave (default: default)")
   .option("--diff-file <path>", "Absolute path to the pinned diff snapshot written by worktree-setup (read-first ingredient)")
-  .action((options: { stage: string; domain: string; seat: string; worktree: string; security?: boolean; skillRoot?: string; recon?: string[]; tier?: string; diffFile?: string }) => {
+  .option("--collect-folded", "Fold the collect wave onto this stage-2 domain seat: the prompt gains a self-collection bullet after the budget block (requires --diff-file; refused on stage 1 and security seats)")
+  .action((options: { stage: string; domain: string; seat: string; worktree: string; security?: boolean; skillRoot?: string; recon?: string[]; tier?: string; diffFile?: string; collectFolded?: boolean }) => {
     try {
       if (options.stage !== "1" && options.stage !== "2") {
         throw new SddScriptError(`usage: pr-review seat-prompt \u2014 --stage must be 1 or 2, got ${JSON.stringify(options.stage)}`, 2);
@@ -3992,6 +3993,7 @@ prReviewCommand
         ...(options.security === true ? { securitySeat: true } : {}),
         ...(tier !== undefined ? { tier } : {}),
         ...(options.diffFile !== undefined && options.diffFile !== "" ? { diffFile: path.resolve(resolveCliPath(options.diffFile)) } : {}),
+        ...(options.collectFolded === true ? { collectFolded: true } : {}),
       });
       console.log(prompt);
     } catch (error) {
