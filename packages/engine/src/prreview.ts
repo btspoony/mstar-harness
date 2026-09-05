@@ -683,6 +683,8 @@ function parseCommentsState(raw: string | undefined): PrCommentsState | null {
  * - `generated_at` must be `YYYY-MM-DD` (DATE_RE).
  * - `tier` optional: `quick | default | deep`; absent is valid (legacy
  *   reports without tier still pass — SP-A amendment).
+ * - `elapsed` optional: non-negative integer minutes; absent is valid
+ *   (legacy reports without elapsed still pass).
  */
 export function validatePrReviewReport(text: string): GateResult {
   const violations: ValidationResult[] = [];
@@ -759,6 +761,12 @@ export function validatePrReviewReport(text: string): GateResult {
 
   if (doc.tier !== undefined && !(PR_TIERS as readonly string[]).includes(doc.tier)) {
     violations.push(violation("medium", "prreview.report.invalid-tier", `tier "${doc.tier}" is not one of ${JSON.stringify(PR_TIERS)}`, "use quick | default | deep, or omit the key"));
+  }
+
+  // Optional `elapsed` (measured review wall-clock, integer minutes >= 0):
+  // absent is valid - legacy reports without elapsed still pass.
+  if (doc.elapsed !== undefined && !/^\d+$/.test(doc.elapsed.trim())) {
+    violations.push(violation("medium", "prreview.report.invalid-elapsed", "elapsed must be a non-negative integer (minutes)", "use non-negative integer minutes (e.g. elapsed: 12), or omit the key"));
   }
 
   const comments = parseCommentsState(doc.comments);
