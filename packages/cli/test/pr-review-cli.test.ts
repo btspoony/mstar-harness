@@ -314,7 +314,7 @@ describe("mstar pr-review budget", () => {
     expect(result.exitCode).toBe(0);
     // Numbers come from the engine export — a cap change must not break the test shape.
     const expected = Object.entries(PR_REVIEW_TIER_BUDGETS).map(([tier, budget]) =>
-      `${tier}: <=${budget.wallClockMinutes}min wall-clock, max ${budget.maxSeats} review seats, ` +
+      `${tier}: <=${budget.wallClockMinutes}min wall-clock, max ${budget.maxSeats} review seats (kept-wave collect seats extra), ` +
       `<=${budget.perSeatFindingsCap} findings/seat, ~${budget.evidenceTokensCap} tokens evidence/seat, ` +
       `<=${budget.fileOpenCap} file opens/seat (baseline 100 tok/s)`,
     );
