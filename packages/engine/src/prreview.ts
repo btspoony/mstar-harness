@@ -1068,6 +1068,44 @@ export function prReviewSizing(input: { changedLines: number; largestTouchedFile
  * Stage-1 wave — collect-wave wording is deep-only); deep includes everything. */
 export type PrReviewTier = "quick" | "default" | "deep";
 
+/**
+ * Per-tier time budget for the `amazing-pr-review` pipeline (SP1 tier
+ * time-budget). Prose SSOT: pr-review.md § Review depth — its Budget column
+ * carries the wall-clock minutes; the per-seat caps below are the engine
+ * contract, rendered into seat prompts, never duplicated as numbers in prose.
+ *
+ * - `wallClockMinutes`: prompt-discipline target for the whole review,
+ *   measured worktree-setup → local report saved by the main agent.
+ *   Overruns are declared in the report `- notes:` — budgets are never a
+ *   host-level hard kill.
+ * - `maxSeats`: review seats only — Stage 2 domain seats + the independent
+ *   cross-domain security seat; NOT Stage 1 collect seats (collect fan-out
+ *   stays governed by pr-review.md § Scale-driven fan-out).
+ * - `perSeatFindingsCap` / `evidenceTokensCap` / `fileOpenCap`: per-seat
+ *   expansion stops (findings / evidence payload tokens / file opens; the
+ *   pinned diff snapshot read does not count). Baseline assumption: 100
+ *   tok/s output — wall-clock is dominated by reads/tool latency, which
+ *   `fileOpenCap` bounds.
+ *
+ * No new sizing bands: the table references tiers only (pr-review.md
+ * § Sizing & change shape stays the only sizing SSOT). */
+export const PR_REVIEW_TIER_BUDGETS: Readonly<
+  Record<
+    PrReviewTier,
+    Readonly<{
+      wallClockMinutes: number;
+      maxSeats: number;
+      perSeatFindingsCap: number;
+      evidenceTokensCap: number;
+      fileOpenCap: number;
+    }>
+  >
+> = Object.freeze({
+  quick: Object.freeze({ wallClockMinutes: 5, maxSeats: 1, perSeatFindingsCap: 5, evidenceTokensCap: 600, fileOpenCap: 12 }),
+  default: Object.freeze({ wallClockMinutes: 10, maxSeats: 2, perSeatFindingsCap: 6, evidenceTokensCap: 900, fileOpenCap: 20 }),
+  deep: Object.freeze({ wallClockMinutes: 15, maxSeats: 4, perSeatFindingsCap: 8, evidenceTokensCap: 1200, fileOpenCap: 30 }),
+});
+
 /** Hard Rules 4 and 5 verbatim (mstar-audit SKILL.md § Hard Rules — same
  * text as pr-review-seat-evidence.md § Hard Rules). */
 const HARD_RULE_4 =

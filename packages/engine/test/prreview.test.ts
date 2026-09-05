@@ -1063,3 +1063,77 @@ must-fix=0 should-fix=0 nit=0 unverified=0`);
     expect(second).toEqual(first);
   });
 });
+
+// ---------------------------------------------------------------------------
+// PR_REVIEW_TIER_BUDGETS — per-tier wall-clock budgets + per-seat caps
+// (SP1 tier time-budget; prose SSOT: pr-review.md § Review depth)
+// ---------------------------------------------------------------------------
+import { PR_REVIEW_TIER_BUDGETS } from "../src/prreview.js";
+
+describe("PR_REVIEW_TIER_BUDGETS — per-tier time budgets (pr-review.md § Review depth)", () => {
+  const TIERS = ["quick", "default", "deep"] as const;
+
+  test("table covers exactly the three review tiers", () => {
+    expect(Object.keys(PR_REVIEW_TIER_BUDGETS).sort()).toEqual([...TIERS].sort());
+  });
+
+  test("wall-clock budget: quick=5 / default=10 / deep=15 minutes", () => {
+    expect(PR_REVIEW_TIER_BUDGETS.quick.wallClockMinutes).toBe(5);
+    expect(PR_REVIEW_TIER_BUDGETS.default.wallClockMinutes).toBe(10);
+    expect(PR_REVIEW_TIER_BUDGETS.deep.wallClockMinutes).toBe(15);
+  });
+
+  test("every tier row matches the ratified budget table (quick 1 seat / default 2 / deep 4)", () => {
+    expect(PR_REVIEW_TIER_BUDGETS.quick).toEqual({
+      wallClockMinutes: 5,
+      maxSeats: 1,
+      perSeatFindingsCap: 5,
+      evidenceTokensCap: 600,
+      fileOpenCap: 12,
+    });
+    expect(PR_REVIEW_TIER_BUDGETS.default).toEqual({
+      wallClockMinutes: 10,
+      maxSeats: 2,
+      perSeatFindingsCap: 6,
+      evidenceTokensCap: 900,
+      fileOpenCap: 20,
+    });
+    expect(PR_REVIEW_TIER_BUDGETS.deep).toEqual({
+      wallClockMinutes: 15,
+      maxSeats: 4,
+      perSeatFindingsCap: 8,
+      evidenceTokensCap: 1200,
+      fileOpenCap: 30,
+    });
+  });
+
+  test("all budget fields are positive integers in every tier row", () => {
+    for (const tier of TIERS) {
+      const row = PR_REVIEW_TIER_BUDGETS[tier];
+      for (const value of [
+        row.wallClockMinutes,
+        row.maxSeats,
+        row.perSeatFindingsCap,
+        row.evidenceTokensCap,
+        row.fileOpenCap,
+      ]) {
+        expect(Number.isInteger(value)).toBe(true);
+        expect(value).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  test("rows are frozen — mutation attempts no-op (as-const-style immutability)", () => {
+    expect(Object.isFrozen(PR_REVIEW_TIER_BUDGETS)).toBe(true);
+    for (const tier of TIERS) {
+      expect(Object.isFrozen(PR_REVIEW_TIER_BUDGETS[tier])).toBe(true);
+    }
+    const mutable = PR_REVIEW_TIER_BUDGETS.quick as { wallClockMinutes: number };
+    try {
+      mutable.wallClockMinutes = 99;
+    } catch {
+      // strict mode throws on frozen assignment - equally acceptable
+    }
+    expect(PR_REVIEW_TIER_BUDGETS.quick.wallClockMinutes).toBe(5);
+  });
+});
