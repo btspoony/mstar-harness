@@ -71,6 +71,7 @@ import {
   validatePrReviewReport,
   pickReviewBranchName,
   planReviewPost,
+  PR_REVIEW_TIER_BUDGETS,
   preflightChangeset,
   prReviewSeatPrompt,
   prReviewSizing,
@@ -3994,6 +3995,22 @@ prReviewCommand
       console.log(prompt);
     } catch (error) {
       failScript(error, "pr-review seat-prompt");
+    }
+  });
+
+prReviewCommand
+  .command("budget")
+  .description(
+    "Print the per-tier time-budget table (wall-clock target + per-seat caps) from PR_REVIEW_TIER_BUDGETS \u2014 " +
+      "for humans and drift checks (pr-review.md \u00a7 Review depth Budget column)",
+  )
+  .action(() => {
+    for (const [tier, budget] of Object.entries(PR_REVIEW_TIER_BUDGETS)) {
+      console.log(
+        `${tier}: <=${budget.wallClockMinutes}min wall-clock, max ${budget.maxSeats} seats, ` +
+          `<=${budget.perSeatFindingsCap} findings/seat, ~${budget.evidenceTokensCap} tokens evidence/seat, ` +
+          `<=${budget.fileOpenCap} file opens/seat (baseline 100 tok/s)`,
+      );
     }
   });
 
