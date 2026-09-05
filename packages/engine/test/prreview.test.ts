@@ -667,6 +667,35 @@ describe("validatePrReviewReport — structure checks", () => {
   });
 });
 
+describe("validatePrReviewReport - optional elapsed minutes", () => {
+  test("elapsed: 12 (non-negative integer minutes) passes", () => {
+    const gate = validatePrReviewReport(report("elapsed: 12\n"));
+    expect(gate.ok).toBe(true);
+    expect(gate.violations).toEqual([]);
+  });
+
+  test("elapsed: 0 (zero minutes) passes", () => {
+    expect(validatePrReviewReport(report("elapsed: 0\n")).ok).toBe(true);
+  });
+
+  test("absent elapsed is valid (legacy reports without elapsed still pass)", () => {
+    const gate = validatePrReviewReport(VALID_MINIMAL);
+    expect(gate.ok).toBe(true);
+    expect(codes(gate)).toEqual([]);
+  });
+
+  test.each(["elapsed: -1", 'elapsed: "12m"', "elapsed: 12.5"])(
+    "invalid elapsed flagged: %s",
+    (line) => {
+      const gate = validatePrReviewReport(report(`${line}\n`));
+      expect(gate.ok).toBe(false);
+      const elapsed = gate.violations.find((v) => v.code === "prreview.report.invalid-elapsed");
+      expect(elapsed).toBeDefined();
+      expect(elapsed?.message).toBe("elapsed must be a non-negative integer (minutes)");
+    },
+  );
+});
+
 import { prReviewSeatPrompt, validateFindingDoc } from "../src/prreview.js";
 
 /**
