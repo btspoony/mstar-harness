@@ -1128,6 +1128,12 @@ export type PrReviewSeatPromptOptions = {
    * (review artifact beside the sidecar). Non-empty → the prompt gains a
    * read-first ingredient line pointing at it. */
   diffFile?: string;
+  /** Stage-2 only (`true` + `stage: 1` throws): the collect wave was folded
+   * onto this domain seat (SSOT pr-review.md § Review depth — "folds
+   * collection in = seat reuse"). The prompt gains one bullet after the
+   * `## Budget` block telling the seat to do its own collection, staying
+   * within the budget block. Omitted/`false` → no line. */
+  collectFolded?: boolean;
 };
 
 /**
@@ -1141,6 +1147,10 @@ export type PrReviewSeatPromptOptions = {
  * - Per-seat budget block (`## Budget`, SP1 tier time-budget): findings /
  *   evidence-token / file-open caps interpolated from `PR_REVIEW_TIER_BUDGETS`
  *   — expansion stops for the seat, never a host-level hard stop.
+ * - `collectFolded: true` (stage 2 only; with stage 1 it throws): one bullet
+ *   after the `## Budget` block — the collect wave folded onto this seat,
+ *   so it collects itself (pinned diff snapshot/pack first, then in-domain
+ *   changed files) within the budget block.
  * - Recon facts + decided tradeoffs.
  * - Hard Rules 4/5 VERBATIM.
  * - Payload-return contract (write-blocked-safe; main agent writes files).
@@ -1160,6 +1170,11 @@ export type PrReviewSeatPromptOptions = {
 export function prReviewSeatPrompt(opts: PrReviewSeatPromptOptions): string {
   if (opts.stage !== 1 && opts.stage !== 2) {
     throw new TypeError(`prReviewSeatPrompt: stage must be 1 or 2 - got ${JSON.stringify(String(opts.stage))}`);
+  }
+  if (opts.collectFolded === true && opts.stage !== 2) {
+    // A Stage 1 collect seat IS the collect wave - folding it onto itself is
+    // a contradiction, so fail loud instead of rendering a nonsense line.
+    throw new TypeError("prReviewSeatPrompt: collectFolded requires stage 2 - a Stage 1 seat with a folded collect wave is a contradiction");
   }
   const domain = opts.domain.trim();
   const seat = opts.seat.trim();
@@ -1232,6 +1247,14 @@ export function prReviewSeatPrompt(opts: PrReviewSeatPromptOptions): string {
   lines.push(`- Evidence payload \u2248 ${budget.evidenceTokensCap} tokens.`);
   lines.push(`- Open at most ${budget.fileOpenCap} files (the pinned diff snapshot read does not count).`);
   lines.push("- Caps are expansion stops for this seat \u2014 when a cap is reached, stop expanding and return what you have; declare truncated coverage in the payload tail.");
+  if (opts.collectFolded === true) {
+    // Stage-2 fold (SP2 context-pack): the collect wave folded onto this
+    // domain seat - say so, anchored to the budget block above. Reachable
+    // only with stage 2 (stage 1 + collectFolded throws at the top).
+    lines.push(
+      "- Collect wave folded \u2014 you do your own collection: start from the pinned diff snapshot/pack, then open changed files in your domain directly (stay within the budget block); record `file:line` observations as you go.",
+    );
+  }
   lines.push("");
   lines.push("## Recon facts");
   lines.push("");

@@ -1238,3 +1238,49 @@ describe("prReviewSeatPrompt — per-seat ## Budget block (SP1 tier time-budget)
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// prReviewSeatPrompt — collectFolded seat option (SP2 context-pack, task 1)
+// When the collect wave folds onto the Stage-2 domain seats (SSOT
+// pr-review.md § Review depth "folds collection in = seat reuse"), the seat
+// prompt says so in ONE bullet, placed after the ## Budget block it tells
+// the seat to stay within (block order: Read first -> Budget -> fold line
+// -> Recon facts). Stage 1 + collectFolded is a contradiction (a collect
+// seat IS the collect wave) - TypeError, fail loud. Omitted/false: no line.
+// ---------------------------------------------------------------------------
+
+describe("prReviewSeatPrompt — collectFolded option (SP2 collect-wave fold)", () => {
+  const base = {
+    stage: 2 as const,
+    domain: "backend",
+    seat: "api",
+    skillRoot: "/tmp/engine-seat-skill",
+    worktreePath: "/tmp/engine-seat-worktree",
+    reconFacts: [],
+  };
+  const foldLine =
+    "- Collect wave folded \u2014 you do your own collection: start from the pinned diff snapshot/pack, then open changed files in your domain directly (stay within the budget block); record `file:line` observations as you go.";
+
+  test("stage 2 + collectFolded renders the fold bullet verbatim", () => {
+    expect(prReviewSeatPrompt({ ...base, collectFolded: true })).toContain(foldLine);
+  });
+
+  test("stage 2 without collectFolded has no fold line (omitted and false both)", () => {
+    expect(prReviewSeatPrompt(base)).not.toContain("Collect wave folded");
+    expect(prReviewSeatPrompt({ ...base, collectFolded: false })).not.toContain("Collect wave folded");
+  });
+
+  test("stage 1 + collectFolded throws TypeError (collect seat IS the collect wave)", () => {
+    expect(() => prReviewSeatPrompt({ ...base, stage: 1, collectFolded: true })).toThrow(TypeError);
+    expect(() => prReviewSeatPrompt({ ...base, stage: 1, collectFolded: true })).toThrow(/collectFolded requires stage 2/);
+  });
+
+  test("fold bullet sits after the ## Budget block and before ## Recon facts", () => {
+    const prompt = prReviewSeatPrompt({ ...base, collectFolded: true });
+    const budget = prompt.indexOf("## Budget");
+    const fold = prompt.indexOf("- Collect wave folded");
+    const recon = prompt.indexOf("## Recon facts");
+    expect(fold).toBeGreaterThan(budget);
+    expect(recon).toBeGreaterThan(fold);
+  });
+});
