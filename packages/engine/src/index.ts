@@ -348,6 +348,7 @@ export type {
 } from "./prreview.js";
 export {
   MERGE_CLASSES,
+  PR_REVIEW_TIER_BUDGETS,
   PR_VERDICTS,
   REVIEW_EMOJI,
   computePrTally,
