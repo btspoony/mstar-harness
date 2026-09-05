@@ -6,6 +6,26 @@
 
 ## [Unreleased]
 
+## [3.6.2] - 2026-09-05
+
+### Harness
+
+- 为 `prReviewSeatPrompt` 新增 **`collectFolded` 席位提示选项**（仅限 Stage 2；与 Stage 1 同用即抛错）：在 `## Budget` 块后追加一条折叠要点，告知 deep 档领域席位自行收集——先读钉扎 diff 包，再开本领域变更文件，且不超预算块；现可经 CLI 新旗标 `mstar pr-review seat-prompt --collect-folded` 触达（引擎守卫以命令错误呈现）。
+- Deep PR 评审**默认两波运行（存在钉扎 diff 包时）**：Stage 1 收集波折叠进 Stage 2 领域席位（`collectFolded`），仅在例外时保留收集波（无 `diffFile` 快照、PM 判断），并在报告 `- notes:` 中声明 `collect wave folded (pack)` / `collect wave kept (no pack / PM judgment: <reason>)`；独立跨领域安全席位永不折叠。
+- 收紧 **pack-first 有界席位读取**：席位先读钉扎 diff 包，再在 `fileOpenCap` 内定向开本领域文件，`deep` 扇出措辞在 `mstar-audit` 文档与 `/amazing-pr-review` 命令间保持一致。
+- 强化 **`collectFolded` 失败即抛守卫**（镜像 Stage-1 矛盾守卫）：`collectFolded` 现要求非空 `diffFile`（钉扎 diff 快照），与独立跨领域安全席位（永不折叠）组合即抛 `TypeError`；`prReviewSizing.collectSeats` / `mstar pr-review size` 说明补充 kept-wave 限定（仅保留收集波时才有 collect 席位），并调和 `pr-review.md` 中 deep 档措辞与折叠默认的一致性。
+- PR 评审综合阶段改为**分层三向 vet**：must-fix / should-fix 走完整三向攻击（反例、更简解释、证据可验证）；nit 仅做证据核验（打开被引文件，确认 `file:line` 支撑论断）。领域席位保持完整三向攻击——分层仅作用于主代理综合阶段。
+- Stage 2 领域席位现按**每条发现一块固定字段块**返回载荷——字段名与 `finding-format.md` 逐字一致，`Merge class` 紧跟 `Confidence`（lint 强制），`Fix sketch` 一行——保持与唯一校验器（`mstar lint --type finding --pr-variant` → `validateFindingDoc`）lint 兼容；预算上限截断扩展时在载荷尾部声明截断覆盖。
+- 发布的评审正文新增**软上限（约 150 行）**，超出即触发时间预算阶梯的降级 ③：nit 折叠进摘要正文（仅展示层——发现绝不丢弃），并在报告 `- notes:` 中声明。
+- PR 评审报告 frontmatter 新增**可选 `elapsed` 字段**：`validatePrReviewReport` 接受非负整数分钟（缺省对历史报告合法；格式非法即违规），`/amazing-pr-review` 命令在 worktree-setup 记录起始时间，并把实测墙钟分钟写入 frontmatter。
+- 新增 **PR 评审时间预算体系**：engine 常量表 `PR_REVIEW_TIER_BUDGETS`（每档墙钟目标 + 席位上限）作为数字 SSOT，并在 `prReviewSeatPrompt` 席位提示中渲染预算块。
+- 新增 **`mstar pr-review budget`** CLI 命令，打印 `quick`/`default`/`deep` 三档预算表，供人工查看与漂移检查。
+- `mstar-audit` PR 评审文档与 `/amazing-pr-review` 命令新增 **Budget 列与时间预算降级阶梯**（①读深度 ②席位拓扑 ③展示，附永不降级清单）。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单及便携式 Agent Plugins 清单：**→ 3.6.2**。
+
 ## [3.6.1] - 2026-09-03
 
 ### Harness
