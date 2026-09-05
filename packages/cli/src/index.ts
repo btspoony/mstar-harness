@@ -4007,7 +4007,7 @@ prReviewCommand
   .action(() => {
     for (const [tier, budget] of Object.entries(PR_REVIEW_TIER_BUDGETS)) {
       console.log(
-        `${tier}: <=${budget.wallClockMinutes}min wall-clock, max ${budget.maxSeats} seats, ` +
+        `${tier}: <=${budget.wallClockMinutes}min wall-clock, max ${budget.maxSeats} review seats, ` +
           `<=${budget.perSeatFindingsCap} findings/seat, ~${budget.evidenceTokensCap} tokens evidence/seat, ` +
           `<=${budget.fileOpenCap} file opens/seat (baseline 100 tok/s)`,
       );

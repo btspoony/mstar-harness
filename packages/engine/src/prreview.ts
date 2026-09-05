@@ -1223,7 +1223,12 @@ export function prReviewSeatPrompt(opts: PrReviewSeatPromptOptions): string {
   lines.push("");
   lines.push("## Budget");
   lines.push("");
-  lines.push(`- At most ${budget.perSeatFindingsCap} findings.`);
+  if (opts.stage === 2) {
+    // Findings cap is a Stage-2-only concept: Stage-1 collect seats' output
+    // contract is "NO findings table" - the cap line would contradict it.
+    // Evidence-token / file-open caps and the stop clause still bind there.
+    lines.push(`- At most ${budget.perSeatFindingsCap} findings.`);
+  }
   lines.push(`- Evidence payload \u2248 ${budget.evidenceTokensCap} tokens.`);
   lines.push(`- Open at most ${budget.fileOpenCap} files (the pinned diff snapshot read does not count).`);
   lines.push("- Caps are expansion stops for this seat \u2014 when a cap is reached, stop expanding and return what you have; declare truncated coverage in the payload tail.");

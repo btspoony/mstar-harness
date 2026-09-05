@@ -17,8 +17,8 @@
  * - Display contract: pr-review.md § Display contract (chat output) — the
  *   two-line chat header, verbatim.
  *
- * Report-path tests (`prReviewReportPath`) arrive with Task 3 — this file is
- * tally-only.
+ * prreview engine unit tests — tally, report path, seat prompts, tier
+ * budgets, finding lint.
  */
 import { describe, expect, test } from "bun:test";
 import { computePrTally, synthesizeReview } from "../src/prreview.js";
@@ -1145,7 +1145,6 @@ describe("PR_REVIEW_TIER_BUDGETS — per-tier time budgets (pr-review.md § Revi
 // Rendered from PR_REVIEW_TIER_BUDGETS[tier] — never literals in the prompt
 // body; every tier (incl. omitted → default) ships the block.
 // ---------------------------------------------------------------------------
-import { readFileSync } from "node:fs";
 
 describe("prReviewSeatPrompt — per-seat ## Budget block (SP1 tier time-budget)", () => {
   const base = {
@@ -1183,6 +1182,30 @@ describe("prReviewSeatPrompt — per-seat ## Budget block (SP1 tier time-budget)
     expect(prompt).toContain("- Evidence payload \u2248 900 tokens.");
     expect(prompt).toContain("- Open at most 20 files (the pinned diff snapshot read does not count).");
     expect(prompt).toContain(expansionStopClause);
+  });
+
+  test("stage-1 budget block drops the findings cap, keeps the binding caps (every tier incl. omitted -> default)", () => {
+    const variants = [
+      { tier: "quick" as const, row: PR_REVIEW_TIER_BUDGETS.quick },
+      { tier: "default" as const, row: PR_REVIEW_TIER_BUDGETS.default },
+      { tier: "deep" as const, row: PR_REVIEW_TIER_BUDGETS.deep },
+      { tier: undefined, row: PR_REVIEW_TIER_BUDGETS.default }, // omitted tier -> default row
+    ];
+    for (const { tier, row } of variants) {
+      const prompt =
+        tier === undefined ? prReviewSeatPrompt({ ...base, stage: 1 }) : prReviewSeatPrompt({ ...base, stage: 1, tier });
+      expect(prompt).toContain("## Budget");
+      // Stage-1 collect seats' contract is "NO findings table" - the findings
+      // cap line must not render against it (fix wave 1, F-002/S-1).
+      expect(prompt).not.toContain(`- At most ${row.perSeatFindingsCap} findings.`);
+      expect(prompt).toContain(`- Open at most ${row.fileOpenCap} files (the pinned diff snapshot read does not count).`);
+      expect(prompt).toContain(`- Evidence payload \u2248 ${row.evidenceTokensCap} tokens.`);
+      expect(prompt).toContain(expansionStopClause);
+      expect(prompt).toContain("NO findings table. NO verdict. Collect evidence only.");
+    }
+    // Stage 2 unchanged: the findings cap still renders for domain seats.
+    const stage2 = prReviewSeatPrompt({ ...base, tier: "deep" });
+    expect(stage2).toContain(`- At most ${PR_REVIEW_TIER_BUDGETS.deep.perSeatFindingsCap} findings.`);
   });
 
   test("## Budget sits between ## Read first and ## Recon facts in every tier (incl. omitted → default)", () => {
