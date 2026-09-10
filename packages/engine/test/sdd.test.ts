@@ -567,6 +567,28 @@ describe("reviewPackage — review diff packaging (SKILL.md § After all tasks +
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  test("an EMPTY range fails loudly (exit 1) and writes nothing", () => {
+    // Regression: from the control checkout the range resolves to nothing
+    // (HEAD === base), and the command used to exit 0 with a ~72-byte package
+    // whose `## Commits` / `## Diff` sections were empty — a QC seat would be
+    // handed a file with nothing to review while every exit code stayed 0.
+    const root = tmpRoot("sdd-rp-");
+    const out = tmpRoot("sdd-rp-out-");
+    try {
+      const { head } = gitFixture(root);
+      const file = join(out, "empty.diff");
+      const empty = errOf(() => reviewPackage(head, head, file, { cwd: root }));
+      expect(empty.exitCode).toBe(1);
+      expect(empty.message).toContain("is empty in");
+      expect(empty.message).toContain(root);
+      expect(empty.message).toContain("refusing to write an empty package");
+      expect(existsSync(file)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(out, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("engine helper contracts (bash originals removed in slice 5 — behavior asserted directly / against golden fixtures)", () => {

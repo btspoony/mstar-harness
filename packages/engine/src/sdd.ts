@@ -471,10 +471,24 @@ export function reviewPackage(base: string, head: string, outFile?: string, opts
 
   const run = (args: string[]): Buffer =>
     execFileSync("git", args, { cwd, maxBuffer: GIT_CAPTURE_MAX_BYTES });
+  const commits = run(["log", "--oneline", `${base}..${head}`]);
+  // FAIL LOUD on an empty range instead of writing an empty package. The range
+  // resolves to nothing whenever the command runs outside the branch worktree
+  // (e.g. from the control checkout, where HEAD is the base): the package then
+  // has empty `## Commits` / `## Diff` sections and a QC seat would be handed a
+  // file with nothing to review while every exit code stays 0. An empty commit
+  // list is never a legitimate review input, so refuse before any write.
+  if (commits.length === 0) {
+    throw new SddScriptError(
+      `review package range ${base}..${head} is empty in ${cwd} — refusing to write an empty package ` +
+        `(run the command from the branch worktree, not the control checkout)`,
+      1,
+    );
+  }
  // `{ echo …; git …; } > file` layout, byte-for-byte.
   const parts: Buffer[] = [
     Buffer.from(`# Review package: ${base}..${head}\n\n## Commits\n`),
-    run(["log", "--oneline", `${base}..${head}`]),
+    commits,
     Buffer.from("\n## Files changed\n"),
     run(["diff", "--stat", `${base}..${head}`]),
     Buffer.from("\n## Diff\n"),
