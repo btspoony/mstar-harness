@@ -39,6 +39,7 @@ import {
   EXPLICIT_CACHE_KEY,
 } from './gates/catalog.ts'
 import type { CatalogCacheEntry, TurnDigest } from './gates/catalog.ts'
+import { installEngineStatusEndpoint } from './engine-status-endpoint.ts'
 import { writeIntentListener, editIntentListener } from './gates/status.ts'
 import type { StatusGateAdvisory } from './gates/status.ts'
 import { skillWriteIntentListener } from './gates/skill-lint.ts'
@@ -857,6 +858,20 @@ export function apply(ctx: Context, config: Config): void {
   const catalogDigests = new Map<string, TurnDigest>()
   ctx.on('agent/pre-step', (payload, next) =>
     preStepCatalogListener(ctx, resolver, explicitKey, catalogCache, ttlMs, catalogInvalidation.register, catalogDigests, payload, next))
+
+  // Panel channel — the host half of the engine-status endpoint
+  // (`/api/mstar/engineStatus`): the `mstar` service + its invocation
+  // descriptor on the host's SHARED `/api` typert gateway, serving the
+  // snapshot the pre-step emission persisted above.
+  //
+  // Both units are OPTIONAL (see `installEngineStatusEndpoint`): the service
+  // is deduped per context, and the descriptor is registered inside
+  // `ctx.inject(['typert'], …)`. This row's STATIC inject is deliberately left
+  // free of `connection` / `webServer` — naming either there would pend the
+  // whole row (and with it the boot) on a base-only/headless profile, which is
+  // exactly the failure both sibling plugins avoid by registering web-only
+  // units through optional children.
+  installEngineStatusEndpoint(ctx, { resolver, bootHarnessDir })
 
   // v2 seams — sdd + iteration model-facing tools: `mstar sdd …` / `mstar iteration gate` equivalents on `ctx.tools`.
   registerSddIterationTools(ctx, resolver)
