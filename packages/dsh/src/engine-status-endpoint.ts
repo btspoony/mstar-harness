@@ -46,11 +46,13 @@ import type { TypertContribution } from '@deepseek-ai/dsh-typert-registry'
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import type { HarnessResolver } from './gates/_shared.ts'
 import { readEngineStatusSnapshot, type EngineStatusSnapshotEntry } from './engine-status-store.ts'
+import { MSTAR_ENGINE_STATUS_METHOD, MSTAR_ENGINE_STATUS_NAMESPACE } from './engine-status-wire.ts'
 
-/** Wire namespace of the endpoint (the cordis service key mirrors it). */
-export const MSTAR_ENGINE_STATUS_NAMESPACE = 'mstar'
-/** Wire method of the endpoint → `/api/mstar/engineStatus`. */
-export const MSTAR_ENGINE_STATUS_METHOD = 'engineStatus'
+// The wire address is declared ONCE for both halves (`./engine-status-wire.ts`)
+// and re-exported here for the host-side consumers that already import this
+// module; a rename can therefore never land on one side only.
+export { MSTAR_ENGINE_STATUS_METHOD, MSTAR_ENGINE_STATUS_NAMESPACE }
+
 /** The contributing package identity (also the invocation id prefix). */
 const CONTRIBUTING_PACKAGE = '@mstar-harness/dsh'
 /** Logger label for the endpoint's own degradation lines. */

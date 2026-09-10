@@ -24,12 +24,13 @@
  */
 
 import type { ConnectionRpcResult } from '@deepseek-ai/dsh-client-connection/client'
+import { ENGINE_STATUS_CHANNEL, ENGINE_STATUS_ENDPOINT } from '../../engine-status-wire.ts'
 import { parseEngineStatusResult, type MstarEngineStatusFetch } from './guards.ts'
 
-/** The gateway call: `/api` + the `mstar/engineStatus` endpoint. */
-export const ENGINE_STATUS_CHANNEL = '/api'
-/** The endpoint path on the shared gateway (namespace `mstar` + method). */
-export const ENGINE_STATUS_ENDPOINT = 'mstar/engineStatus'
+// The wire address is the SAME declaration the host half builds its descriptor
+// from (`../../engine-status-wire.ts`); re-exported here for the panel's own
+// consumers and specs.
+export { ENGINE_STATUS_CHANNEL, ENGINE_STATUS_ENDPOINT }
 
 /**
  * Structural face of the client `connection` service the panel needs — the
