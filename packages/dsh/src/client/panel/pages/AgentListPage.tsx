@@ -341,6 +341,9 @@ function subBucketLabel(id: SubBucketView['id'], t: TranslateNS<'mstar-panel'>):
 
 export function AgentListPage({ view, iteration, t }: AgentListPageProps) {
   const { degraded, note, executing, pending } = view
+  // Memoized on the projection identity: `view.agents` is stable per snapshot
+  // (PanelContent memoizes `projectGraph` on the payload), so the group model
+  // rebuilds only when the projection actually changes.
   const groups = useMemo(() => buildGroups(view), [view])
 
   // Muted degradation note (spec §8 — four honest states, never orange):

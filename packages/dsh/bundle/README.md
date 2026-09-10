@@ -183,11 +183,11 @@ injection, purity gate, and inline assertions that the bundle carries **no
 and its plain-`.css` text loader were removed with the graph layer), zero
 `@deepseek-ai/*` value imports and no `import.meta` / ESM statements — the
 web loader executes plugin bundles as classic `<script>`s); the full `bun run
-build` runs it after the node half. Verified locally: boot graph entry, the
+build` runs it after the node half. Verified against the realized install
+surface: boot graph entry, the
 `/plugins/<id>/client.js` route serving the exact built bundle, and the
 browser-handoff materialization (`inject`/`apply`/CSS injection under
-classic-script semantics) — see the
-`install-verification.md` guide of the panel-beautify iteration (local harness root).
+classic-script semantics).
 
 Known limitations (this iteration): the iteration stepper's Step 1
 (iteration-start) IS the current step while the steering compass is

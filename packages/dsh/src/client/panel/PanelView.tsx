@@ -98,7 +98,8 @@ function formatSnapshotTime(at: string): string | null {
 }
 
 export interface PanelContentProps {
-  tab: PanelSection
+  /** The active panel section (plan sidebar §L1.5 vocabulary — not a sidebar tab record). */
+  section: PanelSection
   source: MstarEngineStatusPayload
   t: TranslateNS<'mstar-panel'>
 }
@@ -110,15 +111,19 @@ export interface PanelContentProps {
  * grouped list, plan sidebar §L3); events = the EventLogPage (spec §5 — the
  * log page with per-row `<details>` expansion).
  */
-export function PanelContent({ tab, source, t }: PanelContentProps) {
-  if (tab === 'agents') {
+export function PanelContent({ section, source, t }: PanelContentProps) {
+  // The projection is memoized on the SNAPSHOT identity (the payload object is
+  // stable between snapshot stores updates) — the pages' downstream
+  // `useMemo(..., [view])` memos stay effective instead of re-running on every
+  // render against a fresh projection object.
+  const view = React.useMemo(() => projectGraph(source), [source])
+  if (section === 'agents') {
     // The SHARED iteration info section : the agents page receives the
     // SAME `view.iteration` the tasks page renders (IterationInfoSection).
-    const view = projectGraph(source)
     return <AgentListPage view={view.agents} iteration={view.iteration} t={t} />
   }
-  if (tab === 'events') return <EventLogPage view={projectGraph(source)} t={t} />
-  return <IterationTaskPage view={projectGraph(source)} t={t} />
+  if (section === 'events') return <EventLogPage view={view} t={t} />
+  return <IterationTaskPage view={view} t={t} />
 }
 
 export function PanelView({ t, useChat, useSessions, sessionId, engineStatus, useTabInfo, useStore, actions }: MstarPanelBodyProps) {
@@ -227,7 +232,7 @@ export function PanelView({ t, useChat, useSessions, sessionId, engineStatus, us
     <div className={css.root} data-mstar-panel="panel">
       <TabNav active={section} onChange={selectSection} t={t} />
       <div className={css.scroll} data-mstar-scroll data-mstar-graph>
-        <PanelContent tab={section} source={source} t={t} />
+        <PanelContent section={section} source={source} t={t} />
         <Sidebar t={t} state={source.state} source={source} />
         {freshness}
       </div>

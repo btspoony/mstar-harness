@@ -35,8 +35,7 @@
  *   (the stage skeleton + entities/edges now live in the `agents` projection —
  *   spec §4);
  * - added: `iteration.steps / currentStep / branches`, `tasks.columns / total
- *   / truncated`, `agents` (entities + actual/supervise edges + executing/
- *   pending counts — spec §4).
+ *   / truncated`, `agents` (entities + executing/pending counts — spec §4).
  *
  * Agent-entity semantics (the per-role aggregation): entities aggregate by ROLE, not by session
  * — a KNOWN_AGENTS roster role keys its own card (same role across sessions
@@ -48,8 +47,8 @@
  * RENDER places `zone: 'general'` entities in an unknown sub-partition at
  * the bottom of the LAST column (the standalone rightmost unknown column
  * is superseded: 4 columns total). The SDD loop back-edge (sdd-implement →
- * general) stays REMOVED from the projection; the supervise line is a SEPARATE sub-bucket edge
- * (`kind: 'supervise'`, see `superviseEdges`). The event-log `unexpected`
+ * general) and the sub-bucket supervise line are both REMOVED from the
+ * projection — the agents zone projects entities only. The event-log `unexpected`
  * badge is a SEPARATE, unchanged semantic (`expected` ⟺ role ∈
  * EXPECTED_ROLE_FLOW union). The `sdd-implement` column is further split
  * into implementor / reviewer SUB-BUCKETS: every entity carries a projected `bucket` field ('implementor' /
@@ -231,7 +230,7 @@ export interface AgentEntityView {
    * non-roster dispatch); the KNOWN_AGENTS role id for idle cards. INVARIANT
    * (spec §6.2): keys are UNIQUE across the whole `entities` array —
    * an evidence-derived `general` key suppresses the idle general twin in
-   * `idleEntities`, so the React `key` / `layoutAgents` `cards.set` never see
+   * `idleEntities`, so the render layer's entity `key` space never sees
    * duplicates.
    */
   key: string
@@ -345,46 +344,6 @@ export type AgentEntityStatus =
   | 'advisory'
   | 'idle'
 
-/** Edge kinds (spec §4 — the finalized line semantics, design doc §2.2): handoff / sub-bucket
- * supervision arrows. `expected` (stage skeleton) and `next` (running
- * animation) are REMOVED — the column order implies the flow, the running
- * card glow/status point carries the position. */
-export type AgentEdgeKind = 'actual' | 'supervise'
-
-/**
- * One agents-zone arrow (spec §4):
- * - `actual`: same-plan handoff between ts-adjacent dispatch ENTITY keys
- *   (source/target = entity key — role-based). The line set filters
- *   general-bucket endpoints
- *   (a general handoff is noise, not a meaningful transfer) and keeps at most
- *   ONE edge per entity-key pair (the latest direction) — design doc §2.2;
- * - `supervise`: ONE static sub-bucket line inside the `sdd-implement`
- *   column — implementor ↔ reviewer mutual supervision (the mstar-sdd
- *   mutual-supervision contract; the render draws it as a bidirectional
- *   double arrow).
- *   source/target embed the column id as an anchor prefix:
- *   `<stage-id>:implementor` / `<stage-id>:reviewer`. NOT per-entity pairs —
- *   drawing per-role pairs would fabricate concrete supervision relations
- *   where no evidence exists (evidence-level handoffs are covered by
- *   `actualEdges`). STATIC presence (design knowledge) + evidence-driven
- *   lighting via `evidenced` (dim without implement/review dispatch
- *   evidence, lit with it — never a fabricated activation).
- */
-export interface AgentEdge {
-  kind: AgentEdgeKind
-  /** actual: entity key; supervise: `<stage-id>:implementor|reviewer`. */
-  source: string
-  target: string
-  /** Unused by the line edge set (the removed `next` arrow carried the
-   * running entity key); kept for shape stability — always null. */
-  entityKey: string | null
-  /** Supervise edges only:
-   * evidence-driven lighting — true when any dispatch row's role belongs to
-   * an SDD sub-bucket (implementor ∪ reviewer), false otherwise (dim).
-   * Absent (undefined) for actual. */
-  evidenced?: boolean
-}
-
 /**
  * The canvas degradation-note classification (spec §8): the projection
  * decides the note from the RAW ledger (never a UI-side heuristic on the
@@ -398,8 +357,8 @@ export type AgentZoneNote = 'empty' | 'settle-only' | null
 
 /**
  * The projected agents zone (spec §4 + §6.2): the EXPECTED_ROLE_FLOW stage
- * skeleton plus the dispatch-derived entity cards and the actual/supervise
- * arrows. Total function — NEVER throws and NEVER fabricates: the KNOWN_AGENTS
+ * skeleton plus the dispatch-derived entity cards. Total function — NEVER
+ * throws and NEVER fabricates: the KNOWN_AGENTS
  * roster always projects as entities (idle cards when there is no evidence) —
  * agentFlow missing/unreadable → `degraded` (full idle roster + no
  * executing/pending claims); 0 events → `empty` (full idle roster + pending
@@ -417,8 +376,6 @@ export interface AgentZoneView {
   note: AgentZoneNote
   /** Evidence-derived dispatch entities ∪ idle KNOWN_AGENTS cards — the full roster is NEVER hidden (spec §6.2). */
   entities: readonly AgentEntityView[]
-  /** expected (stage skeleton) + actual (same-plan handoffs) + at most one next (latest running). */
-  edges: readonly AgentEdge[]
   /** `running` entity count — the summary "N 执行中" (idle cards never count). */
   executing: number
   /** Sum of expected roles of stages with no dispatch evidence — the summary "M 待执行". */
@@ -772,45 +729,6 @@ function bucketOf(role: string): AgentBucket | null {
   return null
 }
 
-/** The `sdd-implement` stage column id (the sub-buckets' host column) —
- * DERIVED from the projected stages (the same `${phase}:${stage}` key
- * construction the projection emits — a phase/stage rename can never
- * silently orphan the supervise line); null when the stage is absent. */
-function sddImplementColumnId(stages: readonly AgentZoneStage[]): string | null {
-  const s = stages.find((x) => x.stage === 'sdd-implement')
-  return s === undefined ? null : s.id
-}
-
-/**
- * The sub-bucket supervision edge: ONE static design-knowledge line between
- * the `sdd-implement` column's
- * implementor and reviewer sub-buckets (the mstar-sdd mutual-supervision
- * contract — the render draws it as a bidirectional double arrow).
- * NOT per-entity pairs: drawing implementor→reviewer per role pair would
- * fabricate concrete supervision relations where no evidence exists (the
- * evidence-level handoffs are already covered by `actualEdges`). STATIC
- * presence (existence = design knowledge — the edge is emitted even without
- * any dispatch evidence, degraded/empty branches included) + evidence-driven
- * lighting via `AgentEdge.evidenced` (dim with no implement/review dispatch
- * evidence, lit with it — the same pattern as the expected skeleton: never a
- * fabricated activation). Anchors embed the column id as a prefix:
- * `<stage-id>:implementor` / `<stage-id>:reviewer`.
- */
-function superviseEdges(stages: readonly AgentZoneStage[], entries: readonly { view: FlowEventView }[]): AgentEdge[] {
-  const columnId = sddImplementColumnId(stages)
-  if (columnId === null) return []
-  const evidenced = entries.some(
-    (e) => e.view.kind === 'dispatch' && bucketOf(e.view.role) !== null,
-  )
-  return [{
-    kind: 'supervise',
-    source: `${columnId}:implementor`,
-    target: `${columnId}:reviewer`,
-    entityKey: null,
-    evidenced,
-  }]
-}
-
 /** One in-progress entity accumulator (the aggregation walk, spec §4). */
 interface EntityAccum {
   key: string
@@ -946,52 +864,6 @@ function aggregateEntities(
 }
 
 /**
- * Same-plan handoff arrows (spec §4 — design doc §2.2): within each planId, the ts-ascending adjacent
- * dispatch ENTITY pairs — keys are ROLE-based
- * (`entityKeyOf`, the same classification the
- * entity cards use, so a handoff always connects two real cards; anonymous
- * rows fold into the `general` key). Plan-less dispatches cannot form a pair
- * → excluded; a self-pair (the same entity twice in a row) is skipped — a
- * card never hands off to itself.
- *
- * 简洁化 (design doc §2.2): general-bucket
- * endpoints are FILTERED (a handoff into/out of the anonymous catch-all is
- * noise, not a meaningful transfer — the general card is a sink, not a flow
- * participant), and each unordered entity-key PAIR emits AT MOST ONE edge —
- * the latest direction (an A→B→A→B oscillation collapses to the final B
- * handoff). Total function, never a throw.
- */
-function actualEdges(entries: readonly { view: FlowEventView }[]): AgentEdge[] {
-  const byPlan = new Map<string, { key: string; ts: number; idx: number }[]>()
-  entries.forEach((e, idx) => {
-    const v = e.view
-    if (v.kind !== 'dispatch') return
-    if (v.planId === null) return // no plan → no same-plan chain
-    const key = entityKeyOf(v.role)
-    const list = byPlan.get(v.planId)
-    if (list === undefined) byPlan.set(v.planId, [{ key, ts: v.ts, idx }])
-    else list.push({ key, ts: v.ts, idx })
-  })
-  // Unordered-pair dedupe map: the walk is ts-ascending, so the LAST write per
-  // pair carries the LATEST direction (design doc §2.2 — 同对实体键至多 1 条).
-  const pairEdges = new Map<string, AgentEdge>()
-  for (const planId of Array.from(byPlan.keys()).sort()) {
-    const rows = byPlan.get(planId)!
-      .slice()
-      .sort((a, b) => a.ts - b.ts || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0) || a.idx - b.idx)
-    for (let i = 0; i + 1 < rows.length; i++) {
-      if (rows[i]!.key === rows[i + 1]!.key) continue // self-pair skip
-      const a = rows[i]!.key
-      const b = rows[i + 1]!.key
-      if (a === GENERAL_BUCKET || b === GENERAL_BUCKET) continue // general endpoints filtered
-      const pairKey = a < b ? `${a}|${b}` : `${b}|${a}`
-      pairEdges.set(pairKey, { kind: 'actual', source: a, target: b, entityKey: null })
-    }
-  }
-  return Array.from(pairEdges.values())
-}
-
-/**
  * Idle roster cards (spec §6.2): every KNOWN_AGENTS member WITHOUT role
  * evidence gets an `idle` entity (key = role id) — the full known roster is
  * NEVER hidden, degraded/empty branches included. `idle` cards carry no
@@ -1002,8 +874,8 @@ function actualEdges(entries: readonly { view: FlowEventView }[]): AgentEdge[] {
  * (e.g. `scout` — no KNOWN_AGENTS entry for it) produces a lit card keyed
  * `general` WITHOUT the `general` role being literally evidenced.
  * `litKeys` (the evidence-derived entity key set) suppresses the idle general
- * twin in that case too — the entity key space stays unique, so
- * `layoutAgents`' `cards.set` and the React `key` never collide/overwrite.
+ * twin in that case too — the entity key space stays unique, so the render
+ * layer's entity `key` space never collides/overwrites.
  */
 function idleEntities(
   evidencedRoles: ReadonlySet<string>,
@@ -1159,14 +1031,12 @@ export function projectAgents(source: MstarEngineStatusPayload | null, currentSt
   if (rawEvents === null || !Array.isArray(rawEvents)) {
     // No ledger evidence at all → every known agent is idle (spec §6.2);
     // `note` is null — the `degraded` flag IS the note for this branch. The
-    // supervise edge still exists (STATIC design knowledge), dimmed
-    // (evidenced false — no evidence to light it). The Phase-2 plan note
-    // still renders (it is a state.plans annotation, independent of the
-    // ledger evidence).
+    // Phase-2 plan note still renders (it is a state.plans annotation,
+    // independent of the ledger evidence).
     return {
       stages, degraded: true, empty: false, note: null,
       entities: idleEntities(new Set(), new Set(), currentStep),
-      edges: superviseEdges(stages, []), executing: 0, pending: 0,
+      executing: 0, pending: 0,
       activePlanId, activePlanCount,
     }
   }
@@ -1179,14 +1049,13 @@ export function projectAgents(source: MstarEngineStatusPayload | null, currentSt
   // any dispatch row (anonymous included — it IS dispatch evidence) → null.
   const note: AgentZoneNote = empty ? 'empty' : entries.some((e) => e.view.kind === 'dispatch') ? null : 'settle-only'
 
-  // The「当前迭代」filter: entities
-  // and actual edges derive ONLY from the current iteration's dispatch rows.
-  // Settle rows are always kept (they carry the pairing identity); a dispatch
-  // row survives unless it is PROVABLY cross-iteration (see
-  // `isCurrentIterationDispatch`). A cross-iteration plan's events therefore
-  // produce no entity/edge (the roster falls back to idle). `note`/`empty`/
-  // `degraded` stay computed from the RAW ledger above — the event-log tab
-  // (projectFlowEvents) is unfiltered too.
+  // The「当前迭代」filter: entities derive ONLY from the current iteration's
+  // dispatch rows. Settle rows are always kept (they carry the pairing
+  // identity); a dispatch row survives unless it is PROVABLY cross-iteration
+  // (see `isCurrentIterationDispatch`). A cross-iteration plan's events
+  // therefore produce no entity (the roster falls back to idle). `note`/
+  // `empty`/`degraded` stay computed from the RAW ledger above — the
+  // event-log tab (projectFlowEvents) is unfiltered too.
   const iterationRow = source == null ? null : (source as { iteration?: unknown }).iteration
   const iterationId = iterationRow === null || iterationRow === undefined
     ? null
@@ -1243,22 +1112,12 @@ export function projectAgents(source: MstarEngineStatusPayload | null, currentSt
   // idle roster `general` card.
   const litKeys = new Set(lit.map((e) => e.key))
   const entities = [...lit, ...idleEntities(evidencedRoles, litKeys, currentStep)]
-  // Line edge set (design doc §2.2): actual (filtered handoffs) + supervise
-  // (static design knowledge). `expected` skeleton / `next` animation edges
-  // are REMOVED — 简洁化. The actual edges
-  // derive from the FILTERED rows;
-  // the supervise line stays UNCHANGED (raw rows — its evidence-driven lighting
-  // is sub-bucket presence, independent of the iteration filter).
-  const edges = [
-    ...actualEdges(filtered),
-    ...superviseEdges(stages, entries),
-  ]
 
   const executing = entities.filter((e) => e.status === 'running').length
   // Pending = expected roles of stages with NO dispatch evidence (spec §4).
   const pending = stages.reduce((sum, s) => sum + (evidenced.has(s.id) ? 0 : s.roles.length), 0)
 
-  return { stages, degraded: false, empty, note, entities, edges, executing, pending, activePlanId, activePlanCount }
+  return { stages, degraded: false, empty, note, entities, executing, pending, activePlanId, activePlanCount }
 }
 
 /* ---------------------------------- flow events projection (spec §3 — moved from `flow.*`) ---------------------------------- */

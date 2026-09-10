@@ -13,10 +13,12 @@ import type { IconProps } from '@deepseek-ai/dsh-client-ui-primitives'
 
 /**
  * A four-point morning star on `currentColor` — the plugin's mark at guide
- * and chip sizes (14–16px). Pure geometry: no fills, no hardcoded colors,
+ * and chip sizes (14–16px). `size` defaults to 16 (the guide-capsule size —
+ * the definition registers this component with no props); the chip title
+ * seat passes 14 explicitly. Pure geometry: no fills, no hardcoded colors,
  * every stroke rides `currentColor` so the host's chip/guide styling applies.
  */
-export function MstarGlyph({ size, className }: IconProps) {
+export function MstarGlyph({ size = 16, className }: IconProps) {
   return (
     <svg
       className={className}

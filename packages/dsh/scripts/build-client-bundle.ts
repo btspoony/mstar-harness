@@ -166,6 +166,19 @@ export function assertNoUnescapedDigitHashSelector(text: string, what: string): 
 }
 
 /**
+ * Purity-gate classification (the post-build half of the bundle contract):
+ * the `@deepseek-ai/*` module ids required by `text` that are NOT in
+ * `CLIENT_EXTERNALS` — each one is a value import the loader's module table
+ * cannot resolve (throw at build time; the documented external rows are the
+ * only allowed requires). Exported for the spec that pins the
+ * allows-exactly-CLIENT_EXTERNALS contract.
+ */
+export function offTableDeepseekRequires(text: string): string[] {
+  const deepseekRequires = [...text.matchAll(/require\(\s*["'](@deepseek-ai\/[^"']*)["']\s*\)/g)].map((m) => m[1]!)
+  return deepseekRequires.filter((id) => !CLIENT_EXTERNALS.includes(id))
+}
+
+/**
  * Transform-layer regression assertion (plan Scope item 2): after compiling
  * one `*.module.css`, (i) every classMap value appears in the css text in its
  * canonical escaped form (`'.' + cssEscapeIdentifier(hashed)` — a byte-level
@@ -346,8 +359,7 @@ if (import.meta.main) {
   if (/xyflow|reactflow/i.test(bundleText)) {
     throw new Error('client bundle contract: the emitted bundle still contains xyflow/reactflow markers — the react-flow removal is incomplete (check imports / comments / devDeps)')
   }
-  const deepseekRequires = [...bundleText.matchAll(/require\(\s*["'](@deepseek-ai\/[^"']*)["']\s*\)/g)].map((m) => m[1]!)
-  const offTableRequires = deepseekRequires.filter((id) => !CLIENT_EXTERNALS.includes(id))
+  const offTableRequires = offTableDeepseekRequires(bundleText)
   if (offTableRequires.length > 0) {
     throw new Error(`client bundle contract: a @deepseek-ai/* VALUE import survived the purity gate (${offTableRequires.join(', ')})`)
   }

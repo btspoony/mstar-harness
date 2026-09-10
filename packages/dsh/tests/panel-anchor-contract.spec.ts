@@ -65,10 +65,15 @@ describe('panel anchor contract — deleted conversation-view seat stays deleted
 })
 
 describe('panel anchor contract — the agent canvas stays deleted (plan sidebar §L3.4/§L3.5, AC5)', () => {
-  it('src/client/** carries no canvas anchor, no card port anchor', () => {
+  it('src/client/** carries no canvas anchor, no card port anchor, no deleted edge-anchor family', () => {
     expectAbsent(collectFiles(CLIENT_DIR), [
       'data-canvas-',
+      'data-canvas-viewport',
+      'data-canvas-pan',
       'data-agent-port',
+      'data-mstar-edge-',
+      'data-agent-edge-',
+      'canvasEdges',
     ])
   })
 

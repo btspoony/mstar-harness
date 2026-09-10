@@ -238,6 +238,10 @@ describe('agent list — L3.2 group/stage/sub-bucket order (plan sidebar §L3.2)
     const qaGate = html.indexOf('data-agent-stage="autonomous-execute:qa-gate"')
     expect(qaGate).toBeGreaterThan(-1)
     expect(unknown).toBeGreaterThan(qaGate)
+    // The zone.agents.bucket.* captions render with their partitions (the
+    // reviewer caption is the distinct 「sdd-reviewer」 copy).
+    expect(html).toContain('>implementor</span>')
+    expect(html).toContain('>sdd-reviewer</span>')
   })
 
   it('implementor partition order: flow roles first (SDD_BUCKET_ROLES order), on-demand roles after, reviewer below', () => {

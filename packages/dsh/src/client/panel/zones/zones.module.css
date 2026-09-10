@@ -14,7 +14,7 @@
  *   - the TaskBoard kanban (five stacked groups, reused in flow by
  *     IterationTaskPage — plan sidebar §L4.2),
  *   - the Legend agent-pipeline + entity-status swatches (mounted on the
- *     agent canvas).
+ *     AgentListPage).
  *
  * Hard metrics (spec §1.2/§7): spacing from the --mstar-space-* ramp (defined
  * at the panel root) only; EVERY color is a verified --dsw-* alias token —

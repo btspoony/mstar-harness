@@ -57,8 +57,8 @@
  *   the react-flow-era orange notes are asserted absent; zh labels;
  *   garbage-proof totality.
  * - iteration zone (spec panel-f4 §2.3 R8/R9
- *   iteration-zone Task 2): the expanded head body is a LEFT-RIGHT split —
- *   branches (small half, DOM-first) + steps (large half), the
+ *   iteration-zone Task 2): the expanded head body is a STACKED split —
+ *   branches (DOM-first) above the vertical steps stepper, the
  *   `data-iteration-head-split` container present only while branches render;
  *   the verdict badge renders only for a current step with a real gate
  *   verdict (Phase 1 → Step 1 current, verdict unknown → NO badge) and every
@@ -1705,7 +1705,7 @@ describe('workflow panel — T7 iteration-task page: content head collapse/expan
     expect(html).not.toContain('data-mstar-legend')
   })
 
-  it('state null → the muted 5-column kanban skeleton + no-plans note, never an orange box (spec §8)', async () => {
+  it('state null → the muted five-group kanban skeleton + no-plans note, never an orange box (spec §8)', async () => {
     const g = await panelHtml({ ...fullSource, state: null })
     expect(g).toContain('data-mstar-page="tasks"')
     expect(g).toContain('data-zone="tasks"')
@@ -1762,10 +1762,10 @@ describe('workflow panel — T7 iteration-task page: content head collapse/expan
 
 /* ---------------------------------------------------------------------------
  * F4.3 iteration zone (spec panel-f4 §2.3 R8/R9
- * iteration-zone Task 2): the expanded head body becomes a LEFT-RIGHT split —
- * branches (`data-iteration-head-branches`) LEFT small half + steps
- * (`data-iteration-head-steps`) RIGHT large half, DOM order branches BEFORE
- * steps (a plain flex row puts branches left); the `data-iteration-head-split`
+ * iteration-zone Task 2): the expanded head body becomes a STACKED split
+ * (§L4.2) — branches (`data-iteration-head-branches`) above the steps
+ * (`data-iteration-head-steps`) vertical stepper, DOM order branches BEFORE
+ * steps; the `data-iteration-head-split`
  * container exists ONLY while branches render (active + non-null). The
  * verdict badge renders ONLY for a current step carrying a REAL gate verdict
  * (`step.state === 'current' && step.verdict !== 'unknown'`) — Phase 1
@@ -2360,14 +2360,14 @@ describe('workflow panel — T6 tabs-shell: section nav + content switching + in
     locale.setLocale('en')
     const t = locale.bind(NS)
     // tasks → the IterationTaskPage (Content Head + kanban, spec §3).
-    const tasks = renderToStaticMarkup(createElement(PanelContent, { tab: 'tasks', source: fullSource, t }))
+    const tasks = renderToStaticMarkup(createElement(PanelContent, { section: 'tasks', source: fullSource, t }))
     expect(tasks).toContain('data-mstar-page="tasks"')
     expect(tasks).toContain('data-iteration-head')
     expect(tasks).toContain('data-zone="tasks"')
     expect(tasks).not.toContain('data-mstar-canvas')
     // agents → the vertical grouped list: data-mstar-page + the list root +
     // full-roster entity rows (plan sidebar §L3).
-    const agents = renderToStaticMarkup(createElement(PanelContent, { tab: 'agents', source: fullSource, t }))
+    const agents = renderToStaticMarkup(createElement(PanelContent, { section: 'agents', source: fullSource, t }))
     expect(agents).toContain('data-mstar-page="agents"')
     expect(agents).toContain('data-agent-list')
     expect(agents).toContain('data-agent-group="iteration-start"')
@@ -2378,7 +2378,7 @@ describe('workflow panel — T6 tabs-shell: section nav + content switching + in
     // events → the real log page :
     // the two partitions + expandable rows + muted empty states (the muted
     // placeholder note is gone — its copy landed in this page).
-    const events = renderToStaticMarkup(createElement(PanelContent, { tab: 'events', source: fullSource, t }))
+    const events = renderToStaticMarkup(createElement(PanelContent, { section: 'events', source: fullSource, t }))
     expect(events).toContain('data-mstar-page="events"')
     expect(events).toContain('data-event-log-section="events"')
     expect(events).toContain('data-event-log-section="violations"')
@@ -2428,7 +2428,7 @@ describe('workflow panel — T6 tabs-shell: section nav + content switching + in
     const locale = newLocale()
     locale.register(NS, { zh, en })
     locale.setLocale('zh')
-    const agents = renderToStaticMarkup(createElement(PanelContent, { tab: 'agents', source: fullSource, t: locale.bind(NS) }))
+    const agents = renderToStaticMarkup(createElement(PanelContent, { section: 'agents', source: fullSource, t: locale.bind(NS) }))
     expect(agents).toContain('data-mstar-page="agents"')
     expect(agents).toContain('data-agent-list')
     // The degraded list note + summary are localized (spec §4/§8).
@@ -2950,12 +2950,12 @@ describe('workflow panel — agent list page (spec panel-tabs §4/§6.2, plan si
  * ------------------------------------------------------------------------- */
 
 describe('workflow panel — shared iteration info section ', () => {
-  /** Render one tab's content through the real PanelContent mapping. */
+  /** Render one section's content through the real PanelContent mapping. */
   function tabHtml(tab: 'tasks' | 'agents', source: MstarEngineStatusPayload): string {
     const locale = newLocale()
     locale.register(NS, { zh, en })
     locale.setLocale('en')
-    return renderToStaticMarkup(createElement(PanelContent, { tab, source, t: locale.bind(NS) }))
+    return renderToStaticMarkup(createElement(PanelContent, { section: tab, source, t: locale.bind(NS) }))
   }
 
   it('the agents tab renders the SAME IterationInfoSection as the tasks tab — same anchors, same data', async () => {
@@ -2999,7 +2999,7 @@ describe('workflow panel — shared iteration info section ', () => {
     locale.register(NS, { zh, en })
     locale.setLocale('zh')
     const agents = renderToStaticMarkup(createElement(PanelContent, {
-      tab: 'agents',
+      section: 'agents',
       source: fullSource,
       t: locale.bind(NS),
     }))

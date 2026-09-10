@@ -17,7 +17,10 @@ export type MstarPanelTitleProps = PropsRuntime<'sidebar.right.pane.tab.title'>
 export function MstarPanelTitle({ useTabInfo }: MstarPanelTitleProps) {
   const { tab } = useTabInfo()
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+    // The chip renders in host chrome OUTSIDE the panel `.root`, where the
+    // `--mstar-space-*` ramp is not defined — the px fallback keeps the gap
+    // honest there (the token scale still applies wherever the ramp exists).
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--mstar-space-1, 4px)' }}>
       <MstarGlyph size={14} />
       <span>{tab.title}</span>
     </span>

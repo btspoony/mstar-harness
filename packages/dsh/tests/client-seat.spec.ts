@@ -233,20 +233,27 @@ describe('workflow panel — sidebar seat registration (plugin entry)', () => {
     disposeFixture()
   })
 
-  it('running the entry\'s effect disposers tears the tab type and both seat registrations down', () => {
-    const { ctx, slots, tabs, runEffectDisposers } = makeCtx()
+  it('running the entry\'s effect disposers tears ALL FOUR registrations down (tab type, body, chip title, dictionaries)', () => {
+    const { ctx, locale, slots, tabs, runEffectDisposers } = makeCtx()
     apply(ctx)
     const disposeFixture = declareFixture(slots)
     expect(tabs.registered).toHaveLength(1)
     expect(slots.entries('sidebar.right.pane.tab')).toHaveLength(1)
     expect(slots.entries('sidebar.right.pane.tab.title')).toHaveLength(1)
+    // 4th registration — the `mstar-panel` dictionaries: keys resolve while
+    // registered (the lookup never returns the raw key for a live namespace).
+    const t = locale.bind(NS)('view.mstar-workflow')
+    expect(t).not.toBe('view.mstar-workflow')
     disposeFixture()
-    // Unload: the host disposes the plugin's effects — the tab type and both
-    // keyed seats leave their registries with them.
+    // Unload: the host disposes the plugin's effects — the tab type, both
+    // keyed seats and the dictionaries leave their registries with them.
     runEffectDisposers()
     expect(tabs.registered).toHaveLength(0)
     expect(slots.entries('sidebar.right.pane.tab')).toHaveLength(0)
     expect(slots.entries('sidebar.right.pane.tab.title')).toHaveLength(0)
+    // The dictionary disposer ran: the namespace is gone — the lookup falls
+    // through to the key itself.
+    expect(locale.bind(NS)('view.mstar-workflow')).toBe('view.mstar-workflow')
   })
 })
 
