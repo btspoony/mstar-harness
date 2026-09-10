@@ -82,7 +82,7 @@ The `mstar` row accepts the plugin `Config` (see `src/index.ts`):
 | `dispatchBinding` | unset → fail-closed `empty-binding` under hard | the dispatching agent's own role (the anti-recursion CALLER) for the precheck |
 | `skillRoots` | unset | additional skill roots (custom mirrors) |
 | `bundledSkillDir` | unset → plugin resolves its OWN packaged `harness-skills/` mirror package-relative | bundled skill mount — the repo-root `skills/` mirror synced by `bundle-assets` at build time (gitignored), resolved package-relative (NOT cwd-anchored). An explicit value wins; a RELATIVE override stays cwd-anchored, so pass an absolute path in the profile layer |
-| `catalogTtlMs` | unset → `60000` | pre-step catalog cache refresh interval (ms) — how often the per-workspace unified `mstar-engine-status` catalog row (watermark + iteration gate + workspace-state digest) re-reads `status.json` / the compass / the knowledge index; the hot path is a timestamp compare + cache hit between refreshes |
+| `catalogTtlMs` | unset → `60000` | pre-step catalog cache refresh interval (ms) — how often the per-workspace unified `mstar-engine` catalog row (watermark + iteration gate + workspace-state digest) re-reads `status.json` / the compass / the knowledge index; the hot path is a timestamp compare + cache hit between refreshes |
 
 ## Client half (workflow panel)
 
@@ -97,11 +97,14 @@ boot the web app serves the closure-factory CJS bundle at
 `/plugins/@mstar-harness/dsh/client.js` (rev = content sha1) and loads it via
 `window.__ModuleLoader__.load({ id, factory })`.
 
-The client entry registers a `conversation.view` view-ring tab
-(`id: 'mstar-workflow'`, `order: 20`), labeled **"MStar 工作流" / "MStar
-Workflow"**, rendering the latest `mstar-engine-status` catalog **anchor** row
+The client entry registers a right-Sidebar page tab type (`id:
+'@mstar-harness/dsh'`, `kind: 'mstar-workflow'`, one guide-page capsule at
+`order: 20`), labeled **"MStar 工作流" / "MStar
+Workflow"**, rendering the latest `mstar-engine` catalog **anchor** row
 — the persisted source is the bare first-party `plugin` arm
-(`{ kind: 'plugin', plugin: 'mstar-engine-status', form: 'catalog' }`), and the
+(`{ kind: 'plugin', plugin: 'mstar-engine', form: 'catalog' }`; the anchor
+reader also accepts the legacy `mstar-engine-status` identity from persisted
+logs), and the
 payload is fetched from the host's `/api/mstar/engineStatus` endpoint (the
 shared `/api` typert gateway owns the route; the panel's browser half calls
 `connection.rpc.call('/api', 'mstar/engineStatus', { args: { sessionId, cwd } })`
@@ -296,9 +299,10 @@ never faked); the current-iteration filter with NO steering compass infers
 the iteration from plan ids (8-digit date prefix) + doneAt — a
 deterministic, documented heuristic, and only provably cross-iteration
 events are dropped; no historical
-back-scan of resumed long logs; no custom top-level slot (the
-`conversation.view` tab is the only session-level panel seat without
-dsh-private layout changes). Browser UI observation is the user-restart
+back-scan of resumed long logs; the sidebar chip title is captured at open
+time (a mid-session locale switch does not flip it), and a docked body
+renders nothing while the column is collapsed or another pane tab is active
+(`tab.visible === false`). Browser UI observation is the user-restart
 acceptance (R1 folded into this iteration's AC-1/2).
 
 ## Known constraints

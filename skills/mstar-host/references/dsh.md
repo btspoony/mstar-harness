@@ -34,12 +34,14 @@ or a custom profile).
 - Web client plugin (workflow panel): the same `mstar` bundle row carries a
   browser client half (`dsh.client` + `exports["./client"]`) discovered
   automatically by `ClientModuleHostService` — no separate profile layer or
-  install step. It registers a **`conversation.view`** view-ring tab
-  (`id: 'mstar-workflow'`, `order: 20`) labeled **"MStar 工作流" / "MStar
-  Workflow"** rendering the latest `mstar-engine-status` catalog **anchor** row
+  install step. It registers a **right-Sidebar page tab type** (`id:
+  '@mstar-harness/dsh'`, `kind: 'mstar-workflow'`, one guide-page capsule at
+  `order: 20`) labeled **"MStar 工作流" / "MStar
+  Workflow"** rendering the latest `mstar-engine` catalog **anchor** row
   — the persisted source is the bare first-party `plugin` arm
-  (`{ kind: 'plugin', plugin: 'mstar-engine-status', form: 'catalog' }`, no
-  payload members), and the payload is fetched from the host's
+  (`{ kind: 'plugin', plugin: 'mstar-engine', form: 'catalog' }`, no
+  payload members; the anchor reader also accepts the legacy
+  `mstar-engine-status` identity from persisted logs), and the payload is fetched from the host's
   `/api/mstar/engineStatus` endpoint (the gateway owns the route; the browser
   half calls `connection.rpc.call('/api', 'mstar/engineStatus', { args: { sessionId, cwd } })`
   and renders the session's stored snapshot, or an explicit unavailable reason) —
