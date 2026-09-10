@@ -272,15 +272,12 @@ export function mstarEngineStatusContribution(): TypertContribution {
 /**
  * Is a `mstar` gateway already registered on this context?
  *
- * The dedupe ADMISSION TEST, deliberately taken before the constructor rather
- * than after it: constructing a second `MstarEngineStatusGateway` whose
- * `provide` finds the name taken throws out of the service's `fiber.effect`,
- * and that ends the calling fiber's setup — which silently withdraws the
- * effects that fiber had already installed. The previous "catch
- * `has been registered` and keep the first instance" shape therefore made the
- * second apply replace the first gateway's registration AND lose the endpoint
- * contribution it had just registered; the failure was invisible because the
- * service read back looked healthy.
+ * The dedupe ADMISSION TEST, taken before the constructor so the duplicate path
+ * is explicit: constructing a second `MstarEngineStatusGateway` whose `provide`
+ * finds the name taken throws out of the service's `fiber.effect`, and the
+ * dedupe then rests on matching cordis' error text. This reads the live
+ * registration instead — the FIRST instance keeps serving with its own
+ * resolver/boot root, which is what the sibling-apply spec pins.
  *
  * An unreadable registry is not a reason to skip the service: fall through to
  * the constructor, whose own guard still contains the duplicate.
