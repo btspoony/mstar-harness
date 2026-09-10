@@ -25,6 +25,7 @@ import { join } from 'node:path'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import { bootApp, seedHarness, v2Root, v2Snapshot, v2WorkflowEntry, type BootResult } from './harness.ts'
+import { buildCatalogPayload } from '../src/gates/catalog.ts'
 import { ENGINE_VERSION } from './engine-version.ts'
 
 let booted: BootResult | undefined
@@ -160,19 +161,21 @@ describe('mstar-engine-status — the unified catalog row (watermark + gate + st
     expect(decision.messages.length).toBe(inbox.length + 1)
 
     const row = lastMessage(decision)
-    expect(row?.source).toMatchObject({ kind: 'mstar-engine-status', form: 'catalog' })
-    const source = row?.source
-    if (source === undefined || source.kind !== 'mstar-engine-status') return
+    expect(row?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine-status', form: 'catalog' })
+    if (row?.source.kind !== 'plugin') return
+    // The catalog payload is NOT persisted on the row's source — it is read
+    // from the same builder the pre-step listener rendered the row from.
+    const payload = buildCatalogPayload(booted!.ctx, harnessDir)
 
     // Iteration gate section (steering compass + selected workflow snapshot resolve).
-    expect(source.iteration).toMatchObject({
+    expect(payload.iteration).toMatchObject({
       iterationId: 'v2.2.0',
       statusPath: join(harnessDir, `workflows/${RICH_WORKFLOW}/snapshot.json`),
       gate: { transition: 'phase-2-execute', all_plans_done: false },
     })
 
     // Workspace-state section.
-    expect(source.state).toMatchObject({
+    expect(payload.state).toMatchObject({
       selection: { kind: 'active', workflowId: RICH_WORKFLOW, dir: `workflows/${RICH_WORKFLOW}` },
       plans: [
         { id: 'plan-a', status: 'InProgress', doneAt: null },
@@ -226,9 +229,11 @@ describe('mstar-engine-status — the unified catalog row (watermark + gate + st
     const decision = await booted.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
 
     const row = lastMessage(decision)
-    const source = row?.source
-    if (source === undefined || source.kind !== 'mstar-engine-status') return
-    expect(source.state).toMatchObject({ iterationBaseBranch: 'dev-dsh', targetBranch: 'dev-dsh' })
+    if (row?.source.kind !== 'plugin') return
+    // The catalog payload is NOT persisted on the row's source — it is read
+    // from the same builder the pre-step listener rendered the row from.
+    const payload = buildCatalogPayload(booted!.ctx, harnessDir)
+    expect(payload.state).toMatchObject({ iterationBaseBranch: 'dev-dsh', targetBranch: 'dev-dsh' })
     expect(textOf(row)).toContain('branch: dev-dsh → dev-dsh')
   })
 })
@@ -253,9 +258,11 @@ describe('mstar-engine-status — residualFindings register semantics (spec §6)
     const decision = await booted.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
 
     const row = lastMessage(decision)
-    const source = row?.source
-    if (source === undefined || source.kind !== 'mstar-engine-status') return
-    expect(source.state).toMatchObject({ residuals: [], residualFindings: null })
+    if (row?.source.kind !== 'plugin') return
+    // The catalog payload is NOT persisted on the row's source — it is read
+    // from the same builder the pre-step listener rendered the row from.
+    const payload = buildCatalogPayload(booted!.ctx, harnessDir)
+    expect(payload.state).toMatchObject({ residuals: [], residualFindings: null })
   })
 
   it('register present with no open entries → residualFindings [] (closed lifecycles only)', async () => {
@@ -279,11 +286,13 @@ describe('mstar-engine-status — residualFindings register semantics (spec §6)
     const decision = await booted.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
 
     const row = lastMessage(decision)
-    const source = row?.source
-    if (source === undefined || source.kind !== 'mstar-engine-status') return
+    if (row?.source.kind !== 'plugin') return
+    // The catalog payload is NOT persisted on the row's source — it is read
+    // from the same builder the pre-step listener rendered the row from.
+    const payload = buildCatalogPayload(booted!.ctx, harnessDir)
     // Closed entries must NOT count toward the severity
     // rollup either — the workspace shows no open residuals at all.
-    expect(source.state).toMatchObject({ residualFindings: [], residuals: [] })
+    expect(payload.state).toMatchObject({ residualFindings: [], residuals: [] })
   })
 })
 
@@ -297,8 +306,8 @@ describe('mstar-engine-status — residualFindings register semantics (spec §6)
  * ========================================================================== */
 
 describe('mstar-engine-status — residualFindings open-filter branches + severity order + cap (spec §6)', () => {
-  /** Seed a v2 tree whose project register carries the given entries. */
-  async function seedWithRegister(entries: Record<string, unknown[]>): Promise<void> {
+  /** Seed a v2 tree whose project register carries the given entries; returns its resolved harness dir. */
+  async function seedWithRegister(entries: Record<string, unknown[]>): Promise<string> {
     const root = await mkdtemp(join(tmpdir(), 'dsh-harness-state-register-'))
     const harnessDir = join(root, 'harness')
     await mkdir(harnessDir, { recursive: true })
@@ -308,10 +317,11 @@ describe('mstar-engine-status — residualFindings open-filter branches + severi
       'projects/_default/residuals.json': JSON.stringify({ entries }),
     })
     booted = await bootApp({ root })
+    return harnessDir
   }
 
   it('open filter parity: missing / null / false lifecycle → open; strict "open" string → open; true and non-"open" strings → closed', async () => {
-    await seedWithRegister({
+    const harnessDir = await seedWithRegister({
       'plan-a': [
         { id: 'R-missing', title: 'no lifecycle key', severity: 'critical', source_plan: 'plan-a', registered_at: '2026-08-08' },
         { id: 'R-null', title: 'null lifecycle', severity: 'high', lifecycle: null, source_plan: 'plan-a', registered_at: '2026-08-08' },
@@ -326,10 +336,12 @@ describe('mstar-engine-status — residualFindings open-filter branches + severi
     const decision = await booted!.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
 
     const row = lastMessage(decision)
-    const source = row?.source
-    if (source === undefined || source.kind !== 'mstar-engine-status') return
-    const state = source.state
-    expect(source.state).not.toBeNull()
+    if (row?.source.kind !== 'plugin') return
+    // The catalog payload is NOT persisted on the row's source — it is read
+    // from the same builder the pre-step listener rendered the row from.
+    const payload = buildCatalogPayload(booted!.ctx, harnessDir)
+    const state = payload.state
+    expect(payload.state).not.toBeNull()
     if (state === null) return
     expect(state.residualFindings).toEqual([
       { planId: 'plan-a', id: 'R-missing', severity: 'critical', title: 'no lifecycle key' },
@@ -349,7 +361,7 @@ describe('mstar-engine-status — residualFindings open-filter branches + severi
   })
 
   it('severity order critical→nit regardless of source order; unknown severities skipped; missing id/title → ""', async () => {
-    await seedWithRegister({
+    const harnessDir = await seedWithRegister({
       'plan-a': [
         { id: 'R-nit', title: 'nit first in source', severity: 'nit', source_plan: 'plan-a', registered_at: '2026-08-08' },
         { id: 'R-unknown', title: 'unknown severity must be skipped', severity: 'urgent', source_plan: 'plan-a', registered_at: '2026-08-08' },
@@ -364,10 +376,12 @@ describe('mstar-engine-status — residualFindings open-filter branches + severi
     const decision = await booted!.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
 
     const row = lastMessage(decision)
-    const source = row?.source
-    if (source === undefined || source.kind !== 'mstar-engine-status') return
-    const state = source.state
-    expect(source.state).not.toBeNull()
+    if (row?.source.kind !== 'plugin') return
+    // The catalog payload is NOT persisted on the row's source — it is read
+    // from the same builder the pre-step listener rendered the row from.
+    const payload = buildCatalogPayload(booted!.ctx, harnessDir)
+    const state = payload.state
+    expect(payload.state).not.toBeNull()
     if (state === null) return
     expect(state.residualFindings).toEqual([
       { planId: 'plan-a', id: '', severity: 'critical', title: '' },
@@ -382,7 +396,7 @@ describe('mstar-engine-status — residualFindings open-filter branches + severi
   it('cap 10: more than 10 open findings (across plans) → the first 10 by severity order, planId preserved', async () => {
     const criticals = Array.from({ length: 4 }, (_, i) => ({ id: `C${i + 1}`, title: `critical ${i + 1}`, severity: 'critical', source_plan: 'plan-a', registered_at: '2026-08-08' }))
     const nits = Array.from({ length: 8 }, (_, i) => ({ id: `N${i + 1}`, title: `nit ${i + 1}`, severity: 'nit', source_plan: 'plan-b', registered_at: '2026-08-08' }))
-    await seedWithRegister({
+    const harnessDir = await seedWithRegister({
       'plan-a': criticals.slice(0, 2),
       'plan-b': [...criticals.slice(2), ...nits],
     })
@@ -390,10 +404,12 @@ describe('mstar-engine-status — residualFindings open-filter branches + severi
     const decision = await booted!.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
 
     const row = lastMessage(decision)
-    const source = row?.source
-    if (source === undefined || source.kind !== 'mstar-engine-status') return
-    const state = source.state
-    expect(source.state).not.toBeNull()
+    if (row?.source.kind !== 'plugin') return
+    // The catalog payload is NOT persisted on the row's source — it is read
+    // from the same builder the pre-step listener rendered the row from.
+    const payload = buildCatalogPayload(booted!.ctx, harnessDir)
+    const state = payload.state
+    expect(payload.state).not.toBeNull()
     if (state === null) return
     const findings = state.residualFindings
     if (findings === null) return
@@ -436,10 +452,12 @@ describe('mstar-engine-status — doneAt passthrough (spec §6)', () => {
     const decision = await booted.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
 
     const row = lastMessage(decision)
-    const source = row?.source
-    if (source === undefined || source.kind !== 'mstar-engine-status') return
-    const state = source.state
-    expect(source.state).not.toBeNull()
+    if (row?.source.kind !== 'plugin') return
+    // The catalog payload is NOT persisted on the row's source — it is read
+    // from the same builder the pre-step listener rendered the row from.
+    const payload = buildCatalogPayload(booted!.ctx, harnessDir)
+    const state = payload.state
+    expect(payload.state).not.toBeNull()
     if (state === null) return
     expect(state.plans).toEqual([
       { id: 'plan-a', status: 'Done', doneAt: '2026-08-09', iterationRefs: [] },
@@ -468,10 +486,12 @@ describe('mstar-engine-status — advisory degrade (state section null)', () => 
     if (decision.kind !== 'enter') return
     expect(decision.messages).toHaveLength(1)
     const row = lastMessage(decision)
-    const source = row?.source
-    if (source === undefined || source.kind !== 'mstar-engine-status') return
-    expect(source.state).toBeNull()
-    expect(source.iteration).toBeUndefined()
+    if (row?.source.kind !== 'plugin') return
+    // The catalog payload is NOT persisted on the row's source — it is read
+    // from the same builder the pre-step listener rendered the row from.
+    const payload = buildCatalogPayload(booted!.ctx, harnessDir)
+    expect(payload.state).toBeNull()
+    expect(payload.iteration).toBeUndefined()
     const text = textOf(row)
     expect(text).toContain('<mstar_engine_status>')
     expect(text).not.toContain('plans:')
@@ -486,10 +506,12 @@ describe('mstar-engine-status — advisory degrade (state section null)', () => 
     if (decision.kind !== 'enter') return
     expect(decision.messages).toHaveLength(1)
     const row = lastMessage(decision)
-    const source = row?.source
-    if (source === undefined || source.kind !== 'mstar-engine-status') return
-    expect(source.harnessDir).toBeNull()
-    expect(source.state).toBeNull()
+    if (row?.source.kind !== 'plugin') return
+    // No explicit `harnessDir` config and an agent-less payload → the
+    // resolved `{HARNESS_DIR}` is null (the payload the listener built).
+    const payload = buildCatalogPayload(booted!.ctx, null)
+    expect(payload.harnessDir).toBeNull()
+    expect(payload.state).toBeNull()
     expect(textOf(row)).toContain('harness dir: none')
   })
 })

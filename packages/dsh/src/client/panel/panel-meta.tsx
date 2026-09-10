@@ -11,13 +11,13 @@
 
 import * as React from 'react'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
-import type { MstarEngineStatusSource } from '../../types.ts'
+import type { MstarEngineStatusPayload } from '../../types.ts'
 import css from './panel.module.css'
 import { str } from './guards.ts'
 
 export interface PanelMetaProps {
   t: TranslateNS<'mstar-panel'>
-  source: MstarEngineStatusSource
+  source: MstarEngineStatusPayload
 }
 
 export function PanelMeta({ t, source }: PanelMetaProps) {

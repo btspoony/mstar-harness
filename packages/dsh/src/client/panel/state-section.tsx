@@ -14,7 +14,7 @@
 
 import * as React from 'react'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
-import type { MstarEngineStatusSource, MstarHarnessState } from '../../types.ts'
+import type { MstarEngineStatusPayload, MstarHarnessState } from '../../types.ts'
 import css from './panel.module.css'
 import { bool, count, str } from './guards.ts'
 import { FINDINGS_CAP, PLAN_CAP, sortPlans } from './plan-sort.ts'
@@ -23,13 +23,13 @@ export interface StateSectionProps {
   t: TranslateNS<'mstar-panel'>
   state: MstarHarnessState
   /** Top-level enforcement flag (spec §2.1) — NOT part of the state digest. */
-  enforcement: MstarEngineStatusSource['enforcement']
+  enforcement: MstarEngineStatusPayload['enforcement']
 }
 
 /** Enforcement flag label: hard/soft (+ provenance source), unknown when missing (spec §2.1). */
 function enforcementLabel(
   t: TranslateNS<'mstar-panel'>,
-  enforcement: MstarEngineStatusSource['enforcement'],
+  enforcement: MstarEngineStatusPayload['enforcement'],
 ): string {
   if (enforcement === null || enforcement === undefined || typeof enforcement !== 'object') {
     return t('panel.unknown')

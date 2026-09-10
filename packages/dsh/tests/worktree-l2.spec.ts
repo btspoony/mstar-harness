@@ -40,6 +40,7 @@ import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 import { bootApp, seedHarness, v2Root, v2RootWithWorkflow, v2Snapshot, v2SnapshotWithPlans, v2WorkflowEntry, type BootResult } from './harness.ts'
+import { buildCatalogPayload } from '../src/gates/catalog.ts'
 import type { DispatchGateAdvisory } from '../src/index.ts'
 
 let booted: BootResult | undefined
@@ -215,18 +216,18 @@ describe('pre-step iteration gate — catalog composition (REAL-composition boot
     // ONE unified catalog row: watermark + iteration-gate section + state section.
     const row = lastMessage(decision)
     expect(row?.role).toBe('user')
-    expect(row?.source).toMatchObject({ kind: 'mstar-engine-status', form: 'catalog' })
-    const source = row?.source
-    expect(source).toBeDefined()
-    if (source === undefined || source.kind !== 'mstar-engine-status') return
-    expect(source.iteration).toMatchObject({
+    expect(row?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine-status', form: 'catalog' })
+    // The catalog payload is NOT persisted on the row's source — read it from
+    // the same builder the pre-step listener rendered the row from.
+    const payload = buildCatalogPayload(app.ctx, app.harnessDir)
+    expect(payload.iteration).toMatchObject({
       iterationId: 'iter-00000808-wt',
       statusPath: join(app.harnessDir, 'workflows/iter-00000808-wt/snapshot.json'),
       compassPath: join(app.harnessDir, 'iterations/iter-00000808-wt/delivery-compass.md'),
     })
     // The cached view reuses the Task 1 tool result shape (transition /
     // all_plans_done / ok / entry / exit / violations).
-    expect(source.iteration!.gate).toMatchObject({
+    expect(payload.iteration!.gate).toMatchObject({
       transition: 'phase-2-execute',
       all_plans_done: false,
       ok: true,
@@ -234,10 +235,10 @@ describe('pre-step iteration gate — catalog composition (REAL-composition boot
       exit: { ok: false },
       violations: [],
     })
-    expect(source.iteration!.gate.entry.violations.map((v) => v.code)).toContain('PLAN_NOT_DONE')
+    expect(payload.iteration!.gate.entry.violations.map((v) => v.code)).toContain('PLAN_NOT_DONE')
     // Boot-time evaluation passes NO git probes (documented in
     // iterationGateSource): the exit branch/base items are unverifiable.
-    const exitCodes = source.iteration!.gate.exit.violations.map((v) => v.code)
+    const exitCodes = payload.iteration!.gate.exit.violations.map((v) => v.code)
     expect(exitCodes).toContain('EXIT_BRANCH_UNVERIFIABLE')
     expect(exitCodes).toContain('EXIT_PR_BASE_UNVERIFIABLE')
     // The composed session log carries the model-facing gate lines.
@@ -261,11 +262,10 @@ describe('pre-step iteration gate — catalog composition (REAL-composition boot
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
 
     const row = lastMessage(decision)
-    expect(row?.source).toMatchObject({ kind: 'mstar-engine-status' })
-    const source = row?.source
-    if (source === undefined || source.kind !== 'mstar-engine-status') return
-    expect(source.iteration!.gate).toMatchObject({ transition: 'phase-3-close', all_plans_done: true, ok: false })
-    const codes = source.iteration!.gate.violations.map((v) => v.code)
+    expect(row?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine-status', form: 'catalog' })
+    const payload = buildCatalogPayload(app.ctx, app.harnessDir)
+    expect(payload.iteration!.gate).toMatchObject({ transition: 'phase-3-close', all_plans_done: true, ok: false })
+    const codes = payload.iteration!.gate.violations.map((v) => v.code)
     expect(codes).toContain('EXIT_STATUS_NOT_COMPLETED')
     const text = row?.content[0]?.type === 'text' ? row.content[0].text : ''
     expect(text).toContain('gate: FAIL')
@@ -289,7 +289,7 @@ describe('pre-step iteration gate — catalog composition (REAL-composition boot
 
     expect(decision.kind).toBe('enter')
     expect(decision.kind === 'enter' && decision.messages.slice(0, -1)).toEqual(replaced)
-    expect(decision.kind === 'enter' && decision.messages.at(-1)?.source).toMatchObject({ kind: 'mstar-engine-status' })
+    expect(decision.kind === 'enter' && decision.messages.at(-1)?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine-status', form: 'catalog' })
   })
 
   it('aborted step → the delegated decision returns unchanged, no catalog rows (advisory never publishes on a blocked step)', async () => {
@@ -318,7 +318,7 @@ describe('pre-step iteration gate — catalog composition (REAL-composition boot
     // Boot without iteration state → only the engine-status row.
     const before = await app.ctx.waterfall('agent/pre-step', stepPayload(inbox), defaultEnter(inbox))
     expect(before.kind === 'enter' && before.messages.length).toBe(inbox.length + 1)
-    expect(lastMessage(before)?.source).toMatchObject({ kind: 'mstar-engine-status' })
+    expect(lastMessage(before)?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine-status', form: 'catalog' })
 
     // A compass + status.json appearing mid-session does NOT re-watermark
     // within the catalog TTL: the cache is built at boot (no disk I/O on
@@ -331,7 +331,7 @@ describe('pre-step iteration gate — catalog composition (REAL-composition boot
     })
     const after = await app.ctx.waterfall('agent/pre-step', stepPayload(inbox, 2), defaultEnter(inbox))
     expect(after.kind === 'enter' && after.messages.length).toBe(inbox.length + 1)
-    expect(lastMessage(after)?.source).toMatchObject({ kind: 'mstar-engine-status' })
+    expect(lastMessage(after)?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine-status', form: 'catalog' })
   })
 
   it('boot-time degrade — malformed status.json keeps the row absent while the engine-status catalog still appends', async () => {
@@ -348,7 +348,7 @@ describe('pre-step iteration gate — catalog composition (REAL-composition boot
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
 
     expect(decision.kind === 'enter' && decision.messages).toHaveLength(1)
-    expect(lastMessage(decision)?.source).toMatchObject({ kind: 'mstar-engine-status' })
+    expect(lastMessage(decision)?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine-status', form: 'catalog' })
   })
 })
 

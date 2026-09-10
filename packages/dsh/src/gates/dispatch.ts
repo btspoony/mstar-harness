@@ -190,8 +190,31 @@ function assignmentHeaderValue(headerRegion: string, label: string): string | un
   const plain = new RegExp(`^[ \\t]*(?:[-*][ \\t]+)?${escaped}[ \\t]*:[ \\t]*(.*)$`, 'm')
   const line = headerRegion.match(bold)?.[1] ?? headerRegion.match(plain)?.[1]
   if (line === undefined) return undefined
-  const value = line.trim()
+  const value = stripWrappingCodeSpan(line.trim())
   return value === '' ? undefined : value
+}
+
+/**
+ * Strip ONE wrapping markdown code span from a header value.
+ *
+ * Assignment prose routinely writes header values as code spans —
+ * ``**Plan Path**: `/x/plan.md` `` — and the extractor used to keep the
+ * backticks. That failed **silently**: `planIdOf` keys off a literal `.md`
+ * suffix, so `` plan.md` `` was not recognised as a plan file and the id was
+ * carried into the agent-flow ledger *with* its trailing backtick, matching no
+ * registered plan (and, under an iteration lease gate, producing a spurious
+ * "plan is not registered" violation).
+ *
+ * Only a single clean pair is stripped: a value that wraps several spans
+ * (`` `/a`, `/b` ``) has backticks inside and is left untouched, so no other
+ * reading of the line changes.
+ * @param value - the trimmed header value.
+ * @returns the value without one wrapping pair of backticks.
+ */
+function stripWrappingCodeSpan(value: string): string {
+  if (value.length < 2 || !value.startsWith('`') || !value.endsWith('`')) return value
+  const inner = value.slice(1, -1)
+  return inner.includes('`') ? value : inner.trim()
 }
 
 /** First whitespace-delimited token of a header value (paths in this convention never contain spaces). */

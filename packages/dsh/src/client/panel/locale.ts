@@ -162,6 +162,8 @@ export type PanelKey =
   | 'event-log.yes'
   | 'event-log.no'
   | 'empty.waiting'
+  | 'empty.loading'
+  | 'empty.unavailable'
   | 'empty.no-harness'
   | 'empty.no-harness-hint'
   | 'watermark.version'
@@ -290,6 +292,8 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'event-log.yes': '是',
   'event-log.no': '否',
   'empty.waiting': '等待首条 engine-status catalog…',
+  'empty.loading': '正在读取该会话的 engine-status 快照…',
+  'empty.unavailable': 'engine-status 快照不可用（{reason}）',
   'empty.no-harness': '未检测到 Morning Star harness',
   'empty.no-harness-hint': '当前工作区未发现 .mstar/ harness 目录，详细面板保持未激活；检测到 harness 后自动呈现',
   'watermark.version': 'mstar {version}',
@@ -371,8 +375,8 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'state.policy.worktree': 'worktree',
   'state.policy.control-worktree': 'control worktree',
   'state.knowledge.docs': '{count} 篇文档',
-  'freshness.last-updated': '最后更新 {time}',
-  'freshness.refresh-note': '刷新跟随 catalog 重发（约 ≤1 分钟）',
+  'freshness.last-updated': '快照 {time} · 第 {turn} 轮',
+  'freshness.refresh-note': '该会话已存储的快照——不是实时值',
 }
 
 /** en dictionary (default locale). */
@@ -413,6 +417,8 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'event-log.yes': 'yes',
   'event-log.no': 'no',
   'empty.waiting': 'Waiting for the first engine-status catalog…',
+  'empty.loading': 'Reading this session’s engine-status snapshot…',
+  'empty.unavailable': 'Engine-status snapshot unavailable ({reason})',
   'empty.no-harness': 'No Morning Star harness detected',
   'empty.no-harness-hint': 'No .mstar/ harness directory found in this workspace — the detail panel stays inactive and activates automatically once a harness is detected',
   'watermark.version': 'mstar {version}',
@@ -494,6 +500,6 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'state.policy.worktree': 'worktree',
   'state.policy.control-worktree': 'control worktree',
   'state.knowledge.docs': '{count} docs',
-  'freshness.last-updated': 'last updated {time}',
-  'freshness.refresh-note': 'refreshes with catalog re-emission (≤~1 min)',
+  'freshness.last-updated': 'snapshot {time} · turn {turn}',
+  'freshness.refresh-note': 'the stored snapshot for this session — never a live value',
 }

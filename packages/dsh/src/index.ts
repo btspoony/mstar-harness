@@ -33,12 +33,13 @@ import {
 } from './gates/_shared.ts'
 import {
   preStepCatalogListener,
-  buildCatalogSources,
+  buildCatalogPayload,
   createCatalogInvalidation,
   DEFAULT_CATALOG_TTL_MS,
   EXPLICIT_CACHE_KEY,
 } from './gates/catalog.ts'
 import type { CatalogCacheEntry, TurnDigest } from './gates/catalog.ts'
+import { installEngineStatusEndpoint } from './engine-status-endpoint.ts'
 import { writeIntentListener, editIntentListener } from './gates/status.ts'
 import type { StatusGateAdvisory } from './gates/status.ts'
 import { skillWriteIntentListener } from './gates/skill-lint.ts'
@@ -108,6 +109,7 @@ export { DshMstar } from './service.ts'
 export type { DshMstarOptions } from './service.ts'
 export type {
   MstarEngineStatusSource,
+  MstarEngineStatusPayload,
   MstarHarnessState,
   MstarIterationGateView,
   AgentFlowEventView,
@@ -822,7 +824,7 @@ export function apply(ctx: Context, config: Config): void {
   // (Config `catalogTtlMs`, default 60000): the pre-step hot path is a
   // timestamp compare + Map lookup between refreshes, and a mid-session
   // status/compass/residual change lands within one interval (see
-  // catalogSourcesFor / buildCatalogSources).
+  // catalogPayloadFor / buildCatalogPayload).
   //
   // Digest-gated re-emission: per agent+workspace the row is injected once
   // per turn and re-injected only when its rendered text changed (a
@@ -832,14 +834,14 @@ export function apply(ctx: Context, config: Config): void {
   const explicitKey = bootHarnessDir !== null ? EXPLICIT_CACHE_KEY : undefined
   const catalogCache = new Map<string, CatalogCacheEntry>()
   if (explicitKey !== undefined) {
-    catalogCache.set(explicitKey, { sources: buildCatalogSources(ctx, bootHarnessDir), builtAt: Date.now() })
+    catalogCache.set(explicitKey, { payload: buildCatalogPayload(ctx, bootHarnessDir), builtAt: Date.now() })
   }
   // Catalog-invalidation hook : the apply-scoped `harnessDir → cache key` reverse map +
   // invalidation closure, created HERE with the same lifetime as the cache
   // above (an HMR fiber restart recreates both — module-level state would
   // survive and point at a destroyed cache). The explicit-config key is
   // pre-registered so a ledger record between apply and the first pre-step
-  // still invalidates the boot-seeded entry; `catalogSourcesFor` registers
+  // still invalidates the boot-seeded entry; `catalogPayloadFor` registers
   // every other workspace's key on hit/build. Bound to the agent-flow
   // ledger hook (`setAgentFlowInvalidator`, Task 1 delivery): every
   // successful recordDispatch/recordSettle fires it with the affected
@@ -856,6 +858,20 @@ export function apply(ctx: Context, config: Config): void {
   const catalogDigests = new Map<string, TurnDigest>()
   ctx.on('agent/pre-step', (payload, next) =>
     preStepCatalogListener(ctx, resolver, explicitKey, catalogCache, ttlMs, catalogInvalidation.register, catalogDigests, payload, next))
+
+  // Panel channel — the host half of the engine-status endpoint
+  // (`/api/mstar/engineStatus`): the `mstar` service + its invocation
+  // descriptor on the host's SHARED `/api` typert gateway, serving the
+  // snapshot the pre-step emission persisted above.
+  //
+  // Both units are OPTIONAL (see `installEngineStatusEndpoint`): the service
+  // is deduped per context, and the descriptor is registered inside
+  // `ctx.inject(['typert'], …)`. This row's STATIC inject is deliberately left
+  // free of `connection` / `webServer` — naming either there would pend the
+  // whole row (and with it the boot) on a base-only/headless profile, which is
+  // exactly the failure both sibling plugins avoid by registering web-only
+  // units through optional children.
+  installEngineStatusEndpoint(ctx, { resolver, bootHarnessDir })
 
   // v2 seams — sdd + iteration model-facing tools: `mstar sdd …` / `mstar iteration gate` equivalents on `ctx.tools`.
   registerSddIterationTools(ctx, resolver)

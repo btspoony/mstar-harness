@@ -47,7 +47,8 @@
       "inject": [
         "@deepseek-ai/dsh-client-store",
         "@deepseek-ai/dsh-client-ui-conversation",
-        "@deepseek-ai/dsh-client-locale"
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-connection"
       ],
       "platform": "web"
     }
@@ -56,6 +57,7 @@
     "pretest": "bun run build-client",
     "test": "bun test",
     "typecheck:tests": "bunx tsc --noEmit -p tests/tsconfig.json",
+    "typecheck:src": "bunx tsc --noEmit -p tsconfig.json",
     "bundle-assets": "bun run scripts/bundle-harness-assets.ts",
     "build": "bun run bundle-assets && rm -rf dist && bun build src/index.ts src/invariant.ts --target node --outdir dist --external @deepseek-ai/cordis --external @deepseek-ai/dsh-skill-filesystem --external @deepseek-ai/dsh-tools --external @deepseek-ai/dsh-llm && bun run build-client && bunx tsc",
     "build-client": "bun run scripts/build-client-bundle.ts",

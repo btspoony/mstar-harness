@@ -91,7 +91,7 @@
  * assertions pin `data-mstar-*` attributes, never class names).
  */
 
-import { describe, expect, it } from 'bun:test'
+import { beforeAll, describe, expect, it } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -106,7 +106,23 @@ import { resolveSlotLabel } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { clientExports } from './client-bundles.ts'
 import { Context } from '@deepseek-ai/cordis'
-import type { MstarEngineStatusSource } from '../src/types'
+import type { MstarEngineStatusPayload } from '../src/types'
+import { MstarEngineStatusClient } from '../src/client/panel/engine-status-client'
+import {
+  anchorRow,
+  bindUseSessions,
+  chatSnapshot,
+  gatewayError,
+  gatewayOk,
+  SESSION,
+  SESSION_CWD,
+  SESSION_ID,
+  servedSnapshot,
+  settleRender,
+  stubGateway,
+  unavailableResult,
+  userNode,
+} from './gateway-stub.ts'
 import type { AgentFlowEventView, AgentFlowView } from '../src/types'
 import type { EnforcementSource } from '@mstar-harness/engine'
 import { apply } from '../src/client/index'
@@ -156,9 +172,7 @@ import { toggleKanbanExpanded, visibleKanbanPlans } from '../src/client/panel/zo
 import { PLAN_CAP } from '../src/client/panel/plan-sort'
 
 /** Full fixture: every field the panel renders (spec §2.1–§2.3). */
-const fullSource: MstarEngineStatusSource = {
-  kind: 'mstar-engine-status',
-  form: 'catalog',
+const fullSource: MstarEngineStatusPayload = {
   version: '2.0.4',
   harnessDir: '/proj/.mstar',
   enforcement: { hard: true, source: 'iteration compass' as EnforcementSource },
@@ -218,9 +232,7 @@ const fullSource: MstarEngineStatusSource = {
 }
 
 /** `state` null + harnessDir null + no iteration ⇒ no-harness state (spec §3). */
-const noHarnessSource: MstarEngineStatusSource = {
-  kind: 'mstar-engine-status',
-  form: 'catalog',
+const noHarnessSource: MstarEngineStatusPayload = {
   version: '2.0.4',
   harnessDir: null,
   enforcement: { hard: false, source: 'iteration compass' as EnforcementSource },
@@ -228,9 +240,7 @@ const noHarnessSource: MstarEngineStatusSource = {
 }
 
 /** Harness present but no iteration key ⇒ no-gate state; state renders normally (spec §3). */
-const noGateSource: MstarEngineStatusSource = {
-  kind: 'mstar-engine-status',
-  form: 'catalog',
+const noGateSource: MstarEngineStatusPayload = {
   version: '2.0.4',
   harnessDir: '/proj/.mstar',
   enforcement: { hard: false, source: 'iteration compass' as EnforcementSource },
@@ -261,7 +271,7 @@ const noGateSource: MstarEngineStatusSource = {
  * count branch of `phaseVerdict` — neither is exercised by the ok:true
  * fixture (QC2-003).
  */
-const failGateSource: MstarEngineStatusSource = {
+const failGateSource: MstarEngineStatusPayload = {
   ...fullSource,
   iteration: {
     ...fullSource.iteration!,
@@ -284,13 +294,19 @@ const degradedSource = {
   ...fullSource,
   version: undefined,
   enforcement: undefined,
-} as unknown as MstarEngineStatusSource
+} as unknown as MstarEngineStatusPayload
 
-/** Session-standard kit the view ring hands every conversation.view entry (stub faces; unused by the pure render). */
+/**
+ * Session-standard kit the view ring hands every conversation.view entry: the
+ * chat selector, the Host session list (the panel reads the session's `cwd`
+ * from it — the host cross-checks the asserted cwd), the session identity and
+ * the plugin's engine-status client.
+ */
 function kitProps(overrides?: Partial<ConvViewProps>): ConvViewProps {
   return {
-    sessionId: 's-1' as SessionId,
+    sessionId: SESSION,
     useChat: (() => null) as never,
+    useSessions: bindUseSessions(SESSION_ID, SESSION_CWD) as never,
     useConversation: (() => null) as never,
     useWorkspaces: (() => null) as never,
     ...overrides,
@@ -309,21 +325,17 @@ function bindUseChat(store: { getSnapshot(): ChatSnapshot }): SnapshotSelectorHo
   }
 }
 
-/** Build a chat-target snapshot carrying the fixture source as the newest catalog row (spec §5 data path). */
-function snapshotFor(source: MstarEngineStatusSource | null, lastUpdated: number | null): ChatSnapshot {
+/**
+ * Build a chat-target snapshot carrying the ANCHOR row at the given time
+ * (`null` = the plugin never ran on this session). The row itself carries NO
+ * payload — the persisted source is the locked three-member arm and the
+ * payload is served over the `/api` gateway (spec §5 data path).
+ */
+function snapshotFor(source: MstarEngineStatusPayload | null, lastUpdated: number | null): ChatSnapshot {
   const nodes: ConversationNode[] = [
     { kind: 'user', seq: 1, time: 1_719_999_000_000, content: [], source: null },
   ]
-  if (source !== null) {
-    nodes.push({
-      kind: 'context',
-      seq: 2,
-      time: lastUpdated ?? 1_720_001_000_000,
-      content: [],
-      source,
-      form: 'catalog',
-    } as unknown as ConversationNode)
-  }
+  if (source !== null) nodes.push(anchorRow(2, lastUpdated ?? ANCHOR_TIME))
   return {
     legacy: {
       nodes,
@@ -335,20 +347,69 @@ function snapshotFor(source: MstarEngineStatusSource | null, lastUpdated: number
   } as unknown as ChatSnapshot
 }
 
-/** Render the panel to static HTML through the real data path: snapshot store → useChat → hook → PanelView (default copy pinned to en). */
-function panelHtml(
-  source: MstarEngineStatusSource | null,
-  locale: LocaleRuntime = newLocale(),
-  lastUpdated: number | null = 1_720_001_000_000,
-  lang: 'en' | 'zh' = 'en',
-): string {
+/** The fixture anchor row's message time (the specs' default). */
+const ANCHOR_TIME = 1_720_001_000_000
+
+/** One gateway stub serving the fixture payload as the host's stored snapshot. */
+function gatewayFor(source: MstarEngineStatusPayload | null, at: number | null = ANCHOR_TIME): ReturnType<typeof stubGateway> {
+  return stubGateway(servedSnapshot(source, { at: new Date(at ?? ANCHOR_TIME).toISOString() }))
+}
+
+/** One locale seat with the panel dictionaries registered exactly once. */
+function panelLocale(lang: 'en' | 'zh'): LocaleRuntime {
+  const locale = newLocale()
   locale.register(NS, { zh, en })
   locale.setLocale(lang)
-  const store = createSnapshotStore(snapshotFor(source, lastUpdated))
+  return locale
+}
+
+/** One panel fixture: locale + log store + gateway stub + the client over it. */
+interface PanelFixture {
+  readonly locale: LocaleRuntime
+  readonly store: { getSnapshot(): ChatSnapshot }
+  readonly gateway: ReturnType<typeof stubGateway>
+  readonly engineStatus: MstarEngineStatusClient
+}
+
+/** Bind one fixture (the client is created ONCE so both passes share its cache). */
+function panelFixture(
+  locale: LocaleRuntime,
+  store: { getSnapshot(): ChatSnapshot },
+  gateway: ReturnType<typeof stubGateway>,
+): PanelFixture {
+  return { locale, store, gateway, engineStatus: new MstarEngineStatusClient(gateway.connection) }
+}
+
+/** One synchronous render pass of the panel over the given fixture. */
+function renderPanelPass(content: PanelFixture): string {
   return renderToStaticMarkup(createElement(PanelView, {
-    ...kitProps({ useChat: bindUseChat(store) }),
-    t: locale.bind(NS),
-  }))
+    ...kitProps({ useChat: bindUseChat(content.store) }),
+    engineStatus: content.engineStatus,
+    t: content.locale.bind(NS),
+  } as never))
+}
+
+/**
+ * Render the panel to static HTML through the real data path: anchor snapshot
+ * store → useChat/useSessions → hook → `/api` gateway → PanelView. The first
+ * pass issues the gateway call; the returned markup is the settled one
+ * (default copy pinned to en).
+ */
+async function panelHtml(
+  source: MstarEngineStatusPayload | null,
+  locale: LocaleRuntime = newLocale(),
+  lastUpdated: number | null = ANCHOR_TIME,
+  lang: 'en' | 'zh' = 'en',
+): Promise<string> {
+  const store = createSnapshotStore(snapshotFor(source, lastUpdated))
+  const gateway = gatewayFor(source, lastUpdated)
+  const seat = locale === undefined ? panelLocale(lang) : locale
+  if (locale !== undefined) {
+    locale.register(NS, { zh, en })
+    locale.setLocale(lang)
+  }
+  const fixture = panelFixture(seat, store, gateway)
+  return settleRender(() => renderPanelPass(fixture))
 }
 
 /**
@@ -391,7 +452,7 @@ function settleEvent(over: { ts: number; agent?: string; outcome?: 'ok' | 'error
 }
 
 /** A full source whose `state.agentFlow` carries the given events (latest-first). */
-function flowSource(events: readonly unknown[]): MstarEngineStatusSource {
+function flowSource(events: readonly unknown[]): MstarEngineStatusPayload {
   return {
     ...fullSource,
     state: {
@@ -402,7 +463,7 @@ function flowSource(events: readonly unknown[]): MstarEngineStatusSource {
 }
 
 /** Render the AgentCanvasPage to static HTML (en locale; optional pan seed). */
-function agentsHtml(source: MstarEngineStatusSource, initialPan?: PanState): string {
+function agentsHtml(source: MstarEngineStatusPayload, initialPan?: PanState): string {
   const locale = newLocale()
   locale.register(NS, { zh, en })
   locale.setLocale('en')
@@ -425,9 +486,10 @@ function cardRegion(html: string, key: string): string {
 }
 
 describe('workflow panel — full fixture renders every section (spec §2)', () => {
-  const html = panelHtml(fullSource)
+  let html = ''
+  beforeAll(async () => { html = await panelHtml(fullSource) })
 
-  it('renders the sidebar meta dock (version / harness dir, watermark preserved)', () => {
+  it('renders the sidebar meta dock (version / harness dir, watermark preserved)', async () => {
     expect(html).toContain('data-mstar-meta')
     expect(html).toContain('data-mstar-meta-version')
     expect(html).toContain('data-mstar-meta-harness')
@@ -437,7 +499,7 @@ describe('workflow panel — full fixture renders every section (spec §2)', () 
     expect(html).toContain('harness: /proj/.mstar')
   })
 
-  it('renders the IterationTaskPage (content head + full-width kanban) in the main area (T7)', () => {
+  it('renders the IterationTaskPage (content head + full-width kanban) in the main area (T7)', async () => {
     // The WorkflowCanvas zone dashboard is replaced by the IterationTaskPage
     // (spec §3, Task 2): the Content Head (active → expanded by default) +
     // the reused TaskBoard kanban. The canvas / footer / dock surfaces are
@@ -458,8 +520,8 @@ describe('workflow panel — full fixture renders every section (spec §2)', () 
     expect(html).not.toContain('data-agent-event-dock')
   })
 
-  it('renders the additive project rollup zone (roadmap milestones + open residual severity counts) on the tasks page', () => {
-    const rollupSource: MstarEngineStatusSource = {
+  it('renders the additive project rollup zone (roadmap milestones + open residual severity counts) on the tasks page', async () => {
+    const rollupSource: MstarEngineStatusPayload = {
       ...fullSource,
       state: {
         ...fullSource.state!,
@@ -472,7 +534,7 @@ describe('workflow panel — full fixture renders every section (spec §2)', () 
         },
       },
     }
-    const html = panelHtml(rollupSource)
+    const html = await panelHtml(rollupSource)
     expect(html).toContain('data-zone="project"')
     expect(html).toContain('data-project-milestones-title')
     expect(html).toContain('data-project-milestone')
@@ -487,7 +549,7 @@ describe('workflow panel — full fixture renders every section (spec §2)', () 
     expect(html).toContain('data-iteration-head')
   })
 
-  it('renders the state section: plans board, residual findings, policy (enforcement first), leases, knowledge, direction', () => {
+  it('renders the state section: plans board, residual findings, policy (enforcement first), leases, knowledge, direction', async () => {
     expect(html).toContain('data-mstar-section="state"')
     // Plan status board: id(status) rows.
     expect(html).toContain('data-plan-id="00000809-dsh-workflow-viz-panel"')
@@ -528,22 +590,32 @@ describe('workflow panel — full fixture renders every section (spec §2)', () 
     expect(html).toContain('dsh is highly customizable (client plugins + slot registry)')
   })
 
-  it('renders the freshness marker (last-updated + refresh note)', () => {
+  it('renders the freshness marker (the served snapshot\u2019s own emission, never "live")', async () => {
     expect(html).toContain('data-mstar-freshness')
-    expect(html).toMatch(/last updated\s+\S+/)
-    expect(html).toContain('refreshes with catalog re-emission')
+    // The freshness marker is the SERVED snapshot's own `at` (never "live") …
+    expect(html).toMatch(/snapshot\s+\S+/)
+    expect(html).toContain(`data-mstar-freshness-at="${new Date(ANCHOR_TIME).toISOString()}"`)
+    // … plus the agent turn it was written for, so the footer names WHICH
+    // emission the panel is showing. That is what keeps it true when the
+    // current turn's write failed and the stored entry is an earlier one: the
+    // copy names the store's record instead of claiming to be the last emission.
+    expect(html).toContain('data-mstar-freshness-turn="')
+    expect(html).toMatch(/turn\s+\d+/)
+    expect(html).toContain('the stored snapshot for this session')
+    // …and it must NOT re-introduce the claim that this is the last emission.
+    expect(html).not.toContain('last catalog emission')
   })
 })
 
 describe('workflow panel — empty states and degradation (spec §3, §2.4)', () => {
-  it('no catalog row (source null) → waiting hint, no crash', () => {
-    const html = panelHtml(null)
+  it('no catalog row (source null) → waiting hint, no crash', async () => {
+    const html = await panelHtml(null)
     expect(html).toContain('data-mstar-panel="waiting"')
     expect(html).toContain('Waiting for the first engine-status catalog')
   })
 
-  it('no harness (harnessDir null + state null + no iteration) → no-harness hint + freshness, no meta dock', () => {
-    const html = panelHtml(noHarnessSource)
+  it('no harness (harnessDir null + state null + no iteration) → no-harness hint + freshness, no meta dock', async () => {
+    const html = await panelHtml(noHarnessSource)
     expect(html).toContain('data-mstar-panel="no-harness"')
     expect(html).toContain('No Morning Star harness detected')
     expect(html).toContain('data-mstar-freshness')
@@ -552,8 +624,8 @@ describe('workflow panel — empty states and degradation (spec §3, §2.4)', ()
     expect(html).not.toContain('data-mstar-sidebar')
   })
 
-  it('no gate (harness present, iteration key absent) → collapsed muted head, kanban skeleton, state still renders, no orange note', () => {
-    const html = panelHtml(noGateSource)
+  it('no gate (harness present, iteration key absent) → collapsed muted head, kanban skeleton, state still renders, no orange note', async () => {
+    const html = await panelHtml(noGateSource)
     expect(html).toContain('data-mstar-panel="panel"')
     expect(html).toContain('data-mstar-page="tasks"')
     expect(html).toContain('data-iteration-head')
@@ -574,11 +646,11 @@ describe('workflow panel — empty states and degradation (spec §3, §2.4)', ()
     expect(html).toContain('data-mstar-empty="no-knowledge"')
   })
 
-  it('iteration: null (schema-drift variant of "absent") → same muted collapsed head, never a crash (AC-3)', () => {
-    const html = panelHtml({
+  it('iteration: null (schema-drift variant of "absent") → same muted collapsed head, never a crash (AC-3)', async () => {
+    const html = await panelHtml({
       ...noGateSource,
       iteration: null,
-    } as unknown as MstarEngineStatusSource)
+    } as unknown as MstarEngineStatusPayload)
     expect(html).toContain('data-mstar-panel="panel"')
     expect(html).toContain('data-mstar-page="tasks"')
     expect(html).toContain('data-iteration-head')
@@ -589,13 +661,13 @@ describe('workflow panel — empty states and degradation (spec §3, §2.4)', ()
     expect(html).toContain('data-mstar-section="state"')
   })
 
-  it('missing version degrades the meta dock to unknown, no guessed values', () => {
-    const html = panelHtml(degradedSource)
+  it('missing version degrades the meta dock to unknown, no guessed values', async () => {
+    const html = await panelHtml(degradedSource)
     expect(html).toContain('mstar unknown')
   })
 
-  it('partial state (null direction, empty lists) renders without crashing', () => {
-    const html = panelHtml({
+  it('partial state (null direction, empty lists) renders without crashing', async () => {
+    const html = await panelHtml({
       ...fullSource,
       state: {
         ...fullSource.state!,
@@ -612,8 +684,8 @@ describe('workflow panel — empty states and degradation (spec §3, §2.4)', ()
 })
 
 describe('workflow panel — FAIL gate verdict and zh body (spec §2.2, §4.3)', () => {
-  it('gate.ok false → FAIL verdict in the content head summary (data-iteration-head-verdict)', () => {
-    const html = panelHtml(failGateSource)
+  it('gate.ok false → FAIL verdict in the content head summary (data-iteration-head-verdict)', async () => {
+    const html = await panelHtml(failGateSource)
     expect(html).toContain('data-iteration-head-verdict="fail"')
     expect(html).toContain('FAIL')
     // The old footer gate-summary surface is gone with the WorkflowCanvas.
@@ -621,8 +693,8 @@ describe('workflow panel — FAIL gate verdict and zh body (spec §2.2, §4.3)',
     expect(html).not.toContain('data-graph-violations-count')
   })
 
-  it('renders the panel body in zh when the locale flips (not just the tab label)', () => {
-    const html = panelHtml(fullSource, undefined, undefined, 'zh')
+  it('renders the panel body in zh when the locale flips (not just the tab label)', async () => {
+    const html = await panelHtml(fullSource, undefined, undefined, 'zh')
     expect(html).toContain('data-mstar-page="tasks"')
     expect(html).toContain('data-iteration-head')
     expect(html).toContain('迭代启动')
@@ -631,7 +703,7 @@ describe('workflow panel — FAIL gate verdict and zh body (spec §2.2, §4.3)',
     expect(html).toContain('data-mstar-section="state"')
     expect(html).toContain('工作区状态')
     expect(html).toContain('3 篇文档')
-    expect(html).toContain('最后更新')
+    expect(html).toContain('快照')
     // en graph labels must not leak into the zh body.
     expect(html).not.toContain('Autonomous Execute')
     expect(html).not.toContain('Workspace state')
@@ -639,21 +711,27 @@ describe('workflow panel — FAIL gate verdict and zh body (spec §2.2, §4.3)',
 })
 
 describe('workflow panel — data wiring through the hook (spec §5)', () => {
-  /** Render the panel against a live snapshot store (real PanelView + useMstarEngineStatus path). */
-  function renderAgainst(store: { getSnapshot(): ChatSnapshot }, locale: LocaleRuntime): string {
-    return renderToStaticMarkup(createElement(PanelView, {
-      ...kitProps({ useChat: bindUseChat(store) }),
-      t: locale.bind(NS),
-    }))
+  /**
+   * Render the panel against a live snapshot store and a gateway stub (the
+   * real PanelView + useMstarEngineStatus path). The first pass issues the
+   * gateway call, so a snapshot bump between two calls asks again.
+   */
+  async function renderAgainst(
+    store: { getSnapshot(): ChatSnapshot },
+    locale: LocaleRuntime,
+    gateway: ReturnType<typeof stubGateway> = gatewayFor(fullSource),
+  ): Promise<string> {
+    const fixture = panelFixture(locale, store, gateway)
+    return settleRender(() => renderPanelPass(fixture))
   }
 
-  it('renders the LATEST catalog row when the snapshot carries several (spec §2.4)', () => {
+  it('several anchor rows ask for ONE snapshot — the newest anchor drives the request (spec §2.4)', async () => {
     const store = createSnapshotStore<ChatSnapshot>({
       legacy: {
         nodes: [
           { kind: 'user', seq: 1, time: 1_719_999_000_000, content: [], source: null },
-          { kind: 'context', seq: 2, time: 1_720_000_000_000, content: [], source: { ...fullSource, version: '2.0.3' }, form: 'catalog' } as unknown as ConversationNode,
-          { kind: 'context', seq: 4, time: 1_720_001_000_000, content: [], source: fullSource, form: 'catalog' } as unknown as ConversationNode,
+          anchorRow(2, 1_720_000_000_000),
+          anchorRow(4, 1_720_001_000_000),
         ],
         turnTimings: new Map(),
         turnEnds: new Map(),
@@ -664,30 +742,43 @@ describe('workflow panel — data wiring through the hook (spec §5)', () => {
     const locale = newLocale()
     locale.register(NS, { zh, en })
     locale.setLocale('en')
-    const html = renderAgainst(store, locale)
+    // The gateway serves the payload of the session's newest snapshot.
+    const gateway = gatewayFor({ ...fullSource, version: '2.0.4' })
+    const html = await renderAgainst(store, locale, gateway)
     expect(html).toContain('mstar 2.0.4')
-    expect(html).not.toContain('mstar 2.0.3')
+    expect(gateway.calls).toHaveLength(1)
+
+    // A newer anchor row asks again (the log tail is the refresh signal).
+    store.set(chatSnapshot([userNode(), anchorRow(6, 1_720_002_000_000)]))
+    gateway.reply(servedSnapshot({ ...fullSource, version: '2.0.5' }, { at: new Date(1_720_002_000_000).toISOString() }))
+    const after = await renderAgainst(store, locale, gateway)
+    expect(after).toContain('mstar 2.0.5')
+    expect(gateway.calls).toHaveLength(2)
   })
 
-  it('a new catalog row (snapshot bump = refresh signal) re-renders the panel with fresh data', () => {
+  it('a new catalog row (snapshot bump = refresh signal) re-renders the panel with fresh data', async () => {
     const locale = newLocale()
     locale.register(NS, { zh, en })
     locale.setLocale('en')
     const store = createSnapshotStore(snapshotFor(fullSource, 1_720_000_000_000))
+    const gateway = gatewayFor(fullSource, 1_720_000_000_000)
 
-    const before = renderAgainst(store, locale)
+    const before = await renderAgainst(store, locale, gateway)
     expect(before).toContain('mstar 2.0.4')
     expect(before).toContain('harness: /proj/.mstar')
     expect(before).toContain('data-mstar-freshness')
+    expect(before).toContain(`data-mstar-freshness-at="${new Date(1_720_000_000_000).toISOString()}"`)
 
-    // Server re-emission appends a newer row → snapshot bump → hook re-scans → re-render.
+    // Server re-emission appends a newer anchor row → snapshot bump → the hook
+    // re-scans, asks the gateway for the newer snapshot and re-renders.
     const refreshed = { ...fullSource, version: '2.0.5', harnessDir: '/proj2/.mstar' }
-    store.set(snapshotFor(refreshed, 1_720_002_000_000))
-    const after = renderAgainst(store, locale)
+    gateway.reply(servedSnapshot(refreshed, { at: new Date(1_720_002_000_000).toISOString() }))
+    store.set(snapshotFor(fullSource, 1_720_002_000_000))
+    const after = await renderAgainst(store, locale, gateway)
     expect(after).toContain('mstar 2.0.5')
     expect(after).toContain('harness: /proj2/.mstar')
     expect(after).not.toContain('harness: /proj/.mstar')
-    expect(after).toContain('data-mstar-freshness')
+    expect(after).toContain(`data-mstar-freshness-at="${new Date(1_720_002_000_000).toISOString()}"`)
   })
 })
 
@@ -716,7 +807,7 @@ describe('workflow panel — plugin entry registers locale + conversation.view t
     } as never, () => null)
   }
 
-  it('registers the mstar-panel dictionaries on apply', () => {
+  it('registers the mstar-panel dictionaries on apply', async () => {
     const { ctx, locale } = makeCtx()
     apply(ctx)
     // Pin zh: the real LocaleRuntime's initial locale is browser/persisted
@@ -725,7 +816,7 @@ describe('workflow panel — plugin entry registers locale + conversation.view t
     expect(locale.bind(NS)('view.mstar-workflow')).toBe('MStar 工作流')
   })
 
-  it('registers the conversation.view tab (id mstar-workflow, order 20, label follows locale)', () => {
+  it('registers the conversation.view tab (id mstar-workflow, order 20, label follows locale)', async () => {
     const { ctx, slots, locale } = makeCtx()
     apply(ctx)
     // Not declared yet: the inject callback must wait.
@@ -749,9 +840,10 @@ describe('workflow panel — plugin entry registers locale + conversation.view t
 })
 
 describe('workflow panel — T1 layout: sidebar meta dock / main grid / full-tab (spec panel-zones §2)', () => {
-  const html = panelHtml(fullSource)
+  let html = ''
+  beforeAll(async () => { html = await panelHtml(fullSource) })
 
-  it('the sidebar meta dock renders version + harness dir (header removed)', () => {
+  it('the sidebar meta dock renders version + harness dir (header removed)', async () => {
     // The old 3-cell header is gone; version/harness live in the sidebar bottom dock.
     expect(html).not.toContain('data-mstar-header')
     expect(html).not.toContain('data-mstar-header-cell')
@@ -762,7 +854,7 @@ describe('workflow panel — T1 layout: sidebar meta dock / main grid / full-tab
     expect(html).toContain('harness: /proj/.mstar')
   })
 
-  it('root + main CSS pin the full-tab v3 layout (no page scroll; the canvas zone container is the ONLY scroll body)', () => {
+  it('root + main CSS pin the full-tab v3 layout (no page scroll; the canvas zone container is the ONLY scroll body)', async () => {
     const cssText = readFileSync(new URL('../src/client/panel/panel.module.css', import.meta.url), 'utf8')
     // Root fills the Tab and never scrolls (v3: the page NEVER scrolls).
     expect(cssText).toContain('grid-template-columns: minmax(0, 1fr) 300px')
@@ -783,7 +875,7 @@ describe('workflow panel — T1 layout: sidebar meta dock / main grid / full-tab
     expect(cssText).not.toMatch(/rgb\(|rgba\(/)
   })
 
-  it('opts the panel root into the host composer overlay so height:100% resolves — the scroll root-cause fix (plan quick-fixes T4)', () => {
+  it('opts the panel root into the host composer overlay so height:100% resolves — the scroll root-cause fix (plan quick-fixes T4)', async () => {
     // The panel root's `height: 100%` only resolves when the host's `.viewArea`
     // wrapper is a definite-height container. The host flips it via
     // `:has([data-conversation-composer-overlay])`; without the opt-in it keeps
@@ -797,7 +889,7 @@ describe('workflow panel — T1 layout: sidebar meta dock / main grid / full-tab
     expect(cssText).toMatch(/padding-bottom:\s*calc\(var\(--dsh-composer-height/)
   })
 
-  it('sidebar renders the plans / residuals / knowledge / leases status areas + the fixed meta dock', () => {
+  it('sidebar renders the plans / residuals / knowledge / leases status areas + the fixed meta dock', async () => {
     expect(html).toContain('data-mstar-sidebar')
     expect(html).toContain('data-mstar-sidebar-scroll')
     expect(html).toContain('data-plan-id="00000809-dsh-workflow-viz-panel"')
@@ -813,14 +905,14 @@ describe('workflow panel — T1 layout: sidebar meta dock / main grid / full-tab
     expect(html.indexOf('data-mstar-sidebar')).toBeLessThan(html.indexOf('data-mstar-watermark'))
   })
 
-  it('the selection seat renders the aggregated workflow — active / multi-active warning / terminal history / selection error ', () => {
+  it('the selection seat renders the aggregated workflow — active / multi-active warning / terminal history / selection error ', async () => {
     // Active without warning (the full fixture).
     expect(html).toContain('data-selection-kind="active"')
     expect(html).toContain('data-selection-workflow="iter-00000809-dsh-workflow-viz"')
     expect(html).not.toContain('data-selection-warning')
 
     // Multi-active → the structured warning is surfaced (no silent pick).
-    const warned = panelHtml({
+    const warned = await panelHtml({
       ...fullSource,
       state: {
         ...fullSource.state!,
@@ -836,7 +928,7 @@ describe('workflow panel — T1 layout: sidebar meta dock / main grid / full-tab
     expect(warned).toContain('2 active lifecycles')
 
     // Terminal history view → the history marker renders beside the id.
-    const terminal = panelHtml({
+    const terminal = await panelHtml({
       ...fullSource,
       state: { ...fullSource.state!, selection: { kind: 'terminal', workflowId: 'wf-old', dir: 'workflows/wf-old' } },
     })
@@ -845,7 +937,7 @@ describe('workflow panel — T1 layout: sidebar meta dock / main grid / full-tab
     expect(terminal).toContain('data-selection-history')
 
     // Selection error → code + reason rendered, never a crash.
-    const errored = panelHtml({
+    const errored = await panelHtml({
       ...fullSource,
       state: {
         ...fullSource.state!,
@@ -857,7 +949,7 @@ describe('workflow panel — T1 layout: sidebar meta dock / main grid / full-tab
     expect(errored).toContain('cannot read the selected workflow snapshot')
   })
 
-  it('main area renders the IterationTaskPage inside the content region (T7 fills the tasks tab)', () => {
+  it('main area renders the IterationTaskPage inside the content region (T7 fills the tasks tab)', async () => {
     expect(html).toContain('data-mstar-graph')
     expect(html).toContain('data-mstar-page="tasks"')
     expect(html).toContain('data-iteration-head')
@@ -885,7 +977,7 @@ describe('workflow panel — T4 theme audit: token-only colors, ramp metrics, re
     return values
   }
 
-  it('every color-family declaration is a --dsw-* token — zero bare colors of ANY form (spec §7)', () => {
+  it('every color-family declaration is a --dsw-* token — zero bare colors of ANY form (spec §7)', async () => {
     // Full-file scan, not spot checks: color / background / border(-side)
     // declarations must all resolve through var(--dsw-alias-*|--dsw-static-*).
     const colorRe = /\b(?:color|background(?:-color)?|border(?:-(?:top|right|bottom|left))?(?:-color)?)\s*:/g
@@ -899,7 +991,7 @@ describe('workflow panel — T4 theme audit: token-only colors, ramp metrics, re
     expect(cssText).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(|hwb\(|lab\(|lch\(|color\(/)
   })
 
-  it('spacing rides the --mstar-space-1..6 ramp — no bare px gaps/paddings/margins (spec §7)', () => {
+  it('spacing rides the --mstar-space-1..6 ramp — no bare px gaps/paddings/margins (spec §7)', async () => {
     const spacingRe = /\b(?:gap|padding(?:-(?:top|right|bottom|left))?|margin(?:-(?:top|right|bottom|left))?)\s*:/g
     const spacing = declValues(spacingRe)
     expect(spacing.length).toBeGreaterThan(0)
@@ -916,7 +1008,7 @@ describe('workflow panel — T4 theme audit: token-only colors, ramp metrics, re
     }
   })
 
-  it('font sizes ride the --dsw-font-xxxs-11 / xxs-12 / xs-13 ramp (spec §7)', () => {
+  it('font sizes ride the --dsw-font-xxxs-11 / xxs-12 / xs-13 ramp (spec §7)', async () => {
     const fonts = declValues(/\bfont\s*:/g)
     expect(fonts.length).toBeGreaterThan(0)
     for (const value of fonts) {
@@ -924,7 +1016,7 @@ describe('workflow panel — T4 theme audit: token-only colors, ramp metrics, re
     }
   })
 
-  it('hover feedback is 120–150ms, state switches ≤200ms — every transition duration in window (spec §7)', () => {
+  it('hover feedback is 120–150ms, state switches ≤200ms — every transition duration in window (spec §7)', async () => {
     const transitions = [...cssText.matchAll(/transition:\s*([^;}]+)/g)].map((m) => m[1]!.trim())
     expect(transitions.length).toBeGreaterThan(0)
     for (const t of transitions) {
@@ -940,13 +1032,13 @@ describe('workflow panel — T4 theme audit: token-only colors, ramp metrics, re
     expect(cssText).toMatch(/transition:\s*[^;]*\b1[2-5]0ms/)
   })
 
-  it('prefers-reduced-motion disables every transition and animation (spec §1.2/§7)', () => {
+  it('prefers-reduced-motion disables every transition and animation (spec §1.2/§7)', async () => {
     expect(cssText).toMatch(/@media\s*\(prefers-reduced-motion:\s*reduce\)/)
     expect(cssText).toMatch(/transition:\s*none\s*!important/)
     expect(cssText).toMatch(/animation:\s*none\s*!important/)
   })
 
-  it('section titles are uppercase + letter-spaced; chip radius is unified (spec §7)', () => {
+  it('section titles are uppercase + letter-spaced; chip radius is unified (spec §7)', async () => {
     expect(cssText).toMatch(/\.sectionTitle\s*\{[\s\S]*?text-transform:\s*uppercase/)
     expect(cssText).toMatch(/\.sectionTitle\s*\{[\s\S]*?letter-spacing:\s*0\.03em/)
     expect(cssText).toMatch(/\.subTitle\s*\{[\s\S]*?text-transform:\s*uppercase/)
@@ -955,7 +1047,7 @@ describe('workflow panel — T4 theme audit: token-only colors, ramp metrics, re
     for (const r of radii) expect(['999px', '8px']).toContain(r)
   })
 
-  it('dark mode is a host token flip — no theme-specific color overrides in the panel CSS (spec §7)', () => {
+  it('dark mode is a host token flip — no theme-specific color overrides in the panel CSS (spec §7)', async () => {
     // The panel carries zero colors of its own, so `body[data-ds-dark-theme]`
     // readability comes from the host's token values — a `data-ds-dark-theme`
     // selector with a hard-coded override in the panel CSS would be a leak.
@@ -977,7 +1069,7 @@ describe('workflow panel — T4 theme audit: token-only colors, ramp metrics, re
 describe('workflow panel — T5 zones CSS audit: dock token styles + transition window + reduced-motion coverage (spec panel-zones §7)', () => {
   const cssText = readFileSync(new URL('../src/client/panel/zones/zones.module.css', import.meta.url), 'utf8')
 
-  it('every transition in the zones css sits in the 120–200ms window (spec §7)', () => {
+  it('every transition in the zones css sits in the 120–200ms window (spec §7)', async () => {
     const transitions = [...cssText.matchAll(/transition:\s*([^;}]+)/g)].map((m) => m[1]!.trim())
     expect(transitions.length).toBeGreaterThan(0)
     for (const t of transitions) {
@@ -991,7 +1083,7 @@ describe('workflow panel — T5 zones CSS audit: dock token styles + transition 
     }
   })
 
-  it('the panel root reduced-motion rule covers EVERY zones transition/animation (spec §1.2)', () => {
+  it('the panel root reduced-motion rule covers EVERY zones transition/animation (spec §1.2)', async () => {
     const root = readFileSync(new URL('../src/client/panel/panel.module.css', import.meta.url), 'utf8')
     // The global kill switch targets `*` (every element — the zones css
     // included) inside @media (prefers-reduced-motion: reduce).
@@ -1006,7 +1098,7 @@ describe('workflow panel — T5 zones CSS audit: dock token styles + transition 
     expect(cssText).not.toMatch(/@media\s*\(prefers-reduced-motion/)
   })
 
-  it('font sizes in the zones css ride the --dsw-font-xxxs-11 / xxs-12 / xs-13 ramp (spec §7)', () => {
+  it('font sizes in the zones css ride the --dsw-font-xxxs-11 / xxs-12 / xs-13 ramp (spec §7)', async () => {
     const stripped = cssText.replace(/\/\*[\s\S]*?\*\//g, '')
     const fonts: string[] = []
     for (const m of stripped.matchAll(/\bfont\s*:/g)) {
@@ -1020,7 +1112,7 @@ describe('workflow panel — T5 zones CSS audit: dock token styles + transition 
     }
   })
 
-  it('event-log page styles align with the zone frames: token bg/border + 8px radius + token status colors', () => {
+  it('event-log page styles align with the zone frames: token bg/border + 8px radius + token status colors', async () => {
     const pageCss = readFileSync(new URL('../src/client/panel/pages/event-log.module.css', import.meta.url), 'utf8')
     // Partition frame = the same token treatment as the zone frames
     // (bg-layer-1 / border-l1 / 8px radius — spec §2/§7 "样式与新区块统一").
@@ -1041,7 +1133,7 @@ describe('workflow panel — T5 zones CSS audit: dock token styles + transition 
     expect(pageCss).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(|hwb\(|lab\(|lch\(|color\(/)
   })
 
-  it('event-log page: two-column locked-height body + per-partition internal scroll + narrow stack fallback (plan F3 Task 2)', () => {
+  it('event-log page: two-column locked-height body + per-partition internal scroll + narrow stack fallback (plan F3 Task 2)', async () => {
     const pageCss = readFileSync(new URL('../src/client/panel/pages/event-log.module.css', import.meta.url), 'utf8')
     // Page frame (AC-3): grid two columns, locked to the tab height, NO
     // whole-page scroll — the old `overflow-y: auto` scroll body is gone.
@@ -1078,7 +1170,7 @@ describe('workflow panel — T5 zones CSS audit: dock token styles + transition 
 describe('workflow panel — T5b agent-canvas page CSS audit (spec panel-tabs §4/§7)', () => {
   const cssText = readFileSync(new URL('../src/client/panel/pages/agent-canvas.module.css', import.meta.url), 'utf8')
 
-  it('every color-family declaration is a --dsw-* token — zero bare colors of ANY form', () => {
+  it('every color-family declaration is a --dsw-* token — zero bare colors of ANY form', async () => {
     const colorRe = /\b(?:color|background(?:-color)?|border(?:-(?:top|right|bottom|left))?(?:-color)?)\s*:/g
     const stripped = cssText.replace(/\/\*[\s\S]*?\*\//g, '')
     const colors: string[] = []
@@ -1095,7 +1187,7 @@ describe('workflow panel — T5b agent-canvas page CSS audit (spec panel-tabs §
     expect(cssText).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(|hwb\(|lab\(|lch\(|color\(/)
   })
 
-  it('spacing rides the --mstar-space-* ramp; font sizes ride the --dsw-font-xxxs-11/xxs-12/xs-13 ramp', () => {
+  it('spacing rides the --mstar-space-* ramp; font sizes ride the --dsw-font-xxxs-11/xxs-12/xs-13 ramp', async () => {
     const stripped = cssText.replace(/\/\*[\s\S]*?\*\//g, '')
     const spacingRe = /\b(?:gap|padding(?:-(?:top|right|bottom|left))?|margin(?:-(?:top|right|bottom|left))?)\s*:/g
     const spacing: string[] = []
@@ -1119,7 +1211,7 @@ describe('workflow panel — T5b agent-canvas page CSS audit (spec panel-tabs §
     }
   })
 
-  it('every transition duration sits in the 120–200ms window (hover affordance)', () => {
+  it('every transition duration sits in the 120–200ms window (hover affordance)', async () => {
     const transitions = [...cssText.matchAll(/transition:\s*([^;}]+)/g)].map((m) => m[1]!.trim())
     expect(transitions.length).toBeGreaterThan(0)
     for (const t of transitions) {
@@ -1133,7 +1225,7 @@ describe('workflow panel — T5b agent-canvas page CSS audit (spec panel-tabs §
     }
   })
 
-  it('declares ONLY the running-card pulse animation (the next-edge dash flow is REMOVED with the next edge — T5); NO own reduced-motion block (root rule covers)', () => {
+  it('declares ONLY the running-card pulse animation (the next-edge dash flow is REMOVED with the next edge — T5); NO own reduced-motion block (root rule covers)', async () => {
     // The canvas ANIMATION (spec §6.2
     // Task 5 — running glow pulse) is declared here — the single motion-kill
     // coverage point stays the panel ROOT rule (`* { animation: none
@@ -1149,7 +1241,7 @@ describe('workflow panel — T5b agent-canvas page CSS audit (spec panel-tabs §
     expect(cssText).not.toContain('data-ds-dark-theme')
   })
 
-  it('arrowhead fills target the marker <path> itself — no descendant selector', () => {
+  it('arrowhead fills target the marker <path> itself — no descendant selector', async () => {
     // The marker defs put the class ON the <path> element (AgentCanvasPage.tsx
     // `canvas-arrow-*` markers), so a `.canvasArrowX path` descendant selector
     // can never match — the SVG default (black) fill would win and the lit
@@ -1166,7 +1258,7 @@ describe('workflow panel — T5b agent-canvas page CSS audit (spec panel-tabs §
     expect(arrowRule('canvasArrowSuperviseLit')).toContain('fill: var(--dsw-alias-state-business-primary)')
   })
 
-  it('evidenced supervise line renders SOLID — the lit rule RESETS the base dasharray (cascade outcome)', () => {
+  it('evidenced supervise line renders SOLID — the lit rule RESETS the base dasharray (cascade outcome)', async () => {
     // qc1 W-001 : `.canvasEdgeSupervise` declares
     // `stroke-dasharray: 5 4` and `.canvasEdgeSuperviseLit` overrides only
     // `stroke` — both single-class specificity (0,1,0), so the dash
@@ -1188,8 +1280,8 @@ describe('workflow panel — T3 sidebar reorg: plan cap/sort, residual findings 
     return start === -1 || end === -1 ? html : html.slice(start, end)
   }
 
-  it('plan board caps at 5 in spec §3 order with a +N more note; ≤5 renders no note', () => {
-    const many = panelHtml({
+  it('plan board caps at 5 in spec §3 order with a +N more note; ≤5 renders no note', async () => {
+    const many = await panelHtml({
       ...fullSource,
       state: {
         ...fullSource.state!,
@@ -1217,17 +1309,17 @@ describe('workflow panel — T3 sidebar reorg: plan cap/sort, residual findings 
     expect(s).not.toContain('data-plan-id="plan-2"')
     expect(s).not.toContain('data-plan-id="plan-1"')
     // The fixture (2 plans) renders no truncation note.
-    expect(stateSlice(panelHtml(fullSource))).not.toContain('data-plan-truncated')
+    expect(stateSlice(await panelHtml(fullSource))).not.toContain('data-plan-truncated')
   })
 
-  it('residual findings cap at 10 with an overflow hint; ≤10 renders none (spec §5)', () => {
+  it('residual findings cap at 10 with an overflow hint; ≤10 renders none (spec §5)', async () => {
     const findings = Array.from({ length: 12 }, (_, i) => ({
       planId: 'plan-x',
       id: `R${i + 1}`,
       severity: 'nit' as string,
       title: `finding ${i + 1}`,
     }))
-    const s = stateSlice(panelHtml({
+    const s = stateSlice(await panelHtml({
       ...fullSource,
       state: { ...fullSource.state!, residualFindings: findings },
     }))
@@ -1238,32 +1330,32 @@ describe('workflow panel — T3 sidebar reorg: plan cap/sort, residual findings 
     expect(s).not.toContain('data-residual-finding-id="R11"')
     expect(s).not.toContain('data-residual-finding-id="R12"')
     // Fixture: 2 findings → no overflow hint.
-    expect(stateSlice(panelHtml(fullSource))).not.toContain('data-residual-truncated')
+    expect(stateSlice(await panelHtml(fullSource))).not.toContain('data-residual-truncated')
   })
 
-  it('residualFindings null (root key unreadable) degrades to the none note, never a crash', () => {
-    const s = stateSlice(panelHtml(noGateSource))
+  it('residualFindings null (root key unreadable) degrades to the none note, never a crash', async () => {
+    const s = stateSlice(await panelHtml(noGateSource))
     expect(s).toContain('data-mstar-empty="no-residuals"')
     expect(s).toContain('none')
   })
 
-  it('enforcement missing / garbage degrades the policy row to unknown, never a crash', () => {
+  it('enforcement missing / garbage degrades the policy row to unknown, never a crash', async () => {
     // Missing (degradedSource carries enforcement: undefined) → unknown value.
-    expect(panelHtml(degradedSource)).toContain('data-field="enforcement">unknown')
+    expect(await panelHtml(degradedSource)).toContain('data-field="enforcement">unknown')
     // Garbage (non-object) → same unknown degrade.
-    const garbage = panelHtml({ ...fullSource, enforcement: 'not-an-object' } as unknown as MstarEngineStatusSource)
+    const garbage = await panelHtml({ ...fullSource, enforcement: 'not-an-object' } as unknown as MstarEngineStatusPayload)
     expect(garbage).toContain('data-field="enforcement">unknown')
   })
 
-  it('soft enforcement renders soft + provenance source (spec §2.1)', () => {
-    const soft = panelHtml({ ...fullSource, enforcement: { hard: false, source: 'iteration compass' as EnforcementSource } })
+  it('soft enforcement renders soft + provenance source (spec §2.1)', async () => {
+    const soft = await panelHtml({ ...fullSource, enforcement: { hard: false, source: 'iteration compass' as EnforcementSource } })
     expect(soft).toContain('data-field="enforcement"')
     expect(soft).toContain('soft (iteration compass)')
   })
 })
 
 describe('workflow panel — T1 panel rename: "MStar 工作流" / "MStar Workflow" (spec panel-layout-graph §1.1)', () => {
-  it('view.mstar-workflow label flips with the locale', () => {
+  it('view.mstar-workflow label flips with the locale', async () => {
     const locale = newLocale()
     locale.register(NS, { zh, en })
     locale.setLocale('en')
@@ -1272,8 +1364,8 @@ describe('workflow panel — T1 panel rename: "MStar 工作流" / "MStar Workflo
     expect(locale.bind(NS)('view.mstar-workflow')).toBe('MStar 工作流')
   })
 
-  it('zh body renders the meta dock + zone dashboard labels (header captions removed)', () => {
-    const zhHtml = panelHtml(fullSource, undefined, undefined, 'zh')
+  it('zh body renders the meta dock + zone dashboard labels (header captions removed)', async () => {
+    const zhHtml = await panelHtml(fullSource, undefined, undefined, 'zh')
     // zh/en dual-locale coverage of the meta dock: anchors + watermark values
     // (zh `watermark.*` values are identical to en — both render from the dock).
     expect(zhHtml).toContain('data-mstar-meta-version')
@@ -1308,9 +1400,10 @@ describe('workflow panel — T1 panel rename: "MStar 工作流" / "MStar Workflo
  * ------------------------------------------------------------------------- */
 
 describe('workflow panel — T7 iteration-task page: content head collapse/expand + horizontal steps + full-width kanban (spec panel-tabs §3)', () => {
-  const html = panelHtml(fullSource)
+  let html = ''
+  beforeAll(async () => { html = await panelHtml(fullSource) })
 
-  it('active iteration → head EXPANDED by default: summary row + horizontal 5-step row + branches', () => {
+  it('active iteration → head EXPANDED by default: summary row + horizontal 5-step row + branches', async () => {
     expect(html).toContain('data-iteration-head')
     expect(html).toContain('data-iteration-head-active="true"')
     expect(html).toContain('data-iteration-head-expanded="true"')
@@ -1366,7 +1459,7 @@ describe('workflow panel — T7 iteration-task page: content head collapse/expan
     expect(html).toContain('iteration/iter-00000809-dsh-workflow-viz')
   })
 
-  it('LIVE activation re-sync (Task 2 review Important-1): the head expands when the SAME mounted instance sees active flip false→true; user collapse while already active is never overridden', () => {
+  it('LIVE activation re-sync (Task 2 review Important-1): the head expands when the SAME mounted instance sees active flip false→true; user collapse while already active is never overridden', async () => {
     // The collapse/expand state is seeded from `iteration.active` at mount
     // (SSR-stable, asserted above); a live catalog update can flip active
     // false→true WITHOUT a remount, and spec §3 says an active iteration
@@ -1390,8 +1483,8 @@ describe('workflow panel — T7 iteration-task page: content head collapse/expan
     expect(t(false, false, false)).toBe(false)
   })
 
-  it('inactive iteration → head COLLAPSED to a one-line summary by default; the toggle can expand the idle skeleton', () => {
-    const g = panelHtml(noGateSource)
+  it('inactive iteration → head COLLAPSED to a one-line summary by default; the toggle can expand the idle skeleton', async () => {
+    const g = await panelHtml(noGateSource)
     expect(g).toContain('data-iteration-head')
     expect(g).toContain('data-iteration-head-active="false"')
     expect(g).toContain('data-iteration-head-expanded="false"')
@@ -1410,8 +1503,8 @@ describe('workflow panel — T7 iteration-task page: content head collapse/expan
     expect(g).not.toContain('data-branch=')
   })
 
-  it('garbage iteration field → the same collapsed muted head, never a crash', () => {
-    const garbage = panelHtml({ ...fullSource, iteration: 'not-an-object' } as unknown as MstarEngineStatusSource)
+  it('garbage iteration field → the same collapsed muted head, never a crash', async () => {
+    const garbage = await panelHtml({ ...fullSource, iteration: 'not-an-object' } as unknown as MstarEngineStatusPayload)
     expect(garbage).toContain('data-iteration-head')
     expect(garbage).toContain('data-iteration-head-active="false"')
     expect(garbage).toContain('data-iteration-head-expanded="false"')
@@ -1420,16 +1513,16 @@ describe('workflow panel — T7 iteration-task page: content head collapse/expan
     expect(garbage).not.toContain('data-branch=')
   })
 
-  it('FAIL gate → the head verdict badge carries data-iteration-head-verdict="fail"', () => {
-    const failHtml = panelHtml(failGateSource)
+  it('FAIL gate → the head verdict badge carries data-iteration-head-verdict="fail"', async () => {
+    const failHtml = await panelHtml(failGateSource)
     expect(failHtml).toContain('data-iteration-head-active="true"')
     expect(failHtml).toContain('data-iteration-head-expanded="true"')
     expect(failHtml).toContain('data-iteration-head-verdict="fail"')
     expect(failHtml).toContain('data-iteration-verdict="fail"')
   })
 
-  it('zh locale: summary/phase/chip/branch labels localize; en labels do not leak', () => {
-    const zhHtml = panelHtml(fullSource, undefined, undefined, 'zh')
+  it('zh locale: summary/phase/chip/branch labels localize; en labels do not leak', async () => {
+    const zhHtml = await panelHtml(fullSource, undefined, undefined, 'zh')
     expect(zhHtml).toContain('data-iteration-head-active="true"')
     expect(zhHtml).toContain('data-iteration-head-expanded="true"')
     // Pure numbers in zh too (plan Item 1 — no 步骤 wording at all).
@@ -1453,12 +1546,12 @@ describe('workflow panel — T7 iteration-task page: content head collapse/expan
     // en phase labels must not leak into the zh body.
     expect(zhHtml).not.toContain('Autonomous Execute')
     // The zh "not started" note localizes too.
-    const zhInactive = panelHtml(noGateSource, undefined, undefined, 'zh')
+    const zhInactive = await panelHtml(noGateSource, undefined, undefined, 'zh')
     expect(zhInactive).toContain('data-iteration-head-expanded="false"')
     expect(zhInactive).toContain('迭代未启动')
   })
 
-  it('renders the full-width kanban in the tasks scroll area: 5 columns + total', () => {
+  it('renders the full-width kanban in the tasks scroll area: 5 columns + total', async () => {
     expect(html).toContain('data-mstar-tasks-scroll')
     expect(html).toContain('data-zone="tasks"')
     expect(html).toContain('data-mstar-kanban')
@@ -1476,8 +1569,8 @@ describe('workflow panel — T7 iteration-task page: content head collapse/expan
     expect(html).not.toContain('data-mstar-legend')
   })
 
-  it('state null → the muted 5-column kanban skeleton + no-plans note, never an orange box (spec §8)', () => {
-    const g = panelHtml({ ...fullSource, state: null })
+  it('state null → the muted 5-column kanban skeleton + no-plans note, never an orange box (spec §8)', async () => {
+    const g = await panelHtml({ ...fullSource, state: null })
     expect(g).toContain('data-mstar-page="tasks"')
     expect(g).toContain('data-zone="tasks"')
     expect(g.match(/data-kanban-column="/g)).toHaveLength(5)
@@ -1487,11 +1580,11 @@ describe('workflow panel — T7 iteration-task page: content head collapse/expan
     expect(g).not.toContain('data-graph-empty="no-state"')
   })
 
-  it('plans missing → same muted kanban skeleton + no-plans note, no no-plans orange note (spec §8)', () => {
-    const g = panelHtml({
+  it('plans missing → same muted kanban skeleton + no-plans note, no no-plans orange note (spec §8)', async () => {
+    const g = await panelHtml({
       ...fullSource,
       state: { ...fullSource.state!, plans: undefined },
-    } as unknown as MstarEngineStatusSource)
+    } as unknown as MstarEngineStatusPayload)
     expect(g).toContain('data-zone="tasks"')
     expect(g.match(/data-kanban-column="/g)).toHaveLength(5)
     expect(g).toContain('data-zone-empty="no-plans"')
@@ -1499,7 +1592,7 @@ describe('workflow panel — T7 iteration-task page: content head collapse/expan
     expect(g).not.toContain('data-graph-empty="no-plans"')
   })
 
-  it('css: the tasks area is the page\'s independent vertical scroll body; the kanban columns spread full-width (spec §3/D2)', () => {
+  it('css: the tasks area is the page\'s independent vertical scroll body; the kanban columns spread full-width (spec §3/D2)', async () => {
     const panelCss = readFileSync(new URL('../src/client/panel/panel.module.css', import.meta.url), 'utf8')
     // The page fills the content region (flex column); the tasks area takes
     // the remaining height and scrolls independently — never compressed into
@@ -1538,13 +1631,13 @@ describe('workflow panel — T7 iteration-task page: content head collapse/expan
 
 describe('workflow panel — F4.3 iteration zone: split layout + verdict badge seat/condition (spec panel-f4 §2.3 R8/R9)', () => {
   /** Phase 1 in flight: compassStatus active → Step 1 current, verdict unknown (Task 1 projection). */
-  const phase1Source: MstarEngineStatusSource = {
+  const phase1Source: MstarEngineStatusPayload = {
     ...fullSource,
     iteration: { ...fullSource.iteration!, compassStatus: 'active' },
   }
 
-  it('active + branches → the split container wraps branches (DOM-first) and steps', () => {
-    const html = panelHtml(fullSource)
+  it('active + branches → the split container wraps branches (DOM-first) and steps', async () => {
+    const html = await panelHtml(fullSource)
     expect(html).toContain('data-iteration-head-split')
     // DOM order: the split wraps BOTH panels, branches BEFORE steps — a plain
     // flex row puts branches on the left (spec R8; the pre-split DOM had
@@ -1553,14 +1646,14 @@ describe('workflow panel — F4.3 iteration zone: split layout + verdict badge s
     expect(html.indexOf('data-iteration-head-branches')).toBeLessThan(html.indexOf('data-iteration-head-steps'))
   })
 
-  it('inactive → no branches, no split container (the steps row alone)', () => {
-    const g = panelHtml(noGateSource)
+  it('inactive → no branches, no split container (the steps row alone)', async () => {
+    const g = await panelHtml(noGateSource)
     expect(g).not.toContain('data-iteration-head-split')
     expect(g).not.toContain('data-iteration-head-branches')
     expect(g).not.toContain('data-branch=')
   })
 
-  it('expanded head without the split → the steps-row-alone fallback: 5 verdict seats, 0 badges, no split/branches ', () => {
+  it('expanded head without the split → the steps-row-alone fallback: 5 verdict seats, 0 badges, no split/branches ', async () => {
     // The user-visible case (a manually EXPANDED inactive head) is
     // SSR-unreachable in this suite — `expanded` is seeded from `active`
     // (`useState(active)`), and effects/clicks cannot run under
@@ -1596,8 +1689,8 @@ describe('workflow panel — F4.3 iteration zone: split layout + verdict badge s
     expect(html).not.toMatch(/data-step-state="current"/)
   })
 
-  it('every step reserves the verdict seat; the badge renders only once, on a real gate verdict', () => {
-    const html = panelHtml(fullSource)
+  it('every step reserves the verdict seat; the badge renders only once, on a real gate verdict', async () => {
+    const html = await panelHtml(fullSource)
     // Structural parity: all 5 steps carry the fixed-height seat — the
     // conditional badge never shifts the current step's centered group.
     expect(html.match(/data-step-verdict-seat/g)).toHaveLength(5)
@@ -1608,8 +1701,8 @@ describe('workflow panel — F4.3 iteration zone: split layout + verdict badge s
     expect(html.match(/data-iteration-verdict=/g)).toHaveLength(1)
   })
 
-  it('Phase 1 (compassStatus active): Step 1 current, Step 2 next, verdict unknown, NO badge', () => {
-    const html = panelHtml(phase1Source)
+  it('Phase 1 (compassStatus active): Step 1 current, Step 2 next, verdict unknown, NO badge', async () => {
+    const html = await panelHtml(phase1Source)
     expect(html).toContain('data-iteration-head-active="true"')
     expect(html).toContain('data-iteration-head-expanded="true"')
     // Step 1 (iteration-start) is current; Step 2 is next (spec R9).
@@ -1628,14 +1721,14 @@ describe('workflow panel — F4.3 iteration zone: split layout + verdict badge s
     expect(html.match(/data-step-verdict-seat/g)).toHaveLength(5)
   })
 
-  it('Phase 1 in zh: no badge either, seat row still reserved (zh/en parity)', () => {
-    const zhHtml = panelHtml(phase1Source, undefined, undefined, 'zh')
+  it('Phase 1 in zh: no badge either, seat row still reserved (zh/en parity)', async () => {
+    const zhHtml = await panelHtml(phase1Source, undefined, undefined, 'zh')
     expect(zhHtml).toContain('data-iteration-head-verdict="unknown"')
     expect(zhHtml).not.toContain('data-iteration-verdict')
     expect(zhHtml.match(/data-step-verdict-seat/g)).toHaveLength(5)
   })
 
-  it('css: split flex row (branches width-capped, steps absorb) + narrow stack; badge aligned via the fixed-height seat, no align-self skew', () => {
+  it('css: split flex row (branches width-capped, steps absorb) + narrow stack; badge aligned via the fixed-height seat, no align-self skew', async () => {
     const cssText = readFileSync(new URL('../src/client/panel/panel.module.css', import.meta.url), 'utf8')
     // Split container: a flex row with a ramp gap (spec R8).
     expect(cssText).toMatch(/\.iterationHeadSplit\s*\{[\s\S]*?display:\s*flex[\s\S]*?gap:\s*var\(--mstar-space-/)
@@ -1693,18 +1786,18 @@ describe('workflow panel — T5 AC-3 orange-box zeroing: old anchors/texts gone,
     zh: ['无 steering compass / status.json', '无 plan 行（状态机骨架）', '无工作区状态摘要'],
   }
 
-  it('full fixture, en + zh: zero data-graph-empty anchors, zero old note texts, zero stateUnknown', () => {
+  it('full fixture, en + zh: zero data-graph-empty anchors, zero old note texts, zero stateUnknown', async () => {
     for (const lang of ['en', 'zh'] as const) {
-      const html = panelHtml(fullSource, undefined, undefined, lang)
+      const html = await panelHtml(fullSource, undefined, undefined, lang)
       expect(html).not.toContain(OLD_ANCHOR)
       expect(html).not.toContain('stateUnknown')
       for (const text of OLD_TEXTS[lang]) expect(html).not.toContain(text)
     }
   })
 
-  it('no iteration, en + zh: collapsed muted head with the not-started note, no-compass anchor + text gone', () => {
+  it('no iteration, en + zh: collapsed muted head with the not-started note, no-compass anchor + text gone', async () => {
     for (const lang of ['en', 'zh'] as const) {
-      const g = panelHtml(noGateSource, undefined, undefined, lang)
+      const g = await panelHtml(noGateSource, undefined, undefined, lang)
       expect(g).toContain('data-iteration-head')
       expect(g).toContain('data-iteration-head-active="false"')
       expect(g).toContain('data-iteration-head-expanded="false"')
@@ -1715,9 +1808,9 @@ describe('workflow panel — T5 AC-3 orange-box zeroing: old anchors/texts gone,
     }
   })
 
-  it('state null, en + zh: muted no-plans note present, no-state anchor + text gone', () => {
+  it('state null, en + zh: muted no-plans note present, no-state anchor + text gone', async () => {
     for (const lang of ['en', 'zh'] as const) {
-      const g = panelHtml({ ...fullSource, state: null }, undefined, undefined, lang)
+      const g = await panelHtml({ ...fullSource, state: null }, undefined, undefined, lang)
       expect(g).toContain('data-zone-empty="no-plans"')
       expect(g).toContain(lang === 'en' ? 'no plans' : '暂无计划')
       expect(g).not.toContain(OLD_ANCHOR)
@@ -1726,12 +1819,12 @@ describe('workflow panel — T5 AC-3 orange-box zeroing: old anchors/texts gone,
     }
   })
 
-  it('plans missing, en + zh: same muted skeleton, no-plans anchor + text gone', () => {
+  it('plans missing, en + zh: same muted skeleton, no-plans anchor + text gone', async () => {
     for (const lang of ['en', 'zh'] as const) {
-      const g = panelHtml({
+      const g = await panelHtml({
         ...fullSource,
         state: { ...fullSource.state!, plans: undefined },
-      } as unknown as MstarEngineStatusSource, undefined, undefined, lang)
+      } as unknown as MstarEngineStatusPayload, undefined, undefined, lang)
       expect(g).toContain('data-zone-empty="no-plans"')
       expect(g).not.toContain(OLD_ANCHOR)
       expect(g).not.toContain('data-graph-empty="no-plans"')
@@ -1739,9 +1832,9 @@ describe('workflow panel — T5 AC-3 orange-box zeroing: old anchors/texts gone,
     }
   })
 
-  it('agentFlow null, en + zh: the tasks page renders no agents zone / no dock / no orange flow note (agents render moves to the agent-canvas plan)', () => {
+  it('agentFlow null, en + zh: the tasks page renders no agents zone / no dock / no orange flow note (agents render moves to the agent-canvas plan)', async () => {
     for (const lang of ['en', 'zh'] as const) {
-      const g = panelHtml(fullSource, undefined, undefined, lang)
+      const g = await panelHtml(fullSource, undefined, undefined, lang)
       expect(g).toContain('data-iteration-head')
       expect(g).not.toContain('data-zone="agents"')
       expect(g).not.toContain('data-agent-event-dock')
@@ -1749,7 +1842,7 @@ describe('workflow panel — T5 AC-3 orange-box zeroing: old anchors/texts gone,
     }
   })
 
-  it('the .stateUnknown orange bucket class is deleted from the zones css; blocked-unknown column stays muted NEUTRAL', () => {
+  it('the .stateUnknown orange bucket class is deleted from the zones css; blocked-unknown column stays muted NEUTRAL', async () => {
     const cssText = readFileSync(new URL('../src/client/panel/zones/zones.module.css', import.meta.url), 'utf8')
     // The react-flow-era `.stateUnknown` RULE (dashed warn border + warn
     // label) is gone with graph.module.css — no selector rule survives (a
@@ -1767,20 +1860,24 @@ describe('workflow panel — T5 AC-3 orange-box zeroing: old anchors/texts gone,
 })
 
 describe('workflow panel — T7 data projection integration (spec panel-tabs §3)', () => {
-  const html = panelHtml(fullSource)
+  let html = ''
+  beforeAll(async () => { html = await panelHtml(fullSource) })
 
-  /** Render the panel against a live snapshot store (same helper shape as the data-wiring block). */
-  function renderStore(store: { getSnapshot(): ChatSnapshot }, lang: 'en' | 'zh' = 'en'): string {
-    const locale = newLocale()
-    locale.register(NS, { zh, en })
-    locale.setLocale(lang)
-    return renderToStaticMarkup(createElement(PanelView, {
-      ...kitProps({ useChat: bindUseChat(store) }),
-      t: locale.bind(NS),
-    }))
+  /**
+   * Render the panel against a live snapshot store and the payload the gateway
+   * serves for it (same helper shape as the data-wiring block).
+   */
+  async function renderStore(
+    store: { getSnapshot(): ChatSnapshot },
+    lang: 'en' | 'zh' = 'en',
+    payload: MstarEngineStatusPayload = fullSource,
+  ): Promise<string> {
+    const gateway = gatewayFor(payload)
+    const fixture = panelFixture(panelLocale(lang), store, gateway)
+    return settleRender(() => renderPanelPass(fixture))
   }
 
-  it('tasks page, meta dock and sidebar all render from the SAME catalog row (single source of truth)', () => {
+  it('tasks page, meta dock and sidebar all render from the SAME catalog row (single source of truth)', async () => {
     // Meta dock watermark = source.version / harnessDir (was the header).
     expect(html).toContain('mstar 2.0.4')
     expect(html).toContain('harness: /proj/.mstar')
@@ -1796,10 +1893,11 @@ describe('workflow panel — T7 data projection integration (spec panel-tabs §3
     expect(html).toContain('data-plan-status="InProgress"')
   })
 
-  it('a new catalog row re-renders the tasks page with fresh data (no stale ring state)', () => {
+  it('a new catalog row re-renders the tasks page with fresh data (no stale ring state)', async () => {
     // Snapshot bump: server re-emission with a FAIL verdict.
     const beforeStore = createSnapshotStore(snapshotFor(fullSource, 1_720_000_000_000))
-    expect(renderStore(beforeStore)).toContain('data-iteration-head-verdict="pass"')
+    expect(await renderStore(beforeStore)).toContain('data-iteration-head-verdict="pass"')
+    expect(beforeStore.getSnapshot()).toBeDefined()
 
     const failing = {
       ...fullSource,
@@ -1811,9 +1909,9 @@ describe('workflow panel — T7 data projection integration (spec panel-tabs §3
           violations: [{ severity: 'high', code: 'EXIT-9', message: 'new violation row' }],
         },
       },
-    } as unknown as MstarEngineStatusSource
-    const store = createSnapshotStore(snapshotFor(failing, 1_720_000_000_000))
-    const after = renderStore(store)
+    } as unknown as MstarEngineStatusPayload
+    const store = createSnapshotStore(snapshotFor(failing, 1_720_001_000_000))
+    const after = await renderStore(store, 'en', failing)
     expect(after).toContain('data-iteration-head-verdict="fail"')
     expect(after).toContain('data-iteration-verdict="fail"')
     // The violation list itself renders on the event-log page (event-log plan) —
@@ -1821,8 +1919,8 @@ describe('workflow panel — T7 data projection integration (spec panel-tabs §3
     expect(after).not.toContain('data-graph-violations-count')
   })
 
-  it('missing / garbage fields degrade the WHOLE panel (meta dock + tasks page + sidebar) without crashing', () => {
-    const noIteration = panelHtml({ ...fullSource, iteration: undefined } as unknown as MstarEngineStatusSource)
+  it('missing / garbage fields degrade the WHOLE panel (meta dock + tasks page + sidebar) without crashing', async () => {
+    const noIteration = await panelHtml({ ...fullSource, iteration: undefined } as unknown as MstarEngineStatusPayload)
     expect(noIteration).toContain('data-mstar-meta')
     expect(noIteration).toContain('data-iteration-head')
     expect(noIteration).toContain('data-iteration-head-active="false"')
@@ -1830,7 +1928,7 @@ describe('workflow panel — T7 data projection integration (spec panel-tabs §3
     expect(noIteration).toContain('data-mstar-sidebar')
     expect(noIteration).toContain('data-plan-id="00000809-dsh-workflow-viz-panel"')
 
-    const garbageIteration = panelHtml({ ...fullSource, iteration: 'not-an-object' } as unknown as MstarEngineStatusSource)
+    const garbageIteration = await panelHtml({ ...fullSource, iteration: 'not-an-object' } as unknown as MstarEngineStatusPayload)
     expect(garbageIteration).toContain('data-mstar-meta')
     expect(garbageIteration).toContain('data-iteration-head')
     expect(garbageIteration).toContain('data-iteration-head-active="false"')
@@ -1869,7 +1967,7 @@ describe('workflow panel — T4 task board kanban: 5 columns + counts + cards + 
 
   /** A plan-status spread covering every column (Blocked + a non-5-state
    * status both fold into the merged blocked-unknown column). */
-  const kanbanSource: MstarEngineStatusSource = {
+  const kanbanSource: MstarEngineStatusPayload = {
     ...fullSource,
     state: {
       ...fullSource.state!,
@@ -1884,9 +1982,10 @@ describe('workflow panel — T4 task board kanban: 5 columns + counts + cards + 
       ],
     },
   }
-  const html = panelHtml(kanbanSource)
+  let html = ''
+  beforeAll(async () => { html = await panelHtml(kanbanSource) })
 
-  it('renders 5 columns in PLAN_STATE_IDS order with count badges and the total', () => {
+  it('renders 5 columns in PLAN_STATE_IDS order with count badges and the total', async () => {
     expect(html).toContain('data-mstar-kanban')
     const cols = [...html.matchAll(/data-kanban-column="([^"]+)"/g)].map((m) => m[1]!)
     expect(cols).toEqual(['Todo', 'InProgress', 'InReview', 'Done', 'blocked-unknown'])
@@ -1898,7 +1997,7 @@ describe('workflow panel — T4 task board kanban: 5 columns + counts + cards + 
     expect(html.match(/data-kanban-count="1"/g)).toHaveLength(3)
   })
 
-  it('buckets plan cards into their columns: data-plan-id / data-plan-status (shared anchors)', () => {
+  it('buckets plan cards into their columns: data-plan-id / data-plan-status (shared anchors)', async () => {
     const todo = columnSlice(html, 'Todo')
     expect(todo).toContain('data-plan-id="plan-todo-1"')
     expect(todo).toContain('data-plan-id="plan-todo-2"')
@@ -1920,7 +2019,7 @@ describe('workflow panel — T4 task board kanban: 5 columns + counts + cards + 
     expect(html).not.toContain('data-kanban-column="unknown"')
   })
 
-  it('blocked-unknown column is muted NEUTRAL (spec §3) — never the warn/orange treatment', () => {
+  it('blocked-unknown column is muted NEUTRAL (spec §3) — never the warn/orange treatment', async () => {
     const cssText = readFileSync(new URL('../src/client/panel/zones/zones.module.css', import.meta.url), 'utf8')
     const mergedRule = cssText.match(/\[data-kanban-column='blocked-unknown'\]\s*\{[\s\S]*?\}/)
     expect(mergedRule).not.toBeNull()
@@ -1931,7 +2030,7 @@ describe('workflow panel — T4 task board kanban: 5 columns + counts + cards + 
     expect(mergedRule![0]).not.toMatch(/--dsw-alias-state-(?:warn|error|business)/)
   })
 
-  it('renders the dim inter-column flow arrows: chain → + Blocked ⇄ docking at the merged column (spec §2.4)', () => {
+  it('renders the dim inter-column flow arrows: chain → + Blocked ⇄ docking at the merged column (spec §2.4)', async () => {
     const k = tasksSlice(html)
     expect(k.match(/data-kanban-arrow=/g)).toHaveLength(4)
     expect(k).toContain('data-kanban-arrow="Todo-InProgress"')
@@ -1948,8 +2047,8 @@ describe('workflow panel — T4 task board kanban: 5 columns + counts + cards + 
     expect(pos('data-kanban-arrow="InProgress-Blocked"')).toBeLessThan(pos('data-kanban-column="blocked-unknown"'))
   })
 
-  it('overflow: 7 Done plans → top-5 rendered + count 7 + a clickable +2 more button (data-kanban-more)', () => {
-    const doneOverflow: MstarEngineStatusSource = {
+  it('overflow: 7 Done plans → top-5 rendered + count 7 + a clickable +2 more button (data-kanban-more)', async () => {
+    const doneOverflow: MstarEngineStatusPayload = {
       ...fullSource,
       state: {
         ...fullSource.state!,
@@ -1964,7 +2063,7 @@ describe('workflow panel — T4 task board kanban: 5 columns + counts + cards + 
         ],
       },
     }
-    const g = panelHtml(doneOverflow)
+    const g = await panelHtml(doneOverflow)
     const done = columnSlice(g, 'Done')
     // Full count on the badge, top PLAN_CAP cards rendered by default (Task 1).
     expect(done).toContain('data-kanban-count="7"')
@@ -1983,8 +2082,8 @@ describe('workflow panel — T4 task board kanban: 5 columns + counts + cards + 
     // pins the RENDER of the capped column only.
   })
 
-  it('overflow boundary: exactly 5 Done plans → no 「更多」 button', () => {
-    const five: MstarEngineStatusSource = {
+  it('overflow boundary: exactly 5 Done plans → no 「更多」 button', async () => {
+    const five: MstarEngineStatusPayload = {
       ...fullSource,
       state: {
         ...fullSource.state!,
@@ -1996,14 +2095,14 @@ describe('workflow panel — T4 task board kanban: 5 columns + counts + cards + 
         })),
       },
     }
-    const done = columnSlice(panelHtml(five), 'Done')
+    const done = columnSlice(await panelHtml(five), 'Done')
     expect(done.match(/data-plan-id="/g)).toHaveLength(5)
     expect(done).not.toContain('data-kanban-more')
     expect(done).not.toContain('+1 more')
   })
 
-  it('non-Done columns keep input order (only Done sorts); ≤PLAN_CAP → no 「更多」 button (spec §3)', () => {
-    const unsorted: MstarEngineStatusSource = {
+  it('non-Done columns keep input order (only Done sorts); ≤PLAN_CAP → no 「更多」 button (spec §3)', async () => {
+    const unsorted: MstarEngineStatusPayload = {
       ...fullSource,
       state: {
         ...fullSource.state!,
@@ -2014,7 +2113,7 @@ describe('workflow panel — T4 task board kanban: 5 columns + counts + cards + 
         ],
       },
     }
-    const todo = columnSlice(panelHtml(unsorted), 'Todo')
+    const todo = columnSlice(await panelHtml(unsorted), 'Todo')
     // Input order (plan-z, plan-a, plan-m) — NOT the id lex DESC the Done
     // column would apply.
     expect(todo.indexOf('data-plan-id="plan-z"')).toBeLessThan(todo.indexOf('data-plan-id="plan-a"'))
@@ -2022,8 +2121,8 @@ describe('workflow panel — T4 task board kanban: 5 columns + counts + cards + 
     expect(todo).not.toContain('data-kanban-more')
   })
 
-  it('zh locale: localized column headers, total label and the muted no-plans note', () => {
-    const zhHtml = panelHtml(kanbanSource, undefined, undefined, 'zh')
+  it('zh locale: localized column headers, total label and the muted no-plans note', async () => {
+    const zhHtml = await panelHtml(kanbanSource, undefined, undefined, 'zh')
     const zhTasks = tasksSlice(zhHtml)
     // Column headers ride the zone.state.* keys (the merged column is「受阻/未知」).
     for (const label of ['待办', '进行中', '审查中', '已完成', '受阻/未知']) {
@@ -2031,14 +2130,14 @@ describe('workflow panel — T4 task board kanban: 5 columns + counts + cards + 
     }
     expect(zhTasks).toContain('7 个计划')
     // The empty note localizes too (state null → muted no-plans, spec §8).
-    const zhEmpty = panelHtml({ ...fullSource, state: null }, undefined, undefined, 'zh')
+    const zhEmpty = await panelHtml({ ...fullSource, state: null }, undefined, undefined, 'zh')
     expect(tasksSlice(zhEmpty)).toContain('暂无计划')
     expect(zhEmpty).toContain('data-zone-empty="no-plans"')
   })
 })
 
 describe('workflow panel — 「更多」 interaction ', () => {
-  it('visibleKanbanPlans truncates to PLAN_CAP by default and reveals ALL rows when expanded', () => {
+  it('visibleKanbanPlans truncates to PLAN_CAP by default and reveals ALL rows when expanded', async () => {
     const v = projectGraph({
       ...fullSource,
       state: {
@@ -2054,7 +2153,7 @@ describe('workflow panel — 「更多」 interaction ', () => {
     expect(visibleKanbanPlans(done, true).map((p) => p.id)).toEqual(done.plans.map((p) => p.id))
   })
 
-  it('toggleKanbanExpanded adds/removes a column id (the click path)', () => {
+  it('toggleKanbanExpanded adds/removes a column id (the click path)', async () => {
     const on = toggleKanbanExpanded(new Set(), 'Done')
     expect(on.has('Done')).toBe(true)
     expect(toggleKanbanExpanded(on, 'Done').has('Done')).toBe(false)
@@ -2081,8 +2180,8 @@ describe('workflow panel — 「更多」 interaction ', () => {
  * ------------------------------------------------------------------------- */
 
 describe('workflow panel — T6 tabs-shell: resident sidebar + header nav + content switching (spec panel-tabs §2/§6.1)', () => {
-  it('renders the 3 MenuTab anchors in the header nav, tasks active by default (D1)', () => {
-    const html = panelHtml(fullSource)
+  it('renders the 3 MenuTab anchors in the header nav, tasks active by default (D1)', async () => {
+    const html = await panelHtml(fullSource)
     expect(html).toContain('data-mstar-tab-nav')
     for (const id of ['tasks', 'agents', 'events']) expect(html).toContain(`data-mstar-tab="${id}"`)
     // Default tab = tasks (D1): exactly one active tab, two inactive; the
@@ -2096,7 +2195,7 @@ describe('workflow panel — T6 tabs-shell: resident sidebar + header nav + cont
     expect(html).toContain('Event Log')
   })
 
-  it('TabNav flips the active anchor per prop (activation state follows the tab)', () => {
+  it('TabNav flips the active anchor per prop (activation state follows the tab)', async () => {
     const locale = newLocale()
     locale.register(NS, { zh, en })
     locale.setLocale('en')
@@ -2108,7 +2207,7 @@ describe('workflow panel — T6 tabs-shell: resident sidebar + header nav + cont
     }
   })
 
-  it('content switches with the tab: tasks → IterationTaskPage, agents → AgentCanvasPage, events → EventLogPage', () => {
+  it('content switches with the tab: tasks → IterationTaskPage, agents → AgentCanvasPage, events → EventLogPage', async () => {
     const locale = newLocale()
     locale.register(NS, { zh, en })
     locale.setLocale('en')
@@ -2143,8 +2242,8 @@ describe('workflow panel — T6 tabs-shell: resident sidebar + header nav + cont
     for (const html of [tasks, agents, events]) expect(html).not.toContain('data-mstar-sidebar')
   })
 
-  it('the resident sidebar renders outside the tab-switching region, present under the default (tasks) tab', () => {
-    const html = panelHtml(fullSource)
+  it('the resident sidebar renders outside the tab-switching region, present under the default (tasks) tab', async () => {
+    const html = await panelHtml(fullSource)
     // data-mstar-graph = the content container (spec §6.1): it precedes the
     // sidebar, and the sidebar follows the whole main area.
     expect(html).toContain('data-mstar-graph')
@@ -2155,12 +2254,12 @@ describe('workflow panel — T6 tabs-shell: resident sidebar + header nav + cont
     expect(html.indexOf('data-mstar-graph')).toBeLessThan(html.indexOf('data-iteration-head'))
   })
 
-  it('waiting / no-harness branches keep data-mstar-panel + freshness, no tabs, no sidebar', () => {
-    const waiting = panelHtml(null)
+  it('waiting / no-harness branches keep data-mstar-panel + freshness, no tabs, no sidebar', async () => {
+    const waiting = await panelHtml(null)
     expect(waiting).toContain('data-mstar-panel="waiting"')
     expect(waiting).not.toContain('data-mstar-tab-nav')
     expect(waiting).not.toContain('data-mstar-sidebar')
-    const noHarness = panelHtml(noHarnessSource)
+    const noHarness = await panelHtml(noHarnessSource)
     expect(noHarness).toContain('data-mstar-panel="no-harness"')
     expect(noHarness).toContain('data-mstar-freshness')
     expect(noHarness).toContain('data-mstar-graph')
@@ -2168,8 +2267,8 @@ describe('workflow panel — T6 tabs-shell: resident sidebar + header nav + cont
     expect(noHarness).not.toContain('data-mstar-sidebar')
   })
 
-  it('zh locale localizes the tab labels + the agents canvas page copy', () => {
-    const zhHtml = panelHtml(fullSource, undefined, undefined, 'zh')
+  it('zh locale localizes the tab labels + the agents canvas page copy', async () => {
+    const zhHtml = await panelHtml(fullSource, undefined, undefined, 'zh')
     expect(zhHtml).toContain('任务迭代')
     expect(zhHtml).toContain('代理执行')
     expect(zhHtml).toContain('事件记录')
@@ -2206,7 +2305,7 @@ describe('workflow panel — T6 tabs-shell: resident sidebar + header nav + cont
 
 describe('workflow panel — T9 event-log page: partitions + rows + details + empty states (spec panel-tabs §5, plan event-log Task 2)', () => {
   /** Render the EventLogPage to static HTML (en default; the full projection). */
-  function eventsHtml(source: MstarEngineStatusSource, lang: 'en' | 'zh' = 'en'): string {
+  function eventsHtml(source: MstarEngineStatusPayload, lang: 'en' | 'zh' = 'en'): string {
     const locale = newLocale()
     locale.register(NS, { zh, en })
     locale.setLocale(lang)
@@ -2216,7 +2315,7 @@ describe('workflow panel — T9 event-log page: partitions + rows + details + em
     }))
   }
 
-  it('renders the two partitions with row anchors and counts (events + violations)', () => {
+  it('renders the two partitions with row anchors and counts (events + violations)', async () => {
     const html = eventsHtml(flowSource([
       { ts: 3_000, kind: 'settle', role: '', planId: null, taskId: null, taskCategory: null, agent: 'a-1', outcome: 'ok', durationMs: 1234 },
       { ts: 2_000, kind: 'dispatch', role: 'fullstack-dev', planId: 'plan-x', taskId: 'T1', taskCategory: 'logic', agent: 'a-1', verdict: 'advisory' },
@@ -2242,7 +2341,7 @@ describe('workflow panel — T9 event-log page: partitions + rows + details + em
     expect(html).toContain('data-event-log-code="PLAN-3"')
   })
 
-  it('every row is an expandable <details> whose body carries the full catalog fields (T1-Min-3 backfill)', () => {
+  it('every row is an expandable <details> whose body carries the full catalog fields (T1-Min-3 backfill)', async () => {
     const html = eventsHtml(flowSource([
       { ts: 3_000, kind: 'settle', role: '', planId: null, taskId: null, taskCategory: null, agent: 'a-1', outcome: 'ok', durationMs: 1234 },
       { ts: 2_000, kind: 'dispatch', role: 'fullstack-dev', planId: 'plan-x', taskId: 'T1', taskCategory: 'logic', agent: 'a-1', verdict: 'advisory' },
@@ -2271,7 +2370,7 @@ describe('workflow panel — T9 event-log page: partitions + rows + details + em
     expect(html).toContain('plan  not complete')
   })
 
-  it('missing fields degrade to 「—」 in the detail body — never fabricated (T1-Min-2 ts)', () => {
+  it('missing fields degrade to 「—」 in the detail body — never fabricated (T1-Min-2 ts)', async () => {
     // A sparse dispatch: no role/agent/plan/task/category/stage, ts 0, no
     // duration — every one of those detail fields must render「—」.
     const html = eventsHtml(flowSource([
@@ -2288,7 +2387,7 @@ describe('workflow panel — T9 event-log page: partitions + rows + details + em
     expect(html).toContain('data-event-log-status="dispatched"')
   })
 
-  it('settle rows render「—」for the settled field — the completion record itself, not a misleading no (T2-Min-2)', () => {
+  it('settle rows render「—」for the settled field — the completion record itself, not a misleading no (T2-Min-2)', async () => {
     // A settle row IS the completion record: the detail body's settled seat
     // renders「—」(not applicable) instead of a flat 'no' (review T2-Min-2).
     const html = eventsHtml(flowSource([
@@ -2311,7 +2410,7 @@ describe('workflow panel — T9 event-log page: partitions + rows + details + em
     expect(dispatchField).toContain('>no</span>')
   })
 
-  it('both empty → single muted 暂无记录 note, no partitions (spec §8)', () => {
+  it('both empty → single muted 暂无记录 note, no partitions (spec §8)', async () => {
     const html = eventsHtml({
       ...flowSource([]),
       iteration: { ...fullSource.iteration!, gate: { ...fullSource.iteration!.gate, violations: [] } },
@@ -2322,7 +2421,7 @@ describe('workflow panel — T9 event-log page: partitions + rows + details + em
     expect(html).not.toContain('<details')
   })
 
-  it('workflow rows render with the run name + workflow detail fields; unknown kinds render as generic rows (plan W-B2 Task 4)', () => {
+  it('workflow rows render with the run name + workflow detail fields; unknown kinds render as generic rows (plan W-B2 Task 4)', async () => {
     const html = eventsHtml(flowSource([
       { ts: 3_000, kind: 'workflow-run-end', runId: 'run-1', stopReason: 'completed' },
       { ts: 2_000, kind: 'workflow-agent', runId: 'run-1', seq: 1, label: 'worker', childId: 'child-1' },
@@ -2359,7 +2458,7 @@ describe('workflow panel — T9 event-log page: partitions + rows + details + em
     expect(html).not.toContain('data-event-log-unexpected')
   })
 
-  it('mixed empty: violations only → the events partition degrades independently (its own muted note)', () => {
+  it('mixed empty: violations only → the events partition degrades independently (its own muted note)', async () => {
     // fullSource: agentFlow null (0 events) + 2 gate violations.
     const html = eventsHtml(fullSource)
     expect(html).toContain('data-event-log-section="events"')
@@ -2370,7 +2469,7 @@ describe('workflow panel — T9 event-log page: partitions + rows + details + em
     expect(html).not.toContain('data-event-log-empty="')
   })
 
-  it('mixed empty: events only → the violations partition degrades independently (its own muted note)', () => {
+  it('mixed empty: events only → the violations partition degrades independently (its own muted note)', async () => {
     const html = eventsHtml({
       ...flowSource([dispatchEvent({ ts: 3, role: 'fullstack-dev', agent: 'a1' })]),
       iteration: { ...fullSource.iteration!, gate: { ...fullSource.iteration!.gate, violations: [] } },
@@ -2381,7 +2480,7 @@ describe('workflow panel — T9 event-log page: partitions + rows + details + em
     expect(html).not.toContain('data-event-log-empty="')
   })
 
-  it('unexpected dispatches fold into the events partition once (expected=false badge — never double-appended)', () => {
+  it('unexpected dispatches fold into the events partition once (expected=false badge — never double-appended)', async () => {
     const html = eventsHtml(flowSource([dispatchEvent({ ts: 4, role: 'scout', agent: 's-9' })]))
     // Exactly ONE event row for the off-pipeline dispatch (view.unexpected is
     // a re-list — Task 1 folds via expected:false; the page never re-lists).
@@ -2391,7 +2490,7 @@ describe('workflow panel — T9 event-log page: partitions + rows + details + em
     expect(html).toContain('Unexpected roles')
   })
 
-  it('settle rows NEVER render the unexpected badge — dispatch-only marker ', () => {
+  it('settle rows NEVER render the unexpected badge — dispatch-only marker ', async () => {
     // A normal dispatch→settle pair: the settle row's projected `expected`
     // is always false, but it is a completion record — no badge and no
     // "not-applicable" expected seat in its detail body.
@@ -2411,7 +2510,7 @@ describe('workflow panel — T9 event-log page: partitions + rows + details + em
     expect(unexpectedHtml).toContain('Unexpected roles')
   })
 
-  it('a finite but out-of-Date-range ts degrades to「—」— never throws ', () => {
+  it('a finite but out-of-Date-range ts degrades to「—」— never throws ', async () => {
     // ts = 1e18 is finite (guards.count passes it through the projection)
     // but outside the ECMAScript Date range (±8.64e15 ms): the old
     // formatEventTime threw RangeError and crashed the whole events tab.
@@ -2426,14 +2525,14 @@ describe('workflow panel — T9 event-log page: partitions + rows + details + em
     expect(timeField).toContain('data-event-log-missing="true"')
   })
 
-  it('dock migration: zero data-agent-event-dock anchors on the events page (无双份日志, spec §5)', () => {
+  it('dock migration: zero data-agent-event-dock anchors on the events page (无双份日志, spec §5)', async () => {
     const html = eventsHtml(flowSource([dispatchEvent({ ts: 3, role: 'fullstack-dev', agent: 'a1' })]))
     expect(html).not.toContain('data-agent-event-dock')
     expect(html).not.toContain('data-mstar-flow-events')
     expect(html).not.toContain('data-mstar-page-note')
   })
 
-  it('zh locale localizes the log page copy (partitions + empty notes + field labels)', () => {
+  it('zh locale localizes the log page copy (partitions + empty notes + field labels)', async () => {
     // fullSource has 0 events (agentFlow null) → detail field labels render
     // only for the violation rows; use a source WITH events too.
     const zhEvents = eventsHtml(flowSource([dispatchEvent({ ts: 3, role: 'fullstack-dev', agent: 'a1' })]), 'zh')
@@ -2476,7 +2575,7 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2)', () 
     dispatchEvent({ ts: 10, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x', taskId: 'T1' }),
   ])
 
-  it('data-agent-entity covers the full KNOWN_AGENTS roster — idle (degraded ledger) never hides a known agent', () => {
+  it('data-agent-entity covers the full KNOWN_AGENTS roster — idle (degraded ledger) never hides a known agent', async () => {
     const html = agentsHtml(fullSource) // agentFlow null → degraded
     for (const known of KNOWN_AGENTS) {
       expect(html).toContain(`data-agent-entity="${known.id}"`)
@@ -2489,7 +2588,7 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2)', () 
     expect(html).toContain('data-agent-summary-pending="0"')
   })
 
-  it('lit cards carry the agent-name title + record fields; idle cards are muted with no fabricated record', () => {
+  it('lit cards carry the agent-name title + record fields; idle cards are muted with no fabricated record', async () => {
     const html = agentsHtml(evidenceSource)
     expect(html.match(/data-agent-entity="/g)).toHaveLength(KNOWN_AGENTS.length)
     // 3 lit (fullstack-dev / general / qc-specialist — role-keyed) + 11 idle
@@ -2520,7 +2619,7 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2)', () 
     expect(html).toContain('data-agent-summary-pending="4"')
   })
 
-  it('7 lit + 6 idle = 13 entities — the full roster is rendered, never hidden (plan f3 AC-1)', () => {
+  it('7 lit + 6 idle = 13 entities — the full roster is rendered, never hidden (plan f3 AC-1)', async () => {
     const html = agentsHtml(flowSource([
       dispatchEvent({ ts: 40, role: 'product-manager', agent: 'p1' }),
       dispatchEvent({ ts: 39, role: 'architect', agent: 'p1' }),
@@ -2541,7 +2640,7 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2)', () 
     expect(html).toContain('data-agent-summary-pending="0"')
   })
 
-  it('empty ledger → data-canvas-note="empty"; settle-only ledger → the restored data-canvas-note="settle-only" (the canvas note is projected)', () => {
+  it('empty ledger → data-canvas-note="empty"; settle-only ledger → the restored data-canvas-note="settle-only" (the canvas note is projected)', async () => {
     // 0 events → the `empty` anchor (spec §8).
     const emptyHtml = agentsHtml(flowSource([]))
     expect(emptyHtml).toContain('data-canvas-note="empty"')
@@ -2570,7 +2669,7 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2)', () 
     expect(anonymousDispatch).toContain('data-agent-summary-executing="1"')
   })
 
-  it('mounts the Legend on the agents page: ONLY the 3 role-card status entries; the collaboration-edge / layout swatches are gone ', () => {
+  it('mounts the Legend on the agents page: ONLY the 3 role-card status entries; the collaboration-edge / layout swatches are gone ', async () => {
     const html = agentsHtml(evidenceSource)
     expect(html).toContain('data-mstar-legend')
     // Task 1 (图例精简): exactly the 3 entity-status entries — the 7
@@ -2607,7 +2706,7 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2)', () 
     expect(zhHtml).not.toContain('next 流转边（动画）')
   })
 
-  it('draws the AgentEdge bezier paths: actual handoffs (general endpoints filtered) + the supervise line — NO expected/next edges (plan f5 T2 + design-system T5)', () => {
+  it('draws the AgentEdge bezier paths: actual handoffs (general endpoints filtered) + the supervise line — NO expected/next edges (plan f5 T2 + design-system T5)', async () => {
     const html = agentsHtml(evidenceSource)
     // (design doc §2.2): the
     // expected skeleton + the next animation edge are REMOVED — no anchors
@@ -2644,7 +2743,7 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2)', () 
     }
   })
 
-  it('the SDD loop edge is NOT rendered in any view — the projection no longer emits it and the render branch is gone (plan f4.2 Task 1 + Task 2, AC-3 "no data-agent-edge-loop anchor")', () => {
+  it('the SDD loop edge is NOT rendered in any view — the projection no longer emits it and the render branch is gone (plan f4.2 Task 1 + Task 2, AC-3 "no data-agent-edge-loop anchor")', async () => {
     // Both the degraded (all-idle) roster and an evidence view render NO loop
     // path: the projection's `expectedEdges` emits only the 3 forward
     // skeleton edges (Task 1) AND the render's `if (edge.loop)` SVG branch +
@@ -2655,7 +2754,7 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2)', () 
     expect(agentsHtml(flowSource([dispatchEvent({ ts: 1, role: 'fullstack-dev', agent: 'a1' })]))).not.toContain('data-agent-edge-loop')
   })
 
-  it('data-canvas-pan exposes the pan state as a translate transform (origin default)', () => {
+  it('data-canvas-pan exposes the pan state as a translate transform (origin default)', async () => {
     const html = agentsHtml(fullSource)
     expect(html).toContain('data-canvas-pan')
     expect(html).toMatch(/data-canvas-pan[^>]*transform:\s*translate\(0px, 0px\)/)
@@ -2663,14 +2762,14 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2)', () 
     expect(html).toContain('data-canvas-viewport')
   })
 
-  it('a pan seed renders the translated content layer — transform change on the anchor (SSR seam)', () => {
+  it('a pan seed renders the translated content layer — transform change on the anchor (SSR seam)', async () => {
     const html = agentsHtml(fullSource, { x: 40, y: -20 })
     expect(html).toContain('translate(40px, -20px)')
     expect(html).toMatch(/data-canvas-pan[^>]*transform:\s*translate\(40px, -20px\)/)
     expect(html).not.toContain('translate(0px, 0px)')
   })
 
-  it('pointer-event sequence → pan state → transform (pure drag helpers)', () => {
+  it('pointer-event sequence → pan state → transform (pure drag helpers)', async () => {
     // pointerdown at (100, 50) on the origin; moves; pointerup — the pan
     // tracks origin + (pointer − start), freely (no bounds, spec §6.2).
     const drag = panDragStart(PAN_ORIGIN, 100, 50)
@@ -2683,7 +2782,7 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2)', () 
     expect(panTransform(PAN_ORIGIN)).toBe('translate(0px, 0px)')
   })
 
-  it('layoutAgents is deterministic: the 4 flow columns ONLY (no unknown/on-demand/general column — Task 5), every entity boxed', () => {
+  it('layoutAgents is deterministic: the 4 flow columns ONLY (no unknown/on-demand/general column — Task 5), every entity boxed', async () => {
     const view = projectGraph(fullSource).agents
     const layout = layoutAgents(view)
     expect(layout.columns.map((c) => c.id)).toEqual([
@@ -2717,7 +2816,7 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2)', () 
     expect(layoutAgents(view)).toEqual(layout)
   })
 
-  it('total function: no sdd-implement stage column → general AND on-demand entities fall back to the LAST column, never a throw', () => {
+  it('total function: no sdd-implement stage column → general AND on-demand entities fall back to the LAST column, never a throw', async () => {
     // A view whose stage skeleton lacks the sdd-implement column (degraded
     // shape — the projection always emits it, but `layoutAgents` stays total):
     // the general-bucket entity AND an on-demand entity (ops-engineer) land
@@ -2760,7 +2859,7 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2)', () 
     }
   })
 
-  it('a non-roster session id is only a record field — the ROLE keys the card, ONE card per key, honest summary', () => {
+  it('a non-roster session id is only a record field — the ROLE keys the card, ONE card per key, honest summary', async () => {
     // dispatch agent = 'explore' (session id, no longer a roster id) with role
     // 'fullstack-dev' — the card is keyed by the ROLE; the session id rides
     // the record line. 1 lit + 13 idle = 14 unique entities (roster 14 — plan
@@ -2784,7 +2883,7 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2)', () 
     expect(html).toContain('data-agent-summary-executing="1"')
   })
 
-  it('renders the unknown SUB-PARTITION at the bottom of the last column — NO standalone unknown column; sub-bucket + on-demand-badge anchors ride the cards (plan f5 Task 2 + T5)', () => {
+  it('renders the unknown SUB-PARTITION at the bottom of the last column — NO standalone unknown column; sub-bucket + on-demand-badge anchors ride the cards (plan f5 Task 2 + T5)', async () => {
     const html = agentsHtml(fullSource) // degraded → full idle roster
     // FOUR columns; the
     // rightmost catch-all COLUMN is gone — `data-canvas-column` never carries
@@ -2846,14 +2945,14 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2)', () 
 
 describe('workflow panel — shared iteration info section ', () => {
   /** Render one tab's content through the real PanelContent mapping. */
-  function tabHtml(tab: 'tasks' | 'agents', source: MstarEngineStatusSource): string {
+  function tabHtml(tab: 'tasks' | 'agents', source: MstarEngineStatusPayload): string {
     const locale = newLocale()
     locale.register(NS, { zh, en })
     locale.setLocale('en')
     return renderToStaticMarkup(createElement(PanelContent, { tab, source, t: locale.bind(NS) }))
   }
 
-  it('the agents tab renders the SAME IterationInfoSection as the tasks tab — same anchors, same data', () => {
+  it('the agents tab renders the SAME IterationInfoSection as the tasks tab — same anchors, same data', async () => {
     const agents = tabHtml('agents', fullSource)
     const tasks = tabHtml('tasks', fullSource)
     // The agents page now carries the shared iteration head (Task 8).
@@ -2881,7 +2980,7 @@ describe('workflow panel — shared iteration info section ', () => {
     expect(tasks.match(/data-iteration-head(?=["= ])/g)).toHaveLength(1)
   })
 
-  it('inactive iteration → the agents page renders the same collapsed muted head as the tasks page', () => {
+  it('inactive iteration → the agents page renders the same collapsed muted head as the tasks page', async () => {
     const agents = tabHtml('agents', noGateSource)
     expect(agents).toContain('data-mstar-page="agents"')
     expect(agents).toContain('data-iteration-head-active="false"')
@@ -2889,7 +2988,7 @@ describe('workflow panel — shared iteration info section ', () => {
     expect(agents).toContain('iteration not started')
   })
 
-  it('zh locale: the agents-page iteration section localizes like the tasks page', () => {
+  it('zh locale: the agents-page iteration section localizes like the tasks page', async () => {
     const locale = newLocale()
     locale.register(NS, { zh, en })
     locale.setLocale('zh')
@@ -2904,7 +3003,7 @@ describe('workflow panel — shared iteration info section ', () => {
     expect(agents).not.toContain('Autonomous Execute')
   })
 
-  it('the pure helpers keep their contract from the SHARED module (IterationInfoSection — the single implementation)', () => {
+  it('the pure helpers keep their contract from the SHARED module (IterationInfoSection — the single implementation)', async () => {
     // The transition table pins the collapse/expand contract (moved verbatim
     // from the old IterationTaskPage head; the anchors are unchanged).
     const t = nextExpandedOnActivation
@@ -2915,5 +3014,72 @@ describe('workflow panel — shared iteration info section ', () => {
     expect(iterationSplitActive(false, null)).toBe(false)
     expect(iterationSplitActive(true, null)).toBe(false)
     expect(iterationSplitActive(true, { iterationBase: 'a', target: 'b', specIntegration: 'c' })).toBe(true)
+  })
+})
+
+/* ---------------------------------------------------------------------------
+ * T4 client-half acceptance: the panel's data path is the host's `/api`
+ * gateway, and its degraded states are explicit.
+ *
+ * - session isolation: the panel shows ONE session; an answer naming another
+ *   session is refused, so session A's request can never render B's data
+ *   (the client-side complement of the host's no-cross-session answer);
+ * - `unavailable` never renders silently-empty: the degraded render carries
+ *   its own anchor + machine-readable reason and NO data surface (no tabs, no
+ *   sidebar, no kanban, no counters, no freshness marker).
+ * ------------------------------------------------------------------------- */
+
+describe('workflow panel — client half: session isolation + explicit unavailable (T4)', () => {
+  it("session A's request can never render session B's data (foreign answer refused)", async () => {
+    // The gateway answers A's request with B's snapshot: the panel must refuse
+    // it outright — no B payload text, no panel surface.
+    const gateway = stubGateway(servedSnapshot(
+      { ...fullSource, version: 'B-2.0.4', harnessDir: '/projB/.mstar' },
+      { sessionId: 's-B' },
+    ))
+    const store = createSnapshotStore(snapshotFor(fullSource, ANCHOR_TIME))
+    const fixture = panelFixture(panelLocale('en'), store, gateway)
+    const html = await settleRender(() => renderPanelPass(fixture))
+
+    expect(html).toContain('data-mstar-panel="unavailable"')
+    expect(html).toContain('data-mstar-unavailable-reason="session-mismatch"')
+    expect(html).not.toContain('B-2.0.4')
+    expect(html).not.toContain('/projB/.mstar')
+    expect(html).not.toContain('data-mstar-sidebar')
+    expect(html).not.toContain('data-mstar-tab-nav')
+  })
+
+  it('unavailable never renders silently-empty: anchor + reason, and no data surface', async () => {
+    const gateway = stubGateway(gatewayError('no-route', 'gateway unreachable'))
+    const store = createSnapshotStore(snapshotFor(fullSource, ANCHOR_TIME))
+    const fixture = panelFixture(panelLocale('en'), store, gateway)
+    const html = await settleRender(() => renderPanelPass(fixture))
+
+    expect(html).toContain('data-mstar-panel="unavailable"')
+    expect(html).toContain('data-mstar-empty="unavailable"')
+    expect(html).toContain('data-mstar-unavailable-reason="transport-error:no-route"')
+    expect(html).toContain('Engine-status snapshot unavailable (transport-error:no-route)')
+    // No silently-empty data: no kanban columns / plan rows / event log /
+    // residual counters, and no freshness marker claiming a snapshot.
+    expect(html).not.toContain('data-mstar-kanban')
+    expect(html).not.toContain('data-plan-id=')
+    expect(html).not.toContain('data-mstar-section="state"')
+    expect(html).not.toContain('data-event-log-section=')
+    expect(html).not.toContain('data-mstar-freshness')
+    // The waiting branch stays a DIFFERENT state (no anchor row at all).
+    const waiting = await panelHtml(null)
+    expect(waiting).toContain('data-mstar-panel="waiting"')
+    expect(waiting).not.toContain('data-mstar-unavailable-reason')
+  })
+
+  it('the host degraded reasons surface verbatim in the panel (no snapshot / unknown sv / cwd mismatch)', async () => {
+    for (const reason of ['store-absent', 'store-unknown-sv', 'cwd-mismatch', 'session-absent']) {
+      const gateway = stubGateway(gatewayOk(unavailableResult(reason)))
+      const store = createSnapshotStore(snapshotFor(fullSource, ANCHOR_TIME))
+      const fixture = panelFixture(panelLocale('en'), store, gateway)
+      const html = await settleRender(() => renderPanelPass(fixture))
+      expect(html).toContain(`data-mstar-unavailable-reason="${reason}"`)
+      expect(html).toContain(`Engine-status snapshot unavailable (${reason})`)
+    }
   })
 })

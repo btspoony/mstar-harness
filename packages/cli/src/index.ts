@@ -110,6 +110,7 @@ import {
   type ReviewChangesetMode,
   type ReviewPostPlan,
   type SddExecutionContext,
+  type StatusV2Doc,
   type ToolSignal,
   type ValidationResult,
   type WorktreeTrack,
@@ -1779,9 +1780,20 @@ dispatchCommand
       if (!assignmentFile) {
         throw new SddScriptError("usage: dispatch validate <assignment-file> [--branch <branch>]", 2);
       }
-      const file = resolveCliPath(assignmentFile);
+      // Resolve like a shell would: the invocation cwd first, then the CLI
+      // project root (the shared `resolveCliPath` convention that the other
+      // path-taking commands keep). An agent that `cd`s into the directory
+      // holding its Assignment — or into a branch worktree — must not have to
+      // spell an absolute path, and this command's sibling `review seats`
+      // already resolves against the invocation cwd.
+      const fromCwd = path.isAbsolute(assignmentFile)
+        ? assignmentFile
+        : path.resolve(process.cwd(), assignmentFile);
+      const file = fs.existsSync(fromCwd) ? fromCwd : resolveCliPath(assignmentFile);
       if (!fs.existsSync(file)) {
-        throw new Error(`assignment file not found: ${file}`);
+        throw new Error(
+          `assignment file not found: ${assignmentFile} (tried ${fromCwd} and ${resolveCliPath(assignmentFile)})`,
+        );
       }
       const text = fs.readFileSync(file, "utf8");
 

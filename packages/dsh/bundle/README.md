@@ -99,7 +99,14 @@ boot the web app serves the closure-factory CJS bundle at
 
 The client entry registers a `conversation.view` view-ring tab
 (`id: 'mstar-workflow'`, `order: 20`), labeled **"MStar 工作流" / "MStar
-Workflow"**, rendering the latest `mstar-engine-status` catalog row as the
+Workflow"**, rendering the latest `mstar-engine-status` catalog **anchor** row
+— the persisted source is the bare first-party `plugin` arm
+(`{ kind: 'plugin', plugin: 'mstar-engine-status', form: 'catalog' }`), and the
+payload is fetched from the host's `/api/mstar/engineStatus` endpoint (the
+shared `/api` typert gateway owns the route; the panel's browser half calls
+`connection.rpc.call('/api', 'mstar/engineStatus', { args: { sessionId, cwd } })`
+and renders the session's stored snapshot, or an explicit unavailable reason) —
+as the
 **MStar Workflow layout**: a right sidebar (plans ≤5 time-desc + `+N more`,
 open residual findings ≤10 with severity chips + overflow hint, policy with
 enforcement first, leases, knowledge, direction) over a bottom **fixed meta

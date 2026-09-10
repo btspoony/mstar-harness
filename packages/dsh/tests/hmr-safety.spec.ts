@@ -189,7 +189,7 @@ describe('HMR safety — fiber.dispose removes every gate contribution', () => {
       await ctx.waterfall('fs/write-intent', skillTarget(skillRoot, 'broken-skill'), {}, () => undefined)
       expect(skillAdvisories).toHaveLength(1)
       const live = await ctx.waterfall('agent/pre-step', stepPayload(inbox), defaultEnter(inbox))
-      expect(lastMessage(live)?.source).toMatchObject({ kind: 'mstar-engine-status' })
+      expect(lastMessage(live)?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine-status', form: 'catalog' })
 
       // Dispose — both contributions are unwound: no advisory, no catalog row.
       await fiber.dispose()
@@ -204,7 +204,7 @@ describe('HMR safety — fiber.dispose removes every gate contribution', () => {
       await ctx.waterfall('fs/write-intent', skillTarget(skillRoot, 'broken-skill'), {}, () => undefined)
       expect(skillAdvisories.length).toBe(before + 1)
       const again = await ctx.waterfall('agent/pre-step', stepPayload(inbox), defaultEnter(inbox))
-      expect(lastMessage(again)?.source).toMatchObject({ kind: 'mstar-engine-status' })
+      expect(lastMessage(again)?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine-status', form: 'catalog' })
       await reloaded.dispose()
     } finally {
       await ctx.fiber.dispose().catch(() => {})

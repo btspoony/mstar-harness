@@ -60,16 +60,24 @@ if ((globalThis as unknown as Record<string, unknown>).localStorage === undefine
  * bundles declare their PACKAGE id (`@deepseek-ai/dsh-client-ui-renderer`,
  * `@deepseek-ai/dsh-client-locale`) — the same keys the dsh web loader's
  * module table uses — not the `/client` subpath.
+ *
+ * @param id - the captured bundle's package id.
+ * @param overrides - optional module-table substitutions handed to the
+ *   factory's `require` (a spec that must render a collapsed-state component
+ *   expanded supplies its own `react`, so the REAL component tree is rendered
+ *   under a controlled hook state instead of being re-implemented).
+ * @returns the bundle's `module.exports`.
  */
-export function clientExports(id: string): Record<string, unknown> {
+export function clientExports(id: string, overrides?: Readonly<Record<string, unknown>>): Record<string, unknown> {
   const factory = factories.get(id)
   if (factory === undefined) throw new Error(`no captured client bundle for ${id} (import the bundle through this module first)`)
-  return factory(bundleRequire) as unknown as Record<string, unknown>
+  return factory((dep: string) => bundleRequire(dep, overrides)) as unknown as Record<string, unknown>
 }
 
 /** Resolve one browser-bundle dependency: bundles recurse, everything else resolves as Node ESM. */
-function bundleRequire(id: string): unknown {
-  if (factories.has(id)) return clientExports(id)
+function bundleRequire(id: string, overrides?: Readonly<Record<string, unknown>>): unknown {
+  if (overrides !== undefined && id in overrides) return overrides[id]
+  if (factories.has(id)) return clientExports(id, overrides)
   // The vendor cordis (shim), the client packages' Node-ESM main entries
   // (ui-slots, ui-primitives), and npm react — all resolvable via the repo's
   // node_modules (bun's require() of an ESM module returns its namespace).

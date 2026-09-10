@@ -483,6 +483,20 @@ export function sessionCwdOf(agent: unknown): string | undefined {
   return typeof cwd === 'string' && cwd.trim() !== '' ? cwd : undefined
 }
 
+/**
+ * The stable session id of one agent — `session.header.id` (structural read).
+ *
+ * The SAME identity a later reader asserts when it asks the host endpoint for
+ * a session's engine-status snapshot: without a real id there is nothing to key
+ * a stored snapshot by, so an agent stub answers undefined and the write site
+ * skips the persist instead of inventing a key.
+ */
+export function sessionHeaderIdOf(agent: unknown): string | undefined {
+  const session = (agent as { session?: { header?: { id?: unknown } } } | null | undefined)?.session
+  const id = session?.header?.id
+  return typeof id === 'string' && id.trim() !== '' ? id : undefined
+}
+
 /** The tool-execution actor of one fs-intent event, when it carries an agent. */
 export function actorAgentOf(actor: object | undefined): unknown {
   return (actor as { agent?: unknown } | undefined)?.agent

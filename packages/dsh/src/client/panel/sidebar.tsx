@@ -9,7 +9,7 @@
 
 import * as React from 'react'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
-import type { MstarEngineStatusSource, MstarHarnessState } from '../../types.ts'
+import type { MstarEngineStatusPayload, MstarHarnessState } from '../../types.ts'
 import css from './panel.module.css'
 import { PanelMeta } from './panel-meta.tsx'
 import { StateSection } from './state-section.tsx'
@@ -17,7 +17,7 @@ import { StateSection } from './state-section.tsx'
 export interface SidebarProps {
   t: TranslateNS<'mstar-panel'>
   state: MstarHarnessState | null
-  source: MstarEngineStatusSource
+  source: MstarEngineStatusPayload
 }
 
 export function Sidebar({ t, state, source }: SidebarProps) {

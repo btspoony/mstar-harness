@@ -689,6 +689,11 @@ export interface BootResult {
    * app's config-stack re-composition (settings write → HMR re-apply).
    */
   fallbacksFiber?: Fiber
+  /**
+   * The mstar plugin row's own fiber: disposing it (without disposing the app
+   * context) models an HMR reload of the plugin against a live host.
+   */
+  pluginFiber?: Fiber
   /** Dispose the app fiber and remove the temp root. */
   dispose(): Promise<void>
 }
@@ -1012,6 +1017,7 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
       : []),
   ])
   let fallbacksFiber: Fiber | undefined
+  let pluginFiber: Fiber | undefined
   for (const row of rows) {
     const mod = modules.get(row.name)
     if (mod === undefined) throw new Error(`unexpected boot row: ${row.name}`)
@@ -1022,12 +1028,17 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
     // The fallbacks row handle  the
     // e2e disposes it to model the host config-stack re-composition.
     if (row.name === 'dsh-llm-fallbacks') fallbacksFiber = fiber
+    // The mstar row handle: a spec may dispose THIS row (and re-apply it) to
+    // model an HMR plugin reload while the host composition — the typert
+    // registry included — stays live.
+    if (row.name === '@mstar-harness/dsh') pluginFiber = fiber
   }
   return {
     ctx,
     root,
     harnessDir,
     fallbacksFiber,
+    pluginFiber,
     async dispose() {
       await ctx.fiber.dispose()
       await rm(root, { recursive: true, force: true })

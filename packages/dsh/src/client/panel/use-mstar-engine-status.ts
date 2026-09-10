@@ -1,92 +1,189 @@
 /**
- * Data hook for the workflow panel (spec §5): subscribes to the active
- * session's conversation log through the session standard kit's chat target
- * (`useChat`, a uSES selector hook over the `chat` conversation view target)
- * and scans the log for the latest `mstar-engine-status` catalog row.
+ * Data hook for the workflow panel (spec §5): the panel's ONE data path.
  *
- * Node discriminator (spec §2.4): `kind === 'context'` + `form === 'catalog'`
- * + `source.kind === 'mstar-engine-status'`; the LATEST row wins (snapshot
- * order tail). Refresh = snapshot subscription: a digest/TTL re-emission on
- * the server only produces a new log line, whose snapshot bump re-runs this
- * selection — no manual reload, no polling.
+ * The persisted catalog row is an ANCHOR, not a data source: since the source
+ * reduction the row carries exactly `{ kind: 'plugin', plugin:
+ * 'mstar-engine-status', form: 'catalog' }`, and the structured payload lives
+ * in the host's per-session snapshot store. So the hook
  *
- * Contract: `{ source: MstarEngineStatusSource | null; lastUpdated: number |
- * null }` — `source` null while no catalog row is logged yet (waiting empty
- * state); `lastUpdated` carries the catalog message node `time` (Unix ms) for
- * the freshness marker. The hook never throws: a snapshot the selector cannot
- * read, or an absent session face, degrades to the explicit empty signal
- * instead of bubbling a crash (spec §5 degradation path; the strict-session
- * slot normally guarantees a session — the guard is belt-and-suspenders).
+ * 1. finds the LATEST anchor row in the active session's conversation log
+ *    (`kind === 'context'` + `form === 'catalog'` + the first-party `plugin`
+ *    arm with this plugin's identity) and takes its message time as the
+ *    refresh key — a re-emission appends a new row, the snapshot bump re-runs
+ *    this selection, and the newest anchor asks for the newest snapshot;
+ * 2. reads the session's workspace directory from the session standard kit's
+ *    session feed (the host cross-checks the asserted `cwd` against the
+ *    session AND the stored snapshot, so it must be the real one);
+ * 3. asks {@link MstarEngineStatusClient} for that session's snapshot over the
+ *    host's shared `/api` typert gateway, and renders the validated result.
+ *
+ * Every degraded path is an EXPLICIT state (spec §5): `waiting` (no anchor row
+ * — the plugin never ran on this session), `loading` (anchor seen, no answer
+ * for it yet), `unavailable` (a reason: transport failure, an unknown session
+ * directory, no connection, a malformed answer, or the host's own reason).
+ * None of them renders an empty plans list, an empty event log or a zeroed
+ * counter as if it were data. A VALID snapshot that says "empty" still renders
+ * as data — the distinction between "no snapshot" and "a snapshot that says
+ * empty" survives.
+ *
+ * Freshness is the served snapshot's own `at`, never "live".
+ *
+ * The hook never throws: a throwing seat or a missing client degrades to an
+ * explicit state instead of bubbling a crash (spec §5 degradation path).
  */
 
+import { useSyncExternalStore } from 'react'
 import type { ConversationNode, ContextMessageNode } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { ChatSnapshot } from '@deepseek-ai/dsh-client-ui-chat/client'
 import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
-import type { MstarEngineStatusSource } from '../../types.ts'
+import type { SessionListState } from '@deepseek-ai/dsh-api-session-controller/client'
+import type { SessionId } from '@deepseek-ai/dsh-session'
+import type { MstarEngineStatusPayload } from '../../types.ts'
+import type { MstarEngineStatusClient, MstarEngineStatusSnapshot } from './engine-status-client.ts'
 
-/** The hook result: the latest catalog row plus its message time (spec §5). */
-export interface MstarEngineStatusView {
-  source: MstarEngineStatusSource | null
-  /** Unix ms of the catalog message node; null while no row is present. */
-  lastUpdated: number | null
+/** Selector hook over the Host session list (the `useSessions` standard seat). */
+export type UseSessions = SnapshotSelectorHook<SessionListState>
+
+/** The panel's render state — a closed set: no shape can be both data and empty. */
+export type MstarEngineStatusView =
+  /** No anchor row: this session never ran the plugin (today's empty state). */
+  | { readonly state: 'waiting'; readonly anchorTime: null; readonly payload: null; readonly at: null; readonly turn: null; readonly reason: null }
+  /** Anchor row seen, no answer for it yet — pending, never rendered as data. */
+  | { readonly state: 'loading'; readonly anchorTime: number; readonly payload: null; readonly at: null; readonly turn: null; readonly reason: null }
+  /**
+   * The validated snapshot: the payload plus the snapshot's OWN emission
+   * identity (`at` timestamp and the agent turn it was written for). Both are
+   * the host's records of the stored entry, so the panel can name which
+   * emission it is showing rather than implying it is the newest one.
+   */
+  | { readonly state: 'ok'; readonly anchorTime: number; readonly payload: MstarEngineStatusPayload; readonly at: string; readonly turn: number; readonly reason: null }
+  /** An explicit degraded answer — always WITH a reason, never silently empty. */
+  | { readonly state: 'unavailable'; readonly anchorTime: number; readonly payload: null; readonly at: null; readonly turn: null; readonly reason: string }
+
+/** The seats the hook needs: the session standard kit + the plugin's client. */
+export interface MstarEngineStatusSeats {
+  /** Selector hook over the chat target snapshot (the `conversation.view` kit). */
+  useChat: SnapshotSelectorHook<ChatSnapshot>
+  /**
+   * Selector hook over the Host session list (the global standard seat). The
+   * view ring always hands it to a `conversation.view` entry; it stays
+   * optional here because a program without the ui-session adapter does not
+   * see the declaration merge (the panel then reports `session-cwd-unknown`).
+   */
+  useSessions: UseSessions | undefined
+  /** Current session identity (the strict-session slot's own prop). */
+  sessionId: SessionId | undefined
+  /** The plugin's engine-status client (absent in a composition without one). */
+  engineStatus: MstarEngineStatusClient | undefined
 }
 
-/** Stable empty view — a shared reference keeps the selector result referentially stable. */
-const EMPTY: MstarEngineStatusView = { source: null, lastUpdated: null }
+/** Stable empty snapshot — the fallback read face when no client is injected. */
+const EMPTY_SNAPSHOT: MstarEngineStatusSnapshot = { entries: new Map() }
+/** Stable no-op subscribe — keeps the hook's call order unconditional. */
+const NO_SUBSCRIBE = (): (() => void) => () => {}
+/** Stable fallback read — same reference as {@link EMPTY_SNAPSHOT}. */
+const readEmptySnapshot = (): MstarEngineStatusSnapshot => EMPTY_SNAPSHOT
 
-/** Latest `mstar-engine-status` catalog row in snapshot order, or null (spec §2.4). */
-function latestEngineStatusRow(nodes: readonly ConversationNode[]): ContextMessageNode | null {
+/** Latest `mstar-engine-status` anchor row in snapshot order, or null. */
+export function latestEngineStatusRow(nodes: readonly ConversationNode[]): ContextMessageNode | null {
   for (let i = nodes.length - 1; i >= 0; i--) {
     const node = nodes[i]!
     if (node.kind !== 'context' || node.form !== 'catalog') continue
-    const source = node.source as { kind?: unknown } | null
-    if (source?.kind === 'mstar-engine-status') return node
+    const source = node.source as { kind?: unknown; plugin?: unknown } | null
+    if (source?.kind === 'plugin' && source.plugin === 'mstar-engine-status') return node
   }
   return null
 }
 
-/** Selector-result equality: only a NEW row (new source reference + new time) triggers a re-render. */
-function sameView(a: MstarEngineStatusView, b: MstarEngineStatusView): boolean {
-  return a.source === b.source && a.lastUpdated === b.lastUpdated
-}
-
-/**
- * Select the latest engine-status catalog row from a conversation snapshot.
- * Degradation: any snapshot the selection cannot read yields the empty view
- * (never a throw — spec §5).
- */
-function selectEngineStatus(snapshot: ChatSnapshot): MstarEngineStatusView {
+/** Anchor row message time, or null when the log carries no anchor row. */
+export function selectAnchorTime(snapshot: ChatSnapshot): number | null {
   try {
-    const row = latestEngineStatusRow(snapshot.legacy.nodes)
-    if (row === null) return EMPTY
-    // `kind` discrimination is the only narrowing the client does; field-level
-    // degradation happens at render time (spec §2.4).
-    return { source: row.source as MstarEngineStatusSource, lastUpdated: row.time }
+    const row = latestEngineStatusRow(snapshot?.legacy?.nodes ?? [])
+    return row === null ? null : row.time
   } catch {
-    return EMPTY
+    return null
   }
 }
 
+/** One session's workspace directory from the session list, or null when unknown. */
+export function selectSessionCwd(sessionId: SessionId | undefined) {
+  return (state: SessionListState): string | null => {
+    try {
+      if (sessionId === undefined) return null
+      const cwd = state?.byId?.[sessionId]?.cwd
+      return typeof cwd === 'string' && cwd !== '' ? cwd : null
+    } catch {
+      return null
+    }
+  }
+}
+
+/** `waiting` — one shared reference (stable across renders). */
+const WAITING: MstarEngineStatusView = { state: 'waiting', anchorTime: null, payload: null, at: null, turn: null, reason: null }
+
+/** `unavailable` — one shape, always with a reason. */
+function unavailable(anchorTime: number, reason: string): MstarEngineStatusView {
+  return { state: 'unavailable', anchorTime, payload: null, at: null, turn: null, reason }
+}
+
 /**
- * `useMstarEngineStatus(useChat): MstarEngineStatusView` — the panel's data
- * hook (spec §5). The session standard kit's `useChat` is passed in (the
- * view ring hands it to every `conversation.view` entry); the hook rides it as
- * a selector over the chat target snapshot, so a snapshot bump (new catalog
- * row) re-runs the selection and refreshes the panel.
+ * The panel's data hook (spec §5).
  *
- * The hook never throws (spec §5 degradation path; Task 3 contract): a
- * throwing session face or an absent one degrades to the explicit empty
- * signal instead of bubbling a crash — the strict-session slot normally
- * guarantees a session, the guard is belt-and-suspenders.
+ * @param seats - the session standard kit + the plugin's engine-status client.
+ * @returns the explicit render state (never a throw, never a half-parsed view).
  */
-export function useMstarEngineStatus(useChat: SnapshotSelectorHook<ChatSnapshot>): MstarEngineStatusView {
+export function useMstarEngineStatus(seats: MstarEngineStatusSeats): MstarEngineStatusView {
+  const { useChat, useSessions, sessionId, engineStatus } = seats
+
+  // Both seats are selector hooks; a throwing seat degrades to the explicit
+  // empty signal (the strict-session slot normally guarantees a session — the
+  // guard is belt-and-suspenders). Called unconditionally either way: the
+  // hook's call order is fixed whether or not a client is injected.
+  let anchorTime: number | null = null
+  let cwd: string | null = null
   try {
-    const view = useChat(selectEngineStatus, sameView)
-    // Absent session face → explicit empty signal (spec §3 maps the no-session
-    // case to the shell; this guard keeps the panel from crashing regardless).
-    return view ?? EMPTY
+    anchorTime = useChat(selectAnchorTime)
   } catch {
-    // Throwing session face → same explicit empty signal (never a crash).
-    return EMPTY
+    anchorTime = null
   }
+  try {
+    cwd = useSessions === undefined ? null : useSessions(selectSessionCwd(sessionId))
+  } catch {
+    cwd = null
+  }
+  const snapshot = useSyncExternalStore(
+    engineStatus?.subscribe ?? NO_SUBSCRIBE,
+    engineStatus?.getSnapshot ?? readEmptySnapshot,
+    engineStatus?.getSnapshot ?? readEmptySnapshot,
+  )
+
+  // No anchor row → the plugin never ran on this session (today's empty state).
+  if (anchorTime === null) return WAITING
+
+  if (engineStatus !== undefined && sessionId !== undefined && cwd !== null) {
+    // Idempotent: one request per (session, anchor row), deduped in the client.
+    // Called during render on purpose — the store is written only from the
+    // response continuation, so this starts a request without mutating the
+    // snapshot React is reading, and an SSR render issues the same call the
+    // browser's next render does.
+    try {
+      engineStatus.ensure(String(sessionId), cwd, anchorTime)
+    } catch {
+      // A faulting client must not take the panel down; the render below
+      // reports `unavailable` for the answer that never arrives.
+    }
+  }
+
+  const entry = sessionId === undefined ? undefined : snapshot.entries.get(String(sessionId))
+  if (entry === undefined) {
+    if (engineStatus === undefined) return unavailable(anchorTime, 'no-connection')
+    if (sessionId === undefined) return unavailable(anchorTime, 'session-unknown')
+    if (cwd === null) return unavailable(anchorTime, 'session-cwd-unknown')
+    return { state: 'loading', anchorTime, payload: null, at: null, turn: null, reason: null }
+  }
+  // A superseded snapshot keeps rendering with its OWN `at` until the answer
+  // for the newest anchor lands: a panel that blinked to a loading card on
+  // every catalog re-emission would misreport a healthy refresh as a failure.
+  if (entry.fetch.status === 'unavailable') return unavailable(anchorTime, entry.fetch.reason)
+  return { state: 'ok', anchorTime, payload: entry.fetch.payload, at: entry.fetch.at, turn: entry.fetch.turn, reason: null }
 }

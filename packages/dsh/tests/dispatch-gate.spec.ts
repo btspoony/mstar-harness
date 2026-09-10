@@ -19,8 +19,10 @@
  */
 import { describe, expect, it, afterEach } from 'bun:test'
 import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
+import { assignmentHeaderRegion } from '@mstar-harness/engine'
 import { bootApp, seedHarness, type BootResult } from './harness.ts'
 import type { DispatchGateAdvisory } from '../src/index.ts'
+import { planIdOf } from '../src/gates/dispatch.ts'
 
 let booted: BootResult | undefined
 
@@ -695,5 +697,31 @@ Survey the codebase, report only.
     // The degraded emit failure degrades to a log — the chain still delegates.
     expect(decision).toEqual({ kind: 'allow' })
     expect(secondRan).toBe(true)
+  })
+})
+
+describe('dispatch gate — Assignment header values written as markdown code spans', () => {
+  const idOf = (assignment: string): string | undefined => planIdOf(assignmentHeaderRegion(assignment))
+
+  it('a backticked Plan Path resolves the bare plan id (no trailing backtick)', () => {
+    // Regression: the extractor kept the wrapping backticks, so `plan.md`
+    // became `` plan.md` `` — the `.md` suffix test failed and the id was
+    // carried into the ledger with the backtick, matching no registered plan.
+    expect(idOf('**Plan Path**: `/x/plans/20260101-demo.md`')).toBe('20260101-demo')
+  })
+
+  it('a backticked SDD dir resolves the bare directory name', () => {
+    expect(idOf('**SDD dir**: `/x/.mstar/sdd/20260101-demo`')).toBe('20260101-demo')
+  })
+
+  it('a backticked plan_id resolves verbatim', () => {
+    expect(idOf('**plan_id**: `20260101-demo`')).toBe('20260101-demo')
+  })
+
+  it('unbackticked values are unchanged, and a multi-span value is left literal', () => {
+    expect(idOf('**Plan Path**: /x/plans/20260101-demo.md')).toBe('20260101-demo')
+    // Only ONE clean wrapping pair is stripped: a value that wraps several
+    // spans has backticks inside, so it is left exactly as written.
+    expect(idOf('**plan_id**: `/a`, `/b`')).toBe('`/a`, `/b`')
   })
 })
