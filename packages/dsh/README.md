@@ -391,11 +391,11 @@ pages** — one `IterationInfoSection` component, both pages render the same
 `projectGraph(source)` function (schema constants strictly separated from
 catalog evidence; never throws).
 
-**Dependency**: the zone dashboard carries **no graph library** — the
+**Dependency**: the panel's client bundle carries **no graph library** — the
 `@xyflow/react` devDependency (previously inlined into `dist/client.js` at
-build time) was removed with the react-flow rendering layer (plan
-`20260810-panel-canvas-zones`), and the plain-`.css` text loader whose only
-consumer was `@xyflow/react/dist/style.css` is gone too (`CLIENT_EXTERNALS`
+build time) was removed with the react-flow rendering layer, and the
+plain-`.css` text loader whose only consumer was
+`@xyflow/react/dist/style.css` is gone too (`CLIENT_EXTERNALS`
 is unchanged — react / react-dom and the `@deepseek-ai/dsh-client-*` platform
 modules stay external). The build script asserts the removal end to end: the
 emitted bundle must contain **no `xyflow`/`reactflow` markers**, zero
@@ -403,11 +403,11 @@ emitted bundle must contain **no `xyflow`/`reactflow` markers**, zero
 the web loader executes plugin bundles as classic `<script>`s, where a
 literal `import.meta` is a parse-time SyntaxError (a zustand v4
 `import.meta.env` read is defined away at build; see the iteration
-install-verification guide §6). Bundle size at this plan's wrap-up: **145,159 B
+install-verification guide §6). Current bundle size: **145,159 B
 raw / 29,460 B gzip** (re-measure per the iteration install-verification
 guide — the bundle shrank to ~85 KB when react-flow was removed and grew
-back with the agent-execution zone's entity rendering, then again with the
-F5 emphasis tiers + edge rework).
+back with the agents page's entity rendering, then again with the
+emphasis-tier styling).
 
 Install / verify (the client half rides the same bundle-row install as the
 server half):
@@ -513,7 +513,7 @@ The catalog row is appended at the END of the composed step messages, after dele
 - **CLI `HOST_SIGNALS` lacks the `subagent` token** — the engine `ToolSignal` union includes it and `detectHost` handles it, but `packages/cli` `HOST_SIGNALS` is not updated yet, so `mstar host detect --signals subagent` would reject until the CLI list is updated on upstreaming.
 - **Entry is a module index over `src/gates/*`** — the split shipped: `src/index.ts` re-exports the frozen 56-name export surface (31 value + 25 type-only names; `Config` counts once) from the gate modules (`_shared` / `status` / `skill-lint` / `seams` / `dispatch` / `catalog` / `tools` / `adapter`) and keeps the plugin manifest, the single cordis augmentation point, the command registration, and the `apply()` startup wiring. The surface is frozen by `tests/export-surface.spec.ts` — the runtime value-export set plus, under `typecheck:tests` (`bunx tsc --noEmit -p tests/tsconfig.json`), the value-namespace identity and the per-name type-only probes.
 - **Engine dsh rows are upstreaming-destined** — the dsh changes to engine `host.ts` (`DetectResult`, `ToolSignal`, `resolveSkillRoot`) live in the mstar-workflow engine mirror and are intended for a user-authorized upstream PR into mstar-harness; the `mstar-host` skill mirror (§ Detect / § Resolve loaded skill root / `references/dsh.md`) updates with it.
-- **Iteration stepper: Step 1 is compass-driven, Step 5 is schema-driven** — the zone dashboard's Step 1 (iteration-start) is the current step while the steering compass is `status: active` (Phase 1 in flight — no gate verdict, so no PASS/FAIL badge); Step 5 (merge-ready) is a schema constant the engine gate never lights as current (transition covers Phase 2→3→4 only), so it always renders idle — recorded in the iteration guide, not a defect. The full panel-limitation list lives in the Web client plugin section.
+- **Iteration stepper: Step 1 is compass-driven, Step 5 is schema-driven** — the workflow panel's Step 1 (iteration-start) is the current step while the steering compass is `status: active` (Phase 1 in flight — no gate verdict, so no PASS/FAIL badge); Step 5 (merge-ready) is a schema constant the engine gate never lights as current (transition covers Phase 2→3→4 only), so it always renders idle — recorded in the iteration guide, not a defect. The full panel-limitation list lives in the Web client plugin section.
 - **`dsh-llm-fallbacks` is an optional dev-time-only dependency** — dsh natively covers subagent customization, so fallbacks is strictly optional: `src/` carries zero imports of it (runtime and type — the consumed surface is the local structural mirror `fallbacks-structural.ts`, kept in sync by the probe's exact-keys drift gate plus the `typecheck:tests` real → view assignability check), `package.json` carries it only under `devDependencies` (type mirroring + the real-package test harness), and `dist/` carries no import and no type reference (only ONE string literal naming the package — the probe's loader-entry match; the advisory logs say `fallbacks`). Activation is a SEPARATE explicit install (two-command contract), never transitive; there is no `--external` guard anymore — a future value import must re-add a runtime dependency by design.
 - **Role→model override NOT delivered this batch** — routing a role to a fallbacks `model` (or persona via fallbacks rules) would require rewriting the child's `agentOptions` on the start request, but start-request options are caller-controlled (tool-subagent's own Config; call args are `description`/`prompt`/`run_in_background` only, deep-frozen). Awaits upstream `fallbacks-explicit-role-tool` or the N-B1 systemPrompt adoption (roadmap §10.4).
 - **Persona delivery is dsh-native — no additive section** — the role persona merges into `SubagentStartRequest.persona` (one-shot `start` AND the opt-in continuable `startContinuable`) and SHADOWS the deployment persona for role-matched children (child embodies the role; persisted + reapplied on resume). There is NO `mstar:role-persona` system-prompt section anymore.

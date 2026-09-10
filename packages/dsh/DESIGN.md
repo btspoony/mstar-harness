@@ -376,7 +376,7 @@ the canvas. The list carries the flow with **zero lines**:
 line classes (`actual` handoff / `supervise` sub-bucket edge), the 4-port
 card anchor system, the standoff retreat, and the H1 (arrow along the local
 tangent) / H2 (line never crosses text) hard rules described decision
-points D1–D3 / D8–D15 (§6) — those decisions are **superseded** by this
+points D1–D3 / D8–D12 / D14–D15 (§6) — those decisions are **superseded** by this
 section (F1–F4), kept in the review record for provenance rather than
 silently deleted.
 
@@ -487,7 +487,7 @@ emphasis(entity) =
 | running 行 | 边框保持 business；ring / 辉光施加于**圆角行体**（§1.3） | 150ms |
 | idle 行 | 边框 → `--dsw-alias-label-caption` | 150ms |
 | 分区 / 列表组标题 | 无 hover 反馈（纯标注） | — |
-| 组框（group frame） | 边框 `border-l1` → `border-l2` | 150ms |
+| 分区 / 看板组框（zone & kanban group frames；agents 页分组框无 hover） | 边框 `border-l1` → `border-l2` | 150ms |
 
 #### 4.2 卡片状态点
 
@@ -579,7 +579,7 @@ emphasis(entity) =
 
 ### 6. 决策点清单（审阅 gate 记录）
 
-> 2026-09-11 sidebar 迁移标注：D1–D3 / D8–D15 描述的**线型语义已随画布删除**
+> 2026-09-11 sidebar 迁移标注：D1–D3 / D8–D12 / D14–D15 描述的**线型语义已随画布删除**
 > ——下列各行**标记 SUPERSEDED**，仅作历史决策记录保留（不可作为实现依据）；
 > D4–D7（透明度档位）与 D16–D19（完成态 / 分组 / 共用 Section）语义仍有效，
 > 其中 D17 的「两 band 左右布局」已被堆叠分组列表取代。
@@ -611,7 +611,7 @@ emphasis(entity) =
 | 日期 | 结论 | 修订要点 |
 |------|------|---------|
 | 2026-08-12（初稿 → 第 4 轮） | 画布契约定稿（v2→v4） | 线型语义三轮修订（expected/next 移除、bezier、4 端口、H1/H2、standoff、侧隙锚点）、透明度档位 0.75/0.45、完成态绿框 ✓ off 排除、Phase 1/2 分组 + 当前 plan 标注、迭代信息 Section 两 tab 共用；本 doc 提升为 `packages/dsh/DESIGN.md` |
-| 2026-09-11（sidebar 迁移） | **重写（v0.2.0）** | 面板迁移为 dsh 右 Sidebar 页签（guide 入口 + keyed seats），画布删除、代理执行页改为竖直分组列表：§1 重写为堆叠分组结构，§2 线型语义由流规则 F1–F4 取代，§3 档位语义不变（应用点移至流行），§4 移除 pan；`canvas:` token 组剪枝至 6 项存活（3 档 + row-gap/group-gap/label-h），`line-*` 色token 移除；断点改为容器查询（L4.3 表）；描述线型语义的决策点（D1–D3/D8–D12/D14–D15）标记 SUPERSEDED 而非静默删除 |
+| 2026-09-11（sidebar 迁移） | **重写（v0.2.0）** | 面板迁移为 dsh 右 Sidebar 页签（guide 入口 + keyed seats），画布删除、代理执行页改为竖直分组列表：§1 重写为堆叠分组结构，§2 线型语义由流规则 F1–F4 取代，§3 档位语义不变（应用点移至流行），§4 移除 pan；`canvas:` token 组剪枝至 6 项存活（3 档 + row-gap/group-gap/label-h），`line-*` 色token 移除；断点改为容器查询（§Breakpoints 表）；描述线型语义的决策点（D1–D3/D8–D12/D14–D15）标记 SUPERSEDED 而非静默删除 |
 
 ## Upgrade path (placeholders)
 
