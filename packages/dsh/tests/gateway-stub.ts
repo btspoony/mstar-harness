@@ -22,6 +22,7 @@ import type { SessionListState } from '@deepseek-ai/dsh-api-session-controller/c
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { MstarEngineStatusConnection } from '../src/client/panel/engine-status-client.ts'
 import type { UseSessions } from '../src/client/panel/use-mstar-engine-status.ts'
+import { createPanelStore, type PanelStoreState } from '../src/client/panel/panel-store.ts'
 
 /** Session id / workspace directory the specs' fixtures belong to (synthetic). */
 export const SESSION_ID = 's-1'
@@ -196,6 +197,44 @@ export function anchorStore(anchorTime: number | null = 1_720_001_000_000) {
 
 /** The session id as the panel prop type expects it (branded). */
 export const SESSION = SESSION_ID as SessionId
+
+/**
+ * A VISIBLE sidebar tab record — the seat's tab-information face the panel
+ * body reads (plan sidebar §L6.3.2's fixture shape: sidebar / panel / tab).
+ * `id` keys the entry store; `visible: true` passes the §L2.6 gate (the
+ * hidden-tab half of the gate is client-seat.spec.ts's subject).
+ */
+export function visibleTabInfo(tabId = 'tab-1') {
+  return {
+    sidebar: { expanded: true, fullscreen: false },
+    panel: { id: 'pane-1' },
+    tab: {
+      id: tabId,
+      kind: 'mstar-workflow',
+      title: 'MStar Workflow',
+      contentId: 'sidebar://mstar-workflow',
+      visible: true,
+    },
+  }
+}
+
+/**
+ * The visible-tab fixture kit (plan sidebar §L2.4): the seat's
+ * tab-information hook + the body's entry-store share (`useStore` + the
+ * baked `select` action) over ONE REAL panel store instance — the dev-time
+ * twin of the sidebar seat dispatch. `create(scopeKey)` is the tests'
+ * isolation seam (each kit gets its own instance); pass the same kit to two
+ * renders to prove a selection survives the body's unmount/remount cycle.
+ */
+export function visibleTabKit(tabId = 'tab-1') {
+  const instance = createPanelStore().create(tabId)
+  return {
+    useTabInfo: () => visibleTabInfo(tabId),
+    useStore: (sel: (s: PanelStoreState) => unknown) => sel(instance.getSnapshot()),
+    actions: instance.actions,
+    instance,
+  }
+}
 
 /**
  * Render once, let an in-flight gateway answer land, then render again — the

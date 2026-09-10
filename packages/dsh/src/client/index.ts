@@ -26,6 +26,7 @@ import { MSTAR_PANEL_ID, mstarPanelDefinition } from './panel/definition.ts'
 import { MstarEngineStatusClient, type MstarEngineStatusConnection } from './panel/engine-status-client.ts'
 import { MstarPanelTitle } from './panel/MstarPanelTitle.tsx'
 import { en, NS, zh } from './panel/locale.ts'
+import { createPanelStore } from './panel/panel-store.ts'
 import { PanelView } from './panel/PanelView.tsx'
 
 /**
@@ -50,13 +51,17 @@ export function apply(ctx: ClientContext): void {
   )
   // The body seat closes over the engine-status client exactly as the old
   // view-tab registration did: the transport is a plugin-level concern, never
-  // a host-supplied prop. (The entry store joins in the narrow-column
-  // re-layout task.)
+  // a host-supplied prop. The `store` option hands the seat the panel's
+  // entry store (plan sidebar §L2.4): the framework caches one instance per
+  // (entry, session), so the selected section survives the body's unmount
+  // while another pane tab is active.
+  const panelStore = createPanelStore()
   ctx.effect(
     () => ctx.slots.inject('sidebar.right.pane.tab', () => ctx.slots.register({
       name: 'sidebar.right.pane.tab',
       key: MSTAR_PANEL_ID,
       locale: NS,
+      store: panelStore,
     }, (props: Parameters<typeof PanelView>[0]) => PanelView({ ...props, engineStatus }))),
     'ui-mstar-panel: panel body',
   )

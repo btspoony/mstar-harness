@@ -30,7 +30,7 @@ import { apply } from '../src/client/index.ts'
 import { MSTAR_GUIDE_ORDER, MSTAR_PANEL_ID, MSTAR_PANEL_KIND, mstarPanelDefinition } from '../src/client/panel/definition.ts'
 import { en, NS, zh } from '../src/client/panel/locale.ts'
 import { PanelView } from '../src/client/panel/PanelView.tsx'
-import { anchorSnapshot, bindUseChat, bindUseSessions, SESSION } from './gateway-stub.ts'
+import { anchorSnapshot, bindUseChat, bindUseSessions, SESSION, visibleTabInfo, visibleTabKit } from './gateway-stub.ts'
 
 // The REAL client service values — SlotRegistry / LocaleRuntime are cordis
 // services loaded from the browser bundles through the loader shim
@@ -251,18 +251,24 @@ describe('workflow panel — sidebar seat registration (plugin entry)', () => {
 })
 
 describe('workflow panel — sidebar body visibility gate (plan §L2.6)', () => {
-  /** Render the body directly with a stub `useTabInfo` (waiting state: no anchor row, no transport). */
+  /**
+   * Render the body directly with a stub `useTabInfo` (waiting state: no
+   * anchor row, no transport). The entry-store share rides the visible-tab
+   * fixture kit (gateway-stub) — the gate itself only reads `tab.visible`.
+   */
   function renderBody(visible: boolean): string {
     const locale = new LocaleRuntimeCtor(new Context())
     locale.register(NS, { zh, en })
     locale.setLocale('en')
     const store = { getSnapshot: () => anchorSnapshot(null) }
+    const kit = visibleTabKit()
+    if (!visible) kit.useTabInfo = () => ({ ...visibleTabInfo(), tab: { ...visibleTabInfo().tab, visible: false } })
     return renderToStaticMarkup(createElement(PanelView, {
       sessionId: SESSION,
       useChat: bindUseChat(store),
       useSessions: bindUseSessions(),
       t: locale.bind(NS),
-      useTabInfo: () => ({ tab: { visible } }),
+      ...kit,
     } as never))
   }
 

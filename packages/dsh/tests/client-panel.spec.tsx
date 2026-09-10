@@ -5,18 +5,22 @@
  *
  * Coverage:
  * - full fixture (iteration + state + freshness): every section renders —
- *   the sidebar meta dock (version/harness, header removed), the
+ *   the meta dock (version/harness, header removed), the
  *   IterationTaskPage on the tasks tab (Content Head with the horizontal
  *   Step 1–5 row + branches, and the full-width 5-column kanban — the
  *   WorkflowCanvas zone dashboard is replaced by Task 2 and no longer
  *   renders here), plan status board, residual counts, branch/policy/lease
  *   anchors, knowledge digest, direction one-liner, last-updated marker;
- * - full-tab layout (spec panel-zones §2, v3 + panel-tabs §2): root fills
- *   the Tab without page scroll (`overflow: hidden`); the tasks page's own
- *   scroll body (`data-mstar-tasks-scroll`, the full-width kanban area) is
- *   the ONLY page-level scroller — the kanban is never compressed into a
- *   small box; sidebar is its own scroll container with a fixed bottom meta
- *   dock; zero bare hex/rgb in the panel + zones CSS;
+ * - narrow-column shell (plan sidebar §L2.1/L2.2/L2.7): the root is a
+ *   single flex column with three zones — the section nav (flex:none), the
+ *   panel-owned scroll body (`[data-mstar-scroll]`, the ONLY overflow-y
+ *   element, carrying `data-mstar-graph`), the pinned meta dock — the
+ *   workspace-state digest IN FLOW at the end of the scroll body (its old
+ *   nested scroller retired), no composer-overlay opt-in, `container-type`
+ *   on the root with @container width rules and NO viewport media queries;
+ * - section store (plan sidebar §L2.4): the selected section lives in the
+ *   entry store keyed by the sidebar tab id (default 'tasks') and survives
+ *   the body's unmount/remount cycle through the store;
  * - theme audit (spec panel-zones §7): EVERY color-family declaration is a
  *   --dsw-* token (no bare color of any form), spacing/font ride the
  *   --mstar-space-* / --dsw-font-xxxs-11..xs-13 ramps, hover feedback sits in
@@ -58,10 +62,11 @@
  *   verdict (Phase 1 → Step 1 current, verdict unknown → NO badge) and every
  *   step reserves the fixed-height `data-step-verdict-seat` so the centered
  *   groups align (no `align-self` skew, no block shift).
- * - tabs-shell (spec panel-tabs §2/§6.1): the panel is re-laid-out as
- *   Tabs + Content — resident right sidebar (all tabs share it), fixed
- *   header nav (TabNav, 3 MenuTabs) + per-tab content; `data-mstar-graph`
- *   now anchors the CONTENT container; default tab = 任务迭代 (D1); tab
+ * - tabs-shell (spec panel-tabs §2/§6.1): the panel is laid out as
+ *   section nav + content (plan sidebar §L2.1 — the workspace-state digest
+ *   follows the content in the scroll-zone flow), fixed section nav
+ *   (TabNav, 3 tabs) + per-tab content; `data-mstar-graph` anchors the
+ *   scroll zone; default tab = 任务迭代 (D1); tab
  *   switching content assertions ride the exported TabNav + PanelContent;
  *   the agents tab renders the draggable AgentCanvasPage and the events tab
  *   the real EventLogPage (`data-mstar-page-*` + the `data-event-log-*`
@@ -121,6 +126,7 @@ import {
   stubGateway,
   unavailableResult,
   userNode,
+  visibleTabKit,
 } from './gateway-stub.ts'
 import type { AgentFlowEventView, AgentFlowView } from '../src/types'
 import type { EnforcementSource } from '@mstar-harness/engine'
@@ -299,15 +305,17 @@ const degradedSource = {
  * Session-standard kit the sidebar body seat hands every dispatch: the chat
  * selector, the Host session list (the panel reads the session's `cwd`
  * from it — the host cross-checks the asserted cwd), the session identity,
- * the plugin's engine-status client, and the seat's tab-information hook
- * (a VISIBLE tab — the hidden-tab gate is client-seat.spec.ts's subject).
+ * the plugin's engine-status client, and the visible-tab fixture kit (the
+ * seat's tab-information hook + the entry-store share — plan sidebar §L2.4;
+ * the hidden-tab gate is client-seat.spec.ts's subject).
  */
 function kitProps(overrides?: Partial<MstarPanelBodyProps>): MstarPanelBodyProps {
+  const kit = visibleTabKit()
   return {
     sessionId: SESSION,
     useChat: (() => null) as never,
     useSessions: bindUseSessions(SESSION_ID, SESSION_CWD) as never,
-    useTabInfo: () => ({ tab: { visible: true } }),
+    ...kit,
     ...overrides,
   } as unknown as MstarPanelBodyProps
 }
@@ -835,7 +843,7 @@ describe('workflow panel — plugin entry registers locale + the sidebar seats (
     expect(locale.bind(NS)('view.mstar-workflow')).toBe('MStar 工作流')
   })
 
-  it('registers the sidebar body + title seats (keyed @mstar-harness/dsh, locale follows)', async () => {
+  it('registers the sidebar body + title seats (keyed @mstar-harness/dsh, locale + entry store)', async () => {
     const { ctx, slots, locale } = makeCtx()
     apply(ctx)
     // Not declared yet: the inject callbacks must wait.
@@ -850,17 +858,21 @@ describe('workflow panel — plugin entry registers locale + the sidebar seats (
     expect(bodies[0]!.options.key).toBe('@mstar-harness/dsh')
     expect(titles[0]!.options.key).toBe('@mstar-harness/dsh')
     expect(bodies[0]!.locale).toBe(NS)
+    // The body seat declares the entry store (plan sidebar §L2.4) — the
+    // props share (`useStore` + baked actions) is backed by it. The core
+    // records the declared store seat on the stored entry (top-level member).
+    expect(bodies[0]!.store).toBeDefined()
 
     disposeRightbar()
   })
 })
 
-describe('workflow panel — T1 layout: sidebar meta dock / main grid / full-tab (spec panel-zones §2)', () => {
+describe('workflow panel — T2 narrow-column shell: three zones / single scroll owner / digest in flow (plan sidebar §L2)', () => {
   let html = ''
   beforeAll(async () => { html = await panelHtml(fullSource) })
 
-  it('the sidebar meta dock renders version + harness dir (header removed)', async () => {
-    // The old 3-cell header is gone; version/harness live in the sidebar bottom dock.
+  it('the meta dock renders version + harness dir (header removed)', async () => {
+    // The old 3-cell header is gone; version/harness live in the pinned meta dock.
     expect(html).not.toContain('data-mstar-header')
     expect(html).not.toContain('data-mstar-header-cell')
     expect(html).toContain('data-mstar-meta')
@@ -870,54 +882,92 @@ describe('workflow panel — T1 layout: sidebar meta dock / main grid / full-tab
     expect(html).toContain('harness: /proj/.mstar')
   })
 
-  it('root + main CSS pin the full-tab v3 layout (no page scroll; the canvas zone container is the ONLY scroll body)', async () => {
+  it('shell DOM: nav → scroll(=graph) → page → digest → freshness → meta, in one column', async () => {
+    // The three flex zones of §L2.1, in order: the section nav, the scroll
+    // zone (which carries the content-container anchor `data-mstar-graph`),
+    // the pinned meta dock. The digest renders IN FLOW inside the scroll
+    // body after the active page; the freshness footer follows it.
+    expect(html).toContain('data-mstar-tab-nav')
+    expect(html).toContain('data-mstar-scroll')
+    expect(html).toContain('data-mstar-graph')
+    expect(html).toContain('data-mstar-sidebar')
+    expect(html).toContain('data-mstar-meta')
+    expect(html.match(/data-mstar-scroll/g)).toHaveLength(1)
+    // The scroll zone IS the graph content container (one anchor, one zone).
+    expect(html.indexOf('data-mstar-tab-nav')).toBeLessThan(html.indexOf('data-mstar-scroll'))
+    expect(html.indexOf('data-mstar-scroll')).toBeLessThan(html.indexOf('data-iteration-head'))
+    expect(html.indexOf('data-iteration-head')).toBeLessThan(html.indexOf('data-mstar-sidebar'))
+    expect(html.indexOf('data-mstar-sidebar')).toBeLessThan(html.indexOf('data-mstar-freshness'))
+    expect(html.indexOf('data-mstar-freshness')).toBeLessThan(html.indexOf('data-mstar-meta'))
+    // The digest's nested scroller is RETIRED — the digest is flow content.
+    expect(html).not.toContain('data-mstar-sidebar-scroll')
+  })
+
+  it('root + zone CSS pin the narrow-column shell: flex zones, container-type, @container rules, NO viewport media queries (plan sidebar §L2.1/L2.7)', () => {
     const cssText = readFileSync(new URL('../src/client/panel/panel.module.css', import.meta.url), 'utf8')
-    // Root fills the Tab and never scrolls (v3: the page NEVER scrolls).
-    expect(cssText).toContain('grid-template-columns: minmax(0, 1fr) 300px')
-    expect(cssText).toMatch(/grid-template-areas:\s*'main sidebar'/)
-    expect(cssText).toContain('height: 100%')
-    expect(cssText).toContain('min-height: 0')
-    expect(cssText).toContain('overflow: hidden')
-    expect(cssText).toMatch(/@media \(max-width: 860px\)/)
-    // `.main` itself never scrolls (v3) — the canvas zone container scrolls.
-    expect(cssText).toMatch(/\.main\s*\{[\s\S]*?overflow:\s*hidden/)
-    // Sidebar is its own scroll container (digest region), not the page.
-    expect(cssText).toContain('overflow-y: auto')
-    expect(cssText).toContain('flex: 1')
+    // The root is the three-zone flex column bound to the pane body's
+    // definite height — no shell grid areas, no page scroll.
+    expect(cssText).toMatch(/\.root\s*\{[\s\S]*?display:\s*flex[\s\S]*?flex-direction:\s*column/)
+    expect(cssText).toMatch(/\.root\s*\{[\s\S]*?height:\s*100%/)
+    expect(cssText).toMatch(/\.root\s*\{[\s\S]*?min-height:\s*0/)
+    expect(cssText).toMatch(/\.root\s*\{[\s\S]*?overflow:\s*hidden/)
+    expect(cssText).toMatch(/\.root\s*\{[\s\S]*?container-type:\s*inline-size/)
+    expect(cssText).not.toContain('grid-template-areas')
+    // Zone flex contract: nav and meta dock are flex:none — they cannot move;
+    // the scroll zone takes the rest and is the ONLY scroller.
+    expect(cssText).toMatch(/\.tabNav\s*\{[\s\S]*?flex:\s*none/)
+    expect(cssText).toMatch(/\.scroll\s*\{[\s\S]*?flex:\s*1\s+1\s+auto/)
+    expect(cssText).toMatch(/\.scroll\s*\{[\s\S]*?min-height:\s*0/)
+    expect(cssText).toMatch(/\.scroll\s*\{[\s\S]*?overflow-y:\s*auto/)
+    expect(cssText).toMatch(/\.scroll\s*\{[\s\S]*?overflow-x:\s*hidden/)
+    expect(cssText).toMatch(/\.meta\s*\{[\s\S]*?flex:\s*none/)
+    // Singular scroll ownership (§L2.2): exactly ONE overflow-y declaration
+    // in the shell CSS and it lives on .scroll; NO element declares an
+    // overflow-x scroller. (Per-page module CSS is the owning page tasks':
+    // events/canvas re-shapes retire theirs later on the board.)
+    const stripped = cssText.replace(/\/\*[\s\S]*?\*\//g, '')   // comments off — scan declarations only
+    const overflowY = [...stripped.matchAll(/overflow-y:\s*([^;}]+)/g)].map((m) => m[1]!.trim())
+    expect(overflowY).toEqual(['auto'])
+    const scrollBlock = stripped.match(/\.scroll\s*\{[^}]*overflow-y: auto[^}]*\}/)
+    expect(scrollBlock).not.toBeNull()
+    expect(scrollBlock![0]).toContain('overflow-x: hidden')
+    expect(stripped).not.toMatch(/overflow-x:\s*(?:auto|scroll)/)
+    // Width signal (§L2.7): container queries only — the two obsolete
+    // viewport media queries are deleted (reduced-motion is not a width query).
+    expect(cssText).toMatch(/@container\s*\(max-width:\s*480px\)/)
+    expect(cssText).toMatch(/@container\s*\(min-width:\s*720px\)/)
+    expect(cssText).toMatch(/@container\s*\(min-width:\s*720px\)\s*\{[\s\S]*?\.groupGrid\s*\{[\s\S]*?grid-template-columns:\s*repeat\(auto-fit,\s*minmax\(280px,\s*1fr\)\)/)
+    expect(cssText).toMatch(/\.groupGrid\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\)/)
+    expect(cssText).not.toMatch(/@media\s*\((?:max|min)-width:/)
     // Spacing ramp tokens defined at the panel root (spec §1.2).
     expect(cssText).toMatch(/--mstar-space-[1-6]:\s*\d+px/)
-    // Theming is dsw-token driven only — no bare hex (dark mode = token value flip).
-    expect(cssText).not.toMatch(/#[0-9a-fA-F]{3,8}\b/)
-    expect(cssText).not.toMatch(/rgb\(|rgba\(/)
   })
 
-  it('opts the panel root into the host composer overlay so height:100% resolves — the scroll root-cause fix (plan quick-fixes T4)', async () => {
-    // The panel root's `height: 100%` only resolves when the host's `.viewArea`
-    // wrapper is a definite-height container. The host flips it via
-    // `:has([data-conversation-composer-overlay])`; without the opt-in it keeps
-    // `.viewArea { min-height: auto; flex: 1 0 auto }`, so `height: 100%`
-    // collapses to auto and the host's resident scrollport scrolls the WHOLE
-    // panel instead of the event-log `.rowList` scrolling internally.
-    expect(html).toContain('data-conversation-composer-overlay')
-    // The root reserves clearance for the now-floating composer (host-published
-    // `--dsh-composer-height`) so the fixed freshness footer + meta dock clear it.
+  it('the composer-overlay opt-in is GONE: no attribute, no --dsh-composer-height reserve (plan sidebar §L1.5 row)', async () => {
+    // The sidebar pane body is already a definite-height box (L0.12), so the
+    // old conversation-view opt-in (attribute + composer-height padding
+    // reserve) has no reason to exist — inverted from the pre-migration
+    // assertion, which required it.
+    expect(html).not.toContain('data-conversation-composer-overlay')
     const cssText = readFileSync(new URL('../src/client/panel/panel.module.css', import.meta.url), 'utf8')
-    expect(cssText).toMatch(/padding-bottom:\s*calc\(var\(--dsh-composer-height/)
+    expect(cssText).not.toContain('--dsh-composer-height')
+    expect(cssText).not.toMatch(/padding-bottom:\s*calc\(/)
   })
 
-  it('sidebar renders the plans / residuals / knowledge / leases status areas + the fixed meta dock', async () => {
+  it('the digest renders in flow: state section inside the scroll body, meta dock after the scroll zone', async () => {
     expect(html).toContain('data-mstar-sidebar')
-    expect(html).toContain('data-mstar-sidebar-scroll')
+    expect(html).toContain('data-mstar-section="state"')
     expect(html).toContain('data-plan-id="00000809-dsh-workflow-viz-panel"')
     expect(html).toContain('data-residual-finding-severity="high"')
     expect(html).toContain('data-knowledge-docs="3"')
     expect(html).toContain('data-lease-plan="00000809-dsh-workflow-viz-panel"')
-    // The digest content lives INSIDE the sidebar scroll region; the meta dock
-    // follows it (data-plan-id also appears earlier in the graph node plan rows,
-    // so order is pinned against the sidebar's own state section marker).
+    // The digest content lives in the scroll body's flow (after the active
+    // page); the pinned meta dock follows the whole scroll zone (data-plan-id
+    // also appears earlier in the graph node plan rows, so order is pinned
+    // against the sidebar's own state section marker).
     expect(html.indexOf('data-mstar-sidebar')).toBeLessThan(html.indexOf('data-mstar-section="state"'))
     expect(html.indexOf('data-mstar-section="state"')).toBeLessThan(html.indexOf('data-mstar-meta'))
-    // The meta dock renders inside the sidebar (watermark lineage preserved).
+    // The meta dock renders outside the scroll zone (watermark lineage preserved).
     expect(html.indexOf('data-mstar-sidebar')).toBeLessThan(html.indexOf('data-mstar-watermark'))
   })
 
@@ -965,7 +1015,7 @@ describe('workflow panel — T1 layout: sidebar meta dock / main grid / full-tab
     expect(errored).toContain('cannot read the selected workflow snapshot')
   })
 
-  it('main area renders the IterationTaskPage inside the content region (T7 fills the tasks tab)', async () => {
+  it('the scroll zone renders the IterationTaskPage inside the flow (T7 fills the tasks tab)', async () => {
     expect(html).toContain('data-mstar-graph')
     expect(html).toContain('data-mstar-page="tasks"')
     expect(html).toContain('data-iteration-head')
@@ -975,6 +1025,50 @@ describe('workflow panel — T1 layout: sidebar meta dock / main grid / full-tab
     expect(html).not.toContain('data-mstar-canvas')
     expect(html).not.toContain('data-graph-canvas')
     expect(html).not.toContain('data-graph-nodes-draggable')
+  })
+})
+
+describe('workflow panel — T2 section store: keyed by tab id, default tasks, survives remount via the store (plan sidebar §L2.4)', () => {
+  it('an untouched store reads the tasks default (D1, SSR-stable)', async () => {
+    const html = await panelHtml(fullSource)
+    expect(html).toContain('data-mstar-page="tasks"')
+    expect(html).toMatch(/data-mstar-tab="tasks"[^>]*data-mstar-tab-active="true"/)
+  })
+
+  it('a selection survives the body\'s unmount/remount cycle THROUGH the store (not component state)', async () => {
+    // One kit = one real store instance + one tab record. Render → select
+    // through the baked action → render AGAIN with the same kit: a fresh
+    // PanelView (the simulated remount after another pane tab was active)
+    // reads the persisted section from the store.
+    const kit = visibleTabKit('tab-1')
+    // The client is created ONCE (both passes share its snapshot cache, like
+    // the panelFixture helper) — a fresh client per pass would re-enter the
+    // loading state on the settled pass.
+    const engineStatus = new MstarEngineStatusClient(gatewayFor(fullSource).connection)
+    const render = () => settleRender(() => renderToStaticMarkup(createElement(PanelView, {
+      sessionId: SESSION,
+      ...kit,
+      useChat: bindUseChat(createSnapshotStore(snapshotFor(fullSource, ANCHOR_TIME))),
+      useSessions: bindUseSessions(SESSION_ID, SESSION_CWD) as never,
+      engineStatus,
+      t: panelLocale('en').bind(NS),
+    } as never)))
+    expect((await render()).includes('data-mstar-page="tasks"')).toBe(true)
+    kit.actions.select('tab-1', 'agents')
+    const second = await render()
+    expect(second).toContain('data-mstar-page="agents"')
+    expect(second).toMatch(/data-mstar-tab="agents"[^>]*data-mstar-tab-active="true"/)
+    // The store (not a useState default) is what carried the selection:
+    // its snapshot holds the key.
+    expect(kit.instance.getSnapshot().byTab['tab-1']).toBe('agents')
+  })
+
+  it('the store is keyed by TAB ID — a second tab record stays on the tasks default', () => {
+    const kit = visibleTabKit('tab-1')
+    kit.actions.select('tab-1', 'events')
+    // A different tab record reads `undefined` → the 'tasks' default.
+    expect(kit.instance.getSnapshot().byTab['tab-2']).toBeUndefined()
+    expect(kit.instance.getSnapshot().byTab['tab-1']).toBe('events')
   })
 })
 
@@ -1608,16 +1702,16 @@ describe('workflow panel — T7 iteration-task page: content head collapse/expan
     expect(g).not.toContain('data-graph-empty="no-plans"')
   })
 
-  it('css: the tasks area is the page\'s independent vertical scroll body; the kanban columns spread full-width (spec §3/D2)', async () => {
+  it('css: the tasks page is flow content in the panel scroll zone — no per-page scroller (plan sidebar §L2.2)', async () => {
     const panelCss = readFileSync(new URL('../src/client/panel/panel.module.css', import.meta.url), 'utf8')
-    // The page fills the content region (flex column); the tasks area takes
-    // the remaining height and scrolls independently — never compressed into
-    // a small box by a canvas height.
+    // The page is a flex column in the scroll zone's flow; the tasks area
+    // takes the remaining space but owns NO scroller any more — the panel
+    // scroll body (`[data-mstar-scroll]`) is the single scroller (§L2.2).
     expect(panelCss).toMatch(/\.iterationPage\s*\{[\s\S]*?flex:\s*1/)
     expect(panelCss).toMatch(/\.iterationTasks\s*\{[\s\S]*?flex:\s*1/)
     expect(panelCss).toMatch(/\.iterationTasks\s*\{[\s\S]*?min-height:\s*0/)
-    expect(panelCss).toMatch(/\.iterationTasks\s*\{[\s\S]*?overflow-y:\s*auto/)
-    // The head stays fixed (flex:none) above the scrolling tasks area.
+    expect(panelCss).not.toMatch(/\.iterationTasks\s*\{[^}]*overflow/)
+    // The head stays fixed (flex:none) above the flowing tasks area.
     expect(panelCss).toMatch(/\.iterationHead\s*\{[\s\S]*?flex:\s*none/)
     // The kanban columns spread to fill the content width: flex grow without
     // a max-width cap (the removed 200px ceiling was the "small box").
@@ -1744,33 +1838,17 @@ describe('workflow panel — F4.3 iteration zone: split layout + verdict badge s
     expect(zhHtml.match(/data-step-verdict-seat/g)).toHaveLength(5)
   })
 
-  it('css: split flex row (branches width-capped, steps absorb) + narrow stack; badge aligned via the fixed-height seat, no align-self skew', async () => {
+  it('css: split flex row (branches + absorbing steps row) — no viewport media queries left in the shell css; badge aligned via the fixed-height seat, no align-self skew', async () => {
     const cssText = readFileSync(new URL('../src/client/panel/panel.module.css', import.meta.url), 'utf8')
     // Split container: a flex row with a ramp gap (spec R8).
     expect(cssText).toMatch(/\.iterationHeadSplit\s*\{[\s\S]*?display:\s*flex[\s\S]*?gap:\s*var\(--mstar-space-/)
-    // Width contract :
-    // branches are width-CAPPED (flex-basis 260px, max-width 280px — branch
-    // info never stretches with the container), the steps row absorbs ALL
-    // remaining width (flex 1 1 0).
-    expect(cssText).toMatch(/\.iterationHeadSplit\s*>\s*\.iterationBranches\s*\{[\s\S]*?flex:\s*0\s+1\s+260px[\s\S]*?max-width:\s*280px/)
+    // The steps row absorbs ALL remaining width (flex 1 1 0).
     expect(cssText).toMatch(/\.iterationHeadSplit\s*>\s*\.iterationStepsRow\s*\{[\s\S]*?flex:\s*1\s+1\s+0/)
-    // Narrow fallback: the same 860px breakpoint stacks the split vertically —
-    // and the Task 2 width cap RESETS (a column flex-basis would become a
-    // 260px HEIGHT in the stack, so the cap is lifted for the column axis).
-    expect(cssText).toMatch(/@media\s*\(max-width:\s*860px\)\s*\{[\s\S]*?\.iterationHeadSplit\s*\{[\s\S]*?flex-direction:\s*column/)
-    expect(cssText).toMatch(/@media\s*\(max-width:\s*860px\)\s*\{[\s\S]*?\.iterationHeadSplit\s*>\s*\.iterationBranches\s*\{[\s\S]*?max-width:\s*none/)
-    // Regression guard : the ≤860px column stack must
-    // NEVER see the row-mode cap. The cap is scoped inside a SINGLE
-    // `@media (min-width: 861px)` block — at ≤860px only the content-height
-    // reset above exists, so no cascade competition remains (an earlier
-    // source-order bug let the later same-specificity base rule win and
-    // defeat the reset). A text-presence assertion alone cannot catch this.
-    expect(cssText.match(/@media\s*\(min-width:\s*861px\)\s*\{/g)).toHaveLength(1)
-    const capBlock = cssText.match(/@media\s*\(min-width:\s*861px\)\s*\{([\s\S]*?)\n\}/)
-    expect(capBlock).not.toBeNull()
-    expect(capBlock![1]).toMatch(/\.iterationHeadSplit\s*>\s*\.iterationBranches\s*\{[\s\S]*?flex:\s*0\s+1\s+260px[\s\S]*?max-width:\s*280px/)
-    // The reset must stay in the ≤860px fallback, never inside the ≥861px block.
-    expect(capBlock![1]).not.toContain('max-width: none')
+    // Viewport media queries are DELETED (plan sidebar §L2.7): neither the
+    // ≤860px stack fallback nor the ≥861px branch width cap survives — the
+    // width signal is the root's container queries (asserted in the shell
+    // block). The narrow-column head re-shape is the next task on the board.
+    expect(cssText).not.toMatch(/@media\s*\((?:max|min)-width:/)
     // Verdict alignment fix: every step reserves a fixed-height flex seat; the
     // badge rule carries NO align-self (the `align-self: flex-start` skew
     // root cause is gone — spec §2.3 R9 "不再歪斜、不导致 Step 对齐偏移").
@@ -1967,7 +2045,7 @@ describe('workflow panel — T7 data projection integration (spec panel-tabs §3
  * ------------------------------------------------------------------------- */
 
 describe('workflow panel — T4 task board kanban: 5 columns + counts + cards + arrows + 「更多」 expand + empty state (spec panel-zones §3/§8)', () => {
-  /** The tasks zone slice: from the TaskBoard zone frame to the resident sidebar. */
+  /** The tasks zone slice: from the TaskBoard zone frame to the in-flow digest. */
   function tasksSlice(html: string): string {
     const start = html.indexOf('data-zone="tasks"')
     const end = html.indexOf('data-mstar-sidebar')
@@ -2195,7 +2273,7 @@ describe('workflow panel — 「更多」 interaction ', () => {
  * per-tab content is pinned through the exported mapping component.
  * ------------------------------------------------------------------------- */
 
-describe('workflow panel — T6 tabs-shell: resident sidebar + header nav + content switching (spec panel-tabs §2/§6.1)', () => {
+describe('workflow panel — T6 tabs-shell: section nav + content switching + in-flow digest (spec panel-tabs §2/§6.1)', () => {
   it('renders the 3 MenuTab anchors in the header nav, tasks active by default (D1)', async () => {
     const html = await panelHtml(fullSource)
     expect(html).toContain('data-mstar-tab-nav')
@@ -2258,16 +2336,19 @@ describe('workflow panel — T6 tabs-shell: resident sidebar + header nav + cont
     for (const html of [tasks, agents, events]) expect(html).not.toContain('data-mstar-sidebar')
   })
 
-  it('the resident sidebar renders outside the tab-switching region, present under the default (tasks) tab', async () => {
+  it('the digest renders in the scroll zone after the page content — outside the tab-switching region', async () => {
     const html = await panelHtml(fullSource)
-    // data-mstar-graph = the content container (spec §6.1): it precedes the
-    // sidebar, and the sidebar follows the whole main area.
+    // data-mstar-graph = the scroll zone (plan sidebar §L2.1 — the content
+    // container anchor rides the shell's single scroller): the active page
+    // renders inside it first, the digest follows in the same flow.
     expect(html).toContain('data-mstar-graph')
     expect(html).toContain('data-mstar-sidebar')
-    expect(html).toContain('data-mstar-sidebar-scroll')
+    // The digest's nested scroller is retired (§L2.1) — flow content only.
+    expect(html).not.toContain('data-mstar-sidebar-scroll')
     expect(html.indexOf('data-mstar-graph')).toBeLessThan(html.indexOf('data-mstar-sidebar'))
-    // The default render still shows the tasks page inside content.
+    // The default render still shows the tasks page inside the scroll zone.
     expect(html.indexOf('data-mstar-graph')).toBeLessThan(html.indexOf('data-iteration-head'))
+    expect(html.indexOf('data-iteration-head')).toBeLessThan(html.indexOf('data-mstar-sidebar'))
   })
 
   it('waiting / no-harness branches keep data-mstar-panel + freshness, no tabs, no sidebar', async () => {

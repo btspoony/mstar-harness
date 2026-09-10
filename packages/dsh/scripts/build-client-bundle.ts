@@ -336,16 +336,20 @@ if (import.meta.main) {
   // Inline bundle-contract assertions (spec §3.2 #2 verify-only + the
   // classic-script guard): the emitted text must NOT carry the removed
   // react-flow library (negative assertion — proves the removal is complete
-  // end to end, spec panel-zones §2), must not value-import `@deepseek-ai/*`
-  // (purity gate), and must contain NO `import.meta` / ESM statements — the
-  // web loader executes this file as a classic <script>, where either is a
-  // parse-time SyntaxError.
+  // end to end, spec panel-zones §2), must not value-import a `@deepseek-ai/*`
+  // module OUTSIDE the loader-table externals (purity gate — an external row
+  // such as the documented `@deepseek-ai/dsh-client-store` exemption emits a
+  // `require` the loader's module table resolves; see the header), and must
+  // contain NO `import.meta` / ESM statements — the web loader executes this
+  // file as a classic <script>, where either is a parse-time SyntaxError.
   const bundleText = readFileSync(result.outputs[0]!.path, 'utf8')
   if (/xyflow|reactflow/i.test(bundleText)) {
     throw new Error('client bundle contract: the emitted bundle still contains xyflow/reactflow markers — the react-flow removal is incomplete (check imports / comments / devDeps)')
   }
-  if (/require\(\s*["']@deepseek-ai\//.test(bundleText)) {
-    throw new Error('client bundle contract: a @deepseek-ai/* VALUE import survived the purity gate')
+  const deepseekRequires = [...bundleText.matchAll(/require\(\s*["'](@deepseek-ai\/[^"']*)["']\s*\)/g)].map((m) => m[1]!)
+  const offTableRequires = deepseekRequires.filter((id) => !CLIENT_EXTERNALS.includes(id))
+  if (offTableRequires.length > 0) {
+    throw new Error(`client bundle contract: a @deepseek-ai/* VALUE import survived the purity gate (${offTableRequires.join(', ')})`)
   }
   if (bundleText.includes('import.meta') || /(^|\n)\s*(import|export)\s/.test(bundleText)) {
     throw new Error('client bundle contract: emitted bundle contains import.meta / ESM statements — the classic-script loader would fail to parse it')
