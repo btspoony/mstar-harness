@@ -225,9 +225,15 @@ export class MstarEngineStatusClient {
       if (this.disposed) return
       if (now - entry.fetchedAt < this.refreshIntervalMs) continue
       if (this.refreshing.has(sessionId)) continue
-      // The cache moved to a newer anchor while nothing was refreshing: the
-      // entry this pass planned to re-pull is superseded, so re-pulling it
-      // would cost a request that publishes an older snapshot over a newer one.
+      // Re-entrancy defence, not a mid-pass race: this pass walks a COPY of the
+      // current snapshot with a fully synchronous body, so a visited entry
+      // cannot be superseded between that copy and this line. The comparison can
+      // only differ if a subscriber re-enters the store synchronously from a
+      // notify raised inside the pass — a re-entrant `ensure()` landing a newer
+      // anchor for a session not yet visited, or an `invalidate()` that dropped
+      // the entry — and skipping is right in both cases: the answer to the
+      // request this avoids would be discarded by the generation fence or by the
+      // write-path anchor guard anyway.
       if (this.snapshot.entries.get(sessionId)?.anchorTime !== entry.anchorTime) continue
       this.refreshing.add(sessionId)
       void this.fetch(sessionId, entry.cwd, entry.anchorTime)
