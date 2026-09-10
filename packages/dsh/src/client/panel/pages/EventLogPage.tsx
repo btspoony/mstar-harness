@@ -10,10 +10,13 @@
  * keyboard-accessible, SSR-stable) whose body shows the FULL catalog fields;
  * a missing field renders「—」— never a guessed value (spec §5/§8).
  *
- * Layout (user feedback「左右
- * 排两列 + 锁定一个高内部滚动」): the two partitions render side by side in a
- * locked-height two-column grid; the page never scrolls as a whole — each
- * partition pins its title and scrolls internally (`event-log.module.css`).
+ * Layout (plan sidebar §L2.5/§L4.1): the two partitions are FLOW ROWS in
+ * the panel's single scroll body (`[data-mstar-scroll]`) — the old
+ * locked-height two-column grid and both per-partition internal scrollers
+ * are retired; rows grow the scroll body instead of owning a scrollbar.
+ * The grid rides the shell's shared `.groupGrid` class, so the ≥720px
+ * container spread is the shell's one rule. The iteration head is NOT
+ * rendered in this section.
  *
  * Dock migration decision (spec §5 — 无双份日志): the AgentEventDock is
  * REMOVED, not degraded. The dock's content (row layout + status chips)
@@ -48,6 +51,7 @@ import {
   type EventLogViolationEntry,
 } from '../graph/event-log.ts'
 import css from './event-log.module.css'
+import panelCss from '../panel.module.css'
 
 export interface EventLogPageProps {
   /** The projected zone view — the events/violations slices + source rows. */
@@ -278,7 +282,10 @@ export function EventLogPage({ view, t }: EventLogPageProps) {
     )
   }
   return (
-    <div className={css.eventLogPage} data-mstar-page="events">
+    // The partition grid is the shell's shared `.groupGrid` (plan sidebar
+    // §L4.3 — one column below the 720px container breakpoint, the ≥720px
+    // spread is that rule's): flow rows in the panel's single scroll body.
+    <div className={`${css.eventLogPage} ${panelCss.groupGrid}`} data-mstar-page="events">
       <section className={css.section} data-event-log-section="events" data-event-log-section-count={eventEntries.length}>
         <h2 className={css.sectionTitle} data-event-log-section-title>{t('event-log.section.events')}</h2>
         {eventEntries.length === 0 ? (

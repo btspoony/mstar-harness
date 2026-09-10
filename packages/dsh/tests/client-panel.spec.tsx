@@ -927,8 +927,9 @@ describe('workflow panel — T2 narrow-column shell: three zones / single scroll
     // in the shell CSS and it lives on .scroll; NO element declares an
     // overflow-x scroller. The tasks subtree's own module css (zones) is
     // swept too: its former `.kanban` horizontal scroller is retired with
-    // the stacked groups. (The events page retires its internal scroll on
-    // the events task; the canvas module dies with the agents task — the
+    // the stacked groups. The events subtree joins the sweep with its flow-row
+    // conversion: both partition scrollers and the whole-page overflow rule
+    // are retired. (The canvas module dies with the agents task — the
     // whole-panel sweep is theirs.)
     const stripped = cssText.replace(/\/\*[\s\S]*?\*\//g, '')   // comments off — scan declarations only
     const overflowY = [...stripped.matchAll(/overflow-y:\s*([^;}]+)/g)].map((m) => m[1]!.trim())
@@ -941,6 +942,10 @@ describe('workflow panel — T2 narrow-column shell: three zones / single scroll
       .replace(/\/\*[\s\S]*?\*\//g, '')
     expect([...zonesStripped.matchAll(/overflow-y:\s*([^;}]+)/g)]).toEqual([])
     expect(zonesStripped).not.toMatch(/overflow-x:\s*(?:auto|scroll)/)
+    const eventsStripped = readFileSync(new URL('../src/client/panel/pages/event-log.module.css', import.meta.url), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+    expect(eventsStripped).not.toMatch(/overflow(?:-x|-y)?:/)   // no scroller, no clip — flow content only
+    expect(eventsStripped).not.toMatch(/@media\s*\((?:max|min)-width:/)   // the width signal is the shell's container system
     // Width signal (§L2.7): container queries only — the two obsolete
     // viewport media queries are deleted (reduced-motion is not a width query).
     expect(cssText).toMatch(/@container\s*\(max-width:\s*480px\)/)
@@ -1252,28 +1257,38 @@ describe('workflow panel — T5 zones CSS audit: dock token styles + transition 
     expect(pageCss).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(|hwb\(|lab\(|lch\(|color\(/)
   })
 
-  it('event-log page: two-column locked-height body + per-partition internal scroll + narrow stack fallback (plan F3 Task 2)', async () => {
+  it('event-log page: flow-row partitions in the panel scroll body — no locked-height grid, no nested scroller, no width media query (plan sidebar §L4.1)', async () => {
     const pageCss = readFileSync(new URL('../src/client/panel/pages/event-log.module.css', import.meta.url), 'utf8')
-    // Page frame (AC-3): grid two columns, locked to the tab height, NO
-    // whole-page scroll — the old `overflow-y: auto` scroll body is gone.
+    const stripped = pageCss.replace(/\/\*[\s\S]*?\*\//g, '')
+    // Page frame (§L4.1): the two partitions are FLOW ROWS inside the panel's
+    // single scroll body — the locked-height two-column grid is retired. The
+    // local rule carries only the grid-item floor; the grid itself (one column
+    // below 720px, the ≥720px spread) rides the shell's shared `.groupGrid`
+    // class, not a second layout.
     const pageRule = pageCss.match(/\.eventLogPage\s*\{[\s\S]*?\}/)
     expect(pageRule).not.toBeNull()
-    expect(pageRule![0]).toContain('grid-template-columns: repeat(2, minmax(0, 1fr))')
-    expect(pageRule![0]).toContain('grid-template-rows: minmax(0, 1fr)')
-    expect(pageRule![0]).toContain('overflow: hidden')
-    expect(pageRule![0]).not.toContain('overflow-y')
-    // Partitions shrink inside the locked row; the row list owns the internal
-    // scroll (the pinned section title never scrolls away).
+    expect(pageRule![0]).toContain('min-width: 0')
+    expect(pageRule![0]).not.toContain('grid-template')
+    expect(pageRule![0]).not.toContain('overflow')
+    expect(pageRule![0]).not.toContain('flex')
+    // The partition keeps its framed anatomy; the locked-row shrink floor
+    // (`min-height: 0` for the internal scroll) is gone with the scroll.
     const sectionRule = pageCss.match(/\.section\s*\{[\s\S]*?\}/)
-    expect(sectionRule![0]).toContain('min-height: 0')
+    expect(sectionRule![0]).toContain('min-width: 0')
+    expect(sectionRule![0]).not.toContain('min-height')
+    // The row list is a plain flow list — the per-partition internal scroll
+    // (`overflow-y: auto` + the flex fill/shrink pair) is retired; rows grow
+    // the panel scroll body instead.
     const listRule = pageCss.match(/\.rowList\s*\{[\s\S]*?\}/)
     expect(listRule).not.toBeNull()
-    expect(listRule![0]).toContain('flex: 1')
-    expect(listRule![0]).toContain('min-height: 0')
-    expect(listRule![0]).toContain('overflow-y: auto')
-    // Narrow fallback: below the zones 1200px precedent the partitions stack
-    // as locked 50/50 rows (both stay visible, each scrolling internally).
-    expect(pageCss).toMatch(/@media\s*\(max-width:\s*1200px\)\s*\{[\s\S]*?\.eventLogPage\s*\{[\s\S]*?grid-template-columns:\s*1fr/)
+    expect(listRule![0]).not.toMatch(/overflow(?:-x|-y)?:/)
+    expect(listRule![0]).not.toContain('flex: 1')
+    expect(listRule![0]).not.toContain('min-height')
+    // Width signal (§L2.7): NO viewport media query survives in the module —
+    // the former 1200px stack fallback is the shared grid's one-column base.
+    // Motion is killed by the root reduced-motion rule, not a local block.
+    expect(stripped).not.toMatch(/@media\s*\((?:max|min)-width:/)
+    expect(stripped).not.toMatch(/@media\s*\(prefers-reduced-motion/)
   })
 })
 
