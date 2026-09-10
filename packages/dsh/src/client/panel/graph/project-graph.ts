@@ -974,8 +974,7 @@ function isCurrentIterationDispatch(
  *   role is pending);
  * - otherwise: entities aggregated from dispatch rows (with `idle: false`),
  *   statuses via the shared pairing walk, the un-evidenced KNOWN_AGENTS
- *   members appended as idle cards, actual/supervise edges (design doc §2.2 —
- *   the `expected` skeleton and `next` animation edges are REMOVED), and the
+ *   members appended as idle cards, and the
  *   executing (running entities — idle never counts) / pending
  *   (un-evidenced stage roles) counts.
  *
@@ -984,8 +983,8 @@ function isCurrentIterationDispatch(
  * suppresses a known role's idle card when its id already exists as an
  * evidence-derived entity key (a NON-roster dispatch produces a lit `general`
  * key while the roster `general` id stays un-evidenced — the twin is
- * suppressed via `litKeys`), so the render layer's `key`/`cards.set` never
- * collide.
+ * suppressed via `litKeys`), so the render layer's entity `key` space never
+ * collides.
  *
  * Canvas note: `note` classifies the readable ledger in
  * the projection ('empty' / 'settle-only' / null — see `AgentZoneNote`); the
