@@ -159,7 +159,7 @@ describe('useMstarEngineStatus — explicit empty and degraded states (spec §3,
   it('no anchor row → waiting, and NO gateway call is made', async () => {
     const gateway = stubGateway(servedSnapshot(payload('2.0.4')))
     const view = await settleView(seats(anchorStore(null), gateway))
-    expect(view).toEqual({ state: 'waiting', anchorTime: null, payload: null, at: null, reason: null })
+    expect(view).toEqual({ state: 'waiting', anchorTime: null, payload: null, at: null, turn: null, reason: null })
     expect(gateway.calls).toHaveLength(0)
   })
 

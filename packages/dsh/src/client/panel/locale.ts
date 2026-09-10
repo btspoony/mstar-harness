@@ -375,8 +375,8 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'state.policy.worktree': 'worktree',
   'state.policy.control-worktree': 'control worktree',
   'state.knowledge.docs': '{count} 篇文档',
-  'freshness.last-updated': '快照 {time}',
-  'freshness.refresh-note': '快照取自该会话最近一次 catalog 发送',
+  'freshness.last-updated': '快照 {time} · 第 {turn} 轮',
+  'freshness.refresh-note': '该会话已存储的快照——不是实时值',
 }
 
 /** en dictionary (default locale). */
@@ -500,6 +500,6 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'state.policy.worktree': 'worktree',
   'state.policy.control-worktree': 'control worktree',
   'state.knowledge.docs': '{count} docs',
-  'freshness.last-updated': 'snapshot {time}',
-  'freshness.refresh-note': 'snapshot from this session’s last catalog emission',
+  'freshness.last-updated': 'snapshot {time} · turn {turn}',
+  'freshness.refresh-note': 'the stored snapshot for this session — never a live value',
 }

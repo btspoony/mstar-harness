@@ -155,8 +155,13 @@ export function PanelView({ t, useChat, useSessions, sessionId, engineStatus }: 
       {snapshotTime === null
         ? null
         : (
-          <span data-mstar-freshness-at={view.at}>
-            {t('freshness.last-updated', { time: snapshotTime })}
+          // The served snapshot's OWN emission identity: its timestamp and the
+          // agent turn it was written for. Both are the host's records, so the
+          // footer stays TRUE when the CURRENT turn's write failed and the
+          // stored entry is an earlier one: it never claims to be live, and it
+          // never claims to be "the last emission" either.
+          <span data-mstar-freshness-at={view.at} data-mstar-freshness-turn={String(view.turn)}>
+            {t('freshness.last-updated', { time: snapshotTime, turn: String(view.turn) })}
           </span>
         )}
       <span>{t('freshness.refresh-note')}</span>

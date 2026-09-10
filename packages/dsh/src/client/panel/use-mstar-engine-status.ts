@@ -47,13 +47,18 @@ export type UseSessions = SnapshotSelectorHook<SessionListState>
 /** The panel's render state — a closed set: no shape can be both data and empty. */
 export type MstarEngineStatusView =
   /** No anchor row: this session never ran the plugin (today's empty state). */
-  | { readonly state: 'waiting'; readonly anchorTime: null; readonly payload: null; readonly at: null; readonly reason: null }
+  | { readonly state: 'waiting'; readonly anchorTime: null; readonly payload: null; readonly at: null; readonly turn: null; readonly reason: null }
   /** Anchor row seen, no answer for it yet — pending, never rendered as data. */
-  | { readonly state: 'loading'; readonly anchorTime: number; readonly payload: null; readonly at: null; readonly reason: null }
-  /** The validated snapshot: the payload plus the snapshot's own timestamp. */
-  | { readonly state: 'ok'; readonly anchorTime: number; readonly payload: MstarEngineStatusPayload; readonly at: string; readonly reason: null }
+  | { readonly state: 'loading'; readonly anchorTime: number; readonly payload: null; readonly at: null; readonly turn: null; readonly reason: null }
+  /**
+   * The validated snapshot: the payload plus the snapshot's OWN emission
+   * identity (`at` timestamp and the agent turn it was written for). Both are
+   * the host's records of the stored entry, so the panel can name which
+   * emission it is showing rather than implying it is the newest one.
+   */
+  | { readonly state: 'ok'; readonly anchorTime: number; readonly payload: MstarEngineStatusPayload; readonly at: string; readonly turn: number; readonly reason: null }
   /** An explicit degraded answer — always WITH a reason, never silently empty. */
-  | { readonly state: 'unavailable'; readonly anchorTime: number; readonly payload: null; readonly at: null; readonly reason: string }
+  | { readonly state: 'unavailable'; readonly anchorTime: number; readonly payload: null; readonly at: null; readonly turn: null; readonly reason: string }
 
 /** The seats the hook needs: the session standard kit + the plugin's client. */
 export interface MstarEngineStatusSeats {
@@ -114,11 +119,11 @@ export function selectSessionCwd(sessionId: SessionId | undefined) {
 }
 
 /** `waiting` — one shared reference (stable across renders). */
-const WAITING: MstarEngineStatusView = { state: 'waiting', anchorTime: null, payload: null, at: null, reason: null }
+const WAITING: MstarEngineStatusView = { state: 'waiting', anchorTime: null, payload: null, at: null, turn: null, reason: null }
 
 /** `unavailable` — one shape, always with a reason. */
 function unavailable(anchorTime: number, reason: string): MstarEngineStatusView {
-  return { state: 'unavailable', anchorTime, payload: null, at: null, reason }
+  return { state: 'unavailable', anchorTime, payload: null, at: null, turn: null, reason }
 }
 
 /**
@@ -174,11 +179,11 @@ export function useMstarEngineStatus(seats: MstarEngineStatusSeats): MstarEngine
     if (engineStatus === undefined) return unavailable(anchorTime, 'no-connection')
     if (sessionId === undefined) return unavailable(anchorTime, 'session-unknown')
     if (cwd === null) return unavailable(anchorTime, 'session-cwd-unknown')
-    return { state: 'loading', anchorTime, payload: null, at: null, reason: null }
+    return { state: 'loading', anchorTime, payload: null, at: null, turn: null, reason: null }
   }
   // A superseded snapshot keeps rendering with its OWN `at` until the answer
   // for the newest anchor lands: a panel that blinked to a loading card on
   // every catalog re-emission would misreport a healthy refresh as a failure.
   if (entry.fetch.status === 'unavailable') return unavailable(anchorTime, entry.fetch.reason)
-  return { state: 'ok', anchorTime, payload: entry.fetch.payload, at: entry.fetch.at, reason: null }
+  return { state: 'ok', anchorTime, payload: entry.fetch.payload, at: entry.fetch.at, turn: entry.fetch.turn, reason: null }
 }

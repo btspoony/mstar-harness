@@ -590,12 +590,20 @@ describe('workflow panel — full fixture renders every section (spec §2)', () 
     expect(html).toContain('dsh is highly customizable (client plugins + slot registry)')
   })
 
-  it('renders the freshness marker (last-updated + refresh note)', async () => {
+  it('renders the freshness marker (the served snapshot\u2019s own emission, never "live")', async () => {
     expect(html).toContain('data-mstar-freshness')
-    // The freshness marker is the SERVED snapshot's own `at` (never "live").
+    // The freshness marker is the SERVED snapshot's own `at` (never "live") …
     expect(html).toMatch(/snapshot\s+\S+/)
     expect(html).toContain(`data-mstar-freshness-at="${new Date(ANCHOR_TIME).toISOString()}"`)
-    expect(html).toContain('snapshot from this session’s last catalog emission')
+    // … plus the agent turn it was written for, so the footer names WHICH
+    // emission the panel is showing. That is what keeps it true when the
+    // current turn's write failed and the stored entry is an earlier one: the
+    // copy names the store's record instead of claiming to be the last emission.
+    expect(html).toContain('data-mstar-freshness-turn="')
+    expect(html).toMatch(/turn\s+\d+/)
+    expect(html).toContain('the stored snapshot for this session')
+    // …and it must NOT re-introduce the claim that this is the last emission.
+    expect(html).not.toContain('last catalog emission')
   })
 })
 
