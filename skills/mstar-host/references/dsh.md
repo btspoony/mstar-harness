@@ -36,7 +36,14 @@ or a custom profile).
   automatically by `ClientModuleHostService` — no separate profile layer or
   install step. It registers a **`conversation.view`** view-ring tab
   (`id: 'mstar-workflow'`, `order: 20`) labeled **"MStar 工作流" / "MStar
-  Workflow"** rendering the latest `mstar-engine-status` catalog row as the
+  Workflow"** rendering the latest `mstar-engine-status` catalog **anchor** row
+  — the persisted source is the bare first-party `plugin` arm
+  (`{ kind: 'plugin', plugin: 'mstar-engine-status', form: 'catalog' }`, no
+  payload members), and the payload is fetched from the host's
+  `/api/mstar/engineStatus` endpoint (the gateway owns the route; the browser
+  half calls `connection.rpc.call('/api', 'mstar/engineStatus', { args: { sessionId, cwd } })`
+  and renders the session's stored snapshot, or an explicit unavailable reason) —
+  as the
   **MStar Workflow layout** — a right sidebar (plans ≤5 in time-desc order +
   `+N more`, open residual findings ≤10 with severity chips + overflow hint,
   policy with **enforcement first** then push / worktree / control worktree,
@@ -208,9 +215,11 @@ or a custom profile).
   the zones stack vertically. Pure `projectGraph` projection (never throws,
   explicit degraded states — muted empty states, never orange warn boxes).
   The branches block left the sidebar in plan `20260810-panel-sidebar-info`
-  (its anchor fields stay in the catalog source; the iteration zone renders
-  them via plan `20260810-panel-canvas-zones`); refresh follows the session
-  snapshot, no polling — while the main agent is ACTIVELY orchestrating, a
+  (its anchor fields ride the row's per-session snapshot payload, NOT the
+  persisted source — the source is the bare first-party `plugin` arm; the
+  iteration zone renders them via plan `20260810-panel-canvas-zones`); refresh
+  follows the session snapshot, no polling — while the main agent is ACTIVELY
+  orchestrating, a
   ledger record (dispatch/settle) invalidates the workspace's TTL-cached
   catalog row so the next pre-step rebuilds and (digest text change)
   re-injects it, and the panel refreshes per step (seconds, not the 60 s TTL);
