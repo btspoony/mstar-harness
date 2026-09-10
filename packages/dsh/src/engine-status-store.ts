@@ -293,6 +293,15 @@ type WriteLoad =
  * (the caller degrades with that reason and touches nothing). The read rule and
  * the write rule are the same rule: what the reader must not parse is what the
  * writer must not overwrite.
+ *
+ * That rule applies at the ENTRY level too, and it is the reason this function
+ * refuses rather than filters: the write replaces the whole file, so silently
+ * dropping anything it cannot parse would let a build destroy data a DIFFERENT
+ * build wrote — an upgrade/downgrade overlap where a newer plugin's records
+ * (a bumped record version, or a bucket shape this build does not model) are
+ * erased by an older plugin's next write, including other sessions' buckets. A
+ * store this build does not fully understand is therefore refused whole, never
+ * rewritten in part.
  */
 function loadForWrite(harnessDir: string): WriteLoad {
   let raw: string
@@ -315,11 +324,15 @@ function loadForWrite(harnessDir: string): WriteLoad {
   }
   const entries = sessionMap()
   for (const [key, value] of Object.entries(parsed.entries)) {
-    if (!Array.isArray(value)) continue
+    // A bucket that is not an array, or an entry this build cannot parse (an
+    // unknown record version, a foreign shape), is unrecognized content: refuse
+    // instead of dropping it on the floor of a full-file rewrite.
+    if (!Array.isArray(value)) return { kind: 'refused', reason: 'store-entry-schema' }
     const kept: EngineStatusSnapshotEntry[] = []
     for (const candidate of value) {
       const entry = asEntry(candidate)
-      if (entry !== undefined) kept.push(entry)
+      if (entry === undefined) return { kind: 'refused', reason: 'store-entry-schema' }
+      kept.push(entry)
     }
     if (kept.length > 0) entries[key] = kept
   }

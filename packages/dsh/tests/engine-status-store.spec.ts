@@ -136,6 +136,37 @@ describe('engine-status snapshot store — write + schema', () => {
     expect(readFileSync(engineStatusSnapshotPath(harness), 'utf8')).toBe(newer)
   })
 
+  it('REFUSES a store holding a record version this build does not know — it never deletes it', () => {
+    // Upgrade/downgrade overlap: a newer plugin wrote `rv: 2` records (possibly
+    // for other sessions) while keeping the envelope at `sv: 1`. The write is a
+    // full-file replace, so filtering the unknown record out would ERASE it.
+    const harness = freshHarnessDir()
+    mkdirSync(join(harness, 'snapshots'), { recursive: true })
+    const newer = JSON.stringify({
+      sv: 1,
+      entries: {
+        ses_other: [{ rv: 2, cwd: '/other', at: '2026-09-10T12:00:00.000Z', turn: 9, payload: { v: 2 } }],
+        ses_mine: [{ rv: 1, cwd: '/proj', at: '2026-09-10T11:00:00.000Z', turn: 1, payload: { v: 1 } }],
+      },
+    })
+    writeFileSync(engineStatusSnapshotPath(harness), newer)
+    expect(writeEngineStatusSnapshot(harness, { sessionId: 'ses_mine', cwd: '/proj', turn: 5, payload: payload(5) }))
+      .toEqual({ kind: 'degraded', reason: 'store-entry-schema' })
+    // The other session's newer record is still there, byte for byte.
+    expect(readFileSync(engineStatusSnapshotPath(harness), 'utf8')).toBe(newer)
+    expect(readdirSync(join(harness, 'snapshots')).sort()).toEqual(['engine-status.json'])
+  })
+
+  it('REFUSES a store whose bucket is not an array, instead of dropping the bucket', () => {
+    const harness = freshHarnessDir()
+    mkdirSync(join(harness, 'snapshots'), { recursive: true })
+    const foreign = JSON.stringify({ sv: 1, entries: { ses_other: { rv: 1, cwd: '/other' } } })
+    writeFileSync(engineStatusSnapshotPath(harness), foreign)
+    expect(writeEngineStatusSnapshot(harness, { sessionId: 'ses_new', cwd: '/proj', turn: 5, payload: payload(5) }))
+      .toEqual({ kind: 'degraded', reason: 'store-entry-schema' })
+    expect(readFileSync(engineStatusSnapshotPath(harness), 'utf8')).toBe(foreign)
+  })
+
   it('still starts a fresh envelope when the store is simply absent', () => {
     const harness = freshHarnessDir()
     // A directory where the file belongs is NOT "absent": it is unreadable, so
