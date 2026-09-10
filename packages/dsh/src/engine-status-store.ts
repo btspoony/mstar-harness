@@ -86,7 +86,7 @@ export const ENGINE_STATUS_SNAPSHOT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000
  * Retention: global byte ceiling for one store — the bound the per-session
  * numbers above cannot express, since every session in a workspace shares this
  * one file. Calibrated on the measured emission payload (≈19 KB per entry,
- * ≈0.9 MB per session at the 50-entry cap) to ≈16 MB, i.e. ≈40 sessions before
+ * ≈0.9 MB per session at the 50-entry cap) to ≈16 MB, i.e. ≈17 sessions before
  * the oldest buckets are evicted; the writing session is never the one evicted.
  */
 export const ENGINE_STATUS_SNAPSHOT_MAX_BYTES = 16 * 1024 * 1024
