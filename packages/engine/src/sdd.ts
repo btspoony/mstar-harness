@@ -480,7 +480,7 @@ export function reviewPackage(base: string, head: string, outFile?: string, opts
   // list is never a legitimate review input, so refuse before any write.
   if (commits.length === 0) {
     throw new SddScriptError(
-      `review package range ${base}..${head} is empty in ${cwd} — refusing to write an empty package ` +
+      `review package range ${base}..${head} is empty in ${cwd} \u2014 refusing to write an empty package ` +
         `(run the command from the branch worktree, not the control checkout)`,
       1,
     );
