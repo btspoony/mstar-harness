@@ -7,6 +7,53 @@
 
 ---
 
+## 0. 现状复核 — 本文件的「现状盘点」口径已过期
+
+§1–§3 是一次**冻结基线**（entry-split 拆分当时）的盘点，保留为历史记录。它不再描述当前 `src/`:
+拆分后的多轮迭代新增了多个模块、重命名了符号、并让导出面增长——按 §1 的表读代码会读到不存在的名字。**以本节为现状口径**，文档/接线/所有权问题看这里。
+
+### 0.1 符号重命名（本文件旧文中的名字已不存在）
+
+| 旧名（§1 §3 中的写法） | 现名 | 位置 |
+|---|---|---|
+| `buildCatalogSources` | `buildCatalogPayload` | `src/gates/catalog.ts` |
+| `catalogSourcesFor` | `catalogPayloadFor`（模块内部函数，不导出） | `src/gates/catalog.ts` |
+
+### 0.2 顶层模块（`src/`）与职责
+
+| 模块 | 职责 | 备注 |
+|---|---|---|
+| `index.ts` | 插件 manifest（`name`/`inject`）+ `Config` + cordis augmentation + **`apply()` 启动接线** + 全部公共 re-export | 仍为唯一 re-export 汇聚点（禁 barrel 不变） |
+| `service.ts` | `DshMstar` service（`ctx.dshMstar`） | |
+| `types.ts` | 载荷/视图类型（`MstarEngineStatusSource`/`MstarEngineStatusPayload`/`MstarHarnessState`/`MstarIterationGateView` + agent-flow 视图类型） | |
+| `invariant.ts` | 单一版本不变量的独立入口（`@mstar-harness/dsh/invariant`） | |
+| `engine-status-wire.ts` | **新增**：引擎状态信道的**唯一**线上地址声明（`/api` + `mstar/engineStatus` + namespace/method 字面量） | 无 import、无副作用 → 宿主半体与浏览器半体各自内联；两侧测试互钉 |
+| `engine-status-store.ts` | **新增**：`{HARNESS_DIR}/snapshots/engine-status.json` 持久化存储（写入 = 目录写锁 + 临时文件 rename；读取 = 显式 `unavailable` 原因） | 见 §0.3 依赖边 |
+| `engine-status-endpoint.ts` | **新增**：宿主半体 `/api/mstar/engineStatus`（typert 服务 + invocation descriptor + 可选单元安装/去重） | 同上 |
+
+### 0.3 依赖边（现状图）
+
+```
+index.ts ──> gates/* + service + types + engine-status-{wire,endpoint}
+gates/catalog.ts ──> engine-status-store.ts            （发射时持久化快照）
+engine-status-store.ts ──> gates/agent-flow.ts         （复用 withWorkflowDirLock）
+engine-status-endpoint.ts ──> engine-status-store.ts + engine-status-wire.ts + gates/_shared.ts（type-only）
+gates/* ──> gates/_shared.ts
+```
+
+- **不再是「entry 是唯一扇出点」**：§3.3 的「gate 之间只有单向边」说法已被两条新边取代——`gates/catalog.ts → engine-status-store.ts → gates/agent-flow.ts` 是自上而下的**跨层**边（顶层模块依赖 gate），反向 `gates/catalog.ts` 不 import 顶层模块本身，但顶层模块 import gate，因此顶层与 `gates/` 之间**双向**。新增顶层模块时按此图检查是否成环。
+- `engine-status-wire.ts` 必须是**无依赖**模块：浏览器半体的 bundle 纯净门禁只拒绝非内联安全的 `@deepseek-ai/*` **值**导入，而该模块连 import 都没有，两侧包图都能内联。
+
+### 0.4 导出面计数（现状）
+
+`§2` 的「17 值导出 + 11 类型导出」已过期。当前公共面 = **31 个值导出**（`Object.keys` 运行时可见）+ **27 个 type-only 导出** + **1 个 cordis augmentation**，逐名冻结在 `tests/export-surface.spec.ts`（`FROZEN_VALUE_EXPORTS` / `FROZEN_TYPE_ONLY_EXPORTS`）——以该文件为准，本文件不再逐名重复。
+
+### 0.5 浏览器半体（`src/client/`）
+
+`§3` 未覆盖：`src/client/index.ts` 是客户端插件入口（`inject` + `apply`），`src/client/panel/**` 是面板（`PanelView`/`TabNav`/`sidebar`/`state-section`/`panel-meta` + `pages/`（AgentCanvas / EventLog / IterationTask / IterationInfo）+ `zones/`（Legend / ProjectRollup / TaskBoard）+ `graph/`（project-graph / event-log / schema））。数据路径见上表 `engine-status-client.ts`/`use-mstar-engine-status.ts`/`guards.ts`（缓存、锚点行、线载荷校验）。
+
+---
+
 ## 1. 现状盘点 — `src/index.ts`（3184 行）
 
 | # | Section | 行范围 | 内容 |
