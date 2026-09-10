@@ -985,6 +985,11 @@ function persistEngineStatusSnapshot(
 ): void {
   const sessionId = sessionHeaderIdOf(agent)
   if (sessionId === undefined || cwd === undefined) return
+  // No harness root ⇒ nothing to key a snapshot to: the endpoint answers the
+  // explicit unavailable state for that workspace anyway, so this is a normal
+  // composition (a workspace that never initialized a harness) rather than a
+  // degraded write — skip it without a warn per turn.
+  if (harnessDir === null) return
   const result = writeEngineStatusSnapshot(harnessDir, {
     sessionId,
     cwd,
