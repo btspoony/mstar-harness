@@ -1,5 +1,5 @@
 /**
- * Engine-status pre-step catalog — the ONE unified `mstar-engine-status`
+ * Engine-status pre-step catalog — the ONE unified `mstar-engine`
  * row appended at `agent/pre-step`. *
  * `preStepCatalogListener` delegates through `next()` and appends the unified
  * catalog message (watermark fields + iteration phase-gate section +
@@ -117,7 +117,7 @@ function pluginVersion(): string {
  * {@link engineStatusPayload} instead.
  */
 function engineStatusSource(): MstarEngineStatusSource {
-  return { kind: 'plugin', plugin: 'mstar-engine-status', form: 'catalog' }
+  return { kind: 'plugin', plugin: 'mstar-engine', form: 'catalog' }
 }
 
 /**
@@ -853,7 +853,7 @@ function iterationGateSource(harnessDir: string | null): MstarIterationGateView 
  * Advisory `agent/pre-step` waterfall listener (agent
  * catalog): delegates through `next()` (never `reject` — that would block the
  * step — and never replaces the delegated messages) and appends the ONE
- * unified `mstar-engine-status` catalog message to the composed step
+ * unified `mstar-engine` catalog message to the composed step
  * messages, so the durable session log carries it (model-visible ⟺ logged,
  * MessageSource form): the `<mstar_engine_status>` block renders the
  * watermark fields (version, harness dir, enforcement), plus the iteration

@@ -811,7 +811,7 @@ export function apply(ctx: Context, config: Config): void {
   // Engine-status catalog — advisory `agent/pre-step` waterfall listener
   // (agent catalog): calls `next()` (never vetoes or
   // replaces the delegated messages) and appends the ONE unified
-  // `mstar-engine-status` catalog message to the composed step messages,
+  // `mstar-engine` catalog message to the composed step messages,
   // so the session log carries the engine status + iteration phase gate +
   // workspace-state digest (model-visible ⟺ logged).
   //

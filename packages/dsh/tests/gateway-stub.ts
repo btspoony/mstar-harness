@@ -31,7 +31,7 @@ export const SESSION_CWD = '/proj'
 export const SNAPSHOT_AT = '2024-07-03T09:23:20.000Z'
 
 /** The locked anchor source: exactly three members, never a payload. */
-export const ANCHOR_SOURCE = { kind: 'plugin', plugin: 'mstar-engine-status', form: 'catalog' } as const
+export const ANCHOR_SOURCE = { kind: 'plugin', plugin: 'mstar-engine', form: 'catalog' } as const
 
 /** One recorded gateway call (the literal arguments, for request-shape asserts). */
 export interface GatewayCall {
@@ -121,7 +121,7 @@ export function userNode(): ConversationNode {
   return { kind: 'user', seq: 1, time: 1_719_999_000_000, content: [], source: null }
 }
 
-/** One `mstar-engine-status` anchor row at the given message time. */
+/** One engine-status anchor row (the current `mstar-engine` identity) at the given message time. */
 export function anchorRow(seq: number, time: number): ConversationNode {
   return {
     kind: 'context',

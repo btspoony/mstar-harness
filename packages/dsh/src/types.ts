@@ -1,5 +1,5 @@
 /**
- * `mstar-engine-status` catalog source + payload: the durable `catalog`-form
+ * `mstar-engine` catalog source + payload: the durable `catalog`-form
  * MessageSource the plugin appends to every composed step at
  * `agent/pre-step`, so the model-visible engine-status row is
  * reconstructable from the session log without re-parsing its prose
@@ -27,15 +27,22 @@ import type { EnforcementFlag } from '@mstar-harness/engine'
  * `plugin` arm with a CLOSED member set — exactly these three keys, never a
  * fourth.
  *
- * `plugin` carries the plugin's identity literal and `form: 'catalog'` the
- * row's first-party presentation; both are opaque, already-admitted
- * vocabulary at every released session-format edge. Everything the row
- * publishes about the workspace lives in
- * {@link MstarEngineStatusPayload}, which never rides `source`.
+ * `plugin` carries the plugin's identity and `form: 'catalog'` the row's
+ * first-party presentation; both are opaque, already-admitted vocabulary at
+ * every released session-format edge. Everything the row publishes about the
+ * workspace lives in {@link MstarEngineStatusPayload}, which never rides
+ * `source`.
+ *
+ * The `plugin` union is the PERSISTED-LOG vocabulary, not a write-time
+ * choice: the plugin emits `mstar-engine`, while rows emitted by shipped
+ * builds before 2026-09-11 persist `mstar-engine-status` in already-written
+ * session logs. Both are valid persisted rows; the panel's anchor reader
+ * accepts both (data compat for persisted session logs, not a code-compat
+ * layer).
  */
 export interface MstarEngineStatusSource {
   readonly kind: 'plugin'
-  readonly plugin: 'mstar-engine-status'
+  readonly plugin: 'mstar-engine' | 'mstar-engine-status'
   readonly form: 'catalog'
 }
 

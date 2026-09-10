@@ -1469,7 +1469,7 @@ function catalogRowOf(decision: PreStepDecision): { row: UserMessage; source: Ms
   const row = decision.messages.at(-1)
   if (row === undefined) throw new Error('missing catalog row')
   const source = row.source
-  if (source.kind !== 'plugin' || source.plugin !== 'mstar-engine-status') throw new Error('missing catalog row')
+  if (source.kind !== 'plugin' || source.plugin !== 'mstar-engine') throw new Error('missing catalog row')
   return { row, source: source as MstarEngineStatusSource }
 }
 

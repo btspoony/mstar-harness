@@ -28,7 +28,7 @@ describe('dsh client-seam — catalog reading (spec §5)', () => {
    * gateway), and a fourth key here would be refused by every released
    * session-format edge.
    */
-  const anchorSource = { kind: 'plugin', plugin: 'mstar-engine-status', form: 'catalog' } as const
+  const anchorSource = { kind: 'plugin', plugin: 'mstar-engine', form: 'catalog' } as const
   const engineRow = {
     kind: 'context',
     seq: 2,
@@ -48,7 +48,7 @@ describe('dsh client-seam — catalog reading (spec §5)', () => {
     }
   })
 
-  it('reads the latest mstar-engine-status catalog row from the snapshot nodes', () => {
+  it('reads the latest engine-status catalog row from the snapshot nodes', () => {
     const store = createSnapshotStore<ChatSnapshot>({
       legacy: {
         nodes: [

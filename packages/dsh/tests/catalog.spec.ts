@@ -22,7 +22,7 @@
  * MUST call `next()` and build on the delegated decision; it never returns
  * `reject` (would block the step) and never replaces the delegated messages
  * (would drop them). It appends one `catalog`-form MessageSource named
- * `mstar-engine-status` whose content is the unified mstar version
+ * `mstar-engine` whose content is the unified mstar version
  * (own manifest, single-version invariant with the bundled engine), the
  * compass enforcement mode (`resolveCompassEnforcement`), the harness dir,
  * — so the model-visible row is reconstructable from the session log
@@ -83,7 +83,7 @@ function catalogRowOf(decision: PreStepDecision): { row: UserMessage; source: Ms
   const row = decision.messages.at(-1)
   if (row === undefined) throw new Error('missing catalog row')
   const source = row.source
-  if (source.kind !== 'plugin' || source.plugin !== 'mstar-engine-status') throw new Error('missing catalog row')
+  if (source.kind !== 'plugin' || source.plugin !== 'mstar-engine') throw new Error('missing catalog row')
   return { row, source: source as MstarEngineStatusSource }
 }
 
@@ -108,7 +108,7 @@ describe('mstar-engine-status catalog — pre-step composition (REAL-composition
     const catalog = lastMessage(decision)
     expect(catalog?.role).toBe('user')
     // The PERSISTED source is the first-party plugin arm and nothing else.
-    expect(catalog?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine-status', form: 'catalog' })
+    expect(catalog?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine', form: 'catalog' })
     // The facts the row renders from are not persisted with it — they come
     // from the same builder the pre-step listener used.
     expect(buildCatalogPayload(app.ctx, app.harnessDir)).toMatchObject({
@@ -147,7 +147,7 @@ describe('mstar-engine-status catalog — pre-step composition (REAL-composition
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
 
     const catalog = lastMessage(decision)
-    expect(catalog?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine-status', form: 'catalog' })
+    expect(catalog?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine', form: 'catalog' })
     expect(buildCatalogPayload(app.ctx, app.harnessDir).enforcement).toEqual({ hard: true, source: 'compass' })
     const text = catalog?.content[0]?.type === 'text' ? catalog.content[0].text : ''
     expect(text).toContain('enforcement: hard (compass)')
@@ -166,7 +166,7 @@ describe('mstar-engine-status catalog — pre-step composition (REAL-composition
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
 
     const catalog = lastMessage(decision)
-    expect(catalog?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine-status', form: 'catalog' })
+    expect(catalog?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine', form: 'catalog' })
     // The STALE watermark is observable in the rendered text (the payload is
     // not persisted on the row, so the text is the row's own record of it):
     // the boot build saw no compass, and the post-boot compass is not read
@@ -189,7 +189,7 @@ describe('mstar-engine-status catalog — pre-step composition (REAL-composition
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
 
     const catalog = lastMessage(decision)
-    expect(catalog?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine-status', form: 'catalog' })
+    expect(catalog?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine', form: 'catalog' })
     // The optional `iteration` key is ABSENT from the payload — never
     // `iteration: undefined`: the payload is the wire value a consumer
     // receives, so the lossless-JSON discipline still applies to it.
@@ -231,7 +231,7 @@ describe('mstar-engine-status catalog — pre-step composition (REAL-composition
     expect(decision.kind).toBe('enter')
     expect(decision.kind === 'enter' && decision.messages.slice(0, -1)).toEqual(replaced)
     const catalog = lastMessage(decision)
-    expect(catalog?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine-status', form: 'catalog' })
+    expect(catalog?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine', form: 'catalog' })
   })
 
   it('observes the step abort signal — an aborted step publishes no catalog and returns the delegated decision ', async () => {
@@ -984,7 +984,7 @@ describe('catalog teardown — fiber.dispose removes the pre-step listener (HMR-
       // Mount 1 — the catalog is appended on pre-step.
       const fiber = await ctx.plugin(plugin, { harnessDir })
       const live = await ctx.waterfall('agent/pre-step', stepPayload(inbox), defaultEnter(inbox))
-      expect(lastMessage(live)?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine-status', form: 'catalog' })
+      expect(lastMessage(live)?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine', form: 'catalog' })
 
       // Dispose — the listener is unwound: the terminal decision passes through unchanged.
       await fiber.dispose()
@@ -994,7 +994,7 @@ describe('catalog teardown — fiber.dispose removes the pre-step listener (HMR-
       // HMR reload — a fresh fiber restores the catalog contribution.
       const reloaded = await ctx.plugin(plugin, { harnessDir })
       const again = await ctx.waterfall('agent/pre-step', stepPayload(inbox), defaultEnter(inbox))
-      expect(lastMessage(again)?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine-status', form: 'catalog' })
+      expect(lastMessage(again)?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine', form: 'catalog' })
       await reloaded.dispose()
     } finally {
       await ctx.fiber.dispose().catch(() => {})
