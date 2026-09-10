@@ -45,7 +45,7 @@ import { describe, expect, it } from 'bun:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
-import type { MstarEngineStatusSource } from '../src/types'
+import type { MstarEngineStatusPayload } from '../src/types'
 import type { AgentFlowEventView, AgentFlowView } from '../src/types'
 import type { EnforcementSource } from '@mstar-harness/engine'
 import { clientExports } from './client-bundles.ts'
@@ -76,9 +76,7 @@ function newLocale(): LocaleRuntime {
 /** Minimal catalog source: harness present, no agentFlow → the degraded
  * branch (full idle roster + expected skeleton + a STATIC supervise edge,
  * dimmed). */
-const baseSource: MstarEngineStatusSource = {
-  kind: 'mstar-engine-status',
-  form: 'catalog',
+const baseSource: MstarEngineStatusPayload = {
   version: '2.1.1',
   harnessDir: '/proj/.mstar',
   enforcement: { hard: false, source: 'iteration compass' as EnforcementSource },
@@ -135,7 +133,7 @@ function settleEvent(over: { ts: number; agent?: string; outcome?: 'ok' | 'error
 }
 
 /** A source whose `state.agentFlow` carries the given events (latest-first). */
-function flowSource(events: readonly unknown[]): MstarEngineStatusSource {
+function flowSource(events: readonly unknown[]): MstarEngineStatusPayload {
   return {
     ...baseSource,
     state: {
@@ -149,7 +147,7 @@ function flowSource(events: readonly unknown[]): MstarEngineStatusSource {
  * with the given ledger events — the emphasis-tier render tests need an
  * ACTIVE iteration (the base `flowSource` carries none → `currentStep`
  * null → no emphasis override). */
-function phase2Source(events: readonly unknown[]): MstarEngineStatusSource {
+function phase2Source(events: readonly unknown[]): MstarEngineStatusPayload {
   return {
     ...flowSource(events),
     iteration: {
@@ -169,7 +167,7 @@ function phase2Source(events: readonly unknown[]): MstarEngineStatusSource {
 }
 
 /** Render the AgentCanvasPage to static HTML (optional locale / pan seed). */
-function agentsHtml(source: MstarEngineStatusSource, lang: 'en' | 'zh' = 'en', initialPan?: PanState): string {
+function agentsHtml(source: MstarEngineStatusPayload, lang: 'en' | 'zh' = 'en', initialPan?: PanState): string {
   const locale = newLocale()
   locale.register(NS, { zh, en })
   locale.setLocale(lang)
@@ -789,7 +787,7 @@ describe('agent canvas — emphasis tiers (plan  T4, design doc §3)', () => {
 
 describe('agent canvas — Phase 1/2 groups + current-plan annotation ', () => {
   /** A phase-2 source whose state.plans carries the given InProgress rows. */
-  function planSource(inProgress: string[]): MstarEngineStatusSource {
+  function planSource(inProgress: string[]): MstarEngineStatusPayload {
     return {
       ...phase2Source([dispatchEvent({ ts: 1, role: 'fullstack-dev', agent: 'a1' })]),
       state: {

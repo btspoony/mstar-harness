@@ -1,14 +1,21 @@
 /**
- * Empty-state render tests for the no-harness branch (plan
- *  Task 3): when the catalog source carries no
- * harness (`harnessDir === null && state === null && iteration == null`), the
- * panel renders a CENTERED inactive-state card — icon (`data-mstar-empty-icon`)
- * + title (the reused `empty.no-harness` key, `data-mstar-empty="no-harness"`)
- * + hint (`empty.no-harness-hint`) inside a card container
- * (`data-mstar-empty-card`), with the freshness footer, and NO tabs / NO
- * sidebar / NO meta dock — replacing the former left-aligned hint. A
- * harness-present source keeps the normal panel unchanged (tabs + sidebar,
- * no centered card). The waiting branch (no catalog row) is untouched.
+ * Empty-state render tests for the panel's degraded branches: the no-harness
+ * card, the waiting state, and the EXPLICIT unavailable state.
+ *
+ * - no harness (`harnessDir === null && state === null && iteration == null`):
+ *   a CENTERED inactive-state card — icon (`data-mstar-empty-icon`) + title
+ *   (the reused `empty.no-harness` key, `data-mstar-empty="no-harness"`) +
+ *   hint (`empty.no-harness-hint`) inside a card container
+ *   (`data-mstar-empty-card`), with the freshness footer, and NO tabs / NO
+ *   sidebar / NO meta dock; a harness-present source keeps the normal panel.
+ * - waiting (no anchor row): its own anchor, no centered card.
+ * - unavailable (the gateway answered a degraded result, or the transport
+ *   failed): its own anchor + the machine-readable reason — the panel NEVER
+ *   renders an empty plans list / event log / zeroed counter instead.
+ *
+ * The panel's data path is the host's shared `/api` typert gateway (the
+ * persisted catalog row is only the anchor), so these specs stub THE CHANNEL
+ * through `./gateway-stub.ts` and render the settled state.
  *
  * The CSS contract (single-column no-harness root + the centered muted card)
  * is asserted against the raw panel.module.css text — under `bun test` the
@@ -22,18 +29,26 @@ import { readFileSync } from 'node:fs'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
-import type { ConversationNode } from '@deepseek-ai/dsh-client-ui-conversation/client'
-import type { ChatSnapshot } from '@deepseek-ai/dsh-client-ui-chat/client'
-import type { SessionId } from '@deepseek-ai/dsh-session'
-import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
-import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
-import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import { clientExports } from './client-bundles.ts'
 import { Context } from '@deepseek-ai/cordis'
-import type { MstarEngineStatusSource } from '../src/types'
+import type { MstarEngineStatusPayload } from '../src/types'
 import type { EnforcementSource } from '@mstar-harness/engine'
 import { en, NS, zh } from '../src/client/panel/locale'
 import { PanelView } from '../src/client/panel/PanelView'
+import { MstarEngineStatusClient } from '../src/client/panel/engine-status-client'
+import {
+  anchorSnapshot,
+  bindUseChat,
+  bindUseSessions,
+  gatewayError,
+  SESSION,
+  SESSION_CWD,
+  SESSION_ID,
+  SNAPSHOT_AT,
+  servedSnapshot,
+  settleRender,
+  stubGateway,
+} from './gateway-stub.ts'
 
 // The REAL client service values — the store is a plain Node-ESM module
 // (direct import); LocaleRuntime is a cordis service loaded from the browser
@@ -50,9 +65,7 @@ function newLocale(): LocaleRuntime {
 /* ------------------------------ fixtures ------------------------------ */
 
 /** `state` null + harnessDir null + no iteration ⇒ no-harness state (spec §3). */
-const noHarnessSource: MstarEngineStatusSource = {
-  kind: 'mstar-engine-status',
-  form: 'catalog',
+const noHarnessSource: MstarEngineStatusPayload = {
   version: '2.1.1',
   harnessDir: null,
   enforcement: { hard: false, source: 'iteration compass' as EnforcementSource },
@@ -60,9 +73,7 @@ const noHarnessSource: MstarEngineStatusSource = {
 }
 
 /** Harness present (state renders normally, no iteration) ⇒ the normal panel branch. */
-const harnessSource: MstarEngineStatusSource = {
-  kind: 'mstar-engine-status',
-  form: 'catalog',
+const harnessSource: MstarEngineStatusPayload = {
   version: '2.1.1',
   harnessDir: '/proj/.mstar',
   enforcement: { hard: false, source: 'iteration compass' as EnforcementSource },
@@ -89,71 +100,38 @@ const harnessSource: MstarEngineStatusSource = {
 
 /* --------------------------- render plumbing --------------------------- */
 
-/** Session-standard kit the view ring hands every conversation.view entry (stub faces; unused by the pure render). */
-function kitProps(overrides?: Partial<ConvViewProps>): ConvViewProps {
-  return {
-    sessionId: 's-1' as SessionId,
-    useChat: (() => null) as never,
-    useConversation: (() => null) as never,
-    useWorkspaces: (() => null) as never,
-    ...overrides,
-  } as unknown as ConvViewProps
-}
+const ANCHOR_TIME = 1_720_001_000_000
 
-/** Plain selector binding over the stub snapshot store (dev-time twin of the real uSES binding). */
-function bindUseChat(store: { getSnapshot(): ChatSnapshot }): SnapshotSelectorHook<ChatSnapshot> {
-  return function useSelector<S>(sel: (s: ChatSnapshot) => S): S {
-    return sel(store.getSnapshot())
-  }
-}
-
-/** Build a chat-target snapshot carrying the fixture source as the newest catalog row (spec §5 data path). */
-function snapshotFor(source: MstarEngineStatusSource | null, lastUpdated: number | null): ChatSnapshot {
-  const nodes: ConversationNode[] = [
-    { kind: 'user', seq: 1, time: 1_719_999_000_000, content: [], source: null },
-  ]
-  if (source !== null) {
-    nodes.push({
-      kind: 'context',
-      seq: 2,
-      time: lastUpdated ?? 1_720_001_000_000,
-      content: [],
-      source,
-      form: 'catalog',
-    } as unknown as ConversationNode)
-  }
-  return {
-    legacy: {
-      nodes,
-      turnTimings: new Map(),
-      turnEnds: new Map(),
-      partial: null,
-      runningCalls: [],
-    },
-  } as unknown as ChatSnapshot
-}
-
-/** Render the panel to static HTML through the real data path: snapshot store → useChat → hook → PanelView. */
-function panelHtml(
-  source: MstarEngineStatusSource | null,
+/**
+ * Render the panel to static HTML through the real data path: anchor snapshot
+ * → `useChat`/`useSessions` → hook → the `/api` gateway → `PanelView`. The
+ * first pass issues the gateway call; the returned markup is the settled one.
+ */
+async function panelHtml(
+  source: MstarEngineStatusPayload | null,
   lang: 'en' | 'zh' = 'en',
-  lastUpdated: number | null = 1_720_001_000_000,
-): string {
+  reply?: unknown,
+): Promise<string> {
   const locale = newLocale()
   locale.register(NS, { zh, en })
   locale.setLocale(lang)
-  const store = createSnapshotStore(snapshotFor(source, lastUpdated))
-  return renderToStaticMarkup(createElement(PanelView, {
-    ...kitProps({ useChat: bindUseChat(store) }),
+  const store = { getSnapshot: () => anchorSnapshot(source === null ? null : ANCHOR_TIME) }
+  const gateway = stubGateway(reply ?? servedSnapshot(source, { at: SNAPSHOT_AT }))
+  const engineStatus = new MstarEngineStatusClient(gateway.connection)
+  return settleRender(() => renderToStaticMarkup(createElement(PanelView, {
+    sessionId: SESSION,
+    useChat: bindUseChat(store),
+    useSessions: bindUseSessions(SESSION_ID, SESSION_CWD),
+    engineStatus,
     t: locale.bind(NS),
-  }))
+  } as never)))
 }
 
 /* ------------------------------- tests -------------------------------- */
 
 describe('workflow panel — no-harness centered inactive state ', () => {
-  it('no harness → centered inactive-state card (icon + title + hint + freshness), no tabs / sidebar / meta dock', () => {
-    const html = panelHtml(noHarnessSource)
+  it('no harness → centered inactive-state card (icon + title + hint + freshness), no tabs / sidebar / meta dock', async () => {
+    const html = await panelHtml(noHarnessSource)
     expect(html).toContain('data-mstar-panel="no-harness"')
     // The content-container anchor contract stays on the no-harness main.
     expect(html).toContain('data-mstar-graph')
@@ -170,8 +148,8 @@ describe('workflow panel — no-harness centered inactive state ', () => {
     expect(html).not.toContain('data-mstar-meta')
   })
 
-  it('card DOM order: icon → title → hint, all inside the card container', () => {
-    const html = panelHtml(noHarnessSource)
+  it('card DOM order: icon → title → hint, all inside the card container', async () => {
+    const html = await panelHtml(noHarnessSource)
     const cardStart = html.indexOf('data-mstar-empty-card')
     const icon = html.indexOf('data-mstar-empty-icon')
     const title = html.indexOf('data-mstar-empty="no-harness"')
@@ -185,15 +163,15 @@ describe('workflow panel — no-harness centered inactive state ', () => {
     expect(title).toBeLessThan(hint)
   })
 
-  it('zh locale localizes the card title + hint', () => {
-    const html = panelHtml(noHarnessSource, 'zh')
+  it('zh locale localizes the card title + hint', async () => {
+    const html = await panelHtml(noHarnessSource, 'zh')
     expect(html).toContain('data-mstar-empty-card')
     expect(html).toContain('未检测到 Morning Star harness')
     expect(html).toContain('未发现 .mstar/ harness 目录')
   })
 
-  it('with harness → the normal panel is unchanged: tabs + sidebar, no centered empty card', () => {
-    const html = panelHtml(harnessSource)
+  it('with harness → the normal panel is unchanged: tabs + sidebar, no centered empty card', async () => {
+    const html = await panelHtml(harnessSource)
     expect(html).toContain('data-mstar-panel="panel"')
     expect(html).toContain('data-mstar-tab-nav')
     expect(html).toContain('data-mstar-sidebar')
@@ -203,12 +181,31 @@ describe('workflow panel — no-harness centered inactive state ', () => {
     expect(html).not.toContain('data-mstar-empty="no-harness"')
   })
 
-  it('waiting branch (no catalog row) is untouched — its own anchor, no centered card', () => {
-    const html = panelHtml(null)
+  it('waiting branch (no anchor row) is untouched — its own anchor, no centered card', async () => {
+    const html = await panelHtml(null)
     expect(html).toContain('data-mstar-panel="waiting"')
     expect(html).toContain('data-mstar-empty="waiting"')
     expect(html).not.toContain('data-mstar-empty-card')
     expect(html).not.toContain('data-mstar-empty-icon')
+  })
+
+  it('unavailable branch: the transport failure renders its own anchor + reason — never a silently-empty panel', async () => {
+    const html = await panelHtml(harnessSource, 'en', gatewayError('timeout', 'gateway unreachable'))
+    expect(html).toContain('data-mstar-panel="unavailable"')
+    expect(html).toContain('data-mstar-empty="unavailable"')
+    expect(html).toContain('data-mstar-unavailable-reason="transport-error:timeout"')
+    expect(html).toContain('Engine-status snapshot unavailable (transport-error:timeout)')
+    // No data surfaces: no tabs, no sidebar, no kanban skeleton, no counters.
+    expect(html).not.toContain('data-mstar-tab-nav')
+    expect(html).not.toContain('data-mstar-sidebar')
+    expect(html).not.toContain('data-mstar-kanban')
+    expect(html).not.toContain('data-mstar-freshness')
+  })
+
+  it('unavailable branch localizes in zh', async () => {
+    const html = await panelHtml(harnessSource, 'zh', gatewayError('timeout'))
+    expect(html).toContain('data-mstar-empty="unavailable"')
+    expect(html).toContain('engine-status 快照不可用（transport-error:timeout）')
   })
 
   it('CSS contract: single-column no-harness root + centered muted card (flex center, no orange)', () => {
@@ -223,7 +220,7 @@ describe('workflow panel — no-harness centered inactive state ', () => {
     expect(card![0]).toContain('border: 1px solid var(--dsw-alias-border-l1)')
     expect(card![0]).toContain('border-radius: 8px')
     // Muted only — no orange/error state token on the card, and the file
-    // carries zero bare colors (the T4 theme audit stays green).
+    // carries zero bare colors (the theme audit stays green).
     expect(card![0]).not.toMatch(/state-(?:warn|error)-/)
     expect(cssText).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgba?\(/)
   })

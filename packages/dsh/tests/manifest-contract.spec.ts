@@ -49,6 +49,9 @@ const EXPECTED_INJECT = [
   '@deepseek-ai/dsh-client-store',
   '@deepseek-ai/dsh-client-ui-conversation',
   '@deepseek-ai/dsh-client-locale',
+  // The panel's data path: the shared `/api` typert gateway lives on the
+  // client `connection` service, so the panel row waits for it.
+  '@deepseek-ai/dsh-client-connection',
 ]
 
 describe('manifest contract: dsh.client (upstream client-modules discovery)', () => {

@@ -34,7 +34,7 @@
  */
 
 import { describe, expect, it } from 'bun:test'
-import type { MstarEngineStatusSource } from '../src/types'
+import type { MstarEngineStatusPayload } from '../src/types'
 import type { AgentFlowEventView, AgentFlowView } from '../src/types'
 import type { EnforcementSource } from '@mstar-harness/engine'
 import { pairSettleIndexes, projectGraph, type ZoneView } from '../src/client/panel/graph/project-graph'
@@ -46,9 +46,7 @@ import {
 import { PLAN_CAP, sortPlans } from '../src/client/panel/plan-sort'
 
 /** Full fixture: every evidence field populated (spec §3). */
-const fullSource: MstarEngineStatusSource = {
-  kind: 'mstar-engine-status',
-  form: 'catalog',
+const fullSource: MstarEngineStatusPayload = {
   version: '2.1.1',
   harnessDir: '/proj/.mstar',
   enforcement: { hard: true, source: 'iteration compass' as EnforcementSource },
@@ -96,7 +94,7 @@ const fullSource: MstarEngineStatusSource = {
 }
 
 /** Transition at Phase 4 → current step 4, next = merge-ready (Phase 5 as NEXT is legal). */
-const prDeliverySource: MstarEngineStatusSource = {
+const prDeliverySource: MstarEngineStatusPayload = {
   ...fullSource,
   iteration: {
     ...fullSource.iteration!,
@@ -105,9 +103,7 @@ const prDeliverySource: MstarEngineStatusSource = {
 }
 
 /** `state` null + no iteration ⇒ the no-harness predicate, but projection stays total. */
-const noHarnessSource: MstarEngineStatusSource = {
-  kind: 'mstar-engine-status',
-  form: 'catalog',
+const noHarnessSource: MstarEngineStatusPayload = {
   version: '2.1.1',
   harnessDir: null,
   enforcement: { hard: false, source: 'iteration compass' as EnforcementSource },
@@ -202,7 +198,7 @@ describe('projectGraph — iteration zone (spec §3)', () => {
       iteration: {
         ...fullSource.iteration!,
         gate: { ...fullSource.iteration!.gate, ok: 'yes' },
-      } as unknown as MstarEngineStatusSource['iteration'],
+      } as unknown as MstarEngineStatusPayload['iteration'],
     })
     expect(v.iteration.active).toBe(true)
     expect(v.iteration.currentStep).toBe(2)
@@ -217,7 +213,7 @@ describe('projectGraph — iteration zone (spec §3)', () => {
       iteration: {
         ...fullSource.iteration!,
         gate: { ...fullSource.iteration!.gate, violations: 'nope' },
-      } as unknown as MstarEngineStatusSource['iteration'],
+      } as unknown as MstarEngineStatusPayload['iteration'],
     })
     const current = v.iteration.steps.find((s) => s.state === 'current')!
     expect(current.verdict).toBe('pass')
@@ -230,7 +226,7 @@ describe('projectGraph — iteration zone (spec §3)', () => {
     const v = projectGraph({
       ...fullSource,
       iteration: { ...fullSource.iteration!, iterationId: undefined },
-    } as unknown as MstarEngineStatusSource)
+    } as unknown as MstarEngineStatusPayload)
     expect(v.iteration.active).toBe(true)
     expect(v.iteration.iterationId).toBeNull()
   })
@@ -319,7 +315,7 @@ describe('projectGraph — iteration zone (spec §3)', () => {
     const v = projectGraph({
       ...fullSource,
       iteration: { ...fullSource.iteration!, compassStatus: 'completed' },
-    } as unknown as MstarEngineStatusSource)
+    } as unknown as MstarEngineStatusPayload)
     expect(v.iteration.active).toBe(true)
     expect(v.iteration.currentStep).toBe(2)
     expect(v.iteration.verdict).toBe('pass')
@@ -373,7 +369,7 @@ describe('projectGraph — iteration steps done state ', () => {
     const v = projectGraph({
       ...fullSource,
       iteration: undefined,
-    } as unknown as MstarEngineStatusSource)
+    } as unknown as MstarEngineStatusPayload)
     expect(statesOf(v)).toEqual(['idle', 'idle', 'idle', 'idle', 'idle'])
   })
 })
@@ -383,7 +379,7 @@ describe('projectGraph — iteration disabled determination (spec §3 / §8)', (
     const v = projectGraph({
       ...fullSource,
       iteration: undefined,
-    } as unknown as MstarEngineStatusSource)
+    } as unknown as MstarEngineStatusPayload)
     expect(v.iteration.active).toBe(false)
     expect(v.iteration.currentStep).toBeNull()
     expect(v.iteration.iterationId).toBeNull()
@@ -406,7 +402,7 @@ describe('projectGraph — iteration disabled determination (spec §3 / §8)', (
       iteration: {
         ...fullSource.iteration!,
         gate: { ...fullSource.iteration!.gate, transition: undefined },
-      } as unknown as MstarEngineStatusSource['iteration'],
+      } as unknown as MstarEngineStatusPayload['iteration'],
     })
     expect(v.iteration.active).toBe(false)
     expect(v.iteration.currentStep).toBeNull()
@@ -422,7 +418,7 @@ describe('projectGraph — iteration disabled determination (spec §3 / §8)', (
       iteration: {
         ...fullSource.iteration!,
         gate: { ...fullSource.iteration!.gate, transition: 'phase-9-bogus' },
-      } as unknown as MstarEngineStatusSource['iteration'],
+      } as unknown as MstarEngineStatusPayload['iteration'],
     })
     expect(v.iteration.active).toBe(false)
     expect(v.iteration.currentStep).toBeNull()
@@ -433,7 +429,7 @@ describe('projectGraph — iteration disabled determination (spec §3 / §8)', (
     const v = projectGraph({
       ...fullSource,
       iteration: { ...fullSource.iteration!, gate: undefined },
-    } as unknown as MstarEngineStatusSource)
+    } as unknown as MstarEngineStatusPayload)
     expect(v.iteration.active).toBe(false)
     expect(v.degraded.iteration).toBe(true)
   })
@@ -442,7 +438,7 @@ describe('projectGraph — iteration disabled determination (spec §3 / §8)', (
     const v = projectGraph({
       ...fullSource,
       iteration: { ...fullSource.iteration!, gate: 42 },
-    } as unknown as MstarEngineStatusSource)
+    } as unknown as MstarEngineStatusPayload)
     expect(v.iteration.active).toBe(false)
     expect(v.iteration.currentStep).toBeNull()
     expect(v.iteration.steps.every((s) => s.state === 'idle')).toBe(true)
@@ -507,7 +503,7 @@ describe('projectGraph — tasks zone (spec §3)', () => {
     const v = projectGraph({
       ...fullSource,
       state: { ...fullSource.state!, plans: undefined },
-    } as unknown as MstarEngineStatusSource)
+    } as unknown as MstarEngineStatusPayload)
     expect(v.tasks.columns.every((c) => c.plans.length === 0 && c.count === 0)).toBe(true)
     expect(v.tasks.total).toBe(0)
     expect(v.degraded.plans).toBe(true)
@@ -524,7 +520,7 @@ describe('projectGraph — tasks zone (spec §3)', () => {
           { id: 'plan-y' },
           { id: 'plan-z', status: 'Done' },
         ],
-      } as unknown as MstarEngineStatusSource['state'],
+      } as unknown as MstarEngineStatusPayload['state'],
     })
     const merged = v.tasks.columns.find((c) => c.id === 'blocked-unknown')!
     // Raw non-string statuses degrade to an empty display string (never a guessed label).
@@ -538,7 +534,7 @@ describe('projectGraph — tasks zone (spec §3)', () => {
 
 describe('projectGraph — Done column sort + per-column cap (spec §3, shared plan-sort key)', () => {
   /** A source whose Done column carries the given rows (id → doneAt). */
-  function doneSource(rows: { id: string; doneAt: string | null }[]): MstarEngineStatusSource {
+  function doneSource(rows: { id: string; doneAt: string | null }[]): MstarEngineStatusPayload {
     return {
       ...fullSource,
       state: {
@@ -700,7 +696,7 @@ function settleRow(over: {
 }
 
 /** A full source whose `state.agentFlow` carries the given events (latest-first). */
-function flowSource(events: readonly unknown[]): MstarEngineStatusSource {
+function flowSource(events: readonly unknown[]): MstarEngineStatusPayload {
   return {
     ...fullSource,
     state: {
@@ -776,7 +772,7 @@ describe('projectGraph — agents zone skeleton (spec §4, plan 2)', () => {
     const project = (agentFlow: unknown) => projectGraph({
       ...fullSource,
       state: { ...fullSource.state!, agentFlow },
-    } as unknown as MstarEngineStatusSource).agents
+    } as unknown as MstarEngineStatusPayload).agents
     for (const bad of [42, 'nope', [], { events: 'nope' }, { events: 42 }, { no: 'events' }]) {
       expect(() => project(bad)).not.toThrow()
       expect(project(bad).degraded).toBe(true)
@@ -978,7 +974,7 @@ describe('projectGraph — agents zone status derivation (spec §4)', () => {
 describe('projectGraph — agents current-iteration filter ', () => {
   /** A source with the given plans + events, keeping `fullSource`'s ACTIVE
    * iteration (iterationId 'iter-00000810-panel-zones' → the compass branch). */
-  function iterSource(plans: readonly unknown[], events: readonly unknown[]): MstarEngineStatusSource {
+  function iterSource(plans: readonly unknown[], events: readonly unknown[]): MstarEngineStatusPayload {
     return {
       ...fullSource,
       state: {
@@ -1054,7 +1050,7 @@ describe('projectGraph — agents current-iteration filter ', () => {
           summary: [],
         } as unknown as AgentFlowView,
       },
-    } as unknown as MstarEngineStatusSource
+    } as unknown as MstarEngineStatusPayload
     const byKey = new Map(projectGraph(source).agents.entities.map((e) => [e.key, e]))
     // most-recent iteration = iter-00000812 (plan id date prefix 00000812 is the
     // max) → fullstack-dev () is lit; the older iter-00000810 is
@@ -1083,7 +1079,7 @@ describe('projectGraph — agents current-iteration filter ', () => {
           summary: [],
         } as unknown as AgentFlowView,
       },
-    } as unknown as MstarEngineStatusSource
+    } as unknown as MstarEngineStatusPayload
     const byKey = new Map(projectGraph(source).agents.entities.map((e) => [e.key, e]))
     // Same 8-digit date prefix (00000812): the more-recent doneAt (2026-08-14)
     // names the current iteration → qc-specialist (new) lit; fullstack-dev (old)
@@ -1794,7 +1790,7 @@ describe('projectGraph — SDD sub-buckets ', () => {
 function phaseSource(
   transition: 'phase-2-execute' | 'phase-3-close' | 'phase-4-pr-delivery',
   events: readonly unknown[] = [],
-): MstarEngineStatusSource {
+): MstarEngineStatusPayload {
   return {
     ...flowSource(events),
     iteration: { ...fullSource.iteration!, gate: { ...fullSource.iteration!.gate, transition } },
@@ -1863,7 +1859,7 @@ describe('projectGraph — agents emphasis tiers ', () => {
   })
 
   it('totality: emphasis is projected per entity on garbage branches too (never throws)', () => {
-    const view = projectGraph({ garbage: true } as unknown as MstarEngineStatusSource)
+    const view = projectGraph({ garbage: true } as unknown as MstarEngineStatusPayload)
     expect(view.agents.entities.length).toBeGreaterThan(0)
     for (const e of view.agents.entities) expect(e.emphasis).toBeNull()
   })
@@ -1880,7 +1876,7 @@ describe('projectGraph — agents emphasis tiers ', () => {
 
 describe('projectGraph — agents activePlanId / activePlanCount ', () => {
   /** A ledger-evidence source whose state.plans carries the given rows. */
-  function planRowsSource(rows: readonly { id?: string; status?: string }[]): MstarEngineStatusSource {
+  function planRowsSource(rows: readonly { id?: string; status?: string }[]): MstarEngineStatusPayload {
     return {
       ...flowSource([dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a1' })]),
       state: { ...fullSource.state!, plans: rows as never },
@@ -1911,10 +1907,10 @@ describe('projectGraph — agents activePlanId / activePlanCount ', () => {
   it('state null / plans missing / non-array → null / 0 (total function)', () => {
     expect(projectGraph({ ...fullSource, state: null }).agents.activePlanId).toBeNull()
     expect(projectGraph({ ...fullSource, state: null }).agents.activePlanCount).toBe(0)
-    const missing = projectGraph({ ...fullSource, state: { ...fullSource.state!, plans: undefined } } as unknown as MstarEngineStatusSource)
+    const missing = projectGraph({ ...fullSource, state: { ...fullSource.state!, plans: undefined } } as unknown as MstarEngineStatusPayload)
     expect(missing.agents.activePlanId).toBeNull()
     expect(missing.agents.activePlanCount).toBe(0)
-    const garbage = projectGraph({ ...fullSource, state: { ...fullSource.state!, plans: 'nope' } } as unknown as MstarEngineStatusSource)
+    const garbage = projectGraph({ ...fullSource, state: { ...fullSource.state!, plans: 'nope' } } as unknown as MstarEngineStatusPayload)
     expect(garbage.agents.activePlanId).toBeNull()
   })
 
@@ -2423,9 +2419,9 @@ describe('projectGraph — totality (spec §8)', () => {
   })
 
   it('never throws on a structurally garbage source (spec §8 full-garbage row)', () => {
-    expect(() => projectGraph({ garbage: true } as unknown as MstarEngineStatusSource)).not.toThrow()
-    expect(() => projectGraph({ iteration: 'not-an-object', state: 42 } as unknown as MstarEngineStatusSource)).not.toThrow()
-    expect(() => projectGraph({ iteration: { gate: { transition: { deep: true } } } } as unknown as MstarEngineStatusSource)).not.toThrow()
+    expect(() => projectGraph({ garbage: true } as unknown as MstarEngineStatusPayload)).not.toThrow()
+    expect(() => projectGraph({ iteration: 'not-an-object', state: 42 } as unknown as MstarEngineStatusPayload)).not.toThrow()
+    expect(() => projectGraph({ iteration: { gate: { transition: { deep: true } } } } as unknown as MstarEngineStatusPayload)).not.toThrow()
   })
 
   it('prototype-key transitions (__proto__/constructor/toString/hasOwnProperty) degrade, never crash', () => {
@@ -2438,7 +2434,7 @@ describe('projectGraph — totality (spec §8)', () => {
           ...fullSource.iteration!,
           gate: { ...fullSource.iteration!.gate, transition: key },
         },
-      } as unknown as MstarEngineStatusSource
+      } as unknown as MstarEngineStatusPayload
       expect(() => projectGraph(source)).not.toThrow()
       const v = projectGraph(source)
       expect(v.iteration.active).toBe(false)
@@ -2703,7 +2699,7 @@ describe('eventLogEntries — workflow rows ', () => {
 
 describe('projectGraph — project rollup zone (compass AC-4)', () => {
   it('projects roadmap milestones + open-residual severity counts from state.project', () => {
-    const source: MstarEngineStatusSource = {
+    const source: MstarEngineStatusPayload = {
       ...fullSource,
       state: {
         ...fullSource.state!,
@@ -2736,7 +2732,7 @@ describe('projectGraph — project rollup zone (compass AC-4)', () => {
     const garbage = projectGraph({
       ...fullSource,
       state: { ...fullSource.state!, project: { milestones: 'nope', openResiduals: [{ severity: 'nit' }] } },
-    } as unknown as MstarEngineStatusSource)
+    } as unknown as MstarEngineStatusPayload)
     expect(garbage.project).toEqual({ milestones: [], openResiduals: [{ severity: 'nit', count: 0 }] })
     // state null → empty rollup, never a throw.
     expect(projectGraph(noHarnessSource).project).toEqual({ milestones: [], openResiduals: [] })

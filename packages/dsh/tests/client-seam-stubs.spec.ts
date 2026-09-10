@@ -13,9 +13,12 @@
  * - registry semantics the panel depends on: undeclared register throws, list
  *   id/order/label (label thunk re-read per projection), `inject` declaration
  *   waiting, disposer cascade;
- * - catalog reading: latest `kind==='context' && form==='catalog' &&
- *   source.kind==='mstar-engine-status'` node over `ChatSnapshot.legacy.nodes`,
- *   driven by the `createSnapshotStore` test double.
+ * - anchor reading: latest `kind==='context' && form==='catalog'` node whose
+ *   FIRST-PARTY `plugin` source carries this plugin's identity — the panel's
+ *   own exported discriminator, over `ChatSnapshot.legacy.nodes`, driven by the
+ *   `createSnapshotStore` test double. The source is the locked three-member
+ *   arm (never a payload), and the payload itself travels over the host's
+ *   shared `/api` gateway (`use-mstar-engine-status` / `engine-status-client`).
  */
 
 import { describe, expect, it } from 'bun:test'
@@ -35,6 +38,7 @@ import type { ConvViewProps, ViewTab } from '@deepseek-ai/dsh-client-ui-conversa
 // key union (a second `declare module` for the same namespace would collide
 // under `typecheck:tests`).
 import { NS, type PanelKey } from '../src/client/panel/locale.ts'
+import { latestEngineStatusRow } from '../src/client/panel/use-mstar-engine-status.ts'
 
 // The REAL client service values — the store is a plain Node-ESM module
 // (direct import); SlotRegistry / LocaleRuntime are cordis services loaded
@@ -155,22 +159,31 @@ describe('dsh client-seam peer stubs — slot registry (conversation.view)', () 
 
 describe('dsh client-seam peer stubs — catalog reading (spec §5)', () => {
   const sessionId = 's-1' as SessionId
+  /**
+   * The persisted ANCHOR row: the first-party `plugin` arm with exactly three
+   * members — the payload is NOT on the source (it is fetched over the `/api`
+   * gateway), and a fourth key here would be refused by every released
+   * session-format edge.
+   */
+  const anchorSource = { kind: 'plugin', plugin: 'mstar-engine-status', form: 'catalog' } as const
   const engineRow = {
     kind: 'context',
     seq: 2,
     time: 1_720_000_000_000,
     content: [],
-    source: { kind: 'mstar-engine-status', form: 'catalog', version: '2.0.4', harnessDir: '/proj/.mstar', state: null },
+    source: anchorSource,
     form: 'catalog',
   } as unknown as ContextMessageNode
 
-  /** The panel's discriminator (spec §2.4): latest `mstar-engine-status` catalog row. */
-  const latestEngineStatus = (nodes: readonly ConversationNode[]) =>
-    [...nodes].reverse().find(
-      node => node.kind === 'context'
-        && node.form === 'catalog'
-        && (node.source as { kind?: string } | null)?.kind === 'mstar-engine-status',
-    )
+  /** The panel's OWN discriminator (spec §2.4) — imported, never re-declared. */
+  const latestEngineStatus = latestEngineStatusRow
+
+  it('the anchor source is exactly the three first-party members — never a payload', () => {
+    expect(Object.keys(anchorSource).sort()).toEqual(['form', 'kind', 'plugin'])
+    for (const payloadMember of ['version', 'harnessDir', 'enforcement', 'iteration', 'state']) {
+      expect(anchorSource).not.toHaveProperty(payloadMember)
+    }
+  })
 
   it('reads the latest mstar-engine-status catalog row from the snapshot nodes', () => {
     const store = createSnapshotStore<ChatSnapshot>({
@@ -191,7 +204,7 @@ describe('dsh client-seam peer stubs — catalog reading (spec §5)', () => {
     expect(latestEngineStatus(nodes)).toBe(engineRow)
   })
 
-  it('returns undefined while no catalog row exists (empty state) and on a later re-emission returns the newest', () => {
+  it('returns null while no catalog row exists (empty state) and on a later re-emission returns the newest', () => {
     const store = createSnapshotStore<ChatSnapshot>({
       legacy: {
         nodes: [{ kind: 'user', seq: 1, time: 1_719_999_000_000, content: [], source: null }],
@@ -201,13 +214,13 @@ describe('dsh client-seam peer stubs — catalog reading (spec §5)', () => {
         runningCalls: [],
       },
     } as unknown as ChatSnapshot)
-    expect(latestEngineStatus(store.getSnapshot().legacy.nodes)).toBeUndefined()
+    expect(latestEngineStatus(store.getSnapshot().legacy.nodes)).toBeNull()
 
     const newer: ContextMessageNode = {
       ...engineRow,
       seq: 4,
       time: 1_720_001_000_000,
-      source: { kind: 'mstar-engine-status', form: 'catalog', version: '2.0.4', harnessDir: '/proj/.mstar', state: null },
+      source: { ...anchorSource },
     }
     store.set({
       legacy: {
