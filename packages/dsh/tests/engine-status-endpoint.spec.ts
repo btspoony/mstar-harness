@@ -13,13 +13,14 @@
  * served payload is proven to be the emitted one.
  */
 import { afterEach, describe, expect, it } from 'bun:test'
-import { Context, Service } from '@deepseek-ai/cordis'
+import { Context, Service, type Fiber } from '@deepseek-ai/cordis'
 import TypertRegistry from '@deepseek-ai/dsh-typert-registry'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import * as entry from '../src/index.ts'
 import { writeEngineStatusSnapshot } from '../src/engine-status-store.ts'
 import {
+  installEngineStatusEndpoint,
   MSTAR_ENGINE_STATUS_METHOD,
   MSTAR_ENGINE_STATUS_NAMESPACE,
   type MstarEngineStatusResult,
@@ -285,9 +286,121 @@ describe('engineStatus endpoint — validation chain', () => {
   })
 })
 
+describe('engineStatus endpoint — multi-fiber dedupe and withdrawal', () => {
+  /**
+   * A sibling-plugin boot (an HMR re-apply, or two plugin instances on one
+   * host) applies `installEngineStatusEndpoint` a second time on the SAME
+   * context. This is the branch that had no coverage: without it, a failed
+   * second registration could replace the first gateway and withdraw the
+   * endpoint the first apply contributed — a whole host losing the panel,
+   * which no unit case could see.
+   */
+  interface ServiceView {
+    engineStatus(sessionId: unknown, cwd: unknown): Promise<MstarEngineStatusResult>
+  }
+
+  /** The endpoint owner's answer for a session this host does not know. */
+  async function renderOf(ctx: Context): Promise<string | undefined> {
+    const service = ctx.get(MSTAR_ENGINE_STATUS_NAMESPACE) as ServiceView | undefined
+    if (service === undefined) return undefined
+    const answer = await service.engineStatus('ses_none', '/proj')
+    return answer.status === 'unavailable' ? answer.reason : answer.status
+  }
+
+  /**
+   * Which gateway instance is live, identified by the OPTIONS it was built
+   * with. `ctx.get(...)` hands back a fresh callable wrapper per read (cordis
+   * `Service` with the invoke symbol), so identity has to be read off the
+   * instance's own options — which is exactly what the dedupe is about: whose
+   * resolver/boot root the live endpoint serves with.
+   */
+  function optionsOf(ctx: Context): string | undefined {
+    const service = ctx.get(MSTAR_ENGINE_STATUS_NAMESPACE) as
+      | { bootHarnessDir?: string | null; resolver?: { explicit?: string | null } }
+      | undefined
+    return service === undefined
+      ? undefined
+      : `${String(service.bootHarnessDir)} ${String(service.resolver?.explicit)}`
+  }
+
+  /**
+   * A sibling fiber that installs the endpoint with its OWN boot root and its
+   * own resolver — the second plugin instance's options, which the dedupe must
+   * NOT let take over the live gateway.
+   */
+  async function sibling(app: BootResult, bootHarnessDir: string): Promise<Fiber> {
+    const fiber = app.ctx.plugin((siblingCtx) => {
+      installEngineStatusEndpoint(siblingCtx, {
+        resolver: { forWorkspace: () => bootHarnessDir } as never,
+        bootHarnessDir,
+      })
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    return fiber
+  }
+
+  it('keeps ONE gateway and ONE descriptor when a sibling fiber applies the endpoint', async () => {
+    const app = (booted = await bootApp({ sessionsService: 'fake' }))
+    await app.ctx.plugin(TypertRegistry)
+    const registry = app.ctx.get('typert') as { local: { get(endpoint: string): unknown } }
+    const before = await renderOf(app.ctx)
+    expect(before).toBe('session-absent')
+    const ownerOptions = optionsOf(app.ctx)
+    expect(ownerOptions).toContain(app.harnessDir)
+
+    // The sibling apply: a second install on the same context.
+    const fiber = await sibling(app, '/proj/sibling-boot-root')
+    // The first gateway is untouched — the sibling's own options did NOT take
+    // over, which is the exact class the dedupe exists to prevent…
+    expect(optionsOf(app.ctx)).toBe(ownerOptions)
+    expect(await renderOf(app.ctx)).toBe(before)
+    // …and the endpoint is still served exactly once.
+    expect(registry.local.get(`${MSTAR_ENGINE_STATUS_NAMESPACE}/${MSTAR_ENGINE_STATUS_METHOD}`)).toBeDefined()
+
+    // Withdrawal is scoped to ownership: the sibling registered neither unit,
+    // so disposing it must not remove the owner's service or descriptor.
+    await fiber.dispose()
+    expect(optionsOf(app.ctx)).toBe(ownerOptions)
+    expect(await renderOf(app.ctx)).toBe(before)
+    expect(registry.local.get(`${MSTAR_ENGINE_STATUS_NAMESPACE}/${MSTAR_ENGINE_STATUS_METHOD}`)).toBeDefined()
+  })
+
+  it('registers afresh on the next apply after an HMR reload of the plugin row', async () => {
+    const app = (booted = await bootApp({ sessionsService: 'fake' }))
+    // The host composition owns the registry — an HMR reload disposes the
+    // plugin ROW only, and re-applies it against the same live registry.
+    const hostFiber = app.ctx.plugin(TypertRegistry)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const registry = app.ctx.get('typert') as { local: { get(endpoint: string): unknown } }
+    const endpoint = `${MSTAR_ENGINE_STATUS_NAMESPACE}/${MSTAR_ENGINE_STATUS_METHOD}`
+    expect(registry.local.get(endpoint)).toBeDefined()
+    expect(optionsOf(app.ctx)).toContain(app.harnessDir)
+
+    // The reload: the plugin row's fiber withdraws both of its units, and the
+    // host context is otherwise untouched.
+    expect(app.pluginFiber).toBeDefined()
+    await (app.pluginFiber as Fiber).dispose()
+    expect(app.ctx.get(MSTAR_ENGINE_STATUS_NAMESPACE)).toBeUndefined()
+    expect(registry.local.get(endpoint)).toBeUndefined()
+
+    // Re-apply the same row on the same context, as the loader would.
+    const reapplied = await app.ctx.plugin(entry, { harnessDir: app.harnessDir })
+    expect(app.ctx.get(MSTAR_ENGINE_STATUS_NAMESPACE)).toBeDefined()
+    expect(optionsOf(app.ctx)).toContain(app.harnessDir)
+    expect(await renderOf(app.ctx)).toBe('session-absent')
+    expect(registry.local.get(endpoint)).toBeDefined()
+
+    // The re-applied units belong to the re-applied row: disposing it
+    // withdraws them, so ownership follows the apply and never the context.
+    await reapplied.dispose()
+    expect(app.ctx.get(MSTAR_ENGINE_STATUS_NAMESPACE)).toBeUndefined()
+    expect(registry.local.get(endpoint)).toBeUndefined()
+    await hostFiber.dispose()
+  })
+})
+
 describe('engineStatus endpoint — optional-unit boot', () => {
-  it('boots a composition with no typert registry, no sessions and no controller', async () => {
-    // A base-only profile shape: the endpoint registers nothing web-only, the
+  it('boots a composition with no typert registry, no sessions and no controller', async () => {    // A base-only profile shape: the endpoint registers nothing web-only, the
     // boot settles (the harness awaits each row — a pended row would hang it),
     // and the plugin surface is still present.
     const app = (booted = await bootApp())

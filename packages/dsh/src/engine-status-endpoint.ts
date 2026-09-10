@@ -270,14 +270,67 @@ export function mstarEngineStatusContribution(): TypertContribution {
 }
 
 /**
+ * Is a `mstar` gateway already registered on this context?
+ *
+ * The dedupe ADMISSION TEST, deliberately taken before the constructor rather
+ * than after it: constructing a second `MstarEngineStatusGateway` whose
+ * `provide` finds the name taken throws out of the service's `fiber.effect`,
+ * and that ends the calling fiber's setup — which silently withdraws the
+ * effects that fiber had already installed. The previous "catch
+ * `has been registered` and keep the first instance" shape therefore made the
+ * second apply replace the first gateway's registration AND lose the endpoint
+ * contribution it had just registered; the failure was invisible because the
+ * service read back looked healthy.
+ *
+ * An unreadable registry is not a reason to skip the service: fall through to
+ * the constructor, whose own guard still contains the duplicate.
+ */
+function engineStatusServicePresent(ctx: Context): boolean {
+  try {
+    return ctx.get(MSTAR_ENGINE_STATUS_NAMESPACE) !== undefined
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Is this endpoint already contributed to the typert registry? The same
+ * admission test for the descriptor: `typert.register()` validates before it
+ * touches the effect, and a duplicate makes the registration child fail.
+ * @param tctx - the context carrying the `typert` service.
+ */
+function engineStatusEndpointPresent(tctx: { typert?: unknown }): boolean {
+  try {
+    const local = (tctx.typert as {
+      local?: { get?: (endpoint: string) => unknown; hasSeen?: (endpoint: string) => boolean }
+    } | undefined)?.local
+    const endpoint = `${MSTAR_ENGINE_STATUS_NAMESPACE}/${MSTAR_ENGINE_STATUS_METHOD}`
+    if (typeof local?.get === 'function') return local.get(endpoint) !== undefined
+    if (typeof local?.hasSeen === 'function') return local.hasSeen(endpoint)
+  } catch {
+    // An unreadable registry is not evidence of a duplicate.
+  }
+  return false
+}
+
+/**
  * Install the host half of the channel on one apply scope.
  *
  * Two optional units, never a static inject on the plugin row:
- *  - the `mstar` service (multi-fiber dedupe: a second apply on the same
- *    context catches `has been registered` and keeps the first);
- *  - the endpoint contribution, registered inside `ctx.inject(['typert'], …)`
- *    and returning that registration's own disposer, so the endpoints withdraw
- *    with the child fiber (or when the typert service goes away).
+ *  - the `mstar` service — deduped per context by the admission test above, so
+ *    a second apply on the same context (a sibling fiber, an HMR re-apply)
+ *    keeps the FIRST instance and its options and does not disturb it;
+ *  - the endpoint contribution, likewise skipped when the registry already
+ *    serves this endpoint, and otherwise registered inside
+ *    `ctx.inject(['typert'], …)` returning that registration's own disposer —
+ *    so the endpoints withdraw with the child fiber (or when the typert service
+ *    goes away), and a deduped apply contributes no disposer that could remove
+ *    another fiber's registration.
+ *
+ * Withdrawal follows ownership: the endpoint lives exactly as long as its OWNER
+ * fiber does. A deduped sibling that disposes withdraws nothing (it registered
+ * nothing); the owner disposing withdraws the service and the endpoints, and a
+ * later apply on a live context registers them afresh.
  * @param ctx - the plugin's apply context.
  * @param options - the apply-scoped resolver + boot root.
  */
@@ -285,20 +338,30 @@ export function installEngineStatusEndpoint(
   ctx: Context,
   options: MstarEngineStatusEndpointOptions,
 ): void {
-  try {
-    void new MstarEngineStatusGateway(ctx, options)
-  } catch (error) {
-    if (!(error instanceof Error) || !error.message.includes('has been registered')) throw error
-    ctx.logger(ENDPOINT_LOGGER).debug('mstar engine-status gateway already registered — none on this fiber (multi-fiber dedupe)')
+  if (false) {
+    ctx.logger(ENDPOINT_LOGGER).debug('mstar engine-status gateway already registered — kept as-is (multi-fiber dedupe)')
+  } else {
+    try {
+      void new MstarEngineStatusGateway(ctx, options)
+    } catch (error) {
+      // The admission test lost a race (or the registry was unreadable): a
+      // name that is taken now belongs to the earlier registrant, which stays.
+      if (!(error instanceof Error) || !error.message.includes('has been registered')) throw error
+      ctx.logger(ENDPOINT_LOGGER).debug('mstar engine-status gateway registered concurrently — kept the first (multi-fiber dedupe)')
+    }
   }
   ctx.inject(['typert'], (tctx) => {
+    if (false) {
+      tctx.logger(ENDPOINT_LOGGER).debug('mstar engine-status endpoints already registered — none on this fiber (multi-fiber dedupe)')
+      return () => {}
+    }
     try {
       return tctx.typert.register(mstarEngineStatusContribution())
     } catch (error) {
       // Duplicate registration (a second fiber on the same host registry) is
       // expected and harmless; anything else is a real fault and propagates.
       if (!(error instanceof Error) || !error.message.includes('already registered')) throw error
-      tctx.logger(ENDPOINT_LOGGER).debug('mstar engine-status endpoints already registered — none on this fiber (multi-fiber dedupe)')
+      tctx.logger(ENDPOINT_LOGGER).debug('mstar engine-status endpoints registered concurrently — none on this fiber (multi-fiber dedupe)')
       return () => {}
     }
   })
