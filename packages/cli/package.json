@@ -20,6 +20,7 @@
     "dev": "bun run src/index.ts",
     "build": "rm -rf dist && bun build src/index.ts --target node --outfile dist/mstar-harness.js && bun ../../scripts/escape-dist-literals.ts dist/mstar-harness.js",
     "check": "bun run src/index.ts --help",
+    "typecheck:src": "bunx tsc --noEmit -p tsconfig.json",
     "test": "bun run --cwd ../engine build && bun run build && bun test",
     "prepublishOnly": "bun run build && bun run check"
   },

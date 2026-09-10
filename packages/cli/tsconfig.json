@@ -1,0 +1,23 @@
+{
+  // The CLI was previously outside every tsc project (the root tsconfig
+  // `include` lists only packages/opencode/src/mstar.ts, tools/** and hooks/**),
+  // so a type error here — including an unresolved type name in an assertion —
+  // was invisible to `bun run typecheck` and to CI, which only bundles the file
+  // with `bun build` (no type checking). This project closes that hole.
+  //
+  // `types: ["node"]` resolves @types/node from the repo root. The one in-src
+  // spec (`global-cli.test.ts`) needs bun test types, which no tsc project in
+  // this package provides yet — it is excluded rather than silently mis-typed;
+  // package tests live in `test/` and run under `bun test`.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": ["src"],
+  "exclude": ["src/**/*.test.ts"]
+}

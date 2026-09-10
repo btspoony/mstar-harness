@@ -110,6 +110,7 @@ import {
   type ReviewChangesetMode,
   type ReviewPostPlan,
   type SddExecutionContext,
+  type StatusV2Doc,
   type ToolSignal,
   type ValidationResult,
   type WorktreeTrack,
