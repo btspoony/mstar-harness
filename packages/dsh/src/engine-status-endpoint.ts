@@ -301,18 +301,25 @@ function engineStatusServicePresent(ctx: Context): boolean {
  *    with its own resolver/boot root. Constructing a second one would make the
  *    service's `provide` find the name taken and throw out of the child effect,
  *    so the present-check is the primary dedupe and the `has been registered`
- *    catch arm below only covers the concurrent-apply window;
+ *    catch arm below covers what it cannot see: the concurrent-apply window, and
+ *    an unreadable registry (the helper falls through in both cases);
  *  - the endpoint contribution, registered inside `ctx.inject(['typert'], …)`
  *    and returning that registration's own disposer — so the endpoints withdraw
  *    with the child fiber (or when the typert service goes away).
  *
- * DESCRIPTOR DEDUPE RESTS ON THE CATCH ARM, not on a present-check: the typert
- * registry offers no guaranteed descriptor-presence probe (`local` exposes
- * `get(endpoint)` and may or may not expose `hasSeen(endpoint)`), so a
- * pre-flight check could only ever work by accident of the exposed branch. The
- * registration itself is the test — a duplicate makes `register` throw, the
- * arm swallows exactly that error and contributes NO disposer, so a deduped
- * apply can never withdraw another fiber's endpoint.
+ * DESCRIPTOR DEDUPE RESTS ON THE CATCH ARM. The registry does serve a presence
+ * probe — `local.get(endpoint)` answers the LIVE descriptor, or `undefined` when
+ * absent — but a pre-flight check cannot close the concurrent-apply window (two
+ * applies can both read it absent before either registers), so the registration
+ * itself stays the authoritative test. `local.hasSeen(endpoint)` is no
+ * substitute: it is a HISTORY probe, `true` for an endpoint registered at least
+ * once and staying `true` after it is withdrawn, so as a presence test it would
+ * skip re-registration for the endpoint a reload withdrew. A duplicate makes
+ * `register` throw, the arm swallows exactly that error and returns a no-op
+ * disposer, so a deduped apply can never withdraw another fiber's endpoint. The
+ * cost of that is the dependency on typert's error text (`already registered`);
+ * a `get`-based pre-check is the way to drop the dependency — it precedes the
+ * arm, but cannot replace it.
  *
  * Withdrawal follows ownership: the endpoint lives exactly as long as its OWNER
  * fiber does. A deduped sibling that disposes withdraws nothing (it registered
