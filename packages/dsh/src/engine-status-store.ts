@@ -110,7 +110,7 @@ export interface EngineStatusSnapshotWriteInput {
   /** The agent turn the row was emitted for. */
   readonly turn: number
   /** The exact payload object handed to the step messages. */
-  readonly payload: Record<string, unknown>
+  readonly payload: object
   /** Emission timestamp (test seam; production uses `new Date()`). */
   readonly now?: Date
 }
@@ -293,7 +293,7 @@ export function writeEngineStatusSnapshot(
         cwd: input.cwd,
         at,
         turn: input.turn,
-        payload: input.payload,
+        payload: input.payload as Record<string, unknown>,
       })
       doc.entries[input.sessionId] = pruneBucket(bucket, nowMs)
       const pruned: Record<string, EngineStatusSnapshotEntry[]> = {}

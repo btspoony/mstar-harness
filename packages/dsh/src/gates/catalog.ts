@@ -55,9 +55,10 @@ import type {
   ResidualFindingView,
   WorkflowSelectionView,
 } from '../types.ts'
-import { STATUS_FILE, CATALOG_STATE_JOIN_LIMIT, asRecord, joinCapped, sessionCwdOf, HarnessResolver, iterationViolationView, iterationGateView } from './_shared.ts'
+import { STATUS_FILE, CATALOG_STATE_JOIN_LIMIT, asRecord, joinCapped, sessionCwdOf, sessionHeaderIdOf, HarnessResolver, iterationViolationView, iterationGateView } from './_shared.ts'
 import { readAgentFlow, AGENT_FLOW_DEFAULT_LIMIT } from './agent-flow.ts'
 import { resolveReadWorkflow } from './workflow-selection.ts'
+import { writeEngineStatusSnapshot } from '../engine-status-store.ts'
 /** Logger label for the engine-status catalog (dsh logger naming: `<scope>/<subject>`). */
 const CATALOG_LOGGER = 'mstar/engine-status-catalog'
 
@@ -928,6 +929,14 @@ export async function preStepCatalogListener(
     const prior = digests.get(digestKey)
     if (prior === undefined || prior.turn !== payload.turn || prior.text !== text) {
       messages.push(createUserMessage({ source: engineStatusSource(), content: [{ type: 'text', text }] }))
+      // The persisted snapshot is written at THIS gate — the only place the
+      // composed payload is known to have reached the model. A later reader
+      // (the web-only host endpoint) therefore serves a record of what was
+      // emitted, never a re-resolution that could disagree with the session
+      // log. Keyed by `session.header.id`: a stub without a real id has
+      // nothing to key on, so the write is skipped (a reader then answers the
+      // explicit unavailable state rather than another session's row).
+      persistEngineStatusSnapshot(ctx, harnessDir, cwd, payload.turn, catalogPayload, payload.agent)
     }
     digests.set(digestKey, { turn: payload.turn, text })
     return { kind: 'enter', messages }
@@ -949,5 +958,43 @@ export interface TurnDigest {
 function agentDigestKey(agent: unknown, cwd: string | undefined): string {
   const id = (agent as { id?: unknown } | null | undefined)?.id
   return `${typeof id === 'string' ? id : '<unknown>'}\u0000${cwd ?? ''}`
+}
+
+/**
+ * Persist the JUST-EMITTED catalog payload to the durable snapshot store
+ * (`{HARNESS_DIR}/snapshots/engine-status.json`), keyed by the session id —
+ * the edge-safe source a later host endpoint serves.
+ *
+ * Contained: no session id, an unresolved `{HARNESS_DIR}` or an unwritable
+ * store degrades to a debug/warn log — the advisory emission path never aborts
+ * the step it observes (same containment rule as the append path above).
+ * @param ctx - registrant context (logger only).
+ * @param harnessDir - the workspace's resolved `{HARNESS_DIR}` (null when none).
+ * @param cwd - the session workspace the payload was resolved for.
+ * @param turn - the agent turn the row was emitted for.
+ * @param catalogPayload - the exact payload object handed to the step messages.
+ * @param agent - the stepping agent (the snapshot's session identity).
+ */
+function persistEngineStatusSnapshot(
+  ctx: Context,
+  harnessDir: string | null,
+  cwd: string | undefined,
+  turn: number,
+  catalogPayload: MstarEngineStatusPayload,
+  agent: unknown,
+): void {
+  const sessionId = sessionHeaderIdOf(agent)
+  if (sessionId === undefined || cwd === undefined) return
+  const result = writeEngineStatusSnapshot(harnessDir, {
+    sessionId,
+    cwd,
+    turn,
+    payload: catalogPayload,
+  })
+  if (result.kind === 'degraded') {
+    ctx.logger(CATALOG_LOGGER).warn(
+      `engine-status snapshot not persisted for ${sessionId} (readers answer unavailable): ${result.reason}`,
+    )
+  }
 }
 
