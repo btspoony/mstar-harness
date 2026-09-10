@@ -1,0 +1,416 @@
+/**
+ * AgentListPage styles (plan sidebar §L3/L4) — the 代理执行 tab as a
+ * VERTICAL GROUPED LIST: phase groups / stage groups / sub-bucket partitions
+ * as flow headings, entity cards as FULL-WIDTH FLOW ROWS (no absolute
+ * positioning, no inline box style, no ports), the muted degradation note,
+ * and the Legend seat. The deleted canvas module's vocabulary (viewport /
+ * pan / grid background / column geometry / port dots / SVG edges) has no
+ * rule here — the page owns NO scroller (the rows grow the panel's single
+ * scroll body) and declares no width query (the phase groups ride the
+ * shell's shared `.groupGrid`).
+ *
+ * Emphasis tiers (design doc §3.5 — token names kept, semantics unchanged,
+ * theme-independent per `DESIGN.md`): the chrome-alpha PERCENTAGES the tier
+ * rules mix chrome colors toward the layer background (current 1 / next
+ * 0.75 / off 0.45). NEVER a whole-card opacity — the status point + running
+ * glow stay opaque.
+ *
+ * Token discipline (spec §1.2/§7): EVERY color is a verified --dsw-alias-*
+ * token (zero bare hex/rgb — dark mode is the host token flip); spacing
+ * rides the --mstar-space-1..6 ramp; fonts ride the --dsw-font-xxxs-11/
+ * xxs-12/xs-13 ramp; hover feedback 150ms (120–150ms window); radius is the
+ * unified 8px/999px pair; motion (the running-row pulse) is killed by the
+ * panel root's global `prefers-reduced-motion` rule
+ * (`* { animation: none !important }`) — this module declares no
+ * self-contained reduced-motion block.
+ */
+
+/* --- page frame: flow content in the panel's single scroll body --- */
+
+.listPage {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-2);
+  min-width: 0;
+  /* Emphasis chrome tiers (design doc §3.5): names kept from the deleted
+   * canvas module — the tier percentages the card rules mix with. */
+  --mstar-canvas-emphasis-current: 100%;
+  --mstar-canvas-emphasis-next: 75%;
+  --mstar-canvas-emphasis-off: 45%;
+}
+
+.listHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--mstar-space-2);
+  flex: none;
+  min-width: 0;
+}
+
+.listTitle {
+  margin: 0;
+  color: var(--dsw-alias-label-primary);
+  font: var(--dsw-font-xs-13);
+  font-weight: 600;
+}
+
+/* Summary row (spec §4): `N executing · M pending` — projection counts. */
+.listSummary {
+  flex: none;
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Muted degradation note (spec §8 — never an orange warn frame). */
+.listNote {
+  flex: none;
+  margin: 0;
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxs-12);
+}
+
+/* Legend seat: in flow below the list (the Legend component renders its own
+ * frame; this wrapper just keeps it from shrinking inside the flex column). */
+.listLegend {
+  flex: none;
+}
+
+/* --- the list root: phase groups on the shell's shared `.groupGrid` (the
+ * grid behaviour — one column, two above 720px — is that rule's) --- */
+
+.agentList {
+  min-width: 0;
+}
+
+/* --- phase group (plan sidebar §L3.2): Phase 1 (the sequential
+ * review-edit-chain) then Phase 2 (the iterative plan loop), each with its
+ * label row; the Phase-2 row additionally carries the CURRENT-PLAN
+ * annotation (the projected `activePlanId`, or the muted「无进行中 plan」
+ * note). Same frame treatment as the panel's zone frames. */
+
+.agentGroup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-2);
+  min-width: 0;
+  padding: var(--mstar-space-3);
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-1);
+}
+
+.groupLabel {
+  display: flex;
+  align-items: center;
+  gap: var(--mstar-space-2);
+  min-width: 0;
+  padding: 0 var(--mstar-space-1);
+  color: var(--dsw-alias-label-primary);
+  font: var(--dsw-font-xxxs-11);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+/* Current-plan annotation chip (Phase 2 group only): the projected
+ * `activePlanId` in a caption pill — bounded width + ellipsis so a long plan
+ * id never stretches the narrow column. */
+.groupPlan {
+  display: flex;
+  align-items: center;
+  gap: var(--mstar-space-1);
+  min-width: 0;
+  max-width: 220px;
+  padding: 0 var(--mstar-space-2);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 999px;
+  overflow: hidden;
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-11);
+  font-weight: 400;
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+/* The `+N more` honesty count (several InProgress plans — the annotation
+ * shows the first, never hides the rest). */
+.groupPlanMore {
+  flex: none;
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+/* The muted「无进行中 plan」note (no InProgress `state.plans[]` row). */
+.groupNoPlan {
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+/* --- stage group: the inner heading level (the pipeline-order context) --- */
+
+.stageGroup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-1);
+  min-width: 0;
+}
+
+.stageLabel {
+  padding: 0 var(--mstar-space-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+/* --- sub-bucket partition (implementor / reviewer / unknown): a tiny
+ * uppercase caption + the dashed rule filling the rest of the row, then its
+ * card list. Rendered only while the partition has cards. */
+
+.subBucket {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-1);
+  min-width: 0;
+}
+
+.subBucketLabel {
+  display: flex;
+  align-items: center;
+  gap: var(--mstar-space-1);
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+/* The dashed separator rule filling the rest of the caption row. */
+.subBucketLabel::after {
+  content: '';
+  flex: 1;
+  border-top: 1px dashed var(--dsw-alias-border-l2);
+}
+
+/* --- entity rows (plan sidebar §L3.3): full-width flow rows — agent-name
+ * title / status point / record fields; idle rows muted via the dashed
+ * border + caption treatment, running = business ring + glow --- */
+
+.cardList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-1);
+  min-width: 0;
+}
+
+.agentCard {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-1);
+  min-width: 0;
+  padding: var(--mstar-space-2);
+  /* Emphasis chrome alpha: the tier percentage applied to the row CHROME
+   * colors via color-mix toward the layer background — NEVER a whole-card
+   * `opacity` (a parent opacity would fade the status point + running glow,
+   * violating the status-point highest-priority rule). Default = the
+   * current tier (100% → identity mix); the `data-agent-emphasis` rules
+   * below swap it. The status point / running ring + glow use their OWN
+   * full-strength token colors and are never mixed. */
+  --mstar-chrome-alpha: var(--mstar-canvas-emphasis-current);
+  border: 1px solid color-mix(in srgb, var(--dsw-alias-border-l1) var(--mstar-chrome-alpha), var(--dsw-alias-bg-layer-1));
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-1);
+  transition: border-color 150ms ease;   /* hover 120–150ms window */
+}
+
+/* Emphasis tier overrides (design doc §3.3/§3.5): swap the chrome alpha
+ * only — `current` renders the attribute but changes nothing (100% = the
+ * default). No tier → no attribute → no override (the no-iteration /
+ * no-plan case). */
+.agentCard[data-agent-emphasis='next'] {
+  --mstar-chrome-alpha: var(--mstar-canvas-emphasis-next);
+}
+
+.agentCard[data-agent-emphasis='off'] {
+  --mstar-chrome-alpha: var(--mstar-canvas-emphasis-off);
+}
+
+.agentCard:hover {
+  /* Hover brightening (spec §4.1 — border-l1 → border-l2) mixed with the
+   * row's own chrome alpha: the tier fade persists on hover instead of the
+   * neutral hover color overriding it. */
+  border-color: color-mix(in srgb, var(--dsw-alias-border-l2) var(--mstar-chrome-alpha), var(--dsw-alias-bg-layer-1));
+}
+
+/* Running row (spec §4): business ring + soft glow pulse — the "执行中高亮"
+   treatment. The pulse is motion, killed by the root reduced-motion rule. */
+.agentCardRunning {
+  border-color: var(--dsw-alias-state-business-primary);
+  box-shadow: 0 0 0 1px var(--dsw-alias-state-business-primary);
+  animation: agent-card-pulse 1.6s ease-in-out infinite;
+}
+
+.agentCardRunning:hover {
+  border-color: var(--dsw-alias-state-business-primary);
+}
+
+@keyframes agent-card-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 1px var(--dsw-alias-state-business-primary);
+  }
+  50% {
+    box-shadow: 0 0 0 1px var(--dsw-alias-state-business-primary), 0 0 6px 0 var(--dsw-alias-state-business-primary);
+  }
+}
+
+/* Idle row (the muted "未工作" card): dashed frame, caption text — never a
+ * guessed status. The border-color rides the row's chrome alpha (idle
+ * dashed + emphasis coexist — border-style is a DIFFERENT property plane
+ * than the chrome fade). */
+.agentCardIdle {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--dsw-alias-border-l2) var(--mstar-chrome-alpha), var(--dsw-alias-bg-layer-1));
+}
+
+.agentCardIdle:hover {
+  border-color: color-mix(in srgb, var(--dsw-alias-label-caption) var(--mstar-chrome-alpha), var(--dsw-alias-bg-layer-1));
+}
+
+/* Done row: settled AND emphasis ≠ 'off' → a STANDALONE GREEN frame
+ * (success border + 1px ring on the ROUNDED row body) + the green ✓ in the
+ * status point. Full-strength success token — an EVIDENCE state, the same
+ * priority class as the running ring/glow (never chrome-mixed / never faded
+ * by the emphasis tier). emphasis === 'off' NEVER shows the green frame or
+ * ✓ — the completed state cannot appear on an off-tier role. */
+.agentCardDone {
+  border-color: var(--dsw-alias-state-success-primary);
+  box-shadow: 0 0 0 1px var(--dsw-alias-state-success-primary);
+}
+
+.agentCardDone:hover {
+  border-color: var(--dsw-alias-state-success-primary);
+}
+
+/* On-demand badge: the implementor-partition on-demand roles (ops-engineer /
+ * prompt-engineer) carry a dashed business chip — the tag marks the
+ * on-demand nature inside the implementor partition. */
+.onDemandBadge {
+  align-self: flex-start;
+  padding: 0 var(--mstar-space-1);
+  border: 1px dashed color-mix(in srgb, var(--dsw-alias-state-business-primary) var(--mstar-chrome-alpha), var(--dsw-alias-bg-layer-1));
+  border-radius: 999px;
+  color: color-mix(in srgb, var(--dsw-alias-label-secondary) var(--mstar-chrome-alpha), var(--dsw-alias-bg-layer-1));
+  font: var(--dsw-font-xxxs-11);
+}
+
+.agentCardLine {
+  display: flex;
+  align-items: center;
+  gap: var(--mstar-space-1);
+  min-width: 0;
+}
+
+.agentCardName {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: color-mix(in srgb, var(--dsw-alias-label-primary) var(--mstar-chrome-alpha), var(--dsw-alias-bg-layer-1));
+  font: var(--dsw-font-xxxs-11);
+  font-weight: 600;
+}
+
+.agentCardIdle .agentCardName {
+  color: color-mix(in srgb, var(--dsw-alias-label-caption) var(--mstar-chrome-alpha), var(--dsw-alias-bg-layer-1));
+}
+
+/* ×N count badge (spec §4 — count > 1 only); the name's flex:1 pushes it
+   right without a non-ramp margin. */
+.agentCount {
+  flex: none;
+  min-width: 18px;
+  padding: 0 var(--mstar-space-1);
+  border: 1px solid color-mix(in srgb, var(--dsw-alias-border-l2) var(--mstar-chrome-alpha), var(--dsw-alias-bg-layer-1));
+  border-radius: 999px;
+  color: color-mix(in srgb, var(--dsw-alias-label-caption) var(--mstar-chrome-alpha), var(--dsw-alias-bg-layer-1));
+  font: var(--dsw-font-xxxs-11);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.agentRoleChip {
+  align-self: flex-start;
+  padding: 0 var(--mstar-space-1);
+  border: 1px solid color-mix(in srgb, var(--dsw-alias-border-l2) var(--mstar-chrome-alpha), var(--dsw-alias-bg-layer-1));
+  border-radius: 999px;
+  color: color-mix(in srgb, var(--dsw-alias-label-secondary) var(--mstar-chrome-alpha), var(--dsw-alias-bg-layer-1));
+  font: var(--dsw-font-xxxs-11);
+}
+
+/* Record fields (spec §4 — session id / task tag are auxiliary, never the
+ * title): monospace caption line. */
+.agentRecord {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: color-mix(in srgb, var(--dsw-alias-label-caption) var(--mstar-chrome-alpha), var(--dsw-alias-bg-layer-1));
+  font: var(--dsw-font-xxxs-11);
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Status point (spec §4): dot colored by status; running glows (business),
+   settled shows the ✓ (success), error/denied carry error, advisory warn,
+   idle stays muted caption. */
+.agentStatusDot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.agentStatusRunning {
+  color: var(--dsw-alias-state-business-primary);
+  box-shadow: 0 0 0 1px var(--dsw-alias-state-business-primary);
+}
+
+.agentStatusSettled {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 12px;
+  background: none;
+  color: var(--dsw-alias-state-success-primary);
+  font: var(--dsw-font-xxxs-11);
+  font-weight: 600;
+}
+
+.agentStatusError {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.agentStatusAdvisory {
+  color: var(--dsw-alias-state-warn-label);
+}
+
+.agentStatusIdle {
+  color: var(--dsw-alias-label-caption);
+}

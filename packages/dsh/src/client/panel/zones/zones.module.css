@@ -5,8 +5,8 @@
  * (legend + gate summary + violations), the vertical IterationZone stepper
  * AND the AgentFlowZone stage pipeline styles were removed here (the
  * agent-canvas plan deleted the AgentFlowZone component and its css — the
- * stage columns / entity cards / expected-actual-next arrows now live in
- * `pages/agent-canvas.module.css`). The AgentEventDock and its event-row
+ * entity rows now live in `pages/agent-list.module.css`, the vertical
+ * grouped list of plan sidebar §L3). The AgentEventDock and its event-row
  * styles were removed by the event-log plan (spec §5 — 无双份日志: the dock
  * content migrated into `pages/EventLogPage.tsx` + `pages/event-log.module.css`).
  * What remains serves the components mounted today:
@@ -100,14 +100,15 @@
 /* Agent-pipeline legend swatches (spec §7
  * the zone-dashboard legend items (iteration/current/disabled/
  * tasks/verdicts) were removed with the WorkflowCanvas (spec §6.1 — the
- * legend re-mounts on the agent-canvas page). The collaboration-edge /
+ * legend re-mounts on the agents list page, in flow below the list). The
+ * collaboration-edge /
  * layout swatches (actual handoff edge / card ports / sub-buckets /
  * supervise line / on-demand badge / unknown partition) are REMOVED with
  * the legend simplification ; only the
  * 3 entity-status swatches stay. */
 
 /* Entity status swatches : the
- * agent-canvas card treatments — running = business dot with the 1px ring
+ * agent row card treatments — running = business dot with the 1px ring
  * the running-card glow uses; settled = the success ✓ color; idle = the
  * dashed muted card frame (caption border, like `agentCardIdle`). */
 .swatchAgentRunning {

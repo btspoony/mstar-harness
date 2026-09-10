@@ -2016,8 +2016,8 @@ describe('projectGraph — supervise edge ', () => {
  * vs the idle roster `general` member": a NON-roster dispatch (scout,
  * anonymous, the former generalPurpose) produces a lit card keyed `general`
  * while the roster `general` id stays un-evidenced — the idle twin must be
- * suppressed by the lit key set, so React `key` / `layoutAgents` `cards.set`
- * never collide and `executing` stays consistent with the visible cards.
+ * suppressed by the lit key set, so the render layer's entity `key` space
+ * never collides and `executing` stays consistent with the visible rows.
  * ------------------------------------------------------------------------- */
 
 describe('projectGraph — agents entity key uniqueness', () => {

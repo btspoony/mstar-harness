@@ -50,7 +50,7 @@ import { projectGraph } from './graph/project-graph.ts'
 import { PanelMeta } from './panel-meta.tsx'
 import { Sidebar } from './sidebar.tsx'
 import { TabNav } from './TabNav.tsx'
-import { AgentCanvasPage } from './pages/AgentCanvasPage.tsx'
+import { AgentListPage } from './pages/AgentListPage.tsx'
 import { EventLogPage } from './pages/EventLogPage.tsx'
 import { IterationTaskPage } from './pages/IterationTaskPage.tsx'
 import { useMstarEngineStatus, type UseSessions } from './use-mstar-engine-status.ts'
@@ -106,17 +106,16 @@ export interface PanelContentProps {
 /**
  * Section → page mapping (spec §6.2): the only per-section-switching part of
  * the layout. tasks = the IterationTaskPage (spec §3 — Content Head + Steps
- * + the plan board; the narrow-column re-shape of its internals is the next
- * task on the board); agents = the AgentCanvasPage (spec §4 — the vertical
- * grouped list replaces it later on the board); events = the EventLogPage
- * (spec §5 — the non-canvas log page with per-row `<details>` expansion).
+ * + the plan board); agents = the AgentListPage (spec §4 — the vertical
+ * grouped list, plan sidebar §L3); events = the EventLogPage (spec §5 — the
+ * log page with per-row `<details>` expansion).
  */
 export function PanelContent({ tab, source, t }: PanelContentProps) {
   if (tab === 'agents') {
     // The SHARED iteration info section : the agents page receives the
     // SAME `view.iteration` the tasks page renders (IterationInfoSection).
     const view = projectGraph(source)
-    return <AgentCanvasPage view={view.agents} iteration={view.iteration} t={t} />
+    return <AgentListPage view={view.agents} iteration={view.iteration} t={t} />
   }
   if (tab === 'events') return <EventLogPage view={projectGraph(source)} t={t} />
   return <IterationTaskPage view={projectGraph(source)} t={t} />
