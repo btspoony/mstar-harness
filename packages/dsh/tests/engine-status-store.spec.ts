@@ -4,11 +4,12 @@
  *
  * Covered: envelope schema (`sv` / `rv`), session keying (including ids that
  * name `Object.prototype` members), the prune boundary (per-session cap + 30-day
- * age, both enforced on write), the unknown-`sv` and torn-file paths on BOTH
- * sides (the reader answers the explicit unavailable state and the writer
- * REFUSES rather than replacing a store it cannot parse), lock contention (the
- * short bounded timeout degrades instead of stalling the per-turn path), and
- * the atomic replace (writer-unique temp file + rename, no left-over temp).
+ * age + the global byte ceiling, all enforced on write), the unknown-`sv` and
+ * torn-file paths on BOTH sides (the reader answers the explicit unavailable
+ * state and the writer REFUSES rather than replacing a store it cannot parse),
+ * lock contention (the short bounded timeout degrades instead of stalling the
+ * per-turn path), and the atomic replace (writer-unique temp file + rename, no
+ * left-over temp).
  *
  * Fixtures use the package's synthetic harness layout (`/proj/.mstar/…`), never
  * a real checkout path.
@@ -21,6 +22,7 @@ import {
   ENGINE_STATUS_SNAPSHOT_ENTRY_VERSION,
   ENGINE_STATUS_SNAPSHOT_LOCK_TIMEOUT_MS,
   ENGINE_STATUS_SNAPSHOT_MAX_AGE_MS,
+  ENGINE_STATUS_SNAPSHOT_MAX_BYTES,
   ENGINE_STATUS_SNAPSHOT_MAX_PER_SESSION,
   ENGINE_STATUS_SNAPSHOT_RELATIVE_PATH,
   ENGINE_STATUS_SNAPSHOT_VERSION,
@@ -97,7 +99,8 @@ describe('engine-status snapshot store — write + schema', () => {
   it('never leaves a temp file behind after an atomic replace', () => {
     const harness = freshHarnessDir()
     writeEngineStatusSnapshot(harness, { sessionId: 'ses_a', cwd: '/proj', turn: 1, payload: payload(1) })
-    expect(existsSync(`${engineStatusSnapshotPath(harness)}.tmp`)).toBe(false)
+    const snapshots = join(harness, 'snapshots')
+    expect(readdirSync(snapshots)).toEqual(['engine-status.json'])
     // The replace is a rename: no `.tmp` sibling, and the file holds the envelope.
     expect(envelopeOf(harness).sv).toBe(ENGINE_STATUS_SNAPSHOT_VERSION)
   })
@@ -349,52 +352,6 @@ describe('engine-status snapshot store — read rule', () => {
   })
 })
 
-describe('engine-status snapshot store — session ids that name Object.prototype members', () => {
-  // The session id is caller-chosen on the host's `session.create` (a branded
-  // string with no shape validation), so an id colliding with an inherited
-  // member is reachable, not theoretical. On a plain-object map each of these
-  // ids either threw a raw `TypeError` or was reported `written` while
-  // persisting nothing.
-  const HOSTILE_IDS = ['__proto__', 'constructor', 'toString', 'hasOwnProperty'] as const
-
-  for (const sessionId of HOSTILE_IDS) {
-    it(`keys ${sessionId} like any other session and serves it back`, () => {
-      const harness = freshHarnessDir()
-      expect(writeEngineStatusSnapshot(harness, { sessionId, cwd: '/proj', turn: 3, payload: payload(3) })).toMatchObject({
-        kind: 'written',
-        entries: 1,
-      })
-      const doc = envelopeOf(harness)
-      expect(Object.keys(doc.entries)).toEqual([sessionId])
-      expect(doc.entries[sessionId]).toHaveLength(1)
-      const read = readEngineStatusSnapshot(harness, sessionId)
-      expect(read.kind).toBe('ok')
-      if (read.kind !== 'ok') throw new Error('unreachable')
-      expect(read.entry.turn).toBe(3)
-      // …and it is an ORDINARY key: no inherited member is ever served.
-      expect(readEngineStatusSnapshot(harness, 'ses_other').kind).toBe('unavailable')
-    })
-  }
-
-  it('never resolves an inherited member for a session that has no bucket', () => {
-    const harness = freshHarnessDir()
-    writeEngineStatusSnapshot(harness, { sessionId: 'ses_a', cwd: '/proj', turn: 1, payload: payload(1) })
-    for (const probe of HOSTILE_IDS) {
-      expect(readEngineStatusSnapshot(harness, probe)).toEqual({
-        kind: 'unavailable',
-        reason: 'no-session-entry',
-      })
-    }
-  })
-
-  it('keeps the hostile-key bucket and the ordinary buckets independent', () => {
-    const harness = freshHarnessDir()
-    writeEngineStatusSnapshot(harness, { sessionId: '__proto__', cwd: '/proj', turn: 1, payload: payload(1) })
-    writeEngineStatusSnapshot(harness, { sessionId: 'ses_b', cwd: '/proj', turn: 2, payload: payload(2) })
-    expect(Object.keys(envelopeOf(harness).entries).sort()).toEqual(['__proto__', 'ses_b'])
-  })
-})
-
 describe('engine-status snapshot store — write guards', () => {
   it('degrades without touching the disk when the identity is unusable', () => {
     const harness = freshHarnessDir()
@@ -455,5 +412,166 @@ describe('engine-status snapshot store — write guards', () => {
     expect(readdirSync(snapshotDir).sort()).toEqual([WORKFLOW_LEDGER_LOCKDIR])
     // The holder's lockdir is never removed for it.
     expect(existsSync(join(snapshotDir, WORKFLOW_LEDGER_LOCKDIR))).toBe(true)
+  })
+})
+
+describe('engine-status snapshot store — session ids that name Object.prototype members', () => {
+  // The session id is caller-chosen on the host's `session.create` (a branded
+  // string with no shape validation), so an id colliding with an inherited
+  // member is reachable, not theoretical. On a plain-object map each of these
+  // ids either threw a raw `TypeError` or was reported `written` while
+  // persisting nothing.
+  const HOSTILE_IDS = ['__proto__', 'constructor', 'toString', 'hasOwnProperty'] as const
+
+  for (const sessionId of HOSTILE_IDS) {
+    it(`keys ${sessionId} like any other session and serves it back`, () => {
+      const harness = freshHarnessDir()
+      expect(writeEngineStatusSnapshot(harness, { sessionId, cwd: '/proj', turn: 3, payload: payload(3) })).toMatchObject({
+        kind: 'written',
+        entries: 1,
+      })
+      const doc = envelopeOf(harness)
+      expect(Object.keys(doc.entries)).toEqual([sessionId])
+      expect(doc.entries[sessionId]).toHaveLength(1)
+      const read = readEngineStatusSnapshot(harness, sessionId)
+      expect(read.kind).toBe('ok')
+      if (read.kind !== 'ok') throw new Error('unreachable')
+      expect(read.entry.turn).toBe(3)
+      // …and it is an ORDINARY key: no inherited member is ever served.
+      expect(readEngineStatusSnapshot(harness, 'ses_other').kind).toBe('unavailable')
+    })
+  }
+
+  it('never resolves an inherited member for a session that has no bucket', () => {
+    const harness = freshHarnessDir()
+    writeEngineStatusSnapshot(harness, { sessionId: 'ses_a', cwd: '/proj', turn: 1, payload: payload(1) })
+    for (const probe of HOSTILE_IDS) {
+      expect(readEngineStatusSnapshot(harness, probe)).toEqual({
+        kind: 'unavailable',
+        reason: 'no-session-entry',
+      })
+    }
+  })
+
+  it('keeps the hostile-key bucket and the ordinary buckets independent', () => {
+    const harness = freshHarnessDir()
+    writeEngineStatusSnapshot(harness, { sessionId: '__proto__', cwd: '/proj', turn: 1, payload: payload(1) })
+    writeEngineStatusSnapshot(harness, { sessionId: 'ses_b', cwd: '/proj', turn: 2, payload: payload(2) })
+    expect(Object.keys(envelopeOf(harness).entries).sort()).toEqual(['__proto__', 'ses_b'])
+  })
+})
+
+describe('engine-status snapshot store — global bound', () => {
+  /** A payload sized so a handful of entries crosses the test's byte ceiling. */
+  function bulkPayload(bytes: number): Record<string, unknown> {
+    return { blob: 'x'.repeat(bytes) }
+  }
+
+  // A small ceiling keeps the case fast; the mechanism is the same one the
+  // production constant drives (the constant itself is asserted below).
+  const CEILING = 8 * 1024
+  const ENTRY_BYTES = 1024
+  const SESSIONS = 24
+
+  it('sheds the oldest session buckets once the store crosses its byte ceiling', () => {
+    const harness = freshHarnessDir()
+    const base = Date.parse('2026-09-10T12:00:00.000Z')
+    let lastEvicted = 0
+    for (let i = 0; i < SESSIONS; i += 1) {
+      const result = writeEngineStatusSnapshot(harness, {
+        sessionId: `ses_${String(i).padStart(4, '0')}`,
+        cwd: '/proj',
+        turn: 1,
+        payload: bulkPayload(ENTRY_BYTES),
+        now: new Date(base + i * 1000),
+        maxBytes: CEILING,
+      })
+      expect(result.kind).toBe('written')
+      lastEvicted = (result as { evicted: number }).evicted
+    }
+    const doc = envelopeOf(harness)
+    // Under the ceiling, the newest session is always retained, and the oldest
+    // ones were shed rather than kept (which is what a global bound means).
+    expect(Buffer.byteLength(JSON.stringify(doc), 'utf8')).toBeLessThanOrEqual(CEILING)
+    expect(lastEvicted).toBeGreaterThan(0)
+    expect(Object.keys(doc.entries)).toContain(`ses_${String(SESSIONS - 1).padStart(4, '0')}`)
+    expect(Object.keys(doc.entries)).not.toContain('ses_0000')
+    // Every surviving session still reads back (the shed is bucket-scoped).
+    for (const key of Object.keys(doc.entries)) {
+      expect(readEngineStatusSnapshot(harness, key).kind).toBe('ok')
+    }
+  })
+
+  it('asks for the oversize warning when a single session alone exceeds the ceiling', () => {
+    const harness = freshHarnessDir()
+    const result = writeEngineStatusSnapshot(harness, {
+      sessionId: 'ses_a',
+      cwd: '/proj',
+      turn: 1,
+      payload: bulkPayload(CEILING * 2),
+      maxBytes: CEILING,
+    })
+    expect(result).toMatchObject({ kind: 'written', evicted: 0 })
+    expect((result as { warn?: string }).warn).toContain('byte ceiling')
+  })
+
+  it('reports the oversize condition ONCE per store, never once per turn', () => {
+    const harness = freshHarnessDir()
+    const base = Date.parse('2026-09-10T12:00:00.000Z')
+    const warnings: string[] = []
+    // A session far larger than the ceiling on its own: the store is oversize
+    // from this first write on, and every later write must stay silent.
+    const seed = writeEngineStatusSnapshot(harness, {
+      sessionId: 'ses_huge',
+      cwd: '/proj',
+      turn: 0,
+      payload: bulkPayload(CEILING * 4),
+      now: new Date(base),
+      maxBytes: CEILING,
+    })
+    expect(seed).toMatchObject({ kind: 'written', evicted: 0 })
+    if (seed.kind === 'written' && seed.warn !== undefined) warnings.push(seed.warn)
+
+    for (let i = 0; i < 12; i += 1) {
+      const result = writeEngineStatusSnapshot(harness, {
+        sessionId: `ses_live_${String(i).padStart(2, '0')}`,
+        cwd: '/proj',
+        turn: i + 1,
+        payload: bulkPayload(256),
+        now: new Date(base + (i + 1) * 1000),
+        maxBytes: CEILING,
+      })
+      expect(result.kind).toBe('written')
+      if (result.kind === 'written' && result.warn !== undefined) warnings.push(result.warn)
+    }
+    // One oversize store, thirteen writes, exactly ONE warning — the per-store
+    // latch, not a warning per turn (a per-turn warning would be 13 here). It
+    // names the recovery step; the seed could not shed anything (it was the
+    // only session), and no later write repeats the warning.
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain(`${CEILING}-byte ceiling`)
+    expect(warnings[0]).toContain('recovery: delete the file')
+    expect(warnings[0]).toContain('shed 0 oldest session bucket(s)')
+    // The first subsequent write sheds the oversize resident bucket (oldest
+    // first) without complaining again, so the store then holds only the fresh
+    // per-session buckets.
+    expect(Object.keys(envelopeOf(harness).entries)).toHaveLength(12)
+    expect(Object.keys(envelopeOf(harness).entries)).not.toContain('ses_huge')
+  })
+
+  it('keeps a store well under the production ceiling without evicting anything', () => {
+    const harness = freshHarnessDir()
+    const first = writeEngineStatusSnapshot(harness, {
+      sessionId: 'ses_a',
+      cwd: '/proj',
+      turn: 1,
+      payload: payload(1),
+    })
+    expect(first).toMatchObject({ kind: 'written', evicted: 0 })
+    expect((first as { warn?: string }).warn).toBeUndefined()
+    expect(Object.keys(envelopeOf(harness).entries)).toEqual(['ses_a'])
+    // The production ceiling is a real global bound (the per-session numbers
+    // alone cannot bound a file every session in the workspace shares).
+    expect(ENGINE_STATUS_SNAPSHOT_MAX_BYTES).toBeGreaterThan(ENGINE_STATUS_SNAPSHOT_MAX_PER_SESSION)
   })
 })

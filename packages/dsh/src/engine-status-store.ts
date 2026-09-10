@@ -33,8 +33,9 @@
  *   `renameSync` (atomic replace — concurrent readers never observe a torn
  *   file, and the failure cleanup can only ever remove its own temp file);
  * - retention is enforced on EVERY write: newest
- *   {@link ENGINE_STATUS_SNAPSHOT_MAX_PER_SESSION} entries per session, and
- *   nothing older than {@link ENGINE_STATUS_SNAPSHOT_MAX_AGE_MS}.
+ *   {@link ENGINE_STATUS_SNAPSHOT_MAX_PER_SESSION} entries per session,
+ *   nothing older than {@link ENGINE_STATUS_SNAPSHOT_MAX_AGE_MS}, and the whole
+ *   envelope under {@link ENGINE_STATUS_SNAPSHOT_MAX_BYTES}.
  *
  * READ RULE (HARD): `sv !== 1`, an unknown shape, an unreadable file, or an
  * absent file all yield the explicit {@link EngineStatusUnavailable} result.
@@ -49,6 +50,14 @@
  * every other session sharing this `{HARNESS_DIR}` — a store the writer does
  * not understand is never the writer's to overwrite (a version flap between
  * two plugin builds, or a hand-truncated file, must not become data loss).
+ *
+ * BOUNDS: retention is per-session ({@link ENGINE_STATUS_SNAPSHOT_MAX_PER_SESSION}
+ * + {@link ENGINE_STATUS_SNAPSHOT_MAX_AGE_MS}) AND global
+ * ({@link ENGINE_STATUS_SNAPSHOT_MAX_BYTES}): a store above the byte ceiling
+ * sheds its least-recently-written session buckets — oldest first, never the
+ * writing session — and the write path reports the oversize condition ONCE per
+ * store so the host can log the one warning the containment contract promises
+ * instead of a warning per turn.
  *
  * KEYING (HARD): both session maps are prototype-less (`Object.create(null)`),
  * and the read path gates on `Object.hasOwn`. The session id is caller-chosen
@@ -73,6 +82,14 @@ export const ENGINE_STATUS_SNAPSHOT_ENTRY_VERSION = 1
 export const ENGINE_STATUS_SNAPSHOT_MAX_PER_SESSION = 50
 /** Retention: maximum entry age (30 days) — older entries are pruned on write. */
 export const ENGINE_STATUS_SNAPSHOT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000
+/**
+ * Retention: global byte ceiling for one store — the bound the per-session
+ * numbers above cannot express, since every session in a workspace shares this
+ * one file. Calibrated on the measured emission payload (≈19 KB per entry,
+ * ≈0.9 MB per session at the 50-entry cap) to ≈16 MB, i.e. ≈40 sessions before
+ * the oldest buckets are evicted; the writing session is never the one evicted.
+ */
+export const ENGINE_STATUS_SNAPSHOT_MAX_BYTES = 16 * 1024 * 1024
 /**
  * Lock-acquisition budget (ms) for the advisory snapshot write. The write runs
  * synchronously on the per-turn `agent/pre-step` emission path, so it may never
@@ -126,7 +143,18 @@ export type EngineStatusSnapshotRead =
 
 /** Write outcome: written, or the degraded reason (never throws for I/O faults). */
 export type EngineStatusSnapshotWrite =
-  | { readonly kind: 'written'; readonly path: string; readonly entries: number }
+  | {
+    readonly kind: 'written'
+    readonly path: string
+    readonly entries: number
+    /** Session buckets shed to stay under the global byte ceiling (0 when none). */
+    readonly evicted: number
+    /**
+     * Present ONLY on the first oversize write for this store in this process —
+     * the caller logs it. One warning per store, never one per turn.
+     */
+    readonly warn?: string
+  }
   | { readonly kind: 'degraded'; readonly reason: string }
 
 /** One write request — the emission site's payload plus its session identity. */
@@ -141,6 +169,8 @@ export interface EngineStatusSnapshotWriteInput {
   readonly payload: object
   /** Emission timestamp (test seam; production uses `new Date()`). */
   readonly now?: Date
+  /** Global byte ceiling override (test seam; production uses the constant). */
+  readonly maxBytes?: number
 }
 
 /** Absolute snapshot file path for one `{HARNESS_DIR}`. */
@@ -316,10 +346,56 @@ function pruneBucket(
   return fresh.slice(fresh.length - ENGINE_STATUS_SNAPSHOT_MAX_PER_SESSION)
 }
 
+/** Emission time of a bucket's newest entry (0 when no entry carries one). */
+function bucketRecency(bucket: readonly EngineStatusSnapshotEntry[]): number {
+  let newest = 0
+  for (const entry of bucket) {
+    const parsed = Date.parse(entry.at)
+    if (Number.isFinite(parsed) && parsed > newest) newest = parsed
+  }
+  return newest
+}
+
+/**
+ * Enforce the GLOBAL bound: shed whole session buckets, least-recently-written
+ * first, until the serialized envelope fits `maxBytes`. The writing session is
+ * never evicted (its bucket is the write's whole point) — when it alone exceeds
+ * the ceiling the store is written as-is and only the oversize signal is raised.
+ * @param pruned - the per-session-pruned map (mutated).
+ * @param keep - the session the write belongs to (never evicted).
+ * @param maxBytes - the byte ceiling for the serialized envelope.
+ * @param sizeOf - serialized size of a candidate map.
+ * @returns how many buckets were shed.
+ */
+function enforceGlobalBound(
+  pruned: Record<string, EngineStatusSnapshotEntry[]>,
+  keep: string,
+  maxBytes: number,
+  sizeOf: (entries: Record<string, EngineStatusSnapshotEntry[]>) => number,
+): number {
+  if (sizeOf(pruned) <= maxBytes) return 0
+  const candidates = Object.keys(pruned)
+    .filter((key) => key !== keep)
+    .map((key) => ({ key, recency: bucketRecency(pruned[key] as EngineStatusSnapshotEntry[]) }))
+    .sort((left, right) => left.recency - right.recency)
+  let evicted = 0
+  for (const candidate of candidates) {
+    if (sizeOf(pruned) <= maxBytes) break
+    // `delete` on a prototype-less map: an ordinary key removal, never a
+    // prototype interaction (same reason the map is created without one).
+    delete pruned[candidate.key]
+    evicted += 1
+  }
+  return evicted
+}
+
+/** Stores that already raised their one oversize warning in this process. */
+const oversizeWarned = new Set<string>()
+
 /**
  * Persist one emission: append the entry for `sessionId`, prune (age + per
- * session cap), and atomically replace the file — the whole read-modify-write
- * under the directory write lock.
+ * session cap + the global byte ceiling), and atomically replace the file — the
+ * whole read-modify-write under the directory write lock.
  *
  * Contained by design: a lock timeout, a missing/unwritable directory, a failed
  * replace, or an existing store this build does not understand returns
@@ -328,7 +404,8 @@ function pruneBucket(
  * payload is unaffected either way.
  * @param harnessDir - the resolved `{HARNESS_DIR}` (null when none resolved).
  * @param input - the emission's session identity + payload.
- * @returns written (with the entry count) or the degraded reason.
+ * @returns written (with the entry count, the evicted-bucket count and — once
+ *   per store — the oversize warning) or the degraded reason.
  */
 export function writeEngineStatusSnapshot(
   harnessDir: string | null,
@@ -372,17 +449,41 @@ export function writeEngineStatusSnapshot(
       })
       doc.entries[input.sessionId] = pruneBucket(bucket, nowMs)
       const pruned = sessionMap()
-      let total = 0
       for (const [key, value] of Object.entries(doc.entries)) {
         const kept = pruneBucket(value, nowMs)
         if (kept.length === 0) continue
         pruned[key] = kept
-        total += kept.length
       }
-      doc.entries = pruned
-      writeFileSync(tmp, JSON.stringify(doc))
+      const maxBytes = input.maxBytes ?? ENGINE_STATUS_SNAPSHOT_MAX_BYTES
+      const serialized = (entries: Record<string, EngineStatusSnapshotEntry[]>): string =>
+        JSON.stringify({ sv: ENGINE_STATUS_SNAPSHOT_VERSION, entries })
+      const evicted = enforceGlobalBound(pruned, input.sessionId, maxBytes, (entries) =>
+        Buffer.byteLength(serialized(entries), 'utf8'))
+      const payload = serialized(pruned)
+      const oversized = Buffer.byteLength(payload, 'utf8') > maxBytes
+      let total = 0
+      for (const kept of Object.values(pruned)) total += kept.length
+      writeFileSync(tmp, payload)
       renameSync(tmp, file)
-      return { kind: 'written' as const, path: file, entries: total }
+      // One warning per oversize store, never one per turn: the latch is
+      // per-store and monotonic for this process — an already-warned store
+      // never warns again, so an eviction loop cannot turn the containment
+      // warning into a per-turn log line.
+      let warn: string | undefined
+      if (oversized && !oversizeWarned.has(file)) {
+        oversizeWarned.add(file)
+        warn =
+          `engine-status snapshot store ${file} is above its ${maxBytes}-byte ceiling ` +
+          `(kept ${total} entries, shed ${evicted} oldest session bucket(s) this write); ` +
+          'recovery: delete the file — it is prunable plugin-owned state and readers answer unavailable for it'
+      }
+      return {
+        kind: 'written' as const,
+        path: file,
+        entries: total,
+        evicted,
+        ...(warn === undefined ? {} : { warn }),
+      }
     }, { timeoutMs: ENGINE_STATUS_SNAPSHOT_LOCK_TIMEOUT_MS })
   } catch (error) {
     // Remove ONLY this call's temp file: the lock may have failed before the

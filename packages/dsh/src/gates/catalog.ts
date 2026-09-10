@@ -1000,6 +1000,12 @@ function persistEngineStatusSnapshot(
     ctx.logger(CATALOG_LOGGER).warn(
       `engine-status snapshot not persisted for ${sessionId} (readers answer unavailable): ${result.reason}`,
     )
+    return
   }
+  // The store reports an oversize store ONCE (`warn` is present only on the
+  // first write that crosses its byte ceiling in this process), so this is the
+  // containment contract's "one warning per oversized store" — not a warning
+  // per turn. The row and the panel are unaffected either way.
+  if (result.warn !== undefined) ctx.logger(CATALOG_LOGGER).warn(result.warn)
 }
 
