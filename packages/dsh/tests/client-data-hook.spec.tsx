@@ -37,7 +37,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ChatSnapshot } from '@deepseek-ai/dsh-client-ui-chat/client'
-import { MstarEngineStatusClient } from '../src/client/panel/engine-status-client'
+import { MstarEngineStatusClient, type MstarEngineStatusConnection } from '../src/client/panel/engine-status-client'
 import { useMstarEngineStatus, type MstarEngineStatusView } from '../src/client/panel/use-mstar-engine-status'
 import type { MstarEngineStatusPayload } from '../src/types'
 import {
@@ -348,5 +348,64 @@ describe('MstarEngineStatusClient — store mechanics', () => {
     expect(notifications).toBeGreaterThan(0)
     // The throwing listener did not stop the write.
     expect(client.getSnapshot().entries.size).toBe(1)
+  })
+})
+
+describe('MstarEngineStatusClient — connection generation fence', () => {
+  /**
+   * A gateway whose answers are released by the test: `calls` records the
+   * request, and the answer is delivered only when the returned `release()` is
+   * invoked — so the "generation changed WHILE a request was in flight" ordering
+   * is exercised exactly, not simulated.
+   */
+  function deferredGateway(envelope: unknown): { connection: MstarEngineStatusConnection; calls: number; release(): void } {
+    const state = { calls: 0, release: (): void => {} }
+    const connection = {
+      rpc: {
+        call(): Promise<unknown> {
+          state.calls += 1
+          return new Promise((resolve) => { state.release = () => { resolve(envelope) } })
+        },
+      },
+    } as unknown as MstarEngineStatusConnection
+    return {
+      connection,
+      get calls() { return state.calls },
+      release: () => { state.release() },
+    }
+  }
+
+  it('drops an in-flight answer issued before a new connection generation', async () => {
+    const gateway = deferredGateway(servedSnapshot(payload('2.0.4')))
+    let onGeneration: (() => void) | null = null
+    const client = new MstarEngineStatusClient({
+      ...gateway.connection,
+      generation: { subscribe: (listener: () => void) => { onGeneration = listener; return () => {} } },
+    })
+    client.ensure(SESSION_ID, SESSION_CWD, 1)
+    expect(gateway.calls).toBe(1)
+    // The generation changes while that request is still on the wire (the
+    // reconnect case): the answer belongs to the connection that is gone.
+    ;(onGeneration as unknown as () => void)()
+    gateway.release()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    // Nothing landed, so the panel is NOT showing pre-reconnect data as `ok`…
+    expect(client.getSnapshot().entries.size).toBe(0)
+    // …and the next render really re-issues the request (the repull the
+    // invalidation exists to force is not suppressed by the stale answer).
+    client.ensure(SESSION_ID, SESSION_CWD, 1)
+    expect(gateway.calls).toBe(2)
+  })
+
+  it('keeps the answer of the current generation', async () => {
+    const gateway = deferredGateway(servedSnapshot(payload('2.0.4')))
+    const client = new MstarEngineStatusClient(gateway.connection)
+    client.ensure(SESSION_ID, SESSION_CWD, 1)
+    gateway.release()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const entry = client.getSnapshot().entries.get(SESSION_ID)
+    expect(entry?.anchorTime).toBe(1)
+    expect(entry?.fetch.status).toBe('ok')
+    client.dispose()
   })
 })

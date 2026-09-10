@@ -16,6 +16,14 @@
  * ({@link parseEngineStatusResult}) — session A's panel can never render
  * session B's snapshot.
  *
+ * GENERATIONS: a new connection generation makes every wire-derived byte
+ * suspect, so `invalidate()` bumps a generation counter, drops the cache and
+ * clears the in-flight registry; a request answered after the bump is discarded
+ * on arrival ({@link MstarEngineStatusClient.write}) and the next render
+ * re-issues it. Without the fence an in-flight pre-reconnect answer would
+ * repopulate the cache and then suppress the repull the invalidation exists to
+ * force.
+ *
  * The store is written ONLY from a response continuation (never during a
  * render), so reading it through `useSyncExternalStore` stays within React's
  * snapshot contract.
@@ -75,6 +83,8 @@ export class MstarEngineStatusClient {
   private readonly inFlight = new Map<string, Promise<void>>()
   private readonly abort = new AbortController()
   private generationDisposer: (() => void) | null = null
+  /** Connection generation: bumped by {@link invalidate}; a mismatched answer is dropped. */
+  private generation = 0
   private disposed = false
 
   /**
@@ -120,9 +130,17 @@ export class MstarEngineStatusClient {
     this.inFlight.set(key, request)
   }
 
-  /** Drop every cached answer (a new connection generation invalidates the wire data). */
+  /**
+   * Drop every cached answer (a new connection generation invalidates the wire
+   * data) and fence off the requests already on the wire: their answers belong
+   * to the previous generation and must never repopulate the cache, or the
+   * repull this invalidation exists to force would be suppressed by them.
+   */
   invalidate(): void {
-    if (this.disposed || this.snapshot.entries.size === 0) return
+    if (this.disposed) return
+    this.generation += 1
+    this.inFlight.clear()
+    if (this.snapshot.entries.size === 0) return
     this.snapshot = EMPTY
     this.notify()
   }
@@ -136,8 +154,12 @@ export class MstarEngineStatusClient {
     this.listeners.clear()
   }
 
-  /** One request → one validated entry. Never throws: a fault is an explicit reason. */
+  /**
+   * One request → one validated entry. Never throws: a fault is an explicit
+   * reason.
+   */
   private async fetch(sessionId: string, cwd: string, anchorTime: number): Promise<void> {
+    const generation = this.generation
     let answer: MstarEngineStatusFetch
     if (this.connection === null || this.connection === undefined || typeof this.connection.rpc?.call !== 'function') {
       answer = { status: 'unavailable', reason: 'no-connection' }
@@ -157,12 +179,25 @@ export class MstarEngineStatusClient {
         answer = { status: 'unavailable', reason: `transport-error:${(error as Error)?.message ?? 'unknown'}` }
       }
     }
-    this.write(sessionId, anchorTime, answer)
+    this.write(generation, sessionId, anchorTime, answer)
   }
 
-  /** Publish one answer (the only writer — always outside a render). */
-  private write(sessionId: string, anchorTime: number, fetch: MstarEngineStatusFetch): void {
+  /**
+   * Publish one answer (the only writer — always outside a render).
+   *
+   * An answer issued under a superseded connection generation is DROPPED: it
+   * describes the connection that is gone, and publishing it would both render
+   * pre-reconnect data as `ok` and suppress the repull `invalidate()` forces
+   * (the stale answer would satisfy `ensure`'s anchor check).
+   */
+  private write(
+    generation: number,
+    sessionId: string,
+    anchorTime: number,
+    fetch: MstarEngineStatusFetch,
+  ): void {
     if (this.disposed) return
+    if (generation !== this.generation) return
     const entries = new Map(this.snapshot.entries)
     entries.set(sessionId, { anchorTime, fetch })
     this.snapshot = { entries }
