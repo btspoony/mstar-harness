@@ -2,9 +2,10 @@
  * IterationInfoSection (spec panel-tabs §3
  * — the SHARED iteration info block): the
  * Content Head — iteration summary (the collapsible toggle row) + the 5
- * horizontal iteration steps + the branches panel — rendered by BOTH tabs
+ * iteration steps stacked VERTICALLY + the branches panel — rendered by BOTH
+ * tabs
  * from the SAME `view.iteration` data (the tasks tab inside IterationTaskPage
- * above the kanban, the agents tab inside AgentCanvasPage above the canvas).
+ * above the board, the agents tab inside AgentCanvasPage above the canvas).
  * One implementation, two mounts — 任务迭代与代理执行共用同一迭代信息块.
  *
  * The component is extracted VERBATIM from the former inline head of
@@ -13,18 +14,20 @@
  * - Content Head (spec §3): the iteration info (iterationId / gate verdict /
  *   status note) rides the summary row, which IS the toggle (a native button
  *   with aria-expanded + aria-controls pointing at the body). The
- *   expanded body renders the Steps HORIZONTALLY as 5 EQUAL full-width unit
- *   blocks (badge/phase/chip
- *   centered, --mstar-space-* gap; no connector bars) with the current step
- *   highlighted on the block itself (the same honesty as the zone stepper:
- *   no "completed" checkmarks) plus the branch panel (rendered ONLY while the
- *   iteration is active, spec §3). Plan (spec panel-f4 §2.3 R8/R9): the expanded body is a LEFT-RIGHT
- *   SPLIT — branches (small half, DOM-first) + steps (large half), with the
- *   `data-iteration-head-split` container present only while branches render;
+ *   expanded body renders the Steps as a VERTICAL 5-item stacked stepper
+ *   (one row per step: badge · phase · chip · verdict seat; plan sidebar
+ *   §L4.2 — the horizontal row cannot fit the 300px column) with the current
+ *   step highlighted on the block itself (the same honesty as the zone
+ *   stepper: no "completed" checkmarks) plus the branch panel (rendered ONLY
+ *   while the iteration is active, spec §3). Plan (spec panel-f4 §2.3
+ *   R8/R9, re-shaped by plan sidebar §L4.2): the expanded body STACKS —
+ *   branches (DOM-first) above the steps; the `data-iteration-head-split`
+ *   container is present only while branches render;
  *   each step reserves the fixed-height verdict seat (`data-step-verdict-seat`)
  *   and the PASS/FAIL badge renders only for a current step with a real gate
  *   verdict (`state === 'current' && verdict !== 'unknown'` — Phase 1 renders
- *   no badge), so the centered content groups align across steps.
+ *   no badge), so every step row has the SAME children (badge/phase/chip/seat)
+ *   and the rows align across steps.
  *
  * Collapse/expand (spec §3): a local `useState` defaulted to
  * the iteration state — `active === false` → collapsed to a one-line summary
@@ -86,9 +89,9 @@ const STATE_LABEL = {
  * — exported pure for the render tests, the `nextExpandedOnActivation`
  * precedent): the `data-iteration-head-split` container renders ONLY while
  * the branch panel renders (`active && branches !== null`); otherwise the
- * expanded body renders the steps row ALONE — the expanded-inactive fallback
+ * expanded body renders the steps stack ALONE — the expanded-inactive fallback
  * (a user manually expands an inactive head → the 5-step idle skeleton
- * without the split). The `active + branches null` arm is projection-
+ * without the wrapper). The `active + branches null` arm is projection-
  * unreachable (branches are always projected non-null while active), but the
  * predicate keeps the decision a single, testable source of truth.
  */
@@ -134,13 +137,13 @@ export function IterationInfoSection({ iteration, t }: IterationInfoSectionProps
     ? t('zone.iteration.step-label', { n: String(iteration.currentStep), total: String(iteration.steps.length) })
     : t('page.iteration.not-started')
 
-  // The horizontal steps row (spec §3) — shared by the split layout (steps
-  // right) and the no-branches fallback (steps alone). Each step reserves the
-  // fixed-height verdict seat (spec panel-f4 §2.3 R9): the
+  // The vertical steps stack (plan sidebar §L4.2) — shared by the stacked
+  // layout (branches above) and the no-branches fallback. Each step reserves
+  // the fixed-height verdict seat (spec panel-f4 §2.3 R9): the
   // conditional PASS/FAIL badge fills the seat on the current step only, so
   // every step item has the SAME children (badge/phase/chip/seat) and the
-  // centered content groups align identically — the old in-flow badge (an
-  // extra child on the current step) shifted that block. The badge renders
+  // rows align identically — the old in-flow badge (an
+  // extra child on the current step) shifted that row. The badge renders
   // ONLY for a current step carrying a REAL gate verdict — Phase 1 (Step 1
   // current, verdict 'unknown') renders NO badge (spec R9).
   const stepsRow = (
@@ -202,19 +205,19 @@ export function IterationInfoSection({ iteration, t }: IterationInfoSectionProps
 
       {expanded && (
         <div className={css.iterationHeadBody} id="iteration-head-body" data-iteration-head-body>
-          {/* Steps, HORIZONTAL (spec §3): PHASE_IDS order — 5 EQUAL full-width unit blocks
-              (flex 1 1 0, centered content, --mstar-space-* gap; the old
-              connector bars are removed, the gap replaces them), the
-              current step highlighted on the block itself (honest — the
-              schema knows only current/next/done/idle). */}
+          {/* Steps, VERTICAL (plan sidebar §L4.2): PHASE_IDS order — one row
+              per step (badge · phase · chip · verdict seat; a --mstar-space-*
+              gap; the old connector bars are removed, the gap replaces
+              them), the current step highlighted on the block itself. */}
           {iterationSplitActive(active, iteration.branches) ? (
-            /* LEFT-RIGHT split (spec panel-f4 §2.3 R8):
-               branches LEFT (small half) + steps RIGHT (large half). DOM
-               order: branches BEFORE steps — a plain flex row puts branches
-               on the left. The split container exists ONLY while the
+            /* STACKED wrapper (spec panel-f4 §2.3 R8, re-shaped by plan
+               sidebar §L4.2): branches FIRST + the steps stack below —
+               the former left-right row cannot fit the 300px column, the
+               DOM order is unchanged. The wrapper exists ONLY while the
                branches panel renders (`iterationSplitActive` — active +
-               branches non-null); inactive / branches-null → the steps row
-               alone (existing semantics, the expanded-inactive fallback). */
+               branches non-null); inactive / branches-null → the steps
+               stack alone (existing semantics, the expanded-inactive
+               fallback). */
             <div className={css.iterationHeadSplit} data-iteration-head-split>
               {/* Branch panel (spec §3): rendered ONLY while the iteration
                   is active (branches are null while inactive, spec §3). */}

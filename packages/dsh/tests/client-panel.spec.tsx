@@ -6,8 +6,8 @@
  * Coverage:
  * - full fixture (iteration + state + freshness): every section renders —
  *   the meta dock (version/harness, header removed), the
- *   IterationTaskPage on the tasks tab (Content Head with the horizontal
- *   Step 1–5 row + branches, and the full-width 5-column kanban — the
+ *   IterationTaskPage on the tasks tab (Content Head with the vertical
+ *   Step 1–5 stack + branches, and the five stacked kanban groups — the
  *   WorkflowCanvas zone dashboard is replaced by Task 2 and no longer
  *   renders here), plan status board, residual counts, branch/policy/lease
  *   anchors, knowledge digest, direction one-liner, last-updated marker;
@@ -43,11 +43,13 @@
  *   Task 2): the Content Head — `data-iteration-head-*` anchors pin the
  *   collapse/expand defaults (active → expanded, inactive → collapsed one-line
  *   summary with the muted "not started" note + toggle affordance), the
- *   horizontal 5-step row (PHASE_IDS order, current/next/done/idle, connectors,
+ *   vertical 5-step stack (PHASE_IDS order, current/next/done/idle,
  *   current-step verdict) and the branches panel; the kanban anchors
- *   (`data-kanban-column` 5 columns / `data-tasks-total` / `data-mstar-kanban`)
- *   ride the reused TaskBoard; css asserts the tasks area is the independent
- *   vertical scroll body and the kanban columns spread full-width. The
+ *   (`data-kanban-column` 5 stacked groups / `data-tasks-total` /
+ *   `data-mstar-kanban`) ride the reused TaskBoard; css asserts the tasks
+ *   area is flow content in the panel's single scroll body, the kanban
+ *   groups stack (the ≥720px group grid reaches them), and the tasks
+ *   subtree carries no horizontal scroller. The
  *   WorkflowCanvas-era render surfaces (zone frames, footer legend/gate
  *   summary, agent event dock, agent flow zone) are GONE from the tasks tab —
  *   their render tests migrate to the agent-canvas / event-log plans (the
@@ -923,8 +925,11 @@ describe('workflow panel — T2 narrow-column shell: three zones / single scroll
     expect(cssText).toMatch(/\.meta\s*\{[\s\S]*?flex:\s*none/)
     // Singular scroll ownership (§L2.2): exactly ONE overflow-y declaration
     // in the shell CSS and it lives on .scroll; NO element declares an
-    // overflow-x scroller. (Per-page module CSS is the owning page tasks':
-    // events/canvas re-shapes retire theirs later on the board.)
+    // overflow-x scroller. The tasks subtree's own module css (zones) is
+    // swept too: its former `.kanban` horizontal scroller is retired with
+    // the stacked groups. (The events page retires its internal scroll on
+    // the events task; the canvas module dies with the agents task — the
+    // whole-panel sweep is theirs.)
     const stripped = cssText.replace(/\/\*[\s\S]*?\*\//g, '')   // comments off — scan declarations only
     const overflowY = [...stripped.matchAll(/overflow-y:\s*([^;}]+)/g)].map((m) => m[1]!.trim())
     expect(overflowY).toEqual(['auto'])
@@ -932,6 +937,10 @@ describe('workflow panel — T2 narrow-column shell: three zones / single scroll
     expect(scrollBlock).not.toBeNull()
     expect(scrollBlock![0]).toContain('overflow-x: hidden')
     expect(stripped).not.toMatch(/overflow-x:\s*(?:auto|scroll)/)
+    const zonesStripped = readFileSync(new URL('../src/client/panel/zones/zones.module.css', import.meta.url), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+    expect([...zonesStripped.matchAll(/overflow-y:\s*([^;}]+)/g)]).toEqual([])
+    expect(zonesStripped).not.toMatch(/overflow-x:\s*(?:auto|scroll)/)
     // Width signal (§L2.7): container queries only — the two obsolete
     // viewport media queries are deleted (reduced-motion is not a width query).
     expect(cssText).toMatch(/@container\s*\(max-width:\s*480px\)/)
@@ -1501,19 +1510,20 @@ describe('workflow panel — T1 panel rename: "MStar 工作流" / "MStar Workflo
 /* ---------------------------------------------------------------------------
  * T7 iteration-task page (spec panel-tabs §3
  * Task 2): the tasks tab renders the IterationTaskPage — Content Head
- * (collapsible iteration summary + HORIZONTAL Step 1–5 row + branches) above
- * the full-width standard kanban (the reused TaskBoard). The WorkflowCanvas
+ * (collapsible iteration summary + VERTICAL Step 1–5 stack + branches) above
+ * the five stacked kanban groups (the reused TaskBoard; plan sidebar §L4.2).
+ * The WorkflowCanvas
  * zone dashboard (zone frames / footer legend + gate summary / corner event
  * dock / agent flow zone) no longer renders on the tasks tab — its render
  * surfaces migrate to the agent-canvas / event-log plans, the projection
  * layer stays unit-tested in client-graph-projection.spec.ts.
  * ------------------------------------------------------------------------- */
 
-describe('workflow panel — T7 iteration-task page: content head collapse/expand + horizontal steps + full-width kanban (spec panel-tabs §3)', () => {
+describe('workflow panel — T7 iteration-task page: content head collapse/expand + vertical steps + stacked kanban groups (spec panel-tabs §3, plan sidebar §L4.2)', () => {
   let html = ''
   beforeAll(async () => { html = await panelHtml(fullSource) })
 
-  it('active iteration → head EXPANDED by default: summary row + horizontal 5-step row + branches', async () => {
+  it('active iteration → head EXPANDED by default: summary row + vertical 5-step stack + branches', async () => {
     expect(html).toContain('data-iteration-head')
     expect(html).toContain('data-iteration-head-active="true"')
     expect(html).toContain('data-iteration-head-expanded="true"')
@@ -1523,7 +1533,7 @@ describe('workflow panel — T7 iteration-task page: content head collapse/expan
     expect(html).toContain('data-iteration-head-verdict="pass"')
     expect(html).toContain('2/5')
     expect(html).not.toContain('Step ')
-    // The horizontal 5-step row: PHASE_IDS order, one done + one current +
+    // The vertical 5-step stack: PHASE_IDS order, one done + one current +
     // one next + two idle (the
     // completed Step 1 before current projects `done`, not idle).
     expect(html).toContain('data-iteration-head-steps')
@@ -1661,8 +1671,11 @@ describe('workflow panel — T7 iteration-task page: content head collapse/expan
     expect(zhInactive).toContain('迭代未启动')
   })
 
-  it('renders the full-width kanban in the tasks scroll area: 5 columns + total', async () => {
-    expect(html).toContain('data-mstar-tasks-scroll')
+  it('renders the five stacked kanban groups in the panel scroll flow: 5 groups + total; the page-owned scroll body is retired (plan sidebar §L2.2/§L4.2)', async () => {
+    // The page's independent vertical scroll body is RETIRED — the tasks
+    // page renders flow content inside the panel's single scroll body
+    // (`[data-mstar-scroll]`), and the retired anchor must be gone.
+    expect(html).not.toContain('data-mstar-tasks-scroll')
     expect(html).toContain('data-zone="tasks"')
     expect(html).toContain('data-mstar-kanban')
     const cols = [...html.matchAll(/data-kanban-column="([^"]+)"/g)].map((m) => m[1]!)
@@ -1670,6 +1683,11 @@ describe('workflow panel — T7 iteration-task page: content head collapse/expan
     expect(html).toContain('data-tasks-total="2"')
     expect(html).toContain('data-plan-id="00000809-dsh-workflow-viz-panel"')
     expect(html).toContain('data-plan-status="InProgress"')
+    // Flow placement (§L2.5 tasks column): the board sits inside the panel
+    // scroll body, and the project rollup + the in-flow digest FOLLOW it in
+    // the same scroll flow (the digest is `[data-mstar-sidebar]`).
+    expect(html.indexOf('data-mstar-scroll')).toBeLessThan(html.indexOf('data-mstar-page="tasks"'))
+    expect(html.indexOf('data-mstar-kanban')).toBeLessThan(html.indexOf('data-mstar-sidebar'))
     // The tasks page never mounts the WorkflowCanvas-era surfaces.
     expect(html).not.toContain('data-mstar-canvas')
     expect(html).not.toContain('data-mstar-iteration-steps')
@@ -1702,23 +1720,34 @@ describe('workflow panel — T7 iteration-task page: content head collapse/expan
     expect(g).not.toContain('data-graph-empty="no-plans"')
   })
 
-  it('css: the tasks page is flow content in the panel scroll zone — no per-page scroller (plan sidebar §L2.2)', async () => {
+  it('css: the tasks page is flow content in the panel scroll zone; the kanban stacks as five groups on the shared group grid (plan sidebar §L2.2/§L4.2/§L4.3)', async () => {
     const panelCss = readFileSync(new URL('../src/client/panel/panel.module.css', import.meta.url), 'utf8')
-    // The page is a flex column in the scroll zone's flow; the tasks area
-    // takes the remaining space but owns NO scroller any more — the panel
-    // scroll body (`[data-mstar-scroll]`) is the single scroller (§L2.2).
+    // The page is a flex column in the scroll zone's flow; the tasks area is
+    // plain flow content — the panel scroll body (`[data-mstar-scroll]`) is
+    // the single scroller (§L2.2), so it owns NO scroll and NO flex sizing.
     expect(panelCss).toMatch(/\.iterationPage\s*\{[\s\S]*?flex:\s*1/)
-    expect(panelCss).toMatch(/\.iterationTasks\s*\{[\s\S]*?flex:\s*1/)
-    expect(panelCss).toMatch(/\.iterationTasks\s*\{[\s\S]*?min-height:\s*0/)
+    expect(panelCss).toMatch(/\.iterationTasks\s*\{[\s\S]*?display:\s*flex/)
     expect(panelCss).not.toMatch(/\.iterationTasks\s*\{[^}]*overflow/)
+    expect(panelCss).not.toMatch(/\.iterationTasks\s*\{[^}]*flex:\s*1/)
     // The head stays fixed (flex:none) above the flowing tasks area.
     expect(panelCss).toMatch(/\.iterationHead\s*\{[\s\S]*?flex:\s*none/)
-    // The kanban columns spread to fill the content width: flex grow without
-    // a max-width cap (the removed 200px ceiling was the "small box").
+    // The board rides the SHARED group grid (§L4.3 — one wide rule, not a
+    // second layout): TaskBoard applies the shell's `.groupGrid` class to
+    // the `data-mstar-kanban` container, so the ≥720px container spread
+    // reaches the board groups.
+    const taskBoardSrc = readFileSync(new URL('../src/client/panel/zones/TaskBoard.tsx', import.meta.url), 'utf8')
+    expect(taskBoardSrc).toMatch(/panelCss\.groupGrid/)
+    // The kanban itself is NO LONGER a horizontal flex row with an internal
+    // scroller (§L4.2): no flex row, no overflow, no 120px column floors.
     const zonesCss = readFileSync(new URL('../src/client/panel/zones/zones.module.css', import.meta.url), 'utf8')
+    const kanbanRule = zonesCss.match(/\.kanban\s*\{[\s\S]*?\}/)
+    expect(kanbanRule).not.toBeNull()
+    expect(kanbanRule![0]).not.toContain('display: flex')
+    expect(kanbanRule![0]).not.toContain('overflow')
     const columnRule = zonesCss.match(/\.kanbanColumn\s*\{[\s\S]*?\}/)
     expect(columnRule).not.toBeNull()
-    expect(columnRule![0]).toContain('flex: 1 1 0')
+    expect(columnRule![0]).not.toContain('flex: 1 1 0')
+    expect(columnRule![0]).not.toContain('min-width: 120px')
     expect(columnRule![0]).not.toContain('max-width')
   })
 })
@@ -1749,9 +1778,9 @@ describe('workflow panel — F4.3 iteration zone: split layout + verdict badge s
   it('active + branches → the split container wraps branches (DOM-first) and steps', async () => {
     const html = await panelHtml(fullSource)
     expect(html).toContain('data-iteration-head-split')
-    // DOM order: the split wraps BOTH panels, branches BEFORE steps — a plain
-    // flex row puts branches on the left (spec R8; the pre-split DOM had
-    // steps first, which would put steps left).
+    // DOM order: the split wraps BOTH panels, branches BEFORE steps (spec
+    // R8; the stacked narrow-column head keeps that order — branches render
+    // above the vertical stepper, plan sidebar §L4.2).
     expect(html.indexOf('data-iteration-head-split')).toBeLessThan(html.indexOf('data-iteration-head-branches'))
     expect(html.indexOf('data-iteration-head-branches')).toBeLessThan(html.indexOf('data-iteration-head-steps'))
   })
@@ -1838,16 +1867,22 @@ describe('workflow panel — F4.3 iteration zone: split layout + verdict badge s
     expect(zhHtml.match(/data-step-verdict-seat/g)).toHaveLength(5)
   })
 
-  it('css: split flex row (branches + absorbing steps row) — no viewport media queries left in the shell css; badge aligned via the fixed-height seat, no align-self skew', async () => {
+  it('css: the head body stacks (branches then the vertical stepper) — no viewport media queries left in the shell css; badge aligned via the fixed-height seat, no align-self skew (plan sidebar §L4.2)', async () => {
     const cssText = readFileSync(new URL('../src/client/panel/panel.module.css', import.meta.url), 'utf8')
-    // Split container: a flex row with a ramp gap (spec R8).
-    expect(cssText).toMatch(/\.iterationHeadSplit\s*\{[\s\S]*?display:\s*flex[\s\S]*?gap:\s*var\(--mstar-space-/)
-    // The steps row absorbs ALL remaining width (flex 1 1 0).
-    expect(cssText).toMatch(/\.iterationHeadSplit\s*>\s*\.iterationStepsRow\s*\{[\s\S]*?flex:\s*1\s+1\s+0/)
+    // The split container is a STACKED column now (§L4.2 — a left-right row
+    // cannot fit the 300px floor): branches and the stepper stack with a
+    // ramp gap, DOM order unchanged (branches first).
+    expect(cssText).toMatch(/\.iterationHeadSplit\s*\{[\s\S]*?display:\s*flex[\s\S]*?flex-direction:\s*column[\s\S]*?gap:\s*var\(--mstar-space-/)
+    // The stepper is the vertical 5-item stack (§L4.2): the row runs down
+    // the column; each item is a horizontal badge·phase·chip·seat row.
+    expect(cssText).toMatch(/\.iterationStepsRow\s*\{[\s\S]*?flex-direction:\s*column/)
+    expect(cssText).toMatch(/\.iterationStepItem\s*\{[\s\S]*?display:\s*flex/)
+    expect(cssText).not.toMatch(/\.iterationStepItem\s*\{[^}]*flex:\s*1\s+1\s+0/)
+    expect(cssText).not.toMatch(/\.iterationStepsRow\s*\{[^}]*overflow-x/)
     // Viewport media queries are DELETED (plan sidebar §L2.7): neither the
     // ≤860px stack fallback nor the ≥861px branch width cap survives — the
     // width signal is the root's container queries (asserted in the shell
-    // block). The narrow-column head re-shape is the next task on the board.
+    // block).
     expect(cssText).not.toMatch(/@media\s*\((?:max|min)-width:/)
     // Verdict alignment fix: every step reserves a fixed-height flex seat; the
     // badge rule carries NO align-self (the `align-self: flex-start` skew
@@ -2033,10 +2068,12 @@ describe('workflow panel — T7 data projection integration (spec panel-tabs §3
 
 /* ---------------------------------------------------------------------------
  * T4 task board kanban (spec panel-zones §3/§8
- * Task 1): the 5 PLAN_STATE_IDS columns with localized headers + count badges,
+ * Task 1): the 5 PLAN_STATE_IDS groups — stacked in constant order (plan
+ * sidebar §L4.2) — with localized headers + count badges,
  * plan cards (data-plan-id / data-plan-status — the anchors shared with the
- * sidebar), the dim inter-column flow arrows (chain + Blocked ⇄ docking at the
- * merged column), the clickable per-column 「更多」 expand (the projection
+ * sidebar), the flow glyphs riding each target group's header (chain → plus
+ * the Blocked ⇄ back-edge docking at the merged column), the clickable
+ * 「更多」 expand (the projection
  * KEEPS all rows and reports `capped` — the render truncates to PLAN_CAP and
  * surfaces the +N more button), the muted no-plans empty state, and the merged
  * blocked-unknown column's muted NEUTRAL (non-orange) treatment. The sort/cap
@@ -2044,7 +2081,7 @@ describe('workflow panel — T7 data projection integration (spec panel-tabs §3
  * client-graph-projection.spec.ts are independent (compass Risk Register).
  * ------------------------------------------------------------------------- */
 
-describe('workflow panel — T4 task board kanban: 5 columns + counts + cards + arrows + 「更多」 expand + empty state (spec panel-zones §3/§8)', () => {
+describe('workflow panel — T4 task board kanban: 5 stacked groups + counts + cards + flow glyphs + 「更多」 expand + empty state (spec panel-zones §3/§8, plan sidebar §L4.2)', () => {
   /** The tasks zone slice: from the TaskBoard zone frame to the in-flow digest. */
   function tasksSlice(html: string): string {
     const start = html.indexOf('data-zone="tasks"')
@@ -2079,7 +2116,7 @@ describe('workflow panel — T4 task board kanban: 5 columns + counts + cards + 
   let html = ''
   beforeAll(async () => { html = await panelHtml(kanbanSource) })
 
-  it('renders 5 columns in PLAN_STATE_IDS order with count badges and the total', async () => {
+  it('renders 5 stacked groups in PLAN_STATE_IDS order with count badges and the total', async () => {
     expect(html).toContain('data-mstar-kanban')
     const cols = [...html.matchAll(/data-kanban-column="([^"]+)"/g)].map((m) => m[1]!)
     expect(cols).toEqual(['Todo', 'InProgress', 'InReview', 'Done', 'blocked-unknown'])
@@ -2124,8 +2161,9 @@ describe('workflow panel — T4 task board kanban: 5 columns + counts + cards + 
     expect(mergedRule![0]).not.toMatch(/--dsw-alias-state-(?:warn|error|business)/)
   })
 
-  it('renders the dim inter-column flow arrows: chain → + Blocked ⇄ docking at the merged column (spec §2.4)', async () => {
+  it('flow glyphs ride the target group header: chain → + the Blocked ⇄ back-edge docking at the merged group (spec §2.4, plan sidebar §L4.2)', async () => {
     const k = tasksSlice(html)
+    // All four glyphs survive, labels unchanged.
     expect(k.match(/data-kanban-arrow=/g)).toHaveLength(4)
     expect(k).toContain('data-kanban-arrow="Todo-InProgress"')
     expect(k).toContain('data-kanban-arrow="InProgress-InReview"')
@@ -2133,12 +2171,19 @@ describe('workflow panel — T4 task board kanban: 5 columns + counts + cards + 
     expect(k).toContain('data-kanban-arrow="InProgress-Blocked"')
     // The bidirectional glyph rides the Blocked back-edge.
     expect(k).toContain('⇄')
-    // Arrows sit in the column gaps (chain: between the first four columns).
+    // Each glyph docks INSIDE its target group's header (the stacked groups
+    // have no inter-column gaps): the target column anchor precedes its
+    // glyph, and the glyph precedes the next column anchor.
     const pos = (s: string) => k.indexOf(s)
-    expect(pos('data-kanban-column="Todo"')).toBeLessThan(pos('data-kanban-arrow="Todo-InProgress"'))
-    expect(pos('data-kanban-arrow="Todo-InProgress"')).toBeLessThan(pos('data-kanban-column="InProgress"'))
-    expect(pos('data-kanban-column="InProgress"')).toBeLessThan(pos('data-kanban-arrow="InProgress-Blocked"'))
-    expect(pos('data-kanban-arrow="InProgress-Blocked"')).toBeLessThan(pos('data-kanban-column="blocked-unknown"'))
+    expect(pos('data-kanban-column="Todo"')).toBeLessThan(pos('data-kanban-column="InProgress"'))
+    expect(pos('data-kanban-column="InProgress"')).toBeLessThan(pos('data-kanban-arrow="Todo-InProgress"'))
+    expect(pos('data-kanban-arrow="Todo-InProgress"')).toBeLessThan(pos('data-kanban-column="InReview"'))
+    // The glyph sits in the header row, before the group's count badge.
+    const ip = columnSlice(html, 'InProgress')
+    expect(ip.indexOf('data-kanban-arrow="Todo-InProgress"')).toBeLessThan(ip.indexOf('data-kanban-count='))
+    // The ⇄ back-edge docks at the merged group's header, before its count.
+    const merged = columnSlice(html, 'blocked-unknown')
+    expect(merged.indexOf('data-kanban-arrow="InProgress-Blocked"')).toBeLessThan(merged.indexOf('data-kanban-count='))
   })
 
   it('overflow: 7 Done plans → top-5 rendered + count 7 + a clickable +2 more button (data-kanban-more)', async () => {

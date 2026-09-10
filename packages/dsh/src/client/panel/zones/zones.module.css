@@ -11,7 +11,8 @@
  * content migrated into `pages/EventLogPage.tsx` + `pages/event-log.module.css`).
  * What remains serves the components mounted today:
  *   - the shared `.zone` frame (TaskBoard),
- *   - the TaskBoard kanban (reused full-width by IterationTaskPage),
+ *   - the TaskBoard kanban (five stacked groups, reused in flow by
+ *     IterationTaskPage — plan sidebar §L4.2),
  *   - the Legend agent-pipeline + entity-status swatches (mounted on the
  *     agent canvas).
  *
@@ -124,11 +125,13 @@
   border: 1px dashed var(--dsw-alias-label-caption);
 }
 
-/* --- task board kanban (spec §3/§5/§7): 5 columns + count badges + plan cards + dim inter-column flow
-   arrows + per-column 「更多」 expand affordance + muted no-plans empty
-   state. Colors are --dsw-* tokens only (the blocked-unknown catch-all column
-   is muted NEUTRAL — deliberately NOT the warn/orange treatment); spacing
-   rides the --mstar-space-* ramp; hover feedback sits in the 120–150ms
+/* --- task board kanban (spec §3/§5/§7): five STACKED groups + count badges + plan cards + dim flow
+   glyphs in the group headers + per-group 「更多」 expand affordance + muted
+   no-plans empty state (plan sidebar §L4.2 — the horizontal 5-column row and
+   its internal overflow-x scroller cannot fit the 300px column and are
+   retired). Colors are --dsw-* tokens only (the blocked-unknown catch-all
+   group is muted NEUTRAL — deliberately NOT the warn/orange treatment);
+   spacing rides the --mstar-space-* ramp; hover feedback sits in the 120–150ms
    window (the panel root's reduced-motion rule kills all motion). --- */
 
 .tasksHeader {
@@ -146,34 +149,22 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* Horizontal 5-column row; on the IterationTaskPage the tasks area scrolls
-   vertically (the page's independent scroll body) and the columns SPREAD
-   full-width (flex: 1 1 0, no width cap — spec panel-tabs §3/D2); on very
-   narrow widths the row scrolls internally. */
+/* The stack container: the grid itself rides the shell's shared `.groupGrid`
+   class (applied by TaskBoard — plan sidebar §L4.3: ONE column below 720px,
+   the ≥720px container spread is that rule's, not a second layout). The
+   former `display: flex` + `overflow-x: auto` horizontal row is retired. */
 .kanban {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--mstar-space-1);
   min-width: 0;
-  overflow-x: auto;
-  overscroll-behavior: contain;
 }
 
-/* box-sizing: border-box keeps `min-width` an OUTER width — under the
-   default content-box the 150px floor silently became 166px per column and
-   the columns (+ flow arrows) overflowed the content area at normal desktop
-   widths, hiding the trailing columns behind the internal scrollbar
-   . 120px
-   outer floor: the columns spread the content width down to narrower
-   viewports; below that the row scrolls internally (the narrow-width
-   fallback, spec §3/D2). */
+/* A stacked group card: full column width, no `flex: 1 1 0` spread and no
+   `min-width: 120px` floor — both belonged to the retired horizontal row. */
 .kanbanColumn {
   box-sizing: border-box;
   display: flex;
-  flex: 1 1 0;
   flex-direction: column;
   gap: var(--mstar-space-2);
-  min-width: 120px;
+  min-width: 0;
   padding: var(--mstar-space-2);
   border: 1px solid var(--dsw-alias-border-l1);
   border-radius: 8px;
@@ -193,10 +184,11 @@
   opacity: 0.7;
 }
 
+/* The group header row: flow glyph (docking at its target group) · state
+   name · count badge (pushed right). */
 .kanbanColumnHeader {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: var(--mstar-space-1);
   min-width: 0;
 }
@@ -214,6 +206,7 @@
 
 .kanbanCount {
   flex: none;
+  margin-left: auto;
   min-width: 18px;
   padding: 0 var(--mstar-space-1);
   border: 1px solid var(--dsw-alias-border-l2);
@@ -281,10 +274,10 @@
   color: var(--dsw-alias-state-business-primary);
 }
 
-/* Dim inter-column flow arrow (spec §2.4): the chain → and the Blocked ⇄. */
+/* Dim flow glyph in the target group's header row (spec §2.4): the chain →
+   and the Blocked ⇄. */
 .kanbanArrow {
   flex: none;
-  align-self: center;
   width: 18px;
   height: 18px;
   display: inline-flex;

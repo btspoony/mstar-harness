@@ -203,11 +203,10 @@
 }
 
 /* --- IterationTaskPage (spec panel-tabs §3
- * Content Head (collapsible iteration summary + horizontal steps) +
- * full-width kanban. The page fills the content region as a flex column; the
- * head is flex:none (stays fixed) and the tasks area is the page's
- * INDEPENDENT scroll body — the kanban spreads full-width and is never
- * compressed into a small box by a canvas height. Colors are --dsw-* tokens
+ * Content Head (collapsible iteration summary + vertical steps) + the five
+ * stacked kanban groups. The page is flow content in the panel's single
+ * scroll zone (plan sidebar §L2.2 — the page-owned scroll body is retired).
+ * Colors are --dsw-* tokens
  * only; spacing rides the --mstar-space-* ramp; motion ≤200ms (killed by the
  * root reduced-motion rule). --- */
 
@@ -323,16 +322,14 @@
   border-top: 1px solid var(--dsw-alias-border-l1);
 }
 
-/* LEFT-RIGHT split (spec panel-f4 §2.3 R8): branches
- * (small half, DOM-first) LEFT + steps (large half) RIGHT — a plain flex
- * row; the DOM already puts branches before steps. (The former ≤860px stack
- * fallback and the ≥861px branch width cap died with the viewport media
- * queries — plan sidebar §L2.7; the narrow-column head re-shape is the next
- * task on the board.) */
+/* Narrow-column head body (spec panel-f4 §2.3 R8 re-shaped by plan sidebar
+ * §L4.2): branches (DOM-first) stack ABOVE the vertical stepper — the former
+ * LEFT-RIGHT flex row cannot fit the 300px floor. The DOM order is unchanged
+ * (branches before steps); only the axis turned. */
 .iterationHeadSplit {
   display: flex;
-  align-items: stretch;
-  gap: var(--mstar-space-4);
+  flex-direction: column;
+  gap: var(--mstar-space-3);
   min-width: 0;
 }
 
@@ -341,37 +338,33 @@
 }
 
 .iterationHeadSplit > .iterationStepsRow {
-  flex: 1 1 0;   /* absorbs the remaining width */
   min-width: 0;
 }
 
-/* Steps (spec §3): 5 EQUAL full-width unit blocks (flex `1 1 0` — the row
- * spreads evenly with no compression), item content centered (badge/phase/
- * chip vertically + horizontally), a consistent --mstar-space-* gap; the
- * old connector bars are REMOVED — the gap replaces them. The row's former
- * `overflow-x: auto` scroller is retired with the per-page scrollers (plan
- * sidebar §L2.2) — content flows inside the panel's single scroll zone. */
+/* Steps (plan sidebar §L4.2): the VERTICAL 5-item stacked stepper — one row
+ * per step (badge · phase · chip · reserved verdict seat). The horizontal
+ * row and its former `overflow-x: auto` scroller are retired — content flows
+ * inside the panel's single scroll zone. The current-step highlight stays on
+ * the block itself (honest — the schema knows only current/next/done/idle). */
 .iterationStepsRow {
   display: flex;
+  flex-direction: column;
   align-items: stretch;
-  gap: var(--mstar-space-3);
+  gap: var(--mstar-space-2);
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
 .iterationStepItem {
-  flex: 1 1 0;
   min-width: 0;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: var(--mstar-space-1);
-  text-align: center;
+  gap: var(--mstar-space-2);
 }
 
 .iterationStepBadge {
+  flex: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -386,6 +379,7 @@
 }
 
 .iterationStepPhase {
+  flex: 1 1 auto;
   overflow-wrap: anywhere;
   color: var(--dsw-alias-label-secondary);
   font: var(--dsw-font-xxxs-11);
@@ -393,9 +387,10 @@
 
 /* State chip: current = business glow + ring, next = dashed, idle = dim —
  * driven by the step item's `data-step-state` (spec §3 treatment carried
- * over from the zone stepper, now horizontal; the current-step highlight
- * stays on the BLOCK itself — plan Item 1). */
+ * over from the zone stepper, now a vertical stack row; the current-step
+ * highlight stays on the BLOCK itself — plan Item 1). */
 .iterationStepChip {
+  flex: none;
   display: inline-flex;
   align-items: center;
   padding: 0 var(--mstar-space-2);
@@ -450,15 +445,14 @@
   color: var(--dsw-alias-state-success-primary);
 }
 
-/* Verdict seat row (spec panel-f4 §2.3 R9): EVERY step
- * reserves a fixed-height seat below the chip — the conditional PASS/FAIL
- * badge fills the seat on the current step only. Every step item now has the
- * same children (badge/phase/chip/seat), so the centered content groups align
- * identically across steps — the old in-flow badge (an extra child on the
- * current step only) shifted that block's centered group. The badge itself
- * centers in the seat (inherit the item's center alignment — the old
- * `align-self: flex-start` skew is gone). */
+/* Verdict seat (spec panel-f4 §2.3 R9): EVERY step
+ * reserves a fixed-height seat at the end of its row — the conditional
+ * PASS/FAIL badge fills the seat on the current step only. Every step item
+ * has the same children (badge/phase/chip/seat), so the rows align
+ * identically — the old in-flow badge (an extra child on the current step)
+ * shifted that block. The badge centers in the seat. */
 .iterationVerdictSeat {
+  flex: none;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -536,11 +530,12 @@
 
 /* Task area: flow content in the panel's scroll zone (plan sidebar §L2.2 —
  * the page's own vertical scroll body is retired; `[data-mstar-scroll]` is
- * the only scroller). The kanban spreads full-width, never compressed by a
- * canvas height. */
+ * the only scroller). A plain stack: the board, then the project rollup. */
 .iterationTasks {
-  flex: 1;
-  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-3);
+  min-width: 0;
 }
 
 /* --- workspace-state digest: IN FLOW at the end of the scroll zone (plan
