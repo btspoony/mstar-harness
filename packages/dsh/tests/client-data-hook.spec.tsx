@@ -492,3 +492,98 @@ describe('MstarEngineStatusClient — bounded request and explicit refresh', () 
     expect(gateway.calls).toHaveLength(1)
   })
 })
+
+describe('MstarEngineStatusClient — a refresh never publishes a superseded anchor', () => {
+  /**
+   * A gateway whose answers are released by the test IN REQUEST ORDER (index 0
+   * is the first request the client issued), so the ordering that makes the
+   * hazard real is exercised exactly rather than simulated: a refresh issued
+   * for the anchor it saw, and its answer landing after a newer anchor row has
+   * already been answered.
+   */
+  function deferredGateway(): {
+    connection: MstarEngineStatusConnection
+    calls: Array<{ sessionId: string; cwd: string }>
+    answer(callIndex: number, snapshot: unknown): void
+  } {
+    const pending: Array<{ resolve(envelope: unknown): void }> = []
+    const calls: Array<{ sessionId: string; cwd: string }> = []
+    const connection = {
+      rpc: {
+        call(_channel: string, _endpoint: string, request: { args: { sessionId: string; cwd: string } }): Promise<unknown> {
+          calls.push(request.args)
+          const slot: { resolve(envelope: unknown): void } = { resolve: () => {} }
+          pending.push(slot)
+          return new Promise((resolve) => { slot.resolve = resolve })
+        },
+      },
+    } as unknown as MstarEngineStatusConnection
+    return {
+      connection,
+      calls,
+      answer: (callIndex, snapshot) => {
+        const slot = pending[callIndex]
+        if (slot === undefined) throw new Error(`no pending request at index ${callIndex}`)
+        slot.resolve(snapshot)
+      },
+    }
+  }
+
+  /**
+   * One refresh pass with the interval treated as elapsed for every entry.
+   * `refresh()` is public as the interval's deterministic body, so the pass runs
+   * under a deliberately advanced clock while the client's own timer stays
+   * inert — the interval below is far longer than any real elapsed test time,
+   * so no stray pass can slip in across the `await`s.
+   */
+  function refreshPass(client: MstarEngineStatusClient, intervalMs: number): void {
+    const realNow = Date.now
+    Date.now = (): number => realNow() + intervalMs
+    try {
+      client.refresh()
+    } finally {
+      Date.now = realNow
+    }
+  }
+
+  /** One settled pass: let every already-resolved response continuation run. */
+  const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
+
+  /** The refresh interval every case uses: a day, so only the seam pass can fire. */
+  const REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000
+
+  it('drops a refresh answer that arrives after the anchor moved (the in-flight case)', async () => {
+    const gateway = deferredGateway()
+    const client = new MstarEngineStatusClient(gateway.connection, { refreshIntervalMs: REFRESH_INTERVAL_MS })
+    client.ensure(SESSION_ID, SESSION_CWD, 1)
+    gateway.answer(0, servedSnapshot(payload('anchor-1'), { at: '2024-07-03T09:23:20.000Z' }))
+    await settle()
+    expect(client.getSnapshot().entries.get(SESSION_ID)?.anchorTime).toBe(1)
+
+    // The refresh for anchor 1 is issued first (nothing has moved yet)…
+    refreshPass(client, REFRESH_INTERVAL_MS)
+    expect(gateway.calls).toHaveLength(2)
+    // …then the newer anchor row's own request is issued while it is in flight.
+    client.ensure(SESSION_ID, SESSION_CWD, 2)
+    expect(gateway.calls).toHaveLength(3)
+
+    // The newer anchor is answered first, and the stale refresh answer arrives
+    // only afterwards: it must not roll the cache back to anchor 1 under a
+    // refreshed cache clock and with no staleness marker.
+    gateway.answer(2, servedSnapshot(payload('anchor-2'), { at: '2024-07-03T09:24:20.000Z' }))
+    await settle()
+    expect(client.getSnapshot().entries.get(SESSION_ID)?.anchorTime).toBe(2)
+    gateway.answer(1, servedSnapshot(payload('refresh-of-anchor-1'), { at: '2024-07-03T09:25:20.000Z' }))
+    await settle()
+    const entry = client.getSnapshot().entries.get(SESSION_ID)
+    expect(entry?.anchorTime).toBe(2)
+    if (entry?.fetch.status !== 'ok') throw new Error('expected ok')
+    expect(entry.fetch.payload.version).toBe('anchor-2')
+    // The superseded anchor is not requeued behind the answer either: a later
+    // render asking for anchor 2 is already satisfied by the cache.
+    client.ensure(SESSION_ID, SESSION_CWD, 2)
+    await settle()
+    expect(gateway.calls).toHaveLength(3)
+    client.dispose()
+  })
+})

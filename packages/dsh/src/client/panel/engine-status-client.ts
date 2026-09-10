@@ -30,7 +30,9 @@
  * reason instead of pinning `loading` for a whole turn. A served snapshot is
  * likewise re-pulled on a modest interval
  * ({@link MstarEngineStatusClientOptions.refreshIntervalMs}) — D3's "explicit
- * refresh", never per agent-flow event.
+ * refresh", never per agent-flow event. A refresh asks for the anchor it saw,
+ * so it never overwrites a newer anchor's answer ({@link
+ * MstarEngineStatusClient.write}).
  *
  * The store is written ONLY from a response continuation (never during a
  * render), so reading it through `useSyncExternalStore` stays within React's
@@ -223,6 +225,10 @@ export class MstarEngineStatusClient {
       if (this.disposed) return
       if (now - entry.fetchedAt < this.refreshIntervalMs) continue
       if (this.refreshing.has(sessionId)) continue
+      // The cache moved to a newer anchor while nothing was refreshing: the
+      // entry this pass planned to re-pull is superseded, so re-pulling it
+      // would cost a request that publishes an older snapshot over a newer one.
+      if (this.snapshot.entries.get(sessionId)?.anchorTime !== entry.anchorTime) continue
       this.refreshing.add(sessionId)
       void this.fetch(sessionId, entry.cwd, entry.anchorTime)
         .finally(() => { this.refreshing.delete(sessionId) })
@@ -291,6 +297,13 @@ export class MstarEngineStatusClient {
    * describes the connection that is gone, and publishing it would both render
    * pre-reconnect data as `ok` and suppress the repull `invalidate()` forces
    * (the stale answer would satisfy `ensure`'s anchor check).
+   *
+   * An answer for a SUPERSEDED anchor is dropped for the same class of reason:
+   * a refresh issues its request for the anchor it saw, and a newer anchor row
+   * can be answered in the meantime, so publishing on arrival would overwrite a
+   * newer snapshot with an older one under a refreshed cache clock and no
+   * staleness marker. `ensure` already refuses an older anchor, which is why
+   * this only ever happens through {@link refresh}.
    */
   private write(
     generation: number,
@@ -301,6 +314,7 @@ export class MstarEngineStatusClient {
   ): void {
     if (this.disposed) return
     if (generation !== this.generation) return
+    if ((this.snapshot.entries.get(sessionId)?.anchorTime ?? anchorTime) > anchorTime) return
     this.writeEntry(sessionId, { anchorTime, cwd, fetchedAt: Date.now(), fetch })
   }
 
