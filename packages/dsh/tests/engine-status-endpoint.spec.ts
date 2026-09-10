@@ -365,6 +365,36 @@ describe('engineStatus endpoint — multi-fiber dedupe and withdrawal', () => {
     expect(registry.local.get(`${MSTAR_ENGINE_STATUS_NAMESPACE}/${MSTAR_ENGINE_STATUS_METHOD}`)).toBeDefined()
   })
 
+  it('takes the admission-test branch on a second install instead of rebuilding the gateway', async () => {
+    const app = (booted = await bootApp({ sessionsService: 'fake' }))
+    // The dedupe line is the observable difference between the two branches: the
+    // admission test skips the constructor, whereas a lost race would build a
+    // second gateway, be refused by the live service name and log the
+    // concurrent-registration line instead. The logger is the seam this module
+    // already writes through.
+    const originalLogger = app.ctx.logger
+    const lines: string[] = []
+    const capture = (name?: string): Record<'debug' | 'info' | 'warn' | 'error', (message: string) => void> => {
+      const sink = originalLogger.call(app.ctx, name)
+      const record = (write: (message: string) => void) => (message: string): void => {
+        lines.push(message)
+        write(message)
+      }
+      return { debug: record(sink.debug), info: record(sink.info), warn: record(sink.warn), error: record(sink.error) }
+    }
+    app.ctx.logger = capture as unknown as typeof app.ctx.logger
+    try {
+      const siblingFiber = await sibling(app, '/proj/sibling-boot-root')
+      expect(lines.filter((line) => line.includes('gateway already registered'))).toHaveLength(1)
+      expect(lines.filter((line) => line.includes('gateway registered concurrently'))).toHaveLength(0)
+      // The deduped second install left the live gateway serving.
+      expect(await renderOf(app.ctx)).toBe('session-absent')
+      await siblingFiber.dispose()
+    } finally {
+      app.ctx.logger = originalLogger
+    }
+  })
+
   it('registers afresh on the next apply after an HMR reload of the plugin row', async () => {
     const app = (booted = await bootApp({ sessionsService: 'fake' }))
     // The host composition owns the registry — an HMR reload disposes the
