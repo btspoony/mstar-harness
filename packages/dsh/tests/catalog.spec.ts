@@ -40,7 +40,8 @@ import { Context } from '@deepseek-ai/cordis'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import * as plugin from '../src/index.ts'
-import type { MstarEngineStatusSource } from '../src/index.ts'
+import type { MstarEngineStatusPayload, MstarEngineStatusSource } from '../src/index.ts'
+import { buildCatalogPayload } from '../src/gates/catalog.ts'
 import { bootApp, FakeLoaderRegistry, seedHarness, v2Root, v2Snapshot, v2WorkflowEntry, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
@@ -82,8 +83,8 @@ function catalogRowOf(decision: PreStepDecision): { row: UserMessage; source: Ms
   const row = decision.messages.at(-1)
   if (row === undefined) throw new Error('missing catalog row')
   const source = row.source
-  if (source.kind !== 'mstar-engine-status') throw new Error('missing catalog row')
-  return { row, source }
+  if (source.kind !== 'plugin' || source.plugin !== 'mstar-engine-status') throw new Error('missing catalog row')
+  return { row, source: source as MstarEngineStatusSource }
 }
 
 /** The model-facing text of a catalog row. */
@@ -106,9 +107,11 @@ describe('mstar-engine-status catalog — pre-step composition (REAL-composition
     // The appended row is the durable catalog MessageSource (model-visible ⟺ logged).
     const catalog = lastMessage(decision)
     expect(catalog?.role).toBe('user')
-    expect(catalog?.source).toMatchObject({
-      kind: 'mstar-engine-status',
-      form: 'catalog',
+    // The PERSISTED source is the first-party plugin arm and nothing else.
+    expect(catalog?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine-status', form: 'catalog' })
+    // The facts the row renders from are not persisted with it — they come
+    // from the same builder the pre-step listener used.
+    expect(buildCatalogPayload(app.ctx, app.harnessDir)).toMatchObject({
       version: PLUGIN_VERSION,
       harnessDir: app.harnessDir,
       enforcement: { hard: false, source: 'none' },
@@ -144,11 +147,8 @@ describe('mstar-engine-status catalog — pre-step composition (REAL-composition
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
 
     const catalog = lastMessage(decision)
-    expect(catalog?.source).toMatchObject({
-      kind: 'mstar-engine-status',
-      form: 'catalog',
-      enforcement: { hard: true, source: 'compass' },
-    })
+    expect(catalog?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine-status', form: 'catalog' })
+    expect(buildCatalogPayload(app.ctx, app.harnessDir).enforcement).toEqual({ hard: true, source: 'compass' })
     const text = catalog?.content[0]?.type === 'text' ? catalog.content[0].text : ''
     expect(text).toContain('enforcement: hard (compass)')
   })
@@ -166,7 +166,11 @@ describe('mstar-engine-status catalog — pre-step composition (REAL-composition
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
 
     const catalog = lastMessage(decision)
-    expect(catalog?.source).toMatchObject({ enforcement: { hard: false, source: 'none' } })
+    expect(catalog?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine-status', form: 'catalog' })
+    // The STALE watermark is observable in the rendered text (the payload is
+    // not persisted on the row, so the text is the row's own record of it):
+    // the boot build saw no compass, and the post-boot compass is not read
+    // until the TTL expires.
     const text = catalog?.content[0]?.type === 'text' ? catalog.content[0].text : ''
     expect(text).toContain('enforcement: soft')
   })
@@ -185,10 +189,13 @@ describe('mstar-engine-status catalog — pre-step composition (REAL-composition
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
 
     const catalog = lastMessage(decision)
-    const source = catalog?.source as Record<string, unknown>
-    expect(source).toMatchObject({ kind: 'mstar-engine-status' })
-    expect(Object.keys(source).every((key) => source[key] !== undefined)).toBe(true)
-    expect('iteration' in source).toBe(false)
+    expect(catalog?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine-status', form: 'catalog' })
+    // The optional `iteration` key is ABSENT from the payload — never
+    // `iteration: undefined`: the payload is the wire value a consumer
+    // receives, so the lossless-JSON discipline still applies to it.
+    const payload = buildCatalogPayload(app.ctx, app.harnessDir) as unknown as Record<string, unknown>
+    expect(Object.keys(payload).every((key) => payload[key] !== undefined)).toBe(true)
+    expect('iteration' in payload).toBe(false)
     const text = catalog?.content[0]?.type === 'text' ? catalog.content[0].text : ''
     expect(text).not.toContain('iteration:')
   })
@@ -224,7 +231,7 @@ describe('mstar-engine-status catalog — pre-step composition (REAL-composition
     expect(decision.kind).toBe('enter')
     expect(decision.kind === 'enter' && decision.messages.slice(0, -1)).toEqual(replaced)
     const catalog = lastMessage(decision)
-    expect(catalog?.source).toMatchObject({ kind: 'mstar-engine-status' })
+    expect(catalog?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine-status', form: 'catalog' })
   })
 
   it('observes the step abort signal — an aborted step publishes no catalog and returns the delegated decision ', async () => {
@@ -279,8 +286,8 @@ describe('mstar-engine-status catalog — iteration compassStatus (spec panel-f4
     ].join('\n')
   }
 
-  /** Boot with status.json + a delivery-compass seeded, then run one pre-step and return the catalog source. */
-  async function sourceWithCompass(status: 'active' | 'locked' | 'completed'): Promise<MstarEngineStatusSource> {
+  /** Boot with status.json + a delivery-compass seeded, run one pre-step, and return the catalog payload (the row's source carries none). */
+  async function payloadWithCompass(status: 'active' | 'locked' | 'completed'): Promise<MstarEngineStatusPayload> {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-compassstatus-'))
     const harnessDir = join(root, 'harness')
     await mkdir(harnessDir, { recursive: true })
@@ -290,40 +297,40 @@ describe('mstar-engine-status catalog — iteration compassStatus (spec panel-f4
       'iterations/iter-00000811-catalog-compass/delivery-compass.md': compassDoc(status),
     })
     const app = booted = await bootApp({ root })
-    const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
-    return catalogRowOf(decision).source
+    await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
+    return buildCatalogPayload(app.ctx, harnessDir)
   }
 
   it('surfaces `compassStatus: active` when the steering compass is active (Phase 1 in flight)', async () => {
-    const source = await sourceWithCompass('active')
-    expect(source.iteration).toBeDefined()
-    expect(source.iteration!.compassStatus).toBe('active')
-    expect(source.iteration!.iterationId).toBe('iter-00000811-catalog-compass')
+    const payload = await payloadWithCompass('active')
+    expect(payload.iteration).toBeDefined()
+    expect(payload.iteration!.compassStatus).toBe('active')
+    expect(payload.iteration!.iterationId).toBe('iter-00000811-catalog-compass')
     // The empty-plans fixture: engine emits phase-2-execute + ok:true during
     // Phase 1 — `iteration.active` is true, only the current step re-derives
     // from compassStatus (projection side).
-    expect(source.iteration!.gate.transition).toBe('phase-2-execute')
-    expect(source.iteration!.gate.ok).toBe(true)
+    expect(payload.iteration!.gate.transition).toBe('phase-2-execute')
+    expect(payload.iteration!.gate.ok).toBe(true)
   })
 
   it('surfaces `compassStatus: locked` when the steering compass is locked (Phase 1 complete)', async () => {
-    const source = await sourceWithCompass('locked')
-    expect(source.iteration!.compassStatus).toBe('locked')
+    const payload = await payloadWithCompass('locked')
+    expect(payload.iteration!.compassStatus).toBe('locked')
   })
 
   it('omits compassStatus (and the whole iteration row) for a NON-steering status — the steering filter never admits it (belt-and-suspenders guard)', async () => {
     // `status: completed` is not active|locked → `steeringCompassPath` skips
     // the compass → no iteration section at all. The appended message stays
     // losslessly JSON-serializable (no undefined-valued props, Session.append).
-    const source = await sourceWithCompass('completed')
-    expect(Object.keys(source).every((key) => (source as unknown as Record<string, unknown>)[key] !== undefined)).toBe(true)
-    expect('iteration' in source).toBe(false)
+    const payload = await payloadWithCompass('completed')
+    expect(Object.keys(payload).every((key) => (payload as unknown as Record<string, unknown>)[key] !== undefined)).toBe(true)
+    expect('iteration' in payload).toBe(false)
   })
 })
 
 describe('mstar-engine-status catalog — plan iterationRefs ', () => {
   /** Boot with a v2 tree whose selected snapshot plans carry (or omit) `metadata.iteration_refs`, then return the state section. */
-  async function stateWithPlans(plans: unknown[]): Promise<NonNullable<MstarEngineStatusSource['state']>> {
+  async function stateWithPlans(plans: unknown[]): Promise<NonNullable<MstarEngineStatusPayload['state']>> {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-iterationrefs-'))
     const harnessDir = join(root, 'harness')
     await mkdir(harnessDir, { recursive: true })
@@ -332,9 +339,8 @@ describe('mstar-engine-status catalog — plan iterationRefs ', () => {
       'workflows/wf-iterrefs/snapshot.json': v2Snapshot('wf-iterrefs', { plans }),
     })
     const app = booted = await bootApp({ root })
-    const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
-    const { source } = catalogRowOf(decision)
-    const state = source.state
+    await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
+    const state = buildCatalogPayload(app.ctx, harnessDir).state
     if (state === null) throw new Error('expected a non-null state section')
     return state
   }
@@ -394,8 +400,10 @@ Implement the invalidation.
 
     // Pre-step 1 (turn 1): no ledger events yet — the row is injected once.
     const first = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
-    const { source: firstSource } = catalogRowOf(first)
-    expect(firstSource.state!.agentFlow).toEqual({ events: [], summary: [] })
+    // No ledger events yet → the row carries no agent-flow line. The payload
+    // is not persisted on the row, so the rendered text — produced from the
+    // SAME payload — is the structured observable here.
+    expect(textOf(lastMessage(first)!)).not.toContain('agent flow:')
 
     // One successful ledger record — the apply-bound invalidator deletes the
     // workspace's catalog cache entry (the TTL itself is untouched).
@@ -415,9 +423,10 @@ Implement the invalidation.
       step: 2,
       signal: new AbortController().signal,
     } as never, defaultEnter([]))
-    const { row, source } = catalogRowOf(second)
-    expect(source.state!.agentFlow!.events).toHaveLength(1)
-    expect(source.state!.agentFlow!.events[0]).toMatchObject({ kind: 'dispatch', verdict: 'ok', role: 'fullstack-dev' })
+    const { row } = catalogRowOf(second)
+    // The re-emitted row's OWN text proves the payload it rendered from is the
+    // rebuilt one (the digest gate suppresses an unchanged row, so the
+    // re-injection itself is the invalidation witness).
     expect(textOf(row)).toContain('agent flow: 1 events')
     expect(textOf(row)).toContain('by role: fullstack-dev 1')
   })
@@ -447,10 +456,10 @@ Implement the invalidation.
 
     // Register BOTH workspace keys with one pre-step each (the cache is built
     // on first use + the reverse map registers on build).
-    const sourceA1 = catalogRowOf(await app.ctx.waterfall('agent/pre-step', stepFor(wsA, 1), defaultEnter([]))).source
-    const sourceB1 = catalogRowOf(await app.ctx.waterfall('agent/pre-step', stepFor(wsB, 1), defaultEnter([]))).source
-    expect(sourceA1.state!.agentFlow).toEqual({ events: [], summary: [] })
-    expect(sourceB1.state!.agentFlow).toEqual({ events: [], summary: [] })
+    const rowA1 = catalogRowOf(await app.ctx.waterfall('agent/pre-step', stepFor(wsA, 1), defaultEnter([]))).row
+    const rowB1 = catalogRowOf(await app.ctx.waterfall('agent/pre-step', stepFor(wsB, 1), defaultEnter([]))).row
+    expect(textOf(rowA1)).not.toContain('agent flow:')
+    expect(textOf(rowB1)).not.toContain('agent flow:')
 
     // An OUT-OF-BAND ledger line in B (direct write to the workflow dir,
     // bypassing recordDispatch → NO invalidation fires for B): if B's cache
@@ -474,16 +483,16 @@ Implement the invalidation.
 
     // Next pre-step for A (new turn): the entry was invalidated → REBUILT (a
     // fresh source carrying the new workflow-dir dispatch event).
-    const sourceA2 = catalogRowOf(await app.ctx.waterfall('agent/pre-step', stepFor(wsA, 2), defaultEnter([]))).source
-    expect(sourceA2.state!.agentFlow!.events).toHaveLength(1)
-    expect(sourceA2.state!.agentFlow!.events[0]).toMatchObject({ kind: 'dispatch', verdict: 'ok', role: 'fullstack-dev' })
+    const rowA2 = catalogRowOf(await app.ctx.waterfall('agent/pre-step', stepFor(wsA, 2), defaultEnter([]))).row
+    expect(textOf(rowA2)).toContain('agent flow: 1 events')
+    expect(textOf(rowA2)).toContain('by role: fullstack-dev 1')
 
     // Next pre-step for B (new turn): B's entry was NOT invalidated → the
     // cache HIT serves the cached build — the out-of-band B line stays
     // invisible within the TTL (no global clear; a multi-workspace deployment
     // does not rebuild every workspace per record).
-    const sourceB2 = catalogRowOf(await app.ctx.waterfall('agent/pre-step', stepFor(wsB, 2), defaultEnter([]))).source
-    expect(sourceB2.state!.agentFlow).toEqual({ events: [], summary: [] }) // cached build — the direct line is NOT visible
+    const rowB2 = catalogRowOf(await app.ctx.waterfall('agent/pre-step', stepFor(wsB, 2), defaultEnter([]))).row
+    expect(textOf(rowB2)).not.toContain('agent flow:') // cached build — the direct line is NOT visible
   })
 
   it('without a ledger change the cache-hit behavior is unchanged — a directly-written ledger line stays invisible within the TTL (only the record path invalidates)', async () => {
@@ -513,8 +522,7 @@ Implement the invalidation.
       step: 1,
       signal: new AbortController().signal,
     } as never, defaultEnter([]))
-    const { row, source } = catalogRowOf(second)
-    expect(source.state!.agentFlow).toEqual({ events: [], summary: [] })
+    const { row } = catalogRowOf(second)
     expect(textOf(row)).not.toContain('agent flow:')
   })
 })
@@ -627,12 +635,15 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
     })
     const app = booted = await bootApp({ root })
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
-    const { row, source } = catalogRowOf(decision)
+    const { row } = catalogRowOf(decision)
+    // The payload is NOT persisted on the row's source — read it from the same
+    // builder the pre-step listener rendered the row from.
+    const payload = buildCatalogPayload(app.ctx, harnessDir)
 
     // The state section: every field is the legacy-row golden shape, sourced
     // from the selected workflow snapshot + workflow agent-flow + project
     // register; `selection` is the additive v3 field.
-    expect(source.state).toEqual({
+    expect(payload.state).toEqual({
       selection: { kind: 'active', workflowId: GOLDEN_WORKFLOW, dir: `workflows/${GOLDEN_WORKFLOW}` },
       workflowType: 'iteration',
       workflowStatus: 'running',
@@ -680,7 +691,7 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
 
     // The iteration section: the gate evaluates the SELECTED snapshot (the
     // evaluated-doc path is the snapshot, not the root status.json).
-    expect(source.iteration).toMatchObject({
+    expect(payload.iteration).toMatchObject({
       iterationId: 'v2.2.0',
       statusPath: join(harnessDir, `workflows/${GOLDEN_WORKFLOW}/snapshot.json`),
       compassPath: join(harnessDir, 'iterations/v2.2.0/delivery-compass.md'),
@@ -709,9 +720,9 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
     })
     const app = booted = await bootApp({ root })
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
-    const { row, source } = catalogRowOf(decision)
+    const { row } = catalogRowOf(decision)
 
-    const state = source.state
+    const state = buildCatalogPayload(app.ctx, harnessDir).state
     expect(state).not.toBeNull()
     if (state === null) return
     expect(state.selection).toEqual({
@@ -723,7 +734,7 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
     expect(state.plans).toEqual([])
     expect(state.agentFlow).toBeNull()
     // No snapshot → no iteration gate row either.
-    expect(source.iteration).toBeUndefined()
+    expect(buildCatalogPayload(app.ctx, harnessDir).iteration).toBeUndefined()
     // The model text carries the clear error.
     expect(textOf(row)).toContain('workflow selection: ERROR (workflow.selection.no-snapshot)')
   })
@@ -740,9 +751,9 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
     })
     const app = booted = await bootApp({ root })
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
-    const { row, source } = catalogRowOf(decision)
+    const { row } = catalogRowOf(decision)
 
-    const state = source.state
+    const state = buildCatalogPayload(app.ctx, harnessDir).state
     expect(state).not.toBeNull()
     if (state === null) return
     expect(state.selection).toEqual({
@@ -773,9 +784,9 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
     })
     const app = booted = await bootApp({ root })
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
-    const { row, source } = catalogRowOf(decision)
+    const { row } = catalogRowOf(decision)
 
-    const state = source.state
+    const state = buildCatalogPayload(app.ctx, harnessDir).state
     expect(state).not.toBeNull()
     if (state === null) return
     expect(state.selection).toEqual({
@@ -799,9 +810,9 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
     })
     const app = booted = await bootApp({ root })
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
-    const { row, source } = catalogRowOf(decision)
+    const { row } = catalogRowOf(decision)
 
-    const state = source.state
+    const state = buildCatalogPayload(app.ctx, harnessDir).state
     expect(state).not.toBeNull()
     if (state === null) return
     // The FIRST active entry is selected, with a structured warning.
@@ -843,9 +854,9 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
     await utimes(runningPath, base - 50, base - 50)
     const app = booted = await bootApp({ root })
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
-    const { row, source } = catalogRowOf(decision)
+    const { row } = catalogRowOf(decision)
 
-    const state = source.state
+    const state = buildCatalogPayload(app.ctx, harnessDir).state
     expect(state).not.toBeNull()
     if (state === null) return
     expect(state.selection).toEqual({ kind: 'terminal', workflowId: 'wf-new', dir: 'workflows/wf-new' })
@@ -905,8 +916,8 @@ describe('mstar-engine-status catalog — state plans/leases join cap (spec D4)'
     })
     const app = booted = await bootApp({ root })
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
-    const { row, source } = catalogRowOf(decision)
-    const state = source.state
+    const { row } = catalogRowOf(decision)
+    const state = buildCatalogPayload(app.ctx, harnessDir).state
     if (state === null) throw new Error('missing state')
     return { text: textOf(row), state }
   }
@@ -973,7 +984,7 @@ describe('catalog teardown — fiber.dispose removes the pre-step listener (HMR-
       // Mount 1 — the catalog is appended on pre-step.
       const fiber = await ctx.plugin(plugin, { harnessDir })
       const live = await ctx.waterfall('agent/pre-step', stepPayload(inbox), defaultEnter(inbox))
-      expect(lastMessage(live)?.source).toMatchObject({ kind: 'mstar-engine-status' })
+      expect(lastMessage(live)?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine-status', form: 'catalog' })
 
       // Dispose — the listener is unwound: the terminal decision passes through unchanged.
       await fiber.dispose()
@@ -983,7 +994,7 @@ describe('catalog teardown — fiber.dispose removes the pre-step listener (HMR-
       // HMR reload — a fresh fiber restores the catalog contribution.
       const reloaded = await ctx.plugin(plugin, { harnessDir })
       const again = await ctx.waterfall('agent/pre-step', stepPayload(inbox), defaultEnter(inbox))
-      expect(lastMessage(again)?.source).toMatchObject({ kind: 'mstar-engine-status' })
+      expect(lastMessage(again)?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine-status', form: 'catalog' })
       await reloaded.dispose()
     } finally {
       await ctx.fiber.dispose().catch(() => {})

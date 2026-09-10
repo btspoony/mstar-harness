@@ -44,6 +44,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { DispatchGateAdvisory, SeamLintAdvisory, SkillLintAdvisory, StatusGateAdvisory } from '../src/index.ts'
 import { DshHostAdapter, readAgentFlow } from '../src/index.ts'
 import { bootApp, seedHarness, v2Root, v2RootWithWorkflow, v2Snapshot, v2SnapshotWithPlans, v2WorkflowEntry, type BootResult } from './harness.ts'
+import { buildCatalogPayload } from '../src/gates/catalog.ts'
 import { ENGINE_VERSION } from './engine-version.ts'
 
 let booted: BootResult | undefined
@@ -434,19 +435,20 @@ describe('agent/pre-step — iteration-gate row + catalog watermark', () => {
 
     const row = decision.messages.at(-1)
     expect(row?.role).toBe('user')
-    expect(row?.source).toMatchObject({ kind: 'mstar-engine-status', form: 'catalog' })
-    const source = row?.source
-    if (source === undefined || source.kind !== 'mstar-engine-status') return
+    expect(row?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine-status', form: 'catalog' })
+    // The catalog payload is NOT persisted on the row's source — read it from
+    // the same builder the pre-step listener rendered the row from.
+    const payload = buildCatalogPayload(app.ctx, harnessDir)
 
     // Watermark fields — AC-6 shape.
-    expect(source.version).toBe(ENGINE_VERSION)
-    expect(source.harnessDir).toBe(harnessDir)
-    expect(source.enforcement).toEqual({ hard: false, source: 'none' })
+    expect(payload.version).toBe(ENGINE_VERSION)
+    expect(payload.harnessDir).toBe(harnessDir)
+    expect(payload.enforcement).toEqual({ hard: false, source: 'none' })
 
     // Iteration phase-gate section: the boot-evaluated gate in the Task 1
     // tool result shape (transition / all_plans_done / ok / codes) over the
     // SELECTED workflow snapshot.
-    expect(source.iteration).toMatchObject({
+    expect(payload.iteration).toMatchObject({
       iterationId: 'e2e-iter',
       statusPath: join(harnessDir, 'workflows/e2e-iter/snapshot.json'),
       gate: {
@@ -460,7 +462,7 @@ describe('agent/pre-step — iteration-gate row + catalog watermark', () => {
     // Workspace-state section: plan registry, residuals, branch anchors
     // (the snapshot carries no branch anchors, so the compass fills
     // base/target).
-    expect(source.state).toMatchObject({
+    expect(payload.state).toMatchObject({
       selection: { kind: 'active', workflowId: 'e2e-iter', dir: 'workflows/e2e-iter' },
       plans: [{ id: 'fixture-plan-1', status: 'Todo' }],
       residuals: [],
@@ -566,7 +568,7 @@ describe('bundledSkillDir — launch-cwd resolution (Task 4 reviewer note)', () 
     const decision = await booted.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
     expect(decision.kind).toBe('enter')
     if (decision.kind !== 'enter') return
-    const statusRow = decision.messages.find((m) => m.source.kind === 'mstar-engine-status')
+    const statusRow = decision.messages.find((m) => m.source.kind === 'plugin' && m.source.plugin === 'mstar-engine-status')
     expect(statusRow).toBeDefined()
     const text = statusRow?.content[0]?.type === 'text' ? statusRow.content[0].text : ''
     expect(text).toContain('<mstar_engine_status>')

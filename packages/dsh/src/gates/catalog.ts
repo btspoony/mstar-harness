@@ -5,7 +5,7 @@
  * catalog message (watermark fields + iteration phase-gate section +
  * workspace-state digest) to the composed step messages, digest-gated per
  * agent+workspace turn. The per-workspace TTL cache
- * (`buildCatalogSources` / `catalogSourcesFor`, Config `catalogTtlMs`) keeps
+ * (`buildCatalogPayload` / `catalogPayloadFor`, Config `catalogTtlMs`) keeps
  * the hot path a timestamp compare + Map lookup between refreshes.
  *
  * v3 per-lifecycle aggregation :
@@ -19,7 +19,7 @@
  * — never a root v1 `plans[]` / root `agent-flow.jsonl` read.
  *
  * Module boundary: no barrel — the entry imports by explicit relative path;
- * the wiring exports (`preStepCatalogListener`, `buildCatalogSources`,
+ * the wiring exports (`preStepCatalogListener`, `buildCatalogPayload`,
  * `DEFAULT_CATALOG_TTL_MS`, `EXPLICIT_CACHE_KEY`, `CatalogCacheEntry` /
  * `TurnDigest`, `createCatalogInvalidation` / `CatalogInvalidation`) are
  * entry-internal.
@@ -47,6 +47,7 @@ import type {
   HarnessPlanView,
   HarnessResidualView,
   IterationGateView,
+  MstarEngineStatusPayload,
   MstarEngineStatusSource,
   MstarHarnessProject,
   MstarHarnessState,
@@ -107,13 +108,25 @@ function pluginVersion(): string {
 }
 
 /**
- * The durable source for the ONE unified engine-status catalog row (the
+ * The durable source of the ONE unified engine-status catalog row: the
+ * first-party `plugin` arm with a CLOSED member set. The `kind` vocabulary is
+ * frozen per released dsh session-format edge and the historical edges refuse
+ * unexpected `source` members, so this literal is the whole persisted
+ * provenance — every fact the row publishes travels in
+ * {@link engineStatusPayload} instead.
+ */
+function engineStatusSource(): MstarEngineStatusSource {
+  return { kind: 'plugin', plugin: 'mstar-engine-status', form: 'catalog' }
+}
+
+/**
+ * The payload the ONE unified engine-status catalog row renders from (the
  * watermark + iteration gate + workspace-state digest). Every field is
  * boot/workspace-resolved — the unified mstar version is a
  * process-immutable manifest read, the compass enforcement resolves like
  * the gates themselves, and the iteration/state sections come from the
  * same per-workspace cached build. With an explicit `harnessDir` config
- * the source is built ONCE at `apply()`; without one it is built on the
+ * the payload is built ONCE at `apply()`; without one it is built on the
  * FIRST pre-step of each workspace. The whole cache entry is then
  * TTL-refreshed (Config `catalogTtlMs`, default 60000 — a mid-session
  * status/compass/residual change lands within one interval). The
@@ -122,11 +135,9 @@ function pluginVersion(): string {
  * refreshes.
  * @param harnessDir - the resolved `{HARNESS_DIR}` (null when none found).
  */
-function engineStatusSource(harnessDir: string | null): MstarEngineStatusSource {
+function engineStatusPayload(harnessDir: string | null): MstarEngineStatusPayload {
   const iteration = harnessDir !== null ? iterationGateSource(harnessDir) : undefined
   return {
-    kind: 'mstar-engine-status',
-    form: 'catalog',
     version: pluginVersion(),
     harnessDir,
     enforcement: harnessDir !== null ? resolveRepoEnforcement(harnessDir) : { hard: false, source: 'none' },
@@ -141,9 +152,9 @@ function engineStatusSource(harnessDir: string | null): MstarEngineStatusSource 
   }
 }
 
-/** One TTL cache entry: the unified source plus the build timestamp. */
+/** One TTL cache entry: the unified payload plus the build timestamp. */
 export interface CatalogCacheEntry {
-  sources: MstarEngineStatusSource
+  payload: MstarEngineStatusPayload
   builtAt: number
 }
 
@@ -162,7 +173,7 @@ export interface CatalogCacheEntry {
 export interface CatalogInvalidation {
   /**
    * Register `key` as the cache key of `harnessDir` — called by
-   * `catalogSourcesFor` on cache hit AND build, and pre-registered by the
+   * `catalogPayloadFor` on cache hit AND build, and pre-registered by the
    * entry at apply for the explicit-config boot entry (a ledger record
    * between apply and the first pre-step must still invalidate the
    * pre-seeded entry). A null harness dir (no `{HARNESS_DIR}` resolved) has
@@ -197,26 +208,26 @@ export function createCatalogInvalidation(cache: Map<string, CatalogCacheEntry>)
 }
 
 /**
- * Build the unified catalog source for one harness dir (boot for the
+ * Build the unified catalog payload for one harness dir (boot for the
  * explicit config, first-use per workspace otherwise, then TTL-refreshed —
- * see `catalogSourcesFor`). Logs the manifest fallback once per build — a
+ * see `catalogPayloadFor`). Logs the manifest fallback once per build — a
  * '0.0.0' version would watermark every catalog row wrongly, so the
  * fallback is never silent.
  * @param ctx - registrant context (logger for the manifest fallback).
  * @param harnessDir - the resolved `{HARNESS_DIR}` (null when none found).
  */
-export function buildCatalogSources(ctx: Context, harnessDir: string | null): MstarEngineStatusSource {
-  const source = engineStatusSource(harnessDir)
-  if (source.version === '0.0.0') {
+export function buildCatalogPayload(ctx: Context, harnessDir: string | null): MstarEngineStatusPayload {
+  const payload = engineStatusPayload(harnessDir)
+  if (payload.version === '0.0.0') {
     ctx.logger(CATALOG_LOGGER).warn('plugin manifest version unavailable — falling back to 0.0.0 for the engine-status catalog watermark')
   }
-  return source
+  return payload
 }
 
 /**
- * Look up the catalog sources for one cache key with a TTL: within the
+ * Look up the catalog payload for one cache key with a TTL: within the
  * interval the cached build is reused (the agent-loop hot path is a
- * timestamp compare + Map lookup); after it the sources are rebuilt from
+ * timestamp compare + Map lookup); after it the payload is rebuilt from
  * disk (one bounded sync re-read per workspace per interval — the
  * mid-session plan/compass/residual staleness window the user opted into;
  * Config `catalogTtlMs`).
@@ -233,27 +244,27 @@ export function buildCatalogSources(ctx: Context, harnessDir: string | null): Ms
  * @param harnessDir - the resolved `{HARNESS_DIR}` for this key.
  * @param ttlMs - refresh interval in milliseconds.
  */
-function catalogSourcesFor(
+function catalogPayloadFor(
   ctx: Context,
   cache: Map<string, CatalogCacheEntry>,
   register: (harnessDir: string | null, key: string) => void,
   key: string,
   harnessDir: string | null,
   ttlMs: number,
-): MstarEngineStatusSource {
+): MstarEngineStatusPayload {
   const entry = cache.get(key)
   if (entry !== undefined && Date.now() - entry.builtAt < ttlMs) {
     register(harnessDir, key)
-    return entry.sources
+    return entry.payload
   }
-  const sources = buildCatalogSources(ctx, harnessDir)
-  cache.set(key, { sources, builtAt: Date.now() })
+  const payload = buildCatalogPayload(ctx, harnessDir)
+  cache.set(key, { payload, builtAt: Date.now() })
   register(harnessDir, key)
-  return sources
+  return payload
 }
 
 /** Model-facing rendering of the unified engine-status catalog (the `<mstar_engine_status>` block). */
-function renderEngineStatusCatalog(source: MstarEngineStatusSource): string {
+function renderEngineStatusCatalog(source: MstarEngineStatusPayload): string {
   const enforcement = `${source.enforcement.hard ? 'hard' : 'soft'}${source.enforcement.source === 'none' ? '' : ` (${source.enforcement.source})`}`
   const lines = [
     '<mstar_engine_status>',
@@ -906,9 +917,9 @@ export async function preStepCatalogListener(
     const cwd = sessionCwdOf(payload.agent)
     const harnessDir = resolver.forWorkspace(cwd)
     const key = explicitKey ?? cwd ?? ''
-    const sources = catalogSourcesFor(ctx, cache, register, key, harnessDir, ttlMs)
+    const catalogPayload = catalogPayloadFor(ctx, cache, register, key, harnessDir, ttlMs)
     const messages = [...decision.messages]
-    const text = renderEngineStatusCatalog(sources)
+    const text = renderEngineStatusCatalog(catalogPayload)
     // Digest gate: inject the ONE unified row on the first step of a turn,
     // or when its rendered text changed since the last injection (a TTL
     // refresh picked up new state). Per agent+workspace, so different
@@ -916,7 +927,7 @@ export async function preStepCatalogListener(
     const digestKey = agentDigestKey(payload.agent, cwd)
     const prior = digests.get(digestKey)
     if (prior === undefined || prior.turn !== payload.turn || prior.text !== text) {
-      messages.push(createUserMessage({ source: sources, content: [{ type: 'text', text }] }))
+      messages.push(createUserMessage({ source: engineStatusSource(), content: [{ type: 'text', text }] }))
     }
     digests.set(digestKey, { turn: payload.turn, text })
     return { kind: 'enter', messages }

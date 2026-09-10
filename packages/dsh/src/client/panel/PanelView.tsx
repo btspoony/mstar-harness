@@ -40,7 +40,7 @@ import * as React from 'react'
 import { useState } from 'react'
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
-import type { MstarEngineStatusSource } from '../../types.ts'
+import type { MstarEngineStatusPayload } from '../../types.ts'
 import css from './panel.module.css'
 import { projectGraph } from './graph/project-graph.ts'
 import { Sidebar } from './sidebar.tsx'
@@ -62,7 +62,7 @@ function formatTime(ms: number): string {
 
 export interface PanelContentProps {
   tab: PanelTab
-  source: MstarEngineStatusSource
+  source: MstarEngineStatusPayload
   t: TranslateNS<'mstar-panel'>
 }
 

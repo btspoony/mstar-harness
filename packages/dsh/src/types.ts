@@ -1,11 +1,16 @@
 /**
- * `mstar-engine-status` catalog source: a durable `catalog`-form
- * MessageSource the plugin appends to
- * every composed step at `agent/pre-step`, so the model-visible engine-status
- * row is reconstructable from the session log without re-parsing its prose
- * (model-visible ⟺ logged — dsh packages/AGENTS.md). Merge-extensible
- * `MessageSourceMap` augmentation mirroring the `@deepseek-ai/dsh-tool-skill`
- * precedent (declare module '@deepseek-ai/dsh-llm' + catalog-form source).
+ * `mstar-engine-status` catalog source + payload: the durable `catalog`-form
+ * MessageSource the plugin appends to every composed step at
+ * `agent/pre-step`, so the model-visible engine-status row is
+ * reconstructable from the session log without re-parsing its prose
+ * (model-visible ⟺ logged — dsh packages/AGENTS.md), plus the NON-persisted
+ * payload that row is rendered from.
+ *
+ * The source is the first-party `plugin` arm and nothing else: dsh freezes
+ * the source vocabulary per released session-format edge, so a custom `kind`
+ * or any extra `source` member makes a released edge refuse the whole session
+ * log. The structured facts live in
+ * {@link MstarEngineStatusPayload} instead.
  *
  * `mstar-iteration-gate` is the sibling catalog row: the boot-cached
  * `evaluatePhaseGate` verdict (tool result shape) appended after the
@@ -18,15 +23,30 @@
 import type { EnforcementFlag } from '@mstar-harness/engine'
 
 /**
- * Durable provenance for the ONE unified engine-status catalog row. The
- * catalog is a `catalog`-form context, so it records the facts it published
- * beside the model-facing prose: a consumer presenting the row must not
- * re-parse the `<mstar_engine_status>` block, whose framing exists for the
- * model.
+ * The ONE unified engine-status catalog row's `source`: the first-party
+ * `plugin` arm with a CLOSED member set — exactly these three keys, never a
+ * fourth.
+ *
+ * `plugin` carries the plugin's identity literal and `form: 'catalog'` the
+ * row's first-party presentation; both are opaque, already-admitted
+ * vocabulary at every released session-format edge. Everything the row
+ * publishes about the workspace lives in
+ * {@link MstarEngineStatusPayload}, which never rides `source`.
  */
 export interface MstarEngineStatusSource {
-  readonly kind: 'mstar-engine-status'
+  readonly kind: 'plugin'
+  readonly plugin: 'mstar-engine-status'
   readonly form: 'catalog'
+}
+
+/**
+ * The engine-status payload the model-facing row is rendered from — the
+ * facts the catalog publishes BESIDE the prose (a consumer presenting the row
+ * must not re-parse the `<mstar_engine_status>` block, whose framing exists
+ * for the model). Deliberately NOT persisted on the message `source`: no
+ * released historical session-format edge admits extra `source` members.
+ */
+export interface MstarEngineStatusPayload {
   /**
    * The unified mstar version: the `@mstar-harness/dsh` plugin package
    * version (own manifest). The single-version invariant pins the bundled
@@ -200,7 +220,7 @@ export type WorkflowSelectionView =
  * one-liner. All fields come from the same per-workspace cached build as
  * the rest of the row (one status.json / compass / knowledge-index read
  * per cache refresh — the TTL-bounded staleness tradeoff documented on
- * `buildCatalogSources`).
+ * `buildCatalogPayload`).
  */
 export interface MstarHarnessState {
   /**
@@ -344,10 +364,4 @@ export interface AgentFlowSummaryRow {
 export interface AgentFlowView {
   readonly events: readonly AgentFlowEventView[]
   readonly summary: readonly AgentFlowSummaryRow[]
-}
-
-declare module '@deepseek-ai/dsh-llm' {
-  interface MessageSourceMap {
-    'mstar-engine-status': MstarEngineStatusSource
-  }
 }

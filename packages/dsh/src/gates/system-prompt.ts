@@ -35,7 +35,7 @@
  *   compass soft/hard flip lands on the next assembly without
  *   re-registration, in zero-config and explicit-config deployments alike.
  * - The context provider reuses the catalog's unified machine-summary
- *   source (`buildCatalogSources` — the SAME builder the engine-status
+ *   payload (`buildCatalogPayload` — the SAME builder the engine-status
  *   pre-step catalog row uses) and projects the SLIM digest: the version watermark
  *   ALWAYS, plus ONE `workflow … | plans: …` line only when the active set
  *   selects a lifecycle (`state.selection.kind === 'active'`). Harness dir
@@ -80,8 +80,8 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { resolveRepoEnforcement } from '@mstar-harness/engine'
 import type { EnforcementFlag } from '@mstar-harness/engine'
-import type { MstarEngineStatusSource } from '../types.ts'
-import { DEFAULT_CATALOG_TTL_MS, buildCatalogSources } from './catalog.ts'
+import type { MstarEngineStatusPayload } from '../types.ts'
+import { DEFAULT_CATALOG_TTL_MS, buildCatalogPayload } from './catalog.ts'
 import { joinCapped, stripInterpolationHazard, type HarnessResolver } from './_shared.ts'
 
 /** Logger label for the harness-prompt injection (dsh logger naming: `<scope>/<subject>`). */
@@ -285,8 +285,8 @@ function harnessRulesText(harnessDir: string | null, enforcement: EnforcementFla
 
 /**
  * The apply-scoped engine-status provider: a TTL-memoized bounded projection
- * over `buildCatalogSources` (the catalog's unified machine-summary builder
- * — same source as the pre-step engine-status row). The harness dir resolves
+ * over `buildCatalogPayload` (the catalog's unified machine-summary builder
+ * — the same payload the pre-step engine-status row renders from). The harness dir resolves
  * PER ASSEMBLY from the assembly context's agent , and the memo is keyed by the resolved harness dir so
  * distinct session workspaces keep independent bounded rows instead of
  * sharing one stale boot row. The memo keeps one bounded disk read per
@@ -299,16 +299,16 @@ function harnessRulesText(harnessDir: string | null, enforcement: EnforcementFla
 // catalog). Upgrade path: share the apply-scoped catalog cache + invalidation
 // hook with the provider.
 function engineStatusProvider(ctx: Context, resolver: HarnessResolver, bootHarnessDir: string | null): (context: object) => string {
-  const memo = new Map<string | null, { source: MstarEngineStatusSource; builtAt: number }>()
+  const memo = new Map<string | null, { payload: MstarEngineStatusPayload; builtAt: number }>()
   return (context) => {
     const harnessDir = resolveAssemblyHarnessDir(context, resolver, bootHarnessDir)
     const now = Date.now()
     let entry = memo.get(harnessDir)
     if (entry === undefined || now - entry.builtAt >= DEFAULT_CATALOG_TTL_MS) {
-      entry = { source: buildCatalogSources(ctx, harnessDir), builtAt: now }
+      entry = { payload: buildCatalogPayload(ctx, harnessDir), builtAt: now }
       memo.set(harnessDir, entry)
     }
-    return engineStatusSummary(entry.source)
+    return engineStatusSummary(entry.payload)
   }
 }
 
@@ -326,7 +326,7 @@ const DIGEST_PLAN_CAP = 8
 /**
  * The slim `mstar:engine-status` digest (only when the
  * session's workspace has an active workflow
- * (`source.state.selection.kind === 'active'`) — ONE compact
+ * (`payload.state.selection.kind === 'active'`) — ONE compact
  * `workflow <id> (<type>) <status> | plans: <id>(<status>) …` line. Idle
  * sessions (empty/absent active set — `state === null`, or a `'terminal'` /
  * `'error'` selection) render the version line alone; the catalog's
@@ -348,9 +348,9 @@ const DIGEST_PLAN_CAP = 8
  * the `+N more` overflow marker) are constants, not operator text, and stay
  * unscreened.
  */
-function engineStatusSummary(source: MstarEngineStatusSource): string {
-  const lines = [`mstar engine status: v${source.version}`]
-  const state = source.state
+function engineStatusSummary(payload: MstarEngineStatusPayload): string {
+  const lines = [`mstar engine status: v${payload.version}`]
+  const state = payload.state
   if (state !== null) {
     const selection = state.selection
     if (selection.kind === 'active') {

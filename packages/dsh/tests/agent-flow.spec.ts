@@ -64,6 +64,7 @@ import {
 } from '../src/gates/agent-flow.ts'
 import type { AgentFlowPairing } from '../src/gates/agent-flow.ts'
 import type { AgentFlowView, MstarEngineStatusSource } from '../src/index.ts'
+import { buildCatalogPayload } from '../src/gates/catalog.ts'
 import { bootApp, seedHarness, seedV2Tree, FakeJobRegistry, v2Root, v2Snapshot, v2WorkflowEntry, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
@@ -1309,9 +1310,12 @@ describe('agent-flow — catalog-invalidation hook (Task 2 seam)', () => {
     // in the ACTIVE workflow dir — the catalog reads the SAME file, so the
     // invalidation observable is the record's own line (no out-of-band write).
     const step = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
-    const { source } = catalogRowOf(step)
-    expect(source.state!.agentFlow!.events).toHaveLength(1)
-    expect(source.state!.agentFlow!.events[0]).toMatchObject({ kind: 'dispatch', verdict: 'ok' })
+    const { row } = catalogRowOf(step)
+    // The payload is not persisted on the row, so the row's OWN rendered text
+    // — produced from the payload the listener used — is the invalidation
+    // observable (a stale boot build would render no agent-flow line).
+    expect(textOf(row)).toContain('agent flow: 1 events')
+    expect(textOf(row)).toContain('by role: fullstack-dev 1')
   })
 })
 
@@ -1465,8 +1469,8 @@ function catalogRowOf(decision: PreStepDecision): { row: UserMessage; source: Ms
   const row = decision.messages.at(-1)
   if (row === undefined) throw new Error('missing catalog row')
   const source = row.source
-  if (source.kind !== 'mstar-engine-status') throw new Error('missing catalog row')
-  return { row, source }
+  if (source.kind !== 'plugin' || source.plugin !== 'mstar-engine-status') throw new Error('missing catalog row')
+  return { row, source: source as MstarEngineStatusSource }
 }
 
 /** The model-facing text of a catalog row. */
@@ -1502,11 +1506,12 @@ describe('agent-flow catalog — state.agentFlow evidence + render', () => {
     const app = booted = await bootApp({ root })
     const inbox = [inboxMessage()]
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload(inbox), defaultEnter(inbox))
-    const { row, source } = catalogRowOf(decision)
+    const { row } = catalogRowOf(decision)
+    const payload = buildCatalogPayload(app.ctx, harnessDir)
 
     // Structured evidence: events (latest first) + summary over the window.
-    expect(source.state).not.toBeNull()
-    const flow = source.state!.agentFlow!
+    expect(payload.state).not.toBeNull()
+    const flow = payload.state!.agentFlow!
     expect(flow.events.map((e) => e.kind)).toEqual(['settle', 'dispatch'])
     expect(flow.events[1]).toMatchObject({
       kind: 'dispatch',
@@ -1536,9 +1541,10 @@ describe('agent-flow catalog — state.agentFlow evidence + render', () => {
     const app = booted = await bootApp({ root })
     const inbox = [inboxMessage()]
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload(inbox), defaultEnter(inbox))
-    const { row, source } = catalogRowOf(decision)
+    const { row } = catalogRowOf(decision)
+    const payload = buildCatalogPayload(app.ctx, harnessDir)
 
-    expect(source.state!.agentFlow).toEqual({ events: [], summary: [] })
+    expect(payload.state!.agentFlow).toEqual({ events: [], summary: [] })
     expect(textOf(row)).not.toContain('agent flow:')
   })
 
@@ -1552,9 +1558,10 @@ describe('agent-flow catalog — state.agentFlow evidence + render', () => {
     })
     const app = booted = await bootApp({ root })
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
-    const { row, source } = catalogRowOf(decision)
+    const { row } = catalogRowOf(decision)
+    const payload = buildCatalogPayload(app.ctx, harnessDir)
 
-    expect(source.state!.agentFlow!.events).toHaveLength(50)
+    expect(payload.state!.agentFlow!.events).toHaveLength(50)
     expect(textOf(row)).toContain('agent flow: 50 events (latest 50)')
   })
 
@@ -1566,9 +1573,10 @@ describe('agent-flow catalog — state.agentFlow evidence + render', () => {
     })
     const app = booted = await bootApp({ root })
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
-    const { row, source } = catalogRowOf(decision)
+    const { row } = catalogRowOf(decision)
+    const payload = buildCatalogPayload(app.ctx, harnessDir)
 
-    expect(source.state!.agentFlow).toEqual({ events: [], summary: [] })
+    expect(payload.state!.agentFlow).toEqual({ events: [], summary: [] })
     expect(textOf(row)).not.toContain('agent flow:')
   })
 
@@ -1580,11 +1588,12 @@ describe('agent-flow catalog — state.agentFlow evidence + render', () => {
     })
     const app = booted = await bootApp({ root })
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
-    const { source } = catalogRowOf(decision)
+    catalogRowOf(decision)
+    const payload = buildCatalogPayload(app.ctx, harnessDir)
 
-    const sourceRecord = source as unknown as Record<string, unknown>
-    expect(Object.values(sourceRecord).every((v) => v !== undefined)).toBe(true)
-    const state = source.state as unknown as Record<string, unknown>
+    const payloadRecord = payload as unknown as Record<string, unknown>
+    expect(Object.values(payloadRecord).every((v) => v !== undefined)).toBe(true)
+    const state = payload.state as unknown as Record<string, unknown>
     expect(Object.values(state).every((v) => v !== undefined)).toBe(true)
     const flow = state.agentFlow as { events: Array<Record<string, unknown>> }
     for (const event of flow.events) {
@@ -1605,10 +1614,11 @@ describe('agent-flow catalog — state.agentFlow evidence + render', () => {
     await app.ctx.waterfall('tools/pre-execute', subagentExec(VALID_PLANNED), defaultAllow)
     // Second pre-step: TTL 0 forces a rebuild → the event is visible.
     const second = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
-    const { row, source } = catalogRowOf(second)
+    const { row } = catalogRowOf(second)
+    const payload = buildCatalogPayload(app.ctx, harnessDir)
 
-    expect(source.state!.agentFlow?.events).toHaveLength(1)
-    expect(source.state!.agentFlow?.events[0]).toMatchObject({ kind: 'dispatch', verdict: 'ok' })
+    expect(payload.state!.agentFlow?.events).toHaveLength(1)
+    expect(payload.state!.agentFlow?.events[0]).toMatchObject({ kind: 'dispatch', verdict: 'ok' })
     expect(textOf(row)).toContain('agent flow: 1 events')
   })
 })

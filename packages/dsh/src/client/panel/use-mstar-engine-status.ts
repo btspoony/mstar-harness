@@ -5,15 +5,19 @@
  * and scans the log for the latest `mstar-engine-status` catalog row.
  *
  * Node discriminator (spec §2.4): `kind === 'context'` + `form === 'catalog'`
- * + `source.kind === 'mstar-engine-status'`; the LATEST row wins (snapshot
- * order tail). Refresh = snapshot subscription: a digest/TTL re-emission on
- * the server only produces a new log line, whose snapshot bump re-runs this
- * selection — no manual reload, no polling.
+ * + the first-party `plugin` source arm carrying this plugin's identity
+ * (`source.kind === 'plugin' && source.plugin === 'mstar-engine-status'`); the
+ * LATEST row wins (snapshot order tail). Refresh = snapshot subscription: a
+ * digest/TTL re-emission on the server only produces a new log line, whose
+ * snapshot bump re-runs this selection — no manual reload, no polling.
  *
- * Contract: `{ source: MstarEngineStatusSource | null; lastUpdated: number |
- * null }` — `source` null while no catalog row is logged yet (waiting empty
- * state); `lastUpdated` carries the catalog message node `time` (Unix ms) for
- * the freshness marker. The hook never throws: a snapshot the selector cannot
+ * Contract: `{ source: MstarEngineStatusPayload | null; lastUpdated: number |
+ * null }` — `source` null while no payload is available; `lastUpdated` carries
+ * the catalog message node `time` (Unix ms) for the freshness marker. The row
+ * is only the ANCHOR: its persisted source carries no payload (the catalog
+ * payload is not persisted on the message source at all), so the payload is
+ * fetched over the plugin's client channel and this hook hands it to the panel
+ * once that fetch lands. The hook never throws: a snapshot the selector cannot
  * read, or an absent session face, degrades to the explicit empty signal
  * instead of bubbling a crash (spec §5 degradation path; the strict-session
  * slot normally guarantees a session — the guard is belt-and-suspenders).
@@ -22,11 +26,11 @@
 import type { ConversationNode, ContextMessageNode } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { ChatSnapshot } from '@deepseek-ai/dsh-client-ui-chat/client'
 import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
-import type { MstarEngineStatusSource } from '../../types.ts'
+import type { MstarEngineStatusPayload } from '../../types.ts'
 
 /** The hook result: the latest catalog row plus its message time (spec §5). */
 export interface MstarEngineStatusView {
-  source: MstarEngineStatusSource | null
+  source: MstarEngineStatusPayload | null
   /** Unix ms of the catalog message node; null while no row is present. */
   lastUpdated: number | null
 }
@@ -39,8 +43,8 @@ function latestEngineStatusRow(nodes: readonly ConversationNode[]): ContextMessa
   for (let i = nodes.length - 1; i >= 0; i--) {
     const node = nodes[i]!
     if (node.kind !== 'context' || node.form !== 'catalog') continue
-    const source = node.source as { kind?: unknown } | null
-    if (source?.kind === 'mstar-engine-status') return node
+    const source = node.source as { kind?: unknown; plugin?: unknown } | null
+    if (source?.kind === 'plugin' && source.plugin === 'mstar-engine-status') return node
   }
   return null
 }
@@ -59,9 +63,11 @@ function selectEngineStatus(snapshot: ChatSnapshot): MstarEngineStatusView {
   try {
     const row = latestEngineStatusRow(snapshot.legacy.nodes)
     if (row === null) return EMPTY
-    // `kind` discrimination is the only narrowing the client does; field-level
-    // degradation happens at render time (spec §2.4).
-    return { source: row.source as MstarEngineStatusSource, lastUpdated: row.time }
+    // The row anchors the plugin presence and its message time; its persisted
+    // source deliberately carries NO payload, so `source` stays null until the
+    // client channel fetch supplies the session's snapshot (field-level
+    // degradation of a fetched payload happens at render time, spec §2.4).
+    return { source: null, lastUpdated: row.time }
   } catch {
     return EMPTY
   }

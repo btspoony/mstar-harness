@@ -75,7 +75,7 @@
  * (Step 2→4) — backward compatible, `active` semantics unchanged.
  */
 
-import type { MstarEngineStatusSource } from '../../../types.ts'
+import type { MstarEngineStatusPayload } from '../../../types.ts'
 import { bool, count, str } from '../guards.ts'
 import { comparePlansByIterationRecency, PLAN_CAP, sortPlans } from '../plan-sort.ts'
 import {
@@ -551,7 +551,7 @@ function violationRow(raw: unknown): GraphViolation {
 }
 
 /** Guarded state section: the workspace-state digest (plans + branch anchors + project rollup), null when missing. */
-function stateRow(source: MstarEngineStatusSource | null): {
+function stateRow(source: MstarEngineStatusPayload | null): {
   plans?: unknown
   iterationBaseBranch?: unknown
   targetBranch?: unknown
@@ -569,7 +569,7 @@ function stateRow(source: MstarEngineStatusSource | null): {
   }
 }
 
-export function projectGraph(source: MstarEngineStatusSource | null): ZoneView {
+export function projectGraph(source: MstarEngineStatusPayload | null): ZoneView {
   const degraded = { iteration: false, state: false, plans: false }
 
   // --- iteration zone: 5-step skeleton, then transition evidence (spec §3) ---
@@ -741,7 +741,7 @@ export function projectGraph(source: MstarEngineStatusSource | null): ZoneView {
  * malformed `state.project` (or no state at all) degrades to empty
  * aggregates (`[]`), never a throw and never a guessed value.
  */
-function projectRollup(source: MstarEngineStatusSource | null): ProjectRollupZoneView {
+function projectRollup(source: MstarEngineStatusPayload | null): ProjectRollupZoneView {
   const state = stateRow(source)
   const project = state?.project as { milestones?: unknown; openResiduals?: unknown } | null | undefined
   const milestones = Array.isArray(project?.milestones)
@@ -1125,7 +1125,7 @@ function isCurrentIterationDispatch(
  * annotates the current plan; degraded/empty branches include the note too
  * (it is a state.plans annotation, independent of the ledger evidence).
  */
-export function projectAgents(source: MstarEngineStatusSource | null, currentStep: number | null): AgentZoneView {
+export function projectAgents(source: MstarEngineStatusPayload | null, currentStep: number | null): AgentZoneView {
   const stages: AgentZoneStage[] = EXPECTED_ROLE_FLOW.map((s) => ({
     id: `${s.phase}:${s.stage}`,
     phase: s.phase,
@@ -1528,7 +1528,7 @@ function classifyFlowRows(rawEvents: readonly unknown[]): { view: FlowEventView 
  *   `agents` skeleton carries `empty`).
  */
 export function projectFlowEvents(
-  source: MstarEngineStatusSource | null,
+  source: MstarEngineStatusPayload | null,
 ): { events: FlowEventView[]; unexpected: FlowEventView[] } {
   const state = source == null ? null : (source as { state?: unknown }).state
   const agentFlow = state == null ? undefined : (state as { agentFlow?: unknown }).agentFlow
