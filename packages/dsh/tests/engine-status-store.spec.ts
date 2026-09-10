@@ -11,11 +11,12 @@
  * a real checkout path.
  */
 import { afterEach, describe, expect, it } from 'bun:test'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   ENGINE_STATUS_SNAPSHOT_ENTRY_VERSION,
+  ENGINE_STATUS_SNAPSHOT_LOCK_TIMEOUT_MS,
   ENGINE_STATUS_SNAPSHOT_MAX_AGE_MS,
   ENGINE_STATUS_SNAPSHOT_MAX_PER_SESSION,
   ENGINE_STATUS_SNAPSHOT_RELATIVE_PATH,
@@ -24,6 +25,7 @@ import {
   readEngineStatusSnapshot,
   writeEngineStatusSnapshot,
 } from '../src/engine-status-store.ts'
+import { WORKFLOW_LEDGER_LOCKDIR } from '../src/gates/agent-flow.ts'
 
 const dirs: string[] = []
 
@@ -351,5 +353,29 @@ describe('engine-status snapshot store — write guards', () => {
         payload: [] as unknown as Record<string, unknown>,
       }),
     ).toEqual({ kind: 'degraded', reason: 'payload-not-object' })
+  })
+
+  it('degrades within the bounded lock budget when another writer holds the lockdir', () => {
+    const harness = freshHarnessDir()
+    const snapshotDir = join(harness, 'snapshots')
+    mkdirSync(join(snapshotDir, WORKFLOW_LEDGER_LOCKDIR), { recursive: true })
+    const started = Date.now()
+    const result = writeEngineStatusSnapshot(harness, {
+      sessionId: 'ses_a',
+      cwd: '/proj',
+      turn: 1,
+      payload: payload(1),
+    })
+    const elapsed = Date.now() - started
+    // Degraded with the lock's own reason, and the advisory write NEVER waits
+    // for the ledger's 30 s default on the per-turn path.
+    expect(result.kind).toBe('degraded')
+    expect((result as { reason: string }).reason).toContain(WORKFLOW_LEDGER_LOCKDIR)
+    expect(elapsed).toBeLessThan(ENGINE_STATUS_SNAPSHOT_LOCK_TIMEOUT_MS * 10)
+    // Nothing was written, and the contended write left no temp file behind.
+    expect(existsSync(engineStatusSnapshotPath(harness))).toBe(false)
+    expect(readdirSync(snapshotDir).sort()).toEqual([WORKFLOW_LEDGER_LOCKDIR])
+    // The holder's lockdir is never removed for it.
+    expect(existsSync(join(snapshotDir, WORKFLOW_LEDGER_LOCKDIR))).toBe(true)
   })
 })

@@ -28,8 +28,9 @@
  * - every write runs under the per-directory inter-process write lock
  *   ({@link withWorkflowDirLock} — atomic `mkdir` lockdir, the package's
  *   single lock primitive);
- * - the file itself is replaced by `writeFileSync(<file>.tmp)` + `renameSync`
- *   (atomic replace — concurrent readers never observe a torn file);
+ * - the file itself is replaced by `writeFileSync(<writer-unique>.tmp)` +
+ *   `renameSync` (atomic replace — concurrent readers never observe a torn
+ *   file, and the failure cleanup can only ever remove its own temp file);
  * - retention is enforced on EVERY write: newest
  *   {@link ENGINE_STATUS_SNAPSHOT_MAX_PER_SESSION} entries per session, and
  *   nothing older than {@link ENGINE_STATUS_SNAPSHOT_MAX_AGE_MS}.
@@ -54,6 +55,15 @@ export const ENGINE_STATUS_SNAPSHOT_ENTRY_VERSION = 1
 export const ENGINE_STATUS_SNAPSHOT_MAX_PER_SESSION = 50
 /** Retention: maximum entry age (30 days) — older entries are pruned on write. */
 export const ENGINE_STATUS_SNAPSHOT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000
+/**
+ * Lock-acquisition budget (ms) for the advisory snapshot write. The write runs
+ * synchronously on the per-turn `agent/pre-step` emission path, so it may never
+ * inherit the ledger's 30 s deadline: contention (or a stale lockdir left by a
+ * killed host) must degrade the advisory write quickly instead of stalling the
+ * agent step — and, in the same process, the `/api` gateway that serves the
+ * panel.
+ */
+export const ENGINE_STATUS_SNAPSHOT_LOCK_TIMEOUT_MS = 250
 /** Snapshot file location relative to `{HARNESS_DIR}`. */
 export const ENGINE_STATUS_SNAPSHOT_RELATIVE_PATH = 'snapshots/engine-status.json'
 
@@ -278,6 +288,11 @@ export function writeEngineStatusSnapshot(
   if (!Number.isFinite(Date.parse(at))) return { kind: 'degraded', reason: 'invalid-timestamp' }
   const dir = dirname(engineStatusSnapshotPath(harnessDir))
   const file = engineStatusSnapshotPath(harnessDir)
+  // Writer-unique temp name: the failure cleanup below removes EXACTLY the file
+  // this call created. A shared `${file}.tmp` would let one writer's error path
+  // delete a concurrent writer's live temp file (its `renameSync` then fails
+  // with ENOENT and that snapshot is silently dropped).
+  const tmp = `${file}.${process.pid}.${Math.random().toString(36).slice(2, 10)}.tmp`
   try {
     // The lockdir lives INSIDE the snapshot dir (same placement rule as the
     // ledger's), so the directory must exist before the atomic `mkdir` lock
@@ -305,16 +320,15 @@ export function writeEngineStatusSnapshot(
         total += kept.length
       }
       doc.entries = pruned
-      const tmp = `${file}.tmp`
       writeFileSync(tmp, JSON.stringify(doc))
       renameSync(tmp, file)
       return { kind: 'written' as const, path: file, entries: total }
-    })
+    }, { timeoutMs: ENGINE_STATUS_SNAPSHOT_LOCK_TIMEOUT_MS })
   } catch (error) {
-    // The lock may have failed BEFORE mkdirSync created the directory; drop a
-    // stale temp file so a later write never renames a torn left-over.
+    // Remove ONLY this call's temp file: the lock may have failed before the
+    // directory existed, and the name above is unique to this writer.
     try {
-      rmSync(`${file}.tmp`, { force: true })
+      rmSync(tmp, { force: true })
     } catch {
       // best-effort cleanup only
     }
