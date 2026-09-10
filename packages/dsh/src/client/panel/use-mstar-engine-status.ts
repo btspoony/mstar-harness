@@ -62,11 +62,11 @@ export type MstarEngineStatusView =
 
 /** The seats the hook needs: the session standard kit + the plugin's client. */
 export interface MstarEngineStatusSeats {
-  /** Selector hook over the chat target snapshot (the `conversation.view` kit). */
+  /** Selector hook over the chat target snapshot (the session standard kit's chat face). */
   useChat: SnapshotSelectorHook<ChatSnapshot>
   /**
    * Selector hook over the Host session list (the global standard seat). The
-   * view ring always hands it to a `conversation.view` entry; it stays
+   * session-scope slot dispatch always hands it to the panel; it stays
    * optional here because a program without the ui-session adapter does not
    * see the declaration merge (the panel then reports `session-cwd-unknown`).
    */

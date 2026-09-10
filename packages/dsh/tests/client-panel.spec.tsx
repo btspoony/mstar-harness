@@ -1,6 +1,6 @@
 /**
  * Render tests for the Morning Star workflow-viz panel page (Task 2 + Task 3):
- * the `conversation.view` view tab that renders the `mstar-engine-status`
+ * the right-Sidebar pane body that renders the `mstar-engine-status`
  * catalog source (spec `panel-contract.md` §2/§3/§4).
  *
  * Coverage:
@@ -32,8 +32,9 @@
  *   stub chat-target snapshot (`createSnapshotStore`), and a snapshot bump
  *   (new catalog row) re-renders the panel with fresh data + freshness;
  * - plugin entry: `apply(ctx)` registers the `mstar-panel` dictionaries and
- *   the `conversation.view` tab (`id: 'mstar-workflow'`, `order: 20`,
- *   locale-following label thunk);
+ *   the sidebar body + chip-title seats (keyed `@mstar-harness/dsh`, the
+ *   body's `locale: 'mstar-panel'`); the definition's shape is
+ *   client-seat.spec.ts's subject;
  * - iteration-task page (spec panel-tabs §3
  *   Task 2): the Content Head — `data-iteration-head-*` anchors pin the
  *   collapse/expand defaults (active → expanded, inactive → collapsed one-line
@@ -102,8 +103,6 @@ import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { SlotRegistry } from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
-import { resolveSlotLabel } from '@deepseek-ai/dsh-client-ui-slots'
-import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { clientExports } from './client-bundles.ts'
 import { Context } from '@deepseek-ai/cordis'
 import type { MstarEngineStatusPayload } from '../src/types'
@@ -159,7 +158,7 @@ function newLocale(): LocaleRuntime {
   return new LocaleRuntimeCtor(new Context())
 }
 import { en, NS, zh } from '../src/client/panel/locale'
-import { PanelContent, PanelView } from '../src/client/panel/PanelView'
+import { PanelContent, PanelView, type MstarPanelBodyProps } from '../src/client/panel/PanelView'
 import { TabNav } from '../src/client/panel/TabNav'
 import { IterationTaskPage } from '../src/client/panel/pages/IterationTaskPage'
 import {
@@ -297,20 +296,20 @@ const degradedSource = {
 } as unknown as MstarEngineStatusPayload
 
 /**
- * Session-standard kit the view ring hands every conversation.view entry: the
- * chat selector, the Host session list (the panel reads the session's `cwd`
- * from it — the host cross-checks the asserted cwd), the session identity and
- * the plugin's engine-status client.
+ * Session-standard kit the sidebar body seat hands every dispatch: the chat
+ * selector, the Host session list (the panel reads the session's `cwd`
+ * from it — the host cross-checks the asserted cwd), the session identity,
+ * the plugin's engine-status client, and the seat's tab-information hook
+ * (a VISIBLE tab — the hidden-tab gate is client-seat.spec.ts's subject).
  */
-function kitProps(overrides?: Partial<ConvViewProps>): ConvViewProps {
+function kitProps(overrides?: Partial<MstarPanelBodyProps>): MstarPanelBodyProps {
   return {
     sessionId: SESSION,
     useChat: (() => null) as never,
     useSessions: bindUseSessions(SESSION_ID, SESSION_CWD) as never,
-    useConversation: (() => null) as never,
-    useWorkspaces: (() => null) as never,
+    useTabInfo: () => ({ tab: { visible: true } }),
     ...overrides,
-  } as unknown as ConvViewProps
+  } as unknown as MstarPanelBodyProps
 }
 
 /**
@@ -782,7 +781,7 @@ describe('workflow panel — data wiring through the hook (spec §5)', () => {
   })
 })
 
-describe('workflow panel — plugin entry registers locale + conversation.view tab (spec §4)', () => {
+describe('workflow panel — plugin entry registers locale + the sidebar seats (spec §4)', () => {
   /** Real cordis context over the real services (slots + locale + sessions faces). */
   function makeCtx(): { ctx: Context; slots: SlotRegistry; locale: LocaleRuntime } {
     const ctx = new Context()
@@ -792,18 +791,38 @@ describe('workflow panel — plugin entry registers locale + conversation.view t
     // faces the plugin's client entry injects (slots registers itself).
     ;(ctx as unknown as Record<string, unknown>).locale = locale
     ;(ctx as unknown as Record<string, unknown>).sessions = {}
+    // The tab-type registry is the host's service — a recording double keeps
+    // this describe on the apply-wiring face (the definition's full shape is
+    // client-seat.spec.ts's subject).
+    const registered: unknown[] = []
+    ;(ctx as unknown as Record<string, unknown>).sidebarRightTabs = {
+      register: (definition: unknown) => {
+        registered.push(definition)
+        return () => {
+          const at = registered.indexOf(definition)
+          if (at >= 0) registered.splice(at, 1)
+        }
+      },
+    }
     return { ctx, slots, locale }
   }
 
-  /** Declare the view-ring chain exactly like ui-conversation apply (spec §3.2). */
-  function declareViewRing(slots: SlotRegistry): () => void {
+  /** Declare the sidebar seat chain exactly like ui-sidebar-right apply. */
+  function declareRightbar(slots: SlotRegistry): () => void {
     slots.register({
-      name: 'root' as 'conversation.view',
-      children: { 'conversation.session': { kind: 'single', scope: 'session' } } as never,
+      name: 'root' as 'sidebar.right.pane.tab',
+      children: { rightbar: { kind: 'single', scope: 'root' } },
+    } as never, () => null)
+    slots.register({
+      name: 'rightbar' as 'sidebar.right.pane.tab',
+      children: { 'rightbar.session': { kind: 'single', scope: 'session' } },
     } as never, () => null)
     return slots.register({
-      name: 'conversation.session' as 'conversation.view',
-      children: { 'conversation.view': { kind: 'list', scope: 'session' } },
+      name: 'rightbar.session' as 'sidebar.right.pane.tab',
+      children: {
+        'sidebar.right.pane.tab': { kind: 'keyed', scope: 'session', inject: { hooks: { tabInfo: () => () => ({ tab: { visible: true } }) } } },
+        'sidebar.right.pane.tab.title': { kind: 'keyed', scope: 'session', inject: { hooks: { tabInfo: () => () => ({ tab: { visible: true } }) } } },
+      },
     } as never, () => null)
   }
 
@@ -816,26 +835,23 @@ describe('workflow panel — plugin entry registers locale + conversation.view t
     expect(locale.bind(NS)('view.mstar-workflow')).toBe('MStar 工作流')
   })
 
-  it('registers the conversation.view tab (id mstar-workflow, order 20, label follows locale)', async () => {
+  it('registers the sidebar body + title seats (keyed @mstar-harness/dsh, locale follows)', async () => {
     const { ctx, slots, locale } = makeCtx()
     apply(ctx)
-    // Not declared yet: the inject callback must wait.
-    expect(slots.entries('conversation.view')).toHaveLength(0)
+    // Not declared yet: the inject callbacks must wait.
+    expect(slots.entries('sidebar.right.pane.tab')).toHaveLength(0)
 
-    const disposeDeclarer = declareViewRing(slots)
+    const disposeRightbar = declareRightbar(slots)
     locale.setLocale('zh')
-    const entries = slots.entries('conversation.view')
-    expect(entries).toHaveLength(1)
-    const tab = entries[0]!
-    expect(tab.options.id).toBe('mstar-workflow')
-    expect(tab.options.order).toBe(20)
-    expect(resolveSlotLabel(tab.options.label)).toBe('MStar 工作流')
+    const bodies = slots.entries('sidebar.right.pane.tab')
+    const titles = slots.entries('sidebar.right.pane.tab.title')
+    expect(bodies).toHaveLength(1)
+    expect(titles).toHaveLength(1)
+    expect(bodies[0]!.options.key).toBe('@mstar-harness/dsh')
+    expect(titles[0]!.options.key).toBe('@mstar-harness/dsh')
+    expect(bodies[0]!.locale).toBe(NS)
 
-    // Label thunk re-reads per projection: locale switch flips the tab.
-    locale.setLocale('en')
-    expect(resolveSlotLabel(tab.options.label)).toBe('MStar Workflow')
-
-    disposeDeclarer()
+    disposeRightbar()
   })
 })
 

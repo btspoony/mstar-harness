@@ -5,7 +5,7 @@
     "": {
       "name": "morning-star",
       "dependencies": {
-        "@mstar-harness/engine": "^3.7.2",
+        "@mstar-harness/engine": "^3.7.3",
       },
       "devDependencies": {
         "@oh-my-pi/pi-coding-agent": "^17.2.11",
@@ -14,7 +14,7 @@
     },
     "packages/cli": {
       "name": "@mstar-harness/cli",
-      "version": "3.7.2",
+      "version": "3.7.3",
       "bin": {
         "mstar-harness": "dist/mstar-harness.js",
         "mstar": "dist/mstar-harness.js",
@@ -30,7 +30,7 @@
     },
     "packages/dsh": {
       "name": "@mstar-harness/dsh",
-      "version": "3.7.2",
+      "version": "3.7.3",
       "devDependencies": {
         "@mstar-harness/engine": "workspace:*",
         "@shikijs/langs": "^4.3.1",
@@ -87,6 +87,7 @@
         "@deepseek-ai/dsh-client-ui-renderer": "^0.1.5-rc.1",
         "@deepseek-ai/dsh-client-ui-settings": "^0.1.5-rc.1",
         "@deepseek-ai/dsh-client-ui-settings-plugins": "^0.1.5-rc.1",
+        "@deepseek-ai/dsh-client-ui-sidebar-right": "^0.1.5-rc.1",
         "@deepseek-ai/dsh-client-ui-slots": "^0.1.5-rc.1",
         "@deepseek-ai/dsh-code-runtime": "^0.1.5-rc.1",
         "@deepseek-ai/dsh-commands": "^0.1.5-rc.1",
@@ -133,7 +134,7 @@
     },
     "packages/engine": {
       "name": "@mstar-harness/engine",
-      "version": "3.7.2",
+      "version": "3.7.3",
       "devDependencies": {
         "@types/node": "^25.6.0",
         "bun-types": "^1.2.17",
@@ -142,14 +143,14 @@
     },
     "packages/omp": {
       "name": "@mstar-harness/omp",
-      "version": "3.7.2",
+      "version": "3.7.3",
       "devDependencies": {
         "@mstar-harness/engine": "workspace:*",
       },
     },
     "packages/opencode": {
       "name": "@mstar-harness/opencode",
-      "version": "3.7.2",
+      "version": "3.7.3",
       "dependencies": {
         "@opencode-ai/plugin": "1.4.8",
       },
@@ -214,6 +215,8 @@
     "@deepseek-ai/dsh-client-ui-settings": ["@deepseek-ai/dsh-client-ui-settings@0.1.5-rc.1", "", { "peerDependencies": { "@deepseek-ai/cordis": "^4.0.2" } }, "sha512-5O+HJrGuyJL0rNf7ulLI7CbdVozYfKDrAYKXoykAzZZ11EgSEaOrNfRobBhUKMsmXyfbKec7qce9rtG+HOgiuA=="],
 
     "@deepseek-ai/dsh-client-ui-settings-plugins": ["@deepseek-ai/dsh-client-ui-settings-plugins@0.1.5-rc.1", "", { "peerDependencies": { "@deepseek-ai/cordis": "^4.0.2" } }, "sha512-DEE4oGtDd0O0jCuo3Jrpt1FF5RIA49P6TfObJbhugOzdt2X1vdsoEqZZDAO4yuu6f2QedgM1mGP3IMCP9J57Qg=="],
+
+    "@deepseek-ai/dsh-client-ui-sidebar-right": ["@deepseek-ai/dsh-client-ui-sidebar-right@0.1.5-rc.1", "", { "peerDependencies": { "@deepseek-ai/cordis": "^4.0.2" } }, "sha512-JFKsoWRdfX4r++DL2CbuDAgZ6Di1L3siSjcl5z6ilieFfcsN9eUHyOcZN+2WKOQtmpw374ZwrN5Z/i+coO/mCA=="],
 
     "@deepseek-ai/dsh-client-ui-slots": ["@deepseek-ai/dsh-client-ui-slots@0.1.5-rc.1", "", { "peerDependencies": { "@deepseek-ai/cordis": "^4.0.2" } }, "sha512-xBCdGmV1RdCwWFHCW5m6Y3FVAIHNRR6ppFNeZN4iRpn/osCvnYCF7L+MyjeWExyjC71Xl/Rh06Kj8/1gtbb/wg=="],
 

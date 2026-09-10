@@ -124,6 +124,10 @@ async function panelHtml(
     useSessions: bindUseSessions(SESSION_ID, SESSION_CWD),
     engineStatus,
     t: locale.bind(NS),
+    // Visible-tab stub (the sidebar seat's tab-information hook); the gate
+    // itself is client-seat.spec.ts's subject — this spec asserts the
+    // degraded branches, so every render here sees a visible tab.
+    useTabInfo: () => ({ tab: { visible: true } }),
   } as never)))
 }
 

@@ -1,13 +1,21 @@
 /**
- * Morning Star workflow panel page — the `conversation.view` tab component
- * (spec §4.2): render of the session's engine-status snapshot.
+ * Morning Star workflow panel page — the right-Sidebar pane body (the keyed
+ * `sidebar.right.pane.tab` seat component, plan sidebar §L1.5): render of the
+ * session's engine-status snapshot.
  *
- * Inputs: the session standard kit (`ConvViewProps` + the session-list seat),
- * the plugin's engine-status client (bound to the client `connection` service
- * by the plugin entry) and the typed `t` seat (`locale: 'mstar-panel'`). The
- * `useMstarEngineStatus()` hook turns the anchor row + the served snapshot
- * into ONE explicit render state (spec §5) — the render body is a pure
- * function of (state, payload, snapshot `at`, t).
+ * Inputs: the sidebar seat's props (`MstarPanelBodyProps` — the seat's
+ * runtime share incl. the framework-injected `useTabInfo()` + the session
+ * standard kit + the plugin's engine-status client bound by the plugin entry
+ * + the typed `t` seat (`locale: 'mstar-panel'`)). The `useMstarEngineStatus()`
+ * hook turns the anchor row + the served snapshot into ONE explicit render
+ * state (spec §5) — the render body is a pure function of
+ * (state, payload, snapshot `at`, t).
+ *
+ * Visibility (plan sidebar §L2.6): a docked body is projected only while its
+ * sidebar column is expanded and the tab is active — `useTabInfo().tab.visible`
+ * — so a collapsed column renders NOTHING (no projection, no DOM). A floating
+ * pane is always visible. T1 keeps the wide two-column body rendering; the
+ * narrow-column re-layout is the next task on the board.
  *
  * Layout (spec panel-tabs §2): root grid
  * `"main sidebar"` fills the Tab (height 100%, overflow hidden — the page
@@ -42,8 +50,7 @@
 
 import * as React from 'react'
 import { useState } from 'react'
-import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
-import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
+import type { PropsLocale, PropsRuntime, TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { MstarEngineStatusPayload } from '../../types.ts'
 import css from './panel.module.css'
@@ -56,14 +63,22 @@ import { EventLogPage } from './pages/EventLogPage.tsx'
 import { IterationTaskPage } from './pages/IterationTaskPage.tsx'
 import { useMstarEngineStatus, type UseSessions } from './use-mstar-engine-status.ts'
 
-export interface MstarPanelViewProps extends ConvViewProps {
+/**
+ * The sidebar body seat's props (plan sidebar §L1.5): the seat's runtime
+ * share (owner + keyed + the seat's inject face — `useTabInfo()` — + the
+ * session standard kit, incl. the ui-chat-merged `useChat`) + the typed `t`
+ * seat from the registration's `locale:` option. The entry store share joins
+ * with the narrow-column re-layout task.
+ */
+export interface MstarPanelBodyProps extends PropsRuntime<'sidebar.right.pane.tab'>, PropsLocale<'mstar-panel'> {
   /** Namespace-bound translate seat (`locale: 'mstar-panel'`). */
   t: TranslateNS<'mstar-panel'>
   /**
    * Current session identity — the session standard kit's own prop. Declared
    * here (rather than inherited) because this package does not depend on the
    * ui-session adapter that merges the session-kit declarations into
-   * `ConvViewProps`; the view ring always supplies it at runtime.
+   * `SessionStandardProps`; the seat's session scope always supplies it at
+   * runtime.
    */
   sessionId?: SessionId
   /** Host session-list selector hook (the global standard seat, same reason). */
@@ -114,12 +129,18 @@ export function PanelContent({ tab, source, t }: PanelContentProps) {
   return <IterationTaskPage view={projectGraph(source)} t={t} />
 }
 
-export function PanelView({ t, useChat, useSessions, sessionId, engineStatus }: MstarPanelViewProps) {
+export function PanelView({ t, useChat, useSessions, sessionId, engineStatus, useTabInfo }: MstarPanelBodyProps) {
   const view = useMstarEngineStatus({ useChat, useSessions, sessionId, engineStatus })
   // Tab state (spec §6.2): local, default 'tasks' (D1), no routing. Called
   // before every early return (hooks rule) — the empty branches never render
   // the tab nav.
   const [tab, setTab] = useState<PanelTab>('tasks')
+  // Visibility gate (plan sidebar §L2.6): a docked body costs nothing while
+  // the column is collapsed or another tab is active — no projection, no
+  // digest, no DOM. A floating pane is always visible, so this never blanks a
+  // float. Called with the other hooks (hooks rule), read after them.
+  const tabInfo = useTabInfo()
+  if (!tabInfo.tab.visible) return null
   if (view.state === 'waiting') {
     return (
       <div className={css.emptyRoot} data-mstar-panel="waiting" data-conversation-composer-overlay="">
@@ -205,16 +226,20 @@ export function PanelView({ t, useChat, useSessions, sessionId, engineStatus }: 
     )
   }
   // Full-tab height (spec panel-tabs §2 Task
-  // 4): the host only gives a view a definite height when the view opts into
-  // the composer overlay. The `data-conversation-composer-overlay` attribute
-  // flips the host's `.viewArea` wrapper from flow content (`min-height: auto;
-  // flex: 1 0 auto` — which makes `.root`'s `height: 100%` resolve to auto and
-  // the WHOLE page scroll) to a fixed-height container (`flex: 1 1 0;
-  // min-height: 0; overflow: hidden`). Only then does the panel's own height
-  // chain (`height: 100%` → `.main` → `.content` → `.eventLogPage` →
-  // `.rowList`) constrain, so each partition scrolls internally. The waiting
-  // and no-harness roots carry the SAME opt-in so `height: 100%` also centers
-  // their content and the composer position never jumps on transition.
+  // 4): the host only gave a conversation VIEW a definite height when the view
+  // opted into the composer overlay. The `data-conversation-composer-overlay`
+  // attribute flips the host's `.viewArea` wrapper from flow content
+  // (`min-height: auto; flex: 1 0 auto` — which makes `.root`'s `height: 100%`
+  // resolve to auto and the WHOLE page scroll) to a fixed-height container
+  // (`flex: 1 1 0; min-height: 0; overflow: hidden`). Only then does the
+  // panel's own height chain (`height: 100%` → `.main` → `.content` →
+  // `.eventLogPage` → `.rowList`) constrain, so each partition scrolls
+  // internally. The waiting and no-harness roots carry the SAME opt-in so
+  // `height: 100%` also centers their content and the composer position never
+  // jumps on transition.
+  // (Sidebar-seat note: the pane body is already a definite-height box, so
+  // this opt-in is vestigial here — it is removed with the narrow-column
+  // re-layout task.)
   return (
     <div className={css.root} data-mstar-panel="panel" data-conversation-composer-overlay="">
       <main className={css.main}>
