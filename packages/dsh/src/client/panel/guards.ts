@@ -71,9 +71,15 @@ function unavailable(reason: string): MstarEngineStatusFetch {
  * @param sessionId - the session this client ASKED for; a response naming any
  *   other session is refused (`session-mismatch`) — one session's request can
  *   never render another session's data.
+ * @param cwd - the workspace this client ASSERTED in the same request; the host
+ *   echoes the record's `cwd`, so a response naming another workspace is refused
+ *   (`cwd-mismatch`) rather than rendered as this session's snapshot. The
+ *   comparison is exact byte equality: the host matched the asserted string
+ *   against its own record verbatim, so a normalising comparison here would
+ *   accept a workspace the host itself refused.
  * @returns the validated snapshot state, or the explicit unavailable state.
  */
-export function parseEngineStatusResult(raw: unknown, sessionId: string): MstarEngineStatusFetch {
+export function parseEngineStatusResult(raw: unknown, sessionId: string, cwd?: string): MstarEngineStatusFetch {
   const envelope = record(raw)
   if (envelope === null) return unavailable('malformed-response')
 
@@ -92,6 +98,12 @@ export function parseEngineStatusResult(raw: unknown, sessionId: string): MstarE
   // The answer must name the session that was asked for — a foreign id is
   // refused rather than rendered under this session's panel.
   if (value.sessionId !== sessionId) return unavailable('session-mismatch')
+
+  // …and the workspace it names must be the one this panel asserted. The host
+  // echoes the stored record's `cwd`, so a mismatch means the answer describes
+  // another workspace (a same-session, moved/foreign read) — never a close
+  // match to render. Asserted only when the caller passes the requested cwd.
+  if (cwd !== undefined && value.cwd !== cwd) return unavailable('cwd-mismatch')
 
   const at = str(value.at)
   if (at === null) return unavailable('malformed-snapshot')

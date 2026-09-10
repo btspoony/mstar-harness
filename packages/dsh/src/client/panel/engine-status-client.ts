@@ -24,6 +24,14 @@
  * repopulate the cache and then suppress the repull the invalidation exists to
  * force.
  *
+ * DEADLINES: the gateway is a network hop, so one request is bounded
+ * ({@link MstarEngineStatusClientOptions.timeoutMs}) and a request that
+ * outlives its budget degrades to the explicit `unavailable('timeout:…')`
+ * reason instead of pinning `loading` for a whole turn. A served snapshot is
+ * likewise re-pulled on a modest interval
+ * ({@link MstarEngineStatusClientOptions.refreshIntervalMs}) — D3's "explicit
+ * refresh", never per agent-flow event.
+ *
  * The store is written ONLY from a response continuation (never during a
  * render), so reading it through `useSyncExternalStore` stays within React's
  * snapshot contract.
@@ -39,6 +47,11 @@ import { parseEngineStatusResult, type MstarEngineStatusFetch } from './guards.t
 // from (`../../engine-status-wire.ts`); re-exported here for the panel's own
 // consumers and specs.
 export { ENGINE_STATUS_CHANNEL, ENGINE_STATUS_ENDPOINT }
+
+/** Deadline for one `/api/mstar/engineStatus` request (a hanging gateway must not pin `loading`). */
+export const ENGINE_STATUS_REQUEST_TIMEOUT_MS = 5_000
+/** How often a served snapshot is re-pulled (D3's "explicit refresh", modest interval). */
+export const ENGINE_STATUS_REFRESH_INTERVAL_MS = 30_000
 
 /**
  * Structural face of the client `connection` service the panel needs — the
@@ -58,10 +71,22 @@ export interface MstarEngineStatusConnection {
   readonly generation?: { subscribe(listener: () => void): () => void }
 }
 
+/** Optional timings (test seams; production uses the two constants above). */
+export interface MstarEngineStatusClientOptions {
+  /** Per-request deadline in ms (`0` disables the bound). */
+  readonly timeoutMs?: number
+  /** Refresh interval in ms (`0` disables the interval). */
+  readonly refreshIntervalMs?: number
+}
+
 /** One session's cached answer, tagged with the anchor row it answers. */
 export interface MstarEngineStatusEntry {
   /** Message time of the anchor row this answer belongs to (staleness key). */
   readonly anchorTime: number
+  /** The workspace directory the answer was requested for (reused by a refresh). */
+  readonly cwd: string
+  /** When the answer landed — the refresh clock (never the anchor row's time). */
+  readonly fetchedAt: number
   readonly fetch: MstarEngineStatusFetch
 }
 
@@ -82,6 +107,11 @@ export class MstarEngineStatusClient {
   private readonly listeners = new Set<() => void>()
   private readonly inFlight = new Map<string, Promise<void>>()
   private readonly abort = new AbortController()
+  /** Refreshes in flight, keyed by session (one per session, alongside the anchor requests). */
+  private readonly refreshing = new Set<string>()
+  private readonly timeoutMs: number
+  private readonly refreshIntervalMs: number
+  private refreshTimer: ReturnType<typeof setInterval> | null = null
   private generationDisposer: (() => void) | null = null
   /** Connection generation: bumped by {@link invalidate}; a mismatched answer is dropped. */
   private generation = 0
@@ -90,8 +120,14 @@ export class MstarEngineStatusClient {
   /**
    * @param connection - the client `connection` service, or undefined in a
    *   composition without one (the panel then reports `unavailable`).
+   * @param options - request deadline / refresh interval (test seams).
    */
-  constructor(private readonly connection: MstarEngineStatusConnection | null | undefined) {
+  constructor(
+    private readonly connection: MstarEngineStatusConnection | null | undefined,
+    options: MstarEngineStatusClientOptions = {},
+  ) {
+    this.timeoutMs = options.timeoutMs ?? ENGINE_STATUS_REQUEST_TIMEOUT_MS
+    this.refreshIntervalMs = options.refreshIntervalMs ?? ENGINE_STATUS_REFRESH_INTERVAL_MS
     try {
       this.generationDisposer = connection?.generation?.subscribe(() => { this.invalidate() }) ?? null
     } catch {
@@ -99,6 +135,7 @@ export class MstarEngineStatusClient {
       // panel: the cache simply never repulls on reconnect.
       this.generationDisposer = null
     }
+    this.startRefreshTimer()
   }
 
   /** Current store value (stable reference until a response lands). */
@@ -145,18 +182,58 @@ export class MstarEngineStatusClient {
     this.notify()
   }
 
-  /** Stop accepting writes and abort in-flight requests (plugin teardown). */
+  /** Stop accepting writes, abort in-flight requests and end the refresh interval (plugin teardown). */
   dispose(): void {
     this.disposed = true
     this.generationDisposer?.()
     this.generationDisposer = null
+    if (this.refreshTimer !== null) {
+      clearInterval(this.refreshTimer)
+      this.refreshTimer = null
+    }
     this.abort.abort()
     this.listeners.clear()
   }
 
   /**
-   * One request → one validated entry. Never throws: a fault is an explicit
-   * reason.
+   * Re-pull every served snapshot on a modest interval: the host keeps emitting
+   * on each digest-gated `agent/pre-step`, and a panel left open on an idle
+   * session would otherwise never see a newer snapshot. Deliberately NOT tied to
+   * agent-flow events, and never in flight twice for one session.
+   */
+  private startRefreshTimer(): void {
+    if (this.disposed || this.refreshIntervalMs <= 0) return
+    if (typeof setInterval !== 'function') return
+    this.refreshTimer = setInterval(() => { this.refresh() }, this.refreshIntervalMs)
+    // A long-lived Node process (SSR / tests) must not be held open by it.
+    const timer = this.refreshTimer as unknown as { unref?: () => void }
+    timer.unref?.()
+  }
+
+  /**
+   * One refresh pass over the cache: every entry older than the refresh
+   * interval is re-pulled for the SAME anchor (the anchor only moves when the
+   * host appends a newer row, which already triggers its own request). Public
+   * as the interval's deterministic test seam; the interval calls it.
+   */
+  refresh(): void {
+    if (this.disposed) return
+    const now = Date.now()
+    for (const [sessionId, entry] of [...this.snapshot.entries]) {
+      if (this.disposed) return
+      if (now - entry.fetchedAt < this.refreshIntervalMs) continue
+      if (this.refreshing.has(sessionId)) continue
+      this.refreshing.add(sessionId)
+      void this.fetch(sessionId, entry.cwd, entry.anchorTime)
+        .finally(() => { this.refreshing.delete(sessionId) })
+    }
+  }
+
+  /**
+   * One request → one validated entry. Never throws: a fault, a missing
+   * connection and an exceeded deadline are all explicit reasons.
+   * @returns the answer (also published through {@link write} when the
+   *   generation it was issued under is still current).
    */
   private async fetch(sessionId: string, cwd: string, anchorTime: number): Promise<void> {
     const generation = this.generation
@@ -168,18 +245,43 @@ export class MstarEngineStatusClient {
         // The host's shared typert gateway: exactly one plain-object `args`
         // field, keyed by the endpoint descriptor's declared parameter names
         // (`sessionId`, `cwd`).
-        const raw = await this.connection.rpc.call(
+        const raw = await this.withDeadline((signal) => this.connection!.rpc.call(
           ENGINE_STATUS_CHANNEL,
           ENGINE_STATUS_ENDPOINT,
           { args: { sessionId, cwd } },
-          this.abort.signal,
-        )
-        answer = parseEngineStatusResult(raw, sessionId)
+          signal,
+        ))
+        answer = parseEngineStatusResult(raw, sessionId, cwd)
       } catch (error) {
         answer = { status: 'unavailable', reason: `transport-error:${(error as Error)?.message ?? 'unknown'}` }
       }
     }
-    this.write(generation, sessionId, anchorTime, answer)
+    this.write(generation, sessionId, cwd, anchorTime, answer)
+  }
+
+  /**
+   * Bound one request: the request is aborted at the deadline and the caller
+   * gets the explicit timeout reason. A gateway that never answers must not pin
+   * `loading` (and with it the panel) for a whole turn.
+   */
+  private async withDeadline<T>(call: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    if (this.timeoutMs <= 0 || typeof setTimeout !== 'function') return await call(this.abort.signal)
+    const controller = new AbortController()
+    const relay = (): void => { controller.abort() }
+    this.abort.signal.addEventListener('abort', relay)
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        controller.abort()
+        reject(new Error(`timeout:${this.timeoutMs}ms`))
+      }, this.timeoutMs)
+    })
+    try {
+      return await Promise.race([call(controller.signal), deadline])
+    } finally {
+      if (timer !== null) clearTimeout(timer)
+      this.abort.signal.removeEventListener('abort', relay)
+    }
   }
 
   /**
@@ -193,13 +295,19 @@ export class MstarEngineStatusClient {
   private write(
     generation: number,
     sessionId: string,
+    cwd: string,
     anchorTime: number,
     fetch: MstarEngineStatusFetch,
   ): void {
     if (this.disposed) return
     if (generation !== this.generation) return
+    this.writeEntry(sessionId, { anchorTime, cwd, fetchedAt: Date.now(), fetch })
+  }
+
+  /** The store write itself (no generation test — see {@link write}). */
+  private writeEntry(sessionId: string, entry: MstarEngineStatusEntry): void {
     const entries = new Map(this.snapshot.entries)
-    entries.set(sessionId, { anchorTime, fetch })
+    entries.set(sessionId, entry)
     this.snapshot = { entries }
     this.notify()
   }

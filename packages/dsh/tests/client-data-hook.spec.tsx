@@ -23,8 +23,8 @@
  *   the newer snapshot;
  * - every degraded path is EXPLICIT: no anchor row → `waiting`, no answer yet
  *   → `loading`, transport failure / malformed envelope / foreign session id /
- *   unknown cwd / no connection → `unavailable` WITH a reason (never a
- *   silently-empty payload);
+ *   unknown cwd / a foreign workspace / no connection → `unavailable` WITH a
+ *   reason (never a silently-empty payload);
  * - session A's request can never render session B's data;
  * - a valid snapshot that says "empty" still renders as data;
  * - the client store's own mechanics (dedupe, per-anchor refetch, generation
@@ -246,6 +246,18 @@ describe('useMstarEngineStatus — explicit empty and degraded states (spec §3,
 })
 
 describe('useMstarEngineStatus — per-session answer isolation (spec §5)', () => {
+  it('an answer for the same session but another workspace → unavailable(cwd-mismatch)', async () => {
+    // The host echoes the STORED record's cwd; a same-session answer naming a
+    // different workspace describes a moved/foreign read, not this panel's.
+    const gateway = stubGateway(servedSnapshot(payload('2.0.4'), { cwd: '/proj/other' }))
+    const view = await settleView(seats(anchorStore(), gateway))
+    expect(view.state).toBe('unavailable')
+    if (view.state !== 'unavailable') throw new Error('expected unavailable')
+    expect(view.reason).toBe('cwd-mismatch')
+    // The payload of the foreign workspace is nowhere in this panel's state.
+    expect(view.payload).toBeNull()
+  })
+
   it("session A's request can never render session B's snapshot", async () => {
     // The gateway answers with B's snapshot for A's request (a foreign answer).
     const gateway = stubGateway(servedSnapshot(payload('B-version'), { sessionId: 's-B' }))
@@ -407,5 +419,76 @@ describe('MstarEngineStatusClient — connection generation fence', () => {
     expect(entry?.anchorTime).toBe(1)
     expect(entry?.fetch.status).toBe('ok')
     client.dispose()
+  })
+})
+
+describe('MstarEngineStatusClient — bounded request and explicit refresh', () => {
+  it('degrades to an explicit timeout reason when the gateway never answers', async () => {
+    // A gateway that never resolves: without a deadline the panel would stay
+    // `loading` for the rest of the turn.
+    const connection = { rpc: { call: () => new Promise<never>(() => {}) } } as unknown as MstarEngineStatusConnection
+    const client = new MstarEngineStatusClient(connection, { timeoutMs: 10, refreshIntervalMs: 0 })
+    client.ensure(SESSION_ID, SESSION_CWD, 1)
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    const entry = client.getSnapshot().entries.get(SESSION_ID)
+    expect(entry?.fetch.status).toBe('unavailable')
+    if (entry?.fetch.status !== 'unavailable') throw new Error('expected unavailable')
+    expect(entry.fetch.reason).toContain('timeout')
+    client.dispose()
+  })
+
+  it('re-pulls a served snapshot after the refresh interval, without a new anchor row', async () => {
+    const gateway = stubGateway(
+      servedSnapshot(payload('2.0.4'), { at: '2024-07-03T09:23:20.000Z' }),
+      servedSnapshot(payload('2.0.5'), { at: '2024-07-03T09:24:20.000Z' }),
+    )
+    // The interval drives it; disabling the timer for the seeding phase keeps
+    // the assertion about WHICH call is the refresh exact.
+    const client = new MstarEngineStatusClient(gateway.connection, { refreshIntervalMs: 0 })
+    client.ensure(SESSION_ID, SESSION_CWD, 1)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(gateway.calls).toHaveLength(1)
+    // A refresh pass with the interval elapsed asks AGAIN for the same anchor.
+    const refreshing = new MstarEngineStatusClient(gateway.connection, { refreshIntervalMs: 1 })
+    refreshing.ensure(SESSION_ID, SESSION_CWD, 1)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    // The interval fires on its own from here.
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(gateway.calls.length).toBeGreaterThanOrEqual(3)
+    const entry = refreshing.getSnapshot().entries.get(SESSION_ID)
+    // Same anchor row, newer snapshot: the panel sees the re-emission without
+    // waiting for the host to append another row.
+    expect(entry?.anchorTime).toBe(1)
+    if (entry?.fetch.status !== 'ok') throw new Error('expected ok')
+    expect(entry.fetch.payload.version).toBe('2.0.5')
+    client.dispose()
+    refreshing.dispose()
+  })
+
+  it('refresh() is the interval body: it re-pulls once the clock has passed', async () => {
+    const gateway = stubGateway(servedSnapshot(payload('2.0.4')), servedSnapshot(payload('2.0.5')))
+    const client = new MstarEngineStatusClient(gateway.connection, { refreshIntervalMs: 1 })
+    client.ensure(SESSION_ID, SESSION_CWD, 1)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const before = gateway.calls.length
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    client.refresh()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(gateway.calls.length).toBeGreaterThan(before)
+    client.dispose()
+  })
+
+  it('does not refresh a snapshot younger than the interval, and stops when disposed', async () => {
+    const gateway = stubGateway(servedSnapshot(payload('2.0.4')), servedSnapshot(payload('2.0.5')))
+    const client = new MstarEngineStatusClient(gateway.connection, { refreshIntervalMs: 60_000 })
+    client.ensure(SESSION_ID, SESSION_CWD, 1)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    client.refresh()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(gateway.calls).toHaveLength(1)
+    client.dispose()
+    client.refresh()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(gateway.calls).toHaveLength(1)
   })
 })
