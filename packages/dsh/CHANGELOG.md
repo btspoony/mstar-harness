@@ -6,6 +6,18 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [3.7.3] - 2026-09-10
+
+### dsh
+
+- Bump `@deepseek-ai/dsh-*` host peers to `^0.1.5-rc.1` and refresh the lock against the `0.1.5-rc.1` line (badge `0.1.5-rc.1`). Corridor rollup from `dsh-v0.1.2-rc.1` through alphas (`0.1.3-alpha.1/2`, `0.1.5-alpha.1/2`) to this RC. No `dsh-session-persistence-sqlite` / `dsh-client-runtime` pin is added (neither is published at `0.1.5-rc.1`). Remote / `dsh-api-remotes` stays; `host-apiproxy` stays out of the client-bundle INLINE_SAFE allowlist; `SessionEvent.ignorable` usage is kept. The fallbacks-only / transitive dsh packages are declared as `@mstar-harness/dsh` peers at the same caret so those packages resolve into the checked graph and the `peer-deps.spec.ts` single-line guard covers the whole family.
+- Lock converges to a single `0.1.5-rc.1` dsh line. No root `package.json` overrides.
+- Compensate for `@deepseek-ai/dsh-client-store` / `dsh-client-ui-primitives` / `dsh-client-ui-renderer` publishing without their former runtime dependencies: add `zustand`/`immer`, the previous primitives markdown/shiki stack, and `use-sync-external-store` as `@mstar-harness/dsh` **devDependencies** so client-seam tests and typecheck can load the registry packages.
+
+- Version alignment with harness **3.7.3**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **3.7.3**.
+
 ## [3.7.2] - 2026-09-09
 
 ### Changed
