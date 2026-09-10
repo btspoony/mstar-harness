@@ -320,7 +320,7 @@ describe('engineStatus endpoint — multi-fiber dedupe and withdrawal', () => {
       | undefined
     return service === undefined
       ? undefined
-      : `${String(service.bootHarnessDir)} ${String(service.resolver?.explicit)}`
+      : `${String(service.bootHarnessDir)}\u0000${String(service.resolver?.explicit)}`
   }
 
   /**
