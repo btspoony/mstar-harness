@@ -2,10 +2,13 @@
  * Store spec for the durable engine-status snapshot
  * (`src/engine-status-store.ts`).
  *
- * Covered: envelope schema (`sv` / `rv`), session keying, the prune boundary
- * (per-session cap + 30-day age, both enforced on write), the unknown-`sv` and
- * torn-file read paths (explicit unavailable — never a best-effort parse), and
- * the atomic replace (temp file + rename, no left-over temp).
+ * Covered: envelope schema (`sv` / `rv`), session keying (including ids that
+ * name `Object.prototype` members), the prune boundary (per-session cap + 30-day
+ * age, both enforced on write), the unknown-`sv` and torn-file paths on BOTH
+ * sides (the reader answers the explicit unavailable state and the writer
+ * REFUSES rather than replacing a store it cannot parse), lock contention (the
+ * short bounded timeout degrades instead of stalling the per-turn path), and
+ * the atomic replace (writer-unique temp file + rename, no left-over temp).
  *
  * Fixtures use the package's synthetic harness layout (`/proj/.mstar/…`), never
  * a real checkout path.
@@ -99,19 +102,48 @@ describe('engine-status snapshot store — write + schema', () => {
     expect(envelopeOf(harness).sv).toBe(ENGINE_STATUS_SNAPSHOT_VERSION)
   })
 
-  it('replaces the file atomically — the previous content is never merged when it is unreadable', () => {
+  it('REFUSES to replace a store it cannot parse — every other session keeps its snapshots', () => {
     const harness = freshHarnessDir()
     mkdirSync(join(harness, 'snapshots'), { recursive: true })
-    writeFileSync(engineStatusSnapshotPath(harness), '{"sv":1,"entries":{"ses_old":[{"rv":1,')
+    const torn = '{"sv":1,"entries":{"ses_old":[{"rv":1,'
+    writeFileSync(engineStatusSnapshotPath(harness), torn)
     const result = writeEngineStatusSnapshot(harness, {
       sessionId: 'ses_new',
       cwd: '/proj',
       turn: 5,
       payload: payload(5),
     })
-    expect(result.kind).toBe('written')
-    const doc = envelopeOf(harness)
-    expect(Object.keys(doc.entries)).toEqual(['ses_new'])
+    // Degraded WITH a reason, and the bytes on disk are untouched.
+    expect(result).toEqual({ kind: 'degraded', reason: 'store-invalid-json' })
+    expect(readFileSync(engineStatusSnapshotPath(harness), 'utf8')).toBe(torn)
+    // No temp file was left behind by the refused write.
+    expect(readdirSync(join(harness, 'snapshots')).sort()).toEqual(['engine-status.json'])
+  })
+
+  it('REFUSES to replace an envelope with an unknown sv instead of resetting it', () => {
+    const harness = freshHarnessDir()
+    mkdirSync(join(harness, 'snapshots'), { recursive: true })
+    const newer = JSON.stringify({
+      sv: 2,
+      entries: { ses_old: [{ rv: 9, cwd: '/proj', at: '2026-09-10T12:00:00.000Z', turn: 1, payload: {} }] },
+    })
+    writeFileSync(engineStatusSnapshotPath(harness), newer)
+    expect(writeEngineStatusSnapshot(harness, { sessionId: 'ses_new', cwd: '/proj', turn: 5, payload: payload(5) }))
+      .toEqual({ kind: 'degraded', reason: 'store-envelope-schema' })
+    expect(readFileSync(engineStatusSnapshotPath(harness), 'utf8')).toBe(newer)
+  })
+
+  it('still starts a fresh envelope when the store is simply absent', () => {
+    const harness = freshHarnessDir()
+    // A directory where the file belongs is NOT "absent": it is unreadable, so
+    // the write refuses rather than losing whatever a reader would have seen.
+    mkdirSync(engineStatusSnapshotPath(harness), { recursive: true })
+    expect(writeEngineStatusSnapshot(harness, { sessionId: 'ses_a', cwd: '/proj', turn: 1, payload: payload(1) }))
+      .toEqual({ kind: 'degraded', reason: 'store-unreadable' })
+    // …and the plain absent case writes normally.
+    const clean = freshHarnessDir()
+    expect(writeEngineStatusSnapshot(clean, { sessionId: 'ses_a', cwd: '/proj', turn: 1, payload: payload(1) }).kind)
+      .toBe('written')
   })
 })
 
@@ -314,6 +346,52 @@ describe('engine-status snapshot store — read rule', () => {
       kind: 'unavailable',
       reason: 'unreadable',
     })
+  })
+})
+
+describe('engine-status snapshot store — session ids that name Object.prototype members', () => {
+  // The session id is caller-chosen on the host's `session.create` (a branded
+  // string with no shape validation), so an id colliding with an inherited
+  // member is reachable, not theoretical. On a plain-object map each of these
+  // ids either threw a raw `TypeError` or was reported `written` while
+  // persisting nothing.
+  const HOSTILE_IDS = ['__proto__', 'constructor', 'toString', 'hasOwnProperty'] as const
+
+  for (const sessionId of HOSTILE_IDS) {
+    it(`keys ${sessionId} like any other session and serves it back`, () => {
+      const harness = freshHarnessDir()
+      expect(writeEngineStatusSnapshot(harness, { sessionId, cwd: '/proj', turn: 3, payload: payload(3) })).toMatchObject({
+        kind: 'written',
+        entries: 1,
+      })
+      const doc = envelopeOf(harness)
+      expect(Object.keys(doc.entries)).toEqual([sessionId])
+      expect(doc.entries[sessionId]).toHaveLength(1)
+      const read = readEngineStatusSnapshot(harness, sessionId)
+      expect(read.kind).toBe('ok')
+      if (read.kind !== 'ok') throw new Error('unreachable')
+      expect(read.entry.turn).toBe(3)
+      // …and it is an ORDINARY key: no inherited member is ever served.
+      expect(readEngineStatusSnapshot(harness, 'ses_other').kind).toBe('unavailable')
+    })
+  }
+
+  it('never resolves an inherited member for a session that has no bucket', () => {
+    const harness = freshHarnessDir()
+    writeEngineStatusSnapshot(harness, { sessionId: 'ses_a', cwd: '/proj', turn: 1, payload: payload(1) })
+    for (const probe of HOSTILE_IDS) {
+      expect(readEngineStatusSnapshot(harness, probe)).toEqual({
+        kind: 'unavailable',
+        reason: 'no-session-entry',
+      })
+    }
+  })
+
+  it('keeps the hostile-key bucket and the ordinary buckets independent', () => {
+    const harness = freshHarnessDir()
+    writeEngineStatusSnapshot(harness, { sessionId: '__proto__', cwd: '/proj', turn: 1, payload: payload(1) })
+    writeEngineStatusSnapshot(harness, { sessionId: 'ses_b', cwd: '/proj', turn: 2, payload: payload(2) })
+    expect(Object.keys(envelopeOf(harness).entries).sort()).toEqual(['__proto__', 'ses_b'])
   })
 })
 

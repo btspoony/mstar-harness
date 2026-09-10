@@ -22,7 +22,8 @@
  *
  * `sv` is the envelope schema version and `rv` the per-entry record version:
  * a reader that does not recognize EITHER must answer "unavailable" rather
- * than parse a shape it does not understand.
+ * than parse a shape it does not understand — and (write rule below) a writer
+ * must refuse rather than replace one.
  *
  * Durability discipline (same as the agent-flow ledger):
  * - every write runs under the per-directory inter-process write lock
@@ -39,6 +40,23 @@
  * absent file all yield the explicit {@link EngineStatusUnavailable} result.
  * A best-effort parse is never returned — a reader must not present guessed
  * state as the model's state.
+ *
+ * WRITE RULE (HARD): the same rule governs the writer. An existing envelope
+ * whose `sv` is unknown, whose JSON is torn, or that cannot be read is NOT
+ * replaceable: the write refuses with the explicit `degraded` reason and
+ * leaves the bytes untouched. Every session's snapshots live in that one file,
+ * so "start from an empty envelope" would silently destroy the snapshots of
+ * every other session sharing this `{HARNESS_DIR}` — a store the writer does
+ * not understand is never the writer's to overwrite (a version flap between
+ * two plugin builds, or a hand-truncated file, must not become data loss).
+ *
+ * KEYING (HARD): both session maps are prototype-less (`Object.create(null)`),
+ * and the read path gates on `Object.hasOwn`. The session id is caller-chosen
+ * on the host's `session.create` (a branded string with no shape validation),
+ * so an id equal to an `Object.prototype` member (`__proto__`, `constructor`,
+ * `toString`, …) must be an ordinary key: on a plain object literal it would
+ * instead read an inherited member (a non-array → `TypeError`) or hit the
+ * `__proto__` setter (reported `written` while persisting nothing).
  *
  * @module @mstar-harness/dsh/engine-status-store
  */
@@ -201,6 +219,9 @@ export function readEngineStatusSnapshot(
   }
   const entries = doc.entries
   if (!isPlainObject(entries)) return engineStatusUnavailable('envelope-schema')
+  // OWN key only: the session id is caller-chosen on the host's `session.create`,
+  // so `entries['constructor']` must never resolve an inherited member.
+  if (!Object.hasOwn(entries, sessionId)) return engineStatusUnavailable('no-session-entry')
   const bucket = entries[sessionId]
   if (!Array.isArray(bucket) || bucket.length === 0) return engineStatusUnavailable('no-session-entry')
   const entry = asEntry(bucket[bucket.length - 1])
@@ -215,31 +236,64 @@ interface SnapshotDoc {
 }
 
 /**
- * Load the existing envelope for a read-modify-write, or an empty envelope.
- * A torn/invalid existing file is NOT merged: the write starts a fresh
- * envelope (the previous content was unreadable, so nothing is salvageable)
- * and the caller-visible reason is the write result, not a silent merge.
+ * A prototype-less session map. Session ids are caller-chosen (`session.create`
+ * brand-casts whatever the caller sent), so an id equal to an `Object.prototype`
+ * member must behave exactly like any other key — on a plain object literal
+ * `entries['__proto__']` would reach the setter (and `'constructor'` an
+ * inherited function) instead of the bucket.
  */
-function loadForWrite(harnessDir: string): SnapshotDoc {
+function sessionMap(): Record<string, EngineStatusSnapshotEntry[]> {
+  return Object.create(null) as Record<string, EngineStatusSnapshotEntry[]>
+}
+
+/**
+ * The read-modify-write precondition: a usable envelope, or the explicit reason
+ * the write refuses. An existing file the writer cannot understand is NEVER
+ * treated as an empty envelope — this file holds every session's snapshots.
+ */
+type WriteLoad =
+  | { readonly kind: 'ok'; readonly doc: SnapshotDoc }
+  | { readonly kind: 'refused'; readonly reason: string }
+
+/**
+ * Load the existing envelope for a read-modify-write.
+ *
+ * Absent → a fresh envelope (the normal first write). Present but unreadable,
+ * torn, a non-object, or carrying an `sv` this build does not know → `refused`
+ * (the caller degrades with that reason and touches nothing). The read rule and
+ * the write rule are the same rule: what the reader must not parse is what the
+ * writer must not overwrite.
+ */
+function loadForWrite(harnessDir: string): WriteLoad {
+  let raw: string
   try {
-    const doc: unknown = JSON.parse(readFileSync(engineStatusSnapshotPath(harnessDir), 'utf8'))
-    if (isPlainObject(doc) && doc.sv === ENGINE_STATUS_SNAPSHOT_VERSION && isPlainObject(doc.entries)) {
-      const entries: Record<string, EngineStatusSnapshotEntry[]> = {}
-      for (const [key, value] of Object.entries(doc.entries)) {
-        if (!Array.isArray(value)) continue
-        const kept: EngineStatusSnapshotEntry[] = []
-        for (const candidate of value) {
-          const entry = asEntry(candidate)
-          if (entry !== undefined) kept.push(entry)
-        }
-        if (kept.length > 0) entries[key] = kept
-      }
-      return { sv: ENGINE_STATUS_SNAPSHOT_VERSION, entries }
+    raw = readFileSync(engineStatusSnapshotPath(harnessDir), 'utf8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return { kind: 'ok', doc: { sv: ENGINE_STATUS_SNAPSHOT_VERSION, entries: sessionMap() } }
     }
-  } catch {
-    // absent / unreadable / not JSON / unknown envelope ⇒ fresh envelope
+    return { kind: 'refused', reason: 'store-unreadable' }
   }
-  return { sv: ENGINE_STATUS_SNAPSHOT_VERSION, entries: {} }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return { kind: 'refused', reason: 'store-invalid-json' }
+  }
+  if (!isPlainObject(parsed) || parsed.sv !== ENGINE_STATUS_SNAPSHOT_VERSION || !isPlainObject(parsed.entries)) {
+    return { kind: 'refused', reason: 'store-envelope-schema' }
+  }
+  const entries = sessionMap()
+  for (const [key, value] of Object.entries(parsed.entries)) {
+    if (!Array.isArray(value)) continue
+    const kept: EngineStatusSnapshotEntry[] = []
+    for (const candidate of value) {
+      const entry = asEntry(candidate)
+      if (entry !== undefined) kept.push(entry)
+    }
+    if (kept.length > 0) entries[key] = kept
+  }
+  return { kind: 'ok', doc: { sv: ENGINE_STATUS_SNAPSHOT_VERSION, entries } }
 }
 
 /**
@@ -267,10 +321,11 @@ function pruneBucket(
  * session cap), and atomically replace the file — the whole read-modify-write
  * under the directory write lock.
  *
- * Contained by design: a lock timeout, a missing/unwritable directory, or a
- * failed replace returns `{kind:'degraded', reason}` (the advisory emission
- * path must never abort the step it observes). The in-memory payload is
- * unaffected either way.
+ * Contained by design: a lock timeout, a missing/unwritable directory, a failed
+ * replace, or an existing store this build does not understand returns
+ * `{kind:'degraded', reason}` (the advisory emission path must never abort the
+ * step it observes, and must never destroy what it cannot read). The in-memory
+ * payload is unaffected either way.
  * @param harnessDir - the resolved `{HARNESS_DIR}` (null when none resolved).
  * @param input - the emission's session identity + payload.
  * @returns written (with the entry count) or the degraded reason.
@@ -300,7 +355,12 @@ export function writeEngineStatusSnapshot(
     // lock contention.
     mkdirSync(dir, { recursive: true })
     return withWorkflowDirLock(dir, () => {
-      const doc = loadForWrite(harnessDir)
+      const loaded = loadForWrite(harnessDir)
+      // A store this build does not understand is not the writer's to replace:
+      // refusing keeps every other session's snapshots (and the bytes the newer
+      // build wrote) intact, and the reader answers `unavailable` for it anyway.
+      if (loaded.kind === 'refused') return { kind: 'degraded' as const, reason: loaded.reason }
+      const doc = loaded.doc
       const nowMs = Date.parse(at)
       const bucket = pruneBucket(doc.entries[input.sessionId] ?? [], nowMs)
       bucket.push({
@@ -311,7 +371,7 @@ export function writeEngineStatusSnapshot(
         payload: input.payload as Record<string, unknown>,
       })
       doc.entries[input.sessionId] = pruneBucket(bucket, nowMs)
-      const pruned: Record<string, EngineStatusSnapshotEntry[]> = {}
+      const pruned = sessionMap()
       let total = 0
       for (const [key, value] of Object.entries(doc.entries)) {
         const kept = pruneBucket(value, nowMs)
