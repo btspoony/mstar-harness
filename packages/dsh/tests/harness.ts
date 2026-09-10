@@ -256,18 +256,32 @@ export function startContinuableViaNativeChannel(
  * `create(inputs)` supports the CONTINUABLE persona-channel tests (plan
  *  Task 3 fix round): the real
  * continuation manager materializes every continuable child through
- * `agents.create({ sessionId, meta, seed, agentOptions, signal, setup })`.
- * This fake RECORDS the creation inputs and THROWS — the earliest real
- * observation point for the resolved continuable request (the creation
- * `seed` carries the `subagent/descriptor` event with the snapshot persona,
- * so the merged persona is observable without a live agent runtime). A
+ * `agents.create({ sessionId, parentAgent, meta, seed, inheritedEventCount,
+ * agentOptions, signal, setup })`, and the creation `setup` appends the
+ * `subagent/descriptor` event to the child session inside the creation
+ * window. This fake RECORDS the creation inputs, invokes the supplied
+ * `setup` against a fake child whose session records the appends, and
+ * THROWS — the recorded appends are the earliest real observation point for
+ * the resolved continuable request (the descriptor data is upstream-
+ * composed; the fake only records what `setup` appends, never synthesizing
+ * it), so the merged persona is observable without a live agent runtime. A
  * rejection here is the documented rollback boundary (creation owns
  * rollback before handle transfer), so the start call rejects cleanly.
  */
 export class FakeAgentRegistry extends Service {
   private readonly live = new Map<string, Agent>()
   /** Recorded `agents.create` inputs (the continuable materialization observation point). */
-  readonly createCalls: Array<{ sessionId: unknown; meta?: { parentSession?: string }; seed?: Array<{ type: string; data?: Record<string, unknown> }>; agentOptions?: unknown }> = []
+  readonly createCalls: Array<{
+    sessionId: unknown
+    parentAgent?: unknown
+    meta?: { parentSession?: string }
+    seed?: Array<{ type: string; data?: Record<string, unknown> }>
+    inheritedEventCount?: unknown
+    agentOptions?: unknown
+    signal?: unknown
+    /** Events the creation `setup` callback appended to the child session, in append order. */
+    events: Array<{ type: string; data?: Record<string, unknown> }>
+  }> = []
 
   constructor(ctx: Context) {
     super(ctx, 'agents')
@@ -286,9 +300,48 @@ export class FakeAgentRegistry extends Service {
     return this.live.get(id)
   }
 
-  /** Record the creation inputs and reject — capture-only (see class doc). */
-  create(inputs: { sessionId: unknown; meta?: { parentSession?: string }; seed?: Array<{ type: string; data?: Record<string, unknown> }> }): never {
-    this.createCalls.push(inputs)
+  /**
+   * Record the creation inputs, run the creation `setup` against a fake
+   * child (recording the events it appends to the child session), and
+   * reject — capture-only (see class doc).
+   */
+  create(inputs: {
+    sessionId: unknown
+    parentAgent?: unknown
+    meta?: { parentSession?: string }
+    seed?: Array<{ type: string; data?: Record<string, unknown> }>
+    inheritedEventCount?: unknown
+    agentOptions?: unknown
+    signal?: unknown
+    setup?: (childCtx: unknown, child: { session: { append(type: string, data?: Record<string, unknown>): void } }) => void
+  }): never {
+    const call = { ...inputs, events: [] as Array<{ type: string; data?: Record<string, unknown> }> }
+    this.createCalls.push(call)
+    // The real continuation manager appends the descriptor (and any
+    // delegation policy) INSIDE the creation window via `setup` — invoke it
+    // against a fake child context/child whose session records the appends.
+    // The child context is the minimal surface `applyChildComposition`
+    // touches (no agentPresets service is composed in the boot; the
+    // systemPrompt registrations are no-ops — the tests observe the
+    // session events, not the scoped composition).
+    inputs.setup?.(
+      {
+        get: () => undefined,
+        systemPrompt: {
+          getContextOrder: () => 0,
+          getSectionOrder: () => 0,
+          context: () => {},
+          section: () => {},
+        },
+      } as never,
+      {
+        session: {
+          append: (type: string, data?: Record<string, unknown>) => {
+            call.events.push({ type, data })
+          },
+        },
+      } as never,
+    )
     throw new Error('fake agents create: capture-only harness (continuable materialization stops here)')
   }
 }

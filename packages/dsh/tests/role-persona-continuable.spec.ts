@@ -20,12 +20,15 @@
  *   channel skips the merge there.
  *
  * Observation boundary: the real continuation manager materializes every
- * continuable child through `agents.create({ sessionId, meta, seed, … })`,
- * and the creation `seed` carries the `subagent/descriptor` event with the
- * snapshotted persona (the durable record fresh creation composes AND cold
- * resume replays). The harness agents fake records that creation and
- * throws — the earliest REAL observation point for the resolved continuable
- * request, without a live agent runtime.
+ * continuable child through `agents.create({ sessionId, parentAgent, meta,
+ * seed, inheritedEventCount, agentOptions, signal, setup })`, and the
+ * creation `setup` appends the `subagent/descriptor` event to the child
+ * session with the snapshotted persona (the durable record fresh creation
+ * composes AND cold resume replays). The harness agents fake records that
+ * creation, invokes the supplied `setup` against a fake child whose session
+ * records the appends, and throws — the recorded appends are the earliest
+ * REAL observation point for the resolved continuable request, without a
+ * live agent runtime.
  */
 import { Context, Service } from '@deepseek-ai/cordis'
 import { describe, expect, it, afterEach } from 'bun:test'
@@ -130,10 +133,9 @@ function continuableSpec(parent: unknown, text: string, overrides: Partial<Subag
   } as ContinuableStartSpecView
 }
 
-/** The `subagent/descriptor` event data recorded in one creation seed (undefined when absent). */
+/** The `subagent/descriptor` event data the creation `setup` appended to the child session (undefined when absent). */
 function descriptorOf(agents: FakeAgentRegistry): Record<string, unknown> | undefined {
-  const seed = agents.createCalls[0]?.seed ?? []
-  return seed.find((event) => event.type === 'subagent/descriptor')?.data
+  return agents.createCalls[0]?.events.find((event) => event.type === 'subagent/descriptor')?.data
 }
 
 describe('native persona channel — the continuable start surface', () => {
@@ -193,6 +195,15 @@ describe('native persona channel — the continuable start surface', () => {
       await expect(startContinuableViaNativeChannel(app, continuableSpec(parent, ASSIGNMENT_PROMPT.replace(EXECUTE_AS, 'scout'))))
         .rejects.toThrow('fake agents create: capture-only harness')
 
+      // The observation must be populated first: a continuable child's
+      // descriptor always carries mode/provider/label, so a missing
+      // `subagent/descriptor` event fails here rather than passing the
+      // persona-absence check vacuously.
+      expect(descriptorOf(agents)).toMatchObject({
+        mode: 'continuable',
+        provider: 'fake-spawn',
+        label: 'continuable label',
+      })
       expect(descriptorOf(agents)?.persona).toBeUndefined()
       expect(captured).toHaveLength(0)
     } finally {
@@ -211,7 +222,10 @@ describe('native persona channel — the continuable start surface', () => {
       await expect(startContinuableViaNativeChannel(app, continuableSpec(parent, ASSIGNMENT_PROMPT)))
         .rejects.toThrow(/does not support continuable children/)
 
-      expect(descriptorOf(agents)?.persona).toBeUndefined()
+      // The native rejection precedes materialization: no child is created,
+      // so no `subagent/descriptor` observation can exist. Assert the real
+      // observable — the manager never reached `agents.create`.
+      expect(agents.createCalls).toHaveLength(0)
       expect(captured).toHaveLength(1)
       expect(captured[0]?.[0]).toBe('debug')
       expect(captured[0]?.[1]).toContain('does not support continuable children')
