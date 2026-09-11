@@ -116,7 +116,11 @@ function terminalStatusOf(snapshotPath: string): { terminal: boolean; mtimeMs: n
   if (cached !== undefined && cached.mtimeMs === mtimeMs) return cached
   let terminal = false
   try {
-    const snapshot = readJson(snapshotPath)
+    // `readJson` casts arbitrary parsed JSON — a bare `null`/array/primitive
+    // snapshot has no `status` field: no evidence, exactly like an
+    // unreadable snapshot (skip, never cache a verdict).
+    const snapshot = asRecord(readJson(snapshotPath))
+    if (snapshot === undefined) return undefined
     const status = snapshot.status
     terminal = typeof status === 'string' && (WORKFLOW_TERMINAL_STATUSES as readonly string[]).includes(status)
   } catch {
@@ -319,7 +323,15 @@ export function resolveActiveWorkflow(harnessDir: string, hint?: SessionHint): A
   }
   let doc: Record<string, unknown>
   try {
-    doc = readJson(statusPath)
+    // `readJson` casts arbitrary parsed JSON: a bare `null`/array/primitive
+    // root has no `version`, so it is rejected as unreadable rather than
+    // dereferenced (the resolver NEVER throws out of a ledger/dispatch
+    // listener).
+    const parsed = asRecord(readJson(statusPath))
+    if (parsed === undefined) {
+      return { kind: 'error', code: 'status.unreadable', message: `cannot read ${statusPath}` }
+    }
+    doc = parsed
   } catch {
     return { kind: 'error', code: 'status.unreadable', message: `cannot read ${statusPath}` }
   }

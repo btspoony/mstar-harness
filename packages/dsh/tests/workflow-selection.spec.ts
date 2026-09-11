@@ -609,6 +609,29 @@ describe('workflow selection — binding order: explicit, unique, unbound', () =
       message: expect.any(String),
     })
   })
+
+  it('a non-object status root is a selection error — never a throw', async () => {
+    const root = await freshRoot('non-object-status-root')
+    const harnessDir = join(root, 'harness')
+    await mkdir(harnessDir, { recursive: true })
+    // `readJson` casts arbitrary parsed JSON: a bare `null` (or an array) has
+    // no `version`, so the root is rejected as unreadable instead of being
+    // dereferenced. The read path inherits the same non-`no-active` error and
+    // never falls through to terminal history.
+    for (const raw of ['null', '[]']) {
+      await seedHarness(harnessDir, { 'status.json': raw })
+      expect(resolveActiveWorkflow(harnessDir, { selectedWorkflowId: 'wf-a' })).toEqual({
+        kind: 'error',
+        code: 'status.unreadable',
+        message: expect.any(String),
+      })
+      expect(resolveReadWorkflow(harnessDir, { selectedWorkflowId: 'wf-a' })).toEqual({
+        kind: 'error',
+        code: 'status.unreadable',
+        message: expect.any(String),
+      })
+    }
+  })
 })
 
 describe('workflow selection — a cwd/lease binding is attribution, never lease ownership', () => {
