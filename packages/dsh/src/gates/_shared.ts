@@ -147,15 +147,6 @@ export interface Config {
    * so P-a never applies to them.
    */
   workflowNames?: string[]
-  /**
-   * Goal-bridge round cap : the
-   * flat `maxGoalRounds` the goal bridge passes to the goals service when it
-   * mirrors the active iteration objective (bounds autonomous Phase 2
-   * loops — the service itself throws on resume past the cap). Absent →
-   * 256 (aligned with the GoalService default and ralph `maxRounds` —
-   * architect decision; see the plan).
-   */
-  maxGoalRounds?: number
 }
 
 /**
@@ -241,11 +232,6 @@ export const Config: z<Config> = z.object({
   // the dispatch/persona array keys so absence stays observable).
   workflowGate: z.union(['off', 'warn', 'ask', 'hard']).default('warn'),
   workflowNames: z.array(z.string()).default(undefined as unknown as string[]),
-  // Goal-bridge round cap :
-  // flat numeric key preserving omission via `.default(undefined)` (the
-  // `catalogTtlMs` precedent) — the module resolves the 256 fallback, so
-  // absence stays observable at the Config boundary.
-  maxGoalRounds: z.number().default(undefined as unknown as number),
 })
 /** One violation line for logs and the typed veto message. */
 export function formatViolation(violation: ValidationResult): string {
