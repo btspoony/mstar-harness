@@ -211,7 +211,7 @@ export function visibleTabInfo(tabId = 'tab-1') {
     tab: {
       id: tabId,
       kind: 'mstar-workflow',
-      title: 'MStar Workflow',
+      title: 'Morning Star Workflow',
       contentId: 'sidebar://mstar-workflow',
       visible: true,
     },
