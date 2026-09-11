@@ -353,13 +353,13 @@ export class FakeAgentRegistry extends Service {
  * the ONE contract the workflow-ledger consumer reads — `get(id)` /
  * `list()` over live sessions (the depth advisory + cold scan) — plus
  * `register(session)` and an `append(session, type, data)` driver that
- * pushes an envelope into the session's `events` log and emits it on the
+ * pushes an envelope into the session's `log` and emits it on the
  * `session/event` firehose (the real store's append+emit contract). The
  * sessions are STRUCTURAL FAKES (plain objects): the consumer reads only
- * `id` / `events` / `header.cwd` / `header.delegationDepth` structurally,
- * and `@deepseek-ai/dsh-session` cannot construct under Bun/JSC. Mounted as
- * the `@deepseek-ai/dsh-session-fake` module row
- * (`bootApp({ sessionsService: 'fake' })`) so the plugin's REAL
+ * `header.id` / `header.cwd` / `header.delegationDepth` / `seq` /
+ * `eventAt(seq)` structurally, and `@deepseek-ai/dsh-session` cannot
+ * construct under Bun/JSC. Mounted as the `@deepseek-ai/dsh-session-fake`
+ * module row (`bootApp({ sessionsService: 'fake' })`) so the plugin's REAL
  * `registerWorkflowLedger` wiring registers against it — the gate → session
  * event → consumer → ledger composition under test.
  */
@@ -374,8 +374,13 @@ export class FakeSessionsRegistry extends Service {
 
   /** Record one live session (the real store's `create`/`enter` contract). */
   register(session: unknown): void {
-    const id = (session as { id?: unknown } | null | undefined)?.id
-    if (typeof id === 'string' && id !== '') this.live.set(id, session)
+    const rec = session as { id?: unknown; header?: { id?: unknown } } | null | undefined
+    const id = typeof rec?.header?.id === 'string' && rec.header.id !== ''
+      ? rec.header.id
+      : typeof rec?.id === 'string' && rec.id !== ''
+        ? rec.id
+        : undefined
+    if (id !== undefined) this.live.set(id, session)
   }
 
   /** Look up a live session by id (the consumer's depth-advisory read). */
@@ -395,9 +400,9 @@ export class FakeSessionsRegistry extends Service {
    * `[carrier, 'session/event', session, event]` and cordis `dispatch`
    * shifts the leading object as `this` before the event name.
    */
-  append(session: { id: string; events: unknown[] }, type: string, data: object): void {
-    const event = { type, seq: session.events.length, time: 1_700_000_000_000 + session.events.length, data }
-    session.events.push(event)
+  append(session: { log: unknown[] }, type: string, data: object): void {
+    const event = { type, seq: session.log.length, time: 1_700_000_000_000 + session.log.length, data }
+    session.log.push(event)
     this.app.events.emit({}, 'session/event', session, event)
   }
 }

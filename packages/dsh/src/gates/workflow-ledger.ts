@@ -4,8 +4,9 @@
  * into the CALLING PARENT session's log (top-level runs only — nested
  * transport calls record nothing upstream; Task 1 seam notes §4). The
  * consumer has THREE halves (the architect-verified seam):
- *  1. COLD SCAN at apply — iterate `ctx.get('sessions').list()`, read each
- *     session's `events` snapshot, and record any `tool-workflow/*` rows
+ *  1. COLD SCAN at apply — iterate `ctx.get('sessions').list()`, walk each
+ *     session's log through the installed `seq` + `eventAt(seq)` surface
+ *     (never a whole-log copy), and record any `tool-workflow/*` rows
  *     already present. Constructor-seeded events (replay/resume/fork) NEVER
  *     publish on the `session/event` firehose (`firstLiveSeq`), so without
  *     the cold scan pre-restart runs would be invisible.
@@ -232,11 +233,20 @@ interface SessionsView {
   list(): readonly unknown[]
 }
 
-/** Structural view of one session (`id` + immutable `events` snapshot + `header`). */
+/**
+ * Structural view of one session on the INSTALLED `Session` surface
+ * (upstream `core/session`, live-verified: `'events' in session === false`):
+ * the identity header (`header.id` is the session id the real Session's `id`
+ * getter delegates to; `header.cwd` is the workspace), the `seq` log-length
+ * contract (`seq ≡ log.length`, so `seq` is both the next event's sequence
+ * and the exclusive end of the walk), and `eventAt(seq)` for ONE exact
+ * envelope. `snapshotEvents()` is deliberately not part of this view — the
+ * scan never copies a whole log.
+ */
 interface SessionView {
-  id: unknown
-  events?: readonly unknown[]
-  header?: { cwd?: unknown; delegationDepth?: unknown }
+  header?: { id?: unknown; cwd?: unknown; delegationDepth?: unknown }
+  seq?: unknown
+  eventAt?(seq: number): unknown
 }
 
 /** One mapped ledger row: the envelope's session-log seq + the fully-shaped v1 event. */
@@ -259,10 +269,33 @@ interface WorkflowLedgerRow {
   runName?: string
 }
 
-/** The session's stable id (structural read; branded `SessionId` is a string). */
+/** The session's stable id (structural read — the installed `Session`'s `header.id`). */
 function sessionIdOf(session: unknown): string | undefined {
-  const id = (session as SessionView | null | undefined)?.id
+  const id = (session as SessionView | null | undefined)?.header?.id
   return typeof id === 'string' && id !== '' ? id : undefined
+}
+
+/** The session's workspace (`header.cwd`) when it is a non-empty string. */
+function sessionCwdOf(session: unknown): string | undefined {
+  const cwd = (session as SessionView | null | undefined)?.header?.cwd
+  return typeof cwd === 'string' && cwd.trim() !== '' ? cwd : undefined
+}
+
+/**
+ * The session's captured END sequence — its log length (`seq ≡ log.length`).
+ * Validated structurally: a safe integer in `[0, WORKFLOW_LEDGER_MAX_SEQ)`.
+ * A missing member (or a hostile getter, which throws to the caller's own
+ * containment) is not the installed surface, and the session is skipped.
+ */
+function sessionEndSeqOf(session: unknown): number | undefined {
+  const seq = (session as SessionView | null | undefined)?.seq
+  return typeof seq === 'number' && Number.isSafeInteger(seq) && seq >= 0 && seq < WORKFLOW_LEDGER_MAX_SEQ ? seq : undefined
+}
+
+/** The session's `eventAt(seq)` reader, bound to the session (`undefined` when the surface is absent). */
+function sessionEventAtOf(session: unknown): ((seq: number) => unknown) | undefined {
+  const eventAt = (session as SessionView | null | undefined)?.eventAt
+  return typeof eventAt === 'function' ? eventAt.bind(session) : undefined
 }
 
 /* ---------------------------------- durable watermark ---------------------------------- */
@@ -594,7 +627,7 @@ function depthAdvisory(sessions: SessionsView, row: WorkflowLedgerRow, warned: S
  * Register the workflow-ledger consumer: (1) a `session/created` backfill
  * listener (registered FIRST — — so no apply-time window exists
  * between the snapshot and the attach); (2) a bounded cold scan over
- * `ctx.sessions.list()` reading each session's `events` snapshot for
+ * `ctx.sessions.list()` walking each session's `seq` + `eventAt(seq)` log for
  * `tool-workflow/*` rows (covers pre-restart runs — constructor-seeded
  * events never hit the firehose, `firstLiveSeq`); (3) a live
  * `ctx.events.on('session/event', …)` listener filtering the four types.
@@ -682,8 +715,7 @@ export function registerWorkflowLedger(ctx: Context, resolver: HarnessResolver, 
     // no-op for unresolvable harness) and the watermark is NOT advanced —
     // the row is re-evaluated at the next scan, so it records once a
     // workspace resolves (strictly better than a permanently-lost row).
-    const cwd = (session as SessionView | null | undefined)?.header?.cwd
-    const workspace = typeof cwd === 'string' && cwd.trim() !== '' ? cwd : undefined
+    const workspace = sessionCwdOf(session)
     const harnessDir = resolver.forWorkspace(workspace)
     if (harnessDir === null) return
     // D4 binding: this session's durable pick + no-backfill floor. A
@@ -735,15 +767,16 @@ export function registerWorkflowLedger(ctx: Context, resolver: HarnessResolver, 
     // persisted file's mirror — re-applies and restarts stay deduped).
     const watermark = loadWatermark(workflowDir)
     let next = watermark.get(sid) ?? 0
-    // Log-rebuild guard: a snapshot SHORTER than the recorded watermark can
-    // only be a re-created session with a fresh log (id reuse after
-    // disposal) — restart the cursor so the new log's rows are not all
-    // skipped. Live logs only grow, so this never misfires on a healthy
-    // session. The EXCLUSION floor above is deliberately NOT reset here: a
-    // rebuilt log must never replay rows the operator's pick already excluded
+    // Log-rebuild guard: a log SHORTER than the recorded cursor can only be
+    // a re-created session with a fresh log (id reuse after disposal) —
+    // restart the cursor so the new log's rows are not all skipped. The end
+    // seq is the installed Session's log length (`seq ≡ log.length`); live
+    // logs only grow, so this never misfires on a healthy session. The
+    // EXCLUSION floor above is deliberately NOT reset here: a rebuilt log
+    // must never replay rows the operator's pick already excluded
     // (`row.seq < floor` returns before this point).
-    const events = (session as SessionView).events
-    if (Array.isArray(events) && events.length < next) next = 0
+    const endSeq = sessionEndSeqOf(session)
+    if (endSeq !== undefined && endSeq < next) next = 0
     if (row.seq < next) return // earlier-scan coverage — already recorded
     // Record-then-advance : the ledger row is appended FIRST and
     // the durable watermark advances ONLY on success — a failing append
@@ -799,21 +832,61 @@ export function registerWorkflowLedger(ctx: Context, resolver: HarnessResolver, 
     }
   }
 
+  /**
+   * The scan's EFFECTIVE START for one session: `max(success cursor, D4
+   * exclusion floor)` over the workflow dir the session resolves to. Rows
+   * below BOTH were already recorded (cursor) or intentionally excluded by
+   * the operator's pick (floor) — the walk never even reads them.
+   *
+   * `0` whenever either fact is unknown (no workspace, an unreadable binding
+   * record, no directed active workflow dir): the per-row guards in `consume`
+   * then decide, and its binding warn stays the one report. `0` also for a
+   * cursor PAST the captured end — a rebuilt log must be re-walked, never
+   * skipped by a stale-high cursor (`consume`'s own rebuild guard resets it).
+   * A floor PAST the captured end is identity drift on the EXCLUSION record:
+   * report it and scan nothing, never reset the intentional exclusion.
+   */
+  const scanStartSeq = (session: unknown, sid: string, endSeq: number): number => {
+    const workspace = sessionCwdOf(session)
+    if (workspace === undefined) return 0
+    const harnessDir = resolver.forWorkspace(workspace)
+    if (harnessDir === null) return 0
+    const binding = readWorkflowSessionBinding(harnessDir, sid, workspace)
+    if (binding.kind === 'unavailable') return 0
+    const floor = binding.binding?.excludedBeforeSeq ?? 0
+    if (floor > endSeq) {
+      log('warn', `workflow-ledger session ${sid} exclusion floor ${floor} is past its log end ${endSeq} — identity/log-rebuild drift, scan skipped (the intentional exclusion record is preserved)`)
+      return endSeq
+    }
+    const selected = binding.binding?.selectedWorkflowId
+    const hint: SessionHint = { sessionId: sid, cwd: workspace, ...(selected === undefined ? {} : { selectedWorkflowId: selected }) }
+    const workflowDir = resolveAgentFlowWriteTarget(harnessDir, hint).dir
+    if (workflowDir === null) return floor
+    const cursor = loadWatermark(workflowDir).get(sid) ?? 0
+    return Math.max(floor, cursor > endSeq ? 0 : cursor)
+  }
+
   // One session's snapshot pass — the shared body of the cold scan AND the
   // `session/created` backfill (a session created after apply with a seeded
   // log is scanned exactly once here; the durable watermark keeps it
-  // idempotent across registrations). The scan depth brackets the pass so the
-  // queued exclusion floors flush ONCE, after the last row (see
-  // `pendingFloors`); the `finally` keeps the counter honest even if a row
-  // read throws.
+  // idempotent across registrations). The walk reads the installed Session
+  // surface: the end seq is captured ONCE (`session.seq`), then `eventAt(i)`
+  // yields envelopes in order to `i < endSeq` — no whole-log copy, and live
+  // events appended after the capture stay the live observer's job. The scan
+  // depth brackets the pass so the queued exclusion floors flush ONCE, after
+  // the last row (see `pendingFloors`); the `finally` keeps the counter
+  // honest even if a read throws.
   const scanSession = (session: unknown): void => {
     const sid = sessionIdOf(session)
     if (sid === undefined) return
-    const events = (session as SessionView).events
-    if (!Array.isArray(events)) return
+    const endSeq = sessionEndSeqOf(session)
+    if (endSeq === undefined || endSeq === 0) return
+    const eventAt = sessionEventAtOf(session)
+    if (eventAt === undefined) return
+    const startSeq = scanStartSeq(session, sid, endSeq)
     scanDepth += 1
     try {
-      for (const envelope of events) consume(session, envelope)
+      for (let seq = startSeq; seq < endSeq; seq += 1) consume(session, eventAt(seq))
     } finally {
       scanDepth -= 1
       if (scanDepth === 0) flushExclusionFloors()
@@ -837,10 +910,11 @@ export function registerWorkflowLedger(ctx: Context, resolver: HarnessResolver, 
     }
   })
 
-  // COLD SCAN — bounded per session: each session's events snapshot is read
-  // ONCE; a throwing `list()` or read logs one warn and the pass is skipped
-  // (the consumer stays live: the firehose and the created
-  // backfill above keep recording; the run is never affected).
+  // COLD SCAN — bounded per session: each session's log length is captured
+  // ONCE and its envelopes are walked through `eventAt(seq)`; a throwing
+  // `list()` or read logs one warn and the pass is skipped (the consumer
+  // stays live: the firehose and the created backfill above keep recording;
+  // the run is never affected).
   let sessionsSnapshot: readonly unknown[]
   try {
     sessionsSnapshot = sessions.list()
