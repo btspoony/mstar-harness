@@ -143,9 +143,9 @@ function emitUndeclared(ctx: Context, name: string, ...args: unknown[]): void {
   ;(ctx as unknown as { emit(event: string, ...args: unknown[]): void }).emit(name, ...args)
 }
 
-/** A fresh apply-scoped pairing store (empty maps). */
+/** A fresh apply-scoped pairing store (empty maps + slot map). */
 function pairingOf(): AgentFlowPairing {
-  return { dispatchByCallId: new Map(), dispatchByJobId: new Map() }
+  return { dispatchByCallId: new Map(), dispatchByJobId: new Map(), catalogBySession: new WeakMap() }
 }
 
 /** A fork dispatch-tool exec carrying the FULL pairing surface (callId + agent). */

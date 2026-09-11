@@ -57,6 +57,7 @@ import type { DispatchGateAdvisory } from './gates/dispatch.ts'
 import {
   AGENT_FLOW_LOGGER,
   registerSettleListener,
+  registerSubagentCatalogListener,
   recordJobSettle,
   setAgentFlowInvalidator,
   setAgentFlowLogger,
@@ -396,10 +397,14 @@ export function apply(ctx: Context, config: Config): void {
   // the window stay unpaired (documented honest degrade; no cross-apply
   // pairing). Shared by the dispatch recording (callId → dispatchRef via the
   // adapter), the post-execute settle listener (reads callId, writes the
-  // background jobId) and the onJobDone wiring (reads jobId).
+  // background jobId) and the onJobDone wiring (reads jobId). The
+  // `catalogBySession` slot map carries the call-window child-identity join
+  // (raw label → candidate, keyed by the live parent Session object) through
+  // the same lifetime: a catalog outside the apply window joins nothing.
   const pairing: AgentFlowPairing = {
     dispatchByCallId: new Map(),
     dispatchByJobId: new Map(),
+    catalogBySession: new WeakMap(),
   }
   // The host-facing HostAdapter facade — the fs-intent / pre-execute gates
   // route through it (host hooks and in-plugin gates share ONE code path).
@@ -602,6 +607,16 @@ export function apply(ctx: Context, config: Config): void {
     }
   })
   registerSettleListener(ctx, config, pairing)
+  // Subagent-catalog join (live half): ONE root-context `session/event`
+  // observer registered here — before any execution can start — that joins a
+  // parent-owned `subagent/catalog` (the child session identity upstream
+  // publishes) back to the dispatch ref its pre-execute reserved the label
+  // for, appending a nonterminal `subagent-link` row. The catch-up half runs
+  // at each dispatch's post-execute eligibility; neither half scans history,
+  // so a catalog predating this apply joins nothing (honest, apply-scoped —
+  // the same boundary as the pairing store it reads). Contained: a throwing
+  // observation degrades to a log line and never affects the session append.
+  registerSubagentCatalogListener(ctx, pairing)
 
   // Workflow-ledger session-event consumer : a cold scan over `ctx.sessions.list()`
   // at apply (durable `tool-workflow/*` rows already in each session's events

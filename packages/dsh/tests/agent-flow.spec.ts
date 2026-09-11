@@ -54,7 +54,9 @@ import {
 import {
   AGENT_FLOW_SIZE_GATE_BYTES,
   registerSettleListener,
+  registerSubagentCatalogListener,
   recordJobSettle,
+  recordSubagentLink,
   setAgentFlowInvalidator,
   setAgentFlowLogger,
   SETTLE_SEAM_PAIRING_NOTE,
@@ -62,7 +64,7 @@ import {
   truncateLedgerField,
   WORKFLOW_LEDGER_TRUNCATION_MARKER,
 } from '../src/gates/agent-flow.ts'
-import type { AgentFlowPairing } from '../src/gates/agent-flow.ts'
+import type { AgentFlowCatalogJoin, AgentFlowPairing } from '../src/gates/agent-flow.ts'
 import type { AgentFlowView, MstarEngineStatusSource } from '../src/index.ts'
 import { buildCatalogPayload } from '../src/gates/catalog.ts'
 import { bootApp, seedHarness, seedV2Tree, FakeJobRegistry, v2Root, v2Snapshot, v2WorkflowEntry, type BootResult } from './harness.ts'
@@ -836,9 +838,9 @@ describe('agent-flow dispatch smoke — bootApp + tools/pre-execute', () => {
  *     + verification-gate trace
  * ========================================================================== */
 
-/** A fresh apply-scoped pairing store (empty maps). */
+/** A fresh apply-scoped pairing store (empty maps + slot map). */
 function pairingOf(): AgentFlowPairing {
-  return { dispatchByCallId: new Map(), dispatchByJobId: new Map() }
+  return { dispatchByCallId: new Map(), dispatchByJobId: new Map(), catalogBySession: new WeakMap() }
 }
 
 /** A dispatch-tool exec carrying the FULL pairing surface (callId + agent). */
@@ -1837,5 +1839,669 @@ describe('agent-flow catalog — state.agentFlow evidence + render', () => {
     expect(payload.state!.agentFlow?.events).toHaveLength(1)
     expect(payload.state!.agentFlow?.events[0]).toMatchObject({ kind: 'dispatch', verdict: 'ok' })
     expect(textOf(row)).toContain('agent flow: 1 events')
+  })
+})
+
+/* ===========================================================================
+ * 6. Call-window catalog join — the nonterminal `subagent-link` row
+ *    (child session identity: reserve → eligibility → catch-up/live → consume)
+ * ========================================================================== */
+
+/**
+ * One structural live-Session stand-in exposing EXACTLY the verified surface
+ * the join reads (`id` / `seq` / `eventAt`) — never an `.events` member,
+ * which a real Session does not have (the reason the join walks
+ * `eventAt(seq)` over a bounded window instead of copying a log).
+ */
+interface CatalogSessionStub {
+  readonly id: string
+  readonly seq: number
+  /** The verified append contract: the envelope's `seq` is the log length BEFORE the push. */
+  append(type: string, data: unknown): CatalogEnvelopeStub
+  eventAt(seq: number): unknown
+}
+
+/** One structural session-log envelope (`{type, seq, time, data}`). */
+interface CatalogEnvelopeStub {
+  type: string
+  seq: number
+  time: number
+  data: unknown
+}
+
+/**
+ * Build one such stand-in. `seed` events are placed at the log positions
+ * they occupy BEFORE any live append — a constructor-seeded log (they are
+ * never replayed on the firehose, exactly like a real seeded Session).
+ */
+function catalogSession(id: string, seed: CatalogEnvelopeStub[] = []): CatalogSessionStub {
+  const log: CatalogEnvelopeStub[] = [...seed]
+  return {
+    id,
+    get seq(): number {
+      return log.length
+    },
+    append(type: string, data: unknown): CatalogEnvelopeStub {
+      const envelope: CatalogEnvelopeStub = { type, seq: log.length, time: Date.now(), data }
+      log.push(envelope)
+      return envelope
+    },
+    eventAt(seq: number): unknown {
+      return log[seq]
+    },
+  }
+}
+
+/** Epoch ms the catalog payload reports as the child's creation time (validated, never a ledger clock). */
+const CATALOG_CHILD_CREATED_AT = 1_780_000_000_001
+
+/** One verified v0 `subagent/catalog` payload (`label` = the delegation description). */
+function catalogPayload(childId: string, label: string, mode: 'one-shot' | 'continuable' = 'continuable'): Record<string, unknown> {
+  return { version: 0, childId, childCreatedAt: CATALOG_CHILD_CREATED_AT, mode, label }
+}
+
+/** A dispatch exec carrying the live parent Session + the raw delegation label (the join's step-1 seam). */
+function catalogExec(callId: string, agent: string, session: CatalogSessionStub, description: string): ToolExecution {
+  return {
+    callId: callId as ToolExecution['callId'],
+    name: 'subagent',
+    arguments: { description, prompt: VALID_PLANNED },
+    agent: { id: agent, session } as never,
+    signal: new AbortController().signal,
+    token: Symbol('dsh.tool.execution') as unknown as ToolExecutionToken,
+  } as unknown as ToolExecution
+}
+
+/** Record one dispatch whose exec carries the live Session + raw label (reserving its catalog slot). */
+function catalogDispatch(harnessDir: string, pairing: AgentFlowPairing, callId: string, agent: string, session: CatalogSessionStub, description: string): void {
+  recordDispatch({ harnessDir, exec: catalogExec(callId, agent, session, description), prompt: VALID_PLANNED, violations: [], hard: false, pairing })
+}
+
+/** Post-execute one catalog-capable dispatch call (the eligibility seam). */
+function emitPostExecute(ctx: Context, session: CatalogSessionStub, callId: string, agent: string, result: unknown): void {
+  emitUndeclared(ctx, SETTLE_SEAM, { callId, name: 'subagent', agent: { id: agent, session } }, result)
+}
+
+/** Emit one live `session/event` firehose envelope (carrier-first — the real store's dispatch shape). */
+function emitSessionEvent(ctx: Context, session: CatalogSessionStub, envelope: unknown): void {
+  ctx.events.emit({}, 'session/event', session, envelope)
+}
+
+/** The raw ledger rows of one workflow dir, oldest first (parsed JSONL). */
+function ledgerRows(workflowDir: string): Array<Record<string, unknown>> {
+  const file = join(workflowDir, AGENT_FLOW_FILE)
+  if (!existsSync(file)) return []
+  return readFileSync(file, 'utf8')
+    .split('\n')
+    .filter((line) => line.trim() !== '')
+    .map((line) => JSON.parse(line) as Record<string, unknown>)
+}
+
+/** The `subagent-link` rows of one workflow dir, oldest first. */
+function linkRows(workflowDir: string): Array<Record<string, unknown>> {
+  return ledgerRows(workflowDir).filter((row) => row.kind === 'subagent-link')
+}
+
+describe('agent-flow subagent-link — call-window catalog join', () => {
+  it('links a continuable child whose catalog was appended BEFORE post-execute (the required call-window catch-up)', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-link-early-')
+    const pairing = pairingOf()
+    const ctx = new Context()
+    const priorSink = setAgentFlowLogger(() => {})
+    try {
+      registerSettleListener(ctx, {}, pairing)
+      registerSubagentCatalogListener(ctx, pairing)
+      const session = catalogSession('sess-early')
+      catalogDispatch(harnessDir, pairing, 'c-early', 'sess-early', session, 'ship the widget')
+
+      // The tool body appends the catalog and only THEN returns — the
+      // continuable path necessarily does (the append precedes the return).
+      session.append('subagent/catalog', catalogPayload('child-early', 'ship the widget'))
+
+      emitPostExecute(ctx, session, 'c-early', 'sess-early', { isError: false, value: { kind: 'continuable', subagentId: 'child-early' } })
+
+      const rows = ledgerRows(workflowDir)
+      expect(rows.map((row) => row.kind)).toEqual(['dispatch', 'subagent-link'])
+      const link = rows[1]!
+      expect(link).toMatchObject({
+        v: 1,
+        kind: 'subagent-link',
+        childId: 'child-early',
+        label: 'ship the widget',
+        role: 'fullstack-dev',
+        planId: '00000810-agent-flow',
+        taskId: 'T2',
+      })
+      // A link is NOT a completion: no outcome/verdict/paired marker, and a
+      // continuable link carries no registry job reference.
+      expect('outcome' in link).toBe(false)
+      expect('verdict' in link).toBe(false)
+      expect('paired' in link).toBe(false)
+      expect('taskRef' in link).toBe(false)
+      expect(Object.values(link).every((value) => value !== undefined)).toBe(true)
+      // The observed child id was copied onto the retained dispatch ref.
+      expect(pairing.dispatchByCallId.size).toBe(0) // the call was consumed
+    } finally {
+      setAgentFlowLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('links a LATE live catalog (background one-shot) and the later job terminal carries the child id into its settle', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-link-late-')
+    const pairing = pairingOf()
+    const ctx = new Context()
+    const priorSink = setAgentFlowLogger(() => {})
+    try {
+      registerSettleListener(ctx, {}, pairing)
+      registerSubagentCatalogListener(ctx, pairing)
+      const session = catalogSession('sess-late')
+      catalogDispatch(harnessDir, pairing, 'c-late', 'sess-late', session, 'run the batch job')
+
+      emitPostExecute(ctx, session, 'c-late', 'sess-late', { isError: false, value: { kind: 'background', jobId: 'subagent-9' } })
+      // Eligible but no catalog yet — nothing is fabricated at eligibility.
+      expect(ledgerRows(workflowDir).map((row) => row.kind)).toEqual(['dispatch'])
+
+      // The one-shot catalog arrives later, on the live firehose.
+      const envelope = session.append('subagent/catalog', catalogPayload('child-bg', 'run the batch job', 'one-shot'))
+      emitSessionEvent(ctx, session, envelope)
+
+      let rows = ledgerRows(workflowDir)
+      expect(rows.map((row) => row.kind)).toEqual(['dispatch', 'subagent-link'])
+      expect(rows[1]).toMatchObject({ kind: 'subagent-link', childId: 'child-bg', label: 'run the batch job', taskRef: 'subagent-9' })
+
+      // The SAME ref object was in flight for the job: the terminal settle
+      // now carries the child identity the link supplied.
+      recordJobSettle({ id: 'subagent-9', status: 'completed', startedAt: 10, finishedAt: 30 }, pairing)
+      rows = ledgerRows(workflowDir)
+      expect(rows.map((row) => row.kind)).toEqual(['dispatch', 'subagent-link', 'settle'])
+      expect(rows[2]).toMatchObject({ kind: 'settle', outcome: 'ok', childId: 'child-bg', taskRef: 'subagent-9', role: 'fullstack-dev' })
+      expect(pairing.dispatchByJobId.size).toBe(0)
+    } finally {
+      setAgentFlowLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('terminal-before-link: a settle that already consumed the job entry still gets its link, and keeps no fabricated childId', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-link-reverse-')
+    const pairing = pairingOf()
+    const ctx = new Context()
+    const priorSink = setAgentFlowLogger(() => {})
+    try {
+      registerSettleListener(ctx, {}, pairing)
+      registerSubagentCatalogListener(ctx, pairing)
+      const session = catalogSession('sess-reverse')
+      catalogDispatch(harnessDir, pairing, 'c-rev', 'sess-reverse', session, 'reverse order')
+
+      emitPostExecute(ctx, session, 'c-rev', 'sess-reverse', { isError: false, value: { kind: 'background', jobId: 'subagent-rev' } })
+      // The terminal lands BEFORE any catalog: the settle records the real
+      // completion and consumes the job pairing.
+      recordJobSettle({ id: 'subagent-rev', status: 'completed' }, pairing)
+      let rows = ledgerRows(workflowDir)
+      expect(rows.map((row) => row.kind)).toEqual(['dispatch', 'settle'])
+      expect('childId' in rows[1]!).toBe(false)
+
+      // The catalog arrives afterwards — the pending candidate still owns the
+      // ref and writes the identity independently.
+      const envelope = session.append('subagent/catalog', catalogPayload('child-rev', 'reverse order', 'one-shot'))
+      emitSessionEvent(ctx, session, envelope)
+      rows = ledgerRows(workflowDir)
+      expect(rows.map((row) => row.kind)).toEqual(['dispatch', 'settle', 'subagent-link'])
+      expect(rows[2]).toMatchObject({ kind: 'subagent-link', childId: 'child-rev', label: 'reverse order', taskRef: 'subagent-rev' })
+      expect(pairing.dispatchByJobId.size).toBe(0)
+    } finally {
+      setAgentFlowLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('a duplicate label never marks a different dispatch eligible — the FIRST reserved dispatch owns the slot', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-link-duplicate-')
+    const pairing = pairingOf()
+    const ctx = new Context()
+    const priorSink = setAgentFlowLogger(() => {})
+    try {
+      registerSettleListener(ctx, {}, pairing)
+      registerSubagentCatalogListener(ctx, pairing)
+      const session = catalogSession('sess-dup')
+      catalogDispatch(harnessDir, pairing, 'c-first', 'sess-dup', session, 'shared description')
+      catalogDispatch(harnessDir, pairing, 'c-second', 'sess-dup', session, 'shared description')
+      expect(pairing.catalogBySession.get(session)!.size).toBe(1)
+
+      // The FIRST dispatch is the background one; the second is continuable.
+      emitPostExecute(ctx, session, 'c-first', 'sess-dup', { isError: false, value: { kind: 'background', jobId: 'subagent-dup' } })
+      emitPostExecute(ctx, session, 'c-second', 'sess-dup', { isError: false, value: { kind: 'continuable', subagentId: 'child-second' } })
+
+      // A continuable catalog naming the SECOND dispatch's child matches no
+      // slot: the first dispatch owns the label and expects a one-shot.
+      const wrongMode = session.append('subagent/catalog', catalogPayload('child-second', 'shared description', 'continuable'))
+      emitSessionEvent(ctx, session, wrongMode)
+      expect(linkRows(workflowDir)).toHaveLength(0)
+
+      // The first dispatch's own one-shot catalog links, carrying its job ref.
+      const right = session.append('subagent/catalog', catalogPayload('child-first', 'shared description', 'one-shot'))
+      emitSessionEvent(ctx, session, right)
+      const links = linkRows(workflowDir)
+      expect(links).toHaveLength(1)
+      expect(links[0]).toMatchObject({ childId: 'child-first', label: 'shared description', taskRef: 'subagent-dup' })
+    } finally {
+      setAgentFlowLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('cross-session isolation: one label on two live sessions links each session its own dispatch', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-link-crosssession-')
+    const pairing = pairingOf()
+    const ctx = new Context()
+    const priorSink = setAgentFlowLogger(() => {})
+    try {
+      registerSettleListener(ctx, {}, pairing)
+      registerSubagentCatalogListener(ctx, pairing)
+      const sessionA = catalogSession('sess-A')
+      const sessionB = catalogSession('sess-B')
+      catalogDispatch(harnessDir, pairing, 'c-A', 'sess-A', sessionA, 'parallel work')
+      catalogDispatch(harnessDir, pairing, 'c-B', 'sess-B', sessionB, 'parallel work')
+      expect(pairing.catalogBySession.get(sessionA)!.size).toBe(1)
+      expect(pairing.catalogBySession.get(sessionB)!.size).toBe(1)
+
+      emitPostExecute(ctx, sessionA, 'c-A', 'sess-A', { isError: false, value: { kind: 'continuable', subagentId: 'child-A' } })
+      emitPostExecute(ctx, sessionB, 'c-B', 'sess-B', { isError: false, value: { kind: 'continuable', subagentId: 'child-B' } })
+
+      const envelopeB = sessionB.append('subagent/catalog', catalogPayload('child-B', 'parallel work'))
+      emitSessionEvent(ctx, sessionB, envelopeB)
+      let links = linkRows(workflowDir)
+      expect(links).toHaveLength(1)
+      expect(links[0]).toMatchObject({ childId: 'child-B', agent: 'sess-B' })
+
+      const envelopeA = sessionA.append('subagent/catalog', catalogPayload('child-A', 'parallel work'))
+      emitSessionEvent(ctx, sessionA, envelopeA)
+      links = linkRows(workflowDir)
+      expect(links).toHaveLength(2)
+      expect(links.map((row) => row.agent)).toEqual(['sess-B', 'sess-A'])
+      expect(links.map((row) => row.childId)).toEqual(['child-B', 'child-A'])
+    } finally {
+      setAgentFlowLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects every malformed / out-of-window / mismatched catalog, then still links the valid one (the matcher stays live)', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-link-matcher-')
+    const pairing = pairingOf()
+    const ctx = new Context()
+    const priorSink = setAgentFlowLogger(() => {})
+    try {
+      registerSettleListener(ctx, {}, pairing)
+      registerSubagentCatalogListener(ctx, pairing)
+      // One pre-existing (seeded) log entry puts the window start at seq 1.
+      const seeded: CatalogEnvelopeStub = { type: 'session/start-seed', seq: 0, time: 1, data: { inherited: true } }
+      const session = catalogSession('sess-matcher', [seeded])
+      catalogDispatch(harnessDir, pairing, 'c-match', 'sess-matcher', session, 'matcher drill')
+      emitPostExecute(ctx, session, 'c-match', 'sess-matcher', { isError: false, value: { kind: 'continuable', subagentId: 'child-ok' } })
+
+      const label = 'matcher drill'
+      const payload = catalogPayload('child-ok', label)
+      const fire = (overrides: Partial<CatalogEnvelopeStub>): void => {
+        emitSessionEvent(ctx, session, { type: 'subagent/catalog', seq: 1, time: 1, data: payload, ...overrides })
+      }
+      fire({ type: 'session/other' }) // wrong event type
+      fire({ data: { ...payload, version: 1 } }) // wrong payload version
+      fire({ time: Number.NaN }) // non-finite envelope time
+      fire({ data: { ...payload, childCreatedAt: -1 } }) // negative creation time
+      fire({ data: { ...payload, childCreatedAt: 1.5 } }) // non-integer creation time
+      fire({ data: { ...payload, childId: 'x'.repeat(513) } }) // oversized child id
+      fire({ data: { ...payload, childId: 'child-other' } }) // returned-child mismatch
+      fire({ data: { ...payload, label: 'another description' } }) // label mismatch
+      fire({ data: { ...payload, mode: 'one-shot' } }) // wrong mode for a continuable result
+      fire({ seq: 0 }) // below the captured window start
+      fire({ seq: session.seq + 4 }) // beyond the live session bound
+      expect(linkRows(workflowDir)).toHaveLength(0)
+
+      // The capability control: the same matcher path still links the valid
+      // catalog appended by the tool body (recovered by the catch-up walk).
+      const good = session.append('subagent/catalog', catalogPayload('child-ok', label))
+      emitSessionEvent(ctx, session, good)
+      const links = linkRows(workflowDir)
+      expect(links).toHaveLength(1)
+      expect(links[0]).toMatchObject({ childId: 'child-ok', label })
+      // Consumed once — a repeated delivery of the same envelope adds nothing.
+      emitSessionEvent(ctx, session, good)
+      expect(linkRows(workflowDir)).toHaveLength(1)
+    } finally {
+      setAgentFlowLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('a catalog that predates the apply window (a constructor seed) never owns a same-label dispatch — a live append on that session does', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-link-seed-')
+    const pairing = pairingOf()
+    const ctx = new Context()
+    const priorSink = setAgentFlowLogger(() => {})
+    try {
+      registerSettleListener(ctx, {}, pairing)
+      registerSubagentCatalogListener(ctx, pairing)
+      // The seed carries the SAME label and the SAME child id the dispatch
+      // will report, so only provenance can explain a negative.
+      const seed: CatalogEnvelopeStub = { type: 'subagent/catalog', seq: 0, time: 5, data: catalogPayload('child-seed', 'seeded delegation') }
+      const session = catalogSession('sess-seeded', [seed])
+      expect(session.seq).toBe(1) // the seed sits below the live frontier
+      catalogDispatch(harnessDir, pairing, 'c-seed', 'sess-seeded', session, 'seeded delegation')
+      emitPostExecute(ctx, session, 'c-seed', 'sess-seeded', { isError: false, value: { kind: 'continuable', subagentId: 'child-seed' } })
+
+      // The catch-up window is [1, 1) — the seeded catalog is unreachable.
+      expect(linkRows(workflowDir)).toHaveLength(0)
+      expect(pairing.catalogBySession.get(session)!.get('seeded delegation')?.result).toEqual({ kind: 'continuable', subagentId: 'child-seed' })
+
+      // Positive control: a genuine live append on the SAME session with the
+      // SAME label reaches the live observer and is consumed.
+      const live = session.append('subagent/catalog', catalogPayload('child-seed', 'seeded delegation'))
+      emitSessionEvent(ctx, session, live)
+      const links = linkRows(workflowDir)
+      expect(links).toHaveLength(1)
+      expect(links[0]).toMatchObject({ childId: 'child-seed', label: 'seeded delegation' })
+    } finally {
+      setAgentFlowLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('admits no candidate for a label that sanitizes to nothing or is oversized (the key is never truncated)', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-link-label-')
+    const pairing = pairingOf()
+    const ctx = new Context()
+    const priorSink = setAgentFlowLogger(() => {})
+    try {
+      registerSettleListener(ctx, {}, pairing)
+      registerSubagentCatalogListener(ctx, pairing)
+      const session = catalogSession('sess-label')
+
+      // Control-char-only label: no identity → no slot.
+      catalogDispatch(harnessDir, pairing, 'c-sani', 'sess-label', session, '\u0000\u001f\u007f')
+      expect(pairing.catalogBySession.has(session)).toBe(false)
+
+      // Oversized label: never truncated into a different key → no slot.
+      const oversized = 'd'.repeat(1025)
+      catalogDispatch(harnessDir, pairing, 'c-long', 'sess-label', session, oversized)
+      expect(pairing.catalogBySession.has(session)).toBe(false)
+
+      // A 1024-unit label IS admitted, and its row carries the capped DISPLAY
+      // label while the join compared the raw one.
+      const long = `${'d'.repeat(600)}!`
+      catalogDispatch(harnessDir, pairing, 'c-display', 'sess-label', session, long)
+      emitPostExecute(ctx, session, 'c-display', 'sess-label', { isError: false, value: { kind: 'continuable', subagentId: 'child-display' } })
+      const envelope = session.append('subagent/catalog', catalogPayload('child-display', long))
+      emitSessionEvent(ctx, session, envelope)
+      const links = linkRows(workflowDir)
+      expect(links).toHaveLength(1)
+      const written = links[0]!.label as string
+      expect(written).toBe(`${'d'.repeat(511)}${WORKFLOW_LEDGER_TRUNCATION_MARKER}`)
+      expect(links[0]!.childId).toBe('child-display')
+    } finally {
+      setAgentFlowLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('refuses NEW labels at capacity (500 slots per Session) while existing labels keep working', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-link-cap-')
+    const pairing = pairingOf()
+    const ctx = new Context()
+    const priorSink = setAgentFlowLogger(() => {})
+    try {
+      registerSettleListener(ctx, {}, pairing)
+      registerSubagentCatalogListener(ctx, pairing)
+
+      const full = new Map<string, AgentFlowCatalogJoin | null>()
+      for (let i = 0; i < AGENT_FLOW_MAX_EVENTS; i += 1) full.set(`filler-${i}`, null)
+      const sessionFull = catalogSession('sess-full')
+      pairing.catalogBySession.set(sessionFull, full)
+      catalogDispatch(harnessDir, pairing, 'c-full', 'sess-full', sessionFull, 'one too many')
+      emitPostExecute(ctx, sessionFull, 'c-full', 'sess-full', { isError: false, value: { kind: 'continuable', subagentId: 'child-full' } })
+      const envelopeFull = sessionFull.append('subagent/catalog', catalogPayload('child-full', 'one too many'))
+      emitSessionEvent(ctx, sessionFull, envelopeFull)
+      expect(linkRows(workflowDir)).toHaveLength(0)
+
+      // One slot below the cap, the same flow links — the refusal is the
+      // capacity rule, not a broken join. The retained tombstones stay put.
+      const roomy = new Map<string, AgentFlowCatalogJoin | null>()
+      for (let i = 0; i < AGENT_FLOW_MAX_EVENTS - 1; i += 1) roomy.set(`filler-${i}`, null)
+      const sessionRoomy = catalogSession('sess-roomy')
+      pairing.catalogBySession.set(sessionRoomy, roomy)
+      catalogDispatch(harnessDir, pairing, 'c-roomy', 'sess-roomy', sessionRoomy, 'one too many')
+      emitPostExecute(ctx, sessionRoomy, 'c-roomy', 'sess-roomy', { isError: false, value: { kind: 'continuable', subagentId: 'child-roomy' } })
+      const envelopeRoomy = sessionRoomy.append('subagent/catalog', catalogPayload('child-roomy', 'one too many'))
+      emitSessionEvent(ctx, sessionRoomy, envelopeRoomy)
+      const links = linkRows(workflowDir)
+      expect(links).toHaveLength(1)
+      expect(links[0]).toMatchObject({ childId: 'child-roomy' })
+      expect(pairing.catalogBySession.get(sessionFull)!.size).toBe(AGENT_FLOW_MAX_EVENTS)
+    } finally {
+      setAgentFlowLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('a failed call, a foreground call, and an unpaired call each admit no link — never a fabricated identity', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-link-negative-')
+    const pairing = pairingOf()
+    const ctx = new Context()
+    const priorSink = setAgentFlowLogger(() => {})
+    try {
+      registerSettleListener(ctx, {}, pairing)
+      registerSubagentCatalogListener(ctx, pairing)
+      const session = catalogSession('sess-neg')
+
+      // Failed call → error settle, candidate retired.
+      catalogDispatch(harnessDir, pairing, 'c-fail', 'sess-neg', session, 'fails outright')
+      emitPostExecute(ctx, session, 'c-fail', 'sess-neg', { isError: true, error: { message: 'boom' } })
+      const failedEnvelope = session.append('subagent/catalog', catalogPayload('child-fail', 'fails outright'))
+      emitSessionEvent(ctx, session, failedEnvelope)
+      expect(linkRows(workflowDir)).toHaveLength(0)
+      expect(ledgerRows(workflowDir).map((row) => row.kind)).toEqual(['dispatch', 'settle'])
+
+      // Foreground call → immediate settle, no join (its own runId is the identity).
+      catalogDispatch(harnessDir, pairing, 'c-fg', 'sess-neg', session, 'synchronous work')
+      emitPostExecute(ctx, session, 'c-fg', 'sess-neg', { isError: false, value: { kind: 'foreground', runId: 'run-fg', output: [] } })
+      const fgEnvelope = session.append('subagent/catalog', catalogPayload('child-fg', 'synchronous work'))
+      emitSessionEvent(ctx, session, fgEnvelope)
+      expect(linkRows(workflowDir)).toHaveLength(0)
+      const fgSettle = ledgerRows(workflowDir).filter((row) => row.kind === 'settle').at(-1)!
+      expect(fgSettle).toMatchObject({ outcome: 'ok', childId: 'run-fg' })
+
+      // Unpaired post-execute (no recorded call) → nothing, and no throw.
+      expect(() => emitPostExecute(ctx, session, 'c-unknown', 'sess-neg', { isError: false, value: { kind: 'continuable', subagentId: 'child-x' } })).not.toThrow()
+      expect(linkRows(workflowDir)).toHaveLength(0)
+
+      // A malformed result payload (no `value` at all) retires too.
+      catalogDispatch(harnessDir, pairing, 'c-noval', 'sess-neg', session, 'no payload')
+      emitPostExecute(ctx, session, 'c-noval', 'sess-neg', { isError: false })
+      const noValEnvelope = session.append('subagent/catalog', catalogPayload('child-noval', 'no payload'))
+      emitSessionEvent(ctx, session, noValEnvelope)
+      expect(linkRows(workflowDir)).toHaveLength(0)
+    } finally {
+      setAgentFlowLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('contains a failing link append (logged, never thrown) and never retries the consumed candidate', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-link-contained-')
+    const pairing = pairingOf()
+    const ctx = new Context()
+    const captured: string[] = []
+    const priorSink = setAgentFlowLogger((_level, message) => { captured.push(message) })
+    try {
+      registerSettleListener(ctx, {}, pairing)
+      registerSubagentCatalogListener(ctx, pairing)
+      const session = catalogSession('sess-contained')
+      catalogDispatch(harnessDir, pairing, 'c-cnt', 'sess-contained', session, 'unwritable ledger')
+      emitPostExecute(ctx, session, 'c-cnt', 'sess-contained', { isError: false, value: { kind: 'continuable', subagentId: 'child-cnt' } })
+
+      // Break the ledger slot AFTER the dispatch row landed: a DIRECTORY at
+      // the file path makes the link append fail (EISDIR).
+      const file = join(workflowDir, AGENT_FLOW_FILE)
+      await rm(file)
+      await mkdir(file)
+      const envelope = session.append('subagent/catalog', catalogPayload('child-cnt', 'unwritable ledger'))
+      expect(() => emitSessionEvent(ctx, session, envelope)).not.toThrow()
+      expect(captured.some((message) => message.includes('subagent-link record failed (contained)'))).toBe(true)
+
+      // The candidate was consumed BEFORE the append attempt: restoring the
+      // file and re-delivering the same catalog writes no second row.
+      await rm(file, { recursive: true })
+      await writeFile(file, '')
+      emitSessionEvent(ctx, session, envelope)
+      expect(linkRows(workflowDir)).toHaveLength(0)
+    } finally {
+      setAgentFlowLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('attributes the link to the DISPATCH workflow dir even after the active set moved', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-link-move-')
+    const pairing = pairingOf()
+    const ctx = new Context()
+    const priorSink = setAgentFlowLogger(() => {})
+    try {
+      registerSettleListener(ctx, {}, pairing)
+      registerSubagentCatalogListener(ctx, pairing)
+      const session = catalogSession('sess-move')
+      catalogDispatch(harnessDir, pairing, 'c-mv', 'sess-move', session, 'moved active set')
+      emitPostExecute(ctx, session, 'c-mv', 'sess-move', { isError: false, value: { kind: 'continuable', subagentId: 'child-mv' } })
+      // The active set moves to wf-2 BEFORE the catalog arrives.
+      await seedHarness(harnessDir, {
+        'status.json': v2Root([v2WorkflowEntry('wf-2')]),
+        'workflows/wf-2/snapshot.json': v2Snapshot('wf-2'),
+      })
+      const envelope = session.append('subagent/catalog', catalogPayload('child-mv', 'moved active set'))
+      emitSessionEvent(ctx, session, envelope)
+
+      expect(ledgerRows(workflowDir).map((row) => row.kind)).toEqual(['dispatch', 'subagent-link'])
+      expect(readAgentFlow(join(harnessDir, 'workflows/wf-2'))!.events).toEqual([])
+    } finally {
+      setAgentFlowLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('projects a link without completion markers, buckets it separately, and still reads legacy rows', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-link-read-')
+    try {
+      const file = join(workflowDir, AGENT_FLOW_FILE)
+      const linkLine = (overrides: Record<string, unknown> = {}): string => JSON.stringify({
+        v: 1,
+        ts: 1_700_000_002_000,
+        kind: 'subagent-link',
+        agent: 'a1',
+        childId: 'child-read',
+        label: 'read it back',
+        role: 'fullstack-dev',
+        planId: '00000810-x',
+        taskId: 'T3',
+        taskRef: 'subagent-11',
+        ...overrides,
+      })
+      // Legacy v1 rows stay readable, and every REQUIRED-identity violation
+      // skips only that link row (unknown version included).
+      await writeFile(file, [
+        dispatchLine(),
+        settleLine({ role: 'fullstack-dev', childId: 'run-1', taskRef: 'subagent-7' }),
+        linkLine({ childId: undefined }),
+        linkLine({ childId: 'x'.repeat(513) }),
+        linkLine({ role: undefined }),
+        linkLine({ v: 2 }),
+        'not json at all',
+        '',
+      ].join('\n'))
+
+      const view = readAgentFlow(workflowDir)!
+      expect(view.events.map((event) => event.kind)).toEqual(['settle', 'dispatch']) // legacy only, latest first
+      expect(view.events[0]).toMatchObject({ kind: 'settle', outcome: 'ok', childId: 'run-1', taskRef: 'subagent-7', paired: true })
+      expect(view.summary.some((row) => row.outcome === 'subagent-link')).toBe(false)
+
+      // ONE real link next to the legacy rows.
+      recordSubagentLink({
+        ref: { harnessDir, workflowDir, agent: 'a1', role: 'fullstack-dev', planId: '00000810-x', taskId: 'T3', taskRef: 'subagent-11' },
+        childId: 'child-read',
+        label: 'read it back',
+      })
+      const after = readAgentFlow(workflowDir)!
+      const linkView = after.events[0]!
+      expect(linkView).toMatchObject({
+        kind: 'subagent-link',
+        agent: 'a1',
+        role: 'fullstack-dev',
+        planId: '00000810-x',
+        taskId: 'T3',
+        taskCategory: null,
+        label: 'read it back',
+        childId: 'child-read',
+        taskRef: 'subagent-11',
+      })
+      // A link is not a completion: no settle markers on the view.
+      expect(linkView.paired).toBeUndefined()
+      expect(linkView.outcome).toBeUndefined()
+      expect(linkView.verdict).toBeUndefined()
+      expect(Object.values(linkView).every((value) => value !== undefined)).toBe(true)
+      // Summary buckets: the link is its own outcome (never counted as a
+      // dispatch or a settle) and keeps the dispatch's role.
+      expect(after.summary.find((row) => row.outcome === 'subagent-link')).toEqual({ role: 'fullstack-dev', outcome: 'subagent-link', count: 1 })
+      expect(after.summary.reduce((total, row) => total + row.count, 0)).toBe(after.events.length)
+
+      // A link whose REQUIRED identity is invalid skips just that row.
+      recordSubagentLink({
+        ref: { harnessDir, workflowDir, agent: 'a1', role: 'fullstack-dev' },
+        childId: 'x'.repeat(513),
+        label: 'oversized identity',
+      })
+      const last = readAgentFlow(workflowDir)!
+      expect(last.events.filter((event) => event.kind === 'subagent-link')).toHaveLength(1)
+      expect(last.events.map((event) => event.kind)).toEqual(['subagent-link', 'settle', 'dispatch'])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('apply wiring: the entry registers the live observer — a background dispatch through the real waterfalls links its child', async () => {
+    const app = booted = await bootApp({ seedV2: true, dispatchBinding: 'qc-specialist' })
+    const session = catalogSession('sess-apply')
+    const exec = catalogExec('c-apply', 'sess-apply', session, 'apply-wired delegation')
+
+    // The REAL pre-execute waterfall records the dispatch and reserves the
+    // slot; the REAL post-execute waterfall marks it eligible.
+    await app.ctx.waterfall('tools/pre-execute', exec, defaultAllow)
+    emitUndeclared(app.ctx, SETTLE_SEAM, exec, { isError: false, value: { kind: 'background', jobId: 'subagent-42' } })
+
+    // The live half is the observer `apply` registered on the root context.
+    const envelope = session.append('subagent/catalog', catalogPayload('child-apply', 'apply-wired delegation', 'one-shot'))
+    app.ctx.events.emit({}, 'session/event', session, envelope)
+
+    const view = flowOf(app)
+    expect(view.events.map((event) => event.kind)).toEqual(['subagent-link', 'dispatch'])
+    expect(view.events[0]).toMatchObject({
+      kind: 'subagent-link',
+      childId: 'child-apply',
+      label: 'apply-wired delegation',
+      role: 'fullstack-dev',
+      planId: '00000810-agent-flow',
+      taskId: 'T2',
+      taskRef: 'subagent-42',
+    })
   })
 })

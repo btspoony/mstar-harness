@@ -101,9 +101,53 @@
  * fabricated settlement). Non-dispatch tool calls and unpaired payloads
  * record nothing either.
  *
+ * Child session identity (`subagent-link`, nonterminal): a dispatch's child
+ * session id is published upstream as a PARENT-OWNED `subagent/catalog`
+ * session event (`{ version: 0, childId, childCreatedAt, mode, label }`,
+ * `label` = the delegation `description`), appended by the tool body — for
+ * the continuable path necessarily BEFORE the tool returns, hence before
+ * `tools/post-execute`. The join therefore spans a CALL WINDOW per dispatch:
+ * - step 1 (reserve, during the same pre-execute that recorded the
+ *   dispatch): capture `exec.agent.session` + its current `seq` as the
+ *   window start (`fromSeq`) and the RAW `exec.arguments.description` as the
+ *   slot key, and reserve the first slot for that label under the exact
+ *   parent Session object (`AgentFlowPairing.catalogBySession`, a WeakMap —
+ *   session-incarnation safe, no delimiter ambiguity). No row yet.
+ * - step 2 (eligibility, at successful post-execute): a valid `background`
+ *   result (job stored, `taskRef` set) marks the candidate expecting a
+ *   `one-shot` catalog; a valid `continuable` result marks it expecting a
+ *   `continuable` catalog naming the exact returned `subagentId` (no job
+ *   pairing, no settle). Every other outcome — other success / foreground,
+ *   tool error, malformed result, invalid background job id — retires the
+ *   candidate to its tombstone. A duplicate label is owned by the FIRST
+ *   reserved dispatch and can never mark another one eligible.
+ * - step 3 (catch-up, immediately at eligibility): walk
+ *   `eventAt(seq)` over `[fromSeq, session.seq)` in order — no whole-log copy
+ *   — through the SAME matcher, so a catalog appended before the tool
+ *   returned is still recovered.
+ * - step 4 (live): ONE root-context `session/event` observer
+ *   (`registerSubagentCatalogListener`, registered by the entry at apply)
+ *   feeds the same matcher for the exact carrying Session; its upper bound
+ *   is the live `session.seq`, not the catch-up endpoint. Neither half scans
+ *   history: a catalog written before apply has no surviving dispatch ref
+ *   and must never label a future same-label dispatch (the cold/replay
+ *   ruling — constructor seeds precede every newly captured `fromSeq`).
+ * - step 5 (consume once): the slot becomes `null` BEFORE the append
+ *   attempt, the observed child id is copied onto the retained dispatch ref
+ *   (so a still-in-flight background job's terminal settle carries it — and
+ *   a candidate whose terminal already consumed the job entry still owns the
+ *   ref until the link is written), then `recordSubagentLink` appends to the
+ *   DISPATCH's workflow dir. Existing rows are never rewritten; append
+ *   failures stay contained and logged, never retried.
+ * A `subagent-link` row is an IDENTITY record, not a completion: it carries
+ * no `outcome`, no `verdict` and no `paired` marker, and `ts` is the link
+ * observation time (never a fabricated child-creation time). Its `childId`
+ * is REQUIRED identity — a missing/empty/oversized one skips the row.
+ *
  * Module boundary: no barrel — the entry and the adapter import by explicit
  * relative path; the public exports (`recordDispatch` / `recordSettle` /
- * `readAgentFlow` + constants + types) are re-exported verbatim by the entry.
+ * `recordSubagentLink` / `readAgentFlow` + constants + types) are re-exported
+ * verbatim by the entry.
  */
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -372,6 +416,37 @@ export type AgentFlowEvent =
   | {
       v: 1
       ts: number
+      kind: 'subagent-link'
+      /** The dispatching session's stable id (the paired dispatch ref's agent; absent when it carried none). */
+      agent?: string
+      /**
+       * The catalog `childId` — the child session the dispatch actually
+       * started. REQUIRED: a row whose identity is missing, empty, or
+       * oversized is skipped (never truncated, never fabricated).
+       */
+      childId: string
+      /**
+       * The delegation `description` the join correlated on, DISPLAY-
+       * normalized and capped at this write boundary (the matcher always
+       * compares the RAW label, never this value).
+       */
+      label: string
+      /** The paired dispatch's Assignment `Execute as` — written even when `''`. */
+      role: string
+      /** The paired dispatch's `planIdOf(header)`. */
+      planId?: string
+      /** The paired dispatch's Assignment `Task N` tag. */
+      taskId?: string
+      /**
+       * The registry background-job id, on a link whose dispatch started a
+       * background job (`<kind>-N`). A continuable link omits it — that path
+       * starts no registry job. Never a child session id.
+       */
+      taskRef?: string
+    }
+  | {
+      v: 1
+      ts: number
       kind: 'workflow-verdict'
       /** The calling session's stable id, when carried. */
       agent?: string
@@ -428,6 +503,43 @@ export interface AgentFlowDispatchRef {
    * `Task N` tag.
    */
   taskRef?: string
+  /**
+   * The admitted call-window catalog CANDIDATE of this dispatch: the live
+   * parent Session it runs on plus the RAW delegation label that names its
+   * slot. Present only while a reservation is live — `recordDispatch`
+   * installs it, and the post-execute branch either advances it to eligible
+   * or retires it (both release this field). Its presence is what lets the
+   * post-execute path find the join without re-deriving the session.
+   */
+  catalog?: { session: AgentFlowSessionView; label: string }
+}
+
+/**
+ * The structural view of one live dsh `Session` the call-window join needs:
+ * the VERIFIED upstream surface (`id` / `seq` / `eventAt`). A real Session
+ * exposes no `events` member — that read is why the join uses `eventAt(seq)`
+ * over a bounded window instead of copying a log. Structural by design (no
+ * session package dependency); `seq` is read LIVE at every use, so the
+ * captured view is also the catch-up bound source while `fromSeq` (stored on
+ * the join) keeps the capture moment.
+ */
+export interface AgentFlowSessionView {
+  readonly id: string
+  readonly seq: number
+  eventAt(seq: number): unknown
+}
+
+/**
+ * One pending call-window catalog candidate: the recorded dispatch ref and
+ * the `fromSeq` window start. `result` marks ELIGIBILITY — an inert
+ * candidate (no `result` yet, awaiting its post-execute branch) can never be
+ * matched by a catalog, and the slot's `null` tombstone is a
+ * consumed/rejected candidate, never a second one.
+ */
+export interface AgentFlowCatalogJoin {
+  ref: AgentFlowDispatchRef
+  fromSeq: number
+  result?: { kind: 'background'; jobId: string } | { kind: 'continuable'; subagentId: string }
 }
 
 /**
@@ -453,6 +565,17 @@ export interface AgentFlowPairing {
   dispatchByCallId: Map<string, AgentFlowDispatchRef>
   /** Registry background-job id (`JobSnapshot.id`) → the dispatch that started it (populated by the post-execute background branch; consumed by `recordJobSettle`). */
   dispatchByJobId: Map<string, AgentFlowDispatchRef>
+  /**
+   * The call-window catalog join's slots: the EXACT parent Session object →
+   * (RAW delegation label → candidate). A `null` slot is a consumed or
+   * rejected tombstone, never a second candidate — reuse is what would let a
+   * delayed duplicate label or a pre-existing catalog acquire a new owner.
+   * Keying on the session OBJECT (not its id) is what makes the namespace
+   * session-incarnation safe and delimiter-free; per Session the map holds at
+   * most `AGENT_FLOW_MAX_EVENTS` slots (new keys are refused at capacity —
+   * existing pending entries and tombstones are retained).
+   */
+  catalogBySession: WeakMap<object, Map<string, AgentFlowCatalogJoin | null>>
 }
 
 /** Module-scoped log sink (bound to `mstar/agent-flow` by the entry at apply). */
@@ -788,7 +911,11 @@ function appendEvent(workflowDir: string, event: AgentFlowEvent): void {
  * only after the ledger append SUCCEEDED — a failed record never pairs to a
  * phantom dispatch. An exec-less record (host-hook path) has no callId → no
  * pairing. The pairing sub-path has its OWN catch scope: a `Map.set` throw must not log "record
- * failed" after the dispatch was already appended.
+ * failed" after the dispatch was already appended. On that same successful
+ * pairing the dispatch's call-window catalog candidate is RESERVED (the
+ * first RAW-label slot under the live parent Session, when the exec carries
+ * one) — the child-identity join's step 1; admission is all-or-nothing and
+ * never affects the dispatch, the pairing, or a later settle.
  * @param input - the harness dir; the dispatching exec's agent id; the
  * Assignment text; the gate's violations; the hard-enforcement resolution;
  * the apply-scoped pairing store (the adapter passes its own; direct callers
@@ -845,14 +972,25 @@ export function recordDispatch(input: {
       if (input.pairing !== undefined && input.exec !== undefined) {
         const key = callPairingKey(input.exec)
         if (key !== undefined) {
-          input.pairing.dispatchByCallId.set(key, {
+          const ref: AgentFlowDispatchRef = {
             harnessDir: input.harnessDir,
             workflowDir,
             ...(agent !== undefined ? { agent } : {}),
             role: fields.executeAs ?? '',
             ...(planId !== undefined && !isNaValue(planId) ? { planId } : {}),
             ...(taskId !== undefined ? { taskId } : {}),
-          })
+          }
+          input.pairing.dispatchByCallId.set(key, ref)
+          // Call-window catalog candidate (step 1): the dispatch is recorded
+          // and paired, so the ref exists to own the slot. Own catch scope —
+          // a candidate-admission throw must not claim the (already
+          // successful) pairing registration failed, and a missing live
+          // Session / label simply admits no candidate.
+          try {
+            reserveCatalogCandidate(input.pairing, ref, input.exec)
+          } catch (error) {
+            log('error', `catalog candidate reservation failed (contained — the dispatch record and pairing stand): ${errorMessage(error)}`)
+          }
         }
       }
     } catch (error) {
@@ -1058,6 +1196,7 @@ function eventFromUnknown(value: unknown): AgentFlowEvent | undefined {
   if (
     kind !== 'dispatch' &&
     kind !== 'settle' &&
+    kind !== 'subagent-link' &&
     kind !== 'workflow-verdict' &&
     kind !== 'workflow-run' &&
     kind !== 'workflow-agent' &&
@@ -1105,6 +1244,31 @@ function eventFromUnknown(value: unknown): AgentFlowEvent | undefined {
       ...(typeof rec.planId === 'string' && rec.planId !== '' ? { planId: rec.planId } : {}),
       ...(typeof rec.taskId === 'string' && rec.taskId !== '' ? { taskId: rec.taskId } : {}),
       ...(childId !== undefined ? { childId } : {}),
+      ...(taskRef !== undefined ? { taskRef } : {}),
+    }
+  }
+  if (kind === 'subagent-link') {
+    // The link row's REQUIRED identity: a valid bounded `childId`, plus the
+    // required `role` / `label` the writer always emits. A missing, empty, or
+    // oversized identity SKIPS this row (never a truncated or fabricated id);
+    // the optional identity fields (`agent` / `planId` / `taskId` /
+    // `taskRef`) omit when absent. Evaluated BEFORE the workflow-required
+    // `runId` narrowing below — a link carries no `runId`.
+    const childId = optionalLedgerId(rec.childId)
+    if (childId === undefined) return undefined
+    if (typeof rec.role !== 'string') return undefined
+    if (typeof rec.label !== 'string' || rec.label === '') return undefined
+    const taskRef = optionalLedgerId(rec.taskRef)
+    return {
+      v: 1,
+      ts: rec.ts,
+      kind: 'subagent-link',
+      ...(agent !== undefined ? { agent } : {}),
+      childId,
+      label: truncateLedgerField(normalizeWorkflowName(rec.label), WORKFLOW_LEDGER_MAX_LABEL_LENGTH),
+      role: rec.role,
+      ...(typeof rec.planId === 'string' && rec.planId !== '' ? { planId: rec.planId } : {}),
+      ...(typeof rec.taskId === 'string' && rec.taskId !== '' ? { taskId: rec.taskId } : {}),
       ...(taskRef !== undefined ? { taskRef } : {}),
     }
   }
@@ -1278,6 +1442,25 @@ function eventView(event: AgentFlowEvent): AgentFlowEventView {
       ...(event.code !== undefined ? { code: event.code } : {}),
     }
   }
+  if (event.kind === 'subagent-link') {
+    // Explicit branch BEFORE the settle fallback: a link is NOT a completion,
+    // so it keeps its own identity fields and carries none of the settle
+    // markers (`outcome` / `durationMs` / the `paired` presence flag). Its
+    // `taskCategory` is null — the link's identity is the DISPATCH's
+    // (role/planId/taskId), and no new pairing algorithm is introduced.
+    return {
+      ts: event.ts,
+      kind: 'subagent-link',
+      agent: event.agent ?? null,
+      role: event.role,
+      planId: event.planId ?? null,
+      taskId: event.taskId ?? null,
+      taskCategory: null,
+      label: event.label,
+      childId: event.childId,
+      ...(event.taskRef !== undefined ? { taskRef: event.taskRef } : {}),
+    }
+  }
   return {
     ts: event.ts,
     kind: 'settle',
@@ -1311,8 +1494,12 @@ function summaryOf(events: readonly AgentFlowEvent[]): AgentFlowSummaryRow[] {
     // `denied`/`ask` — the model-visible gate surface); every event lands
     // in exactly one bucket (the role×outcome sum = the window's event
     // count).
+    // `subagent-link` rows keep the DISPATCH's role and bucket under the
+    // literal `subagent-link` outcome — an identity signal that is neither a
+    // dispatch nor a settle (no overlap with the dispatch-verdict or
+    // settle-outcome buckets).
     const role =
-      event.kind === 'dispatch' ? event.role
+      event.kind === 'dispatch' || event.kind === 'subagent-link' ? event.role
       : event.kind === 'workflow-run' || event.kind === 'workflow-agent' || event.kind === 'workflow-run-end' || event.kind === 'workflow-verdict'
         ? 'workflow'
         : ''
@@ -1521,6 +1708,19 @@ function recordSettleWithRef(ref: AgentFlowDispatchRef, outcome: SettleOutcome, 
  * the call (map pruning — each callId
  * pairs exactly once; the map holds only in-flight calls).
  *
+ * Catalog candidate (steps 2–3 of the child-identity join): the SAME branch
+ * decides the dispatch's reserved call-window catalog candidate — a valid
+ * background result makes it eligible expecting the job's `one-shot` catalog
+ * (after the job pairing + `taskRef` are in place), a valid continuable
+ * result makes it eligible for exactly the returned `subagentId`, and every
+ * other outcome (other success / foreground, tool error, missing result
+ * payload, malformed result, invalid background job id) retires it to its
+ * tombstone. Eligibility then runs the catch-up walk over
+ * `[fromSeq, session.seq)` through the same matcher the live observer uses,
+ * so a catalog appended before this seam ran is still recovered. Both
+ * candidate helpers are self-contained: a throwing join degrades to a log
+ * line and NEVER costs the settle/awarded identity its row.
+ *
  * The waterfall MUST be delegated via `next()` on every path — returning
  * without calling `next` bails the chain and breaks every tool call. A
  * throwing record never propagates.
@@ -1531,7 +1731,8 @@ function recordSettleWithRef(ref: AgentFlowDispatchRef, outcome: SettleOutcome, 
  * @param ctx - registrant context (fiber disposal unwinds the listener).
  * @param config - the plugin Config (dispatch-tool matching).
  * @param pairing - the apply-scoped pairing store (dispatchByCallId read,
- * dispatchByJobId written by the background branch).
+ * dispatchByJobId written by the background branch, catalogBySession
+ * advanced/retired here).
  */
 export function registerSettleListener(ctx: Context, config: Config, pairing: AgentFlowPairing): void {
   const dispatchTools = config.dispatchTools ?? [...DEFAULT_DISPATCH_TOOLS]
@@ -1576,7 +1777,10 @@ export function registerSettleListener(ctx: Context, config: Config, pairing: Ag
             // `error` payload settles `error` — a result carrying `error`
             // without `isError: true` must NEVER settle a fabricated `ok`.
             if (resultRec.isError === true || resultRec.error !== undefined) {
-              // The dispatch call itself failed → settle error.
+              // The dispatch call itself failed → settle error, and the
+              // call-window candidate is retired (a failed call authorizes
+              // no child identity).
+              retireCatalogCandidate(pairing, dispatchRef)
               recordSettleWithRef(dispatchRef, 'error', undefined, childId)
             } else if (value !== undefined && value.kind === 'background') {
               if (typeof value.jobId === 'string' && value.jobId !== '') {
@@ -1587,18 +1791,36 @@ export function registerSettleListener(ctx: Context, config: Config, pairing: Ag
                 // on the ORIGINAL id, so the real terminal still settles.
                 const taskRef = optionalLedgerId(value.jobId)
                 if (taskRef !== undefined) dispatchRef.taskRef = taskRef
+                // The catalog candidate is now eligible, expecting the job's
+                // ONE-SHOT catalog (this is the one-shot tool producer).
+                advanceCatalogCandidate(pairing, dispatchRef, { kind: 'background', jobId: value.jobId })
+              } else {
+                // Background WITHOUT a valid jobId → nothing mappable
+                // background result) — never a fabricated ok settle, and no
+                // child identity to authorize.
+                retireCatalogCandidate(pairing, dispatchRef)
               }
-              // Background WITHOUT a valid jobId → nothing mappable
-              // background result) — never a fabricated ok settle.
             } else if (value !== undefined && value.kind === 'continuable') {
               // Continuable child — no terminal signal this round → honest
               // no-settle; its `subagentId` is never copied onto a settle.
+              // It DOES authorize the identity join, and only for the exact
+              // child the tool returned.
+              const subagentId = optionalLedgerId(value.subagentId)
+              if (subagentId !== undefined) {
+                advanceCatalogCandidate(pairing, dispatchRef, { kind: 'continuable', subagentId })
+              } else {
+                retireCatalogCandidate(pairing, dispatchRef)
+              }
             } else {
-              // Foreground / any other successful value → the call completed.
+              // Foreground / any other successful value → the call completed,
+              // and its identity (when any) is the settle's own — no join.
+              retireCatalogCandidate(pairing, dispatchRef)
               recordSettleWithRef(dispatchRef, 'ok', undefined, childId)
             }
+          } else {
+            // No result payload at all → nothing mappable, no identity join.
+            retireCatalogCandidate(pairing, dispatchRef)
           }
-          // resultRec === undefined → no result payload at all — nothing mappable.
         }
         // The call is CONSUMED — each callId pairs exactly once (map pruning,
         // map pruning): the dispatchByCallId
@@ -1685,4 +1907,286 @@ export function recordJobSettle(snapshot: JobDoneSnapshot, pairing: AgentFlowPai
   } catch (error) {
     log('error', `settle record failed (contained): ${errorMessage(error)}`)
   }
+}
+
+/* ---------------------------------- subagent catalog join (child session identity) ---------------------------------- */
+
+/**
+ * Reserve the FIRST raw-label call-window slot for one recorded dispatch
+ * (join step 1). The parent Session object is the WeakMap key (the exact
+ * object — session-incarnation safe, delimiter-free) and the RAW delegation
+ * `description` is the slot key, so two dispatches that share a label are
+ * NOT silently merged: the first reservation owns the label and every later
+ * one is admitted no candidate at all. The slot is reserved INERT — no
+ * catalog can match it until the post-execute branch marks it eligible, so a
+ * catalog that arrives before the tool's result is known can never be
+ * attributed by itself.
+ *
+ * Admission is all-or-nothing and never affects the dispatch or its settle:
+ * a missing/malformed live Session (`id` / non-negative safe `seq` below the
+ * ledger sequence bound / callable `eventAt`), a missing/empty raw label, a
+ * label that sanitizes to nothing, an oversized label (never truncated into
+ * a different key), an already-owned label, or a Session at
+ * `AGENT_FLOW_MAX_EVENTS` slots (existing pending entries and tombstones are
+ * retained) simply admits no candidate.
+ * @param pairing - the apply-scoped pairing store (the slots live here).
+ * @param ref - the dispatch ref the candidate will own until it is consumed
+ *   or retired (the SAME object the job pairing carries into a settle).
+ * @param exec - the dispatch exec (structural read of `agent.session` and
+ *   `arguments.description`).
+ */
+function reserveCatalogCandidate(pairing: AgentFlowPairing, ref: AgentFlowDispatchRef, exec: unknown): void {
+  const session = asRecord(asRecord(exec)?.agent)?.session
+  if (typeof session !== 'object' || session === null) return
+  const view = asRecord(session)
+  if (view === undefined) return
+  if (typeof view.id !== 'string' || view.id === '') return
+  const seq = view.seq
+  if (typeof seq !== 'number' || !Number.isSafeInteger(seq) || seq < 0 || seq >= WORKFLOW_LEDGER_MAX_SEQ) return
+  if (typeof view.eventAt !== 'function') return
+  const label = asRecord(asRecord(exec)?.arguments)?.description
+  if (typeof label !== 'string' || label === '') return
+  if (normalizeWorkflowName(label) === '') return
+  if (label.length > WORKFLOW_LEDGER_MAX_NAME_LENGTH) return
+  let map = pairing.catalogBySession.get(session)
+  if (map === undefined) {
+    map = new Map<string, AgentFlowCatalogJoin | null>()
+    pairing.catalogBySession.set(session, map)
+  }
+  if (map.has(label)) return
+  if (map.size >= AGENT_FLOW_MAX_EVENTS) return
+  map.set(label, { ref, fromSeq: seq })
+  ref.catalog = { session: session as unknown as AgentFlowSessionView, label }
+}
+
+/**
+ * Match one session-log envelope against one ELIGIBLE call-window candidate
+ * (join steps 3–4 share this ONE matcher, so the catch-up and live halves can
+ * never disagree). Every field of the verified v0 payload is validated: the
+ * event type, the payload `version`, a finite envelope time, an integer
+ * envelope `seq` inside `[fromSeq, session.seq)` and below
+ * {@link WORKFLOW_LEDGER_MAX_SEQ}, a non-negative integer `childCreatedAt`, a
+ * non-empty bounded `childId`, the RAW label equality, and the mode implied
+ * by the eligible result kind (`one-shot` for background, `continuable`
+ * otherwise) — plus the returned-child agreement a continuable result
+ * carries. An inert candidate (`result` unset) never matches.
+ * @returns the catalog child id, or undefined when this envelope is not this
+ *   candidate's catalog.
+ */
+function matchCatalogEvent(
+  session: AgentFlowSessionView,
+  label: string,
+  join: AgentFlowCatalogJoin,
+  envelope: unknown,
+): string | undefined {
+  const result = join.result
+  if (result === undefined) return undefined
+  const rec = asRecord(envelope)
+  if (rec === undefined || rec.type !== 'subagent/catalog') return undefined
+  const data = asRecord(rec.data)
+  if (data === undefined || data.version !== 0) return undefined
+  if (typeof rec.time !== 'number' || !Number.isFinite(rec.time)) return undefined
+  const seq = rec.seq
+  if (typeof seq !== 'number' || !Number.isInteger(seq)) return undefined
+  // The call window — the load-bearing bound: a catalog below this dispatch's
+  // window start can never own it (a constructor-seeded or pre-apply catalog
+  // is unreachable, so replay never labels a new dispatch), and the LIVE
+  // `session.seq` is the exclusive upper bound (the catch-up walk reads it at
+  // eligibility, the live observer at delivery).
+  if (seq < join.fromSeq || seq >= session.seq || seq >= WORKFLOW_LEDGER_MAX_SEQ) return undefined
+  const childCreatedAt = data.childCreatedAt
+  if (typeof childCreatedAt !== 'number' || !Number.isInteger(childCreatedAt) || childCreatedAt < 0) return undefined
+  const childId = data.childId
+  if (typeof childId !== 'string' || childId === '' || childId.length > WORKFLOW_LEDGER_MAX_ID_LENGTH) return undefined
+  if (data.label !== label) return undefined
+  if (data.mode !== (result.kind === 'background' ? 'one-shot' : 'continuable')) return undefined
+  if (result.kind === 'continuable' && result.subagentId !== childId) return undefined
+  return childId
+}
+
+/**
+ * Consume one matched candidate exactly once (join step 5). The slot becomes
+ * a tombstone BEFORE the append attempt — a failed link write is contained
+ * and logged, never retried and never re-owned (no second row). The observed
+ * child id is copied onto the RETAINED dispatch ref first: the same object
+ * sits in `dispatchByJobId` while a background job is in flight, so the
+ * later terminal settle carries the identity, and a candidate whose terminal
+ * already consumed the job entry still owns the ref long enough to write the
+ * identity independently.
+ */
+function consumeCatalogCandidate(
+  map: Map<string, AgentFlowCatalogJoin | null>,
+  label: string,
+  join: AgentFlowCatalogJoin,
+  childId: string,
+): void {
+  map.set(label, null)
+  const ref = join.ref
+  ref.childId = childId
+  delete ref.catalog
+  recordSubagentLink({ ref, childId, label })
+}
+
+/**
+ * Make one dispatch's reserved candidate ELIGIBLE and run its catch-up window
+ * (join steps 2–3), invoked from the post-execute result branch with the
+ * result shape it authorized. The catch-up walks `eventAt(seq)` over
+ * `[fromSeq, session.seq)` in sequence order — no whole-log copy — and stops
+ * at the first match; this is what recovers the catalog the continuable path
+ * necessarily appends BEFORE the tool returns, hence before this seam.
+ * Contained: a throwing join degrades to a log line and never costs the
+ * settle (or the awarded identity) its row.
+ */
+function advanceCatalogCandidate(
+  pairing: AgentFlowPairing,
+  ref: AgentFlowDispatchRef,
+  result: NonNullable<AgentFlowCatalogJoin['result']>,
+): void {
+  try {
+    const catalog = ref.catalog
+    if (catalog === undefined) return
+    const map = pairing.catalogBySession.get(catalog.session)
+    const join = map?.get(catalog.label)
+    if (map === undefined || join === undefined || join === null || join.ref !== ref) return
+    join.result = result
+    const end = catalog.session.seq
+    for (let seq = join.fromSeq; seq < end; seq += 1) {
+      let envelope: unknown
+      try {
+        envelope = catalog.session.eventAt(seq)
+      } catch {
+        continue // an unreadable position never aborts the window walk
+      }
+      const childId = matchCatalogEvent(catalog.session, catalog.label, join, envelope)
+      if (childId === undefined) continue
+      consumeCatalogCandidate(map, catalog.label, join, childId)
+      return
+    }
+  } catch (error) {
+    log('warn', `catalog candidate advance failed (contained — the result branch proceeds): ${errorMessage(error)}`)
+  }
+}
+
+/**
+ * Retire one dispatch's reserved candidate to its tombstone (join step 2's
+ * non-linkable outcomes: other success / foreground, tool error, absent or
+ * malformed result, invalid background job id). The tombstone is RETAINED
+ * (not deleted) so a delayed duplicate of the same raw label can never
+ * acquire a new owner, and the ref releases its catalog view. Contained like
+ * {@link advanceCatalogCandidate}.
+ */
+function retireCatalogCandidate(pairing: AgentFlowPairing, ref: AgentFlowDispatchRef): void {
+  try {
+    const catalog = ref.catalog
+    if (catalog === undefined) return
+    delete ref.catalog
+    const map = pairing.catalogBySession.get(catalog.session)
+    const slot = map?.get(catalog.label)
+    if (map !== undefined && slot !== undefined && slot !== null && slot.ref === ref) map.set(catalog.label, null)
+  } catch (error) {
+    log('warn', `catalog candidate retire failed (contained — the result branch proceeds): ${errorMessage(error)}`)
+  }
+}
+
+/**
+ * Record one NONTERMINAL `subagent-link` row — the call-window join's output:
+ * the child session a dispatch actually started, correlated back to the
+ * dispatch identity mstar recorded. This is an IDENTITY record, not a
+ * completion: the row carries NO `outcome`, NO `verdict` and NO `paired`
+ * marker (the child is still running this round), and `ts` is the link
+ * OBSERVATION time — never a fabricated child-creation time
+ * (`childCreatedAt` is validated upstream, it is not another ledger clock).
+ * The row is written ONLY from a candidate that actually matched, and only
+ * from the ref of a dispatch that was really recorded: a link is never a
+ * guess or a synthesis.
+ *
+ * Attribution follows the dispatch, not the clock: the row lands in
+ * `ref.workflowDir` (the dir the dispatch was appended to), never in today's
+ * active workflow dir, and the ref's `harnessDir` is the invalidation key.
+ * Fully try/catch-contained — a failing link write logs only and never
+ * escapes into the session append (or the job notification) that triggered
+ * it.
+ * @param input - the retained dispatch ref, the observed catalog `childId`,
+ *   and the RAW delegation label the join matched on.
+ */
+export function recordSubagentLink(input: { ref: AgentFlowDispatchRef; childId: string; label: string }): void {
+  try {
+    // The child id is REQUIRED identity: a missing, empty, or oversized value
+    // skips the ROW (unlike the settle's OPTIONAL identity, which omits only
+    // the field) — an id is never truncated and never re-keyed.
+    const childId = optionalLedgerId(input.childId)
+    if (childId === undefined) {
+      log('warn', 'subagent-link row skipped — the observed catalog child id is missing, empty, or oversized (never truncated, never fabricated)')
+      return
+    }
+    const label = truncateLedgerField(normalizeWorkflowName(input.label), WORKFLOW_LEDGER_MAX_LABEL_LENGTH)
+    if (label === '') {
+      log('warn', 'subagent-link row skipped — the matched delegation label carries no displayable text')
+      return
+    }
+    const ref = input.ref
+    // `role` is a REQUIRED row field (present even when ''): a ref without
+    // one would write a row this module's own reader skips, so refuse it.
+    if (typeof ref.role !== 'string') {
+      log('warn', 'subagent-link row skipped — the dispatch ref carries no role identity')
+      return
+    }
+    const taskRef = optionalLedgerId(ref.taskRef)
+    const event: AgentFlowEvent = {
+      v: 1,
+      ts: Date.now(),
+      kind: 'subagent-link',
+      ...(ref.agent !== undefined && ref.agent.trim() !== '' ? { agent: ref.agent } : {}),
+      childId,
+      label,
+      role: ref.role,
+      ...(ref.planId !== undefined && ref.planId !== '' ? { planId: ref.planId } : {}),
+      ...(ref.taskId !== undefined && ref.taskId !== '' ? { taskId: ref.taskId } : {}),
+      ...(taskRef !== undefined ? { taskRef } : {}),
+    }
+    appendEvent(ref.workflowDir, event)
+    try {
+      invalidator?.(ref.harnessDir)
+    } catch (error) {
+      log('error', `catalog invalidation failed (contained): ${errorMessage(error)}`)
+    }
+  } catch (error) {
+    log('error', `subagent-link record failed (contained): ${errorMessage(error)}`)
+  }
+}
+
+/**
+ * The LIVE half of the call-window join (step 4): ONE root-context
+ * `session/event` observer, registered by the entry at apply — before
+ * execution can start — that reads only an ELIGIBLE slot of the EXACT
+ * carrying Session. The root (untagged) registration is admitted globally by
+ * the session store's scope carrier, so a catalog appended by any session
+ * reaches it; slots for every other session are simply absent from the
+ * WeakMap, and an inert (pending) or tombstoned slot is skipped. Its window
+ * bound is the live `session.seq`, not the catch-up endpoint, so a catalog
+ * appended after eligibility is still joined.
+ *
+ * No cold scan and no `session/created` backfill: a catalog written before
+ * apply has no surviving dispatch ref, so it can never label a future
+ * same-label dispatch. Contained — a throwing observation never escapes the
+ * session append.
+ * @param ctx - registrant context (fiber disposal unwinds the observer).
+ * @param pairing - the apply-scoped pairing store (the slots).
+ */
+export function registerSubagentCatalogListener(ctx: Context, pairing: AgentFlowPairing): void {
+  ctx.events.on('session/event', (session: unknown, envelope: unknown) => {
+    try {
+      if (typeof session !== 'object' || session === null) return
+      const map = pairing.catalogBySession.get(session)
+      if (map === undefined) return
+      for (const [label, join] of map) {
+        if (join === null || join.result === undefined) continue
+        const childId = matchCatalogEvent(session as AgentFlowSessionView, label, join, envelope)
+        if (childId === undefined) continue
+        consumeCatalogCandidate(map, label, join, childId)
+      }
+    } catch (error) {
+      log('warn', `subagent catalog observation failed (contained — the session append proceeds): ${errorMessage(error)}`)
+    }
+  })
 }

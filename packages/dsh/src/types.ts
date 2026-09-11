@@ -310,7 +310,7 @@ export interface MstarHarnessState {
  */
 export interface AgentFlowEventView {
   readonly ts: number
-  readonly kind: 'dispatch' | 'settle' | 'workflow-run' | 'workflow-agent' | 'workflow-run-end' | 'workflow-verdict'
+  readonly kind: 'dispatch' | 'settle' | 'subagent-link' | 'workflow-run' | 'workflow-agent' | 'workflow-run-end' | 'workflow-verdict'
   /** The session's stable id; null when the event carried none. */
   readonly agent: string | null
   /** Assignment `Execute as` ('' for settle rows without a paired identity). */
@@ -340,7 +340,7 @@ export interface AgentFlowEventView {
   readonly name?: string
   /** Run-member 1-based sequence within the run (workflow-agent events only). */
   readonly seq?: number
-  /** Run-member display label (workflow-agent events only). */
+  /** Run-member display label (workflow-agent events), or the delegation label a `subagent-link` correlated (link events). */
   readonly label?: string
   /** Run-member phase — workflow-agent events only, when carried. */
   readonly phase?: string
@@ -354,9 +354,11 @@ export interface AgentFlowEventView {
    */
   readonly childId?: string
   /**
-   * Settle rows only: the registry background-job id the settle paired on
-   * (`jobs.onJobDone` → `recordJobSettle`). A jobs-registry key (`<kind>-N`),
-   * never a child session id and never the Assignment `Task N` tag.
+   * Settle + `subagent-link` rows: the registry background-job id the row
+   * carries (`jobs.onJobDone` → `recordJobSettle`; the post-execute
+   * background branch for a link). A jobs-registry key (`<kind>-N`), never a
+   * child session id and never the Assignment `Task N` tag. A continuable
+   * link omits it (that path starts no registry job).
    */
   readonly taskRef?: string
   /** Terminal workflow run reason (workflow-run-end events only). */
