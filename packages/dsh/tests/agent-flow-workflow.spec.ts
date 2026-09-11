@@ -396,11 +396,28 @@ describe('agent-flow workflow kinds — truncation keeps the most recent across 
 /** Deterministic envelope timestamps (epoch ms — the consumer's `ts` source). */
 const SESSION_T0 = 1_700_000_000_000
 
-/** One structural fake session (the consumer's consumed surface: id + events + header). */
+/**
+ * One structural fake session on the INSTALLED Session surface the consumer
+ * reads: the identity header (`header.id` / `header.cwd`), the `seq`
+ * log-length contract, and `eventAt(seq)` for one exact envelope. The real
+ * `Session` has NO `events` member (`'events' in session === false` — the old
+ * `.events` snapshot read was structurally dead against it), so the fixture
+ * keeps its append log under `log` — a fixture-only driver field the consumer
+ * never reads.
+ */
 interface FakeSession {
-  id: string
-  events: FakeSessionEvent[]
-  header?: { cwd?: string; delegationDepth?: number }
+  header: { id: string; cwd?: string; delegationDepth?: number }
+  /**
+   * The installed `Session`'s durable fork-lineage cut
+   * (`inheritedEventCount`): the leading events a conversation fork copied
+   * from its parent. `0` for every unseeded session — the real constructor
+   * enforces that default, and the fixture mirrors it.
+   */
+  inheritedEventCount: number
+  /** The next event's sequence number — the real `Session`'s `seq ≡ log.length` contract. */
+  readonly seq: number
+  eventAt(seq: number): FakeSessionEvent | undefined
+  log: FakeSessionEvent[]
 }
 
 /** One structural fake `session/event` envelope (`{type, seq, time, data}` — `seq` = session-log position). */
@@ -417,11 +434,17 @@ interface FakeSessionEvent {
 let fakeSessionSeq = 0
 
 /** Compose a fake session whose log carries the given event data payloads (envelope seq/time assigned). */
-function fakeSession(events: Array<{ type: string; data: object }>, init: { id?: string; header?: FakeSession['header'] } = {}): FakeSession {
+function fakeSession(
+  seed: Array<{ type: string; data: object }>,
+  init: { id?: string; header?: Omit<FakeSession['header'], 'id'>; inheritedEventCount?: number } = {},
+): FakeSession {
+  const log: FakeSessionEvent[] = seed.map((e, i) => ({ type: e.type, seq: i, time: SESSION_T0 + i, data: e.data }))
   return {
-    id: init.id ?? `sess-${fakeSessionSeq++}`,
-    events: events.map((e, i) => ({ type: e.type, seq: i, time: SESSION_T0 + i, data: e.data })),
-    header: init.header,
+    header: { id: init.id ?? `sess-${fakeSessionSeq++}`, ...init.header },
+    inheritedEventCount: init.inheritedEventCount ?? 0,
+    log,
+    get seq(): number { return log.length },
+    eventAt(seq: number): FakeSessionEvent | undefined { return log[seq] },
   }
 }
 
@@ -432,8 +455,9 @@ function fakeSession(events: Array<{ type: string; data: object }>, init: { id?:
  * append+emit drivers the real SessionStore owns. Sessions are STRUCTURAL
  * FAKES (plain objects): `@deepseek-ai/dsh-session` cannot construct under
  * Bun/JSC (`Session.create` rejects non-lossless-JSON headers — Task 1
- * review reproduced the throw), and the consumer reads only `id` / `events`
- * / `header.cwd` / `header.delegationDepth` structurally.
+ * review reproduced the throw), and the consumer reads only `header.id` /
+ * `header.cwd` / `header.delegationDepth` / `seq` / `eventAt(seq)`
+ * structurally.
  */
 class FakeSessionRegistry extends Service {
   private readonly app: Context
@@ -446,7 +470,7 @@ class FakeSessionRegistry extends Service {
 
   /** Record one live session (the real store's `create`/`enter` contract). */
   register(session: FakeSession): void {
-    this.live.set(session.id, session)
+    this.live.set(session.header.id, session)
   }
 
   /**
@@ -458,7 +482,7 @@ class FakeSessionRegistry extends Service {
    * `session/event` driver.
    */
   create(session: FakeSession): void {
-    this.live.set(session.id, session)
+    this.live.set(session.header.id, session)
     this.app.events.emit({}, 'session/created', session)
   }
 
@@ -484,8 +508,8 @@ class FakeSessionRegistry extends Service {
    * notes §2).
    */
   append(session: FakeSession, type: string, data: object): FakeSessionEvent {
-    const event: FakeSessionEvent = { type, seq: session.events.length, time: SESSION_T0 + session.events.length, data }
-    session.events.push(event)
+    const event: FakeSessionEvent = { type, seq: session.log.length, time: SESSION_T0 + session.log.length, data }
+    session.log.push(event)
     this.app.events.emit({}, 'session/event', session, event)
     return event
   }
@@ -547,7 +571,7 @@ describe('workflow-ledger consumer — cold scan over session event snapshots ()
       // The cold scan recorded 3 rows (agent-end filtered) and the cursor sits
       // at the snapshot length. Re-emitting the SAME envelopes on the firehose
       // (replay) must not append anything — one row per (runId, kind, seq).
-      for (const event of parent.events) sessions.replay(parent, event)
+      for (const event of parent.log) sessions.replay(parent, event)
       const view = readAgentFlow(workflowDir)
       expect(view!.events.map((e) => e.kind)).toEqual(['workflow-run-end', 'workflow-agent', 'workflow-run'])
       const lines = readFileSync(join(workflowDir, AGENT_FLOW_FILE), 'utf8').trim().split('\n')
@@ -592,22 +616,28 @@ describe('workflow-ledger consumer — cold scan over session event snapshots ()
       { type: 'tool-workflow/run-start', data: runStart({ runId: 'run-ok' }) },
       { type: 'tool-workflow/run-end', data: runEnd({ runId: 'run-ok' }) },
     ], { id: 'parent-ok', header: { cwd: root } }))
-    // …and a hostile session whose events snapshot getter THROWS mid-scan.
+    // …and a hostile session whose log-length read THROWS mid-scan.
     sessions.register({
-      id: 'parent-hostile',
-      get events(): never {
+      header: { id: 'parent-hostile' },
+      inheritedEventCount: 0,
+      log: [],
+      get seq(): number {
         throw new Error('snapshot exploded')
       },
+      eventAt: () => undefined,
     })
     // A child whose header depth getter throws at advisory-read time.
     sessions.register({
-      id: 'child-hostile',
-      events: [],
       header: {
+        id: 'child-hostile',
         get delegationDepth(): never {
           throw new Error('header exploded')
         },
       },
+      inheritedEventCount: 0,
+      log: [],
+      get seq(): number { return 0 },
+      eventAt: () => undefined,
     })
     const captured: Array<{ level: string; message: string }> = []
     const priorSink = setWorkflowLedgerLogger((level, message) => { captured.push({ level, message }) })
@@ -638,6 +668,43 @@ describe('workflow-ledger consumer — cold scan over session event snapshots ()
     }
   })
 
+  it('a throwing header.id is contained — the cold scan survives and other sessions still record', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-workflow-consumer-idthrows-')
+    const ctx = new Context()
+    const sessions = new FakeSessionRegistry(ctx)
+    // A hostile session whose IDENTITY read throws. The cold scan extracts
+    // `header.id` BEFORE the per-session containment, so the throw escaped
+    // `registerWorkflowLedger` and broke plugin apply.
+    const hostile = fakeSession([], { id: 'parent-hostile' })
+    sessions.register(hostile)
+    Object.defineProperty(hostile.header, 'id', {
+      get(): never {
+        throw new Error('header exploded')
+      },
+      configurable: true,
+    })
+    // A valid session whose run must still be recorded.
+    sessions.register(fakeSession([
+      { type: 'tool-workflow/run-start', data: runStart({ runId: 'run-ok' }) },
+    ], { id: 'parent-ok', header: { cwd: root } }))
+    const captured: Array<{ level: string; message: string }> = []
+    const priorSink = setWorkflowLedgerLogger((level, message) => { captured.push({ level, message }) })
+    try {
+      registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))
+
+      const view = readAgentFlow(workflowDir)
+      expect(view!.events.map((e) => e.runId)).toEqual(['run-ok'])
+      // One contained warn; the id IS the throwing read, so the message falls
+      // back to a placeholder instead of re-reading the hostile header.
+      expect(captured.filter((c) => c.level === 'warn' && c.message.includes('cold scan failed for session unknown'))).toHaveLength(1)
+      expect(captured.filter((c) => c.level === 'warn')).toHaveLength(1)
+    } finally {
+      setWorkflowLedgerLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('sessions service absent → one debug log + consumer disabled (composition without dsh-session)', async () => {
     const { root, harnessDir, workflowDir } = await tempHarness('dsh-workflow-consumer-degrade-')
     const ctx = new Context()
@@ -661,9 +728,9 @@ describe('workflow-ledger consumer — cold scan over session event snapshots ()
     const { root, harnessDir, workflowDir } = await tempHarness('dsh-workflow-consumer-depth-')
     const ctx = new Context()
     const sessions = new FakeSessionRegistry(ctx)
-    sessions.register({ id: 'child-deep', events: [], header: { delegationDepth: 2 } })
-    sessions.register({ id: 'child-mid', events: [], header: { delegationDepth: 1 } })
-    sessions.register({ id: 'child-deeper', events: [], header: { delegationDepth: 3 } })
+    sessions.register(fakeSession([], { id: 'child-deep', header: { delegationDepth: 2 } }))
+    sessions.register(fakeSession([], { id: 'child-mid', header: { delegationDepth: 1 } }))
+    sessions.register(fakeSession([], { id: 'child-deeper', header: { delegationDepth: 3 } }))
     sessions.register(fakeSession([
       { type: 'tool-workflow/run-start', data: runStart() },
       // Two deep members + one shallow member in run-1: ONE warn for the run.
@@ -828,6 +895,10 @@ describe('workflow-ledger consumer — cold scan over session event snapshots ()
         { type: 'tool-workflow/agent-start', data: agentStart({ runId: 'run-seeded', childId: 'child-seeded' }) },
         { type: 'tool-workflow/run-end', data: runEnd({ runId: 'run-seeded' }) },
       ], { id: 'parent-seeded', header: { cwd: root } })
+      // The seeded log is the installed surface (no `.events`), and the
+      // fixture's `create` announces the session WITHOUT emitting a single
+      // `session/event` — the rows below can only come from the backfill.
+      expect('events' in parent).toBe(false)
       sessions.create(parent)
       const view = readAgentFlow(workflowDir)
       expect(view!.events.map((e) => e.kind)).toEqual(['workflow-run-end', 'workflow-agent', 'workflow-run'])
@@ -844,24 +915,75 @@ describe('workflow-ledger consumer — cold scan over session event snapshots ()
     }
   })
 
+  it('a FORKED child does not re-record its parent-inherited tool-workflow prefix into the same workflow dir (qc3 F-001)', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-workflow-consumer-fork-')
+    const ctx = new Context()
+    const sessions = new FakeSessionRegistry(ctx)
+    // The parent ran a workflow BEFORE the fork: three durable rows that are
+    // the PARENT's, already recorded by its own scan.
+    const prefix = [
+      { type: 'tool-workflow/run-start', data: runStart({ runId: 'run-parent' }) },
+      { type: 'tool-workflow/agent-start', data: agentStart({ runId: 'run-parent', childId: 'child-parent' }) },
+      { type: 'tool-workflow/run-end', data: runEnd({ runId: 'run-parent' }) },
+    ]
+    sessions.register(fakeSession(prefix, { id: 'parent-1', header: { cwd: root } }))
+    const priorSink = setWorkflowLedgerLogger(() => {})
+    try {
+      registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))
+      expect(readAgentFlow(workflowDir)!.events).toHaveLength(3)
+
+      // `SessionStore.fork()` copies the parent's log into the child and
+      // stamps the durable lineage cut (`inheritedEventCount` = seed length);
+      // the child then appends its OWN run. The child has no watermark cursor
+      // of its own, so the `session/created` backfill's walk must start at the
+      // cut — from 0 the parent's rows enter the SAME workflow dir a second
+      // time, attributed to the child, breaking the
+      // one-row-per-(runId, kind, envelope seq) invariant the sibling suite
+      // pins and inflating the run's member count.
+      const child = fakeSession([
+        ...prefix,
+        { type: 'tool-workflow/run-start', data: runStart({ runId: 'run-child' }) },
+      ], { id: 'child-1', header: { cwd: root }, inheritedEventCount: prefix.length })
+      sessions.create(child)
+
+      const view = readAgentFlow(workflowDir)!
+      // Newest first: the child's own row, then the parent's three.
+      expect(view.events.map((e) => e.kind)).toEqual(['workflow-run', 'workflow-run-end', 'workflow-agent', 'workflow-run'])
+      // Each run-start row is recorded ONCE, under the session that produced
+      // it — the child contributes only its own events.
+      expect(view.events.filter((e) => e.kind === 'workflow-run').map((e) => [e.runId, e.agent])).toEqual([
+        ['run-child', 'child-1'],
+        ['run-parent', 'parent-1'],
+      ])
+      expect(readFileSync(join(workflowDir, AGENT_FLOW_FILE), 'utf8').trim().split('\n')).toHaveLength(4)
+      // Idempotent across a re-apply: the cut bounds the walk while the
+      // watermark still advances for the child's OWN row.
+      registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))
+      expect(readAgentFlow(workflowDir)!.events).toHaveLength(4)
+    } finally {
+      setWorkflowLedgerLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('fractional envelope seq is skipped WITHOUT corrupting the cursor — later integer envelopes still record (W-2)', async () => {
     const { root, harnessDir, workflowDir } = await tempHarness('dsh-workflow-consumer-fracseq-')
     const ctx = new Context()
     const sessions = new FakeSessionRegistry(ctx)
-    // Built manually (not via fakeSession): a hostile envelope with seq 1.5
-    // between valid integer envelopes. A permissive `Number.isFinite` guard
-    // would accept it, advance the cursor to 2.5, and silently drop every
-    // later integer envelope (seq 2, 3, …) — the W-2 corruption mode.
-    sessions.register({
-      id: 'parent-1',
-      header: { cwd: root },
-      events: [
-        { type: 'tool-workflow/run-start', seq: 0, time: SESSION_T0, data: runStart() },
-        { type: 'tool-workflow/agent-start', seq: 1.5, time: SESSION_T0 + 1, data: agentStart() },
-        { type: 'tool-workflow/agent-start', seq: 2, time: SESSION_T0 + 2, data: agentStart({ seq: 2, label: 'reviewer', childId: 'child-2' }) },
-        { type: 'tool-workflow/run-end', seq: 3, time: SESSION_T0 + 3, data: runEnd() },
-      ],
-    })
+    // Built from the shared fixture (not a bespoke object): the log-length
+    // contract holds and ONE envelope is patched to the hostile fractional
+    // seq. A permissive `Number.isFinite` guard would accept it, advance the
+    // cursor to 2.5, and silently drop every later integer envelope (seq 2,
+    // 3, …) — the W-2 corruption mode.
+    const parent = fakeSession([
+      { type: 'tool-workflow/run-start', data: runStart() },
+      { type: 'tool-workflow/agent-start', data: agentStart() },
+      { type: 'tool-workflow/agent-start', data: agentStart({ seq: 2, label: 'reviewer', childId: 'child-2' }) },
+      { type: 'tool-workflow/run-end', data: runEnd() },
+    ], { id: 'parent-1', header: { cwd: root } })
+    parent.log[1] = { ...parent.log[1]!, seq: 1.5 }
+    sessions.register(parent)
     const priorSink = setWorkflowLedgerLogger(() => {})
     try {
       registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))
@@ -967,6 +1089,10 @@ describe('workflow-ledger consumer — cold scan over session event snapshots ()
       registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))
       expect(captured.some((m) => m.includes('workflow record failed'))).toBe(true)
       expect(existsSync(join(workflowDir, WORKFLOW_LEDGER_WATERMARK_FILE))).toBe(false)
+      // A failing append never turns into a durable exclusion either: the row
+      // is attributed to the bound workflow, so no exclusion floor is
+      // recorded for the session — the re-apply below is free to re-attempt.
+      expect(readWorkflowSessionBinding(harnessDir, 'parent-1', root)).toEqual({ kind: 'ok' })
       // Repair the ledger slot, then re-apply: the cold scan re-walks the
       // same envelope (cursor still 0) and RE-ATTEMPTS the row — bounded
       // re-attempt, NOT permanent loss.
@@ -1178,29 +1304,33 @@ describe('workflow-ledger consumer — cold scan over session event snapshots ()
         "import { readAgentFlow } from './src/gates/agent-flow.ts'",
         "import { readFileSync } from 'node:fs'",
         "import { join } from 'node:path'",
-        'interface SessionView {',
-        '  id: string',
-        '  header: { cwd: string }',
-        '  events: Array<{ type: string; seq: number; time: number; data: object }>',
+        'interface SessionFixture {',
+        '  header: { id: string; cwd: string }',
+        '  log: Array<{ type: string; seq: number; time: number; data: object }>',
+        '  readonly seq: number',
+        '  eventAt(seq: number): unknown',
+        '}',
+        'class FakeSession {',
+        "  constructor(id, cwd) { this.header = { id, cwd }; this.log = [] }",
+        '  get seq() { return this.log.length }',
+        '  eventAt(seq) { return this.log[seq] }',
         '}',
         'class Registry extends Service {',
         "  constructor(ctx: Context) { super(ctx, 'sessions') }",
-        '  sessions = new Map<string, SessionView>()',
-        '  list(): SessionView[] { return [...this.sessions.values()] }',
-        '  get(id: string): SessionView | undefined { return this.sessions.get(id) }',
+        '  sessions = new Map<string, SessionFixture>()',
+        '  list(): SessionFixture[] { return [...this.sessions.values()] }',
+        '  get(id: string): SessionFixture | undefined { return this.sessions.get(id) }',
         '}',
         'const harnessDir = process.argv[2]',
         'const workflowDir = process.argv[3]',
         'const ctx = new Context()',
         'const reg = new Registry(ctx)',
-        'const session: SessionView = {',
-        "  id: 'parent-1', header: { cwd: harnessDir },",
-        '  events: [',
-        "    { type: 'tool-workflow/run-start', seq: 0, time: 1700000000000, data: { runId: 'run-1', name: 'audit' } },",
-        "    { type: 'tool-workflow/run-start', seq: 1, time: 1700000000001, data: { runId: 'run-2', name: 'audit' } },",
-        '  ],',
-        '}',
-        'reg.sessions.set(session.id, session)',
+        'const session = new FakeSession("parent-1", harnessDir)',
+        'session.log.push(',
+        "  { type: 'tool-workflow/run-start', seq: 0, time: 1700000000000, data: { runId: 'run-1', name: 'audit' } },",
+        "  { type: 'tool-workflow/run-start', seq: 1, time: 1700000000001, data: { runId: 'run-2', name: 'audit' } },",
+        ')',
+        'reg.sessions.set(session.header.id, session)',
         'registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))',
         "const view = readAgentFlow(workflowDir)",
         "const watermark = JSON.parse(readFileSync(join(workflowDir, 'workflow-ledger-cursors.json'), 'utf8'))",
@@ -1237,29 +1367,35 @@ describe('workflow-ledger consumer — cold scan over session event snapshots ()
         "import { Context, Service } from '@deepseek-ai/cordis'",
         "import { registerWorkflowLedger } from './src/gates/workflow-ledger.ts'",
         "import { HarnessResolver } from './src/gates/_shared.ts'",
-        'interface SessionView {',
-        '  id: string',
-        '  header: { cwd: string }',
-        '  events: Array<{ type: string; seq: number; time: number; data: object }>',
+        'interface SessionFixture {',
+        '  header: { id: string; cwd: string }',
+        '  log: Array<{ type: string; seq: number; time: number; data: object }>',
+        '  readonly seq: number',
+        '  eventAt(seq: number): unknown',
+        '}',
+        'class FakeSession {',
+        '  constructor(id, cwd) { this.header = { id, cwd }; this.log = [] }',
+        '  get seq() { return this.log.length }',
+        '  eventAt(seq) { return this.log[seq] }',
         '}',
         'class Registry extends Service {',
         '  constructor(ctx: Context) { super(ctx, \'sessions\') }',
-        '  sessions = new Map<string, SessionView>()',
-        '  list(): SessionView[] { return [...this.sessions.values()] }',
-        '  get(id: string): SessionView | undefined { return this.sessions.get(id) }',
-        '  register(s: SessionView): void { this.sessions.set(s.id, s) }',
+        '  sessions = new Map<string, SessionFixture>()',
+        '  list(): SessionFixture[] { return [...this.sessions.values()] }',
+        '  get(id: string): SessionFixture | undefined { return this.sessions.get(id) }',
+        '  register(s: SessionFixture): void { this.sessions.set(s.header.id, s) }',
         '}',
         'const harnessDir = process.argv[2]',
         'const sid = process.argv[3]',
         'const count = Number(process.argv[4])',
         'const ctx = new Context()',
         'const reg = new Registry(ctx)',
-        'const session: SessionView = { id: sid, header: { cwd: harnessDir }, events: [] }',
+        'const session = new FakeSession(sid, harnessDir)',
         'reg.register(session)',
         'registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))',
         'for (let i = 0; i < count; i += 1) {',
         "  const event = { type: 'tool-workflow/run-start', seq: i, time: Date.now() + i, data: { runId: `${sid}-${i}`, name: 'audit' } }",
-        '  session.events.push(event)',
+        '  session.log.push(event)',
         "  ctx.events.emit({}, 'session/event', session, event)",
         '}',
       ].join('\n'))
@@ -1286,6 +1422,78 @@ describe('workflow-ledger consumer — cold scan over session event snapshots ()
       ])
     } finally {
       await rm(script, { force: true }).catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+})
+
+/* ===========================================================================
+ * 4a. D3 cold scan over the INSTALLED Session surface — `seq` + `eventAt`
+ *     (the real `Session` has no `events` member; the `.events` snapshot
+ *     read was structurally dead against it)
+ * ========================================================================== */
+
+describe('workflow-ledger consumer — installed Session surface (seq + eventAt)', () => {
+  it('cold-scans a bound session through seq + eventAt — no .events member (D3 red-first pin)', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-workflow-consumer-surface-')
+    const ctx = new Context()
+    const sessions = new FakeSessionRegistry(ctx)
+    const parent = fakeSession([
+      { type: 'tool-workflow/run-start', data: runStart() },
+    ], { id: 'parent-1', header: { cwd: root } })
+    // The pin: the fixture IS the installed surface (`'events' in session ===
+    // false` — T0 live evidence). The old `scanSession` read `.events`, so it
+    // returned immediately and recorded nothing.
+    expect('events' in parent).toBe(false)
+    expect(parent.seq).toBe(1)
+    sessions.register(parent)
+    const priorSink = setWorkflowLedgerLogger(() => {})
+    try {
+      registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))
+      const view = readAgentFlow(workflowDir)
+      expect(view).not.toBeNull()
+      expect(view!.events.map((e) => e.kind)).toEqual(['workflow-run'])
+      expect(view!.events[0]).toMatchObject({ kind: 'workflow-run', runId: 'run-1', name: 'audit', agent: 'parent-1' })
+      // The scan captured the end seq once: an event appended AFTER the scan
+      // is the live firehose's responsibility, never re-read by the cold walk.
+      expect(parent.seq).toBe(1)
+    } finally {
+      setWorkflowLedgerLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('a session without the installed surface (no seq / no eventAt) is skipped, not crashed on', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-workflow-consumer-surface-absent-')
+    const ctx = new Context()
+    const sessions = new FakeSessionRegistry(ctx)
+    const noSeq = fakeSession([{ type: 'tool-workflow/run-start', data: runStart({ runId: 'run-no-seq' }) }], {
+      id: 'parent-no-seq',
+      header: { cwd: root },
+    })
+    // A structurally incomplete session — the installed surface is validated,
+    // not assumed: an absent `seq` never enters the scan (no crash, no row).
+    Reflect.deleteProperty(noSeq, 'seq')
+    const noEventAt = fakeSession([{ type: 'tool-workflow/run-start', data: runStart({ runId: 'run-no-eventat' }) }], {
+      id: 'parent-no-eventat',
+      header: { cwd: root },
+    })
+    Reflect.deleteProperty(noEventAt, 'eventAt')
+    sessions.register(noSeq)
+    sessions.register(noEventAt)
+    const observed: string[] = []
+    const priorSink = setWorkflowLedgerLogger((level, message) => { observed.push(`${level}: ${message}`) })
+    try {
+      registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))
+      // Neither incomplete session is readable → nothing recorded anywhere,
+      // and the structural rejection is silent (an absent surface is not a
+      // fault the operator owns).
+      expect(observed).toEqual([])
+      expect(readAgentFlow(workflowDir)!.events).toEqual([])
+    } finally {
+      setWorkflowLedgerLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
       await rm(root, { recursive: true, force: true })
     }
   })
@@ -1466,6 +1674,129 @@ describe('workflow-ledger consumer — D4 session binding + exclusion floor', ()
     } finally {
       setWorkflowLedgerLogger(priorSink)
       await rm(lockDir, { recursive: true, force: true })
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('the scan starts at max(success cursor, exclusion floor) — the excluded prefix is never even read', async () => {
+    const { root, harnessDir, dirs } = await tempMultiHarness('dsh-ledger-scan-start-')
+    const ctx = new Context()
+    const sessions = new FakeSessionRegistry(ctx)
+    const parent = fakeSession([
+      { type: 'tool-workflow/run-start', data: runStart({ runId: 'run-old-1' }) },
+      { type: 'tool-workflow/run-start', data: runStart({ runId: 'run-old-2' }) },
+      { type: 'tool-workflow/run-start', data: runStart({ runId: 'run-new' }) },
+    ], { id: 'sess-start', header: { cwd: root } })
+    const reads: number[] = []
+    parent.eventAt = (seq: number) => {
+      reads.push(seq)
+      return parent.log[seq]
+    }
+    sessions.register(parent)
+    const priorSink = setWorkflowLedgerLogger(() => {})
+    try {
+      // The operator picked wf-a when the log already held two rows: the pick
+      // commits `excludedBeforeSeq = seq`, so those rows are intentional
+      // exclusions — not "history the scan happens to filter out".
+      expect(updateWorkflowSessionBinding(harnessDir, 'sess-start', root, { selectedWorkflowId: 'wf-a', excludedBeforeSeq: 2 }).kind).toBe('written')
+      registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))
+      expect(reads).toEqual([2])
+      expect(readAgentFlow(dirs['wf-a'])!.events.map((e) => e.runId)).toEqual(['run-new'])
+      expect(readAgentFlow(dirs['wf-b'])!.events).toEqual([])
+      // The success cursor now sits at the captured end (3): a re-apply has
+      // nothing left to read at all — the floor and the cursor agree.
+      reads.length = 0
+      registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))
+      expect(reads).toEqual([])
+      expect(readAgentFlow(dirs['wf-a'])!.events.map((e) => e.runId)).toEqual(['run-new'])
+    } finally {
+      setWorkflowLedgerLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('a floor past the log end is reported as identity drift — scan skipped, exclusion record preserved', async () => {
+    const { root, harnessDir, dirs } = await tempMultiHarness('dsh-ledger-floor-drift-')
+    const ctx = new Context()
+    const sessions = new FakeSessionRegistry(ctx)
+    sessions.register(fakeSession([
+      { type: 'tool-workflow/run-start', data: runStart({ runId: 'run-behind-floor' }) },
+    ], { id: 'sess-drift', header: { cwd: root } }))
+    // An exclusion floor ahead of the log can only be a rebuilt/reused session
+    // identity (the floor is durable, the log is not). Resetting it would
+    // replay rows the operator already excluded — report and skip instead.
+    expect(updateWorkflowSessionBinding(harnessDir, 'sess-drift', root, { selectedWorkflowId: 'wf-a', excludedBeforeSeq: 5 }).kind).toBe('written')
+    const captured: string[] = []
+    const priorSink = setWorkflowLedgerLogger((_level, message) => { captured.push(message) })
+    try {
+      registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))
+
+      expect(captured.some((m) => m.includes('drift'))).toBe(true)
+      expect(readAgentFlow(dirs['wf-a'])!.events).toEqual([])
+      expect(readAgentFlow(dirs['wf-b'])!.events).toEqual([])
+      // The intentional exclusion record is untouched — never reset to zero.
+      expect(readWorkflowSessionBinding(harnessDir, 'sess-drift', root)).toEqual({
+        kind: 'ok',
+        binding: { cwd: root, selectedWorkflowId: 'wf-a', excludedBeforeSeq: 5 },
+      })
+    } finally {
+      setWorkflowLedgerLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('an EMPTY rebuilt log with a floor ahead of zero still reports identity drift — the zero-length fast return must not skip the diagnostic', async () => {
+    const { root, harnessDir, dirs } = await tempMultiHarness('dsh-ledger-floor-drift-empty-')
+    const ctx = new Context()
+    const sessions = new FakeSessionRegistry(ctx)
+    // The same identity drift as the non-empty case, but on a rebuilt session
+    // whose log is EMPTY (`seq === 0`): the durable floor is ahead of the log,
+    // so the contract's report-and-preserve path must still run.
+    sessions.register(fakeSession([], { id: 'sess-empty-drift', header: { cwd: root } }))
+    expect(updateWorkflowSessionBinding(harnessDir, 'sess-empty-drift', root, { selectedWorkflowId: 'wf-a', excludedBeforeSeq: 5 }).kind).toBe('written')
+    const captured: string[] = []
+    const priorSink = setWorkflowLedgerLogger((_level, message) => { captured.push(message) })
+    try {
+      registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))
+
+      expect(captured.some((m) => m.includes('drift'))).toBe(true)
+      expect(readAgentFlow(dirs['wf-a'])!.events).toEqual([])
+      expect(readAgentFlow(dirs['wf-b'])!.events).toEqual([])
+      // The intentional exclusion record is preserved, never reset to zero.
+      expect(readWorkflowSessionBinding(harnessDir, 'sess-empty-drift', root)).toEqual({
+        kind: 'ok',
+        binding: { cwd: root, selectedWorkflowId: 'wf-a', excludedBeforeSeq: 5 },
+      })
+    } finally {
+      setWorkflowLedgerLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('a log shorter than the recorded success cursor is re-walked, never skipped by the stale cursor', async () => {
+    const { root, harnessDir, dirs } = await tempMultiHarness('dsh-ledger-log-rebuild-')
+    const ctx = new Context()
+    const sessions = new FakeSessionRegistry(ctx)
+    sessions.register(fakeSession([
+      { type: 'tool-workflow/run-start', data: runStart({ runId: 'run-1' }) },
+      { type: 'tool-workflow/run-start', data: runStart({ runId: 'run-2' }) },
+    ], { id: 'sess-rebuilt', header: { cwd: root } }))
+    expect(updateWorkflowSessionBinding(harnessDir, 'sess-rebuilt', root, { selectedWorkflowId: 'wf-a', excludedBeforeSeq: 0 }).kind).toBe('written')
+    // The durable cursor names a position PAST this log: id reuse after
+    // disposal / a rebuilt session. The scan must re-walk from the floor so
+    // the new log's rows are recorded (the rebuild guard), not skip them all.
+    await writeFile(join(dirs['wf-a']!, WORKFLOW_LEDGER_WATERMARK_FILE), JSON.stringify({ v: 1, cursors: { 'sess-rebuilt': 9 } }))
+    const priorSink = setWorkflowLedgerLogger(() => {})
+    try {
+      registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))
+
+      expect(readAgentFlow(dirs['wf-a'])!.events.map((e) => e.runId)).toEqual(['run-2', 'run-1'])
+    } finally {
+      setWorkflowLedgerLogger(priorSink)
       await ctx.fiber.dispose().catch(() => {})
       await rm(root, { recursive: true, force: true })
     }

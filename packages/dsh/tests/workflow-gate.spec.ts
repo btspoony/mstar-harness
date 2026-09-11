@@ -741,9 +741,24 @@ function ledgerEvents(app: BootResult): readonly AgentFlowEventView[] {
   return view.events
 }
 
-/** One structural fake parent session for the e2e consumer tests (consumer-read surface). */
-const parentSession = (id: string, cwd: string): { id: string; events: unknown[]; header: { cwd: string } } =>
-  ({ id, events: [], header: { cwd } })
+/**
+ * One structural fake parent session for the e2e consumer tests — the
+ * installed Session surface (`header.id` / `seq` / `eventAt`, no `.events`).
+ */
+function parentSession(id: string, cwd: string): {
+  header: { id: string; cwd: string }
+  log: unknown[]
+  readonly seq: number
+  eventAt(seq: number): unknown
+} {
+  const log: unknown[] = []
+  return {
+    header: { id, cwd },
+    log,
+    get seq(): number { return log.length },
+    eventAt(seq: number): unknown { return log[seq] },
+  }
+}
 
 describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observation)', () => {
   it('(1) warn + unknown name → ONE advisory verdict row (workflow-verdict, mode + name carried)', async () => {
