@@ -42,6 +42,7 @@ import {
   WORKFLOW_LEDGER_WATERMARK_MAX_DIRS,
 } from '../src/gates/workflow-ledger.ts'
 import { seedHarness, seedV2Tree, v2Root, v2Snapshot, v2WorkflowEntry } from './harness.ts'
+import { readWorkflowSessionBinding, updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
 import {
   agentEnd,
   agentEndMissingRunId,
@@ -1285,6 +1286,187 @@ describe('workflow-ledger consumer — cold scan over session event snapshots ()
       ])
     } finally {
       await rm(script, { force: true }).catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+})
+
+/* ===========================================================================
+ * 4b. D4 session binding + the no-backfill exclusion floor
+ * ========================================================================== */
+
+describe('workflow-ledger consumer — D4 session binding + exclusion floor', () => {
+  /** A temp harness with TWO active lifecycles (the concurrent-active registry). */
+  async function tempMultiHarness(prefix: string): Promise<{ root: string; harnessDir: string; dirs: Record<string, string> }> {
+    const root = await mkdtemp(join(tmpdir(), prefix))
+    const harnessDir = join(root, 'harness')
+    await mkdir(harnessDir, { recursive: true })
+    await seedHarness(harnessDir, {
+      'status.json': v2Root([v2WorkflowEntry('wf-a'), v2WorkflowEntry('wf-b')]),
+      'workflows/wf-a/snapshot.json': v2Snapshot('wf-a'),
+      'workflows/wf-b/snapshot.json': v2Snapshot('wf-b'),
+    })
+    return { root, harnessDir, dirs: { 'wf-a': join(harnessDir, 'workflows/wf-a'), 'wf-b': join(harnessDir, 'workflows/wf-b') } }
+  }
+
+  it('two sessions in one harness record into the lifecycle each is bound to', async () => {
+    const { root, harnessDir, dirs } = await tempMultiHarness('dsh-ledger-bound-')
+    const ctx = new Context()
+    const sessions = new FakeSessionRegistry(ctx)
+    sessions.register(fakeSession([{ type: 'tool-workflow/run-start', data: runStart({ runId: 'run-a' }) }], { id: 'sess-a', header: { cwd: root } }))
+    sessions.register(fakeSession([{ type: 'tool-workflow/run-start', data: runStart({ runId: 'run-b' }) }], { id: 'sess-b', header: { cwd: root } }))
+    expect(updateWorkflowSessionBinding(harnessDir, 'sess-a', root, { excludedBeforeSeq: 0, selectedWorkflowId: 'wf-a' }).kind).toBe('written')
+    expect(updateWorkflowSessionBinding(harnessDir, 'sess-b', root, { excludedBeforeSeq: 0, selectedWorkflowId: 'wf-b' }).kind).toBe('written')
+    const priorSink = setWorkflowLedgerLogger(() => {})
+    try {
+      registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))
+
+      expect(readAgentFlow(dirs['wf-a'])!.events.map((e) => e.runId)).toEqual(['run-a'])
+      expect(readAgentFlow(dirs['wf-b'])!.events.map((e) => e.runId)).toEqual(['run-b'])
+    } finally {
+      setWorkflowLedgerLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('a bound session keeps floor 0 — a pre-apply row is still recoverable', async () => {
+    const { root, harnessDir, dirs } = await tempMultiHarness('dsh-ledger-floor-zero-')
+    const ctx = new Context()
+    const sessions = new FakeSessionRegistry(ctx)
+    sessions.register(fakeSession([{ type: 'tool-workflow/run-start', data: runStart({ runId: 'run-pre' }) }], { id: 'sess-a', header: { cwd: root } }))
+    expect(updateWorkflowSessionBinding(harnessDir, 'sess-a', root, { excludedBeforeSeq: 0, selectedWorkflowId: 'wf-a' }).kind).toBe('written')
+    const priorSink = setWorkflowLedgerLogger(() => {})
+    try {
+      registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))
+
+      // Recovery semantics for a BOUND session: with no exclusion history the
+      // floor stays 0, so the pre-apply run-start is still recorded.
+      expect(readAgentFlow(dirs['wf-a'])!.events.map((e) => e.runId)).toEqual(['run-pre'])
+      expect(readWorkflowSessionBinding(harnessDir, 'sess-a', root)).toEqual({
+        kind: 'ok',
+        binding: { cwd: root, selectedWorkflowId: 'wf-a', excludedBeforeSeq: 0 },
+      })
+    } finally {
+      setWorkflowLedgerLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('an unbound row is skipped with ZERO workflow-dir writes and persists n+1 as the exclusion floor, so a later pick never backfills it', async () => {
+    const { root, harnessDir, dirs } = await tempMultiHarness('dsh-ledger-unbound-floor-')
+    const ctx = new Context()
+    const sessions = new FakeSessionRegistry(ctx)
+    const parent = fakeSession([{ type: 'tool-workflow/run-start', data: runStart({ runId: 'run-excluded' }) }], { id: 'sess-unbound', header: { cwd: root } })
+    sessions.register(parent)
+    const priorSink = setWorkflowLedgerLogger(() => {})
+    try {
+      registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))
+
+      // Nothing was written anywhere; the observation advanced the floor.
+      expect(readAgentFlow(dirs['wf-a'])!.events).toEqual([])
+      expect(readAgentFlow(dirs['wf-b'])!.events).toEqual([])
+      expect(readWorkflowSessionBinding(harnessDir, 'sess-unbound', root)).toEqual({
+        kind: 'ok',
+        binding: { cwd: root, excludedBeforeSeq: 1 },
+      })
+
+      // The operator picks wf-a. The picker commits `max(oldFloor, seq)` —
+      // the already-persisted floor stands (an older observation never walks
+      // the exclusion window back).
+      expect(updateWorkflowSessionBinding(harnessDir, 'sess-unbound', root, { selectedWorkflowId: 'wf-a', excludedBeforeSeq: 0 }).kind).toBe('written')
+
+      // A re-apply (restart) re-scans the same log: the pre-pick row stays
+      // excluded, and a NEW row records normally.
+      sessions.append(parent, 'tool-workflow/run-start', runStart({ runId: 'run-after' }))
+      registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))
+
+      expect(readAgentFlow(dirs['wf-a'])!.events.map((e) => e.runId)).toEqual(['run-after'])
+      expect(readAgentFlow(dirs['wf-b'])!.events).toEqual([])
+    } finally {
+      setWorkflowLedgerLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('an unreadable binding record pauses attribution — no rows anywhere and the store bytes are untouched', async () => {
+    const { root, harnessDir, dirs } = await tempMultiHarness('dsh-ledger-store-broken-')
+    const ctx = new Context()
+    const sessions = new FakeSessionRegistry(ctx)
+    sessions.register(fakeSession([{ type: 'tool-workflow/run-start', data: runStart({ runId: 'run-x' }) }], { id: 'sess-x', header: { cwd: root } }))
+    const storePath = join(harnessDir, 'snapshots', 'engine-status.json')
+    await seedHarness(harnessDir, { 'snapshots/engine-status.json': '{ "sv": 1, "entries": ' })
+    const captured: string[] = []
+    const priorSink = setWorkflowLedgerLogger((_level, message) => { captured.push(message) })
+    try {
+      registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))
+
+      expect(readAgentFlow(dirs['wf-a'])!.events).toEqual([])
+      expect(readAgentFlow(dirs['wf-b'])!.events).toEqual([])
+      // The corrupt store is REPORTED and left byte-identical (never reset).
+      expect(captured.some((m) => m.includes('store-invalid-json'))).toBe(true)
+      expect(readFileSync(storePath, 'utf8')).toBe('{ "sv": 1, "entries": ')
+    } finally {
+      setWorkflowLedgerLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('coalesces a multi-row unbound scan into ONE floor value — the maximum row seq + 1', async () => {
+    const { root, harnessDir, dirs } = await tempMultiHarness('dsh-ledger-floor-coalesce-')
+    const ctx = new Context()
+    const sessions = new FakeSessionRegistry(ctx)
+    sessions.register(fakeSession([
+      { type: 'tool-workflow/run-start', data: runStart({ runId: 'run-1' }) },
+      { type: 'tool-workflow/run-start', data: runStart({ runId: 'run-2' }) },
+      { type: 'tool-workflow/run-start', data: runStart({ runId: 'run-3' }) },
+    ], { id: 'sess-unbound', header: { cwd: root } }))
+    const priorSink = setWorkflowLedgerLogger(() => {})
+    try {
+      registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))
+
+      // The scan still converges on the row-max floor (nothing is lost by the
+      // per-scan batching) and writes NO workflow dir.
+      expect(readWorkflowSessionBinding(harnessDir, 'sess-unbound', root)).toEqual({
+        kind: 'ok',
+        binding: { cwd: root, excludedBeforeSeq: 3 },
+      })
+      expect(readAgentFlow(dirs['wf-a'])!.events).toEqual([])
+      expect(readAgentFlow(dirs['wf-b'])!.events).toEqual([])
+    } finally {
+      setWorkflowLedgerLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('reaches the durable floor with ONE store write per scan, not one per row', async () => {
+    const { root, harnessDir } = await tempMultiHarness('dsh-ledger-floor-one-write-')
+    const ctx = new Context()
+    const sessions = new FakeSessionRegistry(ctx)
+    sessions.register(fakeSession([
+      { type: 'tool-workflow/run-start', data: runStart({ runId: 'run-1' }) },
+      { type: 'tool-workflow/run-start', data: runStart({ runId: 'run-2' }) },
+      { type: 'tool-workflow/run-start', data: runStart({ runId: 'run-3' }) },
+    ], { id: 'sess-unbound', header: { cwd: root } }))
+    // Hold the snapshot-dir lock: every floor write degrades, and the module's
+    // warn IS the write — one warn ⇒ one lock/read-modify-write for the scan
+    // (a per-row writer would report three).
+    const lockDir = join(harnessDir, 'snapshots', WORKFLOW_LEDGER_LOCKDIR)
+    await mkdir(lockDir, { recursive: true })
+    const captured: string[] = []
+    const priorSink = setWorkflowLedgerLogger((_level, message) => { captured.push(message) })
+    try {
+      registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))
+
+      expect(captured.filter((m) => m.includes('exclusion floor not persisted'))).toHaveLength(1)
+    } finally {
+      setWorkflowLedgerLogger(priorSink)
+      await rm(lockDir, { recursive: true, force: true })
+      await ctx.fiber.dispose().catch(() => {})
       await rm(root, { recursive: true, force: true })
     }
   })

@@ -65,6 +65,11 @@ const RICH_WORKFLOW = 'v2.2.0'
 const RICH_ROOT = v2Root([v2WorkflowEntry(RICH_WORKFLOW, 'iteration')])
 const RICH_SNAPSHOT = v2Snapshot(RICH_WORKFLOW, {
   type: 'iteration',
+  // The selected lifecycle's ONLY compass link (D4): direction and the
+  // iteration gate come from this `compass_ref`, never a directory-wide
+  // first-active compass scan. `migrate.ts` producer shape — the linked
+  // compass frontmatter `iteration_id` equals the snapshot id.
+  compass_ref: 'iterations/v2.2.0/delivery-compass.md',
   plans: [
     {
       plan_id: 'plan-a',
@@ -219,10 +224,16 @@ describe('mstar-engine-status — the unified catalog row (watermark + gate + st
     const root = await mkdtemp(join(tmpdir(), 'dsh-harness-state-branch-'))
     const harnessDir = join(root, 'harness')
     await mkdir(harnessDir, { recursive: true })
+    // The compass MUST belong to the SELECTED workflow (D4): `compass_ref`
+    // points at this lifecycle's own compass and the frontmatter
+    // `iteration_id` equals the snapshot id, so the base/target fallback can
+    // never borrow another iteration's compass.
     await seedHarness(harnessDir, {
       'status.json': v2Root([v2WorkflowEntry('wf-branch')]),
-      'workflows/wf-branch/snapshot.json': v2Snapshot('wf-branch'),
-      'iterations/v2.2.0/delivery-compass.md': '---\niteration_id: v2.2.0\nstatus: active\niteration_base_branch: dev-dsh\ntarget_branch: dev-dsh\n---\n',
+      'workflows/wf-branch/snapshot.json': v2Snapshot('wf-branch', {
+        compass_ref: 'iterations/wf-branch/delivery-compass.md',
+      }),
+      'iterations/wf-branch/delivery-compass.md': '---\niteration_id: wf-branch\nstatus: active\niteration_base_branch: dev-dsh\ntarget_branch: dev-dsh\n---\n',
     })
     booted = await bootApp({ root })
 

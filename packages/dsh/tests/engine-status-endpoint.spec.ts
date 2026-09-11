@@ -13,19 +13,23 @@
  * served payload is proven to be the emitted one.
  */
 import { afterEach, describe, expect, it } from 'bun:test'
+import { writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { Context, Service, type Fiber } from '@deepseek-ai/cordis'
 import TypertRegistry from '@deepseek-ai/dsh-typert-registry'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import * as entry from '../src/index.ts'
-import { writeEngineStatusSnapshot } from '../src/engine-status-store.ts'
+import { ENGINE_STATUS_SNAPSHOT_RELATIVE_PATH, readWorkflowSessionBinding, writeEngineStatusSnapshot } from '../src/engine-status-store.ts'
 import {
   installEngineStatusEndpoint,
   MSTAR_ENGINE_STATUS_METHOD,
   MSTAR_ENGINE_STATUS_NAMESPACE,
+  MSTAR_SELECT_WORKFLOW_METHOD,
   type MstarEngineStatusResult,
+  type MstarSelectWorkflowResult,
 } from '../src/engine-status-endpoint.ts'
-import { bootApp, type BootResult } from './harness.ts'
+import { bootApp, seedHarness, v2Root, v2Snapshot, v2WorkflowEntry, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
 
@@ -56,6 +60,7 @@ class FakeSessionController extends Service {
 /** Structural view of the endpoint as the gateway dispatches it. */
 interface EndpointView {
   engineStatus(sessionId: unknown, cwd: unknown): Promise<MstarEngineStatusResult>
+  selectWorkflow(sessionId: unknown, cwd: unknown, workflowId: unknown): Promise<MstarSelectWorkflowResult>
 }
 
 /** Structural view of the fake sessions registry (the harness's driver). */
@@ -70,11 +75,11 @@ function endpointOf(app: BootResult): EndpointView {
   return service
 }
 
-/** Register one live session (id + header cwd) on the fake sessions service. */
-function liveSession(app: BootResult, id: string, cwd: string): void {
+/** Register one live session (id + header cwd + bounded seq) on the fake sessions service. */
+function liveSession(app: BootResult, id: string, cwd: string, seq = 0): void {
   const sessions = app.ctx.get('sessions') as FakeSessionsView | undefined
   if (sessions === undefined) throw new Error('sessions service not mounted')
-  sessions.register({ id, header: { cwd } })
+  sessions.register({ id, header: { cwd }, seq })
 }
 
 /** Seed one stored snapshot through the store's own writer. */
@@ -453,3 +458,73 @@ describe('engineStatus endpoint — optional-unit boot', () => {
     expect(entry.inject).toEqual(['loader'])
   })
 })
+
+describe('selectWorkflow endpoint — D4 picker commit', () => {
+  async function seedTwoActives(app: BootResult): Promise<void> {
+    await seedHarness(app.harnessDir, {
+      'status.json': v2Root([v2WorkflowEntry('wf-a'), v2WorkflowEntry('wf-b')]),
+      'workflows/wf-a/snapshot.json': v2Snapshot('wf-a', { plans: [{ id: 'plan-a', status: 'Todo' }] }),
+      'workflows/wf-b/snapshot.json': v2Snapshot('wf-b', { plans: [{ id: 'plan-b', status: 'Done' }] }),
+      'workflows/wf-old/snapshot.json': v2Snapshot('wf-old', { status: 'completed', ended_at: '2026-08-19' }),
+    })
+  }
+
+  it('refuses invalid/terminal ids, cwd mismatch, non-live sessions and a failed store commit', async () => {
+    const app = (booted = await bootApp({ sessionsService: 'fake' }))
+    await seedTwoActives(app)
+    const endpoint = endpointOf(app)
+
+    expect(await endpoint.selectWorkflow('', app.root, 'wf-a')).toEqual({ status: 'unavailable', reason: 'invalid-session-id' })
+    expect(await endpoint.selectWorkflow('s-A', app.root, 'wf-a')).toEqual({ status: 'unavailable', reason: 'session-not-live' })
+
+    liveSession(app, 's-A', app.root, 5)
+    expect(await endpoint.selectWorkflow('s-A', '/elsewhere', 'wf-a')).toEqual({ status: 'unavailable', reason: 'cwd-mismatch' })
+    expect(await endpoint.selectWorkflow('s-A', app.root, 'wf-old')).toEqual({ status: 'unavailable', reason: 'workflow-not-active' })
+    expect(await endpoint.selectWorkflow('s-A', app.root, 'wf-missing')).toEqual({ status: 'unavailable', reason: 'workflow-not-active' })
+    seed(app, 's-A', app.root, 1)
+    await writeFile(
+      join(app.harnessDir, ENGINE_STATUS_SNAPSHOT_RELATIVE_PATH),
+      JSON.stringify({ sv: 1, entries: {}, bindings: [] }),
+    )
+    expect(await endpoint.selectWorkflow('s-A', app.root, 'wf-a')).toEqual({
+      status: 'unavailable',
+      reason: 'store-store-bindings-schema',
+    })
+  })
+
+  it('a valid pick survives re-apply without advancing the exclusion floor', async () => {
+    const app = (booted = await bootApp({ sessionsService: 'fake' }))
+    await seedTwoActives(app)
+    liveSession(app, 's-A', app.root, 5)
+    seed(app, 's-A', app.root, 1)
+    const endpoint = endpointOf(app)
+
+    expect(await endpoint.selectWorkflow('s-A', app.root, 'wf-a')).toEqual({
+      status: 'selected',
+      sessionId: 's-A',
+      workflowId: 'wf-a',
+    })
+    expect(readWorkflowSessionBinding(app.harnessDir, 's-A', app.root)).toEqual({
+      kind: 'ok',
+      binding: { cwd: app.root, selectedWorkflowId: 'wf-a', excludedBeforeSeq: 5 },
+    })
+
+    liveSession(app, 's-A', app.root, 9)
+    expect(await endpoint.selectWorkflow('s-A', app.root, 'wf-a')).toEqual({
+      status: 'selected',
+      sessionId: 's-A',
+      workflowId: 'wf-a',
+    })
+    expect(readWorkflowSessionBinding(app.harnessDir, 's-A', app.root)).toEqual({
+      kind: 'ok',
+      binding: { cwd: app.root, selectedWorkflowId: 'wf-a', excludedBeforeSeq: 5 },
+    })
+
+    const served = await endpoint.engineStatus('s-A', app.root)
+    expect(served).toMatchObject({
+      status: 'ok',
+      binding: { selection: { kind: 'active', workflowId: 'wf-a', dir: 'workflows/wf-a' } },
+    })
+  })
+})
+

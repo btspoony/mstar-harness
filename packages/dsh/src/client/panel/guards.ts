@@ -11,7 +11,7 @@
  * envelope degrades to `unavailable` — never to a half-parsed view.
  */
 
-import type { MstarEngineStatusPayload } from '../../types.ts'
+import type { MstarEngineStatusPayload, WorkflowSelectionView } from '../../types.ts'
 
 /** String field: non-empty string, else null (missing → `unknown`). */
 export function str(value: unknown): string | null {
@@ -50,12 +50,60 @@ export type MstarEngineStatusFetch =
     readonly at: string
     /** The agent turn the row was emitted for. */
     readonly turn: number
+    /**
+     * The session's CURRENT control-state selection, when the host served one
+     * (D4). It is deliberately separate from `payload.state.selection`, which
+     * keeps recording the LAST MODEL EMISSION — the picker's acknowledgement
+     * shows here immediately while plans / Event Log stay on the last snapshot.
+     * Null when the response carries none (an older host, or a malformed one).
+     */
+    readonly binding: WorkflowSelectionView | null
   }
+  | { readonly status: 'unavailable'; readonly reason: string }
+
+/** One workflow-pick acknowledgement (the `selectWorkflow` wire result). */
+export type MstarSelectWorkflowFetch =
+  | { readonly status: 'selected'; readonly sessionId: string; readonly workflowId: string }
   | { readonly status: 'unavailable'; readonly reason: string }
 
 /** The explicit degraded state (one constructor — one shape everywhere). */
 function unavailable(reason: string): MstarEngineStatusFetch {
   return { status: 'unavailable', reason }
+}
+
+/**
+ * Narrow one untrusted workflow-selection view. Every arm must carry its
+ * discriminants as non-empty strings; the picker rows (`activeWorkflowIds`)
+ * survive only as a string array. Anything else is null — the caller then
+ * falls back to the emitted payload's own selection rather than rendering a
+ * guessed one.
+ */
+export function selectionView(value: unknown): WorkflowSelectionView | null {
+  const view = record(value)
+  if (view === null) return null
+  const workflowId = str(view.workflowId)
+  const dir = str(view.dir)
+  if (view.kind === 'active' || view.kind === 'terminal') {
+    if (workflowId === null || dir === null) return null
+    if (view.kind === 'terminal') return { kind: 'terminal', workflowId, dir }
+    const warning = record(view.warning)
+    const code = warning === null ? null : str(warning.code)
+    const message = warning === null ? null : str(warning.message)
+    return {
+      kind: 'active',
+      workflowId,
+      dir,
+      ...(code === null || message === null ? {} : { warning: { code, message } }),
+    }
+  }
+  if (view.kind !== 'error') return null
+  const code = str(view.code)
+  const message = str(view.message)
+  if (code === null || message === null) return null
+  const ids = Array.isArray(view.activeWorkflowIds)
+    ? view.activeWorkflowIds.filter((id): id is string => str(id) !== null)
+    : undefined
+  return { kind: 'error', code, message, ...(ids === undefined ? {} : { activeWorkflowIds: ids }) }
 }
 
 /**
@@ -117,5 +165,55 @@ export function parseEngineStatusResult(raw: unknown, sessionId: string, cwd?: s
   // at render time (`str`/`bool`/`count`/`Array.isArray`), so a payload
   // missing a member renders `unknown` for that member — the established
   // field-level degradation contract (spec §2.4).
-  return { status: 'ok', payload: payload as unknown as MstarEngineStatusPayload, at, turn }
+  //
+  // The CURRENT control-state binding is a separate, optional field (D4): a
+  // host that does not serve one (or a malformed one) degrades to `null`, so
+  // the panel keeps the last emission's own selection as its display source.
+  const binding = record(value.binding)
+  return {
+    status: 'ok',
+    payload: payload as unknown as MstarEngineStatusPayload,
+    at,
+    turn,
+    binding: binding === null ? null : selectionView(binding.selection),
+  }
+}
+
+/**
+ * Validate one `/api/mstar/selectWorkflow` response into the picker's state.
+ *
+ * Like {@link parseEngineStatusResult} the whole envelope is untrusted: the
+ * transport result, the endpoint result and the acknowledged identity are all
+ * checked. A success MUST name the session AND the workflow this client asked
+ * for — a foreign acknowledgement is refused rather than rendered as this
+ * session's pick.
+ *
+ * @param raw - the value returned by `connection.rpc.call` (untrusted).
+ * @param sessionId - the session this client ASKED for.
+ * @param workflowId - the workflow id this client asked to select.
+ * @returns the acknowledged pick, or the explicit unavailable state.
+ */
+export function parseSelectWorkflowResult(
+  raw: unknown,
+  sessionId: string,
+  workflowId: string,
+): MstarSelectWorkflowFetch {
+  const envelope = record(raw)
+  if (envelope === null) return { status: 'unavailable', reason: 'malformed-response' }
+  if (envelope.ok !== true) {
+    const error = record(envelope.error)
+    const code = str(error?.code)
+    return { status: 'unavailable', reason: code === null ? 'transport-error' : `transport-error:${code}` }
+  }
+  const value = record(envelope.value)
+  if (value === null) return { status: 'unavailable', reason: 'malformed-response' }
+  if (value.status === 'unavailable') {
+    return { status: 'unavailable', reason: str(value.reason) ?? 'unavailable' }
+  }
+  if (value.status !== 'selected') return { status: 'unavailable', reason: 'malformed-response' }
+  const acknowledgedSession = str(value.sessionId)
+  const acknowledgedWorkflow = str(value.workflowId)
+  if (acknowledgedSession !== sessionId) return { status: 'unavailable', reason: 'session-mismatch' }
+  if (acknowledgedWorkflow !== workflowId) return { status: 'unavailable', reason: 'workflow-mismatch' }
+  return { status: 'selected', sessionId, workflowId }
 }

@@ -41,7 +41,8 @@ import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ChatSnapshot } from '@deepseek-ai/dsh-client-ui-chat/client'
 import type { ConversationNode } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { MstarEngineStatusClient, type MstarEngineStatusConnection } from '../src/client/panel/engine-status-client'
-import { useMstarEngineStatus, type MstarEngineStatusView } from '../src/client/panel/use-mstar-engine-status'
+import { useMstarEngineStatus, type MstarEngineStatusHook, type MstarEngineStatusView } from '../src/client/panel/use-mstar-engine-status'
+import { ENGINE_STATUS_ENDPOINT, SELECT_WORKFLOW_ENDPOINT } from '../src/engine-status-wire.ts'
 import type { MstarEngineStatusPayload } from '../src/types'
 import {
   anchorSnapshot,
@@ -51,6 +52,7 @@ import {
   chatSnapshot,
   gatewayError,
   gatewayOk,
+  okResult,
   otherKindCatalogRow,
   SESSION,
   SESSION_CWD,
@@ -113,13 +115,18 @@ function seats(
 
 /** One render pass of the hook through a probe component (the hook's real consumer). */
 function renderHook(seatsUnderTest: ReturnType<typeof seats>): MstarEngineStatusView {
-  let captured: MstarEngineStatusView | null = null
+  return renderSeat(seatsUnderTest).view
+}
+
+/** One render pass of the full hook result (view + picker seat). */
+function renderSeat(seatsUnderTest: ReturnType<typeof seats>): MstarEngineStatusHook {
+  let captured: MstarEngineStatusHook | null = null
   const Probe = (): null => {
     captured = useMstarEngineStatus(seatsUnderTest)
     return null
   }
   renderToStaticMarkup(createElement(Probe))
-  return captured as unknown as MstarEngineStatusView
+  return captured as unknown as MstarEngineStatusHook
 }
 
 /** Issue the request (first pass), let the answer land, then read the settled view. */
@@ -632,3 +639,83 @@ describe('MstarEngineStatusClient — a refresh never publishes a superseded anc
     client.dispose()
   })
 })
+
+describe('useMstarEngineStatus — picker seat (D4)', () => {
+  const UNBOUND = {
+    kind: 'error' as const,
+    code: 'workflow.selection.unbound-multi-active',
+    message: 'pick one',
+    activeWorkflowIds: ['wf-a', 'wf-b'],
+  }
+
+  it('surfaces the served binding as selection and exposes select', async () => {
+    const gateway = stubGateway(gatewayOk({
+      ...okResult(payload('2.0.4')),
+      binding: { selection: UNBOUND },
+    }))
+    const seatsUnderTest = seats(anchorStore(), gateway)
+    renderHook(seatsUnderTest)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const seat = renderSeat(seatsUnderTest)
+    expect(seat.view.state).toBe('ok')
+    expect(seat.selection).toEqual(UNBOUND)
+    expect(seat.pick).toEqual({ state: 'idle' })
+    expect(typeof seat.select).toBe('function')
+  })
+})
+
+describe('MstarEngineStatusClient — selectWorkflow (D4)', () => {
+  it('refuses a second submission while one is pending', async () => {
+    const pending = new Map<string, (value: unknown) => void>()
+    const connection = {
+      rpc: {
+        call(_channel: string, endpoint: string): Promise<unknown> {
+          const { promise, resolve } = Promise.withResolvers<unknown>()
+          pending.set(endpoint, resolve)
+          return promise
+        },
+      },
+    } as unknown as MstarEngineStatusConnection
+    const client = new MstarEngineStatusClient(connection, { refreshIntervalMs: 0, timeoutMs: 0 })
+    const first = client.selectWorkflow(SESSION_ID, SESSION_CWD, 'wf-a')
+    expect(client.getSnapshot().selections.get(SESSION_ID)).toEqual({ state: 'pending' })
+    expect(await client.selectWorkflow(SESSION_ID, SESSION_CWD, 'wf-b')).toEqual({
+      status: 'unavailable',
+      reason: 'selection-pending',
+    })
+    pending.get(SELECT_WORKFLOW_ENDPOINT)!({
+      ok: true,
+      value: { status: 'selected', sessionId: SESSION_ID, workflowId: 'wf-a' },
+    })
+    expect(await first).toEqual({ status: 'selected', sessionId: SESSION_ID, workflowId: 'wf-a' })
+    expect(client.getSnapshot().selections.get(SESSION_ID)).toEqual({ state: 'selected', workflowId: 'wf-a' })
+    client.dispose()
+  })
+
+  it('a late pre-pick engineStatus answer cannot overwrite post-pick state', async () => {
+    const pending = new Map<string, (value: unknown) => void>()
+    const connection = {
+      rpc: {
+        call(_channel: string, endpoint: string): Promise<unknown> {
+          const { promise, resolve } = Promise.withResolvers<unknown>()
+          pending.set(endpoint, resolve)
+          return promise
+        },
+      },
+    } as unknown as MstarEngineStatusConnection
+    const client = new MstarEngineStatusClient(connection, { refreshIntervalMs: 0, timeoutMs: 0 })
+    client.ensure(SESSION_ID, SESSION_CWD, 1)
+    const pick = client.selectWorkflow(SESSION_ID, SESSION_CWD, 'wf-a')
+    pending.get(SELECT_WORKFLOW_ENDPOINT)!({
+      ok: true,
+      value: { status: 'selected', sessionId: SESSION_ID, workflowId: 'wf-a' },
+    })
+    expect(await pick).toEqual({ status: 'selected', sessionId: SESSION_ID, workflowId: 'wf-a' })
+    pending.get(ENGINE_STATUS_ENDPOINT)!(servedSnapshot(payload('pre-pick')))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(client.getSnapshot().entries.get(SESSION_ID)).toBeUndefined()
+    expect(client.getSnapshot().selections.get(SESSION_ID)).toEqual({ state: 'selected', workflowId: 'wf-a' })
+    client.dispose()
+  })
+})
+

@@ -80,6 +80,18 @@
  * record degrades the observation with one warn — the ledger row is already
  * appended, the run is never affected.
  *
+ * D4 session binding: every row is attributed to the lifecycle the CARRYING
+ * session is bound to — its durable picker record (`session.header.id` +
+ * exact cwd) folded into the structural hint the shared write resolver
+ * consumes — and the record's durable `excludedBeforeSeq` is an intentional
+ * EXCLUSION floor: rows the session observed while unbound (below a pick) are
+ * never replayed, including after a restart. Rows observed while unbound are
+ * not written anywhere; their next seq is persisted as the floor (with zero
+ * workflow-dir writes) so the later pick cannot backfill them. An unreadable
+ * binding record pauses attribution for that session (no write, no floor,
+ * row re-evaluated next scan) — an unverifiable record is never treated as
+ * "no pick".
+ *
  * Observe-only (plan Global Constraints: W3 / N5): ZERO gating — every read
  * and append is try/catch-contained; a throwing session read logs one warn
  * and the run is unaffected; all appends go through `recordWorkflowEvent`
@@ -101,7 +113,7 @@ import { readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   recordWorkflowEvent,
-  resolveAgentFlowWriteDir,
+  resolveAgentFlowWriteTarget,
   truncateLedgerField,
   withWorkflowDirLock,
   WORKFLOW_LEDGER_MAX_ID_LENGTH,
@@ -110,8 +122,14 @@ import {
   WORKFLOW_LEDGER_MAX_SEQ,
 } from './agent-flow.ts'
 import type { AgentFlowWorkflowEvent } from './agent-flow.ts'
+// The durable picker record (D4): the ledger reads the carrying session's
+// binding at THIS composition edge and hands the resolver a plain hint, so
+// `agent-flow.ts` never imports the store (the store imports its lock).
+import { readWorkflowSessionBinding, updateWorkflowSessionBinding } from '../engine-status-store.ts'
 import { asRecord } from './_shared.ts'
 import type { HarnessResolver } from './_shared.ts'
+// Type-only (erased at runtime): the carrying-session hint shape.
+import type { SessionHint } from './workflow-selection.ts'
 // The SHARED P-c cache-key normalization : the run-start
 // observation MUST key the ask cache through the SAME function the gate
 // composes `metaName` with (dispatch.ts `workflowGateInputOf`), or a
@@ -615,6 +633,44 @@ export function registerWorkflowLedger(ctx: Context, resolver: HarnessResolver, 
     // depth-warn latch (reset per apply).
   const depthWarned = new Set<string>()
 
+  // The exclusion floor is a per-SCAN durable fact, not a per-row one. A cold
+  // scan / created-backfill walks EVERY row of a session log, and an unbound
+  // row would otherwise reload and rewrite the whole snapshot store under its
+  // lock — N rows costing N lock/read-modify-write cycles at plugin boot on
+  // the common unbound path. Rows queue `seq + 1` here and ONE write per
+  // session per scan persists the maximum; that is the same value the per-row
+  // writes converged to (the store merges by max), at one lock cycle.
+  const pendingFloors = new Map<string, { harnessDir: string; sessionId: string; cwd: string; floor: number }>()
+  let scanDepth = 0
+
+  /** Write one session's exclusion floor (the max a scan queued for it). */
+  const persistExclusionFloor = (harnessDir: string, sessionId: string, cwd: string, floor: number): void => {
+    const written = updateWorkflowSessionBinding(harnessDir, sessionId, cwd, { excludedBeforeSeq: floor })
+    if (written.kind === 'degraded') {
+      log('warn', `workflow-ledger exclusion floor not persisted for session ${sessionId} (${written.reason}) — attribution stays paused, the row is re-evaluated at the next scan`)
+    }
+  }
+
+  /** Flush the scan's queued floors: at most one write per session. */
+  const flushExclusionFloors = (): void => {
+    for (const pending of pendingFloors.values()) {
+      persistExclusionFloor(pending.harnessDir, pending.sessionId, pending.cwd, pending.floor)
+    }
+    pendingFloors.clear()
+  }
+
+  /** One unbound observation: queue it while a scan is running, else persist it (the live firehose sees one row per event). */
+  const observeExclusionFloor = (harnessDir: string, sessionId: string, cwd: string, floor: number): void => {
+    if (scanDepth === 0) {
+      persistExclusionFloor(harnessDir, sessionId, cwd, floor)
+      return
+    }
+    const key = `${harnessDir}\u0000${sessionId}`
+    const pending = pendingFloors.get(key)
+    if (pending === undefined) pendingFloors.set(key, { harnessDir, sessionId, cwd, floor })
+    else if (floor > pending.floor) pending.floor = floor
+  }
+
   const consume = (session: unknown, envelope: unknown): void => {
     const sid = sessionIdOf(session)
     if (sid === undefined) return
@@ -627,16 +683,54 @@ export function registerWorkflowLedger(ctx: Context, resolver: HarnessResolver, 
     // the row is re-evaluated at the next scan, so it records once a
     // workspace resolves (strictly better than a permanently-lost row).
     const cwd = (session as SessionView | null | undefined)?.header?.cwd
-    const harnessDir = resolver.forWorkspace(typeof cwd === 'string' && cwd.trim() !== '' ? cwd : undefined)
+    const workspace = typeof cwd === 'string' && cwd.trim() !== '' ? cwd : undefined
+    const harnessDir = resolver.forWorkspace(workspace)
     if (harnessDir === null) return
+    // D4 binding: this session's durable pick + no-backfill floor. A
+    // cold/created Session has no Agent, so the hint carries the picker
+    // identity (`header.id` + cwd) and never a lease holder. An UNREADABLE
+    // record is not "no pick": the row is left alone (no workflow-dir write,
+    // no floor write) and re-evaluated at the next scan rather than
+    // attributed to whichever lifecycle happens to resolve.
+    const identity: SessionHint = { sessionId: sid, ...(workspace === undefined ? {} : { cwd: workspace }) }
+    let hint = identity
+    let floor = 0
+    if (workspace !== undefined) {
+      const binding = readWorkflowSessionBinding(harnessDir, sid, workspace)
+      if (binding.kind === 'unavailable') {
+        log('warn', `workflow-ledger attribution paused for session ${sid} — binding store ${binding.reason} (no ledger write, row stays eligible)`)
+        return
+      }
+      floor = binding.binding?.excludedBeforeSeq ?? 0
+      const selected = binding.binding?.selectedWorkflowId
+      if (selected !== undefined) hint = { ...identity, selectedWorkflowId: selected }
+    }
+    // The exclusion floor: rows the session observed while UNBOUND (below its
+    // pick, or below the floor a former unbound observation persisted) are
+    // intentionally excluded — never replayed, even after a pick/restart.
+    if (row.seq < floor) return
     // v3 write path: the ledger rows AND the durable watermark live in the
-    // ACTIVE workflow dir (`workflows/<id>/` — the shared active-set
-    // resolver; never the root file, never a terminal snapshot dir). No
-    // active lifecycle → the row is SKIPPED (one-time warn) and the
-    // watermark is NOT advanced — a later re-apply re-attempts it (R-401
-    // discipline: advance only after a successful append).
-    const workflowDir = resolveAgentFlowWriteDir(harnessDir)
-    if (workflowDir === null) return
+    // ACTIVE workflow dir this session is BOUND to (`workflows/<id>/` — the
+    // shared active-set resolver; never the root file, never a terminal
+    // snapshot dir).
+    const target = resolveAgentFlowWriteTarget(harnessDir, hint)
+    const workflowDir = target.dir
+    if (workflowDir === null) {
+      // Unbound multi-active — the operator has not picked yet. Nothing is
+      // written into ANY workflow dir, but the observation must not be
+      // backfilled once the pick lands, so the row's next seq becomes this
+      // session's durable exclusion floor (queued to the end of the scan so a
+      // multi-row log costs ONE store write, not one per row). A failed floor
+      // write keeps the row eligible (attribution stays paused — never
+      // acknowledged persistence that did not happen). Other skip reasons (no
+      // active lifecycle, a broken root) are not an operator exclusion and
+      // leave the floor alone.
+      const unbound = target.selection.kind === 'error' && target.selection.code === 'workflow.selection.unbound-multi-active'
+      if (unbound && workspace !== undefined && row.seq + 1 > floor) {
+        observeExclusionFloor(harnessDir, sid, workspace, row.seq + 1)
+      }
+      return
+    }
     // Durable watermark: consult + advance (the in-memory Map is the
     // persisted file's mirror — re-applies and restarts stay deduped).
     const watermark = loadWatermark(workflowDir)
@@ -645,7 +739,9 @@ export function registerWorkflowLedger(ctx: Context, resolver: HarnessResolver, 
     // only be a re-created session with a fresh log (id reuse after
     // disposal) — restart the cursor so the new log's rows are not all
     // skipped. Live logs only grow, so this never misfires on a healthy
-    // session.
+    // session. The EXCLUSION floor above is deliberately NOT reset here: a
+    // rebuilt log must never replay rows the operator's pick already excluded
+    // (`row.seq < floor` returns before this point).
     const events = (session as SessionView).events
     if (Array.isArray(events) && events.length < next) next = 0
     if (row.seq < next) return // earlier-scan coverage — already recorded
@@ -706,13 +802,22 @@ export function registerWorkflowLedger(ctx: Context, resolver: HarnessResolver, 
   // One session's snapshot pass — the shared body of the cold scan AND the
   // `session/created` backfill (a session created after apply with a seeded
   // log is scanned exactly once here; the durable watermark keeps it
-  // idempotent across registrations).
+  // idempotent across registrations). The scan depth brackets the pass so the
+  // queued exclusion floors flush ONCE, after the last row (see
+  // `pendingFloors`); the `finally` keeps the counter honest even if a row
+  // read throws.
   const scanSession = (session: unknown): void => {
     const sid = sessionIdOf(session)
     if (sid === undefined) return
     const events = (session as SessionView).events
     if (!Array.isArray(events)) return
-    for (const envelope of events) consume(session, envelope)
+    scanDepth += 1
+    try {
+      for (const envelope of events) consume(session, envelope)
+    } finally {
+      scanDepth -= 1
+      if (scanDepth === 0) flushExclusionFloors()
+    }
   }
 
   // SESSION-CREATED BACKFILL — registered BEFORE the cold scan :

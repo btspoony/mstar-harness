@@ -39,6 +39,8 @@ import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepse
 import { DshHostAdapter, HarnessResolver, type Config } from '../src/index.ts'
 import type { DispatchGateAdvisory, StatusGateAdvisory } from '../src/index.ts'
 import { bootApp, INVALID_STATUS_V2, VALID_STATUS_V2, seedHarness, v2SnapshotWithPlans, type BootResult } from './harness.ts'
+import { readAgentFlow } from '../src/gates/agent-flow.ts'
+import { updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
 
 let booted: BootResult | undefined
 
@@ -185,11 +187,12 @@ const statusCodes = (advisory: StatusGateAdvisory | undefined): string[] => advi
 const dispatchCodes = (advisory: DispatchGateAdvisory | undefined): string[] => advisory?.result.violations.map((v) => v.code) ?? []
 
 /** One pending subagent tool call (dsh-tools registry pipeline shape). */
-function subagentExec(prompt: string): ToolExecution {
+function subagentExec(prompt: string, agent?: unknown): ToolExecution {
   return {
     callId: 'c1' as ToolExecution['callId'],
     name: 'subagent',
     arguments: { description: 'probe', prompt },
+    ...(agent === undefined ? {} : { agent: agent as ToolExecution['agent'] }),
     signal: new AbortController().signal,
     token: Symbol('dsh.tool.execution') as unknown as ToolExecutionToken,
   } as unknown as ToolExecution
@@ -546,11 +549,98 @@ describe('beforeMerge — snapshot integration_merge_lease read (v3 lease home)'
     expect(result.violations.map((v) => v.code)).toContain('lease.merge.snapshot-mismatch')
   })
 
-  it('no snapshot / no active workflow → the passed-lease shape gate stands alone (degrade edge, never a false positive)', async () => {
+  it('no snapshot / no active workflow → the passed-lease shape stands alone (degrade edge, never a false positive)', async () => {
     const app = booted = await bootApp()
     const adapter = makeAdapter()
 
     const result = await adapter.beforeMerge(validMergeLease())
     expect(result.ok).toBe(true)
+  })
+})
+
+/* ===========================================================================
+ * D4 — session hint derivation (the adapter is the store's composition edge)
+ * ========================================================================== */
+
+describe('dispatchGate — D4 session hint derivation', () => {
+  /** An agent carrying the durable identity the binding store is keyed by. */
+  const sessionAgent = (sessionId: string, cwd: string): unknown =>
+    ({ id: sessionId, session: { header: { id: sessionId, cwd } } })
+
+  /** Seed two actives so the selection NEEDS a binding to resolve. */
+  async function seedTwoActives(harnessDir: string): Promise<void> {
+    await seedHarness(harnessDir, {
+      'status.json': JSON.stringify({ version: 2, updated_at: '2026-08-19', workflows: [
+        { id: 'wf-a', type: 'plan', started_at: '2026-08-19', dir: 'workflows/wf-a' },
+        { id: 'wf-b', type: 'plan', started_at: '2026-08-19', dir: 'workflows/wf-b' },
+      ] }),
+      'workflows/wf-a/snapshot.json': v2SnapshotWithPlans('wf-a', []),
+      'workflows/wf-b/snapshot.json': v2SnapshotWithPlans('wf-b', []),
+    })
+  }
+
+  it('folds the durable pick into the hint and routes the ledger row to that lifecycle only', async () => {
+    const app = booted = await bootApp()
+    await seedTwoActives(app.harnessDir)
+    expect(updateWorkflowSessionBinding(app.harnessDir, 'sess-b', app.root, { excludedBeforeSeq: 0, selectedWorkflowId: 'wf-b' }).kind).toBe('written')
+    const adapter = makeAdapter()
+
+    const hintRead = adapter.sessionHintFor(sessionAgent('sess-b', app.root))
+    expect(hintRead).toEqual({ kind: 'ok', hint: { cwd: app.root, sessionId: 'sess-b', leaseHolder: 'sess-b', selectedWorkflowId: 'wf-b' } })
+
+    adapter.dispatchGate(VALID_WRITABLE, subagentExec(VALID_WRITABLE, sessionAgent('sess-b', app.root)))
+
+    expect(readAgentFlow(join(app.harnessDir, 'workflows/wf-b'))!.events.map((e) => e.kind)).toEqual(['dispatch'])
+    expect(readAgentFlow(join(app.harnessDir, 'workflows/wf-a'))!.events).toEqual([])
+  })
+
+  it('an UNBOUND session writes no ledger row (the gate verdict still returns) and reports the discovery state honestly', async () => {
+    const app = booted = await bootApp()
+    await seedTwoActives(app.harnessDir)
+    const adapter = makeAdapter()
+
+    // No session at all (the exec-less host-hook shape) → omitted hint.
+    expect(adapter.sessionHintFor(undefined)).toEqual({ kind: 'ok' })
+    // A session that never picked → hint without a preference.
+    expect(adapter.sessionHintFor(sessionAgent('sess-none', app.root))).toEqual({
+      kind: 'ok',
+      hint: { cwd: app.root, sessionId: 'sess-none', leaseHolder: 'sess-none' },
+    })
+
+    const result = adapter.dispatchGate(VALID_WRITABLE, subagentExec(VALID_WRITABLE, sessionAgent('sess-none', app.root)))
+    expect(result.ok).toBe(false) // the assignment still gates (anti-recursion empty binding)
+    expect(readAgentFlow(join(app.harnessDir, 'workflows/wf-a'))!.events).toEqual([])
+    expect(readAgentFlow(join(app.harnessDir, 'workflows/wf-b'))!.events).toEqual([])
+  })
+
+  it('an unreadable binding store is UNAVAILABLE — reported, no ledger row, never a fabricated empty hint', async () => {
+    const app = booted = await bootApp()
+    await seedTwoActives(app.harnessDir)
+    await seedHarness(app.harnessDir, { 'snapshots/engine-status.json': '{ not json' })
+    const logged: string[] = []
+    const adapter = makeAdapter({ log: (level, msg) => logged.push(`${level}: ${msg}`) })
+
+    const hintRead = adapter.sessionHintFor(sessionAgent('sess-x', app.root))
+    expect(hintRead).toEqual({
+      kind: 'unavailable',
+      reason: 'store-invalid-json',
+      // The STRUCTURAL evidence survives (it is real), only the durable
+      // preference is unknown.
+      hint: { cwd: app.root, sessionId: 'sess-x', leaseHolder: 'sess-x' },
+    })
+    expect(logged.some((m) => m.startsWith('warn:') && m.includes('store-invalid-json'))).toBe(true)
+
+    adapter.dispatchGate(VALID_WRITABLE, subagentExec(VALID_WRITABLE, sessionAgent('sess-x', app.root)))
+    expect(readAgentFlow(join(app.harnessDir, 'workflows/wf-a'))!.events).toEqual([])
+    expect(readAgentFlow(join(app.harnessDir, 'workflows/wf-b'))!.events).toEqual([])
+  })
+
+  it('an exec-less dispatch in a UNIQUE active harness still records (the omitted hint is not a regression)', async () => {
+    const app = booted = await bootApp({ seedV2: true })
+    const adapter = makeAdapter()
+
+    adapter.dispatchGate(VALID_WRITABLE, subagentExec(VALID_WRITABLE))
+
+    expect(readAgentFlow(join(app.harnessDir, 'workflows/wf-1'))!.events.map((e) => e.kind)).toEqual(['dispatch'])
   })
 })
