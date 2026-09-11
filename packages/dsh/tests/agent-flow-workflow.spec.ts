@@ -407,6 +407,13 @@ const SESSION_T0 = 1_700_000_000_000
  */
 interface FakeSession {
   header: { id: string; cwd?: string; delegationDepth?: number }
+  /**
+   * The installed `Session`'s durable fork-lineage cut
+   * (`inheritedEventCount`): the leading events a conversation fork copied
+   * from its parent. `0` for every unseeded session — the real constructor
+   * enforces that default, and the fixture mirrors it.
+   */
+  inheritedEventCount: number
   /** The next event's sequence number — the real `Session`'s `seq ≡ log.length` contract. */
   readonly seq: number
   eventAt(seq: number): FakeSessionEvent | undefined
@@ -429,11 +436,12 @@ let fakeSessionSeq = 0
 /** Compose a fake session whose log carries the given event data payloads (envelope seq/time assigned). */
 function fakeSession(
   seed: Array<{ type: string; data: object }>,
-  init: { id?: string; header?: Omit<FakeSession['header'], 'id'> } = {},
+  init: { id?: string; header?: Omit<FakeSession['header'], 'id'>; inheritedEventCount?: number } = {},
 ): FakeSession {
   const log: FakeSessionEvent[] = seed.map((e, i) => ({ type: e.type, seq: i, time: SESSION_T0 + i, data: e.data }))
   return {
     header: { id: init.id ?? `sess-${fakeSessionSeq++}`, ...init.header },
+    inheritedEventCount: init.inheritedEventCount ?? 0,
     log,
     get seq(): number { return log.length },
     eventAt(seq: number): FakeSessionEvent | undefined { return log[seq] },
@@ -611,6 +619,7 @@ describe('workflow-ledger consumer — cold scan over session event snapshots ()
     // …and a hostile session whose log-length read THROWS mid-scan.
     sessions.register({
       header: { id: 'parent-hostile' },
+      inheritedEventCount: 0,
       log: [],
       get seq(): number {
         throw new Error('snapshot exploded')
@@ -625,6 +634,7 @@ describe('workflow-ledger consumer — cold scan over session event snapshots ()
           throw new Error('header exploded')
         },
       },
+      inheritedEventCount: 0,
       log: [],
       get seq(): number { return 0 },
       eventAt: () => undefined,
@@ -898,6 +908,58 @@ describe('workflow-ledger consumer — cold scan over session event snapshots ()
       registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))
       const after = readAgentFlow(workflowDir)
       expect(after!.events).toHaveLength(3)
+    } finally {
+      setWorkflowLedgerLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('a FORKED child does not re-record its parent-inherited tool-workflow prefix into the same workflow dir (qc3 F-001)', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-workflow-consumer-fork-')
+    const ctx = new Context()
+    const sessions = new FakeSessionRegistry(ctx)
+    // The parent ran a workflow BEFORE the fork: three durable rows that are
+    // the PARENT's, already recorded by its own scan.
+    const prefix = [
+      { type: 'tool-workflow/run-start', data: runStart({ runId: 'run-parent' }) },
+      { type: 'tool-workflow/agent-start', data: agentStart({ runId: 'run-parent', childId: 'child-parent' }) },
+      { type: 'tool-workflow/run-end', data: runEnd({ runId: 'run-parent' }) },
+    ]
+    sessions.register(fakeSession(prefix, { id: 'parent-1', header: { cwd: root } }))
+    const priorSink = setWorkflowLedgerLogger(() => {})
+    try {
+      registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))
+      expect(readAgentFlow(workflowDir)!.events).toHaveLength(3)
+
+      // `SessionStore.fork()` copies the parent's log into the child and
+      // stamps the durable lineage cut (`inheritedEventCount` = seed length);
+      // the child then appends its OWN run. The child has no watermark cursor
+      // of its own, so the `session/created` backfill's walk must start at the
+      // cut — from 0 the parent's rows enter the SAME workflow dir a second
+      // time, attributed to the child, breaking the
+      // one-row-per-(runId, kind, envelope seq) invariant the sibling suite
+      // pins and inflating the run's member count.
+      const child = fakeSession([
+        ...prefix,
+        { type: 'tool-workflow/run-start', data: runStart({ runId: 'run-child' }) },
+      ], { id: 'child-1', header: { cwd: root }, inheritedEventCount: prefix.length })
+      sessions.create(child)
+
+      const view = readAgentFlow(workflowDir)!
+      // Newest first: the child's own row, then the parent's three.
+      expect(view.events.map((e) => e.kind)).toEqual(['workflow-run', 'workflow-run-end', 'workflow-agent', 'workflow-run'])
+      // Each run-start row is recorded ONCE, under the session that produced
+      // it — the child contributes only its own events.
+      expect(view.events.filter((e) => e.kind === 'workflow-run').map((e) => [e.runId, e.agent])).toEqual([
+        ['run-child', 'child-1'],
+        ['run-parent', 'parent-1'],
+      ])
+      expect(readFileSync(join(workflowDir, AGENT_FLOW_FILE), 'utf8').trim().split('\n')).toHaveLength(4)
+      // Idempotent across a re-apply: the cut bounds the walk while the
+      // watermark still advances for the child's OWN row.
+      registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))
+      expect(readAgentFlow(workflowDir)!.events).toHaveLength(4)
     } finally {
       setWorkflowLedgerLogger(priorSink)
       await ctx.fiber.dispose().catch(() => {})

@@ -258,7 +258,7 @@ agent-flow 账本——`{HARNESS_DIR}/agent-flow.jsonl`，即 catalog 的 `state
 
 **第四种类型 `workflow-verdict`** 由 workflow/ralph 闸门（而非本消费者）写入——每个被把关的调用一行（`tool`、`workflow`/`objective`、`mode`、判定 `ok`/`advisory`/`denied`/`ask`、违规 `code`）——见 Gates → Workflow / ralph gate。展示身份字段（`workflow` / `objective`）同样带 1024 字符上限；判定的违规码绝不猜测（P-a `workflow.name.unknown` vs P-b `workflow.lease.uncovered`）。
 
-**去重与回放范围。** 持久化水位线即去重机制：**冷热重叠**以及**插件重应用/重启**（重注册读取持久化水位线而非从空游标开始）下每个 `(runId, kind, seq)` 只产一行。**apply 之后创建**、带构造期种子日志（恢复/分叉会话——其种子从不进 firehose）的会话会在上游 `session/created` 事件上**冷扫描一次**，水位线同样保证该回填幂等。水位线 sidecar 有界（每 harness 会话数上限，驱逐优先已不在线的会话）且完全受控：水位线不可读/不可写时降级为仅内存并告警一次——重启后会重录（诚实的去重欠录，绝不丢数据、绝不阻塞）。
+**去重与回放范围。** 持久化水位线即去重机制：**冷热重叠**以及**插件重应用/重启**（重注册读取持久化水位线而非从空游标开始）下每个 `(runId, kind, seq)` 只产一行。**apply 之后创建**、带构造期种子日志（恢复/分叉会话——其种子从不进 firehose）的会话会在上游 `session/created` 事件上**冷扫描一次**，水位线同样保证该回填幂等。**分叉**会话的扫描从其 `inheritedEventCount` 开始：继承来的前缀属于父会话的历史，因此子会话只记录**自己**的事件——绝不会把父会话的行以子会话身份再记一份。水位线 sidecar 有界（每 harness 会话数上限，驱逐优先已不在线的会话）且完全受控：水位线不可读/不可写时降级为仅内存并告警一次——重启后会重录（诚实的去重欠录，绝不丢数据、绝不阻塞）。
 
 **childId 关联 + 成员计数。** `workflow-agent` 行保留已发布成员的 `childId`（子会话 id）；运行的展示 `name` 只存在于 `workflow-run` 行，面板为 agent/end 行经窗口查找解析（同一 `runId`——成员行本身不带名称）。面板把成员 COUNT 挂到 `workflow-run` 行（窗口内该 `runId` 的 `workflow-agent` 行数；窗口有界——被 ≤50 事件窗口截掉的成员如实缺席，绝不猜 0）。
 

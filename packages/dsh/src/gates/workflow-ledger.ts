@@ -9,7 +9,11 @@
  *     (never a whole-log copy), and record any `tool-workflow/*` rows
  *     already present. Constructor-seeded events (replay/resume/fork) NEVER
  *     publish on the `session/event` firehose (`firstLiveSeq`), so without
- *     the cold scan pre-restart runs would be invisible.
+ *     the cold scan pre-restart runs would be invisible. A forked
+ *     conversation's INHERITED prefix (`Session.inheritedEventCount`) is
+ *     never part of that walk: those envelopes are the fork PARENT's rows,
+ *     so a child records only its own events (never a second copy of the
+ *     parent's rows, attributed to the child, in the same workflow dir).
  *  2. LIVE FIREHOSE — `ctx.events.on('session/event', …)`: the post-commit
  *     append feed, delivered to ALL sessions for a root-context listener
  *     (scope-null event, untagged listeners admitted).
@@ -239,13 +243,15 @@ interface SessionsView {
  * the identity header (`header.id` is the session id the real Session's `id`
  * getter delegates to; `header.cwd` is the workspace), the `seq` log-length
  * contract (`seq ≡ log.length`, so `seq` is both the next event's sequence
- * and the exclusive end of the walk), and `eventAt(seq)` for ONE exact
- * envelope. `snapshotEvents()` is deliberately not part of this view — the
- * scan never copies a whole log.
+ * and the exclusive end of the walk), `eventAt(seq)` for ONE exact
+ * envelope, and `inheritedEventCount` — the DURABLE fork-lineage cut (the
+ * leading events a conversation fork copied from its parent). `snapshotEvents()`
+ * is deliberately not part of this view — the scan never copies a whole log.
  */
 interface SessionView {
   header?: { id?: unknown; cwd?: unknown; delegationDepth?: unknown }
   seq?: unknown
+  inheritedEventCount?: unknown
   eventAt?(seq: number): unknown
 }
 
@@ -279,6 +285,24 @@ function sessionIdOf(session: unknown): string | undefined {
 function sessionCwdOf(session: unknown): string | undefined {
   const cwd = (session as SessionView | null | undefined)?.header?.cwd
   return typeof cwd === 'string' && cwd.trim() !== '' ? cwd : undefined
+}
+
+/**
+ * The session's fork-lineage cut — `Session.inheritedEventCount`, the number
+ * of leading events the conversation fork copied from its parent (the
+ * constructor keeps it 0 for an unseeded session, and requires it for a
+ * seeded one). Envelopes below the cut are the PARENT's history: they were
+ * appended to the parent's log and are the parent's rows to record, so this
+ * session's scans never start below the cut. Validated like `seq`: a safe
+ * integer in `[0, WORKFLOW_LEDGER_MAX_SEQ)`; an absent member (a structural
+ * session without the field — every pre-fork surface, the test fakes) reads
+ * as `0`, which keeps the walk exactly as it was before the cut existed.
+ */
+function sessionForkCutOf(session: unknown): number {
+  const inherited = (session as SessionView | null | undefined)?.inheritedEventCount
+  return typeof inherited === 'number' && Number.isSafeInteger(inherited) && inherited >= 0 && inherited < WORKFLOW_LEDGER_MAX_SEQ
+    ? inherited
+    : 0
 }
 
 /**
@@ -834,17 +858,27 @@ export function registerWorkflowLedger(ctx: Context, resolver: HarnessResolver, 
 
   /**
    * The scan's EFFECTIVE START for one session: `max(success cursor, D4
-   * exclusion floor)` over the workflow dir the session resolves to. Rows
-   * below BOTH were already recorded (cursor) or intentionally excluded by
-   * the operator's pick (floor) — the walk never even reads them.
+   * exclusion floor, fork-lineage cut)` over the workflow dir the session
+   * resolves to. Rows below the first two were already recorded (cursor) or
+   * intentionally excluded by the operator's pick (floor) — the walk never
+   * even reads them.
    *
-   * `0` whenever either fact is unknown (no workspace, an unreadable binding
-   * record, no directed active workflow dir): the per-row guards in `consume`
-   * then decide, and its binding warn stays the one report. `0` also for a
-   * cursor PAST the captured end — a rebuilt log must be re-walked, never
+   * `0` whenever either of those facts is unknown (no workspace, an unreadable
+   * binding record, no directed active workflow dir): the per-row guards in
+   * `consume` then decide, and its binding warn stays the one report. `0` also
+   * for a cursor PAST the captured end — a rebuilt log must be re-walked, never
    * skipped by a stale-high cursor (`consume`'s own rebuild guard resets it).
    * A floor PAST the captured end is identity drift on the EXCLUSION record:
    * report it and scan nothing, never reset the intentional exclusion.
+   *
+   * The FORK cut ({@link sessionForkCutOf}) bounds the walk from below on
+   * every branch that can still record: a forked conversation copies its
+   * parent's log prefix into the child, and those envelopes are the PARENT's
+   * rows — a child walking from 0 re-appends them (attributed to the child)
+   * into the same workflow dir, duplicating one (runId, kind, envelope seq)
+   * the parent already recorded and inflating the run's member count. With
+   * the cut a child contributes only its OWN events; a cut at or past the
+   * captured end leaves no row to walk.
    */
   const scanStartSeq = (session: unknown, sid: string, endSeq: number): number => {
     const workspace = sessionCwdOf(session)
@@ -860,10 +894,11 @@ export function registerWorkflowLedger(ctx: Context, resolver: HarnessResolver, 
     }
     const selected = binding.binding?.selectedWorkflowId
     const hint: SessionHint = { sessionId: sid, cwd: workspace, ...(selected === undefined ? {} : { selectedWorkflowId: selected }) }
+    const cut = Math.max(floor, sessionForkCutOf(session))
     const workflowDir = resolveAgentFlowWriteTarget(harnessDir, hint).dir
-    if (workflowDir === null) return floor
+    if (workflowDir === null) return cut
     const cursor = loadWatermark(workflowDir).get(sid) ?? 0
-    return Math.max(floor, cursor > endSeq ? 0 : cursor)
+    return Math.max(cut, cursor > endSeq ? 0 : cursor)
   }
 
   // One session's snapshot pass — the shared body of the cold scan AND the
