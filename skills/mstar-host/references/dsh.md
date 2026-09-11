@@ -208,59 +208,102 @@ tab's `EventLogPage` log page are pure consumers of this evidence.
   `beforeDispatch` followed by the identical text as an in-loop subagent tool
   call) records two dispatch events — the surfaces are mutually exclusive by
   design; the double record is documented, not deduplicated.
-- **File / bounds**: events append to `{HARNESS_DIR}/agent-flow.jsonl` (JSON
-  Lines, one event per line; harness dirs are gitignored by convention). The
-  ledger assumes ONE dsh process writes each harness dir (single-writer):
-  concurrent dsh sessions on the same repo can lose events (the append itself
-  is near-atomic O_APPEND, but truncation is a read-modify-write) — the loss
-  only under-reports actual flow in the panel, never a gate impact. After each
-  append the file truncates to the most recent **500** events; truncation is
-  size-gated (≈500 lines' typical size — small files stay append-only) and
-  performed as an atomic temp-file rename. The catalog read returns the
-  latest-first view with a default window of **50** and a role × outcome
-  summary. A MISSING file reads as the empty view ("no actual dispatches yet"
-  — recording starts at plan merge); an unreadable file is absent evidence;
-  malformed lines are skipped, never fatal.
+- **File / bounds**: events append to the ACTIVE workflow dir —
+  `{HARNESS_DIR}/workflows/<id>/agent-flow.jsonl` (JSON Lines, one event per
+  line; harness dirs are gitignored by convention) — never the harness root:
+  with no active lifecycle the record is SKIPPED with a one-time warn. The
+  append and the size-gated truncating read-modify-write form ONE critical
+  section behind a per-workflow lockdir, so a second dsh session sharing the
+  active lifecycle cannot silently drop the other writer's lines (steady state
+  stays one writer per workflow dir); any loss only under-reports actual flow
+  in the panel, never a gate impact. After each append the file truncates to
+  the most recent **500** events; truncation is size-gated (≈500 lines'
+  typical size — small files stay append-only) and performed as an atomic
+  temp-file rename. The catalog read returns the latest-first view with a
+  default window of **50** and a role × outcome summary. A MISSING file reads
+  as the empty view ("no actual dispatches yet" — recording starts at plan
+  merge); an unreadable file is absent evidence; malformed lines are skipped,
+  never fatal.
 - **Settle = real completion pairing, never faked**: `tools/post-execute`
   IS part of the
   verified dsh-tools registry surface (`runPostExecute` dispatches the
   waterfall for every tool call — verified against the upstream source and
   pinned by a real-call probe). The pairing listener matches dispatch TOOLS
-  (Config `dispatchTools`, default `['subagent']`), looks up the exec's
-  `callId` in the apply-scoped pairing store, and branches on the verified
-  result shapes:
-  - `{ kind: 'background', taskId }` → store `taskId → dispatchRef`; the REAL
-    settle arrives via `ctx.tasks.onTaskDone` (terminal mapping
-    completed → ok / killed → denied / failed → error, `durationMs` when
-    available), wired through `ctx.inject(['tasks'])`.
+  (Config `dispatchTools`, default `['subagent', 'subagent_fork']`), looks up
+  the exec's agent-namespaced call key in the apply-scoped pairing store, and
+  branches on the verified result shapes:
+  - `{ kind: 'background', jobId }` (the registry job id, `<kind>-N`) → store
+    `jobId → dispatchRef` and the bounded job id as the ref's `taskRef`; the
+    REAL settle arrives via `ctx.inject(['jobs'])` → `jobs.onJobDone`
+    (terminal mapping completed → ok / killed → denied / failed → error,
+    `durationMs` when available). A background value without a valid `jobId` →
+    nothing mappable (no settle).
   - `{ kind: 'continuable', subagentId }` → no terminal signal this round →
-    no settle (documented limit — the child owns its turns).
+    no settle (documented limit — the child owns its turns); the value
+    authorizes the child-identity join below and nothing is copied onto a
+    settle.
   - any other successful value (foreground included) → settle `ok`; a failed
-    result (`isError`) → settle `error`.
+    result (`isError` or an `error` payload) → settle `error`. A returned
+    foreground `runId` is the settle's `childId`, extracted independently of
+    the outcome (an error settle keeps its identity without becoming `ok`).
   Pairing is apply-scoped (in-memory `callId → dispatchRef` /
-  `taskId → dispatchRef` maps created in the entry `apply`; an HMR restart
+  `jobId → dispatchRef` maps created in the entry `apply`; an HMR restart
   resets them, and completions outside the window stay unpaired). Every
   PAIRED settle carries the paired dispatch's identity (`role`/`planId`/
   `taskId` — same field names + semantics as the dispatch event; the registry
-  background-task id is never written as `taskId`, `taskRef` is reserved for
-  it). Unpaired payloads (non-dispatch tools, calls outside the pairing
-  window) record NOTHING — the ledger stays dispatch-only, never a
-  fabricated settle.
+  job id is never written as `taskId` — `taskId` stays the Assignment `Task N`
+  tag, `taskRef` is reserved for the registry id). Unpaired payloads
+  (non-dispatch tools, calls outside the pairing window) record NOTHING — the
+  ledger stays dispatch-only, never a fabricated settle.
+- **Child identity (`subagent-link`, nonterminal)**: the child session id is
+  published upstream as a PARENT-OWNED `subagent/catalog` session event
+  (`{ version: 0, childId, childCreatedAt, mode, label }`; `label` = the
+  delegation `description`), appended by the tool body — for the continuable
+  path BEFORE the tool returns. The join spans a per-dispatch CALL WINDOW: the
+  pre-execute reserves the first raw-label slot under the live parent Session
+  object and captures its `seq` as the window start; a valid `background` /
+  `continuable` result at `tools/post-execute` makes that exact candidate
+  eligible (every other outcome retires it to a tombstone; a duplicate label
+  was already refused a candidate at reservation). Eligibility walks
+  `eventAt(seq)` over `[fromSeq, session.seq)` — recovering a catalog appended
+  before the tool returned — and ONE root-context `session/event` observer
+  feeds the same matcher for a later arrival; both bound on the live
+  `session.seq`, so a catalog after eligibility still joins. A matched
+  candidate is consumed once and appends `{ v: 1, ts, kind: 'subagent-link',
+  agent?, childId, label, role, planId?, taskId?, taskRef? }` to the
+  DISPATCH's own workflow dir (`ts` = observation time), correlating the
+  catalog child back to the dispatch identity mstar recorded. It is an
+  IDENTITY record, NOT a completion: no `outcome`, no `verdict`, no `paired`
+  marker. A background one-shot link also carries its registry `taskRef`; a
+  continuable link omits it. Settle rows carry an optional `childId` — a
+  foreground `runId`, or for background only when the join has already
+  supplied one.
+- **Join bounds (honest degrade)**: NO row when the label is missing/empty,
+  the dispatch unpaired, the catalog version unknown, the mode not matching
+  the result kind, a continuable catalog naming a different child than the
+  tool returned, the slot map at capacity (500 labels per parent Session), or
+  the slot already consumed. The join is apply-scoped: no whole-history cold
+  scan and no `session/created` backfill — a catalog written before apply
+  (constructor seeds) can never label a new dispatch. Duplicate labels are
+  deterministic best-effort (first reservation + first matching catalog wins),
+  NOT proof of unique ownership. Not every provider emits a catalog — a remote
+  run without a `localAgent` produces none, so a dispatch may legitimately
+  have no link row.
 - **Catalog**: `state.agentFlow` carries the ledger view (`events` ≤ 50,
   latest-first, + `summary`); the model-facing `<mstar_engine_status>` text
   renders ONE compact `agent flow: …` line only when events > 0 (role totals
   top-5 + latest dispatch with HH:MM — the event detail lives in the
-  structured source, never the model text). A ledger record (dispatch/settle)
-  invalidates the affected workspace's TTL cache entry IMMEDIATELY
-  (apply-scoped `harnessDir → cache key` reverse map + invalidation closure)
-  → the next pre-step rebuilds and (digest
-  text change) re-injects the row — the 60 s TTL no longer bounds
-  ledger-change latency; it still bounds non-ledger staleness.
+  structured source, never the model text). A ledger record
+  (dispatch/settle/link) invalidates the affected workspace's TTL cache entry
+  IMMEDIATELY (apply-scoped `harnessDir → cache key` reverse map +
+  invalidation closure) → the next pre-step rebuilds and (digest text change)
+  re-injects the row — the 60 s TTL no longer bounds ledger-change latency; it
+  still bounds non-ledger staleness.
 - **Maintainer view**: change the ledger shape (event schema, bounds, settle
   seam) and update the projections together — `gates/agent-flow.ts` (record /
-  read / settle listener), `gates/catalog.ts` (agent-flow line + `source`
-  view) and `client/panel/graph/project-graph.ts` (the ZoneView flow/agents
-  projection) — the panel renders ONLY what the evidence shows.
+  read / settle / catalog-join listeners), `gates/catalog.ts` (agent-flow line
+  + `source` view) and `client/panel/graph/project-graph.ts` (the ZoneView
+  flow/agents projection) — the panel renders ONLY what the evidence shows.
 
 ## PM dispatch
 
