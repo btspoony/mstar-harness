@@ -33,7 +33,7 @@
  */
 import { describe, expect, it, afterEach } from 'bun:test'
 import { readFileSync } from 'node:fs'
-import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, symlink, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
@@ -41,7 +41,7 @@ import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import * as plugin from '../src/index.ts'
 import type { MstarEngineStatusPayload, MstarEngineStatusSource } from '../src/index.ts'
-import { buildCatalogPayload } from '../src/gates/catalog.ts'
+import { buildCatalogPayload, catalogCacheKey } from '../src/gates/catalog.ts'
 import { updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
 import { bootApp, FakeLoaderRegistry, seedHarness, v2Root, v2Snapshot, v2WorkflowEntry, type BootResult } from './harness.ts'
 
@@ -1160,5 +1160,80 @@ Pick.
       compassPath: join(harnessDir, 'iterations/wf-a/delivery-compass.md'),
       compassStatus: 'active',
     })
+  })
+})
+
+describe('D4 catalog identity encoding + selected compass path', () => {
+  it('two tuples that differ only by a delimiter in an opaque field do not collide', () => {
+    const harness = '/h'
+    // Adjacent sessionId / cwd: `\u0000`-join fused these into one key.
+    expect(catalogCacheKey(harness, 's', 'a\u0000b', undefined))
+      .not.toBe(catalogCacheKey(harness, 's\u0000a', 'b', undefined))
+    // Adjacent leaseHolder / selectedWorkflowId — the same delimiter-shift.
+    expect(catalogCacheKey(harness, 's', '/ws', { leaseHolder: 'x\u0000y', selectedWorkflowId: 'wf-a' }))
+      .not.toBe(catalogCacheKey(harness, 's', '/ws', { leaseHolder: 'x', selectedWorkflowId: 'y\u0000wf-a' }))
+  })
+
+  const compassDoc = (id: string, direction: string): string => [
+    '---',
+    `iteration_id: ${id}`,
+    'start_date: 2026-08-19',
+    'status: active',
+    'iteration_base_branch: dev-dsh',
+    'target_branch: dev-dsh',
+    '---',
+    '',
+    '## Direction lock',
+    '',
+    `- **Problem statement:** ${direction}`,
+    '',
+  ].join('\n')
+
+  it('refuses a compass_ref whose basename is not delivery-compass.md', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-compass-basename-'))
+    const harnessDir = join(root, 'harness')
+    await mkdir(harnessDir, { recursive: true })
+    await seedHarness(harnessDir, {
+      'status.json': v2Root([v2WorkflowEntry('wf-a', 'iteration')]),
+      'workflows/wf-a/snapshot.json': v2Snapshot('wf-a', {
+        type: 'iteration',
+        compass_ref: 'iterations/wf-a/notes.md',
+        plans: [{ id: 'plan-a', status: 'Todo' }],
+      }),
+      'iterations/wf-a/notes.md': compassDoc('wf-a', 'Stolen direction.'),
+    })
+    const app = booted = await bootApp({ root })
+    const payload = buildCatalogPayload(app.ctx, harnessDir)
+    expect(payload.state?.selection).toEqual({ kind: 'active', workflowId: 'wf-a', dir: 'workflows/wf-a' })
+    expect(payload.state?.direction).toBeNull()
+    expect(payload.iteration).toBeUndefined()
+  })
+
+  it('refuses a delivery-compass.md symlink whose target escapes the harness', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-compass-symlink-'))
+    const outsideDir = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-compass-outside-'))
+    const harnessDir = join(root, 'harness')
+    await mkdir(harnessDir, { recursive: true })
+    const outsideFile = join(outsideDir, 'delivery-compass.md')
+    await writeFile(outsideFile, compassDoc('wf-a', 'Escaped direction.'))
+    await seedHarness(harnessDir, {
+      'status.json': v2Root([v2WorkflowEntry('wf-a', 'iteration')]),
+      'workflows/wf-a/snapshot.json': v2Snapshot('wf-a', {
+        type: 'iteration',
+        compass_ref: 'iterations/wf-a/delivery-compass.md',
+        plans: [{ id: 'plan-a', status: 'Todo' }],
+      }),
+    })
+    await mkdir(join(harnessDir, 'iterations/wf-a'), { recursive: true })
+    await symlink(outsideFile, join(harnessDir, 'iterations/wf-a/delivery-compass.md'))
+    try {
+      const app = booted = await bootApp({ root })
+      const payload = buildCatalogPayload(app.ctx, harnessDir)
+      expect(payload.state?.selection).toEqual({ kind: 'active', workflowId: 'wf-a', dir: 'workflows/wf-a' })
+      expect(payload.state?.direction).toBeNull()
+      expect(payload.iteration).toBeUndefined()
+    } finally {
+      await rm(outsideDir, { recursive: true, force: true })
+    }
   })
 })

@@ -35,8 +35,8 @@
  * `DEFAULT_CATALOG_TTL_MS`, `CatalogCacheEntry` / `TurnDigest`,
  * `createCatalogInvalidation` / `CatalogInvalidation`) are entry-internal.
  */
-import { existsSync, readFileSync, readdirSync, type Dirent } from 'node:fs'
-import { isAbsolute, join, relative, sep } from 'node:path'
+import { existsSync, readFileSync, readdirSync, realpathSync, type Dirent } from 'node:fs'
+import { basename, isAbsolute, join, relative, sep } from 'node:path'
 import { type Context } from '@deepseek-ai/cordis'
 import {
   evaluatePhaseGate,
@@ -246,9 +246,11 @@ export function createCatalogInvalidation(
       if (harnessDir === null || sessionId === undefined) return
       const key = keysByHarnessDir.get(harnessDir)?.get(sessionId)
       if (key !== undefined) cache.delete(key)
-      // The digest is identity-keyed (`session id + cwd`): drop every entry of
-      // this session so the next pre-step re-emits the rebuilt row.
-      const prefix = `${sessionId}\u0000`
+      // The digest is identity-keyed (JSON tuple of session id + cwd): drop
+      // every entry of this session so the next pre-step re-emits the rebuilt
+      // row. The prefix is the injective first-field encoding, not a raw
+      // delimiter, so a session id that is a prefix of another cannot steal it.
+      const prefix = `[${JSON.stringify(sessionId)},`
       for (const digestKey of [...digests.keys()]) {
         if (digestKey.startsWith(prefix)) digests.delete(digestKey)
       }
@@ -263,20 +265,24 @@ export function createCatalogInvalidation(
  * durable pick — cwd and session id are already in the tuple). Two sessions in
  * the same cwd therefore never share a payload, and a picker commit is a
  * different key rather than a mutated entry.
+ *
+ * Encoded as a JSON string array so a delimiter (NUL / quote / comma) inside
+ * an opaque field cannot fuse two distinct tuples — `\u0000`-join was not
+ * collision-free for those values.
  */
-function catalogCacheKey(
+export function catalogCacheKey(
   harnessDir: string | null,
   sessionId: string,
   cwd: string,
   hint: SessionHint | undefined,
 ): string {
-  return [
+  return JSON.stringify([
     harnessDir ?? '',
     sessionId,
     cwd,
     hint?.leaseHolder ?? '',
     hint?.selectedWorkflowId ?? '',
-  ].join('\u0000')
+  ])
 }
 
 /**
@@ -830,9 +836,10 @@ function compassDirection(compassPath: string): string | null {
 
 /**
  * The SELECTED lifecycle's own iteration compass (D4): its snapshot
- * `compass_ref` must be a harness-relative path inside the harness, name an
- * existing `delivery-compass.md` whose frontmatter `iteration_id` equals the
- * selected snapshot id, and declare a steering `status` (`active` | `locked`).
+ * `compass_ref` must be a harness-relative path inside the harness, basename
+ * `delivery-compass.md`, whose realpath stays inside `{HARNESS_DIR}` (a
+ * symlink whose target escapes is rejected), whose frontmatter `iteration_id`
+ * equals the selected snapshot id, and whose `status` is `active` | `locked`.
  * No directory enumeration: a session never borrows another iteration's
  * direction or phase gate, and a lifecycle whose compass has completed stops
  * steering.
@@ -850,9 +857,18 @@ function selectedCompass(
   const ref = snapshot.compass_ref
   if (typeof ref !== 'string' || ref.trim() === '' || isAbsolute(ref)) return undefined
   const compassPath = join(harnessDir, ref)
-  const inside = relative(harnessDir, compassPath)
-  if (inside === '' || inside === '..' || inside.startsWith(`..${sep}`) || isAbsolute(inside)) return undefined
+  if (!pathInside(harnessDir, compassPath)) return undefined
+  if (basename(compassPath) !== 'delivery-compass.md') return undefined
   if (!existsSync(compassPath)) return undefined
+  let resolvedHarness: string
+  let resolvedCompass: string
+  try {
+    resolvedHarness = realpathSync(harnessDir)
+    resolvedCompass = realpathSync(compassPath)
+  } catch {
+    return undefined
+  }
+  if (!pathInside(resolvedHarness, resolvedCompass)) return undefined
   let doc: Record<string, unknown>
   try {
     doc = parseCompassFrontmatter(compassPath)
@@ -862,6 +878,15 @@ function selectedCompass(
   if (doc.status !== 'active' && doc.status !== 'locked') return undefined
   if (doc.iteration_id !== workflowId) return undefined
   return { iterationId: workflowId, compassPath, doc }
+}
+
+/**
+ * Lexical or canonical containment: `candidate` is a path strictly inside
+ * `root` (not `root` itself, not a `..` escape, not an absolute relative).
+ */
+function pathInside(root: string, candidate: string): boolean {
+  const rel = relative(root, candidate)
+  return rel !== '' && rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel)
 }
 
 /**
@@ -1062,10 +1087,14 @@ export interface TurnDigest {
  * Digest key of one agent: its SESSION identity (`session.header.id`, the
  * picker key and the catalog cache key) + its session workspace. A stub
  * without a session id falls back to its own agent id, and dev stubs without
- * either share the `<unknown>` bucket per workspace.
+ * either share the `<unknown>` bucket per workspace. JSON-encoded with the
+ * cache key so a delimiter inside either field cannot collide two identities.
  */
 function agentDigestKey(agent: unknown, cwd: string | undefined): string {
-  return `${sessionHeaderIdOf(agent) ?? agentIdOf(agent) ?? '<unknown>'}\u0000${cwd ?? ''}`
+  return JSON.stringify([
+    sessionHeaderIdOf(agent) ?? agentIdOf(agent) ?? '<unknown>',
+    cwd ?? '',
+  ])
 }
 
 /**
