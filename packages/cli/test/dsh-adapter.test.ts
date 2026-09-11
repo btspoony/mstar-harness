@@ -12,7 +12,8 @@
  *   - dry-run: no subprocess at all, notes preview the would-run commands;
  *   - idempotency: lines already present in the composed loader tree are
  *     skipped (`skipped-existing` notes, zero add calls) — including rows
- *     that are present but disabled;
+ *     that are present but disabled, and except a fallbacks row whose
+ *     profile install is not the pin (re-added at the pin — the drift case);
  *   - probe degradation: a failing `--dump-config` probe or a malformed
  *     (format-drifted) dump yields an explicit warning note while the adds
  *     still run (pinned no-op keeps it idempotent);
@@ -22,9 +23,10 @@
  *   - `--dry-run` + `--no-fallbacks`: previews a single add with zero
  *     subprocesses.
  * Doctor (`runInstallDoctor`): reports each plugin row's capability state
- * with the AC-2 words `uninstalled` / `disabled` / `mounted` — issue states
- * (uninstalled/disabled) land in `errors` (CLI exits 1), every state also
- * gets a worded notes line (healthy runs show `mounted`), and an unusable
+ * with the AC-2 words `uninstalled` / `disabled` / `mounted`, plus `drifted`
+ * for a fallbacks row installed at a non-pinned version — issue states
+ * (uninstalled/disabled/drifted) land in `errors` (CLI exits 1), every state
+ * also gets a worded notes line (healthy runs show `mounted`), and an unusable
  * probe degrades into an explicit error rather than a silent pass. Disabled
  * rows are pinned in all literal marker shapes: standalone `enabled: false`,
  * standalone `disabled: true`, and inline `disabled: true` on the `- id:` /

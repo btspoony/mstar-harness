@@ -26,6 +26,11 @@
  *     row) but capability off: fallbacksMounted false, advisory false.
  *   Cell 3 (mounted): patch reverted → doctor exit 0, both rows `mounted`,
  *     healthy; runtime seeds = Task 1 e2e (13 roles, cited).
+ *   Cell 4 (drifted): the fallbacks row downgraded in the profile by a real
+ *     `dsh plugin add` of the previous release → doctor exit 1 with
+ *     `dsh-llm-fallbacks@<pin>: drifted (installed <old>, pinned <pin>)`
+ *     (the pinned spec is NOT echoed as `mounted`); `init --target dsh`
+ *     re-adds the pin → doctor exit 0, `mounted`.
  */
 import { afterEach, describe, expect, test } from 'bun:test'
 import { existsSync, readFileSync } from 'node:fs'
@@ -50,6 +55,12 @@ const DSH_PROFILE = 'web'
 const MSTAR_SPEC = '@mstar-harness/dsh'
 /** The fallbacks plugin spec (doctor capability words). */
 const FALLBACKS_SPEC = `dsh-llm-fallbacks@${DSH_LLM_FALLBACKS_VERSION}`
+/** A published release on the SAME peer line as the pin (`^0.1.5-rc.2`),
+ * used to materialize a version-drifted profile with a real install. Drift
+ * is just `installed ≠ pin`, so this only has to be a published version that
+ * is not the pinned one — 0.5.1 is the release the pin moved away from. */
+const PREVIOUS_FALLBACKS_VERSION = '0.5.1'
+const PREVIOUS_FALLBACKS_SPEC = `dsh-llm-fallbacks@${PREVIOUS_FALLBACKS_VERSION}`
 
 /** Skip-guard probe (Task 1 pattern): `dsh` bin on PATH + registry
  * reachability. A missing prerequisite SKIPS with the reason printed —
@@ -355,6 +366,40 @@ describe.skipIf(skipReason !== undefined)('install-surface doctor three-state e2
       // Runtime half of cell 3 (roles seeded) = Task 1 installed-deployment
       // e2e (non-skip PASS: 13 mstar ids seeded, personas non-empty) — cited.
       console.log('install-doctor-e2e: cell3 runtime seeded evidence = Task 1 install-e2e (13 roles seeded, cited)')
+    }
+
+    // --- CELL 4: the fallbacks row installed at a NON-pinned version (the
+    // operator upgrade path). Real downgrade install; doctor must fail loud
+    // instead of echoing the pinned spec as `mounted`, and `init --target dsh`
+    // must re-add the pin and return doctor to exit 0. ---
+    {
+      runDsh(dshHome, ['plugin', '--profile', DSH_PROFILE, 'add', PREVIOUS_FALLBACKS_SPEC], 300_000)
+      const driftDump = runDsh(dshHome, ['--profile', DSH_PROFILE, '--dump-config'], 30_000)
+      // The loader row name stays version-free — the drift is only visible in
+      // the profile's installed node_modules, which doctor reads.
+      expect(driftDump).toContain('name: dsh-llm-fallbacks')
+      const doctor = runCliDoctor(dshHome)
+      console.log(`install-doctor-e2e: cell4(drifted ${PREVIOUS_FALLBACKS_VERSION}) doctor exit ${doctor.exitCode}`)
+      for (const line of doctor.stdout.split('\n').filter((line) => line.trim() !== '')) console.log(`install-doctor-e2e: cell4 doctor | ${line}`)
+      expect(doctor.exitCode).toBe(1)
+      expect(doctor.stdout).toContain(`${MSTAR_SPEC}: mounted`)
+      expect(doctor.stdout).toContain(
+        `${FALLBACKS_SPEC}: drifted (installed ${PREVIOUS_FALLBACKS_VERSION}, pinned ${DSH_LLM_FALLBACKS_VERSION})`,
+      )
+      expect(doctor.stdout).toContain(`${FALLBACKS_SPEC} is drifted`)
+      expect(doctor.stdout).toContain('Run: mstar-harness init --target dsh')
+
+      const initRepair = runCliInit(dshHome)
+      for (const line of initRepair.split('\n').filter((line) => line.trim() !== '')) console.log(`install-doctor-e2e: cli(repair) | ${line}`)
+      expect(initRepair).not.toContain(`skipped-existing: ${FALLBACKS_SPEC}`)
+      expect(initRepair).toContain(`installed: ${FALLBACKS_SPEC}`)
+
+      const repaired = runCliDoctor(dshHome)
+      console.log(`install-doctor-e2e: cell4(repaired) doctor exit ${repaired.exitCode}`)
+      for (const line of repaired.stdout.split('\n').filter((line) => line.trim() !== '')) console.log(`install-doctor-e2e: cell4 repaired doctor | ${line}`)
+      expect(repaired.exitCode).toBe(0)
+      expect(repaired.stdout).toContain(`${FALLBACKS_SPEC}: mounted`)
+      expect(repaired.stdout).toContain('Doctor result: healthy')
     }
   }, { timeout: 600_000 })
 })

@@ -103,10 +103,6 @@ function readInstalledFallbacksVersion(profileDir: string): string | null {
   return null;
 }
 
-function fallbacksLoaderRowInstalled(installed: Set<string>): boolean {
-  return installed.has(DSH_FALLBACKS_SPEC) || installed.has(DSH_FALLBACKS_LOADER_NAME);
-}
-
 function fallbacksVersionDrifted(profileDir: string): boolean {
   if (!FALLBACKS_VERSION_SHAPE_RE.test(DSH_LLM_FALLBACKS_VERSION)) return false;
   const installedVersion = readInstalledFallbacksVersion(profileDir);
@@ -252,11 +248,9 @@ function runInit(scope: Scope, dryRun: boolean, initFlags?: InstallInitFlags) {
     if (!dryRun && (installed.has(spec) || installed.has(dshLoaderName(spec)))) {
       const isFallbacks = spec === DSH_FALLBACKS_SPEC;
       const disabledRow = disabledLoaderNames.has(spec) || disabledLoaderNames.has(dshLoaderName(spec));
-      const needsVersionAlign =
-        isFallbacks &&
-        fallbacksLoaderRowInstalled(installed) &&
-        fallbacksVersionDrifted(profileDir) &&
-        !disabledRow;
+      // The enclosing condition already proved this spec's row is present, so
+      // drift is the only reason to fall through to the versioned re-add.
+      const needsVersionAlign = isFallbacks && fallbacksVersionDrifted(profileDir) && !disabledRow;
       if (!needsVersionAlign) {
         notes.push(`skipped-existing: ${spec} (already installed in profile ${DSH_PROFILE})`);
         continue;
