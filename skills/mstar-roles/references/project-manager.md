@@ -104,6 +104,8 @@ In invoke-based hosts (OpenCode / Cursor Task / Codex with callable multi-agent 
 
 Host invoke/dispatch details: `mstar-host` → active host reference and `references/parallel-dispatch.md`.
 
+**dsh:** mstar **stops arming** a goal — dsh progress is the native workflow (workflow snapshot phases + dispatch gates + **subagent settle notifications**), never a `/goal` objective or goal round loop. Phase 2 is a PM-local loop (dispatch → wait for the child's settle notification → next dispatch); a dispatched child owning the critical path means **wait**, not a duplicate work unit. Rule → `mstar-host` → `references/dsh.md`.
+
 Dispatch mechanics and templates:
 `references/project-manager/dispatch-and-assignment.md`.
 

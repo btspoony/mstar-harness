@@ -50,7 +50,7 @@ When PM dispatches **N >= 2** concurrent assignees (QC tri-review, dual-track im
 
 ## `/goal` directive (host-agnostic)
 
-**Applicability is by capability, not host identity**: any host that exposes a `/goal` command (currently Codex Goal Mode and omp; other code agents may add it later) attaches a persistent objective to the thread. Rule — **always set the goal to running the complete flow to the end**, never a sub-stage:
+**Applicability is by capability, not host identity**: any host that exposes a `/goal` command (currently Codex Goal Mode and omp; other code agents may add it later) attaches a persistent objective to the thread. **Exception — dsh:** mstar **stops arming** a goal there and never uses a `/goal` objective or a goal round loop as the progression driver — dsh runs on the native workflow (workflow snapshot phases + dispatch gates + **subagent settle notifications**; Phase 2 is a PM-local dispatch → wait for the child's settle notification → next dispatch, and a manually armed `/goal` stays outside mstar's flow). Full rule → `references/dsh.md`. Rule — **always set the goal to running the complete flow to the end**, never a sub-stage:
 
 - **Advancing an iteration**: set the goal to **complete the entire iteration flow** (`iteration-start → per-plan cycles → iteration-close → PR delivery → PR merge-ready loop`). Do not set a sub-stage goal (e.g. "finish Phase 1 only").
 - **Advancing non-iteration work** (single plan / hotfix / one-off task): set the goal to **complete the entire per-plan flow** (`specify → clarify → plan → tasks → implement → plan QC tri + QA gate → Done`). Do not set a sub-stage goal (e.g. "write the plan" or "implement one task").

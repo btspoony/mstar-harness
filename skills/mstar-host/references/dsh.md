@@ -347,6 +347,23 @@ the "queued messages" dock instead of reaching the parent (observed on dsh).
 The closing message is the guaranteed delivery channel; reserve `report` for
 MID-turn findings that change what the parent should do next.
 
+### Progress discipline — native workflow, never `/goal`
+
+dsh progress is driven by the **native workflow**: the workflow snapshot phases
++ the dispatch gates + **subagent settle notifications**. mstar **stops arming**
+a goal on dsh — the surviving bridge is advisory-only (no `create` / `edit` /
+`complete` / `pause` / `resume`, no goal read) — so no goal round loop drives
+mstar work here. Never drive a dsh session with a `/goal` objective or a goal
+round loop: `goal-round-driver` opens a round whenever the goal is active +
+armed and the agent is idle, and it knows nothing about running subagents, so
+an operator who arms `/goal` manually can still get rounds firing while a
+dispatched child owns the critical path.
+
+**Phase 2 continuous execution is a PM-local loop**: dispatch → **wait for the
+child's settle notification** → next dispatch. When a dispatched child owns the
+critical path, the correct action is to **wait** — not to open another unit of
+work against the same worktree.
+
 ### QC default
 
 - **`Execution mode: sdd`**: **N=3** `subagent` dispatches — one per QC seat
