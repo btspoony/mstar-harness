@@ -36,8 +36,8 @@ or a custom profile).
   automatically by `ClientModuleHostService` — no separate profile layer or
   install step. It registers a **right-Sidebar page tab type** (`id:
   '@mstar-harness/dsh'`, `kind: 'mstar-workflow'`, one guide-page capsule at
-  `order: 20`) labeled **"MStar 工作流" / "MStar
-  Workflow"** rendering the latest `mstar-engine` catalog **anchor** row
+  `order: 20`) labeled **"启明星工作流" / "Morning
+  Star Workflow"** rendering the latest `mstar-engine` catalog **anchor** row
   — the persisted source is the bare first-party `plugin` arm
   (`{ kind: 'plugin', plugin: 'mstar-engine', form: 'catalog' }`, no
   payload members; the anchor reader also accepts the legacy
@@ -45,7 +45,7 @@ or a custom profile).
   `/api/mstar/engineStatus` endpoint (the gateway owns the route; the browser
   half calls `connection.rpc.call('/api', 'mstar/engineStatus', { args: { sessionId, cwd } })`
   and renders the session's stored snapshot, or an explicit unavailable
-  reason). **MStar Workflow layout**: a narrow-column shell bound to the
+  reason). **Morning Star Workflow layout**: a narrow-column shell bound to the
   sidebar pane's definite height — exactly three zones: the **section nav**
   (任务迭代 / 代理执行 / 事件记录; `data-mstar-tab-nav`), the panel-owned
   **single scroll body** (`[data-mstar-scroll]` — the ONLY `overflow-y`
