@@ -151,24 +151,24 @@ function EventDetailsBody({
       <DetailField
         field="expected"
         label={t('event-log.field.expected')}
-        // A SETTLE row is a completion record — the
-        // expected-role seat is not applicable there (the projection always
-        // sets `expected: false` on settles), so it renders「—」like the
-        // `settled` seat (T2-Min-2 precedent); a WORKFLOW row is not a role
-        // dispatch either — same「—」(plan  
-        // ; only a DISPATCH row renders the honest yes/no.
-        value={entry.eventKind === 'settle' || isWorkflowKind(entry.eventKind) ? '' : entry.expected ? t('event-log.yes') : t('event-log.no')}
+        // A SETTLE row is a completion record — the expected-role seat is
+        // not applicable there, so it renders「—」like the `settled` seat;
+        // a WORKFLOW row is not a role dispatch either; a `subagent-link`
+        // row is an identity record, not a completion. Only a DISPATCH
+        // row renders the honest yes/no.
+        value={entry.eventKind === 'settle' || entry.eventKind === 'subagent-link' || isWorkflowKind(entry.eventKind) ? '' : entry.expected ? t('event-log.yes') : t('event-log.no')}
       />
       <DetailField
         field="settled"
         label={t('event-log.field.settled')}
-        // T2-Min-2: a SETTLE row IS the completion record — the field is not
-        // applicable there, so it renders「—」like any missing value (a flat
-        // 'no' would misread as "not settled"); a WORKFLOW row has no settle
-        // pairing either ; a dispatch row renders the honest yes/no.
-        value={entry.eventKind === 'settle' || isWorkflowKind(entry.eventKind) ? '' : entry.settled ? t('event-log.yes') : t('event-log.no')}
+        // A SETTLE row IS the completion record — the field is not
+        // applicable there, so it renders「—」(a flat 'no' would misread
+        // as "not settled"); a WORKFLOW row has no settle pairing; a
+        // `subagent-link` is identity, not completion. Dispatch: yes/no.
+        value={entry.eventKind === 'settle' || entry.eventKind === 'subagent-link' || isWorkflowKind(entry.eventKind) ? '' : entry.settled ? t('event-log.yes') : t('event-log.no')}
       />
       <DetailField field="duration" label={t('event-log.field.duration')} value={entry.durationMs === null ? '' : `${entry.durationMs}ms`} />
+      <DetailField field="child-id" label={t('event-log.field.child-id')} value={source?.childId ?? ''} />
       {/* Workflow run identity :
           name / member count / stopReason — the workflow-run row's face is
           the run; the end row's is the terminal reason; missing →「—». */}
