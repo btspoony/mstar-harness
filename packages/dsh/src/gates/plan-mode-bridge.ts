@@ -15,7 +15,7 @@
  * Policy: plan mode is ON iff the SELECTED lifecycle's own
  * iteration compass still steers (the snapshot's `compass_ref`, whose
  * frontmatter `iteration_id` must equal the snapshot id and whose `status`
- * must be `active|locked` — D4: the FIRST-active-compass scan is gone, so a
+ * must be `active|locked` — the FIRST-active-compass scan is gone, so a
  * session never borrows another lifecycle's iteration gate) AND the selected
  * snapshot carries ≥1 plan row in the `Todo` state (the Prepare window — a
  * plan registered, not yet started; the engine plan-status vocabulary,
@@ -30,8 +30,8 @@
  * conservatively excluded — plan mode is a session-level selection and the
  * root agent drives the harness workflow). Evaluation points: the
  * `agent/session-start` listener (root filter inside) plus the EXISTING
- * `subagent/start` decision point (the parentSession root walk — {@link
- * rootAgentOf}, the goal-bridge precedent): a mid-session Prepare flip
+ * `subagent/start` decision point (the shared `parentSession` root walk —
+ * {@link rootAgentOf}): a mid-session Prepare flip
  * (plan row appears/advances past `Todo`) re-evaluates the root's flag
  * without extra seams.
  *
@@ -49,9 +49,9 @@ import { asRecord, sessionHintOf, STATUS_FILE } from './_shared.ts'
 import type { HarnessResolver } from './_shared.ts'
 import { readWorkflowSessionBinding } from '../engine-status-store.ts'
 // The shared root discriminator and the `subagent/start` root walk (explicit
-// no-barrel imports — plan Task 4b; goal-bridge.ts does not import this
-// module, so there is no cycle).
-import { isRootLikeAgent, rootAgentOf } from './goal-bridge.ts'
+// no-barrel imports — `gates/steering.ts` imports no bridge, so there is no
+// cycle).
+import { isRootLikeAgent, rootAgentOf } from './steering.ts'
 // v3 relocation : the Todo probe
 // reads the SELECTED workflow snapshot's plan rows — the root v1 `plans[]`
 // home is gone. The bridge is a READ-only mirror, so the read resolver
@@ -298,7 +298,7 @@ export function syncPlanMode(agent: unknown, input: PlanModeSyncInput): boolean 
 /**
  * Register the planMode bridge: an `agent/session-start` listener (root
  * filter inside — root and children alike fire, `runtime-types.ts:217`) plus
- * the EXISTING `subagent/start` decision point (the goal-bridge precedent),
+ * the EXISTING `subagent/start` decision point,
  * resolving the delegating ROOT via the shared `parentSession` walk — the
  * two edges are idempotent (`'noop'` when already in target — no churn). The
  * planMode service is an OPTIONAL seam (`ctx.get('planMode')` structural

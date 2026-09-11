@@ -112,15 +112,15 @@ export interface FlowEventView {
   /** `${ts}-${kind}-${index}` — stable id (index = position in the projected window). */
   id: string
   ts: number
-  /** The ledger kind verbatim: dispatch | settle | the three workflow kinds | any unknown kind string (generic row). */
-  kind: 'dispatch' | 'settle' | 'workflow-run' | 'workflow-agent' | 'workflow-run-end' | (string & {})
+  /** The ledger kind verbatim: dispatch | settle | subagent-link | the three workflow kinds | any unknown kind string (generic row). */
+  kind: 'dispatch' | 'settle' | 'subagent-link' | 'workflow-run' | 'workflow-agent' | 'workflow-run-end' | (string & {})
   /** `Execute as`; '' for settle rows without a paired identity and for workflow/unknown rows. */
   role: string
   planId: string | null
   taskId: string | null
   taskCategory: string | null
   agent: string | null
-  /** dispatch → dispatched|advisory|denied; settle → ok|error|denied; workflow/unknown → unknown (spec §2.4). */
+  /** dispatch → dispatched|advisory|denied; settle → ok|error|denied; link/workflow/unknown → unknown (spec §2.4). */
   status: FlowEventStatus
   /** `role` ∈ the EXPECTED_ROLE_FLOW role union (spec §2.3 exact-string match). */
   expected: boolean
@@ -143,8 +143,19 @@ export interface FlowEventView {
   readonly label?: string
   /** Run-member phase (workflow-agent rows only, when carried). */
   readonly phase?: string
-  /** The published member's child session identity (workflow-agent rows only). */
+  /**
+   * Child session identity when the source supplied one: workflow-agent —
+   * the published member; settle — the foreground `runId` or a background
+   * catalog join; `subagent-link` — the required catalog child id. Omitted
+   * when the row carried none. Never a registry job id (that is `taskRef`).
+   */
   readonly childId?: string
+  /**
+   * Settle + `subagent-link` rows: the registry background-job id, when
+   * carried. A jobs-registry key, never a child session id. Omitted when
+   * the row carried none.
+   */
+  readonly taskRef?: string
   /** Terminal workflow run reason (workflow-run-end rows only). */
   readonly stopReason?: string
 }
@@ -347,13 +358,15 @@ export type AgentEntityStatus =
 /**
  * The canvas degradation-note classification (spec §8): the projection
  * decides the note from the RAW ledger (never a UI-side heuristic on the
- * entity list): `empty` = 0 events; `settle-only` = events present but NO
- * dispatch row (all settle / garbage rows — genuinely no dispatch evidence);
- * `null` = dispatch evidence present (incl. anonymous dispatch rows — they
- * are evidence, not settle-only). The unreadable-ledger case is the SEPARATE
- * `degraded` flag, not a note value.
+ * entity list): `empty` = 0 events; `link-only` = the readable window
+ * contains ONLY `subagent-link` rows (identity records — neither dispatch
+ * nor settlement evidence); `settle-only` = events present but NO dispatch
+ * and not link-only (settles / garbage / workflow — genuinely no dispatch
+ * evidence); `null` = dispatch evidence present (incl. anonymous dispatch
+ * rows — they are evidence, not settle-only). The unreadable-ledger case
+ * is the SEPARATE `degraded` flag, not a note value.
  */
-export type AgentZoneNote = 'empty' | 'settle-only' | null
+export type AgentZoneNote = 'empty' | 'settle-only' | 'link-only' | null
 
 /**
  * The projected agents zone (spec §4 + §6.2): the EXPECTED_ROLE_FLOW stage
@@ -987,9 +1000,9 @@ function isCurrentIterationDispatch(
  * collides.
  *
  * Canvas note: `note` classifies the readable ledger in
- * the projection ('empty' / 'settle-only' / null — see `AgentZoneNote`); the
- * UI consumes it directly and never infers settle-only from the entity list
- * (garbage rows would fake it).
+ * the projection ('empty' / 'link-only' / 'settle-only' / null — see
+ * `AgentZoneNote`); the UI consumes it directly and never infers
+ * settle-only from the entity list (garbage rows would fake it).
  *
  * Current-plan note: `activePlanId` / `activePlanCount` ride the
  * `state.plans[]` InProgress rows (catalog order) — the Phase 2 group label
@@ -1044,9 +1057,16 @@ export function projectAgents(source: MstarEngineStatusPayload | null, currentSt
   const empty = rawEvents.length === 0
   // The canvas note is a PROJECTION decision on the raw ledger (the UI
   // never infers ledger semantics from the entity list): 0 events → 'empty';
-  // events but NO dispatch row (all settle / garbage) → 'settle-only';
+  // only `subagent-link` rows → 'link-only' (identity, not settlement);
+  // events but NO dispatch (settle / garbage / workflow) → 'settle-only';
   // any dispatch row (anonymous included — it IS dispatch evidence) → null.
-  const note: AgentZoneNote = empty ? 'empty' : entries.some((e) => e.view.kind === 'dispatch') ? null : 'settle-only'
+  const note: AgentZoneNote = empty
+    ? 'empty'
+    : entries.some((e) => e.view.kind === 'dispatch')
+      ? null
+      : entries.length > 0 && entries.every((e) => e.view.kind === 'subagent-link')
+        ? 'link-only'
+        : 'settle-only'
 
   // The「当前迭代」filter: entities derive ONLY from the current iteration's
   // dispatch rows. Settle rows are always kept (they carry the pairing
@@ -1179,6 +1199,7 @@ function flowEventOf(
     taskCategory?: unknown; agent?: unknown; verdict?: unknown; outcome?: unknown; durationMs?: unknown
     paired?: unknown
     runId?: unknown; name?: unknown; seq?: unknown; label?: unknown; phase?: unknown; childId?: unknown
+    taskRef?: unknown
     stopReason?: unknown
   } | null | undefined
   const kind = str(row?.kind)
@@ -1204,6 +1225,8 @@ function flowEventOf(
     }
   }
   if (kind === 'settle') {
+    const childId = str(row?.childId)
+    const taskRef = str(row?.taskRef)
     return {
       id: `${ts}-${kind}-${index}`,
       ts,
@@ -1223,6 +1246,33 @@ function flowEventOf(
       // Paired-identity presence (settle rows only — the exact-pairing marker).
       ...(row?.paired === true ? { paired: true } : {}),
       durationMs: count(row?.durationMs),
+      ...(childId !== null ? { childId } : {}),
+      ...(taskRef !== null ? { taskRef } : {}),
+    }
+  }
+  if (kind === 'subagent-link') {
+    // Explicit branch BEFORE the generic fallback: a link is an IDENTITY
+    // record, not a completion. Preserve the dispatch identity
+    // (role/planId/taskId/agent) instead of discarding it; no paired marker,
+    // no stage-completion effect, taskCategory always null.
+    const childId = str(row?.childId)
+    const taskRef = str(row?.taskRef)
+    return {
+      id: `${ts}-${kind}-${index}`,
+      ts,
+      kind,
+      role,
+      planId: str(row?.planId),
+      taskId: str(row?.taskId),
+      taskCategory: null,
+      agent: str(row?.agent),
+      status: 'unknown',
+      expected: matched !== undefined,
+      stage: matched ?? null,
+      settled: false,
+      durationMs: null,
+      ...(childId !== null ? { childId } : {}),
+      ...(taskRef !== null ? { taskRef } : {}),
     }
   }
   // Workflow kinds + unknown kinds: the generic base row (no gate status —

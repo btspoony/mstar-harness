@@ -55,11 +55,12 @@ import type { DispatchGateAdvisory } from './gates/dispatch.ts'
 import {
   AGENT_FLOW_LOGGER,
   registerSettleListener,
-  recordTaskSettle,
+  registerSubagentCatalogListener,
+  recordJobSettle,
   setAgentFlowInvalidator,
   setAgentFlowLogger,
 } from './gates/agent-flow.ts'
-import type { AgentFlowPairing, TaskDoneSnapshot } from './gates/agent-flow.ts'
+import type { AgentFlowPairing, JobDoneSnapshot } from './gates/agent-flow.ts'
 import {
   ROLE_PERSONA_LOGGER,
   probeRolePersonaSeam,
@@ -394,10 +395,14 @@ export function apply(ctx: Context, config: Config): void {
   // the window stay unpaired (documented honest degrade; no cross-apply
   // pairing). Shared by the dispatch recording (callId → dispatchRef via the
   // adapter), the post-execute settle listener (reads callId, writes the
-  // background taskId) and the onJobDone wiring (reads taskId).
+  // background jobId) and the onJobDone wiring (reads jobId). The
+  // `catalogBySession` slot map carries the call-window child-identity join
+  // (raw label → candidate, keyed by the live parent Session object) through
+  // the same lifetime: a catalog outside the apply window joins nothing.
   const pairing: AgentFlowPairing = {
     dispatchByCallId: new Map(),
-    dispatchByTaskId: new Map(),
+    dispatchByJobId: new Map(),
+    catalogBySession: new WeakMap(),
   }
   // The host-facing HostAdapter facade — the fs-intent / pre-execute gates
   // route through it (host hooks and in-plugin gates share ONE code path).
@@ -600,6 +605,16 @@ export function apply(ctx: Context, config: Config): void {
     }
   })
   registerSettleListener(ctx, config, pairing)
+  // Subagent-catalog join (live half): ONE root-context `session/event`
+  // observer registered here — before any execution can start — that joins a
+  // parent-owned `subagent/catalog` (the child session identity upstream
+  // publishes) back to the dispatch ref its pre-execute reserved the label
+  // for, appending a nonterminal `subagent-link` row. The catch-up half runs
+  // at each dispatch's post-execute eligibility; neither half scans history,
+  // so a catalog predating this apply joins nothing (honest, apply-scoped —
+  // the same boundary as the pairing store it reads). Contained: a throwing
+  // observation degrades to a log line and never affects the session append.
+  registerSubagentCatalogListener(ctx, pairing)
 
   // Workflow-ledger session-event consumer : a cold scan over `ctx.sessions.list()`
   // at apply (durable `tool-workflow/*` rows already in each session's events
@@ -626,20 +641,20 @@ export function apply(ctx: Context, config: Config): void {
   })
   registerWorkflowLedger(ctx, resolver, adapter.workflowAskCache)
 
-  // Goal bridge : one-way mirror
-  // of the active iteration objective into the dsh goal service with a
-  // finite `maxGoalRounds` cap (autonomous Phase 2 bounded) — the module
-  // sink is bound to the dsh logger (agent-flow ledger precedent) and the
-  // registration is optional-unit: the goals service is a structural
-  // `ctx.get('goals')` read (no peer dependency), absent → one debug log +
-  // boot unaffected. The bridge never writes harness state (`{HARNESS_DIR}`
-  // / status.json stay SSOT — one-way mirror, mstar-host `/goal` rule).
+  // Goal bridge : observe-only blocked-goal advisory — ONE
+  // `session/event` firehose listener (a `goal/change` envelope whose goal is
+  // blocked logs ONE warn with the block code, a bounded objective summary and
+  // the project-register residual pointer). The module sink is bound to the
+  // dsh logger (agent-flow ledger precedent). mstar NEVER writes dsh goal
+  // state — no `create` / `edit` / `complete` / `pause` / `resume` — so the
+  // plugin can never re-arm a goal an operator paused; the bridge writes
+  // nothing at all (`{HARNESS_DIR}` / status.json stay SSOT).
   setGoalBridgeLogger((level, message) => {
     const logger = ctx.logger(GOAL_BRIDGE_LOGGER)
     if (level === 'debug') logger.debug(message)
     else logger.warn(message)
   })
-  registerGoalBridge(ctx, resolver, config)
+  registerGoalBridge(ctx, resolver)
 
   // PlanMode bridge :
   // the Prepare-phase flag flip — a one-way mirror of the harness Prepare
@@ -659,9 +674,9 @@ export function apply(ctx: Context, config: Config): void {
   })
   registerPlanModeBridge(ctx, resolver)
 
-  // Background-task settle pairing — the SECOND real completion seam: a
-  // terminal task snapshot (completed/killed/failed) pairs via the registry
-  // task id (stored by the post-execute background branch) to the dispatch
+  // Background-job settle pairing — the SECOND real completion seam: a
+  // terminal job snapshot (completed/killed/failed) pairs via the registry
+  // job id (stored by the post-execute background branch) to the dispatch
   // that started it → recordSettle (completed→ok / killed→denied /
   // failed→error; durationMs = finishedAt − startedAt when available).
   // Deferred with `ctx.inject(['jobs'], …)` — the SAME optional-unit
@@ -675,21 +690,21 @@ export function apply(ctx: Context, config: Config): void {
   // are effect-scoped and unwind with this apply.
   ctx.inject(['jobs'], (jobsCtx) => {
     // The dsh-jobs service is an OPTIONAL seam — the plugin deliberately
-    // carries no runtime/type import of it (structural `TaskDoneSnapshot`
+    // carries no runtime/type import of it (structural `JobDoneSnapshot`
     // contract in agent-flow.ts), so the runtime `jobsCtx.jobs` is cast to
     // the ONE consumed surface: `onJobDone(listener)` with the upstream
     // `JobDoneListener = (snapshot, owner) => void | PromiseLike<void>`.
-    const jobs = (jobsCtx as unknown as { jobs: { onJobDone(listener: (snapshot: TaskDoneSnapshot, _owner: unknown) => void): unknown } }).jobs
+    const jobs = (jobsCtx as unknown as { jobs: { onJobDone(listener: (snapshot: JobDoneSnapshot, _owner: unknown) => void): unknown } }).jobs
     try {
       // Registration contained  for symmetry with the
       // rest of the seam wiring: the listener body itself is already
-      // try/catch-contained (`recordTaskSettle`), but a THROWING registration
+      // try/catch-contained (`recordJobSettle`), but a THROWING registration
       // would surface as an unhandled child-fiber error at an arbitrary later
       // time (whenever the jobs service appears) — contained here instead
       // (a failed registration only degrades background settle pairing,
       // honestly: the child fiber still unwinds with this apply).
       jobs.onJobDone((snapshot, _owner) => {
-        recordTaskSettle(snapshot, pairing)
+        recordJobSettle(snapshot, pairing)
       })
     } catch (error) {
       ctx.logger(AGENT_FLOW_LOGGER).error(

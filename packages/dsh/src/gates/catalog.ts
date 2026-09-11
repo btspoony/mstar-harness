@@ -416,15 +416,18 @@ function renderEngineStatusCatalog(source: MstarEngineStatusPayload): string {
 /**
  * The model-facing agent-flow line (spec §2.2): ONE compact row, emitted only
  * when the ledger has events. Role totals collapse the role × outcome summary
- * (top 5 by count); `latest` is the newest dispatch's `role→planId#taskId`
- * with the local HH:MM timestamp. The event detail lives in the structured
+ * (top 5 by count) over DISPATCH/settle ACTIVITY: `subagent-link` rows share
+ * their dispatch's role but are IDENTITY records, not activity, so they are
+ * excluded from the totals (they stay in the structured `source.agentFlow`
+ * summary). `latest` is the newest dispatch's `role→planId#taskId` with the
+ * local HH:MM timestamp. The event detail lives in the structured
  * `source.agentFlow` only — the model text must not balloon.
  * @param flow - the ledger view (non-empty events).
  */
 function renderAgentFlowLine(flow: AgentFlowView): string {
   const byRole = new Map<string, number>()
   for (const row of flow.summary) {
-    if (row.role === '') continue
+    if (row.role === '' || row.outcome === 'subagent-link') continue
     byRole.set(row.role, (byRole.get(row.role) ?? 0) + row.count)
   }
   const top = [...byRole.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5)

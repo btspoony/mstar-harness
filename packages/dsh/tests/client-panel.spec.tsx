@@ -2681,7 +2681,7 @@ describe('workflow panel — T9 event-log page: partitions + rows + details + em
     expect(html).toContain('<summary')
     // The event detail body carries the FULL source fields — planId/taskId/
     // taskCategory come from the id→FlowEventView backfill (T1-Min-3).
-    for (const field of ['role', 'agent', 'stage', 'plan', 'task', 'category', 'time', 'kind', 'status', 'expected', 'settled', 'duration']) {
+    for (const field of ['role', 'agent', 'stage', 'plan', 'task', 'category', 'time', 'kind', 'status', 'expected', 'settled', 'duration', 'child-id']) {
       expect(html).toContain(`data-event-log-field="${field}"`)
     }
     expect(html).toContain('data-event-log-field="plan"')
@@ -2701,17 +2701,17 @@ describe('workflow panel — T9 event-log page: partitions + rows + details + em
 
   it('missing fields degrade to 「—」 in the detail body — never fabricated (T1-Min-2 ts)', async () => {
     // A sparse dispatch: no role/agent/plan/task/category/stage, ts 0, no
-    // duration — every one of those detail fields must render「—」.
+    // duration, no child session id — every one of those detail fields must render「—」.
     const html = eventsHtml(flowSource([
       { ts: 0, kind: 'dispatch', role: '', planId: null, taskId: null, taskCategory: null, agent: null },
     ]))
-    // 8 missing fields: role / agent / stage / plan / task / category / time / duration.
-    expect(html.match(/data-event-log-missing="true"/g)).toHaveLength(8)
+    // 9 missing fields: role / agent / stage / plan / task / category / time / duration / child-id.
+    expect(html.match(/data-event-log-missing="true"/g)).toHaveLength(9)
     expect(html).toContain('data-event-log-field="time"')
     // ts 0 → no fabricated clock time on the row either.
     expect(html).not.toContain('data-event-log-time=')
     // Each missing value renders「—」(spec §5).
-    expect(html.match(/—/g)).toHaveLength(8)
+    expect(html.match(/—/g)).toHaveLength(9)
     // The status/kind/expected/settled seats still render honest values.
     expect(html).toContain('data-event-log-status="dispatched"')
   })
@@ -2725,11 +2725,11 @@ describe('workflow panel — T9 event-log page: partitions + rows + details + em
     const settleField = html.match(/data-event-log-field="settled"[\s\S]*?<\/div>/)?.[0] ?? ''
     expect(settleField).toContain('data-event-log-missing="true"')
     expect(settleField).toContain('>—</span>')
-    // The settle row's detail body: 7 not-applicable fields (role/stage/
-    // plan/task/category/settled/expected — the expected-role seat is
-    // not applicable on a completion record); agent/time/kind/status/duration
-    // render their honest values.
-    expect(html.match(/data-event-log-missing="true"/g)).toHaveLength(7)
+    // The settle row's detail body: 8 missing fields (role/stage/
+    // plan/task/category/settled/expected/child-id — the expected-role seat
+    // is not applicable on a completion record; child-id is absent on this
+    // legacy settle); agent/time/kind/status/duration render their honest values.
+    expect(html.match(/data-event-log-missing="true"/g)).toHaveLength(8)
     // A dispatch row (not settled) still renders the honest 'no'.
     const dispatchHtml = eventsHtml(flowSource([
       { ts: 2_000, kind: 'dispatch', role: 'fullstack-dev', planId: 'plan-x', taskId: 'T1', taskCategory: 'logic', agent: 'a-1', verdict: 'advisory' },
@@ -2878,6 +2878,59 @@ describe('workflow panel — T9 event-log page: partitions + rows + details + em
     }, 'zh')
     expect(zhEmpty).toContain('暂无记录')
   })
+
+  it('child-id detail renders the value on a link row and 「—」 on a legacy row without the field', () => {
+    const linkHtml = eventsHtml(flowSource([{
+      ts: 4_000,
+      kind: 'subagent-link',
+      role: 'fullstack-dev',
+      planId: 'plan-x',
+      taskId: 'T2',
+      taskCategory: null,
+      agent: 'parent-sess',
+      childId: 'child-sess',
+      taskRef: 'background-1',
+    }]))
+    expect(linkHtml).toContain('data-event-log-field="child-id"')
+    const linkChild = linkHtml.match(/data-event-log-field="child-id"[\s\S]*?<\/div>/)?.[0] ?? ''
+    expect(linkChild).toContain('data-event-log-missing="false"')
+    expect(linkChild).toContain('>child-sess</span>')
+    // Identity record — expected/settled are not completion booleans.
+    const linkExpected = linkHtml.match(/data-event-log-field="expected"[\s\S]*?<\/div>/)?.[0] ?? ''
+    expect(linkExpected).toContain('data-event-log-missing="true"')
+    expect(linkExpected).toContain('>—</span>')
+    const linkSettled = linkHtml.match(/data-event-log-field="settled"[\s\S]*?<\/div>/)?.[0] ?? ''
+    expect(linkSettled).toContain('data-event-log-missing="true"')
+    expect(linkSettled).toContain('>—</span>')
+
+    const legacyHtml = eventsHtml(flowSource([
+      { ts: 2_000, kind: 'dispatch', role: 'fullstack-dev', planId: 'plan-x', taskId: 'T1', taskCategory: 'logic', agent: 'a-1', verdict: 'advisory' },
+    ]))
+    const legacyChild = legacyHtml.match(/data-event-log-field="child-id"[\s\S]*?<\/div>/)?.[0] ?? ''
+    expect(legacyChild).toContain('data-event-log-missing="true"')
+    expect(legacyChild).toContain('>—</span>')
+  })
+
+  it('child-id detail degrades to 「—」 on a link row with no childId', () => {
+    const html = eventsHtml(flowSource([{
+      ts: 5_000,
+      kind: 'subagent-link',
+      role: 'fullstack-dev',
+      planId: 'plan-x',
+      taskId: 'T2',
+      taskCategory: null,
+      agent: 'parent-sess',
+    }]))
+    const child = html.match(/data-event-log-field="child-id"[\s\S]*?<\/div>/)?.[0] ?? ''
+    expect(child).toContain('data-event-log-missing="true"')
+    expect(child).toContain('>—</span>')
+  })
+
+  it('event-log.field.child-id exists in both locale dictionaries', () => {
+    expect(en['event-log.field.child-id']).toBe('Child session ID')
+    expect(zh['event-log.field.child-id']).toBe('子会话 ID')
+  })
+
 })
 
 /* ---------------------------------------------------------------------------
@@ -2993,6 +3046,25 @@ describe('workflow panel — agent list page (spec panel-tabs §4/§6.2, plan si
     expect(anonymousDispatch).not.toContain('data-agents-note')
     // An anonymous dispatch folds into the general bucket → one running row.
     expect(anonymousDispatch).toContain('data-agent-summary-executing="1"')
+  })
+
+  it('a link-only window does not render the settle-only agents note', () => {
+    const html = agentsHtml(flowSource([{
+      ts: 4_000,
+      kind: 'subagent-link',
+      role: 'fullstack-dev',
+      planId: 'plan-x',
+      taskId: 'T2',
+      taskCategory: null,
+      agent: 'parent-sess',
+      childId: 'child-sess',
+    }]))
+    expect(html).not.toContain('data-agents-note="settle-only"')
+    expect(html).not.toContain('Settle records only (no dispatch evidence)')
+    expect(html).toContain('data-agents-note="link-only"')
+    expect(html).toContain('Identity records only (no dispatch evidence)')
+    expect(en['flow.link-only']).toBe('Identity records only (no dispatch evidence)')
+    expect(zh['flow.link-only']).toBe('仅有身份记录（无派发证据）')
   })
 
   it('mounts the Legend on the agents page: ONLY the 3 role-card status entries; the collaboration-edge / layout swatches are gone ', async () => {
