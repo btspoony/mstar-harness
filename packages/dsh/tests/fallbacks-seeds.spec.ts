@@ -97,6 +97,7 @@ class FlakyFirstDeclareService implements SeedsServiceView {
         persona: d.persona,
         seeded: true,
         personaOverridden: false,
+        source: 'external',
         seedPersona: d.persona,
       })),
     }
@@ -135,9 +136,9 @@ async function runSeeds(
   return { view, records }
 }
 
-/** One seeded readback row with the upstream `EffectiveRole` shape. */
+/** One seeded readback row with the upstream `EffectiveRole` shape (0.5.2 derives `source` at read time: the declaring set's label, `user` iff unseeded — these fakes declare via the public API with no `set`, i.e. `external`). */
 function seededRow(id: string, seedPersona: string, overridden = false): EffectiveRolesReadback['roles'][number] {
-  return { id, persona: overridden ? `operator override of ${id}` : seedPersona, seeded: true, personaOverridden: overridden, seedPersona }
+  return { id, persona: overridden ? `operator override of ${id}` : seedPersona, seeded: true, personaOverridden: overridden, source: 'external', seedPersona }
 }
 
 /** One structured boot-log record (the cordis logger `Message` subset the
@@ -251,8 +252,8 @@ describe('declareMstarSeeds — persona payload + merge-preserve + gates', () =>
           // Preserved: seeded non-mstar id — batch persona is seedPersona, NOT the operator override.
           seededRow('designer', 'The designer default.', true),
           seededRow('librarian', 'The librarian default.'),
-          // Not preserved: unseeded row.
-          { id: 'reviewer', persona: 'x', seeded: false, personaOverridden: false },
+          // Not preserved: unseeded row (0.5.2 derives `source: 'user'`).
+          { id: 'reviewer', persona: 'x', seeded: false, personaOverridden: false, source: 'user' },
           // Not preserved: mstar id — declared from the MIRROR instead of the readback seed.
           seededRow('architect', 'Architect readback seed.', true),
         ],

@@ -123,7 +123,8 @@ function captureLogs(): { captured: Array<[AdvisoryLogLevel, string]>; restore: 
 /**
  * One effective readback row with the upstream `EffectiveRole` shape (Task 3
  * — the advisory's seeds-aware path reads the EFFECTIVE state, not the raw
- * `roles.list`).
+ * `roles.list`). `source` is derived at read time by 0.5.2: the declaring
+ * set's label when seeded, `user` otherwise.
  */
 function effRow(
   id: string,
@@ -132,7 +133,7 @@ function effRow(
   personaOverridden = false,
   seedPersona?: string,
 ): EffectiveRolesReadback['roles'][number] {
-  const row: EffectiveRolesReadback['roles'][number] = { id, persona, seeded, personaOverridden }
+  const row: EffectiveRolesReadback['roles'][number] = { id, persona, seeded, personaOverridden, source: seeded ? 'external' : 'user' }
   if (seeded && seedPersona !== undefined) row.seedPersona = seedPersona
   return row
 }

@@ -255,7 +255,12 @@ describe('native persona channel — SubagentStartRequest.persona merge', () => 
   })
 
   it('(e) composition with dsh-llm-fallbacks applied → persona still merged (seeds + advisory stay the fallbacks surface)', async () => {
-    const { app, provider } = await bootWithProvider('fake-spawn', { personaCapability: true })
+    // 0.5.2 provides `llm-fallbacks` inside `ctx.inject(["settings"], …)`:
+    // without the settings seam the plugin applies but registers no service,
+    // so the composition would not actually be a fallbacks composition. Same
+    // seam the probe test boots (the real dsh app always composes
+    // `dsh-settings-file` before the plugin layers).
+    const { app, provider } = await bootWithProvider('fake-spawn', { personaCapability: true }, { settingsService: 'fake' })
     // The real registry plugin applied as a row (same entry-shape cast the
     // Task 1 probe test applies).
     const fallbacksPlugin = fallbacks as unknown as Parameters<Context['plugin']>[0]

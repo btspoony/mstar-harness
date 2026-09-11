@@ -34,17 +34,18 @@
  * synchronous/watch change notification; patch-merge `update`), so the
  * config loop the readback depends on CLOSES one tick after the declare
  * window: the provider's preset self-declare lands through the same seam
- * and the RED readback carries the 7 preset ids while the 13 mstar ids are
- * missing — the exact live failure shape (never the fake-api-absence shape:
- * a readback of `[]` plus an `installSection is not a function` provider
- * TypeError).
+ * and the RED readback carries only the upstream preset ids while the 13
+ * mstar ids are missing — the exact live failure shape (never the
+ * fake-api-absence shape: a readback of `[]` plus an `installSection is not
+ * a function` provider TypeError).
  *
  * Falsifiability: RED on the unfixed tree — the effective readback holds
- * only the 7 upstream preset ids, the settings namespace carries no mstar
+ * only the upstream preset ids, the settings namespace carries no mstar
  * row, and the boot log carries one `mstar/fallbacks-seeds` ERROR record
  * (the contained declaration failure). GREEN after the bounded-retry fix:
- * 20 ids (13 mirror-derived mstar + 7 presets), every mstar row seeded with
- * a non-empty persona, the 13 rows persisted, and a clean boot log.
+ * the full union (mirror-derived mstar ids ∪ the installed upstream preset
+ * ids), every mstar row seeded with a non-empty persona, the 13 rows
+ * persisted, and a clean boot log.
  *
  * Boot-log capture: cordis's `LoggerService` registers a default buffer
  * exporter at construction — `ctx.logger.buffer` — but that buffer's level
@@ -167,7 +168,7 @@ afterEach(async () => {
 
 describe('fallbacks seeds boot-order — single REAL-package boot converges the mstar role seeds', () => {
   test.skipIf(skipReason !== undefined)(
-    'plain boot (mstar row first, real dsh-llm-fallbacks, deferred fake settings): 20-id taxonomy, persisted mstar rows, clean boot log',
+    'plain boot (mstar row first, real dsh-llm-fallbacks, deferred fake settings): full id taxonomy, persisted mstar rows, clean boot log',
     async () => {
       // 1. Expected id set — MIRROR-DERIVED mstar ids (never hardcoded) ∪
       //    the installed upstream preset ids (runtime anchor, not a local
@@ -210,8 +211,9 @@ describe('fallbacks seeds boot-order — single REAL-package boot converges the 
       const readback = service!.getEffectiveRoles()
       const effectiveIds = new Set(readback.roles.map((row) => row.id))
 
-      // 5. RED assertion — the effective taxonomy carries ALL 20 ids after
-      //    a plain boot. Failure output names the missing mstar ids.
+      // 5. RED assertion — the effective taxonomy carries ALL expected ids
+      //    (mstar ∪ upstream presets) after a plain boot. Failure output
+      //    names the missing mstar ids.
       const missing = [...expectedIds].filter((id) => !effectiveIds.has(id)).sort()
       expect(missing, 'every expected role id is effective after a single plain boot (no dispose/re-apply)').toEqual([])
 

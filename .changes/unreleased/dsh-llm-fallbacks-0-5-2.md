@@ -1,0 +1,14 @@
+---
+packages: dsh, cli, engine
+---
+
+- **`dsh-llm-fallbacks` upgraded `0.4.1` → `0.5.2`** (the line adapted to `@deepseek-ai/dsh-*` `^0.1.5-rc.2`): the dsh devDependency, the new `@mstar-harness/engine` `DSH_LLM_FALLBACKS_VERSION` export, and the CLI `init --target dsh` install spec are the EXACT `0.5.2`. Two hand-written literals only (`packages/dsh/package.json` + the engine export); the CLI adapter and the dsh tests import the export, and a lockstep test fails if the two ever drift.
+- **The 0.5.x role-identity delivery composes with mstar's own persona channel.** The plugin resolves the Assignment `**Execute as**:` role and delivers that role's persona on the child's start; mstar already delivers its native `SubagentStartRequest.persona`, and an explicit caller-set `request.persona` WINS in both (each side returns early when a persona is already present) — an Assignment-header persona is never replaced after the bump.
+- **Upstream preset roles shrank on this line.** `presetRoles` no longer bundles `designer` / `librarian`: 5 preset ids, so the seeded taxonomy union is 13 mstar ids + 5 presets = 18 (was 20). The coexistence and boot-order drift anchors follow the installed upstream value, so the next preset change fails those suites instead of drifting silently.
+- 0.5.2 provides its `llm-fallbacks` service INSIDE `ctx.inject(['settings'], …)` — a composition without a `settings` service applies the plugin but registers no service (the real dsh app always composes `dsh-settings-file`). The consumed nine-key service surface is unchanged.
+
+<!-- CN -->
+- **`dsh-llm-fallbacks` 由 `0.4.1` 升级到 `0.5.2`**（适配 `@deepseek-ai/dsh-*` `^0.1.5-rc.2` 的版本线）：dsh devDependency、新增的 `@mstar-harness/engine` 导出 `DSH_LLM_FALLBACKS_VERSION`、以及 CLI `init --target dsh` 的安装 spec 均为精确 `0.5.2`。手写字面量只有两处（`packages/dsh/package.json` + engine 导出）；CLI 适配器与 dsh 测试改为 import 该导出，并有 lockstep 测试在两者漂移时失败。
+- **0.5.x 的 role-identity 交付与 mstar 自身的 persona 通道兼容共存。** 插件会解析 Assignment 的 `**Execute as**:` 角色并为其子会话投递该角色 persona；mstar 已通过原生 `SubagentStartRequest.persona` 投递，而显式由调用方设置的 `request.persona` 在两边都优先（任一方已在 persona 存在时提前返回）——升级后 Assignment 头部声明的 persona 不会被替换。
+- **该版本线上的上游 preset 角色变少了。** `presetRoles` 不再内置 `designer` / `librarian`：preset 为 5 个 id，种子化后的分类并集为 13 个 mstar id + 5 个 preset = 18（原为 20）。coexistence 与 boot-order 的漂移锚点改为跟随已安装的上游取值，因此下一次 preset 变更会让这些测试失败，而不是静默漂移。
+- 0.5.2 在 `ctx.inject(['settings'], …)` 内部提供其 `llm-fallbacks` 服务——缺少 `settings` 服务的组合会应用插件但不注册服务（真实 dsh 应用总会组合 `dsh-settings-file`）。对外消费的九键服务面不变。
