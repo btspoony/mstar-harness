@@ -265,10 +265,13 @@ tab's `EventLogPage` log page are pure consumers of this evidence.
   `continuable` result at `tools/post-execute` makes that exact candidate
   eligible (every other outcome retires it to a tombstone; a duplicate label
   was already refused a candidate at reservation). Eligibility walks
-  `eventAt(seq)` over `[fromSeq, session.seq)` — recovering a catalog appended
-  before the tool returned — and ONE root-context `session/event` observer
-  feeds the same matcher for a later arrival; both bound on the live
-  `session.seq`, so a catalog after eligibility still joins. A matched
+  `eventAt(seq)` over `[fromSeq, end)`, where `end` is the session's `seq`
+  CAPTURED when the candidate became eligible — recovering a catalog appended
+  before the tool returned — while ONE root-context `session/event` observer
+  feeds the same matcher for later arrivals against the session's CURRENT
+  `seq`: only that live observer follows the session forward, so a catalog
+  appended after eligibility still joins through it (the catch-up scan stays
+  frozen at its captured endpoint). A matched
   candidate is consumed once and appends `{ v: 1, ts, kind: 'subagent-link',
   agent?, childId, label, role, planId?, taskId?, taskRef? }` to the
   DISPATCH's own workflow dir (`ts` = observation time), correlating the
@@ -279,10 +282,12 @@ tab's `EventLogPage` log page are pure consumers of this evidence.
   foreground `runId`, or for background only when the join has already
   supplied one.
 - **Join bounds (honest degrade)**: NO row when the label is missing/empty,
-  the dispatch unpaired, the catalog version unknown, the mode not matching
-  the result kind, a continuable catalog naming a different child than the
-  tool returned, the slot map at capacity (500 labels per parent Session), or
-  the slot already consumed. The join is apply-scoped: no whole-history cold
+  the dispatch unpaired, a background result carries no valid `jobId` (the
+  reserved candidate is retired — nothing mappable: no settle, no link),
+  the catalog version unknown, the mode not matching the result kind,
+  a continuable catalog naming a different child than the tool returned,
+  the slot map at capacity (500 labels per parent Session), or the slot
+  already consumed. The join is apply-scoped: no whole-history cold
   scan and no `session/created` backfill — a catalog written before apply
   (constructor seeds) can never label a new dispatch. Duplicate labels are
   deterministic best-effort (first reservation + first matching catalog wins),
