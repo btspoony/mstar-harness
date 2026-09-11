@@ -221,6 +221,15 @@ export function detectDshPluginVersion(dshHome: string = defaultDshHome()): stri
   );
 }
 
+/** Installed `dsh-llm-fallbacks` version in the default profile `web` under
+ * `$DSH_HOME` (same profile dir as init/doctor). */
+export function detectDshFallbacksPluginVersion(dshHome: string = defaultDshHome()): string | null {
+  return versionFromJsonFile(
+    path.join(dshHome, DSH_PROFILES_DIR, DSH_PROFILE, "node_modules", "dsh-llm-fallbacks", "package.json"),
+  );
+}
+
+
 // ---------------------------------------------------------------------------
 // kimi
 // ---------------------------------------------------------------------------

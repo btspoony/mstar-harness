@@ -34,7 +34,7 @@
  * injected via PATH.
  */
 import { describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { dshAdapter } from "../src/adapters/dsh";
@@ -162,6 +162,24 @@ function addLines(fake: FakeDsh): string[] {
  * detail after the marker, so exact element match would be wrong). */
 function expectNote(notes: string[], marker: string): void {
   expect(notes.some((note) => note.startsWith(marker))).toBe(true);
+}
+
+
+/** Seed `profiles/web/node_modules/dsh-llm-fallbacks/package.json` under a temp $DSH_HOME. */
+function seedProfileFallbacksPkg(dshHome: string, version: string): void {
+  const pkgDir = join(dshHome, "profiles", "web", "node_modules", "dsh-llm-fallbacks");
+  mkdirSync(pkgDir, { recursive: true });
+  writeFileSync(join(pkgDir, "package.json"), JSON.stringify({ name: "dsh-llm-fallbacks", version }));
+}
+
+function withDshHomeAndPath(
+  dshHome: string,
+  fake: FakeDsh,
+  fallbacksVersion: string | undefined,
+  fn: () => void,
+): void {
+  if (fallbacksVersion !== undefined) seedProfileFallbacksPkg(dshHome, fallbacksVersion);
+  withEnv("DSH_HOME", dshHome, () => withPath(fake.binDir, fn));
 }
 
 const MSTAR_SPEC = "@mstar-harness/dsh";
@@ -384,9 +402,10 @@ describe("dshAdapter.runInstallInit", () => {
 
   test("idempotent: already-installed lines are skipped (skipped-existing)", () => {
     const fake = makeFakeDsh(DUMP_BOTH);
+    const dshHome = mkdtempSync(join(tmpdir(), "dsh-home-"));
     try {
       let result: { location: string; notes: string[] } | undefined;
-      withPath(fake.binDir, () => {
+      withDshHomeAndPath(dshHome, fake, DSH_LLM_FALLBACKS_VERSION, () => {
         result = dshAdapter.runInstallInit?.("global", false);
       });
       expect(result).toBeDefined();
@@ -396,6 +415,25 @@ describe("dshAdapter.runInstallInit", () => {
       expectNote(result!.notes, `skipped-existing: ${MSTAR_SPEC}`);
       expectNote(result!.notes, `skipped-existing: ${FALLBACKS_SPEC}`);
     } finally {
+      rmSync(dshHome, { recursive: true, force: true });
+      fake.remove();
+    }
+  });
+
+  test("fallbacks loader row present but node_modules semver drifted: re-runs versioned add", () => {
+    const fake = makeFakeDsh(DUMP_BOTH);
+    const dshHome = mkdtempSync(join(tmpdir(), "dsh-home-"));
+    try {
+      let result: { location: string; notes: string[] } | undefined;
+      withDshHomeAndPath(dshHome, fake, "0.5.1", () => {
+        result = dshAdapter.runInstallInit?.("global", false);
+      });
+      expect(result).toBeDefined();
+      expectNote(result!.notes, `skipped-existing: ${MSTAR_SPEC}`);
+      expect(addLines(fake)).toEqual([`plugin --profile web add ${FALLBACKS_SPEC}`]);
+      expectNote(result!.notes, `installed: ${FALLBACKS_SPEC}`);
+    } finally {
+      rmSync(dshHome, { recursive: true, force: true });
       fake.remove();
     }
   });
@@ -502,9 +540,10 @@ describe("dshAdapter.runInstallInit", () => {
 describe("dshAdapter.runInstallDoctor", () => {
   test("both rows mounted: healthy, capability words present in notes", () => {
     const fake = makeFakeDsh(DUMP_BOTH);
+    const dshHome = mkdtempSync(join(tmpdir(), "dsh-home-"));
     try {
       let result: { location: string; errors: string[]; notes?: string[] } | undefined;
-      withPath(fake.binDir, () => {
+      withDshHomeAndPath(dshHome, fake, DSH_LLM_FALLBACKS_VERSION, () => {
         result = dshAdapter.runInstallDoctor?.("global");
       });
       expect(result).toBeDefined();
@@ -512,6 +551,24 @@ describe("dshAdapter.runInstallDoctor", () => {
       expectNote(result!.notes ?? [], `${MSTAR_SPEC}: mounted`);
       expectNote(result!.notes ?? [], `${FALLBACKS_SPEC}: mounted`);
     } finally {
+      rmSync(dshHome, { recursive: true, force: true });
+      fake.remove();
+    }
+  });
+
+  test("fallbacks mounted in dump but profile semver drifted: drifted error", () => {
+    const fake = makeFakeDsh(DUMP_BOTH);
+    const dshHome = mkdtempSync(join(tmpdir(), "dsh-home-"));
+    try {
+      let result: { location: string; errors: string[]; notes?: string[] } | undefined;
+      withDshHomeAndPath(dshHome, fake, "0.5.1", () => {
+        result = dshAdapter.runInstallDoctor?.("global");
+      });
+      expect(result).toBeDefined();
+      expectNote(result!.notes ?? [], `${FALLBACKS_SPEC}: drifted`);
+      expect(result!.errors.some((line) => line.includes(`${FALLBACKS_SPEC} is drifted`))).toBe(true);
+    } finally {
+      rmSync(dshHome, { recursive: true, force: true });
       fake.remove();
     }
   });
@@ -557,9 +614,10 @@ describe("dshAdapter.runInstallDoctor", () => {
 
   test("mstar missing: errors carry the uninstalled issue", () => {
     const fake = makeFakeDsh(DUMP_MSTAR_MISSING);
+    const dshHome = mkdtempSync(join(tmpdir(), "dsh-home-"));
     try {
       let result: { location: string; errors: string[]; notes?: string[] } | undefined;
-      withPath(fake.binDir, () => {
+      withDshHomeAndPath(dshHome, fake, DSH_LLM_FALLBACKS_VERSION, () => {
         result = dshAdapter.runInstallDoctor?.("global");
       });
       expect(result).toBeDefined();
@@ -567,15 +625,17 @@ describe("dshAdapter.runInstallDoctor", () => {
       expectNote(result!.notes ?? [], `${FALLBACKS_SPEC}: mounted`);
       expect(result!.errors.some((line) => line.includes(`${MSTAR_SPEC} is uninstalled`))).toBe(true);
     } finally {
+      rmSync(dshHome, { recursive: true, force: true });
       fake.remove();
     }
   });
 
   test("mstar disabled: errors carry the disabled issue", () => {
     const fake = makeFakeDsh(DUMP_MSTAR_DISABLED);
+    const dshHome = mkdtempSync(join(tmpdir(), "dsh-home-"));
     try {
       let result: { location: string; errors: string[]; notes?: string[] } | undefined;
-      withPath(fake.binDir, () => {
+      withDshHomeAndPath(dshHome, fake, DSH_LLM_FALLBACKS_VERSION, () => {
         result = dshAdapter.runInstallDoctor?.("global");
       });
       expect(result).toBeDefined();
@@ -583,6 +643,7 @@ describe("dshAdapter.runInstallDoctor", () => {
       expectNote(result!.notes ?? [], `${FALLBACKS_SPEC}: mounted`);
       expect(result!.errors.some((line) => line.includes(`${MSTAR_SPEC} is disabled`))).toBe(true);
     } finally {
+      rmSync(dshHome, { recursive: true, force: true });
       fake.remove();
     }
   });
@@ -688,13 +749,16 @@ describe("CLI doctor --target dsh (fake dsh on PATH)", () => {
 
   test("both mounted: exit 0 and capability words are printed on the healthy run (AC-2)", () => {
     const fake = makeFakeDsh(DUMP_BOTH);
+    const dshHome = mkdtempSync(join(tmpdir(), "dsh-home-"));
+    seedProfileFallbacksPkg(dshHome, DSH_LLM_FALLBACKS_VERSION);
     try {
-      const result = runCli(["doctor", "--target", "dsh"], { env: fakePathEnv(fake) });
+      const result = runCli(["doctor", "--target", "dsh"], { env: { ...fakePathEnv(fake), DSH_HOME: dshHome } });
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain(`${MSTAR_SPEC}: mounted`);
       expect(result.stdout).toContain(`${FALLBACKS_SPEC}: mounted`);
       expect(result.stdout).toContain("Doctor result: healthy");
     } finally {
+      rmSync(dshHome, { recursive: true, force: true });
       fake.remove();
     }
   });

@@ -462,6 +462,21 @@ describe('native persona channel — SubagentStartRequest.persona merge', () => 
     }
   })
 
+
+  it('(s) Execute as fullstack-dev with no caller persona: mstar Config.rolePersonas wins over a distinct fallbacks row persona (qc2 S-001)', async () => {
+    const { app, provider } = await bootWithProvider('fake-spawn', { personaCapability: true }, { settingsService: 'fake' })
+    await applyFallbacksRow(app, [{ id: EXECUTE_AS, persona: FALLBACKS_PERSONA }])
+
+    const { captured, restore } = captureLogs()
+    try {
+      await startViaNativeChannel(app, 'fake-spawn', startRequest(ASSIGNMENT_PROMPT))
+
+      expect(provider.starts[0]!.request.persona).toBe(PERSONA)
+    } finally {
+      restore()
+    }
+  })
+
   it('(j) config persona wins over a mirror default (lookup chain: config → default)', async () => {
     const { app, provider } = await bootWithProvider('fake-spawn', { personaCapability: true })
     const fixture = await fixtureMirror([[`${EXECUTE_AS}.md`, MIRROR_SHELL]])
