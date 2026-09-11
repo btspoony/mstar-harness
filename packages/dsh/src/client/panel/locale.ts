@@ -257,7 +257,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 
 /** zh dictionary (repo bilingual convention; zh is the stub fallback locale). */
 export const zh: LocaleDictOf<'mstar-panel'> = {
-  'view.mstar-workflow': 'MStar 工作流',
+  'view.mstar-workflow': '启明星工作流',
   'guide.description': '查看工作区状态、计划与迭代进度',
   'tab.tasks': '任务迭代',
   'tab.agents': '代理执行',
@@ -383,7 +383,7 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
 
 /** en dictionary (default locale). */
 export const en: LocaleDictOf<'mstar-panel'> = {
-  'view.mstar-workflow': 'MStar Workflow',
+  'view.mstar-workflow': 'Morning Star Workflow',
   'guide.description': 'Workspace state, plans, and iteration progress',
   'tab.tasks': 'Task Iteration',
   'tab.agents': 'Agent Run',

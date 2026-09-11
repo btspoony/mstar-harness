@@ -8,7 +8,7 @@
  * `parseDshClient` / `resolveMeta` — read `pkg.dsh.client` only, NO legacy
  * fallback). The old field parsed to `undefined` → the plugin was no longer a
  * web client module → `window.__DSH_BOOT__.entries` lost the
- * `@mstar-harness/dsh` row → the "MStar 工作流" panel vanished.
+ * `@mstar-harness/dsh` row → the "启明星工作流" panel vanished.
  *
  * This test freezes the NEW manifest contract so the next upstream field
  * rename fails here FIRST (before any running-app symptom). It lives in its

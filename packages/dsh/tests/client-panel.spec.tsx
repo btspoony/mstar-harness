@@ -837,7 +837,7 @@ describe('workflow panel — plugin entry registers locale + the sidebar seats (
     // Pin zh: the real LocaleRuntime's initial locale is browser/persisted
     // derived (the removed peer-stub defaulted to the first-registered one).
     locale.setLocale('zh')
-    expect(locale.bind(NS)('view.mstar-workflow')).toBe('MStar 工作流')
+    expect(locale.bind(NS)('view.mstar-workflow')).toBe('启明星工作流')
   })
 
   it('registers the sidebar body + title seats (keyed @mstar-harness/dsh, locale + entry store)', async () => {
@@ -1505,14 +1505,14 @@ describe('workflow panel — T3 sidebar reorg: plan cap/sort, residual findings 
   })
 })
 
-describe('workflow panel — T1 panel rename: "MStar 工作流" / "MStar Workflow" (spec panel-layout-graph §1.1)', () => {
+describe('workflow panel — T1 panel rename: "启明星工作流" / "Morning Star Workflow" (spec panel-layout-graph §1.1)', () => {
   it('view.mstar-workflow label flips with the locale', async () => {
     const locale = newLocale()
     locale.register(NS, { zh, en })
     locale.setLocale('en')
-    expect(locale.bind(NS)('view.mstar-workflow')).toBe('MStar Workflow')
+    expect(locale.bind(NS)('view.mstar-workflow')).toBe('Morning Star Workflow')
     locale.setLocale('zh')
-    expect(locale.bind(NS)('view.mstar-workflow')).toBe('MStar 工作流')
+    expect(locale.bind(NS)('view.mstar-workflow')).toBe('启明星工作流')
   })
 
   it('zh body renders the meta dock + zone dashboard labels (header captions removed)', async () => {

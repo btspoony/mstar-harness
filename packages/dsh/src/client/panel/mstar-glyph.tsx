@@ -12,11 +12,14 @@
 import type { IconProps } from '@deepseek-ai/dsh-client-ui-primitives'
 
 /**
- * A four-point morning star on `currentColor` — the plugin's mark at guide
- * and chip sizes (14–16px). `size` defaults to 16 (the guide-capsule size —
- * the definition registers this component with no props); the chip title
- * seat passes 14 explicitly. Pure geometry: no fills, no hardcoded colors,
- * every stroke rides `currentColor` so the host's chip/guide styling applies.
+ * The brand star on `currentColor` — the plugin's mark at guide and chip
+ * sizes (14–16px). `size` defaults to 16 (the guide-capsule size — the
+ * definition registers this component with no props); the chip title seat
+ * passes 14 explicitly. The geometry is the brand mark from the repo's
+ * `assets/` logos (`logo.svg` / `logo-dark.svg`): the star path reused
+ * verbatim (viewBox 512), the assets' colored rounded tile dropped — no
+ * tile, no hardcoded colors — `fill='currentColor'` so the host's chip/guide
+ * styling themes the mark.
  */
 export function MstarGlyph({ size = 16, className }: IconProps) {
   return (
@@ -24,18 +27,11 @@ export function MstarGlyph({ size = 16, className }: IconProps) {
       className={className}
       width={size}
       height={size}
-      viewBox='0 0 24 24'
-      fill='none'
-      stroke='currentColor'
-      strokeWidth='1.5'
-      strokeLinecap='round'
-      strokeLinejoin='round'
+      viewBox='0 0 512 512'
       aria-hidden='true'
     >
-      {/* Four-point star: long vertical/horizontal rays + short diagonals. */}
-      <path d='M12 3v18M3 12h18' />
-      <path d='M12 3l2.2 4.6L12 12l-2.2 4.4L12 21M12 3L7.4 9.8 3 12m9-9l4.6 6.8L21 12m-9 9l-4.6-6.8L3 12m18 0l-4.6 2.2L12 21' />
-      <circle cx='12' cy='12' r='1.6' />
+      {/* Brand star path from assets/logo.svg (verbatim), colored via currentColor. */}
+      <path fill='currentColor' d='M256 72l36 140 140 36-140 36-36 156-36-156-140-36 140-36 36-140z' />
     </svg>
   )
 }

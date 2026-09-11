@@ -188,12 +188,12 @@ describe('workflow panel — sidebar seat registration (plugin entry)', () => {
     // The chip title thunk takes the page address; the guide thunks take none.
     // All three are thunks re-read per use, so a locale switch flips the copy
     // without re-registration.
-    expect(definition.title('sidebar://mstar-workflow')).toBe('MStar Workflow')
-    expect(guide.title()).toBe('MStar Workflow')
+    expect(definition.title('sidebar://mstar-workflow')).toBe('Morning Star Workflow')
+    expect(guide.title()).toBe('Morning Star Workflow')
     expect(guide.description?.()).toBe('Workspace state, plans, and iteration progress')
     locale.setLocale('zh')
-    expect(definition.title('sidebar://mstar-workflow')).toBe('MStar 工作流')
-    expect(guide.title()).toBe('MStar 工作流')
+    expect(definition.title('sidebar://mstar-workflow')).toBe('启明星工作流')
+    expect(guide.title()).toBe('启明星工作流')
     expect(guide.description?.()).toBe('查看工作区状态、计划与迭代进度')
   })
 
