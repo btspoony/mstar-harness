@@ -2758,6 +2758,21 @@ describe('workflow panel — T9 event-log page: partitions + rows + details + em
     expect(legacyChild).toContain('>—</span>')
   })
 
+  it('child-id detail degrades to 「—」 on a link row with no childId', () => {
+    const html = eventsHtml(flowSource([{
+      ts: 5_000,
+      kind: 'subagent-link',
+      role: 'fullstack-dev',
+      planId: 'plan-x',
+      taskId: 'T2',
+      taskCategory: null,
+      agent: 'parent-sess',
+    }]))
+    const child = html.match(/data-event-log-field="child-id"[\s\S]*?<\/div>/)?.[0] ?? ''
+    expect(child).toContain('data-event-log-missing="true"')
+    expect(child).toContain('>—</span>')
+  })
+
   it('event-log.field.child-id exists in both locale dictionaries', () => {
     expect(en['event-log.field.child-id']).toBe('Child session ID')
     expect(zh['event-log.field.child-id']).toBe('子会话 ID')
@@ -2878,6 +2893,25 @@ describe('workflow panel — agent list page (spec panel-tabs §4/§6.2, plan si
     expect(anonymousDispatch).not.toContain('data-agents-note')
     // An anonymous dispatch folds into the general bucket → one running row.
     expect(anonymousDispatch).toContain('data-agent-summary-executing="1"')
+  })
+
+  it('a link-only window does not render the settle-only agents note', () => {
+    const html = agentsHtml(flowSource([{
+      ts: 4_000,
+      kind: 'subagent-link',
+      role: 'fullstack-dev',
+      planId: 'plan-x',
+      taskId: 'T2',
+      taskCategory: null,
+      agent: 'parent-sess',
+      childId: 'child-sess',
+    }]))
+    expect(html).not.toContain('data-agents-note="settle-only"')
+    expect(html).not.toContain('Settle records only (no dispatch evidence)')
+    expect(html).toContain('data-agents-note="link-only"')
+    expect(html).toContain('Identity records only (no dispatch evidence)')
+    expect(en['flow.link-only']).toBe('Identity records only (no dispatch evidence)')
+    expect(zh['flow.link-only']).toBe('仅有身份记录（无派发证据）')
   })
 
   it('mounts the Legend on the agents page: ONLY the 3 role-card status entries; the collaboration-edge / layout swatches are gone ', async () => {

@@ -40,7 +40,7 @@
  *
  * Shared iteration section: the page renders the SAME `IterationInfoSection`
  * the tasks tab uses, from the SAME `view.iteration` data — 两个 tab 显示同一
- * 迭代信息块. The degradation note (degraded / empty / settle-only) is
+ * 迭代信息块. The degradation note (degraded / empty / settle-only / link-only) is
  * PROJECTED metadata, never inferred from the entity list, and the `Legend`
  * (the 3 role-card status treatments) sits in flow BELOW the list.
  *
@@ -346,11 +346,12 @@ export function AgentListPage({ view, iteration, t }: AgentListPageProps) {
   // rebuilds only when the projection actually changes.
   const groups = useMemo(() => buildGroups(view), [view])
 
-  // Muted degradation note (spec §8 — four honest states, never orange):
+  // Muted degradation note (spec §8 — honest states, never orange):
   // `degraded` (unreadable ledger) is its own flag; the projected `note`
-  // classifies the readable ledger — 'empty' = 0 events, 'settle-only' =
-  // events but no dispatch rows, null = dispatch evidence. The note comes
-  // from the PROJECTION, never from an `entities.every(idle)` heuristic — a
+  // classifies the readable ledger — 'empty' = 0 events, 'link-only' =
+  // only identity/link rows, 'settle-only' = events but no dispatch (and
+  // not link-only), null = dispatch evidence. The note comes from the
+  // PROJECTION, never from an `entities.every(idle)` heuristic — a
   // garbage ledger would fake settle-only.
   const noteInfo = degraded
     ? { anchor: 'degraded', text: t('flow.degraded') }
@@ -358,7 +359,9 @@ export function AgentListPage({ view, iteration, t }: AgentListPageProps) {
       ? { anchor: 'empty', text: t('flow.empty') }
       : note === 'settle-only'
         ? { anchor: 'settle-only', text: t('flow.settle-only') }
-        : null
+        : note === 'link-only'
+          ? { anchor: 'link-only', text: t('flow.link-only') }
+          : null
 
   return (
     <div className={css.listPage} data-mstar-page="agents">

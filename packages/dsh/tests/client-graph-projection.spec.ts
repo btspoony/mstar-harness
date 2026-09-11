@@ -2293,6 +2293,27 @@ describe('projectGraph — subagent-link + settle child identity', () => {
     expect(agent.childId).toBe('child-1')
     expect(generic.childId).toBeUndefined()
   })
+
+  it('a link-only window is not settle-only — identity records are not settlement evidence', () => {
+    const agents = projectGraph(flowSource([
+      linkRow({
+        ts: 8,
+        agent: 'parent-sess',
+        role: 'fullstack-dev',
+        planId: 'plan-x',
+        taskId: 'T2',
+        childId: 'child-sess',
+      }),
+    ])).agents
+    expect(agents.empty).toBe(false)
+    expect(agents.degraded).toBe(false)
+    expect(agents.note).not.toBe('settle-only')
+    expect(agents.note).toBe('link-only')
+    // Genuinely settle-only windows (settles, no dispatch) still classify settle-only.
+    expect(projectGraph(flowSource([
+      settleRow({ ts: 3, agent: 'a1', outcome: 'ok' }),
+    ])).agents.note).toBe('settle-only')
+  })
 })
 
 

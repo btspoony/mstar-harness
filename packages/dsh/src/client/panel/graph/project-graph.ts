@@ -358,13 +358,15 @@ export type AgentEntityStatus =
 /**
  * The canvas degradation-note classification (spec §8): the projection
  * decides the note from the RAW ledger (never a UI-side heuristic on the
- * entity list): `empty` = 0 events; `settle-only` = events present but NO
- * dispatch row (all settle / garbage rows — genuinely no dispatch evidence);
- * `null` = dispatch evidence present (incl. anonymous dispatch rows — they
- * are evidence, not settle-only). The unreadable-ledger case is the SEPARATE
- * `degraded` flag, not a note value.
+ * entity list): `empty` = 0 events; `link-only` = the readable window
+ * contains ONLY `subagent-link` rows (identity records — neither dispatch
+ * nor settlement evidence); `settle-only` = events present but NO dispatch
+ * and not link-only (settles / garbage / workflow — genuinely no dispatch
+ * evidence); `null` = dispatch evidence present (incl. anonymous dispatch
+ * rows — they are evidence, not settle-only). The unreadable-ledger case
+ * is the SEPARATE `degraded` flag, not a note value.
  */
-export type AgentZoneNote = 'empty' | 'settle-only' | null
+export type AgentZoneNote = 'empty' | 'settle-only' | 'link-only' | null
 
 /**
  * The projected agents zone (spec §4 + §6.2): the EXPECTED_ROLE_FLOW stage
@@ -998,9 +1000,9 @@ function isCurrentIterationDispatch(
  * collides.
  *
  * Canvas note: `note` classifies the readable ledger in
- * the projection ('empty' / 'settle-only' / null — see `AgentZoneNote`); the
- * UI consumes it directly and never infers settle-only from the entity list
- * (garbage rows would fake it).
+ * the projection ('empty' / 'link-only' / 'settle-only' / null — see
+ * `AgentZoneNote`); the UI consumes it directly and never infers
+ * settle-only from the entity list (garbage rows would fake it).
  *
  * Current-plan note: `activePlanId` / `activePlanCount` ride the
  * `state.plans[]` InProgress rows (catalog order) — the Phase 2 group label
@@ -1055,9 +1057,16 @@ export function projectAgents(source: MstarEngineStatusPayload | null, currentSt
   const empty = rawEvents.length === 0
   // The canvas note is a PROJECTION decision on the raw ledger (the UI
   // never infers ledger semantics from the entity list): 0 events → 'empty';
-  // events but NO dispatch row (all settle / garbage) → 'settle-only';
+  // only `subagent-link` rows → 'link-only' (identity, not settlement);
+  // events but NO dispatch (settle / garbage / workflow) → 'settle-only';
   // any dispatch row (anonymous included — it IS dispatch evidence) → null.
-  const note: AgentZoneNote = empty ? 'empty' : entries.some((e) => e.view.kind === 'dispatch') ? null : 'settle-only'
+  const note: AgentZoneNote = empty
+    ? 'empty'
+    : entries.some((e) => e.view.kind === 'dispatch')
+      ? null
+      : entries.length > 0 && entries.every((e) => e.view.kind === 'subagent-link')
+        ? 'link-only'
+        : 'settle-only'
 
   // The「当前迭代」filter: entities derive ONLY from the current iteration's
   // dispatch rows. Settle rows are always kept (they carry the pairing
