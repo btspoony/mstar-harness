@@ -256,6 +256,19 @@ describe('workflow panel — no-harness centered inactive state ', () => {
     // carries zero bare colors (the theme audit stays green).
     expect(card![0]).not.toMatch(/state-(?:warn|error)-/)
     expect(cssText).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgba?\(/)
+    // The spacing ramp covers BOTH roots (bugbot fix — the waiting/loading/
+    // unavailable branches render `.emptyRoot` as the STANDALONE root, no
+    // `.root` ancestor): the ramp is declared on the `.root, .emptyRoot`
+    // selector list, so `.emptyRoot`'s `padding: var(--mstar-space-4)`
+    // resolves. An undefined custom property drops the declaration at
+    // computed-value time — the empty copy used to sit flush against the
+    // pane edge with the padding silently gone.
+    const ramp = [...cssText.matchAll(/\.root\s*,\s*\.emptyRoot\s*\{[^}]*\}/g)]
+      .map((m) => m[0])
+      .find((block) => block.includes('--mstar-space-4'))   // the RAMP list (the base block shares the selector)
+    expect(ramp).toBeDefined()
+    expect(ramp).toMatch(/--mstar-space-4:\s*16px/)
+    expect(cssText).toMatch(/\.emptyRoot\s*\{[^}]*padding:\s*var\(--mstar-space-4\)/)
     // The composer reserve is gone with the opt-in; width rules are
     // container queries, never viewport media queries (plan sidebar §L2.7).
     expect(cssText).not.toContain('--dsh-composer-height')

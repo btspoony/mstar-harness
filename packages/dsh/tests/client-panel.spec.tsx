@@ -934,6 +934,23 @@ describe('workflow panel — T2 narrow-column shell: three zones / single scroll
     expect(scrollBlock).not.toBeNull()
     expect(scrollBlock![0]).toContain('overflow-x: hidden')
     expect(stripped).not.toMatch(/overflow-x:\s*(?:auto|scroll)/)
+    // Page-frame flex contract (the scroll zone's page children — bugbot
+    // fix): grow WITHOUT shrink-below-content. The former `flex: 1` (=
+    // 1 1 0%) + `min-height: 0` sized the page frame to the zone's free
+    // space regardless of content — tall content stayed compressed (basis
+    // 0), plan groups painted over the in-flow digest, and the single
+    // scroller never carried the page. `flex: 1 0 auto` + no `min-height`
+    // keeps short content growing (digest + freshness pinned to the zone
+    // end) and tall content at its content height so [data-mstar-scroll]
+    // scrolls it — never a second scroller.
+    const pageFrame = stripped.match(/\.iterationPage\s*\{[^}]*\}/)
+    expect(pageFrame).not.toBeNull()
+    expect(pageFrame![0]).toContain('flex: 1 0 auto')
+    expect(pageFrame![0]).not.toContain('min-height')
+    const noHarnessCardBlock = stripped.match(/\.noHarnessCard\s*\{[^}]*\}/)
+    expect(noHarnessCardBlock).not.toBeNull()
+    expect(noHarnessCardBlock![0]).toContain('flex: 1 0 auto')
+    expect(noHarnessCardBlock![0]).not.toContain('min-height')
     const zonesStripped = readFileSync(new URL('../src/client/panel/zones/zones.module.css', import.meta.url), 'utf8')
       .replace(/\/\*[\s\S]*?\*\//g, '')
     expect([...zonesStripped.matchAll(/overflow-y:\s*([^;}]+)/g)]).toEqual([])
@@ -950,6 +967,13 @@ describe('workflow panel — T2 narrow-column shell: three zones / single scroll
     expect(agentListStripped).not.toMatch(/overflow(?:-x|-y)?:\s*(?:auto|scroll)/)
     expect(agentListStripped).not.toMatch(/position:\s*absolute/)
     expect(agentListStripped).not.toMatch(/@media\s*\((?:max|min)-width:/)
+    // Sibling page frames stay plain flow (`.listPage` agents, `.eventLogPage`
+    // events — the bugbot sibling audit found them NOT affected: no flex /
+    // min-height declarations, so the automatic minimum size already keeps
+    // them at content height). A reintroduced `min-height: 0` on a page
+    // frame is the only way back to the shrink-below-content squeeze.
+    expect(agentListStripped).not.toMatch(/min-height:\s*0/)
+    expect(eventsStripped).not.toMatch(/min-height:\s*0/)
     // Width signal (§L2.7): container queries only — the two obsolete
     // viewport media queries are deleted (reduced-motion is not a width query).
     expect(cssText).toMatch(/@container\s*\(max-width:\s*480px\)/)

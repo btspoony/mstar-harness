@@ -33,17 +33,26 @@
   line-height: 1.6;
 }
 
-/* Panel-scope spacing ramp (spec §1.2) — not dsw token names. The shell is
- * the three-zone flex column; `container-type: inline-size` is the width
- * signal for the @container rules below (the host gives a definite height,
- * so inline-size containment does not disturb the height: 100% chain). */
-.root {
+/* Panel-scope spacing ramp (spec §1.2) — not dsw token names. Declared on
+ * BOTH roots: the degraded branches render `.emptyRoot` as the standalone
+ * root (no shell zones at all), so its `--mstar-space-*` references resolve
+ * only if the ramp lives on that root too — an undefined custom property
+ * drops the declaration (the empty copy sat flush against the pane edge).
+ * The shell is the three-zone flex column; `container-type: inline-size` is
+ * the width signal for the @container rules below (the host gives a definite
+ * height, so inline-size containment does not disturb the height: 100%
+ * chain). */
+.root,
+.emptyRoot {
   --mstar-space-1: 4px;
   --mstar-space-2: 8px;
   --mstar-space-3: 12px;
   --mstar-space-4: 16px;
   --mstar-space-5: 24px;
   --mstar-space-6: 32px;
+}
+
+.root {
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -107,10 +116,12 @@
 
 /* The centered inactive-state card: a muted frame (no orange — spec §8
  * degraded tone) centered in the free space above the freshness footer
- * (flex: 1 + inner centering; compact width, text wraps within it). */
+ * (same page-frame flex contract as `.iterationPage` — it is a `.scroll`
+ * child too, so grow without shrink-below-content keeps a short pane from
+ * squeezing it over the footer; flex: 1 0 auto + inner centering; compact
+ * width, text wraps within it). */
 .noHarnessCard {
-  flex: 1;
-  min-height: 0;
+  flex: 1 0 auto;
   width: 100%;
   max-width: 400px;
   align-self: center;
@@ -210,9 +221,17 @@
  * only; spacing rides the --mstar-space-* ramp; motion ≤200ms (killed by the
  * root reduced-motion rule). --- */
 
+/* Page frame flex contract: the page is a `.scroll` child, so it grows
+ * WITHOUT shrink-below-content (`flex: 1 0 auto`, no `min-height: 0`).
+ * The former `flex: 1` (= 1 1 0%) + `min-height: 0` sized the page to the
+ * zone's free space regardless of content — tall content stayed compressed
+ * (basis 0), plan groups painted over the in-flow digest, and the single
+ * scroller never carried the page. `0` shrink keeps tall content at its
+ * content height so [data-mstar-scroll] grows and scrolls it; `1` grow
+ * still fills short zones, pinning the digest + freshness footer to the
+ * zone end. Never a second scroller. */
 .iterationPage {
-  flex: 1;
-  min-height: 0;
+  flex: 1 0 auto;
   display: flex;
   flex-direction: column;
   gap: var(--mstar-space-3);
