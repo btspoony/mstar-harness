@@ -20,7 +20,8 @@
 import { describe, expect, it, afterEach } from 'bun:test'
 import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 import { assignmentHeaderRegion } from '@mstar-harness/engine'
-import { bootApp, seedHarness, type BootResult } from './harness.ts'
+import { bootApp, seedHarness, v2Root, v2SnapshotWithPlans, v2WorkflowEntry, type BootResult } from './harness.ts'
+import { updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
 import type { DispatchGateAdvisory } from '../src/index.ts'
 import { planIdOf } from '../src/gates/dispatch.ts'
 
@@ -198,18 +199,20 @@ Just do some work.
 let seq = 0
 
 /** One pending tool call in the registry pipeline shape (dsh-tools 9451be2). */
-function toolExec(name: string, args: unknown): ToolExecution {
+function toolExec(name: string, args: unknown, agent?: unknown): ToolExecution {
   return {
     callId: `c${++seq}` as ToolExecution['callId'],
     name,
     arguments: args,
+    ...(agent === undefined ? {} : { agent: agent as ToolExecution['agent'] }),
     signal: new AbortController().signal,
     token: Symbol('dsh.tool.execution') as unknown as ToolExecutionToken,
   } as unknown as ToolExecution
 }
 
 /** The subagent tool call shape: `{ description, prompt, run_in_background? }`. */
-const subagentExec = (prompt: string): ToolExecution => toolExec('subagent', { description: 'probe', prompt })
+const subagentExec = (prompt: string, agent?: unknown): ToolExecution =>
+  toolExec('subagent', { description: 'probe', prompt }, agent)
 
 /** The registry's bare default decision (the waterfall's terminal `next()`). */
 const defaultAllow = (): Promise<PreToolDecision> => Promise.resolve<PreToolDecision>({ kind: 'allow' })
@@ -723,5 +726,108 @@ describe('dispatch gate — Assignment header values written as markdown code sp
     // Only ONE clean wrapping pair is stripped: a value that wraps several
     // spans has backticks inside, so it is left exactly as written.
     expect(idOf('**plan_id**: `/a`, `/b`')).toBe('`/a`, `/b`')
+  })
+})
+
+/* ===========================================================================
+ * D4 — session-bound lease attribution (two concurrent actives)
+ * ========================================================================== */
+
+const LEASE_PLAN_ID = '00000810-lease-attribution'
+const LEASE_WORKTREE = '/srv/worktrees/lease-attribution'
+const LEASE_BRANCH = 'feature/lease-attribution'
+const LEASE_HOLDER = 'omp:iter-someone-else'
+
+/** Fully valid SDD writable Assignment matching the seeded lease exactly. */
+const SDD_LEASED = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Execution mode**: sdd
+**Working branch**: ${LEASE_BRANCH}
+**Worktree path**: ${LEASE_WORKTREE}
+**Plan Path**: /proj/plans/${LEASE_PLAN_ID}.md
+
+Do the thing, evidence-first.
+`
+
+/** The InProgress plan row + its execution_lease (held by ANOTHER agent). */
+const LEASED_PLAN: Record<string, unknown> = {
+  id: LEASE_PLAN_ID,
+  title: 'leased plan',
+  status: 'InProgress',
+  execution_lease: {
+    holder: LEASE_HOLDER,
+    claimed_at: '2026-08-08',
+    worktree_path: LEASE_WORKTREE,
+    working_branch: LEASE_BRANCH,
+  },
+}
+
+/** An agent carrying the durable session identity the binding store is keyed by. */
+const sessionAgent = (sessionId: string, cwd: string): unknown =>
+  ({ id: sessionId, session: { header: { id: sessionId, cwd } } })
+
+describe('dispatch gate — D4 session-bound lease attribution (explicit selection never bypasses the no-steal check)', () => {
+  /** Seed two actives: `wf-a` holds the leased plan row, `wf-b` holds none. */
+  async function seedTwoActives(harnessDir: string): Promise<void> {
+    await seedHarness(harnessDir, {
+      'status.json': v2Root([v2WorkflowEntry('wf-a'), v2WorkflowEntry('wf-b')]),
+      'workflows/wf-a/snapshot.json': v2SnapshotWithPlans('wf-a', [LEASED_PLAN]),
+      'workflows/wf-b/snapshot.json': v2SnapshotWithPlans('wf-b', []),
+    })
+  }
+
+  it('the session pick selects WHICH snapshot is re-verified — an id that does not hold the plan row reports plan-not-found', async () => {
+    const app = booted = await bootApp()
+    await seedTwoActives(app.harnessDir)
+    expect(updateWorkflowSessionBinding(app.harnessDir, 'sess-x', app.root, { excludedBeforeSeq: 0, selectedWorkflowId: 'wf-b' }).kind).toBe('written')
+    const advisories = captureAdvisories(app.ctx)
+
+    // `sess-x` holds no lease (its id is not the lease holder and its cwd is
+    // not the lease worktree), so the durable pick is the ONLY binding
+    // evidence — and it names the lifecycle WITHOUT the plan row.
+    const decision = await app.ctx.waterfall(
+      'tools/pre-execute',
+      subagentExec(SDD_LEASED, sessionAgent('sess-x', app.root)),
+      defaultAllow,
+    )
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(violationCodes(advisories[0])).toContain('lease.dispatch.plan-not-found')
+    expect(violationCodes(advisories[0])).not.toContain('lease.dispatch.holder-mismatch')
+  })
+
+  it('the bound lease is still no-steal checked — an explicit pick never bypasses holder-mismatch', async () => {
+    const app = booted = await bootApp()
+    await seedTwoActives(app.harnessDir)
+    expect(updateWorkflowSessionBinding(app.harnessDir, 'sess-x', app.root, { excludedBeforeSeq: 0, selectedWorkflowId: 'wf-a' }).kind).toBe('written')
+    const advisories = captureAdvisories(app.ctx)
+
+    const decision = await app.ctx.waterfall(
+      'tools/pre-execute',
+      subagentExec(SDD_LEASED, sessionAgent('sess-x', app.root)),
+      defaultAllow,
+    )
+
+    expect(decision).toEqual({ kind: 'allow' })
+    const codes = violationCodes(advisories[0])
+    expect(codes).toContain('lease.dispatch.holder-mismatch')
+    expect(codes).not.toContain('lease.dispatch.plan-not-found')
+
+    // The SAME session shape with the holder id passes the no-steal check —
+    // the pick resolves the plan row and the lease verifies clean (worktree
+    // and branch match the Assignment).
+    const matching = await app.ctx.waterfall(
+      'tools/pre-execute',
+      subagentExec(SDD_LEASED, sessionAgent(LEASE_HOLDER, app.root)),
+      defaultAllow,
+    )
+    expect(matching).toEqual({ kind: 'allow' })
+    const lastCodes = violationCodes(advisories.at(-1))
+    expect(lastCodes).not.toContain('lease.dispatch.holder-mismatch')
+    expect(lastCodes).not.toContain('lease.dispatch.plan-not-found')
+    expect(lastCodes).not.toContain('lease.dispatch.unverifiable')
   })
 })

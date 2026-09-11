@@ -42,7 +42,10 @@ import type {
 } from '@mstar-harness/engine'
 import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
 import { STATUS_FILE, asRecord, formatViolation, HarnessResolver } from './_shared.ts'
-import type { Config } from './_shared.ts'
+import type { Config, SessionHintRead } from './_shared.ts'
+// Type-only (erased at runtime): the carrying-session hint the gate forwards
+// to the shared resolver.
+import type { SessionHint } from './workflow-selection.ts'
 // v3 read: the plan rows + leases live on the ACTIVE workflow snapshot
 // (`workflows/<id>/snapshot.json` — the v1 root `plans[]` home is gone).
 // The dispatch gates are WRITE-path-adjacent (lease re-verify, worktree
@@ -325,12 +328,18 @@ export function sessionIdOf(exec: ToolExecution): string | undefined {
  * claim-before-InProgress red line needs the plan's execution_lease, and a
  * missing root/snapshot cannot confirm it — `lease.dispatch.unverifiable`
  * fires (advisory in warn, deny under hard).
+ * @param hint - the carrying session's selection hint: it decides WHICH
+ *   active lifecycle's snapshot the lease is re-verified against, so a
+ *   session that is not bound to the lifecycle holding the plan row stops
+ *   with `lease.dispatch.plan-not-found` instead of verifying a lease it
+ *   does not own.
  */
 export function leaseGateViolations(
   harnessDir: string | null,
   exec: ToolExecution,
   writable: boolean | undefined,
   prompt: string,
+  hint?: SessionHint,
 ): ValidationResult[] {
   if (harnessDir === null || writable === false) return []
   const header = assignmentHeaderRegion(prompt)
@@ -342,7 +351,7 @@ export function leaseGateViolations(
   // workflow snapshot (`workflows/<id>/snapshot.json`). The root v2
   // `status.json` still gates the read: it holds the active `workflows[]`
   // the selection resolves from.
-  const selection = resolveActiveWorkflow(harnessDir)
+  const selection = resolveActiveWorkflow(harnessDir, hint)
   if (selection.kind !== 'active') {
     if (!sdd) return []
     // `resolveActiveWorkflow` never returns `terminal` (the active-set
@@ -526,11 +535,13 @@ function worktreeL2Violations(header: string): ValidationResult[] {
  *
  * Degrade semantics per consumer are kept by the flags: `unreadable` true
  * means the lifecycle cannot be attributed (selection failure — a
- * v1/migration-required root, an invalid workflow entry — or an
- * unreadable/shape-invalid snapshot) and the caller decides its loudness
- * (lease gate: sdd violation; P-b: ONE warn fail-open). `unreadable` false
- * with `rows` null means there is simply nothing to attribute (missing
- * status.json, no active lifecycle) — silent.
+ * v1/migration-required root, an invalid workflow entry, an UNBOUND
+ * multi-active session — or an unreadable/shape-invalid snapshot) and the
+ * caller decides its loudness (lease gate: sdd violation; P-b: ONE warn
+ * fail-open). `unreadable` false with `rows` null means there is simply
+ * nothing to attribute (missing status.json, no active lifecycle) — silent.
+ * @param hint - the carrying session's selection hint (which lifecycle's
+ *   rows/control path this read is about).
  */
 interface ActiveSnapshotRead {
   /** The snapshot's plan rows ([] when the doc has no plans array); null when the read did not reach the rows. */
@@ -541,9 +552,9 @@ interface ActiveSnapshotRead {
   unreadable: boolean
 }
 
-function activeSnapshotRows(harnessDir: string): ActiveSnapshotRead {
+function activeSnapshotRows(harnessDir: string, hint?: SessionHint): ActiveSnapshotRead {
   if (!existsSync(join(harnessDir, STATUS_FILE))) return { rows: null, controlWorktreePath: undefined, unreadable: false }
-  const selection = resolveActiveWorkflow(harnessDir)
+  const selection = resolveActiveWorkflow(harnessDir, hint)
   if (selection.kind !== 'active') {
     // A no-active lifecycle is a valid migrated state — nothing to attribute
     // (no plans exist anywhere); every other selection failure (v1 root,
@@ -589,12 +600,14 @@ function activeSnapshotRows(harnessDir: string): ActiveSnapshotRead {
  * engine probe of the lease worktree is subprocess-based and fails closed.
  * @param harnessDir - the plugin's resolved `{HARNESS_DIR}` (null when none).
  * @param header - `assignmentHeaderRegion(assignmentText)`.
+ * @param hint - the carrying session's selection hint (which lifecycle's
+ *   snapshot carries the L1 metadata to compare against).
  */
-function worktreeL1Violations(harnessDir: string | null, header: string): ValidationResult[] {
+function worktreeL1Violations(harnessDir: string | null, header: string, hint?: SessionHint): ValidationResult[] {
   if (harnessDir === null) return []
   const planId = planIdOf(header)
   if (planId === undefined || planId === '') return []
-  const read = activeSnapshotRows(harnessDir)
+  const read = activeSnapshotRows(harnessDir, hint)
   if (read.rows === null) return [] // unattributable status is the lease gate's report (sdd dispatches)
   const controlWorktreePath = read.controlWorktreePath
   if (controlWorktreePath === undefined || controlWorktreePath.trim() === '') return []
@@ -640,9 +653,9 @@ function worktreeL1Violations(harnessDir: string | null, header: string): Valida
  * @returns the first uncovered plan id (undefined = covered / nothing to
  * attribute) + the unreadable flag.
  */
-function writableFanOutUncovered(harnessDir: string | null): { uncoveredPlanId?: string; unreadable: boolean } {
+function writableFanOutUncovered(harnessDir: string | null, hint?: SessionHint): { uncoveredPlanId?: string; unreadable: boolean } {
   if (harnessDir === null) return { unreadable: false }
-  const read = activeSnapshotRows(harnessDir)
+  const read = activeSnapshotRows(harnessDir, hint)
   if (read.rows === null) return { unreadable: read.unreadable } // missing/no-active → silent; selection failure/unreadable → one-warn degrade
   for (const row of read.rows) {
     if (row === undefined || row.status !== 'InProgress') continue
@@ -678,17 +691,21 @@ function writableFanOutUncovered(harnessDir: string | null): { uncoveredPlanId?:
  *
  * @returns the violations plus the writable flag (false for read-only
  * roles — the listener feeds it to the lease gate).
+ * @param hint - the carrying session's selection hint (the adapter derives
+ *   it once per dispatch and shares it with the lease gate, the ledger
+ *   record and every selection read below).
  */
 export function dispatchGateCore(
   config: Config,
   harnessDir: string | null,
   prompt: string,
+  hint?: SessionHint,
 ): { violations: ValidationResult[]; writable: boolean | undefined } {
   const header = assignmentHeaderRegion(prompt)
   // Worktree L2 (declared parallel tracks) + L1 (control vs feature path
   // when the plan metadata is present) — both run on the header
   // region slice, the engine parsers' single boundary.
-  const violations: ValidationResult[] = [...worktreeL2Violations(header), ...worktreeL1Violations(harnessDir, header)]
+  const violations: ValidationResult[] = [...worktreeL2Violations(header), ...worktreeL1Violations(harnessDir, header, hint)]
   // Read-only roles (scout/explore) skip the branch-form gate entirely.
   const writable = isReadOnlyAssignmentRole(parseAssignmentFields(header).executeAs ?? '') ? false : undefined
   // Engine single composition: shape guard + validateAssignmentFields
@@ -816,6 +833,11 @@ export function workflowGateInputOf(exec: ToolExecution): WorkflowGateInput | un
  * string `objective`) → pass-through + ONE warn (fail-open, documented —
  * never crash a compliant call; under `hard` too) and NO verdict row (no
  * policy verdict was produced). NEVER throws: every read is structural.
+ * @param hintRead - the carrying session's hint (derived ONCE by the caller
+ *   through the adapter), plus whether that session's durable binding could
+ *   be read. P-b attributes the lease coverage of the BOUND lifecycle only;
+ *   an unreadable binding store pauses the durable verdict row instead of
+ *   attributing it to a lifecycle the session may not own.
  */
 function gateWorkflow(
   ctx: Context,
@@ -823,6 +845,7 @@ function gateWorkflow(
   config: Config,
   adapter: DshHostAdapter,
   exec: ToolExecution,
+  hintRead: SessionHintRead,
 ): PreToolDecision | undefined {
   const toolName = exec.name
   if (!(DEFAULT_WORKFLOW_TOOLS as readonly string[]).includes(toolName)) return undefined
@@ -839,8 +862,10 @@ function gateWorkflow(
   }
   // P-b lease attribution : the status read through the contained
   // resolver path — `harnessDir` was already resolved from the calling
-  // agent's session workspace by `preExecuteListener`.
-  const pb = writableFanOutUncovered(harnessDir)
+  // agent's session workspace by `preExecuteListener`, and the hint scopes
+  // the read to the lifecycle THIS session is bound to (an unbound session
+  // has no rows to attribute: the one-warn degrade below).
+  const pb = writableFanOutUncovered(harnessDir, hintRead.hint)
   if (pb.unreadable) {
     // Fail-open + ONE warn ( Step 3 / Clarify — a broken status
     // read must not brick fan-out): P-b is degraded for this call only;
@@ -862,7 +887,11 @@ function gateWorkflow(
   // `off` short-circuited above. `harnessDir === null` (no workspace) skips
   // the row — the same silent no-op as the dispatch record path.
   const recordVerdict = (v: WorkflowVerdict, code?: string): void => {
-    if (harnessDir === null) return
+    // An unreadable binding store pauses the durable row: attributing it to
+    // whichever lifecycle resolves would write one session's verdict into
+    // another session's ledger. The policy decision itself already happened
+    // (the caller's allow/ask/deny is unaffected).
+    if (harnessDir === null || hintRead.kind === 'unavailable') return
     adapter.recordWorkflowVerdict({
       harnessDir,
       exec,
@@ -872,6 +901,7 @@ function gateWorkflow(
       mode,
       verdict: v,
       ...(code !== undefined ? { code } : {}),
+      ...(hintRead.hint !== undefined ? { hint: hintRead.hint } : {}),
     })
   }
   switch (verdict.decision) {
@@ -933,12 +963,19 @@ function gateDispatch(
   exec: ToolExecution,
 ): PreToolDecision | undefined {
   const toolName = exec.name
+  // The carrying session's hint — derived ONCE per tool call through the
+  // adapter (the plugin's only owner of the durable binding store) and
+  // shared by the workflow branch, the dispatch branch's selection reads and
+  // the ledger record below. `dispatch.ts` therefore stays free of a runtime
+  // agent-flow / engine-status-store dependency (the adapter is the acyclic
+  // junction).
+  const hintRead = adapter.sessionHintFor(exec.agent)
   // WORKFLOW/RALPH BRANCH — BEFORE the subagent prompt branch: `workflow`/`ralph` carry no
   // `args.prompt`, so the prompt guard below would pass them through even
   // if the names were added to the dispatch-tool match list (W4 double
   // no-op). Keyed on the FIXED tool names — the workflow tools are gated
   // by their own branch, never by `DEFAULT_DISPATCH_TOOLS` addition.
-  const workflowDecision = gateWorkflow(ctx, harnessDir, config, adapter, exec)
+  const workflowDecision = gateWorkflow(ctx, harnessDir, config, adapter, exec, hintRead)
   if (workflowDecision !== undefined) return workflowDecision
   if (!(config.dispatchTools ?? [...DEFAULT_DISPATCH_TOOLS]).includes(toolName)) return undefined
   const args = asRecord(exec.arguments)
@@ -957,7 +994,7 @@ function gateDispatch(
   // : the adapter's record block and this gate decision share the
   // single resolution instead of each re-reading the compass.
   const hard = resolveDispatchHard(harnessDir, config, prompt)
-  const result = adapter.dispatchGate(prompt, exec, hard)
+  const result = adapter.dispatchGate(prompt, exec, hard, hintRead)
   const verdict = applyEnforcement(result, { hard })
   if (verdict.hardBlocked) {
     ctx.logger(DISPATCH_LOGGER).error(
