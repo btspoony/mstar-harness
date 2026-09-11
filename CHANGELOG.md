@@ -8,6 +8,18 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ## [Unreleased]
 
+## [3.8.1] - 2026-09-11
+
+### Harness
+
+- **dsh plugin**: the workflow panel migrated from the conversation-area view ring to the dsh **right Sidebar** — the panel now registers as a first-class page tab type (`kind: 'mstar-workflow'`) through the sidebar's public two-stage seat contract, with a guide-page capsule as its entry point (opening expands the column, a second pick focuses the existing tab) and the panel body + chip title as keyed seats. The old `conversation.view` tab is **removed** (a migration, not a second surface); the tab chip title is captured at open time and no longer follows a mid-session locale switch; while the column is collapsed or another pane tab is active the body renders nothing.
+- **dsh plugin**: the panel is re-laid out for the narrow docked column — a single-column shell with exactly one scroll owner (`[data-mstar-scroll]`; the per-page scrollers and the workspace-digest's nested scroller are retired), width driven by **container queries** instead of viewport media queries (compact rhythm below 480px container width; the group grid spreads to two columns at 720px+), and the agent-execution **canvas replaced by a vertical grouped list**: the SVG edge layer, card ports, and pointer pan are deleted — flow order is carried by the fixed phase/stage/sub-bucket group headings, entity cards become full-width flow rows keeping the role chip, status point, ×N count, emphasis tiers, done ✓ (off-tier excluded), evidence/idle placeholders, and the on-demand badge; the tasks tab's plan board stacks into five groups with a vertical stepper, and the event log's partitions become flow content.
+- **dsh plugin (behavior change)**: the emitted engine-status catalog anchor identity is renamed `mstar-engine-status` → **`mstar-engine`** (the `kind: 'plugin'` / `form: 'catalog'` source shape is unchanged). Rows already emitted by shipped builds persist the legacy identity in their session logs, so the panel's anchor reader accepts **both** identities; any other `plugin` value is not an anchor and the session degrades to the explicit `waiting` state.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, the portable Agent Plugins manifest, and both marketplace manifests: **→ 3.8.1**.
+
 ## [3.8.0] - 2026-09-10
 
 ### Harness

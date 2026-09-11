@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+## [3.8.1] - 2026-09-11
+
+### Harness
+
+- **dsh 插件**：工作流面板从会话区 view ring 迁入 dsh **右 Sidebar**——面板现经 sidebar 公开的两段式席位契约注册为一等页签类型（`kind: 'mstar-workflow'`），入口为引导页 capsule（点选展开侧栏，再次点选聚焦既有页签），面板体与 chip 标题为 keyed 席位。旧 `conversation.view` 页签**移除**（迁移，而非第二表面）；chip 标题在打开时捕获、不再跟随会话中途的语言切换；列折叠或其它页签激活时面板体不渲染任何内容。
+- **dsh 插件**：面板为窄停靠列重排——单列壳层、唯一滚动主体（`[data-mstar-scroll]`；各页自有滚动器与摘要嵌套滚动器退役），宽度由**容器查询**驱动（480px 以下紧凑节奏；720px 以上分组网格铺开为两列），代理执行**画布改为竖直分组列表**：SVG 连线层、卡片端口与指针 pan 删除——流转顺序由恒定 phase/stage/子桶分组标题承载，实体卡变为全宽流行，保留 role chip、状态点、×N 计数、透明度分级、完成 ✓（off 档排除）、证据/idle 占位与按需徽标；任务迭代页计划板竖排五组 + 竖直 stepper，事件记录分区改为流内容。
+- **dsh 插件（行为变更）**：engine-status catalog 锚点标识更名 `mstar-engine-status` → **`mstar-engine`**（`kind: 'plugin'` / `form: 'catalog'` 的 source 形态不变）。已发布构建发出的行在会话日志中持久化旧标识，面板锚点读取方**同时**接受两种标识；任何其它 `plugin` 值都不是锚点，会话降级为显式 `waiting` 态。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 3.8.1**。
+
 ## [3.8.0] - 2026-09-10
 
 ### Harness
