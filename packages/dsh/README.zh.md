@@ -73,7 +73,9 @@ dsh plugin --profile headless add @mstar-harness/dsh
 | `bundledSkillDir` | `string` | 打包的 `harness-skills/` 镜像（包相对路径） | 向 dsh skill-filesystem 提供者注册的打包技能根（`bundledSkillDir` 语义——最后扫描、受信任）。默认取包内自带的 `harness-skills/` 镜像（`bundle-assets` 同步；gitignore）——包相对路径，**非** cwd 锚定。显式值优先。 |
 | `catalogTtlMs` | `number` | `60000` | pre-step catalog 缓存刷新间隔（毫秒）：按工作区缓存的统一 `mstar-engine` 行（水印 + 迭代闸门 + 工作区摘要）多久重读一次 `status.json` / compass / 知识索引。刷新间隔之间热路径只是时间戳比较 + Map 命中；会话中 plan/compass/residual 的变化会在一个间隔内落地。 |
 | `workflowGate` | `'off' \| 'warn' \| 'ask' \| 'hard'` | `'warn'` | workflow/ralph 闸门模式（见 Gates → Workflow / ralph gate）。`off` = 直通且不产生 verdict 行；`warn` = 仅咨询；`ask` = 首见名字走审批瀑布（P-c）；`hard` = 策略违规在任何子进程启动前否决。默认 `warn` 不改任何 hard 行为——除非部署显式选入 `ask`/`hard`，闸门仅咨询。 |
-| `workflowNames` | `string[]` | 未设置 | workflow 名字白名单（P-a）：被闸门视为 KNOWN 的 `meta.name` 值。为空或缺省 ⇒ **每个**名字都 unknown（有文档——闸门**绝不**因缺省而"全放行"）。ralph 调用不携带 `meta.name`——P-a 对其永不适用。 |
+| `workflowNames` | `string[]` | 未设置 | workflow 名字白名单（P-a）：被闸门视为 KNOWN 的 `meta.name` 值。为空或缺省 ⇒ **每个**名字都 unknown（有文档——闸门**绝不**因缺省而"全放行"）。ralph 调用不携带 `meta.name`——P-a 对其永不适用。mstar 只读扇出路径推荐值：`['mstar-qc-tri', 'mstar-audit-fanout', 'mstar-pr-seats']`。 |
+
+**推荐的 operator 覆盖层。** 上表三个推荐 `workflowNames` 覆盖 mstar 只读扇出路径（plan QC tri、大型仓库 `/codebase-audit`、`/amazing-pr-review deep`）；写入它们是 profile 层的操作者覆盖，绝非 mstar 默认。出厂空列表下每个名字都是 *unknown*，在默认 `workflowGate: 'warn'` 下这只是运行会存活的一条 `workflow.name.unknown` 咨询。生产部署若还要否决 unknown 名字，可设置 `workflowGate: 'hard'`；出厂默认仍为 `'warn'`。
 
 `bundledSkillDir` 默认取包内自带的 `harness-skills/` 镜像（见 Skills mount）——显式 Config 值仍然优先。相对覆盖仍是 **cwd 锚定**（skill-filesystem 以 `join()` 语义相对 dsh **进程 cwd** 解析），因此覆盖默认的部署应在 **profile 层传绝对路径**（见 `bundle/README.md`）。
 
