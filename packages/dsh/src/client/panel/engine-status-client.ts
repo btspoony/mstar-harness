@@ -22,7 +22,13 @@
  * on arrival ({@link MstarEngineStatusClient.write}) and the next render
  * re-issues it. Without the fence an in-flight pre-reconnect answer would
  * repopulate the cache and then suppress the repull the invalidation exists to
- * force.
+ * force. A PICKER COMMIT uses the same fence PER SESSION
+ * ({@link MstarEngineStatusClient.invalidateSession}): the durable binding
+ * changed, so an in-flight pre-pick answer must not land — and the session's
+ * cached entry, which still answers the anchor row (a pick writes no row),
+ * must be re-pulled for its `binding` while the last emitted `payload` stays on
+ * screen (the plans / Event Log are the last MODEL emission until the next real
+ * one).
  *
  * DEADLINES: the gateway is a network hop, so one request is bounded
  * ({@link MstarEngineStatusClientOptions.timeoutMs}) and a request that
@@ -42,13 +48,19 @@
  */
 
 import type { ConnectionRpcResult } from '@deepseek-ai/dsh-client-connection/client'
-import { ENGINE_STATUS_CHANNEL, ENGINE_STATUS_ENDPOINT } from '../../engine-status-wire.ts'
-import { parseEngineStatusResult, type MstarEngineStatusFetch } from './guards.ts'
+import { ENGINE_STATUS_CHANNEL, ENGINE_STATUS_ENDPOINT, SELECT_WORKFLOW_ENDPOINT } from '../../engine-status-wire.ts'
+import {
+  parseEngineStatusResult,
+  parseSelectWorkflowResult,
+  type MstarEngineStatusFetch,
+  type MstarSelectWorkflowFetch,
+} from './guards.ts'
 
 // The wire address is the SAME declaration the host half builds its descriptor
 // from (`../../engine-status-wire.ts`); re-exported here for the panel's own
 // consumers and specs.
-export { ENGINE_STATUS_CHANNEL, ENGINE_STATUS_ENDPOINT }
+export { ENGINE_STATUS_CHANNEL, ENGINE_STATUS_ENDPOINT, SELECT_WORKFLOW_ENDPOINT }
+export type { MstarSelectWorkflowFetch }
 
 /** Deadline for one `/api/mstar/engineStatus` request (a hanging gateway must not pin `loading`). */
 export const ENGINE_STATUS_REQUEST_TIMEOUT_MS = 5_000
@@ -92,13 +104,27 @@ export interface MstarEngineStatusEntry {
   readonly fetch: MstarEngineStatusFetch
 }
 
-/** The observable store value: at most one entry per session. */
+/**
+ * The picker state of ONE session (D4 control feedback, never a selection
+ * source of truth): idle, a submission awaiting the host, the acknowledged
+ * workflow id, or the explicit failure reason. The panel disables a second
+ * submission while `pending` and shows `failed` beside the picker instead of a
+ * fake selection.
+ */
+export type MstarSelectionState =
+  | { readonly state: 'idle' }
+  | { readonly state: 'pending' }
+  | { readonly state: 'selected'; readonly workflowId: string }
+  | { readonly state: 'failed'; readonly reason: string }
+
+/** The observable store value: at most one entry per session (+ its picker state). */
 export interface MstarEngineStatusSnapshot {
   readonly entries: ReadonlyMap<string, MstarEngineStatusEntry>
+  readonly selections: ReadonlyMap<string, MstarSelectionState>
 }
 
 /** Stable empty snapshot — a shared reference keeps `getSnapshot` referentially stable. */
-const EMPTY: MstarEngineStatusSnapshot = { entries: new Map() }
+const EMPTY: MstarEngineStatusSnapshot = { entries: new Map(), selections: new Map() }
 
 /**
  * The panel's engine-status client: one `/api/mstar/engineStatus` request per
@@ -117,6 +143,19 @@ export class MstarEngineStatusClient {
   private generationDisposer: (() => void) | null = null
   /** Connection generation: bumped by {@link invalidate}; a mismatched answer is dropped. */
   private generation = 0
+  /**
+   * Per-session request generation: bumped by {@link invalidateSession} (a
+   * picker commit). A fetch captures the session's generation when it is
+   * issued, and its answer is dropped when that generation moved — the fence
+   * that keeps a late pre-pick answer from overwriting post-pick state.
+   */
+  private readonly sessionGenerations = new Map<string, number>()
+  /**
+   * Sessions whose cached entry no longer describes their durable binding: the
+   * next `ensure` for that entry's own anchor re-pulls it instead of serving it.
+   * Set by {@link invalidateSession}, cleared when the answer lands.
+   */
+  private readonly stale = new Set<string>()
   private disposed = false
 
   /**
@@ -161,7 +200,12 @@ export class MstarEngineStatusClient {
    */
   ensure(sessionId: string, cwd: string, anchorTime: number): void {
     if (this.disposed) return
-    if (this.snapshot.entries.get(sessionId)?.anchorTime === anchorTime) return
+    if (this.snapshot.entries.get(sessionId)?.anchorTime === anchorTime) {
+      // A picker commit marked this session stale ({@link invalidateSession}):
+      // the stored payload still answers the anchor, but `binding` must be
+      // re-read, so this one call goes to the wire anyway.
+      if (!this.stale.delete(sessionId)) return
+    }
     const key = `${sessionId}\u0000${anchorTime}`
     if (this.inFlight.has(key)) return
     const request = this.fetch(sessionId, cwd, anchorTime)
@@ -180,8 +224,101 @@ export class MstarEngineStatusClient {
     this.generation += 1
     this.inFlight.clear()
     if (this.snapshot.entries.size === 0) return
-    this.snapshot = EMPTY
+    this.snapshot = { ...this.snapshot, entries: new Map() }
     this.notify()
+  }
+
+  /**
+   * Mark ONE session's cached answer stale and fence off the requests already on
+   * the wire (a picker commit changed that session's durable binding).
+   *
+   * The entry is KEPT — the last emitted payload is still the last model
+   * emission, and spec §Picker contract 2 keeps plans / Event Log on it until
+   * the next real `agent/pre-step` replaces it. What must change is `binding`,
+   * the host's current control state, which the next {@link ensure} re-pulls for
+   * the same anchor ({@link stale}), because an entry that already answers the
+   * anchor would otherwise short-circuit the request and the panel would keep
+   * rendering the pre-pick selection.
+   *
+   * The fence is per session: a pre-pick answer issued before this call belongs
+   * to the superseded control state and is dropped on arrival, and no other
+   * session's cache is touched.
+   */
+  invalidateSession(sessionId: string): void {
+    if (this.disposed) return
+    this.sessionGenerations.set(sessionId, this.sessionGen(sessionId) + 1)
+    const prefix = `${sessionId}\u0000`
+    for (const key of [...this.inFlight.keys()]) {
+      if (key.startsWith(prefix)) this.inFlight.delete(key)
+    }
+    this.stale.add(sessionId)
+  }
+
+  /**
+   * Commit this session's workflow pick over the host's shared gateway (the
+   * `selectWorkflow` UI control). Never optimistic: the returned state is
+   * `pending` until the host acknowledges, then either `selected` (with the
+   * acknowledged id) or `failed` (with the host's reason) — and a success
+   * invalidates THIS session only, so the next `ensure()` re-reads the
+   * acknowledged binding while every other session's cache is untouched.
+   * @param sessionId - the session the panel is showing.
+   * @param cwd - the session's workspace directory (the host cross-checks it).
+   * @param workflowId - the chosen ACTIVE workflow id.
+   */
+  async selectWorkflow(sessionId: string, cwd: string, workflowId: string): Promise<MstarSelectWorkflowFetch> {
+    if (this.disposed) return { status: 'unavailable', reason: 'disposed' }
+    // One submission per session: a second one while the first is on the wire
+    // would race two acknowledgements for the same binding.
+    if (this.snapshot.selections.get(sessionId)?.state === 'pending') {
+      return { status: 'unavailable', reason: 'selection-pending' }
+    }
+    this.setSelection(sessionId, { state: 'pending' })
+    const answer = await this.callSelect(sessionId, cwd, workflowId)
+    if (answer.status === 'selected') {
+      // Fence first, then publish: the publish notifies, the re-render calls
+      // `ensure`, and that request must be issued under the NEW session
+      // generation or its own answer would be dropped as pre-pick.
+      this.invalidateSession(sessionId)
+      this.setSelection(sessionId, { state: 'selected', workflowId: answer.workflowId })
+    } else {
+      this.setSelection(sessionId, { state: 'failed', reason: answer.reason })
+    }
+    return answer
+  }
+
+  /** One `selectWorkflow` round trip (never throws — every fault is a reason). */
+  private async callSelect(
+    sessionId: string,
+    cwd: string,
+    workflowId: string,
+  ): Promise<MstarSelectWorkflowFetch> {
+    if (this.connection === null || this.connection === undefined || typeof this.connection.rpc?.call !== 'function') {
+      return { status: 'unavailable', reason: 'no-connection' }
+    }
+    try {
+      const raw = await this.withDeadline((signal) => this.connection!.rpc.call(
+        ENGINE_STATUS_CHANNEL,
+        SELECT_WORKFLOW_ENDPOINT,
+        { args: { sessionId, cwd, workflowId } },
+        signal,
+      ))
+      return parseSelectWorkflowResult(raw, sessionId, workflowId)
+    } catch (error) {
+      return { status: 'unavailable', reason: `transport-error:${(error as Error)?.message ?? 'unknown'}` }
+    }
+  }
+
+  /** Publish one session's picker state (store write outside a render). */
+  private setSelection(sessionId: string, state: MstarSelectionState): void {
+    const selections = new Map(this.snapshot.selections)
+    selections.set(sessionId, state)
+    this.snapshot = { ...this.snapshot, selections }
+    this.notify()
+  }
+
+  /** One session's current request generation. */
+  private sessionGen(sessionId: string): number {
+    return this.sessionGenerations.get(sessionId) ?? 0
   }
 
   /** Stop accepting writes, abort in-flight requests and end the refresh interval (plugin teardown). */
@@ -249,6 +386,7 @@ export class MstarEngineStatusClient {
    */
   private async fetch(sessionId: string, cwd: string, anchorTime: number): Promise<void> {
     const generation = this.generation
+    const sessionGeneration = this.sessionGen(sessionId)
     let answer: MstarEngineStatusFetch
     if (this.connection === null || this.connection === undefined || typeof this.connection.rpc?.call !== 'function') {
       answer = { status: 'unavailable', reason: 'no-connection' }
@@ -268,7 +406,7 @@ export class MstarEngineStatusClient {
         answer = { status: 'unavailable', reason: `transport-error:${(error as Error)?.message ?? 'unknown'}` }
       }
     }
-    this.write(generation, sessionId, cwd, anchorTime, answer)
+    this.write(generation, sessionGeneration, sessionId, cwd, anchorTime, answer)
   }
 
   /**
@@ -302,7 +440,11 @@ export class MstarEngineStatusClient {
    * An answer issued under a superseded connection generation is DROPPED: it
    * describes the connection that is gone, and publishing it would both render
    * pre-reconnect data as `ok` and suppress the repull `invalidate()` forces
-   * (the stale answer would satisfy `ensure`'s anchor check).
+   * (the stale answer would satisfy `ensure`'s anchor check). An answer issued
+   * under a superseded SESSION generation is dropped for the same reason after a
+   * picker commit ({@link invalidateSession}): it describes the pre-pick control
+   * state and would otherwise repopulate the very entry the acknowledgement
+   * invalidated.
    *
    * An answer for a SUPERSEDED anchor is dropped for the same class of reason:
    * a refresh issues its request for the anchor it saw, and a newer anchor row
@@ -313,6 +455,7 @@ export class MstarEngineStatusClient {
    */
   private write(
     generation: number,
+    sessionGeneration: number,
     sessionId: string,
     cwd: string,
     anchorTime: number,
@@ -320,15 +463,19 @@ export class MstarEngineStatusClient {
   ): void {
     if (this.disposed) return
     if (generation !== this.generation) return
+    if (sessionGeneration !== this.sessionGen(sessionId)) return
     if ((this.snapshot.entries.get(sessionId)?.anchorTime ?? anchorTime) > anchorTime) return
     this.writeEntry(sessionId, { anchorTime, cwd, fetchedAt: Date.now(), fetch })
   }
 
   /** The store write itself (no generation test — see {@link write}). */
   private writeEntry(sessionId: string, entry: MstarEngineStatusEntry): void {
+    // The answer is on the wire no more: a session marked stale by a picker
+    // commit has just been re-read (a failure reason is an answer too).
+    this.stale.delete(sessionId)
     const entries = new Map(this.snapshot.entries)
     entries.set(sessionId, entry)
-    this.snapshot = { entries }
+    this.snapshot = { ...this.snapshot, entries }
     this.notify()
   }
 

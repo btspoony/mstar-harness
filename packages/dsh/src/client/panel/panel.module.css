@@ -776,6 +776,67 @@
   font-weight: 600;
 }
 
+/* Unbound multi-active picker (spec §Picker contract): the copy plus one row
+   per candidate active id, then the commit state. Same pill language as a
+   plan-status chip; the whole seat is additive and never a crash. */
+.picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-2);
+}
+
+.pickerCopy {
+  margin: 0;
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+}
+
+.pickerList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pickerItem {
+  display: flex;
+  min-width: 0;
+}
+
+.pickerButton {
+  appearance: none;
+  min-width: 0;
+  max-width: 100%;
+  padding: var(--mstar-space-1) var(--mstar-space-2);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 999px;
+  background: none;
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-11);
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+  transition: color 150ms ease, border-color 150ms ease;   /* hover 120–150ms + state switch ≤200ms */
+}
+
+.pickerButton:hover:not(:disabled) {
+  color: var(--dsw-alias-label-primary);
+  border-color: var(--dsw-alias-state-business-primary);
+}
+
+.pickerButton:disabled {
+  color: var(--dsw-alias-label-caption);
+  cursor: default;
+}
+
+.pickerStatus {
+  margin: 0;
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+}
+
 .empty {
   margin: 0;
   color: var(--dsw-alias-label-caption);

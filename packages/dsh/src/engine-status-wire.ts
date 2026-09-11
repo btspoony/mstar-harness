@@ -28,3 +28,12 @@ export const ENGINE_STATUS_ENDPOINT = 'mstar/engineStatus'
 export const MSTAR_ENGINE_STATUS_NAMESPACE = 'mstar'
 /** Wire method of the invocation → `/api/mstar/engineStatus`. */
 export const MSTAR_ENGINE_STATUS_METHOD = 'engineStatus'
+/**
+ * Wire method of the panel's workflow-selection control → `/api/mstar/selectWorkflow`.
+ * A session-scoped UI control (never a model workflow-execution tool): the
+ * host acknowledges the pick durably and the next `ensure()` reads the
+ * current binding back.
+ */
+export const MSTAR_SELECT_WORKFLOW_METHOD = 'selectWorkflow'
+/** The endpoint path the client calls for a workflow pick. */
+export const SELECT_WORKFLOW_ENDPOINT = `${MSTAR_ENGINE_STATUS_NAMESPACE}/${MSTAR_SELECT_WORKFLOW_METHOD}`

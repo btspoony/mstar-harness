@@ -230,6 +230,10 @@ export type PanelKey =
   | 'state.title'
   | 'state.selection'
   | 'state.selection.history'
+  | 'state.selection.unbound'
+  | 'state.selection.pick'
+  | 'state.selection.pending'
+  | 'state.selection.failed'
   | 'state.plans'
   | 'state.residuals'
   | 'state.policy'
@@ -361,6 +365,10 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'state.title': '工作区状态',
   'state.selection': '所选工作流',
   'state.selection.history': '历史视图（终端快照）',
+  'state.selection.unbound': '存在多个活动工作流——请为本会话选择一个。本会话没有租约，也不在任何工作流工作区内。选择之前写入会暂停。其他会话保持各自的绑定。',
+  'state.selection.pick': '选择 {workflowId}',
+  'state.selection.pending': '正在提交选择…',
+  'state.selection.failed': '选择失败：{reason}',
   'state.plans': '计划',
   'state.residuals': '未决残留',
   'state.policy': '策略',
@@ -487,6 +495,10 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'state.title': 'Workspace state',
   'state.selection': 'Selected workflow',
   'state.selection.history': 'history view (terminal snapshot)',
+  'state.selection.unbound': 'Multiple active workflows — pick one for this session. This session has no lease and is not inside a workflow worktree. Writes pause until you pick. Other sessions stay on their own binding.',
+  'state.selection.pick': 'Select {workflowId}',
+  'state.selection.pending': 'Committing your pick…',
+  'state.selection.failed': 'Pick failed: {reason}',
   'state.plans': 'Plans',
   'state.residuals': 'Open residuals',
   'state.policy': 'Policy',

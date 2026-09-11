@@ -39,8 +39,12 @@ import type { ChatSnapshot } from '@deepseek-ai/dsh-client-ui-chat/client'
 import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SessionListState } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { SessionId } from '@deepseek-ai/dsh-session'
-import type { MstarEngineStatusPayload } from '../../types.ts'
-import type { MstarEngineStatusClient, MstarEngineStatusSnapshot } from './engine-status-client.ts'
+import type { MstarEngineStatusPayload, WorkflowSelectionView } from '../../types.ts'
+import type {
+  MstarEngineStatusClient,
+  MstarEngineStatusSnapshot,
+  MstarSelectionState,
+} from './engine-status-client.ts'
 
 /** Selector hook over the Host session list (the `useSessions` standard seat). */
 export type UseSessions = SnapshotSelectorHook<SessionListState>
@@ -56,8 +60,14 @@ export type MstarEngineStatusView =
    * identity (`at` timestamp and the agent turn it was written for). Both are
    * the host's records of the stored entry, so the panel can name which
    * emission it is showing rather than implying it is the newest one.
+   *
+   * `binding` is the host's CURRENT control-state selection for this session
+   * (`null` when it served none), deliberately separate from
+   * `payload.state.selection` — which keeps recording the last MODEL EMISSION,
+   * so the picker's acknowledgement shows immediately while plans / Event Log
+   * stay on the last emitted snapshot.
    */
-  | { readonly state: 'ok'; readonly anchorTime: number; readonly payload: MstarEngineStatusPayload; readonly at: string; readonly turn: number; readonly reason: null }
+  | { readonly state: 'ok'; readonly anchorTime: number; readonly payload: MstarEngineStatusPayload; readonly at: string; readonly turn: number; readonly binding: WorkflowSelectionView | null; readonly reason: null }
   /** An explicit degraded answer — always WITH a reason, never silently empty. */
   | { readonly state: 'unavailable'; readonly anchorTime: number; readonly payload: null; readonly at: null; readonly turn: null; readonly reason: string }
 
@@ -78,8 +88,24 @@ export interface MstarEngineStatusSeats {
   engineStatus: MstarEngineStatusClient | undefined
 }
 
+/**
+ * The panel hook's result: the render state plus this session's picker seat.
+ * `selection` is the served binding (absent until an `ok` render); `pick` is the
+ * local commit state for THIS session only; `select` is null exactly when no
+ * commit can be made (no client, no session, or unknown cwd).
+ */
+export interface MstarEngineStatusHook {
+  readonly view: MstarEngineStatusView
+  /** The served selection of the rendered payload (null unless `view.state === 'ok'`). */
+  readonly selection: WorkflowSelectionView | null
+  /** This session's picker state, `idle` until a pick is committed. */
+  readonly pick: MstarSelectionState
+  /** Commit a pick for this session; null when the panel cannot commit one. */
+  readonly select: ((workflowId: string) => void) | null
+}
+
 /** Stable empty snapshot — the fallback read face when no client is injected. */
-const EMPTY_SNAPSHOT: MstarEngineStatusSnapshot = { entries: new Map() }
+const EMPTY_SNAPSHOT: MstarEngineStatusSnapshot = { entries: new Map(), selections: new Map() }
 /** Stable no-op subscribe — keeps the hook's call order unconditional. */
 const NO_SUBSCRIBE = (): (() => void) => () => {}
 /** Stable fallback read — same reference as {@link EMPTY_SNAPSHOT}. */
@@ -138,6 +164,9 @@ export function selectSessionCwd(sessionId: SessionId | undefined) {
 /** `waiting` — one shared reference (stable across renders). */
 const WAITING: MstarEngineStatusView = { state: 'waiting', anchorTime: null, payload: null, at: null, turn: null, reason: null }
 
+/** A session with no recorded pick — one shared reference (stable across renders). */
+const IDLE_PICK: MstarSelectionState = { state: 'idle' }
+
 /** `unavailable` — one shape, always with a reason. */
 function unavailable(anchorTime: number, reason: string): MstarEngineStatusView {
   return { state: 'unavailable', anchorTime, payload: null, at: null, turn: null, reason }
@@ -147,10 +176,13 @@ function unavailable(anchorTime: number, reason: string): MstarEngineStatusView 
  * The panel's data hook (spec §5).
  *
  * @param seats - the session standard kit + the plugin's engine-status client.
- * @returns the explicit render state (never a throw, never a half-parsed view).
+ * @returns the explicit render state (never a throw, never a half-parsed view)
+ *   plus this session's picker triple: the served `selection`, the local commit
+ *   `pick`, and `select` (null when no pick can be committed).
  */
-export function useMstarEngineStatus(seats: MstarEngineStatusSeats): MstarEngineStatusView {
+export function useMstarEngineStatus(seats: MstarEngineStatusSeats): MstarEngineStatusHook {
   const { useChat, useSessions, sessionId, engineStatus } = seats
+  const session = sessionId === undefined ? null : String(sessionId)
 
   // Both seats are selector hooks; a throwing seat degrades to the explicit
   // empty signal (the strict-session slot normally guarantees a session — the
@@ -174,33 +206,64 @@ export function useMstarEngineStatus(seats: MstarEngineStatusSeats): MstarEngine
     engineStatus?.getSnapshot ?? readEmptySnapshot,
   )
 
-  // No anchor row → the plugin never ran on this session (today's empty state).
-  if (anchorTime === null) return WAITING
+  // The picker needs a client, a session and a workspace dir — all three or no
+  // picker: the host cross-checks the cwd it is given against the live session.
+  const target = engineStatus !== undefined && session !== null && cwd !== null
+    ? { client: engineStatus, sessionId: session, cwd }
+    : null
 
-  if (engineStatus !== undefined && sessionId !== undefined && cwd !== null) {
-    // Idempotent: one request per (session, anchor row), deduped in the client.
-    // Called during render on purpose — the store is written only from the
-    // response continuation, so this starts a request without mutating the
-    // snapshot React is reading, and an SSR render issues the same call the
-    // browser's next render does.
-    try {
-      engineStatus.ensure(String(sessionId), cwd, anchorTime)
-    } catch {
-      // A faulting client must not take the panel down; the render below
-      // reports `unavailable` for the answer that never arrives.
+  let view: MstarEngineStatusView
+  // No anchor row → the plugin never ran on this session (today's empty state).
+  if (anchorTime === null) {
+    view = WAITING
+  } else {
+    if (target !== null) {
+      // Idempotent: one request per (session, anchor row), deduped in the
+      // client. Called during render on purpose — the store is written only
+      // from the response continuation, so this starts a request without
+      // mutating the snapshot React is reading, and an SSR render issues the
+      // same call the browser's next render does.
+      try {
+        target.client.ensure(target.sessionId, target.cwd, anchorTime)
+      } catch {
+        // A faulting client must not take the panel down; the render below
+        // reports `unavailable` for the answer that never arrives.
+      }
+    }
+
+    const entry = session === null ? undefined : snapshot.entries.get(session)
+    if (entry === undefined) {
+      if (engineStatus === undefined) view = unavailable(anchorTime, 'no-connection')
+      else if (session === null) view = unavailable(anchorTime, 'session-unknown')
+      else if (cwd === null) view = unavailable(anchorTime, 'session-cwd-unknown')
+      else view = { state: 'loading', anchorTime, payload: null, at: null, turn: null, reason: null }
+    } else if (entry.fetch.status === 'unavailable') {
+      view = unavailable(anchorTime, entry.fetch.reason)
+    } else {
+      // A superseded snapshot keeps rendering with its OWN `at` until the answer
+      // for the newest anchor lands: a panel that blinked to a loading card on
+      // every catalog re-emission would misreport a healthy refresh as a failure.
+      view = { state: 'ok', anchorTime, payload: entry.fetch.payload, at: entry.fetch.at, turn: entry.fetch.turn, binding: entry.fetch.binding, reason: null }
     }
   }
 
-  const entry = sessionId === undefined ? undefined : snapshot.entries.get(String(sessionId))
-  if (entry === undefined) {
-    if (engineStatus === undefined) return unavailable(anchorTime, 'no-connection')
-    if (sessionId === undefined) return unavailable(anchorTime, 'session-unknown')
-    if (cwd === null) return unavailable(anchorTime, 'session-cwd-unknown')
-    return { state: 'loading', anchorTime, payload: null, at: null, turn: null, reason: null }
+  return {
+    view,
+    // The host's CURRENT control state wins over the payload's last-emission
+    // record: after a pick the panel shows the acknowledged id immediately,
+    // while plans / Event Log stay on the last emitted snapshot until the next
+    // real emission replaces it.
+    selection: view.state === 'ok' ? view.binding ?? view.payload.state?.selection ?? null : null,
+    pick: session === null ? IDLE_PICK : snapshot.selections.get(session) ?? IDLE_PICK,
+    select: target === null ? null : (workflowId: string): void => {
+      // Fire-and-forget on purpose: the acknowledgement, refusal and any fault
+      // land in the store as this session's `pick`, and the store notifies a
+      // re-render. A synchronous throw from a broken client is contained.
+      try {
+        void target.client.selectWorkflow(target.sessionId, target.cwd, workflowId)
+      } catch {
+        // The pick stays `idle`/unchanged and the picker stays clickable.
+      }
+    },
   }
-  // A superseded snapshot keeps rendering with its OWN `at` until the answer
-  // for the newest anchor lands: a panel that blinked to a loading card on
-  // every catalog re-emission would misreport a healthy refresh as a failure.
-  if (entry.fetch.status === 'unavailable') return unavailable(anchorTime, entry.fetch.reason)
-  return { state: 'ok', anchorTime, payload: entry.fetch.payload, at: entry.fetch.at, turn: entry.fetch.turn, reason: null }
 }

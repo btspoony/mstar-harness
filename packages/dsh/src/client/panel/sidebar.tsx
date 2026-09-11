@@ -16,20 +16,20 @@ import * as React from 'react'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { MstarEngineStatusPayload, MstarHarnessState } from '../../types.ts'
 import css from './panel.module.css'
-import { StateSection } from './state-section.tsx'
+import { StateSection, type MstarSelectionSeat } from './state-section.tsx'
 
-export interface SidebarProps {
+export interface SidebarProps extends MstarSelectionSeat {
   t: TranslateNS<'mstar-panel'>
   state: MstarHarnessState | null
   source: MstarEngineStatusPayload
 }
 
-export function Sidebar({ t, state, source }: SidebarProps) {
+export function Sidebar({ t, state, source, selection, pick, select }: SidebarProps) {
   return (
     <aside className={css.sidebar} data-mstar-sidebar>
       {state === null
         ? <p className={css.empty} data-mstar-empty="no-state">{t('state.none')}</p>
-        : <StateSection t={t} state={state} enforcement={source.enforcement} />}
+        : <StateSection t={t} state={state} enforcement={source.enforcement} selection={selection} pick={pick} select={select} />}
     </aside>
   )
 }

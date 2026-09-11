@@ -20,8 +20,9 @@
  * HARD constraint — headless boot safety: this module is reachable from
  * `apply`, and it must never make the host row statically inject `connection`
  * or `webServer`. Everything web-only is inside the optional inject child; the
- * endpoint's own reads (`ctx.get('sessions')`, `ctx.get('sessionController')`)
- * are structural and degrade when the service is absent.
+ * endpoint's own reads (`ctx.get('sessions')`, `ctx.get('agents')`,
+ * `ctx.get('sessionController')`) are structural and degrade when the service
+ * is absent.
  *
  * VALIDATION CHAIN — the endpoint serves ONE session's snapshot and answers
  * otherwise. In order:
@@ -37,6 +38,15 @@
  * another session's data, never a silently-close match, never a path built from
  * unvalidated input.
  *
+ * The response additionally carries the session's CURRENT control-state
+ * selection (`binding.selection`, D4) — server-resolved from the durable
+ * picker record + the verified live Agent — so the panel can show the chosen
+ * active id while `payload` / `at` / `turn` keep naming the LAST MODEL
+ * EMISSION. The `selectWorkflow` UI control (D4) is the write half: a LIVE
+ * session, an exact cwd, an ACTIVE workflow id, automatic-binding compatibility
+ * and a bounded session sequence are mandatory before the durable pick is
+ * committed.
+ *
  * @module @mstar-harness/dsh/engine-status-endpoint
  */
 
@@ -44,19 +54,40 @@ import { isAbsolute } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { TypertContribution } from '@deepseek-ai/dsh-typert-registry'
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
-import type { HarnessResolver } from './gates/_shared.ts'
-import { readEngineStatusSnapshot, type EngineStatusSnapshotEntry } from './engine-status-store.ts'
-import { MSTAR_ENGINE_STATUS_METHOD, MSTAR_ENGINE_STATUS_NAMESPACE } from './engine-status-wire.ts'
+import type { WorkflowSelectionView } from './types.ts'
+import { agentIdOf, sessionCwdOf, sessionHeaderIdOf, type HarnessResolver } from './gates/_shared.ts'
+import { resolveActiveWorkflow, resolveReadWorkflow, type SessionHint } from './gates/workflow-selection.ts'
+import {
+  readEngineStatusSnapshot,
+  readWorkflowSessionBinding,
+  updateWorkflowSessionBinding,
+  type EngineStatusSnapshotEntry,
+} from './engine-status-store.ts'
+import {
+  MSTAR_ENGINE_STATUS_METHOD,
+  MSTAR_ENGINE_STATUS_NAMESPACE,
+  MSTAR_SELECT_WORKFLOW_METHOD,
+} from './engine-status-wire.ts'
 
 // The wire address is declared ONCE for both halves (`./engine-status-wire.ts`)
 // and re-exported here for the host-side consumers that already import this
 // module; a rename can therefore never land on one side only.
-export { MSTAR_ENGINE_STATUS_METHOD, MSTAR_ENGINE_STATUS_NAMESPACE }
+export { MSTAR_ENGINE_STATUS_METHOD, MSTAR_ENGINE_STATUS_NAMESPACE, MSTAR_SELECT_WORKFLOW_METHOD }
 
 /** The contributing package identity (also the invocation id prefix). */
 const CONTRIBUTING_PACKAGE = '@mstar-harness/dsh'
 /** Logger label for the endpoint's own degradation lines. */
 const ENDPOINT_LOGGER = 'mstar-engine-status-endpoint'
+
+/**
+ * The session's CURRENT control state (D4): the selection the server resolves
+ * for the session it just validated — the durable picker record folded with
+ * the verified live Agent's lease holder. Deliberately SEPARATE from
+ * `payload` / `at` / `turn`, which keep naming the last model emission.
+ */
+export interface MstarEngineStatusBinding {
+  readonly selection: WorkflowSelectionView
+}
 
 /** The served snapshot (the stored emission, echoed back with its identity). */
 export interface MstarEngineStatusOk {
@@ -69,6 +100,8 @@ export interface MstarEngineStatusOk {
   readonly turn: number
   /** The exact catalog payload emitted to that session's model. */
   readonly payload: Record<string, unknown>
+  /** Current control-state selection for this session (never the last emission's). */
+  readonly binding?: MstarEngineStatusBinding
 }
 
 /**
@@ -83,16 +116,38 @@ export interface MstarEngineStatusUnavailableResult {
 /** The endpoint's wire result. */
 export type MstarEngineStatusResult = MstarEngineStatusOk | MstarEngineStatusUnavailableResult
 
+/** The picker commit result: the durable preference was acknowledged. */
+export interface MstarSelectWorkflowOk {
+  readonly status: 'selected'
+  readonly sessionId: string
+  readonly workflowId: string
+}
+
+/** The `selectWorkflow` UI control's wire result. */
+export type MstarSelectWorkflowResult = MstarSelectWorkflowOk | MstarEngineStatusUnavailableResult
+
 /** Options the endpoint needs from the plugin's apply scope. */
 export interface MstarEngineStatusEndpointOptions {
   /** The per-workspace `{HARNESS_DIR}` resolver (the same one the gates use). */
   readonly resolver: HarnessResolver
   /** The boot-resolved config root when an explicit `harnessDir` is configured. */
   readonly bootHarnessDir: string | null
+  /**
+   * A picker commit landed for `(harnessDir, sessionId)`: drop that session's
+   * cached catalog payload + re-emission digest so the next pre-step rebuilds
+   * from the acknowledged binding. Optional (a host without the catalog wiring
+   * still serves the control method); a throwing hook is contained.
+   */
+  readonly invalidateSelection?: (harnessDir: string, sessionId: string) => void
 }
 
 /** Structural view of the live sessions service (`get(id)` only). */
 interface SessionsView {
+  get(id: string): unknown
+}
+
+/** Structural view of the live agents service (`get(sessionId)` only). */
+interface AgentsView {
   get(id: string): unknown
 }
 
@@ -118,6 +173,17 @@ function headerCwdOf(value: unknown): string | undefined {
 }
 
 /**
+ * The live Session's bounded integer sequence (`Session.seq` — the log
+ * length), or undefined when the structural fake/older runtime carries none.
+ * A pick cannot be acknowledged without it: the exclusion floor is
+ * `max(old, seq)`.
+ */
+function liveSeqOf(value: unknown): number | undefined {
+  const seq = (value as { seq?: unknown } | null | undefined)?.seq
+  return typeof seq === 'number' && Number.isInteger(seq) && seq >= 0 ? seq : undefined
+}
+
+/**
  * Refuse a client-asserted path that is not a plain absolute path: a relative
  * path would be resolved against the host process cwd (never the caller's), and
  * a `..` segment or NUL byte is a traversal probe, not a workspace.
@@ -140,15 +206,17 @@ type SessionCwdResolution =
 export class MstarEngineStatusGateway extends TypertRemoteService {
   private readonly resolver: HarnessResolver
   private readonly bootHarnessDir: string | null
+  private readonly invalidateSelection: ((harnessDir: string, sessionId: string) => void) | undefined
 
   /**
    * @param ctx - owning Cordis context.
-   * @param options - the apply-scoped resolver + boot root.
+   * @param options - the apply-scoped resolver + boot root (+ pick invalidation hook).
    */
   constructor(ctx: Context, options: MstarEngineStatusEndpointOptions) {
     super(ctx, MSTAR_ENGINE_STATUS_NAMESPACE)
     this.resolver = options.resolver
     this.bootHarnessDir = options.bootHarnessDir
+    this.invalidateSelection = options.invalidateSelection
   }
 
   /**
@@ -156,7 +224,8 @@ export class MstarEngineStatusGateway extends TypertRemoteService {
    * chain documented in the module header.
    * @param sessionId - the session whose snapshot is requested (client-asserted).
    * @param cwd - the session workspace the client believes it is reading (client-asserted).
-   * @returns the stored emission, or the explicit unavailable state with a reason.
+   * @returns the stored emission plus the session's current control-state
+   *   selection, or the explicit unavailable state with a reason.
    */
   async engineStatus(sessionId: string, cwd: string): Promise<MstarEngineStatusResult> {
     try {
@@ -167,6 +236,32 @@ export class MstarEngineStatusGateway extends TypertRemoteService {
       // interpret (and never as another session's data).
       this.ctx.logger(ENDPOINT_LOGGER).warn(
         `engineStatus failed for ${String(sessionId)} (answering unavailable): ${(error as Error)?.message ?? error}`,
+      )
+      return unavailable('internal-error')
+    }
+  }
+
+  /**
+   * Commit one session's durable workflow selection (the panel's picker).
+   *
+   * Mandatory before the commit: the LIVE Session (a cold/persisted-only
+   * target answers `session-not-live`), an exact cwd match, a bounded integer
+   * session sequence, an ACTIVE workflow id from the freshly resolved
+   * registry, and no conflicting higher-priority automatic (lease/cwd)
+   * binding. The exclusion floor commits as `max(stored, seq)`. An identical
+   * already-stored active pick is acknowledged WITHOUT advancing the floor.
+   * No client-supplied directory, holder or sequence is accepted.
+   * @param sessionId - the session whose selection is committed (client-asserted).
+   * @param cwd - the session workspace the client asserts (must match the live session).
+   * @param workflowId - the chosen ACTIVE lifecycle id.
+   * @returns the acknowledgement, or the explicit unavailable state with a reason.
+   */
+  async selectWorkflow(sessionId: string, cwd: string, workflowId: string): Promise<MstarSelectWorkflowResult> {
+    try {
+      return await this.pick(sessionId, cwd, workflowId)
+    } catch (error) {
+      this.ctx.logger(ENDPOINT_LOGGER).warn(
+        `selectWorkflow failed for ${String(sessionId)} (answering unavailable): ${(error as Error)?.message ?? error}`,
       )
       return unavailable('internal-error')
     }
@@ -206,7 +301,129 @@ export class MstarEngineStatusGateway extends TypertRemoteService {
       at: entry.at,
       turn: entry.turn,
       payload: entry.payload,
+      // Current control state, computed for the SAME validated session: the
+      // durable pick folded with the verified live Agent. Never the emitted
+      // payload's selection — that one keeps recording the last emission.
+      binding: { selection: this.currentSelection(harnessDir, sid, entry.cwd, session.source === 'live') },
     }
+  }
+
+  /** The picker commit chain itself (contained by {@link selectWorkflow}). */
+  private async pick(sessionId: unknown, cwd: unknown, workflowId: unknown): Promise<MstarSelectWorkflowResult> {
+    const sid = nonEmptyString(sessionId)
+    if (sid === undefined) return unavailable('invalid-session-id')
+    const claimed = nonEmptyString(cwd)
+    if (claimed === undefined) return unavailable('invalid-cwd')
+    if (isRefusedPath(claimed)) return unavailable('cwd-refused')
+    const wid = nonEmptyString(workflowId)
+    if (wid === undefined) return unavailable('invalid-workflow-id')
+
+    // (1) The target must be LIVE: a session that only exists in the persisted
+    // controller cannot commit a pick until it is resumed.
+    const sessions = this.ctx.get('sessions') as SessionsView | undefined
+    const live = typeof sessions?.get === 'function' ? sessions.get(sid) : undefined
+    const liveCwd = headerCwdOf(live)
+    if (liveCwd === undefined) return unavailable('session-not-live')
+    if (liveCwd !== claimed) return unavailable('cwd-mismatch')
+    const seq = liveSeqOf(live)
+    if (seq === undefined) return unavailable('session-seq-unavailable')
+
+    const harnessDir = this.bootHarnessDir ?? this.resolver.forWorkspace(liveCwd)
+    if (harnessDir === null || harnessDir === '') return unavailable('no-harness-dir')
+
+    // (2) The requested id must be an ACTIVE id of the freshly resolved
+    // registry (validated with the automatic rungs omitted, so the check is
+    // about the registry itself rather than this session's evidence).
+    const registry = resolveActiveWorkflow(harnessDir)
+    if (registry.kind === 'active') {
+      if (registry.workflowId !== wid) return unavailable('workflow-not-active')
+    } else if (registry.kind === 'error') {
+      if (registry.code !== 'workflow.selection.unbound-multi-active') {
+        return unavailable(`selection-unavailable:${registry.code}`)
+      }
+      if (!(registry.activeWorkflowIds ?? []).includes(wid)) return unavailable('workflow-not-active')
+    } else {
+      // Unreachable through {@link resolveActiveWorkflow}, which never answers
+      // the history view: refused rather than treated as a pickable set.
+      return unavailable('selection-unavailable:terminal')
+    }
+
+    // (3) A higher-priority automatic binding wins: refusing the pick keeps
+    // lease/cwd attribution authoritative instead of letting the panel
+    // overrule it (the picker never appears for a bound session anyway).
+    const holder = this.leaseHolderOf(sid, liveCwd)
+    const structural: SessionHint = {
+      cwd: liveCwd,
+      sessionId: sid,
+      ...(holder === undefined ? {} : { leaseHolder: holder }),
+    }
+    const automatic = resolveActiveWorkflow(harnessDir, structural)
+    if (automatic.kind === 'active' && automatic.workflowId !== wid) return unavailable('binding-conflict')
+
+    // (4) Idempotent re-apply: the same stored active pick is acknowledged
+    // without advancing the exclusion floor (no spurious exclusion window).
+    const stored = readWorkflowSessionBinding(harnessDir, sid, liveCwd)
+    if (stored.kind === 'unavailable') return unavailable(`store-${stored.reason}`)
+    if (stored.binding?.selectedWorkflowId === wid) {
+      return { status: 'selected', sessionId: sid, workflowId: wid }
+    }
+
+    // (5) Commit the preference and the exclusion floor `max(stored, seq)`.
+    const written = updateWorkflowSessionBinding(harnessDir, sid, liveCwd, {
+      selectedWorkflowId: wid,
+      excludedBeforeSeq: seq,
+    })
+    if (written.kind === 'degraded') return unavailable(`store-${written.reason}`)
+    try {
+      this.invalidateSelection?.(harnessDir, sid)
+    } catch (error) {
+      // The pick is durable already: a throwing invalidation hook degrades the
+      // cache refresh only (the TTL still bounds it), never the acknowledgement.
+      this.ctx.logger(ENDPOINT_LOGGER).warn(
+        `selectWorkflow cache invalidation degraded for ${sid} (the durable pick stands): ${(error as Error)?.message ?? error}`,
+      )
+    }
+    return { status: 'selected', sessionId: sid, workflowId: wid }
+  }
+
+  /**
+   * The session's CURRENT selection: the durable picker record folded with the
+   * session's structural identity and — for a LIVE session — the verified live
+   * Agent's opaque id as the lease holder. An unreadable binding record keeps
+   * the structural hint only (the pick is unknown, never invented), and the
+   * request's `sessionId` is NEVER substituted for the holder.
+   */
+  private currentSelection(
+    harnessDir: string,
+    sessionId: string,
+    cwd: string,
+    live: boolean,
+  ): WorkflowSelectionView {
+    const holder = live ? this.leaseHolderOf(sessionId, cwd) : undefined
+    const stored = readWorkflowSessionBinding(harnessDir, sessionId, cwd)
+    const selected = stored.kind === 'ok' ? stored.binding?.selectedWorkflowId : undefined
+    const hint: SessionHint = {
+      cwd,
+      sessionId,
+      ...(holder === undefined ? {} : { leaseHolder: holder }),
+      ...(selected === undefined ? {} : { selectedWorkflowId: selected }),
+    }
+    return resolveReadWorkflow(harnessDir, hint)
+  }
+
+  /**
+   * The opaque lease-holder `Agent.id` of the session's live Agent, when the
+   * public agents service resolves one whose own session header identifies the
+   * resolved Session (id AND cwd). Absent/mismatching Agent ⇒ undefined — the
+   * request's `sessionId` is never used as a holder shortcut.
+   */
+  private leaseHolderOf(sessionId: string, cwd: string): string | undefined {
+    const agents = this.ctx.get('agents') as AgentsView | undefined
+    const agent = typeof agents?.get === 'function' ? agents.get(sessionId) : undefined
+    if (agent === undefined) return undefined
+    if (sessionHeaderIdOf(agent) !== sessionId) return undefined
+    if (sessionCwdOf(agent) !== cwd) return undefined
+    return agentIdOf(agent)
   }
 
   /**
@@ -239,7 +456,9 @@ export class MstarEngineStatusGateway extends TypertRemoteService {
 }
 
 /**
- * The generated-style invocation descriptor for `/api/mstar/engineStatus`.
+ * The generated-style invocation descriptors for the shared `/api` gateway:
+ * `/api/mstar/engineStatus` (the stored snapshot + current binding) and
+ * `/api/mstar/selectWorkflow` (the panel's durable pick).
  *
  * Registered EXPLICITLY (not through `@Remote` SRC markers): the host gateway
  * checks its own `ctx.typert.local` table FIRST, while SRC discovery reads a
@@ -262,6 +481,19 @@ export function mstarEngineStatusContribution(): TypertContribution {
         parameters: [
           { name: 'sessionId', wire: 'sessionId', source: 'json', codec: { mode: 'src-json' } },
           { name: 'cwd', wire: 'cwd', source: 'json', codec: { mode: 'src-json' } },
+        ],
+        result: { mode: 'src-json' },
+      },
+      {
+        id: `${CONTRIBUTING_PACKAGE}#${MSTAR_ENGINE_STATUS_NAMESPACE}/${MSTAR_SELECT_WORKFLOW_METHOD}`,
+        service: MSTAR_ENGINE_STATUS_NAMESPACE,
+        namespace: MSTAR_ENGINE_STATUS_NAMESPACE,
+        method: MSTAR_SELECT_WORKFLOW_METHOD,
+        invocation: { kind: 'direct' },
+        parameters: [
+          { name: 'sessionId', wire: 'sessionId', source: 'json', codec: { mode: 'src-json' } },
+          { name: 'cwd', wire: 'cwd', source: 'json', codec: { mode: 'src-json' } },
+          { name: 'workflowId', wire: 'workflowId', source: 'json', codec: { mode: 'src-json' } },
         ],
         result: { mode: 'src-json' },
       },

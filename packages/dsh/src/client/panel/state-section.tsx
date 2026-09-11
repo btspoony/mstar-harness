@@ -14,17 +14,43 @@
 
 import * as React from 'react'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
-import type { MstarEngineStatusPayload, MstarHarnessState } from '../../types.ts'
+import type { MstarEngineStatusPayload, MstarHarnessState, WorkflowSelectionView } from '../../types.ts'
 import css from './panel.module.css'
 import { bool, count, str } from './guards.ts'
+import type { MstarSelectionState } from './engine-status-client.ts'
 import { FINDINGS_CAP, PLAN_CAP, sortPlans } from './plan-sort.ts'
 
-export interface StateSectionProps {
+/**
+ * The picker seat (D4): the selection the panel SHOWS, this session's own
+ * commit state, and the commit seat itself. Handed down as one unit from the
+ * hook result to the section that renders it.
+ */
+export interface MstarSelectionSeat {
+  /**
+   * This session's CURRENT selection: the host's live control-state `binding`
+   * when the response carries one, else the last emission's own record
+   * (`state.selection`). `null` renders the unknown arm rather than throwing.
+   */
+  readonly selection: WorkflowSelectionView | null
+  /** This session's picker state (control feedback, never a selection source). */
+  readonly pick: MstarSelectionState
+  /**
+   * Commit a workflow pick for this session, or null when the panel cannot
+   * (no client / no session / unknown cwd). Null renders an error selection
+   * WITHOUT a picker: a row that cannot be committed must not look clickable.
+   */
+  readonly select: ((workflowId: string) => void) | null
+}
+
+export interface StateSectionProps extends MstarSelectionSeat {
   t: TranslateNS<'mstar-panel'>
   state: MstarHarnessState
   /** Top-level enforcement flag (spec §2.1) — NOT part of the state digest. */
   enforcement: MstarEngineStatusPayload['enforcement']
 }
+
+/** No picker candidates — one shared reference (stable across renders). */
+const NO_IDS: readonly string[] = []
 
 /** Enforcement flag label: hard/soft (+ provenance source), unknown when missing (spec §2.1). */
 function enforcementLabel(
@@ -40,7 +66,7 @@ function enforcementLabel(
   return source === null ? flag : `${flag} (${source})`
 }
 
-export function StateSection({ t, state, enforcement }: StateSectionProps) {
+export function StateSection({ t, state, enforcement, selection, pick, select }: StateSectionProps) {
   const plans = Array.isArray(state?.plans) ? state.plans : []
   // Spec §3 order (doneAt digitized DESC → id-date DESC → id lex DESC), cap 5.
   const sortedPlans = sortPlans(plans)
@@ -54,17 +80,33 @@ export function StateSection({ t, state, enforcement }: StateSectionProps) {
   const hiddenFindings = findings === null ? 0 : Math.max(0, findings.length - FINDINGS_CAP)
   const leases = Array.isArray(state?.leases) ? state.leases : []
   const knowledge = state?.knowledge ?? null
-  const selection = state?.selection
+  // The served binding outranks the last emission's own record; an acknowledged
+  // pick outranks a served binding that has not caught up yet (the client is
+  // this session's only binding writer, and the acknowledgement is durable).
+  const activeId = selection?.kind === 'active'
+    ? selection.workflowId
+    : pick.state === 'selected'
+      ? pick.workflowId
+      : null
+  const activeWarning = selection?.kind === 'active' ? selection.warning : undefined
+  // The error arm's own fields (an error that is neither active nor terminal).
+  const errorView = selection?.kind === 'error' ? selection : null
+  // The picker: an unbound multi-active selection names its candidate ids, and a
+  // pick is only offered when the panel can actually commit one.
+  const unbound = selection?.kind === 'error' && (selection.activeWorkflowIds?.length ?? 0) > 0 ? selection : null
+  const candidates = unbound?.activeWorkflowIds ?? NO_IDS
+  // Captured const: a narrowing that survives into the click closure.
+  const commit = select
   return (
     <section className={css.section} data-mstar-section="state">
       <h2 className={css.sectionTitle}>{t('state.title')}</h2>
 
       <h3 className={css.subTitle}>{t('state.selection')}</h3>
-      {selection?.kind === 'active' ? (
-        <p className={css.selection} data-selection-kind="active" data-selection-workflow={selection.workflowId}>
-          <span className={css.selectionId}>{selection.workflowId}</span>
-          {selection.warning !== undefined
-            ? <span className={css.selectionWarning} data-selection-warning>{selection.warning.message}</span>
+      {activeId !== null ? (
+        <p className={css.selection} data-selection-kind="active" data-selection-workflow={activeId}>
+          <span className={css.selectionId}>{activeId}</span>
+          {activeWarning !== undefined
+            ? <span className={css.selectionWarning} data-selection-warning>{activeWarning.message}</span>
             : null}
         </p>
       ) : selection?.kind === 'terminal' ? (
@@ -73,11 +115,39 @@ export function StateSection({ t, state, enforcement }: StateSectionProps) {
           <span className={css.selectionMeta} data-selection-history>{t('state.selection.history')}</span>
         </p>
       ) : (
-        <p className={css.selection} data-selection-kind="error" data-selection-code={selection?.code ?? t('panel.unknown')}>
-          <span className={css.selectionCode}>{selection?.code ?? t('panel.unknown')}</span>
-          <span className={css.selectionMeta}>{selection?.message ?? t('state.none')}</span>
+        <p className={css.selection} data-selection-kind="error" data-selection-code={errorView?.code ?? t('panel.unknown')}>
+          <span className={css.selectionCode}>{errorView?.code ?? t('panel.unknown')}</span>
+          <span className={css.selectionMeta}>{errorView?.message ?? t('state.none')}</span>
         </p>
       )}
+      {unbound !== null && commit !== null ? (
+        <div className={css.picker} data-mstar-picker data-picker-code={unbound.code}>
+          <p className={css.pickerCopy} data-picker-copy>{t('state.selection.unbound')}</p>
+          <ul className={css.pickerList}>
+            {candidates.map((id) => (
+              <li key={id} className={css.pickerItem}>
+                <button
+                  type="button"
+                  className={css.pickerButton}
+                  data-picker-option={id}
+                  // One submission per session: the client refuses a second, so
+                  // the rows are disabled rather than silently ignored.
+                  disabled={pick.state === 'pending'}
+                  onClick={() => commit(id)}
+                >
+                  {t('state.selection.pick', { workflowId: id })}
+                </button>
+              </li>
+            ))}
+          </ul>
+          {pick.state === 'pending'
+            ? <p className={css.pickerStatus} data-picker-pending>{t('state.selection.pending')}</p>
+            : null}
+          {pick.state === 'failed'
+            ? <p className={css.pickerStatus} data-picker-failed data-picker-reason={pick.reason}>{t('state.selection.failed', { reason: pick.reason })}</p>
+            : null}
+        </div>
+      ) : null}
 
       <h3 className={css.subTitle}>{t('state.plans')}</h3>
       {visiblePlans.length === 0
