@@ -248,6 +248,24 @@ export function truncateLedgerField(value: string, cap: number): string {
 }
 
 /**
+ * Canonicalize one Assignment `Execute as` value for the ledger's `role`
+ * field: `trim()`, then strip ONE leading `@`. The `role` column is what
+ * every consumer groups by, so `@explore` and `explore` must be the SAME
+ * role — normalization happens ONCE, at the write boundary (the dispatch row
+ * and its pairing ref, plus the direct `recordSettle` /
+ * `recordSubagentLink` entry points, whose callers may hand in a raw
+ * Assignment value). NO case folding: role ids are host-defined strings, and
+ * folding could merge ids a host intends to keep distinct. No interior
+ * rewrite either — only the edges are trimmed. A missing role stays `''`,
+ * and rows already on disk are never rewritten or renormalized. Pure —
+ * NEVER throws.
+ */
+export function normalizeRoleId(value: string): string {
+  const trimmed = value.trim()
+  return trimmed.startsWith('@') ? trimmed.slice(1) : trimmed
+}
+
+/**
  * The OPTIONAL identity-field gate (the settle `childId` / `taskRef`): a
  * non-empty string of at most {@link WORKFLOW_LEDGER_MAX_ID_LENGTH} UTF-16
  * units (inclusive) passes through; every other value — absent, empty,
@@ -482,7 +500,7 @@ export interface AgentFlowDispatchRef {
   workflowDir: string
   /** The dispatching session's stable id ('' when the exec carried none). */
   agent?: string
-  /** Assignment `Execute as` ('' when missing — the dispatch event's grammar). */
+  /** Assignment `Execute as`, canonicalized by `normalizeRoleId` ('' when missing — the dispatch event's grammar). */
   role: string
   /** `planIdOf(header)` — the dispatch event's grammar. */
   planId?: string
@@ -941,13 +959,17 @@ export function recordDispatch(input: {
     const planId = planIdOf(header)
     const taskId = taskIdOf(input.prompt)
     const taskCategory = fields.taskCategory
+    // ONE canonical role for every row this dispatch produces: the row itself
+    // and its pairing ref (which the settle / link boundaries then agree
+    // with). `@explore` and `explore` are one actor, not two roles.
+    const role = normalizeRoleId(fields.executeAs ?? '')
     const agent = input.exec !== undefined ? agentOfExec(input.exec) : undefined
     const event: AgentFlowEvent = {
       v: 1,
       ts: Date.now(),
       kind: 'dispatch',
       ...(agent !== undefined ? { agent } : {}),
-      role: fields.executeAs ?? '',
+      role,
       ...(planId !== undefined && !isNaValue(planId) ? { planId } : {}),
       ...(taskId !== undefined ? { taskId } : {}),
       ...(taskCategory !== undefined && taskCategory.trim() !== '' ? { taskCategory } : {}),
@@ -976,7 +998,7 @@ export function recordDispatch(input: {
             harnessDir: input.harnessDir,
             workflowDir,
             ...(agent !== undefined ? { agent } : {}),
-            role: fields.executeAs ?? '',
+            role,
             ...(planId !== undefined && !isNaValue(planId) ? { planId } : {}),
             ...(taskId !== undefined ? { taskId } : {}),
           }
@@ -1017,7 +1039,9 @@ export function recordDispatch(input: {
  * outcome + optional duration + the PAIRED dispatch's identity
  * (`role`/`planId`/`taskId` — same field names + semantics as the dispatch
  * event; written for every paired settle, so the client can exactly pair
- * the settle back to its dispatch) + the OPTIONAL child identity
+ * the settle back to its dispatch — `role` is canonicalized by
+ * `normalizeRoleId`, so a direct caller's raw `@role` lands in the same
+ * grammar as the dispatch row) + the OPTIONAL child identity
  * (`childId` — the settled child session; `taskRef` — a background settle's
  * registry job id). A missing, empty, or oversized optional id is OMITTED
  * from the row (never truncated, never re-keyed) and the completion still
@@ -1047,7 +1071,7 @@ export function recordSettle(input: {
       ...(input.agent !== undefined && input.agent.trim() !== '' ? { agent: input.agent } : {}),
       outcome: input.outcome,
       ...(input.durationMs !== undefined && Number.isFinite(input.durationMs) ? { durationMs: input.durationMs } : {}),
-      ...(input.role !== undefined ? { role: input.role } : {}),
+      ...(input.role !== undefined ? { role: normalizeRoleId(input.role) } : {}),
       ...(input.planId !== undefined && input.planId !== '' ? { planId: input.planId } : {}),
       ...(input.taskId !== undefined && input.taskId !== '' ? { taskId: input.taskId } : {}),
       ...(childId !== undefined ? { childId } : {}),
@@ -2143,10 +2167,15 @@ export function recordSubagentLink(input: { ref: AgentFlowDispatchRef; childId: 
     const ref = input.ref
     // `role` is a REQUIRED row field (present even when ''): a ref without
     // one would write a row this module's own reader skips, so refuse it.
+    // The ref normally already carries the canonical role (its dispatch
+    // normalized it); normalizing here keeps an independently constructed
+    // ref — a direct caller with a raw Assignment value — in the same
+    // grammar as the dispatch and settle rows.
     if (typeof ref.role !== 'string') {
       log('warn', 'subagent-link row skipped — the dispatch ref carries no role identity')
       return
     }
+    const role = normalizeRoleId(ref.role)
     const taskRef = optionalLedgerId(ref.taskRef)
     const event: AgentFlowEvent = {
       v: 1,
@@ -2155,7 +2184,7 @@ export function recordSubagentLink(input: { ref: AgentFlowDispatchRef; childId: 
       ...(ref.agent !== undefined && ref.agent.trim() !== '' ? { agent: ref.agent } : {}),
       childId,
       label,
-      role: ref.role,
+      role,
       ...(ref.planId !== undefined && ref.planId !== '' ? { planId: ref.planId } : {}),
       ...(ref.taskId !== undefined && ref.taskId !== '' ? { taskId: ref.taskId } : {}),
       ...(taskRef !== undefined ? { taskRef } : {}),

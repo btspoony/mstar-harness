@@ -579,6 +579,117 @@ describe('agent-flow ledger — recordDispatch / readAgentFlow', () => {
   })
 })
 
+/* ===========================================================================
+ * 1b. Role text — ONE canonical `role` column at the write boundary
+ * ========================================================================== */
+
+describe('agent-flow — role text is canonicalized at the write boundary', () => {
+  /** The same valid Assignment with a different `Execute as` spelling. */
+  const promptWithRole = (executeAs: string): string => VALID_PLANNED.replace('**Execute as**: fullstack-dev', `**Execute as**: ${executeAs}`)
+
+  it('`@explore` and `explore` write the SAME role — one actor, never two ledger roles', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-role-at-')
+    try {
+      recordDispatch({ harnessDir, prompt: promptWithRole('@explore'), violations: [], hard: false })
+      recordDispatch({ harnessDir, prompt: promptWithRole('explore'), violations: [], hard: false })
+
+      const view = readAgentFlow(workflowDir)!
+      expect(view.events.map((event) => event.role)).toEqual(['explore', 'explore'])
+      // The summary groups them as ONE role (the consumer-visible effect).
+      expect(view.summary).toEqual([{ role: 'explore', outcome: 'ok', count: 2 }])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('the direct recordSettle / recordSubagentLink boundaries normalize an independent caller\'s raw value', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-role-direct-')
+    try {
+      recordSettle({ harnessDir, outcome: 'ok', role: '@explore' })
+      recordSettle({ harnessDir, outcome: 'ok', role: '  Architect  ' })
+      recordSettle({ harnessDir, outcome: 'ok', role: 'full stack' })
+      recordSettle({ harnessDir, outcome: 'ok', role: '' })
+      recordSettle({ harnessDir, outcome: 'ok', role: '@@explore' })
+      recordSettle({ harnessDir, outcome: 'ok' })
+      recordSubagentLink({ ref: { harnessDir, workflowDir, role: '@code-reviewer' }, childId: 'child-direct', label: 'direct link' })
+
+      // Latest-first: the link, then the settles newest-first.
+      const view = readAgentFlow(workflowDir)!
+      expect(view.events[0]).toMatchObject({ kind: 'subagent-link', role: 'code-reviewer', childId: 'child-direct' })
+      expect(view.events[1].role).toBe('') // role absent → no key at all, never a re-spelled ''
+      expect(view.events[2].role).toBe('@explore') // exactly ONE leading @ removed, never both
+      expect(view.events[3].role).toBe('') // a missing `Execute as` stays ''
+      expect(view.events[4].role).toBe('full stack') // interior whitespace is NOT rewritten
+      expect(view.events[5].role).toBe('Architect') // case is PRESERVED (no folding)
+      expect(view.events[6].role).toBe('explore')
+
+      // The role-less settle omitted the key entirely (omit discipline, not `role: ''`).
+      const rows = ledgerRows(workflowDir)
+      expect(rows.map((row) => row.kind)).toEqual(['settle', 'settle', 'settle', 'settle', 'settle', 'settle', 'subagent-link'])
+      expect('role' in rows[5]!).toBe(false)
+      expect(rows.slice(0, 5).map((row) => row.role)).toEqual(['explore', 'Architect', 'full stack', '', '@explore'])
+      expect(rows[6]).toMatchObject({ role: 'code-reviewer' })
+      expect(rows.every((row) => Object.values(row).every((value) => value !== undefined))).toBe(true)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('dispatch, settle, and link rows carry the SAME canonical role for one `Execute as`', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-role-rows-')
+    const ctx = new Context()
+    const pairing = pairingOf()
+    const priorSink = setAgentFlowLogger(() => {})
+    try {
+      registerSettleListener(ctx, {}, pairing)
+      registerSubagentCatalogListener(ctx, pairing)
+      const prompt = promptWithRole('@explore')
+
+      // (a) continuable child → the nonterminal link row (its role comes from
+      // the retained dispatch ref).
+      const linkSession = catalogSession('sess-role-link')
+      recordDispatch({ harnessDir, exec: catalogExec('c-role-link', 'sess-role-link', linkSession, 'label one'), prompt, violations: [], hard: false, pairing })
+      linkSession.append('subagent/catalog', catalogPayload('child-role-link', 'label one'))
+      emitPostExecute(ctx, linkSession, 'c-role-link', 'sess-role-link', { isError: false, value: { kind: 'continuable', subagentId: 'child-role-link' } })
+
+      // (b) foreground child → the paired settle row.
+      const settleSession = catalogSession('sess-role-settle')
+      recordDispatch({ harnessDir, exec: catalogExec('c-role-settle', 'sess-role-settle', settleSession, 'label two'), prompt, violations: [], hard: false, pairing })
+      emitPostExecute(ctx, settleSession, 'c-role-settle', 'sess-role-settle', { isError: false, value: { kind: 'foreground', runId: 'run-role' } })
+
+      const rows = ledgerRows(workflowDir)
+      expect(rows.map((row) => row.kind)).toEqual(['dispatch', 'subagent-link', 'dispatch', 'settle'])
+      expect(rows.map((row) => row.role)).toEqual(['explore', 'explore', 'explore', 'explore'])
+    } finally {
+      setAgentFlowLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('historical rows are read as written — never rewritten or renormalized', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-role-historical-')
+    try {
+      const file = join(workflowDir, AGENT_FLOW_FILE)
+      await writeFile(file, `${dispatchLine({ role: '@explore' })}\n`)
+      const legacy = readFileSync(file, 'utf8')
+
+      // A read of a row written before normalization does not re-spell it …
+      expect(readAgentFlow(workflowDir)!.events[0]!.role).toBe('@explore')
+      expect(readFileSync(file, 'utf8')).toBe(legacy)
+
+      // … and a later normalized record only APPENDS: the legacy line survives byte-identical.
+      recordDispatch({ harnessDir, prompt: promptWithRole('@explore'), violations: [], hard: false })
+      const after = readFileSync(file, 'utf8')
+      expect(after.startsWith(legacy)).toBe(true)
+      expect(after.trim().split('\n')).toHaveLength(2)
+      expect(ledgerRows(workflowDir).map((row) => row.role)).toEqual(['@explore', 'explore'])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('agent-flow tail read — bounded latest-first window ', () => {
   it('P2-AC-1: a large padded ledger (200 × ~2 KiB lines) reads its latest 50 events latest-first via the bounded tail', async () => {
     const { root, workflowDir } = await tempHarness('dsh-agentflow-tail-large-')
