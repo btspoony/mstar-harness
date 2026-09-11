@@ -244,9 +244,17 @@ mstar 技能通过 dsh skill-filesystem 提供者以**单一规范挂载**接入
 
 该行是 **digest 门控**的：按 agent+workspace，每个 turn 只注入一次，仅当渲染文本变化时重新注入——20 步的 turn 只显示一次 catalog，而不是 20 次。source 共享**同一**按工作区缓存条目：显式 `harnessDir` 时在 boot 构建（否则在工作区首次 pre-step 构建），并按 TTL 刷新（`catalogTtlMs`，默认 60 秒）——刷新间隔之间热路径只是时间戳比较 + Map 命中，会话中 plan/compass/residual 的变化在一个间隔内落地。
 
-## Agent-flow ledger（workflow 行）
+## Agent-flow ledger
 
-agent-flow 账本——`{HARNESS_DIR}/agent-flow.jsonl`，即 catalog 的 `state.agentFlow` 证据所读的同一 JSONL——同样记录 **workflow / ralph 扇出运行**：一个会话事件消费者（日志器 `mstar/workflow-ledger`，apply 时注册）把四个持久化的 `tool-workflow/*` 会话事件映射为三种新账本类型。事实来源是**持久化会话事件**——追加进**调用方父会话**的日志（仅顶层运行；嵌套 transport 调用上游不记录任何东西），而**不是**内存中的 `workflow/*` emits（roadmap §10.4 N4）：会话日志才是可回放的事实，因此消费者以 **apply 时冷扫描**（构造期种子事件从不进 firehose——`firstLiveSeq`）加实时 **`session/event` firehose** 监听覆盖它，按**持久化逐会话水位线**（会话日志 `seq` 位置）去重——水位线持久化到 `{HARNESS_DIR}/workflow-ledger-cursors.json`（账本旁的小型有界 sidecar，temp 文件 + rename 原子写入）。
+agent-flow 账本位于**当前活动 workflow 目录**——`{HARNESS_DIR}/workflows/<id>/agent-flow.jsonl`（JSON Lines，保留最近 500 条）——即 catalog 的 `state.agentFlow` 证据所读的同一 JSONL。无活动生命周期时记录被**跳过**并只告警一次——绝不写 harness 根，绝不写终态快照目录。它记录**真实的** subagent 派发与结算证据（咨询式、try/catch 含容——账本写入失败绝不阻断派发或结算）：
+
+- **派发（dispatch）**——每个 Assignment 形态的派发一行，记录派发身份：`role`（在写入边界归一化——去首尾空白并剥掉**一个**前导 `@`，故 `@explore` 与 `explore` 是同一 actor 而非两个角色）、`planId`、Assignment 的 `Task N` 标签记为 `taskId`、`taskCategory` 与判定。
+- **结算（settle）**——仅为**真实配对**的完成记录。前台调用在 `tools/post-execute` 监听器结算；`{ kind: 'background', jobId }` 结果按注册表 **`jobId`** 配对（jobs 注册表键，绝非子会话 id），待 `ctx.inject(['jobs'])` → `jobs.onJobDone` 报告终态快照时结算（`completed → ok` / `killed → denied` / `failed → error`，可用时附 `durationMs`）。每条配对结算都携带派发身份（`Task N` 标签仍是 `taskId`；`taskRef` 专用于注册表 job id，仅后台结算携带）外加**可选** `childId`——前台 `runId`，或 catalog 关联已提供的后台子会话 id。可选 id 缺失或超长时**只省略该字段**：真实完成照常记录，id 绝不截断、绝不重键。未配对载荷**不记录任何东西**——绝不伪造结算。
+- **`subagent-link`（非终态）**——某次派发实际启动的子会话 id，由上游以**父会话自有**的 `subagent/catalog` 会话事件发布（`label` = 委派 `description`；continuable 路径在工具返回**之前**追加）。逐派发的**调用窗口**关联——pre-execute 预留槽位、有效 `background` / `continuable` 结果使其可选中、`eventAt(seq)` 补扫加**一个**活的根上下文 `session/event` 观察者——把该 catalog 子会话关联回派发身份（`role` / `planId` / `taskId`，后台 one-shot 另带 `taskRef`），写入**该派发自己的** workflow 目录。它是**身份记录**，**不是**完成：无 `outcome`、无 `verdict`、无 `paired` 标记。该关联为 apply 作用域——无全历史冷扫描、无 `session/created` 回填，故 apply 之前写入的 catalog 绝不可能给更晚的派发贴标签——而 provider 不发出 catalog 的派发就是没有 link 行。
+
+### Workflow 行
+
+同一账本还记录 **workflow / ralph 扇出运行**：一个会话事件消费者（日志器 `mstar/workflow-ledger`，apply 时注册）把四个持久化的 `tool-workflow/*` 会话事件映射为三种新账本类型。事实来源是**持久化会话事件**——追加进**调用方父会话**的日志（仅顶层运行；嵌套 transport 调用上游不记录任何东西），而**不是**内存中的 `workflow/*` emits（roadmap §10.4 N4）：会话日志才是可回放的事实，因此消费者以 **apply 时冷扫描**（构造期种子事件从不进 firehose——`firstLiveSeq`）加实时 **`session/event` firehose** 监听覆盖它，按**持久化逐会话水位线**（会话日志 `seq` 位置）去重——水位线持久化到 `{HARNESS_DIR}/workflows/<id>/workflow-ledger-cursors.json`（账本旁的小型有界 sidecar，temp 文件 + rename 原子写入）。
 
 | `tool-workflow/*` 事件 | 账本行 | 字段 |
 | --- | --- | --- |
