@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+## [3.8.0] - 2026-09-10
+
+### Harness
+
+- **dsh 插件**：engine-status catalog 行的持久化 `source` 现为一方 `plugin` 臂——即恰好 `{ kind: 'plugin', plugin: 'mstar-engine-status', form: 'catalog' }`，不含任何其它成员。此前的自定义 `kind: 'mstar-engine-status'` 外加五个 payload 成员，使**每一个**跑过本插件的 pre-V3 会话日志都**无法在 Web GUI 中打开**（已发布的会话格式 V2→V3 分类器以 `cannot safely transform unclassified message source` 拒绝整份日志），而这些多余成员在任何 `plugin` 臂 source 被逐成员审计时都会被三条已发布历史边界全部拒绝。新增回归测试在真实组合行上断言该三成员 source，自定义 kind 与「顺手加一个字段」的改动都无法回归。
+- **dsh 插件**：payload 不再落在消息 `source` 上。**实际发出**的 payload 会在追加该行的同一次 digest 门控发射中按会话快照到 `{HARNESS_DIR}/snapshots/engine-status.json`，工作流面板则按需从宿主共享的 `/api` typert 网关（`mstar/engineStatus`）拉取该会话自己的快照——浏览器半体 `connection.rpc.call('/api', 'mstar/engineStatus', { args: { sessionId, cwd } })`，由宿主校验被断言的会话并返回其已存记录。快照缺失、版本未知、写入中断或属于其它会话时，渲染带原因的显式 `unavailable`——面板任何字段都不会静默降级为空态。该端点不做鉴权：能访问本机 `/api` 网关**且**知道 `(sessionId, cwd)` 组合的调用方即会被服务（payload 是工作区摘要，不是机密），但每个应答都限定在请求的会话内——存储记录的 `cwd` 必须同时匹配断言值与服务端解析出的工作区，客户端在渲染前还会复核回显的 id 与工作区。
+- 文档同步到新契约：`packages/dsh` README 双语对 + `bundle/README.md`、dsh 宿主参考，以及 `mstar-artifacts` residual fail-loud 交接条款（现与 `severity` 并列表述 **`decision`** 枚举，并写明 `"resolved"` 这类 lifecycle 取值会导致**整个 register 不可写**）。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 3.8.0**。
+
 ## [3.7.3] - 2026-09-10
 
 ### 版本对齐

@@ -8,6 +8,18 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ## [Unreleased]
 
+## [3.8.0] - 2026-09-10
+
+### Harness
+
+- **dsh plugin**: the engine-status catalog row's persisted `source` is now the first-party `plugin` arm — exactly `{ kind: 'plugin', plugin: 'mstar-engine-status', form: 'catalog' }`, with no other member. The previous custom `kind: 'mstar-engine-status'` plus its five payload members made every pre-V3 session log that ever ran the plugin **unopenable in the Web GUI** (the released session-format V2→V3 classifier refuses the whole log with `cannot safely transform unclassified message source`), and the extra members are refused by all three released historical edges as soon as a `plugin`-arm source is member-audited. A new regression test asserts the exact three-member source on the real composition row, so neither the custom kind nor a "just add one field" edit can return.
+- **dsh plugin**: the payload no longer rides the message `source` at all. The exact emitted payload is snapshotted per session at `{HARNESS_DIR}/snapshots/engine-status.json` in the same digest-gated emission that appends the row, and the workflow panel fetches that session's snapshot on demand from the host's shared `/api` typert gateway (`mstar/engineStatus`; browser half `connection.rpc.call('/api', 'mstar/engineStatus', { args: { sessionId, cwd } })`, the host validating the asserted session and answering its stored record). A missing, unknown-version, torn or foreign snapshot renders an explicit `unavailable` reason — no panel field silently degrades to an empty state. The endpoint is unauthenticated: a caller that can reach the local `/api` gateway **and** knows a `(sessionId, cwd)` pair is served (the payload is a workspace digest, not a secret), while every answer stays scoped to the requested session — the stored record's `cwd` must match the asserted and the server-resolved workspace, and the client re-checks the echoed id and workspace before rendering.
+- Docs synced to the new contract: the `packages/dsh` README pair + `bundle/README.md`, the dsh host reference, and the `mstar-artifacts` residual fail-loud handoff clause (which now names the **`decision`** enum alongside `severity`, and the whole-register refusal a lifecycle value such as `"resolved"` triggers there).
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, the portable Agent Plugins manifest, and both marketplace manifests: **→ 3.8.0**.
+
 ## [3.7.3] - 2026-09-10
 
 ### Version alignment
