@@ -145,7 +145,7 @@ function emitUndeclared(ctx: Context, name: string, ...args: unknown[]): void {
 
 /** A fresh apply-scoped pairing store (empty maps). */
 function pairingOf(): AgentFlowPairing {
-  return { dispatchByCallId: new Map(), dispatchByTaskId: new Map() }
+  return { dispatchByCallId: new Map(), dispatchByJobId: new Map() }
 }
 
 /** A fork dispatch-tool exec carrying the FULL pairing surface (callId + agent). */
@@ -214,7 +214,7 @@ describe('fork settle — ledger records fork dispatch + settle (dispatchTools-d
     const app = booted = await bootApp({ jobsService: 'fake', seedV2: true, dispatchBinding: 'qc-specialist' })
     // The fork tool — the same canonical background shape as the upstream
     // dsh-tool-subagent (the seam-probe fixture), so the post-execute branch
-    // stores `taskId → dispatchRef` and the onJobDone terminal settles.
+    // stores `jobId → dispatchRef` and the onJobDone terminal settles.
     app.ctx.tools.register(defineTool({
       name: 'subagent_fork',
       description: 'fork a delegation to a subagent',
@@ -228,13 +228,13 @@ describe('fork settle — ledger records fork dispatch + settle (dispatchTools-d
           additionalProperties: false,
           properties: {
             kind: { type: 'string', required: true, const: 'background' },
-            taskId: { type: 'string', required: true },
+            jobId: { type: 'string', required: true },
           },
         },
-        render: (_args: unknown, value: { kind: 'background'; taskId: string }) =>
-          [{ type: 'text', text: `forked background subagent task ${value.taskId}` }],
+        render: (_args: unknown, value: { kind: 'background'; jobId: string }) =>
+          [{ type: 'text', text: `forked background subagent job ${value.jobId}` }],
       },
-      execute: async () => ({ kind: 'background' as const, taskId: 'fork-1' }),
+      execute: async () => ({ kind: 'background' as const, jobId: 'fork-1' }),
     }))
 
     const result = await app.ctx.tools.execute({

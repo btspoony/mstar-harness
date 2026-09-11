@@ -57,11 +57,11 @@ import type { DispatchGateAdvisory } from './gates/dispatch.ts'
 import {
   AGENT_FLOW_LOGGER,
   registerSettleListener,
-  recordTaskSettle,
+  recordJobSettle,
   setAgentFlowInvalidator,
   setAgentFlowLogger,
 } from './gates/agent-flow.ts'
-import type { AgentFlowPairing, TaskDoneSnapshot } from './gates/agent-flow.ts'
+import type { AgentFlowPairing, JobDoneSnapshot } from './gates/agent-flow.ts'
 import {
   ROLE_PERSONA_LOGGER,
   probeRolePersonaSeam,
@@ -396,10 +396,10 @@ export function apply(ctx: Context, config: Config): void {
   // the window stay unpaired (documented honest degrade; no cross-apply
   // pairing). Shared by the dispatch recording (callId → dispatchRef via the
   // adapter), the post-execute settle listener (reads callId, writes the
-  // background taskId) and the onJobDone wiring (reads taskId).
+  // background jobId) and the onJobDone wiring (reads jobId).
   const pairing: AgentFlowPairing = {
     dispatchByCallId: new Map(),
-    dispatchByTaskId: new Map(),
+    dispatchByJobId: new Map(),
   }
   // The host-facing HostAdapter facade — the fs-intent / pre-execute gates
   // route through it (host hooks and in-plugin gates share ONE code path).
@@ -661,9 +661,9 @@ export function apply(ctx: Context, config: Config): void {
   })
   registerPlanModeBridge(ctx, resolver)
 
-  // Background-task settle pairing — the SECOND real completion seam: a
-  // terminal task snapshot (completed/killed/failed) pairs via the registry
-  // task id (stored by the post-execute background branch) to the dispatch
+  // Background-job settle pairing — the SECOND real completion seam: a
+  // terminal job snapshot (completed/killed/failed) pairs via the registry
+  // job id (stored by the post-execute background branch) to the dispatch
   // that started it → recordSettle (completed→ok / killed→denied /
   // failed→error; durationMs = finishedAt − startedAt when available).
   // Deferred with `ctx.inject(['jobs'], …)` — the SAME optional-unit
@@ -677,21 +677,21 @@ export function apply(ctx: Context, config: Config): void {
   // are effect-scoped and unwind with this apply.
   ctx.inject(['jobs'], (jobsCtx) => {
     // The dsh-jobs service is an OPTIONAL seam — the plugin deliberately
-    // carries no runtime/type import of it (structural `TaskDoneSnapshot`
+    // carries no runtime/type import of it (structural `JobDoneSnapshot`
     // contract in agent-flow.ts), so the runtime `jobsCtx.jobs` is cast to
     // the ONE consumed surface: `onJobDone(listener)` with the upstream
     // `JobDoneListener = (snapshot, owner) => void | PromiseLike<void>`.
-    const jobs = (jobsCtx as unknown as { jobs: { onJobDone(listener: (snapshot: TaskDoneSnapshot, _owner: unknown) => void): unknown } }).jobs
+    const jobs = (jobsCtx as unknown as { jobs: { onJobDone(listener: (snapshot: JobDoneSnapshot, _owner: unknown) => void): unknown } }).jobs
     try {
       // Registration contained  for symmetry with the
       // rest of the seam wiring: the listener body itself is already
-      // try/catch-contained (`recordTaskSettle`), but a THROWING registration
+      // try/catch-contained (`recordJobSettle`), but a THROWING registration
       // would surface as an unhandled child-fiber error at an arbitrary later
       // time (whenever the jobs service appears) — contained here instead
       // (a failed registration only degrades background settle pairing,
       // honestly: the child fiber still unwinds with this apply).
       jobs.onJobDone((snapshot, _owner) => {
-        recordTaskSettle(snapshot, pairing)
+        recordJobSettle(snapshot, pairing)
       })
     } catch (error) {
       ctx.logger(AGENT_FLOW_LOGGER).error(

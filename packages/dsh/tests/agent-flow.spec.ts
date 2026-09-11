@@ -17,13 +17,13 @@
  *   non-Assignment / non-subagent-tool / no-harness-dir calls stay silent;
  * - settle pairing (plan  T1): the
  *   `tools/post-execute` listener — dispatch-tool matching, the VERIFIED
- *   three-shape branch (background → taskId store / continuable → honest
+ *   three-shape branch (background → jobId store / continuable → honest
  *   no-settle / foreground+other → settle ok, isError → error), unpaired →
  *   no settle + one warn, non-dispatch tool → no record, and the settle
  *   carries the PAIRED dispatch identity (role/planId/taskId — schema +
- *   view `paired` marker + JSONL round-trip); `recordTaskSettle` maps the
+ *   view `paired` marker + JSONL round-trip); `recordJobSettle` maps the
  *   three onJobDone terminal statuses (completed→ok / killed→denied /
- *   failed→error) + durationMs and stays silent for unpaired task ids;
+ *   failed→error) + durationMs and stays silent for unpaired job ids;
  *   the catalog-invalidation hook fires after successful records (Task 2
  *   seam); the upstream seam probes prove the REAL registry emits
  *   `tools/post-execute` and the `ctx.inject(['jobs'])` onJobDone wiring
@@ -54,7 +54,7 @@ import {
 import {
   AGENT_FLOW_SIZE_GATE_BYTES,
   registerSettleListener,
-  recordTaskSettle,
+  recordJobSettle,
   setAgentFlowInvalidator,
   setAgentFlowLogger,
   SETTLE_SEAM_PAIRING_NOTE,
@@ -825,7 +825,7 @@ describe('agent-flow dispatch smoke — bootApp + tools/pre-execute', () => {
 
 /** A fresh apply-scoped pairing store (empty maps). */
 function pairingOf(): AgentFlowPairing {
-  return { dispatchByCallId: new Map(), dispatchByTaskId: new Map() }
+  return { dispatchByCallId: new Map(), dispatchByJobId: new Map() }
 }
 
 /** A dispatch-tool exec carrying the FULL pairing surface (callId + agent). */
@@ -1044,6 +1044,13 @@ describe('agent-flow settle — real completion pairing ', () => {
       emitUndeclared(ctx, SETTLE_SEAM, { callId: 'c-err3', name: 'subagent', agent: { id: 'sess-1' } }, { error: { message: 'x' }, value: 'partial' })
       view = readAgentFlow(workflowDir)!
       expect(view.events[0]).toMatchObject({ kind: 'settle', outcome: 'error' })
+      // A FAILED result carrying a SUCCESS-shaped background value still
+      // settles error and never stores a job pairing (failure precedence).
+      pairedDispatch(harnessDir, pairing, 'c-err4', VALID_PLANNED, 'sess-1')
+      emitUndeclared(ctx, SETTLE_SEAM, { callId: 'c-err4', name: 'subagent', agent: { id: 'sess-1' } }, { isError: true, value: { kind: 'background', jobId: 'subagent-shadow' } })
+      view = readAgentFlow(workflowDir)!
+      expect(view.events[0]).toMatchObject({ kind: 'settle', outcome: 'error' })
+      expect(pairing.dispatchByJobId.size).toBe(0)
     } finally {
       setAgentFlowLogger(priorSink)
       await ctx.fiber.dispose().catch(() => {})
@@ -1051,7 +1058,7 @@ describe('agent-flow settle — real completion pairing ', () => {
     }
   })
 
-  it('a background result WITHOUT a valid taskId records nothing — never a fabricated ok ', async () => {
+  it('a background result WITHOUT a valid jobId records nothing — never a fabricated ok ', async () => {
     const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-settle-background-notask-')
     const ctx = new Context()
     const pairing = pairingOf()
@@ -1059,17 +1066,25 @@ describe('agent-flow settle — real completion pairing ', () => {
     try {
       registerSettleListener(ctx, {}, pairing)
       pairedDispatch(harnessDir, pairing, 'c-bg0', VALID_PLANNED)
-      // `kind: 'background'` with a MISSING taskId → nothing mappable.
+      // `kind: 'background'` with a MISSING jobId → nothing mappable.
       emitUndeclared(ctx, SETTLE_SEAM, { callId: 'c-bg0', name: 'subagent', agent: { id: 'sess-1' } }, { isError: false, value: { kind: 'background' } })
       let view = readAgentFlow(workflowDir)!
       expect(view.events.map((e) => e.kind)).toEqual(['dispatch']) // no settle
-      expect(pairing.dispatchByTaskId.size).toBe(0)
-      // `kind: 'background'` with an EMPTY taskId → nothing mappable too.
+      expect(pairing.dispatchByJobId.size).toBe(0)
+      // `kind: 'background'` with an EMPTY jobId → nothing mappable too.
       pairedDispatch(harnessDir, pairing, 'c-bg0b', VALID_PLANNED, 'sess-2')
-      emitUndeclared(ctx, SETTLE_SEAM, { callId: 'c-bg0b', name: 'subagent', agent: { id: 'sess-2' } }, { isError: false, value: { kind: 'background', taskId: '' } })
+      emitUndeclared(ctx, SETTLE_SEAM, { callId: 'c-bg0b', name: 'subagent', agent: { id: 'sess-2' } }, { isError: false, value: { kind: 'background', jobId: '' } })
       view = readAgentFlow(workflowDir)!
       expect(view.events.map((e) => e.kind)).toEqual(['dispatch', 'dispatch']) // still no settle
-      expect(pairing.dispatchByTaskId.size).toBe(0)
+      expect(pairing.dispatchByJobId.size).toBe(0)
+      // The RETIRED upstream field name `taskId` must never key a pairing —
+      // a background value carrying ONLY the old field settles nothing
+      // (regression guard for the dead branch).
+      pairedDispatch(harnessDir, pairing, 'c-bg0c', VALID_PLANNED, 'sess-3')
+      emitUndeclared(ctx, SETTLE_SEAM, { callId: 'c-bg0c', name: 'subagent', agent: { id: 'sess-3' } }, { isError: false, value: { kind: 'background', taskId: 'subagent-stale' } })
+      view = readAgentFlow(workflowDir)!
+      expect(view.events.map((e) => e.kind)).toEqual(['dispatch', 'dispatch', 'dispatch'])
+      expect(pairing.dispatchByJobId.size).toBe(0)
     } finally {
       setAgentFlowLogger(priorSink)
       await ctx.fiber.dispose().catch(() => {})
@@ -1102,7 +1117,7 @@ describe('agent-flow settle — real completion pairing ', () => {
     }
   })
 
-  it('a background result stores taskId → dispatchRef and records NO settle until the onJobDone terminal', async () => {
+  it('a background result stores jobId → dispatchRef and records NO settle until the onJobDone terminal', async () => {
     const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-settle-background-')
     const ctx = new Context()
     const pairing = pairingOf()
@@ -1113,17 +1128,17 @@ describe('agent-flow settle — real completion pairing ', () => {
       emitUndeclared(
         ctx, SETTLE_SEAM,
         { callId: 'c-bg', name: 'subagent', agent: { id: 'sess-1' } },
-        { isError: false, value: { kind: 'background', taskId: 'subagent-7' } },
+        { isError: false, value: { kind: 'background', jobId: 'subagent-7' } },
       )
 
-      // The pairing store now maps the registry task id → the dispatch.
-      expect(pairing.dispatchByTaskId.get('subagent-7')).toMatchObject({ role: 'fullstack-dev', planId: '00000810-agent-flow' })
+      // The pairing store now maps the registry job id → the dispatch.
+      expect(pairing.dispatchByJobId.get('subagent-7')).toMatchObject({ role: 'fullstack-dev', planId: '00000810-agent-flow' })
       // No settle yet — the ledger stays dispatch-only (honest).
       let view = readAgentFlow(workflowDir)!
       expect(view.events.map((e) => e.kind)).toEqual(['dispatch'])
 
-      // The terminal arrives → recordTaskSettle pairs and settles.
-      recordTaskSettle({ id: 'subagent-7', status: 'completed', startedAt: 1_000, finishedAt: 4_000 }, pairing)
+      // The terminal arrives → recordJobSettle pairs and settles.
+      recordJobSettle({ id: 'subagent-7', status: 'completed', startedAt: 1_000, finishedAt: 4_000 }, pairing)
       view = readAgentFlow(workflowDir)!
       expect(view.events).toHaveLength(2)
       expect(view.events[0]).toMatchObject({
@@ -1135,9 +1150,8 @@ describe('agent-flow settle — real completion pairing ', () => {
         taskId: 'T2',
         durationMs: 3_000,
       })
-      // The consumed task entry is pruned — the map holds only in-flight tasks
-      // The consumed task entry is pruned — the map holds only in-flight tasks.
-      expect(pairing.dispatchByTaskId.size).toBe(0)
+      // The consumed job entry is pruned — the map holds only in-flight jobs.
+      expect(pairing.dispatchByJobId.size).toBe(0)
     } finally {
       setAgentFlowLogger(priorSink)
       await ctx.fiber.dispose().catch(() => {})
@@ -1160,7 +1174,7 @@ describe('agent-flow settle — real completion pairing ', () => {
       )
       const view = readAgentFlow(workflowDir)!
       expect(view.events.map((e) => e.kind)).toEqual(['dispatch']) // dispatch only
-      expect(pairing.dispatchByTaskId.size).toBe(0)
+      expect(pairing.dispatchByJobId.size).toBe(0)
     } finally {
       setAgentFlowLogger(priorSink)
       await ctx.fiber.dispose().catch(() => {})
@@ -1228,20 +1242,20 @@ describe('agent-flow settle — real completion pairing ', () => {
   })
 })
 
-describe('agent-flow settle — recordTaskSettle terminal mapping (onJobDone)', () => {
-  /** Seed one taskId → dispatchRef pairing directly. */
-  function seededPairing(harnessDir: string, workflowDir: string, taskId: string, role = 'fullstack-dev'): AgentFlowPairing {
+describe('agent-flow settle — recordJobSettle terminal mapping (onJobDone)', () => {
+  /** Seed one jobId → dispatchRef pairing directly. */
+  function seededPairing(harnessDir: string, workflowDir: string, jobId: string, role = 'fullstack-dev'): AgentFlowPairing {
     const pairing = pairingOf()
-    pairing.dispatchByTaskId.set(taskId, { harnessDir, workflowDir, agent: 'sess-1', role, planId: 'plan-x', taskId: 'T2' })
+    pairing.dispatchByJobId.set(jobId, { harnessDir, workflowDir, agent: 'sess-1', role, planId: 'plan-x', taskId: 'T2' })
     return pairing
   }
 
   it('completed → ok, killed → denied, failed → error; durationMs = finishedAt − startedAt when available', async () => {
     const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-taskdone-map-')
     try {
-      recordTaskSettle({ id: 'subagent-1', status: 'completed', startedAt: 100, finishedAt: 700 }, seededPairing(harnessDir, workflowDir, 'subagent-1'))
-      recordTaskSettle({ id: 'subagent-2', status: 'killed' }, seededPairing(harnessDir, workflowDir, 'subagent-2'))
-      recordTaskSettle({ id: 'subagent-3', status: 'failed', startedAt: 10, finishedAt: 20 }, seededPairing(harnessDir, workflowDir, 'subagent-3'))
+      recordJobSettle({ id: 'subagent-1', status: 'completed', startedAt: 100, finishedAt: 700 }, seededPairing(harnessDir, workflowDir, 'subagent-1'))
+      recordJobSettle({ id: 'subagent-2', status: 'killed' }, seededPairing(harnessDir, workflowDir, 'subagent-2'))
+      recordJobSettle({ id: 'subagent-3', status: 'failed', startedAt: 10, finishedAt: 20 }, seededPairing(harnessDir, workflowDir, 'subagent-3'))
 
       const view = readAgentFlow(workflowDir)!
       expect(view.events.map((e) => e.outcome)).toEqual(['error', 'denied', 'ok']) // latest first
@@ -1257,11 +1271,28 @@ describe('agent-flow settle — recordTaskSettle terminal mapping (onJobDone)', 
     }
   })
 
-  it('an UNPAIRED task id records nothing (honest — no fabricated settlement)', async () => {
+  it('an UNPAIRED job id records nothing (honest — no fabricated settlement)', async () => {
     const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-taskdone-unpaired-')
     try {
-      recordTaskSettle({ id: 'subagent-99', status: 'completed' }, pairingOf())
+      recordJobSettle({ id: 'subagent-99', status: 'completed' }, pairingOf())
       expect(readAgentFlow(workflowDir)).toEqual({ events: [], summary: [] })
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('a NON-terminal snapshot records nothing and KEEPS the pairing for the real terminal', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-taskdone-nonterminal-')
+    try {
+      const pairing = seededPairing(harnessDir, workflowDir, 'subagent-5')
+      recordJobSettle({ id: 'subagent-5', status: 'running' }, pairing)
+      expect(readAgentFlow(workflowDir)).toEqual({ events: [], summary: [] }) // no settle
+      expect(pairing.dispatchByJobId.size).toBe(1) // the pairing survives
+      // The later REAL terminal still settles (consumed once).
+      recordJobSettle({ id: 'subagent-5', status: 'completed' }, pairing)
+      const view = readAgentFlow(workflowDir)!
+      expect(view.events.map((e) => e.outcome)).toEqual(['ok'])
+      expect(pairing.dispatchByJobId.size).toBe(0)
     } finally {
       await rm(root, { recursive: true, force: true })
     }
@@ -1369,8 +1400,8 @@ describe('upstream seam probe — ctx.inject([\'jobs\']) onJobDone wiring (T1 St
   it('registers against a provided jobs service and receives a terminal snapshot — full chain dispatch → background → terminal → settle', async () => {
     const app = booted = await bootApp({ jobsService: 'fake', seedV2: true })
     // A dispatch tool returning the VERIFIED background shape (canonical
-    // `{ kind: 'background', taskId }` — the upstream dsh-tool-subagent
-    // output schema) so the post-execute branch stores taskId → dispatchRef.
+    // `{ kind: 'background', jobId }` — the upstream dsh-tool-subagent
+    // output schema) so the post-execute branch stores jobId → dispatchRef.
     app.ctx.tools.register(defineTool({
       name: 'subagent',
       description: 'delegate a task to a subagent',
@@ -1384,13 +1415,13 @@ describe('upstream seam probe — ctx.inject([\'jobs\']) onJobDone wiring (T1 St
           additionalProperties: false,
           properties: {
             kind: { type: 'string', required: true, const: 'background' },
-            taskId: { type: 'string', required: true },
+            jobId: { type: 'string', required: true },
           },
         },
-        render: (_args: unknown, value: { kind: 'background'; taskId: string }) =>
-          [{ type: 'text', text: `started background subagent task ${value.taskId}` }],
+        render: (_args: unknown, value: { kind: 'background'; jobId: string }) =>
+          [{ type: 'text', text: `started background subagent job ${value.jobId}` }],
       },
-      execute: async () => ({ kind: 'background' as const, taskId: 'subagent-1' }),
+      execute: async () => ({ kind: 'background' as const, jobId: 'subagent-1' }),
     }))
 
     const result = await app.ctx.tools.execute({

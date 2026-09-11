@@ -57,9 +57,10 @@
  * signals, paired to the dispatch record): `tools/post-execute` IS part of
  * the verified dsh-tools registry surface (`runPostExecute` dispatches the
  * waterfall for every tool call — verified against the upstream source and
- * pinned by the real-call probe in `tests/agent-flow.spec.ts`), and
- * `ctx.jobs.onJobDone` reports background-job terminal snapshots. Settles
- * are recorded ONLY for dispatches that can be paired to a real completion:
+ * pinned by the real-call probe in `tests/agent-flow.spec.ts`), and the
+ * `ctx.inject(['jobs'])` wiring subscribes to `jobs.onJobDone`, which reports
+ * background-job terminal snapshots. Settles are recorded ONLY for dispatches
+ * that can be paired to a real completion:
  * - `registerSettleListener` (the `tools/post-execute` listener) matches the
  *   dispatch TOOLS (Config `dispatchTools`, default
  *   `['subagent', 'subagent_fork']` — the shared `DEFAULT_DISPATCH_TOOLS`
@@ -67,24 +68,25 @@
  *   agent-namespaced call key (`${sessionId}\u0000${callId}` — a raw `callId`
  *   alone is not globally unique across sessions in one process,
  *   in the apply-scoped pairing store, and branches on the
- *   verified result shapes: `{ kind: 'background', taskId }` (valid taskId)
- *   → stores `taskId → dispatchRef` (the settle arrives later via
- *   `onJobDone`); `{ kind: 'background' }` without a valid taskId → nothing
- *   mappable (no settle); `{ kind: 'continuable', subagentId }` → no terminal
- *   signal this round → no settle (documented limit); any other successful
- *   value (foreground `{ kind: 'foreground', … }` included) → immediate
- *   settle with the paired identity. A failed result (`isError` or an
- *   `error` payload — fabrication guard)
+ *   verified result shapes: `{ kind: 'background', jobId }` (valid jobId —
+ *   the registry-issued job id, `<kind>-N`, NEVER a child session id) →
+ *   stores `jobId → dispatchRef` (the settle arrives later via
+ *   `jobs.onJobDone`); `{ kind: 'background' }` without a valid jobId →
+ *   nothing mappable (no settle); `{ kind: 'continuable', subagentId }` → no
+ *   terminal signal this round → no settle (documented limit); any other
+ *   successful value (foreground `{ kind: 'foreground', … }` included) →
+ *   immediate settle with the paired identity. A failed result (`isError` or
+ *   an `error` payload — fabrication guard)
  *   settles `error`.
- * - `recordTaskSettle` (wired through `ctx.inject(['jobs'])` in the entry)
+ * - `recordJobSettle` (wired through `ctx.inject(['jobs'])` in the entry)
  *   maps a terminal snapshot (`completed → ok / killed → denied / failed →
  *   error`, `durationMs = finishedAt − startedAt` when available) onto the
- *   stored `taskId → dispatchRef` and prunes the consumed task entry.
+ *   stored `jobId → dispatchRef` and prunes the consumed job entry.
  * Both pairing maps hold only IN-FLIGHT calls: the `dispatchByCallId` entry
  * is deleted once the post-execute branch resolves the call (each callId
- * pairs exactly once), and `recordTaskSettle` deletes the consumed
- * `dispatchByTaskId` entry. * Pairing is apply-scoped (D1): the in-memory maps live in the entry's
- * `apply`, so an HMR restart resets them — a post-execute/task-done outside
+ * pairs exactly once), and `recordJobSettle` deletes the consumed
+ * `dispatchByJobId` entry. * Pairing is apply-scoped (D1): the in-memory maps live in the entry's
+ * `apply`, so an HMR restart resets them — a post-execute/job-done outside
  * the window stays unpaired and records NOTHING (honest degrade, never
  * fabricated settlement). Non-dispatch tool calls and unpaired payloads
  * record nothing either.
@@ -204,13 +206,13 @@ export const SETTLE_SEAM = 'tools/post-execute'
  * surface, so the constant was renamed to the accurate `PAIRING` name. The
  * message states the VERIFIED pairing facts: the seam is emitted by the
  * registry; foreground dispatch calls settle via it, background subagents
- * settle via `ctx.jobs.onJobDone` pairing; only unpaired payloads stay
- * dispatch-only (never fabricated settlement). Logged ONCE per logger binding
- * (≈ once per apply — the same module-level flag) when the pairing
- * listener is registered.
+ * settle via the `ctx.inject(['jobs'])` → `jobs.onJobDone` pairing; only
+ * unpaired payloads stay dispatch-only (never fabricated settlement). Logged
+ * ONCE per logger binding (≈ once per apply — the same module-level flag)
+ * when the pairing listener is registered.
  */
 export const SETTLE_SEAM_PAIRING_NOTE =
-  `settle seam "${SETTLE_SEAM}" IS part of the verified dsh-tools registry surface (runPostExecute dispatches it for every tool call) — foreground dispatch calls settle here, background subagents settle via ctx.jobs.onJobDone pairing; only UNPAIRED payloads (non-dispatch tools, calls outside the apply-scoped pairing window) stay dispatch-only — never a fabricated settle`
+  `settle seam "${SETTLE_SEAM}" IS part of the verified dsh-tools registry surface (runPostExecute dispatches it for every tool call) — foreground dispatch calls settle here, background subagents settle via ctx.inject(['jobs']) → jobs.onJobDone pairing; only UNPAIRED payloads (non-dispatch tools, calls outside the apply-scoped pairing window) stay dispatch-only — never a fabricated settle`
 
 /** Dispatch verdict vocabulary (spec §2.1.3). */
 export type DispatchVerdict = 'ok' | 'advisory' | 'denied'
@@ -379,8 +381,8 @@ export interface AgentFlowDispatchRef {
  * cache; an HMR restart resets it, and completions outside the window stay
  * unpaired → no settle, the documented honest degrade). Maps are keyed by
  * the TWO verified pairing keys: the tool-call `callId` (pre → post-execute)
- * and the registry background-task id (post-execute background shape →
- * `onJobDone` terminal).
+ * and the registry background-job id (post-execute background shape →
+ * `jobs.onJobDone` terminal).
  */
 export interface AgentFlowPairing {
   /**
@@ -394,8 +396,8 @@ export interface AgentFlowPairing {
    * by the post-execute branch — the map holds only in-flight calls.
    */
   dispatchByCallId: Map<string, AgentFlowDispatchRef>
-  /** Registry background-job id (`JobSnapshot.id`) → the dispatch that started it (populated by the post-execute background branch; consumed by `recordTaskSettle`). */
-  dispatchByTaskId: Map<string, AgentFlowDispatchRef>
+  /** Registry background-job id (`JobSnapshot.id`) → the dispatch that started it (populated by the post-execute background branch; consumed by `recordJobSettle`). */
+  dispatchByJobId: Map<string, AgentFlowDispatchRef>
 }
 
 /** Module-scoped log sink (bound to `mstar/agent-flow` by the entry at apply). */
@@ -1416,9 +1418,10 @@ function recordSettleWithRef(ref: AgentFlowDispatchRef, outcome: SettleOutcome, 
  * - `result.isError === true` OR an `error` payload present → settle `error`
  *   immediately (fabrication guard — the dispatch
  *   call failed; a result carrying `error` without `isError` never settles ok);
- * - successful `result.value` shape `{ kind: 'background', taskId }` with a
- *   valid taskId → store `taskId → dispatchRef` (the real settle arrives via
- *   `ctx.jobs.onJobDone`); `{ kind: 'background' }` WITHOUT a valid taskId
+ * - successful `result.value` shape `{ kind: 'background', jobId }` with a
+ *   valid jobId (the registry id, `<kind>-N` — never a child session id) →
+ *   store `jobId → dispatchRef` (the real settle arrives via
+ *   `jobs.onJobDone`); `{ kind: 'background' }` WITHOUT a valid jobId
  *   → nothing mappable (no settle);
  * - `{ kind: 'continuable', subagentId }` → no terminal signal this round →
  *   no settle (documented limit — the child owns its turns);
@@ -1438,7 +1441,7 @@ function recordSettleWithRef(ref: AgentFlowDispatchRef, outcome: SettleOutcome, 
  * @param ctx - registrant context (fiber disposal unwinds the listener).
  * @param config - the plugin Config (dispatch-tool matching).
  * @param pairing - the apply-scoped pairing store (dispatchByCallId read,
- * dispatchByTaskId written by the background branch).
+ * dispatchByJobId written by the background branch).
  */
 export function registerSettleListener(ctx: Context, config: Config, pairing: AgentFlowPairing): void {
   const dispatchTools = config.dispatchTools ?? [...DEFAULT_DISPATCH_TOOLS]
@@ -1476,11 +1479,11 @@ export function registerSettleListener(ctx: Context, config: Config, pairing: Ag
             } else {
               const value = asRecord(resultRec.value)
               if (value !== undefined && value.kind === 'background') {
-                if (typeof value.taskId === 'string' && value.taskId !== '') {
+                if (typeof value.jobId === 'string' && value.jobId !== '') {
                   // Background job started — the settle arrives via onJobDone.
-                  pairing.dispatchByTaskId.set(value.taskId, dispatchRef)
+                  pairing.dispatchByJobId.set(value.jobId, dispatchRef)
                 }
-                // Background WITHOUT a valid taskId → nothing mappable
+                // Background WITHOUT a valid jobId → nothing mappable
                 // background result) — never a fabricated ok settle.
               } else if (value !== undefined && value.kind === 'continuable') {
                 // Continuable child — no terminal signal this round → honest no-settle.
@@ -1519,16 +1522,18 @@ export function registerSettleListener(ctx: Context, config: Config, pairing: Ag
 
 /**
  * The structural read of the dsh-jobs terminal snapshot the pairing consumes
- * (the settle-pairing upgrade). The `ctx.jobs.onJobDone`
- * contract was verified against the upstream `@deepseek-ai/dsh-jobs`
- * `types.ts`: `JobDoneListener = (snapshot, owner) => …`, terminal
- * `snapshot.status` ∈ `completed | killed | failed`, `startedAt`/`finishedAt`
- * are epoch ms (`finishedAt` absent while running). Structural (no runtime or
+ * (the settle-pairing upgrade). The `ctx.inject(['jobs'])` →
+ * `jobs.onJobDone` contract was verified against the upstream
+ * `@deepseek-ai/dsh-jobs` `types.ts`: `JobDoneListener = (snapshot, owner) =>
+ * …`, terminal `snapshot.status` ∈ `completed | killed | failed`,
+ * `startedAt`/`finishedAt` are epoch ms (`finishedAt` absent while running).
+ * `id` stays the registry-issued JOB id (`<kind>-N`, e.g. `subagent-1`) — it
+ * is a jobs-registry key, NOT a child session id. Structural (no runtime or
  * type import of the optional dsh-jobs seam — the plugin treats it as an
  * optional service, wired via `ctx.inject(['jobs'])`).
  */
-export interface TaskDoneSnapshot {
-  /** The registry-issued task id (`<kind>-N`, e.g. `subagent-1`). */
+export interface JobDoneSnapshot {
+  /** The registry-issued job id (`<kind>-N`, e.g. `subagent-1`) — never a child session id. */
   id: string
   /** Terminal lifecycle status: `completed | killed | failed`. */
   status: string
@@ -1539,25 +1544,25 @@ export interface TaskDoneSnapshot {
 }
 
 /**
- * Record the settle for one background-task terminal (plan
- * the `ctx.jobs.onJobDone` path):
- * the snapshot's task id must hit the pairing store's `dispatchByTaskId`
- * (populated by the post-execute background branch) — a miss records NOTHING
- * (honest degrade, never fabricated). Outcome mapping: `completed → ok` /
- * `killed → denied` / `failed → error`; `durationMs = finishedAt − startedAt`
- * when both are present. After a SUCCESSFUL settle the consumed
- * `dispatchByTaskId` entry is deleted (map pruning — the map holds only
- * in-flight tasks; a contract-violating
+ * Record the settle for one background-job terminal (plan
+ * the `ctx.inject(['jobs'])` → `jobs.onJobDone` path):
+ * the snapshot's registry job id must hit the pairing store's
+ * `dispatchByJobId` (populated by the post-execute background branch) — a
+ * miss records NOTHING (honest degrade, never fabricated). Outcome mapping:
+ * `completed → ok` / `killed → denied` / `failed → error`;
+ * `durationMs = finishedAt − startedAt` when both are present. After a
+ * SUCCESSFUL settle the consumed `dispatchByJobId` entry is deleted (map
+ * pruning — the map holds only in-flight jobs; a contract-violating
  * non-terminal snapshot records nothing and KEEPS the entry so a later real
- * terminal can still settle). Fully contained — never throws into the task
+ * terminal can still settle). Fully contained — never throws into the job
  * registry's listener notification.
- * @param snapshot - the terminal task snapshot (structural read).
+ * @param snapshot - the terminal job snapshot (structural read).
  * @param pairing - the apply-scoped pairing store.
  */
-export function recordTaskSettle(snapshot: TaskDoneSnapshot, pairing: AgentFlowPairing): void {
+export function recordJobSettle(snapshot: JobDoneSnapshot, pairing: AgentFlowPairing): void {
   try {
-    const dispatchRef = pairing.dispatchByTaskId.get(snapshot.id)
-    if (dispatchRef === undefined) return // unpaired task → no settle
+    const dispatchRef = pairing.dispatchByJobId.get(snapshot.id)
+    if (dispatchRef === undefined) return // unpaired job → no settle
     // Terminal mapping (spec R1): completed → ok / killed → denied / failed →
     // error. Anything ELSE (a contract-violating non-terminal snapshot) maps
     // to NOTHING — never a guessed outcome.
@@ -1570,8 +1575,8 @@ export function recordTaskSettle(snapshot: TaskDoneSnapshot, pairing: AgentFlowP
       ? snapshot.finishedAt - snapshot.startedAt
       : undefined
     recordSettleWithRef(dispatchRef, outcome, durationMs)
-    // Consumed — the map holds only in-flight tasks.
-    pairing.dispatchByTaskId.delete(snapshot.id)
+    // Consumed — the map holds only in-flight jobs.
+    pairing.dispatchByJobId.delete(snapshot.id)
   } catch (error) {
     log('error', `settle record failed (contained): ${errorMessage(error)}`)
   }
