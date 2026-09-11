@@ -2372,6 +2372,47 @@ describe('agent-flow subagent-link — call-window catalog join', () => {
     }
   })
 
+  it('a throwing catch-up eventAt is contained, logged once as warn, and later readable positions still link', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-link-unread-')
+    const pairing = pairingOf()
+    const ctx = new Context()
+    const captured: Array<{ level: string; message: string }> = []
+    const priorSink = setAgentFlowLogger((level, message) => { captured.push({ level, message }) })
+    try {
+      registerSettleListener(ctx, {}, pairing)
+      const session = catalogSession('sess-unread')
+      const eventAt = session.eventAt.bind(session)
+      session.eventAt = (seq: number): unknown => {
+        if (seq === 0 || seq === 1) throw new Error(`unreadable catalog position ${seq}`)
+        return eventAt(seq)
+      }
+      catalogDispatch(harnessDir, pairing, 'c-unread', 'sess-unread', session, 'unreadable window')
+
+      // Two unreadable positions, then a valid catalog — the walk must
+      // continue past the throws and still consume the later match.
+      session.append('session/noise', { noise: true })
+      session.append('session/noise', { noise: true })
+      session.append('subagent/catalog', catalogPayload('child-unread', 'unreadable window'))
+
+      expect(() => emitPostExecute(ctx, session, 'c-unread', 'sess-unread', { isError: false, value: { kind: 'continuable', subagentId: 'child-unread' } })).not.toThrow()
+
+      const rows = ledgerRows(workflowDir)
+      expect(rows.map((row) => row.kind)).toEqual(['dispatch', 'subagent-link'])
+      expect(rows[1]).toMatchObject({ kind: 'subagent-link', childId: 'child-unread', label: 'unreadable window' })
+      expect(pairing.catalogBySession.get(session)!.get('unreadable window')).toBeNull()
+
+      const warnings = captured.filter((entry) => entry.level === 'warn' && entry.message.includes('unreadable'))
+      expect(warnings).toHaveLength(1)
+      expect(warnings[0]!.message).toContain('sess-unread')
+      expect(warnings[0]!.message).toContain('seq 0')
+      expect(warnings[0]!.message).toContain('2 unreadable')
+    } finally {
+      setAgentFlowLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('attributes the link to the DISPATCH workflow dir even after the active set moved', async () => {
     const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-link-move-')
     const pairing = pairingOf()

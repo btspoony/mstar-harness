@@ -2035,7 +2035,9 @@ function consumeCatalogCandidate(
  * at the first match; this is what recovers the catalog the continuable path
  * necessarily appends BEFORE the tool returns, hence before this seam.
  * Contained: a throwing join degrades to a log line and never costs the
- * settle (or the awarded identity) its row.
+ * settle (or the awarded identity) its row. An unreadable `eventAt`
+ * position is skipped (the walk continues) and the pass emits at most
+ * one warn with the skip count — never one warn per position.
  */
 function advanceCatalogCandidate(
   pairing: AgentFlowPairing,
@@ -2050,17 +2052,31 @@ function advanceCatalogCandidate(
     if (map === undefined || join === undefined || join === null || join.ref !== ref) return
     join.result = result
     const end = catalog.session.seq
-    for (let seq = join.fromSeq; seq < end; seq += 1) {
-      let envelope: unknown
-      try {
-        envelope = catalog.session.eventAt(seq)
-      } catch {
-        continue // an unreadable position never aborts the window walk
+    let skippedReads = 0
+    let firstSkippedSeq: number | undefined
+    let firstSkippedError: string | undefined
+    try {
+      for (let seq = join.fromSeq; seq < end; seq += 1) {
+        let envelope: unknown
+        try {
+          envelope = catalog.session.eventAt(seq)
+        } catch (error) {
+          skippedReads += 1
+          if (firstSkippedSeq === undefined) {
+            firstSkippedSeq = seq
+            firstSkippedError = errorMessage(error)
+          }
+          continue // an unreadable position never aborts the window walk
+        }
+        const childId = matchCatalogEvent(catalog.session, catalog.label, join, envelope)
+        if (childId === undefined) continue
+        consumeCatalogCandidate(map, catalog.label, join, childId)
+        return
       }
-      const childId = matchCatalogEvent(catalog.session, catalog.label, join, envelope)
-      if (childId === undefined) continue
-      consumeCatalogCandidate(map, catalog.label, join, childId)
-      return
+    } finally {
+      if (skippedReads > 0) {
+        log('warn', `catalog catch-up skipped ${String(skippedReads)} unreadable position(s) in parent session ${catalog.session.id} starting at seq ${String(firstSkippedSeq)} (contained — the window walk continues): ${firstSkippedError ?? 'unknown'}`)
+      }
     }
   } catch (error) {
     log('warn', `catalog candidate advance failed (contained — the result branch proceeds): ${errorMessage(error)}`)
