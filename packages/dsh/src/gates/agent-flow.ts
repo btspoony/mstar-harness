@@ -612,6 +612,14 @@ let settleNoteLogged = false
  */
 let noActiveWarned = false
 /**
+ * Whether the catalog slot-map capacity refusal has been reported for the
+ * CURRENT sink binding (ONE bounded warn per apply, not per refused dispatch
+ * — same once-per-binding discipline as `settleNoteLogged` / `noActiveWarned`).
+ * A saturated per-Session slot map silently stops admitting candidates, so
+ * the degradation must announce itself at least once.
+ */
+let catalogCapacityWarned = false
+/**
  * Module-scoped catalog-invalidation hook : called with
  * the affected `{HARNESS_DIR}` after every SUCCESSFUL ledger record
  * (`recordDispatch` / `recordSettle`). The entry binds the real invalidation
@@ -639,8 +647,8 @@ export function setAgentFlowInvalidator(invalidate: AgentFlowInvalidator | undef
 
 /**
  * Bind the module's log sink (called once at apply; tests may rebind to
- * capture ledger logs). Rebinding RESETS the once-per-apply settle trace
- * flag — each binding is a fresh "apply" (production binds once; tests bind
+ * capture ledger logs). Rebinding RESETS the once-per-apply trace latches
+ * — each binding is a fresh "apply" (production binds once; tests bind
  * per case for deterministic capture).
  * @param sink - the sink (entry binds `ctx.logger('mstar/agent-flow')`);
  * `undefined` clears the binding (restores the pre-bind no-op state).
@@ -651,6 +659,7 @@ export function setAgentFlowLogger(sink: AgentFlowLogSink | undefined): AgentFlo
   logSink = sink
   settleNoteLogged = false
   noActiveWarned = false
+  catalogCapacityWarned = false
   return prior
 }
 
@@ -1952,7 +1961,9 @@ export function recordJobSettle(snapshot: JobDoneSnapshot, pairing: AgentFlowPai
  * label that sanitizes to nothing, an oversized label (never truncated into
  * a different key), an already-owned label, or a Session at
  * `AGENT_FLOW_MAX_EVENTS` slots (existing pending entries and tombstones are
- * retained) simply admits no candidate.
+ * retained) simply admits no candidate. The capacity refusal — a PERMANENT
+ * per-Session degradation, since retention is locked — is warned once per
+ * apply (session identity + cap), never once per refused dispatch.
  * @param pairing - the apply-scoped pairing store (the slots live here).
  * @param ref - the dispatch ref the candidate will own until it is consumed
  *   or retired (the SAME object the job pairing carries into a settle).
@@ -1978,7 +1989,18 @@ function reserveCatalogCandidate(pairing: AgentFlowPairing, ref: AgentFlowDispat
     pairing.catalogBySession.set(session, map)
   }
   if (map.has(label)) return
-  if (map.size >= AGENT_FLOW_MAX_EVENTS) return
+  if (map.size >= AGENT_FLOW_MAX_EVENTS) {
+    // Saturation is a permanent per-Session degradation (slots are never
+    // deleted — tombstones are retained so a delayed duplicate cannot acquire
+    // a new owner), so it must announce itself. One bounded warn per apply,
+    // carrying the session identity and the cap: the refusal silently stops
+    // child-identity linking for that session.
+    if (!catalogCapacityWarned) {
+      catalogCapacityWarned = true
+      log('warn', `catalog slot capacity reached on parent session ${view.id} (${String(AGENT_FLOW_MAX_EVENTS)} slots) — new delegation labels admit no call-window candidate, so no child identity is linked for the rest of this session (existing entries retained; honest degrade)`)
+    }
+    return
+  }
   map.set(label, { ref, fromSeq: seq })
   ref.catalog = { session: session as unknown as AgentFlowSessionView, label }
 }

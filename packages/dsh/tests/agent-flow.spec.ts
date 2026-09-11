@@ -144,6 +144,21 @@ const settleLine = (overrides: Record<string, unknown> = {}): string => JSON.str
   ...overrides,
 })
 
+/** A ledger event line (v1 subagent-link identity row — no verdict/outcome). */
+const linkLine = (overrides: Record<string, unknown> = {}): string => JSON.stringify({
+  v: 1,
+  ts: 1_700_000_002_000,
+  kind: 'subagent-link',
+  agent: 'a1',
+  childId: 'child-read',
+  label: 'read it back',
+  role: 'fullstack-dev',
+  planId: '00000810-x',
+  taskId: 'T3',
+  taskRef: 'subagent-11',
+  ...overrides,
+})
+
 /**
  * A v1 dispatch line padded to ~2 KiB via an ignored display field — the
  * LARGE-ledger fixture line  200 of
@@ -1862,6 +1877,32 @@ describe('agent-flow catalog — state.agentFlow evidence + render', () => {
     expect(text.split('\n').filter((l) => l.startsWith('agent flow:')).length).toBe(1)
   })
 
+  it('the model line reports dispatch ACTIVITY only — a subagent-link identity row never inflates the by-role totals', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-agentflow-catalog-link-role-'))
+    const harnessDir = await seedV2Tree(root)
+    await seedHarness(harnessDir, {
+      'workflows/wf-1/agent-flow.jsonl': `${dispatchLine()}\n${linkLine()}\n${settleLine()}\n`,
+    })
+    const app = booted = await bootApp({ root })
+    const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
+    const { row } = catalogRowOf(decision)
+    const payload = buildCatalogPayload(app.ctx, harnessDir)
+
+    // The structured source KEEPS the link as its own role×outcome bucket
+    // (the identity evidence stays available to machine consumers)…
+    expect(payload.state!.agentFlow!.summary).toEqual([
+      { role: '', outcome: 'ok', count: 1 },
+      { role: 'fullstack-dev', outcome: 'ok', count: 1 },
+      { role: 'fullstack-dev', outcome: 'subagent-link', count: 1 },
+    ])
+    // …while the model-facing role totals count the one dispatch (and the one
+    // settle) only — the link row is identity, not dispatch activity.
+    const text = textOf(row)
+    expect(text).toContain('agent flow: 3 events')
+    expect(text).toContain('by role: fullstack-dev 1')
+    expect(text).not.toContain('fullstack-dev 2')
+  })
+
   it('no ledger → state.agentFlow is the EMPTY view and NO agent-flow line (missing file reads as empty, not null)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-agentflow-catalog-none-'))
     const harnessDir = await seedV2Tree(root)
@@ -2364,11 +2405,12 @@ describe('agent-flow subagent-link — call-window catalog join', () => {
     }
   })
 
-  it('refuses NEW labels at capacity (500 slots per Session) while existing labels keep working', async () => {
+  it('refuses NEW labels at capacity (500 slots per Session) while existing labels keep working — the refusal warns once', async () => {
     const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-link-cap-')
     const pairing = pairingOf()
     const ctx = new Context()
-    const priorSink = setAgentFlowLogger(() => {})
+    const captured: Array<{ level: string; message: string }> = []
+    const priorSink = setAgentFlowLogger((level, message) => { captured.push({ level, message }) })
     try {
       registerSettleListener(ctx, {}, pairing)
       registerSubagentCatalogListener(ctx, pairing)
@@ -2382,6 +2424,19 @@ describe('agent-flow subagent-link — call-window catalog join', () => {
       const envelopeFull = sessionFull.append('subagent/catalog', catalogPayload('child-full', 'one too many'))
       emitSessionEvent(ctx, sessionFull, envelopeFull)
       expect(linkRows(workflowDir)).toHaveLength(0)
+
+      // The saturated refusal announces itself: ONE bounded warn carrying the
+      // parent session identity and the cap — the silent-degradation defect.
+      const capacityWarnings = captured.filter((entry) => entry.level === 'warn' && entry.message.includes('catalog slot'))
+      expect(capacityWarnings).toHaveLength(1)
+      expect(capacityWarnings[0]!.message).toContain('sess-full')
+      expect(capacityWarnings[0]!.message).toContain(String(AGENT_FLOW_MAX_EVENTS))
+
+      // A SECOND distinct label on the same saturated session is refused too —
+      // the warn is latched (one line per apply, not one per refusal).
+      catalogDispatch(harnessDir, pairing, 'c-full-2', 'sess-full', sessionFull, 'another one too many')
+      expect(captured.filter((entry) => entry.level === 'warn' && entry.message.includes('catalog slot'))).toHaveLength(1)
+      expect(pairing.catalogBySession.get(sessionFull)!.size).toBe(AGENT_FLOW_MAX_EVENTS)
 
       // One slot below the cap, the same flow links — the refusal is the
       // capacity rule, not a broken join. The retained tombstones stay put.
@@ -2397,6 +2452,8 @@ describe('agent-flow subagent-link — call-window catalog join', () => {
       expect(links).toHaveLength(1)
       expect(links[0]).toMatchObject({ childId: 'child-roomy' })
       expect(pairing.catalogBySession.get(sessionFull)!.size).toBe(AGENT_FLOW_MAX_EVENTS)
+      // The roomy session did NOT saturate — no second warn.
+      expect(captured.filter((entry) => entry.level === 'warn' && entry.message.includes('catalog slot'))).toHaveLength(1)
     } finally {
       setAgentFlowLogger(priorSink)
       await ctx.fiber.dispose().catch(() => {})
@@ -2556,19 +2613,6 @@ describe('agent-flow subagent-link — call-window catalog join', () => {
     const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-link-read-')
     try {
       const file = join(workflowDir, AGENT_FLOW_FILE)
-      const linkLine = (overrides: Record<string, unknown> = {}): string => JSON.stringify({
-        v: 1,
-        ts: 1_700_000_002_000,
-        kind: 'subagent-link',
-        agent: 'a1',
-        childId: 'child-read',
-        label: 'read it back',
-        role: 'fullstack-dev',
-        planId: '00000810-x',
-        taskId: 'T3',
-        taskRef: 'subagent-11',
-        ...overrides,
-      })
       // Legacy v1 rows stay readable, and every REQUIRED-identity violation
       // skips only that link row (unknown version included).
       await writeFile(file, [
