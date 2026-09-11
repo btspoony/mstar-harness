@@ -658,6 +658,43 @@ describe('workflow-ledger consumer — cold scan over session event snapshots ()
     }
   })
 
+  it('a throwing header.id is contained — the cold scan survives and other sessions still record', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-workflow-consumer-idthrows-')
+    const ctx = new Context()
+    const sessions = new FakeSessionRegistry(ctx)
+    // A hostile session whose IDENTITY read throws. The cold scan extracts
+    // `header.id` BEFORE the per-session containment, so the throw escaped
+    // `registerWorkflowLedger` and broke plugin apply.
+    const hostile = fakeSession([], { id: 'parent-hostile' })
+    sessions.register(hostile)
+    Object.defineProperty(hostile.header, 'id', {
+      get(): never {
+        throw new Error('header exploded')
+      },
+      configurable: true,
+    })
+    // A valid session whose run must still be recorded.
+    sessions.register(fakeSession([
+      { type: 'tool-workflow/run-start', data: runStart({ runId: 'run-ok' }) },
+    ], { id: 'parent-ok', header: { cwd: root } }))
+    const captured: Array<{ level: string; message: string }> = []
+    const priorSink = setWorkflowLedgerLogger((level, message) => { captured.push({ level, message }) })
+    try {
+      registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))
+
+      const view = readAgentFlow(workflowDir)
+      expect(view!.events.map((e) => e.runId)).toEqual(['run-ok'])
+      // One contained warn; the id IS the throwing read, so the message falls
+      // back to a placeholder instead of re-reading the hostile header.
+      expect(captured.filter((c) => c.level === 'warn' && c.message.includes('cold scan failed for session unknown'))).toHaveLength(1)
+      expect(captured.filter((c) => c.level === 'warn')).toHaveLength(1)
+    } finally {
+      setWorkflowLedgerLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('sessions service absent → one debug log + consumer disabled (composition without dsh-session)', async () => {
     const { root, harnessDir, workflowDir } = await tempHarness('dsh-workflow-consumer-degrade-')
     const ctx = new Context()
@@ -1639,6 +1676,35 @@ describe('workflow-ledger consumer — D4 session binding + exclusion floor', ()
       expect(readAgentFlow(dirs['wf-b'])!.events).toEqual([])
       // The intentional exclusion record is untouched — never reset to zero.
       expect(readWorkflowSessionBinding(harnessDir, 'sess-drift', root)).toEqual({
+        kind: 'ok',
+        binding: { cwd: root, selectedWorkflowId: 'wf-a', excludedBeforeSeq: 5 },
+      })
+    } finally {
+      setWorkflowLedgerLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('an EMPTY rebuilt log with a floor ahead of zero still reports identity drift — the zero-length fast return must not skip the diagnostic', async () => {
+    const { root, harnessDir, dirs } = await tempMultiHarness('dsh-ledger-floor-drift-empty-')
+    const ctx = new Context()
+    const sessions = new FakeSessionRegistry(ctx)
+    // The same identity drift as the non-empty case, but on a rebuilt session
+    // whose log is EMPTY (`seq === 0`): the durable floor is ahead of the log,
+    // so the contract's report-and-preserve path must still run.
+    sessions.register(fakeSession([], { id: 'sess-empty-drift', header: { cwd: root } }))
+    expect(updateWorkflowSessionBinding(harnessDir, 'sess-empty-drift', root, { selectedWorkflowId: 'wf-a', excludedBeforeSeq: 5 }).kind).toBe('written')
+    const captured: string[] = []
+    const priorSink = setWorkflowLedgerLogger((_level, message) => { captured.push(message) })
+    try {
+      registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))
+
+      expect(captured.some((m) => m.includes('drift'))).toBe(true)
+      expect(readAgentFlow(dirs['wf-a'])!.events).toEqual([])
+      expect(readAgentFlow(dirs['wf-b'])!.events).toEqual([])
+      // The intentional exclusion record is preserved, never reset to zero.
+      expect(readWorkflowSessionBinding(harnessDir, 'sess-empty-drift', root)).toEqual({
         kind: 'ok',
         binding: { cwd: root, selectedWorkflowId: 'wf-a', excludedBeforeSeq: 5 },
       })

@@ -880,10 +880,18 @@ export function registerWorkflowLedger(ctx: Context, resolver: HarnessResolver, 
     const sid = sessionIdOf(session)
     if (sid === undefined) return
     const endSeq = sessionEndSeqOf(session)
-    if (endSeq === undefined || endSeq === 0) return
+    if (endSeq === undefined) return
+    // The EFFECTIVE START is resolved for every readable log, INCLUDING an
+    // empty one (`endSeq === 0`): a durable exclusion floor ahead of the
+    // captured end is identity drift on the exclusion record, and
+    // `scanStartSeq` owns that report. A zero-length fast return placed
+    // before this call would silently swallow it (the intentional exclusion
+    // must be reported, never reset). `startSeq <= endSeq` always holds, so
+    // the guard below is exactly "no row to walk".
+    const startSeq = scanStartSeq(session, sid, endSeq)
+    if (startSeq >= endSeq) return
     const eventAt = sessionEventAtOf(session)
     if (eventAt === undefined) return
-    const startSeq = scanStartSeq(session, sid, endSeq)
     scanDepth += 1
     try {
       for (let seq = startSeq; seq < endSeq; seq += 1) consume(session, eventAt(seq))
@@ -923,12 +931,20 @@ export function registerWorkflowLedger(ctx: Context, resolver: HarnessResolver, 
     sessionsSnapshot = []
   }
   for (const session of sessionsSnapshot) {
-    const sid = sessionIdOf(session)
-    if (sid === undefined) continue
+    // Identity extraction is INSIDE the per-session containment: `sessionIdOf`
+    // dereferences `header.id`, and a hostile getter/Proxy in one listed
+    // session must never escape `registerWorkflowLedger` (observe-only: a
+    // throwing session read is contained, never an apply failure). `sid` stays
+    // undefined when the id read itself throws — the warn then falls back to a
+    // placeholder rather than re-reading the hostile header — and the session
+    // is skipped.
+    let sid: string | undefined
     try {
+      sid = sessionIdOf(session)
+      if (sid === undefined) continue
       scanSession(session)
     } catch (error) {
-      log('warn', `workflow-ledger cold scan failed for session ${sid} (contained — other sessions unaffected): ${errorMessage(error)}`)
+      log('warn', `workflow-ledger cold scan failed for session ${sid ?? 'unknown'} (contained — other sessions unaffected): ${errorMessage(error)}`)
     }
   }
 
