@@ -13,7 +13,7 @@
  * - `apply(ctx)` is called on a capture-only context, so the REAL node
  *   definitions and the REAL keyed `context` renderer are harvested;
  * - the durable log event (a `user/message` whose `source` is the locked
- *   `{ kind: 'plugin', plugin: 'mstar-engine-status', form: 'catalog' }` row)
+ *   `{ kind: 'plugin', plugin: 'mstar-engine', form: 'catalog' }` row)
  *   is projected through that definition's own `match` + `start`, so the row's
  *   `provenance` / `form` come from upstream's own code, not from this spec;
  * - the renderer is rendered with the disclosure OPEN (`react` is supplied
@@ -71,7 +71,7 @@ interface NodeDefinition {
 }
 
 /** The locked source of the row under test: exactly three first-party members. */
-const LOCKED_SOURCE = { kind: 'plugin', plugin: 'mstar-engine-status', form: 'catalog' } as const
+const LOCKED_SOURCE = { kind: 'plugin', plugin: 'mstar-engine', form: 'catalog' } as const
 
 /** The model-facing text the plugin emits beside the row (opaque body input). */
 const MODEL_TEXT = '<mstar_engine_status>\nversion: 2.0.4\n</mstar_engine_status>'
@@ -175,7 +175,7 @@ describe('first-party transcript row — the locked engine-status source (AC6)',
     // The source label renders THIS plugin's identity — the label resolves
     // through the first-party `plugin` arm (`label = source.plugin`).
     expect(html).toContain('data-context-source="true"')
-    expect(html).toContain('>mstar-engine-status<')
+    expect(html).toContain('>mstar-engine<')
   })
 
   it('the body stays OPAQUE: no catalog form, the model-facing text plus the raw source fields', () => {

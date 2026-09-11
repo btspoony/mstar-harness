@@ -161,7 +161,7 @@ describe('mstar-engine-status — the unified catalog row (watermark + gate + st
     expect(decision.messages.length).toBe(inbox.length + 1)
 
     const row = lastMessage(decision)
-    expect(row?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine-status', form: 'catalog' })
+    expect(row?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine', form: 'catalog' })
     if (row?.source.kind !== 'plugin') return
     // The catalog payload is NOT persisted on the row's source — it is read
     // from the same builder the pre-step listener rendered the row from.

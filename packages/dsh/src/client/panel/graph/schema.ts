@@ -108,8 +108,7 @@ export const TRANSITION_TO_PHASE: Readonly<Record<string, PhaseId>> = {
  * placement (BOTTOM INSIDE the `sdd-implement` column bucket) is
  * superseded by the F5; the former SDD implement ↔ review
  * skeleton EDGE (sdd-implement → general back-edge, the `loop: true` arrow)
- * stays REMOVED from the projection ; the F5 supervise line is a SEPARATE sub-bucket edge (see
- * project-graph.ts `superviseEdges`).
+ * and the F5 sub-bucket supervise line are both REMOVED from the projection.
  *
  * Matching rules (spec §2.3 — implemented by `projectGraph`'s flow
  * projection): `expected` ⟺ `event.role` ∈ the union of ALL `roles` below

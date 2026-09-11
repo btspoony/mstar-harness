@@ -28,7 +28,7 @@ afterEach(async () => {
 })
 
 /** The ONE locked persisted source of the engine-status catalog row. */
-const LOCKED_SOURCE = { kind: 'plugin', plugin: 'mstar-engine-status', form: 'catalog' } as const
+const LOCKED_SOURCE = { kind: 'plugin', plugin: 'mstar-engine', form: 'catalog' } as const
 
 /** The loop's default pre-step decision: enter the step with the inbox messages. */
 const defaultEnter = (messages: UserMessage[]): (() => Promise<PreStepDecision>) =>

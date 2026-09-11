@@ -1,14 +1,21 @@
 /* Morning Star workflow panel — inherits dsh web's visual language
  * (dsw design tokens: surfaces, borders, labels, status states). Layout
- * contract (spec panel-tabs §2, v3): root grid "main sidebar" fills the Tab
- * (height 100%, overflow hidden — the page never scrolls); a fixed 300px
- * resident sidebar with its own internal scroll (<860px it stacks under
- * main); the sidebar bottom holds a fixed meta dock (version + harness dir)
- * that does NOT scroll with the digest. The main column hosts the fixed
- * header nav (TabNav — 3 MenuTabs) + the content region (switches per tab;
- * for the tasks tab the IterationTaskPage's own scroll area
- * `data-mstar-tasks-scroll` is the ONLY scroll body — spec §3) plus the
- * fixed freshness footer; `.main` itself never scrolls.
+ * contract (plan sidebar §L2.1): the narrow-column shell is a single flex
+ * column with exactly three zones — the section nav (flex: none), the
+ * panel-owned scroll body ([data-mstar-scroll], flex: 1 1 auto ·
+ * min-height: 0 · the ONLY overflow-y element — the per-page scrollers are
+ * retired), and the pinned meta dock (flex: none, version + harness dir).
+ * The root never overflows its host: height: 100% + overflow hidden bound
+ * to the pane body's definite height, no page scroll, no horizontal
+ * overflow. The workspace-state digest is IN FLOW inside the scroll body
+ * (the old 300px sibling column and its nested scroller are gone).
+ *
+ * Width signal (plan sidebar §L2.7): the panel's width is a fraction of the
+ * sidebar column, never the viewport, so the shell carries
+ * `container-type: inline-size` and the width rules are @container rules —
+ * the two viewport media queries are deleted. The shell padding rides the
+ * zones because a container query cannot style its own container; the
+ * zones are `.root`'s descendants and query fine.
  *
  * Hard metrics (spec §1.2): spacing comes ONLY from the --mstar-space-1..6
  * ramp defined at the root (a panel-scope ramp — not invented --dsw-* names);
@@ -26,46 +33,95 @@
   line-height: 1.6;
 }
 
-/* Panel-scope spacing ramp (spec §1.2) — not dsw token names. */
-.root {
+/* Panel-scope spacing ramp (spec §1.2) — not dsw token names. Declared on
+ * BOTH roots: the degraded branches render `.emptyRoot` as the standalone
+ * root (no shell zones at all), so its `--mstar-space-*` references resolve
+ * only if the ramp lives on that root too — an undefined custom property
+ * drops the declaration (the empty copy sat flush against the pane edge).
+ * The shell is the three-zone flex column; `container-type: inline-size` is
+ * the width signal for the @container rules below (the host gives a definite
+ * height, so inline-size containment does not disturb the height: 100%
+ * chain). */
+.root,
+.emptyRoot {
   --mstar-space-1: 4px;
   --mstar-space-2: 8px;
   --mstar-space-3: 12px;
   --mstar-space-4: 16px;
   --mstar-space-5: 24px;
   --mstar-space-6: 32px;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 300px;   /* main + fixed-width sidebar */
-  grid-template-rows: minmax(0, 1fr);             /* single full-height body row */
-  grid-template-areas: 'main sidebar';
+}
+
+.root {
+  display: flex;
+  flex-direction: column;
   height: 100%;
   min-height: 0;
   width: 100%;
-  padding: 0;                                     /* padding pushed into the areas */
-  /* Full-tab height : the panel opts into
-   * the host composer overlay (PanelView `data-conversation-composer-overlay`),
-   * which floats the composer over the panel bottom. Reserve clearance so the
-   * fixed freshness footer (main) + meta dock (sidebar) stay visible above it.
-   * `--dsh-composer-height` is the host-published live composer height (a
-   * measured fallback, not a --mstar-space-* spacing token — same 152px
-   * fallback the host's own TrajectoryView uses). */
-  padding-bottom: calc(var(--dsh-composer-height, 152px) + var(--mstar-space-3));
-  overflow: hidden;                               /* full-tab: page never scrolls */
+  overflow: hidden;                               /* the root never scrolls — the scroll zone owns scrolling */
+  container-type: inline-size;
 }
 
-/* No harness → no graph region (spec §2.5): single-column root; the main
- * centers the inactive-state card */
-.root[data-mstar-panel='no-harness'] {
-  grid-template-columns: 1fr;
-  grid-template-areas: 'main';
+/* The panel's group grid (plan sidebar §L4.3): ONE column always below
+ * 720px — the plan-status groups (plan board) and the agent groups share
+ * this class, so the wide behaviour is one rule, not a second layout. */
+
+.groupGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--mstar-space-4);
+}
+
+/* Compact rhythm at the narrow floor (the 300px docked column): the shell
+ * padding and the group grid gap tighten. The padding rides the zones —
+ * a container query cannot style its own container, and `.root` is the
+ * container; the zones are descendants and match. */
+
+@container (max-width: 480px) {
+  .scroll {
+    padding: var(--mstar-space-3);
+  }
+
+  .meta {
+    padding: var(--mstar-space-3);
+  }
+
+  .groupGrid {
+    gap: var(--mstar-space-3);
+  }
+}
+
+/* Fullscreen / manually widened column: the group grid spreads to two
+ * columns — the ONLY structural change any width makes (one DOM, one
+ * structure; width changes the grid, never the tree). */
+
+@container (min-width: 720px) {
+  .groupGrid {
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  }
+}
+
+/* Centered empty state (no catalog row yet). The degraded branches keep the
+ * whole-root centering — they render no shell zones at all. */
+.emptyRoot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-height: 0;
+  width: 100%;
+  padding: var(--mstar-space-4);
+  overflow: hidden;
 }
 
 /* The centered inactive-state card: a muted frame (no orange — spec §8
  * degraded tone) centered in the free space above the freshness footer
- * (flex: 1 + inner centering; compact width, text wraps within it). */
+ * (same page-frame flex contract as `.iterationPage` — it is a `.scroll`
+ * child too, so grow without shrink-below-content keeps a short pane from
+ * squeezing it over the footer; flex: 1 0 auto + inner centering; compact
+ * width, text wraps within it). */
 .noHarnessCard {
-  flex: 1;
-  min-height: 0;
+  flex: 1 0 auto;
   width: 100%;
   max-width: 400px;
   align-self: center;
@@ -101,79 +157,46 @@
   font: var(--dsw-font-xxxs-11);
 }
 
-@media (max-width: 860px) {
-  .root {
-    grid-template-columns: 1fr;
-    grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
-    grid-template-areas:
-      'main'
-      'sidebar';
-  }
-  .sidebar {
-    border-left: 0;
-    border-top: 1px solid var(--dsw-alias-border-l1);
-  }
-  /* Narrow fallback (spec panel-f4 §2.3 R8): the iteration split stacks
-     vertically — branches (DOM-first) above, steps below. The Task 2 width
-     cap applies to the ROW main axis only (flex-basis would otherwise set
-     a 260px HEIGHT in the column stack) — reset to content height. The cap
-     is scoped to `@media (min-width: 861px)` below, so nothing competes
-     with this reset at ≤860px */
-  .iterationHeadSplit {
-    flex-direction: column;
-  }
-  .iterationHeadSplit > .iterationBranches {
-    flex: 0 1 auto;
-    max-width: none;
-  }
-}
+/* --- scroll zone: the panel's ONLY scroller (plan sidebar §L2.1/L2.2):
+ * the active section page, the in-flow workspace-state digest and the
+ * freshness footer all flow inside it; the shell padding rides here (a
+ * container query cannot style its own container — see the @container rules
+ * at the top). Flex column so the degraded no-harness card can grow and
+ * center, and so short content pins the freshness footer to the zone's end. */
 
-/* Centered empty state (no catalog row yet). Full-tab like .root: the page
- * never scrolls (overflow hidden — waiting branch shares the invariant). */
-.emptyRoot {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 100%;
+.scroll {
+  flex: 1 1 auto;
   min-height: 0;
-  width: 100%;
-  padding: var(--mstar-space-4);
-  overflow: hidden;
-}
-
-/* --- main: TabNav header + per-tab content + fixed freshness footer
- * (spec panel-tabs §2, v3) --- */
-
-.main {
-  grid-area: main;
   display: flex;
   flex-direction: column;
-  min-width: 0;
-  min-height: 0;
   padding: var(--mstar-space-4);
-  overflow: hidden;                               /* main never scrolls — the per-tab page owns its scroll body */
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
-/* --- header nav: 3 fixed MenuTabs + content region (spec panel-tabs §2) --- */
+/* --- header nav: the section nav, the shell's first zone (plan sidebar
+ * §L2.3 — the dsh tab strip above it is host chrome, untouched) --- */
 
 .tabNav {
   display: flex;
   flex: none;
   gap: var(--mstar-space-1);
-  padding: 0;
+  padding: var(--mstar-space-1) var(--mstar-space-2);
   margin: 0 0 var(--mstar-space-2);
   border-bottom: 1px solid var(--dsw-alias-border-l1);
 }
 
-/* MenuTab (F1.2): borderless button, secondary label, active underline via
- * box-shadow (the T4 audit treats `border-*` shorthand colors as color
+/* Section tab (spec §6.1): borderless button, secondary label, active
+ * underline via box-shadow (the T4 audit treats `border-*` shorthand colors as color
  * declarations — `transparent` is not a token, so the underline slot rides
- * box-shadow instead). */
+ * box-shadow instead). Tightened for the column (plan sidebar §L2.3):
+ * token padding + the --dsw-font-xxs-12 ramp; the three 4-glyph labels fit
+ * the 300px floor with no wrap at any width. */
 .tab {
   appearance: none;
   border: 0;
   background: none;
-  padding: var(--mstar-space-2) var(--mstar-space-3);
+  padding: var(--mstar-space-1) var(--mstar-space-2);
   color: var(--dsw-alias-label-secondary);
   font: var(--dsw-font-xxs-12);
   cursor: pointer;
@@ -190,32 +213,25 @@
   box-shadow: inset 0 -2px 0 0 var(--dsw-alias-state-business-primary);
 }
 
-/* Content region: the per-tab page mount (`data-mstar-graph`, spec §6.1).
- * The tasks tab's IterationTaskPage fills it and keeps its own scroll body
- * (`data-mstar-tasks-scroll`); the events tab's EventLogPage locks
- * its height and its two partitions scroll internally (plan
- *  Task 2 — no whole-page scroll) —
- * content itself never scrolls (v3 invariant preserved). */
-.content {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
 /* --- IterationTaskPage (spec panel-tabs §3
- * Content Head (collapsible iteration summary + horizontal steps) +
- * full-width kanban. The page fills the content region as a flex column; the
- * head is flex:none (stays fixed) and the tasks area is the page's
- * INDEPENDENT scroll body — the kanban spreads full-width and is never
- * compressed into a small box by a canvas height. Colors are --dsw-* tokens
+ * Content Head (collapsible iteration summary + vertical steps) + the five
+ * stacked kanban groups. The page is flow content in the panel's single
+ * scroll zone (plan sidebar §L2.2 — the page-owned scroll body is retired).
+ * Colors are --dsw-* tokens
  * only; spacing rides the --mstar-space-* ramp; motion ≤200ms (killed by the
  * root reduced-motion rule). --- */
 
+/* Page frame flex contract: the page is a `.scroll` child, so it grows
+ * WITHOUT shrink-below-content (`flex: 1 0 auto`, no `min-height: 0`).
+ * The former `flex: 1` (= 1 1 0%) + `min-height: 0` sized the page to the
+ * zone's free space regardless of content — tall content stayed compressed
+ * (basis 0), plan groups painted over the in-flow digest, and the single
+ * scroller never carried the page. `0` shrink keeps tall content at its
+ * content height so [data-mstar-scroll] grows and scrolls it; `1` grow
+ * still fills short zones, pinning the digest + freshness footer to the
+ * zone end. Never a second scroller. */
 .iterationPage {
-  flex: 1;
-  min-height: 0;
+  flex: 1 0 auto;
   display: flex;
   flex-direction: column;
   gap: var(--mstar-space-3);
@@ -325,67 +341,49 @@
   border-top: 1px solid var(--dsw-alias-border-l1);
 }
 
-/* LEFT-RIGHT split (spec panel-f4 §2.3 R8): branches
- * (small half, DOM-first) LEFT + steps (large half) RIGHT — a plain flex
- * row; the DOM already puts branches before steps. Narrow widths stack
- * vertically (the same 860px breakpoint as the root grid, below).
- * Width cap : in the ROW
- * layout the branch panel is width-constrained (flex-basis 260px, capped
- * 280px — it never stretches with the container; the branch values stay
- * compact) and the steps row absorbs ALL remaining width (flex 1 1 0).
- * The cap is scoped to `@media (min-width: 861px)` so the ≤860px column
- * stack never sees flex-basis 260px / max-width 280px — the narrow reset
- * above is the ONLY branch rule at ≤860px, with no cascade competition
- */
+/* Narrow-column head body (spec panel-f4 §2.3 R8 re-shaped by plan sidebar
+ * §L4.2): branches (DOM-first) stack ABOVE the vertical stepper — the former
+ * LEFT-RIGHT flex row cannot fit the 300px floor. The DOM order is unchanged
+ * (branches before steps); only the axis turned. */
 .iterationHeadSplit {
   display: flex;
-  align-items: stretch;
-  gap: var(--mstar-space-4);
+  flex-direction: column;
+  gap: var(--mstar-space-3);
   min-width: 0;
 }
 
-@media (min-width: 861px) {
-  /* Row-mode width cap — scoped to ≥861px (see the split comment above). */
-  .iterationHeadSplit > .iterationBranches {
-    flex: 0 1 260px;   /* width-capped — branch info never stretches */
-    max-width: 280px;
-    min-width: 0;
-  }
+.iterationHeadSplit > .iterationBranches {
+  min-width: 0;
 }
 
 .iterationHeadSplit > .iterationStepsRow {
-  flex: 1 1 0;   /* absorbs the remaining width — keeps its own horizontal scroll */
   min-width: 0;
 }
 
-/* Steps, HORIZONTAL (spec §3 — user
- * F2 feedback): 5 EQUAL full-width unit blocks (flex `1 1 0` — the row
- * spreads evenly with no compression), item content centered (badge/phase/
- * chip vertically + horizontally), a consistent --mstar-space-* gap; the
- * old connector bars are REMOVED — the gap replaces them. */
+/* Steps (plan sidebar §L4.2): the VERTICAL 5-item stacked stepper — one row
+ * per step (badge · phase · chip · reserved verdict seat). The horizontal
+ * row and its former `overflow-x: auto` scroller are retired — content flows
+ * inside the panel's single scroll zone. The current-step highlight stays on
+ * the block itself (honest — the schema knows only current/next/done/idle). */
 .iterationStepsRow {
   display: flex;
+  flex-direction: column;
   align-items: stretch;
-  gap: var(--mstar-space-3);
+  gap: var(--mstar-space-2);
   margin: 0;
   padding: 0;
   list-style: none;
-  overflow-x: auto;
-  overscroll-behavior: contain;
 }
 
 .iterationStepItem {
-  flex: 1 1 0;
   min-width: 0;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: var(--mstar-space-1);
-  text-align: center;
+  gap: var(--mstar-space-2);
 }
 
 .iterationStepBadge {
+  flex: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -400,6 +398,7 @@
 }
 
 .iterationStepPhase {
+  flex: 1 1 auto;
   overflow-wrap: anywhere;
   color: var(--dsw-alias-label-secondary);
   font: var(--dsw-font-xxxs-11);
@@ -407,9 +406,10 @@
 
 /* State chip: current = business glow + ring, next = dashed, idle = dim —
  * driven by the step item's `data-step-state` (spec §3 treatment carried
- * over from the zone stepper, now horizontal; the current-step highlight
- * stays on the BLOCK itself — plan Item 1). */
+ * over from the zone stepper, now a vertical stack row; the current-step
+ * highlight stays on the BLOCK itself — plan Item 1). */
 .iterationStepChip {
+  flex: none;
   display: inline-flex;
   align-items: center;
   padding: 0 var(--mstar-space-2);
@@ -464,15 +464,14 @@
   color: var(--dsw-alias-state-success-primary);
 }
 
-/* Verdict seat row (spec panel-f4 §2.3 R9): EVERY step
- * reserves a fixed-height seat below the chip — the conditional PASS/FAIL
- * badge fills the seat on the current step only. Every step item now has the
- * same children (badge/phase/chip/seat), so the centered content groups align
- * identically across steps — the old in-flow badge (an extra child on the
- * current step only) shifted that block's centered group. The badge itself
- * centers in the seat (inherit the item's center alignment — the old
- * `align-self: flex-start` skew is gone). */
+/* Verdict seat (spec panel-f4 §2.3 R9): EVERY step
+ * reserves a fixed-height seat at the end of its row — the conditional
+ * PASS/FAIL badge fills the seat on the current step only. Every step item
+ * has the same children (badge/phase/chip/seat), so the rows align
+ * identically — the old in-flow badge (an extra child on the current step)
+ * shifted that block. The badge centers in the seat. */
 .iterationVerdictSeat {
+  flex: none;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -548,39 +547,31 @@
   font-weight: 600;
 }
 
-/* Task area: the page's INDEPENDENT vertical scroll body (spec §3 — the
- * kanban spreads full-width, never compressed by a canvas height). */
+/* Task area: flow content in the panel's scroll zone (plan sidebar §L2.2 —
+ * the page's own vertical scroll body is retired; `[data-mstar-scroll]` is
+ * the only scroller). A plain stack: the board, then the project rollup. */
 .iterationTasks {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-3);
+  min-width: 0;
 }
 
-/* --- sidebar: fixed 300px column, full height, own scroll (spec panel-zones §2) --- */
+/* --- workspace-state digest: IN FLOW at the end of the scroll zone (plan
+ * sidebar §L2.1) — the former 300px sibling column, borderless (the
+ * StateSection carries its own top hairline); the digest's own nested
+ * scroller (`data-mstar-sidebar-scroll`) is retired with the per-page
+ * scrollers. The meta dock below is the shell's third zone. */
 
 .sidebar {
-  grid-area: sidebar;
   display: flex;
   flex-direction: column;
+  gap: var(--mstar-space-2);
   min-width: 0;
-  min-height: 0;
-  border-left: 1px solid var(--dsw-alias-border-l1);
 }
 
-/* Scrolling digest region: the ONLY sidebar scroller — the meta dock below
- * stays fixed (does not scroll with the digest). */
-.sidebarScroll {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: var(--mstar-space-4);
-  padding: var(--mstar-space-4);
-}
-
-/* --- sidebar bottom meta dock: version + harness dir (spec §5) --- */
+/* --- meta dock: version + harness dir, the shell's third zone (spec §5) —
+ * flex: none, pinned under the scroll zone, never scrolls. */
 
 .meta {
   display: flex;

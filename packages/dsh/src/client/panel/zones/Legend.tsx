@@ -1,8 +1,10 @@
 /**
  * Legend (spec panel-tabs §4/§6.2):
- * mounted on the AgentCanvasPage (the zone-dashboard footer legend is gone
- * with the WorkflowCanvas — spec §6.1). Describes ONLY the role-card status
- * treatments of the agent canvas — plan
+ * mounted on the AgentListPage, IN FLOW below the grouped list (the
+ * zone-dashboard footer legend is gone with the WorkflowCanvas — spec §6.1;
+ * the list page keeps the legend placement the canvas page established,
+ * after the content). Describes ONLY the role-card status
+ * treatments of the agent rows — plan
  *  Task 1 (图例精简): the 7
  * collaboration-edge / layout entries (flow-actual / port / group /
  * sub-bucket / supervise / on-demand / unknown) are REMOVED — the legend is

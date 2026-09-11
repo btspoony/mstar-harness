@@ -1,16 +1,17 @@
 /**
  * Data hook for the workflow panel (spec §5): the panel's ONE data path.
  *
- * The persisted catalog row is an ANCHOR, not a data source: since the source
- * reduction the row carries exactly `{ kind: 'plugin', plugin:
- * 'mstar-engine-status', form: 'catalog' }`, and the structured payload lives
- * in the host's per-session snapshot store. So the hook
+ * The persisted catalog row is an ANCHOR, not a data source: rows are emitted
+ * as `{ kind: 'plugin', plugin: 'mstar-engine', form: 'catalog' }`, and the
+ * structured payload lives in the host's per-session snapshot store. So the
+ * hook
  *
  * 1. finds the LATEST anchor row in the active session's conversation log
  *    (`kind === 'context'` + `form === 'catalog'` + the first-party `plugin`
- *    arm with this plugin's identity) and takes its message time as the
- *    refresh key — a re-emission appends a new row, the snapshot bump re-runs
- *    this selection, and the newest anchor asks for the newest snapshot;
+ *    arm with one of this plugin's anchor identities) and takes its message
+ *    time as the refresh key — a re-emission appends a new row, the snapshot
+ *    bump re-runs this selection, and the newest anchor asks for the newest
+ *    snapshot;
  * 2. reads the session's workspace directory from the session standard kit's
  *    session feed (the host cross-checks the asserted `cwd` against the
  *    session AND the stored snapshot, so it must be the real one);
@@ -62,11 +63,11 @@ export type MstarEngineStatusView =
 
 /** The seats the hook needs: the session standard kit + the plugin's client. */
 export interface MstarEngineStatusSeats {
-  /** Selector hook over the chat target snapshot (the `conversation.view` kit). */
+  /** Selector hook over the chat target snapshot (the session standard kit's chat face). */
   useChat: SnapshotSelectorHook<ChatSnapshot>
   /**
    * Selector hook over the Host session list (the global standard seat). The
-   * view ring always hands it to a `conversation.view` entry; it stays
+   * session-scope slot dispatch always hands it to the panel; it stays
    * optional here because a program without the ui-session adapter does not
    * see the declaration merge (the panel then reports `session-cwd-unknown`).
    */
@@ -84,13 +85,29 @@ const NO_SUBSCRIBE = (): (() => void) => () => {}
 /** Stable fallback read — same reference as {@link EMPTY_SNAPSHOT}. */
 const readEmptySnapshot = (): MstarEngineStatusSnapshot => EMPTY_SNAPSHOT
 
-/** Latest `mstar-engine-status` anchor row in snapshot order, or null. */
+/** The anchor identity this plugin emits (the catalog source maker's literal). */
+const ANCHOR_PLUGIN = 'mstar-engine'
+
+/**
+ * Legacy anchor identity: rows emitted by shipped builds before 2026-09-11
+ * persist `mstar-engine-status` in their session logs. Those rows keep
+ * anchoring their sessions — data compat for persisted session logs, not a
+ * code-compat layer. Any other `plugin` value is NOT an anchor.
+ */
+const LEGACY_ANCHOR_PLUGIN = 'mstar-engine-status'
+
+/** Latest engine-status anchor row (either accepted identity) in snapshot order, or null. */
 export function latestEngineStatusRow(nodes: readonly ConversationNode[]): ContextMessageNode | null {
   for (let i = nodes.length - 1; i >= 0; i--) {
     const node = nodes[i]!
     if (node.kind !== 'context' || node.form !== 'catalog') continue
     const source = node.source as { kind?: unknown; plugin?: unknown } | null
-    if (source?.kind === 'plugin' && source.plugin === 'mstar-engine-status') return node
+    if (
+      source?.kind === 'plugin' &&
+      (source.plugin === ANCHOR_PLUGIN || source.plugin === LEGACY_ANCHOR_PLUGIN)
+    ) {
+      return node
+    }
   }
   return null
 }

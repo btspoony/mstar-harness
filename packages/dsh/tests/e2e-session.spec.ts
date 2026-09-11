@@ -435,7 +435,7 @@ describe('agent/pre-step — iteration-gate row + catalog watermark', () => {
 
     const row = decision.messages.at(-1)
     expect(row?.role).toBe('user')
-    expect(row?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine-status', form: 'catalog' })
+    expect(row?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine', form: 'catalog' })
     // The catalog payload is NOT persisted on the row's source — read it from
     // the same builder the pre-step listener rendered the row from.
     const payload = buildCatalogPayload(app.ctx, harnessDir)
@@ -568,7 +568,7 @@ describe('bundledSkillDir — launch-cwd resolution (Task 4 reviewer note)', () 
     const decision = await booted.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
     expect(decision.kind).toBe('enter')
     if (decision.kind !== 'enter') return
-    const statusRow = decision.messages.find((m) => m.source.kind === 'plugin' && m.source.plugin === 'mstar-engine-status')
+    const statusRow = decision.messages.find((m) => m.source.kind === 'plugin' && m.source.plugin === 'mstar-engine')
     expect(statusRow).toBeDefined()
     const text = statusRow?.content[0]?.type === 'text' ? statusRow.content[0].text : ''
     expect(text).toContain('<mstar_engine_status>')

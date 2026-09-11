@@ -1,69 +1,80 @@
 /**
- * Morning Star workflow panel page — the `conversation.view` tab component
- * (spec §4.2): render of the session's engine-status snapshot.
+ * Morning Star workflow panel page — the right-Sidebar pane body (the keyed
+ * `sidebar.right.pane.tab` seat component, plan sidebar §L1.5): render of the
+ * session's engine-status snapshot.
  *
- * Inputs: the session standard kit (`ConvViewProps` + the session-list seat),
- * the plugin's engine-status client (bound to the client `connection` service
- * by the plugin entry) and the typed `t` seat (`locale: 'mstar-panel'`). The
- * `useMstarEngineStatus()` hook turns the anchor row + the served snapshot
- * into ONE explicit render state (spec §5) — the render body is a pure
- * function of (state, payload, snapshot `at`, t).
+ * Inputs: the sidebar seat's props (`MstarPanelBodyProps` — the seat's
+ * runtime share incl. the framework-injected `useTabInfo()` + the session
+ * standard kit + the entry store share (`useStore` + baked `select`, backed
+ * by the registration's `store` option) + the plugin's engine-status client
+ * bound by the plugin entry + the typed `t` seat (`locale: 'mstar-panel'`)).
+ * The `useMstarEngineStatus()` hook turns the anchor row + the served
+ * snapshot into ONE explicit render state (spec §5) — the render body is a
+ * pure function of (state, payload, snapshot `at`, t).
  *
- * Layout (spec panel-tabs §2): root grid
- * `"main sidebar"` fills the Tab (height 100%, overflow hidden — the page
- * never scrolls); the right sidebar is RESIDENT (all tabs share it, its props
- * `{ t, state, source }` unchanged); main = the fixed header nav (TabNav, 3
- * MenuTabs) + the content region (switches per tab) + the freshness footer.
- * The `data-mstar-graph` anchor now marks the CONTENT container (spec §6.1 —
- * previously the canvas container), so tests pin the layout contract, not the
- * per-tab page internals.
+ * Visibility (plan sidebar §L2.6): a docked body is projected only while its
+ * sidebar column is expanded and the tab is active —
+ * `useTabInfo().tab.visible` — so a collapsed column renders NOTHING (no
+ * projection, no DOM). A floating pane is always visible.
  *
- * Tab state (spec §6.2): local `useState<PanelTab>` (default 'tasks', D1, no
- * routing) — `renderToStaticMarkup` renders the default tasks page, keeping
- * SSR assertions stable. The tasks tab renders the IterationTaskPage (Content
- * Head + Steps 横排/收拢 + full-width kanban, spec §3 —
- * replacing the WorkflowCanvas zone dashboard); the agents tab renders the
- * draggable AgentCanvasPage (spec §4 — replacing the muted placeholder + the AgentFlowZone); the events tab
- * renders the EventLogPage (spec §5 — the non-canvas log page with per-row
- * `<details>` expansion, replacing
- * the muted placeholder AND the AgentEventDock — 无双份日志).
+ * Layout (plan sidebar §L2.1): the narrow-column shell is a single flex
+ * column with exactly three zones — the section nav (`flex: none`), the
+ * panel-owned scroll body (`[data-mstar-scroll]`, flex: 1 1 auto ·
+ * min-height: 0 · the ONLY `overflow-y: auto` element in the panel; it also
+ * carries the `data-mstar-graph` content-container anchor), and the pinned
+ * meta dock (`flex: none`). The workspace-state digest renders IN FLOW at the
+ * end of the scroll body (the old 300px sibling column and its nested
+ * scroller are gone); the freshness footer follows it in the same flow.
  *
- * Empty branches (spec §2): waiting / loading / unavailable / no-harness render
- * no tabs and no sidebar — each with its OWN anchor and copy, so a degraded
- * read is never mistakable for an empty workspace. Waiting keeps the muted
- * hint; loading states the pending read; unavailable carries the
- * machine-readable reason; the no-harness branch renders a CENTERED
- * inactive-state card (icon + title + hint) with the freshness footer, and its
- * main keeps `data-mstar-graph` on the content container. Degradation stays
- * total: `projectGraph` never throws; no iteration → the IterationTaskPage's
- * collapsed muted head (spec §8); `state` null / plans missing → muted kanban
- * skeleton.
+ * Section state (plan sidebar §L2.4): the entry store, keyed by
+ * `tabInfo.tab.id` (default `'tasks'`, D1) — it survives the body's unmount
+ * when another pane tab activates, which `useState` cannot. The render is
+ * SSR-stable: an untouched store reads `undefined` → the default tasks page.
+ *
+ * Empty branches (spec §2): waiting / loading / unavailable / no-harness
+ * render no tabs, no digest and no meta dock — each with its OWN anchor and
+ * copy, so a degraded read is never mistakable for an empty workspace.
+ * Degradation stays total: `projectGraph` never throws; no iteration → the
+ * IterationTaskPage's collapsed muted head (spec §8); `state` null / plans
+ * missing → muted kanban skeleton.
  */
 
 import * as React from 'react'
-import { useState } from 'react'
-import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
-import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
+import type { PropsLocale, PropsRuntime, TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { MstarEngineStatusPayload } from '../../types.ts'
+import type { PropsStore } from '@deepseek-ai/dsh-client-store'
 import css from './panel.module.css'
 import type { MstarEngineStatusClient } from './engine-status-client.ts'
 import { projectGraph } from './graph/project-graph.ts'
+import { PanelMeta } from './panel-meta.tsx'
 import { Sidebar } from './sidebar.tsx'
-import { TabNav, type PanelTab } from './TabNav.tsx'
-import { AgentCanvasPage } from './pages/AgentCanvasPage.tsx'
+import { TabNav } from './TabNav.tsx'
+import { AgentListPage } from './pages/AgentListPage.tsx'
 import { EventLogPage } from './pages/EventLogPage.tsx'
 import { IterationTaskPage } from './pages/IterationTaskPage.tsx'
 import { useMstarEngineStatus, type UseSessions } from './use-mstar-engine-status.ts'
+import { createPanelStore, type PanelSection } from './panel-store.ts'
 
-export interface MstarPanelViewProps extends ConvViewProps {
+/**
+ * The sidebar body seat's props (plan sidebar §L1.5): the seat's runtime
+ * share (owner + keyed + the seat's inject face — `useTabInfo()` — + the
+ * session standard kit, incl. the ui-chat-merged `useChat`) + the entry
+ * store share (plan §L2.4 — the registration's `store` option) + the typed
+ * `t` seat from the registration's `locale:` option.
+ */
+export interface MstarPanelBodyProps
+  extends PropsRuntime<'sidebar.right.pane.tab'>,
+    PropsStore<ReturnType<typeof createPanelStore>>,
+    PropsLocale<'mstar-panel'> {
   /** Namespace-bound translate seat (`locale: 'mstar-panel'`). */
   t: TranslateNS<'mstar-panel'>
   /**
    * Current session identity — the session standard kit's own prop. Declared
    * here (rather than inherited) because this package does not depend on the
    * ui-session adapter that merges the session-kit declarations into
-   * `ConvViewProps`; the view ring always supplies it at runtime.
+   * `SessionStandardProps`; the seat's session scope always supplies it at
+   * runtime.
    */
   sessionId?: SessionId
   /** Host session-list selector hook (the global standard seat, same reason). */
@@ -87,42 +98,51 @@ function formatSnapshotTime(at: string): string | null {
 }
 
 export interface PanelContentProps {
-  tab: PanelTab
+  /** The active panel section (plan sidebar §L1.5 vocabulary — not a sidebar tab record). */
+  section: PanelSection
   source: MstarEngineStatusPayload
   t: TranslateNS<'mstar-panel'>
 }
 
 /**
- * Tab → page mapping (spec §6.2): the only per-tab-switching part of the
- * layout. tasks = the IterationTaskPage (spec §3 — Content Head + Steps
- * 横排/收拢 + full-width kanban, it replaced the
- * WorkflowCanvas zone dashboard, whose file is removed by the plan close);
- * agents = the draggable AgentCanvasPage (spec §4 — full KNOWN_AGENTS roster
- * + idle states + AgentEdge collaboration edges; it replaced the muted placeholder and the AgentFlowZone); events =
- * the real EventLogPage (spec §5 — non-canvas log page: Agent 流转事件 +
- * 违规记录 partitions with per-row `<details>` expansion; it replaced the muted placeholder AND the
- * AgentEventDock — 无双份日志, the dock is removed with this plan).
+ * Section → page mapping (spec §6.2): the only per-section-switching part of
+ * the layout. tasks = the IterationTaskPage (spec §3 — Content Head + Steps
+ * + the plan board); agents = the AgentListPage (spec §4 — the vertical
+ * grouped list, plan sidebar §L3); events = the EventLogPage (spec §5 — the
+ * log page with per-row `<details>` expansion).
  */
-export function PanelContent({ tab, source, t }: PanelContentProps) {
-  if (tab === 'agents') {
+export function PanelContent({ section, source, t }: PanelContentProps) {
+  // The projection is memoized on the SNAPSHOT identity (the payload object is
+  // stable between snapshot stores updates) — the pages' downstream
+  // `useMemo(..., [view])` memos stay effective instead of re-running on every
+  // render against a fresh projection object.
+  const view = React.useMemo(() => projectGraph(source), [source])
+  if (section === 'agents') {
     // The SHARED iteration info section : the agents page receives the
     // SAME `view.iteration` the tasks page renders (IterationInfoSection).
-    const view = projectGraph(source)
-    return <AgentCanvasPage view={view.agents} iteration={view.iteration} t={t} />
+    return <AgentListPage view={view.agents} iteration={view.iteration} t={t} />
   }
-  if (tab === 'events') return <EventLogPage view={projectGraph(source)} t={t} />
-  return <IterationTaskPage view={projectGraph(source)} t={t} />
+  if (section === 'events') return <EventLogPage view={view} t={t} />
+  return <IterationTaskPage view={view} t={t} />
 }
 
-export function PanelView({ t, useChat, useSessions, sessionId, engineStatus }: MstarPanelViewProps) {
+export function PanelView({ t, useChat, useSessions, sessionId, engineStatus, useTabInfo, useStore, actions }: MstarPanelBodyProps) {
   const view = useMstarEngineStatus({ useChat, useSessions, sessionId, engineStatus })
-  // Tab state (spec §6.2): local, default 'tasks' (D1), no routing. Called
-  // before every early return (hooks rule) — the empty branches never render
-  // the tab nav.
-  const [tab, setTab] = useState<PanelTab>('tasks')
+  // Visibility gate (plan sidebar §L2.6) + section state (plan §L2.4). All
+  // hooks run before every early return (hooks rule) — the empty branches
+  // never render the tab nav, and the store read is keyed by the tab record
+  // id with the `'tasks'` default applied at the read site (D1, SSR-stable:
+  // an untouched store renders the tasks page).
+  const tabInfo = useTabInfo()
+  const tabId = tabInfo.tab.id
+  const section: PanelSection = useStore((s) => s.byTab[tabId]) ?? 'tasks'
+  if (!tabInfo.tab.visible) return null
+  const selectSection = (next: PanelSection): void => {
+    actions.select(tabId, next)
+  }
   if (view.state === 'waiting') {
     return (
-      <div className={css.emptyRoot} data-mstar-panel="waiting" data-conversation-composer-overlay="">
+      <div className={css.emptyRoot} data-mstar-panel="waiting">
         <p className={css.empty} data-mstar-empty="waiting">{t('empty.waiting')}</p>
       </div>
     )
@@ -133,14 +153,14 @@ export function PanelView({ t, useChat, useSessions, sessionId, engineStatus }: 
   // silently either (each carries its own anchor + copy).
   if (view.state === 'loading') {
     return (
-      <div className={css.emptyRoot} data-mstar-panel="loading" data-conversation-composer-overlay="">
+      <div className={css.emptyRoot} data-mstar-panel="loading">
         <p className={css.empty} data-mstar-empty="loading">{t('empty.loading')}</p>
       </div>
     )
   }
   if (view.state === 'unavailable') {
     return (
-      <div className={css.emptyRoot} data-mstar-panel="unavailable" data-conversation-composer-overlay="">
+      <div className={css.emptyRoot} data-mstar-panel="unavailable">
         <p className={css.empty} data-mstar-empty="unavailable" data-mstar-unavailable-reason={view.reason}>
           {t('empty.unavailable', { reason: view.reason })}
         </p>
@@ -168,15 +188,13 @@ export function PanelView({ t, useChat, useSessions, sessionId, engineStatus }: 
     </footer>
   )
   if (noHarness) {
-    // No harness → no tabs / no sidebar (spec §2 — empty branch unchanged):
-    // a CENTERED inactive-state card (icon + main copy + hint) with the
-    // freshness footer, in a single-column root (plan
-    //  T3 — replaces the left-aligned hint).
-    // The `data-mstar-graph` anchor stays on the main container (its layout
-    // contract slot).
+    // No harness → no tabs / no digest / no meta dock (spec §2 — empty branch
+    // unchanged): a CENTERED inactive-state card (icon + main copy + hint)
+    // with the freshness footer, in the shell's single scroll zone (plan
+    // sidebar §L2.1 — the same three-zone language, degraded).
     return (
-      <div className={css.root} data-mstar-panel="no-harness" data-conversation-composer-overlay="">
-        <main className={css.main} data-mstar-graph>
+      <div className={css.root} data-mstar-panel="no-harness">
+        <div className={css.scroll} data-mstar-scroll data-mstar-graph>
           <div className={css.noHarnessCard} data-mstar-empty-card>
             <svg
               className={css.noHarnessIcon}
@@ -200,31 +218,25 @@ export function PanelView({ t, useChat, useSessions, sessionId, engineStatus }: 
             <p className={css.noHarnessHint}>{t('empty.no-harness-hint')}</p>
           </div>
           {freshness}
-        </main>
+        </div>
       </div>
     )
   }
-  // Full-tab height (spec panel-tabs §2 Task
-  // 4): the host only gives a view a definite height when the view opts into
-  // the composer overlay. The `data-conversation-composer-overlay` attribute
-  // flips the host's `.viewArea` wrapper from flow content (`min-height: auto;
-  // flex: 1 0 auto` — which makes `.root`'s `height: 100%` resolve to auto and
-  // the WHOLE page scroll) to a fixed-height container (`flex: 1 1 0;
-  // min-height: 0; overflow: hidden`). Only then does the panel's own height
-  // chain (`height: 100%` → `.main` → `.content` → `.eventLogPage` →
-  // `.rowList`) constrain, so each partition scrolls internally. The waiting
-  // and no-harness roots carry the SAME opt-in so `height: 100%` also centers
-  // their content and the composer position never jumps on transition.
+  // The narrow-column shell (plan sidebar §L2.1): three flex zones under the
+  // pane body's definite height (L0.12 — the host's `.paneBody` is already a
+  // definite-height box, so no composer-overlay opt-in exists any more). The
+  // scroll zone is the panel's ONLY scroller: the active page, the in-flow
+  // workspace-state digest and the freshness footer all live inside it; the
+  // meta dock is pinned below.
   return (
-    <div className={css.root} data-mstar-panel="panel" data-conversation-composer-overlay="">
-      <main className={css.main}>
-        <TabNav active={tab} onChange={setTab} t={t} />
-        <div className={css.content} data-mstar-graph>
-          <PanelContent tab={tab} source={source} t={t} />
-        </div>
+    <div className={css.root} data-mstar-panel="panel">
+      <TabNav active={section} onChange={selectSection} t={t} />
+      <div className={css.scroll} data-mstar-scroll data-mstar-graph>
+        <PanelContent section={section} source={source} t={t} />
+        <Sidebar t={t} state={source.state} source={source} />
         {freshness}
-      </main>
-      <Sidebar t={t} state={source.state} source={source} />
+      </div>
+      <PanelMeta t={t} source={source} />
     </div>
   )
 }

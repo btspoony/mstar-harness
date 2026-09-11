@@ -19,8 +19,10 @@ import { join } from 'node:path'
 import {
   assertCssModuleTransform,
   assertNoUnescapedDigitHashSelector,
+  CLIENT_EXTERNALS,
   cssEscapeIdentifier,
   hashClass,
+  offTableDeepseekRequires,
   transformCssModule,
   UNESCAPED_DIGIT_HASH_SELECTOR,
 } from '../scripts/build-client-bundle.ts'
@@ -189,5 +191,38 @@ describe('assertion guards — negative control: injected unescaped digit-leadin
         'emitted bundle',
       ),
     ).not.toThrow()
+  })
+})
+
+describe('offTableDeepseekRequires — the post-build purity gate allows exactly CLIENT_EXTERNALS rows', () => {
+  const requireOf = (id: string): string => `require("${id}")`
+
+  it('classifies every CLIENT_EXTERNALS row as allowed — a bundle of only externals has an empty off-table set', () => {
+    const bundleText = CLIENT_EXTERNALS.map(requireOf).join(';\n')
+    expect(offTableDeepseekRequires(bundleText)).toEqual([])
+  })
+
+  it('rejects off-table @deepseek-ai/* requires, naming exactly the offenders', () => {
+    const bundleText = [
+      requireOf('@deepseek-ai/dsh-client-store'), // documented external row — allowed
+      requireOf('@deepseek-ai/dsh-client-locale'), // off-table — flagged
+      requireOf('@deepseek-ai/dsh-client-connection'), // off-table — flagged
+      requireOf('@deepseek-ai/dsh-client-store'), // duplicate external still allowed
+    ].join(';\n')
+    expect(offTableDeepseekRequires(bundleText)).toEqual([
+      '@deepseek-ai/dsh-client-locale',
+      '@deepseek-ai/dsh-client-connection',
+    ])
+  })
+
+  it('the extractor reads only @deepseek-ai/* require ids (other modules and non-require text are ignored)', () => {
+    const bundleText = [
+      'var locale = require("@deepseek-ai/dsh-client-locale")',
+      'var react = require("react")',
+      'var fs = require("node:fs")',
+      'var n = 42',
+      '// a comment naming @deepseek-ai/dsh-client-locale without a require call',
+    ].join('\n')
+    expect(offTableDeepseekRequires(bundleText)).toEqual(['@deepseek-ai/dsh-client-locale'])
   })
 })

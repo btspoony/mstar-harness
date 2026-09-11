@@ -166,6 +166,19 @@ export function assertNoUnescapedDigitHashSelector(text: string, what: string): 
 }
 
 /**
+ * Purity-gate classification (the post-build half of the bundle contract):
+ * the `@deepseek-ai/*` module ids required by `text` that are NOT in
+ * `CLIENT_EXTERNALS` — each one is a value import the loader's module table
+ * cannot resolve (throw at build time; the documented external rows are the
+ * only allowed requires). Exported for the spec that pins the
+ * allows-exactly-CLIENT_EXTERNALS contract.
+ */
+export function offTableDeepseekRequires(text: string): string[] {
+  const deepseekRequires = [...text.matchAll(/require\(\s*["'](@deepseek-ai\/[^"']*)["']\s*\)/g)].map((m) => m[1]!)
+  return deepseekRequires.filter((id) => !CLIENT_EXTERNALS.includes(id))
+}
+
+/**
  * Transform-layer regression assertion (plan Scope item 2): after compiling
  * one `*.module.css`, (i) every classMap value appears in the css text in its
  * canonical escaped form (`'.' + cssEscapeIdentifier(hashed)` — a byte-level
@@ -336,16 +349,19 @@ if (import.meta.main) {
   // Inline bundle-contract assertions (spec §3.2 #2 verify-only + the
   // classic-script guard): the emitted text must NOT carry the removed
   // react-flow library (negative assertion — proves the removal is complete
-  // end to end, spec panel-zones §2), must not value-import `@deepseek-ai/*`
-  // (purity gate), and must contain NO `import.meta` / ESM statements — the
-  // web loader executes this file as a classic <script>, where either is a
-  // parse-time SyntaxError.
+  // end to end, spec panel-zones §2), must not value-import a `@deepseek-ai/*`
+  // module OUTSIDE the loader-table externals (purity gate — an external row
+  // such as the documented `@deepseek-ai/dsh-client-store` exemption emits a
+  // `require` the loader's module table resolves; see the header), and must
+  // contain NO `import.meta` / ESM statements — the web loader executes this
+  // file as a classic <script>, where either is a parse-time SyntaxError.
   const bundleText = readFileSync(result.outputs[0]!.path, 'utf8')
   if (/xyflow|reactflow/i.test(bundleText)) {
     throw new Error('client bundle contract: the emitted bundle still contains xyflow/reactflow markers — the react-flow removal is incomplete (check imports / comments / devDeps)')
   }
-  if (/require\(\s*["']@deepseek-ai\//.test(bundleText)) {
-    throw new Error('client bundle contract: a @deepseek-ai/* VALUE import survived the purity gate')
+  const offTableRequires = offTableDeepseekRequires(bundleText)
+  if (offTableRequires.length > 0) {
+    throw new Error(`client bundle contract: a @deepseek-ai/* VALUE import survived the purity gate (${offTableRequires.join(', ')})`)
   }
   if (bundleText.includes('import.meta') || /(^|\n)\s*(import|export)\s/.test(bundleText)) {
     throw new Error('client bundle contract: emitted bundle contains import.meta / ESM statements — the classic-script loader would fail to parse it')

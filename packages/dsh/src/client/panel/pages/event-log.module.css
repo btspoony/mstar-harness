@@ -10,13 +10,14 @@
  * title uses the `event-log.section.events` locale key (the
  * event-log namespace stays symmetric with `event-log.section.violations`).
  *
- * Layout (user feedback「左右排
- * 两列 + 锁定一个高内部滚动」): the page frame is a locked-height TWO-COLUMN
- * grid (Agent 流转事件 | 违规记录 side by side) and NO LONGER scrolls as a
- * whole (`overflow: hidden`) — each partition pins its title and owns an
- * internal `overflow-y: auto` scroll on its row list, so both partitions are
- * visible at once at any window height. Below 1200px the two partitions stack
- * as 50/50 locked rows (each still scrolls internally).
+ * Layout (plan sidebar §L2.5/§L4.1): the two partitions are FLOW ROWS in
+ * the panel's single scroll body (`[data-mstar-scroll]`) — the old
+ * locked-height two-column grid and BOTH per-partition internal scrollers
+ * are retired; rows grow the scroll body instead of owning a scrollbar.
+ * The grid rides the shell's shared `.groupGrid` class (one column below
+ * the 720px container breakpoint; the ≥720px two-column spread is that
+ * rule's), so this module declares no width query of its own — the former
+ * 1200px viewport media query is gone.
  *
  * Token discipline (spec §1.2/§7 — the T4/T5 css audits): EVERY color is a
  * verified --dsw-alias-* token (zero bare hex/rgb — dark mode is the host
@@ -28,30 +29,24 @@
  * reduced-motion block.
  */
 
-/* --- page frame: locked-height two-column body (the page
- * never scrolls as a whole; each partition scrolls internally) --- */
+/* --- page frame: flow-row partitions in the panel's single scroll body
+ * (plan sidebar §L4.1 — no locked height, no page-owned scroll) --- */
 
+/* The grid itself rides the shell's shared `.groupGrid` class (applied by
+ * EventLogPage — plan sidebar §L4.3: ONE column below 720px, the ≥720px
+ * spread is that rule's, not a second layout). */
 .eventLogPage {
-  flex: 1;
-  min-height: 0;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  grid-template-rows: minmax(0, 1fr);   /* single locked row — the page height IS the tab height */
-  gap: var(--mstar-space-3);
-  padding: var(--mstar-space-3);
-  overflow: hidden;                     /* no whole-page scroll — the partitions own their scroll */
+  min-width: 0;
 }
 
 /* --- partition frame (same token treatment as the zone frames, spec §7) ---
- * min-height: 0 lets the grid item shrink inside the locked row so the row
- * list below can own the internal scroll. */
+ * A flow row: the frame grows with its rows inside the panel scroll body. */
 
 .section {
   display: flex;
   flex-direction: column;
   gap: var(--mstar-space-2);
   min-width: 0;
-  min-height: 0;
   padding: var(--mstar-space-3);
   border: 1px solid var(--dsw-alias-border-l1);
   border-radius: 8px;
@@ -77,9 +72,8 @@
 }
 
 /* --- log rows ---
- * The row list owns the partition's internal scroll: the
- * section is a locked-height flex column, so the pinned title never scrolls
- * away — only the rows do. */
+ * A plain flow list (plan sidebar §L2.2): the per-partition internal scroll
+ * is retired — rows grow the panel's single scroll body. */
 
 .rowList {
   display: flex;
@@ -88,9 +82,6 @@
   margin: 0;
   padding: 0;
   list-style: none;
-  flex: 1;            /* fill the partition below the pinned title */
-  min-height: 0;      /* allow shrinking so overflow-y can engage */
-  overflow-y: auto;   /* internal scroll — the partition locks its height */
 }
 
 /* The row summary IS the toggle (native <details> — no-JS, keyboard-accessible). */
@@ -291,26 +282,4 @@
 /* Missing field → muted「—」(spec §5 — never a guessed value). */
 .detailValueMissing {
   color: var(--dsw-alias-label-caption);
-}
-
-/* --- narrow fallback : below 1200px the two partitions
- * stack as two locked 50/50 rows — both stay visible at any window height,
- * each scrolling internally (same shape as the panel's own sidebar stack at
- * 860px, `panel.module.css`). Breakpoint rationale — MAIN-REGION width
- * arithmetic (this plan's decision):
- * the events page columns live in the main region, which already loses 300px
- * to the resident sidebar above the panel's 860px breakpoint — below 1200px
- * the main area is too narrow for two legible log columns (≈420px each at
- * 1200px, ≈300px at 960px, ≈250px at 860px — rows wrap to several lines).
- * The stacked-rows fallback shape is a decision OF THIS PLAN (two locked
- * 50/50 rows), not a reuse of a precedent: the canvas-zones dual-panel
- * side-by-side layout that once motivated a similar 1200px breakpoint was
- * removed by the tabs rework, so it no longer exists in the
- * codebase (archival). --- */
-
-@media (max-width: 1200px) {
-  .eventLogPage {
-    grid-template-columns: 1fr;
-    grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
-  }
 }

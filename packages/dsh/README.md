@@ -4,7 +4,7 @@ English | [中文](README.zh.md)
 
 ![dsh](https://img.shields.io/badge/dsh-0.1.5--rc.2-4B32C3.svg)
 
-[Morning Star](https://github.com/btspoony/mstar-harness) as a first-class dsh (DeepSeek Harness) host — a cordis function plugin that mounts the mstar engine in-process, implements the engine `HostAdapter` (`host: 'dsh'`), guards `{HARNESS_DIR}/status.json` writes (validate + advisory; repair-escape under hard), blocks disallowed subagent dispatches when `Enforcement: hard` is on, lints `SKILL.md` writes under the mounted skill roots, mounts the mstar `skills/` mirror through the dsh skill-filesystem provider (single canonical mount), and appends a durable `mstar-engine-status` catalog row to every composed agent step. Boot with a dsh Loader app; everything acts through the seam's refusal/advisory channels, never by patching the tools.
+[Morning Star](https://github.com/btspoony/mstar-harness) as a first-class dsh (DeepSeek Harness) host — a cordis function plugin that mounts the mstar engine in-process, implements the engine `HostAdapter` (`host: 'dsh'`), guards `{HARNESS_DIR}/status.json` writes (validate + advisory; repair-escape under hard), blocks disallowed subagent dispatches when `Enforcement: hard` is on, lints `SKILL.md` writes under the mounted skill roots, mounts the mstar `skills/` mirror through the dsh skill-filesystem provider (single canonical mount), and appends a durable `mstar-engine` catalog row (persisted-log readers also accept the legacy `mstar-engine-status` identity) to every composed agent step. Boot with a dsh Loader app; everything acts through the seam's refusal/advisory channels, never by patching the tools.
 
 ## Usage
 
@@ -72,7 +72,7 @@ The shipped headless template auto-initializes on first use (`@deepseek-ai/dsh-b
 | `rolePersonas` | `Record<string, string>` | unset (bundled mirror default) | mstar role id (`Execute as`) → persona text; the native subagent persona channel's **override** source — a role-matched start (one-shot `start` or the opt-in continuable `startContinuable`) merges the persona into the native request `persona` slot (the child embodies the role persona INSTEAD OF the deployment persona; persisted + reapplied on resume). Merge order: the request's own `persona` wins AS-IS (a caller-set persona is never overridden — no role merge); otherwise a non-empty entry beats the bundled `harness-agents/` mirror default, an **empty-string** entry is treated as unset and falls through to the mirror default, and an absent entry uses the mirror default (see LLM fallbacks integration). |
 | `skillRoots` | `string[]` | unset (no custom-root registration) | Additional skill roots registered with the dsh skill-filesystem provider (`customSkillDirs` semantics — scanned before user roots). Dev-time: the mirror `<repo-root>/skills` absolute path. |
 | `bundledSkillDir` | `string` | packaged `harness-skills/` mirror (package-relative) | Bundled skill root registered with the dsh skill-filesystem provider (`bundledSkillDir` semantics — scanned last, trusted). Defaults to the package's OWN `harness-skills/` mirror (synced by `bundle-assets`; gitignored) — package-relative, NOT cwd-anchored. An explicit value wins. |
-| `catalogTtlMs` | `number` | `60000` | Pre-step catalog cache refresh interval (ms): how often the per-workspace unified `mstar-engine-status` catalog row (watermark + iteration gate + workspace-state digest) re-reads `status.json` / the compass / the knowledge index. The hot path is a timestamp compare + cache hit between refreshes; a mid-session plan/compass/residual change lands within one interval. |
+| `catalogTtlMs` | `number` | `60000` | Pre-step catalog cache refresh interval (ms): how often the per-workspace unified `mstar-engine` catalog row (watermark + iteration gate + workspace-state digest) re-reads `status.json` / the compass / the knowledge index. The hot path is a timestamp compare + cache hit between refreshes; a mid-session plan/compass/residual change lands within one interval. |
 | `workflowGate` | `'off' \| 'warn' \| 'ask' \| 'hard'` | `'warn'` | Workflow/ralph gate mode (see Gates → Workflow / ralph gate). `off` = pass-through with no verdict row; `warn` = advisory-only; `ask` = first-seen names route through the approval waterfall (P-c); `hard` = policy violations veto before any child starts. Default `warn` changes NO hard behavior — the gate is advisory-only unless the deployment opts into `ask`/`hard`. |
 | `workflowNames` | `string[]` | unset | Workflow name allowlist (P-a): `meta.name` values treated as KNOWN by the gate. Empty or absent ⇒ **every** name is unknown (documented — the gate is NOT "allow all" by omission). Ralph calls carry no `meta.name` — P-a never applies to them. |
 
@@ -99,7 +99,7 @@ The registry rows mount before the plugin so `ctx.skills` / `ctx.tools` / `ctx.c
 - **Seam lints** — `DESIGN.md` / audit-plan / knowledge-doc / roles-dir writes under the harness get their artifact-specific engine lints.
 - **Model-facing tools** — `mstar_sdd_workspace`, `mstar_sdd_task_brief`, `mstar_iteration_gate`, `mstar_design_md_validate`, `mstar_audit_validate`, `mstar_compound_validate`, `mstar_roles_validate` register on `ctx.tools`. The `mstar_iteration_gate` mirror takes the v3 input `snapshot_path` (`{HARNESS_DIR}/workflows/<id>/snapshot.json` — mirror of `mstar iteration gate --workflow <id>`; the old `status_path` root input is gone with the v1 read path).
 - **Bundled commands** — `ctx.commands` registrations for `/iteration-start`, `/iteration-drive`, `/iteration-loop`, `/codebase-audit` (from the packaged `harness-commands/` mirror; each declares a frontmatter `input` hint so the web client claims `/name ` and waits for the user's follow-up args instead of executing immediately; handlers steer the command body + user args into the receiving agent).
-- **Pre-step catalog row** — every composed agent step appends ONE unified `mstar-engine-status` catalog message: the watermark (unified mstar version, harness dir, enforcement), the iteration phase-gate section (when a steering compass resolves) and the workspace-state digest (plan registry, open residuals, branch/policy anchors, active leases, knowledge digest, compass direction — when the workspace has a `status.json`). The row is digest-gated (injected once per turn, re-injected only when it changed) and shares one TTL-cached per-workspace build (`catalogTtlMs`, default 60 s).
+- **Pre-step catalog row** — every composed agent step appends ONE unified `mstar-engine` catalog message: the watermark (unified mstar version, harness dir, enforcement), the iteration phase-gate section (when a steering compass resolves) and the workspace-state digest (plan registry, open residuals, branch/policy anchors, active leases, knowledge digest, compass direction — when the workspace has a `status.json`). The row is digest-gated (injected once per turn, re-injected only when it changed) and shares one TTL-cached per-workspace build (`catalogTtlMs`, default 60 s).
 
 ### Enforcement semantics
 
@@ -241,7 +241,7 @@ Every engine module attaches to a dsh surface — delivered except the lint modu
 
 ## Engine-status catalog
 
-An advisory `agent/pre-step` waterfall listener appends ONE **`mstar-engine-status`** catalog MessageSource to every composed step — the first-party `plugin` arm, exactly `{ kind: 'plugin', plugin: 'mstar-engine-status', form: 'catalog' }` and **no other member** (mirroring the dsh tool-skill precedent): the model-visible `<mstar_engine_status>` block renders the watermark fields — **mstar version** (plugin own manifest; the single-version invariant pins the bundled engine to the same version), **harness dir** (resolved `{HARNESS_DIR}`, `none` when absent), and **enforcement** (compass mode, `soft` / `hard (compass)`) — plus the **iteration phase-gate section** (when a steering compass + `status.json` resolve: iteration id, transition, all-plans-done, gate verdict + violation codes — the `mstar iteration gate` tool result shape) and the **workspace-state digest section** (when the workspace has a `status.json`): **plans** (`id(status)` registry), **residuals** (open counts by severity), **branch** (base → target, spec integration), **policy** (push policy, worktree mode, control root), **leases** (active plan execution leases: holder + worktree), **knowledge** (knowledge-index doc count + categories) and **direction** (the steering compass's problem-statement one-liner). The listener calls `next()` first and builds on the delegated decision — it never vetoes a step and never replaces the composed messages. Model-visible ⟺ logged: the persisted source carries no facts — the row is the durable **anchor** and the exact emitted payload is snapshotted per session at `{HARNESS_DIR}/snapshots/engine-status.json` in this same digest-gated emission, so the session log plus that store reconstruct the row without re-parsing the block (dsh packages/AGENTS.md). No released session-format edge admits extra members on a message source, so nothing but the `plugin` arm is ever written there. The workflow panel reads that snapshot on demand over the host's shared `/api` typert gateway: the **host gateway owns the route** (a plugin cannot register one; a plain `connection.rpc.handle` channel mounts through `webServer` on the calling fiber and would pend this row's boot — the mechanism this package deliberately does not use) and this package contributes the `mstar/engineStatus` endpoint descriptor through an optional `ctx.typert.register(...)` child. The browser half calls `connection.rpc.call('/api', 'mstar/engineStatus', { args: { sessionId, cwd } })` and receives that session's stored snapshot, or an explicit `unavailable` reason (never another session's data, never silently-empty fields). **Trust boundary, stated plainly:** the endpoint authenticates nothing of its own — the transport fence (host/origin + browser auth) establishes only that the caller is a page this host served, so *possession of a `(sessionId, cwd)` pair plus reachability of the local `/api` gateway is the capability*. An answer is scoped to the REQUEST: the lookup is keyed by the asserted id, the stored record's `cwd` must equal both the asserted and the server-resolved session `cwd`, and the client re-checks the echoed id and workspace before rendering — so one session's request can never be served another session's row. The payload is a workspace digest (version, harness dir, enforcement, plan/residual/lease counters) that the panel's own session transcript already exposes; it is not treated as a secret, and the distinct `unavailable` reasons make the endpoint a weak session-existence oracle for a caller who already holds the id. Fiber disposal removes the listener (HMR-safe).
+An advisory `agent/pre-step` waterfall listener appends ONE **`mstar-engine`** catalog MessageSource to every composed step — the first-party `plugin` arm, exactly `{ kind: 'plugin', plugin: 'mstar-engine', form: 'catalog' }` and **no other member** (mirroring the dsh tool-skill precedent): the model-visible `<mstar_engine_status>` block renders the watermark fields — **mstar version** (plugin own manifest; the single-version invariant pins the bundled engine to the same version), **harness dir** (resolved `{HARNESS_DIR}`, `none` when absent), and **enforcement** (compass mode, `soft` / `hard (compass)`) — plus the **iteration phase-gate section** (when a steering compass + `status.json` resolve: iteration id, transition, all-plans-done, gate verdict + violation codes — the `mstar iteration gate` tool result shape) and the **workspace-state digest section** (when the workspace has a `status.json`): **plans** (`id(status)` registry), **residuals** (open counts by severity), **branch** (base → target, spec integration), **policy** (push policy, worktree mode, control root), **leases** (active plan execution leases: holder + worktree), **knowledge** (knowledge-index doc count + categories) and **direction** (the steering compass's problem-statement one-liner). The listener calls `next()` first and builds on the delegated decision — it never vetoes a step and never replaces the composed messages. Model-visible ⟺ logged: the persisted source carries no facts — the row is the durable **anchor** and the exact emitted payload is snapshotted per session at `{HARNESS_DIR}/snapshots/engine-status.json` in this same digest-gated emission, so the session log plus that store reconstruct the row without re-parsing the block (dsh packages/AGENTS.md). No released session-format edge admits extra members on a message source, so nothing but the `plugin` arm is ever written there. **Anchor identity (renamed, with read compat)**: the emitted `plugin` value is `mstar-engine` (was `mstar-engine-status`); rows emitted by shipped builds before the rename persist the legacy identity in already-written session logs, and the panel's anchor reader treats BOTH `mstar-engine` and `mstar-engine-status` as this plugin's first-party arm — any other `plugin` value is not an anchor and the session degrades to the explicit `waiting` state (never guessed data). The workflow panel reads that snapshot on demand over the host's shared `/api` typert gateway: the **host gateway owns the route** (a plugin cannot register one; a plain `connection.rpc.handle` channel mounts through `webServer` on the calling fiber and would pend this row's boot — the mechanism this package deliberately does not use) and this package contributes the `mstar/engineStatus` endpoint descriptor through an optional `ctx.typert.register(...)` child. The browser half calls `connection.rpc.call('/api', 'mstar/engineStatus', { args: { sessionId, cwd } })` and receives that session's stored snapshot, or an explicit `unavailable` reason (never another session's data, never silently-empty fields). **Trust boundary, stated plainly:** the endpoint authenticates nothing of its own — the transport fence (host/origin + browser auth) establishes only that the caller is a page this host served, so *possession of a `(sessionId, cwd)` pair plus reachability of the local `/api` gateway is the capability*. An answer is scoped to the REQUEST: the lookup is keyed by the asserted id, the stored record's `cwd` must equal both the asserted and the server-resolved session `cwd`, and the client re-checks the echoed id and workspace before rendering — so one session's request can never be served another session's row. The payload is a workspace digest (version, harness dir, enforcement, plan/residual/lease counters) that the panel's own session transcript already exposes; it is not treated as a secret, and the distinct `unavailable` reasons make the endpoint a weak session-existence oracle for a caller who already holds the id. Fiber disposal removes the listener (HMR-safe).
 
 The row is **digest-gated**: per agent+workspace it is injected once per turn and re-injected only when its rendered text changed — a 20-step turn shows the catalog once, not 20 times. The source shares ONE per-workspace cache entry, built at boot for an explicit `harnessDir` (else on the workspace's first pre-step) and TTL-refreshed (`catalogTtlMs`, default 60 s) — the hot path is a timestamp compare + Map lookup between refreshes, and a mid-session plan/compass/residual change lands within one interval.
 
@@ -282,185 +282,120 @@ layer or install step** (spec §6.1). The web app serves the bundle at
 `/plugins/@mstar-harness/dsh/client.js` and loads it through the
 closure-factory loader handoff (`window.__ModuleLoader__.load({ id, factory })`).
 
-The client entry registers a **`conversation.view`** view-ring tab
-(`id: 'mstar-workflow'`, `order: 20` — the trajectory precedent shape), labeled
-**"MStar Workflow"** (en) / **"MStar 工作流"** (zh) through the `mstar-panel`
-locale namespace. The panel is the **MStar Workflow layout**: a fixed 300px
-right sidebar — plans (≤5, time-desc, `+N more`), open residual findings (≤10,
-severity chips, overflow hint), policy (**enforcement first**, then push /
-worktree / control worktree), leases, knowledge, direction — over a bottom
-**fixed meta dock** (version + harness dir; small muted, does not scroll with
-the sidebar digest; the former header row was removed), an **HTML/CSS zone
-dashboard** as the main body, and a freshness footer (`last-updated
-HH:MM:SS` + the catalog-re-emission refresh note). The branches block moved
-out of the sidebar to the iteration zone (plan `20260810-panel-canvas-zones`).
-Below 860px the sidebar stacks under the main area.
+The client entry registers the panel as a **right-Sidebar page tab type**
+through the public two-stage seat contract: `ctx.sidebarRightTabs.register(definition)`
+with `id: '@mstar-harness/dsh'`, `kind: 'mstar-workflow'` (a page type — no
+`patterns`/`canOpen`/`priority`, opened by kind), a locale-following `title()`
+thunk, and exactly one **guide-page capsule** (`order: 20`, description + the
+MStar glyph icon) — picking the capsule opens the panel in that pane's slot
+(replacing the guide tab, expanding the column), and a second pick focuses the
+existing tab (the host's page dedup rule) — no auto-open, no duplicate surface.
+The old **`conversation.view`** view-ring tab is **removed** (a migration, not
+a second surface): the sidebar tab replaces the conversation-area tab. The
+body and its chip title register as keyed seats under the same id
+(`sidebar.right.pane.tab` + `sidebar.right.pane.tab.title`; the chip is the
+glyph + a title captured at open time — it does not follow a mid-session
+locale switch). The body renders **nothing** while `tab.visible === false`
+(collapsed column or a sibling pane tab active — no projection, no DOM), and
+the selected section lives in the entry's slot store keyed by the tab record,
+so it survives the docked body's unmount. Labels come from the `mstar-panel`
+locale namespace: **"MStar Workflow"** (en) / **"MStar 工作流"** (zh).
 
-The canvas is a pure render of the latest `mstar-engine-status` catalog row
-(from the `useSession` snapshot — refresh follows the snapshot, no polling):
-the page fills the Tab (no page-level scrolling — the zone container is the
-only scroll body) and the **zone dashboard** (replacing the react-flow cyclic
-graph, plan `20260810-panel-canvas-zones`) lays out three zones — the
-**iteration zone** (Step 1–5 as 5 equal full-width unit blocks with pure-number
-badges + an `N/5` summary — no 步骤/Step wording, plan `20260811-panel-f2-quickfix`;
-active-highlight / inactive dimmed states; the steps carry a FOUR-STATE machine —
-`current` / `next` / `done` / `idle` (plan `20260812-panel-f5-iteration-zone-fix`
-Task 1): every step BEFORE the current one projects `done`「已完成」(completed —
-a finished Step 1 must not read as idle while Step 2 is current), `next` is the
-single forward target, `idle` is schema-only — and the branch panel: iteration
-base / target / spec integration, rendered only while active; the expanded
-head is a LEFT-RIGHT SPLIT — branches (small left half, WIDTH-CAPPED —
-`flex: 0 1 260px` + `max-width: 280px`, never stretches with the container; the
-<860px column stack resets to content height) + steps (large right half,
-`flex: 1 1 0` absorbing the remaining width) via `data-iteration-head-split`,
-stacking on narrow widths, and NO
-branch panel when there is no active iteration; the current step follows the
-steering compass: `compassStatus: 'active'` (Phase 1 in flight) → Step 1
-(iteration-start) is CURRENT with verdict `unknown` — no PASS/FAIL badge —
-plan `20260811-panel-f4-iteration-zone`); the **iteration info section is
-SHARED by the tasks AND agents tabs** (plan `20260812-panel-f5-design-system`
-Task 8, user round-4 decision #4 — one `IterationInfoSection` component,
-both tabs render the same `view.iteration` block: summary + steps +
-branches); the **tasks zone** (5-column
-kanban: Todo / InProgress / InReview / Done / `blocked-unknown` — the
-Blocked state and the former unknown catch-all fold into ONE merged column
-titled「受阻/未知」/「Blocked / Unknown」, plan `20260813-panel-quick-fixes`
-Task 1 — with count badges; every column caps its rendered rows at
-`PLAN_CAP` and shows a clickable 「更多」/「收起」 expand button
-(`data-kanban-more` anchor) unfolding the full column — the projection
-keeps ALL plan rows, the cap is a render concern never a discard) and the **agent-execution zone** (the four EXPECTED_ROLE_FLOW stage/phase
-columns — review-edit-chain → sdd-implement → qc-tri → qa-gate (the
-terminal stage; the former `sdd-task-review` stage is removed, its SDD L2
-reviewer is now the pipeline role `code-reviewer`, v2.1.1) — a strict
-FOUR-column layout with NO standalone unknown column (plan
-`20260812-panel-f5-design-system` Task 5, user 2026-08-12 round-2 decision —
-the former rightmost unknown column of plan `20260812-panel-f5-agent-layout`
-is superseded): the `general` bucket sinks into an **unknown sub-partition
-at the bottom of the `qa-gate` column** (a `data-sub-bucket="unknown"`
-caption row 「unknown / 未匹配角色」 after the last qa-gate card, then the
-general cards; the standalone on-demand column was already removed in the
-agent-layout plan); `explore` is removed — no card, no column. The `sdd-implement`
-column splits into **sub-buckets** by the projected `entity.bucket` (never
-a render guess): the **implementor** partition above — flow roles in the
-stage's original order (fullstack-dev / fullstack-dev-2 / frontend-dev),
-then the on-demand roles (ops-engineer / prompt-engineer, carrying the
-**on-demand badge** — no standalone on-demand column) — and the
-**sdd-reviewer** partition below (code-reviewer, the SDD L2 task reviewer),
-with implementor / sdd-reviewer caption labels; `zone: 'on-demand'` entities
-live in the implementor partition, `zone: 'general'` entities render in the
-qa-gate column's bottom unknown sub-partition. The agent canvas is laid out
-in **TWO side-by-side Phase groups** (plan `20260812-panel-f5-design-system`
-Task 8, user 2026-08-12 round-4 decision; side-by-side layout per plan
-`20260813-panel-agent-canvas-legend-layout` Task 2): the **Phase 1 group on
-the LEFT** (review-edit-chain — the sequential Review & Edit chain:
-product-manager → architect → writing-specialist) and the **Phase 2 group on
-the RIGHT** (sdd-implement → qc-tri → qa-gate — the iterative plan loop),
-top-aligned (all group label rows share the same `y = PAD_Y`), each with its
-group label row; the **Phase-2 label annotates the CURRENT PLAN** — the
-first InProgress `state.plans[]` row (`data-canvas-group-plan`, projected
-`activePlanId`; `+N more` when several plans run in parallel, muted
-「无进行中 plan」 when none). The subagent **entity cards** aggregate **by role** from actual
-dispatch evidence — the same role across sessions folds into one card ×N,
-and every off-roster dispatch (the former `generalPurpose` SDD reviewer,
-`scout`, anonymous `role === ''`) folds into the single `general` bucket
-entity (the card is role-titled — the role id; the agent session id / task
-tag ride the record line, never the title) — role chip / status point / ×N
-count; running entities carry the
-business glow-pulse highlight (on the ROUNDED `.card-body` — the card is a
-single rounded element, no square outline overlay, plan
-`20260812-panel-f5-design-system` Task 5), un-evidenced stages render the dashed
-"待执行" pending placeholder with their expected role chips, un-evidenced
-KNOWN_AGENTS members render dashed idle cards (the full 14-role roster is
-never hidden), and the header
-shows the `N executing · M pending` summary; cards carry the projected
-**emphasis tier** (plan `20260812-panel-f5-design-system` Task 4, design
-doc §3): `emphasis: 'current' | 'next' | 'off' | null` — the iteration's
-current-phase roles render at **100%** chrome intensity, later-phase
+The panel is a pure render of the latest catalog snapshot (from the host's
+`/api/mstar/engineStatus` endpoint — refresh follows the fetch, no polling):
+the **narrow-column layout** is a single flex column bound to the sidebar
+pane's definite height with exactly three zones — the **section nav**
+(任务迭代 / 代理执行 / 事件记录, flex: none), the panel-owned **single scroll
+body** (`[data-mstar-scroll]` — the ONLY `overflow-y` element in the panel; no
+element scrolls horizontally; `data-mstar-graph` rides it), and the pinned
+**meta dock** (version + harness dir; never scrolls). The workspace-state
+digest (plans ≤5 time-desc + `+N more`, open residual findings ≤10 with
+severity chips, policy with **enforcement first** then push / worktree /
+control worktree, leases, knowledge, direction) sits IN FLOW at the end of
+the scroll body — the fixed 300px sibling column and its nested scroller are
+gone — and the freshness footer (`last-updated HH:MM:SS` + turn) closes the
+scroll body. The host composer-overlay opt-in is no longer needed (the
+sidebar pane body is a definite-height box) and the obsolete viewport media
+queries are deleted: the shell carries `container-type: inline-size` and the
+width rules are **container queries** — below 480px container width the
+padding and group gap tighten (compact rhythm at the 300px floor); at ≥720px
+the shared group grid spreads to two columns
+(`repeat(auto-fit, minmax(280px, 1fr))`) — the only structural change any
+width makes (one DOM, one tree; no JS layout measurement). Missing fields
+degrade to explicit empty/last-known states (muted, never orange warn
+boxes); `waiting` keeps the muted hint; no harness renders the centered
+inactive-state card that activates automatically on detection.
+
+The three sections stack in the single scroll body. **任务迭代** renders the
+iteration head (collapsed summary when inactive) + the **vertical** 5-step
+stepper (one row per step — badge · phase · chip · reserved verdict seat; the
+four-state `current` / `next` / `done` / `idle` machine preserved: every step
+BEFORE the current one projects `done`「已完成」, `next` is the single forward
+target, `idle` is schema-only; Step 1 is the current step while the steering
+compass is `status: active` — no PASS/FAIL badge — and Step 5 can never be
+current) + the branch panel (iteration base / target / spec integration,
+rendered only while active) + the plan board as **five stacked status
+groups** in constant order — Todo / InProgress / InReview / Done / the merged
+「受阻/未知」/「Blocked / Unknown」column — with every `data-kanban-column` /
+`data-kanban-arrow` / `data-kanban-count` anchor preserved; each group caps
+its rendered rows at `PLAN_CAP` with the clickable 「更多」/「收起」 expander
+(`data-kanban-more`) unfolding the full column (the projection keeps ALL plan
+rows — the cap is a render concern, never a discard) — then the project
+rollup. **事件记录** renders its two partitions (Agent 流转事件 / 违规记录) as
+flow content — every row an expandable native `<details>` carrying the full
+catalog fields (a missing field renders 「—」, never a guessed value; the
+workflow-run rows keep their name / member-count / stop-reason fields), with
+no partition-owned scrollers. **代理执行** renders the agents as a **vertical
+grouped list** — the absolutely-positioned canvas with its SVG edge layer,
+card ports, and pointer pan is DELETED: two phase groups in constant order,
+Phase 1 (`iteration-start` — the sequential review-edit-chain:
+product-manager → architect → writing-specialist) above Phase 2
+(`autonomous-execute` — the iterative plan loop; its label annotates the
+CURRENT PLAN: the projected `activePlanId` (`data-agent-group-plan`), `+N
+more` when several plans run in parallel (`data-agent-group-plan-more`),
+muted「无进行中 plan」when none (`data-agent-group-no-plan`)); each phase group
+stacks its stage groups — `sdd-implement` splits into the **implementor**
+partition (flow roles fullstack-dev / fullstack-dev-2 / frontend-dev in flow
+order, then the on-demand roles ops-engineer / prompt-engineer carrying the
+dashed **on-demand badge**) above the **reviewer** partition (code-reviewer),
+and the `general` bucket sinks into the `unknown` sub-bucket at the bottom of
+the LAST stage group, rendered only when it has members; every stage group
+renders the full 14-role roster as **full-width flow rows** (idle rows
+dashed-muted — the roster is never hidden) with role chip / status point /
+`×N` count / record line (session id · task tag — auxiliary, never the
+title), the `N executing · M pending` summary in the header
+(`data-agent-summary-*`), and the three-status legend in flow below the list.
+Rows carry the projected **emphasis tier**: `emphasis: 'current' | 'next' |
+'off' | null` — current-phase roles at **100%** chrome intensity, later-phase
 expected roles at **75%**, already-passed / stage-less (on-demand, general)
-roles at **45%**, and `null` (no iteration / unresolved transition) applies
-NO override — always a chrome **alpha mix** (`--mstar-canvas-emphasis-*`
-tokens; never a whole-card `opacity`, so the status point + running glow
-stay opaque). Settled entities get a **standalone GREEN DONE FRAME + green ✓**
-(plan `20260812-panel-f5-design-system` Task 8 — user round-4 feedback #1/#3:
-`data-agent-done="true"`, a full-strength success border + 1px ring on the
-rounded card body + the ✓ in the status point) **ONLY when `emphasis ≠ 'off'`**
-— an off-tier role (already-passed / stage-less on-demand + general) renders
-the muted dot instead and NEVER shows the completion marker. The agent
-canvas filters dispatch evidence to the **current iteration's plans only**
-(plan `20260813-panel-quick-fixes` Task 2): the steering compass
-`iterationId` when active, else the nearest iteration from the catalog
-`plans[].iterationRefs` (most-recent plan by 8-digit id date prefix +
-doneAt); provably cross-iteration events produce no entity/edge — the
-roster keeps its idle cards, and plan-less / unknown-plan / standalone
-dispatches are never hidden. Status honesty (Task 2): `advisory` is no
-longer terminal — a soft-enforcement dispatch falls through to its paired
-settle (green ✓ when a settle exists, `running` when none), `denied` stays
-terminal, and the advisory verdict still renders in the event log. The
-canvas legend sits BELOW the viewport (Task 3, moved from above). Edges — plan `20260812-panel-f5-design-system` Task 5 (design
-doc §2): the `expected` stage skeleton arrows AND the ANIMATED **next** edge
-(the former `@keyframes agent-dash-flow` dash-flow arrow of plan
-`20260810-panel-agent-flow-zone`) are **REMOVED** — flow order is implied
-by the fixed column order + column labels, the current position by the
-running card glow + status point — leaving TWO semantic kinds: the
-evidence-driven **`actual` handoff** edges (same-plan ts-adjacent dispatch
-entity-key pairs, `general` endpoints filtered, ≤1 per entity pair) drawn as
-**bezier `C` curves** anchored to card **ports** — 4 fixed edge-midpoint
-ports (north / south / east / west; static-invisible, hover-revealed as
-small dots) with the arrow tip pulled back to a **10px standoff** off the
-port — the arrow follows the line's local tangent at the anchor (**H1**),
-and no line's stroke or arrow crosses any text (**H2**: standoff + side-gap
-routing, design doc §2.0/§2.5/§2.6; tightened in plan
-`20260813-panel-quick-fixes` Task 3 — same-column vertical flows whose
-center-x line would cross an in-between card body reroute into the column's
-LEFT side gap (forward AND reverse), and reverse horizontal beziers keep
-direction-aware control points BETWEEN the endpoints, never bulging into
-the adjacent column) — plus the **bidirectional supervise
-line** (plan `20260812-panel-f5-agent-layout` Task 1/2) — one static
-design-knowledge sub-bucket edge inside the `sdd-implement` column
-(implementor ↔ sdd-reviewer — the mstar-sdd mutual-supervision contract),
-now anchored at the **side-gap vertical anchor** (`x = card right edge +
-18px`, vertical bezier flow, arrows along the vertical tangent — design doc
-§2.5/§2.7); dim dashed by default, lit business SOLID when the projected
-`evidenced` flag is true — evidence-driven lighting, never a fabricated
-activation) — with the
-agent-flow event strip migrated into the **事件记录 (Event Log) tab** — a
-non-canvas log page (spec F1.5, plan `20260811-panel-event-log`): two
-partitions (**Agent 流转事件** / **违规记录**), every row an expandable
-native `<details>` carrying the full catalog fields (a missing field renders
-「—」, never a guessed value), muted empty states — the two partitions
-render SIDE BY SIDE in a locked-height two-column grid
-(`repeat(2, minmax(0, 1fr))` — the page never scrolls as a whole; each
-partition pins its title and owns an internal `overflow-y` scroll on its
-row list; plan `20260813-panel-quick-fixes` Task 4 root-caused the
-whole-page scroll — the panel root opts into the host
-`data-conversation-composer-overlay` (the host's full-height opt-in), so
-`height:100%` resolves and `.rowList`'s `overflow-y: auto` scrolls INSIDE
-the partition (the host page no longer scrolls), with bottom clearance
-reserving the floating composer via the host-published
-`--dsh-composer-height`), falling back to two stacked 50/50 locked rows below 1200px (the
-`data-event-log-*` anchors unchanged, plan `20260811-panel-f3-agent-general`)
-— the canvas-corner
-**`AgentEventDock`** is REMOVED with the page (无双份日志, spec §5; the
-fixed footer bar — zone legend + gate summary + violations — died with the
-WorkflowCanvas zone dashboard in the tabs-shell plan; the footer that
-remains is the freshness marker). Empty branches (spec §2, plan
-`20260812-panel-f5-agent-layout` Task 3): waiting keeps the muted hint, and
-NO harness renders a **centered inactive-state card** — folder icon + 「No
-Morning Star harness detected」 title + hint copy (the detail panel stays
-inactive — no tabs, no sidebar — and activates automatically once a harness
-is detected; the `data-mstar-empty="no-harness"` anchor stays on the title,
-`data-mstar-graph` on the main container). Below 1200px the zones stack vertically. Projection is the pure
+roles at **45%**, `null` (no iteration / unresolved transition) applies NO
+override — always a chrome **alpha mix** (`--mstar-canvas-emphasis-*` tokens;
+never a whole-row `opacity`, so the status point + running glow stay opaque).
+Settled entities get a **standalone GREEN DONE FRAME + green ✓**
+(`data-agent-done="true"` — success border + 1px ring on the rounded row body
++ the ✓ in the status point, full-strength evidence states) **ONLY when
+`emphasis ≠ 'off'`** — an off-tier role renders the muted dot instead and
+NEVER shows the completion marker. The agents page contains zero `<svg>`
+elements, zero `data-agent-port` / `data-canvas-*` anchors, and no pan
+transform. Dispatch evidence still projects for the **current iteration's
+plans only** (the steering compass `iterationId` when active, else the
+nearest iteration from the catalog `plans[].iterationRefs`); provably
+cross-iteration events produce no entity — the roster keeps its idle cards,
+and plan-less / unknown-plan / standalone dispatches are never hidden. Status
+honesty: `advisory` is not terminal — a soft-enforcement dispatch falls
+through to its paired settle (green ✓ when a settle exists, `running` when
+none), `denied` stays terminal, and the advisory verdict still renders in the
+event log. The **iteration info section is SHARED by the tasks AND agents
+pages** — one `IterationInfoSection` component, both pages render the same
+`view.iteration` block (summary + steps + branches). Projection is the pure
 `projectGraph(source)` function (schema constants strictly separated from
-catalog evidence; never throws; missing fields degrade to explicit
-empty/last-known states — muted empty states, never orange warn boxes)
-producing a data-only `ZoneView`; `WorkflowCanvas` renders it as plain
-HTML/CSS.
+catalog evidence; never throws).
 
-**Dependency**: the zone dashboard carries **no graph library** — the
+**Dependency**: the panel's client bundle carries **no graph library** — the
 `@xyflow/react` devDependency (previously inlined into `dist/client.js` at
-build time) was removed with the react-flow rendering layer (plan
-`20260810-panel-canvas-zones`), and the plain-`.css` text loader whose only
-consumer was `@xyflow/react/dist/style.css` is gone too (`CLIENT_EXTERNALS`
+build time) was removed with the react-flow rendering layer, and the
+plain-`.css` text loader whose only consumer was
+`@xyflow/react/dist/style.css` is gone too (`CLIENT_EXTERNALS`
 is unchanged — react / react-dom and the `@deepseek-ai/dsh-client-*` platform
 modules stay external). The build script asserts the removal end to end: the
 emitted bundle must contain **no `xyflow`/`reactflow` markers**, zero
@@ -468,11 +403,11 @@ emitted bundle must contain **no `xyflow`/`reactflow` markers**, zero
 the web loader executes plugin bundles as classic `<script>`s, where a
 literal `import.meta` is a parse-time SyntaxError (a zustand v4
 `import.meta.env` read is defined away at build; see the iteration
-install-verification guide §6). Bundle size at this plan's wrap-up: **145,159 B
+install-verification guide §6). Current bundle size: **145,159 B
 raw / 29,460 B gzip** (re-measure per the iteration install-verification
 guide — the bundle shrank to ~85 KB when react-flow was removed and grew
-back with the agent-execution zone's entity rendering, then again with the
-F5 emphasis tiers + edge rework).
+back with the agents page's entity rendering, then again with the
+emphasis-tier styling).
 
 Install / verify (the client half rides the same bundle-row install as the
 server half):
@@ -511,9 +446,12 @@ the iteration from plan ids (8-digit date prefix) + doneAt — a
 deterministic, documented heuristic, and only provably cross-iteration
 events are dropped; no historical
 back-scan of a resumed long log (the server re-emits the row at every turn's
-first step, digest-gated); no custom top-level slot (the `conversation.view`
-tab is the only session-level panel seat available without dsh-private layout
-changes — spec §1). Panel acceptance is dual-track: in-loop browser harness
+first step, digest-gated); the sidebar chip title is captured at open time (a
+mid-session locale switch does not flip it — accepted for glyph parity with
+first-party chips); a docked body renders nothing while the column is
+collapsed or another pane tab is active (`tab.visible === false` — no
+projection, no DOM, zero per-snapshot cost while hidden). Panel acceptance is
+dual-track: in-loop browser harness
 verification against the rebuilt bundle plus user-restart final GUI acceptance —
 rerun steps in the install-verification guide §8.
 
@@ -540,7 +478,7 @@ The dev-time seam surfaces (types, event shapes, runtimes) are the REAL `@deepse
 
 #### What the model sees
 
-Every composed step carries one `mstar-engine-status` catalog user message (the `<mstar_engine_status>` watermark block — see the Engine-status catalog section). Gate decisions add: the dispatch veto as the registry-materialized `PreToolDecision { kind: 'deny', reason }` error; the status gate as the `mstar/status-gate` advisory (warn pass, hard-mode repair escape, or degraded allow); the dispatch gate as the `mstar/dispatch-gate` advisory (warn pass or degraded); the skill lint gate as the `mstar/skill-lint` advisory (warn pass, hard-mode repair escape, or degraded allow). Every model-visible row is reconstructable from the session log (catalog-form sources + advisory events).
+Every composed step carries one `mstar-engine` catalog user message (the `<mstar_engine_status>` watermark block — see the Engine-status catalog section). Gate decisions add: the dispatch veto as the registry-materialized `PreToolDecision { kind: 'deny', reason }` error; the status gate as the `mstar/status-gate` advisory (warn pass, hard-mode repair escape, or degraded allow); the dispatch gate as the `mstar/dispatch-gate` advisory (warn pass or degraded); the skill lint gate as the `mstar/skill-lint` advisory (warn pass, hard-mode repair escape, or degraded allow). Every model-visible row is reconstructable from the session log (catalog-form sources + advisory events).
 
 **Leaf delivery discipline (PM 2026-08-12):** leaf subagents hand back their Completion Report in the **final (closing) message**, not via the `report` tool — the dsh tool-subagent-report default `reportDelivery: quiet` routes a report into the parent's next-step queue, where it strands when the parent's turn has ended (no step boundary follows). The closing message is the guaranteed delivery channel; reserve `report` for mid-turn findings that change what the parent should do next (SSOT: `skills/mstar-host/references/dsh.md` → PM dispatch).
 
@@ -575,7 +513,7 @@ The catalog row is appended at the END of the composed step messages, after dele
 - **CLI `HOST_SIGNALS` lacks the `subagent` token** — the engine `ToolSignal` union includes it and `detectHost` handles it, but `packages/cli` `HOST_SIGNALS` is not updated yet, so `mstar host detect --signals subagent` would reject until the CLI list is updated on upstreaming.
 - **Entry is a module index over `src/gates/*`** — the split shipped: `src/index.ts` re-exports the frozen 56-name export surface (31 value + 25 type-only names; `Config` counts once) from the gate modules (`_shared` / `status` / `skill-lint` / `seams` / `dispatch` / `catalog` / `tools` / `adapter`) and keeps the plugin manifest, the single cordis augmentation point, the command registration, and the `apply()` startup wiring. The surface is frozen by `tests/export-surface.spec.ts` — the runtime value-export set plus, under `typecheck:tests` (`bunx tsc --noEmit -p tests/tsconfig.json`), the value-namespace identity and the per-name type-only probes.
 - **Engine dsh rows are upstreaming-destined** — the dsh changes to engine `host.ts` (`DetectResult`, `ToolSignal`, `resolveSkillRoot`) live in the mstar-workflow engine mirror and are intended for a user-authorized upstream PR into mstar-harness; the `mstar-host` skill mirror (§ Detect / § Resolve loaded skill root / `references/dsh.md`) updates with it.
-- **Iteration stepper: Step 1 is compass-driven, Step 5 is schema-driven** — the zone dashboard's Step 1 (iteration-start) is the current step while the steering compass is `status: active` (Phase 1 in flight — no gate verdict, so no PASS/FAIL badge); Step 5 (merge-ready) is a schema constant the engine gate never lights as current (transition covers Phase 2→3→4 only), so it always renders idle — recorded in the iteration guide, not a defect. The full panel-limitation list lives in the Web client plugin section.
+- **Iteration stepper: Step 1 is compass-driven, Step 5 is schema-driven** — the workflow panel's Step 1 (iteration-start) is the current step while the steering compass is `status: active` (Phase 1 in flight — no gate verdict, so no PASS/FAIL badge); Step 5 (merge-ready) is a schema constant the engine gate never lights as current (transition covers Phase 2→3→4 only), so it always renders idle — recorded in the iteration guide, not a defect. The full panel-limitation list lives in the Web client plugin section.
 - **`dsh-llm-fallbacks` is an optional dev-time-only dependency** — dsh natively covers subagent customization, so fallbacks is strictly optional: `src/` carries zero imports of it (runtime and type — the consumed surface is the local structural mirror `fallbacks-structural.ts`, kept in sync by the probe's exact-keys drift gate plus the `typecheck:tests` real → view assignability check), `package.json` carries it only under `devDependencies` (type mirroring + the real-package test harness), and `dist/` carries no import and no type reference (only ONE string literal naming the package — the probe's loader-entry match; the advisory logs say `fallbacks`). Activation is a SEPARATE explicit install (two-command contract), never transitive; there is no `--external` guard anymore — a future value import must re-add a runtime dependency by design.
 - **Role→model override NOT delivered this batch** — routing a role to a fallbacks `model` (or persona via fallbacks rules) would require rewriting the child's `agentOptions` on the start request, but start-request options are caller-controlled (tool-subagent's own Config; call args are `description`/`prompt`/`run_in_background` only, deep-frozen). Awaits upstream `fallbacks-explicit-role-tool` or the N-B1 systemPrompt adoption (roadmap §10.4).
 - **Persona delivery is dsh-native — no additive section** — the role persona merges into `SubagentStartRequest.persona` (one-shot `start` AND the opt-in continuable `startContinuable`) and SHADOWS the deployment persona for role-matched children (child embodies the role; persisted + reapplied on resume). There is NO `mstar:role-persona` system-prompt section anymore.

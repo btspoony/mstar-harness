@@ -1,9 +1,10 @@
 /**
  * Data-path tests for the workflow-viz panel (spec §5): the
  * `useMstarEngineStatus({ useChat, useSessions, sessionId, engineStatus })`
- * hook finds the latest `mstar-engine-status` ANCHOR row
- * (`kind === 'context'` + `form === 'catalog'` + the first-party
- * `source.kind === 'plugin' && source.plugin === 'mstar-engine-status'`), reads
+ * hook finds the latest engine-status ANCHOR row (`kind === 'context'` +
+ * `form === 'catalog'` + the first-party `source.kind === 'plugin'` with one
+ * of this plugin's two anchor identities — emitted `mstar-engine`, or legacy
+ * `mstar-engine-status` persisted by shipped builds before 2026-09-11), reads
  * the session's workspace directory from the session standard kit, and pulls
  * that session's snapshot from the host's shared `/api` typert gateway.
  *
@@ -16,7 +17,8 @@
  * renders the validated answer.
  *
  * Coverage:
- * - the anchor discriminator (latest row wins; other plugin kinds skipped);
+ * - the anchor discriminator (latest row wins; the legacy `mstar-engine-status`
+ *   identity still anchors; an unknown identity is NOT an anchor → `waiting`);
  * - the request shape: exactly one `/api` + `mstar/engineStatus` call per
  *   (session, anchor row), carrying the session id and the session's cwd;
  * - a new anchor row (snapshot bump = refresh signal) asks again and serves
@@ -37,6 +39,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ChatSnapshot } from '@deepseek-ai/dsh-client-ui-chat/client'
+import type { ConversationNode } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { MstarEngineStatusClient, type MstarEngineStatusConnection } from '../src/client/panel/engine-status-client'
 import { useMstarEngineStatus, type MstarEngineStatusView } from '../src/client/panel/use-mstar-engine-status'
 import type { MstarEngineStatusPayload } from '../src/types'
@@ -66,6 +69,28 @@ function payload(version: string): MstarEngineStatusPayload {
     enforcement: { hard: false, source: 'iteration compass' },
     state: null,
   } as unknown as MstarEngineStatusPayload
+}
+
+/**
+ * Legacy anchor source: rows emitted by shipped builds before 2026-09-11
+ * persist `plugin: 'mstar-engine-status'`. They keep anchoring their sessions
+ * — data compat for persisted session logs, not a code-compat layer.
+ */
+const LEGACY_ANCHOR_SOURCE = { kind: 'plugin', plugin: 'mstar-engine-status', form: 'catalog' } as const
+
+/**
+ * One anchor row with an explicit source (the legacy and unknown-identity
+ * fixtures; the shared `anchorRow` always seeds the current identity).
+ */
+function rowWithSource(source: unknown, time: number) {
+  return {
+    kind: 'context',
+    seq: 2,
+    time,
+    content: [],
+    source,
+    form: 'catalog',
+  } as unknown as ConversationNode
 }
 
 /** The seats under test, over one anchor store + one gateway stub. */
@@ -153,6 +178,15 @@ describe('useMstarEngineStatus — anchor row selection (spec §2.4, §5)', () =
     expect(after.payload.version).toBe('2.0.5')
     expect(after.at).toBe('2024-07-03T09:24:20.000Z')
   })
+
+  it('a legacy `mstar-engine-status` anchor row (persisted by shipped builds before the identity rename) still anchors', async () => {
+    const store = { getSnapshot: () => chatSnapshot([userNode(), rowWithSource(LEGACY_ANCHOR_SOURCE, 1_720_001_000_000)]) }
+    const gateway = stubGateway(servedSnapshot(payload('2.0.4')))
+    const view = await settleView(seats(store, gateway))
+    expect(view.state).toBe('ok')
+    expect(view.anchorTime).toBe(1_720_001_000_000)
+    expect(gateway.calls).toHaveLength(1)
+  })
 })
 
 describe('useMstarEngineStatus — explicit empty and degraded states (spec §3, §5)', () => {
@@ -165,6 +199,17 @@ describe('useMstarEngineStatus — explicit empty and degraded states (spec §3,
 
   it('catalog rows of other plugin kinds → waiting (the anchor discriminator is the plugin identity)', async () => {
     const store = { getSnapshot: () => chatSnapshot([userNode(), otherKindCatalogRow()]) }
+    const gateway = stubGateway(servedSnapshot(payload('2.0.4')))
+    expect((await settleView(seats(store, gateway))).state).toBe('waiting')
+    expect(gateway.calls).toHaveLength(0)
+  })
+
+  it('an unknown anchor identity (a `plugin` value that is neither accepted identity) → waiting, never data', async () => {
+    // Same row shape as the anchor — the ONLY discriminator is the identity.
+    const store = {
+      getSnapshot: () =>
+        chatSnapshot([userNode(), rowWithSource({ kind: 'plugin', plugin: 'other-thing', form: 'catalog' }, 1_720_001_000_000)]),
+    }
     const gateway = stubGateway(servedSnapshot(payload('2.0.4')))
     expect((await settleView(seats(store, gateway))).state).toBe('waiting')
     expect(gateway.calls).toHaveLength(0)

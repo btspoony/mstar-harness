@@ -6,19 +6,27 @@
  *   a CENTERED inactive-state card — icon (`data-mstar-empty-icon`) + title
  *   (the reused `empty.no-harness` key, `data-mstar-empty="no-harness"`) +
  *   hint (`empty.no-harness-hint`) inside a card container
- *   (`data-mstar-empty-card`), with the freshness footer, and NO tabs / NO
- *   sidebar / NO meta dock; a harness-present source keeps the normal panel.
+ *   (`data-mstar-empty-card`) in the shell's scroll zone, with the freshness
+ *   footer, and NO tabs / NO digest / NO meta dock; a harness-present source
+ *   keeps the normal panel.
  * - waiting (no anchor row): its own anchor, no centered card.
  * - unavailable (the gateway answered a degraded result, or the transport
  *   failed): its own anchor + the machine-readable reason — the panel NEVER
  *   renders an empty plans list / event log / zeroed counter instead.
+ * - the composer-overlay opt-in is GONE (plan sidebar §L1.5 row): no branch
+ *   renders `data-conversation-composer-overlay` — the pane body is already
+ *   a definite-height box.
  *
  * The panel's data path is the host's shared `/api` typert gateway (the
  * persisted catalog row is only the anchor), so these specs stub THE CHANNEL
- * through `./gateway-stub.ts` and render the settled state.
+ * through `./gateway-stub.ts` and render the settled state. Every render
+ * rides the visible-tab fixture kit (`visibleTabKit` — the seat's
+ * tab-information face + the entry-store share over a REAL panel store, plan
+ * sidebar §L2.4); the hidden-tab half of the visibility gate is
+ * client-seat.spec.ts's subject.
  *
- * The CSS contract (single-column no-harness root + the centered muted card)
- * is asserted against the raw panel.module.css text — under `bun test` the
+ * The CSS contract (single-column shell + the centered muted card) is
+ * asserted against the raw panel.module.css text — under `bun test` the
  * `*.module.css` import resolves to the raw file-path string, so class
  * attributes are dropped from renders and assertions pin `data-*` anchors +
  * CSS text (the established pattern in client-panel.spec.tsx).
@@ -48,6 +56,7 @@ import {
   servedSnapshot,
   settleRender,
   stubGateway,
+  visibleTabKit,
 } from './gateway-stub.ts'
 
 // The REAL client service values — the store is a plain Node-ESM module
@@ -106,6 +115,8 @@ const ANCHOR_TIME = 1_720_001_000_000
  * Render the panel to static HTML through the real data path: anchor snapshot
  * → `useChat`/`useSessions` → hook → the `/api` gateway → `PanelView`. The
  * first pass issues the gateway call; the returned markup is the settled one.
+ * Every render sees a VISIBLE tab through the real fixture kit (tab record +
+ * entry-store share — plan sidebar §L2.4).
  */
 async function panelHtml(
   source: MstarEngineStatusPayload | null,
@@ -124,24 +135,29 @@ async function panelHtml(
     useSessions: bindUseSessions(SESSION_ID, SESSION_CWD),
     engineStatus,
     t: locale.bind(NS),
+    ...visibleTabKit(),
   } as never)))
 }
 
 /* ------------------------------- tests -------------------------------- */
 
 describe('workflow panel — no-harness centered inactive state ', () => {
-  it('no harness → centered inactive-state card (icon + title + hint + freshness), no tabs / sidebar / meta dock', async () => {
+  it('no harness → centered inactive-state card (icon + title + hint + freshness), no tabs / digest / meta dock', async () => {
     const html = await panelHtml(noHarnessSource)
     expect(html).toContain('data-mstar-panel="no-harness"')
-    // The content-container anchor contract stays on the no-harness main.
+    // The content-container anchor contract stays on the scroll zone.
     expect(html).toContain('data-mstar-graph')
-    // The centered card DOM: card container + icon + the reused title anchor.
-    expect(html).toContain('data-mstar-empty-card')
+    expect(html).toContain('data-mstar-scroll')
+    // The centered card DOM: card container + icon + the reused title anchor,
+    // in flow inside the scroll zone, freshness after it.
+    expect(html.indexOf('data-mstar-panel="no-harness"')).toBeLessThan(html.indexOf('data-mstar-scroll'))
+    expect(html.indexOf('data-mstar-scroll')).toBeLessThan(html.indexOf('data-mstar-empty-card'))
+    expect(html.indexOf('data-mstar-empty-card')).toBeLessThan(html.indexOf('data-mstar-freshness'))
     expect(html).toContain('data-mstar-empty-icon')
     expect(html).toContain('data-mstar-empty="no-harness"')
     expect(html).toContain('No Morning Star harness detected')
     expect(html).toContain('No .mstar/ harness directory found in this workspace')
-    // Freshness stays; tabs / sidebar / meta dock never mount in this branch.
+    // Freshness stays; tabs / digest / meta dock never mount in this branch.
     expect(html).toContain('data-mstar-freshness')
     expect(html).not.toContain('data-mstar-tab-nav')
     expect(html).not.toContain('data-mstar-sidebar')
@@ -208,10 +224,27 @@ describe('workflow panel — no-harness centered inactive state ', () => {
     expect(html).toContain('engine-status 快照不可用（transport-error:timeout）')
   })
 
-  it('CSS contract: single-column no-harness root + centered muted card (flex center, no orange)', () => {
+  it('the composer-overlay opt-in is retired in every branch — no attribute anywhere (plan sidebar §L1.5 row)', async () => {
+    // The pane body is already a definite-height box (L0.12); the old
+    // conversation-view opt-in existed only to survive the `.viewArea`
+    // wrapper. Inverted from the pre-migration requirement.
+    for (const html of [
+      await panelHtml(null),
+      await panelHtml(noHarnessSource),
+      await panelHtml(harnessSource),
+      await panelHtml(harnessSource, 'en', gatewayError('timeout', 'gateway unreachable')),
+    ]) {
+      expect(html).not.toContain('data-conversation-composer-overlay')
+    }
+  })
+
+  it('CSS contract: three-zone shell css + centered muted card (flex center, no orange), no composer reserve, no viewport media queries', () => {
     const cssText = readFileSync(new URL('../src/client/panel/panel.module.css', import.meta.url), 'utf8')
-    // The single-column no-harness root (existing contract).
-    expect(cssText).toMatch(/\.root\[data-mstar-panel='no-harness'\]\s*\{[\s\S]*?grid-template-columns:\s*1fr/)
+    // The shell (plan sidebar §L2.1): the root is the three-zone flex column
+    // with the container width signal — no shell grid any more.
+    expect(cssText).toMatch(/\.root\s*\{[\s\S]*?display:\s*flex[\s\S]*?flex-direction:\s*column/)
+    expect(cssText).toMatch(/\.root\s*\{[\s\S]*?container-type:\s*inline-size/)
+    expect(cssText).not.toMatch(/\.root\[data-mstar-panel='no-harness'\]/)
     // The centered card: flex centering + a muted frame.
     const card = cssText.match(/\.noHarnessCard\s*\{[\s\S]*?\}/)
     expect(card).not.toBeNull()
@@ -223,5 +256,22 @@ describe('workflow panel — no-harness centered inactive state ', () => {
     // carries zero bare colors (the theme audit stays green).
     expect(card![0]).not.toMatch(/state-(?:warn|error)-/)
     expect(cssText).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgba?\(/)
+    // The spacing ramp covers BOTH roots (bugbot fix — the waiting/loading/
+    // unavailable branches render `.emptyRoot` as the STANDALONE root, no
+    // `.root` ancestor): the ramp is declared on the `.root, .emptyRoot`
+    // selector list, so `.emptyRoot`'s `padding: var(--mstar-space-4)`
+    // resolves. An undefined custom property drops the declaration at
+    // computed-value time — the empty copy used to sit flush against the
+    // pane edge with the padding silently gone.
+    const ramp = [...cssText.matchAll(/\.root\s*,\s*\.emptyRoot\s*\{[^}]*\}/g)]
+      .map((m) => m[0])
+      .find((block) => block.includes('--mstar-space-4'))   // the RAMP list (the base block shares the selector)
+    expect(ramp).toBeDefined()
+    expect(ramp).toMatch(/--mstar-space-4:\s*16px/)
+    expect(cssText).toMatch(/\.emptyRoot\s*\{[^}]*padding:\s*var\(--mstar-space-4\)/)
+    // The composer reserve is gone with the opt-in; width rules are
+    // container queries, never viewport media queries (plan sidebar §L2.7).
+    expect(cssText).not.toContain('--dsh-composer-height')
+    expect(cssText).not.toMatch(/@media\s*\((?:max|min)-width:/)
   })
 })

@@ -1,13 +1,17 @@
 /**
  * TaskBoard  — the tasks-zone kanban: the 5
- * PLAN_STATE_IDS columns (Todo / InProgress / InReview / Done /
- * blocked-unknown, in the projection's constant order), each with a localized
- * state-name header + count badge, plan cards (mono ellipsized id + status
- * chip — the `data-plan-id` / `data-plan-status` anchors shared with the
- * sidebar plan board), the dim inter-column flow arrows (spec §2.4:
- * Todo→InProgress→InReview→Done plus the InProgress↔Blocked back-edge, now
- * docking at the merged blocked-unknown column), the per-column 「更多」
- * expand affordance, and the muted "no plans" empty state.
+ * PLAN_STATE_IDS groups (Todo / InProgress / InReview / Done /
+ * blocked-unknown, in the projection's constant order) STACKED in flow (plan
+ * sidebar §L4.2 — the horizontal 5-column row cannot fit the 300px column),
+ * each with a header row carrying the flow glyph (the
+ * `data-kanban-arrow` labels + the `⇄` back-edge glyph: Todo→InProgress→
+ * InReview→Done plus the InProgress↔Blocked back-edge, docking at the merged
+ * blocked-unknown group), the localized state-name + count badge, plan cards
+ * (mono ellipsized id + status chip — the `data-plan-id` /
+ * `data-plan-status` anchors shared with the sidebar plan board), and the
+ * per-group 「更多」 expand affordance. The board rides the shell's shared
+ * `.groupGrid` class, so the ≥720px container spread reaches the groups
+ * (plan sidebar §L4.3 — one wide rule, not a second layout).
  *
  * The projection KEEPS every row (`column.plans` = the full column) and
  * reports `column.capped` (PLAN_CAP) when a column overflows. This render
@@ -19,7 +23,7 @@
  * keeps input order.
  *
  * Degradation (spec §8): state null / plans missing project to the same
- * 5-column skeleton with count 0 — the board renders it with a muted
+ * 5-group skeleton with count 0 — the board renders it with a muted
  * "no plans" note (`data-zone-empty="no-plans"`), NEVER an orange warn box.
  */
 
@@ -29,6 +33,7 @@ import type { KanbanColumnView, ZoneView } from '../graph/project-graph.ts'
 import type { PlanStateId } from '../graph/schema.ts'
 import type { PanelKey } from '../locale.ts'
 import { PLAN_CAP } from '../plan-sort.ts'
+import panelCss from '../panel.module.css'
 import css from './zones.module.css'
 
 export interface TaskBoardProps {
@@ -46,11 +51,10 @@ const COLUMN_TITLE: Readonly<Record<PlanStateId, PanelKey>> = {
 }
 
 /**
- * The inter-column transition arrows (spec §2.4 + the Task 4 brief): the main
- * chain Todo→InProgress→InReview→Done plus the InProgress↔Blocked back-edge
- * (now docking at the merged blocked-unknown column), rendered dim in the gap
- * BEFORE the target column. Mirrors the PLAN_STATE_EDGES transitions
- * (schema.ts).
+ * The inter-group transition glyphs (spec §2.4 + the Task 4 brief): the main
+ * chain Todo→InProgress→InReview→Done plus the InProgress↔Blocked back-edge,
+ * each docking in its TARGET group's header row (the stacked groups have no
+ * inter-column gaps). Mirrors the PLAN_STATE_EDGES transitions (schema.ts).
  */
 const COLUMN_ARROWS: readonly { before: PlanStateId; label: string; glyph: '→' | '⇄' }[] = [
   { before: 'InProgress', label: 'Todo-InProgress', glyph: '→' },
@@ -59,7 +63,7 @@ const COLUMN_ARROWS: readonly { before: PlanStateId; label: string; glyph: '→'
   { before: 'blocked-unknown', label: 'InProgress-Blocked', glyph: '⇄' },
 ]
 
-/** The dim arrow rendered before the given column, if any (decorative — aria-hidden). */
+/** The dim flow glyph docking at the given group's header, if any (decorative — aria-hidden). */
 function leadingArrow(id: PlanStateId): { label: string; glyph: '→' | '⇄' } | null {
   return COLUMN_ARROWS.find((a) => a.before === id) ?? null
 }
@@ -99,56 +103,57 @@ export function TaskBoard({ view, t }: TaskBoardProps) {
         <p className={css.zoneEmpty} data-zone-empty="no-plans">{t('zone.tasks.no-plans')}</p>
       )}
 
-      <div className={css.kanban} data-mstar-kanban>
-        {columns.map((column, i) => {
-          const arrow = i > 0 ? leadingArrow(column.id) : null
+      {/* The stacked groups ride the shell's shared group grid (plan sidebar
+          §L4.2/§L4.3): one column below 720px, the ≥720px container spread
+          via `.groupGrid` — the wide rule is shared, not duplicated. */}
+      <div className={`${css.kanban} ${panelCss.groupGrid}`} data-mstar-kanban>
+        {columns.map((column) => {
+          const arrow = leadingArrow(column.id)
           const isExpanded = expanded.has(column.id)
           const shown = visibleKanbanPlans(column, isExpanded)
           // Hidden rows = full count − displayed rows (0 unless capped & collapsed).
           const overflow = column.capped === null ? 0 : column.count - column.capped
           return (
-            <React.Fragment key={column.id}>
-              {arrow !== null && (
-                <span className={css.kanbanArrow} data-kanban-arrow={arrow.label} aria-hidden="true">{arrow.glyph}</span>
-              )}
-              <div className={css.kanbanColumn} data-kanban-column={column.id}>
-                <header className={css.kanbanColumnHeader}>
-                  <span className={css.kanbanColumnTitle}>{t(COLUMN_TITLE[column.id])}</span>
-                  <span className={css.kanbanCount} data-kanban-count={column.count}>{column.count}</span>
-                </header>
-                <ul className={css.kanbanCards} id={`kanban-cards-${column.id}`}>
-                  {shown.map((plan, j) => (
-                    <li
-                      key={plan.id === '' ? `card-${j}` : plan.id}
-                      className={css.planCard}
-                      data-plan-id={plan.id}
-                      data-plan-status={plan.status}
+            <div className={css.kanbanColumn} key={column.id} data-kanban-column={column.id}>
+              <header className={css.kanbanColumnHeader}>
+                {arrow !== null && (
+                  <span className={css.kanbanArrow} data-kanban-arrow={arrow.label} aria-hidden="true">{arrow.glyph}</span>
+                )}
+                <span className={css.kanbanColumnTitle}>{t(COLUMN_TITLE[column.id])}</span>
+                <span className={css.kanbanCount} data-kanban-count={column.count}>{column.count}</span>
+              </header>
+              <ul className={css.kanbanCards} id={`kanban-cards-${column.id}`}>
+                {shown.map((plan, j) => (
+                  <li
+                    key={plan.id === '' ? `card-${j}` : plan.id}
+                    className={css.planCard}
+                    data-plan-id={plan.id}
+                    data-plan-status={plan.status}
+                  >
+                    <code className={css.planCardId}>{plan.id}</code>
+                    <span className={css.planCardStatus} data-status={plan.status}>{plan.status}</span>
+                  </li>
+                ))}
+                {/* Overflow toggle : the clickable 「更多」/「收起」 —
+                    only for a capped column (expanded or not). */}
+                {overflow > 0 && (
+                  <li className={css.kanbanMore}>
+                    <button
+                      type="button"
+                      className={css.kanbanMoreButton}
+                      data-kanban-more={isExpanded ? 'collapse' : 'expand'}
+                      aria-expanded={isExpanded}
+                      aria-controls={`kanban-cards-${column.id}`}
+                      onClick={() => toggle(column.id)}
                     >
-                      <code className={css.planCardId}>{plan.id}</code>
-                      <span className={css.planCardStatus} data-status={plan.status}>{plan.status}</span>
-                    </li>
-                  ))}
-                  {/* Overflow toggle : the clickable 「更多」/「收起」 —
-                      only for a capped column (expanded or not). */}
-                  {overflow > 0 && (
-                    <li className={css.kanbanMore}>
-                      <button
-                        type="button"
-                        className={css.kanbanMoreButton}
-                        data-kanban-more={isExpanded ? 'collapse' : 'expand'}
-                        aria-expanded={isExpanded}
-                        aria-controls={`kanban-cards-${column.id}`}
-                        onClick={() => toggle(column.id)}
-                      >
-                        {isExpanded
-                          ? t('zone.tasks.collapse')
-                          : t('zone.tasks.more', { count: String(overflow) })}
-                      </button>
-                    </li>
-                  )}
-                </ul>
-              </div>
-            </React.Fragment>
+                      {isExpanded
+                        ? t('zone.tasks.collapse')
+                        : t('zone.tasks.more', { count: String(overflow) })}
+                    </button>
+                  </li>
+                )}
+              </ul>
+            </div>
           )
         })}
       </div>

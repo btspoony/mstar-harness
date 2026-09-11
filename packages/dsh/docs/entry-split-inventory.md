@@ -50,7 +50,7 @@ gates/* ──> gates/_shared.ts
 
 ### 0.5 浏览器半体（`src/client/`）
 
-`§3` 未覆盖：`src/client/index.ts` 是客户端插件入口（`inject` + `apply`），`src/client/panel/**` 是面板（`PanelView`/`TabNav`/`sidebar`/`state-section`/`panel-meta` + `pages/`（AgentCanvas / EventLog / IterationTask / IterationInfo）+ `zones/`（Legend / ProjectRollup / TaskBoard）+ `graph/`（project-graph / event-log / schema））。数据路径见上表 `engine-status-client.ts`/`use-mstar-engine-status.ts`/`guards.ts`（缓存、锚点行、线载荷校验）。
+`§3` 未覆盖：`src/client/index.ts` 是客户端插件入口（`inject` + `apply`），`src/client/panel/**` 是面板（`PanelView`/`TabNav`/`sidebar`/`state-section`/`panel-meta`/`definition`/`panel-store` + `pages/`（AgentList / EventLog / IterationTask / IterationInfo）+ `zones/`（Legend / ProjectRollup / TaskBoard）+ `graph/`（project-graph / event-log / schema））。数据路径见上表 `engine-status-client.ts`/`use-mstar-engine-status.ts`/`guards.ts`（缓存、锚点行——锚点标识为 `mstar-engine`，读取方同时兼容已写日志中旧标识 `mstar-engine-status`、线载荷校验）。
 
 ---
 

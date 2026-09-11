@@ -19,7 +19,8 @@
  *
  * Assertions:
  * - `dsh.client.platform === 'web'` and `dsh.client.inject` is the exact
- *   string array the boot graph injects as edges;
+ *   string array the boot graph injects as edges, and every inject row is a
+ *   declared `peerDependencies` entry;
  * - the legacy top-level `dshClient` key is GONE (upstream has no
  *   compatibility fallback — a resurrected old field would silently
  *   un-discover the plugin);
@@ -44,7 +45,7 @@ import { join, normalize, relative } from 'node:path'
 const PKG_DIR = join(import.meta.dir, '..')
 const pkg = JSON.parse(readFileSync(join(PKG_DIR, 'package.json'), 'utf8')) as Record<string, unknown>
 
-/** The inject faces the boot graph wires as edges — documented contract (). */
+/** The inject faces the boot graph wires as edges — documented contract (plan sidebar §L1.4). */
 const EXPECTED_INJECT = [
   '@deepseek-ai/dsh-client-store',
   '@deepseek-ai/dsh-client-ui-conversation',
@@ -52,6 +53,9 @@ const EXPECTED_INJECT = [
   // The panel's data path: the shared `/api` typert gateway lives on the
   // client `connection` service, so the panel row waits for it.
   '@deepseek-ai/dsh-client-connection',
+  // The right-Sidebar tab-type registry + keyed seats the panel registers
+  // into (the two-stage seat contract).
+  '@deepseek-ai/dsh-client-ui-sidebar-right',
 ]
 
 describe('manifest contract: dsh.client (upstream client-modules discovery)', () => {
@@ -67,6 +71,19 @@ describe('manifest contract: dsh.client (upstream client-modules discovery)', ()
     expect(client.inject).toEqual(EXPECTED_INJECT)
     // every element a string — upstream parseDshClient throws otherwise
     expect((client.inject as unknown[]).every((i) => typeof i === 'string')).toBe(true)
+  })
+
+  it('every dsh.client.inject row is a declared peerDependency (a named package is a declared peer)', () => {
+    // The repo contract: a package named in `dsh.client.inject` must be a
+    // declared peer — consumers resolve every injected face from their own
+    // dependency graph, and a missing peer is a boot failure on the user's
+    // install, not here. The reverse combination (a peer absent from inject)
+    // is allowed; this direction is not.
+    const peers = pkg.peerDependencies as Record<string, string> | undefined
+    const client = (pkg.dsh as Record<string, unknown>).client as Record<string, unknown>
+    for (const name of client.inject as string[]) {
+      expect(peers?.[name], `${name} is injected but not declared in peerDependencies`).toBeTypeOf('string')
+    }
   })
 
   it('removed the legacy top-level dshClient key (upstream has no fallback)', () => {
