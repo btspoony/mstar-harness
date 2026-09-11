@@ -147,7 +147,7 @@ Kimi: not a CLI target — use `/plugins install` in Kimi TUI (see [INSTALL.md](
 - `npx @mstar-harness/cli init --target dsh`
 - `npx @mstar-harness/cli doctor --target dsh`
 
-The CLI runs **two independent** `dsh plugin --profile web add` calls (mstar first, then `dsh-llm-fallbacks`) — the two-command install contract, never folded into a patch file. Re-running is idempotent (already-installed rows are skipped, exit 0); `--dry-run` previews the would-run commands without probing installed state or executing anything.
+The CLI runs **two independent** `dsh plugin --profile web add` calls (mstar first, then `dsh-llm-fallbacks`) — the two-command install contract, never folded into a patch file. Re-running is idempotent (already-installed rows are skipped, exit 0), with one version-aware exception: a `dsh-llm-fallbacks` row installed at a version other than the pin is re-added at the pinned spec (registry install + profile write; a failed re-add exits non-zero, and a local `link:`/`file:` fallbacks checkout is replaced — `--no-fallbacks` leaves it untouched); `--dry-run` previews the would-run commands without probing installed state or executing anything.
 
 Skip the `dsh-llm-fallbacks` row (`--no-fallbacks` is a dsh-target-only flag — ignored for other targets):
 
@@ -192,7 +192,7 @@ Check an existing config:
 - `npx @mstar-harness/cli doctor --target codex`
 - `npx @mstar-harness/cli doctor --target dsh`
 
-If validation fails, `doctor` exits with a non-zero status code. For the dsh target, each plugin row is reported as `uninstalled` / `disabled` / `mounted`; rows that are uninstalled or disabled are issues (exit 1), `mounted` is healthy.
+If validation fails, `doctor` exits with a non-zero status code. For the dsh target, each plugin row is reported as `uninstalled` / `disabled` / `mounted` / `drifted`; rows that are uninstalled or disabled are issues (exit 1), and so is a `drifted` fallbacks row (profile install ≠ the pinned version — re-run `init --target dsh` to repair), `mounted` is healthy.
 
 `doctor` also prints a non-fatal CLI-on-PATH note for every target — `mstar-harness` missing, present with a different version, or present and matching — without affecting the exit code.
 
@@ -434,7 +434,7 @@ Codex `init` registers the repo-bundled Codex marketplace (probed on codex-cli 0
 
 Codex `init` also links all `codex/agents/*.toml` files into `~/.codex/agents/` for global scope or `.codex/agents/` for project scope. Project scope appends the same harness **process** gitignore set as Cursor project `init` (see above) and symlinks `iteration-start` / `iteration-drive` / `iteration-loop` into `.agents/skills/<name>/SKILL.md` from `~/.mstar/harness/commands/<name>.md` (also gitignored). Global scope skips iteration skills and prints a pollution-avoidance warning.
 
-dsh `init` runs the two `dsh plugin --profile web add` calls (`@mstar-harness/dsh` then `dsh-llm-fallbacks`) in the fixed `web` profile — idempotent (already-installed rows skipped), fail-loud when the `dsh` binary is missing, and `--no-fallbacks` skips the fallbacks row.
+dsh `init` runs the two `dsh plugin --profile web add` calls (`@mstar-harness/dsh` then `dsh-llm-fallbacks`) in the fixed `web` profile — idempotent (already-installed rows skipped; a fallbacks row installed at a version other than the pin is re-added at the pin instead), fail-loud when the `dsh` binary is missing, and `--no-fallbacks` skips the fallbacks row.
 
 ## What `doctor` Checks
 

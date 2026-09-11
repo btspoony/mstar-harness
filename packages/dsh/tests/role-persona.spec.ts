@@ -37,6 +37,7 @@ import * as plugin from '../src/index.ts'
 import type { SubagentStartRequestView, SubagentsServiceView } from '../src/gates/role-persona.ts'
 import {
   FakeLoaderRegistry,
+  FakeSettingsRegistry,
   FakeSubagentProvider,
   bootApp,
   startViaNativeChannel,
@@ -65,6 +66,12 @@ const EXECUTE_AS = 'fullstack-dev'
 
 /** The configured persona text for `fullstack-dev`. */
 const PERSONA = 'You are a fullstack-dev executor for the Morning Star harness.'
+
+/** The 0.5.2 fallbacks-declared persona competing for the SAME native slot (AC-7). */
+const FALLBACKS_PERSONA = 'You are the fallbacks-declared executor persona.'
+
+/** A declared-role id OUTSIDE mstar's taxonomy — isolates the fallbacks delivery path. */
+const FALLBACKS_ONLY_ROLE = 'ac7-control'
 
 /** One mstar-style Assignment prompt sent as the start request's task text. */
 const ASSIGNMENT_PROMPT = [
@@ -158,6 +165,23 @@ async function bootWithProvider(
   // path; the wrapper delegates the same registry anyway).
   ;(app.ctx.subagents as unknown as SubagentRuntime).registerProvider(provider as never)
   return { app, provider }
+}
+
+/**
+ * Declare fallback roles through the REAL settings seam, then apply the
+ * 0.5.2 `dsh-llm-fallbacks` row. 0.5.2 composes its live config from
+ * `settings.installSection` (base row + stored section), so a stored
+ * `roles` payload is what an operator's settings.yaml would carry — the
+ * competing role-identity source. The row is applied as a plain plugin
+ * row (the Task 1 probe test's entry-shape cast) with no config argument.
+ */
+async function applyFallbacksRow(app: BootResult, roles: Array<{ id: string; persona: string }>): Promise<void> {
+  const settings = app.ctx.get('settings') as FakeSettingsRegistry | undefined
+  if (settings === undefined) throw new Error('settings seam unavailable in the fallbacks composition')
+  await settings.update('fallbacks', { roles: { list: roles, rules: [] } })
+  const fallbacksPlugin = fallbacks as unknown as Parameters<Context['plugin']>[0]
+  await app.ctx.plugin(fallbacksPlugin)
+  expect(fallbacksMounted(app.ctx)).toBe(true)
 }
 
 /** A real start request whose prompt text carries `text` (Assignment or plain). */
@@ -255,7 +279,12 @@ describe('native persona channel — SubagentStartRequest.persona merge', () => 
   })
 
   it('(e) composition with dsh-llm-fallbacks applied → persona still merged (seeds + advisory stay the fallbacks surface)', async () => {
-    const { app, provider } = await bootWithProvider('fake-spawn', { personaCapability: true })
+    // 0.5.2 provides `llm-fallbacks` inside `ctx.inject(["settings"], …)`:
+    // without the settings seam the plugin applies but registers no service,
+    // so the composition would not actually be a fallbacks composition. Same
+    // seam the probe test boots (the real dsh app always composes
+    // `dsh-settings-file` before the plugin layers).
+    const { app, provider } = await bootWithProvider('fake-spawn', { personaCapability: true }, { settingsService: 'fake' })
     // The real registry plugin applied as a row (same entry-shape cast the
     // Task 1 probe test applies).
     const fallbacksPlugin = fallbacks as unknown as Parameters<Context['plugin']>[0]
@@ -387,6 +416,62 @@ describe('native persona channel — SubagentStartRequest.persona merge', () => 
 
       expect(provider.starts[0]!.request.persona).toBe('caller persona')
       expect(captured).toHaveLength(0) // caller intent respected silently
+    } finally {
+      restore()
+    }
+  })
+
+  // ---- AC-7 : caller-set persona under the real dsh-llm-fallbacks 0.5.2 composition ----
+
+  it('(q) real dsh-llm-fallbacks 0.5.2 row + settings seam → an explicit caller persona still wins (AC-7)', async () => {
+    // 0.5.2's dispatch seam competes for the SAME native slot: it resolves
+    // the declared role from this Assignment and merges that role's declared
+    // `persona` when the slot is free. Declaring a persona for the SAME role
+    // id makes that competing delivery live; the caller's value must win.
+    const { app, provider } = await bootWithProvider('fake-spawn', { personaCapability: true }, { settingsService: 'fake' })
+    await applyFallbacksRow(app, [{ id: EXECUTE_AS, persona: FALLBACKS_PERSONA }])
+
+    const { captured, restore } = captureLogs()
+    try {
+      await startViaNativeChannel(app, 'fake-spawn', startRequest(ASSIGNMENT_PROMPT, { persona: 'caller persona' }))
+
+      expect(provider.starts[0]!.request.persona).toBe('caller persona')
+      expect(captured).toHaveLength(0) // caller intent respected silently
+    } finally {
+      restore()
+    }
+  })
+
+  it('(r) the same 0.5.2 composition delivers the declared fallbacks persona when the slot is free (AC-7 control)', async () => {
+    // Same row + settings seam, but the Assignment declares a role OUTSIDE
+    // mstar's taxonomy: the mstar channel resolves nothing, so the observed
+    // persona can only come from the fallbacks seam. This shows the 0.5.2
+    // role-identity path really fills the native slot on this composition —
+    // (q)'s caller-wins assertion is not vacuous.
+    const { app, provider } = await bootWithProvider('fake-spawn', { personaCapability: true }, { settingsService: 'fake' })
+    await applyFallbacksRow(app, [{ id: FALLBACKS_ONLY_ROLE, persona: FALLBACKS_PERSONA }])
+
+    const { captured, restore } = captureLogs()
+    try {
+      await startViaNativeChannel(app, 'fake-spawn', startRequest(ASSIGNMENT_PROMPT.replace(EXECUTE_AS, FALLBACKS_ONLY_ROLE)))
+
+      expect(provider.starts[0]!.request.persona).toBe(FALLBACKS_PERSONA)
+      expect(captured).toHaveLength(0) // the mstar channel had nothing to deliver
+    } finally {
+      restore()
+    }
+  })
+
+
+  it('(s) Execute as fullstack-dev with no caller persona: mstar Config.rolePersonas wins over a distinct fallbacks row persona (qc2 S-001)', async () => {
+    const { app, provider } = await bootWithProvider('fake-spawn', { personaCapability: true }, { settingsService: 'fake' })
+    await applyFallbacksRow(app, [{ id: EXECUTE_AS, persona: FALLBACKS_PERSONA }])
+
+    const { captured, restore } = captureLogs()
+    try {
+      await startViaNativeChannel(app, 'fake-spawn', startRequest(ASSIGNMENT_PROMPT))
+
+      expect(provider.starts[0]!.request.persona).toBe(PERSONA)
     } finally {
       restore()
     }

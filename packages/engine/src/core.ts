@@ -195,3 +195,12 @@ export function harnessVersionFrom(moduleDir: string): string {
 export function readHarnessVersion(): string {
   return harnessVersionFrom(dirname(fileURLToPath(import.meta.url)));
 }
+
+/**
+ * Exact `dsh-llm-fallbacks` version shared by the workspace pin and the
+ * published CLI `init --target dsh` install spec. Two literals only: this
+ * constant and `packages/dsh/package.json` `devDependencies["dsh-llm-fallbacks"]`.
+ * A drift test asserts they match. CLI src must not import JSON (no
+ * resolveJsonModule; published dist cannot see the repo).
+ */
+export const DSH_LLM_FALLBACKS_VERSION = "0.5.2";

@@ -27,7 +27,7 @@
  * 5-question bodies and resolves skill-relative asset paths.
  */
 export type { GateResult, Severity, ValidationResult } from "./core.js";
-export { SEVERITY_ORDER, applyEnforcement, readHarnessVersion, readJson, resolveProjectRoot, writeJson } from "./core.js";
+export { DSH_LLM_FALLBACKS_VERSION, SEVERITY_ORDER, applyEnforcement, readHarnessVersion, readJson, resolveProjectRoot, writeJson } from "./core.js";
 export type {
   HarnessKind,
   ResolveHarnessDirOptions,

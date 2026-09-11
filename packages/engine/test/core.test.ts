@@ -19,6 +19,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
+  DSH_LLM_FALLBACKS_VERSION,
   SEVERITY_ORDER,
   applyEnforcement,
   harnessVersionFrom,
@@ -331,5 +332,14 @@ describe("readHarnessVersion / harnessVersionFrom", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("DSH_LLM_FALLBACKS_VERSION", () => {
+  test("matches packages/dsh/package.json dsh-llm-fallbacks pin", () => {
+    const repoRoot = resolve(import.meta.dir, "..", "..", "..");
+    const dshPkg = readJson(join(repoRoot, "packages/dsh/package.json"));
+    const pin = (dshPkg.devDependencies as Record<string, string> | undefined)?.["dsh-llm-fallbacks"];
+    expect(DSH_LLM_FALLBACKS_VERSION).toBe(pin);
   });
 });

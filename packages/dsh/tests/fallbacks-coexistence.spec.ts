@@ -1,13 +1,14 @@
 /**
- * Task 4 — preset/mstar seeds coexistence  * the upstream `dsh-llm-fallbacks` package (0.1.6+) self-declares its 7
- * bundled omp-style preset roles at ITS OWN apply. Under upstream
+ * Task 4 — preset/mstar seeds coexistence  * the upstream `dsh-llm-fallbacks`
+ * package (0.1.6+) self-declares its bundled omp-style preset roles
+ * (`PRESET_ROLE_IDS`) at ITS OWN apply. Under upstream
  * REPLACEMENT semantics (`declare` builds a new registry per batch — the
  * last declarer owns it; a non-preserved id keeps its config row but loses
  * its seeded annotation — R2), the preset batch and the mstar batch compete.
  * The mstar declaration (Task 2) merge-preserves the currently-seeded
  * non-mstar ids from the readback, and the advisory decision point (Task 3)
  * awaits an idempotent re-declare before its effective-state read — so BOTH
- * boot orders converge to the same 20-id fully-seeded registry.
+ * boot orders converge to the same fully-seeded registry (`UNION_COUNT` ids).
  *
  * The fake below models the installed upstream semantics faithfully
  * (`FallbacksSeedManager`, dist 0.1.7): the seed registry is replaced
@@ -15,8 +16,8 @@
  * declares (`materialize` rewrites registry ids' row personas to the seed
  * personas and appends registry ids missing as rows — never deletes rows).
  *
- * The 13 mstar role ids are mirror-derived (`subagentRoleIds`) — never
- * hardcoded; the 7 preset ids are a constant (the brief's sanctioned
+ * The mstar role ids are mirror-derived (`subagentRoleIds`) — never
+ * hardcoded; the preset ids are a constant (the brief's sanctioned
  * fake/constant form — a value cannot be type-imported), anchored at
  * runtime against the installed upstream `presetRoles` value so a future
  * preset-id change fails this suite instead of silently drifting.
@@ -45,12 +46,16 @@ import { packageRoot } from '../scripts/bundle-harness-assets.ts'
 const REAL_MIRROR = join(packageRoot, 'harness-agents')
 
 /**
- * The 7 bundled omp-style preset role ids (upstream `presetRoles` — a
+ * Bundled omp-style preset role ids (upstream `presetRoles` — a
  * package-root VALUE export since 0.1.6; `dist/presets.d.ts`). Constant form
  * per the brief; anchored at runtime against the installed value below
  * (drift gate — a future preset-id change fails the suite, not production).
+ * 0.5.2 dropped `designer` and `librarian` (5 ids; union with 13 mstar = 18).
  */
-const PRESET_ROLE_IDS = ['designer', 'librarian', 'reviewer', 'scout', 'security-reviewer', 'sonic', 'task'] as const
+const PRESET_ROLE_IDS = ['reviewer', 'scout', 'security-reviewer', 'sonic', 'task'] as const
+const PRESET_COUNT = PRESET_ROLE_IDS.length
+const MSTAR_COUNT = 13
+const UNION_COUNT = PRESET_COUNT + MSTAR_COUNT
 
 /** One structured log record captured from the module sink. */
 type LogRecord = [SeedsLogLevel, string]
@@ -77,9 +82,10 @@ async function runSeeds(
  * with the new batch (new Map per batch), while the deployment taxonomy rows
  * PERSIST across declares — `materialize` rewrites registry ids' row personas
  * to the seed personas and appends registry ids missing as rows, never
- * deletes rows. `getEffectiveRoles` reads back the CURRENT rows with
- * seeded / seedPersona / personaOverridden derived from the CURRENT
- * registry — a row whose id left the registry stays present but unseeded.
+ * `getEffectiveRoles` reads back the CURRENT rows with
+ * seeded / seedPersona / personaOverridden / source derived from the CURRENT
+ * registry (0.5.2: `source` is the declaring set's label when seeded, `user`
+ * otherwise) — a row whose id left the registry stays present but unseeded.
  */
 class SeedRegistryFake {
   declareCalls: SeedDeclaration[][] = []
@@ -98,6 +104,7 @@ class SeedRegistryFake {
           persona,
           seeded,
           personaOverridden: seeded && persona !== seedPersona,
+          source: seeded ? 'external' : 'user',
         }
         if (seeded) row.seedPersona = seedPersona
         return row
@@ -169,47 +176,47 @@ function presetBatch(): SeedDeclaration[] {
   return PRESET_ROLE_IDS.map((id) => ({ id, persona: `Preset persona for ${id}` }))
 }
 
-describe('preset/mstar seeds coexistence — both boot orders converge to 20 seeded ids ', () => {
-  it('the PRESET_ROLE_IDS constant matches the installed upstream presetRoles ids (drift anchor — 7 ids)', () => {
+describe(`preset/mstar seeds coexistence — both boot orders converge to ${UNION_COUNT} seeded ids`, () => {
+  it(`the PRESET_ROLE_IDS constant matches the installed upstream presetRoles ids (drift anchor — ${PRESET_COUNT} ids)`, () => {
     const upstream = presetRoles.map((r) => r.id).sort()
-    expect(upstream).toHaveLength(7)
+    expect(upstream).toHaveLength(PRESET_COUNT)
     expect(upstream).toEqual([...PRESET_ROLE_IDS].sort())
   })
 
-  test.skipIf(!existsSync(REAL_MIRROR))('id sets are disjoint: the 7 preset ids and the mirror-derived 13 mstar subagent ids never collide', () => {
-    // The 13 mstar ids are MIRROR-DERIVED (never hardcoded — brief).
+  test.skipIf(!existsSync(REAL_MIRROR))(`id sets are disjoint: the ${PRESET_COUNT} preset ids and the mirror-derived ${MSTAR_COUNT} mstar subagent ids never collide`, () => {
+    // The mstar ids are MIRROR-DERIVED (never hardcoded — brief).
     const mstarIds = subagentRoleIds(REAL_MIRROR)
-    expect(mstarIds).toHaveLength(13)
+    expect(mstarIds).toHaveLength(MSTAR_COUNT)
     expect(mstarIds).not.toContain('project-manager')
     const presetIds = [...PRESET_ROLE_IDS]
-    expect(presetIds).toHaveLength(7)
+    expect(presetIds).toHaveLength(PRESET_COUNT)
     // No intersection: no preset id is a mstar role id (and vice versa).
     const mstarSet = new Set(mstarIds)
     expect(presetIds.filter((id) => mstarSet.has(id))).toEqual([])
-    // The union is exactly 20 — a collision would shrink it.
-    expect(new Set([...presetIds, ...mstarIds]).size).toBe(20)
+    // The union is exactly UNION_COUNT — a collision would shrink it.
+    expect(new Set([...presetIds, ...mstarIds]).size).toBe(UNION_COUNT)
   })
 
-  test.skipIf(!existsSync(REAL_MIRROR))('(a) presets declare first, mstar second: merge-preserve carries the 7 preset ids → 20 ids, all seeded, no duplicate rows', async () => {
+  test.skipIf(!existsSync(REAL_MIRROR))(`(a) presets declare first, mstar second: merge-preserve carries the ${PRESET_COUNT} preset ids → ${UNION_COUNT} ids, all seeded, no duplicate rows`, async () => {
     const registry = new SeedRegistryFake()
     // Upstream preset self-declare at its own apply (replacement semantics).
     await registry.declareSeeds(presetBatch())
-    expect(registry.effectiveRows()).toHaveLength(7)
+    expect(registry.effectiveRows()).toHaveLength(PRESET_COUNT)
 
-    // The mstar declaration runs second — its readback sees the 7 preset ids
+    // The mstar declaration runs second — its readback sees the preset ids
     // seeded and merge-preserves them into the batch.
     const { view, records } = await runSeeds(registry, REAL_MIRROR)
     expect(view.preserved.map((p) => p.id).sort()).toEqual([...PRESET_ROLE_IDS].sort())
-    // The declaration batch is exactly 13 mstar + 7 preserved = 20, no duplicates.
+    // The declaration batch is exactly MSTAR_COUNT mstar + PRESET_COUNT preserved = UNION_COUNT, no duplicates.
     const declaredIds = view.declared.map((d) => d.id)
-    expect(declaredIds).toHaveLength(20)
-    expect(new Set(declaredIds).size).toBe(20)
+    expect(declaredIds).toHaveLength(UNION_COUNT)
+    expect(new Set(declaredIds).size).toBe(UNION_COUNT)
     expect(new Set(declaredIds)).toEqual(new Set([...PRESET_ROLE_IDS, ...subagentRoleIds(REAL_MIRROR)]))
     expect(records.filter(([level]) => level === 'warn')).toEqual([])
 
-    // Final effective state: 20 rows, every one seeded, no duplicate ids.
+    // Final effective state: UNION_COUNT rows, every one seeded, no duplicate ids.
     const rows = registry.effectiveRows()
-    expect(rows).toHaveLength(20)
+    expect(rows).toHaveLength(UNION_COUNT)
     expect(new Set(rows.map((r) => r.id)).size).toBe(rows.length)
     expect(rows.every((r) => r.seeded)).toBe(true)
     // The preset ids keep their seeded annotations with their own personas.
@@ -221,26 +228,26 @@ describe('preset/mstar seeds coexistence — both boot orders converge to 20 see
     }
   })
 
-  test.skipIf(!existsSync(REAL_MIRROR))('(b) mstar first, presets second: mstar seeds lose annotation, ONE advisory re-declare converges back to 20 ids all seeded', async () => {
+  test.skipIf(!existsSync(REAL_MIRROR))(`(b) mstar first, presets second: mstar seeds lose annotation, ONE advisory re-declare converges back to ${UNION_COUNT} ids all seeded`, async () => {
     const registry = new SeedRegistryFake()
     // mstar declares first (the entry inject child at fallbacks apply).
     await runSeeds(registry, REAL_MIRROR)
-    expect(registry.effectiveRows()).toHaveLength(13)
+    expect(registry.effectiveRows()).toHaveLength(MSTAR_COUNT)
     expect(registry.effectiveRows().every((r) => r.seeded)).toBe(true)
 
-    // The upstream preset self-declare REPLACES the registry: only the 7
-    // preset ids stay seeded; the 13 mstar ROWS REMAIN but are unseeded
+    // The upstream preset self-declare REPLACES the registry: only the
+    // preset ids stay seeded; the mstar ROWS REMAIN but are unseeded
     // (replacement semantics — R2: rows persist, annotations stripped).
     await registry.declareSeeds(presetBatch())
     const interim = registry.effectiveRows()
-    expect(interim).toHaveLength(20)
-    expect(new Set(interim.map((r) => r.id)).size).toBe(20)
+    expect(interim).toHaveLength(UNION_COUNT)
+    expect(new Set(interim.map((r) => r.id)).size).toBe(UNION_COUNT)
     expect(interim.filter((r) => r.seeded).map((r) => r.id).sort()).toEqual([...PRESET_ROLE_IDS].sort())
     expect(interim.filter((r) => !r.seeded).map((r) => r.id).sort()).toEqual(subagentRoleIds(REAL_MIRROR))
 
     // ONE advisory decision-point pass: it awaits the idempotent re-declare
-    // (merge-preserve carries the 7 preset ids back) then reads the effective
-    // state — the registry converges to 20 ids, all seeded, no warns.
+    // (merge-preserve carries the preset ids back) then reads the effective
+    // state — the registry converges to UNION_COUNT ids, all seeded, no warns.
     const ctx = ctxWithService(registry, rowConfig([]))
     const { captured, restore } = captureAdvisoryLogs()
     try {
@@ -249,19 +256,19 @@ describe('preset/mstar seeds coexistence — both boot orders converge to 20 see
       restore()
     }
     expect(captured.filter(([level]) => level === 'warn')).toEqual([])
-    // The convergence debug names all 13 mstar ids (three-state: all seeded).
+    // The convergence debug names all MSTAR_COUNT mstar ids (three-state: all seeded).
     const seededDebug = captured.find(([, message]) => message.includes('seeded at their defaults'))
     expect(seededDebug).toBeDefined()
     for (const id of subagentRoleIds(REAL_MIRROR)) expect(seededDebug![1]).toContain(id)
 
-    // Final effective state: 20 rows, all seeded, no duplicate ids.
+    // Final effective state: UNION_COUNT rows, all seeded, no duplicate ids.
     const finalRows = registry.effectiveRows()
-    expect(finalRows).toHaveLength(20)
-    expect(new Set(finalRows.map((r) => r.id)).size).toBe(20)
+    expect(finalRows).toHaveLength(UNION_COUNT)
+    expect(new Set(finalRows.map((r) => r.id)).size).toBe(UNION_COUNT)
     expect(finalRows.every((r) => r.seeded)).toBe(true)
-    // The convergence was the advisory's re-declare: mstar(13) → presets(7) → 20.
+    // The convergence was the advisory's re-declare: mstar(MSTAR_COUNT) → presets(PRESET_COUNT) → UNION_COUNT.
     expect(registry.declareCalls).toHaveLength(3)
-    expect(registry.declareCalls[2]!.map((d) => d.id)).toHaveLength(20)
-    expect(new Set(registry.declareCalls[2]!.map((d) => d.id)).size).toBe(20)
+    expect(registry.declareCalls[2]!.map((d) => d.id)).toHaveLength(UNION_COUNT)
+    expect(new Set(registry.declareCalls[2]!.map((d) => d.id)).size).toBe(UNION_COUNT)
   })
 })

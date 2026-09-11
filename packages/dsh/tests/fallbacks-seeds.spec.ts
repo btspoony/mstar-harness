@@ -97,6 +97,7 @@ class FlakyFirstDeclareService implements SeedsServiceView {
         persona: d.persona,
         seeded: true,
         personaOverridden: false,
+        source: 'external',
         seedPersona: d.persona,
       })),
     }
@@ -135,9 +136,9 @@ async function runSeeds(
   return { view, records }
 }
 
-/** One seeded readback row with the upstream `EffectiveRole` shape. */
+/** One seeded readback row with the upstream `EffectiveRole` shape (0.5.2 derives `source` at read time: the declaring set's label, `user` iff unseeded — these fakes declare via the public API with no `set`, i.e. `external`). */
 function seededRow(id: string, seedPersona: string, overridden = false): EffectiveRolesReadback['roles'][number] {
-  return { id, persona: overridden ? `operator override of ${id}` : seedPersona, seeded: true, personaOverridden: overridden, seedPersona }
+  return { id, persona: overridden ? `operator override of ${id}` : seedPersona, seeded: true, personaOverridden: overridden, source: 'external', seedPersona }
 }
 
 /** One structured boot-log record (the cordis logger `Message` subset the
@@ -200,15 +201,15 @@ describe('declareMstarSeeds — persona payload + merge-preserve + gates', () =>
 
   it('(c) a preserved persona carrying the {{...}} interpolation hazard is skipped with reason interpolation + one warn, never declared', async () => {
     const fake = new FakeSeedsService({
-      roles: [seededRow('designer', 'You are the {{role}} executor.')],
+      roles: [seededRow('task', 'You are the {{role}} executor.')],
     })
     const { view, records } = await runSeeds(fake, undefined)
     expect(view.declared).toEqual([])
-    expect(view.skipped).toEqual([{ id: 'designer', reason: 'interpolation' }])
+    expect(view.skipped).toEqual([{ id: 'task', reason: 'interpolation' }])
     expect(view.preserved).toEqual([])
     const warns = records.filter(([level]) => level === 'warn')
     expect(warns).toHaveLength(1)
-    expect(warns[0]![1]).toContain('designer')
+    expect(warns[0]![1]).toContain('task')
     expect(warns[0]![1]).toContain('interpolation')
   })
 
@@ -249,23 +250,23 @@ describe('declareMstarSeeds — persona payload + merge-preserve + gates', () =>
       const fake = new FakeSeedsService({
         roles: [
           // Preserved: seeded non-mstar id — batch persona is seedPersona, NOT the operator override.
-          seededRow('designer', 'The designer default.', true),
-          seededRow('librarian', 'The librarian default.'),
-          // Not preserved: unseeded row.
-          { id: 'reviewer', persona: 'x', seeded: false, personaOverridden: false },
+          seededRow('reviewer', 'The reviewer preset default.', true),
+          seededRow('scout', 'The scout preset default.'),
+          // Not preserved: unseeded row (0.5.2 derives `source: 'user'`).
+          { id: 'ephemeral-user', persona: 'x', seeded: false, personaOverridden: false, source: 'user' },
           // Not preserved: mstar id — declared from the MIRROR instead of the readback seed.
           seededRow('architect', 'Architect readback seed.', true),
         ],
       })
       const { view } = await runSeeds(fake, mirror.dir)
       expect(view.preserved).toEqual([
-        { id: 'designer', persona: 'The designer default.' },
-        { id: 'librarian', persona: 'The librarian default.' },
+        { id: 'reviewer', persona: 'The reviewer preset default.' },
+        { id: 'scout', persona: 'The scout preset default.' },
       ])
       const ids = view.declared.map((d) => d.id)
-      expect(ids).toContain('designer')
-      expect(ids).toContain('librarian')
-      expect(ids).not.toContain('reviewer')
+      expect(ids).toContain('reviewer')
+      expect(ids).toContain('scout')
+      expect(ids).not.toContain('ephemeral-user')
       // The mstar id is declared from the mirror (SSOT), not the readback seedPersona.
       expect(view.declared).toContainEqual({ id: 'architect', persona: `Architect default text.\n\n${loadLine('architect')}` })
       expect(view.declared).not.toContainEqual({ id: 'architect', persona: 'Architect readback seed.' })
@@ -277,7 +278,7 @@ describe('declareMstarSeeds — persona payload + merge-preserve + gates', () =>
   it('(g) idempotent: a second call re-declares an identical batch (upstream no-delta write is the manager contract; the module is deterministic)', async () => {
     const mirror = await fixtureMirror([['fullstack-dev', ['description: |-', '  Fullstack implementer.', 'mode: subagent']]])
     try {
-      const fake = new FakeSeedsService({ roles: [seededRow('designer', 'The designer default.')] })
+      const fake = new FakeSeedsService({ roles: [seededRow('reviewer', 'The reviewer preset default.')] })
       const first = await runSeeds(fake, mirror.dir)
       const second = await runSeeds(fake, mirror.dir)
       expect(fake.declareCalls).toHaveLength(2)
@@ -306,11 +307,11 @@ describe('declareMstarSeeds — persona payload + merge-preserve + gates', () =>
     // child) committed in the readback→commit window. The guard skips the
     // upstream call entirely — the registry is untouched.
     const fake = new FakeSeedsService({
-      roles: [seededRow('designer', 'You are the {{role}} executor.')],
+      roles: [seededRow('task', 'You are the {{role}} executor.')],
     })
     const { view, records } = await runSeeds(fake, undefined)
     expect(view.declared).toEqual([])
-    expect(view.skipped).toEqual([{ id: 'designer', reason: 'interpolation' }])
+    expect(view.skipped).toEqual([{ id: 'task', reason: 'interpolation' }])
     expect(fake.declareCalls).toHaveLength(0)
     // One debug documents the skip (the upstream call was never made).
     expect(records.some(([level, message]) => level === 'debug' && message.includes('empty batch'))).toBe(true)

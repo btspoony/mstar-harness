@@ -181,7 +181,7 @@ npx @mstar-harness/cli init --target dsh
 npx @mstar-harness/cli doctor --target dsh
 ```
 
-The CLI runs **two independent** `dsh plugin --profile web add` calls (mstar first, then `dsh-llm-fallbacks`) — the two-command install contract, never folded into a patch file. Re-running is idempotent: already-installed rows are skipped (`skipped-existing`), exit 0.
+The CLI runs **two independent** `dsh plugin --profile web add` calls (mstar first, then `dsh-llm-fallbacks`) — the two-command install contract, never folded into a patch file. Re-running is idempotent: already-installed rows are skipped (`skipped-existing`), exit 0. The one version-aware exception is a `dsh-llm-fallbacks` row installed at a version other than the pinned one: `init` re-adds the pinned spec (a registry install + profile write; a failed re-add exits non-zero), which also replaces a local `link:`/`file:` fallbacks checkout — pass `--no-fallbacks` to leave such a profile untouched.
 
 Skip the `dsh-llm-fallbacks` row (`--no-fallbacks` is a dsh-target-only flag — ignored for other targets):
 
@@ -200,7 +200,7 @@ dsh plugin --profile web add dsh-llm-fallbacks
 
 - `--dry-run` previews the would-run commands without probing installed state or executing anything.
 - dsh profiles are machine-global; `--scope` is accepted by the shared interface but has no dsh surface.
-- `doctor --target dsh` reports each plugin row as `uninstalled` / `disabled` / `mounted` and exits non-zero when any row is uninstalled or disabled.
+- `doctor --target dsh` reports each plugin row as `uninstalled` / `disabled` / `mounted` / `drifted` and exits non-zero when any row is uninstalled or disabled, or when the `dsh-llm-fallbacks` row is `drifted` (profile install ≠ the pinned version; the note names both versions and `init --target dsh` repairs it).
 - Enter PM with the `pm` skill. Host adapter: **`mstar-host`** → `references/dsh.md` (`skill://mstar-host/references/dsh.md`).
 
 ## Manual install
