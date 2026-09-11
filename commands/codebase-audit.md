@@ -27,6 +27,8 @@ Run a read-only codebase audit that discovers what is worth doing and writes sel
 | **Large repo** (parallel categories needed) | `@code-reviewer` fans out read-only `scout` / `explore` subagents per category via Assignment `Delegation: allowed (scout/explore only, read-only)`, then vets and writes plans |
 | **Specialist depth needed** | PM orchestrates an `@architect` consult for architecture/tech-debt depth (separate dispatch, or folded into the audit delegation brief) |
 
+**dsh host only.** On dsh the large-repo fan-out goes through the native **`workflow`** tool, not `subagent`: after the operator types `/codebase-audit`, take the `script` + `meta` (`meta.name: mstar-audit-fanout`) from skill **`mstar-host`** → `references/dsh-workflow-scripts.md` (§ `mstar-audit-fanout`) — N≥3 read-only category seats, each `agent()` prompt opening with the Assignment header (`Execute as:` / `Delegation: forbidden`), one conversation `workflow-run` node. Other hosts unchanged (they keep their own invoke tool: `task` / Task).
+
 This command is the PM entry point; the audit execution body is `code-reviewer`（PM dispatch）.
 
 The audit is **advisory** — it does not enter the per-plan state machine (`Todo → InProgress → InReview → Done`). Its output is plan *candidates*.
