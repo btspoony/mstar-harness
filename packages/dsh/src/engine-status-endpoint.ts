@@ -55,7 +55,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { TypertContribution } from '@deepseek-ai/dsh-typert-registry'
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import type { WorkflowSelectionView } from './types.ts'
-import { agentIdOf, sessionCwdOf, sessionHeaderIdOf, type HarnessResolver } from './gates/_shared.ts'
+import { verifiedLeaseHolderOf, type HarnessResolver } from './gates/_shared.ts'
 import { resolveActiveWorkflow, resolveReadWorkflow, type SessionHint } from './gates/workflow-selection.ts'
 import {
   readEngineStatusSnapshot,
@@ -415,15 +415,15 @@ export class MstarEngineStatusGateway extends TypertRemoteService {
    * The opaque lease-holder `Agent.id` of the session's live Agent, when the
    * public agents service resolves one whose own session header identifies the
    * resolved Session (id AND cwd). Absent/mismatching Agent ⇒ undefined — the
-   * request's `sessionId` is never used as a holder shortcut.
+   * request's `sessionId` is never used as a holder shortcut. The verification
+   * itself is SHARED ({@link verifiedLeaseHolderOf}) with the other
+   * session-level hint builders (the workflow ledger), so a lease-bound
+   * session resolves the same lifecycle on every path.
    */
   private leaseHolderOf(sessionId: string, cwd: string): string | undefined {
     const agents = this.ctx.get('agents') as AgentsView | undefined
     const agent = typeof agents?.get === 'function' ? agents.get(sessionId) : undefined
-    if (agent === undefined) return undefined
-    if (sessionHeaderIdOf(agent) !== sessionId) return undefined
-    if (sessionCwdOf(agent) !== cwd) return undefined
-    return agentIdOf(agent)
+    return verifiedLeaseHolderOf(agent, sessionId, cwd)
   }
 
   /**

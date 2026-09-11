@@ -501,6 +501,31 @@ export function agentIdOf(agent: unknown): string | undefined {
 }
 
 /**
+ * The VERIFIED live lease-holder identity of one session's Agent — the id the
+ * dispatch gate forwards to the shared resolvers for the SAME dispatch
+ * (`sessionHintOf(exec.agent)` → `agentIdOf`). Every consumer of a
+ * session-level hint (the host endpoint's control-state read, the workflow
+ * ledger's attribution) must forward the SAME identity, or a session whose
+ * lifecycle is only decidable by its lease (two active lifecycles sharing one
+ * `control_worktree_path`) resolves differently per call site.
+ *
+ * The handle must BE that session's agent — its own `session.header.id` names
+ * the session, and (when the caller has an authoritative cwd) its workspace
+ * must equal it. Anything else answers `undefined`: the session id is never
+ * substituted for a holder (they are opaque and distinct).
+ * @param agent - the live agent the host resolves for the session (structural read).
+ * @param sessionId - the session the hint is built for.
+ * @param cwd - the session's workspace; `undefined` skips the workspace check
+ *   (a caller with no authoritative cwd cannot verify one).
+ */
+export function verifiedLeaseHolderOf(agent: unknown, sessionId: string, cwd: string | undefined): string | undefined {
+  if (agent === undefined) return undefined
+  if (sessionHeaderIdOf(agent) !== sessionId) return undefined
+  if (cwd !== undefined && sessionCwdOf(agent) !== cwd) return undefined
+  return agentIdOf(agent)
+}
+
+/**
  * The structural session hint one event's agent supplies to the workflow
  * resolvers (no dsh-session import — cold/raw Session consumers read the same
  * `header.cwd` / `header.id` directly). `selectedWorkflowId` is deliberately

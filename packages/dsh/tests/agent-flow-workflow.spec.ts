@@ -520,6 +520,35 @@ class FakeSessionRegistry extends Service {
   }
 }
 
+/**
+ * Minimal in-memory `agents` service for the workflow-ledger lease tests:
+ * the ONE contract the consumer reads — `get(sessionId)` → the session's live
+ * Agent (a structural fake: `{ id, session: { header } }`, the shape
+ * `agentIdOf` / `sessionHeaderIdOf` / `sessionCwdOf` read).
+ */
+class FakeAgentRegistry extends Service {
+  private readonly live = new Map<string, unknown>()
+
+  constructor(ctx: Context) {
+    super(ctx, 'agents')
+  }
+
+  /** Record the live Agent of one session (the registry is keyed by `SessionId`). */
+  register(sessionId: string, agent: unknown): void {
+    this.live.set(sessionId, agent)
+  }
+
+  /** The session's live Agent (the consumer's lease-holder read). */
+  get(id: string): unknown {
+    return this.live.get(id)
+  }
+}
+
+/** One live Agent handle for one session (the lease holder `Agent.id`). */
+function fakeAgent(id: string, sessionId: string, cwd: string): Record<string, unknown> {
+  return { id, session: { header: { id: sessionId, cwd } } }
+}
+
 describe('workflow-ledger consumer — cold scan over session event snapshots ()', () => {
   it('records run + members + end with childId preserved; agent-end carries no ledger row', async () => {
     const { root, harnessDir, workflowDir } = await tempHarness('dsh-workflow-consumer-cold-')
@@ -1505,17 +1534,104 @@ describe('workflow-ledger consumer — installed Session surface (seq + eventAt)
 
 describe('workflow-ledger consumer — D4 session binding + exclusion floor', () => {
   /** A temp harness with TWO active lifecycles (the concurrent-active registry). */
-  async function tempMultiHarness(prefix: string): Promise<{ root: string; harnessDir: string; dirs: Record<string, string> }> {
+  async function tempMultiHarness(
+    prefix: string,
+    snapshots: { 'wf-a'?: Record<string, unknown>; 'wf-b'?: Record<string, unknown> } = {},
+  ): Promise<{ root: string; harnessDir: string; dirs: Record<string, string> }> {
     const root = await mkdtemp(join(tmpdir(), prefix))
     const harnessDir = join(root, 'harness')
     await mkdir(harnessDir, { recursive: true })
     await seedHarness(harnessDir, {
       'status.json': v2Root([v2WorkflowEntry('wf-a'), v2WorkflowEntry('wf-b')]),
-      'workflows/wf-a/snapshot.json': v2Snapshot('wf-a'),
-      'workflows/wf-b/snapshot.json': v2Snapshot('wf-b'),
+      'workflows/wf-a/snapshot.json': v2Snapshot('wf-a', snapshots['wf-a']),
+      'workflows/wf-b/snapshot.json': v2Snapshot('wf-b', snapshots['wf-b']),
     })
     return { root, harnessDir, dirs: { 'wf-a': join(harnessDir, 'workflows/wf-a'), 'wf-b': join(harnessDir, 'workflows/wf-b') } }
   }
+
+  /** One engine-valid `execution_lease` row (the resolver's lease rung). */
+  function lease(holder: string, worktreePath: string): Record<string, unknown> {
+    return { holder, claimed_at: '2026-09-11', worktree_path: worktreePath, working_branch: `feature/${holder}` }
+  }
+
+  /**
+   * Two active lifecycles on ONE shared control worktree, where only a lease
+   * HOLDER can decide: the cwd rung matches both entries, and `wf-b`'s lease
+   * worktree sits OUTSIDE the control tree, so the lease rung matches neither
+   * by path. The session's workspace is a real directory under the shared
+   * control worktree (the containment rule compares realpaths).
+   */
+  async function sharedControlHarness(): Promise<{
+    root: string
+    leaseRoot: string
+    harnessDir: string
+    dirs: Record<string, string>
+    workspace: string
+  }> {
+    const leaseRoot = await mkdtemp(join(tmpdir(), 'dsh-ledger-lease-holder-root-'))
+    const control = join(leaseRoot, 'repo')
+    await mkdir(join(control, 'src'), { recursive: true })
+    const { root, harnessDir, dirs } = await tempMultiHarness('dsh-ledger-lease-holder-', {
+      'wf-a': { control_worktree_path: control },
+      'wf-b': {
+        control_worktree_path: control,
+        plans: [{ id: 'p-b', status: 'InProgress', execution_lease: lease('agent-b', join(leaseRoot, 'worktrees/wf-b')) }],
+      },
+    })
+    return { root, leaseRoot, harnessDir, dirs, workspace: join(control, 'src') }
+  }
+
+  it('a session whose cwd rung is ambiguous records under the lifecycle its VERIFIED lease holder owns', async () => {
+    const { root, leaseRoot, harnessDir, dirs, workspace } = await sharedControlHarness()
+    const ctx = new Context()
+    const sessions = new FakeSessionRegistry(ctx)
+    const agents = new FakeAgentRegistry(ctx)
+    sessions.register(fakeSession([{ type: 'tool-workflow/run-start', data: runStart({ runId: 'run-b' }) }], { id: 'sess-shared', header: { cwd: workspace } }))
+    agents.register('sess-shared', fakeAgent('agent-b', 'sess-shared', workspace))
+    const priorSink = setWorkflowLedgerLogger(() => {})
+    try {
+      registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))
+
+      expect(readAgentFlow(dirs['wf-b'])!.events.map((e) => e.runId)).toEqual(['run-b'])
+      expect(readAgentFlow(dirs['wf-a'])!.events).toEqual([])
+      // Bound, not excluded: the resolver's lease rung decided, so no
+      // exclusion floor was ever observed for this session.
+      expect(readWorkflowSessionBinding(harnessDir, 'sess-shared', workspace)).toEqual({ kind: 'ok' })
+    } finally {
+      setWorkflowLedgerLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+      await rm(leaseRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('an Agent whose own session header names another session never supplies a lease holder', async () => {
+    const { root, leaseRoot, harnessDir, dirs, workspace } = await sharedControlHarness()
+    const ctx = new Context()
+    const sessions = new FakeSessionRegistry(ctx)
+    const agents = new FakeAgentRegistry(ctx)
+    sessions.register(fakeSession([{ type: 'tool-workflow/run-start', data: runStart({ runId: 'run-weird' }) }], { id: 'sess-shared', header: { cwd: workspace } }))
+    // SAME workspace (so only the identity check can reject it) but the handle
+    // belongs to a different session: an unverified holder must never bind the
+    // row — the session stays unbound and the row is excluded.
+    agents.register('sess-shared', fakeAgent('agent-b', 'sess-other', workspace))
+    const priorSink = setWorkflowLedgerLogger(() => {})
+    try {
+      registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))
+
+      expect(readAgentFlow(dirs['wf-a'])!.events).toEqual([])
+      expect(readAgentFlow(dirs['wf-b'])!.events).toEqual([])
+      expect(readWorkflowSessionBinding(harnessDir, 'sess-shared', workspace)).toEqual({
+        kind: 'ok',
+        binding: { cwd: workspace, excludedBeforeSeq: 1 },
+      })
+    } finally {
+      setWorkflowLedgerLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+      await rm(leaseRoot, { recursive: true, force: true })
+    }
+  })
 
   it('two sessions in one harness record into the lifecycle each is bound to', async () => {
     const { root, harnessDir, dirs } = await tempMultiHarness('dsh-ledger-bound-')
