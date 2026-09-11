@@ -16,9 +16,17 @@
  * ```json
  * {
  *   "sv": 1,
- *   "entries": { "<session id>": [ { "rv": 1, "cwd": "/proj", "at": "…", "turn": 3, "payload": { … } } ] }
+ *   "entries": { "<session id>": [ { "rv": 1, "cwd": "/proj", "at": "…", "turn": 3, "payload": { … } } ] },
+ *   "bindings": { "<session id>": { "cwd": "/proj", "selectedWorkflowId": "wf-2", "excludedBeforeSeq": 12 } }
  * }
  * ```
+ *
+ * `entries` is the emission history (what the model saw); `bindings` is the
+ * session-scoped workflow-selection CONTROL state (D4: the picked active
+ * workflow + the durable no-backfill floor). The control map is additive and
+ * optional — a missing map means "no pick / floor 0" — and is never part of an
+ * emitted payload: each writer preserves the other's field verbatim, and the
+ * binding writer never touches `payload` / `at` / `turn`.
  *
  * `sv` is the envelope schema version and `rv` the per-entry record version:
  * a reader that does not recognize EITHER must answer "unavailable" rather
@@ -173,6 +181,49 @@ export interface EngineStatusSnapshotWriteInput {
   readonly maxBytes?: number
 }
 
+/**
+ * One session's durable workflow-selection CONTROL record (D4): the active
+ * workflow this session picked plus the durable no-backfill floor. It lives in
+ * the envelope's optional top-level `bindings` map — never inside an emitted
+ * payload — and is keyed by the durable `session.header.id`.
+ */
+export interface WorkflowSessionBinding {
+  /** The authoritative session cwd the record was written for (exact-match anchor). */
+  readonly cwd: string
+  /** The session's chosen ACTIVE workflow id; absent = no explicit pick yet. */
+  readonly selectedWorkflowId?: string
+  /**
+   * Durable exclusion floor: ledger rows at or below this sequence were
+   * intentionally skipped while the session was unbound and must never be
+   * backfilled. An absent record means floor 0 (no exclusion history).
+   */
+  readonly excludedBeforeSeq: number
+}
+
+/**
+ * Binding read outcome: the stored record (or its absence as `ok` WITHOUT a
+ * `binding`), or why attribution is unavailable — absent and corrupt are
+ * distinct answers, never a silent empty record.
+ */
+export type WorkflowSessionBindingRead =
+  | { readonly kind: 'ok'; readonly binding?: WorkflowSessionBinding }
+  | { readonly kind: 'unavailable'; readonly reason: string }
+
+/** One binding read-modify-write request (a picker commit or a floor advance). */
+export interface WorkflowSessionBindingUpdate {
+  /** The chosen active workflow id; omitted preserves the stored preference. */
+  readonly selectedWorkflowId?: string
+  /** The exclusion floor to merge (by max) into the stored record. */
+  readonly excludedBeforeSeq: number
+  /** Global byte ceiling override (test seam; production uses the constant). */
+  readonly maxBytes?: number
+}
+
+/** Binding write outcome: written, or the degraded reason (never throws for I/O faults). */
+export type WorkflowSessionBindingWrite =
+  | { readonly kind: 'written' }
+  | { readonly kind: 'degraded'; readonly reason: string }
+
 /** Absolute snapshot file path for one `{HARNESS_DIR}`. */
 export function engineStatusSnapshotPath(harnessDir: string): string {
   return join(harnessDir, ENGINE_STATUS_SNAPSHOT_RELATIVE_PATH)
@@ -205,6 +256,25 @@ function asEntry(value: unknown): EngineStatusSnapshotEntry | undefined {
   if (typeof value.turn !== 'number' || !Number.isFinite(value.turn)) return undefined
   if (!isPlainObject(value.payload)) return undefined
   return { rv: value.rv as number, cwd, at, turn: value.turn, payload: value.payload }
+}
+
+/** Interpret one unknown value as a stored binding record, or undefined. */
+function asBinding(value: unknown): WorkflowSessionBinding | undefined {
+  if (!isPlainObject(value)) return undefined
+  const cwd = nonEmptyString(value.cwd)
+  if (cwd === undefined) return undefined
+  const seq = value.excludedBeforeSeq
+  if (typeof seq !== 'number' || !Number.isInteger(seq) || seq < 0) return undefined
+  // An absent preference is fine (no pick yet); a present-but-unusable one
+  // ('' or a non-string) is a record shape this build refuses.
+  const selectedRaw = value.selectedWorkflowId
+  const selected = nonEmptyString(selectedRaw)
+  if (selectedRaw !== undefined && selected === undefined) return undefined
+  return {
+    cwd,
+    ...(selected === undefined ? {} : { selectedWorkflowId: selected }),
+    excludedBeforeSeq: seq,
+  }
 }
 
 /** Age of one entry in ms, or undefined when its `at` is not a usable timestamp. */
@@ -263,6 +333,7 @@ export function readEngineStatusSnapshot(
 interface SnapshotDoc {
   sv: number
   entries: Record<string, EngineStatusSnapshotEntry[]>
+  bindings: Record<string, WorkflowSessionBinding>
 }
 
 /**
@@ -274,6 +345,24 @@ interface SnapshotDoc {
  */
 function sessionMap(): Record<string, EngineStatusSnapshotEntry[]> {
   return Object.create(null) as Record<string, EngineStatusSnapshotEntry[]>
+}
+
+/** A prototype-less binding map — the same keying rule as {@link sessionMap}. */
+function bindingMap(): Record<string, WorkflowSessionBinding> {
+  return Object.create(null) as Record<string, WorkflowSessionBinding>
+}
+
+/**
+ * The envelope's serialized form. The control map is omitted entirely while it
+ * holds no record, so an envelope written before D4 stays byte-identical on the
+ * next emission write.
+ */
+function serializeEnvelope(
+  entries: Record<string, EngineStatusSnapshotEntry[]>,
+  bindings: Record<string, WorkflowSessionBinding>,
+): string {
+  const base = { sv: ENGINE_STATUS_SNAPSHOT_VERSION, entries }
+  return Object.keys(bindings).length === 0 ? JSON.stringify(base) : JSON.stringify({ ...base, bindings })
 }
 
 /**
@@ -309,7 +398,10 @@ function loadForWrite(harnessDir: string): WriteLoad {
     raw = readFileSync(engineStatusSnapshotPath(harnessDir), 'utf8')
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return { kind: 'ok', doc: { sv: ENGINE_STATUS_SNAPSHOT_VERSION, entries: sessionMap() } }
+      return {
+        kind: 'ok',
+        doc: { sv: ENGINE_STATUS_SNAPSHOT_VERSION, entries: sessionMap(), bindings: bindingMap() },
+      }
     }
     return { kind: 'refused', reason: 'store-unreadable' }
   }
@@ -336,7 +428,19 @@ function loadForWrite(harnessDir: string): WriteLoad {
     }
     if (kept.length > 0) entries[key] = kept
   }
-  return { kind: 'ok', doc: { sv: ENGINE_STATUS_SNAPSHOT_VERSION, entries } }
+  // The control map follows the same one-rule contract: absent means "no pick",
+  // but a map (or a record) this build cannot read is unrecognized content that
+  // a full-file rewrite would destroy — refused whole, never reset to empty.
+  const bindings = bindingMap()
+  if (parsed.bindings !== undefined) {
+    if (!isPlainObject(parsed.bindings)) return { kind: 'refused', reason: 'store-bindings-schema' }
+    for (const [key, value] of Object.entries(parsed.bindings)) {
+      const binding = asBinding(value)
+      if (binding === undefined) return { kind: 'refused', reason: 'store-bindings-schema' }
+      bindings[key] = binding
+    }
+  }
+  return { kind: 'ok', doc: { sv: ENGINE_STATUS_SNAPSHOT_VERSION, entries, bindings } }
 }
 
 /**
@@ -468,8 +572,11 @@ export function writeEngineStatusSnapshot(
         pruned[key] = kept
       }
       const maxBytes = input.maxBytes ?? ENGINE_STATUS_SNAPSHOT_MAX_BYTES
+      // Retention prunes ENTRY buckets only: the control records are not
+      // history and must never be shed (or aged out) by an emission write —
+      // they are counted in the ceiling below instead.
       const serialized = (entries: Record<string, EngineStatusSnapshotEntry[]>): string =>
-        JSON.stringify({ sv: ENGINE_STATUS_SNAPSHOT_VERSION, entries })
+        serializeEnvelope(entries, doc.bindings)
       const evicted = enforceGlobalBound(pruned, input.sessionId, maxBytes, (entries) =>
         Buffer.byteLength(serialized(entries), 'utf8'))
       const payload = serialized(pruned)
@@ -501,6 +608,141 @@ export function writeEngineStatusSnapshot(
   } catch (error) {
     // Remove ONLY this call's temp file: the lock may have failed before the
     // directory existed, and the name above is unique to this writer.
+    try {
+      rmSync(tmp, { force: true })
+    } catch {
+      // best-effort cleanup only
+    }
+    return { kind: 'degraded', reason: (error as Error)?.message ?? 'write-failed' }
+  }
+}
+
+/**
+ * Read one session's durable workflow-selection binding.
+ *
+ * The answers are deliberately distinct: `{kind:'ok'}` WITHOUT a `binding`
+ * means there is nothing recorded for this session (no store yet, an sv=1
+ * envelope without the control map, no key for the session) — the caller
+ * proceeds unbound. `{kind:'unavailable', reason}` means the record cannot be
+ * trusted (`store-unreadable`, `store-invalid-json`, `store-envelope-schema`,
+ * `store-bindings-schema`, `cwd-mismatch`) — the caller must NOT treat that as
+ * "no pick" and attribute the session anywhere.
+ * @param harnessDir - the resolved `{HARNESS_DIR}`.
+ * @param sessionId - the durable `session.header.id` (the picker key).
+ * @param cwd - the authoritative session cwd (exact match against the record).
+ */
+export function readWorkflowSessionBinding(
+  harnessDir: string,
+  sessionId: string,
+  cwd: string,
+): WorkflowSessionBindingRead {
+  if (harnessDir === '') return { kind: 'unavailable', reason: 'no-harness-dir' }
+  if (sessionId === '') return { kind: 'unavailable', reason: 'no-session-id' }
+  if (cwd === '') return { kind: 'unavailable', reason: 'no-session-cwd' }
+  let raw: string
+  try {
+    raw = readFileSync(engineStatusSnapshotPath(harnessDir), 'utf8')
+  } catch (error) {
+    // A store that does not exist yet is "no pick", not a failure — but any
+    // other read fault leaves the record unverifiable.
+    return (error as NodeJS.ErrnoException).code === 'ENOENT'
+      ? { kind: 'ok' }
+      : { kind: 'unavailable', reason: 'store-unreadable' }
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return { kind: 'unavailable', reason: 'store-invalid-json' }
+  }
+  if (!isPlainObject(parsed) || parsed.sv !== ENGINE_STATUS_SNAPSHOT_VERSION || !isPlainObject(parsed.entries)) {
+    return { kind: 'unavailable', reason: 'store-envelope-schema' }
+  }
+  const bindings = parsed.bindings
+  if (bindings === undefined) return { kind: 'ok' }
+  if (!isPlainObject(bindings)) return { kind: 'unavailable', reason: 'store-bindings-schema' }
+  // OWN key only (same rule as the entry buckets): the session id is
+  // caller-chosen, so an id naming an `Object.prototype` member must be an
+  // ordinary key rather than an inherited member.
+  if (!Object.hasOwn(bindings, sessionId)) return { kind: 'ok' }
+  const binding = asBinding(bindings[sessionId])
+  if (binding === undefined) return { kind: 'unavailable', reason: 'store-bindings-schema' }
+  if (binding.cwd !== cwd) return { kind: 'unavailable', reason: 'cwd-mismatch' }
+  return { kind: 'ok', binding }
+}
+
+/**
+ * Durably record one session's workflow-selection binding (the D4 picker
+ * commit / exclusion-floor advance) — the same read-modify-write discipline as
+ * {@link writeEngineStatusSnapshot}: the snapshot-dir lock, a writer-unique
+ * temp file, an atomic rename, and the refusal rule for a store this build
+ * cannot understand. The emission records (`payload` / `at` / `turn` /
+ * `rv` / `cwd`) are preserved EXACTLY: this write only sets
+ * `bindings[sessionId]`, merges the floor by max, and keeps the stored
+ * preference when the update omits one. A binding that cannot fit the ceiling
+ * is refused rather than paid for by dropping another session's record.
+ * @param harnessDir - the resolved `{HARNESS_DIR}`.
+ * @param sessionId - the durable `session.header.id`.
+ * @param cwd - the authoritative session cwd (must match any stored record).
+ * @param update - the preference (optional) and the exclusion floor.
+ * @returns written, or the degraded reason (never throws for I/O faults).
+ */
+export function updateWorkflowSessionBinding(
+  harnessDir: string,
+  sessionId: string,
+  cwd: string,
+  update: WorkflowSessionBindingUpdate,
+): WorkflowSessionBindingWrite {
+  if (harnessDir === '') return { kind: 'degraded', reason: 'no-harness-dir' }
+  if (sessionId === '') return { kind: 'degraded', reason: 'no-session-id' }
+  if (cwd === '') return { kind: 'degraded', reason: 'no-session-cwd' }
+  if (!Number.isInteger(update.excludedBeforeSeq) || update.excludedBeforeSeq < 0) {
+    return { kind: 'degraded', reason: 'invalid-excluded-before-seq' }
+  }
+  if (update.selectedWorkflowId !== undefined && update.selectedWorkflowId === '') {
+    return { kind: 'degraded', reason: 'invalid-selected-workflow-id' }
+  }
+  const file = engineStatusSnapshotPath(harnessDir)
+  const dir = dirname(file)
+  const tmp = `${file}.${process.pid}.${Math.random().toString(36).slice(2, 10)}.tmp`
+  try {
+    mkdirSync(dir, { recursive: true })
+    return withWorkflowDirLock(dir, () => {
+      const loaded = loadForWrite(harnessDir)
+      if (loaded.kind === 'refused') return { kind: 'degraded' as const, reason: loaded.reason }
+      const doc = loaded.doc
+      const existing: WorkflowSessionBinding | undefined = Object.hasOwn(doc.bindings, sessionId)
+        ? doc.bindings[sessionId]
+        : undefined
+      // The record is anchored to its workspace: a session id reused under a
+      // different cwd is not the record's owner (and the picker's read applies
+      // the same exact-match rule).
+      if (existing !== undefined && existing.cwd !== cwd) {
+        return { kind: 'degraded' as const, reason: 'cwd-mismatch' }
+      }
+      const selected = update.selectedWorkflowId ?? existing?.selectedWorkflowId
+      doc.bindings[sessionId] = {
+        cwd,
+        ...(selected === undefined ? {} : { selectedWorkflowId: selected }),
+        // The floor only advances: an older observation never walks the
+        // exclusion window back over rows already excluded.
+        excludedBeforeSeq: Math.max(existing?.excludedBeforeSeq ?? 0, update.excludedBeforeSeq),
+      }
+      const payload = serializeEnvelope(doc.entries, doc.bindings)
+      const maxBytes = update.maxBytes ?? ENGINE_STATUS_SNAPSHOT_MAX_BYTES
+      // Refused as a UNIT: shedding another session's snapshot bucket (or its
+      // pick) to make room for this one would trade a durable record for a
+      // newer one.
+      if (Buffer.byteLength(payload, 'utf8') > maxBytes) {
+        return { kind: 'degraded' as const, reason: 'store-over-byte-ceiling' }
+      }
+      writeFileSync(tmp, payload)
+      renameSync(tmp, file)
+      return { kind: 'written' as const }
+    }, { timeoutMs: ENGINE_STATUS_SNAPSHOT_LOCK_TIMEOUT_MS })
+  } catch (error) {
+    // Remove ONLY this call's temp file (writer-unique name, same rule as the
+    // emission write).
     try {
       rmSync(tmp, { force: true })
     } catch {
