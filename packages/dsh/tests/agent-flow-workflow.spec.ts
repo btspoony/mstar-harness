@@ -996,6 +996,49 @@ describe('workflow-ledger consumer — cold scan over session event snapshots ()
     }
   })
 
+  it('a cwd-less FORKED child still honors the lineage cut — its inherited prefix is never re-recorded', async () => {
+    // The explicit `{HARNESS_DIR}` (the resolver's config arm) means `consume`
+    // resolves a write target for a session with NO `header.cwd`, so the walk
+    // itself is the only bound on what the child may record. An early `0` in
+    // `scanStartSeq` (the old no-cwd branch) re-walked the inherited prefix and
+    // re-appended the parent's three rows under the child.
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-workflow-consumer-fork-nocwd-')
+    const ctx = new Context()
+    const sessions = new FakeSessionRegistry(ctx)
+    const prefix = [
+      { type: 'tool-workflow/run-start', data: runStart({ runId: 'run-parent' }) },
+      { type: 'tool-workflow/agent-start', data: agentStart({ runId: 'run-parent', childId: 'child-parent' }) },
+      { type: 'tool-workflow/run-end', data: runEnd({ runId: 'run-parent' }) },
+    ]
+    sessions.register(fakeSession(prefix, { id: 'parent-1', header: { cwd: root } }))
+    const priorSink = setWorkflowLedgerLogger(() => {})
+    try {
+      registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))
+      expect(readAgentFlow(workflowDir)!.events).toHaveLength(3)
+
+      // The fork's child carries NO workspace (`header.cwd` absent) — the
+      // dispatch still ran under the explicitly configured harness, so its own
+      // row must record, and only it.
+      const child = fakeSession([
+        ...prefix,
+        { type: 'tool-workflow/run-start', data: runStart({ runId: 'run-child' }) },
+      ], { id: 'child-1', header: {}, inheritedEventCount: prefix.length })
+      sessions.create(child)
+
+      const view = readAgentFlow(workflowDir)!
+      expect(view.events.map((e) => e.kind)).toEqual(['workflow-run', 'workflow-run-end', 'workflow-agent', 'workflow-run'])
+      expect(view.events.filter((e) => e.kind === 'workflow-run').map((e) => [e.runId, e.agent])).toEqual([
+        ['run-child', 'child-1'],
+        ['run-parent', 'parent-1'],
+      ])
+      expect(readFileSync(join(workflowDir, AGENT_FLOW_FILE), 'utf8').trim().split('\n')).toHaveLength(4)
+    } finally {
+      setWorkflowLedgerLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('fractional envelope seq is skipped WITHOUT corrupting the cursor — later integer envelopes still record (W-2)', async () => {
     const { root, harnessDir, workflowDir } = await tempHarness('dsh-workflow-consumer-fracseq-')
     const ctx = new Context()

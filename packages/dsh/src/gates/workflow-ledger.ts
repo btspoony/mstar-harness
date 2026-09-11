@@ -906,30 +906,27 @@ export function registerWorkflowLedger(ctx: Context, resolver: HarnessResolver, 
    * intentionally excluded by the operator's pick (floor) — the walk never
    * even reads them.
    *
-   * `0` whenever either of those facts is unknown (no workspace, an unreadable
-   * binding record, no directed active workflow dir): the per-row guards in
-   * `consume` then decide, and its binding warn stays the one report. `0` also
-   * for a cursor PAST the captured end — a rebuilt log must be re-walked, never
-   * skipped by a stale-high cursor (`consume`'s own rebuild guard resets it).
-   * A floor PAST the captured end is identity drift on the EXCLUSION record:
-   * report it and scan nothing, never reset the intentional exclusion.
-   *
    * The FORK cut ({@link sessionForkCutOf}) bounds the walk from below on
-   * every branch that can still record: a forked conversation copies its
-   * parent's log prefix into the child, and those envelopes are the PARENT's
-   * rows — a child walking from 0 re-appends them (attributed to the child)
-   * into the same workflow dir, duplicating one (runId, kind, envelope seq)
-   * the parent already recorded and inflating the run's member count. With
-   * the cut a child contributes only its OWN events; a cut at or past the
-   * captured end leaves no row to walk.
+   * EVERY branch — including the ones whose workflow dir is not known yet: a
+   * forked conversation copies its parent's log prefix into the child, and
+   * those envelopes are the PARENT's rows — a child walking from 0 re-appends
+   * them (attributed to the child) into the same workflow dir, duplicating one
+   * (runId, kind, envelope seq) the parent already recorded and inflating the
+   * run's member count. With the cut a child contributes only its OWN events;
+   * a cut at or past the captured end leaves no row to walk. The cut is a fact
+   * about this session ALONE (its own copy of the parent's log), so it holds
+   * even when the workspace is unknown — a cwd-less child still records via
+   * `consume` under an explicitly configured `{HARNESS_DIR}`, and returning `0`
+   * there would re-record exactly the prefix the cut exists to exclude.
    */
   const scanStartSeq = (session: unknown, sid: string, endSeq: number): number => {
+    const cut = sessionForkCutOf(session)
     const workspace = sessionCwdOf(session)
-    if (workspace === undefined) return 0
+    if (workspace === undefined) return cut
     const harnessDir = resolver.forWorkspace(workspace)
-    if (harnessDir === null) return 0
+    if (harnessDir === null) return cut
     const binding = readWorkflowSessionBinding(harnessDir, sid, workspace)
-    if (binding.kind === 'unavailable') return 0
+    if (binding.kind === 'unavailable') return cut
     const floor = binding.binding?.excludedBeforeSeq ?? 0
     if (floor > endSeq) {
       log('warn', `workflow-ledger session ${sid} exclusion floor ${floor} is past its log end ${endSeq} — identity/log-rebuild drift, scan skipped (the intentional exclusion record is preserved)`)
@@ -946,11 +943,11 @@ export function registerWorkflowLedger(ctx: Context, resolver: HarnessResolver, 
       ...(holder === undefined ? {} : { leaseHolder: holder }),
       ...(selected === undefined ? {} : { selectedWorkflowId: selected }),
     }
-    const cut = Math.max(floor, sessionForkCutOf(session))
+    const bounded = Math.max(floor, cut)
     const workflowDir = resolveAgentFlowWriteTarget(harnessDir, hint).dir
-    if (workflowDir === null) return cut
+    if (workflowDir === null) return bounded
     const cursor = loadWatermark(workflowDir).get(sid) ?? 0
-    return Math.max(cut, cursor > endSeq ? 0 : cursor)
+    return Math.max(bounded, cursor > endSeq ? 0 : cursor)
   }
 
   // One session's snapshot pass — the shared body of the cold scan AND the
@@ -973,8 +970,9 @@ export function registerWorkflowLedger(ctx: Context, resolver: HarnessResolver, 
     // captured end is identity drift on the exclusion record, and
     // `scanStartSeq` owns that report. A zero-length fast return placed
     // before this call would silently swallow it (the intentional exclusion
-    // must be reported, never reset). `startSeq <= endSeq` always holds, so
-    // the guard below is exactly "no row to walk".
+    // must be reported, never reset). A start AT OR PAST the captured end
+    // (an empty log, a fully-inherited fork, a cursor at the end) is exactly
+    // "no row to walk", which is what the guard below means.
     const startSeq = scanStartSeq(session, sid, endSeq)
     if (startSeq >= endSeq) return
     const eventAt = sessionEventAtOf(session)

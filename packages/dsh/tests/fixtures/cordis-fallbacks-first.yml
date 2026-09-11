@@ -1,4 +1,4 @@
-# Reversed-composition fixture (role-persona spec, case (t)): the SAME row set
+# Reversed-composition fixture (role-persona spec, case (v)): the SAME row set
 # the default inline boot composes, with ONE difference — the REAL
 # `dsh-llm-fallbacks` row mounts BEFORE the `@mstar-harness/dsh` row.
 #

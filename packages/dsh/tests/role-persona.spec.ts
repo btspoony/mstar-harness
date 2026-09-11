@@ -86,7 +86,7 @@ const ASSIGNMENT_PROMPT = [
 const PLAIN_PROMPT = 'Summarize the attached file.'
 
 /**
- * The REVERSED-composition row list (case (t)): the same rows the default
+ * The REVERSED-composition row list (case (v)): the same rows the default
  * boot composes, with the REAL `dsh-llm-fallbacks` row BEFORE the
  * `@mstar-harness/dsh` row. Both layers intercept the same `internal/get`
  * service read and each fills the native `persona` slot only when it is
@@ -482,7 +482,7 @@ describe('native persona channel — SubagentStartRequest.persona merge', () => 
   })
 
 
-  it('(s) Execute as fullstack-dev with no caller persona: mstar Config.rolePersonas wins over a distinct fallbacks row persona', async () => {
+  it('(u) Execute as fullstack-dev with no caller persona: mstar Config.rolePersonas wins over a distinct fallbacks row persona', async () => {
     const { app, provider } = await bootWithProvider('fake-spawn', { personaCapability: true }, { settingsService: 'fake' })
     await applyFallbacksRow(app, [{ id: EXECUTE_AS, persona: FALLBACKS_PERSONA }])
 
@@ -496,8 +496,8 @@ describe('native persona channel — SubagentStartRequest.persona merge', () => 
     }
   })
 
-  it('(t) reversed composition (the fallbacks row BEFORE the mstar row): the operator Config.rolePersonas persona still wins — the wrapper order never displaces it', async () => {
-    // (q)/(r)/(s) pin the DEFAULT profile order (mstar row first), where the
+  it('(v) reversed composition (the fallbacks row BEFORE the mstar row): the operator Config.rolePersonas persona still wins — the wrapper order never displaces it', async () => {
+    // (q)/(r)/(u) pin the DEFAULT profile order (mstar row first), where the
     // mstar wrapper is registered first and therefore runs first. This case
     // pins the RE-ORDERED composition: the real 0.5.2 row applies first — the
     // non-default profile order / a re-applied plugin row — so the fallbacks
