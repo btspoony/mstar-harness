@@ -6,6 +6,8 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+- Bump `@deepseek-ai/dsh-*` host peers to `^0.1.5-rc.2` and refresh the lock against the `0.1.5-rc.2` line (badge `0.1.5-rc.2`). Corridor `0.1.5-rc.1 → 0.1.5-rc.2` is cohort bump + web feedback/deliverables polish; no adapter-code changes; no `dsh-session-persistence-sqlite` / `dsh-client-runtime` pin.
+
 ## [3.8.0] - 2026-09-10
 
 ### Changed
