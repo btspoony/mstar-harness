@@ -844,7 +844,7 @@ describe('truncateLedgerField — code-point-safe truncation ', () => {
  * 2. taskIdOf — best-effort body Task N extraction
  * ========================================================================== */
 
-describe('taskIdOf — body `Task N` best-effort extraction (level-2 headings only, qc2 F-8)', () => {
+describe('taskIdOf — body `Task N` best-effort extraction (level-2 headings only)', () => {
   it('extracts the first LEVEL-2 numbered Task heading from the BODY, normalized to T<n>', () => {
     expect(taskIdOf(VALID_PLANNED)).toBe('T2')
     expect(taskIdOf(`## Assignment\n\n**Execute as**: fullstack-dev\n\n## Task 7\n\nwork`)).toBe('T7')

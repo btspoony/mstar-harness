@@ -915,7 +915,7 @@ describe('workflow-ledger consumer — cold scan over session event snapshots ()
     }
   })
 
-  it('a FORKED child does not re-record its parent-inherited tool-workflow prefix into the same workflow dir (qc3 F-001)', async () => {
+  it('a FORKED child does not re-record its parent-inherited tool-workflow prefix into the same workflow dir', async () => {
     const { root, harnessDir, workflowDir } = await tempHarness('dsh-workflow-consumer-fork-')
     const ctx = new Context()
     const sessions = new FakeSessionRegistry(ctx)

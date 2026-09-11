@@ -463,7 +463,7 @@ describe('native persona channel — SubagentStartRequest.persona merge', () => 
   })
 
 
-  it('(s) Execute as fullstack-dev with no caller persona: mstar Config.rolePersonas wins over a distinct fallbacks row persona (qc2 S-001)', async () => {
+  it('(s) Execute as fullstack-dev with no caller persona: mstar Config.rolePersonas wins over a distinct fallbacks row persona', async () => {
     const { app, provider } = await bootWithProvider('fake-spawn', { personaCapability: true }, { settingsService: 'fake' })
     await applyFallbacksRow(app, [{ id: EXECUTE_AS, persona: FALLBACKS_PERSONA }])
 
