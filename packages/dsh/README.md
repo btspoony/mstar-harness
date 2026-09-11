@@ -299,7 +299,7 @@ locale switch). The body renders **nothing** while `tab.visible === false`
 (collapsed column or a sibling pane tab active — no projection, no DOM), and
 the selected section lives in the entry's slot store keyed by the tab record,
 so it survives the docked body's unmount. Labels come from the `mstar-panel`
-locale namespace: **"MStar Workflow"** (en) / **"MStar 工作流"** (zh).
+locale namespace: **"Morning Star Workflow"** (en) / **"启明星工作流"** (zh).
 
 The panel is a pure render of the latest catalog snapshot (from the host's
 `/api/mstar/engineStatus` endpoint — refresh follows the fetch, no polling):
