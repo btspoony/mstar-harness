@@ -40,16 +40,15 @@
  * operator acts without reverse-engineering the host. Advisory-only: ZERO
  * harness writes (the mirror stays one-way; status.json remains SSOT).
  *
- * b (planMode bridge) — the module also SHARES three structural
- * helpers with `gates/plan-mode-bridge.ts` via explicit no-barrel imports:
- * {@link isRootLikeAgent}, {@link steeringCompass} and {@link rootAgentOf}
- * (the planMode bridge reuses the same root discriminator, the same
- * active-iteration compass scan, and the same `subagent/start` root walk).
+ * The root discriminator, the active-iteration compass scan and the
+ * `subagent/start` root walk live in `gates/steering.ts` (explicit no-barrel
+ * imports — the planMode bridge reads the SAME helpers from the same module,
+ * and neither bridge imports the other, so there is no cycle).
  */
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
-import { resolveIterationDir, resolveProjectDir, _DEFAULT_PROJECT, PROJECT_REGISTER_FILE } from '@mstar-harness/engine'
+import { resolveProjectDir, _DEFAULT_PROJECT, PROJECT_REGISTER_FILE } from '@mstar-harness/engine'
 import { asRecord } from './_shared.ts'
 import type { Config, HarnessResolver } from './_shared.ts'
 // The shared display-field bounds (`truncateLedgerField`) and control-char
@@ -59,6 +58,10 @@ import type { Config, HarnessResolver } from './_shared.ts'
 // reach the advisory line). Pure imports — neither module imports goal-bridge
 // (no cycle).
 import { truncateLedgerField } from './agent-flow.ts'
+// The shared root discriminator, the active-iteration compass scan and the
+// `subagent/start` root walk (explicit no-barrel import — `gates/steering.ts`
+// imports neither bridge, so there is no cycle).
+import { isRootLikeAgent, rootAgentOf, steeringCompass } from './steering.ts'
 import { normalizeWorkflowName } from './workflow-policy.ts'
 
 /** Logger label for the goal bridge (dsh logger naming: `<scope>/<subject>`). */
@@ -147,27 +150,6 @@ function projectRegisterPointer(harnessDir: string): string {
 
 /* ---------------------------------- structural views ---------------------------------- */
 
-/** The agent surface the bridge reads structurally (`session.header` — never trusts the runtime shape). */
-interface AgentView {
-  session?: {
-    header?: {
-      /** In-process subagent children stamp the parent session id at creation (`child-agent.ts:112`); forks carry it too (conservatively excluded). */
-      parentSession?: unknown
-    }
-  }
-}
-
-/**
- * Root-agent discriminator (T1-verified; shared with the planMode bridge via
- * explicit no-barrel import): `header.parentSession === undefined` ⇒
- * root-like. Conversation forks also carry `parentSession` (seed lineage) →
- * conservatively excluded from the goal mirror (accepted boundary).
- */
-export function isRootLikeAgent(agent: unknown): boolean {
-  const header = (agent as AgentView | null | undefined)?.session?.header
-  return header?.parentSession === undefined
-}
-
 /** CAS identity for one exact goal revision (upstream `GoalRef`). */
 export interface GoalRefView {
   readonly id: string
@@ -241,46 +223,6 @@ export function iterationGoalObjective(iterationId: string): string {
     `Run iteration ${iterationId} through the complete flow to its exit: ${FLOW_SEQUENCE}. ` +
     "Exit: the iteration's delivery PR is merged to the target branch and the merge-ready loop closes; the harness status.json stays the source of truth."
   )
-}
-
-/* ---------------------------------- steering compass ---------------------------------- */
-
-/**
- * Locate the steering iteration compass (mirror of the engine's
- * `resolveCompassEnforcement` scan + the catalog's `steeringCompassPath`):
- * the FIRST `{ITERATION_DIR}/<id>/delivery-compass.md` whose frontmatter
- * `status` is `active` or `locked` — the directory name IS the iteration id
- * (plan-conventions `{ITERATION_DIR}/<id>/`). Completed/status-less/archived
- * compasses do not steer. Silent on any read failure (advisory degrade).
- * Shared with the planMode bridge via explicit no-barrel import (the same "is an active iteration steering" read).
- * @param harnessDir - the resolved `{HARNESS_DIR}`.
- */
-export function steeringCompass(harnessDir: string): { iterationId: string } | undefined {
-  const iterationsDir = resolveIterationDir(harnessDir)
-  if (!existsSync(iterationsDir)) return undefined
-  let entries
-  try {
-    entries = readdirSync(iterationsDir, { withFileTypes: true })
-  } catch {
-    return undefined
-  }
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue
-    const compassPath = join(iterationsDir, entry.name, 'delivery-compass.md')
-    if (!existsSync(compassPath)) continue
-    let content: string
-    try {
-      content = readFileSync(compassPath, 'utf8')
-    } catch {
-      continue
-    }
-    // Frontmatter only: leading `---` fence through the closing fence; only
-    // steering compasses count (resolveCompassEnforcement parity).
-    const frontmatter = content.match(/^---\r?\n([\s\S]*?)\r?\n---/)
-    if (frontmatter === null || !/^status[ \t]*:[ \t]*(?:active|locked)[ \t]*$/m.test(frontmatter[1]!)) continue
-    return { iterationId: entry.name }
-  }
-  return undefined
 }
 
 /* ---------------------------------- the mirror ---------------------------------- */
@@ -469,37 +411,6 @@ function warnBlockedGoal(harnessDir: string, advisory: BlockedGoalAdvisory): voi
 }
 
 /* ---------------------------------- apply wiring ---------------------------------- */
-
-/**
- * Resolve the ROOT agent of a published child via the `parentSession` walk
- * (upstream `subagent/src/continuation.ts:819-831` precedent): in-process
- * subagent children stamp `header.parentSession` = the parent SESSION id,
- * which IS the parent agent id (a session per agent); the walk stops at the
- * first root-like ancestor. `undefined` when unresolvable (fork lineage,
- * non-in-process provider, registry gap, or a cycle) — the decision point
- * then silently skips. Cycle guard: a `seen` set over visited session ids
- * (the upstream `liveLineage` guard) breaks on ANY revisited id — a 1-hop self-loop, a 2+ hop cycle
- * (A→B→A), or a longer malformed lineage — instead of spinning forever on
- * the synchronous `subagent/start` decision-point listeners (reachable via
- * HMR remounts, resumed/forked sessions with stale headers, or a future
- * host change). Shared with the planMode bridge via explicit no-barrel
- * import (the same `subagent/start` decision-point root walk).
- */
-export function rootAgentOf(agent: unknown, agents: AgentsView): unknown | undefined {
-  let current: unknown = agent
-  const seen = new Set<string>()
-  for (;;) {
-    const header = (current as AgentView | null | undefined)?.session?.header
-    if (header === undefined) return undefined
-    if (header.parentSession === undefined) return current
-    if (typeof header.parentSession !== 'string') return undefined
-    if (seen.has(header.parentSession)) return undefined // revisited id — cycle, abandon
-    seen.add(header.parentSession)
-    const parent = agents.get(header.parentSession)
-    if (parent === undefined) return undefined // registry gap — abandon
-    current = parent
-  }
-}
 
 /**
  * Register the goal bridge: an `agent/session-start` listener (root filter

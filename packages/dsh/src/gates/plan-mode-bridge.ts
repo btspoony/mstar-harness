@@ -44,9 +44,9 @@ import { readJson, WORKFLOW_SNAPSHOT_FILE } from '@mstar-harness/engine'
 import { asRecord, STATUS_FILE } from './_shared.ts'
 import type { HarnessResolver } from './_shared.ts'
 // The shared root discriminator, the active-iteration compass scan and the
-// `subagent/start` root walk (explicit no-barrel imports — plan Task 4b;
-// goal-bridge.ts does not import this module, so there is no cycle).
-import { isRootLikeAgent, rootAgentOf, steeringCompass } from './goal-bridge.ts'
+// `subagent/start` root walk (explicit no-barrel imports — `gates/steering.ts`
+// imports no bridge, so there is no cycle).
+import { isRootLikeAgent, rootAgentOf, steeringCompass } from './steering.ts'
 // v3 relocation : the Todo probe
 // reads the SELECTED workflow snapshot's plan rows — the root v1 `plans[]`
 // home is gone. The bridge is a READ-only mirror, so the read resolver

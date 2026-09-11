@@ -17,14 +17,13 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import { HarnessResolver } from '../src/gates/_shared.ts'
 import {
   DEFAULT_MAX_GOAL_ROUNDS,
-  isRootLikeAgent,
   mirrorIterationGoal,
   registerGoalBridge,
-  rootAgentOf,
   setGoalBridgeLogger,
   type GoalRefView,
   type GoalView,
 } from '../src/gates/goal-bridge.ts'
+import { isRootLikeAgent } from '../src/gates/steering.ts'
 
 /** The complete-flow keyword sequence the goal objective MUST carry verbatim (mstar-host `/goal` rule). */
 const FLOW_SEQUENCE = 'iteration-start → per-plan cycles → iteration-close → PR delivery → merge-ready'
@@ -473,18 +472,6 @@ describe('goal bridge — apply wiring (agent/session-start + subagent/start dec
     } finally {
       await rm(root, { recursive: true, force: true })
     }
-  })
-
-  it('rootAgentOf: a 2+ hop parentSession CYCLE returns undefined (seen-set guard — upstream liveLineage precedent; qc2 W-2)', () => {
-    // A→B→A: no root reachable — the walk must break on the REVISITED id
-    // instead of spinning forever (the sync decision-point listeners hang
-    // otherwise). The current 1-cycle guard (parent === current) cannot see
-    // this — the guard needs a seen-set over session ids.
-    const agentA = { id: 'cycle-a', session: { header: { parentSession: 'cycle-b' } } }
-    const agentB = { id: 'cycle-b', session: { header: { parentSession: 'cycle-a' } } }
-    const registry = { get: (id: string) => (id === 'cycle-a' ? agentA : id === 'cycle-b' ? agentB : undefined) }
-    expect(rootAgentOf(agentA, registry)).toBeUndefined()
-    expect(rootAgentOf(agentB, registry)).toBeUndefined()
   })
 
   it('subagent/start decision point: a 2+ hop parentSession CYCLE in the live registry does not hang the listener (no goal mirrored)', async () => {
