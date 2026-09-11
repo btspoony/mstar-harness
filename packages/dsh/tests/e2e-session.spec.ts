@@ -414,10 +414,17 @@ describe('agent/pre-step — iteration-gate row + catalog watermark', () => {
     // Seeded BEFORE boot: the gate row is boot-cached. The v3
     // catalog aggregates the selected workflow lifecycle (root v2
     // `workflows[]` → the workflow snapshot).
+    //
+    // `compass_ref` is the selected lifecycle's ONLY compass link (D4): the
+    // iteration gate / direction come from the snapshot's own linked compass
+    // (`migrate.ts` producer shape: `iterations/<compass id>/delivery-compass.md`,
+    // frontmatter `iteration_id` === the snapshot id), never a directory-wide
+    // first-active compass scan.
     await seedHarness(harnessDir, {
       'status.json': v2Root([v2WorkflowEntry('e2e-iter', 'iteration')]),
       'workflows/e2e-iter/snapshot.json': v2Snapshot('e2e-iter', {
         type: 'iteration',
+        compass_ref: 'iterations/e2e-iter/delivery-compass.md',
         plans: [{ id: 'fixture-plan-1', title: 'Fixture plan', status: 'Todo', file: 'plans/fixture.md' }],
       }),
       'iterations/e2e-iter/delivery-compass.md': fixture('iteration/delivery-compass.md'),
