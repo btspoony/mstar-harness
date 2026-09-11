@@ -78,7 +78,8 @@
  * @module @mstar-harness/dsh/engine-status-store
  */
 
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import type { Stats } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { withWorkflowDirLock } from './gates/agent-flow.ts'
 
@@ -585,6 +586,10 @@ export function writeEngineStatusSnapshot(
       for (const kept of Object.values(pruned)) total += kept.length
       writeFileSync(tmp, payload)
       renameSync(tmp, file)
+      // This process replaced the store: drop the binding memo so the very next
+      // read re-parses instead of answering from the pre-write bytes (the stat
+      // guard would normally miss on the new inode — this makes it deterministic).
+      bindingStoreMemos.delete(file)
       // One warning per oversize store, never one per turn: the latch is
       // per-store and monotonic for this process — an already-warned store
       // never warns again, so an eviction loop cannot turn the containment
@@ -618,6 +623,100 @@ export function writeEngineStatusSnapshot(
 }
 
 /**
+ * One store file's CONTROL state, as far as the binding read needs it: the
+ * `bindings` map (or its absence), or why the file is not a store this build
+ * can answer from. Per-KEY record validation stays in the read path — this is
+ * only the expensive part (`readFileSync` + `JSON.parse` of every session's
+ * emission history).
+ */
+type BindingStoreSnapshot =
+  | { readonly kind: 'ok'; readonly bindings: Record<string, unknown> | undefined }
+  | { readonly kind: 'unavailable'; readonly reason: string }
+
+/** One memoized parse, keyed by the store file's identity (`ino` + `size` + `mtimeMs`). */
+interface BindingStoreMemo {
+  readonly ino: number
+  readonly size: number
+  readonly mtimeMs: number
+  readonly snapshot: BindingStoreSnapshot
+}
+
+/** Memoized parses kept per process: the store lives under `{HARNESS_DIR}`, one per workspace (repo + worktrees). */
+const BINDING_STORE_MEMO_CAP = 16
+const bindingStoreMemos = new Map<string, BindingStoreMemo>()
+
+/**
+ * The binding read's one full parse of a store file (the memoized body).
+ *
+ * The same shape checks as the write path's `loadForWrite`, narrowed to what
+ * the control map needs: an absent file, a torn one, an unknown envelope
+ * version or a non-object `bindings` map is an explicit answer, never a
+ * guessed empty record. A missing map is `ok` WITHOUT bindings ("no pick").
+ */
+function parseBindingStore(file: string): BindingStoreSnapshot {
+  let raw: string
+  try {
+    raw = readFileSync(file, 'utf8')
+  } catch {
+    return { kind: 'unavailable', reason: 'store-unreadable' }
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return { kind: 'unavailable', reason: 'store-invalid-json' }
+  }
+  if (!isPlainObject(parsed) || parsed.sv !== ENGINE_STATUS_SNAPSHOT_VERSION || !isPlainObject(parsed.entries)) {
+    return { kind: 'unavailable', reason: 'store-envelope-schema' }
+  }
+  const bindings = parsed.bindings
+  if (bindings === undefined) return { kind: 'ok', bindings: undefined }
+  if (!isPlainObject(bindings)) return { kind: 'unavailable', reason: 'store-bindings-schema' }
+  return { kind: 'ok', bindings }
+}
+
+/**
+ * Parse one store file's control map, memoized by the file's identity.
+ *
+ * The binding read sits on the plugin's hottest paths (every
+ * `tools/pre-execute`, every agent pre-step, every plan-mode sync) while the
+ * file changes only when a catalog emission or a picker commit is written —
+ * so an unchanged file answers from one `statSync` plus a Map lookup instead
+ * of a whole-file `readFileSync` + `JSON.parse`. The identity triple is the
+ * guard: this build's own writes replace the file (new inode + size + mtime)
+ * AND forget the entry outright, a content change moves `mtimeMs`, and a
+ * different file at the same path differs in `ino`/`size`.
+ *
+ * Cost of a miss: one stat + one parse. Cost of a hit: one stat. An absent
+ * file is never memoized — the failing stat IS the freshness check.
+ * @param file - the absolute store path (`engineStatusSnapshotPath`).
+ */
+function readBindingStoreSnapshot(file: string): BindingStoreSnapshot {
+  let stat: Stats
+  try {
+    stat = statSync(file)
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT'
+      ? { kind: 'ok', bindings: undefined }
+      : { kind: 'unavailable', reason: 'store-unreadable' }
+  }
+  const memo = bindingStoreMemos.get(file)
+  if (memo !== undefined && memo.ino === stat.ino && memo.size === stat.size && memo.mtimeMs === stat.mtimeMs) {
+    return memo.snapshot
+  }
+  const snapshot = parseBindingStore(file)
+  // Cap FIFO (the codebase's own convention — `watermarkCache`,
+  // `terminalStatusCache`): the oldest store is the least likely to be read
+  // next, and the cap bounds a long-lived process over many workspaces.
+  if (bindingStoreMemos.size >= BINDING_STORE_MEMO_CAP) {
+    const oldest = bindingStoreMemos.keys().next()
+    if (!oldest.done) bindingStoreMemos.delete(oldest.value)
+  }
+  bindingStoreMemos.set(file, { ino: stat.ino, size: stat.size, mtimeMs: stat.mtimeMs, snapshot })
+  return snapshot
+}
+
+/**
  * Read one session's durable workflow-selection binding.
  *
  * The answers are deliberately distinct: `{kind:'ok'}` WITHOUT a `binding`
@@ -627,6 +726,10 @@ export function writeEngineStatusSnapshot(
  * trusted (`store-unreadable`, `store-invalid-json`, `store-envelope-schema`,
  * `store-bindings-schema`, `cwd-mismatch`) — the caller must NOT treat that as
  * "no pick" and attribute the session anywhere.
+ *
+ * The file read + parse is memoized by the file's identity (see
+ * {@link readBindingStoreSnapshot}); only this session's key is re-checked per
+ * call, so the per-tool-call / per-step cost does not scale with the store.
  * @param harnessDir - the resolved `{HARNESS_DIR}`.
  * @param sessionId - the durable `session.header.id` (the picker key).
  * @param cwd - the authoritative session cwd (exact match against the record).
@@ -639,32 +742,13 @@ export function readWorkflowSessionBinding(
   if (harnessDir === '') return { kind: 'unavailable', reason: 'no-harness-dir' }
   if (sessionId === '') return { kind: 'unavailable', reason: 'no-session-id' }
   if (cwd === '') return { kind: 'unavailable', reason: 'no-session-cwd' }
-  let raw: string
-  try {
-    raw = readFileSync(engineStatusSnapshotPath(harnessDir), 'utf8')
-  } catch (error) {
-    // A store that does not exist yet is "no pick", not a failure — but any
-    // other read fault leaves the record unverifiable.
-    return (error as NodeJS.ErrnoException).code === 'ENOENT'
-      ? { kind: 'ok' }
-      : { kind: 'unavailable', reason: 'store-unreadable' }
-  }
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(raw)
-  } catch {
-    return { kind: 'unavailable', reason: 'store-invalid-json' }
-  }
-  if (!isPlainObject(parsed) || parsed.sv !== ENGINE_STATUS_SNAPSHOT_VERSION || !isPlainObject(parsed.entries)) {
-    return { kind: 'unavailable', reason: 'store-envelope-schema' }
-  }
-  const bindings = parsed.bindings
-  if (bindings === undefined) return { kind: 'ok' }
-  if (!isPlainObject(bindings)) return { kind: 'unavailable', reason: 'store-bindings-schema' }
+  const snapshot = readBindingStoreSnapshot(engineStatusSnapshotPath(harnessDir))
+  if (snapshot.kind === 'unavailable') return { kind: 'unavailable', reason: snapshot.reason }
+  const bindings = snapshot.bindings
   // OWN key only (same rule as the entry buckets): the session id is
   // caller-chosen, so an id naming an `Object.prototype` member must be an
   // ordinary key rather than an inherited member.
-  if (!Object.hasOwn(bindings, sessionId)) return { kind: 'ok' }
+  if (bindings === undefined || !Object.hasOwn(bindings, sessionId)) return { kind: 'ok' }
   const binding = asBinding(bindings[sessionId])
   if (binding === undefined) return { kind: 'unavailable', reason: 'store-bindings-schema' }
   if (binding.cwd !== cwd) return { kind: 'unavailable', reason: 'cwd-mismatch' }
@@ -738,6 +822,9 @@ export function updateWorkflowSessionBinding(
       }
       writeFileSync(tmp, payload)
       renameSync(tmp, file)
+      // Same rule as the emission write above: a pick committed by THIS process
+      // is visible to the next read, never served from the pre-pick memo.
+      bindingStoreMemos.delete(file)
       return { kind: 'written' as const }
     }, { timeoutMs: ENGINE_STATUS_SNAPSHOT_LOCK_TIMEOUT_MS })
   } catch (error) {

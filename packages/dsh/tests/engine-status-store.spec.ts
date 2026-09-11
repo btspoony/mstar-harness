@@ -15,7 +15,7 @@
  * a real checkout path.
  */
 import { afterEach, describe, expect, it } from 'bun:test'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -898,6 +898,45 @@ describe('engine-status snapshot store — workflow session bindings (D4 control
     })).toEqual({ kind: 'written' })
     expect(readEngineStatusSnapshot(harness, 'ses_a').kind).toBe('ok')
     expect(readWorkflowSessionBinding(harness, 'ses_b', '/proj')).toEqual({
+      kind: 'ok',
+      binding: { cwd: '/proj', selectedWorkflowId: 'wf-b', excludedBeforeSeq: 0 },
+    })
+  })
+
+  it('answers the hot path from the memoized parse while the store identity is unchanged, and re-reads on any change', () => {
+    const harness = freshHarnessDir()
+    const file = engineStatusSnapshotPath(harness)
+    mkdirSync(join(harness, 'snapshots'), { recursive: true })
+    const pickA = JSON.stringify({ sv: 1, entries: {}, bindings: { ses_a: { cwd: '/proj', selectedWorkflowId: 'wf-a', excludedBeforeSeq: 0 } } })
+    const pickB = JSON.stringify({ sv: 1, entries: {}, bindings: { ses_a: { cwd: '/proj', selectedWorkflowId: 'wf-b', excludedBeforeSeq: 0 } } })
+    // Same byte length, so the in-place rewrite below keeps the identity triple.
+    expect(pickB).toHaveLength(pickA.length)
+    writeFileSync(file, pickA)
+    // Pin the mtime to a whole second so the identity comparison is exact.
+    const pinned = new Date(Math.floor(statSync(file).mtimeMs / 1000) * 1000)
+    utimesSync(file, pinned, pinned)
+    const before = statSync(file)
+
+    expect(readWorkflowSessionBinding(harness, 'ses_a', '/proj')).toEqual({
+      kind: 'ok',
+      binding: { cwd: '/proj', selectedWorkflowId: 'wf-a', excludedBeforeSeq: 0 },
+    })
+
+    // THE hot-path contract: every tool call / pre-step / plan-mode sync reads
+    // the binding, and an unchanged file (same inode + size + mtime) is
+    // answered from the memo — the whole-file read + parse is not re-issued.
+    writeFileSync(file, pickB)
+    utimesSync(file, pinned, pinned)
+    const after = statSync(file)
+    expect([after.ino, after.size, after.mtimeMs]).toEqual([before.ino, before.size, before.mtimeMs])
+    expect(readWorkflowSessionBinding(harness, 'ses_a', '/proj')).toEqual({
+      kind: 'ok',
+      binding: { cwd: '/proj', selectedWorkflowId: 'wf-a', excludedBeforeSeq: 0 },
+    })
+
+    // Any identity change is picked up on the very next read.
+    utimesSync(file, new Date(pinned.getTime() + 2_000), new Date(pinned.getTime() + 2_000))
+    expect(readWorkflowSessionBinding(harness, 'ses_a', '/proj')).toEqual({
       kind: 'ok',
       binding: { cwd: '/proj', selectedWorkflowId: 'wf-b', excludedBeforeSeq: 0 },
     })

@@ -833,11 +833,13 @@ export function workflowGateInputOf(exec: ToolExecution): WorkflowGateInput | un
  * string `objective`) → pass-through + ONE warn (fail-open, documented —
  * never crash a compliant call; under `hard` too) and NO verdict row (no
  * policy verdict was produced). NEVER throws: every read is structural.
- * @param hintRead - the carrying session's hint (derived ONCE by the caller
- *   through the adapter), plus whether that session's durable binding could
- *   be read. P-b attributes the lease coverage of the BOUND lifecycle only;
- *   an unreadable binding store pauses the durable verdict row instead of
- *   attributing it to a lifecycle the session may not own.
+ * @param hintReadOf - derives the carrying session's hint (once — the caller's
+ *   memoized thunk) through the adapter, plus whether that session's durable
+ *   binding could be read. P-b attributes the lease coverage of the BOUND
+ *   lifecycle only; an unreadable binding store pauses the durable verdict row
+ *   instead of attributing it to a lifecycle the session may not own. Called
+ *   only after the tool-name/mode guards — the branch returns for every other
+ *   tool without paying for a hint it would not read.
  */
 function gateWorkflow(
   ctx: Context,
@@ -845,7 +847,7 @@ function gateWorkflow(
   config: Config,
   adapter: DshHostAdapter,
   exec: ToolExecution,
-  hintRead: SessionHintRead,
+  hintReadOf: () => SessionHintRead,
 ): PreToolDecision | undefined {
   const toolName = exec.name
   if (!(DEFAULT_WORKFLOW_TOOLS as readonly string[]).includes(toolName)) return undefined
@@ -865,7 +867,7 @@ function gateWorkflow(
   // agent's session workspace by `preExecuteListener`, and the hint scopes
   // the read to the lifecycle THIS session is bound to (an unbound session
   // has no rows to attribute: the one-warn degrade below).
-  const pb = writableFanOutUncovered(harnessDir, hintRead.hint)
+  const pb = writableFanOutUncovered(harnessDir, hintReadOf().hint)
   if (pb.unreadable) {
     // Fail-open + ONE warn ( Step 3 / Clarify — a broken status
     // read must not brick fan-out): P-b is degraded for this call only;
@@ -891,7 +893,9 @@ function gateWorkflow(
     // whichever lifecycle resolves would write one session's verdict into
     // another session's ledger. The policy decision itself already happened
     // (the caller's allow/ask/deny is unaffected).
-    if (harnessDir === null || hintRead.kind === 'unavailable') return
+    if (harnessDir === null) return
+    const hintRead = hintReadOf()
+    if (hintRead.kind === 'unavailable') return
     adapter.recordWorkflowVerdict({
       harnessDir,
       exec,
@@ -964,18 +968,24 @@ function gateDispatch(
 ): PreToolDecision | undefined {
   const toolName = exec.name
   // The carrying session's hint — derived ONCE per tool call through the
-  // adapter (the plugin's only owner of the durable binding store) and
-  // shared by the workflow branch, the dispatch branch's selection reads and
-  // the ledger record below. `dispatch.ts` therefore stays free of a runtime
+  // adapter (the plugin's only owner of the durable binding store) and shared
+  // by the workflow branch, the dispatch branch's selection reads and the
+  // ledger record below. `dispatch.ts` therefore stays free of a runtime
   // agent-flow / engine-status-store dependency (the adapter is the acyclic
   // junction).
-  const hintRead = adapter.sessionHintFor(exec.agent)
+  //
+  // LAZY on purpose: `tools/pre-execute` fires for EVERY tool call, and most
+  // calls are neither a workflow tool nor a dispatch tool — deriving eagerly
+  // would charge every one of them a binding-store read for a hint no branch
+  // reads. The thunk below memoizes the one derivation a gated call needs.
+  let derived: SessionHintRead | undefined
+  const hintReadOf = (): SessionHintRead => (derived ??= adapter.sessionHintFor(exec.agent))
   // WORKFLOW/RALPH BRANCH — BEFORE the subagent prompt branch: `workflow`/`ralph` carry no
   // `args.prompt`, so the prompt guard below would pass them through even
   // if the names were added to the dispatch-tool match list (W4 double
   // no-op). Keyed on the FIXED tool names — the workflow tools are gated
   // by their own branch, never by `DEFAULT_DISPATCH_TOOLS` addition.
-  const workflowDecision = gateWorkflow(ctx, harnessDir, config, adapter, exec, hintRead)
+  const workflowDecision = gateWorkflow(ctx, harnessDir, config, adapter, exec, hintReadOf)
   if (workflowDecision !== undefined) return workflowDecision
   if (!(config.dispatchTools ?? [...DEFAULT_DISPATCH_TOOLS]).includes(toolName)) return undefined
   const args = asRecord(exec.arguments)
@@ -994,7 +1004,7 @@ function gateDispatch(
   // : the adapter's record block and this gate decision share the
   // single resolution instead of each re-reading the compass.
   const hard = resolveDispatchHard(harnessDir, config, prompt)
-  const result = adapter.dispatchGate(prompt, exec, hard, hintRead)
+  const result = adapter.dispatchGate(prompt, exec, hard, hintReadOf())
   const verdict = applyEnforcement(result, { hard })
   if (verdict.hardBlocked) {
     ctx.logger(DISPATCH_LOGGER).error(

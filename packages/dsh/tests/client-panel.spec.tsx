@@ -114,8 +114,12 @@ import type { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import { clientExports } from './client-bundles.ts'
 import { Context } from '@deepseek-ai/cordis'
-import type { MstarEngineStatusPayload } from '../src/types'
-import { MstarEngineStatusClient } from '../src/client/panel/engine-status-client'
+import type { MstarEngineStatusPayload, WorkflowSelectionView } from '../src/types'
+import {
+  MstarEngineStatusClient,
+  SELECT_WORKFLOW_ENDPOINT,
+  type MstarEngineStatusConnection,
+} from '../src/client/panel/engine-status-client'
 import {
   anchorRow,
   bindUseSessions,
@@ -1067,6 +1071,155 @@ describe('workflow panel — T2 narrow-column shell: three zones / single scroll
     expect(html).not.toContain('data-mstar-canvas')
     expect(html).not.toContain('data-graph-canvas')
     expect(html).not.toContain('data-graph-nodes-draggable')
+  })
+})
+
+describe('workflow panel — D4 picker DOM (unbound multi-active → pick)', () => {
+  /** The unbound multi-active selection the picker exists for (the plan's AC-2 operator path). */
+  const UNBOUND = {
+    kind: 'error' as const,
+    code: 'workflow.selection.unbound-multi-active',
+    message: '2 active lifecycles in status.json workflows[] — pick one for this session',
+    activeWorkflowIds: ['wf-a', 'wf-b'],
+  }
+
+  /** A pick answer that never arrives — the in-flight case. */
+  const neverAnswers = (): Promise<unknown> => Promise.withResolvers<unknown>().promise
+
+  /** The full fixture with the given selection as its last emission. */
+  const selectionSource = (selection: WorkflowSelectionView): MstarEngineStatusPayload => ({
+    ...fullSource,
+    state: { ...fullSource.state!, selection },
+  })
+
+  /** One panel render pass over a live client (the picker seat needs the real store). */
+  function renderClient(locale: LocaleRuntime, store: { getSnapshot(): ChatSnapshot }, client: MstarEngineStatusClient): string {
+    return renderToStaticMarkup(createElement(PanelView, {
+      ...kitProps({ useChat: bindUseChat(store) }),
+      engineStatus: client,
+      t: locale.bind(NS),
+    } as never))
+  }
+
+  /**
+   * One unbound picker fixture on the REAL client path: the gateway serves
+   * `emission()` for `engineStatus` and `selectAnswer()` for the pick call. The
+   * picker seat (`select`) is live because the fixture carries a session + cwd.
+   */
+  async function pickerPass(options: {
+    selectAnswer: () => Promise<unknown>
+    emission?: () => MstarEngineStatusPayload
+    lang?: 'en' | 'zh'
+  }): Promise<{ html: string; client: MstarEngineStatusClient; rerender: () => string }> {
+    const emissionOf = options.emission ?? ((): MstarEngineStatusPayload => selectionSource(UNBOUND))
+    const locale = panelLocale(options.lang ?? 'en')
+    const store = createSnapshotStore(snapshotFor(emissionOf(), ANCHOR_TIME))
+    const connection = {
+      rpc: {
+        call(_channel: string, endpoint: string): Promise<unknown> {
+          if (endpoint === SELECT_WORKFLOW_ENDPOINT) return options.selectAnswer()
+          return Promise.resolve(servedSnapshot(emissionOf()))
+        },
+      },
+    } as unknown as MstarEngineStatusConnection
+    // No refresh timer and no request deadline: the spec drives the store directly.
+    const client = new MstarEngineStatusClient(connection, { refreshIntervalMs: 0, timeoutMs: 0 })
+    const rerender = (): string => renderClient(locale, store, client)
+    return { html: await settleRender(rerender), client, rerender }
+  }
+
+  it('renders the unbound picker: the copy, the code and one committable row per active id', async () => {
+    const { html } = await pickerPass({ selectAnswer: neverAnswers })
+
+    expect(html).toContain('data-mstar-picker')
+    expect(html).toContain('data-picker-code="workflow.selection.unbound-multi-active"')
+    expect(html).toContain('data-picker-copy')
+    expect(html).toContain('Multiple active workflows — pick one for this session.')
+    // One row per candidate, all committable (no pending / failed state yet).
+    expect(html).toContain('data-picker-option="wf-a">')
+    expect(html).toContain('data-picker-option="wf-b">')
+    expect(html).toContain('Select wf-a')
+    expect(html).toContain('Select wf-b')
+    expect(html).not.toContain('data-picker-pending')
+    expect(html).not.toContain('data-picker-failed')
+    // The error arm still names WHY the session is unbound.
+    expect(html).toContain('data-selection-kind="error"')
+    expect(html).toContain('data-selection-code="workflow.selection.unbound-multi-active"')
+  })
+
+  it('localizes the picker copy and the row labels (zh)', async () => {
+    const { html } = await pickerPass({ selectAnswer: neverAnswers, lang: 'zh' })
+
+    expect(html).toContain('存在多个活动工作流——请为本会话选择一个。')
+    expect(html).toContain('选择 wf-b')
+    expect(html).not.toContain('Multiple active workflows')
+    expect(html).not.toContain('Select wf-a')
+  })
+
+  it('keeps the rows disabled with the pending note while the pick is in flight', async () => {
+    const { client, rerender } = await pickerPass({ selectAnswer: neverAnswers })
+
+    // The commit is fire-and-forget on the panel path; the store flips to
+    // `pending` synchronously, so the next render shows the in-flight state.
+    void client.selectWorkflow(SESSION_ID, SESSION_CWD, 'wf-a')
+    const html = rerender()
+
+    expect(html).toContain('data-picker-pending')
+    expect(html).toContain('Committing your pick…')
+    expect(html).toContain('data-picker-option="wf-a" disabled=""')
+    expect(html).toContain('data-picker-option="wf-b" disabled=""')
+    expect(html).not.toContain('data-picker-failed')
+  })
+
+  it('shows the host reason when the pick is refused, and never a fabricated selection', async () => {
+    const { client, rerender } = await pickerPass({
+      selectAnswer: () => Promise.resolve(gatewayOk({ status: 'unavailable', reason: 'session-not-live' })),
+    })
+
+    await client.selectWorkflow(SESSION_ID, SESSION_CWD, 'wf-a')
+    const html = rerender()
+
+    expect(html).toContain('data-picker-failed')
+    expect(html).toContain('data-picker-reason="session-not-live"')
+    expect(html).toContain('Pick failed: session-not-live')
+    // The refused pick asserts no workflow: the error arm stays, no active id
+    // is invented, and the rows stay committable for a retry.
+    expect(html).toContain('data-selection-kind="error"')
+    expect(html).not.toContain('data-selection-kind="active"')
+    expect(html).toContain('data-picker-option="wf-a">')
+  })
+
+  it('renders the acknowledged pick immediately and retires the picker', async () => {
+    // The session's emitted snapshot only catches up on the NEXT real emission;
+    // the acknowledgement itself must already read as the bound workflow.
+    let emission = selectionSource(UNBOUND)
+    const { client, rerender } = await pickerPass({
+      selectAnswer: () => {
+        emission = selectionSource({ kind: 'active', workflowId: 'wf-b', dir: 'workflows/wf-b' })
+        return Promise.resolve(gatewayOk({ status: 'selected', sessionId: SESSION_ID, workflowId: 'wf-b' }))
+      },
+      emission: () => emission,
+    })
+
+    await client.selectWorkflow(SESSION_ID, SESSION_CWD, 'wf-b')
+    const html = await settleRender(rerender)
+
+    expect(html).toContain('data-selection-kind="active"')
+    expect(html).toContain('data-selection-workflow="wf-b"')
+    expect(html).not.toContain('data-mstar-picker')
+    expect(html).not.toContain('data-picker-pending')
+  })
+
+  it('renders no picker for a selection error without candidates, nor for a bound selection', async () => {
+    const noCandidates = await pickerPass({
+      selectAnswer: neverAnswers,
+      emission: () => selectionSource({ kind: 'error', code: 'workflow.selection.no-active', message: 'no active lifecycle is registered' }),
+    })
+    expect(noCandidates.html).not.toContain('data-mstar-picker')
+    expect(noCandidates.html).toContain('data-selection-code="workflow.selection.no-active"')
+
+    const active = await panelHtml(fullSource)
+    expect(active).not.toContain('data-mstar-picker')
   })
 })
 

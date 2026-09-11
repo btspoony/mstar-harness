@@ -1414,6 +1414,62 @@ describe('workflow-ledger consumer — D4 session binding + exclusion floor', ()
       await rm(root, { recursive: true, force: true })
     }
   })
+
+  it('coalesces a multi-row unbound scan into ONE floor value — the maximum row seq + 1', async () => {
+    const { root, harnessDir, dirs } = await tempMultiHarness('dsh-ledger-floor-coalesce-')
+    const ctx = new Context()
+    const sessions = new FakeSessionRegistry(ctx)
+    sessions.register(fakeSession([
+      { type: 'tool-workflow/run-start', data: runStart({ runId: 'run-1' }) },
+      { type: 'tool-workflow/run-start', data: runStart({ runId: 'run-2' }) },
+      { type: 'tool-workflow/run-start', data: runStart({ runId: 'run-3' }) },
+    ], { id: 'sess-unbound', header: { cwd: root } }))
+    const priorSink = setWorkflowLedgerLogger(() => {})
+    try {
+      registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))
+
+      // The scan still converges on the row-max floor (nothing is lost by the
+      // per-scan batching) and writes NO workflow dir.
+      expect(readWorkflowSessionBinding(harnessDir, 'sess-unbound', root)).toEqual({
+        kind: 'ok',
+        binding: { cwd: root, excludedBeforeSeq: 3 },
+      })
+      expect(readAgentFlow(dirs['wf-a'])!.events).toEqual([])
+      expect(readAgentFlow(dirs['wf-b'])!.events).toEqual([])
+    } finally {
+      setWorkflowLedgerLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('reaches the durable floor with ONE store write per scan, not one per row', async () => {
+    const { root, harnessDir } = await tempMultiHarness('dsh-ledger-floor-one-write-')
+    const ctx = new Context()
+    const sessions = new FakeSessionRegistry(ctx)
+    sessions.register(fakeSession([
+      { type: 'tool-workflow/run-start', data: runStart({ runId: 'run-1' }) },
+      { type: 'tool-workflow/run-start', data: runStart({ runId: 'run-2' }) },
+      { type: 'tool-workflow/run-start', data: runStart({ runId: 'run-3' }) },
+    ], { id: 'sess-unbound', header: { cwd: root } }))
+    // Hold the snapshot-dir lock: every floor write degrades, and the module's
+    // warn IS the write — one warn ⇒ one lock/read-modify-write for the scan
+    // (a per-row writer would report three).
+    const lockDir = join(harnessDir, 'snapshots', WORKFLOW_LEDGER_LOCKDIR)
+    await mkdir(lockDir, { recursive: true })
+    const captured: string[] = []
+    const priorSink = setWorkflowLedgerLogger((_level, message) => { captured.push(message) })
+    try {
+      registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))
+
+      expect(captured.filter((m) => m.includes('exclusion floor not persisted'))).toHaveLength(1)
+    } finally {
+      setWorkflowLedgerLogger(priorSink)
+      await rm(lockDir, { recursive: true, force: true })
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
 })
 
 /* ===========================================================================

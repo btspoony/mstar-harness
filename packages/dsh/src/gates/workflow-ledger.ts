@@ -633,6 +633,44 @@ export function registerWorkflowLedger(ctx: Context, resolver: HarnessResolver, 
     // depth-warn latch (reset per apply).
   const depthWarned = new Set<string>()
 
+  // The exclusion floor is a per-SCAN durable fact, not a per-row one. A cold
+  // scan / created-backfill walks EVERY row of a session log, and an unbound
+  // row would otherwise reload and rewrite the whole snapshot store under its
+  // lock — N rows costing N lock/read-modify-write cycles at plugin boot on
+  // the common unbound path. Rows queue `seq + 1` here and ONE write per
+  // session per scan persists the maximum; that is the same value the per-row
+  // writes converged to (the store merges by max), at one lock cycle.
+  const pendingFloors = new Map<string, { harnessDir: string; sessionId: string; cwd: string; floor: number }>()
+  let scanDepth = 0
+
+  /** Write one session's exclusion floor (the max a scan queued for it). */
+  const persistExclusionFloor = (harnessDir: string, sessionId: string, cwd: string, floor: number): void => {
+    const written = updateWorkflowSessionBinding(harnessDir, sessionId, cwd, { excludedBeforeSeq: floor })
+    if (written.kind === 'degraded') {
+      log('warn', `workflow-ledger exclusion floor not persisted for session ${sessionId} (${written.reason}) — attribution stays paused, the row is re-evaluated at the next scan`)
+    }
+  }
+
+  /** Flush the scan's queued floors: at most one write per session. */
+  const flushExclusionFloors = (): void => {
+    for (const pending of pendingFloors.values()) {
+      persistExclusionFloor(pending.harnessDir, pending.sessionId, pending.cwd, pending.floor)
+    }
+    pendingFloors.clear()
+  }
+
+  /** One unbound observation: queue it while a scan is running, else persist it (the live firehose sees one row per event). */
+  const observeExclusionFloor = (harnessDir: string, sessionId: string, cwd: string, floor: number): void => {
+    if (scanDepth === 0) {
+      persistExclusionFloor(harnessDir, sessionId, cwd, floor)
+      return
+    }
+    const key = `${harnessDir}\u0000${sessionId}`
+    const pending = pendingFloors.get(key)
+    if (pending === undefined) pendingFloors.set(key, { harnessDir, sessionId, cwd, floor })
+    else if (floor > pending.floor) pending.floor = floor
+  }
+
   const consume = (session: unknown, envelope: unknown): void => {
     const sid = sessionIdOf(session)
     if (sid === undefined) return
@@ -681,17 +719,15 @@ export function registerWorkflowLedger(ctx: Context, resolver: HarnessResolver, 
       // Unbound multi-active — the operator has not picked yet. Nothing is
       // written into ANY workflow dir, but the observation must not be
       // backfilled once the pick lands, so the row's next seq becomes this
-      // session's durable exclusion floor. A failed floor write keeps the
-      // row eligible (attribution stays paused — never acknowledged
-      // persistence that did not happen). Other skip reasons (no active
-      // lifecycle, a broken root) are not an operator exclusion and leave the
-      // floor alone.
+      // session's durable exclusion floor (queued to the end of the scan so a
+      // multi-row log costs ONE store write, not one per row). A failed floor
+      // write keeps the row eligible (attribution stays paused — never
+      // acknowledged persistence that did not happen). Other skip reasons (no
+      // active lifecycle, a broken root) are not an operator exclusion and
+      // leave the floor alone.
       const unbound = target.selection.kind === 'error' && target.selection.code === 'workflow.selection.unbound-multi-active'
       if (unbound && workspace !== undefined && row.seq + 1 > floor) {
-        const written = updateWorkflowSessionBinding(harnessDir, sid, workspace, { excludedBeforeSeq: row.seq + 1 })
-        if (written.kind === 'degraded') {
-          log('warn', `workflow-ledger exclusion floor not persisted for session ${sid} (${written.reason}) — attribution stays paused, the row is re-evaluated at the next scan`)
-        }
+        observeExclusionFloor(harnessDir, sid, workspace, row.seq + 1)
       }
       return
     }
@@ -766,13 +802,22 @@ export function registerWorkflowLedger(ctx: Context, resolver: HarnessResolver, 
   // One session's snapshot pass — the shared body of the cold scan AND the
   // `session/created` backfill (a session created after apply with a seeded
   // log is scanned exactly once here; the durable watermark keeps it
-  // idempotent across registrations).
+  // idempotent across registrations). The scan depth brackets the pass so the
+  // queued exclusion floors flush ONCE, after the last row (see
+  // `pendingFloors`); the `finally` keeps the counter honest even if a row
+  // read throws.
   const scanSession = (session: unknown): void => {
     const sid = sessionIdOf(session)
     if (sid === undefined) return
     const events = (session as SessionView).events
     if (!Array.isArray(events)) return
-    for (const envelope of events) consume(session, envelope)
+    scanDepth += 1
+    try {
+      for (const envelope of events) consume(session, envelope)
+    } finally {
+      scanDepth -= 1
+      if (scanDepth === 0) flushExclusionFloors()
+    }
   }
 
   // SESSION-CREATED BACKFILL — registered BEFORE the cold scan :

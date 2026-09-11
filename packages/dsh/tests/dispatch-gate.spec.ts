@@ -18,12 +18,17 @@
  * codes per case (acceptance: parity with the opencode validated field set).
  */
 import { describe, expect, it, afterEach } from 'bun:test'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { Context } from '@deepseek-ai/cordis'
 import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 import { assignmentHeaderRegion } from '@mstar-harness/engine'
 import { bootApp, seedHarness, v2Root, v2SnapshotWithPlans, v2WorkflowEntry, type BootResult } from './harness.ts'
 import { updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
 import type { DispatchGateAdvisory } from '../src/index.ts'
-import { planIdOf } from '../src/gates/dispatch.ts'
+import { planIdOf, preExecuteListener } from '../src/gates/dispatch.ts'
+import { DshHostAdapter } from '../src/gates/adapter.ts'
+import { HarnessResolver, type Config } from '../src/gates/_shared.ts'
 
 let booted: BootResult | undefined
 
@@ -829,5 +834,37 @@ describe('dispatch gate — D4 session-bound lease attribution (explicit selecti
     expect(lastCodes).not.toContain('lease.dispatch.holder-mismatch')
     expect(lastCodes).not.toContain('lease.dispatch.plan-not-found')
     expect(lastCodes).not.toContain('lease.dispatch.unverifiable')
+  })
+})
+
+describe('dispatch gate — the carrying-session hint is derived ONLY where the gate reads it (D4 hot path)', () => {
+  it('a tool the gate reads no hint for never touches the binding store', async () => {
+    const app = booted = await bootApp()
+    // An unreadable store: every derivation of the session hint reports the
+    // degrade through the adapter's own sink, so the warn count IS the
+    // derivation count.
+    const snapshots = join(app.harnessDir, 'snapshots')
+    mkdirSync(snapshots, { recursive: true })
+    writeFileSync(join(snapshots, 'engine-status.json'), '{ "sv": 1, "entries": ')
+    const warns: string[] = []
+    const config: Config = {}
+    const resolver = new HarnessResolver(app.harnessDir)
+    const adapter = new DshHostAdapter(new Context(), {
+      resolver,
+      config,
+      log: (level, message) => { if (level === 'warn') warns.push(message) },
+    })
+    const agent = sessionAgent('sess-x', app.root)
+
+    // Not a gated tool: pure pass-through — `tools/pre-execute` fires for every
+    // call, so this path must not pay the durable-binding read at all.
+    expect(await preExecuteListener(app.ctx, resolver, config, adapter, toolExec('bash', { command: 'ls' }, agent), defaultAllow))
+      .toEqual({ kind: 'allow' })
+    expect(warns).toEqual([])
+
+    // A dispatch-shaped call DOES carry the hint — derived once, reported once.
+    await preExecuteListener(app.ctx, resolver, config, adapter, subagentExec(VALID_WRITABLE, agent), defaultAllow)
+    expect(warns).toHaveLength(1)
+    expect(warns[0]).toContain('store-invalid-json')
   })
 })
