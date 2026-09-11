@@ -94,6 +94,8 @@ Host mapping → **`mstar-host`** references (`model` / Task field).
     - **Honest non-convergence**: open findings at wave close → list them in detail and state the disposition — re-feed to the next fix round **or** transfer to residual tracking — never silently close.
 4. QA gate → **`mstar-harness-core`** Done rules; PM **`mstar-roles/references/project-manager/qa-trigger-matrix.md`**
 
+> **On dsh:** the plan QC tri MAY run through the native **`workflow`** tool instead of three `subagent` dispatches — take the `script` + `meta` (`meta.name: mstar-qc-tri`) from skill **`mstar-host`** → `references/dsh-workflow-scripts.md` (§ `mstar-qc-tri`); the three seats stay read-only and PM persists `{SDD_DIR}/review/qc1.md`…`qc3.md` from their returned envelopes. Per-task implementers stay **serial `subagent`** — the `workflow` channel is read-only fan-out only; when the tool is unmounted (`ptc` preset) dispatch the three seats as background `subagent` calls (skill **`mstar-host`** → `references/dsh.md`).
+
 ## Progress ledger（Evidence）
 
 At start: `cat {SDD_DIR}/progress.md`. Tasks marked complete are DONE — do not re-dispatch after compaction.
