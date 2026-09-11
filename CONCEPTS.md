@@ -27,18 +27,13 @@ The durable home for cross-lifecycle debt and direction: open residuals (with se
 ### Closure-verification plan
 A plan whose residual's fix may already have landed — grep the current checkout (CLI surface, docs, skill callouts) before planning a re-implementation; if the work is done, re-scope to verification-only: smoke the real artifact, confirm no stale import-only callouts, fill the changeset gap if missing, close the residual in place. Prevents re-implementing a command that already exists.
 
-## Agent canvas (dsh panel)
+## Agent list (dsh panel)
 
 ### Emphasis
-The time-dimension opacity tier of an agent card in the agent canvas: `current` (the iteration's current phase's expected roles — full chrome strength), `next` (later-phase roles — mid transparency), `off` (already-passed or stage-less on-demand/general roles — low transparency), `null` (no active iteration — no override). Orthogonal to the spatial `bucket` and `zone` dimensions.
+The time-dimension opacity tier of an agent card in the agents grouped list: `current` (the iteration's current phase's expected roles — full chrome strength), `next` (later-phase roles — mid transparency), `off` (already-passed or stage-less on-demand/general roles — low transparency), `null` (no active iteration — no override). Orthogonal to the spatial `bucket` and `zone` dimensions.
 
 Emphasis fades card chrome only, by alpha-mixing toward the layer background — never whole-card `opacity`; the status point and the running ring/glow stay full-opacity (highest-priority rule). A settled entity shows the green done frame + ✓ only when `emphasis ≠ 'off'` — the completed state never appears on an off-tier role.
 
-### Standoff
-The arrow-tip retreat point of a canvas edge: the path ends 10px outside the target port, along the local tangent, so the arrowhead tip lands outside the card border instead of embedding into it (part of the H1 rule below).
-
-### Line rules (H1/H2)
-The user-finalized hard rules for every retained canvas line: **H1** — the arrow axis must align with the line's local tangent at the anchor (`orient="auto"`); **H2** — a line's render area (stroke + arrowhead) must never intersect any text bbox. Conflicts are resolved by rerouting anchors/ports — standoff retreat → side-gap routing → tangent alignment → inter-column empty bands — never by letting the line cross text.
 
 ### SDD sub-bucket
-The implementor / reviewer partition of the `sdd-implement` canvas column — a layout dimension **orthogonal to expectedness**: the implementor sub-bucket also holds the on-demand ops-engineer / prompt-engineer roles, which stay outside the expected-role union (their event-log unexpected badge is unchanged). The supervise line (implementor ↔ reviewer) is the mstar-sdd mutual-supervision contract. Related: Review seat layers (L1–L4).
+The implementor / reviewer partition of the `sdd-implement` stage group in the agents grouped list (`data-sub-bucket`) — a layout dimension **orthogonal to expectedness**: the implementor sub-bucket also holds the on-demand ops-engineer / prompt-engineer roles, which stay outside the expected-role union (their event-log unexpected badge is unchanged). Related: Review seat layers (L1–L4).
