@@ -1,56 +1,33 @@
 /**
- * Goal bridge : one-way mirror
- * of the active iteration objective into the dsh goal service, with a finite
- * `maxGoalRounds` cap — an operator driving autonomous Phase 2 sees ONE
- * session goal that means "run the complete iteration flow to merge-ready",
- * and the autonomous loop is bounded.
+ * Goal bridge: the observe-only blocked-goal advisory.
  *
- * The goals service is consumed STRUCTURALLY over `ctx.get('goals')` (no new
- * peer dependency — the persona channel's structural-cast precedent; the service
- * is agent-scoped: every method takes `(agent, …)`). The bridge resolves the
- * per-workspace `{HARNESS_DIR}` via the shared resolver, scans for the
- * steering iteration compass (`status: active|locked` — resolveCompassEnforcement
- * parity), and mirrors: `get`-first (create throws `GOAL_ALREADY_EXISTS` on
- * a live non-complete goal) → `create` when absent → on objective drift,
- * REPLACE with a fresh goal for the NEW iteration (a completed goal is
- * replaced by `create` directly; a live goal is `complete`d by
- * `{ id, revision }` first, then `create`d — the new goal starts at
- * revision 1 / phase active / ZERO round debt, so cross-iteration round
- * budgets never accumulate and the cap is always passed on create), with a
- * single stale re-read retry (a second stale failure is warned and
- * abandoned — goal-service-side concurrency is rare). The goal text is the
- * COMPLETE iteration flow
- * (mstar-host `/goal` rule): iteration id + the full
- * `iteration-start → per-plan cycles → iteration-close → PR delivery →
- * merge-ready` sequence + the exit definition — never a sub-stage.
- *
- * One-way mirror: the bridge only reads harness state and writes the goal;
- * `{HARNESS_DIR}` / `status.json` stay SSOT. The goals service absent →
- * boot unaffected + ONE debug log (optional-unit degrade); every listener
- * and interaction is try/catch-contained.
- *
- * — blocked sync advisory: a `session/event` firehose listener
- * (workflow-ledger consumer precedent) structurally filters the durable
+ * mstar NEVER writes dsh goal state — no `create`, no `edit`, no `complete`,
+ * no `pause`, no `resume` — so the plugin can never re-arm a goal an operator
+ * paused. The bridge is ONE `session/event` firehose listener
+ * (workflow-ledger consumer precedent) that structurally filters the durable
  * `goal/change` events (upstream `GoalChangeMeta`), gates on
- * `version === 1` (unknown versions → silent skip), and when the goal is
- * blocked (`operation: 'block'` OR `goal.phase === 'blocked'`) logs ONE
- * `mstar/goal-bridge` warn — the `blockedReason.code`, a bounded objective
- * summary, and the project-register residual pointer
- * (`projects/<id>/residuals.json` — the v3 residual home) — so the
- * operator acts without reverse-engineering the host. Advisory-only: ZERO
- * harness writes (the mirror stays one-way; status.json remains SSOT).
+ * `version === 1` (unknown versions → silent skip, forward-compat
+ * defensive), and when the goal is blocked (`operation: 'block'` OR
+ * `goal.phase === 'blocked'`) logs ONE `mstar/goal-bridge` warn — the
+ * `blockedReason.code`, a bounded objective summary, and the
+ * project-register residual pointer (`projects/<id>/residuals.json` — the v3
+ * residual home) — so the operator acts without reverse-engineering the
+ * host. A LATER mutation while the goal is still blocked (e.g. an `edit`)
+ * re-surfaces the same blocked state and warns again: one warn per
+ * qualifying envelope, not one per goal lifetime.
  *
- * The root discriminator, the active-iteration compass scan and the
- * `subagent/start` root walk live in `gates/steering.ts` (explicit no-barrel
- * imports — the planMode bridge reads the SAME helpers from the same module,
- * and neither bridge imports the other, so there is no cycle).
+ * Observe-only: the listener reads the envelope and the goal-owning
+ * session's workspace attribution and writes nothing at all — no goal state,
+ * no harness state (`{HARNESS_DIR}` / status.json stay SSOT). Every listener
+ * body is try/catch-contained: a throwing seam degrades to ONE log line and
+ * never breaks a session.
  */
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { resolveProjectDir, _DEFAULT_PROJECT, PROJECT_REGISTER_FILE } from '@mstar-harness/engine'
 import { asRecord } from './_shared.ts'
-import type { Config, HarnessResolver } from './_shared.ts'
+import type { HarnessResolver } from './_shared.ts'
 // The shared display-field bounds (`truncateLedgerField`) and control-char
 // strip (`normalizeWorkflowName`) — the same sanitization the workflow-ledger
 // consumer applies to its warn/ledger display fields (the goal objective and
@@ -58,28 +35,10 @@ import type { Config, HarnessResolver } from './_shared.ts'
 // reach the advisory line). Pure imports — neither module imports goal-bridge
 // (no cycle).
 import { truncateLedgerField } from './agent-flow.ts'
-// The shared root discriminator, the active-iteration compass scan and the
-// `subagent/start` root walk (explicit no-barrel import — `gates/steering.ts`
-// imports neither bridge, so there is no cycle).
-import { isRootLikeAgent, rootAgentOf, steeringCompass } from './steering.ts'
 import { normalizeWorkflowName } from './workflow-policy.ts'
 
 /** Logger label for the goal bridge (dsh logger naming: `<scope>/<subject>`). */
 export const GOAL_BRIDGE_LOGGER = 'mstar/goal-bridge'
-
-/**
- * Flat `maxGoalRounds` config fallback (architect decision — plan
- *  ): 256, aligned with the GoalService default
- * (`goal/src/index.ts:187`) and ralph `maxRounds` (`tool-ralph/src/index.ts:37`).
- */
-export const DEFAULT_MAX_GOAL_ROUNDS = 256
-
-/**
- * The complete-flow keyword sequence the goal objective MUST carry verbatim
- * (mstar-host `/goal` rule — advancing an iteration means the ENTIRE flow,
- * never a sub-stage).
- */
-const FLOW_SEQUENCE = 'iteration-start → per-plan cycles → iteration-close → PR delivery → merge-ready'
 
 /** The session-event type of one durable goal mutation (upstream `GoalChangeMeta`; `domain.ts:61-68`). */
 const GOAL_CHANGE_EVENT_TYPE = 'goal/change'
@@ -90,7 +49,7 @@ const GOAL_ADVISORY_OBJECTIVE_CAP = 512
 /** Cap for the block-reason message inside the blocked advisory (bounded display field). */
 const GOAL_ADVISORY_MESSAGE_CAP = 512
 /**
- * Cap for the `blockedReason.code` inside the blocked advisory : upstream validates lower-kebab only, NEVER length — a
+ * Cap for the `blockedReason.code` inside the blocked advisory: upstream validates lower-kebab only, NEVER length — a
  * model-driven or hostile code must not produce an unbounded log line.
  */
 const GOAL_ADVISORY_CODE_CAP = 128
@@ -150,203 +109,9 @@ function projectRegisterPointer(harnessDir: string): string {
 
 /* ---------------------------------- structural views ---------------------------------- */
 
-/** CAS identity for one exact goal revision (upstream `GoalRef`). */
-export interface GoalRefView {
-  readonly id: string
-  readonly revision: number
-}
-
-/** The one goal surface the bridge reads (`GoalSnapshot` fields used by the mirror). */
-export interface GoalView extends GoalRefView {
-  readonly objective: string
-  readonly phase: string
-  readonly maxGoalRounds: number
-}
-
-/**
- * Minimal structural view of the goals service the bridge consumes
- * (`@deepseek-ai/dsh-goal` `GoalService` — every method is agent-scoped;
- * the runtime read is `ctx.get('goals')` without the inject requirement,
- * same pattern as the probe's service view). `create` throws
- * `GOAL_ALREADY_EXISTS` on a live non-complete goal and REPLACES a
- * completed one ("A completed goal may be replaced" — `goal/src/
- * index.ts:244-257`); `complete` is a CAS by `{ id, revision }`
- * (`GOAL_STALE_REVISION` on stale). The drift path uses complete+create
- * (never `edit`) so each new iteration gets a FRESH goal with a clean
- * round budget. */
-export interface GoalsServiceView {
-  get(agent: unknown): GoalView | undefined
-  create(agent: unknown, request: { objective: string; maxGoalRounds?: number }): unknown
-  complete(agent: unknown, ref: GoalRefView): unknown
-}
-
-/** The `agents` service surface the `subagent/start` root walk reads. */
-interface AgentsView {
-  get(id: string): unknown
-}
-
 /** Structural view of the session the `session/event` firehose carries (`header.cwd` — the workspace attribution read). */
 interface SessionView {
   header?: { cwd?: unknown }
-}
-
-/** Structural view of one durable goal-change payload (upstream `GoalSnapshotChangeMeta`; `domain.ts:24-32`). */
-interface GoalChangeDataView {
-  version?: unknown
-  operation?: unknown
-  goal?: GoalSnapshotDataView
-}
-
-/** Structural view of one goal snapshot (upstream `GoalSnapshot`; `types.ts:59-68`). */
-interface GoalSnapshotDataView {
-  phase?: unknown
-  objective?: unknown
-  blockedReason?: BlockedReasonDataView
-}
-
-/** Structural view of the block reason (upstream `GoalBlockReason`; `types.ts:51-56` — code lower-kebab, non-empty message). */
-interface BlockedReasonDataView {
-  code?: unknown
-  message?: unknown
-}
-
-/* ---------------------------------- objective text ---------------------------------- */
-
-/**
- * The mirrored goal objective: the COMPLETE iteration flow with the exit
- * definition (mstar-host `/goal` rule — advancing an iteration means the
- * entire flow, never a sub-stage). Session-level text only — `status.json`
- * stays the harness SSOT.
- */
-export function iterationGoalObjective(iterationId: string): string {
-  return (
-    `Run iteration ${iterationId} through the complete flow to its exit: ${FLOW_SEQUENCE}. ` +
-    "Exit: the iteration's delivery PR is merged to the target branch and the merge-ready loop closes; the harness status.json stays the source of truth."
-  )
-}
-
-/* ---------------------------------- the mirror ---------------------------------- */
-
-/** The stable machine-routable code a stale CAS complete throws (`GoalError.code`). */
-const GOAL_STALE_REVISION = 'GOAL_STALE_REVISION'
-
-/** Narrow an arbitrary thrown value to its stable `code` field, when it has one. */
-function goalErrorCode(error: unknown): string | undefined {
-  if (typeof error !== 'object' || error === null) return undefined
-  if (!('code' in error)) return undefined
-  const code = error.code
-  return typeof code === 'string' ? code : undefined
-}
-
-/**
- * Resolve the mirror's round cap from the flat config : absent → the module default; present but NOT a
- * positive safe integer (upstream `resolveMaxGoalRounds` throws
- * `GOAL_INVALID_MAX_ROUNDS` — a 0/negative/NaN value would make every
- * create fail and silently disable the mirror) → ONE loud warn at
- * registration + fall back to the default, so a misconfiguration degrades
- * visibly instead of failing every decision point at runtime.
- */
-function resolveGoalRounds(configValue: number | undefined): number {
-  if (configValue === undefined) return DEFAULT_MAX_GOAL_ROUNDS
-  if (!Number.isSafeInteger(configValue) || configValue < 1) {
-    log('warn', `invalid maxGoalRounds config ${String(configValue)} (must be a positive safe integer) — falling back to the default ${DEFAULT_MAX_GOAL_ROUNDS}`)
-    return DEFAULT_MAX_GOAL_ROUNDS
-  }
-  return configValue
-}
-
-/** Inputs of the mirror: the structural goals view, the per-workspace resolver, and the resolved round cap. */
-export interface MirrorIterationGoalInput {
-  resolver: HarnessResolver
-  /** The structural goals view (`ctx.get('goals')`); absent → the mirror is inert. */
-  goals?: GoalsServiceView
-  /** The resolved `maxGoalRounds` (flat config key, absent → {@link DEFAULT_MAX_GOAL_ROUNDS}). */
-  maxGoalRounds: number
-}
-
-/**
- * Replace the current goal with a FRESH goal for the NEW steering iteration
- * (objective drift): a
- * completed goal is replaced by `create` directly (upstream "A completed
- * goal may be replaced" — `goal/src/index.ts:244-257` — fresh revision 1,
- * phase active, ZERO roundsStarted); a LIVE goal (active/paused/blocked)
- * must be completed FIRST (`create` throws `GOAL_ALREADY_EXISTS` on a
- * non-complete phase), so the new iteration gets a clean round budget
- * instead of inheriting the old goal's spent rounds. The cap is ALWAYS
- * passed on create. Throws on CAS staleness (`GOAL_STALE_REVISION` — the
- * caller retries once with a fresh ref); the mirror never forces the goal.
- */
-function replaceDriftedGoal(
-  goals: GoalsServiceView,
-  agent: unknown,
-  current: GoalView,
-  objective: string,
-  maxGoalRounds: number,
-): void {
-  if (current.phase === 'complete') {
-    goals.create(agent, { objective, maxGoalRounds })
-    return
-  }
-  goals.complete(agent, { id: current.id, revision: current.revision })
-  goals.create(agent, { objective, maxGoalRounds })
-}
-
-/**
- * Mirror the steering iteration objective into the goal of ONE agent.
- * Root-like agent (`header.parentSession === undefined`) + active iteration
- * (compass `status: active|locked`): `get` → absent → `create` (get-先行 —
- * no `GOAL_ALREADY_EXISTS`); present with drifted objective → REPLACE with
- * a fresh goal for the new iteration (see {@link replaceDriftedGoal} — a
- * completed goal is `create`d directly, a live goal is `complete`d first;
- * the new goal starts with a CLEAN round budget); present with the matching
- * objective → no-op (idempotent decision-point re-evaluation). ONE stale
- * re-read retry; a second stale failure is warned and abandoned —
- * goal-service-side concurrency is rare.
- *
- * @returns `true` when the mirror is ensured for this agent (created,
- * replaced, or already in place); `false` when not applicable or a
- * contained failure occurred. Never throws — the caller's listener stays
- * contained.
- */
-export function mirrorIterationGoal(agent: unknown, input: MirrorIterationGoalInput): boolean {
-  const { resolver, goals, maxGoalRounds } = input
-  if (goals === undefined) return false
-  if (!isRootLikeAgent(agent)) return false
-  const harnessDir = resolver.forAgent(agent)
-  if (harnessDir === null) return false
-  const compass = steeringCompass(harnessDir)
-  if (compass === undefined) return false
-  const objective = iterationGoalObjective(compass.iterationId)
-  try {
-    const current = goals.get(agent)
-    if (current === undefined) {
-      goals.create(agent, { objective, maxGoalRounds })
-      return true
-    }
-    if (current.objective === objective) return true
-    try {
-      replaceDriftedGoal(goals, agent, current, objective, maxGoalRounds)
-      return true
-    } catch (error) {
-      if (goalErrorCode(error) !== GOAL_STALE_REVISION) throw error
-      // Concurrent mutation between get and the drift rebuild (rare):
-      // re-read ONCE and retry with the fresh ref. A goal that another
-      // writer already synced is left alone; a second stale failure is
-      // warned and abandoned — the mirror never forces the goal.
-      const fresh = goals.get(agent)
-      if (fresh === undefined) {
-        goals.create(agent, { objective, maxGoalRounds })
-        return true
-      }
-      if (fresh.objective === objective) return true
-      replaceDriftedGoal(goals, agent, fresh, objective, maxGoalRounds)
-      return true
-    }
-  } catch (error) {
-    const code = goalErrorCode(error)
-    log('warn', `goal mirror failed (contained — the session/decision point proceeds)${code !== undefined ? ` [${code}]` : ''}: ${errorMessage(error)}`)
-    return false
-  }
 }
 
 /* ---------------------------------- blocked sync advisory ---------------------------------- */
@@ -396,12 +161,12 @@ function blockedAdvisoryOf(envelope: unknown): BlockedGoalAdvisory | undefined {
 /**
  * Log ONE blocked-advisory warn: the stable `blockedReason.code`, the
  * sanitized (ASCII control chars stripped) + bounded reason message, a
- * bounded objective summary, and the `{HARNESS_DIR}/status.json` residual
- * pointer (the project register `projects/<id>/residuals.json` —
- * mstar-artifacts SSOT; entries keyed by plan id) — the operator
- * acts without reverse-engineering the host. Advisory-only: ZERO harness
- * writes (the one-way mirror; status.json stays SSOT). Never throws (the
- * sink is a no-op before bind; `log` itself is a plain call).
+ * bounded objective summary, and the project register pointer
+ * (`projects/<id>/residuals.json` — mstar-artifacts SSOT; entries keyed by
+ * plan id) — the operator acts without reverse-engineering the host.
+ * Advisory-only: ZERO harness writes (status.json stays SSOT) and ZERO goal
+ * writes. Never throws (the sink is a no-op before bind; `log` itself is a
+ * plain call).
  */
 function warnBlockedGoal(harnessDir: string, advisory: BlockedGoalAdvisory): void {
   const code = truncateLedgerField(advisory.code, GOAL_ADVISORY_CODE_CAP)
@@ -413,79 +178,19 @@ function warnBlockedGoal(harnessDir: string, advisory: BlockedGoalAdvisory): voi
 /* ---------------------------------- apply wiring ---------------------------------- */
 
 /**
- * Register the goal bridge: an `agent/session-start` listener (root filter
- * inside the mirror — root and children alike fire, `runtime-types.ts:217`)
- * plus a decision-point re-evaluation on `subagent/start` (the existing
- * decision point — index.ts advisory slot), resolving the delegating ROOT
- * via the `parentSession` walk — the two mirror edges are idempotent (get +
- * compare when the mirror is in place — no churn) — plus a THIRD, advisory
- * listener on the `session/event` firehose : a `goal/change`
- * envelope whose goal is blocked logs ONE warn (code + objective summary +
- * project-register residual pointer) with ZERO harness writes
- * (the one-way mirror; see {@link warnBlockedGoal}). The goals service is an
- * OPTIONAL seam (`ctx.get('goals')` structural read): absent → ONE debug log
- * + the mirror stays inert, never a boot failure — the blocked advisory is
- * independent of it (it only needs the firehose + resolver). Every listener
- * body is try/catch-contained.
+ * Register the goal bridge: ONE `session/event` firehose listener
+ * (workflow-ledger consumer precedent) that structurally filters the durable
+ * `goal/change` envelopes and logs the blocked advisory (see
+ * {@link warnBlockedGoal}). It resolves no service — the envelope carries
+ * the facts, and the workspace attribution comes from the goal-owning
+ * session's `header.cwd`; an unresolvable harness → silent skip. Observe-only:
+ * no goal mutation of any kind (`create` / `edit` / `complete` / `pause` /
+ * `resume`), and the goal-owning agent is never read.
  *
  * @param ctx - the plugin's registrant context (the app composition root).
  * @param resolver - the shared per-workspace `{HARNESS_DIR}` resolver.
- * @param config - validated plugin configuration (flat `maxGoalRounds`,
- *   absent → {@link DEFAULT_MAX_GOAL_ROUNDS}; a non-positive / non-integer
- *   value warns once and falls back to the default — see
- *   {@link resolveGoalRounds}).
  */
-export function registerGoalBridge(ctx: Context, resolver: HarnessResolver, config: Config): void {
-  const goals = ctx.get('goals') as GoalsServiceView | undefined
-  if (goals === undefined) {
-    log('debug', 'goals service absent — goal bridge disabled (composition without @deepseek-ai/dsh-goal)')
-  }
-  // Validated at the read site :
-  // an invalid flat cap warns ONCE here and falls back to the default, so a
-  // misconfiguration never silently disables the mirror at every decision
-  // point (upstream create would throw GOAL_INVALID_MAX_ROUNDS).
-  const maxGoalRounds = resolveGoalRounds(config.maxGoalRounds)
-  const mirror = (agent: unknown): void => {
-    try {
-      mirrorIterationGoal(agent, { resolver, goals, maxGoalRounds })
-    } catch (error) {
-      log('warn', `goal bridge mirror failed (contained — the session/decision point proceeds): ${errorMessage(error)}`)
-    }
-  }
-  // Primary edge: `agent/session-start` fires per agent, root and children
-  // alike — the root filter lives inside the mirror. Registered on the
-  // untyped `ctx.events.on` (same registration path as the mixined
-  // `ctx.on`, the `subagent/start` precedent): the event is declared by
-  // `@deepseek-ai/dsh-agent`, which this plugin does not type-depend on —
-  // the payload is consumed structurally.
-  ctx.events.on('agent/session-start', (payload: { agent?: unknown }) => {
-    if (payload.agent !== undefined) mirror(payload.agent)
-  })
-  // Decision-point re-evaluation (idempotent — no churn when the mirror is
-  // in place): autonomous Phase 2 drives by dispatching subagents, so each
-  // `subagent/start` re-checks the root's goal against the CURRENT steering
-  // compass (a mid-session iteration flip rebuilds the goal — complete then
-  // create — so the new iteration starts with a clean round budget).
-  ctx.events.on('subagent/start', (info: { id?: unknown }) => {
-    const agents = ctx.get('agents') as AgentsView | undefined
-    if (agents === undefined || typeof info.id !== 'string') return
-    const child = agents.get(info.id)
-    if (child === undefined) return
-    const root = rootAgentOf(child, agents)
-    if (root !== undefined) mirror(root)
-  })
-  // — blocked sync advisory (plan Global Constraints: one-way mirror;
-  // `blocked.code` → warn with the project-register residual pointer, zero writes):
-  // a `session/event` firehose listener (workflow-ledger consumer precedent)
-  // structurally filters the durable `goal/change` envelopes (upstream
-  // `GoalChangeMeta`), gates on `version === 1` (unknown versions → silent
-  // skip, forward-compat defensive), and when the goal is blocked
-  // (`operation: 'block'` OR `goal.phase === 'blocked'`) logs ONE warn —
-  // `blockedReason.code` + a bounded objective summary + the
-  // `{HARNESS_DIR}/projects/<id>/residuals.json` residual pointer — and writes NOTHING.
-  // Workspace attribution from the goal-owning session's `header.cwd`
-  // (workflow-ledger precedent); unresolvable harness → silent skip. Every
-  // envelope is try/catch-contained.
+export function registerGoalBridge(ctx: Context, resolver: HarnessResolver): void {
   ctx.events.on('session/event', (session: unknown, envelope: unknown) => {
     try {
       const advisory = blockedAdvisoryOf(envelope)

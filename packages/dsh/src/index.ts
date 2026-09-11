@@ -643,20 +643,20 @@ export function apply(ctx: Context, config: Config): void {
   })
   registerWorkflowLedger(ctx, resolver, adapter.workflowAskCache)
 
-  // Goal bridge : one-way mirror
-  // of the active iteration objective into the dsh goal service with a
-  // finite `maxGoalRounds` cap (autonomous Phase 2 bounded) — the module
-  // sink is bound to the dsh logger (agent-flow ledger precedent) and the
-  // registration is optional-unit: the goals service is a structural
-  // `ctx.get('goals')` read (no peer dependency), absent → one debug log +
-  // boot unaffected. The bridge never writes harness state (`{HARNESS_DIR}`
-  // / status.json stay SSOT — one-way mirror, mstar-host `/goal` rule).
+  // Goal bridge : observe-only blocked-goal advisory — ONE
+  // `session/event` firehose listener (a `goal/change` envelope whose goal is
+  // blocked logs ONE warn with the block code, a bounded objective summary and
+  // the project-register residual pointer). The module sink is bound to the
+  // dsh logger (agent-flow ledger precedent). mstar NEVER writes dsh goal
+  // state — no `create` / `edit` / `complete` / `pause` / `resume` — so the
+  // plugin can never re-arm a goal an operator paused; the bridge writes
+  // nothing at all (`{HARNESS_DIR}` / status.json stay SSOT).
   setGoalBridgeLogger((level, message) => {
     const logger = ctx.logger(GOAL_BRIDGE_LOGGER)
     if (level === 'debug') logger.debug(message)
     else logger.warn(message)
   })
-  registerGoalBridge(ctx, resolver, config)
+  registerGoalBridge(ctx, resolver)
 
   // PlanMode bridge :
   // the Prepare-phase flag flip — a one-way mirror of the harness Prepare

@@ -1,7 +1,8 @@
 /**
  * Steering helpers : the structural lineage and
- * steering-compass reads the gate bridges consume via explicit no-barrel
- * imports (no barrel — neither bridge imports the other, so there is no cycle):
+ * steering-compass reads the planMode bridge consumes via an explicit
+ * no-barrel import (no barrel — no bridge imports another, so there is no
+ * cycle):
  *
  * - {@link isRootLikeAgent} — the root discriminator (`session.header.
  *   parentSession === undefined` ⇒ root-like; in-process subagent children
@@ -43,7 +44,7 @@ interface AgentsView {
 /* ---------------------------------- root lineage ---------------------------------- */
 
 /**
- * Root-agent discriminator (the root filter both bridges decide on):
+ * Root-agent discriminator (the root filter the planMode bridge decides on):
  * `header.parentSession === undefined` ⇒ root-like. Conversation forks also
  * carry `parentSession` (seed lineage) → conservatively excluded (accepted
  * boundary).
