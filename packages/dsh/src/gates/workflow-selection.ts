@@ -32,6 +32,7 @@ import {
   readJson,
   resolveWorkflowDir,
   validateExecutionLease,
+  validateWorkflowEntry,
   WORKFLOW_SNAPSHOT_FILE,
   WORKFLOW_TERMINAL_STATUSES,
 } from '@mstar-harness/engine'
@@ -131,7 +132,7 @@ function terminalStatusOf(snapshotPath: string): { terminal: boolean; mtimeMs: n
   return verdict
 }
 
-/** One validated `workflows[]` registry row (the only fields the resolver uses). */
+/** One `engine`-validated `workflows[]` registry row (the only fields the resolver uses). */
 interface ActiveEntry {
   readonly id: string
   readonly dir: string
@@ -210,12 +211,17 @@ function validLeases(snapshot: Record<string, unknown>): Record<string, unknown>
   return leases
 }
 
-/** One active registry entry's snapshot (unreadable/absent → undefined — no automatic evidence). */
+/**
+ * One active registry entry's snapshot (`undefined` — no automatic evidence —
+ * when it is absent, unreadable, or not a JSON object: `readJson` casts
+ * arbitrary JSON, so a `null`/array/primitive document is rejected here rather
+ * than dereferenced as a record).
+ */
 function readSnapshot(harnessDir: string, entry: ActiveEntry): Record<string, unknown> | undefined {
   const snapshotPath = join(harnessDir, entry.dir, WORKFLOW_SNAPSHOT_FILE)
   if (!existsSync(snapshotPath)) return undefined
   try {
-    return readJson(snapshotPath)
+    return asRecord(readJson(snapshotPath))
   } catch {
     return undefined
   }
@@ -230,8 +236,12 @@ function soleEntry(matches: Map<string, ActiveEntry>): ActiveEntry | undefined {
  * The two automatic rungs (lease → cwd), each requiring EXACTLY ONE distinct
  * workflow: `undefined` means the rung did not decide (zero or several
  * matches, an omitted hint field, or no automatic evidence) and the caller
- * proceeds to explicit/unique. Each entry's snapshot is read at most once
- * per call, and only when a hint field could actually use it.
+ * proceeds to explicit/unique. The two candidate sets are collected
+ * independently in ONE pass: an entry that matched the lease rung is still
+ * evaluated for the cwd rung, so an ambiguous lease rung (two holders, or a
+ * holder plus a lease-worktree match) can still be decided by a unique
+ * `control_worktree_path`. Each entry's snapshot is read at most once per
+ * call, and only when a hint field could actually use it.
  */
 function automaticBinding(
   harnessDir: string,
@@ -255,14 +265,14 @@ function automaticBinding(
     const snapshot = snapshotOf(entry)
     if (snapshot === undefined) continue
     const leases = validLeases(snapshot)
-    if (holder !== undefined && leases.some((lease) => lease.holder === holder)) {
+    if (
+      (holder !== undefined && leases.some((lease) => lease.holder === holder)) ||
+      (cwd !== undefined && leases.some((lease) => within(String(lease.worktree_path), cwd)))
+    ) {
       leaseMatches.set(entry.id, entry)
-      continue
     }
-    if (cwd !== undefined && leases.some((lease) => within(String(lease.worktree_path), cwd))) {
-      leaseMatches.set(entry.id, entry)
-      continue
-    }
+    // Rung 2 is collected independently: a lease match never removes the
+    // entry from the cwd candidate set.
     const controlWorktree = snapshot.control_worktree_path
     if (cwd !== undefined && typeof controlWorktree === 'string' && within(controlWorktree, cwd)) {
       cwdMatches.set(entry.id, entry)
@@ -283,8 +293,11 @@ function automaticBinding(
  * writer / ledger may use: no bound entry → a clear error, never a terminal
  * snapshot, never the root v1 file, and never the registry's first entry.
  *
- * EVERY registry entry is validated before N or the candidates are exposed
- * (a missing id/dir is an error, not a smaller active set); only a real
+ * EVERY registry entry is validated before N or the candidates are exposed:
+ * the engine `validateWorkflowEntry` contract (`id`/`type`/`started_at` and a
+ * harness-relative `dir` with no absolute path or `..` segment) plus
+ * duplicate-id rejection. A bad row is an error, not a smaller active set —
+ * and never a path the resolver would read outside the harness. Only a real
  * empty array is `workflow.selection.no-active`. Active-set definition:
  * membership in `workflows[]` — the engine lifecycle enum's non-terminal
  * states are `running` AND `paused`, so a PAUSED lifecycle stays in the
@@ -333,18 +346,32 @@ export function resolveActiveWorkflow(harnessDir: string, hint?: SessionHint): A
     }
   }
   const entries: ActiveEntry[] = []
+  const seen = new Set<string>()
   for (const raw of registry) {
-    const entry = asRecord(raw)
-    const id = typeof entry?.id === 'string' && entry.id !== '' ? entry.id : undefined
-    const dir = typeof entry?.dir === 'string' && entry.dir !== '' ? entry.dir : undefined
-    if (id === undefined || dir === undefined) {
+    // Engine contract for one `workflows[]` row: `id`/`type`/`started_at`,
+    // and a harness-relative `dir` with no absolute path or `..` segment
+    // (so `readSnapshot` can never be pointed outside the harness). Every
+    // entry is validated before N or the candidates are exposed.
+    const gate = validateWorkflowEntry(raw)
+    if (!gate.ok) {
       return {
         kind: 'error',
         code: 'workflow.selection.invalid-entry',
-        message: `workflows[] entry is missing id/dir: ${JSON.stringify(raw)}`,
+        message: `workflows[] entry fails the v2 workflow-entry contract: ${gate.violations
+          .map((violation) => violation.message)
+          .join('; ')}`,
       }
     }
-    entries.push({ id, dir })
+    const entry = raw as { id: string; dir: string }
+    if (seen.has(entry.id)) {
+      return {
+        kind: 'error',
+        code: 'workflow.selection.invalid-registry',
+        message: `duplicate workflow id in status.json workflows[]: ${entry.id} — the registry must be keyed by unique active lifecycles`,
+      }
+    }
+    seen.add(entry.id)
+    entries.push({ id: entry.id, dir: entry.dir })
   }
   if (hint !== undefined) {
     const automatic = automaticBinding(harnessDir, entries, hint)

@@ -343,6 +343,46 @@ describe('workflow selection — binding order: cwd', () => {
       resolveActiveWorkflow(harnessDir, { cwd: join(control, 'src'), selectedWorkflowId: 'wf-a' }),
     ).toEqual({ kind: 'active', workflowId: 'wf-b', dir: 'workflows/wf-b' })
   })
+
+  it('collects the cwd rung independently after an ambiguous lease rung', async () => {
+    const root = await freshRoot('ambiguous-lease-then-cwd')
+    const harnessDir = join(root, 'harness')
+    const control = join(root, 'repo')
+    const elsewhere = join(root, 'elsewhere')
+    await mkdir(join(control, 'src'), { recursive: true })
+    await mkdir(elsewhere, { recursive: true })
+    await seedHarness(harnessDir, {
+      'status.json': v2Root([v2WorkflowEntry('wf-a'), v2WorkflowEntry('wf-b')]),
+      // Both entries match the SAME holder → rung 1 is ambiguous. Only wf-a's
+      // control checkout contains the cwd, so wf-a must still win at rung 2.
+      'workflows/wf-a/snapshot.json': v2Snapshot('wf-a', {
+        plans: [planRow(lease({ holder: 'agent-7' }))],
+        control_worktree_path: control,
+      }),
+      'workflows/wf-b/snapshot.json': v2Snapshot('wf-b', {
+        plans: [planRow(lease({ holder: 'agent-7', worktree_path: elsewhere }))],
+        control_worktree_path: elsewhere,
+      }),
+    })
+    expect(resolveActiveWorkflow(harnessDir, { leaseHolder: 'agent-7', cwd: join(control, 'src') })).toEqual({
+      kind: 'active',
+      workflowId: 'wf-a',
+      dir: 'workflows/wf-a',
+    })
+    // A mixed ambiguity (holder match on wf-a, lease worktree_path match on
+    // wf-b) is the same case: the lease rung decides nothing, rung 2 does.
+    await seedHarness(harnessDir, {
+      'workflows/wf-b/snapshot.json': v2Snapshot('wf-b', {
+        plans: [planRow(lease({ holder: 'omp:iter-other', worktree_path: join(control, 'src') }))],
+        control_worktree_path: elsewhere,
+      }),
+    })
+    expect(resolveActiveWorkflow(harnessDir, { leaseHolder: 'agent-7', cwd: join(control, 'src') })).toEqual({
+      kind: 'active',
+      workflowId: 'wf-a',
+      dir: 'workflows/wf-a',
+    })
+  })
 })
 
 describe('workflow selection — binding order: explicit, unique, unbound', () => {
@@ -456,6 +496,44 @@ describe('workflow selection — binding order: explicit, unique, unbound', () =
     })
   })
 
+  it('a non-object snapshot contributes no automatic evidence and never throws', async () => {
+    const root = await freshRoot('null-snapshot')
+    const harnessDir = join(root, 'harness')
+    const control = join(root, 'repo')
+    const elsewhere = join(root, 'elsewhere')
+    await mkdir(join(control, 'src'), { recursive: true })
+    await mkdir(elsewhere, { recursive: true })
+    await seedHarness(harnessDir, {
+      'status.json': v2Root([v2WorkflowEntry('wf-a'), v2WorkflowEntry('wf-b')]),
+      // `readJson` casts arbitrary JSON: a bare `null` is not a snapshot record.
+      'workflows/wf-a/snapshot.json': 'null',
+      'workflows/wf-b/snapshot.json': v2Snapshot('wf-b', { control_worktree_path: control }),
+    })
+    expect(resolveActiveWorkflow(harnessDir, { cwd: join(control, 'src') })).toEqual({
+      kind: 'active',
+      workflowId: 'wf-b',
+      dir: 'workflows/wf-b',
+    })
+    // The malformed entry is the only cwd candidate → no evidence, no throw.
+    await seedHarness(harnessDir, {
+      'workflows/wf-b/snapshot.json': v2Snapshot('wf-b', { control_worktree_path: elsewhere }),
+    })
+    expect(resolveActiveWorkflow(harnessDir, { cwd: join(control, 'src') })).toEqual({
+      ...UNBOUND,
+      activeWorkflowIds: ['wf-a', 'wf-b'],
+    })
+    // An array parses the same way — the guard is record-ness, not a null check.
+    await seedHarness(harnessDir, {
+      'workflows/wf-a/snapshot.json': '[]',
+      'workflows/wf-b/snapshot.json': v2Snapshot('wf-b', { control_worktree_path: control }),
+    })
+    expect(resolveActiveWorkflow(harnessDir, { cwd: join(control, 'src') })).toEqual({
+      kind: 'active',
+      workflowId: 'wf-b',
+      dir: 'workflows/wf-b',
+    })
+  })
+
   it('validates every registry entry — a bad entry is an error, not a smaller active set', async () => {
     const root = await freshRoot('invalid-entry')
     const harnessDir = join(root, 'harness')
@@ -468,6 +546,48 @@ describe('workflow selection — binding order: explicit, unique, unbound', () =
     expect(selection).toEqual({
       kind: 'error',
       code: 'workflow.selection.invalid-entry',
+      message: expect.any(String),
+    })
+  })
+
+  it('rejects every registry entry outside the v2 workflow-entry contract', async () => {
+    const root = await freshRoot('entry-contract')
+    const harnessDir = join(root, 'harness')
+    await mkdir(harnessDir, { recursive: true })
+    const cases: Array<[string, unknown]> = [
+      // `dir` escaping the harness would make the resolver read outside it.
+      ['escape-dir', { id: 'wf-b', type: 'plan', started_at: '2026-08-19', dir: '../outside' }],
+      ['absolute-dir', { id: 'wf-b', type: 'plan', started_at: '2026-08-19', dir: '/tmp/outside' }],
+      // Required `type` / `started_at` are part of the same contract.
+      ['missing-type', { id: 'wf-b', started_at: '2026-08-19', dir: 'workflows/wf-b' }],
+      ['missing-started-at', { id: 'wf-b', type: 'plan', dir: 'workflows/wf-b' }],
+      ['unknown-type', { id: 'wf-b', type: 'hotfix', started_at: '2026-08-19', dir: 'workflows/wf-b' }],
+      // A non-object row is not an entry.
+      ['non-object', 'wf-b'],
+    ]
+    for (const [name, bad] of cases) {
+      await seedHarness(harnessDir, {
+        'status.json': v2Root([v2WorkflowEntry('wf-a'), bad]),
+        'workflows/wf-a/snapshot.json': v2Snapshot('wf-a'),
+      })
+      expect([name, resolveActiveWorkflow(harnessDir, { selectedWorkflowId: 'wf-a' })]).toEqual([
+        name,
+        { kind: 'error', code: 'workflow.selection.invalid-entry', message: expect.any(String) },
+      ])
+    }
+  })
+
+  it('rejects a duplicated id in the registry', async () => {
+    const root = await freshRoot('duplicate-id')
+    const harnessDir = join(root, 'harness')
+    await mkdir(harnessDir, { recursive: true })
+    await seedHarness(harnessDir, {
+      'status.json': v2Root([v2WorkflowEntry('wf-a'), v2WorkflowEntry('wf-a')]),
+      'workflows/wf-a/snapshot.json': v2Snapshot('wf-a'),
+    })
+    expect(resolveActiveWorkflow(harnessDir, { selectedWorkflowId: 'wf-a' })).toEqual({
+      kind: 'error',
+      code: 'workflow.selection.invalid-registry',
       message: expect.any(String),
     })
   })
