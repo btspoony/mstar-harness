@@ -66,6 +66,32 @@ function enforcementLabel(
   return source === null ? flag : `${flag} (${source})`
 }
 
+/**
+ * Does the picker acknowledgement still stand in for the served selection?
+ *
+ * The acknowledgement is a BRIDGE for the window between committing a pick and
+ * the refreshed host binding that reflects it (`engine-status-client`'s
+ * per-session fence), never a permanent override. It therefore applies only
+ * while the served verdict still names the picked lifecycle as an active
+ * candidate: an unbound `error` whose `activeWorkflowIds` list it (the verdict
+ * from BEFORE the pick, or a host that has not caught up), or no verdict at
+ * all (loading / unavailable — no evidence to contradict it).
+ *
+ * The moment the verdict proves the picked lifecycle is gone — an unbound
+ * `error` that no longer lists it, a `terminal` history view, an `active`
+ * selection that names a different lifecycle, a candidate-less error — the
+ * acknowledgement is dropped so the resolver's own verdict renders (the
+ * unbound picker for the lifecycles that remain, or the terminal history).
+ * @param selection - the selection the panel would render without the ack.
+ * @param workflowId - the acknowledged pick.
+ */
+function ackStandsFor(selection: WorkflowSelectionView | null, workflowId: string): boolean {
+  if (selection === null) return true
+  if (selection.kind === 'active') return selection.workflowId === workflowId
+  if (selection.kind === 'error') return selection.activeWorkflowIds?.includes(workflowId) ?? false
+  return false
+}
+
 export function StateSection({ t, state, enforcement, selection, pick, select }: StateSectionProps) {
   const plans = Array.isArray(state?.plans) ? state.plans : []
   // Spec §3 order (doneAt digitized DESC → id-date DESC → id lex DESC), cap 5.
@@ -80,14 +106,16 @@ export function StateSection({ t, state, enforcement, selection, pick, select }:
   const hiddenFindings = findings === null ? 0 : Math.max(0, findings.length - FINDINGS_CAP)
   const leases = Array.isArray(state?.leases) ? state.leases : []
   const knowledge = state?.knowledge ?? null
-  // The served binding outranks the last emission's own record; an acknowledged
-  // pick outranks a served binding that has not caught up yet (the client is
-  // this session's only binding writer, and the acknowledgement is durable).
-  const activeId = selection?.kind === 'active'
-    ? selection.workflowId
-    : pick.state === 'selected'
-      ? pick.workflowId
-      : null
+  // The served binding outranks the last emission's own record; an
+  // acknowledged pick outranks a served binding that has not caught up yet
+  // (the client is this session's only binding writer, and the acknowledgement
+  // is durable) — but ONLY while that binding still names the picked
+  // lifecycle as an active candidate ({@link ackStandsFor}). Once it stops
+  // naming it, the resolver's real verdict renders instead: the unbound error
+  // with its picker for the lifecycles that remain, or the terminal history
+  // when every lifecycle ended.
+  const acked = pick.state === 'selected' && ackStandsFor(selection, pick.workflowId) ? pick.workflowId : null
+  const activeId = selection?.kind === 'active' ? selection.workflowId : acked
   const activeWarning = selection?.kind === 'active' ? selection.warning : undefined
   // The error arm's own fields (an error that is neither active nor terminal).
   const errorView = selection?.kind === 'error' ? selection : null

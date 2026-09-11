@@ -1210,6 +1210,51 @@ describe('workflow panel — D4 picker DOM (unbound multi-active → pick)', () 
     expect(html).not.toContain('data-picker-pending')
   })
 
+  it('retires a stale acknowledgement: the picked lifecycle left the active set, so the unbound verdict and its picker render', async () => {
+    // The pick is acknowledged while wf-b is still an active candidate; wf-b
+    // then completes and only wf-a remains. The refreshed verdict no longer
+    // lists wf-b, so the acknowledgement must not keep rendering it as active.
+    let emission = selectionSource(UNBOUND)
+    const { client, rerender } = await pickerPass({
+      emission: () => emission,
+      selectAnswer: () => {
+        emission = selectionSource({ ...UNBOUND, activeWorkflowIds: ['wf-a'], message: '1 active lifecycle — wf-b completed' })
+        return Promise.resolve(gatewayOk({ status: 'selected', sessionId: SESSION_ID, workflowId: 'wf-b' }))
+      },
+    })
+
+    await client.selectWorkflow(SESSION_ID, SESSION_CWD, 'wf-b')
+    const html = await settleRender(rerender)
+
+    expect(html).not.toContain('data-selection-kind="active"')
+    expect(html).not.toContain('data-selection-workflow="wf-b"')
+    expect(html).toContain('data-selection-kind="error"')
+    expect(html).toContain('data-selection-code="workflow.selection.unbound-multi-active"')
+    // The picker is back for the lifecycles that REMAIN — never for wf-b.
+    expect(html).toContain('data-picker-option="wf-a">')
+    expect(html).not.toContain('data-picker-option="wf-b">')
+  })
+
+  it('retires a stale acknowledgement when every lifecycle ended — the terminal history renders', async () => {
+    let emission = selectionSource(UNBOUND)
+    const { client, rerender } = await pickerPass({
+      emission: () => emission,
+      selectAnswer: () => {
+        emission = selectionSource({ kind: 'terminal', workflowId: 'wf-b', dir: 'workflows/wf-b' })
+        return Promise.resolve(gatewayOk({ status: 'selected', sessionId: SESSION_ID, workflowId: 'wf-b' }))
+      },
+    })
+
+    await client.selectWorkflow(SESSION_ID, SESSION_CWD, 'wf-b')
+    const html = await settleRender(rerender)
+
+    // The SAME id now renders as history — not as this session's active pick.
+    expect(html).toContain('data-selection-kind="terminal"')
+    expect(html).toContain('data-selection-history')
+    expect(html).not.toContain('data-selection-kind="active"')
+    expect(html).not.toContain('data-mstar-picker')
+  })
+
   it('renders no picker for a selection error without candidates, nor for a bound selection', async () => {
     const noCandidates = await pickerPass({
       selectAnswer: neverAnswers,
