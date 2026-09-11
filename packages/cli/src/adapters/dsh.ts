@@ -1,3 +1,4 @@
+import { DSH_LLM_FALLBACKS_VERSION } from "@mstar-harness/engine";
 import { runCliCommand } from "../exec";
 import os from "node:os";
 import path from "node:path";
@@ -64,11 +65,12 @@ function addTimeoutMs(): number {
  * with the dsh CLI's own manifest spec (`^0.3.5`), whose dist re-exports
  * `installSettingsSection` from `@deepseek-ai/dsh-settings` — an export the
  * rc.1 line removed — so an unpinned add breaks the installed-artifact boot
- * against the single-line peer graph. 0.4.1+ is the line adapted to
+ * against the single-line peer graph. 0.4.1 was the line adapted to
  * `@deepseek-ai/dsh-*` `^0.1.2-rc.1` (no dsh-settings re-export at runtime).
- * Bump this constant with the repo's own `dsh-llm-fallbacks` devDependency. */
-const DSH_FALLBACKS_VERSION = "0.4.1";
-const DSH_PLUGIN_SPECS: readonly string[] = ["@mstar-harness/dsh", `dsh-llm-fallbacks@${DSH_FALLBACKS_VERSION}`];
+ * 0.5.2 is the line adapted to `@deepseek-ai/dsh-*` `^0.1.5-rc.2`.
+ * The pin is `DSH_LLM_FALLBACKS_VERSION` from `@mstar-harness/engine`; keep
+ * it lockstep with the repo's `dsh-llm-fallbacks` devDependency. */
+const DSH_PLUGIN_SPECS: readonly string[] = ["@mstar-harness/dsh", `dsh-llm-fallbacks@${DSH_LLM_FALLBACKS_VERSION}`];
 const DSH_FALLBACKS_SPEC = DSH_PLUGIN_SPECS[1];
 
 /** Spec → loader-row name: strip a trailing `@<version>` (none in mstar's

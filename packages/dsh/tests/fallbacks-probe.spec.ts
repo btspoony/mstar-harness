@@ -7,12 +7,13 @@
  * the harness real-composition boot (`bootApp` + `ctx.plugin`): its EXACT
  * service-surface assertion is the executable STOP gate for caret-range
  * drift (a drifted resolver fails the version/surface check HERE, not
- * silently in production). `RESOLVED_VERSION` is the deliberate pin — bump
- * it when the caret lands on a new resolved version.
+ * silently in production). Version pin is `DSH_LLM_FALLBACKS_VERSION` from
+ * `@mstar-harness/engine` — bump it with the dsh package.json pin.
  */
 import { describe, expect, it, afterEach } from 'bun:test'
 import { Context } from '@deepseek-ai/cordis'
 import * as fallbacks from 'dsh-llm-fallbacks'
+import { DSH_LLM_FALLBACKS_VERSION } from '@mstar-harness/engine'
 import { bootApp, FakeLoaderRegistry, type BootResult } from './harness.ts'
 import {
   FALLBACKS_ENTRY_NAME,
@@ -31,9 +32,6 @@ afterEach(async () => {
 /** The exact service surface the plugin provides (shape STOP gate). */
 const SERVICE_KEYS = ['name', 'version', 'resolveRole', 'resolveChain', 'validateFallbacksConfig', 'detectLegacyKeys', 'declareSeeds', 'getEffectiveRoles', 'revertSeededPersona'] as const
 
-/** The resolved registry version the caret range must land on (drift STOP gate). */
-const RESOLVED_VERSION = '0.4.1'
-
 /** A live, enabled loader entry for the fallbacks row. */
 const liveEntry = (): LoaderEntryView => ({ options: { name: FALLBACKS_ENTRY_NAME }, disabled: false, fiber: {} })
 
@@ -45,7 +43,11 @@ describe('fallbacks probe — mounted / unmounted / disabled', () => {
   })
 
   it('(b) composition with dsh-llm-fallbacks applied → true + exact service surface', async () => {
-    const app = booted = await bootApp()
+    // 0.5.2 provides `llm-fallbacks` inside `ctx.inject(["settings"], …)` —
+    // without a settings seam the plugin applies but never registers the
+    // service (mounted stays false). Fake settings is the existing boot
+    // seam; SERVICE_KEYS is unchanged.
+    const app = booted = await bootApp({ settingsService: 'fake' })
     // The real registry plugin applied as a row on the booted composition
     // (static import — the specifier is known at author time). The module
     // namespace's `provide` is declared `readonly` (metadata read by
@@ -61,7 +63,7 @@ describe('fallbacks probe — mounted / unmounted / disabled', () => {
     expect(Object.keys(service!)).toEqual([...SERVICE_KEYS])
     expect(service!.name).toBe('llm-fallbacks')
     expect(typeof service!.version).toBe('string')
-    expect(service!.version).toBe(RESOLVED_VERSION)
+    expect(service!.version).toBe(DSH_LLM_FALLBACKS_VERSION)
     for (const key of ['resolveRole', 'resolveChain', 'validateFallbacksConfig', 'detectLegacyKeys', 'declareSeeds', 'getEffectiveRoles', 'revertSeededPersona'] as const) {
       expect(typeof service![key]).toBe('function')
     }

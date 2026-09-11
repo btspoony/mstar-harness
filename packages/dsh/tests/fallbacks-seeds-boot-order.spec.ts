@@ -175,9 +175,8 @@ describe('fallbacks seeds boot-order — single REAL-package boot converges the 
       const mstarIds = subagentRoleIds(REAL_MIRROR)
       expect(mstarIds, 'the mirror yields the 13 mstar subagent role ids').toHaveLength(13)
       const presetIds = presetRoles.map((role) => role.id)
-      expect(presetIds, 'the installed upstream ships 7 preset roles').toHaveLength(7)
       const expectedIds = new Set([...mstarIds, ...presetIds])
-      expect(expectedIds.size, 'mstar and preset id sets are disjoint (union = 20)').toBe(20)
+      expect(expectedIds.size, 'mstar and preset id sets are disjoint').toBe(mstarIds.length + presetIds.length)
 
       // 2. SINGLE boot — the real fallbacks devDependency, the real mstar
       //    src plugin, the fake settings seam mounted AFTER the fallbacks

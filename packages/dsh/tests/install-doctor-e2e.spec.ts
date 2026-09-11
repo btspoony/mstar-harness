@@ -38,6 +38,7 @@ import { FALLBACKS_ENTRY_NAME, fallbacksMounted } from '../src/gates/fallbacks-p
 import { setAdvisoryLogger, runFallbacksAdvisory, type AdvisoryLogLevel } from '../src/gates/fallbacks-advisory.ts'
 import type { SubagentRuntime, SubagentStartRequest } from '@deepseek-ai/dsh-subagent'
 import { packageRoot } from '../scripts/bundle-harness-assets.ts'
+import { DSH_LLM_FALLBACKS_VERSION } from '@mstar-harness/engine'
 
 /** Repo root (packages/dsh/tests → up three levels). */
 const REPO_ROOT = resolve(import.meta.dir, '../../..')
@@ -48,7 +49,7 @@ const DSH_PROFILE = 'web'
 /** The mstar plugin spec (doctor capability words). */
 const MSTAR_SPEC = '@mstar-harness/dsh'
 /** The fallbacks plugin spec (doctor capability words). */
-const FALLBACKS_SPEC = 'dsh-llm-fallbacks@0.4.1'
+const FALLBACKS_SPEC = `dsh-llm-fallbacks@${DSH_LLM_FALLBACKS_VERSION}`
 
 /** Skip-guard probe (Task 1 pattern): `dsh` bin on PATH + registry
  * reachability. A missing prerequisite SKIPS with the reason printed —

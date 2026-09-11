@@ -38,6 +38,7 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { dshAdapter } from "../src/adapters/dsh";
+import { DSH_LLM_FALLBACKS_VERSION } from "@mstar-harness/engine";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
 const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
@@ -164,7 +165,7 @@ function expectNote(notes: string[], marker: string): void {
 }
 
 const MSTAR_SPEC = "@mstar-harness/dsh";
-const FALLBACKS_SPEC = "dsh-llm-fallbacks@0.4.1";
+const FALLBACKS_SPEC = `dsh-llm-fallbacks@${DSH_LLM_FALLBACKS_VERSION}`;
 
 /** Empty loader tree: nothing installed. */
 const DUMP_EMPTY = "";
@@ -279,6 +280,16 @@ const DUMP_MALFORMED = [
   "some: other: thing",
   "",
 ].join("\n");
+
+describe("dsh-llm-fallbacks pin lockstep", () => {
+  test("engine export matches packages/dsh/package.json devDependency", () => {
+    const repoRoot = resolve(CLI_ROOT, "..", "..");
+    const dshPkg = JSON.parse(readFileSync(join(repoRoot, "packages/dsh/package.json"), "utf8")) as {
+      devDependencies?: Record<string, string>;
+    };
+    expect(DSH_LLM_FALLBACKS_VERSION).toBe(dshPkg.devDependencies?.["dsh-llm-fallbacks"]);
+  });
+});
 
 describe("dshAdapter.runInstallInit", () => {
   test("default install: two adds, mstar first then fallbacks (AC-6)", () => {
