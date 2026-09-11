@@ -151,6 +151,7 @@ export type PanelKey =
   | 'event-log.field.expected'
   | 'event-log.field.settled'
   | 'event-log.field.duration'
+  | 'event-log.field.child-id'
   | 'event-log.field.run-id'
   | 'event-log.field.name'
   | 'event-log.field.members'
@@ -282,6 +283,7 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'event-log.field.expected': '预期角色',
   'event-log.field.settled': '已结算',
   'event-log.field.duration': '耗时',
+  'event-log.field.child-id': '子会话 ID',
   'event-log.field.run-id': '运行 ID',
   'event-log.field.name': '运行名称',
   'event-log.field.members': '成员数',
@@ -408,6 +410,7 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'event-log.field.expected': 'Expected role',
   'event-log.field.settled': 'Settled',
   'event-log.field.duration': 'Duration',
+  'event-log.field.child-id': 'Child session ID',
   'event-log.field.run-id': 'Run ID',
   'event-log.field.name': 'Run name',
   'event-log.field.members': 'Members',

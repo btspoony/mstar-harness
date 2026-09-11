@@ -112,15 +112,15 @@ export interface FlowEventView {
   /** `${ts}-${kind}-${index}` — stable id (index = position in the projected window). */
   id: string
   ts: number
-  /** The ledger kind verbatim: dispatch | settle | the three workflow kinds | any unknown kind string (generic row). */
-  kind: 'dispatch' | 'settle' | 'workflow-run' | 'workflow-agent' | 'workflow-run-end' | (string & {})
+  /** The ledger kind verbatim: dispatch | settle | subagent-link | the three workflow kinds | any unknown kind string (generic row). */
+  kind: 'dispatch' | 'settle' | 'subagent-link' | 'workflow-run' | 'workflow-agent' | 'workflow-run-end' | (string & {})
   /** `Execute as`; '' for settle rows without a paired identity and for workflow/unknown rows. */
   role: string
   planId: string | null
   taskId: string | null
   taskCategory: string | null
   agent: string | null
-  /** dispatch → dispatched|advisory|denied; settle → ok|error|denied; workflow/unknown → unknown (spec §2.4). */
+  /** dispatch → dispatched|advisory|denied; settle → ok|error|denied; link/workflow/unknown → unknown (spec §2.4). */
   status: FlowEventStatus
   /** `role` ∈ the EXPECTED_ROLE_FLOW role union (spec §2.3 exact-string match). */
   expected: boolean
@@ -143,8 +143,19 @@ export interface FlowEventView {
   readonly label?: string
   /** Run-member phase (workflow-agent rows only, when carried). */
   readonly phase?: string
-  /** The published member's child session identity (workflow-agent rows only). */
+  /**
+   * Child session identity when the source supplied one: workflow-agent —
+   * the published member; settle — the foreground `runId` or a background
+   * catalog join; `subagent-link` — the required catalog child id. Omitted
+   * when the row carried none. Never a registry job id (that is `taskRef`).
+   */
   readonly childId?: string
+  /**
+   * Settle + `subagent-link` rows: the registry background-job id, when
+   * carried. A jobs-registry key, never a child session id. Omitted when
+   * the row carried none.
+   */
+  readonly taskRef?: string
   /** Terminal workflow run reason (workflow-run-end rows only). */
   readonly stopReason?: string
 }
@@ -1179,6 +1190,7 @@ function flowEventOf(
     taskCategory?: unknown; agent?: unknown; verdict?: unknown; outcome?: unknown; durationMs?: unknown
     paired?: unknown
     runId?: unknown; name?: unknown; seq?: unknown; label?: unknown; phase?: unknown; childId?: unknown
+    taskRef?: unknown
     stopReason?: unknown
   } | null | undefined
   const kind = str(row?.kind)
@@ -1204,6 +1216,8 @@ function flowEventOf(
     }
   }
   if (kind === 'settle') {
+    const childId = str(row?.childId)
+    const taskRef = str(row?.taskRef)
     return {
       id: `${ts}-${kind}-${index}`,
       ts,
@@ -1223,6 +1237,33 @@ function flowEventOf(
       // Paired-identity presence (settle rows only — the exact-pairing marker).
       ...(row?.paired === true ? { paired: true } : {}),
       durationMs: count(row?.durationMs),
+      ...(childId !== null ? { childId } : {}),
+      ...(taskRef !== null ? { taskRef } : {}),
+    }
+  }
+  if (kind === 'subagent-link') {
+    // Explicit branch BEFORE the generic fallback: a link is an IDENTITY
+    // record, not a completion. Preserve the dispatch identity
+    // (role/planId/taskId/agent) instead of discarding it; no paired marker,
+    // no stage-completion effect, taskCategory always null.
+    const childId = str(row?.childId)
+    const taskRef = str(row?.taskRef)
+    return {
+      id: `${ts}-${kind}-${index}`,
+      ts,
+      kind,
+      role,
+      planId: str(row?.planId),
+      taskId: str(row?.taskId),
+      taskCategory: null,
+      agent: str(row?.agent),
+      status: 'unknown',
+      expected: matched !== undefined,
+      stage: matched ?? null,
+      settled: false,
+      durationMs: null,
+      ...(childId !== null ? { childId } : {}),
+      ...(taskRef !== null ? { taskRef } : {}),
     }
   }
   // Workflow kinds + unknown kinds: the generic base row (no gate status —

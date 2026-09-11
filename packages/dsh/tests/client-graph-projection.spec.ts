@@ -678,6 +678,8 @@ function settleRow(over: {
   role?: string
   planId?: string
   taskId?: string
+  childId?: string
+  taskRef?: string
 }): AgentFlowEventView {
   return {
     ts: over.ts,
@@ -692,6 +694,31 @@ function settleRow(over: {
     ...(over.role !== undefined ? { paired: true } : {}),
     ...(over.outcome !== undefined ? { outcome: over.outcome } : {}),
     ...(over.durationMs !== undefined ? { durationMs: over.durationMs } : {}),
+    ...(over.childId !== undefined ? { childId: over.childId } : {}),
+    ...(over.taskRef !== undefined ? { taskRef: over.taskRef } : {}),
+  }
+}
+
+/** One nonterminal `subagent-link` row as the ledger view emits it. */
+function linkRow(over: {
+  ts: number
+  agent?: string
+  role: string
+  planId?: string
+  taskId?: string
+  childId: string
+  taskRef?: string
+}): AgentFlowEventView {
+  return {
+    ts: over.ts,
+    kind: 'subagent-link',
+    agent: over.agent ?? null,
+    role: over.role,
+    planId: over.planId ?? null,
+    taskId: over.taskId ?? null,
+    taskCategory: null,
+    childId: over.childId,
+    ...(over.taskRef !== undefined ? { taskRef: over.taskRef } : {}),
   }
 }
 
@@ -2176,6 +2203,98 @@ describe('projectGraph — settle pairing (identity-based)', () => {
     expect(view.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('settled')
   })
 })
+
+/* ---------------------------------------------------------------------------
+ * Child session identity on settle + nonterminal `subagent-link` rows.
+ * ------------------------------------------------------------------------- */
+
+describe('projectGraph — subagent-link + settle child identity', () => {
+  it('a link row keeps role/planId/taskId/agent/childId/taskRef and does not fall into the generic branch', () => {
+    const view = projectGraph(flowSource([
+      linkRow({
+        ts: 8,
+        agent: 'parent-sess',
+        role: 'fullstack-dev',
+        planId: 'plan-x',
+        taskId: 'T2',
+        childId: 'child-sess',
+        taskRef: 'background-1',
+      }),
+    ]))
+    expect(view.events).toHaveLength(1)
+    expect(view.events[0]).toMatchObject({
+      kind: 'subagent-link',
+      role: 'fullstack-dev',
+      planId: 'plan-x',
+      taskId: 'T2',
+      agent: 'parent-sess',
+      childId: 'child-sess',
+      taskRef: 'background-1',
+      taskCategory: null,
+      status: 'unknown',
+      settled: false,
+    })
+    expect(view.events[0]!.paired).toBeUndefined()
+    // Link rows are identity records, not dispatches — never unexpected.
+    expect(view.unexpected).toEqual([])
+  })
+
+  it('a link row does not settle a running dispatch and carries no paired marker', () => {
+    const view = projectGraph(flowSource([
+      linkRow({
+        ts: 8,
+        agent: 'a1',
+        role: 'fullstack-dev',
+        planId: 'plan-x',
+        taskId: 'T2',
+        childId: 'child-sess',
+        taskRef: 'background-1',
+      }),
+      dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x', taskId: 'T2' }),
+    ]))
+    const link = view.events.find((e) => e.kind === 'subagent-link')!
+    const dispatch = view.events.find((e) => e.kind === 'dispatch')!
+    expect(dispatch.settled).toBe(false)
+    expect(link.settled).toBe(false)
+    expect(link.paired).toBeUndefined()
+    expect(view.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('running')
+  })
+
+  it('a settle carries optional childId/taskRef when present and omits them when absent', () => {
+    const withIds = projectGraph(flowSource([
+      settleRow({
+        ts: 4,
+        agent: 'a1',
+        outcome: 'ok',
+        role: 'fullstack-dev',
+        childId: 'fg-run',
+        taskRef: 'background-9',
+      }),
+    ]))
+    expect(withIds.events[0]).toMatchObject({
+      kind: 'settle',
+      childId: 'fg-run',
+      taskRef: 'background-9',
+    })
+    const legacy = projectGraph(flowSource([
+      settleRow({ ts: 3, agent: 'a1', outcome: 'ok' }),
+    ]))
+    expect(legacy.events[0]!.childId).toBeUndefined()
+    expect(legacy.events[0]!.taskRef).toBeUndefined()
+  })
+
+  it('the workflow-agent child projection is unchanged — unknown kinds still omit childId', () => {
+    const view = projectGraph(flowSource([
+      workflowAgentRow({ ts: 5, runId: 'run-1', seq: 1, label: 'worker', childId: 'child-1' }),
+      { kind: 'future-kind', ts: 4, childId: 'should-not-leak' },
+    ]))
+    const agent = view.events.find((e) => e.kind === 'workflow-agent')!
+    const generic = view.events.find((e) => e.kind === 'future-kind')!
+    expect(agent.childId).toBe('child-1')
+    expect(generic.childId).toBeUndefined()
+  })
+})
+
 
 /* ---------------------------------------------------------------------------
  * Totality + the spec §8 degradation matrix (never throw, never guess).
