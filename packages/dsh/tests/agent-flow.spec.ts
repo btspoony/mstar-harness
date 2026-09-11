@@ -297,16 +297,29 @@ describe('agent-flow ledger — recordDispatch / readAgentFlow', () => {
     }
   })
 
-  it('recordSettle writes outcome + durationMs (omitted when absent)', async () => {
+  it('recordSettle writes outcome + durationMs + the optional child identity (all omitted when absent)', async () => {
     const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-settle-')
     try {
       recordSettle({ harnessDir, agent: 'sess-1', outcome: 'ok', durationMs: 1234 })
       recordSettle({ harnessDir, outcome: 'error' })
+      // A supplied child identity is written verbatim; an empty/oversized one
+      // is OMITTED (never truncated, never an undefined-valued key).
+      recordSettle({ harnessDir, outcome: 'denied', childId: 'child-direct', taskRef: 'job-9' })
+      recordSettle({ harnessDir, outcome: 'ok', childId: '', taskRef: 'j'.repeat(513) })
 
       const view = readAgentFlow(workflowDir)
-      expect(view!.events.map((e) => e.kind)).toEqual(['settle', 'settle'])
-      expect(view!.events[0]).toMatchObject({ kind: 'settle', outcome: 'error', agent: null })
-      expect(view!.events[1]).toMatchObject({ kind: 'settle', outcome: 'ok', agent: 'sess-1', durationMs: 1234 })
+      expect(view!.events.map((e) => e.kind)).toEqual(['settle', 'settle', 'settle', 'settle'])
+      expect(view!.events[3]).toMatchObject({ kind: 'settle', outcome: 'ok', agent: 'sess-1', durationMs: 1234 })
+      expect(view!.events[2]).toMatchObject({ kind: 'settle', outcome: 'error', agent: null })
+      expect(view!.events[1]).toMatchObject({ kind: 'settle', outcome: 'denied', childId: 'child-direct', taskRef: 'job-9' })
+      expect(view!.events[0].childId).toBeUndefined()
+      expect(view!.events[0].taskRef).toBeUndefined()
+      // The invalid-identity row reached the file WITHOUT either key.
+      const lines = readFileSync(join(workflowDir, AGENT_FLOW_FILE), 'utf8').trim().split('\n')
+      const last = JSON.parse(lines.at(-1)!) as Record<string, unknown>
+      expect('childId' in last).toBe(false)
+      expect('taskRef' in last).toBe(false)
+      expect(Object.values(last).every((v) => v !== undefined)).toBe(true)
     } finally {
       await rm(root, { recursive: true, force: true })
     }
@@ -917,20 +930,25 @@ describe('agent-flow settle — real completion pairing ', () => {
         role: 'fullstack-dev',
         planId: '00000810-agent-flow',
         taskId: 'T2',
+        // The returned child session id rides along as the settle's childId.
+        childId: 'r1',
       })
       // The view carries the paired-identity presence marker.
       expect(view.events[0].paired).toBe(true)
       // The serialized JSONL line carries the identity fields (no undefined keys).
       const line = readFileSync(join(workflowDir, AGENT_FLOW_FILE), 'utf8').trim().split('\n').at(-1)!
       const parsed = JSON.parse(line) as Record<string, unknown>
-      expect(parsed).toMatchObject({ kind: 'settle', outcome: 'ok', role: 'fullstack-dev', planId: '00000810-agent-flow', taskId: 'T2' })
+      expect(parsed).toMatchObject({ kind: 'settle', outcome: 'ok', role: 'fullstack-dev', planId: '00000810-agent-flow', taskId: 'T2', childId: 'r1' })
       expect(Object.values(parsed).every((v) => v !== undefined)).toBe(true)
-      // A plain-string foreground value settles too (foreground/other success).
+      // A plain-string foreground value settles too (foreground/other success) —
+      // with no child identity to record (honest omission, never invented).
       pairing.dispatchByCallId.clear()
       pairedDispatch(harnessDir, pairing, 'c-fg2', VALID_PLANNED, 'sess-2')
       emitUndeclared(ctx, SETTLE_SEAM, { callId: 'c-fg2', name: 'subagent', agent: { id: 'sess-2' } }, { isError: false, value: 'plain result' })
       const after = readAgentFlow(workflowDir)!
       expect(after.events[0]).toMatchObject({ kind: 'settle', outcome: 'ok', agent: 'sess-2', role: 'fullstack-dev' })
+      expect(after.events[0].childId).toBeUndefined()
+      expect(after.events[0].taskRef).toBeUndefined()
     } finally {
       setAgentFlowLogger(priorSink)
       await ctx.fiber.dispose().catch(() => {})
@@ -1131,8 +1149,9 @@ describe('agent-flow settle — real completion pairing ', () => {
         { isError: false, value: { kind: 'background', jobId: 'subagent-7' } },
       )
 
-      // The pairing store now maps the registry job id → the dispatch.
-      expect(pairing.dispatchByJobId.get('subagent-7')).toMatchObject({ role: 'fullstack-dev', planId: '00000810-agent-flow' })
+      // The pairing store now maps the registry job id → the dispatch, and the
+      // ref carries that job id as its future settle's `taskRef`.
+      expect(pairing.dispatchByJobId.get('subagent-7')).toMatchObject({ role: 'fullstack-dev', planId: '00000810-agent-flow', taskRef: 'subagent-7' })
       // No settle yet — the ledger stays dispatch-only (honest).
       let view = readAgentFlow(workflowDir)!
       expect(view.events.map((e) => e.kind)).toEqual(['dispatch'])
@@ -1149,7 +1168,12 @@ describe('agent-flow settle — real completion pairing ', () => {
         planId: '00000810-agent-flow',
         taskId: 'T2',
         durationMs: 3_000,
+        // The registry job id the settle paired on — a JOB key, not a child id.
+        taskRef: 'subagent-7',
       })
+      // No catalog join supplied a child id → the settle omits `childId`
+      // (never fabricated from the job id).
+      expect(view.events[0].childId).toBeUndefined()
       // The consumed job entry is pruned — the map holds only in-flight jobs.
       expect(pairing.dispatchByJobId.size).toBe(0)
     } finally {
@@ -1175,6 +1199,14 @@ describe('agent-flow settle — real completion pairing ', () => {
       const view = readAgentFlow(workflowDir)!
       expect(view.events.map((e) => e.kind)).toEqual(['dispatch']) // dispatch only
       expect(pairing.dispatchByJobId.size).toBe(0)
+      // The continuable's `subagentId` is never copied onto a row: the single
+      // ledger line is the dispatch, with no child identity and no task ref.
+      const line = JSON.parse(readFileSync(join(workflowDir, AGENT_FLOW_FILE), 'utf8').trim()) as Record<string, unknown>
+      expect(line).toMatchObject({ kind: 'dispatch' })
+      expect('childId' in line).toBe(false)
+      expect('taskRef' in line).toBe(false)
+      // The call was consumed by the branch — nothing stays paired for a settle.
+      expect(pairing.dispatchByCallId.size).toBe(0)
     } finally {
       setAgentFlowLogger(priorSink)
       await ctx.fiber.dispose().catch(() => {})
@@ -1293,6 +1325,160 @@ describe('agent-flow settle — recordJobSettle terminal mapping (onJobDone)', (
       const view = readAgentFlow(workflowDir)!
       expect(view.events.map((e) => e.outcome)).toEqual(['ok'])
       expect(pairing.dispatchByJobId.size).toBe(0)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('agent-flow settle — child session identity (childId / taskRef)', () => {
+  it('a background settle carries taskRef = the registry jobId, plus the childId the catalog join supplied', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-identity-background-')
+    const ctx = new Context()
+    const pairing = pairingOf()
+    const priorSink = setAgentFlowLogger(() => {})
+    try {
+      registerSettleListener(ctx, {}, pairing)
+      // (a) Before any catalog join: the settle carries the registry job id as
+      // `taskRef` and NO childId — the job id is a job key, never re-labelled
+      // as a child session id.
+      pairedDispatch(harnessDir, pairing, 'c-id-bg1', VALID_PLANNED)
+      emitUndeclared(ctx, SETTLE_SEAM, { callId: 'c-id-bg1', name: 'subagent', agent: { id: 'sess-1' } }, { isError: false, value: { kind: 'background', jobId: 'subagent-41' } })
+      expect(pairing.dispatchByJobId.get('subagent-41')).toMatchObject({ taskRef: 'subagent-41' })
+      recordJobSettle({ id: 'subagent-41', status: 'completed' }, pairing)
+      let view = readAgentFlow(workflowDir)!
+      expect(view.events[0]).toMatchObject({ kind: 'settle', outcome: 'ok', agent: 'sess-1', taskRef: 'subagent-41' })
+      expect(view.events[0].childId).toBeUndefined()
+
+      // (b) The catalog join copies the observed catalog childId onto the SAME
+      // retained ref (that seam's documented contract; simulated at the ref
+      // itself, so nothing here depends on the join's own task being landed) —
+      // the terminal settle then carries both identities.
+      pairedDispatch(harnessDir, pairing, 'c-id-bg2', VALID_PLANNED, 'sess-2')
+      emitUndeclared(ctx, SETTLE_SEAM, { callId: 'c-id-bg2', name: 'subagent', agent: { id: 'sess-2' } }, { isError: false, value: { kind: 'background', jobId: 'subagent-42' } })
+      const ref = pairing.dispatchByJobId.get('subagent-42')!
+      ref.childId = 'child-42'
+      recordJobSettle({ id: 'subagent-42', status: 'completed' }, pairing)
+      view = readAgentFlow(workflowDir)!
+      expect(view.events[0]).toMatchObject({ kind: 'settle', outcome: 'ok', agent: 'sess-2', taskRef: 'subagent-42', childId: 'child-42' })
+      expect(pairing.dispatchByJobId.size).toBe(0)
+    } finally {
+      setAgentFlowLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('an error settle keeps a returned foreground runId (identity extraction is independent of the outcome)', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-identity-error-')
+    const ctx = new Context()
+    const pairing = pairingOf()
+    const priorSink = setAgentFlowLogger(() => {})
+    try {
+      registerSettleListener(ctx, {}, pairing)
+      // A failed call whose value still carries the foreground shape: the
+      // identity is recorded, and the outcome stays `error` (never `ok`).
+      pairedDispatch(harnessDir, pairing, 'c-id-err', VALID_PLANNED)
+      emitUndeclared(ctx, SETTLE_SEAM, { callId: 'c-id-err', name: 'subagent', agent: { id: 'sess-1' } }, { isError: true, error: { message: 'boom' }, value: { kind: 'foreground', runId: 'child-err', output: [] } })
+      const view = readAgentFlow(workflowDir)!
+      expect(view.events[0]).toMatchObject({ kind: 'settle', outcome: 'error', childId: 'child-err' })
+      // A failed value of ANOTHER shape supplies no identity (and no job pairing).
+      pairedDispatch(harnessDir, pairing, 'c-id-err2', VALID_PLANNED, 'sess-2')
+      emitUndeclared(ctx, SETTLE_SEAM, { callId: 'c-id-err2', name: 'subagent', agent: { id: 'sess-2' } }, { isError: true, error: { message: 'x' }, value: { kind: 'background', jobId: 'subagent-shadow' } })
+      const after = readAgentFlow(workflowDir)!
+      expect(after.events[0]).toMatchObject({ kind: 'settle', outcome: 'error' })
+      expect(after.events[0].childId).toBeUndefined()
+      expect(pairing.dispatchByJobId.size).toBe(0)
+    } finally {
+      setAgentFlowLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('the 512/513 id boundary: a 512-unit id records in full; a 513-unit id is omitted — never truncated, never re-keyed', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-identity-length-')
+    const ctx = new Context()
+    const pairing = pairingOf()
+    const priorSink = setAgentFlowLogger(() => {})
+    const at512 = 'r'.repeat(512)
+    const at513 = 'r'.repeat(513)
+    const bigJob = 'j'.repeat(513)
+    try {
+      registerSettleListener(ctx, {}, pairing)
+      // 512 (inclusive) records verbatim ...
+      pairedDispatch(harnessDir, pairing, 'c-len1', VALID_PLANNED)
+      emitUndeclared(ctx, SETTLE_SEAM, { callId: 'c-len1', name: 'subagent', agent: { id: 'sess-1' } }, { isError: false, value: { kind: 'foreground', runId: at512, output: [] } })
+      // ... 513 omits the FIELD while the real completion still records.
+      pairedDispatch(harnessDir, pairing, 'c-len2', VALID_PLANNED, 'sess-2')
+      emitUndeclared(ctx, SETTLE_SEAM, { callId: 'c-len2', name: 'subagent', agent: { id: 'sess-2' } }, { isError: false, value: { kind: 'foreground', runId: at513, output: [] } })
+      // An over-cap background job id still KEYS the pairing by the original id
+      // (nothing re-keyed) and the terminal still settles — only the
+      // serialized `taskRef` is dropped.
+      pairedDispatch(harnessDir, pairing, 'c-len3', VALID_PLANNED, 'sess-3')
+      emitUndeclared(ctx, SETTLE_SEAM, { callId: 'c-len3', name: 'subagent', agent: { id: 'sess-3' } }, { isError: false, value: { kind: 'background', jobId: bigJob } })
+      expect(pairing.dispatchByJobId.has(bigJob)).toBe(true)
+      expect(pairing.dispatchByJobId.get(bigJob)!.taskRef).toBeUndefined()
+      recordJobSettle({ id: bigJob, status: 'completed' }, pairing)
+
+      const view = readAgentFlow(workflowDir)!
+      // Latest first, with each dispatch row interleaved before its settle:
+      // [0] settle sess-3, [1] dispatch, [2] settle sess-2, [3] dispatch,
+      // [4] settle sess-1, [5] dispatch.
+      expect(view.events[4]).toMatchObject({ kind: 'settle', outcome: 'ok', agent: 'sess-1', childId: at512 })
+      expect(view.events[2]).toMatchObject({ kind: 'settle', outcome: 'ok', agent: 'sess-2' })
+      expect(view.events[2].childId).toBeUndefined()
+      expect(view.events[0]).toMatchObject({ kind: 'settle', outcome: 'ok', agent: 'sess-3' })
+      expect(view.events[0].taskRef).toBeUndefined()
+      expect(pairing.dispatchByJobId.size).toBe(0)
+
+      // The serialized rows prove it: the 512-unit id is byte-exact, the
+      // 513-unit ids produced NO key at all (a truncated copy would differ
+      // from the source id).
+      const parsed = readFileSync(join(workflowDir, AGENT_FLOW_FILE), 'utf8').trim().split('\n').map((row) => JSON.parse(row) as Record<string, unknown>)
+      expect(parsed).toHaveLength(6) // dispatch+settle × 3
+      expect(parsed[1].childId).toBe(at512)
+      expect('childId' in parsed[3]).toBe(false)
+      expect('childId' in parsed[5]).toBe(false)
+      expect('taskRef' in parsed[5]).toBe(false)
+      const raw = readFileSync(join(workflowDir, AGENT_FLOW_FILE), 'utf8')
+      expect(raw).not.toContain(at513)
+      expect(raw).not.toContain(bigJob)
+    } finally {
+      setAgentFlowLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('malformed / legacy v1 settle rows read back with the new fields omitted — never a throw', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-identity-legacy-')
+    try {
+      const file = join(workflowDir, AGENT_FLOW_FILE)
+      await writeFile(file, [
+        // A legacy v1 settle written before either field existed.
+        settleLine(),
+        // Malformed optionals: empty string + non-string.
+        settleLine({ outcome: 'error', childId: '', taskRef: 42 }),
+        // Oversized optionals — dropped as fields, never truncated.
+        settleLine({ outcome: 'denied', childId: 'c'.repeat(513), taskRef: 't'.repeat(513) }),
+        // Valid identities plus an UNKNOWN key (ignored by the narrowing).
+        settleLine({ outcome: 'ok', childId: 'child-ok', taskRef: 'job-1', futureKey: { nested: true } }),
+      ].join('\n') + '\n')
+
+      const view = readAgentFlow(workflowDir)
+      expect(view!.events).toHaveLength(4) // every row stayed readable
+      const [valid, oversized, malformed, legacy] = view!.events // latest first
+      expect(valid).toMatchObject({ kind: 'settle', outcome: 'ok', childId: 'child-ok', taskRef: 'job-1' })
+      // A child id is NOT the pairing identity: these rows carry no `role`, so
+      // they stay unpaired even with a childId present.
+      expect(valid.paired).toBeUndefined()
+      expect(oversized.childId).toBeUndefined()
+      expect(oversized.taskRef).toBeUndefined()
+      expect(malformed.childId).toBeUndefined()
+      expect(malformed.taskRef).toBeUndefined()
+      expect(legacy.childId).toBeUndefined()
+      expect(legacy.taskRef).toBeUndefined()
     } finally {
       await rm(root, { recursive: true, force: true })
     }

@@ -344,8 +344,21 @@ export interface AgentFlowEventView {
   readonly label?: string
   /** Run-member phase — workflow-agent events only, when carried. */
   readonly phase?: string
-  /** The published member's child session identity (workflow-agent events only). */
+  /**
+   * The child session identity the row carries, when its source supplied one:
+   * workflow-agent rows — the published member's child; settle rows — the
+   * returned foreground `runId`, or a background child id the catalog join
+   * supplied (OMITTED when the completion knew none); `subagent-link` rows —
+   * the required catalog child id. Never a registry job id (that is
+   * `taskRef`) and never fabricated.
+   */
   readonly childId?: string
+  /**
+   * Settle rows only: the registry background-job id the settle paired on
+   * (`jobs.onJobDone` → `recordJobSettle`). A jobs-registry key (`<kind>-N`),
+   * never a child session id and never the Assignment `Task N` tag.
+   */
+  readonly taskRef?: string
   /** Terminal workflow run reason (workflow-run-end events only). */
   readonly stopReason?: 'completed' | 'cancelled' | 'error'
   /** The matched workflow/ralph tool name (workflow-verdict events only). */

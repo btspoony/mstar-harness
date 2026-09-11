@@ -70,18 +70,28 @@
  *   in the apply-scoped pairing store, and branches on the
  *   verified result shapes: `{ kind: 'background', jobId }` (valid jobId —
  *   the registry-issued job id, `<kind>-N`, NEVER a child session id) →
- *   stores `jobId → dispatchRef` (the settle arrives later via
- *   `jobs.onJobDone`); `{ kind: 'background' }` without a valid jobId →
+ *   stores `jobId → dispatchRef` plus the bounded job id as the ref's
+ *   `taskRef` (the settle arrives later via `jobs.onJobDone` and carries it);
+ *   `{ kind: 'background' }` without a valid jobId →
  *   nothing mappable (no settle); `{ kind: 'continuable', subagentId }` → no
- *   terminal signal this round → no settle (documented limit); any other
+ *   terminal signal this round → no settle (documented limit), nothing
+ *   copied from its value; any other
  *   successful value (foreground `{ kind: 'foreground', … }` included) →
- *   immediate settle with the paired identity. A failed result (`isError` or
+ *   immediate settle with the paired identity, carrying the returned
+ *   foreground `runId` as the settle's `childId` (extracted independently of
+ *   the outcome — a failed call that returned a runId keeps it on its `error`
+ *   settle without becoming `ok`). A failed result (`isError` or
  *   an `error` payload — fabrication guard)
  *   settles `error`.
  * - `recordJobSettle` (wired through `ctx.inject(['jobs'])` in the entry)
  *   maps a terminal snapshot (`completed → ok / killed → denied / failed →
  *   error`, `durationMs = finishedAt − startedAt` when available) onto the
  *   stored `jobId → dispatchRef` and prunes the consumed job entry.
+ * Settle identity is OPTIONAL data: `childId` is present only when a seam
+ * supplied one (a foreground `runId`, or a background child id the catalog
+ * join copied onto the ref) and `taskRef` only on a background settle. An
+ * invalid or oversized optional id is OMITTED — the real completion still
+ * records, and an id is never truncated or re-keyed.
  * Both pairing maps hold only IN-FLIGHT calls: the `dispatchByCallId` entry
  * is deleted once the post-execute branch resolves the call (each callId
  * pairs exactly once), and `recordJobSettle` deletes the consumed
@@ -154,8 +164,11 @@ const AGENT_FLOW_TAIL_READ_THRESHOLD_BYTES = 64 * 1024
  * unbounded. ID-sized fields (`runId`, `childId`) SKIP the row when
  * oversized — truncating them could forge collisions; display fields
  * (`name`, `label`, `phase`) are truncated deterministically with a suffix
- * marker. `2^31` bounds every sequence number (envelope + member) — the
- * cursor-math safe range (see the consumer's durable watermark).
+ * marker. The settle identity fields are OPTIONAL: an invalid or oversized
+ * `childId` / `taskRef` omits only the FIELD — the real completion still
+ * records (see {@link optionalLedgerId}). `2^31` bounds every sequence number
+ * (envelope + member) — the cursor-math safe range (see the consumer's
+ * durable watermark).
  */
 export const WORKFLOW_LEDGER_MAX_ID_LENGTH = 512
 /** Cap for label-sized display fields (`label`, `phase`). */
@@ -188,6 +201,21 @@ export function truncateLedgerField(value: string, cap: number): string {
   const keep = cap - WORKFLOW_LEDGER_TRUNCATION_MARKER.length
   const prefix = keep > 0 ? cps.slice(0, keep).join('') : ''
   return prefix + WORKFLOW_LEDGER_TRUNCATION_MARKER
+}
+
+/**
+ * The OPTIONAL identity-field gate (the settle `childId` / `taskRef`): a
+ * non-empty string of at most {@link WORKFLOW_LEDGER_MAX_ID_LENGTH} UTF-16
+ * units (inclusive) passes through; every other value — absent, empty,
+ * non-string, oversized — yields `undefined` so the caller OMITS the field.
+ * Contrast the REQUIRED workflow-row ids, where an oversized value skips the
+ * whole row: an optional identity never suppresses the real completion, and
+ * an id is never truncated or re-keyed (a capped id is a different id).
+ * Structural on both boundaries: a malformed JSONL value is treated exactly
+ * like an absent one.
+ */
+function optionalLedgerId(value: unknown): string | undefined {
+  return typeof value === 'string' && value !== '' && value.length <= WORKFLOW_LEDGER_MAX_ID_LENGTH ? value : undefined
 }
 /** Logger label for the agent-flow ledger (dsh logger naming: `<scope>/<subject>`). */
 export const AGENT_FLOW_LOGGER = 'mstar/agent-flow'
@@ -321,13 +349,25 @@ export type AgentFlowEvent =
        * `role` is the Assignment `Execute as` ('' when missing), `planId` /
        * `taskId` the plan + `Task N` tags. Written for every paired settle;
        * ABSENT on unpaired (legacy) settles — the client pairs on identity
-       * presence. The registry background-task id is deliberately NOT
-       * written here (`taskRef` is reserved as the distinct field name if a
-       * future audit needs it — it never collides with `taskId`).
+       * presence (`paired` in the view never depends on `childId`).
        */
       role?: string
       planId?: string
       taskId?: string
+      /**
+       * The settled child session's stable id, when a seam actually supplied
+       * one: the returned foreground `runId`, or a background job's child id
+       * once the catalog join copied it onto the dispatch ref. OMITTED
+       * otherwise — never fabricated, never a registry job id.
+       */
+      childId?: string
+      /**
+       * The registry background-job id a background settle pairs on
+       * (`jobs.onJobDone` → `recordJobSettle`). A jobs-registry key
+       * (`<kind>-N`), NEVER a child session id and never the Assignment
+       * `Task N` tag (`taskId`).
+       */
+      taskRef?: string
     }
   | {
       v: 1
@@ -373,6 +413,21 @@ export interface AgentFlowDispatchRef {
   planId?: string
   /** `taskIdOf(prompt)` — the Assignment `Task N` tag, NOT a registry task id. */
   taskId?: string
+  /**
+   * The child session's stable id, once an upstream seam actually supplied
+   * one: the catalog join copies the observed catalog `childId` onto this
+   * ref (the same object survives into `dispatchByJobId`, so a background
+   * settle then carries it). Omitted until known — never a synthetic id and
+   * never a registry job id.
+   */
+  childId?: string
+  /**
+   * The registry job id of the background call this dispatch started
+   * (observed at `tools/post-execute`, paired by `recordJobSettle`). A
+   * jobs-registry key (`<kind>-N`) — NEVER a child session id and never the
+   * `Task N` tag.
+   */
+  taskRef?: string
 }
 
 /**
@@ -824,7 +879,11 @@ export function recordDispatch(input: {
  * outcome + optional duration + the PAIRED dispatch's identity
  * (`role`/`planId`/`taskId` — same field names + semantics as the dispatch
  * event; written for every paired settle, so the client can exactly pair
- * the settle back to its dispatch).
+ * the settle back to its dispatch) + the OPTIONAL child identity
+ * (`childId` — the settled child session; `taskRef` — a background settle's
+ * registry job id). A missing, empty, or oversized optional id is OMITTED
+ * from the row (never truncated, never re-keyed) and the completion still
+ * records.
  */
 export function recordSettle(input: {
   harnessDir: string
@@ -835,10 +894,14 @@ export function recordSettle(input: {
   role?: string
   planId?: string
   taskId?: string
+  childId?: string
+  taskRef?: string
 }): void {
   try {
     const workflowDir = input.workflowDir ?? resolveAgentFlowWriteDir(input.harnessDir)
     if (workflowDir === null) return
+    const childId = optionalLedgerId(input.childId)
+    const taskRef = optionalLedgerId(input.taskRef)
     const event: AgentFlowEvent = {
       v: 1,
       ts: Date.now(),
@@ -849,6 +912,8 @@ export function recordSettle(input: {
       ...(input.role !== undefined ? { role: input.role } : {}),
       ...(input.planId !== undefined && input.planId !== '' ? { planId: input.planId } : {}),
       ...(input.taskId !== undefined && input.taskId !== '' ? { taskId: input.taskId } : {}),
+      ...(childId !== undefined ? { childId } : {}),
+      ...(taskRef !== undefined ? { taskRef } : {}),
     }
     appendEvent(workflowDir, event)
     try {
@@ -1021,6 +1086,14 @@ function eventFromUnknown(value: unknown): AgentFlowEvent | undefined {
   if (kind === 'settle') {
     const outcome = rec.outcome
     if (outcome !== 'ok' && outcome !== 'error' && outcome !== 'denied') return undefined
+    // Paired-dispatch identity:
+    // `role` presence marks a PAIRED settle (kept even when '' — an
+    // empty-role identity is still an identity); planId/taskId omit when empty.
+    // The optional child identity (`childId` / `taskRef`) follows the OMIT
+    // discipline — a malformed, empty, or oversized value is dropped while the
+    // settle row itself stays readable (the row is defined by its outcome).
+    const childId = optionalLedgerId(rec.childId)
+    const taskRef = optionalLedgerId(rec.taskRef)
     return {
       v: 1,
       ts: rec.ts,
@@ -1028,12 +1101,11 @@ function eventFromUnknown(value: unknown): AgentFlowEvent | undefined {
       ...(agent !== undefined ? { agent } : {}),
       outcome,
       ...(typeof rec.durationMs === 'number' && Number.isFinite(rec.durationMs) ? { durationMs: rec.durationMs } : {}),
-      // Paired-dispatch identity:
-      // `role` presence marks a PAIRED settle (kept even when '' — an
-      // empty-role identity is still an identity); planId/taskId omit when empty.
       ...(typeof rec.role === 'string' ? { role: rec.role } : {}),
       ...(typeof rec.planId === 'string' && rec.planId !== '' ? { planId: rec.planId } : {}),
       ...(typeof rec.taskId === 'string' && rec.taskId !== '' ? { taskId: rec.taskId } : {}),
+      ...(childId !== undefined ? { childId } : {}),
+      ...(taskRef !== undefined ? { taskRef } : {}),
     }
   }
   if (kind === 'workflow-verdict') {
@@ -1219,6 +1291,10 @@ function eventView(event: AgentFlowEvent): AgentFlowEventView {
     ...(event.role !== undefined ? { paired: true } : {}),
     ...(event.outcome !== undefined ? { outcome: event.outcome } : {}),
     ...(event.durationMs !== undefined ? { durationMs: event.durationMs } : {}),
+    // Optional child identity — omitted (never undefined-valued) when the
+    // completion carried none.
+    ...(event.childId !== undefined ? { childId: event.childId } : {}),
+    ...(event.taskRef !== undefined ? { taskRef: event.taskRef } : {}),
   }
 }
 
@@ -1386,9 +1462,16 @@ export function readAgentFlow(workflowDir: string, limit?: number): AgentFlowVie
  * come from the dispatchRef (the apply-scoped pairing store) — never probed
  * from a payload. `role` is always written (the dispatchRef always carries
  * it, possibly ''); planId/taskId omit when absent — the same field
- * names + semantics as the dispatch event.
+ * names + semantics as the dispatch event. The optional child identity is
+ * the OBSERVED `childId` argument when the completion supplied one
+ * (foreground `runId`), else the ref's own `childId` (a background catalog
+ * join copied it there); the ref's `taskRef` (a background settle's registry
+ * job id) rides along. `recordSettle` applies the optional-id length gate, so
+ * an invalid or oversized identity is omitted rather than truncated.
+ * @param childId - the child session id the completion itself returned, when it carried one.
  */
-function recordSettleWithRef(ref: AgentFlowDispatchRef, outcome: SettleOutcome, durationMs: number | undefined): void {
+function recordSettleWithRef(ref: AgentFlowDispatchRef, outcome: SettleOutcome, durationMs: number | undefined, childId?: string): void {
+  const settleChildId = childId ?? ref.childId
   recordSettle({
     harnessDir: ref.harnessDir,
     // The settle lands in the SAME workflow dir as its dispatch (the ref
@@ -1401,6 +1484,8 @@ function recordSettleWithRef(ref: AgentFlowDispatchRef, outcome: SettleOutcome, 
     role: ref.role,
     ...(ref.planId !== undefined ? { planId: ref.planId } : {}),
     ...(ref.taskId !== undefined ? { taskId: ref.taskId } : {}),
+    ...(settleChildId !== undefined ? { childId: settleChildId } : {}),
+    ...(ref.taskRef !== undefined ? { taskRef: ref.taskRef } : {}),
   })
 }
 
@@ -1420,13 +1505,18 @@ function recordSettleWithRef(ref: AgentFlowDispatchRef, outcome: SettleOutcome, 
  *   call failed; a result carrying `error` without `isError` never settles ok);
  * - successful `result.value` shape `{ kind: 'background', jobId }` with a
  *   valid jobId (the registry id, `<kind>-N` — never a child session id) →
- *   store `jobId → dispatchRef` (the real settle arrives via
- *   `jobs.onJobDone`); `{ kind: 'background' }` WITHOUT a valid jobId
- *   → nothing mappable (no settle);
+ *   store `jobId → dispatchRef` and the bounded job id as the ref's `taskRef`
+ *   (so the eventual `jobs.onJobDone` settle carries it); `{ kind: 'background' }`
+ *   WITHOUT a valid jobId → nothing mappable (no settle);
  * - `{ kind: 'continuable', subagentId }` → no terminal signal this round →
- *   no settle (documented limit — the child owns its turns);
+ *   no settle (documented limit — the child owns its turns), and NOTHING is
+ *   copied from its value onto any row;
  * - any other successful value (foreground `{ kind: 'foreground', … }`
  *   included) → settle `ok` (the call completed synchronously).
+ * Child identity: a returned foreground `runId` becomes the settle's
+ * `childId`, extracted from the value INDEPENDENTLY of the outcome branch —
+ * a failed call whose value still carries a foreground `runId` keeps that
+ * identity on its `error` settle (identity never turns an error into `ok`).
  * The consumed `dispatchByCallId` entry is DELETED after the branch resolves
  * the call (map pruning — each callId
  * pairs exactly once; the map holds only in-flight calls).
@@ -1469,28 +1559,43 @@ export function registerSettleListener(ctx: Context, config: Config, pairing: Ag
         } else {
           const resultRec = asRecord(result)
           if (resultRec !== undefined) {
+            // The child-session identity the RESULT itself returned, when it
+            // carries one (the foreground shape `{ kind: 'foreground', runId }`).
+            // Extracted BEFORE — and independently of — the outcome branch so a
+            // failed call that still returned a foreground value keeps its
+            // identity on the `error` settle; the identity never turns an
+            // error into `ok`. Anything else (no value, another kind, a
+            // malformed runId) yields no identity — never fabricated.
+            const value = asRecord(resultRec.value)
+            const childId =
+              value !== undefined && value.kind === 'foreground' && typeof value.runId === 'string'
+                ? value.runId
+                : undefined
             // Fabrication guard : a failed
             // result detected by EITHER the canonical `isError` flag OR an
             // `error` payload settles `error` — a result carrying `error`
             // without `isError: true` must NEVER settle a fabricated `ok`.
             if (resultRec.isError === true || resultRec.error !== undefined) {
               // The dispatch call itself failed → settle error.
-              recordSettleWithRef(dispatchRef, 'error', undefined)
-            } else {
-              const value = asRecord(resultRec.value)
-              if (value !== undefined && value.kind === 'background') {
-                if (typeof value.jobId === 'string' && value.jobId !== '') {
-                  // Background job started — the settle arrives via onJobDone.
-                  pairing.dispatchByJobId.set(value.jobId, dispatchRef)
-                }
-                // Background WITHOUT a valid jobId → nothing mappable
-                // background result) — never a fabricated ok settle.
-              } else if (value !== undefined && value.kind === 'continuable') {
-                // Continuable child — no terminal signal this round → honest no-settle.
-              } else {
-                // Foreground / any other successful value → the call completed.
-                recordSettleWithRef(dispatchRef, 'ok', undefined)
+              recordSettleWithRef(dispatchRef, 'error', undefined, childId)
+            } else if (value !== undefined && value.kind === 'background') {
+              if (typeof value.jobId === 'string' && value.jobId !== '') {
+                // Background job started — the settle arrives via onJobDone.
+                pairing.dispatchByJobId.set(value.jobId, dispatchRef)
+                // Carry the registry job id onto the eventual settle. Bounded:
+                // an oversized id omits the FIELD only — the pairing still keys
+                // on the ORIGINAL id, so the real terminal still settles.
+                const taskRef = optionalLedgerId(value.jobId)
+                if (taskRef !== undefined) dispatchRef.taskRef = taskRef
               }
+              // Background WITHOUT a valid jobId → nothing mappable
+              // background result) — never a fabricated ok settle.
+            } else if (value !== undefined && value.kind === 'continuable') {
+              // Continuable child — no terminal signal this round → honest
+              // no-settle; its `subagentId` is never copied onto a settle.
+            } else {
+              // Foreground / any other successful value → the call completed.
+              recordSettleWithRef(dispatchRef, 'ok', undefined, childId)
             }
           }
           // resultRec === undefined → no result payload at all — nothing mappable.
