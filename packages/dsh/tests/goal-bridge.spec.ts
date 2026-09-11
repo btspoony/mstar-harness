@@ -92,14 +92,30 @@ interface RecordedGoalCall {
   args: unknown[]
 }
 
+/** Every upstream `GoalService` method that mutates the durable goal snapshot — the zero-write contract's surface. */
+const GOAL_WRITE_OPS: Record<string, true> = {
+  create: true,
+  edit: true,
+  pause: true,
+  resume: true,
+  complete: true,
+  block: true,
+  clear: true,
+}
+
 /**
  * Minimal recording stand-in for the dsh `goals` service: ONE pre-seeded
  * snapshot plus a call log. `create` / `complete` apply their upstream
- * observable effect, so an empty `writes` log and an untouched snapshot are
- * the same fact observed twice — a goal-mutating bridge fails both.
- * `writes` is the mutating surface the retired mirror used (the zero-write
- * contract); `calls` also catches a read-only lookup, which an observe-only
- * bridge must not perform either.
+ * observable effect, so for the retired mirror path an empty `writes` log
+ * and an untouched snapshot are the same fact observed twice — a
+ * goal-mutating bridge fails both. Every OTHER snapshot-mutating method of
+ * the upstream service (`edit` / `pause` / `resume` / `block` / `clear`) is
+ * a recording no-op: `writes` is the invariant the pin asserts, and a
+ * second hand-rolled state transition per method would only add another
+ * faithfulness risk. `disarm` is deliberately NOT in `writes` — it flips
+ * process-local activation, never the durable snapshot. `calls` also
+ * catches a read-only lookup, which an observe-only bridge must not
+ * perform either.
  */
 class RecordingGoalsService extends Service {
   readonly calls: RecordedGoalCall[] = []
@@ -111,7 +127,7 @@ class RecordingGoalsService extends Service {
   }
 
   get writes(): RecordedGoalCall[] {
-    return this.calls.filter((call) => call.op === 'create' || call.op === 'complete')
+    return this.calls.filter((call) => GOAL_WRITE_OPS[call.op] === true)
   }
 
   get(agent: unknown): unknown {
@@ -125,12 +141,37 @@ class RecordingGoalsService extends Service {
     return this.current
   }
 
+  edit(agent: unknown, ref: unknown, request: unknown): unknown {
+    this.calls.push({ op: 'edit', args: [agent, ref, request] })
+    return this.current
+  }
+
+  pause(agent: unknown, ref: unknown): unknown {
+    this.calls.push({ op: 'pause', args: [agent, ref] })
+    return this.current
+  }
+
+  resume(agent: unknown, ref: unknown): unknown {
+    this.calls.push({ op: 'resume', args: [agent, ref] })
+    return this.current
+  }
+
   complete(agent: unknown, ref: unknown): unknown {
     this.calls.push({ op: 'complete', args: [agent, ref] })
     if (this.current !== undefined) {
       const { revision } = this.current
       this.current = { ...this.current, phase: 'complete', revision: (typeof revision === 'number' ? revision : 0) + 1 }
     }
+    return this.current
+  }
+
+  block(agent: unknown, ref: unknown, reason: unknown): unknown {
+    this.calls.push({ op: 'block', args: [agent, ref, reason] })
+    return this.current
+  }
+
+  clear(agent: unknown, ref: unknown): unknown {
+    this.calls.push({ op: 'clear', args: [agent, ref] })
     return this.current
   }
 }
@@ -335,6 +376,36 @@ describe('goal bridge — blocked sync advisory (session/event firehose)', () =>
     }
   })
 
+  it('a named project register exists → the advisory points at that register, not the default project', async () => {
+    const { root, harnessDir } = await tempHarness('dsh-goal-bridge-register-')
+    try {
+      const projectDir = join(harnessDir, 'projects', 'named-project')
+      await mkdir(projectDir, { recursive: true })
+      await writeFile(join(projectDir, 'residuals.json'), '{}')
+
+      const ctx = new Context()
+      const captured: string[] = []
+      const prior = setGoalBridgeLogger((level, message) => captured.push(`${level}: ${message}`))
+      try {
+        registerGoalBridge(ctx, new HarnessResolver(harnessDir))
+        ctx.events.emit('session/event', goalSession(root), goalChangeEnvelope({
+          operation: 'block',
+          phase: 'blocked',
+          blockedReason: { code: 'rounds-exhausted', message: 'max autonomous rounds reached' },
+        }))
+
+        const warns = captured.filter((m) => m.startsWith('warn:'))
+        expect(warns).toHaveLength(1)
+        expect(warns[0]).toContain(`${projectDir}/residuals.json`)
+        expect(warns[0]).not.toContain('_default')
+      } finally {
+        setGoalBridgeLogger(prior)
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('unknown version → silent skip (defensive): zero warns, the emit never throws', async () => {
     const { root, harnessDir } = await tempHarness('dsh-goal-bridge-version-')
     try {
@@ -372,6 +443,15 @@ describe('goal bridge — blocked sync advisory (session/event firehose)', () =>
         ctx.events.emit('session/event', goalSession(root), { type: 'turn/start', seq: 0, time: 0, data: { turn: 1 } })
         // A goal/change envelope with a malformed data payload.
         ctx.events.emit('session/event', goalSession(root), { type: 'goal/change', seq: 2, time: 1, data: 'not-a-record' })
+        // The extractor's remaining defensive exits — each envelope is
+        // blocked but malformed in exactly one field, and every one must
+        // skip silently (no warn, no throw).
+        ctx.events.emit('session/event', goalSession(root), { type: 'goal/change', seq: 3, time: 2, data: { version: 1, operation: 'block' } })
+        ctx.events.emit('session/event', goalSession(root), goalChangeEnvelope({ operation: 'block', phase: 'blocked' }))
+        ctx.events.emit('session/event', goalSession(root), goalChangeEnvelope({ operation: 'block', phase: 'blocked', blockedReason: 'not-a-record' }))
+        ctx.events.emit('session/event', goalSession(root), goalChangeEnvelope({ operation: 'block', phase: 'blocked', blockedReason: { code: '', message: '' } }))
+        ctx.events.emit('session/event', goalSession(root), goalChangeEnvelope({ operation: 'block', phase: 'blocked', blockedReason: { code: 'rounds-exhausted', message: 'max rounds' }, objective: '' }))
+        ctx.events.emit('session/event', goalSession(root), goalChangeEnvelope({ version: '1', operation: 'block', phase: 'blocked', blockedReason: { code: 'rounds-exhausted', message: 'max rounds' } }))
 
         expect(captured.filter((m) => m.startsWith('warn:'))).toHaveLength(0)
       } finally {

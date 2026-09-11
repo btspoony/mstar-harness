@@ -1,11 +1,9 @@
 /**
- * Steering-helper tests : the structural
- * lineage reads the goal and planMode bridges share via explicit no-barrel
- * imports (`gates/steering.ts`): the `parentSession` root walk
- * (`rootAgentOf`) — its root discrimination, its registry-gap abandonment,
- * and its `seen`-set cycle guard, which keeps the synchronous
- * `subagent/start` decision-point listeners from spinning on a malformed
- * lineage.
+ * Steering-helper tests: the structural lineage read the planMode bridge
+ * consumes via an explicit no-barrel import (`gates/steering.ts`) — driven
+ * here through `rootAgentOf`, the `parentSession` root walk's `seen`-set
+ * cycle guard, which keeps the synchronous `subagent/start` decision-point
+ * listeners from spinning on a malformed lineage.
  */
 import { describe, expect, it } from 'bun:test'
 import { rootAgentOf } from '../src/gates/steering.ts'
