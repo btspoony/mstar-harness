@@ -293,6 +293,22 @@ const wrapperCache = new WeakMap<object, { rolePersonas: Config['rolePersonas'];
  * applying fiber — an HMR fiber swap unwinds it (reads return the raw
  * service again) and a re-apply restores it.
  *
+ * Composition-order independence (`prepend`): the SAME seam is wrapped by a
+ * mounted role-identity layer (`dsh-llm-fallbacks` — its dispatch seam resolves
+ * the Assignment's declared role and merges that role's declared `persona`),
+ * and BOTH wrappers fill the SAME native `persona` slot, each only when it is
+ * free — so whichever wrapper runs FIRST owns the slot. A waterfall runs
+ * listeners outermost-first, and `prepend` registers this one at the front,
+ * so the harness channel is outermost on ANY row order: the default profile
+ * mounts the mstar row first, while a re-ordered profile (or a re-applied
+ * plugin row) mounts it last. The operator's `rolePersonas` override — the
+ * harness's authoritative role identity for a role it resolves — therefore
+ * wins the slot over a fallbacks-side persona for the same role instead of
+ * losing it to whichever layer happened to apply first. A role the harness
+ * resolves NOTHING for still falls through to the fallbacks seam (the
+ * outermost wrapper delegates the caller's own request object on every skip
+ * path), and reads of every other service are returned untouched.
+ *
  * Never throws: the wrap step is contained — on any internal error the read
  * returns the UNWRAPPED service value (persona delivery degrades, the
  * runtime is untouched).
@@ -323,7 +339,7 @@ export function registerRolePersonaChannel(ctx: Context, config: Config): void {
       log('warn', `role persona channel degraded to pass-through (subagent starts unaffected): ${errorMessage(error)}`)
       return value
     }
-  })
+  }, { prepend: true })
 }
 
 /** The fail-loud warn (ONE per apply, `ok === false`) — the reason is appended. */
