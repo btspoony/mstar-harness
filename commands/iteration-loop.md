@@ -1,20 +1,20 @@
 ---
 name: iteration-loop
-description: "Autonomous full iteration loop for cloud agents — Phase 1 (code-first auto direction lock + compass/plans + Review & Edit chain) through Phase 2–5 (execute → close → PR → merge-ready). Optional args: direction, scale (S|M|L|XL, default M). Not Done until Phase 5 exit checklist passes. Minimal human intervention; no grill-me."
+description: "Autonomous full iteration loop for cloud agents — Phase 1 (code-first auto direction lock + compass/plans + Review & Edit chain) through Phase 2–6 (execute → close → PR → merge-ready → post-merge close). Optional args: direction, scale (S|M|L|XL, default M). Not Done until the Phase 6 post-merge close completes. Minimal human intervention; no grill-me."
 agent: project-manager
 input: "[direction] [scale]"
 ---
 
 # Iteration Loop
 
-Run a **full** Morning Star iteration with minimal human intervention. **Done = Phase 5 §5.5 exit checklist 全 `[x]`** — not Phase 1 lock, not Phase 3 close, not Phase 4 PR open.
+Run a **full** Morning Star iteration with minimal human intervention. **Done = Phase 6 post-merge close §6.1–§6.4 完成** — not Phase 1 lock, not Phase 3 close, not Phase 4 PR open, not Phase 5 merge-ready exit.
 
 **vs other commands:**
 
 | Command | Scope |
-| `iteration-start` | Phase 1 (**grill-me** with user) → **auto-continue** Phase 2→5（`pause` 止于 Phase 1） |
-| `iteration-drive` | Phase 2→5 re-entry / resume on an already locked iteration |
-| **`iteration-loop`** | Phase 1→5 end-to-end; **autonomous** direction lock |
+| `iteration-start` | Phase 1 (**grill-me** with user) → **auto-continue** Phase 2→6（`pause` 止于 Phase 1） |
+| `iteration-drive` | Phase 2→6 re-entry / resume on an already locked iteration |
+| **`iteration-loop`** | Phase 1→6 end-to-end; **autonomous** direction lock |
 
 Phase route + gate SSOT → **`mstar-iteration`** **Phase route map** + **Phase transition gates** table. This command is a **consumer**; it does not redefine skill semantics.
 
@@ -42,7 +42,7 @@ Parse: if the last token is exactly `S`/`M`/`L`/`XL` (case-insensitive), treat i
 
 ## Phase flow（禁止跳步）
 
-`Phase 1: Autonomous start → Phase 2: Autonomous Execute → Phase 3: close → Phase 4: PR → Phase 5: merge-ready`。Transition gates（HARD）→ **`mstar-iteration`** **Phase transition gates** table。
+`Phase 1: Autonomous start → Phase 2: Autonomous Execute → Phase 3: close → Phase 4: PR → Phase 5: merge-ready → Phase 6: post-merge close`。Transition gates（HARD）→ **`mstar-iteration`** **Phase transition gates** table。
 
 ## Continuous execution（HARD — Phase 1 lock 后至 Phase 5 exit）
 
@@ -88,12 +88,12 @@ Per **`mstar-iteration/references/phase-2-worktree-lease.md` §2.3**（create fr
 
 ---
 
-## Phase 2–5: Execute → close → PR → merge-ready
+## Phase 2–6: Execute → close → PR → merge-ready → post-merge close
 
-Delegate to **`iteration-drive`**（Phase 2 → §2、Phase 3 → §3 + `references/phase-3-iteration-close.md`、Phase 4/5 → §4–§5 + `references/phase-4-5-pr-delivery.md`、Phase 5 helper discovery → `phase5-helper-discovery.md`）。**Assignment preflight** per **`command-shared-invariants.md`**。
+Delegate to **`iteration-drive`**（Phase 2 → §2、Phase 3 → §3 + `references/phase-3-iteration-close.md`、Phase 4/5 → §4–§5 + `references/phase-4-5-pr-delivery.md`、Phase 5 helper discovery → `phase5-helper-discovery.md`、Phase 6 → `references/phase-6-post-merge-close.md` §6.1–§6.4）。**Assignment preflight** per **`command-shared-invariants.md`**。
 
-**Loop 特有**：Phase 5 push cadence（HARD）→ **`mstar-iteration/references/phase-4-5-pr-delivery.md`** §5.1a；exit checklist → §5.2（同 reference）。
+**Loop 特有**：Phase 5 push cadence（HARD）→ **`mstar-iteration/references/phase-4-5-pr-delivery.md`** §5.1a；exit checklist → §5.2（同 reference）；Phase 6 → **`mstar-iteration/references/phase-6-post-merge-close.md`** §6.1–§6.4（PR **merged** 后；todo `phase-6-post-merge-close`）。
 
-**Then** report: iteration id, locked direction + scale, plans completed, compound summary, PR link, merge-ready evidence。
+**Then** report: iteration id, locked direction + scale, plans completed, compound summary, PR link, merge-ready evidence, post-merge close evidence（snapshot `completed` + root unregister）。
 
 PR merge itself may remain manual unless user authorized auto-merge.

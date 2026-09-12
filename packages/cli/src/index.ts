@@ -23,12 +23,14 @@ import {
   AUDIT_RISKS,
   appendProjectRegisterEntries,
   closeProjectRegisterEntry,
+  closeWorkflow,
   completenessLevel,
   createFsStore,
   detectHarnessKind,
   detectHost,
   emitGitignoreSnippet,
   evaluatePhaseGate,
+  evaluatePostMergeClose,
   executionModeToN,
   findEphemeralCitations,
   findSimplifyMarkers,
@@ -37,6 +39,7 @@ import {
   GIT_CAPTURE_MAX_BYTES,
   getArtifactStore,
   isReadOnlyAssignmentRole,
+  isTerminalSnapshot,
   l1PreDispatchCheck,
   l2PreDispatchCheck,
   lintFiveQuestion,
@@ -73,6 +76,7 @@ import {
   stripFrontmatter,
   taskBrief,
   techDebtRollup,
+  unregisterWorkflow,
   computePrTally,
   prReviewReportPath,
   validatePrReviewReport,
@@ -1158,6 +1162,82 @@ statusCommand
   });
 
 statusCommand
+  .command("workflow-close")
+  .description(
+    "Close one workflow lifecycle after its delivery PR merged (engine-backed: closeWorkflow writes the " +
+      "terminal snapshot under the snapshot lock, then unregisterWorkflow removes the root status.json entry " +
+      "idempotently; dangling leases and unfinished plan rows refuse before any write; a fully closed retry " +
+      "rewrites nothing; a failed unregister reports a partial close and a re-run finishes it. " +
+      "Exit 0 success, 1 gate/IO refusal, 2 usage)",
+  )
+  .option("--workflow <id>", "Workflow id to close ({WORKFLOW_DIR}/<id>/snapshot.json)")
+  .option("--harness <path>", "Harness dir override (default: resolved control {HARNESS_DIR})")
+  .option("--ended-at <date>", "Terminal ended_at timestamp (YYYY-MM-DD or RFC3339; default: today)")
+  .action(async (options: { workflow?: string; harness?: string; endedAt?: string }) => {
+    try {
+      const workflowId = options.workflow;
+      if (workflowId === undefined || workflowId.trim() === "") {
+        throw new SddScriptError("usage: status workflow-close --workflow <id> [--harness <path>] [--ended-at <date>]", 2);
+      }
+      // Shared workflow-id guard — the same contract every other `--workflow <id>`
+      // verb applies via `resolveSnapshotPath` (reject ""/./.. and separators) so a
+      // hostile id never reaches the path join below. Defense-in-depth on the write
+      // verb: the engine identity check and store key guard would refuse later
+      // regardless, but the shared guard keeps the refusal uniform (exit 1,
+      // "invalid workflow id") across the verb family.
+      assertWorkflowId(workflowId);
+      const harnessDir = resolveProcessHarnessDir(options.harness);
+      if (!harnessDir) {
+        throw new Error(`harness dir not found from ${process.cwd()} \u2014 pass --harness <path>`);
+      }
+      // Store-root pinning (see backlog-register): closeWorkflow and
+      // unregisterWorkflow write through the active ArtifactStore with
+      // fail-loud path agreement — the control harness root resolved above
+      // must ALWAYS be pinned as the store root (the default store resolves
+      // from cwd and diverges in linked checkouts).
+      setArtifactStore(createFsStore(harnessDir));
+      const snapshotDir = path.join(resolveWorkflowDir(harnessDir, { harnessDir }), workflowId);
+      const statusFile = path.join(harnessDir, "status.json");
+      // Terminal pre-read (P1 canonical reader): refuses a missing/invalid
+      // snapshot before any write-side effect and classifies the
+      // already-closed notice. The close itself re-reads under the snapshot
+      // lock — this read never authorizes a skip.
+      const pre = readWorkflowSnapshot(snapshotDir);
+      const wasTerminal = isTerminalSnapshot(pre.snapshot);
+      const endedAt = options.endedAt ?? todayString();
+      const closed = await closeWorkflow(workflowId, snapshotDir, { endedAt });
+      // Fixed ordering: unregister only AFTER the durable terminal write.
+      // Missing root/id removal is already idempotent inside the root lock —
+      // never pre-read and skipped; the pre-state is read only for the report.
+      let hadRootEntry = false;
+      try {
+        const rootDoc = readJson(statusFile);
+        hadRootEntry =
+          Array.isArray(rootDoc.workflows) &&
+          (rootDoc.workflows as Array<Record<string, unknown>>).some((entry) => entry?.id === workflowId);
+        await unregisterWorkflow(statusFile, workflowId);
+      } catch (error) {
+        throw new Error(
+          `partial close: snapshot ${workflowId} is terminal (${closed.status}, ended_at ${closed.ended_at}) but its status.json ` +
+            `entry remains \u2014 resolve the root and re-run the close (${(error as Error).message})`,
+        );
+      }
+      if (wasTerminal) {
+        console.log(pc.green(`workflow-close: ${workflowId} already closed (status ${closed.status}, ended_at ${closed.ended_at})`));
+      } else {
+        console.log(pc.green(`workflow-close: ${workflowId} closed (status ${closed.status}, ended_at ${closed.ended_at})`));
+      }
+      console.log(
+        hadRootEntry
+          ? `workflow-close: unregistered ${workflowId} from ${statusFile}`
+          : `workflow-close: status.json has no ${workflowId} entry (${statusFile})`,
+      );
+    } catch (error) {
+      failScript(error, "status workflow-close");
+    }
+  });
+
+statusCommand
   .command("archive-residuals")
   .description(
     "Removed in v3 \u2014 residual close is a project-register state change; this command exits 1 and names the replacement",
@@ -1769,17 +1849,44 @@ iterationCommand
     "Evaluate the phase-transition gate: prints the transition (phase-2-execute / phase-3-close / phase-4-pr-delivery) " +
       "plus the \u00a73.1 entry and \u00a73.5 exit checklists. Exit 1 when the gate verdict fails \u2014 during the Phase-3 window " +
       "(transition: phase-3-close) exit 1 is EXPECTED until the \u00a73.4 close items (status: completed + end_date) are " +
-      "written: the exit checklist gates Phase 4, not the Phase-3 entry",
+      "written: the exit checklist gates Phase 4, not the Phase-3 entry. " +
+      "--phase 6 switches to the post-merge close local-state gate (terminal snapshot, no dangling lease, root " +
+      "status.json entry unregistered); it needs no --compass. Exit 0 pass, 1 gate fail/error, 2 usage",
   )
   .requiredOption("--workflow <id>", "Workflow id whose snapshot is evaluated")
-  .requiredOption("--compass <path>", "delivery-compass.md path")
+  .option("--compass <path>", "delivery-compass.md path (Phase 2\u20135 transition form; not read by --phase 6)")
+  .option("--phase <n>", "Gate form: 6 evaluates the post-merge close local-state gate (no --compass needed); omit for the Phase 2\u20135 transition form")
   .option("--harness <path>", "Harness dir override (default: resolved {HARNESS_DIR})")
   .option("--branch <branch>", "Current branch probe (exit \u00a73.5 item 5)")
   .option("--integration <branch>", "Spec integration branch probe (exit \u00a73.5 item 5)")
   .option("--target <branch>", "PR base branch probe (exit \u00a73.5 item 6)")
   .action(
-    (options: { workflow: string; compass: string; harness?: string; branch?: string; integration?: string; target?: string }) => {
+    (options: { workflow: string; compass?: string; phase?: string; harness?: string; branch?: string; integration?: string; target?: string }) => {
     try {
+      if (options.phase !== undefined) {
+        const phase = Number(options.phase);
+        if (phase !== 6) {
+          throw new SddScriptError(`usage: iteration gate --phase only supports 6 (got ${JSON.stringify(options.phase)})`, 2);
+        }
+        const snapshotPath = resolveSnapshotPath(options.workflow, options.harness);
+        if (!fs.existsSync(snapshotPath)) throw new Error(`workflow snapshot not found: ${snapshotPath}`);
+        const rootFile = path.join(resolveLeaseHarnessDir(options.harness), "status.json");
+        let rootDoc: unknown;
+        try {
+          rootDoc = fs.existsSync(rootFile) ? readJson(rootFile) : undefined;
+        } catch {
+          // Unreadable root must reach the gate as unreadable — an invalid
+          // root is not proof of the entry's absence (PHASE6_INVALID_ROOT).
+          rootDoc = undefined;
+        }
+        const gate = evaluatePostMergeClose(readJson(snapshotPath), rootDoc);
+        printChecklist("phase 6 (post-merge close)", gate);
+        if (!gate.ok) process.exitCode = 1;
+        return;
+      }
+      if (options.compass === undefined || options.compass.trim() === "") {
+        throw new SddScriptError("usage: iteration gate requires --compass <path> (or --phase 6 for the post-merge close form)", 2);
+      }
       const snapshotPath = resolveSnapshotPath(options.workflow, options.harness);
       const compassPath = path.resolve(options.compass);
       if (!fs.existsSync(snapshotPath)) throw new Error(`workflow snapshot not found: ${snapshotPath}`);
@@ -1794,8 +1901,7 @@ iterationCommand
       printChecklist("exit (close \u00a73.5)", result.exit);
       if (!result.ok) process.exitCode = 1;
     } catch (error) {
-      console.error(pc.red(`iteration gate failed: ${(error as Error).message}`));
-      process.exitCode = 1;
+      failScript(error, "iteration gate");
     }
   });
 

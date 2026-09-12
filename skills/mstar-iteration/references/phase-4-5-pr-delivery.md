@@ -72,14 +72,15 @@ History rewrite / force-with-lease / 改写后证据失效规则 SSOT → `mstar
 
 When both babysit/`*-babysit` and greploop apply: **babysit/`*-babysit` first**（CI + reviews），then optional greploop for Greptile score. Discovery paths → `mstar-iteration` §5 (iteration command layer).
 
-### 5.2 Phase 5 exit checklist（迭代交付完成）
+### 5.2 Phase 5 exit checklist（merge-ready → enter Phase 6）
 
-打印 **`## Phase 5 exit checklist`**；全 `[x]` 后方可宣称 **迭代交付完成**：
+打印 **`## Phase 5 exit checklist`**；前 5 项全 `[x]` = **merge-ready**（第 6 项为 transition marker，merged 后才可勾），此后唯一出口是 **Phase 6**（PR merged 后执行 `references/phase-6-post-merge-close.md` §6.1–§6.4）——本 checklist **不是**「迭代交付完成」：
 
 - [ ] PR mergeable（无 blocking merge conflicts）
 - [ ] All **required** CI checks green on latest head
 - [ ] All review threads **resolved**（或用户书面 waive 特定 thread）
 - [ ] §5.1 review comment + resolve 已覆盖本轮所有 addressed feedback
 - [ ] Host todo `phase-5-pr-merge-ready` 可勾选
+- [ ] PR **merge** 完成后进入 **Phase 6**：追加 todo `phase-6-post-merge-close`，执行 post-merge close（`references/phase-6-post-merge-close.md` §6.1–§6.4）
 
-PR **merge** 本身可仍由用户手动执行，除非 Assignment 明确授权 auto-merge。
+PR **merge** 本身可仍由用户手动执行，除非 Assignment 明确授权 auto-merge。Merge 完成（手动或授权 auto-merge）即进入 **Phase 6** —— merge 不是生命周期终点。

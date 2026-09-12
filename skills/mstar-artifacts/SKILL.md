@@ -22,7 +22,7 @@ description: "Morning Star plan harness artifacts — `{PLAN_DIR}` main plans an
 
 ## `status.json`, workflow snapshots, and open residual (summary)
 
-- **`{HARNESS_DIR}/status.json` (v2)**: active-lifecycle register — `{ version: 2, updated_at, workflows[] }`. Each entry points at its snapshot dir (`dir: workflows/<id>`); terminal lifecycles are unregistered after the snapshot write.
+- **`{HARNESS_DIR}/status.json` (v2)**: active-lifecycle register — `{ version: 2, updated_at, workflows[] }`. Each entry points at its snapshot dir (`dir: workflows/<id>`); terminal lifecycles are unregistered after the snapshot write. The PM-facing close caller is the post-merge `mstar status workflow-close --workflow <id>` (ordering: terminal snapshot write first, root unregister second → `mstar-iteration/references/phase-6-post-merge-close.md` §6.1–§6.2).
 - **`{WORKFLOW_DIR}/<id>/snapshot.json`**: per-lifecycle running state — `plans[]` rows (legacy PlanRow shape verbatim) + per-row `execution_lease` + top-level `integration_merge_lease` / `execution_policy` / `branch` anchors / `integration_worktree_path` (the dedicated integration checkout; the main worktree / control root is derived from Git, never recorded in the snapshot).
 - **`{PROJECT_DIR}/<id>/residuals.json`**: open residual register, `entries[<plan-id>]` arrays — the **open-list SSOT** (severity enum + lifecycle semantics verbatim; project-less flows use `_default`).
 - **Canonical**: register new findings only in the project register (`projects/<id>/residuals.json`); v1 root `residual_findings` is legacy read-only — migrate via `mstar migrate`, do not dual-write.

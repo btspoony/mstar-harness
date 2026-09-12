@@ -4,7 +4,7 @@
 
 v3 布局把 v1 的「单文件 `status.json`（根 `plans[]` + 根级 `residual_findings` + `metadata`）」拆成三层。**只使用 v2 地址；v1 地址（根 `plans[]` / 根级 `residual_findings` / `archived/residuals/`）由 `mstar migrate` 一次性迁移，不再读写**。v1 字段形状/历史全文（v1 行表、v1 `metadata` 表、jq/flock 读路径示例）→ **`mstar-engine-legacy`** `references/status-field-history.md`（engine-absent 历史 + fallback）；本文件只保留 v2 地址与一次性 legacy 只读警告。
 
-- **根 `{HARNESS_DIR}/status.json`（v2）** — 活跃生命周期登记：`{ "version": 2, "updated_at", "workflows": [...] }`。只登记 **active**（`running` / `paused`）lifecycle；terminal 时先写 snapshot 再从根列表移除（removal-at-terminal）。由 engine `validateStatus`（v2）/ `registerWorkflow` / `unregisterWorkflow` 读写。
+- **根 `{HARNESS_DIR}/status.json`（v2）** — 活跃生命周期登记：`{ "version": 2, "updated_at", "workflows": [...] }`。只登记 **active**（`running` / `paused`）lifecycle；terminal 时先写 snapshot 再从根列表移除（removal-at-terminal）。由 engine `validateStatus`（v2）/ `registerWorkflow` / `unregisterWorkflow` 读写。PM-facing unregister caller：post-merge close `mstar status workflow-close --workflow <id>`（ordering 固定：terminal snapshot → unregister；细序 → `mstar-iteration/references/phase-6-post-merge-close.md` §6.1–§6.2）。
 - **`{WORKFLOW_DIR}/<id>/snapshot.json`** — 每 lifecycle 的运行态快照（`schema_version: 1`）：**`plans[]` 行（legacy PlanRow 形状逐字保留）**、per-row **`execution_lease`**、顶层 **`integration_merge_lease`** / **`execution_policy`** / **`branch` anchors** / **`integration_worktree_path`** / `compass_ref`。`<id>` = plan id 或 iteration id。
 - **`{PROJECT_DIR}/<id>/roadmap.md` + `residuals.json`** — 项目层：roadmap frontmatter（machine-checkable）+ residual **register**（`entries[<plan-id>]` 数组；severity 枚举与 lifecycle 语义**逐字保留**）。无项目的流程回落到 `_default` 项目。
 
@@ -95,6 +95,7 @@ Canonical vs legacy residual definitions → **`mstar-artifacts` SKILL.md**（"`
 
 - `plans[]` rows are the **legacy PlanRow shape verbatim** (unknown row fields preserved, never re-bucketed). Per-row `execution_lease` stays on the row; `integration_merge_lease` is **top-level** (the v1 root-`metadata` home is gone).
 - Terminal statuses (`completed` / `failed` / `stopped`) require `ended_at` and no dangling leases.
+- **Completed close (Phase 6)** runs `mstar status workflow-close --workflow <id> [--harness <path>] [--ended-at <date>]`: engine `closeWorkflow` rereads the latest snapshot under the snapshot write lock, refuses any dangling lease / non-`Done` row (fail-loud, bytes unchanged), writes `completed` + `ended_at`, then unregisters the root entry. Unregister failure after the snapshot write is a reported **partial close** — retry finishes unregister without rewriting `ended_at`; a fully closed retry rewrites neither file. An already-terminal `failed` / `stopped` snapshot keeps its actual status (close never fabricates `completed`).
 - `execution_policy` keys are copied from v1 root `metadata` at migrate; values are accepted-but-opaque this iteration (no semantic gate).
 - `notes`: a plan row's `notes` array is the **legacy verbatim copy** preserved at migrate; the **runtime ledger is `notes.jsonl`** in the workflow dir (see `workflows/<id>/notes.jsonl` below). New notes append to the ledger only — never dual-write the row `notes`.
 
