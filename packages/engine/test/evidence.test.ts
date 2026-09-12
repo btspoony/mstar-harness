@@ -294,6 +294,14 @@ describe("validateSddEvidenceRecord", () => {
     expect(codesOf(gate)).toContain("evidence.schema");
   });
 
+  test("accepts an otherwise-valid record whose argv carries an empty-string element", () => {
+    // A literal empty argument is legal argv bytes (e.g. `grep "" file`);
+    // elements are bounded by the size limits only, never by nonemptiness.
+    const gate = validateSddEvidenceRecord(record({ command: { argv: ["grep", "", "unit.spec.ts"], cwd: "/feature/wt" } }));
+    expect(gate.ok).toBe(true);
+    expect(gate.violations).toEqual([]);
+  });
+
   test("enforces fixed capture limits and timeout agreement", () => {
     expect(validateSddEvidenceRecord(record({ limits: { ...V1_LIMITS, maxInputBytes: 1 } })).ok).toBe(false);
     expect(validateSddEvidenceRecord(record({ limits: { ...V1_LIMITS, timeoutMs: 100 } })).ok).toBe(false);
@@ -451,11 +459,31 @@ describe("assessSddEvidenceReuse", () => {
     expect(assessment.reasons).toEqual(["outcome.failed", "target.absent"]);
   });
 
+  test("failed and incomplete outcomes with a supplied target stay uncertain under rule 4", () => {
+    const failed = assessSddEvidenceReuse(record({ outcome: { kind: "exit", code: 7 } }), fullFacts(), EXPECTED, snapshot());
+    expect(failed.outcome).toBe("failed");
+    expect(failed.applicability).toBe("uncertain");
+    expect(failed.reasons).toEqual(["outcome.failed"]);
+    const incomplete = assessSddEvidenceReuse(record({ outcome: { kind: "timeout" } }), fullFacts(), EXPECTED, snapshot());
+    expect(incomplete.outcome).toBe("incomplete");
+    expect(incomplete.applicability).toBe("uncertain");
+    expect(incomplete.reasons).toEqual(["outcome.incomplete"]);
+  });
+
   test("no-target unknown coverage stays not-assessed with a coverage reason", () => {
     const patch = record({ request: request({ coverage: coverage({ declaration: "unknown" }) }) });
     const assessment = assessSddEvidenceReuse(patch, fullFacts(), EXPECTED);
     expect(assessment.applicability).toBe("not-assessed");
     expect(assessment.reasons).toContain("coverage.unknown");
+  });
+
+  test("unknown declaration with a supplied target stays uncertain under rule 3", () => {
+    const rec = record({ request: request({ coverage: coverage({ declaration: "unknown" }) }) });
+    const assessment = assessSddEvidenceReuse(rec, fullFacts(), EXPECTED, snapshot());
+    expect(assessment.integrity.ok).toBe(true);
+    expect(assessment.outcome).toBe("passed");
+    expect(assessment.applicability).toBe("uncertain");
+    expect(assessment.reasons).toEqual(["coverage.unknown"]);
   });
 
   test("damaged log with no target keeps the passed outcome but reports uncertain", () => {
@@ -530,6 +558,23 @@ describe("assessSddEvidenceReuse", () => {
     const changed = assessSddEvidenceReuse(record(), fullFacts(), EXPECTED, missingRoot);
     expect(changed.applicability).toBe("changed");
     expect(changed.changedInputs).toContain("src/alpha.ts");
+  });
+
+  test("a malformed target without snapshot fields is downgraded to unknown, not thrown", () => {
+    // Carries entries/tool/environment but omits unknowns/stable/repoCommonDir/head:
+    // out-of-contract shape, so the target lane must degrade instead of
+    // letting a TypeError escape the public entry point.
+    const malformed = {
+      entries: [fileEntry()],
+      tool: tool(),
+      environment: { CI: "1", NODE_ENV: "test" },
+    } as unknown as EvidenceInputSnapshot;
+    const assessment = assessSddEvidenceReuse(record(), fullFacts(), EXPECTED, malformed);
+    expect(assessment.integrity.ok).toBe(true);
+    expect(assessment.outcome).toBe("passed");
+    expect(assessment.applicability).toBe("uncertain");
+    expect(assessment.reasons).toContain("input.unknown");
+    expect(assessment.changedInputs).toEqual([]);
   });
 
   test("a different repository identity is uncertain and names the repository gap", () => {

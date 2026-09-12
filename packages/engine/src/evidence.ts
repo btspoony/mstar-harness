@@ -478,8 +478,10 @@ function validateRecord(record: unknown, out: ValidationResult[]): void {
     } else {
       let totalBytes = 0;
       argv.forEach((arg, index) => {
-        if (!isNonEmptyString(arg, MAX_ARG_CODE_UNITS)) {
-          out.push(violation(CODE_SCHEMA, `record.command.argv[${index}] must be a nonempty string of at most ${MAX_ARG_CODE_UNITS} code units`));
+        // Elements carry the size bound only: a literal empty argument is
+        // legal argv bytes and must not invalidate a genuine capture.
+        if (!isStringBound(arg, MAX_ARG_CODE_UNITS)) {
+          out.push(violation(CODE_SCHEMA, `record.command.argv[${index}] must be a string of at most ${MAX_ARG_CODE_UNITS} code units`));
         }
         totalBytes += Buffer.byteLength(String(arg), "utf8");
       });
@@ -1036,7 +1038,20 @@ export function verifySddEvidence(
 ): GateResult {
   const schemaGate = validateSddEvidenceRecord(record);
   if (!schemaGate.ok) return schemaGate;
-  const rec = record as SddEvidenceRecord;
+  return verifyValidatedRecord(record as SddEvidenceRecord, artifacts, expected);
+}
+
+/**
+ * Identity, artifact and completeness checks over an already
+ * schema-validated record. Shared by `verifySddEvidence` and
+ * `assessSddEvidenceReuse` so each public entry point validates the record
+ * exactly once.
+ */
+function verifyValidatedRecord(
+  rec: SddEvidenceRecord,
+  artifacts: readonly EvidenceArtifactFact[],
+  expected: EvidenceExpectation,
+): GateResult {
   const out: ValidationResult[] = [];
 
   // Identity: the caller-supplied expectation must match the record, and the
@@ -1209,6 +1224,51 @@ function snapshotHasUnknowns(snapshot: EvidenceInputSnapshot): boolean {
 }
 
 /**
+ * What the target comparison lane needs from the current target snapshot.
+ * `targetLaneOf` is the single place target-shaped reads happen; the caller
+ * guards it so a malformed target cannot support comparison and degrades to
+ * `unusableTargetLane` (unknown, no target-derived disclosure) instead of
+ * throwing out of the public entry point.
+ */
+type TargetLane = {
+  usable: boolean;
+  paths: string[];
+  toolDiffers: boolean;
+  envDiffers: boolean;
+  hasUnknowns: boolean;
+  unknowns: string[];
+  stable: boolean;
+  repoCommonDir: string | null;
+  head: string | null;
+};
+
+const unusableTargetLane: TargetLane = {
+  usable: false,
+  paths: [],
+  toolDiffers: false,
+  envDiffers: false,
+  hasUnknowns: true,
+  unknowns: [],
+  stable: false,
+  repoCommonDir: null,
+  head: null,
+};
+
+function targetLaneOf(after: EvidenceInputSnapshot | null, target: EvidenceInputSnapshot): TargetLane {
+  return {
+    usable: true,
+    paths: after !== null ? diffEntryPaths(after.entries, target.entries) : [],
+    toolDiffers: after !== null && !toolEquals(after.tool, target.tool),
+    envDiffers: after !== null && !environmentEquals(after.environment, target.environment),
+    hasUnknowns: snapshotHasUnknowns(target),
+    unknowns: target.unknowns,
+    stable: target.stable,
+    repoCommonDir: target.repoCommonDir,
+    head: target.head,
+  };
+}
+
+/**
  * Assess whether one retained evidence bundle still applies to the current
  * declared inputs. Read-only: no child execution, discovery, version probe
  * or write. The four outputs stay separate — a damaged log or an identity
@@ -1218,7 +1278,8 @@ function snapshotHasUnknowns(snapshot: EvidenceInputSnapshot): boolean {
  * even when an earlier rule already forces uncertainty; no-target mode
  * returns an empty list. Digest equality is consulted only after the
  * preceding first-match checks, so an unknown marker never becomes a false
- * changed/candidate result.
+ * changed/candidate result. A malformed target snapshot is downgraded to
+ * the unknown lane instead of throwing.
  */
 export function assessSddEvidenceReuse(
   record: unknown,
@@ -1226,10 +1287,11 @@ export function assessSddEvidenceReuse(
   expected: EvidenceExpectation,
   target?: EvidenceInputSnapshot,
 ): EvidenceAssessment {
-  const integrity = verifySddEvidence(record, artifacts, expected);
-  if (!validateSddEvidenceRecord(record).ok) {
-    return { integrity, outcome: "unknown", applicability: "uncertain", coverage: "review-required", changedInputs: [], reasons: ["evidence.integrity"] };
+  const schemaGate = validateSddEvidenceRecord(record);
+  if (!schemaGate.ok) {
+    return { integrity: schemaGate, outcome: "unknown", applicability: "uncertain", coverage: "review-required", changedInputs: [], reasons: ["evidence.integrity"] };
   }
+  const integrity = verifyValidatedRecord(record as SddEvidenceRecord, artifacts, expected);
   const rec = record as SddEvidenceRecord;
   const outcome = recordedOutcome(rec);
   const reasons = new Set<string>();
@@ -1243,34 +1305,29 @@ export function assessSddEvidenceReuse(
   const beforeAfterMoved = after !== null && rec.before.digest !== after.digest;
   const beforeAfterPaths = after !== null ? diffEntryPaths(rec.before.entries, after.entries) : [];
 
-  let targetUsable = target !== undefined;
-  let afterTargetPaths: string[] = [];
-  let toolDiffers = false;
-  let envDiffers = false;
+  let lane = unusableTargetLane;
   if (target !== undefined) {
     try {
-      afterTargetPaths = after !== null ? diffEntryPaths(after.entries, target.entries) : [];
-      toolDiffers = after !== null && !toolEquals(after.tool, target.tool);
-      envDiffers = after !== null && !environmentEquals(after.environment, target.environment);
+      lane = targetLaneOf(after, target);
     } catch {
       // A malformed target cannot support comparison; treat it as unknown.
-      targetUsable = false;
-      afterTargetPaths = [];
-      toolDiffers = false;
-      envDiffers = false;
+      lane = unusableTargetLane;
     }
   }
 
   // Disclosure: known differences are reported even when an earlier
   // first-match rule already forces uncertainty, so reviewers keep the
-  // useful gap without losing the uncertainty. No-target mode stays empty.
+  // useful gap without losing the uncertainty. No-target mode stays empty;
+  // an unusable target discloses only record-derived movement.
   if (target !== undefined) {
     for (const path of beforeAfterPaths) changedInputs.add(path);
-    for (const path of afterTargetPaths) changedInputs.add(path);
-    if (toolDiffers) changedInputs.add("$tool");
-    if (envDiffers) changedInputs.add("$environment");
-    if (after !== null && after.repoCommonDir !== null && target.repoCommonDir !== null && after.repoCommonDir !== target.repoCommonDir) {
-      changedInputs.add("$repository");
+    if (lane.usable) {
+      for (const path of lane.paths) changedInputs.add(path);
+      if (lane.toolDiffers) changedInputs.add("$tool");
+      if (lane.envDiffers) changedInputs.add("$environment");
+      if (after !== null && after.repoCommonDir !== null && lane.repoCommonDir !== null && after.repoCommonDir !== lane.repoCommonDir) {
+        changedInputs.add("$repository");
+      }
     }
   }
 
@@ -1289,16 +1346,16 @@ export function assessSddEvidenceReuse(
   } else {
     // Rules 3-5: target comparison lanes.
     const recordUnknowns = snapshotHasUnknowns(rec.before) || (after !== null && snapshotHasUnknowns(after));
-    const targetUnknown = !targetUsable || snapshotHasUnknowns(target);
-    const unstable = !rec.before.stable || (after !== null && !after.stable) || !target.stable;
+    const targetUnknown = !lane.usable || lane.hasUnknowns;
+    const unstable = !rec.before.stable || (after !== null && !after.stable) || !lane.stable;
     const repoMissing =
-      rec.before.repoCommonDir === null || (after !== null && after.repoCommonDir === null) || target.repoCommonDir === null;
+      rec.before.repoCommonDir === null || (after !== null && after.repoCommonDir === null) || lane.repoCommonDir === null;
     const repoDifferent =
-      after !== null && after.repoCommonDir !== null && target.repoCommonDir !== null && after.repoCommonDir !== target.repoCommonDir;
-    const targetHeadMissing = targetUsable && target.head === null;
+      after !== null && after.repoCommonDir !== null && lane.repoCommonDir !== null && after.repoCommonDir !== lane.repoCommonDir;
+    const targetHeadMissing = lane.usable && lane.head === null;
     if (recordUnknowns || targetUnknown) reasons.add("input.unknown");
     if (targetHeadMissing) reasons.add("input.unknown");
-    if (targetUsable && target.unknowns.includes("target.expected-head-mismatch")) reasons.add("target.expected-head-mismatch");
+    if (lane.usable && lane.unknowns.includes("target.expected-head-mismatch")) reasons.add("target.expected-head-mismatch");
     if (unstable || beforeAfterMoved) reasons.add("input.concurrent-change");
     if (repoMissing || repoDifferent) reasons.add("input.repository");
     if (declarationUnknown) reasons.add("coverage.unknown");
@@ -1313,7 +1370,7 @@ export function assessSddEvidenceReuse(
     } else if (outcome !== "passed") {
       // Rule 4: failed or incomplete proof cannot satisfy a passing criterion.
       applicability = "uncertain";
-    } else if (after !== null && (afterTargetPaths.length > 0 || toolDiffers || envDiffers)) {
+    } else if (after !== null && (lane.paths.length > 0 || lane.toolDiffers || lane.envDiffers)) {
       // Rule 5: known differences in tested bytes, tool content or selected
       // environment.
       applicability = "changed";
