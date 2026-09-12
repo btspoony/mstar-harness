@@ -67,17 +67,17 @@ Replace every placeholder with actual evidence. Unknown or duplicate modes, miss
 
 ## After implementer DONE
 
-PM restores context to the completed task checkout/branch and generates its immutable task-specific review package serially; leaves keep their dispatched inputs unchanged.
+PM sets `FEATURE_CWD` from the completed task's immutable Assignment `Worktree path`, verifies its assigned branch, and restores context to that same checkout/branch. Generate the task-specific review package serially from this path; do not use the PM shell cwd for task endpoints. Leaves keep their dispatched inputs unchanged.
 
-1. `HEAD_SHA=$(git rev-parse HEAD)`
-2. `mstar sdd review-package "$BASE_SHA" "$HEAD_SHA" --context "$SDD_DIR/context.json"` — bound: probes git in `featureCwd`, writes the diff into the control sddDir, prints absolute paths.
+1. `HEAD_SHA=$(git -C "$FEATURE_CWD" rev-parse HEAD)`
+2. `mstar sdd review-package "$BASE_SHA" "$HEAD_SHA" --context "$SDD_DIR/context.json"` — context `featureCwd` must equal the same `$FEATURE_CWD` used for `HEAD_SHA`; probes git there, writes the diff into the control sddDir, prints absolute paths.
 3. Dispatch task reviewer with: brief path, report path, diff path, Global Constraints (verbatim from plan).
 
 **Never use `HEAD~1` as BASE** — multi-commit tasks truncate.
 
 ## Bound child launch (CLI-launchable children)
 
-When the implementer is a CLI command rather than a hosted subagent, launch it through the bound argv entry — never raw from a primary/control checkout:
+**PM-only serialized launch:** when the implementer is a CLI command rather than a hosted subagent, PM holds the serialized context operation through context validation and child spawn, using the launch Assignment's fixed checkout/branch. Do not rotate context until the launch resolves. Hosted leaves never use this entry for their assigned checks; they run allowed commands directly from their verified assigned feature workdir and branch:
 
 ```bash
 mstar sdd exec --context "$SDD_DIR/context.json" -- <argv...>
