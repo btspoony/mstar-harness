@@ -74,6 +74,8 @@ npm i -g @mstar-harness/cli
 
 `npx @mstar-harness/cli doctor --target <opencode\|cursor\|codex\|zcode\|omp\|dsh>`。
 
+Codex 角色链接修复与具名子代理验证：[Codex 安装](INSTALL.md#codex)。
+
 仓库根提供便携式 **Agent Plugins v1.0.0** manifest（`plugin.json`），`skills/` 为 Agent Skills 组件——可用 `npx @mstar-harness/cli plugin validate` 校验。
 
 手动安装 / 路径布局：[`INSTALL.md`](INSTALL.md)。CLI 参数：[`docs/cli.md`](docs/cli.md)。

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { ensureCodexAgentFile, validateCodexAgentFile } from "./codex-agent-files";
 import type { AgentAdapter, Scope } from "../types";
 import { resolveProjectRoot } from "../utils";
 import { runCliCommand } from "../exec";
@@ -32,10 +33,10 @@ import {
  *
  * - init: probe for the codex CLI, then `codex plugin marketplace add
  *   <owner/repo> --ref main` (idempotent — an already-added marketplace is a
- *   no-op). Custom-agent symlinks still come from the shared local checkout at
+ *   no-op). Custom-agent regular files still come from the shared local checkout at
  *   `~/.mstar/harness` (codex only discovers agents from `~/.codex/agents/`,
  *   not from plugin packages).
- * - doctor: validate the local checkout + agent symlinks (as before), then
+ * - doctor: validate the local checkout + agent copies, then
  *   check the marketplace is registered and the plugin resolvable via
  *   `codex plugin marketplace list --json` / `codex plugin list --json`.
  *   The repo-bundled `.agents/plugins/marketplace.json` is a release asset of
@@ -68,6 +69,8 @@ const CODEX_AGENT_NAMES = [
   "writing-specialist",
   "prompt-engineer",
 ];
+
+const CODEX_AGENT_GITIGNORE = [".codex/agents/*.toml", ".codex/agents/*.toml.*.bak"];
 
 const CODEX_PROJECT_COMMAND_NAMES = [
   "iteration-start",
@@ -190,30 +193,30 @@ function agentSourcePath(agentName: string) {
   return path.join(HARNESS_REPO_PATH, "codex", "agents", `${agentName}.toml`);
 }
 
-function globalAgentLinkPath(agentName: string) {
+function globalAgentFilePath(agentName: string) {
   return path.join(os.homedir(), ".codex", "agents", `${agentName}.toml`);
 }
 
-function projectAgentLinkPath(agentName: string) {
+function projectAgentFilePath(agentName: string) {
   return path.join(resolveProjectRoot(), ".codex", "agents", `${agentName}.toml`);
 }
 
-function ensureAgentLinks(scope: Scope, dryRun: boolean) {
+function ensureAgentFiles(scope: Scope, dryRun: boolean) {
   const notes: string[] = [];
   for (const agentName of CODEX_AGENT_NAMES) {
     const source = agentSourcePath(agentName);
-    const linkPath = scope === "global" ? globalAgentLinkPath(agentName) : projectAgentLinkPath(agentName);
-    notes.push(ensureSymlink(source, linkPath, dryRun));
+    const filePath = scope === "global" ? globalAgentFilePath(agentName) : projectAgentFilePath(agentName);
+    notes.push(...ensureCodexAgentFile(source, filePath, dryRun));
   }
   return notes;
 }
 
-function validateAgentLinks(scope: Scope) {
+function validateAgentFiles(scope: Scope) {
   const errors: string[] = [];
   for (const agentName of CODEX_AGENT_NAMES) {
     const source = agentSourcePath(agentName);
-    const linkPath = scope === "global" ? globalAgentLinkPath(agentName) : projectAgentLinkPath(agentName);
-    errors.push(...validateSymlink(source, linkPath));
+    const filePath = scope === "global" ? globalAgentFilePath(agentName) : projectAgentFilePath(agentName);
+    errors.push(...validateCodexAgentFile(source, filePath, scope));
   }
   return errors;
 }
@@ -265,7 +268,7 @@ function validateIterationSkillLinks() {
 function runInit(scope: Scope, dryRun: boolean) {
   const notes: string[] = [];
 
-  // The shared local checkout stays: codex agent .toml symlinks (and the Cursor
+  // The shared local checkout stays: codex agent .toml copies (and the Cursor
   // / omp adapters) materialize from it.
   notes.push(...ensureLocalHarnessRepo(dryRun));
 
@@ -295,13 +298,13 @@ function runInit(scope: Scope, dryRun: boolean) {
 
   if (scope === "project") {
     const projectRoot = resolveProjectRoot();
-    notes.push(...appendGitignore(projectRoot, [".codex/agents/*.toml"], dryRun));
+    notes.push(...appendGitignore(projectRoot, CODEX_AGENT_GITIGNORE, dryRun));
     notes.push(...appendHarnessProjectGitignore(projectRoot, dryRun));
     notes.push(...ensureIterationSkillLinks(dryRun));
   } else {
     notes.push(GLOBAL_ITERATION_SKILLS_WARNING);
   }
-  notes.push(...ensureAgentLinks(scope, dryRun));
+  notes.push(...ensureAgentFiles(scope, dryRun));
 
   return {
     location: `${CODEX_BIN} marketplaces (config.toml)`,
@@ -310,7 +313,7 @@ function runInit(scope: Scope, dryRun: boolean) {
 }
 
 function runDoctor(scope: Scope) {
-  const errors = validateLocalHarnessRepo();
+  const errors = [...validateLocalHarnessRepo(), ...validateAgentFiles(scope)];
   const notes: string[] = [];
   const legacyNote = legacyPersonalMarketplaceNote();
   if (legacyNote) notes.push(legacyNote);
@@ -338,12 +341,16 @@ function runDoctor(scope: Scope) {
     const projectRoot = resolveProjectRoot();
     const gitignorePath = path.join(projectRoot, ".gitignore");
     const gitignore = fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, "utf8") : "";
+    for (const entry of CODEX_AGENT_GITIGNORE) {
+      if (!gitignore.split(/\r?\n/).includes(entry)) {
+        errors.push(`Missing .gitignore entry: ${entry}. Run: mstar-harness init --target codex --scope project`);
+      }
+    }
     for (const entry of missingHarnessProcessGitignoreEntries(gitignore)) {
       errors.push(`Missing .gitignore entry: ${entry}`);
     }
     errors.push(...validateIterationSkillLinks());
   }
-  errors.push(...validateAgentLinks(scope));
   return { location: `${CODEX_BIN} marketplaces (config.toml)`, errors, notes };
 }
 

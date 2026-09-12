@@ -38,9 +38,9 @@ Optional advanced: pass `--pm-model` / `--*-models` flags to write explicit `age
 
 ### Codex
 
-The harness repo ships its own marketplace catalog at `.agents/plugins/marketplace.json` (name `mstar-repo`). The CLI registers the repo as a Codex git marketplace and links Codex custom agents from the maintained `~/.mstar/harness` checkout:
+The harness repo ships its own marketplace catalog at `.agents/plugins/marketplace.json` (name `mstar-repo`). The CLI registers the repo as a Codex git marketplace and copies Codex custom agent TOMLs as regular files from the maintained `~/.mstar/harness` checkout:
 
-1) Register the repo marketplace + link agents:
+1) Register the repo marketplace + install agent files:
 
 - `npx @mstar-harness/cli init --target codex --scope global`
 
@@ -48,7 +48,7 @@ The harness repo ships its own marketplace catalog at `.agents/plugins/marketpla
 
 - `codex plugin add morning-star-harness@mstar-repo`
 
-3) Verify the marketplace registration and agent symlinks:
+3) Verify the marketplace registration and regular agent files:
 
 - `npx @mstar-harness/cli doctor --target codex`
 
@@ -133,7 +133,7 @@ Codex install:
 - A pre-existing legacy `personal` marketplace entry is surfaced as a `doctor` note with migration steps (remove the entry, install from `mstar-repo`).
 - Runtime host behavior after install:
   - `/pm` enters the shared PM flow.
-  - Codex custom agents are linked from `~/.mstar/harness/codex/agents/*.toml`.
+  - Codex custom agents are copied from `~/.mstar/harness/codex/agents/*.toml` as regular files; see [refresh and migration](#codex-agent-files).
   - **Project scope only:** `iteration-start`, `iteration-drive`, and `iteration-loop` are installed as project-local skills under `.agents/skills/<name>/SKILL.md` (symlinked to `~/.mstar/harness/commands/<name>.md`); the CLI gitignores those paths.
   - **Global scope:** iteration skills are **not** installed (avoids polluting other projects); `init` prints a warning — re-run with `--scope project` to enable them.
   - Codex-specific clarify, dispatch, sandbox, and tool-discovery rules live in **`mstar-host`** → `references/codex.md`.
@@ -420,7 +420,7 @@ OpenCode `init` enforces these baseline requirements in `opencode.json`:
 - `plugin` contains `@mstar-harness/opencode@latest` (legacy `morning-star@git+…` lines for `btspoony/mstar-harness` are stripped on init, including URLs without `.git`, `ssh://`, or `#tag`)
 - Role models are **not** required — OpenCode defaults apply unless you pass optional `--*-model` flags
 
-Cursor and Codex `init` ensure a maintained local checkout exists at `~/.mstar/harness`. Codex then creates agent symlinks from that checkout. Cursor clones a **separate real git checkout** at the plugin path (see [Install path layout](#install-path-layout)).
+Cursor and Codex `init` ensure a maintained local checkout exists at `~/.mstar/harness`. Codex then copies regular agent TOML files from that checkout. Cursor clones a **separate real git checkout** at the plugin path (see [Install path layout](#install-path-layout)).
 
 Cursor `init`:
 
@@ -432,9 +432,15 @@ Codex `init` registers the repo-bundled Codex marketplace (probed on codex-cli 0
 - `codex plugin marketplace add https://github.com/btspoony/mstar-harness.git --ref main` — idempotent (an already-registered marketplace is skipped)
 - the marketplace catalog is the repo's own `.agents/plugins/marketplace.json` (name `mstar-repo`, plugin root = repo root, `source.path: "./"`)
 
-Codex `init` also links all `codex/agents/*.toml` files into `~/.codex/agents/` for global scope or `.codex/agents/` for project scope. Project scope appends the same harness **process** gitignore set as Cursor project `init` (see above) and symlinks `iteration-start` / `iteration-drive` / `iteration-loop` into `.agents/skills/<name>/SKILL.md` from `~/.mstar/harness/commands/<name>.md` (also gitignored). Global scope skips iteration skills and prints a pollution-avoidance warning.
+Codex `init` also copies all `codex/agents/*.toml` files as regular files into `~/.codex/agents/` for global scope or `.codex/agents/` for project scope. Project scope appends the same harness **process** gitignore set as Cursor project `init` (see above) and symlinks `iteration-start` / `iteration-drive` / `iteration-loop` into `.agents/skills/<name>/SKILL.md` from `~/.mstar/harness/commands/<name>.md` (also gitignored). Global scope skips iteration skills and prints a pollution-avoidance warning.
 
 dsh `init` runs the two `dsh plugin --profile web add` calls (`@mstar-harness/dsh` then `dsh-llm-fallbacks`) in the fixed `web` profile — idempotent (already-installed rows skipped; a fallbacks row installed at a version other than the pin is re-added at the pin instead), fail-loud when the `dsh` binary is missing, and `--no-fallbacks` skips the fallbacks row.
+
+### Codex agent files
+
+Re-run `init --target codex --scope global` (or `project`) to install from the current `~/.mstar/harness/codex/agents/` source. Identical bytes are left untouched. A differing regular file is backed up as `<role>.toml.<uuid>.bak` before atomic replacement; a legacy symlink to the expected harness source is replaced without writing through it. Unrelated symlinks, non-file destinations, and a symlinked agent directory are refused.
+
+`init` does not pull an existing source checkout: refresh that checkout first when upgrading agent definitions, then re-run `init`. Project iteration skill symlinks are unchanged. After `doctor --target codex --scope <global|project>` passes, have Codex invoke a named role (for example, `fullstack-dev` on a short read-only task) and confirm that it starts; role discovery alone is insufficient.
 
 ## What `doctor` Checks
 
@@ -442,7 +448,7 @@ dsh `init` runs the two `dsh plugin --profile web add` calls (`@mstar-harness/ds
 - Missing per-role `agent.<role>.model` is a **yellow recommendation** only (OpenCode defaults are OK).
 - If only legacy git is present, or legacy and npm are both listed, `doctor` prints **yellow recommendations** and still exits 0; run `init` to normalize to `@mstar-harness/opencode@latest`.
 - For Cursor, `doctor` checks the maintained `~/.mstar/harness` checkout, that the Cursor plugin path is a **real git directory** (not a symlink), that `agents/*.md` files use Cursor-first frontmatter, and (project scope) all harness **process** `.gitignore` entries listed under Cursor `init`.
-- For Codex, `doctor` checks that the `mstar-repo` marketplace is registered (via `codex plugin marketplace list`), the maintained `~/.mstar/harness` checkout, and custom-agent symlinks. A legacy personal-marketplace entry for this plugin in `~/.agents/plugins/marketplace.json` is reported as a migration note. Project scope also validates iteration skill symlinks under `.agents/skills/` and harness **process** `.gitignore` entries.
+- For Codex, `doctor` checks that the `mstar-repo` marketplace is registered (via `codex plugin marketplace list`), the maintained `~/.mstar/harness` checkout, and regular custom-agent files whose bytes match the maintained source. Symlinks, missing files, and stale or customized bytes are issues; configuration checks do not prove successful subagent invocation. A legacy personal-marketplace entry for this plugin in `~/.agents/plugins/marketplace.json` is reported as a migration note. Project scope also validates iteration skill symlinks under `.agents/skills/` and harness **process** `.gitignore` entries.
 
 ## Install path layout
 
@@ -450,7 +456,7 @@ Cursor **does not discover symlinked plugin directories**. Use real directories 
 
 | Path | Host | Layout | Notes |
 | --- | --- | --- | --- |
-| `~/.mstar/harness` | Codex (agent `.toml` source), OpenCode dev bundle | git checkout | Codex agent `.toml` files are **symlinked** from here into `~/.codex/agents/`; the Codex marketplace itself is git-sourced (`btspoony/mstar-harness`) |
+| `~/.mstar/harness` | Codex (agent `.toml` source), OpenCode dev bundle | git checkout | Codex agent `.toml` files are **copied as regular files** from here into `~/.codex/agents/`; the Codex marketplace itself is git-sourced (`btspoony/mstar-harness`) |
 | `~/.cursor/plugins/local/morning-star-harness` | Cursor global plugin | **git checkout (real dir)** | **Not** a symlink to `~/.mstar/harness`; `init` clones or `git pull`s here |
 | `.cursor/plugins/morning-star-harness` | Cursor project plugin | **git checkout (real dir)** | gitignored; same clone/pull behavior as global |
 
