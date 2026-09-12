@@ -112,7 +112,7 @@ The audit and review commands are read-only and advisory; findings can become pl
 |---------|------|
 | `/codebase-audit [keywords]` | Read-only survey of what's worth doing — prioritized, ready-to-execute plans; narrow it with category focus (`bug`, `security`, `perf`, `tech-debt`, …) when you want a targeted pass. |
 | `/amazing-pr-review [pr\|branch\|scope] [quick\|default\|deep]` | Deep pre-merge review of a PR / branch / diff at three strengths — `quick` (single-pass, 1 seat) / `default` (no-flag landing tier, reduced seats) / `deep` (full three-stage pipeline) — one verdict (`ship it` / `needs fixes` / `blocked`) and every finding, posted to GitHub by the command's main agent at Stage 3 synthesis when a PR number is given. `deep` runs the full three-stage pipeline (collect → domain review → main-agent synthesis; one verdict / one GitHub Review); `default` / `quick` are lighter single/dual-seat passes. Multi-PR input → first PR only; remaining PRs queued as audit todos (next session); suggest one session per PR. |
-| `/amazing-e2e-check [environment/device] [scenarios]` | Explicitly requested browser/device/installed-deployment checks in a separate workflow; never a routine iteration QA gate. |
+| `/amazing-e2e-check [environment/device] [scenarios]` | Execute explicitly requested browser/device/installed-deployment scenarios through `mstar-e2e` in a separate workflow; never a routine iteration QA gate. |
 
 ## Harness Workflow
 

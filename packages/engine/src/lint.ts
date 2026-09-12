@@ -265,7 +265,7 @@ const RUNNER_RE =
 
 function hasEvidenceDetail(value: string): boolean {
   const detail = value.trim().replace(/^`+|`+$/g, "").trim();
-  return detail.length > 0 && !/^(?:n\/a|none|tbd|todo|tba|unknown|skipped|not[- ]run|\.\.\.|…|<[^>]+>)$/i.test(detail);
+  return detail.length > 0 && !/^(?:n\/a|none|tbd|todo|tba|unknown|skipped|not[- ]run|\.\.\.|\u2026|<[^>]+>)$/i.test(detail);
 }
 
 /**
