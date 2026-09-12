@@ -114,12 +114,33 @@ function topologyFixture(
 }
 
 /** Write `workflows/<id>/snapshot.json` into `dir`; returns the snapshot path. */
-function writeSnapshot(dir: string, doc: Record<string, unknown>): string {
-  const workflowDir = join(dir, "workflows", WORKFLOW_ID);
+function writeSnapshot(dir: string, doc: Record<string, unknown>, workflowId: string = WORKFLOW_ID): string {
+  const workflowDir = join(dir, "workflows", workflowId);
   mkdirSync(workflowDir, { recursive: true });
   const snapshotPath = join(workflowDir, "snapshot.json");
   writeFileSync(snapshotPath, JSON.stringify(doc, null, 2));
   return snapshotPath;
+}
+
+/**
+ * Write the v2 root register (`status.json` — `workflows[]` holds ACTIVE
+ * lifecycles only) listing the given workflow ids as active.
+ */
+function writeRegister(dir: string, ids: string[]): string {
+  const registerPath = join(dir, "status.json");
+  writeFileSync(
+    registerPath,
+    JSON.stringify(
+      {
+        version: 2,
+        updated_at: "2026-08-08",
+        workflows: ids.map((id) => ({ id, type: "plan", started_at: "2026-08-08", dir: `workflows/${id}` })),
+      },
+      null,
+      2,
+    ),
+  );
+  return registerPath;
 }
 
 /** Base snapshot doc: single running workflow with the given plans. */
@@ -515,6 +536,101 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
       );
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("worktree.l1.lease-equals-main");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("mstar worktree check — lifecycle-owned branches from ALL active workflows (L1 caller policy)", () => {
+  test("a sibling active workflow's integration branch is collected — main on it refuses (residency-switched)", () => {
+    const root = tmpRoot("mstar-wt-l1-sibling-int-");
+    try {
+      // Standalone governing plan (no integration topology of its own).
+      const linked = worktreeFixture(root);
+      const mainBranch = git(["branch", "--show-current"], root);
+      writeSnapshot(root, standaloneSnapshotDoc(mainBranch, [PLAN_A(linked)]));
+      // A second ACTIVE workflow whose branch.integration IS the branch main
+      // currently sits on — the ownership evidence must come from the
+      // sibling snapshot, not only the governing one.
+      writeSnapshot(root, snapshotDoc([], { id: "wf-2", type: "plan", branch: { integration: mainBranch } }), "wf-2");
+      writeRegister(root, [WORKFLOW_ID, "wf-2"]);
+      const result = runCli(
+        ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", mainBranch],
+        root,
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("worktree.main.residency-switched");
+      expect(result.stderr).toContain("owned by an active lifecycle");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("malformed sibling snapshot refuses the check (fail-closed probe), exit 1", () => {
+    const root = tmpRoot("mstar-wt-l1-sibling-bad-");
+    try {
+      const linked = worktreeFixture(root);
+      const mainBranch = git(["branch", "--show-current"], root);
+      writeSnapshot(root, standaloneSnapshotDoc(mainBranch, [PLAN_A(linked)]));
+      // Registered active sibling with an unreadable snapshot — incomplete
+      // lifecycle evidence must refuse, never silently skip.
+      mkdirSync(join(root, "workflows", "wf-2"), { recursive: true });
+      writeFileSync(join(root, "workflows", "wf-2", "snapshot.json"), "{ not json");
+      writeRegister(root, [WORKFLOW_ID, "wf-2"]);
+      const result = runCli(
+        ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", mainBranch],
+        root,
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("worktree.l1.lifecycle-snapshot-unreadable");
+      // The refusal precedes the gate: no residency line, no checklist.
+      expect(result.stdout).not.toContain("main worktree:");
+      expect(result.stdout).not.toContain("worktree L1 check");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("multi-snapshot pass: registered siblings collect, unregistered retained snapshots do not (exit 0)", () => {
+    const root = tmpRoot("mstar-wt-l1-sibling-ok-");
+    try {
+      const topo = topologyFixture(root);
+      writeSnapshot(root, iterationSnapshotDoc(topo, [PLAN_A(topo.linked)]));
+      // A second active workflow with its own integration anchor (distinct
+      // from main) — registered, collected, check still passes.
+      writeSnapshot(root, snapshotDoc([], { id: "wf-2", type: "plan", branch: { integration: "iteration/wf-2" } }), "wf-2");
+      // An UNREGISTERED retained snapshot is not an active lifecycle — even
+      // one whose integration anchor is the branch main sits on must not
+      // refuse the check (the register decides the active set).
+      writeSnapshot(root, snapshotDoc([], { id: "wf-old", type: "plan", branch: { integration: topo.mainBranch } }), "wf-old");
+      writeRegister(root, [WORKFLOW_ID, "wf-2"]);
+      const result = runCli(
+        ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", topo.mainBranch],
+        root,
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("worktree L1 check: OK");
+      expect(result.stderr).toBe("");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("unreadable root register refuses the check (active set cannot be enumerated), exit 1", () => {
+    const root = tmpRoot("mstar-wt-l1-register-bad-");
+    try {
+      const linked = worktreeFixture(root);
+      const mainBranch = git(["branch", "--show-current"], root);
+      writeSnapshot(root, standaloneSnapshotDoc(mainBranch, [PLAN_A(linked)]));
+      writeFileSync(join(root, "status.json"), "{ not json");
+      const result = runCli(
+        ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", mainBranch],
+        root,
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("worktree.l1.lifecycle-register-unreadable");
+      expect(result.stdout).not.toContain("worktree L1 check");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

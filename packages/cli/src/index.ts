@@ -38,6 +38,7 @@ import {
   isReadOnlyAssignmentRole,
   l1PreDispatchCheck,
   l2PreDispatchCheck,
+  LEGACY_WORKTREE_PATH_CODE,
   lintFiveQuestion,
   lintFrontmatter,
   lintLoadOrder,
@@ -114,6 +115,7 @@ import {
   type StatusV2Doc,
   type ToolSignal,
   type ValidationResult,
+  type WorkflowSnapshot,
   type WorktreeTrack,
 } from "@mstar-harness/engine";
 import { verifyPlanExecutionLease } from "./lease-verify";
@@ -900,6 +902,31 @@ function resolveStatusFilePath(pathArg?: string): string {
   return path.join(harnessDir, "status.json");
 }
 
+/** Print a structured violation list (`  - [sev] code: msg` + fix hint) to stderr. */
+function printViolationList(violations: readonly ValidationResult[]): void {
+  for (const violation of violations) {
+    console.error(`  - [${violation.severity}] ${violation.code}: ${violation.message}`);
+    if (violation.fix) console.error(`    fix: ${violation.fix}`);
+  }
+}
+
+/**
+ * Blocking (non-legacy-alias) violations of a workflow snapshot document,
+ * validated BEFORE the canonical read so a refusing read prints the
+ * structured FAIL list (severity/code/message/fix per violation) instead of
+ * a bare error line. The legacy `control_worktree_path` diagnostic is not
+ * blocking — `readWorkflowSnapshot` accepts it as the single read alias. A
+ * missing snapshot file throws the canonical reader's message so callers'
+ * failScript path is unchanged.
+ */
+function blockingSnapshotViolations(snapshotPath: string): ValidationResult[] {
+  if (!fs.existsSync(snapshotPath)) {
+    throw new Error(`workflow snapshot not found: ${snapshotPath}`);
+  }
+  const gate = validateWorkflowSnapshot(readJson(snapshotPath));
+  return gate.violations.filter((violation) => violation.code !== LEGACY_WORKTREE_PATH_CODE);
+}
+
 statusCommand
   .command("validate")
   .description(
@@ -914,6 +941,17 @@ statusCommand
         throw new Error(`status file not found: ${statusPath}`);
       }
       if (path.basename(statusPath) === WORKFLOW_SNAPSHOT_FILE) {
+        // Structured refusal for blocking snapshot violations — the same FAIL
+        // list shape as the root branch below (the read-only canonical reader
+        // handles only the accepted legacy-alias advisory after this).
+        const blocking = blockingSnapshotViolations(statusPath);
+        if (blocking.length > 0) {
+          const count = blocking.length;
+          console.error(pc.red(`${statusPath}: FAIL (${count} violation${count === 1 ? "" : "s"})`));
+          printViolationList(blocking);
+          process.exitCode = 1;
+          return;
+        }
         // Read-only canonical reader: the v1 `control_worktree_path` alias
         // is accepted with its medium migration advisory (normalized in
         // memory — validation never rewrites the source file's bytes);
@@ -932,10 +970,7 @@ statusCommand
       }
       const count = gate.violations.length;
       console.error(pc.red(`${statusPath}: FAIL (${count} violation${count === 1 ? "" : "s"})`));
-      for (const violation of gate.violations) {
-        console.error(`  - [${violation.severity}] ${violation.code}: ${violation.message}`);
-        if (violation.fix) console.error(`    fix: ${violation.fix}`);
-      }
+      printViolationList(gate.violations);
       process.exitCode = 1;
     } catch (error) {
       console.error(pc.red(`status validate failed: ${(error as Error).message}`));
@@ -1384,21 +1419,28 @@ function resolveLeaseHarnessDir(harnessArg?: string): string {
 }
 
 /**
- * Resolve `{WORKFLOW_DIR}/<id>/snapshot.json` for the v2 `--workflow <id>`
- * inputs (lease verify / verify-integration / iteration gate / worktree
- * check). The id is a single path component \u2014 reject separators and `..`
- * so a hostile id cannot escape the workflows dir. The workflow dir comes
- * from the engine resolver (Phase-5 F1): a `.mstarc` `[config]
- * workflow_dir` declaration wins, else `{HARNESS_DIR}/workflows` \u2014 so a
- * custom layout is READ at the same location it is written. Harness
- * discovery starts at the verified MAIN worktree
- * (`resolveProcessHarnessDir`) — the process SSOT is never resolved from a
- * linked feature checkout's own `.mstar/`.
+ * Workflow ids are single path components — reject separators and `..` so a
+ * hostile id cannot escape the workflows dir (shared by `resolveSnapshotPath`
+ * and the active-workflow lifecycle scan below).
  */
-function resolveSnapshotPath(workflowId: string, harnessArg?: string): string {
+function assertWorkflowId(workflowId: string): void {
   if (workflowId === "" || workflowId === "." || workflowId === ".." || workflowId.includes("/") || workflowId.includes("\\")) {
     throw new Error(`invalid workflow id ${JSON.stringify(workflowId)}`);
   }
+}
+
+/**
+ * Resolve `{WORKFLOW_DIR}/<id>/snapshot.json` for the v2 `--workflow <id>`
+ * inputs (lease verify / verify-integration / iteration gate / worktree
+ * check). The workflow dir comes from the engine resolver (Phase-5 F1): a
+ * `.mstarc` `[config] workflow_dir` declaration wins, else
+ * `{HARNESS_DIR}/workflows` \u2014 so a custom layout is READ at the same
+ * location it is written. Harness discovery starts at the verified MAIN
+ * worktree (`resolveProcessHarnessDir`) — the process SSOT is never
+ * resolved from a linked feature checkout's own `.mstar/`.
+ */
+function resolveSnapshotPath(workflowId: string, harnessArg?: string): string {
+  assertWorkflowId(workflowId);
   const harnessDir = resolveLeaseHarnessDir(harnessArg);
   const workflowDir = resolveWorkflowDir(harnessDir, { harnessDir });
   return path.join(workflowDir, workflowId, WORKFLOW_SNAPSHOT_FILE);
@@ -1888,6 +1930,103 @@ function parseTracksArg(tracksJson: string): WorktreeTrack[] {
   return tracks;
 }
 
+/**
+ * One snapshot's lifecycle-owned branch contribution: `branch.integration`
+ * plus every plan row's `execution_lease.working_branch` /
+ * `metadata.working_branch` (the retained working-branch record that
+ * survives lease release). `branch.base` is deliberately NOT collected —
+ * it is the creation/merge anchor, never an ownership fact.
+ */
+function collectSnapshotLifecycleBranches(snapshot: WorkflowSnapshot, owned: Set<string>): void {
+  const integrationBranch = String(snapshot.branch?.integration ?? "");
+  if (integrationBranch.trim() !== "") owned.add(integrationBranch);
+  const plans = Array.isArray(snapshot.plans) ? (snapshot.plans as Array<Record<string, unknown>>) : [];
+  for (const row of plans) {
+    const lease = (row.execution_lease ?? {}) as Record<string, unknown>;
+    if (typeof lease.working_branch === "string" && lease.working_branch.trim() !== "") owned.add(lease.working_branch);
+    const metadata = (row.metadata ?? {}) as Record<string, unknown>;
+    if (typeof metadata.working_branch === "string" && metadata.working_branch.trim() !== "") owned.add(metadata.working_branch);
+  }
+}
+
+/**
+ * Lifecycle-owned branches from ALL registered ACTIVE workflows — the L1
+ * caller policy (spec § Primary residency): callers collect them from all
+ * active workflow snapshots, never only the governing one. The v2 root
+ * register (`{HARNESS_DIR}/status.json` `workflows[]` holds ACTIVE
+ * lifecycles only — removal-at-terminal) drives the enumeration; every
+ * registered snapshot is read through the canonical reader at the SAME
+ * `{WORKFLOW_DIR}` resolution the governing snapshot uses. The governing
+ * workflow id itself is skipped — its snapshot is read and contributed at
+ * the call site (dedupe). Fail-closed: a sibling snapshot that is
+ * unreadable or fails validation is a probe refusal, never a silent skip —
+ * incomplete lifecycle evidence must not weaken the main-branch
+ * non-ownership check; an unreadable/corrupt register (which cannot
+ * enumerate the active set) refuses for the same reason. A MISSING
+ * register leaves the active set empty (nothing is registered active); the
+ * governing snapshot still contributes at the call site. Read-only.
+ */
+type ActiveLifecycleScan =
+  | { kind: "ok"; branches: string[]; notes: ValidationResult[] }
+  | { kind: "refusal"; code: string; detail: string };
+
+function scanActiveLifecycleBranches(harnessDir: string, governingWorkflowId: string): ActiveLifecycleScan {
+  const registerPath = path.join(harnessDir, "status.json");
+  if (!fs.existsSync(registerPath)) return { kind: "ok", branches: [], notes: [] };
+  let register: Record<string, unknown>;
+  try {
+    register = readJson(registerPath);
+  } catch (error) {
+    return { kind: "refusal", code: "worktree.l1.lifecycle-register-unreadable", detail: `${registerPath}: ${(error as Error).message}` };
+  }
+  if (register.version !== 2 || !Array.isArray(register.workflows)) {
+    return {
+      kind: "refusal",
+      code: "worktree.l1.lifecycle-register-unreadable",
+      detail: `${registerPath}: not a readable v2 root register (version 2 + workflows[]) — the active lifecycle set cannot be enumerated`,
+    };
+  }
+  let workflowsDir: string;
+  try {
+    workflowsDir = resolveWorkflowDir(harnessDir, { harnessDir });
+  } catch (error) {
+    return { kind: "refusal", code: "worktree.l1.lifecycle-register-unreadable", detail: `${registerPath}: ${(error as Error).message}` };
+  }
+  const owned = new Set<string>();
+  const notes: ValidationResult[] = [];
+  for (const entry of register.workflows as unknown[]) {
+    if (typeof entry !== "object" || entry === null || typeof (entry as Record<string, unknown>).id !== "string") {
+      return {
+        kind: "refusal",
+        code: "worktree.l1.lifecycle-register-unreadable",
+        detail: `${registerPath}: malformed workflows[] entry — a registered active lifecycle cannot be identified`,
+      };
+    }
+    const id = (entry as Record<string, unknown>).id as string;
+    try {
+      assertWorkflowId(id);
+    } catch (error) {
+      return { kind: "refusal", code: "worktree.l1.lifecycle-register-unreadable", detail: `${registerPath}: ${(error as Error).message}` };
+    }
+    if (id === governingWorkflowId) continue; // governing snapshot read at the call site — dedupe
+    const snapshotPath = path.join(workflowsDir, id, WORKFLOW_SNAPSHOT_FILE);
+    let snapshot: WorkflowSnapshot;
+    try {
+      const read = readWorkflowSnapshot(path.dirname(snapshotPath));
+      snapshot = read.snapshot;
+      notes.push(...read.diagnostics);
+    } catch (error) {
+      return {
+        kind: "refusal",
+        code: "worktree.l1.lifecycle-snapshot-unreadable",
+        detail: `${snapshotPath}: ${(error as Error).message}`,
+      };
+    }
+    collectSnapshotLifecycleBranches(snapshot, owned);
+  }
+  return { kind: "ok", branches: [...owned], notes };
+}
+
 worktreeCommand
   .command("check")
   .description(
@@ -1962,6 +2101,16 @@ worktreeCommand
         }
         const integrationOverride = options.integration ?? options.control;
         const snapshotPath = resolveSnapshotPath(options.workflow, options.harness);
+        // Blocking snapshot violations refuse with the structured FAIL list
+        // (a bare failScript line is reserved for missing/unreadable files).
+        const blocking = blockingSnapshotViolations(snapshotPath);
+        if (blocking.length > 0) {
+          const count = blocking.length;
+          console.error(pc.red(`${snapshotPath}: FAIL (${count} violation${count === 1 ? "" : "s"})`));
+          printViolationList(blocking);
+          process.exitCode = 1;
+          return;
+        }
         // Canonical reader: accepts the v1 control_worktree_path alias with
         // its medium migration diagnostic (reported as a read-only advisory
         // — the source file is never rewritten here).
@@ -1985,15 +2134,25 @@ worktreeCommand
         }
         const row = matches[0]!;
         const lease = (row.execution_lease ?? {}) as Record<string, unknown>;
-   // Lifecycle-owned branches collected from the governing snapshot's plan
-   // rows + branch.integration — main must not sit on any of them.
+   // Lifecycle-owned branches: the governing snapshot's contribution plus
+   // every OTHER registered ACTIVE workflow's snapshot (spec § Primary
+   // residency — main must not sit on ANY active lifecycle's
+   // integration/plan/track branch). Fail-closed: an unreadable sibling
+   // snapshot or register is a probe refusal, never a silent skip.
         const lifecycleBranches = new Set<string>();
-        for (const p of plans) {
-          const l = (p.execution_lease ?? {}) as Record<string, unknown>;
-          if (typeof l.working_branch === "string" && l.working_branch.trim() !== "") lifecycleBranches.add(l.working_branch);
+        collectSnapshotLifecycleBranches(snapshot, lifecycleBranches);
+        const siblingScan = scanActiveLifecycleBranches(resolveLeaseHarnessDir(options.harness), options.workflow);
+        if (siblingScan.kind === "refusal") {
+          console.error(pc.red(`${snapshotPath}: FAIL plan ${plan}`));
+          console.error(`  - [high] ${siblingScan.code}: ${siblingScan.detail}`);
+          process.exitCode = 1;
+          return;
         }
+        for (const diagnostic of siblingScan.notes) {
+          console.error(pc.yellow(`note: [${diagnostic.severity}] ${diagnostic.code}: ${diagnostic.message}`));
+        }
+        for (const branch of siblingScan.branches) lifecycleBranches.add(branch);
         const integrationBranch = String(snapshot.branch?.integration ?? "");
-        if (integrationBranch.trim() !== "") lifecycleBranches.add(integrationBranch);
         const main = readMainWorktree();
         const gate = l1PreDispatchCheck({
           workflowType: snapshot.type,
