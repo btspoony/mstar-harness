@@ -80,7 +80,7 @@ Manual install / path layout: [`INSTALL.md`](INSTALL.md). CLI flags: [`docs/cli.
 
 ## Use
 
-Three entry shapes: **without iteration** (single plan / hotfix), **with iteration** (multi-plan Phase 1–5), or **audit & review** (read-only: discover what to do, or decide whether a change ships).
+Three entry shapes: **without iteration** (single plan / hotfix), **with iteration** (multi-plan Phase 1–5), or **audit, review & verification** (discover work, assess changes, or run requested E2E checks).
 
 ### General (without iteration)
 
@@ -104,19 +104,14 @@ Enter PM, then run the per-plan cycle: `Prepare → Execute → QC → QA gate �
 | `/iteration-drive` | Resume Phase 2→5 on an already-locked iteration. |
 | `/iteration-loop [direction] [scale]` | Full Phase 1→5 autonomous (no grill-me).<br>`direction` — optional free text.<br>`scale` — `S` / `M` / `L` / `XL` (default `M`). |
 
-### Audit & review
+### Audit, review & verification
 
-Two read-only, advisory commands under one roof — they never edit source; findings can become plans for Prepare → Execute. SSOT → `mstar-audit` (variants: `codebase-audit`, `pr`).
+The audit and review commands are read-only and advisory; findings can become plans for Prepare → Execute. SSOT → `mstar-audit` (variants: `codebase-audit`, `pr`).
 
 | Command | When |
 |---------|------|
 | `/codebase-audit [keywords]` | Read-only survey of what's worth doing — prioritized, ready-to-execute plans; narrow it with category focus (`bug`, `security`, `perf`, `tech-debt`, …) when you want a targeted pass. |
 | `/amazing-pr-review [pr\|branch\|scope] [quick\|default\|deep]` | Deep pre-merge review of a PR / branch / diff at three strengths — `quick` (single-pass, 1 seat) / `default` (no-flag landing tier, reduced seats) / `deep` (full three-stage pipeline) — one verdict (`ship it` / `needs fixes` / `blocked`) and every finding, posted to GitHub by the command's main agent at Stage 3 synthesis when a PR number is given. `deep` runs the full three-stage pipeline (collect → domain review → main-agent synthesis; one verdict / one GitHub Review); `default` / `quick` are lighter single/dual-seat passes. Multi-PR input → first PR only; remaining PRs queued as audit todos (next session); suggest one session per PR. |
-
-### Independent E2E verification
-
-| Command | When |
-|---------|------|
 | `/amazing-e2e-check [environment/device] [scenarios]` | Explicitly requested browser/device/installed-deployment checks in a separate workflow; never a routine iteration QA gate. |
 
 ## Harness Workflow
