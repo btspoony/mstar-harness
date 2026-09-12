@@ -137,11 +137,12 @@ async function seedIteration(root: string, plans: unknown[], compass: string): P
 let seq = 0
 
 /** One pending tool call in the registry pipeline shape (dsh-tools 9451be2). */
-function toolExec(name: string, args: unknown): ToolExecution {
+function toolExec(name: string, args: unknown, agent?: unknown): ToolExecution {
   return {
     callId: `c${++seq}` as ToolExecution['callId'],
     name,
     arguments: args,
+    agent,
     signal: new AbortController().signal,
     token: Symbol('dsh.tool.execution') as unknown as ToolExecutionToken,
   } as unknown as ToolExecution
@@ -715,32 +716,32 @@ Do the thing, evidence-first.
       'workflows/wf-2/snapshot.json': '{not json',
     })
 
-    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(l1Assignment(feature)), defaultAllow)
+    const decision = await app.ctx.waterfall('tools/pre-execute', toolExec('subagent', { description: 'probe', prompt: l1Assignment(feature) }, { id: 'test-agent', session: { header: { cwd: feature } } }), defaultAllow)
 
     expect(decision).toEqual({ kind: 'allow' }) // warn mode: refusal is an advisory violation, not a deny
     expect(advisories).toHaveLength(1)
     expect(violationCodes(advisories[0])).toContain('worktree.l1.lifecycle-snapshot-unreadable')
   })
 
-  it('hostile sibling workflow id in the register → worktree.l1.lifecycle-register-unreadable refusal (fail-closed, CLI parity)', async () => {
+  it('hostile sibling workflow id in the register → selection refuses before L1 can attribute the lifecycle', async () => {
     const root = tmpRoot('dsh-wt-l1-sibling-id-')
     const { feature } = seedL1Topology(root)
     const app = booted = await bootApp({ root, dispatchBinding: 'qc-specialist' })
     const advisories = captureAdvisories(app.ctx)
     // A register id is a single path component: an id carrying separators
     // must refuse at the register boundary — before the id is ever joined
-    // under the workflows dir (the same id guard the CLI and omp sibling
-    // scans apply).
+    // under the workflows dir. Session selection validates the full register
+    // before L1 can attribute a governing snapshot.
     await seedHarness(app.harnessDir, {
       'status.json': v2Root([v2WorkflowEntry('wf-1'), v2WorkflowEntry('../escape')]),
       'workflows/wf-1/snapshot.json': v2SnapshotWithPlans('wf-1', [planWithLease(feature, 'feature/a')], { branch: { base: 'main' } }),
     })
 
-    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(l1Assignment(feature)), defaultAllow)
+    const decision = await app.ctx.waterfall('tools/pre-execute', toolExec('subagent', { description: 'probe', prompt: l1Assignment(feature) }, { id: 'test-agent', session: { header: { cwd: feature } } }), defaultAllow)
 
     expect(decision).toEqual({ kind: 'allow' }) // warn mode: refusal is an advisory violation, not a deny
     expect(advisories).toHaveLength(1)
-    expect(violationCodes(advisories[0])).toContain('worktree.l1.lifecycle-register-unreadable')
+    expect(violationCodes(advisories[0])).toContain('lease.dispatch.unverifiable')
   })
 })
 

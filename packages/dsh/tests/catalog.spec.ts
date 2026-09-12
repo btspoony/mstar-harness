@@ -1038,8 +1038,8 @@ Pick.
     await mkdir(harnessDir, { recursive: true })
     await seedHarness(harnessDir, {
       'status.json': v2Root([v2WorkflowEntry('wf-a'), v2WorkflowEntry('wf-b')]),
-      'workflows/wf-a/snapshot.json': v2Snapshot('wf-a', { plans: [{ id: 'plan-a', status: 'Todo' }] }),
-      'workflows/wf-b/snapshot.json': v2Snapshot('wf-b', { plans: [{ id: 'plan-b', status: 'Done' }] }),
+      'workflows/wf-a/snapshot.json': v2Snapshot('wf-a', { plans: [{ id: 'plan-a', title: 'Plan A', file: 'plans/plan-a.md', status: 'Todo' }] }),
+      'workflows/wf-b/snapshot.json': v2Snapshot('wf-b', { plans: [{ id: 'plan-b', title: 'Plan B', file: 'plans/plan-b.md', status: 'Done' }] }),
     })
     const app = booted = await bootApp({ root })
     expect(updateWorkflowSessionBinding(harnessDir, 's-A', root, { selectedWorkflowId: 'wf-a', excludedBeforeSeq: 0 }).kind).toBe('written')
@@ -1092,8 +1092,8 @@ Pick.
     await mkdir(harnessDir, { recursive: true })
     await seedHarness(harnessDir, {
       'status.json': v2Root([v2WorkflowEntry('wf-a'), v2WorkflowEntry('wf-b')]),
-      'workflows/wf-a/snapshot.json': v2Snapshot('wf-a', { plans: [{ id: 'plan-a', status: 'Todo' }] }),
-      'workflows/wf-b/snapshot.json': v2Snapshot('wf-b', { plans: [{ id: 'plan-b', status: 'Done' }] }),
+      'workflows/wf-a/snapshot.json': v2Snapshot('wf-a', { plans: [{ id: 'plan-a', title: 'Plan A', file: 'plans/plan-a.md', status: 'Todo' }] }),
+      'workflows/wf-b/snapshot.json': v2Snapshot('wf-b', { plans: [{ id: 'plan-b', title: 'Plan B', file: 'plans/plan-b.md', status: 'Done' }] }),
       'workflows/wf-old/snapshot.json': v2Snapshot('wf-old', {
         status: 'completed',
         ended_at: '2026-08-19',
@@ -1139,12 +1139,12 @@ Pick.
       'workflows/wf-a/snapshot.json': v2Snapshot('wf-a', {
         type: 'iteration',
         compass_ref: 'iterations/wf-a/delivery-compass.md',
-        plans: [{ id: 'plan-a', status: 'Todo' }],
+        plans: [{ id: 'plan-a', title: 'Plan A', file: 'plans/plan-a.md', status: 'Todo' }],
       }),
       'workflows/wf-b/snapshot.json': v2Snapshot('wf-b', {
         type: 'iteration',
         compass_ref: 'iterations/wf-b/delivery-compass.md',
-        plans: [{ id: 'plan-b', status: 'Done' }],
+        plans: [{ id: 'plan-b', title: 'Plan B', file: 'plans/plan-b.md', status: 'Done' }],
       }),
       'iterations/wf-a/delivery-compass.md': compass('wf-a', 'Direction A.'),
       'iterations/wf-b/delivery-compass.md': compass('wf-b', 'Direction B.'),
@@ -1201,7 +1201,7 @@ describe('D4 catalog identity encoding + selected compass path', () => {
       'workflows/wf-a/snapshot.json': v2Snapshot('wf-a', {
         type: 'iteration',
         compass_ref: 'iterations/wf-a/notes.md',
-        plans: [{ id: 'plan-a', status: 'Todo' }],
+        plans: [{ id: 'plan-a', title: 'Plan A', file: 'plans/plan-a.md', status: 'Todo' }],
       }),
       'iterations/wf-a/notes.md': compassDoc('wf-a', 'Stolen direction.'),
     })
@@ -1224,7 +1224,7 @@ describe('D4 catalog identity encoding + selected compass path', () => {
       'workflows/wf-a/snapshot.json': v2Snapshot('wf-a', {
         type: 'iteration',
         compass_ref: 'iterations/wf-a/delivery-compass.md',
-        plans: [{ id: 'plan-a', status: 'Todo' }],
+        plans: [{ id: 'plan-a', title: 'Plan A', file: 'plans/plan-a.md', status: 'Todo' }],
       }),
     })
     await mkdir(join(harnessDir, 'iterations/wf-a'), { recursive: true })
