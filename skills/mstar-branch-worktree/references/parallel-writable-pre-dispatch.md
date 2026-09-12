@@ -32,8 +32,9 @@ Before the **first** concurrent writable implement dispatch in a round:
 2. **Confirm PM checkout** — PM thread operates the **integration worktree** (dedicated checkout on `spec_integration_branch`); the primary checkout (main worktree) keeps its recorded **`Main worktree branch`** and never switches. **Do not** `checkout` topic / feature branches in the PM **primary cwd** to "help" implementers.
 3. **Create isolation** — for each writable track: `git worktree add .worktrees/<track-slug> <branch>` (or host-equivalent) **before** Task invoke. Each Assignment **must** include absolute **`Worktree path`**.
 4. **Verify paths exist** — for each track: directory exists; `git -C <path> branch --show-current` matches Assignment **`Working branch`**.
-5. **Assignment tags** — `Dispatch mode: parallel independent tracks` + `Worktree isolation: required` (`mstar-phase-gates`).
-6. **Merge order** — when tracks may touch overlapping paths (shared packages, migrations, lockfiles), PM assigns **explicit sequential merge order** before dispatch.
+5. **Retain track ownership** — before L2 dispatch, PM records every track's Assignment **`Working branch`** in the governing snapshot plan row **`metadata.track_branches: string[]`**. Retain these branches while the lifecycle is active, including after individual track leases are released; the main-residency check consumes this record.
+6. **Assignment tags** — `Dispatch mode: parallel independent tracks` + `Worktree isolation: required` (`mstar-phase-gates`).
+7. **Merge order** — when tracks may touch overlapping paths (shared packages, migrations, lockfiles), PM assigns **explicit sequential merge order** before dispatch.
 
 ## PM primary cwd invariants
 

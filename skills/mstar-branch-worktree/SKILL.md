@@ -135,7 +135,7 @@ Default process artifacts are **gitignored** (`mstar-conventions`「Git 跟踪�
 | **Tracked results** (Git-following) | `{KNOWLEDGE_DIR}`, `{SPECS_DIR}`, `{HARNESS_DIR}/AGENTS.md`, `CONCEPTS.md` | whichever checkout holds the target branch | **Yes.** Readable from any worktree; written where the target branch is checked out (iteration Phase 3 compound → the integration worktree), then committed on that branch. |
 | **Product source** | repository code | feature worktree on `Working branch` | feature worktree only. |
 
-**Control harness root** = `<main-worktree-root>/{HARNESS_DIR}/` — resolved from Git (the main worktree), never from a snapshot field.
+**Control harness root** = `<main-repo-root>/{HARNESS_DIR}/` — resolved from Git (the main worktree), never from a snapshot field.
 
 **Hard rules**
 
@@ -143,7 +143,7 @@ Default process artifacts are **gitignored** (`mstar-conventions`「Git 跟踪�
 - Main-worktree residency: the main worktree's attached branch must equal the recorded **`Main worktree branch`** from the plan header (recorded before the lifecycle writes; never invented from the current branch at check time) and must not be owned by any non-terminal workflow (integration, plan or track). Never create a branch or switch main to make a residency check pass; `branch.base` is a creation/merge anchor, never a residency fact.
 - A feature worktree's same-looking `{HARNESS_DIR}` path is **not** the SSOT — **never** treat it as the source of plans/status/SDD, and **never** bootstrap a second process-SSOT copy there.
 - Absolute **`Worktree path`** (feature) MUST appear in the writable Assignment and in `execution_lease.worktree_path` before first writable implement dispatch for that plan.
-- When L1 lease gate is active (not `Worktree mode: waived`), Assignment **`Plan Path`** and **`SDD dir`** MUST be **absolute paths under the control harness root** (not relative `.mstar/...` resolved from the feature cwd). Prefer also writing **`Control harness root: <main-worktree-root>/{HARNESS_DIR}`**.
+- When L1 lease gate is active (not `Worktree mode: waived`), Assignment **`Plan Path`** and **`SDD dir`** MUST be **absolute paths under the control harness root** (not relative `.mstar/...` resolved from the feature cwd). Prefer also writing **`Control harness root: <main-repo-root>/{HARNESS_DIR}`**.
 - Writable dispatch for a plan requires a **verified** `execution_lease` (same read-check-replace-verify discipline as the iteration reference). Full claim tables are **not** duplicated here.
 
 **Anti-pattern (forbidden)**
@@ -238,3 +238,9 @@ Default process artifacts are **gitignored** (`mstar-conventions`「Git 跟踪�
 - 派发与反递归红线 → **`mstar-dispatch-gates`**
 - SDD implement 波次（file handoff / reviewer）→ **`mstar-sdd`**
 - 迭代 Phase 2 integration worktree + lease 细则 → **`mstar-iteration`** §2（`references/phase-2-worktree-lease.md`）
+
+### L1 refusal diagnostics across hosts
+
+CLI, dsh, and omp share `worktree.l1.lifecycle-register-unreadable` when the active register cannot be enumerated and `worktree.l1.lifecycle-snapshot-unreadable` when a registered sibling cannot be read/validated. They fail closed; an absent register contributes no siblings. Engine SDD governing-row discovery remains lenient for unreadable siblings (only readable active snapshots contribute), but a governing active snapshot carrying both integration/control path keys refuses instead of becoming standalone. This is an intentional engine-versus-host seam distinction, not equivalent evidence coverage.
+
+`worktree.l1.integration-missing` covers required integration inputs not supplied and a supplied integration path absent on disk; an existing unusable checkout is reported by branch/checkout probe failures. A standalone plan with both integration fields omitted has no integration requirement and does not emit this code.

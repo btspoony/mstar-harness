@@ -14,7 +14,8 @@ full protocol here.
 **Phase 2**（SKILL.md execute/resume route + `iteration-drive` / `iteration-loop`
 command layer；`iteration-start` ends before this）. Defaults are **hard** unless the current turn
 explicitly waives via Assignment `Worktree mode: waived` (or equivalent user
-instruction). `Plan parallelism: serial` is **not** a waiver — it only forces
+instruction), within the limited scope in § Waiver; main residency and the
+dedicated integration checkout remain mandatory. `Plan parallelism: serial` is **not** a waiver — it only forces
 serial cross-plan **implement** scheduling while the worktree + lease gates remain
 required.
 
@@ -35,7 +36,7 @@ starts at **Phase 2 entry**.
 2. **Pre-implement gate = GO**：plan 已 locked、tasks ready（见 `mstar-phase-gates`）
 3. 用户意图为 **continue Autonomous Execute**（推进迭代 Execute、继续 per-plan 循环等）
 4. **Branch metadata gate**：snapshot `branch.base`（`iteration_base_branch`）、`branch.target`（`target_branch`）已登记，且至少一条 active plan 有 `metadata.spec_integration_branch`（或可从 compass 同轮 backfill）。**缺失 → STOP**，不得用 `main`/`master` 补位。
-5. **Worktree + lease defaults**（iteration 命令；可被 `Worktree mode: waived` 豁免）：除非本轮 Assignment 显式 `Worktree mode: waived`（或等价用户指令），Phase 2 **必须**在入口确认 control root（= **主 checkout / main worktree**，进程 SSOT；其驻留分支 = 主 plan 头记录的 **`Main worktree branch`**，且非任何未终结 workflow 的分支）并建立独立 integration worktree、经 control 绝对路径读写默认 gitignored 的 harness 进程产物（根 `status.json`、`workflows/`、`projects/`、`{PLAN_DIR}`、`{ITERATION_DIR}`、`{SDD_DIR}` 等），并在可写派发前 claim workflow snapshot 的 `plans[].execution_lease` / 顶层 `integration_merge_lease`。可写 Assignment 须含绝对 feature **`Worktree path`** + 绝对 control 系 **`Plan Path`** / **`SDD dir`**（见 **`mstar-branch-worktree`**「Harness path SSOT under default gitignore」三域表）。**禁止**因 feature worktree 在默认 gitignore 下看不到 plans 而推断 `Worktree mode: waived`。`Plan parallelism: serial` **不** waive 本闸——仅强制跨 plan **implement** 串行调度；integration worktree + lease 仍须满足（**串行不豁免 worktree**）。**跨 plan 并行安全闸**（**不可**被 `Worktree mode: waived` 豁免）：跨 plan **并行可写 implement** 须满足下列之一——(a) coordination 路径（control root = 主 checkout `{HARNESS_DIR}/` 下 snapshot / `status.json`）上 **same-host 独占写锁可用且每次 status/协调变更持锁**；(b) 默认 **`Plan parallelism: serial`**（**waived 时尤其优先默认串行**；**无 flock / 无共享锁时只触发本条，不豁免 worktree**）；(c) 用户本轮显式 `Cross-host lease race: accepted`（或等价）+ `plans[].notes` 审计。**禁止**将 `Worktree mode: waived` 当作跨主机无锁并行的授权。细则 → 下方「Integration worktree (Phase 2 entry)」「Execution lease」「Multi-plan parallelism」「Waiver」各节。
+5. **Worktree + lease defaults**（iteration 命令；waiver 范围见下方「Waiver」）：所有模式的 Phase 2 **必须**在入口确认 control root（= **主 checkout / main worktree**，进程 SSOT；其驻留分支 = 主 plan 头记录的 **`Main worktree branch`**，且非任何未终结 workflow 的分支）并建立独立 integration worktree、经 control 绝对路径读写默认 gitignored 的 harness 进程产物（根 `status.json`、`workflows/`、`projects/`、`{PLAN_DIR}`、`{ITERATION_DIR}`、`{SDD_DIR}` 等），；未 waive 时在可写派发前 claim workflow snapshot 的 `plans[].execution_lease` / 顶层 `integration_merge_lease`。可写 Assignment 须含绝对 feature **`Worktree path`** + 绝对 control 系 **`Plan Path`** / **`SDD dir`**（见 **`mstar-branch-worktree`**「Harness path SSOT under default gitignore」三域表）。**禁止**因 feature worktree 在默认 gitignore 下看不到 plans 而推断 `Worktree mode: waived`。`Plan parallelism: serial` **不** waive 本闸——仅强制跨 plan **implement** 串行调度；integration worktree + lease 仍须满足（**串行不豁免 worktree**）。**跨 plan 并行安全闸**（**不可**被 `Worktree mode: waived` 豁免）：跨 plan **并行可写 implement** 须满足下列之一——(a) coordination 路径（control root = 主 checkout `{HARNESS_DIR}/` 下 snapshot / `status.json`）上 **same-host 独占写锁可用且每次 status/协调变更持锁**；(b) 默认 **`Plan parallelism: serial`**（**waived 时尤其优先默认串行**；**无 flock / 无共享锁时只触发本条，不豁免 worktree**）；(c) 用户本轮显式 `Cross-host lease race: accepted`（或等价）+ `plans[].notes` 审计。**禁止**将 `Worktree mode: waived` 当作跨主机无锁并行的授权。细则 → 下方「Integration worktree (Phase 2 entry)」「Execution lease」「Multi-plan parallelism」「Waiver」各节。
 
 > **Engine-check（lease verify / verify-integration）唯一规范体：** `mstar-artifacts` `SKILL.md`（Engine check lease 行；standalone 保证同文）。
 
@@ -69,13 +70,13 @@ SSOT = `{WORKFLOW_DIR}/<id>/snapshot.json` + `{PLAN_DIR}/`。todos 只追踪本�
 4. 仍缺 → 向用户确认 base / PR target；**不得**因 `git symbolic-ref refs/remotes/origin/HEAD` 指向 `main` 就自动采用
 5. 所有参与本轮迭代的 active plan **必须**解析到**同一** `spec_integration_branch`；不一致 → **STOP**
 
-**Integration worktree（§2.0 #5 未 waive 时 — HARD）**按下方「Integration worktree (Phase 2 entry)」checklist 执行（含：若 integration 分支尚不存在，在 integration worktree 内 `git checkout -b <spec_integration_branch> <iteration_base_branch>`——**必须**从记录的 base 创建）。
+**Integration worktree（所有模式 — HARD）**按下方「Integration worktree (Phase 2 entry)」checklist 执行（integration 分支不存在时**必须**从记录的 base 创建，命令见下方）。
 
-**Git 操作（无 integration worktree 时 — 仅 `Worktree mode: waived`）**：
+**Git 操作（含 `Worktree mode: waived`）**：
 
-1. `git fetch`（按需）确认 `iteration_base_branch` 存在
-2. **checkout 或创建** `spec_integration_branch`（同上）
-3. `git branch --show-current` 确认在 `spec_integration_branch`
+1. 在主 checkout 按需 `git fetch` 确认记录的 `iteration_base_branch` 存在；主 checkout 保持记录分支。
+2. 用 `git worktree add <integration-path> <spec_integration_branch>` 建立独立 integration checkout；分支不存在时用 `git worktree add -b <spec_integration_branch> <integration-path> <iteration_base_branch>`。
+3. `git -C <integration-path> branch --show-current` 确认 integration 分支；后续 merge 仅在该 checkout。waiver 仅豁免每 plan feature worktree 默认，不豁免 integration 协调 checkout；产品写入仍须避开主 checkout 和 integration checkout。
 
 `spec_integration_branch` 是本迭代内所有 plan feature branch 的 merge target。QC **`Review range` / `Diff basis`** 的 merge-base 参照优先用 snapshot `branch.target`（或 PM 书面指定的 base ref），**禁止**无 Assignment 依据写死 `origin/main`。
 
@@ -99,12 +100,12 @@ SSOT = `{WORKFLOW_DIR}/<id>/snapshot.json` + `{PLAN_DIR}/`。todos 只追踪本�
    symlinks). The main worktree is **not** recorded in the snapshot — it is
    derived from Git every session.
 6. Resolve coordination paths from the **control root** (default-gitignored process artifacts live on the **main-worktree filesystem**, not as Git blobs):
-   - status register: `<main-worktree-root>/{HARNESS_DIR}/status.json` (v2 root — active workflow entries)
-   - snapshot SSOT: `<main-worktree-root>/{WORKFLOW_DIR}/<id>/snapshot.json` (plan rows + leases + branch anchors)
-   - project register: `<main-worktree-root>/{PROJECT_DIR}/<id>/residuals.json`
-   - plans SSOT: `<main-worktree-root>/{PLAN_DIR}/`
-   - iterations SSOT: `<main-worktree-root>/{ITERATION_DIR}/`
-   - SDD tree: `<main-worktree-root>/{HARNESS_DIR}/sdd/<plan-id>/`
+   - status register: `<main-repo-root>/{HARNESS_DIR}/status.json` (v2 root — active workflow entries)
+   - snapshot SSOT: `<main-repo-root>/{WORKFLOW_DIR}/<id>/snapshot.json` (plan rows + leases + branch anchors)
+   - project register: `<main-repo-root>/{PROJECT_DIR}/<id>/residuals.json`
+   - plans SSOT: `<main-repo-root>/{PLAN_DIR}/`
+   - iterations SSOT: `<main-repo-root>/{ITERATION_DIR}/`
+   - SDD tree: `<main-repo-root>/{HARNESS_DIR}/sdd/<plan-id>/`
 
 All sessions MUST reread the **control-root copy** of the workflow snapshot immediately before
 claim, release, transfer, plan-status transition, or merge-lease mutation.
@@ -306,10 +307,9 @@ ownership for the source plan.
 Explicit `Worktree mode: waived` (or equivalent user instruction) this turn
 waives **only**:
 
-- Integration worktree establishment and per-plan feature worktree defaults
-  (the control root itself is never "established" or waived — the primary
-  checkout stays the process-SSOT holder, addressed via absolute control-root
-  paths in all modes)
+- Per-plan feature worktree defaults. The dedicated integration coordination
+  checkout remains required; the primary checkout keeps its recorded branch
+  and remains the process-SSOT holder via absolute control-root paths.
 - Snapshot lease claim/hold/release defaults (`plans[].execution_lease` and top-level `integration_merge_lease`)
 
 It does **not** waive the **cross-plan parallel safety gate**. Under waiver,
