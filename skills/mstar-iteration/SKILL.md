@@ -37,7 +37,7 @@ Phase 6: post-merge close —— PR merged 后 §6.1–§6.4
 
 - **Phase 3** 在 integration 分支收口 compound / roadmap；**开 PR（Phase 4）≠ 迭代交付完成**。
 - **Phase 5** 是 **merge-ready loop**（修复 → 等 CI/review 波次结束再 push → 再验证，至 §5.5 exit）；**Loop 理念与 push cadence SSOT 在本 skill**（§2.6；push cadence 细则 §5.1a → `references/phase-4-5-pr-delivery.md`）；宿主 command 可叠加额外 **non-`mstar-*`** helper（**优先** `babysit` / `*-babysit`；**`greploop` 可选**），但不写入 `mstar-*` load order。
-- **Phase 6** 是 **post-merge close**（PR **merged** 后 §6.1–§6.4：terminal snapshot → unregister → 投影对齐 → cleanup handoff）；**§5.5 exit / PR mergeable ≠ 生命周期已关闭**（`references/phase-6-post-merge-close.md`）。
+- **Phase 6** 是 **post-merge close**（PR **merged** 后 §6.1–§6.4：terminal snapshot → unregister → 投影对齐 → cleanup（`mstar worktree cleanup`，dry-run 默认；守卫契约本体 → `mstar-branch-worktree`「Worktree / branch cleanup」））；**§5.5 exit / PR mergeable ≠ 生命周期已关闭**（`references/phase-6-post-merge-close.md`）。
 - 一次迭代 = 一个 PR；compound 产物随 PR 合入 snapshot `branch.target`。
 
 ## Phase route map（唯一路由表 — 按当前动作加载）
@@ -48,7 +48,7 @@ Phase 6: post-merge close —— PR merged 后 §6.1–§6.4
 | **execute / resume**（推进或恢复 per-plan 循环） | **`references/phase-2-worktree-lease.md`**（§2.0 五道闸、§2.1–§2.5 loop/dispatch 细则、control root + integration worktree + lease 全文） |
 | **close**（全部 plan Done 后收口迭代） | **`references/phase-3-iteration-close.md`**（§3.0–§3.6：entry checklist、compound、roadmap、完成标记、exit checklist + commit） |
 | **PR / merge-ready**（开 PR、推进合并就绪 loop） | **`references/phase-4-5-pr-delivery.md`**（§4–§5.2：开 PR、§5.1a push cadence、loop、exit checklist） |
-| **Phase 6 / post-merge close**（PR merged 后关闭 lifecycle） | **`references/phase-6-post-merge-close.md`**（entry（verified merged）+ §6.1 terminal write → §6.2 unregister → §6.3 projection reconciliation → §6.4 cleanup handoff） |
+| **Phase 6 / post-merge close**（PR merged 后关闭 lifecycle） | **`references/phase-6-post-merge-close.md`**（entry（verified merged）+ §6.1 terminal write → §6.2 unregister → §6.3 projection reconciliation → §6.4 cleanup：`mstar worktree cleanup`，dry-run 默认，`--apply` 才变更） |
 | **Phase 5 helper discovery**（仅 command 层按需） | **`references/phase5-helper-discovery.md`**（babysit / greploop 发现） |
 
 一次只加载当前 route 一行；phase 切换按下方 **Phase transition gates** 走。
