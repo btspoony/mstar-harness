@@ -10,7 +10,7 @@ PM runs context-dependent `mstar sdd workspace`, `task-brief`, and `review-packa
 
 1. `export SDD_DIR=$(mstar sdd workspace <plan-id>)`
    - Iteration L1 (implementer cwd = feature worktree):
-     `export MSTAR_CONTROL_ROOT=<main repo root>` — the **derived main worktree** root, verified by Git probing before the fail-closed guard
+     `export MSTAR_CONTROL_ROOT=<main-repo-root>` — the **derived main worktree** root, verified by Git probing before the fail-closed guard
      or `mstar sdd workspace <plan-id> <main-repo-root>`
      so `{SDD_DIR}` lands on the control harness (default-gitignored plans/status/sdd). Do not create a second SDD tree under the feature checkout.
 2. PM writes `$SDD_DIR/context.json` for the current helper operation — parallel hosted handoffs pin these values in their Assignment instead of consulting mutable plan context:
