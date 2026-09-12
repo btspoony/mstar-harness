@@ -247,7 +247,7 @@ export function findEphemeralCitations(skillText: string): EphemeralCitation[] {
  * (mstar-sdd/references/file-handoffs.md "Covering test file(s)"). */
 const TEST_FILE_PATH_RE = /[\w./-]+\.(?:test|spec)\.[a-z0-9]+/i;
 /** Test-file reference: the template phrase "test file(s)". */
-const TEST_FILE_PHRASE_RE = /\btest files?\b/i;
+const TEST_FILE_PHRASE_RE = /\btest file(?:s|\(s\))?\s*:[ \t]*(.+)/i;
 
 /** Command evidence: a `$`-prefixed shell line with content. */
 const COMMAND_PROMPT_RE = /^\s*[$>]\s*\S/;
@@ -263,12 +263,16 @@ const RUNNER_RE =
  * on") deliberately does NOT count — output-shaped forms only */const OUTPUT_TOKEN_RE =
   /[\u2713\u2714\u2717\u2718]|\b(?:PASS|FAIL)\b|\b\d+\s+(?:pass(?:es|ed)?|fail(?:s|ed|ing)?|skipped|tests?|ok)\b|\bok\s+\d+\b|\ball\s+ok\b|exit(?:ed)?\s+(?:with\s+)?(?:code\s+)?\d+/i;
 
+function hasEvidenceDetail(value: string): boolean {
+  const detail = value.trim().replace(/^`+|`+$/g, "").trim();
+  return detail.length > 0 && !/^(?:n\/a|none|tbd|todo|tba|unknown|skipped|not[- ]run|\.\.\.|…|<[^>]+>)$/i.test(detail);
+}
+
 /**
- * Assert the SDD TDD triple is present in a `task-N-report.md` text
- * (mstar-coding-behavior § Integration Notes — "completion evidence must
- * include TDD triple — test file(s), command, output — in task-N-report.md";
- * mstar-sdd/references/file-handoffs.md — fix subagents append covering test
- * file(s), command run, output).
+ * Validate task report evidence: an explicit scoped-check declaration for
+ * document/policy checks, otherwise the executable-change TDD triple.
+ * This checks structure, not whether the declared mode fits the actual diff
+ * or a command ran. PM/QC own applicability and evidence authenticity.
  *
  * One violation per missing part:
  * - `lint.sdd-tdd.missing-tests` — no test file reference
@@ -276,9 +280,8 @@ const RUNNER_RE =
  * - `lint.sdd-tdd.missing-output` — no output evidence
  *
  * Heuristics (documented, conservative — tuned so prose alone never counts):
- * - tests: a `.test.<ext>` / `.spec.<ext>` path, or the phrase "test file(s)"
- * (the handoff template's exact header). "I added tests" without a file or
- * the phrase does not count.
+ * - tests: a `.test.<ext>` / `.spec.<ext>` path, or a non-placeholder
+ * "test file(s): <reference>" field. Bare N/A is not test evidence.
  * - command: a `$`-prefixed line, or a known runner invocation (bun/pnpm/
  * npm/yarn/npx/bunx test|run|exec, npx/bunx exec, tsc/vitest/jest/mocha/
  * pytest/go test/cargo test). Prose "run the tests" names no runner and
@@ -292,11 +295,45 @@ const RUNNER_RE =
 export function assertSddTddTriple(reportText: string): GateResult {
   const violations: ValidationResult[] = [];
   const lines = reportText.split(/\r?\n/);
+  const fields = new Map<string, string[]>();
+  for (const line of lines) {
+    const match = line.match(/^\s*(Verification mode|Changed files|Tests|Reason|Check command|Check result):[ \t]*(.*)$/i);
+    if (match) {
+      const key = match[1].toLowerCase();
+      fields.set(key, [...(fields.get(key) ?? []), match[2].trim()]);
+    }
+  }
+  const modes = fields.get("verification mode");
+  if (modes) {
+    if (modes.length !== 1 || modes[0] !== "scoped-check") {
+      return {
+        ok: false,
+        violations: [violation("medium", "lint.sdd-evidence.invalid-mode", "Use exactly one Verification mode: scoped-check declaration; unknown or duplicate modes are invalid.")],
+      };
+    }
+    for (const key of ["changed files", "tests", "reason", "check command", "check result"]) {
+      const values = fields.get(key) ?? [];
+      const value = values[0] ?? "";
+      const valid = values.length === 1 && (key === "tests"
+        ? value === "N/A"
+        : hasEvidenceDetail(value) && (key !== "check result" || OUTPUT_TOKEN_RE.test(value)));
+      if (!valid) {
+        violations.push(violation("medium", `lint.sdd-evidence.${key.replaceAll(" ", "-")}`, `scoped-check requires one concrete ${key} field${key === "tests" ? " with value N/A" : ""}; missing, duplicate, or placeholder evidence is invalid.`));
+      }
+    }
+    return { ok: violations.length === 0, violations };
+  }
+  if (lines.some((line) => /^\s*(?:Tests|(?:Covering )?test file(?:s|\(s\))?):\s*`?N\/A`?\s*$/i.test(line))) {
+    return {
+      ok: false,
+      violations: [violation("medium", "lint.sdd-tdd.missing-tests", "Bare N/A is not test evidence; document/policy checks need an explicit, complete scoped-check declaration.")],
+    };
+  }
   let hasTests = false;
   let hasCommand = false;
   let hasOutput = false;
   for (const line of lines) {
-    if (!hasTests && (TEST_FILE_PATH_RE.test(line) || TEST_FILE_PHRASE_RE.test(line))) hasTests = true;
+    if (!hasTests && (TEST_FILE_PATH_RE.test(line) || hasEvidenceDetail(line.match(TEST_FILE_PHRASE_RE)?.[1] ?? ""))) hasTests = true;
     if (!hasCommand && (COMMAND_PROMPT_RE.test(line) || RUNNER_RE.test(line))) hasCommand = true;
     if (!hasOutput && OUTPUT_TOKEN_RE.test(line)) hasOutput = true;
     if (hasTests && hasCommand && hasOutput) break;

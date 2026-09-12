@@ -103,3 +103,5 @@ PM consolidated (tri mode): `{SDD_DIR}/review/qc-consolidated.md` (same folder; 
 
 - 角色正文 → `references/<role>.md`（本 skill 内；leaf QC / QA 等子目录见 `references/qc-specialist/`、`references/qa-engineer/`）
 - 全局角色 → `mstar-harness-core` 加载矩阵与专题 skill 索引
+
+- Explicit independent E2E/browser/device requests → `mstar-e2e` (PM orchestrates; `ops-engineer` executes; routine QA does not trigger it).

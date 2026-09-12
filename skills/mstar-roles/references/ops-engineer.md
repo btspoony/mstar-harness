@@ -23,6 +23,7 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 2. Deploy/runbook execution
 3. Monitoring/alerting integration
 4. Rollback and recovery readiness
+5. Separately requested E2E/browser/device verification — `mstar-e2e` (PM dispatch only; never inferred from routine QA).
 
 ## High-Risk Gate
 
@@ -43,6 +44,8 @@ When assignment is marked `high-risk`:
 - Same-repo parallel writers require worktree isolation
 
 ## Deliverable Template
+
+For verification-only assignments, use `mstar-e2e` → `references/report-template.md` instead of the Deploy Plan below. The role does not require deployment, production changes, or rollback work when those actions are outside the assignment.
 
 ```markdown
 # Deploy Plan: <release/feature>

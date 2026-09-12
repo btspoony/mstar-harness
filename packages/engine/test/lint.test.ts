@@ -541,6 +541,50 @@ describe("findEphemeralCitations", () => {
 // ---------------------------------------------------------------------------
 
 describe("assertSddTddTriple", () => {
+  const scopedReport = `Verification mode: scoped-check
+Changed files: skills/example/SKILL.md
+Tests: N/A
+Reason: Policy text changed; the affected trigger and scope contract are checked.
+Check command: rg -n 'scoped rule' skills/example/SKILL.md
+Check result: exit 0; the changed rule and referenced boundary are present.
+`;
+
+  test("accepts scoped-check policy evidence without invented tests", () => {
+    expect(assertSddTddTriple(scopedReport)).toEqual({ ok: true, violations: [] });
+  });
+
+  for (const field of ["Changed files", "Tests", "Reason", "Check command", "Check result"]) {
+    for (const value of ["", "TBD", "..."]) {
+      test(`rejects scoped-check ${field} with placeholder ${JSON.stringify(value)}`, () => {
+        const report = scopedReport.split("\n").map((line) => line.startsWith(`${field}:`) ? `${field}: ${value}` : line).join("\n");
+        expect(assertSddTddTriple(report).ok).toBe(false);
+      });
+    }
+    test(`rejects scoped-check missing ${field}`, () => {
+      expect(assertSddTddTriple(scopedReport.split("\n").filter((line) => !line.startsWith(`${field}:`)).join("\n")).ok).toBe(false);
+    });
+  }
+
+  test("rejects unknown or empty verification modes even with a valid triple", () => {
+    for (const mode of ["docs-only", "full", ""]) {
+      expect(assertSddTddTriple(`Verification mode: ${mode}\n${TRIPLE_COMPLETE}`).ok).toBe(false);
+    }
+  });
+
+  test("rejects duplicate modes and duplicate evidence fields", () => {
+    expect(assertSddTddTriple(`Verification mode: scoped-check\n${scopedReport}`).ok).toBe(false);
+    expect(assertSddTddTriple(`${scopedReport}Reason: another claim\n`).ok).toBe(false);
+  });
+
+  test("rejects prose-only scoped-check result and non-N/A tests", () => {
+    expect(assertSddTddTriple(scopedReport.replace("exit 0; the changed rule and referenced boundary are present.", "Looks fine.")).ok).toBe(false);
+    expect(assertSddTddTriple(scopedReport.replace("Tests: N/A", "Tests: skipped")).ok).toBe(false);
+  });
+
+  test("rejects bare N/A test-file claim outside scoped-check", () => {
+    expect(assertSddTddTriple("Covering test file(s): N/A\nCommand run: bun test\n12 pass / 0 fail").ok).toBe(false);
+  });
+
   test("ok for a report with test file reference + command + output", () => {
     const result = assertSddTddTriple(TRIPLE_COMPLETE);
     expect(result.ok).toBe(true);
