@@ -1,5 +1,5 @@
 ---
-name: e2e-check
+name: amazing-e2e-check
 description: Run explicitly requested E2E, browser, device, or installed-deployment scenarios in an independent verification workflow.
 agent: project-manager
 input: "[environment/device] [scenarios]"

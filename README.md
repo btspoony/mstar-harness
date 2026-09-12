@@ -117,7 +117,7 @@ Two read-only, advisory commands under one roof — they never edit source; find
 
 | Command | When |
 |---------|------|
-| `/e2e-check [environment/device] [scenarios]` | Explicitly requested browser/device/installed-deployment checks in a separate workflow; never a routine iteration QA gate. |
+| `/amazing-e2e-check [environment/device] [scenarios]` | Explicitly requested browser/device/installed-deployment checks in a separate workflow; never a routine iteration QA gate. |
 
 ## Harness Workflow
 

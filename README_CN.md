@@ -118,7 +118,7 @@ npm i -g @mstar-harness/cli
 
 | 命令 | 何时 |
 |---------|------|
-| `/e2e-check [环境/设备] [场景]` | 用户明确请求的浏览器、真机或安装部署检查；独立 workflow 承载，不作为常规迭代 QA 门禁。 |
+| `/amazing-e2e-check [环境/设备] [场景]` | 用户明确请求的浏览器、真机或安装部署检查；独立 workflow 承载，不作为常规迭代 QA 门禁。 |
 
 ## Harness Workflow（统一流程）
 

@@ -23,15 +23,15 @@ console.log(JSON.stringify(codexAdapter.runInstallInit(${JSON.stringify(scope)},
   return JSON.parse(result.stdout.toString()) as { notes: string[] };
 }
 
-describe("e2e-check Codex command skill dry-run", () => {
+describe("amazing-e2e-check Codex command skill dry-run", () => {
   test("project reports the command-to-skill link without writing it", () => {
     const root = mkdtempSync(join(tmpdir(), "mstar-codex-command-"));
     try {
       const { notes } = dryRun("project", root);
-      const source = join(root, ".mstar", "harness", "commands", "e2e-check.md");
-      const destination = resolve(root, ".agents", "skills", "e2e-check", "SKILL.md");
+      const source = join(root, ".mstar", "harness", "commands", "amazing-e2e-check.md");
+      const destination = resolve(root, ".agents", "skills", "amazing-e2e-check", "SKILL.md");
       expect(notes).toContain(`Linked ${destination} -> ${source}`);
-      expect(notes).toContain("Added .agents/skills/e2e-check to .gitignore");
+      expect(notes).toContain("Added .agents/skills/amazing-e2e-check to .gitignore");
       expect(readdirSync(root)).toEqual([]);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -42,8 +42,8 @@ describe("e2e-check Codex command skill dry-run", () => {
     const root = mkdtempSync(join(tmpdir(), "mstar-codex-command-"));
     try {
       const { notes } = dryRun("global", root);
-      expect(notes.some((note) => note.startsWith("Linked ") && note.includes("e2e-check"))).toBe(false);
-      expect(notes.some((note) => note.includes("e2e-check") && note.includes("--scope project"))).toBe(true);
+      expect(notes.some((note) => note.startsWith("Linked ") && note.includes("amazing-e2e-check"))).toBe(false);
+      expect(notes.some((note) => note.includes("amazing-e2e-check") && note.includes("--scope project"))).toBe(true);
       expect(readdirSync(root)).toEqual([]);
     } finally {
       rmSync(root, { recursive: true, force: true });

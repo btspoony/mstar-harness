@@ -121,7 +121,7 @@ or a custom profile).
   long logs; the sidebar chip title is captured at open time; a docked
   body renders nothing while `tab.visible === false`. Routine panel QA uses affected unit evidence only. Real-browser rebuilt-bundle
   verification or user-restart GUI acceptance belongs to an explicitly requested
-  independent **`mstar-e2e`** workflow (`/e2e-check`), never an iteration QA gate.
+  independent **`mstar-e2e`** workflow (`/amazing-e2e-check`), never an iteration QA gate.
 
 ## Skill loading
 

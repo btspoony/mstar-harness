@@ -1,6 +1,6 @@
 ---
 name: mstar-e2e
-description: Runs separately requested E2E, real-browser, device, or installed-deployment verification and produces scoped evidence. Loads only for an explicit user request or e2e-check entry; never from routine QA, UI changes, missing screenshots, or review recommendations.
+description: Runs separately requested E2E, real-browser, device, or installed-deployment verification and produces scoped evidence. Loads only for an explicit user request or amazing-e2e-check entry; never from routine QA, UI changes, missing screenshots, or review recommendations.
 ---
 
 # Independent E2E Verification
@@ -11,7 +11,7 @@ Read `mstar-harness-core` first. PM follows `mstar-roles` → `references/projec
 
 ## Scope
 
-This is an explicitly requested verification workflow, separate from development iterations and routine QA. Trigger phrases include “run these E2E scenarios”, “verify on this device”, “check the installed deployment”, and `/e2e-check`. A UI diff, missing screenshot, failed unit test, or reviewer suggestion does not authorize it.
+This is an explicitly requested verification workflow, separate from development iterations and routine QA. Trigger phrases include “run these E2E scenarios”, “verify on this device”, “check the installed deployment”, and `/amazing-e2e-check`. A UI diff, missing screenshot, failed unit test, or reviewer suggestion does not authorize it.
 
 ## Workflow
 
