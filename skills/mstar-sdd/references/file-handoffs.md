@@ -4,14 +4,16 @@ PM and subagents move artifacts as **files**, not pasted text. Pasted content st
 
 ## Before implementer dispatch
 
-Run the SDD helpers through the engine CLI **`mstar sdd …`** (engine-backed; the former bash scripts are removed — semantics unchanged).
+**PM owns helper execution and shared coordination writes.** Keep one canonical per-plan `{SDD_DIR}` root; only PM writes its `context.json` and `progress.md`. Subdirectories namespace artifacts, not a second SDD root. Scheduling → `mstar-sdd` § Ready-task scheduling.
+
+PM runs context-dependent `mstar sdd workspace`, `task-brief`, and `review-package` helpers serially for the corresponding assigned checkout/branch. These helpers may update shared context; parallel hosted leaves never invoke them. Before each dispatch, PM fixes absolute task-specific brief/report/diff destinations and copies `Worktree path` / branch into the Assignment. Updating context for another task must not change an already-dispatched leaf's inputs.
 
 1. `export SDD_DIR=$(mstar sdd workspace <plan-id>)`
    - Iteration L1 (implementer cwd = feature worktree):
      `export MSTAR_CONTROL_ROOT=<control_worktree_path>`
      or `mstar sdd workspace <plan-id> <control_worktree_path>`
      so `{SDD_DIR}` lands on the control harness (default-gitignored plans/status/sdd). Do not create a second SDD tree under the feature checkout.
-2. Write the execution context file `$SDD_DIR/context.json` — the absolute destination contract every handoff cites:
+2. PM writes `$SDD_DIR/context.json` for the current helper operation — parallel hosted handoffs pin these values in their Assignment instead of consulting mutable plan context:
 
    ```json
    {
@@ -32,7 +34,7 @@ Run the SDD helpers through the engine CLI **`mstar sdd …`** (engine-backed; t
    - Absolute brief path: read first — verbatim requirements
    - Interfaces / decisions brief cannot know
    - Absolute report path: `$SDD_DIR/task-N-report.md`
-   - Absolute control root, feature cwd, plan and context-file paths (destination contract — see prompt templates)
+   - Absolute control root, feature cwd, branch and plan paths, plus task-specific brief/report/diff paths fixed for this dispatch; the context path is PM coordination metadata, not a leaf checkout selector
    - `Model tier` → host-specific model (required)
    - **`SDD implementer session`**: `fresh` (new subagent) or `sticky` (resume — see **`sticky-implementer-session.md`**)
 
@@ -65,6 +67,8 @@ Replace every placeholder with actual evidence. Unknown or duplicate modes, miss
 
 ## After implementer DONE
 
+PM restores context to the completed task checkout/branch and generates its immutable task-specific review package serially; leaves keep their dispatched inputs unchanged.
+
 1. `HEAD_SHA=$(git rev-parse HEAD)`
 2. `mstar sdd review-package "$BASE_SHA" "$HEAD_SHA" --context "$SDD_DIR/context.json"` — bound: probes git in `featureCwd`, writes the diff into the control sddDir, prints absolute paths.
 3. Dispatch task reviewer with: brief path, report path, diff path, Global Constraints (verbatim from plan).
@@ -86,8 +90,8 @@ mstar sdd exec --context "$SDD_DIR/context.json" -- <argv...>
 
 Hosted subagents are not cwd-bound by the launcher, so their dispatch prompt must carry the absolute destination contract (templates: `implementer-prompt.md`, `implementer-continuation-prompt.md`, `task-reviewer-prompt.md`) and their first step is to observe, then write:
 
-1. Observe `pwd` and the checked-out branch in the tool's workdir; both must equal `featureCwd`/`workingBranch`. On mismatch, stop and report — a declared-correct assignment does not make a wrong-checkout write safe.
-2. Source edits go through the tool workdir at `featureCwd` (or absolute feature paths); briefs/reports/diffs go only to the absolute control paths from the handoff.
+1. Observe `pwd` and the checked-out branch in the tool's workdir; both must equal the immutable Assignment `Worktree path` / branch (`featureCwd`/`workingBranch`), never a newly read value from mutable plan context. On mismatch, stop and report — a declared-correct assignment does not make a wrong-checkout write safe.
+2. Source edits go through the assigned feature workdir; write the report only to its fixed task-specific path and consume brief/diff artifacts only from the dispatched paths. Do not modify shared context/progress or invoke context-writing workspace/task-brief/review-package helpers; request missing artifacts from PM.
 
 ## Fix loop
 
@@ -97,7 +101,7 @@ The per-task fix loop applies the same fix-round mechanics as plan-level QC fix 
 
 ## Progress ledger
 
-On clean task review, append to `$SDD_DIR/progress.md`:
+On clean task review, PM alone appends to `$SDD_DIR/progress.md`:
 
 ```text
 Task N: complete (<base>..<head>, review clean)
@@ -107,7 +111,7 @@ Minor findings: append under `## Minor (for plan QC)` in same file.
 
 ## Plan-level QC package
 
-After all tasks:
+After all tasks, PM generates the package serially from the integrated checkout with its corresponding context:
 
 ```bash
 MERGE_BASE=$(git merge-base <target-branch> HEAD)
