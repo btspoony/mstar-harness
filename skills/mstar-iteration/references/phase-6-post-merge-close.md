@@ -52,6 +52,8 @@ mstar status workflow-close --workflow <id> [--harness <path>] [--ended-at <date
 
 Phase-6 gate 只查**本地 state**（valid terminal shape + 无 dangling lease + root 条目已注销），**不**验证远端 merged 证据，**不**检查物理清理是否完成。
 
+> **Engine check (when available):** run `mstar iteration gate --phase 6 --workflow <id>` (or `import { evaluatePostMergeClose } from "@mstar-harness/engine"` in a host hook) to gate the local post-merge close state（valid terminal shape + 无 dangling lease + root 条目已注销；稳定码 `PHASE6_*`；invalid/unreadable root 不是条目已注销的证明）. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+
 ## Standalone plans & abandonment
 
 - `type: plan` 独立 lifecycle 在其 PR merge 后用**同一** completed-close 命令关闭（无第二 verb、无 `--outcome` / `--force`）
@@ -59,7 +61,7 @@ Phase-6 gate 只查**本地 state**（valid terminal shape + 无 dangling lease 
 
 ## Evidence
 
-Phase 6 完成 = `jq -r '.status, .ended_at'` `{HARNESS_DIR}/workflows/<id>/snapshot.json` → `completed` + 日期；根 `{HARNESS_DIR}/status.json` 不含该 id 且 `mstar status validate <root status.json>` exit 0；无 dangling lease；投影一致；host todo `phase-6-post-merge-close` 可勾掉。transition engine gate（`mstar iteration gate --phase 6 --workflow <id>`，声明接口）exit 0。
+Phase 6 完成 = `jq -r '.status, .ended_at'` `{HARNESS_DIR}/workflows/<id>/snapshot.json` → `completed` + 日期；根 `{HARNESS_DIR}/status.json` 不含该 id 且 `mstar status validate <root status.json>` exit 0；无 dangling lease；投影一致；host todo `phase-6-post-merge-close` 可勾掉。transition engine gate（`mstar iteration gate --phase 6 --workflow <id>`）exit 0。
 
 ## References
 

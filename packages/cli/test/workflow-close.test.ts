@@ -264,3 +264,122 @@ describe("mstar status workflow-close", () => {
     });
   });
 });
+
+/**
+ * CLI `mstar iteration gate --phase 6` — the additive post-merge close
+ * local-state gate form (P2 T4). Thin wrapper over engine
+ * `evaluatePostMergeClose`: no `--compass` required (standalone plans have
+ * none); exit 0 pass / 1 gate fail or error / 2 usage. The Phase 2–5
+ * transition form (requires `--compass`) is pinned unchanged in the last
+ * test. Every case runs the real CLI as a subprocess against a temp fixture
+ * harness — no live workflow is ever touched.
+ */
+describe("mstar iteration gate --phase 6", () => {
+  const gateArgs = (harness: string, workflow = WORKFLOW_ID): string[] =>
+    ["iteration", "gate", "--phase", "6", "--workflow", workflow, "--harness", harness];
+
+  test("closed + unregistered standalone plan passes without --compass (exit 0)", () => {
+    setupHarness(
+      (harness) => {
+        const result = runCli(gateArgs(harness));
+        expect(result.exitCode).toBe(0);
+        expect(result.stderr).toBe("");
+        expect(result.stdout).toContain("phase 6 (post-merge close): OK");
+      },
+      {
+        snapshot: snapshotDoc({ status: "completed", ended_at: "2026-09-12", updated_at: "2026-09-12" }),
+        root: rootDoc(),
+      },
+    );
+  });
+
+  test("running snapshot (close not yet run) → exit 1 with PHASE6_NOT_TERMINAL", () => {
+    setupHarness((harness) => {
+      const result = runCli(gateArgs(harness));
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("PHASE6_NOT_TERMINAL");
+    });
+  });
+
+  test("root entry still registered → exit 1 with PHASE6_ROOT_ENTRY_PRESENT", () => {
+    setupHarness(
+      (harness) => {
+        const result = runCli(gateArgs(harness));
+        expect(result.exitCode).toBe(1);
+        expect(result.stderr).toContain("PHASE6_ROOT_ENTRY_PRESENT");
+      },
+      { snapshot: snapshotDoc({ status: "completed", ended_at: "2026-09-12", updated_at: "2026-09-12" }) },
+    );
+  });
+
+  test("dangling integration merge lease → exit 1 with PHASE6_DANGLING_LEASE", () => {
+    setupHarness(
+      (harness) => {
+        const result = runCli(gateArgs(harness));
+        expect(result.exitCode).toBe(1);
+        expect(result.stderr).toContain("PHASE6_DANGLING_LEASE");
+      },
+      {
+        snapshot: snapshotDoc({
+          status: "completed",
+          ended_at: "2026-09-12",
+          updated_at: "2026-09-12",
+          integration_merge_lease: {
+            holder: "pm",
+            claimed_at: "2026-08-19",
+            plan_id: "plan-a",
+            source_branch: "feature/plan-a",
+            target_branch: "main",
+          },
+        }),
+        root: rootDoc(),
+      },
+    );
+  });
+
+  test("missing snapshot file refuses (exit 1)", () => {
+    setupHarness(
+      (harness) => {
+        const result = runCli(gateArgs(harness, "wf-missing"));
+        expect(result.exitCode).toBe(1);
+        expect(result.stderr).toContain("workflow snapshot not found");
+      },
+      { snapshot: null, root: null },
+    );
+  });
+
+  test("unsupported --phase value is a usage error (exit 2)", () => {
+    setupHarness((harness) => {
+      const result = runCli(["iteration", "gate", "--phase", "5", "--workflow", WORKFLOW_ID, "--harness", harness]);
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain("usage");
+    });
+  });
+
+  test("existing transition form is intact: --compass still required (exit 2 without it) and the evaluation still exits 0/1", () => {
+    setupHarness(
+      (harness) => {
+        const compassPath = join(harness, "delivery-compass.md");
+        writeFileSync(
+          compassPath,
+          "---\niteration_id: v9.9.9\nstart_date: 2026-08-01\nstatus: active\niteration_base_branch: main\ntarget_branch: main\nplans:\n  - plan-a\n---\n",
+          "utf8",
+        );
+        // Running plan row → phase-2-execute verdict, gate passes (exit 0).
+        const okRun = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--compass", compassPath, "--harness", harness]);
+        expect(okRun.exitCode).toBe(0);
+        expect(okRun.stdout).toContain("transition: phase-2-execute");
+
+        // Phase 2–5 form without --compass → usage error (exit 2).
+        const noCompass = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--harness", harness]);
+        expect(noCompass.exitCode).toBe(2);
+        expect(noCompass.stderr).toContain("usage");
+      },
+      {
+        snapshot: snapshotDoc({
+          plans: [{ id: "plan-a", title: "Plan A", file: "plans/plan-a.md", status: "InProgress" }],
+        }),
+      },
+    );
+  });
+});

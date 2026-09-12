@@ -197,10 +197,12 @@ export type {
   PhaseGateOptions,
   PhaseGateResult,
   PhaseTransition,
+  SnapshotDoc,
 } from "./iteration.js";
 export {
   assertIndexRowObligations,
   evaluatePhaseGate,
+  evaluatePostMergeClose,
   parseCompassFrontmatter,
   parseCompassFrontmatterText,
   pushCadenceProbe,

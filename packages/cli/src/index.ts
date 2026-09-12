@@ -30,6 +30,7 @@ import {
   detectHost,
   emitGitignoreSnippet,
   evaluatePhaseGate,
+  evaluatePostMergeClose,
   executionModeToN,
   findEphemeralCitations,
   findSimplifyMarkers,
@@ -1841,17 +1842,44 @@ iterationCommand
     "Evaluate the phase-transition gate: prints the transition (phase-2-execute / phase-3-close / phase-4-pr-delivery) " +
       "plus the \u00a73.1 entry and \u00a73.5 exit checklists. Exit 1 when the gate verdict fails \u2014 during the Phase-3 window " +
       "(transition: phase-3-close) exit 1 is EXPECTED until the \u00a73.4 close items (status: completed + end_date) are " +
-      "written: the exit checklist gates Phase 4, not the Phase-3 entry",
+      "written: the exit checklist gates Phase 4, not the Phase-3 entry. " +
+      "--phase 6 switches to the post-merge close local-state gate (terminal snapshot, no dangling lease, root " +
+      "status.json entry unregistered); it needs no --compass. Exit 0 pass, 1 gate fail/error, 2 usage",
   )
   .requiredOption("--workflow <id>", "Workflow id whose snapshot is evaluated")
-  .requiredOption("--compass <path>", "delivery-compass.md path")
+  .option("--compass <path>", "delivery-compass.md path (Phase 2\u20135 transition form; not read by --phase 6)")
+  .option("--phase <n>", "Gate form: 6 evaluates the post-merge close local-state gate (no --compass needed); omit for the Phase 2\u20135 transition form")
   .option("--harness <path>", "Harness dir override (default: resolved {HARNESS_DIR})")
   .option("--branch <branch>", "Current branch probe (exit \u00a73.5 item 5)")
   .option("--integration <branch>", "Spec integration branch probe (exit \u00a73.5 item 5)")
   .option("--target <branch>", "PR base branch probe (exit \u00a73.5 item 6)")
   .action(
-    (options: { workflow: string; compass: string; harness?: string; branch?: string; integration?: string; target?: string }) => {
+    (options: { workflow: string; compass?: string; phase?: string; harness?: string; branch?: string; integration?: string; target?: string }) => {
     try {
+      if (options.phase !== undefined) {
+        const phase = Number(options.phase);
+        if (phase !== 6) {
+          throw new SddScriptError(`usage: iteration gate --phase only supports 6 (got ${JSON.stringify(options.phase)})`, 2);
+        }
+        const snapshotPath = resolveSnapshotPath(options.workflow, options.harness);
+        if (!fs.existsSync(snapshotPath)) throw new Error(`workflow snapshot not found: ${snapshotPath}`);
+        const rootFile = path.join(resolveLeaseHarnessDir(options.harness), "status.json");
+        let rootDoc: unknown;
+        try {
+          rootDoc = fs.existsSync(rootFile) ? readJson(rootFile) : undefined;
+        } catch {
+          // Unreadable root must reach the gate as unreadable — an invalid
+          // root is not proof of the entry's absence (PHASE6_INVALID_ROOT).
+          rootDoc = undefined;
+        }
+        const gate = evaluatePostMergeClose(readJson(snapshotPath), rootDoc);
+        printChecklist("phase 6 (post-merge close)", gate);
+        if (!gate.ok) process.exitCode = 1;
+        return;
+      }
+      if (options.compass === undefined || options.compass.trim() === "") {
+        throw new SddScriptError("usage: iteration gate requires --compass <path> (or --phase 6 for the post-merge close form)", 2);
+      }
       const snapshotPath = resolveSnapshotPath(options.workflow, options.harness);
       const compassPath = path.resolve(options.compass);
       if (!fs.existsSync(snapshotPath)) throw new Error(`workflow snapshot not found: ${snapshotPath}`);
@@ -1866,8 +1894,7 @@ iterationCommand
       printChecklist("exit (close \u00a73.5)", result.exit);
       if (!result.ok) process.exitCode = 1;
     } catch (error) {
-      console.error(pc.red(`iteration gate failed: ${(error as Error).message}`));
-      process.exitCode = 1;
+      failScript(error, "iteration gate");
     }
   });
 

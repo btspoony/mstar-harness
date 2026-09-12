@@ -34,10 +34,17 @@
  *   table header on first creation): `mstar-iteration` SKILL.md §1.4.
  *   Legacy flat `<id>-delivery-compass.md` files are read-compatible only
  *   (§1.3) and are not indexed by this check.
+ * - Phase 6 post-merge close local-state gate (valid terminal snapshot
+ *   shape + no leftover lease + root status.json entry unregistered;
+ *   invalid/unreadable root is NOT proof of root absence):
+ *   `mstar-iteration/references/phase-6-post-merge-close.md` §6.4 +
+ *   Evidence. Pure and additive over the Phase 2–5 `evaluatePhaseGate`
+ *   contract.
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { GateResult, Severity, ValidationResult } from "./core.js";
+import { isTerminalSnapshot, validateWorkflowSnapshot, type WorkflowSnapshot } from "./workflow.js";
 
 const COMPASS_STATUSES = ["active", "locked", "completed"] as const;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -53,11 +60,13 @@ const INDEX_HEADER = "| Iteration | Path | Description | Status |";
  * verbatim () — `findPlanRow` accepts `id` or `plan_id`.
  *
  * Deliberate decoupling: this is a loose LOCAL re-declaration,
- * NOT an import of `WorkflowSnapshot` from workflow.ts. This module only
- * reads `plans[].status`; importing the full schema would add a module edge
- * to workflow.ts (which imports status.ts, which workflow.ts cycles back
- * through — the call-time-safe loop family stays static-edge-free this
- * way). Keep this shape in sync manually when the snapshot schema changes.
+ * NOT an import of `WorkflowSnapshot` from workflow.ts. The loose phase-gate
+ * reads (`evaluatePhaseGate`) only touch `plans[].status`, so the full
+ * schema stays out of those call paths. The Phase-6 gate
+ * (`evaluatePostMergeClose`) DOES consume the strict T1 validator directly
+ * (static edge iteration → workflow; workflow's closure never imports this
+ * module, so no cycle is created). Keep this shape in sync manually when
+ * the snapshot schema changes.
  */
 export type SnapshotDoc = {
   plans?: unknown;
@@ -485,6 +494,100 @@ export function evaluatePhaseGate(
     ok: gateBlocking.length === 0,
     violations: gateBlocking,
   };
+}
+
+/**
+ * Leftover-lease probe over the loose snapshot doc: presence only, never
+ * lease validity (an invalid lease shape fails the strict snapshot validator
+ * and is reported as PHASE6_INVALID_SNAPSHOT).
+ */
+function hasLeftoverLease(snapshotDoc: SnapshotDoc): boolean {
+  if (snapshotDoc.integration_merge_lease !== undefined && snapshotDoc.integration_merge_lease !== null) return true;
+  if (!Array.isArray(snapshotDoc.plans)) return false;
+  return snapshotDoc.plans.some(
+    (row) => isPlainObject(row) && row.execution_lease !== undefined && row.execution_lease !== null,
+  );
+}
+
+/**
+ * Phase 6 post-merge close local-state gate (phase-6-post-merge-close.md
+ * §6.4 + Evidence): verifies the checkable post-close state — the workflow
+ * snapshot is a valid v3 document (T1 `validateWorkflowSnapshot`) in a
+ * terminal status (completed | failed | stopped, T1 `isTerminalSnapshot`),
+ * no `plans[].execution_lease` or top-level `integration_merge_lease`
+ * survived the close, and the root `status.json` no longer registers the
+ * workflow (removal-at-terminal).
+ *
+ * Deliberately does NOT verify remote merge evidence or physical cleanup —
+ * the gate only reads local state. An invalid/unreadable ROOT is a
+ * violation (`PHASE6_INVALID_ROOT`): it is not proof of the entry's
+ * absence. The lease probe runs on terminal documents only — mid-flight
+ * leases on a running lifecycle are legitimate and the actionable code is
+ * `PHASE6_NOT_TERMINAL`.
+ *
+ * Pure and additive: consumes T1's validators unchanged and does not touch
+ * `evaluatePhaseGate` / `PhaseGateResult` (Phase 2–5 exit codes stay
+ * intact). Stable machine codes: `PHASE6_NOT_TERMINAL`,
+ * `PHASE6_ROOT_ENTRY_PRESENT`, `PHASE6_DANGLING_LEASE`,
+ * `PHASE6_INVALID_SNAPSHOT`, `PHASE6_INVALID_ROOT`.
+ */
+export function evaluatePostMergeClose(snapshotDoc: SnapshotDoc, rootDoc: unknown): GateResult {
+  const violations: ValidationResult[] = [];
+  const shape = validateWorkflowSnapshot(snapshotDoc);
+  if (!shape.ok) {
+    const detail = shape.violations.map((v) => v.message).join("; ");
+    violations.push(
+      violation(
+        "high",
+        "PHASE6_INVALID_SNAPSHOT",
+        `Workflow snapshot is not a valid v3 snapshot \u2014 the Phase-6 local close state cannot be verified (${detail})`,
+        "Repair {HARNESS_DIR}/workflows/<id>/snapshot.json (mstar status validate), then re-run the gate",
+      ),
+    );
+  }
+  // T1 terminal predicate — status-only read, safe on any parsed document.
+  const terminal = isTerminalSnapshot(snapshotDoc as unknown as WorkflowSnapshot);
+  if (shape.ok && !terminal) {
+    violations.push(
+      violation(
+        "high",
+        "PHASE6_NOT_TERMINAL",
+        `Workflow status is ${JSON.stringify(snapshotDoc.status)} \u2014 post-merge close requires a terminal snapshot (completed | failed | stopped); run 'mstar status workflow-close --workflow <id>' first`,
+      ),
+    );
+  }
+  if (terminal && hasLeftoverLease(snapshotDoc)) {
+    violations.push(
+      violation(
+        "high",
+        "PHASE6_DANGLING_LEASE",
+        "Terminal snapshot still carries a lease (plans[].execution_lease or integration_merge_lease) \u2014 close never releases leases",
+        "Release the lease(s) with the owner action, then re-run 'mstar iteration gate --phase 6 --workflow <id>'",
+      ),
+    );
+  }
+  const workflowId = typeof snapshotDoc.id === "string" ? snapshotDoc.id : null;
+  const workflows = isPlainObject(rootDoc) && Array.isArray(rootDoc.workflows) ? rootDoc.workflows : null;
+  if (workflows === null) {
+    violations.push(
+      violation(
+        "high",
+        "PHASE6_INVALID_ROOT",
+        "Root status.json is not a readable v2 workflow registry (workflows[] missing or not an array) \u2014 an invalid/unreadable root is not proof that the entry is gone",
+        "Repair or migrate {HARNESS_DIR}/status.json to the v2 shape, then re-run the gate",
+      ),
+    );
+  } else if (workflowId !== null && workflows.some((entry) => isPlainObject(entry) && entry.id === workflowId)) {
+    violations.push(
+      violation(
+        "high",
+        "PHASE6_ROOT_ENTRY_PRESENT",
+        `Workflow '${workflowId}' is still registered in the root status.json workflows[] \u2014 post-merge close unregisters it (removal-at-terminal)`,
+        "Run 'mstar status workflow-close --workflow <id>' to finish the unregister",
+      ),
+    );
+  }
+  return { ok: violations.length === 0, violations };
 }
 
 /**
