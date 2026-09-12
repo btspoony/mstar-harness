@@ -28,7 +28,7 @@ PM runs context-dependent `mstar sdd workspace`, `task-brief`, and `review-packa
 
    All paths absolute; `planFile`/`sddDir` must resolve inside the control harness; `featureCwd` must be the assigned feature worktree on `workingBranch`. The declared control root is authoritative — never re-inferred from the feature cwd.
 3. `mstar sdd task-brief <plan-file> <N> --context "$SDD_DIR/context.json"` — bound producer: validates the artifact destination **before** mkdir/write and prints the absolute brief path (`{SDD_DIR}/task-N-brief.md`).
-4. Record `BASE_SHA` (`git rev-parse HEAD` before dispatch).
+4. Record `BASE_SHA` (`BASE_SHA=$(git -C "$FEATURE_CWD" rev-parse HEAD)` before dispatch). For dependent tasks, first satisfy `mstar-sdd` § Ready-task scheduling: PM serially integrates reviewed prerequisite commits and records their ancestry in this base. Include those commit/base IDs and the check result in the handoff; review approval alone is insufficient.
 5. Dispatch implementer with:
    - One line scene-setting (where task fits)
    - Absolute brief path: read first — verbatim requirements
@@ -63,7 +63,11 @@ Check command: <exact targeted command actually run>
 Check result: <actual exit/result and observed output>
 ```
 
-Replace every placeholder with actual evidence. Unknown or duplicate modes, missing/empty/placeholder fields, and bare `Tests: N/A` fail; do not copy the template as a report. `assertSddTddTriple` / `mstar lint <task-report>` validate structure only. PM/QC check the actual changed range, applicability and evidence honesty; the checker cannot establish that commands ran or intercept arbitrary shell execution. For policy changes, record the before/after expectation and triggering scenario alongside the concrete check; no broad model-eval matrix is implied.
+`Check result` accepts concrete static-tool output (for example `docs/guide.md:12: scoped rule`); a test-style PASS/exit token is not required. It must be nonempty and non-placeholder. Whether an observation is truthful and sufficient remains PM/QC's responsibility.
+
+For appended fixes, begin each new block with `## Verification round: <concrete label>` (for example `fix 1`). Only the last such round is active; earlier rounds remain history and cannot fill missing fields. A report without round headings is one active block. The active round supplies its complete applicable evidence, including `Verification mode` for scoped checks; executable rounds retain their own test triple without a mode. A blank/placeholder round label is invalid.
+
+Replace every placeholder with actual evidence. Unknown or duplicate modes within the active round, missing/empty/placeholder fields, and bare `Tests: N/A` fail; do not copy the template as a report. `assertSddTddTriple` / `mstar lint <task-report>` validate structure only. PM/QC check the actual changed range, applicability and evidence honesty; the checker cannot establish that commands ran or intercept arbitrary shell execution. For policy changes, record the before/after expectation and triggering scenario alongside the concrete check; no broad model-eval matrix is implied.
 
 ## After implementer DONE
 
@@ -95,7 +99,7 @@ Hosted subagents are not cwd-bound by the launcher, so their dispatch prompt mus
 
 ## Fix loop
 
-Fix subagent appends the affected evidence to the same `task-N-report.md`: the executable test triple or applicable `scoped-check` block above, with actual output (warnings remain findings). Reuse unaffected evidence, citing its original range and why it remains applicable. Re-dispatch the owning reviewer for the assigned finding/fix delta when the required evidence is present.
+Fix subagent appends a new `## Verification round: <concrete label>` to the same `task-N-report.md`, followed by the complete affected executable test triple or applicable `scoped-check` block above, with actual output (warnings remain findings). Reuse unaffected evidence, citing its original range and why it remains applicable. Re-dispatch the owning reviewer for the assigned finding/fix delta when the required evidence is present.
 
 The per-task fix loop applies the same fix-round mechanics as plan-level QC fix waves (SKILL.md · "After all tasks" — unverified rounds count, affected finding/fix-delta re-entry, capped cross-round excerpt, honest non-convergence): from round ≥2 the excerpt of prior rounds' findings/dispositions goes into the fix dispatch brief, and the round tally/verification history lands in `$SDD_DIR/progress.md`.
 

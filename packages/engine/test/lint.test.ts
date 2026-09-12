@@ -549,6 +549,38 @@ Check command: rg -n 'scoped rule' skills/example/SKILL.md
 Check result: exit 0; the changed rule and referenced boundary are present.
 `;
 
+  test("accepts actual static output without unit-test status tokens", () => {
+    for (const output of ["skills/example/SKILL.md:12: scoped rule", "README.md -> README_CN.md", '{"valid":true}']) {
+      expect(assertSddTddTriple(scopedReport.replace("exit 0; the changed rule and referenced boundary are present.", output)).ok).toBe(true);
+    }
+  });
+
+  test("append-only verification rounds validate the active round", () => {
+    const report = `## Verification round: initial\n${scopedReport}\n## Verification round: fix 1\n${scopedReport}`;
+    expect(assertSddTddTriple(report).ok).toBe(true);
+  });
+
+  test("active duplicate declarations remain invalid after a valid historical round", () => {
+    const report = `${scopedReport}\n## Verification round: fix 1\nVerification mode: scoped-check\n${scopedReport}`;
+    expect(assertSddTddTriple(report).ok).toBe(false);
+  });
+
+  test("incomplete active round cannot borrow historical fields or test evidence", () => {
+    for (const active of ["", "Reason: changed a policy", scopedReport.replace("Check command: rg -n 'scoped rule' skills/example/SKILL.md\n", ""), scopedReport.replace("Verification mode: scoped-check\n", "")]) {
+      expect(assertSddTddTriple(`${TRIPLE_COMPLETE}\n${scopedReport}\n## Verification round: fix 1\n${active}`).ok).toBe(false);
+    }
+  });
+
+  test("malformed active round label cannot reuse a completed historical report", () => {
+    for (const label of ["", "TBD"]) {
+      expect(assertSddTddTriple(`${scopedReport}\n## Verification round: ${label}\n`).ok).toBe(false);
+    }
+  });
+
+  test("active executable test triple remains valid after historical scoped evidence", () => {
+    expect(assertSddTddTriple(`${scopedReport}\n## Verification round: code fix\n${TRIPLE_COMPLETE}`).ok).toBe(true);
+  });
+
   test("accepts scoped-check policy evidence without invented tests", () => {
     expect(assertSddTddTriple(scopedReport)).toEqual({ ok: true, violations: [] });
   });
@@ -576,8 +608,8 @@ Check result: exit 0; the changed rule and referenced boundary are present.
     expect(assertSddTddTriple(`${scopedReport}Reason: another claim\n`).ok).toBe(false);
   });
 
-  test("rejects prose-only scoped-check result and non-N/A tests", () => {
-    expect(assertSddTddTriple(scopedReport.replace("exit 0; the changed rule and referenced boundary are present.", "Looks fine.")).ok).toBe(false);
+  test("rejects placeholder scoped-check result and non-N/A tests", () => {
+    expect(assertSddTddTriple(scopedReport.replace("exit 0; the changed rule and referenced boundary are present.", "N/A")).ok).toBe(false);
     expect(assertSddTddTriple(scopedReport.replace("Tests: N/A", "Tests: skipped")).ok).toBe(false);
   });
 

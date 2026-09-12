@@ -42,6 +42,8 @@ Batch all findings for the human in one message. If clean, proceed silently.
 
 Dispatch independent ready tasks concurrently after L2 worktree isolation. Keep one canonical per-plan `{SDD_DIR}`. PM alone writes its `context.json`, `progress.md` and workflow snapshot; prepare context-dependent helper outputs serially. Each writable track has its own worktree/branch and immutable task-specific absolute brief/report/diff paths. Artifact subdirectories are namespaces inside that SDD root, never a second SDD root. Parallel leaves use the supplied paths directly and do not invoke shared-context helpers or read mutable context to choose their checkout; never share a writable session or `implementer-session.json`. Use **fresh** implementers for parallel tasks. Serialize only actual dependencies, overlapping write ownership, one sticky session, and integration merges; state the dependency when serializing. A task reviewer may run alongside an unrelated ready implementer. PM alone reconciles reports into the shared `progress.md` and workflow snapshot.
 
+**Dependent-task readiness:** review approval alone does not make a prerequisite available. PM serially integrates the reviewed prerequisite commits, then creates or updates the idle dependent worktree from that integrated state before recording its `BASE_SHA` and dispatching. For each required reviewed commit, record `git -C "$FEATURE_CWD" merge-base --is-ancestor <prerequisite-sha> <BASE_SHA>` with exit 0; a missing commit blocks only that dependent task. Do not move an active task's base; independent ready tasks continue concurrently.
+
 ## Per-task loop (PM only · Workflow)
 
 1. Record `BASE_SHA` (never use `HEAD~1` later)
@@ -54,7 +56,7 @@ Dispatch independent ready tasks concurrently after L2 worktree isolation. Keep 
 6. Dispatch **fresh** task reviewer — role **`code-reviewer`** (L2; **not** `qc-specialist*`; host fallback generic + C5b → `mstar-host` C5) — brief, report, diff, Global Constraints — `references/task-reviewer-prompt.md` — **never** sticky resume for reviewers
 7. Fix loop for Critical/Important; re-review until approved
 8. Append `progress.md`; update the workflow snapshot plan row (`workflows/<id>/snapshot.json` → `plans[]`) `task_commits[]` and `implementer-session.json` `last_task` if sticky
-9. Release dependent tasks when their required output is reviewed; independent ready tasks need not wait
+9. Release dependent tasks only after reviewed prerequisite commits are present in their assigned base, per Dependent-task readiness above; independent ready tasks need not wait
 
 **Never** dispatch parallel writers without isolated worktrees and disjoint ownership. Merge their outputs serially before producing the plan review-package.
 

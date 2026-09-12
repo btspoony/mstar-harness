@@ -1,9 +1,9 @@
 /**
  * Bundled mstar commands (omp parity, iteration v2.1.0 gap fill): the plugin
  * registers the packaged `harness-commands/*.md` mirror (synced from the
- * repo root by `bundle-assets`; gitignored) on `ctx.commands` — the five
+ * repo root by `bundle-assets`; gitignored) on `ctx.commands` — the six
  * mstar slash commands (`iteration-start`, `iteration-drive`,
- * `iteration-loop`, `codebase-audit`, `amazing-pr-review`), matching the omp/opencode command
+ * `iteration-loop`, `codebase-audit`, `amazing-pr-review`, `amazing-e2e-check`), matching the omp/opencode command
  * surface. Each registered command's handler steers the command body into
  * the receiving agent as a user message (the dsh-commands "explicitly
  * schedule model-visible work through the receiving Agent" path).
@@ -37,8 +37,8 @@ function packagedCommandsDir(): string | undefined {
   return existsSync(dir) ? dir : undefined
 }
 
-/** The five mstar slash commands (repo-root `commands/` mirror). */
-const MSTAR_COMMANDS = ['iteration-start', 'iteration-drive', 'iteration-loop', 'codebase-audit', 'amazing-pr-review'] as const
+/** The six mstar slash commands (repo-root `commands/` mirror). */
+const MSTAR_COMMANDS = ['iteration-start', 'iteration-drive', 'iteration-loop', 'codebase-audit', 'amazing-pr-review', 'amazing-e2e-check'] as const
 
 /** The frontmatter `input` hint each command must advertise (the client-claim contract). */
 const EXPECTED_HINTS: Readonly<Record<(typeof MSTAR_COMMANDS)[number], string>> = {
@@ -47,6 +47,7 @@ const EXPECTED_HINTS: Readonly<Record<(typeof MSTAR_COMMANDS)[number], string>> 
   'iteration-drive': '[no args]',
   'codebase-audit': '[simplify]',
   'amazing-pr-review': '[pr|branch|scope] [quick|default|deep]',
+  'amazing-e2e-check': '[environment/device] [scenarios]',
 }
 
 /** One command's registered descriptor (the view the dsh web client resolves). */
@@ -96,7 +97,7 @@ function commandBody(dir: string, name: string): string {
 }
 
 describe('bundled mstar commands (omp parity)', () => {
-  it('registers the five mstar commands on ctx.commands from the packaged mirror', async () => {
+  it('registers the six mstar commands on ctx.commands from the packaged mirror', async () => {
     const dir = packagedCommandsDir()
     if (dir === undefined) {
       // bundle-assets has not run — nothing to register.

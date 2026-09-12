@@ -273,6 +273,8 @@ function hasEvidenceDetail(value: string): boolean {
  * document/policy checks, otherwise the executable-change TDD triple.
  * This checks structure, not whether the declared mode fits the actual diff
  * or a command ran. PM/QC own applicability and evidence authenticity.
+ * Scoped check results may be arbitrary concrete static-tool output; the
+ * output-token heuristic below applies only to executable test triples.
  *
  * One violation per missing part:
  * - `lint.sdd-tdd.missing-tests` — no test file reference
@@ -294,7 +296,17 @@ function hasEvidenceDetail(value: string): boolean {
  */
 export function assertSddTddTriple(reportText: string): GateResult {
   const violations: ValidationResult[] = [];
-  const lines = reportText.split(/\r?\n/);
+  // Fix evidence is append-only. Validate the last explicitly delimited round
+  // in isolation; earlier fields cannot satisfy an incomplete active report.
+  const activeRound = [...reportText.matchAll(/^## Verification round:[ \t]*(.*)$/gm)].at(-1);
+  if (activeRound && !hasEvidenceDetail(activeRound[1])) {
+    return {
+      ok: false,
+      violations: [violation("medium", "lint.sdd-evidence.invalid-round", "Verification round requires a concrete label.")],
+    };
+  }
+  const activeText = activeRound ? reportText.slice(activeRound.index! + activeRound[0].length) : reportText;
+  const lines = activeText.split(/\r?\n/);
   const fields = new Map<string, string[]>();
   for (const line of lines) {
     const match = line.match(/^\s*(Verification mode|Changed files|Tests|Reason|Check command|Check result):[ \t]*(.*)$/i);
@@ -308,7 +320,7 @@ export function assertSddTddTriple(reportText: string): GateResult {
     if (modes.length !== 1 || modes[0] !== "scoped-check") {
       return {
         ok: false,
-        violations: [violation("medium", "lint.sdd-evidence.invalid-mode", "Use exactly one Verification mode: scoped-check declaration; unknown or duplicate modes are invalid.")],
+        violations: [violation("medium", "lint.sdd-evidence.invalid-mode", "Use exactly one Verification mode: scoped-check declaration in the active round; unknown or duplicate modes are invalid.")],
       };
     }
     for (const key of ["changed files", "tests", "reason", "check command", "check result"]) {
@@ -316,7 +328,7 @@ export function assertSddTddTriple(reportText: string): GateResult {
       const value = values[0] ?? "";
       const valid = values.length === 1 && (key === "tests"
         ? value === "N/A"
-        : hasEvidenceDetail(value) && (key !== "check result" || OUTPUT_TOKEN_RE.test(value)));
+        : hasEvidenceDetail(value));
       if (!valid) {
         violations.push(violation("medium", `lint.sdd-evidence.${key.replaceAll(" ", "-")}`, `scoped-check requires one concrete ${key} field${key === "tests" ? " with value N/A" : ""}; missing, duplicate, or placeholder evidence is invalid.`));
       }
