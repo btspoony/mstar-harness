@@ -4,7 +4,7 @@ Reuse the **same implementer subagent** across multiple tasks in one plan when t
 
 SSOT for mode selection and host resume → this file. Per-task artifacts → **`file-handoffs.md`**.
 
-**Parallel ready tasks use fresh sessions and isolated per-track SDD paths** (`mstar-sdd` § Ready-task scheduling). Never resume the same session concurrently or share its ledger between tracks; PM alone updates shared progress.
+**Parallel ready tasks use fresh sessions and task-specific artifact paths inside one canonical per-plan SDD root** (`mstar-sdd` § Ready-task scheduling). Never resume the same session concurrently or share its ledger between tracks; PM alone updates shared context/progress; parallel leaves consume immutable absolute artifact paths, not shared-context helpers.
 
 ## When to use
 

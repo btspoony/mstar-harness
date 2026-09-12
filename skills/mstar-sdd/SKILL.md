@@ -40,7 +40,7 @@ Batch all findings for the human in one message. If clean, proceed silently.
 
 ## Ready-task scheduling (PM only · Decision Rules)
 
-Dispatch independent ready tasks concurrently after L2 worktree isolation. Each writable track has its own worktree, branch, brief/report/diff paths and SDD directory; never share a writable session or `implementer-session.json`. Use **fresh** implementers for parallel tasks. Serialize only actual dependencies, overlapping write ownership, one sticky session, and integration merges; state the dependency when serializing. A task reviewer may run alongside an unrelated ready implementer. PM alone reconciles reports into the shared `progress.md` and workflow snapshot.
+Dispatch independent ready tasks concurrently after L2 worktree isolation. Keep one canonical per-plan `{SDD_DIR}`. PM alone writes its `context.json`, `progress.md` and workflow snapshot; prepare context-dependent helper outputs serially. Each writable track has its own worktree/branch and immutable task-specific absolute brief/report/diff paths. Artifact subdirectories are namespaces inside that SDD root, never a second SDD root. Parallel leaves use the supplied paths directly and do not invoke shared-context helpers or read mutable context to choose their checkout; never share a writable session or `implementer-session.json`. Use **fresh** implementers for parallel tasks. Serialize only actual dependencies, overlapping write ownership, one sticky session, and integration merges; state the dependency when serializing. A task reviewer may run alongside an unrelated ready implementer. PM alone reconciles reports into the shared `progress.md` and workflow snapshot.
 
 ## Per-task loop (PM only · Workflow)
 
