@@ -8,6 +8,18 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ## [Unreleased]
 
+## [3.8.3] - 2026-09-12
+
+### Harness
+
+- Scope local verification and review to changed behavior, parallelize independent work, and keep routine QA on targeted unit evidence; full local suites require explicit user authorization.
+- Accept explicit `scoped-check` evidence for documentation and policy changes without invented test files, while preserving executable-change test evidence.
+- Add the independent `mstar-e2e` workflow and `/amazing-e2e-check` entry, including Codex project command installation, for explicitly requested browser, device, and installed-deployment scenarios.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, the portable Agent Plugins manifest, and both marketplace manifests: **→ 3.8.3**.
+
 ## [3.8.2] - 2026-09-12
 
 ### Changed
