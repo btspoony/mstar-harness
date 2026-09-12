@@ -6,6 +6,20 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [3.8.2] - 2026-09-12
+
+### Changed
+
+- **`dsh-llm-fallbacks` upgraded `0.4.1` → `0.5.2`** (the line adapted to `@deepseek-ai/dsh-*` `^0.1.5-rc.2`): the dsh devDependency, the new `@mstar-harness/engine` `DSH_LLM_FALLBACKS_VERSION` export, and the CLI `init --target dsh` install spec are the EXACT `0.5.2`. Two hand-written literals only (`packages/dsh/package.json` + the engine export); the CLI adapter and the dsh tests import the export, and a lockstep test fails if the two ever drift.
+- **The 0.5.x role-identity delivery composes with mstar's own persona channel.** The plugin resolves the Assignment `**Execute as**:` role and delivers that role's persona on the child's start; mstar already delivers its native `SubagentStartRequest.persona`, and an explicit caller-set `request.persona` WINS in both (each side returns early when a persona is already present) — an Assignment-header persona is never replaced after the bump.
+- **Upstream preset roles shrank on this line.** `presetRoles` no longer bundles `designer` / `librarian`: 5 preset ids, so the seeded taxonomy union is 13 mstar ids + 5 presets = 18 (was 20). The coexistence and boot-order drift anchors follow the installed upstream value, so the next preset change fails those suites instead of drifting silently.
+- 0.5.2 provides its `llm-fallbacks` service INSIDE `ctx.inject(['settings'], …)` — a composition without a `settings` service applies the plugin but registers no service (the real dsh app always composes `dsh-settings-file`). The consumed nine-key service surface is unchanged.
+- **The dsh `init` / `doctor` install surface is version-aware for the fallbacks row.** A profile whose `dsh-llm-fallbacks` install is not the pinned version (an operator `link:` checkout from the previous line included) is reported `drifted` by `doctor --target dsh` (exit 1, both versions named) instead of `mounted` + healthy, and `init --target dsh` re-adds the pinned spec instead of reporting `skipped-existing` — the upgrade path from the previous pin, documented in `INSTALL.md` / `docs/cli.md`.
+
+- Version alignment with harness **3.8.2**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **3.8.2**.
+
 ## [3.8.1] - 2026-09-11
 
 ### Changed
