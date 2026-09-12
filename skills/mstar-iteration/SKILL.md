@@ -28,6 +28,8 @@ Phase 4: PR delivery（开 PR）
      ↓
 Phase 5: PR merge-ready loop —— 至 mergeable + CI 全绿 + reviews resolved
      ↓
+Phase 6: post-merge close —— PR merged 后 §6.1–§6.4
+     ↓
 迭代交付完成
 ```
 
@@ -35,6 +37,7 @@ Phase 5: PR merge-ready loop —— 至 mergeable + CI 全绿 + reviews resolved
 
 - **Phase 3** 在 integration 分支收口 compound / roadmap；**开 PR（Phase 4）≠ 迭代交付完成**。
 - **Phase 5** 是 **merge-ready loop**（修复 → 等 CI/review 波次结束再 push → 再验证，至 §5.5 exit）；**Loop 理念与 push cadence SSOT 在本 skill**（§2.6；push cadence 细则 §5.1a → `references/phase-4-5-pr-delivery.md`）；宿主 command 可叠加额外 **non-`mstar-*`** helper（**优先** `babysit` / `*-babysit`；**`greploop` 可选**），但不写入 `mstar-*` load order。
+- **Phase 6** 是 **post-merge close**（PR **merged** 后 §6.1–§6.4：terminal snapshot → unregister → 投影对齐 → cleanup handoff）；**§5.5 exit / PR mergeable ≠ 生命周期已关闭**（`references/phase-6-post-merge-close.md`）。
 - 一次迭代 = 一个 PR；compound 产物随 PR 合入 snapshot `branch.target`。
 
 ## Phase route map（唯一路由表 — 按当前动作加载）
@@ -45,6 +48,7 @@ Phase 5: PR merge-ready loop —— 至 mergeable + CI 全绿 + reviews resolved
 | **execute / resume**（推进或恢复 per-plan 循环） | **`references/phase-2-worktree-lease.md`**（§2.0 五道闸、§2.1–§2.5 loop/dispatch 细则、control root + integration worktree + lease 全文） |
 | **close**（全部 plan Done 后收口迭代） | **`references/phase-3-iteration-close.md`**（§3.0–§3.6：entry checklist、compound、roadmap、完成标记、exit checklist + commit） |
 | **PR / merge-ready**（开 PR、推进合并就绪 loop） | **`references/phase-4-5-pr-delivery.md`**（§4–§5.2：开 PR、§5.1a push cadence、loop、exit checklist） |
+| **Phase 6 / post-merge close**（PR merged 后关闭 lifecycle） | **`references/phase-6-post-merge-close.md`**（entry（verified merged）+ §6.1 terminal write → §6.2 unregister → §6.3 projection reconciliation → §6.4 cleanup handoff） |
 | **Phase 5 helper discovery**（仅 command 层按需） | **`references/phase5-helper-discovery.md`**（babysit / greploop 发现） |
 
 一次只加载当前 route 一行；phase 切换按下方 **Phase transition gates** 走。
@@ -57,14 +61,15 @@ Phase 5: PR merge-ready loop —— 至 mergeable + CI 全绿 + reviews resolved
 | **→ Phase 3** | workflow snapshot（`workflows/<id>/snapshot.json`）中 compass 登记的全部 plan 均为 `Done` | 打印 `## Phase 3: iteration-close`；执行 §3.0→§3.5（`references/phase-3-iteration-close.md`）；host todo `phase-3-iteration-close` 保持 open 直至 §3.5；close commit 在 **integration worktree** 执行 | 开 PR；宣称迭代交付完成；仅依赖 final plan closure；在主 checkout 上 commit close 产物 |
 | **→ Phase 4** | §3.5 exit checklist 全 `[x]`；frontmatter `status: completed` + `end_date` | 打印 `## Phase 4: PR delivery`；开 PR 到 snapshot `branch.target`（§4 → `references/phase-4-5-pr-delivery.md`） | 跳过 §3.1 entry checklist 或 compound Phase 6 |
 | **→ Phase 5** | Phase 4 PR 已创建 | 打印 `## Phase 5: PR merge-ready`；执行 §5 loop 至 §5.5 exit（含 §5.1a push cadence） | 开 PR 后停止；跳过 review resolve / CI loop；**CI/AI review 仍在跑时 push** |
-| **→ 迭代交付完成** | §5.5 exit checklist 全 `[x]` | PR mergeable；required CI 全绿；reviews resolved | Phase 4 开 PR 即宣称完成 |
+| **→ Phase 6** | PR **已 merge**（verified merged；mergeable ≠ merged，由 PM 核实） | 打印 `## Phase 6: post-merge close`；按 §6.1→§6.4 执行（`references/phase-6-post-merge-close.md`）；todo `phase-6-post-merge-close` 保持 open 直至 §6.4 | mergeable 即视为 merged；未核实 merge 就调用 close；§6.1–§6.3 之间夹带 tracked commit |
+| **→ 迭代交付完成** | Phase 6 §6.1–§6.4 完成（`references/phase-6-post-merge-close.md`） | snapshot `completed` + `ended_at`；根 `status.json` 条目注销（`mstar status workflow-close --workflow <id>` exit 0）；投影一致 | §5.5 exit 或 PR merge 即宣称交付完成；为 close 释放 lease 或伪造 Done/关闭 residual |
 | **start → integration branch** | §1.6 Review & Edit chain（`references/phase-1-prepare.md`） | 三角色按序 invoke；**specs** 为主产出；**禁止** start 链向 `{KNOWLEDGE_DIR}/` 新增；writing-specialist corpus hygiene + compass `status: locked` | PM 代做专业编辑；并行三角色；product/architect 写 knowledge；临时笔记进 specs |
 
 > **Engine check (when available):** run `mstar iteration gate --workflow <id> --compass <delivery-compass.md> --branch "$(git branch --show-current)" --integration <spec_integration_branch> --target <target_branch>` (or `import { evaluatePhaseGate } from "@mstar-harness/engine"` with the `currentBranch` / `specIntegrationBranch` / `prBaseBranch` probe inputs in a host hook) to evaluate the transition gate above against the workflow snapshot — the branch probes cover §3.5 exit item 5 (`EXIT_BRANCH_MISMATCH` when the commit checkout is not on `spec_integration_branch`; verify **before** the §3.5 close commit, not after). On `fail` (gate-blocking violations) -> do not proceed; fix and re-run. Note: during the Phase-3 window (`transition: phase-3-close`) the gate exits 1 until the §3.4 close items (`status: completed` + `end_date`) are written — that exit-1 is the expected "close work pending" signal (the exit checklist gates Phase 4, not the Phase-3 entry), so proceed with Phase 3 per the table below. Skill text below remains authoritative when the runtime is absent.
 
 **误判信号**：对话里出现 compound 摘要、roadmap 更新、或「所有 plan 已完成」但 **未** 打印 §3.1 / §3.5 checklist → 视为 **Phase 3 未执行**，回到 `references/phase-3-iteration-close.md` §3.0。
 
-**per-plan 状态 SSOT**：`{WORKFLOW_DIR}/<id>/snapshot.json` 的 `plans[]` 行（per-plan Todo/InProgress/InReview/Done）；根 `{HARNESS_DIR}/status.json` `workflows[]` 登记活跃 lifecycle。
+**per-plan 状态 SSOT**：`{WORKFLOW_DIR}/<id>/snapshot.json` 的 `plans[]` 行（per-plan Todo/InProgress/InReview/Done）；根 `{HARNESS_DIR}/status.json` `workflows[]` 登记活跃 lifecycle。Phase 6 close 后 snapshot 终态（`completed` + `ended_at`）保留为归档，根条目注销（removal-at-terminal；`references/phase-6-post-merge-close.md` §6.1–§6.2）。
 **迭代状态 SSOT**：`{ITERATION_DIR}/<id>/delivery-compass.md` frontmatter `status` + `{ITERATION_DIR}/README.md` 索引（一行 = 一次迭代）。
 **迭代分支 SSOT**：snapshot `branch.base`（= `iteration_base_branch`）+ `branch.target`（= `target_branch`）与 `branch.integration`（= `spec_integration_branch`）（`workflows/<id>/snapshot.json`）；compass frontmatter 镜像同名字段。解析顺序见 phase-2 reference §2.3。**禁止**因仓库存在 `main`/`master` 就假定 base 或 PR 目标。**`branch.base` 是创建/merge 锚点，不是驻留事实**——主 worktree（control root）驻留分支在生命周期写入前由 PM 记录为主 plan 头的 **`Main worktree branch`**，全程不切换；integration 分支检出在专属 integration worktree（snapshot `integration_worktree_path`）。
 
@@ -107,6 +112,7 @@ Phase 5: PR merge-ready loop —— 至 mergeable + CI 全绿 + reviews resolved
 共享反递归红线全清单见 **`mstar-roles/references/_shared/leaf-executor-core.md`**「Shared anti-recursion NEVER」。迭代级高频陷阱（其余各 Phase 内已含对应 hard rule）：
 
 - **不要将 Phase 4 开 PR 等同于迭代交付完成** — 必须完成 Phase 5 §5.2 merge-ready loop
+- **不要将 §5.5 exit 或 PR merge 当作生命周期终点** — merged 后必须进入 Phase 6（`references/phase-6-post-merge-close.md` §6.1–§6.4）；禁止为通过 close 释放 lease 或伪造 Done/关闭 residual
 - **不要在 Phase 5 CI 仍跑或 AI review 波次未结束时 push**（§5.1a）— 本地可提前修，push 等 idle
 - **不要在 integration worktree 或主 checkout（control root）上直接编辑产品代码** — Phase 5 修复走 fix feature worktree，review 后 merge 回 integration worktree（`phase-4-5-pr-delivery.md` §5.0）
 - **不要在缺 `iteration_base_branch` / `target_branch` 时默认 `main` / `master`**
@@ -115,8 +121,8 @@ Phase 5: PR merge-ready loop —— 至 mergeable + CI 全绿 + reviews resolved
 
 ## Workflow
 
-Phase 1–5 总览见上文 **`## 设计思路`** 图。执行时按 **`## Phase route map`** 选当前动作的一行 detail：`start`（范围 + compass + §1.6 Review & Edit 链）→ `Autonomous Execute`（五道闸 → §2.4 per-plan 循环：分支 → 实现 → QC → QA gate → Done → 串行 merge）→ `iteration-close`（§3.1–§3.5 + `mstar-compound`）→ `PR delivery`（Phase 4）→ `PR merge-ready loop`（Phase 5 至 §5.5 exit）。每波用 §2.1 session todos 设护栏防范围漂移；phase 切换以上方 **Phase transition gates** 为准。
+Phase 1–6 总览见上文 **`## 设计思路`** 图。执行时按 **`## Phase route map`** 选当前动作的一行 detail：`start`（范围 + compass + §1.6 Review & Edit 链）→ `Autonomous Execute`（五道闸 → §2.4 per-plan 循环：分支 → 实现 → QC → QA gate → Done → 串行 merge）→ `iteration-close`（§3.1–§3.5 + `mstar-compound`）→ `PR delivery`（Phase 4）→ `PR merge-ready loop`（Phase 5 至 §5.5 exit）→ `post-merge close`（Phase 6，PR merged 后 §6.1–§6.4）。每波用 §2.1 session todos 设护栏防范围漂移；phase 切换以上方 **Phase transition gates** 为准。
 
 ## Evidence
 
-迭代交付完成 = Phase 5 §5.5 exit checklist 全 `[x]` + PR mergeable + required CI 全绿 + reviews resolved。Phase 3 完成标志 = compass frontmatter `status: completed` + `end_date`（§3.4）+ §3.5 exit checklist。close 证据在磁盘产物（compass / plans / specs 修订 + 索引 + metadata），不要求单独迭代审查报告（§1.6，`references/phase-1-prepare.md`）。
+迭代交付完成 = Phase 5 §5.5 exit checklist 全 `[x]` **且 PR merged 已核实** **且 Phase 6 §6.1–§6.4 完成**（snapshot `completed` + `ended_at`、根 `status.json` 条目注销、投影一致；`references/phase-6-post-merge-close.md`）。Phase 3 完成标志 = compass frontmatter `status: completed` + `end_date`（§3.4）+ §3.5 exit checklist。close 证据在磁盘产物（compass / plans / specs 修订 + 索引 + metadata），不要求单独迭代审查报告（§1.6，`references/phase-1-prepare.md`）。
