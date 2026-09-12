@@ -6,6 +6,22 @@
 
 ## [Unreleased]
 
+## [3.8.2] - 2026-09-12
+
+### Changed
+
+- **dsh 文档**：包 README 现记录 dsh 原生只读扇出路径的推荐 `workflowNames` 白名单——`mstar-qc-tri`（plan QC tri）、`mstar-audit-fanout`（大型仓库 `/codebase-audit`）、`mstar-pr-seats`（`/amazing-pr-review deep`）——并在同处给出生产覆盖层说明：出厂空名单下每个名字都是 *unknown*，默认 `workflowGate: 'warn'` 把它变成运行可存活的一条 `workflow.name.unknown` 咨询；若还要否决 unknown 名字，部署在 profile 层设置 `workflowGate: 'hard'`。默认值未变——`workflowGate` 仍为 `'warn'`、`workflowNames` 仍未设置（二者都是操作者覆盖，绝非 mstar 默认）。
+- **dsh 只读扇出（文档）**：`skills/mstar-host/references/dsh.md` 新增 **Read-only fan-out via the `workflow` tool** 一节，`references/dsh-workflow-scripts.md` 提供三个名字可直接复制的 `script` + `meta` 模板；`commands/codebase-audit.md` 与 `commands/amazing-pr-review.md` 携带 dsh 条件句（斜杠命令 → 原生 `workflow` 工具 → 会话 `workflow-run` 节点，其它宿主不变），`skills/mstar-sdd/SKILL.md` 注明 plan QC tri 可走 qc-tri 脚本，而逐任务实现者仍为串行 `subagent`。
+
+### Harness
+
+- **dsh 宿主**：mstar 在 dsh 上的推进方式现为**原生 workflow**——workflow 快照相位、派发门禁与 subagent settle 通知；goal bridge 收敛为**纯 advisory**，人类 `/goal pause` 不再会被 mstar 自身的派发边重新 arm。`mstar-host` 的宿主无关 `/goal` 规则加入显式 dsh 例外（其他宿主保留完整流程目标规则），`mstar-host/references/dsh.md` 新增推进纪律小节（子代理占据关键路径时等待其 settle 通知，而非在同一 worktree 上再开工作单元），PM 必读增加 dsh 指引。
+- **dsh 宿主**：共享 steering 辅助函数（`isRootLikeAgent`、`rootAgentOf`、`steeringCompass`）迁至 dsh 插件的 `gates/steering.ts`——planMode 行为不变。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 3.8.2**。
+
 ## [3.8.1] - 2026-09-11
 
 ### Harness
