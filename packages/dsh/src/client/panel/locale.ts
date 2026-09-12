@@ -250,7 +250,7 @@ export type PanelKey =
   | 'state.residual.more'
   | 'state.policy.push'
   | 'state.policy.worktree'
-  | 'state.policy.control-worktree'
+  | 'state.policy.integration-worktree'
   | 'state.knowledge.docs'
   | 'freshness.last-updated'
   | 'freshness.refresh-note'
@@ -387,7 +387,7 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'state.residual.more': '+{count} 更多',
   'state.policy.push': 'push',
   'state.policy.worktree': 'worktree',
-  'state.policy.control-worktree': 'control worktree',
+  'state.policy.integration-worktree': 'integration worktree',
   'state.knowledge.docs': '{count} 篇文档',
   'freshness.last-updated': '快照 {time} · 第 {turn} 轮',
   'freshness.refresh-note': '该会话已存储的快照——不是实时值',
@@ -519,7 +519,7 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'state.residual.more': '+{count} more',
   'state.policy.push': 'push',
   'state.policy.worktree': 'worktree',
-  'state.policy.control-worktree': 'control worktree',
+  'state.policy.integration-worktree': 'integration worktree',
   'state.knowledge.docs': '{count} docs',
   'freshness.last-updated': 'snapshot {time} · turn {turn}',
   'freshness.refresh-note': 'the stored snapshot for this session — never a live value',

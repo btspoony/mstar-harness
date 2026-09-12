@@ -17,12 +17,17 @@
  * `Dispatch mode: parallel independent tracks` marker), the gate runs the
  * engine `l2PreDispatchCheck` over the declared tracks (absolute + distinct
  * paths, dir exists, `git branch --show-current` matches the Working
- * branch; duplicate/relative paths → `worktree.l2.*` violations); with
- * `metadata.control_worktree_path` + a plan `execution_lease` present, the
- * engine `l1PreDispatchCheck` verifies the control-vs-feature topology
- * (lease worktree MUST differ from the control worktree). Violations flow
- * through the existing enforcement path: advisory + allow (warn default),
- * PreToolDecision { kind: 'deny' } without `next()` under hard.
+ * branch; duplicate/relative paths → `worktree.l2.*` violations); with an
+ * ACTIVE workflow snapshot + a plan `execution_lease` present, the gate
+ * assembles the FULL engine `l1PreDispatchInput` — Git-derived main
+ * worktree, the snapshot's canonical `integration_worktree_path` +
+ * `branch.integration`, the recorded residency expectation (Assignment
+ * header `Main worktree branch` else `branch.base`), and lifecycle-owned
+ * branches collected from all active workflow snapshots (CLI parity,
+ * fail-closed on unreadable sibling state) — and verifies the topology.
+ * Violations flow through the existing enforcement path: advisory + allow
+ * (warn default), PreToolDecision { kind: 'deny' } without `next()` under
+ * hard.
  *
  * Dev-time reality (brief): the llm/agent/tools seams are dev-time stubs, so
  * the waterfalls are simulated with the typed harness — the exact
@@ -562,23 +567,54 @@ describe('dispatch gate — worktree L2 hard mode', () => {
   })
 })
 
-describe('dispatch gate — worktree L1 control-vs-feature (when metadata present)', () => {
-  /** InProgress plan row with a valid execution_lease (lease-gate fixture shape). */
-  const planWithLease = (worktree: string, branch: string): Record<string, unknown> => ({
+describe('dispatch gate — worktree L1 integration topology (canonical reader + full engine input)', () => {
+  /** InProgress plan row with a valid execution_lease (lease-gate fixture shape; canonical row contract — id/title/file/status). */
+  const planWithLease = (worktree: string, branch: string, metadata?: Record<string, unknown>): Record<string, unknown> => ({
     id: 'l1-plan',
     title: 'L1 fixture',
+    file: 'plans/l1-plan.md',
     status: 'InProgress',
+    ...(metadata === undefined ? {} : { metadata }),
     execution_lease: { holder: 'test-agent', claimed_at: '2026-08-08', worktree_path: worktree, working_branch: branch },
   })
 
-  // v3 L1 fixture (Task 3): the control worktree path is the snapshot's
-  // FIRST-CLASS field and the plan row + lease live on the snapshot rows.
-  async function seedL1Tree(harnessDir: string, control: string | undefined, plan: Record<string, unknown>): Promise<void> {
+  /**
+   * Real git topology for the full L1 input (the T3 worktree-write model):
+   * the temp repo IS the main worktree on the recorded base branch `main`,
+   * plus a dedicated integration checkout on branch.integration and a
+   * feature worktree for the lease. The engine's residency / pairwise
+   * Git-checkout-identity / branch probes run REAL git against these paths
+   * (plain directories would fail the probes — the old fixtures could not
+   * observe topology at all).
+   */
+  function seedL1Topology(root: string): { integration: string; feature: string } {
+    git(['init', '-q', '-b', 'main'], root)
+    git(['config', 'user.email', 'l1-fixture@example.com'], root)
+    git(['config', 'user.name', 'L1 Fixture'], root)
+    writeFileSync(join(root, 'base.txt'), 'base\n')
+    git(['add', '-A'], root)
+    git(['commit', '-q', '-m', 'base'], root)
+    const integration = join(root, 'integration')
+    git(['worktree', 'add', '-q', integration, '-b', 'iteration/wf-1'], root)
+    const feature = join(root, 'wt-a')
+    git(['worktree', 'add', '-q', feature, '-b', 'feature/a'], root)
+    return { integration, feature }
+  }
+
+  /** Seed the ACTIVE workflow snapshot carrying the L1 topology fields. */
+  async function seedL1Snapshot(harnessDir: string, overrides: Record<string, unknown>, plan: Record<string, unknown>): Promise<void> {
     await seedHarness(harnessDir, {
       'status.json': v2RootWithWorkflow(),
-      'workflows/wf-1/snapshot.json': v2SnapshotWithPlans('wf-1', [plan], control === undefined ? {} : { control_worktree_path: control }),
+      'workflows/wf-1/snapshot.json': v2SnapshotWithPlans('wf-1', [plan], overrides),
     })
   }
+
+  /** Iteration snapshot overrides wiring the seeded topology (canonical field + branch anchors). */
+  const iterationSnapshot = (integration: string): Record<string, unknown> => ({
+    type: 'iteration',
+    branch: { base: 'main', integration: 'iteration/wf-1' },
+    integration_worktree_path: integration,
+  })
 
   const l1Assignment = (worktree: string): string => `## Assignment
 
@@ -593,51 +629,95 @@ describe('dispatch gate — worktree L1 control-vs-feature (when metadata presen
 Do the thing, evidence-first.
 `
 
-  it('execution_lease.worktree_path equals metadata.control_worktree_path → advisory worktree.l1.lease-equals-control (critical)', async () => {
+  it('execution_lease.worktree_path equals the integration checkout → advisory worktree.l1.lease-equals-integration (critical)', async () => {
     const root = tmpRoot('dsh-wt-l1-eq-')
-    const control = join(root, 'control')
-    mkdirSync(control, { recursive: true })
-    const app = booted = await bootApp()
+    const { integration } = seedL1Topology(root)
+    const app = booted = await bootApp({ root }) // boot INSIDE the git repo — the harness dir is the main-discovery anchor
     const advisories = captureAdvisories(app.ctx)
-    await seedL1Tree(app.harnessDir, control, planWithLease(control, 'feature/a'))
+    await seedL1Snapshot(app.harnessDir, iterationSnapshot(integration), planWithLease(integration, 'feature/a'))
 
-    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(l1Assignment(control)), defaultAllow)
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(l1Assignment(integration)), defaultAllow)
 
     expect(decision).toEqual({ kind: 'allow' })
     expect(advisories).toHaveLength(1)
     const codes = violationCodes(advisories[0])
-    expect(codes).toContain('worktree.l1.lease-equals-control')
-    const violation = advisories[0]!.result.violations.find((v) => v.code === 'worktree.l1.lease-equals-control')
+    expect(codes).toContain('worktree.l1.lease-equals-integration')
+    const violation = advisories[0]!.result.violations.find((v) => v.code === 'worktree.l1.lease-equals-integration')
     expect(violation?.severity).toBe('critical')
   })
 
-  it('L1 control==feature under hard → deny with the critical code', async () => {
+  it('L1 lease==integration under hard → deny with the critical code', async () => {
     const root = tmpRoot('dsh-wt-l1-hard-')
-    const control = join(root, 'control')
-    mkdirSync(control, { recursive: true })
-    const app = booted = await bootApp({ enforcement: 'hard' })
-    await seedL1Tree(app.harnessDir, control, planWithLease(control, 'feature/a'))
+    const { integration } = seedL1Topology(root)
+    const app = booted = await bootApp({ root, enforcement: 'hard' })
+    await seedL1Snapshot(app.harnessDir, iterationSnapshot(integration), planWithLease(integration, 'feature/a'))
 
-    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(l1Assignment(control)), defaultAllow)
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(l1Assignment(integration)), defaultAllow)
 
     expect(decision.kind).toBe('deny')
-    expect(decision.kind === 'deny' && decision.reason).toContain('worktree.l1.lease-equals-control')
+    expect(decision.kind === 'deny' && decision.reason).toContain('worktree.l1.lease-equals-integration')
   })
 
-  it('metadata absent (no control path) → L1 silent, no worktree codes (only the lease gate may speak)', async () => {
-    const root = tmpRoot('dsh-wt-l1-nometa-')
-    const worktree = join(root, 'wt-a')
-    mkdirSync(worktree, { recursive: true })
-    const app = booted = await bootApp({ dispatchBinding: 'qc-specialist' })
+  it('standalone plan without integration fields → main-vs-feature L1 only; valid topology stays silent', async () => {
+    const root = tmpRoot('dsh-wt-l1-standalone-')
+    const { feature } = seedL1Topology(root)
+    const app = booted = await bootApp({ root, dispatchBinding: 'qc-specialist' })
     const advisories = captureAdvisories(app.ctx)
-    // No `control_worktree_path` on the snapshot; the lease matches the
-    // assignment exactly, so even the lease gate is silent.
-    await seedL1Tree(app.harnessDir, undefined, planWithLease(worktree, 'feature/a'))
+    // `type: 'plan'` with no integration fields: the engine checks main
+    // residency vs feature only; base anchor `main` matches the main
+    // worktree, the lease matches the assignment — no worktree codes (only
+    // the lease gate may speak, and it is silent too).
+    await seedL1Snapshot(app.harnessDir, { branch: { base: 'main' } }, planWithLease(feature, 'feature/a'))
 
-    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(l1Assignment(worktree)), defaultAllow)
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(l1Assignment(feature)), defaultAllow)
 
     expect(decision).toEqual({ kind: 'allow' })
     expect(advisories).toHaveLength(0)
+  })
+
+  it('main worktree on a lifecycle-owned branch → worktree.main.residency-switched (recorded expectation + ownership)', async () => {
+    const root = tmpRoot('dsh-wt-l1-owned-')
+    seedL1Topology(root)
+    // Main carries a branch owned by the governing snapshot's retained
+    // `metadata.working_branch` record — L1 must refuse (never re-point the
+    // expectation at the observed branch).
+    git(['checkout', '-q', '-b', 'feature/retired'], root)
+    const app = booted = await bootApp({ root, dispatchBinding: 'qc-specialist' })
+    const advisories = captureAdvisories(app.ctx)
+    await seedL1Snapshot(
+      app.harnessDir,
+      { branch: { base: 'main' } },
+      planWithLease(join(root, 'wt-a'), 'feature/a', { working_branch: 'feature/retired' }),
+    )
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(l1Assignment(join(root, 'wt-a'))), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(advisories).toHaveLength(1)
+    const codes = violationCodes(advisories[0])
+    expect(codes).toContain('worktree.main.residency-switched')
+  })
+
+  it('unreadable sibling lifecycle snapshot → worktree.l1.lifecycle-snapshot-unreadable refusal (fail-closed, CLI parity)', async () => {
+    const root = tmpRoot('dsh-wt-l1-sibling-')
+    const { feature } = seedL1Topology(root)
+    const app = booted = await bootApp({ root, dispatchBinding: 'qc-specialist' })
+    const advisories = captureAdvisories(app.ctx)
+    // Two ACTIVE lifecycles: the governing wf-1 (valid) + wf-2 whose
+    // snapshot is malformed. Incomplete lifecycle evidence must not weaken
+    // the main-branch non-ownership check — the scan refuses instead of
+    // silently skipping the sibling.
+    await seedHarness(app.harnessDir, {
+      'status.json': v2Root([v2WorkflowEntry('wf-1'), v2WorkflowEntry('wf-2')]),
+      'workflows/wf-1/snapshot.json': v2SnapshotWithPlans('wf-1', [planWithLease(feature, 'feature/a')], { branch: { base: 'main' } }),
+      'workflows/wf-2/snapshot.json': '{not json',
+    })
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(l1Assignment(feature)), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' }) // warn mode: refusal is an advisory violation, not a deny
+    expect(advisories).toHaveLength(1)
+    expect(violationCodes(advisories[0])).toContain('worktree.l1.lifecycle-snapshot-unreadable')
   })
 })
 

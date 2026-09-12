@@ -362,10 +362,10 @@ describe('mstar-engine-status catalog — plan iterationRefs ', () => {
 
   it('projects each plan\'s metadata.iteration_refs into `iterationRefs` (string[]; missing → [])', async () => {
     const state = await stateWithPlans([
-      { id: 'plan-a', status: 'Done', metadata: { iteration_refs: ['iter-00000812', 'iter-00000813'] } },
-      { id: 'plan-b', status: 'Done', metadata: { iteration_refs: [] } },
-      { id: 'plan-c', status: 'Done', metadata: {} },
-      { id: 'plan-d', status: 'Done' },
+      { id: 'plan-a', title: 'Plan A', file: 'plans/plan-a.md', status: 'Done', metadata: { iteration_refs: ['iter-00000812', 'iter-00000813'] } },
+      { id: 'plan-b', title: 'Plan B', file: 'plans/plan-b.md', status: 'Done', metadata: { iteration_refs: [] } },
+      { id: 'plan-c', title: 'Plan C', file: 'plans/plan-c.md', status: 'Done', metadata: {} },
+      { id: 'plan-d', title: 'Plan D', file: 'plans/plan-d.md', status: 'Done' },
     ])
     expect(state.plans.map((p) => p.iterationRefs)).toEqual([
       ['iter-00000812', 'iter-00000813'],
@@ -377,8 +377,8 @@ describe('mstar-engine-status catalog — plan iterationRefs ', () => {
 
   it('a non-array / partially-garbage iteration_refs → [] (or only the string members) — never omitted', async () => {
     const state = await stateWithPlans([
-      { id: 'plan-a', status: 'Done', metadata: { iteration_refs: 'iter-x' } },
-      { id: 'plan-b', status: 'Done', metadata: { iteration_refs: [42, 'iter-y', null, ''] } },
+      { id: 'plan-a', title: 'Plan A', file: 'plans/plan-a.md', status: 'Done', metadata: { iteration_refs: 'iter-x' } },
+      { id: 'plan-b', title: 'Plan B', file: 'plans/plan-b.md', status: 'Done', metadata: { iteration_refs: [42, 'iter-y', null, ''] } },
     ])
     expect(state.plans.map((p) => p.iterationRefs)).toEqual([[], ['iter-y']])
   })
@@ -559,6 +559,7 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
     {
       plan_id: 'plan-a',
       title: 'Plan A',
+      file: 'plans/plan-a.md',
       status: 'InProgress',
       execution_lease: {
         holder: 'dsh-session-1',
@@ -567,7 +568,7 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
         working_branch: 'feature/plan-a',
       },
     },
-    { id: 'plan-b', title: 'Plan B', status: 'Done', done_at: '2026-08-19' },
+    { id: 'plan-b', title: 'Plan B', file: 'plans/plan-b.md', status: 'Done', done_at: '2026-08-19' },
   ]
   /** The golden fixture's project register (the v1 `residual_findings` home). */
   const GOLDEN_REGISTER = {
@@ -641,7 +642,7 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
         plans: GOLDEN_PLANS,
         branch: { base: 'dev-dsh', integration: 'iteration/v2.2.0', target: 'dev-dsh' },
         execution_policy: { push_policy: 'no-push', worktree_mode: 'feature-worktree' },
-        control_worktree_path: '/control/worktree',
+        integration_worktree_path: '/integration/worktree',
       }),
       'projects/_default/residuals.json': JSON.stringify(GOLDEN_REGISTER),
       'projects/_default/roadmap.md': GOLDEN_ROADMAP,
@@ -687,7 +688,7 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
       specIntegrationBranch: 'iteration/v2.2.0',
       pushPolicy: 'no-push',
       worktreeMode: 'feature-worktree',
-      controlWorktreePath: '/control/worktree',
+      integrationWorktreePath: '/integration/worktree',
       leases: [{ planId: 'plan-a', holder: 'dsh-session-1', worktreePath: '/worktrees/plan-a' }],
       knowledge: { docCount: 1, categories: ['conventions'] },
       direction: 'Golden direction.',
@@ -721,7 +722,7 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
     expect(text).toContain('plans: plan-a(InProgress) plan-b(Done)')
     expect(text).toContain('residuals: high 1, nit 1')
     expect(text).toContain('branch: dev-dsh → dev-dsh (spec integration: iteration/v2.2.0)')
-    expect(text).toContain('policy: push no-push; worktree feature-worktree; control /control/worktree')
+    expect(text).toContain('policy: push no-push; worktree feature-worktree; integration /integration/worktree')
     expect(text).toContain('leases: plan-a → dsh-session-1 (/worktrees/plan-a)')
     expect(text).toContain('agent flow: 2 events; by role: fullstack-dev 1')
   })
@@ -821,8 +822,8 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
     await mkdir(harnessDir, { recursive: true })
     await seedHarness(harnessDir, {
       'status.json': v2Root([v2WorkflowEntry('wf-a'), v2WorkflowEntry('wf-b')]),
-      'workflows/wf-a/snapshot.json': v2Snapshot('wf-a', { plans: [{ id: 'plan-a', status: 'Todo' }] }),
-      'workflows/wf-b/snapshot.json': v2Snapshot('wf-b', { plans: [{ id: 'plan-b', status: 'Done' }] }),
+      'workflows/wf-a/snapshot.json': v2Snapshot('wf-a', { plans: [{ id: 'plan-a', title: 'Plan A', file: 'plans/plan-a.md', status: 'Todo' }] }),
+      'workflows/wf-b/snapshot.json': v2Snapshot('wf-b', { plans: [{ id: 'plan-b', title: 'Plan B', file: 'plans/plan-b.md', status: 'Done' }] }),
     })
     const app = booted = await bootApp({ root })
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
@@ -853,11 +854,11 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
     await mkdir(harnessDir, { recursive: true })
     await seedHarness(harnessDir, {
       'status.json': v2Root([]),
-      'workflows/wf-old/snapshot.json': v2Snapshot('wf-old', { status: 'completed', ended_at: '2026-08-18', plans: [{ id: 'plan-old', status: 'Done' }] }),
-      'workflows/wf-new/snapshot.json': v2Snapshot('wf-new', { status: 'completed', ended_at: '2026-08-19', plans: [{ id: 'plan-new', status: 'Done' }] }),
+      'workflows/wf-old/snapshot.json': v2Snapshot('wf-old', { status: 'completed', ended_at: '2026-08-18', plans: [{ id: 'plan-old', title: 'Plan old', file: 'plans/plan-old.md', status: 'Done' }] }),
+      'workflows/wf-new/snapshot.json': v2Snapshot('wf-new', { status: 'completed', ended_at: '2026-08-19', plans: [{ id: 'plan-new', title: 'Plan new', file: 'plans/plan-new.md', status: 'Done' }] }),
       // A non-terminal snapshot NOT in the root active set is inconsistent —
       // the terminal filter must skip it (never selected).
-      'workflows/wf-running/snapshot.json': v2Snapshot('wf-running', { plans: [{ id: 'plan-running', status: 'InProgress' }] }),
+      'workflows/wf-running/snapshot.json': v2Snapshot('wf-running', { plans: [{ id: 'plan-running', title: 'Plan running', file: 'plans/plan-running.md', status: 'InProgress' }] }),
     })
     // Deterministic mtimes: wf-old older, wf-new newer (the selection is by
     // file mtime, not by the snapshot's updated_at).
@@ -889,6 +890,7 @@ describe('mstar-engine-status catalog — state plans/leases join cap (spec D4)'
   interface CapRow {
     id: string
     title: string
+    file: string
     status: string
     execution_lease: {
       holder: string
@@ -901,6 +903,7 @@ describe('mstar-engine-status catalog — state plans/leases join cap (spec D4)'
   const capRow = (index: number): CapRow => ({
     id: `plan-${index}`,
     title: `Plan ${index}`,
+    file: `plans/plan-${index}.md`,
     status: 'InProgress',
     execution_lease: {
       holder: `holder-${index}`,

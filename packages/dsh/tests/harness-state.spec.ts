@@ -74,6 +74,7 @@ const RICH_SNAPSHOT = v2Snapshot(RICH_WORKFLOW, {
     {
       plan_id: 'plan-a',
       title: 'Plan A',
+      file: 'plans/plan-a.md',
       status: 'InProgress',
       // No done_at: the always-present doneAt must project to null.
       execution_lease: {
@@ -83,7 +84,7 @@ const RICH_SNAPSHOT = v2Snapshot(RICH_WORKFLOW, {
         working_branch: 'feature/plan-a',
       },
     },
-    { id: 'plan-b', title: 'Plan B', status: 'Done', done_at: '2026-08-08' },
+    { id: 'plan-b', title: 'Plan B', file: 'plans/plan-b.md', status: 'Done', done_at: '2026-08-08' },
   ],
   branch: {
     base: 'dev-dsh',
@@ -94,7 +95,7 @@ const RICH_SNAPSHOT = v2Snapshot(RICH_WORKFLOW, {
     push_policy: 'no-push',
     worktree_mode: 'feature-worktree',
   },
-  control_worktree_path: '/control/worktree',
+  integration_worktree_path: '/integration/worktree',
 })
 /** The project register (the v1 `residual_findings` home after migrate). */
 const RICH_REGISTER = JSON.stringify({
@@ -199,7 +200,7 @@ describe('mstar-engine-status — the unified catalog row (watermark + gate + st
       specIntegrationBranch: 'iteration/v2.2.0',
       pushPolicy: 'no-push',
       worktreeMode: 'feature-worktree',
-      controlWorktreePath: '/control/worktree',
+      integrationWorktreePath: '/integration/worktree',
       leases: [{ planId: 'plan-a', holder: 'dsh-session-1', worktreePath: '/worktrees/plan-a' }],
       knowledge: { docCount: 3, categories: ['architecture-patterns', 'conventions'] },
     })
@@ -213,7 +214,7 @@ describe('mstar-engine-status — the unified catalog row (watermark + gate + st
     expect(text).toContain('plans: plan-a(InProgress) plan-b(Done)')
     expect(text).toContain('residuals: high 1, nit 1')
     expect(text).toContain('branch: dev-dsh → dev-dsh (spec integration: iteration/v2.2.0)')
-    expect(text).toContain('policy: push no-push; worktree feature-worktree; control /control/worktree')
+    expect(text).toContain('policy: push no-push; worktree feature-worktree; integration /integration/worktree')
     expect(text).toContain('leases: plan-a → dsh-session-1 (/worktrees/plan-a)')
     expect(text).toContain('knowledge: 3 docs (architecture-patterns, conventions)')
     expect(text).toContain('direction: The dsh host plugin needs richer in-session harness context for operators.')
@@ -450,11 +451,11 @@ describe('mstar-engine-status — doneAt passthrough (spec §6)', () => {
       'status.json': v2Root([v2WorkflowEntry('wf-1')]),
       'workflows/wf-1/snapshot.json': v2Snapshot('wf-1', {
         plans: [
-          { id: 'plan-a', status: 'Done', done_at: '  2026-08-09  ' },
-          { id: 'plan-b', status: 'Done', done_at: '   ' },
-          { id: 'plan-c', status: 'Done', done_at: '' },
-          { id: 'plan-d', status: 'Done', done_at: 810 },
-          { id: 'plan-e', status: 'Done' },
+          { id: 'plan-a', title: 'Plan A', file: 'plans/plan-a.md', status: 'Done', done_at: '  2026-08-09  ' },
+          { id: 'plan-b', title: 'Plan B', file: 'plans/plan-b.md', status: 'Done', done_at: '   ' },
+          { id: 'plan-c', title: 'Plan C', file: 'plans/plan-c.md', status: 'Done', done_at: '' },
+          { id: 'plan-d', title: 'Plan D', file: 'plans/plan-d.md', status: 'Done', done_at: 810 },
+          { id: 'plan-e', title: 'Plan E', file: 'plans/plan-e.md', status: 'Done' },
         ],
       }),
     })
@@ -538,7 +539,7 @@ describe('mstar-engine-status — TTL refresh and digest-gated re-emission', () 
     await mkdir(harnessDir, { recursive: true })
     await seedHarness(harnessDir, {
       'status.json': v2Root([v2WorkflowEntry('wf-1')]),
-      'workflows/wf-1/snapshot.json': v2Snapshot('wf-1', { plans: [{ id: 'plan-a', status: 'Todo' }] }),
+      'workflows/wf-1/snapshot.json': v2Snapshot('wf-1', { plans: [{ id: 'plan-a', title: 'Plan A', file: 'plans/plan-a.md', status: 'Todo' }] }),
     })
     // 50ms refresh interval: proves both the cache hit (immediate reuse)
     // and the bounded re-read (after the interval).
@@ -559,7 +560,7 @@ describe('mstar-engine-status — TTL refresh and digest-gated re-emission', () 
     // Same turn, TTL-refreshed change (snapshot plan status + register
     // residual changed): the row re-appears with the new state.
     await seedHarness(harnessDir, {
-      'workflows/wf-1/snapshot.json': v2Snapshot('wf-1', { plans: [{ id: 'plan-a', status: 'Done' }] }),
+      'workflows/wf-1/snapshot.json': v2Snapshot('wf-1', { plans: [{ id: 'plan-a', title: 'Plan A', file: 'plans/plan-a.md', status: 'Done' }] }),
       'projects/_default/residuals.json': JSON.stringify({
         entries: { 'plan-a': [{ severity: 'critical', description: 'new finding', source_plan: 'plan-a', registered_at: '2026-08-08' }] },
       }),

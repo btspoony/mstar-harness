@@ -72,8 +72,18 @@ function setupRepo(): SmokeRepo {
   git(["commit", "-q", "-m", "base"], root);
   const linked = join(root, "linked");
   git(["worktree", "add", "-q", linked, "-b", "feature/plan-a"], root);
+  // The dedicated integration checkout (T3 worktree-write model): an
+  // iteration snapshot's full L1 input requires a real integration worktree
+  // on branch.integration, distinct from the main worktree.
+  const integration = join(root, "integration");
+  const mainBranch = git(["branch", "--show-current"], root);
+  const integrationBranch = "iteration/wf-smoke";
+  git(["worktree", "add", "-q", integration, "-b", integrationBranch], root);
 
-  // Patch the committed snapshot's placeholder lease paths with real ones.
+  // Patch the committed snapshot's placeholder paths with real ones (the
+  // canonical `integration_worktree_path` + branch anchors; the v1
+  // `control_worktree_path` key is gone — writers emit only the canonical
+  // shape and the strict writer rejects the legacy key).
   const snapshotPath = join(root, SNAPSHOT_REL);
   const snapshotDoc = JSON.parse(readFile(snapshotPath)) as Record<string, unknown>;
   const plans = snapshotDoc.plans;
@@ -87,7 +97,8 @@ function setupRepo(): SmokeRepo {
     worktree_path: linked,
     working_branch: "feature/plan-a",
   };
-  snapshotDoc.control_worktree_path = root;
+  snapshotDoc.integration_worktree_path = integration;
+  snapshotDoc.branch = { base: mainBranch, integration: integrationBranch };
   writeFileSync(snapshotPath, JSON.stringify(snapshotDoc, null, 2));
 
   return { root, linked, harness: join(root, "plans"), snapshotPath, mstar: "" };
@@ -243,7 +254,7 @@ function setupCustomLayoutRepo(): SmokeRepo {
             },
           },
         ],
-        control_worktree_path: "__CONTROL_WORKTREE__",
+        integration_worktree_path: "__INTEGRATION_WORKTREE__",
         integration_merge_lease: {
           holder: "omp-pm-custom",
           claimed_at: "2026-08-19",
@@ -266,7 +277,16 @@ function setupCustomLayoutRepo(): SmokeRepo {
   // Real linked worktree so the L1 lease probes pass (mirrors setupRepo).
   const linked = join(root, "linked");
   git(["worktree", "add", "-q", linked, "-b", "feature/plan-a"], root);
-  // Patch the committed snapshot's placeholder lease paths with real ones.
+  // Dedicated integration checkout (T3 worktree-write model): the full L1
+  // input for an iteration snapshot requires the integration worktree on
+  // branch.integration, distinct from the main worktree.
+  const integration = join(root, "integration");
+  const mainBranch = git(["branch", "--show-current"], root);
+  const integrationBranch = "iteration/wf-custom";
+  git(["worktree", "add", "-q", integration, "-b", integrationBranch], root);
+  // Patch the committed snapshot's placeholder paths with real ones (the
+  // canonical `integration_worktree_path` + branch anchors — the v1
+  // `control_worktree_path` key is gone, the strict writer rejects it).
   const snapshotDoc = JSON.parse(readFile(snapshotPath)) as Record<string, unknown>;
   const plans = snapshotDoc.plans;
   if (!Array.isArray(plans) || plans.length === 0) {
@@ -279,7 +299,8 @@ function setupCustomLayoutRepo(): SmokeRepo {
     worktree_path: linked,
     working_branch: "feature/plan-a",
   };
-  snapshotDoc.control_worktree_path = root;
+  snapshotDoc.integration_worktree_path = integration;
+  snapshotDoc.branch = { base: mainBranch, integration: integrationBranch };
   writeFileSync(snapshotPath, JSON.stringify(snapshotDoc, null, 2));
   return { root, linked, harness, snapshotPath: "", mstar: harness };
 }
@@ -976,5 +997,82 @@ describe("custom workflow_dir/project_dir layout (Phase-5 F1)", () => {
     writeFileSync(stray, JSON.stringify({ schema_version: 99 }));
     const strayRes = await handler!({ toolName: "write", input: { path: stray, content: "{}" } });
     expect(strayRes).toBeUndefined();
+  });
+});
+
+describe("mstar_worktree_check: full L1 inputs (T3 worktree-write model)", () => {
+  let ownedRepo: SmokeRepo | undefined;
+  let expectationRepo: SmokeRepo | undefined;
+  let siblingRepo: SmokeRepo | undefined;
+
+  beforeAll(() => {
+    // Main on a branch the GOVERNING snapshot owns (retained
+    // `metadata.working_branch`) — residency must refuse.
+    ownedRepo = setupRepo();
+    const ownedRoot = ownedRepo.root;
+    const ownedDoc = JSON.parse(readFile(ownedRepo.snapshotPath)) as Record<string, unknown>;
+    (ownedDoc.plans as Array<Record<string, unknown>>)[0]!.metadata = { working_branch: "feature/lifecycle-owned" };
+    writeFileSync(ownedRepo.snapshotPath, JSON.stringify(ownedDoc, null, 2));
+    git(["checkout", "-q", "-b", "feature/lifecycle-owned"], ownedRoot);
+
+    // No recorded residency anywhere (no branch anchors, standalone plan) —
+    // the recorded `mainBranch` param transports the expectation; without
+    // it the check refuses instead of trusting the observed branch.
+    expectationRepo = setupRepo();
+    const expectationDoc = JSON.parse(readFile(expectationRepo.snapshotPath)) as Record<string, unknown>;
+    expectationDoc.type = "plan";
+    delete expectationDoc.integration_worktree_path;
+    delete expectationDoc.branch;
+    writeFileSync(expectationRepo.snapshotPath, JSON.stringify(expectationDoc, null, 2));
+
+    // A second ACTIVE lifecycle whose snapshot is malformed — the sibling
+    // register scan refuses instead of silently skipping it.
+    siblingRepo = setupRepo();
+    const registerPath = join(siblingRepo.root, "plans", "status.json");
+    const register = JSON.parse(readFile(registerPath)) as Record<string, unknown>;
+    (register.workflows as Array<Record<string, unknown>>).push({
+      id: "wf-broken",
+      type: "plan",
+      started_at: "2026-08-19",
+      dir: "workflows/wf-broken",
+    });
+    writeFileSync(registerPath, JSON.stringify(register, null, 2));
+    mkdirSync(join(siblingRepo.root, "plans", "workflows", "wf-broken"), { recursive: true });
+    writeFileSync(join(siblingRepo.root, "plans", "workflows", "wf-broken", "snapshot.json"), "{not json");
+  });
+
+  afterAll(() => {
+    for (const repo of [ownedRepo, expectationRepo, siblingRepo]) {
+      if (repo) rmSync(repo.root, { recursive: true, force: true });
+    }
+  });
+
+  test("L1 refuses when main sits on a lifecycle-owned branch (recorded expectation + ownership)", async () => {
+    const res = await runTool(mstarWorktreeCheck, ownedRepo!.root, { kind: "l1", workflowId: "wf-smoke", planId: "plan-a" });
+    expect(res.isError).toBe(true);
+    expect(res.content[0]!.text).toContain("worktree.main.residency-switched");
+  });
+
+  test("L1 mainBranch param transports the recorded expectation; missing expectation refuses", async () => {
+    const root = expectationRepo!.root;
+    const mainBranch = git(["branch", "--show-current"], root);
+    const withParam = await runTool(mstarWorktreeCheck, root, {
+      kind: "l1",
+      workflowId: "wf-smoke",
+      planId: "plan-a",
+      mainBranch,
+    });
+    expect(withParam.isError).not.toBe(true);
+    expect(withParam.content[0]!.text).toContain("l1 pre-dispatch check OK");
+
+    const without = await runTool(mstarWorktreeCheck, root, { kind: "l1", workflowId: "wf-smoke", planId: "plan-a" });
+    expect(without.isError).toBe(true);
+    expect(without.content[0]!.text).toContain("worktree.main.expected-branch-missing");
+  });
+
+  test("L1 refuses on an unreadable sibling lifecycle snapshot (no silent skip)", async () => {
+    const res = await runTool(mstarWorktreeCheck, siblingRepo!.root, { kind: "l1", workflowId: "wf-smoke", planId: "plan-a" });
+    expect(res.isError).toBe(true);
+    expect(res.content[0]!.text).toContain("worktree.l1.lifecycle-snapshot-unreadable");
   });
 });
