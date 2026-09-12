@@ -10,8 +10,8 @@ PM runs context-dependent `mstar sdd workspace`, `task-brief`, and `review-packa
 
 1. `export SDD_DIR=$(mstar sdd workspace <plan-id>)`
    - Iteration L1 (implementer cwd = feature worktree):
-     `export MSTAR_CONTROL_ROOT=<control_worktree_path>`
-     or `mstar sdd workspace <plan-id> <control_worktree_path>`
+     `export MSTAR_CONTROL_ROOT=<main repo root>` — the **derived main worktree** root, verified by Git probing before the fail-closed guard
+     or `mstar sdd workspace <plan-id> <main-repo-root>`
      so `{SDD_DIR}` lands on the control harness (default-gitignored plans/status/sdd). Do not create a second SDD tree under the feature checkout.
 2. PM writes `$SDD_DIR/context.json` for the current helper operation — parallel hosted handoffs pin these values in their Assignment instead of consulting mutable plan context:
 
@@ -26,7 +26,7 @@ PM runs context-dependent `mstar sdd workspace`, `task-brief`, and `review-packa
    }
    ```
 
-   All paths absolute; `planFile`/`sddDir` must resolve inside the control harness; `featureCwd` must be the assigned feature worktree on `workingBranch`. The declared control root is authoritative — never re-inferred from the feature cwd.
+   All paths absolute; `planFile`/`sddDir` must resolve inside the control harness; `featureCwd` must be the assigned feature worktree on `workingBranch`. The declared control root is authoritative — never re-inferred from the feature cwd, and it must canonicalize to the Git-derived main worktree root (an integration/foreign checkout is refused, not redirected).
 3. `mstar sdd task-brief <plan-file> <N> --context "$SDD_DIR/context.json"` — bound producer: validates the artifact destination **before** mkdir/write and prints the absolute brief path (`{SDD_DIR}/task-N-brief.md`).
 4. Record `BASE_SHA` (`BASE_SHA=$(git -C "$FEATURE_CWD" rev-parse HEAD)` before dispatch). For dependent tasks, first satisfy `mstar-sdd` § Ready-task scheduling: PM serially integrates reviewed prerequisite commits and records their ancestry in this base. Include those commit/base IDs and the check result in the handoff; review approval alone is insufficient.
 5. Dispatch implementer with:

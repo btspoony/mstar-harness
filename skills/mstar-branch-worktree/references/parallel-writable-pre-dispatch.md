@@ -6,8 +6,8 @@ This reference is **L2** worktree isolation: **same `plan_id`**, **same business
 
 **L1 (cross-plan)** is separate and stacks on top when iteration Phase 2 defaults apply:
 
-- A **control worktree** on `spec_integration_branch` (snapshot `control_worktree_path`) holds status/SDD SSOT and serial integration merge.
-- Each concurrently active plan uses a **distinct feature worktree** (`execution_lease.worktree_path` **≠** `control_worktree_path`) with a verified snapshot `plans[].execution_lease` before writable dispatch.
+- The **control root** is the primary checkout (main worktree) — the process-SSOT holder whose residency is recorded as **`Main worktree branch`** in the main plan header. The **integration worktree** (`integration_worktree_path`, checked out to `spec_integration_branch`) is the sole merge cwd; status/SDD coordination reads/writes run via absolute control-root paths.
+- Each concurrently active plan uses a **distinct feature worktree** (`execution_lease.worktree_path` ≠ the main worktree ≠ `integration_worktree_path`) with a verified snapshot `plans[].execution_lease` before writable dispatch. **Every** writable track — parallel or serial — is excluded from the main and integration checkouts.
 - Claim/hold/release/merge rules → **`mstar-iteration`** `references/phase-2-worktree-lease.md` (not repeated here).
 
 When **one plan** runs **≥2** concurrent writable tracks, **L2 still applies** inside that plan even if L1 leases already isolate plans from each other. Run this checklist **per plan** that has multiple parallel implement tracks.
@@ -20,7 +20,7 @@ Host dispatch can satisfy **「N Assignments ⇒ N invokes in one message」** w
 
 ## Mode switch (do not carry single-track habits)
 
-Serial single-plan waves (one feature branch, one checkout, PM on integration) do **not** authorize multi-writer parallel tracks without re-running this **L2** gate.
+Serial single-plan waves (one feature branch, one feature worktree, PM merging via the integration worktree) do **not** authorize multi-writer parallel tracks without re-running this **L2** gate.
 
 When the round adds a second **concurrent** writable implement track on the **same business repo** within one plan, treat it as a **mode switch** — even if earlier plans in the iteration were serial or L1 already assigned each plan its own feature worktree.
 
@@ -29,7 +29,7 @@ When the round adds a second **concurrent** writable implement track on the **sa
 Before the **first** concurrent writable implement dispatch in a round:
 
 1. **Re-read repo parallel rules** — root `AGENTS.md` and `{HARNESS_DIR}/AGENTS.md` for branch / worktree / merge-order constraints not duplicated in harness skills.
-2. **Confirm PM checkout** — PM thread stays on **`spec_integration_branch`** (or the team integration line). **Do not** `checkout` topic / feature branches in the PM **primary cwd** to "help" implementers.
+2. **Confirm PM checkout** — PM thread operates the **integration worktree** (dedicated checkout on `spec_integration_branch`); the primary checkout (main worktree) keeps its recorded **`Main worktree branch`** and never switches. **Do not** `checkout` topic / feature branches in the PM **primary cwd** to "help" implementers.
 3. **Create isolation** — for each writable track: `git worktree add .worktrees/<track-slug> <branch>` (or host-equivalent) **before** Task invoke. Each Assignment **must** include absolute **`Worktree path`**.
 4. **Verify paths exist** — for each track: directory exists; `git -C <path> branch --show-current` matches Assignment **`Working branch`**.
 5. **Assignment tags** — `Dispatch mode: parallel independent tracks` + `Worktree isolation: required` (`mstar-phase-gates`).
@@ -39,8 +39,8 @@ Before the **first** concurrent writable implement dispatch in a round:
 
 | Allowed (PM thread) | Forbidden (PM thread) |
 |---------------------|----------------------|
-| `git checkout` integration branch | `checkout` writable topic branches while tracks are active |
-| `git worktree add` / `list` / `remove` | `commit` product code |
+| operate the **integration worktree** (dedicated checkout on `spec_integration_branch`) for merges and tracked-result commits | `git checkout` any branch in the **primary cwd** — the main worktree never leaves its recorded **`Main worktree branch`** |
+| `git worktree add` / `list` / `remove` | `commit` product code in the main or integration checkout (product source → feature worktree) |
 | read-only inspection inside worktrees | switch primary cwd to an implementer feature branch |
 
 ## Leaf implementer invariants

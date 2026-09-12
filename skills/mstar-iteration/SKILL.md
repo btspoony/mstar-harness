@@ -42,7 +42,7 @@ Phase 5: PR merge-ready loop —— 至 mergeable + CI 全绿 + reviews resolved
 | 当前动作 | 必读 detail（按需加载，勿通读） |
 |---------|--------------------------------|
 | **start**（启动迭代 / 重开方向锁定） | **`references/phase-1-prepare.md`**（§1.1–§1.6：上下文、范围与 direction lock、compass、索引、v2 状态面、产物边界、§1.6 Review & Edit 链） |
-| **execute / resume**（推进或恢复 per-plan 循环） | **`references/phase-2-worktree-lease.md`**（§2.0 五道闸、§2.1–§2.5 loop/dispatch 细则、control worktree + lease 全文） |
+| **execute / resume**（推进或恢复 per-plan 循环） | **`references/phase-2-worktree-lease.md`**（§2.0 五道闸、§2.1–§2.5 loop/dispatch 细则、control root + integration worktree + lease 全文） |
 | **close**（全部 plan Done 后收口迭代） | **`references/phase-3-iteration-close.md`**（§3.0–§3.6：entry checklist、compound、roadmap、完成标记、exit checklist + commit） |
 | **PR / merge-ready**（开 PR、推进合并就绪 loop） | **`references/phase-4-5-pr-delivery.md`**（§4–§5.2：开 PR、§5.1a push cadence、loop、exit checklist） |
 | **Phase 5 helper discovery**（仅 command 层按需） | **`references/phase5-helper-discovery.md`**（babysit / greploop 发现） |
@@ -53,8 +53,8 @@ Phase 5: PR merge-ready loop —— 至 mergeable + CI 全绿 + reviews resolved
 
 | 边界 | 触发 | 必须 | 禁止 |
 |------|------|------|------|
-| **→ Phase 2**（entry / resume） | §2.0 五道闸全过（细则 → `references/phase-2-worktree-lease.md`） | 继续 Autonomous Execute per-plan loop（phase-2 reference §2.4） | 五道闸任一 false 仍派发；branch metadata 缺失用 `main`/`master` 补位 |
-| **→ Phase 3** | workflow snapshot（`workflows/<id>/snapshot.json`）中 compass 登记的全部 plan 均为 `Done` | 打印 `## Phase 3: iteration-close`；执行 §3.0→§3.5（`references/phase-3-iteration-close.md`）；host todo `phase-3-iteration-close` 保持 open 直至 §3.5 | 开 PR；宣称迭代交付完成；仅依赖 final plan closure |
+| **→ Phase 2**（entry / resume） | §2.0 五道闸全过（细则 → `references/phase-2-worktree-lease.md`） | 继续 Autonomous Execute per-plan loop（phase-2 reference §2.4）；主 worktree 驻留 = 记录的 **`Main worktree branch`**，integration 分支检出在专属 integration worktree | 五道闸任一 false 仍派发；branch metadata 缺失用 `main`/`master` 补位；把生命周期分支切到主 checkout |
+| **→ Phase 3** | workflow snapshot（`workflows/<id>/snapshot.json`）中 compass 登记的全部 plan 均为 `Done` | 打印 `## Phase 3: iteration-close`；执行 §3.0→§3.5（`references/phase-3-iteration-close.md`）；host todo `phase-3-iteration-close` 保持 open 直至 §3.5；close commit 在 **integration worktree** 执行 | 开 PR；宣称迭代交付完成；仅依赖 final plan closure；在主 checkout 上 commit close 产物 |
 | **→ Phase 4** | §3.5 exit checklist 全 `[x]`；frontmatter `status: completed` + `end_date` | 打印 `## Phase 4: PR delivery`；开 PR 到 snapshot `branch.target`（§4 → `references/phase-4-5-pr-delivery.md`） | 跳过 §3.1 entry checklist 或 compound Phase 6 |
 | **→ Phase 5** | Phase 4 PR 已创建 | 打印 `## Phase 5: PR merge-ready`；执行 §5 loop 至 §5.5 exit（含 §5.1a push cadence） | 开 PR 后停止；跳过 review resolve / CI loop；**CI/AI review 仍在跑时 push** |
 | **→ 迭代交付完成** | §5.5 exit checklist 全 `[x]` | PR mergeable；required CI 全绿；reviews resolved | Phase 4 开 PR 即宣称完成 |
@@ -66,7 +66,7 @@ Phase 5: PR merge-ready loop —— 至 mergeable + CI 全绿 + reviews resolved
 
 **per-plan 状态 SSOT**：`{WORKFLOW_DIR}/<id>/snapshot.json` 的 `plans[]` 行（per-plan Todo/InProgress/InReview/Done）；根 `{HARNESS_DIR}/status.json` `workflows[]` 登记活跃 lifecycle。
 **迭代状态 SSOT**：`{ITERATION_DIR}/<id>/delivery-compass.md` frontmatter `status` + `{ITERATION_DIR}/README.md` 索引（一行 = 一次迭代）。
-**迭代分支 SSOT**：snapshot `branch.base`（= `iteration_base_branch`）+ `branch.target`（= `target_branch`）与 `branch.integration`（= `spec_integration_branch`）（`workflows/<id>/snapshot.json`）；compass frontmatter 镜像同名字段。解析顺序见 phase-2 reference §2.3。**禁止**因仓库存在 `main`/`master` 就假定 base 或 PR 目标。
+**迭代分支 SSOT**：snapshot `branch.base`（= `iteration_base_branch`）+ `branch.target`（= `target_branch`）与 `branch.integration`（= `spec_integration_branch`）（`workflows/<id>/snapshot.json`）；compass frontmatter 镜像同名字段。解析顺序见 phase-2 reference §2.3。**禁止**因仓库存在 `main`/`master` 就假定 base 或 PR 目标。**`branch.base` 是创建/merge 锚点，不是驻留事实**——主 worktree（control root）驻留分支在生命周期写入前由 PM 记录为主 plan 头的 **`Main worktree branch`**，全程不切换；integration 分支检出在专属 integration worktree（snapshot `integration_worktree_path`）。
 
 ## 产物存储位置
 
@@ -97,7 +97,7 @@ Phase 5: PR merge-ready loop —— 至 mergeable + CI 全绿 + reviews resolved
 
 - **`mstar-compound`** — iteration-close 中触发知识结晶（**唯一**默认 knowledge 新增路径）
 - **`references/phase-1-prepare.md`** — start route detail（§1.1–§1.6）
-- **`references/phase-2-worktree-lease.md`** — execute/resume route detail（per-plan loop + control worktree、`execution_lease`、`integration_merge_lease`）
+- **`references/phase-2-worktree-lease.md`** — execute/resume route detail（per-plan loop + integration worktree、`execution_lease`、`integration_merge_lease`）
 - **`references/autonomous-direction-lock.md`** — §1.2 autonomous direction lock、scale budget、branch resolve
 - **`references/iteration-artifact-boundaries.md`** — Phase 1 specs / iteration package / knowledge 分工
 - **`references/iteration-corpus-hygiene.md`** — §1.6 writing-specialist specs 卫生细则
@@ -108,7 +108,7 @@ Phase 5: PR merge-ready loop —— 至 mergeable + CI 全绿 + reviews resolved
 
 - **不要将 Phase 4 开 PR 等同于迭代交付完成** — 必须完成 Phase 5 §5.2 merge-ready loop
 - **不要在 Phase 5 CI 仍跑或 AI review 波次未结束时 push**（§5.1a）— 本地可提前修，push 等 idle
-- **不要为 Phase 5 另开 feature/fix worktree**，也不要把 Phase 2 control 产品编辑禁令套到 Phase 5 — 直接在集成分支 checkout 上修
+- **不要在 integration worktree 或主 checkout（control root）上直接编辑产品代码** — Phase 5 修复走 fix feature worktree，review 后 merge 回 integration worktree（`phase-4-5-pr-delivery.md` §5.0）
 - **不要在缺 `iteration_base_branch` / `target_branch` 时默认 `main` / `master`**
 - **不要在 Phase 1 §1.6 由 product/architect 向 `{KNOWLEDGE_DIR}/` 新增**（知识 → iteration-close **`mstar-compound`**）
 - **不要在 per-plan Done 后立即 compound** — 等 iteration-close 统一做

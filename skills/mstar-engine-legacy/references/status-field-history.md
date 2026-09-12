@@ -83,7 +83,7 @@ Closed residual entries added: `lifecycle`, `closed_at`, `closure_note`; optiona
 | --- | --- | --- | --- |
 | `holder` | non-empty string | Yes | Opaque cooperative owner identity (recommended `<host>:<stable-session-id>`, e.g. `cursor:bc-1234`); stable for claim lifetime; **no credentials**; used for ownership comparison — not `session_label`. |
 | `claimed_at` | RFC 3339 UTC (`Z`) | Yes | Acquisition time (audit only; **not** an expiry clock). |
-| `worktree_path` | absolute path string | Yes | Dedicated feature-worktree root; **MUST** differ from `metadata.control_worktree_path`. |
+| `worktree_path` | absolute path string | Yes | Dedicated feature-worktree root; **MUST** differ from `metadata.control_worktree_path` (v1-historical name; canonical snapshot member = `integration_worktree_path`). |
 | `working_branch` | non-empty string | Yes | Feature branch at `worktree_path`; MUST agree with Assignment `Working branch`. |
 | `session_label` | string | No | Human display only — **MUST NOT** authorize or compare ownership. |
 
@@ -99,7 +99,7 @@ Writers **delete** `execution_lease` on release; `null` and tombstone objects ar
 | `notes` | array | **Legacy** — prefer `{HARNESS_DIR}/notes.json`. |
 | `residual_findings_history` | object | **Legacy** — prefer `archived/residuals/<plan-id>.json`. |
 | `tech_debt_summary` | object | Optional rollup over open R# (engine `techDebtRollup`). |
-| `control_worktree_path` | absolute path string | Iteration Phase 2: canonical repository root checked out to active `spec_integration_branch`; coordination + serial merge cwd. |
+| `control_worktree_path` | absolute path string | **v1-historical (read-alias)**. Iteration Phase 2: canonical repository root checked out to active `spec_integration_branch`; coordination + serial merge cwd. Canonical snapshot member = **`integration_worktree_path`** (dedicated integration checkout, distinct from the main worktree); `readWorkflowSnapshot` normalizes the old key in memory with a medium diagnostic — canonical writers reject it. |
 | `integration_merge_lease` | object | While one integration merge is owned; **absent** = unclaimed. Writers **delete** the key on release — never `null`/tombstones. |
 
 ## v1 residual entry contract (9 required fields + severity/lifecycle)
@@ -163,7 +163,7 @@ Legacy read paths (root `residual_findings` / `metadata.residual_findings` / `ar
 | root `plans[]` rows | `{WORKFLOW_DIR}/<id>/snapshot.json` → `plans[]` (legacy PlanRow shape verbatim) |
 | root `plans[].execution_lease` | snapshot plan row `execution_lease` |
 | root `metadata.integration_merge_lease` | snapshot top-level `integration_merge_lease` |
-| root `metadata.control_worktree_path` | snapshot top-level `control_worktree_path` |
+| root `metadata.control_worktree_path` | snapshot top-level `integration_worktree_path` (v1 key is a read-alias; canonical writers emit only the new name) |
 | root `metadata.iteration_base_branch` / `target_branch` / `spec_integration_branch` / `merge_target` | snapshot top-level `branch.{base,integration,target}` |
 | root `metadata.plan_parallelism` / `worktree_mode` / `push_policy` | snapshot `execution_policy` |
 | root `metadata.notes` / legacy row `notes` | `{WORKFLOW_DIR}/<id>/notes.jsonl` (runtime ledger; row `notes` kept verbatim as legacy copy) |
