@@ -74,6 +74,8 @@ Without a global install the harness still works and those checks stay advisory.
 
 `npx @mstar-harness/cli doctor --target <opencode\|cursor\|codex\|zcode\|omp\|dsh>`.
 
+Codex agent-link repair and named-role verification: [Codex installation](INSTALL.md#codex).
+
 The repo ships a portable **Agent Plugins v1.0.0** manifest (`plugin.json`) at its root; `skills/` is the Agent Skills component — verify it with `npx @mstar-harness/cli plugin validate`.
 
 Manual install / path layout: [`INSTALL.md`](INSTALL.md). CLI flags: [`docs/cli.md`](docs/cli.md).

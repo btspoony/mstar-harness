@@ -68,7 +68,7 @@ Restart Cursor or run **Developer: Reload Window** after install.
 
 The harness repo ships its own Codex marketplace catalog at `.agents/plugins/marketplace.json` (marketplace name `mstar-repo`, plugin root = repo root). `init --target codex` registers that repo as a git marketplace under the `mstar-repo` name:
 
-Global (custom agents linked from `~/.mstar/harness`):
+Global (custom agent TOMLs copied from `~/.mstar/harness` as regular files):
 
 ```bash
 npx @mstar-harness/cli init --target codex --scope global
@@ -90,6 +90,8 @@ Without the CLI (direct marketplace registration):
 codex plugin marketplace add btspoony/mstar-harness --ref main
 codex plugin add morning-star-harness@mstar-repo
 ```
+
+Custom agent TOMLs must be regular files: Codex can discover a symlinked role but fail to load it when invoked. Re-run `init` with the installed scope to repair legacy links; see [agent refresh behavior](docs/cli.md#codex-agent-files). After `doctor` passes, ask Codex to use `fullstack-dev` for a short read-only task and confirm that the named subagent actually starts.
 
 #### Codex: project vs global scope
 
@@ -263,12 +265,11 @@ codex plugin marketplace add btspoony/mstar-harness --ref main
 codex plugin add morning-star-harness@mstar-repo
 ```
 
-Link custom agents (Codex discovers agents from `~/.codex/agents/`):
+Install custom agents as regular files (also safely replaces legacy harness symlinks):
 
 ```bash
-git clone https://github.com/btspoony/mstar-harness.git ~/.mstar/harness
-mkdir -p ~/.codex/agents
-ln -s ~/.mstar/harness/codex/agents/*.toml ~/.codex/agents/
+npx @mstar-harness/cli init --target codex --scope global
+npx @mstar-harness/cli doctor --target codex --scope global
 ```
 
 Migrating from the legacy personal marketplace: remove the `morning-star-harness` entry from `~/.agents/plugins/marketplace.json`, then install from the repo marketplace (`codex plugin remove morning-star-harness@personal` if previously installed).
