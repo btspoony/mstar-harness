@@ -431,6 +431,30 @@ describe("evaluatePostMergeClose — Phase 6 post-merge close local-state gate (
     }
   });
 
+  test("legacy control_worktree_path alias (valid otherwise, terminal, no leases, root entry gone) is NOT classified invalid — the close path accepts and migrates it", () => {
+    const result = evaluatePostMergeClose(phase6Snapshot({ control_worktree_path: "/tmp/wt/wf-1" }), phase6Root([]));
+    expect(result.ok).toBe(true);
+    expect(result.violations.some((v) => v.code === "PHASE6_INVALID_SNAPSHOT")).toBe(false);
+  });
+
+  test("legacy-alias running snapshot → PHASE6_NOT_TERMINAL (the actionable close-first code, not INVALID_SNAPSHOT)", () => {
+    const result = evaluatePostMergeClose(
+      phase6Snapshot({ status: "running", ended_at: undefined, control_worktree_path: "/tmp/wt/wf-1" }),
+      phase6Root([]),
+    );
+    expect(result.ok).toBe(false);
+    expect(result.violations.some((v) => v.code === "PHASE6_NOT_TERMINAL")).toBe(true);
+    expect(result.violations.some((v) => v.code === "PHASE6_INVALID_SNAPSHOT")).toBe(false);
+  });
+
+  test("non-object parsed body (literal null / primitive) → PHASE6_INVALID_SNAPSHOT, never a TypeError", () => {
+    for (const body of [null, 42, "snapshot"]) {
+      const result = evaluatePostMergeClose(body as unknown as SnapshotDoc, phase6Root([]));
+      expect(result.ok).toBe(false);
+      expect(result.violations.some((v) => v.code === "PHASE6_INVALID_SNAPSHOT")).toBe(true);
+    }
+  });
+
   test("unreadable/invalid root is NOT proof of root absence → PHASE6_INVALID_ROOT", () => {
     for (const bad of [null, "status", 42, {}, { version: 1, plans: [] }]) {
       const result = evaluatePostMergeClose(phase6Snapshot(), bad);

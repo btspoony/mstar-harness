@@ -13,6 +13,9 @@
  *   close and a fixed-root retry finishes the unregister without changing
  *   `ended_at`.
  * - exit 2 usage: missing `--workflow`.
+ * - exit 1: a hostile workflow id is rejected up front by the shared
+ *   `assertWorkflowId` guard (same convention as every other
+ *   `--workflow <id>` verb).
  *
  * Every case runs the real CLI as a subprocess against a temp fixture
  * harness — no live workflow is ever touched.
@@ -261,6 +264,16 @@ describe("mstar status workflow-close", () => {
       const result = runCli(["status", "workflow-close", "--harness", harness]);
       expect(result.exitCode).toBe(2);
       expect(result.stderr).toContain("usage");
+    });
+  });
+
+  test("hostile workflow id (path traversal) is rejected by the shared id guard (exit 1)", () => {
+    setupHarness((harness) => {
+      const result = runCli(["status", "workflow-close", "--workflow", "../escape", "--harness", harness]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("invalid workflow id");
+      // The guard fires before any I/O — no dir appears at the escaped path.
+      expect(existsSync(join(harness, "escape"))).toBe(false);
     });
   });
 });

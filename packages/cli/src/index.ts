@@ -1179,6 +1179,13 @@ statusCommand
       if (workflowId === undefined || workflowId.trim() === "") {
         throw new SddScriptError("usage: status workflow-close --workflow <id> [--harness <path>] [--ended-at <date>]", 2);
       }
+      // Shared workflow-id guard — the same contract every other `--workflow <id>`
+      // verb applies via `resolveSnapshotPath` (reject ""/./.. and separators) so a
+      // hostile id never reaches the path join below. Defense-in-depth on the write
+      // verb: the engine identity check and store key guard would refuse later
+      // regardless, but the shared guard keeps the refusal uniform (exit 1,
+      // "invalid workflow id") across the verb family.
+      assertWorkflowId(workflowId);
       const harnessDir = resolveProcessHarnessDir(options.harness);
       if (!harnessDir) {
         throw new Error(`harness dir not found from ${process.cwd()} \u2014 pass --harness <path>`);

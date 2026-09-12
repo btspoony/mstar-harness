@@ -44,7 +44,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { GateResult, Severity, ValidationResult } from "./core.js";
-import { isTerminalSnapshot, validateWorkflowSnapshot, type WorkflowSnapshot } from "./workflow.js";
+import { LEGACY_WORKTREE_PATH_CODE, isTerminalSnapshot, validateWorkflowSnapshot, type WorkflowSnapshot } from "./workflow.js";
 
 const COMPASS_STATUSES = ["active", "locked", "completed"] as const;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -512,7 +512,9 @@ function hasLeftoverLease(snapshotDoc: SnapshotDoc): boolean {
 /**
  * Phase 6 post-merge close local-state gate (phase-6-post-merge-close.md
  * §6.4 + Evidence): verifies the checkable post-close state — the workflow
- * snapshot is a valid v3 document (T1 `validateWorkflowSnapshot`) in a
+ * snapshot is a valid v3 document (T1 `validateWorkflowSnapshot`, with the
+ * single legacy `control_worktree_path` alias non-blocking exactly as the
+ * canonical reader accepts and migrates it) in a
  * terminal status (completed | failed | stopped, T1 `isTerminalSnapshot`),
  * no `plans[].execution_lease` or top-level `integration_merge_lease`
  * survived the close, and the root `status.json` no longer registers the
@@ -534,8 +536,14 @@ function hasLeftoverLease(snapshotDoc: SnapshotDoc): boolean {
 export function evaluatePostMergeClose(snapshotDoc: SnapshotDoc, rootDoc: unknown): GateResult {
   const violations: ValidationResult[] = [];
   const shape = validateWorkflowSnapshot(snapshotDoc);
-  if (!shape.ok) {
-    const detail = shape.violations.map((v) => v.message).join("; ");
+  // Mirror `normalizeWorkflowSnapshot`: the legacy `control_worktree_path`
+  // alias is a non-blocking migration diagnostic that `closeWorkflow` accepts
+  // and migrates on the next authorized write, so the gate classifies
+  // INVALID_SNAPSHOT only from the blocking remainder — the gate and the
+  // closer must agree on which documents are closable.
+  const blocking = shape.violations.filter((v) => v.code !== LEGACY_WORKTREE_PATH_CODE);
+  if (blocking.length > 0) {
+    const detail = blocking.map((v) => v.message).join("; ");
     violations.push(
       violation(
         "high",
@@ -545,9 +553,14 @@ export function evaluatePostMergeClose(snapshotDoc: SnapshotDoc, rootDoc: unknow
       ),
     );
   }
-  // T1 terminal predicate — status-only read, safe on any parsed document.
-  const terminal = isTerminalSnapshot(snapshotDoc as unknown as WorkflowSnapshot);
-  if (shape.ok && !terminal) {
+  // T1 terminal predicate — status-only read, guarded to object documents:
+  // the total validator above refuses parsed non-object bodies (a literal
+  // `null` snapshot.json etc.) as blocking violations, so this read cannot
+  // throw. Shape-invalid OBJECT documents still reach it — the
+  // dangling-lease probe below intentionally runs on any terminal body.
+  const shapeOk = blocking.length === 0;
+  const terminal = isPlainObject(snapshotDoc) && isTerminalSnapshot(snapshotDoc as WorkflowSnapshot);
+  if (shapeOk && !terminal) {
     violations.push(
       violation(
         "high",
@@ -566,7 +579,7 @@ export function evaluatePostMergeClose(snapshotDoc: SnapshotDoc, rootDoc: unknow
       ),
     );
   }
-  const workflowId = typeof snapshotDoc.id === "string" ? snapshotDoc.id : null;
+  const workflowId = isPlainObject(snapshotDoc) && typeof snapshotDoc.id === "string" ? snapshotDoc.id : null;
   const workflows = isPlainObject(rootDoc) && Array.isArray(rootDoc.workflows) ? rootDoc.workflows : null;
   if (workflows === null) {
     violations.push(
