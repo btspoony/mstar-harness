@@ -41,14 +41,18 @@ Dispatch:
 
     ## Before you begin
 
-    Ask questions now about requirements, approach, or dependencies.
+    Read the supplied brief and relevant inputs. Ask only about a concrete missing prerequisite that prevents this task; do not reopen settled choices.
+
+    ## Scope and stop
+
+    Use only the brief's owned files, relevant inputs and named checks. Do not restart global exploration, extend the task, or run local full suites without the user's explicit scoped permission. Reuse unaffected evidence. Stop once the assigned acceptance criteria are evidenced; report concrete missing context instead of over-analyzing settled work.
 
     ## Your job
 
     1. Implement exactly what the brief specifies
-    2. Run tests (TDD if brief requires)
+    2. Run only the assigned affected unit tests; for non-executable docs/policy, use real scoped-check evidence per file-handoffs.md § Verification evidence
     3. Commit on Working branch
-    4. Self-review
+    4. Self-review only the task diff and directly affected contracts
     5. Write report file; return short summary only
 
     ## When stuck
@@ -59,7 +63,8 @@ Dispatch:
 
     - Status: DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED
     - Implemented / attempted
-    - Tests: command, output, red/green evidence if TDD
+    - Verification: affected test files, command, actual output (red/green for executable bug fixes), OR the complete scoped-check block from file-handoffs.md for non-executable docs/policy
+    - Reused evidence: original range and reason it remains applicable
     - Files changed
     - Self-review notes
 ```

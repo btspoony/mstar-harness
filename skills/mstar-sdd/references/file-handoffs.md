@@ -42,8 +42,26 @@ Implementer writes full report to `task-N-report.md`. Return to PM only:
 
 - Status: `DONE` | `DONE_WITH_CONCERNS` | `NEEDS_CONTEXT` | `BLOCKED`
 - Commits (SHAs)
-- One-line test summary
+- One-line verification summary (affected tests or scoped static evidence)
 - Concerns (if any)
+
+## Verification evidence
+
+Choose evidence from the actual diff, not the file extension. Scope limits → `mstar-harness-core` § 定向执行与验证边界.
+
+- **Executable logic**: report the affected test file(s), exact command/selector and actual output; bug fixes include the reproduction red/green evidence. No `Verification mode` is needed for this test triple.
+- **Non-executable documentation or prompt/skill policy**: use `Verification mode: scoped-check` with real scoped static or before/after observable evidence. This mode cannot exempt executable code, configuration logic or executable snippets from corresponding tests. Mixed changes retain executable test evidence and do not claim a scoped-check exemption for the task.
+
+```markdown
+Verification mode: scoped-check
+Changed files: <actual non-executable files>
+Tests: N/A
+Reason: <why scoped evidence fits the actual change>
+Check command: <exact targeted command actually run>
+Check result: <actual exit/result and observed output>
+```
+
+Replace every placeholder with actual evidence. Unknown or duplicate modes, missing/empty/placeholder fields, and bare `Tests: N/A` fail; do not copy the template as a report. `assertSddTddTriple` / `mstar lint <task-report>` validate structure only. PM/QC check the actual changed range, applicability and evidence honesty; the checker cannot establish that commands ran or intercept arbitrary shell execution. For policy changes, record the before/after expectation and triggering scenario alongside the concrete check; no broad model-eval matrix is implied.
 
 ## After implementer DONE
 
@@ -73,15 +91,9 @@ Hosted subagents are not cwd-bound by the launcher, so their dispatch prompt mus
 
 ## Fix loop
 
-Fix subagent appends to same `task-N-report.md` with test evidence:
+Fix subagent appends the affected evidence to the same `task-N-report.md`: the executable test triple or applicable `scoped-check` block above, with actual output (warnings remain findings). Reuse unaffected evidence, citing its original range and why it remains applicable. Re-dispatch the owning reviewer for the assigned finding/fix delta when the required evidence is present.
 
-- Covering test file(s)
-- Command run
-- Output (pristine — warnings are findings)
-
-Re-dispatch reviewer only when all three are present.
-
-The per-task fix loop applies the same fix-round mechanics as plan-level QC fix waves (SKILL.md · "After all tasks" — unverified rounds count, full re-entry, capped cross-round excerpt, honest non-convergence): from round ≥2 the excerpt of prior rounds' findings/dispositions goes into the fix dispatch brief, and the round tally/verification history lands in `$SDD_DIR/progress.md`.
+The per-task fix loop applies the same fix-round mechanics as plan-level QC fix waves (SKILL.md · "After all tasks" — unverified rounds count, affected finding/fix-delta re-entry, capped cross-round excerpt, honest non-convergence): from round ≥2 the excerpt of prior rounds' findings/dispositions goes into the fix dispatch brief, and the round tally/verification history lands in `$SDD_DIR/progress.md`.
 
 ## Progress ledger
 

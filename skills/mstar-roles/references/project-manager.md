@@ -124,7 +124,7 @@ If any item below matches, fix the dispatch/plan state or mark `Blocked`—do **
 - **NEVER** dispatch same-repo **≥2 concurrent writable implement** tracks without **`references/parallel-writable-pre-dispatch.md`**（per-track worktree + absolute **`Worktree path`**；**N invokes ≠ isolation** — also `mstar-dispatch-gates` dual-gate table).
 - **NEVER** point QC at a single dev worktree/`Review cwd` that cannot contain **all** claimed changes from parallel tracks until Git integration lands on one `Working branch` `HEAD` (`mstar-branch-worktree` QC/QA alignment).
 - **NEVER** skip `qa-engineer` on `QA gate: report-only` primary routes—still dispatch with `QA mode: report-only`; QC skip rules are separate and explicit.
-- **NEVER** use `QA gate: pm-acceptance` when open R# exist, UI observable gate is unmet, or QC verdict is not clean `Approve`.
+- **NEVER** use `QA gate: pm-acceptance` outside the tiers in `qa-trigger-matrix.md` (open R# or unclean QC require QA). Missing real UI evidence is a separately requested `mstar-e2e` concern, not permission for iteration QA to run browser/device tests.
 - **NEVER** mark plan `Done` on runtime/behavior change without `QA gate: mandatory` fulfilled or completed PM acceptance checklist (`qa-trigger-matrix.md`).
 - **NEVER** run tests/repro in the PM orchestration thread to substitute for `QA gate: mandatory` dispatch.
 - **NEVER** let non-PM/non-QA roles mark plan `Done`.
@@ -257,7 +257,7 @@ PM must:
 
 - Dispatch QC with aligned scope fields
 - Consolidate to one gate verdict
-- Assign fixes; default **targeted QC re-review** (same `{SDD_DIR}/review/qcN.md`); full tri only when Assignment says `QC re-review: full tri-review`
+- Assign fixes; default **targeted QC re-review** by the owning seat (same `{SDD_DIR}/review/qcN.md`), limited to its findings, fix delta and direct contracts. `QC re-review: full tri-review` changes seat count only, not review scope (`mstar-harness-core` § 定向执行与验证边界).
 - Record non-blocking leftovers as residual findings
 - Keep open vs archived residual state coherent at closure
 - Sync plan/status in the same coordination round

@@ -1,6 +1,6 @@
 ---
 name: mstar-coding-behavior
-description: Morning Star 跨角色通用编码行为准则 —— 任何实现、调试、重构、审查任务动手前必读。约束 Think Before Coding（先读懂再改、显式假设、不静默猜测）、Simplicity First（YAGNI、The Ladder、`simplify:` 标记、最小耐久切片）、Surgical Changes（改动可追溯、Bug 修根因先 grep 所有调用点、不 piggyback）、Debugging（先复现、一步一测、修前写复现测试）、Review Feedback Handling（先核实再改、证据反驳）、Goal-Driven Execution（非平凡逻辑留可运行检查、Step→verify）。`@fullstack-dev*` / `@frontend-dev` / `@architect` / `@qa-engineer` / `@ops-engineer` / `@prompt-engineer` 必读；QC 核对手术范围时必读。不覆盖分支门禁、QC/QA 路由、Assignment 权限。
+description: Morning Star 跨角色通用编码行为准则 —— 任何实现、调试、重构、审查任务动手前必读。约束 Think Before Coding（先读懂再改、显式假设、不静默猜测）、Simplicity First（YAGNI、The Ladder、`simplify:` 标记、最小耐久切片）、Surgical Changes（改动可追溯、Bug 修根因定向检查直接调用点、不 piggyback）、Debugging（先复现、一步一测、修前写复现测试）、Review Feedback Handling（先核实再改、证据反驳）、Goal-Driven Execution（非平凡逻辑留可运行检查、Step→verify）。`@fullstack-dev*` / `@frontend-dev` / `@architect` / `@qa-engineer` / `@ops-engineer` / `@prompt-engineer` 必读；QC 核对手术范围时必读。不覆盖分支门禁、QC/QA 路由、Assignment 权限。
 ---
 
 ## Load order（必读顺序）
@@ -21,7 +21,7 @@ Lightweight, host-agnostic coding-behavior principles that reduce common agent m
 
 Do not silently choose an interpretation when ambiguity exists. State assumptions explicitly when material; if multiple plausible interpretations exist, present options and ask. Surface tradeoffs affecting scope/risk/maintainability. If critical context is missing, pause and clarify instead of guessing.
 
-**Never lazy about understanding.** Shorten the solution, never the reading. Read the task and every file the change touches fully first; trace the actual flow end to end. A small diff in the wrong place is not efficiency — it is a second bug shipped with confidence.
+**Understand the affected flow.** Read the brief, the code to be changed and its direct contracts before editing. Use supplied evidence and relevant knowledge; follow a changed symbol only far enough to resolve the concrete question. Do not restart repository-wide exploration during development or review. Scope and stopping rules → `mstar-harness-core` § 定向执行与验证边界.
 
 **Read before you write.** Before generating code in an existing project: inspect imports (which libraries the project actually uses — do not introduce a different library for the same purpose); look at nearby tests (they document expected behavior more precisely than comments); follow existing patterns (API routes, file structure, error handling — match it, do not silently introduce a different one). If no precedent exists, say so and ask. If not 100% sure a signature/parameter exists, check source/docs before using it — confidently calling a non-existent API may compile then fail at runtime.
 
@@ -76,7 +76,7 @@ Every changed line should be traceable to the task. Touch only files/regions nee
 
 **Traceability test**: each hunk maps to a user requirement, acceptance criterion, or required fix-up.
 
-**Bug fix = root cause, not symptom.** A bug report names a symptom, not the cause. Before editing, grep every caller of the function or code path you are about to touch. The fix belongs where all callers route through — one guard in the shared function is smaller than a guard in every caller. Patching only the path the ticket names leaves every sibling caller still broken. Fix it once, at the narrowest shared point.
+**Bug fix = root cause, not symptom.** Inspect the failing path, changed symbol and directly affected callers. Fix at the narrowest responsible point and cover the demonstrated regression. An unresolved dependency outside the assigned scope is a concrete question for PM, not permission to survey every caller or module.
 
 ## 4) Debugging
 
@@ -86,8 +86,8 @@ When something does not work, investigate; do not guess.
 - **Reproduce before fixing.** If you cannot reproduce, you cannot verify. "I think this should fix it" is gambling.
 - **Change one thing at a time.** Changing three things and seeing the bug disappear tells you nothing about which change fixed it — or what new bugs the other two introduced.
 - **Fix the root cause, not the symptom.** If a value is unexpectedly null, do not just add a null check — figure out why it is null (see Surgical Changes · bug=root-cause).
-- **Write a reproduction test before fixing a bug.** Minimal test reproducing the reported behavior → watch it fail → apply fix → watch it pass. The only way to prove you fixed the actual problem, not merely suppressed symptoms.
-- **Run existing tests before and after changes.** If they passed before and fail after, you broke something. If they were already failing, say so.
+- **For executable bugs, write the minimal reproduction unit test before fixing.** Observe the relevant failure, apply the fix, then observe that case pass. For document/policy fixes, use the scoped evidence route below.
+- **Run only affected unit tests.** Name the relevant file/case or selector; distinguish pre-existing failures from regressions. Reuse unaffected evidence and do not rerun a suite because HEAD changed. If an entry cannot select the required scope, report the gap instead of broadening it.
 - **If stuck, say so.** "I tried X and Y; neither worked. I'm seeing Z. I think it might be W but am not sure" is infinitely more useful than silently trying random things for 20 iterations.
 
 ## 5) Goal-Driven Execution
@@ -124,9 +124,9 @@ Do not perform agreement. State the technical action, the verification result, o
 
 ## Integration Notes
 
-- **SDD implementer reports** (`mstar-sdd`): completion evidence must include TDD triple — test file(s), command, output — in `task-N-report.md`; fix rounds add the same for new/changed tests.
+- **SDD implementer reports**: executable changes retain the affected test file(s), command and actual output in `task-N-report.md`. Non-executable docs and prompt/skill policy changes use `Verification mode: scoped-check` with real changed files, reason, check command and result; complete format and applicability → `mstar-sdd/references/file-handoffs.md` § Verification evidence. Never use this mode to skip tests for executable logic. Fix reports update only the affected evidence.
 
-> **Engine check (when available):** run `mstar lint <task-N-report.md>` (or `import { assertSddTddTriple } from "@mstar-harness/engine"` in a host hook) to assert the TDD triple above — test file(s), runnable command, and output evidence must all be present in the report. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check (when available):** run `mstar lint <task-N-report.md>` (or `import { assertSddTddTriple } from "@mstar-harness/engine"` in a host hook) to validate the selected report evidence: executable test triple or explicit `scoped-check` fields. This is structural validation; PM/QC still verify applicability against the actual diff and evidence. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 - This skill must not be used to bypass branch constraints, QC/QA gate definitions, assignment authority, or `Done` ownership rules.
 
@@ -142,7 +142,7 @@ Apply the six sections in reading order: **1) Think Before Coding**（读懂再�
 
 ## Evidence
 
-正确结果 = 可运行检查通过并附输出：非平凡逻辑留下一个**最小可失败检查**（§5）；bug 修复先写复现测试、红转绿（§4）；回报引用检查结果与输出，而非「我觉得应该没问题」。
+正确结果 = 相关检查及真实输出：可执行逻辑留下一个**最小可失败检查**（§5），bug 单测红转绿（§4）；文档/策略改动用 `scoped-check` 的定向静态或 before/after 可观察证据（Integration Notes）。不因模板制造测试，也不把静态校验声称为模型服从度或运行时实测。
 
 ## References
 

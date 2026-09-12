@@ -93,7 +93,7 @@ PM 在 Assignment 写 **`Task category`**（主类 + 可选 `secondary`）：
 | `mstar-harness-core` | 本文件：入口、状态机、Task category、explore、索引、护栏 |
 | `mstar-phase-gates` | per-plan 双阶段门禁：Prepare/Execute、意图门禁、hotfix、可验证编辑 |
 | `mstar-iteration` | 迭代管理：Phase 1–5（start / Autonomous Execute / iteration-close / PR delivery / PR merge-ready loop） |
-| `mstar-dispatch-gates` | 派发、Delegation、反递归、SDD 串行、SDD 路径 plan QC 强制 tri |
+| `mstar-dispatch-gates` | 派发、Delegation、反递归、依赖与隔离驱动并行、SDD 路径 plan QC 强制 tri |
 | `mstar-engine-legacy` | 条件契约档案（engine-absent fallback）：status v1→v2 字段历史、lease 协议全文、各宿主 N=3/N=1 重述、反递归全清单、Engine-check 样板；engine 激活时不加载 |
 | `mstar-sdd` | Subagent-driven development：file handoff、per-task review、ledger |
 | `mstar-branch-worktree` | 功能分支、worktree、QC/QA 检出对齐 |
@@ -108,6 +108,7 @@ PM 在 Assignment 写 **`Task category`**（主类 + 可选 `secondary`）：
 | `mstar-strategy` | `STRATEGY.md` 全局战略方向 —— 产品愿景、技术方向、决策原则 |
 | `mstar-skill-authoring` | 通用 skill 撰写门控（SkillsBench 六原则）：trigger 契约、紧凑 5 问 body、渐进披露、paired 证据 |
 | `mstar-audit` | Variant carrier：common core（hard rules、recon、vet、variant dispatch）+ SKILL.md `## Plan output (all variants)`（Status block、plan files、handoff）+ `references/codebase-audit.md`（full-audit 变体：9 类别 fan-out、effort、scope variants、Phase 4 excerpt/reconcile、audit index 模板）+ `references/security-review.md`（security 深查：exploitability 门槛、FP 纪律、LLM/供应链面）+ `references/pr-review.md`（`pr` 变体）；`audit-playbook` + `finding-format` + `plan-quality-bar` |
+| `mstar-e2e` | 用户显式启动的独立真实浏览器 / 真机 / E2E 验证 workflow；PM 编排、ops 执行，不进入迭代 QA gate |
 | `mstar-roles` | 角色正文 hub |
 | `mstar-host` | 宿主适配（自动识别；`references/opencode.md` / `cursor.md` / `codex.md` / `kimi.md` / `parallel-dispatch.md`） |
 
@@ -129,6 +130,18 @@ Read **`mstar-host`** after this skill; detect host per its table, then Read the
 - 检查：`mstar-harness doctor --target <host>`（全部宿主已实现：opencode / cursor / codex / zcode / omp / dsh / kimi）。
 - **CLI 较新** → 提示用户更新宿主插件；**插件较新** → 提示用户更新全局 CLI（`npm i -g @mstar-harness/cli@latest`）。
 - 触发纪律：harness 行为异常/疑似过期、已知新版本发布后、或用户要求时运行——**不是**每个会话都跑。
+
+## 定向执行与验证边界
+
+本节是全部角色的范围与验证授权 SSOT；角色方法只展开其执行细节，`Skill presets: none` 仍由共享 leaf 边界承接这些限制。
+
+- **本地全量测试默认禁止，完整套件交 CI。** 只有用户明确许可才能例外；Assignment 的 `Constraints` 引用许可，`Evidence Required` 写明命令、范围、环境与次数。PM 字段、风险等级、缺证据、fix wave 和早期探索都不产生许可；不得拆成多个无关“小测试”绕过全量边界。
+- **全域只读调查限早期探索。** 实现、fix、QC、QA 只查本次变更、直接影响接口及相关 knowledge；不重新全仓扫描、测试或审查。通过知识索引只选相关 Active 条目；缺口超出范围时报告具体所缺信息，不自行扩展任务。
+- **验证按变更映射。** 可执行逻辑使用对应单测；非可执行文档与 prompt/skill 策略使用真实定向静态或 before/after 证据，不制造测试文件。SDD 的 `Verification mode: scoped-check` 格式与适用性 → `mstar-sdd/references/file-handoffs.md`。报告结构校验不证明命令执行或 diff 适用性，也不是任意 shell 拦截器。
+- **只使受影响证据失效。** HEAD 或 Review range 改变不等于全部重跑；复用仍有效的 L1/CI/先前 QA 证据，记明原范围及仍适用的理由。fix 只验证相关回归；QC 复审只看归属 finding、fix delta 与直接接口。`full tri-review` 表示席位数量，不授权全仓 review；QC 不运行 test/build/install。
+- **QA 仅定向单元测试与验收证据映射。** 模式仅 `acceptance-only` / `targeted` / `report-only`。用户许可的本地全量由实现 owner 或 ops 另接明确行动，QA 只消费证据。真实浏览器、真机、安装/部署 E2E 仅由用户显式启动独立 `mstar-e2e` workflow，PM 编排、ops 执行；不作为迭代 QA gate。未验证的真实环境行为如实记录，不伪称通过。
+- **依赖允许即并行。** PM 对无依赖、写所有权及 worktree 隔离的 ready tasks 并行派发；共享写目标、同一 session/ledger、前置接口与 integration merge 才按具体约束串行。leaf 不因并行策略获得派发权限。
+- **完成即交付。** Assignment 给出任务、输入、所有权、允许检查与可观察结果；执行者只解答这些问题，不重复分析已解决内容、不顺手修复或增加“保险”检查。真实范围缺口返回 PM，已有证据充分即停止。
 
 ## 核心研发守则
 

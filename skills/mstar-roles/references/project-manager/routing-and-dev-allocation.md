@@ -15,7 +15,7 @@ When multiple routes apply, set one `Primary` route in Assignment and treat othe
 6. Bug fix
 7. Refactor
 8. Feature size bucket (large/medium/small)
-9. User-visible UI/critical-flow evidence requirement (additional gate, usually not primary)
+9. User-visible UI/critical-flow unit evidence (additional gate); real browser/device/E2E requires an explicit independent `mstar-e2e` request, never an automatic iteration QA gate
 
 ## Size Heuristics
 
@@ -96,4 +96,4 @@ Document override as `Dev owner tie-break: single id — <reason>`.
 - `Dev routing` matches task board ownership
 - Parallel intent and branch/worktree policy align
 - **`QA gate`** and **`QA gate reason`** set per `qa-trigger-matrix.md`
-- If UI-visible changes: `QA gate: mandatory` and observable evidence gate planned
+- If UI-visible changes: `QA gate: mandatory` with unit-evidence mapping per `qa-trigger-matrix.md`; record unverified real-environment behavior for a separately requested `mstar-e2e` workflow, not an iteration gate

@@ -21,15 +21,15 @@ Before a plan is locked, verify every item:
 
 ### 2. Verification gates
 
-Every step ends with a **command and its expected result**, not a judgment call.
+Each verification step names the changed behavior, exact scoped command and expected result, or reusable evidence with its applicability. Use only checks needed for this change; discovering a repository command does not make it a gate. Scope authority → `mstar-harness-core` § 定向执行与验证边界.
 
-| Pattern | Weak (do not use) | Strong (required) |
-|---------|-------------------|-------------------|
-| Test step | "run the tests" | `pnpm test -- orders` → all pass, including 2 new tests |
-| Typecheck | "make sure it compiles" | `pnpm typecheck` → exit 0, no errors |
-| Removal | "clean up the old code" | `grep -rn "oldPattern" src/` → no matches |
+| Pattern | Weak (do not use) | Strong (scope first) |
+|---------|-------------------|----------------------|
+| Executable bug | "run the tests" | `pytest tests/test_orders.py -k rejects_empty_order -v` → the relevant regression fails before the fix and passes after |
+| Documentation | "run all docs checks" | `rg -n 'new-target' docs/setup.md` → the changed reference matches the verified target; record actual output |
+| Removal | "scan the source tree" | `rg -n 'oldPattern' src/orders.ts tests/test_orders.py` → no matches in the affected files |
 
-The executor should never have to *judge* whether a step succeeded — it runs a command and compares output.
+These are examples, not commands to copy into every plan. Resolve actual paths/selectors before locking. No available scoped entry → report the exact gap; do not substitute a package/workspace suite. Non-executable docs/policy use `Verification mode: scoped-check` evidence per `mstar-sdd/references/file-handoffs.md`, with before/after observable criteria for policy changes. Executable changes retain their corresponding unit-test evidence.
 
 ### 3. Hard boundaries
 
@@ -61,16 +61,18 @@ In SDD, this maps to the `BASE_SHA` recorded before Task 1.
 
 ### 6. Done criteria (machine-checkable)
 
-ALL must hold — commands and expected results, not prose:
+All **selected, change-relevant** criteria must hold. Remove inapplicable example rows rather than creating unnecessary work:
 
 ```markdown
 ## Done criteria
 
-- [ ] `pnpm typecheck` exits 0
-- [ ] `pnpm test` exits 0; new tests for <X> exist and pass
-- [ ] `grep -rn "<old-pattern>" src/` returns no matches
-- [ ] No files outside the in-scope list are modified (`git status`)
+- [ ] Executable bug: `pytest tests/test_orders.py -k rejects_empty_order -v` passes; record the relevant red/green evidence
+- [ ] Docs-only alternative: `rg -n 'new-target' docs/setup.md` matches the changed reference and its target resolves; record scoped-check evidence, no test file needed
+- [ ] `git diff --check -- <in-scope-files>` exits 0
+- [ ] No files outside the in-scope list are modified (`git status --short`)
 ```
+
+Do not add repository-wide build/test/lint/typecheck gates for insurance. Full suites remain CI-owned unless the user explicitly authorizes a bounded local exception; that exception is not inferred from this template.
 
 "Works correctly" is not a done criterion.
 

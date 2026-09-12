@@ -39,11 +39,16 @@ Dispatch:
 
     Write your full report to: [REPORT_FILE]
 
+    ## Scope and stop
+
+    Use only the brief's owned files, relevant inputs and named checks. Do not restart global exploration, extend the task, or run local full suites without the user's explicit scoped permission. Reuse unaffected evidence. Stop once the assigned acceptance criteria are evidenced; report concrete missing context instead of over-analyzing settled work.
+
     ## Your job
 
     1. Implement exactly what this brief specifies (prior tasks are done)
-    2. Run tests; commit on Working branch
-    3. Write report file; return short summary only
+    2. Run only assigned affected unit tests or applicable scoped-check evidence; use file-handoffs.md § Verification evidence and retain unaffected prior evidence
+    3. Commit on Working branch
+    4. Write report file with actual evidence; return short summary only
 
     ## When stuck
 
