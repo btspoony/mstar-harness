@@ -1,3 +1,4 @@
+import { collectActiveLifecycleBranches } from "./lifecycle-branches.js";
 /**
  * Engine sdd module — SDD loop state machine + the engine implementations
  * of the SDD workspace / task-brief / review-package helpers (CLI form:
@@ -46,7 +47,7 @@ import { findMstarc, parseMstarc } from "./mstarc.js";
 import { readJson, type GateResult, type Severity, type ValidationResult } from "./core.js";
 import { verifyPlanExecutionLease } from "./lease.js";
 import { WORKFLOW_SNAPSHOT_FILE } from "./workflow.js";
-import { assertBranchAlignment, isDistinctCheckout, l1PreDispatchCheck, probeCheckoutRoot, readMainWorktree } from "./worktree.js";
+import { assertBranchAlignment, gitProbeTimeoutMs, isDistinctCheckout, l1PreDispatchCheck, probeCheckoutRoot, readMainWorktree } from "./worktree.js";
 
 /**
  * Error carrying the ported script exit code so the CLI can map validation
@@ -142,6 +143,7 @@ function gitOut(cwd: string, args: string[]): string | null {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
       maxBuffer: GIT_CAPTURE_MAX_BYTES,
+      timeout: gitProbeTimeoutMs(),
     }).trim();
   } catch {
     return null;
@@ -236,7 +238,7 @@ export function sddWorkspace(planId: string, opts: SddWorkspaceOptions = {}): st
   if (!planId) {
     throw new SddScriptError(
       "usage: mstar sdd workspace PLAN_ID [CONTROL_ROOT]\n" +
-        "  Set MSTAR_CONTROL_ROOT=<main-worktree-root> when running from a feature worktree.",
+        "  Set MSTAR_CONTROL_ROOT=<main-repo-root> when running from a feature worktree.",
       2,
     );
   }
@@ -265,7 +267,7 @@ export function sddWorkspace(planId: string, opts: SddWorkspaceOptions = {}): st
         );
       }
       root = main.root;
-    } else if (gitOut(supplied, ["rev-parse", "--is-inside-work-tree"]) === "true") {
+    } else if (isFile(join(supplied, ".git")) || gitOut(supplied, ["rev-parse", "--is-inside-work-tree"]) === "true") {
  // A Git checkout whose main discovery failed — fail closed; a failed
  // Git probe must never fall through to mkdir.
       throw new SddScriptError(
@@ -288,7 +290,7 @@ export function sddWorkspace(planId: string, opts: SddWorkspaceOptions = {}): st
       throw new SddScriptError(
         `mstar sdd workspace: cannot verify the main worktree from cwd ${cwd} (git worktree discovery failed, git is unavailable, or the directory is not a Git worktree).\n` +
           `  Refusing to resolve or create any SDD tree without a verified main worktree — no second process-SSOT tree is ever created under a linked checkout.\n` +
-          `  Re-run with MSTAR_CONTROL_ROOT=<main-worktree-root> or: mstar sdd workspace ${planId} <main-worktree-root>`,
+          `  Re-run with MSTAR_CONTROL_ROOT=<main-repo-root> or: mstar sdd workspace ${planId} <main-repo-root>`,
         1,
       );
     }
@@ -464,7 +466,7 @@ export function reviewPackage(base: string, head: string, outFile?: string, opts
 
   const verifyRef = (ref: string, what: "BASE" | "HEAD"): void => {
     try {
-      execFileSync("git", ["rev-parse", "--verify", "--quiet", ref], { cwd, stdio: ["ignore", "pipe", "pipe"] });
+      execFileSync("git", ["rev-parse", "--verify", "--quiet", ref], { cwd, stdio: ["ignore", "pipe", "pipe"], timeout: gitProbeTimeoutMs() });
     } catch {
       throw new SddScriptError(`bad ${what}: ${ref}`, 2);
     }
@@ -500,7 +502,7 @@ export function reviewPackage(base: string, head: string, outFile?: string, opts
   }
 
   const run = (args: string[]): Buffer =>
-    execFileSync("git", args, { cwd, maxBuffer: GIT_CAPTURE_MAX_BYTES });
+    execFileSync("git", args, { cwd, maxBuffer: GIT_CAPTURE_MAX_BYTES, timeout: gitProbeTimeoutMs() });
   const commits = run(["log", "--oneline", `${base}..${head}`]);
   // FAIL LOUD on an empty range instead of writing an empty package. The range
   // resolves to nothing whenever the command runs outside the branch worktree
@@ -548,6 +550,7 @@ export function assertBaseSha(ref: string, opts: { cwd?: string } = {}): void {
  // accepts any well-formed 40-hex string without checking existence.
     execFileSync("git", ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], {
       cwd: opts.cwd,
+      timeout: gitProbeTimeoutMs(),
       stdio: ["ignore", "pipe", "pipe"],
     });
   } catch {
@@ -749,37 +752,6 @@ function recordedMainWorktreeBranch(planFile: string): string {
 }
 
 /**
- * Branches owned by ANY active lifecycle (integration/plan/track), collected
- * from the readable active snapshots: `branch.integration` anchors plus
- * every plan row's `execution_lease.working_branch` /
- * `metadata.working_branch`. `branch.base` is deliberately NOT collected —
- * it is the creation/merge anchor (often the main branch itself), never an
- * ownership fact.
- */
-function collectLifecycleBranches(snapshots: readonly Record<string, unknown>[]): string[] {
-  const owned = new Set<string>();
-  for (const doc of snapshots) {
-    const branch = doc.branch;
-    if (isPlainObject(branch) && typeof branch.integration === "string" && branch.integration.trim() !== "") {
-      owned.add(branch.integration);
-    }
-    if (!Array.isArray(doc.plans)) continue;
-    for (const row of doc.plans) {
-      if (!isPlainObject(row)) continue;
-      const lease = row.execution_lease;
-      if (isPlainObject(lease) && typeof lease.working_branch === "string" && lease.working_branch.trim() !== "") {
-        owned.add(lease.working_branch);
-      }
-      const meta = row.metadata;
-      if (isPlainObject(meta) && typeof meta.working_branch === "string" && meta.working_branch.trim() !== "") {
-        owned.add(meta.working_branch);
-      }
-    }
-  }
-  return [...owned];
-}
-
-/**
  * Outcome of the workflow plan-row lookup: the governing row from the single
  * registered active workflow holding the plan (`row`) plus the governing
  * snapshot document (its integration topology feeds L1) and the readable
@@ -806,7 +778,7 @@ type WorkflowPlanRowMatch =
  * row lookup must tolerate partially-written snapshots (the lenient
  * row-preserving read is unchanged) — so it normalizes ONLY the single
  * permitted legacy alias. A document carrying BOTH path keys is corrupted
- * topology and is refused (skip, fail-closed) rather than normalized.
+ * topology and is refused for a governing active row rather than normalized.
  */
 function normalizeSnapshotWorktreePath(doc: Record<string, unknown>): Record<string, unknown> | null {
   const legacy = doc.control_worktree_path;
@@ -886,6 +858,7 @@ function findWorkflowPlanRow(controlHarnessRoot: string, planId: string): Workfl
   } catch {
     return { kind: "none" };
   }
+  const registeredActive = readActiveWorkflowIds(controlHarnessRoot);
   const scanned: { workflowId: string; doc: Record<string, unknown> }[] = [];
   const matches: { workflowId: string; row: Record<string, unknown>; doc: Record<string, unknown> }[] = [];
   for (const id of workflowIds) {
@@ -898,7 +871,13 @@ function findWorkflowPlanRow(controlHarnessRoot: string, planId: string): Workfl
       continue; // malformed snapshot — cannot establish an active workflow
     }
     const normalized = normalizeSnapshotWorktreePath(doc);
-    if (normalized === null) continue; // conflicting path keys — corrupted topology, skip fail-closed
+    if (normalized === null) {
+      if ((registeredActive === null || registeredActive.has(id)) && Array.isArray(doc.plans) &&
+          doc.plans.some((row) => isPlainObject(row) && (row.id === planId || row.plan_id === planId))) {
+        throw new SddScriptError(`refusing conflicting integration_worktree_path / control_worktree_path in ${snapshotPath}`, 1);
+      }
+      continue;
+    }
     scanned.push({ workflowId: id, doc: normalized });
     const plans = normalized.plans;
     if (!Array.isArray(plans)) continue;
@@ -910,7 +889,6 @@ function findWorkflowPlanRow(controlHarnessRoot: string, planId: string): Workfl
     }
   }
   if (matches.length === 0) return { kind: "none" };
-  const registeredActive = readActiveWorkflowIds(controlHarnessRoot);
   if (registeredActive === null) {
     return {
       kind: "row",
@@ -1180,7 +1158,7 @@ export function resolveSddExecutionContext(input: SddExecutionContext): SddExecu
           : "",
       mainWorktree: main,
       expectedMainBranch,
-      lifecycleBranches: collectLifecycleBranches(match.activeSnapshots),
+      lifecycleBranches: collectActiveLifecycleBranches(match.activeSnapshots),
       leaseWorktreePath: lease.worktree_path as string,
       leaseWorkingBranch: lease.working_branch as string,
       planId,

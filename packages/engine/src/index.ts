@@ -398,3 +398,7 @@ export {
 } from "./prreview.js";
 export type { ArtifactDoc, ArtifactKind, ArtifactRef, ArtifactStore } from "./store.js";
 export { assertFsStorePath, createFsStore, getArtifactStore, loadStoreModule, resolveArtifactPath, setArtifactStore } from "./store.js";
+
+export { collectActiveLifecycleBranches, scanActiveLifecycleBranches, type ActiveLifecycleScan } from "./lifecycle-branches.js";
+
+export { WorkflowSnapshotValidationError } from "./workflow.js";

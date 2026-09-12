@@ -384,6 +384,10 @@ export type WorkflowSnapshotRead = {
  * next authorized read-modify-write through the canonical writer. Missing
  * files, malformed JSON, and non-object documents throw.
  */
+export class WorkflowSnapshotValidationError extends Error {
+  constructor(message: string, readonly violations: ValidationResult[]) { super(message); }
+}
+
 export function readWorkflowSnapshot(dir: string): WorkflowSnapshotRead {
   const snapshotPath = join(dir, WORKFLOW_SNAPSHOT_FILE);
   if (!existsSync(snapshotPath)) {
@@ -400,7 +404,7 @@ export function readWorkflowSnapshot(dir: string): WorkflowSnapshotRead {
   const blocking = gate.violations.filter((v) => v.code !== LEGACY_WORKTREE_PATH_CODE);
   if (blocking.length > 0) {
     const detail = blocking.map((v) => `${v.code}: ${v.message}`).join("; ");
-    throw new Error(`refusing to read invalid workflow snapshot ${snapshotPath}: ${detail}`);
+    throw new WorkflowSnapshotValidationError(`refusing to read invalid workflow snapshot ${snapshotPath}: ${detail}`, blocking);
   }
   if (migration.length === 0) {
     return { snapshot: doc as WorkflowSnapshot, diagnostics: [] };

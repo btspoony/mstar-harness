@@ -1,3 +1,4 @@
+import { collectActiveLifecycleBranches, scanActiveLifecycleBranches } from "@mstar-harness/engine"
 /**
  * Dispatch gate — subagent delegation gating on `tools/pre-execute` (plan
  *   §11 extraction).
@@ -32,7 +33,6 @@ import {
   readMainWorktree,
   readWorkflowSnapshot,
   resolveRepoEnforcement,
-  resolveWorkflowDir,
   validateExecutionLease,
   verifyPlanExecutionLease,
   WORKFLOW_SNAPSHOT_FILE,
@@ -594,103 +594,6 @@ function activeSnapshotRows(harnessDir: string, hint?: SessionHint): ActiveSnaps
 }
 
 /**
- * One snapshot's lifecycle-owned branch contribution — the SAME field set
- * the CLI collects (`branch.integration` + every plan row's
- * `execution_lease.working_branch` / `metadata.working_branch`, the
- * retained working-branch record that survives lease release;
- * `branch.base` is deliberately NOT collected — it is the creation/merge
- * anchor, never an ownership fact).
- */
-function collectSnapshotLifecycleBranches(snapshot: WorkflowSnapshot, owned: Set<string>): void {
-  const integrationBranch = typeof snapshot.branch?.integration === 'string' ? snapshot.branch.integration : ''
-  if (integrationBranch.trim() !== '') owned.add(integrationBranch)
-  const plans = Array.isArray(snapshot.plans) ? (snapshot.plans as Array<Record<string, unknown>>) : []
-  for (const row of plans) {
-    const lease = asRecord(row.execution_lease)
-    if (typeof lease?.working_branch === 'string' && lease.working_branch.trim() !== '') owned.add(lease.working_branch)
-    const metadata = asRecord(row.metadata)
-    if (typeof metadata?.working_branch === 'string' && metadata.working_branch.trim() !== '') owned.add(metadata.working_branch)
-  }
-}
-
-/**
- * Lifecycle-owned branches from ALL registered ACTIVE workflows (spec §
- * Primary residency; CLI parity — the same field set and the same
- * fail-closed shape): the v2 root register (`{HARNESS_DIR}/status.json`
- * `workflows[]` holds ACTIVE lifecycles only) drives the enumeration;
- * every registered snapshot is read through the canonical reader at the
- * engine `{WORKFLOW_DIR}` resolution (`.mstarc` `workflow_dir` honored).
- * The governing workflow id itself is skipped — its snapshot is read and
- * contributed at the call site (dedupe). Fail-closed: a sibling snapshot
- * that is unreadable or fails validation is a refusal, never a silent
- * skip — incomplete lifecycle evidence must not weaken the main-branch
- * non-ownership check; an unreadable/corrupt register (which cannot
- * enumerate the active set) refuses for the same reason. A MISSING
- * register leaves the active set empty. Read-only.
- */
-type ActiveLifecycleScan =
-  | { kind: 'ok'; branches: string[] }
-  | { kind: 'refusal'; code: string; detail: string }
-
-function scanActiveLifecycleBranches(harnessDir: string, governingWorkflowId: string | null): ActiveLifecycleScan {
-  const registerPath = join(harnessDir, STATUS_FILE)
-  if (!existsSync(registerPath)) return { kind: 'ok', branches: [] }
-  let register: Record<string, unknown>
-  try {
-    register = readJson(registerPath) as Record<string, unknown>
-  } catch (error) {
-    return { kind: 'refusal', code: 'worktree.l1.lifecycle-register-unreadable', detail: `${registerPath}: ${(error as Error).message}` }
-  }
-  if (register.version !== 2 || !Array.isArray(register.workflows)) {
-    return {
-      kind: 'refusal',
-      code: 'worktree.l1.lifecycle-register-unreadable',
-      detail: `${registerPath}: not a readable v2 root register (version 2 + workflows[]) — the active lifecycle set cannot be enumerated`,
-    }
-  }
-  let workflowsDir: string
-  try {
-    workflowsDir = resolveWorkflowDir(harnessDir, { harnessDir })
-  } catch (error) {
-    return { kind: 'refusal', code: 'worktree.l1.lifecycle-register-unreadable', detail: `${registerPath}: ${(error as Error).message}` }
-  }
-  const owned = new Set<string>()
-  for (const entry of register.workflows as unknown[]) {
-    const record = asRecord(entry)
-    const id = typeof record?.id === 'string' ? record.id : undefined
-    if (id === undefined) {
-      return {
-        kind: 'refusal',
-        code: 'worktree.l1.lifecycle-register-unreadable',
-        detail: `${registerPath}: malformed workflows[] entry — a registered active lifecycle cannot be identified`,
-      }
-    }
-    // Workflow ids are single path components — the same guard the CLI
-    // (`assertWorkflowId`) and omp (`assertSafeWorkflowId`) apply before
-    // joining the id under `{WORKFLOW_DIR}`; a hostile id refuses.
-    if (id === '' || id === '.' || id === '..' || id.includes('/') || id.includes('\\')) {
-      return {
-        kind: 'refusal',
-        code: 'worktree.l1.lifecycle-register-unreadable',
-        detail: `${registerPath}: invalid workflow id ${JSON.stringify(id)}`,
-      }
-    }
-    if (id === governingWorkflowId) continue // governing snapshot read at the call site — dedupe
-    const snapshotDir = join(workflowsDir, id)
-    try {
-      collectSnapshotLifecycleBranches(readWorkflowSnapshot(snapshotDir).snapshot, owned)
-    } catch (error) {
-      return {
-        kind: 'refusal',
-        code: 'worktree.l1.lifecycle-snapshot-unreadable',
-        detail: `${join(snapshotDir, WORKFLOW_SNAPSHOT_FILE)}: ${(error as Error).message}`,
-      }
-    }
-  }
-  return { kind: 'ok', branches: [...owned] }
-}
-
-/**
  * L1 cross-plan isolation (engine `l1PreDispatchCheck` FULL input): when
  * the Assignment resolves a plan id AND the ACTIVE workflow snapshot
  * carries a plan `execution_lease` (worktree_path + working_branch), the
@@ -737,8 +640,7 @@ function worktreeL1Violations(harnessDir: string | null, header: string, hint?: 
     return [] // no lease metadata to compare — nothing to verify
   }
   const snapshot = read.snapshot
-  const lifecycleBranches = new Set<string>()
-  collectSnapshotLifecycleBranches(snapshot, lifecycleBranches)
+  const lifecycleBranches = new Set(collectActiveLifecycleBranches([snapshot]))
   const siblingScan = scanActiveLifecycleBranches(harnessDir, read.workflowId)
   if (siblingScan.kind === 'refusal') {
     return [worktreeViolation(siblingScan.code, siblingScan.detail, 'repair or unregister the unreadable lifecycle state before dispatch')]

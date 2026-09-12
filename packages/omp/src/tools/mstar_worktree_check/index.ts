@@ -40,7 +40,6 @@ import { join, resolve } from "node:path";
 import {
   l1PreDispatchCheck,
   l2PreDispatchCheck,
-  readJson,
   resolveHarnessDir,
 } from "@mstar-harness/engine";
 import type {
@@ -131,6 +130,8 @@ async function resolveWorkflowDirOf(harnessDir: string): Promise<string> {
  * published engines (^2.0.2 floor) and silently drop the tool from
  * /extensions. */
 type P1EngineExports = {
+  collectActiveLifecycleBranches: typeof import("@mstar-harness/engine").collectActiveLifecycleBranches;
+  scanActiveLifecycleBranches: typeof import("@mstar-harness/engine").scanActiveLifecycleBranches;
   snapshotFile: string;
   readWorkflowSnapshot: (dir: string) => { snapshot: WorkflowSnapshot; diagnostics: ValidationResult[] };
   readMainWorktree: (cwd?: string) => MainWorktreeInfo | null;
@@ -138,10 +139,11 @@ type P1EngineExports = {
 
 async function loadP1Exports(): Promise<P1EngineExports | { error: AgentToolResult }> {
   const engine = await import("@mstar-harness/engine");
+  const { collectActiveLifecycleBranches, scanActiveLifecycleBranches } = engine;
   const snapshotFile = engine.WORKFLOW_SNAPSHOT_FILE;
   const readWorkflowSnapshot = engine.readWorkflowSnapshot;
   const readMainWorktree = engine.readMainWorktree;
-  if (typeof snapshotFile !== "string" || typeof readWorkflowSnapshot !== "function" || typeof readMainWorktree !== "function") {
+  if (typeof collectActiveLifecycleBranches !== "function" || typeof scanActiveLifecycleBranches !== "function" || typeof snapshotFile !== "string" || typeof readWorkflowSnapshot !== "function" || typeof readMainWorktree !== "function") {
     return {
       error: result(
         "installed @mstar-harness/engine lacks the P1 worktree-write-model exports (WORKFLOW_SNAPSHOT_FILE / readWorkflowSnapshot / readMainWorktree) — upgrade the engine (next release); CLI fallback: mstar worktree check",
@@ -150,100 +152,9 @@ async function loadP1Exports(): Promise<P1EngineExports | { error: AgentToolResu
       ),
     };
   }
-  return { snapshotFile, readWorkflowSnapshot, readMainWorktree };
+  return { snapshotFile, readWorkflowSnapshot, readMainWorktree, collectActiveLifecycleBranches, scanActiveLifecycleBranches };
 }
 
-/**
- * One snapshot's lifecycle-owned branch contribution — the SAME field set
- * the CLI collects (`branch.integration` + every plan row's
- * `execution_lease.working_branch` / `metadata.working_branch`, the
- * retained working-branch record that survives lease release;
- * `branch.base` is deliberately NOT collected — it is the creation/merge
- * anchor, never an ownership fact).
- */
-function collectSnapshotLifecycleBranches(snapshot: WorkflowSnapshot, owned: Set<string>): void {
-  const integrationBranch = String(snapshot.branch?.integration ?? "");
-  if (integrationBranch.trim() !== "") owned.add(integrationBranch);
-  const plans = Array.isArray(snapshot.plans) ? (snapshot.plans as Array<Record<string, unknown>>) : [];
-  for (const row of plans) {
-    const lease = isPlainObject(row.execution_lease) ? row.execution_lease : {};
-    if (typeof lease.working_branch === "string" && lease.working_branch.trim() !== "") owned.add(lease.working_branch);
-    const metadata = isPlainObject(row.metadata) ? row.metadata : {};
-    if (typeof metadata.working_branch === "string" && metadata.working_branch.trim() !== "") owned.add(metadata.working_branch);
-  }
-}
-
-/**
- * Lifecycle-owned branches from ALL registered ACTIVE workflows (spec §
- * Primary residency): the v2 root register (`{HARNESS_DIR}/status.json`
- * `workflows[]` holds ACTIVE lifecycles only) drives the enumeration;
- * every registered snapshot is read through the canonical reader at the
- * SAME `{WORKFLOW_DIR}` resolution the governing snapshot uses. The
- * governing workflow id itself is skipped — its snapshot is read and
- * contributed at the call site (dedupe). Fail-closed: a sibling snapshot
- * that is unreadable or fails validation is a refusal, never a silent
- * skip; an unreadable/corrupt register (which cannot enumerate the active
- * set) refuses for the same reason. A MISSING register leaves the active
- * set empty (nothing is registered active). Sibling legacy-alias migration
- * diagnostics are surfaced through the same `note:` channel as the
- * governing snapshot's (CLI parity). Read-only.
- */
-type ActiveLifecycleScan =
-  | { kind: "ok"; branches: string[]; notes: ValidationResult[] }
-  | { kind: "refusal"; code: string; detail: string };
-
-function scanActiveLifecycleBranches(
-  harnessDir: string,
-  workflowsDir: string,
-  snapshotFile: string,
-  readWorkflowSnapshot: P1EngineExports["readWorkflowSnapshot"],
-  governingWorkflowId: string,
-): ActiveLifecycleScan {
-  const registerPath = join(harnessDir, "status.json");
-  if (!existsSync(registerPath)) return { kind: "ok", branches: [], notes: [] };
-  let register: Record<string, unknown>;
-  try {
-    register = readJson(registerPath) as Record<string, unknown>;
-  } catch (error) {
-    return { kind: "refusal", code: "worktree.l1.lifecycle-register-unreadable", detail: `${registerPath}: ${(error as Error).message}` };
-  }
-  if (register.version !== 2 || !Array.isArray(register.workflows)) {
-    return {
-      kind: "refusal",
-      code: "worktree.l1.lifecycle-register-unreadable",
-      detail: `${registerPath}: not a readable v2 root register (version 2 + workflows[]) — the active lifecycle set cannot be enumerated`,
-    };
-  }
-  const owned = new Set<string>();
-  const notes: ValidationResult[] = [];
-  for (const entry of register.workflows as unknown[]) {
-    if (!isPlainObject(entry) || typeof entry.id !== "string") {
-      return {
-        kind: "refusal",
-        code: "worktree.l1.lifecycle-register-unreadable",
-        detail: `${registerPath}: malformed workflows[] entry — a registered active lifecycle cannot be identified`,
-      };
-    }
-    const id = entry.id;
-    if (assertSafeWorkflowId(id) !== null) {
-      return { kind: "refusal", code: "worktree.l1.lifecycle-register-unreadable", detail: `${registerPath}: invalid workflow id ${JSON.stringify(id)}` };
-    }
-    if (id === governingWorkflowId) continue; // governing snapshot read at the call site — dedupe
-    const snapshotDir = join(workflowsDir, id);
-    try {
-      const read = readWorkflowSnapshot(snapshotDir);
-      collectSnapshotLifecycleBranches(read.snapshot, owned);
-      notes.push(...read.diagnostics);
-    } catch (error) {
-      return {
-        kind: "refusal",
-        code: "worktree.l1.lifecycle-snapshot-unreadable",
-        detail: `${join(snapshotDir, snapshotFile)}: ${(error as Error).message}`,
-      };
-    }
-  }
-  return { kind: "ok", branches: [...owned], notes };
-}
 
 export default function mstarWorktreeCheck(pi: CustomToolAPI): CustomTool {
   return {
@@ -281,7 +192,11 @@ export default function mstarWorktreeCheck(pi: CustomToolAPI): CustomTool {
         }
         const guardError = assertSafeWorkflowId(params.workflowId);
         if (guardError !== null) return result(guardError, { ok: false }, true);
-        const harnessDir = resolveHarnessDir(pi.cwd);
+        const p1 = await loadP1Exports();
+        if ("error" in p1) return p1.error;
+        const main = p1.readMainWorktree(pi.cwd);
+        if (main === null) return result("[high] worktree.main.unresolved: cannot verify main worktree", { ok: false }, true);
+        const harnessDir = resolveHarnessDir(main.root);
         if (harnessDir === null) {
           return result(
             `no harness directory found from "${pi.cwd}" (looked for .mstar/ / .agents/ / .plans/ / plans/ walking up)`,
@@ -291,9 +206,7 @@ export default function mstarWorktreeCheck(pi: CustomToolAPI): CustomTool {
         }
         // Main-root discovery BEFORE snapshot resolution: the main worktree
         // (process-SSOT control root) is Git-derived, never snapshot state.
-        const p1 = await loadP1Exports();
-        if ("error" in p1) return p1.error;
-        const main = p1.readMainWorktree(pi.cwd);
+        const observedMain = `main worktree: ${main.root} on branch "${main.branch}" (observed)`;
         const workflowDir = await resolveWorkflowDirOf(harnessDir);
         const snapshotDir = join(workflowDir, params.workflowId);
         if (!existsSync(join(snapshotDir, p1.snapshotFile))) {
@@ -334,12 +247,11 @@ export default function mstarWorktreeCheck(pi: CustomToolAPI): CustomTool {
         const planId = String(row.plan_id ?? row.id ?? params?.planId ?? "");
         // Lifecycle-owned branches: the governing snapshot's contribution
         // plus every OTHER registered ACTIVE workflow's snapshot.
-        const lifecycleBranches = new Set<string>();
-        collectSnapshotLifecycleBranches(snapshot, lifecycleBranches);
-        const siblingScan = scanActiveLifecycleBranches(harnessDir, workflowDir, p1.snapshotFile, p1.readWorkflowSnapshot, params.workflowId);
+        const lifecycleBranches = new Set(p1.collectActiveLifecycleBranches([snapshot]));
+        const siblingScan = p1.scanActiveLifecycleBranches(harnessDir, params.workflowId);
         if (siblingScan.kind === "refusal") {
           return result(
-            `[high] ${siblingScan.code}: ${siblingScan.detail}`,
+            `${observedMain}\n[high] ${siblingScan.code}: ${siblingScan.detail}`,
             { kind: "l1", workflow_id: params.workflowId, plan_id: planId, ok: false, refusal: siblingScan },
             true,
           );
@@ -370,7 +282,7 @@ export default function mstarWorktreeCheck(pi: CustomToolAPI): CustomTool {
           ? `l1 pre-dispatch check OK (plan "${planId}", workflow "${params.workflowId}")`
           : violationLines(gate.violations);
         return result(
-          notes === "" ? body : `${notes}\n${body}`,
+          `${observedMain}\n${notes === "" ? body : `${notes}\n${body}`}`,
           { kind: "l1", workflow_id: params.workflowId, plan_id: planId, ok: gate.ok, violations: gate.violations, input },
           !gate.ok,
         );

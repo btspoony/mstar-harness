@@ -111,6 +111,7 @@ export type PlanRow = {
   title?: unknown;
   file?: unknown;
   status?: unknown;
+  /** Opaque plan metadata; metadata.track_branches retains active L2 Assignment working branches. */
   metadata?: unknown;
   execution_lease?: unknown;
   [key: string]: unknown;

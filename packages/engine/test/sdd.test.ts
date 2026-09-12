@@ -702,7 +702,7 @@ describe("engine helper contracts (bash originals removed in slice 5 — behavio
       const err = errOf(() => sddWorkspace("parity-plan", { cwd: root }));
       expect(err.exitCode).toBe(1);
       expect(err.message).toContain("cannot verify the main worktree");
-      expect(err.message).toContain("or: mstar sdd workspace parity-plan <main-worktree-root>");
+      expect(err.message).toContain("or: mstar sdd workspace parity-plan <main-repo-root>");
       expect(existsSync(join(root, ".mstar"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -1909,4 +1909,51 @@ describe("bound task-brief / review-package — A3 artifact producers ()", () =>
       rmSync(root, { recursive: true, force: true });
     }
   });
+});
+
+test("explicit linked marker refuses unavailable Git without creating process state", () => {
+  const root = tmpRoot("sdd-linked-marker-");
+  const previousPath = process.env.PATH;
+  try {
+    writeFileSync(join(root, ".git"), "gitdir: /unavailable/common/worktrees/linked\n");
+    process.env.PATH = root;
+    expect(() => sddWorkspace("plan-a", { controlRoot: root })).toThrow("cannot verify");
+    expect(existsSync(join(root, ".mstar"))).toBe(false);
+  } finally {
+    process.env.PATH = previousPath;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test("governing active snapshot with both topology keys refuses standalone downgrade", () => {
+  const root = tmpRoot("sdd-both-topology-");
+  try {
+    const f = executionFixture(root);
+    writeSnapshot(f, "wf-a", [{ id: PLAN_ID, status: "InProgress", execution_lease: executionLease(f) }], {
+      integration_worktree_path: f.control, control_worktree_path: f.control,
+    });
+    expect(() => resolveSddExecutionContext(contextOf(f))).toThrow("refusing conflicting");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("review and base verification bound hung Git before artifact writes", () => {
+  const root = tmpRoot("sdd-bounded-git-");
+  const previousPath = process.env.PATH;
+  const previousTimeout = process.env.MSTAR_GIT_PROBE_TIMEOUT_MS;
+  try {
+    writeFileSync(join(root, "git"), "#!/bin/sh\nexec /bin/sleep 30\n", { mode: 0o755 });
+    process.env.PATH = root;
+    process.env.MSTAR_GIT_PROBE_TIMEOUT_MS = "50";
+    const started = Date.now();
+    expect(() => reviewPackage("abcd", "efab", join(root, "review.diff"), { cwd: root })).toThrow("bad BASE");
+    expect(() => assertBaseSha("abcd", { cwd: root })).toThrow("commit not found");
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(existsSync(join(root, "review.diff"))).toBe(false);
+  } finally {
+    process.env.PATH = previousPath;
+    if (previousTimeout === undefined) delete process.env.MSTAR_GIT_PROBE_TIMEOUT_MS;
+    else process.env.MSTAR_GIT_PROBE_TIMEOUT_MS = previousTimeout;
+    rmSync(root, { recursive: true, force: true });
+  }
 });

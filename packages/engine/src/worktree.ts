@@ -53,7 +53,7 @@ import type { WorkflowLifecycleType } from "./workflow.js";
  */
 const DEFAULT_PROBE_TIMEOUT_MS = 10_000;
 
-function probeTimeoutMs(): number {
+export function gitProbeTimeoutMs(): number {
   const raw = process.env.MSTAR_GIT_PROBE_TIMEOUT_MS;
   if (raw === undefined || raw.trim() === "") return DEFAULT_PROBE_TIMEOUT_MS;
   const parsed = Number(raw);
@@ -125,7 +125,7 @@ export function readMainWorktree(cwd?: string): MainWorktreeInfo | null {
     const stdout = execFileSync("git", ["-C", start, "worktree", "list", "--porcelain", "-z"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
-      timeout: probeTimeoutMs(),
+      timeout: gitProbeTimeoutMs(),
     });
     return parseMainWorktree(stdout);
   } catch {
@@ -258,7 +258,7 @@ function gate(violations: ValidationResult[]): GateResult {
 function probeBranch(worktreePath: string, opts: BranchProbeOptions): BranchProbe {
   const precomputed = opts.branchOf?.(worktreePath);
   if (precomputed !== undefined) return { branch: precomputed };
-  const timeout = opts.timeoutMs ?? probeTimeoutMs();
+  const timeout = opts.timeoutMs ?? gitProbeTimeoutMs();
   try {
     const stdout = execFileSync(opts.gitPath ?? "git", ["-C", worktreePath, "branch", "--show-current"], {
       encoding: "utf8",
@@ -293,7 +293,7 @@ function probeBranch(worktreePath: string, opts: BranchProbeOptions): BranchProb
 type CheckoutProbe = { gitDir: string } | { error: string };
 
 function probeCheckout(worktreePath: string, opts: BranchProbeOptions): CheckoutProbe {
-  const timeout = opts.timeoutMs ?? probeTimeoutMs();
+  const timeout = opts.timeoutMs ?? gitProbeTimeoutMs();
   try {
     const stdout = execFileSync(opts.gitPath ?? "git", ["-C", worktreePath, "rev-parse", "--git-dir"], {
       encoding: "utf8",
@@ -345,7 +345,7 @@ export function isDistinctCheckout(controlPath: string, candidatePath: string, o
  * the harness sits directly under the checkout).
  */
 export function probeCheckoutRoot(path: string, opts: BranchProbeOptions = {}): string | null {
-  const timeout = opts.timeoutMs ?? probeTimeoutMs();
+  const timeout = opts.timeoutMs ?? gitProbeTimeoutMs();
   try {
     const stdout = execFileSync(opts.gitPath ?? "git", ["-C", path, "rev-parse", "--show-toplevel"], {
       encoding: "utf8",
@@ -372,6 +372,13 @@ export function probeCheckoutRoot(path: string, opts: BranchProbeOptions = {}): 
  */
 export function l1PreDispatchCheck(input: L1PreDispatchInput, opts: BranchProbeOptions = {}): GateResult {
   const violations: ValidationResult[] = [];
+  // Invocation-local identity memo: each checkout is probed once across all pairs.
+  const checkoutCache = new Map<string, CheckoutProbe>();
+  const checkout = (path: string): CheckoutProbe => {
+    const key = resolve(path);
+    if (!checkoutCache.has(key)) checkoutCache.set(key, probeCheckout(path, opts));
+    return checkoutCache.get(key)!;
+  };
   const {
     workflowType,
     integrationWorktreePath,
@@ -465,7 +472,7 @@ export function l1PreDispatchCheck(input: L1PreDispatchInput, opts: BranchProbeO
           "high",
           "worktree.l1.integration-missing",
           `integration worktree "${integrationWorktreePath}" does not exist for plan "${planId}" \u2014 the integration checkout must exist before dispatch`,
-          `create it before dispatch: git worktree add ${integrationWorktreePath} ${integrationBranch}`,
+          `create it before dispatch: git worktree add ${shellQuote(integrationWorktreePath)} ${shellQuote(integrationBranch)}`,
         ),
       );
     } else {
@@ -485,7 +492,7 @@ export function l1PreDispatchCheck(input: L1PreDispatchInput, opts: BranchProbeO
             "high",
             "worktree.branch-mismatch",
             `integration worktree "${integrationWorktreePath}" is on branch "${probe.branch}", expected branch.integration "${integrationBranch}" (plan "${planId}")`,
-            `checkout ${integrationBranch} in the integration worktree`,
+            `checkout ${shellQuote(integrationBranch)} in the integration worktree`,
           ),
         );
       }
@@ -514,8 +521,8 @@ export function l1PreDispatchCheck(input: L1PreDispatchInput, opts: BranchProbeO
       );
     }
     if (!existsSync(aPath) || !existsSync(bPath)) return null; // absence is reported by its own check
-    const a = probeCheckout(aPath, opts);
-    const b = probeCheckout(bPath, opts);
+    const a = checkout(aPath);
+    const b = checkout(bPath);
     if ("error" in a) {
       return violation(
         "high",
@@ -585,7 +592,7 @@ export function l1PreDispatchCheck(input: L1PreDispatchInput, opts: BranchProbeO
         "high",
         "worktree.l1.feature-missing",
         `feature worktree directory "${leaseWorktreePath}" does not exist for plan "${planId}"`,
-        `create it before dispatch: git worktree add ${leaseWorktreePath} <working-branch>`,
+        `create it before dispatch: git worktree add ${shellQuote(leaseWorktreePath)} <working-branch>`,
       ),
     );
   } else if (leaseWorktreePath.trim() !== "" && leaseWorkingBranch.trim() !== "") {
@@ -605,7 +612,7 @@ export function l1PreDispatchCheck(input: L1PreDispatchInput, opts: BranchProbeO
           "high",
           "worktree.l1.branch-mismatch",
           `feature worktree "${leaseWorktreePath}" is on branch "${probe.branch}", expected execution_lease.working_branch "${leaseWorkingBranch}" (plan "${planId}")`,
-          `checkout ${leaseWorkingBranch} in the feature worktree`,
+          `checkout ${shellQuote(leaseWorkingBranch)} in the feature worktree`,
         ),
       );
     }
@@ -857,4 +864,9 @@ export function singleReviewSnapshot(assignments: readonly QcSnapshotAssignment[
     );
   }
   return gate(violations);
+}
+
+/** Shell-safe display of snapshot-controlled command arguments. */
+function shellQuote(value: string): string {
+  return "'" + value.replaceAll("'", "'\"'\"'") + "'";
 }

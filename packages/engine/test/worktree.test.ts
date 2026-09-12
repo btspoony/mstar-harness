@@ -33,7 +33,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, readFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { GateResult } from "../src/core.js";
@@ -1334,4 +1334,23 @@ describe("git probe timeout — bounded probes fail closed ", () => {
       else process.env.MSTAR_GIT_PROBE_TIMEOUT_MS = previous;
     }
   });
+});
+
+
+test("L1 identity probes are once per checkout per invocation, never cached across checks", () => {
+  const root = tmpRoot("wt-probe-memo-");
+  try {
+    const wts = worktreeFixture(root, ["iteration/a", "feature/a"]);
+    const repo = join(root, "repo");
+    const main = mainInfo(repo);
+    const log = join(root, "calls");
+    const shim = join(root, "git-shim");
+    const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+    writeFileSync(shim, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${log}'\nexec '${realGit}' "$@"\n`, { mode: 0o755 });
+    const input = { workflowType: "iteration" as const, integrationWorktreePath: wts.get("iteration/a")!, integrationBranch: "iteration/a", mainWorktree: main, expectedMainBranch: main.branch, lifecycleBranches: ["iteration/a", "feature/a"], leaseWorktreePath: wts.get("feature/a")!, leaseWorkingBranch: "feature/a", planId: "plan-a" };
+    expect(l1PreDispatchCheck(input, { gitPath: shim }).ok).toBe(true);
+    expect(readFileSync(log, "utf8").split("\n").filter((line) => line.endsWith("rev-parse --git-dir"))).toHaveLength(3);
+    expect(l1PreDispatchCheck(input, { gitPath: shim }).ok).toBe(true);
+    expect(readFileSync(log, "utf8").split("\n").filter((line) => line.endsWith("rev-parse --git-dir"))).toHaveLength(6);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });

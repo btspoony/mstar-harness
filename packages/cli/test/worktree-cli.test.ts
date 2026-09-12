@@ -584,8 +584,8 @@ describe("mstar worktree check — lifecycle-owned branches from ALL active work
       );
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("worktree.l1.lifecycle-snapshot-unreadable");
-      // The refusal precedes the gate: no residency line, no checklist.
-      expect(result.stdout).not.toContain("main worktree:");
+      // The observed main line remains available before refusal.
+      expect(result.stdout).toContain("main worktree:");
       expect(result.stdout).not.toContain("worktree L1 check");
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -783,4 +783,31 @@ describe("mstar worktree check — L2 (parallel writable tracks)", () => {
     expect(result.exitCode).toBe(2);
     expect(result.stderr).toContain("every track needs string worktreePath + workingBranch");
   });
+});
+
+
+test("retained track ownership prevents main from carrying an active track", () => {
+  const root = tmpRoot("mstar-retained-track-");
+  try {
+    const linked = worktreeFixture(root);
+    const mainBranch = git(["branch", "--show-current"], root);
+    const row = { ...PLAN_A(linked), metadata: { track_branches: [mainBranch] } };
+    writeSnapshot(root, standaloneSnapshotDoc(mainBranch, [row]));
+    const result = runCli(["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root], root);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("owned by an active lifecycle");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("degraded Git refuses a linked checkout marker before local harness discovery", () => {
+  const root = tmpRoot("mstar-degraded-linked-");
+  try {
+    writeFileSync(join(root, ".git"), "gitdir: /unavailable/worktrees/linked\n");
+    mkdirSync(join(root, ".mstar"));
+    const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, "status", "validate"], {
+      cwd: root, env: { ...cliEnv(), PATH: root }, stdout: "pipe", stderr: "pipe",
+    });
+    expect(proc.exitCode).toBe(1);
+    expect(proc.stderr.toString()).toContain("cannot verify main worktree for linked checkout");
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
