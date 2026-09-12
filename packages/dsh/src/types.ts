@@ -192,21 +192,26 @@ export interface MstarHarnessProject {
 
 /**
  * The catalog's workflow selection result (compass v3.0.0 § Catalog
- * selection rule): the lifecycle the state section aggregates.
- * `active` = the root v2 `workflows[]` first entry (with a structured
- * warning when multiple active lifecycles — no silent pick); `terminal` =
- * the latest terminal snapshot by mtime (history view); `error` = a clear
- * selection failure (v1/unmigrated root, no snapshots) — never a root v1
- * read. Structured and panel-renderable (not only a log line).
+ * selection rule): the lifecycle the state section aggregates, resolved by
+ * the locked binding order — lease (an `execution_lease` holder match or a
+ * `worktree_path` containing the session cwd) → cwd (a
+ * `control_worktree_path` containing it) → the session's durable
+ * `selectedWorkflowId` → the only active entry. `terminal` = the latest
+ * terminal snapshot by mtime (history view; reachable only when the active
+ * registry is EMPTY); `error` = a clear selection failure (v1/unmigrated
+ * root, no snapshots, or N>1 active lifecycles with no binding — then
+ * `activeWorkflowIds` carries the picker rows) — never a root v1 read and
+ * never the registry's first entry. Structured and panel-renderable (not
+ * only a log line).
  */
 export type WorkflowSelectionView =
   | {
       readonly kind: 'active'
-      /** The selected active lifecycle id (root v2 `workflows[]` first entry). */
+      /** The selected active lifecycle id (a root v2 `workflows[]` entry). */
       readonly workflowId: string
       /** Harness-relative workflow dir (e.g. `workflows/<id>`). */
       readonly dir: string
-      /** Present when multiple active lifecycles — the first was picked (no silent pick). */
+      /** Structured warning attached by a resolver, when it has one. */
       readonly warning?: { readonly code: string; readonly message: string }
     }
   | {
@@ -218,6 +223,11 @@ export type WorkflowSelectionView =
       readonly kind: 'error'
       readonly code: string
       readonly message: string
+      /**
+       * Present on the multi-active-unbound error: the validated active ids,
+       * in registry order — the actionable rows of the operator's picker.
+       */
+      readonly activeWorkflowIds?: readonly string[]
     }
 
 /**

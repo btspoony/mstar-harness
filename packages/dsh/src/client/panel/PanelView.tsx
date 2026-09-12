@@ -127,7 +127,9 @@ export function PanelContent({ section, source, t }: PanelContentProps) {
 }
 
 export function PanelView({ t, useChat, useSessions, sessionId, engineStatus, useTabInfo, useStore, actions }: MstarPanelBodyProps) {
-  const view = useMstarEngineStatus({ useChat, useSessions, sessionId, engineStatus })
+  // The render state plus this session's picker seat (the seat is handed to the
+  // state digest, which owns the picker's placement).
+  const { view, selection, pick, select } = useMstarEngineStatus({ useChat, useSessions, sessionId, engineStatus })
   // Visibility gate (plan sidebar §L2.6) + section state (plan §L2.4). All
   // hooks run before every early return (hooks rule) — the empty branches
   // never render the tab nav, and the store read is keyed by the tab record
@@ -233,7 +235,7 @@ export function PanelView({ t, useChat, useSessions, sessionId, engineStatus, us
       <TabNav active={section} onChange={selectSection} t={t} />
       <div className={css.scroll} data-mstar-scroll data-mstar-graph>
         <PanelContent section={section} source={source} t={t} />
-        <Sidebar t={t} state={source.state} source={source} />
+        <Sidebar t={t} state={source.state} source={source} selection={selection} pick={pick} select={select} />
         {freshness}
       </div>
       <PanelMeta t={t} source={source} />

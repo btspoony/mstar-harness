@@ -33,9 +33,12 @@ import type {
   ValidationResult,
 } from '@mstar-harness/engine'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
-import type { HarnessResolver, Config } from './_shared.ts'
+import { sessionHintOf } from './_shared.ts'
+import type { HarnessResolver, Config, SessionHintRead } from './_shared.ts'
+import { readWorkflowSessionBinding } from '../engine-status-store.ts'
 import { harnessDocKindOfTarget, validateStatusDoc, validateStatusValue, type HarnessDocKind } from './status.ts'
 import { resolveActiveWorkflow } from './workflow-selection.ts'
+import type { SessionHint } from './workflow-selection.ts'
 import {
   dispatchGateCore,
   leaseGateViolations,
@@ -194,6 +197,54 @@ export class DshHostAdapter extends Service implements HostAdapter {
   }
 
   /**
+   * Derive the carrying session's workflow-selection hint for one event
+   * (D4): the structural identity read off the agent (`session.header.cwd` /
+   * `session.header.id` plus the agent's own opaque id as the lease holder)
+   * folded with this session's DURABLE binding preference from the
+   * engine-status store. Both gate reads and ledger writes route through
+   * this ONE derivation, so a session is attributed consistently within a
+   * single decision.
+   *
+   * The store is the plugin's only durable picker state, and it is read at
+   * THIS composition edge: `dispatch.ts` (and the writers in `agent-flow.ts`)
+   * receive plain hints and never touch the store — no circular
+   * `agent-flow → store → agent-flow` import.
+   *
+   * Degrades honestly, never with a fabricated hint:
+   * - no session at all (exec-less hook / agent stub) → `ok` without a hint,
+   *   so the automatic rungs miss and only a unique active lifecycle
+   *   resolves;
+   * - a session without both id AND cwd → `ok` with what IS known (the
+   *   lease/cwd rungs and the unique-active case still work — only the
+   *   durable pick needs the session key);
+   * - an unreadable/refused/cwd-mismatched binding record → `unavailable`
+   *   (reported once through the adapter's log), so the callers keep the
+   *   structural evidence for GATE validation but write no ledger row.
+   * @param agent - the event's agent (`exec.agent`), structural read.
+   */
+  sessionHintFor(agent: unknown): SessionHintRead {
+    const identity: SessionHint | undefined = sessionHintOf(agent)
+    if (identity === undefined) return { kind: 'ok' }
+    const { sessionId, cwd } = identity
+    if (sessionId === undefined || cwd === undefined) return { kind: 'ok', hint: identity }
+    const harnessDir = this.resolver.forAgent(agent)
+    if (harnessDir === null) return { kind: 'ok', hint: identity }
+    const read = readWorkflowSessionBinding(harnessDir, sessionId, cwd)
+    if (read.kind === 'unavailable') {
+      this.log(
+        'warn',
+        `session ${sessionId}: workflow selection binding ${read.reason} — attribution paused (no ledger write for this call)`,
+      )
+      return { kind: 'unavailable', reason: read.reason, hint: identity }
+    }
+    const selectedWorkflowId = read.binding?.selectedWorkflowId
+    return {
+      kind: 'ok',
+      hint: selectedWorkflowId === undefined ? identity : { ...identity, selectedWorkflowId },
+    }
+  }
+
+  /**
    * Shared dispatch-gate core (plugin-internal): the `tools/pre-execute`
    * listener and `beforeDispatch` route through this method — ONE
    * validation code path (field gate + anti-recursion + branch gate +
@@ -206,12 +257,17 @@ export class DshHostAdapter extends Service implements HostAdapter {
    * @param hard - the caller's ONE `resolveDispatchHard` resolution): passed in so the record block and
    * the caller's enforcement decision share a single compass resolution;
    * when omitted (external callers) the adapter resolves it itself.
+   * @param hintRead - the caller's already-derived hint read (the
+   * `tools/pre-execute` listener derives it once and shares it with the
+   * workflow branch); omitted → derived here from `exec.agent`.
    */
-  dispatchGate(prompt: string, exec?: ToolExecution, hard?: boolean): GateResult {
+  dispatchGate(prompt: string, exec?: ToolExecution, hard?: boolean, hintRead?: SessionHintRead): GateResult {
     const harnessDir = this.resolver.forAgent(exec?.agent)
-    const { violations, writable } = dispatchGateCore(this.config, harnessDir, prompt)
+    const session = hintRead ?? this.sessionHintFor(exec?.agent)
+    const hint = session.hint
+    const { violations, writable } = dispatchGateCore(this.config, harnessDir, prompt, hint)
     if (exec !== undefined) {
-      violations.push(...leaseGateViolations(harnessDir, exec, writable, prompt))
+      violations.push(...leaseGateViolations(harnessDir, exec, writable, prompt, hint))
     }
     // Agent-flow ledger — the ONE recording point for both dispatch paths
     // (spec §2.1.1: this shared core sits behind the `tools/pre-execute`
@@ -226,7 +282,12 @@ export class DshHostAdapter extends Service implements HostAdapter {
     // `callId → dispatchRef` inside `recordDispatch`, so the later
     // `tools/post-execute` for the same call can settle with the same
     // identity; the exec-less host-hook path has no callId → no pairing.
-    if (harnessDir !== null && isAssignmentShaped(assignmentHeaderRegion(prompt))) {
+    // The hint carries which lifecycle this session writes under; an
+    // UNREADABLE binding record skips the write entirely (the assignment
+    // still gates, but no row is attributed to a session whose record cannot
+    // be trusted — and no pairing is created, so no settle can be
+    // synthesized for a dispatch that was never admitted).
+    if (harnessDir !== null && session.kind === 'ok' && isAssignmentShaped(assignmentHeaderRegion(prompt))) {
       try {
         recordDispatch({
           harnessDir,
@@ -235,6 +296,7 @@ export class DshHostAdapter extends Service implements HostAdapter {
           violations,
           hard: hard ?? resolveDispatchHard(harnessDir, this.config, prompt),
           pairing: this.pairing,
+          ...(hint !== undefined ? { hint } : {}),
         })
       } catch (error) {
         this.ctx.logger(AGENT_FLOW_LOGGER).error(

@@ -1,0 +1,30 @@
+# Reversed-composition fixture (role-persona spec, case (v)): the SAME row set
+# the default inline boot composes, with ONE difference — the REAL
+# `dsh-llm-fallbacks` row mounts BEFORE the `@mstar-harness/dsh` row.
+#
+# Why: both layers intercept the SAME cordis service-read waterfall
+# (`internal/get`) and each merges its role persona into the SAME native
+# `SubagentStartRequest.persona` slot, filling it only when it is free — so
+# whichever wrapper runs FIRST wins the slot. The default dsh profile order
+# puts the mstar row first (probed on dsh 0.1.0-rc.6); a re-ordered profile /
+# a re-applied plugin row puts the fallbacks wrapper outermost instead. This
+# fixture pins the re-ordered composition so the operator's `rolePersonas`
+# override provably survives it.
+#
+# The remaining rows mirror `fixtures/cordis.yml` plus the seams the
+# persona-channel assertions need: the fake settings registry (the real
+# fallbacks plugin binds its role config through `ctx.inject(['settings'])`),
+# the fake agents registry (the REAL subagents runtime injects `agents`), and
+# the REAL `@deepseek-ai/dsh-subagent` runtime the starts are driven through.
+# The boot-time mstar config block (cwd, enforcement, rolePersonas) is
+# appended to the mstar row by `bootApp` exactly as for the inline list.
+
+- name: '@deepseek-ai/dsh-skill'
+- name: '@deepseek-ai/dsh-system-prompt'
+- name: '@deepseek-ai/dsh-tools'
+- name: '@deepseek-ai/dsh-commands'
+- name: '@deepseek-ai/dsh-settings-fake'
+- name: '@deepseek-ai/dsh-agent-fake'
+- name: '@deepseek-ai/dsh-subagent'
+- name: 'dsh-llm-fallbacks'
+- name: '@mstar-harness/dsh'

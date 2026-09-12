@@ -14,7 +14,7 @@ dsh 应用如何使用本插件——安装路径、配置、挂载时发生什�
 
 本包以 workspace 包形式发布（`workspaces: ["packages/*"]`），构建时把 engine 打进 `dist/`（`bun run build`；dist 已被 gitignore）。安装途径是 **profile bundle**，装进现成的 `web` profile（`dsh --profile web`——开箱即用的 web 应用 profile，即 `dsh web`），经 `dsh.bundle.patch` 清单——一个叠在 dsh-base 默认层之上的补丁层：
 
-**一条命令的 CLI 入口（推荐）**——`npx @mstar-harness/cli init --target dsh` 一次性装齐全量能力：它按序运行下面两条 `dsh plugin --profile web add` 安装（先 mstar bundle，再 `dsh-llm-fallbacks`），并可用 `npx @mstar-harness/cli doctor --target dsh` 逐行报告 `uninstalled` / `disabled` / `mounted`。它编排的仍是同一条双命令安装；`--no-fallbacks` 跳过第二行（连带跳过 seeded 角色——见下文「零配置获得什么」）。
+**一条命令的 CLI 入口（推荐）**——`npx @mstar-harness/cli init --target dsh` 一次性装齐全量能力：它按序运行下面两条 `dsh plugin --profile web add` 安装（先 mstar bundle，再 `dsh-llm-fallbacks`），并可用 `npx @mstar-harness/cli doctor --target dsh` 逐行报告 `uninstalled` / `disabled` / `mounted` / `drifted`（`drifted` = fallbacks 行的安装版本不等于 pin；`init --target dsh` 会按 pin 重新 add，在此之前 `doctor` 以非零退出）。它编排的仍是同一条双命令安装；`--no-fallbacks` 跳过第二行（连带跳过 seeded 角色——见下文「零配置获得什么」）。
 
 **（a）registry 安装（发布形态）**——npm 包自带构建好的 `dist/`（安装时无需构建）：
 
@@ -73,7 +73,9 @@ dsh plugin --profile headless add @mstar-harness/dsh
 | `bundledSkillDir` | `string` | 打包的 `harness-skills/` 镜像（包相对路径） | 向 dsh skill-filesystem 提供者注册的打包技能根（`bundledSkillDir` 语义——最后扫描、受信任）。默认取包内自带的 `harness-skills/` 镜像（`bundle-assets` 同步；gitignore）——包相对路径，**非** cwd 锚定。显式值优先。 |
 | `catalogTtlMs` | `number` | `60000` | pre-step catalog 缓存刷新间隔（毫秒）：按工作区缓存的统一 `mstar-engine` 行（水印 + 迭代闸门 + 工作区摘要）多久重读一次 `status.json` / compass / 知识索引。刷新间隔之间热路径只是时间戳比较 + Map 命中；会话中 plan/compass/residual 的变化会在一个间隔内落地。 |
 | `workflowGate` | `'off' \| 'warn' \| 'ask' \| 'hard'` | `'warn'` | workflow/ralph 闸门模式（见 Gates → Workflow / ralph gate）。`off` = 直通且不产生 verdict 行；`warn` = 仅咨询；`ask` = 首见名字走审批瀑布（P-c）；`hard` = 策略违规在任何子进程启动前否决。默认 `warn` 不改任何 hard 行为——除非部署显式选入 `ask`/`hard`，闸门仅咨询。 |
-| `workflowNames` | `string[]` | 未设置 | workflow 名字白名单（P-a）：被闸门视为 KNOWN 的 `meta.name` 值。为空或缺省 ⇒ **每个**名字都 unknown（有文档——闸门**绝不**因缺省而"全放行"）。ralph 调用不携带 `meta.name`——P-a 对其永不适用。 |
+| `workflowNames` | `string[]` | 未设置 | workflow 名字白名单（P-a）：被闸门视为 KNOWN 的 `meta.name` 值。为空或缺省 ⇒ **每个**名字都 unknown（有文档——闸门**绝不**因缺省而"全放行"）。ralph 调用不携带 `meta.name`——P-a 对其永不适用。mstar 只读扇出路径推荐值：`['mstar-qc-tri', 'mstar-audit-fanout', 'mstar-pr-seats']`。 |
+
+**推荐的 operator 覆盖层。** 上表三个推荐 `workflowNames` 覆盖 mstar 只读扇出路径（plan QC tri、大型仓库 `/codebase-audit`、`/amazing-pr-review deep`）；写入它们是 profile 层的操作者覆盖，绝非 mstar 默认。出厂空列表下每个名字都是 *unknown*，在默认 `workflowGate: 'warn'` 下这只是运行会存活的一条 `workflow.name.unknown` 咨询。生产部署若还要否决 unknown 名字，可设置 `workflowGate: 'hard'`；出厂默认仍为 `'warn'`。
 
 `bundledSkillDir` 默认取包内自带的 `harness-skills/` 镜像（见 Skills mount）——显式 Config 值仍然优先。相对覆盖仍是 **cwd 锚定**（skill-filesystem 以 `join()` 语义相对 dsh **进程 cwd** 解析），因此覆盖默认的部署应在 **profile 层传绝对路径**（见 `bundle/README.md`）。
 
@@ -172,7 +174,7 @@ persona 交付走 dsh 原生的 `SubagentStartRequest.persona` 槽（`@deepseek-
 
 ### 角色 seeds 与采纳建议（Adoption advisory）
 
-当可选的 `dsh-llm-fallbacks` 能力**已挂载**（第二条安装命令——见 Install paths）时，mstar 插件会向 fallbacks seed registry **零配置声明 13 个 `mode: subagent` mstar 角色 seed**：persona = `harness-agents/` 镜像 `description`（原样）+ 一行强制加载引导（`Load mstar-roles (references/<role-id>.md) first — identity comes before skills; load topic skills only when the Assignment activates them via its Skill presets field.`）；含 `{{...}}` 插值风险的 persona 跳过并告警，绝不声明。声明会**合并保留 readback 中当前已 seeded 的非 mstar id**——例如上游包在其自身 apply 时自声明的 7 个 omp 风格 preset 角色：上游 `declare` **全量替换** registry，若不保留，mstar-only 批会摘掉 preset id 的 seeded 注记（行仍在，仅失去 seeded）。声明在每次 fallbacks（重新）apply（HMR/纤程切换）时幂等重放——绝不用一次性 latch——因此两种 boot 顺序（presets 先或 mstar 先）都收敛到同一 20-id 全 seeded registry。boot 时收敛经 bounded retry（有界重试）：上游的 seed 写通道在其 apply 之后一个 macrotask 才绑定，因此 apply 窗口内首次尝试被 `seeds: settings service is unavailable` 拒绝时会重试（跨上游 apply 窗口的 3 次尝试），暂时性拒绝自行收敛；仅当所有尝试最终失败时，声明才记录恰好一条终态错误，同时 advisory 的决策点 re-declare 仍可用作 retry 路径。**无需手动编辑 `roles.list`。**
+当可选的 `dsh-llm-fallbacks` 能力**已挂载**（第二条安装命令——见 Install paths）时，mstar 插件会向 fallbacks seed registry **零配置声明 13 个 `mode: subagent` mstar 角色 seed**：persona = `harness-agents/` 镜像 `description`（原样）+ 一行强制加载引导（`Load mstar-roles (references/<role-id>.md) first — identity comes before skills; load topic skills only when the Assignment activates them via its Skill presets field.`）；含 `{{...}}` 插值风险的 persona 跳过并告警，绝不声明。声明会**合并保留 readback 中当前已 seeded 的非 mstar id**——例如上游包在其自身 apply 时自声明的 5 个上游 preset 角色：上游 `declare` **全量替换** registry，若不保留，mstar-only 批会摘掉 preset id 的 seeded 注记（行仍在，仅失去 seeded）。声明在每次 fallbacks（重新）apply（HMR/纤程切换）时幂等重放——绝不用一次性 latch——因此两种 boot 顺序（presets 先或 mstar 先）都收敛到同一 18-id 全 seeded registry。boot 时收敛经 bounded retry（有界重试）：上游的 seed 写通道在其 apply 之后一个 macrotask 才绑定，因此 apply 窗口内首次尝试被 `seeds: settings service is unavailable` 拒绝时会重试（跨上游 apply 窗口的 3 次尝试），暂时性拒绝自行收敛；仅当所有尝试最终失败时，声明才记录恰好一条终态错误，同时 advisory 的决策点 re-declare 仍可用作 retry 路径。**无需手动编辑 `roles.list`。**
 
 一条只告警的采纳建议通道（日志器 `mstar/fallbacks-advisory`）**每次 apply 只跑一遍**——apply 时先尝试一次；当 fallbacks 行在 `dsh` 之后挂载（loader 并发挂载条目）时，改在首个 `subagent/start` 决策点只跑一遍。服务存在时，通道**先 await 幂等 re-declare**（闭合 boot 竞争窗口）再读取**有效状态**（`getEffectiveRoles`），并按**每类至多一条告警**有界报告：
 
@@ -266,7 +268,7 @@ agent-flow 账本位于**当前活动 workflow 目录**——`{HARNESS_DIR}/work
 
 **第四种类型 `workflow-verdict`** 由 workflow/ralph 闸门（而非本消费者）写入——每个被把关的调用一行（`tool`、`workflow`/`objective`、`mode`、判定 `ok`/`advisory`/`denied`/`ask`、违规 `code`）——见 Gates → Workflow / ralph gate。展示身份字段（`workflow` / `objective`）同样带 1024 字符上限；判定的违规码绝不猜测（P-a `workflow.name.unknown` vs P-b `workflow.lease.uncovered`）。
 
-**去重与回放范围。** 持久化水位线即去重机制：**冷热重叠**以及**插件重应用/重启**（重注册读取持久化水位线而非从空游标开始）下每个 `(runId, kind, seq)` 只产一行。**apply 之后创建**、带构造期种子日志（恢复/分叉会话——其种子从不进 firehose）的会话会在上游 `session/created` 事件上**冷扫描一次**，水位线同样保证该回填幂等。水位线 sidecar 有界（每 harness 会话数上限，驱逐优先已不在线的会话）且完全受控：水位线不可读/不可写时降级为仅内存并告警一次——重启后会重录（诚实的去重欠录，绝不丢数据、绝不阻塞）。
+**去重与回放范围。** 持久化水位线即去重机制：**冷热重叠**以及**插件重应用/重启**（重注册读取持久化水位线而非从空游标开始）下每个 `(runId, kind, seq)` 只产一行。**apply 之后创建**、带构造期种子日志（恢复/分叉会话——其种子从不进 firehose）的会话会在上游 `session/created` 事件上**冷扫描一次**，水位线同样保证该回填幂等。**分叉**会话的扫描从其 `inheritedEventCount` 开始：继承来的前缀属于父会话的历史，因此子会话只记录**自己**的事件——绝不会把父会话的行以子会话身份再记一份。水位线 sidecar 有界（每 harness 会话数上限，驱逐优先已不在线的会话）且完全受控：水位线不可读/不可写时降级为仅内存并告警一次——重启后会重录（诚实的去重欠录，绝不丢数据、绝不阻塞）。
 
 **childId 关联 + 成员计数。** `workflow-agent` 行保留已发布成员的 `childId`（子会话 id）；运行的展示 `name` 只存在于 `workflow-run` 行，面板为 agent/end 行经窗口查找解析（同一 `runId`——成员行本身不带名称）。面板把成员 COUNT 挂到 `workflow-run` 行（窗口内该 `runId` 的 `workflow-agent` 行数；窗口有界——被 ≤50 事件窗口截掉的成员如实缺席，绝不猜 0）。
 

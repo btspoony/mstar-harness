@@ -11,21 +11,32 @@
  * v3 per-lifecycle aggregation :
  * the state + iteration sections aggregate the SELECTED workflow lifecycle
  * (compass v3.0.0 § Catalog selection rule — `resolveReadWorkflow` in
- * `workflow-selection.ts`): active `workflows[]` first (multi-active →
- * first + a structured warning), else the latest terminal snapshot by
- * mtime, else a clear error. `state.plans[]` / leases come from the
- * selected snapshot's `plans[]` rows verbatim, `agentFlow` from the
- * workflow dir's `agent-flow.jsonl`, residuals from the project registers
- * — never a root v1 `plans[]` / root `agent-flow.jsonl` read.
+ * `workflow-selection.ts`): the session's lease/cwd/durable pick, else the
+ * only active entry, else the latest terminal snapshot by mtime for an EMPTY
+ * active registry; N>1 with no binding is the picker error, never first entry.
+ * `state.plans[]` / leases come from the selected snapshot's `plans[]` rows
+ * verbatim, `agentFlow` from the workflow dir's `agent-flow.jsonl`, residuals
+ * from the project registers — never a root v1 `plans[]` / root
+ * `agent-flow.jsonl` read. The direction one-liner and the iteration gate come
+ * from the SELECTED snapshot's own `compass_ref` (harness-relative, its
+ * frontmatter `iteration_id` matching the snapshot id, `status` active|locked)
+ * — never a directory-wide first-active compass scan.
+ *
+ * Session-scoped catalog identity (D4): the cache key is
+ * `harnessDir + session.header.id + cwd + effective hint`, so two sessions in
+ * one workspace (even the same cwd) can never share a payload; a session with
+ * no stable id is built UNCACHED rather than served another session's
+ * selection. The apply-scoped invalidation keeps every current session key per
+ * harness dir and evicts them all on a ledger change; a picker commit
+ * additionally drops that session's key (and its re-emission digest).
  *
  * Module boundary: no barrel — the entry imports by explicit relative path;
  * the wiring exports (`preStepCatalogListener`, `buildCatalogPayload`,
- * `DEFAULT_CATALOG_TTL_MS`, `EXPLICIT_CACHE_KEY`, `CatalogCacheEntry` /
- * `TurnDigest`, `createCatalogInvalidation` / `CatalogInvalidation`) are
- * entry-internal.
+ * `DEFAULT_CATALOG_TTL_MS`, `CatalogCacheEntry` / `TurnDigest`,
+ * `createCatalogInvalidation` / `CatalogInvalidation`) are entry-internal.
  */
-import { existsSync, readFileSync, readdirSync, type Dirent } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, readFileSync, readdirSync, realpathSync, type Dirent } from 'node:fs'
+import { basename, isAbsolute, join, relative, sep } from 'node:path'
 import { type Context } from '@deepseek-ai/cordis'
 import {
   evaluatePhaseGate,
@@ -34,7 +45,6 @@ import {
   readJson,
   resolveProjectDir,
   resolveRepoEnforcement,
-  resolveIterationDir,
   PROJECT_REGISTER_FILE,
   PROJECT_ROADMAP_FILE,
   WORKFLOW_SNAPSHOT_FILE,
@@ -55,18 +65,15 @@ import type {
   ResidualFindingView,
   WorkflowSelectionView,
 } from '../types.ts'
-import { STATUS_FILE, CATALOG_STATE_JOIN_LIMIT, asRecord, joinCapped, sessionCwdOf, sessionHeaderIdOf, HarnessResolver, iterationViolationView, iterationGateView } from './_shared.ts'
+import { STATUS_FILE, CATALOG_STATE_JOIN_LIMIT, asRecord, joinCapped, agentIdOf, sessionCwdOf, sessionHeaderIdOf, sessionHintOf, HarnessResolver, iterationViolationView, iterationGateView } from './_shared.ts'
 import { readAgentFlow, AGENT_FLOW_DEFAULT_LIMIT } from './agent-flow.ts'
-import { resolveReadWorkflow } from './workflow-selection.ts'
-import { writeEngineStatusSnapshot } from '../engine-status-store.ts'
+import { resolveReadWorkflow, type SessionHint } from './workflow-selection.ts'
+import { readWorkflowSessionBinding, writeEngineStatusSnapshot } from '../engine-status-store.ts'
 /** Logger label for the engine-status catalog (dsh logger naming: `<scope>/<subject>`). */
 const CATALOG_LOGGER = 'mstar/engine-status-catalog'
 
 /** Default catalog cache refresh interval (ms) — see Config `catalogTtlMs`. */
 export const DEFAULT_CATALOG_TTL_MS = 60_000
-
-/** Catalog cache key for the explicit-`harnessDir` app-wide entry (one entry for every session). */
-export const EXPLICIT_CACHE_KEY = '\u0000explicit'
 
 /** Residual severity vocabulary (mstar-artifacts severity SSOT order). */
 const RESIDUAL_SEVERITIES = ['critical', 'high', 'medium', 'low', 'nit'] as const
@@ -135,21 +142,28 @@ function engineStatusSource(): MstarEngineStatusSource {
  * agent-loop hot path: a timestamp compare + Map lookup per step between
  * refreshes.
  * @param harnessDir - the resolved `{HARNESS_DIR}` (null when none found).
+ * @param hint - the carrying session's structural identity + durable pick
+ *   (D4): the ONE selection resolves the state and iteration sections
+ *   together, so the read path can never aggregate two different lifecycles.
  */
-function engineStatusPayload(harnessDir: string | null): MstarEngineStatusPayload {
-  const iteration = harnessDir !== null ? iterationGateSource(harnessDir) : undefined
+function engineStatusPayload(harnessDir: string | null, hint?: SessionHint): MstarEngineStatusPayload {
+  // ONE read-path resolution per build (D4): the state section AND the
+  // iteration gate consume the SAME selection — never two independent
+  // `resolveReadWorkflow` calls that could disagree.
+  const selection = harnessDir !== null ? resolveReadWorkflow(harnessDir, hint) : undefined
+  const iteration = harnessDir !== null ? iterationGateSource(harnessDir, selection) : undefined
   return {
     version: pluginVersion(),
     harnessDir,
     enforcement: harnessDir !== null ? resolveRepoEnforcement(harnessDir) : { hard: false, source: 'none' },
     // The iteration section is OPTIONAL: when the row cannot be built (no
-    // status.json / no steering compass / unreadable docs) the key must be
+    // status.json / no linked compass / unreadable docs) the key must be
     // ABSENT, never `iteration: undefined` — the agent loop appends the
     // composed message to the real session, whose `Session.append` rejects
     // event data that is not losslessly JSON-serializable (undefined-valued
     // object properties included) with a hard round failure.
     ...(iteration !== undefined ? { iteration } : {}),
-    state: harnessDir !== null ? harnessStateSource(harnessDir) : null,
+    state: harnessDir !== null && selection !== undefined ? harnessStateSource(harnessDir, selection) : null,
   }
 }
 
@@ -160,52 +174,115 @@ export interface CatalogCacheEntry {
 }
 
 /**
- * The apply-scoped `harnessDir → cache key` reverse map + invalidation
- * closure : the
- * catalog cache is keyed by {@link EXPLICIT_CACHE_KEY} or the session cwd,
- * while ledger records (dispatch/settle) identify the affected workspace by
- * `{HARNESS_DIR}` — the reverse map bridges the two so a ledger change
- * deletes EXACTLY the affected workspace's entry (no global clear; a
- * multi-workspace deployment does not rebuild every workspace). BOTH the map
- * and the closure are created per-apply by the entry (same lifetime as the
- * cache): module-level state would survive an HMR fiber restart and point at
- * a destroyed cache.
+ * The apply-scoped catalog invalidation (D4): the `harnessDir → { session →
+ * cache key }` reverse map + the digest set, created per-apply by the entry
+ * (same lifetime as the cache — module-level state would survive an HMR fiber
+ * restart and point at a destroyed cache).
+ *
+ * WHY a set per harness: two sessions in one workspace key their OWN catalog
+ * payloads, so a ledger record for that harness must drop EVERY current
+ * session key (never a single shared one) — and a picker commit must drop
+ * exactly ONE session's key without touching its neighbours.
  */
 export interface CatalogInvalidation {
   /**
-   * Register `key` as the cache key of `harnessDir` — called by
-   * `catalogPayloadFor` on cache hit AND build, and pre-registered by the
-   * entry at apply for the explicit-config boot entry (a ledger record
-   * between apply and the first pre-step must still invalidate the
-   * pre-seeded entry). A null harness dir (no `{HARNESS_DIR}` resolved) has
-   * no cache entry to invalidate → no-op.
+   * Register `key` as one session's cache key for `harnessDir` — called by
+   * `catalogPayloadFor` on hit AND build. A session whose hint changed
+   * (a picker commit) has its OLD key dropped here, so the reverse map never
+   * grows a key history. A null harness dir or a session with no stable id
+   * has no cached entry to invalidate → no-op.
    */
-  register(harnessDir: string | null, key: string): void
+  register(harnessDir: string | null, sessionId: string | undefined, key: string): void
   /**
-   * Delete the cache entry of `harnessDir` (D3 — the ledger record path
-   * invokes this through the apply-bound hook). A missing mapping is a safe
-   * no-op, and a missing entry after a previous invalidation is a no-op too
-   * (the next pre-step rebuilds regardless). A throwing invalidation is
-   * contained by the record path (log-only — it never blocks the ledger
-   * record).
+   * Delete every current session's cache entry for `harnessDir` (the ledger
+   * record path invokes this through the apply-bound hook). A missing mapping
+   * is a safe no-op, and a missing entry after a previous invalidation is a
+   * no-op too (the next pre-step rebuilds regardless). A throwing
+   * invalidation is contained by the record path (log-only — it never blocks
+   * the ledger record).
    */
   invalidate(harnessDir: string): void
+  /**
+   * Delete ONE session's cache entry (and its re-emission digest) — the
+   * picker commit path: the session's durable hint changed, so the next
+   * pre-step rebuilds from the acknowledged binding and re-emits the row
+   * within the same turn instead of serving the pre-pick payload until the
+   * TTL expires.
+   */
+  invalidateSession(harnessDir: string | null, sessionId: string | undefined): void
 }
 
-/** Create the apply-scoped invalidation bound to ONE catalog cache (entry-internal wiring — see {@link CatalogInvalidation}). */
-export function createCatalogInvalidation(cache: Map<string, CatalogCacheEntry>): CatalogInvalidation {
-  const keyByHarnessDir = new Map<string, string>()
+/** Create the apply-scoped invalidation bound to ONE catalog cache + its digests. */
+export function createCatalogInvalidation(
+  cache: Map<string, CatalogCacheEntry>,
+  digests: Map<string, TurnDigest>,
+): CatalogInvalidation {
+  /** harnessDir → (session id → cache key). */
+  const keysByHarnessDir = new Map<string, Map<string, string>>()
+  const sessionsOf = (harnessDir: string): Map<string, string> => {
+    let sessions = keysByHarnessDir.get(harnessDir)
+    if (sessions === undefined) {
+      sessions = new Map()
+      keysByHarnessDir.set(harnessDir, sessions)
+    }
+    return sessions
+  }
   return {
-    register(harnessDir, key) {
-      if (harnessDir === null) return
-      keyByHarnessDir.set(harnessDir, key)
+    register(harnessDir, sessionId, key) {
+      if (harnessDir === null || sessionId === undefined) return
+      const sessions = sessionsOf(harnessDir)
+      const previous = sessions.get(sessionId)
+      // Replace the session's previous key (no unbounded key history): the
+      // old payload belongs to a hint this session no longer carries.
+      if (previous !== undefined && previous !== key) cache.delete(previous)
+      sessions.set(sessionId, key)
     },
     invalidate(harnessDir) {
-      const key = keyByHarnessDir.get(harnessDir)
-      if (key === undefined) return
-      cache.delete(key)
+      const sessions = keysByHarnessDir.get(harnessDir)
+      if (sessions === undefined) return
+      for (const key of sessions.values()) cache.delete(key)
+    },
+    invalidateSession(harnessDir, sessionId) {
+      if (harnessDir === null || sessionId === undefined) return
+      const key = keysByHarnessDir.get(harnessDir)?.get(sessionId)
+      if (key !== undefined) cache.delete(key)
+      // The digest is identity-keyed (JSON tuple of session id + cwd): drop
+      // every entry of this session so the next pre-step re-emits the rebuilt
+      // row. The prefix is the injective first-field encoding, not a raw
+      // delimiter, so a session id that is a prefix of another cannot steal it.
+      const prefix = `[${JSON.stringify(sessionId)},`
+      for (const digestKey of [...digests.keys()]) {
+        if (digestKey.startsWith(prefix)) digests.delete(digestKey)
+      }
     },
   }
+}
+
+/**
+ * The cache key of ONE session's catalog payload (D4): the resolved harness
+ * dir + the durable `session.header.id` + the session cwd + the EFFECTIVE
+ * hint fields that can change the selection (the opaque lease holder and the
+ * durable pick — cwd and session id are already in the tuple). Two sessions in
+ * the same cwd therefore never share a payload, and a picker commit is a
+ * different key rather than a mutated entry.
+ *
+ * Encoded as a JSON string array so a delimiter (NUL / quote / comma) inside
+ * an opaque field cannot fuse two distinct tuples — `\u0000`-join was not
+ * collision-free for those values.
+ */
+export function catalogCacheKey(
+  harnessDir: string | null,
+  sessionId: string,
+  cwd: string,
+  hint: SessionHint | undefined,
+): string {
+  return JSON.stringify([
+    harnessDir ?? '',
+    sessionId,
+    cwd,
+    hint?.leaseHolder ?? '',
+    hint?.selectedWorkflowId ?? '',
+  ])
 }
 
 /**
@@ -216,9 +293,16 @@ export function createCatalogInvalidation(cache: Map<string, CatalogCacheEntry>)
  * fallback is never silent.
  * @param ctx - registrant context (logger for the manifest fallback).
  * @param harnessDir - the resolved `{HARNESS_DIR}` (null when none found).
+ * @param hint - the carrying session's structural identity + durable pick
+ *   (omitted ⇒ the automatic rungs miss and only a unique active lifecycle —
+ *   or the picker error — resolves).
  */
-export function buildCatalogPayload(ctx: Context, harnessDir: string | null): MstarEngineStatusPayload {
-  const payload = engineStatusPayload(harnessDir)
+export function buildCatalogPayload(
+  ctx: Context,
+  harnessDir: string | null,
+  hint?: SessionHint,
+): MstarEngineStatusPayload {
+  const payload = engineStatusPayload(harnessDir, hint)
   if (payload.version === '0.0.0') {
     ctx.logger(CATALOG_LOGGER).warn('plugin manifest version unavailable — falling back to 0.0.0 for the engine-status catalog watermark')
   }
@@ -226,41 +310,49 @@ export function buildCatalogPayload(ctx: Context, harnessDir: string | null): Ms
 }
 
 /**
- * Look up the catalog payload for one cache key with a TTL: within the
- * interval the cached build is reused (the agent-loop hot path is a
- * timestamp compare + Map lookup); after it the payload is rebuilt from
- * disk (one bounded sync re-read per workspace per interval — the
- * mid-session plan/compass/residual staleness window the user opted into;
- * Config `catalogTtlMs`).
+ * Look up the catalog payload for one SESSION with a TTL: within the interval
+ * the cached build is reused (the agent-loop hot path is a timestamp compare +
+ * Map lookup); after it the payload is rebuilt from disk (one bounded sync
+ * re-read per session per interval — the mid-session plan/compass/residual
+ * staleness window the user opted into; Config `catalogTtlMs`).
  *
- * The `harnessDir → key` reverse map  is registered on BOTH hit and build: a later ledger
- * record (dispatch/settle) for this harness dir can then invalidate exactly
- * this cache entry through the apply-bound closure (see
- * `createCatalogInvalidation`) — the 60s TTL no longer bounds ledger-change
- * latency (AC-2).
+ * A session with no stable id is built UNCACHED (its payload is still
+ * rendered for its own step, but nothing is stored under a shared
+ * unknown-session key that another session could read).
+ *
+ * The `harnessDir → session → key` reverse map is registered on BOTH hit and
+ * build, so a later ledger record (dispatch/settle) can invalidate exactly the
+ * affected harness's current sessions, and a picker commit can invalidate
+ * exactly one session (see `createCatalogInvalidation`).
  * @param ctx - registrant context (logger for the manifest fallback).
- * @param cache - the per-workspace TTL cache.
- * @param register - the apply-scoped reverse-map registration (harnessDir → key).
- * @param key - cache key (the explicit-config key, else the session cwd).
- * @param harnessDir - the resolved `{HARNESS_DIR}` for this key.
+ * @param cache - the per-session TTL cache.
+ * @param invalidation - the apply-scoped reverse-map registration.
+ * @param harnessDir - the resolved `{HARNESS_DIR}` for this session.
+ * @param sessionId - the durable `session.header.id` (undefined ⇒ uncached build).
+ * @param cwd - the session workspace the payload is resolved for.
+ * @param hint - the carrying session's effective selection hint.
  * @param ttlMs - refresh interval in milliseconds.
  */
 function catalogPayloadFor(
   ctx: Context,
   cache: Map<string, CatalogCacheEntry>,
-  register: (harnessDir: string | null, key: string) => void,
-  key: string,
+  invalidation: CatalogInvalidation,
   harnessDir: string | null,
+  sessionId: string | undefined,
+  cwd: string,
+  hint: SessionHint | undefined,
   ttlMs: number,
 ): MstarEngineStatusPayload {
+  if (sessionId === undefined) return buildCatalogPayload(ctx, harnessDir, hint)
+  const key = catalogCacheKey(harnessDir, sessionId, cwd, hint)
   const entry = cache.get(key)
   if (entry !== undefined && Date.now() - entry.builtAt < ttlMs) {
-    register(harnessDir, key)
+    invalidation.register(harnessDir, sessionId, key)
     return entry.payload
   }
-  const payload = buildCatalogPayload(ctx, harnessDir)
+  const payload = buildCatalogPayload(ctx, harnessDir, hint)
   cache.set(key, { payload, builtAt: Date.now() })
-  register(harnessDir, key)
+  invalidation.register(harnessDir, sessionId, key)
   return payload
 }
 
@@ -373,22 +465,22 @@ function hhmm(ts: number): string {
  * iteration-gate row).
  *
  * v3 per-lifecycle aggregation (compass v3.0.0 § Catalog selection rule):
- * the state section aggregates the SELECTED workflow lifecycle — active
- * `workflows[]` first (multi-active → first + a structured warning), else
- * the latest terminal snapshot by mtime (history view), else a clear
- * selection error. `state.plans[]` / `leases` come from the selected
- * snapshot's `plans[]` rows verbatim, `agentFlow` from the workflow dir's
- * `agent-flow.jsonl`, residuals from the project registers
- * (`projects/<id>/residuals.json` — the v1 `residual_findings` home after
- * migrate). Never a root v1 `plans[]` / root `agent-flow.jsonl` read.
+ * the state section aggregates the SELECTED workflow lifecycle — resolved
+ * ONCE by the caller (D4: the same selection the iteration gate consumes).
+ * `state.plans[]` / `leases` come from the selected snapshot's `plans[]` rows
+ * verbatim, `agentFlow` from the workflow dir's `agent-flow.jsonl`, residuals
+ * from the project registers (`projects/<id>/residuals.json` — the v1
+ * `residual_findings` home after migrate). Never a root v1 `plans[]` / root
+ * `agent-flow.jsonl` read. The direction one-liner and the branch fallbacks
+ * come from the SELECTED snapshot's own `compass_ref` — never a directory-wide
+ * first-active compass scan.
  * @param harnessDir - the resolved `{HARNESS_DIR}` (null when none found).
+ * @param selection - the ONE read-path selection for this build.
  */
-function harnessStateSource(harnessDir: string | null): MstarHarnessState | null {
-  if (harnessDir === null) return null
+function harnessStateSource(harnessDir: string, selection: WorkflowSelectionView): MstarHarnessState | null {
   const statusPath = join(harnessDir, STATUS_FILE)
   if (!existsSync(statusPath)) return null
   try {
-    const selection = resolveReadWorkflow(harnessDir)
     // ONE residual rollup per catalog build : the state
     // section AND the project rollup zone consume the same register parse —
     // never two independent `residualRollup` walks per refresh.
@@ -398,20 +490,12 @@ function harnessStateSource(harnessDir: string | null): MstarHarnessState | null
     /** `plans[].metadata.iteration_refs` → non-empty string[]; missing/non-array → [] (lossless). */
     const iterationRefsOf = (value: unknown): string[] =>
       Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string' && v.trim() !== '') : []
-    const compass = steeringCompassPath(harnessDir)
-    let compassFields: Record<string, unknown> | undefined
-    if (compass !== undefined) {
-      try {
-        compassFields = parseCompassFrontmatter(compass.compassPath)
-      } catch {
-        compassFields = undefined
-      }
-    }
     if (selection.kind === 'error') {
-      // Clear selection error (v1/unmigrated root, no snapshots): the state
-      // section stays PRESENT with the operator-visible reason and empty
-      // aggregates — never a root v1 read, never a silent empty row.
-      return selectionErrorState(selection, rollup, harnessDir, compass)
+      // Clear selection error (v1/unmigrated root, no snapshots, unbound
+      // multi-active): the state section stays PRESENT with the
+      // operator-visible reason (and, for the picker, the active ids) and
+      // empty aggregates — never a root v1 read, never a silent empty row.
+      return selectionErrorState(selection, rollup, harnessDir)
     }
     const snapshotPath = join(harnessDir, selection.dir, WORKFLOW_SNAPSHOT_FILE)
     let snapshot: Record<string, unknown>
@@ -430,7 +514,6 @@ function harnessStateSource(harnessDir: string | null): MstarHarnessState | null
         },
         rollup,
         harnessDir,
-        compass,
       )
     }
     try {
@@ -445,9 +528,13 @@ function harnessStateSource(harnessDir: string | null): MstarHarnessState | null
         },
         rollup,
         harnessDir,
-        compass,
       )
     }
+    // The SELECTED snapshot's OWN compass (D4): direction and the branch
+    // fallbacks read this lifecycle's `compass_ref` only — a session never
+    // borrows another iteration's direction.
+    const compass = selectedCompass(harnessDir, selection.workflowId, snapshot)
+    const compassFields = compass?.doc
     const plans: HarnessPlanView[] = []
     const leases: HarnessLeaseView[] = []
     if (Array.isArray(snapshot.plans)) {
@@ -482,8 +569,8 @@ function harnessStateSource(harnessDir: string | null): MstarHarnessState | null
     const { residuals, residualFindings } = rollup
     // v3 branch/policy anchors: the snapshot's first-class fields (migrate
     // lifts the v1 root metadata into `branch` / `execution_policy` /
-    // `control_worktree_path`); the compass frontmatter stays the fallback
-    // for base/target.
+    // `control_worktree_path`); the SELECTED lifecycle's compass frontmatter
+    // stays the fallback for base/target.
     const branch = asRecord(snapshot.branch)
     const executionPolicy = asRecord(snapshot.execution_policy)
     return {
@@ -526,12 +613,14 @@ function harnessStateSource(harnessDir: string | null): MstarHarnessState | null
  * empty aggregates — never a root v1 read, never a silent null state. The
  * project rollup zone still shows the workspace-level residual counts (the
  * rollup is computed once per build — — and passed in).
+ *
+ * No selected lifecycle ⇒ no compass: direction is null rather than borrowed
+ * from whichever iteration happens to be steering.
  */
 function selectionErrorState(
   selection: WorkflowSelectionView,
   rollup: { residuals: HarnessResidualView[]; residualFindings: ResidualFindingView[] | null },
   harnessDir: string,
-  compass: { iterationId: string; compassPath: string } | undefined,
 ): MstarHarnessState {
   return {
     selection,
@@ -549,7 +638,7 @@ function selectionErrorState(
     controlWorktreePath: null,
     leases: [],
     knowledge: knowledgeDigest(harnessDir),
-    direction: compass !== undefined ? compassDirection(compass.compassPath) : null,
+    direction: null,
     agentFlow: null,
   }
 }
@@ -749,79 +838,95 @@ function compassDirection(compassPath: string): string | null {
 }
 
 /**
- * Locate the steering iteration compass (mirror of the engine's
- * `resolveCompassEnforcement` scan): the FIRST `{ITERATION_DIR}/<id>/
- * delivery-compass.md` whose frontmatter `status` is `active` or `locked`.
- * Completed/status-less/archived compasses do not steer the repo — the
- * pre-step gate section reports the iteration that is still in flight.
- * Silent on any read failure (the catalog row is advisory).
+ * The SELECTED lifecycle's own iteration compass (D4): its snapshot
+ * `compass_ref` must be a harness-relative path inside the harness, basename
+ * `delivery-compass.md`, whose realpath stays inside `{HARNESS_DIR}` (a
+ * symlink whose target escapes is rejected), whose frontmatter `iteration_id`
+ * equals the selected snapshot id, and whose `status` is `active` | `locked`.
+ * No directory enumeration: a session never borrows another iteration's
+ * direction or phase gate, and a lifecycle whose compass has completed stops
+ * steering.
  * @param harnessDir - the resolved `{HARNESS_DIR}`.
+ * @param workflowId - the selected snapshot's id (the compass attribution key).
+ * @param snapshot - the parsed selected snapshot document.
+ * @returns the compass path + parsed frontmatter, or undefined when this
+ *   lifecycle carries no steering compass of its own.
  */
-function steeringCompassPath(harnessDir: string): { iterationId: string; compassPath: string } | undefined {
-  const iterationsDir = resolveIterationDir(harnessDir)
-  if (!existsSync(iterationsDir)) return undefined
-  let entries
+function selectedCompass(
+  harnessDir: string,
+  workflowId: string,
+  snapshot: Record<string, unknown>,
+): { iterationId: string; compassPath: string; doc: Record<string, unknown> } | undefined {
+  const ref = snapshot.compass_ref
+  if (typeof ref !== 'string' || ref.trim() === '' || isAbsolute(ref)) return undefined
+  const compassPath = join(harnessDir, ref)
+  if (!pathInside(harnessDir, compassPath)) return undefined
+  if (basename(compassPath) !== 'delivery-compass.md') return undefined
+  if (!existsSync(compassPath)) return undefined
+  let resolvedHarness: string
+  let resolvedCompass: string
   try {
-    entries = readdirSync(iterationsDir, { withFileTypes: true })
+    resolvedHarness = realpathSync(harnessDir)
+    resolvedCompass = realpathSync(compassPath)
   } catch {
     return undefined
   }
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue
-    const compassPath = join(iterationsDir, entry.name, 'delivery-compass.md')
-    if (!existsSync(compassPath)) continue
-    let content: string
-    try {
-      content = readFileSync(compassPath, 'utf8')
-    } catch {
-      continue
-    }
-    // Frontmatter only: leading `---` fence through the closing fence; only
-    // steering compasses count (resolveCompassEnforcement parity).
-    const frontmatter = content.match(/^---\r?\n([\s\S]*?)\r?\n---/)
-    if (frontmatter === null || !/^status[ \t]*:[ \t]*(?:active|locked)[ \t]*$/m.test(frontmatter[1]!)) continue
-    return { iterationId: entry.name, compassPath }
+  if (!pathInside(resolvedHarness, resolvedCompass)) return undefined
+  let doc: Record<string, unknown>
+  try {
+    doc = parseCompassFrontmatter(compassPath)
+  } catch {
+    return undefined
   }
-  return undefined
+  if (doc.status !== 'active' && doc.status !== 'locked') return undefined
+  if (doc.iteration_id !== workflowId) return undefined
+  return { iterationId: workflowId, compassPath, doc }
+}
+
+/**
+ * Lexical or canonical containment: `candidate` is a path strictly inside
+ * `root` (not `root` itself, not a `..` escape, not an absolute relative).
+ */
+function pathInside(root: string, candidate: string): boolean {
+  const rel = relative(root, candidate)
+  return rel !== '' && rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel)
 }
 
 /**
  * The cached iteration-gate catalog row: `evaluatePhaseGate`
  * over the SELECTED workflow snapshot (compass v3.0.0 § Catalog selection
- * rule — the same selection the state section aggregates) + the steering
- * delivery-compass.md, projected to the tool result shape
- * (`IterationGateView`). Computed ONCE per harness dir — at `apply()` when
- * the explicit `harnessDir` config is set, else on the first pre-step of
- * each workspace root — and reused per pre-step (no disk I/O on the
- * agent-loop hot path). A mid-session status/compass change does NOT
- * re-evaluate until a config reload re-runs `apply` (HMR fiber restart) —
- * the documented staleness tradeoff that keeps the hot path
- * synchronous-I/O-free.
+ * rule — the same selection the state section aggregates) + that snapshot's
+ * OWN linked delivery compass, projected to the tool result shape
+ * (`IterationGateView`). Computed per catalog build and reused within the
+ * cache TTL (no disk I/O on the agent-loop hot path between refreshes).
  *
  * Returns undefined when the row cannot be built: no harness dir,
- * missing status.json, no steering compass, a selection error (v1 root /
- * no snapshots), or an unreadable/unparseable document (advisory degrade —
- * the engine-status catalog still appends; a later tool call can
- * re-evaluate on demand with explicit probes).
+ * missing status.json, a selection error (v1 root / no snapshots / unbound
+ * multi-active), no linked steering compass (`compass_ref` missing, outside
+ * the harness, non-steering, or not this lifecycle's own), or an
+ * unreadable/unparseable document (advisory degrade — the engine-status
+ * catalog still appends; a later tool call can re-evaluate on demand with
+ * explicit probes).
  * @param harnessDir - the resolved `{HARNESS_DIR}` (null when none found).
+ * @param selection - the ONE read-path selection for this build.
  */
-function iterationGateSource(harnessDir: string | null): MstarIterationGateView | undefined {
-  if (harnessDir === null) return undefined
+function iterationGateSource(
+  harnessDir: string | null,
+  selection: WorkflowSelectionView | undefined,
+): MstarIterationGateView | undefined {
+  if (harnessDir === null || selection === undefined || selection.kind === 'error') return undefined
   const statusPath = join(harnessDir, STATUS_FILE)
   if (!existsSync(statusPath)) return undefined
-  const compass = steeringCompassPath(harnessDir)
-  if (compass === undefined) return undefined
-  const selection = resolveReadWorkflow(harnessDir)
-  if (selection.kind === 'error') return undefined
   const snapshotPath = join(harnessDir, selection.dir, WORKFLOW_SNAPSHOT_FILE)
   try {
     // v3 relocation: the gate's first doc is the SELECTED workflow snapshot
-    // (`workflows/<id>/snapshot.json`); the compass stays the second input.
+    // (`workflows/<id>/snapshot.json`); its own `compass_ref` is the second.
     const snapshotDoc = readJson(snapshotPath)
-    const compassDoc = parseCompassFrontmatter(compass.compassPath)
+    const compass = selectedCompass(harnessDir, selection.workflowId, snapshotDoc)
+    if (compass === undefined) return undefined
     // No git probes at boot: the row reports what the two control docs
     // prove (the tool remains the explicit-probe surface for branch checks).
-    const result = evaluatePhaseGate(snapshotDoc, compassDoc)
+    const result = evaluatePhaseGate(snapshotDoc, compass.doc)
     const gate: IterationGateView = {
       transition: result.transition,
       all_plans_done: result.allPlansDone,
@@ -832,11 +937,11 @@ function iterationGateSource(harnessDir: string | null): MstarIterationGateView 
     }
     // Steering compass `status` — the authoritative Phase-1-in-flight signal
     // (spec panel-f4 §5 D5; consumed by the iteration current-step projection).
-    // `steeringCompassPath` already filters to `active | locked`, so this guard
-    // is belt-and-suspenders only: a non-union value omits the field (lossless
+    // `selectedCompass` already filters to `active | locked`, so this guard is
+    // belt-and-suspenders only: a non-union value omits the field (lossless
     // omit-when-absent — `Session.append` rejects undefined-valued props).
-    const compassStatus = compassDoc.status === 'active' || compassDoc.status === 'locked'
-      ? compassDoc.status
+    const compassStatus = compass.doc.status === 'active' || compass.doc.status === 'locked'
+      ? compass.doc.status
       : undefined
     return {
       iterationId: compass.iterationId,
@@ -885,14 +990,14 @@ function iterationGateSource(harnessDir: string | null): MstarIterationGateView 
  * @param ctx - registrant context (logger for the containment path).
  * @param resolver - the per-workspace `{HARNESS_DIR}` resolver (the probe
  * never starts from the process cwd).
- * @param explicitKey - the app-wide cache key when an explicit
- * `harnessDir` config is set (undefined → per-session-cwd keys).
- * @param cache - per-workspace TTL catalog sources cache (boot pre-seeded
- * for the explicit-config case; otherwise built on first use of each
- * workspace root and TTL-refreshed — Config `catalogTtlMs`).
+ * @param cache - per-session TTL catalog cache: each session's payload is
+ * keyed by harness dir + `session.header.id` + cwd + effective hint, so two
+ * sessions in one workspace never share a selection; a session with no stable
+ * id is built uncached.
  * @param ttlMs - catalog refresh interval in milliseconds.
- * @param register - the apply-scoped `harnessDir → cache key` reverse-map
- * registration. * @param digests - per agent+workspace turn digests (last rendered text)
+ * @param invalidation - the apply-scoped session-keyed invalidation (ledger
+ * records evict every session of a harness; a picker commit evicts one).
+ * @param digests - per session+workspace turn digests (last rendered text)
  * for the digest-gated re-emission.
  * @param payload - the proposed step the loop is about to enter.
  * @param next - the remaining pre-step chain; its value is the delegated decision.
@@ -900,10 +1005,9 @@ function iterationGateSource(harnessDir: string | null): MstarIterationGateView 
 export async function preStepCatalogListener(
   ctx: Context,
   resolver: HarnessResolver,
-  explicitKey: string | undefined,
   cache: Map<string, CatalogCacheEntry>,
   ttlMs: number,
-  register: (harnessDir: string | null, key: string) => void,
+  invalidation: CatalogInvalidation,
   digests: Map<string, TurnDigest>,
   payload: { agent: unknown; messages: UserMessage[]; turn: number; step: number; signal: AbortSignal },
   next: () => Promise<PreStepDecision>,
@@ -913,20 +1017,24 @@ export async function preStepCatalogListener(
   try {
     // The watermark harness dir resolves from the WORKSPACE of the session
     // whose agent enters the step (the session cwd) — never the process
-    // cwd. With an explicit config the whole app shares one cache entry
-    // (pre-seeded at boot); without one each workspace root gets its own
-    // entry, built on first use and TTL-refreshed (Config `catalogTtlMs` —
-    // a mid-session plan/compass/residual change lands within one interval;
-    // the hot path is a timestamp compare + Map lookup between refreshes).
+    // cwd. Each session then keys its OWN cache entry (D4), built on first
+    // use and TTL-refreshed (Config `catalogTtlMs`; the hot path is a
+    // timestamp compare + Map lookup between refreshes).
     const cwd = sessionCwdOf(payload.agent)
+    const sessionId = sessionHeaderIdOf(payload.agent)
     const harnessDir = resolver.forWorkspace(cwd)
-    const key = explicitKey ?? cwd ?? ''
-    const catalogPayload = catalogPayloadFor(ctx, cache, register, key, harnessDir, ttlMs)
+    // The carrying session's effective selection hint: the structural identity
+    // plus this session's DURABLE pick. An unreadable binding record is not
+    // "no pick" for the WRITE path (which pauses attribution); the catalog is
+    // a READ path and must still render, so it falls back to the structural
+    // hint and reports the degrade once through the logger.
+    const hint = sessionHintForCatalog(harnessDir, payload.agent)
+    const catalogPayload = catalogPayloadFor(ctx, cache, invalidation, harnessDir, sessionId, cwd ?? '', hint, ttlMs)
     const messages = [...decision.messages]
     const text = renderEngineStatusCatalog(catalogPayload)
     // Digest gate: inject the ONE unified row on the first step of a turn,
     // or when its rendered text changed since the last injection (a TTL
-    // refresh picked up new state). Per agent+workspace, so different
+    // refresh picked up new state). Per session+workspace, so different
     // sessions/workspaces keep independent digests.
     const digestKey = agentDigestKey(payload.agent, cwd)
     const prior = digests.get(digestKey)
@@ -951,16 +1059,45 @@ export async function preStepCatalogListener(
   }
 }
 
-/** Per agent+workspace turn digest: the rendered catalog text as of the last injection. */
+/**
+ * The carrying session's catalog selection hint: the structural identity off
+ * the agent (cwd + `header.id` + its opaque agent id as the lease holder)
+ * folded with the DURABLE pick when the binding record is readable. An
+ * unreadable record keeps the structural hint only — the pick is unknown,
+ * never invented, so the resolver falls back to lease/cwd/unique evidence (or
+ * reports the picker error) instead of this reader guessing. The catalog is a
+ * read path: it renders the honest degrade rather than refusing to render.
+ * @param harnessDir - the resolved `{HARNESS_DIR}` for the session workspace.
+ * @param agent - the stepping agent.
+ */
+function sessionHintForCatalog(harnessDir: string | null, agent: unknown): SessionHint | undefined {
+  const identity = sessionHintOf(agent)
+  if (identity === undefined) return undefined
+  const { cwd, sessionId } = identity
+  if (cwd === undefined || sessionId === undefined || harnessDir === null) return identity
+  const binding = readWorkflowSessionBinding(harnessDir, sessionId, cwd)
+  const selected = binding.kind === 'ok' ? binding.binding?.selectedWorkflowId : undefined
+  return selected === undefined ? identity : { ...identity, selectedWorkflowId: selected }
+}
+
+/** Per session+workspace turn digest: the rendered catalog text as of the last injection. */
 export interface TurnDigest {
   turn: number
   text: string
 }
 
-/** Digest key of one agent: the agent id + its session workspace (dev stubs without an id share the `<unknown>` bucket per workspace). */
+/**
+ * Digest key of one agent: its SESSION identity (`session.header.id`, the
+ * picker key and the catalog cache key) + its session workspace. A stub
+ * without a session id falls back to its own agent id, and dev stubs without
+ * either share the `<unknown>` bucket per workspace. JSON-encoded with the
+ * cache key so a delimiter inside either field cannot collide two identities.
+ */
 function agentDigestKey(agent: unknown, cwd: string | undefined): string {
-  const id = (agent as { id?: unknown } | null | undefined)?.id
-  return `${typeof id === 'string' ? id : '<unknown>'}\u0000${cwd ?? ''}`
+  return JSON.stringify([
+    sessionHeaderIdOf(agent) ?? agentIdOf(agent) ?? '<unknown>',
+    cwd ?? '',
+  ])
 }
 
 /**

@@ -33,10 +33,8 @@ import {
 } from './gates/_shared.ts'
 import {
   preStepCatalogListener,
-  buildCatalogPayload,
   createCatalogInvalidation,
   DEFAULT_CATALOG_TTL_MS,
-  EXPLICIT_CACHE_KEY,
 } from './gates/catalog.ts'
 import type { CatalogCacheEntry, TurnDigest } from './gates/catalog.ts'
 import { installEngineStatusEndpoint } from './engine-status-endpoint.ts'
@@ -830,54 +828,46 @@ export function apply(ctx: Context, config: Config): void {
   // so the session log carries the engine status + iteration phase gate +
   // workspace-state digest (model-visible ⟺ logged).
   //
-  // Watermark resolution: with an explicit `harnessDir` config one
-  // app-wide cache entry is built ONCE at boot (the unified mstar version
-  // is a process-immutable manifest read, compass enforcement is
-  // boot-resolved like the gates, and the iteration gate is
-  // boot-evaluated); without the config each workspace root gets its own
-  // entry, built on its first pre-step. Every entry is then TTL-refreshed
-  // (Config `catalogTtlMs`, default 60000): the pre-step hot path is a
-  // timestamp compare + Map lookup between refreshes, and a mid-session
-  // status/compass/residual change lands within one interval (see
-  // catalogPayloadFor / buildCatalogPayload).
+  // Per-SESSION catalog identity (D4): every session's payload is keyed by
+  // harness dir + `session.header.id` + cwd + its effective selection hint,
+  // built on first use and TTL-refreshed (Config `catalogTtlMs`, default
+  // 60000): the pre-step hot path is a timestamp compare + Map lookup between
+  // refreshes, and a mid-session status/compass/residual change lands within
+  // one interval (see catalogPayloadFor / buildCatalogPayload). No boot-seeded
+  // shared entry exists any more — two sessions in one workspace (even the
+  // same cwd) can never be served each other's selection; a session with no
+  // stable id is built uncached.
   //
-  // Digest-gated re-emission: per agent+workspace the row is injected once
+  // Digest-gated re-emission: per session+workspace the row is injected once
   // per turn and re-injected only when its rendered text changed (a
   // 20-step turn shows the catalog once, not 20 times — see
   // preStepCatalogListener / agentDigestKey).
   const ttlMs = config.catalogTtlMs ?? DEFAULT_CATALOG_TTL_MS
-  const explicitKey = bootHarnessDir !== null ? EXPLICIT_CACHE_KEY : undefined
   const catalogCache = new Map<string, CatalogCacheEntry>()
-  if (explicitKey !== undefined) {
-    catalogCache.set(explicitKey, { payload: buildCatalogPayload(ctx, bootHarnessDir), builtAt: Date.now() })
-  }
-  // Catalog-invalidation hook : the apply-scoped `harnessDir → cache key` reverse map +
-  // invalidation closure, created HERE with the same lifetime as the cache
-  // above (an HMR fiber restart recreates both — module-level state would
-  // survive and point at a destroyed cache). The explicit-config key is
-  // pre-registered so a ledger record between apply and the first pre-step
-  // still invalidates the boot-seeded entry; `catalogPayloadFor` registers
-  // every other workspace's key on hit/build. Bound to the agent-flow
-  // ledger hook (`setAgentFlowInvalidator`, Task 1 delivery): every
-  // successful recordDispatch/recordSettle fires it with the affected
-  // `{HARNESS_DIR}` → that workspace's entry is deleted → the next pre-step
-  // rebuilds and (digest text change) re-injects the row — the 60s TTL no
-  // longer bounds ledger-change latency (AC-2). No mapping → safe no-op; a
-  // throwing invalidation is contained by the record path (log-only, never
-  // blocks the ledger record).
-  const catalogInvalidation = createCatalogInvalidation(catalogCache)
-  if (explicitKey !== undefined) catalogInvalidation.register(bootHarnessDir, explicitKey)
-  setAgentFlowInvalidator(catalogInvalidation.invalidate)
-  // Per agent+workspace turn digests for the digest-gated re-emission
+  // Per session+workspace turn digests for the digest-gated re-emission
   // (inject once per turn; re-inject only when the row changed).
   const catalogDigests = new Map<string, TurnDigest>()
+  // Catalog-invalidation hook : the apply-scoped session-keyed reverse map +
+  // invalidation closure, created HERE with the same lifetime as the cache
+  // above (an HMR fiber restart recreates both — module-level state would
+  // survive and point at a destroyed cache). `catalogPayloadFor` registers
+  // each session's key on hit/build. Bound to the agent-flow ledger hook
+  // (`setAgentFlowInvalidator`): every successful recordDispatch/recordSettle
+  // fires it with the affected `{HARNESS_DIR}` → EVERY current session entry
+  // of that workspace is deleted → the next pre-step rebuilds and (digest text
+  // change) re-injects the row — the 60s TTL no longer bounds ledger-change
+  // latency (AC-2). No mapping → safe no-op; a throwing invalidation is
+  // contained by the record path (log-only, never blocks the ledger record).
+  const catalogInvalidation = createCatalogInvalidation(catalogCache, catalogDigests)
+  setAgentFlowInvalidator(catalogInvalidation.invalidate)
   ctx.on('agent/pre-step', (payload, next) =>
-    preStepCatalogListener(ctx, resolver, explicitKey, catalogCache, ttlMs, catalogInvalidation.register, catalogDigests, payload, next))
+    preStepCatalogListener(ctx, resolver, catalogCache, ttlMs, catalogInvalidation, catalogDigests, payload, next))
 
   // Panel channel — the host half of the engine-status endpoint
   // (`/api/mstar/engineStatus`): the `mstar` service + its invocation
   // descriptor on the host's SHARED `/api` typert gateway, serving the
-  // snapshot the pre-step emission persisted above.
+  // snapshot the pre-step emission persisted above, plus the `selectWorkflow`
+  // UI control (a durable, session-scoped pick).
   //
   // Both units are OPTIONAL (see `installEngineStatusEndpoint`): the service
   // is deduped per context, and the descriptor is registered inside
@@ -886,7 +876,14 @@ export function apply(ctx: Context, config: Config): void {
   // whole row (and with it the boot) on a base-only/headless profile, which is
   // exactly the failure both sibling plugins avoid by registering web-only
   // units through optional children.
-  installEngineStatusEndpoint(ctx, { resolver, bootHarnessDir })
+  installEngineStatusEndpoint(ctx, {
+    resolver,
+    bootHarnessDir,
+    // A picker commit changes THIS session's durable hint: drop its cached
+    // catalog payload + digest so the next pre-step rebuilds from the
+    // acknowledged binding (the other sessions' keys stay untouched).
+    invalidateSelection: (harnessDir, sessionId) => catalogInvalidation.invalidateSession(harnessDir, sessionId),
+  })
 
   // v2 seams — sdd + iteration model-facing tools: `mstar sdd …` / `mstar iteration gate` equivalents on `ctx.tools`.
   registerSddIterationTools(ctx, resolver)

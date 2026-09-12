@@ -57,6 +57,8 @@ import {
   registerSubagentCatalogListener,
   recordJobSettle,
   recordSubagentLink,
+  recordWorkflowEvent,
+  recordWorkflowVerdict,
   setAgentFlowInvalidator,
   setAgentFlowLogger,
   SETTLE_SEAM_PAIRING_NOTE,
@@ -65,6 +67,7 @@ import {
   WORKFLOW_LEDGER_TRUNCATION_MARKER,
 } from '../src/gates/agent-flow.ts'
 import type { AgentFlowCatalogJoin, AgentFlowPairing } from '../src/gates/agent-flow.ts'
+import type { SessionHint } from '../src/gates/workflow-selection.ts'
 import type { AgentFlowView, MstarEngineStatusSource } from '../src/index.ts'
 import { buildCatalogPayload } from '../src/gates/catalog.ts'
 import { bootApp, seedHarness, seedV2Tree, FakeJobRegistry, v2Root, v2Snapshot, v2WorkflowEntry, type BootResult } from './harness.ts'
@@ -595,6 +598,151 @@ describe('agent-flow ledger — recordDispatch / readAgentFlow', () => {
 })
 
 /* ===========================================================================
+ * 1b. D4 session-bound write routing — two concurrent active lifecycles
+ * ========================================================================== */
+
+/** The workflow ledger event this block records through `recordWorkflowEvent`. */
+const RUN_START = { v: 1, ts: 1_700_000_000_000, kind: 'workflow-run', runId: 'run-1', name: 'audit' } as const
+
+/**
+ * A temp harness with TWO active lifecycles (`wf-a` / `wf-b`) — the
+ * concurrent-active registry the D4 cutover routes through. `order` flips the
+ * registry array: array order must never decide a write target.
+ */
+async function tempMultiHarness(prefix: string, order: readonly string[] = ['wf-a', 'wf-b']): Promise<{ root: string; harnessDir: string; dirs: Record<string, string> }> {
+  const root = await mkdtemp(join(tmpdir(), prefix))
+  const harnessDir = join(root, 'harness')
+  await mkdir(harnessDir, { recursive: true })
+  await seedHarness(harnessDir, {
+    'status.json': v2Root(order.map((id) => v2WorkflowEntry(id))),
+    'workflows/wf-a/snapshot.json': v2Snapshot('wf-a'),
+    'workflows/wf-b/snapshot.json': v2Snapshot('wf-b'),
+  })
+  return { root, harnessDir, dirs: { 'wf-a': join(harnessDir, 'workflows/wf-a'), 'wf-b': join(harnessDir, 'workflows/wf-b') } }
+}
+
+/** A session hint at one cwd with an explicit durable pick (the same-cwd selection case). */
+const picked = (sessionId: string, cwd: string, selectedWorkflowId: string): SessionHint =>
+  ({ sessionId, cwd, selectedWorkflowId })
+
+describe('agent-flow — session-bound write routing (two concurrent actives)', () => {
+  it('two sessions in the SAME cwd with different picks write into their OWN workflow dirs (no array-order pick)', async () => {
+    for (const order of [['wf-a', 'wf-b'], ['wf-b', 'wf-a']] as const) {
+      const { root, harnessDir, dirs } = await tempMultiHarness('dsh-agentflow-multi-pick-', order)
+      try {
+        const cwd = '/srv/workspace/shared'
+        recordDispatch({ harnessDir, exec: { agent: { id: 'sess-a' } }, prompt: VALID_PLANNED, violations: [], hard: false, hint: picked('sess-a', cwd, 'wf-a') })
+        recordDispatch({ harnessDir, exec: { agent: { id: 'sess-b' } }, prompt: VALID_PLANNED, violations: [], hard: false, hint: picked('sess-b', cwd, 'wf-b') })
+        recordSettle({ harnessDir, agent: 'sess-b', outcome: 'ok', hint: picked('sess-b', cwd, 'wf-b') })
+        recordWorkflowEvent({ harnessDir, event: RUN_START, hint: picked('sess-a', cwd, 'wf-a') })
+        recordWorkflowVerdict({ harnessDir, exec: { agent: { id: 'sess-a' } }, tool: 'workflow', workflow: 'audit', mode: 'warn', verdict: 'ok', hint: picked('sess-a', cwd, 'wf-a') })
+
+        const a = readAgentFlow(dirs['wf-a'])!
+        const b = readAgentFlow(dirs['wf-b'])!
+        expect(a.events.map((e) => e.kind)).toEqual(['workflow-verdict', 'workflow-run', 'dispatch'])
+        expect(b.events.map((e) => e.kind)).toEqual(['settle', 'dispatch'])
+        // Cross-check the identity columns: no row leaked into the sibling.
+        expect(a.events.every((e) => e.agent === 'sess-a' || e.agent === null)).toBe(true)
+        expect(b.events.map((e) => e.agent)).toEqual(['sess-b', 'sess-b'])
+        // The root ledger is never a target.
+        expect(existsSync(join(harnessDir, AGENT_FLOW_FILE))).toBe(false)
+      } finally {
+        await rm(root, { recursive: true, force: true })
+      }
+    }
+  })
+
+  it('an UNBOUND session writes nothing into ANY workflow dir — every writer path skips', async () => {
+    const { root, harnessDir, dirs } = await tempMultiHarness('dsh-agentflow-multi-unbound-')
+    try {
+      recordDispatch({ harnessDir, exec: { agent: { id: 'sess-x' } }, prompt: VALID_PLANNED, violations: [], hard: false })
+      recordSettle({ harnessDir, agent: 'sess-x', outcome: 'ok' })
+      recordWorkflowEvent({ harnessDir, event: RUN_START })
+      recordWorkflowVerdict({ harnessDir, exec: { agent: { id: 'sess-x' } }, tool: 'workflow', workflow: 'audit', mode: 'warn', verdict: 'ok' })
+      // A hint that names an id which is NOT in the active registry is just
+      // as unbound (a terminal/foreign pick is never revived).
+      recordDispatch({ harnessDir, prompt: VALID_PLANNED, violations: [], hard: false, hint: picked('sess-x', '/srv/workspace', 'wf-gone') })
+
+      for (const dir of Object.values(dirs)) {
+        expect(existsSync(join(dir, AGENT_FLOW_FILE))).toBe(false)
+        expect(readAgentFlow(dir)!.events).toEqual([])
+      }
+      expect(existsSync(join(harnessDir, AGENT_FLOW_FILE))).toBe(false)
+      // The boolean-returning writer reports the skip (the ledger's cursor
+      // discipline depends on it: no advance without an append).
+      expect(recordWorkflowEvent({ harnessDir, event: RUN_START })).toBe(false)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('a pinned workflowDir stays FIRST CHOICE for settle/event even when the session is unbound or picked elsewhere', async () => {
+    const { root, harnessDir, dirs } = await tempMultiHarness('dsh-agentflow-multi-pinned-')
+    try {
+      // Pinned to wf-b while the session is UNBOUND (two actives, no pick).
+      recordSettle({ harnessDir, workflowDir: dirs['wf-b'], agent: 'sess-x', outcome: 'ok' })
+      recordWorkflowEvent({ harnessDir, workflowDir: dirs['wf-b'], event: RUN_START })
+      // Pinned to wf-a while the session's pick says wf-b.
+      recordDispatch({ harnessDir, prompt: VALID_PLANNED, violations: [], hard: false, hint: picked('sess-x', '/srv/workspace', 'wf-b') })
+      recordSettle({ harnessDir, workflowDir: dirs['wf-a'], agent: 'sess-x', outcome: 'ok', hint: picked('sess-x', '/srv/workspace', 'wf-b') })
+
+      // wf-b holds the two PINNED rows plus the row the session's own pick
+      // routed there; wf-a holds ONLY the settle whose dir was pinned to it —
+      // the pin beats the wf-b hint.
+      expect(readAgentFlow(dirs['wf-b'])!.events.map((e) => e.kind)).toEqual(['dispatch', 'workflow-run', 'settle'])
+      expect(readAgentFlow(dirs['wf-a'])!.events.map((e) => e.kind)).toEqual(['settle'])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('an unbound dispatch creates NO pairing — a later settle for the same call writes nowhere', async () => {
+    const { root, harnessDir, dirs } = await tempMultiHarness('dsh-agentflow-multi-nopair-')
+    const ctx = new Context()
+    const pairing = pairingOf()
+    const priorSink = setAgentFlowLogger(() => {})
+    try {
+      registerSettleListener(ctx, {}, pairing)
+      const exec = dispatchExec('c-unbound', 'sess-x', VALID_PLANNED)
+      recordDispatch({ harnessDir, exec, prompt: VALID_PLANNED, violations: [], hard: false, pairing })
+      expect(pairing.dispatchByCallId.size).toBe(0)
+
+      emitUndeclared(ctx, SETTLE_SEAM, { callId: 'c-unbound', name: 'subagent', agent: { id: 'sess-x' } }, { isError: false, value: { kind: 'foreground', runId: 'r1', output: [] } })
+      for (const dir of Object.values(dirs)) expect(readAgentFlow(dir)!.events).toEqual([])
+    } finally {
+      setAgentFlowLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('a PAIRED settle stays in its dispatch workflow dir after the session re-picks the other lifecycle', async () => {
+    const { root, harnessDir, dirs } = await tempMultiHarness('dsh-agentflow-multi-repick-')
+    const ctx = new Context()
+    const pairing = pairingOf()
+    const priorSink = setAgentFlowLogger(() => {})
+    try {
+      registerSettleListener(ctx, {}, pairing)
+      const cwd = '/srv/workspace/shared'
+      const exec = dispatchExec('c-repick', 'sess-x', VALID_PLANNED)
+      recordDispatch({ harnessDir, exec, prompt: VALID_PLANNED, violations: [], hard: false, pairing, hint: picked('sess-x', cwd, 'wf-a') })
+      expect(pairing.dispatchByCallId.get('sess-x\u0000c-repick')).toMatchObject({ workflowDir: dirs['wf-a'] })
+
+      // The session re-picks wf-b BEFORE the completion arrives: the settle
+      // must still land next to its dispatch (the pairing ref pins the dir).
+      emitUndeclared(ctx, SETTLE_SEAM, { callId: 'c-repick', name: 'subagent', agent: { id: 'sess-x' } }, { isError: false, value: { kind: 'foreground', runId: 'r1', output: [] } })
+
+      expect(readAgentFlow(dirs['wf-a'])!.events.map((e) => e.kind)).toEqual(['settle', 'dispatch'])
+      expect(readAgentFlow(dirs['wf-b'])!.events).toEqual([])
+      expect(pairing.dispatchByCallId.size).toBe(0)
+    } finally {
+      setAgentFlowLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+})
+/* ===========================================================================
  * 1b. Role text — ONE canonical `role` column at the write boundary
  * ========================================================================== */
 
@@ -836,7 +984,7 @@ describe('truncateLedgerField — code-point-safe truncation ', () => {
  * 2. taskIdOf — best-effort body Task N extraction
  * ========================================================================== */
 
-describe('taskIdOf — body `Task N` best-effort extraction (level-2 headings only, qc2 F-8)', () => {
+describe('taskIdOf — body `Task N` best-effort extraction (level-2 headings only)', () => {
   it('extracts the first LEVEL-2 numbered Task heading from the BODY, normalized to T<n>', () => {
     expect(taskIdOf(VALID_PLANNED)).toBe('T2')
     expect(taskIdOf(`## Assignment\n\n**Execute as**: fullstack-dev\n\n## Task 7\n\nwork`)).toBe('T7')

@@ -57,6 +57,7 @@ import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 import { bootApp, seedHarness, seedV2Tree, FakeSessionsRegistry, v2Root, v2RootWithWorkflow, v2Snapshot, v2SnapshotWithPlans, v2WorkflowEntry, type BootResult } from './harness.ts'
+import { updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
 import type { DispatchGateAdvisory } from '../src/index.ts'
 import { DISPATCH_LOGGER } from '../src/gates/dispatch.ts'
 import { readAgentFlow } from '../src/gates/agent-flow.ts'
@@ -130,6 +131,18 @@ const workflowExecFrom = (metaName: string, cwd: string): ToolExecution =>
 /** A `ralph` call attributed to an agent in the given workspace. */
 const ralphExecFrom = (objective: string, cwd: string): ToolExecution =>
   toolExec('ralph', { objective }, agentIn(cwd))
+
+/**
+ * An agent carrying a DURABLE session identity (`id` = the dispatching agent
+ * id, `session.header.id` = the picker key) in the given workspace — the D4
+ * hint source, so the binding store can be consulted.
+ */
+const boundAgentIn = (cwd: string, sessionId: string): unknown =>
+  ({ id: sessionId, session: { header: { id: sessionId, cwd } } })
+
+/** A `workflow` call attributed to a session-bound agent. */
+const workflowExecBound = (metaName: string, cwd: string, sessionId: string): ToolExecution =>
+  toolExec('workflow', { script: 'probe', meta: { name: metaName, description: 'probe' } }, boundAgentIn(cwd, sessionId))
 
 /** The subagent tool call shape: `{ description, prompt, run_in_background? }`. */
 const subagentExec = (prompt: string): ToolExecution => toolExec('subagent', { description: 'probe', prompt })
@@ -678,6 +691,43 @@ describe('workflow gate — P-b lease attribution', () => {
       code: 'workflow.name.unknown',
     })
   })
+
+  it('(i) P-b reads only the BOUND lifecycle snapshot; an unbound session degrades instead of silently picking the first active', async () => {
+    const ws = await makeHarnessWorkspace('dsh-ws-pb-bound-')
+    const harnessDir = join(ws, '.agents')
+    // wf-a is lease-covered, wf-b carries an orphan InProgress plan.
+    await seedHarness(harnessDir, {
+      'status.json': v2Root([v2WorkflowEntry('wf-a'), v2WorkflowEntry('wf-b')]),
+      'workflows/wf-a/snapshot.json': v2SnapshotWithPlans('wf-a', [IN_PROGRESS_WITH_LEASE]),
+      'workflows/wf-b/snapshot.json': v2SnapshotWithPlans('wf-b', [IN_PROGRESS_ORPHAN]),
+    })
+    const app = booted = await bootApp({ workflowGate: 'hard', workflowNames: ['deploy-x'], harnessDir: null })
+    const advisories = captureAdvisories(app.ctx)
+    const warns = captureDispatchWarns(app.ctx)
+
+    // Session A is durably bound to the COVERED lifecycle: the sibling's
+    // orphan is not its red line, and the read is NOT a degrade (no warn).
+    expect(updateWorkflowSessionBinding(harnessDir, 'sess-covered', ws, { excludedBeforeSeq: 0, selectedWorkflowId: 'wf-a' }).kind).toBe('written')
+    const warnSnapshot = warns.length
+    expect(await app.ctx.waterfall('tools/pre-execute', workflowExecBound('deploy-x', ws, 'sess-covered'), defaultAllow)).toEqual({ kind: 'allow' })
+    expect(advisories).toHaveLength(0)
+    expect(warns.length - warnSnapshot).toBe(0)
+
+    // Session B is bound to the OTHER lifecycle: the orphan IS its red line.
+    expect(updateWorkflowSessionBinding(harnessDir, 'sess-orphan', ws, { excludedBeforeSeq: 0, selectedWorkflowId: 'wf-b' }).kind).toBe('written')
+    const decision = await app.ctx.waterfall('tools/pre-execute', workflowExecBound('deploy-x', ws, 'sess-orphan'), defaultAllow)
+    expect(decision.kind).toBe('deny')
+    if (decision.kind !== 'deny') throw new Error('expected deny')
+    expect(decision.reason).toContain('plan-orphan')
+
+    // An agent with NO session identity at all (the exec-less-equivalent
+    // shape) is UNBOUND with two actives: P-b degrades fail-open with ONE
+    // warn rather than attributing the first registry entry's rows.
+    const unboundWarnSnapshot = warns.length
+    const unbound = await app.ctx.waterfall('tools/pre-execute', workflowExecFrom('deploy-x', ws), defaultAllow)
+    expect(unbound).toEqual({ kind: 'allow' })
+    expect(warns.length - unboundWarnSnapshot).toBe(1)
+  })
 })
 
 /* ---------------------------------- Task 4: ledger integration ---------------------------------- */
@@ -691,9 +741,24 @@ function ledgerEvents(app: BootResult): readonly AgentFlowEventView[] {
   return view.events
 }
 
-/** One structural fake parent session for the e2e consumer tests (consumer-read surface). */
-const parentSession = (id: string, cwd: string): { id: string; events: unknown[]; header: { cwd: string } } =>
-  ({ id, events: [], header: { cwd } })
+/**
+ * One structural fake parent session for the e2e consumer tests — the
+ * installed Session surface (`header.id` / `seq` / `eventAt`, no `.events`).
+ */
+function parentSession(id: string, cwd: string): {
+  header: { id: string; cwd: string }
+  log: unknown[]
+  readonly seq: number
+  eventAt(seq: number): unknown
+} {
+  const log: unknown[] = []
+  return {
+    header: { id, cwd },
+    log,
+    get seq(): number { return log.length },
+    eventAt(seq: number): unknown { return log[seq] },
+  }
+}
 
 describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observation)', () => {
   it('(1) warn + unknown name → ONE advisory verdict row (workflow-verdict, mode + name carried)', async () => {

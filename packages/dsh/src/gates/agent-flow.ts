@@ -164,6 +164,10 @@ import { isNaValue, planIdOf, sessionIdOf, DEFAULT_DISPATCH_TOOLS } from './disp
 // MUST NOT enter the writer's module graph (compass v3.0.0 § Catalog
 // selection rule — write path = active `workflows[]` only).
 import { resolveActiveWorkflow } from './workflow-selection.ts'
+// Type-only (erased at runtime): the carrying-session hint the writers accept
+// and forward to the shared resolver, plus the resolver verdict the ledger
+// classifies the unbound skip from.
+import type { ActiveWorkflowSelection, SessionHint } from './workflow-selection.ts'
 // The SHARED ASCII-control-char strip : the ralph
 // `objective` — model-controlled display text, like the workflow name —
 // is routed through the same normalization at the verdict-row WRITE
@@ -733,26 +737,45 @@ function callPairingKey(exec: unknown): string | undefined {
 }
 
 /**
- * Resolve the agent-flow WRITE target dir for one harness dir: the ACTIVE
- * workflow's dir (root v2 `workflows[]` first entry — the shared active-set
- * resolver; the terminal-mtime fallback is catalog-read-only and MUST NOT
- * enter the writer's module graph). The active set is defined by root
- * `workflows[]` MEMBERSHIP — non-terminal lifecycles (`running` AND
- * `paused`; terminal lifecycles are removed at terminal) — so a paused
- * lifecycle stays a valid append target (explicit decision, plan
+ * The write-path selection for one session: the resolver verdict plus the
+ * absolute dir that verdict resolves to. The ledger needs BOTH (it
+ * classifies the unbound skip to keep the no-backfill floor honest), and
+ * both must come from ONE registry read — {@link resolveAgentFlowWriteDir}
+ * is the dir-only facade over this.
+ */
+export interface AgentFlowWriteTarget {
+  /** The absolute workflow dir (`<harnessDir>/workflows/<id>`), or `null` when this session may not write. */
+  dir: string | null
+  /** The verdict `dir` was derived from. */
+  selection: ActiveWorkflowSelection
+}
+
+/**
+ * Resolve the agent-flow WRITE target for one harness dir: the ACTIVE
+ * workflow the CARRYING SESSION is bound to (root v2 `workflows[]` — the
+ * shared active-set resolver; the terminal-mtime fallback is
+ * catalog-read-only and MUST NOT enter the writer's module graph). The active
+ * set is defined by root `workflows[]` MEMBERSHIP — non-terminal lifecycles
+ * (`running` AND `paused`; terminal lifecycles are removed at terminal) — so
+ * a paused lifecycle stays a valid append target (explicit decision, plan
  * the workflow viz plan).
  *
- * No active entry → `null`: the record is SKIPPED with a one-time warn
+ * D4 binding: `hint` carries the session's lease/cwd/pick evidence, so two
+ * sessions writing in ONE harness reach two different workflow dirs. An
+ * omitted hint is the exec-less case — the automatic rungs miss and only a
+ * unique active lifecycle resolves.
+ *
+ * No bound entry → `dir: null`: the record is SKIPPED with a one-time warn
  * (per sink binding) — never a silent write into the root v1 file, never a
- * write into a terminal snapshot dir (compass v3.0.0 § Catalog selection
- * rule — the writer appends only to an active lifecycle).
+ * write into a terminal snapshot dir, never another session's lifecycle
+ * (compass v3.0.0 § Catalog selection rule — the writer appends only to an
+ * active lifecycle).
  * @param harnessDir - the resolved `{HARNESS_DIR}`.
- * @returns the absolute workflow dir (`<harnessDir>/workflows/<id>`), or
- *   `null` when no active lifecycle resolves.
+ * @param hint - the carrying session's structural identity + durable pick.
  */
-export function resolveAgentFlowWriteDir(harnessDir: string): string | null {
-  const selection = resolveActiveWorkflow(harnessDir)
-  if (selection.kind === 'active') return join(harnessDir, selection.dir)
+export function resolveAgentFlowWriteTarget(harnessDir: string, hint?: SessionHint): AgentFlowWriteTarget {
+  const selection = resolveActiveWorkflow(harnessDir, hint)
+  if (selection.kind === 'active') return { dir: join(harnessDir, selection.dir), selection }
   // `resolveActiveWorkflow` never returns `terminal` (the active-set resolver
   // has no history view — the shared `WorkflowSelectionView` union includes
   // it for the read resolver); both non-active branches are a clear skip.
@@ -763,7 +786,18 @@ export function resolveAgentFlowWriteDir(harnessDir: string): string | null {
     noActiveWarned = true
     log('warn', `agent-flow record skipped — ${message}`)
   }
-  return null
+  return { dir: null, selection }
+}
+
+/**
+ * The dir-only facade over {@link resolveAgentFlowWriteTarget} — the pinned
+ * writer contract every record path uses.
+ * @param harnessDir - the resolved `{HARNESS_DIR}`.
+ * @param hint - the carrying session's structural identity + durable pick.
+ * @returns the absolute workflow dir, or `null` when nothing may be written.
+ */
+export function resolveAgentFlowWriteDir(harnessDir: string, hint?: SessionHint): string | null {
+  return resolveAgentFlowWriteTarget(harnessDir, hint).dir
 }
 
 /**
@@ -946,7 +980,8 @@ function appendEvent(workflowDir: string, event: AgentFlowEvent): void {
  * @param input - the harness dir; the dispatching exec's agent id; the
  * Assignment text; the gate's violations; the hard-enforcement resolution;
  * the apply-scoped pairing store (the adapter passes its own; direct callers
- * may omit it).
+ * may omit it); the carrying session's `hint` (the adapter derives it — this
+ * module never reads the picker store).
  */
 export function recordDispatch(input: {
   harnessDir: string
@@ -955,13 +990,16 @@ export function recordDispatch(input: {
   violations: readonly unknown[]
   hard: boolean
   pairing?: AgentFlowPairing
+  /** The carrying session's selection hint — decides WHICH active lifecycle the row lands in. */
+  hint?: SessionHint
 }): void {
   try {
-    // v3 write path: the ACTIVE workflow dir only (root v2 `workflows[]`
-    // first entry). No active lifecycle → the record is SKIPPED with a
+    // v3 write path: the ACTIVE workflow dir BOUND to this session (root v2
+    // `workflows[]`). No bound lifecycle → the record is SKIPPED with a
     // one-time warn — never a root v1 write, never a terminal snapshot
-    // write (compass v3.0.0 § Catalog selection rule).
-    const workflowDir = resolveAgentFlowWriteDir(input.harnessDir)
+    // write, never a sibling session's lifecycle (compass v3.0.0 § Catalog
+    // selection rule).
+    const workflowDir = resolveAgentFlowWriteDir(input.harnessDir, input.hint)
     if (workflowDir === null) return
     const header = assignmentHeaderRegion(input.prompt)
     const fields = parseAssignmentFields(header)
@@ -1054,7 +1092,9 @@ export function recordDispatch(input: {
  * (`childId` — the settled child session; `taskRef` — a background settle's
  * registry job id). A missing, empty, or oversized optional id is OMITTED
  * from the row (never truncated, never re-keyed) and the completion still
- * records.
+ * records. The carrying session's `hint` is the no-dir fallback (a PAIRED
+ * settle keeps its pinned `workflowDir` — a later pick must never split a
+ * dispatch from its settle).
  */
 export function recordSettle(input: {
   harnessDir: string
@@ -1065,11 +1105,13 @@ export function recordSettle(input: {
   role?: string
   planId?: string
   taskId?: string
+  /** The carrying session's selection hint — consulted ONLY when no `workflowDir` is pinned. */
+  hint?: SessionHint
   childId?: string
   taskRef?: string
 }): void {
   try {
-    const workflowDir = input.workflowDir ?? resolveAgentFlowWriteDir(input.harnessDir)
+    const workflowDir = input.workflowDir ?? resolveAgentFlowWriteDir(input.harnessDir, input.hint)
     if (workflowDir === null) return
     const childId = optionalLedgerId(input.childId)
     const taskRef = optionalLedgerId(input.taskRef)
@@ -1116,10 +1158,11 @@ export function recordSettle(input: {
  * `harnessDir`. No active lifecycle → `false` (skipped with a one-time warn
  * — never a root v1 write, never a terminal snapshot write).
  * @param input - harness dir + optional pre-resolved active workflow dir +
- * the fully-shaped v1 workflow event.
+ * the fully-shaped v1 workflow event + the carrying session's `hint` for the
+ * no-dir fallback (a pinned dir always wins).
  * @returns `true` when the row was appended (the caller may durably advance
  *   its watermark); `false` on a contained append failure OR when no active
- *   lifecycle resolves — the caller must leave the cursor behind so the row
+ *   lifecycle is bound — the caller must leave the cursor behind so the row
  *   is re-attempted at the next scan (advance-then-record made a
  *   failed append permanent loss).
  */
@@ -1127,9 +1170,11 @@ export function recordWorkflowEvent(input: {
   harnessDir: string
   workflowDir?: string
   event: AgentFlowWorkflowEvent
+  /** The carrying session's selection hint — consulted ONLY when no `workflowDir` is pinned. */
+  hint?: SessionHint
 }): boolean {
   try {
-    const workflowDir = input.workflowDir ?? resolveAgentFlowWriteDir(input.harnessDir)
+    const workflowDir = input.workflowDir ?? resolveAgentFlowWriteDir(input.harnessDir, input.hint)
     if (workflowDir === null) return false
     appendEvent(workflowDir, input.event)
     try {
@@ -1166,6 +1211,13 @@ export interface WorkflowVerdictInput {
   verdict: WorkflowVerdict
   /** The policy violation code (advisory/ask/denied rows only). */
   code?: string
+  /**
+   * The carrying session's selection hint (the adapter derives it from the
+   * same `exec` it passes here) — decides WHICH active lifecycle the verdict
+   * row lands in. Absent (exec-less / unreadable binding store) → the row is
+   * skipped rather than attributed to an arbitrary lifecycle.
+   */
+  hint?: SessionHint
 }
 
 /**
@@ -1188,10 +1240,10 @@ export interface WorkflowVerdictInput {
  */
 export function recordWorkflowVerdict(input: WorkflowVerdictInput): void {
   try {
-    // v3 write path: the ACTIVE workflow dir only. No active lifecycle →
-    // skipped with a one-time warn (never a root v1 write, never a terminal
-    // snapshot write).
-    const workflowDir = resolveAgentFlowWriteDir(input.harnessDir)
+    // v3 write path: the ACTIVE workflow dir BOUND to this session. No bound
+    // lifecycle → skipped with a one-time warn (never a root v1 write, never
+    // a terminal snapshot write, never a sibling session's lifecycle).
+    const workflowDir = resolveAgentFlowWriteDir(input.harnessDir, input.hint)
     if (workflowDir === null) return
     const agent = input.exec !== undefined ? agentOfExec(input.exec) : undefined
     const event: AgentFlowEvent = {

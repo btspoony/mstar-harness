@@ -56,10 +56,15 @@ afterEach(async () => {
 
 /* ------------------------------ shared fixtures ------------------------------ */
 
-/** Valid in-progress delivery compass (mstar-iteration §1.3 template shape). */
+/**
+ * Valid in-progress delivery compass (mstar-iteration §1.3 template shape).
+ * `iteration_id` MUST equal the owning workflow snapshot's `id` (D4): the
+ * catalog attributes a compass to the SELECTED lifecycle only when the
+ * snapshot's `compass_ref` and this frontmatter id agree.
+ */
 const COMPASS_ACTIVE = [
   '---',
-  'iteration_id: fixture-iter',
+  'iteration_id: iter-00000808-wt',
   'start_date: 2026-08-08',
   'status: locked',
   'iteration_base_branch: dev-dsh',
@@ -110,7 +115,14 @@ async function seedIteration(root: string, plans: unknown[], compass: string): P
   await mkdir(harnessDir, { recursive: true })
   await seedHarness(harnessDir, {
     'status.json': v2Root([v2WorkflowEntry('iter-00000808-wt', 'iteration')]),
-    'workflows/iter-00000808-wt/snapshot.json': v2Snapshot('iter-00000808-wt', { type: 'iteration', plans }),
+    // `compass_ref` is the selected lifecycle's ONLY compass link (D4 —
+    // `migrate.ts` producer shape): the gate row resolves this snapshot's own
+    // compass, never the first active compass on disk.
+    'workflows/iter-00000808-wt/snapshot.json': v2Snapshot('iter-00000808-wt', {
+      type: 'iteration',
+      plans,
+      compass_ref: 'iterations/iter-00000808-wt/delivery-compass.md',
+    }),
     'iterations/iter-00000808-wt/delivery-compass.md': compass,
   })
 }

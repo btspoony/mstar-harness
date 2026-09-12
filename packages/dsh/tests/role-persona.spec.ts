@@ -37,6 +37,7 @@ import * as plugin from '../src/index.ts'
 import type { SubagentStartRequestView, SubagentsServiceView } from '../src/gates/role-persona.ts'
 import {
   FakeLoaderRegistry,
+  FakeSettingsRegistry,
   FakeSubagentProvider,
   bootApp,
   startViaNativeChannel,
@@ -66,6 +67,12 @@ const EXECUTE_AS = 'fullstack-dev'
 /** The configured persona text for `fullstack-dev`. */
 const PERSONA = 'You are a fullstack-dev executor for the Morning Star harness.'
 
+/** The 0.5.2 fallbacks-declared persona competing for the SAME native slot (AC-7). */
+const FALLBACKS_PERSONA = 'You are the fallbacks-declared executor persona.'
+
+/** A declared-role id OUTSIDE mstar's taxonomy — isolates the fallbacks delivery path. */
+const FALLBACKS_ONLY_ROLE = 'ac7-control'
+
 /** One mstar-style Assignment prompt sent as the start request's task text. */
 const ASSIGNMENT_PROMPT = [
   '**Execute as**: fullstack-dev',
@@ -77,6 +84,17 @@ const ASSIGNMENT_PROMPT = [
 
 /** A non-Assignment task prompt (no header fields). */
 const PLAIN_PROMPT = 'Summarize the attached file.'
+
+/**
+ * The REVERSED-composition row list (case (v)): the same rows the default
+ * boot composes, with the REAL `dsh-llm-fallbacks` row BEFORE the
+ * `@mstar-harness/dsh` row. Both layers intercept the same `internal/get`
+ * service read and each fills the native `persona` slot only when it is
+ * free, so the composition order decides which wrapper runs first — the
+ * default order mounts the mstar row first (probed on dsh 0.1.0-rc.6), this
+ * fixture pins the re-ordered one.
+ */
+const REVERSED_CORDIS_YML = join(import.meta.dir, 'fixtures', 'cordis-fallbacks-first.yml')
 
 /** One fixture mirror shell: frontmatter `name` + block-scalar `description` (`mode: subagent`). */
 const mirrorShell = (name: string, description: string): string => [
@@ -158,6 +176,31 @@ async function bootWithProvider(
   // path; the wrapper delegates the same registry anyway).
   ;(app.ctx.subagents as unknown as SubagentRuntime).registerProvider(provider as never)
   return { app, provider }
+}
+
+/**
+ * Declare fallback roles through the REAL settings seam (0.5.2 composes its
+ * live config from `settings.installSection` — base row + stored section, so
+ * a stored `roles` payload is what an operator's settings.yaml would carry:
+ * the competing role-identity source). The plugin re-reads the section live,
+ * so a declaration made after the row applied takes effect.
+ */
+async function declareFallbacksRoles(app: BootResult, roles: Array<{ id: string; persona: string }>): Promise<void> {
+  const settings = app.ctx.get('settings') as FakeSettingsRegistry | undefined
+  if (settings === undefined) throw new Error('settings seam unavailable in the fallbacks composition')
+  await settings.update('fallbacks', { roles: { list: roles, rules: [] } })
+}
+
+/**
+ * {@link declareFallbacksRoles}, then mount the 0.5.2 `dsh-llm-fallbacks` row
+ * as a plain plugin row (the Task 1 probe test's entry-shape cast) with no
+ * config argument — the composition where the mstar row mounts FIRST.
+ */
+async function applyFallbacksRow(app: BootResult, roles: Array<{ id: string; persona: string }>): Promise<void> {
+  await declareFallbacksRoles(app, roles)
+  const fallbacksPlugin = fallbacks as unknown as Parameters<Context['plugin']>[0]
+  await app.ctx.plugin(fallbacksPlugin)
+  expect(fallbacksMounted(app.ctx)).toBe(true)
 }
 
 /** A real start request whose prompt text carries `text` (Assignment or plain). */
@@ -255,7 +298,12 @@ describe('native persona channel — SubagentStartRequest.persona merge', () => 
   })
 
   it('(e) composition with dsh-llm-fallbacks applied → persona still merged (seeds + advisory stay the fallbacks surface)', async () => {
-    const { app, provider } = await bootWithProvider('fake-spawn', { personaCapability: true })
+    // 0.5.2 provides `llm-fallbacks` inside `ctx.inject(["settings"], …)`:
+    // without the settings seam the plugin applies but registers no service,
+    // so the composition would not actually be a fallbacks composition. Same
+    // seam the probe test boots (the real dsh app always composes
+    // `dsh-settings-file` before the plugin layers).
+    const { app, provider } = await bootWithProvider('fake-spawn', { personaCapability: true }, { settingsService: 'fake' })
     // The real registry plugin applied as a row (same entry-shape cast the
     // Task 1 probe test applies).
     const fallbacksPlugin = fallbacks as unknown as Parameters<Context['plugin']>[0]
@@ -387,6 +435,111 @@ describe('native persona channel — SubagentStartRequest.persona merge', () => 
 
       expect(provider.starts[0]!.request.persona).toBe('caller persona')
       expect(captured).toHaveLength(0) // caller intent respected silently
+    } finally {
+      restore()
+    }
+  })
+
+  // ---- AC-7 : caller-set persona under the real dsh-llm-fallbacks 0.5.2 composition ----
+
+  it('(q) real dsh-llm-fallbacks 0.5.2 row + settings seam → an explicit caller persona still wins (AC-7)', async () => {
+    // 0.5.2's dispatch seam competes for the SAME native slot: it resolves
+    // the declared role from this Assignment and merges that role's declared
+    // `persona` when the slot is free. Declaring a persona for the SAME role
+    // id makes that competing delivery live; the caller's value must win.
+    const { app, provider } = await bootWithProvider('fake-spawn', { personaCapability: true }, { settingsService: 'fake' })
+    await applyFallbacksRow(app, [{ id: EXECUTE_AS, persona: FALLBACKS_PERSONA }])
+
+    const { captured, restore } = captureLogs()
+    try {
+      await startViaNativeChannel(app, 'fake-spawn', startRequest(ASSIGNMENT_PROMPT, { persona: 'caller persona' }))
+
+      expect(provider.starts[0]!.request.persona).toBe('caller persona')
+      expect(captured).toHaveLength(0) // caller intent respected silently
+    } finally {
+      restore()
+    }
+  })
+
+  it('(r) the same 0.5.2 composition delivers the declared fallbacks persona when the slot is free (AC-7 control)', async () => {
+    // Same row + settings seam, but the Assignment declares a role OUTSIDE
+    // mstar's taxonomy: the mstar channel resolves nothing, so the observed
+    // persona can only come from the fallbacks seam. This shows the 0.5.2
+    // role-identity path really fills the native slot on this composition —
+    // (q)'s caller-wins assertion is not vacuous.
+    const { app, provider } = await bootWithProvider('fake-spawn', { personaCapability: true }, { settingsService: 'fake' })
+    await applyFallbacksRow(app, [{ id: FALLBACKS_ONLY_ROLE, persona: FALLBACKS_PERSONA }])
+
+    const { captured, restore } = captureLogs()
+    try {
+      await startViaNativeChannel(app, 'fake-spawn', startRequest(ASSIGNMENT_PROMPT.replace(EXECUTE_AS, FALLBACKS_ONLY_ROLE)))
+
+      expect(provider.starts[0]!.request.persona).toBe(FALLBACKS_PERSONA)
+      expect(captured).toHaveLength(0) // the mstar channel had nothing to deliver
+    } finally {
+      restore()
+    }
+  })
+
+
+  it('(u) Execute as fullstack-dev with no caller persona: mstar Config.rolePersonas wins over a distinct fallbacks row persona', async () => {
+    const { app, provider } = await bootWithProvider('fake-spawn', { personaCapability: true }, { settingsService: 'fake' })
+    await applyFallbacksRow(app, [{ id: EXECUTE_AS, persona: FALLBACKS_PERSONA }])
+
+    const { captured, restore } = captureLogs()
+    try {
+      await startViaNativeChannel(app, 'fake-spawn', startRequest(ASSIGNMENT_PROMPT))
+
+      expect(provider.starts[0]!.request.persona).toBe(PERSONA)
+    } finally {
+      restore()
+    }
+  })
+
+  it('(v) reversed composition (the fallbacks row BEFORE the mstar row): the operator Config.rolePersonas persona still wins — the wrapper order never displaces it', async () => {
+    // (q)/(r)/(u) pin the DEFAULT profile order (mstar row first), where the
+    // mstar wrapper is registered first and therefore runs first. This case
+    // pins the RE-ORDERED composition: the real 0.5.2 row applies first — the
+    // non-default profile order / a re-applied plugin row — so the fallbacks
+    // wrapper would otherwise claim the native slot before the harness
+    // channel ever sees the request. The operator's `rolePersonas` override is
+    // the authoritative role identity for a role the harness resolves, so it
+    // must win the slot on EITHER order. The competing fallbacks persona is
+    // declared through the real settings seam — the same `roles.list[]`
+    // materialization the mstar seeds/`harness-agents` mirror feeds.
+    const app = booted = await bootApp({
+      cordisYml: REVERSED_CORDIS_YML,
+      agentsService: 'fake',
+      subagents: 'real',
+      settingsService: 'fake',
+      fallbacksModule: fallbacks,
+      rolePersonas: { [EXECUTE_AS]: PERSONA },
+    })
+    const provider = new FakeSubagentProvider('fake-spawn', { personaCapability: true })
+    // Registration targets the raw root-context read (the root fiber has no
+    // runtime) — the same direct registry path `bootWithProvider` uses.
+    ;(app.ctx.subagents as unknown as SubagentRuntime).registerProvider(provider as never)
+    await declareFallbacksRoles(app, [
+      { id: EXECUTE_AS, persona: FALLBACKS_PERSONA },
+      { id: FALLBACKS_ONLY_ROLE, persona: FALLBACKS_PERSONA },
+    ])
+
+    const { captured, restore } = captureLogs()
+    try {
+      await startViaNativeChannel(app, 'fake-spawn', startRequest(ASSIGNMENT_PROMPT))
+
+      expect(provider.starts[0]!.request.persona).toBe(PERSONA)
+      // The delivered persona is the CONFIG one — the merge log names the source.
+      expect(captured).toHaveLength(1)
+      expect(captured[0]![0]).toBe('debug')
+      expect(captured[0]![1]).toContain('mstar Config')
+
+      // Liveness control: on THIS composition the fallbacks seam really does
+      // own the slot for a role the harness channel resolves nothing for —
+      // so the assertion above is not vacuous (the 0.5.2 role-identity path
+      // is live and would have filled the same slot first).
+      await startViaNativeChannel(app, 'fake-spawn', startRequest(ASSIGNMENT_PROMPT.replace(EXECUTE_AS, FALLBACKS_ONLY_ROLE)))
+      expect(provider.starts[1]!.request.persona).toBe(FALLBACKS_PERSONA)
     } finally {
       restore()
     }

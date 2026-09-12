@@ -33,7 +33,7 @@
  */
 import { describe, expect, it, afterEach } from 'bun:test'
 import { readFileSync } from 'node:fs'
-import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, symlink, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
@@ -41,7 +41,8 @@ import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import * as plugin from '../src/index.ts'
 import type { MstarEngineStatusPayload, MstarEngineStatusSource } from '../src/index.ts'
-import { buildCatalogPayload } from '../src/gates/catalog.ts'
+import { buildCatalogPayload, catalogCacheKey } from '../src/gates/catalog.ts'
+import { updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
 import { bootApp, FakeLoaderRegistry, seedHarness, v2Root, v2Snapshot, v2WorkflowEntry, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
@@ -64,9 +65,12 @@ const inboxMessage = (): UserMessage => createUserMessage({
 const defaultEnter = (messages: UserMessage[]): (() => Promise<PreStepDecision>) =>
   () => Promise.resolve<PreStepDecision>({ kind: 'enter', messages })
 
+/** The session every simulated step carries (the durable catalog-cache key). */
+const SESSION_ID = 's-catalog'
+
 /** A `agent/pre-step` payload the agent loop would dispatch. */
 const stepPayload = (messages: UserMessage[], signal = new AbortController().signal) => ({
-  agent: {},
+  agent: { session: { header: { id: SESSION_ID } } },
   messages,
   turn: 1,
   step: 1,
@@ -155,15 +159,21 @@ describe('mstar-engine-status catalog — pre-step composition (REAL-composition
 
   it('keeps the watermark stable within the catalog TTL — a compass appearing after boot does not re-watermark immediately (TTL-bounded)', async () => {
     const app = booted = await bootApp()
-    // The cache is built at boot for the explicit config; a compass that
-    // appears after boot does not change the catalog row until the catalog
-    // TTL expires (Config `catalogTtlMs`, default 60000 — the documented
-    // staleness tradeoff for keeping disk I/O off the hot path).
+    // Prime the session cache (D4: no boot pre-seed — the first pre-step
+    // builds it). A compass that appears afterwards does not change the
+    // catalog row until the TTL expires.
+    await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
     await seedHarness(app.harnessDir, {
       'iterations/00000808-catalog-test/delivery-compass.md': '---\nstatus: active\nenforcement: hard\n---\n',
     })
 
-    const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
+    const decision = await app.ctx.waterfall('agent/pre-step', {
+      agent: { session: { header: { id: SESSION_ID } } },
+      messages: [],
+      turn: 2,
+      step: 1,
+      signal: new AbortController().signal,
+    } as never, defaultEnter([]))
 
     const catalog = lastMessage(decision)
     expect(catalog?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine', form: 'catalog' })
@@ -293,7 +303,12 @@ describe('mstar-engine-status catalog — iteration compassStatus (spec panel-f4
     await mkdir(harnessDir, { recursive: true })
     await seedHarness(harnessDir, {
       'status.json': VALID_STATUS_JSON,
-      [`workflows/${ITERATION_WORKFLOW}/snapshot.json`]: v2Snapshot(ITERATION_WORKFLOW, { type: 'iteration' }),
+      // The selected snapshot's OWN `compass_ref` (harness-relative) is the
+      // only compass link the read path admits (D4) — never a directory scan.
+      [`workflows/${ITERATION_WORKFLOW}/snapshot.json`]: v2Snapshot(ITERATION_WORKFLOW, {
+        type: 'iteration',
+        compass_ref: 'iterations/iter-00000811-catalog-compass/delivery-compass.md',
+      }),
       'iterations/iter-00000811-catalog-compass/delivery-compass.md': compassDoc(status),
     })
     const app = booted = await bootApp({ root })
@@ -319,8 +334,8 @@ describe('mstar-engine-status catalog — iteration compassStatus (spec panel-f4
   })
 
   it('omits compassStatus (and the whole iteration row) for a NON-steering status — the steering filter never admits it (belt-and-suspenders guard)', async () => {
-    // `status: completed` is not active|locked → `steeringCompassPath` skips
-    // the compass → no iteration section at all. The appended message stays
+    // `status: completed` is not active|locked → `selectedCompass` refuses the
+    // link → no iteration section at all. The appended message stays
     // losslessly JSON-serializable (no undefined-valued props, Session.append).
     const payload = await payloadWithCompass('completed')
     expect(Object.keys(payload).every((key) => (payload as unknown as Record<string, unknown>)[key] !== undefined)).toBe(true)
@@ -417,7 +432,7 @@ Implement the invalidation.
     // from the invalidation-triggered rebuild (the sources now carry the new
     // workflow-dir dispatch event).
     const second = await app.ctx.waterfall('agent/pre-step', {
-      agent: {},
+      agent: { session: { header: { id: SESSION_ID } } },
       messages: [],
       turn: 1,
       step: 2,
@@ -434,9 +449,9 @@ Implement the invalidation.
   it('cross-workspace isolation: a ledger record in workspace A invalidates ONLY A — B\'s cached entry survives within the TTL ', async () => {
     // Two workspaces, each with its OWN probed harness root — no explicit
     // config, so each session cwd resolves its own `{HARNESS_DIR}` and its own
-    // cache key (the session cwd) + reverse-map entry (D3: per-workspace
-    // invalidation — a record deletes EXACTLY the affected workspace's entry,
-    // never a global clear).
+    // cache key (the session id + cwd) + reverse-map entry (D4: per-session
+    // keys, per-harness invalidation — a record deletes EVERY session of the
+    // affected harness, never a global clear).
     const wsA = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-isolate-a-'))
     const wsB = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-isolate-b-'))
     for (const ws of [wsA, wsB]) {
@@ -445,8 +460,8 @@ Implement the invalidation.
         'workflows/wf-1/snapshot.json': v2Snapshot('wf-1'),
       })
     }
-    const stepFor = (cwd: string, turn: number) => ({
-      agent: { session: { header: { cwd } } },
+    const stepFor = (cwd: string, turn: number, sessionId: string) => ({
+      agent: { session: { header: { id: sessionId, cwd } } },
       messages: [],
       turn,
       step: 1,
@@ -456,8 +471,8 @@ Implement the invalidation.
 
     // Register BOTH workspace keys with one pre-step each (the cache is built
     // on first use + the reverse map registers on build).
-    const rowA1 = catalogRowOf(await app.ctx.waterfall('agent/pre-step', stepFor(wsA, 1), defaultEnter([]))).row
-    const rowB1 = catalogRowOf(await app.ctx.waterfall('agent/pre-step', stepFor(wsB, 1), defaultEnter([]))).row
+    const rowA1 = catalogRowOf(await app.ctx.waterfall('agent/pre-step', stepFor(wsA, 1, 's-A'), defaultEnter([]))).row
+    const rowB1 = catalogRowOf(await app.ctx.waterfall('agent/pre-step', stepFor(wsB, 1, 's-B'), defaultEnter([]))).row
     expect(textOf(rowA1)).not.toContain('agent flow:')
     expect(textOf(rowB1)).not.toContain('agent flow:')
 
@@ -483,7 +498,7 @@ Implement the invalidation.
 
     // Next pre-step for A (new turn): the entry was invalidated → REBUILT (a
     // fresh source carrying the new workflow-dir dispatch event).
-    const rowA2 = catalogRowOf(await app.ctx.waterfall('agent/pre-step', stepFor(wsA, 2), defaultEnter([]))).row
+    const rowA2 = catalogRowOf(await app.ctx.waterfall('agent/pre-step', stepFor(wsA, 2, 's-A'), defaultEnter([]))).row
     expect(textOf(rowA2)).toContain('agent flow: 1 events')
     expect(textOf(rowA2)).toContain('by role: fullstack-dev 1')
 
@@ -491,7 +506,7 @@ Implement the invalidation.
     // cache HIT serves the cached build — the out-of-band B line stays
     // invisible within the TTL (no global clear; a multi-workspace deployment
     // does not rebuild every workspace per record).
-    const rowB2 = catalogRowOf(await app.ctx.waterfall('agent/pre-step', stepFor(wsB, 2), defaultEnter([]))).row
+    const rowB2 = catalogRowOf(await app.ctx.waterfall('agent/pre-step', stepFor(wsB, 2, 's-B'), defaultEnter([]))).row
     expect(textOf(rowB2)).not.toContain('agent flow:') // cached build — the direct line is NOT visible
   })
 
@@ -516,7 +531,7 @@ Implement the invalidation.
     // invalidated → the cached build is reused (stale) — the 60s TTL
     // fallback still bounds an out-of-band ledger change.
     const second = await app.ctx.waterfall('agent/pre-step', {
-      agent: {},
+      agent: { session: { header: { id: SESSION_ID } } },
       messages: [],
       turn: 2,
       step: 1,
@@ -530,10 +545,10 @@ Implement the invalidation.
 /* ===========================================================================
  * v3 per-lifecycle aggregation  —
  * the catalog row aggregates the SELECTED workflow lifecycle (compass
- * v3.0.0 § Catalog selection rule): active `workflows[]` first (multi-active
- * → first + a structured warning), else the latest terminal snapshot by
- * mtime, else a clear error. ZoneView field shapes stay byte-compatible
- * (the golden test pins the legacy-row shape).
+ * v3.0.0 § Catalog selection rule): lease → cwd → durable pick → unique
+ * active; N>1 unbound is a picker error (never `workflows[0]`). Else the
+ * latest terminal snapshot by mtime, else a clear error. ZoneView field
+ * shapes stay byte-compatible (the golden test pins the legacy-row shape).
  * ========================================================================== */
 
 describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => {
@@ -590,7 +605,7 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
   /** A steering compass with a `## Direction lock` problem statement. */
   const GOLDEN_COMPASS = [
     '---',
-    'iteration_id: v2.2.0',
+    `iteration_id: ${GOLDEN_WORKFLOW}`,
     'start_date: 2026-08-19',
     'status: active',
     'iteration_base_branch: dev-dsh',
@@ -622,6 +637,7 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
       'status.json': v2Root([v2WorkflowEntry(GOLDEN_WORKFLOW, 'iteration')]),
       [`workflows/${GOLDEN_WORKFLOW}/snapshot.json`]: v2Snapshot(GOLDEN_WORKFLOW, {
         type: 'iteration',
+        compass_ref: 'iterations/v2.2.0/delivery-compass.md',
         plans: GOLDEN_PLANS,
         branch: { base: 'dev-dsh', integration: 'iteration/v2.2.0', target: 'dev-dsh' },
         execution_policy: { push_policy: 'no-push', worktree_mode: 'feature-worktree' },
@@ -692,7 +708,7 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
     // The iteration section: the gate evaluates the SELECTED snapshot (the
     // evaluated-doc path is the snapshot, not the root status.json).
     expect(payload.iteration).toMatchObject({
-      iterationId: 'v2.2.0',
+      iterationId: GOLDEN_WORKFLOW,
       statusPath: join(harnessDir, `workflows/${GOLDEN_WORKFLOW}/snapshot.json`),
       compassPath: join(harnessDir, 'iterations/v2.2.0/delivery-compass.md'),
       gate: { transition: 'phase-2-execute', all_plans_done: false, ok: true },
@@ -799,7 +815,7 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
     expect(textOf(row)).toContain('workflow selection: ERROR (status.migration-required)')
   })
 
-  it('multiple active workflows → first entry selected + operator-visible warning field (no silent pick)', async () => {
+  it('multiple active workflows unbound → picker error + empty aggregates (never workflows[0])', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-multiactive-'))
     const harnessDir = join(root, 'harness')
     await mkdir(harnessDir, { recursive: true })
@@ -812,23 +828,23 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
     const { row } = catalogRowOf(decision)
 
-    const state = buildCatalogPayload(app.ctx, harnessDir).state
+    const payload = buildCatalogPayload(app.ctx, harnessDir)
+    const state = payload.state
     expect(state).not.toBeNull()
     if (state === null) return
-    // The FIRST active entry is selected, with a structured warning.
+    // N>1 with no lease/cwd/pick is the picker error — never the first entry.
     expect(state.selection).toEqual({
-      kind: 'active',
-      workflowId: 'wf-a',
-      dir: 'workflows/wf-a',
-      warning: {
-        code: 'workflow.selection.multi-active',
-        message: expect.stringContaining('2 active lifecycles'),
-      },
+      kind: 'error',
+      code: 'workflow.selection.unbound-multi-active',
+      message: expect.stringContaining('2 active lifecycles'),
+      activeWorkflowIds: ['wf-a', 'wf-b'],
     })
-    // The state aggregates the FIRST workflow only.
-    expect(state.plans).toEqual([{ id: 'plan-a', status: 'Todo', doneAt: null, iterationRefs: [] }])
-    // The warning is operator-visible in the model text too.
-    expect(textOf(row)).toContain('workflow warning: workflow.selection.multi-active')
+    // The aggregates stay empty by construction (no silent first-entry steal).
+    expect(state.plans).toEqual([])
+    expect(state.direction).toBeNull()
+    expect(payload.iteration).toBeUndefined()
+    expect(textOf(row)).toContain('workflow selection: ERROR (workflow.selection.unbound-multi-active)')
+    expect(textOf(row)).not.toContain('workflow warning: workflow.selection.multi-active')
   })
 
   it('no active workflows → the latest terminal snapshot by mtime (history view); non-terminal snapshots are skipped', async () => {
@@ -999,6 +1015,225 @@ describe('catalog teardown — fiber.dispose removes the pre-step listener (HMR-
     } finally {
       await ctx.fiber.dispose().catch(() => {})
       await rm(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('D4 session-scoped catalog selection', () => {
+  const ASSIGNMENT = `## Assignment
+
+**Execute as**: fullstack-dev
+
+## Task
+
+Pick.
+`
+
+  it('two same-cwd sessions with different picks keep their own plans/ledger within TTL; one ledger invalidation refreshes both', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-d4-isolate-'))
+    const harnessDir = join(root, 'harness')
+    await mkdir(harnessDir, { recursive: true })
+    await seedHarness(harnessDir, {
+      'status.json': v2Root([v2WorkflowEntry('wf-a'), v2WorkflowEntry('wf-b')]),
+      'workflows/wf-a/snapshot.json': v2Snapshot('wf-a', { plans: [{ id: 'plan-a', status: 'Todo' }] }),
+      'workflows/wf-b/snapshot.json': v2Snapshot('wf-b', { plans: [{ id: 'plan-b', status: 'Done' }] }),
+    })
+    const app = booted = await bootApp({ root })
+    expect(updateWorkflowSessionBinding(harnessDir, 's-A', root, { selectedWorkflowId: 'wf-a', excludedBeforeSeq: 0 }).kind).toBe('written')
+    expect(updateWorkflowSessionBinding(harnessDir, 's-B', root, { selectedWorkflowId: 'wf-b', excludedBeforeSeq: 0 }).kind).toBe('written')
+
+    const stepFor = (sessionId: string, turn: number) => ({
+      agent: { session: { header: { id: sessionId, cwd: root } } },
+      messages: [],
+      turn,
+      step: 1,
+      signal: new AbortController().signal,
+    } as never)
+
+    const rowA1 = catalogRowOf(await app.ctx.waterfall('agent/pre-step', stepFor('s-A', 1), defaultEnter([]))).row
+    const rowB1 = catalogRowOf(await app.ctx.waterfall('agent/pre-step', stepFor('s-B', 1), defaultEnter([]))).row
+    expect(textOf(rowA1)).toContain('workflow: wf-a (active)')
+    expect(textOf(rowA1)).toContain('plan-a(Todo)')
+    expect(textOf(rowA1)).not.toContain('plan-b')
+    expect(textOf(rowB1)).toContain('workflow: wf-b (active)')
+    expect(textOf(rowB1)).toContain('plan-b(Done)')
+    expect(textOf(rowB1)).not.toContain('plan-a')
+
+    await writeFile(
+      join(harnessDir, 'workflows/wf-b', plugin.AGENT_FLOW_FILE),
+      `${JSON.stringify({ v: 1, ts: Date.now(), kind: 'dispatch', role: 'architect', verdict: 'ok', hard: false })}\n`,
+    )
+    const rowA2 = catalogRowOf(await app.ctx.waterfall('agent/pre-step', stepFor('s-A', 2), defaultEnter([]))).row
+    const rowB2 = catalogRowOf(await app.ctx.waterfall('agent/pre-step', stepFor('s-B', 2), defaultEnter([]))).row
+    expect(textOf(rowA2)).not.toContain('agent flow:')
+    expect(textOf(rowB2)).not.toContain('agent flow:')
+
+    plugin.recordDispatch({
+      harnessDir,
+      prompt: ASSIGNMENT,
+      violations: [],
+      hard: false,
+      hint: { cwd: root, sessionId: 's-A', selectedWorkflowId: 'wf-a' },
+    })
+    const rowA3 = catalogRowOf(await app.ctx.waterfall('agent/pre-step', stepFor('s-A', 3), defaultEnter([]))).row
+    const rowB3 = catalogRowOf(await app.ctx.waterfall('agent/pre-step', stepFor('s-B', 3), defaultEnter([]))).row
+    expect(textOf(rowA3)).toContain('agent flow: 1 events')
+    expect(textOf(rowA3)).toContain('by role: fullstack-dev 1')
+    expect(textOf(rowB3)).toContain('agent flow: 1 events')
+    expect(textOf(rowB3)).toContain('by role: architect 1')
+  })
+
+  it('unbound multi-active plus a newer terminal snapshot stays the picker error (never history)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-d4-terminal-'))
+    const harnessDir = join(root, 'harness')
+    await mkdir(harnessDir, { recursive: true })
+    await seedHarness(harnessDir, {
+      'status.json': v2Root([v2WorkflowEntry('wf-a'), v2WorkflowEntry('wf-b')]),
+      'workflows/wf-a/snapshot.json': v2Snapshot('wf-a', { plans: [{ id: 'plan-a', status: 'Todo' }] }),
+      'workflows/wf-b/snapshot.json': v2Snapshot('wf-b', { plans: [{ id: 'plan-b', status: 'Done' }] }),
+      'workflows/wf-old/snapshot.json': v2Snapshot('wf-old', {
+        status: 'completed',
+        ended_at: '2026-08-19',
+        plans: [{ id: 'plan-old', status: 'Done' }],
+      }),
+    })
+    const oldPath = join(harnessDir, 'workflows/wf-old/snapshot.json')
+    const now = Date.now() / 1000
+    await utimes(oldPath, now + 100, now + 100)
+    const app = booted = await bootApp({ root })
+    const payload = buildCatalogPayload(app.ctx, harnessDir)
+    expect(payload.state?.selection).toEqual({
+      kind: 'error',
+      code: 'workflow.selection.unbound-multi-active',
+      message: expect.stringContaining('2 active lifecycles'),
+      activeWorkflowIds: ['wf-a', 'wf-b'],
+    })
+    expect(payload.state?.plans).toEqual([])
+    expect(payload.state?.direction).toBeNull()
+    expect(payload.iteration).toBeUndefined()
+  })
+
+  it('state, direction and iteration gate all come from the same selected workflow', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-d4-cohere-'))
+    const harnessDir = join(root, 'harness')
+    await mkdir(harnessDir, { recursive: true })
+    const compass = (id: string, direction: string): string => [
+      '---',
+      `iteration_id: ${id}`,
+      'start_date: 2026-08-19',
+      'status: active',
+      'iteration_base_branch: dev-dsh',
+      'target_branch: dev-dsh',
+      '---',
+      '',
+      '## Direction lock',
+      '',
+      `- **Problem statement:** ${direction}`,
+      '',
+    ].join('\n')
+    await seedHarness(harnessDir, {
+      'status.json': v2Root([v2WorkflowEntry('wf-a', 'iteration'), v2WorkflowEntry('wf-b', 'iteration')]),
+      'workflows/wf-a/snapshot.json': v2Snapshot('wf-a', {
+        type: 'iteration',
+        compass_ref: 'iterations/wf-a/delivery-compass.md',
+        plans: [{ id: 'plan-a', status: 'Todo' }],
+      }),
+      'workflows/wf-b/snapshot.json': v2Snapshot('wf-b', {
+        type: 'iteration',
+        compass_ref: 'iterations/wf-b/delivery-compass.md',
+        plans: [{ id: 'plan-b', status: 'Done' }],
+      }),
+      'iterations/wf-a/delivery-compass.md': compass('wf-a', 'Direction A.'),
+      'iterations/wf-b/delivery-compass.md': compass('wf-b', 'Direction B.'),
+    })
+    const app = booted = await bootApp({ root })
+    const payload = buildCatalogPayload(app.ctx, harnessDir, {
+      cwd: root,
+      sessionId: 's-A',
+      selectedWorkflowId: 'wf-a',
+    })
+    expect(payload.state?.selection).toEqual({ kind: 'active', workflowId: 'wf-a', dir: 'workflows/wf-a' })
+    expect(payload.state?.plans).toEqual([{ id: 'plan-a', status: 'Todo', doneAt: null, iterationRefs: [] }])
+    expect(payload.state?.direction).toBe('Direction A.')
+    expect(payload.iteration).toMatchObject({
+      iterationId: 'wf-a',
+      compassPath: join(harnessDir, 'iterations/wf-a/delivery-compass.md'),
+      compassStatus: 'active',
+    })
+  })
+})
+
+describe('D4 catalog identity encoding + selected compass path', () => {
+  it('two tuples that differ only by a delimiter in an opaque field do not collide', () => {
+    const harness = '/h'
+    // Adjacent sessionId / cwd: `\u0000`-join fused these into one key.
+    expect(catalogCacheKey(harness, 's', 'a\u0000b', undefined))
+      .not.toBe(catalogCacheKey(harness, 's\u0000a', 'b', undefined))
+    // Adjacent leaseHolder / selectedWorkflowId — the same delimiter-shift.
+    expect(catalogCacheKey(harness, 's', '/ws', { leaseHolder: 'x\u0000y', selectedWorkflowId: 'wf-a' }))
+      .not.toBe(catalogCacheKey(harness, 's', '/ws', { leaseHolder: 'x', selectedWorkflowId: 'y\u0000wf-a' }))
+  })
+
+  const compassDoc = (id: string, direction: string): string => [
+    '---',
+    `iteration_id: ${id}`,
+    'start_date: 2026-08-19',
+    'status: active',
+    'iteration_base_branch: dev-dsh',
+    'target_branch: dev-dsh',
+    '---',
+    '',
+    '## Direction lock',
+    '',
+    `- **Problem statement:** ${direction}`,
+    '',
+  ].join('\n')
+
+  it('refuses a compass_ref whose basename is not delivery-compass.md', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-compass-basename-'))
+    const harnessDir = join(root, 'harness')
+    await mkdir(harnessDir, { recursive: true })
+    await seedHarness(harnessDir, {
+      'status.json': v2Root([v2WorkflowEntry('wf-a', 'iteration')]),
+      'workflows/wf-a/snapshot.json': v2Snapshot('wf-a', {
+        type: 'iteration',
+        compass_ref: 'iterations/wf-a/notes.md',
+        plans: [{ id: 'plan-a', status: 'Todo' }],
+      }),
+      'iterations/wf-a/notes.md': compassDoc('wf-a', 'Stolen direction.'),
+    })
+    const app = booted = await bootApp({ root })
+    const payload = buildCatalogPayload(app.ctx, harnessDir)
+    expect(payload.state?.selection).toEqual({ kind: 'active', workflowId: 'wf-a', dir: 'workflows/wf-a' })
+    expect(payload.state?.direction).toBeNull()
+    expect(payload.iteration).toBeUndefined()
+  })
+
+  it('refuses a delivery-compass.md symlink whose target escapes the harness', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-compass-symlink-'))
+    const outsideDir = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-compass-outside-'))
+    const harnessDir = join(root, 'harness')
+    await mkdir(harnessDir, { recursive: true })
+    const outsideFile = join(outsideDir, 'delivery-compass.md')
+    await writeFile(outsideFile, compassDoc('wf-a', 'Escaped direction.'))
+    await seedHarness(harnessDir, {
+      'status.json': v2Root([v2WorkflowEntry('wf-a', 'iteration')]),
+      'workflows/wf-a/snapshot.json': v2Snapshot('wf-a', {
+        type: 'iteration',
+        compass_ref: 'iterations/wf-a/delivery-compass.md',
+        plans: [{ id: 'plan-a', status: 'Todo' }],
+      }),
+    })
+    await mkdir(join(harnessDir, 'iterations/wf-a'), { recursive: true })
+    await symlink(outsideFile, join(harnessDir, 'iterations/wf-a/delivery-compass.md'))
+    try {
+      const app = booted = await bootApp({ root })
+      const payload = buildCatalogPayload(app.ctx, harnessDir)
+      expect(payload.state?.selection).toEqual({ kind: 'active', workflowId: 'wf-a', dir: 'workflows/wf-a' })
+      expect(payload.state?.direction).toBeNull()
+      expect(payload.iteration).toBeUndefined()
+    } finally {
+      await rm(outsideDir, { recursive: true, force: true })
     }
   })
 })

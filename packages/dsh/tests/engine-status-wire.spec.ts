@@ -13,10 +13,11 @@
  * against a re-declared constant).
  */
 import { describe, expect, it } from 'bun:test'
-import { ENGINE_STATUS_CHANNEL, ENGINE_STATUS_ENDPOINT } from '../src/engine-status-wire.ts'
+import { ENGINE_STATUS_CHANNEL, ENGINE_STATUS_ENDPOINT, SELECT_WORKFLOW_ENDPOINT } from '../src/engine-status-wire.ts'
 import {
   MSTAR_ENGINE_STATUS_METHOD,
   MSTAR_ENGINE_STATUS_NAMESPACE,
+  MSTAR_SELECT_WORKFLOW_METHOD,
   mstarEngineStatusContribution,
 } from '../src/engine-status-endpoint.ts'
 import { MstarEngineStatusClient } from '../src/client/panel/engine-status-client.ts'
@@ -51,3 +52,25 @@ describe('engine-status wire address — one declaration, both halves', () => {
     expect(ENGINE_STATUS_CHANNEL).toBe('/api')
   })
 })
+
+describe('selectWorkflow wire address — one declaration, both halves', () => {
+  it('the host descriptor is served at the shared selectWorkflow literal', () => {
+    const invocation = mstarEngineStatusContribution().invocations[1]
+    expect(`${invocation?.namespace}/${invocation?.method}`).toBe(SELECT_WORKFLOW_ENDPOINT)
+  })
+
+  it('the client calls the shared selectWorkflow literal on the host /api channel', async () => {
+    const gateway = stubGateway()
+    const client = new MstarEngineStatusClient(gateway.connection)
+    await client.selectWorkflow('s-wire', '/proj', 'wf-a')
+    expect(gateway.calls).toHaveLength(1)
+    expect(gateway.calls[0]!.channel).toBe(ENGINE_STATUS_CHANNEL)
+    expect(gateway.calls[0]!.endpoint).toBe(SELECT_WORKFLOW_ENDPOINT)
+    client.dispose()
+  })
+
+  it('the address is composed of the namespace and method the host declares', () => {
+    expect(SELECT_WORKFLOW_ENDPOINT).toBe(`${MSTAR_ENGINE_STATUS_NAMESPACE}/${MSTAR_SELECT_WORKFLOW_METHOD}`)
+  })
+})
+

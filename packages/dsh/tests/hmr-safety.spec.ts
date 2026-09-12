@@ -121,7 +121,7 @@ describe('HMR safety — fiber.dispose removes every gate contribution', () => {
     // before apply — same loader-guarantee the real dsh app provides.
     new FakeLoaderRegistry(ctx)
     // Advisory capture proves listener liveness: the status gate never throws
-    // (repair-escape design, qc3 F-1), so a live mount with an invalid on-disk
+    // (repair-escape design), so a live mount with an invalid on-disk
     // document emits a repair advisory on BOTH intent slots; a disposed mount
     // emits nothing.
     const advisories: StatusGateAdvisory[] = []

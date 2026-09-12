@@ -21,6 +21,11 @@ import { resolveHarnessDir, resolveRepoEnforcement } from '@mstar-harness/engine
 import type { GateResult, ValidationResult } from '@mstar-harness/engine'
 import type { Config as SkillLocalConfig } from '@deepseek-ai/dsh-skill-filesystem'
 import type { IterationGateListView, IterationGateViolationView } from '../types.ts'
+// Type-only (erased at runtime — no cycle): the resolver's structural hint
+// shape, constructed here from the session/agent accessors below.
+// `workflow-selection.ts` imports THIS module for values, so the value edge
+// stays one-way; only the hint's TYPE crosses back.
+import type { SessionHint } from './workflow-selection.ts'
 /** Canonical harness status file name (mstar-artifacts status.json). */
 export const STATUS_FILE = 'status.json'
 /** Plugin configuration. */
@@ -482,6 +487,83 @@ export function sessionHeaderIdOf(agent: unknown): string | undefined {
   const id = session?.header?.id
   return typeof id === 'string' && id.trim() !== '' ? id : undefined
 }
+
+/**
+ * The opaque id of one agent — the LEASE-holder identity (`Agent.id`,
+ * structural read). Deliberately distinct from {@link sessionHeaderIdOf}:
+ * the durable picker key is `session.header.id` while a lease's `holder` is
+ * the dispatching agent's own id, and the two are never substituted for one
+ * another (no host-prefix coercion — the resolver compares them opaquely).
+ */
+export function agentIdOf(agent: unknown): string | undefined {
+  const id = (agent as { id?: unknown } | null | undefined)?.id
+  return typeof id === 'string' && id.trim() !== '' ? id : undefined
+}
+
+/**
+ * The VERIFIED live lease-holder identity of one session's Agent — the id the
+ * dispatch gate forwards to the shared resolvers for the SAME dispatch
+ * (`sessionHintOf(exec.agent)` → `agentIdOf`). Every consumer of a
+ * session-level hint (the host endpoint's control-state read, the workflow
+ * ledger's attribution) must forward the SAME identity, or a session whose
+ * lifecycle is only decidable by its lease (two active lifecycles sharing one
+ * `control_worktree_path`) resolves differently per call site.
+ *
+ * The handle must BE that session's agent — its own `session.header.id` names
+ * the session, and (when the caller has an authoritative cwd) its workspace
+ * must equal it. Anything else answers `undefined`: the session id is never
+ * substituted for a holder (they are opaque and distinct).
+ * @param agent - the live agent the host resolves for the session (structural read).
+ * @param sessionId - the session the hint is built for.
+ * @param cwd - the session's workspace; `undefined` skips the workspace check
+ *   (a caller with no authoritative cwd cannot verify one).
+ */
+export function verifiedLeaseHolderOf(agent: unknown, sessionId: string, cwd: string | undefined): string | undefined {
+  if (agent === undefined) return undefined
+  if (sessionHeaderIdOf(agent) !== sessionId) return undefined
+  if (cwd !== undefined && sessionCwdOf(agent) !== cwd) return undefined
+  return agentIdOf(agent)
+}
+
+/**
+ * The structural session hint one event's agent supplies to the workflow
+ * resolvers (no dsh-session import — cold/raw Session consumers read the same
+ * `header.cwd` / `header.id` directly). `selectedWorkflowId` is deliberately
+ * ABSENT: it is the session's durable binding record, loaded by the
+ * composition edge that owns the store (adapter / catalog / workflow-ledger /
+ * plan-mode bridge) — the pure structural read never fabricates it.
+ * @param agent - the agent an event carries (structural read).
+ * @returns the hint, or `undefined` when the agent carries no session
+ *   identity and no id at all (an exec-less hook) — an OMITTED hint, never a
+ *   fabricated empty one.
+ */
+export function sessionHintOf(agent: unknown): SessionHint | undefined {
+  const cwd = sessionCwdOf(agent)
+  const sessionId = sessionHeaderIdOf(agent)
+  const leaseHolder = agentIdOf(agent)
+  if (cwd === undefined && sessionId === undefined && leaseHolder === undefined) return undefined
+  return {
+    ...(cwd === undefined ? {} : { cwd }),
+    ...(sessionId === undefined ? {} : { sessionId }),
+    ...(leaseHolder === undefined ? {} : { leaseHolder }),
+  }
+}
+
+/**
+ * One carrying session's selection-hint read: the hint the resolvers consume,
+ * plus whether the session's DURABLE binding could be trusted.
+ *
+ * `ok` without a `hint` = the event carries no session (an exec-less hook) —
+ * the automatic rungs miss and the registry's unique-active case still
+ * resolves. `unavailable` = the binding store could not be read
+ * (corrupt/unreadable/cwd-mismatch), so the caller must NOT attribute a
+ * durable write to this session — an unverifiable record is NOT "no pick",
+ * and must never be replaced by an empty hint that would silently attribute
+ * the write to whichever lifecycle happens to resolve.
+ */
+export type SessionHintRead =
+  | { readonly kind: 'ok'; readonly hint?: SessionHint }
+  | { readonly kind: 'unavailable'; readonly reason: string; readonly hint?: SessionHint }
 
 /** The tool-execution actor of one fs-intent event, when it carries an agent. */
 export function actorAgentOf(actor: object | undefined): unknown {

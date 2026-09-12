@@ -1,5 +1,8 @@
+import { DSH_LLM_FALLBACKS_VERSION } from "@mstar-harness/engine";
 import { runCliCommand } from "../exec";
+import fs from "node:fs";
 import os from "node:os";
+import { compareSemver } from "../version-compare";
 import path from "node:path";
 import type { AgentAdapter, InstallInitFlags, Scope } from "../types";
 
@@ -64,11 +67,12 @@ function addTimeoutMs(): number {
  * with the dsh CLI's own manifest spec (`^0.3.5`), whose dist re-exports
  * `installSettingsSection` from `@deepseek-ai/dsh-settings` — an export the
  * rc.1 line removed — so an unpinned add breaks the installed-artifact boot
- * against the single-line peer graph. 0.4.1+ is the line adapted to
+ * against the single-line peer graph. 0.4.1 was the line adapted to
  * `@deepseek-ai/dsh-*` `^0.1.2-rc.1` (no dsh-settings re-export at runtime).
- * Bump this constant with the repo's own `dsh-llm-fallbacks` devDependency. */
-const DSH_FALLBACKS_VERSION = "0.4.1";
-const DSH_PLUGIN_SPECS: readonly string[] = ["@mstar-harness/dsh", `dsh-llm-fallbacks@${DSH_FALLBACKS_VERSION}`];
+ * 0.5.2 is the line adapted to `@deepseek-ai/dsh-*` `^0.1.5-rc.2`.
+ * The pin is `DSH_LLM_FALLBACKS_VERSION` from `@mstar-harness/engine`; keep
+ * it lockstep with the repo's `dsh-llm-fallbacks` devDependency. */
+const DSH_PLUGIN_SPECS: readonly string[] = ["@mstar-harness/dsh", `dsh-llm-fallbacks@${DSH_LLM_FALLBACKS_VERSION}`];
 const DSH_FALLBACKS_SPEC = DSH_PLUGIN_SPECS[1];
 
 /** Spec → loader-row name: strip a trailing `@<version>` (none in mstar's
@@ -77,6 +81,33 @@ function dshLoaderName(spec: string): string {
   const at = spec.lastIndexOf("@");
   // Scoped names (`@scope/pkg`) carry an `@` at index 0 — only strip a TRAILING `@version`.
   return at > 0 ? spec.slice(0, at) : spec;
+}
+
+/** Loader-row name for the fallbacks package (dump-config `name:` line is version-free). */
+export const DSH_FALLBACKS_LOADER_NAME = dshLoaderName(DSH_FALLBACKS_SPEC);
+
+const FALLBACKS_VERSION_SHAPE_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+
+function readInstalledFallbacksVersion(profileDir: string): string | null {
+  const pkgJson = path.join(profileDir, "node_modules", DSH_FALLBACKS_LOADER_NAME, "package.json");
+  try {
+    const raw = fs.readFileSync(pkgJson, "utf8");
+    const version = (JSON.parse(raw) as { version?: unknown }).version;
+    if (typeof version === "string") {
+      const trimmed = version.trim();
+      if (FALLBACKS_VERSION_SHAPE_RE.test(trimmed)) return trimmed;
+    }
+  } catch {
+    // absent / unreadable
+  }
+  return null;
+}
+
+function fallbacksVersionDrifted(profileDir: string): boolean {
+  if (!FALLBACKS_VERSION_SHAPE_RE.test(DSH_LLM_FALLBACKS_VERSION)) return false;
+  const installedVersion = readInstalledFallbacksVersion(profileDir);
+  if (installedVersion === null) return true;
+  return compareSemver(installedVersion, DSH_LLM_FALLBACKS_VERSION) !== 0;
 }
 
 const DSH_INSTALL_HINT =
@@ -184,6 +215,7 @@ function runInit(scope: Scope, dryRun: boolean, initFlags?: InstallInitFlags) {
   // Probe installed state from the composed loader tree: same binary, same
   // home resolution as `add`, so the probe can never disagree with install.
   const installed = new Set<string>();
+  const disabledLoaderNames = new Set<string>();
   if (!dryRun) {
     try {
       const entries = parseLoaderEntries(
@@ -195,7 +227,10 @@ function runInit(scope: Scope, dryRun: boolean, initFlags?: InstallInitFlags) {
         // (probe 2026-08-17), so the install stays idempotent.
         notes.push("Warning: could not parse installed plugins from dump (unexpected format); proceeding with add (idempotent).");
       } else {
-        for (const entry of entries) installed.add(entry.name);
+        for (const entry of entries) {
+          installed.add(entry.name);
+          if (!entry.enabled) disabledLoaderNames.add(entry.name);
+        }
       }
     } catch (error) {
       // Probe unavailable: degrade to unconditional adds. Duplicate `add` is
@@ -211,8 +246,15 @@ function runInit(scope: Scope, dryRun: boolean, initFlags?: InstallInitFlags) {
       continue;
     }
     if (!dryRun && (installed.has(spec) || installed.has(dshLoaderName(spec)))) {
-      notes.push(`skipped-existing: ${spec} (already installed in profile ${DSH_PROFILE})`);
-      continue;
+      const isFallbacks = spec === DSH_FALLBACKS_SPEC;
+      const disabledRow = disabledLoaderNames.has(spec) || disabledLoaderNames.has(dshLoaderName(spec));
+      // The enclosing condition already proved this spec's row is present, so
+      // drift is the only reason to fall through to the versioned re-add.
+      const needsVersionAlign = isFallbacks && fallbacksVersionDrifted(profileDir) && !disabledRow;
+      if (!needsVersionAlign) {
+        notes.push(`skipped-existing: ${spec} (already installed in profile ${DSH_PROFILE})`);
+        continue;
+      }
     }
     const addArgs = ["plugin", DSH_PROFILE_FLAG, DSH_PROFILE, "add", spec];
     if (dryRun) {
@@ -277,7 +319,16 @@ function runDoctor(scope: Scope): { location: string; errors: string[]; notes: s
   const byName = new Map(entries.map((entry) => [entry.name, entry]));
   for (const spec of DSH_PLUGIN_SPECS) {
     const entry = byName.get(spec) ?? byName.get(dshLoaderName(spec));
-    const state = !entry ? "uninstalled" : entry.enabled ? "mounted" : "disabled";
+    let state = !entry ? "uninstalled" : entry.enabled ? "mounted" : "disabled";
+    if (spec === DSH_FALLBACKS_SPEC && state === "mounted" && fallbacksVersionDrifted(profileDir)) {
+      const installedVersion = readInstalledFallbacksVersion(profileDir);
+      const installedLabel = installedVersion ?? "unknown";
+      notes.push(`${spec}: drifted (installed ${installedLabel}, pinned ${DSH_LLM_FALLBACKS_VERSION})`);
+      errors.push(
+        `${spec} is drifted (profile has ${installedLabel}, harness pins ${DSH_LLM_FALLBACKS_VERSION}). Run: mstar-harness init --target dsh`,
+      );
+      continue;
+    }
     notes.push(`${spec}: ${state}`);
     if (state === "mounted") continue;
     const hint =

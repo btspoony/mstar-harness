@@ -138,6 +138,7 @@ or a custom profile).
 | dsh tool | Harness use |
 |----------|-------------|
 | **`subagent`** | Primary dispatch — the model-facing delegation tool the dispatch gate matches (default `toolName`; a renamed instance must be declared via Config `dispatchTools`) |
+| **`workflow`** | Read-only N≥3 fan-out — one run, one conversation `workflow-run` node (§ Read-only fan-out via the `workflow` tool; scripts → `references/dsh-workflow-scripts.md`) |
 | **`mstar_iteration_gate`** | Evaluate the iteration phase gate in-app (`evaluatePhaseGate` — `mstar iteration gate` parity) |
 | **`mstar_sdd_workspace`** / **`mstar_sdd_task_brief`** | SDD workspace resolve + task brief extraction (`mstar sdd …` parity) |
 | **`mstar_*_validate`** | On-demand seam validators (design-md / audit / compound / roles) |
@@ -366,13 +367,17 @@ work against the same worktree.
 
 ### QC default
 
-- **`Execution mode: sdd`**: **N=3** `subagent` dispatches — one per QC seat
-  (`qc-specialist`, `qc-specialist-2`, `qc-specialist-3`), each body **Act as**
-  the respective QC role + QC skill load. **MUST dispatch all three with
-  `run_in_background: true` in one message** → the seats run CONCURRENTLY
-  (background children; wall ≈ single seat); foreground (no
-  `run_in_background`) runs serially (wall ≈ 3× single seat) and does NOT
-  count as parallel tri. Cannot emit required **N** → **`Blocked`**.
+- **`Execution mode: sdd`**: **N=3** seats — one per QC seat (`qc-specialist`,
+  `qc-specialist-2`, `qc-specialist-3`), each body **Act as** the respective QC
+  role + QC skill load. Read-only fan-out of N≥3 on dsh uses the native
+  **`workflow`** tool (the `mstar-qc-tri` script — § Read-only fan-out via the
+  `workflow` tool): one run, three concurrent children, one conversation
+  `workflow-run` node. When the tool is not mounted (the `ptc` preset hides it),
+  fall back to the `subagent` path below. **The `subagent` path MUST dispatch all
+  three with `run_in_background: true` in one message** → the seats run
+  CONCURRENTLY (background children; wall ≈ single seat); foreground (no
+  `run_in_background`) runs serially (wall ≈ 3× single seat) and does NOT count
+  as parallel tri. Cannot emit required **N** → **`Blocked`**.
 - **`inline`**: **N=1**.
 
 ### SDD implement (serial)
@@ -380,6 +385,63 @@ work against the same worktree.
 - **`Execution mode: sdd`**: one implementer `subagent` dispatch per task id;
   task reviewer = a separate dispatch (SDD review role) — no sticky resume
   unless the host's continuable-subagent id is available and recorded.
+
+## Read-only fan-out via the `workflow` tool
+
+dsh also exposes the upstream **`workflow`** tool
+(`@deepseek-ai/dsh-tool-workflow`, mounted by the shipped agent presets; the
+`ptc` preset disables it in favour of its own orchestration surface). It runs a
+model-written plain-JavaScript script that fans children out inside ONE run; the
+run is recorded as durable `tool-workflow/*` session events and the stock dsh UI
+(`dsh-client-ui-workflow-run`) folds them into one conversation **`workflow-run`**
+node the operator expands by phase and member. Use it for **read-only fan-out of
+N ≥ 3 seats** — plan QC tri, large-repo audit categories, `/amazing-pr-review
+deep` seats — and copy the `script` + `meta` + `args` from this skill →
+`references/dsh-workflow-scripts.md`. For **1–2** delegations keep **`subagent`**
+(the tool's own guidance): the two-seat default tier of `/amazing-pr-review`
+shows two subagent cards and no `workflow-run` node, and that is expected.
+
+**Read-only only.** A workflow child is a delegated child (the shipped `spawn`
+provider pins `approval: never` for the whole delegation), and the run has **no
+per-child pre-start veto seam** — so a script is never the channel for writable
+work; writable fan-out stays on `subagent` behind the dispatch and lease gates.
+Seats return findings in their result payload and must never depend on writing
+files — the caller persists the seat reports.
+
+**Every `agent()` prompt starts with the Assignment header** — `## Assignment`
+plus `Execute as` / `Delegation` / `Task category` as the first lines:
+
+```markdown
+## Assignment
+
+Execute as: qc-specialist
+Delegation: forbidden
+Task category: audit
+```
+
+Role binding on dsh is prompt-only (there is no `agent` field), and the same
+engine grammar is what the role-persona channel parses
+(`packages/dsh/src/gates/role-persona.ts` reads only the header region) — so
+`Execute as: qc-specialist` resolves the QC role persona for that child. Keep
+body-quoted field examples out of the header region, and never pass the deferred
+`agentType` option: the engine rejects it loudly.
+
+| Operator types | N | Tool | `meta.name` | Operator sees |
+|---|---|---|---|---|
+| `/codebase-audit` (large repo) | ≥3 | native `workflow` | `mstar-audit-fanout` | conversation `workflow-run` node |
+| `/amazing-pr-review deep` | ≥3 | native `workflow` | `mstar-pr-seats` | same |
+| `/amazing-pr-review` default tier | 2 | `subagent` | — | two subagent cards, no node (expected) |
+| Plan QC tri (PM already in session, no extra slash) | 3 | native `workflow` | `mstar-qc-tri` | conversation `workflow-run` node |
+| Any 1–2 read-only delegation | 1–2 | `subagent` | — | expected |
+
+`meta.name` is the gate identity — keep it kebab-case and on the recommended
+list. With the default Config (`workflowNames` unset) every name is *unknown*,
+which under the default `workflowGate: warn` is one `workflow.name.unknown`
+**advisory that the run survives** — acceptable on a first run, not a failure. A
+production overlay may set `workflowNames: ['mstar-qc-tri', 'mstar-audit-fanout',
+'mstar-pr-seats']` (and, separately, `workflowGate: hard`); both are operator
+choices, never mstar defaults. The same run also reaches the panel's 事件记录 tab
+through the agent-flow ledger (§ Agent-flow ledger).
 
 ## Commands and skills paths
 

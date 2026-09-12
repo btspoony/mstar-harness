@@ -48,6 +48,8 @@ Order matters: check `cursor` → `opencode` → `omp` → `dsh` → `kimi` → 
 
 When PM dispatches **N >= 2** concurrent assignees (QC tri-review, dual-track implement, etc.) and the host exposes actual invoke / Task / subagent tools, read **`references/parallel-dispatch.md`** in the dispatch round (shared with `mstar-dispatch-gates`). Without a callable invoke tool when dispatch is required → **`Blocked`**; Assignment Markdown alone is not dispatch.
 
+On **dsh** only, read-only fan-out of **N ≥ 3** seats runs through the native **`workflow`** tool instead of N `subagent` invokes (1–2 delegations keep `subagent`; writable fan-out never uses it) — scripts + operator path: `references/dsh.md` § Read-only fan-out via the `workflow` tool.
+
 ## `/goal` directive (host-agnostic)
 
 **Applicability is by capability, not host identity**: any host that exposes a `/goal` command (currently Codex Goal Mode and omp; other code agents may add it later) attaches a persistent objective to the thread. **Exception — dsh:** mstar **stops arming** a goal there and never uses a `/goal` objective or a goal round loop as the progression driver — dsh runs on the native workflow (workflow snapshot phases + dispatch gates + **subagent settle notifications**; Phase 2 is a PM-local dispatch → wait for the child's settle notification → next dispatch, and a manually armed `/goal` stays outside mstar's flow). Full rule → `references/dsh.md`. Rule — **always set the goal to running the complete flow to the end**, never a sub-stage:

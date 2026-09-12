@@ -15,7 +15,7 @@
  * a real checkout path.
  */
 import { afterEach, describe, expect, it } from 'bun:test'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -28,6 +28,8 @@ import {
   ENGINE_STATUS_SNAPSHOT_VERSION,
   engineStatusSnapshotPath,
   readEngineStatusSnapshot,
+  readWorkflowSessionBinding,
+  updateWorkflowSessionBinding,
   writeEngineStatusSnapshot,
 } from '../src/engine-status-store.ts'
 import { WORKFLOW_LEDGER_LOCKDIR } from '../src/gates/agent-flow.ts'
@@ -604,5 +606,339 @@ describe('engine-status snapshot store — global bound', () => {
     // The production ceiling is a real global bound (the per-session numbers
     // alone cannot bound a file every session in the workspace shares).
     expect(ENGINE_STATUS_SNAPSHOT_MAX_BYTES).toBeGreaterThan(ENGINE_STATUS_SNAPSHOT_MAX_PER_SESSION)
+  })
+})
+
+/* -------------------------------------------------------------------------- */
+/* D4 — session-scoped workflow bindings (picker control state)                */
+/* -------------------------------------------------------------------------- */
+
+describe('engine-status snapshot store — workflow session bindings (D4 control state)', () => {
+  /** A payload sized so a handful of entries crosses a test's byte ceiling. */
+  function bulkPayload(bytes: number): Record<string, unknown> {
+    return { blob: 'x'.repeat(bytes) }
+  }
+
+  it('reads an old sv:1 envelope without bindings as ok-without-binding, then round-trips one', () => {
+    const harness = freshHarnessDir()
+    // The pre-D4 envelope (sv:1, entries only) — absence of the control map is
+    // "no pick / floor 0", never an error.
+    writeEngineStatusSnapshot(harness, {
+      sessionId: 'ses_a',
+      cwd: '/proj',
+      turn: 1,
+      payload: payload(1),
+      now: new Date('2026-09-10T12:00:00.000Z'),
+    })
+    expect(readWorkflowSessionBinding(harness, 'ses_a', '/proj')).toEqual({ kind: 'ok' })
+    // A store that does not exist yet is the same answer.
+    expect(readWorkflowSessionBinding(freshHarnessDir(), 'ses_a', '/proj')).toEqual({ kind: 'ok' })
+
+    expect(updateWorkflowSessionBinding(harness, 'ses_a', '/proj', {
+      selectedWorkflowId: 'wf-b',
+      excludedBeforeSeq: 4,
+    })).toEqual({ kind: 'written' })
+    expect(readWorkflowSessionBinding(harness, 'ses_a', '/proj')).toEqual({
+      kind: 'ok',
+      binding: { cwd: '/proj', selectedWorkflowId: 'wf-b', excludedBeforeSeq: 4 },
+    })
+    // No version bump, and the unknown-session query stays a plain "no binding".
+    expect(envelopeOf(harness).sv).toBe(ENGINE_STATUS_SNAPSHOT_VERSION)
+    expect(readWorkflowSessionBinding(harness, 'ses_other', '/proj')).toEqual({ kind: 'ok' })
+  })
+
+  it('preserves every stored emission field and value when the picker updates the binding', () => {
+    const harness = freshHarnessDir()
+    writeEngineStatusSnapshot(harness, {
+      sessionId: 'ses_a',
+      cwd: '/proj',
+      turn: 3,
+      payload: payload(3),
+      now: new Date('2026-09-10T12:00:00.000Z'),
+    })
+    writeEngineStatusSnapshot(harness, {
+      sessionId: 'ses_b',
+      cwd: '/other',
+      turn: 9,
+      payload: payload(9),
+      now: new Date('2026-09-10T12:00:01.000Z'),
+    })
+    const before = envelopeOf(harness).entries
+
+    expect(updateWorkflowSessionBinding(harness, 'ses_a', '/proj', {
+      selectedWorkflowId: 'wf-a',
+      excludedBeforeSeq: 2,
+    })).toEqual({ kind: 'written' })
+
+    expect(envelopeOf(harness).entries).toEqual(before)
+    expect(readEngineStatusSnapshot(harness, 'ses_a')).toEqual({
+      kind: 'ok',
+      entry: {
+        rv: 1,
+        cwd: '/proj',
+        at: '2026-09-10T12:00:00.000Z',
+        turn: 3,
+        payload: payload(3),
+      },
+    })
+  })
+
+  it('a binding survives an intervening emission write and a store reload', () => {
+    const harness = freshHarnessDir()
+    expect(updateWorkflowSessionBinding(harness, 'ses_a', '/proj', {
+      selectedWorkflowId: 'wf-b',
+      excludedBeforeSeq: 7,
+    })).toEqual({ kind: 'written' })
+    // The emission is a read-modify-write of the SAME envelope: the control
+    // record must not be dropped by the entry-only writer.
+    expect(writeEngineStatusSnapshot(harness, {
+      sessionId: 'ses_a',
+      cwd: '/proj',
+      turn: 5,
+      payload: payload(5),
+      now: new Date('2026-09-10T12:00:02.000Z'),
+    }).kind).toBe('written')
+    expect(readWorkflowSessionBinding(harness, 'ses_a', '/proj')).toEqual({
+      kind: 'ok',
+      binding: { cwd: '/proj', selectedWorkflowId: 'wf-b', excludedBeforeSeq: 7 },
+    })
+    expect(readEngineStatusSnapshot(harness, 'ses_a').kind).toBe('ok')
+  })
+
+  it('keeps two same-cwd sessions independent (choices and floors)', () => {
+    const harness = freshHarnessDir()
+    expect(updateWorkflowSessionBinding(harness, 'ses_a', '/proj', {
+      selectedWorkflowId: 'wf-a',
+      excludedBeforeSeq: 3,
+    })).toEqual({ kind: 'written' })
+    expect(updateWorkflowSessionBinding(harness, 'ses_b', '/proj', {
+      selectedWorkflowId: 'wf-b',
+      excludedBeforeSeq: 9,
+    })).toEqual({ kind: 'written' })
+    expect(readWorkflowSessionBinding(harness, 'ses_a', '/proj')).toEqual({
+      kind: 'ok',
+      binding: { cwd: '/proj', selectedWorkflowId: 'wf-a', excludedBeforeSeq: 3 },
+    })
+    expect(readWorkflowSessionBinding(harness, 'ses_b', '/proj')).toEqual({
+      kind: 'ok',
+      binding: { cwd: '/proj', selectedWorkflowId: 'wf-b', excludedBeforeSeq: 9 },
+    })
+  })
+
+  it('merges the exclusion floor by max and preserves an omitted preference', () => {
+    const harness = freshHarnessDir()
+    expect(updateWorkflowSessionBinding(harness, 'ses_a', '/proj', {
+      selectedWorkflowId: 'wf-a',
+      excludedBeforeSeq: 5,
+    })).toEqual({ kind: 'written' })
+    // A lower floor never walks back; the omitted preference is preserved.
+    expect(updateWorkflowSessionBinding(harness, 'ses_a', '/proj', { excludedBeforeSeq: 2 }))
+      .toEqual({ kind: 'written' })
+    expect(readWorkflowSessionBinding(harness, 'ses_a', '/proj')).toEqual({
+      kind: 'ok',
+      binding: { cwd: '/proj', selectedWorkflowId: 'wf-a', excludedBeforeSeq: 5 },
+    })
+    expect(updateWorkflowSessionBinding(harness, 'ses_a', '/proj', { excludedBeforeSeq: 11 }))
+      .toEqual({ kind: 'written' })
+    expect(readWorkflowSessionBinding(harness, 'ses_a', '/proj')).toEqual({
+      kind: 'ok',
+      binding: { cwd: '/proj', selectedWorkflowId: 'wf-a', excludedBeforeSeq: 11 },
+    })
+    // A real re-pick replaces the stored preference.
+    expect(updateWorkflowSessionBinding(harness, 'ses_a', '/proj', {
+      selectedWorkflowId: 'wf-b',
+      excludedBeforeSeq: 11,
+    })).toEqual({ kind: 'written' })
+    expect(readWorkflowSessionBinding(harness, 'ses_a', '/proj')).toEqual({
+      kind: 'ok',
+      binding: { cwd: '/proj', selectedWorkflowId: 'wf-b', excludedBeforeSeq: 11 },
+    })
+  })
+
+  it('refuses a record whose stored cwd is not this session cwd', () => {
+    const harness = freshHarnessDir()
+    expect(updateWorkflowSessionBinding(harness, 'ses_a', '/proj', { excludedBeforeSeq: 0 }))
+      .toEqual({ kind: 'written' })
+    expect(updateWorkflowSessionBinding(harness, 'ses_a', '/elsewhere', { excludedBeforeSeq: 1 }))
+      .toEqual({ kind: 'degraded', reason: 'cwd-mismatch' })
+    expect(readWorkflowSessionBinding(harness, 'ses_a', '/elsewhere'))
+      .toEqual({ kind: 'unavailable', reason: 'cwd-mismatch' })
+    // The stored record is untouched by the refused write.
+    expect(readWorkflowSessionBinding(harness, 'ses_a', '/proj')).toEqual({
+      kind: 'ok',
+      binding: { cwd: '/proj', excludedBeforeSeq: 0 },
+    })
+  })
+
+  it('refuses a malformed bindings map or record instead of resetting the store', () => {
+    const cases = [
+      JSON.stringify({ sv: 1, entries: {}, bindings: [] }),
+      JSON.stringify({ sv: 1, entries: {}, bindings: { ses_a: { cwd: '/proj', excludedBeforeSeq: -1 } } }),
+      JSON.stringify({ sv: 1, entries: {}, bindings: { ses_a: { cwd: '', excludedBeforeSeq: 0 } } }),
+      JSON.stringify({ sv: 1, entries: {}, bindings: { ses_a: { cwd: '/proj', selectedWorkflowId: 7, excludedBeforeSeq: 0 } } }),
+      JSON.stringify({ sv: 1, entries: {}, bindings: { ses_a: 'nope' } }),
+    ]
+    for (const doc of cases) {
+      const harness = freshHarnessDir()
+      mkdirSync(join(harness, 'snapshots'), { recursive: true })
+      writeFileSync(engineStatusSnapshotPath(harness), doc)
+      expect(updateWorkflowSessionBinding(harness, 'ses_b', '/proj', { excludedBeforeSeq: 0 }))
+        .toEqual({ kind: 'degraded', reason: 'store-bindings-schema' })
+      // A malformed map/record is unavailable for its own key (a different
+      // session's read is simply "no binding" — the corruption is not theirs).
+      expect(readWorkflowSessionBinding(harness, 'ses_a', '/proj'))
+        .toEqual({ kind: 'unavailable', reason: 'store-bindings-schema' })
+      // The emission writer refuses the same store (one unknown content rule).
+      expect(writeEngineStatusSnapshot(harness, { sessionId: 'ses_b', cwd: '/proj', turn: 1, payload: payload(1) }))
+        .toEqual({ kind: 'degraded', reason: 'store-bindings-schema' })
+      expect(readFileSync(engineStatusSnapshotPath(harness), 'utf8')).toBe(doc)
+    }
+  })
+
+  it('answers unavailable for a corrupt store — never a silent empty record', () => {
+    const harness = freshHarnessDir()
+    mkdirSync(join(harness, 'snapshots'), { recursive: true })
+    writeFileSync(engineStatusSnapshotPath(harness), '{"sv":1,"entries":')
+    expect(readWorkflowSessionBinding(harness, 'ses_a', '/proj'))
+      .toEqual({ kind: 'unavailable', reason: 'store-invalid-json' })
+    writeFileSync(engineStatusSnapshotPath(harness), JSON.stringify({ sv: 2, entries: {} }))
+    expect(readWorkflowSessionBinding(harness, 'ses_a', '/proj'))
+      .toEqual({ kind: 'unavailable', reason: 'store-envelope-schema' })
+  })
+
+  it('keys hostile session ids in the binding map like any other session', () => {
+    for (const sessionId of ['__proto__', 'constructor', 'toString']) {
+      const harness = freshHarnessDir()
+      expect(updateWorkflowSessionBinding(harness, sessionId, '/proj', {
+        selectedWorkflowId: 'wf-a',
+        excludedBeforeSeq: 1,
+      })).toEqual({ kind: 'written' })
+      expect(readWorkflowSessionBinding(harness, sessionId, '/proj')).toEqual({
+        kind: 'ok',
+        binding: { cwd: '/proj', selectedWorkflowId: 'wf-a', excludedBeforeSeq: 1 },
+      })
+      // An ordinary lookup never resolves an inherited member.
+      expect(readWorkflowSessionBinding(harness, 'ses_other', '/proj')).toEqual({ kind: 'ok' })
+    }
+  })
+
+  it('degrades the binding write on unusable identity without touching the disk', () => {
+    const harness = freshHarnessDir()
+    expect(updateWorkflowSessionBinding('', 'ses_a', '/proj', { excludedBeforeSeq: 0 }))
+      .toEqual({ kind: 'degraded', reason: 'no-harness-dir' })
+    expect(updateWorkflowSessionBinding(harness, '', '/proj', { excludedBeforeSeq: 0 }))
+      .toEqual({ kind: 'degraded', reason: 'no-session-id' })
+    expect(updateWorkflowSessionBinding(harness, 'ses_a', '', { excludedBeforeSeq: 0 }))
+      .toEqual({ kind: 'degraded', reason: 'no-session-cwd' })
+    expect(updateWorkflowSessionBinding(harness, 'ses_a', '/proj', { excludedBeforeSeq: -1 }))
+      .toEqual({ kind: 'degraded', reason: 'invalid-excluded-before-seq' })
+    expect(existsSync(engineStatusSnapshotPath(harness))).toBe(false)
+    expect(readWorkflowSessionBinding(harness, 'ses_a', '/proj')).toEqual({ kind: 'ok' })
+  })
+
+  it('degrades within the bounded lock budget when another writer holds the lockdir', () => {
+    const harness = freshHarnessDir()
+    const snapshotDir = join(harness, 'snapshots')
+    mkdirSync(join(snapshotDir, WORKFLOW_LEDGER_LOCKDIR), { recursive: true })
+    const result = updateWorkflowSessionBinding(harness, 'ses_a', '/proj', { excludedBeforeSeq: 0 })
+    expect(result.kind).toBe('degraded')
+    // Nothing was written and no temp file was left behind.
+    expect(existsSync(engineStatusSnapshotPath(harness))).toBe(false)
+    expect(readdirSync(snapshotDir).sort()).toEqual([WORKFLOW_LEDGER_LOCKDIR])
+  })
+
+  it('counts bindings in the emission byte accounting and never sheds them', () => {
+    const harness = freshHarnessDir()
+    const CEILING = 4 * 1024
+    const pick = 'wf-' + 'p'.repeat(1200)
+    expect(updateWorkflowSessionBinding(harness, 'ses_pick', '/proj', {
+      selectedWorkflowId: pick,
+      excludedBeforeSeq: 1,
+    })).toEqual({ kind: 'written' })
+    // The entries alone fit; entries + the control record do not, and the write
+    // may not drop the control record to get under the ceiling.
+    const result = writeEngineStatusSnapshot(harness, {
+      sessionId: 'ses_live',
+      cwd: '/proj',
+      turn: 1,
+      payload: bulkPayload(CEILING - 512),
+      maxBytes: CEILING,
+    })
+    expect(result.kind).toBe('written')
+    expect((result as { warn?: string }).warn).toContain('byte ceiling')
+    expect(readWorkflowSessionBinding(harness, 'ses_pick', '/proj')).toEqual({
+      kind: 'ok',
+      binding: { cwd: '/proj', selectedWorkflowId: pick, excludedBeforeSeq: 1 },
+    })
+  })
+
+  it('refuses a binding write that cannot fit instead of dropping another session', () => {
+    const harness = freshHarnessDir()
+    const CEILING = 4 * 1024
+    // One oversized resident emission — already above the ceiling on its own.
+    writeEngineStatusSnapshot(harness, {
+      sessionId: 'ses_a',
+      cwd: '/proj',
+      turn: 1,
+      payload: bulkPayload(CEILING * 2),
+      maxBytes: CEILING,
+    })
+    const before = readFileSync(engineStatusSnapshotPath(harness), 'utf8')
+    expect(updateWorkflowSessionBinding(harness, 'ses_b', '/proj', {
+      selectedWorkflowId: 'wf-b',
+      excludedBeforeSeq: 0,
+      maxBytes: CEILING,
+    })).toEqual({ kind: 'degraded', reason: 'store-over-byte-ceiling' })
+    expect(readFileSync(engineStatusSnapshotPath(harness), 'utf8')).toBe(before)
+    // Under the production ceiling the same write succeeds and the resident
+    // session's emission survives it.
+    expect(updateWorkflowSessionBinding(harness, 'ses_b', '/proj', {
+      selectedWorkflowId: 'wf-b',
+      excludedBeforeSeq: 0,
+    })).toEqual({ kind: 'written' })
+    expect(readEngineStatusSnapshot(harness, 'ses_a').kind).toBe('ok')
+    expect(readWorkflowSessionBinding(harness, 'ses_b', '/proj')).toEqual({
+      kind: 'ok',
+      binding: { cwd: '/proj', selectedWorkflowId: 'wf-b', excludedBeforeSeq: 0 },
+    })
+  })
+
+  it('answers the hot path from the memoized parse while the store identity is unchanged, and re-reads on any change', () => {
+    const harness = freshHarnessDir()
+    const file = engineStatusSnapshotPath(harness)
+    mkdirSync(join(harness, 'snapshots'), { recursive: true })
+    const pickA = JSON.stringify({ sv: 1, entries: {}, bindings: { ses_a: { cwd: '/proj', selectedWorkflowId: 'wf-a', excludedBeforeSeq: 0 } } })
+    const pickB = JSON.stringify({ sv: 1, entries: {}, bindings: { ses_a: { cwd: '/proj', selectedWorkflowId: 'wf-b', excludedBeforeSeq: 0 } } })
+    // Same byte length, so the in-place rewrite below keeps the identity triple.
+    expect(pickB).toHaveLength(pickA.length)
+    writeFileSync(file, pickA)
+    // Pin the mtime to a whole second so the identity comparison is exact.
+    const pinned = new Date(Math.floor(statSync(file).mtimeMs / 1000) * 1000)
+    utimesSync(file, pinned, pinned)
+    const before = statSync(file)
+
+    expect(readWorkflowSessionBinding(harness, 'ses_a', '/proj')).toEqual({
+      kind: 'ok',
+      binding: { cwd: '/proj', selectedWorkflowId: 'wf-a', excludedBeforeSeq: 0 },
+    })
+
+    // THE hot-path contract: every tool call / pre-step / plan-mode sync reads
+    // the binding, and an unchanged file (same inode + size + mtime) is
+    // answered from the memo — the whole-file read + parse is not re-issued.
+    writeFileSync(file, pickB)
+    utimesSync(file, pinned, pinned)
+    const after = statSync(file)
+    expect([after.ino, after.size, after.mtimeMs]).toEqual([before.ino, before.size, before.mtimeMs])
+    expect(readWorkflowSessionBinding(harness, 'ses_a', '/proj')).toEqual({
+      kind: 'ok',
+      binding: { cwd: '/proj', selectedWorkflowId: 'wf-a', excludedBeforeSeq: 0 },
+    })
+
+    // Any identity change is picked up on the very next read.
+    utimesSync(file, new Date(pinned.getTime() + 2_000), new Date(pinned.getTime() + 2_000))
+    expect(readWorkflowSessionBinding(harness, 'ses_a', '/proj')).toEqual({
+      kind: 'ok',
+      binding: { cwd: '/proj', selectedWorkflowId: 'wf-b', excludedBeforeSeq: 0 },
+    })
   })
 })
