@@ -61,7 +61,7 @@ Phase-6 gate 只查**本地 state**（valid terminal shape + 无 dangling lease 
 
 ## Evidence
 
-Phase 6 完成 = `jq -r '.status, .ended_at'` `{HARNESS_DIR}/workflows/<id>/snapshot.json` → `completed` + 日期；根 `{HARNESS_DIR}/status.json` 不含该 id 且 `mstar status validate <root status.json>` exit 0；无 dangling lease；投影一致；host todo `phase-6-post-merge-close` 可勾掉。transition engine gate（`mstar iteration gate --phase 6 --workflow <id>`）exit 0。
+Phase 6 完成 = `jq -r '.status, .ended_at'` `{HARNESS_DIR}/workflows/<id>/snapshot.json` → `completed` + 日期；根 `{HARNESS_DIR}/status.json` 不含该 id 且 `mstar status validate <root status.json>` exit 0；无 dangling lease；投影一致；host todo `phase-6-post-merge-close` 可勾掉。Phase-6 post-merge close gate（`mstar iteration gate --phase 6 --workflow <id>`，只查本地 close state）exit 0。
 
 ## References
 

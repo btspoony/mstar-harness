@@ -39,7 +39,7 @@ Execute **`mstar-iteration/references/phase-4-5-pr-delivery.md`** §4：打印 `
 
 ## Phase 5: PR merge-ready（babysit loop）
 
-Execute **`mstar-iteration/references/phase-4-5-pr-delivery.md`** §5.0–§5.2（**§5.1a push cadence HARD**）。**§5.5 exit checklist 全 `[x]` = 本 command Done.**
+Execute **`mstar-iteration/references/phase-4-5-pr-delivery.md`** §5.0–§5.2（**§5.1a push cadence HARD**）。**§5.5 exit checklist 前 5 项全 `[x]` = merge-ready → 进入 Phase 6.**
 
 本 command **叠加**可选 helper skill 发现（**non-`mstar-*`**；不写入 `mstar-*` load order）→ **`mstar-iteration/references/phase5-helper-discovery.md`**（babysit / `*-babysit` / greploop / fallback 路径清单；first readable `SKILL.md` wins）。Loop + review fix hygiene + exit checklist → §5.1–§5.2（同上 reference）。
 

@@ -74,7 +74,7 @@ When both babysit/`*-babysit` and greploop apply: **babysit/`*-babysit` first**�
 
 ### 5.2 Phase 5 exit checklist（merge-ready → enter Phase 6）
 
-打印 **`## Phase 5 exit checklist`**；全 `[x]` = **merge-ready**，此后唯一出口是 **Phase 6**（PR merged 后执行 `references/phase-6-post-merge-close.md` §6.1–§6.4）——本 checklist **不是**「迭代交付完成」：
+打印 **`## Phase 5 exit checklist`**；前 5 项全 `[x]` = **merge-ready**（第 6 项为 transition marker，merged 后才可勾），此后唯一出口是 **Phase 6**（PR merged 后执行 `references/phase-6-post-merge-close.md` §6.1–§6.4）——本 checklist **不是**「迭代交付完成」：
 
 - [ ] PR mergeable（无 blocking merge conflicts）
 - [ ] All **required** CI checks green on latest head

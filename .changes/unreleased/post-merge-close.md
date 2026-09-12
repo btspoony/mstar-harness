@@ -1,5 +1,4 @@
 ---
-category: Harness
 packages: root, engine, cli
 ---
 

@@ -1,6 +1,6 @@
 ---
 name: mstar-iteration
-description: "Use when starting, driving, resuming, or closing a Morning Star iteration, or running an autonomous Phase 1–5 loop — including without a slash command (e.g. 'start an iteration', 'drive the iteration', 'run an autonomous loop'). Manages Phase 1 (default interactive direction lock; opt-in autonomous), Autonomous Execute, iteration-close (compound promotes knowledge), PR delivery, and the PR merge-ready loop. Branch SSOT: workflow snapshot (`workflows/<id>/snapshot.json`) + compass frontmatter."
+description: "Use when starting, driving, resuming, or closing a Morning Star iteration, or running an autonomous Phase 1–6 loop — including without a slash command (e.g. 'start an iteration', 'drive the iteration', 'run an autonomous loop'). Manages Phase 1 (default interactive direction lock; opt-in autonomous), Autonomous Execute, iteration-close (compound promotes knowledge), PR delivery, the PR merge-ready loop, and the Phase 6 post-merge close. Branch SSOT: workflow snapshot (`workflows/<id>/snapshot.json`) + compass frontmatter."
 ---
 
 # mstar-iteration（迭代管理）
@@ -15,7 +15,7 @@ description: "Use when starting, driving, resuming, or closing a Morning Star it
 
 mstar 实践模式通常是：一次迭代锁定几个 spec 点（`specify + clarify`），产生多个 `plan`，每个 plan 含多个 tasks。**per-plan 生命周期有完整的闭环**（Prepare → Execute → QC → Done）。Compound 不是 per-plan 活动——它是**迭代级收口**，在迭代内所有 plan Done 后，沉淀一轮知识。
 
-本 skill 管理迭代 **Phase 1–5**（command 层可聚合编排，但 **不得**反向引用 command 名；第三方 helper 仅由 command 按需发现）：
+本 skill 管理迭代 **Phase 1–6**（command 层可聚合编排，但 **不得**反向引用 command 名；第三方 helper 仅由 command 按需发现）：
 
 ```
 Phase 1: start
