@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+## [3.8.3] - 2026-09-12
+
+### Harness
+
+- 本地验证与审查限定于改动行为，独立工作并行，常规 QA 仅使用定向单元证据；全量本地测试须用户明确授权。
+- 文档和策略修改可提交明确的 `scoped-check` 证据，无需虚构测试文件；可执行逻辑变更仍须真实测试证据。
+- 新增独立 `mstar-e2e` workflow 与 `/amazing-e2e-check` 入口，包含 Codex 项目命令安装，用于用户明确请求的浏览器、真机及安装部署场景。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 3.8.3**。
+
 ## [3.8.2] - 2026-09-12
 
 ### Changed
