@@ -28,7 +28,9 @@
  * (`plan_parallelism`/`worktree_mode`/`push_policy`) -> snapshot
  * `execution_policy` (first-class); `iteration_base_branch`/
  * `target_branch`/`spec_integration_branch` -> `branch`;
- * `control_worktree_path` -> `control_worktree_path`;
+ * `control_worktree_path` -> `integration_worktree_path` (the v1 root
+ * metadata key is consumed under its historical name; the canonical
+ * snapshot field is the integration checkout);
  * `integration_merge_lease` -> top-level `integration_merge_lease`; all of
  * these land on the ACTIVE iteration snapshot (status `running`; v3.0.0
  * today). `program_roadmap` seeds `projects/<id>/roadmap.md` (its
@@ -461,8 +463,10 @@ function applyRootMetadataLift(
   }
   if (Object.keys(branch).length > 0) data.branch = branch as WorkflowSnapshot["branch"];
 
+  // v1 root metadata key keeps its historical name; the lift target is the
+  // CANONICAL snapshot member (writers emit only the new shape).
   if (typeof metadata.control_worktree_path === "string" && metadata.control_worktree_path !== "") {
-    data.control_worktree_path = metadata.control_worktree_path;
+    data.integration_worktree_path = metadata.control_worktree_path;
   }
   if (isPlainObject(metadata.integration_merge_lease)) {
     data.integration_merge_lease = metadata.integration_merge_lease as WorkflowSnapshot["integration_merge_lease"];

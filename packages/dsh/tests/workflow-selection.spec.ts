@@ -693,3 +693,24 @@ Do the thing.
     )
   })
 })
+
+it('automatically selects canonical integration cwd and refuses conflicting topology evidence', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-canonical-cwd-'))
+  const harnessDir = join(root, 'harness')
+  try {
+    for (const fields of [
+      { integration_worktree_path: join(root, 'integration') },
+      { control_worktree_path: join(root, 'integration') },
+      { integration_worktree_path: join(root, 'integration'), control_worktree_path: join(root, 'integration') },
+    ]) {
+      await seedHarness(harnessDir, {
+        'status.json': v2Root([v2WorkflowEntry('wf-a'), v2WorkflowEntry('wf-b')]),
+        'workflows/wf-a/snapshot.json': JSON.stringify({ ...JSON.parse(v2Snapshot('wf-a')), ...fields }),
+        'workflows/wf-b/snapshot.json': v2Snapshot('wf-b'),
+      })
+      const selected = resolveActiveWorkflow(harnessDir, { cwd: join(root, 'integration', 'src') })
+      if ('control_worktree_path' in fields && 'integration_worktree_path' in fields) expect(selected.kind).toBe('error')
+      else expect(selected).toMatchObject({ kind: 'active', workflowId: 'wf-a' })
+    }
+  } finally { await rm(root, { recursive: true, force: true }) }
+})

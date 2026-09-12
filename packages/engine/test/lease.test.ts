@@ -147,7 +147,7 @@ describe("validateExecutionLease", () => {
 
   test("worktree_path must be an absolute path", () => {
  // Spec: § plans[].execution_lease — worktree_path is an absolute path
- // string; MUST differ from metadata.control_worktree_path.
+ // string; MUST be a Git checkout distinct from the main worktree.
     const gate = validateExecutionLease(validExecutionLease({ worktree_path: "relative/worktree" }));
     expect(gate.ok).toBe(false);
     expect(violationCodes(gate)).toContain("lease.execution-lease.invalid-worktree-path");

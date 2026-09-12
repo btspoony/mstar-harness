@@ -152,4 +152,6 @@ Phase 1 与 §1.6 须遵守 **`references/iteration-artifact-boundaries.md`**（
 
 **完成证据** = 磁盘上的 compass / plans / specs / iteration 文档修订 + specs（与既有 knowledge）卫生/归档（如有）+ 索引与 metadata 更新 + compass `status: locked`。**不**要求单独的迭代审查报告——迭代审查的 SSOT 是被编辑的文档本身，无 per-plan QC 式审计链。
 
+**Uncommitted-docs exception（bounded — Phase 1 only）**：Review & Edit 链的文档编辑（compass / plans / specs / `<iteration-id>/` package）可以**未提交**状态落在主 checkout（control root = 主 worktree）——这是 worktree 默认在 Phase 1 的唯一例外，主 checkout 分支**不**切换、不产生 feature commit。**§6 创建 integration worktree 后**：只把**已 review 的本轮文档改动** transfer 到 integration worktree 并在其上 commit（tracked results 写在目标分支所在的检出），随后恢复主 checkout 上对应的未提交文档改动（不切分支）；**禁止**搬运主 checkout 上无关的既有用户改动。
+
 **反模式**：PM 线程代替三角色完成全部编辑而不 invoke；或将本链三角色并行派发 —— 见 **`mstar-roles/references/_shared/leaf-executor-core.md`**「Shared anti-recursion NEVER」。

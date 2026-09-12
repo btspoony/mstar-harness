@@ -22,7 +22,8 @@
  *   `running`, `Blocked` -> `paused`, `Todo` -> `paused` + not-started
  *   note; nothing maps to `failed|stopped`; row statuses stay verbatim.
  * - Field lift: execution-policy keys first-class `execution_policy` +
- *   branch/control_worktree_path/integration_merge_lease on the ACTIVE
+ *   branch/integration_worktree_path (lifted from the v1 root
+ *   `control_worktree_path`)/integration_merge_lease on the ACTIVE
  *   iteration snapshot (v3.0.0); `program_roadmap` seeds the default
  *   project roadmap; `harness_root` dropped with a legacy note; all other
  *   root-metadata keys -> `legacy_metadata` (nothing dropped silently).
@@ -165,7 +166,7 @@ describe("migrateHarnessTree — planner on the snapshot fixture", () => {
     }
   });
 
-  test("v3.0.0 active iteration snapshot carries execution_policy / branch / control_worktree_path / legacy_metadata lifts + verbatim rows", () => {
+  test("v3.0.0 active iteration snapshot carries execution_policy / branch / integration_worktree_path / legacy_metadata lifts + verbatim rows", () => {
     const root = fixtureTree();
     try {
       const plan = migrateHarnessTree(root);
@@ -186,7 +187,10 @@ describe("migrateHarnessTree — planner on the snapshot fixture", () => {
         push_policy: "push to mirror dev-dsh authorized (2026-08-09)",
       });
       expect(data.branch).toEqual({ base: "main", integration: "iteration/v3.0.0", target: "main" });
-      expect(data.control_worktree_path).toBe("/Users/dev/workspace/ai/mstar-harness");
+      // v1 root metadata.control_worktree_path lifts into the CANONICAL
+      // snapshot field (the old key name survives only as the v1 input).
+      expect(data.integration_worktree_path).toBe("/Users/dev/workspace/ai/mstar-harness");
+      expect((data as Record<string, unknown>).control_worktree_path).toBeUndefined();
       expect(data.integration_merge_lease).toBeUndefined();
 
       expect(data.legacy_metadata).toMatchObject({

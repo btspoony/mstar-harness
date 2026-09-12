@@ -1,21 +1,30 @@
 /**
- * Engine worktree module — L1/L2 pre-dispatch checklists, control-vs-feature
- * path gate, git branch alignment probe, QC/QA field alignment.
+ * Engine worktree module — main-worktree discovery + residency, L1/L2
+ * pre-dispatch checklists, main/integration/feature checkout identity,
+ * git branch alignment probe, QC/QA field alignment.
  *
  * Spec sources (semantic SSOT — the skills stay authoritative; this module
  * implements their deterministic rules without forking semantics):
- * - L1/L2 layer split + stacking — control worktree + per-plan feature
- *   worktrees + `plans[].execution_lease` (L1); within-plan parallel writable
- *   tracks need their own distinct worktrees and L1 does not replace L2:
+ * - L1/L2 layer split + stacking — main control root + dedicated
+ *   integration checkout + per-plan feature worktrees +
+ *   `plans[].execution_lease` (L1); within-plan parallel writable tracks
+ *   need their own distinct worktrees and L1 does not replace L2:
  *   `mstar-branch-worktree` SKILL.md § "Worktree isolation layers (L1 vs L2)"
  *   § "Stacking rules".
- * - Control vs feature worktree roles — `execution_lease.worktree_path` MUST
- *   differ from `metadata.control_worktree_path`; the feature worktree is the
- *   required cwd for product edits (control checkout is Forbidden for
- *   writable edits); never bootstrap a second plans/status/SDD tree under the
- *   feature checkout (harness SSOT resolves from the control worktree):
+ * - Main control root — the process-SSOT holder is the Git-derived MAIN
+ *   worktree (first `git worktree list --porcelain -z` record); the
+ *   dedicated integration checkout (`integration_worktree_path` on
+ *   `branch.integration`) is the sole merge cwd and MUST be distinct from
+ *   main; `execution_lease.worktree_path` MUST be a distinct checkout from
+ *   the main worktree and never holds product edits in main:
  *   SKILL.md § "Control worktree vs feature worktree (iteration / L1)" +
- *   § "Harness path SSOT under default gitignore (L1)" § "Hard rules".
+ *   iteration spec worktree-write-model § "Three domains" / § "Field
+ *   semantics" / § "Primary residency".
+ * - Primary residency — the expected main branch is the value RECORDED at
+ *   lifecycle start (or the explicit `branch.base` fallback), never the
+ *   branch observed at check time as its own expected value; main on any
+ *   active lifecycle-owned branch is refused; detached/unresolved main
+ *   fails closed.
  * - L2 pre-dispatch checklist — per-track worktree dirs exist, `worktreePath`
  *   values are absolute and distinct (one Worktree per track; N parallel
  *   invokes ≠ isolation) and `git -C <path> branch --show-current` matches
@@ -34,6 +43,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import type { GateResult, ValidationResult, Severity } from "./core.js";
+import type { WorkflowLifecycleType } from "./workflow.js";
 
 /**
  * Git probe timeout — bounded so a hung git (dead NFS mount, pathological
@@ -43,7 +53,7 @@ import type { GateResult, ValidationResult, Severity } from "./core.js";
  */
 const DEFAULT_PROBE_TIMEOUT_MS = 10_000;
 
-function probeTimeoutMs(): number {
+export function gitProbeTimeoutMs(): number {
   const raw = process.env.MSTAR_GIT_PROBE_TIMEOUT_MS;
   if (raw === undefined || raw.trim() === "") return DEFAULT_PROBE_TIMEOUT_MS;
   const parsed = Number(raw);
@@ -58,13 +68,129 @@ export type WorktreeTrack = {
   workingBranch: string;
 };
 
+/** The Git-derived main worktree of the repository containing a cwd. */
+export type MainWorktreeInfo = {
+  /** Absolute (realpath'd) main-worktree checkout root. */
+  root: string;
+  /** Branch checked out at the main worktree (`""` when detached). */
+  branch: string;
+};
+
 /**
- * L1 pre-dispatch checklist input — mirrors the status.json L1 fields
- * (`metadata.control_worktree_path` + `plans[].execution_lease`).
+ * Parse the first record of `git worktree list --porcelain -z` (NUL form —
+ * preserves spaces/newlines in paths). The first record is always the MAIN
+ * worktree; `refs/heads/` is stripped; `detached` yields `branch: ""`.
+ * Bare repositories, malformed output (no worktree/branch attribute), or an
+ * inaccessible root yield `null` — never a guess.
+ */
+function parseMainWorktree(out: string): MainWorktreeInfo | null {
+  const tokens = out.split("\0");
+  const first = tokens.findIndex((t) => t.startsWith("worktree "));
+  if (first === -1) return null;
+  const rawPath = tokens[first]!.slice("worktree ".length);
+  if (rawPath.trim() === "") return null;
+  let branch: string | null = null;
+  let detached = false;
+  for (let i = first + 1; i < tokens.length; i++) {
+    const token = tokens[i]!;
+    if (token.startsWith("worktree ")) break; // second record begins — the main record ended
+    if (token === "bare") return null;
+    if (token === "detached") detached = true;
+    else if (token.startsWith("branch ")) {
+      const ref = token.slice("branch ".length).trim();
+      if (ref === "") return null;
+      branch = ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : ref;
+    }
+  }
+  if (detached) branch = "";
+  if (branch === null) return null; // malformed main record — no branch attribute and not detached
+  try {
+    return { root: realpathSync(rawPath), branch };
+  } catch {
+    return null; // inaccessible root
+  }
+}
+
+/**
+ * Discover the main worktree of the repository containing `cwd` (default
+ * `process.cwd()`): the FIRST record of `git worktree list --porcelain -z`,
+ * never the first attached branch or a name-matched path. Bounded by the
+ * shared probe timeout; unavailable Git, a hung git, a bare repository,
+ * malformed output, or an inaccessible root yield `null` — callers fail
+ * closed (`worktree.main.unresolved`), never fall through.
+ */
+export function readMainWorktree(cwd?: string): MainWorktreeInfo | null {
+  const start = cwd ?? process.cwd();
+  try {
+    const stdout = execFileSync("git", ["-C", start, "worktree", "list", "--porcelain", "-z"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: gitProbeTimeoutMs(),
+    });
+    return parseMainWorktree(stdout);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Primary-residency equality primitive: the main worktree must be on the
+ * branch RECORDED at lifecycle start (`expectedBranch` — callers transport
+ * the recorded value or the explicit `branch.base` fallback, never the
+ * branch observed at check time as its own expected value). Detached main
+ * (`branch: ""`) and any mismatch are `worktree.main.residency-switched`
+ * (high). Never switch main to satisfy this check.
+ */
+export function assertMainWorktreeResidency(main: MainWorktreeInfo, expectedBranch: string): GateResult {
+  const violations: ValidationResult[] = [];
+  if (main.branch === "") {
+    violations.push(
+      violation(
+        "high",
+        "worktree.main.residency-switched",
+        `main worktree "${main.root}" is detached (no branch checked out) \u2014 residency cannot match the recorded expectation ${JSON.stringify(expectedBranch)}`,
+        "check out the recorded main-worktree branch in the main worktree",
+      ),
+    );
+  } else if (main.branch !== expectedBranch) {
+    violations.push(
+      violation(
+        "high",
+        "worktree.main.residency-switched",
+        `main worktree "${main.root}" is on branch "${main.branch}", expected the recorded branch "${expectedBranch}" \u2014 residency is checked against the value recorded at lifecycle start, never re-pointed at the observed branch`,
+        "restore the recorded branch in the main worktree; re-record at lifecycle start only through the owning workflow",
+      ),
+    );
+  }
+  return gate(violations);
+}
+
+/**
+ * L1 pre-dispatch checklist input — the three-domain topology: the
+ * Git-derived main worktree (process-SSOT holder), the governing snapshot's
+ * dedicated integration checkout, and the plan's feature worktree
+ * (`plans[].execution_lease`). Callers carry the actual snapshot type and
+ * resolve the recorded residency expectation + active lifecycle branches
+ * from the governing snapshots.
  */
 export type L1PreDispatchInput = {
-  /** `metadata.control_worktree_path` — harness coordination SSOT checkout. */
-  controlWorktreePath: string;
+  /** Governing snapshot lifecycle type — `plan` standalone or `iteration`. */
+  workflowType: WorkflowLifecycleType;
+  /**
+   * `integration_worktree_path` — the dedicated integration checkout, on
+   * `branch.integration`. A standalone plan without integration passes `""`
+   * (both fields empty); if either field is supplied, both and the full
+   * checks are required.
+   */
+  integrationWorktreePath: string;
+  /** `branch.integration` — the branch that must be checked out at the integration worktree (`""` for a standalone plan without integration). */
+  integrationBranch: string;
+  /** Git-derived main worktree (`readMainWorktree`); `null` = unresolved — a failure, never a skipped row. */
+  mainWorktree: MainWorktreeInfo | null;
+  /** Recorded main-worktree branch (plan header) or the explicit `branch.base` fallback — never the branch observed at check time. */
+  expectedMainBranch: string;
+  /** Branches owned by ANY active lifecycle (integration/plan/track) — main must not sit on any of them, even when the recorded expectation matches. */
+  lifecycleBranches: readonly string[];
   /** `execution_lease.worktree_path` — the plan's feature worktree. */
   leaseWorktreePath: string;
   /** `execution_lease.working_branch` — the plan's Working branch. */
@@ -132,7 +258,7 @@ function gate(violations: ValidationResult[]): GateResult {
 function probeBranch(worktreePath: string, opts: BranchProbeOptions): BranchProbe {
   const precomputed = opts.branchOf?.(worktreePath);
   if (precomputed !== undefined) return { branch: precomputed };
-  const timeout = opts.timeoutMs ?? probeTimeoutMs();
+  const timeout = opts.timeoutMs ?? gitProbeTimeoutMs();
   try {
     const stdout = execFileSync(opts.gitPath ?? "git", ["-C", worktreePath, "branch", "--show-current"], {
       encoding: "utf8",
@@ -167,7 +293,7 @@ function probeBranch(worktreePath: string, opts: BranchProbeOptions): BranchProb
 type CheckoutProbe = { gitDir: string } | { error: string };
 
 function probeCheckout(worktreePath: string, opts: BranchProbeOptions): CheckoutProbe {
-  const timeout = opts.timeoutMs ?? probeTimeoutMs();
+  const timeout = opts.timeoutMs ?? gitProbeTimeoutMs();
   try {
     const stdout = execFileSync(opts.gitPath ?? "git", ["-C", worktreePath, "rev-parse", "--git-dir"], {
       encoding: "utf8",
@@ -219,7 +345,7 @@ export function isDistinctCheckout(controlPath: string, candidatePath: string, o
  * the harness sits directly under the checkout).
  */
 export function probeCheckoutRoot(path: string, opts: BranchProbeOptions = {}): string | null {
-  const timeout = opts.timeoutMs ?? probeTimeoutMs();
+  const timeout = opts.timeoutMs ?? gitProbeTimeoutMs();
   try {
     const stdout = execFileSync(opts.gitPath ?? "git", ["-C", path, "rev-parse", "--show-toplevel"], {
       encoding: "utf8",
@@ -236,24 +362,86 @@ export function probeCheckoutRoot(path: string, opts: BranchProbeOptions = {}): 
 
 /**
  * L1 cross-plan pre-dispatch checklist (mstar-branch-worktree L1 table +
- * Harness path SSOT hard rules): control path recorded, feature worktree
- * exists, lease worktree ≠ control path, and the branch checked out at the
- * feature worktree matches `execution_lease.working_branch`.
+ * iteration spec worktree-write-model § "Locked interfaces (P1 engine)"):
+ * main residency against the recorded expectation + non-ownership of any
+ * active lifecycle branch, integration presence/alignment (iterations
+ * require both integration fields; a standalone plan without integration
+ * checks main vs feature only), pairwise main/integration/feature
+ * Git-checkout identity, and the existing feature/lease checks. Null main
+ * discovery is a failure (`worktree.main.unresolved`), never a skipped row.
  */
 export function l1PreDispatchCheck(input: L1PreDispatchInput, opts: BranchProbeOptions = {}): GateResult {
   const violations: ValidationResult[] = [];
-  const { controlWorktreePath, leaseWorktreePath, leaseWorkingBranch, planId } = input;
+  // Invocation-local identity memo: each checkout is probed once across all pairs.
+  const checkoutCache = new Map<string, CheckoutProbe>();
+  const checkout = (path: string): CheckoutProbe => {
+    const key = resolve(path);
+    if (!checkoutCache.has(key)) checkoutCache.set(key, probeCheckout(path, opts));
+    return checkoutCache.get(key)!;
+  };
+  const {
+    workflowType,
+    integrationWorktreePath,
+    integrationBranch,
+    mainWorktree,
+    expectedMainBranch,
+    lifecycleBranches,
+    leaseWorktreePath,
+    leaseWorkingBranch,
+    planId,
+  } = input;
 
-  if (controlWorktreePath.trim() === "") {
+  // Main residency row — never skipped. Null discovery is itself a failure.
+  if (mainWorktree === null) {
     violations.push(
       violation(
         "high",
-        "worktree.l1.control-missing",
-        "metadata.control_worktree_path is not recorded \u2014 the L1 control worktree (integration-branch checkout) must be recorded in status.json before writable dispatch",
-        "record the control worktree path in status.json metadata.control_worktree_path",
+        "worktree.main.unresolved",
+        `main worktree identity cannot be proved for plan "${planId}" (git worktree discovery failed or unavailable) \u2014 L1 refuses instead of skipping the residency row`,
+        "run from inside the repository (or pass a resolvable cwd) so the main worktree can be discovered",
+      ),
+    );
+  } else {
+    if (expectedMainBranch.trim() === "") {
+      violations.push(
+        violation(
+          "high",
+          "worktree.main.expected-branch-missing",
+          `neither a recorded main-worktree branch nor an explicit branch.base is available for plan "${planId}" \u2014 the expectation is never the branch observed at check time`,
+          "record the main worktree branch at lifecycle start (plan header / --main-branch) or carry the explicit branch.base",
+        ),
+      );
+    } else {
+      violations.push(...assertMainWorktreeResidency(mainWorktree, expectedMainBranch).violations);
+    }
+    if (mainWorktree.branch !== "" && lifecycleBranches.includes(mainWorktree.branch)) {
+      violations.push(
+        violation(
+          "high",
+          "worktree.main.residency-switched",
+          `main worktree "${mainWorktree.root}" is on branch "${mainWorktree.branch}", which is owned by an active lifecycle \u2014 main must not carry any lifecycle-owned branch, even when the recorded expectation matches it`,
+          "restore the recorded main-worktree branch; never switch main to satisfy a check",
+        ),
+      );
+    }
+  }
+
+  // Integration inputs: iterations require both fields; a standalone plan
+  // without integration passes empty strings (main vs feature only); if
+  // either field is supplied, both and the full checks are required.
+  const integrationRequired =
+    workflowType === "iteration" || integrationWorktreePath.trim() !== "" || integrationBranch.trim() !== "";
+  if (integrationRequired && (integrationWorktreePath.trim() === "" || integrationBranch.trim() === "")) {
+    violations.push(
+      violation(
+        "high",
+        "worktree.l1.integration-missing",
+        `integration worktree path and branch are both required (workflow type "${workflowType}") for plan "${planId}" \u2014 got path ${JSON.stringify(integrationWorktreePath)}, branch ${JSON.stringify(integrationBranch)}`,
+        "record snapshot integration_worktree_path + branch.integration (the dedicated integration checkout), or pass both empty for a standalone plan",
       ),
     );
   }
+
   if (leaseWorktreePath.trim() === "") {
     violations.push(
       violation(
@@ -274,68 +462,140 @@ export function l1PreDispatchCheck(input: L1PreDispatchInput, opts: BranchProbeO
       ),
     );
   }
-  // Same-checkout refusal by Git checkout identity, not physical path
-  // equality: the lease worktree MUST be a distinct checkout from the
-  // control worktree. A real linked worktree nested inside the control
-  // checkout (the documented .worktrees layout) is a distinct checkout and
-  // passes; the same checkout, a plain subdirectory, or a symlink alias of
-  // it is refused — even when the declared branch matches the control
-  // branch. Git-probe failure fails closed (bounded timeout).
-  if (controlWorktreePath !== "" && leaseWorktreePath !== "") {
-    // Fast path: normalized path equality is the same checkout — no probe.
-    if (resolve(controlWorktreePath) === resolve(leaseWorktreePath)) {
+
+  // Integration checkout existence + branch alignment (only when fully
+  // supplied; the generic branch codes cover their unchanged conditions).
+  if (integrationRequired && integrationWorktreePath.trim() !== "" && integrationBranch.trim() !== "") {
+    if (!existsSync(integrationWorktreePath)) {
       violations.push(
         violation(
-          "critical",
-          "worktree.l1.lease-equals-control",
-          `execution_lease.worktree_path "${leaseWorktreePath}" equals metadata.control_worktree_path \u2014 the feature worktree MUST differ from the control worktree (L1 isolation; product edits never land in the control checkout)`,
-          "use a distinct feature worktree for the plan (git worktree add <path> <branch>) and update the lease",
+          "high",
+          "worktree.l1.integration-missing",
+          `integration worktree "${integrationWorktreePath}" does not exist for plan "${planId}" \u2014 the integration checkout must exist before dispatch`,
+          `create it before dispatch: git worktree add ${shellQuote(integrationWorktreePath)} ${shellQuote(integrationBranch)}`,
         ),
       );
-    } else if (existsSync(leaseWorktreePath)) {
-      const controlProbe = probeCheckout(controlWorktreePath, opts);
-      const leaseProbe = probeCheckout(leaseWorktreePath, opts);
-      if ("error" in controlProbe) {
+    } else {
+      const probe = probeBranch(integrationWorktreePath, opts);
+      if ("error" in probe) {
         violations.push(
           violation(
             "high",
-            "worktree.l1.checkout-probe-failed",
-            `cannot establish the lease worktree "${leaseWorktreePath}" is a distinct Git checkout from the control worktree "${controlWorktreePath}" for plan "${planId}": ${controlProbe.error}`,
-            "verify the control worktree path is a git checkout (integration-branch checkout)",
+            "worktree.branch-probe-failed",
+            `cannot probe branch at the integration worktree "${integrationWorktreePath}" for plan "${planId}": ${probe.error}`,
+            "verify the path is a git worktree checkout on the integration branch (not detached)",
           ),
         );
-      } else if ("error" in leaseProbe) {
+      } else if (probe.branch !== integrationBranch) {
         violations.push(
           violation(
             "high",
-            "worktree.l1.checkout-probe-failed",
-            `cannot establish the lease worktree "${leaseWorktreePath}" is a distinct Git checkout from the control worktree "${controlWorktreePath}" for plan "${planId}": ${leaseProbe.error}`,
-            "verify the lease worktree path is a git checkout (git worktree add <path> <branch>)",
-          ),
-        );
-      } else if (controlProbe.gitDir === leaseProbe.gitDir) {
-        violations.push(
-          violation(
-            "critical",
-            "worktree.l1.lease-equals-control",
-            `execution_lease.worktree_path "${leaseWorktreePath}" is the same Git checkout as metadata.control_worktree_path "${controlWorktreePath}" \u2014 a plain subdirectory or symlink alias of the control checkout is not isolation; the feature worktree MUST be a distinct checkout`,
-            "use a distinct feature worktree for the plan (git worktree add <path> <branch>) and update the lease",
+            "worktree.branch-mismatch",
+            `integration worktree "${integrationWorktreePath}" is on branch "${probe.branch}", expected branch.integration "${integrationBranch}" (plan "${planId}")`,
+            `checkout ${shellQuote(integrationBranch)} in the integration worktree`,
           ),
         );
       }
     }
   }
 
-  if (leaseWorktreePath !== "" && !existsSync(leaseWorktreePath)) {
+  /**
+   * Pairwise Git-checkout identity: normalized path equality is the same
+   * checkout (no probe); otherwise both paths must exist and their
+   * canonical per-worktree git dirs must differ. A probe failure is
+   * `worktree.l1.checkout-probe-failed` (fail closed, never an identity).
+   */
+  const identityViolation = (
+    aPath: string,
+    bPath: string,
+    code: string,
+    describe: string,
+    fix: string,
+  ): ValidationResult | null => {
+    if (resolve(aPath) === resolve(bPath)) {
+      return violation(
+        "critical",
+        code,
+        `${describe} \u2014 the same checkout (normalized path equality) is not isolation`,
+        fix,
+      );
+    }
+    if (!existsSync(aPath) || !existsSync(bPath)) return null; // absence is reported by its own check
+    const a = checkout(aPath);
+    const b = checkout(bPath);
+    if ("error" in a) {
+      return violation(
+        "high",
+        "worktree.l1.checkout-probe-failed",
+        `cannot establish the Git-checkout identity of "${aPath}" for plan "${planId}": ${a.error}`,
+        "verify the path is a git checkout",
+      );
+    }
+    if ("error" in b) {
+      return violation(
+        "high",
+        "worktree.l1.checkout-probe-failed",
+        `cannot establish the Git-checkout identity of "${bPath}" for plan "${planId}": ${b.error}`,
+        "verify the path is a git checkout",
+      );
+    }
+    if (a.gitDir === b.gitDir) {
+      return violation(
+        "critical",
+        code,
+        `${describe} \u2014 a plain subdirectory or symlink alias of the other checkout is not isolation (canonical per-worktree git dirs match)`,
+        fix,
+      );
+    }
+    return null;
+  };
+
+  // lease worktree vs MAIN worktree.
+  if (mainWorktree !== null && leaseWorktreePath.trim() !== "") {
+    const v = identityViolation(
+      mainWorktree.root,
+      leaseWorktreePath,
+      "worktree.l1.lease-equals-main",
+      `execution_lease.worktree_path "${leaseWorktreePath}" is the same Git checkout as the main worktree "${mainWorktree.root}" (plan "${planId}")`,
+      "use a distinct feature worktree for the plan (git worktree add <path> <branch>) and update the lease",
+    );
+    if (v !== null) violations.push(v);
+  }
+  // integration checkout vs MAIN worktree.
+  if (mainWorktree !== null && integrationRequired && integrationWorktreePath.trim() !== "") {
+    const v = identityViolation(
+      mainWorktree.root,
+      integrationWorktreePath,
+      "worktree.l1.integration-equals-main",
+      `integration worktree "${integrationWorktreePath}" is the same Git checkout as the main worktree "${mainWorktree.root}" (plan "${planId}") — the integration checkout is the sole merge cwd and must be dedicated`,
+      "use a dedicated integration checkout on branch.integration (git worktree add <path> <integration-branch>) and record it as integration_worktree_path",
+    );
+    if (v !== null) violations.push(v);
+  }
+  // lease worktree vs integration checkout.
+  if (integrationRequired && integrationWorktreePath.trim() !== "" && leaseWorktreePath.trim() !== "") {
+    const v = identityViolation(
+      integrationWorktreePath,
+      leaseWorktreePath,
+      "worktree.l1.lease-equals-integration",
+      `execution_lease.worktree_path "${leaseWorktreePath}" is the same Git checkout as the integration worktree "${integrationWorktreePath}" (plan "${planId}") — the feature worktree must be distinct from both main and integration`,
+      "use a distinct feature worktree for the plan (git worktree add <path> <working-branch>) and update the lease",
+    );
+    if (v !== null) violations.push(v);
+  }
+
+  // Feature worktree checks (existing contract): dir exists, checked-out
+  // branch matches execution_lease.working_branch. Fail-closed probes.
+  if (leaseWorktreePath.trim() !== "" && !existsSync(leaseWorktreePath)) {
     violations.push(
       violation(
         "high",
         "worktree.l1.feature-missing",
         `feature worktree directory "${leaseWorktreePath}" does not exist for plan "${planId}"`,
-        `create it before dispatch: git worktree add ${leaseWorktreePath} <working-branch>`,
+        `create it before dispatch: git worktree add ${shellQuote(leaseWorktreePath)} <working-branch>`,
       ),
     );
-  } else if (leaseWorktreePath !== "" && leaseWorkingBranch !== "") {
+  } else if (leaseWorktreePath.trim() !== "" && leaseWorkingBranch.trim() !== "") {
     const probe = probeBranch(leaseWorktreePath, opts);
     if ("error" in probe) {
       violations.push(
@@ -352,7 +612,7 @@ export function l1PreDispatchCheck(input: L1PreDispatchInput, opts: BranchProbeO
           "high",
           "worktree.l1.branch-mismatch",
           `feature worktree "${leaseWorktreePath}" is on branch "${probe.branch}", expected execution_lease.working_branch "${leaseWorkingBranch}" (plan "${planId}")`,
-          `checkout ${leaseWorkingBranch} in the feature worktree`,
+          `checkout ${shellQuote(leaseWorkingBranch)} in the feature worktree`,
         ),
       );
     }
@@ -461,14 +721,14 @@ export function l2PreDispatchCheck(input: L2PreDispatchInput, opts: BranchProbeO
 }
 
 /**
- * L1 hard rule (Harness path SSOT): `execution_lease.worktree_path` MUST
- * be a Git checkout DISTINCT from `metadata.control_worktree_path` — the
- * same checkout, a plain subdirectory, or a symlink alias of the control
- * checkout is refused (checkout identity via the canonical per-worktree
- * git dir; probe failure fails closed). Both-empty stays a match (nothing
- * recorded, per the lease validator contract); one empty has nothing to
- * compare and passes (the lease validator's absolute-path requirement owns
- * empty lease paths).
+ * L1 hard rule (main control root vs feature): `execution_lease.worktree_path`
+ * MUST be a Git checkout DISTINCT from the MAIN worktree (the process-SSOT
+ * control root) — the same checkout, a plain subdirectory, or a symlink
+ * alias of the main checkout is refused (checkout identity via the
+ * canonical per-worktree git dir; probe failure fails closed). Both-empty
+ * stays a match (nothing recorded, per the lease validator contract); one
+ * empty has nothing to compare and passes (the lease validator's
+ * absolute-path requirement owns empty lease paths).
  */
 export function assertControlVsFeaturePath(
   controlWorktreePath: string,
@@ -481,7 +741,7 @@ export function assertControlVsFeaturePath(
       violation(
         "critical",
         "worktree.control-feature.same",
-        `control worktree path and feature/lease worktree path are both empty \u2014 execution_lease.worktree_path MUST differ from metadata.control_worktree_path`,
+        `main control root and feature/lease worktree path are both empty \u2014 execution_lease.worktree_path MUST be a distinct checkout from the main worktree`,
         "record a distinct feature worktree path",
       ),
     );
@@ -495,7 +755,7 @@ export function assertControlVsFeaturePath(
       violation(
         "critical",
         "worktree.control-feature.same",
-        `control worktree path "${controlWorktreePath}" and feature/lease worktree path "${featureWorktreePath}" are not distinct Git checkouts \u2014 a plain subdirectory or symlink alias of the control checkout is not isolation; execution_lease.worktree_path MUST be a distinct checkout`,
+        `main control root "${controlWorktreePath}" and feature/lease worktree path "${featureWorktreePath}" are not distinct Git checkouts \u2014 a plain subdirectory or symlink alias of the main checkout is not isolation; execution_lease.worktree_path MUST be a distinct checkout`,
         "use a distinct feature worktree for the plan's product edits (git worktree add <path> <branch>)",
       ),
     );
@@ -604,4 +864,9 @@ export function singleReviewSnapshot(assignments: readonly QcSnapshotAssignment[
     );
   }
   return gate(violations);
+}
+
+/** Shell-safe display of snapshot-controlled command arguments. */
+function shellQuote(value: string): string {
+  return "'" + value.replaceAll("'", "'\"'\"'") + "'";
 }

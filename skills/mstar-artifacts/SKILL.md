@@ -23,7 +23,7 @@ description: "Morning Star plan harness artifacts — `{PLAN_DIR}` main plans an
 ## `status.json`, workflow snapshots, and open residual (summary)
 
 - **`{HARNESS_DIR}/status.json` (v2)**: active-lifecycle register — `{ version: 2, updated_at, workflows[] }`. Each entry points at its snapshot dir (`dir: workflows/<id>`); terminal lifecycles are unregistered after the snapshot write.
-- **`{WORKFLOW_DIR}/<id>/snapshot.json`**: per-lifecycle running state — `plans[]` rows (legacy PlanRow shape verbatim) + per-row `execution_lease` + top-level `integration_merge_lease` / `execution_policy` / `branch` anchors / `control_worktree_path`.
+- **`{WORKFLOW_DIR}/<id>/snapshot.json`**: per-lifecycle running state — `plans[]` rows (legacy PlanRow shape verbatim) + per-row `execution_lease` + top-level `integration_merge_lease` / `execution_policy` / `branch` anchors / `integration_worktree_path` (the dedicated integration checkout; the main worktree / control root is derived from Git, never recorded in the snapshot).
 - **`{PROJECT_DIR}/<id>/residuals.json`**: open residual register, `entries[<plan-id>]` arrays — the **open-list SSOT** (severity enum + lifecycle semantics verbatim; project-less flows use `_default`).
 - **Canonical**: register new findings only in the project register (`projects/<id>/residuals.json`); v1 root `residual_findings` is legacy read-only — migrate via `mstar migrate`, do not dual-write.
 
@@ -37,7 +37,7 @@ description: "Morning Star plan harness artifacts — `{PLAN_DIR}` main plans an
 > **Engine check (when available):** run `mstar status findings-cleanup <plan-id> [--project <id>] [--mode zero-residual|allow-residual]` (or import `findingsCleanupGate` from `@mstar-harness/engine` in a host hook) to enforce the Findings cleanup mode above against the plan's register entries. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 - **`{WORKFLOW_DIR}/<id>/notes.jsonl`**: per-workflow append-only notes ledger (runtime); snapshot plan-row `notes` is the legacy verbatim copy. **Tech-debt rollup**: `mstar status tech-debt <project-dir>` over the project registers — **`references/status-and-residuals.md`**.
-- **Iteration Phase 2 leases** (snapshot: `control_worktree_path`, `plans[].execution_lease`, top-level `integration_merge_lease`): field semantics → **`references/status-and-residuals.md`** (“Iteration execution leases”); Phase 2 execution checklist → **`mstar-iteration`** `references/phase-2-worktree-lease.md`; full protocol prose (single copy) → **`mstar-engine-legacy`** `references/lease-protocol.md`.
+- **Iteration Phase 2 leases** (snapshot: `integration_worktree_path`, `plans[].execution_lease`, top-level `integration_merge_lease`): field semantics → **`references/status-and-residuals.md`** (“Iteration execution leases”); Phase 2 execution checklist → **`mstar-iteration`** `references/phase-2-worktree-lease.md`; full protocol prose (single copy) → **`mstar-engine-legacy`** `references/lease-protocol.md`.
 
 > **Engine check (when available):** run `mstar lease verify --workflow <id> [--plan <plan-id>]` or `mstar lease verify-integration --workflow <id>` (or import `validateExecutionLease` / `validateIntegrationMergeLease` from `@mstar-harness/engine` in a host hook) to validate the iteration leases above on the workflow snapshot (execution_lease / integration_merge_lease). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 

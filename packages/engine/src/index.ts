@@ -105,12 +105,15 @@ export type {
   WorkflowLifecycleStatus,
   WorkflowLifecycleType,
   WorkflowSnapshot,
+  WorkflowSnapshotRead,
 } from "./workflow.js";
 export {
+  LEGACY_WORKTREE_PATH_CODE,
   WORKFLOW_LIFECYCLE_STATUSES,
   WORKFLOW_LIFECYCLE_TYPES,
   WORKFLOW_SNAPSHOT_FILE,
   WORKFLOW_TERMINAL_STATUSES,
+  readWorkflowSnapshot,
   validateWorkflowSnapshot,
   writeWorkflowSnapshot,
 } from "./workflow.js";
@@ -144,6 +147,7 @@ export type {
   BranchProbeOptions,
   L1PreDispatchInput,
   L2PreDispatchInput,
+  MainWorktreeInfo,
   QcAlignmentAssignment,
   QcSnapshotAssignment,
   WorktreeTrack,
@@ -151,11 +155,13 @@ export type {
 export {
   assertBranchAlignment,
   assertControlVsFeaturePath,
+  assertMainWorktreeResidency,
   assertQcAlignment,
   isDistinctCheckout,
   l1PreDispatchCheck,
   l2PreDispatchCheck,
   probeCheckoutRoot,
+  readMainWorktree,
   singleReviewSnapshot,
 } from "./worktree.js";
 export type {
@@ -392,3 +398,7 @@ export {
 } from "./prreview.js";
 export type { ArtifactDoc, ArtifactKind, ArtifactRef, ArtifactStore } from "./store.js";
 export { assertFsStorePath, createFsStore, getArtifactStore, loadStoreModule, resolveArtifactPath, setArtifactStore } from "./store.js";
+
+export { collectActiveLifecycleBranches, scanActiveLifecycleBranches, type ActiveLifecycleScan } from "./lifecycle-branches.js";
+
+export { WorkflowSnapshotValidationError } from "./workflow.js";

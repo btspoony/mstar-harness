@@ -26,7 +26,7 @@
  */
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import {
@@ -365,7 +365,7 @@ describe("sddWorkspace — SDD dir resolution (SKILL.md § Per-task loop + § CL
     expect(err.message).toContain("is not a directory");
   });
 
-  test("fail-closed: linked worktree without status.json refuses a second SDD tree", () => {
+  test("discovery from a linked checkout reaches only main — the SDD tree lands on the main worktree", () => {
     const main = tmpRoot("sdd-ws-main-");
     const parent = tmpRoot("sdd-ws-parent-");
     try {
@@ -373,19 +373,19 @@ describe("sddWorkspace — SDD dir resolution (SKILL.md § Per-task loop + § CL
       const linked = join(parent, "linked");
       mkdirSync(dirname(linked), { recursive: true });
       git(["worktree", "add", "-q", linked, "-b", "feature/linked"], main);
- // linked worktree has no .mstar/status.json and no control root
-      const err = errOf(() => sddWorkspace("plan-1", { cwd: linked }));
-      expect(err.exitCode).toBe(1);
-      expect(err.message).toMatch(/linked worktree at .* has no \{HARNESS_DIR\}\/status\.json/);
-      expect(err.message).toMatch(/Refusing to create a second SDD tree/);
-      expect(err.message).toContain("MSTAR_CONTROL_ROOT");
+ // no explicit root: Git-derived main discovery (first worktree record)
+ // resolves the main worktree and the SDD tree is created THERE — never a
+ // second SDD tree under the feature checkout.
+      const dir = sddWorkspace("plan-1", { cwd: linked });
+      expect(dir).toBe(realpathSync(join(main, ".mstar", "sdd", "plan-1")));
+      expect(existsSync(join(linked, ".mstar"))).toBe(false);
     } finally {
       rmSync(main, { recursive: true, force: true });
       rmSync(parent, { recursive: true, force: true });
     }
   });
 
-  test("fail-closed first: MSTAR_HARNESS_DIR cannot bypass the linked-worktree guard", () => {
+  test("harness override from a linked checkout resolves against the main root, never the feature checkout", () => {
     const main = tmpRoot("sdd-ws-guard-");
     const parent = tmpRoot("sdd-ws-guard-parent-");
     try {
@@ -393,14 +393,101 @@ describe("sddWorkspace — SDD dir resolution (SKILL.md § Per-task loop + § CL
       const linked = join(parent, "linked");
       mkdirSync(dirname(linked), { recursive: true });
       git(["worktree", "add", "-q", linked, "-b", "feature/guarded"], main);
- // override + no CONTROL_ROOT must still fail closed — the override
- // may never create a second SDD tree under the feature checkout
       withEnv(MSTAR_HARNESS_DIR, ".custom-root", () => {
-        const err = errOf(() => sddWorkspace("plan-1", { cwd: linked }));
-        expect(err.exitCode).toBe(1);
-        expect(err.message).toMatch(/linked worktree at .* has no \{HARNESS_DIR\}\/status\.json/);
-        expect(err.message).toMatch(/Refusing to create a second SDD tree/);
+        const dir = sddWorkspace("plan-1", { cwd: linked });
+        expect(dir).toBe(realpathSync(join(main, ".custom-root", "sdd", "plan-1")));
+        expect(existsSync(join(linked, ".custom-root"))).toBe(false);
+        expect(existsSync(join(linked, ".mstar"))).toBe(false);
       });
+    } finally {
+      rmSync(main, { recursive: true, force: true });
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
+  test("an override redirecting the process SSOT into the linked checkout is refused and writes nowhere", () => {
+    const main = tmpRoot("sdd-ws-redirect-");
+    const parent = tmpRoot("sdd-ws-redirect-parent-");
+    try {
+      gitFixture(main);
+      const linked = join(parent, "linked");
+      mkdirSync(dirname(linked), { recursive: true });
+      git(["worktree", "add", "-q", linked, "-b", "feature/redirect"], main);
+      withEnv(MSTAR_HARNESS_DIR, join(linked, "harness-redirect"), () => {
+        const err = errOf(() => sddWorkspace("plan-1", { cwd: main }));
+        expect(err.exitCode).toBe(1);
+        expect(err.message).toContain("linked");
+        expect(existsSync(join(linked, "harness-redirect"))).toBe(false);
+        expect(existsSync(join(linked, ".mstar"))).toBe(false);
+      });
+    } finally {
+      rmSync(main, { recursive: true, force: true });
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
+  test("failed main discovery writes nowhere (fail-closed before any mkdir)", () => {
+    const root = tmpRoot("sdd-ws-faildisc-");
+    try {
+      gitFixture(root);
+ // A hung git (slow shim + bounded probe timeout) makes main discovery
+ // return null — the workspace must refuse BEFORE resolving any harness
+ // dir or creating anything.
+      const shim = join(root, "shim");
+      mkdirSync(shim, { recursive: true });
+      const fakeGit = join(shim, "git");
+      writeFileSync(fakeGit, "#!/bin/sh\nsleep 30\nexit 0\n", { mode: 0o755 });
+      chmodSync(fakeGit, 0o755);
+      const previousPath = process.env.PATH;
+      const previousTimeout = process.env.MSTAR_GIT_PROBE_TIMEOUT_MS;
+      process.env.PATH = `${shim}:${previousPath ?? ""}`;
+      process.env.MSTAR_GIT_PROBE_TIMEOUT_MS = "300";
+      try {
+        const err = errOf(() => sddWorkspace("plan-1", { cwd: root }));
+        expect(err.exitCode).toBe(1);
+        expect(err.message).toContain("main worktree");
+        expect(existsSync(join(root, ".mstar"))).toBe(false);
+      } finally {
+        if (previousPath === undefined) delete process.env.PATH;
+        else process.env.PATH = previousPath;
+        if (previousTimeout === undefined) delete process.env.MSTAR_GIT_PROBE_TIMEOUT_MS;
+        else process.env.MSTAR_GIT_PROBE_TIMEOUT_MS = previousTimeout;
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("an explicit control root that is an integration/foreign linked checkout is refused, not silently redirected", () => {
+    const main = tmpRoot("sdd-ws-foreign-");
+    const parent = tmpRoot("sdd-ws-foreign-parent-");
+    try {
+      gitFixture(main);
+      const linked = join(parent, "linked");
+      mkdirSync(dirname(linked), { recursive: true });
+      git(["worktree", "add", "-q", linked, "-b", "feature/foreign"], main);
+      const err = errOf(() => sddWorkspace("plan-1", { cwd: linked, controlRoot: linked }));
+      expect(err.exitCode).toBe(1);
+      expect(err.message).toContain("main worktree");
+      expect(existsSync(join(linked, ".mstar"))).toBe(false);
+      expect(existsSync(join(main, ".mstar"))).toBe(false);
+    } finally {
+      rmSync(main, { recursive: true, force: true });
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
+  test("an explicit control root on the main worktree itself is verified and used", () => {
+    const main = tmpRoot("sdd-ws-explicit-main-");
+    const parent = tmpRoot("sdd-ws-explicit-parent-");
+    try {
+      gitFixture(main);
+      const linked = join(parent, "linked");
+      mkdirSync(dirname(linked), { recursive: true });
+      git(["worktree", "add", "-q", linked, "-b", "feature/elsewhere"], main);
+      const dir = sddWorkspace("plan-1", { cwd: linked, controlRoot: main });
+      expect(dir).toBe(realpathSync(join(main, ".mstar", "sdd", "plan-1")));
+      expect(existsSync(join(linked, ".mstar"))).toBe(false);
     } finally {
       rmSync(main, { recursive: true, force: true });
       rmSync(parent, { recursive: true, force: true });
@@ -606,22 +693,19 @@ describe("engine helper contracts (bash originals removed in slice 5 — behavio
     }
   });
 
-  test("sddWorkspace fail-closed: exit 1 with the linked-worktree message", () => {
-    const main = tmpRoot("sdd-fc-main-");
-    const parent = tmpRoot("sdd-fc-parent-");
+  test("sddWorkspace fail-closed: no verified main worktree refuses with exit 1 (non-Git cwd, no explicit root)", () => {
+    const root = tmpRoot("sdd-fc-nongit-");
     try {
-      gitFixture(main);
-      const linked = join(parent, "linked");
-      mkdirSync(linked, { recursive: true });
-      git(["worktree", "add", "-q", linked, "-b", "feature/parity"], main);
-      const err = errOf(() => sddWorkspace("parity-plan", { cwd: linked }));
+ // Automatic non-Git discovery never authorizes an SDD write: without a
+ // Git-verified main worktree the engine refuses before resolving any
+ // harness dir — nothing is written anywhere.
+      const err = errOf(() => sddWorkspace("parity-plan", { cwd: root }));
       expect(err.exitCode).toBe(1);
-      expect(err.message).toContain("linked worktree");
-      expect(err.message).toContain("Refusing to create a second SDD tree");
-      expect(err.message).toContain("or: mstar sdd workspace parity-plan <control_worktree_path>");
+      expect(err.message).toContain("cannot verify the main worktree");
+      expect(err.message).toContain("or: mstar sdd workspace parity-plan <main-repo-root>");
+      expect(existsSync(join(root, ".mstar"))).toBe(false);
     } finally {
-      rmSync(main, { recursive: true, force: true });
-      rmSync(parent, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true });
     }
   });
 
@@ -706,29 +790,23 @@ describe("engine helper contracts (bash originals removed in slice 5 — behavio
     }
   });
 
-  test("repo under a directory named 'worktrees' is classified as linked (fail-closed)", () => {
+  test("a main checkout under a directory named 'worktrees' verifies as its own main (Git identity, not path substring)", () => {
     const parent = tmpRoot("sdd-wt-");
     const root = join(parent, "worktrees", "proj");
     try {
       mkdirSync(root, { recursive: true });
-      git(["init", "-q"], root);
-      git(["config", "user.email", "sdd-test@example.com"], root);
-      git(["config", "user.name", "SDD Test"], root);
-      writeFileSync(join(root, "a.txt"), "a\n");
-      git(["add", "-A"], root);
-      git(["commit", "-q", "-m", "base commit"], root);
- // The `git_dir` path contains `/worktrees/` → the substring branch
- // classifies this MAIN checkout as linked and fails closed —
-       // documented in `isLinkedWorktree`.
-      const err = errOf(() => sddWorkspace("parity-plan", { cwd: root }));
-      expect(err.exitCode).toBe(1);
-      expect(err.message).toContain("linked worktree");
+      gitFixture(root);
+ // Git-worktree discovery (first porcelain record) classifies by checkout
+ // identity, not by a `/worktrees/` substring: this MAIN checkout verifies
+ // as its own main and the SDD tree is created at its own harness.
+      const dir = sddWorkspace("parity-plan", { cwd: root });
+      expect(dir).toBe(realpathSync(join(root, ".mstar", "sdd", "parity-plan")));
     } finally {
       rmSync(parent, { recursive: true, force: true });
     }
   });
 
-  test("stray status.json in a linked worktree: fail-closed first (intentional divergence)", () => {
+  test("stray status.json in a linked worktree never wins — discovery reaches main only", () => {
     const main = tmpRoot("sdd-stray-main-");
     const parent = tmpRoot("sdd-stray-parent-");
     try {
@@ -737,17 +815,14 @@ describe("engine helper contracts (bash originals removed in slice 5 — behavio
       mkdirSync(dirname(linked), { recursive: true });
       git(["worktree", "add", "-q", linked, "-b", "feature/stray"], main);
  // Stray `.mstar/status.json` under the feature checkout (default
- // gitignore lets it exist uncommitted). A status.json-first probe
- // would resolve and create a second SDD tree under the feature
- // checkout (the hazard); the engine guards FIRST (fail-closed-before-
- // override, mstar-branch-worktree «Harness path SSOT under default
- // gitignore») and refuses regardless of the probe result (
- // intentional divergence).
+ // gitignore lets it exist uncommitted). A status.json-first probe would
+ // resolve the linked checkout and create a second SDD tree there; the
+ // Git-derived main discovery ignores the stray and writes only at main.
       mkdirSync(join(linked, ".mstar"), { recursive: true });
       writeFileSync(join(linked, ".mstar", "status.json"), "{}\n");
-      const err = errOf(() => sddWorkspace("parity-plan", { cwd: linked }));
-      expect(err.exitCode).toBe(1);
-      expect(err.message).toMatch(/Refusing to create a second SDD tree/);
+      const dir = sddWorkspace("parity-plan", { cwd: linked });
+      expect(dir).toBe(realpathSync(join(main, ".mstar", "sdd", "parity-plan")));
+      expect(existsSync(join(linked, ".mstar", "sdd"))).toBe(false);
     } finally {
       rmSync(main, { recursive: true, force: true });
       rmSync(parent, { recursive: true, force: true });
@@ -807,7 +882,10 @@ function executionFixture(root: string, opts: { nested?: boolean; nestedHarness?
   const harnessDir = opts.nestedHarness ? join(control, "state", ".mstar") : join(control, ".mstar");
   const planFile = join(harnessDir, "plans", `${PLAN_ID}.md`);
   mkdirSync(dirname(planFile), { recursive: true });
-  writeFileSync(planFile, "# Plan\n\n## Task 1\n\n- implement\n");
+  writeFileSync(
+    planFile,
+    "# Plan\n\n**Main worktree branch**: main\n\n## Task 1\n\n- implement\n",
+  );
   const sddDir = join(harnessDir, "sdd", PLAN_ID);
   mkdirSync(sddDir, { recursive: true });
   return { root, primary, control, feature, harnessDir, planId: PLAN_ID, planFile, sddDir, workingBranch };
@@ -834,10 +912,10 @@ function executionLease(f: ExecutionFixture, overrides: Record<string, string> =
   };
 }
 
-function writeSnapshot(f: ExecutionFixture, workflowId: string, plans: unknown[]): void {
+function writeSnapshot(f: ExecutionFixture, workflowId: string, plans: unknown[], extra: Record<string, unknown> = {}): void {
   const dir = join(f.harnessDir, "workflows", workflowId);
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "snapshot.json"), JSON.stringify({ schema_version: 1, plans }));
+  writeFileSync(join(dir, "snapshot.json"), JSON.stringify({ schema_version: 1, ...extra, plans }));
 }
 
 /**
@@ -1107,8 +1185,10 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
       const resolved = resolveSddExecutionContext(contextOf(f));
       expect(resolved.featureCwd).toBe(realpathSync(f.feature));
 
-      // A lease naming a plain subdirectory of the control checkout is the
-      // same checkout — the reused L1 gate refuses it (lease-equals-control).
+      // A lease naming a plain subdirectory of the harness checkout is not
+      // the context's feature worktree — the context binding refuses it
+      // (the L1 pairwise identity check compares against the MAIN worktree
+      // and the snapshot's integration checkout, not the harness checkout).
       const subdir = join(f.control, "plain-feature");
       mkdirSync(subdir);
       const controlBranch = git(["branch", "--show-current"], f.control);
@@ -1117,7 +1197,24 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
       ]);
       const err = errOf(() => resolveSddExecutionContext(contextOf(f)));
       expect(err.exitCode).toBe(1);
-      expect(err.message).toContain("worktree.l1.lease-equals-control");
+      expect(err.message).toContain("sdd.context.lease-worktree-mismatch");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a lease naming a plain subdirectory of the MAIN worktree is refused by L1 (lease-equals-main)", () => {
+    const root = tmpRoot("sdd-ctx-lease-mainsub-");
+    try {
+      const f = executionFixture(root);
+      const subdir = join(f.primary, "plain-subdir");
+      mkdirSync(subdir);
+      writeSnapshot(f, "wf-1", [
+        { id: PLAN_ID, status: "InProgress", execution_lease: executionLease(f, { worktree_path: subdir, working_branch: "feature/sub" }) },
+      ]);
+      const err = errOf(() => resolveSddExecutionContext(contextOf(f)));
+      expect(err.exitCode).toBe(1);
+      expect(err.message).toContain("worktree.l1.lease-equals-main");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1132,14 +1229,14 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
       expect(resolved.featureCwd).toBe(realpathSync(f.feature));
 
  // Context featureCwd ≠ verified lease worktree (lease points at the
- // primary checkout on main, so the reused L1 gate passes and the
- // context binding is what refuses).
+ // primary checkout on main) — the L1 gate refuses first: the feature
+ // worktree MUST be a distinct checkout from the MAIN worktree.
       writeSnapshot(f, "wf-1", [
         { id: PLAN_ID, status: "InProgress", execution_lease: executionLease(f, { worktree_path: f.primary, working_branch: "main" }) },
       ]);
       const worktreeErr = errOf(() => resolveSddExecutionContext(contextOf(f)));
       expect(worktreeErr.exitCode).toBe(1);
-      expect(worktreeErr.message).toContain("sdd.context.lease-worktree-mismatch");
+      expect(worktreeErr.message).toContain("worktree.l1.lease-equals-main");
 
  // Context workingBranch ≠ verified lease branch (lease matches the real
  // checkout; the declared branch is what differs).
@@ -1196,7 +1293,7 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
       expect(resolveSddExecutionContext(contextOf(f)).planId).toBe(PLAN_ID);
 
  // The ACTIVE row's lease is what got enforced: point that lease at the
- // primary checkout and the context is refused with the lease mismatch —
+ // primary checkout (main) and the L1 gate refuses with lease-equals-main —
  // a terminal-row win would have fallen through to standalone success.
       writeSnapshot(f, "wf-live", [
         {
@@ -1209,7 +1306,7 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
       ]);
       const err = errOf(() => resolveSddExecutionContext(contextOf(f)));
       expect(err.exitCode).toBe(1);
-      expect(err.message).toContain("sdd.context.lease-worktree-mismatch");
+      expect(err.message).toContain("worktree.l1.lease-equals-main");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1262,6 +1359,66 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
         },
       ]);
       expect(resolveSddExecutionContext(contextOf(f)).planId).toBe(PLAN_ID);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("residency expectation: recorded plan header wins, explicit branch.base is the fallback, neither refuses", () => {
+    const root = tmpRoot("sdd-ctx-mainbranch-");
+    try {
+      const f = executionFixture(root);
+      const row = { id: PLAN_ID, status: "InProgress", execution_lease: executionLease(f) };
+ // Recorded plan header (the fixture plan carries "Main worktree branch:
+ // main") — resolves.
+      writeSnapshot(f, "wf-1", [row]);
+      expect(resolveSddExecutionContext(contextOf(f)).planId).toBe(PLAN_ID);
+ // Headerless plan falls back conservatively to the snapshot's explicit
+ // branch.base — never the branch observed at check time.
+      writeFileSync(f.planFile, "# Plan\n\n## Task 1\n\n- implement\n");
+      writeSnapshot(f, "wf-1", [row], { branch: { base: "main" } });
+      expect(resolveSddExecutionContext(contextOf(f)).planId).toBe(PLAN_ID);
+ // Neither recorded header nor branch.base → expected-branch-missing refusal.
+      writeSnapshot(f, "wf-1", [row]);
+      const err = errOf(() => resolveSddExecutionContext(contextOf(f)));
+      expect(err.exitCode).toBe(1);
+      expect(err.message).toContain("worktree.main.expected-branch-missing");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("an iteration snapshot's integration worktree drives the full L1 checks", () => {
+    const root = tmpRoot("sdd-ctx-iteration-");
+    try {
+      const f = executionFixture(root);
+      const row = { id: PLAN_ID, status: "InProgress", execution_lease: executionLease(f) };
+ // Aligned, distinct integration checkout (the control worktree is on the
+ // integration branch in this fixture) — full checks pass.
+      writeSnapshot(f, "wf-iter", [row], {
+        type: "iteration",
+        integration_worktree_path: f.control,
+        branch: { integration: "codex/iter-integration" },
+      });
+      expect(resolveSddExecutionContext(contextOf(f)).planId).toBe(PLAN_ID);
+ // Integration checkout IS the main worktree → integration-equals-main.
+      writeSnapshot(f, "wf-iter", [row], {
+        type: "iteration",
+        integration_worktree_path: f.primary,
+        branch: { integration: "main" },
+      });
+      const eqMain = errOf(() => resolveSddExecutionContext(contextOf(f)));
+      expect(eqMain.exitCode).toBe(1);
+      expect(eqMain.message).toContain("worktree.l1.integration-equals-main");
+ // Feature worktree equals the integration checkout → lease-equals-integration.
+      writeSnapshot(f, "wf-iter", [row], {
+        type: "iteration",
+        integration_worktree_path: f.feature,
+        branch: { integration: f.workingBranch },
+      });
+      const eqLease = errOf(() => resolveSddExecutionContext(contextOf(f)));
+      expect(eqLease.exitCode).toBe(1);
+      expect(eqLease.message).toContain("worktree.l1.lease-equals-integration");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1752,4 +1909,51 @@ describe("bound task-brief / review-package — A3 artifact producers ()", () =>
       rmSync(root, { recursive: true, force: true });
     }
   });
+});
+
+test("explicit linked marker refuses unavailable Git without creating process state", () => {
+  const root = tmpRoot("sdd-linked-marker-");
+  const previousPath = process.env.PATH;
+  try {
+    writeFileSync(join(root, ".git"), "gitdir: /unavailable/common/worktrees/linked\n");
+    process.env.PATH = root;
+    expect(() => sddWorkspace("plan-a", { controlRoot: root })).toThrow("cannot verify");
+    expect(existsSync(join(root, ".mstar"))).toBe(false);
+  } finally {
+    process.env.PATH = previousPath;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test("governing active snapshot with both topology keys refuses standalone downgrade", () => {
+  const root = tmpRoot("sdd-both-topology-");
+  try {
+    const f = executionFixture(root);
+    writeSnapshot(f, "wf-a", [{ id: PLAN_ID, status: "InProgress", execution_lease: executionLease(f) }], {
+      integration_worktree_path: f.control, control_worktree_path: f.control,
+    });
+    expect(() => resolveSddExecutionContext(contextOf(f))).toThrow("refusing conflicting");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("review and base verification bound hung Git before artifact writes", () => {
+  const root = tmpRoot("sdd-bounded-git-");
+  const previousPath = process.env.PATH;
+  const previousTimeout = process.env.MSTAR_GIT_PROBE_TIMEOUT_MS;
+  try {
+    writeFileSync(join(root, "git"), "#!/bin/sh\nexec /bin/sleep 30\n", { mode: 0o755 });
+    process.env.PATH = root;
+    process.env.MSTAR_GIT_PROBE_TIMEOUT_MS = "50";
+    const started = Date.now();
+    expect(() => reviewPackage("abcd", "efab", join(root, "review.diff"), { cwd: root })).toThrow("bad BASE");
+    expect(() => assertBaseSha("abcd", { cwd: root })).toThrow("commit not found");
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(existsSync(join(root, "review.diff"))).toBe(false);
+  } finally {
+    process.env.PATH = previousPath;
+    if (previousTimeout === undefined) delete process.env.MSTAR_GIT_PROBE_TIMEOUT_MS;
+    else process.env.MSTAR_GIT_PROBE_TIMEOUT_MS = previousTimeout;
+    rmSync(root, { recursive: true, force: true });
+  }
 });
