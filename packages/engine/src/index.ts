@@ -105,12 +105,15 @@ export type {
   WorkflowLifecycleStatus,
   WorkflowLifecycleType,
   WorkflowSnapshot,
+  WorkflowSnapshotRead,
 } from "./workflow.js";
 export {
+  LEGACY_WORKTREE_PATH_CODE,
   WORKFLOW_LIFECYCLE_STATUSES,
   WORKFLOW_LIFECYCLE_TYPES,
   WORKFLOW_SNAPSHOT_FILE,
   WORKFLOW_TERMINAL_STATUSES,
+  readWorkflowSnapshot,
   validateWorkflowSnapshot,
   writeWorkflowSnapshot,
 } from "./workflow.js";
@@ -144,6 +147,7 @@ export type {
   BranchProbeOptions,
   L1PreDispatchInput,
   L2PreDispatchInput,
+  MainWorktreeInfo,
   QcAlignmentAssignment,
   QcSnapshotAssignment,
   WorktreeTrack,
@@ -151,11 +155,13 @@ export type {
 export {
   assertBranchAlignment,
   assertControlVsFeaturePath,
+  assertMainWorktreeResidency,
   assertQcAlignment,
   isDistinctCheckout,
   l1PreDispatchCheck,
   l2PreDispatchCheck,
   probeCheckoutRoot,
+  readMainWorktree,
   singleReviewSnapshot,
 } from "./worktree.js";
 export type {
