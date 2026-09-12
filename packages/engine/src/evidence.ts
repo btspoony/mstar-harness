@@ -422,7 +422,7 @@ function digestProjection(snapshot: EvidenceInputSnapshot): Record<string, unkno
  */
 export function evidenceInputDigest(snapshot: EvidenceInputSnapshot): string {
   if (!isPlainObject(snapshot)) throw new TypeError("evidence input snapshot must be a plain object");
-  for (const key of ["entries", "tool", "environment", "unknowns", "stable"]) {
+  for (const key of ["entries", "tool", "environment", "unknowns", "stable"] as const) {
     if (snapshot[key] === undefined) {
       throw new TypeError(`evidence input snapshot is missing required field "${key}"`);
     }
