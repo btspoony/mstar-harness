@@ -1,6 +1,6 @@
 ---
 name: mstar-dispatch-gates
-description: Morning Star 派发与委派门禁 —— 仅 PM 可增派 subagent、`Execute as` 与 `Delegation`、承接方反递归 NEVER 红线、SDD implement 串行派发、**SDD 路径 plan QC 强制 tri-review（N=3）**、inline 单席 QC 例外、Assignment 文案≠派发、未齐不发、**invoke 角色字段必填（漏写=静默 generic 回退=派发未完成）**。`project-manager` 派发时必读；leaf 动手前必读反递归。worktree 见 `mstar-branch-worktree`；SDD 见 `mstar-sdd`；宿主见 `mstar-host`。
+description: Morning Star 派发与委派门禁 —— 仅 PM 可增派 subagent、`Execute as` 与 `Delegation`、承接方反递归 NEVER 红线、SDD 独立就绪任务并行派发、**SDD 路径 plan QC 强制 tri-review（N=3）**、inline 单席 QC 例外、Assignment 文案≠派发、未齐不发、**invoke 角色字段必填（漏写=静默 generic 回退=派发未完成）**。`project-manager` 派发时必读；leaf 动手前必读反递归。worktree 见 `mstar-branch-worktree`；SDD 见 `mstar-sdd`；宿主见 `mstar-host`。
 ---
 
 ## Load order（必读顺序）
@@ -49,6 +49,8 @@ description: Morning Star 派发与委派门禁 —— 仅 PM 可增派 subagent
 
 当 PM 声明「并发分派」时，须同时满足**文案并发**与**工具并发**：
 
+同消息批调用在宿主支持时使用；仅支持逐次异步启动的宿主，连续启动所有 ready calls，全部启动前不等待任何结果。不得将工具封装限制误作任务必须串行；无法真实并发时如实报告限制。
+
 - **工具并发**：同一调度轮次内，多个 subagent 调用须在**同一条 assistant 消息**里一次性发出（宿主允许时）。
 - **QC tri-review（SDD 强制）**：`Execution mode: sdd` 且全部 task 完成后 → `qc-specialist` / `qc-specialist-2` / `qc-specialist-3` 同条消息 **N=3**（写 `{SDD_DIR}/review/qc1.md`…`qc3.md`；PM 汇总 `qc-consolidated.md` + durable plan summary）。Assignment 须含 branch **review-package** 路径与 report paths。适用于**单 plan 与 iteration**。
 - **QC 单席（例外）**：`Execution mode: inline`（hotfix 等），或 Assignment 显式 `QC mode: single` / `QC mode: single — override: <reason>` → `qc-specialist` ×1，`N=1`，写 `{SDD_DIR}/review/qc.md`。
@@ -56,7 +58,7 @@ description: Morning Star 派发与委派门禁 —— 仅 PM 可增派 subagent
 - **先自检再发送**：发送前核对「Assignment 条数 = 本条消息中的实际 **派发** 调用条数」。
 - **先自检字段再发送（与 count 同级门禁）**：核对**每条** invoke 都携带与 **`Execute as`** 匹配的角色绑定字段——omp **`agent`** / Cursor **`subagent_type`** / OpenCode **`subagent`** / Kimi·ZCode **`subagent_type`**；宿主列以 **`mstar-host`** §Detect active host 的 tool-shape 检测为准（禁以 config 路径/仓库内容判定）。**漏写或取默认通用值**（omp 漏 `agent` ⇒ 自动回退 generic `task`，无报错）= **派发未完成**，与 paste-only（零 invoke）**同等级**：当场补齐重发，不得进入下一 gate。**N=1 顺序链（Review & Edit）不豁免**——count 门在 N=1 恒过，**字段门是唯一保护**。
 - **前置步骤与派发回合分离（防串行 rollout）**：为派发准备的 **`bash` / `read` / `glob` / `grep`**（如 `merge-base`、`Review range`、`git rev-parse`）**不计入** `N` 次派发；可在上一条仅含准备的消息完成。准备完成后，**下一条派发消息**须**一次性**含 **`N` 次** Task / subagent invoke。**禁止**先发 `1` 次、等返回再补发其余 `N-1` 次。
-- **未齐不发（emit zero until batch-ready）**：需并发 `N≥2` 而当前只能发 `1` 条时，本条应发 **`0` 条派发 invoke`**（可继续 read/bash 补齐），**禁止**「先发一个顶一下」；`N` 份 payload 就绪后**单次消息发满 `N`**。见 **`mstar-host`** → `references/parallel-dispatch.md`（具备 invoke / Task / subagent 工具的宿主共用）。
+- **未齐不发（emit zero until batch-ready）**：宿主支持批调用且需并发 `N≥2` 而当前 payload 只齐 `1` 条时，本条应发 **`0` 条派发 invoke`**（可继续 read/bash 补齐），**禁止**「先发一个顶一下」；`N` 份 payload 就绪后**单次消息发满 `N`**。见 **`mstar-host`** → `references/parallel-dispatch.md`（具备 invoke / Task / subagent 工具的宿主共用）。
 
 ### 具名 subagent 宿主：文案分派 ≠ 调度完成
 
@@ -68,7 +70,7 @@ description: Morning Star 派发与委派门禁 —— 仅 PM 可增派 subagent
 
 When **`Execution mode: sdd`** (`mstar-sdd`):
 
-- **串行**：one implementer at a time; one **fresh** task reviewer after each — **never** parallel implementers (write conflicts).
+- **依赖驱动**：按 **`mstar-sdd`** § Ready-task scheduling 并行派发独立 ready tasks；各 task 后一位 fresh reviewer。真实依赖、共享写目标和 integration merge 串行。
 - **`SDD implementer session: sticky`**：same implementer subagent may **resume** across tasks when host supports it; **reviewers never resume** — see **`mstar-sdd/references/sticky-implementer-session.md`**.
 - File handoffs only — no pasted plan/diff/history in dispatch prompts.
 - Record per-task BASE SHA; use `review-package` for diffs — **never `HEAD~1`**.
@@ -86,7 +88,7 @@ When **`Execution mode: sdd`** (`mstar-sdd`):
 | **同仓写隔离** | 派发 **前** 每轨独立 `Worktree path` | 只写了 `Working branch` / `checkout -b` |
 
 - 独立模块可并行 **implement 轨道**（不同 dev Assignment）；**同仓 ≥2 可写并发** → **`mstar-branch-worktree`** **`references/parallel-writable-pre-dispatch.md`**（先于 invoke；同 plan 多轨 = L2）。
-- **SDD 单 plan 内**：task / implementer **仍串行**（`mstar-sdd`）；**禁止**同一 plan 内并行 SDD implementer（写冲突）。
+- **SDD 单 plan 内**：独立 ready tasks 默认并行；每轨先完成 L2 隔离，fresh session 与独立产物路径，PM 唯一写共享 ledger。规则 → **`mstar-sdd`** § Ready-task scheduling。
 - **跨 plan（迭代 Phase 2）≠ 单 plan 内并行**：不同 `plan_id` 的 feature implement **允许** lease 门控并行（每 plan 独立 verified snapshot `plans[].execution_lease` + feature worktree，L1）**仅当** coordination 路径 same-host 独占写锁可用且每次协调变更持锁 → **`mstar-iteration`** §2.0 #5 · **`mstar-artifacts`**。**跨主机 / 无共享 flock** → 默认 **`Plan parallelism: serial`** 或 Assignment 仍写并行 → **Blocked**（用户本轮 `Cross-host lease race: accepted` + audit `notes` 除外）。**无 flock 不豁免** control/feature worktree 或 lease。**`Worktree mode: waived` 不豁免**跨 plan 并行安全闸。**禁止**因默认 gitignore 导致 feature 缺 plans 而 waive worktree（harness 经 control 绝对路径）→ **`mstar-branch-worktree`**。**禁止**无 lease 的跨 plan 可写派发（lease 闸未 waive 时）。
 - **`integration_merge_lease`**：`spec_integration_branch` 上的 merge **始终串行**（一次仅一 holder）→ **`mstar-iteration`** · **`mstar-artifacts`**。
 - **`Plan parallelism: serial`**：仅强制跨 plan implement **调度串行**；**不** waive control worktree / `execution_lease` / `integration_merge_lease`（`Worktree mode: waived` 才是 lease/worktree 豁免）→ **`mstar-iteration`** §2.0 #5。
@@ -110,9 +112,9 @@ When **`Execution mode: sdd`** (`mstar-sdd`):
 
 共享反递归红线全清单见 **`mstar-roles/references/_shared/leaf-executor-core.md`**「Shared anti-recursion NEVER」；lease / worktree / Phase 相关反模式见 **`mstar-branch-worktree`** 与 **`mstar-iteration`**。本节仅列派发机制专属：
 
-- QC 三审拆在多条消息（tri 模式）或单席却未附 review-package 路径。
+- 宿主支持批调用却把 QC 三审拆成等待完成的串行轮次（tri 模式），或单席未附 review-package 路径。
 - 仅 1 次 invoke 却声称「tri-review 已并行启动」（tri 模式 N=3）。
-- SDD 并行 implementer dispatch（**同一 plan 内**多 task）— **不同于**跨 plan lease 门控并行（后者见上节 L1 / **`mstar-branch-worktree`**）。
+- SDD 并行 implementer 未隔离 worktree / ownership / session；把任务独立当作跳过 L1/L2 安全闸的理由。
 - 递归同角色 subagent；把 Handoff / 多轨编排措辞当 invoke。
 - Review-and-edit 链未完成即 commit integration 分支；PM 代做专业角色编辑而不 invoke。
 - Phase 1 review-and-edit 链三角色并行派发，或未等上一角色返回即派发下一角色。
@@ -121,7 +123,7 @@ When **`Execution mode: sdd`** (`mstar-sdd`):
 
 ## Workflow
 
-派发检查顺序：承接方先读 Assignment 顶部 **IDENTITY / 反模式块**确认 leaf 身份（反递归红线）→ PM 核对字段契约（`Execute as` / `Delegation` / 角色绑定字段；**先自检字段再发送**）→ 同一条消息**一次性发满 N 次** invoke（工具并发；N 按 `Execution mode` 映射）→ 派发前完成同仓写隔离（L1/L2 worktree）→ SDD 波次**串行** implement + fresh reviewer → task 全完成后 `{SDD_DIR}/review/` review-package → **强制 tri-review N=3**（或 inline 单席 N=1）。准备用 read/bash 不计入 N，且与派发回合分离（**未齐不发**）。
+派发检查顺序：承接方先读 Assignment 顶部 **IDENTITY / 反模式块**确认 leaf 身份（反递归红线）→ PM 核对字段契约（`Execute as` / `Delegation` / 角色绑定字段；**先自检字段再发送**）→ 同一条消息**一次性发满 N 次** invoke（工具并发；N 按 `Execution mode` 映射）→ 派发前完成同仓写隔离（L1/L2 worktree）→ SDD 按 ready-task 依赖并行 implement + fresh reviewer → task 全完成后 `{SDD_DIR}/review/` review-package → **强制 tri-review N=3**（或 inline 单席 N=1）。准备用 read/bash 不计入 N，且与派发回合分离（**未齐不发**）。
 
 ## References
 

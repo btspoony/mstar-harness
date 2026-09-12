@@ -46,16 +46,16 @@ Formal iteration Phase 2 uses the same SDD + tri rule — not a separate carve-o
 
 （**SDD 默认**已在上一节；本节仅覆盖显式 tri 的非 SDD 场景。）
 
-## SDD implement (serial — not parallel)
+## SDD implement
 
-- **`Execution mode: sdd`**: implementer and task reviewer dispatches are **one at a time** per task.
-- **Never** multiple implementer Tasks in one message for the same plan.
-- See **`mstar-sdd`**.
+- Follow **`mstar-sdd`** § Ready-task scheduling: independent ready tasks run concurrently after per-track worktree and artifact isolation; fresh implementers, one fresh reviewer per task.
+- Serialize only actual dependencies, overlapping writers, one sticky session, and integration merges. PM alone updates shared progress.
+- When the host only exposes separate asynchronous starts, issue every ready call before waiting for any result; same-message packaging is required only when supported.
 
 ## QC targeted re-review (after fixes)
 
 - Assignment: **`QC re-review: targeted — reviewers: <role-ids>`** → **N** = listed seats only (1–3), **one** dispatch turn with **N** invocations.
-- Do **not** default to three invocations after a routine fix round.
+- Do **not** default to three invocations after a routine fix round. Each listed seat receives only its findings and fix delta; tri seat count never expands review scope.
 - Post-dispatch: verify only **dispatched** seats returned; PM updates same bundle `qc-consolidated.md` and durable plan summary (see `mstar-artifacts/references/plan-files-and-reports.md`).
 
 ## Self-check before send
@@ -65,4 +65,4 @@ Formal iteration Phase 2 uses the same SDD + tri rule — not a separate carve-o
 3. Dispatch message contains **exactly `N`** invocation calls?
 4. **Each** invocation carries its role-binding field set to **`Execute as`** (omp `agent` / Cursor `subagent_type` / OpenCode `subagent` / Kimi·ZCode `subagent_type`)? A bare `task`/prompt item with no role field = **incomplete**, even at **N=1**.
 5. QC initial: **`Execution mode: sdd`** → **N=3**? **`inline`** → **N=1**? Targeted re-review → **N** = Assignment reviewer count?
-6. SDD implement → **serial** (never batch implementers); sticky = **resume** same implementer, not parallel
+6. SDD implement → independent ready tasks isolated and concurrent? Sticky resume limited to one sequential owner track?

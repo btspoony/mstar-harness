@@ -12,7 +12,7 @@ Dispatch:
     <SUBAGENT-STOP> Skip PM orchestration. Read-only review.</SUBAGENT-STOP>
 
     Review one task implementation: spec compliance first, then quality.
-    Task-scoped gate — plan-level QC comes later on the whole branch.
+    Task-scoped gate — later plan QC checks changed interfaces across tasks, reusing this report.
 
     ## What was requested
 
@@ -39,8 +39,12 @@ Dispatch:
     Diff file: [DIFF_FILE]
 
     Read the diff file once. Do not re-run git. Do not mutate checkout.
-    Do not re-run full test suite — trust implementer evidence unless a
-    specific doubt needs one focused test.
+    Review only the assigned task diff and directly affected interfaces.
+    No repository-wide exploration or full test suite. Reuse relevant
+    implementer evidence; a specific doubt permits only the assigned focused
+    unit check. Non-executable docs/policy may use scoped-check evidence;
+    verify its applicability against the diff, never invent a test obligation.
+    Stop once the assigned acceptance questions are answered.
 
     ## Output
 
@@ -57,4 +61,4 @@ Dispatch:
     **Task quality:** Approved | Needs fixes
 ```
 
-Re-review after fixes covers both verdicts. PM resolves all ⚠️ items before marking task complete.
+Re-review after fixes checks both verdicts only for the raised findings and fix delta; unchanged evidence remains reusable. PM resolves all ⚠️ items before marking task complete.

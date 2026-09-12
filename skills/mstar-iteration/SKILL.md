@@ -81,7 +81,7 @@ Phase 5: PR merge-ready loop —— 至 mergeable + CI 全绿 + reviews resolved
 - 未知 → 读 `mstar-*`；仅 **`Blocked`**、secrets、不可逆范围缺口、branch metadata 缺失、或 Phase 5 多轮仍 blocked 时升级用户
 - 实际 Git ≠ `working_branch` → **同轮**更新 plan + snapshot + `execution_lease.working_branch`（如适用）
 - **跨 plan implement 并行安全闸**与 **integration merge 串行** → `references/phase-2-worktree-lease.md` §2.0 #5 /「Multi-plan parallelism」（**无论** `Worktree mode: waived`）
-- plan 内 SDD task **串行** — phase-2 reference §2.4、§2.5、`mstar-sdd` Continuous execution
+- plan 内 SDD 独立 ready tasks **并行**，真实依赖与共享写目标串行 — phase-2 reference §2.4、§2.5、`mstar-sdd` Ready-task scheduling
 - **zero-residual（默认）**：单 plan QC findings 尽量当轮清干净；仅真 blocker 才 defer（须 Durable Roadmap）— 见 **`mstar-artifacts`** Findings cleanup modes
 - iteration 命令共享的 PM invariants / preflight / todos / STOP → **`references/command-shared-invariants.md`**
 

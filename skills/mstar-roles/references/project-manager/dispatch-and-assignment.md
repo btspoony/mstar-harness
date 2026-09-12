@@ -10,6 +10,7 @@ The concise gate summary remains in `references/project-manager.md`.
 - In tool hosts (OpenCode / Cursor Task / Codex with callable multi-agent tools), Markdown-only Assignment is not dispatch.
 - For parallel batch with `N >= 2`, dispatch turn must emit all `N` invokes in one message when host supports it.
 - **Same-repo writable parallel tracks**: tool concurrency and worktree isolation are **separate gates**. Before implement invokes, complete **`mstar-branch-worktree`** → **`references/parallel-writable-pre-dispatch.md`**.
+- **Scope and stopping are explicit**: apply `mstar-harness-core` § 定向执行与验证边界. Give each leaf one result, owned paths/symbols, relevant inputs, named checks/selectors, and an evidence-based stopping condition. Reuse unaffected evidence; do not inject a suite merely because the repo exposes it. Independent ready assignments run concurrently after their dependency/isolation checks.
 - **Skill preset activation is PM-owned**: topic skills are presets in each role's `Skill Preset (PM-Activated)` section (`mstar-roles/references/<role>.md`), not self-loaded defaults. Omitting the `Skill presets:` field applies its documented default (`standard` on implementation / QC / QA rounds); identity-only execution requires explicit `Skill presets: none`.
 
 ## Executor Anti-Recursion Rules
@@ -43,7 +44,7 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
   - **QC reviewers** (`qc-specialist*`): "start review before all QC reviewers are dispatched in parallel"; "treat other reviewers' names in routing text as invoke targets"; "run test/build/lint on shared Review cwd"; "fill missing runtime evidence by executing the suite"
   - **Multi-track implementers** (`fullstack-dev` + `frontend-dev` / `fullstack-dev-2`): "auto-dispatch to the other track mentioned in Dev routing"; "implement in repo root when Assignment names a different `Worktree path`"
   - **`fullstack-dev-2`**: "treat `fullstack-dev` in routing narrative as a handoff or invoke target"
-  - **`qa-engineer`**: "start validation before QC reports are consolidated"; "default to full test re-run when `QA mode: acceptance-only` and L1/CI evidence is sufficient"; "expect QC reports to contain test logs"; "modify application code" (unless allowed)
+  - **`qa-engineer`**: "start validation before QC reports are consolidated"; "run anything beyond the assigned unit-test scope, including full suites or browser/device/E2E"; "expect QC reports to contain test logs"; "modify application code" (unless allowed)
   - **`explore`-assigned**: "implement or modify code"
   - **All non-PM**: "dispatch parallel agents"; "spawn a subagent whose `subagent_type` matches your own `Execute as` role id"
 - Anti-patterns must be action-oriented ("auto-dispatch to …", "treat … as invoke", "start … before …") — not abstract descriptions.
@@ -68,6 +69,8 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 - dispatch or invoke any subagent unless `Delegation: allowed (...)` appears below
 - treat plain `role-id` mentions, `Handoff`, `QA gate`, routing tables, or multi-track prose as invoke commands
 - invoke a subagent whose `subagent_type` matches your own `Execute as` role id (recursive dispatch)
+- expand beyond owned files or named checks; restart whole-repository exploration, review or tests
+- repeat settled analysis or add checks after the acceptance criteria are evidenced
 - <situation-specific anti-pattern #1>
 - <situation-specific anti-pattern #2>
 - ...
@@ -100,26 +103,26 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 **Worktree path**: <absolute feature implementer path when L1/L2 isolation used; default `<repoRoot>/.worktrees/<plan-id>-<slug>` (L2 tracks: `<track-slug>`); must ≠ control_worktree_path>
 **QA gate**: mandatory | pm-acceptance | report-only — see `references/project-manager/qa-trigger-matrix.md`
 **QA gate reason**: <tier label, e.g. hotfix-inline | small-feature-clean-qc | mandatory-medium-feature>
-**QA mode**: acceptance-only | full | report-only | N/A — required when `QA gate: mandatory` or `report-only`
+**QA mode**: acceptance-only | targeted | report-only | N/A — required when `QA gate: mandatory` or `report-only`
 **Findings cleanup**: zero-residual | allow-residual — **default `zero-residual` on formal iteration Phase 2**; **default `allow-residual`** for standalone `/pm`, hotfix, `Execution mode: inline` (override via Assignment or `plans[].metadata.findings_cleanup`; SSOT → `mstar-artifacts` Findings cleanup modes)
 **Why this agent**: <role-fit>
 **PM Task Board coverage**: <task ids>
 **Roadmap / deferred scope**: <required when staged, partial, or temporary; otherwise N/A>
-**Task**: <concrete work aligned with coverage>
+**Task**: <one concrete deliverable and stopping result aligned with coverage>
 **Checkpoint Comment Rule**: commit -> Completion Report -> PM Status Update -> next batch
 **Why batching is safe**: <required when batching >=3 IDs>
 **Scope**:
-- In: ...
-- Out: ...
-**Inputs**: ...
+- In: <owned files/symbols, directly affected interfaces; finding + fix delta for re-review>
+- Out: <excluded work and specific boundary>
+**Inputs**: <brief, diff, relevant knowledge, reusable evidence with original range>
 **Deliverables**: ...
 **Acceptance Criteria**:
 - [ ] ...
 **Evidence Required**:
-- [ ] commands/tests/checks
-- [ ] observable proof
+- [ ] <AC → exact affected unit-test selector or scoped static check; expected result>
+- [ ] <reused evidence + why unchanged, or new observable proof>
 - [ ] commit proof
-**Constraints**: ...
+**Constraints**: <no scope expansion; no local full suite without referenced explicit user permission; QA unit-only; no spontaneous browser/device/E2E; stop on concrete missing inputs and return once acceptance is evidenced>
 **Effort (agent-oriented)**: <XS/S/M/L/XL + session band>
 **Orchestration Guard** (see `**You are a leaf executor. You MUST NOT:**` block at top for primary anti-patterns):
 - No recursive same-role dispatch

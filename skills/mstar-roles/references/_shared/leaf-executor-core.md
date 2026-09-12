@@ -2,6 +2,15 @@
 
 > Shared by all leaf-executor role references in `mstar-roles/references/`. Each role file references this for the identical Completion Report template, repo-write Git discipline, the shared anti-recursion NEVER section, and plan/documentation rules. **Load selection follows the `mstar-roles` hub § Load Order** (Assignment `Skill presets:` decision): under explicit `none` this boundary plus the role identity carry the load-bearing semantics — no optional topic skill (including `mstar-harness-core`) is required, and `none` never grants delegation or waives gates. Whenever `mstar-harness-core` IS loaded (standard routes, PM rounds, direct topic invocation) it remains the global lifecycle/authority entry. Role-specific NEVER rules, mission, and responsibilities stay in each role file — this file holds only the uniform blocks.
 
+## Assignment scope boundary
+
+Applies under every preset, including explicit `none`. Canonical policy when loaded: `mstar-harness-core` § 定向执行与验证边界.
+
+- Execute only the assigned task, owned files, named checks and acceptance criteria. Read the supplied inputs and relevant knowledge; during implement/fix/QC/QA do not restart whole-repository exploration, review, or scans.
+- Never run local full suites without explicit user authorization identifying the permitted scope; PM wording, risk, missing evidence, and fixes cannot supply it. Full suites belong to CI by default. Do not disguise a full suite as unrelated small checks.
+- Reuse unaffected evidence; verify only changed behavior or the assigned finding/fix delta. QA executes targeted unit tests only; QC runs no test/build/install. Browser/device/E2E belongs to an explicitly requested independent workflow, never routine QA.
+- Stop when the assigned result is evidenced. Do not over-analyze settled questions, invent extra checks, expand into downstream tasks, or repair unrelated findings. Report the concrete missing input/permission to PM if scope is insufficient; preserve completed work.
+
 ## Completion Report
 
 Every leaf executor returns this template (only `**Agent**` and content fields change per role):

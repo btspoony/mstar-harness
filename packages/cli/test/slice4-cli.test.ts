@@ -315,6 +315,25 @@ describe("mstar lint — content-type lints", () => {
     });
   });
 
+  for (const reason of ["Policy scope and trigger changed; exact changed lines checked.", "TBD"]) {
+    test(`task report scoped-check ${reason === "TBD" ? "invalid reason → exit 1" : "valid → exit 0"}`, () => {
+      withTempDir((dir) => {
+        const file = join(dir, "task-1-report.md");
+        writeFileSync(file, `Verification mode: scoped-check
+Changed files: skills/example/SKILL.md
+Tests: N/A
+Reason: ${reason}
+Check command: rg -n 'scope' skills/example/SKILL.md
+Check result: exit 0; changed scope line found.
+`);
+        const result = runCli(["lint", file]);
+        expect(result.exitCode).toBe(reason === "TBD" ? 1 : 0);
+        if (reason === "TBD") expect(result.stderr).toContain("lint.sdd-evidence.reason");
+        else expect(result.stdout).toContain("OK");
+      });
+    });
+  }
+
   test("task report with full TDD triple → exit 0", () => {
     withTempDir((dir) => {
       const file = join(dir, "task-1-report.md");

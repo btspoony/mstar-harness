@@ -4,14 +4,16 @@ Reuse the **same implementer subagent** across multiple tasks in one plan when t
 
 SSOT for mode selection and host resume → this file. Per-task artifacts → **`file-handoffs.md`**.
 
+**Parallel ready tasks use fresh sessions and task-specific artifact paths inside one canonical per-plan SDD root** (`mstar-sdd` § Ready-task scheduling). Never resume the same session concurrently or share its ledger between tracks; PM alone updates shared context/progress; parallel leaves consume immutable absolute artifact paths, not shared-context helpers.
+
 ## When to use
 
 | `SDD implementer session` | Use |
 |---------------------------|-----|
 | **`fresh`** (default) | Independent tasks, module boundaries, different dev tracks, or first task on a plan |
-| **`sticky`** | Same `fullstack-dev` (or same role id), sequential tasks on one branch, strong file/context continuity (e.g. T3+T4 daemon stderr + DB reset) |
+| **`sticky`** | One sequential dependency chain on one owner track; same `fullstack-dev` (or same role id), sequential tasks on one branch, strong file/context continuity (e.g. T3+T4 daemon stderr + DB reset) |
 
-**Prefer `sticky`** on iteration Phase 2 Autonomous Execute when PM will dispatch many tasks to the same dev on one plan feature branch.
+**Prefer `sticky`** only within a sequential dependency chain with strong context continuity; independent ready tasks remain fresh and concurrent.
 
 ## Assignment fields (implement dispatch)
 

@@ -26,10 +26,10 @@ Dispatch:
 
     - Control harness root (briefs/reports/diffs live here): [CONTROL_ROOT]
     - Feature worktree — cwd for all source edits, branch [WORKING_BRANCH]: [FEATURE_CWD]
-    - Plan: [PLAN_FILE] — Context file: [CONTEXT_FILE]
+    - Plan: [PLAN_FILE] — PM coordination context: [CONTEXT_FILE] (never use it to select your checkout)
     - Brief: [BRIEF_FILE] — Report: [REPORT_FILE]
     - First step: observe `pwd` and the checked-out branch; on mismatch with [FEATURE_CWD]/[WORKING_BRANCH], stop and report BLOCKED — do not write. A declared-correct assignment does not make a wrong-checkout write safe.
-    - These destinations bind the handoff, not the host: a later deliberate `chdir`, absolute-path write outside [FEATURE_CWD], or host-native edit tool (apply_patch) is NOT blocked. CLI-launchable children are started via `mstar sdd exec --context [CONTEXT_FILE] -- <argv>` (starting cwd = feature worktree).
+    - These destinations bind the handoff, not the host: a later deliberate `chdir`, absolute-path write outside [FEATURE_CWD], or host-native edit tool (apply_patch) is NOT blocked. Execute allowed commands directly with the tool workdir fixed to the verified [FEATURE_CWD] / [WORKING_BRANCH]. Hosted leaves must not invoke `mstar sdd exec --context` or resolve cwd from mutable shared context; that entry is reserved for PM serialized CLI launch (file-handoffs.md § Bound child launch).
 
     ## Context not in the brief
 
@@ -41,14 +41,18 @@ Dispatch:
 
     ## Before you begin
 
-    Ask questions now about requirements, approach, or dependencies.
+    Read the supplied brief and relevant inputs. Ask only about a concrete missing prerequisite that prevents this task; do not reopen settled choices.
+
+    ## Scope and stop
+
+    Use only the brief's owned files, relevant inputs and named checks. Do not restart global exploration, extend the task, or run local full suites without the user's explicit scoped permission. Reuse unaffected evidence. Stop once the assigned acceptance criteria are evidenced; report concrete missing context instead of over-analyzing settled work.
 
     ## Your job
 
     1. Implement exactly what the brief specifies
-    2. Run tests (TDD if brief requires)
+    2. Run only the assigned affected unit tests; for non-executable docs/policy, use real scoped-check evidence per file-handoffs.md § Verification evidence
     3. Commit on Working branch
-    4. Self-review
+    4. Self-review only the task diff and directly affected contracts
     5. Write report file; return short summary only
 
     ## When stuck
@@ -59,7 +63,8 @@ Dispatch:
 
     - Status: DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED
     - Implemented / attempted
-    - Tests: command, output, red/green evidence if TDD
+    - Verification: affected test files, command, actual output (red/green for executable bug fixes), OR the complete scoped-check block from file-handoffs.md for non-executable docs/policy
+    - Reused evidence: original range and reason it remains applicable
     - Files changed
     - Self-review notes
 ```

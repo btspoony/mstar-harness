@@ -97,10 +97,10 @@ Harness **dispatch** on Kimi = **one or more `Agent` tool calls** with correct *
 
 Cannot emit required **N** → **`Blocked`**.
 
-### SDD implement (serial)
+### SDD implement
 
-- **`Execution mode: sdd`**: one implementer **`Agent`** per task id; task reviewer = new **`Agent`** with **Act as `code-reviewer`** (Kimi L2 review; not qc-specialist*), always via generic fallback `subagent_type: "coder"` per C5 — no sticky resume unless host adds it later. Serial rule → **`parallel-dispatch.md`** § SDD implement.
-- **Never** multiple implementer Agents in one message for the same plan.
+- **`Execution mode: sdd`**: one implementer **`Agent`** per task id; task reviewer = new **`Agent`** with **Act as `code-reviewer`** (Kimi L2 review; not qc-specialist*), always via generic fallback `subagent_type: "coder"` per C5 — no sticky resume unless host adds it later. Ready-task scheduling → **`parallel-dispatch.md`** § SDD implement.
+- Independent ready implementers use isolated parallel tracks; never share a writable worktree or session.
 
 ## Clarify
 

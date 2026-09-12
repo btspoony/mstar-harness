@@ -4,10 +4,10 @@
 
 | Layer | Who | When | Scope | Input |
 |-------|-----|------|-------|--------|
-| **L1** Implementer | dev subagent | Per task | Write code + **run** TDD / verification evidence | `task-N-brief.md` |
+| **L1** Implementer | dev subagent | Per task | Write code + affected unit evidence; non-executable docs/policy may use `scoped-check` | `task-N-brief.md` |
 | **L2** Task reviewer | `code-reviewer` (default; generic fallback when the host agent list lacks it) — PM-dispatched subagent (SDD) | Per task, after implementer | Spec + quality for **one task** (diff-first; no full suite) | brief, report, **task-level** diff |
-| **L3** Plan QC tri (cross-review) | `qc-specialist` + `qc-specialist-2` + `qc-specialist-3` | After **all** tasks on branch | **Code-review seat** — diff, language/logic, security & contract lenses on **whole branch**; **not** the test-execution path | Branch `review-package` MERGE_BASE..HEAD |
-| **L4** QA | `qa-engineer` when **`QA gate: mandatory`**; else PM acceptance | After QC gate | DoD acceptance, residual verify, targeted/full **command** verification, Done recommendation | Review bundle + plan + **L1 evidence** + `status.json` |
+| **L3** Plan QC tri (cross-review) | `qc-specialist` + `qc-specialist-2` + `qc-specialist-3` | After **all** tasks on branch | **Code-review seat** — diff, language/logic, security & contract lenses on **the assigned change and directly affected interfaces**; **not** the test-execution path | Branch `review-package` MERGE_BASE..HEAD |
+| **L4** QA | `qa-engineer` when **`QA gate: mandatory`**; else PM acceptance | After QC gate | DoD acceptance, residual verify, named affected **unit-test** verification only, Done recommendation | Review bundle + plan + **L1 evidence** + `status.json` |
 
 PM sets **`QA gate`** per `mstar-roles/references/project-manager/qa-trigger-matrix.md`. L4 execution when dispatched → `mstar-roles/references/qa-engineer/acceptance-gate.md`.
 
@@ -18,15 +18,17 @@ PM sets **`QA gate`** per `mstar-roles/references/project-manager/qa-trigger-mat
 | Produce runnable test/build evidence | **L1** implementer | **Does not** own |
 | Diff / logic / vulnerability / contract review | **L3** QC (and L2 task reviewer) | **Primary job** |
 | Map DoD → evidence; re-run gaps; close residuals | **L4** QA (or PM acceptance) | **Does not** own |
-| Full / targeted test suites, builds, installs | **L1** and/or **L4** | **NEVER** — leave to QA/dev |
+| Affected unit tests / evidence gaps | **L1** and/or **L4** | **NEVER** — consume evidence |
+| Explicitly user-authorized full local suite | Separate bounded action by implementer/ops; core authorization contract | **NEVER** |
+| Real browser / device / E2E | Explicit independent **`mstar-e2e`** workflow; ops executor | **NEVER**; not an L4 gate |
 
 **Why:** SDD plan QC is **N=3 parallel** on a **shared** `Review cwd`. Build/test/lint toolchains contend for caches and locks and falsely `Blocked` peer reviewers. QC is a **reviewer**, not a second QA lane.
 
-**SDD rule:** Layers L1–L2 run **per task** (serial). Layer L3 is **mandatory full tri-review** (`N=3`) whenever **`Execution mode: sdd`** — single-plan **and** iteration **and** multi-plan iteration. Layer L3 is **not** optional “final single review”.
+**SDD rule:** Layers L1–L2 run **per task**; independent ready tasks use isolated parallel tracks (`mstar-sdd` § Ready-task scheduling). Layer L3 is **mandatory full tri-review** (`N=3`) whenever **`Execution mode: sdd`** — single-plan **and** iteration **and** multi-plan iteration. Layer L3 is **not** optional “final single review”.
 
 **Non-SDD (`Execution mode: inline`):** hotfix / single-stream — plan QC may be **single-seat** (`qc.md`) or skipped per PM routing.
 
-Per-task spec/quality is **done** in L2 before L3. QC seats do not re-derive each task from scratch; they cross-review the **whole branch** for gaps L2 could not see.
+Per-task spec/quality is **done** in L2 before L3. QC seats do not re-derive each task from scratch; they review changed cross-task interfaces for gaps L2 could not see. Full tri denotes three seats, not full scope; do not repeat unchanged L2 work or survey the repository.
 
 ## Plan QC tri (SDD mandatory)
 
@@ -47,7 +49,7 @@ Per-task spec/quality is **done** in L2 before L3. QC seats do not re-derive eac
 | After | Fix dispatch |
 |-------|----------------|
 | Task review Critical/Important | Task fix subagent → task re-review (L2) |
-| Plan QC Critical/Important | **One** fix subagent with **complete** finding list → **targeted** QC re-review (listed seats) |
+| Plan QC Critical/Important | Owned fix assignments, independent ones in parallel; PM retains complete ledger → **targeted** QC re-review (listed seats) |
 
 ## Minor findings
 

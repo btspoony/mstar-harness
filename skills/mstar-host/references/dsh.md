@@ -119,9 +119,9 @@ or a custom profile).
   doneAt — deterministic, documented heuristic, only provably
   cross-iteration events are dropped, no historical back-scan of resumed
   long logs; the sidebar chip title is captured at open time; a docked
-  body renders nothing while `tab.visible === false`. Panel acceptance is
-  dual-track: in-loop browser harness verification against the rebuilt
-  bundle plus user-restart final GUI acceptance.
+  body renders nothing while `tab.visible === false`. Routine panel QA uses affected unit evidence only. Real-browser rebuilt-bundle
+  verification or user-restart GUI acceptance belongs to an explicitly requested
+  independent **`mstar-e2e`** workflow (`/amazing-e2e-check`), never an iteration QA gate.
 
 ## Skill loading
 
@@ -380,11 +380,13 @@ work against the same worktree.
   as parallel tri. Cannot emit required **N** → **`Blocked`**.
 - **`inline`**: **N=1**.
 
-### SDD implement (serial)
+### SDD implement
 
-- **`Execution mode: sdd`**: one implementer `subagent` dispatch per task id;
-  task reviewer = a separate dispatch (SDD review role) — no sticky resume
-  unless the host's continuable-subagent id is available and recorded.
+- **`Execution mode: sdd`**: one implementer `subagent` dispatch per ready task id;
+  independent tasks use isolated tracks and `run_in_background: true` before
+  waiting, per **`mstar-sdd`** § Ready-task scheduling. Task reviewer is a fresh
+  separate dispatch; sticky resume is limited to one sequential owner track
+  with a recorded continuable-subagent id.
 
 ## Read-only fan-out via the `workflow` tool
 

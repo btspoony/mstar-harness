@@ -19,7 +19,7 @@ If you were dispatched as an SDD implementer or task reviewer, skip PM orchestra
 
 ## Core principle
 
-**Default:** fresh implementer subagent per task + task review (spec + quality) + plan-level QC on whole branch = quality with isolated context.
+**Default:** fresh implementer per ready task + task-scoped review + plan QC on the changed diff and directly affected interfaces. Execution scope → **`mstar-harness-core`** § 定向执行与验证边界.
 
 **Optional:** **`SDD implementer session: sticky`** — same implementer subagent across sequential tasks on one plan/branch; **task reviewers stay fresh per task**. SSOT → **`references/sticky-implementer-session.md`**.
 
@@ -38,6 +38,12 @@ Before Task 1, scan plan once for:
 
 Batch all findings for the human in one message. If clean, proceed silently.
 
+## Ready-task scheduling (PM only · Decision Rules)
+
+Dispatch independent ready tasks concurrently after L2 worktree isolation. Keep one canonical per-plan `{SDD_DIR}`. PM alone writes its `context.json`, `progress.md` and workflow snapshot; prepare context-dependent helper outputs serially. Each writable track has its own worktree/branch and immutable task-specific absolute brief/report/diff paths. Artifact subdirectories are namespaces inside that SDD root, never a second SDD root. Parallel leaves use the supplied paths directly and do not invoke shared-context helpers or read mutable context to choose their checkout; never share a writable session or `implementer-session.json`. Use **fresh** implementers for parallel tasks. Serialize only actual dependencies, overlapping write ownership, one sticky session, and integration merges; state the dependency when serializing. A task reviewer may run alongside an unrelated ready implementer. PM alone reconciles reports into the shared `progress.md` and workflow snapshot.
+
+**Dependent-task readiness:** review approval alone does not make a prerequisite available. PM serially integrates the reviewed prerequisite commits, then creates or updates the idle dependent worktree from that integrated state before recording its `BASE_SHA` and dispatching. For each required reviewed commit, record `git -C "$FEATURE_CWD" merge-base --is-ancestor <prerequisite-sha> <BASE_SHA>` with exit 0; a missing commit blocks only that dependent task. Do not move an active task's base; independent ready tasks continue concurrently.
+
 ## Per-task loop (PM only · Workflow)
 
 1. Record `BASE_SHA` (never use `HEAD~1` later)
@@ -50,9 +56,9 @@ Batch all findings for the human in one message. If clean, proceed silently.
 6. Dispatch **fresh** task reviewer — role **`code-reviewer`** (L2; **not** `qc-specialist*`; host fallback generic + C5b → `mstar-host` C5) — brief, report, diff, Global Constraints — `references/task-reviewer-prompt.md` — **never** sticky resume for reviewers
 7. Fix loop for Critical/Important; re-review until approved
 8. Append `progress.md`; update the workflow snapshot plan row (`workflows/<id>/snapshot.json` → `plans[]`) `task_commits[]` and `implementer-session.json` `last_task` if sticky
-9. Next task
+9. Release dependent tasks only after reviewed prerequisite commits are present in their assigned base, per Dependent-task readiness above; independent ready tasks need not wait
 
-**Never** dispatch multiple implementers in parallel (write conflicts).
+**Never** dispatch parallel writers without isolated worktrees and disjoint ownership. Merge their outputs serially before producing the plan review-package.
 
 Detail: **`references/file-handoffs.md`**.
 
@@ -87,20 +93,20 @@ Host mapping → **`mstar-host`** references (`model` / Task field).
 
 1. `mstar sdd review-package MERGE_BASE HEAD` → branch diff in `{SDD_DIR}/review/`
 2. PM dispatches **plan QC tri-review (L3)** — **`QC mode: full tri-review`**, **N=3** — with branch review-package path and report paths under `{SDD_DIR}/review/` → **`mstar-review-qc`** · **`mstar-dispatch-gates`**. Layer SSOT → **`mstar-review-qc/references/review-responsibility-boundaries.md`**. PM writes `{SDD_DIR}/review/qc-consolidated.md` and durable main-plan gate summary. **Mandatory whenever `Execution mode: sdd`** (single-plan or iteration).
-3. Critical/Important QC findings → **one** fix dispatch (full list), then targeted re-review. Fix rounds run on four mechanics — the per-task fix loop applies the same (`references/file-handoffs.md`):
+3. Critical/Important QC findings → fix assignments partitioned by ownership/dependency, then targeted re-review. Independent fixes run concurrently; PM retains the complete findings ledger. Fix rounds run on four mechanics — the per-task fix loop applies the same (`references/file-handoffs.md`):
     - **Unverified rounds count**: a fix round without verification evidence (reviewer not confirmed / report not on disk) is **not clean** — re-check and count the round; never enter the convergence branch.
-    - **Full re-entry**: the next fix dispatch carries **all** open findings (including last round's unverified items) — never slice a subset.
-    - **Capped cross-round excerpt**: from round ≥2, the fix dispatch attaches an excerpt of prior rounds' findings and dispositions (advisory caps: ~500 words per round, ~1500 total — suggested values, not hard limits).
+    - **Complete ledger, scoped dispatch**: PM retains every open finding, including unverified items; each fix assignment carries only its owned findings and relevant fix delta. Unrelated findings do not expand a leaf task.
+    - **Capped cross-round excerpt**: from round ≥2, the fix dispatch attaches only relevant prior findings and dispositions (advisory caps: ~500 words per round, ~1500 total — suggested values, not hard limits).
     - **Honest non-convergence**: open findings at wave close → list them in detail and state the disposition — re-feed to the next fix round **or** transfer to residual tracking — never silently close.
 4. QA gate → **`mstar-harness-core`** Done rules; PM **`mstar-roles/references/project-manager/qa-trigger-matrix.md`**
 
-> **On dsh:** the plan QC tri MAY run through the native **`workflow`** tool instead of three `subagent` dispatches — take the `script` + `meta` (`meta.name: mstar-qc-tri`) from skill **`mstar-host`** → `references/dsh-workflow-scripts.md` (§ `mstar-qc-tri`); the three seats stay read-only and PM persists `{SDD_DIR}/review/qc1.md`…`qc3.md` from their returned envelopes. Per-task implementers stay **serial `subagent`** — the `workflow` channel is read-only fan-out only; when the tool is unmounted (`ptc` preset) dispatch the three seats as background `subagent` calls (skill **`mstar-host`** → `references/dsh.md`).
+> **On dsh:** the plan QC tri MAY run through the native **`workflow`** tool instead of three `subagent` dispatches — take the `script` + `meta` (`meta.name: mstar-qc-tri`) from skill **`mstar-host`** → `references/dsh-workflow-scripts.md` (§ `mstar-qc-tri`); the three seats stay read-only and PM persists `{SDD_DIR}/review/qc1.md`…`qc3.md` from their returned envelopes. Independent ready implementers use background **`subagent`** dispatches with isolated writable tracks — the `workflow` channel is read-only fan-out only; when the tool is unmounted (`ptc` preset) dispatch the three seats as background `subagent` calls (skill **`mstar-host`** → `references/dsh.md`).
 
 ## Progress ledger（Evidence）
 
-At start: `cat {SDD_DIR}/progress.md`. Tasks marked complete are DONE — do not re-dispatch after compaction.
+PM at start: `cat {SDD_DIR}/progress.md`. Tasks marked complete are DONE — do not re-dispatch after compaction.
 
-Append on clean review: `Task N: complete (<base>..<head>, review clean)`.
+PM appends on clean review: `Task N: complete (<base>..<head>, review clean)`.
 
 Minor findings → `## Minor (for plan QC)` section in same file.
 
@@ -108,7 +114,7 @@ Minor findings → `## Minor (for plan QC)` section in same file.
 
 ## Red flags (NEVER)
 
-- Parallel implementer dispatches
+- Parallel implementers sharing a worktree, ownership, or session
 - Paste plan, diffs, or task history into dispatch prompts
 - Dispatch reviewer without diff file
 - `HEAD~1` as review BASE

@@ -75,10 +75,11 @@ const CODEX_PROJECT_COMMAND_NAMES = [
   "iteration-loop",
   "codebase-audit",
   "amazing-pr-review",
+  "amazing-e2e-check",
 ] as const;
 
 const GLOBAL_ITERATION_SKILLS_WARNING =
-  "Codex project-scoped commands (iteration-start / iteration-drive / iteration-loop / codebase-audit / amazing-pr-review) are installed as project-local skills under .agents/skills/ only. Global install skips them to avoid polluting other code agents. Re-run with --scope project to enable.";
+  "Codex project-scoped commands (iteration-start / iteration-drive / iteration-loop / codebase-audit / amazing-pr-review / amazing-e2e-check) are installed as project-local skills under .agents/skills/ only. Global install skips them to avoid polluting other code agents. Re-run with --scope project to enable.";
 
 /** Run codex with args; dry-run never spawns a subprocess. env is spread so
  * the binary resolves from PATH (same contract as the dsh adapter). */
@@ -240,7 +241,7 @@ function ensureIterationSkillLinks(dryRun: boolean) {
   const gitignoreEntries = CODEX_PROJECT_COMMAND_NAMES.map(iterationSkillGitignoreEntry);
   notes.push(...appendGitignore(projectRoot, gitignoreEntries, dryRun));
   notes.push(
-    "Installed Codex project-scoped command skills under .agents/skills/ (iteration-start, iteration-drive, iteration-loop, codebase-audit, amazing-pr-review) \u2014 symlinked to harness commands/*.md.",
+    "Installed Codex project-scoped command skills under .agents/skills/ (iteration-start, iteration-drive, iteration-loop, codebase-audit, amazing-pr-review, amazing-e2e-check) \u2014 symlinked to harness commands/*.md.",
   );
   return notes;
 }

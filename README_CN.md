@@ -81,7 +81,7 @@ npm i -g @mstar-harness/cli
 
 ## 使用
 
-三种入口：**不跑迭代**（单 plan / hotfix）、**跑迭代**（多 plan Phase 1–5）、或 **审计与 Review**（只读：发现该做什么，或判定变更是否可合）。
+三种入口：**不跑迭代**（单 plan / hotfix）、**跑迭代**（多 plan Phase 1–5）、或 **审计、Review 与验证**（发现工作、评估变更，或执行明确请求的 E2E 检查）。
 
 ### 通用（不跑迭代）
 
@@ -105,14 +105,15 @@ npm i -g @mstar-harness/cli
 | `/iteration-drive` | 在已锁定的迭代上恢复 / 继续推进 Phase 2→5。 |
 | `/iteration-loop [direction] [scale]` | Phase 1→5 全自动（无 grill-me）。<br>`direction` — 可选自由文本。<br>`scale` — `S` / `M` / `L` / `XL`（默认 `M`）。 |
 
-### 审计与 Review
+### 审计、Review 与验证
 
-同一屋檐下的两条只读顾问命令——绝不改源码；发现可转为 plan 进入 Prepare → Execute。SSOT → `mstar-audit`（变体：`codebase-audit`、`pr`）。
+审计与 Review 命令提供只读建议；发现可转为 plan 进入 Prepare → Execute。SSOT → `mstar-audit`（变体：`codebase-audit`、`pr`）。
 
 | 命令 | 何时 |
 |------|------|
 | `/codebase-audit [关键词]` | 只读扫描代码库里值得做的事 —— 产出按优先级排序、可直接执行的改进计划；可按类别聚焦（`bug`、`security`、`perf`、`tech-debt`、…）做定向深扫。 |
 | `/amazing-pr-review [pr\|branch\|scope] [quick\|default\|deep]` | 合并前对 PR / 分支 / diff 做深度审查，三档强度：`quick`（单趟 1 席）/ `default`（无 flag 默认档，席位精简）/ `deep`（完整三阶段流水线）→ 给出唯一结论（`ship it` / `needs fixes` / `blocked`）与全部发现；有 PR 编号时由命令主代理在 Stage 3 合成阶段发布 GitHub Review。`deep` 档走完整三阶段流水线（collect → domain review → main-agent synthesis；one verdict / one GitHub Review）；`default` / `quick` 为更轻量的单/双席通道。多 PR 输入 → 仅审查第一个 PR；其余 PR 登记为审计待办（下一次会话）；建议一个会话只审一个 PR。 |
+| `/amazing-e2e-check [环境/设备] [场景]` | 通过 `mstar-e2e` 在独立 workflow 中执行用户明确请求的浏览器、真机或安装部署场景；不作为常规迭代 QA 门禁。 |
 
 ## Harness Workflow（统一流程）
 
@@ -193,6 +194,7 @@ flowchart TD
 | `mstar-strategy` | `STRATEGY.md` 对齐 |
 | `mstar-skill-authoring` | 通用 skill 撰写契约（SkillsBench 门控） |
 | `mstar-audit` | 只读代码库审计 → 优先级改进计划 |
+| `mstar-e2e` | 显式独立 E2E、浏览器、真机与安装部署验证 |
 | `mstar-roles` | 角色提示词 + 加载清单 |
 | `mstar-host` | 宿主适配（dsh / omp / OpenCode / Cursor / Kimi / ZCode / Codex） |
 | `pm` | `/pm` / `/skill:pm` / 宿主 PM 入口 |

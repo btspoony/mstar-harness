@@ -26,10 +26,10 @@ Dispatch:
 
     - Control harness root (briefs/reports/diffs live here): [CONTROL_ROOT]
     - Feature worktree — cwd for all source edits, branch [WORKING_BRANCH]: [FEATURE_CWD]
-    - Plan: [PLAN_FILE] — Context file: [CONTEXT_FILE]
+    - Plan: [PLAN_FILE] — PM coordination context: [CONTEXT_FILE] (never use it to select your checkout)
     - Brief: [BRIEF_FILE] — Report: [REPORT_FILE]
     - First step on resume: re-observe `pwd` and the checked-out branch — a sticky session may wake in a different cwd; on mismatch with [FEATURE_CWD]/[WORKING_BRANCH], stop and report BLOCKED — do not write.
-    - These destinations bind the handoff, not the host: a later deliberate `chdir`, absolute-path write outside [FEATURE_CWD], or host-native edit tool (apply_patch) is NOT blocked. CLI-launchable children are started via `mstar sdd exec --context [CONTEXT_FILE] -- <argv>` (starting cwd = feature worktree).
+    - These destinations bind the handoff, not the host: a later deliberate `chdir`, absolute-path write outside [FEATURE_CWD], or host-native edit tool (apply_patch) is NOT blocked. Execute allowed commands directly with the tool workdir fixed to the verified [FEATURE_CWD] / [WORKING_BRANCH]. Hosted leaves must not invoke `mstar sdd exec --context` or resolve cwd from mutable shared context; that entry is reserved for PM serialized CLI launch (file-handoffs.md § Bound child launch).
 
     ## Context not in the brief
 
@@ -39,11 +39,16 @@ Dispatch:
 
     Write your full report to: [REPORT_FILE]
 
+    ## Scope and stop
+
+    Use only the brief's owned files, relevant inputs and named checks. Do not restart global exploration, extend the task, or run local full suites without the user's explicit scoped permission. Reuse unaffected evidence. Stop once the assigned acceptance criteria are evidenced; report concrete missing context instead of over-analyzing settled work.
+
     ## Your job
 
     1. Implement exactly what this brief specifies (prior tasks are done)
-    2. Run tests; commit on Working branch
-    3. Write report file; return short summary only
+    2. Run only assigned affected unit tests or applicable scoped-check evidence; use file-handoffs.md § Verification evidence and retain unaffected prior evidence
+    3. Commit on Working branch
+    4. Write report file with actual evidence; return short summary only
 
     ## When stuck
 
