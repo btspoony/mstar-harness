@@ -128,8 +128,9 @@ const lease = (worktreePath: string, workingBranch: string): Record<string, unkn
 /**
  * Basic fixture: main worktree (harness root) + integration worktree
  * (running iteration wf-1) + Done+merged attached worktree + leased
- * InProgress worktree + Done dirty worktree + Done unmerged detached
- * branch + one foreign worktree/branch nothing records.
+ * InProgress worktree + Done dirty worktree + Done ignored-only-dirty
+ * worktree + Done unmerged detached branch + one foreign worktree/branch
+ * nothing records.
  */
 function basicFixture(prefix: string): {
   root: string;
@@ -138,6 +139,7 @@ function basicFixture(prefix: string): {
   doneWt: string;
   wipWt: string;
   dirtyWt: string;
+  ignoredWt: string;
   foreignWt: string;
 } {
   const root = tmpRoot(prefix);
@@ -145,6 +147,7 @@ function basicFixture(prefix: string): {
   git(["config", "user.email", "cleanup-test@example.com"], root);
   git(["config", "user.name", "Cleanup Test"], root);
   writeFileSync(join(root, "base.txt"), "base\n");
+  writeFileSync(join(root, ".gitignore"), "secret.env\n");
   git(["add", "-A"], root);
   git(["commit", "-q", "-m", "base commit"], root);
   const mainBranch = git(["branch", "--show-current"], root);
@@ -172,6 +175,12 @@ function basicFixture(prefix: string): {
   git(["commit", "-q", "-m", "dirty work"], dirtyWt);
   writeFileSync(join(dirtyWt, "untracked.txt"), "untracked\n"); // dirty probe
 
+  const ignoredWt = join(root, "wt-ignored");
+  git(["worktree", "add", "-q", ignoredWt, "-b", "feature/ignored"], root);
+  // The ONLY dirtiness is an ignored file: tracked/untracked state is clean.
+  writeFileSync(join(ignoredWt, "secret.env"), "ignored secret\n");
+  git(["merge", "-q", "--no-ff", "-m", "merge ignored", "feature/ignored"], intWt);
+
   // Detached unmerged branch: create via a temporary worktree, then remove
   // the worktree (branch stays, checked out nowhere).
   const tmpWt = join(root, "wt-tmp-unmerged");
@@ -191,6 +200,7 @@ function basicFixture(prefix: string): {
   const donePath = wt(records, "wt-done-a").path;
   const wipPath = wt(records, "wt-wip").path;
   const dirtyPath = wt(records, "wt-dirty").path;
+  const ignoredPath = wt(records, "wt-ignored").path;
 
   const workflowDir = join(root, "workflows", "wf-1");
   execFileSync("mkdir", ["-p", workflowDir]);
@@ -211,13 +221,14 @@ function basicFixture(prefix: string): {
           row("plan-b", "InProgress", { execution_lease: lease(wipPath, "feature/wip") }),
           row("plan-c", "Done", { metadata: { working_branch: "feature/dirty", worktree_path: dirtyPath } }),
           row("plan-d", "Done", { metadata: { working_branch: "feature/unmerged" } }),
+          row("plan-e", "Done", { metadata: { working_branch: "feature/ignored", worktree_path: ignoredPath } }),
         ],
       },
       null,
       2,
     ),
   );
-  return { root: canonicalRoot, mainBranch, intWt: intPath, doneWt: donePath, wipWt: wipPath, dirtyWt: dirtyPath, foreignWt: wt(records, "wt-foreign").path };
+  return { root: canonicalRoot, mainBranch, intWt: intPath, doneWt: donePath, wipWt: wipPath, dirtyWt: dirtyPath, ignoredWt: ignoredPath, foreignWt: wt(records, "wt-foreign").path };
 }
 
 /**
@@ -349,6 +360,29 @@ describe("mstar worktree cleanup — apply executes exactly the current remove r
       for (const branch of ["feature/wip", "feature/dirty", "feature/unmerged", "feature/stranger", "iteration/wf-1"]) {
         expect(git(["for-each-ref", `refs/heads/${branch}`], fx.root)).not.toBe("");
       }
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  test("a worktree whose only dirtiness is an ignored file refuses as dirty and survives --apply untouched", () => {
+    const fx = basicFixture("mstar-cleanup-ignored-");
+    try {
+      const dry = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root], fx.root);
+      expect(dry.exitCode).toBe(0);
+      // Ignored user content counts as dirty: `git worktree remove` deletes
+      // ignored files silently (no git-side backstop), so the probe must
+      // surface them and the verdict is refuse, never remove.
+      expect(dry.stdout).toContain(`refuse | worktree | ${fx.ignoredWt} | cleanup.refuse.dirty-worktree`);
+      expect(dry.stdout).not.toContain(`remove | worktree | ${fx.ignoredWt}`);
+
+      const applied = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root, "--apply"], fx.root);
+      expect(applied.exitCode).toBe(0);
+      expect(applied.stdout).not.toContain(`apply: removed worktree ${fx.ignoredWt}`);
+      // The worktree, its branch, and the ignored content survive untouched.
+      expect(git(["worktree", "list", "--porcelain"], fx.root)).toContain(fx.ignoredWt);
+      expect(git(["for-each-ref", "refs/heads/feature/ignored"], fx.root)).not.toBe("");
+      expect(readFileSync(join(fx.ignoredWt, "secret.env"), "utf8")).toBe("ignored secret\n");
     } finally {
       rmSync(fx.root, { recursive: true, force: true });
     }
