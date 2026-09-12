@@ -96,6 +96,7 @@ Canonical vs legacy residual definitions → **`mstar-artifacts` SKILL.md**（"`
 - `plans[]` rows are the **legacy PlanRow shape verbatim** (unknown row fields preserved, never re-bucketed). Per-row `execution_lease` stays on the row; `integration_merge_lease` is **top-level** (the v1 root-`metadata` home is gone).
 - Terminal statuses (`completed` / `failed` / `stopped`) require `ended_at` and no dangling leases.
 - **Completed close (Phase 6)** runs `mstar status workflow-close --workflow <id> [--harness <path>] [--ended-at <date>]`: engine `closeWorkflow` rereads the latest snapshot under the snapshot write lock, refuses any dangling lease / non-`Done` row (fail-loud, bytes unchanged), writes `completed` + `ended_at`, then unregisters the root entry. Unregister failure after the snapshot write is a reported **partial close** — retry finishes unregister without rewriting `ended_at`; a fully closed retry rewrites neither file. An already-terminal `failed` / `stopped` snapshot keeps its actual status (close never fabricates `completed`).
+- **Physical cleanup is out of close's scope**: it is the separate `mstar worktree cleanup --workflow <id> …` verb (dry-run default), run in its own timing lane — same-round after a plan's integration merge (Phase 2) or after §6.1–§6.3 + PR merged (Phase 6). Close and cleanup never release leases — owners release manually before either. Guard/decision codes (`cleanup.keep.*`, `cleanup.refuse.*`, `cleanup.remove.merged`) → **`mstar-branch-worktree`**「Worktree / branch cleanup」.
 - `execution_policy` keys are copied from v1 root `metadata` at migrate; values are accepted-but-opaque this iteration (no semantic gate).
 - `notes`: a plan row's `notes` array is the **legacy verbatim copy** preserved at migrate; the **runtime ledger is `notes.jsonl`** in the workflow dir (see `workflows/<id>/notes.jsonl` below). New notes append to the ledger only — never dual-write the row `notes`.
 
@@ -292,6 +293,8 @@ Optional when a plan is not owned; **required** while a Phase 2 session owns wri
 | `session_label` | string | No | Human display only — **MUST NOT** authorize or compare ownership. |
 
 Writers **delete** `execution_lease` on release; `null` and tombstone objects are invalid.
+
+**Ownership survives release**: later `mstar worktree cleanup` attributes a released plan row through the retained row `metadata.working_branch` / `metadata.worktree_path` and retained track Assignments — never by branch-name inference. Guard codes and the cleanup contract → **`mstar-branch-worktree`**「Worktree / branch cleanup」.
 
 V1: **manual release only** — omit `expires_at`; readers **MUST NOT** treat unknown or draft `expires_at` as authority to steal or release.
 

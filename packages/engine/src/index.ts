@@ -24,7 +24,9 @@
  * gate core (target classification + content/edit validation + reason
  * formatting, shared by the omp and ZCode host gates), and `skill-authoring`
  * lints frontmatter +
- * 5-question bodies and resolves skill-relative asset paths.
+ * 5-question bodies and resolves skill-relative asset paths, and
+ * `cleanup` is the pure worktree/branch cleanup planner (immutable facts
+ * in, stable `cleanup.*` remove/keep/refuse decisions out).
  */
 export type { GateResult, Severity, ValidationResult } from "./core.js";
 export { DSH_LLM_FALLBACKS_VERSION, SEVERITY_ORDER, applyEnforcement, readHarnessVersion, readJson, resolveProjectRoot, writeJson } from "./core.js";
@@ -120,6 +122,13 @@ export {
   validateWorkflowSnapshot,
   writeWorkflowSnapshot,
 } from "./workflow.js";
+export type {
+  CleanupDecision,
+  CleanupFacts,
+  CleanupTarget,
+  CleanupTargetKind,
+} from "./cleanup.js";
+export { planWorktreeCleanup } from "./cleanup.js";
 export type {
   AssignmentBranchForms,
   AssignmentFields,

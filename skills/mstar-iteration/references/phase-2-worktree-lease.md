@@ -169,7 +169,7 @@ mismatch → **STOP**.
      7. 放行已满足依赖的 next task；不等待无依赖任务，PM 独占共享 progress / snapshot 写入
    - 每次 Completion Report 后更新 snapshot（`workflows/<id>/snapshot.json`）+ 主 plan
 4. **QC → QA gate**（plan 保持 **`InReview`**；**保留** `execution_lease`）：per-plan 审查链 → **`mstar-sdd`**（L1–L2）+ **`mstar-review-qc/references/review-responsibility-boundaries.md`**（L3 tri / inline 单席；raw reports in `{SDD_DIR}/review/`，durable summary in main plan/snapshot）+ **`QA gate`**（`mandatory` → `qa-engineer`；`pm-acceptance` → PM checklist）。**禁止**在 integration merge 成功前设 `Done` 或删除 `execution_lease`。
-5. **Plan complete — serial merge back**（§2.0 #5 未 waive）：自 **integration worktree** claim/resume snapshot 顶层 `integration_merge_lease` → 将 plan feature branch 合并入 `spec_integration_branch`（仅 merge-lease holder；细则 → 下方「Integration merge lease」）→ 记录 merge commit 证据 → 释放 merge lease；**同轮**设 `Done` 并删除 `execution_lease`。merge 失败：保持 `InReview` + 保留 lease，不得标 `Done`。
+5. **Plan complete — serial merge back**（§2.0 #5 未 waive）：自 **integration worktree** claim/resume snapshot 顶层 `integration_merge_lease` → 将 plan feature branch 合并入 `spec_integration_branch`（仅 merge-lease holder；细则 → 下方「Integration merge lease」）→ 记录 merge commit 证据 → 释放 merge lease；**同轮**设 `Done` 并删除 `execution_lease`（此即 owner 的 lease 释放动作），并在**同一 locked update** 内把 `metadata.working_branch` / `metadata.worktree_path` 持久化到该 plan 行（归属生产者义务；语义唯一 home → `mstar-branch-worktree`「Worktree / branch cleanup」Ownership）。merge 失败：保持 `InReview` + 保留 lease，不得标 `Done`。merge 成功即打开该 plan 的**同轮 cleanup 资格**（timing lane 1 → 下方「Same-round plan cleanup」）。
 6. **Cross-plan 进度同步**：更新 `{ITERATION_DIR}/<iteration-id>/delivery-compass.md` 的 `## Plans` 表状态列
 7. **Next plan / parallel wave** 从步骤 1 继续（可并行推进其他已 claim 的 plan；merge 仍排队串行）
 
@@ -178,6 +178,19 @@ mismatch → **STOP**.
 1. **STOP** per-plan loop — 禁止 merge 后继续下一 plan、禁止开 PR、禁止会话结束语。
 2. 打印 **`## Phase 3: iteration-close`**。
 3. 按 **`references/phase-3-iteration-close.md`** §3.0 起独立执行至 §3.5。final plan 的 Assignment / closure 仅作输入，**不能**替代 Phase 3 gate。
+
+### Same-round plan cleanup（timing lane 1；merge 成功同轮）
+
+integration merge 成功且 plan 行 `Done`、`execution_lease` 已删除的**同一轮**，即可回收该 plan/track 的 feature worktree + 已合并分支 —— **父迭代仍在运行不影响资格**：不存在「父须终结」的一刀切，这是 cleanup 的明确设计而非遗漏。命令与守卫契约本体（ownership、合并证据、refusals、apply 顺序）→ **`mstar-branch-worktree`**「Worktree / branch cleanup」（唯一 home；本节只放 call site）：
+
+```text
+mstar worktree cleanup --workflow <id> [--harness <path>] [--apply] [--worktree <path>]
+```
+
+- 先 dry-run 看 `verdict | kind | ref | reason`（merge 刚完成 → 该 Done 行 eligible）；`--apply` 才变更。lane 1 只清**本地面**（无 `--remote`；远端残留留给 Phase 6）。
+- 分支可能仍被该 Done-child worktree 检出 → apply 内部先移 worktree，再 re-probe / re-plan 删分支（**worktree 移除 ≠ 分支删除**；细则 → 契约本体）。
+- **lease 释放是手工 owner 动作、cleanup 范围外**：上方步骤 5 的 `Done` + `execution_lease` 删除就是 owner 释放动作；cleanup **从不**替 owner 释放任何 lease。standalone plan（无 integration）以 `branch.target` 为证据 base，且须**先 terminal close**。
+- **禁止**为让 cleanup 通过而推进/终结父迭代或改 snapshot 状态；受保护行保持 `refuse` 是正确行为，不是失败。
 
 ## 2.5 Dispatch-first（implement 派发约束）
 

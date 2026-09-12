@@ -1,13 +1,13 @@
 ---
 name: mstar-branch-worktree
-description: "Morning Star 业务仓 Git 功能分支、worktree 隔离与三写域模型（L1 跨 plan：主 checkout control root + iteration integration worktree + 每 plan feature worktree + `execution_lease`，默认 gitignore 下经 control 绝对路径读写进程产物；L2 同 plan：`references/parallel-writable-pre-dispatch.md`，N 次 invoke ≠ 隔离）、Spec 集成分支、QC/QA 检出对齐（`Review cwd` / `Working branch` / `plan_id` / `Review range` / `Diff basis` 三审 + QA 逐字相同）。Read when PM writes `Working branch` / `Branch policy`, iteration/parallel writable dispatch, or QC/QA checkout alignment is needed."
+description: "Morning Star 业务仓 Git 功能分支、worktree 隔离与三写域模型（L1 跨 plan：主 checkout control root + iteration integration worktree + 每 plan feature worktree + `execution_lease`，默认 gitignore 下经 control 绝对路径读写进程产物；L2 同 plan：`references/parallel-writable-pre-dispatch.md`，N 次 invoke ≠ 隔离）、Spec 集成分支、QC/QA 检出对齐（`Review cwd` / `Working branch` / `plan_id` / `Review range` / `Diff basis` 三审 + QA 逐字相同）。Read when PM writes `Working branch` / `Branch policy`, iteration/parallel writable dispatch, QC/QA checkout alignment, or guarded post-merge worktree/branch cleanup (`mstar worktree cleanup`) is needed."
 ---
 
 ## Load order（必读顺序）
 
 **首次 Read 本 skill 前：必须先 Read `mstar-harness-core`（SKILL.md）。** 冲突时 **以 `mstar-harness-core` 为准**。
 
-**Spec 多 plan 命名**（`iteration_base_branch`、`spec_integration_branch`、`target_branch` PR 门禁）→ **`mstar-conventions`**。**L1/L2 worktree 分层**（迭代 integration worktree vs feature、plan 内并行轨）→ 下文 **「Worktree isolation layers」**；**L2** 同仓并行可写派发前清单 → **`references/parallel-writable-pre-dispatch.md`**；迭代 lease claim/merge 细则 → **`mstar-iteration`** `references/phase-2-worktree-lease.md`（勿在本 skill 重复完整协议表）。下文为分支、三写域与 QC/QA 检出对齐主文。
+**Spec 多 plan 命名**（`iteration_base_branch`、`spec_integration_branch`、`target_branch` PR 门禁）→ **`mstar-conventions`**。**L1/L2 worktree 分层**（迭代 integration worktree vs feature、plan 内并行轨）→ 下文 **「Worktree isolation layers」**；**L2** 同仓并行可写派发前清单 → **`references/parallel-writable-pre-dispatch.md`**；迭代 lease claim/merge 细则 → **`mstar-iteration`** `references/phase-2-worktree-lease.md`（勿在本 skill 重复完整协议表）。merge 后 worktree/分支回收（cleanup）守卫契约 → 下文 **「Worktree / branch cleanup」**。下文为分支、三写域、QC/QA 检出对齐与 merge 后 cleanup 主文。
 
 ## Scope（摘要）
 
@@ -228,6 +228,37 @@ Default process artifacts are **gitignored** (`mstar-conventions`「Git 跟踪�
 - Rewrite 推送后：重新 fetch heads；rewrite 前的 review threads / approvals / check 结果**不再是当前证据** — merge 结论前须重审（commit hash 与 inline-comment anchor 已失效）。
 - 证据最窄原则（audit / QA Assignment 场景）：选择会在目标回归上失败的**最窄**检查；不因「push 在即」重跑已通过的检查。
 - 本节只管 rewrite / lease / 证据失效面；CI / review 波次 push 门禁（时序）SSOT → `mstar-iteration` §5.1a。
+
+## Worktree / branch cleanup（merge 后回收；唯一契约本体）
+
+生命周期末端的物理回收（feature/integration worktree、本地/远端分支删除）的 ownership 与守卫规则**只在本节**；两条时序车道的 call site（Phase-2 同轮 / Phase-6 收尾）只引用本节，不复制规则。命令（**dry-run 默认**；无 fetch / prune / 任何写入）：
+
+```text
+mstar worktree cleanup --workflow <id> [--harness <path>] [--apply] [--remote] [--worktree <path>]
+```
+
+- dry-run 逐候选打印 `verdict | kind | ref | reason` 后结束；`--apply` 只执行当前 `remove` 行。Exit：0 = 合法 dry-run / eligible 移除全部成功；1 = 探测/变更失败；2 = usage。失败行**永不扩大范围**；受保护/拒绝行保持可见。
+- `--worktree <path>` 可重复：既收窄 worktree 候选集，也是**操作者所有权断言**——必须匹配记录的生命周期分支与同仓 checkout 身份，不能认领其他 lifecycle 的 worktree。`--remote` 只决定是否纳入 `origin/*` 删除候选；安全探测（integration 证据）无论是否 `--remote` 都会收集。
+- **信任模型**：`--harness <path>` 为操作者提供且受信——dry-run 与 `--apply` 的全部状态事实（snapshot、lease、行归属元数据、protected 锚点）均读自该目录。
+
+**Ownership（禁止命名推断）**：候选归属只来自 snapshot 行元数据（`plans[].execution_lease`；lease 释放后为保留的行 `metadata.working_branch` / `metadata.worktree_path` 与 retained track Assignments）或已验证的显式 `--worktree` 断言。归属缺失 / 歧义 / 他属 → `cleanup.refuse.foreign-worktree` / `cleanup.refuse.foreign-branch`。**归属生产者义务（owner=PM）**：设 `Done` 并删除 `execution_lease` 的**同一 locked update** 内，owner 必须把 `metadata.working_branch` + `metadata.worktree_path` 持久化到该 plan 行（值以本轮 Assignment 为准）——这是 lease 释放后 ownership 检查读取的持久归属；缺失时已 merge 的 Done 行也会被 `cleanup.refuse.foreign-*` 拒绝，回收只能靠手工补写快照。
+
+**合并证据硬前置**：本地资格 = `git branch --merged <base>` 成员资格，base 取候选自己的锚（plan/track → `branch.integration`；standalone plan / integration 分支 → `branch.target`）。远端证据绑定 {branch, tip, base} **同一分支化身**；当前 harness 无 PR-merged 记录源（`prMerged` 恒为 null）→ 远端仅走 tip-ancestor 历史残留路线。squash-only（tip 非 base 祖先）**保留并报告，绝不 `git branch -D`**；旧 merged PR 不能授权已复用分支的新化身。
+
+**Refusals（refuse 行可见、可审计，不是 apply 失败）**：active `execution_lease` / `integration_merge_lease`（按 path 与 branch 匹配，跨**全部**已知 snapshot）→ `cleanup.refuse.active-lease`；分支在**任何** checkout 检出 → `cleanup.refuse.checked-out`；foreign worktree；dirty / locked worktree；protected refs（默认分支、每个 `branch.base`、非终结 integration 分支、非 Done plan/track 行）→ `cleanup.keep.protected-ref` / `cleanup.refuse.non-terminal`。
+
+**Done child ≠ active parent**：已 merge 的 Done plan/track 行**即使父迭代仍在运行也 eligible**（时序车道 1）——不存在「父必须终结」的一刀切；反之，非终结 integration 与非 Done 行跨**所有** lifecycle 受保护。standalone plan 即整个 lifecycle：以 `branch.target` 为证据 base，且**先 terminal close** 才清理。
+
+**顺序（--apply；worktree 移除 ≠ 分支删除）**：普通 `git worktree remove`（**永不 force**）移除 eligible attached worktree → **重新探测 + 重新规划** → 删除**现已**未检出的分支（`git branch -d`，**永不 `-D`**）→ 远端 expected-OID compare-and-delete（`git push --force-with-lease=refs/heads/<branch>:<observed-oid> origin :refs/heads/<branch>`；ref 已移动 → `cleanup.refuse.facts-changed`，**不**自动用新 OID 重试）。dry-run 打印 worktree `remove` + 其分支 `refuse(checked-out)` 是合法状态。**禁止**全局 `git worktree prune`（会动 foreign 注册）；Git 调用默认在 main worktree root，`git branch -d` 在该分支证据 base 的检出处执行（`-d` merged-into-HEAD 语义所需）——任何 Git 调用**永不位于移除候选内**。
+
+**Lease 释放是手工 owner 动作、cleanup 范围外**：cleanup（与 close）**从不**释放 lease；owner 先手工释放再清理，释放后归属靠保留的行元数据 / Assignments 维持。
+
+**两条时序车道（唯一合法时机）**：
+
+1. **Phase-2 同轮**（per-plan）：integration merge 成功的**同一轮**回收该 Done plan/track 的 feature worktree + 已合并分支（call site → `mstar-iteration` `references/phase-2-worktree-lease.md`「Same-round plan cleanup」）。
+2. **Phase-6 收尾**（integration 面）：只在 valid terminal close（§6.1–§6.3 完成）+ PR **verified merged** 之后回收 integration worktree / 分支 / 远端残留（call site → `mstar-iteration` `references/phase-6-post-merge-close.md` §6.4）。Phase-6 gate 只查本地 state，**不**验证 merged、**不**检查物理清理是否完成。
+
+> **Engine check (when available):** dry-run 即机器检查 —— `mstar worktree cleanup --workflow <id>`（或 import `planWorktreeCleanup` from `@mstar-harness/engine`）对当前 facts 输出 remove/keep/refuse 计划，每行带稳定 `cleanup.*` 码。若已知受保护目标（active lease / 非 Done / 非终结 owner）出现 `remove` → STOP：守卫有错，**任何 `--apply` 前先修**。Skill text above remains authoritative when the runtime is absent.
 
 ## Workflow
 

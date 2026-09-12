@@ -1,5 +1,12 @@
 #!/usr/bin/env bun
 import { WorkflowSnapshotValidationError, collectActiveLifecycleBranches, scanActiveLifecycleBranches } from "@mstar-harness/engine";
+import {
+  planWorktreeCleanup,
+  type CleanupDecision,
+  type CleanupFacts,
+  type CleanupTarget,
+  type WorkflowSnapshot,
+} from "@mstar-harness/engine";
 
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
@@ -2244,6 +2251,544 @@ worktreeCommand
       process.exitCode = 1;
     } catch (error) {
       failScript(error, "worktree qc-alignment");
+    }
+  });
+
+// ---------------------------------------------------------------------------
+// `worktree cleanup` — guarded worktree/branch
+// reclamation. The pure planner is engine `planWorktreeCleanup` (values in,
+// decisions out); this verb alone probes Git/state, builds the facts
+// (ownership attributed from snapshot rows — leases OR retained row metadata
+// — plus ALL known snapshots under the harness dir), prints
+// `verdict | kind | ref | reason` per candidate, and — only with `--apply` —
+// executes CURRENT remove rows: ordinary `git worktree remove` (never
+// force) → full re-probe + re-plan → `git branch -d` (never `-D`) → remote
+// expected-OID compare-and-delete. No unconditional force and no retry with
+// a newer OID: a push whose observed OID no longer matches the remote fails
+// as `cleanup.refuse.facts-changed`. Dry-run is the default and does no
+// fetch, no prune, no write — cleanup never fetches, so the compare-and-
+// delete guard owns remote freshness. Every git probe/mutation runs with an
+// explicit cwd at the MAIN worktree root (never inside a removal candidate;
+// `git branch -d` runs where the branch's evidence base is checked out,
+// because -d refuses unless merged into HEAD). No global
+// `git worktree prune`. Exit: 0 valid dry-run / successful eligible
+// removals; 1 probe/mutation failure; 2 usage. Failed rows never widen
+// scope: the remaining independent rows still run, the exit stays 1.
+// ---------------------------------------------------------------------------
+
+/** One probed worktree: a `git worktree list` record + cleanliness facts. */
+interface CleanupProbeWorktree {
+  path: string;
+  branch: string | null;
+  tip: string;
+  isMain: boolean;
+  clean: boolean;
+  locked: boolean;
+}
+
+/** Everything one probe pass observed (git + all known snapshots). */
+interface CleanupProbe {
+  selected: WorkflowSnapshot;
+  snapshots: WorkflowSnapshot[];
+  worktrees: CleanupProbeWorktree[];
+  defaultBranch: string;
+  localBranches: { branch: string; tip: string }[];
+  remoteBranches: { branch: string; tip: string }[];
+  mergedLocalBranches: Record<string, string[]>;
+  remoteEvidence: CleanupFacts["remoteEvidence"];
+}
+
+interface CleanupProbeInput {
+  mainRoot: string;
+  snapshotDir: string;
+  workflowRoot: string;
+  workflowId: string;
+}
+
+type CleanupOwner = NonNullable<CleanupTarget["owner"]>;
+
+/** Realpath when the entry exists (macOS /var vs /private/var), resolve otherwise. */
+function cleanupPathKey(p: string): string {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return path.resolve(p);
+  }
+}
+
+/** First meaningful line of a failed git run: stderr if captured, else the error. */
+function cleanupGitMessage(error: unknown): string {
+  const err = error as { stderr?: Uint8Array | string; message?: string };
+  const stderr = typeof err.stderr === "string" ? err.stderr : Buffer.from(err.stderr ?? "").toString("utf8");
+  const line = (stderr.trim() || err.message || String(error))
+    .split(/\r?\n/)
+    .find((candidate) => candidate.trim() !== "");
+  return line ?? "git failed";
+}
+
+function cleanupIsPlainRow(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Row identity the way the SDD lookup does (`id` or `plan_id`). */
+function cleanupRowId(row: Record<string, unknown>): string | undefined {
+  if (typeof row.id === "string" && row.id !== "") return row.id;
+  if (typeof row.plan_id === "string" && row.plan_id !== "") return row.plan_id;
+  return undefined;
+}
+
+/** Exactly one distinct claim attributes; zero or several stay unowned (fail-closed). */
+function cleanupDistinctOwner(claims: CleanupOwner[]): { owner: CleanupOwner | null; ambiguous: boolean } {
+  const distinct = new Map<string, CleanupOwner>();
+  for (const claim of claims) distinct.set(JSON.stringify(claim), claim);
+  if (distinct.size === 1) return { owner: [...distinct.values()][0]!, ambiguous: false };
+  return { owner: null, ambiguous: distinct.size > 1 };
+}
+
+/** Snapshot rows/lifecycles that record `branch` (leases OR retained metadata). */
+function cleanupBranchClaims(branch: string, snapshots: readonly WorkflowSnapshot[]): CleanupOwner[] {
+  const claims: CleanupOwner[] = [];
+  for (const doc of snapshots) {
+    if (doc.branch?.integration === branch) claims.push({ workflowId: doc.id });
+    for (const row of doc.plans as unknown as Array<Record<string, unknown>>) {
+      if (!cleanupIsPlainRow(row)) continue;
+      const lease = row.execution_lease;
+      const meta = row.metadata;
+      const recorded =
+        (cleanupIsPlainRow(lease) && lease.working_branch === branch) ||
+        (cleanupIsPlainRow(meta) &&
+          (meta.working_branch === branch || (Array.isArray(meta.track_branches) && meta.track_branches.includes(branch))));
+      if (recorded) claims.push({ workflowId: doc.id, planId: cleanupRowId(row) });
+    }
+  }
+  return claims;
+}
+
+/** Snapshot rows/lifecycles that record the worktree path (lease OR retained metadata). */
+function cleanupWorktreeClaims(worktreePath: string, snapshots: readonly WorkflowSnapshot[]): CleanupOwner[] {
+  const claims: CleanupOwner[] = [];
+  const key = cleanupPathKey(worktreePath);
+  for (const doc of snapshots) {
+    if (typeof doc.integration_worktree_path === "string" && cleanupPathKey(doc.integration_worktree_path) === key) {
+      claims.push({ workflowId: doc.id });
+    }
+    for (const row of doc.plans as unknown as Array<Record<string, unknown>>) {
+      if (!cleanupIsPlainRow(row)) continue;
+      const lease = row.execution_lease;
+      const meta = row.metadata;
+      const recorded =
+        (cleanupIsPlainRow(lease) && typeof lease.worktree_path === "string" && cleanupPathKey(lease.worktree_path) === key) ||
+        (cleanupIsPlainRow(meta) && typeof meta.worktree_path === "string" && cleanupPathKey(meta.worktree_path) === key);
+      if (recorded) claims.push({ workflowId: doc.id, planId: cleanupRowId(row) });
+    }
+  }
+  return claims;
+}
+
+/** Canonical reader with a path-carrying error (validation details inline). */
+function cleanupReadSnapshotDir(dir: string): { snapshot: WorkflowSnapshot; diagnostics: readonly ValidationResult[] } {
+  try {
+    return readWorkflowSnapshot(dir);
+  } catch (error) {
+    if (error instanceof WorkflowSnapshotValidationError) {
+      const detail = error.violations.map((violation) => `${violation.code}: ${violation.message}`).join("; ");
+      throw new Error(`${path.join(dir, WORKFLOW_SNAPSHOT_FILE)}: ${detail}`);
+    }
+    throw error; // missing file / malformed JSON already carries the path
+  }
+}
+
+function cleanupPrintDiagnostics(diagnostics: readonly ValidationResult[]): void {
+  for (const diagnostic of diagnostics) {
+    console.error(pc.yellow(`note: [${diagnostic.severity}] ${diagnostic.code}: ${diagnostic.message}`));
+  }
+}
+
+/**
+ * Porcelain worktree records + per-worktree cleanliness. Cleanliness uses
+ * `git status --porcelain --ignored=matching` INSIDE the worktree: tracked
+ * modifications, untracked files AND ignored files all count as dirty —
+ * ignored user content has no git-side deletion backstop (`git worktree
+ * remove` deletes it silently). A probe that cannot run (missing worktree
+ * dir, broken git) throws — a probe failure aborts the command with exit 1;
+ * it is never an empty-safe fact.
+ */
+function cleanupProbeWorktrees(mainRoot: string): CleanupProbeWorktree[] {
+  const raw = gitSync(["worktree", "list", "--porcelain"], mainRoot);
+  const records: CleanupProbeWorktree[] = [];
+  let current: CleanupProbeWorktree | null = null;
+  const flush = () => {
+    if (current !== null) records.push(current);
+    current = null;
+  };
+  for (const line of raw.split(/\r?\n/)) {
+    if (line === "") {
+      flush();
+      continue;
+    }
+    if (line.startsWith("worktree ")) {
+      current = { path: line.slice("worktree ".length), branch: null, tip: "", isMain: false, clean: false, locked: false };
+    } else if (current !== null) {
+      if (line.startsWith("HEAD ")) current.tip = line.slice("HEAD ".length);
+      else if (line.startsWith("branch ")) current.branch = line.slice("branch ".length).replace(/^refs\/heads\//, "");
+      else if (line.startsWith("locked")) current.locked = true;
+      // `bare` / `detached` / `prunable` need no field (detached stays branch: null).
+    }
+  }
+  flush();
+  records.forEach((record, index) => {
+    record.isMain = index === 0; // porcelain lists the main worktree first
+  });
+  for (const record of records) {
+    record.clean = gitSync(["status", "--porcelain", "--ignored=matching"], record.path).trim() === "";
+  }
+  return records;
+}
+
+/** Branch tips under `refPrefix`; the `origin/HEAD` symref summary is not a branch. */
+function cleanupProbeRefs(mainRoot: string, refPrefix: string): { branch: string; tip: string }[] {
+  const raw = gitSync(["for-each-ref", "--format=%(refname:short)%09%(objectname)", refPrefix], mainRoot);
+  return raw
+    .split(/\r?\n/)
+    .filter((line) => line.trim() !== "")
+    .map((line) => {
+      const tab = line.indexOf("\t");
+      return { branch: line.slice(0, tab), tip: line.slice(tab + 1) };
+    })
+    .filter((entry) => entry.branch !== "origin/HEAD");
+}
+
+/** Remote HEAD symref, else the main worktree's branch (no-remote repos). */
+function cleanupProbeDefaultBranch(mainRoot: string, mainBranch: string | null): string {
+  try {
+    return gitSync(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], mainRoot).replace(/^origin\//, "");
+  } catch {
+    if (mainBranch === null || mainBranch === "") {
+      throw new Error("cannot determine the default branch — no origin HEAD symref and the main worktree is detached");
+    }
+    return mainBranch;
+  }
+}
+
+/** Every explicit integration/target anchor across all known snapshots. */
+function cleanupEvidenceBases(snapshots: readonly WorkflowSnapshot[]): string[] {
+  const bases = new Set<string>();
+  for (const doc of snapshots) {
+    if (typeof doc.branch?.integration === "string" && doc.branch.integration !== "") bases.add(doc.branch.integration);
+    if (typeof doc.branch?.target === "string" && doc.branch.target !== "") bases.add(doc.branch.target);
+  }
+  return [...bases];
+}
+
+/**
+ * `mergedLocalBranches` keyed per base ref. A dangling recorded anchor is
+ * determinate state, not a transient probe failure: the key is OMITTED (with
+ * a stderr note) so the planner refuses exactly the candidates evaluated
+ * against it (`cleanup.refuse.unmerged`) — never a fabricated empty-safe list.
+ */
+function cleanupProbeMerged(mainRoot: string, bases: readonly string[]): Record<string, string[]> {
+  const merged: Record<string, string[]> = {};
+  for (const base of bases) {
+    try {
+      merged[base] = gitSync(["branch", "--merged", base, "--format=%(refname:short)"], mainRoot)
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line !== "");
+    } catch {
+      console.error(
+        pc.yellow(
+          `worktree cleanup: note: merged-evidence base ${JSON.stringify(base)} does not resolve — candidates against it refuse as unmerged`,
+        ),
+      );
+    }
+  }
+  return merged;
+}
+
+/** `merge-base --is-ancestor`: exit 0 = true, 1 = false, anything else = indeterminate. */
+function cleanupIsAncestor(tip: string, base: string, mainRoot: string): boolean | null {
+  try {
+    execFileSync("git", ["merge-base", "--is-ancestor", tip, base], { cwd: mainRoot, stdio: ["ignore", "ignore", "ignore"] });
+    return true;
+  } catch (error) {
+    return (error as { status?: number | null }).status === 1 ? false : null;
+  }
+}
+
+/**
+ * Remote evidence rows bind the branch incarnation {branch, tip, base}.
+ * `prMerged` is null BY FACTS — the harness records no PR-merge registry —
+ * so the locked ancestor-only historical-residue route is the only evidence
+ * path; a moved or squash-only remote tip never matches and refuses. An
+ * indeterminate ancestry records no row (candidates refuse), never a guess.
+ */
+function cleanupProbeRemoteEvidence(
+  mainRoot: string,
+  remoteBranches: readonly { branch: string; tip: string }[],
+  bases: readonly string[],
+): CleanupFacts["remoteEvidence"] {
+  const evidence: { branch: string; tip: string; base: string; ancestor: boolean; prMerged: boolean | null }[] = [];
+  for (const remote of remoteBranches) {
+    for (const base of bases) {
+      const ancestor = cleanupIsAncestor(remote.tip, base, mainRoot);
+      if (ancestor === null) {
+        console.error(
+          pc.yellow(
+            `worktree cleanup: note: ancestry of ${remote.branch} against ${JSON.stringify(base)} is indeterminate — no evidence row recorded (candidates refuse)`,
+          ),
+        );
+        continue;
+      }
+      evidence.push({ branch: remote.branch, tip: remote.tip, base, ancestor, prMerged: null });
+    }
+  }
+  return evidence;
+}
+
+/** One full probe pass: all known snapshots + git state. Any failure throws (exit 1). */
+function cleanupProbe(input: CleanupProbeInput): CleanupProbe {
+  const selectedRead = cleanupReadSnapshotDir(input.snapshotDir);
+  cleanupPrintDiagnostics(selectedRead.diagnostics);
+  const selected = selectedRead.snapshot;
+  const snapshots: WorkflowSnapshot[] = [];
+  // ALL known snapshots under the harness dir — registered active or not —
+  // feed the protected-ref/lease safety set; an unreadable one is a probe
+  // refusal (exit 1), never a silent skip.
+  for (const entry of fs.readdirSync(input.workflowRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const dir = path.join(input.workflowRoot, entry.name);
+    if (!fs.existsSync(path.join(dir, WORKFLOW_SNAPSHOT_FILE))) continue;
+    const read = cleanupReadSnapshotDir(dir);
+    cleanupPrintDiagnostics(read.diagnostics);
+    snapshots.push(read.snapshot);
+  }
+  if (!snapshots.some((doc) => doc.id === selected.id)) snapshots.push(selected);
+
+  const worktrees = cleanupProbeWorktrees(input.mainRoot);
+  const localBranches = cleanupProbeRefs(input.mainRoot, "refs/heads");
+  const remoteBranches = cleanupProbeRefs(input.mainRoot, "refs/remotes/origin").map((entry) => ({
+    branch: entry.branch.replace(/^origin\//, ""),
+    tip: entry.tip,
+  }));
+  const evidenceBases = cleanupEvidenceBases(snapshots);
+  return {
+    selected,
+    snapshots,
+    worktrees,
+    defaultBranch: cleanupProbeDefaultBranch(input.mainRoot, worktrees[0]?.branch ?? null),
+    localBranches,
+    remoteBranches,
+    mergedLocalBranches: cleanupProbeMerged(input.mainRoot, evidenceBases),
+    remoteEvidence: cleanupProbeRemoteEvidence(input.mainRoot, remoteBranches, evidenceBases),
+  };
+}
+
+/**
+ * Candidates + facts for the planner. Worktree ownership comes from path
+ * claims (lease/metadata `worktree_path`, lifecycle integration path); a
+ * verified explicit `--worktree` assertion additionally attributes a path
+ * whose checked-out branch is recorded by exactly one snapshot row (a
+ * released lease leaves the branch, not the path, in the snapshot). Branch
+ * ownership comes from recorded branches only — never inferred from naming.
+ */
+function cleanupBuildFacts(
+  probe: CleanupProbe,
+  scope: { scoped: boolean; asserted: Set<string> },
+  remoteSelected: boolean,
+): { facts: CleanupFacts; branchBase: Map<string, string> } {
+  const targets: CleanupTarget[] = [];
+  const notes = new Set<string>();
+  for (const worktree of probe.worktrees) {
+    if (scope.scoped && !scope.asserted.has(cleanupPathKey(worktree.path))) continue;
+    let attribution = cleanupDistinctOwner(cleanupWorktreeClaims(worktree.path, probe.snapshots));
+    if (attribution.owner === null && !attribution.ambiguous && scope.asserted.has(cleanupPathKey(worktree.path))) {
+      const checkedOut = worktree.branch ?? "";
+      if (checkedOut !== "") attribution = cleanupDistinctOwner(cleanupBranchClaims(checkedOut, probe.snapshots));
+    }
+    if (attribution.ambiguous) {
+      notes.add(`worktree ${worktree.path} is claimed by more than one snapshot row — treated as unowned (refuses)`);
+    }
+    targets.push({ kind: "worktree", ref: worktree.path, branch: worktree.branch ?? "", tip: worktree.tip, owner: attribution.owner });
+  }
+  for (const local of probe.localBranches) {
+    const attribution = cleanupDistinctOwner(cleanupBranchClaims(local.branch, probe.snapshots));
+    if (attribution.ambiguous) {
+      notes.add(`branch ${local.branch} is claimed by more than one snapshot row — treated as unowned (refuses)`);
+    }
+    targets.push({ kind: "local-branch", ref: local.branch, branch: local.branch, tip: local.tip, owner: attribution.owner });
+  }
+  if (remoteSelected) {
+    for (const remote of probe.remoteBranches) {
+      const attribution = cleanupDistinctOwner(cleanupBranchClaims(remote.branch, probe.snapshots));
+      if (attribution.ambiguous) {
+        notes.add(`remote branch ${remote.branch} is claimed by more than one snapshot row — treated as unowned (refuses)`);
+      }
+      targets.push({ kind: "remote-branch", ref: `origin/${remote.branch}`, branch: remote.branch, tip: remote.tip, owner: attribution.owner });
+    }
+  }
+  for (const note of notes) console.error(pc.yellow(`worktree cleanup: note: ${note}`));
+  const facts: CleanupFacts = {
+    targets,
+    worktrees: probe.worktrees.map((worktree) => ({
+      path: worktree.path,
+      branch: worktree.branch,
+      isMain: worktree.isMain,
+      clean: worktree.clean,
+      locked: worktree.locked,
+    })),
+    snapshots: probe.snapshots,
+    defaultBranch: probe.defaultBranch,
+    mergedLocalBranches: probe.mergedLocalBranches,
+    remoteEvidence: probe.remoteEvidence,
+  };
+  // Per-branch evidence base (the planner's mergedEvidenceBase rule) to pick
+  // the `git branch -d` cwd: -d refuses unless merged into HEAD, so the
+  // deletion runs where that base is checked out.
+  const branchBase = new Map<string, string>();
+  for (const target of targets) {
+    if (target.kind !== "local-branch" || target.owner === null) continue;
+    const ownerDoc = probe.snapshots.find((doc) => doc.id === target.owner!.workflowId);
+    if (ownerDoc === undefined) continue;
+    const base =
+      target.owner.planId !== undefined && ownerDoc.type === "iteration" ? ownerDoc.branch?.integration : ownerDoc.branch?.target;
+    if (typeof base === "string" && base !== "") branchBase.set(target.ref, base);
+  }
+  return { facts, branchBase };
+}
+
+function cleanupPrintPlan(title: string, decisions: readonly CleanupDecision[]): void {
+  console.log(title);
+  for (const decision of decisions) {
+    console.log(`${decision.verdict} | ${decision.kind} | ${decision.ref} | ${decision.reason}`);
+  }
+}
+
+/** Deletion cwd: the worktree checked out at the branch's evidence base, else the main root (git's -d guard still applies). */
+function cleanupBranchDeletionCwd(base: string | undefined, probe: CleanupProbe, mainRoot: string): string {
+  if (base === undefined) return mainRoot;
+  const host = probe.worktrees.find((worktree) => worktree.branch === base);
+  return host?.path ?? mainRoot;
+}
+
+worktreeCommand
+  .command("cleanup")
+  .description(
+    "Plan (and with --apply execute) guarded worktree/branch cleanup for a workflow: merged-evidence-only branch deletion with " +
+      "active-lease / checked-out / foreign / dirty / non-terminal refusals; dry-run by default (no fetch/prune/write), prints " +
+      "`verdict | kind | ref | reason` (exit 0 valid dry-run / successful removals, 1 probe/mutation failure, 2 usage)",
+  )
+  .option("--workflow <id>", "Workflow id whose snapshot drives ownership and protected refs (required)")
+  .option("--harness <path>", "Harness dir override (default: process-harness discovery from the verified main worktree)")
+  .option(
+    "--apply",
+    "Execute current remove rows: git worktree remove (never force) → re-probe/re-plan → git branch -d (never -D) → remote compare-and-delete",
+  )
+  .option("--remote", "Include remote-branch candidates (refs/remotes/origin) with expected-OID compare-and-delete")
+  .option(
+    "--worktree <path>",
+    "Limit worktree candidates to this path (repeatable); also asserts ownership for a released-lease worktree matched to its recorded branch",
+    (value: string, previous: string[]) => [...previous, value],
+    [] as string[],
+  )
+  .action((options: { workflow?: string; harness?: string; apply?: boolean; remote?: boolean; worktree?: string[] }) => {
+    try {
+      if (!options.workflow) {
+        throw new SddScriptError(
+          "usage: worktree cleanup --workflow <id> [--harness <path>] [--apply] [--remote] [--worktree <path>]",
+          2,
+        );
+      }
+      const main = readMainWorktree();
+      if (main === null) throw new Error("cannot resolve the main worktree of the current repository — run inside the repo");
+      const harnessDir = resolveProcessHarnessDir(options.harness, main);
+      if (harnessDir === null) throw new Error("harness directory not found");
+      const snapshotPath = resolveSnapshotPath(options.workflow, harnessDir);
+      const workflowRoot = resolveWorkflowDir(harnessDir, { harnessDir });
+      const scope = {
+        scoped: (options.worktree?.length ?? 0) > 0,
+        asserted: new Set((options.worktree ?? []).map((candidate) => cleanupPathKey(candidate))),
+      };
+      const probeInput: CleanupProbeInput = {
+        mainRoot: main.root,
+        snapshotDir: path.dirname(snapshotPath),
+        workflowRoot,
+        workflowId: options.workflow,
+      };
+
+      const probe1 = cleanupProbe(probeInput);
+      const built1 = cleanupBuildFacts(probe1, scope, options.remote === true);
+      const plan1 = planWorktreeCleanup(probe1.selected, built1.facts);
+      cleanupPrintPlan(`worktree cleanup (workflow ${options.workflow}): plan`, plan1);
+      if (options.apply !== true) return; // dry-run: printed the plan, changed nothing
+
+      // Safe cwd outside every removal candidate: the main worktree is never
+      // one (cleanup.keep.main-worktree). Every git call below still passes
+      // its cwd explicitly.
+      try {
+        process.chdir(main.root);
+      } catch {
+        // explicit per-call cwd makes this a best-effort safety net only
+      }
+
+      let failed = false;
+      for (const decision of plan1) {
+        if (decision.kind !== "worktree" || decision.verdict !== "remove") continue;
+        try {
+          gitSync(["worktree", "remove", decision.ref], main.root); // never --force
+          console.log(pc.green(`apply: removed worktree ${decision.ref}`));
+        } catch (error) {
+          failed = true;
+          console.error(pc.red(`apply: failed worktree ${decision.ref}: ${cleanupGitMessage(error)}`));
+        }
+      }
+
+      // Re-probe + re-plan after the removals: branches whose worktree is
+      // gone may now delete; a failed removal leaves its branch
+      // checked-out → refused. Failed rows never widen scope.
+      const probe2 = cleanupProbe(probeInput);
+      const built2 = cleanupBuildFacts(probe2, scope, options.remote === true);
+      const plan2 = planWorktreeCleanup(probe2.selected, built2.facts);
+      cleanupPrintPlan(`worktree cleanup (workflow ${options.workflow}): post-removal re-plan`, plan2);
+      for (const decision of plan2) {
+        if (decision.verdict !== "remove") continue;
+        if (decision.kind === "local-branch") {
+          const cwd = cleanupBranchDeletionCwd(built2.branchBase.get(decision.ref), probe2, main.root);
+          try {
+            gitSync(["branch", "-d", decision.ref], cwd); // never -D
+            console.log(pc.green(`apply: deleted branch ${decision.ref}`));
+          } catch (error) {
+            failed = true;
+            console.error(pc.red(`apply: failed branch ${decision.ref}: ${cleanupGitMessage(error)}`));
+          }
+        } else if (decision.kind === "remote-branch") {
+          // CleanupDecision carries `ref` (`origin/<branch>`), not `branch` —
+          // resolve the observed incarnation from the re-probe by ref, and
+          // never push without one.
+          const remote = probe2.remoteBranches.find((candidate) => `origin/${candidate.branch}` === decision.ref);
+          if (remote === undefined) {
+            failed = true;
+            console.error(pc.red(`apply: failed remote ${decision.ref}: cleanup.refuse.facts-changed (observed remote incarnation vanished)`));
+            continue;
+          }
+          try {
+            // Expected-OID compare-and-delete: the deletion only lands while
+            // the remote still sits at the observed incarnation — a moved ref
+            // fails as cleanup.refuse.facts-changed. No unconditional force,
+            // no automatic retry with a newer OID.
+            gitSync(
+              ["push", `--force-with-lease=refs/heads/${remote.branch}:${remote.tip}`, "origin", `:refs/heads/${remote.branch}`],
+              main.root,
+            );
+            console.log(pc.green(`apply: deleted remote ${decision.ref}`));
+          } catch (error) {
+            failed = true;
+            console.error(pc.red(`apply: failed remote ${decision.ref}: cleanup.refuse.facts-changed (${cleanupGitMessage(error)})`));
+          }
+        }
+      }
+      if (failed) process.exitCode = 1;
+    } catch (error) {
+      failScript(error, "worktree cleanup");
     }
   });
 
