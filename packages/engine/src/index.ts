@@ -100,6 +100,7 @@ export {
   withStatusWriteLock,
 } from "./lease.js";
 export type {
+  CloseWorkflowOptions,
   WorkflowBranchAnchors,
   WorkflowExecutionPolicy,
   WorkflowLifecycleStatus,
@@ -108,6 +109,8 @@ export type {
   WorkflowSnapshotRead,
 } from "./workflow.js";
 export {
+  closeWorkflow,
+  isTerminalSnapshot,
   LEGACY_WORKTREE_PATH_CODE,
   WORKFLOW_LIFECYCLE_STATUSES,
   WORKFLOW_LIFECYCLE_TYPES,

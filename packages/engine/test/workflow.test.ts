@@ -34,6 +34,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { GateResult } from "../src/core.js";
 import {
+  closeWorkflow,
+  isTerminalSnapshot,
   WORKFLOW_SNAPSHOT_FILE,
   readWorkflowSnapshot,
   validateWorkflowSnapshot,
@@ -553,5 +555,116 @@ describe("writeWorkflowSnapshot — whole-rewrite under withStatusWriteLock", ()
       rmSync(root, { recursive: true, force: true });
       rmSync(other, { recursive: true, force: true });
     }
+  });
+});
+
+
+describe("closeWorkflow", () => {
+  const id = "00000101-close-fixture";
+  const endedAt = "2026-09-12T10:20:30+08:00";
+  const roots: string[] = [];
+  afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
+  function fixture(overrides: Record<string, unknown> = {}) {
+    const root = tmpRoot("workflow-close-");
+    roots.push(root);
+    const dir = join(root, "workflows", id);
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, WORKFLOW_SNAPSHOT_FILE);
+    const snapshot = validSnapshot({ id, status: "running", ended_at: undefined, ...overrides });
+    writeFileSync(path, JSON.stringify(snapshot, null, 4) + "\n");
+    setArtifactStore(createFsStore(root));
+    return { root, dir, path, snapshot };
+  }
+  const lease = { holder: "fixture-owner", claimed_at: "2026-09-12", worktree_path: "/fixture/worktree", working_branch: "feature/fixture" };
+  test.each(["plan", "iteration"])("completes an all-Done %s and preserves rows", async (type) => {
+    const { dir, path, snapshot } = fixture({ type });
+    const closed = await closeWorkflow(id, dir, { endedAt });
+    expect(closed).toEqual({ ...JSON.parse(JSON.stringify(snapshot)), status: "completed", ended_at: endedAt, updated_at: endedAt });
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual(closed);
+    expect(isTerminalSnapshot(closed)).toBe(true);
+  });
+  test.each(["completed", "failed", "stopped"])("keeps valid %s terminal bytes and timestamps", async (status) => {
+    const { dir, path } = fixture({ status, ended_at: "2026-09-11", plans: [legacyRow({ status: "Blocked" })] });
+    const before = readFileSync(path, "utf8");
+    expect((await closeWorkflow(id, dir, { endedAt })).status).toBe(status);
+    expect(readFileSync(path, "utf8")).toBe(before);
+  });
+  test.each([
+    { plans: [legacyRow({ execution_lease: lease })] },
+    { integration_merge_lease: { holder: "fixture-owner", claimed_at: "2026-09-12", plan_id: "00000101-fixture", source_branch: "feature/fixture", target_branch: "integration/fixture" } },
+    { plans: [legacyRow({ status: "InReview" })] },
+    { id: "00000101-other" },
+    { status: "completed", ended_at: undefined },
+    { status: "completed", ended_at: "2026-09-11", plans: [legacyRow({ execution_lease: lease })] },
+    { control_worktree_path: "/fixture/legacy" },
+  ])("refuses unsafe snapshot without rewriting it: %j", async (overrides) => {
+    const { dir, path } = fixture(overrides);
+    const before = readFileSync(path, "utf8");
+    await expect(closeWorkflow(id, dir, { endedAt })).rejects.toThrow();
+    expect(readFileSync(path, "utf8")).toBe(before);
+  });
+  test.each(["", "yesterday", "2026-02-30", "2026-09-12T25:00:00Z", "2026-09-12T12:00:00"])("rejects invalid endedAt %s", async (value) => {
+    const { dir, path } = fixture();
+    const before = readFileSync(path, "utf8");
+    await expect(closeWorkflow(id, dir, { endedAt: value })).rejects.toThrow(/endedAt/);
+    expect(readFileSync(path, "utf8")).toBe(before);
+  });
+  test("date-only timestamps and legacy normalization are supported on authorized close", async () => {
+    const { dir, path } = fixture({ integration_worktree_path: undefined, control_worktree_path: "/fixture/integration" });
+    const closed = await closeWorkflow(id, dir, { endedAt: "2026-09-12" });
+    expect(closed.integration_worktree_path).toBe("/fixture/integration");
+    expect(closed.ended_at).toBe("2026-09-12");
+    expect(readFileSync(path, "utf8")).not.toContain("control_worktree_path");
+  });
+  test.each(["missing", "malformed"])("refuses %s snapshot", async (kind) => {
+    const { dir, path } = fixture();
+    if (kind === "missing") rmSync(path); else writeFileSync(path, "{");
+    await expect(closeWorkflow(id, dir, { endedAt })).rejects.toThrow();
+    expect(existsSync(path)).toBe(kind !== "missing");
+    if (kind === "malformed") expect(readFileSync(path, "utf8")).toBe("{");
+  });
+  test("reads a lease claimed while waiting for the snapshot lock", async () => {
+    const { dir, path, snapshot } = fixture();
+    const lock = join(dir, ".status-write.lockdir");
+    mkdirSync(lock); // another writer holds the same filesystem lock
+    const pending = closeWorkflow(id, dir, { endedAt });
+    const rejection = pending.then(() => null, (error: Error) => error);
+    await Bun.sleep(40);
+    writeFileSync(path, JSON.stringify({ ...snapshot, plans: [legacyRow({ execution_lease: lease })] }));
+    const claimed = readFileSync(path, "utf8");
+    rmSync(lock, { recursive: true });
+    expect(await rejection).toBeInstanceOf(Error);
+    expect((await rejection)?.message).toContain("lease");
+    expect(readFileSync(path, "utf8")).toBe(claimed);
+  });
+  test("pins the store for the locked read and write without consulting disk", async () => {
+    const { dir, path, snapshot } = fixture({ status: "paused" });
+    writeFileSync(path, "{invalid disk snapshot");
+    const puts: ArtifactDoc[] = [];
+    const recording: ArtifactStore = {
+      async get<T>(ref): Promise<T> {
+        expect(ref).toEqual({ kind: "snapshot", key: id });
+        expect(existsSync(join(dir, ".status-write.lockdir"))).toBe(true);
+        setArtifactStore({ async get() { throw new Error("wrong store"); }, async put() { throw new Error("wrong store"); } });
+        return snapshot as T;
+      },
+      async put(doc) { expect(existsSync(join(dir, ".status-write.lockdir"))).toBe(true); puts.push(doc); },
+    };
+    setArtifactStore(recording);
+    await closeWorkflow(id, dir, { endedAt });
+    expect(puts).toHaveLength(1);
+    expect(puts[0]?.key).toBe(id);
+    expect(readFileSync(path, "utf8")).toBe("{invalid disk snapshot");
+  });
+  test("refuses mismatched FsStore path before creating a directory", async () => {
+    const { root } = fixture();
+    const dir = join(root, "elsewhere", id);
+    await expect(closeWorkflow(id, dir, { endedAt })).rejects.toThrow(/routed writer path mismatch/);
+    expect(existsSync(dir)).toBe(false);
+  });
+  test("terminal predicate checks only the enum", () => {
+    expect(isTerminalSnapshot({ status: "completed" } as never)).toBe(true);
+    expect(isTerminalSnapshot({ status: "running" } as never)).toBe(false);
+    expect(isTerminalSnapshot({ status: "paused" } as never)).toBe(false);
   });
 });

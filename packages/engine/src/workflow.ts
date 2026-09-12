@@ -30,7 +30,7 @@ import { isAbsolute, join } from "node:path";
 import type { GateResult, Severity, ValidationResult } from "./core.js";
 import { validateExecutionLease, validateIntegrationMergeLease, withStatusWriteLock, type IntegrationMergeLease } from "./lease.js";
 import { validatePlanRow, type PlanRow } from "./status.js";
-import { assertFsStorePath, getArtifactStore } from "./store.js";
+import { assertFsStorePath, getArtifactStore, type ArtifactStore } from "./store.js";
 
 /** Snapshot file name inside `workflows/<id>/` ( — writer contract). */
 export const WORKFLOW_SNAPSHOT_FILE = "snapshot.json";
@@ -399,6 +399,10 @@ export function readWorkflowSnapshot(dir: string): WorkflowSnapshotRead {
   } catch (error) {
     throw new Error(`Invalid JSON in ${snapshotPath}: ${(error as Error).message}`);
   }
+  return normalizeWorkflowSnapshot(doc, snapshotPath);
+}
+
+function normalizeWorkflowSnapshot(doc: unknown, snapshotPath: string): WorkflowSnapshotRead {
   const gate = validateWorkflowSnapshot(doc);
   const migration = gate.violations.filter((v) => v.code === LEGACY_WORKTREE_PATH_CODE);
   const blocking = gate.violations.filter((v) => v.code !== LEGACY_WORKTREE_PATH_CODE);
@@ -462,6 +466,65 @@ export async function writeWorkflowSnapshot(snapshot: WorkflowSnapshot, dir: str
   // The store put is the durable write inside the lock; the store is never a
   // second lock (architect-locked 2026-08-27: locks stay with callers).
   await withStatusWriteLock(snapshotPath, async () => {
-    await store.put({ kind: "snapshot", key: snapshot.id, payload: snapshot });
+    await validateAndPutWorkflowSnapshot(store, snapshot);
+  });
+}
+
+
+/** Shared by writers that already hold the snapshot lock. */
+async function validateAndPutWorkflowSnapshot(store: ArtifactStore, snapshot: WorkflowSnapshot): Promise<void> {
+  const gate = validateWorkflowSnapshot(snapshot);
+  if (!gate.ok) {
+    const detail = gate.violations.map((v) => `${v.code}: ${v.message}`).join("; ");
+    throw new WorkflowSnapshotValidationError(`refusing to write invalid workflow snapshot: ${detail}`, gate.violations);
+  }
+  await store.put({ kind: "snapshot", key: snapshot.id, payload: snapshot });
+}
+
+/** Terminal enum predicate only; callers validate document shape separately. */
+export function isTerminalSnapshot(doc: WorkflowSnapshot): boolean {
+  return (WORKFLOW_TERMINAL_STATUSES as readonly string[]).includes(doc.status);
+}
+
+export type CloseWorkflowOptions = { endedAt: string };
+
+function isCloseTimestamp(value: string): boolean {
+  if (typeof value !== "string") return false;
+  const match = /^(\d{4})-(\d{2})-(\d{2})(?:[Tt]([01]\d|2[0-3]):([0-5]\d):([0-5]\d)(?:\.\d+)?(?:[Zz]|[+-](?:[01]\d|2[0-3]):[0-5]\d))?$/.exec(value);
+  if (!match) return false;
+  // Date.parse normalizes impossible dates such as February 30; compare the
+  // calendar date independently of the optional timestamp's UTC offset.
+  const date = new Date(`${match[1]}-${match[2]}-${match[3]}T00:00:00Z`);
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value.slice(0, 10);
+}
+
+/**
+ * Complete the latest snapshot under its write lock. Never releases leases.
+ * A valid terminal snapshot is returned unchanged, including failed/stopped.
+ */
+export async function closeWorkflow(workflowId: string, dir: string, opts: CloseWorkflowOptions): Promise<WorkflowSnapshot> {
+  if (!isCloseTimestamp(opts.endedAt)) {
+    throw new Error("endedAt must be a valid YYYY-MM-DD date or RFC3339 timestamp");
+  }
+  const snapshotPath = join(dir, WORKFLOW_SNAPSHOT_FILE);
+  const store = getArtifactStore();
+  const ref = { kind: "snapshot" as const, key: workflowId };
+  assertFsStorePath(store, ref, snapshotPath);
+  mkdirSync(dir, { recursive: true });
+  return withStatusWriteLock(snapshotPath, async () => {
+    const doc = await store.get(ref);
+    if (doc === undefined) throw new Error(`workflow snapshot not found: ${snapshotPath}`);
+    const { snapshot } = normalizeWorkflowSnapshot(doc, snapshotPath);
+    if (snapshot.id !== workflowId) {
+      throw new Error(`workflow snapshot identity mismatch: expected ${workflowId}, got ${snapshot.id}`);
+    }
+    if (isTerminalSnapshot(snapshot)) return snapshot;
+    if (snapshot.plans.some((row) => row.status !== "Done")) {
+      throw new Error("refusing to close workflow: every plan row must be Done");
+    }
+    const completed: WorkflowSnapshot = { ...snapshot, status: "completed", ended_at: opts.endedAt, updated_at: opts.endedAt };
+    // Strict terminal validation refuses both lease kinds without deleting them.
+    await validateAndPutWorkflowSnapshot(store, completed);
+    return completed;
   });
 }
