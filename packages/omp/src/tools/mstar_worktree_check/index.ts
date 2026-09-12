@@ -184,10 +184,12 @@ function collectSnapshotLifecycleBranches(snapshot: WorkflowSnapshot, owned: Set
  * that is unreadable or fails validation is a refusal, never a silent
  * skip; an unreadable/corrupt register (which cannot enumerate the active
  * set) refuses for the same reason. A MISSING register leaves the active
- * set empty (nothing is registered active). Read-only.
+ * set empty (nothing is registered active). Sibling legacy-alias migration
+ * diagnostics are surfaced through the same `note:` channel as the
+ * governing snapshot's (CLI parity). Read-only.
  */
 type ActiveLifecycleScan =
-  | { kind: "ok"; branches: string[] }
+  | { kind: "ok"; branches: string[]; notes: ValidationResult[] }
   | { kind: "refusal"; code: string; detail: string };
 
 function scanActiveLifecycleBranches(
@@ -198,7 +200,7 @@ function scanActiveLifecycleBranches(
   governingWorkflowId: string,
 ): ActiveLifecycleScan {
   const registerPath = join(harnessDir, "status.json");
-  if (!existsSync(registerPath)) return { kind: "ok", branches: [] };
+  if (!existsSync(registerPath)) return { kind: "ok", branches: [], notes: [] };
   let register: Record<string, unknown>;
   try {
     register = readJson(registerPath) as Record<string, unknown>;
@@ -213,6 +215,7 @@ function scanActiveLifecycleBranches(
     };
   }
   const owned = new Set<string>();
+  const notes: ValidationResult[] = [];
   for (const entry of register.workflows as unknown[]) {
     if (!isPlainObject(entry) || typeof entry.id !== "string") {
       return {
@@ -230,6 +233,7 @@ function scanActiveLifecycleBranches(
     try {
       const read = readWorkflowSnapshot(snapshotDir);
       collectSnapshotLifecycleBranches(read.snapshot, owned);
+      notes.push(...read.diagnostics);
     } catch (error) {
       return {
         kind: "refusal",
@@ -238,7 +242,7 @@ function scanActiveLifecycleBranches(
       };
     }
   }
-  return { kind: "ok", branches: [...owned] };
+  return { kind: "ok", branches: [...owned], notes };
 }
 
 export default function mstarWorktreeCheck(pi: CustomToolAPI): CustomTool {
@@ -357,7 +361,9 @@ export default function mstarWorktreeCheck(pi: CustomToolAPI): CustomTool {
           planId,
         };
         const gate = l1PreDispatchCheck(input);
-        const notes = diagnostics
+        // Governing + sibling diagnostics share one `note:` channel (the
+        // sibling contributions come from the scan, CLI parity).
+        const notes = [...diagnostics, ...siblingScan.notes]
           .map((d) => `note: [${d.severity}] ${d.code}: ${d.message}`)
           .join("\n");
         const body = gate.ok

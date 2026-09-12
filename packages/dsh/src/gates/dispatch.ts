@@ -665,6 +665,16 @@ function scanActiveLifecycleBranches(harnessDir: string, governingWorkflowId: st
         detail: `${registerPath}: malformed workflows[] entry — a registered active lifecycle cannot be identified`,
       }
     }
+    // Workflow ids are single path components — the same guard the CLI
+    // (`assertWorkflowId`) and omp (`assertSafeWorkflowId`) apply before
+    // joining the id under `{WORKFLOW_DIR}`; a hostile id refuses.
+    if (id === '' || id === '.' || id === '..' || id.includes('/') || id.includes('\\')) {
+      return {
+        kind: 'refusal',
+        code: 'worktree.l1.lifecycle-register-unreadable',
+        detail: `${registerPath}: invalid workflow id ${JSON.stringify(id)}`,
+      }
+    }
     if (id === governingWorkflowId) continue // governing snapshot read at the call site — dedupe
     const snapshotDir = join(workflowsDir, id)
     try {

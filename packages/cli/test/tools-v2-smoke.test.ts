@@ -72,7 +72,7 @@ function setupRepo(): SmokeRepo {
   git(["commit", "-q", "-m", "base"], root);
   const linked = join(root, "linked");
   git(["worktree", "add", "-q", linked, "-b", "feature/plan-a"], root);
-  // The dedicated integration checkout (T3 worktree-write model): an
+  // The dedicated integration checkout (worktree-write model): an
   // iteration snapshot's full L1 input requires a real integration worktree
   // on branch.integration, distinct from the main worktree.
   const integration = join(root, "integration");
@@ -277,7 +277,7 @@ function setupCustomLayoutRepo(): SmokeRepo {
   // Real linked worktree so the L1 lease probes pass (mirrors setupRepo).
   const linked = join(root, "linked");
   git(["worktree", "add", "-q", linked, "-b", "feature/plan-a"], root);
-  // Dedicated integration checkout (T3 worktree-write model): the full L1
+  // Dedicated integration checkout (worktree-write model): the full L1
   // input for an iteration snapshot requires the integration worktree on
   // branch.integration, distinct from the main worktree.
   const integration = join(root, "integration");
@@ -1000,7 +1000,7 @@ describe("custom workflow_dir/project_dir layout (Phase-5 F1)", () => {
   });
 });
 
-describe("mstar_worktree_check: full L1 inputs (T3 worktree-write model)", () => {
+describe("mstar_worktree_check: full L1 inputs (worktree-write model)", () => {
   let ownedRepo: SmokeRepo | undefined;
   let expectationRepo: SmokeRepo | undefined;
   let siblingRepo: SmokeRepo | undefined;
