@@ -4,7 +4,7 @@ Extension of `references/qc-specialist-shared.md`. Read when dispatched as `qc-s
 
 ## What this seat is
 
-**L3 plan QC = independent code review** on the whole-branch diff: logic, contracts, security, maintainability, reliability — same job family as a human PR reviewer.
+**L3 plan QC = independent code review** on the assigned changed diff and directly affected interfaces: logic, contracts, security, maintainability, reliability — same job family as a human PR reviewer.
 
 | This seat does | This seat does **not** |
 |----------------|-------------------------|
@@ -26,10 +26,10 @@ Layer SSOT → `mstar-review-qc/references/review-responsibility-boundaries.md`.
 ## Standard review workflow
 
 1. **Align checkout:** Enter **`Review cwd` / `Worktree path`** from Assignment; verify with `git rev-parse --show-toplevel` and `git branch --show-current`. Confirm **`plan_id`** and **`Review range` / `Diff basis`** are present; if missing → `Blocked` to PM. All `git diff` / `git log` must reproduce the assigned range.
-2. **Build context from the diff** with `git diff` / `git show` / review-package file / `glob` / `grep` / `read`. Optional short `@explore` for navigation only — **never** outsource review steps to `@explore`.
+2. **Build context from the diff** with `git diff` / `git show` / review-package file / `glob` / `grep` / `read`. Use the supplied relevant knowledge/context; do not launch global exploration or delegate navigation.
 3. Re-verify branch vs **`Working branch` / `Branch policy`** before concluding.
 4. **Static judgment on the source** (naming, error paths, boundaries, contracts). Default tooling = read/grep only. **Do not** start lint/typecheck/test/build on shared tri-review cwd (see NEVER in `qc-specialist-shared.md`).
-5. Execute **`reviewer-checklist.md`** manually against the diff.
+5. Apply only the **`reviewer-checklist.md`** items affected by the diff. Reuse unchanged L2 evidence; re-review only the assigned findings and fix delta. Stop when these questions have evidence.
 6. Produce structured findings with severity and evidence. PM maps report sections to register **`severity`** (`projects/<id>/residuals.json` → `entries[<plan-id>]`) per `mstar-artifacts/references/status-and-residuals.md` — do not invent non-canonical severity strings.
 7. **Write report:** Write `.md` to the Assignment-provided `{SDD_DIR}/review/` report path. Do not commit raw bundle reports unless Assignment explicitly says `Review archive mode: tracked reports`.
 8. **No stall:** When done, emit **Completion Report** in the same turn — no “notify PM?” choosers.
@@ -38,7 +38,8 @@ Layer SSOT → `mstar-review-qc/references/review-responsibility-boundaries.md`.
 
 If Acceptance Criteria or high-risk paths need **runtime** proof and L1 reports leave a gap:
 
-- Record in findings / Summary: `Needs L4/QA verification: <what command or check>` with confidence Medium/Low as appropriate.
+- Record in findings / Summary: `Needs targeted unit evidence: <affected behavior and named case>` with confidence Medium/Low as appropriate.
+- Browser/device/E2E gaps become an explicitly requested independent **`mstar-e2e`** workflow, not QA commands or an automatic iteration gate.
 - Still complete the **diff review** and return a verdict for what you *can* judge from source.
 - Do **not** run the missing commands yourself to fill the gap.
 

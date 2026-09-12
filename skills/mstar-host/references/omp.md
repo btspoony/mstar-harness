@@ -188,10 +188,10 @@ Harness **dispatch** on omp = **one or more `task` tool calls** with correct **`
 
 Cannot emit required **N** → **`Blocked`**.
 
-### SDD implement (serial)
+### SDD implement
 
-- **`Execution mode: sdd`**: one implementer `task` entry per task id with `agent` matching the implementer role when listed; task reviewer = new entry with `agent: "code-reviewer"` (omp L2 review; not qc-specialist*) or `agent: "reviewer"`/`"task"` as fallback + C5b — no sticky resume unless host resume/id is available and recorded. Serial rule → **`parallel-dispatch.md`** § SDD implement.
-- **Never** multiple implementer entries in one message for the same plan.
+- **`Execution mode: sdd`**: one implementer `task` entry per task id with `agent` matching the implementer role when listed; task reviewer = new entry with `agent: "code-reviewer"` (omp L2 review; not qc-specialist*) or `agent: "reviewer"`/`"task"` as fallback + C5b — no sticky resume unless host resume/id is available and recorded. Ready-task scheduling → **`parallel-dispatch.md`** § SDD implement.
+- Independent ready implementers use isolated parallel tracks; never share a writable worktree or session.
 
 ## Clarify
 

@@ -9,7 +9,7 @@ Extension of `references/qc-specialist-shared.md`. Read at QC session start when
 
 ## Deep review 触发规则（自动判定，无需人工指定）
 
-QC reviewer 在开工时根据以下信号自判是否启用 deep review。满足 **≥2 条**即触发。
+QC reviewer 在开工时根据以下信号自判是否启用 deep review。满足 **≥2 条**时仅选择与 Assignment 变更问题相关的透镜；触发不会扩大 review 范围。
 
 ### 触发信号
 
@@ -17,12 +17,12 @@ QC reviewer 在开工时根据以下信号自判是否启用 deep review。满�
 |---|------|---------|
 | S1 | **变更规模大** | `git diff --stat <Review range>` → 变更行数 ≥ 200 或 变更文件数 ≥ 8 |
 | S2 | **触及敏感模块** | diff 中包含 `auth/`、`payment/`、`security/`、`permission/`、`login/`、`migration/`、`db/migrate/`、`schema/` 路径 |
-| S3 | **首次涉足新领域** | `{KNOWLEDGE_DIR}` 中不存在 diff 触及的模块名；或 plan metadata 标记为首次实现 |
+| S3 | **首次涉足新领域** | 已提供的相关 knowledge / 索引未覆盖 diff 模块，或 plan 标记首次实现；禁止为证明缺失扫描全知识库 |
 | S4 | **数据结构变更** | diff 中包含 DDL（`CREATE TABLE`、`ALTER TABLE`、`ADD COLUMN`、schema 文件、migration 文件） |
 | S5 | **plan 显式声明高风险** | plan 正文或 workflow snapshot plan 行的 metadata 中包含 `high-risk`、`critical-path`、`breaking-change` 标记 |
 | S6 | **多模块耦合** | diff 跨越 ≥3 个不同模块/包/目录边界 |
 
-**判定**：满足 ≥2 条 → 启用 deep review。QC reviewer 在报告 `## Scope` 节中写明判定依据（例：`Deep review: triggered (S1: 350 lines / 12 files, S2: auth/ + payment/)`）。
+**判定**：满足 ≥2 条 → 在既定 changed scope 内启用相关透镜。QC reviewer 在报告 `## Scope` 节中写明判定依据（例：`Deep review: triggered (S1: 350 lines / 12 files, S2: auth/ + payment/)`）。
 
 ## 透镜选择
 
@@ -43,7 +43,7 @@ QC reviewer 在开工时根据以下信号自判是否启用 deep review。满�
 | S2 (敏感模块) | **Auth Lens**（若涉及 auth/login）、**Data Migration Lens**（若涉及 DDL/migration）、**Input Validation Lens**（若涉及用户输入/API） | 全体 |
 | S3 (新领域) | **Standards Lens**、**Testing Lens** | 全体 |
 | S4 (数据结构变更) | **Data Migration Lens** | 全体 |
-| S5 (显式高风险) | **全部透镜**（每个 reviewer 覆盖自己身份相关的所有透镜） | 全体 |
+| S5 (显式高风险) | **与该变更风险直接相关的透镜**（不因 high-risk 全量扩审） | 全体 |
 
 ---
 
@@ -100,5 +100,5 @@ QC reviewer 在开工时根据以下信号自判是否启用 deep review。满�
 即使触发信号阈值达标，以下情况 QC reviewer 仍按默认单透镜模式审查：
 
 - **Re-review（targeted re-review）**：只在原报告基础上验证修复点，不重新扩展审查范围
-- **Hotfix**：时间窗口不允许扩展审查，按 hotfix 压缩路径处理（事后在 plan notes 中补 deep review 追记）
+- **Hotfix**：时间窗口不允许扩展审查，按 hotfix 压缩路径处理（不自动追加事后全量审查）
 - **上下文限制**：宿主会话上下文不足以加载透镜内容时，标记为 `Deep review: skipped (context constraint)` 并仅执行默认审查

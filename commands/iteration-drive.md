@@ -25,7 +25,7 @@ Phase 2–5 共享内容（PM invariants、assignment preflight、session todos�
 
 ## Phase 2: Autonomous Execute
 
-Execute **`mstar-iteration/references/phase-2-worktree-lease.md`** §2.0–§2.5 exactly（§2.0 五道闸 → §2.1 session todos → §2.2 backlog → §2.3 integration branch + control worktree → §2.4 per-plan loop（lease-gated；SDD per-task；QC tri N=3 + QA；serial merge）→ §2.5 dispatch-first；§2.6 push 纪律 → main skill `## 2.6`）。全部 plan `Done` → **STOP** → 打印 `## Phase 3: iteration-close`。
+Execute **`mstar-iteration/references/phase-2-worktree-lease.md`** §2.0–§2.5 exactly（§2.0 五道闸 → §2.1 session todos → §2.2 backlog → §2.3 integration branch + control worktree → §2.4 per-plan loop（lease-gated；SDD independent ready tasks parallel with isolation；changed-scope QC tri N=3 + unit-only QA；serial merge）→ §2.5 dispatch-first；§2.6 push 纪律 → main skill `## 2.6`）。全部 plan `Done` → **STOP** → 打印 `## Phase 3: iteration-close`。
 
 **Assignment preflight**：每次 implement/QC/QA 派发前按 **`mstar-iteration/references/command-shared-invariants.md`** 执行。
 

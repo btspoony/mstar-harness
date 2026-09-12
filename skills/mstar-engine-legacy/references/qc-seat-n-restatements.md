@@ -10,7 +10,7 @@
 | `inline` (hotfix) / explicit `QC mode: single` override | `qc-specialist` ×1 | **N=1** |
 | Targeted re-review (`QC re-review: targeted — reviewers: <ids>`) | the listed seats only | N = listed count (1–3) |
 
-Rules that never change: tri seats dispatch **in one message** with a branch review-package path (`{SDD_DIR}/review/qc1.md`…`qc3.md` + `qc-consolidated.md`); post-dispatch verify three distinct agent ids; `Execution mode: inline` with `QC mode: full tri-review` still launches the three seats; SDD implement/reviewer dispatches stay **serial** (never parallel implementers for the same plan); each invoke must carry the role-binding field set to `Execute as` even at N=1.
+Rules that never change: tri seats dispatch **in one message** with a branch review-package path (`{SDD_DIR}/review/qc1.md`…`qc3.md` + `qc-consolidated.md`); post-dispatch verify three distinct agent ids; `Execution mode: inline` with `QC mode: full tri-review` still launches the three seats; SDD independent ready tasks run concurrently after isolation (`mstar-sdd` § Ready-task scheduling); tri seat count never grants full review scope; each invoke must carry the role-binding field set to `Execute as` even at N=1.
 
 ## Per-host restatements (full text)
 
@@ -19,7 +19,7 @@ Rules that never change: tri seats dispatch **in one message** with a branch rev
 - **`Execution mode: sdd`**: **N=3** task entries — prefer `agent: "qc-specialist"`, `"qc-specialist-2"`, `"qc-specialist-3"` when listed; each body still **Act as** the respective QC role + QC skill load. If a seat is missing from the live schema, fall back per C5 (generic + C5b) for that seat only. N rules → `parallel-dispatch.md`.
 - **`inline`**: **N=1** per `parallel-dispatch.md`.
 - Cannot emit required **N** → **`Blocked`**.
-- SDD implement: one implementer `task` entry per task id with `agent` matching the implementer role when listed; task reviewer = new entry with `agent: "code-reviewer"` (omp L2 review; not qc-specialist*) or `agent: "reviewer"`/`"task"` fallback + C5b; serial rule → `parallel-dispatch.md`.
+- SDD implement: one implementer `task` entry per task id with `agent` matching the implementer role when listed; task reviewer = new entry with `agent: "code-reviewer"` (omp L2 review; not qc-specialist*) or `agent: "reviewer"`/`"task"` fallback + C5b; ready-task scheduling → `parallel-dispatch.md`.
 
 ### opencode (`task` tool, `subagent` field)
 
@@ -31,7 +31,7 @@ Rules that never change: tri seats dispatch **in one message** with a branch rev
 
 - **`Execution mode: sdd`**: **N=3** Tasks (`qc-specialist`, `qc-specialist-2`, `qc-specialist-3`) + branch review-package path (N rules → `parallel-dispatch.md`).
 - **`inline`**: **N=1** per `parallel-dispatch.md`.
-- SDD implement/reviewer: serial — implementer Task per task id with `subagent_type` matching the implementer role when listed; task reviewer = new Task with `subagent_type: "code-reviewer"` (Cursor L2; not qc-specialist*) when listed, else generic fallback per C5 — no `resume` for reviewers.
+- SDD implement/reviewer: ready-task scheduling per `mstar-sdd` — implementer Task per task id with `subagent_type` matching the implementer role when listed; task reviewer = new Task with `subagent_type: "code-reviewer"` (Cursor L2; not qc-specialist*) when listed, else generic fallback per C5 — no `resume` for reviewers.
 
 ### codex (custom-agent / multi-agent tools only)
 

@@ -29,7 +29,7 @@ Paste-only Assignment **without** an invoke call is **not** dispatch.
 - **1 Assignment ⇒ 1 invoke**: one invoke call carrying the full Assignment body per assignee.
 - **Parallel batch N**: **N** invocations in **one** assistant message (mechanics → **`parallel-dispatch.md`**).
 - **No invoke call** → **Not dispatched** — paste-only / `dispatch incomplete`.
-- **Anti-recursion NEVER**: leaf executors are already `Execute as` — **no** recursive invoke of the same role; Assignment wins (`Delegation: forbidden` unless stated). **Never** multiple implementer invokes in one message for the same plan (SDD serial → **`parallel-dispatch.md`** § SDD implement).
+- **Anti-recursion NEVER**: leaf executors are already `Execute as` — **no** recursive invoke of the same role; Assignment wins (`Delegation: forbidden` unless stated). Independent ready implementers may run concurrently after isolation; scheduling → **`parallel-dispatch.md`** § SDD implement.
 
 ## Assignment / prompt template
 

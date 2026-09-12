@@ -67,7 +67,7 @@ ZCode C5/C5b SSOT is **this file** — do **not** load `_shared/host-role-bindin
 3. **Skill load list** — instruct the subagent to read `mstar-roles` → `references/<role-id>.md` (or shared reference + parameters) and topic skills per that reference.
 4. **`subagent_type`** — bare Morning Star role id per C5; `general-purpose` fallback.
 
-Paste-only Assignment **without** an invoke call is **not** dispatch. Anti-recursion NEVER: leaf executors are already `Execute as` — no recursive invoke of the same role; Assignment wins (`Delegation: forbidden` unless stated). **Never** multiple implementer invokes in one message for the same plan (SDD serial → **`parallel-dispatch.md`** § SDD implement).
+Paste-only Assignment **without** an invoke call is **not** dispatch. Anti-recursion NEVER: leaf executors are already `Execute as` — no recursive invoke of the same role; Assignment wins (`Delegation: forbidden` unless stated). Independent ready implementers may run concurrently after isolation; scheduling → **`parallel-dispatch.md`** § SDD implement.
 
 ZCode invoke shape (same turn):
 
@@ -119,10 +119,10 @@ Harness **dispatch** on ZCode = **one or more `Agent` tool calls** with correct 
 
 Cannot emit required **N** → **`Blocked`**.
 
-### SDD implement (serial)
+### SDD implement
 
-- **`Execution mode: sdd`**: one implementer **`Agent`** per task id (bare role id per C5, `general-purpose` fallback); task reviewer = new **`Agent`** with **Act as `code-reviewer`** (`subagent_type: "code-reviewer"`, `general-purpose` fallback; ZCode L2 review; not qc-specialist*), always with C5b prompt binding — no sticky resume unless host adds it later. Serial rule → **`parallel-dispatch.md`** § SDD implement.
-- **Never** multiple implementer Agents in one message for the same plan.
+- **`Execution mode: sdd`**: one implementer **`Agent`** per task id (bare role id per C5, `general-purpose` fallback); task reviewer = new **`Agent`** with **Act as `code-reviewer`** (`subagent_type: "code-reviewer"`, `general-purpose` fallback; ZCode L2 review; not qc-specialist*), always with C5b prompt binding — no sticky resume unless host adds it later. Ready-task scheduling → **`parallel-dispatch.md`** § SDD implement.
+- Independent ready implementers use isolated parallel tracks; never share a writable worktree or session.
 
 ## Clarify
 

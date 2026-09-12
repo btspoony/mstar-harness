@@ -17,6 +17,8 @@ Write under the Assignment-provided **`{SDD_DIR}/review/qc#.md`** (`qc1`…`qc3`
 - Report Timestamp: {ISO-8601}
 
 ## Scope
+- Changed scope: {assigned changed hunks and directly affected interfaces; re-review: finding IDs + fix delta}
+- Reused evidence: {unchanged L2 / prior-review evidence; do not rerun it}
 - plan_id: {same as Assignment — or `N/A` + Feature / scope label from Assignment}
 - Review range / Diff basis: {exact copy from Assignment}
 - Working branch (verified): {name}

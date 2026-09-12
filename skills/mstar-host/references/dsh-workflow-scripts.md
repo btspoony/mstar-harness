@@ -55,7 +55,7 @@ its sandbox permits).
 {
   "name": "mstar-qc-tri",
   "description": "Plan QC tri-review: three independent read-only QC seats over one review range, each returning a verdict envelope.",
-  "whenToUse": "dsh host, Execution mode: sdd — the whole-branch plan QC tri instead of three subagent dispatches.",
+  "whenToUse": "dsh host, Execution mode: sdd — the changed-scope plan QC tri instead of three subagent dispatches.",
   "phases": [
     { "title": "qc-tri", "detail": "Three concurrent read-only QC seats over the same review range." }
   ]
@@ -143,7 +143,7 @@ You are the first of three INDEPENDENT read-only QC seats over the same review r
 
 Load in order: skill mstar-roles then references/qc-specialist-shared.md (identity first), then references/qc-specialist/report-template.md and references/qc-specialist/reviewer-checklist.md; the plan at ${a.planPath}.
 
-Review the whole-branch diff for the review range above against that plan. Every finding needs a verification cross-check and an expected-vs-observed line; prefer omission to fabrication. Do not run build or test suites (they are not your evidence channel). Never edit the worktree, never post, never merge, never touch project registers.
+Review only changed hunks and directly affected interfaces in the review range above against that plan. Reuse unchanged task-review evidence; for re-review inspect only assigned findings and fix delta. Every finding needs a verification cross-check and an expected-vs-observed line; prefer omission to fabrication. Do not run build or test suites (they are not your evidence channel). Never edit the worktree, never post, never merge, never touch project registers.
 
 Return ONLY the JSON object matching the provided schema (seat, verdict, summary, findings). If your sandbox permits, also write the full report to the report path above — never depend on being able to write.`, { ...opts, label: 'qc1-architecture' }),
   () => agent(`## Assignment
@@ -163,7 +163,7 @@ You are the second of three INDEPENDENT read-only QC seats over the same review 
 
 Load in order: skill mstar-roles then references/qc-specialist-shared.md (identity first), then references/qc-specialist/report-template.md, references/qc-specialist/reviewer-checklist.md and references/qc-specialist/deep-review-lenses.md; the plan at ${a.planPath}.
 
-Review the whole-branch diff for the review range above against that plan, with the security and correctness lenses. Every finding needs a verification cross-check and an expected-vs-observed line; prefer omission to fabrication. Do not run build or test suites. Never edit the worktree, never post, never merge, never touch project registers.
+Review only changed hunks and directly affected interfaces in the review range above against that plan. Reuse unchanged task-review evidence; for re-review inspect only assigned findings and fix delta, with the security and correctness lenses. Every finding needs a verification cross-check and an expected-vs-observed line; prefer omission to fabrication. Do not run build or test suites. Never edit the worktree, never post, never merge, never touch project registers.
 
 Return ONLY the JSON object matching the provided schema (seat, verdict, summary, findings). If your sandbox permits, also write the full report to the report path above — never depend on being able to write.`, { ...opts, label: 'qc2-security-correctness' }),
   () => agent(`## Assignment
@@ -183,7 +183,7 @@ You are the third of three INDEPENDENT read-only QC seats over the same review r
 
 Load in order: skill mstar-roles then references/qc-specialist-shared.md (identity first), then references/qc-specialist/report-template.md, references/qc-specialist/reviewer-checklist.md and references/qc-specialist/deep-review-lenses.md; the plan at ${a.planPath}.
 
-Review the whole-branch diff for the review range above against that plan, with the performance and reliability lenses. Every finding needs a verification cross-check and an expected-vs-observed line; prefer omission to fabrication. Do not run build or test suites. Never edit the worktree, never post, never merge, never touch project registers.
+Review only changed hunks and directly affected interfaces in the review range above against that plan. Reuse unchanged task-review evidence; for re-review inspect only assigned findings and fix delta, with the performance and reliability lenses. Every finding needs a verification cross-check and an expected-vs-observed line; prefer omission to fabrication. Do not run build or test suites. Never edit the worktree, never post, never merge, never touch project registers.
 
 Return ONLY the JSON object matching the provided schema (seat, verdict, summary, findings). If your sandbox permits, also write the full report to the report path above — never depend on being able to write.`, { ...opts, label: 'qc3-perf-reliability' }),
 ])

@@ -17,7 +17,7 @@ Use this reference when PM is dispatching QC, consolidating review verdicts, or 
 0. Pre-dispatch: read `mstar-review-qc`.
 1. `review-package MERGE_BASE HEAD` → branch diff under `{SDD_DIR}/review/`.
 2. Dispatch **three** QC seats in **one** message (**N=3**); alignment fields text-identical across reports and Assignment.
-3. PM writes `{SDD_DIR}/review/qc-consolidated.md` + main plan durable summary; after fixes → targeted re-review (default) or `QC re-review: full tri-review` for new wave files.
+3. PM writes `{SDD_DIR}/review/qc-consolidated.md` + main plan durable summary; after fixes → targeted re-review of affected findings and fix delta; three seats only when all three have affected findings (new wave files do not broaden scope).
 
 **NEVER** end an SDD plan with only a single final `qc-specialist` unless user override: `QC mode: single — override: <reason>`.
 
@@ -39,7 +39,7 @@ Use this reference when PM is dispatching QC, consolidating review verdicts, or 
 - **NEVER** under `Findings cleanup: zero-residual`, use `Approve with residuals` or open R# for fixable findings — fix-now + re-review; residual only for true blocker-defer + roadmap.
 - **NEVER** drop residual tracking to chat-only when `Approve with residuals` applies.
 - **NEVER** treat "two of three QC reports arrived" as sufficient — missing seat → `Blocked`.
-- **NEVER** re-dispatch all three after routine fix when only one or two had blockers — **targeted re-review** unless `QC re-review: full tri-review`.
+- **NEVER** re-dispatch all three after routine fix when only one or two had blockers — **targeted re-review**; the `full tri-review` label changes seats, never the allowed delta.
 - **NEVER** create `qc1-rev2.md` for **targeted** re-review; update original bundle `qcN.md` in place.
 
 ## Consolidated Decision Template

@@ -2,7 +2,7 @@
 
 Extension of `references/qc-specialist-shared.md`. Use during step 5 of `reviewer-workflow.md`.
 
-Apply by **reading the diff and related source** — do not run project test/build/lint suites to tick these boxes (see `reviewer-workflow.md`).
+Apply only affected items by **reading the assigned changed diff and directly related source** — do not run project test/build/lint suites to tick these boxes (see `reviewer-workflow.md`).
 
 ## Code quality
 
