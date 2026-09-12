@@ -2,13 +2,14 @@
  * Engine cleanup planner tests — pure facts→decisions planner
  * (`planWorktreeCleanup`, one function, no `planBranchCleanup`).
  *
- * Spec sources (each test cites the contract it enforces):
- * - Locked interface + decision precedence + timing lanes — iteration spec
- *   worktree-write-model § "Locked interfaces (P3 engine)" + § "Stable
- *   machine codes"; plan 20260912-cleanup-tool-sweep T1 (Step 1 fixtures).
+ * Contract sources (each test cites the contract it enforces):
+ * - Locked interface + decision precedence + timing lanes: the planner's
+ *   stable behavior contract — exact `cleanup.*` machine codes, values in /
+ *   decisions out (see the src/cleanup.ts header).
  * - Non-terminal integration refuse is scoped to the integration owner, not
  *   to all children: a Done plan row under a running parent iteration is
- *   eligible (lock decision 4, two timing lanes).
+ *   eligible without terminal close (first timing lane); a standalone plan
+ *   needs the lifecycle terminal first.
  * - Checked-out guard applies to branch deletion, not to removal of the
  *   eligible owned worktree: dry-run prints worktree `remove` plus its
  *   branch `refuse` (`cleanup.refuse.checked-out`).

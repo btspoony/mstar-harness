@@ -7,11 +7,11 @@
  * mutated. The CLI alone probes Git/state and applies current decisions;
  * the planner only classifies.
  *
- * Spec sources (behavior contract, verbatim where locked):
+ * Behavior contract (locked):
  * - Locked interface block, candidate ownership/attribution, decision
- *   precedence, two timing lanes and every `cleanup.*` machine code:
- *   iteration spec worktree-write-model § "Locked interfaces (P3 engine)"
- *   + § "Stable machine codes"; plan 20260912-cleanup-tool-sweep Task 1.
+ *   precedence, two timing lanes and every `cleanup.*` machine code are a
+ *   stable contract: consumers match on the exact codes, so both codes and
+ *   precedence may only change as a deliberate contract update.
  * - Reuses the P1 canonical snapshot shape (`WorkflowSnapshot`) and the P2
  *   terminal predicate (`isTerminalSnapshot`); snapshot/terminal semantics
  *   are never re-derived here.
@@ -158,9 +158,9 @@ function protectedRefReason(snapshots: readonly WorkflowSnapshot[], facts: Clean
  * row (lease `working_branch`, retained `metadata.working_branch` /
  * `metadata.track_branches`). Attribution then decides the positive lane:
  * lifecycle-owned targets need valid terminal close; iteration plan/track
- * rows need only row `Done` while the parent still runs (lock decision 4);
- * a standalone plan is the whole lifecycle, so terminal close is required
- * first ( — lane 1 wording). An unresolvable owner lifecycle or a missing
+ * rows need only row `Done` while the parent still runs (first timing
+ * lane); a standalone plan is the whole lifecycle, so terminal close is
+ * required first. An unresolvable owner lifecycle or a missing
  * owner row refuses — probe failure/malformed state never substitutes an
  * empty-safe verdict.
  */

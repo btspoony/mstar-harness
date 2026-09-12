@@ -2255,7 +2255,7 @@ worktreeCommand
   });
 
 // ---------------------------------------------------------------------------
-// (20260912-cleanup-tool-sweep): `worktree cleanup` — guarded worktree/branch
+// `worktree cleanup` — guarded worktree/branch
 // reclamation. The pure planner is engine `planWorktreeCleanup` (values in,
 // decisions out); this verb alone probes Git/state, builds the facts
 // (ownership attributed from snapshot rows — leases OR retained row metadata

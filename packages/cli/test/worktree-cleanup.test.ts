@@ -1,8 +1,8 @@
 /**
  * CLI `mstar worktree cleanup` — guarded worktree/branch reclamation
- * (plan 20260912-cleanup-tool-sweep T2) against real throwaway git repos.
+ * against real throwaway git repos.
  *
- * The pure planner is `planWorktreeCleanup` (engine, T1 — reviewed); this
+ * The pure planner is `planWorktreeCleanup` (engine); this
  * suite exercises the CLI wrapper only: probing Git/state + all known
  * harness snapshots, dry-run no-op by default, and --apply sequencing
  * (ordinary `git worktree remove` → re-probe → re-plan → `git branch -d`;
