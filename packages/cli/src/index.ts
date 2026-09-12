@@ -51,6 +51,8 @@ import {
   PROJECT_REGISTER_FILE,
   promoteAuditPlans,
   pushCadenceProbe,
+  readMainWorktree,
+  readWorkflowSnapshot,
   resolveHarnessDir,
   resolveProjectDir,
   resolveSddExecutionContext,
@@ -101,7 +103,6 @@ import {
   type AuditRisk,
   type GateResult,
   type HostId,
-  type L1PreDispatchInput,
   type PrReportTarget,
   type ProjectRegisterDoc,
   type QcAlignmentAssignment,
@@ -874,10 +875,25 @@ const statusCommand = program
   .command("status")
   .description("v2 status.json root / workflow snapshot / project-register checks (engine-backed)");
 
+/**
+ * Process-harness resolution starts at the verified MAIN worktree: the
+ * process SSOT (`status.json` / `workflows/`) lives at the main checkout,
+ * so a tracked-results `.mstar/` (e.g. `knowledge/`) in a linked feature
+ * checkout can never win discovery. An explicit `--harness` override wins
+ * unchanged; a non-Git cwd (standalone harness layout) keeps the
+ * pre-existing local probe — a linked checkout is always Git-discoverable,
+ * so this fallback can never let a feature-local harness win.
+ */
+function resolveProcessHarnessDir(harnessArg?: string): string | null {
+  if (harnessArg) return path.resolve(harnessArg);
+  const main = readMainWorktree();
+  return resolveHarnessDir(main !== null ? main.root : process.cwd());
+}
+
 /** Resolve the status.json path: explicit arg wins, else the resolved {HARNESS_DIR}. */
 function resolveStatusFilePath(pathArg?: string): string {
   if (pathArg) return path.resolve(pathArg);
-  const harnessDir = resolveHarnessDir();
+  const harnessDir = resolveProcessHarnessDir();
   if (!harnessDir) {
     throw new Error(`harness dir not found from ${process.cwd()} \u2014 pass a status.json path or set MSTAR_HARNESS_DIR`);
   }
@@ -897,10 +913,19 @@ statusCommand
       if (!fs.existsSync(statusPath)) {
         throw new Error(`status file not found: ${statusPath}`);
       }
-      const gate =
-        path.basename(statusPath) === WORKFLOW_SNAPSHOT_FILE
-          ? validateWorkflowSnapshot(readJson(statusPath))
-          : validateStatus(statusPath);
+      if (path.basename(statusPath) === WORKFLOW_SNAPSHOT_FILE) {
+        // Read-only canonical reader: the v1 `control_worktree_path` alias
+        // is accepted with its medium migration advisory (normalized in
+        // memory — validation never rewrites the source file's bytes);
+        // any blocking violation refuses the read.
+        const { diagnostics } = readWorkflowSnapshot(path.dirname(statusPath));
+        for (const diagnostic of diagnostics) {
+          console.error(pc.yellow(`note: [${diagnostic.severity}] ${diagnostic.code}: ${diagnostic.message}`));
+        }
+        console.log(pc.green(`${statusPath}: OK`));
+        return;
+      }
+      const gate = validateStatus(statusPath);
       if (gate.ok) {
         console.log(pc.green(`${statusPath}: OK`));
         return;
@@ -1349,10 +1374,9 @@ const leaseCommand = program
   .command("lease")
   .description("execution_lease / integration_merge_lease checks (engine-backed)");
 
-/** Resolve the harness dir for lease commands: --harness wins, else {HARNESS_DIR} resolution. */
+/** Resolve the harness dir for lease commands: --harness wins, else main-root process discovery. */
 function resolveLeaseHarnessDir(harnessArg?: string): string {
-  if (harnessArg) return path.resolve(harnessArg);
-  const harnessDir = resolveHarnessDir();
+  const harnessDir = resolveProcessHarnessDir(harnessArg);
   if (!harnessDir) {
     throw new Error(`harness dir not found from ${process.cwd()} \u2014 pass --harness or set MSTAR_HARNESS_DIR`);
   }
@@ -1366,7 +1390,10 @@ function resolveLeaseHarnessDir(harnessArg?: string): string {
  * so a hostile id cannot escape the workflows dir. The workflow dir comes
  * from the engine resolver (Phase-5 F1): a `.mstarc` `[config]
  * workflow_dir` declaration wins, else `{HARNESS_DIR}/workflows` \u2014 so a
- * custom layout is READ at the same location it is written.
+ * custom layout is READ at the same location it is written. Harness
+ * discovery starts at the verified MAIN worktree
+ * (`resolveProcessHarnessDir`) — the process SSOT is never resolved from a
+ * linked feature checkout's own `.mstar/`.
  */
 function resolveSnapshotPath(workflowId: string, harnessArg?: string): string {
   if (workflowId === "" || workflowId === "." || workflowId === ".." || workflowId.includes("/") || workflowId.includes("\\")) {
@@ -1550,7 +1577,7 @@ sddCommand
   .command("workspace")
   .description("Resolve and ensure {SDD_DIR} for a plan (exit 1 on resolution failures, 2 on usage errors)")
   .argument("[plan-id]", "Plan id whose SDD dir is resolved/created")
-  .argument("[control-root]", "Control worktree root (default: MSTAR_CONTROL_ROOT or the cwd's git top-level)")
+  .argument("[control-root]", "Main worktree repo root (default: MSTAR_CONTROL_ROOT or the Git-derived main worktree of the cwd)")
   .action((planId: string | undefined, controlRoot?: string) => {
     try {
  // Optional args + explicit count check: commander's own
@@ -1559,7 +1586,7 @@ sddCommand
       if (!planId) {
         throw new SddScriptError(
           "usage: mstar sdd workspace PLAN_ID [CONTROL_ROOT]\n" +
-            "  Set MSTAR_CONTROL_ROOT=<control_worktree_path> when running from a feature worktree.",
+            "  Set MSTAR_CONTROL_ROOT=<main-worktree-root> when running from a feature worktree.",
           2,
         );
       }
@@ -1864,14 +1891,17 @@ function parseTracksArg(tracksJson: string): WorktreeTrack[] {
 worktreeCommand
   .command("check")
   .description(
-    "L1: verify the plan's execution_lease worktree vs control path (isolation, existence, branch alignment) from the " +
-      "workflow snapshot rows + snapshot control_worktree_path; --l2: verify parallel writable tracks (exit 1 on violations, 2 on usage)",
+    "L1: verify main-worktree residency, the dedicated integration checkout, and the plan's execution_lease feature " +
+      "worktree (Git-checkout identity, existence, branch alignment) from the workflow snapshot + the Git-derived " +
+      "main worktree; --l2: verify parallel writable tracks (exit 1 on violations, 2 on usage)",
   )
   .argument("[plan-id]", "Plan id whose execution_lease drives the L1 input (alternative to --plan)")
-  .option("--workflow <id>", "Workflow id whose snapshot supplies the L1 plan rows + control_worktree_path")
+  .option("--workflow <id>", "Workflow id whose snapshot supplies the L1 plan rows + integration topology (canonical reader accepts the v1 control_worktree_path alias)")
   .option("--plan <plan-id>", "Plan id whose execution_lease drives the L1 input")
-  .option("--harness <path>", "Harness dir override (default: resolved {HARNESS_DIR})")
-  .option("--control <path>", "Control worktree path override (default: snapshot control_worktree_path)")
+  .option("--harness <path>", "Harness dir override (default: process-harness discovery from the verified main worktree)")
+  .option("--integration <path>", "Integration worktree path override (default: snapshot integration_worktree_path)")
+  .option("--main-branch <branch>", "Recorded main-worktree branch (plan header) — transports the recorded expectation, never a new one")
+  .option("--control <path>", "Deprecated alias of --integration (one-release grace; stderr migration notice)")
   .option("--l2", "Run the L2 within-plan check (parallel writable tracks) instead of L1")
   .option(
     "--tracks <json>",
@@ -1880,7 +1910,16 @@ worktreeCommand
   .action(
     (
       planId: string | undefined,
-      options: { workflow?: string; plan?: string; harness?: string; control?: string; l2?: boolean; tracks?: string },
+      options: {
+        workflow?: string;
+        plan?: string;
+        harness?: string;
+        integration?: string;
+        mainBranch?: string;
+        control?: string;
+        l2?: boolean;
+        tracks?: string;
+      },
     ) => {
       try {
         if (options.l2) {
@@ -1896,19 +1935,41 @@ worktreeCommand
         const plan = options.plan ?? planId;
         if (!plan) {
           throw new SddScriptError(
-            "usage: worktree check <plan-id> --workflow <id> [--harness <path>] [--control <path>] (or --plan <plan-id>)",
+            "usage: worktree check <plan-id> --workflow <id> [--harness <path>] [--integration <path>] [--main-branch <branch>] (or --plan <plan-id>)",
             2,
           );
         }
         if (!options.workflow) {
-          throw new SddScriptError("usage: worktree check <plan-id> --workflow <id> [--harness <path>] [--control <path>] (or --plan <plan-id>)", 2);
+          throw new SddScriptError(
+            "usage: worktree check <plan-id> --workflow <id> [--harness <path>] [--integration <path>] [--main-branch <branch>] (or --plan <plan-id>)",
+            2,
+          );
         }
+   // `--control` is the ONLY deprecated alias of `--integration` (one
+   // release, stderr notice); passing both is a usage error.
+        if (options.control !== undefined && options.integration !== undefined) {
+          throw new SddScriptError(
+            "usage: worktree check <plan-id> --workflow <id> — pass --integration or the deprecated --control alias, not both",
+            2,
+          );
+        }
+        if (options.control !== undefined) {
+          console.error(
+            pc.yellow(
+              "note: --control is deprecated — it aliases --integration (the snapshot field is integration_worktree_path); the alias will be removed in a future release",
+            ),
+          );
+        }
+        const integrationOverride = options.integration ?? options.control;
         const snapshotPath = resolveSnapshotPath(options.workflow, options.harness);
-        if (!fs.existsSync(snapshotPath)) {
-          throw new Error(`workflow snapshot not found: ${snapshotPath}`);
+        // Canonical reader: accepts the v1 control_worktree_path alias with
+        // its medium migration diagnostic (reported as a read-only advisory
+        // — the source file is never rewritten here).
+        const { snapshot, diagnostics } = readWorkflowSnapshot(path.dirname(snapshotPath));
+        for (const diagnostic of diagnostics) {
+          console.error(pc.yellow(`note: [${diagnostic.severity}] ${diagnostic.code}: ${diagnostic.message}`));
         }
-        const doc = readJson(snapshotPath);
-        const plans = Array.isArray(doc.plans) ? (doc.plans as Array<Record<string, unknown>>) : [];
+        const plans = Array.isArray(snapshot.plans) ? (snapshot.plans as Array<Record<string, unknown>>) : [];
         const matches = plans.filter((row) => row?.id === plan || row?.plan_id === plan);
         if (matches.length === 0) {
           console.error(pc.red(`${snapshotPath}: FAIL plan ${plan}`));
@@ -1924,13 +1985,40 @@ worktreeCommand
         }
         const row = matches[0]!;
         const lease = (row.execution_lease ?? {}) as Record<string, unknown>;
-        const input: L1PreDispatchInput = {
-          controlWorktreePath: options.control ? path.resolve(options.control) : String(doc.control_worktree_path ?? ""),
+   // Lifecycle-owned branches collected from the governing snapshot's plan
+   // rows + branch.integration — main must not sit on any of them.
+        const lifecycleBranches = new Set<string>();
+        for (const p of plans) {
+          const l = (p.execution_lease ?? {}) as Record<string, unknown>;
+          if (typeof l.working_branch === "string" && l.working_branch.trim() !== "") lifecycleBranches.add(l.working_branch);
+        }
+        const integrationBranch = String(snapshot.branch?.integration ?? "");
+        if (integrationBranch.trim() !== "") lifecycleBranches.add(integrationBranch);
+        const main = readMainWorktree();
+        const gate = l1PreDispatchCheck({
+          workflowType: snapshot.type,
+          integrationWorktreePath:
+            integrationOverride !== undefined
+              ? path.resolve(integrationOverride)
+              : String(snapshot.integration_worktree_path ?? ""),
+          integrationBranch,
+          mainWorktree: main,
+          expectedMainBranch: options.mainBranch ?? String(snapshot.branch?.base ?? ""),
+          lifecycleBranches: [...lifecycleBranches],
           leaseWorktreePath: String(lease.worktree_path ?? ""),
           leaseWorkingBranch: String(lease.working_branch ?? ""),
           planId: plan,
-        };
-        const gate = l1PreDispatchCheck(input);
+        });
+        if (main !== null) {
+          const recorded = options.mainBranch ?? String(snapshot.branch?.base ?? "");
+          console.log(
+            pc.green(
+              recorded.trim() === ""
+                ? `main worktree: ${main.root} on branch "${main.branch}" (no recorded expectation)`
+                : `main worktree: ${main.root} on branch "${main.branch}" (recorded: "${recorded}")`,
+            ),
+          );
+        }
         printChecklist("worktree L1 check", gate);
         if (!gate.ok) process.exitCode = 1;
       } catch (error) {
