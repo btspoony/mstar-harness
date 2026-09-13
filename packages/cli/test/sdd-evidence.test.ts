@@ -13,6 +13,13 @@
  * - literal argv (no shell), separate raw stdout/stderr bytes, tagged
  *   outcomes (exit 7, ENOENT 127, EACCES 1, timeout 124, SIGINT 130),
  *   bounded TERM→KILL escalation and descendant-pipe drain,
+ * - symlinked executables are fingerprinted by their resolved target bytes
+ *   (never "not found on PATH" provenance for a child that ran), the
+ *   timeout/SIGINT escalation records capture.drain-incomplete when it
+ *   force-closes stuck pipes, and settle-time markers survive the
+ *   captureErrors truncation window,
+ * - v1 ceiling constants are pinned equal on both sides of the engine↔CLI
+ *   mirror (engine schema validation accepts exactly the CLI's constants),
  * - 8 MiB per-stream storage cap, finalization-failure honesty,
  * - usage/gate refusals before any child, canonical SDD writes only,
  * - read-only verify: artifact damage codes, no-target integrity-only
@@ -140,7 +147,7 @@ interface EvidenceFixture {
   request: EvidenceCaptureRequest;
   requestFile: string;
   argvRecordPath: string;
-  children: { counter: string; exit7: string; ignoreTerm: string; interruptible: string; descendant: string; grandchild: string; bigOut: string; overflow: string; finalizeFail: string };
+  children: { counter: string; exit7: string; ignoreTerm: string; interruptible: string; descendant: string; grandchild: string; bigOut: string; overflow: string; finalizeFail: string; escaper: string; escaperGrand: string; overflowDrain: string };
 }
 
 const DECLARED_INPUTS: EvidenceCaptureRequest["inputs"] = [
@@ -229,6 +236,9 @@ function evidenceFixture(root: string): EvidenceFixture {
     bigOut: join(bin, "child-big-out.mjs"),
     overflow: join(bin, "child-overflow.mjs"),
     finalizeFail: join(bin, "child-finalize-fail.mjs"),
+    escaper: join(bin, "child-escaper.mjs"),
+    escaperGrand: join(bin, "child-escaper-grand.mjs"),
+    overflowDrain: join(bin, "child-overflow-drain.mjs"),
   };
   writeFileSync(
     children.counter,
@@ -299,6 +309,41 @@ function evidenceFixture(root: string): EvidenceFixture {
       "  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);\n" +
       "}\n" +
       "if (target) { rmSync(target); mkdirSync(target); }\n",
+  );
+  // Ignores TERM (survives past the timeout escalation) while a detached
+  // grandchild — outside the owned process group — keeps the output pipes
+  // open past the group SIGKILL, forcing the destroy-stuck-pipes step.
+  writeFileSync(
+    children.escaper,
+    `import { spawn } from 'node:child_process';\n` +
+      `spawn(process.execPath, [${JSON.stringify(children.escaperGrand)}], { stdio: ['ignore', 'inherit', 'inherit'], detached: true }).unref();\n` +
+      "process.on('SIGTERM', () => {});\n" +
+      "setInterval(() => {}, 1000);\n",
+  );
+  // Holds the inherited pipes and exits on the first failed write (EPIPE
+  // after the capture destroys its read end) or after a hard 30 s cap.
+  writeFileSync(
+    children.escaperGrand,
+    "import fs from 'node:fs';\n" +
+      "const started = Date.now();\n" +
+      "setInterval(() => {\n" +
+      "  try { fs.writeSync(1, 'tick\\n'); } catch { process.exit(0); }\n" +
+      "  if (Date.now() - started > 30000) process.exit(0);\n" +
+      "}, 50);\n",
+  );
+  // Chatty on both streams (capture.log-write-error flood under log-fd
+  // sabotage) while a detached grandchild keeps the pipes open after this
+  // child exits — the settle-time drain-incomplete marker is appended AFTER
+  // more than 255 arrival-order capture errors.
+  writeFileSync(
+    children.overflowDrain,
+    `import { spawn } from 'node:child_process';\n` +
+      `import fs from 'node:fs';\n` +
+      `spawn(process.execPath, [${JSON.stringify(children.escaperGrand)}], { stdio: ['ignore', 'inherit', 'inherit'], detached: true }).unref();\n` +
+      "for (let i = 0; i < 500; i += 1) {\n" +
+      "  try { fs.writeSync(1, `tick ${i}\\n`); fs.writeSync(2, `tick ${i}\\n`); } catch {}\n" +
+      "  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);\n" +
+      "}\n",
   );
 
   const f: EvidenceFixture = {
@@ -384,8 +429,10 @@ function listFilesRecursive(dir: string): string[] {
   return out;
 }
 
-function targetFileFor(root: string, cwd: string, expectedHead: string): string {
-  const p = join(root, `target-${expectedHead.slice(0, 6)}.json`);
+function targetFileFor(root: string, cwd: string, expectedHead: string, label = "primary"): string {
+  // The label keeps same-HEAD targets (e.g. the beat-8 alternate checkout)
+  // from shadowing an earlier beat's target file on disk.
+  const p = join(root, `target-${label}-${expectedHead.slice(0, 6)}.json`);
   writeFileSync(p, JSON.stringify({ cwd, expectedHead, rationale: "current integration checkout of the same feature" }));
   return p;
 }
@@ -626,6 +673,54 @@ describe("capture — outcomes", () => {
   }, 30000);
 
   test(
+    "a symlinked executable is fingerprinted by its resolved target — never 'not found' provenance while it runs",
+    async () => {
+      const root = tmpRoot("mstar-sdd-ev-symtool-");
+      try {
+        const f = evidenceFixture(root);
+        // The only PATH instance of the tool is a symlink (the default
+        // Homebrew/nvm/volta layout): resolution must fingerprint the bytes
+        // that actually execute, or the record would claim "not found on
+        // PATH" for a child that ran.
+        const realBin = join(root, "tool-real");
+        const linkBin = join(root, "tool-link");
+        mkdirSync(realBin);
+        mkdirSync(linkBin);
+        const toolBody = "#!/bin/sh\necho tool-ran-through-symlink\n";
+        writeFileSync(join(realBin, "tool-sym"), toolBody);
+        chmodSync(join(realBin, "tool-sym"), 0o755);
+        symlinkSync(join(realBin, "tool-sym"), join(linkBin, "tool-sym"));
+        const gitPath = execFileSync("which", ["git"]).toString().trim();
+        const pathEnv = `${linkBin}:${dirname(gitPath)}`;
+
+        // PATH lane: bare name resolved through a symlinked PATH entry.
+        const byPath = await captureDirect(f, ["tool-sym"], { env: { PATH: pathEnv } });
+        expect(byPath.exitCode).toBe(0);
+        expect(byPath.record.outcome).toEqual({ kind: "exit", code: 0 });
+        expect(byPath.record.logs.stdout.bytes).toBeGreaterThan(0);
+        expect(readFileSync(join(byPath.runDir, "stdout.log")).toString()).toContain("tool-ran-through-symlink");
+        expect(byPath.record.before.tool.error).toBeNull();
+        expect(byPath.record.before.tool.resolvedPath).toBe(join(linkBin, "tool-sym"));
+        expect(byPath.record.before.tool.sha256).toBe(sha256(toolBody));
+        expect(byPath.record.before.tool.bytes).toBe(Buffer.byteLength(toolBody));
+        expect(validateSddEvidenceRecord(byPath.record).ok).toBe(true);
+
+        // Explicit-path lane: a symlinked relative path resolves the same way.
+        symlinkSync(join(realBin, "tool-sym"), join(f.feature, "explicit-sym"));
+        const byPath2 = await captureDirect(f, ["./explicit-sym"], { env: { PATH: pathEnv } });
+        expect(byPath2.exitCode).toBe(0);
+        expect(byPath2.record.before.tool.error).toBeNull();
+        expect(byPath2.record.before.tool.resolvedPath).toBe(join(realpathSync(f.feature), "explicit-sym"));
+        expect(byPath2.record.before.tool.sha256).toBe(sha256(toolBody));
+        expect(validateSddEvidenceRecord(byPath2.record).ok).toBe(true);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+    30000,
+  );
+
+  test(
     "timeout with a TERM-ignoring child escalates to KILL and settles bounded (exit 124)",
     async () => {
       const root = tmpRoot("mstar-sdd-ev-timeout-");
@@ -688,6 +783,32 @@ describe("capture — outcomes", () => {
         expect(elapsed).toBeGreaterThan(1800); // the 2 s drain bound actually elapsed
         expect(result.record.outcome).toEqual({ kind: "exit", code: 0 });
         expect(result.exitCode).toBe(1);
+        expect(result.record.captureErrors.join("\n")).toContain("capture.drain-incomplete");
+        expect(validateSddEvidenceRecord(result.record).ok).toBe(true);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+    30000,
+  );
+
+  test(
+    "timeout escalation force-closing stuck pipes records capture.drain-incomplete (bounded settle, exit 124)",
+    async () => {
+      const root = tmpRoot("mstar-sdd-ev-escdrain-");
+      try {
+        const f = evidenceFixture(root);
+        const started = Date.now();
+        const result = await captureDirect(f, [process.execPath, f.children.escaper], { timeoutMs: 700 });
+        const elapsed = Date.now() - started;
+        expect(result.exitCode).toBe(124);
+        expect(result.record.outcome).toEqual({ kind: "timeout" });
+        // Bounded completion of the escalation ladder (TERM → KILL → drain
+        // window → settle), not a millisecond equality.
+        expect(elapsed).toBeLessThan(15000);
+        expect(elapsed).toBeGreaterThan(2700 - 1500);
+        // Stuck pipes were force-closed on the timeout escalation lane: the
+        // contracted disclosure must accompany the destroy.
         expect(result.record.captureErrors.join("\n")).toContain("capture.drain-incomplete");
         expect(validateSddEvidenceRecord(result.record).ok).toBe(true);
       } finally {
@@ -789,6 +910,77 @@ describe("capture — outcomes", () => {
   );
 
   test(
+    "settle-time markers survive captureErrors truncation (drain-incomplete pinned outside the window)",
+    async () => {
+      const root = tmpRoot("mstar-sdd-ev-markerpin-");
+      try {
+        const f = evidenceFixture(root);
+        // Same log-fd sabotage as the overflow test, but the child leaves a
+        // detached grandchild holding the pipes: after >255 arrival-order
+        // log-write errors, settle pushes capture.drain-incomplete LAST —
+        // exactly the event the truncation window would previously drop.
+        const knownRuns = new Set(existsSync(f.evidenceDir) ? readdirSync(f.evidenceDir) : []);
+        let closed = 0;
+        const saboteur = setInterval(() => {
+          if (closed >= 2) return;
+          try {
+            if (!existsSync(f.evidenceDir)) return;
+            for (const run of readdirSync(f.evidenceDir)) {
+              if (knownRuns.has(run)) continue;
+              for (const slot of ["stdout.log", "stderr.log"]) {
+                let target: { ino: number; dev: number };
+                try {
+                  const st = lstatSync(join(f.evidenceDir, run, slot));
+                  if (!st.isFile()) continue;
+                  target = { ino: st.ino, dev: st.dev };
+                } catch {
+                  continue;
+                }
+                for (let fd = 3; fd < 1024; fd += 1) {
+                  try {
+                    const st = fstatSync(fd);
+                    if (st.isFile() && st.ino === target.ino && st.dev === target.dev) {
+                      closeSync(fd);
+                      closed += 1;
+                    }
+                  } catch {
+                    // fd not open in this process
+                  }
+                }
+              }
+            }
+          } catch {
+            // the attempt dir may not exist yet; retry on the next tick
+          }
+        }, 5);
+        let result: Awaited<ReturnType<typeof captureDirect>>;
+        try {
+          result = await captureDirect(f, [process.execPath, f.children.overflowDrain]);
+        } finally {
+          clearInterval(saboteur);
+        }
+        expect(closed).toBeGreaterThan(0);
+        const captureErrors = result.record.captureErrors;
+        expect(captureErrors).toHaveLength(256);
+        // The retained prefix is arrival-order log-write errors only...
+        expect(captureErrors[0]).toContain("capture.log-write-error");
+        expect(captureErrors[253]).toContain("capture.log-write-error");
+        // ...and the settle-time disclosure is pinned after it, before the
+        // overflow marker — never truncated away.
+        expect(captureErrors[254]).toContain("capture.drain-incomplete");
+        expect(captureErrors[255]).toContain("capture.errors-truncated:");
+        expect(captureErrors[255]).toContain("additional capture errors were dropped");
+        expect(result.record.outcome).toEqual({ kind: "exit", code: 0 });
+        expect(result.exitCode).toBe(1); // child passed but capture incomplete
+        expect(validateSddEvidenceRecord(result.record).ok).toBe(true);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+    30000,
+  );
+
+  test(
     "finalization write failure throws with the run dir, preserving running artifacts (no catch-and-success)",
     async () => {
       const root = tmpRoot("mstar-sdd-ev-final-");
@@ -879,9 +1071,39 @@ describe("capture — usage and gate refusals launch no child", () => {
       writeFileSync(unknownKey, JSON.stringify({ ...f.request, unrequested: true }));
       expect(captureArgs(unknownKey, f.feature).exitCode).toBe(2);
 
+      // Relative id components are refused at usage time; the engine record
+      // schema rejects them too, so accepting them here would finalize an
+      // invalid record only after the child already ran.
+      const dotTask = join(root, "dot-task.json");
+      writeFileSync(dotTask, JSON.stringify({ ...f.request, taskId: "." }));
+      expect(captureArgs(dotTask, f.feature).exitCode).toBe(2);
+      const dotdotTask = join(root, "dotdot-task.json");
+      writeFileSync(dotdotTask, JSON.stringify({ ...f.request, taskId: ".." }));
+      expect(captureArgs(dotdotTask, f.feature).exitCode).toBe(2);
+      const dotAc = join(root, "dot-ac.json");
+      writeFileSync(dotAc, JSON.stringify({ ...f.request, coverage: { ...f.request.coverage, acIds: ["."] } }));
+      expect(captureArgs(dotAc, f.feature).exitCode).toBe(2);
+
       // No durable attempt was created by any usage refusal.
       expect(existsSync(f.evidenceDir)).toBe(false);
       expect(existsSync(f.counterPath)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  test("id predicates agree with the engine schema in both directions (spaced ids are never refused)", async () => {
+    const root = tmpRoot("mstar-sdd-ev-idagree-");
+    try {
+      const f = evidenceFixture(root);
+      // The engine record predicate accepts any trimmed id without path
+      // separators or relative components; the CLI usage gate must accept
+      // exactly the same set, so this capture self-validates at finalize.
+      const spaced = buildRequest(f, { taskId: "review 2" });
+      const result = await captureDirect(f, counterArgv(f), { request: spaced, env: { NODE_ENV: undefined } });
+      expect(result.exitCode).toBe(0);
+      expect(result.record.request.taskId).toBe("review 2");
+      expect(validateSddEvidenceRecord(result.record).ok).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1433,7 +1655,9 @@ describe("integrated handoff — capture once, verify, reuse, damage, retry, rem
         git(["worktree", "add", "-q", "-b", `feature/${PLAN_ID}-target`, alt, f.head], f.primary);
         const altHead = git(["rev-parse", "HEAD"], alt);
         expect(altHead).toBe(f.head);
-        const altTarget = targetFileFor(root, alt, altHead);
+        // Distinct filename: same HEAD as the earlier same-checkout targets,
+        // so a labeled slot keeps this write from shadowing their files.
+        const altTarget = targetFileFor(root, alt, altHead, "alt-checkout");
         const altCandidate = verifyCli(f, first.record.runId, { target: altTarget, env });
         expect(altCandidate.exitCode).toBe(0);
         const altAssessment = JSON.parse(altCandidate.stdout) as {
@@ -1620,4 +1844,130 @@ describe("collectEvidenceInputs — bounded collection", () => {
       rmSync(root, { recursive: true, force: true });
     }
   }, 30000);
+});
+
+// ---------------------------------------------------------------------------
+// v1 ceiling constants — engine↔CLI mirror tie.
+// ---------------------------------------------------------------------------
+
+describe("v1 ceilings — engine schema validation ties the CLI constants", () => {
+  test(
+    "engine validation accepts records exactly at the CLI's v1 constants and rejects one step beyond",
+    async () => {
+      const root = tmpRoot("mstar-sdd-ev-tie-");
+      try {
+        const f = evidenceFixture(root);
+        const result = await captureDirect(f, counterArgv(f), { env: { NODE_ENV: undefined } });
+        expect(result.exitCode).toBe(0);
+        const template = result.record;
+        const messagesFor = (mutate: (record: SddEvidenceRecord) => void): string[] => {
+          const candidate = JSON.parse(JSON.stringify(template)) as SddEvidenceRecord;
+          mutate(candidate);
+          return validateSddEvidenceRecord(candidate).violations.map((violation) => violation.message);
+        };
+        const okAt = (mutate: (record: SddEvidenceRecord) => void): void => expect(messagesFor(mutate)).toEqual([]);
+        const failsWith = (mutate: (record: SddEvidenceRecord) => void, needle: string): void => {
+          const messages = messagesFor(mutate);
+          expect(messages.length).toBeGreaterThan(0);
+          expect(messages.join("\n")).toContain(needle);
+        };
+
+        // Collection limits: the CLI's emitted limits are the engine's fixed
+        // values (strict equality), and the engine's ceiling number in the
+        // violation message is exactly the CLI-emitted constant.
+        for (const key of ["maxLogBytesPerStream", "maxInputBytes", "maxInputEntries", "maxInputMs", "maxSnapshotBytes"] as const) {
+          const value = template.limits[key];
+          failsWith((record) => {
+            (record.limits as unknown as Record<string, number>)[key] = value + 1;
+          }, `must be the fixed value ${value}`);
+        }
+
+        // Per-stream log byte ceiling.
+        okAt((record) => {
+          record.logs.stdout.bytes = 8388608;
+        });
+        failsWith((record) => {
+          record.logs.stdout.bytes = 8388609;
+        }, "at most 8388608");
+
+        // Timeout bounds (effective timeout must agree with limits.timeoutMs).
+        okAt((record) => {
+          record.request.timeoutMs = 1;
+          record.limits.timeoutMs = 1;
+        });
+        okAt((record) => {
+          record.request.timeoutMs = 3600000;
+          record.limits.timeoutMs = 3600000;
+        });
+        failsWith((record) => {
+          record.request.timeoutMs = 0;
+          record.limits.timeoutMs = 0;
+        }, "between 1 and 3600000");
+        failsWith((record) => {
+          record.request.timeoutMs = 3600001;
+          record.limits.timeoutMs = 3600001;
+        }, "between 1 and 3600000");
+
+        // argv bounds.
+        okAt((record) => {
+          record.command.argv = ["x", ...Array.from({ length: 255 }, () => "a")];
+        });
+        failsWith((record) => {
+          record.command.argv = ["x", ...Array.from({ length: 256 }, () => "a")];
+        }, "at most 256 arguments");
+        okAt((record) => {
+          record.command.argv = ["a".repeat(65536)];
+        });
+        failsWith((record) => {
+          record.command.argv = ["a".repeat(65537)];
+        }, "at most 65536 code units");
+        okAt((record) => {
+          record.command.argv = ["x", "b".repeat(65536), "b".repeat(65536), "b".repeat(65536), "b".repeat(65535)];
+        });
+        failsWith((record) => {
+          record.command.argv = ["x", "b".repeat(65536), "b".repeat(65536), "b".repeat(65536), "b".repeat(65536)];
+        }, "over the 262144-byte limit");
+
+        // Coverage, inputs and diagnostics bounds.
+        okAt((record) => {
+          record.request.coverage.acIds = Array.from({ length: 128 }, (_, i) => `AC-${i}`);
+        });
+        failsWith((record) => {
+          record.request.coverage.acIds = Array.from({ length: 129 }, (_, i) => `AC-${i}`);
+        }, "at most 128 ids");
+        okAt((record) => {
+          record.request.inputs = Array.from({ length: 1024 }, (_, i) => ({ path: `d${i}/f.js`, kind: "file" as const, purpose: "fixture" as const }));
+        });
+        failsWith((record) => {
+          record.request.inputs = Array.from({ length: 1025 }, (_, i) => ({ path: `d${i}/f.js`, kind: "file" as const, purpose: "fixture" as const }));
+        }, "at most 1024 roots");
+        okAt((record) => {
+          record.captureErrors = Array.from({ length: 256 }, (_, i) => `capture e${i}`);
+        });
+        failsWith((record) => {
+          record.captureErrors = Array.from({ length: 257 }, (_, i) => `capture e${i}`);
+        }, "at most 256 messages");
+        okAt((record) => {
+          record.captureErrors = ["x".repeat(512)];
+        });
+        failsWith((record) => {
+          record.captureErrors = ["x".repeat(513)];
+        }, "at most 512 characters");
+
+        // CLI-side mirrors of the argv bounds (usage refusals launch no
+        // child); the capture-path mirrors are additionally guarded by the
+        // finalize-time selfGate.
+        const captureArgs = (argv: string[]) => runCli(["sdd", "evidence", "capture", "--request", f.requestFile, "--", ...argv], { cwd: f.feature });
+        const runsBeforeRefusals = readdirSync(f.evidenceDir).sort();
+        expect(captureArgs(["x", ...Array.from({ length: 256 }, () => "a")]).exitCode).toBe(2);
+        expect(captureArgs(["a".repeat(65537)]).exitCode).toBe(2);
+        expect(captureArgs(["x", "b".repeat(65536), "b".repeat(65536), "b".repeat(65536), "b".repeat(65536)]).exitCode).toBe(2);
+        // The refusals launch no child and create no durable attempt.
+        expect(readdirSync(f.evidenceDir).sort()).toEqual(runsBeforeRefusals);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+    60000,
+  );
 });

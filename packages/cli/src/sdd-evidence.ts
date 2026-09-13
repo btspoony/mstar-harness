@@ -22,7 +22,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, relative, resolve as resolvePath } from "node:path";
 import { performance } from "node:perf_hooks";
 import pc from "picocolors";
 import type { Command } from "commander";
@@ -124,13 +124,24 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/**
+ * Id-shaped fields (taskId, coverage.acIds, verify --task): nonempty, not
+ * padding-only, no path separators or relative components. Deliberately the
+ * engine record predicate (engine evidence isIdLike) so CLI usage refusals
+ * and post-capture schema validation agree in both directions: an id the
+ * engine accepts is never refused here, and an id refused here can never
+ * finalize a record the engine schema would reject.
+ */
 function isIdLike(value: unknown): value is string {
   return (
     typeof value === "string" &&
     value.length > 0 &&
     value.length <= MAX_STRING &&
     value.trim() === value &&
-    SAFE_COMPONENT_RE.test(value)
+    value !== "." &&
+    value !== ".." &&
+    !value.includes("/") &&
+    !value.includes("\\")
   );
 }
 
@@ -180,16 +191,29 @@ function capDiagnostics(messages: string[]): string[] {
 }
 
 /**
+ * Contract-named settle-time capture errors (pushed last by the capture
+ * runner's settle step). They are pinned outside the truncation window so
+ * the terminal state machine's disclosures always survive capping.
+ */
+const SETTLE_TIME_CAPTURE_MARKERS: readonly string[] = ["capture.drain-incomplete", "capture.sink-error"];
+
+/**
  * Cap captureErrors at the record schema bound: keep the first 255 events
  * in arrival order plus one explicit overflow marker, so an overflowing
  * capture still finalizes a valid record instead of failing record
- * self-validation after the child already ran.
+ * self-validation after the child already ran. Settle-time markers are
+ * re-appended after the retained prefix (before the overflow marker), so
+ * `capture.drain-incomplete` / `capture.sink-error` are never truncated
+ * away in an overflowing capture.
  */
 function capCaptureErrors(messages: string[]): string[] {
   if (messages.length <= MAX_UNKNOWN_MESSAGES) return messages;
+  const pinned = messages.filter((message) => SETTLE_TIME_CAPTURE_MARKERS.some((marker) => message.startsWith(marker)));
+  const kept = messages.filter((message) => !pinned.includes(message)).slice(0, MAX_UNKNOWN_MESSAGES - pinned.length);
   return [
-    ...messages.slice(0, MAX_UNKNOWN_MESSAGES),
-    `capture.errors-truncated: ${messages.length - MAX_UNKNOWN_MESSAGES} additional capture errors were dropped`,
+    ...kept,
+    ...pinned,
+    `capture.errors-truncated: ${messages.length - kept.length - pinned.length} additional capture errors were dropped`,
   ];
 }
 
@@ -697,9 +721,12 @@ async function collectRoot(
 /**
  * Resolve the requested tool on this pass without executing probes: an
  * explicit path resolves against the cwd; a bare name scans the inherited
- * PATH (empty entries resolve to the cwd) within 256 entries / 65536
- * UTF-8 bytes. The hash consumes the same shared byte budget, before the
- * declared inputs.
+ * PATH (platform delimiter; empty entries resolve to the cwd) within 256
+ * entries / 65536 UTF-8 bytes. Candidates may be reached through a symlink
+ * (the default Homebrew/nvm/volta layout): acceptance follows file
+ * symlinks, and the hash consumes the symlink target's bytes within the
+ * same shared byte budget, before the declared inputs — so the fingerprint
+ * always describes the bytes a launch from `resolvedPath` executes.
  */
 async function resolveTool(cwdReal: string, requested: string, ctx: PassContext): Promise<EvidenceToolFingerprint> {
   const base = {
@@ -714,7 +741,10 @@ async function resolveTool(cwdReal: string, requested: string, ctx: PassContext)
     const absPath = resolvePath(cwdReal, requested);
     let stat: fs.Stats | null = null;
     try {
-      stat = await fsp.lstat(absPath);
+      // stat follows file symlinks: a symlinked tool resolves to its
+      // regular-file target instead of being rejected as "not a regular
+      // file" (matching the input collector's symlinkEntry semantics).
+      stat = await fsp.stat(absPath);
     } catch (error) {
       resolutionError = `tool resolve failed: ${errnoLabel(error)}`;
     }
@@ -724,7 +754,7 @@ async function resolveTool(cwdReal: string, requested: string, ctx: PassContext)
     }
   } else {
     const pathValue = process.env.PATH ?? "";
-    const segments = pathValue.split(":");
+    const segments = pathValue.split(delimiter);
     let pathBytes = 0;
     let scanned = 0;
     let overflow = false;
@@ -739,7 +769,9 @@ async function resolveTool(cwdReal: string, requested: string, ctx: PassContext)
       const candidatePath = join(dir, requested);
       let stat: fs.Stats | null = null;
       try {
-        stat = await fsp.lstat(candidatePath);
+        // stat follows the final symlink component, so a symlinked
+        // executable on PATH is accepted and hashed below via its target.
+        stat = await fsp.stat(candidatePath);
       } catch {
         continue;
       }
@@ -760,13 +792,18 @@ async function resolveTool(cwdReal: string, requested: string, ctx: PassContext)
     }
     return { ...base, resolvedPath: null, sha256: null, bytes: null, error: bound(resolutionError ?? "tool resolve failed") };
   }
+  // Hash the resolved target bytes (readAndHash is no-follow, so a
+  // symlinked candidate is hashed through its realpath), with the same
+  // metadata identity check as any other hashed file.
+  let hashPath: string;
   let stat: fs.Stats;
   try {
-    stat = await fsp.lstat(candidate);
+    hashPath = await fsp.realpath(candidate);
+    stat = await fsp.lstat(hashPath);
   } catch (error) {
     return { ...base, resolvedPath: candidate, sha256: null, bytes: null, error: bound(`tool hash failed: ${errnoLabel(error)}`) };
   }
-  const hashed = await readAndHash(candidate, stat.size, ctx);
+  const hashed = await readAndHash(hashPath, stat.size, ctx);
   if ("failure" in hashed) {
     if (hashed.failure.startsWith("input.concurrent-change")) ctx.unknowns.push(bound(hashed.failure));
     return { ...base, resolvedPath: candidate, sha256: null, bytes: null, error: bound(hashed.failure) };
@@ -1198,7 +1235,16 @@ function runChild(
     const escalate = (signal: NodeJS.Signals): void => {
       killGroup(signal);
       timers.push(setTimeout(() => killGroup("SIGKILL"), TERM_GRACE_MS));
-      timers.push(setTimeout(() => destroyStreams(), TERM_GRACE_MS + DRAIN_MS));
+      timers.push(
+        setTimeout(() => {
+          if (settled) return;
+          // Closing stuck pipes on the timeout/parent-signal escalation lane
+          // discloses the incomplete drain (locked capture step 5), same as
+          // the descendant-held-pipe drain timer below.
+          if (!stats.stdout.closed || !stats.stderr.closed) drainIncomplete = true;
+          destroyStreams();
+        }, TERM_GRACE_MS + DRAIN_MS),
+      );
       timers.push(setTimeout(() => settleNow(), TERM_GRACE_MS + DRAIN_MS + TERM_GRACE_MS));
     };
     const onSignal = (signal: NodeJS.Signals): void => {
