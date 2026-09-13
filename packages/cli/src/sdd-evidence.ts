@@ -22,7 +22,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
-import { basename, isAbsolute, join, relative, resolve as resolvePath } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath } from "node:path";
 import { performance } from "node:perf_hooks";
 import pc from "picocolors";
 import type { Command } from "commander";
@@ -97,6 +97,7 @@ const DRAIN_MS = 2000;
 const ARTIFACT_READ_DEADLINE_MS = 10000;
 const ENVIRONMENT_KEYS: readonly EvidenceEnvironmentKey[] = ["CI", "NODE_ENV", "TZ", "LANG"];
 const INPUT_PURPOSES: readonly EvidenceInputSpec["purpose"][] = ["source", "test", "fixture", "config", "dependency"];
+const REQUEST_KEYS: readonly string[] = ["context", "taskId", "coverage", "inputs", "environmentKeys", "timeoutMs"];
 
 const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const GIT_OID_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
@@ -176,6 +177,20 @@ function capDiagnostics(messages: string[]): string[] {
   const unique = [...new Set(messages.filter((m) => typeof m === "string" && m.length > 0).map((m) => bound(m)))].sort();
   if (unique.length <= MAX_UNKNOWN_MESSAGES) return unique;
   return [...unique.slice(0, MAX_UNKNOWN_MESSAGES), "diagnostics-truncated: additional diagnostics were dropped"];
+}
+
+/**
+ * Cap captureErrors at the record schema bound: keep the first 255 events
+ * in arrival order plus one explicit overflow marker, so an overflowing
+ * capture still finalizes a valid record instead of failing record
+ * self-validation after the child already ran.
+ */
+function capCaptureErrors(messages: string[]): string[] {
+  if (messages.length <= MAX_UNKNOWN_MESSAGES) return messages;
+  return [
+    ...messages.slice(0, MAX_UNKNOWN_MESSAGES),
+    `capture.errors-truncated: ${messages.length - MAX_UNKNOWN_MESSAGES} additional capture errors were dropped`,
+  ];
 }
 
 // ---------------------------------------------------------------------------
@@ -269,6 +284,13 @@ function validateInputSpecsUsage(inputs: unknown): EvidenceInputSpec[] {
  */
 function validateRequestUsage(request: unknown): EvidenceCaptureRequest {
   if (!isPlainObject(request)) throw usageError("evidence capture request must be a JSON object");
+  // Reject unknown request keys BEFORE any child runs: the engine would only
+  // reject them at record finalization, after the child already executed.
+  for (const key of Object.keys(request)) {
+    if (!(REQUEST_KEYS as readonly string[]).includes(key)) {
+      throw usageError(`evidence capture request has unknown key "${key}"; expected keys: ${REQUEST_KEYS.join(", ")}`);
+    }
+  }
   const context = request.context;
   if (!isPlainObject(context)) throw usageError("evidence capture request.context must be a JSON object");
   if (typeof context.planId !== "string" || context.planId.length === 0 || !SAFE_COMPONENT_RE.test(context.planId)) {
@@ -559,7 +581,7 @@ async function symlinkEntry(
     if (hashed.failure.startsWith("input.concurrent-change")) ctx.unknowns.push(bound(hashed.failure));
     return symlinkErrorEntry(relPath, linkText, hashed.failure);
   }
-  const resolvedRelative = relative(cwdReal, real).split("/").join("/");
+  const resolvedRelative = relative(cwdReal, real);
   return {
     path: relPath,
     kind: "symlink",
@@ -1307,7 +1329,29 @@ function runChild(
   });
 }
 
-function writeRecordAtomic(recordPath: string, record: SddEvidenceRecord): void {
+/**
+ * Final write of the record file. Immediately before the atomic replace the
+ * file-boundary contract's recheck runs: the record path must still sit
+ * inside the canonical SDD dir, both ancestors below it must still be real
+ * directories (never a symlink or file swap that would redirect the write),
+ * and the leaf itself must be a regular file or absent.
+ */
+function writeRecordAtomic(sddDir: string, runDir: string, recordPath: string, record: SddEvidenceRecord): void {
+  const withinSdd = relative(sddDir, recordPath);
+  if (withinSdd === "" || withinSdd.startsWith("..") || isAbsolute(withinSdd)) {
+    throw new Error(`evidence record path is outside the canonical SDD dir: ${recordPath}`);
+  }
+  for (const ancestor of [dirname(runDir), runDir]) {
+    let ancestorStat: fs.Stats;
+    try {
+      ancestorStat = fs.lstatSync(ancestor);
+    } catch (error) {
+      throw new Error(`evidence ancestor dir missing before finalize: ${ancestor} (${(error as Error).message})`);
+    }
+    if (!ancestorStat.isDirectory()) {
+      throw new Error(`evidence ancestor is not a real directory: ${ancestor}`);
+    }
+  }
   try {
     const lstat = fs.lstatSync(recordPath);
     if (!lstat.isFile()) {
@@ -1419,7 +1463,7 @@ export async function captureSddEvidence(
       captureErrors: [],
       counts: null,
     };
-    writeRecordAtomic(recordPath, record);
+    writeRecordAtomic(resolved.sddDir, runDir, recordPath, record);
 
     // Phases 3-5: spawn, stream, bounded timeout/signal handling.
     const run = await runChild(resolved.featureCwd, argv, before.tool, before.unknowns, limits.timeoutMs, { stdout: stdoutFd, stderr: stderrFd });
@@ -1443,7 +1487,7 @@ export async function captureSddEvidence(
       } catch {}
     }
     record.outcome = run.outcome;
-    record.captureErrors = run.captureErrors;
+    record.captureErrors = capCaptureErrors(run.captureErrors);
     record.after = after;
     record.logs.stdout = { path: "stdout.log", bytes: run.logs.stdout.bytes, sha256: run.logs.stdout.sha256, truncated: run.logs.stdout.truncated };
     record.logs.stderr = { path: "stderr.log", bytes: run.logs.stderr.bytes, sha256: run.logs.stderr.sha256, truncated: run.logs.stderr.truncated };
@@ -1457,7 +1501,7 @@ export async function captureSddEvidence(
       );
     }
     try {
-      writeRecordAtomic(recordPath, record);
+      writeRecordAtomic(resolved.sddDir, runDir, recordPath, record);
     } catch (error) {
       throw new Error(`evidence finalization write failed for ${runDir}: ${(error as Error).message}`);
     }
@@ -1535,6 +1579,15 @@ function ioFailureAssessment(message: string): EvidenceAssessment {
   };
 }
 
+/** Canonical (realpath) form when the path exists; lexical resolution otherwise. */
+function canonicalExisting(pathValue: string): string {
+  try {
+    return fs.realpathSync(pathValue);
+  } catch {
+    return resolvePath(pathValue);
+  }
+}
+
 type VerifyInvocation = {
   sddDir: string;
   planId: string;
@@ -1549,9 +1602,25 @@ type VerifyInvocation = {
  * historical lease/source-checkout validation. Record reads are capped at
  * 8 MiB; a truncated/oversized record yields a structured non-success
  * assessment, never a JSON success.
+ *
+ * Canonical-path containment (locked verify path): the invoked sdd dir must
+ * canonicalize to the plan's own location — basename equal to the expected
+ * plan, parent named "sdd", under the canonical control root recorded in
+ * `record.request.context`. A mismatch is refused with the usage error class
+ * (exit 2) BEFORE any record path is dereferenced, so a relocated or copied
+ * bundle directory is never assessed.
  */
 async function runEvidenceVerify(invocation: VerifyInvocation): Promise<EvidenceAssessment> {
-  const runDir = join(invocation.sddDir, "evidence", invocation.runId);
+  const canonicalSddDir = canonicalExisting(invocation.sddDir);
+  if (basename(canonicalSddDir) !== invocation.planId) {
+    throw usageError(
+      `${VERIFY_USAGE}\n  --sdd-dir must be the canonical plan SDD dir whose basename is the plan id "${invocation.planId}"; got ${invocation.sddDir}`,
+    );
+  }
+  if (basename(dirname(canonicalSddDir)) !== "sdd") {
+    throw usageError(`${VERIFY_USAGE}\n  --sdd-dir must sit under an "sdd" dir of the canonical control harness; got ${invocation.sddDir}`);
+  }
+  const runDir = join(canonicalSddDir, "evidence", invocation.runId);
   const recordPath = join(runDir, "record.json");
 
   let record: unknown;
@@ -1567,6 +1636,24 @@ async function runEvidenceVerify(invocation: VerifyInvocation): Promise<Evidence
       return ioFailureAssessment(`evidence record not found: ${recordPath}`);
     }
     return ioFailureAssessment(`evidence record unreadable: ${(error as Error).message}`);
+  }
+
+  // Control-root half of the containment gate: the canonical parent chain of
+  // the invoked sdd dir must land on the canonical control root recorded at
+  // capture time. A record too broken to carry a context stays on the
+  // structured integrity lanes (it can never verify successfully anyway).
+  if (isPlainObject(record)) {
+    const request = (record as { request?: unknown }).request;
+    const context = isPlainObject(request) ? (request as { context?: unknown }).context : null;
+    const controlRoot =
+      isPlainObject(context) && typeof (context as { controlHarnessRoot?: unknown }).controlHarnessRoot === "string"
+        ? (context as { controlHarnessRoot: string }).controlHarnessRoot
+        : null;
+    if (controlRoot !== null && dirname(dirname(canonicalSddDir)) !== controlRoot) {
+      throw usageError(
+        `${VERIFY_USAGE}\n  --sdd-dir ${canonicalSddDir} is not under the canonical control root recorded in the record context (${controlRoot}); a relocated or copied evidence bundle is refused`,
+      );
+    }
   }
 
   const facts = await collectEvidenceArtifacts(runDir);

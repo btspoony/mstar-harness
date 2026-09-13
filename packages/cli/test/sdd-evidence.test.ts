@@ -29,7 +29,10 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
+  closeSync,
+  cpSync,
   existsSync,
+  fstatSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -131,7 +134,7 @@ interface EvidenceFixture {
   request: EvidenceCaptureRequest;
   requestFile: string;
   argvRecordPath: string;
-  children: { counter: string; exit7: string; ignoreTerm: string; interruptible: string; descendant: string; grandchild: string; bigOut: string; finalizeFail: string };
+  children: { counter: string; exit7: string; ignoreTerm: string; interruptible: string; descendant: string; grandchild: string; bigOut: string; overflow: string; finalizeFail: string };
 }
 
 const DECLARED_INPUTS: EvidenceCaptureRequest["inputs"] = [
@@ -218,6 +221,7 @@ function evidenceFixture(root: string): EvidenceFixture {
     descendant: join(bin, "child-descendant.mjs"),
     grandchild: join(bin, "grandchild.mjs"),
     bigOut: join(bin, "child-big-out.mjs"),
+    overflow: join(bin, "child-overflow.mjs"),
     finalizeFail: join(bin, "child-finalize-fail.mjs"),
   };
   writeFileSync(
@@ -261,6 +265,16 @@ function evidenceFixture(root: string): EvidenceFixture {
       "const chunk = Buffer.alloc(1 << 20, 0x78);\n" +
       "for (let i = 0; i < 9; i += 1) fs.writeSync(1, chunk);\n" +
       "fs.writeSync(2, 'ERR-LINE\\n');\n",
+  );
+  // Chatty on both streams so a sabotaged log fd yields far more than the
+  // 256-message captureErrors bound before the child exits.
+  writeFileSync(
+    children.overflow,
+    "import fs from 'node:fs';\n" +
+      "for (let i = 0; i < 500; i += 1) {\n" +
+      "  try { fs.writeSync(1, `tick ${i}\\n`); fs.writeSync(2, `tick ${i}\\n`); } catch {}\n" +
+      "  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);\n" +
+      "}\n",
   );
   writeFileSync(
     children.finalizeFail,
@@ -701,6 +715,74 @@ describe("capture — outcomes", () => {
   );
 
   test(
+    "captureErrors beyond the record bound finalize capped with an explicit overflow marker (never a finalization failure)",
+    async () => {
+      const root = tmpRoot("mstar-sdd-ev-caperr-");
+      try {
+        const f = evidenceFixture(root);
+        // Sabotage the capture log fds (in-process lane) as soon as the run
+        // dir appears: closing them turns every subsequent stream chunk into
+        // a capture.log-write-error, overflowing the 256-message bound.
+        const knownRuns = new Set(existsSync(f.evidenceDir) ? readdirSync(f.evidenceDir) : []);
+        let closed = 0;
+        const saboteur = setInterval(() => {
+          // Exactly one open fd per log slot; nothing left to do after both.
+          if (closed >= 2) return;
+          try {
+            if (!existsSync(f.evidenceDir)) return;
+            for (const run of readdirSync(f.evidenceDir)) {
+              if (knownRuns.has(run)) continue;
+              for (const slot of ["stdout.log", "stderr.log"]) {
+                let target: { ino: number; dev: number };
+                try {
+                  const st = lstatSync(join(f.evidenceDir, run, slot));
+                  if (!st.isFile()) continue;
+                  target = { ino: st.ino, dev: st.dev };
+                } catch {
+                  continue;
+                }
+                for (let fd = 3; fd < 1024; fd += 1) {
+                  try {
+                    const st = fstatSync(fd);
+                    if (st.isFile() && st.ino === target.ino && st.dev === target.dev) {
+                      closeSync(fd);
+                      closed += 1;
+                    }
+                  } catch {
+                    // fd not open in this process
+                  }
+                }
+              }
+            }
+          } catch {
+            // the attempt dir may not exist yet; retry on the next tick
+          }
+        }, 5);
+        let result: Awaited<ReturnType<typeof captureDirect>>;
+        try {
+          result = await captureDirect(f, [process.execPath, f.children.overflow]);
+        } finally {
+          clearInterval(saboteur);
+        }
+        expect(closed).toBeGreaterThan(0);
+        // The capture still finalizes a schema-valid record instead of
+        // failing record self-validation after the child already ran.
+        expect(result.record.state).toBe("finished");
+        expect(result.record.outcome).toEqual({ kind: "exit", code: 0 });
+        expect(result.record.captureErrors).toHaveLength(256);
+        expect(result.record.captureErrors[254]).toContain("capture.log-write-error");
+        expect(result.record.captureErrors[255]).toContain("capture.errors-truncated:");
+        expect(result.record.captureErrors[255]).toContain("additional capture errors were dropped");
+        expect(validateSddEvidenceRecord(result.record).ok).toBe(true);
+        expect(result.exitCode).toBe(1); // child passed but capture incomplete
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+    30000,
+  );
+
+  test(
     "finalization write failure throws with the run dir, preserving running artifacts (no catch-and-success)",
     async () => {
       const root = tmpRoot("mstar-sdd-ev-final-");
@@ -784,6 +866,12 @@ describe("capture — usage and gate refusals launch no child", () => {
       const zeroTimeout = join(root, "zero-timeout.json");
       writeFileSync(zeroTimeout, JSON.stringify({ ...f.request, timeoutMs: 0 }));
       expect(captureArgs(zeroTimeout, f.feature).exitCode).toBe(2);
+
+      // Unknown request keys are a usage error BEFORE the child runs (not a
+      // late finalization failure after execution).
+      const unknownKey = join(root, "unknown-key.json");
+      writeFileSync(unknownKey, JSON.stringify({ ...f.request, unrequested: true }));
+      expect(captureArgs(unknownKey, f.feature).exitCode).toBe(2);
 
       // No durable attempt was created by any usage refusal.
       expect(existsSync(f.evidenceDir)).toBe(false);
@@ -904,7 +992,6 @@ describe("verify — artifact integrity is read-only and code-exact", () => {
     try {
       const f = evidenceFixture(root);
       const result = await captureDirect(f, counterArgv(f));
-      const recordPath = join(result.runDir, "record.json");
 
       // Alter stdout.log after capture.
       const stdoutPath = join(result.runDir, "stdout.log");
@@ -921,7 +1008,6 @@ describe("verify — artifact integrity is read-only and code-exact", () => {
       const gate2 = verifySddEvidence(readRecord(result.runDir), facts2, { planId: PLAN_ID, taskId: TASK_ID, runId: result.record.runId });
       expect(gate2.ok).toBe(false);
       expect(gate2.violations.map((v) => v.code)).toContain("evidence.artifact.missing");
-      void recordPath;
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1072,6 +1158,47 @@ describe("verify — target applicability", () => {
     30000,
   );
 
+  test(
+    "a wholly-missing declared root is an explicit missing entry and its appearance is a known difference (changed)",
+    async () => {
+      const root = tmpRoot("mstar-sdd-ev-missingroot-");
+      try {
+        const f = evidenceFixture(root);
+        const request = buildRequest(f, {
+          inputs: [...DECLARED_INPUTS, { path: "ghost", kind: "directory", purpose: "fixture" }],
+        });
+        const result = await captureDirect(f, counterArgv(f), { request, env: { NODE_ENV: undefined } });
+
+        // Absent at capture: an explicit missing entry with null facts in the
+        // retained snapshot — distinct from a member disappearing inside a
+        // declared directory root.
+        expect(result.record.before.entries).toContainEqual({
+          path: "ghost",
+          kind: "missing",
+          sha256: null,
+          bytes: null,
+          executable: null,
+          linkText: null,
+          resolvedRelativePath: null,
+          error: null,
+        });
+        expect(result.record.before.stable).toBe(true);
+
+        // The root existing in the target checkout is a known difference ⇒ changed.
+        mkdirSync(join(f.feature, "ghost"));
+        const target = targetFileFor(root, f.feature, f.head);
+        const verify = verifyCli(f, result.record.runId, { target });
+        expect(verify.exitCode).toBe(1);
+        const assessment = JSON.parse(verify.stdout) as { applicability: string; changedInputs: string[] };
+        expect(assessment.applicability).toBe("changed");
+        expect(assessment.changedInputs).toContain("ghost");
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+    30000,
+  );
+
   test("unknown coverage declaration is a noncandidate even with equal inputs", async () => {
     const root = tmpRoot("mstar-sdd-ev-unknown-");
     try {
@@ -1151,6 +1278,45 @@ describe("verify — target applicability", () => {
       rmSync(root, { recursive: true, force: true });
     }
   }, 30000);
+});
+
+// ---------------------------------------------------------------------------
+// Canonical sdd-dir containment (verify).
+// ---------------------------------------------------------------------------
+
+describe("verify — canonical sdd-dir containment", () => {
+  test(
+    "a bundle copied to a different control root is refused (exit 2); verifying in place still passes",
+    async () => {
+      const root = tmpRoot("mstar-sdd-ev-relocate-");
+      try {
+        const f = evidenceFixture(root);
+        // Selected env must be identical on both lanes (capture + verify).
+        const env = { NODE_ENV: "EVIDENCE_NODE_ENV" };
+        const result = await captureDirect(f, counterArgv(f), { env });
+        const target = targetFileFor(root, f.feature, f.head);
+
+        // In place: the canonical location recorded at capture time still verifies.
+        const inPlace = verifyCli(f, result.record.runId, { target, env });
+        expect(inPlace.exitCode).toBe(0);
+        expect((JSON.parse(inPlace.stdout) as { applicability: string }).applicability).toBe("candidate");
+
+        // The same bundle copied to another control root with the layout
+        // preserved (basename still the plan id, parent still "sdd") must be
+        // refused before any assessment; stdout stays empty (no JSON verdict).
+        const relocatedSdd = join(root, "elsewhere", "sdd", PLAN_ID);
+        mkdirSync(relocatedSdd, { recursive: true });
+        cpSync(join(f.sddDir, "evidence"), join(relocatedSdd, "evidence"), { recursive: true });
+        const relocated = verifyCli(f, result.record.runId, { target, sddDir: relocatedSdd, env });
+        expect(relocated.exitCode).toBe(2);
+        expect(relocated.stdout).toBe("");
+        expect(relocated.stderr).toContain("canonical");
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+    30000,
+  );
 });
 
 // ---------------------------------------------------------------------------
