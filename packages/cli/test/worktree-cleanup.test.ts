@@ -284,6 +284,64 @@ function remoteFixture(prefix: string): { root: string; bare: string; mainBranch
   return { root, bare, mainBranch };
 }
 
+/**
+ * Terminal-iteration fixture for apply ordering: integration worktree still
+ * present (branch iteration/wf-9, unmerged into main — squash-merge era) plus
+ * a Done plan worktree whose branch is merged ONLY into the integration
+ * branch. Both worktrees are remove-eligible (worktree removal is not gated
+ * by merged evidence); the plan branch's `git branch -d` evidence base is the
+ * integration checkout.
+ */
+function terminalIntegrationFixture(prefix: string): { root: string; mainBranch: string; intWt: string; doneWt: string } {
+  const root = tmpRoot(prefix);
+  git(["init", "-q"], root);
+  git(["config", "user.email", "cleanup-test@example.com"], root);
+  git(["config", "user.name", "Cleanup Test"], root);
+  writeFileSync(join(root, "base.txt"), "base\n");
+  git(["add", "-A"], root);
+  git(["commit", "-q", "-m", "base commit"], root);
+  const mainBranch = git(["branch", "--show-current"], root);
+
+  const intWt = join(root, "wt-integration");
+  git(["worktree", "add", "-q", intWt, "-b", "iteration/wf-9"], root);
+
+  const doneWt = join(root, "wt-done-a");
+  git(["worktree", "add", "-q", doneWt, "-b", "feature/done-a"], root);
+  writeFileSync(join(doneWt, "done.txt"), "done-a work\n");
+  git(["add", "-A"], doneWt);
+  git(["commit", "-q", "-m", "done-a work"], doneWt);
+  // Merged ONLY into the integration branch — never into main.
+  git(["merge", "-q", "--no-ff", "-m", "merge done-a", "feature/done-a"], intWt);
+
+  const records = worktreeList(root);
+  const canonicalRoot = records[0]!.path;
+  const intPath = wt(records, "wt-integration").path;
+  const donePath = wt(records, "wt-done-a").path;
+
+  const workflowDir = join(root, "workflows", "wf-9");
+  execFileSync("mkdir", ["-p", workflowDir]);
+  writeFileSync(
+    join(workflowDir, "snapshot.json"),
+    JSON.stringify(
+      {
+        schema_version: 1,
+        id: "wf-9",
+        type: "iteration",
+        status: "completed",
+        started_at: "2026-09-11",
+        ended_at: "2026-09-12",
+        updated_at: "2026-09-12",
+        branch: { base: mainBranch, integration: "iteration/wf-9", target: mainBranch },
+        integration_worktree_path: intPath,
+        plans: [row("plan-a", "Done", { metadata: { working_branch: "feature/done-a", worktree_path: donePath } })],
+      },
+      null,
+      2,
+    ),
+  );
+  return { root: canonicalRoot, mainBranch, intWt: intPath, doneWt: donePath };
+}
+
 describe("mstar worktree cleanup — dry-run is a byte-for-byte no-op", () => {
   test("prints verdict | kind | ref | reason for every candidate and changes nothing", () => {
     const fx = basicFixture("mstar-cleanup-dry-");
@@ -360,6 +418,38 @@ describe("mstar worktree cleanup — apply executes exactly the current remove r
       for (const branch of ["feature/wip", "feature/dirty", "feature/unmerged", "feature/stranger", "iteration/wf-1"]) {
         expect(git(["for-each-ref", `refs/heads/${branch}`], fx.root)).not.toBe("");
       }
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  test("terminal iteration: plan branch merged only into integration IS deleted from the integration checkout, integration worktree removed last", () => {
+    // Bugbot HIGH: a single-pass apply removed the integration worktree (the
+    // plan branch's `git branch -d` evidence base) before the branch pass, so
+    // the deletion fell back to the main worktree where `-d` merges into main
+    // HEAD and a squash-merge-era branch refuses. The apply must sequence:
+    // other worktrees → re-probe/re-plan → branch -d from the evidence-base
+    // checkout → then the deferred integration worktree.
+    const fx = terminalIntegrationFixture("mstar-cleanup-terminal-");
+    try {
+      const applied = runCli(["worktree", "cleanup", "--workflow", "wf-9", "--harness", fx.root, "--apply"], fx.root);
+      expect(applied.exitCode).toBe(0);
+      // The branch WAS deleted — its deletion cwd was the integration checkout.
+      expect(applied.stdout).toContain("apply: deleted branch feature/done-a");
+      expect(git(["for-each-ref", "refs/heads/feature/done-a"], fx.root)).toBe("");
+      // The integration worktree is removed too — AFTER the branch deletion.
+      expect(applied.stdout).toContain(`apply: removed worktree ${fx.intWt}`);
+      const branchLine = applied.stdout.indexOf("apply: deleted branch feature/done-a");
+      const integrationLine = applied.stdout.indexOf(`apply: removed worktree ${fx.intWt}`);
+      expect(integrationLine).toBeGreaterThan(branchLine);
+      expect(git(["worktree", "list", "--porcelain"], fx.root)).not.toContain(fx.intWt);
+      expect(git(["worktree", "list", "--porcelain"], fx.root)).not.toContain(fx.doneWt);
+      // The unmerged integration branch itself retains (no squash inference).
+      // At re-plan time the deferred integration worktree is still present, so
+      // the branch refuses checked-out (pre-fix it re-planned as unmerged) —
+      // the retained end state is identical either way.
+      expect(applied.stdout).toContain("refuse | local-branch | iteration/wf-9 | cleanup.refuse.checked-out");
+      expect(git(["for-each-ref", "refs/heads/iteration/wf-9"], fx.root)).not.toBe("");
     } finally {
       rmSync(fx.root, { recursive: true, force: true });
     }

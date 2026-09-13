@@ -2686,7 +2686,7 @@ worktreeCommand
   .option("--harness <path>", "Harness dir override (default: process-harness discovery from the verified main worktree)")
   .option(
     "--apply",
-    "Execute current remove rows: git worktree remove (never force) → re-probe/re-plan → git branch -d (never -D) → remote compare-and-delete",
+    "Execute current remove rows: git worktree remove (never force; evidence-base hosts deferred) → re-probe/re-plan → git branch -d (never -D) from the evidence-base checkout → remote compare-and-delete → deferred integration worktree removal",
   )
   .option("--remote", "Include remote-branch candidates (refs/remotes/origin) with expected-OID compare-and-delete")
   .option(
@@ -2736,8 +2736,25 @@ worktreeCommand
       }
 
       let failed = false;
+      // The branch-deletion pass runs `git branch -d` from the worktree checked
+      // out at each branch's evidence base (cleanupBranchDeletionCwd) —
+      // typically the terminal integration worktree. Removing that worktree in
+      // this first pass would push the deletions back to the main worktree,
+      // where `-d` merges into main HEAD and plan branches merged only into
+      // the integration branch (squash-merge era) refuse — so evidence-base
+      // host worktrees are deferred to the pass AFTER the branch deletions.
+      const evidenceBaseBranches = new Set<string>(built1.branchBase.values());
+      const deferredWorktrees = new Set<string>();
       for (const decision of plan1) {
         if (decision.kind !== "worktree" || decision.verdict !== "remove") continue;
+        const host = probe1.worktrees.find((worktree) => worktree.path === decision.ref);
+        if (host?.branch !== null && host?.branch !== undefined && evidenceBaseBranches.has(host.branch)) {
+          deferredWorktrees.add(decision.ref);
+        }
+      }
+      for (const decision of plan1) {
+        if (decision.kind !== "worktree" || decision.verdict !== "remove") continue;
+        if (deferredWorktrees.has(decision.ref)) continue;
         try {
           gitSync(["worktree", "remove", decision.ref], main.root); // never --force
           console.log(pc.green(`apply: removed worktree ${decision.ref}`));
@@ -2789,6 +2806,21 @@ worktreeCommand
             failed = true;
             console.error(pc.red(`apply: failed remote ${decision.ref}: cleanup.refuse.facts-changed (${cleanupGitMessage(error)})`));
           }
+        }
+      }
+      // Last: the deferred evidence-base hosts (terminal integration
+      // worktrees) — their branch-deletion duty is done, so removing them can
+      // no longer strand a `git branch -d` on the main worktree. Only rows
+      // the re-plan still marks remove are executed (facts-changed rows skip).
+      for (const decision of plan2) {
+        if (decision.kind !== "worktree" || decision.verdict !== "remove") continue;
+        if (!deferredWorktrees.has(decision.ref)) continue;
+        try {
+          gitSync(["worktree", "remove", decision.ref], main.root); // never --force
+          console.log(pc.green(`apply: removed worktree ${decision.ref}`));
+        } catch (error) {
+          failed = true;
+          console.error(pc.red(`apply: failed worktree ${decision.ref}: ${cleanupGitMessage(error)}`));
         }
       }
       if (failed) process.exitCode = 1;
