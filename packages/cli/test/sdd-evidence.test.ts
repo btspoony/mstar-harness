@@ -22,7 +22,13 @@
  * - no environment dump; selected env values (including null absence)
  *   fingerprinted,
  * - budgeted collectEvidenceInputs: shared two-pass byte allowance, entry
- *   enumeration stop, capped-snapshot representability, usage rejections.
+ *   enumeration stop, capped-snapshot representability, usage rejections,
+ * - integrated handoff (task 4): one capture feeds integrity, current-target
+ *   candidate, damaged-log/changed-fixture noncandidates without counter
+ *   change, an explicit retry (new run id, counter incremented only by
+ *   capture), integrity readable after historical worktree removal, and a
+ *   target comparison against another explicit checkout sharing the common
+ *   dir identity.
  */
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
@@ -1320,7 +1326,132 @@ describe("verify — canonical sdd-dir containment", () => {
 });
 
 // ---------------------------------------------------------------------------
-// collectEvidenceInputs budgets and usage.
+// Integrated exactly-once handoff (task 4): one capture drives every lane.
+// ---------------------------------------------------------------------------
+
+describe("integrated handoff — capture once, verify, reuse, damage, retry, removal", () => {
+  test(
+    "one capture feeds integrity, candidate, damaged-log/changed-fixture noncandidates, " +
+      "explicit retry, historical worktree removal survival and a same-repo alternate checkout",
+    async () => {
+      const root = tmpRoot("mstar-sdd-ev-integrated-");
+      try {
+        const f = evidenceFixture(root);
+        // Selected env must be identical on both lanes (capture + verify).
+        const env = { NODE_ENV: "EVIDENCE_NODE_ENV" };
+
+        // 1) Capture once: the counter child runs exactly once.
+        const first = await captureDirect(f, counterArgv(f), { env });
+        expect(first.exitCode).toBe(0);
+        expect(first.record.state).toBe("finished");
+        expect(first.record.outcome).toEqual({ kind: "exit", code: 0 });
+        expect(JSON.parse(readFileSync(f.counterPath, "utf8"))).toEqual({ count: 1 });
+
+        // 2) Integrity-only verify (no target): complete integrity, exit 0,
+        //    applicability not-assessed even for the passed run.
+        const integrity = verifyCli(f, first.record.runId);
+        expect(integrity.exitCode).toBe(0);
+        const integrityAssessment = JSON.parse(integrity.stdout) as {
+          integrity: { ok: boolean };
+          outcome: string;
+          applicability: string;
+        };
+        expect(integrityAssessment.integrity.ok).toBe(true);
+        expect(integrityAssessment.outcome).toBe("passed");
+        expect(integrityAssessment.applicability).toBe("not-assessed");
+        expect(integrity.stderr).toContain("integrity only; outcome=passed; acceptance not assessed");
+
+        // 3) Current-target assessment in the same checkout: candidate.
+        const currentTarget = targetFileFor(root, f.feature, f.head);
+        const candidate = verifyCli(f, first.record.runId, { target: currentTarget, env });
+        expect(candidate.exitCode).toBe(0);
+        const candidateAssessment = JSON.parse(candidate.stdout) as {
+          applicability: string;
+          changedInputs: string[];
+        };
+        expect(candidateAssessment.applicability).toBe("candidate");
+        expect(candidateAssessment.changedInputs).toEqual([]);
+        // Verify lanes never executed the recorded child.
+        expect(JSON.parse(readFileSync(f.counterPath, "utf8"))).toEqual({ count: 1 });
+
+        // 4) Damaged log: integrity fails first, so the run is an uncertain
+        //    noncandidate whether or not a target exists; counter unchanged.
+        const stdoutLog = join(first.runDir, "stdout.log");
+        const originalLog = readFileSync(stdoutLog);
+        writeFileSync(stdoutLog, `${originalLog.toString("utf8")}damaged\n`);
+        const damaged = verifyCli(f, first.record.runId, { target: currentTarget, env });
+        expect(damaged.exitCode).toBe(1);
+        const damagedAssessment = JSON.parse(damaged.stdout) as {
+          applicability: string;
+          integrity: { ok: boolean };
+          reasons: string[];
+        };
+        expect(damagedAssessment.integrity.ok).toBe(false);
+        expect(damagedAssessment.applicability).toBe("uncertain");
+        expect(damagedAssessment.reasons).toContain("evidence.integrity");
+        expect(JSON.parse(readFileSync(f.counterPath, "utf8"))).toEqual({ count: 1 });
+
+        // 5) Restored log + changed declared fixture input: a known difference
+        //    (changed noncandidate) with still zero additional child runs.
+        writeFileSync(stdoutLog, originalLog);
+        writeFileSync(join(f.feature, "src", "app.js"), "export const app = 'fixture-v2';\n");
+        const changed = verifyCli(f, first.record.runId, { target: currentTarget, env });
+        expect(changed.exitCode).toBe(1);
+        const changedAssessment = JSON.parse(changed.stdout) as { applicability: string; changedInputs: string[] };
+        expect(changedAssessment.applicability).toBe("changed");
+        expect(changedAssessment.changedInputs).toContain("src/app.js");
+        expect(JSON.parse(readFileSync(f.counterPath, "utf8"))).toEqual({ count: 1 });
+
+        // 6) Only an explicit second capture increments the counter, under a
+        //    new run id; the original bundle is retained.
+        const second = await captureDirect(f, counterArgv(f), { env });
+        expect(second.exitCode).toBe(0);
+        expect(second.record.runId).not.toBe(first.record.runId);
+        expect(second.runDir).not.toBe(first.runDir);
+        expect(existsSync(first.runDir)).toBe(true);
+        expect(JSON.parse(readFileSync(f.counterPath, "utf8"))).toEqual({ count: 2 });
+
+        // 7) Historical source worktree removal: the original bundle's
+        //    integrity stays readable (no historical checkout validation).
+        git(["worktree", "remove", "--force", f.feature], f.primary);
+        const afterRemoval = verifyCli(f, first.record.runId);
+        expect(afterRemoval.exitCode).toBe(0);
+        const afterRemovalAssessment = JSON.parse(afterRemoval.stdout) as {
+          integrity: { ok: boolean };
+          outcome: string;
+          applicability: string;
+        };
+        expect(afterRemovalAssessment.integrity.ok).toBe(true);
+        expect(afterRemovalAssessment.outcome).toBe("passed");
+        expect(afterRemovalAssessment.applicability).toBe("not-assessed");
+
+        // 8) Target comparison against ANOTHER explicit checkout sharing the
+        //    common-dir identity: equal tested bytes are a candidate. The
+        //    start point is pinned to the recorded commit (primary HEAD is
+        //    an unborn branch in the fixture).
+        const alt = join(root, "target-checkout");
+        git(["worktree", "add", "-q", "-b", `feature/${PLAN_ID}-target`, alt, f.head], f.primary);
+        const altHead = git(["rev-parse", "HEAD"], alt);
+        expect(altHead).toBe(f.head);
+        const altTarget = targetFileFor(root, alt, altHead);
+        const altCandidate = verifyCli(f, first.record.runId, { target: altTarget, env });
+        expect(altCandidate.exitCode).toBe(0);
+        const altAssessment = JSON.parse(altCandidate.stdout) as {
+          applicability: string;
+          changedInputs: string[];
+        };
+        expect(altAssessment.applicability).toBe("candidate");
+        expect(altAssessment.changedInputs).toEqual([]);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+    60000,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// collectEvidenceInputs — budgets and usage.
 // ---------------------------------------------------------------------------
 
 interface BudgetDir {
