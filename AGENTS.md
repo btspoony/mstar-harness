@@ -1,256 +1,64 @@
-# Morning Star Harness Maintenance Guide
+# Morning Star Harness Maintenance
 
-This repository is maintained as a **harness/configuration project**, not an application repo.
-Use this document as the primary maintenance contract for contributors and agents.
+This repository contains the Morning Star runtime skills, workflow engine, CLI, and host plugins. This file defines repository maintenance policy; runtime behavior belongs in `skills/mstar-*`.
 
-## Scope
+## Working rules
 
-- Default intent in this workspace: maintain Morning Star harness behavior, docs, and host adapters.
-- Repository layout uses a monorepo-style split: `packages/opencode` for the publishable OpenCode plugin (`@mstar-harness/opencode`), `packages/cli` (`@mstar-harness/cli`) for the standalone CLI.
-- Do not treat this repo like a product feature/codebase task unless explicitly requested.
-- Runtime execution rules for users/agents live in `mstar-*` skills; this file defines **maintenance behavior**.
+- Read the affected source and direct contracts before editing. Fix the demonstrated problem or requested outcome with the smallest complete change; avoid speculative features, compatibility layers, and unrelated refactors.
+- Keep each rule in its authoritative topic. Follow [harness core](skills/mstar-harness-core/SKILL.md) for runtime semantics and [roles](skills/mstar-roles/SKILL.md) for skill selection; do not duplicate their load matrices, gates, or role procedures here.
+- Use tools actually available in the session. Continue authorized work through verification; ask only when a material decision or required authorization remains unresolved. Do not add a separate human approval gate for every diff.
+- Respect existing assignments and write ownership. Preserve other contributors' changes; do not reset or clean their work.
+- Do not edit user secrets or credential files. Changes to global host configuration or security-sensitive defaults require explicit user authorization.
 
-## Maintenance Goals
+## Git and local artifacts
 
-- Keep one coherent harness behavior across hosts.
-- Keep prompts/rules minimal, explicit, and non-duplicated.
-- Prefer stable defaults and small, reviewable changes.
-- Preserve user safety boundaries for global config and secrets.
+- Develop in a task worktree under `.worktrees/`. Keep the primary checkout on `main`: skills and commands may be symlinked to it. Changes reach `main` through PRs; never make direct feature commits there.
+- Reuse the assigned worktree when continuing a task. For new maintenance work without an assigned branch, create a worktree from `main` using the host's branch naming convention. Keep commits scoped to one concern.
+- Remove a worktree and prune its metadata after merge only when it contains no unmerged or uncommitted work that must be retained.
+- Use `.tmp/` for disposable probes and logs; clean up your own scratch files when no longer needed. Keep resumable work until its task is complete.
+- Keep local plans, status, reports, and knowledge under the gitignored `.mstar/` harness root. Runtime path conventions belong in [mstar-conventions](skills/mstar-conventions/SKILL.md).
+- Tracked code and docs must not depend on local harness artifacts or disclose their provenance (real plan/iteration IDs, QC finding IDs, local merge SHAs, or acceptance labels). Describe the behavior; use synthetic IDs in fixtures and `{HARNESS_DIR}` or a `.mstarc` declaration for layout examples. This section documents the local layout and is the exception to that path-reference restriction.
 
-## Core Rules
+## Where to edit
 
-- **Single source by topic**: keep each rule in one authoritative place; avoid copy-paste rule drift.
-- **Execution vs maintenance split**:
-  - Skills/role prompts describe runtime behavior.
-  - `AGENTS.md` describes repository maintenance policy.
-- **Surgical edits**: only change what the task requires; avoid opportunistic refactors.
-- **Read before edit**: inspect current content before patching; verify after patching.
-- **Worktree-only development**: all feature/plan development happens in git worktrees under `.worktrees/`; the primary checkout stays on `main` at all times. Never check out a working branch in the primary checkout — skills/commands may be symlinked into this directory, so a feature branch checked out here would break linked consumers. Local `main` receives no direct feature commits (changes land via PRs/merges).
-- **README = developer consumer docs** (`README.md` / `README_CN.md`):
-  - Audience is developers who install and run the harness — not a concept tutorial.
-  - Prefer commands, tables, and links. Do **not** write chatty “How to use” prose.
-  - A short curated value-prop bullet list at the top is allowed; keep it to a few selling points, not a marketing essay.
-  - Keep the shortest executable path: Install → Use (**without iteration** vs **with iteration**) → Workflow diagram → Roles/skills tables.
-  - Put narrative, deep install, and host quirks in `INSTALL.md`, `docs/`, or `mstar-*` skills — not in the README body.
-  - Edit both language files together when README content changes.
-  - **Bilingual minimal updates**: for paired docs (README.md/README_CN.md, packages/dsh README triplets), apply the minimal counterpart edit — never re-translate a document to apply an update — and re-record pairing hashes (`git hash-object`) in the same change set.
+| Concern | Source |
+| --- | --- |
+| Runtime rules | `skills/mstar-*/`; find the owning topic through the [core index](skills/mstar-harness-core/SKILL.md) |
+| Role behavior | `skills/mstar-roles/references/`; keep `agents/` and `codex/agents/` shells thin |
+| Commands and host behavior | `commands/`, `skills/mstar-host/` |
+| Workflow engine | `packages/engine/` |
+| Install/link adapters | `packages/cli/`; follow its local `AGENTS.md` |
+| Host plugin implementation and packaging | `packages/opencode/`, `packages/dsh/`, `packages/omp/`; follow applicable local `AGENTS.md` files |
+| Plugin metadata | Host plugin/marketplace manifests; release surfaces are listed in `scripts/release-surfaces.ts` |
 
-## Cursor + OpenCode + Codex + Kimi + ZCode + omp Sync Policy
+Edit canonical sources, not generated `harness-skills/` or `harness-agents/` copies. Use the affected package's bundle command when validating packaged assets. OpenCode's primary `project-manager` shell lives in `packages/opencode/agents/`; shared `agents/` contains subagent shells. Installed plugins must resolve bundled assets from their package, not the consumer's working directory.
 
-When a change affects shared harness behavior, treat OpenCode, Cursor, Codex, Kimi, ZCode, and omp as host surfaces of one system.
+## Skills and host consistency
 
-- Update shared semantics first (core harness contract), then host-specific adapters.
-- Keep host wording consistent on:
-  - load order expectations
-  - dispatch/delegation boundaries
-  - gate/evidence language
-- If behavior must diverge by host, document the reason explicitly and keep the divergence minimal.
-- For plugin-facing changes, ensure all hosts remain installable and understandable from current docs.
-- Do not maintain long host-specific checklists in many files; keep intent centralized and examples lightweight.
+- Change shared semantics first, then only the affected host adapters and docs. Keep supported hosts consistent; document necessary host differences at their owning adapter.
+- Keep `SKILL.md` focused on the execution path and trigger contract; move detailed variants to `references/`. Do not embed repository maintenance manuals in runtime skills.
+- For new skills or major rewrites, follow [mstar-skill-authoring](skills/mstar-skill-authoring/SKILL.md) and use available `skill-creator` guidance from the session's skill catalog. Do not hard-code a maintainer's home-directory paths or require another host's tools.
+- Preserve the [standalone contract](skills/mstar-harness-core/SKILL.md): external authoring tools are maintenance aids, not runtime load-order dependencies.
+- Verify behavior-shaping changes with affected regressions, evaluations, or concrete before/after evidence. Explain the expected outcome improvement; wording preference alone is insufficient.
+- Use `.cursor/skills/mstar-routing-eval/` for affected Cursor routing/gate regressions, not as a runtime dependency or a universal host check. Check changed references for stale paths.
 
-## What To Do
+## Documentation
 
-- Do align changes with the current harness invariants before editing downstream docs/prompts.
-- Do update bilingual docs together when user-facing behavior changes.
-- Do keep `README.md` / `README_CN.md` developer-short (Install + Use scenarios + Workflow + tables); reject verbose onboarding rewrites into README.
-- Do keep CLI implementation changes inside `packages/cli` and OpenCode plugin packaging inside `packages/opencode`.
-- Do keep role shells thin and maintain richer role behavior in role-skill references.
-- Do keep commit scope coherent (one concern per commit when possible).
-- Do verify any changed command/config snippets are still runnable.
+- Keep `README.md` and `README_CN.md` short and executable: Install → Use (without/with iteration) → Workflow → Roles/skills. Prefer commands, tables, and links; put detailed installation and host explanations in `INSTALL.md`, `docs/`, or the owning skill.
+- When changing paired docs, make the same minimal semantic update in each language, including the dsh README triplet. Update existing pairing hashes with `git hash-object` where recorded; do not retranslate whole documents for a small change.
+- Update docs only where behavior or onboarding changes affect them. Verify changed commands, configuration examples, and links against their source.
 
-## What Not To Do
+## Verification and delivery
 
-- Do not edit user secrets or local credential files.
-- Do not silently change security-sensitive defaults.
-- Do not introduce parallel “maintenance manuals” inside skill bodies.
-- Do not turn `README.md` / `README_CN.md` into tutorials or long “How to use” essays — keep executable paths; detail belongs in `INSTALL.md` / `docs/` / skills.
-- Do not scatter the same rule text across multiple files just for discoverability.
-- Do not require manual file-by-file index maintenance when explore/search can discover structure.
-
-## Change Workflow (Lightweight)
-
-1. Clarify the maintenance intent and affected behavior surface.
-2. Apply minimal edits in the right canonical layer.
-3. Sync host adapters/docs only where behavior or onboarding changed.
-4. Run lightweight validation (lint/typecheck/doc link sanity as relevant).
-5. Summarize what changed, why, and any intentional host-specific divergence.
+- Before repeating a fix, inspect relevant history for duplicate or rejected attempts. Keep changes appropriate to the harness; project-specific behavior belongs in a separate extension.
+- Follow [core verification boundaries](skills/mstar-harness-core/SKILL.md#定向执行与验证边界): run checks mapped to the changed behavior and reuse still-valid evidence. Full local suites require explicit user authorization; CI owns routine full-suite coverage.
+- For executable changes, run affected unit tests and relevant scoped lint/type checks. For docs/policy changes, use targeted static checks and before/after evidence; do not manufacture tests or claim static checks prove model compliance.
+- Fix failures caused by the change. Report unresolved failures or missing evidence precisely; do not claim completion while required verification remains outstanding.
+- Before delivery, review the diff for scope, accidental generated edits, local-artifact disclosures, and the required changelog fragment. Report what changed, why, actual verification results, and material limitations.
 
 ## Release Process
 
-Releases are PR-driven and mostly automated. Every release ships one version across all version surfaces — the authoritative surface list lives in `scripts/release-surfaces.ts` (15 surfaces at merge time: root + 5 npm packages + 7 plugin manifests [6 host + portable Agent Plugins] + 2 marketplace manifests).
-
-### 1. During development — add a changelog fragment
-
-Per logical change, add `.changes/unreleased/<slug>.md` (committed with the change). Format and defaults: [`.changes/README.md`](.changes/README.md).
-
-During development, **do not** hand-edit `CHANGELOG.md` / `CHANGELOG_CN.md` / `packages/*/CHANGELOG.md` (including under `## [Unreleased]`); those files are assembled later by `release:prepare`.
-
-```markdown
----
-category: Harness        # optional; default per package
-packages: root           # optional; comma list of root | cli | opencode | engine
----
-- English bullet.
-
-<!-- CN -->
-- 中文要点。
-```
-
-Need both root + OpenCode notes? Prefer one fragment with `packages: root, opencode` (omit `category` so each package keeps its default section header), or split fragments if the bullets must differ. A release always auto-appends the **Version alignment** block — do not write one.
-
-### 2. Cut a release — assemble + open the release PR
-
-Either:
-
-- **GitHub Actions**: Actions → *Release prep* → Run workflow (optionally pass an explicit `X.Y.Z`; empty = auto patch bump), **or**
-- **Local**: `bun run release:prepare -- 1.8.7` (or `-- --patch` / `-- --minor`), then open a PR titled `release v1.8.7`.
-
-`scripts/prepare-release.ts` reads `.changes/unreleased/*.md`, inserts a `## [<version>]` section into all 5 changelogs, bumps every surface, and moves consumed fragments to `.changes/archive/<version>/`. Validate with `bun run release:validate -- v1.8.7`.
-
-### 3. Merge the release PR — auto-tag + publish
-
-Merging a `release vX.Y.Z` PR runs the **Release** workflow **inline on the `pull_request` event**: validate → build → npm publish (provenance) → create+push `vX.Y.Z` (annotated tag, pushed with the workflow's `GITHUB_TOKEN`) → GitHub Release. No secrets are required for the default flow. Releases are PR-driven by design — a manual `git tag && git push --tags` no longer auto-publishes.
-
-> npm trusted publishing / provenance now runs on the `pull_request` event (previously `push:tags`); the workflow filename is unchanged. If the first release via this flow fails publish, revert the trigger to `push:tags` and switch to a PAT-pushed auto-tag model.
-
-### Prereleases (alpha)
-
-Prerelease lines use the same PR flow with a suffixed version: `bun run release:prepare -- 3.6.0-alpha.1`, then merge the `release v3.6.0-alpha.1` PR. The Release workflow publishes under the npm dist-tag `alpha` (never `latest`) and flags the GitHub Release as prerelease. `release:prepare` and `release:validate` touch version surfaces only — `INSTALL.md` is not a release surface.
-
-### Conventions
-
-- Never invent a skipped tag (e.g. do not create `v1.8.4` to fill a historical gap).
-- Bump version + changelog in the same change set via `release:prepare`; do not hand-edit version surfaces (the `release:validate` gate reads the same surface list).
-
-## AI Agent Quality Gate
-
-Before opening PRs or proposing "done", an agent must:
-
-1. Confirm the change solves a real, observed maintenance problem (not a theoretical one).
-2. Check for duplicate or recently rejected attempts before repeating similar work.
-3. Confirm the change belongs in core harness (otherwise recommend a separate plugin/extension path).
-4. Provide verification evidence for any behavior-shaping changes.
-5. If the change is user-facing or behavior-notable, confirm a matching `.changes/unreleased/<slug>.md` fragment exists — and that assembled `CHANGELOG*` files were **not** hand-edited for it.
-
-If one of these checks fails, stop and report why.
-
-## Changes Usually Rejected
-
-- Unrelated bundled edits in one PR.
-- Speculative fixes without a concrete failure or user impact.
-- Project-specific customizations disguised as core behavior.
-- Style-only rewrites of behavior-shaping prompts/skills without evaluation evidence.
-- Claims that are not supported by code, tests, or reproducible validation.
-
-## Evidence Standard
-
-- Behavior change -> show before/after expectation and at least one concrete verification step.
-- Install/config change -> verify snippets are executable and aligned with current docs.
-- Prompt/skill change -> explain why the wording change improves outcomes, not only readability.
-
-## Skill Maintenance Essentials
-
-- Keep skills as **runtime SSOT**, not maintenance handbooks.
-- Keep `SKILL.md` focused on execution path; move deep detail to `references/` when needed.
-- Treat frontmatter `description` as a trigger contract; update it when scenarios change.
-- Prefer one coherent skill per workflow unit; avoid over-splitting or giant mixed-scope skills.
-- Use default-first guidance (primary path first, exceptions second) to reduce agent ambiguity.
-- Preserve role shell minimalism: role binding stays thin; reusable behavior stays in skill references.
-- When changing behavior-shaping skill text, require evidence (evals, regressions, or concrete outcomes), not wording preference.
-- **`mstar-*` standalone**: runtime `mstar-*` skills must not require external skills, CLIs, or MCPs in load order; commands may reference bundled non-`mstar-*` assets under `skills/` (e.g. `grill-me` for `/iteration-start` only). **`prompt-engineer`** may additionally follow the repository **`skill-creator`** requirement for new/major skill work (`AGENTS.md`).
-
-## Skill-Creator Requirement
-
-- For new skills or major skill rewrites, use skill-creator guidance before editing:
-  - `~/.agents/skills/skill-creator/SKILL.md`
-  - `~/.cursor/skills-cursor/create-skill/SKILL.md`
-- Keep trigger quality explicit:
-  - `description` must say when to trigger and what outcome it enables.
-  - Add/update trigger phrases when scenarios expand.
-- If a change alters behavior (not just wording), include evaluation evidence.
-
-## Local scratch layout (`.tmp/`, `.worktrees/`)
-
-统一本地布局约定（gitignored，用完即清）：
-
-- 临时文件（一次性探针、日志、浏览器 profile、验证脚本等）→ 仓库根 **`.tmp/*`**，用完即清，不跨轮次残留
-- **开发必须基于 worktree**：任何 feature/plan 开发一律在 **`.worktrees/*`** 中进行（每 plan 一个子目录，如 `.worktrees/<plan-id>-<slug>`，`git worktree add .worktrees/<slug> -b feature/<plan-slug>`）；主 checkout **永远停留在 `main`**——技能/命令可能软链接到本目录，主 checkout 检出工作分支会破坏链接消费者的文件可见性；本地 `main` 不直接提交 feature 改动（经 PR 合并进入）；合并后 `git worktree remove` 并 `git worktree prune`
-
-## Local maintenance workspace (`.mstar/`, gitignored)
-
-The repo's harness root is **`.mstar/`** (the `mstar-conventions` consumer default — same convention consumer projects use): `status.json`, `workflows/`, `plans/`, `sdd/`, `iterations/`, `projects/`, `knowledge/`, `references/`, `specs/`, `archived/` and in-progress maint docs all live under `.mstar/`.
-
-**No tracked references to gitignored harness artifacts.** Tracked `*.ts` / `*.md` files must not cite paths under `.mstar/` (e.g. `.mstar/status.json`, `.mstar/plans/<id>.md`, `.mstar/references/*.md`, `.mstar/iterations/…`, `.mstar/sdd/…`, `.mstar/knowledge/…`): those files exist only in the local checkout, so references break fresh clones and CI. **Provenance citations count as disclosures**: plan/iteration ids, QC-report finding ids (`qcN F-xxx`), local merge SHAs, and local acceptance labels must not appear in tracked comments, test names, fixtures, or docs — describe the behavior, not its local origin. Synthetic placeholder ids are required in fixtures that model local file formats. Refer to `{HARNESS_DIR}` / the consumer default (`.mstar/` → `.agents/` → `.plans/`/`plans/`) or a repo `.mstarc` declaration instead. This section is the maintenance contract that documents the local layout; the rule applies to all other tracked files.
-
-**Runtime SSOT** for `mstar-*` skills stays in repo-root **`skills/`** (bundled via `packages/opencode` `bundle-assets`).
-
-## Where To Edit (Minimal Routing)
-
-- Core harness entry, state machine, Task category, skill index -> `skills/mstar-harness-core/*`
-- Phase gates (Prepare/Execute, hotfix) -> `skills/mstar-phase-gates/*`
-- Dispatch, Delegation, anti-recursion, SDD serial, QC default -> `skills/mstar-dispatch-gates/*`
-- SDD file handoff, per-task review, ledger -> `skills/mstar-sdd/*`
-- Git branches, worktrees, QC/QA checkout alignment -> `skills/mstar-branch-worktree/*`
-- Plan directory discovery, init, Spec branch summary -> `skills/mstar-conventions/*`
-- Plan artifacts (`status.json`, residual, main plan, reports/, knowledge, Done compaction, `templates/`) -> `skills/mstar-artifacts/*`
-- DESIGN.md design system spec (create/audit/maintain, tokens, completeness checklist, light/dark themes, templates) -> `skills/mstar-design-md/*`
-- QC baseline and review template -> `skills/mstar-review-qc/*` (PM orchestration); leaf QC execution -> `skills/mstar-roles/references/qc-specialist/*`
-- Codebase audit → prioritized improvement plans -> `skills/mstar-audit/*` (read-only advisory; plan quality bar -> `skills/mstar-artifacts/references/plan-quality-bar.md`)
-- Cross-role coding behavior (RCA, verification, test-first discipline, review feedback) -> `skills/mstar-coding-behavior/*`
-- Skill authoring / trigger contracts -> `skills/mstar-skill-authoring/*`
-- Role behavior text -> `skills/mstar-roles/references/*`
-- Host adapters:
-  - Host adapter -> `mstar-host` (in-repo: `skills/mstar-host/*`; OpenCode via `bundle-assets` → `harness-skills/mstar-host/`; Cursor/Codex/Kimi/ZCode/omp via `.cursor-plugin/` / `.codex-plugin` / `.kimi-plugin` / `.zcode-plugin/` / `.omp-plugin/` `skills/`)
-  - OpenCode package: `harness-skills/` + `harness-agents/` from `bundle-assets` (npm publish `prepublishOnly`; explicit `bun run opencode:bundle-assets` in checkouts); plugin reads only package paths, not `process.cwd()` (npm: `@mstar-harness/opencode`)
-  - OpenCode-only primary agent shells (the `mode: primary` `project-manager`) -> `packages/opencode/agents/*`, merged into `harness-agents/` at bundle time; the shared repo-root `agents/` carries subagent shells only — other hosts take PM via the `pm` skill
-- CLI package -> `packages/cli/*` (package name `@mstar-harness/cli`; local `AGENTS.md`)
-- Codex plugin manifest -> `.codex-plugin/plugin.json`
-- Kimi plugin manifest -> `.kimi-plugin/plugin.json` (plugin root is repo root; paths `./skills/`, `./commands/`)
-- ZCode plugin manifest -> `.zcode-plugin/plugin.json` (plugin root is repo root; paths `./skills/`, `./commands/`, `./agents/`)
-- omp plugin markers -> `.omp-plugin/plugin.json` + `.claude-plugin/plugin.json` (plugin root is repo root; paths `./skills/`, `./commands/`, `./agents/`)
-- Codex install metadata generation -> `packages/cli/src/adapters/codex.ts`
-- ZCode install metadata generation -> `packages/cli/src/adapters/zcode.ts`
-- omp install/link flow -> `packages/cli/src/adapters/omp.ts`
-- Maintenance policy (this file) -> `AGENTS.md`
-
-## Skill Sync Rules
-
-- Update shared harness semantics before host adapters.
-- Sync bilingual user-facing docs when installation or behavior expectations change.
-- Keep cross-host differences explicit and minimal; no silent divergence.
-- Avoid duplicating the same maintenance guidance across many runtime files.
-
-## Cursor Routing-Eval Usage Rules
-
-Use `.cursor/skills/mstar-routing-eval/` only for Cursor maintenance and regression work:
-
-- When PM routing logic changes.
-- When phase gates or dispatch constraints change.
-- When role/prompt/rule updates may affect routing outcomes.
-
-Do not treat routing-eval as a runtime skill for normal implementation tasks.
-
-## Topic skill load matrix (runtime)
-
-After `mstar-harness-core`, load **only** what the role and round need (see `skills/mstar-roles/SKILL.md`):
-
-| Skill | Typical readers |
-|-------|-----------------|
-| `mstar-phase-gates` | PM; product/architect in Prepare |
-| `mstar-dispatch-gates` | PM; **all leaf executors** before Task/subagent |
-| `mstar-sdd` | PM on `Execution mode: sdd`; SDD implementer/reviewer subagents (SUBAGENT-STOP); optional **`SDD implementer session: sticky`** (`references/sticky-implementer-session.md`) |
-| `mstar-branch-worktree` | PM, dev*, QC*, QA, ops when Git/write or QC checkout |
-| `mstar-conventions` | PM; dev* for path symbols / metadata |
-| `mstar-artifacts` | PM (status/residual, InReview/QC waves), architect, product-manager, QC* (reports), QA (R#) |
-
-Edit topic skills directly (`mstar-phase-gates`, `mstar-branch-worktree`, `mstar-artifacts`, …); do not recreate moved stub files under legacy paths.
-
-## Post-Skill-Change Sync Checklist
-
-- [ ] `description` still matches trigger scope and intent.
-- [ ] `SKILL.md` stays concise; heavy detail moved to `references/` when needed.
-- [ ] Shared semantics and host adapters remain consistent.
-- [ ] Cursor routing-eval updated if routing/gate behavior changed.
-- [ ] User-facing docs updated in both `README.md` and `README_CN.md` if onboarding changed.
-- [ ] Validation evidence included for behavior-shaping changes.
-- [ ] Stale cross-references point at topic **`SKILL.md`** or real `mstar-artifacts/references/*` files (no deleted stub paths).
+- Add one bilingual `.changes/unreleased/<slug>.md` fragment per logical change, following [the fragment format](.changes/README.md). Do not hand-edit assembled `CHANGELOG*` files or version surfaces.
+- Prepare releases with `bun run release:prepare -- <version>` (or `-- --patch` / `-- --minor`) or the [Release prep workflow](.github/workflows/release-prep.yml). Validate with `bun run release:validate -- v<version>` and open a `release v<version>` PR.
+- The [Release workflow](.github/workflows/release.yml) publishes, tags, and creates the GitHub Release after merge. Prereleases use the `alpha` dist-tag. Do not invent skipped tags or manually push tags as a publishing substitute.
+- Version surfaces are authoritative in [scripts/release-surfaces.ts](scripts/release-surfaces.ts); release mechanics live in the scripts and workflows, not duplicated counts or historical recovery recipes here.
