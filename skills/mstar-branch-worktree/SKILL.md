@@ -258,7 +258,7 @@ mstar worktree cleanup --workflow <id> [--harness <path>] [--apply] [--remote] [
 1. **Phase-2 同轮**（per-plan）：integration merge 成功的**同一轮**回收该 Done plan/track 的 feature worktree + 已合并分支（call site → `mstar-iteration` `references/phase-2-worktree-lease.md`「Same-round plan cleanup」）。
 2. **Phase-6 收尾**（integration 面）：只在 valid terminal close（§6.1–§6.3 完成）+ PR **verified merged** 之后回收 integration worktree / 分支 / 远端残留（call site → `mstar-iteration` `references/phase-6-post-merge-close.md` §6.4）。Phase-6 gate 只查本地 state，**不**验证 merged、**不**检查物理清理是否完成。
 
-> **Engine check (when available):** dry-run 即机器检查 —— `mstar worktree cleanup --workflow <id>`（或 import `planWorktreeCleanup` from `@mstar-harness/engine`）对当前 facts 输出 remove/keep/refuse 计划，每行带稳定 `cleanup.*` 码。若已知受保护目标（active lease / 非 Done / 非终结 owner）出现 `remove` → STOP：守卫有错，**任何 `--apply` 前先修**。Skill text above remains authoritative when the runtime is absent.
+> **Engine check (when available):** dry-run 即机器检查 —— `mstar worktree cleanup --workflow <id>`（或 import `planWorktreeCleanup` from `@mstar-harness/engine`）对当前 facts 输出 remove/keep/refuse 计划，每行带稳定 `cleanup.*` 码。若已知受保护目标（active lease / 非 Done / 非终结 owner）出现 `remove` → STOP：守卫有错，**任何 `--apply` 前先修**。Skill text below remains authoritative when the runtime is absent.
 
 ## Workflow
 
