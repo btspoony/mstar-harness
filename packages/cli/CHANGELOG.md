@@ -6,6 +6,30 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [3.9.0] - 2026-09-13
+
+### Fixed
+
+- Cleanup now re-probes local branches released by deferred integration worktree removal, deleting merged branches in one apply while preserving refusal guards and evidence-base deletion ordering.
+- Escaped remaining Unicode literals in worktree validation, SDD discovery and evidence diagnostics without changing runtime text or matching behavior, restoring the ASCII source gate.
+- Escaped em dashes in worktree check and cleanup CLI literals to satisfy ASCII source checks while preserving runtime messages.
+- Install Codex custom agent TOMLs as regular files so discovered roles can load. Re-running init replaces expected legacy links and backs up differing regular files before refresh; doctor detects links and source drift. Update installation and dispatch guidance to require successful named-role invocation.
+- Added the **Phase 6 post-merge close engine gate** (`evaluatePostMergeClose`): a pure, additive local-state check over the terminal snapshot shape, leftover leases and root-status unregister, with stable `PHASE6_*` codes; `mstar iteration gate --phase 6 --workflow <id>` evaluates it without `--compass`.
+- The Phase 6 gate now validates the root `status.json` with the full v2 root validator (`validateStatusV2`, structure-only): a malformed registry (non-v2 version, missing `updated_at`, malformed `workflows[]` entries) fails closed as `PHASE6_INVALID_ROOT` instead of false-PASSing when the workflow id is absent; `/iteration-start` and the README commands table now state the auto-continue completion at Phase 6 post-merge close (same Done definition as `/iteration-drive`).
+- Added a **pure SDD test-evidence contract** in the engine: record schema + validation (`validateSddEvidenceRecord`), artifact verification (`verifySddEvidence`), deterministic two-pass input snapshot digests (`evidenceInputDigest`) and first-match reuse applicability (`assessSddEvidenceReuse`) that keeps integrity, process outcome, input applicability and coverage as four separate outputs — unknown dependency/runtime/environment scope stays uncertain and is never silently a reuse candidate.
+- Added scoped **`mstar sdd evidence capture|verify`** CLI commands: one recorded execution of an already-authorized check retains literal argv (no shell), separate raw stdout/stderr logs, the tagged outcome and bounded input/tool/environment fingerprints under `{SDD_DIR}/evidence/<run-uuid>`; every retry gets a new run id. Read-only verify never re-runs the recorded child, reports integrity-only without `--target`, and emits a candidate/changed/uncertain verdict with `--target`. Capture supports POSIX linux/darwin in v1 with bounded logs, inputs, snapshots and timeout; the old `sdd exec` and manual scoped-check reports are unchanged.
+- Wired the handoff into the skill corpus: PM publishes the fixed capture request, developers capture authorized checks, QC reviews code/coverage without executing, and QA maps acceptance criteria to the retained record (with an explicit AC/run/integrity/outcome/applicability/coverage/gap table) instead of repeating child commands.
+- Added the **guarded `mstar worktree cleanup` verb** with the pure `planWorktreeCleanup` engine planner: dry-run by default prints `verdict | kind | ref | reason` per worktree/branch candidate; `--apply` removes eligible worktrees (ordinary `git worktree remove`, never force), re-probes/re-plans, then deletes newly unchecked-out branches (`git branch -d`, never `-D`) and runs expected-OID `--force-with-lease` remote compare-and-delete. Active leases, branches checked out anywhere and foreign ownership refuse; protected refs are never removed (default and `branch.base` refs are kept, non-terminal owners refuse); merged evidence is a hard precondition (squash-only residue is retained and reported, never force-deleted).
+- Wired the two cleanup timing lanes into the skill corpus: a new **`mstar-branch-worktree`「Worktree / branch cleanup」** contract home (ownership from snapshot row metadata/retained track Assignments or verified `--worktree` assertions — never naming inference), a same-round post-merge call in `mstar-iteration` Phase 2 (a Done plan is eligible while its parent iteration still runs), and the Phase 6 §6.4 call after terminal close + PR merged.
+- Worktree dirtiness now counts ignored files: an ignored-content worktree (e.g. a local-only `.env`) is refused (`cleanup.refuse.dirty-worktree`) instead of being removed.
+- `--apply` defers the branch-deletion cwd host (typically the terminal integration worktree) to a last removal pass: other eligible worktrees are removed first, then `git branch -d` runs from the evidence-base checkout, and the deferred integration worktrees are removed last — plan branches merged only into the integration branch (squash-merge era) now delete instead of refusing on the main worktree.
+- Unify active lifecycle branch checks across hosts, retain parallel track ownership, bound SDD Git probes, and preserve integration-cwd workflow selection.
+- Isolated the evidence output-cap test in a captured CLI subprocess, verifying complete forwarding and capped log storage without flooding the test runner's live output.
+
+- Version alignment with harness **3.9.0**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **3.9.0**.
+
 ## [3.8.3] - 2026-09-12
 
 ### Changed

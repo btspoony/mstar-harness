@@ -8,6 +8,46 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ## [Unreleased]
 
+## [3.9.0] - 2026-09-13
+
+### Testing
+
+- Generated the synthetic audit password before interpolating the test document, preserving random secret-detection coverage while preventing a source scanner from mistaking the nested expression for a hardcoded credential.
+- Isolated the evidence output-cap test in a captured CLI subprocess, verifying complete forwarding and capped log storage without flooding the test runner's live output.
+- Updated exact drift-regression counts to include the validated cleanup and post-merge close gate callouts: 48 Engine-check callouts and 46 CLI citations.
+
+### Fixed
+
+- Cleanup now re-probes local branches released by deferred integration worktree removal, deleting merged branches in one apply while preserving refusal guards and evidence-base deletion ordering.
+- Updated **dsh headless guidance** to retain restricted permissions for unattended work, verify effective session permissions, and move operations requiring approval to the web profile instead of removing sandbox restrictions.
+- Escaped remaining Unicode literals in worktree validation, SDD discovery and evidence diagnostics without changing runtime text or matching behavior, restoring the ASCII source gate.
+- Escaped em dashes in worktree check and cleanup CLI literals to satisfy ASCII source checks while preserving runtime messages.
+- Regenerated the bundled write-gate hook from the current engine and canonical hook source to restore bundle freshness.
+
+### Harness
+
+- Install Codex custom agent TOMLs as regular files so discovered roles can load. Re-running init replaces expected legacy links and backs up differing regular files before refresh; doctor detects links and source drift. Update installation and dispatch guidance to require successful named-role invocation.
+- Added the **Phase 6 post-merge close engine gate** (`evaluatePostMergeClose`): a pure, additive local-state check over the terminal snapshot shape, leftover leases and root-status unregister, with stable `PHASE6_*` codes; `mstar iteration gate --phase 6 --workflow <id>` evaluates it without `--compass`.
+- The Phase 6 gate now validates the root `status.json` with the full v2 root validator (`validateStatusV2`, structure-only): a malformed registry (non-v2 version, missing `updated_at`, malformed `workflows[]` entries) fails closed as `PHASE6_INVALID_ROOT` instead of false-PASSing when the workflow id is absent; `/iteration-start` and the README commands table now state the auto-continue completion at Phase 6 post-merge close (same Done definition as `/iteration-drive`).
+- Build the real DSH plugin entry with frozen dependencies before security scanning, and preserve the scanner's complete JSON findings with an untruncated job summary.
+- Streamlined repository maintenance instructions: removed duplicated runtime loading rules and historical release details, updated package routing, and aligned authoring guidance and scoped verification with current harness contracts.
+- Removed the mandatory full-diff approval gate for repository maintenance; agents can continue already-authorized work without separate approval for each complete diff.
+- Added the **guarded `mstar worktree cleanup` verb** with the pure `planWorktreeCleanup` engine planner: dry-run by default prints `verdict | kind | ref | reason` per worktree/branch candidate; `--apply` removes eligible worktrees (ordinary `git worktree remove`, never force), re-probes/re-plans, then deletes newly unchecked-out branches (`git branch -d`, never `-D`) and runs expected-OID `--force-with-lease` remote compare-and-delete. Active leases, branches checked out anywhere and foreign ownership refuse; protected refs are never removed (default and `branch.base` refs are kept, non-terminal owners refuse); merged evidence is a hard precondition (squash-only residue is retained and reported, never force-deleted).
+- Wired the two cleanup timing lanes into the skill corpus: a new **`mstar-branch-worktree`「Worktree / branch cleanup」** contract home (ownership from snapshot row metadata/retained track Assignments or verified `--worktree` assertions — never naming inference), a same-round post-merge call in `mstar-iteration` Phase 2 (a Done plan is eligible while its parent iteration still runs), and the Phase 6 §6.4 call after terminal close + PR merged.
+- Worktree dirtiness now counts ignored files: an ignored-content worktree (e.g. a local-only `.env`) is refused (`cleanup.refuse.dirty-worktree`) instead of being removed.
+- `--apply` defers the branch-deletion cwd host (typically the terminal integration worktree) to a last removal pass: other eligible worktrees are removed first, then `git branch -d` runs from the evidence-base checkout, and the deferred integration worktrees are removed last — plan branches merged only into the integration branch (squash-merge era) now delete instead of refusing on the main worktree.
+- Unify active lifecycle branch checks across hosts, retain parallel track ownership, bound SDD Git probes, and preserve integration-cwd workflow selection.
+- Keep the dedicated integration checkout under feature-worktree waivers, record retained parallel-track branches, and centralize L1 refusal semantics.
+- Renamed the workflow-snapshot integration field `control_worktree_path` to **`integration_worktree_path`**: writers emit only the canonical key, the canonical reader accepts the v1 alias with a medium migration advisory (normalized in memory, never rewritten in place), strict validation refuses documents carrying both keys, and `mstar migrate` lifts the rename.
+- **`mstar worktree check`** now validates main-worktree residency — the process SSOT (`status.json` / `workflows/`) resolves from the verified main worktree root and is never recorded in the snapshot.
+- Renamed the `worktree check` flag `--control` to **`--integration`**; `--control` remains as a deprecated alias for one release (stderr migration notice).
+- Cut the **dsh / omp / opencode** host surfaces (gates, tools, hooks) over to the canonical write model.
+- Rewrote the runtime skill corpus to the **three-domain worktree write model** (control / feature / integration residency) and refreshed all bundled mirrors.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, the portable Agent Plugins manifest, and both marketplace manifests: **→ 3.9.0**.
+
 ## [3.8.3] - 2026-09-12
 
 ### Harness

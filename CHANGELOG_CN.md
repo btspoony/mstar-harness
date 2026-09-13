@@ -6,6 +6,46 @@
 
 ## [Unreleased]
 
+## [3.9.0] - 2026-09-13
+
+### Testing
+
+- 在插入测试文档前生成合成 audit 密码，保留随机值的秘密检测覆盖，并避免源码扫描器将嵌套表达式误判为硬编码凭据。
+- 将 evidence 输出上限测试隔离到捕获输出的 CLI 子进程中，在验证完整转发与日志截断的同时，避免大量内容涌入测试运行器的实时输出。
+- 更新精确漂移回归计数，纳入已验证的 cleanup 与合并后关闭门禁引用：48 个 Engine-check callout、46 个 CLI citation。
+
+### Fixed
+
+- 清理命令现会重新探测延后删除的 integration worktree 所释放的本地分支，在一次 apply 中删除已合并分支，同时保留拒绝护栏及证据基准检出目录的删除顺序。
+- 更新 **dsh headless 使用指导**：无人值守工作应保留受限权限、核实会话实际生效的权限，并将需要审批的操作转到 web profile，不再建议解除沙箱限制。
+- 将 worktree 校验、SDD 发现与 evidence 诊断中剩余的 Unicode 字面量转义，保持运行时文案及匹配行为不变，恢复源码 ASCII 门禁。
+- 将 worktree check 与 cleanup CLI 字面量中的破折号改为 Unicode 转义，在保留运行时文案的同时满足源码 ASCII 检查。
+- 基于当前引擎及权威 hook 源码重新生成写入门禁 bundle，恢复构建产物同步。
+
+### Harness
+
+- 将 Codex 自定义角色 TOML 安装为普通文件，使已发现的角色能够加载。再次运行 init 会替换指向预期来源的旧链接，并在刷新不同内容的普通文件前备份；doctor 检测链接与来源内容漂移。同步安装及派发指导，以具名角色实际启动成功作为验证依据。
+- 新增 **Phase 6 post-merge close 引擎门禁**（`evaluatePostMergeClose`）：纯函数、增量式校验本地终态（快照终态合法性、悬挂 lease、根 `status.json` 已注销），稳定码 `PHASE6_*`；`mstar iteration gate --phase 6 --workflow <id>` 无需 `--compass` 即可评估。
+- Phase 6 门禁现在以完整 v2 根校验器（`validateStatusV2`，仅结构）校验根 `status.json`：畸形 registry（非 v2 版本、缺 `updated_at`、畸形 `workflows[]` 条目）一律 fail-closed 报 `PHASE6_INVALID_ROOT`，不再因 workflow id 缺席而误判 PASS；`/iteration-start` 与 README 命令表的自动推进完成定义对齐到 Phase 6 post-merge close（与 `/iteration-drive` 同一 Done 定义）。
+- 安全扫描前使用冻结依赖构建真实 DSH 插件入口，保留扫描器的完整 JSON 告警，并在任务摘要中展示全部告警。
+- 精简仓库维护指引：移除重复的运行时加载规则与历史发布细节，更新包职责入口，并将技能编写指引和定向验证要求对齐当前 harness 契约。
+- 移除仓库维护中完整 diff 必须单独审批的门槛；agent 可继续执行已获授权的工作，无需为每份完整 diff 重复申请批准。
+- 新增**带守卫的 `mstar worktree cleanup` 命令**与纯函数 `planWorktreeCleanup` 引擎规划器：默认 dry-run 逐候选打印 `verdict | kind | ref | reason`；`--apply` 先以普通 `git worktree remove`（永不 force）移除 eligible worktree，重新探测/规划后删除现已未检出的分支（`git branch -d`，永不 `-D`），远端走 expected-OID `--force-with-lease` compare-and-delete。active lease、任意检出分支与 foreign 归属一律 refuse；protected refs 一律不移除（默认分支与 `branch.base` 为 keep，非终结 owner 为 refuse）；合并证据是硬前置（squash-only 残留保留并报告，绝不强删）。
+- 将两条 cleanup 时序车道接入技能语料：新增 **`mstar-branch-worktree`「Worktree / branch cleanup」** 契约本体（归属来自 snapshot 行元数据/retained track Assignments 或已验证 `--worktree` 断言——禁止命名推断）、`mstar-iteration` Phase 2 的 merge 同轮调用（父迭代仍在运行即可回收 Done plan），以及 Phase 6 §6.4 在 terminal close + PR merged 后的调用。
+- worktree 脏检查现在计入 ignored 文件：含 ignored 内容的 worktree（如本地独有 `.env`）会被拒绝（`cleanup.refuse.dirty-worktree`）而不是被移除。
+- `--apply` 将分支删除 cwd 宿主（通常是 terminal integration worktree）推迟到最后一轮移除：先移除其他 eligible worktree，再从 evidence-base 检出执行 `git branch -d`，最后移除被推迟的 integration worktree——仅合并进 integration 分支的 plan 分支（squash-merge 时代）现在能真正删除，而不是退回主 worktree 后 refuse。
+- 统一各宿主的活跃生命周期分支校验，保留并行轨道所有权，限制 SDD Git 探测时间，并保持 integration cwd 工作流选择。
+- feature worktree 豁免下仍保留独立 integration checkout，记录并行轨道保留分支，并集中说明 L1 拒绝语义。
+- 工作流快照集成字段 `control_worktree_path` 更名为 **`integration_worktree_path`**：writer 只输出规范键；canonical reader 以 medium 迁移建议接受 v1 别名（仅内存归一化，绝不原地改写）；严格校验拒绝同时携带两键的文档；`mstar migrate` 完成更名迁移。
+- **`mstar worktree check`** 现校验主 worktree 驻留——进程 SSOT（`status.json` / `workflows/`）从验证过的主 worktree 根解析，不再记录进快照。
+- `worktree check` 旗标 `--control` 更名为 **`--integration`**；`--control` 作为弃用别名保留一个发布周期（stderr 迁移提示）。
+- **dsh / omp / opencode** 宿主面（gates、tools、hooks）切换到规范写模型。
+- 运行时技能语料改写为**三域 worktree 写模型**（control / feature / integration 驻留），并刷新全部打包镜像。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 3.9.0**。
+
 ## [3.8.3] - 2026-09-12
 
 ### Harness
