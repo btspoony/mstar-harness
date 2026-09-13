@@ -129,9 +129,8 @@ Before opening PRs or proposing "done", an agent must:
 1. Confirm the change solves a real, observed maintenance problem (not a theoretical one).
 2. Check for duplicate or recently rejected attempts before repeating similar work.
 3. Confirm the change belongs in core harness (otherwise recommend a separate plugin/extension path).
-4. Show the complete diff to the human partner and get explicit approval.
-5. Provide verification evidence for any behavior-shaping changes.
-6. If the change is user-facing or behavior-notable, confirm a matching `.changes/unreleased/<slug>.md` fragment exists — and that assembled `CHANGELOG*` files were **not** hand-edited for it.
+4. Provide verification evidence for any behavior-shaping changes.
+5. If the change is user-facing or behavior-notable, confirm a matching `.changes/unreleased/<slug>.md` fragment exists — and that assembled `CHANGELOG*` files were **not** hand-edited for it.
 
 If one of these checks fails, stop and report why.
 
