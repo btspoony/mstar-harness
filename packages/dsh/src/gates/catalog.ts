@@ -45,6 +45,7 @@ import {
   readJson,
   resolveProjectDir,
   resolveRepoEnforcement,
+  readWorkflowSnapshot,
   PROJECT_REGISTER_FILE,
   PROJECT_ROADMAP_FILE,
   WORKFLOW_SNAPSHOT_FILE,
@@ -395,7 +396,7 @@ function renderEngineStatusCatalog(source: MstarEngineStatusPayload): string {
       const policy = [
         state.pushPolicy !== null ? `push ${state.pushPolicy}` : null,
         state.worktreeMode !== null ? `worktree ${state.worktreeMode}` : null,
-        state.controlWorktreePath !== null ? `control ${state.controlWorktreePath}` : null,
+        state.integrationWorktreePath !== null ? `integration ${state.integrationWorktreePath}` : null,
       ].filter((part): part is string => part !== null).join('; ')
       if (policy !== '') lines.push(`policy: ${policy}`)
       lines.push(`leases: ${state.leases.length === 0 ? 'none active' : joinCapped(state.leases, CATALOG_STATE_JOIN_LIMIT, '; ', (l) => `${l.planId} → ${l.holder}${l.worktreePath !== null ? ` (${l.worktreePath})` : ''}`)}`)
@@ -517,7 +518,14 @@ function harnessStateSource(harnessDir: string, selection: WorkflowSelectionView
       )
     }
     try {
-      snapshot = readJson(snapshotPath)
+      // Canonical reader: legacy-only snapshots stay readable through the
+      // single sanctioned alias normalization (the v1
+      // `control_worktree_path` key reads as `integration_worktree_path`);
+      // any other validation violation refuses the read → the same
+      // structured snapshot-unreadable degrade. The reader's migration
+      // diagnostic is advisory and the catalog has no note channel — the
+      // CLI surface prints it instead.
+      snapshot = readWorkflowSnapshot(join(harnessDir, selection.dir)).snapshot
     } catch {
       // Same structured degrade for an unreadable/corrupt snapshot file.
       return selectionErrorState(
@@ -569,7 +577,7 @@ function harnessStateSource(harnessDir: string, selection: WorkflowSelectionView
     const { residuals, residualFindings } = rollup
     // v3 branch/policy anchors: the snapshot's first-class fields (migrate
     // lifts the v1 root metadata into `branch` / `execution_policy` /
-    // `control_worktree_path`); the SELECTED lifecycle's compass frontmatter
+    // `integration_worktree_path`); the SELECTED lifecycle's compass frontmatter
     // stays the fallback for base/target.
     const branch = asRecord(snapshot.branch)
     const executionPolicy = asRecord(snapshot.execution_policy)
@@ -586,7 +594,7 @@ function harnessStateSource(harnessDir: string, selection: WorkflowSelectionView
       specIntegrationBranch: str(branch?.integration),
       pushPolicy: str(executionPolicy?.push_policy),
       worktreeMode: str(executionPolicy?.worktree_mode),
-      controlWorktreePath: str(snapshot.control_worktree_path),
+      integrationWorktreePath: str(snapshot.integration_worktree_path),
       leases,
       knowledge: knowledgeDigest(harnessDir),
       direction: compass !== undefined ? compassDirection(compass.compassPath) : null,
@@ -635,7 +643,7 @@ function selectionErrorState(
     specIntegrationBranch: null,
     pushPolicy: null,
     worktreeMode: null,
-    controlWorktreePath: null,
+    integrationWorktreePath: null,
     leases: [],
     knowledge: knowledgeDigest(harnessDir),
     direction: null,

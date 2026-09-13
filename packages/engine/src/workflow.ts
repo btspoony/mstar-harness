@@ -14,7 +14,9 @@
  *   verbatim — unknown row fields preserved, never re-bucketed),
  *   `execution_policy?` (first-class; keys accepted-but-opaque this
  *   iteration), `integration_merge_lease?` (top-level; the v1 root-`metadata`
- *   home is gone), `branch?` / `control_worktree_path?` (iteration anchors),
+ *   home is gone), `branch?` / `integration_worktree_path?` (iteration
+ *   anchors — the canonical checkout field; the v1 `control_worktree_path`
+ *   key survives only as a read alias in `readWorkflowSnapshot`),
  *   `legacy_metadata?` (catch-all for unmapped v1 root-metadata keys),
  *   `compass_ref?` (relative pointer to the iteration delivery compass).
  * - Lease shape delegation: `validateExecutionLease` /
@@ -23,12 +25,12 @@
  *   `.status-write.lockdir` lands inside `workflows/<id>/` (dirname of the
  *   snapshot), no harness-root pollution.
  */
-import { mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
 import type { GateResult, Severity, ValidationResult } from "./core.js";
 import { validateExecutionLease, validateIntegrationMergeLease, withStatusWriteLock, type IntegrationMergeLease } from "./lease.js";
 import { validatePlanRow, type PlanRow } from "./status.js";
-import { assertFsStorePath, getArtifactStore } from "./store.js";
+import { assertFsStorePath, getArtifactStore, type ArtifactStore } from "./store.js";
 
 /** Snapshot file name inside `workflows/<id>/` ( — writer contract). */
 export const WORKFLOW_SNAPSHOT_FILE = "snapshot.json";
@@ -69,6 +71,14 @@ export type WorkflowBranchAnchors = {
  * per-row `execution_lease` stays on the row, `integration_merge_lease` is
  * top-level.
  *
+ * Integration worktree path: the canonical member is
+ * `integration_worktree_path` — the dedicated integration checkout, on
+ * `branch.integration`, distinct from the main worktree. The v1
+ * `control_worktree_path` key has NO canonical member: legacy-only
+ * documents stay readable through `readWorkflowSnapshot` (in-memory
+ * normalization + medium migration diagnostic); writers emit only the
+ * canonical shape — no dual writer.
+ *
  * Notes dual-home SSOT: a plan row's `notes` array is the
  * LEGACY VERBATIM copy preserved at migrate time — the RUNTIME ledger is
  * `notes.jsonl` in the workflow dir (`migrate.ts` NOTES_LEDGER_FILE). New
@@ -88,7 +98,7 @@ export type WorkflowSnapshot = {
   execution_policy?: WorkflowExecutionPolicy;
   integration_merge_lease?: IntegrationMergeLease;
   branch?: WorkflowBranchAnchors;
-  control_worktree_path?: string;
+  integration_worktree_path?: string;
   legacy_metadata?: Record<string, unknown>;
   compass_ref?: string;
 };
@@ -116,15 +126,40 @@ function validateNonEmptyString(
 }
 
 /**
+ * Integration worktree path value check — shared by the canonical member
+ * and the v1 read alias: empty, non-string, or relative (non-absolute)
+ * values are rejected under one stable machine code.
+ */
+function validateWorktreePathValue(violations: ValidationResult[], value: unknown, field: string): void {
+  if (typeof value !== "string" || value.trim() === "" || !isAbsolute(value)) {
+    violations.push(
+      violation(
+        "high",
+        "workflow.snapshot.invalid-integration-worktree-path",
+        `${field} must be a non-empty absolute path \u2014 got ${JSON.stringify(value)}`,
+        "record the absolute integration checkout path (integration_worktree_path)",
+      ),
+    );
+  }
+}
+
+/**
  * Validate a v3 workflow snapshot document ( — final schema):
  * enum/type/id checks, `schema_version: 1`, required timestamps, `plans[]`
  * rows validated by the legacy `validatePlanRow` with row-level
  * `execution_lease` shape delegated to `validateExecutionLease`,
  * `integration_merge_lease` shape delegated to
  * `validateIntegrationMergeLease`, `execution_policy` keys accepted-but-
- * opaque. Terminal invariant: `status` ∈ completed|failed|stopped ⇒
- * `ended_at` present AND no row carries `execution_lease` AND no
- * `integration_merge_lease` (no dangling leases).
+ * opaque. Integration worktree path: the canonical member is
+ * `integration_worktree_path`; the v1 `control_worktree_path` key is a
+ * read-only alias whose presence keeps this STRICT validation a failing
+ * gate carrying the medium `workflow.snapshot.legacy-control-worktree-path`
+ * migration diagnostic (read acceptance is not write permission — the
+ * canonical reader is the only consumer that normalizes it, in memory);
+ * both keys present is `workflow.snapshot.conflicting-worktree-paths`
+ * (high), even when the values are equal. Terminal invariant: `status` ∈
+ * completed|failed|stopped ⇒ `ended_at` present AND no row carries
+ * `execution_lease` AND no `integration_merge_lease` (no dangling leases).
  */
 export function validateWorkflowSnapshot(doc: unknown): GateResult {
   const violations: ValidationResult[] = [];
@@ -236,14 +271,37 @@ export function validateWorkflowSnapshot(doc: unknown): GateResult {
     }
   }
 
-  if (doc.control_worktree_path !== undefined) {
-    validateNonEmptyString(
-      violations,
-      doc.control_worktree_path,
-      "control_worktree_path",
-      "workflow.snapshot.missing-control-worktree-path",
-      "workflow.snapshot.invalid-control-worktree-path",
+  // Integration worktree path (canonical member + v1 read alias):
+  // strict validation never accepts the legacy key — the medium diagnostic
+  // keeps `ok` false so the writer refuses; only `readWorkflowSnapshot`
+  // normalizes it, in memory. An invalid legacy value never falls back to
+  // (or substitutes for) the canonical key.
+  const legacyWorktreePath = doc.control_worktree_path;
+  const canonicalWorktreePath = doc.integration_worktree_path;
+  if (legacyWorktreePath !== undefined && canonicalWorktreePath !== undefined) {
+    violations.push(
+      violation(
+        "high",
+        "workflow.snapshot.conflicting-worktree-paths",
+        "both integration_worktree_path and the legacy control_worktree_path key are present \u2014 the canonical snapshot carries only integration_worktree_path (refused even when the values are equal)",
+        "remove the legacy control_worktree_path key",
+      ),
     );
+  } else {
+    if (canonicalWorktreePath !== undefined) {
+      validateWorktreePathValue(violations, canonicalWorktreePath, "integration_worktree_path");
+    }
+    if (legacyWorktreePath !== undefined) {
+      violations.push(
+        violation(
+          "medium",
+          "workflow.snapshot.legacy-control-worktree-path",
+          "legacy control_worktree_path is present \u2014 the canonical reader normalizes it to integration_worktree_path in memory; migrate on the next authorized write (writers emit only the canonical key)",
+          "rename control_worktree_path to integration_worktree_path on the next authorized write",
+        ),
+      );
+      validateWorktreePathValue(violations, legacyWorktreePath, "control_worktree_path (legacy alias)");
+    }
   }
 
   if (doc.legacy_metadata !== undefined && !isPlainObject(doc.legacy_metadata)) {
@@ -299,6 +357,76 @@ export function validateWorkflowSnapshot(doc: unknown): GateResult {
   return { ok: violations.length === 0, violations };
 }
 
+/** Machine code of the v1 read-alias migration diagnostic (`readWorkflowSnapshot`). */
+export const LEGACY_WORKTREE_PATH_CODE = "workflow.snapshot.legacy-control-worktree-path";
+
+/**
+ * Result of the canonical snapshot read: the validated snapshot plus the
+ * non-blocking diagnostics collected while reading (currently only the
+ * `workflow.snapshot.legacy-control-worktree-path` migration diagnostic for
+ * v1-shaped documents). A read with diagnostics is NOT write permission —
+ * writers keep strict validation and emit only the canonical shape.
+ */
+export type WorkflowSnapshotRead = {
+  snapshot: WorkflowSnapshot;
+  diagnostics: ValidationResult[];
+};
+
+/**
+ * Canonical snapshot reader (`{WORKFLOW_DIR}/<id>/snapshot.json`): reads
+ * `dir/snapshot.json`, validates the raw document, normalizes the single
+ * permitted legacy alias (`control_worktree_path` →
+ * `integration_worktree_path`) IN MEMORY and returns its medium migration
+ * diagnostic separately. Any other validation violation refuses the read
+ * (throw) — read acceptance extends only to the migration diagnostic, so
+ * this never weakens the strict writer gate. Performs no writes: the
+ * source file's bytes are never touched; legacy snapshots migrate on their
+ * next authorized read-modify-write through the canonical writer. Missing
+ * files, malformed JSON, and non-object documents throw.
+ */
+export class WorkflowSnapshotValidationError extends Error {
+  constructor(message: string, readonly violations: ValidationResult[]) { super(message); }
+}
+
+export function readWorkflowSnapshot(dir: string): WorkflowSnapshotRead {
+  const snapshotPath = join(dir, WORKFLOW_SNAPSHOT_FILE);
+  if (!existsSync(snapshotPath)) {
+    throw new Error(`workflow snapshot not found: ${snapshotPath}`);
+  }
+  let doc: unknown;
+  try {
+    doc = JSON.parse(readFileSync(snapshotPath, "utf8"));
+  } catch (error) {
+    throw new Error(`Invalid JSON in ${snapshotPath}: ${(error as Error).message}`);
+  }
+  return normalizeWorkflowSnapshot(doc, snapshotPath);
+}
+
+function normalizeWorkflowSnapshot(doc: unknown, snapshotPath: string): WorkflowSnapshotRead {
+  const gate = validateWorkflowSnapshot(doc);
+  const migration = gate.violations.filter((v) => v.code === LEGACY_WORKTREE_PATH_CODE);
+  const blocking = gate.violations.filter((v) => v.code !== LEGACY_WORKTREE_PATH_CODE);
+  if (blocking.length > 0) {
+    const detail = blocking.map((v) => `${v.code}: ${v.message}`).join("; ");
+    throw new WorkflowSnapshotValidationError(`refusing to read invalid workflow snapshot ${snapshotPath}: ${detail}`, blocking);
+  }
+  if (migration.length === 0) {
+    return { snapshot: doc as WorkflowSnapshot, diagnostics: [] };
+  }
+  // In-memory normalization of the single permitted legacy alias.
+  const raw = doc as Record<string, unknown>;
+  const { control_worktree_path: _legacy, ...rest } = raw;
+  const normalized = { ...rest, integration_worktree_path: raw.control_worktree_path } as unknown as WorkflowSnapshot;
+  const revalidated = validateWorkflowSnapshot(normalized);
+  if (!revalidated.ok) {
+    const detail = revalidated.violations.map((v) => `${v.code}: ${v.message}`).join("; ");
+    throw new Error(
+      `refusing to read workflow snapshot ${snapshotPath}: legacy normalization produced an invalid document: ${detail}`,
+    );
+  }
+  return { snapshot: normalized, diagnostics: migration };
+}
+
 /**
  * Write a workflow snapshot as a whole-rewrite of `dir/snapshot.json` under
  * `withStatusWriteLock(snapshotPath)` ( — the `.status-write.lockdir`
@@ -338,6 +466,65 @@ export async function writeWorkflowSnapshot(snapshot: WorkflowSnapshot, dir: str
   // The store put is the durable write inside the lock; the store is never a
   // second lock (architect-locked 2026-08-27: locks stay with callers).
   await withStatusWriteLock(snapshotPath, async () => {
-    await store.put({ kind: "snapshot", key: snapshot.id, payload: snapshot });
+    await validateAndPutWorkflowSnapshot(store, snapshot);
+  });
+}
+
+
+/** Shared by writers that already hold the snapshot lock. */
+async function validateAndPutWorkflowSnapshot(store: ArtifactStore, snapshot: WorkflowSnapshot): Promise<void> {
+  const gate = validateWorkflowSnapshot(snapshot);
+  if (!gate.ok) {
+    const detail = gate.violations.map((v) => `${v.code}: ${v.message}`).join("; ");
+    throw new WorkflowSnapshotValidationError(`refusing to write invalid workflow snapshot: ${detail}`, gate.violations);
+  }
+  await store.put({ kind: "snapshot", key: snapshot.id, payload: snapshot });
+}
+
+/** Terminal enum predicate only; callers validate document shape separately. */
+export function isTerminalSnapshot(doc: WorkflowSnapshot): boolean {
+  return (WORKFLOW_TERMINAL_STATUSES as readonly string[]).includes(doc.status);
+}
+
+export type CloseWorkflowOptions = { endedAt: string };
+
+function isCloseTimestamp(value: string): boolean {
+  if (typeof value !== "string") return false;
+  const match = /^(\d{4})-(\d{2})-(\d{2})(?:[Tt]([01]\d|2[0-3]):([0-5]\d):([0-5]\d)(?:\.\d+)?(?:[Zz]|[+-](?:[01]\d|2[0-3]):[0-5]\d))?$/.exec(value);
+  if (!match) return false;
+  // Date.parse normalizes impossible dates such as February 30; compare the
+  // calendar date independently of the optional timestamp's UTC offset.
+  const date = new Date(`${match[1]}-${match[2]}-${match[3]}T00:00:00Z`);
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value.slice(0, 10);
+}
+
+/**
+ * Complete the latest snapshot under its write lock. Never releases leases.
+ * A valid terminal snapshot is returned unchanged, including failed/stopped.
+ */
+export async function closeWorkflow(workflowId: string, dir: string, opts: CloseWorkflowOptions): Promise<WorkflowSnapshot> {
+  if (!isCloseTimestamp(opts.endedAt)) {
+    throw new Error("endedAt must be a valid YYYY-MM-DD date or RFC3339 timestamp");
+  }
+  const snapshotPath = join(dir, WORKFLOW_SNAPSHOT_FILE);
+  const store = getArtifactStore();
+  const ref = { kind: "snapshot" as const, key: workflowId };
+  assertFsStorePath(store, ref, snapshotPath);
+  mkdirSync(dir, { recursive: true });
+  return withStatusWriteLock(snapshotPath, async () => {
+    const doc = await store.get(ref);
+    if (doc === undefined) throw new Error(`workflow snapshot not found: ${snapshotPath}`);
+    const { snapshot } = normalizeWorkflowSnapshot(doc, snapshotPath);
+    if (snapshot.id !== workflowId) {
+      throw new Error(`workflow snapshot identity mismatch: expected ${workflowId}, got ${snapshot.id}`);
+    }
+    if (isTerminalSnapshot(snapshot)) return snapshot;
+    if (snapshot.plans.some((row) => row.status !== "Done")) {
+      throw new Error("refusing to close workflow: every plan row must be Done");
+    }
+    const completed: WorkflowSnapshot = { ...snapshot, status: "completed", ended_at: opts.endedAt, updated_at: opts.endedAt };
+    // Strict terminal validation refuses both lease kinds without deleting them.
+    await validateAndPutWorkflowSnapshot(store, completed);
+    return completed;
   });
 }

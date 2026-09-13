@@ -1,13 +1,13 @@
 ---
 name: iteration-start
-description: "Start a new harness iteration — optional direction hint, research, grill-me, compass/plans, Review & Edit chain (long-lived {SPECS_DIR}/ + {ITERATION_DIR}/<id>/ package; compound promotes package at close only), PM lock, integration branch; then auto-continue Phase 2→5 (execute → close → PR → merge-ready) unless `pause` arg given."
+description: "Start a new harness iteration — optional direction hint, research, grill-me, compass/plans, Review & Edit chain (long-lived {SPECS_DIR}/ + {ITERATION_DIR}/<id>/ package; compound promotes package at close only), PM lock, integration branch; then auto-continue Phase 2→6 (execute → close → PR → merge-ready → post-merge close) unless `pause` arg given."
 agent: project-manager
 input: "[direction] [pause]"
 ---
 
 # Start Iteration
 
-Start a new Morning Star harness iteration. **Phase 1 is not complete until the Review & Edit chain runs via dispatched roles and PM lock — not when compass files are first written.** By default, after Phase 1 lock + integration branch, **auto-continue into Phase 2→5** (execute → close → PR → merge-ready); pass **`pause`** to stop after Phase 1 and resume later with `/iteration-drive`.
+Start a new Morning Star harness iteration. **Phase 1 is not complete until the Review & Edit chain runs via dispatched roles and PM lock — not when compass files are first written.** By default, after Phase 1 lock + integration worktree, **auto-continue into Phase 2→6** (execute → close → PR → merge-ready → post-merge close); pass **`pause`** to stop after Phase 1 and resume later with `/iteration-drive`.
 
 ## Args
 
@@ -18,7 +18,7 @@ Start a new Morning Star harness iteration. **Phase 1 is not complete until the 
 | Arg | Meaning | Default |
 |-----|---------|---------|
 | `direction` | Iteration direction hint — constrains §2 candidates and seeds §3 grill-me; **not** a lock (start stays interactive) | Research → grill-me converges with user |
-| `pause` | Stop after Phase 1 (lock + integration branch); run `/iteration-drive` later to resume | **Auto-continue** into Phase 2→5 |
+| `pause` | Stop after Phase 1 (lock + integration worktree); run `/iteration-drive` later to resume | **Auto-continue** into Phase 2→6 |
 
 **Parse**: if any token is exactly `pause` (case-insensitive), treat as the `pause` flag; the remaining tokens (joined) are the `direction` hint. `/iteration-start pause` = pause with empty direction.
 
@@ -34,7 +34,7 @@ Start a new Morning Star harness iteration. **Phase 1 is not complete until the 
 
 派发细则 → **`mstar-dispatch-gates`**（specialist review-and-edit dispatch）+ **`mstar-host`**（宿主 invoke 能力）。**不得**在 PM 线程加载其他 role reference 代劳。
 
-**Phase 1 完成定义**：compass `status: locked` + 三角色 invoke 已返回 + pre-commit checklist 全 `[x]` — 不是初稿落盘。**Command Done**（§7 auto-continue）= Phase 5 §5.5 exit checklist 全 `[x]`（同 `iteration-drive`）；`pause` 时 = Phase 1 完成。
+**Phase 1 完成定义**：compass `status: locked` + 三角色 invoke 已返回 + pre-commit checklist 全 `[x]` — 不是初稿落盘。**Command Done**（§7 auto-continue）= Phase 6 post-merge close 完成（同 `iteration-drive`：Phase 5 §5.5 exit checklist 全 `[x]` **且** PR merged 后 §6.1–§6.4 完成）；`pause` 时 = Phase 1 完成。
 
 **Phase 2–5 共享 invariants / preflight / todos / STOP** → **`mstar-iteration/references/command-shared-invariants.md`**（不在本命令重复）。
 
@@ -45,7 +45,7 @@ Start a new Morning Star harness iteration. **Phase 1 is not complete until the 
 | **Cursor Plan mode**（CreatePlan / Plan 会话活跃） | §0 Boot → **§P** — **先**空白 CreatePlan，再 **feedback-driven** 自主改同一份 plan；grill-me **仅**在用户明确结束反馈后、仍有阻塞疑问时；**Build 前不执行** Review 链 / commit / integration 分支 |
 | **其它**（Agent、OpenCode、非 Plan） | §0 Boot → §1–§6（Research → Explore → grill-me → Write → Review → branch） |
 
-**Both paths converge at §6**（integration branch）。Default → §7 auto-continue Phase 2→5；`pause` → command ends at §6。
+**Both paths converge at §6**（integration worktree）。Default → §7 auto-continue Phase 2→6；`pause` → command ends at §6.
 
 ## 0. Boot
 
@@ -105,18 +105,18 @@ PM must print this block before §6; all `[ ]` must be `[x]`:
 - [ ] product-manager / architect / writing-specialist invokes completed — 编辑 compass / plans / specs / **`<iteration-id>/` package**；**未**向 `{KNOWLEDGE_DIR}/` 新增
 - [ ] PM final lock: compass `status: locked`; Prepare gates pass (blocked plans documented)
 - [ ] Branch policy locked: `iteration_base_branch` / `spec_integration_branch` / `target_branch` recorded in compass / `status.json`
-- [ ] **THEN**: commit + push `iteration/<iteration-id>`
+- [ ] **THEN**: transfer reviewed changes + commit + push `iteration/<iteration-id>` **in the integration worktree** (never the primary checkout)
 
 ## 6. Integration Branch
 
-Per **`mstar-iteration/references/phase-2-worktree-lease.md` §2.3**：create `spec_integration_branch` from `iteration_base_branch`（`git fetch` → `git checkout -b <spec_integration_branch> <iteration_base_branch>`）；register `iteration_base_branch` / `spec_integration_branch` / `target_branch` in compass frontmatter **and** `status.json` metadata；commit docs；push。**STOP** if `iteration_base_branch` / `target_branch` missing — never default `main`/`master`.
+Per **`mstar-iteration/references/phase-2-worktree-lease.md` §2.3**：create the **integration worktree** — a dedicated linked checkout **distinct from the primary checkout**（`git worktree add <path> -b <spec_integration_branch> <iteration_base_branch>`；primary 分支**不**切换）；register `iteration_base_branch` / `spec_integration_branch` / `target_branch` in compass frontmatter **and** `status.json` metadata；record the observed primary branch as **`Main worktree branch`** in the main plan header；**transfer only the reviewed §5 changes** into the integration worktree, commit there, then restore the primary checkout's corresponding uncommitted docs without switching its branch（Phase-1 bounded exception → `phase-1-prepare.md` §1.6；**不得**搬运无关用户改动）；push。**STOP** if `iteration_base_branch` / `target_branch` missing — never default `main`/`master`.
 
 ---
 
-## 7. Phase 2–5（auto-continue）
+## 7. Phase 2–6（auto-continue）
 
-**`pause` arg → command ends here**（Phase 1 locked + integration pushed；run `/iteration-drive` later）。**Default（no `pause`）→ auto-continue**：execute **`iteration-drive`**（Phase 2 → **`mstar-iteration/references/phase-2-worktree-lease.md`**；Phase 3 → `references/phase-3-iteration-close.md`；Phase 4/5 → `references/phase-4-5-pr-delivery.md`；Phase 5 helper discovery → `phase5-helper-discovery.md`）。Shared invariants / preflight / STOP → **`mstar-iteration/references/command-shared-invariants.md`**。
+**`pause` arg → command ends here**（Phase 1 locked + integration pushed；run `/iteration-drive` later）。**Default（no `pause`）→ auto-continue**：execute **`iteration-drive`**（Phase 2 → **`mstar-iteration/references/phase-2-worktree-lease.md`**；Phase 3 → `references/phase-3-iteration-close.md`；Phase 4/5 → `references/phase-4-5-pr-delivery.md`；Phase 5 helper discovery → `phase5-helper-discovery.md`；Phase 6 post-merge close（PR merged 后）→ `references/phase-6-post-merge-close.md` §6.1–§6.4）。Shared invariants / preflight / STOP → **`mstar-iteration/references/command-shared-invariants.md`**。
 
-**Done = Phase 5 §5.5 exit checklist 全 `[x]`**（同 `iteration-drive`）。**Then** report: iteration id, direction lock summary, plans completed, compound summary, PR link, merge-ready evidence（CI snapshot + review resolution + Greptile if applicable）。
+**Done = Phase 6 post-merge close 完成**（同 `iteration-drive`：Phase 5 §5.5 exit checklist 全 `[x]` 且 PR merged 后 §6.1–§6.4 完成 — Phase 5 exit / PR merged 不是 Done）。**Then** report: iteration id, direction lock summary, plans completed, compound summary, PR link, merge-ready evidence（CI snapshot + review resolution + Greptile if applicable）, post-merge close evidence（snapshot `completed` + `ended_at`、根 `status.json` 注销、投影一致）。
 
 PR merge itself may remain manual unless user authorized auto-merge.

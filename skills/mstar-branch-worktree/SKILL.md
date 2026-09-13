@@ -1,19 +1,19 @@
 ---
 name: mstar-branch-worktree
-description: "Morning Star 业务仓 Git 功能分支、worktree 隔离（L1 跨 plan：control worktree + 每 plan feature worktree + `execution_lease`，默认 gitignore 下经 control 绝对路径读写进程产物；L2 同 plan：`references/parallel-writable-pre-dispatch.md`，N 次 invoke ≠ 隔离）、Spec 集成分支、QC/QA 检出对齐（`Review cwd` / `Working branch` / `plan_id` / `Review range` / `Diff basis` 三审 + QA 逐字相同）。Read when PM writes `Working branch` / `Branch policy`, iteration/parallel writable dispatch, or QC/QA checkout alignment is needed."
+description: "Morning Star 业务仓 Git 功能分支、worktree 隔离与三写域模型（L1 跨 plan：主 checkout control root + iteration integration worktree + 每 plan feature worktree + `execution_lease`，默认 gitignore 下经 control 绝对路径读写进程产物；L2 同 plan：`references/parallel-writable-pre-dispatch.md`，N 次 invoke ≠ 隔离）、Spec 集成分支、QC/QA 检出对齐（`Review cwd` / `Working branch` / `plan_id` / `Review range` / `Diff basis` 三审 + QA 逐字相同）。Read when PM writes `Working branch` / `Branch policy`, iteration/parallel writable dispatch, QC/QA checkout alignment, or guarded post-merge worktree/branch cleanup (`mstar worktree cleanup`) is needed."
 ---
 
 ## Load order（必读顺序）
 
 **首次 Read 本 skill 前：必须先 Read `mstar-harness-core`（SKILL.md）。** 冲突时 **以 `mstar-harness-core` 为准**。
 
-**Spec 多 plan 命名**（`iteration_base_branch`、`spec_integration_branch`、`target_branch` PR 门禁）→ **`mstar-conventions`**。**L1/L2 worktree 分层**（迭代 control vs feature、plan 内并行轨）→ 下文 **「Worktree isolation layers」**；**L2** 同仓并行可写派发前清单 → **`references/parallel-writable-pre-dispatch.md`**；迭代 lease claim/merge 细则 → **`mstar-iteration`** `references/phase-2-worktree-lease.md`（勿在本 skill 重复完整协议表）。下文为分支与 QC/QA 检出对齐主文。
+**Spec 多 plan 命名**（`iteration_base_branch`、`spec_integration_branch`、`target_branch` PR 门禁）→ **`mstar-conventions`**。**L1/L2 worktree 分层**（迭代 integration worktree vs feature、plan 内并行轨）→ 下文 **「Worktree isolation layers」**；**L2** 同仓并行可写派发前清单 → **`references/parallel-writable-pre-dispatch.md`**；迭代 lease claim/merge 细则 → **`mstar-iteration`** `references/phase-2-worktree-lease.md`（勿在本 skill 重复完整协议表）。merge 后 worktree/分支回收（cleanup）守卫契约 → 下文 **「Worktree / branch cleanup」**。下文为分支、三写域、QC/QA 检出对齐与 merge 后 cleanup 主文。
 
 ## Scope（摘要）
 
 - **仅 PM 决定分支**；其他可写角色不得自行新开分支或切回 `main`。
 - **Assignment 须含其一**：`Working branch: <existing>` | `create <new> from <base>` | `Branch policy: direct on <branch> — <reason>`。
-- **L1（跨 plan / 迭代 Phase 2）**：control worktree（snapshot `control_worktree_path`，检出 `spec_integration_branch`）+ 每 plan 独立 feature worktree（`execution_lease.worktree_path` **≠** control 路径）+ lease；见 **「Worktree isolation layers」**。
+- **L1（跨 plan / 迭代 Phase 2）**：control root（= **主 checkout / main worktree**，进程 SSOT，Git 派生）+ integration worktree（snapshot `integration_worktree_path`，检出 `spec_integration_branch`，唯一 merge cwd）+ 每 plan 独立 feature worktree（`execution_lease.worktree_path`）+ lease；见 **「Worktree isolation layers」**。
 - **L2（同 plan 内 ≥2 可写并发）**：派发 **前** 完成 **`references/parallel-writable-pre-dispatch.md`**（含 `git worktree`、绝对 **`Worktree path`**；**N 次并行 invoke ≠ 已隔离**）。单 plan 多轨时 **L1 不替代 L2**。
 - **QC/QA 前**：待审提交归并到 **单一 `Working branch` `HEAD`**；三审 + QA 共用一套 **`Review cwd` + `plan_id` + `Review range` / `Diff basis`**（逐字相同）。
 
@@ -106,41 +106,44 @@ Two complementary **worktree** isolation layers coexist. Do **not** conflate the
 
 | Layer | Scope | When | Mechanism |
 |-------|-------|------|-----------|
-| **L1** | Cross-plan (iteration Phase 2) | Multiple plans may implement concurrently in one iteration | **Control worktree** + per-plan **feature worktrees** + `plans[].execution_lease` (workflow snapshot `workflows/<id>/snapshot.json`) |
+| **L1** | Cross-plan (iteration Phase 2) | Multiple plans may implement concurrently in one iteration | **Main-worktree control root** (process SSOT) + **integration worktree** (`integration_worktree_path`) + per-plan **feature worktrees** + `plans[].execution_lease` (workflow snapshot `workflows/<id>/snapshot.json`) |
 | **L2** | Within-plan | Same `plan_id`, same business repo, **≥2 concurrent writable implement tracks** | **`references/parallel-writable-pre-dispatch.md`** — distinct absolute **`Worktree path`** per track |
 
 **Stacking rules**
 
 - Default **L1** capacity is **one writable track per plan**. If one plan runs **≥2** concurrent writable tracks, each track **also** satisfies **L2**; L1 does **not** replace L2.
-- **L1** applies under iteration commands with Phase 2 control-worktree defaults (unless explicit `Worktree mode: waived` this turn). Single-plan waves without iteration leases still require **L2** when **≥2** parallel writable tracks share one repo.
+- **L1** applies under iteration commands with Phase 2 worktree/lease defaults (unless explicit `Worktree mode: waived` this turn). Single-plan waves without iteration leases still require **L2** when **≥2** parallel writable tracks share one repo.
 - Cross-plan **integration merge** into `spec_integration_branch` remains **serial** (snapshot top-level `integration_merge_lease`) even when L1 feature implementation runs in parallel.
 
-### Control worktree vs feature worktree (iteration / L1)
+### Main-worktree control root, integration worktree, feature worktree (iteration / L1)
 
-Established at iteration **Phase 2 entry** (Phase 1 Review & Edit may stay on the primary checkout). Normative field names and claim/release/merge protocol → **`mstar-iteration`** `references/phase-2-worktree-lease.md` and maintenance ADR `2026-07-22-iteration-worktree-plan-lease.md`. **Do not invent alternate lease field names in this skill.**
+The integration worktree is established at iteration **Phase 2 entry** (Phase 1 Review & Edit may edit uncommitted docs on the primary checkout under the Prepare policy — the bounded exception; the main worktree never switches branch). Normative field names and claim/release/merge protocol → **`mstar-iteration`** `references/phase-2-worktree-lease.md` and maintenance ADR `2026-07-22-iteration-worktree-plan-lease.md`. **Do not invent alternate lease field names in this skill.**
 
-| Worktree role | Checked-out branch | Path recorded in workflow snapshot | Writable product edits |
-|---------------|-------------------|-------------------------------|------------------------|
-| **Control worktree** | Resolved `spec_integration_branch` (same across active plans) | `control_worktree_path` (snapshot top-level) — canonical **repository root** (not `{HARNESS_DIR}`) | **Forbidden** — harness coordination SSOT + serial integration merge only |
+| Checkout | Checked-out branch | Path recorded | Writable role |
+|----------|-------------------|---------------|---------------|
+| **Control root** = the **primary checkout** (main worktree) | the recorded **`Main worktree branch`** from the main plan header (never a lifecycle-owned branch; never switched) | **not in the snapshot** — derived from Git (`readMainWorktree`); the branch is recorded once as `Main worktree branch: <branch>` in the main plan | **Forbidden** for product edits — process-SSOT holder + Git-control cwd only |
+| **Integration worktree** | Resolved `spec_integration_branch` (same across active plans) | `integration_worktree_path` (snapshot top-level) — canonical **repository root** (not `{HARNESS_DIR}`) | Sole merge cwd for serial integration merges (`integration_merge_lease`) + tracked-result close commits (Phase 3 compound); **no product-source edits** — Phase-5 fixes use a feature worktree |
 | **Feature worktree** (per plan) | Plan `Working branch` / feature branch from integration | `plans[].execution_lease.worktree_path` (snapshot plan row) | **Required cwd** for that plan's product/source edits |
 
-### Harness path SSOT under default gitignore (L1)
+### Harness path SSOT under default gitignore (L1) — the three-domain table
 
-Default process artifacts (`plans/`, `iterations/`, `status.json`, `workflows/`, `projects/`, `sdd/`) are **gitignored** (`mstar-conventions`「Git 跟踪策略」). `git worktree add` does **not** copy them into a new feature checkout. They live on the **control worktree filesystem** (the checkout of `spec_integration_branch`), not as Git blobs on that branch.
+Default process artifacts are **gitignored** (`mstar-conventions`「Git 跟踪策略」); `git worktree add` does **not** copy them into a new checkout. A worktree's `.mstar/` is **not categorically non-writable** — writability is decided per domain. This is the **sole** three-domain table in the skill corpus; other skills point here instead of restating it.
 
-| Path role | Resolve from |
-|-----------|--------------|
-| **Control harness root** | `<control_worktree_path>/{HARNESS_DIR}/` |
-| **Process / coordination SSOT** (read + write) | Absolute under control harness root: `status.json` (v2 root), `workflows/<id>/snapshot.json`, `projects/<id>/residuals.json`, `plans/`, `iterations/`, `sdd/<plan-id>/` |
-| **Tracked results** (`AGENTS.md`, `knowledge/`, `specs/`) | Available in any worktree via Git; absolute control paths in Assignment are still fine |
-| **Product / source edits** | Feature worktree only (`execution_lease.worktree_path`) |
+| Domain | Contents | Home | Writable from a worktree? |
+|---|---|---|---|
+| **Process SSOT** (gitignored) | `status.json`, `workflows/`, `projects/`, `plans/`, `sdd/`, `iterations/`, `archived/` | control root = the **primary checkout** (main worktree) | **No.** Always addressed via absolute control-root paths; a second process-SSOT copy must never be bootstrapped under any worktree. |
+| **Tracked results** (Git-following) | `{KNOWLEDGE_DIR}`, `{SPECS_DIR}`, `{HARNESS_DIR}/AGENTS.md`, `CONCEPTS.md` | whichever checkout holds the target branch | **Yes.** Readable from any worktree; written where the target branch is checked out (iteration Phase 3 compound → the integration worktree), then committed on that branch. |
+| **Product source** | repository code | feature worktree on `Working branch` | feature worktree only. |
+
+**Control harness root** = `<main-repo-root>/{HARNESS_DIR}/` — resolved from Git (the main worktree), never from a snapshot field.
 
 **Hard rules**
 
-- Snapshot `control_worktree_path` **MUST** differ from `execution_lease.worktree_path` (never reuse the control checkout for product edits).
-- A feature worktree's same-looking `{HARNESS_DIR}` path is **not** the SSOT — **never** treat it as the source of plans/status/SDD, and **never** bootstrap a second plans/status/SDD tree there.
+- Snapshot `integration_worktree_path` **MUST** differ from the main worktree (control root) and from `execution_lease.worktree_path` — never merge from the main checkout, never product-edit the integration checkout.
+- Main-worktree residency: the main worktree's attached branch must equal the recorded **`Main worktree branch`** from the plan header (recorded before the lifecycle writes; never invented from the current branch at check time) and must not be owned by any non-terminal workflow (integration, plan or track). Never create a branch or switch main to make a residency check pass; `branch.base` is a creation/merge anchor, never a residency fact.
+- A feature worktree's same-looking `{HARNESS_DIR}` path is **not** the SSOT — **never** treat it as the source of plans/status/SDD, and **never** bootstrap a second process-SSOT copy there.
 - Absolute **`Worktree path`** (feature) MUST appear in the writable Assignment and in `execution_lease.worktree_path` before first writable implement dispatch for that plan.
-- When L1 lease gate is active (not `Worktree mode: waived`), Assignment **`Plan Path`** and **`SDD dir`** MUST be **absolute paths under the control harness root** (not relative `.mstar/...` resolved from the feature cwd). Prefer also writing **`Control harness root: <control_worktree_path>/{HARNESS_DIR}`**.
+- When L1 lease gate is active (not `Worktree mode: waived`), Assignment **`Plan Path`** and **`SDD dir`** MUST be **absolute paths under the control harness root** (not relative `.mstar/...` resolved from the feature cwd). Prefer also writing **`Control harness root: <main-repo-root>/{HARNESS_DIR}`**.
 - Writable dispatch for a plan requires a **verified** `execution_lease` (same read-check-replace-verify discipline as the iteration reference). Full claim tables are **not** duplicated here.
 
 **Anti-pattern (forbidden)**
@@ -149,11 +152,12 @@ Default process artifacts (`plans/`, `iterations/`, `status.json`, `workflows/`,
 
 **Naming conventions (PM / ops; examples only — paths MUST be canonical absolute)**
 
-1. **Control worktree** — usually the primary checkout or a PM-designated path on `spec_integration_branch`; record once in snapshot `control_worktree_path`.
-2. **Feature worktree (per plan)** — one distinct subdirectory under the workspace root **`.worktrees/`** per active `plan_id` (e.g. `.worktrees/<plan-id>-<slug>`; AGENTS.md「Local scratch layout」), gitignored by the repo convention; Assignment **`Worktree path`** must match lease `worktree_path`.
-3. **L2 track worktrees (within-plan)** — additional distinct directories per parallel implement track under the **same** plan (see **`references/parallel-writable-pre-dispatch.md`**), each with its own PM-approved **`Working branch`**.
+1. **Control root** — always the **primary checkout** (main worktree), derived from Git (`readMainWorktree`); never a PM-designated alternative checkout, never recorded in the snapshot. Its attached branch is recorded once as **`Main worktree branch: <branch>`** in the main plan header before the lifecycle writes, and PM passes it unchanged in writable Assignments. `branch.base` is the creation/merge anchor — not a residency fact.
+2. **Integration worktree** — one dedicated linked checkout on `spec_integration_branch`, distinct from the main worktree, recorded once in snapshot `integration_worktree_path`; sole merge cwd for the iteration.
+3. **Feature worktree (per plan)** — one distinct subdirectory under the workspace root **`.worktrees/`** per active `plan_id` (e.g. `.worktrees/<plan-id>-<slug>`; AGENTS.md「Local scratch layout」), gitignored by the repo convention; Assignment **`Worktree path`** must match lease `worktree_path`.
+4. **L2 track worktrees (within-plan)** — additional distinct directories per parallel implement track under the **same** plan (see **`references/parallel-writable-pre-dispatch.md`**), each with its own PM-approved **`Working branch`**.
 
-> **Engine check (when available):** run `mstar worktree check <plan-id> --workflow <id>` (L1) / `mstar worktree check --l2 --tracks <json>` (L2) (or `import { l1PreDispatchCheck, l2PreDispatchCheck, assertControlVsFeaturePath, assertBranchAlignment } from "@mstar-harness/engine"` in a host hook) to verify the L1/L2 isolation rules above (snapshot lease worktree ≠ control path; checked-out branch matches `Working branch`). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check (when available):** run `mstar worktree check <plan-id> --workflow <id>` (L1) / `mstar worktree check --l2 --tracks <json>` (L2) (or `import { l1PreDispatchCheck, l2PreDispatchCheck, readMainWorktree, assertMainWorktreeResidency, assertControlVsFeaturePath, assertBranchAlignment } from "@mstar-harness/engine"` in a host hook) to verify the L1/L2 isolation rules above (main residency vs recorded `Main worktree branch`; main/integration/feature pairwise checkout distinctness — lease worktree ≠ main control root ≠ integration; checked-out branch matches `Working branch`). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 ## 同仓并发写入与 Git worktree（强制）
 
@@ -166,7 +170,7 @@ Default process artifacts (`plans/`, `iterations/`, `status.json`, `workflows/`,
 - **PM 须在 Assignment 中写清**各并发写流的 **检出约定**（例如预期 **`Worktree path`** / 命名规则，或「由承接方创建/使用隔离 worktree 并在 Completion Report 回报路径」），避免多代理默认共享同一目录导致互相覆盖、冲突或半写入状态。
 - **同仓、同一 plan、≥2 可写并行轨**：派发各轨实现 Assignment **之前** 确认 **`Branch policy`** 与 plan 集成分支 / topic 分支关系（见下节 **「默认编排」**），并完成 reference 清单中的 worktree 步骤。
 
-**可不强制新开 worktree** 的情形包括：并发流 **全部为只读**；各写入者针对 **不同 Git 仓库根**；或写入 **串行**（同一时刻仅一个代理持有该仓工作区）。
+**串行不豁免**：并发流全部为只读、或各写入者针对**不同 Git 仓库根**时不存在共享写入面；但**写入串行**（同一时刻仅一个代理持有该仓工作区）**不**豁免隔离——只要本轮存在对同一仓库工作区的可写改动，每条写流都使用独立检出目录（主 checkout 可能被链接的技能/命令消费者读取，任何生命周期分支都不得落到主 worktree）。worktree 默认的唯一豁免通道：本轮显式 **`Worktree mode: waived`** 与 Phase 1 Review & Edit 链的未提交文档例外（`mstar-iteration` §1.6 / §6）。
 
 ### 并发 subagent 与同仓工作树（对齐）
 
@@ -225,12 +229,49 @@ Default process artifacts (`plans/`, `iterations/`, `status.json`, `workflows/`,
 - 证据最窄原则（audit / QA Assignment 场景）：选择会在目标回归上失败的**最窄**检查；不因「push 在即」重跑已通过的检查。
 - 本节只管 rewrite / lease / 证据失效面；CI / review 波次 push 门禁（时序）SSOT → `mstar-iteration` §5.1a。
 
+## Worktree / branch cleanup（merge 后回收；唯一契约本体）
+
+生命周期末端的物理回收（feature/integration worktree、本地/远端分支删除）的 ownership 与守卫规则**只在本节**；两条时序车道的 call site（Phase-2 同轮 / Phase-6 收尾）只引用本节，不复制规则。命令（**dry-run 默认**；无 fetch / prune / 任何写入）：
+
+```text
+mstar worktree cleanup --workflow <id> [--harness <path>] [--apply] [--remote] [--worktree <path>]
+```
+
+- dry-run 逐候选打印 `verdict | kind | ref | reason` 后结束；`--apply` 只执行当前 `remove` 行。Exit：0 = 合法 dry-run / eligible 移除全部成功；1 = 探测/变更失败；2 = usage。失败行**永不扩大范围**；受保护/拒绝行保持可见。
+- `--worktree <path>` 可重复：既收窄 worktree 候选集，也是**操作者所有权断言**——必须匹配记录的生命周期分支与同仓 checkout 身份，不能认领其他 lifecycle 的 worktree。`--remote` 只决定是否纳入 `origin/*` 删除候选；安全探测（integration 证据）无论是否 `--remote` 都会收集。
+- **信任模型**：`--harness <path>` 为操作者提供且受信——dry-run 与 `--apply` 的全部状态事实（snapshot、lease、行归属元数据、protected 锚点）均读自该目录。
+
+**Ownership（禁止命名推断）**：候选归属只来自 snapshot 行元数据（`plans[].execution_lease`；lease 释放后为保留的行 `metadata.working_branch` / `metadata.worktree_path` 与 retained track Assignments）或已验证的显式 `--worktree` 断言。归属缺失 / 歧义 / 他属 → `cleanup.refuse.foreign-worktree` / `cleanup.refuse.foreign-branch`。**归属生产者义务（owner=PM）**：设 `Done` 并删除 `execution_lease` 的**同一 locked update** 内，owner 必须把 `metadata.working_branch` + `metadata.worktree_path` 持久化到该 plan 行（值以本轮 Assignment 为准）——这是 lease 释放后 ownership 检查读取的持久归属；缺失时已 merge 的 Done 行也会被 `cleanup.refuse.foreign-*` 拒绝，回收只能靠手工补写快照。
+
+**合并证据硬前置**：本地资格 = `git branch --merged <base>` 成员资格，base 取候选自己的锚（plan/track → `branch.integration`；standalone plan / integration 分支 → `branch.target`）。远端证据绑定 {branch, tip, base} **同一分支化身**；当前 harness 无 PR-merged 记录源（`prMerged` 恒为 null）→ 远端仅走 tip-ancestor 历史残留路线。squash-only（tip 非 base 祖先）**保留并报告，绝不 `git branch -D`**；旧 merged PR 不能授权已复用分支的新化身。
+
+**Refusals（refuse 行可见、可审计，不是 apply 失败）**：active `execution_lease` / `integration_merge_lease`（按 path 与 branch 匹配，跨**全部**已知 snapshot）→ `cleanup.refuse.active-lease`；分支在**任何** checkout 检出 → `cleanup.refuse.checked-out`；foreign worktree；dirty / locked worktree；protected refs（默认分支、每个 `branch.base`、非终结 integration 分支、非 Done plan/track 行）→ `cleanup.keep.protected-ref` / `cleanup.refuse.non-terminal`。
+
+**Done child ≠ active parent**：已 merge 的 Done plan/track 行**即使父迭代仍在运行也 eligible**（时序车道 1）——不存在「父必须终结」的一刀切；反之，非终结 integration 与非 Done 行跨**所有** lifecycle 受保护。standalone plan 即整个 lifecycle：以 `branch.target` 为证据 base，且**先 terminal close** 才清理。
+
+**顺序（--apply；worktree 移除 ≠ 分支删除）**：普通 `git worktree remove`（**永不 force**）移除 eligible attached worktree → **重新探测 + 重新规划** → 删除**现已**未检出的分支（`git branch -d`，**永不 `-D`**）→ 远端 expected-OID compare-and-delete（`git push --force-with-lease=refs/heads/<branch>:<observed-oid> origin :refs/heads/<branch>`；ref 已移动 → `cleanup.refuse.facts-changed`，**不**自动用新 OID 重试）。dry-run 打印 worktree `remove` + 其分支 `refuse(checked-out)` 是合法状态。**禁止**全局 `git worktree prune`（会动 foreign 注册）；Git 调用默认在 main worktree root，`git branch -d` 在该分支证据 base 的检出处执行（`-d` merged-into-HEAD 语义所需）——任何 Git 调用**永不位于移除候选内**。
+
+**Lease 释放是手工 owner 动作、cleanup 范围外**：cleanup（与 close）**从不**释放 lease；owner 先手工释放再清理，释放后归属靠保留的行元数据 / Assignments 维持。
+
+**两条时序车道（唯一合法时机）**：
+
+1. **Phase-2 同轮**（per-plan）：integration merge 成功的**同一轮**回收该 Done plan/track 的 feature worktree + 已合并分支（call site → `mstar-iteration` `references/phase-2-worktree-lease.md`「Same-round plan cleanup」）。
+2. **Phase-6 收尾**（integration 面）：只在 valid terminal close（§6.1–§6.3 完成）+ PR **verified merged** 之后回收 integration worktree / 分支 / 远端残留（call site → `mstar-iteration` `references/phase-6-post-merge-close.md` §6.4）。Phase-6 gate 只查本地 state，**不**验证 merged、**不**检查物理清理是否完成。
+
+> **Engine check (when available):** dry-run 即机器检查 —— `mstar worktree cleanup --workflow <id>`（或 import `planWorktreeCleanup` from `@mstar-harness/engine`）对当前 facts 输出 remove/keep/refuse 计划，每行带稳定 `cleanup.*` 码。若已知受保护目标（active lease / 非 Done / 非终结 owner）出现 `remove` → STOP：守卫有错，**任何 `--apply` 前先修**。Skill text below remains authoritative when the runtime is absent.
+
 ## Workflow
 
-主链：**PM 唯一分支决策**（`Working branch` / `Branch policy`，写进 Assignment）→ 实现者在 feature worktree 写产品编辑（L1：control worktree 管 harness SSOT、feature 管源码）→ **QC 前**全部待审提交归并到**单一 `Working branch` `HEAD`** → 派 QC 三审 / QA 时共用**同一套对齐字段**（`Review cwd` / `Working branch` / `plan_id` / `Review range` / `Diff basis`，逐字相同）→ 集成分支 merge 串行（`integration_merge_lease`）。并发写流在派发**前**完成 worktree 隔离（L1 跨 plan / L2 同 plan）。
+主链：**PM 唯一分支决策**（`Working branch` / `Branch policy`，写进 Assignment）→ 实现者在 feature worktree 写产品编辑（L1：control root（主 checkout）管进程 SSOT、integration worktree 管 merge、feature 管源码）→ **QC 前**全部待审提交归并到**单一 `Working branch` `HEAD`** → 派 QC 三审 / QA 时共用**同一套对齐字段**（`Review cwd` / `Working branch` / `plan_id` / `Review range` / `Diff basis`，逐字相同）→ 集成分支 merge 串行（`integration_merge_lease`，在 integration worktree 执行）。并发写流在派发**前**完成 worktree 隔离（L1 跨 plan / L2 同 plan）；主 worktree 驻留分支 = 计划头记录的 **`Main worktree branch`**，全程不切换。
 
 ## References
 
 - 派发与反递归红线 → **`mstar-dispatch-gates`**
 - SDD implement 波次（file handoff / reviewer）→ **`mstar-sdd`**
-- 迭代 Phase 2 control worktree + lease 细则 → **`mstar-iteration`** §2（`references/phase-2-worktree-lease.md`）
+- 迭代 Phase 2 integration worktree + lease 细则 → **`mstar-iteration`** §2（`references/phase-2-worktree-lease.md`）
+
+### L1 refusal diagnostics across hosts
+
+CLI, dsh, and omp share `worktree.l1.lifecycle-register-unreadable` when the active register cannot be enumerated and `worktree.l1.lifecycle-snapshot-unreadable` when a registered sibling cannot be read/validated. They fail closed; an absent register contributes no siblings. Engine SDD governing-row discovery remains lenient for unreadable siblings (only readable active snapshots contribute), but a governing active snapshot carrying both integration/control path keys refuses instead of becoming standalone. This is an intentional engine-versus-host seam distinction, not equivalent evidence coverage.
+
+`worktree.l1.integration-missing` covers required integration inputs not supplied and a supplied integration path absent on disk; an existing unusable checkout is reported by branch/checkout probe failures. A standalone plan with both integration fields omitted has no integration requirement and does not emit this code.

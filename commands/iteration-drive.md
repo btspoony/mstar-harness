@@ -1,19 +1,19 @@
 ---
 name: iteration-drive
-description: Drive the active iteration to completion — Phase 2 Autonomous Execute, Phase 3 iteration-close, Phase 4 Create PR, Phase 5 PR merge-ready loop (prefer babysit/*-babysit; optional greploop when repo has it; else CI fallback) until mergeable. Not Done until Phase 5 exit checklist passes.
+description: Drive the active iteration to completion — Phase 2 Autonomous Execute, Phase 3 iteration-close, Phase 4 Create PR, Phase 5 PR merge-ready loop (prefer babysit/*-babysit; optional greploop when repo has it; else CI fallback) until mergeable, then Phase 6 post-merge close once the PR is verified merged. Not Done until Phase 6 close completes.
 agent: project-manager
 input: "[no args]"
 ---
 
 # Drive Iteration
 
-Drive the active Morning Star iteration forward. **Boot loads skills; this command sequences Phase 2 → 3 → 4 → 5.** Phase route + gate SSOT → **`mstar-iteration`** Phase route map + **Phase transition gates** table（§2 detail → `references/phase-2-worktree-lease.md`；§3 → `references/phase-3-iteration-close.md`；§4–§5 → `references/phase-4-5-pr-delivery.md`）；本 command 仅补充 **可选第三方 helper skill 发现**（Phase 5），不反向写入 `mstar-*`。
+Drive the active Morning Star iteration forward. **Boot loads skills; this command sequences Phase 2 → 3 → 4 → 5 → 6.** Phase route + gate SSOT → **`mstar-iteration`** Phase route map + **Phase transition gates** table（§2 detail → `references/phase-2-worktree-lease.md`；§3 → `references/phase-3-iteration-close.md`；§4–§5 → `references/phase-4-5-pr-delivery.md`；§6 → `references/phase-6-post-merge-close.md`）；本 command 仅补充 **可选第三方 helper skill 发现**（Phase 5），不反向写入 `mstar-*`。
 
 ## Phase flow（禁止跳步）
 
-`Phase 2: Autonomous Execute → Phase 3: iteration-close → Phase 4: Create PR → Phase 5: PR merge-ready`。Transition gates（HARD）→ **`mstar-iteration`** **Phase transition gates** table。
+`Phase 2: Autonomous Execute → Phase 3: iteration-close → Phase 4: Create PR → Phase 5: PR merge-ready → Phase 6: post-merge close`。Transition gates（HARD）→ **`mstar-iteration`** **Phase transition gates** table。
 
-**Done 定义**：**仅** Phase 5 §5.5 exit checklist 全 `[x]`。**Phase 3 close ≠ Done；Phase 4 开 PR ≠ Done。**
+**Done 定义**：Phase 5 §5.5 exit checklist 全 `[x]` **且** PR merged 后 Phase 6 §6.1–§6.4 完成。**Phase 3 close ≠ Done；Phase 4 开 PR ≠ Done；§5.5 exit / PR merged ≠ Done。**
 
 ## 共享 invariants / preflight / todos / STOP
 
@@ -39,10 +39,16 @@ Execute **`mstar-iteration/references/phase-4-5-pr-delivery.md`** §4：打印 `
 
 ## Phase 5: PR merge-ready（babysit loop）
 
-Execute **`mstar-iteration/references/phase-4-5-pr-delivery.md`** §5.0–§5.2（**§5.1a push cadence HARD**）。**§5.5 exit checklist 全 `[x]` = 本 command Done.**
+Execute **`mstar-iteration/references/phase-4-5-pr-delivery.md`** §5.0–§5.2（**§5.1a push cadence HARD**）。**§5.5 exit checklist 前 5 项全 `[x]` = merge-ready → 进入 Phase 6.**
 
 本 command **叠加**可选 helper skill 发现（**non-`mstar-*`**；不写入 `mstar-*` load order）→ **`mstar-iteration/references/phase5-helper-discovery.md`**（babysit / `*-babysit` / greploop / fallback 路径清单；first readable `SKILL.md` wins）。Loop + review fix hygiene + exit checklist → §5.1–§5.2（同上 reference）。
 
 **Then** report: iteration id, plans completed, compound summary, PR link, merge-ready evidence（CI snapshot + review resolution + Greptile if applicable）。
 
-PR merge itself may still be manual or a separate host action unless user authorized auto-merge.
+PR merge itself may still be manual or a separate host action unless user authorized auto-merge. Merge 完成（手动或授权 auto-merge）→ **立即**进入 Phase 6（下节）。
+
+## Phase 6: post-merge close（PR merged 后）
+
+PR **已 merge**（verified merged；mergeable ≠ merged）→ 追加 todo `phase-6-post-merge-close` → 打印 **`## Phase 6: post-merge close`** → execute **`mstar-iteration/references/phase-6-post-merge-close.md`** §6.1→§6.4（`mstar status workflow-close --workflow <id>` terminal write → unregister → projections reconcile → cleanup handoff）。**§6.1–§6.4 完成 = 本 command Done**（勾掉 `phase-6-post-merge-close`）。可在后续会话补跑；对已关闭 lifecycle 幂等。
+
+**Then** report adds: post-merge close evidence（snapshot `completed` + `ended_at`、根 `status.json` 注销、投影一致）。

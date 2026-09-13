@@ -4,8 +4,8 @@
 
 v3 布局把 v1 的「单文件 `status.json`（根 `plans[]` + 根级 `residual_findings` + `metadata`）」拆成三层。**只使用 v2 地址；v1 地址（根 `plans[]` / 根级 `residual_findings` / `archived/residuals/`）由 `mstar migrate` 一次性迁移，不再读写**。v1 字段形状/历史全文（v1 行表、v1 `metadata` 表、jq/flock 读路径示例）→ **`mstar-engine-legacy`** `references/status-field-history.md`（engine-absent 历史 + fallback）；本文件只保留 v2 地址与一次性 legacy 只读警告。
 
-- **根 `{HARNESS_DIR}/status.json`（v2）** — 活跃生命周期登记：`{ "version": 2, "updated_at", "workflows": [...] }`。只登记 **active**（`running` / `paused`）lifecycle；terminal 时先写 snapshot 再从根列表移除（removal-at-terminal）。由 engine `validateStatus`（v2）/ `registerWorkflow` / `unregisterWorkflow` 读写。
-- **`{WORKFLOW_DIR}/<id>/snapshot.json`** — 每 lifecycle 的运行态快照（`schema_version: 1`）：**`plans[]` 行（legacy PlanRow 形状逐字保留）**、per-row **`execution_lease`**、顶层 **`integration_merge_lease`** / **`execution_policy`** / **`branch` anchors** / **`control_worktree_path`** / `compass_ref`。`<id>` = plan id 或 iteration id。
+- **根 `{HARNESS_DIR}/status.json`（v2）** — 活跃生命周期登记：`{ "version": 2, "updated_at", "workflows": [...] }`。只登记 **active**（`running` / `paused`）lifecycle；terminal 时先写 snapshot 再从根列表移除（removal-at-terminal）。由 engine `validateStatus`（v2）/ `registerWorkflow` / `unregisterWorkflow` 读写。PM-facing unregister caller：post-merge close `mstar status workflow-close --workflow <id>`（ordering 固定：terminal snapshot → unregister；细序 → `mstar-iteration/references/phase-6-post-merge-close.md` §6.1–§6.2）。
+- **`{WORKFLOW_DIR}/<id>/snapshot.json`** — 每 lifecycle 的运行态快照（`schema_version: 1`）：**`plans[]` 行（legacy PlanRow 形状逐字保留）**、per-row **`execution_lease`**、顶层 **`integration_merge_lease`** / **`execution_policy`** / **`branch` anchors** / **`integration_worktree_path`** / `compass_ref`。`<id>` = plan id 或 iteration id。
 - **`{PROJECT_DIR}/<id>/roadmap.md` + `residuals.json`** — 项目层：roadmap frontmatter（machine-checkable）+ residual **register**（`entries[<plan-id>]` 数组；severity 枚举与 lifecycle 语义**逐字保留**）。无项目的流程回落到 `_default` 项目。
 
 `status.json`（根）、workflow snapshot 与 project register 都是 **SSOT**：plan 行状态与 lease 在 snapshot，open residual 在 register。  
@@ -85,7 +85,7 @@ Canonical vs legacy residual definitions → **`mstar-artifacts` SKILL.md**（"`
     "target_branch": "iteration/iter-demo"
   },
   "branch": { "base": "main", "integration": "iteration/iter-demo", "target": "main" },
-  "control_worktree_path": "/abs/repo/root",
+  "integration_worktree_path": "/abs/repo/.worktrees/iter-demo-integration",
   "legacy_metadata": {},
   "compass_ref": "iterations/iter-demo/delivery-compass.md"
 }
@@ -95,6 +95,8 @@ Canonical vs legacy residual definitions → **`mstar-artifacts` SKILL.md**（"`
 
 - `plans[]` rows are the **legacy PlanRow shape verbatim** (unknown row fields preserved, never re-bucketed). Per-row `execution_lease` stays on the row; `integration_merge_lease` is **top-level** (the v1 root-`metadata` home is gone).
 - Terminal statuses (`completed` / `failed` / `stopped`) require `ended_at` and no dangling leases.
+- **Completed close (Phase 6)** runs `mstar status workflow-close --workflow <id> [--harness <path>] [--ended-at <date>]`: engine `closeWorkflow` rereads the latest snapshot under the snapshot write lock, refuses any dangling lease / non-`Done` row (fail-loud, bytes unchanged), writes `completed` + `ended_at`, then unregisters the root entry. Unregister failure after the snapshot write is a reported **partial close** — retry finishes unregister without rewriting `ended_at`; a fully closed retry rewrites neither file. An already-terminal `failed` / `stopped` snapshot keeps its actual status (close never fabricates `completed`).
+- **Physical cleanup is out of close's scope**: it is the separate `mstar worktree cleanup --workflow <id> …` verb (dry-run default), run in its own timing lane — same-round after a plan's integration merge (Phase 2) or after §6.1–§6.3 + PR merged (Phase 6). Close and cleanup never release leases — owners release manually before either. Guard/decision codes (`cleanup.keep.*`, `cleanup.refuse.*`, `cleanup.remove.merged`) → **`mstar-branch-worktree`**「Worktree / branch cleanup」.
 - `execution_policy` keys are copied from v1 root `metadata` at migrate; values are accepted-but-opaque this iteration (no semantic gate).
 - `notes`: a plan row's `notes` array is the **legacy verbatim copy** preserved at migrate; the **runtime ledger is `notes.jsonl`** in the workflow dir (see `workflows/<id>/notes.jsonl` below). New notes append to the ledger only — never dual-write the row `notes`.
 
@@ -286,11 +288,13 @@ Optional when a plan is not owned; **required** while a Phase 2 session owns wri
 | --- | --- | --- | --- |
 | `holder` | non-empty string | Yes | Opaque cooperative owner identity (recommended `<host>:<stable-session-id>`, e.g. `cursor:bc-1234`). Stable for claim lifetime; **no credentials**; used for ownership comparison — not `session_label`. |
 | `claimed_at` | RFC 3339 UTC (`Z`) | Yes | Acquisition time (audit only; **not** an expiry clock). |
-| `worktree_path` | absolute path string | Yes | Dedicated feature-worktree root; **MUST** differ from `control_worktree_path`. |
+| `worktree_path` | absolute path string | Yes | Dedicated feature-worktree root; **MUST** differ from the main worktree (control root) and snapshot `integration_worktree_path`. |
 | `working_branch` | non-empty string | Yes | Feature branch at `worktree_path`; MUST agree with Assignment **`Working branch`**. |
 | `session_label` | string | No | Human display only — **MUST NOT** authorize or compare ownership. |
 
 Writers **delete** `execution_lease` on release; `null` and tombstone objects are invalid.
+
+**Ownership survives release**: later `mstar worktree cleanup` attributes a released plan row through the retained row `metadata.working_branch` / `metadata.worktree_path` and retained track Assignments — never by branch-name inference. Guard codes and the cleanup contract → **`mstar-branch-worktree`**「Worktree / branch cleanup」.
 
 V1: **manual release only** — omit `expires_at`; readers **MUST NOT** treat unknown or draft `expires_at` as authority to steal or release.
 
@@ -301,7 +305,7 @@ V1: **manual release only** — omit `expires_at`; readers **MUST NOT** treat un
 | `integration_merge_lease` | object | While one integration merge is owned; **absent** = unclaimed. Writers **delete** the key on release — never `null` or tombstones |
 | `execution_policy` | object | `plan_parallelism` / `worktree_mode` / `push_policy` — first-class (copied from v1 root `metadata` at migrate; values accepted-but-opaque this iteration) |
 | `branch` | object | Iteration branch anchors: `base` (from `iteration_base_branch`), `integration` (the `spec_integration_branch`), `target` (final PR target) |
-| `control_worktree_path` | absolute path string | Iteration Phase 2: canonical **repository root** (not `{HARNESS_DIR}`) checked out to the `branch.integration` branch; coordination + serial merge cwd |
+| `integration_worktree_path` | absolute path string | Iteration Phase 2: canonical **repository root** (not `{HARNESS_DIR}`) of the dedicated integration checkout, on the `branch.integration` branch, **distinct from the main worktree**; sole merge cwd. Canonical writers emit only this key; a raw v1 legacy worktree-path key is a **read-alias** (reader normalizes in memory + medium diagnostic `workflow.snapshot.legacy-control-worktree-path`) — migrate on the next authorized write; both keys present is a high violation, and writes never accept the old key. The main worktree (control root) is **not** a snapshot field — it is derived from Git (`readMainWorktree`). |
 | `compass_ref` | string | Relative pointer to the iteration delivery compass |
 | `legacy_metadata` | object | Catch-all for unmapped v1 root-`metadata` keys at migrate |
 
@@ -314,11 +318,11 @@ V1: **manual release only** — omit `expires_at`; readers **MUST NOT** treat un
 
 ## Iteration execution leases (Phase 2)
 
-Leases live in the **workflow snapshot** `{WORKFLOW_DIR}/<id>/snapshot.json` (`plans[].execution_lease` per row; `integration_merge_lease` top-level). Coordination happens through the **control worktree** copy of that file. This is cooperative, not a distributed lock service — non-cooperating processes are out of scope.
+Leases live in the **workflow snapshot** `{WORKFLOW_DIR}/<id>/snapshot.json` (`plans[].execution_lease` per row; `integration_merge_lease` top-level). Coordination happens through the **control-root copy** (the primary checkout / main worktree) of that file. This is cooperative, not a distributed lock service — non-cooperating processes are out of scope.
 
-**When fields apply:** iteration Phase 2 (after control worktree entry, or primary checkout when `Worktree mode: waived`). Control worktree + lease fields are waived only by explicit current-turn user instruction (`Worktree mode: waived` or equivalent). `Plan parallelism: serial` does **not** waive leases. **`Worktree mode: waived` does not waive the cross-plan parallel safety gate.**
+**When fields apply:** iteration Phase 2 (after integration-worktree entry). Worktree + lease fields are waived only by explicit current-turn user instruction (`Worktree mode: waived` or equivalent); the process SSOT still lives on the primary checkout in all modes. `Plan parallelism: serial` does **not** waive leases. **`Worktree mode: waived` does not waive the cross-plan parallel safety gate.**
 
-**Path SSOT:** Default-gitignored process artifacts — `status.json`, `workflows/`, `projects/`, `plans/`, `iterations/`, `sdd/` — read/write via `<control_worktree_path>/{HARNESS_DIR}/…` (absolute). A feature worktree's same-looking `{HARNESS_DIR}` path is **not** the SSOT. Missing plans under a feature checkout (gitignore) is **not** grounds for `Worktree mode: waived` — keep feature worktrees and use control absolute **`Plan Path`** / **`SDD dir`**. Detail → **`mstar-branch-worktree`** 「Harness path SSOT under default gitignore」.
+**Path SSOT:** Default-gitignored process artifacts — `status.json`, `workflows/`, `projects/`, `plans/`, `iterations/`, `sdd/` — read/write via `<main-repo-root>/{HARNESS_DIR}/…` (absolute; control root = the primary checkout / main worktree). A feature worktree's same-looking `{HARNESS_DIR}` path is **not** the SSOT. Missing plans under a feature checkout (gitignore) is **not** grounds for `Worktree mode: waived` — keep feature worktrees and use control absolute **`Plan Path`** / **`SDD dir`**. The three-domain table (process SSOT / tracked results / product source) → **`mstar-branch-worktree`** 「Harness path SSOT under default gitignore」.
 
 **Protocol home (single canonical copy):** the full lease protocol prose — same-host exclusive write lock, hard gate, claim-before-`InProgress`, hold/release/override, integration merge protocol, orphan recovery, lease prohibitions — lives in **`mstar-engine-legacy`** `references/lease-protocol.md` (engine-absent fallback). The Phase 2 iteration-command **execution checklist** → **`mstar-iteration`** `references/phase-2-worktree-lease.md`. This file carries the **field semantics** only (tables below + the lockdir location summary).
 

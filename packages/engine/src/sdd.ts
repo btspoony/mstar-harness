@@ -1,3 +1,4 @@
+import { collectActiveLifecycleBranches } from "./lifecycle-branches.js";
 /**
  * Engine sdd module — SDD loop state machine + the engine implementations
  * of the SDD workspace / task-brief / review-package helpers (CLI form:
@@ -46,7 +47,7 @@ import { findMstarc, parseMstarc } from "./mstarc.js";
 import { readJson, type GateResult, type Severity, type ValidationResult } from "./core.js";
 import { verifyPlanExecutionLease } from "./lease.js";
 import { WORKFLOW_SNAPSHOT_FILE } from "./workflow.js";
-import { assertBranchAlignment, isDistinctCheckout, l1PreDispatchCheck, probeCheckoutRoot } from "./worktree.js";
+import { assertBranchAlignment, gitProbeTimeoutMs, isDistinctCheckout, l1PreDispatchCheck, probeCheckoutRoot, readMainWorktree } from "./worktree.js";
 
 /**
  * Error carrying the ported script exit code so the CLI can map validation
@@ -67,7 +68,7 @@ export class SddScriptError extends Error {
  * usage plus the harness-root override (plan finding 2026-08-08).
  */
 export type SddWorkspaceOptions = {
- /** Control worktree repo root — CLI 2nd arg / `MSTAR_CONTROL_ROOT`. */
+ /** Main worktree repo root — CLI 2nd arg / `MSTAR_CONTROL_ROOT`. */
   controlRoot?: string;
  /** Explicit harness root — `MSTAR_HARNESS_DIR` / `--harness-dir`. */
   harnessDir?: string;
@@ -142,6 +143,7 @@ function gitOut(cwd: string, args: string[]): string | null {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
       maxBuffer: GIT_CAPTURE_MAX_BYTES,
+      timeout: gitProbeTimeoutMs(),
     }).trim();
   } catch {
     return null;
@@ -188,31 +190,24 @@ function hasWorkflowSnapshot(harnessDir: string): boolean {
 }
 
 /**
- * A linked worktree from `git worktree add` has `--git-dir` ≠
- * `--git-common-dir` (or a `.git/worktrees/` / `worktrees/` git dir path).
- *
- * The `/worktrees/` substring branches keep the original script's
- * fail-closed classification: a MAIN checkout cloned into a directory
- * literally named `worktrees` is ALSO classified as linked (fail-closed
- * until CONTROL_ROOT is given). The realpath comparison below would
- * classify such a checkout correctly, but the substring branches
- * short-circuit first; see the test "repo under a directory named
- * 'worktrees'".
+ * Checkout root containing `dir`, probed through the nearest EXISTING
+ * ancestor (a not-yet-created harness dir resolves through its parent).
+ * When the walk starts inside `boundary` it never probes above the
+ * boundary — a non-Git main root must not inherit an unrelated ancestor's
+ * checkout identity. `null` when no Git checkout contains the walk.
  */
-function isLinkedWorktree(root: string): boolean {
-  const gitDirRaw = gitOut(root, ["rev-parse", "--git-dir"]);
-  const commonRaw = gitOut(root, ["rev-parse", "--git-common-dir"]);
-  if (gitDirRaw === null || commonRaw === null) return false;
-  const gitDir = isAbsolute(gitDirRaw) ? gitDirRaw : join(root, gitDirRaw);
-  const common = isAbsolute(commonRaw) ? commonRaw : join(root, commonRaw);
- // Path contains /worktrees/ → definitely linked (original case glob).
-  if (gitDir.includes("/.git/worktrees/") || gitDir.includes("/worktrees/")) return true;
-  try {
-    const gdParent = realpathSync(dirname(gitDir));
-    const cmAbs = realpathSync(common);
-    return join(gdParent, basename(gitDir)) !== cmAbs && gitDir !== cmAbs;
-  } catch {
-    return false;
+function checkoutRootNearestExisting(dir: string, boundary: string): string | null {
+  const stop = resolve(boundary);
+  const startInside = isInside(resolve(dir), stop);
+  let current = resolve(dir);
+  for (;;) {
+    const probed = probeCheckoutRoot(current);
+    if (probed !== null) return probed;
+    if (startInside && current === stop) return null;
+    const parent = dirname(current);
+    if (parent === current) return null;
+    if (startInside && !isInside(parent, stop)) return null; // next hop leaves the boundary
+    current = parent;
   }
 }
 
@@ -220,25 +215,30 @@ function isLinkedWorktree(root: string): boolean {
  * Resolve and ensure `{SDD_DIR}` = `{HARNESS_DIR}/sdd/<plan-id>/` (prints
  * the absolute path). Resolution order:
  *
- * 1. fail-closed FIRST: a linked worktree without a control root never
- * resolves or creates any SDD tree under the feature checkout (refuses a
- * second SDD tree; no override or probe may bypass this guard);
- * 2. explicit harness-root override (`opts.harnessDir` / `MSTAR_HARNESS_DIR`)
- * — plan finding 2026-08-08: covers repos the status.json probe misses;
- * resolved relative to the established root;
- * 3. `.mstarc` `[config] harness_dir` at `root` (repo-declared root;
- * resolved against the config file's directory);
- * 4. `status.json` probe at root (`.mstar` → `.agents`);
- * 5. fallback: existing `.mstar`/`.agents` dir, else `.mstar`.
- *
- * `controlRoot` (CLI 2nd arg / `MSTAR_CONTROL_ROOT`) pins `root` to the
- * control worktree instead of the cwd's git top-level.
+ * 1. Git-derived MAIN discovery FIRST (fail-closed): the process-SSOT
+ *    control root is the MAIN worktree (`readMainWorktree` — the first
+ *    `git worktree list --porcelain -z` record). From a linked checkout the
+ *    first record still reaches main; a failed/unavailable probe (null)
+ *    refuses BEFORE any harness resolution or mkdir — nothing is written.
+ * 2. An explicit `controlRoot` (CLI 2nd arg / `MSTAR_CONTROL_ROOT`) must BE
+ *    the main worktree when Git is available — an integration/foreign
+ *    linked checkout is refused, never silently redirected; explicit
+ *    non-Git standalone roots are preserved;
+ * 3. explicit harness-root override (`opts.harnessDir` / `MSTAR_HARNESS_DIR`)
+ *    — resolved relative to the established main root;
+ * 4. `.mstarc` `[config] harness_dir` at the main root (repo-declared root;
+ *    resolved against the config file's directory);
+ * 5. `status.json` probe at the main root (`.mstar` → `.agents`);
+ * 6. fallback: existing `.mstar`/`.agents` dir under the main root, else
+ *    `.mstar`;
+ * 7. the resolved harness dir must not redirect the process SSOT into a
+ *    linked/foreign Git checkout — refused before any mkdir/write.
  */
 export function sddWorkspace(planId: string, opts: SddWorkspaceOptions = {}): string {
   if (!planId) {
     throw new SddScriptError(
       "usage: mstar sdd workspace PLAN_ID [CONTROL_ROOT]\n" +
-        "  Set MSTAR_CONTROL_ROOT=<control_worktree_path> when running from a feature worktree.",
+        "  Set MSTAR_CONTROL_ROOT=<main-repo-root> when running from a feature worktree.",
       2,
     );
   }
@@ -252,32 +252,49 @@ export function sddWorkspace(planId: string, opts: SddWorkspaceOptions = {}): st
         1,
       );
     }
-    root = realpathSync(controlRoot);
+    const supplied = realpathSync(controlRoot);
+    const main = readMainWorktree(supplied);
+    if (main !== null) {
+      if (main.root !== supplied) {
+ // The supplied root is a linked (integration/foreign) checkout of the
+ // discovered main worktree — the process control root is the main
+ // worktree itself. Refuse, never silently redirect.
+        throw new SddScriptError(
+          `mstar sdd workspace: CONTROL_ROOT / MSTAR_CONTROL_ROOT "${supplied}" is a linked (integration/foreign) checkout of the main worktree "${main.root}".\n` +
+            `  The process control root is the main worktree itself \u2014 refusing to redirect the process SSOT.\n` +
+            `  Re-run with MSTAR_CONTROL_ROOT=${main.root}`,
+          1,
+        );
+      }
+      root = main.root;
+    } else if (isFile(join(supplied, ".git")) || gitOut(supplied, ["rev-parse", "--is-inside-work-tree"]) === "true") {
+ // A Git checkout whose main discovery failed — fail closed; a failed
+ // Git probe must never fall through to mkdir.
+      throw new SddScriptError(
+        `mstar sdd workspace: cannot verify the main worktree for CONTROL_ROOT "${supplied}" (git worktree discovery failed).\n` +
+          `  Refusing to resolve or create any SDD tree without a verified main worktree.`,
+        1,
+      );
+    } else {
+ // Explicit non-Git standalone SDD root — preserved.
+      root = supplied;
+    }
   } else {
-    const topLevel = gitOut(cwd, ["rev-parse", "--show-toplevel"]);
-    root = realpathSync(topLevel ?? cwd);
-  }
-
- // Fail-closed FIRST (mstar-branch-worktree «Harness path SSOT under
- // default gitignore»): a linked worktree without CONTROL_ROOT must never
- // resolve or create any SDD tree under the feature checkout — the harness
- // override and the status probe both run only after this guard passes.
- //
- // INTENTIONAL DIVERGENCE from the original script (pinned by
- // the test "stray status.json in a linked worktree"): a status.json-first
- // probe would resolve a linked feature checkout with a stray
- // `.mstar/status.json` and create the second SDD tree under the feature
- // checkout — exactly the hazard this guard exists to refuse. The engine
- // refuses regardless of the probe result.
-  if (!controlRoot && isLinkedWorktree(root)) {
- // Fail-closed message (exit 1).
-    throw new SddScriptError(
-      `mstar sdd workspace: linked worktree at ${root} has no {HARNESS_DIR}/status.json (default gitignore).\n` +
-        `  Refusing to create a second SDD tree under the feature checkout.\n` +
-        `  Re-run with MSTAR_CONTROL_ROOT=<control_worktree_path> or: mstar sdd workspace ${planId} <control_worktree_path>\n` +
-        `  See mstar-branch-worktree \u00abHarness path SSOT under default gitignore\u00bb.`,
-      1,
-    );
+    const main = readMainWorktree(cwd);
+    if (main === null) {
+ // Fail-closed FIRST (iteration spec worktree-write-model § Field
+ // semantics): without a verified main root the engine never resolves or
+ // creates any SDD tree — a failed Git probe must not fall through to
+ // mkdir, and no automatic non-Git discovery may authorize a
+ // linked-checkout write.
+      throw new SddScriptError(
+        `mstar sdd workspace: cannot verify the main worktree from cwd ${cwd} (git worktree discovery failed, git is unavailable, or the directory is not a Git worktree).\n` +
+          `  Refusing to resolve or create any SDD tree without a verified main worktree \u2014 no second process-SSOT tree is ever created under a linked checkout.\n` +
+          `  Re-run with MSTAR_CONTROL_ROOT=<main-repo-root> or: mstar sdd workspace ${planId} <main-repo-root>`,
+        1,
+      );
+    }
+    root = main.root;
   }
 
   const harnessOverride = opts.harnessDir ?? (process.env.MSTAR_HARNESS_DIR || undefined);
@@ -303,6 +320,21 @@ export function sddWorkspace(planId: string, opts: SddWorkspaceOptions = {}): st
         harnessDir = join(root, ".mstar");
       }
     }
+  }
+
+ // The resolved harness dir must not redirect the process SSOT into a
+ // linked/foreign Git checkout (an absolute override or a `.mstarc`
+ // declaration could). The checkout containing the harness (nearest
+ // existing ancestor) must be the established main root — a walk bounded
+ // at the root so a non-Git main root never inherits an unrelated
+ // ancestor's checkout identity.
+  const harnessCheckout = checkoutRootNearestExisting(harnessDir, root);
+  if (harnessCheckout !== null && harnessCheckout !== root) {
+    throw new SddScriptError(
+      `mstar sdd workspace: harness root "${harnessDir}" resolves inside Git checkout "${harnessCheckout}", not the verified main worktree "${root}".\n` +
+        `  Refusing to redirect the process SSOT into a linked checkout \u2014 resolve MSTAR_HARNESS_DIR / .mstarc harness_dir relative to the main worktree.`,
+      1,
+    );
   }
 
   const sddDir = resolveSddDir(harnessDir, planId);
@@ -434,7 +466,7 @@ export function reviewPackage(base: string, head: string, outFile?: string, opts
 
   const verifyRef = (ref: string, what: "BASE" | "HEAD"): void => {
     try {
-      execFileSync("git", ["rev-parse", "--verify", "--quiet", ref], { cwd, stdio: ["ignore", "pipe", "pipe"] });
+      execFileSync("git", ["rev-parse", "--verify", "--quiet", ref], { cwd, stdio: ["ignore", "pipe", "pipe"], timeout: gitProbeTimeoutMs() });
     } catch {
       throw new SddScriptError(`bad ${what}: ${ref}`, 2);
     }
@@ -470,7 +502,7 @@ export function reviewPackage(base: string, head: string, outFile?: string, opts
   }
 
   const run = (args: string[]): Buffer =>
-    execFileSync("git", args, { cwd, maxBuffer: GIT_CAPTURE_MAX_BYTES });
+    execFileSync("git", args, { cwd, maxBuffer: GIT_CAPTURE_MAX_BYTES, timeout: gitProbeTimeoutMs() });
   const commits = run(["log", "--oneline", `${base}..${head}`]);
   // FAIL LOUD on an empty range instead of writing an empty package. The range
   // resolves to nothing whenever the command runs outside the branch worktree
@@ -518,6 +550,7 @@ export function assertBaseSha(ref: string, opts: { cwd?: string } = {}): void {
  // accepts any well-formed 40-hex string without checking existence.
     execFileSync("git", ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], {
       cwd: opts.cwd,
+      timeout: gitProbeTimeoutMs(),
       stdio: ["ignore", "pipe", "pipe"],
     });
   } catch {
@@ -702,15 +735,59 @@ function throwUsage(message: string): never {
 }
 
 /**
+ * Recorded main-worktree branch from the declared plan file (the plan
+ * header `**Main worktree branch**: <branch>` written at lifecycle start —
+ * SDD reads the plan it already declares). Missing record → `""`: the
+ * caller falls back conservatively to the governing snapshot's explicit
+ * `branch.base`, never to the branch observed at check time.
+ */
+function recordedMainWorktreeBranch(planFile: string): string {
+  try {
+    const text = readFileSync(planFile, "utf8");
+    const match = text.match(/^\s*\*{0,2}Main worktree branch\*{0,2}\s*[:\uff1a][ \t]*(\S+)/m);
+    return match ? match[1]! : "";
+  } catch {
+    return "";
+  }
+}
+
+/**
  * Outcome of the workflow plan-row lookup: the governing row from the single
- * registered active workflow holding the plan (`row`), no active workflow at
+ * registered active workflow holding the plan (`row`) plus the governing
+ * snapshot document (its integration topology feeds L1) and the readable
+ * ACTIVE snapshots (the lifecycle-owned branch set), no active workflow at
  * all (`none` — standalone branch policy applies), or the plan claimed by
  * more than one registered active workflow (`ambiguous` — fail-closed).
  */
 type WorkflowPlanRowMatch =
   | { kind: "none" }
-  | { kind: "row"; workflowId: string; row: Record<string, unknown> }
+  | {
+      kind: "row";
+      workflowId: string;
+      row: Record<string, unknown>;
+      /** Governing snapshot document (legacy `control_worktree_path` normalized in memory). */
+      snapshot: Record<string, unknown>;
+      /** Readable active lifecycle snapshots — the L1 lifecycle-branch ownership set. */
+      activeSnapshots: readonly Record<string, unknown>[];
+    }
   | { kind: "ambiguous"; workflowIds: string[] };
+
+/**
+ * Minimal in-memory normalization for the governing-row lookup: the
+ * canonical reader (`readWorkflowSnapshot`) owns full validation, but the
+ * row lookup must tolerate partially-written snapshots (the lenient
+ * row-preserving read is unchanged) — so it normalizes ONLY the single
+ * permitted legacy alias. A document carrying BOTH path keys is corrupted
+ * topology and is refused for a governing active row rather than normalized.
+ */
+function normalizeSnapshotWorktreePath(doc: Record<string, unknown>): Record<string, unknown> | null {
+  const legacy = doc.control_worktree_path;
+  const canonical = doc.integration_worktree_path;
+  if (legacy !== undefined && canonical !== undefined) return null;
+  if (legacy === undefined) return doc;
+  const { control_worktree_path: _dropped, ...rest } = doc;
+  return { ...rest, integration_worktree_path: legacy };
+}
 
 /**
  * Registered active workflow ids from the v2 root `status.json`
@@ -748,7 +825,9 @@ function readActiveWorkflowIds(controlHarnessRoot: string): Set<string> | null {
  * - a snapshot whose workflow id is registered active in
  * `status.json` `workflows[]` wins over retained terminal snapshots —
  * filesystem scan order never lets a completed lifecycle shadow a live
- * one;
+ * one; the row match carries the governing snapshot document (legacy alias
+ * normalized in memory) and every readable ACTIVE snapshot (the
+ * lifecycle-owned branch ownership set for L1);
  * - the plan appearing in MORE THAN ONE registered active workflow is
  * ambiguous — returned as `kind: "ambiguous"` so the caller fails closed
  * instead of silently picking one;
@@ -756,7 +835,8 @@ function readActiveWorkflowIds(controlHarnessRoot: string): Set<string> | null {
  * terminal lifecycles) is `kind: "none"` — a terminal snapshot must never
  * satisfy lease enforcement;
  * - without a v2 register the legacy behavior is unchanged: the first
- * snapshot mentioning the plan wins.
+ * snapshot mentioning the plan wins (the ownership set is every readable
+ * snapshot — no register to distinguish active from terminal).
  *
  * Unreadable/malformed snapshots are skipped (consistent with
  * `hasWorkflowSnapshot`): an unreadable snapshot cannot establish an active
@@ -778,7 +858,9 @@ function findWorkflowPlanRow(controlHarnessRoot: string, planId: string): Workfl
   } catch {
     return { kind: "none" };
   }
-  const matches: { workflowId: string; row: Record<string, unknown> }[] = [];
+  const registeredActive = readActiveWorkflowIds(controlHarnessRoot);
+  const scanned: { workflowId: string; doc: Record<string, unknown> }[] = [];
+  const matches: { workflowId: string; row: Record<string, unknown>; doc: Record<string, unknown> }[] = [];
   for (const id of workflowIds) {
     const snapshotPath = join(workflowsDir, id, WORKFLOW_SNAPSHOT_FILE);
     if (!isFile(snapshotPath)) continue;
@@ -788,26 +870,49 @@ function findWorkflowPlanRow(controlHarnessRoot: string, planId: string): Workfl
     } catch {
       continue; // malformed snapshot — cannot establish an active workflow
     }
-    const plans = doc.plans;
+    const normalized = normalizeSnapshotWorktreePath(doc);
+    if (normalized === null) {
+      if ((registeredActive === null || registeredActive.has(id)) && Array.isArray(doc.plans) &&
+          doc.plans.some((row) => isPlainObject(row) && (row.id === planId || row.plan_id === planId))) {
+        throw new SddScriptError(`refusing conflicting integration_worktree_path / control_worktree_path in ${snapshotPath}`, 1);
+      }
+      continue;
+    }
+    scanned.push({ workflowId: id, doc: normalized });
+    const plans = normalized.plans;
     if (!Array.isArray(plans)) continue;
     for (const row of plans) {
       if (isPlainObject(row) && (row.id === planId || row.plan_id === planId)) {
-        matches.push({ workflowId: id, row });
+        matches.push({ workflowId: id, row, doc: normalized });
         break; // one row per snapshot is enough for the register comparison
       }
     }
   }
   if (matches.length === 0) return { kind: "none" };
-  const registeredActive = readActiveWorkflowIds(controlHarnessRoot);
   if (registeredActive === null) {
-    return { kind: "row", workflowId: matches[0]!.workflowId, row: matches[0]!.row };
+    return {
+      kind: "row",
+      workflowId: matches[0]!.workflowId,
+      row: matches[0]!.row,
+      snapshot: matches[0]!.doc,
+      activeSnapshots: scanned.map((s) => s.doc),
+    };
   }
   const active = matches.filter((m) => registeredActive.has(m.workflowId));
   if (active.length === 0) return { kind: "none" }; // only unregistered (terminal) snapshots mention the plan
   if (active.length > 1) {
     return { kind: "ambiguous", workflowIds: active.map((m) => m.workflowId) };
   }
-  return { kind: "row", workflowId: active[0]!.workflowId, row: active[0]!.row };
+  // The L1 lifecycle-branch ownership set spans ALL registered active
+  // lifecycles, never only the governing one.
+  const activeDocs = scanned.filter((s) => registeredActive.has(s.workflowId)).map((s) => s.doc);
+  return {
+    kind: "row",
+    workflowId: active[0]!.workflowId,
+    row: active[0]!.row,
+    snapshot: active[0]!.doc,
+    activeSnapshots: activeDocs,
+  };
 }
 
 /**
@@ -844,7 +949,9 @@ function findWorkflowPlanRow(controlHarnessRoot: string, planId: string): Workfl
  * `workflows[]`; a retained terminal snapshot never satisfies lease
  * enforcement, and a plan claimed by multiple active workflows fails
  * closed), its lease is verified (`verifyPlanExecutionLease`) and the
- * L1 checklist runs (`l1PreDispatchCheck` with the control checkout);
+ * L1 checklist runs (`l1PreDispatchCheck` with the Git-derived MAIN
+ * worktree, the governing snapshot's integration topology, the recorded
+ * residency expectation and the active lifecycle-branch ownership set);
  * the context must then match the verified lease exactly. Without an
  * active lease (no row, or a non-InProgress row without lease), the
  * standalone branch policy applies (`assertBranchAlignment`) — an
@@ -1023,13 +1130,35 @@ export function resolveSddExecutionContext(input: SddExecutionContext): SddExecu
       ),
     ]);
   }
-  const row = match.kind === "row" ? match.row : null;
-  if (row !== null && row.execution_lease !== undefined) {
+  if (match.kind === "row" && match.row.execution_lease !== undefined) {
+    const row = match.row;
     const leaseVerify = verifyPlanExecutionLease(row, planId);
     if (!leaseVerify.ok) throwGateFail(leaseVerify.violations);
     const lease = leaseVerify.lease as Record<string, unknown>;
+    // L1 consumes the full governing snapshot and the Git-derived MAIN
+    // worktree separately (never the harness checkout as a stand-in):
+    // main residency against the recorded expectation (plan header, with
+    // the explicit branch.base fallback), non-ownership of every active
+    // lifecycle branch, the snapshot's integration topology, and the
+    // pairwise main/integration/feature checkout identity.
+    const snapshot = match.snapshot;
+    const main = readMainWorktree(canonicalControlHarnessRoot);
+    const snapshotBase =
+      isPlainObject(snapshot.branch) && typeof snapshot.branch.base === "string" && snapshot.branch.base.trim() !== ""
+        ? snapshot.branch.base
+        : "";
+    const expectedMainBranch = recordedMainWorktreeBranch(input.planFile) || snapshotBase;
     const l1 = l1PreDispatchCheck({
-      controlWorktreePath: controlCheckout,
+      workflowType: snapshot.type === "iteration" ? "iteration" : "plan",
+      integrationWorktreePath:
+        typeof snapshot.integration_worktree_path === "string" ? snapshot.integration_worktree_path : "",
+      integrationBranch:
+        isPlainObject(snapshot.branch) && typeof snapshot.branch.integration === "string"
+          ? snapshot.branch.integration
+          : "",
+      mainWorktree: main,
+      expectedMainBranch,
+      lifecycleBranches: collectActiveLifecycleBranches(match.activeSnapshots),
       leaseWorktreePath: lease.worktree_path as string,
       leaseWorkingBranch: lease.working_branch as string,
       planId,
@@ -1053,10 +1182,10 @@ export function resolveSddExecutionContext(input: SddExecutionContext): SddExecu
         ),
       ]);
     }
-  } else if (row !== null && row.status === "InProgress") {
+  } else if (match.kind === "row" && match.row.status === "InProgress") {
  // InProgress without a lease is the orphan refusal (status-and-residuals
  // § Orphan recovery) — fail with the reused violation, never invent a lease.
-    throwGateFail(verifyPlanExecutionLease(row, planId).violations);
+    throwGateFail(verifyPlanExecutionLease(match.row, planId).violations);
   } else {
  // Standalone (no active workflow row, or a non-InProgress row without a
  // lease): existing branch policy only — no lease mandate.

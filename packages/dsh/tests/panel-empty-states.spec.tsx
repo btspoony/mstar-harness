@@ -99,7 +99,7 @@ const harnessSource: MstarEngineStatusPayload = {
     specIntegrationBranch: null,
     pushPolicy: null,
     worktreeMode: null,
-    controlWorktreePath: null,
+    integrationWorktreePath: null,
     leases: [],
     knowledge: null,
     direction: null,
