@@ -449,8 +449,45 @@ describe("mstar worktree cleanup — apply executes exactly the current remove r
       // the branch refuses checked-out (pre-fix it re-planned as unmerged) —
       // the retained end state is identical either way.
       expect(applied.stdout).toContain("refuse | local-branch | iteration/wf-9 | cleanup.refuse.checked-out");
+      expect(applied.stdout).toContain("refuse | local-branch | iteration/wf-9 | cleanup.refuse.unmerged");
       expect(git(["for-each-ref", "refs/heads/iteration/wf-9"], fx.root)).not.toBe("");
     } finally {
+      rmSync(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  test("terminal iteration merged into target: one apply removes the deferred worktree and its branch", () => {
+    const fx = terminalIntegrationFixture("mstar-cleanup-terminal-merged-");
+    try {
+      git(["merge", "-q", "--no-ff", "-m", "merge integration", "iteration/wf-9"], fx.root);
+      // Run inside the removal candidate to also exercise the surviving cwd.
+      const applied = runCli(["worktree", "cleanup", "--workflow", "wf-9", "--harness", fx.root, "--apply"], fx.intWt);
+      expect(applied.exitCode).toBe(0);
+      expect(git(["for-each-ref", "refs/heads/feature/done-a"], fx.root)).toBe("");
+      expect(git(["for-each-ref", "refs/heads/iteration/wf-9"], fx.root)).toBe("");
+      expect(worktreeList(fx.root)).toHaveLength(1);
+      const removed = applied.stdout.indexOf(`apply: removed worktree ${fx.intWt}`);
+      expect(removed).toBeGreaterThan(applied.stdout.indexOf("apply: deleted branch feature/done-a"));
+      expect(applied.stdout.indexOf("apply: deleted branch iteration/wf-9")).toBeGreaterThan(removed);
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  test("a failed deferred worktree removal retains its merged branch", () => {
+    const fx = terminalIntegrationFixture("mstar-cleanup-deferred-failure-");
+    const adminDir = join(fx.root, ".git", "worktrees", "wt-integration");
+    try {
+      git(["merge", "-q", "--no-ff", "-m", "merge integration", "iteration/wf-9"], fx.root);
+      chmodSync(adminDir, 0o555);
+      const applied = runCli(["worktree", "cleanup", "--workflow", "wf-9", "--harness", fx.root, "--apply"], fx.root);
+      expect(applied.exitCode).toBe(1);
+      expect(applied.stderr).toContain(`apply: failed worktree ${fx.intWt}`);
+      expect(applied.stdout).not.toContain("apply: deleted branch iteration/wf-9");
+      expect(git(["for-each-ref", "refs/heads/iteration/wf-9"], fx.root)).not.toBe("");
+      expect(git(["worktree", "list", "--porcelain"], fx.root)).toContain(fx.intWt);
+    } finally {
+      chmodSync(adminDir, 0o755);
       rmSync(fx.root, { recursive: true, force: true });
     }
   });

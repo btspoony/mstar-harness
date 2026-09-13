@@ -2686,7 +2686,7 @@ worktreeCommand
   .option("--harness <path>", "Harness dir override (default: process-harness discovery from the verified main worktree)")
   .option(
     "--apply",
-    "Execute current remove rows: git worktree remove (never force; evidence-base hosts deferred) → re-probe/re-plan → git branch -d (never -D) from the evidence-base checkout → remote compare-and-delete → deferred integration worktree removal",
+    "Execute current remove rows: git worktree remove (never force; evidence-base hosts deferred) \u2192 re-probe/re-plan \u2192 git branch -d (never -D) from the evidence-base checkout \u2192 remote compare-and-delete \u2192 deferred integration worktree removal \u2192 re-probe/re-plan newly released local branches",
   )
   .option("--remote", "Include remote-branch candidates (refs/remotes/origin) with expected-OID compare-and-delete")
   .option(
@@ -2812,15 +2812,40 @@ worktreeCommand
       // worktrees) — their branch-deletion duty is done, so removing them can
       // no longer strand a `git branch -d` on the main worktree. Only rows
       // the re-plan still marks remove are executed (facts-changed rows skip).
+      const releasedBranches = new Set<string>();
       for (const decision of plan2) {
         if (decision.kind !== "worktree" || decision.verdict !== "remove") continue;
         if (!deferredWorktrees.has(decision.ref)) continue;
         try {
           gitSync(["worktree", "remove", decision.ref], main.root); // never --force
           console.log(pc.green(`apply: removed worktree ${decision.ref}`));
+          const branch = probe2.worktrees.find((worktree) => worktree.path === decision.ref)?.branch;
+          if (branch !== null && branch !== undefined) releasedBranches.add(branch);
         } catch (error) {
           failed = true;
           console.error(pc.red(`apply: failed worktree ${decision.ref}: ${cleanupGitMessage(error)}`));
+        }
+      }
+      // These branches were checked out during plan2. Re-check every guard
+      // after their hosts are gone, without retrying other branches/remotes
+      // or widening scope when a deferred worktree removal failed.
+      if (releasedBranches.size > 0) {
+        const probe3 = cleanupProbe(probeInput);
+        const built3 = cleanupBuildFacts(probe3, scope, options.remote === true);
+        const plan3 = planWorktreeCleanup(probe3.selected, built3.facts).filter(
+          (decision) => decision.kind === "local-branch" && releasedBranches.has(decision.ref),
+        );
+        cleanupPrintPlan(`worktree cleanup (workflow ${options.workflow}): post-deferred-removal re-plan`, plan3);
+        for (const decision of plan3) {
+          if (decision.verdict !== "remove") continue;
+          const cwd = cleanupBranchDeletionCwd(built3.branchBase.get(decision.ref), probe3, main.root);
+          try {
+            gitSync(["branch", "-d", decision.ref], cwd); // never -D
+            console.log(pc.green(`apply: deleted branch ${decision.ref}`));
+          } catch (error) {
+            failed = true;
+            console.error(pc.red(`apply: failed branch ${decision.ref}: ${cleanupGitMessage(error)}`));
+          }
         }
       }
       if (failed) process.exitCode = 1;
