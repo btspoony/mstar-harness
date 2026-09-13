@@ -824,16 +824,25 @@ describe("capture — outcomes", () => {
       const root = tmpRoot("mstar-sdd-ev-cap-");
       try {
         const f = evidenceFixture(root);
-        const result = await captureDirect(f, [process.execPath, f.children.bigOut]);
-        expect(result.record.outcome).toEqual({ kind: "exit", code: 0 });
+        // Capture the CLI's forwarded bytes without flooding the test runner's
+        // terminal sink; production forwarding and log caps still run intact.
+        const result = runCli(
+          ["sdd", "evidence", "capture", "--request", f.requestFile, "--", process.execPath, f.children.bigOut],
+          { cwd: f.feature },
+        );
+        const runDir = runDirFromStderr(result.stderr);
+        const record = readRecord(runDir);
+        expect(result.stdout).toBe("x".repeat(9 * 1024 * 1024));
+        expect(result.stderr).toContain("ERR-LINE\n");
+        expect(record.outcome).toEqual({ kind: "exit", code: 0 });
         expect(result.exitCode).toBe(1); // child passed but capture incomplete
-        expect(result.record.logs.stdout.bytes).toBe(8388608);
-        expect(result.record.logs.stdout.truncated).toBe(true);
-        expect(result.record.logs.stderr.truncated).toBe(false);
-        const onDisk = readFileSync(join(result.runDir, "stdout.log"));
+        expect(record.logs.stdout.bytes).toBe(8388608);
+        expect(record.logs.stdout.truncated).toBe(true);
+        expect(record.logs.stderr.truncated).toBe(false);
+        const onDisk = readFileSync(join(runDir, "stdout.log"));
         expect(onDisk.length).toBe(8388608);
-        expect(result.record.logs.stdout.sha256).toBe(sha256(onDisk));
-        expect(validateSddEvidenceRecord(result.record).ok).toBe(true);
+        expect(record.logs.stdout.sha256).toBe(sha256(onDisk));
+        expect(validateSddEvidenceRecord(record).ok).toBe(true);
       } finally {
         rmSync(root, { recursive: true, force: true });
       }
