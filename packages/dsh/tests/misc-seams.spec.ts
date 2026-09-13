@@ -115,8 +115,9 @@ Every order-list render issues 1+N queries.
 const AUDIT_BROKEN = AUDIT_GOOD.replace('- **Priority**: P1', '- **Priority**: P9')
 
 /** Valid Status block whose body reproduces a secret value (Hard Rule 4). */
+const auditFixturePassword = randomBytes(24).toString('hex')
 const AUDIT_SECRET = `${AUDIT_GOOD}
-const password = "${randomBytes(24).toString('hex')}";
+const password = "${auditFixturePassword}";
 `
 
 /** No Status block at all → `audit.status.missing-block`. */
