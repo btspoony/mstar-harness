@@ -2053,7 +2053,7 @@ worktreeCommand
   .option("--plan <plan-id>", "Plan id whose execution_lease drives the L1 input")
   .option("--harness <path>", "Harness dir override (default: process-harness discovery from the verified main worktree)")
   .option("--integration <path>", "Integration worktree path override (default: snapshot integration_worktree_path)")
-  .option("--main-branch <branch>", "Recorded main-worktree branch (plan header) — transports the recorded expectation, never a new one")
+  .option("--main-branch <branch>", "Recorded main-worktree branch (plan header) \u2014 transports the recorded expectation, never a new one")
   .option("--control <path>", "Deprecated alias of --integration (one-release grace; stderr migration notice)")
   .option("--l2", "Run the L2 within-plan check (parallel writable tracks) instead of L1")
   .option(
@@ -2102,14 +2102,14 @@ worktreeCommand
    // release, stderr notice); passing both is a usage error.
         if (options.control !== undefined && options.integration !== undefined) {
           throw new SddScriptError(
-            "usage: worktree check <plan-id> --workflow <id> — pass --integration or the deprecated --control alias, not both",
+            "usage: worktree check <plan-id> --workflow <id> \u2014 pass --integration or the deprecated --control alias, not both",
             2,
           );
         }
         if (options.control !== undefined) {
           console.error(
             pc.yellow(
-              "note: --control is deprecated — it aliases --integration (the snapshot field is integration_worktree_path); the alias will be removed in a future release",
+              "note: --control is deprecated \u2014 it aliases --integration (the snapshot field is integration_worktree_path); the alias will be removed in a future release",
             ),
           );
         }
@@ -2469,7 +2469,7 @@ function cleanupProbeDefaultBranch(mainRoot: string, mainBranch: string | null):
     return gitSync(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], mainRoot).replace(/^origin\//, "");
   } catch {
     if (mainBranch === null || mainBranch === "") {
-      throw new Error("cannot determine the default branch — no origin HEAD symref and the main worktree is detached");
+      throw new Error("cannot determine the default branch \u2014 no origin HEAD symref and the main worktree is detached");
     }
     return mainBranch;
   }
@@ -2502,7 +2502,7 @@ function cleanupProbeMerged(mainRoot: string, bases: readonly string[]): Record<
     } catch {
       console.error(
         pc.yellow(
-          `worktree cleanup: note: merged-evidence base ${JSON.stringify(base)} does not resolve — candidates against it refuse as unmerged`,
+          `worktree cleanup: note: merged-evidence base ${JSON.stringify(base)} does not resolve \u2014 candidates against it refuse as unmerged`,
         ),
       );
     }
@@ -2539,7 +2539,7 @@ function cleanupProbeRemoteEvidence(
       if (ancestor === null) {
         console.error(
           pc.yellow(
-            `worktree cleanup: note: ancestry of ${remote.branch} against ${JSON.stringify(base)} is indeterminate — no evidence row recorded (candidates refuse)`,
+            `worktree cleanup: note: ancestry of ${remote.branch} against ${JSON.stringify(base)} is indeterminate \u2014 no evidence row recorded (candidates refuse)`,
           ),
         );
         continue;
@@ -2611,14 +2611,14 @@ function cleanupBuildFacts(
       if (checkedOut !== "") attribution = cleanupDistinctOwner(cleanupBranchClaims(checkedOut, probe.snapshots));
     }
     if (attribution.ambiguous) {
-      notes.add(`worktree ${worktree.path} is claimed by more than one snapshot row — treated as unowned (refuses)`);
+      notes.add(`worktree ${worktree.path} is claimed by more than one snapshot row \u2014 treated as unowned (refuses)`);
     }
     targets.push({ kind: "worktree", ref: worktree.path, branch: worktree.branch ?? "", tip: worktree.tip, owner: attribution.owner });
   }
   for (const local of probe.localBranches) {
     const attribution = cleanupDistinctOwner(cleanupBranchClaims(local.branch, probe.snapshots));
     if (attribution.ambiguous) {
-      notes.add(`branch ${local.branch} is claimed by more than one snapshot row — treated as unowned (refuses)`);
+      notes.add(`branch ${local.branch} is claimed by more than one snapshot row \u2014 treated as unowned (refuses)`);
     }
     targets.push({ kind: "local-branch", ref: local.branch, branch: local.branch, tip: local.tip, owner: attribution.owner });
   }
@@ -2626,7 +2626,7 @@ function cleanupBuildFacts(
     for (const remote of probe.remoteBranches) {
       const attribution = cleanupDistinctOwner(cleanupBranchClaims(remote.branch, probe.snapshots));
       if (attribution.ambiguous) {
-        notes.add(`remote branch ${remote.branch} is claimed by more than one snapshot row — treated as unowned (refuses)`);
+        notes.add(`remote branch ${remote.branch} is claimed by more than one snapshot row \u2014 treated as unowned (refuses)`);
       }
       targets.push({ kind: "remote-branch", ref: `origin/${remote.branch}`, branch: remote.branch, tip: remote.tip, owner: attribution.owner });
     }
@@ -2704,7 +2704,7 @@ worktreeCommand
         );
       }
       const main = readMainWorktree();
-      if (main === null) throw new Error("cannot resolve the main worktree of the current repository — run inside the repo");
+      if (main === null) throw new Error("cannot resolve the main worktree of the current repository \u2014 run inside the repo");
       const harnessDir = resolveProcessHarnessDir(options.harness, main);
       if (harnessDir === null) throw new Error("harness directory not found");
       const snapshotPath = resolveSnapshotPath(options.workflow, harnessDir);
