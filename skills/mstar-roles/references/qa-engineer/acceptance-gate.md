@@ -32,6 +32,21 @@ When **`QA mode: acceptance-only`**:
 2. If **L1** (or prior QA/CI) already provides reproducible relevant evidence → **verify mapping** to plan Acceptance Criteria; do not re-execute covered checks. Non-executable docs/policy may supply `scoped-check` evidence (`mstar-sdd/references/file-handoffs.md`), not a fabricated test log.
 3. Document in Completion Report **Validation**: which ACs are covered by reused evidence vs newly executed checks.
 
+### Captured evidence mapping (`sdd evidence`)
+
+Retained `sdd evidence` bundles are consumed read-only: QA integrity-checks and maps the evidence — it never repeats the captured child command (exact command shapes and exit meanings → `mstar-sdd/references/file-handoffs.md` § Verification evidence). Map every AC with all columns:
+
+| AC | run/manual reference | original input identity | integrity | outcome | target applicability and reason | coverage judgment | targeted gap |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+
+- **Run/manual reference**: `{SDD_DIR}/evidence/<run-uuid>/` with the record and raw `stdout.log`/`stderr.log` paths — or the manual report/CI citation with provenance.
+- **Original input identity**: the recorded run's Git HEAD plus declared-input digest from `record.json` — the basis any target comparison reuses.
+- **Coverage judgment** is reviewer reasoning: the assessment always reports `review-required`, supplies no pass/fail counts and no automatic coverage inference; skips and behavior coverage need raw-log/code review when material.
+- Evaluate candidate assumptions, never inherit them: a `reviewed` declaration, an empty environment allowlist, or a lockfile-only dependency rationale is the caller's assumption, not automatic completeness — name the unverified scope as the targeted gap when material.
+- Reuse outcomes: tested bytes equal after a later commit → reuse, no rerun; docs-only change → reuse; a changed shared runtime/config/fixture/dependency input → name the affected gap instead of rerunning everything; failed/incomplete or unknown-scope proof stays uncertain; no assessed target → `not-assessed`.
+- A pre-fix failing run keeps outcome `failed` and is never relabeled a pre-feature baseline; the fix needs its own passing evidence for the affected AC.
+- Manual historical evidence is unverified/manual — cite it with provenance and reviewer reasoning; NEVER convert it into a v1 runner record.
+
 ## Fill only the affected gap
 
 Scope authority → `mstar-harness-core` § 定向执行与验证边界. All QA modes remain unit-only; a mode, risk level or absent evidence does not grant wider execution.

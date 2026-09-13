@@ -135,6 +135,8 @@ The SDD helpers are engine-backed commands under **`mstar sdd`**（引擎 CLI；
 | `mstar sdd task-brief` | `PLAN_FILE TASK_N [OUTFILE]` |
 | `mstar sdd review-package` | `BASE HEAD [OUTFILE]` |
 
+Developer check evidence: `mstar sdd evidence capture|verify` — capture runs an already-authorized argv once and retains raw evidence; verify is read-only. Command shapes, exit meanings and role boundaries → **`references/file-handoffs.md`** § Verification evidence. `mstar sdd exec` stays PM-only.
+
 ## References
 
 - `references/file-handoffs.md` — paths and fix-loop evidence
