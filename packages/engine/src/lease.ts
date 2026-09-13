@@ -178,7 +178,7 @@ export function validateExecutionLease(lease: unknown): GateResult {
       violation(
         "medium",
         "lease.execution-lease.invalid-worktree-path",
-        "worktree_path must be an absolute path \u2014 it identifies the dedicated feature-worktree root (and MUST differ from metadata.control_worktree_path)",
+        "worktree_path must be an absolute path \u2014 it identifies the dedicated feature-worktree root (a Git checkout distinct from the main worktree and the integration worktree)",
       ),
     );
   }

@@ -23,8 +23,8 @@
 ### 5.0 Phase boundary
 
 - Phase 5 在 PR head（`spec_integration_branch`）上 push 修复；**禁止**另开替代分支
-- **Checkout / worktree（HARD）**：Phase 5 是 PR 级 **hotfix** loop，**不是** Phase 2 plan 实现。修复直接在 **control worktree**（已检出 `spec_integration_branch` 的 checkout）上编辑、commit、再按 §5.1a push。**禁止**为 Phase 5 另开 feature / fix worktree；**禁止**把 Phase 2「control 禁止产品编辑 / 须 feature worktree」套用到 Phase 5。另开 worktree 浪费时间、磁盘与计算，与 Phase 5 快速收敛 CI/review 的目标相悖。
-- 产品代码修复 → PM **dispatch** dev/ops（`mstar-dispatch-gates`）；Assignment **`Worktree path`** / cwd = control（snapshot `control_worktree_path` 或当前已在集成分支上的 checkout）；PM 线程不代写实现
+- **Checkout / worktree（HARD）**：Phase 5 是 PR 级 **hotfix** loop，**不是** Phase 2 plan 实现。产品修复在 **fix feature worktree**（从 `spec_integration_branch` 出的 fix 分支）上编辑、commit；review 后在 **integration worktree**（snapshot `integration_worktree_path`）merge 回 `spec_integration_branch`，再按 §5.1a push。**禁止**在 integration worktree 或主 checkout（control root）上直接编辑产品代码——三域表（`mstar-branch-worktree`）规定 product source → feature worktree only；merge 一次一个 holder。
+- 产品代码修复 → PM **dispatch** dev/ops（`mstar-dispatch-gates`）；Assignment **`Worktree path`** / cwd = 绝对 fix feature worktree 路径；merge 回 integration 由 PM 在 **integration worktree** 执行；PM 线程不代写实现
 - 禁止为「让 CI 变绿」而改 workflow，除非用户明确授权
 - **Push cadence** → **§5.1a**（本地可提前修；**禁止**在 CI / AI review 波次未结束时 push）
 
@@ -72,14 +72,15 @@ History rewrite / force-with-lease / 改写后证据失效规则 SSOT → `mstar
 
 When both babysit/`*-babysit` and greploop apply: **babysit/`*-babysit` first**（CI + reviews），then optional greploop for Greptile score. Discovery paths → `mstar-iteration` §5 (iteration command layer).
 
-### 5.2 Phase 5 exit checklist（迭代交付完成）
+### 5.2 Phase 5 exit checklist（merge-ready → enter Phase 6）
 
-打印 **`## Phase 5 exit checklist`**；全 `[x]` 后方可宣称 **迭代交付完成**：
+打印 **`## Phase 5 exit checklist`**；前 5 项全 `[x]` = **merge-ready**（第 6 项为 transition marker，merged 后才可勾），此后唯一出口是 **Phase 6**（PR merged 后执行 `references/phase-6-post-merge-close.md` §6.1–§6.4）——本 checklist **不是**「迭代交付完成」：
 
 - [ ] PR mergeable（无 blocking merge conflicts）
 - [ ] All **required** CI checks green on latest head
 - [ ] All review threads **resolved**（或用户书面 waive 特定 thread）
 - [ ] §5.1 review comment + resolve 已覆盖本轮所有 addressed feedback
 - [ ] Host todo `phase-5-pr-merge-ready` 可勾选
+- [ ] PR **merge** 完成后进入 **Phase 6**：追加 todo `phase-6-post-merge-close`，执行 post-merge close（`references/phase-6-post-merge-close.md` §6.1–§6.4）
 
-PR **merge** 本身可仍由用户手动执行，除非 Assignment 明确授权 auto-merge。
+PR **merge** 本身可仍由用户手动执行，除非 Assignment 明确授权 auto-merge。Merge 完成（手动或授权 auto-merge）即进入 **Phase 6** —— merge 不是生命周期终点。

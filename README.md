@@ -102,9 +102,9 @@ Enter PM, then run the per-plan cycle: `Prepare → Execute → QC → QA gate �
 
 | Command | When |
 |---------|------|
-| `/iteration-start [direction] [pause]` | Start a new iteration: Phase 1 (interactive grill-me), then auto-continue Phase 2→5.<br>`direction` — optional hint (still interactive).<br>`pause` — stop after Phase 1; resume with `/iteration-drive`. |
-| `/iteration-drive` | Resume Phase 2→5 on an already-locked iteration. |
-| `/iteration-loop [direction] [scale]` | Full Phase 1→5 autonomous (no grill-me).<br>`direction` — optional free text.<br>`scale` — `S` / `M` / `L` / `XL` (default `M`). |
+| `/iteration-start [direction] [pause]` | Start a new iteration: Phase 1 (interactive grill-me), then auto-continue Phase 2→6.<br>`direction` — optional hint (still interactive).<br>`pause` — stop after Phase 1; resume with `/iteration-drive`. |
+| `/iteration-drive` | Resume Phase 2→6 on an already-locked iteration. |
+| `/iteration-loop [direction] [scale]` | Full Phase 1→6 autonomous (no grill-me).<br>`direction` — optional free text.<br>`scale` — `S` / `M` / `L` / `XL` (default `M`). |
 
 ### Audit, review & verification
 

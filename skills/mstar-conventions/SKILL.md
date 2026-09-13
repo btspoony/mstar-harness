@@ -140,7 +140,7 @@ Legacy `.agents/` 项目：将上表路径前缀 `.mstar/` 换为 `.agents/`。
 
 **v3 运行时目录的 gitignore 说明（文档化；canonical snippet 零改动）**：`workflows/` 与 `projects/` 都位于已被 **`.mstar/**` 默认忽略**的 `{HARNESS_DIR}` 之下——**不需要**在仓库根 `.gitignore` 增加任何条目，也**不新增** re-include 条目（它们不是 tracked 结果）。`projects/_default/` 由 **`scaffoldHarness` / `mstar harness scaffold` 预建**（`roadmap.md` + 空 `residuals.json`）；其余 project id 与 `workflows/` 子目录由 **engine writers 按需创建**（`writeWorkflowSnapshot` / `registerWorkflow` / project-register 写入路径），**不是** `scaffoldHarness` 的初始化产物。
 
-**多 worktree（iteration L1）**：默认 gitignored 的进程产物**不会**随 `git worktree add` 进入 feature 检出。读写须经 **control worktree** 绝对路径（`<control_worktree_path>/{HARNESS_DIR}/…`）；产品代码改在 feature worktree。细则与反模式（禁止因 feature 缺 plans 而 `Worktree mode: waived`）→ **`mstar-branch-worktree`**「Harness path SSOT under default gitignore」。
+**多 worktree（iteration L1）**：默认 gitignored 的进程产物**不会**随 `git worktree add` 进入新检出。进程 SSOT 固定在 **control root = 主 checkout（main worktree）**，读写经 control 绝对路径（`<main-repo-root>/{HARNESS_DIR}/…`）；integration 分支检出在专属 integration worktree（snapshot `integration_worktree_path`，唯一 merge cwd）；产品代码改在 feature worktree。**Gitignore 策略注**：tracked-results 层（`{KNOWLEDGE_DIR}` / `{SPECS_DIR}` / `{HARNESS_DIR}/AGENTS.md`）随 Git 分支走，在采纳 canonical gitignore snippet 的仓库中对所有 worktree **可见**——本仓库 `.mstar/` 全量 gitignore 属仓库自身 ignore 规则的属性，非契约。三写域模型（process SSOT / tracked results / product source）的 SSOT 表 → **`mstar-branch-worktree`**「Harness path SSOT under default gitignore」；反模式（禁止因 feature 缺 plans 而 `Worktree mode: waived`）同见该表。
 
 **Canonical `.gitignore` snippet**（skills 与 CLI `init` 对齐）：
 
@@ -175,7 +175,7 @@ Legacy `.agents/` 等价：
 
 ## Spec 驱动的分支模型（多 Plan · 同一 Spec）
 
-- **Iteration base branch**：创建 Spec/iteration 集成分支的祖先分支或 ref；必须显式记录，不能默认 `main` / `master`。
+- **Iteration base branch**：创建 Spec/iteration 集成分支的祖先分支或 ref；必须显式记录，不能默认 `main` / `master`。**`branch.base` 是创建/merge 锚点，不是主 worktree 驻留事实**——主 worktree（control root）的驻留分支在生命周期写入前由 PM 记录为 **`Main worktree branch`**（主 plan 头），全程不切换。
 - **Spec 集成分支**：从 `iteration_base_branch` 创建；各 Plan 实现 merge 回此线后再视为 Spec 在代码侧集成。
 - **Plan 实现分支**：每 `plan_id` 一条（PM 书面）。
 - **PR target**：全部 Plans 与 iteration-close 完成后，向显式 `target_branch` 提 PR（窄例外见 Assignment `Branch policy`）。

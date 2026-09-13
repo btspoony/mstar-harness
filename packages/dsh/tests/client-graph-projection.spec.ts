@@ -85,7 +85,7 @@ const fullSource: MstarEngineStatusPayload = {
     specIntegrationBranch: 'iteration/iter-00000810-panel-zones',
     pushPolicy: 'push authorized',
     worktreeMode: 'feature-worktree',
-    controlWorktreePath: '/proj',
+    integrationWorktreePath: '/proj',
     leases: [],
     knowledge: null,
     direction: null,

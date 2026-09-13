@@ -226,8 +226,8 @@ export function StateSection({ t, state, enforcement, selection, pick, select }:
         <dd className={css.defValue} data-field="push-policy">{str(state?.pushPolicy) ?? t('state.none')}</dd>
         <dt className={css.defTerm}>{t('state.policy.worktree')}</dt>
         <dd className={css.defValue} data-field="worktree-mode">{str(state?.worktreeMode) ?? t('state.none')}</dd>
-        <dt className={css.defTerm}>{t('state.policy.control-worktree')}</dt>
-        <dd className={css.defValue} data-field="control-worktree-path">{str(state?.controlWorktreePath) ?? t('state.none')}</dd>
+        <dt className={css.defTerm}>{t('state.policy.integration-worktree')}</dt>
+        <dd className={css.defValue} data-field="integration-worktree-path">{str(state?.integrationWorktreePath) ?? t('state.none')}</dd>
       </dl>
 
       <h3 className={css.subTitle}>{t('state.leases')}</h3>

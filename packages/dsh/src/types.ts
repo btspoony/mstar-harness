@@ -292,8 +292,8 @@ export interface MstarHarnessState {
   readonly pushPolicy: string | null
   /** `metadata.worktree_mode`, null when absent. */
   readonly worktreeMode: string | null
-  /** `metadata.control_worktree_path`, null when absent. */
-  readonly controlWorktreePath: string | null
+  /** `integration_worktree_path`, null when absent. */
+  readonly integrationWorktreePath: string | null
   /** Active plan execution leases (holder + worktree). */
   readonly leases: readonly HarnessLeaseView[]
   /** Knowledge index digest (docs count + categories), null when no index. */

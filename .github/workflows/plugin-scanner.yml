@@ -26,13 +26,32 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # The DSH manifest points to dist/index.js; scan the real package entry.
+      - name: Build engine and DSH plugin
+        run: |
+          bun run engine:build
+          bun run dsh:build
+
       - name: Run HOL AI Plugin Scanner
-        uses: hashgraph-online/ai-plugin-scanner-action@b6087cac286c39d504f9d0d8a45778da5ee6f1b9 # v1.2.620 / scanner 3.0.104
+        uses: hashgraph-online/ai-plugin-scanner-action@b6087cac286c39d504f9d0d8a45778da5ee6f1b9 # scanner 3.0.151
         with:
           plugin_dir: .
           mode: scan
-          format: markdown
-          output: ${{ runner.temp }}/plugin-scanner.md
+          format: json
+          output: ${{ runner.temp }}/plugin-scanner.json
           min_score: 80
           fail_on_severity: high
           install_cisco: true
@@ -49,19 +68,25 @@ jobs:
         if: ${{ always() && !cancelled() }}
         shell: bash
         run: |
-          SCAN_REPORT="$RUNNER_TEMP/plugin-scanner.md"
+          SCAN_REPORT="$RUNNER_TEMP/plugin-scanner.json"
           printf '## Advisory plugin scan\n\nTarget: score >= 80 and no high/critical findings. A failed scan is not a passing security verdict.\n\n' >> "$GITHUB_STEP_SUMMARY"
           if [ ! -s "$SCAN_REPORT" ]; then
             echo 'Scanner did not produce a report. Inspect the scanner step for installation or execution errors.' >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
-          cat "$SCAN_REPORT" >> "$GITHUB_STEP_SUMMARY"
+          jq -r '
+            "- Score: **\(.score)/100**",
+            "- Findings: \(.summary.findings | tojson)",
+            "",
+            "## All findings",
+            (.findings[] | "- **\(.severity | ascii_upcase)** \(.title) (`\(.filePath // "repository")`\(if .lineNumber then ":\(.lineNumber)" else "" end)) — `\(.ruleId)`")
+          ' "$SCAN_REPORT" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Preserve scan report
         if: ${{ always() && !cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: plugin-scanner-report
-          path: ${{ runner.temp }}/plugin-scanner.md
+          path: ${{ runner.temp }}/plugin-scanner.json
           if-no-files-found: warn
           retention-days: 30

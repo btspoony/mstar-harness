@@ -225,7 +225,14 @@ function readSnapshot(harnessDir: string, entry: ActiveEntry): Record<string, un
   const snapshotPath = join(harnessDir, entry.dir, WORKFLOW_SNAPSHOT_FILE)
   if (!existsSync(snapshotPath)) return undefined
   try {
-    return asRecord(readJson(snapshotPath))
+    const snapshot = asRecord(readJson(snapshotPath))
+    if (snapshot === undefined) return undefined
+    if ('control_worktree_path' in snapshot && 'integration_worktree_path' in snapshot) return undefined
+    if ('control_worktree_path' in snapshot) {
+      const { control_worktree_path, ...rest } = snapshot
+      return { ...rest, integration_worktree_path: control_worktree_path }
+    }
+    return snapshot
   } catch {
     return undefined
   }
@@ -244,7 +251,7 @@ function soleEntry(matches: Map<string, ActiveEntry>): ActiveEntry | undefined {
  * independently in ONE pass: an entry that matched the lease rung is still
  * evaluated for the cwd rung, so an ambiguous lease rung (two holders, or a
  * holder plus a lease-worktree match) can still be decided by a unique
- * `control_worktree_path`. Each entry's snapshot is read at most once per
+ * `integration_worktree_path`. Each entry's snapshot is read at most once per
  * call, and only when a hint field could actually use it.
  */
 function automaticBinding(
@@ -277,8 +284,8 @@ function automaticBinding(
     }
     // Rung 2 is collected independently: a lease match never removes the
     // entry from the cwd candidate set.
-    const controlWorktree = snapshot.control_worktree_path
-    if (cwd !== undefined && typeof controlWorktree === 'string' && within(controlWorktree, cwd)) {
+    const integrationWorktree = snapshot.integration_worktree_path
+    if (cwd !== undefined && typeof integrationWorktree === 'string' && within(integrationWorktree, cwd)) {
       cwdMatches.set(entry.id, entry)
     }
   }

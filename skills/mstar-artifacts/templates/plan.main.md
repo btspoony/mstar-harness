@@ -10,6 +10,8 @@
 
 **Execution:** mstar-sdd | inline
 
+**Main worktree branch:** [recorded residency of the primary checkout (main worktree) — PM observes and records before the lifecycle writes, then passes it unchanged in writable Assignments; never invented at check time, and never `branch.base` (that is a creation/merge anchor, not a residency fact)]
+
 ## Global Constraints
 
 [Project requirements — version floors, naming, exact values — copied verbatim from spec. Every task includes them. Verification scope follows `mstar-harness-core` § 定向执行与验证边界: only changed behavior and direct contracts; no local full suites without explicit user permission.]

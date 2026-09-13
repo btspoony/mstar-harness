@@ -46,7 +46,7 @@ Dispatch:
     ## Your job
 
     1. Implement exactly what this brief specifies (prior tasks are done)
-    2. Run only assigned affected unit tests or applicable scoped-check evidence; use file-handoffs.md § Verification evidence and retain unaffected prior evidence
+    2. Run only assigned affected unit tests or applicable scoped-check evidence; use file-handoffs.md § Verification evidence and retain unaffected prior evidence. When this task's Assignment names a PM-fixed capture request, capture the authorized check once with `mstar sdd evidence capture --request <absolute-task-request.json> -- <executable> [args...]` and cite the retained run's record/raw logs
     3. Commit on Working branch
     4. Write report file with actual evidence; return short summary only
 

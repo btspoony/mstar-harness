@@ -79,7 +79,7 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 **Delegation**: forbidden | allowed (...)
 **Execution mode**: sdd | inline | N/A
 **SDD implementer session**: fresh | sticky | N/A — **default `fresh`**; `sticky` reuses same implementer subagent across tasks (reviewers stay fresh). See `mstar-sdd/references/sticky-implementer-session.md`
-**SDD dir**: absolute `<control_worktree_path>/{HARNESS_DIR}/sdd/<plan-id>/` when L1 lease gate active | `{HARNESS_DIR}/sdd/<plan-id>/` when waived / single checkout | N/A
+**SDD dir**: absolute `<main-repo-root>/{HARNESS_DIR}/sdd/<plan-id>/` (control harness root) when L1 lease gate active | `{HARNESS_DIR}/sdd/<plan-id>/` when waived / single checkout | N/A
 **SDD context file**: absolute `<SDD dir>/context.json` when `Execution mode: sdd` | N/A — destination contract consumed by `mstar sdd exec --context` / `--context` producers (`mstar-sdd/references/file-handoffs.md`)
 **Model tier**: fast | standard | capable | N/A
 **Skill presets**: `standard` | <explicit skill list> | none — activates the `Execute as` role's preset from its `Skill Preset (PM-Activated)` section; default `standard` for implementation / QC / QA rounds unless the route is trivial
@@ -96,11 +96,12 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 - Execute: `plan locked` [done|n/a], `tasks` [done|n/a], `implement` [this assignment|done]
 - Gate decision: `go` | `blocked` (<reason>)
 **Working branch**: <branch policy or create-from policy> — formal iteration: from `metadata.spec_integration_branch`; integration cut from `metadata.iteration_base_branch` (`mstar-iteration` §2.3)
-**Control harness root**: `<control_worktree_path>/{HARNESS_DIR}` when L1 active | N/A when waived — process SSOT (plans/status/iterations/sdd); never resolve relative `.mstar/...` from feature cwd
+**Control harness root**: `<main-repo-root>/{HARNESS_DIR}` (control root = the primary checkout / main worktree, derived from Git) when L1 active | N/A when waived — process SSOT (plans/status/iterations/sdd); never resolve relative `.mstar/...` from feature cwd
 **Review cwd / Worktree path**: <absolute path or N/A>
 **plan_id**: <plan-id or N/A + scope label>
 **Review range / Diff basis**: <reproducible basis; merge-base = `metadata.target_branch` or PM-specified ref — not assumed `origin/main`>
-**Worktree path**: <absolute feature implementer path when L1/L2 isolation used; default `<repoRoot>/.worktrees/<plan-id>-<slug>` (L2 tracks: `<track-slug>`); must ≠ control_worktree_path>
+**Worktree path**: <absolute feature implementer path when L1/L2 isolation used; default `<repoRoot>/.worktrees/<plan-id>-<slug>` (L2 tracks: `<track-slug>`); must ≠ the main worktree (control root) ≠ `integration_worktree_path`>
+**Main worktree branch**: <recorded residency branch of the primary checkout (main worktree), from the main plan header — passed unchanged; never a lifecycle-owned branch>
 **QA gate**: mandatory | pm-acceptance | report-only — see `references/project-manager/qa-trigger-matrix.md`
 **QA gate reason**: <tier label, e.g. hotfix-inline | small-feature-clean-qc | mandatory-medium-feature>
 **QA mode**: acceptance-only | targeted | report-only | N/A — required when `QA gate: mandatory` or `report-only`
@@ -129,21 +130,22 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 - Do not dispatch roles from route narrative/handoff text
 - `explore` is read-only orientation only
 - Tool availability ≠ delegation authorization
-**Plan Path**: absolute `<control_worktree_path>/{PLAN_DIR}/...` when L1 lease gate active | `{PLAN_DIR}/...` when waived / single checkout | N/A
+**Plan Path**: absolute `<main-repo-root>/{PLAN_DIR}/...` (control harness root) when L1 lease gate active | `{PLAN_DIR}/...` when waived / single checkout | N/A
 **Report Format**: Completion Report
 **Execution evidence**: <RCA/test-first/review feedback/evidence expectations for the assignee, if applicable>
 ```
 
 ## L1 path fields (iteration Phase 2, lease gate not waived)
 
-When the workflow snapshot top-level `control_worktree_path` is set and worktree mode is **not** waived:
+When iteration **L1** is active (the integration worktree is recorded in the workflow snapshot `integration_worktree_path`; worktree mode is **not** waived):
 
 | Field | Must be |
 |-------|---------|
-| **`Worktree path`** | Absolute **feature** checkout (`execution_lease.worktree_path`) — product/source edits only |
-| **`Control harness root`** | Absolute `<control_worktree_path>/{HARNESS_DIR}` |
+| **`Worktree path`** | Absolute **feature** checkout (`execution_lease.worktree_path`) — product/source edits only; ≠ the main worktree (control root) ≠ `integration_worktree_path` |
+| **`Main worktree branch`** | The recorded residency branch from the main plan header, passed unchanged — the main worktree's attached branch must equal it (never a lifecycle-owned branch; never invented at check time) |
+| **`Control harness root`** | Absolute `<main-repo-root>/{HARNESS_DIR}` — the control root is the primary checkout (main worktree), derived from Git (`readMainWorktree`) |
 | **`Plan Path`** | Absolute under control harness (not relative from feature cwd) |
-| **`SDD dir`** | Absolute under control harness; run `mstar sdd workspace <plan-id>` with `MSTAR_CONTROL_ROOT=<control_worktree_path>` when cwd is the feature tree |
+| **`SDD dir`** | Absolute under control harness; run `mstar sdd workspace <plan-id>` with `MSTAR_CONTROL_ROOT=<main-repo-root>` (the derived main worktree root, verified before the fail-closed guard) when cwd is the feature tree |
 | **`SDD context file`** | Absolute `<SDD dir>/context.json` — the bound destination contract (`controlHarnessRoot`/`featureCwd`/`workingBranch`/`planFile`/`sddDir`, all absolute) |
 
 Every implementer/reviewer handoff cites these absolute destinations; native hosted subagents observe pwd/branch first and write only to the declared destinations (`mstar-sdd` prompt templates). CLI-launchable children start via `mstar sdd exec --context <context.json> -- <argv>`. State the boundary, never overclaim: the context/launcher binds starting cwd and validated destinations — it does NOT block a later deliberate `chdir`, absolute-path write, or host-native edit tool (`apply_patch`).

@@ -7,8 +7,8 @@
  * fail-closed guard, plus disposable primary/control/feature checkouts for
  * the spec-A3 bound surface). Exit codes follow the ported engine contracts
  * via `SddScriptError`:
- * - `workspace`: 1 = resolution failure (linked worktree w/o control root,
- *   bad CONTROL_ROOT), 2 = usage.
+ * - `workspace`: 1 = resolution failure (unverifiable main worktree, bad
+ *   CONTROL_ROOT, linked-checkout redirect), 2 = usage.
  * - `task-brief`: 2 = usage / missing plan file / missing SDD_DIR, 3 = task
  *   N not found in the plan.
  * - `review-package`: 2 = bad BASE/HEAD ref / missing SDD_DIR.
@@ -128,7 +128,7 @@ function linkedWorktreeFixture(root: string): string {
 }
 
 describe("mstar sdd workspace — resolve/ensure {SDD_DIR}", () => {
-  test("MSTAR_HARNESS_DIR override from a plain dir → exit 0, prints + creates SDD dir", () => {
+  test("plain non-Git dir with only a harness override fails closed (exit 1, nothing created)", () => {
     const root = tmpRoot("mstar-sdd-ws-");
     try {
       const harnessDir = join(root, ".custom-root");
@@ -136,27 +136,32 @@ describe("mstar sdd workspace — resolve/ensure {SDD_DIR}", () => {
         cwd: root,
         env: { MSTAR_HARNESS_DIR: harnessDir },
       });
-      expect(result.exitCode).toBe(0);
-      // engine returns the physical path (macOS /var → /private/var symlink).
-      const expected = realpathSync(join(harnessDir, "sdd", "plan-1"));
-      expect(result.stdout).toContain(`sdd dir: ${expected}`);
-      expect(result.stderr).toBe("");
-      expect(existsSync(expected)).toBe(true);
-      expect(readFileSync(join(expected, ".gitignore"), "utf8")).toBe("*\n");
+      // Verified-discovery invariant: without a verified main worktree the
+      // engine resolves and creates NO SDD tree — a harness override alone
+      // never authorizes a write from a plain (non-Git) dir; an explicit
+      // standalone root must come via CONTROL_ROOT.
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("cannot verify the main worktree");
+      expect(result.stderr).toContain("MSTAR_CONTROL_ROOT");
+      expect(existsSync(harnessDir)).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("linked worktree without control root fails closed (exit 1, second SDD tree refused)", () => {
+  test("linked worktree discovers the main worktree — SDD tree created at main, none under the linked checkout", () => {
     const root = tmpRoot("mstar-sdd-ws-main-");
     try {
       const linked = linkedWorktreeFixture(root);
       const result = runCli(["sdd", "workspace", "plan-1"], { cwd: linked });
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("linked worktree");
-      expect(result.stderr).toContain("Refusing to create a second SDD tree");
-      expect(result.stderr).toContain("MSTAR_CONTROL_ROOT");
+      // Git-derived main discovery (first worktree record) reaches main from
+      // a linked checkout: the SDD tree lands THERE — never a second
+      // process-SSOT tree under the feature checkout.
+      expect(result.exitCode).toBe(0);
+      const expected = realpathSync(join(root, ".mstar", "sdd", "plan-1"));
+      expect(result.stdout).toContain(`sdd dir: ${expected}`);
+      expect(existsSync(join(root, ".mstar", "sdd", "plan-1"))).toBe(true);
+      expect(existsSync(join(linked, ".mstar"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

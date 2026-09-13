@@ -47,7 +47,7 @@ Dispatch independent ready tasks concurrently after L2 worktree isolation. Keep 
 ## Per-task loop (PM only · Workflow)
 
 1. Record `BASE_SHA` (never use `HEAD~1` later)
-2. `mstar sdd workspace <plan-id>` → `SDD_DIR`（iteration L1 从 feature cwd 调用时：`MSTAR_CONTROL_ROOT=<control_worktree_path>` 或 `mstar sdd workspace <plan-id> <control_worktree_path>`；probe 以 v2 根 `status.json`（`workflows[]`）或 workflow snapshot 存在为准，linked worktree 缺文件会 fail closed）
+2. `mstar sdd workspace <plan-id>` → `SDD_DIR`（iteration L1 从 feature cwd 调用时：`MSTAR_CONTROL_ROOT=<main-repo-root>`（= **Git 派生的主 worktree 根**；先完成派生验证，fail-closed 守卫在其后）或 `mstar sdd workspace <plan-id> <main-repo-root>`；显式值必须与派生主根 canonicalize 一致，integration/外来检出被拒而非静默重定向；probe 以 v2 根 `status.json`（`workflows[]`）或 workflow snapshot 存在为准，linked worktree 缺文件会 fail closed）
 3. `mstar sdd task-brief <plan> N` → brief file
 4. Dispatch implementer:
     - **`SDD implementer session: fresh`** (default) — new subagent; templates: `references/implementer-prompt.md`
@@ -134,6 +134,8 @@ The SDD helpers are engine-backed commands under **`mstar sdd`**（引擎 CLI；
 | `mstar sdd workspace` | `PLAN_ID [CONTROL_ROOT]` → creates `{SDD_DIR}` under control harness when set (`MSTAR_CONTROL_ROOT` or 2nd arg); fail closed on linked worktree without `status.json` |
 | `mstar sdd task-brief` | `PLAN_FILE TASK_N [OUTFILE]` |
 | `mstar sdd review-package` | `BASE HEAD [OUTFILE]` |
+
+Developer check evidence: `mstar sdd evidence capture|verify` — capture runs an already-authorized argv once and retains raw evidence; verify is read-only. Command shapes, exit meanings and role boundaries → **`references/file-handoffs.md`** § Verification evidence. `mstar sdd exec` stays PM-only.
 
 ## References
 

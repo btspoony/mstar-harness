@@ -103,9 +103,9 @@ Codex 角色链接修复与具名子代理验证：[Codex 安装](INSTALL.md#cod
 
 | 命令 | 何时 |
 |------|------|
-| `/iteration-start [direction] [pause]` | 开始新迭代：Phase 1（交互式 grill-me），然后自动推进 Phase 2→5。<br>`direction` — 可选提示（仍走交互）。<br>`pause` — 止于 Phase 1；之后用 `/iteration-drive` 恢复。 |
-| `/iteration-drive` | 在已锁定的迭代上恢复 / 继续推进 Phase 2→5。 |
-| `/iteration-loop [direction] [scale]` | Phase 1→5 全自动（无 grill-me）。<br>`direction` — 可选自由文本。<br>`scale` — `S` / `M` / `L` / `XL`（默认 `M`）。 |
+| `/iteration-start [direction] [pause]` | 开始新迭代：Phase 1（交互式 grill-me），然后自动推进 Phase 2→6。<br>`direction` — 可选提示（仍走交互）。<br>`pause` — 止于 Phase 1；之后用 `/iteration-drive` 恢复。 |
+| `/iteration-drive` | 在已锁定的迭代上恢复 / 继续推进 Phase 2→6。 |
+| `/iteration-loop [direction] [scale]` | Phase 1→6 全自动（无 grill-me）。<br>`direction` — 可选自由文本。<br>`scale` — `S` / `M` / `L` / `XL`（默认 `M`）。 |
 
 ### 审计、Review 与验证
 

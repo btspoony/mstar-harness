@@ -27,7 +27,7 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 
 ## Core QA Gate Duties
 
-Before sign-off: validate phase-gate prerequisites, Assignment metadata alignment, and reproducible evidence for any **new** checks. Mode/mapping rules → **`references/qa-engineer/acceptance-gate.md`**.
+Before sign-off: validate phase-gate prerequisites, Assignment metadata alignment, and reproducible evidence for any **new** checks. Mode/mapping rules → **`references/qa-engineer/acceptance-gate.md`**. Retained `sdd evidence` bundles are integrity-checked and mapped read-only (captured-evidence mapping columns → **`references/qa-engineer/acceptance-gate.md`** § Captured evidence mapping); QA never repeats a captured child command, and manual historical evidence is never converted into a v1 runner record.
 
 ## Branch & Review Context Gate
 
@@ -49,6 +49,8 @@ When Assignment provides a report path, write report-only output under `{SDD_DIR
 ## Not tested
 ## Recommended owners
 ```
+
+The acceptance AC mapping uses the evidence columns defined in **`references/qa-engineer/acceptance-gate.md`** § Captured evidence mapping (`AC | run/manual reference | original input identity | integrity | outcome | target applicability and reason | coverage judgment | targeted gap`).
 
 ## Skill Preset (PM-Activated)
 

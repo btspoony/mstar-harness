@@ -191,6 +191,7 @@ async function seedPbShapeInvalid(harnessDir: string): Promise<void> {
 const IN_PROGRESS_ORPHAN: Record<string, unknown> = {
   id: 'plan-orphan',
   title: 'orphan plan',
+  file: 'plans/plan-orphan.md',
   status: 'InProgress',
 }
 
@@ -198,6 +199,7 @@ const IN_PROGRESS_ORPHAN: Record<string, unknown> = {
 const IN_PROGRESS_WITH_LEASE: Record<string, unknown> = {
   id: 'plan-leased',
   title: 'leased plan',
+  file: 'plans/plan-leased.md',
   status: 'InProgress',
   execution_lease: {
     holder: 'test-agent',
@@ -211,6 +213,7 @@ const IN_PROGRESS_WITH_LEASE: Record<string, unknown> = {
 const DONE_NO_LEASE: Record<string, unknown> = {
   id: 'plan-done',
   title: 'done plan',
+  file: 'plans/plan-done.md',
   status: 'Done',
 }
 

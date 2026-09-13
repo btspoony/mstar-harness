@@ -221,7 +221,7 @@ const fullSource: MstarEngineStatusPayload = {
     specIntegrationBranch: 'iteration/iter-00000809-dsh-workflow-viz',
     pushPolicy: 'push authorized',
     worktreeMode: 'feature-worktree',
-    controlWorktreePath: '/Users/bibi/workspace/ai/mstar-workflow',
+    integrationWorktreePath: '/Users/bibi/workspace/ai/mstar-workflow',
     leases: [
       {
         planId: '00000809-dsh-workflow-viz-panel',
@@ -264,7 +264,7 @@ const noGateSource: MstarEngineStatusPayload = {
     specIntegrationBranch: null,
     pushPolicy: null,
     worktreeMode: null,
-    controlWorktreePath: null,
+    integrationWorktreePath: null,
     leases: [],
     knowledge: null,
     direction: null,
@@ -580,7 +580,7 @@ describe('workflow panel — full fixture renders every section (spec §2)', () 
     expect(html).toContain('push authorized')
     expect(html).toContain('data-field="worktree-mode"')
     expect(html).toContain('feature-worktree')
-    expect(html).toContain('data-field="control-worktree-path"')
+    expect(html).toContain('data-field="integration-worktree-path"')
     // Branches block removed from the sidebar (moved to the iteration zone,
     //) — the branch anchors are gone.
     expect(html).not.toContain('data-field="iteration-base-branch"')

@@ -13,7 +13,8 @@
  */
 import { describe, expect, it, afterEach } from 'bun:test'
 import { execFileSync } from 'node:child_process'
-import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { ToolCallView, ToolExecutionResult } from '@deepseek-ai/dsh-tools'
@@ -165,14 +166,36 @@ describe('mstar_sdd_workspace', () => {
     expect(existsSync(join(app.harnessDir, 'sdd', 'bare-plan'))).toBe(true)
   })
 
-  it.skipIf(!cwdIsLinkedWorktree())('fails closed in a linked worktree without control_root (no second SDD tree)', async () => {
-    const app = booted = await bootApp()
-    const result = await run(app.ctx, 'mstar_sdd_workspace', { plan_id: 'stray-plan' })
+  it('discovers main from a linked workspace without control_root (no second SDD tree)', async () => {
+    const fixtureRoot = mkdtempSync(join(tmpdir(), 'dsh-sdd-linked-'))
+    const main = join(fixtureRoot, 'main')
+    const linked = join(fixtureRoot, 'linked')
+    mkdirSync(main)
+    try {
+      git(['init', '-q', '-b', 'main'], main)
+      writeFileSync(join(main, 'seed.txt'), 'seed\n')
+      git(['add', 'seed.txt'], main)
+      git(['commit', '-q', '-m', 'fixture'], main)
+      git(['worktree', 'add', '-q', linked, '-b', 'feature/linked'], main)
 
-    expect(result.isError).toBe(true)
-    if (!result.isError) return
-    expect(result.error.message).toContain('linked worktree')
-    expect(existsSync(join(app.harnessDir, 'sdd', 'stray-plan'))).toBe(false)
+      const app = booted = await bootApp({ harnessDir: null })
+      const result = await app.ctx.tools.execute({
+        callId,
+        name: 'mstar_sdd_workspace',
+        arguments: { plan_id: 'stray-plan' },
+        agent: { session: { header: { cwd: linked } } } as never,
+        signal,
+      })
+
+      expect(result.isError).toBe(false)
+      if (result.isError) return
+      expect(valueOf(result) as { sdd_dir: string }).toEqual({
+        sdd_dir: realpathSync(join(main, '.mstar', 'sdd', 'stray-plan')),
+      })
+      expect(existsSync(join(linked, '.mstar', 'sdd', 'stray-plan'))).toBe(false)
+    } finally {
+      rmSync(fixtureRoot, { recursive: true, force: true })
+    }
   })
 
   it('hostile: missing plan_id → INVALID_ARGS', async () => {
@@ -584,27 +607,20 @@ describe('mstar_iteration_gate', () => {
   })
 })
 
-// ---------------------------------------------------------------------------
-// Environment-dependent: linked-worktree fail-closed guard
-// ---------------------------------------------------------------------------
-
-/** Whether the test process cwd's git top-level is a linked worktree
- * (mirror of engine sdd.ts `isLinkedWorktree` classification — the tool runs
- * against process.cwd() and the fail-closed guard only fires there). */
-function cwdIsLinkedWorktree(): boolean {
-  try {
-    const topLevel = execFileSync('git', ['rev-parse', '--show-toplevel'], {
-      cwd: process.cwd(),
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    }).trim()
-    const gitDir = execFileSync('git', ['rev-parse', '--git-dir'], {
-      cwd: topLevel,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    }).trim()
-    return gitDir.includes('/.git/worktrees/') || gitDir.includes('/worktrees/')
-  } catch {
-    return false
-  }
+/** Run fixture Git with process-local signing and identity overrides. */
+function git(args: string[], cwd: string): void {
+  execFileSync('git', args, {
+    cwd,
+    env: {
+      ...process.env,
+      GIT_CONFIG_COUNT: '3',
+      GIT_CONFIG_KEY_0: 'commit.gpgsign',
+      GIT_CONFIG_VALUE_0: 'false',
+      GIT_CONFIG_KEY_1: 'user.name',
+      GIT_CONFIG_VALUE_1: 'Fixture User',
+      GIT_CONFIG_KEY_2: 'user.email',
+      GIT_CONFIG_VALUE_2: 'fixture@example.test',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
 }

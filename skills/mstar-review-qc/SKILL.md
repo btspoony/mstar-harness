@@ -16,6 +16,7 @@ description: "Morning Star QC orchestration — **SDD mandatory plan QC tri-revi
 - Plan QC seats are **reviewers**: assigned changed **diff / logic / risk** lenses and directly affected interfaces — same family as PR review, not a parallel QA test lane.
 - **Do not** instruct QC in Assignment to “run the suite / build / lint to confirm” on shared tri cwd; that causes peer `Blocked` and collapses L3 into L4.
 - Runtime proof stays with scoped **implementer evidence** and **`QA gate`** (targeted unit evidence only). `full tri-review` describes seats, not full-repository review. Scope SSOT → **`mstar-harness-core`** § 定向执行与验证边界; QC never broadens exploration or repeats unchanged L2 evidence.
+- Retained `sdd evidence` bundles are review **inputs, not something QC executes**: QC reviews the code and the declared coverage rationale; it never runs `sdd evidence capture`, never repeats the recorded child, and a record's integrity/outcome is not acceptance — coverage stays `review-required` (command semantics → **`mstar-sdd`** `references/file-handoffs.md` § Verification evidence).
 
 ## 分派时机（与 plan / batch 对齐）
 

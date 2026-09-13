@@ -53,7 +53,7 @@ or a custom profile).
   rides it), and the pinned **meta dock** (version + harness dir; never
   scrolls). The workspace-state digest (plans ≤5 time-desc + `+N more`,
   open residual findings ≤10 with severity chips + overflow hint, policy
-  with **enforcement first** then push / worktree / control worktree,
+  with **enforcement first** then push / worktree / integration worktree,
   leases, knowledge, direction) renders IN FLOW at the end of the scroll
   body, closed by the freshness footer (`snapshot {time} · turn {turn}` —
   the served snapshot's own timestamp + turn, never "live"). The three

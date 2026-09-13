@@ -67,6 +67,7 @@ const RICH_SNAPSHOT = v2Snapshot(RICH_WORKFLOW, {
     {
       plan_id: 'plan-a',
       title: 'Plan A',
+      file: 'plans/plan-a.md',
       status: 'InProgress',
       execution_lease: {
         holder: 'dsh-session-1',
@@ -75,11 +76,11 @@ const RICH_SNAPSHOT = v2Snapshot(RICH_WORKFLOW, {
         working_branch: 'feature/plan-a',
       },
     },
-    { id: 'plan-b', title: 'Plan B', status: 'Done', done_at: '2026-08-08' },
+    { id: 'plan-b', title: 'Plan B', file: 'plans/plan-b.md', status: 'Done', done_at: '2026-08-08' },
   ],
   branch: { base: 'dev-dsh', integration: 'iteration/v2.2.0', target: 'dev-dsh' },
   execution_policy: { push_policy: 'no-push', worktree_mode: 'feature-worktree' },
-  control_worktree_path: '/control/worktree',
+  integration_worktree_path: '/integration/worktree',
 })
 /** The project register (the v1 `residual_findings` home after migrate). */
 const RICH_REGISTER = JSON.stringify({
@@ -425,8 +426,9 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
         {
           plan_id: '{{plan}}',
           title: 'Hostile',
+          file: 'plans/hostile.md',
           status: 'InProgress',
-          execution_lease: { holder: '{{leaser}}', claimed_at: '2026-08-08' },
+          execution_lease: { holder: '{{leaser}}', claimed_at: '2026-08-08', worktree_path: '/wt/{{plan}}', working_branch: 'feature/{{plan}}' },
         },
       ],
     })
@@ -484,7 +486,7 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
       'status.json': v2Root([v2WorkflowEntry('v2.2.0', 'iteration')]),
       'workflows/v2.2.0/snapshot.json': v2Snapshot('v2.2.0', {
         type: 'iteration',
-        plans: [{ plan_id: 'plan-{{open', title: 'Lone', status: 'InProgress' }],
+        plans: [{ plan_id: 'plan-{{open', title: 'Lone', file: 'plans/lone.md', status: 'InProgress' }],
       }),
     })
     booted = await bootApp({ root })
@@ -549,10 +551,10 @@ describe('mstar:engine-status slim digest ', () => {
       'workflows/v2.2.0/snapshot.json': v2Snapshot('v2.2.0', {
         type: 'iteration',
         plans: [
-          { plan_id: 'p-todo', title: 'Todo', status: 'Todo' },
-          { plan_id: 'p-prog', title: 'Progress', status: 'InProgress' },
-          { plan_id: 'p-done', title: 'Done', status: 'Done', done_at: '2026-08-19' },
-          { plan_id: 'p-blocked', title: 'Blocked', status: 'Blocked' },
+          { plan_id: 'p-todo', title: 'Todo', file: 'plans/p-todo.md', status: 'Todo' },
+          { plan_id: 'p-prog', title: 'Progress', file: 'plans/p-prog.md', status: 'InProgress' },
+          { plan_id: 'p-done', title: 'Done', file: 'plans/p-done.md', status: 'Done', done_at: '2026-08-19' },
+          { plan_id: 'p-blocked', title: 'Blocked', file: 'plans/p-blocked.md', status: 'Blocked' },
         ],
       }),
     })
@@ -567,7 +569,7 @@ describe('mstar:engine-status slim digest ', () => {
       'status.json': v2Root([v2WorkflowEntry('v2.2.0', 'iteration')]),
       'workflows/v2.2.0/snapshot.json': v2Snapshot('v2.2.0', {
         type: 'iteration',
-        plans: [{ plan_id: 'p-done', title: 'Done', status: 'Done', done_at: '2026-08-19' }],
+        plans: [{ plan_id: 'p-done', title: 'Done', file: 'plans/p-done.md', status: 'Done', done_at: '2026-08-19' }],
       }),
     })
     expect(text).toBe(`mstar engine status: v${PLUGIN_VERSION}\nworkflow v2.2.0 (iteration) running | plans: none`)
@@ -591,9 +593,9 @@ describe('mstar:engine-status slim digest ', () => {
 
   it('(slim-6) cap after filter — 10 non-Done plans render the first 8 + `+2 more`; the 9th non-Done id and both Done ids stay out (D5)', async () => {
     const plans = [
-      ...Array.from({ length: 10 }, (_, i) => ({ plan_id: `p-${i}`, title: `Plan ${i}`, status: 'InProgress' })),
-      { plan_id: 'p-done-1', title: 'Done 1', status: 'Done', done_at: '2026-08-19' },
-      { plan_id: 'p-done-2', title: 'Done 2', status: 'Done', done_at: '2026-08-19' },
+      ...Array.from({ length: 10 }, (_, i) => ({ plan_id: `p-${i}`, title: `Plan ${i}`, file: `plans/p-${i}.md`, status: 'InProgress' })),
+      { plan_id: 'p-done-1', title: 'Done 1', file: 'plans/p-done-1.md', status: 'Done', done_at: '2026-08-19' },
+      { plan_id: 'p-done-2', title: 'Done 2', file: 'plans/p-done-2.md', status: 'Done', done_at: '2026-08-19' },
     ]
     const { text } = await bootSlim({
       'status.json': v2Root([v2WorkflowEntry('v2.2.0', 'iteration')]),

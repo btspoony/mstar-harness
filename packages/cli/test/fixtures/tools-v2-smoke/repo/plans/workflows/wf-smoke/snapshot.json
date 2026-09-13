@@ -19,7 +19,7 @@
       }
     }
   ],
-  "control_worktree_path": "__CONTROL_WORKTREE__",
+  "integration_worktree_path": "__INTEGRATION_WORKTREE__",
   "integration_merge_lease": {
     "holder": "omp-pm-smoke",
     "claimed_at": "2026-08-19",

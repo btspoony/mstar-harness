@@ -1,10 +1,12 @@
 # Lease claim protocol (full prose, archived)
 
 > Engine-absent fallback: the full lease protocol prose displaced from `mstar-iteration` / `mstar-artifacts` when engine validators (`validateExecutionLease` / `validateIntegrationMergeLease` / CLI `mstar lease verify --workflow <id>`) took over the same contract. Engine-present hosts read the runtime skills' engine-check pointers instead.
+>
+> **v1 field note:** snapshot key `control_worktree_path` is **v1-historical** — a read-alias only. The canonical snapshot member is **`integration_worktree_path`** (the dedicated integration checkout on `branch.integration`, distinct from the main worktree). `readWorkflowSnapshot` normalizes the alias in memory with a medium diagnostic (`workflow.snapshot.legacy-control-worktree-path`); canonical writers reject the old key. The **control root** (process-SSOT holder) is the **primary checkout / main worktree**, derived from Git — not a snapshot field.
 
 ## When it applies
 
-**Iteration Phase 2 only** (after control-worktree entry, or primary checkout when `Worktree mode: waived`). Defaults are **hard** unless the current turn explicitly waives via Assignment `Worktree mode: waived` (or equivalent user instruction). `Plan parallelism: serial` is **not** a waiver — it only forces serial cross-plan **implement** scheduling while control worktree + leases remain required. Phase 1 Review & Edit may stay on the primary checkout; the control-worktree gate starts at **Phase 2 entry**. **`Worktree mode: waived` does not waive the cross-plan parallel safety gate**.
+**Iteration Phase 2 only** (after integration-worktree entry). Defaults are **hard** unless the current turn explicitly waives via Assignment `Worktree mode: waived` (or equivalent user instruction). `Plan parallelism: serial` is **not** a waiver — it only forces serial cross-plan **implement** scheduling while the worktree + lease gates remain required. Phase 1 Review & Edit may edit uncommitted docs on the primary checkout under the Prepare policy; the integration-worktree gate starts at **Phase 2 entry**. **`Worktree mode: waived` does not waive the cross-plan parallel safety gate**.
 
 ## Coordination SSOT and lock discipline
 
@@ -16,11 +18,12 @@ Lease mutations happen on the **control copy** of the coordination file — the 
 - Manual fallback when no engine writer exists: atomic `mkdir` on `{WORKFLOW_DIR}/<id>/.status-write.lockdir/` — success acquires; existing dir → **Blocked** (another writer holds the lock); `rmdir` the directory only after successful verify or explicit rollback. The dsh notes-ledger writer uses the same lockdir pattern (`{WORKFLOW_DIR}/<id>/.ledger-write.lockdir`). Do **not** invent a distributed CAS CLI.
 
 ```bash
-CONTROL_ROOT="<snapshot top-level control_worktree_path>"
+MAIN_ROOT="<derived main worktree root (control root; Git readMainWorktree)>"
+INTEGRATION_WORKTREE="<snapshot top-level integration_worktree_path>"
 HARNESS=".mstar"   # or resolved {HARNESS_DIR}
 WORKFLOW_ID="<plan-or-iteration-id>"
-SNAPSHOT="$CONTROL_ROOT/$HARNESS/workflows/$WORKFLOW_ID/snapshot.json"
-LOCKDIR="$CONTROL_ROOT/$HARNESS/workflows/$WORKFLOW_ID/.status-write.lockdir"
+SNAPSHOT="$MAIN_ROOT/$HARNESS/workflows/$WORKFLOW_ID/snapshot.json"
+LOCKDIR="$MAIN_ROOT/$HARNESS/workflows/$WORKFLOW_ID/.status-write.lockdir"
 (
   mkdir "$LOCKDIR" || exit 1
   trap 'rmdir "$LOCKDIR"' EXIT
@@ -38,7 +41,7 @@ A Phase 2 session **MUST** claim before moving a plan from `Todo`/`Blocked` to `
 2. **Resume (not steal):** if `execution_lease` exists and `holder` **equals this session** → verify-held: confirm `worktree_path` and `working_branch` match the Assignment; continue (not Blocked, not a new claim).
 3. **Blocked:** if `execution_lease` exists and `holder` **differs** → stop. No timestamp, TTL, or inactivity makes it stealable.
 4. **Orphan:** if `status` is `InProgress` but `execution_lease` is absent → **STOP** (see Orphan recovery). Do not writable-dispatch or invent a lease.
-5. Create or verify the dedicated feature worktree and branch (default `<repoRoot>/.worktrees/<plan-id>-<slug>`; `worktree_path` ≠ `control_worktree_path`).
+5. Create or verify the dedicated feature worktree and branch (default `<repoRoot>/.worktrees/<plan-id>-<slug>`; `worktree_path` ≠ the main worktree (control root) ≠ `integration_worktree_path`).
 6. Acquire the same-host write lock (above); re-read the coordination file; if row/status/lease changed, restart from step 1.
 7. In **one complete-file update** (under lock), set `status: "InProgress"` and write the full `execution_lease` object. Use a temp file in the same directory + atomic replace; never expose partial JSON.
 8. Re-read the stored row; verify `holder`, `worktree_path`, `working_branch` exactly match the attempted claim. Writable dispatch is forbidden until verification succeeds.
@@ -59,14 +62,14 @@ V1: **manual release only** — omit `expires_at`; readers **MUST NOT** treat un
 
 Feature implementation may run in parallel across plan IDs **only when** the cross-plan parallel hard gate is satisfied (same-host lock on the coordination file, default `Plan parallelism: serial`, or current-turn `Cross-host lease race: accepted` + audit — **not** by `Worktree mode: waived` alone); when the lease gate is active, each plan also needs a verified `execution_lease` and distinct feature worktree. Mutations of `spec_integration_branch` are **serial**. Plan status after QC/QA is `InReview` with `execution_lease` retained until merge succeeds (when lease gate active); `Done` + lease deletion happen **after** the integration merge commit is recorded.
 
-1. From `control_worktree_path`: clean working tree; checked-out branch = resolved `spec_integration_branch`.
+1. From the **integration worktree** (`integration_worktree_path`): clean working tree; checked-out branch = resolved `spec_integration_branch`. Never merge from the primary checkout.
 2. Re-read the coordination file under the same-process write lock. If `integration_merge_lease` exists:
-   - **Resume (not steal):** `holder` equals this session → verify `plan_id`, `source_branch`, `target_branch` match the intended merge; confirm control worktree state; continue (not Blocked).
+   - **Resume (not steal):** `holder` equals this session → verify `plan_id`, `source_branch`, `target_branch` match the intended merge; confirm integration worktree state; continue (not Blocked).
    - **Blocked:** `holder` differs → stop. No timestamp, TTL, or inactivity makes it stealable.
 3. If unclaimed, claim the merge lease with the same read-check-replace-verify discipline as execution claims. `source_branch`/`plan_id` must match the feature; `target_branch` must match `spec_integration_branch`.
-4. Only the stored merge-lease holder runs integration from `control_worktree_path`.
+4. Only the stored merge-lease holder runs integration from `integration_worktree_path`.
 5. On success: record merge commit/evidence; **delete** `integration_merge_lease`; in the **same** locked update set plan `status: "Done"` and **delete** `execution_lease`.
-6. On conflict/failure: retain both leases; plan stays `InReview` — do not set `Done`. Release the merge lease only after the control worktree is clean and in a known state.
+6. On conflict/failure: retain both leases; plan stays `InReview` — do not set `Done`. Release the merge lease only after the integration worktree is clean and in a known state.
 
 Execution and merge leases may coexist; the merge lease does not grant execution ownership for the source plan.
 

@@ -17,7 +17,7 @@ Phase 2–5 全程有效（drive + loop 共有的行）：
 | Write/Edit/Shell 产品代码、写测试、跑 QC（Phase 2） | 每条 implement/QC/QA Assignment ⇒ **1 次 `Task`** |
 | **多 task plan 用 inline 大包派发**（整份 plan / T1–Tn 贴进一个 dev Assignment） | **SDD**：`mstar-sdd` per-task 循环 — `mstar sdd task-brief` → implementer → `mstar sdd review-package` → task reviewer → `progress.md` |
 | 只写 Assignment 就进入下一 gate | 同轮 dispatch：每条 Assignment ⇒ **1 次 invoke**（`Subagent invokes issued: N`，N = Assignment 条数） |
-| 最后一个 plan `Done` 后直接开 PR / 汇报结束 | **Phase 3 → 4 → 5** 顺序执行 |
+| 最后一个 plan `Done` 后直接开 PR / 汇报结束；§5.2 exit 或 PR merged 即宣称交付完成 | **Phase 3 → 4 → 5 → 6** 顺序执行（Phase 6 = PR merged 后 post-merge close，`references/phase-6-post-merge-close.md`） |
 | Phase 5 自己改产品代码 | 需改产品代码时 **dispatch** `fullstack-dev` / `ops-engineer` |
 
 派发细则 → **`mstar-dispatch-gates`** + **`mstar-host`**。Phase 3 细则 → **`mstar-iteration/references/phase-3-iteration-close.md`** + **`mstar-compound`**。
@@ -48,6 +48,7 @@ if command -v mstar-harness >/dev/null 2>&1; then mstar-harness dispatch validat
 | `phase-3-iteration-close` | 仅剩 1 个非 `Done` plan | Phase 3 §3.5 exit 全 `[x]` |
 | `phase-4-create-pr` | Phase 3 完成后 | PR 已创建并记录 URL/number |
 | `phase-5-pr-merge-ready` | Phase 4 完成后 | Phase 5 §5.5 exit 全 `[x]` |
+| `phase-6-post-merge-close` | §5.2 exit 后 PR **已 merge**（mergeable ≠ merged） | Phase 6 §6.1–§6.4 完成（`mstar status workflow-close --workflow <id>` exit 0 + 投影一致） |
 
 ## Continuous execution STOP list（重叠行；start / drive / loop 共有）
 

@@ -9,15 +9,16 @@ import { isAbsolute as isAbsolute3, join, relative as relative3 } from "node:pat
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { readFileSync as readFileSync2, statSync } from "node:fs";
 import { dirname as dirname2, isAbsolute, join as join2, relative, resolve as resolve2 } from "node:path";
-import { existsSync as existsSync6, mkdirSync as mkdirSync5, readdirSync as readdirSync5, readFileSync as readFileSync6, realpathSync as realpathSync2, statSync as statSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import { existsSync as existsSync7, mkdirSync as mkdirSync5, readdirSync as readdirSync5, readFileSync as readFileSync7, realpathSync as realpathSync2, statSync as statSync3, writeFileSync as writeFileSync3 } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { basename as basename3, dirname as dirname5, isAbsolute as isAbsolute4, join as join9, relative as relative2, resolve as resolve7 } from "node:path";
-import { dirname as dirname3, isAbsolute as isAbsolute2, join as join4, resolve as resolve3 } from "node:path";
+import { basename as basename3, dirname as dirname5, isAbsolute as isAbsolute5, join as join9, relative as relative2, resolve as resolve7 } from "node:path";
+import { existsSync as existsSync4, readFileSync as readFileSync4, readdirSync as readdirSync2, realpathSync } from "node:fs";
+import { dirname as dirname4, join as join6, resolve as resolve5, sep } from "node:path";
+import { dirname as dirname3, isAbsolute as isAbsolute2, join as join3, resolve as resolve3 } from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { existsSync as existsSync4, readFileSync as readFileSync4, readdirSync as readdirSync3, realpathSync } from "node:fs";
-import { dirname as dirname4, join as join7, resolve as resolve5, sep } from "node:path";
-import { existsSync as existsSync8, statSync as statSync5 } from "node:fs";
-import { basename as basename5, dirname as dirname7, join as join12, relative as relative4, resolve as resolve10 } from "node:path";
+import { isAbsolute as isAbsolute4, join as join5 } from "node:path";
+import { existsSync as existsSync10, statSync as statSync5 } from "node:fs";
+import { basename as basename6, dirname as dirname9, join as join13, relative as relative4, resolve as resolve10 } from "node:path";
 var SEVERITY_ORDER = ["critical", "high", "medium", "low", "nit"];
 function readJson(filePath) {
   if (!existsSync(filePath))
@@ -116,17 +117,17 @@ function isAtOrBelow(dir, root) {
   const rel = relative(root, dir);
   return rel === "" || !rel.startsWith("..") && !isAbsolute(rel);
 }
-function isPlainObject2(value) {
+function isPlainObject(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-function violation2(severity, code, message, fix) {
+function violation(severity, code, message, fix) {
   return { ok: false, severity, code, message, fix };
 }
 function validateNonEmptyString(violations, value, field, missingCode, invalidCode) {
   if (value === undefined) {
-    violations.push(violation2("high", missingCode, `missing required field: ${field}`));
+    violations.push(violation("high", missingCode, `missing required field: ${field}`));
   } else if (typeof value !== "string" || value.trim() === "") {
-    violations.push(violation2("medium", invalidCode, `${field} must be a non-empty string`));
+    violations.push(violation("medium", invalidCode, `${field} must be a non-empty string`));
   }
 }
 var DATE_PART = String.raw`\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])`;
@@ -137,54 +138,54 @@ function isValidClaimedAt(value) {
 }
 function validateExecutionLease(lease) {
   const violations = [];
-  if (!isPlainObject2(lease)) {
+  if (!isPlainObject(lease)) {
     return {
       ok: false,
       violations: [
-        violation2("high", "lease.execution-lease.invalid", "execution_lease must be an object — null and tombstone objects are invalid; writers delete the key on release")
+        violation("high", "lease.execution-lease.invalid", "execution_lease must be an object — null and tombstone objects are invalid; writers delete the key on release")
       ]
     };
   }
   validateNonEmptyString(violations, lease.holder, "holder", "lease.execution-lease.missing-holder", "lease.execution-lease.invalid-holder");
   if (lease.claimed_at === undefined) {
-    violations.push(violation2("high", "lease.execution-lease.missing-claimed-at", "missing required field: claimed_at"));
+    violations.push(violation("high", "lease.execution-lease.missing-claimed-at", "missing required field: claimed_at"));
   } else if (!isValidClaimedAt(lease.claimed_at)) {
-    violations.push(violation2("medium", "lease.execution-lease.invalid-claimed-at", "claimed_at must be an RFC 3339 UTC timestamp with explicit Z (e.g. 2026-07-22T02:30:00Z) or a YYYY-MM-DD date"));
+    violations.push(violation("medium", "lease.execution-lease.invalid-claimed-at", "claimed_at must be an RFC 3339 UTC timestamp with explicit Z (e.g. 2026-07-22T02:30:00Z) or a YYYY-MM-DD date"));
   }
   if (lease.worktree_path === undefined) {
-    violations.push(violation2("high", "lease.execution-lease.missing-worktree-path", "missing required field: worktree_path"));
+    violations.push(violation("high", "lease.execution-lease.missing-worktree-path", "missing required field: worktree_path"));
   } else if (typeof lease.worktree_path !== "string" || lease.worktree_path.trim() === "") {
-    violations.push(violation2("medium", "lease.execution-lease.invalid-worktree-path", "worktree_path must be a non-empty string"));
+    violations.push(violation("medium", "lease.execution-lease.invalid-worktree-path", "worktree_path must be a non-empty string"));
   } else if (!isAbsolute2(lease.worktree_path)) {
-    violations.push(violation2("medium", "lease.execution-lease.invalid-worktree-path", "worktree_path must be an absolute path — it identifies the dedicated feature-worktree root (and MUST differ from metadata.control_worktree_path)"));
+    violations.push(violation("medium", "lease.execution-lease.invalid-worktree-path", "worktree_path must be an absolute path — it identifies the dedicated feature-worktree root (a Git checkout distinct from the main worktree and the integration worktree)"));
   }
   validateNonEmptyString(violations, lease.working_branch, "working_branch", "lease.execution-lease.missing-working-branch", "lease.execution-lease.invalid-working-branch");
   if (lease.session_label !== undefined && typeof lease.session_label !== "string") {
-    violations.push(violation2("medium", "lease.execution-lease.invalid-session-label", "session_label must be a string (display only — never used for ownership comparison)"));
+    violations.push(violation("medium", "lease.execution-lease.invalid-session-label", "session_label must be a string (display only — never used for ownership comparison)"));
   }
   return { ok: violations.length === 0, violations };
 }
 function validateIntegrationMergeLease(lease) {
   const violations = [];
-  if (!isPlainObject2(lease)) {
+  if (!isPlainObject(lease)) {
     return {
       ok: false,
       violations: [
-        violation2("high", "lease.merge-lease.invalid", "integration_merge_lease must be an object — absent means unclaimed; null and tombstone objects are invalid; writers delete the key on release")
+        violation("high", "lease.merge-lease.invalid", "integration_merge_lease must be an object — absent means unclaimed; null and tombstone objects are invalid; writers delete the key on release")
       ]
     };
   }
   validateNonEmptyString(violations, lease.holder, "holder", "lease.merge-lease.missing-holder", "lease.merge-lease.invalid-holder");
   if (lease.claimed_at === undefined) {
-    violations.push(violation2("high", "lease.merge-lease.missing-claimed-at", "missing required field: claimed_at"));
+    violations.push(violation("high", "lease.merge-lease.missing-claimed-at", "missing required field: claimed_at"));
   } else if (!isValidClaimedAt(lease.claimed_at)) {
-    violations.push(violation2("medium", "lease.merge-lease.invalid-claimed-at", "claimed_at must be an RFC 3339 UTC timestamp with explicit Z (e.g. 2026-07-22T04:00:00Z) or a YYYY-MM-DD date"));
+    violations.push(violation("medium", "lease.merge-lease.invalid-claimed-at", "claimed_at must be an RFC 3339 UTC timestamp with explicit Z (e.g. 2026-07-22T04:00:00Z) or a YYYY-MM-DD date"));
   }
   validateNonEmptyString(violations, lease.plan_id, "plan_id", "lease.merge-lease.missing-plan-id", "lease.merge-lease.invalid-plan-id");
   validateNonEmptyString(violations, lease.source_branch, "source_branch", "lease.merge-lease.missing-source-branch", "lease.merge-lease.invalid-source-branch");
   validateNonEmptyString(violations, lease.target_branch, "target_branch", "lease.merge-lease.missing-target-branch", "lease.merge-lease.invalid-target-branch");
   if (lease.session_label !== undefined && typeof lease.session_label !== "string") {
-    violations.push(violation2("medium", "lease.merge-lease.invalid-session-label", "session_label must be a string (display only — never used for ownership comparison)"));
+    violations.push(violation("medium", "lease.merge-lease.invalid-session-label", "session_label must be a string (display only — never used for ownership comparison)"));
   }
   return { ok: violations.length === 0, violations };
 }
@@ -213,45 +214,50 @@ var WORKFLOW_SNAPSHOT_FILE = "snapshot.json";
 var WORKFLOW_LIFECYCLE_STATUSES = ["running", "paused", "completed", "failed", "stopped"];
 var WORKFLOW_TERMINAL_STATUSES = ["completed", "failed", "stopped"];
 var WORKFLOW_LIFECYCLE_TYPES = ["plan", "iteration"];
-function isPlainObject3(value) {
+function isPlainObject2(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-function violation4(severity, code, message, fix) {
+function violation3(severity, code, message, fix) {
   return { ok: false, severity, code, message, fix };
 }
 function validateNonEmptyString2(violations, value, field, missingCode, invalidCode) {
   if (value === undefined) {
-    violations.push(violation4("high", missingCode, `missing required field: ${field}`));
+    violations.push(violation3("high", missingCode, `missing required field: ${field}`));
   } else if (typeof value !== "string" || value.trim() === "") {
-    violations.push(violation4("medium", invalidCode, `${field} must be a non-empty string`));
+    violations.push(violation3("medium", invalidCode, `${field} must be a non-empty string`));
+  }
+}
+function validateWorktreePathValue(violations, value, field) {
+  if (typeof value !== "string" || value.trim() === "" || !isAbsolute4(value)) {
+    violations.push(violation3("high", "workflow.snapshot.invalid-integration-worktree-path", `${field} must be a non-empty absolute path — got ${JSON.stringify(value)}`, "record the absolute integration checkout path (integration_worktree_path)"));
   }
 }
 function validateWorkflowSnapshot(doc) {
   const violations = [];
-  if (!isPlainObject3(doc)) {
+  if (!isPlainObject2(doc)) {
     return {
       ok: false,
-      violations: [violation4("high", "workflow.snapshot.invalid", "workflow snapshot must be an object")]
+      violations: [violation3("high", "workflow.snapshot.invalid", "workflow snapshot must be an object")]
     };
   }
   if (doc.schema_version === undefined) {
-    violations.push(violation4("high", "workflow.snapshot.missing-schema-version", "missing required field: schema_version"));
+    violations.push(violation3("high", "workflow.snapshot.missing-schema-version", "missing required field: schema_version"));
   } else if (doc.schema_version !== 1) {
-    violations.push(violation4("high", "workflow.snapshot.invalid-schema-version", `schema_version must be 1 — got ${JSON.stringify(doc.schema_version)} (version is reserved for the root file discriminator)`));
+    violations.push(violation3("high", "workflow.snapshot.invalid-schema-version", `schema_version must be 1 — got ${JSON.stringify(doc.schema_version)} (version is reserved for the root file discriminator)`));
   }
   if (doc.version !== undefined) {
-    violations.push(violation4("medium", "workflow.snapshot.reserved-version", `top-level version is reserved for the root status.json discriminator — snapshots use schema_version; remove the version key (got ${JSON.stringify(doc.version)})`, "remove the version key from the snapshot"));
+    violations.push(violation3("medium", "workflow.snapshot.reserved-version", `top-level version is reserved for the root status.json discriminator — snapshots use schema_version; remove the version key (got ${JSON.stringify(doc.version)})`, "remove the version key from the snapshot"));
   }
   validateNonEmptyString2(violations, doc.id, "id", "workflow.snapshot.missing-id", "workflow.snapshot.invalid-id");
   if (doc.type === undefined) {
-    violations.push(violation4("high", "workflow.snapshot.missing-type", "missing required field: type"));
+    violations.push(violation3("high", "workflow.snapshot.missing-type", "missing required field: type"));
   } else if (typeof doc.type !== "string" || !WORKFLOW_LIFECYCLE_TYPES.includes(doc.type)) {
-    violations.push(violation4("medium", "workflow.snapshot.invalid-type", `type must be one of ${WORKFLOW_LIFECYCLE_TYPES.join(" | ")} — got ${JSON.stringify(doc.type)}`));
+    violations.push(violation3("medium", "workflow.snapshot.invalid-type", `type must be one of ${WORKFLOW_LIFECYCLE_TYPES.join(" | ")} — got ${JSON.stringify(doc.type)}`));
   }
   if (doc.status === undefined) {
-    violations.push(violation4("high", "workflow.snapshot.missing-status", "missing required field: status"));
+    violations.push(violation3("high", "workflow.snapshot.missing-status", "missing required field: status"));
   } else if (typeof doc.status !== "string" || !WORKFLOW_LIFECYCLE_STATUSES.includes(doc.status)) {
-    violations.push(violation4("medium", "workflow.snapshot.invalid-status", `status must be one of ${WORKFLOW_LIFECYCLE_STATUSES.join(" | ")} — got ${JSON.stringify(doc.status)}`));
+    violations.push(violation3("medium", "workflow.snapshot.invalid-status", `status must be one of ${WORKFLOW_LIFECYCLE_STATUSES.join(" | ")} — got ${JSON.stringify(doc.status)}`));
   }
   validateNonEmptyString2(violations, doc.started_at, "started_at", "workflow.snapshot.missing-started-at", "workflow.snapshot.invalid-started-at");
   validateNonEmptyString2(violations, doc.updated_at, "updated_at", "workflow.snapshot.missing-updated-at", "workflow.snapshot.invalid-updated-at");
@@ -259,44 +265,54 @@ function validateWorkflowSnapshot(doc) {
     validateNonEmptyString2(violations, doc.ended_at, "ended_at", "workflow.snapshot.missing-ended-at", "workflow.snapshot.invalid-ended-at");
   }
   if (doc.phase !== undefined && typeof doc.phase !== "string") {
-    violations.push(violation4("medium", "workflow.snapshot.invalid-phase", "phase must be a string (free-form phase machine label)"));
+    violations.push(violation3("medium", "workflow.snapshot.invalid-phase", "phase must be a string (free-form phase machine label)"));
   }
   if (doc.plans === undefined) {
-    violations.push(violation4("high", "workflow.snapshot.missing-plans", "missing required field: plans"));
+    violations.push(violation3("high", "workflow.snapshot.missing-plans", "missing required field: plans"));
   } else if (!Array.isArray(doc.plans)) {
-    violations.push(violation4("high", "workflow.snapshot.invalid-plans", "plans must be an array of legacy plan rows"));
+    violations.push(violation3("high", "workflow.snapshot.invalid-plans", "plans must be an array of legacy plan rows"));
   } else {
     for (const row of doc.plans) {
       violations.push(...validatePlanRow(row).violations);
-      if (isPlainObject3(row) && row.execution_lease !== undefined) {
+      if (isPlainObject2(row) && row.execution_lease !== undefined) {
         violations.push(...validateExecutionLease(row.execution_lease).violations);
       }
     }
   }
   if (doc.execution_policy !== undefined) {
-    if (!isPlainObject3(doc.execution_policy)) {
-      violations.push(violation4("medium", "workflow.snapshot.invalid-execution-policy", "execution_policy must be an object"));
+    if (!isPlainObject2(doc.execution_policy)) {
+      violations.push(violation3("medium", "workflow.snapshot.invalid-execution-policy", "execution_policy must be an object"));
     }
   }
   if (doc.integration_merge_lease !== undefined) {
     violations.push(...validateIntegrationMergeLease(doc.integration_merge_lease).violations);
   }
   if (doc.branch !== undefined) {
-    if (!isPlainObject3(doc.branch)) {
-      violations.push(violation4("medium", "workflow.snapshot.invalid-branch", "branch must be an object"));
+    if (!isPlainObject2(doc.branch)) {
+      violations.push(violation3("medium", "workflow.snapshot.invalid-branch", "branch must be an object"));
     } else {
       for (const key of ["base", "integration", "target"]) {
         if (doc.branch[key] !== undefined && (typeof doc.branch[key] !== "string" || doc.branch[key].trim() === "")) {
-          violations.push(violation4("medium", "workflow.snapshot.invalid-branch", `branch.${key} must be a non-empty string`));
+          violations.push(violation3("medium", "workflow.snapshot.invalid-branch", `branch.${key} must be a non-empty string`));
         }
       }
     }
   }
-  if (doc.control_worktree_path !== undefined) {
-    validateNonEmptyString2(violations, doc.control_worktree_path, "control_worktree_path", "workflow.snapshot.missing-control-worktree-path", "workflow.snapshot.invalid-control-worktree-path");
+  const legacyWorktreePath = doc.control_worktree_path;
+  const canonicalWorktreePath = doc.integration_worktree_path;
+  if (legacyWorktreePath !== undefined && canonicalWorktreePath !== undefined) {
+    violations.push(violation3("high", "workflow.snapshot.conflicting-worktree-paths", "both integration_worktree_path and the legacy control_worktree_path key are present — the canonical snapshot carries only integration_worktree_path (refused even when the values are equal)", "remove the legacy control_worktree_path key"));
+  } else {
+    if (canonicalWorktreePath !== undefined) {
+      validateWorktreePathValue(violations, canonicalWorktreePath, "integration_worktree_path");
+    }
+    if (legacyWorktreePath !== undefined) {
+      violations.push(violation3("medium", "workflow.snapshot.legacy-control-worktree-path", "legacy control_worktree_path is present — the canonical reader normalizes it to integration_worktree_path in memory; migrate on the next authorized write (writers emit only the canonical key)", "rename control_worktree_path to integration_worktree_path on the next authorized write"));
+      validateWorktreePathValue(violations, legacyWorktreePath, "control_worktree_path (legacy alias)");
+    }
   }
-  if (doc.legacy_metadata !== undefined && !isPlainObject3(doc.legacy_metadata)) {
-    violations.push(violation4("medium", "workflow.snapshot.invalid-legacy-metadata", "legacy_metadata must be an object"));
+  if (doc.legacy_metadata !== undefined && !isPlainObject2(doc.legacy_metadata)) {
+    violations.push(violation3("medium", "workflow.snapshot.invalid-legacy-metadata", "legacy_metadata must be an object"));
   }
   if (doc.compass_ref !== undefined) {
     validateNonEmptyString2(violations, doc.compass_ref, "compass_ref", "workflow.snapshot.missing-compass-ref", "workflow.snapshot.invalid-compass-ref");
@@ -304,46 +320,46 @@ function validateWorkflowSnapshot(doc) {
   const terminal = typeof doc.status === "string" && WORKFLOW_TERMINAL_STATUSES.includes(doc.status);
   if (terminal) {
     if (doc.ended_at === undefined) {
-      violations.push(violation4("high", "workflow.snapshot.missing-ended-at", `terminal status ${JSON.stringify(doc.status)} requires ended_at — a terminal snapshot must record when the lifecycle ended`));
+      violations.push(violation3("high", "workflow.snapshot.missing-ended-at", `terminal status ${JSON.stringify(doc.status)} requires ended_at — a terminal snapshot must record when the lifecycle ended`));
     }
     if (Array.isArray(doc.plans)) {
       for (const row of doc.plans) {
-        if (isPlainObject3(row) && row.execution_lease !== undefined) {
-          violations.push(violation4("high", "workflow.snapshot.terminal-dangling-execution-lease", `terminal snapshot must not carry a row execution_lease (dangling lease) — release every lease before the lifecycle ends`));
+        if (isPlainObject2(row) && row.execution_lease !== undefined) {
+          violations.push(violation3("high", "workflow.snapshot.terminal-dangling-execution-lease", `terminal snapshot must not carry a row execution_lease (dangling lease) — release every lease before the lifecycle ends`));
         }
       }
     }
     if (doc.integration_merge_lease !== undefined) {
-      violations.push(violation4("high", "workflow.snapshot.terminal-dangling-merge-lease", "terminal snapshot must not carry integration_merge_lease (dangling lease) — release the merge lease before the lifecycle ends"));
+      violations.push(violation3("high", "workflow.snapshot.terminal-dangling-merge-lease", "terminal snapshot must not carry integration_merge_lease (dangling lease) — release the merge lease before the lifecycle ends"));
     }
   }
   return { ok: violations.length === 0, violations };
 }
-var DATE_RE2 = /^\d{4}-\d{2}-\d{2}$/;
+var DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 var PLAN_STATUSES = ["Todo", "InProgress", "InReview", "Blocked", "Done"];
 var RESIDUAL_DECISIONS = ["defer", "accept", "risk-accepted"];
 var RESIDUAL_LIFECYCLES = ["open", "resolved", "waived", "superseded", "duplicate"];
-function isPlainObject4(value) {
+function isPlainObject3(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-function violation5(severity, code, message, fix) {
+function violation4(severity, code, message, fix) {
   return { ok: false, severity, code, message, fix };
 }
 function validateNonEmptyString3(violations, value, field, missingCode, invalidCode) {
   if (value === undefined) {
-    violations.push(violation5("high", missingCode, `missing required field: ${field}`));
+    violations.push(violation4("high", missingCode, `missing required field: ${field}`));
   } else if (typeof value !== "string" || value.trim() === "") {
-    violations.push(violation5("medium", invalidCode, `${field} must be a non-empty string`));
+    violations.push(violation4("medium", invalidCode, `${field} must be a non-empty string`));
   }
 }
 function validatePlanRow(row) {
   const violations = [];
-  if (!isPlainObject4(row)) {
-    return { ok: false, violations: [violation5("high", "status.plan-row.invalid", "plan row must be an object")] };
+  if (!isPlainObject3(row)) {
+    return { ok: false, violations: [violation4("high", "status.plan-row.invalid", "plan row must be an object")] };
   }
   const { id, plan_id: planId, title, file, status, metadata, execution_lease } = row;
   if (id === undefined && planId === undefined) {
-    violations.push(violation5("high", "status.plan-row.missing-id", "missing required field: id (or legacy plan_id)"));
+    violations.push(violation4("high", "status.plan-row.missing-id", "missing required field: id (or legacy plan_id)"));
   } else {
     if (id !== undefined) {
       validateNonEmptyString3(violations, id, "id", "status.plan-row.missing-id", "status.plan-row.invalid-id");
@@ -352,31 +368,31 @@ function validatePlanRow(row) {
       validateNonEmptyString3(violations, planId, "plan_id", "status.plan-row.missing-plan-id", "status.plan-row.invalid-plan-id");
     }
     if (id !== undefined && planId !== undefined && id !== planId) {
-      violations.push(violation5("medium", "status.plan-row.dual-id", "row has both id and plan_id with different values — write one canonical key (prefer id)"));
+      violations.push(violation4("medium", "status.plan-row.dual-id", "row has both id and plan_id with different values — write one canonical key (prefer id)"));
     }
   }
   validateNonEmptyString3(violations, title, "title", "status.plan-row.missing-title", "status.plan-row.invalid-title");
   validateNonEmptyString3(violations, file, "file", "status.plan-row.missing-file", "status.plan-row.invalid-file");
   if (status === undefined) {
-    violations.push(violation5("high", "status.plan-row.missing-status", "missing required field: status"));
+    violations.push(violation4("high", "status.plan-row.missing-status", "missing required field: status"));
   } else if (typeof status !== "string" || !PLAN_STATUSES.includes(status)) {
-    violations.push(violation5("medium", "status.plan-row.invalid-status", `status must be one of ${PLAN_STATUSES.join(" | ")} — got ${JSON.stringify(status)}`));
+    violations.push(violation4("medium", "status.plan-row.invalid-status", `status must be one of ${PLAN_STATUSES.join(" | ")} — got ${JSON.stringify(status)}`));
   }
-  if (metadata !== undefined && !isPlainObject4(metadata)) {
-    violations.push(violation5("medium", "status.plan-row.invalid-metadata", "metadata must be an object"));
+  if (metadata !== undefined && !isPlainObject3(metadata)) {
+    violations.push(violation4("medium", "status.plan-row.invalid-metadata", "metadata must be an object"));
   }
-  if (execution_lease !== undefined && !isPlainObject4(execution_lease)) {
-    violations.push(violation5("medium", "status.plan-row.invalid-execution-lease", "execution_lease must be an object"));
+  if (execution_lease !== undefined && !isPlainObject3(execution_lease)) {
+    violations.push(violation4("medium", "status.plan-row.invalid-execution-lease", "execution_lease must be an object"));
   }
   if (status === "Done" && execution_lease !== undefined) {
-    violations.push(violation5("medium", "status.plan-row.done-with-lease", 'plan status Done must not carry an execution_lease — the Done authority deletes the lease in the same complete-file update as status: "Done" (status-and-residuals.md § Hold, release, and override)', 'delete plans[].execution_lease in the same update that sets status: "Done"'));
+    violations.push(violation4("medium", "status.plan-row.done-with-lease", 'plan status Done must not carry an execution_lease — the Done authority deletes the lease in the same complete-file update as status: "Done" (status-and-residuals.md § Hold, release, and override)', 'delete plans[].execution_lease in the same update that sets status: "Done"'));
   }
   return { ok: violations.length === 0, violations };
 }
 function validateResidual(entry) {
   const violations = [];
-  if (!isPlainObject4(entry)) {
-    return { ok: false, violations: [violation5("high", "status.residual.invalid", "residual entry must be an object")] };
+  if (!isPlainObject3(entry)) {
+    return { ok: false, violations: [violation4("high", "status.residual.invalid", "residual entry must be an object")] };
   }
   const { id, title, severity, source, scope, decision, owner, target, tracking, detail_doc, lifecycle, closed_at } = entry;
   validateNonEmptyString3(violations, id, "id", "status.residual.missing-id", "status.residual.invalid-id");
@@ -385,42 +401,42 @@ function validateResidual(entry) {
   validateNonEmptyString3(violations, scope, "scope", "status.residual.missing-scope", "status.residual.invalid-scope");
   validateNonEmptyString3(violations, owner, "owner", "status.residual.missing-owner", "status.residual.invalid-owner");
   if (severity === undefined) {
-    violations.push(violation5("high", "status.residual.missing-severity", "missing required field: severity"));
+    violations.push(violation4("high", "status.residual.missing-severity", "missing required field: severity"));
   } else if (typeof severity !== "string" || !SEVERITY_ORDER.includes(severity) && severity !== "warning") {
-    violations.push(violation5("medium", "status.residual.invalid-severity", `severity must be one of ${SEVERITY_ORDER.join(" | ")} — got ${JSON.stringify(severity)}`));
+    violations.push(violation4("medium", "status.residual.invalid-severity", `severity must be one of ${SEVERITY_ORDER.join(" | ")} — got ${JSON.stringify(severity)}`));
   } else if (severity === "warning") {
-    violations.push(violation5("low", "status.residual.legacy-warning", `severity "warning" is legacy — forbidden on new entries; read paths normalize it to "low"`, `use "low" (normalizeSeverity maps 'warning' → 'low')`));
+    violations.push(violation4("low", "status.residual.legacy-warning", `severity "warning" is legacy — forbidden on new entries; read paths normalize it to "low"`, `use "low" (normalizeSeverity maps 'warning' → 'low')`));
   }
   if (decision === undefined) {
-    violations.push(violation5("high", "status.residual.missing-decision", "missing required field: decision"));
+    violations.push(violation4("high", "status.residual.missing-decision", "missing required field: decision"));
   } else if (typeof decision !== "string" || !RESIDUAL_DECISIONS.includes(decision)) {
-    violations.push(violation5("medium", "status.residual.invalid-decision", `decision must be one of ${RESIDUAL_DECISIONS.join(" | ")} — got ${JSON.stringify(decision)}`));
+    violations.push(violation4("medium", "status.residual.invalid-decision", `decision must be one of ${RESIDUAL_DECISIONS.join(" | ")} — got ${JSON.stringify(decision)}`));
   }
   if (target === undefined) {
-    violations.push(violation5("high", "status.residual.missing-target", "missing required field: target"));
+    violations.push(violation4("high", "status.residual.missing-target", "missing required field: target"));
   } else if (typeof target !== "string" && target !== null) {
-    violations.push(violation5("medium", "status.residual.invalid-target", "target must be a string or null"));
+    violations.push(violation4("medium", "status.residual.invalid-target", "target must be a string or null"));
   }
   if (tracking === undefined) {
-    violations.push(violation5("high", "status.residual.missing-tracking", "missing required field: tracking"));
+    violations.push(violation4("high", "status.residual.missing-tracking", "missing required field: tracking"));
   } else if (typeof tracking !== "string" && tracking !== null) {
-    violations.push(violation5("medium", "status.residual.invalid-tracking", "tracking must be a string or null"));
+    violations.push(violation4("medium", "status.residual.invalid-tracking", "tracking must be a string or null"));
   }
   if (detail_doc !== undefined && typeof detail_doc !== "string" && detail_doc !== null) {
-    violations.push(violation5("medium", "status.residual.invalid-detail-doc", "detail_doc must be a string or null"));
+    violations.push(violation4("medium", "status.residual.invalid-detail-doc", "detail_doc must be a string or null"));
   }
-  if (closed_at !== undefined && (typeof closed_at !== "string" || !DATE_RE2.test(closed_at))) {
-    violations.push(violation5("medium", "status.residual.invalid-closed-at", "closed_at must be YYYY-MM-DD"));
+  if (closed_at !== undefined && (typeof closed_at !== "string" || !DATE_RE.test(closed_at))) {
+    violations.push(violation4("medium", "status.residual.invalid-closed-at", "closed_at must be YYYY-MM-DD"));
   }
   if (lifecycle !== undefined) {
     if (typeof lifecycle !== "string" || !RESIDUAL_LIFECYCLES.includes(lifecycle)) {
-      violations.push(violation5("medium", "status.residual.invalid-lifecycle", `lifecycle must be one of ${RESIDUAL_LIFECYCLES.join(" | ")} — got ${JSON.stringify(lifecycle)}`));
+      violations.push(violation4("medium", "status.residual.invalid-lifecycle", `lifecycle must be one of ${RESIDUAL_LIFECYCLES.join(" | ")} — got ${JSON.stringify(lifecycle)}`));
     } else if (lifecycle !== "open") {
       if (closed_at === undefined) {
-        violations.push(violation5("high", "status.residual.closed-missing-closed-at", `lifecycle "${lifecycle}" requires closed_at (YYYY-MM-DD)`, 'set closed_at (e.g. "2026-08-08")'));
+        violations.push(violation4("high", "status.residual.closed-missing-closed-at", `lifecycle "${lifecycle}" requires closed_at (YYYY-MM-DD)`, 'set closed_at (e.g. "2026-08-08")'));
       }
       if (entry.closure_note === undefined) {
-        violations.push(violation5("medium", "status.residual.closed-missing-closure-note", `lifecycle "${lifecycle}" requires closure_note (what changed; how verified)`, "add closure_note explaining the close"));
+        violations.push(violation4("medium", "status.residual.closed-missing-closure-note", `lifecycle "${lifecycle}" requires closure_note (what changed; how verified)`, "add closure_note explaining the close"));
       }
     }
   }
@@ -435,25 +451,25 @@ function isHarnessRelativePath(dir) {
 }
 function validateWorkflowEntry(entry) {
   const violations = [];
-  if (!isPlainObject4(entry)) {
+  if (!isPlainObject3(entry)) {
     return {
       ok: false,
-      violations: [violation5("high", "status.workflow.invalid", "workflow entry must be an object")]
+      violations: [violation4("high", "status.workflow.invalid", "workflow entry must be an object")]
     };
   }
   validateNonEmptyString3(violations, entry.id, "id", "status.workflow.missing-id", "status.workflow.invalid-id");
   if (entry.type === undefined) {
-    violations.push(violation5("high", "status.workflow.missing-type", "missing required field: type"));
+    violations.push(violation4("high", "status.workflow.missing-type", "missing required field: type"));
   } else if (typeof entry.type !== "string" || !WORKFLOW_LIFECYCLE_TYPES.includes(entry.type)) {
-    violations.push(violation5("medium", "status.workflow.invalid-type", `type must be one of ${WORKFLOW_LIFECYCLE_TYPES.join(" | ")} — got ${JSON.stringify(entry.type)}`));
+    violations.push(violation4("medium", "status.workflow.invalid-type", `type must be one of ${WORKFLOW_LIFECYCLE_TYPES.join(" | ")} — got ${JSON.stringify(entry.type)}`));
   }
   validateNonEmptyString3(violations, entry.started_at, "started_at", "status.workflow.missing-started-at", "status.workflow.invalid-started-at");
   if (entry.dir === undefined) {
-    violations.push(violation5("high", "status.workflow.missing-dir", "missing required field: dir"));
+    violations.push(violation4("high", "status.workflow.missing-dir", "missing required field: dir"));
   } else if (typeof entry.dir !== "string" || entry.dir.trim() === "") {
-    violations.push(violation5("medium", "status.workflow.invalid-dir", "dir must be a non-empty string"));
+    violations.push(violation4("medium", "status.workflow.invalid-dir", "dir must be a non-empty string"));
   } else if (!isHarnessRelativePath(entry.dir)) {
-    violations.push(violation5("medium", "status.workflow.invalid-dir", `dir must be a harness-relative path (no absolute paths, no ".." segments) — got ${JSON.stringify(entry.dir)}`));
+    violations.push(violation4("medium", "status.workflow.invalid-dir", `dir must be a harness-relative path (no absolute paths, no ".." segments) — got ${JSON.stringify(entry.dir)}`));
   }
   return { ok: violations.length === 0, violations };
 }
@@ -467,20 +483,20 @@ function validateStatusV2(docOrPath, opts = {}) {
     } catch (error) {
       return {
         ok: false,
-        violations: [violation5("high", "status.invalid-json", error.message)]
+        violations: [violation4("high", "status.invalid-json", error.message)]
       };
     }
   } else {
     doc = docOrPath;
   }
-  if (!isPlainObject4(doc)) {
-    return { ok: false, violations: [violation5("high", "status.invalid-doc", "status document must be an object")] };
+  if (!isPlainObject3(doc)) {
+    return { ok: false, violations: [violation4("high", "status.invalid-doc", "status document must be an object")] };
   }
   if (doc.version !== 2) {
     return {
       ok: false,
       violations: [
-        violation5("high", "status.migration-required", `status.json schema version 2 required — got ${JSON.stringify(doc.version)} (v1 or unknown version); run \`mstar migrate\` to convert the tree`, "run `mstar migrate`")
+        violation4("high", "status.migration-required", `status.json schema version 2 required — got ${JSON.stringify(doc.version)} (v1 or unknown version); run \`mstar migrate\` to convert the tree`, "run `mstar migrate`")
       ]
     };
   }
@@ -488,7 +504,7 @@ function validateStatusV2(docOrPath, opts = {}) {
     return {
       ok: false,
       violations: [
-        violation5("high", "status.migration-required", "v1-shaped status.json (root plans[]) is not a v2 document — run `mstar migrate` to convert the tree", "run `mstar migrate`")
+        violation4("high", "status.migration-required", "v1-shaped status.json (root plans[]) is not a v2 document — run `mstar migrate` to convert the tree", "run `mstar migrate`")
       ]
     };
   }
@@ -496,27 +512,27 @@ function validateStatusV2(docOrPath, opts = {}) {
     return {
       ok: false,
       violations: [
-        violation5("high", "status.migration-required", "v1-shaped status.json (root residual_findings) is not a v2 document — run `mstar migrate` to convert the tree", "run `mstar migrate`")
+        violation4("high", "status.migration-required", "v1-shaped status.json (root residual_findings) is not a v2 document — run `mstar migrate` to convert the tree", "run `mstar migrate`")
       ]
     };
   }
   const violations = [];
   if (doc.updated_at === undefined) {
-    violations.push(violation5("high", "status.missing-updated-at", "missing required field: updated_at"));
-  } else if (typeof doc.updated_at !== "string" || !DATE_RE2.test(doc.updated_at)) {
-    violations.push(violation5("medium", "status.invalid-updated-at", "updated_at must be YYYY-MM-DD"));
+    violations.push(violation4("high", "status.missing-updated-at", "missing required field: updated_at"));
+  } else if (typeof doc.updated_at !== "string" || !DATE_RE.test(doc.updated_at)) {
+    violations.push(violation4("medium", "status.invalid-updated-at", "updated_at must be YYYY-MM-DD"));
   }
   if (doc.workflows === undefined) {
-    violations.push(violation5("high", "status.missing-workflows", "missing required field: workflows"));
+    violations.push(violation4("high", "status.missing-workflows", "missing required field: workflows"));
   } else if (!Array.isArray(doc.workflows)) {
-    violations.push(violation5("high", "status.invalid-workflows", "workflows must be an array"));
+    violations.push(violation4("high", "status.invalid-workflows", "workflows must be an array"));
   } else {
     const seen = new Set;
     for (const entry of doc.workflows) {
       violations.push(...validateWorkflowEntry(entry).violations);
-      if (isPlainObject4(entry) && typeof entry.id === "string") {
+      if (isPlainObject3(entry) && typeof entry.id === "string") {
         if (seen.has(entry.id)) {
-          violations.push(violation5("medium", "status.workflow.duplicate-id", `duplicate workflow id in workflows[]: ${JSON.stringify(entry.id)}`));
+          violations.push(violation4("medium", "status.workflow.duplicate-id", `duplicate workflow id in workflows[]: ${JSON.stringify(entry.id)}`));
         }
         seen.add(entry.id);
       }
@@ -528,37 +544,37 @@ function validateStatusV2(docOrPath, opts = {}) {
       realHarnessDir = realpathSync(harnessDir);
     } catch {}
     for (const entry of doc.workflows) {
-      if (!isPlainObject4(entry) || typeof entry.dir !== "string")
+      if (!isPlainObject3(entry) || typeof entry.dir !== "string")
         continue;
-      const relSnapshot = join7(entry.dir, WORKFLOW_SNAPSHOT_FILE);
-      const snapshotPath = join7(harnessDir, relSnapshot);
+      const relSnapshot = join6(entry.dir, WORKFLOW_SNAPSHOT_FILE);
+      const snapshotPath = join6(harnessDir, relSnapshot);
       const label = typeof entry.id === "string" ? entry.id : relSnapshot;
       let physical;
       try {
         physical = realpathSync(snapshotPath);
       } catch {
-        violations.push(violation5("high", "status.workflow.snapshot-missing", `workflows[] lists ${JSON.stringify(label)} but its snapshot does not exist at ${JSON.stringify(relSnapshot)} — the root holds active lifecycles only; unregister the id when its snapshot is removed`));
+        violations.push(violation4("high", "status.workflow.snapshot-missing", `workflows[] lists ${JSON.stringify(label)} but its snapshot does not exist at ${JSON.stringify(relSnapshot)} — the root holds active lifecycles only; unregister the id when its snapshot is removed`));
         continue;
       }
       if (realHarnessDir !== null && physical !== realHarnessDir && !physical.startsWith(`${realHarnessDir}${sep}`)) {
-        violations.push(violation5("high", "status.workflow.snapshot-outside-harness", `workflows[] lists ${JSON.stringify(label)} but its snapshot resolves outside the harness dir (${JSON.stringify(physical)}) — symlinked snapshot paths are rejected; the snapshot must physically live under ${JSON.stringify(harnessDir)}`));
+        violations.push(violation4("high", "status.workflow.snapshot-outside-harness", `workflows[] lists ${JSON.stringify(label)} but its snapshot resolves outside the harness dir (${JSON.stringify(physical)}) — symlinked snapshot paths are rejected; the snapshot must physically live under ${JSON.stringify(harnessDir)}`));
         continue;
       }
       let snapshot;
       try {
         snapshot = readJson(snapshotPath);
       } catch (error) {
-        violations.push(violation5("high", "status.workflow.snapshot-invalid", `snapshot at ${JSON.stringify(relSnapshot)} is not valid JSON: ${error.message}`));
+        violations.push(violation4("high", "status.workflow.snapshot-invalid", `snapshot at ${JSON.stringify(relSnapshot)} is not valid JSON: ${error.message}`));
         continue;
       }
       if (typeof snapshot.status === "string" && WORKFLOW_TERMINAL_STATUSES.includes(snapshot.status)) {
-        violations.push(violation5("high", "status.workflow.terminal-listed", `workflows[] lists ${JSON.stringify(label)} whose snapshot status is terminal (${snapshot.status}) — removal-at-terminal: terminal writers unregister AFTER the snapshot write`));
+        violations.push(violation4("high", "status.workflow.terminal-listed", `workflows[] lists ${JSON.stringify(label)} whose snapshot status is terminal (${snapshot.status}) — removal-at-terminal: terminal writers unregister AFTER the snapshot write`));
       }
       if (typeof entry.type === "string" && typeof snapshot.type === "string" && entry.type !== snapshot.type) {
-        violations.push(violation5("medium", "status.workflow.mismatched-type", `workflows[] entry ${JSON.stringify(label)} type ${JSON.stringify(entry.type)} does not match its snapshot type ${JSON.stringify(snapshot.type)} — the root entry mirrors the snapshot; align them`));
+        violations.push(violation4("medium", "status.workflow.mismatched-type", `workflows[] entry ${JSON.stringify(label)} type ${JSON.stringify(entry.type)} does not match its snapshot type ${JSON.stringify(snapshot.type)} — the root entry mirrors the snapshot; align them`));
       }
       if (typeof entry.started_at === "string" && typeof snapshot.started_at === "string" && entry.started_at !== snapshot.started_at) {
-        violations.push(violation5("medium", "status.workflow.mismatched-started-at", `workflows[] entry ${JSON.stringify(label)} started_at ${JSON.stringify(entry.started_at)} does not match its snapshot started_at ${JSON.stringify(snapshot.started_at)} — workflow ${JSON.stringify(label)} collided with another writer (e.g. a concurrent/re-run \`audit promote\` with the same workflow id rewrote the snapshot); the root entry mirrors the snapshot — align them or remove the colliding workflow`));
+        violations.push(violation4("medium", "status.workflow.mismatched-started-at", `workflows[] entry ${JSON.stringify(label)} started_at ${JSON.stringify(entry.started_at)} does not match its snapshot started_at ${JSON.stringify(snapshot.started_at)} — workflow ${JSON.stringify(label)} collided with another writer (e.g. a concurrent/re-run \`audit promote\` with the same workflow id rewrote the snapshot); the root entry mirrors the snapshot — align them or remove the colliding workflow`));
       }
     }
   }
@@ -571,14 +587,14 @@ function resolveCompassEnforcement(harnessDir) {
     return { hard: false, source: "none" };
   let entries;
   try {
-    entries = readdirSync3(iterationsDir, { withFileTypes: true });
+    entries = readdirSync2(iterationsDir, { withFileTypes: true });
   } catch {
     return { hard: false, source: "none" };
   }
   for (const entry of entries) {
     if (!entry.isDirectory())
       continue;
-    const compassPath = join7(iterationsDir, entry.name, "delivery-compass.md");
+    const compassPath = join6(iterationsDir, entry.name, "delivery-compass.md");
     if (!existsSync4(compassPath))
       continue;
     let content;
@@ -714,7 +730,7 @@ function defaultWorkspaceRoot(startDir) {
 }
 function isAtOrBelow2(dir, root) {
   const rel = relative2(root, dir);
-  return rel === "" || !rel.startsWith("..") && !isAbsolute4(rel);
+  return rel === "" || !rel.startsWith("..") && !isAbsolute5(rel);
 }
 function mstarcDirOverride(harnessDir, key) {
   const dir = resolve7(harnessDir);
@@ -774,12 +790,14 @@ function isDirectory(dir) {
     return false;
   }
 }
+var INPUT_ENTRIES_CAP = 1e4;
+var MAX_RETAINED_ENTRIES = INPUT_ENTRIES_CAP / 2;
 var STATUS_FILE = "status.json";
 var SNAPSHOT_FILE = "snapshot.json";
 var REGISTER_FILE = "residuals.json";
 function hasEntry(dir, name) {
   try {
-    statSync5(join12(dir, name));
+    statSync5(join13(dir, name));
     return true;
   } catch {
     return false;
@@ -801,7 +819,7 @@ function resolveHarnessRootOf(target) {
   for (;; ) {
     if (hasHarnessRootMarkers(dir))
       return dir;
-    const parent = dirname7(dir);
+    const parent = dirname9(dir);
     if (parent === dir)
       return null;
     dir = parent;
@@ -811,7 +829,7 @@ function harnessDocKindOfTarget(targetPath) {
   if (typeof targetPath !== "string" || targetPath.trim() === "")
     return null;
   const resolved = resolve10(targetPath);
-  const name = basename5(resolved);
+  const name = basename6(resolved);
   if (name !== STATUS_FILE && name !== SNAPSHOT_FILE && name !== REGISTER_FILE)
     return null;
   const classify = (harnessDir2) => {
@@ -824,8 +842,8 @@ function harnessDocKindOfTarget(targetPath) {
       workflowDir = resolveWorkflowDir(harnessDir2, { harnessDir: harnessDir2 });
       projectDir = resolveProjectDir(harnessDir2, { harnessDir: harnessDir2 });
     } catch {
-      workflowDir = join12(harnessDir2, "workflows");
-      projectDir = join12(harnessDir2, "projects");
+      workflowDir = join13(harnessDir2, "workflows");
+      projectDir = join13(harnessDir2, "projects");
     }
     if (name === SNAPSHOT_FILE && /^[^/]+\/snapshot\.json$/.test(relative4(workflowDir, resolved))) {
       return { harnessDir: harnessDir2, kind: "snapshot" };
@@ -835,8 +853,8 @@ function harnessDocKindOfTarget(targetPath) {
     }
     return null;
   };
-  const probeRoot = resolveHarnessRootOf(dirname7(resolved));
-  const harnessDir = probeRoot ?? resolveHarnessDir(dirname7(resolved));
+  const probeRoot = resolveHarnessRootOf(dirname9(resolved));
+  const harnessDir = probeRoot ?? resolveHarnessDir(dirname9(resolved));
   if (harnessDir === null)
     return null;
   const classified = classify(harnessDir);
@@ -844,13 +862,13 @@ function harnessDocKindOfTarget(targetPath) {
     return classified;
   if (probeRoot === null)
     return null;
-  const fallbackDir = resolveHarnessDir(dirname7(resolved));
+  const fallbackDir = resolveHarnessDir(dirname9(resolved));
   if (fallbackDir === null || fallbackDir === probeRoot)
     return null;
   return classify(fallbackDir);
 }
-function violationLine(violation8) {
-  return `[${violation8.severity}] ${violation8.code}: ${violation8.message}${violation8.fix ? ` (fix: ${violation8.fix})` : ""}`;
+function violationLine(violation9) {
+  return `[${violation9.severity}] ${violation9.code}: ${violation9.message}${violation9.fix ? ` (fix: ${violation9.fix})` : ""}`;
 }
 var MAX_STATUS_CONTENT_LENGTH = 2097152;
 function oversizedViolation(filePath) {
@@ -858,7 +876,7 @@ function oversizedViolation(filePath) {
     ok: false,
     severity: "high",
     code: "status.oversized",
-    message: `${basename5(filePath)} exceeds the ${MAX_STATUS_CONTENT_LENGTH}-byte (2 MiB) coordination-document validation budget — repair out of band or disable for this session with MSTAR_WRITE_GATE=off`
+    message: `${basename6(filePath)} exceeds the ${MAX_STATUS_CONTENT_LENGTH}-byte (2 MiB) coordination-document validation budget — repair out of band or disable for this session with MSTAR_WRITE_GATE=off`
   };
 }
 function validateStatusWriteDoc(content, filePath, kind, options = {}) {
@@ -886,13 +904,13 @@ function validateStatusWriteDoc(content, filePath, kind, options = {}) {
           ok: false,
           severity: "high",
           code: "status.invalid-json",
-          message: `${basename5(filePath)} content must be a JSON object`
+          message: `${basename6(filePath)} content must be a JSON object`
         }
       ];
     }
     return validateDocByKind(doc2, kind);
   }
-  if (!existsSync8(filePath))
+  if (!existsSync10(filePath))
     return [];
   try {
     if (statSync5(filePath).size > MAX_STATUS_CONTENT_LENGTH) {

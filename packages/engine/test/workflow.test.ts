@@ -9,7 +9,16 @@
  *   `updated_at`, `phase?`, `plans[]` (legacy PlanRow verbatim — unknown row
  *   fields preserved, never re-bucketed), `execution_policy?` (first-class,
  *   accepted-but-opaque keys), `integration_merge_lease?` (top-level),
- *   `branch?`/`control_worktree_path?`, `legacy_metadata?`, `compass_ref?`.
+ *   `branch?`/`integration_worktree_path?`, `legacy_metadata?`, `compass_ref?`.
+ * - Integration worktree path — the canonical snapshot member is
+ *   `integration_worktree_path`; the v1 `control_worktree_path` key is a
+ *   READ-ONLY alias: the canonical reader (`readWorkflowSnapshot`) normalizes
+ *   legacy-only documents in memory, returns the medium
+ *   `workflow.snapshot.legacy-control-worktree-path` diagnostic separately
+ *   and never touches the file bytes; both keys present is
+ *   `workflow.snapshot.conflicting-worktree-paths` (high, even when equal);
+ *   writers emit only the canonical shape (iteration spec
+ *   worktree-write-model § "Field semantics" + § "Stable machine codes").
  * - Terminal invariants: terminal set = `completed|failed|stopped` ⇒
  *   `ended_at` present AND no row carries `execution_lease` AND no
  *   `integration_merge_lease` (no dangling leases).
@@ -20,12 +29,15 @@
  *   snapshot), no harness-root pollution; `WORKFLOW_SNAPSHOT_FILE = "snapshot.json"`.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { GateResult } from "../src/core.js";
 import {
+  closeWorkflow,
+  isTerminalSnapshot,
   WORKFLOW_SNAPSHOT_FILE,
+  readWorkflowSnapshot,
   validateWorkflowSnapshot,
   writeWorkflowSnapshot,
 } from "../src/workflow.js";
@@ -82,7 +94,7 @@ function validSnapshot(overrides: Record<string, unknown> = {}): Record<string, 
     plans: [legacyRow()],
     execution_policy: { plan_parallelism: "serial", worktree_mode: "feature-worktree", push_policy: "manual" },
     branch: { base: "main", integration: "spec_integration_branch", target: "main" },
-    control_worktree_path: "/Users/bibi/workspace/ai/mstar-harness",
+    integration_worktree_path: "/Users/bibi/workspace/ai/mstar-harness",
     legacy_metadata: { program_roadmap: "roadmap.md" },
     compass_ref: "iterations/00000819-workflow-engine-core/delivery-compass.md",
     ...overrides,
@@ -224,12 +236,7 @@ describe("validateWorkflowSnapshot — schema basics", () => {
     );
   });
 
-  test("control_worktree_path / legacy_metadata / compass_ref are optional with shape checks", () => {
-    expect(validateWorkflowSnapshot(validSnapshot({ control_worktree_path: undefined })).ok).toBe(true);
-    expectViolations(
-      validateWorkflowSnapshot(validSnapshot({ control_worktree_path: "" })),
-      "workflow.snapshot.invalid-control-worktree-path",
-    );
+  test("legacy_metadata / compass_ref are optional with shape checks", () => {
     expectViolations(
       validateWorkflowSnapshot(validSnapshot({ legacy_metadata: "nope" })),
       "workflow.snapshot.invalid-legacy-metadata",
@@ -238,6 +245,116 @@ describe("validateWorkflowSnapshot — schema basics", () => {
       validateWorkflowSnapshot(validSnapshot({ compass_ref: "" })),
       "workflow.snapshot.invalid-compass-ref",
     );
+  });
+});
+
+describe("validateWorkflowSnapshot — integration worktree path (canonical member, v1 read alias, conflict)", () => {
+  test("canonical integration_worktree_path is accepted when non-empty and absolute", () => {
+    expect(validateWorkflowSnapshot(validSnapshot({ integration_worktree_path: undefined })).ok).toBe(true);
+    expect(validateWorkflowSnapshot(validSnapshot()).ok).toBe(true);
+  });
+
+  test("empty / relative / non-string canonical path → workflow.snapshot.invalid-integration-worktree-path (high)", () => {
+    for (const bad of ["", "relative/path", "./rel", 42]) {
+      const result = validateWorkflowSnapshot(validSnapshot({ integration_worktree_path: bad }));
+      expectViolations(result, "workflow.snapshot.invalid-integration-worktree-path");
+      expect(result.violations.find((v) => v.code === "workflow.snapshot.invalid-integration-worktree-path")?.severity).toBe("high");
+    }
+  });
+
+  test("legacy-only control_worktree_path is a failing gate carrying the medium migration diagnostic", () => {
+    const { integration_worktree_path: _canonical, ...legacyOnly } = validSnapshot();
+    const legacy = { ...legacyOnly, control_worktree_path: "/Users/bibi/workspace/ai/mstar-harness" };
+    const result = validateWorkflowSnapshot(legacy);
+    expect(result.ok).toBe(false);
+    expect(violationsOf(result)).toEqual(["workflow.snapshot.legacy-control-worktree-path"]);
+    expect(result.violations[0]!.severity).toBe("medium");
+  });
+
+  test("legacy-only document with an invalid path value also reports the invalid-path violation", () => {
+    const { integration_worktree_path: _canonical, ...legacyOnly } = validSnapshot();
+    const legacy = { ...legacyOnly, control_worktree_path: "relative/path" };
+    const result = validateWorkflowSnapshot(legacy);
+    expect(result.ok).toBe(false);
+    expect(violationsOf(result)).toContain("workflow.snapshot.legacy-control-worktree-path");
+    expectViolations(result, "workflow.snapshot.invalid-integration-worktree-path");
+  });
+
+  test("both fields present is refused as conflicting — even when the values are equal", () => {
+    const both = validSnapshot({ control_worktree_path: "/Users/bibi/workspace/ai/mstar-harness" });
+    const result = validateWorkflowSnapshot(both);
+    expect(result.ok).toBe(false);
+    expect(violationsOf(result)).toContain("workflow.snapshot.conflicting-worktree-paths");
+    expect(result.violations.find((v) => v.code === "workflow.snapshot.conflicting-worktree-paths")?.severity).toBe("high");
+    expect(violationsOf(result)).not.toContain("workflow.snapshot.legacy-control-worktree-path");
+  });
+});
+
+describe("readWorkflowSnapshot — canonical reader with the v1 read alias (no mutation, no dual write)", () => {
+  test("reads a canonical snapshot written by the writer; no diagnostics", async () => {
+    const root = tmpRoot("workflow-reader-");
+    setArtifactStore(createFsStore(root));
+    const dir = join(root, "workflows", "00000819-workflow-engine-core");
+    const snapshot = validSnapshot();
+    await writeWorkflowSnapshot(snapshot as never, dir);
+    const read = readWorkflowSnapshot(dir);
+    expect(read.snapshot).toEqual(snapshot);
+    expect(read.diagnostics).toEqual([]);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test("legacy-only document normalizes in memory and never mutates the file bytes", () => {
+    const root = tmpRoot("workflow-reader-legacy-");
+    const dir = join(root, "workflows", "peer-lifecycle");
+    mkdirSync(dir, { recursive: true });
+    const legacy = validSnapshot();
+    delete (legacy as Record<string, unknown>).integration_worktree_path;
+    (legacy as Record<string, unknown>).control_worktree_path = "/Users/bibi/workspace/ai/mstar-harness";
+    const raw = `${JSON.stringify(legacy, null, 2)}\n`;
+    const snapshotPath = join(dir, WORKFLOW_SNAPSHOT_FILE);
+    writeFileSync(snapshotPath, raw, "utf8");
+
+    const read = readWorkflowSnapshot(dir);
+    expect(read.snapshot.integration_worktree_path).toBe("/Users/bibi/workspace/ai/mstar-harness");
+    expect("control_worktree_path" in read.snapshot).toBe(false);
+    expect(read.diagnostics).toHaveLength(1);
+    expect(read.diagnostics[0]!.code).toBe("workflow.snapshot.legacy-control-worktree-path");
+    expect(read.diagnostics[0]!.severity).toBe("medium");
+    // The read alias never mutates the source: byte-for-byte unchanged.
+    expect(readFileSync(snapshotPath, "utf8")).toBe(raw);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test("a document with both path keys refuses the read (conflict is never normalized away)", () => {
+    const root = tmpRoot("workflow-reader-conflict-");
+    const dir = join(root, "workflows", "conflicted");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, WORKFLOW_SNAPSHOT_FILE),
+      JSON.stringify({ ...validSnapshot(), control_worktree_path: "/same/path" }),
+      "utf8",
+    );
+    expect(() => readWorkflowSnapshot(dir)).toThrow(/conflicting-worktree-paths/);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test("any violation other than the migration diagnostic refuses the read", () => {
+    const root = tmpRoot("workflow-reader-invalid-");
+    const dir = join(root, "workflows", "broken");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, WORKFLOW_SNAPSHOT_FILE), JSON.stringify({ schema_version: 1, plans: [] }), "utf8");
+    expect(() => readWorkflowSnapshot(dir)).toThrow(/missing-id/);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test("missing file and malformed JSON throw (never an empty-object guess)", () => {
+    const root = tmpRoot("workflow-reader-missing-");
+    const dir = join(root, "workflows", "absent");
+    expect(() => readWorkflowSnapshot(dir)).toThrow(/snapshot\.json/);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, WORKFLOW_SNAPSHOT_FILE), "{not json", "utf8");
+    expect(() => readWorkflowSnapshot(dir)).toThrow(/Invalid JSON/);
+    rmSync(root, { recursive: true, force: true });
   });
 });
 
@@ -360,6 +477,24 @@ describe("writeWorkflowSnapshot — whole-rewrite under withStatusWriteLock", ()
     rmSync(root, { recursive: true, force: true });
   });
 
+  test("canonical writers reject the v1 control_worktree_path key, even through an untyped caller", async () => {
+    const root = tmpRoot("workflow-writer-legacy-");
+    setArtifactStore(createFsStore(root));
+    const dir = join(root, "workflows", "00000819-workflow-engine-core");
+    // legacy-only shape — the medium read diagnostic must never become write permission
+    const legacyOnly = validSnapshot();
+    delete legacyOnly.integration_worktree_path;
+    await expect(
+      writeWorkflowSnapshot({ ...legacyOnly, control_worktree_path: "/repo/main" } as never, dir),
+    ).rejects.toThrow(/invalid workflow snapshot/);
+    // both keys present — conflict refuses too
+    await expect(
+      writeWorkflowSnapshot({ ...validSnapshot(), control_worktree_path: "/repo/main" } as never, dir),
+    ).rejects.toThrow(/invalid workflow snapshot/);
+    expect(existsSync(join(dir, WORKFLOW_SNAPSHOT_FILE))).toBe(false);
+    rmSync(root, { recursive: true, force: true });
+  });
+
   test("overwrites an existing snapshot (whole-rewrite)", async () => {
     const root = tmpRoot("workflow-writer-");
     setArtifactStore(createFsStore(root));
@@ -420,5 +555,116 @@ describe("writeWorkflowSnapshot — whole-rewrite under withStatusWriteLock", ()
       rmSync(root, { recursive: true, force: true });
       rmSync(other, { recursive: true, force: true });
     }
+  });
+});
+
+
+describe("closeWorkflow", () => {
+  const id = "00000101-close-fixture";
+  const endedAt = "2026-09-12T10:20:30+08:00";
+  const roots: string[] = [];
+  afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
+  function fixture(overrides: Record<string, unknown> = {}) {
+    const root = tmpRoot("workflow-close-");
+    roots.push(root);
+    const dir = join(root, "workflows", id);
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, WORKFLOW_SNAPSHOT_FILE);
+    const snapshot = validSnapshot({ id, status: "running", ended_at: undefined, ...overrides });
+    writeFileSync(path, JSON.stringify(snapshot, null, 4) + "\n");
+    setArtifactStore(createFsStore(root));
+    return { root, dir, path, snapshot };
+  }
+  const lease = { holder: "fixture-owner", claimed_at: "2026-09-12", worktree_path: "/fixture/worktree", working_branch: "feature/fixture" };
+  test.each(["plan", "iteration"])("completes an all-Done %s and preserves rows", async (type) => {
+    const { dir, path, snapshot } = fixture({ type });
+    const closed = await closeWorkflow(id, dir, { endedAt });
+    expect(closed).toEqual({ ...JSON.parse(JSON.stringify(snapshot)), status: "completed", ended_at: endedAt, updated_at: endedAt });
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual(closed);
+    expect(isTerminalSnapshot(closed)).toBe(true);
+  });
+  test.each(["completed", "failed", "stopped"])("keeps valid %s terminal bytes and timestamps", async (status) => {
+    const { dir, path } = fixture({ status, ended_at: "2026-09-11", plans: [legacyRow({ status: "Blocked" })] });
+    const before = readFileSync(path, "utf8");
+    expect((await closeWorkflow(id, dir, { endedAt })).status).toBe(status);
+    expect(readFileSync(path, "utf8")).toBe(before);
+  });
+  test.each([
+    { plans: [legacyRow({ execution_lease: lease })] },
+    { integration_merge_lease: { holder: "fixture-owner", claimed_at: "2026-09-12", plan_id: "00000101-fixture", source_branch: "feature/fixture", target_branch: "integration/fixture" } },
+    { plans: [legacyRow({ status: "InReview" })] },
+    { id: "00000101-other" },
+    { status: "completed", ended_at: undefined },
+    { status: "completed", ended_at: "2026-09-11", plans: [legacyRow({ execution_lease: lease })] },
+    { control_worktree_path: "/fixture/legacy" },
+  ])("refuses unsafe snapshot without rewriting it: %j", async (overrides) => {
+    const { dir, path } = fixture(overrides);
+    const before = readFileSync(path, "utf8");
+    await expect(closeWorkflow(id, dir, { endedAt })).rejects.toThrow();
+    expect(readFileSync(path, "utf8")).toBe(before);
+  });
+  test.each(["", "yesterday", "2026-02-30", "2026-09-12T25:00:00Z", "2026-09-12T12:00:00"])("rejects invalid endedAt %s", async (value) => {
+    const { dir, path } = fixture();
+    const before = readFileSync(path, "utf8");
+    await expect(closeWorkflow(id, dir, { endedAt: value })).rejects.toThrow(/endedAt/);
+    expect(readFileSync(path, "utf8")).toBe(before);
+  });
+  test("date-only timestamps and legacy normalization are supported on authorized close", async () => {
+    const { dir, path } = fixture({ integration_worktree_path: undefined, control_worktree_path: "/fixture/integration" });
+    const closed = await closeWorkflow(id, dir, { endedAt: "2026-09-12" });
+    expect(closed.integration_worktree_path).toBe("/fixture/integration");
+    expect(closed.ended_at).toBe("2026-09-12");
+    expect(readFileSync(path, "utf8")).not.toContain("control_worktree_path");
+  });
+  test.each(["missing", "malformed"])("refuses %s snapshot", async (kind) => {
+    const { dir, path } = fixture();
+    if (kind === "missing") rmSync(path); else writeFileSync(path, "{");
+    await expect(closeWorkflow(id, dir, { endedAt })).rejects.toThrow();
+    expect(existsSync(path)).toBe(kind !== "missing");
+    if (kind === "malformed") expect(readFileSync(path, "utf8")).toBe("{");
+  });
+  test("reads a lease claimed while waiting for the snapshot lock", async () => {
+    const { dir, path, snapshot } = fixture();
+    const lock = join(dir, ".status-write.lockdir");
+    mkdirSync(lock); // another writer holds the same filesystem lock
+    const pending = closeWorkflow(id, dir, { endedAt });
+    const rejection = pending.then(() => null, (error: Error) => error);
+    await Bun.sleep(40);
+    writeFileSync(path, JSON.stringify({ ...snapshot, plans: [legacyRow({ execution_lease: lease })] }));
+    const claimed = readFileSync(path, "utf8");
+    rmSync(lock, { recursive: true });
+    expect(await rejection).toBeInstanceOf(Error);
+    expect((await rejection)?.message).toContain("lease");
+    expect(readFileSync(path, "utf8")).toBe(claimed);
+  });
+  test("pins the store for the locked read and write without consulting disk", async () => {
+    const { dir, path, snapshot } = fixture({ status: "paused" });
+    writeFileSync(path, "{invalid disk snapshot");
+    const puts: ArtifactDoc[] = [];
+    const recording: ArtifactStore = {
+      async get<T>(ref): Promise<T> {
+        expect(ref).toEqual({ kind: "snapshot", key: id });
+        expect(existsSync(join(dir, ".status-write.lockdir"))).toBe(true);
+        setArtifactStore({ async get() { throw new Error("wrong store"); }, async put() { throw new Error("wrong store"); } });
+        return snapshot as T;
+      },
+      async put(doc) { expect(existsSync(join(dir, ".status-write.lockdir"))).toBe(true); puts.push(doc); },
+    };
+    setArtifactStore(recording);
+    await closeWorkflow(id, dir, { endedAt });
+    expect(puts).toHaveLength(1);
+    expect(puts[0]?.key).toBe(id);
+    expect(readFileSync(path, "utf8")).toBe("{invalid disk snapshot");
+  });
+  test("refuses mismatched FsStore path before creating a directory", async () => {
+    const { root } = fixture();
+    const dir = join(root, "elsewhere", id);
+    await expect(closeWorkflow(id, dir, { endedAt })).rejects.toThrow(/routed writer path mismatch/);
+    expect(existsSync(dir)).toBe(false);
+  });
+  test("terminal predicate checks only the enum", () => {
+    expect(isTerminalSnapshot({ status: "completed" } as never)).toBe(true);
+    expect(isTerminalSnapshot({ status: "running" } as never)).toBe(false);
+    expect(isTerminalSnapshot({ status: "paused" } as never)).toBe(false);
   });
 });
