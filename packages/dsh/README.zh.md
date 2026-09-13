@@ -56,7 +56,7 @@ dsh plugin --profile headless add @mstar-harness/dsh
 **Headless 使用注意事项**（已在 dsh 0.1.0-rc.6 上验证）：
 
 - **一次性 turn 模型**——runner 把任务作为一条 user message 提交，agent 转入 idle（`whenIdle()`）后即退出；它**不会**等待 `run_in_background` 子任务。前台 subagent 派发可用（创建子会话、结果回到父会话）；后台 QC-tri 式并行在进程内不会完成——要么前台派发 QC 席（串行墙钟时间），要么让 agent 在结束 turn **之前**用 `tool-subagent-control` 收集完后台结果。
-- **无交互通道**——`ask_user_question` 与审批提示 fail-closed（没有应答者）。无人值守运行用 `DSH_PERMISSION_MODE=danger-full-access`（sandbox `danger-full-access` + approval `never`）；交互式 Prepare 流程（grill-me）属于 web profile。
+- **无交互通道**——没有可用应答者时，`ask_user_question` 与审批提示会 fail-closed。无人值守运行应保留受限权限预设（`workspace-write` 搭配 approval `ask`，或使用 `read-only` 进行只读检查），并在开始工作前核实会话实际生效的权限。仅执行该边界内已允许的操作；若某项操作需要审批，停止该操作并通过 web profile 获取审批。不要通过解除沙箱限制来绕过缺失的审批通道。交互式 Prepare 流程（grill-me）属于 web profile。
 - **默认模型解析**——headless 不组合 fallbacks 行，因此 settings 里 `agent-default-model` 钉在 `FallbacksChain` 会以 `NO_ADAPTER` 失败（web profile 的产物）。把默认模型指向真实 provider，或同样把 `dsh-llm-fallbacks` 装进 headless profile（注意：已发布的 dsh 0.1.0-rc.6 上，fallbacks 的 settings 集成早于 `SettingsProvider.installSection` API，虚拟适配器不会注册——随 dsh ≥ 0.1.2-alpha 解决）。
 
 ### Configuration
