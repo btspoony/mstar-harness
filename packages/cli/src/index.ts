@@ -129,6 +129,7 @@ import {
   type WorktreeTrack,
 } from "@mstar-harness/engine";
 import { verifyPlanExecutionLease } from "./lease-verify";
+import { registerSddEvidenceCommands } from "./sdd-evidence";
 import { runMigrateCommand, type MigrateCliOptions } from "./commands/migrate";
 import { validateAgentPlugin } from "./agent-plugins";
 import { buildModelAssignments } from "./assignment";
@@ -1831,6 +1832,10 @@ sddCommand
       failScript(error, "sdd exec");
     }
   });
+
+// Local SDD test-evidence facility: capture + read-only verify, registered
+// beside the existing sdd commands; `sdd exec` stays untouched.
+registerSddEvidenceCommands(sddCommand);
 
 const iterationCommand = program
   .command("iteration")

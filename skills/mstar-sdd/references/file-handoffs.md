@@ -69,6 +69,24 @@ For appended fixes, begin each new block with `## Verification round: <concrete 
 
 Replace every placeholder with actual evidence. Unknown or duplicate modes within the active round, missing/empty/placeholder fields, and bare `Tests: N/A` fail; do not copy the template as a report. `assertSddTddTriple` / `mstar lint <task-report>` validate structure only. PM/QC check the actual changed range, applicability and evidence honesty; the checker cannot establish that commands ran or intercept arbitrary shell execution. For policy changes, record the before/after expectation and triggering scenario alongside the concrete check; no broad model-eval matrix is implied.
 
+### Captured check evidence (`sdd evidence`)
+
+An already-authorized check can run **once** and leave version-bound raw evidence in canonical SDD for read-only review: reviewers inspect the retained bundle instead of repeating the child command. Division of labor: **PM publishes the fixed, immutable task capture request** (task-specific JSON naming context, coverage declaration, declared inputs and selected environment keys); the **developer captures** the already-authorized check with it; QC/QA only inspect and verify — they never repeat the recorded child. The capture request is a separate immutable artifact, never the rotating `context.json`; no hosted leaf resolves it as a checkout selector. Capture authorizes nothing by itself: it neither dispatches agents nor grants test/full-suite/E2E permission.
+
+Exact public command shapes (angle-bracket terms are required CLI values):
+
+```text
+mstar sdd evidence capture --request <absolute-task-request.json> -- <executable> [args...]
+mstar sdd evidence verify --sdd-dir <absolute-dir> --plan <id> --task <id> --run <uuid> [--target <absolute-target.json>]
+```
+
+- Capture runs the child once (literal argv, no shell), POSIX linux/darwin only (unsupported hosts refuse before spawn), and retains `{SDD_DIR}/evidence/<run-uuid>/` with fixed `record.json`, `stdout.log`, `stderr.log`; every retry is a fresh run UUID. Capture exits: child exit code preserved; missing executable 127; timeout 124; signal 128+n (parent SIGINT 130 / SIGTERM 143); gate/IO refusal 1; usage 2. Cite the raw log paths as evidence links — not paraphrased output.
+- `verify` is read-only and portable: it never runs the recorded child, discovery or version probes, writes no assessment artifact, and emits exactly one JSON assessment. Without `--target`, exit 0 means complete **integrity only** — a retained failed run still verifies with outcome `failed` (stderr: `integrity only; outcome=<value>; acceptance not assessed`). With `--target`, exit 0 means reuse **candidate** (stderr adds `reuse candidate; coverage review required`); every non-candidate exits 1; usage 2.
+- Four outputs stay separate everywhere — **integrity** (bundle complete/unaltered), **outcome** (recorded process result), **target applicability** (`not-assessed`/`candidate`/`changed`/`uncertain`), **coverage judgment** (always `review-required` in v1). No exit code or record field decides acceptance: there is no parser promise, no pass/fail counts and no automatic coverage inference (`counts` stays null in v1) — a reviewer judges coverage.
+- Reuse semantics (first match): tested bytes equal after a later commit or a docs-only change stay reuse candidates; a changed shared runtime/config/fixture/dependency input names the affected gap (`changed`); failed/incomplete proof, unknown input scope or a different repository stays `uncertain` — a pre-fix failure is retained as `failed` and never relabeled a pre-feature baseline; without a target the result is `not-assessed`, never candidate. An empty environment allowlist or a lockfile-only dependency declaration is the caller's reviewed assumption, not automatic completeness.
+- Non-executable documentation/policy never manufactures capture evidence — it uses `Verification mode: scoped-check` above. Historical manual evidence stays manual/unverified: cite it with provenance and reviewer reasoning; NEVER retrofit it into a v1 runner record.
+- The old `mstar sdd exec` entry is unchanged and stays PM-only serialized launch (§ Bound child launch); hosted leaves never use it for their assigned checks.
+
 ## After implementer DONE
 
 PM sets `FEATURE_CWD` from the completed task's immutable Assignment `Worktree path`, verifies its assigned branch, and restores context to that same checkout/branch. Generate the task-specific review package serially from this path; do not use the PM shell cwd for task endpoints. Leaves keep their dispatched inputs unchanged.

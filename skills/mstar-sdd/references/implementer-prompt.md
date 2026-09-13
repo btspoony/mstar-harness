@@ -50,7 +50,7 @@ Dispatch:
     ## Your job
 
     1. Implement exactly what the brief specifies
-    2. Run only the assigned affected unit tests; for non-executable docs/policy, use real scoped-check evidence per file-handoffs.md § Verification evidence
+    2. Run only the assigned affected unit tests; for non-executable docs/policy, use real scoped-check evidence per file-handoffs.md § Verification evidence. When the Assignment names a PM-fixed capture request, capture the authorized check once with `mstar sdd evidence capture --request <absolute-task-request.json> -- <executable> [args...]` and cite the retained run's record/raw logs (same section) instead of ad-hoc reruns
     3. Commit on Working branch
     4. Self-review only the task diff and directly affected contracts
     5. Write report file; return short summary only
