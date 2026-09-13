@@ -6,6 +6,16 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [3.9.0] - 2026-09-13
+
+### Changed
+
+- Unify active lifecycle branch checks across hosts, retain parallel track ownership, bound SDD Git probes, and preserve integration-cwd workflow selection.
+
+- Version alignment with harness **3.9.0**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **3.9.0**.
+
 ## [3.8.3] - 2026-09-12
 
 ### Changed

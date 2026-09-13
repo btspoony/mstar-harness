@@ -6,6 +6,18 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [3.9.0] - 2026-09-13
+
+### Bundled harness skills (`harness-skills/` at publish)
+
+- Added a **pure SDD test-evidence contract** in the engine: record schema + validation (`validateSddEvidenceRecord`), artifact verification (`verifySddEvidence`), deterministic two-pass input snapshot digests (`evidenceInputDigest`) and first-match reuse applicability (`assessSddEvidenceReuse`) that keeps integrity, process outcome, input applicability and coverage as four separate outputs — unknown dependency/runtime/environment scope stays uncertain and is never silently a reuse candidate.
+- Added scoped **`mstar sdd evidence capture|verify`** CLI commands: one recorded execution of an already-authorized check retains literal argv (no shell), separate raw stdout/stderr logs, the tagged outcome and bounded input/tool/environment fingerprints under `{SDD_DIR}/evidence/<run-uuid>`; every retry gets a new run id. Read-only verify never re-runs the recorded child, reports integrity-only without `--target`, and emits a candidate/changed/uncertain verdict with `--target`. Capture supports POSIX linux/darwin in v1 with bounded logs, inputs, snapshots and timeout; the old `sdd exec` and manual scoped-check reports are unchanged.
+- Wired the handoff into the skill corpus: PM publishes the fixed capture request, developers capture authorized checks, QC reviews code/coverage without executing, and QA maps acceptance criteria to the retained record (with an explicit AC/run/integrity/outcome/applicability/coverage/gap table) instead of repeating child commands.
+
+- Version alignment with harness **3.9.0** (no OpenCode package API change).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **3.9.0**.
+
 ## [3.8.3] - 2026-09-12
 
 ### Bundled harness skills (`harness-skills/` at publish)
