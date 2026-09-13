@@ -159,7 +159,7 @@ function errnoLabel(error: unknown): string {
 }
 
 function bound(text: string, max = MAX_DIAGNOSTIC): string {
-  return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
+  return text.length <= max ? text : `${text.slice(0, max - 1)}\u2026`;
 }
 
 function v1Limits(timeoutMs: number = TIMEOUT_DEFAULT_MS): EvidenceLimits {

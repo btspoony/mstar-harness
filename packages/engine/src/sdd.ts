@@ -261,7 +261,7 @@ export function sddWorkspace(planId: string, opts: SddWorkspaceOptions = {}): st
  // worktree itself. Refuse, never silently redirect.
         throw new SddScriptError(
           `mstar sdd workspace: CONTROL_ROOT / MSTAR_CONTROL_ROOT "${supplied}" is a linked (integration/foreign) checkout of the main worktree "${main.root}".\n` +
-            `  The process control root is the main worktree itself — refusing to redirect the process SSOT.\n` +
+            `  The process control root is the main worktree itself \u2014 refusing to redirect the process SSOT.\n` +
             `  Re-run with MSTAR_CONTROL_ROOT=${main.root}`,
           1,
         );
@@ -289,7 +289,7 @@ export function sddWorkspace(planId: string, opts: SddWorkspaceOptions = {}): st
  // linked-checkout write.
       throw new SddScriptError(
         `mstar sdd workspace: cannot verify the main worktree from cwd ${cwd} (git worktree discovery failed, git is unavailable, or the directory is not a Git worktree).\n` +
-          `  Refusing to resolve or create any SDD tree without a verified main worktree — no second process-SSOT tree is ever created under a linked checkout.\n` +
+          `  Refusing to resolve or create any SDD tree without a verified main worktree \u2014 no second process-SSOT tree is ever created under a linked checkout.\n` +
           `  Re-run with MSTAR_CONTROL_ROOT=<main-repo-root> or: mstar sdd workspace ${planId} <main-repo-root>`,
         1,
       );
@@ -332,7 +332,7 @@ export function sddWorkspace(planId: string, opts: SddWorkspaceOptions = {}): st
   if (harnessCheckout !== null && harnessCheckout !== root) {
     throw new SddScriptError(
       `mstar sdd workspace: harness root "${harnessDir}" resolves inside Git checkout "${harnessCheckout}", not the verified main worktree "${root}".\n` +
-        `  Refusing to redirect the process SSOT into a linked checkout — resolve MSTAR_HARNESS_DIR / .mstarc harness_dir relative to the main worktree.`,
+        `  Refusing to redirect the process SSOT into a linked checkout \u2014 resolve MSTAR_HARNESS_DIR / .mstarc harness_dir relative to the main worktree.`,
       1,
     );
   }
@@ -744,7 +744,7 @@ function throwUsage(message: string): never {
 function recordedMainWorktreeBranch(planFile: string): string {
   try {
     const text = readFileSync(planFile, "utf8");
-    const match = text.match(/^\s*\*{0,2}Main worktree branch\*{0,2}\s*[:：][ \t]*(\S+)/m);
+    const match = text.match(/^\s*\*{0,2}Main worktree branch\*{0,2}\s*[:\uff1a][ \t]*(\S+)/m);
     return match ? match[1]! : "";
   } catch {
     return "";

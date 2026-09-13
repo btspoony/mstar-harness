@@ -57,7 +57,7 @@ export function scanActiveLifecycleBranches(harnessDir: string, governingWorkflo
     return {
       kind: "refusal",
       code: "worktree.l1.lifecycle-register-unreadable",
-      detail: `${registerPath}: not a readable v2 root register (version 2 + workflows[]) — the active lifecycle set cannot be enumerated`,
+      detail: `${registerPath}: not a readable v2 root register (version 2 + workflows[]) \u2014 the active lifecycle set cannot be enumerated`,
     };
   }
   let workflowsDir: string;
@@ -73,7 +73,7 @@ export function scanActiveLifecycleBranches(harnessDir: string, governingWorkflo
       return {
         kind: "refusal",
         code: "worktree.l1.lifecycle-register-unreadable",
-        detail: `${registerPath}: malformed workflows[] entry — a registered active lifecycle cannot be identified`,
+        detail: `${registerPath}: malformed workflows[] entry \u2014 a registered active lifecycle cannot be identified`,
       };
     }
     const id = (entry as Record<string, unknown>).id as string;

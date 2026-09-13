@@ -567,7 +567,7 @@ export function l1PreDispatchCheck(input: L1PreDispatchInput, opts: BranchProbeO
       mainWorktree.root,
       integrationWorktreePath,
       "worktree.l1.integration-equals-main",
-      `integration worktree "${integrationWorktreePath}" is the same Git checkout as the main worktree "${mainWorktree.root}" (plan "${planId}") — the integration checkout is the sole merge cwd and must be dedicated`,
+      `integration worktree "${integrationWorktreePath}" is the same Git checkout as the main worktree "${mainWorktree.root}" (plan "${planId}") \u2014 the integration checkout is the sole merge cwd and must be dedicated`,
       "use a dedicated integration checkout on branch.integration (git worktree add <path> <integration-branch>) and record it as integration_worktree_path",
     );
     if (v !== null) violations.push(v);
@@ -578,7 +578,7 @@ export function l1PreDispatchCheck(input: L1PreDispatchInput, opts: BranchProbeO
       integrationWorktreePath,
       leaseWorktreePath,
       "worktree.l1.lease-equals-integration",
-      `execution_lease.worktree_path "${leaseWorktreePath}" is the same Git checkout as the integration worktree "${integrationWorktreePath}" (plan "${planId}") — the feature worktree must be distinct from both main and integration`,
+      `execution_lease.worktree_path "${leaseWorktreePath}" is the same Git checkout as the integration worktree "${integrationWorktreePath}" (plan "${planId}") \u2014 the feature worktree must be distinct from both main and integration`,
       "use a distinct feature worktree for the plan (git worktree add <path> <working-branch>) and update the lease",
     );
     if (v !== null) violations.push(v);
