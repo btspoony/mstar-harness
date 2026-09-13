@@ -44,6 +44,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { GateResult, Severity, ValidationResult } from "./core.js";
+import { validateStatusV2, type StatusV2Doc } from "./status.js";
 import { LEGACY_WORKTREE_PATH_CODE, isTerminalSnapshot, validateWorkflowSnapshot, type WorkflowSnapshot } from "./workflow.js";
 
 const COMPASS_STATUSES = ["active", "locked", "completed"] as const;
@@ -517,11 +518,14 @@ function hasLeftoverLease(snapshotDoc: SnapshotDoc): boolean {
  * canonical reader accepts and migrates it) in a
  * terminal status (completed | failed | stopped, T1 `isTerminalSnapshot`),
  * no `plans[].execution_lease` or top-level `integration_merge_lease`
- * survived the close, and the root `status.json` no longer registers the
+ * survived the close, and the root `status.json` validates as a v2 registry
+ * (`validateStatusV2`, structure-only) and no longer registers the
  * workflow (removal-at-terminal).
  *
  * Deliberately does NOT verify remote merge evidence or physical cleanup —
- * the gate only reads local state. An invalid/unreadable ROOT is a
+ * the gate only reads local state. An invalid/unreadable ROOT — any
+ * `validateStatusV2` failure (non-v2 version, missing `updated_at`,
+ * malformed `workflows[]` or entries) — is a
  * violation (`PHASE6_INVALID_ROOT`): it is not proof of the entry's
  * absence. The lease probe runs on terminal documents only — mid-flight
  * leases on a running lifecycle are legitimate and the actionable code is
@@ -580,8 +584,16 @@ export function evaluatePostMergeClose(snapshotDoc: SnapshotDoc, rootDoc: unknow
     );
   }
   const workflowId = isPlainObject(snapshotDoc) && typeof snapshotDoc.id === "string" ? snapshotDoc.id : null;
-  const workflows = isPlainObject(rootDoc) && Array.isArray(rootDoc.workflows) ? rootDoc.workflows : null;
-  if (workflows === null) {
+  // Full v2 root validation, not a minimal "workflows is an array" probe: a
+  // malformed registry (non-v2 version, missing `updated_at`, malformed
+  // `workflows[]` entries) must fail closed as PHASE6_INVALID_ROOT — an
+  // invalid root is not proof that the entry is gone, and the minimal probe
+  // false-PASSed whenever the workflow id was absent from an invalid
+  // registry. Doc input without a harness dir is structure-only
+  // (`validateStatusV2`); the removal-at-terminal snapshot invariants are
+  // the caller's deployment-level checks, not this pure gate's.
+  const rootGate = validateStatusV2(rootDoc as StatusV2Doc);
+  if (!rootGate.ok) {
     violations.push(
       violation(
         "high",
@@ -590,7 +602,7 @@ export function evaluatePostMergeClose(snapshotDoc: SnapshotDoc, rootDoc: unknow
         "Repair or migrate {HARNESS_DIR}/status.json to the v2 shape, then re-run the gate",
       ),
     );
-  } else if (workflowId !== null && workflows.some((entry) => isPlainObject(entry) && entry.id === workflowId)) {
+  } else if (workflowId !== null && (rootDoc as StatusV2Doc).workflows.some((entry) => entry.id === workflowId)) {
     violations.push(
       violation(
         "high",

@@ -463,6 +463,28 @@ describe("evaluatePostMergeClose — Phase 6 post-merge close local-state gate (
     }
   });
 
+  test("array-valued workflows[] alone is not a readable v2 registry — v1-versioned root → PHASE6_INVALID_ROOT", () => {
+    // Greptile P1: the minimal "workflows is an array" probe passed a
+    // `{ version: 1, workflows: [] }` root as readable, so the absent entry
+    // produced a false PASS. The gate validates the root with the engine v2
+    // root validator — a non-v2 version fails closed.
+    const result = evaluatePostMergeClose(phase6Snapshot(), { version: 1, workflows: [] });
+    expect(result.ok).toBe(false);
+    expect(result.violations.some((v) => v.code === "PHASE6_INVALID_ROOT")).toBe(true);
+  });
+
+  test("valid-version root missing updated_at → PHASE6_INVALID_ROOT", () => {
+    const result = evaluatePostMergeClose(phase6Snapshot(), { version: 2, workflows: [] });
+    expect(result.ok).toBe(false);
+    expect(result.violations.some((v) => v.code === "PHASE6_INVALID_ROOT")).toBe(true);
+  });
+
+  test("valid v2 root carrying a malformed workflow entry → PHASE6_INVALID_ROOT", () => {
+    const result = evaluatePostMergeClose(phase6Snapshot(), phase6Root([{ id: "wf-1" }]));
+    expect(result.ok).toBe(false);
+    expect(result.violations.some((v) => v.code === "PHASE6_INVALID_ROOT")).toBe(true);
+  });
+
   test("root still registers the workflow → PHASE6_ROOT_ENTRY_PRESENT", () => {
     const result = evaluatePostMergeClose(
       phase6Snapshot(),
