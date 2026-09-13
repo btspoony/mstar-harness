@@ -626,7 +626,7 @@ async function walkDirectory(
   entries: EvidenceInputEntry[],
 ): Promise<void> {
   if (ctx.stop || !checkDeadline(ctx)) return;
-  let dir: fs.promises.Dir;
+  let dir: fs.Dir;
   try {
     dir = await fsp.opendir(absPath);
   } catch (error) {
