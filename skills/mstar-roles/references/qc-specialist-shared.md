@@ -21,7 +21,7 @@ Your output is a structured QC report plus Completion Report.
 
 **Scope:** follow **`mstar-harness-core`** § 定向执行与验证边界. Initial review covers assigned changed hunks and directly affected interfaces; reuse L2 evidence. Re-review covers only assigned findings and fix delta. Seat count never authorizes full-repository review or fresh global exploration.
 
-**Budget and stopping (hard):** honour the Assignment **`Budget`**; when it is omitted, the default in the core section applies — it may be tightened, never loosened. Follow past the assigned range only on a must-fix trail. On reaching the budget, stop expanding: keep the verdict for what was reviewed and declare `Truncated coverage:` in the report `## Scope`. A cap stop is **not** `Unconfirmed` — the evidence channel was intact, only scope was cut; `Unconfirmed` stays reserved for a failed channel.
+**Budget and stopping (hard):** honour the Assignment **`Budget`** and **`Return shape`** (return the declared verdict + findings; a clean round returns `findings: []` explicitly instead of prose); when `Budget` is omitted, the default in the core section applies — it may be tightened, never loosened. Follow past the assigned range only on a must-fix trail. On reaching the budget, stop expanding: keep the verdict for what was reviewed and declare `Truncated coverage:` in the report `## Scope`. A cap stop is **not** `Unconfirmed` — the evidence channel was intact, only scope was cut; `Unconfirmed` stays reserved for a failed channel. The Assignment-side presence of `Budget` and `Return shape` is machine-checked by `mstar dispatch validate`, and the report-side `Truncated coverage:` / verdict pairing by `mstar qc validate-report` (see the engine check in **`mstar-review-qc`** § 席位预算与截断).
 
 **Do (L3):** Read `git diff` / review-package; reason about correctness, security, contracts, maintainability, reliability; flag coverage **gaps in the diff** (missing tests for changed behavior); write findings with evidence from source.
 
@@ -75,6 +75,7 @@ Write the Assignment-provided path under **`{SDD_DIR}/review/{report_suffix}.md`
 When Assignment includes **`QC re-review: targeted`**:
 
 - Edit the **same** bundle `{report_suffix}.md` — add **`## Revalidation`**, update frontmatter verdict/`generated_at`.
+- **Refresh the current state in place**: `## Summary` and the `## Findings` sections must describe the state AFTER the fix delta (a closed finding leaves its section, counts drop), so the report carries exactly ONE tally. `## Revalidation` records the process — what was re-checked, findings closed/kept per ID — and never holds a second count. Leaving the original `## Summary` counts in place while the verdict moves to `Approve` makes the report contradict itself.
 - Do **not** create `qcN-rev2.md` on this path.
 - Full tri re-review → new basenames per `mstar-artifacts/references/plan-files-and-reports.md`.
 

@@ -87,6 +87,7 @@ import {
   computePrTally,
   prReviewReportPath,
   validatePrReviewReport,
+  validateQcReport,
   pickReviewBranchName,
   planReviewPost,
   PR_REVIEW_TIER_BUDGETS,
@@ -1975,11 +1976,17 @@ dispatchCommand
         );
       }
       const text = fs.readFileSync(file, "utf8");
+      // Header region only — the engine's Assignment parsers
+      // (`parseAssignmentFields` / `parseAssignmentBranchForms`) scope their
+      // own input, so role, branch form and `direct on` exception are read
+      // from the Assignment header, never from a template line quoted in the
+      // task body. Pass the raw file text: the scope belongs to the engine
+      // grammar, not to this call site.
 
- // Read-only orientation roles (scout/explore, engine SSOT) skip the
- // branch-form gate AND the default-branch gate \u2014 no writable work on a
- // branch : `mstar dispatch validate` on a scout
- // Assignment without a Working branch exits 0.
+// Read-only orientation roles (scout/explore, engine SSOT) skip the
+// branch-form gate AND the default-branch gate \u2014 no writable work on a
+// branch : `mstar dispatch validate` on a scout
+// Assignment without a Working branch exits 0.
       const readOnly = isReadOnlyAssignmentRole(parseAssignmentFields(text).executeAs ?? "");
       const violations = [...validateAssignmentFields(text, { writable: readOnly ? false : undefined }).violations];
 
@@ -3997,6 +4004,36 @@ prReviewCommand
       if (!gate.ok) process.exitCode = 1;
     } catch (error) {
       failScript(error, "pr-review validate-report");
+    }
+  });
+
+// ---------------------------------------------------------------------------
+// qc validate-report — thin CLI wrapper over the engine's QC seat-report
+// validator (qcreview.ts): structural contract only, never review content.
+// ---------------------------------------------------------------------------
+
+const qcCommand = program.command("qc").description(
+  "QC seat-report contract (engine-backed): frontmatter fields, verdict vocabulary, body-verdict " +
+    "agreement, Summary/Findings count parity, truncation/verdict coherence " +
+    "(mstar-review-qc SKILL.md \u00a7 seat budgets and truncation)",
+);
+
+qcCommand
+  .command("validate-report")
+  .description(
+    "Validate a saved QC seat report against the machine-readable contract (frontmatter fields, verdict vocabulary, " +
+      "body verdict agreement, Summary/Findings count parity, truncation/verdict coherence; exit 1 with violations printed)",
+  )
+  .argument("<file.md>", "Saved QC seat report markdown file")
+  .action((reportFile: string) => {
+    try {
+      const abs = resolveCliPath(reportFile);
+      if (!fs.existsSync(abs)) throw new Error(`report file not found: ${abs}`);
+      const gate = validateQcReport(fs.readFileSync(abs, "utf8"));
+      printChecklist(abs, gate);
+      if (!gate.ok) process.exitCode = 1;
+    } catch (error) {
+      failScript(error, "qc validate-report");
     }
   });
 

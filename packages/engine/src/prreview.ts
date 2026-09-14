@@ -588,7 +588,7 @@ function violation(severity: Severity, code: string, message: string, fix?: stri
  * tails stripped, surrounding quotes trimmed). Returns null when the fence
  * is missing. Unreadable lines surface as violations, never throws.
  */
-function parseReportFrontmatter(text: string): { doc: Record<string, string>; unreadable: number } {
+export function parseReportFrontmatter(text: string): { doc: Record<string, string>; unreadable: number } {
   const doc: Record<string, string> = {};
   const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/);
   if (lines.length === 0 || lines[0].trim() !== "---") return { doc, unreadable: 0 };
@@ -808,7 +808,7 @@ export function validatePrReviewReport(text: string): GateResult {
 }
 
 /** True when `text` opens with a `---` fenced frontmatter block. */
-function lines_missing_fence(text: string): boolean {
+export function lines_missing_fence(text: string): boolean {
   const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/);
   return lines.length === 0 || lines[0].trim() !== "---";
 }

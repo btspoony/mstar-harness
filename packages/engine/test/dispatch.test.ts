@@ -14,6 +14,12 @@
  * `<base>` is flagged (never assume `main`): `mstar-branch-worktree`
  * SKILL.md § "Assignment 要求（PM）" + § "`<base>` 与叠分支（stacked
  * branches）".
+ * - Review/audit round-bounding fields — an Assignment whose `Execute as`
+ * names a review seat, or whose `Task category` starts with `audit`, must
+ * carry non-empty `Budget (review / QC seats)` and `Return shape (review / QC
+ * seats)` values that are not `N/A`; the cap may only tighten the default:
+ * `mstar-harness-core` SKILL.md
+ * § "定向执行与验证边界" + `mstar-review-qc` SKILL.md § "席位预算与截断（PM）".
  * - Default-protected-branch gate — no writable work on `main`/`master`
  * unless the Assignment carries an explicit `Branch policy: direct on
  * <branch> — <reason>` exception: `mstar-branch-worktree` SKILL.md
@@ -56,16 +62,18 @@ const VALID_ASSIGNMENT = `## Assignment
 **Plan Path**: .mstar/plans/20260808-example.md
 `;
 
-function assignment(overrides: Record<string, string>): string {
+function assignment(overrides: Record<string, string | undefined>): string {
   const base: Record<string, string> = {
     "Execute as": "fullstack-dev",
     Delegation: "forbidden",
     "Task category": "logic",
     "Working branch": "feature/foo",
   };
-  const merged = { ...base, ...overrides };
+  const merged: Record<string, string | undefined> = { ...base, ...overrides };
   const lines = ["## Assignment", ""];
   for (const [field, value] of Object.entries(merged)) {
+    // `undefined` overrides DROP the field — the missing-field probes rely on it.
+    if (value === undefined) continue;
     lines.push(`**${field}**: ${value}`);
   }
   return lines.join("\n") + "\n";
@@ -392,6 +400,229 @@ describe("validateAssignmentFields — branch-form matrix (writable)", () => {
 `;
     const r = validateAssignmentFields(text, { writable: false });
     expect(r.ok).toBe(true);
+  });
+});
+
+describe("validateAssignmentFields — review-seat / audit round bounding gate", () => {
+ // The gate is independent of `writable` — review seats are read-only
+ // assignments, so every probe here runs with `writable: false` unless it
+ // exercises the writable path explicitly.
+  const ROUND_FIELD_CODES = ["assignment.field.budget-missing", "assignment.field.return-shape-missing"];
+  const roundFieldViolations = (text: string) =>
+    validateAssignmentFields(text, { writable: false }).violations.filter((v) =>
+      ROUND_FIELD_CODES.includes(v.code),
+    );
+  const budgetViolations = (text: string) =>
+    roundFieldViolations(text).filter((v) => v.code === "assignment.field.budget-missing");
+  const returnShapeViolations = (text: string) =>
+    roundFieldViolations(text).filter((v) => v.code === "assignment.field.return-shape-missing");
+  const COMPLETE_ROUND = {
+    "Budget (review / QC seats)": "<= 12 file opens / <= 10 minutes",
+    "Return shape (review / QC seats)": "verdict + findings; findings: [] when clean",
+  };
+
+  test("review seat without Budget → assignment.field.budget-missing (high, actionable fix)", () => {
+    const r = validateAssignmentFields(assignment({ "Execute as": "qc-specialist", ...COMPLETE_ROUND, "Budget (review / QC seats)": undefined }));
+    expect(r.ok).toBe(false);
+    const violation = r.violations.find((v) => v.code === "assignment.field.budget-missing");
+    expect(violation).toBeDefined();
+    expect(violation!.severity).toBe("high");
+    expect(violation!.message).toContain("qc-specialist");
+    expect(violation!.message).toContain("the field is absent");
+ // The fix must name the field label and the tighten-only rule — a PM
+ // reading only the violation can repair the Assignment.
+    expect(violation!.fix).toContain("Budget (review / QC seats)");
+    expect(violation!.fix).toContain("never loosen it");
+  });
+
+  test("review seat missing only Return shape → exactly assignment.field.return-shape-missing", () => {
+    const text = assignment({ "Execute as": "qa-engineer", ...COMPLETE_ROUND, "Return shape (review / QC seats)": undefined });
+    const r = validateAssignmentFields(text, { writable: false });
+    expect(r.ok).toBe(false);
+    expect(r.violations.map((v) => v.code)).toEqual(["assignment.field.return-shape-missing"]);
+    const violation = r.violations[0]!;
+    expect(violation.severity).toBe("high");
+    expect(violation.message).toContain("qa-engineer");
+    expect(violation.message).toContain("the field is absent");
+    expect(violation.fix).toContain("Return shape (review / QC seats)");
+  });
+
+  test("audit Task category gates a non-QC executor, one code per missing field", () => {
+    const r = validateAssignmentFields(
+      assignment({ "Execute as": "architect", "Task category": "audit" }),
+      { writable: false },
+    );
+    expect(r.ok).toBe(false);
+    expect(r.violations.map((v) => v.code)).toEqual([
+      "assignment.field.budget-missing",
+      "assignment.field.return-shape-missing",
+    ]);
+    expect(r.violations[0]!.message).toContain("audit round");
+    expect(r.violations[0]!.message).toContain("Task category: audit");
+  });
+
+  test("audit round passes with both fields; a `secondary` suffix still gates", () => {
+    expect(
+      validateAssignmentFields(
+        assignment({ "Execute as": "code-reviewer", "Task category": "audit", ...COMPLETE_ROUND }),
+      ).ok,
+    ).toBe(true);
+    expect(
+      roundFieldViolations(assignment({ "Execute as": "architect", "Task category": "audit (secondary)" })),
+    ).toHaveLength(2);
+ // `audit_secondary` is the same suffix written with an underscore — still a
+ // leading `audit` token, because only an ALPHANUMERIC next char excludes it.
+    expect(
+      roundFieldViolations(assignment({ "Execute as": "architect", "Task category": "audit_secondary" })),
+    ).toHaveLength(2);
+ // Only a LEADING `audit` triggers the gate — other categories stay untouched.
+    expect(roundFieldViolations(assignment({ "Execute as": "architect", "Task category": "deep" }))).toHaveLength(0);
+    expect(roundFieldViolations(assignment({ "Execute as": "architect", "Task category": "auditing" }))).toHaveLength(0);
+  });
+
+  test("implement round is unaffected by the round-bounding fields", () => {
+    const text = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Working branch**: feature/impl
+`;
+    expect(validateAssignmentFields(text).ok).toBe(true);
+  });
+
+  test("Budget (review / QC seats) satisfies the gate", () => {
+    const text = assignment({
+      "Execute as": "qc-specialist-2",
+      ...COMPLETE_ROUND,
+    });
+    expect(validateAssignmentFields(text).ok).toBe(true);
+  });
+
+  test("bare Budget label is recognized (parser no longer drops the field silently)", () => {
+    const text = assignment({
+      "Execute as": "code-reviewer",
+      Budget: "<= 6 file opens",
+      "Return shape": "verdict + findings",
+    });
+    expect(validateAssignmentFields(text).ok).toBe(true);
+  });
+
+  test("N/A never satisfies the gate (case-insensitive) — it is an implement / ops value", () => {
+    for (const value of ["N/A", "n/a", "N/a"]) {
+      const text = assignment({ "Execute as": "qa-engineer", ...COMPLETE_ROUND, "Budget (review / QC seats)": value });
+      const violations = budgetViolations(text);
+      expect(violations).toHaveLength(1);
+      expect(violations[0]!.message).toContain("N/A");
+    }
+    const returnShape = assignment({ "Execute as": "qa-engineer", ...COMPLETE_ROUND, "Return shape (review / QC seats)": "n/a" });
+    expect(returnShapeViolations(returnShape)).toHaveLength(1);
+    expect(returnShapeViolations(returnShape)[0]!.message).toContain("N/A");
+  });
+
+  test("empty Budget value does not satisfy the gate", () => {
+    const text = assignment({ "Execute as": "qc-specialist-3", ...COMPLETE_ROUND, "Budget (review / QC seats)": "" });
+    expect(budgetViolations(text)).toHaveLength(1);
+  });
+
+  test("@mention, case and trailing annotation still resolve to the seat", () => {
+    expect(budgetViolations(assignment({ "Execute as": "@QC-Specialist" }))).toHaveLength(1);
+    expect(
+      roundFieldViolations(
+        assignment({ "Execute as": "qc-specialist-2 (security lens)", ...COMPLETE_ROUND }),
+      ),
+    ).toHaveLength(0);
+  });
+
+  test("every review seat is gated; other roles are unaffected", () => {
+    for (const seat of ["qc-specialist", "qc-specialist-2", "qc-specialist-3", "code-reviewer", "qa-engineer"]) {
+      expect(roundFieldViolations(assignment({ "Execute as": seat }))).toHaveLength(2);
+    }
+    for (const role of ["fullstack-dev", "architect", "ops-engineer", "product-manager", "scout"]) {
+      expect(roundFieldViolations(assignment({ "Execute as": role, "Task category": "logic" }))).toHaveLength(0);
+    }
+  });
+
+  test("read-only review seat is gated (writable:false skips only the branch-form gate)", () => {
+    const text = `## Assignment
+
+**Execute as**: qc-specialist
+**Delegation**: forbidden
+**Task category**: review
+`;
+    const r = validateAssignmentFields(text, { writable: false });
+    expect(r.violations.map((v) => v.code)).toEqual([
+      "assignment.field.budget-missing",
+      "assignment.field.return-shape-missing",
+    ]);
+  });
+
+// Dispatch text routinely QUOTES the template labels in its task body (the
+// `## Task` heading is the header boundary), so the gate reads the header
+// region only — a body-only label must not satisfy it.
+  const HEADER_AND_BODY_LABELS = (labelLines: readonly string[]) => `## Assignment
+
+**Execute as**: qc-specialist
+**Delegation**: forbidden
+**Task category**: review
+**Working branch**: feature/review-seat-machine-gates
+
+## Task 1: Review the diff
+
+Reproduce this shape in your own header:
+${labelLines.join("\n")}
+`;
+
+  test("body-only round-bounding labels do not satisfy the gate", () => {
+    const r = validateAssignmentFields(
+      HEADER_AND_BODY_LABELS([
+        "**Budget (review / QC seats)**: <= 12 file opens",
+        "**Return shape (review / QC seats)**: verdict + findings",
+      ]),
+      { writable: false },
+    );
+    expect(r.ok).toBe(false);
+    expect(r.violations.map((v) => v.code)).toEqual([
+      "assignment.field.budget-missing",
+      "assignment.field.return-shape-missing",
+    ]);
+  });
+
+  test("the same labels in the header satisfy the gate (body scope is the only difference)", () => {
+    const r = validateAssignmentFields(
+      `## Assignment
+
+**Execute as**: qc-specialist
+**Delegation**: forbidden
+**Task category**: review
+**Working branch**: feature/review-seat-machine-gates
+**Budget (review / QC seats)**: <= 12 file opens
+**Return shape (review / QC seats)**: verdict + findings
+
+## Task 1: Review the diff
+
+Reproduce this shape in your own header:
+**Budget (review / QC seats)**: <= 12 file opens
+`,
+      { writable: false },
+    );
+    expect(r.ok).toBe(true);
+  });
+
+  test("body-only Working branch does not satisfy the branch-form gate", () => {
+    const text = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+
+## Task 1: Implement
+
+**Working branch**: feature/foo
+`;
+    expect(validateAssignmentFields(text).violations.map((v) => v.code)).toEqual([
+      "assignment.field.branch-missing",
+    ]);
   });
 });
 
@@ -726,6 +957,23 @@ describe("parseBranchPolicyDirectOnBranch — strict direct-on exception (CLI/pl
     expect(parseBranchPolicyDirectOnBranch(assignment({ "Working branch": "", "Branch policy": "merge to main" }))).toBeUndefined();
     expect(parseBranchPolicyDirectOnBranch(assignment({ "Working branch": "feature/foo" }))).toBeUndefined();
   });
+
+  test("header forms win over body-quoted ones (header region only)", () => {
+    const text = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Working branch**: main
+
+## Task 1: implement
+
+Example: **Working branch**: feature/body-only
+**Branch policy**: direct on main — hotfix
+`;
+    expect(parseAssignmentBranchForms(text)).toEqual({ workingBranch: "main" });
+    expect(parseBranchPolicyDirectOnBranch(text)).toBeUndefined();
+  });
 });
 
 describe("isReadOnlyAssignmentRole — scout/explore read-only roles", () => {
@@ -763,6 +1011,17 @@ Delegation: forbidden
     });
   });
 
+  test("captures round-bounding labels (parenthesized PM form and bare form)", () => {
+    expect(
+      parseAssignmentFields(`**Budget (review / QC seats)**: <= 12 file opens / <= 10 min\n`).budget,
+    ).toBe("<= 12 file opens / <= 10 min");
+    expect(parseAssignmentFields(`- **Budget**: 8 file opens\n`).budget).toBe("8 file opens");
+    expect(
+      parseAssignmentFields(`**Return shape (review / QC seats)**: verdict + findings\n`).returnShape,
+    ).toBe("verdict + findings");
+    expect(parseAssignmentFields(`- **Return shape**: verdict only\n`).returnShape).toBe("verdict only");
+  });
+
   test("last duplicate field line wins", () => {
     const text = `## Assignment
 
@@ -774,6 +1033,41 @@ Delegation: forbidden
 
   test("unrelated prose does not produce fields", () => {
     expect(parseAssignmentFields("This is not an assignment.\n- one: two\nNo fields.")).toEqual({});
+  });
+
+  test("reads the header region only — body-quoted field lines are ignored", () => {
+    const text = `## Assignment
+
+**Execute as**: architect
+**Delegation**: forbidden
+**Task category**: logic
+**Working branch**: feature/foo
+
+## Task 1: implement
+
+Example Assignment snippet: **Execute as**: scout
+**Budget (review / QC seats)**: <= 12 file opens
+`;
+    expect(parseAssignmentFields(text)).toEqual({
+      executeAs: "architect",
+      delegation: "forbidden",
+      taskCategory: "logic",
+      workingBranch: "feature/foo",
+    });
+  });
+
+  test("an already-sliced header parses identically (self-scoping is idempotent)", () => {
+    const text = `## Assignment
+
+**Execute as**: fullstack-dev
+**Working branch**: feature/foo
+
+# Change
+
+**Execute as**: qc-specialist
+`;
+    expect(parseAssignmentFields(assignmentHeaderRegion(text))).toEqual(parseAssignmentFields(text));
+    expect(parseAssignmentFields(text).executeAs).toBe("fullstack-dev");
   });
 });
 
@@ -1119,5 +1413,41 @@ An example Assignment template line: **Enforcement**: hard
     expect(result.enforcement).toEqual({ hard: true, source: "assignment" });
     expect(result.ok).toBe(true);
     expect(result.hardBlocked).toBe(false);
+  });
+
+  test("body-quoted branch form neither satisfies the branch gate nor redirects the default-branch gate", () => {
+    const text = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Working branch**: main
+
+## Task 1: implement
+
+Example: **Working branch**: feature/body-only
+`;
+    const result = composeDispatchGate(text, { caller: "project-manager" });
+    expect(result.ok).toBe(false);
+    // The HEADER form (`main`) is the branch the gate checks; had the body
+    // example been read, the gate would have checked `feature/body-only` and
+    // silently allowed work on the default branch.
+    expect(result.violations.some((v) => v.code === "dispatch.default-branch.protected")).toBe(true);
+  });
+
+  test("body-quoted `Execute as` cannot mask a self-dispatch (header region only)", () => {
+    const text = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Working branch**: feature/foo
+
+## Task 1: implement
+
+Example Assignment snippet: **Execute as**: scout
+`;
+    const result = composeDispatchGate(text, { caller: "fullstack-dev" });
+    expect(result.violations.some((v) => v.code === "dispatch.anti-recursion.self-type")).toBe(true);
   });
 });

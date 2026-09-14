@@ -6,6 +6,8 @@ Extension of `references/qc-specialist-shared.md`. Frontmatter and path rules re
 
 Write under the Assignment-provided **`{SDD_DIR}/review/qc#.md`** (`qc1`…`qc3` or `qc.md`). YAML frontmatter first (see `qc-specialist-shared.md`), then:
 
+**Machine-checked lines** (`mstar qc validate-report <report.md>`): the frontmatter fields `report_kind` / `reviewer` / `reviewer_index` / `plan_id` / `verdict` / `generated_at`; the body `**Verdict**:` line must agree with the frontmatter `verdict` (trailing prose is fine); each `## Summary` count must equal the top-level entries under the matching `## Findings` severity section — `## Summary` and `## Findings` are the report's SINGLE current state, so an in-place revalidation refreshes both instead of appending a second tally (`qc-specialist-shared.md` § Targeted re-review); `Approve` is refused while Critical/Warning counts are non-zero; `Unconfirmed` is refused while the report declares `Truncated coverage:`. A cap stop is not a channel failure — keep the earned verdict and write the truncation line.
+
 ```markdown
 # Code Review Report
 

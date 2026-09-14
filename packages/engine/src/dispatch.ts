@@ -8,6 +8,12 @@
  * present, non-empty; paste-only assignments missing fields are flagged):
  * `mstar-dispatch-gates` SKILL.md § "调度防串扰（强制）" + § 反模式（派发）
  * ("Assignment 已写、invoke 为零（paste-only）").
+ * - Assignment fields live in the Assignment HEADER region
+ *   ({@link assignmentHeaderRegion}) — the field parsers apply the region to
+ *   their own input, so no reader (validator, compose gate, CLI, host
+ *   adapter) ever sees a line after a `## Task` heading / `---` rule /
+ *   single-`#` heading, and a template label quoted in the task body can
+ *   never satisfy — or disable — the gate.
  * - Branch-field exactly-one rule + `<base>` requirement: `mstar-branch-worktree`
  * SKILL.md § "Assignment 要求（PM）" + § "`<base>` 与叠分支（stacked
  * branches）" ("若写新建但未写 `<base>`：实现侧应停下问 project-manager…
@@ -20,6 +26,16 @@
  * `mstar-dispatch-gates` SKILL.md § "QC tri-review（SDD 强制）" / "QC
  * 单席（例外）" / "QC targeted re-review" + `mstar-roles` SKILL.md
  * "QC reviewer" 参数表.
+ * - Review/audit round-bounding fields (`Budget` + `Return shape`, presence
+ * only, neither `N/A`): a dispatch whose `Execute as` names a review seat — or
+ * whose `Task category` starts with `audit` (an audit round may name an
+ * executor outside the QC seat set) — must carry
+ * `Budget (review / QC seats)` and `Return shape (review / QC seats)`; the cap
+ * may only tighten the default, never loosen it:
+ * `mstar-harness-core` SKILL.md § "定向执行与验证边界" ("只读审查席位有界")
+ * + `mstar-review-qc` SKILL.md § "席位预算与截断（PM）" + the PM Assignment
+ * template in dispatch-and-assignment.md (both labels required on review / QC
+ * rounds, `N/A` otherwise).
  * - Anti-recursion NEVER red line (dispatching agent's OWN role == the
  * dispatch's `Execute as`): `mstar-dispatch-gates` SKILL.md § "承接方反递归红线
  * （NEVER / DO NOT；leaf executor 必读）". The precheck compares the CALLER
@@ -49,6 +65,19 @@ export type AssignmentFields = {
   taskCategory?: string;
   workingBranch?: string;
   branchPolicy?: string;
+  /**
+   * `Budget (review / QC seats)` round cap. Required (present, non-empty,
+   * not `N/A`) on review-seat and audit rounds — see
+   * {@link REVIEW_SEAT_ROLES}. The value is prose (file opens / wall clock);
+   * it is never parsed numerically.
+   */
+  budget?: string;
+  /**
+   * `Return shape (review / QC seats)` — what the seat returns and how it
+   * stops. Same presence-only rule as {@link AssignmentFields.budget}, one
+   * violation code per field so the PM sees exactly which label is missing.
+   */
+  returnShape?: string;
 };
 
 export type ValidateAssignmentFieldsOptions = {
@@ -84,8 +113,40 @@ const REQUIRED_FIELDS: ReadonlyArray<{ key: keyof AssignmentFields; label: strin
   { key: "taskCategory", label: "Task category", code: "task-category" },
 ];
 
+/**
+ * Review seats whose dispatch must declare the round-bounding fields
+ * (mstar-harness-core § "定向执行与验证边界" — "只读审查席位有界"; the cap may
+ * only tighten the default). `code-reviewer` is the L2 task-review seat and
+ * `qa-engineer` the QA gate seat, so they carry the same bounded-round rule
+ * as the three QC seats. An `audit` `Task category` triggers the same fields
+ * independently — audit execution is read-only review work. */
+const REVIEW_SEAT_ROLES: readonly string[] = ["qc-specialist", "qc-specialist-2", "qc-specialist-3", "code-reviewer", "qa-engineer"];
+
+/**
+ * Assignment labels carrying the review-seat Budget cap. The PM template
+ * (dispatch-and-assignment.md) writes the parenthesized form; the bare
+ * `Budget` label is accepted too — it matches neither {@link REQUIRED_FIELDS}
+ * nor `Working branch` / `Branch policy`, so a hand-written dispatch would
+ * otherwise drop the field silently.
+ */
+const BUDGET_LABELS: readonly string[] = ["Budget (review / QC seats)", "Budget"];
+
+/** Labels carrying the review-seat `Return shape` (same parenthesized + bare pair). */
+const RETURN_SHAPE_LABELS: readonly string[] = ["Return shape (review / QC seats)", "Return shape"];
+
 function violation(severity: Severity, code: string, message: string, fix?: string): ValidationResult {
   return { ok: false, severity, code, message, fix };
+}
+
+/** Why a round-bounding field is unusable: absent, empty, or declared `N/A`. */
+function describeAbsence(value: string | undefined): string | undefined {
+  return value === undefined
+    ? "the field is absent"
+    : value === ""
+      ? "the field is empty"
+      : value.trim().toLowerCase() === "n/a"
+        ? 'the value is "N/A"'
+        : undefined;
 }
 
 /**
@@ -95,10 +156,18 @@ function violation(severity: Severity, code: string, message: string, fix?: stri
  * are accepted so the engine parser is the SINGLE grammar for Assignment
  * header fields (the Slice-2 opencode presence parser tolerated bullets;
  * its acceptance is folded into this parser, not forked —).
- */
+ *
+ * The function scopes its OWN input: it reads the {@link
+ * assignmentHeaderRegion} of whatever text it is handed, so any caller (host
+ * gate, CLI, plugin) may pass the whole dispatch/prompt — a field label
+ * quoted in the task body can never be read as a header field. An
+ * already-sliced header may be passed as well: a slice holds no body marker,
+ * so re-slicing is a no-op (idempotent). Every Assignment field/branch read
+ * therefore shares ONE header rule by construction, rather than by each call
+ * site remembering to pre-slice. */
 export function parseAssignmentFields(assignmentText: string): AssignmentFields {
   const fields: AssignmentFields = {};
-  for (const line of assignmentText.split(/\r?\n/)) {
+  for (const line of assignmentHeaderRegion(assignmentText).split(/\r?\n/)) {
     const match =
       line.match(/^[ \t]*(?:[-*][ \t]+)?\*\*\s*([^*:]+?)\s*\*\*\s*:\s*(.*)$/) ??
       line.match(/^[ \t]*(?:[-*][ \t]+)?([A-Za-z][A-Za-z -]*?)\s*:\s*(.*)$/);
@@ -112,6 +181,8 @@ export function parseAssignmentFields(assignmentText: string): AssignmentFields 
     }
     if (label === "Working branch") fields.workingBranch = value;
     else if (label === "Branch policy") fields.branchPolicy = value;
+    else if (BUDGET_LABELS.includes(label)) fields.budget = value;
+    else if (RETURN_SHAPE_LABELS.includes(label)) fields.returnShape = value;
   }
   return fields;
 }
@@ -152,9 +223,11 @@ const ASSIGNMENT_BODY_START_RE = /^(?:#{1,6}[ \t]+Task\b|-{3,}[ \t]*$|#[ \t])/m;
 /**
  * Slice an Assignment's header region — the text before the first body
  * marker (see {@link ASSIGNMENT_BODY_START_RE}). Returns the full text when
- * no marker is present. The Assignment enforcement flag is parsed against
- * THIS region only, so an example line `**Enforcement**: hard` quoted in the
- * task body cannot harden the dispatch. */
+ * no marker is present. This is the SINGLE header-scope rule: the Assignment
+ * field parsers ({@link parseAssignmentFields} plus the branch forms built
+ * on it) apply it to their own input, and the Assignment enforcement flag is
+ * parsed against THIS region, so an example line `**Enforcement**: hard`
+ * quoted in the task body cannot harden the dispatch. */
 export function assignmentHeaderRegion(assignmentText: string): string {
   const marker = assignmentText.match(ASSIGNMENT_BODY_START_RE);
   return marker !== null ? assignmentText.slice(0, marker.index) : assignmentText;
@@ -272,8 +345,9 @@ function parseWorkingBranchValue(
  * Parse an Assignment's branch forms via the engine's single parser
  * (`parseAssignmentFields` + {@link parseWorkingBranchValue}). Consumed by
  * the CLI `dispatch validate` gate-branch derivation and the opencode hook;
- * also the internal grammar behind `validateAssignmentFields`.
- */
+ * also the internal grammar behind `validateAssignmentFields`. Input may be
+ * the whole dispatch — the header scope is inherited from
+ * {@link parseAssignmentFields}. */
 export function parseAssignmentBranchForms(assignmentText: string): AssignmentBranchForms {
   const fields = parseAssignmentFields(assignmentText);
   const forms: AssignmentBranchForms = {};
@@ -304,7 +378,8 @@ export function parseAssignmentBranchForms(assignmentText: string): AssignmentBr
  * form (branch + non-empty reason; separator set [—–]|--|-); undefined when
  * absent or malformed — the default-branch gate recognizes explicit
  * direct-on exceptions only. Single engine grammar shared by CLI + plugin
- *. */
+ * (the header scope is inherited from {@link parseAssignmentBranchForms}, so
+ * a whole dispatch may be passed). */
 export function parseBranchPolicyDirectOnBranch(assignmentText: string): string | undefined {
   const directOn = parseAssignmentBranchForms(assignmentText).directOn;
   return directOn !== undefined && directOn.reason !== "" ? directOn.branch : undefined;
@@ -327,11 +402,23 @@ export function isReadOnlyAssignmentRole(roleId: string): boolean {
  *
  * Required: `Execute as` / `Delegation` / `Task category` present with
  * non-empty values (paste-only shells are caught here — every field missing).
- * Writable assignments must carry EXACTLY ONE branch form; `create <new>
+ * Review-seat and audit rounds must additionally declare both round-bounding
+ * fields, `Budget (review / QC seats)` and `Return shape (review / QC
+ * seats)` (one violation code per missing label). Writable assignments must
+ * carry EXACTLY ONE branch form; `create <new>`
  * from <base>` without `<base>` (incl. the dangling `create <new> from`
  * / `create from <base>` typos) and `Branch policy` without branch/reason
  * are flagged. The three core-field violations carry the legacy
- * `assignment.presence.*` codes as aliases. */
+ * `assignment.presence.*` codes as aliases.
+ *
+ * Every read is scoped to the Assignment HEADER region — the scope is
+ * applied by the field parsers themselves ({@link parseAssignmentFields} /
+ * {@link parseAssignmentBranchForms}), never the task body — the same rule
+ * {@link parseEnforcementFlag} follows at the compose gate. Dispatch text
+ * routinely quotes the field labels (template blocks, `## Task` bodies, the
+ * `**Task**:` line's own prose), and a quoted `**Budget (review / QC
+ * seats)**: …` line must not satisfy a gate the Assignment header left
+ * open. */
 export function validateAssignmentFields(assignmentText: string, opts: ValidateAssignmentFieldsOptions = {}): GateResult {
   const violations: ValidationResult[] = [];
   const fields = parseAssignmentFields(assignmentText);
@@ -339,6 +426,51 @@ export function validateAssignmentFields(assignmentText: string, opts: ValidateA
 
   for (const { key, label, code } of REQUIRED_FIELDS) {
     requireField(violations, fields[key], label, code);
+  }
+
+// Review/audit rounds are bounded (mstar-harness-core § 定向执行与验证边界);
+// `Budget` and `Return shape` are the PM's declared cap and stop condition and
+// the only machine-decidable part is their EXISTENCE — the values are prose,
+// never parsed numerically. The role token strips a leading `@` mention,
+// compares case-insensitively and takes the first whitespace token, so
+// `@QC-Specialist-2 (security lens)` still resolves to the seat. `Task
+// category: audit` is an independent trigger: mstar-harness-core maps `audit`
+// to `@code-reviewer`, but nothing forces the pairing, so an audit round whose
+// `Execute as` is outside the seat set would otherwise escape the gate. The
+// category token is read case-insensitively, tolerating a suffix (`audit`,
+// `audit (secondary)`, `audit_secondary`) but not a longer word (`auditing`).
+  const role = (fields.executeAs ?? "").trim().replace(/^@/, "").toLowerCase().split(/\s+/)[0] ?? "";
+  const reviewSeat = REVIEW_SEAT_ROLES.includes(role);
+  const category = (fields.taskCategory ?? "").replace(/^[*_`"'\s]+/, "").toLowerCase();
+  const auditRound = /^audit(?![A-Za-z0-9])/.test(category);
+  if (reviewSeat || auditRound) {
+    const subject = reviewSeat ? `review seat "${role}"` : `audit round (Task category: ${category})`;
+    // One code per field — the PM reads which label is missing off the code.
+    const boundingFields = [
+      {
+        code: "assignment.field.budget-missing",
+        label: "Budget",
+// The fix quotes the spec section title verbatim (Chinese). Code literals
+// stay pure-ASCII `\uXXXX` escapes per the ASCII literal lint (bun 1.2.17
+// misdecodes raw multi-byte UTF-8 in the CLI bundle); the runtime string is
+// identical. Section title: mstar-harness-core § 定向执行与验证边界.
+        fix: `add "**Budget (review / QC seats)**: <cap> \u2014 may only tighten the default in mstar-harness-core \u00a7 \u5b9a\u5411\u6267\u884c\u4e0e\u9a8c\u8bc1\u8fb9\u754c, never loosen it"`,
+        value: fields.budget,
+      },
+      {
+        code: "assignment.field.return-shape-missing",
+        label: "Return shape",
+        fix: `add "**Return shape (review / QC seats)**: <what the seat returns and how it stops \u2014 verdict + findings shape; a clean round returns findings: [] explicitly>"`,
+        value: fields.returnShape,
+      },
+    ] as const;
+    for (const field of boundingFields) {
+      const missing = describeAbsence(field.value);
+      if (missing === undefined) continue;
+      violations.push(
+        violation("high", field.code, `${subject} must declare a round ${field.label} \u2014 ${missing}`, field.fix),
+      );
+    }
   }
 
   if (writable) {
@@ -541,7 +673,17 @@ const ASSIGNMENT_FIELD_RE =
  * heading or at least one core field line (`Execute as` / `Delegation` /
  * `Task category`). Non-Assignment prompts stay silent — no false positives.
  * This is the SINGLE shape-guard grammar shared by the omp hook and the
- * opencode adapter via {@link composeDispatchGate}. */
+ * opencode adapter via {@link composeDispatchGate}.
+ *
+ * Shape detection reads the WHOLE text on purpose: a core-field label quoted
+ * anywhere (title, body, template block) makes the text an Assignment CANDIDATE
+ * so the gate then validates it strictly and reports whatever the header is
+ * missing. That direction is fail-closed — it can only ADD violations. Reads
+ * that could LOOSEN a gate instead (`Execute as` role, branch forms) MUST stay
+ * header-scoped, which is why they go through the self-scoping parsers rather
+ * than a second grammar here. The dsh adapter's shape guard is header-scoped
+ * instead, because there a wrong "true" would write a dispatch RECORD (a
+ * phantom ledger row) for a non-Assignment prompt. */
 function isAssignmentShaped(assignmentText: string): boolean {
   return ASSIGNMENT_HEADING_RE.test(assignmentText) || assignmentText.match(ASSIGNMENT_FIELD_RE) !== null;
 }
@@ -630,6 +772,11 @@ export function composeDispatchGate(text: string, opts: ComposeDispatchGateOptio
     const writable = opts.writable !== false;
 
  // (2) Engine full field validation — read-only roles skip the branch-form gate.
+    // Every field/branch read below (and in the validator) is header-scoped by
+    // the parsers themselves (`parseAssignmentFields` /
+    // `parseAssignmentBranchForms` slice `assignmentHeaderRegion(text)`), so
+    // passing the whole dispatch here is safe by construction: a field quoted
+    // in the task body can neither satisfy nor disable a gate.
     violations.push(...validateAssignmentFields(text, { writable }).violations);
 
  // (3) Anti-recursion NEVER red line — CALLER identity vs the dispatch's

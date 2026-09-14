@@ -17,7 +17,10 @@
  * compound-refresh scope. `roles` validates the role reference mapping +
  * parameter tables and the load-order contract, `prreview` implements the
  * PR-review tally/score/verdict arithmetic and the merge-class/verdict
- * constants (mstar-audit pr-review.md § Tally and derived score), `host`
+ * constants (mstar-audit pr-review.md § Tally and derived score), `qcreview`
+ * is the QC seat-report contract (frontmatter fields + verbatim verdict
+ * vocabulary + body-verdict agreement + Summary/Findings count parity +
+ * truncation/verdict coherence, `mstar-review-qc` SKILL.md § 席位预算与截断), `host`
  * detects the active
  * host from tool shapes, resolves skill roots and defines the type-only
  * `HostAdapter` contract, `gates` is the host-neutral coordination-write
@@ -435,6 +438,8 @@ export {
   validateMstarReviewV1,
   validatePrReviewReport,
 } from "./prreview.js";
+export type { QcVerdict } from "./qcreview.js";
+export { QC_VERDICTS, validateQcReport } from "./qcreview.js";
 export type { ArtifactDoc, ArtifactKind, ArtifactRef, ArtifactStore } from "./store.js";
 export { assertFsStorePath, createFsStore, getArtifactStore, loadStoreModule, resolveArtifactPath, setArtifactStore } from "./store.js";
 
