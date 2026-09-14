@@ -87,6 +87,7 @@ import {
   computePrTally,
   prReviewReportPath,
   validatePrReviewReport,
+  validateQcReport,
   pickReviewBranchName,
   planReviewPost,
   PR_REVIEW_TIER_BUDGETS,
@@ -3997,6 +3998,36 @@ prReviewCommand
       if (!gate.ok) process.exitCode = 1;
     } catch (error) {
       failScript(error, "pr-review validate-report");
+    }
+  });
+
+// ---------------------------------------------------------------------------
+// (20260914-review-seat-machine-gates): qc validate-report \u2014 thin CLI wrapper
+// over @mstar-harness/engine qcreview.ts (QC seat-report contract).
+// ---------------------------------------------------------------------------
+
+const qcCommand = program.command("qc").description(
+  "QC seat-report contract (engine-backed): frontmatter fields, verdict vocabulary, body-verdict " +
+    "agreement, Summary/Findings count parity, truncation/verdict coherence " +
+    "(mstar-review-qc SKILL.md \u00a7 seat budgets and truncation)",
+);
+
+qcCommand
+  .command("validate-report")
+  .description(
+    "Validate a saved QC seat report against the machine-readable contract (frontmatter fields, verdict vocabulary, " +
+      "body verdict agreement, Summary/Findings count parity, truncation/verdict coherence; exit 1 with violations printed)",
+  )
+  .argument("<file.md>", "Saved QC seat report markdown file")
+  .action((reportFile: string) => {
+    try {
+      const abs = resolveCliPath(reportFile);
+      if (!fs.existsSync(abs)) throw new Error(`report file not found: ${abs}`);
+      const gate = validateQcReport(fs.readFileSync(abs, "utf8"));
+      printChecklist(abs, gate);
+      if (!gate.ok) process.exitCode = 1;
+    } catch (error) {
+      failScript(error, "qc validate-report");
     }
   });
 

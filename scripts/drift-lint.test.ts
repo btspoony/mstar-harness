@@ -270,7 +270,7 @@ describe("checkEngineCallouts — Guard 1 CLI citation binary-prefix check", () 
     expect(failures).toEqual([]);
   });
 
-  test("real corpus pins 48 Engine-check callouts / 46 CLI citations (F-S3, drift goes red)", () => {
+  test("real corpus pins 49 Engine-check callouts / 48 CLI citations (F-S3, drift goes red)", () => {
     const REPO_ROOT = join(import.meta.dir, "..");
     const SKILLS_ROOT = join(REPO_ROOT, "skills");
 
@@ -311,8 +311,8 @@ describe("checkEngineCallouts — Guard 1 CLI citation binary-prefix check", () 
       engineExports,
       binNames,
     });
-    expect(calloutsChecked).toBe(48);
-    expect(cliCitationsChecked).toBe(46);
+    expect(calloutsChecked).toBe(49);
+    expect(cliCitationsChecked).toBe(48);
     expect(failures).toEqual([]);
   });
 });
