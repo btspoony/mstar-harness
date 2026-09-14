@@ -545,7 +545,9 @@ export async function closeProjectRegisterEntry(opts: CloseProjectRegisterEntryO
  * snapshot's plan row). Every OPEN entry of the plan is checked.
  * `zero-residual`: only true blocker-defers (`decision: defer` + non-empty
  * `target`) may stay open — fixable findings, `nit`s, and waived/
- * risk-accepted entries are violations. `allow-residual` (default): open
+ * risk-accepted entries are violations, and an unresolved Critical is a
+ * violation for EVERY decision (it must be fixed or closed by explicit
+ * risk acceptance, not carried as a defer). `allow-residual` (default): open
  * residuals are fine unless an unresolved Critical remains. Mode resolution:
  * explicit `opts.mode` → `allow-residual` (the v1
  * `plans[].metadata.findings_cleanup` mirror is deleted — no dual-track).
@@ -587,7 +589,18 @@ export function findingsCleanupGate(
     const id = typeof entry.id === "string" ? entry.id : "<unnamed>";
     const label = `R#${id}`;
     if (mode === "zero-residual") {
-      if (entry.severity === "nit") {
+      if (normalizeSeverity(entry.severity) === "critical") {
+// Severity outranks the decision branch: an unresolved Critical may not
+// ride along under zero-residual as a defer/waiver/open fixable — the
+// entry gets exactly this one violation (first branch wins).
+        violations.push(
+          violation(
+            "high",
+            "findings.zero-residual-critical",
+            `${label}: unresolved critical blocks approval under zero-residual \u2014 fix now or close via explicit risk acceptance`,
+          ),
+        );
+      } else if (entry.severity === "nit") {
         violations.push(
           violation(
             "medium",
