@@ -2295,6 +2295,8 @@ interface CleanupProbeWorktree {
 interface CleanupProbe {
   selected: WorkflowSnapshot;
   snapshots: WorkflowSnapshot[];
+  /** Sibling snapshot paths that could not be parsed at all — their declarations are unknown. */
+  unreadableSiblings: string[];
   worktrees: CleanupProbeWorktree[];
   defaultBranch: string;
   localBranches: { branch: string; tip: string }[];
@@ -2390,17 +2392,45 @@ function cleanupWorktreeClaims(worktreePath: string, snapshots: readonly Workflo
   return claims;
 }
 
-/** Canonical reader with a path-carrying error (validation details inline). */
-function cleanupReadSnapshotDir(dir: string): { snapshot: WorkflowSnapshot; diagnostics: readonly ValidationResult[] } {
-  try {
-    return readWorkflowSnapshot(dir);
-  } catch (error) {
-    if (error instanceof WorkflowSnapshotValidationError) {
-      const detail = error.violations.map((violation) => `${violation.code}: ${violation.message}`).join("; ");
-      throw new Error(`${path.join(dir, WORKFLOW_SNAPSHOT_FILE)}: ${detail}`);
+/**
+ * Conservative degraded read of a schema-INVALID sibling snapshot (the JSON
+ * parsed, validation failed). Only PROTECTIVE declarations are carried over —
+ * branch base/integration/target anchors, lifecycle worktree paths, the merge
+ * lease and per-row execution leases plus ownership metadata — while every
+ * state that could authorize a removal (lifecycle status, row status) is
+ * forced to its non-terminal form. The result can therefore only ADD
+ * keep/refuse facts to the planner, never subtract them. It is never a
+ * substitute for the canonical reader: the selected snapshot and every writer
+ * stay strictly validated.
+ */
+function cleanupDegradeSiblingSnapshot(doc: Record<string, unknown>, id: string): WorkflowSnapshot {
+  const text = (value: unknown): string | undefined => (typeof value === "string" && value !== "" ? value : undefined);
+  const branch: Record<string, string> = {};
+  const rawBranch = doc.branch;
+  if (cleanupIsPlainRow(rawBranch)) {
+    for (const key of ["base", "integration", "target"] as const) {
+      const value = text(rawBranch[key]);
+      if (value !== undefined) branch[key] = value;
     }
-    throw error; // missing file / malformed JSON already carries the path
   }
+  const integrationWorktreePath = text(doc.integration_worktree_path) ?? text(doc.control_worktree_path);
+  const plans = (Array.isArray(doc.plans) ? doc.plans : [])
+    .filter(cleanupIsPlainRow)
+    .map((row) => ({ ...row, status: "InProgress" })); // a row state we cannot trust never authorizes a removal
+  return {
+    schema_version: 1,
+    // The directory name IS the workflow identity (`resolveSnapshotPath`); a
+    // doc.id that disagrees is corruption and never overrides it.
+    id,
+    type: doc.type === "iteration" || doc.type === "plan" ? doc.type : "plan",
+    status: "running", // an unverified lifecycle is never terminal
+    started_at: text(doc.started_at) ?? "",
+    updated_at: text(doc.updated_at) ?? "",
+    ...(Object.keys(branch).length > 0 ? { branch } : {}),
+    ...(integrationWorktreePath !== undefined ? { integration_worktree_path: integrationWorktreePath } : {}),
+    ...(cleanupIsPlainRow(doc.integration_merge_lease) ? { integration_merge_lease: doc.integration_merge_lease } : {}),
+    plans,
+  } as unknown as WorkflowSnapshot;
 }
 
 function cleanupPrintDiagnostics(diagnostics: readonly ValidationResult[]): void {
@@ -2550,20 +2580,55 @@ function cleanupProbeRemoteEvidence(
   return evidence;
 }
 
-/** One full probe pass: all known snapshots + git state. Any failure throws (exit 1). */
+/**
+ * One full probe pass: all known snapshots + git state. A failure of the
+ * SELECTED snapshot throws (exit 1) — nothing can be planned without it.
+ *
+ * Sibling snapshots are read best-effort so a broken unrelated workflow can
+ * never block this workflow's own cleanup, and without losing safeguards:
+ * - a schema-INVALID sibling (JSON parsed, validation failed) is kept in
+ *   degraded form; its protective declarations survive and can only ADD
+ *   keep/refuse facts (`cleanupDegradeSiblingSnapshot`);
+ * - an UNPARSABLE sibling declares nothing that can be carried over, so its
+ *   path is recorded and every removal is withheld downstream
+ *   (`cleanupGuardUnreadableSiblings`) unless the operator accepts the gap.
+ */
 function cleanupProbe(input: CleanupProbeInput): CleanupProbe {
-  const selectedRead = cleanupReadSnapshotDir(input.snapshotDir);
+  const selectedRead = readWorkflowSnapshot(input.snapshotDir);
   cleanupPrintDiagnostics(selectedRead.diagnostics);
   const selected = selectedRead.snapshot;
   const snapshots: WorkflowSnapshot[] = [];
+  const unreadableSiblings: string[] = [];
   // ALL known snapshots under the harness dir — registered active or not —
-  // feed the protected-ref/lease safety set; an unreadable one is a probe
-  // refusal (exit 1), never a silent skip.
+  // feed the protected-ref/lease safety set; the selected one is read above.
   for (const entry of fs.readdirSync(input.workflowRoot, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     const dir = path.join(input.workflowRoot, entry.name);
-    if (!fs.existsSync(path.join(dir, WORKFLOW_SNAPSHOT_FILE))) continue;
-    const read = cleanupReadSnapshotDir(dir);
+    const snapshotPath = path.join(dir, WORKFLOW_SNAPSHOT_FILE);
+    if (!fs.existsSync(snapshotPath)) continue;
+    let read: { snapshot: WorkflowSnapshot; diagnostics: readonly ValidationResult[] };
+    try {
+      read = readWorkflowSnapshot(dir);
+    } catch (error) {
+      if (error instanceof WorkflowSnapshotValidationError) {
+        const detail = error.violations.map((violation) => `${violation.code}: ${violation.message}`).join("; ");
+        const doc = JSON.parse(fs.readFileSync(snapshotPath, "utf8")) as Record<string, unknown>;
+        snapshots.push(cleanupDegradeSiblingSnapshot(doc, entry.name));
+        console.error(
+          pc.yellow(
+            `worktree cleanup: note: sibling snapshot ${snapshotPath} is invalid (${detail}) \u2014 its protective declarations are kept in degraded form`,
+          ),
+        );
+        continue;
+      }
+      unreadableSiblings.push(snapshotPath);
+      console.error(
+        pc.yellow(
+          `worktree cleanup: note: sibling snapshot ${snapshotPath} cannot be parsed (${(error as Error).message}) \u2014 its declarations are unknown, so removals are withheld`,
+        ),
+      );
+      continue;
+    }
     cleanupPrintDiagnostics(read.diagnostics);
     snapshots.push(read.snapshot);
   }
@@ -2579,6 +2644,7 @@ function cleanupProbe(input: CleanupProbeInput): CleanupProbe {
   return {
     selected,
     snapshots,
+    unreadableSiblings,
     worktrees,
     defaultBranch: cleanupProbeDefaultBranch(input.mainRoot, worktrees[0]?.branch ?? null),
     localBranches,
@@ -2668,6 +2734,25 @@ function cleanupPrintPlan(title: string, decisions: readonly CleanupDecision[]):
   }
 }
 
+/**
+ * An unparsable sibling leaves the safety set incomplete: nothing proves that
+ * a candidate it may guard (lease, base anchor, ownership) is free. Unless the
+ * operator accepts that gap explicitly, every removal row is withheld as a
+ * visible refusal — the plan still prints in full.
+ */
+function cleanupGuardUnreadableSiblings(
+  decisions: readonly CleanupDecision[],
+  probe: CleanupProbe,
+  ignoreUnreadableSiblings: boolean,
+): CleanupDecision[] {
+  if (ignoreUnreadableSiblings || probe.unreadableSiblings.length === 0) return [...decisions];
+  return decisions.map((decision) =>
+    decision.verdict === "remove"
+      ? { ...decision, verdict: "refuse" as const, reason: "cleanup.refuse.unreadable-snapshot" }
+      : decision,
+  );
+}
+
 /** Deletion cwd: the worktree checked out at the branch's evidence base, else the main root (git's -d guard still applies). */
 function cleanupBranchDeletionCwd(base: string | undefined, probe: CleanupProbe, mainRoot: string): string {
   if (base === undefined) return mainRoot;
@@ -2695,11 +2780,15 @@ worktreeCommand
     (value: string, previous: string[]) => [...previous, value],
     [] as string[],
   )
-  .action((options: { workflow?: string; harness?: string; apply?: boolean; remote?: boolean; worktree?: string[] }) => {
+  .option(
+    "--ignore-unreadable-snapshots",
+    "Operator assertion: judge candidates against the readable snapshots only even when a sibling snapshot cannot be parsed at all (its declarations are unknown, so removals are otherwise withheld as cleanup.refuse.unreadable-snapshot)",
+  )
+  .action((options: { workflow?: string; harness?: string; apply?: boolean; remote?: boolean; worktree?: string[]; ignoreUnreadableSnapshots?: boolean }) => {
     try {
       if (!options.workflow) {
         throw new SddScriptError(
-          "usage: worktree cleanup --workflow <id> [--harness <path>] [--apply] [--remote] [--worktree <path>]",
+          "usage: worktree cleanup --workflow <id> [--harness <path>] [--apply] [--remote] [--worktree <path>] [--ignore-unreadable-snapshots]",
           2,
         );
       }
@@ -2720,9 +2809,10 @@ worktreeCommand
         workflowId: options.workflow,
       };
 
+      const ignoreUnreadableSiblings = options.ignoreUnreadableSnapshots === true;
       const probe1 = cleanupProbe(probeInput);
       const built1 = cleanupBuildFacts(probe1, scope, options.remote === true);
-      const plan1 = planWorktreeCleanup(probe1.selected, built1.facts);
+      const plan1 = cleanupGuardUnreadableSiblings(planWorktreeCleanup(probe1.selected, built1.facts), probe1, ignoreUnreadableSiblings);
       cleanupPrintPlan(`worktree cleanup (workflow ${options.workflow}): plan`, plan1);
       if (options.apply !== true) return; // dry-run: printed the plan, changed nothing
 
@@ -2769,7 +2859,11 @@ worktreeCommand
       // checked-out → refused. Failed rows never widen scope.
       const probe2 = cleanupProbe(probeInput);
       const built2 = cleanupBuildFacts(probe2, scope, options.remote === true);
-      const plan2 = planWorktreeCleanup(probe2.selected, built2.facts);
+      const plan2 = cleanupGuardUnreadableSiblings(
+        planWorktreeCleanup(probe2.selected, built2.facts),
+        probe2,
+        ignoreUnreadableSiblings,
+      );
       cleanupPrintPlan(`worktree cleanup (workflow ${options.workflow}): post-removal re-plan`, plan2);
       for (const decision of plan2) {
         if (decision.verdict !== "remove") continue;
@@ -2832,7 +2926,7 @@ worktreeCommand
       if (releasedBranches.size > 0) {
         const probe3 = cleanupProbe(probeInput);
         const built3 = cleanupBuildFacts(probe3, scope, options.remote === true);
-        const plan3 = planWorktreeCleanup(probe3.selected, built3.facts).filter(
+        const plan3 = cleanupGuardUnreadableSiblings(planWorktreeCleanup(probe3.selected, built3.facts), probe3, ignoreUnreadableSiblings).filter(
           (decision) => decision.kind === "local-branch" && releasedBranches.has(decision.ref),
         );
         cleanupPrintPlan(`worktree cleanup (workflow ${options.workflow}): post-deferred-removal re-plan`, plan3);

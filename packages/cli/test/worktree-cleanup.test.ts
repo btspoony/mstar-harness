@@ -698,17 +698,95 @@ describe("mstar worktree cleanup — exit contract", () => {
     }
   });
 
-  test("an unreadable known sibling snapshot refuses the probe (fail-closed), exit 1, nothing removed", () => {
+  test("an unreadable SELECTED snapshot refuses the probe (fail-closed), exit 1, nothing removed", () => {
     const fx = basicFixture("mstar-cleanup-badsnap-");
     try {
-      const badDir = join(fx.root, "workflows", "wf-bad");
-      execFileSync("mkdir", ["-p", badDir]);
-      writeFileSync(join(badDir, "snapshot.json"), "{ not json");
+      writeFileSync(join(fx.root, "workflows", "wf-1", "snapshot.json"), "{ not json");
       const applied = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root, "--apply"], fx.root);
       expect(applied.exitCode).toBe(1);
       expect(applied.stderr).toContain("worktree cleanup failed");
       expect(applied.stdout).not.toContain("apply: removed worktree");
       expect(git(["worktree", "list", "--porcelain"], fx.root)).toContain(fx.doneWt);
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  test("an unparsable UNRELATED sibling no longer aborts the plan, and withholds every removal by default", () => {
+    const fx = basicFixture("mstar-cleanup-badsibling-");
+    try {
+      const badDir = join(fx.root, "workflows", "wf-bad");
+      execFileSync("mkdir", ["-p", badDir]);
+      const badPath = join(badDir, "snapshot.json");
+      writeFileSync(badPath, "{ not json");
+
+      const dry = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root], fx.root);
+      expect(dry.exitCode).toBe(0);
+      expect(dry.stderr).toContain("cannot be parsed");
+      expect(dry.stderr).toContain("wf-bad/snapshot.json");
+      // The incomplete safety set withholds the eligible row instead of
+      // failing the command; unowned candidates keep refusing as before.
+      expect(dry.stdout).toContain(`refuse | worktree | ${fx.doneWt} | cleanup.refuse.unreadable-snapshot`);
+      expect(dry.stdout).not.toContain("remove | ");
+      expect(dry.stdout).toContain(`refuse | worktree | ${fx.foreignWt} | cleanup.refuse.foreign-worktree`);
+      expect(dry.stdout).toContain("refuse | local-branch | feature/stranger | cleanup.refuse.foreign-branch");
+
+      const applied = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root, "--apply"], fx.root);
+      expect(applied.exitCode).toBe(0);
+      expect(applied.stdout).not.toContain("apply: removed worktree");
+      expect(git(["worktree", "list", "--porcelain"], fx.root)).toContain(fx.doneWt);
+      // Cleanup never repairs, rewrites or removes the unreadable sibling.
+      expect(readFileSync(badPath, "utf8")).toBe("{ not json");
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  test("--ignore-unreadable-snapshots is the operator assertion that restores the removals", () => {
+    const fx = basicFixture("mstar-cleanup-badsibling-ignore-");
+    try {
+      const badDir = join(fx.root, "workflows", "wf-bad");
+      execFileSync("mkdir", ["-p", badDir]);
+      const badPath = join(badDir, "snapshot.json");
+      writeFileSync(badPath, "{ not json");
+
+      const applied = runCli(
+        ["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root, "--apply", "--ignore-unreadable-snapshots"],
+        fx.root,
+      );
+      expect(applied.exitCode).toBe(0);
+      expect(applied.stdout).toContain(`apply: removed worktree ${fx.doneWt}`);
+      expect(git(["worktree", "list", "--porcelain"], fx.root)).not.toContain(fx.doneWt);
+      // The assertion changes the judgement only: the sibling bytes stay put.
+      expect(readFileSync(badPath, "utf8")).toBe("{ not json");
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  test("a schema-invalid sibling is kept in degraded form: its protection survives and the plan still runs", () => {
+    const fx = basicFixture("mstar-cleanup-badschema-");
+    try {
+      const badDir = join(fx.root, "workflows", "wf-bad-schema");
+      execFileSync("mkdir", ["-p", badDir]);
+      // Parseable JSON, invalid snapshot (type/status/dates/plans missing) —
+      // but it declares a base anchor, which the degraded read must keep.
+      writeFileSync(
+        join(badDir, "snapshot.json"),
+        JSON.stringify({ schema_version: 1, id: "wf-bad-schema", branch: { base: "feature/done-a" } }),
+      );
+
+      const dry = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root], fx.root);
+      expect(dry.exitCode).toBe(0);
+      expect(dry.stderr).toContain("kept in degraded form");
+      expect(dry.stderr).toContain("workflow.snapshot.missing-type");
+      // feature/done-a is owned, Done and merged (removable by wf-1 alone),
+      // but the degraded sibling's base anchor still keeps its branch — and
+      // with it the worktree checked out at that branch.
+      expect(dry.stdout).toContain("keep | local-branch | feature/done-a | cleanup.keep.protected-ref");
+      expect(dry.stdout).toContain(`keep | worktree | ${fx.doneWt} | cleanup.keep.protected-ref`);
+      // The schema-invalid sibling never aborts the plan: it still prints whole.
+      expect(dry.stdout).toContain(`refuse | worktree | ${fx.foreignWt} | cleanup.refuse.foreign-worktree`);
     } finally {
       rmSync(fx.root, { recursive: true, force: true });
     }
