@@ -60,7 +60,7 @@ Dispatch:
     ### Strengths
 
     ### Issues
-    #### Critical | Important | Minor
+    #### Critical | Important | Minor     # thresholds + fix-loop routing → mstar-roles/references/code-reviewer.md § Issue severity (Mode A)
 
     ### Assessment
     **Task quality:** Approved | Needs fixes

@@ -208,7 +208,21 @@ When registering into the project register (template in `mstar-review-qc`):
 
 **Common mistake:** report **Warning** is not a valid `severity` string; there is no `warning` in the enum (see legacy below).
 
-### 5. Legacy `"severity": "warning"`
+### 5. Cross-chain vocabulary (one axis, four labels)
+
+The blocking judgement is decided **once**, on the §3 axis. Each chain's label set is a different projection of that one decision — map by **axis band**, never by label shape:
+
+| Blocking judgement (§3 axis) | register `severity` | audit Merge class | plan-QC report section | L2 task review |
+| ---------------------------- | ------------------- | ----------------- | ---------------------- | -------------- |
+| **Blocking** — unsafe outcome reachable on this change/merge | `critical` | `must-fix` | **Critical** | `Critical` |
+| High impact, non-blocking — unsafe but not reachable here, or significant tech debt | `high` | `should-fix` | **Warning** | `Important` |
+| Substantive, non-blocking — below the above | `medium` | `should-fix` | **Warning** | `Important` |
+| Small and cheap | `low` | `nit` | **Suggestion** | `Minor` |
+| Style / naming / wording | `nit` | `nit` | **Suggestion** | `Minor` |
+
+**A cross-chain translation never changes the judgement** — a label is a projection of the axis, so moving a finding between chains must not promote or demote it.
+
+### 6. Legacy `"severity": "warning"`
 
 In old JSON, **`"severity": "warning"`** is read and rolled up as **`low`**. **Forbidden** on new entries.
 
