@@ -41,8 +41,11 @@
  * before it drifts.
  * 7. repo text face — dated plan/iteration ids and dated harness deep
  * paths on the tracked text face fail (engine findProvenanceCitations
- * over the repo tree): `.md` files are scanned full text, `.ts` files at
- * comment lines only; `.changes/archive` and the assembled `CHANGELOG`
+ * over the repo tree, intersected with `git ls-files` so untracked local
+ * files never fail the guard): `.md` files are scanned full text, `.ts`
+ * files at comment lines only (leading comment lines plus trailing `//`
+ * comments; `://` URL sequences are not comment fragments);
+ * `.changes/archive` and the assembled `CHANGELOG`
  * release surfaces are exempt (historical release record, not new
  * prose). One failure row per citation, named `file:line`, turning the
  * repo AGENTS.md provenance rule (no local plan/iteration ids or harness
@@ -718,27 +721,88 @@ const PROVENANCE_SCAN_EXEMPTS = {
  * fixture data like the engine's JSON corpora) are not on the face. */
 const PROVENANCE_SCAN_EXTS = [".ts", ".md"];
 
-/** Line-level comment prefilter for the `.ts` scan face: keep only lines
- * whose trimmed text starts with a comment introducer (`//`, `/*`, `*` —
+/** First `//` in `line` that starts a trailing comment: at line start or
+ * preceded by whitespace, and not part of a `://` URL sequence. Returns -1
+ * when no occurrence qualifies. simplify: line-level heuristic without
+ * string-literal awareness — a whitespace-preceded `//` inside a string
+ * literal is kept too (conservative over-inclusion of the scan face). */
+function trailingCommentStart(line: string): number {
+  let idx = line.indexOf("//");
+  while (idx !== -1) {
+    const precededByWhitespace = idx === 0 || /\s/.test(line[idx - 1]);
+    const notUrlSequence = line[idx - 1] !== ":";
+    if (precededByWhitespace && notUrlSequence) return idx;
+    idx = line.indexOf("//", idx + 1);
+  }
+  return -1;
+}
+
+/** Line-level comment prefilter for the `.ts` scan face: keep lines whose
+ * trimmed text starts with a comment introducer (`//`, `/*`, `*` —
  * block-comment continuation and close lines both start with `*`, the
- * same line-level heuristic as the engine's COMMENT_INTRODUCER); every
- * other line is blanked so citation line numbers stay the real file
- * lines. Code positions (identifiers, string literals) are never scanned. */
+ * same line-level heuristic as the engine's COMMENT_INTRODUCER), plus the
+ * trailing-comment fragment of code lines (from the first `//` that is at
+ * line start or preceded by whitespace and not part of a `://` URL
+ * sequence — trailingCommentStart). Every other line is blanked so citation
+ * line numbers stay the real file lines. simplify: string-literal-aware
+ * parsing is out of scope, so the trailing rule over-includes a
+ * whitespace-preceded `//` inside a string literal; code positions without
+ * a qualifying comment fragment (identifiers, literals) are never scanned. */
 function tsCommentLines(text: string): string {
   return text
     .split(/\r?\n/)
-    .map((line) => (/^\s*(?:\/\/|\/\*|\*)/.test(line) ? line : ""))
+    .map((line) => {
+      if (/^\s*(?:\/\/|\/\*|\*)/.test(line)) return line;
+      const idx = trailingCommentStart(line);
+      return idx === -1 ? "" : line.slice(idx);
+    })
     .join("\n");
+}
+
+/** Tracked-file set at `repoRoot` (`git ls-files` with cwd = `repoRoot`, the
+ * repo root — the script's existing git access pattern is plain
+ * `execFileSync("git", …)` from the process cwd, which the main block runs
+ * at the repo root). Guard-or-clear-error (same idiom as
+ * `readDeclaredBins`): a git failure returns one explicit failure row and
+ * an empty set, so the caller skips the scan with a loud named row instead
+ * of crashing or silently passing. Exported as a test seam. */
+export function readTrackedFiles(repoRoot: string): {
+  tracked: Set<string>;
+  failures: string[];
+} {
+  try {
+    const out = execFileSync("git", ["ls-files"], { encoding: "utf8", cwd: repoRoot });
+    return {
+      tracked: new Set(
+        out
+          .split("\n")
+          .map((line) => line.trim())
+          .filter(Boolean),
+      ),
+      failures: [],
+    };
+  } catch (error) {
+    return {
+      tracked: new Set(),
+      failures: [`provenance: git ls-files failed at ${repoRoot} - ${(error as Error).message}`],
+    };
+  }
 }
 
 /** Guard 7 collection — walk `repoRoot` for the `.ts`/`.md` scan face,
  * pruning exemption dirs during traversal (the same PROVENANCE_SCAN_EXEMPTS
  * the scan filters by; pruning only avoids reading ignored/derived trees).
- * Reads are guard-or-clear-error (same pattern as `readRolesCorpus`): an
- * unreadable file — or an unlistable directory, which is skipped rather
- * than walked — becomes an explicit `provenance: read` row, never a raw
- * crash mid-scan. Exported as a test seam over temp trees. */
-export function collectProvenanceScanFiles(repoRoot: string): {
+ * The walk is intersected with `tracked` (repo-root-relative paths from
+ * `git ls-files`, readTrackedFiles): untracked local files cannot leak into
+ * committed history, so they must not fail the guard. Reads are
+ * guard-or-clear-error (same pattern as `readRolesCorpus`): an unreadable
+ * file — or an unlistable directory, which is skipped rather than walked —
+ * becomes an explicit `provenance: read` row, never a raw crash mid-scan.
+ * Exported as a test seam over temp trees with an injected tracked-set. */
+export function collectProvenanceScanFiles(
+  repoRoot: string,
+  tracked: Set<string>,
+): {
   entries: Array<{ rel: string; text: string }>;
   readFailures: string[];
 } {
@@ -765,7 +829,7 @@ export function collectProvenanceScanFiles(repoRoot: string): {
         if (PROVENANCE_SCAN_EXEMPTS.dirs.includes(entry.name)) continue;
         if (rel === PROVENANCE_SCAN_EXEMPTS.archivedDir) continue;
         walk(abs);
-      } else if (PROVENANCE_SCAN_EXTS.some((ext) => entry.name.endsWith(ext))) {
+      } else if (tracked.has(rel) && PROVENANCE_SCAN_EXTS.some((ext) => entry.name.endsWith(ext))) {
         try {
           entries.push({ rel, text: readFileSync(abs, "utf8") });
         } catch (error) {
@@ -1098,7 +1162,15 @@ if (import.meta.main) {
  /* Guard 7: repo text face — provenance citations (engine lint) */
  /* ------------------------------------------------------------------ */
 
-  const provenanceCollection = collectProvenanceScanFiles(root);
+  const tracked = readTrackedFiles(root);
+  for (const row of tracked.failures) fail(row);
+ // A git failure skips the scan behind its loud named row (guard-or-clear
+ // error): scanning unfiltered would re-expose the untracked-file failures
+ // the tracked-set intersection exists to prevent.
+  const provenanceCollection =
+    tracked.failures.length === 0
+      ? collectProvenanceScanFiles(root, tracked.tracked)
+      : { entries: [], readFailures: [] as string[] };
   for (const row of provenanceCollection.readFailures) fail(row);
   const provenance = checkProvenanceScan(provenanceCollection.entries);
   for (const row of provenance.failures) fail(row);
