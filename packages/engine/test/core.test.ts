@@ -10,8 +10,8 @@
  * - `ValidationResult` / `GateResult` shapes: roadmap
  *   §8.5 C4 — engine returns `{ ok: boolean, severity, code, message, fix? }`;
  *   §8.5 C2 — engine unit tests cite the source section as spec.
- * - `readJson`/`writeJson`/`resolveProjectRoot`/`readHarnessVersion`: plan
- *   20260808-slice1-engine-foundation Task 2 + roadmap §8.2 core row + §8.5 C6
+ * - `readJson`/`writeJson`/`resolveProjectRoot`/`readHarnessVersion`:
+ *   roadmap §8.2 core row + §8.5 C6
  *   (version single-source in engine; CLI re-exports).
  */
 import { describe, expect, test } from "bun:test";

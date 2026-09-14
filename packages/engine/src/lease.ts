@@ -118,8 +118,8 @@ const DATE_ONLY_RE = new RegExp(String.raw`^${DATE_PART}$`);
 /**
  * A `claimed_at` is valid as RFC 3339 UTC with explicit `Z` (normative) or as
  * a `YYYY-MM-DD` date (repo convention — the real control status.json
- * execution_lease for 20260808-slice1-engine-foundation uses
- * `"claimed_at": "2026-08-08"` and `mstar lease verify` must pass on it).
+ * execution_lease uses `"claimed_at": "2026-08-08"` and `mstar lease verify`
+ * must pass on it).
  */
 function isValidClaimedAt(value: unknown): value is string {
   return typeof value === "string" && (RFC3339_Z_RE.test(value) || DATE_ONLY_RE.test(value));

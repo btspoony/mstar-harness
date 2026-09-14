@@ -1,6 +1,6 @@
 /**
  * Engine project module — roadmap frontmatter validator + project register
- * validator (plan `20260819-workflow-engine-core.md` Task 4).
+ * validator.
  *
  * Spec sources (each test cites the plan/brief section it enforces):
  * - Roadmap frontmatter schema `{ project_id, title, status:

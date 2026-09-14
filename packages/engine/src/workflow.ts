@@ -4,8 +4,8 @@
  * whole-rewrite writer.
  *
  * Spec sources (each export cites the plan/brief section it enforces):
- * - Snapshot schema (final): plan `20260819-workflow-engine-core.md` Task 2 —
- *   `schema_version: 1` (snapshot-own field; `version` stays the root-file
+ * - Snapshot schema (final): `schema_version: 1` (snapshot-own field;
+ *   `version` stays the root-file
  *   discriminator), `id` (= plan id or iteration id), `type: "plan" |
  *   "iteration"`, `status` lifecycle enum (terminal set =
  *   `completed|failed|stopped`; `running|paused` are the active root-listed

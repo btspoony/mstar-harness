@@ -39,7 +39,7 @@
  * to canonical pointers);
  * corpus drift goes red.
  */
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { describe, expect, test } from "bun:test";
@@ -52,8 +52,10 @@ import {
   checkCalloutDuplication,
   checkEngineCallouts,
   checkFiveQuestionCorpus,
+  checkProvenanceScan,
   checkRolesCorpus,
   citesKnowledgeConventions,
+  collectProvenanceScanFiles,
   evaluateBilingualGuard,
   extractCategoryRowTokens,
   isGitHubActions,
@@ -600,8 +602,8 @@ describe("checkFiveQuestionCorpus — Guard 5 five-question runtime smoke", () =
 
   test("canonical fixture corpus: the classifier selects exactly the runtime rows (spec A4 parity)", () => {
  // The same canonical rows the Engine, CLI and dsh suites consume —
- // Guard5's corpus selection must agree row for row (plan
- // 20260907-skill-lint-parity Task 2, cross-consumer decision parity).
+ // Guard5's corpus selection must agree row for row (cross-consumer
+ // decision parity).
     type FixtureRow = {
       id: string;
       skillId: string | null;
@@ -825,5 +827,123 @@ describe("checkRolesCorpus — Guard 4 roles/load-order corpus", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("checkProvenanceScan — Guard 7 repo text-face provenance scan", () => {
+  /** Synthetic dated-slug token mirroring the real leak shape (a dated
+   * plan id cited in a comment / doc prose). Synthetic on purpose —
+   * fixtures must never carry real provenance. */
+  const SAMPLE_ID = "20991216-provenance-guard-sample";
+  /** Root ignores directory permission bits, so a chmod-0o000 probe cannot
+   * make readdir fail there — skip instead of flaking on such systems. */
+  const CHMOD_PROBE_UNRELIABLE = typeof process.getuid === "function" && process.getuid() === 0;
+
+  test("red probe: real-shaped leak on a temp tree fails the guard (ts comment + md prose)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "drift-prov-"));
+    try {
+      mkdirSync(join(dir, "src"), { recursive: true });
+      mkdirSync(join(dir, "docs"), { recursive: true });
+      writeFileSync(
+        join(dir, "src", "sample.ts"),
+        ["export const ok = 1;", `// ported from plan ${SAMPLE_ID} Task 2`].join("\n"),
+      );
+      writeFileSync(join(dir, "docs", "note.md"), `see plan ${SAMPLE_ID} for details\n`);
+      writeFileSync(join(dir, "docs", "clean.md"), "no tokens here\n");
+      const { entries, readFailures } = collectProvenanceScanFiles(dir);
+      expect(readFailures).toEqual([]);
+      const result = checkProvenanceScan(entries);
+      expect(result.filesScanned).toBe(3);
+      expect(result.citationsFound).toBe(2);
+      expect(result.failures.some((r) => r.startsWith("src/sample.ts:2 ") && r.includes("(plan-id)"))).toBe(true);
+      expect(result.failures.some((r) => r.startsWith("docs/note.md:1 ") && r.includes("(plan-id)"))).toBe(true);
+      expect(result.failures.every((r) => !r.includes("docs/clean.md"))).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test.skipIf(CHMOD_PROBE_UNRELIABLE)(
+    "unlistable directory becomes an explicit provenance: read row, not a crash (guard-or-clear-error)",
+    () => {
+      const dir = mkdtempSync(join(tmpdir(), "drift-prov-dir-"));
+      const locked = join(dir, "locked");
+      try {
+        mkdirSync(locked, { recursive: true });
+        writeFileSync(join(dir, "clean.md"), "no tokens here\n");
+        chmodSync(locked, 0o000);
+        const { entries, readFailures } = collectProvenanceScanFiles(dir);
+        expect(readFailures.length).toBe(1);
+        expect(readFailures[0]).toContain("provenance: read locked");
+        // The readable face is still collected; the CLI guard run turns the
+        // surfaced row into a named failure + exit 1 through the normal path.
+        expect(entries.map((e) => e.rel)).toEqual(["clean.md"]);
+      } finally {
+        chmodSync(locked, 0o700);
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test("ts scan face is comment lines only: the same token in code position is not scanned", () => {
+    const text = [
+      `const citedFrom = "${SAMPLE_ID}";`,
+      `// cited from ${SAMPLE_ID}`,
+    ].join("\n");
+    const result = checkProvenanceScan([{ rel: "src/sample.ts", text }]);
+    expect(result.filesScanned).toBe(1);
+    expect(result.citationsFound).toBe(1);
+    expect(result.failures[0]).toContain("src/sample.ts:2");
+  });
+
+  test("exemption surfaces are skipped: assembled CHANGELOG files, archived change fragments, ignored dirs", () => {
+    const leak = `plan ${SAMPLE_ID}`;
+    const result = checkProvenanceScan([
+      { rel: "CHANGELOG.md", text: leak },
+      { rel: "README_CN.md", text: "clean\n" },
+      { rel: "packages/cli/CHANGELOG.md", text: leak },
+      { rel: "packages/cli/CHANGELOG_CN.md", text: leak },
+      { rel: ".changes/archive/2026-09/bump.md", text: leak },
+      { rel: "node_modules/pkg/index.d.ts", text: `// ${SAMPLE_ID}` },
+      { rel: "dist/bundle.js", text: leak },
+      { rel: ".tmp/probe.ts", text: `// ${SAMPLE_ID}` },
+    ]);
+    expect(result.citationsFound).toBe(0);
+    expect(result.filesScanned).toBe(1);
+    expect(result.failures).toEqual([]);
+  });
+
+  test("synthetic example forms pass (finder discrimination preserved through the seam)", () => {
+    const result = checkProvenanceScan([
+      { rel: "docs/note.md", text: "layout template: 20991231-example-plan\n" },
+      { rel: "src/a.ts", text: "// layout template: 20991231-example-plan\n" },
+    ]);
+    expect(result.citationsFound).toBe(0);
+    expect(result.failures).toEqual([]);
+  });
+
+  test("harness-path citations are caught with their kind (synthetic dated deeplink)", () => {
+    const result = checkProvenanceScan([
+      { rel: "docs/note.md", text: `recorded under .mstar/plans/${SAMPLE_ID}.md\n` },
+    ]);
+    expect(result.citationsFound).toBe(1);
+    expect(result.failures[0]).toContain("(harness-path)");
+  });
+
+  test("real repo face is collectable and scannable; failure rows stay 1:1 with citations (cleanliness is enforced by the CLI guard run, not pinned here — the existing-leak cleanup is tracked as its own change)", () => {
+    const REPO_ROOT = join(import.meta.dir, "..");
+    const { entries, readFailures } = collectProvenanceScanFiles(REPO_ROOT);
+    expect(readFailures).toEqual([]);
+    expect(entries.length).toBeGreaterThan(0);
+    const result = checkProvenanceScan(entries);
+    // The scan skips exactly the assembled-changelog entries the collector
+    // hands it: file-level exemption lives at scan level, the walk prunes
+    // only exemption dirs.
+    const assembled = entries.filter((e) => {
+      const base = e.rel.split("/").pop();
+      return base === "CHANGELOG.md" || base === "CHANGELOG_CN.md";
+    }).length;
+    expect(result.filesScanned).toBe(entries.length - assembled);
+    expect(result.failures.length).toBe(result.citationsFound);
   });
 });

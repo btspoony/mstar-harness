@@ -642,9 +642,9 @@ describe("mstar-iteration phase route map ", () => {
 });
 
 // ---------------------------------------------------------------------------
-// SP6 Task 2 — adversarial phase-transition case assertions (plan
-// 20260907-iteration-progressive-disclosure, AC5 boundary scenarios). Spec A1
-// + manifest validation lock the corpus shape (5 routes x 6, dev4/heldout2),
+// Adversarial phase-transition case assertions (AC5 boundary scenarios).
+// Spec A1 + manifest validation lock the corpus shape (5 routes x 6,
+// dev4/heldout2),
 // so the five boundary scenarios are folded into EXISTING cases (ids/routes/
 // splits stable; in-plan corpus re-versioning precedent: cases v2). Pins
 // (STRUCTURAL only — never substitutes for model traces, Spec A1):

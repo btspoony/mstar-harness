@@ -1,7 +1,7 @@
 /**
  * plugin-version-alignment — the shared CLI ↔ host-plugin version-alignment
- * module (plan 20260908-cli-plugin-version-alignment, batch 2) plus the moved
- * zcode discovery/note pins from batch 1 (the former zcode-adapter.test.ts).
+ * module plus the moved zcode discovery/note pins (the former
+ * zcode-adapter.test.ts).
  *
  * Fully hermetic: temp-dir roots and injected paths everywhere; the codex and
  * omp subprocess surfaces are tested at their JSON-parsing layer only (no

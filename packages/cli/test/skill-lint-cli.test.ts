@@ -1,6 +1,5 @@
 /**
- * CLI `mstar skill lint` — canonical fixture parity (plan
- * 20260907-skill-lint-parity Task 2, spec A4).
+ * CLI `mstar skill lint` — canonical fixture parity (spec A4).
  *
  * Each case runs the real CLI as a subprocess over a materialized fixture
  * skill (`<skillId>/SKILL.md`) from the canonical corpus

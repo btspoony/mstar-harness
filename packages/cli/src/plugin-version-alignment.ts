@@ -12,7 +12,7 @@ import { findInstalledPlugin, listInstalledPlugins } from "./adapters/omp";
 
 /**
  * plugin-version-alignment — one shared home for the CLI ↔ host-plugin
- * version-alignment check (plan 20260908-cli-plugin-version-alignment, batch 2).
+ * version-alignment check.
  *
  * `mstar-harness doctor` prints exactly one informational alignment line for
  * the selected target: per-host discovery (`detectInstalledPluginVersion`)

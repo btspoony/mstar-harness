@@ -116,7 +116,7 @@ The deployment is a temporary measure until the rollout completes.
 `;
 
 const TEMPORARY_PLAN_PATH = `
-// temporary: offline fallback. See plans/20260808-slice2.md for removal.
+// temporary: offline fallback. See plans/20991231-example.md for removal.
 `;
 
 const TEMPORARY_REMOVAL_PATH_LABEL = `
@@ -453,7 +453,7 @@ describe("findTemporaryMarkers", () => {
 
     const byPath = findTemporaryMarkers(TEMPORARY_PLAN_PATH);
     expect(byPath.ok).toBe(true);
-    expect(byPath.markers[0].removalPath).toBe("plans/20260808-slice2.md");
+    expect(byPath.markers[0].removalPath).toBe("plans/20991231-example.md");
   });
 
   test("accepts an explicit 'removal path:' label", () => {

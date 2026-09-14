@@ -5,7 +5,7 @@
  * `bun add github:…`). The `workspace:` protocol is pack-time-only syntax and
  * unresolvable outside the declaring workspace, so a `workspace:` spec in a
  * shipped dependency section breaks every hosted install at resolve time
- * (20260829-omp-git-install-workspace-dep hotfix).
+ * (the hotfix that motivated this guard).
  *
  * Raw violations fail fast (report + exit 1) before packing: a raw
  * `workspace:` spec makes `bun pm pack` throw, which would preempt the

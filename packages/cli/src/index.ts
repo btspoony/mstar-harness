@@ -4057,7 +4057,7 @@ qcCommand
   });
 
 // ---------------------------------------------------------------------------
-// (20260826-prreview-execution): pr-review post / worktree-setup /
+// PR-review execution surface: pr-review post / worktree-setup /
 // worktree-cleanup / size / seat-prompt \u2014 thin CLI wrappers; the
 // deterministic part lives in @mstar-harness/engine prreview.ts, the CLI owns
 // process/git/gh side effects only.

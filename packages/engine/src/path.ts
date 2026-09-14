@@ -13,8 +13,8 @@
  * root is not one of the probed names (slice-2 plan finding 2026-08-08) and
  * stays the highest authority (above `.mstarc`).
  *
- * Workspace-root stop boundary (roadmap §7c, plan
- * 20260810-harness-root-boundary): `resolveHarnessDir` NEVER walks above the
+ * Workspace-root stop boundary (roadmap §7c): `resolveHarnessDir` NEVER
+ * walks above the
  * workspace root — an optional `opts.workspaceRoot` stops the upward probe
  * (a harness dir above it is never returned; the `~/.mstar` global-collision
  * defect is the special case). The default boundary is the git top-level of
@@ -52,8 +52,8 @@ export type ResolveHarnessDirOptions = {
  */
   harnessDir?: string;
   /**
- * Workspace-root stop boundary (roadmap §7c / plan
- * 20260810-harness-root-boundary). The upward probe keeps walking only
+ * Workspace-root stop boundary (roadmap §7c). The upward probe keeps
+ * walking only
  * while `dir` is at or below this root — a harness dir above it is never
  * returned (the `~/.mstar` global-collision defect is the special case).
  * Resolved against `startDir` when relative. When omitted, the default
