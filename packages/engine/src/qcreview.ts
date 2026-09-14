@@ -7,25 +7,28 @@
  * `qc-specialist-shared.md` § Budget and stopping / § Targeted re-review
  * （就地 revalidation 刷新当前状态，报告只有一份计数）。
  *
- * 机器可判定的十条规则（violation code 前缀一律 `qcreview.report.`）：
+ * 机器可判定的十一条规则（violation code 前缀一律 `qcreview.report.`）：
  * 1. `missing-frontmatter` — 报告必须以 `---` 围栏 frontmatter 开头。
- * 2. `missing-<field>` — `report_kind` / `reviewer` / `reviewer_index` /
+ * 2. `unclosed-frontmatter` — 起始围栏必须有闭合 `---` 行。缺闭合行时其后的
+ *    全部内容都被读作 frontmatter（`parseReportFrontmatter` 直到文末收集
+ *    `key: value`），正文与 frontmatter 的边界不存在，后续规则无从判定。
+ * 3. `missing-<field>` — `report_kind` / `reviewer` / `reviewer_index` /
  *    `plan_id` / `verdict` / `generated_at` 缺失或空值。
- * 3. `invalid-report-kind` — `report_kind` 必须是 `qc`。
- * 4. `invalid-verdict` — frontmatter `verdict` 必须逐字属于 `QC_VERDICTS`。
- * 5. `invalid-generated-at` — `generated_at` 必须是日历日期 `YYYY-MM-DD`。
- * 6. `missing-body-verdict` — 正文必须有 verdict 行。
- * 7. `verdict-mismatch` — 正文 verdict 取词必须属于 `QC_VERDICTS` 且与
+ * 4. `invalid-report-kind` — `report_kind` 必须是 `qc`。
+ * 5. `invalid-verdict` — frontmatter `verdict` 必须逐字属于 `QC_VERDICTS`。
+ * 6. `invalid-generated-at` — `generated_at` 必须是日历日期 `YYYY-MM-DD`。
+ * 7. `missing-body-verdict` — 正文必须有 verdict 行。
+ * 8. `verdict-mismatch` — 正文 verdict 取词必须属于 `QC_VERDICTS` 且与
  *    frontmatter verdict 一致；允许尾随散文（真实报告写
  *    `**Verdict**: Approve. The diff keeps ...`，历史上还出现
  *    `## Verdict: **Approve with residuals**`）。
- * 8. `summary-count-mismatch` — `## Summary` 计数必须等于 `## Findings`
+ * 9. `summary-count-mismatch` — `## Summary` 计数必须等于 `## Findings`
  *    对应 severity 分区的顶层条目数（`None.` = 0）。`## Summary` 是报告
  *    唯一的当前计数：就地 revalidation 刷新它与 `## Findings`，
  *    `## Revalidation` 只记过程与逐 finding 处置，不另立计数。
- * 9. `verdict-contradicts-counts` — Critical / Warning 计数 > 0 不允许
+ * 10. `verdict-contradicts-counts` — Critical / Warning 计数 > 0 不允许
  *    `Approve`；Unconfirmed 计数 > 0 要求 verdict 为 `Unconfirmed`。
- * 10. `truncation-verdict` — 已声明 `Truncated coverage:` 行时 verdict 不得为
+ * 11. `truncation-verdict` — 已声明 `Truncated coverage:` 行时 verdict 不得为
  *    `Unconfirmed`（截断是范围收缩，不是证据通道失败）。
  *
  * 不可判定即静默：形状未文档化（分区或计数行缺失、计数单元格非数字、
@@ -101,6 +104,14 @@ function bodyLines(lines: string[]): string[] {
   return lines;
 }
 
+/** 起始围栏存在但无闭合 `---` 行时为 true（`lines_missing_fence` 只管起始行，
+ * 故这里独立判定；两者不可互相替代）。 */
+function linesUnclosedFence(text: string): boolean {
+  const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/);
+  if (lines.length === 0 || lines[0]!.trim() !== "---") return false;
+  return !lines.slice(1).some((line) => line.trim() === "---");
+}
+
 /** `| a | b |` 表格行的单元格（非表格行返回 undefined）。 */
 function tableCells(line: string): string[] | undefined {
   const trimmed = line.trim();
@@ -120,8 +131,8 @@ function namesSeverity(text: string, severity: ReportSeverity): boolean {
  * `## Summary` 各 severity 的**当前**计数 —— 最后一个命中行的最后一个数值单元格。
  * 报告只有一份状态：`## Summary` 与 `## Findings` 始终描述当前轮次，就地
  * revalidation 刷新两者，`## Revalidation` 只记录过程与逐 finding 处置、不另立
- * 计数（`qc-specialist-shared.md` § Targeted re-review）。规则 8（Summary ↔
- * Findings 对账）与规则 9（verdict ↔ 计数）因此共用这一份读数。
+ * 计数（`qc-specialist-shared.md` § Targeted re-review）。规则 9（Summary ↔
+ * Findings 对账）与规则 10（verdict ↔ 计数）因此共用这一份读数。
  * 真实报告在计数单元格里带上 finding ID 与一句话标题 —— 单元格取首个整数；
  * 计数行缺失或值非数字的 severity 视为不可判定，依赖它的规则静默。
  */
@@ -224,6 +235,23 @@ export function validateQcReport(text: string): GateResult {
   }
 
   const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/);
+  if (linesUnclosedFence(text)) {
+    // 缺闭合围栏时 `parseReportFrontmatter` 收集到文末、`bodyLines` 退回全文，
+    // 正文规则全部读到 frontmatter 自身 —— 结构与逐字段规则无从判定，
+    // 因此与规则 1 一样即刻返回，只报这一条。
+    return {
+      ok: false,
+      violations: [
+        violation(
+          "high",
+          "qcreview.report.unclosed-frontmatter",
+          "the frontmatter `---` fence is never closed - every line after it is read as frontmatter, so the report body is not part of the document",
+          "add a closing `---` line after the last frontmatter key (report-template.md \u00a7 Frontmatter)",
+        ),
+      ],
+    };
+  }
+
   const { doc } = parseReportFrontmatter(text);
 
   for (const field of REPORT_FIELDS) {
@@ -332,7 +360,7 @@ export function validateQcReport(text: string): GateResult {
       ? bodyPhrase
       : undefined;
   if (effectiveVerdict !== undefined) {
-    // 规则 9 与规则 8 同源：`## Summary` 是报告唯一的当前计数（revalidation
+    // 规则 10 与规则 9 同源：`## Summary` 是报告唯一的当前计数（revalidation
     // 就地刷新它），裁决因此基于席位自己声明的当前状态。
     const critical = summary.Critical;
     const warning = summary.Warning;
