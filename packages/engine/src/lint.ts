@@ -103,7 +103,7 @@ export type TemporaryMarkerResult = GateResult & { markers: TemporaryMarker[] };
  * 1. `status.json` (the plan-harness status artifact)
  * 2. `R#<n>` (residual entry)
  * 3. the word `residual` (residual tracker / notes)
- * 4. a `plans/<file>` path (e.g. `plans/20260808-x.md`)
+ * 4. a `plans/<file>` path (e.g. `plans/20991231-example.md`)
  * 5. a dated plan id ("plan 20991231-example-plan")
  * 6. "tracked/recorded/logged/scheduled/listed/noted in <artifact>"
  * 7. an explicit "removal path: <artifact>" label
@@ -214,8 +214,8 @@ const SDD_DEEPLINK_RE = /\.(?:mstar|agents)\/sdd\/([^\s/<>{}\[\]"'\*\?]+)/g;
  * concrete instance → reported (`task-2-report`, `task-1.diff`).
  * Placeholders (`task-N-brief`, `task-N-report`, `<plan-id>`,
  * `{SDD_DIR}/task-N-report.md`) never match.
- * - `.mstar/sdd/<segment>` / `.agents/sdd/<segment>` with a concrete first
- * segment (`20260815-x`) → reported; `<plan-id>` / `{SDD_DIR}` segments
+ * - `.mstar/sdd/<segment>` / `.agents/sdd/<segment>` with a concrete dated
+ * first segment → reported; `<plan-id>` / `{SDD_DIR}` segments
  * are template forms → never match.
  *
  * Discovery only — a finder returning an array, same shape as
@@ -262,7 +262,7 @@ export type ProvenanceCitation = {
 };
 
 /** Dated-slug token shape shared by both provenance kinds: `20\d{6}-` plus a
- * lowercase slug, word-bounded at both ends (`20991231-sample-plan`; an
+ * lowercase slug, word-bounded at both ends (`20991231-example-plan`; an
  * `iter-` / `plan ` / `planId` prefix is optional — the token itself is the
  * fingerprint). The trailing `(?!\\.\d)` lookahead rejects a `.digits`
  * version segment after the token (`20260908-v3.9.0` is a version, not a
@@ -313,8 +313,8 @@ function qualifyingDatedToken(text: string): string | null {
  * local deep paths).
  *
  * Discrimination (HARD — zero false positives on the skills corpus):
- * - `plan-id`: a dated-slug token (`20991231-sample-plan`; the dated token
- *   inside `iter-20990101-sample-iteration` counts). Synthetic example
+ * - `plan-id`: a dated-slug token (`20991231-<slug>`; the dated token
+ *   inside `iter-20990101-<slug>` counts). Synthetic example
  *   slugs (`20991231-example-plan`, `20260717-example`) are never reported;
  *   a token followed by a `.digits` version segment (`20260908-v3.9.0`) is
  *   a version, not a plan id; placeholder shapes (`task-N-*`, `<plan-id>`,

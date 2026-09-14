@@ -841,7 +841,7 @@ export const MorningStarHarnessPlugin: Plugin = async () => {
  // the overwhelming majority of edits) skip the read/parse entirely.
         classifyDirResolvers = await dirResolversLoader.load();
         if (harnessDocKindOfTarget(filePath) === null) return;
- // f8 (audit-20260821-f8): when the OpenCode `edit` args carry a
+ // Patched-doc linting: when the OpenCode `edit` args carry a
  // literal `oldString` -> `newString` pair (one pair per tool call —
  // no replacements array, no regex), synthesize the PATCHED text and
  // lint the patched coordination doc, so an edit that turns a valid

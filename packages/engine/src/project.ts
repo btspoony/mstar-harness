@@ -24,8 +24,7 @@
  * validation delegates verbatim to `validateResidual` (status.ts), so the
  * severity enum + lifecycle semantics are preserved at the new address.
  * - `_DEFAULT_PROJECT` fallback for project-less flows (compass ruling 2).
- * - Theme-scoped research corpus `projects/<id>/references/` (plan
- * 20260820-project-research-corpus Task 1): engine owns
+ * - Theme-scoped research corpus `projects/<id>/references/`: engine owns
  * `PROJECT_REFERENCES_DIR` + `listProjectReferenceFiles` — directory
  * metadata only (`readdirSync` with `withFileTypes`), never file bodies,
  * never a markdown schema; placement semantics are skills prose, not
@@ -726,8 +725,8 @@ export function techDebtRollup(projectDir: string): TechDebtRollup {
 }
 
 /**
- * List theme-scoped research files under `<projectDir>/references/` (plan
- * 20260820-project-research-corpus Task 1 — compass ruling 1): top-level
+ * List theme-scoped research files under `<projectDir>/references/`
+ * (compass ruling 1): top-level
  * files plus files exactly one subdirectory deep; deeper nesting ignored;
  * directories never listed; regular files only (`Dirent.isFile()`). Returns
  * paths relative to the references root with `/` separators, sorted by code

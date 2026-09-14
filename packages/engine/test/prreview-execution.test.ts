@@ -1,5 +1,5 @@
 /**
- * Engine pr-review EXECUTION tests — plans 20260826-prreview-execution Task 2.
+ * Engine pr-review EXECUTION tests.
  *
  * Spec sources (each describe cites the skill/reference section it enforces):
  * - `mstar-audit/references/pr-review.md` § Comment posting — target parsed

@@ -272,7 +272,7 @@ Exit codes (binding):
 `kind: review` stores a validated `mstar.review/v1` envelope — the machine-readable review document that `pr-deep-review` / `amazing-pr-review` Stage 3 must persist after synthesis (the Markdown report is the optional human copy, not a substitute). Plan-shaped keys (`^[0-9]{8}-[a-z0-9-]+$`) land at `{HARNESS_DIR}/sdd/<key>/review/report.json`; other keys (PR ids, review ids) at `{HARNESS_DIR}/sdd/_reviews/<key>.json`.
 
 ```sh
-mstar-harness persist review --key 20260827-review-json --stdin <<'JSON'
+mstar-harness persist review --key 20991231-example-review-json --stdin <<'JSON'
 {
   "schema": "mstar.review/v1",
   "verdict": "needs fixes",

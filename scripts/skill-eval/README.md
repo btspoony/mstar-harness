@@ -72,7 +72,7 @@ configuration only):
 
 ```json
 {
-  "plan": "20260907-skill-eval-baseline",
+  "plan": "20991231-example-skill-eval",
   "sourceRefs": { "baseline": "<40-hex sha>", "candidate": "<40-hex sha>" },
   "cli": { "path": "/opt/homebrew/bin/codex", "version": "codex-cli 0.144.1", "helpHash": "<64-hex sha256 of recorded help output>" },
   "requestedModel": null,

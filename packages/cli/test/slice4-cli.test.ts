@@ -27,7 +27,7 @@ const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
  * MSTAR_CLI_PROJECT_ROOT / INIT_CWD are pinned too: `resolveCliPath`
  * (audit-002) reads them ahead of PWD, so an ambient value would redirect
  * every relative-path fixture spuriously. TZ is pinned to the test process's
- * own frame (residual 20260827-qa-tzflake-cli-slice4): `bun test` runs this
+ * own frame (tracked residual): `bun test` runs this
  * process in UTC when TZ is unset, while a bare subprocess would fall back to
  * the system zone — the two frames diverge across the local calendar-day
  * boundary (00:00–08:00 in positive-offset zones), breaking the backlog

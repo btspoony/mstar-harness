@@ -1,4 +1,4 @@
-# dsh entry split — 模块盘点 + 拆分方案（plan `20260810-dsh-entry-split` T1）
+# dsh entry split — 模块盘点 + 拆分方案
 
 - **范围**：`packages/dsh/src/index.ts`（3184 行）→ `src/gates/*` 纯重构拆分的模块盘点与 move plan。
 - **冻结基线**：worktree branch `feature/dsh-entry-split` @ `76bbad4`（含 Plan A 全部代码：engine workspaceRoot 边界 + 2.0.5 版本对齐）。
