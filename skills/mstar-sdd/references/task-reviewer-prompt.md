@@ -39,12 +39,17 @@ Dispatch:
     Diff file: [DIFF_FILE]
 
     Read the diff file once. Do not re-run git. Do not mutate checkout.
-    Review only the assigned task diff and directly affected interfaces.
-    No repository-wide exploration or full test suite. Reuse relevant
-    implementer evidence; a specific doubt permits only the assigned focused
-    unit check. Non-executable docs/policy may use scoped-check evidence;
-    verify its applicability against the diff, never invent a test obligation.
-    Stop once the assigned acceptance questions are answered.
+    Review only the assigned task diff and directly affected interfaces;
+    no repository-wide tracing unless a blocking finding requires it.
+    No full test suite. Reuse relevant implementer evidence; a specific
+    doubt permits only the assigned focused unit check. Non-executable
+    docs/policy may use scoped-check evidence; verify its applicability
+    against the diff, never invent a test obligation. Stop once the
+    assigned acceptance questions are answered.
+    The task diff plus directly affected interfaces are this review's budget
+    (default bounded-seat cap → `mstar-harness-core` § 定向执行与验证边界);
+    when it is reached, stop there and return the assessment for what was
+    reviewed plus a `Truncated coverage: <what was not covered>` line.
 
     ## Output
 

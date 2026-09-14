@@ -11,6 +11,7 @@ The concise gate summary remains in `references/project-manager.md`.
 - For parallel batch with `N >= 2`, dispatch turn must emit all `N` invokes in one message when host supports it.
 - **Same-repo writable parallel tracks**: tool concurrency and worktree isolation are **separate gates**. Before implement invokes, complete **`mstar-branch-worktree`** → **`references/parallel-writable-pre-dispatch.md`**.
 - **Scope and stopping are explicit**: apply `mstar-harness-core` § 定向执行与验证边界. Give each leaf one result, owned paths/symbols, relevant inputs, named checks/selectors, and an evidence-based stopping condition. Reuse unaffected evidence; do not inject a suite merely because the repo exposes it. Independent ready assignments run concurrently after their dependency/isolation checks.
+- **Review/QC rounds are quantitative, not adjectival**: a read-only review / QC dispatch states a `Budget` (expansion cap) and a `Return shape`, so the seat stops when its assigned questions are answered or the cap is reached, returns the verdict it has plus a truncated-coverage declaration, and never expands until a human steers. Budget defaults, the truncation marker, and its relation to `Unconfirmed` → `mstar-harness-core` § 定向执行与验证边界. The severity bar for the round's findings → `mstar-artifacts` `references/status-and-residuals.md`.
 - **Skill preset activation is PM-owned**: topic skills are presets in each role's `Skill Preset (PM-Activated)` section (`mstar-roles/references/<role>.md`), not self-loaded defaults. Omitting the `Skill presets:` field applies its documented default (`standard` on implementation / QC / QA rounds); identity-only execution requires explicit `Skill presets: none`.
 
 ## Executor Anti-Recursion Rules
@@ -50,6 +51,7 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 - Anti-patterns must be action-oriented ("auto-dispatch to …", "treat … as invoke", "start … before …") — not abstract descriptions.
 - If the assignment involves multiple QCs or parallel tracks, add a specific bullet about NOT serializing or pre-empting the parallel dispatch.
 - If the assignment is part of a broader staged plan with follow-up tasks, add a bullet about NOT auto-extending scope into downstream tasks.
+- **Anti-pattern — unbounded negative acceptance:** an Acceptance Criterion phrased as a repo-wide negative property ("prove no surviving claim of X anywhere", "make sure nothing else uses Y") with no termination rule. Scope it to the assigned diff pack plus directly affected interfaces, or state the budget that bounds the search — the seat stops there and declares what it did not cover. An open-ended "prove no X anywhere" acceptance is a dispatch defect, not a review task.
 
 ```markdown
 ## Assignment
@@ -116,6 +118,10 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 - In: <owned files/symbols, directly affected interfaces; finding + fix delta for re-review>
 - Out: <excluded work and specific boundary>
 **Inputs**: <brief, diff, relevant knowledge, reusable evidence with original range>
+**Budget (review / QC seats)**: <expansion cap (file opens / wall clock) — may only tighten the default in `mstar-harness-core` § 定向执行与验证边界, never loosen it; `N/A` on implement / ops rounds>
+**Return shape (review / QC seats)**: <what the seat returns and how it stops — verdict + findings shape; a clean round returns `findings: []` explicitly instead of prose; `N/A` when the round produces no findings>
+**Severity bar**: <what this round must treat as blocking — the blocking classes are unsafe-to-ship or significant tech debt; class definitions and the full report-section mapping → `mstar-artifacts` `references/status-and-residuals.md`; `N/A` on rounds with no findings>
+**Input provenance**: <how the seat grounds its claims — the command plus observed output for a `declared` / `recorded` / `written` artifact claim, and provenance for an asserted `path:line` citation; `N/A` when the round asserts neither>
 **Deliverables**: ...
 **Acceptance Criteria**:
 - [ ] ...
@@ -123,7 +129,7 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 - [ ] <AC → exact affected unit-test selector or scoped static check; expected result>
 - [ ] <reused evidence + why unchanged, or new observable proof>
 - [ ] commit proof
-**Constraints**: <no scope expansion; no local full suite without referenced explicit user permission; QA unit-only; no spontaneous browser/device/E2E; stop on concrete missing inputs and return once acceptance is evidenced>
+**Constraints**: <no scope expansion; no local full suite without referenced explicit user permission; QA unit-only; no spontaneous browser/device/E2E; review / QC seats stop at the assigned budget and declare truncated coverage instead of expanding; stop on concrete missing inputs and return once acceptance is evidenced>
 **Effort (agent-oriented)**: <XS/S/M/L/XL + session band>
 **Orchestration Guard** (see `**You are a leaf executor. You MUST NOT:**` block at top for primary anti-patterns):
 - No recursive same-role dispatch
@@ -134,6 +140,13 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 **Report Format**: Completion Report
 **Execution evidence**: <RCA/test-first/review feedback/evidence expectations for the assignee, if applicable>
 ```
+
+## PM Self-Check (artifact claims and citations)
+
+State a claim only as strongly as the evidence in hand:
+
+- An artifact claim — `declared` / `recorded` / `written` — is stated only together with the command and the observed output that shows it; without both, describe the artifact as pending rather than done.
+- An asserted `path:line` carries its provenance: a normative-document citation is traced (`git show <ref>:<path>`) or fetched raw with a content identity check, so the quoted text is shown to come from the revision being cited — not from memory of the file.
 
 ## L1 path fields (iteration Phase 2, lease gate not waived)
 

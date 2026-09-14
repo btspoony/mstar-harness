@@ -26,7 +26,7 @@ starts at **Phase 2 entry**.
 
 **本 Phase 定义 per-plan 派发循环的完整流程**：前置条件检查、session todos、backlog 读取、integration 分支管理、per-plan dispatch 循环（分支→实现→QC→**QA gate**→Done→合并）、dispatch-first 约束。PM 读取本 Phase（含 §2.0–§2.5 与下方 lease 细则）即可执行迭代。
 
-**Findings cleanup（默认）**：Phase 2 每个 plan Assignment 默认 **`Findings cleanup: zero-residual`**（可修 findings 当轮 fix→re-review 清干净；仅真 blocker-defer + Durable Roadmap 可留 open R#）。compass 或 Assignment 可显式覆写为 `allow-residual`。SSOT → **`mstar-artifacts`**「Findings cleanup modes」。
+**Findings cleanup（默认）**：Phase 2 每个 plan Assignment 默认 **`Findings cleanup: zero-residual`**（可修 findings 当轮 fix→re-review 清干净；仅真 blocker-defer + Durable Roadmap 可留 open R#，`critical` 不属 defer）。compass 或 Assignment 可显式覆写为 `allow-residual`。SSOT → **`mstar-artifacts`**「Findings cleanup modes」。
 
 ## 2.0 前置条件（五道闸）
 
@@ -212,7 +212,7 @@ Iteration Phase 2 附加：
 - PM **NEVER** 在 PM 线程实现产品代码（delegate dev；hotfix 例外见 **`mstar-phase-gates`**）
 - `Subagent invokes issued: 0` 而 Assignment 已写出 → **`dispatch incomplete`**；下一条补发 invoke，禁止 PM 顶替
 - QC 初轮：**SDD → N=3**；**inline → N=1**；plan QC tri 三席 **同条消息 N=3**（非 implement 轨数）
-- **`Findings cleanup: zero-residual`（默认）**：QC 后可修 Warning/Suggestion → 继续 fix→targeted re-review，直至 clean `Approve` 或仅剩真 blocker-defer；**禁止**把可修项登记为 open residual 草草 `Approve with residuals`
+- **`Findings cleanup: zero-residual`（默认）**：QC 后可修 Warning/Suggestion → 继续 fix→targeted re-review，直至 clean `Approve` 或仅剩真 blocker-defer（`critical` 不属 defer —— 定义 → **`mstar-artifacts`**「Findings cleanup modes」）；**禁止**把可修项登记为 open residual 草草 `Approve with residuals`
 
 ## Feature worktree (per plan)
 

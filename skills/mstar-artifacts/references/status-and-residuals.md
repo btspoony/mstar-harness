@@ -186,8 +186,8 @@ Only these five, **lowercase English**:
 
 | `severity` | Meaning |
 | ---------- | ------- |
-| `critical` | Merge-blocking; maps to QC **Critical** findings. |
-| `high` | Not blocking but high impact (security, correctness, data, significant tech debt); fix, escalate, or open residual with PM follow-up. |
+| `critical` | **Unsafe to ship, reachable on this merge** — correctness bug, security hole, data loss, or broken public contract whose unsafe outcome can be triggered here; merge-blocking. Maps to QC **Critical** findings. |
+| `high` | Not blocking — the same unsafe-to-ship classes whose unsafe outcome is **not reachable on this merge** (narrow reach, unreachable path, or already mitigated), **or significant tech debt**; fix, escalate, or open a residual with PM follow-up. |
 | `medium` | Should address this or next milestone; may be open residual. |
 | `low` | Small impact, cheap fix; may be open residual. |
 | `nit` | Style, naming, wording, non-behavior doc nits; **lighter than `low`**. PM may omit from the register if no tracking needed. |
@@ -196,12 +196,14 @@ Summary vs `mstar-review-qc`: unresolved **`critical`** → usually `Request Cha
 
 ### 4. QC report section → JSON `severity`
 
+Grade by **what would happen if the finding is true**, never by how uncertain you are. Whether a finding blocks turns on whether its unsafe outcome is **reachable on this merge** — the axis defined in §3 — and not on the report section (Critical / Warning / Suggestion) it was filed under; the filing is a routing hint, not a severity decision. Two classes reach `high` or above: (a) **unsafe to ship** — correctness, security, data loss, broken public contract → `critical` / `high` even at low confidence; (b) **significant tech debt** → `high`. Everything else stays below: documentation accuracy, citations/line numbers, naming, wording, and test polish are `low` / `nit` — including inside a normative document — **unless the defect would itself drive an unsafe outcome** (a normative instruction that leads an executor into a correctness, security, or data failure), in which case it grades by that consequence. Evidence confidence belongs in the report (`Confidence`), not encoded by inflating `severity`. When the uncertainty is about **scope** (reachability) rather than severity class, record the worst-case class among the plausible ones and state the open question in the entry's `scope`.
+
 When registering into the project register (template in `mstar-review-qc`):
 
 | Report Findings section | JSON `severity` |
 | ----------------------- | --------------- |
-| **Critical** | Default `critical`. PM may record `high` if “not blocking this merge but follow up soon” — state reason in `title`/`scope`. |
-| **Warning** | `high` or `medium`: security/correctness/data → `high`; other substantive non-blocking → `medium`; **when unsure, use `high`**. |
+| **Critical** | Default `critical`. PM may record `high` only when the §3 axis puts the unsafe outcome outside reachability on this merge, with the reasoning stated in `title`/`scope`. |
+| **Warning** | `medium` for ordinary substantive non-blocking items. A security/correctness/data finding follows the same §3 reachability axis as the **Critical** row: `high` when the unsafe outcome is not reachable on this merge, `critical` when it is — note the Warning filing in `title`/`scope`. |
 | **Suggestion** | `low` or `nit`: substantive improvement → `low`; pure style/optional → `nit`. |
 
 **Common mistake:** report **Warning** is not a valid `severity` string; there is no `warning` in the enum (see legacy below).
@@ -238,14 +240,14 @@ Intent: clear findings in the current plan session whenever possible. Open resid
 1. After QC: default path is **fix-now + targeted re-review**, not `Approve with residuals`.
 2. Do **not** register open R# for items that can be fixed in this session.
 3. **`nit`**: fix in-session **or** drop with no R# (existing “no tracking needed”); **never** open residual for style-only nits.
-4. **`Approve with residuals`** only when every remaining open item is a true blocker-defer (`decision: defer`, `target` = next iteration/milestone, Durable Roadmap Gate written).
+4. **`Approve with residuals`** only when every remaining open item is a true blocker-defer (`decision: defer`, `target` = next iteration/milestone, Durable Roadmap Gate written) — **except `critical`** (unsafe outcome reachable on this merge, §3): a `critical` is fixed now, or the risk is explicitly accepted and the entry is **closed** per item 6, never left open as the approval's remaining item.
 5. **True defer** only: external dependency; product/scope decision for a later iteration; or explicit **current-turn** user defer — plus Durable Roadmap Gate.
 6. **`waived` / `risk-accepted`**: still require PM + user/architect alignment; **close in the register** (do not leave open). Prefer a cheap fix over waive-as-shortcut.
-7. Plan **Done**: prefer an empty `entries[<plan_id>]` in the register. If any open entries remain, **every** one must be blocker-defer + roadmap; otherwise keep `InReview` / `Blocked`.
+7. Plan **Done**: prefer an empty `entries[<plan_id>]` in the register. If any open entries remain, **every** one must be blocker-defer + roadmap and none may be `critical` (item 4); otherwise keep `InReview` / `Blocked`.
 
 ### `allow-residual` (legacy default)
 
-Non-blocking Warning/Suggestion may ship with open register entries and `Approve with residuals` when no unresolved Critical remains (existing residual lifecycle unchanged).
+Non-blocking register entries — `severity` below `critical` on the §3 axis — may ship with open entries and `Approve with residuals` when no unresolved `critical` remains (existing residual lifecycle unchanged).
 
 > **Engine check (when available):** run `mstar status findings-cleanup <plan-id> [--project <id>] [--mode zero-residual|allow-residual]` (or import `findingsCleanupGate` from `@mstar-harness/engine` in a host hook) to enforce the mode above against the plan's register entries. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 

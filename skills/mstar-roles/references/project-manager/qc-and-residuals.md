@@ -69,9 +69,9 @@ Read Assignment **`Findings cleanup`** first (`mstar-artifacts` — Findings cle
 
 - Prefer **fix-now + targeted re-review** for Critical / Warning / Suggestion that can be fixed this session.
 - **NEVER** park fixable findings as open R# or use `Approve with residuals` for them.
-- Register open R# **only** for true blocker-defers (`decision: defer` + Durable Roadmap + `target` next iteration/milestone).
+- Register open R# **only** for true blocker-defers (`decision: defer` + Durable Roadmap + `target` next iteration/milestone) — never a `critical` (`mstar-artifacts` Findings cleanup modes).
 - `nit`: fix or drop (no R#).
-- Plan Done: prefer empty open list; any remaining open R# must all be blocker-defer + roadmap.
+- Plan Done: prefer empty open list; any remaining open R# must all be blocker-defer + roadmap — never a `critical` (`mstar-artifacts` Findings cleanup modes).
 
 ### When `Findings cleanup: allow-residual` (or unset outside iteration Phase 2)
 

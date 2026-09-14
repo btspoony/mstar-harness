@@ -781,6 +781,33 @@ describe("findingsCleanupGate — project register input (array schema)", () => 
     violationCodes("findings.zero-residual-open-fixable")(gated(entry({ decision: "accept" }), { mode: "zero-residual" }));
   });
 
+  test("zero-residual: an open critical defer (valid target) is still blocked", () => {
+// severity outranks the decision branch: a defer with a well-formed target
+// is a true blocker-defer, but never for a critical — fix it or close it
+// by explicit risk acceptance.
+    const result = gated(entry({ severity: "critical", decision: "defer", target: "next iteration" }), {
+      mode: "zero-residual",
+    });
+    expect(result.ok).toBe(false);
+    expect(violationsOf(result)).toEqual(["findings.zero-residual-critical"]);
+    expect(result.violations[0]!.severity).toBe("high");
+  });
+
+  test("zero-residual: an open critical is blocked for every decision (accept)", () => {
+    const result = gated(entry({ severity: "critical", decision: "accept" }), { mode: "zero-residual" });
+    expect(result.ok).toBe(false);
+    expect(violationsOf(result)).toEqual(["findings.zero-residual-critical"]);
+  });
+
+  test("zero-residual: a resolved critical passes (closed entries stay first)", () => {
+    const result = gated(
+      entry({ severity: "critical", lifecycle: "resolved", closed_at: "2026-09-14", closure_note: "fixed in 8f2c1a" }),
+      { mode: "zero-residual" },
+    );
+    expect(result.ok).toBe(true);
+    expect(result.violations).toEqual([]);
+  });
+
   test("zero-residual: risk-accepted must be closed/archived, not left open", () => {
     violationCodes("findings.zero-residual-risk-accepted")(
       gated(entry({ decision: "risk-accepted" }), { mode: "zero-residual" }),

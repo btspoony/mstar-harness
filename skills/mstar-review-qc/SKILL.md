@@ -38,7 +38,7 @@ description: "Morning Star QC orchestration — **SDD mandatory plan QC tri-revi
 ## Residual Findings 留档门禁（PM）
 
 - 先读 Assignment **`Findings cleanup`**（`plans[].metadata.findings_cleanup` mirror 已删——Assignment 是唯一 mode 来源）→ **`mstar-artifacts/references/status-and-residuals.md`**「Findings cleanup modes」。
-- **`Findings cleanup: zero-residual`**（iteration Phase 2 默认）：可修 **Warning / Suggestion / Critical** → **fix-now + targeted re-review**，**禁止**把可修项登记为 open R# 或用 `Approve with residuals` 收口；**`nit`** 当场修或丢弃（无 R#）。仅 **真 blocker-defer**（外部依赖 / 须下轮产品决策 / 用户本轮显式 defer + Durable Roadmap）可登记 open R#（`decision: defer`）。此时 `Approve with residuals` **仅**允许剩余项全是该类 defer。
+- **`Findings cleanup: zero-residual`**（iteration Phase 2 默认）：可修 **Warning / Suggestion / Critical** → **fix-now + targeted re-review**，**禁止**把可修项登记为 open R# 或用 `Approve with residuals` 收口；**`nit`** 当场修或丢弃（无 R#）。仅 **真 blocker-defer**（外部依赖 / 须下轮产品决策 / 用户本轮显式 defer + Durable Roadmap）可登记 open R#（`decision: defer`）。此时 `Approve with residuals` **仅**允许剩余项全是该类 defer，且**不含 `critical`**（不安全后果本次 merge 可达，见上文「Findings cleanup modes」）；`critical` 当场修复，或走显式 risk acceptance 并在 register 内关闭，**不得**作为批准遗留项。
 - **`Findings cleanup: allow-residual`**（standalone / hotfix / inline 默认）：阻断项修复后仍有 **Warning / Suggestion** 或技术债 → 必须留档；**`Approve with residuals`** 仅当无 open **Critical**；PM 汇总结论须含 residual 清单与跟踪位置。
 - **`severity`** 仅允许 `mstar-artifacts/references/status-and-residuals.md` 枚举。
 - **Open SSOT**：`{PROJECT_DIR}/<id>/residuals.json`（默认 `{HARNESS_DIR}/projects/<id>/`；无项目流程 `_default`）→ `entries[<plan-id>]`；PM 在 consolidated 决策分配 **R1…** 并写入。关闭 → 在 register 内 **in place** 置 `lifecycle` / `closed_at` / `closure_note`（v1 `archived/residuals/` 与 `archive-residuals` 已移除）。
@@ -59,6 +59,12 @@ Leaf reviewers apply verdict per **`mstar-roles/references/qc-specialist/report-
 - **未提及 = 未审查**：某 finding / severity 项 / 声明未被任何席位报告提及 → 不得在汇总中标记为已解决或通过；如实标注 `unreviewed`，仅对受影响项按需转 targeted re-review 或补充席位；不据此重审无关内容。
 - **汇总层零注入**：consolidated 中每条发现可溯源到某 `qcN.md`；PM 不得在汇总层引入席位报告之外的新声明（PM 自身观察走独立 Status Update，不混入 gate 决策输入）。
 - **Unconfirmed 传导**：任一席位 verdict = `Unconfirmed`（`report-template.md` 定义的证据通道失败态）→ gate 决策不得为 `Approve`——先补证据（重发 review-package / 修 diff 基线）再收敛；受影响席位走既有 targeted re-review 机制（同 `qcN.md` `## Revalidation` 原位更新 verdict），不新增 re-review 形态、不改 N 规则。
+
+### 席位预算与截断（PM）
+
+- **座次不放宽范围。** N=3 只增加视角：每个席位仍只审其 diff pack 与直接影响接口，预算也不因席位增加而变宽。PM 用 Assignment `Budget` 收紧；默认与数字 SSOT → **`mstar-harness-core`** § 定向执行与验证边界。
+- **截断报告保留 verdict。** 席位因触达预算而声明 `Truncated coverage:` 时，其 verdict 有效，PM **不得**因此升级为 `Unconfirmed`——`Unconfirmed` 仍是证据通道失败态（见上条传导规则）。
+- **未覆盖范围不改写门禁。** 席位 verdict 只涵盖其已审范围：当 Assignment 范围未被完整覆盖时，**gate decision 不得为 `Approve`**。PM 二选一——把未覆盖范围按 targeted re-review 重新派发（席位在预算内补完），或显式收窄 `Review range` 并把收窄依据记入 `qc-consolidated.md` 后再收敛。截断范围仍按「未提及 = 未审查」在 `qc-consolidated.md` 中如实标注 `unreviewed`，PM 不重审无关内容来补全它。
 
 ## 证据规则（PM · consolidated 输入）
 

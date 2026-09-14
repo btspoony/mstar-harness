@@ -89,7 +89,7 @@ Register 文档形状（`entries[<plan-id>]` 数组 JSON）、**9 个必填字�
 ### Findings cleanup（与 Assignment 联动）
 
 - Assignment **`Findings cleanup: zero-residual | allow-residual`** 是唯一 mode 来源（`metadata.findings_cleanup` mirror 已删）；迭代 Phase 2 默认 `zero-residual`。
-- `zero-residual`：可修 findings 当轮 fix → re-review 清干净；仅真 blocker 可 defer 且须 Durable Roadmap + `target`；`nit` 必须当场修或删；waived/risk-accepted 必须关闭，不得留 open。
+- `zero-residual`：可修 findings 当轮 fix → re-review 清干净；仅真 blocker 可 defer 且须 Durable Roadmap + `target`（`critical` 不属 defer —— 定义 → **`mstar-artifacts`**「Findings cleanup modes」）；`nit` 必须当场修或删；waived/risk-accepted 必须关闭，不得留 open。
 - `allow-residual`：仅 unresolved **critical** 阻止 Approve。
 - mode 全文与 enforcement → **`mstar-artifacts`** `references/status-and-residuals.md`（「Findings cleanup modes」+ 其 engine check）。
 
