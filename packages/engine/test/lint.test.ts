@@ -595,6 +595,13 @@ describe("findProvenanceCitations", () => {
     ]);
   });
 
+  test("trims trailing sentence punctuation from the reported match (finding kept, match clean)", () => {
+    const citations = findProvenanceCitations("tracked in .mstar/plans/20991231-sample-plan/tasks.md.");
+    expect(citations).toEqual([
+      { line: 1, match: ".mstar/plans/20991231-sample-plan/tasks.md", kind: "harness-path" },
+    ]);
+  });
+
   test("keeps sdd deeplinks unreported — the ephemeral check owns that surface", () => {
     expect(findProvenanceCitations("report at .mstar/sdd/20991231-sample-plan/task-1-report.md")).toEqual([]);
     expect(findProvenanceCitations("mirror at .agents/sdd/20991231-sample-plan/")).toEqual([]);

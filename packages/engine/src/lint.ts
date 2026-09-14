@@ -270,7 +270,9 @@ export type ProvenanceCitation = {
  * `N` is a letter and bracket characters are not digits (same placeholder
  * discrimination as TASK_ARTIFACT_RE). */
 const DATED_SLUG_TOKEN_SOURCE = "\\b20\\d{6}-[a-z0-9][a-z0-9-]*\\b(?!\\.\\d)";
-/** Standalone dated-slug token occurrences (plan-id candidates). */
+/** Standalone dated-slug token occurrences (plan-id candidates). Consumed
+ * only via `matchAll` (which clones the regex), so the shared `lastIndex`
+ * never leaks between calls — do not `.exec` this instance directly. */
 const DATED_SLUG_TOKEN_RE = new RegExp(DATED_SLUG_TOKEN_SOURCE, "g");
 /** Local-harness deeplink — `.mstar/` / `.agents/` + a path tail. Segment
  * charset mirrors SDD_DEEPLINK_RE (whitespace, placeholder brackets, quotes
@@ -281,6 +283,11 @@ const HARNESS_PATH_RE = /\.(?:mstar|agents)\/[^\s<>{}\[\]"'\*\?]+/g;
  * SDD_DEEPLINK_RE). Attribution contract: these paths belong to the
  * ephemeral-citation check exclusively, so this finder never reports them. */
 const SDD_DEEPLINK_PREFIX_RE = /^\.(?:mstar|agents)\/sdd(?:\/|$)/;
+/** Trailing sentence punctuation swallowed by the harness-path tail charset
+ * (`… /tasks.md.` in a sentence). Trimmed from the REPORTED `match` only —
+ * span and line detection are unchanged; the plan-id token charset cannot
+ * carry trailing punctuation (word-bounded), so the trim is a no-op there. */
+const TRAILING_SENTENCE_PUNCT_RE = /[.,;:!?]+$/;
 
 /** True when a dated-slug token is a synthetic example form
  * (`20991231-example-plan`, `20260717-example`): any `-`-separated segment
@@ -293,8 +300,7 @@ function isExampleSlug(token: string): boolean {
  * `null` — the dated-instance requirement a harness path must satisfy to be
  * specific (generic layout segments alone never qualify). */
 function qualifyingDatedToken(text: string): string | null {
-  const re = new RegExp(DATED_SLUG_TOKEN_SOURCE, "g");
-  for (let m = re.exec(text); m !== null; m = re.exec(text)) {
+  for (const m of text.matchAll(DATED_SLUG_TOKEN_RE)) {
     if (!isExampleSlug(m[0])) return m[0];
   }
   return null;
@@ -352,7 +358,7 @@ export function findProvenanceCitations(text: string): ProvenanceCitation[] {
     }
     found.sort((a, b) => a.index - b.index);
     for (const f of found) {
-      citations.push({ line: i + 1, match: f.match, kind: f.kind });
+      citations.push({ line: i + 1, match: f.match.replace(TRAILING_SENTENCE_PUNCT_RE, ""), kind: f.kind });
     }
   }
   return citations;

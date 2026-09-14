@@ -485,13 +485,13 @@ describe("mstar lint --type provenance", () => {
 
   test("forced provenance dir walk applies to every collected file, exit 1", () => {
     withTempDir((dir) => {
-      writeFileSync(join(dir, "20260808-real-plan.md"), "# Plan\n\n## Goal\nTracked in 20991231-sample-plan.\n");
-      writeFileSync(join(dir, "20260808-clean-plan.md"), "# Plan\n\n## Goal\nPlaceholder <plan-id> only.\n");
+      writeFileSync(join(dir, "20991231-real-plan.md"), "# Plan\n\n## Goal\nTracked in 20991231-sample-plan.\n");
+      writeFileSync(join(dir, "20991231-clean-plan.md"), "# Plan\n\n## Goal\nPlaceholder <plan-id> only.\n");
       const result = runCli(["lint", "--type", "provenance", dir]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("20260808-real-plan.md: FAIL");
+      expect(result.stderr).toContain("20991231-real-plan.md: FAIL");
       expect(result.stderr).toContain("lint.provenance.plan-id");
-      expect(result.stdout).toContain("20260808-clean-plan.md: OK");
+      expect(result.stdout).toContain("20991231-clean-plan.md: OK");
     });
   });
 
