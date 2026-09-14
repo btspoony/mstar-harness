@@ -6,6 +6,28 @@
 
 ## [Unreleased]
 
+## [3.9.2] - 2026-09-14
+
+### Harness
+
+- 新增**回合边界派发门禁**：当 `Execute as` 为审查席位（`qc-specialist`、`qc-specialist-2`、`qc-specialist-3`、`code-reviewer`、`qa-engineer`）或 `Task category` 为 `audit` 时，Assignment 必须同时声明 **`Budget (review / QC seats)`** 与 **`Return shape (review / QC seats)`**。`mstar dispatch validate` 在字段缺失、为空或为 `N/A` 时报错并指出缺的是哪一个；implement / ops / docs 轮不受影响。只校验字段**是否存在** —— 字段值是散文，从不解析。
+- 新增 **`validateQcReport`**（`@mstar-harness/engine`）与 **`mstar qc validate-report <report.md>`**，用于 plan-QC 席位报告。门禁检查：报告以 `---` frontmatter 开头且带 `qc` 必需字段；frontmatter `verdict` 在枚举内且与正文 verdict 行一致；`## Summary` 各项计数与对应 `## Findings` 区的条目数一致；verdict 由计数推出（存在未解决的 Critical / Warning 时不得 `Approve`；`Unconfirmed` 计数不为 0 时 verdict 必须为 `Unconfirmed`）；已声明的 `Truncated coverage:` 行不得被判为 `Unconfirmed` —— 触顶收口是范围裁剪，不是证据通道失败。无法判定的情况保持静默，不做猜测。
+- 报告门禁读取**最后一条** verdict 行，且 `## Summary` 是报告**唯一的当前计数** —— 原地复审刷新 `## Summary` 与 `## Findings`，而不是追加第二份计数，因此复审后的报告按当前状态判定，所有计数规则共用同一读数。
+- 两个门禁都只读 **Assignment header 区 / 报告 frontmatter 区**：派发门禁停在首个 `## Task` 标题、`---` 分隔线或单 `#` 标题处，因此在任务正文里引用的模板字段行不会满足门禁，也不会关闭门禁（正文里的 `**Execute as**: scout` 不再让可写门禁失效）；报告门禁对起始 `---` 未闭合的 frontmatter 直接报 `qcreview.report.unclosed-frontmatter`（high）—— 缺闭合行时正文会被读作 frontmatter，字段与正文规则无从判定。
+- 将检查接入运行时 skills：`mstar-review-qc` § 席位预算与截断 新增唯一一条 Engine-check callout，`qc-specialist-shared.md` 与 QC 报告模板给出指针，`mstar-harness-core` § 定向执行与验证边界 的回合边界条目现点名两个必需字段。
+- 未改变审计链行为、verdict 词汇、severity 语义、register schema 或既有报告契约。
+- 在 `mstar-harness-core` § 定向执行与验证边界 新增**只读审查席位终止契约**：review / QC / L2 席位受默认席位预算约束，触达即停止扩展而非等到人工干预，并声明 `Truncated coverage:`——该状态与 `Unconfirmed` 保持区分。
+- 规范化 Assignment 模板新增 review / QC 轮次的 **`Budget` / `Return shape` / `Severity bar` / `Input provenance`** 字段，并补充定量停止派发不变量、无界否证式验收反模式，以及两条 PM 自检规则（产物声明与 `path:line` 引用来源）。
+- 将规则贯通到席位侧（`qc-specialist-shared`、`reviewer-workflow`、`report-template`、`mstar-sdd` task reviewer）与 PM 编排（`mstar-review-qc`）：截断的席位停止并声明其覆盖范围，未覆盖范围上的 gate decision 不构成批准。收紧 `mstar-artifacts` 的 residual **severity bar**：`critical` 与 `high` 现以「不安全后果在本次 merge 上是否可达」区分，与 finding 落在哪个 QC 报告 section 无关，因此可达的不安全 finding 无法借 `Approve with residuals` 过关；分级按后果而非不确定度，文档缺陷若本身会导致不安全后果则按该后果分级——并移除把非阻断文档发现升级为阻断项的 “when unsure, use `high`” 默认。
+- 将 harness 的阻塞判定统一到同一条**可达性轴**：跨链词汇表（register `severity` / 审计 Merge class / plan-QC report section / L2 task review）落位到 register SSOT —— `mstar-artifacts` `references/status-and-residuals.md` §5 Cross-chain vocabulary。
+- `mstar-audit` `references/pr-review.md` § Merge class 现将 `must-fix` 限定为与 register `critical` 同类（不安全**且**在本次审查变更中可达），并把 `should-fix` 置于同一轴上（不可达的不安全 / 显著技术债 / 实质性非阻塞），同时指向该表而非重述定义。
+- 为 `Critical` / `Important` / `Minor` 补上缺失的定义（`mstar-roles` `references/code-reviewer.md` § Issue severity (Mode A)）：阈值对齐轴，`Critical`/`Important` 驱动 per-task 修复循环，`Minor` 交给 `## Minor (for plan QC)`；L2 派发提示词（`mstar-sdd` `references/task-reviewer-prompt.md`）指向该定义。Merge class 仍只由 Mode C（PR review）使用；Mode B（审计）沿用其自身的 finding 格式（`Impact` / `Effort` / `Risk` / `Confidence`，plan 按 `Priority` 排序）。
+- 枚举、verdict 规则、tally/score 规则、tier 与 budget 机制、路由行为均未改变 —— 标签始终是同一判定的投影。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 3.9.2**。
+
 ## [3.9.1] - 2026-09-14
 
 ### Fixed

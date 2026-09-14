@@ -6,6 +6,21 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [3.9.2] - 2026-09-14
+
+### Harness
+
+- Added a **round-bounding dispatch gate**: when `Execute as` is a review seat (`qc-specialist`, `qc-specialist-2`, `qc-specialist-3`, `code-reviewer`, `qa-engineer`) or `Task category` is `audit`, the Assignment must declare both **`Budget (review / QC seats)`** and **`Return shape (review / QC seats)`**. `mstar dispatch validate` now fails such an Assignment when either field is absent, empty, or `N/A`, naming the missing field; implement / ops / docs rounds are unaffected. Only field **presence** is checked — the field values are prose and are never parsed.
+- Added **`validateQcReport`** (`@mstar-harness/engine`) and **`mstar qc validate-report <report.md>`** for plan-QC seat reports. The gate checks that the report opens with `---` frontmatter carrying the required `qc` fields, that the frontmatter `verdict` is an enum member and agrees with the body verdict line, that each `## Summary` tally matches the number of entries in its `## Findings` section, that the verdict follows from those counts (no `Approve` with an open Critical or Warning; any `Unconfirmed` count requires the `Unconfirmed` verdict), and that a present `Truncated coverage:` line is never reported as `Unconfirmed` — a cap stop is a scope cut, not a failed evidence channel. Undecidable cases stay silent rather than guessing.
+- The report gate reads the **last** verdict line, and `## Summary` is the report's **single current count** — an in-place revalidation refreshes `## Summary` and `## Findings` rather than appending a second tally, so a revalidated report is judged on its current state and every count rule shares one source.
+- Both gates read only the Assignment **header region** / the report's **frontmatter**: the dispatch gate stops at the first `## Task` heading, `---` rule or single-`#` heading, so field lines quoted in the task body neither satisfy it nor disable it (a body `**Execute as**: scout` no longer turns the writable gate off); the report gate reports `qcreview.report.unclosed-frontmatter` (high) when the opening `---` is never closed, since the body would otherwise be read as frontmatter and the field and body rules could not be decided.
+- Wired the checks into the runtime skills: one Engine-check callout in `mstar-review-qc` § 席位预算与截断, pointers from `qc-specialist-shared.md` and the QC report template, and the round-bounding bullet in `mstar-harness-core` § 定向执行与验证边界 now names both required Assignment fields.
+- No audit-chain behaviour, verdict vocabulary, severity semantics, register schema, or existing report contract was changed.
+
+- Version alignment with harness **3.9.2**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **3.9.2**.
+
 ## [3.9.1] - 2026-09-14
 
 ### Changed
