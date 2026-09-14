@@ -61,6 +61,7 @@ import {
   isGitHubActions,
   readDeclaredBins,
   readRolesCorpus,
+  readTrackedFiles,
 } from "./drift-lint.ts";
 
 describe("checkBilingualPairing — README pairing logic (guard 2)", () => {
@@ -850,7 +851,10 @@ describe("checkProvenanceScan — Guard 7 repo text-face provenance scan", () =>
       );
       writeFileSync(join(dir, "docs", "note.md"), `see plan ${SAMPLE_ID} for details\n`);
       writeFileSync(join(dir, "docs", "clean.md"), "no tokens here\n");
-      const { entries, readFailures } = collectProvenanceScanFiles(dir);
+      const { entries, readFailures } = collectProvenanceScanFiles(
+        dir,
+        new Set(["src/sample.ts", "docs/note.md", "docs/clean.md"]),
+      );
       expect(readFailures).toEqual([]);
       const result = checkProvenanceScan(entries);
       expect(result.filesScanned).toBe(3);
@@ -872,7 +876,7 @@ describe("checkProvenanceScan — Guard 7 repo text-face provenance scan", () =>
         mkdirSync(locked, { recursive: true });
         writeFileSync(join(dir, "clean.md"), "no tokens here\n");
         chmodSync(locked, 0o000);
-        const { entries, readFailures } = collectProvenanceScanFiles(dir);
+        const { entries, readFailures } = collectProvenanceScanFiles(dir, new Set(["clean.md"]));
         expect(readFailures.length).toBe(1);
         expect(readFailures[0]).toContain("provenance: read locked");
         // The readable face is still collected; the CLI guard run turns the
@@ -932,7 +936,9 @@ describe("checkProvenanceScan — Guard 7 repo text-face provenance scan", () =>
 
   test("real repo face is collectable and scannable; failure rows stay 1:1 with citations (cleanliness is enforced by the CLI guard run, not pinned here — the existing-leak cleanup is tracked as its own change)", () => {
     const REPO_ROOT = join(import.meta.dir, "..");
-    const { entries, readFailures } = collectProvenanceScanFiles(REPO_ROOT);
+    const { tracked, failures: trackedFailures } = readTrackedFiles(REPO_ROOT);
+    expect(trackedFailures).toEqual([]);
+    const { entries, readFailures } = collectProvenanceScanFiles(REPO_ROOT, tracked);
     expect(readFailures).toEqual([]);
     expect(entries.length).toBeGreaterThan(0);
     const result = checkProvenanceScan(entries);
@@ -945,5 +951,72 @@ describe("checkProvenanceScan — Guard 7 repo text-face provenance scan", () =>
     }).length;
     expect(result.filesScanned).toBe(entries.length - assembled);
     expect(result.failures.length).toBe(result.citationsFound);
+  });
+
+  test("ts trailing comments are scanned: the fragment from the first qualifying // fails at its real line (F-B)", () => {
+    const text = [
+      "export const ok = 1;",
+      `const x = 1; // ported from plan ${SAMPLE_ID}`,
+    ].join("\n");
+    const result = checkProvenanceScan([{ rel: "src/a.ts", text }]);
+    expect(result.filesScanned).toBe(1);
+    expect(result.citationsFound).toBe(1);
+    expect(result.failures[0]).toContain("src/a.ts:2");
+    expect(result.failures[0]).toContain("(plan-id)");
+  });
+
+  test("ts trailing-comment rule excludes :// URL sequences (F-B)", () => {
+    const text = [
+      `const u = "https://example.com/${SAMPLE_ID}";`,
+      `const v = "https://example.com/x"; // clean trailing comment`,
+    ].join("\n");
+    const result = checkProvenanceScan([{ rel: "src/a.ts", text }]);
+    expect(result.citationsFound).toBe(0);
+    expect(result.failures).toEqual([]);
+  });
+
+  test("ts first-token comment face unchanged (F-B): block comment and continuation lines still scanned, code without a trailing comment stays blanked", () => {
+    const text = [
+      `/* header cites ${SAMPLE_ID} */`,
+      ` * continued ${SAMPLE_ID}`,
+      `const cited = "${SAMPLE_ID}";`,
+    ].join("\n");
+    const result = checkProvenanceScan([{ rel: "src/a.ts", text }]);
+    expect(result.citationsFound).toBe(2);
+    expect(result.failures.some((r) => r.startsWith("src/a.ts:1 "))).toBe(true);
+    expect(result.failures.some((r) => r.startsWith("src/a.ts:2 "))).toBe(true);
+    expect(result.failures.every((r) => !r.startsWith("src/a.ts:3"))).toBe(true);
+  });
+
+  test("tracked-set seam: untracked files are not collected, tracked files stay on the face (F-C)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "drift-prov-tracked-"));
+    try {
+      writeFileSync(join(dir, "tracked.md"), `plan ${SAMPLE_ID}\n`);
+      writeFileSync(join(dir, "untracked.md"), `plan ${SAMPLE_ID}\n`);
+      const { entries, readFailures } = collectProvenanceScanFiles(dir, new Set(["tracked.md"]));
+      expect(readFailures).toEqual([]);
+      expect(entries.map((e) => e.rel)).toEqual(["tracked.md"]);
+      const result = checkProvenanceScan(entries);
+      expect(result.citationsFound).toBe(1);
+      expect(result.failures[0]).toContain("tracked.md:1");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("readTrackedFiles returns the repo-root-relative tracked set; a git failure is one named row with an empty set (F-C guard-or-clear)", () => {
+    const REPO_ROOT = join(import.meta.dir, "..");
+    const ok = readTrackedFiles(REPO_ROOT);
+    expect(ok.failures).toEqual([]);
+    expect(ok.tracked.has("scripts/drift-lint.ts")).toBe(true);
+    const notARepo = mkdtempSync(join(tmpdir(), "drift-prov-norepo-"));
+    try {
+      const bad = readTrackedFiles(notARepo);
+      expect(bad.tracked.size).toBe(0);
+      expect(bad.failures.length).toBe(1);
+      expect(bad.failures[0]).toContain("provenance: git ls-files failed");
+    } finally {
+      rmSync(notARepo, { recursive: true, force: true });
+    }
   });
 });
