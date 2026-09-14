@@ -60,6 +60,12 @@ Leaf reviewers apply verdict per **`mstar-roles/references/qc-specialist/report-
 - **汇总层零注入**：consolidated 中每条发现可溯源到某 `qcN.md`；PM 不得在汇总层引入席位报告之外的新声明（PM 自身观察走独立 Status Update，不混入 gate 决策输入）。
 - **Unconfirmed 传导**：任一席位 verdict = `Unconfirmed`（`report-template.md` 定义的证据通道失败态）→ gate 决策不得为 `Approve`——先补证据（重发 review-package / 修 diff 基线）再收敛；受影响席位走既有 targeted re-review 机制（同 `qcN.md` `## Revalidation` 原位更新 verdict），不新增 re-review 形态、不改 N 规则。
 
+### 席位预算与截断（PM）
+
+- **座次不放宽范围。** N=3 只增加视角：每个席位仍只审其 diff pack 与直接影响接口，预算也不因席位增加而变宽。PM 用 Assignment `Budget` 收紧；默认与数字 SSOT → **`mstar-harness-core`** § 定向执行与验证边界。
+- **截断报告保留 verdict。** 席位因触达预算而声明 `Truncated coverage:` 时，其 verdict 有效，PM **不得**因此升级为 `Unconfirmed`——`Unconfirmed` 仍是证据通道失败态（见上条传导规则）。
+- **未覆盖范围按上条处理。** 截断声明指向的范围在 `qc-consolidated.md` 中如实标注 `unreviewed`，按「未提及 = 未审查」处置；PM 不重审无关内容来补全它。
+
 ## 证据规则（PM · consolidated 输入）
 
 - Critical 发现须含触发条件、影响范围、修复建议。

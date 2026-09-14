@@ -24,6 +24,7 @@ Write under the Assignment-provided **`{SDD_DIR}/review/qc#.md`** (`qc1`…`qc3`
 - Working branch (verified): {name}
 - Review cwd (verified): {path from git rev-parse --show-toplevel}
 - Files reviewed: {count}
+- Truncated coverage: {present only when the seat budget stopped expansion — name what was not covered; omit this line otherwise. The verdict stands: truncation is not `Unconfirmed`}
 - Commit range (if not identical to Review range line, explain): {hash..hash}
 - Analysis methods: {e.g. git-diff, read, grep, deep-lens: <names> — not test/build runs}
 

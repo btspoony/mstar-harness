@@ -186,8 +186,8 @@ Only these five, **lowercase English**:
 
 | `severity` | Meaning |
 | ---------- | ------- |
-| `critical` | Merge-blocking; maps to QC **Critical** findings. |
-| `high` | Not blocking but high impact (security, correctness, data, significant tech debt); fix, escalate, or open residual with PM follow-up. |
+| `critical` | **Unsafe to ship** — correctness bug, security hole, data loss, or broken public contract; merge-blocking. Maps to QC **Critical** findings. |
+| `high` | **Unsafe to ship if left** — the same classes as `critical` at narrower reach; fix, escalate, or open a residual with PM follow-up. |
 | `medium` | Should address this or next milestone; may be open residual. |
 | `low` | Small impact, cheap fix; may be open residual. |
 | `nit` | Style, naming, wording, non-behavior doc nits; **lighter than `low`**. PM may omit from the register if no tracking needed. |
@@ -196,12 +196,14 @@ Summary vs `mstar-review-qc`: unresolved **`critical`** → usually `Request Cha
 
 ### 4. QC report section → JSON `severity`
 
+Grade by **what would happen if the finding is true**, never by how uncertain you are. A finding whose consequence class is unsafe-to-ship is `critical` / `high` even at low confidence; documentation accuracy, citations/line numbers, naming, wording, and test polish stay `low` / `nit` **even inside a normative document**. Evidence confidence belongs in the report (`Confidence`), not encoded by inflating `severity`. When the uncertainty is about **scope** (reachability) rather than severity class, record the worst-case class among the plausible ones and state the open question in the entry's `scope`.
+
 When registering into the project register (template in `mstar-review-qc`):
 
 | Report Findings section | JSON `severity` |
 | ----------------------- | --------------- |
 | **Critical** | Default `critical`. PM may record `high` if “not blocking this merge but follow up soon” — state reason in `title`/`scope`. |
-| **Warning** | `high` or `medium`: security/correctness/data → `high`; other substantive non-blocking → `medium`; **when unsure, use `high`**. |
+| **Warning** | `high` or `medium`: security/correctness/data → `high`; other substantive non-blocking → `medium`. |
 | **Suggestion** | `low` or `nit`: substantive improvement → `low`; pure style/optional → `nit`. |
 
 **Common mistake:** report **Warning** is not a valid `severity` string; there is no `warning` in the enum (see legacy below).
