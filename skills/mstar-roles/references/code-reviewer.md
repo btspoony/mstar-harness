@@ -55,7 +55,7 @@ Layering anchor: `mstar-review-qc/references/review-responsibility-boundaries.md
 | `Important` | High-impact but non-blocking: unsafe but **not** reachable in this diff, significant tech debt, or otherwise substantive. | Drives the per-task fix loop (same). |
 | `Minor` | Small and cheap, or style / naming / wording only. | Not a fix-loop driver — handed to `## Minor (for plan QC)` in the same ledger file (`mstar-sdd` SKILL.md). |
 
-Mode B (audit) and Mode C (PR review) do **not** use this vocabulary — they classify with the audit chain's **Merge class** (`must-fix` / `should-fix` / `nit`; `mstar-audit` `references/pr-review.md` § Merge class). Never mix the two label sets in one report.
+Mode B (audit) does not use this vocabulary either — it reports with the audit finding format (`Impact` / `Effort` / `Risk` / `Confidence` per finding, no severity class; `mstar-audit` `references/finding-format.md`) and ranks plans by `Priority` in the audit index (`mstar-audit` `references/codebase-audit.md` § Execution order & status). Mode C (PR review) is the only mode that classifies with the **Merge class** (`must-fix` / `should-fix` / `nit`; `mstar-audit` `references/pr-review.md` § Merge class — PR findings only). Never mix label sets in one report.
 
 ## Mode B — Audit Executor (`Task category: audit`)
 
