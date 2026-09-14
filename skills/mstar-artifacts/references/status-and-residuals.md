@@ -186,8 +186,8 @@ Only these five, **lowercase English**:
 
 | `severity` | Meaning |
 | ---------- | ------- |
-| `critical` | **Unsafe to ship** — correctness bug, security hole, data loss, or broken public contract; merge-blocking. Maps to QC **Critical** findings. |
-| `high` | Not blocking, but high impact — the unsafe-to-ship classes at narrower reach, **or significant tech debt**; fix, escalate, or open a residual with PM follow-up. |
+| `critical` | **Unsafe to ship, reachable on this merge** — correctness bug, security hole, data loss, or broken public contract whose unsafe outcome can be triggered here; merge-blocking. Maps to QC **Critical** findings. |
+| `high` | Not blocking — the same unsafe-to-ship classes whose unsafe outcome is **not reachable on this merge** (narrow reach, unreachable path, or already mitigated), **or significant tech debt**; fix, escalate, or open a residual with PM follow-up. |
 | `medium` | Should address this or next milestone; may be open residual. |
 | `low` | Small impact, cheap fix; may be open residual. |
 | `nit` | Style, naming, wording, non-behavior doc nits; **lighter than `low`**. PM may omit from the register if no tracking needed. |
@@ -196,14 +196,14 @@ Summary vs `mstar-review-qc`: unresolved **`critical`** → usually `Request Cha
 
 ### 4. QC report section → JSON `severity`
 
-Grade by **what would happen if the finding is true**, never by how uncertain you are. Two classes reach `high` or above: (a) **unsafe to ship** — correctness, security, data loss, broken public contract → `critical` / `high` even at low confidence; (b) **significant tech debt** → `high`. Everything else stays below: documentation accuracy, citations/line numbers, naming, wording, and test polish are `low` / `nit` — including inside a normative document — **unless the defect would itself drive an unsafe outcome** (a normative instruction that leads an executor into a correctness, security, or data failure), in which case it grades by that consequence. Evidence confidence belongs in the report (`Confidence`), not encoded by inflating `severity`. When the uncertainty is about **scope** (reachability) rather than severity class, record the worst-case class among the plausible ones and state the open question in the entry's `scope`.
+Grade by **what would happen if the finding is true**, never by how uncertain you are. Whether a finding blocks turns on whether its unsafe outcome is **reachable on this merge** — the axis defined in §3 — and not on the report section (Critical / Warning / Suggestion) it was filed under; the filing is a routing hint, not a severity decision. Two classes reach `high` or above: (a) **unsafe to ship** — correctness, security, data loss, broken public contract → `critical` / `high` even at low confidence; (b) **significant tech debt** → `high`. Everything else stays below: documentation accuracy, citations/line numbers, naming, wording, and test polish are `low` / `nit` — including inside a normative document — **unless the defect would itself drive an unsafe outcome** (a normative instruction that leads an executor into a correctness, security, or data failure), in which case it grades by that consequence. Evidence confidence belongs in the report (`Confidence`), not encoded by inflating `severity`. When the uncertainty is about **scope** (reachability) rather than severity class, record the worst-case class among the plausible ones and state the open question in the entry's `scope`.
 
 When registering into the project register (template in `mstar-review-qc`):
 
 | Report Findings section | JSON `severity` |
 | ----------------------- | --------------- |
-| **Critical** | Default `critical`. PM may record `high` only when the unsafe outcome is **not reachable on this merge** (narrow reach, unreachable path, or already mitigated), with the reasoning stated in `title`/`scope`; an unsafe-and-reachable finding stays `critical`. |
-| **Warning** | `high` or `medium`: security/correctness/data → `high`; other substantive non-blocking → `medium`. |
+| **Critical** | Default `critical`. PM may record `high` only when the §3 axis puts the unsafe outcome outside reachability on this merge, with the reasoning stated in `title`/`scope`. |
+| **Warning** | `medium` for ordinary substantive non-blocking items. A security/correctness/data finding follows the same §3 reachability axis as the **Critical** row: `high` when the unsafe outcome is not reachable on this merge, `critical` when it is — note the Warning filing in `title`/`scope`. |
 | **Suggestion** | `low` or `nit`: substantive improvement → `low`; pure style/optional → `nit`. |
 
 **Common mistake:** report **Warning** is not a valid `severity` string; there is no `warning` in the enum (see legacy below).
