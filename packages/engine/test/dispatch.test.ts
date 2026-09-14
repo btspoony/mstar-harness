@@ -957,6 +957,23 @@ describe("parseBranchPolicyDirectOnBranch — strict direct-on exception (CLI/pl
     expect(parseBranchPolicyDirectOnBranch(assignment({ "Working branch": "", "Branch policy": "merge to main" }))).toBeUndefined();
     expect(parseBranchPolicyDirectOnBranch(assignment({ "Working branch": "feature/foo" }))).toBeUndefined();
   });
+
+  test("header forms win over body-quoted ones (header region only)", () => {
+    const text = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Working branch**: main
+
+## Task 1: implement
+
+Example: **Working branch**: feature/body-only
+**Branch policy**: direct on main — hotfix
+`;
+    expect(parseAssignmentBranchForms(text)).toEqual({ workingBranch: "main" });
+    expect(parseBranchPolicyDirectOnBranch(text)).toBeUndefined();
+  });
 });
 
 describe("isReadOnlyAssignmentRole — scout/explore read-only roles", () => {
@@ -1016,6 +1033,41 @@ Delegation: forbidden
 
   test("unrelated prose does not produce fields", () => {
     expect(parseAssignmentFields("This is not an assignment.\n- one: two\nNo fields.")).toEqual({});
+  });
+
+  test("reads the header region only — body-quoted field lines are ignored", () => {
+    const text = `## Assignment
+
+**Execute as**: architect
+**Delegation**: forbidden
+**Task category**: logic
+**Working branch**: feature/foo
+
+## Task 1: implement
+
+Example Assignment snippet: **Execute as**: scout
+**Budget (review / QC seats)**: <= 12 file opens
+`;
+    expect(parseAssignmentFields(text)).toEqual({
+      executeAs: "architect",
+      delegation: "forbidden",
+      taskCategory: "logic",
+      workingBranch: "feature/foo",
+    });
+  });
+
+  test("an already-sliced header parses identically (self-scoping is idempotent)", () => {
+    const text = `## Assignment
+
+**Execute as**: fullstack-dev
+**Working branch**: feature/foo
+
+# Change
+
+**Execute as**: qc-specialist
+`;
+    expect(parseAssignmentFields(assignmentHeaderRegion(text))).toEqual(parseAssignmentFields(text));
+    expect(parseAssignmentFields(text).executeAs).toBe("fullstack-dev");
   });
 });
 
@@ -1361,5 +1413,41 @@ An example Assignment template line: **Enforcement**: hard
     expect(result.enforcement).toEqual({ hard: true, source: "assignment" });
     expect(result.ok).toBe(true);
     expect(result.hardBlocked).toBe(false);
+  });
+
+  test("body-quoted branch form neither satisfies the branch gate nor redirects the default-branch gate", () => {
+    const text = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Working branch**: main
+
+## Task 1: implement
+
+Example: **Working branch**: feature/body-only
+`;
+    const result = composeDispatchGate(text, { caller: "project-manager" });
+    expect(result.ok).toBe(false);
+    // The HEADER form (`main`) is the branch the gate checks; had the body
+    // example been read, the gate would have checked `feature/body-only` and
+    // silently allowed work on the default branch.
+    expect(result.violations.some((v) => v.code === "dispatch.default-branch.protected")).toBe(true);
+  });
+
+  test("body-quoted `Execute as` cannot mask a self-dispatch (header region only)", () => {
+    const text = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Working branch**: feature/foo
+
+## Task 1: implement
+
+Example Assignment snippet: **Execute as**: scout
+`;
+    const result = composeDispatchGate(text, { caller: "fullstack-dev" });
+    expect(result.violations.some((v) => v.code === "dispatch.anti-recursion.self-type")).toBe(true);
   });
 });

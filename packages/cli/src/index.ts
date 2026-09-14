@@ -29,7 +29,6 @@ import {
   AUDIT_PRIORITIES,
   AUDIT_RISKS,
   appendProjectRegisterEntries,
-  assignmentHeaderRegion,
   closeProjectRegisterEntry,
   closeWorkflow,
   completenessLevel,
@@ -1977,16 +1976,18 @@ dispatchCommand
         );
       }
       const text = fs.readFileSync(file, "utf8");
-      // Header region only (`assignmentHeaderRegion`) — role, branch form and
-      // `direct on` exception are read from the Assignment header, never from
-      // a template line quoted in the task body the gate below never sees.
-      const header = assignmentHeaderRegion(text);
+      // Header region only — the engine's Assignment parsers
+      // (`parseAssignmentFields` / `parseAssignmentBranchForms`) scope their
+      // own input, so role, branch form and `direct on` exception are read
+      // from the Assignment header, never from a template line quoted in the
+      // task body. Pass the raw file text: the scope belongs to the engine
+      // grammar, not to this call site.
 
 // Read-only orientation roles (scout/explore, engine SSOT) skip the
 // branch-form gate AND the default-branch gate \u2014 no writable work on a
 // branch : `mstar dispatch validate` on a scout
 // Assignment without a Working branch exits 0.
-      const readOnly = isReadOnlyAssignmentRole(parseAssignmentFields(header).executeAs ?? "");
+      const readOnly = isReadOnlyAssignmentRole(parseAssignmentFields(text).executeAs ?? "");
       const violations = [...validateAssignmentFields(text, { writable: readOnly ? false : undefined }).violations];
 
       if (!readOnly) {
@@ -1999,11 +2000,11 @@ dispatchCommand
  // ("create feature/x from main" checks feature/x, not main). A
  // well-formed `Branch policy: direct on <branch> \u2014 <reason>` exception
  // is honored only when its branch is the one being checked.
-        const forms = parseAssignmentBranchForms(header);
+        const forms = parseAssignmentBranchForms(text);
         const branch =
           forms.createForm?.name ?? forms.workingBranch ?? forms.directOn?.branch ?? options.branch ?? process.env.MSTAR_WORKING_BRANCH;
         if (branch !== undefined && branch.trim() !== "") {
-          const directOnException = parseBranchPolicyDirectOnBranch(header) === branch.trim();
+          const directOnException = parseBranchPolicyDirectOnBranch(text) === branch.trim();
           violations.push(...assertDefaultBranchProtected(branch, { directOnException }).violations);
         }
       }
