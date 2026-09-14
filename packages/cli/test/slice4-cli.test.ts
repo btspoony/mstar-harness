@@ -495,6 +495,24 @@ describe("mstar lint --type provenance", () => {
     });
   });
 
+  test("forced provenance dir walk collects ordinary-named .md files (not the classifier face only)", () => {
+    withTempDir((dir) => {
+      // README.md / notes.md are unclassifiable to the ordinary classifier
+      // (previously dropped from dir walks entirely); .txt stays off the
+      // calibrated .md/.ts face even with a real-shaped token.
+      writeFileSync(join(dir, "README.md"), "removal tracked in plan 20991231-sample-plan\n");
+      writeFileSync(join(dir, "notes.md"), "clean prose\n");
+      writeFileSync(join(dir, "notes.txt"), "tracked in plan 20991231-sample-plan\n");
+      const result = runCli(["lint", "--type", "provenance", dir]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("README.md: FAIL");
+      expect(result.stderr).toContain("lint.provenance.plan-id");
+      expect(result.stdout).toContain("notes.md: OK");
+      expect(result.stdout).not.toContain("notes.txt");
+      expect(result.stderr).not.toContain("notes.txt");
+    });
+  });
+
   test("unknown --type value → usage listing includes provenance, exit 2", () => {
     withTempDir((dir) => {
       const file = join(dir, "notes.md");
