@@ -14,6 +14,10 @@
  * `<base>` is flagged (never assume `main`): `mstar-branch-worktree`
  * SKILL.md § "Assignment 要求（PM）" + § "`<base>` 与叠分支（stacked
  * branches）".
+ * - Review-seat `Budget` presence — an Assignment whose `Execute as` names a
+ * review seat must carry a non-empty `Budget (review / QC seats)` that is not
+ * `N/A`; the cap may only tighten the default: `mstar-harness-core` SKILL.md
+ * § "定向执行与验证边界" + `mstar-review-qc` SKILL.md § "席位预算与截断（PM）".
  * - Default-protected-branch gate — no writable work on `main`/`master`
  * unless the Assignment carries an explicit `Branch policy: direct on
  * <branch> — <reason>` exception: `mstar-branch-worktree` SKILL.md
@@ -395,6 +399,85 @@ describe("validateAssignmentFields — branch-form matrix (writable)", () => {
   });
 });
 
+describe("validateAssignmentFields — review-seat Budget gate", () => {
+ // The gate is independent of `writable` — review seats are read-only
+ // assignments, so every probe here runs with `writable: false` unless it
+ // exercises the writable path explicitly.
+  const budgetViolations = (text: string) =>
+    validateAssignmentFields(text, { writable: false }).violations.filter(
+      (v) => v.code === "assignment.field.budget-missing",
+    );
+
+  test("review seat without Budget → assignment.field.budget-missing (high, actionable fix)", () => {
+    const r = validateAssignmentFields(assignment({ "Execute as": "qc-specialist" }));
+    expect(r.ok).toBe(false);
+    const violation = r.violations.find((v) => v.code === "assignment.field.budget-missing");
+    expect(violation).toBeDefined();
+    expect(violation!.severity).toBe("high");
+    expect(violation!.message).toContain("qc-specialist");
+ // The fix must name the field label and the tighten-only rule — a PM
+ // reading only the violation can repair the Assignment.
+    expect(violation!.fix).toContain("Budget (review / QC seats)");
+    expect(violation!.fix).toContain("never loosen it");
+  });
+
+  test("Budget (review / QC seats) satisfies the gate", () => {
+    const text = assignment({
+      "Execute as": "qc-specialist-2",
+      "Budget (review / QC seats)": "<= 8 file opens / <= 7 minutes",
+    });
+    expect(validateAssignmentFields(text).ok).toBe(true);
+  });
+
+  test("bare Budget label is recognized (parser no longer drops the field silently)", () => {
+    const text = assignment({ "Execute as": "code-reviewer", Budget: "<= 6 file opens" });
+    expect(validateAssignmentFields(text).ok).toBe(true);
+  });
+
+  test("N/A never satisfies the gate (case-insensitive) — it is an implement / ops value", () => {
+    for (const value of ["N/A", "n/a", "N/a"]) {
+      const text = assignment({ "Execute as": "qa-engineer", "Budget (review / QC seats)": value });
+      const violations = budgetViolations(text);
+      expect(violations).toHaveLength(1);
+      expect(violations[0]!.message).toContain("N/A");
+    }
+  });
+
+  test("empty Budget value does not satisfy the gate", () => {
+    const text = assignment({ "Execute as": "qc-specialist-3", "Budget (review / QC seats)": "" });
+    expect(budgetViolations(text)).toHaveLength(1);
+  });
+
+  test("@mention, case and trailing annotation still resolve to the seat", () => {
+    expect(budgetViolations(assignment({ "Execute as": "@QC-Specialist" }))).toHaveLength(1);
+    expect(
+      budgetViolations(
+        assignment({ "Execute as": "qc-specialist-2 (security lens)", "Budget (review / QC seats)": "<= 10 file opens" }),
+      ),
+    ).toHaveLength(0);
+  });
+
+  test("every review seat is gated; other roles are unaffected", () => {
+    for (const seat of ["qc-specialist", "qc-specialist-2", "qc-specialist-3", "code-reviewer", "qa-engineer"]) {
+      expect(budgetViolations(assignment({ "Execute as": seat }))).toHaveLength(1);
+    }
+    for (const role of ["fullstack-dev", "architect", "ops-engineer", "product-manager", "scout"]) {
+      expect(budgetViolations(assignment({ "Execute as": role }))).toHaveLength(0);
+    }
+  });
+
+  test("read-only review seat is gated (writable:false skips only the branch-form gate)", () => {
+    const text = `## Assignment
+
+**Execute as**: qc-specialist
+**Delegation**: forbidden
+**Task category**: review
+`;
+    const r = validateAssignmentFields(text, { writable: false });
+    expect(r.violations.map((v) => v.code)).toEqual(["assignment.field.budget-missing"]);
+  });
+});
+
 describe("assertDefaultBranchProtected — default-branch gate", () => {
   test("main is protected without an exception", () => {
     const r = assertDefaultBranchProtected("main");
@@ -761,6 +844,13 @@ Delegation: forbidden
       workingBranch: "feature/foo",
       branchPolicy: "direct on main — hotfix",
     });
+  });
+
+  test("captures Budget labels (parenthesized PM form and bare form)", () => {
+    expect(
+      parseAssignmentFields(`**Budget (review / QC seats)**: <= 12 file opens / <= 10 min\n`).budget,
+    ).toBe("<= 12 file opens / <= 10 min");
+    expect(parseAssignmentFields(`- **Budget**: 8 file opens\n`).budget).toBe("8 file opens");
   });
 
   test("last duplicate field line wins", () => {

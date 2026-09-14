@@ -20,6 +20,11 @@
  * `mstar-dispatch-gates` SKILL.md § "QC tri-review（SDD 强制）" / "QC
  * 单席（例外）" / "QC targeted re-review" + `mstar-roles` SKILL.md
  * "QC reviewer" 参数表.
+ * - Review-seat `Budget` presence (a dispatch whose `Execute as` names a
+ * review seat must carry a non-empty `Budget (review / QC seats)` that is
+ * not `N/A` — the cap may only tighten the default, never loosen it):
+ * `mstar-harness-core` SKILL.md § "定向执行与验证边界" ("只读审查席位有界")
+ * + `mstar-review-qc` SKILL.md § "席位预算与截断（PM）".
  * - Anti-recursion NEVER red line (dispatching agent's OWN role == the
  * dispatch's `Execute as`): `mstar-dispatch-gates` SKILL.md § "承接方反递归红线
  * （NEVER / DO NOT；leaf executor 必读）". The precheck compares the CALLER
@@ -49,6 +54,13 @@ export type AssignmentFields = {
   taskCategory?: string;
   workingBranch?: string;
   branchPolicy?: string;
+  /**
+   * `Budget (review / QC seats)` round cap. Required (present, non-empty,
+   * not `N/A`) when `Execute as` names a review seat — see
+   * {@link REVIEW_SEAT_ROLES}. The value is prose (file opens / wall clock);
+   * it is never parsed numerically.
+   */
+  budget?: string;
 };
 
 export type ValidateAssignmentFieldsOptions = {
@@ -84,6 +96,24 @@ const REQUIRED_FIELDS: ReadonlyArray<{ key: keyof AssignmentFields; label: strin
   { key: "taskCategory", label: "Task category", code: "task-category" },
 ];
 
+/**
+ * Review seats whose dispatch must declare a round `Budget`
+ * (mstar-harness-core § "定向执行与验证边界" — "只读审查席位有界"; the cap may
+ * only tighten the default). `code-reviewer` is the L2 task-review seat and
+ * `qa-engineer` the QA gate seat, so they carry the same bounded-round rule
+ * as the three QC seats.
+ */
+const REVIEW_SEAT_ROLES: readonly string[] = ["qc-specialist", "qc-specialist-2", "qc-specialist-3", "code-reviewer", "qa-engineer"];
+
+/**
+ * Assignment labels carrying the review-seat Budget cap. The PM template
+ * (dispatch-and-assignment.md) writes the parenthesized form; the bare
+ * `Budget` label is accepted too — it matches neither {@link REQUIRED_FIELDS}
+ * nor `Working branch` / `Branch policy`, so a hand-written dispatch would
+ * otherwise drop the field silently.
+ */
+const BUDGET_LABELS: readonly string[] = ["Budget (review / QC seats)", "Budget"];
+
 function violation(severity: Severity, code: string, message: string, fix?: string): ValidationResult {
   return { ok: false, severity, code, message, fix };
 }
@@ -112,6 +142,7 @@ export function parseAssignmentFields(assignmentText: string): AssignmentFields 
     }
     if (label === "Working branch") fields.workingBranch = value;
     else if (label === "Branch policy") fields.branchPolicy = value;
+    else if (BUDGET_LABELS.includes(label)) fields.budget = value;
   }
   return fields;
 }
@@ -339,6 +370,39 @@ export function validateAssignmentFields(assignmentText: string, opts: ValidateA
 
   for (const { key, label, code } of REQUIRED_FIELDS) {
     requireField(violations, fields[key], label, code);
+  }
+
+ // Review-seat rounds are bounded (mstar-harness-core § 定向执行与验证边界);
+ // the Budget field is the PM's declared cap and the only machine-decidable
+ // part is its EXISTENCE — the value is prose, never parsed numerically.
+ // The role token strips a leading `@` mention, compares case-insensitively
+ // and takes the first whitespace token, so `@QC-Specialist-2 (security
+ // lens)` still resolves to the seat. Non-review rounds are unaffected.
+  const role = (fields.executeAs ?? "").trim().replace(/^@/, "").toLowerCase().split(/\s+/)[0] ?? "";
+  if (REVIEW_SEAT_ROLES.includes(role)) {
+    const budget = fields.budget;
+    const missing =
+      budget === undefined
+        ? "the field is absent"
+        : budget === ""
+          ? "the field is empty"
+          : budget.toLowerCase() === "n/a"
+            ? 'the value is "N/A"'
+            : undefined;
+    if (missing !== undefined) {
+      violations.push(
+        violation(
+          "high",
+          "assignment.field.budget-missing",
+          `review seat "${role}" must declare a round Budget \u2014 ${missing}`,
+ // The fix quotes the spec section title verbatim (Chinese). Code literals
+ // stay pure-ASCII `\uXXXX` escapes per the ASCII literal lint (bun 1.2.17
+ // misdecodes raw multi-byte UTF-8 in the CLI bundle); the runtime string is
+ // identical. Section title: mstar-harness-core § 定向执行与验证边界.
+          `add "**Budget (review / QC seats)**: <cap> \u2014 may only tighten the default in mstar-harness-core \u00a7 \u5b9a\u5411\u6267\u884c\u4e0e\u9a8c\u8bc1\u8fb9\u754c, never loosen it"`,
+        ),
+      );
+    }
   }
 
   if (writable) {
