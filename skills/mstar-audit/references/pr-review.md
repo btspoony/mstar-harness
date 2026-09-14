@@ -187,11 +187,13 @@ Classify each **accepted** finding (after vet) as exactly one class. Do not inve
 
 | Class | Use when | Verdict effect |
 | --- | --- | --- |
-| `must-fix` | Shipping this issue is unsafe: correctness bug, security hole, data loss, auth/authz bypass, or a broken public contract. Same meaning as today's `blocked` gloss ("a must-fix issue stands in the way of shipping"). | Any count ≥ 1 → `blocked` |
-| `should-fix` | A real issue that should be addressed before merge but is not itself a ship-stopper. Same meaning as today's middle gloss ("issues found; address before merge"). | Else if count ≥ 1 → `needs fixes` |
+| `must-fix` | Shipping this issue is unsafe **and** the unsafe outcome is reachable in the reviewed change: correctness bug, security hole, data loss, auth/authz bypass, or a broken public contract. This is the same class the register records as `critical` (class pointer below). Same meaning as today's `blocked` gloss ("a must-fix issue stands in the way of shipping"). | Any count ≥ 1 → `blocked` |
+| `should-fix` | A real issue that should be addressed before merge but is not itself a ship-stopper: unsafe but **not** reachable in this change, significant tech debt, or otherwise substantive non-blocking — the register's `high` / `medium` bands. Same meaning as today's middle gloss ("issues found; address before merge"). | Else if count ≥ 1 → `needs fixes` |
 | `nit` | Optional cleanup, naming, comment, or small suggestion that does **not** change merge-readiness. Lint-covered cosmetics stay ignored (existing lens rule) — they are not findings. | Does not change verdict |
 
-Tie-break: unsafe to ship → `must-fix`; should be addressed before merge but ship-safe → `should-fix`; otherwise `nit`. A LOW-confidence smell that fails evidence rules is **not** a finding (existing disqualify rules) — put it on `- unverified:` if it must be mentioned.
+**Class ↔ register:** these three classes are this chain's projection of the one blocking judgement — the register `severity` value, plan-QC report section, and L2 task-review label sitting at each band are tabulated in `mstar-artifacts` `references/status-and-residuals.md` § Residual findings: `severity` → §5 Cross-chain vocabulary. Translate by band; never re-grade on translation.
+
+Tie-break: unsafe to ship **and reachable in this change** → `must-fix`; should be addressed before merge but ship-safe → `should-fix`; otherwise `nit`. A LOW-confidence smell that fails evidence rules is **not** a finding (existing disqualify rules) — put it on `- unverified:` if it must be mentioned.
 
 Presumptive-structural classes: a refactor that relocates complexity instead of reducing it · a change pushing a file past the size boundary with no decomposition · feature logic added to a shared module · a near-duplicate of an existing canonical helper · a silent fallback hiding an unclear invariant → default `should-fix`; downgrade to `nit` only with a stated reason; never `must-fix` on shape alone without correctness/security evidence.
 

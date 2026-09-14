@@ -45,6 +45,18 @@ Layering anchor: `mstar-review-qc/references/review-responsibility-boundaries.md
 
 `⚠️ Cannot verify from diff` items do not block other findings — PM resolves them before marking the task complete.
 
+### Issue severity (Mode A)
+
+`Critical` / `Important` / `Minor` are this mode's projection of the one blocking judgement — the axis itself is defined once in `mstar-artifacts` `references/status-and-residuals.md` (§ Residual findings: `severity` → §5 Cross-chain vocabulary). Do not re-derive its ladder here.
+
+| Label | Threshold on the axis | Effect |
+| --- | --- | --- |
+| `Critical` | Unsafe **and** reachable in this task's diff: correctness bug, security hole, data loss, auth/authz bypass, broken public contract. | Blocks the task — drives the per-task fix loop (`mstar-sdd` `references/file-handoffs.md` § Fix loop). |
+| `Important` | High-impact but non-blocking: unsafe but **not** reachable in this diff, significant tech debt, or otherwise substantive. | Drives the per-task fix loop (same). |
+| `Minor` | Small and cheap, or style / naming / wording only. | Not a fix-loop driver — handed to `## Minor (for plan QC)` in the same ledger file (`mstar-sdd` SKILL.md). |
+
+Mode B (audit) and Mode C (PR review) do **not** use this vocabulary — they classify with the audit chain's **Merge class** (`must-fix` / `should-fix` / `nit`; `mstar-audit` `references/pr-review.md` § Merge class). Never mix the two label sets in one report.
+
 ## Mode B — Audit Executor (`Task category: audit`)
 
 - Execute the `mstar-audit` codebase-audit variant: SKILL.md common core (Recon → Vet & prioritize) + `references/codebase-audit.md` (Audit — parallel category scout fan-out; ≤4 concurrent `standard`, ≤8 `deep` → Write plans at `{PLAN_DIR}/audit-<date>/`).
