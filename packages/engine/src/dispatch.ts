@@ -8,6 +8,10 @@
  * present, non-empty; paste-only assignments missing fields are flagged):
  * `mstar-dispatch-gates` SKILL.md § "调度防串扰（强制）" + § 反模式（派发）
  * ("Assignment 已写、invoke 为零（paste-only）").
+ * - Assignment fields live in the Assignment HEADER region
+ *   ({@link assignmentHeaderRegion}) — `validateAssignmentFields` reads no
+ *   line after a `## Task` heading / `---` rule / single-`#` heading, so a
+ *   template label quoted in the task body can never satisfy the gate.
  * - Branch-field exactly-one rule + `<base>` requirement: `mstar-branch-worktree`
  * SKILL.md § "Assignment 要求（PM）" + § "`<base>` 与叠分支（stacked
  * branches）" ("若写新建但未写 `<base>`：实现侧应停下问 project-manager…
@@ -150,7 +154,13 @@ function describeAbsence(value: string | undefined): string | undefined {
  * are accepted so the engine parser is the SINGLE grammar for Assignment
  * header fields (the Slice-2 opencode presence parser tolerated bullets;
  * its acceptance is folded into this parser, not forked —).
- */
+ *
+ * The function reads exactly the text it is handed and applies no document
+ * scope of its own: callers holding a whole prompt/dispatch paste the
+ * HEADER region through {@link assignmentHeaderRegion} first (the gate
+ * {@link validateAssignmentFields} does), so a field label quoted in the
+ * task body cannot be read as a header field. Callers that already sliced
+ * the header pass it unchanged. */
 export function parseAssignmentFields(assignmentText: string): AssignmentFields {
   const fields: AssignmentFields = {};
   for (const line of assignmentText.split(/\r?\n/)) {
@@ -391,10 +401,19 @@ export function isReadOnlyAssignmentRole(roleId: string): boolean {
  * from <base>` without `<base>` (incl. the dangling `create <new> from`
  * / `create from <base>` typos) and `Branch policy` without branch/reason
  * are flagged. The three core-field violations carry the legacy
- * `assignment.presence.*` codes as aliases. */
+ * `assignment.presence.*` codes as aliases.
+ *
+ * Every read is scoped to the Assignment HEADER region
+ * ({@link assignmentHeaderRegion}), never the task body — the same rule
+ * {@link parseEnforcementFlag} follows at the compose gate. Dispatch text
+ * routinely quotes the field labels (template blocks, `## Task` bodies, the
+ * `**Task**:` line's own prose), and a quoted `**Budget (review / QC
+ * seats)**: …` line must not satisfy a gate the Assignment header left
+ * open. */
 export function validateAssignmentFields(assignmentText: string, opts: ValidateAssignmentFieldsOptions = {}): GateResult {
   const violations: ValidationResult[] = [];
-  const fields = parseAssignmentFields(assignmentText);
+  const header = assignmentHeaderRegion(assignmentText);
+  const fields = parseAssignmentFields(header);
   const writable = opts.writable !== false;
 
   for (const { key, label, code } of REQUIRED_FIELDS) {
@@ -450,7 +469,7 @@ export function validateAssignmentFields(assignmentText: string, opts: ValidateA
     const workingPresent = fields.workingBranch !== undefined && fields.workingBranch !== "";
     const policyPresent = fields.branchPolicy !== undefined && fields.branchPolicy !== "";
     const formCount = Number(workingPresent) + Number(policyPresent);
-    const forms = parseAssignmentBranchForms(assignmentText);
+    const forms = parseAssignmentBranchForms(header);
 
     if (formCount === 0) {
       violations.push(

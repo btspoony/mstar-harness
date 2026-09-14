@@ -556,6 +556,74 @@ describe("validateAssignmentFields — review-seat / audit round bounding gate",
       "assignment.field.return-shape-missing",
     ]);
   });
+
+// Dispatch text routinely QUOTES the template labels in its task body (the
+// `## Task` heading is the header boundary), so the gate reads the header
+// region only — a body-only label must not satisfy it.
+  const HEADER_AND_BODY_LABELS = (labelLines: readonly string[]) => `## Assignment
+
+**Execute as**: qc-specialist
+**Delegation**: forbidden
+**Task category**: review
+**Working branch**: feature/review-seat-machine-gates
+
+## Task 1: Review the diff
+
+Reproduce this shape in your own header:
+${labelLines.join("\n")}
+`;
+
+  test("body-only round-bounding labels do not satisfy the gate", () => {
+    const r = validateAssignmentFields(
+      HEADER_AND_BODY_LABELS([
+        "**Budget (review / QC seats)**: <= 12 file opens",
+        "**Return shape (review / QC seats)**: verdict + findings",
+      ]),
+      { writable: false },
+    );
+    expect(r.ok).toBe(false);
+    expect(r.violations.map((v) => v.code)).toEqual([
+      "assignment.field.budget-missing",
+      "assignment.field.return-shape-missing",
+    ]);
+  });
+
+  test("the same labels in the header satisfy the gate (body scope is the only difference)", () => {
+    const r = validateAssignmentFields(
+      `## Assignment
+
+**Execute as**: qc-specialist
+**Delegation**: forbidden
+**Task category**: review
+**Working branch**: feature/review-seat-machine-gates
+**Budget (review / QC seats)**: <= 12 file opens
+**Return shape (review / QC seats)**: verdict + findings
+
+## Task 1: Review the diff
+
+Reproduce this shape in your own header:
+**Budget (review / QC seats)**: <= 12 file opens
+`,
+      { writable: false },
+    );
+    expect(r.ok).toBe(true);
+  });
+
+  test("body-only Working branch does not satisfy the branch-form gate", () => {
+    const text = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+
+## Task 1: Implement
+
+**Working branch**: feature/foo
+`;
+    expect(validateAssignmentFields(text).violations.map((v) => v.code)).toEqual([
+      "assignment.field.branch-missing",
+    ]);
+  });
 });
 
 describe("assertDefaultBranchProtected — default-branch gate", () => {

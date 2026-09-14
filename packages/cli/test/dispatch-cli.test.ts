@@ -12,7 +12,9 @@
  * branch form. Read-only roles (scout/explore) skip both branch gates
  * . A well-formed `Branch policy: direct on <branch> —
  * <reason>` exception is honored only when its branch matches the checked
- * branch.
+ * branch. Role and branch are read from the Assignment HEADER region only
+ * (`assignmentHeaderRegion`), so a `## Task` body quoting the labels neither
+ * satisfies the gate nor disables it.
  *
  * Each case runs the real CLI as a subprocess against a temp assignment
  * fixture and asserts the exit code + reported violation codes.
@@ -295,6 +297,42 @@ describe("mstar dispatch validate — Assignment field + default-branch gate", (
     withAssignment(scout, (file) => {
       const result = runCli(["dispatch", "validate", file]);
       expect(result.exitCode).toBe(0);
+    });
+  });
+
+  test("body-only field lines do not satisfy the preflight (header region only)", () => {
+    const bodyOnly = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+
+## Task 1: implement
+
+**Working branch**: feature/foo
+`;
+    withAssignment(bodyOnly, (file) => {
+      const result = runCli(["dispatch", "validate", file]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("assignment.field.branch-missing");
+    });
+  });
+
+  test("a body-only read-only role does not disable the writable gate", () => {
+    const text = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+
+## Task 1: recon
+
+**Execute as**: scout
+`;
+    withAssignment(text, (file) => {
+      const result = runCli(["dispatch", "validate", file]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("assignment.field.branch-missing");
     });
   });
 
