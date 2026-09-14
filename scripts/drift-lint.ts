@@ -39,14 +39,17 @@
  * in more than one file (bilingual variant `或 import` → `or import`
  * counts as identical), so a re-vendored canonical callout fails CI
  * before it drifts.
- * 7. repo text face — no provenance citations anywhere on the tracked
- * text face (engine findProvenanceCitations over the repo tree): `.md`
- * files are scanned full text, `.ts` files at comment lines only;
- * `.changes/archive` and the assembled `CHANGELOG` release surfaces are
- * exempt (historical release record, not new prose). One failure row per
- * citation, named `file:line`, turning the repo AGENTS.md provenance
- * rule (no local plan/iteration ids or harness deep paths in tracked
- * text; synthetic forms only) into a CI guard.
+ * 7. repo text face — dated plan/iteration ids and dated harness deep
+ * paths on the tracked text face fail (engine findProvenanceCitations
+ * over the repo tree): `.md` files are scanned full text, `.ts` files at
+ * comment lines only; `.changes/archive` and the assembled `CHANGELOG`
+ * release surfaces are exempt (historical release record, not new
+ * prose). One failure row per citation, named `file:line`, turning the
+ * repo AGENTS.md provenance rule (no local plan/iteration ids or harness
+ * deep paths in tracked text; synthetic forms only) into a CI guard.
+ * Face note: `.mstar|agents/sdd/…` deeplinks stay attributed to the
+ * ephemeral check (item 3, skills corpus) by the finder contract, so
+ * that subclass is policed there, not on the repo face.
  *
  * The forward callout citation check also validates the **binary prefix**
  * of every backticked CLI
@@ -784,7 +787,8 @@ export function collectProvenanceScanFiles(repoRoot: string): {
  * dedup or extra exemptions: sdd deeplinks stay exclusively attributed to
  * the ephemeral check by the finder contract, so the two guards cannot
  * double-report. Load-bearing: a dated plan id or a dated-instance
- * harness deeplink anywhere on the face fails drift-lint
+ * non-sdd harness deeplink on the face fails drift-lint; sdd deeplinks
+ * are policed by the ephemeral check over the skills corpus, not here
  * (regression-pinned by scripts/drift-lint.test.ts).
  */
 export function checkProvenanceScan(files: Array<{ rel: string; text: string }>): ProvenanceScanResult {
