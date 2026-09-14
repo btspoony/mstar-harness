@@ -602,8 +602,8 @@ describe("checkFiveQuestionCorpus — Guard 5 five-question runtime smoke", () =
 
   test("canonical fixture corpus: the classifier selects exactly the runtime rows (spec A4 parity)", () => {
  // The same canonical rows the Engine, CLI and dsh suites consume —
- // Guard5's corpus selection must agree row for row (plan
- // 20260907-skill-lint-parity Task 2, cross-consumer decision parity).
+ // Guard5's corpus selection must agree row for row (cross-consumer
+ // decision parity).
     type FixtureRow = {
       id: string;
       skillId: string | null;
@@ -881,6 +881,7 @@ describe("checkProvenanceScan — Guard 7 repo text-face provenance scan", () =>
       { rel: ".changes/archive/2026-09/bump.md", text: leak },
       { rel: "node_modules/pkg/index.d.ts", text: `// ${SAMPLE_ID}` },
       { rel: "dist/bundle.js", text: leak },
+      { rel: ".tmp/probe.ts", text: `// ${SAMPLE_ID}` },
     ]);
     expect(result.citationsFound).toBe(0);
     expect(result.filesScanned).toBe(1);

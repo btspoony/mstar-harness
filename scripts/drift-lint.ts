@@ -25,8 +25,7 @@
  * `lintLoadOrder`) and the mstar-roles mapping / parameter tables
  * must resolve against the on-disk `references/<role>.md` layout
  * (engine `validateRoleMapping` on `skills/mstar-roles`).
- * 5. skills corpus — five-question runtime smoke (plan
- * 20260816-audit-001-five-question-lint Task 2, audit finding 5;
+ * 5. skills corpus — five-question runtime smoke (audit finding 5;
  * classifier wiring per the shared lint-classifier):
  * every shipped `skills/mstar-*` SKILL.md selected as `runtime` by the
  * shared Engine classifier (`classifySkillLint`; the
@@ -35,8 +34,7 @@
  * `lintFiveQuestion` in its classified runtime mode, so the corpus
  * cannot drift out of five-question alignment without failing CI.
  * Guard numbers are per-plan locked, not positional.
- * 6. skills corpus — Engine-check callout dedup (plan
- * 20260822-skill-pointer-hygiene Task 2): the same normalized
+ * 6. skills corpus — Engine-check callout dedup: the same normalized
  * `**Engine check (when available):**` callout body must not appear
  * in more than one file (bilingual variant `或 import` → `or import`
  * counts as identical), so a re-vendored canonical callout fails CI
@@ -50,8 +48,8 @@
  * rule (no local plan/iteration ids or harness deep paths in tracked
  * text; synthetic forms only) into a CI guard.
  *
- * The forward callout citation check (this plan, 20260817-cli-bin-alias
- * also validates the **binary prefix** of every backticked CLI
+ * The forward callout citation check also validates the **binary prefix**
+ * of every backticked CLI
  * citation in Engine-check callouts against the declared `bin` names read
  * from packages/cli/package.json — the manifest is SSOT, never a hardcoded
  * list — closing the blind spot where prose could cite a nonexistent
@@ -694,9 +692,10 @@ export type ProvenanceScanResult = {
 /**
  * Guard 7 exemption set — the single place provenance-scan exemptions
  * live (no scattered path strings at call sites). Why each entry exists:
- * - dirs `node_modules` / `dist` / `.git` / `.worktrees` / `.mstar`: not
- *   tracked text face (installed deps, build output, git object database,
- *   sibling checkouts, the gitignored local harness root).
+ * - dirs `node_modules` / `dist` / `.git` / `.worktrees` / `.mstar` /
+ *   `.tmp`: not tracked text face (installed deps, build output, git
+ *   object database, sibling checkouts, the gitignored local harness root,
+ *   disposable local scratch).
  * - `.changes/archive`: assembled release record — archived change
  *   fragments are appended verbatim into the changelog at release time,
  *   so they legitimately carry the ids of already-shipped changes; the
@@ -706,7 +705,7 @@ export type ProvenanceScanResult = {
  *   historical-record rationale.
  */
 const PROVENANCE_SCAN_EXEMPTS = {
-  dirs: ["node_modules", "dist", ".git", ".worktrees", ".mstar"],
+  dirs: ["node_modules", "dist", ".git", ".worktrees", ".mstar", ".tmp"],
   archivedDir: ".changes/archive",
   files: new Set(["CHANGELOG.md", "CHANGELOG_CN.md"]),
 };
