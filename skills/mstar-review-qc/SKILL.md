@@ -38,7 +38,7 @@ description: "Morning Star QC orchestration — **SDD mandatory plan QC tri-revi
 ## Residual Findings 留档门禁（PM）
 
 - 先读 Assignment **`Findings cleanup`**（`plans[].metadata.findings_cleanup` mirror 已删——Assignment 是唯一 mode 来源）→ **`mstar-artifacts/references/status-and-residuals.md`**「Findings cleanup modes」。
-- **`Findings cleanup: zero-residual`**（iteration Phase 2 默认）：可修 **Warning / Suggestion / Critical** → **fix-now + targeted re-review**，**禁止**把可修项登记为 open R# 或用 `Approve with residuals` 收口；**`nit`** 当场修或丢弃（无 R#）。仅 **真 blocker-defer**（外部依赖 / 须下轮产品决策 / 用户本轮显式 defer + Durable Roadmap）可登记 open R#（`decision: defer`）。此时 `Approve with residuals` **仅**允许剩余项全是该类 defer。
+- **`Findings cleanup: zero-residual`**（iteration Phase 2 默认）：可修 **Warning / Suggestion / Critical** → **fix-now + targeted re-review**，**禁止**把可修项登记为 open R# 或用 `Approve with residuals` 收口；**`nit`** 当场修或丢弃（无 R#）。仅 **真 blocker-defer**（外部依赖 / 须下轮产品决策 / 用户本轮显式 defer + Durable Roadmap）可登记 open R#（`decision: defer`）。此时 `Approve with residuals` **仅**允许剩余项全是该类 defer，且**不含 `critical`**（不安全后果本次 merge 可达，见上文「Findings cleanup modes」）；`critical` 当场修复，或走显式 risk acceptance 并在 register 内关闭，**不得**作为批准遗留项。
 - **`Findings cleanup: allow-residual`**（standalone / hotfix / inline 默认）：阻断项修复后仍有 **Warning / Suggestion** 或技术债 → 必须留档；**`Approve with residuals`** 仅当无 open **Critical**；PM 汇总结论须含 residual 清单与跟踪位置。
 - **`severity`** 仅允许 `mstar-artifacts/references/status-and-residuals.md` 枚举。
 - **Open SSOT**：`{PROJECT_DIR}/<id>/residuals.json`（默认 `{HARNESS_DIR}/projects/<id>/`；无项目流程 `_default`）→ `entries[<plan-id>]`；PM 在 consolidated 决策分配 **R1…** 并写入。关闭 → 在 register 内 **in place** 置 `lifecycle` / `closed_at` / `closure_note`（v1 `archived/residuals/` 与 `archive-residuals` 已移除）。
