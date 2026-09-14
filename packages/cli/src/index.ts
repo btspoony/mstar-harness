@@ -4002,8 +4002,8 @@ prReviewCommand
   });
 
 // ---------------------------------------------------------------------------
-// (20260914-review-seat-machine-gates): qc validate-report \u2014 thin CLI wrapper
-// over @mstar-harness/engine qcreview.ts (QC seat-report contract).
+// qc validate-report — thin CLI wrapper over the engine's QC seat-report
+// validator (qcreview.ts): structural contract only, never review content.
 // ---------------------------------------------------------------------------
 
 const qcCommand = program.command("qc").description(
