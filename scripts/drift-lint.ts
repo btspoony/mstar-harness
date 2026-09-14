@@ -66,7 +66,7 @@
  * Exit 0 = no drift; exit 1 = drift found (one line per violation).
  */
 import { execFileSync } from "node:child_process";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, statSync, type Dirent } from "node:fs";
 import { join, relative } from "node:path";
 import {
   AUDIT_CATEGORIES,
@@ -732,7 +732,8 @@ function tsCommentLines(text: string): string {
  * pruning exemption dirs during traversal (the same PROVENANCE_SCAN_EXEMPTS
  * the scan filters by; pruning only avoids reading ignored/derived trees).
  * Reads are guard-or-clear-error (same pattern as `readRolesCorpus`): an
- * unreadable file becomes an explicit `provenance: read` row, never a raw
+ * unreadable file — or an unlistable directory, which is skipped rather
+ * than walked — becomes an explicit `provenance: read` row, never a raw
  * crash mid-scan. Exported as a test seam over temp trees. */
 export function collectProvenanceScanFiles(repoRoot: string): {
   entries: Array<{ rel: string; text: string }>;
@@ -741,9 +742,19 @@ export function collectProvenanceScanFiles(repoRoot: string): {
   const entries: Array<{ rel: string; text: string }> = [];
   const readFailures: string[] = [];
   const walk = (absDir: string) => {
-    const dirents = readdirSync(absDir, { withFileTypes: true }).sort((a, b) =>
-      a.name < b.name ? -1 : 1,
-    );
+    let dirents: Dirent[];
+    try {
+      dirents = readdirSync(absDir, { withFileTypes: true }).sort((a, b) =>
+        a.name < b.name ? -1 : 1,
+      );
+    } catch (error) {
+      // Guard-or-clear-error, same idiom as the file-read branch: an
+      // unlistable directory (e.g. permission-denied scratch) becomes an
+      // explicit row and is skipped, never a raw crash that loses the
+      // accumulated report.
+      readFailures.push(`provenance: read ${relative(repoRoot, absDir)} - ${(error as Error).message}`);
+      return;
+    }
     for (const entry of dirents) {
       const abs = join(absDir, entry.name);
       const rel = relative(repoRoot, abs);

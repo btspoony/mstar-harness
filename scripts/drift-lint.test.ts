@@ -39,7 +39,7 @@
  * to canonical pointers);
  * corpus drift goes red.
  */
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { describe, expect, test } from "bun:test";
@@ -835,6 +835,9 @@ describe("checkProvenanceScan — Guard 7 repo text-face provenance scan", () =>
    * plan id cited in a comment / doc prose). Synthetic on purpose —
    * fixtures must never carry real provenance. */
   const SAMPLE_ID = "20991216-provenance-guard-sample";
+  /** Root ignores directory permission bits, so a chmod-0o000 probe cannot
+   * make readdir fail there — skip instead of flaking on such systems. */
+  const CHMOD_PROBE_UNRELIABLE = typeof process.getuid === "function" && process.getuid() === 0;
 
   test("red probe: real-shaped leak on a temp tree fails the guard (ts comment + md prose)", () => {
     const dir = mkdtempSync(join(tmpdir(), "drift-prov-"));
@@ -859,6 +862,28 @@ describe("checkProvenanceScan — Guard 7 repo text-face provenance scan", () =>
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test.skipIf(CHMOD_PROBE_UNRELIABLE)(
+    "unlistable directory becomes an explicit provenance: read row, not a crash (guard-or-clear-error)",
+    () => {
+      const dir = mkdtempSync(join(tmpdir(), "drift-prov-dir-"));
+      const locked = join(dir, "locked");
+      try {
+        mkdirSync(locked, { recursive: true });
+        writeFileSync(join(dir, "clean.md"), "no tokens here\n");
+        chmodSync(locked, 0o000);
+        const { entries, readFailures } = collectProvenanceScanFiles(dir);
+        expect(readFailures.length).toBe(1);
+        expect(readFailures[0]).toContain("provenance: read locked");
+        // The readable face is still collected; the CLI guard run turns the
+        // surfaced row into a named failure + exit 1 through the normal path.
+        expect(entries.map((e) => e.rel)).toEqual(["clean.md"]);
+      } finally {
+        chmodSync(locked, 0o700);
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
 
   test("ts scan face is comment lines only: the same token in code position is not scanned", () => {
     const text = [
