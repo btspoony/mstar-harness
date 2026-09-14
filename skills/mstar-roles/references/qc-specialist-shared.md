@@ -75,6 +75,7 @@ Write the Assignment-provided path under **`{SDD_DIR}/review/{report_suffix}.md`
 When Assignment includes **`QC re-review: targeted`**:
 
 - Edit the **same** bundle `{report_suffix}.md` — add **`## Revalidation`**, update frontmatter verdict/`generated_at`.
+- **Refresh the current state in place**: `## Summary` and the `## Findings` sections must describe the state AFTER the fix delta (a closed finding leaves its section, counts drop), so the report carries exactly ONE tally. `## Revalidation` records the process — what was re-checked, findings closed/kept per ID — and never holds a second count. Leaving the original `## Summary` counts in place while the verdict moves to `Approve` makes the report contradict itself.
 - Do **not** create `qcN-rev2.md` on this path.
 - Full tri re-review → new basenames per `mstar-artifacts/references/plan-files-and-reports.md`.
 

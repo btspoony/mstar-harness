@@ -4,7 +4,8 @@
  * spec: `mstar-review-qc` SKILL.md § 席位预算与截断（该节 callout 声明的
  * `qc validate-report`）、`report-template.md` § Frontmatter / § Report body
  * template / § Findings（verdict 词表与报告形状逐字来源）、
- * `qc-specialist-shared.md` § Budget and stopping。
+ * `qc-specialist-shared.md` § Budget and stopping / § Targeted re-review
+ * （就地 revalidation 刷新当前状态，报告只有一份计数）。
  *
  * 机器可判定的十条规则（violation code 前缀一律 `qcreview.report.`）：
  * 1. `missing-frontmatter` — 报告必须以 `---` 围栏 frontmatter 开头。
@@ -18,8 +19,10 @@
  *    frontmatter verdict 一致；允许尾随散文（真实报告写
  *    `**Verdict**: Approve. The diff keeps ...`，历史上还出现
  *    `## Verdict: **Approve with residuals**`）。
- * 8. `summary-count-mismatch` — `## Summary` 四行计数必须等于 `## Findings`
- *    对应 severity 分区的顶层条目数（`None.` = 0）。
+ * 8. `summary-count-mismatch` — `## Summary` 计数必须等于 `## Findings`
+ *    对应 severity 分区的顶层条目数（`None.` = 0）。`## Summary` 是报告
+ *    唯一的当前计数：就地 revalidation 刷新它与 `## Findings`，
+ *    `## Revalidation` 只记过程与逐 finding 处置，不另立计数。
  * 9. `verdict-contradicts-counts` — Critical / Warning 计数 > 0 不允许
  *    `Approve`；Unconfirmed 计数 > 0 要求 verdict 为 `Unconfirmed`。
  * 10. `truncation-verdict` — 已声明 `Truncated coverage:` 行时 verdict 不得为
@@ -53,9 +56,7 @@ type ReportSeverity = (typeof REPORT_SEVERITIES)[number];
 
 /**
  * 正文 verdict 行：`**Verdict**: X`、`**Verdict: X**`、`## Verdict: X`，以及
- * 真实报告里的列表项写法 `- **Verdict: Approve** — ...`。首个匹配行即生效行
- * （全量真实报告里首个 verdict 取词与 frontmatter verdict 零分歧；其后出现的
- * verdict 行属于 revalidation 叙述）。
+ * 真实报告里的列表项写法 `- **Verdict: Approve** — ...`。
  */
 const BODY_VERDICT_RE = /^[ \t]*(?:[-*+][ \t]+)?(?:#{1,6}[ \t]+)?[*_\s]*Verdict[*_\s]*:[ \t]*(.*)$/i;
 
@@ -116,23 +117,18 @@ function namesSeverity(text: string, severity: ReportSeverity): boolean {
 }
 
 /**
- * `## Summary` 各 severity 计数，两份口径：
- * - `first`（首个命中行的首个数值单元格）—— 与 `## Findings` 配对的原轮计数，
- *   供规则 8 使用。
- * - `last`（最后命中行的最后一个数值单元格）—— revalidation 报告在
- *   `## Summary` 内追加 `### Revalidation summary` 三列表（`| Warning | 1 | 0 |`），
- *   末列才是当前状态，供规则 9 使用。
- * 真实报告写 `| 🟢 Suggestion | 1 (F-001; ...) |` —— 单元格取首个整数；计数行缺失
- * 或值非数字的 severity 视为不可判定，依赖它的规则静默。
+ * `## Summary` 各 severity 的**当前**计数 —— 最后一个命中行的最后一个数值单元格。
+ * 报告只有一份状态：`## Summary` 与 `## Findings` 始终描述当前轮次，就地
+ * revalidation 刷新两者，`## Revalidation` 只记录过程与逐 finding 处置、不另立
+ * 计数（`qc-specialist-shared.md` § Targeted re-review）。规则 8（Summary ↔
+ * Findings 对账）与规则 9（verdict ↔ 计数）因此共用这一份读数。
+ * 真实报告在计数单元格里带上 finding ID 与一句话标题 —— 单元格取首个整数；
+ * 计数行缺失或值非数字的 severity 视为不可判定，依赖它的规则静默。
  */
-function summaryCounts(lines: string[]): {
-  first: Partial<Record<ReportSeverity, number>>;
-  last: Partial<Record<ReportSeverity, number>>;
-} {
-  const first: Partial<Record<ReportSeverity, number>> = {};
-  const last: Partial<Record<ReportSeverity, number>> = {};
+function summaryCounts(lines: string[]): Partial<Record<ReportSeverity, number>> {
+  const counts: Partial<Record<ReportSeverity, number>> = {};
   const range = sectionRange(lines, "Summary");
-  if (range === undefined) return { first, last };
+  if (range === undefined) return counts;
   for (let i = range[0]; i < range[1]; i++) {
     const cells = tableCells(lines[i]!);
     if (cells === undefined) continue;
@@ -141,11 +137,10 @@ function summaryCounts(lines: string[]): {
     if (tail === undefined) continue;
     for (const severity of REPORT_SEVERITIES) {
       if (!namesSeverity(cells[0]!, severity)) continue;
-      if (first[severity] === undefined) first[severity] = Number(values[0] ?? tail);
-      last[severity] = Number(tail);
+      counts[severity] = Number(tail);
     }
   }
-  return { first, last };
+  return counts;
 }
 
 /**
@@ -318,7 +313,7 @@ export function validateQcReport(text: string): GateResult {
   const summary = summaryCounts(lines);
   const findings = findingsCounts(lines);
   for (const severity of REPORT_SEVERITIES) {
-    const claimed = summary.first[severity];
+    const claimed = summary[severity];
     const counted = findings[severity];
     if (claimed === undefined || counted === undefined || claimed === counted) continue;
     violations.push(
@@ -337,10 +332,10 @@ export function validateQcReport(text: string): GateResult {
       ? bodyPhrase
       : undefined;
   if (effectiveVerdict !== undefined) {
-    // 规则 9 用**当前**计数（`summary.last`）：revalidation 报告的
-    // `### Revalidation summary` 末列才是裁决所依据的状态。
-    const critical = summary.last.Critical;
-    const warning = summary.last.Warning;
+    // 规则 9 与规则 8 同源：`## Summary` 是报告唯一的当前计数（revalidation
+    // 就地刷新它），裁决因此基于席位自己声明的当前状态。
+    const critical = summary.Critical;
+    const warning = summary.Warning;
     const blocking = (critical ?? 0) + (warning ?? 0);
     if (effectiveVerdict === "Approve" && blocking > 0) {
       violations.push(
@@ -352,7 +347,7 @@ export function validateQcReport(text: string): GateResult {
         ),
       );
     }
-    const unconfirmed = summary.last.Unconfirmed;
+    const unconfirmed = summary.Unconfirmed;
     if (unconfirmed !== undefined && unconfirmed > 0 && effectiveVerdict !== "Unconfirmed") {
       violations.push(
         violation(

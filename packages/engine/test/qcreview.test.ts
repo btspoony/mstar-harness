@@ -4,7 +4,8 @@
  *
  * One case per violation code plus the valid-report baseline: rules 1-7
  * (frontmatter + verdict agreement), rule 8 (Summary/Findings count parity),
- * rule 9 (verdict vs counts), rule 10 (truncation vs verdict).
+ * rule 9 (verdict vs counts), rule 10 (truncation vs verdict), and the
+ * in-place revalidation contract (one refreshed tally; last verdict line wins).
  */
 import { describe, expect, test } from "bun:test";
 import { QC_VERDICTS, validateQcReport } from "../src/qcreview.js";
@@ -210,5 +211,48 @@ describe("validateQcReport \u2014 report rules", () => {
       .replace(BODY_VERDICT_LINE, "**Verdict**: Unconfirmed. Sample only.")
       .replace("Nothing to fix.", "- The report carries no `Truncated coverage:` line.");
     expect(codes(text)).toEqual([]);
+  });
+});
+
+describe("validateQcReport \u2014 in-place revalidation (one current state)", () => {
+  /**
+   * Targeted re-review per `qc-specialist-shared.md` § Targeted re-review: the
+   * SAME file gains `## Revalidation`, the first-round verdict line stays as
+   * narrative, `## Summary` + `## Findings` are refreshed to the post-fix
+   * state, and the revalidation appends the final verdict line (last wins).
+   */
+  const REVALIDATED = VALID_REPORT.replace(
+    BODY_VERDICT_LINE,
+    "**Verdict**: Request Changes. W-1 open on the first round.",
+  ).replace(
+    "## Verdict rationale",
+    [
+      "## Revalidation",
+      "",
+      "- Re-checked the fix delta for the assigned range; W-1 (`guard the call`) is closed.",
+      "- Per-finding disposition: W-1 closed; S-1 kept as a Suggestion.",
+      "",
+      "**Verdict**: Approve. No Critical/Warning findings remain.",
+      "",
+      "## Verdict rationale",
+    ].join("\n"),
+  );
+
+  test("refreshed Summary + Revalidation section + final verdict line are clean", () => {
+    const gate = validateQcReport(REVALIDATED);
+    expect(gate.violations).toEqual([]);
+    expect(gate.ok).toBe(true);
+  });
+
+  test("a stale Summary behind a refreshed verdict is still caught", () => {
+    const text = REVALIDATED.replace("| \ud83d\udfe1 Warning | 0 |", "| \ud83d\udfe1 Warning | 1 |")
+      .replace("### \ud83d\udfe1 Warning\n\nNone.", "### \ud83d\udfe1 Warning\n\n- **W-1** guard the call.")
+      // A tally written under `## Revalidation` is prose about the process —
+      // the engine reads `## Summary` only, so this stays outside the count.
+      .replace(
+        "## Verdict rationale",
+        "| Severity | Count |\n| --- | --- |\n| \ud83d\udfe1 Warning | 1 (open) |\n\n## Verdict rationale",
+      );
+    expect(codes(text)).toEqual(["qcreview.report.verdict-contradicts-counts"]);
   });
 });
