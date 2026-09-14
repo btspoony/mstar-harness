@@ -40,6 +40,7 @@ import {
   evaluatePostMergeClose,
   executionModeToN,
   findEphemeralCitations,
+  findProvenanceCitations,
   findSimplifyMarkers,
   findTemporaryMarkers,
   findingsCleanupGate,
@@ -3029,8 +3030,10 @@ reviewCommand
 /** Content types `mstar lint` knows, mapped 1:1 to engine lint.* checks. */
 /** Content types `mstar lint` knows, mapped 1:1 to engine lint.* checks.
  * `finding` is explicit-only (`--type finding`) \u2014 finding docs carry no
- * classifiable name/location, so inference never selects it. */
-type LintTargetType = "plan" | "skill" | "strategy" | "report" | "code" | "finding";
+ * classifiable name/location, so inference never selects it. `provenance` is
+ * explicit-only too (`--type provenance`) \u2014 a content-agnostic citation
+ * scan applied to every collected target when forced. */
+type LintTargetType = "plan" | "skill" | "strategy" | "report" | "code" | "finding" | "provenance";
 
 /** Build a static string-keyed membership lookup from an enum array. */
 function lookupTable(values: readonly string[]): Record<string, true> {
@@ -3139,6 +3142,21 @@ async function lintOneFile(filePath: string, forcedType?: LintTargetType, prVari
     case "finding":
       violations.push(...validateFindingDoc(text, { ...(prVariant ? { prVariant: true } : {}) }).violations);
       break;
+    case "provenance": {
+ // findProvenanceCitations is a discovery finder (array, no GateResult);
+ // wrap each citation into one violation \u2014 an empty array passes
+ // (same seam as the skill lint ephemeral wrapper).
+      for (const citation of findProvenanceCitations(text)) {
+        violations.push({
+          ok: false,
+          severity: "medium",
+          code: `lint.provenance.${citation.kind}`,
+          message: `provenance ${citation.kind} citation at line ${citation.line}: "${citation.match}" \u2014 tracked content must not disclose local plan/iteration ids or dated harness deep paths`,
+          fix: `rewrite "${citation.match}" as a placeholder form (e.g. task-N-report, <plan-id>) or a synthetic example slug (any -example- segment)`,
+        });
+      }
+      break;
+    }
     default:
       throw new SddScriptError(
         `usage: lint <target> \u2014 unsupported file type "${path.basename(filePath)}" (lintable: plan files, SKILL.md, STRATEGY.md, task-N-report.md, code files)`,
@@ -3158,10 +3176,11 @@ const lintCommand = program
 lintCommand
   .description(
     "Lint <target> (file or dir) \u2014 exit 1 on violations, 2 on usage. --type forces one content type " +
-      "(plan | skill | strategy | report | code | finding); finding docs are explicit-only",
+      "(plan | skill | strategy | report | code | finding | provenance); finding docs are explicit-only, " +
+      "and --type provenance is a content-agnostic citation scan applied to every collected target",
   )
   .argument("[target]", "File or directory to lint")
-  .option("--type <type>", "Force the content type (plan | skill | strategy | report | code | finding)")
+  .option("--type <type>", "Force the content type (plan | skill | strategy | report | code | finding | provenance)")
   .option("--pr-variant", "With --type finding: enforce the PR-only Merge class contract (presence, enum, placement after Confidence)")
   .action(async (target: string | undefined, options: { type?: string; prVariant?: boolean }) => {
     try {
@@ -3169,7 +3188,7 @@ lintCommand
       let forcedType: LintTargetType | null = null;
       if (options.type !== undefined) {
         const forced = options.type.trim().toLowerCase();
-        const KNOWN: readonly string[] = ["plan", "skill", "strategy", "report", "code", "finding"];
+        const KNOWN: readonly string[] = ["plan", "skill", "strategy", "report", "code", "finding", "provenance"];
         if (!KNOWN.includes(forced)) {
           throw new SddScriptError(`usage: lint --type must be one of ${KNOWN.join(" | ")}, got ${JSON.stringify(options.type)}`, 2);
         }

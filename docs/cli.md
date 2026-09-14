@@ -387,6 +387,21 @@ Exit codes:
 - `1` — missing required `--host` / `--skill` option (commander default)
 - `2` — usage: unknown `--host` id, or an empty `--skill` value
 
+### `mstar-harness lint`
+
+Lint harness artifacts by content type (engine-backed): plan files → quality bar, `SKILL.md` → frontmatter, `STRATEGY.md` → required sections, `task-N-report.md` → SDD TDD triple, code files → `simplify:`/`temporary` markers. The content type is inferred from the target's basename/location; directory targets collect lintable files recursively (build/vendor trees skipped). Violations print as per-file FAIL rows plus one row per finding on stderr; `simplify:` markers are advisory stdout notes.
+
+- `npx @mstar-harness/cli lint <file-or-dir>`
+- `npx @mstar-harness/cli lint <file-or-dir> --type provenance`
+
+`--type` forces one content type: `plan | skill | strategy | report | code | finding | provenance`. `finding` (finding-doc contract, `--pr-variant` adds the PR-only Merge class) and `provenance` are explicit-only — inference never selects them. `--type provenance` is a content-agnostic scan applied to every collected target: it reports provenance citations (dated plan/iteration id tokens and dated local-harness deeplinks that tracked content must not carry) as `lint.provenance.plan-id` / `lint.provenance.harness-path` rows with 1-based line numbers. Placeholder forms (`task-N-report`, `<plan-id>`), synthetic example slugs (any `-example-` segment), plain dates, version tokens, and undated layout lines pass.
+
+Exit codes:
+
+- `0` — OK (an empty directory walk prints a "no lintable files" note)
+- `1` — violations or file errors
+- `2` — usage: missing target, unknown `--type` value, or an unclassifiable file without `--type`
+
 ## Harness Slash Commands (not CLI subcommands)
 
 `/codebase-audit`, `/amazing-pr-review`, and the `/iteration-*` commands ship with the harness plugin (`commands/*.md`), not the `mstar-harness` CLI binary. Host availability: dsh / omp / OpenCode / Cursor load them from the plugin; Kimi / ZCode expose `/morning-star-harness:<name>`; Codex installs them as project-local skills (`--scope project`). See the command-loading table in [README.md](../README.md#codebase-audit).
