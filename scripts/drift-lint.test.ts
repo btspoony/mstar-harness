@@ -994,6 +994,31 @@ describe("checkProvenanceScan — Guard 7 repo text-face provenance scan", () =>
     expect(result.failures).toEqual([]);
   });
 
+  test("ts trailing-comment rule masks template literals: a `//` inside a backtick span is not a comment introducer (F-F)", () => {
+    const text = [
+      "const a = `see // plan " + SAMPLE_ID + "`;",
+      "const b = `https://example.com/" + SAMPLE_ID + "/x`;",
+    ].join("\n");
+    const result = checkProvenanceScan([{ rel: "src/a.ts", text }]);
+    expect(result.filesScanned).toBe(1);
+    expect(result.citationsFound).toBe(0);
+    expect(result.failures).toEqual([]);
+  });
+
+  test("ts introducer face is template-literal aware: a line-start `//` inside a multi-line backtick span is not scanned (F-F)", () => {
+    const text = [
+      "const s = [",
+      "  `",
+      `// plan ${SAMPLE_ID}`,
+      "  `,",
+      "];",
+    ].join("\n");
+    const result = checkProvenanceScan([{ rel: "src/a.ts", text }]);
+    expect(result.filesScanned).toBe(1);
+    expect(result.citationsFound).toBe(0);
+    expect(result.failures).toEqual([]);
+  });
+
   test("ts first-token comment face unchanged (F-B): block comment and continuation lines still scanned, code without a trailing comment stays blanked", () => {
     const text = [
       `/* header cites ${SAMPLE_ID} */`,
