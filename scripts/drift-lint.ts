@@ -74,6 +74,7 @@
 import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync, statSync, type Dirent } from "node:fs";
 import { join, relative } from "node:path";
+import { commentMask } from "./ascii-literal-utils.ts";
 import {
   AUDIT_CATEGORIES,
   classifySkillLint,
@@ -721,55 +722,60 @@ const PROVENANCE_SCAN_EXEMPTS = {
  * fixture data like the engine's JSON corpora) are not on the face. */
 const PROVENANCE_SCAN_EXTS = [".ts", ".md"];
 
-/** Mask single- and double-quoted string literal spans in `line` with
- * spaces (length-preserving, so indices stay valid against the original
- * line): `'(?:[^'\\]|\\.)*'` / `"(?:[^"\\]|\\.)*"` cover standard `\\`
- * escapes inside the quoted span. */
-function maskStringLiterals(line: string): string {
-  return line.replace(
-    /'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"/g,
-    (match) => " ".repeat(match.length),
-  );
-}
-
-/** First `//` in `line` that starts a trailing comment — mask-then-detect:
- * string literal spans are masked first, then the first `//` in the masked
- * remainder that is not part of a `://` URL sequence is the comment start
- * (no whitespace requirement, so `statement;// comment` qualifies). Returns
- * -1 when no occurrence qualifies. simplify: line-level mask, not a
- * tokenizer — template literals (a `//` inside a backtick literal stays a
- * comment introducer, conservative over-inclusion of the scan face) and
- * escaped-quote sequences outside string literals are out of scope. */
-function trailingCommentStart(line: string): number {
-  const masked = maskStringLiterals(line);
-  let idx = masked.indexOf("//");
+/** First `//` in `line` that starts a real trailing comment — mask-then-
+ * detect: `mask` is the file-level commentMask of the whole text (`base` is
+ * `line`'s offset in it), and the first `//` the mask marks as comment
+ * content that is not part of a `://` URL sequence is the comment start (no
+ * whitespace requirement, so `statement;// comment` qualifies). Returns -1
+ * when no occurrence qualifies. simplify: detection inherits commentMask's
+ * own ceiling — the regex-vs-division heuristic documented in
+ * scripts/ascii-literal-utils.ts. */
+function trailingCommentStart(line: string, mask: Uint8Array, base: number): number {
+  let idx = line.indexOf("//");
   while (idx !== -1) {
-    if (masked[idx - 1] !== ":") return idx;
-    idx = masked.indexOf("//", idx + 1);
+    if (mask[base + idx] === 1 && line[idx - 1] !== ":") return idx;
+    idx = line.indexOf("//", idx + 1);
   }
   return -1;
 }
 
 /** Line-level comment prefilter for the `.ts` scan face: keep lines whose
- * trimmed text starts with a comment introducer (`//`, `/*`, `*` —
- * block-comment continuation and close lines both start with `*`, the
- * same line-level heuristic as the engine's COMMENT_INTRODUCER), plus the
- * trailing-comment fragment of code lines (from the first `//` that
- * survives string-literal masking and is not part of a `://` URL
- * sequence — trailingCommentStart). Every other line is blanked so citation
- * line numbers stay the real file lines. simplify: the mask is line-level,
- * not a tokenizer — see trailingCommentStart for the template-literal and
- * escaped-quote ceiling; code positions without a qualifying comment
- * fragment (identifiers, string literals) are never scanned. */
+ * trimmed text starts with a comment introducer — `*` (block-comment
+ * continuation and close; the same line-level heuristic as the engine's
+ * COMMENT_INTRODUCER, kept unconditional), or `//` / `/*` when
+ * commentMask confirms real comment content — plus the trailing-comment
+ * fragment of code lines (from the first `//` the mask marks as a real
+ * comment and that is not part of a `://` URL sequence —
+ * trailingCommentStart). Every other line is blanked so citation line
+ * numbers stay the real file lines. The mask is computed once over the
+ * whole text, so a `//` or `/*` inside a template literal (backtick spans,
+ * including multi-line and `${}` expressions) or a quoted string is never
+ * taken for a comment introducer. simplify: the introducer test stays a
+ * line-level first-token heuristic on top of the mask; residual ceilings =
+ * the unconditional `*` line (over-inclusive once its block comment has
+ * closed) and commentMask's own regex-vs-division heuristic
+ * (scripts/ascii-literal-utils.ts). */
 function tsCommentLines(text: string): string {
-  return text
-    .split(/\r?\n/)
-    .map((line) => {
-      if (/^\s*(?:\/\/|\/\*|\*)/.test(line)) return line;
-      const idx = trailingCommentStart(line);
-      return idx === -1 ? "" : line.slice(idx);
-    })
-    .join("\n");
+  const mask = commentMask(text);
+  const out: string[] = [];
+  let base = 0;
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trimStart();
+    const intro = line.length - trimmed.length;
+    const introducer =
+      trimmed.startsWith("*") ||
+      ((trimmed.startsWith("//") || trimmed.startsWith("/*")) && mask[base + intro] === 1);
+    if (introducer) {
+      out.push(line);
+    } else {
+      const idx = trailingCommentStart(line, mask, base);
+      out.push(idx === -1 ? "" : line.slice(idx));
+    }
+    // Advance past the line plus its real separator (`\r\n` counts 2); the
+    // final line has none — the overshoot is never read.
+    base += line.length + (text.charCodeAt(base + line.length) === 13 ? 2 : 1);
+  }
+  return out.join("\n");
 }
 
 /** Tracked-file set at `repoRoot` (`git ls-files` with cwd = `repoRoot`, the
