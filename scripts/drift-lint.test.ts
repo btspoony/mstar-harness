@@ -39,6 +39,7 @@
  * to canonical pointers);
  * corpus drift goes red.
  */
+import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
@@ -975,6 +976,24 @@ describe("checkProvenanceScan — Guard 7 repo text-face provenance scan", () =>
     expect(result.failures).toEqual([]);
   });
 
+  test("ts trailing-comment rule catches a no-whitespace `statement;// comment` line (F-E)", () => {
+    const text = [`const x = 1;// ported from plan ${SAMPLE_ID}`].join("\n");
+    const result = checkProvenanceScan([{ rel: "src/a.ts", text }]);
+    expect(result.citationsFound).toBe(1);
+    expect(result.failures[0]).toContain("src/a.ts:1");
+    expect(result.failures[0]).toContain("(plan-id)");
+  });
+
+  test("ts trailing-comment rule masks string literals: a `//` inside a quoted span is not a comment introducer (F-E)", () => {
+    const text = [
+      `const s = "label // plan ${SAMPLE_ID}";`,
+      `const t = 'single // plan ${SAMPLE_ID}';`,
+    ].join("\n");
+    const result = checkProvenanceScan([{ rel: "src/a.ts", text }]);
+    expect(result.citationsFound).toBe(0);
+    expect(result.failures).toEqual([]);
+  });
+
   test("ts first-token comment face unchanged (F-B): block comment and continuation lines still scanned, code without a trailing comment stays blanked", () => {
     const text = [
       `/* header cites ${SAMPLE_ID} */`,
@@ -1017,6 +1036,29 @@ describe("checkProvenanceScan — Guard 7 repo text-face provenance scan", () =>
       expect(bad.failures[0]).toContain("provenance: git ls-files failed");
     } finally {
       rmSync(notARepo, { recursive: true, force: true });
+    }
+  });
+
+  test("readTrackedFiles keeps space-padded tracked filenames verbatim so the walk intersection still matches (F-D)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "drift-prov-space-"));
+    try {
+      execFileSync("git", ["init", "-q"], { cwd: dir });
+      writeFileSync(join(dir, " docs.md"), `plan ${SAMPLE_ID}\n`);
+      execFileSync("git", ["add", " docs.md"], { cwd: dir });
+      const { tracked, failures } = readTrackedFiles(dir);
+      expect(failures).toEqual([]);
+      expect(tracked.has(" docs.md")).toBe(true);
+      // The verbatim ls-files entry matches the fs-relative walk path: the
+      // legitimately-named tracked file stays on the scan face instead of
+      // being skipped by a trimmed comparison.
+      const { entries, readFailures } = collectProvenanceScanFiles(dir, tracked);
+      expect(readFailures).toEqual([]);
+      expect(entries.map((e) => e.rel)).toEqual([" docs.md"]);
+      const result = checkProvenanceScan(entries);
+      expect(result.citationsFound).toBe(1);
+      expect(result.failures[0]).toContain(" docs.md:1");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });
