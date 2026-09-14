@@ -41,6 +41,14 @@
  * in more than one file (bilingual variant `或 import` → `or import`
  * counts as identical), so a re-vendored canonical callout fails CI
  * before it drifts.
+ * 7. repo text face — no provenance citations anywhere on the tracked
+ * text face (engine findProvenanceCitations over the repo tree): `.md`
+ * files are scanned full text, `.ts` files at comment lines only;
+ * `.changes/archive` and the assembled `CHANGELOG` release surfaces are
+ * exempt (historical release record, not new prose). One failure row per
+ * citation, named `file:line`, turning the repo AGENTS.md provenance
+ * rule (no local plan/iteration ids or harness deep paths in tracked
+ * text; synthetic forms only) into a CI guard.
  *
  * The forward callout citation check (this plan, 20260817-cli-bin-alias
  * also validates the **binary prefix** of every backticked CLI
@@ -66,6 +74,7 @@ import {
   AUDIT_CATEGORIES,
   classifySkillLint,
   findEphemeralCitations,
+  findProvenanceCitations,
   lintFiveQuestion,
   lintLoadOrder,
   stripFrontmatter,
@@ -670,6 +679,129 @@ export function checkCalloutDuplication(
   return { failures };
 }
 
+/* ------------------------------------------------------------------ */
+/* Guard 7 helpers: repo text-face provenance scan */
+/* ------------------------------------------------------------------ */
+
+/** Guard 7 result: scanned tracked-text files plus one failure row per
+ * provenance citation. */
+export type ProvenanceScanResult = {
+  filesScanned: number;
+  citationsFound: number;
+  failures: string[];
+};
+
+/**
+ * Guard 7 exemption set — the single place provenance-scan exemptions
+ * live (no scattered path strings at call sites). Why each entry exists:
+ * - dirs `node_modules` / `dist` / `.git` / `.worktrees` / `.mstar`: not
+ *   tracked text face (installed deps, build output, git object database,
+ *   sibling checkouts, the gitignored local harness root).
+ * - `.changes/archive`: assembled release record — archived change
+ *   fragments are appended verbatim into the changelog at release time,
+ *   so they legitimately carry the ids of already-shipped changes; the
+ *   guard polices new prose, not the historical record.
+ * - files `CHANGELOG.md` / `CHANGELOG_CN.md` (any depth): assembled
+ *   release surfaces generated from `.changes/` fragments — same
+ *   historical-record rationale.
+ */
+const PROVENANCE_SCAN_EXEMPTS = {
+  dirs: ["node_modules", "dist", ".git", ".worktrees", ".mstar"],
+  archivedDir: ".changes/archive",
+  files: new Set(["CHANGELOG.md", "CHANGELOG_CN.md"]),
+};
+
+/** Scan-face extension whitelist: `.ts` is scanned at comment lines only,
+ * `.md` full text. Other extensions (lockfiles, build metadata, test
+ * fixture data like the engine's JSON corpora) are not on the face. */
+const PROVENANCE_SCAN_EXTS = [".ts", ".md"];
+
+/** Line-level comment prefilter for the `.ts` scan face: keep only lines
+ * whose trimmed text starts with a comment introducer (`//`, `/*`, `*` —
+ * block-comment continuation and close lines both start with `*`, the
+ * same line-level heuristic as the engine's COMMENT_INTRODUCER); every
+ * other line is blanked so citation line numbers stay the real file
+ * lines. Code positions (identifiers, string literals) are never scanned. */
+function tsCommentLines(text: string): string {
+  return text
+    .split(/\r?\n/)
+    .map((line) => (/^\s*(?:\/\/|\/\*|\*)/.test(line) ? line : ""))
+    .join("\n");
+}
+
+/** Guard 7 collection — walk `repoRoot` for the `.ts`/`.md` scan face,
+ * pruning exemption dirs during traversal (the same PROVENANCE_SCAN_EXEMPTS
+ * the scan filters by; pruning only avoids reading ignored/derived trees).
+ * Reads are guard-or-clear-error (same pattern as `readRolesCorpus`): an
+ * unreadable file becomes an explicit `provenance: read` row, never a raw
+ * crash mid-scan. Exported as a test seam over temp trees. */
+export function collectProvenanceScanFiles(repoRoot: string): {
+  entries: Array<{ rel: string; text: string }>;
+  readFailures: string[];
+} {
+  const entries: Array<{ rel: string; text: string }> = [];
+  const readFailures: string[] = [];
+  const walk = (absDir: string) => {
+    const dirents = readdirSync(absDir, { withFileTypes: true }).sort((a, b) =>
+      a.name < b.name ? -1 : 1,
+    );
+    for (const entry of dirents) {
+      const abs = join(absDir, entry.name);
+      const rel = relative(repoRoot, abs);
+      if (entry.isDirectory()) {
+        if (PROVENANCE_SCAN_EXEMPTS.dirs.includes(entry.name)) continue;
+        if (rel === PROVENANCE_SCAN_EXEMPTS.archivedDir) continue;
+        walk(abs);
+      } else if (PROVENANCE_SCAN_EXTS.some((ext) => entry.name.endsWith(ext))) {
+        try {
+          entries.push({ rel, text: readFileSync(abs, "utf8") });
+        } catch (error) {
+          readFailures.push(`provenance: read ${rel} - ${(error as Error).message}`);
+        }
+      }
+    }
+  };
+  walk(repoRoot);
+  return { entries, readFailures };
+}
+
+/**
+ * Guard 7 — repo-wide provenance scan over the collected text face:
+ * `.md` entries are scanned full text, `.ts` entries at comment lines only
+ * (tsCommentLines prefilter), exemption surfaces are skipped, and every
+ * engine findProvenanceCitations hit becomes a `${rel}:${line}` failure
+ * row (same row idiom as the ephemeral-citation guard). No guard-level
+ * dedup or extra exemptions: sdd deeplinks stay exclusively attributed to
+ * the ephemeral check by the finder contract, so the two guards cannot
+ * double-report. Load-bearing: a dated plan id or a dated-instance
+ * harness deeplink anywhere on the face fails drift-lint
+ * (regression-pinned by scripts/drift-lint.test.ts).
+ */
+export function checkProvenanceScan(files: Array<{ rel: string; text: string }>): ProvenanceScanResult {
+  const failures: string[] = [];
+  let filesScanned = 0;
+  let citationsFound = 0;
+  for (const { rel, text } of files) {
+    const segments = rel.split("/");
+    if (segments.some((s) => PROVENANCE_SCAN_EXEMPTS.dirs.includes(s))) continue;
+    if (rel.startsWith(`${PROVENANCE_SCAN_EXEMPTS.archivedDir}/`)) continue;
+    if (PROVENANCE_SCAN_EXEMPTS.files.has(segments[segments.length - 1])) continue;
+    const ext = PROVENANCE_SCAN_EXTS.find((e) => rel.endsWith(e));
+    if (!ext) continue;
+    filesScanned++;
+    const scanText = ext === ".ts" ? tsCommentLines(text) : text;
+    const citations = findProvenanceCitations(scanText);
+    if (citations.length === 0) continue;
+    citationsFound += citations.length;
+    for (const c of citations) {
+      failures.push(
+        `${rel}:${c.line} provenance citation "${c.match}" (${c.kind}) — tracked text must not disclose local plan/iteration ids or harness deep paths (use synthetic forms)`,
+      );
+    }
+  }
+  return { filesScanned, citationsFound, failures };
+}
+
 if (import.meta.main) {
  /* ------------------------------------------------------------------ */
  /* Engine export inventory (packages/engine/src/index.ts) */
@@ -949,6 +1081,15 @@ if (import.meta.main) {
   for (const row of fiveQuestion.failures) fail(row);
 
  /* ------------------------------------------------------------------ */
+ /* Guard 7: repo text face — provenance citations (engine lint) */
+ /* ------------------------------------------------------------------ */
+
+  const provenanceCollection = collectProvenanceScanFiles(root);
+  for (const row of provenanceCollection.readFailures) fail(row);
+  const provenance = checkProvenanceScan(provenanceCollection.entries);
+  for (const row of provenance.failures) fail(row);
+
+ /* ------------------------------------------------------------------ */
 
  // Guard 4 footer fragment: report each check's own verdict + count so a
  // load-order-only failure is never misstated as a combined/OK status.
@@ -964,12 +1105,12 @@ if (import.meta.main) {
     console.error(`drift-lint: ${failures.length} violation(s) found\n`);
     for (const f of failures) console.error(`  ✗ ${f}`);
     console.error(
-      `\nchecked ${calloutsChecked} Engine-check callouts (${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins) against ${engineExports.size} engine exports and ${cliCommands.size} CLI commands; ${categoryTokensChecked} audit category tokens; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files (${ephemeralCitationsFound} ephemeral citations); ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations)`,
+      `\nchecked ${calloutsChecked} Engine-check callouts (${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins) against ${engineExports.size} engine exports and ${cliCommands.size} CLI commands; ${categoryTokensChecked} audit category tokens; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files (${ephemeralCitationsFound} ephemeral citations); ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations)`,
     );
     process.exit(1);
   }
 
   console.log(
-    `drift-lint: OK — ${calloutsChecked} Engine-check callouts reference real exports (${engineExports.size}) and CLI commands (${cliCommands.size}); ${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins; engine spec citations resolve; ${categoryTokensChecked} audit category tokens match AUDIT_CATEGORIES; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files clean of ephemeral citations; ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations)`,
+    `drift-lint: OK — ${calloutsChecked} Engine-check callouts reference real exports (${engineExports.size}) and CLI commands (${cliCommands.size}); ${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins; engine spec citations resolve; ${categoryTokensChecked} audit category tokens match AUDIT_CATEGORIES; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files clean of ephemeral citations; ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations)`,
   );
 }
