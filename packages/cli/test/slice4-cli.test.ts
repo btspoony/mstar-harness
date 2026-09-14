@@ -437,6 +437,83 @@ Check result: exit 0; changed scope line found.
 });
 
 // ---------------------------------------------------------------------------
+// mstar lint --type provenance
+// ---------------------------------------------------------------------------
+
+describe("mstar lint --type provenance", () => {
+  test("forced provenance scan flags dated plan id + harness path with lines, exit 1", () => {
+    withTempDir((dir) => {
+      const file = join(dir, "task-1-report.md");
+      writeFileSync(
+        file,
+        [
+          "## Evidence",
+          "",
+          "removal tracked in plan 20991231-sample-plan",
+          "deeplink .mstar/plans/20991231-sample-plan/tasks.md",
+          "",
+        ].join("\n"),
+      );
+      const result = runCli(["lint", "--type", "provenance", file]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("lint.provenance.plan-id");
+      expect(result.stderr).toContain("lint.provenance.harness-path");
+      expect(result.stderr).toContain("line 3");
+      expect(result.stderr).toContain("line 4");
+      expect(result.stderr).toContain("20991231-sample-plan");
+    });
+  });
+
+  test("forced provenance scan passes synthetic example and placeholder forms, exit 0", () => {
+    withTempDir((dir) => {
+      const file = join(dir, "notes.md");
+      writeFileSync(
+        file,
+        [
+          "removal tracked in plan 20991231-example-plan",
+          "placeholder shapes: task-N-plan, <plan-id>, {plan-id}",
+          "version token 20260908-v3.9.0 stays out",
+          "layout lines: .mstar/plans/, .mstar/status.json",
+        ].join("\n"),
+      );
+      const result = runCli(["lint", "--type", "provenance", file]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("OK");
+      expect(result.stderr).toBe("");
+    });
+  });
+
+  test("forced provenance dir walk applies to every collected file, exit 1", () => {
+    withTempDir((dir) => {
+      writeFileSync(join(dir, "20991231-real-plan.md"), "# Plan\n\n## Goal\nTracked in 20991231-sample-plan.\n");
+      writeFileSync(join(dir, "20991231-clean-plan.md"), "# Plan\n\n## Goal\nPlaceholder <plan-id> only.\n");
+      const result = runCli(["lint", "--type", "provenance", dir]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("20991231-real-plan.md: FAIL");
+      expect(result.stderr).toContain("lint.provenance.plan-id");
+      expect(result.stdout).toContain("20991231-clean-plan.md: OK");
+    });
+  });
+
+  test("unknown --type value → usage listing includes provenance, exit 2", () => {
+    withTempDir((dir) => {
+      const file = join(dir, "notes.md");
+      writeFileSync(file, "prose\n");
+      const result = runCli(["lint", "--type", "nope", file]);
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain("usage");
+      expect(result.stderr).toContain("provenance");
+    });
+  });
+
+  test("--type provenance without a target → usage, exit 2", () => {
+    const result = runCli(["lint", "--type", "provenance"]);
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("usage: lint <target>");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // mstar design-md validate
 // ---------------------------------------------------------------------------
 

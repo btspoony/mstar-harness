@@ -243,6 +243,127 @@ export function findEphemeralCitations(skillText: string): EphemeralCitation[] {
   return citations;
 }
 
+/**
+ * A provenance citation found in text: a dated plan/iteration id token, or a
+ * local-harness deeplink whose specificity comes from a dated instance
+ * segment. Both disclose local artifact provenance, which tracked code and
+ * docs must not carry (repo AGENTS.md "Git and local artifacts": tracked
+ * content must not disclose real plan/iteration ids or local deep paths;
+ * synthetic example forms and generic layout lines are exempt).
+ */
+export type ProvenanceCitation = {
+  /** 1-based line number of the citation. */
+  line: number;
+  /** The matched citation token (dated plan id or deeplink path). */
+  match: string;
+  /** `plan-id`: a dated-slug plan/iteration id token; `harness-path`: a
+   * local-harness deeplink containing a dated token. */
+  kind: "plan-id" | "harness-path";
+};
+
+/** Dated-slug token shape shared by both provenance kinds: `20\d{6}-` plus a
+ * lowercase slug, word-bounded at both ends (`20991231-sample-plan`; an
+ * `iter-` / `plan ` / `planId` prefix is optional — the token itself is the
+ * fingerprint). The trailing `(?!\\.\d)` lookahead rejects a `.digits`
+ * version segment after the token (`20260908-v3.9.0` is a version, not a
+ * plan id). Placeholder forms (`task-N-*`, `<plan-id>`, `{…}`) never match:
+ * `N` is a letter and bracket characters are not digits (same placeholder
+ * discrimination as TASK_ARTIFACT_RE). */
+const DATED_SLUG_TOKEN_SOURCE = "\\b20\\d{6}-[a-z0-9][a-z0-9-]*\\b(?!\\.\\d)";
+/** Standalone dated-slug token occurrences (plan-id candidates). Consumed
+ * only via `matchAll` (which clones the regex), so the shared `lastIndex`
+ * never leaks between calls — do not `.exec` this instance directly. */
+const DATED_SLUG_TOKEN_RE = new RegExp(DATED_SLUG_TOKEN_SOURCE, "g");
+/** Local-harness deeplink — `.mstar/` / `.agents/` + a path tail. Segment
+ * charset mirrors SDD_DEEPLINK_RE (whitespace, placeholder brackets, quotes
+ * and glob wildcards excluded) plus `/`, so `<plan-id>` / `{SDD_DIR}` tails
+ * and allowlist globs (`.mstar/sdd/**`) never match past the root. */
+const HARNESS_PATH_RE = /\.(?:mstar|agents)\/[^\s<>{}\[\]"'\*\?]+/g;
+/** Sdd deeplink surface — first path segment `sdd` (same face as
+ * SDD_DEEPLINK_RE). Attribution contract: these paths belong to the
+ * ephemeral-citation check exclusively, so this finder never reports them. */
+const SDD_DEEPLINK_PREFIX_RE = /^\.(?:mstar|agents)\/sdd(?:\/|$)/;
+/** Trailing sentence punctuation swallowed by the harness-path tail charset
+ * (`… /tasks.md.` in a sentence). Trimmed from the REPORTED `match` only —
+ * span and line detection are unchanged; the plan-id token charset cannot
+ * carry trailing punctuation (word-bounded), so the trim is a no-op there. */
+const TRAILING_SENTENCE_PUNCT_RE = /[.,;:!?]+$/;
+
+/** True when a dated-slug token is a synthetic example form
+ * (`20991231-example-plan`, `20260717-example`): any `-`-separated segment
+ * equal to `example` marks fixture/template text — never reported. */
+function isExampleSlug(token: string): boolean {
+  return token.split("-").includes("example");
+}
+
+/** First dated-slug token in `text` that is not a synthetic example form, or
+ * `null` — the dated-instance requirement a harness path must satisfy to be
+ * specific (generic layout segments alone never qualify). */
+function qualifyingDatedToken(text: string): string | null {
+  for (const m of text.matchAll(DATED_SLUG_TOKEN_RE)) {
+    if (!isExampleSlug(m[0])) return m[0];
+  }
+  return null;
+}
+
+/**
+ * Find provenance citations in text (repo AGENTS.md "Git and local
+ * artifacts": tracked code and docs must not depend on local harness
+ * artifacts or disclose their provenance with real plan/iteration ids or
+ * local deep paths).
+ *
+ * Discrimination (HARD — zero false positives on the skills corpus):
+ * - `plan-id`: a dated-slug token (`20991231-sample-plan`; the dated token
+ *   inside `iter-20990101-sample-iteration` counts). Synthetic example
+ *   slugs (`20991231-example-plan`, `20260717-example`) are never reported;
+ *   a token followed by a `.digits` version segment (`20260908-v3.9.0`) is
+ *   a version, not a plan id; placeholder shapes (`task-N-*`, `<plan-id>`,
+ *   `{…}`) never match the digit-anchored form.
+ * - `harness-path`: a `.mstar/…` / `.agents/…` deeplink containing a
+ *   qualifying dated token — the dated instance segment carries the
+ *   specificity, so generic layout lines (`.mstar/plans/`,
+ *   `.mstar/status.json`, `.mstar/knowledge/<category>/`) are never
+ *   reported.
+ * - Attribution (single decision, shared with `findEphemeralCitations`):
+ *   sdd deeplinks (first segment `sdd`, the SDD_DEEPLINK_RE face) belong to
+ *   the ephemeral check exclusively; a dated token inside any harness path
+ *   is reported at most once — as `harness-path` for non-sdd paths, never
+ *   by this finder for sdd paths. Undated concrete path segments are out of
+ *   scope (shape ambiguity — prose/review territory, like merge SHAs).
+ *
+ * Discovery only — a finder returning an array, same shape as
+ * `findEphemeralCitations`; callers wrap findings into `ViolationResult`s.
+ * Citations are reported line by line in 1-based line order, source order
+ * within a line.
+ */
+export function findProvenanceCitations(text: string): ProvenanceCitation[] {
+  const citations: ProvenanceCitation[] = [];
+  const lines = text.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const found: Array<{ index: number; match: string; kind: ProvenanceCitation["kind"] }> = [];
+    const pathRanges: Array<[number, number]> = [];
+    for (const m of lines[i].matchAll(HARNESS_PATH_RE)) {
+      const start = m.index;
+      pathRanges.push([start, start + m[0].length]);
+      if (SDD_DEEPLINK_PREFIX_RE.test(m[0])) continue;
+      if (qualifyingDatedToken(m[0]) !== null) {
+        found.push({ index: start, match: m[0], kind: "harness-path" });
+      }
+    }
+    const inPath = (index: number) => pathRanges.some(([from, to]) => index >= from && index < to);
+    for (const m of lines[i].matchAll(DATED_SLUG_TOKEN_RE)) {
+      if (inPath(m.index)) continue; // owned by the path-level decision
+      if (isExampleSlug(m[0])) continue;
+      found.push({ index: m.index, match: m[0], kind: "plan-id" });
+    }
+    found.sort((a, b) => a.index - b.index);
+    for (const f of found) {
+      citations.push({ line: i + 1, match: f.match.replace(TRAILING_SENTENCE_PUNCT_RE, ""), kind: f.kind });
+    }
+  }
+  return citations;
+}
+
 /** Test-file reference: a path ending in `.test.<ext>` / `.spec.<ext>`
  * (mstar-sdd/references/file-handoffs.md "Covering test file(s)"). */
 const TEST_FILE_PATH_RE = /[\w./-]+\.(?:test|spec)\.[a-z0-9]+/i;
