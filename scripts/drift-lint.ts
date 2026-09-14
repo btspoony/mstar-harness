@@ -721,18 +721,31 @@ const PROVENANCE_SCAN_EXEMPTS = {
  * fixture data like the engine's JSON corpora) are not on the face. */
 const PROVENANCE_SCAN_EXTS = [".ts", ".md"];
 
-/** First `//` in `line` that starts a trailing comment: at line start or
- * preceded by whitespace, and not part of a `://` URL sequence. Returns -1
- * when no occurrence qualifies. simplify: line-level heuristic without
- * string-literal awareness — a whitespace-preceded `//` inside a string
- * literal is kept too (conservative over-inclusion of the scan face). */
+/** Mask single- and double-quoted string literal spans in `line` with
+ * spaces (length-preserving, so indices stay valid against the original
+ * line): `'(?:[^'\\]|\\.)*'` / `"(?:[^"\\]|\\.)*"` cover standard `\\`
+ * escapes inside the quoted span. */
+function maskStringLiterals(line: string): string {
+  return line.replace(
+    /'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"/g,
+    (match) => " ".repeat(match.length),
+  );
+}
+
+/** First `//` in `line` that starts a trailing comment — mask-then-detect:
+ * string literal spans are masked first, then the first `//` in the masked
+ * remainder that is not part of a `://` URL sequence is the comment start
+ * (no whitespace requirement, so `statement;// comment` qualifies). Returns
+ * -1 when no occurrence qualifies. simplify: line-level mask, not a
+ * tokenizer — template literals (a `//` inside a backtick literal stays a
+ * comment introducer, conservative over-inclusion of the scan face) and
+ * escaped-quote sequences outside string literals are out of scope. */
 function trailingCommentStart(line: string): number {
-  let idx = line.indexOf("//");
+  const masked = maskStringLiterals(line);
+  let idx = masked.indexOf("//");
   while (idx !== -1) {
-    const precededByWhitespace = idx === 0 || /\s/.test(line[idx - 1]);
-    const notUrlSequence = line[idx - 1] !== ":";
-    if (precededByWhitespace && notUrlSequence) return idx;
-    idx = line.indexOf("//", idx + 1);
+    if (masked[idx - 1] !== ":") return idx;
+    idx = masked.indexOf("//", idx + 1);
   }
   return -1;
 }
@@ -741,13 +754,13 @@ function trailingCommentStart(line: string): number {
  * trimmed text starts with a comment introducer (`//`, `/*`, `*` —
  * block-comment continuation and close lines both start with `*`, the
  * same line-level heuristic as the engine's COMMENT_INTRODUCER), plus the
- * trailing-comment fragment of code lines (from the first `//` that is at
- * line start or preceded by whitespace and not part of a `://` URL
+ * trailing-comment fragment of code lines (from the first `//` that
+ * survives string-literal masking and is not part of a `://` URL
  * sequence — trailingCommentStart). Every other line is blanked so citation
- * line numbers stay the real file lines. simplify: string-literal-aware
- * parsing is out of scope, so the trailing rule over-includes a
- * whitespace-preceded `//` inside a string literal; code positions without
- * a qualifying comment fragment (identifiers, literals) are never scanned. */
+ * line numbers stay the real file lines. simplify: the mask is line-level,
+ * not a tokenizer — see trailingCommentStart for the template-literal and
+ * escaped-quote ceiling; code positions without a qualifying comment
+ * fragment (identifiers, string literals) are never scanned. */
 function tsCommentLines(text: string): string {
   return text
     .split(/\r?\n/)
@@ -762,10 +775,14 @@ function tsCommentLines(text: string): string {
 /** Tracked-file set at `repoRoot` (`git ls-files` with cwd = `repoRoot`, the
  * repo root — the script's existing git access pattern is plain
  * `execFileSync("git", …)` from the process cwd, which the main block runs
- * at the repo root). Guard-or-clear-error (same idiom as
- * `readDeclaredBins`): a git failure returns one explicit failure row and
- * an empty set, so the caller skips the scan with a loud named row instead
- * of crashing or silently passing. Exported as a test seam. */
+ * at the repo root). Entries are kept verbatim — git emits exact paths one
+ * per line, and git permits leading/trailing spaces in filenames, so
+ * trimming entries would drop a legitimately-named tracked file that the
+ * fs-relative walk still reports under its real name. Guard-or-clear-error
+ * (same idiom as `readDeclaredBins`): a git failure returns one explicit
+ * failure row and an empty set, so the caller skips the scan with a loud
+ * named row instead of crashing or silently passing. Exported as a test
+ * seam. */
 export function readTrackedFiles(repoRoot: string): {
   tracked: Set<string>;
   failures: string[];
@@ -773,12 +790,7 @@ export function readTrackedFiles(repoRoot: string): {
   try {
     const out = execFileSync("git", ["ls-files"], { encoding: "utf8", cwd: repoRoot });
     return {
-      tracked: new Set(
-        out
-          .split("\n")
-          .map((line) => line.trim())
-          .filter(Boolean),
-      ),
+      tracked: new Set(out.split("\n").filter(Boolean)),
       failures: [],
     };
   } catch (error) {
