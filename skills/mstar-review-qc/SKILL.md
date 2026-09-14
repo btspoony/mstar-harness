@@ -66,7 +66,7 @@ Leaf reviewers apply verdict per **`mstar-roles/references/qc-specialist/report-
 - **截断报告保留 verdict。** 席位因触达预算而声明 `Truncated coverage:` 时，其 verdict 有效，PM **不得**因此升级为 `Unconfirmed`——`Unconfirmed` 仍是证据通道失败态（见上条传导规则）。
 - **未覆盖范围不改写门禁。** 席位 verdict 只涵盖其已审范围：当 Assignment 范围未被完整覆盖时，**gate decision 不得为 `Approve`**。PM 二选一——把未覆盖范围按 targeted re-review 重新派发（席位在预算内补完），或显式收窄 `Review range` 并把收窄依据记入 `qc-consolidated.md` 后再收敛。截断范围仍按「未提及 = 未审查」在 `qc-consolidated.md` 中如实标注 `unreviewed`，PM 不重审无关内容来补全它。
 
-> **Engine check (when available):** run `mstar qc validate-report <report.md>` on each seat report (and `mstar dispatch validate <assignment-file>` for the Assignment-side Budget gate; or `import { validateQcReport } from "@mstar-harness/engine"` in a host hook). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check (when available):** run `mstar qc validate-report <report.md>` on each seat report (and `mstar dispatch validate <assignment-file>` for the Assignment-side round-bounding gate — `Budget` + `Return shape` on review / audit rounds; or `import { validateQcReport } from "@mstar-harness/engine"` in a host hook). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 ## 证据规则（PM · consolidated 输入）
 
