@@ -120,7 +120,7 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 **Inputs**: <brief, diff, relevant knowledge, reusable evidence with original range>
 **Budget (review / QC seats)**: <expansion cap (file opens / wall clock) — may only tighten the default in `mstar-harness-core` § 定向执行与验证边界, never loosen it; `N/A` on implement / ops rounds>
 **Return shape (review / QC seats)**: <what the seat returns and how it stops — verdict + findings shape; a clean round returns `findings: []` explicitly instead of prose; `N/A` when the round produces no findings>
-**Severity bar**: <what this round must treat as blocking — `critical` / `high` mean unsafe to ship; grading SSOT (including what stays `low` / `nit`) → `mstar-artifacts` `references/status-and-residuals.md`; `N/A` on rounds with no findings>
+**Severity bar**: <what this round must treat as blocking — the blocking classes are unsafe-to-ship or significant tech debt; class definitions and the full report-section mapping → `mstar-artifacts` `references/status-and-residuals.md`; `N/A` on rounds with no findings>
 **Input provenance**: <how the seat grounds its claims — the command plus observed output for a `declared` / `recorded` / `written` artifact claim, and provenance for an asserted `path:line` citation; `N/A` when the round asserts neither>
 **Deliverables**: ...
 **Acceptance Criteria**:
