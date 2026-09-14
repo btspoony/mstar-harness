@@ -6,6 +6,16 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [3.9.1] - 2026-09-14
+
+### Fixed
+
+- `mstar worktree cleanup` no longer aborts on an unrelated workflow's broken snapshot, and no longer drops that snapshot's safeguards. A sibling whose JSON parses but fails validation enters the safety set in **degraded form** — only protective declarations survive (branch base/integration/target, lifecycle worktree path, merge/execution leases, row ownership metadata) with lifecycle and row states forced non-terminal, so it can only ADD keep/refuse verdicts. A sibling that cannot be parsed at all leaves the safety set incomplete, so every removal is withheld as `cleanup.refuse.unreadable-snapshot` (the plan still prints whole) unless the operator asserts `--ignore-unreadable-snapshots`. The selected snapshot stays fail-loud (exit 1), and no broken snapshot is ever repaired, rewritten or removed. Contract documented in `mstar-branch-worktree`「Worktree / branch cleanup」.
+
+- Version alignment with harness **3.9.1**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **3.9.1**.
+
 ## [3.9.0] - 2026-09-13
 
 ### Fixed
