@@ -247,7 +247,7 @@ Intent: clear findings in the current plan session whenever possible. Open resid
 
 ### `allow-residual` (legacy default)
 
-Non-blocking Warning/Suggestion may ship with open register entries and `Approve with residuals` when no unresolved Critical remains (existing residual lifecycle unchanged).
+Non-blocking register entries — `severity` below `critical` on the §3 axis — may ship with open entries and `Approve with residuals` when no unresolved `critical` remains (existing residual lifecycle unchanged).
 
 > **Engine check (when available):** run `mstar status findings-cleanup <plan-id> [--project <id>] [--mode zero-residual|allow-residual]` (or import `findingsCleanupGate` from `@mstar-harness/engine` in a host hook) to enforce the mode above against the plan's register entries. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
