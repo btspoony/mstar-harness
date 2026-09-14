@@ -740,8 +740,7 @@ export function parseCompassFrontmatter(filePath: string): Record<string, unknow
 /**
  * Parse flat-subset YAML frontmatter from raw file content — the single
  * shared parser core behind `parseCompassFrontmatter` (path wrapper) and
- * the roadmap validator (plan `20260819-workflow-engine-core.md` Task 4 —
- * extract/reuse the same parsing, no fork).
+ * the roadmap validator (extract/reuse the same parsing, no fork).
  */
 export function parseCompassFrontmatterText(content: string, filePath: string): Record<string, unknown> {
   const lines = content.split(/\r?\n/);

@@ -39,7 +39,8 @@
  * to canonical pointers);
  * corpus drift goes red.
  */
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { describe, expect, test } from "bun:test";
@@ -52,13 +53,16 @@ import {
   checkCalloutDuplication,
   checkEngineCallouts,
   checkFiveQuestionCorpus,
+  checkProvenanceScan,
   checkRolesCorpus,
   citesKnowledgeConventions,
+  collectProvenanceScanFiles,
   evaluateBilingualGuard,
   extractCategoryRowTokens,
   isGitHubActions,
   readDeclaredBins,
   readRolesCorpus,
+  readTrackedFiles,
 } from "./drift-lint.ts";
 
 describe("checkBilingualPairing — README pairing logic (guard 2)", () => {
@@ -600,8 +604,8 @@ describe("checkFiveQuestionCorpus — Guard 5 five-question runtime smoke", () =
 
   test("canonical fixture corpus: the classifier selects exactly the runtime rows (spec A4 parity)", () => {
  // The same canonical rows the Engine, CLI and dsh suites consume —
- // Guard5's corpus selection must agree row for row (plan
- // 20260907-skill-lint-parity Task 2, cross-consumer decision parity).
+ // Guard5's corpus selection must agree row for row (cross-consumer
+ // decision parity).
     type FixtureRow = {
       id: string;
       skillId: string | null;
@@ -822,6 +826,262 @@ describe("checkRolesCorpus — Guard 4 roles/load-order corpus", () => {
       expect(readFailures.length).toBe(1);
       expect(readFailures[0]).toContain("roles: read mstar-foo/SKILL.md");
       expect(readFailures[0]).toContain("EISDIR");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("checkProvenanceScan — Guard 7 repo text-face provenance scan", () => {
+  /** Synthetic dated-slug token mirroring the real leak shape (a dated
+   * plan id cited in a comment / doc prose). Synthetic on purpose —
+   * fixtures must never carry real provenance. */
+  const SAMPLE_ID = "20991216-provenance-guard-sample";
+  /** Root ignores directory permission bits, so a chmod-0o000 probe cannot
+   * make readdir fail there — skip instead of flaking on such systems. */
+  const CHMOD_PROBE_UNRELIABLE = typeof process.getuid === "function" && process.getuid() === 0;
+
+  test("red probe: real-shaped leak on a temp tree fails the guard (ts comment + md prose)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "drift-prov-"));
+    try {
+      mkdirSync(join(dir, "src"), { recursive: true });
+      mkdirSync(join(dir, "docs"), { recursive: true });
+      writeFileSync(
+        join(dir, "src", "sample.ts"),
+        ["export const ok = 1;", `// ported from plan ${SAMPLE_ID} Task 2`].join("\n"),
+      );
+      writeFileSync(join(dir, "docs", "note.md"), `see plan ${SAMPLE_ID} for details\n`);
+      writeFileSync(join(dir, "docs", "clean.md"), "no tokens here\n");
+      const { entries, readFailures } = collectProvenanceScanFiles(
+        dir,
+        new Set(["src/sample.ts", "docs/note.md", "docs/clean.md"]),
+      );
+      expect(readFailures).toEqual([]);
+      const result = checkProvenanceScan(entries);
+      expect(result.filesScanned).toBe(3);
+      expect(result.citationsFound).toBe(2);
+      expect(result.failures.some((r) => r.startsWith("src/sample.ts:2 ") && r.includes("(plan-id)"))).toBe(true);
+      expect(result.failures.some((r) => r.startsWith("docs/note.md:1 ") && r.includes("(plan-id)"))).toBe(true);
+      expect(result.failures.every((r) => !r.includes("docs/clean.md"))).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test.skipIf(CHMOD_PROBE_UNRELIABLE)(
+    "unlistable directory becomes an explicit provenance: read row, not a crash (guard-or-clear-error)",
+    () => {
+      const dir = mkdtempSync(join(tmpdir(), "drift-prov-dir-"));
+      const locked = join(dir, "locked");
+      try {
+        mkdirSync(locked, { recursive: true });
+        writeFileSync(join(dir, "clean.md"), "no tokens here\n");
+        chmodSync(locked, 0o000);
+        const { entries, readFailures } = collectProvenanceScanFiles(dir, new Set(["clean.md"]));
+        expect(readFailures.length).toBe(1);
+        expect(readFailures[0]).toContain("provenance: read locked");
+        // The readable face is still collected; the CLI guard run turns the
+        // surfaced row into a named failure + exit 1 through the normal path.
+        expect(entries.map((e) => e.rel)).toEqual(["clean.md"]);
+      } finally {
+        chmodSync(locked, 0o700);
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test("ts scan face is comment lines only: the same token in code position is not scanned", () => {
+    const text = [
+      `const citedFrom = "${SAMPLE_ID}";`,
+      `// cited from ${SAMPLE_ID}`,
+    ].join("\n");
+    const result = checkProvenanceScan([{ rel: "src/sample.ts", text }]);
+    expect(result.filesScanned).toBe(1);
+    expect(result.citationsFound).toBe(1);
+    expect(result.failures[0]).toContain("src/sample.ts:2");
+  });
+
+  test("exemption surfaces are skipped: assembled CHANGELOG files, archived change fragments, ignored dirs", () => {
+    const leak = `plan ${SAMPLE_ID}`;
+    const result = checkProvenanceScan([
+      { rel: "CHANGELOG.md", text: leak },
+      { rel: "README_CN.md", text: "clean\n" },
+      { rel: "packages/cli/CHANGELOG.md", text: leak },
+      { rel: "packages/cli/CHANGELOG_CN.md", text: leak },
+      { rel: ".changes/archive/2026-09/bump.md", text: leak },
+      { rel: "node_modules/pkg/index.d.ts", text: `// ${SAMPLE_ID}` },
+      { rel: "dist/bundle.js", text: leak },
+      { rel: ".tmp/probe.ts", text: `// ${SAMPLE_ID}` },
+    ]);
+    expect(result.citationsFound).toBe(0);
+    expect(result.filesScanned).toBe(1);
+    expect(result.failures).toEqual([]);
+  });
+
+  test("synthetic example forms pass (finder discrimination preserved through the seam)", () => {
+    const result = checkProvenanceScan([
+      { rel: "docs/note.md", text: "layout template: 20991231-example-plan\n" },
+      { rel: "src/a.ts", text: "// layout template: 20991231-example-plan\n" },
+    ]);
+    expect(result.citationsFound).toBe(0);
+    expect(result.failures).toEqual([]);
+  });
+
+  test("harness-path citations are caught with their kind (synthetic dated deeplink)", () => {
+    const result = checkProvenanceScan([
+      { rel: "docs/note.md", text: `recorded under .mstar/plans/${SAMPLE_ID}.md\n` },
+    ]);
+    expect(result.citationsFound).toBe(1);
+    expect(result.failures[0]).toContain("(harness-path)");
+  });
+
+  test("real repo face is collectable and scannable; failure rows stay 1:1 with citations (cleanliness is enforced by the CLI guard run, not pinned here — the existing-leak cleanup is tracked as its own change)", () => {
+    const REPO_ROOT = join(import.meta.dir, "..");
+    const { tracked, failures: trackedFailures } = readTrackedFiles(REPO_ROOT);
+    expect(trackedFailures).toEqual([]);
+    const { entries, readFailures } = collectProvenanceScanFiles(REPO_ROOT, tracked);
+    expect(readFailures).toEqual([]);
+    expect(entries.length).toBeGreaterThan(0);
+    const result = checkProvenanceScan(entries);
+    // The scan skips exactly the assembled-changelog entries the collector
+    // hands it: file-level exemption lives at scan level, the walk prunes
+    // only exemption dirs.
+    const assembled = entries.filter((e) => {
+      const base = e.rel.split("/").pop();
+      return base === "CHANGELOG.md" || base === "CHANGELOG_CN.md";
+    }).length;
+    expect(result.filesScanned).toBe(entries.length - assembled);
+    expect(result.failures.length).toBe(result.citationsFound);
+  });
+
+  test("ts trailing comments are scanned: the fragment from the first qualifying // fails at its real line (F-B)", () => {
+    const text = [
+      "export const ok = 1;",
+      `const x = 1; // ported from plan ${SAMPLE_ID}`,
+    ].join("\n");
+    const result = checkProvenanceScan([{ rel: "src/a.ts", text }]);
+    expect(result.filesScanned).toBe(1);
+    expect(result.citationsFound).toBe(1);
+    expect(result.failures[0]).toContain("src/a.ts:2");
+    expect(result.failures[0]).toContain("(plan-id)");
+  });
+
+  test("ts trailing-comment rule excludes :// URL sequences (F-B)", () => {
+    const text = [
+      `const u = "https://example.com/${SAMPLE_ID}";`,
+      `const v = "https://example.com/x"; // clean trailing comment`,
+    ].join("\n");
+    const result = checkProvenanceScan([{ rel: "src/a.ts", text }]);
+    expect(result.citationsFound).toBe(0);
+    expect(result.failures).toEqual([]);
+  });
+
+  test("ts trailing-comment rule catches a no-whitespace `statement;// comment` line (F-E)", () => {
+    const text = [`const x = 1;// ported from plan ${SAMPLE_ID}`].join("\n");
+    const result = checkProvenanceScan([{ rel: "src/a.ts", text }]);
+    expect(result.citationsFound).toBe(1);
+    expect(result.failures[0]).toContain("src/a.ts:1");
+    expect(result.failures[0]).toContain("(plan-id)");
+  });
+
+  test("ts trailing-comment rule masks string literals: a `//` inside a quoted span is not a comment introducer (F-E)", () => {
+    const text = [
+      `const s = "label // plan ${SAMPLE_ID}";`,
+      `const t = 'single // plan ${SAMPLE_ID}';`,
+    ].join("\n");
+    const result = checkProvenanceScan([{ rel: "src/a.ts", text }]);
+    expect(result.citationsFound).toBe(0);
+    expect(result.failures).toEqual([]);
+  });
+
+  test("ts trailing-comment rule masks template literals: a `//` inside a backtick span is not a comment introducer (F-F)", () => {
+    const text = [
+      "const a = `see // plan " + SAMPLE_ID + "`;",
+      "const b = `https://example.com/" + SAMPLE_ID + "/x`;",
+    ].join("\n");
+    const result = checkProvenanceScan([{ rel: "src/a.ts", text }]);
+    expect(result.filesScanned).toBe(1);
+    expect(result.citationsFound).toBe(0);
+    expect(result.failures).toEqual([]);
+  });
+
+  test("ts introducer face is template-literal aware: a line-start `//` inside a multi-line backtick span is not scanned (F-F)", () => {
+    const text = [
+      "const s = [",
+      "  `",
+      `// plan ${SAMPLE_ID}`,
+      "  `,",
+      "];",
+    ].join("\n");
+    const result = checkProvenanceScan([{ rel: "src/a.ts", text }]);
+    expect(result.filesScanned).toBe(1);
+    expect(result.citationsFound).toBe(0);
+    expect(result.failures).toEqual([]);
+  });
+
+  test("ts first-token comment face unchanged (F-B): block comment and continuation lines still scanned, code without a trailing comment stays blanked", () => {
+    const text = [
+      `/* header cites ${SAMPLE_ID} */`,
+      ` * continued ${SAMPLE_ID}`,
+      `const cited = "${SAMPLE_ID}";`,
+    ].join("\n");
+    const result = checkProvenanceScan([{ rel: "src/a.ts", text }]);
+    expect(result.citationsFound).toBe(2);
+    expect(result.failures.some((r) => r.startsWith("src/a.ts:1 "))).toBe(true);
+    expect(result.failures.some((r) => r.startsWith("src/a.ts:2 "))).toBe(true);
+    expect(result.failures.every((r) => !r.startsWith("src/a.ts:3"))).toBe(true);
+  });
+
+  test("tracked-set seam: untracked files are not collected, tracked files stay on the face (F-C)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "drift-prov-tracked-"));
+    try {
+      writeFileSync(join(dir, "tracked.md"), `plan ${SAMPLE_ID}\n`);
+      writeFileSync(join(dir, "untracked.md"), `plan ${SAMPLE_ID}\n`);
+      const { entries, readFailures } = collectProvenanceScanFiles(dir, new Set(["tracked.md"]));
+      expect(readFailures).toEqual([]);
+      expect(entries.map((e) => e.rel)).toEqual(["tracked.md"]);
+      const result = checkProvenanceScan(entries);
+      expect(result.citationsFound).toBe(1);
+      expect(result.failures[0]).toContain("tracked.md:1");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("readTrackedFiles returns the repo-root-relative tracked set; a git failure is one named row with an empty set (F-C guard-or-clear)", () => {
+    const REPO_ROOT = join(import.meta.dir, "..");
+    const ok = readTrackedFiles(REPO_ROOT);
+    expect(ok.failures).toEqual([]);
+    expect(ok.tracked.has("scripts/drift-lint.ts")).toBe(true);
+    const notARepo = mkdtempSync(join(tmpdir(), "drift-prov-norepo-"));
+    try {
+      const bad = readTrackedFiles(notARepo);
+      expect(bad.tracked.size).toBe(0);
+      expect(bad.failures.length).toBe(1);
+      expect(bad.failures[0]).toContain("provenance: git ls-files failed");
+    } finally {
+      rmSync(notARepo, { recursive: true, force: true });
+    }
+  });
+
+  test("readTrackedFiles keeps space-padded tracked filenames verbatim so the walk intersection still matches (F-D)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "drift-prov-space-"));
+    try {
+      execFileSync("git", ["init", "-q"], { cwd: dir });
+      writeFileSync(join(dir, " docs.md"), `plan ${SAMPLE_ID}\n`);
+      execFileSync("git", ["add", " docs.md"], { cwd: dir });
+      const { tracked, failures } = readTrackedFiles(dir);
+      expect(failures).toEqual([]);
+      expect(tracked.has(" docs.md")).toBe(true);
+      // The verbatim ls-files entry matches the fs-relative walk path: the
+      // legitimately-named tracked file stays on the scan face instead of
+      // being skipped by a trimmed comparison.
+      const { entries, readFailures } = collectProvenanceScanFiles(dir, tracked);
+      expect(readFailures).toEqual([]);
+      expect(entries.map((e) => e.rel)).toEqual([" docs.md"]);
+      const result = checkProvenanceScan(entries);
+      expect(result.citationsFound).toBe(1);
+      expect(result.failures[0]).toContain(" docs.md:1");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -1,6 +1,6 @@
 /**
  * Engine migrate module — the ONLY code that reads the v1 root status.json
- * shape (plan `20260819-workflow-engine-core.md` Task 6): a pure planner
+ * shape: a pure planner
  * `migrateHarnessTree(root, opts): MigratePlan` plus the executor
  * `applyMigratePlan(plan)`.
  *
@@ -930,7 +930,7 @@ export async function applyMigratePlan(plan: MigratePlan): Promise<MigrateResult
         `refusing to apply migration: invalid project register: ${gate.violations.map((v) => v.message).join("; ")}`,
       );
     }
- // Zero entries -> no register file (audit-20260821-f3): the planner
+ // Zero entries -> no register file: the planner
  // already returns `register: null` when there are no open residuals,
  // but a hand-built plan may carry a gate-passing empty `{ entries: {} }`
  // — writing an empty register would orphan an empty file. Validate

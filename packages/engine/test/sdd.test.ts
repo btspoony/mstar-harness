@@ -831,8 +831,8 @@ describe("engine helper contracts (bash originals removed in slice 5 — behavio
 });
 
 // ---------------------------------------------------------------------------
-// SDD execution context + action checks (spec A3, plan
-// 20260907-sdd-execution-paths Task 1). Fixtures build separate disposable
+// SDD execution context + action checks (spec A3). Fixtures build
+// separate disposable
 // primary / control / feature checkouts with real `git worktree add` — never
 // the real main checkout. Checks must be read-only.
 // ---------------------------------------------------------------------------

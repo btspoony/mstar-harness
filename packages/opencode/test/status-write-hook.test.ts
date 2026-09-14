@@ -640,7 +640,7 @@ describe("hard mode (compass enforcement: hard — Slice 5, roadmap §8.5 C4/D2)
   });
 
   test("plugin wiring (f8): edit literal replace that corrupts status.json is caught POST-patch in hard mode", async () => {
- // Regression (audit-20260821-f8): the edit branch validated only the
+ // Regression (post-patch linting): the edit branch validated only the
  // PRE-edit on-disk file, so an edit that turns a valid status.json
  // invalid (version 2 -> 1) passed silently. The hook must synthesize
  // the patched doc from the literal single `oldString` -> `newString`

@@ -41,9 +41,9 @@
  *
  * `claimed_at` acceptance: normative form is RFC 3339 UTC with explicit `Z`
  * (ADR field table); the repo's local `YYYY-MM-DD` date convention is also
- * accepted — the real control `status.json` execution_lease
- * (`20260808-slice1-engine-foundation`, written by PM 2026-08-08) uses
- * `"claimed_at": "2026-08-08"` and MUST pass `mstar lease verify`.
+ * accepted — the real control `status.json` execution_lease (written
+ * 2026-08-08) uses `"claimed_at": "2026-08-08"` and MUST pass
+ * `mstar lease verify`.
  */
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
@@ -104,8 +104,7 @@ describe("validateExecutionLease", () => {
   test("valid lease with repo date-only claimed_at passes (real control data)", () => {
  // Spec: ADR field table claims RFC 3339 UTC with Z; the repo's local
  // `YYYY-MM-DD` date convention is accepted too — the real control
- // control status.json execution_lease for
- // 20260808-slice1-engine-foundation uses `"claimed_at": "2026-08-08"`
+ // status.json execution_lease uses `"claimed_at": "2026-08-08"`
  // and `mstar lease verify` must pass on it.
     const gate = validateExecutionLease(validExecutionLease({ claimed_at: "2026-08-08" }));
     expect(gate.ok).toBe(true);

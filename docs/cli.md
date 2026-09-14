@@ -272,7 +272,7 @@ Exit codes (binding):
 `kind: review` stores a validated `mstar.review/v1` envelope — the machine-readable review document that `pr-deep-review` / `amazing-pr-review` Stage 3 must persist after synthesis (the Markdown report is the optional human copy, not a substitute). Plan-shaped keys (`^[0-9]{8}-[a-z0-9-]+$`) land at `{HARNESS_DIR}/sdd/<key>/review/report.json`; other keys (PR ids, review ids) at `{HARNESS_DIR}/sdd/_reviews/<key>.json`.
 
 ```sh
-mstar-harness persist review --key 20260827-review-json --stdin <<'JSON'
+mstar-harness persist review --key 20991231-example-review-json --stdin <<'JSON'
 {
   "schema": "mstar.review/v1",
   "verdict": "needs fixes",
@@ -386,6 +386,21 @@ Exit codes:
 - `0` — prints the canonical skill-root string (e.g. `harness-skills/mstar-roles`); `pi` prints the deferred-resolution notice in yellow
 - `1` — missing required `--host` / `--skill` option (commander default)
 - `2` — usage: unknown `--host` id, or an empty `--skill` value
+
+### `mstar-harness lint`
+
+Lint harness artifacts by content type (engine-backed): plan files → quality bar, `SKILL.md` → frontmatter, `STRATEGY.md` → required sections, `task-N-report.md` → SDD TDD triple, code files → `simplify:`/`temporary` markers. The content type is inferred from the target's basename/location; directory targets collect lintable files recursively (build/vendor trees skipped). Violations print as per-file FAIL rows plus one row per finding on stderr; `simplify:` markers are advisory stdout notes.
+
+- `npx @mstar-harness/cli lint <file-or-dir>`
+- `npx @mstar-harness/cli lint <file-or-dir> --type provenance`
+
+`--type` forces one content type: `plan | skill | strategy | report | code | finding | provenance`. `finding` (finding-doc contract, `--pr-variant` adds the PR-only Merge class) and `provenance` are explicit-only — inference never selects them. `--type provenance` is a content-agnostic scan applied to every collected target: over a directory the walk collects the calibrated repo text face (`.md` / `.ts` files — ordinary-named docs like `README.md` are scanned, not just classifier-classifiable targets). It reports provenance citations (dated plan/iteration id tokens and dated local-harness deeplinks that tracked content must not carry) as `lint.provenance.plan-id` / `lint.provenance.harness-path` rows with 1-based line numbers. Placeholder forms (`task-N-report`, `<plan-id>`), synthetic example slugs (any `-example-` segment), plain dates, version tokens, undated layout lines, and sdd deeplinks (`.mstar/sdd/…` / `.agents/sdd/…` — attributed to the `skill lint` ephemeral-citation check, not this scan) pass.
+
+Exit codes:
+
+- `0` — OK (an empty directory walk prints a "no lintable files" note)
+- `1` — violations or file errors
+- `2` — usage: missing target, unknown `--type` value, or an unclassifiable file without `--type`
 
 ## Harness Slash Commands (not CLI subcommands)
 

@@ -40,6 +40,7 @@ import {
   evaluatePostMergeClose,
   executionModeToN,
   findEphemeralCitations,
+  findProvenanceCitations,
   findSimplifyMarkers,
   findTemporaryMarkers,
   findingsCleanupGate,
@@ -3029,8 +3030,12 @@ reviewCommand
 /** Content types `mstar lint` knows, mapped 1:1 to engine lint.* checks. */
 /** Content types `mstar lint` knows, mapped 1:1 to engine lint.* checks.
  * `finding` is explicit-only (`--type finding`) \u2014 finding docs carry no
- * classifiable name/location, so inference never selects it. */
-type LintTargetType = "plan" | "skill" | "strategy" | "report" | "code" | "finding";
+ * classifiable name/location, so inference never selects it. `provenance` is
+ * explicit-only too (`--type provenance`) \u2014 a content-agnostic citation
+ * scan applied to every collected target when forced; over a directory the
+ * walk selects the calibrated `.md`/`.ts` text face
+ * (PROVENANCE_LINT_EXTENSIONS), not classifier-classifiable targets. */
+type LintTargetType = "plan" | "skill" | "strategy" | "report" | "code" | "finding" | "provenance";
 
 /** Build a static string-keyed membership lookup from an enum array. */
 function lookupTable(values: readonly string[]): Record<string, true> {
@@ -3056,6 +3061,17 @@ const LINT_CODE_EXTENSIONS: Record<string, true> = {
   ".rb": true, ".java": true, ".kt": true, ".swift": true,
 };
 
+/** Dir-walk face for `lint --type provenance`: the calibrated repo text
+ * face of the drift guard (`.md` scanned full text, `.ts` at comment
+ * lines). The ordinary classifier drops ordinary-named files like
+ * README.md / notes.md as unclassifiable, so a forced-provenance dir walk
+ * selects by this extension face instead of widening to arbitrary
+ * (possibly binary) files. */
+const PROVENANCE_LINT_EXTENSIONS: Record<string, true> = {
+  ".md": true,
+  ".ts": true,
+};
+
 /**
  * Classify a lint target by content type (basename first, then plan-location
  * heuristics, then code extensions). Unclassifiable files (DESIGN.md, task
@@ -3076,8 +3092,14 @@ function lintTargetType(filePath: string): LintTargetType | null {
 
 /** Recursively collect lintable files under a directory (skip build trees).
  * Every visited path is the walk root extended by readdir entry names, so a
- * child can never resolve above the directory the walk started from. */
-function collectLintTargets(dir: string): string[] {
+ * child can never resolve above the directory the walk started from.
+ * `accept` defaults to the content-type classifier; `lint --type provenance`
+ * swaps in the calibrated `.md`/`.ts` extension face
+ * (PROVENANCE_LINT_EXTENSIONS). */
+function collectLintTargets(
+  dir: string,
+  accept: (filePath: string) => boolean = (file) => lintTargetType(file) !== null,
+): string[] {
   const targets: string[] = [];
   const visit = (current: string): void => {
     for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
@@ -3086,7 +3108,7 @@ function collectLintTargets(dir: string): string[] {
       const child = current + entry.name;
       if (entry.isDirectory()) {
         if (LINT_SKIP_DIRS[entry.name] !== true) visit(child + path.sep);
-      } else if (entry.isFile() && lintTargetType(child) !== null) {
+      } else if (entry.isFile() && accept(child)) {
         targets.push(child);
       }
     }
@@ -3139,6 +3161,21 @@ async function lintOneFile(filePath: string, forcedType?: LintTargetType, prVari
     case "finding":
       violations.push(...validateFindingDoc(text, { ...(prVariant ? { prVariant: true } : {}) }).violations);
       break;
+    case "provenance": {
+ // findProvenanceCitations is a discovery finder (array, no GateResult);
+ // wrap each citation into one violation \u2014 an empty array passes
+ // (same seam as the skill lint ephemeral wrapper).
+      for (const citation of findProvenanceCitations(text)) {
+        violations.push({
+          ok: false,
+          severity: "medium",
+          code: `lint.provenance.${citation.kind}`,
+          message: `provenance ${citation.kind} citation at line ${citation.line}: "${citation.match}" \u2014 tracked content must not disclose local plan/iteration ids or dated harness deep paths`,
+          fix: `rewrite "${citation.match}" as a placeholder form (e.g. task-N-report, <plan-id>) or a synthetic example slug (any -example- segment)`,
+        });
+      }
+      break;
+    }
     default:
       throw new SddScriptError(
         `usage: lint <target> \u2014 unsupported file type "${path.basename(filePath)}" (lintable: plan files, SKILL.md, STRATEGY.md, task-N-report.md, code files)`,
@@ -3158,10 +3195,16 @@ const lintCommand = program
 lintCommand
   .description(
     "Lint <target> (file or dir) \u2014 exit 1 on violations, 2 on usage. --type forces one content type " +
-      "(plan | skill | strategy | report | code | finding); finding docs are explicit-only",
+      "(plan | skill | strategy | report | code | finding | provenance); finding docs are explicit-only, " +
+      "and --type provenance is a content-agnostic citation scan applied to every collected target " +
+      "(forced-provenance dir walks collect the .md/.ts text face)",
   )
   .argument("[target]", "File or directory to lint")
-  .option("--type <type>", "Force the content type (plan | skill | strategy | report | code | finding)")
+  .option(
+    "--type <type>",
+    "Force the content type (plan | skill | strategy | report | code | finding | provenance); " +
+      "provenance dir walks collect the .md/.ts text face",
+  )
   .option("--pr-variant", "With --type finding: enforce the PR-only Merge class contract (presence, enum, placement after Confidence)")
   .action(async (target: string | undefined, options: { type?: string; prVariant?: boolean }) => {
     try {
@@ -3169,7 +3212,7 @@ lintCommand
       let forcedType: LintTargetType | null = null;
       if (options.type !== undefined) {
         const forced = options.type.trim().toLowerCase();
-        const KNOWN: readonly string[] = ["plan", "skill", "strategy", "report", "code", "finding"];
+        const KNOWN: readonly string[] = ["plan", "skill", "strategy", "report", "code", "finding", "provenance"];
         if (!KNOWN.includes(forced)) {
           throw new SddScriptError(`usage: lint --type must be one of ${KNOWN.join(" | ")}, got ${JSON.stringify(options.type)}`, 2);
         }
@@ -3177,7 +3220,18 @@ lintCommand
       }
       const abs = resolveCliPath(target);
       if (!fs.existsSync(abs)) throw new Error(`lint target not found: ${abs}`);
-      const targets = fs.statSync(abs).isDirectory() ? collectLintTargets(abs) : [abs];
+      const isDir = fs.statSync(abs).isDirectory();
+      // Forced provenance is content-agnostic, so the dir walk selects the
+      // calibrated .md/.ts text face instead of classifier-classifiable
+      // targets (an ordinary-named README.md must be scanned too).
+      const targets = !isDir
+        ? [abs]
+        : forcedType === "provenance"
+          ? collectLintTargets(
+              abs,
+              (file) => PROVENANCE_LINT_EXTENSIONS[path.extname(file).toLowerCase()] === true,
+            )
+          : collectLintTargets(abs);
       if (targets.length === 0) {
         console.log(pc.yellow(`lint: no lintable files under ${target}`));
         return;
@@ -4038,7 +4092,7 @@ qcCommand
   });
 
 // ---------------------------------------------------------------------------
-// (20260826-prreview-execution): pr-review post / worktree-setup /
+// PR-review execution surface: pr-review post / worktree-setup /
 // worktree-cleanup / size / seat-prompt \u2014 thin CLI wrappers; the
 // deterministic part lives in @mstar-harness/engine prreview.ts, the CLI owns
 // process/git/gh side effects only.

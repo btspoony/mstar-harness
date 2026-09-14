@@ -27,7 +27,7 @@ const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
  * MSTAR_CLI_PROJECT_ROOT / INIT_CWD are pinned too: `resolveCliPath`
  * (audit-002) reads them ahead of PWD, so an ambient value would redirect
  * every relative-path fixture spuriously. TZ is pinned to the test process's
- * own frame (residual 20260827-qa-tzflake-cli-slice4): `bun test` runs this
+ * own frame (tracked residual): `bun test` runs this
  * process in UTC when TZ is unset, while a bare subprocess would fall back to
  * the system zone — the two frames diverge across the local calendar-day
  * boundary (00:00–08:00 in positive-offset zones), breaking the backlog
@@ -433,6 +433,101 @@ Check result: exit 0; changed scope line found.
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("lint target not found");
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// mstar lint --type provenance
+// ---------------------------------------------------------------------------
+
+describe("mstar lint --type provenance", () => {
+  test("forced provenance scan flags dated plan id + harness path with lines, exit 1", () => {
+    withTempDir((dir) => {
+      const file = join(dir, "task-1-report.md");
+      writeFileSync(
+        file,
+        [
+          "## Evidence",
+          "",
+          "removal tracked in plan 20991231-sample-plan",
+          "deeplink .mstar/plans/20991231-sample-plan/tasks.md",
+          "",
+        ].join("\n"),
+      );
+      const result = runCli(["lint", "--type", "provenance", file]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("lint.provenance.plan-id");
+      expect(result.stderr).toContain("lint.provenance.harness-path");
+      expect(result.stderr).toContain("line 3");
+      expect(result.stderr).toContain("line 4");
+      expect(result.stderr).toContain("20991231-sample-plan");
+    });
+  });
+
+  test("forced provenance scan passes synthetic example and placeholder forms, exit 0", () => {
+    withTempDir((dir) => {
+      const file = join(dir, "notes.md");
+      writeFileSync(
+        file,
+        [
+          "removal tracked in plan 20991231-example-plan",
+          "placeholder shapes: task-N-plan, <plan-id>, {plan-id}",
+          "version token 20260908-v3.9.0 stays out",
+          "layout lines: .mstar/plans/, .mstar/status.json",
+        ].join("\n"),
+      );
+      const result = runCli(["lint", "--type", "provenance", file]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("OK");
+      expect(result.stderr).toBe("");
+    });
+  });
+
+  test("forced provenance dir walk applies to every collected file, exit 1", () => {
+    withTempDir((dir) => {
+      writeFileSync(join(dir, "20991231-real-plan.md"), "# Plan\n\n## Goal\nTracked in 20991231-sample-plan.\n");
+      writeFileSync(join(dir, "20991231-clean-plan.md"), "# Plan\n\n## Goal\nPlaceholder <plan-id> only.\n");
+      const result = runCli(["lint", "--type", "provenance", dir]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("20991231-real-plan.md: FAIL");
+      expect(result.stderr).toContain("lint.provenance.plan-id");
+      expect(result.stdout).toContain("20991231-clean-plan.md: OK");
+    });
+  });
+
+  test("forced provenance dir walk collects ordinary-named .md files (not the classifier face only)", () => {
+    withTempDir((dir) => {
+      // README.md / notes.md are unclassifiable to the ordinary classifier
+      // (previously dropped from dir walks entirely); .txt stays off the
+      // calibrated .md/.ts face even with a real-shaped token.
+      writeFileSync(join(dir, "README.md"), "removal tracked in plan 20991231-sample-plan\n");
+      writeFileSync(join(dir, "notes.md"), "clean prose\n");
+      writeFileSync(join(dir, "notes.txt"), "tracked in plan 20991231-sample-plan\n");
+      const result = runCli(["lint", "--type", "provenance", dir]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("README.md: FAIL");
+      expect(result.stderr).toContain("lint.provenance.plan-id");
+      expect(result.stdout).toContain("notes.md: OK");
+      expect(result.stdout).not.toContain("notes.txt");
+      expect(result.stderr).not.toContain("notes.txt");
+    });
+  });
+
+  test("unknown --type value → usage listing includes provenance, exit 2", () => {
+    withTempDir((dir) => {
+      const file = join(dir, "notes.md");
+      writeFileSync(file, "prose\n");
+      const result = runCli(["lint", "--type", "nope", file]);
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain("usage");
+      expect(result.stderr).toContain("provenance");
+    });
+  });
+
+  test("--type provenance without a target → usage, exit 2", () => {
+    const result = runCli(["lint", "--type", "provenance"]);
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("usage: lint <target>");
   });
 });
 

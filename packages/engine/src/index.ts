@@ -9,7 +9,8 @@
  * the execution/merge lease state machines + same-host status write lock,
  * `dispatch` implements the Assignment field contract, default-branch
  * gate, QC seat mapping and tri-identity/anti-recursion prechecks, `lint`
- * implements marker/TDD-triple/plan-quality/frontmatter/STRATEGY checks,
+ * implements marker/TDD-triple/plan-quality/frontmatter/STRATEGY checks and
+ * ephemeral/provenance citation discovery,
  * `design-md` validates DESIGN.md token frontmatter + light/dark parity +
  * completeness levels, `audit` validates audit Status blocks, redacts
  * secrets and scaffolds audit-<date>/ plan dirs, and `compound` validates
@@ -361,6 +362,7 @@ export type {
   EphemeralCitation,
   PlanQualityFinding,
   PlanQualityResult,
+  ProvenanceCitation,
   SimplifyMarker,
   TemporaryMarker,
   TemporaryMarkerResult,
@@ -368,6 +370,7 @@ export type {
 export {
   assertSddTddTriple,
   findEphemeralCitations,
+  findProvenanceCitations,
   findSimplifyMarkers,
   findTemporaryMarkers,
   lintSkillFrontmatter,

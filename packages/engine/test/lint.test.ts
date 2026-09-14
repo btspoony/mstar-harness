@@ -29,6 +29,10 @@
  * (`task-N-*`, `<plan-id>`, `{SDD_DIR}`, `.mstar/sdd/<plan-id>/`) pass;
  * concrete instances (`task-2-report`, `task-1.diff`,
  * `.mstar/sdd/20260815-x/`) are flagged.
+ * - Provenance citations: repo AGENTS.md "Git and local artifacts" — tracked
+ * code and docs must not disclose provenance with real plan/iteration ids or
+ * dated local-harness deeplinks; example slugs, version tokens, placeholder
+ * shapes, plain dates and undated layout lines pass.
  */
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
@@ -36,6 +40,7 @@ import { dirname, join } from "node:path";
 import {
   assertSddTddTriple,
   findEphemeralCitations,
+  findProvenanceCitations,
   findSimplifyMarkers,
   findTemporaryMarkers,
   lintSkillFrontmatter,
@@ -111,7 +116,7 @@ The deployment is a temporary measure until the rollout completes.
 `;
 
 const TEMPORARY_PLAN_PATH = `
-// temporary: offline fallback. See plans/20260808-slice2.md for removal.
+// temporary: offline fallback. See plans/20991231-example.md for removal.
 `;
 
 const TEMPORARY_REMOVAL_PATH_LABEL = `
@@ -151,6 +156,30 @@ const EPHEMERAL_REAL_GLOB = `全局 agent 提示词应允许 \`.mstar/sdd/**\`�
 
 /** One line carrying both citation kinds — source order must be preserved. */
 const EPHEMERAL_MULTI = `both on one line: .mstar/sdd/20260815-x/ contains task-3-report.md
+`;
+
+/** Provenance hits — sanitized isomorphic samples (synthetic dated slugs in
+ * real shapes, never real artifact ids): a standalone plan id, an
+ * `iter-`-prefixed iteration token, and dated deeplinks under both harness
+ * roots. Every line must be flagged exactly once. */
+const PROVENANCE_HITS = `removal tracked in plan 20991231-sample-plan
+gate notes for iter-20990101-sample-iteration
+deeplink .mstar/plans/20991231-sample-plan/tasks.md
+mirror layout .agents/plans/20990102-sample-agent/report.md
+`;
+
+/** Zero-false-positive fixture — every excluded shape from the finder's
+ * discrimination contract: synthetic example slugs, `.digits` version
+ * tokens, placeholder forms, plain dates, generic layout lines without a
+ * dated instance segment, and sdd deeplinks (owned by the ephemeral check). */
+const PROVENANCE_FALSE_POSITIVES = `removal tracked in plan 20991231-example-plan
+see 20260717-example for the template form
+version token 20260908-v3.9.0 stays out
+placeholder shapes: task-N-plan, <plan-id>, {plan-id}
+plain dates 2026-08-16 and 20260816 are not id tokens
+layout lines: .mstar/plans/, .mstar/status.json, .mstar/knowledge/<category>/
+sdd surface: .mstar/sdd/20991231-sample-plan/task-1-report.md
+sdd mirror: .agents/sdd/20991231-sample-plan/
 `;
 
 /** Complete TDD triple per mstar-sdd/references/file-handoffs.md:
@@ -424,7 +453,7 @@ describe("findTemporaryMarkers", () => {
 
     const byPath = findTemporaryMarkers(TEMPORARY_PLAN_PATH);
     expect(byPath.ok).toBe(true);
-    expect(byPath.markers[0].removalPath).toBe("plans/20260808-slice2.md");
+    expect(byPath.markers[0].removalPath).toBe("plans/20991231-example.md");
   });
 
   test("accepts an explicit 'removal path:' label", () => {
@@ -533,6 +562,87 @@ describe("findEphemeralCitations", () => {
   test("returns [] for empty input", () => {
     expect(findEphemeralCitations("")).toEqual([]);
   });
+});
+
+// ---------------------------------------------------------------------------
+// findProvenanceCitations — repo AGENTS.md provenance rule ("tracked code
+// and docs must not depend on local harness artifacts or disclose their
+// provenance") + the attribution contract shared with findEphemeralCitations:
+// sdd deeplinks are the ephemeral check's exclusive surface.
+// ---------------------------------------------------------------------------
+
+describe("findProvenanceCitations", () => {
+  test("flags dated plan ids, iteration tokens, and dated harness paths with 1-based lines", () => {
+    const citations = findProvenanceCitations(PROVENANCE_HITS);
+    expect(citations).toHaveLength(4);
+    expect(citations.map((c) => c.kind)).toEqual(["plan-id", "plan-id", "harness-path", "harness-path"]);
+    expect(citations.map((c) => c.match)).toEqual([
+      "20991231-sample-plan",
+      "20990101-sample-iteration",
+      ".mstar/plans/20991231-sample-plan/tasks.md",
+      ".agents/plans/20990102-sample-agent/report.md",
+    ]);
+    expect(citations.map((c) => c.line)).toEqual([1, 2, 3, 4]);
+  });
+
+  test("reports a dated token once as harness-path inside a path, and standalone occurrences as plan-id", () => {
+    const citations = findProvenanceCitations(
+      ".mstar/plans/20991231-sample-plan.md ships with 20991231-sample-plan mentioned",
+    );
+    expect(citations).toEqual([
+      { line: 1, match: ".mstar/plans/20991231-sample-plan.md", kind: "harness-path" },
+      { line: 1, match: "20991231-sample-plan", kind: "plan-id" },
+    ]);
+  });
+
+  test("trims trailing sentence punctuation from the reported match (finding kept, match clean)", () => {
+    const citations = findProvenanceCitations("tracked in .mstar/plans/20991231-sample-plan/tasks.md.");
+    expect(citations).toEqual([
+      { line: 1, match: ".mstar/plans/20991231-sample-plan/tasks.md", kind: "harness-path" },
+    ]);
+  });
+
+  test("keeps sdd deeplinks unreported — the ephemeral check owns that surface", () => {
+    expect(findProvenanceCitations("report at .mstar/sdd/20991231-sample-plan/task-1-report.md")).toEqual([]);
+    expect(findProvenanceCitations("mirror at .agents/sdd/20991231-sample-plan/")).toEqual([]);
+  });
+
+  test("zero false positives on every excluded shape (example slugs, versions, placeholders, dates, layout, sdd)", () => {
+    expect(findProvenanceCitations(PROVENANCE_FALSE_POSITIVES)).toEqual([]);
+  });
+
+  test("globs and template path tails never carry a dated instance segment", () => {
+    expect(findProvenanceCitations("allow `.mstar/sdd/**` and `.agents/sdd/**` globs")).toEqual([]);
+    expect(findProvenanceCitations("template .mstar/plans/<plan-id>/tasks.md")).toEqual([]);
+  });
+
+  test("returns [] for empty input", () => {
+    expect(findProvenanceCitations("")).toEqual([]);
+  });
+
+  test.skipIf(CORPUS === null)(
+    "real corpus: zero provenance citations across the whole skills corpus",
+    () => {
+      const corpus = CORPUS as string;
+      const stack = [corpus];
+      const hits: string[] = [];
+      let checked = 0;
+      while (stack.length > 0) {
+        const dir = stack.pop() as string;
+        for (const entry of readdirSync(dir, { withFileTypes: true })) {
+          const path = join(dir, entry.name);
+          if (entry.isDirectory()) stack.push(path);
+          else if (entry.isFile()) {
+            checked++;
+            const found = findProvenanceCitations(readFileSync(path, "utf8"));
+            if (found.length > 0) hits.push(`${path}: ${found.map((c) => `${c.kind}:${c.match}`).join(", ")}`);
+          }
+        }
+      }
+      expect(checked).toBeGreaterThan(100);
+      expect(hits).toEqual([]);
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------

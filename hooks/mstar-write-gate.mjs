@@ -951,6 +951,8 @@ var AUDIT_EFFORTS = ["XS", "S", "M", "L", "XL"];
 var AUDIT_RISKS = ["LOW", "MED", "HIGH"];
 var AUDIT_CONFIDENCES = ["HIGH", "MED", "LOW"];
 var WALK_SKIP_DIRS = new Set(["node_modules", ".git", "dist"]);
+var DATED_SLUG_TOKEN_SOURCE = "\\b20\\d{6}-[a-z0-9][a-z0-9-]*\\b(?!\\.\\d)";
+var DATED_SLUG_TOKEN_RE = new RegExp(DATED_SLUG_TOKEN_SOURCE, "g");
 var PR_REVIEW_TIER_BUDGETS = Object.freeze({
   quick: Object.freeze({ wallClockMinutes: 5, maxSeats: 1, perSeatFindingsCap: 5, evidenceTokensCap: 600, fileOpenCap: 12 }),
   default: Object.freeze({ wallClockMinutes: 10, maxSeats: 2, perSeatFindingsCap: 6, evidenceTokensCap: 900, fileOpenCap: 20 }),
