@@ -234,12 +234,13 @@ Default process artifacts are **gitignored** (`mstar-conventions`「Git 跟踪�
 生命周期末端的物理回收（feature/integration worktree、本地/远端分支删除）的 ownership 与守卫规则**只在本节**；两条时序车道的 call site（Phase-2 同轮 / Phase-6 收尾）只引用本节，不复制规则。命令（**dry-run 默认**；无 fetch / prune / 任何写入）：
 
 ```text
-mstar worktree cleanup --workflow <id> [--harness <path>] [--apply] [--remote] [--worktree <path>]
+mstar worktree cleanup --workflow <id> [--harness <path>] [--apply] [--remote] [--worktree <path>] [--ignore-unreadable-snapshots]
 ```
 
 - dry-run 逐候选打印 `verdict | kind | ref | reason` 后结束；`--apply` 只执行当前 `remove` 行。Exit：0 = 合法 dry-run / eligible 移除全部成功；1 = 探测/变更失败；2 = usage。失败行**永不扩大范围**；受保护/拒绝行保持可见。
 - `--worktree <path>` 可重复：既收窄 worktree 候选集，也是**操作者所有权断言**——必须匹配记录的生命周期分支与同仓 checkout 身份，不能认领其他 lifecycle 的 worktree。`--remote` 只决定是否纳入 `origin/*` 删除候选；安全探测（integration 证据）无论是否 `--remote` 都会收集。
 - **信任模型**：`--harness <path>` 为操作者提供且受信——dry-run 与 `--apply` 的全部状态事实（snapshot、lease、行归属元数据、protected 锚点）均读自该目录。
+- **坏 sibling 不再阻塞，且不丢保护**：扫描 `workflows/*/snapshot.json` 时，**非选中**的坏 snapshot 不会让命令失败（exit 1）。**JSON 可解析但校验失败**者以**降级保守形态**入安全集：只携带具保护性的声明（`branch.base` / `branch.integration` / `branch.target`、lifecycle worktree path、merge / execution lease、行 ownership 元数据），且 lifecycle 与行状态一律强制为非终态——故只会**增加** keep/refuse 判定，绝不减少（它保护的分支/worktree 会被 `cleanup.keep.protected-ref` 或 `cleanup.refuse.*` 拦住）。**完全不可解析**者声明不可知：默认 **withhold 全部 remove**（改判 `cleanup.refuse.unreadable-snapshot`，plan 仍完整打印），仅当操作者给出 `--ignore-unreadable-snapshots` 断言时才按可读 snapshot 判定。**选中** workflow 自身 snapshot 不可读仍是探测失败（exit 1）；任何坏 snapshot 的字节**永不**被修复、改写或删除。
 
 **Ownership（禁止命名推断）**：候选归属只来自 snapshot 行元数据（`plans[].execution_lease`；lease 释放后为保留的行 `metadata.working_branch` / `metadata.worktree_path` 与 retained track Assignments）或已验证的显式 `--worktree` 断言。归属缺失 / 歧义 / 他属 → `cleanup.refuse.foreign-worktree` / `cleanup.refuse.foreign-branch`。**归属生产者义务（owner=PM）**：设 `Done` 并删除 `execution_lease` 的**同一 locked update** 内，owner 必须把 `metadata.working_branch` + `metadata.worktree_path` 持久化到该 plan 行（值以本轮 Assignment 为准）——这是 lease 释放后 ownership 检查读取的持久归属；缺失时已 merge 的 Done 行也会被 `cleanup.refuse.foreign-*` 拒绝，回收只能靠手工补写快照。
 
