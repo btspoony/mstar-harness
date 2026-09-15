@@ -181,7 +181,7 @@ mismatch → **STOP**.
 
 对每个本轮要推进的 active `plan_id`（可交错/并行，非强制 plan A 全 Done 再 plan B）：
 
-1. **Claim / resume — execution lease**（§2.0 #5 未 waive）：按下方「Execution lease」claim/resume 规则——同 `holder` → resume（校验 `worktree_path` / `working_branch` 与 Assignment 一致）；异 `holder` → **Blocked**；`InProgress` 无 lease → **STOP** 升级（孤儿恢复 → **`mstar-artifacts`**）；verify 通过前 **禁止**可写派发。**Scoped route**：claim/resume 的唯一入口是 `mstar plan bind`（`--assignment` / `--workflow --plan` / `--resume`）——同 plan 的第二个 fresh 形态 → `coordination.duplicate-holder`（只有显式 `--resume` 续接原会话；无自动 attach / fallback plan / TTL 夺取）。
+1. **Claim / resume — execution lease**（§2.0 #5 未 waive）：按下方「Execution lease」claim/resume 规则——同 `holder` → resume（校验 `worktree_path` / `working_branch` 与 Assignment 一致）；异 `holder` → **Blocked**；`InProgress` 无 lease → **STOP** 升级（孤儿恢复 → **`mstar-artifacts`**）；verify 通过前 **禁止**可写派发。**Scoped route**：fresh claim 的唯一入口是 `mstar plan bind`（`--assignment` / `--workflow --plan`）——同 plan 的第二个 fresh 形态 → `coordination.duplicate-holder`；续接只经 `mstar plan bind --resume`，且为**只读校验**（不重新获取 ownership、不重启执行、不改 revision；无自动 attach / fallback plan / TTL 夺取）。
 2. **Plan start — feature worktree + branch**：创建/校验 dedicated feature worktree（默认 `<repoRoot>/.worktrees/<plan-id>-<slug>`）；Assignment 须含绝对 `Worktree path` + `Working branch`（与 lease 一致）。plan 内多可写并行轨 → **`mstar-branch-worktree`** **`references/parallel-writable-pre-dispatch.md`**
 3. **Implement → InReview**（产品编辑在 feature worktree；plans / snapshot / iterations / SDD 经 control root 绝对路径）：
    - **默认 `Execution mode: sdd`**（多 task plan；hotfix 可 `inline`）。
@@ -193,7 +193,7 @@ mismatch → **STOP**.
      5. Dispatch **one** task reviewer subagent（brief + report + diff + Global Constraints）
      6. Fix loop 直至 review clean；append `{SDD_DIR}/progress.md`；更新 snapshot plan 行 / plan checkbox
      7. 放行已满足依赖的 next task；不等待无依赖任务，PM 独占共享 progress / snapshot 写入
-   - 每次 Completion Report 后更新 snapshot（`workflows/<id>/snapshot.json`）+ 主 plan。**Scoped route**：row 状态只经 `mstar plan progress --session <plan-session> --file <abs-json> --expect <revision>`（仅 `InProgress` / `InReview` / `Blocked` 子集；**禁止** `Todo` / `Done` / lease 删除）；leaf 与 plan 会话**不得**直接写 snapshot / 根 register。
+   - **整迭代路线**：每次 Completion Report 后更新 snapshot（`workflows/<id>/snapshot.json`）+ 主 plan。**Scoped route**：每次 Completion Report 后的 row 更新只经 `mstar plan progress --session <plan-session> --file <abs-json> --expect <revision>`（仅 `InProgress` / `InReview` / `Blocked` 子集；**禁止** `Todo` / `Done` / lease 删除）；leaf 与 plan 会话**不得**直接写 snapshot / 根 register。
 4. **QC → QA gate**（plan 保持 **`InReview`**；**保留** `execution_lease`）：per-plan 审查链 → **`mstar-sdd`**（L1–L2）+ **`mstar-review-qc/references/review-responsibility-boundaries.md`**（L3 tri / inline 单席；raw reports in `{SDD_DIR}/review/`，durable summary in main plan/snapshot）+ **`QA gate`**（`mandatory` → `qa-engineer`；`pm-acceptance` → PM checklist）。**禁止**在 integration merge 成功前设 `Done` 或删除 `execution_lease`。**Scoped route**：QA 证据齐备后的写点是 `mstar plan handoff --session <plan-session> --file <abs-json> --expect <revision>`，随后 **STOP**（row 保持 `InReview`、保留 lease）——`Done` 与 lease 释放不是 plan 会话的动作。
 5. **Plan complete — serial merge back**（§2.0 #5 未 waive；**整迭代路线**，语义未变 —— scoped route 见紧随其后的冻结序列，plan 会话不得执行本步骤）：自 **integration worktree** claim/resume snapshot 顶层 `integration_merge_lease` → 将 plan feature branch 合并入 `spec_integration_branch`（仅 merge-lease holder；细则 → 下方「Integration merge lease」）→ 记录 merge commit 证据 → 释放 merge lease；**同轮**设 `Done` 并删除 `execution_lease`（此即 owner 的 lease 释放动作），并在**同一 locked update** 内把 `metadata.working_branch` / `metadata.worktree_path` 持久化到该 plan 行（归属生产者义务；语义唯一 home → `mstar-branch-worktree`「Worktree / branch cleanup」Ownership）。merge 失败：保持 `InReview` + 保留 lease，不得标 `Done`。merge 成功即打开该 plan 的**同轮 cleanup 资格**（timing lane 1 → 下方「Same-round plan cleanup」）。
 
@@ -286,12 +286,19 @@ Lives on the snapshot plan row — `{WORKFLOW_DIR}/<id>/snapshot.json` → `plan
 6. Re-read and verify `holder`, `worktree_path`, `working_branch` match before
    any writable dispatch.
 
-**Scoped route:** steps 1–6 are executed **inside** `mstar plan bind`
-(`--assignment` / `--workflow --plan` / `--resume`) under its own lock — no
-handwritten complete-file update and no hand-rolled atomic replace. A second
-**fresh** bind on a row already held → `coordination.duplicate-holder` (with the
-active holder, workflow and plan); only an explicit `--resume` of the original
-session continues. Cross-primary references are **absolute control-root paths**
+**Scoped route — fresh bind:** steps 1–6 are executed **inside** `mstar plan bind`
+(`--assignment` / `--workflow --plan`) under its own lock — no handwritten
+complete-file update and no hand-rolled atomic replace. A second **fresh** bind
+on a row already held → `coordination.duplicate-holder` (with the active holder,
+workflow and plan).
+
+**Scoped route — `--resume`:** `mstar plan bind --resume` is **read-only** and is
+the only continuation path for the original session: it validates the pinned
+binding (the current session plus lease `worktree_path` / `working_branch`) and
+continues — it never re-runs step 5, never re-acquires ownership, never restarts
+execution and never changes the row revision. It may report handed-off /
+accepted / completed context read-only, and a released lease is never
+reacquired. Cross-primary references are **absolute control-root paths**
 (`local://` is not a portable handoff address).
 
 ### Hold, release, override
