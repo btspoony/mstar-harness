@@ -30,6 +30,7 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -42,6 +43,7 @@ import {
   type PlanCoordinationView,
 } from "../src/coordination.js";
 import { CoordinationError } from "../src/coordination-write.js";
+import { claimLease } from "../src/lease.js";
 import { createFsStore, setArtifactStore } from "../src/store.js";
 
 const WORKFLOW_ID = "wf-plana";
@@ -291,6 +293,159 @@ function registerBucket(fixture: Fixture, planId: string): Array<Record<string, 
   return bucket as Array<Record<string, unknown>>;
 }
 
+type GitFixture = Fixture & { integrationPath: string; baseSha: string; planSha: string };
+
+function headOf(cwd: string): string {
+  return execFileSync("git", ["-C", cwd, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+}
+
+/**
+ * A fixture whose plan worktree is a real Git checkout on the plan's own branch
+ * and whose snapshot names a real integration checkout, so the handoff and
+ * integration proofs run against real objects instead of path stubs.
+ */
+function gitFixture(): GitFixture {
+  const fixture = makeFixture() as GitFixture;
+  fixture.baseSha = headOf(fixture.root);
+  fixture.integrationPath = join(fixture.root, "wt-integration");
+  rmSync(fixture.worktreePath, { recursive: true, force: true });
+  git(["worktree", "add", "-q", "-b", "feature/plan-a", fixture.worktreePath], fixture.root);
+  git(["worktree", "add", "-q", "-b", "integration/plan-a", fixture.integrationPath], fixture.root);
+  writeText(join(fixture.worktreePath, "slice.txt"), "slice B\n");
+  git(["add", "-A"], fixture.worktreePath);
+  git(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "feat: slice B"], fixture.worktreePath);
+  fixture.planSha = headOf(fixture.worktreePath);
+  // The snapshot names the integration checkout handoff/integration address.
+  writeJson(fixture.snapshotPath, {
+    ...readJson(fixture.snapshotPath),
+    branch: { base: "main", integration: "integration/plan-a" },
+    integration_worktree_path: fixture.integrationPath,
+  });
+  return fixture;
+}
+
+function snapshotOf(fixture: Fixture): Record<string, unknown> {
+  return readJson(fixture.snapshotPath);
+}
+
+function planRowOf(fixture: Fixture, planId: string): Record<string, unknown> {
+  const rows = snapshotOf(fixture).plans;
+  if (!Array.isArray(rows)) throw new Error("snapshot has no plans array");
+  const row = rows.find((entry) => entry?.id === planId);
+  if (row === undefined) throw new Error(`snapshot has no row ${planId}`);
+  return row;
+}
+
+/** Direct fixture edits stand in for the session/status writes a live run does. */
+function updatePlanRow(
+  fixture: Fixture,
+  planId: string,
+  patch: (row: Record<string, unknown>) => Record<string, unknown>,
+): void {
+  const snapshot = snapshotOf(fixture);
+  const rows = snapshot.plans;
+  if (!Array.isArray(rows)) throw new Error("snapshot has no plans array");
+  writeJson(fixture.snapshotPath, { ...snapshot, plans: rows.map((row) => (row.id === planId ? patch(row) : row)) });
+}
+
+function claimExecutionLease(fixture: Fixture, planId: string, sessionPath: string): void {
+  const sessionId = readJson(sessionPath).session_id;
+  if (typeof sessionId !== "string") throw new Error("session envelope has no session_id");
+  const branch = planId === PLAN_ID ? "feature/plan-a" : "feature/plan-b";
+  updatePlanRow(fixture, planId, (row) => {
+    const claimed = claimLease(row as never, sessionId, {
+      worktree_path: planId === PLAN_ID ? fixture.worktreePath : join(fixture.root, "wt-planb"),
+      working_branch: branch,
+    });
+    if (!claimed.ok) throw new Error(`claim failed: ${claimed.violations.map((entry) => entry.code).join(", ")}`);
+    return claimed.row;
+  });
+}
+
+function handoffFields(row: Record<string, unknown>): Record<string, unknown> {
+  const coordination = row.coordination;
+  if (coordination === null || typeof coordination !== "object" || !("handoff" in coordination)) {
+    throw new Error("row has no coordination.handoff");
+  }
+  return coordination.handoff as Record<string, unknown>;
+}
+
+function leaseHolder(row: Record<string, unknown>): string | undefined {
+  const lease = row.execution_lease;
+  if (lease === null || typeof lease !== "object" || !("holder" in lease)) return undefined;
+  return typeof lease.holder === "string" ? lease.holder : undefined;
+}
+
+/** Handoff evidence the way a plan session submits it: paths and revisions. */
+type HandoffEvidence = {
+  source_sha: string;
+  worktree_path: string;
+  review_base: string;
+  review_head: string;
+  qc: { decision: string; reports: string[]; consolidated: string };
+  qa: { gate: string; decision: string; report: string };
+};
+
+/** Review/QA evidence inside the plan's own SDD area. */
+function handoffEvidenceOf(fixture: GitFixture, sourceSha: string): HandoffEvidence {
+  const reports = [join(fixture.sddDir, "review", "qc1.md"), join(fixture.sddDir, "review", "qc2.md")];
+  for (const path of reports) writeText(path, "# qc report\n");
+  const consolidated = join(fixture.sddDir, "review", "qc.md");
+  const qa = join(fixture.sddDir, "qa.md");
+  writeText(consolidated, "# consolidated qc\n");
+  writeText(qa, "# qa pass\n");
+  return {
+    source_sha: sourceSha,
+    worktree_path: fixture.worktreePath,
+    review_base: fixture.baseSha,
+    review_head: sourceSha,
+    qc: { decision: "Approve", reports, consolidated },
+    qa: { gate: "mandatory", decision: "pass", report: qa },
+  };
+}
+
+function recordField(record: Record<string, unknown>, key: string): Record<string, unknown> {
+  const value = record[key];
+  if (value === null || typeof value !== "object") throw new Error(`${key} is not an object`);
+  return value as Record<string, unknown>;
+}
+
+/** The `sha256` of a stored evidence ref, or a failed assertion. */
+function digestOf(ref: unknown): string {
+  if (ref === null || typeof ref !== "object" || !("sha256" in ref) || typeof ref.sha256 !== "string") {
+    throw new Error("evidence ref has no sha256");
+  }
+  return ref.sha256;
+}
+
+function sha256OfFile(path: string): string {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+async function handoffCall(fixture: Fixture, evidence: HandoffEvidence): Promise<CoordinationResult> {
+  const view = await readPlanCoordination(fixture.planSession, PLAN_ID, fixture.root);
+  return mutatePlanCoordination({
+    sessionPath: fixture.planSession,
+    planId: PLAN_ID,
+    expectedRevision: view.revision,
+    operation: { kind: "handoff", evidence } as never,
+  });
+}
+
+async function coordinatorCall(
+  fixture: Fixture,
+  planId: string,
+  operation: Record<string, unknown>,
+): Promise<CoordinationResult> {
+  const view = await readPlanCoordination(fixture.coordinatorSession, planId, fixture.root);
+  return mutatePlanCoordination({
+    sessionPath: fixture.coordinatorSession,
+    planId,
+    expectedRevision: view.revision,
+    operation: operation as never,
+  });
+}
+
 describe("binding", () => {
   test("coordinator bind claims the lifecycle with a 0600 envelope and refuses a second holder", async () => {
     const fixture = makeFixture();
@@ -368,14 +523,14 @@ describe("binding", () => {
     expect(await errorCodeOf(() => bindPlan(fixture, PEER_PLAN_ID))).toBe("coordination.not-prepared");
   });
 
-  test("slice-B operations are refused, never advertised, and never silently no-op", async () => {
+  test("unimplemented operations are refused, never advertised, and never silently no-op", async () => {
     const fixture = makeFixture();
     await preparePlan(fixture, PLAN_ID);
     await bindPlan(fixture, PLAN_ID);
 
     const view = await readPlanCoordination(fixture.planSession, PLAN_ID, fixture.root);
-    expect([...view.allowed_operations].sort()).toEqual(["progress", "residual-add", "residual-close"]);
-    for (const kind of ["handoff", "accept", "return", "integration-start", "integration-accept", "complete", "reconcile"]) {
+    expect([...view.allowed_operations].sort()).toEqual(["handoff", "progress", "residual-add", "residual-close"]);
+    for (const kind of ["integration-start", "integration-accept", "complete", "reconcile"]) {
       expect(view.allowed_operations).not.toContain(kind);
       expect(
         await errorCodeOf(() =>
@@ -388,6 +543,30 @@ describe("binding", () => {
         ),
       ).toBe("coordination.not-implemented");
     }
+    // Coordinator verbs are implemented and scoped: a plan session cannot issue them.
+    for (const kind of ["accept", "return"]) {
+      expect(
+        await errorCodeOf(() =>
+          mutatePlanCoordination({
+            sessionPath: fixture.planSession,
+            planId: PLAN_ID,
+            expectedRevision: view.revision,
+            operation: { kind } as never,
+          }),
+        ),
+      ).toBe("coordination.session-role");
+    }
+    // `handoff` is implemented: it refuses its own missing evidence, not the slice boundary.
+    expect(
+      await errorCodeOf(() =>
+        mutatePlanCoordination({
+          sessionPath: fixture.planSession,
+          planId: PLAN_ID,
+          expectedRevision: view.revision,
+          operation: { kind: "handoff" } as never,
+        }),
+      ),
+    ).toBe("coordination.invalid-input");
     // A precondition on the operation itself is refused: it belongs to the request.
     expect(
       await errorCodeOf(() =>
@@ -414,6 +593,121 @@ describe("binding", () => {
     const coordinatorView = await readPlanCoordination(fixture.coordinatorSession, PEER_PLAN_ID, fixture.root);
     expect(coordinatorView.allowed_operations).toEqual(["prepare"]);
     expect(coordinatorView.scope).toBeNull();
+  });
+});
+
+describe("handoff-transitions", () => {
+  test("handoff seals the evidence, accept moves the lease to the coordinator, return restores it", async () => {
+    const fixture = gitFixture();
+    await preparePlan(fixture, PLAN_ID);
+    await bindPlan(fixture, PLAN_ID);
+    claimExecutionLease(fixture, PLAN_ID, fixture.planSession);
+    updatePlanRow(fixture, PLAN_ID, (row) => ({ ...row, status: "InReview" }));
+
+    const evidence = handoffEvidenceOf(fixture, fixture.planSha);
+    const planSessionId = readJson(fixture.planSession).session_id;
+    const coordinatorSessionId = readJson(fixture.coordinatorSession).session_id;
+
+    // A dirty plan worktree is not a handoff-able state.
+    writeText(join(fixture.worktreePath, "scratch.txt"), "wip\n");
+    expect(await errorCodeOf(() => handoffCall(fixture, evidence))).toBe("coordination.git-proof");
+    rmSync(join(fixture.worktreePath, "scratch.txt"), { force: true });
+
+    // An abbreviated revision is never silently expanded into a pin.
+    expect(await errorCodeOf(() => handoffCall(fixture, { ...evidence, source_sha: fixture.planSha.slice(0, 7) }))).toBe(
+      "coordination.invalid-input",
+    );
+
+    // Evidence must live inside this plan's own plan/SDD area.
+    const stray = join(fixture.root, "stray-qc.md");
+    writeText(stray, "# qc\n");
+    expect(
+      await errorCodeOf(() => handoffCall(fixture, { ...evidence, qc: { ...evidence.qc, reports: [stray] } })),
+    ).toBe("coordination.path-mismatch");
+
+    // A QA gate the Assignment never pinned is a stale handoff.
+    expect(
+      await errorCodeOf(() => handoffCall(fixture, { ...evidence, qa: { ...evidence.qa, gate: "pm-acceptance" } })),
+    ).toBe("coordination.assignment-stale");
+
+    const handed = await handoffCall(fixture, evidence);
+    expect(handed.outcome).toBe("handed-off");
+    const handedRow = planRowOf(fixture, PLAN_ID);
+    expect(handedRow.status).toBe("InReview");
+    expect(leaseHolder(handedRow)).toBe(planSessionId);
+    const handoff = handoffFields(handedRow);
+    expect(handoff.state).toBe("submitted");
+    expect(handoff.attempt).toBe(1);
+    expect(handoff.submitted_by).toBe(planSessionId);
+    expect(typeof handoff.submitted_at).toBe("string");
+    expect(handoff.source_branch).toBe("feature/plan-a");
+    expect(handoff.source_sha).toBe(fixture.planSha);
+    expect(handoff.review_base).toBe(fixture.baseSha);
+    expect(handoff.review_head).toBe(fixture.planSha);
+    expect(handoff.worktree_path).toBe(fixture.worktreePath);
+
+    // Evidence is sealed by content, not by reference: the digest is the file's.
+    const qc = recordField(handoff, "qc");
+    expect(qc.decision).toBe("Approve");
+    const reports = qc.reports;
+    if (!Array.isArray(reports)) throw new Error("qc.reports is not an array");
+    expect(reports).toHaveLength(2);
+    expect(reports.map(digestOf)).toEqual([
+      sha256OfFile(join(fixture.sddDir, "review", "qc1.md")),
+      sha256OfFile(join(fixture.sddDir, "review", "qc2.md")),
+    ]);
+    const consolidated = recordField(qc, "consolidated");
+    expect(consolidated.path).toBe(join(fixture.sddDir, "review", "qc.md"));
+    expect(digestOf(consolidated)).toBe(sha256OfFile(join(fixture.sddDir, "review", "qc.md")));
+    const qa = recordField(handoff, "qa");
+    expect(qa.gate).toBe("mandatory");
+    expect(qa.decision).toBe("pass");
+    expect(digestOf(recordField(qa, "report"))).toBe(sha256OfFile(join(fixture.sddDir, "qa.md")));
+
+    // The plan session is done until the row comes back; the coordinator can act.
+    const planView = await readPlanCoordination(fixture.planSession, PLAN_ID, fixture.root);
+    expect(planView.allowed_operations).toEqual([]);
+    const coordinatorView = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
+    expect([...coordinatorView.allowed_operations].sort()).toEqual(["accept", "return"]);
+    expect(await errorCodeOf(() => handoffCall(fixture, evidence))).toBe("coordination.invalid-transition");
+
+    const accepted = await coordinatorCall(fixture, PLAN_ID, { kind: "accept" });
+    expect(accepted.outcome).toBe("accepted");
+    const acceptedRow = planRowOf(fixture, PLAN_ID);
+    expect(acceptedRow.status).toBe("InReview");
+    expect(leaseHolder(acceptedRow)).toBe(coordinatorSessionId);
+    const acceptedHandoff = handoffFields(acceptedRow);
+    expect(acceptedHandoff.id).toBe(handoff.id);
+    expect(acceptedHandoff.state).toBe("accepted");
+    expect(acceptedHandoff.accepted_by).toBe(coordinatorSessionId);
+    expect(typeof acceptedHandoff.accepted_at).toBe("string");
+
+    // A return needs a reason, and it puts the row back with its own session.
+    expect(await errorCodeOf(() => coordinatorCall(fixture, PLAN_ID, { kind: "return" }))).toBe(
+      "coordination.invalid-input",
+    );
+    const returned = await coordinatorCall(fixture, PLAN_ID, { kind: "return", reason: "review range is stale" });
+    expect(returned.outcome).toBe("returned");
+    const returnedRow = planRowOf(fixture, PLAN_ID);
+    expect(returnedRow.status).toBe("InProgress");
+    expect(leaseHolder(returnedRow)).toBe(planSessionId);
+    const returnedHandoff = handoffFields(returnedRow);
+    expect(returnedHandoff.state).toBe("returned");
+    expect(returnedHandoff.return_reason).toBe("review range is stale");
+    expect(typeof returnedHandoff.returned_at).toBe("string");
+
+    // Rework is a new commit and a new attempt, never a rewritten record.
+    writeText(join(fixture.worktreePath, "slice.txt"), "slice B v2\n");
+    git(["add", "-A"], fixture.worktreePath);
+    git(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "fix: rework"], fixture.worktreePath);
+    updatePlanRow(fixture, PLAN_ID, (row) => ({ ...row, status: "InReview" }));
+    const second = await handoffCall(fixture, handoffEvidenceOf(fixture, headOf(fixture.worktreePath)));
+    expect(second.outcome).toBe("handed-off");
+    const secondHandoff = handoffFields(planRowOf(fixture, PLAN_ID));
+    expect(secondHandoff.state).toBe("submitted");
+    expect(secondHandoff.attempt).toBe(2);
+    expect(secondHandoff.id).not.toBe(returnedHandoff.id);
+    expect(secondHandoff.source_sha).toBe(headOf(fixture.worktreePath));
   });
 });
 

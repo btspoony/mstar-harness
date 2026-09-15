@@ -32,6 +32,7 @@
  * `residuals.json`) can only be written from inside this module's locked
  * sections.
  */
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
@@ -39,6 +40,7 @@ import {
   CoordinationError,
   assertExactKeys,
   canonicalTarget,
+  evidenceRefOf,
   isArtifactVersion,
   isNonEmptyString,
   isPlainObject,
@@ -48,11 +50,15 @@ import {
   validatePreparedCoordination,
   validateRowCoordination,
   withProtectedWrite,
+  type EvidenceRef,
+  type HandoffIntegration,
+  type HandoffState,
+  type PlanHandoff,
   type PlanProgress,
   type PreparedCoordination,
   type RowCoordination,
 } from "./coordination-write.js";
-import { claimLease, withStatusWriteLock } from "./lease.js";
+import { claimLease, transferLease, withStatusWriteLock } from "./lease.js";
 import {
   assertSafePathComponent,
   canonicalizeNearestExisting,
@@ -65,11 +71,12 @@ import {
 import {
   PROJECT_REGISTER_FILE,
   _DEFAULT_PROJECT,
+  findingsCleanupGate,
   validateProjectRegister,
   type ProjectRegisterDoc,
   type ProjectRegisterEntry,
 } from "./project.js";
-import { validateResidual, type PlanRow } from "./status.js";
+import { validateResidual, validateStatusV2, type PlanRow, type StatusV2Doc } from "./status.js";
 import { getArtifactStore, resolveArtifactPath, type ArtifactRef, type ArtifactStore } from "./store.js";
 import { readMainWorktree, type MainWorktreeInfo } from "./worktree.js";
 import { readWorkflowSnapshot, validateWorkflowSnapshot, writeWorkflowSnapshot, type WorkflowSnapshot } from "./workflow.js";
@@ -157,7 +164,7 @@ export type PlanCoordinationView = {
 /** Success shape of a coordination call. */
 export type CoordinationResult = {
   ok: true;
-  action: string;
+  operation: string;
   session: CoordinationSession;
   session_file: string;
   /** `claimed` / `resumed` / `prepared` / `progressed` / `residual-added` / `residual-closed`. */
@@ -287,13 +294,13 @@ const IMPLEMENTED_OPERATIONS: Record<string, true> = {
   progress: true,
   "residual-add": true,
   "residual-close": true,
+  handoff: true,
+  accept: true,
+  return: true,
 };
 
 /** Spec §D operation kinds that exist in the type surface but are not built. */
 const UNIMPLEMENTED_OPERATIONS: Record<string, true> = {
-  handoff: true,
-  accept: true,
-  return: true,
   "integration-start": true,
   "integration-accept": true,
   complete: true,
@@ -977,7 +984,14 @@ async function commitSnapshot(
   await withProtectedWrite(snapshotPath, "put", () => store.put({ kind: "snapshot", key: workflowId, payload: next }));
 }
 
-type RowCommit = { row: PlanRow; coordination: RowCoordination };
+type RowCommit = {
+  row: PlanRow;
+  coordination: RowCoordination;
+  /** Snapshot-level fields this row mutation owns (e.g. the merge lease). */
+  topLevel?: Partial<WorkflowSnapshot>;
+  /** Snapshot-level keys this row mutation deletes in the same write. */
+  dropTopLevel?: readonly string[];
+};
 
 type RowContext = {
   scope: ResolvedPlanScope;
@@ -1039,9 +1053,13 @@ async function withRowCommit(
     outcome = "mutated";
     const nextSnapshot: WorkflowSnapshot = {
       ...snapshot,
+      ...(commit.topLevel ?? {}),
       updated_at: nowIso(),
       plans: snapshot.plans.map((entry, i) => (i === index ? commit.row : entry)),
     };
+    for (const key of commit.dropTopLevel ?? []) {
+      delete (nextSnapshot as Record<string, unknown>)[key];
+    }
     await commitSnapshot(scope.harnessRoot, scope.workflowId, scope.snapshotPath, nextSnapshot);
     return { snapshot: nextSnapshot, row: commit.row, outcome };
   });
@@ -1118,13 +1136,12 @@ function assertRowBinding(session: CoordinationSession, sessionPath: string, row
 /** Reject row mutations while a handoff owns the plan's transition. */
 function assertNoHandoff(context: RowContext): void {
   const handoff = context.coordination?.handoff;
-  if (handoff !== undefined) {
-    throw new CoordinationError(
-      "coordination.invalid-transition",
-      `plan ${context.scope.planId} is handed off (state ${String(handoff.state)}) — the plan session owns no transition until the coordinator returns or completes it`,
-      { plan_id: context.scope.planId, state: handoff.state },
-    );
-  }
+  if (handoff === undefined || handoff.state === "returned") return;
+  throw new CoordinationError(
+    "coordination.invalid-transition",
+    `plan ${context.scope.planId} is handed off (state ${String(handoff.state)}) — the plan session owns no transition until the coordinator returns or completes it`,
+    { plan_id: context.scope.planId, state: handoff.state },
+  );
 }
 
 function allowedOperations(
@@ -1135,20 +1152,44 @@ function allowedOperations(
 ): string[] {
   const coordination = rowCoordinationOf(row);
   const status = rowStatusOf(row);
+  const handoff = coordination?.handoff;
   const out: string[] = [];
   if (role === "coordinator") {
-    const bound = snapshot.coordination?.coordinator.session_id === sessionId;
+    // The coordinator seat is per workflow: an unbound session advertises nothing.
+    if (snapshot.coordination?.coordinator.session_id !== sessionId) return [];
     if (
-      bound &&
       coordination?.prepared === undefined &&
       coordination?.session === undefined &&
-      coordination?.handoff === undefined &&
+      handoff === undefined &&
       isClaimableStatus(status)
     ) {
       out.push("prepare");
     }
+    switch (handoff?.state) {
+      case "submitted":
+        out.push("accept", "return");
+        break;
+      case "accepted":
+        out.push("return", "integration-start");
+        break;
+      case "integrating":
+        out.push("integration-accept", "complete", "reconcile");
+        break;
+      case "merged":
+        out.push("complete", "reconcile");
+        break;
+      case "completed":
+        out.push("reconcile");
+        break;
+      default:
+        break;
+    }
   } else if (coordination?.session?.session_id === sessionId && coordination.prepared !== undefined) {
-    if (coordination.handoff === undefined) out.push("progress", "residual-add", "residual-close");
+    // A plan session keeps only `handoff`: returning a handoff restores the
+    // same session, so both directions stay available to it without rebinding.
+    if (handoff === undefined || handoff.state === "returned") {
+      out.push("progress", "residual-add", "residual-close", "handoff");
+    }
   }
   return out.filter((kind) => IMPLEMENTED_OPERATIONS[kind] === true);
 }
@@ -2100,11 +2141,6 @@ async function writeRegister(
  * ------------------------------------------------------------------------ */
 
 /**
- * Run one coordinated mutation (spec §D). Every call re-authenticates the
- * session, re-checks the Assignment hash, enforces the revision/version
- * preconditions under the lock, and writes through `withProtectedWrite`.
- */
-/**
  * Run one coordinated mutation (spec §B/§D). Every call re-authenticates the
  * session from its envelope, re-checks the Assignment hash, enforces the
  * revision/register precondition under the lock, and writes through
@@ -2132,7 +2168,7 @@ export async function mutatePlanCoordination(request: CoordinationRequest): Prom
   if (UNIMPLEMENTED_OPERATIONS[kind] === true) {
     throw notImplemented(
       kind,
-      "implemented operations in this slice are prepare, progress, residual-add, residual-close",
+      "implemented operations in this slice are prepare, progress, residual-add, residual-close, handoff, accept, return",
     );
   }
   if (IMPLEMENTED_OPERATIONS[kind] !== true) {
@@ -2176,6 +2212,27 @@ export async function mutatePlanCoordination(request: CoordinationRequest): Prom
       assertExactKeys(operation, ["kind", "entryId", "note", "expectedRegisterVersion"], "residual-close operation");
       return mutateResidualClose(await sessionScope(session), session, sessionAbs, { ...operation, expectedRevision });
     }
+    case "handoff": {
+      assertExactKeys(operation, ["kind", "evidence"], "handoff operation");
+      return mutateHandoff(await sessionScope(session), session, sessionAbs, {
+        evidence: operation.evidence,
+        expectedRevision,
+      });
+    }
+    case "accept": {
+      assertExactKeys(operation, ["kind"], "accept operation");
+      return mutateAccept(await coordinatorScope(session, request.planId, kind), session, sessionAbs, {
+        expectedRevision,
+      });
+    }
+    case "return": {
+      assertExactKeys(operation, ["kind", "reason"], "return operation");
+      if (!isNonEmptyString(operation.reason)) throw invalidInput("return requires a non-empty reason");
+      return mutateReturn(await coordinatorScope(session, request.planId, kind), session, sessionAbs, {
+        reason: operation.reason,
+        expectedRevision,
+      });
+    }
     default:
       throw new CoordinationError(
         "coordination.unknown-operation",
@@ -2204,20 +2261,49 @@ function assertExpectedRevision(revision: number): void {
   }
 }
 
+/** Operations only a coordinator session may issue (spec §D/§E). */
+const COORDINATOR_OPERATIONS: readonly string[] = [
+  "prepare",
+  "accept",
+  "return",
+  "integration-start",
+  "integration-accept",
+  "complete",
+  "reconcile",
+];
+
 function assertSessionRole(session: CoordinationSession, kind: string): void {
-  if (kind === "prepare" && session.role !== "coordinator") {
-    throw new CoordinationError("coordination.session-role", `prepare requires a coordinator session, not ${session.role}`, {
-      role: session.role,
-      operation: kind,
-    });
+  const coordinatorOperation = COORDINATOR_OPERATIONS.includes(kind);
+  if (coordinatorOperation && session.role !== "coordinator") {
+    throw new CoordinationError(
+      "coordination.session-role",
+      `${kind} requires a coordinator session, not ${session.role}`,
+      { role: session.role, operation: kind },
+    );
   }
-  if (kind !== "prepare" && session.role !== "plan-pm") {
+  if (!coordinatorOperation && session.role !== "plan-pm") {
     throw new CoordinationError(
       "coordination.session-role",
       `${kind} is a plan-session operation (a coordinator session coordinates, it does not execute)`,
       { role: session.role, operation: kind },
     );
   }
+}
+
+/**
+ * Scope of the row a coordinator session mutates: a coordinator addresses plans
+ * by id inside its own workflow, never by a plan session envelope.
+ */
+async function coordinatorScope(
+  session: CoordinationSession,
+  planId: string | undefined,
+  kind: string,
+): Promise<ResolvedPlanScope> {
+  if (!isNonEmptyString(planId)) throw invalidInput(`${kind} requires the planId of the row it transitions`);
+  return resolvePlanScope(
+    { workflowId: session.workflow_id, planId, harnessDir: session.harness_root },
+    session.harness_root,
+  );
 }
 
 /** Scope of the plan a session mutates: a plan session mutates only its own row. */
@@ -2238,6 +2324,465 @@ async function sessionScope(session: CoordinationSession): Promise<ResolvedPlanS
     { workflowId: session.workflow_id, planId, harnessDir: session.harness_root },
     session.harness_root,
   );
+}
+
+/* ------------------------------------------------------------------------ *
+ * § Git proof (spec §D/§E)
+ * ------------------------------------------------------------------------ */
+
+/** A full Git object id (40- or 64-hex); abbreviations are never expanded. */
+const GIT_OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+
+/** In-flight Git operations: a checkout holding one is never proof. */
+const UNFINISHED_GIT_OPERATIONS: ReadonlyArray<readonly [string, string]> = [
+  ["MERGE_HEAD", "merge"],
+  ["CHERRY_PICK_HEAD", "cherry-pick"],
+  ["REVERT_HEAD", "revert"],
+  ["rebase-merge", "rebase"],
+  ["rebase-apply", "rebase"],
+];
+
+/** QC verdicts a handoff may carry (spec §D). */
+const HANDOFF_QC_DECISIONS: readonly string[] = ["Approve", "Approve with residuals"];
+
+/** Assignment QA gates a handoff may carry (spec §D). */
+const HANDOFF_QA_GATES: readonly string[] = ["mandatory", "pm-acceptance"];
+
+type GitCheckout = { head: string; clean: boolean; operation: string | undefined };
+
+/**
+ * One read-only `git` read. Every argument is a separate argv entry, so branch
+ * names, worktree paths and revisions never reach a shell.
+ */
+function gitRead(cwd: string, args: readonly string[]): string | undefined {
+  try {
+    return execFileSync("git", ["-C", cwd, ...args], {
+      stdio: ["ignore", "pipe", "pipe"],
+      encoding: "utf8",
+    }).trim();
+  } catch {
+    return undefined;
+  }
+}
+
+function gitObjectExists(cwd: string, sha: string): boolean {
+  return gitRead(cwd, ["cat-file", "-e", `${sha}^{commit}`]) !== undefined;
+}
+
+function gitIsAncestor(cwd: string, ancestor: string, descendant: string): boolean {
+  return gitRead(cwd, ["merge-base", "--is-ancestor", ancestor, descendant]) !== undefined;
+}
+
+/** `undefined` when `path` is not a readable Git worktree. */
+function gitCheckout(path: string): GitCheckout | undefined {
+  const head = gitRead(path, ["rev-parse", "HEAD"]);
+  if (head === undefined || !GIT_OBJECT_ID.test(head)) return undefined;
+  const dirty = gitRead(path, ["status", "--porcelain"]);
+  if (dirty === undefined) return undefined;
+  let operation: string | undefined;
+  for (const [marker, label] of UNFINISHED_GIT_OPERATIONS) {
+    const markerPath = gitRead(path, ["rev-parse", "--git-path", marker]);
+    if (markerPath !== undefined && markerPath.length > 0 && existsSync(resolve(path, markerPath))) {
+      operation = label;
+      break;
+    }
+  }
+  return { head, clean: dirty.length === 0, operation };
+}
+
+function assertGitObjectId(value: unknown, what: string): string {
+  if (typeof value !== "string" || !GIT_OBJECT_ID.test(value)) {
+    throw invalidInput(`${what} must be a full Git object id (40 or 64 lowercase hex), not an abbreviation`, {
+      field: what,
+    });
+  }
+  return value;
+}
+
+function gitProof(message: string, details: Record<string, unknown>): CoordinationError {
+  return new CoordinationError("coordination.git-proof", message, details);
+}
+
+/**
+ * Feature-side proof (spec §D): the pinned commit is what the recorded plan
+ * worktree has checked out, the worktree is clean, and no Git operation is
+ * half-finished. Required at handoff, accept and integration-start.
+ */
+function assertFeatureCheckout(scope: ResolvedPlanScope, sourceSha: string, what: string): void {
+  const checkout = gitCheckout(scope.worktreePath);
+  if (checkout === undefined) {
+    throw new CoordinationError(
+      "coordination.not-in-git",
+      `${what} requires the plan worktree ${scope.worktreePath} to be a readable Git worktree`,
+      { plan_id: scope.planId, worktree_path: scope.worktreePath },
+    );
+  }
+  if (checkout.operation !== undefined) {
+    throw gitProof(
+      `${what} requires a clean plan worktree — ${scope.worktreePath} has an unfinished ${checkout.operation}`,
+      { plan_id: scope.planId, operation: checkout.operation },
+    );
+  }
+  if (!checkout.clean) {
+    throw gitProof(`${what} requires a clean plan worktree — ${scope.worktreePath} has uncommitted changes`, {
+      plan_id: scope.planId,
+      head: checkout.head,
+    });
+  }
+  if (checkout.head !== sourceSha) {
+    throw gitProof(
+      `${what} requires the plan worktree HEAD to be the pinned source ${sourceSha} — ${scope.worktreePath} is at ${checkout.head}`,
+      { plan_id: scope.planId, expected: sourceSha, actual: checkout.head },
+    );
+  }
+}
+
+/* ------------------------------------------------------------------------ *
+ * § Handoff, accept and return (spec §D)
+ * ------------------------------------------------------------------------ */
+
+/** One evidence path as supplied by the plan session (a path, never a ref). */
+function evidencePath(value: unknown, what: string): string {
+  if (!isNonEmptyString(value) || !isAbsolute(value)) {
+    throw invalidInput(`${what} must be an absolute path`, { field: what });
+  }
+  return canonicalTarget(value);
+}
+
+function evidenceRef(value: unknown, what: string): EvidenceRef {
+  const path = evidencePath(value, what);
+  if (!existsSync(path)) throw invalidInput(`${what} does not exist: ${path}`, { field: what, path });
+  return evidenceRefOf(path);
+}
+
+/** Handoff evidence validated and hashed for the durable record (spec §D). */
+type HandoffEvidenceInput = {
+  source_sha: string;
+  worktree_path: string;
+  review_base: string;
+  review_head: string;
+  qc_decision: string;
+  qc_reports: EvidenceRef[];
+  qc_consolidated: EvidenceRef;
+  qa_gate: string;
+  qa_report: EvidenceRef;
+  evidence_paths: string[];
+};
+
+/** The plan session supplies paths and revisions only — never state or holder. */
+function readHandoffEvidence(value: unknown): HandoffEvidenceInput {
+  if (!isPlainObject(value)) {
+    throw invalidInput(
+      "handoff requires an evidence object with source_sha, worktree_path, review_base, review_head, qc and qa",
+    );
+  }
+  assertExactKeys(value, ["source_sha", "worktree_path", "review_base", "review_head", "qc", "qa"], "handoff evidence");
+  const source_sha = assertGitObjectId(value.source_sha, "evidence.source_sha");
+  const worktree_path = evidencePath(value.worktree_path, "evidence.worktree_path");
+  const review_base = assertGitObjectId(value.review_base, "evidence.review_base");
+  const review_head = assertGitObjectId(value.review_head, "evidence.review_head");
+  const qc = value.qc;
+  if (!isPlainObject(qc)) throw invalidInput("handoff evidence requires a qc object");
+  assertExactKeys(qc, ["decision", "reports", "consolidated"], "handoff evidence qc");
+  if (typeof qc.decision !== "string" || !HANDOFF_QC_DECISIONS.includes(qc.decision)) {
+    throw invalidInput(`handoff evidence qc.decision must be one of ${HANDOFF_QC_DECISIONS.join(", ")}`, {
+      field: "evidence.qc.decision",
+    });
+  }
+  if (!Array.isArray(qc.reports) || qc.reports.length === 0) {
+    throw invalidInput("handoff evidence qc.reports must list at least one QC report path", {
+      field: "evidence.qc.reports",
+    });
+  }
+  const qc_reports = qc.reports.map((entry, index) => evidenceRef(entry, `evidence.qc.reports[${index}]`));
+  const qc_consolidated = evidenceRef(qc.consolidated, "evidence.qc.consolidated");
+  const qa = value.qa;
+  if (!isPlainObject(qa)) throw invalidInput("handoff evidence requires a qa object");
+  assertExactKeys(qa, ["gate", "decision", "report"], "handoff evidence qa");
+  if (typeof qa.gate !== "string" || !HANDOFF_QA_GATES.includes(qa.gate)) {
+    throw invalidInput(`handoff evidence qa.gate must be one of ${HANDOFF_QA_GATES.join(", ")}`, {
+      field: "evidence.qa.gate",
+    });
+  }
+  if (qa.decision !== "pass") {
+    throw invalidInput("handoff evidence qa.decision must be pass", { field: "evidence.qa.decision" });
+  }
+  const qa_report = evidenceRef(qa.report, "evidence.qa.report");
+  return {
+    source_sha,
+    worktree_path,
+    review_base,
+    review_head,
+    qc_decision: qc.decision,
+    qc_reports,
+    qc_consolidated,
+    qa_gate: qa.gate,
+    qa_report,
+    evidence_paths: [...qc_reports.map((ref) => ref.path), qc_consolidated.path, qa_report.path],
+  };
+}
+
+/** The recorded handoff of a plan, or a refusal when the row has none. */
+function requireHandoff(context: RowContext, planId: string): PlanHandoff {
+  const handoff = context.coordination?.handoff;
+  if (handoff === undefined) {
+    throw new CoordinationError("coordination.invalid-transition", `plan ${planId} has no handoff to transition`, {
+      plan_id: planId,
+    });
+  }
+  return handoff;
+}
+
+/**
+ * The Assignment QA gate, the evidence containment and the findings cleanup
+ * gate a handoff must clear (spec §D).
+ */
+function assertHandoffGates(
+  scope: ResolvedPlanScope,
+  prepared: PreparedCoordination,
+  input: HandoffEvidenceInput,
+): void {
+  if (input.qa_gate !== prepared.qa_gate) {
+    throw new CoordinationError(
+      "coordination.assignment-stale",
+      `handoff qa.gate ${input.qa_gate} is not the Assignment's QA gate ${prepared.qa_gate}`,
+      { plan_id: scope.planId, expected: prepared.qa_gate, actual: input.qa_gate },
+    );
+  }
+  assertEvidenceInsidePlan(scope, input.evidence_paths);
+  const register = readRegister(scope.harnessRoot, scope.projectId);
+  const gate = findingsCleanupGate(register.doc, scope.planId, {
+    mode: prepared.findings_cleanup === "zero-residual" ? "zero-residual" : "allow-residual",
+  });
+  if (!gate.ok) {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `plan ${scope.planId} cannot hand off while findings are open (${prepared.findings_cleanup}): ${summarize(gate.violations)}`,
+      { plan_id: scope.planId, findings_cleanup: prepared.findings_cleanup },
+    );
+  }
+}
+
+/** Feature HEAD, cleanliness and the review range of one handoff (spec §D). */
+function assertHandoffGitProof(
+  scope: ResolvedPlanScope,
+  input: HandoffEvidenceInput,
+  what: string,
+): void {
+  if (canonicalTarget(input.worktree_path) !== canonicalTarget(scope.worktreePath)) {
+    throw new CoordinationError(
+      "coordination.path-mismatch",
+      `${what} evidence worktree_path ${input.worktree_path} is not the plan's recorded worktree ${scope.worktreePath}`,
+      { plan_id: scope.planId, expected: scope.worktreePath, actual: input.worktree_path },
+    );
+  }
+  assertFeatureCheckout(scope, input.source_sha, what);
+  if (input.review_head !== input.source_sha) {
+    throw gitProof(
+      `${what} requires review_head to be the pinned source ${input.source_sha} — got ${input.review_head}`,
+      { plan_id: scope.planId, source_sha: input.source_sha, review_head: input.review_head },
+    );
+  }
+  if (!gitObjectExists(scope.worktreePath, input.review_base)) {
+    throw gitProof(`${what} review base ${input.review_base} is not a commit of ${scope.worktreePath}`, {
+      plan_id: scope.planId,
+      review_base: input.review_base,
+    });
+  }
+  if (!gitIsAncestor(scope.worktreePath, input.review_base, input.review_head)) {
+    throw gitProof(
+      `${what} review range ${input.review_base}..${input.review_head} is not an ancestry`,
+      { plan_id: scope.planId, review_base: input.review_base, review_head: input.review_head },
+    );
+  }
+}
+
+type HandoffRequest = { evidence: unknown; expectedRevision: number };
+
+async function mutateHandoff(
+  scope: ResolvedPlanScope,
+  session: CoordinationSession,
+  sessionPath: string,
+  request: HandoffRequest,
+): Promise<CoordinationResult> {
+  const input = readHandoffEvidence(request.evidence);
+  const result = await withRowCommit(scope, {
+    expectedRevision: request.expectedRevision,
+    precheck: (context) => {
+      assertRowBinding(session, sessionPath, context.row, scope.planId);
+      const coordination = context.coordination ?? { revision: 0 };
+      const prepared = coordination.prepared;
+      if (prepared === undefined) {
+        throw new CoordinationError(
+          "coordination.not-prepared",
+          `plan ${scope.planId} is not prepared in this workflow — prepare records the Assignment pins a handoff cites`,
+          { plan_id: scope.planId },
+        );
+      }
+      const previous = coordination.handoff;
+      if (previous !== undefined && previous.state !== "returned") {
+        throw new CoordinationError(
+          "coordination.invalid-transition",
+          `plan ${scope.planId} is handed off (state ${previous.state}) — only a returned handoff can be handed off again`,
+          { plan_id: scope.planId, state: previous.state, handoff_id: previous.id },
+        );
+      }
+      const status = rowStatusOf(context.row);
+      if (status !== "InReview") {
+        throw new CoordinationError(
+          "coordination.invalid-transition",
+          `handoff requires ${scope.planId} to be InReview — it is ${status || "unstatused"}`,
+          { plan_id: scope.planId, status: context.row.status },
+        );
+      }
+      assertHandoffGitProof(scope, input, "handoff");
+      assertHandoffGates(scope, prepared, input);
+    },
+    mutate: (context) => {
+      const coordination = context.coordination ?? { revision: 0 };
+      const previous = coordination.handoff;
+      const record: PlanHandoff = {
+        id: randomUUID(),
+        attempt: previous === undefined ? 1 : previous.attempt + 1,
+        state: "submitted",
+        submitted_by: session.session_id,
+        submitted_at: nowIso(),
+        source_branch: scope.workingBranch,
+        source_sha: input.source_sha,
+        worktree_path: scope.worktreePath,
+        review_base: input.review_base,
+        review_head: input.review_head,
+        qc: {
+          decision: input.qc_decision,
+          reports: input.qc_reports,
+          consolidated: input.qc_consolidated,
+        },
+        qa: { gate: input.qa_gate, decision: "pass", report: input.qa_report },
+      };
+      const nextCoordination: RowCoordination = { ...coordination, handoff: record };
+      // The execution lease stays with the plan session: handoff is not release.
+      return { row: { ...context.row, coordination: nextCoordination }, coordination: nextCoordination };
+    },
+  });
+  return {
+    ok: true,
+    operation: "handoff",
+    session,
+    session_file: sessionPath,
+    outcome: "handed-off",
+    view: buildView(scope.harnessRoot, scope.workflowId, scope.projectId, scope, result.snapshot, result.row, session, sessionPath),
+  };
+}
+
+/**
+ * Move the row's execution lease holder when a lease is active (spec §D/§E).
+ * A row without a lease still transitions: there is no holder to move.
+ */
+function transferRowLease(row: PlanRow, from: string, to: string, what: string, planId: string): PlanRow {
+  const lease = row.execution_lease;
+  if (lease === undefined || lease === null) return row;
+  const transferred = transferLease(row, from, to);
+  if (!transferred.ok) {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `${what} cannot move the execution lease: ${summarize(transferred.violations)}`,
+      { plan_id: planId, holder: from },
+    );
+  }
+  return transferred.row;
+}
+
+type AcceptRequest = { expectedRevision: number };
+
+async function mutateAccept(
+  scope: ResolvedPlanScope,
+  session: CoordinationSession,
+  sessionPath: string,
+  request: AcceptRequest,
+): Promise<CoordinationResult> {
+  const result = await withRowCommit(scope, {
+    expectedRevision: request.expectedRevision,
+    precheck: (context) => {
+      assertCoordinatorBinding(session, sessionPath, context.snapshot);
+      const handoff = requireHandoff(context, scope.planId);
+      if (handoff.state !== "submitted") {
+        throw new CoordinationError(
+          "coordination.invalid-transition",
+          `plan ${scope.planId} handoff is ${handoff.state} — accept requires submitted`,
+          { plan_id: scope.planId, state: handoff.state },
+        );
+      }
+      if (rowStatusOf(context.row) !== "InReview") {
+        throw new CoordinationError(
+          "coordination.invalid-transition",
+          `accept requires ${scope.planId} to still be InReview`,
+          { plan_id: scope.planId, status: context.row.status },
+        );
+      }
+      assertFeatureCheckout(scope, handoff.source_sha, "accept");
+    },
+    mutate: (context) => {
+      const handoff = requireHandoff(context, scope.planId);
+      const row = transferRowLease(context.row, handoff.submitted_by, session.session_id, "accept", scope.planId);
+      const nextCoordination: RowCoordination = {
+        ...(context.coordination ?? { revision: 0 }),
+        handoff: { ...handoff, state: "accepted", accepted_by: session.session_id, accepted_at: nowIso() },
+      };
+      // InReview is preserved: the coordinator now holds the row.
+      return { row: { ...row, coordination: nextCoordination }, coordination: nextCoordination };
+    },
+  });
+  return {
+    ok: true,
+    operation: "accept",
+    session,
+    session_file: sessionPath,
+    outcome: "accepted",
+    view: buildView(scope.harnessRoot, scope.workflowId, scope.projectId, scope, result.snapshot, result.row, session, sessionPath),
+  };
+}
+
+type ReturnRequest = { reason: string; expectedRevision: number };
+
+async function mutateReturn(
+  scope: ResolvedPlanScope,
+  session: CoordinationSession,
+  sessionPath: string,
+  request: ReturnRequest,
+): Promise<CoordinationResult> {
+  const result = await withRowCommit(scope, {
+    expectedRevision: request.expectedRevision,
+    precheck: (context) => {
+      assertCoordinatorBinding(session, sessionPath, context.snapshot);
+      const handoff = requireHandoff(context, scope.planId);
+      if (handoff.state !== "submitted" && handoff.state !== "accepted") {
+        throw new CoordinationError(
+          "coordination.invalid-transition",
+          `plan ${scope.planId} handoff is ${handoff.state} — a return requires submitted or accepted`,
+          { plan_id: scope.planId, state: handoff.state },
+        );
+      }
+    },
+    mutate: (context) => {
+      const handoff = requireHandoff(context, scope.planId);
+      const row = transferRowLease(context.row, session.session_id, handoff.submitted_by, "return", scope.planId);
+      const nextCoordination: RowCoordination = {
+        ...(context.coordination ?? { revision: 0 }),
+        handoff: { ...handoff, state: "returned", returned_at: nowIso(), return_reason: request.reason },
+      };
+      // A returned plan is being worked on again: InProgress, same session.
+      const nextRow: PlanRow = { ...row, status: "InProgress", coordination: nextCoordination };
+      return { row: nextRow, coordination: nextCoordination };
+    },
+  });
+  return {
+    ok: true,
+    operation: "return",
+    session,
+    session_file: sessionPath,
+    outcome: "returned",
+    view: buildView(scope.harnessRoot, scope.workflowId, scope.projectId, scope, result.snapshot, result.row, session, sessionPath),
+  };
 }
 
 /* ------------------------------------------------------------------------ *
