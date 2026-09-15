@@ -518,14 +518,14 @@ export async function writeWorkflowSnapshot(
   if (opts.expectedVersion !== undefined && !isArtifactVersion(opts.expectedVersion)) {
     throw new CoordinationError(
       "coordination.invalid-input",
-      `expectedVersion must be "absent" or sha256:<64 hex> — got ${JSON.stringify(opts.expectedVersion)}`,
+      `expectedVersion must be "absent" or sha256:<64 hex> \u2014 got ${JSON.stringify(opts.expectedVersion)}`,
       { expected: opts.expectedVersion },
     );
   }
   if (opts.createOnly === true && opts.expectedVersion !== undefined && opts.expectedVersion !== "absent") {
     throw new CoordinationError(
       "coordination.invalid-input",
-      `createOnly implies expectedVersion "absent" — got ${JSON.stringify(opts.expectedVersion)}`,
+      `createOnly implies expectedVersion "absent" \u2014 got ${JSON.stringify(opts.expectedVersion)}`,
       { expected: opts.expectedVersion },
     );
   }
@@ -558,7 +558,7 @@ export async function writeWorkflowSnapshot(
       throw new CoordinationError(
         missingToken ? "coordination.expected-version-required" : "coordination.version-conflict",
         missingToken
-          ? `snapshot ${snapshotPath} already exists — replace it with an explicit expectedVersion (its current version is ${currentVersion}) or write a new snapshot`
+          ? `snapshot ${snapshotPath} already exists \u2014 replace it with an explicit expectedVersion (its current version is ${currentVersion}) or write a new snapshot`
           : `snapshot ${snapshotPath} is at ${currentVersion}, writer required ${required}`,
         { path: snapshotPath, expected: required, actual: currentVersion },
       );
@@ -591,7 +591,7 @@ function assertCoordinatedSnapshotWriter(
   if (sessionPath === undefined || typeof bound !== "string" || canonicalTarget(sessionPath) !== canonicalTarget(bound)) {
     throw new CoordinationError(
       "coordination.session-mismatch",
-      `snapshot ${snapshotPath} is coordinated — ${action} requires --session <coordinator envelope>`,
+      `snapshot ${snapshotPath} is coordinated \u2014 ${action} requires --session <coordinator envelope>`,
       { path: snapshotPath, expected: bound, actual: sessionPath },
     );
   }
@@ -608,7 +608,7 @@ function mergePhaseProjection(stored: unknown, incoming: WorkflowSnapshot): Work
   if (!isPlainObject(stored)) {
     throw new CoordinationError(
       "coordination.version-conflict",
-      "stored workflow snapshot is not an object — refusing a field-scoped rewrite over it",
+      "stored workflow snapshot is not an object \u2014 refusing a field-scoped rewrite over it",
       {},
     );
   }
@@ -622,7 +622,7 @@ function mergePhaseProjection(stored: unknown, incoming: WorkflowSnapshot): Work
   if (drifted.length > 0) {
     throw new CoordinationError(
       "coordination.direct-write-refused",
-      `refusing snapshot write: field(s) ${drifted.join(", ")} differ from disk — this writer may only change ${allowed.join(", ")}`,
+      `refusing snapshot write: field(s) ${drifted.join(", ")} differ from disk \u2014 this writer may only change ${allowed.join(", ")}`,
       { fields: drifted, allowed },
     );
   }

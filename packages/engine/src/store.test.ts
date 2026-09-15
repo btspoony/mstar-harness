@@ -879,7 +879,7 @@ describe("loadStoreModule", () => {
 // coordinated-writer — the protected-write boundary (spec C4)
 // ---------------------------------------------------------------------------
 
-describe("coordinated-writer — protected FsStore boundary", () => {
+describe("coordinated-writer \u2014 protected FsStore boundary", () => {
   test("refuses a raw put/delete on every protected kind and leaves the bytes unchanged", async () => {
     const root = tmpRoot("coordinated-writer-store-");
     try {

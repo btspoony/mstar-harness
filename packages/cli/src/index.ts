@@ -934,7 +934,7 @@ function resolveProcessHarnessDir(harnessArg?: string): string | null {
 function resolveSessionFlag(raw: string | undefined): string | undefined {
   if (raw === undefined) return undefined;
   if (!path.isAbsolute(raw)) {
-    throw new SddScriptError(`--session must be an absolute path — got ${JSON.stringify(raw)}`, 2);
+    throw new SddScriptError(`--session must be an absolute path \u2014 got ${JSON.stringify(raw)}`, 2);
   }
   return raw;
 }
@@ -1532,7 +1532,7 @@ persistCommand
  // action reads the values the parent parsed (probe-verified).
  // --validate has no parent twin, so it is declared here and read from the
  // action's own options.
-  .option("--validate", "Run the kind's validator on the fetched payload (notes on stderr; invalid → exit 1)")
+  .option("--validate", "Run the kind's validator on the fetched payload (notes on stderr; invalid \u2192 exit 1)")
   .option(
     "--versioned",
     "Read through the coordinated artifact port and print {payload,version}: the sha256 byte version of the exact bytes read, " +
@@ -1554,7 +1554,7 @@ persistCommand
         const root = (artifactStore as ArtifactStore & { root?: unknown }).root;
         if (typeof root !== "string") {
           throw new Error(
-            "coordination.local-store-required: persist get --versioned reads coordinated artifacts from the default local FsStore only — a pluggable --store module has no same-host CAS contract",
+            "coordination.local-store-required: persist get --versioned reads coordinated artifacts from the default local FsStore only \u2014 a pluggable --store module has no same-host CAS contract",
           );
         }
         const read = await readCoordinatedArtifact(root, { kind: parsedKind, key });

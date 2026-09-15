@@ -554,7 +554,7 @@ async function scaffoldProtectedDoc(
         "coordination.invalid-input",
         `refusing to scaffold ${target}: the document already exists but is invalid (${gate.violations
           .map((violation) => violation.message)
-          .join("; ")}) — scaffold never replaces existing state`,
+          .join("; ")}) \u2014 scaffold never replaces existing state`,
         { path: target },
       );
     }
