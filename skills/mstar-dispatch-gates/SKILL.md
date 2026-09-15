@@ -42,7 +42,7 @@ description: Morning Star 派发与委派门禁 —— 仅 PM 可增派 subagent
 
 - **子 Assignment 继承父 plan 作用域**：`plan_id` + 绝对 `Plan Path`（L1 另含 `SDD dir` / `Control harness root`）逐字下发。child **不得**自选或新建 plan、写 workflow snapshot / root register / 共享索引、释放 `execution_lease` / `integration_merge_lease`。缺失、相对路径或暗示「child 自行选 plan」= **派发未完成**（`mstar-roles/references/project-manager/dispatch-and-assignment.md` § Assignment Template `Plan scope`）。
 - **credential 不下发 leaf**：session JSON 路径、`mstar plan --session` 写凭据、`--expect <revision>` 等**只由派发方（PM/coordinator）持有**。leaf 拿到 session 路径或写凭据即视为越权 → 停止并回报（`mstar-iteration/references/plan-scoped-pm.md` §8）。
-- **`project-manager` 不是派发目标**：该角色无 agent shell；scoped primary drive（`/iteration-drive --assignment | --workflow --plan | --resume`）在**主会话**启动 PM，不是 subagent。任何 `Execute as: project-manager` 的 invoke = 派发缺陷。
+- **`project-manager` 不是派发目标**：PM 是 primary-session 角色，无 subagent shell（规则家 → `mstar-roles/references/project-manager.md` § Plan-scoped authority；宿主派发面 → `mstar-host/references/omp.md` § C5）；scoped primary drive（`/iteration-drive --assignment | --workflow --plan | --resume`）在**主会话**启动 PM，不是 subagent。任何 `Execute as: project-manager` 的 invoke = 派发缺陷。
 
 ## 调度防串扰（强制；leaf executor 已在上方读过反递归红线，此处为完整规则供 PM/对照用）
 

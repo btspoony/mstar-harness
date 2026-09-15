@@ -35,7 +35,7 @@ Scoped boot does **not** load `mstar-compound` or the Phase 3–6 detail files m
 
 ## 2. Scoped boot
 
-1. **Load PM identity in the current primary session**: `mstar-harness-core` → `mstar-roles` → `references/project-manager.md`. No PM subagent is spawned or dispatched for any address form (`mstar-host/references/omp.md`: `project-manager` ships no agent shell; `project-manager` is never a `task` dispatch target).
+1. **Load PM identity in the current primary session**: `mstar-harness-core` → `mstar-roles` → `references/project-manager.md`. No PM subagent is spawned or dispatched for any address form — PM runs in the **primary session** on every host（rule home → `mstar-roles/references/project-manager.md` § Plan-scoped authority；omp dispatch surface → `mstar-host/references/omp.md` § C5）.
 2. **Bind once**, matching the form exactly:
 
    ```bash
