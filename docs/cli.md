@@ -229,6 +229,7 @@ Exit codes:
 Persist one JSON coordination doc through the pluggable **ArtifactStore** (engine `@mstar-harness/engine` — `ArtifactStore` / `ArtifactKind` / `createFsStore` / `setArtifactStore` / `getArtifactStore` / `loadStoreModule`). The default `FsStore` maps kinds to the existing `{HARNESS_DIR}` paths and keeps the atomic temp+rename write semantics; integrations can mount their own store in-process (`setArtifactStore`) or per-command via `--store` / `MSTAR_STORE_MODULE`.
 
 - `mstar-harness persist <kind> --key <key> [--file <path>|--stdin] [--store <module>] [--schema <id>]`
+- `mstar-harness persist status|snapshot|residuals --key <key> --expect-version <absent|sha256:<hex>> [--file <path>|--stdin] [--session <absolute-coordinator-envelope>] [--store <module>]`
 - `mstar-harness persist get <kind> --key <key> [--validate] [--versioned] [--store <module>]`
 - `mstar-harness persist list <kind> [--store <module>]`
 - `mstar-harness persist delete <kind> --key <key> [--store <module>]`
@@ -255,11 +256,13 @@ Default `FsStore` path table:
 
 `persist get --versioned` reads through the engine's **coordinated artifact port** and prints `{payload,version}` instead of the bare payload: `version` is the `sha256:<64 lowercase hex>` digest of the exact bytes read, or the literal `"absent"` when the document does not exist (payload `null` there) — the precondition token a first coordinated write needs. It requires the active local `FsStore`; an injected `--store` / `MSTAR_STORE_MODULE` module is refused (`coordination.local-store-required`, exit 1) because no same-host CAS is promised on a pluggable module.
 
-**Protected-writer boundary.** `status`, `snapshot` and `residuals` are coordination documents: their bytes are written by the engine's locked coordination writers, so the `FsStore` refuses a bare `put`/`delete` on them (and on any `json` alias whose canonical target is one of those files) with `coordination.direct-write-refused` (exit 1, nothing written). This applies to `persist <kind>` and `persist delete`; `mstar status workflow-close` is the lifecycle route for a finished workflow, not `persist delete`. The versioned replacement face for those kinds (`persist <kind> --expect-version <version>`, spec §C4) lands with the engine's coordinated replacement port.
+**Protected-writer boundary.** `status`, `snapshot` and `residuals` are coordination documents: their bytes are written by the engine's locked coordination writers, so the `FsStore` refuses a bare `put`/`delete` on them (and on any `json` alias whose canonical target is one of those files) with `coordination.direct-write-refused` (exit 1, nothing written). This applies to `persist <kind>` and `persist delete`; `mstar status workflow-close` is the lifecycle route for a finished workflow, not `persist delete`.
 
 `persist list` prints the stored keys only — one per line, ascending, with **no header** (the kind is already the argv; pipe-friendly). An empty kind prints nothing and exits 0. Enumeration reports what exists: a missing backing file or directory yields an empty list, and every listed key round-trips through `persist get` — `status` lists `root` iff `{HARNESS_DIR}/status.json` exists; `review` is the union of `{HARNESS_DIR}/sdd/_reviews/*.json` keys and plan-shaped `{HARNESS_DIR}/sdd/<key>/review/report.json` directories. `json` keys are absolute paths and cannot be listed — a usage error (exit 2) raised before enumeration.
 
 `persist delete` removes the stored document and prints `deleted <kind>/<key>`. Deleting an absent document is an idempotent no-op (same output, exit 0) and there is no confirmation prompt. It keeps that contract for the unprotected kinds (`review`, unrelated `json`); the protected kinds above refuse instead (`coordination.direct-write-refused`), so an accidental `persist delete status` can never drop the root register.
+
+**Coordinated replacement.** The versioned face for those kinds is `persist <kind> --expect-version <version>`, where `<version>` is exactly the token `persist get --versioned` returned — `absent` for a document that does not exist yet, else its `sha256:<64 hex>` digest. `--expect-version` is **required** for a protected kind (a bare `persist status` is refused, exit 2) and never replaces the bare `put` path silently; the engine's locked writer owns the bytes, so the CLI never calls `put` on those targets. A missing token refuses `coordination.expected-version-required`, a token that no longer matches refuses `coordination.version-conflict` (someone wrote in between — the write is lost, not merged), and an injected `--store` / `MSTAR_STORE_MODULE` module refuses `coordination.local-store-required` (no same-host CAS); every refusal leaves the authoritative bytes untouched. A coordinated `snapshot` replacement additionally requires `--session <absolute-coordinator-envelope>`: replacing the workflow snapshot is a coordinator write (`coordination.session-role` for a plan session, `--session must be an absolute path` for a relative one).
 
 All three faces go through the same `--store` / `MSTAR_STORE_MODULE` injection path as put/get. An injected store without the optional `list` or `delete` member is a usage error (exit 2, probed before the call) — never a TypeError.
 
@@ -268,8 +271,8 @@ Exit codes (binding):
 | Code | When |
 |------|------|
 | `0` | put OK (`persist <kind>/<key>: OK`); get printed the payload (with or without `--validate`); get `--versioned` printed `{payload,version}` (a missing document is `version: "absent"`, payload `null`); delete succeeded or no-op; list printed keys (including none) |
-| `1` | get miss; get `--validate` invalid; put invalid payload; put payload file missing / not valid JSON; stored file unparseable JSON on get; FsStore `doc.schema` rejection; store-module load failure; harness dir not found; protected-write refusal on a `put`/`delete` of a coordination document (`status` / `snapshot` / `residuals` or a `json` alias of one) — `coordination.direct-write-refused`; `--versioned` on an injected store module — `coordination.local-store-required` |
-| `2` | usage: unknown kind; missing `--key`; `--file` + `--stdin` together; `persist list json`; injected store missing `list` / `delete` |
+| `1` | get miss; get `--validate` invalid; put invalid payload; put payload file missing / not valid JSON; stored file unparseable JSON on get; FsStore `doc.schema` rejection; store-module load failure; harness dir not found; protected-write refusal on a `put`/`delete` of a coordination document (`status` / `snapshot` / `residuals` or a `json` alias of one) — `coordination.direct-write-refused`; `--versioned` on an injected store module — `coordination.local-store-required`; coordinated replacement refusals — `coordination.expected-version-required` (no `--expect-version`), `coordination.version-conflict` (stale token), `coordination.session-role` / a snapshot replacement without `--session`, `coordination.local-store-required` (injected store) |
+| `2` | usage: unknown kind; missing `--key`; missing `--expect-version` on a protected kind; `--expect-version` on `review` / `json`; `--session` that is not an absolute path; `--file` + `--stdin` together; `persist list json`; injected store missing `list` / `delete` |
 
 #### Persist a review envelope
 
@@ -334,7 +337,9 @@ mstar plan reconcile --session <coordinator-session> --plan <id> --handoff <id> 
 
 Two address forms reach the same prepared row: the pinned Assignment (`--assignment`) and the `--workflow/--plan` pair (which reads the row's registered Assignment path). A second fresh claim of the same row fails with `coordination.duplicate-holder` naming the live session; `bind --resume <session>` reports the current context read-only and never reacquires a released lease. `prepare` (coordinator) registers the reviewed Assignment and releases that plan's dependencies.
 
-JSON success is `{ok:true, operation, workflow_id, plan_id?, revision?, snapshot_version?, session_file, session_id, role, handoff_id?, state?, outcome?}`; `show` additionally returns `register_version`, `scope`, `row` and `allowed_operations`. JSON failure is `{ok:false, operation, code, message, workflow_id?, plan_id?, holder?, path?, expected?, actual?}`. JSON goes to stdout with no color or banner; in human mode stdout stays empty and the summary goes to stderr.
+`--handoff <id>` is mandatory on the six coordinator transitions and must be the row's **live** handoff id — the one `plan handoff` minted and `plan show --json` reports. The CLI checks the flag against the row before calling the engine and refuses a *different* live id with `coordination.handoff-mismatch` (exit 1, nothing written); the engine re-checks the handoff inside the lock, so the row stays the authority and the flag can never invent one.
+
+JSON success is `{ok:true, operation, workflow_id, plan_id?, revision?, snapshot_version?, session_file, session_id, role, handoff_id?, state?, outcome?}`; `show` additionally returns `register_version`, `scope`, `row`, `allowed_operations` and, once a handoff exists, the row's live `handoff_id` with its `state` and `attempt`. JSON failure is `{ok:false, operation, code, message, workflow_id?, plan_id?, holder?, path?, expected?, actual?}`. JSON goes to stdout with no color or banner; in human mode stdout stays empty and the summary goes to stderr.
 
 Exit codes (binding):
 
@@ -372,6 +377,16 @@ The coordinator half of the lifecycle — `handoff` (plan side, leaves the row `
 ## Maintainer Commands
 
 Engine-backed harness checks for maintainers (thin wrappers — business logic lives in `@mstar-harness/engine`). Each command mirrors an engine validator that skill engine-check callouts cite; exit codes follow the CLI convention (0 = OK, 1 = violations/data errors, 2 = usage).
+
+### `mstar-harness status workflow-close`
+
+Close one workflow lifecycle after its delivery PR merged: `closeWorkflow` writes the terminal snapshot under the snapshot lock, then `unregisterWorkflow` removes the root `status.json` entry idempotently. Dangling leases and unfinished plan rows refuse before any write, a fully closed retry rewrites nothing, and a failed unregister reports a partial close a re-run finishes.
+
+```text
+mstar-harness status workflow-close --workflow <id> [--harness <path>] [--ended-at <date>] [--session <path>]
+```
+
+`--session <absolute-json>` is the coordinator envelope that authorizes closing a **coordinated** workflow: the engine's close gate runs before the unfinished-row check, so a coordinated workflow refuses a session-less close with `snapshot <path> is coordinated — close requires --session <coordinator envelope>` (exit 1, nothing written) instead of reporting the plan rows. A plan envelope is not sufficient — only the workflow's coordinator may close it. An uncoordinated workflow closes with or without the flag, exactly as before; `--session` with a relative path is a usage error (exit 2).
 
 ### `mstar-harness status tech-debt`
 
