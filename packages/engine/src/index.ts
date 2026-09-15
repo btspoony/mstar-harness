@@ -456,6 +456,7 @@ export {
   readCoordinatedArtifact,
   readPlanCoordination,
   readSessionEnvelope,
+  replaceCoordinatedArtifact,
   resolvePlanScope,
   resolveProcessHarnessDir,
 } from "./coordination.js";
