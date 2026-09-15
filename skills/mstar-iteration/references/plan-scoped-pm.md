@@ -137,7 +137,7 @@ mstar plan reconcile         --session <coordinator-session> --plan <id> --hando
    | Observed state | `reconcile` result |
    |---|---|
    | `integrating`; HEAD == base; clean; source not yet an ancestor | back to `accepted`, drop the attempt + this holder's merge lease, keep coordinator execution lease and `InReview`; outcome `retry-ready` |
-   | `integrating`; source already ancestor, or unique exact merge proof is an ancestor of HEAD | record proof, apply the atomic completion; outcome `completed`; no duplicate merge |
+   | `integrating` or `merged`; source already ancestor, or unique exact merge proof is an ancestor of HEAD | record proof, apply the atomic completion; outcome `completed`; no duplicate merge |
    | `integrating`; `MERGE_HEAD` / conflicts / dirty checkout | refuse `coordination.integration-unresolved`; all state and leases preserved; resolve or explicitly abort Git, then re-run |
    | moved/missing branch, unexpected parent graph, multiple matching results, changed evidence | refuse `coordination.integration-diverged` / `coordination.evidence-stale`; no `Done`, no lease release |
    | `completed`; proof still valid | read-only no-op `already-completed` |
