@@ -2260,8 +2260,14 @@ export async function mutatePlanCoordination(request: CoordinationRequest): Prom
       }
       const assignment = parseAssignmentFile(operation.assignmentPath);
       // The session's own harness root is the anchor: mutations never depend on
-      // the caller's process cwd.
-      const scope = scopeFromAssignment(assignment, session.harness_root, { requirePrepared: false });
+      // the caller's process cwd. Pinning chosenRoot keeps prepare off the
+      // Git-dependent process-root re-derivation too — with git unavailable
+      // the degraded probe must not masquerade as a scope mismatch; the Git
+      // read itself surfaces coordination.git-unavailable.
+      const scope = scopeFromAssignment(assignment, session.harness_root, {
+        requirePrepared: false,
+        chosenRoot: session.harness_root,
+      });
       if (request.planId !== undefined && request.planId !== scope.planId) {
         throw new CoordinationError(
           "coordination.scope-mismatch",
