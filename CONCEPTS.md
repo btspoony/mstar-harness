@@ -30,6 +30,12 @@ The durable home for cross-lifecycle debt and direction: open residuals (with se
 ### Closure-verification plan
 A plan whose residual's fix may already have landed — grep the current checkout (CLI surface, docs, skill callouts) before planning a re-implementation; if the work is done, re-scope to verification-only: smoke the real artifact, confirm no stale import-only callouts, fill the changeset gap if missing, close the residual in place. Prevents re-implementing a command that already exists.
 
+### Row revision and artifact version
+The two concurrency tokens guarding the **protected documents** — the coordination documents (workflow snapshot, harness status root, project register) whose writes the harness routes through one authorized path and refuses at the raw store otherwise.
+
+A **row revision** is a monotonic counter on one plan row, advanced only when that row changes, so two sessions mutating different rows of the same snapshot both persist and only a re-write of the same row conflicts. An **artifact version** is the hash of a document's exact on-disk bytes (`absent` before its first write) and guards whole-document replacement. A caller passes the row revision to plan mutations and the artifact version to document replacement; a missing token is refused rather than read as "replace whatever is there", and a stale token is a loud conflict carrying expected and actual values. Related: Workflow lifecycle, Project register.
+*Avoid:* document revision (ambiguous between the two), mtime or date as a version.
+
 ## Agent list (dsh panel)
 
 ### Emphasis
