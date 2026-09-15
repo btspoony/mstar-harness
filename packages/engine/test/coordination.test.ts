@@ -1740,4 +1740,15 @@ describe("seam-regressions", () => {
     expect(recordField(handoffFields(planRowOf(fixture, PLAN_ID)), "integration").result_sha).toBe(mergeSha);
     expect(snapshotOf(fixture).integration_merge_lease).toBeUndefined();
   }, 30000);
+
+  test("a git that answers with a failure still reports a repository fact, not an environment fault (QC3-001)", async () => {
+    const fixture = await acceptedFixture();
+    rmSync(fixture.worktreePath, { recursive: true, force: true });
+    // git exits non-zero here: the repository was reachable and said "no such
+    // worktree", so the refusal stays a Git-fact refusal (`not-in-git`) — the
+    // new environment code must not swallow it.
+    expect(await errorCodeOf(() => coordinatorCall(fixture, PLAN_ID, { kind: "integration-start" }))).toBe(
+      "coordination.not-in-git",
+    );
+  }, 30000);
 });

@@ -2437,17 +2437,65 @@ const HANDOFF_QA_GATES: readonly string[] = ["mandatory", "pm-acceptance"];
 type GitCheckout = { head: string; clean: boolean; operation: string | undefined };
 
 /**
+ * How long one read-only Git read may take. The snapshot write lock waits 30s,
+ * so a `git` that never answers (a stalled filesystem, a contended lock) has to
+ * give up well short of it rather than hold the row for the whole budget.
+ */
+const GIT_READ_TIMEOUT_MS = 10_000;
+
+/**
+ * One own property of an unknown thrown value, read without asserting a shape.
+ */
+function propertyOf(value: unknown, key: string): unknown {
+  if (typeof value !== "object" || value === null) return undefined;
+  return Object.entries(value).find(([name]) => name === key)?.[1];
+}
+
+/**
+ * The environment could not answer a Git read — a missing or non-executable
+ * `git`, or a read that outlived its timeout. That says nothing about whether a
+ * branch merged or diverged, so it is refused as its own failure instead of
+ * being reported as repository state (spec §E — nothing is repaired by
+ * guessing).
+ */
+function gitUnavailable(cwd: string, args: readonly string[], error: unknown): CoordinationError {
+  const code = propertyOf(error, "code");
+  const signal = propertyOf(error, "signal");
+  const message = propertyOf(error, "message");
+  const timedOut = code === "ETIMEDOUT";
+  const cause = timedOut
+    ? `git did not answer within ${GIT_READ_TIMEOUT_MS}ms${typeof signal === "string" ? ` (${signal})` : ""}`
+    : typeof code === "string"
+      ? code
+      : typeof message === "string"
+        ? message
+        : String(error);
+  return new CoordinationError(
+    "coordination.git-unavailable",
+    `cannot read Git state at ${cwd} (git ${args.join(" ")}): ${cause}`,
+    { path: cwd, command: `git ${args.join(" ")}`, cause },
+  );
+}
+
+/**
  * One read-only `git` read. Every argument is a separate argv entry, so branch
  * names, worktree paths and revisions never reach a shell.
+ *
+ * A non-zero exit is the repository answering — no such object, not an
+ * ancestor, not a worktree — and resolves to `undefined`. An error without an
+ * exit status means `git` itself never answered, which is refused rather than
+ * folded into `undefined` (see `gitUnavailable`).
  */
 function gitRead(cwd: string, args: readonly string[]): string | undefined {
   try {
     return execFileSync("git", ["-C", cwd, ...args], {
       stdio: ["ignore", "pipe", "pipe"],
       encoding: "utf8",
+      timeout: GIT_READ_TIMEOUT_MS,
     }).trim();
-  } catch {
-    return undefined;
+  } catch (error) {
+    if (typeof propertyOf(error, "status") === "number") return undefined;
+    throw gitUnavailable(cwd, args, error);
   }
 }
 

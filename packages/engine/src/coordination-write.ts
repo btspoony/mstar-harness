@@ -52,6 +52,7 @@ export const COORDINATION_ERROR_CODES = [
   "coordination.invalid-input",
   "coordination.forbidden-field",
   "coordination.not-in-git",
+  "coordination.git-unavailable",
   "coordination.git-proof",
   "coordination.evidence-stale",
   "coordination.integration-unresolved",
