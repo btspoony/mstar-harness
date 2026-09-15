@@ -20,6 +20,10 @@
 
 ### Task 1: [Component Name]
 
+**Effort (agent-oriented):** [XS–XL band per `mstar-conventions/references/effort-estimation.md` — a size estimate, not a round ceiling]
+
+**Split point:** [where the task splits if it cannot close its Files and gates in one round — capacity criterion → `mstar-artifacts/references/plan-quality-bar.md` item 7 (Task shape / session fit)]
+
 **Files:**
 - Create: `exact/path/to/file`
 - Modify: `exact/path/existing.py`

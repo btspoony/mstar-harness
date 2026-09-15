@@ -25,6 +25,8 @@
 
 「**会话**」指：一次连贯的 agent 运行（读上下文 → 实现 → 运行验证），**不是**人类 8 小时工作日。
 
+任务层使用：每 task 的容量判据（单轮闭合其 Files 与验证门、命名 split point）→ **`mstar-artifacts/references/plan-quality-bar.md`** item 7（Task shape / session fit）；本尺码只是规模预估，**不**定义单轮上限。
+
 ## 文档与模板中的字段名（建议）
 
 - **PRD / 产品文档**：**`## Effort (agent-oriented)`** — 仅 **Complexity (XS–XL) + agent session band + 假设**（规格已锁、契约稳定等）。  
