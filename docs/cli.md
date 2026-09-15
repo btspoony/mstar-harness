@@ -372,7 +372,7 @@ mstar plan progress --session …/sessions/<plan>.json --file ./progress.json --
 mstar plan residual-add --session …/sessions/<plan>.json --file ./entries.json --expect 2 --expect-register absent --json
 ```
 
-The coordinator half of the lifecycle — `handoff` (plan side, leaves the row `InReview`), then `accept` → explicit pinned `git merge --no-ff --no-edit <source-sha>` in the recorded integration worktree → `integration-start` → `integration-accept` → `complete`, with `reconcile` as the explicit crash path and `return` for a failed attempt — transports the same A2 shape. Those seven row operations are the engine plan's remaining slice: until they land, the CLI reports the engine's `coordination.not-implemented` refusal (exit 1) instead of performing them. State verbs never run the merge themselves.
+The coordinator half of the lifecycle — `handoff` (plan side, leaves the row `InReview`), then `accept` (ownership transfer, not integration acceptance) → `integration-start` (reads the clean recorded integration checkout, refuses any foreign merge lease, and records the current integration HEAD as `base_sha` plus the immutable source pin) → the coordinator's own explicit pinned `git merge --no-ff --no-edit <source-sha>` in that recorded integration worktree → `integration-accept` → `complete`, with `reconcile` as the explicit crash path and `return` for a failed attempt — transports the same A2 shape. The attempt is recorded and pinned **before** Git runs — that is what makes a crash mid-merge reconcilable, and why a retried `integration-start` never moves `base_sha`. State verbs never run the merge themselves.
 
 ## Maintainer Commands
 
