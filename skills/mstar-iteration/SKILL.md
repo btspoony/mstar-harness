@@ -11,6 +11,17 @@ description: "Use when starting, driving, resuming, or closing a Morning Star it
 
 **Phase detail 不在本 skill 正文**：按下方 **Phase route map** 只加载当前动作对应的一行 detail——**禁止**无条件通读全部 phase references。
 
+**Scoped primary route**（`/iteration-drive --assignment|--workflow/--plan|--resume`）→ **`references/plan-scoped-pm.md`**，且**先于**本 skill 的全局 todo / backlog / last-plan 逻辑判定。
+
+## Scoped primary route（先于全局 Phase 逻辑）
+
+`/iteration-drive` 的 scoped 形态在**本 skill 的任何全局 Phase 逻辑之前**改道：
+
+- **先选 route，再 seed todo**：不得先按整迭代 boot 建立全局 session todos / backlog / last-plan Phase 3 判断，再把 scoped 会话当作过滤器处理。
+- **scoped finish = durable handoff**（plan 保持 `InReview`、保留 `execution_lease`）。`status: Done`、两个 lease 的删除、Phase 3–6、compass / index / root 投影与迭代 PR **仅 coordinator** 拥有。
+- 无参数调用**语义不变**（Phase 2 → 3 → 4 → 5 → 6）；非法非空形态 **fail closed**，**禁止**回落整迭代路线；leaf 收到该命令 → 角色边界拒绝。
+- boot / plan-local drive / finish / coordinator 序列全文 → **`references/plan-scoped-pm.md`**。
+
 ## 设计思路
 
 mstar 实践模式通常是：一次迭代锁定几个 spec 点（`specify + clarify`），产生多个 `plan`，每个 plan 含多个 tasks。**per-plan 生命周期有完整的闭环**（Prepare → Execute → QC → Done）。Compound 不是 per-plan 活动——它是**迭代级收口**，在迭代内所有 plan Done 后，沉淀一轮知识。
@@ -44,6 +55,7 @@ Phase 6: post-merge close —— PR merged 后 §6.1–§6.4
 
 | 当前动作 | 必读 detail（按需加载，勿通读） |
 |---------|--------------------------------|
+| **scoped primary**（`/iteration-drive` 带 `--assignment` / `--workflow --plan` / `--resume`） | **`references/plan-scoped-pm.md`**（scoped boot → plan-local drive → handoff finish → coordinator 序列；**先于**整迭代 todo / last-plan 逻辑） |
 | **start**（启动迭代 / 重开方向锁定） | **`references/phase-1-prepare.md`**（§1.1–§1.6：上下文、范围与 direction lock、compass、索引、v2 状态面、产物边界、§1.6 Review & Edit 链） |
 | **execute / resume**（推进或恢复 per-plan 循环） | **`references/phase-2-worktree-lease.md`**（§2.0 五道闸、§2.1–§2.5 loop/dispatch 细则、control root + integration worktree + lease 全文） |
 | **close**（全部 plan Done 后收口迭代） | **`references/phase-3-iteration-close.md`**（§3.0–§3.6：entry checklist、compound、roadmap、完成标记、exit checklist + commit） |

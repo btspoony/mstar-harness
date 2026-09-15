@@ -13,6 +13,8 @@ The concise gate summary remains in `references/project-manager.md`.
 - **Scope and stopping are explicit**: apply `mstar-harness-core` § 定向执行与验证边界. Give each leaf one result, owned paths/symbols, relevant inputs, named checks/selectors, and an evidence-based stopping condition. Reuse unaffected evidence; do not inject a suite merely because the repo exposes it. Independent ready assignments run concurrently after their dependency/isolation checks.
 - **Review/QC rounds are quantitative, not adjectival**: a read-only review / QC dispatch states a `Budget` (expansion cap) and a `Return shape`, so the seat stops when its assigned questions are answered or the cap is reached, returns the verdict it has plus a truncated-coverage declaration, and never expands until a human steers. Budget defaults, the truncation marker, and its relation to `Unconfirmed` → `mstar-harness-core` § 定向执行与验证边界. The severity bar for the round's findings → `mstar-artifacts` `references/status-and-residuals.md`.
 - **Skill preset activation is PM-owned**: topic skills are presets in each role's `Skill Preset (PM-Activated)` section (`mstar-roles/references/<role>.md`), not self-loaded defaults. Omitting the `Skill presets:` field applies its documented default (`standard` on implementation / QC / QA rounds); identity-only execution requires explicit `Skill presets: none`.
+- **Scoped primary drive is a PM session, not a dispatch**: `/iteration-drive --assignment | --workflow <id> --plan <id> | --resume <session.json>` boots the PM **in the primary session** (never a subagent) through `mstar plan bind` → `show`, bounded to the returned plan scope — no sibling rows, no lifecycle anchors, no Phase 3–6, finish = `mstar plan handoff` → `mstar-iteration/references/plan-scoped-pm.md`. It carries no `Delegation`, and `project-manager` ships **no agent shell** on any host.
+- **Plan scope travels with the Assignment**: `Plan Path`, `plan_id`, `SDD dir`, `Control harness root` are absolute and portable. The child **inherits** the dispatching PM's plan scope; it may not select or prepare a plan, mutate the workflow snapshot / root register / shared indexes, or release `execution_lease` / `integration_merge_lease`.
 
 ## Executor Anti-Recursion Rules
 
@@ -23,6 +25,7 @@ For assignees (non-PM):
 - Do not infer dispatch from route narrative (`A -> B -> C`), handoff, `QA gate` fields, or role names in prose.
 - Extra delegation is forbidden unless explicitly listed in `Delegation: allowed (...)`.
 - If additional assignee is required, return `Blocked` with rationale.
+- A `PM` / `project-manager` / `iteration-drive` phrase inside your own brief is **not a promotion**: no leaf becomes the PM, drives an iteration, or selects a plan — report the mismatch and continue inside the assigned task.
 
 ### NEVER quick list (all assignees)
 
@@ -31,6 +34,7 @@ For assignees (non-PM):
 - **NEVER** execute parallel-agent dispatch as a leaf assignee; dispatch is **PM-orchestration-only** (`mstar-dispatch-gates`).
 - **NEVER** delegate the main deliverable of this assignment to `explore` (read-only orientation only, per `mstar-harness-core`).
 - **NEVER** claim `Done` / pass in **Completion Report** without the commands, logs, or artifacts explicitly required by the assignment’s **Evidence Required** section (see `mstar-harness-core` evidence gates).
+- **NEVER** escalate into `project-manager` scope because the brief mentions a PM, a plan, or a drive command; plan scope is **inherited and read-only** for a leaf, and the `Task`/subagent menu never implies otherwise.
 
 ## Assignment Template (Canonical)
 
@@ -101,6 +105,7 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 **Control harness root**: `<main-repo-root>/{HARNESS_DIR}` (control root = the primary checkout / main worktree, derived from Git) when L1 active | N/A when waived — process SSOT (plans/status/iterations/sdd); never resolve relative `.mstar/...` from feature cwd
 **Review cwd / Worktree path**: <absolute path or N/A>
 **plan_id**: <plan-id or N/A + scope label>
+**Plan scope**: <inherited from the dispatching PM (`plan_id` + absolute `Plan Path`) — read-only for the leaf: no plan selection/preparation, workflow-snapshot or root-register writes, or lease release> | N/A
 **Review range / Diff basis**: <reproducible basis; merge-base = `metadata.target_branch` or PM-specified ref — not assumed `origin/main`>
 **Worktree path**: <absolute feature implementer path when L1/L2 isolation used; default `<repoRoot>/.worktrees/<plan-id>-<slug>` (L2 tracks: `<track-slug>`); must ≠ the main worktree (control root) ≠ `integration_worktree_path`>
 **Main worktree branch**: <recorded residency branch of the primary checkout (main worktree), from the main plan header — passed unchanged; never a lifecycle-owned branch>
@@ -206,6 +211,8 @@ Do **not** waive worktree because default-gitignored `plans/` are missing under 
 
 For host behavior details (dispatch turn shape, paste-only failure mode, invoke-count discipline),
 read `mstar-host` → the active host reference and `references/parallel-dispatch.md` as host SSOT for dispatch.
+
+The **scoped primary route** never appears as a subagent invoke on any host: `/iteration-drive` with a scope flag boots the PM in the **primary session** — and `project-manager` ships no agent shell — so an Assignment whose `Execute as` is `project-manager` is a dispatch defect, not a target (`mstar-iteration/references/plan-scoped-pm.md` §2).
 
 ## SDD vs inline implement Assignment（PM）
 

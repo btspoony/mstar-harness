@@ -35,6 +35,7 @@ PM runs context-dependent `mstar sdd workspace`, `task-brief`, and `review-packa
    - Interfaces / decisions brief cannot know
    - Absolute report path: `$SDD_DIR/task-N-report.md`
    - Absolute control root, feature cwd, branch and plan paths, plus task-specific brief/report/diff paths fixed for this dispatch; the context path is PM coordination metadata, not a leaf checkout selector
+   - **Inherited plan scope, no credentials**: the handoff restates the inherited plan id + absolute paths and nothing more — a leaf neither selects a plan nor writes the workflow snapshot / root register / leases. Session JSON, `mstar plan --session` write credentials and `--expect <revision>` are PM/coordinator-only and **never** appear in a leaf prompt (`mstar-iteration/references/plan-scoped-pm.md` §8)
    - `Model tier` → host-specific model (required)
    - **`SDD implementer session`**: `fresh` (new subagent) or `sticky` (resume — see **`sticky-implementer-session.md`**)
 

@@ -1,6 +1,6 @@
 ---
 name: mstar-artifacts
-description: "Morning Star plan harness artifacts — `{PLAN_DIR}` main plans and durable review summaries, `{SDD_DIR}/review/` ephemeral QC/QA bundles, `{KNOWLEDGE_DIR}` / `{ITERATION_DIR}` indexes, plus `{HARNESS_DIR}/status.json` (v2 root register) / `{WORKFLOW_DIR}/<id>/snapshot.json` (plan rows + leases) and `{PROJECT_DIR}/<id>/residuals.json` (residual register; severity SSOT, open/close lifecycle). Read when writing plans or QC/QA review bundles, maintaining knowledge/iteration indexes, reading or writing status/snapshot/register, or mapping QC severity to JSON. Required for `@project-manager` on status, residuals, and InReview/QC waves; `@qc-specialist*` before writing review bundle reports; `@qa-engineer` before closing R# when `QA gate: mandatory`. Verdict rules: leaf → `mstar-roles/references/qc-specialist/report-template.md`; PM → `mstar-review-qc`."
+description: "Morning Star plan harness artifacts — `{PLAN_DIR}` main plans and durable review summaries, `{SDD_DIR}/review/` ephemeral QC/QA bundles, `{KNOWLEDGE_DIR}` / `{ITERATION_DIR}` indexes, plus `{HARNESS_DIR}/status.json` (v2 root register) / `{WORKFLOW_DIR}/<id>/snapshot.json` (plan rows + leases + plan-scoped `coordination`/session/handoff/revision semantics) and `{PROJECT_DIR}/<id>/residuals.json` (residual register; severity SSOT, open/close lifecycle). Read when writing plans or QC/QA review bundles, maintaining knowledge/iteration indexes, reading or writing status/snapshot/register, or mapping QC severity to JSON. Required for `@project-manager` on status, residuals, and InReview/QC waves; `@qc-specialist*` before writing review bundle reports; `@qa-engineer` before closing R# when `QA gate: mandatory`. Verdict rules: leaf → `mstar-roles/references/qc-specialist/report-template.md`; PM → `mstar-review-qc`."
 ---
 
 ## Load order
@@ -14,7 +14,7 @@ description: "Morning Star plan harness artifacts — `{PLAN_DIR}` main plans an
 | Main plan, review bundle naming, durable summaries, QC waves, residual and plan index order | `references/plan-files-and-reports.md` |
 | Plan template (Global Constraints, Interfaces) | `templates/plan.main.md` |
 | knowledge / iterations / specs boundaries and indexes | `references/knowledge-and-designs.md` |
-| `status.json` (v2 root), workflow snapshots, project register, residual severity / lifecycle, engine-check queries | `references/status-and-residuals.md` |
+| `status.json` (v2 root), workflow snapshots, plan-scoped `coordination` / session / handoff / revision schema, project register, residual severity / lifecycle, engine-check queries | `references/status-and-residuals.md` |
 | Empty-repo `status.json` template | `templates/status.empty.json` (`templates/README.md`) |
 | Tech-debt rollup (read-only) | `mstar status tech-debt [path]` (engine `techDebtRollup`; see `references/status-and-residuals.md`) |
 
@@ -38,6 +38,7 @@ description: "Morning Star plan harness artifacts — `{PLAN_DIR}` main plans an
 
 - **`{WORKFLOW_DIR}/<id>/notes.jsonl`**: per-workflow append-only notes ledger (runtime); snapshot plan-row `notes` is the legacy verbatim copy. **Tech-debt rollup**: `mstar status tech-debt <project-dir>` over the project registers — **`references/status-and-residuals.md`**.
 - **Iteration Phase 2 leases** (snapshot: `integration_worktree_path`, `plans[].execution_lease`, top-level `integration_merge_lease`): field semantics → **`references/status-and-residuals.md`** (“Iteration execution leases”); Phase 2 execution checklist → **`mstar-iteration`** `references/phase-2-worktree-lease.md`; full protocol prose (single copy) → **`mstar-engine-legacy`** `references/lease-protocol.md`.
+- **Plan-scoped coordination is a domain-call surface**: plan-row `coordination` block (`prepared` / `revision` / `duplicate-holder`), session JSON, handoff record, and `--expect <revision>` semantics have their **single runtime home** in **`references/status-and-residuals.md`**; flag shapes and exit codes → `docs/cli.md`; route semantics → **`mstar-iteration`** `references/plan-scoped-pm.md`. Every plan-row mutation goes through the verbs (`mstar plan bind | show | progress | residual-add | residual-close | handoff | accept | return | integration-start | integration-accept | complete | reconcile`) — hand-editing snapshot rows or the register outside those verbs is **not** an authorized path.
 
 > **Engine check (when available):** run `mstar lease verify --workflow <id> [--plan <plan-id>]` or `mstar lease verify-integration --workflow <id>` (or import `validateExecutionLease` / `validateIntegrationMergeLease` from `@mstar-harness/engine` in a host hook) to validate the iteration leases above on the workflow snapshot (execution_lease / integration_merge_lease). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
@@ -47,13 +48,14 @@ Field semantics, severity mapping, findings cleanup modes, archive flow, and `jq
 
 ## Workflow
 
-产物生命周期主链：主 plan 落盘 `{PLAN_DIR}`（命名见 `references/plan-files-and-reports.md`）→ 实现推进时更新 workflow snapshot（`workflows/<id>/snapshot.json` 的 `plans[]` 行 + 根 `status.json` `workflows[]` 登记）→ 审查波次产出 `{SDD_DIR}/review/` bundle（raw QC/QA reports）+ durable gate summary 回写主 plan / snapshot → 关闭后 residual **in place** close in the project register（`projects/<id>/residuals.json`）。索引（`{KNOWLEDGE_DIR}` / `{ITERATION_DIR}` / `{PLAN_DIR}`）随产物更新。
+产物生命周期主链：主 plan 落盘 `{PLAN_DIR}`（命名见 `references/plan-files-and-reports.md`）→ 实现推进时经 **domain call** 更新 workflow snapshot 的 `plans[]` 行（scoped 路线：`mstar plan progress | handoff | complete --session <session.json> [--expect <revision>]`；直接文件编辑仅限 CLI 缺失的 legacy 路线），根 `status.json` `workflows[]` 的登记/注销由生命周期动词负责（如 `mstar status workflow-close`）→ 审查波次产出 `{SDD_DIR}/review/` bundle（raw QC/QA reports）+ durable gate summary 回写主 plan / snapshot → 关闭后 residual **in place** close in the project register（`projects/<id>/residuals.json`）。索引（`{KNOWLEDGE_DIR}` / `{ITERATION_DIR}` / `{PLAN_DIR}`）随产物更新。
 
 ## Decision Rules
 
 - residual **severity** 是机器字段 SSOT（`references/status-and-residuals.md`）；每条新 finding 只登记 project register（`projects/<id>/residuals.json` → `entries[<plan-id>]`），v1 根级 `residual_findings` 仅 legacy 只读，**禁止**双写。
 - **`Findings cleanup: zero-residual`** 默认（迭代 Phase 2）：可修 findings 当轮 fix → re-review 清干净；仅真 blocker 可 defer 且须 Durable Roadmap。
 - 登记前必须过 `validateResidual` / `validateProjectRegister` / `validateStatus`（fail-loud handoff）；malformed → reject + rewrite。
+- **计划行 / register 只经 domain call 修改**：scoped 路线使用 `mstar plan …` 动词（带 `--session` 与 `--expect`），手写 snapshot / register 会被拒（`coordination.direct-write-refused` / `coordination.scoped-writer-required`）；只读校验器（`mstar lease verify` / `mstar worktree check`）是检查而非修改替代。
 
 ## Evidence
 
@@ -62,5 +64,5 @@ Field semantics, severity mapping, findings cleanup modes, archive flow, and `jq
 ## References
 
 - `references/plan-files-and-reports.md` — 主 plan / review bundle 命名、QC 波次、durable summaries
-- `references/status-and-residuals.md` — `status.json` (v2), workflow snapshots, project register, residual severity / lifecycle / engine-check queries
+- `references/status-and-residuals.md` — `status.json` (v2), workflow snapshots, plan-scoped coordination (bind / revision / session / handoff / reconcile), project register, residual severity / lifecycle / engine-check queries
 - `references/knowledge-and-designs.md` — knowledge / iterations / specs 边界与索引
