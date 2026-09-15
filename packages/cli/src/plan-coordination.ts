@@ -407,11 +407,14 @@ async function mutate(
   const expectedRevision = parseExpect(options.expect as string | undefined, verb);
   const handoffId = options.handoff as string | undefined;
   const concrete = operation(options);
+  // The store pin comes first: the pre-check below reads the row through the
+  // ArtifactStore, so an unpinned read resolves the cwd-derived root and
+  // refuses a linked checkout whose session envelope names the control root.
+  pinSessionRoot(sessionPath);
   if (handoffId !== undefined && planId !== undefined) {
     const live = handoffIdOf(await readPlanCoordination(sessionPath, planId));
     if (live !== undefined && live !== handoffId) throw handoffMismatch(verb, planId, live, handoffId);
   }
-  pinSessionRoot(sessionPath);
   const result = await mutatePlanCoordination({
     sessionPath,
     ...(planId !== undefined ? { planId } : {}),
@@ -507,6 +510,12 @@ function bindInputOf(options: PlanCliOptions): BindPlanSessionInput {
     return { scope: { assignmentPath: requireAbsolutePath(assignment, "--assignment", "bind", "md-path") }, cwd };
   }
   if (resume !== undefined) {
+    if (harness !== undefined) {
+      throw new SddScriptError(
+        "plan bind --resume accepts no --harness (the session envelope pins the harness root)",
+        2,
+      );
+    }
     return { resumePath: requireAbsolutePath(resume, "--resume", "bind", "session-json-path"), cwd };
   }
   if (workflow === undefined || plan === undefined) {
@@ -520,6 +529,21 @@ function bindInputOf(options: PlanCliOptions): BindPlanSessionInput {
     },
     cwd,
   };
+}
+
+/**
+ * The harness override one address form declared (spec §A2): the top-level key
+ * for `--coordinator`, `scope.harnessDir` for the `--workflow/--plan` form, and
+ * none for `--assignment`/`--resume` (the pinned Assignment and the session
+ * envelope carry those roots themselves). The store must be pinned to the root
+ * the engine resolves — the cwd-derived default is correct only when the form
+ * declared no override, and `--harness` otherwise addresses a root the process
+ * root check never sees.
+ */
+function harnessOverrideOf(input: BindPlanSessionInput): string | undefined {
+  if ("scope" in input) return "harnessDir" in input.scope ? input.scope.harnessDir : undefined;
+  if ("coordinator" in input) return input.harnessDir;
+  return undefined;
 }
 
 export function registerPlanCommands(program: Command): void {
@@ -553,7 +577,7 @@ export function registerPlanCommands(program: Command): void {
         { workflow_id: options.workflow as string | undefined, plan_id: options.plan as string | undefined },
         async (json) => {
           const input = bindInputOf(options);
-          pinProcessRoot("harnessDir" in input ? input.harnessDir : undefined);
+          pinProcessRoot(harnessOverrideOf(input));
           await printSuccess("bind", await bindPlanSession(input), json);
         },
       ),

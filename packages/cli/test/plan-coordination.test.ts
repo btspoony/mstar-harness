@@ -410,6 +410,40 @@ describe("mstar plan — strict-input", () => {
     expect(jsonOf(groupLevel).operation).toBe("plan");
   });
 
+  test("--resume refuses a --harness override instead of silently dropping it", () => {
+    const fixture = makeFixture();
+    const coordinator = bindCoordinator(fixture);
+    preparePlan(fixture, coordinator, PLAN_ID);
+    const planSession = bindPlan(fixture, PLAN_ID);
+    const before = rowRevision(fixture, planSession);
+
+    // `--resume <session-file>` addresses the envelope directly and the envelope
+    // already records its harness root, so the mix cannot be honored: it fails
+    // closed like the `--assignment` form instead of exiting 0 with the flag
+    // quietly ignored.
+    const mixed = runCli(
+      ["plan", "bind", "--resume", planSession, "--harness", fixture.harness, "--json"],
+      fixture.root,
+    );
+    expect(mixed.exitCode).toBe(2);
+    const payload = jsonOf(mixed);
+    expect(payload.ok).toBe(false);
+    expect(payload.operation).toBe("bind");
+    expect(payload.code).toBe("usage");
+    expect(String(payload.message)).toContain("--harness");
+
+    // Without --json the usage failure stays human: stdout is machine-only.
+    const human = runCli(["plan", "bind", "--resume", planSession, "--harness", fixture.harness], fixture.root);
+    expect(human.exitCode).toBe(2);
+    expect(human.stdout).toBe("");
+
+    // Fail-closed means no side effect: the same session still resumes untouched.
+    const resumed = runCli(["plan", "bind", "--resume", planSession, "--json"], fixture.root);
+    expect(resumed.exitCode).toBe(0);
+    expect(jsonOf(resumed).outcome).toBe("resumed");
+    expect(rowRevision(fixture, planSession)).toBe(before);
+  });
+
   test("a non-numeric or negative --expect is a usage error, not an engine refusal", () => {
     const fixture = makeFixture();
     for (const value of ["abc", "-1", "1.5", ""]) {
@@ -571,6 +605,84 @@ describe("mstar plan — linked-control-root", () => {
     const refused = runCli(["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--json"], linked);
     expect(refused.exitCode).toBe(1);
     expect(jsonOf(refused).ok).toBe(false);
+  });
+
+  test("the workflow+plan form pins its --harness override, not the cwd-resolved root", () => {
+    const fixture = makeFixture();
+    const coordinator = bindCoordinator(fixture);
+    preparePlan(fixture, coordinator, PLAN_ID);
+
+    // A process cwd outside any harness: the override is the only address the
+    // engine can resolve, so the store pin has to follow the flag. Pinning the
+    // cwd-derived root instead pins no store at all and refuses a valid bind.
+    const outside = mkdtempSync(join(tmpdir(), "outside-harness-"));
+    roots.push(outside);
+    const bound = runCli(
+      ["plan", "bind", "--workflow", WORKFLOW_ID, "--plan", PLAN_ID, "--harness", fixture.harness, "--json"],
+      outside,
+    );
+    expect(bound.exitCode).toBe(0);
+    const payload = jsonOf(bound);
+    expect(payload.outcome).toBe("claimed");
+    expect(String(payload.session_file)).toContain(join(fixture.harness, "workflows", WORKFLOW_ID, "sessions"));
+  });
+
+  test("a coordinator transition pins the session root before it reads the row", () => {
+    const fixture = makeIntegrationFixture();
+    const coordinator = bindCoordinator(fixture);
+    preparePlan(fixture, coordinator, PLAN_ID);
+    const planSession = bindPlan(fixture, PLAN_ID);
+    toInReview(fixture, planSession, "slice ready for review");
+    const handoffId = submitHandoff(fixture, planSession);
+
+    // A linked checkout carrying its own harness copy: cwd discovery alone
+    // yields a foreign store, so the session-root pin must land before the
+    // pre-check read that authorizes the transition.
+    const linked = join(fixture.root, "linked-transition");
+    git(["worktree", "add", "-q", "-b", "linked-transition", linked], fixture.root);
+    writeJson(join(linked, ".mstar", "status.json"), { version: 2, updated_at: "2026-01-01", workflows: [] });
+
+    const accepted = runCli(
+      [
+        "plan",
+        "accept",
+        "--session",
+        coordinator,
+        "--plan",
+        PLAN_ID,
+        "--handoff",
+        handoffId,
+        "--expect",
+        String(rowRevision(fixture, coordinator, PLAN_ID)),
+        "--json",
+      ],
+      linked,
+    );
+    expect(accepted.exitCode).toBe(0);
+    expect(jsonOf(accepted).state).toBe("accepted");
+    // The write landed in the control root named by the session envelope.
+    expect(recordedHandoffState(fixture)).toBe("accepted");
+
+    // The pre-check now reads THROUGH that pinned store: a stale id is refused
+    // by the pre-check's own verdict, not by an unpinned store mismatch.
+    const stale = runCli(
+      [
+        "plan",
+        "accept",
+        "--session",
+        coordinator,
+        "--plan",
+        PLAN_ID,
+        "--handoff",
+        "handoff-stale",
+        "--expect",
+        String(rowRevision(fixture, coordinator, PLAN_ID)),
+        "--json",
+      ],
+      linked,
+    );
+    expect(stale.exitCode).toBe(1);
+    expect(jsonOf(stale).code).toBe("coordination.handoff-mismatch");
   });
 });
 
