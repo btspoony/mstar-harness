@@ -66,6 +66,7 @@ import {
   readCoordinatedArtifact,
   readMainWorktree,
   readWorkflowSnapshot,
+  replaceCoordinatedArtifact,
   resolveHarnessDir,
   resolveProcessHarnessDir as resolveEngineProcessHarnessDir,
   resolveProjectDir,
@@ -921,6 +922,23 @@ function resolveProcessHarnessDir(harnessArg?: string): string | null {
   return resolveEngineProcessHarnessDir(process.cwd(), harnessArg);
 }
 
+/**
+ * `--session <path>` on the coordination-write verbs (`status workflow-close`,
+ * `persist`): the coordinator envelope that authorizes the write. Like the plan
+ * family's `--session`, the path must be absolute — the engine compares
+ * canonical targets, so a relative path would silently mean "relative to
+ * whatever cwd this process runs with". Absent stays absent: an uncoordinated
+ * workflow closes, and a status/residual replacement is validated, exactly as
+ * before.
+ */
+function resolveSessionFlag(raw: string | undefined): string | undefined {
+  if (raw === undefined) return undefined;
+  if (!path.isAbsolute(raw)) {
+    throw new SddScriptError(`--session must be an absolute path — got ${JSON.stringify(raw)}`, 2);
+  }
+  return raw;
+}
+
 /** Resolve the status.json path: explicit arg wins, else the resolved {HARNESS_DIR}. */
 function resolveStatusFilePath(pathArg?: string): string {
   if (pathArg) return path.resolve(pathArg);
@@ -1292,6 +1310,16 @@ const persistCommand = program
 /** Persist kinds (unknown kind is a usage error, exit 2). */
 const PERSIST_KINDS: readonly string[] = ["status", "snapshot", "residuals", "review", "json"];
 
+/**
+ * Kinds the coordination boundary protects: their local bytes belong to the
+ * engine's locked writers, so the CLI's only put face is the versioned
+ * replacement below (a bare `put` refuses with
+ * `coordination.direct-write-refused`). The `json` alias of one of these
+ * files keeps the plain put and its store refusal — the alias is a
+ * path-shaped key, not a coordinated ref.
+ */
+const COORDINATED_PERSIST_KINDS: readonly ArtifactKind[] = ["status", "snapshot", "residuals"];
+
 function parsePersistKind(kind: string): ArtifactKind {
   if (PERSIST_KINDS.includes(kind)) return kind as ArtifactKind;
   throw new SddScriptError(
@@ -1302,6 +1330,62 @@ function parsePersistKind(kind: string): ArtifactKind {
       `  unknown kind ${JSON.stringify(kind)} \u2014 expected status | snapshot | residuals | review | json`,
     2,
   );
+}
+
+/**
+ * Classify a put against the coordinated-artifact boundary and narrow its
+ * contract. Coordinated kinds (`status` / `snapshot` / `residuals`) require
+ * the caller's exact byte version — `absent` for a first create, else the
+ * `sha256:<hex>` the versioned read reported — and a snapshot replacement
+ * additionally requires the coordinator envelope that binds the writer
+ * (the engine refuses a plan session). Flags that do not belong to the
+ * request's write face fail closed rather than being dropped silently.
+ */
+function resolvePersistWrite(
+  kind: ArtifactKind,
+  options: { expectVersion?: string; session?: string; schema?: string },
+): { coordinated: false } | { coordinated: true; expectVersion: string; sessionPath?: string } {
+  const sessionPath = resolveSessionFlag(options.session);
+  if (!COORDINATED_PERSIST_KINDS.includes(kind)) {
+    if (options.expectVersion !== undefined || sessionPath !== undefined) {
+      throw new SddScriptError(
+        `usage: --expect-version / --session replace coordinated artifacts (status | snapshot | residuals) \u2014 ${kind} keeps its existing writer`,
+        2,
+      );
+    }
+    return { coordinated: false };
+  }
+  if (options.expectVersion === undefined) {
+    throw new SddScriptError(
+      `usage: persist ${kind} --key <key> --expect-version <absent|sha256:<hex>> [--file <path>|--stdin]` +
+        `${kind === "snapshot" ? " --session <coordinator-session>" : ""}\n` +
+        `  ${kind} is a coordinated artifact: only the engine's locked replacement writes it`,
+      2,
+    );
+  }
+  if (options.schema !== undefined) {
+    throw new SddScriptError(
+      `usage: --schema does not apply to a coordinated ${kind} replacement \u2014 the engine writes the document, not a store envelope`,
+      2,
+    );
+  }
+  if (kind === "snapshot") {
+    if (sessionPath === undefined) {
+      throw new SddScriptError(
+        "usage: persist snapshot --key <workflow-id> --expect-version <version> --session <coordinator-session> \u2014 " +
+          "a coordinated snapshot replacement is authorized by its coordinator envelope",
+        2,
+      );
+    }
+    return { coordinated: true, expectVersion: options.expectVersion, sessionPath };
+  }
+  if (sessionPath !== undefined) {
+    throw new SddScriptError(
+      `usage: --session applies to a coordinated snapshot replacement only \u2014 ${kind} takes no coordinator envelope`,
+      2,
+    );
+  }
+  return { coordinated: true, expectVersion: options.expectVersion };
 }
 
 /** Inject the store module from --store (wins) or MSTAR_STORE_MODULE; no
@@ -1359,8 +1443,21 @@ persistCommand
   .option("--stdin", "Read the payload JSON from stdin")
   .option("--store <module>", "Store module path (filesystem only; overrides MSTAR_STORE_MODULE)")
   .option("--schema <id>", "Optional schema id stored on the artifact doc (e.g. mstar.review/v1); stored only by store modules that persist it \u2014 the default FsStore rejects it (exit 1)")
+  .option("--expect-version <version>", 'Exact byte version of the document being replaced (status | snapshot | residuals): "absent" or sha256:<hex> from `persist get --versioned`')
+  .option("--session <path>", "Absolute coordinator session envelope path (required to replace a coordinated snapshot)")
   .action(
-    async (kind: string, options: { key?: string; file?: string; stdin?: boolean; store?: string; schema?: string }) => {
+    async (
+      kind: string,
+      options: {
+        key?: string;
+        file?: string;
+        stdin?: boolean;
+        store?: string;
+        schema?: string;
+        expectVersion?: string;
+        session?: string;
+      },
+    ) => {
       try {
         const parsedKind = parsePersistKind(kind);
         if (options.key === undefined) {
@@ -1369,6 +1466,9 @@ persistCommand
             2,
           );
         }
+        // Flag contract first: a coordinated put must refuse a missing
+        // precondition before it blocks on stdin.
+        const write = resolvePersistWrite(parsedKind, options);
         const raw = readPersistPayload(options);
         let payload: unknown;
         try {
@@ -1378,19 +1478,35 @@ persistCommand
         }
         validatePersistPayload(parsedKind, payload);
         await resolvePersistStore(options.store);
+        const store = getArtifactStore();
         // Protected kinds (`status` / `snapshot` / `residuals`, and any
         // `json` alias of those files) go through the FsStore boundary: only
-        // the engine's locked writers may write them, so a bare put refuses
-        // with `coordination.direct-write-refused` instead of replacing
-        // authoritative bytes. The versioned replacement face for these
-        // kinds (`--expect-version`) needs the coordinated replacement port;
-        // see the task report for the engine delta.
-        await getArtifactStore().put({
-          kind: parsedKind,
-          key: options.key,
-          payload,
-          ...(options.schema !== undefined ? { schema: options.schema } : {}),
-        });
+        // the engine's locked writers may write them. The replacement face
+        // runs inside the engine's own lock + same-host CAS check, so the
+        // boundary and the replacement always agree on the harness root.
+        if (write.coordinated) {
+          const root = (store as ArtifactStore & { root?: unknown }).root;
+          if (typeof root !== "string") {
+            throw new Error(
+              "coordination.local-store-required: persist --expect-version replaces coordinated artifacts " +
+                "through the default local FsStore only \u2014 a pluggable --store module has no same-host CAS contract",
+            );
+          }
+          await replaceCoordinatedArtifact({
+            harnessRoot: root,
+            ref: { kind: parsedKind, key: options.key },
+            payload,
+            expectedVersion: write.expectVersion,
+            ...(write.sessionPath !== undefined ? { sessionPath: write.sessionPath } : {}),
+          });
+        } else {
+          await store.put({
+            kind: parsedKind,
+            key: options.key,
+            payload,
+            ...(options.schema !== undefined ? { schema: options.schema } : {}),
+          });
+        }
         console.log(pc.green(`persist ${parsedKind}/${options.key}: OK`));
       } catch (error) {
         failScript(error, "persist");
