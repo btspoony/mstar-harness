@@ -3,22 +3,24 @@
 
 // hooks/src/mstar-write-gate.ts
 import { readFileSync as readFileSync3, statSync as statSync2, writeSync } from "node:fs";
-import { isAbsolute as isAbsolute3, join, relative as relative3 } from "node:path";
+import { isAbsolute as isAbsolute4, join, relative as relative3 } from "node:path";
 
 // packages/engine/dist/engine.js
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { readFileSync as readFileSync2, statSync } from "node:fs";
 import { dirname as dirname2, isAbsolute, join as join2, relative, resolve as resolve2 } from "node:path";
-import { existsSync as existsSync7, mkdirSync as mkdirSync5, readdirSync as readdirSync5, readFileSync as readFileSync7, realpathSync as realpathSync2, statSync as statSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import { existsSync as existsSync8, mkdirSync as mkdirSync5, readdirSync as readdirSync5, readFileSync as readFileSync8, realpathSync as realpathSync3, statSync as statSync3, writeFileSync as writeFileSync3 } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { basename as basename3, dirname as dirname5, isAbsolute as isAbsolute5, join as join9, relative as relative2, resolve as resolve7 } from "node:path";
-import { existsSync as existsSync4, readFileSync as readFileSync4, readdirSync as readdirSync2, realpathSync } from "node:fs";
-import { dirname as dirname4, join as join6, resolve as resolve5, sep } from "node:path";
+import { basename as basename4, dirname as dirname5, isAbsolute as isAbsolute6, join as join9, relative as relative2, resolve as resolve8 } from "node:path";
+import { existsSync as existsSync5, readFileSync as readFileSync5, readdirSync as readdirSync2, realpathSync as realpathSync2 } from "node:fs";
+import { dirname as dirname4, join as join6, resolve as resolve6, sep as sep2 } from "node:path";
 import { dirname as dirname3, isAbsolute as isAbsolute2, join as join3, resolve as resolve3 } from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { isAbsolute as isAbsolute4, join as join5 } from "node:path";
-import { existsSync as existsSync10, statSync as statSync5 } from "node:fs";
-import { basename as basename6, dirname as dirname9, join as join13, relative as relative4, resolve as resolve10 } from "node:path";
+import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
+import { isAbsolute as isAbsolute3, resolve as resolve4 } from "node:path";
+import { isAbsolute as isAbsolute5, join as join5 } from "node:path";
+import { existsSync as existsSync11, statSync as statSync5 } from "node:fs";
+import { basename as basename7, dirname as dirname9, join as join13, relative as relative4, resolve as resolve11 } from "node:path";
 var SEVERITY_ORDER = ["critical", "high", "medium", "low", "nit"];
 function readJson(filePath) {
   if (!existsSync(filePath))
@@ -190,6 +192,302 @@ function validateIntegrationMergeLease(lease) {
   return { ok: violations.length === 0, violations };
 }
 var heldLockDirs = new AsyncLocalStorage;
+function isPlainObject2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function isNonEmptyString(value) {
+  return typeof value === "string" && value.trim() !== "";
+}
+var writeAuthorizations = new AsyncLocalStorage2;
+var HANDOFF_STATES = [
+  "submitted",
+  "accepted",
+  "returned",
+  "integrating",
+  "merged",
+  "completed"
+];
+var PLAN_PROGRESS_STATUSES = ["InProgress", "InReview", "Blocked"];
+var SHA256_HEX = /^[0-9a-f]{64}$/;
+var GIT_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+function invalid(code, message) {
+  return { ok: false, severity: "high", code, message };
+}
+function validateBinding(value, what) {
+  if (!isPlainObject2(value))
+    return [invalid("coordination.row.binding-shape", `${what} must be an object`)];
+  const violations = [];
+  const extra = Object.keys(value).filter((key) => !["session_id", "session_file", "bound_at"].includes(key));
+  if (extra.length > 0) {
+    violations.push(invalid("coordination.row.binding-field", `${what} has unexpected key(s): ${extra.join(", ")}`));
+  }
+  if (!isNonEmptyString(value.session_id)) {
+    violations.push(invalid("coordination.row.binding-field", `${what}.session_id must be a non-empty string`));
+  }
+  if (!isNonEmptyString(value.session_file) || !isAbsolute3(String(value.session_file))) {
+    violations.push(invalid("coordination.row.binding-field", `${what}.session_file must be an absolute path`));
+  }
+  if (!isNonEmptyString(value.bound_at)) {
+    violations.push(invalid("coordination.row.binding-field", `${what}.bound_at must be a timestamp`));
+  }
+  return violations;
+}
+function validateEvidenceRef(value, what) {
+  if (!isPlainObject2(value))
+    return [invalid("coordination.row.evidence-shape", `${what} must be a hash-pinned reference`)];
+  const violations = [];
+  const extra = Object.keys(value).filter((key) => !["path", "sha256"].includes(key));
+  if (extra.length > 0) {
+    violations.push(invalid("coordination.row.evidence-field", `${what} has unexpected key(s): ${extra.join(", ")}`));
+  }
+  if (!isNonEmptyString(value.path) || !isAbsolute3(String(value.path))) {
+    violations.push(invalid("coordination.row.evidence-field", `${what}.path must be an absolute path`));
+  }
+  if (!isNonEmptyString(value.sha256) || !SHA256_HEX.test(String(value.sha256))) {
+    violations.push(invalid("coordination.row.evidence-field", `${what}.sha256 must be 64 lowercase hex`));
+  }
+  return violations;
+}
+function validatePlanProgress(value, what = "coordination.progress") {
+  if (!isPlainObject2(value))
+    return [invalid("coordination.row.progress-shape", `${what} must be an object`)];
+  const violations = [];
+  const extra = Object.keys(value).filter((key) => !["status", "summary", "evidence_paths", "track_branches"].includes(key));
+  if (extra.length > 0) {
+    violations.push(invalid("coordination.row.progress-field", `${what} has unexpected key(s): ${extra.join(", ")}`));
+  }
+  if (!PLAN_PROGRESS_STATUSES.includes(value.status)) {
+    violations.push(invalid("coordination.row.progress-field", `${what}.status must be one of ${PLAN_PROGRESS_STATUSES.join(", ")}`));
+  }
+  if (!isNonEmptyString(value.summary)) {
+    violations.push(invalid("coordination.row.progress-field", `${what}.summary must be a non-empty string`));
+  }
+  if (!Array.isArray(value.evidence_paths) || !value.evidence_paths.every(isNonEmptyString)) {
+    violations.push(invalid("coordination.row.progress-field", `${what}.evidence_paths must be an array of paths`));
+  }
+  if (value.track_branches !== undefined) {
+    if (!Array.isArray(value.track_branches) || !value.track_branches.every(isNonEmptyString)) {
+      violations.push(invalid("coordination.row.progress-field", `${what}.track_branches must be an array of branch names`));
+    }
+  }
+  return violations;
+}
+function validatePlanHandoff(value, what = "coordination.handoff") {
+  if (!isPlainObject2(value))
+    return [invalid("coordination.row.handoff-shape", `${what} must be an object`)];
+  const allowed = [
+    "id",
+    "attempt",
+    "state",
+    "submitted_by",
+    "submitted_at",
+    "source_branch",
+    "source_sha",
+    "worktree_path",
+    "review_base",
+    "review_head",
+    "qc",
+    "qa",
+    "accepted_by",
+    "accepted_at",
+    "returned_at",
+    "return_reason",
+    "integration",
+    "completed_at"
+  ];
+  const violations = [];
+  const extra = Object.keys(value).filter((key) => !allowed.includes(key));
+  if (extra.length > 0) {
+    violations.push(invalid("coordination.row.handoff-field", `${what} has unexpected key(s): ${extra.join(", ")}`));
+  }
+  const required = [
+    "id",
+    "attempt",
+    "state",
+    "submitted_by",
+    "submitted_at",
+    "source_branch",
+    "source_sha",
+    "worktree_path",
+    "review_base",
+    "review_head"
+  ];
+  for (const key of required) {
+    if (value[key] === undefined) {
+      violations.push(invalid("coordination.row.handoff-field", `${what}.${key} is required`));
+    }
+  }
+  if (!Number.isInteger(value.attempt) || value.attempt < 1) {
+    violations.push(invalid("coordination.row.handoff-field", `${what}.attempt must be a positive integer`));
+  }
+  if (!HANDOFF_STATES.includes(value.state)) {
+    violations.push(invalid("coordination.row.handoff-field", `${what}.state must be one of ${HANDOFF_STATES.join(", ")}`));
+  }
+  if (value.id !== undefined && !isNonEmptyString(value.id)) {
+    violations.push(invalid("coordination.row.handoff-field", `${what}.id must be a non-empty string`));
+  }
+  for (const key of ["source_sha", "review_base", "review_head"]) {
+    if (value[key] !== undefined && !GIT_SHA.test(String(value[key]))) {
+      violations.push(invalid("coordination.row.handoff-field", `${what}.${key} must be a 40-hex git object id`));
+    }
+  }
+  for (const key of ["submitted_at", "accepted_at", "returned_at", "completed_at"]) {
+    if (value[key] !== undefined && !isNonEmptyString(value[key])) {
+      violations.push(invalid("coordination.row.handoff-field", `${what}.${key} must be a timestamp`));
+    }
+  }
+  if (value.worktree_path !== undefined && (!isNonEmptyString(value.worktree_path) || !isAbsolute3(String(value.worktree_path)))) {
+    violations.push(invalid("coordination.row.handoff-field", `${what}.worktree_path must be an absolute path`));
+  }
+  if (value.qc !== undefined) {
+    if (!isPlainObject2(value.qc)) {
+      violations.push(invalid("coordination.row.handoff-shape", `${what}.qc must be an object`));
+    } else {
+      const qc = value.qc;
+      const qcExtra = Object.keys(qc).filter((key) => !["decision", "reports", "consolidated"].includes(key));
+      if (qcExtra.length > 0) {
+        violations.push(invalid("coordination.row.handoff-field", `${what}.qc has unexpected key(s): ${qcExtra.join(", ")}`));
+      }
+      if (!isNonEmptyString(qc.decision)) {
+        violations.push(invalid("coordination.row.handoff-field", `${what}.qc.decision must be a non-empty string`));
+      }
+      if (!Array.isArray(qc.reports) || qc.reports.length === 0) {
+        violations.push(invalid("coordination.row.handoff-field", `${what}.qc.reports must be a non-empty array`));
+      } else {
+        qc.reports.forEach((ref, index) => {
+          violations.push(...validateEvidenceRef(ref, `${what}.qc.reports[${index}]`));
+        });
+      }
+      violations.push(...validateEvidenceRef(qc.consolidated, `${what}.qc.consolidated`));
+    }
+  }
+  if (value.qa !== undefined) {
+    if (!isPlainObject2(value.qa)) {
+      violations.push(invalid("coordination.row.handoff-shape", `${what}.qa must be an object`));
+    } else {
+      const qa = value.qa;
+      const qaExtra = Object.keys(qa).filter((key) => !["gate", "decision", "report"].includes(key));
+      if (qaExtra.length > 0) {
+        violations.push(invalid("coordination.row.handoff-field", `${what}.qa has unexpected key(s): ${qaExtra.join(", ")}`));
+      }
+      if (!isNonEmptyString(qa.gate)) {
+        violations.push(invalid("coordination.row.handoff-field", `${what}.qa.gate must be a non-empty string`));
+      }
+      if (!isNonEmptyString(qa.decision)) {
+        violations.push(invalid("coordination.row.handoff-field", `${what}.qa.decision must be a non-empty string`));
+      }
+      violations.push(...validateEvidenceRef(qa.report, `${what}.qa.report`));
+    }
+  }
+  if (value.integration !== undefined) {
+    if (!isPlainObject2(value.integration)) {
+      violations.push(invalid("coordination.row.handoff-shape", `${what}.integration must be an object`));
+    } else {
+      const integration = value.integration;
+      const integrationAllowed = [
+        "target_branch",
+        "worktree_path",
+        "base_sha",
+        "started_at",
+        "result_sha",
+        "verified_at"
+      ];
+      const integrationExtra = Object.keys(integration).filter((key) => !integrationAllowed.includes(key));
+      if (integrationExtra.length > 0) {
+        violations.push(invalid("coordination.row.handoff-field", `${what}.integration has unexpected key(s): ${integrationExtra.join(", ")}`));
+      }
+      for (const key of ["target_branch", "worktree_path", "base_sha", "started_at"]) {
+        if (!isNonEmptyString(integration[key])) {
+          violations.push(invalid("coordination.row.handoff-field", `${what}.integration.${key} is required`));
+        }
+      }
+      for (const key of ["base_sha", "result_sha"]) {
+        if (integration[key] !== undefined && !GIT_SHA.test(String(integration[key]))) {
+          violations.push(invalid("coordination.row.handoff-field", `${what}.integration.${key} must be a 40-hex git object id`));
+        }
+      }
+      if (integration.result_sha !== undefined && integration.verified_at === undefined) {
+        violations.push(invalid("coordination.row.handoff-field", `${what}.integration.result_sha requires verified_at`));
+      }
+    }
+  }
+  if ((value.state === "integrating" || value.state === "merged" || value.state === "completed") && value.integration === undefined) {
+    violations.push(invalid("coordination.row.handoff-field", `${what}.state ${String(value.state)} requires integration`));
+  }
+  return violations;
+}
+function validatePreparedCoordination(value, what = "coordination.prepared") {
+  if (!isPlainObject2(value))
+    return [invalid("coordination.row.prepared-shape", `${what} must be an object`)];
+  const allowed = [
+    "assignment_path",
+    "assignment_sha256",
+    "plan_sha256",
+    "qa_gate",
+    "findings_cleanup",
+    "prepared_by",
+    "prepared_at"
+  ];
+  const violations = [];
+  const extra = Object.keys(value).filter((key) => !allowed.includes(key));
+  if (extra.length > 0) {
+    violations.push(invalid("coordination.row.prepared-field", `${what} has unexpected key(s): ${extra.join(", ")}`));
+  }
+  for (const key of allowed) {
+    if (!isNonEmptyString(value[key])) {
+      violations.push(invalid("coordination.row.prepared-field", `${what}.${key} is required`));
+    }
+  }
+  if (value.assignment_path !== undefined && !isAbsolute3(String(value.assignment_path))) {
+    violations.push(invalid("coordination.row.prepared-field", `${what}.assignment_path must be absolute`));
+  }
+  for (const key of ["assignment_sha256", "plan_sha256"]) {
+    if (value[key] !== undefined && !SHA256_HEX.test(String(value[key]))) {
+      violations.push(invalid("coordination.row.prepared-field", `${what}.${key} must be 64 lowercase hex`));
+    }
+  }
+  return violations;
+}
+function validateRowCoordination(value, what = "coordination") {
+  if (!isPlainObject2(value))
+    return [invalid("coordination.row.shape", `${what} must be an object`)];
+  const allowed = ["revision", "prepared", "session", "progress", "handoff"];
+  const violations = [];
+  const extra = Object.keys(value).filter((key) => !allowed.includes(key));
+  if (extra.length > 0) {
+    violations.push(invalid("coordination.row.field", `${what} has unexpected key(s): ${extra.join(", ")}`));
+  }
+  if (!Number.isInteger(value.revision) || value.revision < 0) {
+    violations.push(invalid("coordination.row.revision", `${what}.revision must be a non-negative integer`));
+  }
+  if (value.prepared !== undefined)
+    violations.push(...validatePreparedCoordination(value.prepared, `${what}.prepared`));
+  if (value.session !== undefined)
+    violations.push(...validateBinding(value.session, `${what}.session`));
+  if (value.progress !== undefined)
+    violations.push(...validatePlanProgress(value.progress, `${what}.progress`));
+  if (value.handoff !== undefined)
+    violations.push(...validatePlanHandoff(value.handoff, `${what}.handoff`));
+  if (value.handoff !== undefined && value.session === undefined) {
+    violations.push(invalid("coordination.row.handoff-field", `${what}.handoff requires a bound plan session`));
+  }
+  return violations;
+}
+function validateSnapshotCoordination(value, what = "coordination") {
+  if (!isPlainObject2(value))
+    return [invalid("coordination.snapshot.shape", `${what} must be an object`)];
+  const violations = [];
+  const extra = Object.keys(value).filter((key) => key !== "coordinator");
+  if (extra.length > 0) {
+    violations.push(invalid("coordination.snapshot.field", `${what} has unexpected key(s): ${extra.join(", ")}`));
+  }
+  if (value.coordinator === undefined) {
+    violations.push(invalid("coordination.snapshot.field", `${what}.coordinator is required`));
+  } else {
+    violations.push(...validateBinding(value.coordinator, `${what}.coordinator`));
+  }
+  return violations;
+}
 var ASSIGNMENT_ENFORCEMENT_BOLD_RE = /^[ \t]*(?:[-*][ \t]+)?\*\*\s*Enforcement\s*\*\*\s*:\s*(.*)$/m;
 var ASSIGNMENT_ENFORCEMENT_PLAIN_RE = /^[ \t]*(?:[-*][ \t]+)?Enforcement\s*:\s*(.*)$/m;
 var COMPASS_ENFORCEMENT_RE = /^enforcement\s*:\s*(.*)$/m;
@@ -214,9 +512,6 @@ var WORKFLOW_SNAPSHOT_FILE = "snapshot.json";
 var WORKFLOW_LIFECYCLE_STATUSES = ["running", "paused", "completed", "failed", "stopped"];
 var WORKFLOW_TERMINAL_STATUSES = ["completed", "failed", "stopped"];
 var WORKFLOW_LIFECYCLE_TYPES = ["plan", "iteration"];
-function isPlainObject2(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 function violation3(severity, code, message, fix) {
   return { ok: false, severity, code, message, fix };
 }
@@ -228,7 +523,7 @@ function validateNonEmptyString2(violations, value, field, missingCode, invalidC
   }
 }
 function validateWorktreePathValue(violations, value, field) {
-  if (typeof value !== "string" || value.trim() === "" || !isAbsolute4(value)) {
+  if (typeof value !== "string" || value.trim() === "" || !isAbsolute5(value)) {
     violations.push(violation3("high", "workflow.snapshot.invalid-integration-worktree-path", `${field} must be a non-empty absolute path — got ${JSON.stringify(value)}`, "record the absolute integration checkout path (integration_worktree_path)"));
   }
 }
@@ -277,7 +572,13 @@ function validateWorkflowSnapshot(doc) {
       if (isPlainObject2(row) && row.execution_lease !== undefined) {
         violations.push(...validateExecutionLease(row.execution_lease).violations);
       }
+      if (isPlainObject2(row) && row.coordination !== undefined) {
+        violations.push(...validateRowCoordination(row.coordination, `plans[${String(row.id)}].coordination`));
+      }
     }
+  }
+  if (doc.coordination !== undefined) {
+    violations.push(...validateSnapshotCoordination(doc.coordination));
   }
   if (doc.execution_policy !== undefined) {
     if (!isPlainObject2(doc.execution_policy)) {
@@ -339,9 +640,6 @@ var DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 var PLAN_STATUSES = ["Todo", "InProgress", "InReview", "Blocked", "Done"];
 var RESIDUAL_DECISIONS = ["defer", "accept", "risk-accepted"];
 var RESIDUAL_LIFECYCLES = ["open", "resolved", "waived", "superseded", "duplicate"];
-function isPlainObject3(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 function violation4(severity, code, message, fix) {
   return { ok: false, severity, code, message, fix };
 }
@@ -354,7 +652,7 @@ function validateNonEmptyString3(violations, value, field, missingCode, invalidC
 }
 function validatePlanRow(row) {
   const violations = [];
-  if (!isPlainObject3(row)) {
+  if (!isPlainObject2(row)) {
     return { ok: false, violations: [violation4("high", "status.plan-row.invalid", "plan row must be an object")] };
   }
   const { id, plan_id: planId, title, file, status, metadata, execution_lease } = row;
@@ -378,10 +676,10 @@ function validatePlanRow(row) {
   } else if (typeof status !== "string" || !PLAN_STATUSES.includes(status)) {
     violations.push(violation4("medium", "status.plan-row.invalid-status", `status must be one of ${PLAN_STATUSES.join(" | ")} — got ${JSON.stringify(status)}`));
   }
-  if (metadata !== undefined && !isPlainObject3(metadata)) {
+  if (metadata !== undefined && !isPlainObject2(metadata)) {
     violations.push(violation4("medium", "status.plan-row.invalid-metadata", "metadata must be an object"));
   }
-  if (execution_lease !== undefined && !isPlainObject3(execution_lease)) {
+  if (execution_lease !== undefined && !isPlainObject2(execution_lease)) {
     violations.push(violation4("medium", "status.plan-row.invalid-execution-lease", "execution_lease must be an object"));
   }
   if (status === "Done" && execution_lease !== undefined) {
@@ -391,7 +689,7 @@ function validatePlanRow(row) {
 }
 function validateResidual(entry) {
   const violations = [];
-  if (!isPlainObject3(entry)) {
+  if (!isPlainObject2(entry)) {
     return { ok: false, violations: [violation4("high", "status.residual.invalid", "residual entry must be an object")] };
   }
   const { id, title, severity, source, scope, decision, owner, target, tracking, detail_doc, lifecycle, closed_at } = entry;
@@ -451,7 +749,7 @@ function isHarnessRelativePath(dir) {
 }
 function validateWorkflowEntry(entry) {
   const violations = [];
-  if (!isPlainObject3(entry)) {
+  if (!isPlainObject2(entry)) {
     return {
       ok: false,
       violations: [violation4("high", "status.workflow.invalid", "workflow entry must be an object")]
@@ -479,7 +777,7 @@ function validateStatusV2(docOrPath, opts = {}) {
   if (typeof docOrPath === "string") {
     try {
       doc = readJson(docOrPath);
-      harnessDir = dirname4(resolve5(docOrPath));
+      harnessDir = dirname4(resolve6(docOrPath));
     } catch (error) {
       return {
         ok: false,
@@ -489,7 +787,7 @@ function validateStatusV2(docOrPath, opts = {}) {
   } else {
     doc = docOrPath;
   }
-  if (!isPlainObject3(doc)) {
+  if (!isPlainObject2(doc)) {
     return { ok: false, violations: [violation4("high", "status.invalid-doc", "status document must be an object")] };
   }
   if (doc.version !== 2) {
@@ -530,7 +828,7 @@ function validateStatusV2(docOrPath, opts = {}) {
     const seen = new Set;
     for (const entry of doc.workflows) {
       violations.push(...validateWorkflowEntry(entry).violations);
-      if (isPlainObject3(entry) && typeof entry.id === "string") {
+      if (isPlainObject2(entry) && typeof entry.id === "string") {
         if (seen.has(entry.id)) {
           violations.push(violation4("medium", "status.workflow.duplicate-id", `duplicate workflow id in workflows[]: ${JSON.stringify(entry.id)}`));
         }
@@ -541,22 +839,22 @@ function validateStatusV2(docOrPath, opts = {}) {
   if (harnessDir !== undefined && Array.isArray(doc.workflows)) {
     let realHarnessDir = null;
     try {
-      realHarnessDir = realpathSync(harnessDir);
+      realHarnessDir = realpathSync2(harnessDir);
     } catch {}
     for (const entry of doc.workflows) {
-      if (!isPlainObject3(entry) || typeof entry.dir !== "string")
+      if (!isPlainObject2(entry) || typeof entry.dir !== "string")
         continue;
       const relSnapshot = join6(entry.dir, WORKFLOW_SNAPSHOT_FILE);
       const snapshotPath = join6(harnessDir, relSnapshot);
       const label = typeof entry.id === "string" ? entry.id : relSnapshot;
       let physical;
       try {
-        physical = realpathSync(snapshotPath);
+        physical = realpathSync2(snapshotPath);
       } catch {
         violations.push(violation4("high", "status.workflow.snapshot-missing", `workflows[] lists ${JSON.stringify(label)} but its snapshot does not exist at ${JSON.stringify(relSnapshot)} — the root holds active lifecycles only; unregister the id when its snapshot is removed`));
         continue;
       }
-      if (realHarnessDir !== null && physical !== realHarnessDir && !physical.startsWith(`${realHarnessDir}${sep}`)) {
+      if (realHarnessDir !== null && physical !== realHarnessDir && !physical.startsWith(`${realHarnessDir}${sep2}`)) {
         violations.push(violation4("high", "status.workflow.snapshot-outside-harness", `workflows[] lists ${JSON.stringify(label)} but its snapshot resolves outside the harness dir (${JSON.stringify(physical)}) — symlinked snapshot paths are rejected; the snapshot must physically live under ${JSON.stringify(harnessDir)}`));
         continue;
       }
@@ -583,7 +881,7 @@ function validateStatusV2(docOrPath, opts = {}) {
 var validateStatus = validateStatusV2;
 function resolveCompassEnforcement(harnessDir) {
   const iterationsDir = resolveIterationDir(harnessDir);
-  if (!existsSync4(iterationsDir))
+  if (!existsSync5(iterationsDir))
     return { hard: false, source: "none" };
   let entries;
   try {
@@ -595,11 +893,11 @@ function resolveCompassEnforcement(harnessDir) {
     if (!entry.isDirectory())
       continue;
     const compassPath = join6(iterationsDir, entry.name, "delivery-compass.md");
-    if (!existsSync4(compassPath))
+    if (!existsSync5(compassPath))
       continue;
     let content;
     try {
-      content = readFileSync4(compassPath, "utf8");
+      content = readFileSync5(compassPath, "utf8");
     } catch {
       continue;
     }
@@ -614,7 +912,7 @@ function resolveCompassEnforcement(harnessDir) {
   return { hard: false, source: "none" };
 }
 function resolveMstarcEnforcement(harnessDir) {
-  const dir = resolve5(harnessDir);
+  const dir = resolve6(harnessDir);
   const rc = loadMstarc(dir, dirname4(dir));
   const value = rc?.config.enforcement;
   if (value === "hard")
@@ -630,9 +928,6 @@ function resolveRepoEnforcement(harnessDir) {
   return resolveCompassEnforcement(harnessDir);
 }
 var DATE_RE3 = /^\d{4}-\d{2}-\d{2}$/;
-function isPlainObject5(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 function violation6(severity, code, message, fix) {
   return { ok: false, severity, code, message, fix };
 }
@@ -645,7 +940,7 @@ function validateNonEmptyString4(violations, value, field, missingCode, invalidC
 }
 function validateProjectRegister(doc) {
   const violations = [];
-  if (!isPlainObject5(doc)) {
+  if (!isPlainObject2(doc)) {
     return {
       ok: false,
       violations: [violation6("high", "project.register.invalid", "project register must be an object")]
@@ -653,7 +948,7 @@ function validateProjectRegister(doc) {
   }
   if (doc.entries === undefined) {
     violations.push(violation6("high", "project.register.missing-entries", "missing required field: entries"));
-  } else if (!isPlainObject5(doc.entries)) {
+  } else if (!isPlainObject2(doc.entries)) {
     violations.push(violation6("high", "project.register.invalid-entries", "entries must be an object keyed by plan id"));
   } else {
     for (const [key, entries] of Object.entries(doc.entries)) {
@@ -666,7 +961,7 @@ function validateProjectRegister(doc) {
       }
       for (const entry of entries) {
         violations.push(...validateResidual(entry).violations);
-        if (!isPlainObject5(entry))
+        if (!isPlainObject2(entry))
           continue;
         validateNonEmptyString4(violations, entry.source_plan, "source_plan", "project.register.missing-source-plan", "project.register.invalid-source-plan");
         if (entry.registered_at === undefined) {
@@ -686,14 +981,14 @@ function validateProjectRegister(doc) {
   return { ok: violations.length === 0, violations };
 }
 function resolveHarnessDir(startDir = process.cwd(), opts = {}) {
-  const start = resolve7(startDir);
+  const start = resolve8(startDir);
   const explicit = opts.harnessDir ?? process.env.MSTAR_HARNESS_DIR;
   if (explicit)
-    return resolve7(start, explicit);
-  const boundary = resolve7(start, opts.workspaceRoot ?? defaultWorkspaceRoot(start));
+    return resolve8(start, explicit);
+  const boundary = resolve8(start, opts.workspaceRoot ?? defaultWorkspaceRoot(start));
   const rc = loadMstarc(start, boundary);
   if (rc !== null && rc.config.harnessDir)
-    return resolve7(rc.dir, rc.config.harnessDir);
+    return resolve8(rc.dir, rc.config.harnessDir);
   let dir = start;
   for (;; ) {
     if (!isAtOrBelow2(dir, boundary))
@@ -724,33 +1019,33 @@ function defaultWorkspaceRoot(startDir) {
       if (segment && segment !== ".")
         boundary = dirname5(boundary);
     }
-    return resolve7(boundary);
+    return resolve8(boundary);
   } catch {}
   return startDir;
 }
 function isAtOrBelow2(dir, root) {
   const rel = relative2(root, dir);
-  return rel === "" || !rel.startsWith("..") && !isAbsolute5(rel);
+  return rel === "" || !rel.startsWith("..") && !isAbsolute6(rel);
 }
 function mstarcDirOverride(harnessDir, key) {
-  const dir = resolve7(harnessDir);
+  const dir = resolve8(harnessDir);
   const rc = loadMstarc(dir, dirname5(dir));
   const declared = rc?.config[key];
-  return declared ? resolve7(rc.dir, declared) : null;
+  return declared ? resolve8(rc.dir, declared) : null;
 }
 function resolveIterationDir(harnessDir) {
   const declared = mstarcDirOverride(harnessDir, "iterationDir");
   if (declared !== null)
     return declared;
-  return join9(resolve7(harnessDir), "iterations");
+  return join9(resolve8(harnessDir), "iterations");
 }
 function resolveHarnessSubdir(startDir, opts, key, fallback) {
   const harness = resolveHarnessDir(startDir, opts);
   if (harness === null) {
-    throw new Error(`harness dir not found from ${resolve7(startDir)} — cannot resolve the ${fallback} dir (run \`mstar harness scaffold\`, pass opts.harnessDir, or set MSTAR_HARNESS_DIR)`);
+    throw new Error(`harness dir not found from ${resolve8(startDir)} — cannot resolve the ${fallback} dir (run \`mstar harness scaffold\`, pass opts.harnessDir, or set MSTAR_HARNESS_DIR)`);
   }
   const declared = mstarcDirOverride(harness, key);
-  return declared !== null ? declared : join9(resolve7(harness), fallback);
+  return declared !== null ? declared : join9(resolve8(harness), fallback);
 }
 function resolveWorkflowDir(startDir = process.cwd(), opts = {}) {
   return resolveHarnessSubdir(startDir, opts, "workflowDir", "workflows");
@@ -815,7 +1110,7 @@ function hasHarnessRootMarkers(dir) {
   }
 }
 function resolveHarnessRootOf(target) {
-  let dir = resolve10(target);
+  let dir = resolve11(target);
   for (;; ) {
     if (hasHarnessRootMarkers(dir))
       return dir;
@@ -828,8 +1123,8 @@ function resolveHarnessRootOf(target) {
 function harnessDocKindOfTarget(targetPath) {
   if (typeof targetPath !== "string" || targetPath.trim() === "")
     return null;
-  const resolved = resolve10(targetPath);
-  const name = basename6(resolved);
+  const resolved = resolve11(targetPath);
+  const name = basename7(resolved);
   if (name !== STATUS_FILE && name !== SNAPSHOT_FILE && name !== REGISTER_FILE)
     return null;
   const classify = (harnessDir2) => {
@@ -876,7 +1171,7 @@ function oversizedViolation(filePath) {
     ok: false,
     severity: "high",
     code: "status.oversized",
-    message: `${basename6(filePath)} exceeds the ${MAX_STATUS_CONTENT_LENGTH}-byte (2 MiB) coordination-document validation budget — repair out of band or disable for this session with MSTAR_WRITE_GATE=off`
+    message: `${basename7(filePath)} exceeds the ${MAX_STATUS_CONTENT_LENGTH}-byte (2 MiB) coordination-document validation budget — repair out of band or disable for this session with MSTAR_WRITE_GATE=off`
   };
 }
 function validateStatusWriteDoc(content, filePath, kind, options = {}) {
@@ -904,13 +1199,13 @@ function validateStatusWriteDoc(content, filePath, kind, options = {}) {
           ok: false,
           severity: "high",
           code: "status.invalid-json",
-          message: `${basename6(filePath)} content must be a JSON object`
+          message: `${basename7(filePath)} content must be a JSON object`
         }
       ];
     }
     return validateDocByKind(doc2, kind);
   }
-  if (!existsSync10(filePath))
+  if (!existsSync11(filePath))
     return [];
   try {
     if (statSync5(filePath).size > MAX_STATUS_CONTENT_LENGTH) {
@@ -1035,7 +1330,7 @@ try {
   const tool = toolInput;
   const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
   for (const rawPath of writeTargetPaths(tool)) {
-    const targetPath = isAbsolute3(rawPath) ? rawPath : join(cwd, rawPath);
+    const targetPath = isAbsolute4(rawPath) ? rawPath : join(cwd, rawPath);
     const target = harnessDocKindOfTarget(targetPath);
     if (target === null)
       continue;
@@ -1047,7 +1342,7 @@ try {
     if (!enforcement.hard)
       continue;
     const rel = relative3(target.harnessDir, targetPath);
-    const display = displaySafe(rel && !rel.startsWith("..") && !isAbsolute3(rel) ? rel : targetPath);
+    const display = displaySafe(rel && !rel.startsWith("..") && !isAbsolute4(rel) ? rel : targetPath);
     writeSync(2, `[Morning Star write gate] blocked ${toolName} to ${display}
 `);
     writeSync(2, `${formatStatusWriteBlockReason(violations, SKILL_POINTER)}
