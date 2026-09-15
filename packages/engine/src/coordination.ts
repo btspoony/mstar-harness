@@ -59,7 +59,14 @@ import {
   type PreparedCoordination,
   type RowCoordination,
 } from "./coordination-write.js";
-import { claimLease, transferLease, withStatusWriteLock, type IntegrationMergeLease } from "./lease.js";
+import {
+  claimLease,
+  transferLease,
+  validateExecutionLease,
+  withStatusWriteLock,
+  type ExecutionLease,
+  type IntegrationMergeLease,
+} from "./lease.js";
 import {
   assertSafePathComponent,
   canonicalizeNearestExisting,
@@ -77,7 +84,7 @@ import {
   type ProjectRegisterDoc,
   type ProjectRegisterEntry,
 } from "./project.js";
-import { validateResidual, validateStatusV2, type PlanRow, type StatusV2Doc } from "./status.js";
+import { rowPlanIds, validateResidual, validateStatusV2, type PlanRow, type StatusV2Doc } from "./status.js";
 import { getArtifactStore, resolveArtifactPath, type ArtifactRef, type ArtifactStore } from "./store.js";
 import { readMainWorktree, type MainWorktreeInfo } from "./worktree.js";
 import { readWorkflowSnapshot, validateWorkflowSnapshot, writeWorkflowSnapshot, type WorkflowSnapshot } from "./workflow.js";
@@ -360,12 +367,6 @@ function assertViolationFree(violations: readonly { code: string; message: strin
       violations: violations.map((entry) => entry.code),
     });
   }
-}
-
-function rowPlanId(row: PlanRow): string | undefined {
-  if (isNonEmptyString(row.plan_id)) return row.plan_id;
-  if (isNonEmptyString(row.id)) return row.id;
-  return undefined;
 }
 
 function rowCoordinationOf(row: PlanRow): RowCoordination | undefined {
@@ -681,7 +682,9 @@ function readSnapshot(dir: string): WorkflowSnapshot {
 }
 
 function findPlanRow(snapshot: WorkflowSnapshot, planId: string): { row: PlanRow; index: number } {
-  const matches = snapshot.plans.map((row, index) => ({ row, index })).filter((entry) => rowPlanId(entry.row) === planId);
+  const matches = snapshot.plans
+    .map((row, index) => ({ row, index }))
+    .filter((entry) => rowPlanIds(entry.row).includes(planId));
   if (matches.length === 0) {
     throw new CoordinationError("coordination.plan-not-found", `plan ${planId} is not a row of workflow ${snapshot.id}`, {
       workflow_id: snapshot.id,
@@ -1105,8 +1108,51 @@ function assertCoordinatorBinding(session: CoordinationSession, sessionPath: str
   }
 }
 
-/** A plan session must match the row's session binding. */
-function assertRowBinding(session: CoordinationSession, sessionPath: string, row: PlanRow, planId: string): void {
+/**
+ * The row's own execution lease, validated (spec §C2/§C3: a released lease is
+ * deleted, `null`/tombstone objects are invalid). Fails closed — callers that
+ * need a holder never proceed on an absent or malformed lease.
+ */
+function requireExecutionLease(row: PlanRow, planId: string, what: string): ExecutionLease {
+  const gate = validateExecutionLease(row.execution_lease);
+  if (!gate.ok) {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `${what} requires ${planId} to hold an active execution lease — ${summarize(gate.violations)}`,
+      { plan_id: planId, violations: gate.violations.map((entry) => entry.code) },
+    );
+  }
+  // Boundary cast: `validateExecutionLease` just proved the shape.
+  return row.execution_lease as ExecutionLease;
+}
+
+/** The row's execution lease, proven to be held by `holder` (spec §D). */
+function assertExecutionHolder(row: PlanRow, holder: string, planId: string, what: string): void {
+  const lease = requireExecutionLease(row, planId, what);
+  if (lease.holder !== holder) {
+    throw new CoordinationError(
+      "coordination.session-mismatch",
+      `${what} requires ${planId}'s execution lease held by ${holder} — it is held by ${lease.holder}`,
+      { plan_id: planId, expected: holder, actual: lease.holder },
+    );
+  }
+}
+
+/**
+ * A plan session must match the row's session binding, and — for a write — must
+ * still hold the row's execution lease: identity is not ownership, and a
+ * transferred or released lease ends the plan's authority (§D "claim before
+ * InProgress"; §E keeps both leases until complete). Only the read paths
+ * (`show`/`resume`) pass `readOnly`, because a completed row carries no lease
+ * yet stays reportable.
+ */
+function assertRowBinding(
+  session: CoordinationSession,
+  sessionPath: string,
+  row: PlanRow,
+  planId: string,
+  options: { readOnly?: boolean } = {},
+): void {
   const binding = rowCoordinationOf(row)?.session;
   if (binding === undefined) {
     throw new CoordinationError("coordination.not-prepared", `plan ${planId} has no bound plan session`, {
@@ -1127,6 +1173,7 @@ function assertRowBinding(session: CoordinationSession, sessionPath: string, row
       { expected: binding.session_file, actual: canonicalTarget(sessionPath) },
     );
   }
+  if (options.readOnly !== true) assertExecutionHolder(row, session.session_id, planId, "a plan-owned write");
 }
 
 /** Reject row mutations while a handoff owns the plan's transition. */
@@ -1272,7 +1319,7 @@ export async function readPlanCoordination(
   if (session.role === "coordinator") {
     assertCoordinatorBinding(session, sessionPath, snapshot);
   } else {
-    assertRowBinding(session, sessionPath, row, targetPlanId);
+    assertRowBinding(session, sessionPath, row, targetPlanId, { readOnly: true });
   }
 
   const prepared = rowCoordinationOf(row)?.prepared;
@@ -1639,12 +1686,12 @@ function resumeBoundSession(resumePath: string): CoordinationResult {
     });
   }
   const { row } = findPlanRow(snapshot, planId);
-  assertRowBinding(session, sessionPath, row, planId);
+  assertRowBinding(session, sessionPath, row, planId, { readOnly: true });
   // A session that no longer holds the row's lease was released: report it, do
-  // not reacquire (spec §C2 never infers a resume).
+  // not reacquire (spec §C2 never infers a resume). `holder` is the ownership
+  // field — any other value that happens to equal the session id is not a claim.
   const lease = row.execution_lease;
-  const held = isPlainObject(lease) ? Object.values(lease) : [];
-  if (!held.includes(session.session_id)) {
+  if (!isPlainObject(lease) || lease.holder !== session.session_id) {
     throw new CoordinationError(
       "coordination.duplicate-holder",
       `plan ${planId} holds no live lease for session ${session.session_id} — it was released; a fresh bind is required`,
@@ -1706,7 +1753,7 @@ function assertTrackBranches(context: RowContext, branches: readonly string[]): 
     for (const value of Object.values(context.snapshot.branch)) if (isNonEmptyString(value)) forbidden.add(value);
   }
   for (const row of context.snapshot.plans) {
-    if (rowPlanId(row) === context.scope.planId) continue;
+    if (rowPlanIds(row).includes(context.scope.planId)) continue;
     for (const branch of reportedBranchesOf(row)) forbidden.add(branch);
   }
   const seen = new Set<string>();
@@ -1772,6 +1819,16 @@ async function mutatePrepare(
           "coordination.invalid-transition",
           `plan ${scope.planId} is handed off — preparation precedes the handoff`,
           { plan_id: scope.planId },
+        );
+      }
+      // §D prepare: Todo/Blocked with no execution lease — a sealed row with a
+      // second owner would make the plan session ambiguous. `null` and
+      // tombstone objects are existing keys, not absent ones.
+      if (context.row.execution_lease !== undefined) {
+        throw new CoordinationError(
+          "coordination.duplicate-holder",
+          `plan ${scope.planId} already carries an execution lease — prepare must not seal a second owner`,
+          { plan_id: scope.planId, holder: isPlainObject(context.row.execution_lease) ? context.row.execution_lease.holder : null },
         );
       }
       if (!isClaimableStatus(rowStatusOf(context.row))) {
@@ -1900,19 +1957,26 @@ async function mutateProgress(
 
 type RegisterBytes = { doc: ProjectRegisterDoc; version: string; path: string };
 
-/** Read one project register (payload + byte version) — single byte read. */
+/**
+ * The project register as stored, or the absent placeholder (spec §C3): absent
+ * bytes are a legitimate empty state, but existing bytes are validated before
+ * anyone reads findings or transforms residuals — a malformed document fails
+ * and is never normalized into an empty register.
+ */
 function readRegister(harnessRoot: string, projectId: string): RegisterBytes {
   const path = registerPathOf(harnessRoot, projectId);
   const bytes = readArtifactBytes(path);
   if (bytes === undefined) return { doc: {}, version: "absent", path };
-  const payload = bytes.payload;
-  if (!isPlainObject(payload)) {
-    throw new CoordinationError("coordination.store", `project register is not an object: ${path}`, { path });
+  const gate = validateProjectRegister(bytes.payload);
+  if (!gate.ok) {
+    throw new CoordinationError(
+      "coordination.store",
+      `project register ${path} is malformed — ${summarize(gate.violations)}`,
+      { path, violations: gate.violations.map((entry) => entry.code) },
+    );
   }
-  // Boundary cast: the register document is re-validated (`validateProjectRegister`)
-  // before every write, and `entries` is re-checked on each read below.
-  const doc = payload as ProjectRegisterDoc;
-  return { doc, version: bytes.version, path };
+  // Boundary cast: `validateProjectRegister` just proved the document shape.
+  return { doc: bytes.payload as ProjectRegisterDoc, version: bytes.version, path };
 }
 
 function registerEntriesOf(doc: ProjectRegisterDoc, planId: string): ProjectRegisterEntry[] {
@@ -2121,7 +2185,7 @@ async function writeRegister(
     const current = readRegister(scope.harnessRoot, scope.projectId);
     if (current.version !== expectedVersion) {
       throw new CoordinationError(
-        "coordination.register-version-conflict",
+        "coordination.version-conflict",
         `${path} is at version ${current.version}, expected ${expectedVersion} — re-run \`mstar plan show\` and retry`,
         { expected: expectedVersion, actual: current.version, path },
       );
@@ -2477,10 +2541,13 @@ function evidenceRef(value: unknown, what: string): EvidenceRef {
   return evidenceRefOf(path);
 }
 
-/** Handoff evidence validated and hashed for the durable record (spec §D). */
+/**
+ * Handoff evidence validated and hashed for the durable record (spec §D). The
+ * plan worktree is not a caller input: it is read from the persisted scope, so
+ * a conforming caller cannot be rejected for omitting or spoofing it.
+ */
 type HandoffEvidenceInput = {
   source_sha: string;
-  worktree_path: string;
   review_base: string;
   review_head: string;
   qc_decision: string;
@@ -2494,13 +2561,10 @@ type HandoffEvidenceInput = {
 /** The plan session supplies paths and revisions only — never state or holder. */
 function readHandoffEvidence(value: unknown): HandoffEvidenceInput {
   if (!isPlainObject(value)) {
-    throw invalidInput(
-      "handoff requires an evidence object with source_sha, worktree_path, review_base, review_head, qc and qa",
-    );
+    throw invalidInput("handoff requires an evidence object with source_sha, review_base, review_head, qc and qa");
   }
-  assertExactKeys(value, ["source_sha", "worktree_path", "review_base", "review_head", "qc", "qa"], "handoff evidence");
+  assertExactKeys(value, ["source_sha", "review_base", "review_head", "qc", "qa"], "handoff evidence");
   const source_sha = assertGitObjectId(value.source_sha, "evidence.source_sha");
-  const worktree_path = evidencePath(value.worktree_path, "evidence.worktree_path");
   const review_base = assertGitObjectId(value.review_base, "evidence.review_base");
   const review_head = assertGitObjectId(value.review_head, "evidence.review_head");
   const qc = value.qc;
@@ -2532,7 +2596,6 @@ function readHandoffEvidence(value: unknown): HandoffEvidenceInput {
   const qa_report = evidenceRef(qa.report, "evidence.qa.report");
   return {
     source_sha,
-    worktree_path,
     review_base,
     review_head,
     qc_decision: qc.decision,
@@ -2617,19 +2680,15 @@ function assertEvidenceDigests(handoff: PlanHandoff): void {
   }
 }
 
-/** Feature HEAD, cleanliness and the review range of one handoff (spec §D). */
+/**
+ * Feature HEAD, cleanliness and the review range of one handoff (spec §D). The
+ * worktree is the persisted scope's — never an evidence field.
+ */
 function assertHandoffGitProof(
   scope: ResolvedPlanScope,
   input: HandoffEvidenceInput,
   what: string,
 ): void {
-  if (canonicalTarget(input.worktree_path) !== canonicalTarget(scope.worktreePath)) {
-    throw new CoordinationError(
-      "coordination.path-mismatch",
-      `${what} evidence worktree_path ${input.worktree_path} is not the plan's recorded worktree ${scope.worktreePath}`,
-      { plan_id: scope.planId, expected: scope.worktreePath, actual: input.worktree_path },
-    );
-  }
   assertFeatureCheckout(scope, input.source_sha, what);
   if (input.review_head !== input.source_sha) {
     throw gitProof(
@@ -2734,12 +2793,13 @@ async function mutateHandoff(
 }
 
 /**
- * Move the row's execution lease holder when a lease is active (spec §D/§E).
- * A row without a lease still transitions: there is no holder to move.
+ * Move the row's execution lease, failing closed (spec §D/§E): the lease must
+ * exist and be held by `from`, because every caller here hands ownership over.
+ * An absent, `null` or foreign lease is a refusal — never a silent no-op that
+ * leaves the row owned by nobody or by the wrong session.
  */
 function transferRowLease(row: PlanRow, from: string, to: string, what: string, planId: string): PlanRow {
-  const lease = row.execution_lease;
-  if (lease === undefined || lease === null) return row;
+  assertExecutionHolder(row, from, planId, what);
   const transferred = transferLease(row, from, to);
   if (!transferred.ok) {
     throw new CoordinationError(
@@ -2827,7 +2887,17 @@ async function mutateReturn(
     },
     mutate: (context) => {
       const handoff = requireHandoff(context, scope.planId);
-      const row = transferRowLease(context.row, session.session_id, handoff.submitted_by, "return", scope.planId);
+      // The lease follows the record (spec §D): handoff keeps the plan's lease,
+      // accept moves it to the coordinator, so a return from `submitted` only
+      // proves the plan session still holds it, while a return from `accepted`
+      // restores it — neither may re-claim on the plan's behalf.
+      let row: PlanRow;
+      if (handoff.state === "accepted") {
+        row = transferRowLease(context.row, session.session_id, handoff.submitted_by, "return", scope.planId);
+      } else {
+        assertExecutionHolder(context.row, handoff.submitted_by, scope.planId, "return");
+        row = context.row;
+      }
       const nextCoordination: RowCoordination = {
         ...(context.coordination ?? { revision: 0 }),
         revision: context.revision + 1,
@@ -2928,21 +2998,33 @@ type IntegrationProof =
   | { kind: "diverged"; reason: string };
 
 /**
- * Prove the attempt from the pinned objects (spec §E): either the source was
- * already an ancestor of the recorded base, or the first-parent path from the
- * base to the current integration HEAD carries exactly one merge whose parents
- * are exactly base then source. Zero candidates is `pending` (nothing merged
- * yet); several are `diverged` — a result is never picked out of a set.
+ * Prove the attempt from the pinned objects (spec §E): the pinned base must
+ * still be an ancestor of `head`, the integration HEAD the proof is taken
+ * against — otherwise the checkout has moved on and no merge in it belongs to
+ * this attempt. Given that, either the source was already an ancestor of the
+ * recorded base, or the first-parent path from the base to `head` carries
+ * exactly one merge whose parents are exactly base then source. Zero
+ * candidates is `pending` (nothing merged yet); several are `diverged` — a
+ * result is never picked out of a set.
  */
-function integrationProof(path: string, baseSha: string, sourceSha: string): IntegrationProof {
+function integrationProof(path: string, head: string, baseSha: string, sourceSha: string): IntegrationProof {
   if (!gitObjectExists(path, baseSha)) {
     return { kind: "diverged", reason: `the pinned base ${baseSha} is unavailable` };
   }
   if (!gitObjectExists(path, sourceSha)) {
     return { kind: "diverged", reason: `the pinned source ${sourceSha} is unavailable` };
   }
+  if (!gitObjectExists(path, head)) {
+    return { kind: "diverged", reason: `the integration HEAD ${head} is unavailable` };
+  }
+  if (!gitIsAncestor(path, baseSha, head)) {
+    return {
+      kind: "diverged",
+      reason: `the pinned base ${baseSha} is not an ancestor of the integration HEAD ${head}`,
+    };
+  }
   if (gitIsAncestor(path, sourceSha, baseSha)) return { kind: "proven", resultSha: baseSha };
-  const range = gitRead(path, ["rev-list", "--first-parent", `${baseSha}..HEAD`]);
+  const range = gitRead(path, ["rev-list", "--first-parent", `${baseSha}..${head}`]);
   if (range === undefined) {
     return { kind: "diverged", reason: `the first-parent path ${baseSha}..HEAD is unreadable` };
   }
@@ -3075,6 +3157,10 @@ async function mutateIntegrationStart(
       }
       assertEvidenceDigests(handoff);
       assertFeatureCheckout(scope, handoff.source_sha, "integration-start");
+      // The coordinator owns the row between accept and complete: integration
+      // must never proceed on a row nobody holds (spec §D/§E — both leases stay
+      // until complete, so an absent one means ownership was lost).
+      assertExecutionHolder(context.row, session.session_id, scope.planId, "integration-start");
       assertMergeLease(context.snapshot, session, scope.planId);
       assertIntegrationCheckout(integrationAnchors(context.snapshot, scope.planId), scope.planId);
     },
@@ -3164,11 +3250,12 @@ async function mutateIntegrationAccept(
         );
       }
       assertEvidenceDigests(handoff);
+      assertExecutionHolder(context.row, session.session_id, scope.planId, "integration-accept");
       assertMergeLease(context.snapshot, session, scope.planId);
       const integration = requireIntegration(handoff, scope.planId);
       const anchors = integrationAnchors(context.snapshot, scope.planId);
-      assertIntegrationCheckout(anchors, scope.planId);
-      proof = integrationProof(anchors.worktreePath, integration.base_sha, handoff.source_sha);
+      const checkout = assertIntegrationCheckout(anchors, scope.planId);
+      proof = integrationProof(anchors.worktreePath, checkout.head, integration.base_sha, handoff.source_sha);
       if (proof.kind === "diverged") {
         throw integrationDiverged(`plan ${scope.planId} integration cannot be proven — ${proof.reason}`, {
           plan_id: scope.planId,
@@ -3289,6 +3376,7 @@ async function mutateComplete(
       }
       assertEvidenceDigests(handoff);
       assertFindingsClosed(scope, prepared, "complete");
+      assertExecutionHolder(context.row, session.session_id, scope.planId, "complete");
       assertMergeLease(context.snapshot, session, scope.planId);
       const integration = requireIntegration(handoff, scope.planId);
       const anchors = integrationAnchors(context.snapshot, scope.planId);
@@ -3376,6 +3464,10 @@ function classifyReconcile(
     const integration = requireIntegration(handoff, planId);
     const anchors = integrationAnchors(context.snapshot, planId);
     const checkout = assertIntegrationCheckout(anchors, planId);
+    // `completed` above is the read-only replay; every other path completes the
+    // row, so the coordinator must still hold the execution lease it received
+    // at accept (spec §E — nothing is replayed into ownership).
+    assertExecutionHolder(context.row, session.session_id, planId, "reconcile");
     assertMergeLease(context.snapshot, session, planId);
     const merged = (resultSha: string): ReconcilePlan => {
       assertFindingsClosed(scope, prepared, "complete");
@@ -3388,7 +3480,7 @@ function classifyReconcile(
       const resultSha = assertRecordedResult(anchors.worktreePath, planId, integration, handoff.source_sha, checkout.head);
       return merged(resultSha);
     }
-    const proof = integrationProof(anchors.worktreePath, integration.base_sha, handoff.source_sha);
+    const proof = integrationProof(anchors.worktreePath, checkout.head, integration.base_sha, handoff.source_sha);
     if (proof.kind === "diverged") {
       throw integrationDiverged(`plan ${planId} integration cannot be reconciled — ${proof.reason}`, {
         plan_id: planId,
@@ -3659,12 +3751,18 @@ function coordinatedOwnershipOf(
 ): CoordinatedOwnership {
   const workflows: string[] = [];
   const plans = new Set<string>();
+  // Membership is decided by canonical snapshot path, never by object
+  // identity: a replacement that retains an existing workflow passes its own
+  // entry object for the very file the lock was taken on (spec §C4 — the
+  // guard judges the document set, not the caller's instances).
+  const lockedPaths = new Set(locked.map((entry) => canonicalizeNearestExisting(entry.snapshotPath)));
   for (const entry of subset) {
-    if (!locked.includes(entry)) {
+    const snapshotPath = canonicalizeNearestExisting(entry.snapshotPath);
+    if (!lockedPaths.has(snapshotPath)) {
       throw new CoordinationError(
         "coordination.store",
-        `snapshot ${entry.snapshotPath} was not locked before the protection discovery`,
-        { path: entry.snapshotPath },
+        `snapshot ${snapshotPath} was not locked before the protection discovery`,
+        { path: snapshotPath },
       );
     }
     const snapshot = readSnapshot(dirname(entry.snapshotPath));
@@ -3673,19 +3771,26 @@ function coordinatedOwnershipOf(
     for (const row of snapshot.plans ?? []) {
       if (!isPlainObject(row)) continue;
       const coordination = row.coordination;
-      if (isPlainObject(coordination) && coordination.prepared !== undefined) plans.add(String(row.id));
+      // Every address the row answers to (`id` and/or legacy `plan_id`): a
+      // prepared row reachable under either key makes that key protected.
+      if (isPlainObject(coordination) && coordination.prepared !== undefined) {
+        for (const planId of rowPlanIds(row)) plans.add(planId);
+      }
     }
   }
   return { workflows, plans };
 }
 
-/** The workflow entries both documents name, deduplicated by snapshot path. */
+/** The workflow entries both documents name, deduplicated by canonical snapshot path. */
 function lockableEntries(...groups: readonly WorkflowEntryRef[][]): WorkflowEntryRef[] {
   const byPath = new Map<string, WorkflowEntryRef>();
-  for (const entry of groups.flat()) if (!byPath.has(entry.snapshotPath)) byPath.set(entry.snapshotPath, entry);
-  return [...byPath.values()].sort((left, right) =>
-    canonicalizeNearestExisting(left.snapshotPath).localeCompare(canonicalizeNearestExisting(right.snapshotPath)),
-  );
+  for (const entry of groups.flat()) {
+    const key = canonicalizeNearestExisting(entry.snapshotPath);
+    if (!byPath.has(key)) byPath.set(key, entry);
+  }
+  return [...byPath.entries()]
+    .sort((left, right) => left[0].localeCompare(right[0]))
+    .map(([, entry]) => entry);
 }
 
 /** Bucket keys (plan ids) a project register doc holds, if any. */
