@@ -29,7 +29,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
-import { isAbsolute, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import type { ValidationResult } from "./core.js";
 
 /** Stable refusal codes of the scoped coordination surface (spec §C4). */
@@ -128,16 +128,33 @@ export function readArtifactBytes(filePath: string): ArtifactBytes | undefined {
 }
 
 /**
- * Canonicalize a target: realpath when it exists (symlinks resolved), else
- * the lexical absolute path. Aliases therefore collapse onto the real
- * protected file, so a `json`/symlink ref can never dodge the boundary.
+ * Canonicalize a target: realpath when it exists (symlinks resolved), else the
+ * realpath of its nearest existing ancestor with the missing tail re-attached.
+ * Aliases therefore collapse onto the real protected file whether or not the
+ * leaf has been created yet, so a `json`/symlink ref can never dodge the
+ * boundary. A lexical fallback would do exactly that: a symlinked parent stays
+ * unresolved, the alias classifies as unprotected, and `put` creates the
+ * protected document through it.
+ *
+ * The same rule as `path.ts#canonicalizeNearestExisting`, restated here because
+ * `path.ts` imports this module (importing back would close an ESM cycle).
  */
 export function canonicalTarget(target: string): string {
   const abs = resolve(target);
-  try {
-    return realpathSync(abs);
-  } catch {
-    return abs;
+  let dir = abs;
+  const tail: string[] = [];
+  for (;;) {
+    if (existsSync(dir)) {
+      try {
+        return join(realpathSync(dir), ...tail);
+      } catch {
+        return abs;
+      }
+    }
+    const parent = dirname(dir);
+    if (parent === dir) return abs; // reached the filesystem root
+    tail.unshift(basename(dir));
+    dir = parent;
   }
 }
 
