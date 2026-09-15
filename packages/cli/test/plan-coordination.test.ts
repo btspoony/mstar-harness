@@ -449,24 +449,79 @@ describe("mstar plan — strict-input", () => {
 
   test("--expect-register accepts only absent or the exact version token (exit 2)", () => {
     const fixture = makeFixture();
-    for (const value of ["latest", "sha256:ABC", "sha256:0"]) {
-      const result = runCli(
-        [
-          "plan",
-          "residual-add",
-          "--session",
-          "/tmp/nope.json",
-          "--file",
-          join(fixture.root, "entries.json"),
-          "--expect",
-          "0",
-          "--expect-register",
-          value,
-        ],
-        fixture.root,
-      );
-      expect({ value, exitCode: result.exitCode }).toEqual({ value, exitCode: 2 });
+    // A real, parseable payload file. The flag is validated before any payload
+    // is read, so a malformed token never degrades into a payload-read failure
+    // and the payload bytes are never consumed.
+    const entriesPath = join(fixture.root, "entries.json");
+    const payload = `${JSON.stringify(
+      [
+        {
+          id: "R1",
+          title: "residual one",
+          severity: "low",
+          source: "cli-tests",
+          scope: "cli",
+          decision: "defer",
+          owner: "pm",
+          target: "later",
+          tracking: "plan",
+        },
+      ],
+      null,
+      2,
+    )}\n`;
+    writeText(entriesPath, payload);
+    // Two payload states: the existing file above, and a missing one. The
+    // missing leg is the one that pins the ordering — with the payload read
+    // first it reports "payload file not found" (still exit 2) and this case
+    // fails, so the refusal must come from the flag in both states.
+    for (const [state, file] of [
+      ["existing", entriesPath],
+      ["missing", join(fixture.root, "absent.json")],
+    ] as const) {
+      for (const value of ["latest", "sha256:ABC", "sha256:0"]) {
+        const result = runCli(
+          [
+            "plan",
+            "residual-add",
+            "--session",
+            "/tmp/nope.json",
+            "--file",
+            file,
+            "--expect",
+            "0",
+            "--expect-register",
+            value,
+          ],
+          fixture.root,
+        );
+        expect(`${state} ${value} -> ${result.exitCode}`).toBe(`${state} ${value} -> 2`);
+        expect(result.stderr).toContain('--expect-register must be "absent" or sha256:<64 lowercase hex>');
+        expect(result.stderr).not.toContain("payload file not found");
+      }
     }
+    expect(readText(entriesPath)).toBe(payload);
+    // Positive control: with a valid token the same invocation gets past the
+    // flag AND the payload read (the file above is genuinely parseable) and
+    // fails later on the missing session — so the refusals above came from the
+    // flag, never from the payload file.
+    const accepted = runCli(
+      [
+        "plan",
+        "residual-add",
+        "--session",
+        "/tmp/nope.json",
+        "--file",
+        entriesPath,
+        "--expect",
+        "0",
+        "--expect-register",
+        "absent",
+      ],
+      fixture.root,
+    );
+    expect(accepted.exitCode).toBe(1);
+    expect(accepted.stderr).toContain("session envelope not found");
   });
 
   test("--json failures are parseable on stdout and exit 1 differs from usage exit 2", () => {

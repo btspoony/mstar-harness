@@ -546,7 +546,8 @@ describe("writeWorkflowSnapshot — whole-rewrite under withStatusWriteLock", ()
     const path = join(dir, WORKFLOW_SNAPSHOT_FILE);
     const stored = validSnapshot({ updated_at: "2026-08-19T10:00:00Z" });
     await writeWorkflowSnapshot(stored as never, dir);
-    const version = artifactVersion(readFileSync(path, "utf8"));
+    const onDisk = readFileSync(path, "utf8");
+    const version = artifactVersion(onDisk);
     const tampered = {
       ...stored,
       status: "completed",
@@ -557,6 +558,20 @@ describe("writeWorkflowSnapshot — whole-rewrite under withStatusWriteLock", ()
     expect(await refusalCode(() => writeWorkflowSnapshot(tampered as never, dir, { expectedVersion: version }))).toBe(
       "coordination.direct-write-refused",
     );
+    expect(readFileSync(path, "utf8")).toBe(onDisk);
+    // The widening this case pins: the pre-fix public surface let a caller
+    // *name* the lifecycle scalars it was rewriting on top of
+    // `phase`/`updated_at`, so this exact shape used to be honoured. The
+    // option is gone from the type — the cast is the test boundary, and the
+    // runtime path it opened must stay closed.
+    const legacyAuthority = ["status", "ended_at", "type", "started_at"] as const;
+    const widened = { ...stored, status: "running", ended_at: undefined, updated_at: "2026-08-19T11:00:00Z" };
+    expect(
+      await refusalCode(() =>
+        writeWorkflowSnapshot(widened as never, dir, { expectedVersion: version, authority: legacyAuthority } as never),
+      ),
+    ).toBe("coordination.direct-write-refused");
+    expect(readFileSync(path, "utf8")).toBe(onDisk);
     const projected = { ...stored, phase: "Phase 3", updated_at: "2026-08-19T11:00:00Z" };
     await writeWorkflowSnapshot(projected as never, dir, { expectedVersion: version });
     const written = JSON.parse(readFileSync(path, "utf8"));

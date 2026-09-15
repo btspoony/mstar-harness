@@ -432,12 +432,30 @@ describe("fail-loud path agreement  — register writers vs the active store roo
 
 describe("coordinated-writer — the legacy backlog helpers refuse coordinated plan keys", () => {
   /**
-   * Register one coordinated workflow whose row id is `planId`, using the
-   * validated writers so the fixtures match what the guard actually reads:
-   * root register -> snapshot row carrying a `coordination` block.
+   * Register one coordinated workflow whose row is addressed by `planId`,
+   * using the validated writers so the fixtures match what the guard actually
+   * reads: root register -> snapshot row carrying a `coordination` block.
+   * `address` picks the key slot the row carries: the canonical `id`
+   * (default) or the legacy `plan_id` ALONE — a coordinated row whose `id`
+   * is empty, which the backlog helpers must still refuse (T1-OWN-003: the
+   * protected key `plan-a` is what the writer names, not the row's slot).
    */
-  async function seedCoordinatedWorkflow(root: string, planId: string): Promise<void> {
+  async function seedCoordinatedWorkflow(
+    root: string,
+    planId: string,
+    address: "id" | "plan_id" = "id",
+  ): Promise<void> {
     const workflowId = "wf-coordinated";
+    const row =
+      address === "id"
+        ? { id: planId, title: "Coordinated plan", file: "plans/plan.md", status: "Todo", coordination: { revision: 1 } }
+        : {
+            plan_id: planId,
+            title: "Coordinated plan",
+            file: "plans/plan.md",
+            status: "Todo",
+            coordination: { revision: 1 },
+          };
     await writeWorkflowSnapshot(
       {
         schema_version: 1,
@@ -446,7 +464,7 @@ describe("coordinated-writer — the legacy backlog helpers refuse coordinated p
         status: "running",
         started_at: "2026-09-15T00:00:00Z",
         updated_at: "2026-09-15",
-        plans: [{ id: planId, title: "Coordinated plan", file: "plans/plan.md", status: "Todo", coordination: { revision: 1 } }],
+        plans: [row],
       } as never,
       join(root, "workflows", workflowId),
     );
@@ -475,6 +493,47 @@ describe("coordinated-writer — the legacy backlog helpers refuse coordinated p
     const { root, dir } = harnessProject("coordinated-writer-close-");
     try {
       await seedCoordinatedWorkflow(root, "plan-a");
+      const doc = {
+        entries: { "plan-a": [residualEntry({ id: "R-9", source_plan: "plan-a" })] },
+      };
+      const content = `${JSON.stringify(doc, null, 2)}\n`;
+      writeFileSync(registerPath(dir), content, "utf8");
+      await expect(
+        closeProjectRegisterEntry({
+          projectDir: dir,
+          planKey: "plan-a",
+          entryId: "R-9",
+          closureNote: "should never land",
+        }),
+      ).rejects.toMatchObject({ code: "coordination.scoped-writer-required" });
+      expect(readFileSync(registerPath(dir), "utf8")).toBe(content);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("append onto a coordinated plan key refuses when the row carries only the legacy plan_id (T1-OWN-003)", async () => {
+    const { root, dir } = harnessProject("coordinated-writer-legacy-append-");
+    try {
+      // The guard's ownership discovery reads the row's addresses, not its
+      // canonical slot: a coordinated row whose `id` is absent and whose
+      // `plan_id` names the writer's key is still protected (project.ts
+      // consumes every `rowPlanIds` value).
+      await seedCoordinatedWorkflow(root, "plan-a", "plan_id");
+      const content = seedRegister(dir);
+      await expect(
+        appendProjectRegisterEntries({ projectDir: dir, basePlanKey: "plan-a", entries: [residualEntry()] as never }),
+      ).rejects.toMatchObject({ code: "coordination.scoped-writer-required" });
+      expect(readFileSync(registerPath(dir), "utf8")).toBe(content);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("close on a coordinated plan key refuses when the row carries only the legacy plan_id (T1-OWN-003)", async () => {
+    const { root, dir } = harnessProject("coordinated-writer-legacy-close-");
+    try {
+      await seedCoordinatedWorkflow(root, "plan-a", "plan_id");
       const doc = {
         entries: { "plan-a": [residualEntry({ id: "R-9", source_plan: "plan-a" })] },
       };
