@@ -1,6 +1,6 @@
 /**
  * Engine scoped-plan coordination — slice A (core, binding and read
- * operations) of plan `20260915-plan-coordination` Task 1.
+ * operations: session envelope, scope resolution, residual provenance).
  *
  * Spec sources (each group cites the section it enforces):
  * - Spec §B — one coordinator session per lifecycle, one plan session per plan;
