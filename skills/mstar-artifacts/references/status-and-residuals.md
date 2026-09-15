@@ -411,14 +411,7 @@ The scoped route（`/iteration-drive --assignment | --workflow <id> --plan <id> 
 
 ### Reconcile outcomes (crash recovery)
 
-| Observed state | Outcome |
-| --- | --- |
-| `integrating`; no merge result present | retry-ready — rerun the documented `git -C <integration-path> merge --no-ff --no-edit <pinned-source-sha>` in the integration worktree |
-| `integrating`; source already an ancestor of base, or the unique exact two-parent merge proof exists and is an ancestor of HEAD | record proof, then apply atomic completion (`completed`) — **no duplicate merge** |
-| `integrating`; `MERGE_HEAD` / conflicts or dirty checkout | refuse `coordination.integration-unresolved`; preserve all state and both leases; resolve or explicitly abort Git, then reconcile |
-| `integrating` / `merged`; moved or missing branch, unexpected parent graph, multiple matches, unavailable objects, changed evidence | refuse `coordination.integration-diverged` / `coordination.evidence-stale`; no `Done`, no lease release |
-| `merged`; proof still valid | apply normal `complete` atomically |
-| `completed`; same handoff and valid recorded proof | read-only no-op `already-completed` — no lease reacquisition, no revised timestamps |
+Per-state `reconcile` outcome **and** the recovery action it requires are **route semantics, not fields**: single canonical copy → **`mstar-iteration`** `references/plan-scoped-pm.md` §6.7（outcome table）with §7（`show` refresh before a stale retry）. The `retry-ready` path therefore resumes `show` → `integration-start`（re-pin `base_sha`, re-acquire the merge lease）→ the coordinator's `git merge --no-ff` → `integration-accept` — **never a bare merge**.
 
 Reconciliation observes **Git ancestry / HEAD facts** in the recorded repository and never trusts a caller's success flag, and never performs a second merge. A crash after `complete` but before CLI output is handled by `show` + `reconcile`; a crash before the session binding leaves only an inert envelope. `return` after a failed merge requires an explicit Git abort plus reconcile first — a merge lease is never discarded while Git may still be in flight. Lost credentials or an abandoned active owner need explicit human recovery outside the normal verbs; no automatic takeover flag is introduced.
 
