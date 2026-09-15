@@ -64,6 +64,7 @@ const completeAssignment = `## Assignment
 **Delegation**: forbidden
 **Task category**: logic
 **Working branch**: feature/example
+**Task budget (implement / ops rounds)**: S — one focused implementer round
 
 Do the thing, evidence-first.
 `;
@@ -127,6 +128,7 @@ const directOnMainPolicy = `## Assignment
 **Delegation**: allowed (hotfix)
 **Task category**: logic
 **Branch policy**: direct on main — urgent user-authorized hotfix
+**Task budget (implement / ops rounds)**: S — one focused implementer round
 
 Ship the hotfix.
 `;
@@ -173,6 +175,7 @@ Create the branch.
 **Execute as**: scout
 **Delegation**: forbidden
 **Task category**: deep
+**Task budget (implement / ops rounds)**: XS — one orientation round
 
 Survey the codebase.
 `;
@@ -203,6 +206,7 @@ const hardCompleteAssignment = `## Assignment
 **Delegation**: forbidden
 **Task category**: logic
 **Working branch**: feature/example
+**Task budget (implement / ops rounds)**: S — one focused implementer round
 
 Do the thing, evidence-first.
 `;
@@ -239,7 +243,8 @@ describe("validateDispatchAssignment (warn-only wrapper, full validation)", () =
     const result = validateDispatchAssignment(missingExecuteAs, { log });
     expect(result!.ok).toBe(false);
  // Single parser: NO stacked presence warning — one violation per missing field.
-    expect(warnings).toHaveLength(2);
+ // 2 field/branch violations + the new task-budget gate = 3.
+    expect(warnings).toHaveLength(3);
     expect(warnings.some((w) => w.includes("assignment.field.missing-execute-as"))).toBe(true);
     expect(warnings.some((w) => w.includes("assignment.field.branch-missing"))).toBe(true);
     expect(warnings.some((w) => w.includes("assignment.presence.missing-execute-as"))).toBe(false);
@@ -264,12 +269,12 @@ describe("validateDispatchAssignment (warn-only wrapper, full validation)", () =
     }
   });
 
-  test("missing all three → 3 engine field warnings, no stacked presence lines", () => {
+  test("missing all three → 4 field warnings (3 core fields + task-budget), no stacked presence lines", () => {
     const { warnings, log } = captureWarnings();
     const result = validateDispatchAssignment(missingAllFields, { log });
     expect(result!.ok).toBe(false);
  // The fixture still carries a Working branch — no branch-missing.
-    expect(warnings).toHaveLength(3);
+    expect(warnings).toHaveLength(4);
     for (const code of [
       "assignment.field.missing-execute-as",
       "assignment.field.missing-delegation",
@@ -322,7 +327,8 @@ describe("validateDispatchAssignment (warn-only wrapper, full validation)", () =
     const { warnings, log } = captureWarnings();
     const result = validateDispatchAssignment("Execute as: [unbalanced", { log });
     expect(result!.ok).toBe(false);
-    expect(warnings).toHaveLength(3);
+ // 3 pre-existing warnings + the task-budget gate = 4.
+    expect(warnings).toHaveLength(4);
     expect(warnings.some((w) => w.includes("assignment.field.missing-delegation"))).toBe(true);
     expect(warnings.some((w) => w.includes("assignment.field.missing-task-category"))).toBe(true);
     expect(warnings.some((w) => w.includes("assignment.field.branch-missing"))).toBe(true);
@@ -343,18 +349,19 @@ describe("validateDispatchAssignment full-validation matrix (Slice 3)", () => {
     const { warnings, log } = captureWarnings();
     const result = validateDispatchAssignment(createWithoutBase, { log });
     expect(result!.ok).toBe(false);
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain("assignment.field.branch-missing-base");
+ // Task-budget + branch-missing-base: the implement fixture lacks the capacity field.
+    expect(warnings).toHaveLength(2);
+    expect(warnings.some((w) => w.includes("assignment.field.branch-missing-base"))).toBe(true);
  // The created branch (feature/x) itself is not default-protected — no gate warn.
-    expect(warnings[0]).not.toContain("dispatch.default-branch.protected");
+    expect(warnings.some((w) => w.includes("dispatch.default-branch.protected"))).toBe(false);
   });
 
   test("dangling create form ('create feature/x from') → branch-missing-base warn", () => {
     const { warnings, log } = captureWarnings();
     const result = validateDispatchAssignment(createDanglingFrom, { log });
     expect(result!.ok).toBe(false);
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain("assignment.field.branch-missing-base");
+    expect(warnings).toHaveLength(2);
+    expect(warnings.some((w) => w.includes("assignment.field.branch-missing-base"))).toBe(true);
   });
 
   test("read-only scout assignment without a branch form → no branch-missing warn", () => {
@@ -424,10 +431,11 @@ describe("validateDispatchAssignment full-validation matrix (Slice 3)", () => {
     const { warnings, log } = captureWarnings();
     const result = validateDispatchAssignment(workingBranchMain, { log });
     expect(result!.ok).toBe(false);
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain("dispatch.default-branch.protected");
-    expect(warnings[0]).toContain('"main"');
-    expect(warnings[0]).toContain("(fix:");
+ // Task-budget + protected-branch: the implement fixture lacks the capacity field.
+    expect(warnings).toHaveLength(2);
+    expect(warnings.some((w) => w.includes("dispatch.default-branch.protected"))).toBe(true);
+    expect(warnings.some((w) => w.includes('"main"'))).toBe(true);
+    expect(warnings.some((w) => w.includes("(fix:"))).toBe(true);
   });
 
   test("Working branch on a feature branch → no protected warn", () => {
