@@ -19,6 +19,10 @@
  * non-store shape throw).
  * - `put` schema guard (throw on `doc.schema !== undefined`, canonical
  * message; `payload.schema` unaffected).
+ * - Protected-write authorization seam (§C4): every FsStore write below runs
+ * inside `withProtectedWrite`, the private context the locked coordination
+ * writers open, so the read/write/delete and path-guard coverage stays
+ * truthful against the authorization the boundary now requires.
  * - `list?` interface + FsStore enumeration (exists-conditional status,
  * snapshot/residuals dir scans through the single path table, review
  * union with the one PLAN_SHAPED_KEY_RE detector, json non-enumerable,
@@ -37,8 +41,10 @@ import {
   resolveArtifactPath,
   setArtifactStore,
   type ArtifactDoc,
+  type ArtifactRef,
   type ArtifactStore,
 } from "../src/store.js";
+import { withProtectedWrite } from "../src/coordination-write.js";
 
 const ENV_KEY = "MSTAR_HARNESS_DIR";
 
@@ -79,6 +85,30 @@ function recordingStore(): ArtifactStore & { puts: ArtifactDoc[] } {
   };
 }
 
+/**
+ * A writer view of the FsStore: every call runs inside the same private
+ * authorization context the locked coordination writers open (spec §C4). A
+ * protected document — `status.json`, a workflow `snapshot.json`, a project
+ * `residuals.json`, directly or through a `json` alias — may only be written
+ * from that context, so a bare `store.put`/`store.delete` is refused; the
+ * unprotected kinds (`review`, unrelated `json`) are unaffected by it. This
+ * keeps the file's read/write/delete, alias-classification and path-guard
+ * coverage intact against the authorization the boundary requires.
+ */
+function authorizedStore(store: ArtifactStore & { root: string }): ArtifactStore & { root: string } {
+  return {
+    root: store.root,
+    async put(doc: ArtifactDoc): Promise<void> {
+      await withProtectedWrite(resolveArtifactPath(store.root, doc), "put", () => store.put(doc));
+    },
+    get: (ref) => store.get(ref),
+    async delete(ref: ArtifactRef): Promise<void> {
+      await withProtectedWrite(resolveArtifactPath(store.root, ref), "delete", () => store.delete?.(ref) ?? Promise.resolve());
+    },
+    list: (kind) => store.list!(kind),
+  };
+}
+
 beforeEach(() => {
   setArtifactStore(undefined);
   delete process.env[ENV_KEY];
@@ -97,7 +127,7 @@ describe("createFsStore path mapping", () => {
   test("status maps to {HARNESS_DIR}/status.json", async () => {
     const root = tmpRoot("store-status-");
     try {
-      const store = createFsStore(root);
+      const store = authorizedStore(createFsStore(root));
       await store.put({ kind: "status", key: "root", payload: { version: 2, updated_at: "2026-08-27", workflows: [] } });
       expect(existsSync(join(root, "status.json"))).toBe(true);
     } finally {
@@ -108,7 +138,7 @@ describe("createFsStore path mapping", () => {
   test("snapshot maps to {WORKFLOW_DIR}/<key>/snapshot.json", async () => {
     const root = tmpRoot("store-snapshot-");
     try {
-      const store = createFsStore(root);
+      const store = authorizedStore(createFsStore(root));
       await store.put({ kind: "snapshot", key: "wf-1", payload: { id: "wf-1" } });
       expect(existsSync(join(root, "workflows", "wf-1", "snapshot.json"))).toBe(true);
     } finally {
@@ -119,7 +149,7 @@ describe("createFsStore path mapping", () => {
   test("residuals maps to {PROJECT_DIR}/<key>/residuals.json", async () => {
     const root = tmpRoot("store-residuals-");
     try {
-      const store = createFsStore(root);
+      const store = authorizedStore(createFsStore(root));
       await store.put({ kind: "residuals", key: "proj-1", payload: { entries: [] } });
       expect(existsSync(join(root, "projects", "proj-1", "residuals.json"))).toBe(true);
     } finally {
@@ -130,7 +160,7 @@ describe("createFsStore path mapping", () => {
   test("review plan-shaped key maps to {HARNESS_DIR}/sdd/<key>/review/report.json", async () => {
     const root = tmpRoot("store-review-plan-");
     try {
-      const store = createFsStore(root);
+      const store = authorizedStore(createFsStore(root));
       await store.put({ kind: "review", key: "20260827-artifact-store", payload: { verdict: "approve" } });
       expect(existsSync(join(root, "sdd", "20260827-artifact-store", "review", "report.json"))).toBe(true);
     } finally {
@@ -141,7 +171,7 @@ describe("createFsStore path mapping", () => {
   test("review non-plan-shaped key maps to {HARNESS_DIR}/sdd/_reviews/<key>.json", async () => {
     const root = tmpRoot("store-review-other-");
     try {
-      const store = createFsStore(root);
+      const store = authorizedStore(createFsStore(root));
       await store.put({ kind: "review", key: "review-abc", payload: { verdict: "approve" } });
       expect(existsSync(join(root, "sdd", "_reviews", "review-abc.json"))).toBe(true);
     } finally {
@@ -152,7 +182,7 @@ describe("createFsStore path mapping", () => {
   test("review key with date prefix but no plan suffix is not plan-shaped", async () => {
     const root = tmpRoot("store-review-date-");
     try {
-      const store = createFsStore(root);
+      const store = authorizedStore(createFsStore(root));
       await store.put({ kind: "review", key: "20260827", payload: { verdict: "approve" } });
       expect(existsSync(join(root, "sdd", "_reviews", "20260827.json"))).toBe(true);
     } finally {
@@ -164,7 +194,7 @@ describe("createFsStore path mapping", () => {
     const root = tmpRoot("store-mstarc-");
     try {
       writeFileSync(join(root, ".mstarc"), "[config]\nworkflow_dir=wf-custom\nproject_dir=proj-custom\n");
-      const store = createFsStore(root);
+      const store = authorizedStore(createFsStore(root));
       await store.put({ kind: "snapshot", key: "wf-1", payload: { id: "wf-1" } });
       await store.put({ kind: "residuals", key: "proj-1", payload: { entries: [] } });
       expect(existsSync(join(root, "wf-custom", "wf-1", "snapshot.json"))).toBe(true);
@@ -183,7 +213,7 @@ describe("FsStore round-trip", () => {
   test("status / snapshot / residuals / review put then get returns the payload", async () => {
     const root = tmpRoot("store-roundtrip-");
     try {
-      const store = createFsStore(root);
+      const store = authorizedStore(createFsStore(root));
       const status = { version: 2, updated_at: "2026-08-27", workflows: [] };
       const snapshot = { id: "wf-1", status: "in_progress" };
       const residuals = { entries: [{ id: "R1" }] };
@@ -211,7 +241,7 @@ describe("FsStore round-trip", () => {
   test("get on a missing artifact returns undefined", async () => {
     const root = tmpRoot("store-missing-");
     try {
-      const store = createFsStore(root);
+      const store = authorizedStore(createFsStore(root));
       expect(await store.get({ kind: "status", key: "root" })).toBeUndefined();
       expect(await store.get({ kind: "snapshot", key: "wf-1" })).toBeUndefined();
       expect(await store.get({ kind: "residuals", key: "proj-1" })).toBeUndefined();
@@ -226,7 +256,7 @@ describe("FsStore round-trip", () => {
     try {
       mkdirSync(join(root, "workflows", "wf-1"), { recursive: true });
       writeFileSync(join(root, "workflows", "wf-1", "snapshot.json"), "{ not json", "utf8");
-      const store = createFsStore(root);
+      const store = authorizedStore(createFsStore(root));
       await expect(store.get({ kind: "snapshot", key: "wf-1" })).rejects.toThrow(
         /Invalid JSON in .*workflows[\\/]wf-1[\\/]snapshot\.json/,
       );
@@ -238,7 +268,7 @@ describe("FsStore round-trip", () => {
   test("delete removes the artifact; get returns undefined afterwards", async () => {
     const root = tmpRoot("store-delete-");
     try {
-      const store = createFsStore(root);
+      const store = authorizedStore(createFsStore(root));
       await store.put({ kind: "status", key: "root", payload: { version: 2, updated_at: "2026-08-27", workflows: [] } });
       expect(await store.get({ kind: "status", key: "root" })).toBeDefined();
       await store.delete?.({ kind: "status", key: "root" });
@@ -264,7 +294,7 @@ describe("FsStore schema guard (D3)", () => {
   test("doc carrying an envelope schema is rejected with the canonical message and no file is written", async () => {
     const root = tmpRoot("store-schema-guard-");
     try {
-      const store = createFsStore(root);
+      const store = authorizedStore(createFsStore(root));
       const doc: ArtifactDoc = {
         kind: "review",
         key: "r-1",
@@ -283,7 +313,7 @@ describe("FsStore schema guard (D3)", () => {
   test("doc without schema puts unchanged (payload written verbatim)", async () => {
     const root = tmpRoot("store-schema-absent-");
     try {
-      const store = createFsStore(root);
+      const store = authorizedStore(createFsStore(root));
       const payload = { version: 2, updated_at: "2026-08-28", workflows: [] };
       await store.put({ kind: "status", key: "root", payload });
       const got = await store.get({ kind: "status", key: "root" });
@@ -296,7 +326,7 @@ describe("FsStore schema guard (D3)", () => {
   test("review payload with inner schema field still writes (payload.schema is data, not doc.schema)", async () => {
     const root = tmpRoot("store-payload-schema-");
     try {
-      const store = createFsStore(root);
+      const store = authorizedStore(createFsStore(root));
       const ref = { kind: "review", key: "20260828-store-engine-contract" } as const;
       const payload = { schema: "mstar.review/v1", verdict: "approve", findings: [] };
       await store.put({ ...ref, payload });
@@ -320,7 +350,7 @@ describe("FsStore list (D4)", () => {
   test("status lists [root] iff status.json exists; absent file \u2192 []", async () => {
     const root = tmpRoot("store-list-status-");
     try {
-      const store = createFsStore(root);
+      const store = authorizedStore(createFsStore(root));
       expect(await store.list!("status")).toEqual([]);
       const payload = { version: 2, updated_at: "2026-08-28", workflows: [] };
       await store.put({ kind: "status", key: "root", payload });
@@ -333,7 +363,7 @@ describe("FsStore list (D4)", () => {
   test("snapshot lists workflow dirs with snapshot.json, ascending; stray dirs/files excluded; missing backing \u2192 []", async () => {
     const root = tmpRoot("store-list-snapshot-");
     try {
-      const store = createFsStore(root);
+      const store = authorizedStore(createFsStore(root));
       expect(await store.list!("snapshot")).toEqual([]);
       await store.put({ kind: "snapshot", key: "wf-2", payload: { id: "wf-2" } });
       await store.put({ kind: "snapshot", key: "wf-10", payload: { id: "wf-10" } });
@@ -353,7 +383,7 @@ describe("FsStore list (D4)", () => {
   test("residuals lists project dirs with residuals.json, ascending; stray dirs excluded; missing backing \u2192 []", async () => {
     const root = tmpRoot("store-list-residuals-");
     try {
-      const store = createFsStore(root);
+      const store = authorizedStore(createFsStore(root));
       expect(await store.list!("residuals")).toEqual([]);
       await store.put({ kind: "residuals", key: "proj-1", payload: { entries: [] } });
       await store.put({ kind: "residuals", key: "_default", payload: { entries: [] } });
@@ -370,7 +400,7 @@ describe("FsStore list (D4)", () => {
   test("review union lists _reviews flat keys + plan-shaped dirs with report.json, ascending; non-qualifying entries excluded", async () => {
     const root = tmpRoot("store-list-review-");
     try {
-      const store = createFsStore(root);
+      const store = authorizedStore(createFsStore(root));
       expect(await store.list!("review")).toEqual([]); // missing sdd backing
       await store.put({ kind: "review", key: "review-inline", payload: { verdict: "approve" } });
       await store.put({ kind: "review", key: "20260828-store-engine", payload: { verdict: "approve" } });
@@ -390,7 +420,7 @@ describe("FsStore list (D4)", () => {
   test("review: a plan-shaped _reviews file is not listed (get would route elsewhere) until the plan dir exists \u2014 then exactly once", async () => {
     const root = tmpRoot("store-list-review-guard-");
     try {
-      const store = createFsStore(root);
+      const store = authorizedStore(createFsStore(root));
       mkdirSync(join(root, "sdd", "_reviews"), { recursive: true });
       writeFileSync(join(root, "sdd", "_reviews", "20260828-orphan.json"), "{}", "utf8");
  // Empty case: existing but non-qualifying backing → [].
@@ -405,7 +435,7 @@ describe("FsStore list (D4)", () => {
   test("snapshot: a stray unsafe dir name is skipped without throwing, never advertised", async () => {
     const root = tmpRoot("store-list-unsafe-dir-");
     try {
-      const store = createFsStore(root);
+      const store = authorizedStore(createFsStore(root));
       await store.put({ kind: "snapshot", key: "wf-1", payload: { id: "wf-1" } });
  // Unsafe name (space) WITH a backing snapshot.json: skipped for the
  // name itself — a get on such a key would throw, so list must not
@@ -421,7 +451,7 @@ describe("FsStore list (D4)", () => {
   test("review: an unsafe _reviews filename is skipped without throwing, never advertised", async () => {
     const root = tmpRoot("store-list-unsafe-review-");
     try {
-      const store = createFsStore(root);
+      const store = authorizedStore(createFsStore(root));
       await store.put({ kind: "review", key: "review-inline", payload: { verdict: "approve" } });
  // Garbage flat filename: advertised pre-fix, then get threw.
       writeFileSync(join(root, "sdd", "_reviews", "bad name.json"), "{}", "utf8");
@@ -434,7 +464,7 @@ describe("FsStore list (D4)", () => {
   test("every listed key across kinds round-trips through get (D4 uniform rule)", async () => {
     const root = tmpRoot("store-list-roundtrip-");
     try {
-      const store = createFsStore(root);
+      const store = authorizedStore(createFsStore(root));
       const payloads: Record<string, unknown> = {
         status: { version: 2, updated_at: "2026-08-28", workflows: [] },
         snapshot: { id: "wf-1" },
@@ -463,7 +493,7 @@ describe("FsStore list (D4)", () => {
   test("json kind throws the canonical usage error", async () => {
     const root = tmpRoot("store-list-json-");
     try {
-      const store = createFsStore(root);
+      const store = authorizedStore(createFsStore(root));
       await expect(store.list!("json")).rejects.toThrow(LIST_JSON_MESSAGE);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -473,7 +503,7 @@ describe("FsStore list (D4)", () => {
   test("a readdir ENOENT/ENOTDIR 'path gone' race maps to [], never throws out of list (greptile P1)", async () => {
     const root = tmpRoot("store-list-race-");
     try {
-      const store = createFsStore(root);
+      const store = authorizedStore(createFsStore(root));
  // Deterministic stand-in for the existsSync→readdirSync race: a
  // regular file where the backing dir is expected makes readdirSync
  // throw ENOTDIR — the same "path gone" class as ENOENT when the dir
@@ -514,7 +544,7 @@ describe("FsStore key discipline", () => {
   test("status key must be \"root\"", async () => {
     const root = tmpRoot("store-status-key-");
     try {
-      const store = createFsStore(root);
+      const store = authorizedStore(createFsStore(root));
       await expect(store.put({ kind: "status", key: "not-root", payload: {} })).rejects.toThrow(
         /status key must be "root"/,
       );
@@ -527,7 +557,7 @@ describe("FsStore key discipline", () => {
   test("unsafe keys are rejected by assertSafePathComponent before mapping", async () => {
     const root = tmpRoot("store-unsafe-key-");
     try {
-      const store = createFsStore(root);
+      const store = authorizedStore(createFsStore(root));
       for (const key of ["../evil", "a/b", "", ".", ".."]) {
         await expect(store.put({ kind: "snapshot", key, payload: {} })).rejects.toThrow(/single safe path component/);
       }
@@ -545,7 +575,7 @@ describe("FsStore json escape hatch", () => {
   test("absolute key round-trips to the caller-supplied path", async () => {
     const root = tmpRoot("store-json-ok-");
     try {
-      const store = createFsStore(root);
+      const store = authorizedStore(createFsStore(root));
       const target = join(root, "out", "doc.json");
       await store.put({ kind: "json", key: target, payload: { note: "escape hatch" } });
       expect(existsSync(target)).toBe(true);
@@ -559,7 +589,7 @@ describe("FsStore json escape hatch", () => {
   test("non-absolute key is rejected", async () => {
     const root = tmpRoot("store-json-rel-");
     try {
-      const store = createFsStore(root);
+      const store = authorizedStore(createFsStore(root));
       await expect(store.put({ kind: "json", key: "relative/path.json", payload: {} })).rejects.toThrow(
         /json key must be an absolute path/,
       );
@@ -571,7 +601,7 @@ describe("FsStore json escape hatch", () => {
   test("key with a \"..\" segment is rejected", async () => {
     const root = tmpRoot("store-json-dotdot-");
     try {
-      const store = createFsStore(root);
+      const store = authorizedStore(createFsStore(root));
  // join() would normalize the ".." away — build the key literally.
       await expect(store.put({ kind: "json", key: `${root}/../escape.json`, payload: {} })).rejects.toThrow(
         /must not contain "\.\." segments/,
@@ -599,7 +629,7 @@ describe("setArtifactStore / getArtifactStore", () => {
       setArtifactStore(recordingStore());
       setArtifactStore(undefined);
       await withEnv(root, async () => {
-        const store = getArtifactStore();
+        const store = authorizedStore(getArtifactStore() as ArtifactStore & { root: string });
         const payload = { version: 2, updated_at: "2026-08-27", workflows: [] };
         await store.put({ kind: "status", key: "root", payload });
         const got = await store.get({ kind: "status", key: "root" });
@@ -615,7 +645,7 @@ describe("setArtifactStore / getArtifactStore", () => {
     const root = tmpRoot("store-default-env-");
     try {
       await withEnv(root, async () => {
-        const store = getArtifactStore();
+        const store = authorizedStore(getArtifactStore() as ArtifactStore & { root: string });
         const payload = { version: 2, updated_at: "2026-08-27", workflows: [] };
         await store.put({ kind: "status", key: "root", payload });
         expect(existsSync(join(root, "status.json"))).toBe(true);
@@ -645,7 +675,7 @@ describe("assertFsStorePath - fail-loud path agreement ", () => {
   test("FsStore with the store-resolved path equal to the expected path passes", () => {
     const root = tmpRoot("store-assert-ok-");
     try {
-      const store = createFsStore(root);
+      const store = authorizedStore(createFsStore(root));
       expect(() => assertFsStorePath(store, { kind: "status", key: "root" }, join(root, "status.json"))).not.toThrow();
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -656,7 +686,7 @@ describe("assertFsStorePath - fail-loud path agreement ", () => {
     const root = tmpRoot("store-assert-mismatch-");
     const other = tmpRoot("store-assert-other-");
     try {
-      const store = createFsStore(root);
+      const store = authorizedStore(createFsStore(root));
       const target = join(other, "status.json");
       let caught: Error | undefined;
       try {
