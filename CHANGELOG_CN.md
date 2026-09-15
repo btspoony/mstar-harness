@@ -6,6 +6,31 @@
 
 ## [Unreleased]
 
+## [3.9.4] - 2026-09-15
+
+### Harness
+
+- 受保护的 `mstar persist` 类型（`status`、`snapshot`、`residuals`）现在只有一个写入者：`--expect-version <absent|sha256:<hex>>` 把 put 路由到引擎加锁的 `replaceCoordinatedArtifact`（同机 CAS）；协调的 `snapshot` 替换还必须带 `--session <coordinator envelope>`；注入的 `--store` 模块因无法满足该契约而被拒绝；受保护类型的裸（未加版本）`put`／`delete` 会在写入任何内容之前被拒绝。缺失／非法／混用标志在读入任何内容之前就 fail-closed（用法错误，退出码 `2`）；版本或会话不匹配是引擎拒绝（退出码 `1`），字节保持不变。
+- `mstar persist get <受保护类型> --versioned` 输出 `{payload,version}`：读取到确切字节的 `sha256:` 字节版本；文档缺失时为 `absent` 令牌且 `payload` 为 `null` —— 因此读-改-写就是 `get --versioned` → `put --expect-version`，把报告的令牌回填给 `--expect-version`。
+- 新增 **`mstar plan` 计划级协调传输层**：`bind`（coordinator / workflow+plan / Assignment / `--resume`）、`show`、`prepare`、`progress`、`residual-add`、`residual-close`、`handoff`、`accept`、`return`、`integration-start`、`integration-accept`、`complete`、`reconcile`；JSON 走 stdout、诊断走 stderr，退出码为 `0` 成功 / `1` 引擎拒绝 / `2` 用法错误。
+- `mstar harness scaffold` 现在 await 异步且 store 路由的引擎引导，并固定其解析出的 store 根。
+- 协调者转换动词现在把 **`--handoff` id 传入引擎**，由引擎在自己的锁内与行内记录核对：在 CLI 读取与变更之间被替换的 handoff，不再可能被「指名旧 handoff」的命令转换；CLI 侧的预检仅作为更早、更友好的拒绝保留。
+- Git 读取在环境无法作答时以 `coordination.git-unavailable` 拒绝（携带路径、命令与原因），不再报告为集成分叉；同时加上 10 秒超时，卡住的 `git` 不再一直占住行锁、拖垮其他写入方。
+- 集成证明改为**一次** `git rev-list` 读取 first-parent 路径，不再逐 commit 起子进程，繁忙集成分支上的持锁时间保持恒定。
+- findings-cleanup 门在持有 register 写锁时求值（snapshot → register 锁序）；workflow merge lease 按 plan 与 source branch 比对，外来 lease 既不会被复用也不会被释放。
+- 计划级动词在每次调用前把活动 `FsStore` 固定到引擎解析出的根，因此在 linked feature checkout 内运行的进程解析到的是**主 worktree** 的 harness，而不是本地 `.mstar`。
+- `mstar plan` 的行级动词现在作用于该行的**实时**交接：`--handoff <id>` 会与引擎报告的交接 id 校对（传入*不同的*实时 id 时以 `coordination.handoff-mismatch` 拒绝，退出码 `1`，不写入任何内容），且 `plan show --json` 会连同行的 `state` / `attempt` 一起报告 `handoff_id`，因此崩溃的调用方丢失 id 后仍可在恢复步骤中读到它。
+- `/iteration-drive` 新增 **plan 级 scoped 入口**：`--assignment <绝对 md 路径>`、`--workflow <id> --plan <id>` 与显式的 `--resume <绝对 session json 路径>` 形态在独立 primary 会话中只驱动一个已 prepare 的 plan。该会话止于一次可持久化的 **handoff**——`Done` 与两个 lease 的释放仍由 coordinator 在验证合并后完成。同一 plan 的第二次 fresh 入口以重复持有被拒绝；非空但畸形的参数 fail closed；无参数仍走整迭代路线。
+- scoped 会话只拥有一个 plan 行：用 `show` 读取，只写 `progress`、`residual-add`、`residual-close` 与 `handoff`；兄弟行、生命周期锚点、根 register、共享索引、迭代 PR 与 Phase 3–6 均留给 coordinator。用户指南：`docs/commands.md`——本次变更附带的统一命令参考，scoped 会话即其中的 `/iteration-drive` 章节；CLI 标志与退出码：`docs/cli.md`。
+- scoped 终端是**传输方式，不是依赖**：任意终端均可，Herdr / tmux 均为可选——所有权不读 pane 状态、TTL 或终端标签。
+- PM 路由回归语料新增七个 `plan-scope-*` 场景，覆盖两种寻址形态、重复入口、未知参数、最后一个 plan 的停止、合并前标 `Done` 的拒绝、无参数路线与 leaf 边界。`mstar plan` 传输层本身记录在 `.changes/unreleased/plan-coordination.md`。
+- 由于 `/iteration-drive` 现在在命令 frontmatter 中公布其参数形态，钉住每条 `input:` hint 的 dsh 客户端 claim 表（`packages/dsh/tests/commands.spec.ts`）已同步到新 hint，使输入框 ghost text 提供 scoped 形态而非直接裸执行命令。
+- `mstar status workflow-close` 通过引擎加锁的 snapshot 写入器关闭工作流，并新增 `--session <绝对路径的 coordinator envelope>`：协调工作流现在拒绝由计划会话关闭（`snapshot <path> is coordinated — close requires --session <coordinator envelope>`，退出码 `1`，不写入任何内容），且该判断发生在判定计划行之前，因此"未完成行"拒绝不会再被误判为会话问题。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 3.9.4**。
+
 ## [3.9.3] - 2026-09-15
 
 ### Harness

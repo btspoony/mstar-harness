@@ -6,6 +6,18 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [3.9.4] - 2026-09-15
+
+### Changed
+
+- `plan bind --resume` now refuses a `--harness` override with a usage error (exit 2, no I/O) instead of silently dropping it — the `--assignment` form already rejects that mix, and the session envelope pins the harness root on its own.
+- Fixed the plan-coordination CLI store pin: the `--workflow/--plan` bind form now pins the `--harness` override (only a top-level `--harness` was read, so the store pinned the cwd-resolved root and the bind was refused with `coordination.path-mismatch`), and coordinator transitions now pin the session root **before** the live-handoff pre-check reads the row — a linked checkout whose session envelope names the control root is no longer refused by an unpinned read.
+- Added load-bearing cases for both: a bind run from a directory with no resolvable harness, and an accept run from a linked worktree whose stale-id variant proves the pre-check now reaches the pinned store.
+
+- Version alignment with harness **3.9.4**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **3.9.4**.
+
 ## [3.9.3] - 2026-09-15
 
 ### Changed

@@ -8,6 +8,31 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ## [Unreleased]
 
+## [3.9.4] - 2026-09-15
+
+### Harness
+
+- The protected `mstar persist` kinds (`status`, `snapshot`, `residuals`) now have exactly one writer: `--expect-version <absent|sha256:<hex>>` routes the put through the engine's locked `replaceCoordinatedArtifact` (same-host CAS), a coordinated `snapshot` replacement additionally requires `--session <coordinator envelope>`, an injected `--store` module is refused because it cannot honour that contract, and a bare (un-versioned) `put` or `delete` of a protected kind is refused before anything is written. A missing / invalid / mixed flag fails closed as a usage error (exit `2`) before anything is read, and a version or session mismatch is an engine refusal (exit `1`) with the bytes intact.
+- `mstar persist get <protected> --versioned` prints `{payload,version}`: the `sha256:` byte version of the exact bytes read, or the `absent` token with a `null` payload for a missing document, so a read-modify-write is `get --versioned` → `put --expect-version` and the reported token is passed back as `--expect-version`.
+- Added the **`mstar plan` scoped coordination transport**: `bind` (coordinator / workflow+plan / Assignment / `--resume`), `show`, `prepare`, `progress`, `residual-add`, `residual-close`, `handoff`, `accept`, `return`, `integration-start`, `integration-accept`, `complete` and `reconcile`, with JSON on stdout, diagnostics on stderr and the `0` ok / `1` engine refusal / `2` usage exit contract.
+- Scoped verbs pin the active `FsStore` to the engine's resolved root before every call, so a process inside a linked feature checkout resolves the **main worktree's** harness instead of its own `.mstar`.
+- `mstar harness scaffold` awaits the now-async, store-routed engine bootstrap and pins the store root it resolves.
+- Coordinator transition verbs now **carry the `--handoff` id into the engine**, which re-checks it against the row inside its own lock: a handoff replaced between the CLI's read and the mutation can no longer be transitioned by a command that named the old one. The CLI pre-check stays as an early, friendlier refusal.
+- Git reads refuse an unanswerable environment as `coordination.git-unavailable` (with the path, command and cause) instead of reporting integration divergence, and are bounded by a 10s timeout so a blocked `git` can no longer pin the row lock until every other writer times out.
+- The integration proof reads the first-parent path in **one** `git rev-list` call instead of one subprocess per commit, keeping the lock hold constant on a busy integration branch.
+- The findings-cleanup gate is evaluated while holding the register write lock (snapshot → register order), and the workflow merge lease is compared by plan and source branch, so a foreign lease is never reused or released.
+- The `mstar plan` row verbs now act on the row's **live** handoff: `--handoff <id>` is validated against the handoff the engine reports (a *different* live id is refused as `coordination.handoff-mismatch`, exit `1`, nothing written) and `plan show --json` reports `handoff_id` alongside the row's `state` / `attempt`, so a recovery step can read the id after a crashed caller lost it.
+- Added a **plan-scoped primary entry** to `/iteration-drive`: `--assignment <absolute-md-path>`, `--workflow <id> --plan <id>` and the explicit `--resume <absolute-session-json-path>` form drive one prepared plan in an independent primary session. That session stops at a durable **handoff** — `Done` and both lease releases stay with the iteration coordinator after it verifies the merge. A second fresh entry for the same plan fails as a duplicate holder; malformed nonempty arguments fail closed, and no arguments keep the whole-iteration route.
+- The scoped session owns one plan row: it reads with `show` and writes only `progress`, `residual-add`, `residual-close` and `handoff`, leaving sibling rows, lifecycle anchors, the root register, the shared indexes, the iteration PR and Phase 3–6 to the coordinator. User guide: `docs/commands.md` — the unified command reference this change ships, with the scoped session as its `/iteration-drive` section; CLI flags and exit codes: `docs/cli.md`.
+- The scoped terminal is **transport, not a dependency**: any terminal works, and Herdr / tmux are optional — ownership never reads pane state, TTL or terminal labels.
+- Added seven `plan-scope-*` cases to the PM routing-eval corpus covering both addressing forms, duplicate entry, unknown arguments, last-plan stop, `Done`-before-integration refusal, the no-argument route and the leaf boundary. The `mstar plan` transport itself is recorded in `.changes/unreleased/plan-coordination.md`.
+- Because `/iteration-drive` now advertises its argument shapes in the command frontmatter, the dsh client-claim table that pins every `input:` hint (`packages/dsh/tests/commands.spec.ts`) moved to the new hint, so the composer ghost text offers the scoped forms instead of executing the bare command.
+- `mstar status workflow-close` closes a workflow through the engine's locked snapshot writer and takes `--session <absolute coordinator envelope>`: a coordinated workflow now refuses to close from a plan session (`snapshot <path> is coordinated — close requires --session <coordinator envelope>`, exit `1`, nothing written) before it judges the plan rows, so an unfinished-row refusal can no longer be mistaken for a session problem.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, the portable Agent Plugins manifest, and both marketplace manifests: **→ 3.9.4**.
+
 ## [3.9.3] - 2026-09-15
 
 ### Harness

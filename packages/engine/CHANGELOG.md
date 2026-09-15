@@ -6,6 +6,16 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [3.9.4] - 2026-09-15
+
+### Changed
+
+- Fixed the protected-write boundary: `canonicalTarget` now resolves the nearest existing ancestor and re-appends the missing tail instead of falling back to the lexical path, so a `json` alias through a symlinked parent can no longer create a not-yet-existing `snapshot.json` / `status.json` / `residuals.json` outside the protected classification.
+
+- Version alignment with harness **3.9.4**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **3.9.4**.
+
 ## [3.9.3] - 2026-09-15
 
 ### Changed
