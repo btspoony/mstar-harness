@@ -870,12 +870,12 @@ export function migrateHarnessTree(root: string, opts: MigrateOptions = {}): Mig
  */
 export async function applyMigratePlan(plan: MigratePlan): Promise<MigrateResult> {
   if (plan.dryRun) {
-    return { applied: false, message: `dry-run: ${plan.steps.length} steps planned (source → destination), zero writes` };
+    return { applied: false, message: `dry-run: ${plan.steps.length} steps planned (source \u2192 destination), zero writes` };
   }
   const statusPath = join(plan.root, MIGRATE_STATUS_FILE);
   const current = readJson(statusPath);
   if (current.version === 2) {
-    return { applied: false, message: "no-op: status.json already at schema version 2 (migrated) — nothing to do" };
+    return { applied: false, message: "no-op: status.json already at schema version 2 (migrated) \u2014 nothing to do" };
   }
 
  // Phase-5 F1: actual write targets derive from the RESOLVED layout dirs
@@ -958,7 +958,7 @@ async function applyMigratePlanLocked(
   const source = readArtifactBytes(statusPath);
   const sourcePayload = source?.payload;
   if (isPlainObject(sourcePayload) && sourcePayload.version === 2) {
-    return { applied: false, message: "no-op: status.json already at schema version 2 (migrated) — nothing to do" };
+    return { applied: false, message: "no-op: status.json already at schema version 2 (migrated) \u2014 nothing to do" };
   }
   const sourceVersion = source?.version ?? "absent";
   if (sourceVersion !== plan.sourceVersion) {

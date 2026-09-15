@@ -363,7 +363,7 @@ function summarize(violations: readonly { code: string; message: string }[]): st
 
 function assertViolationFree(violations: readonly { code: string; message: string }[], what: string): void {
   if (violations.length > 0) {
-    throw new CoordinationError("coordination.invalid-input", `${what} is invalid — ${summarize(violations)}`, {
+    throw new CoordinationError("coordination.invalid-input", `${what} is invalid \u2014 ${summarize(violations)}`, {
       violations: violations.map((entry) => entry.code),
     });
   }
@@ -414,7 +414,7 @@ function localStore(harnessRoot: string): ArtifactStore & { root: string } {
   } catch (error) {
     throw new CoordinationError(
       "coordination.local-store-required",
-      `no artifact store is resolvable from ${resolve(process.cwd())} — scoped coordination requires createFsStore(<control harness root>): ${errorMessage(error)}`,
+      `no artifact store is resolvable from ${resolve(process.cwd())} \u2014 scoped coordination requires createFsStore(<control harness root>): ${errorMessage(error)}`,
       { harness_root: harnessRoot },
     );
   }
@@ -422,7 +422,7 @@ function localStore(harnessRoot: string): ArtifactStore & { root: string } {
   if (typeof root !== "string") {
     throw new CoordinationError(
       "coordination.local-store-required",
-      "the active ArtifactStore exposes no local root — scoped coordination requires the canonical FsStore",
+      "the active ArtifactStore exposes no local root \u2014 scoped coordination requires the canonical FsStore",
       { harness_root: harnessRoot },
     );
   }
@@ -477,7 +477,7 @@ export function resolveProcessHarnessDir(cwd: string = process.cwd(), harnessDir
     if (linked) {
       throw new CoordinationError(
         "coordination.not-in-git",
-        `${start} is a linked checkout (${join(dir, ".git")} is a file) whose main worktree is unreadable — refusing to resolve a process harness root from local artifacts`,
+        `${start} is a linked checkout (${join(dir, ".git")} is a file) whose main worktree is unreadable \u2014 refusing to resolve a process harness root from local artifacts`,
         { cwd: start, marker: join(dir, ".git") },
       );
     }
@@ -593,32 +593,32 @@ function parseAssignmentFile(assignmentPath: string): AssignmentHeaders {
     }
   }
   const executionScope = requireHeader("execution scope").toLowerCase();
-  if (executionScope !== "plan") throw invalidInput(`Assignment "Execution scope" must be "plan" — got ${requireHeader("execution scope")}`, { path: abs });
+  if (executionScope !== "plan") throw invalidInput(`Assignment "Execution scope" must be "plan" \u2014 got ${requireHeader("execution scope")}`, { path: abs });
   const executeAs = requireHeader("execute as");
   if (executeAs !== "project-manager") {
-    throw invalidInput(`Assignment "Execute as" must be "project-manager" — got ${executeAs}`, { path: abs });
+    throw invalidInput(`Assignment "Execute as" must be "project-manager" \u2014 got ${executeAs}`, { path: abs });
   }
   const delegation = requireHeader("delegation");
   if (!delegation.toLowerCase().startsWith("allowed")) {
     throw invalidInput(
-      `Assignment "Delegation" must start with "allowed" (plan-local delegation only) — got ${delegation}`,
+      `Assignment "Delegation" must start with "allowed" (plan-local delegation only) \u2014 got ${delegation}`,
       { path: abs },
     );
   }
   const qaGate = requireHeader("qa gate").toLowerCase();
   if (ASSIGNMENT_QA_GATES[qaGate] !== true) {
-    throw invalidInput(`Assignment "QA gate" must be one of ${Object.keys(ASSIGNMENT_QA_GATES).join(", ")} — got ${requireHeader("qa gate")}`, { path: abs });
+    throw invalidInput(`Assignment "QA gate" must be one of ${Object.keys(ASSIGNMENT_QA_GATES).join(", ")} \u2014 got ${requireHeader("qa gate")}`, { path: abs });
   }
   const findingsCleanup = requireHeader("findings cleanup").toLowerCase();
   if (ASSIGNMENT_FINDINGS_MODES[findingsCleanup] !== true) {
     throw invalidInput(
-      `Assignment "Findings cleanup" must be one of ${Object.keys(ASSIGNMENT_FINDINGS_MODES).join(", ")} — got ${requireHeader("findings cleanup")}`,
+      `Assignment "Findings cleanup" must be one of ${Object.keys(ASSIGNMENT_FINDINGS_MODES).join(", ")} \u2014 got ${requireHeader("findings cleanup")}`,
       { path: abs },
     );
   }
   const prepareGate = requireHeader("prepare gate").toLowerCase();
   if (prepareGate !== "go") {
-    throw invalidInput(`Assignment "Prepare gate" must be "go" — got ${requireHeader("prepare gate")}`, { path: abs });
+    throw invalidInput(`Assignment "Prepare gate" must be "go" \u2014 got ${requireHeader("prepare gate")}`, { path: abs });
   }
   return {
     assignmentPath: canonicalTarget(abs),
@@ -694,7 +694,7 @@ function findPlanRow(snapshot: WorkflowSnapshot, planId: string): { row: PlanRow
   if (matches.length > 1) {
     throw new CoordinationError(
       "coordination.store",
-      `workflow ${snapshot.id} has ${matches.length} rows claiming plan id ${planId} — refusing to pick one`,
+      `workflow ${snapshot.id} has ${matches.length} rows claiming plan id ${planId} \u2014 refusing to pick one`,
       { workflow_id: snapshot.id, plan_id: planId },
     );
   }
@@ -751,7 +751,7 @@ function scopeFromAssignment(
     if (options.requirePrepared) {
       throw new CoordinationError(
         "coordination.not-prepared",
-        `plan ${assignment.planId} has no prepared Assignment — the coordinator must run \`prepare\` first`,
+        `plan ${assignment.planId} has no prepared Assignment \u2014 the coordinator must run \`prepare\` first`,
         { workflow_id: assignment.workflowId, plan_id: assignment.planId },
       );
     }
@@ -828,7 +828,7 @@ export async function resolvePlanScope(input: PlanScopeInput, cwd: string = proc
   if (harnessRoot === null) {
     throw new CoordinationError(
       "coordination.harness-not-found",
-      `no harness root is resolvable from ${resolve(cwd)} — pass the control harness root explicitly`,
+      `no harness root is resolvable from ${resolve(cwd)} \u2014 pass the control harness root explicitly`,
       { cwd: resolve(cwd) },
     );
   }
@@ -838,7 +838,7 @@ export async function resolvePlanScope(input: PlanScopeInput, cwd: string = proc
   if (prepared === undefined || !isNonEmptyString(prepared.assignment_path)) {
     throw new CoordinationError(
       "coordination.not-prepared",
-      `plan ${planId} has no prepared Assignment — the coordinator must run \`prepare\` first`,
+      `plan ${planId} has no prepared Assignment \u2014 the coordinator must run \`prepare\` first`,
       { workflow_id: workflowId, plan_id: planId },
     );
   }
@@ -927,7 +927,7 @@ function createSessionEnvelope(session: CoordinationSession): string {
     if (code === "EEXIST") {
       throw new CoordinationError(
         "coordination.session-mismatch",
-        `session envelope already exists: ${path} — resume it instead of re-binding`,
+        `session envelope already exists: ${path} \u2014 resume it instead of re-binding`,
         { path },
       );
     }
@@ -976,7 +976,7 @@ async function commitSnapshot(
   if (!gate.ok) {
     throw new CoordinationError(
       "coordination.invalid-transition",
-      `refusing to write a snapshot that fails validation — ${summarize(gate.violations)}`,
+      `refusing to write a snapshot that fails validation \u2014 ${summarize(gate.violations)}`,
       { violations: gate.violations.map((entry) => entry.code) },
     );
   }
@@ -1043,7 +1043,7 @@ async function withRowCommit(
     if (opts.expectedRevision !== null && context.revision !== opts.expectedRevision) {
       throw new CoordinationError(
         "coordination.version-conflict",
-        `plan ${scope.planId} is at row revision ${context.revision}, expected ${opts.expectedRevision} — re-run \`mstar plan show\` and retry`,
+        `plan ${scope.planId} is at row revision ${context.revision}, expected ${opts.expectedRevision} \u2014 re-run \`mstar plan show\` and retry`,
         { expected: opts.expectedRevision, actual: context.revision, plan_id: scope.planId },
       );
     }
@@ -1076,7 +1076,7 @@ function assertPreparedFresh(scope: ResolvedPlanScope, prepared: PreparedCoordin
   if (actual !== prepared.assignment_sha256) {
     throw new CoordinationError(
       "coordination.assignment-stale",
-      `Assignment ${scope.assignmentPath} changed after preparation (${prepared.assignment_sha256} → ${actual}) — the coordinator must re-run \`prepare\``,
+      `Assignment ${scope.assignmentPath} changed after preparation (${prepared.assignment_sha256} \u2192 ${actual}) \u2014 the coordinator must re-run \`prepare\``,
       { path: scope.assignmentPath, expected: prepared.assignment_sha256, actual },
     );
   }
@@ -1088,7 +1088,7 @@ function assertCoordinatorBinding(session: CoordinationSession, sessionPath: str
   if (coordinator === undefined) {
     throw new CoordinationError(
       "coordination.not-prepared",
-      `workflow ${snapshot.id} has no coordinator binding — bind the coordinator session first`,
+      `workflow ${snapshot.id} has no coordinator binding \u2014 bind the coordinator session first`,
       { workflow_id: snapshot.id },
     );
   }
@@ -1118,7 +1118,7 @@ function requireExecutionLease(row: PlanRow, planId: string, what: string): Exec
   if (!gate.ok) {
     throw new CoordinationError(
       "coordination.invalid-transition",
-      `${what} requires ${planId} to hold an active execution lease — ${summarize(gate.violations)}`,
+      `${what} requires ${planId} to hold an active execution lease \u2014 ${summarize(gate.violations)}`,
       { plan_id: planId, violations: gate.violations.map((entry) => entry.code) },
     );
   }
@@ -1132,7 +1132,7 @@ function assertExecutionHolder(row: PlanRow, holder: string, planId: string, wha
   if (lease.holder !== holder) {
     throw new CoordinationError(
       "coordination.session-mismatch",
-      `${what} requires ${planId}'s execution lease held by ${holder} — it is held by ${lease.holder}`,
+      `${what} requires ${planId}'s execution lease held by ${holder} \u2014 it is held by ${lease.holder}`,
       { plan_id: planId, expected: holder, actual: lease.holder },
     );
   }
@@ -1182,7 +1182,7 @@ function assertNoHandoff(context: RowContext): void {
   if (handoff === undefined || handoff.state === "returned") return;
   throw new CoordinationError(
     "coordination.invalid-transition",
-    `plan ${context.scope.planId} is handed off (state ${String(handoff.state)}) — the plan session owns no transition until the coordinator returns or completes it`,
+    `plan ${context.scope.planId} is handed off (state ${String(handoff.state)}) \u2014 the plan session owns no transition until the coordinator returns or completes it`,
     { plan_id: context.scope.planId, state: handoff.state },
   );
 }
@@ -1379,7 +1379,7 @@ function assertStoredArtifact(kind: string, payload: unknown, path: string, harn
   if (gate === undefined || gate.ok) return;
   throw new CoordinationError(
     "coordination.store",
-    `${kind} ${path} fails validation — ${summarize(gate.violations)}`,
+    `${kind} ${path} fails validation \u2014 ${summarize(gate.violations)}`,
     { path, kind, violations: gate.violations.map((entry) => entry.code) },
   );
 }
@@ -1427,7 +1427,7 @@ function assertCoordinatorResidency(cwd: string, snapshot: WorkflowSnapshot): Ma
   if (main === null) {
     throw new CoordinationError(
       "coordination.not-in-git",
-      `coordinator binding requires a Git process root — ${resolve(cwd)} has no readable main worktree`,
+      `coordinator binding requires a Git process root \u2014 ${resolve(cwd)} has no readable main worktree`,
       { cwd: resolve(cwd) },
     );
   }
@@ -1438,7 +1438,7 @@ function assertCoordinatorResidency(cwd: string, snapshot: WorkflowSnapshot): Ma
   if (!allowed.some((candidate) => isWithin(candidate, here))) {
     throw new CoordinationError(
       "coordination.scope-mismatch",
-      `a coordinator session must be bound from the main worktree or the recorded integration worktree — ${here} is neither (${allowed.join(", ")})`,
+      `a coordinator session must be bound from the main worktree or the recorded integration worktree \u2014 ${here} is neither (${allowed.join(", ")})`,
       { cwd: here, allowed },
     );
   }
@@ -1472,7 +1472,7 @@ async function bindCoordinatorSession(cwd: string, workflowId: string, harnessDi
       if (snapshot.status !== "running") {
         throw new CoordinationError(
           "coordination.invalid-transition",
-          `workflow ${workflowId} is ${String(snapshot.status)} — a coordinator session binds only to a running lifecycle`,
+          `workflow ${workflowId} is ${String(snapshot.status)} \u2014 a coordinator session binds only to a running lifecycle`,
           { workflow_id: workflowId, status: snapshot.status },
         );
       }
@@ -1481,7 +1481,7 @@ async function bindCoordinatorSession(cwd: string, workflowId: string, harnessDi
       if (existing !== undefined) {
         throw new CoordinationError(
           "coordination.duplicate-holder",
-          `workflow ${workflowId} already has coordinator session ${existing.session_id} — resume it instead of binding a second one`,
+          `workflow ${workflowId} already has coordinator session ${existing.session_id} \u2014 resume it instead of binding a second one`,
           { holder: existing.session_id, session_file: existing.session_file },
         );
       }
@@ -1510,7 +1510,7 @@ function requireProcessRoot(cwd: string, harnessDir?: string): string {
   if (root === null) {
     throw new CoordinationError(
       "coordination.harness-not-found",
-      `no harness root is resolvable from ${resolve(cwd)} — pass the control harness root explicitly`,
+      `no harness root is resolvable from ${resolve(cwd)} \u2014 pass the control harness root explicitly`,
       { cwd: resolve(cwd) },
     );
   }
@@ -1533,7 +1533,7 @@ async function bindPlanSessionForPlan(scope: ResolvedPlanScope): Promise<Coordin
   if (prepared === undefined) {
     throw new CoordinationError(
       "coordination.not-prepared",
-      `plan ${planId} has no prepared Assignment — the coordinator must run \`prepare\` first`,
+      `plan ${planId} has no prepared Assignment \u2014 the coordinator must run \`prepare\` first`,
       { workflow_id: workflowId, plan_id: planId },
     );
   }
@@ -1547,7 +1547,7 @@ async function bindPlanSessionForPlan(scope: ResolvedPlanScope): Promise<Coordin
   if (!existsSync(scope.worktreePath) || !statSync(scope.worktreePath).isDirectory()) {
     throw new CoordinationError(
       "coordination.scope-mismatch",
-      `Assignment "Worktree path" ${scope.worktreePath} is not an existing directory — create the plan worktree before binding`,
+      `Assignment "Worktree path" ${scope.worktreePath} is not an existing directory \u2014 create the plan worktree before binding`,
       { path: scope.worktreePath },
     );
   }
@@ -1571,14 +1571,14 @@ async function bindPlanSessionForPlan(scope: ResolvedPlanScope): Promise<Coordin
       if (context.coordination.session !== undefined) {
         throw new CoordinationError(
           "coordination.duplicate-holder",
-          `plan ${planId} is already bound to session ${context.coordination.session.session_id} — resume it instead of binding a second one`,
+          `plan ${planId} is already bound to session ${context.coordination.session.session_id} \u2014 resume it instead of binding a second one`,
           { holder: context.coordination.session.session_id, session_file: context.coordination.session.session_file },
         );
       }
       if (context.coordination.handoff !== undefined) {
         throw new CoordinationError(
           "coordination.invalid-transition",
-          `plan ${planId} is handed off (state ${String(context.coordination.handoff.state)}) — the plan session cannot rebind`,
+          `plan ${planId} is handed off (state ${String(context.coordination.handoff.state)}) \u2014 the plan session cannot rebind`,
           { plan_id: planId, state: context.coordination.handoff.state },
         );
       }
@@ -1694,7 +1694,7 @@ function resumeBoundSession(resumePath: string): CoordinationResult {
   if (!isPlainObject(lease) || lease.holder !== session.session_id) {
     throw new CoordinationError(
       "coordination.duplicate-holder",
-      `plan ${planId} holds no live lease for session ${session.session_id} — it was released; a fresh bind is required`,
+      `plan ${planId} holds no live lease for session ${session.session_id} \u2014 it was released; a fresh bind is required`,
       { plan_id: planId, session_id: session.session_id },
     );
   }
@@ -1763,7 +1763,7 @@ function assertTrackBranches(context: RowContext, branches: readonly string[]): 
     if (forbidden.has(branch)) {
       throw new CoordinationError(
         "coordination.invalid-input",
-        `track branch ${branch} belongs to main/integration or another plan — a plan reports only its own L2 track branches`,
+        `track branch ${branch} belongs to main/integration or another plan \u2014 a plan reports only its own L2 track branches`,
         { branch },
       );
     }
@@ -1810,14 +1810,14 @@ async function mutatePrepare(
       if (context.coordination?.session !== undefined) {
         throw new CoordinationError(
           "coordination.invalid-transition",
-          `plan ${scope.planId} already has a bound plan session — preparation precedes the bind`,
+          `plan ${scope.planId} already has a bound plan session \u2014 preparation precedes the bind`,
           { plan_id: scope.planId },
         );
       }
       if (context.coordination?.handoff !== undefined) {
         throw new CoordinationError(
           "coordination.invalid-transition",
-          `plan ${scope.planId} is handed off — preparation precedes the handoff`,
+          `plan ${scope.planId} is handed off \u2014 preparation precedes the handoff`,
           { plan_id: scope.planId },
         );
       }
@@ -1827,14 +1827,14 @@ async function mutatePrepare(
       if (context.row.execution_lease !== undefined) {
         throw new CoordinationError(
           "coordination.duplicate-holder",
-          `plan ${scope.planId} already carries an execution lease — prepare must not seal a second owner`,
+          `plan ${scope.planId} already carries an execution lease \u2014 prepare must not seal a second owner`,
           { plan_id: scope.planId, holder: isPlainObject(context.row.execution_lease) ? context.row.execution_lease.holder : null },
         );
       }
       if (!isClaimableStatus(rowStatusOf(context.row))) {
         throw new CoordinationError(
           "coordination.invalid-transition",
-          `plan ${scope.planId} is ${rowStatusOf(context.row)} — prepare requires Todo or Blocked`,
+          `plan ${scope.planId} is ${rowStatusOf(context.row)} \u2014 prepare requires Todo or Blocked`,
           { plan_id: scope.planId, status: context.row.status },
         );
       }
@@ -1899,14 +1899,14 @@ async function mutateProgress(
       if (allowed === undefined) {
         throw new CoordinationError(
           "coordination.invalid-transition",
-          `plan ${scope.planId} is ${status || "unstatused"} — progress is reported only while executing (${Object.keys(PROGRESS_TRANSITIONS).join(", ")})`,
+          `plan ${scope.planId} is ${status || "unstatused"} \u2014 progress is reported only while executing (${Object.keys(PROGRESS_TRANSITIONS).join(", ")})`,
           { plan_id: scope.planId, status: context.row.status },
         );
       }
       if (!allowed.includes(progress.status)) {
         throw new CoordinationError(
           "coordination.invalid-transition",
-          `plan ${scope.planId} cannot move ${status} → ${progress.status} (allowed: ${allowed.join(", ")})`,
+          `plan ${scope.planId} cannot move ${status} \u2192 ${progress.status} (allowed: ${allowed.join(", ")})`,
           { plan_id: scope.planId, from: status, to: progress.status },
         );
       }
@@ -1971,7 +1971,7 @@ function readRegister(harnessRoot: string, projectId: string): RegisterBytes {
   if (!gate.ok) {
     throw new CoordinationError(
       "coordination.store",
-      `project register ${path} is malformed — ${summarize(gate.violations)}`,
+      `project register ${path} is malformed \u2014 ${summarize(gate.violations)}`,
       { path, violations: gate.violations.map((entry) => entry.code) },
     );
   }
@@ -2012,7 +2012,7 @@ function assertResidualInputs(entries: readonly ResidualInput[]): void {
     if (!residual.ok) {
       throw new CoordinationError(
         "coordination.invalid-input",
-        `residual ${String(entry.id)} is invalid — ${summarize(residual.violations)}`,
+        `residual ${String(entry.id)} is invalid \u2014 ${summarize(residual.violations)}`,
         { violations: residual.violations.map((violation) => violation.code) },
       );
     }
@@ -2151,12 +2151,12 @@ function assertExpectedRegisterVersion(version: string): void {
   if (!isNonEmptyString(version)) {
     throw new CoordinationError(
       "coordination.expected-version-required",
-      "residual writes require expectedRegisterVersion (the register's sha256:… version, or \"absent\" to create it)",
+      "residual writes require expectedRegisterVersion (the register's sha256:\u2026 version, or \"absent\" to create it)",
       {},
     );
   }
   if (version !== "absent" && !isArtifactVersion(version)) {
-    throw invalidInput(`expectedRegisterVersion must be "absent" or sha256:<hex> — got ${version}`, { version });
+    throw invalidInput(`expectedRegisterVersion must be "absent" or sha256:<hex> \u2014 got ${version}`, { version });
   }
 }
 
@@ -2186,7 +2186,7 @@ async function writeRegister(
     if (current.version !== expectedVersion) {
       throw new CoordinationError(
         "coordination.version-conflict",
-        `${path} is at version ${current.version}, expected ${expectedVersion} — re-run \`mstar plan show\` and retry`,
+        `${path} is at version ${current.version}, expected ${expectedVersion} \u2014 re-run \`mstar plan show\` and retry`,
         { expected: expectedVersion, actual: current.version, path },
       );
     }
@@ -2195,7 +2195,7 @@ async function writeRegister(
     if (!gate.ok) {
       throw new CoordinationError(
         "coordination.invalid-transition",
-        `refusing to write a project register that fails validation — ${summarize(gate.violations)}`,
+        `refusing to write a project register that fails validation \u2014 ${summarize(gate.violations)}`,
         { path, violations: gate.violations.map((entry) => entry.code) },
       );
     }
@@ -2350,7 +2350,7 @@ function assertRequestedPlan(session: CoordinationSession, requestedPlanId: stri
 
 function assertExpectedRevision(revision: number): void {
   if (!Number.isInteger(revision) || revision < 0) {
-    throw invalidInput(`expectedRevision must be a nonnegative integer — got ${JSON.stringify(revision)}`, { revision });
+    throw invalidInput(`expectedRevision must be a nonnegative integer \u2014 got ${JSON.stringify(revision)}`, { revision });
   }
 }
 
@@ -2559,19 +2559,19 @@ function assertFeatureCheckout(scope: ResolvedPlanScope, sourceSha: string, what
   }
   if (checkout.operation !== undefined) {
     throw gitProof(
-      `${what} requires a clean plan worktree — ${scope.worktreePath} has an unfinished ${checkout.operation}`,
+      `${what} requires a clean plan worktree \u2014 ${scope.worktreePath} has an unfinished ${checkout.operation}`,
       { plan_id: scope.planId, operation: checkout.operation },
     );
   }
   if (!checkout.clean) {
-    throw gitProof(`${what} requires a clean plan worktree — ${scope.worktreePath} has uncommitted changes`, {
+    throw gitProof(`${what} requires a clean plan worktree \u2014 ${scope.worktreePath} has uncommitted changes`, {
       plan_id: scope.planId,
       head: checkout.head,
     });
   }
   if (checkout.head !== sourceSha) {
     throw gitProof(
-      `${what} requires the plan worktree HEAD to be the pinned source ${sourceSha} — ${scope.worktreePath} is at ${checkout.head}`,
+      `${what} requires the plan worktree HEAD to be the pinned source ${sourceSha} \u2014 ${scope.worktreePath} is at ${checkout.head}`,
       { plan_id: scope.planId, expected: sourceSha, actual: checkout.head },
     );
   }
@@ -2686,7 +2686,7 @@ function requireHandoff(context: RowContext, planId: string, namedHandoffId: str
   if (handoff.id !== namedHandoffId) {
     throw new CoordinationError(
       "coordination.invalid-transition",
-      `plan ${planId} handoff ${handoff.id} is not the handoff this command named (${namedHandoffId}) — a replaced handoff is a different attempt`,
+      `plan ${planId} handoff ${handoff.id} is not the handoff this command named (${namedHandoffId}) \u2014 a replaced handoff is a different attempt`,
       { plan_id: planId, expected: namedHandoffId, actual: handoff.id },
     );
   }
@@ -2781,7 +2781,7 @@ function assertHandoffGitProof(
   assertFeatureCheckout(scope, input.source_sha, what);
   if (input.review_head !== input.source_sha) {
     throw gitProof(
-      `${what} requires review_head to be the pinned source ${input.source_sha} — got ${input.review_head}`,
+      `${what} requires review_head to be the pinned source ${input.source_sha} \u2014 got ${input.review_head}`,
       { plan_id: scope.planId, source_sha: input.source_sha, review_head: input.review_head },
     );
   }
@@ -2817,7 +2817,7 @@ async function mutateHandoff(
       if (prepared === undefined) {
         throw new CoordinationError(
           "coordination.not-prepared",
-          `plan ${scope.planId} is not prepared in this workflow — prepare records the Assignment pins a handoff cites`,
+          `plan ${scope.planId} is not prepared in this workflow \u2014 prepare records the Assignment pins a handoff cites`,
           { plan_id: scope.planId },
         );
       }
@@ -2825,7 +2825,7 @@ async function mutateHandoff(
       if (previous !== undefined && previous.state !== "returned") {
         throw new CoordinationError(
           "coordination.invalid-transition",
-          `plan ${scope.planId} is handed off (state ${previous.state}) — only a returned handoff can be handed off again`,
+          `plan ${scope.planId} is handed off (state ${previous.state}) \u2014 only a returned handoff can be handed off again`,
           { plan_id: scope.planId, state: previous.state, handoff_id: previous.id },
         );
       }
@@ -2833,7 +2833,7 @@ async function mutateHandoff(
       if (status !== "InReview") {
         throw new CoordinationError(
           "coordination.invalid-transition",
-          `handoff requires ${scope.planId} to be InReview — it is ${status || "unstatused"}`,
+          `handoff requires ${scope.planId} to be InReview \u2014 it is ${status || "unstatused"}`,
           { plan_id: scope.planId, status: context.row.status },
         );
       }
@@ -2916,7 +2916,7 @@ async function mutateAccept(
       if (handoff.state !== "submitted") {
         throw new CoordinationError(
           "coordination.invalid-transition",
-          `plan ${scope.planId} handoff is ${handoff.state} — accept requires submitted`,
+          `plan ${scope.planId} handoff is ${handoff.state} \u2014 accept requires submitted`,
           { plan_id: scope.planId, state: handoff.state },
         );
       }
@@ -2969,7 +2969,7 @@ async function mutateReturn(
       if (handoff.state !== "submitted" && handoff.state !== "accepted") {
         throw new CoordinationError(
           "coordination.invalid-transition",
-          `plan ${scope.planId} handoff is ${handoff.state} — a return requires submitted or accepted`,
+          `plan ${scope.planId} handoff is ${handoff.state} \u2014 a return requires submitted or accepted`,
           { plan_id: scope.planId, state: handoff.state },
         );
       }
@@ -3032,7 +3032,7 @@ function integrationAnchors(snapshot: WorkflowSnapshot, planId: string): Integra
   const worktreePath = snapshot.integration_worktree_path;
   if (!isNonEmptyString(targetBranch) || !isNonEmptyString(worktreePath)) {
     throw integrationUnresolved(
-      `plan ${planId} has no integration target — the snapshot must name branch.integration and integration_worktree_path`,
+      `plan ${planId} has no integration target \u2014 the snapshot must name branch.integration and integration_worktree_path`,
       { plan_id: planId },
     );
   }
@@ -3062,7 +3062,7 @@ function assertIntegrationCheckout(anchors: IntegrationAnchors, planId: string):
     throw integrationUnresolved(
       `plan ${planId} integration checkout ${anchors.worktreePath} ${
         checkout.operation === undefined ? "has uncommitted changes" : `has an unfinished ${checkout.operation}`
-      } — finish or abort it, then retry`,
+      } \u2014 finish or abort it, then retry`,
       { plan_id: planId, operation: checkout.operation, head: checkout.head },
     );
   }
@@ -3241,7 +3241,7 @@ function assertMergeLease(
   if (lease.plan_id !== planId || lease.source_branch !== handoff.source_branch) {
     throw new CoordinationError(
       "coordination.invalid-transition",
-      `plan ${planId} merge lease claims plan ${lease.plan_id} source ${lease.source_branch}, not this attempt (${planId} source ${handoff.source_branch}) — a foreign claim is never reused or released`,
+      `plan ${planId} merge lease claims plan ${lease.plan_id} source ${lease.source_branch}, not this attempt (${planId} source ${handoff.source_branch}) \u2014 a foreign claim is never reused or released`,
       {
         plan_id: planId,
         holder_plan_id: lease.plan_id,
@@ -3283,7 +3283,7 @@ async function mutateIntegrationStart(
       if (handoff.state !== "accepted" && handoff.state !== "integrating") {
         throw new CoordinationError(
           "coordination.invalid-transition",
-          `plan ${scope.planId} handoff is ${handoff.state} — integration-start requires accepted (or a started attempt to re-verify)`,
+          `plan ${scope.planId} handoff is ${handoff.state} \u2014 integration-start requires accepted (or a started attempt to re-verify)`,
           { plan_id: scope.planId, state: handoff.state },
         );
       }
@@ -3370,7 +3370,7 @@ async function mutateIntegrationAccept(
       if (handoff.state !== "integrating") {
         throw new CoordinationError(
           "coordination.invalid-transition",
-          `plan ${scope.planId} handoff is ${handoff.state} — integration-accept requires an integrating attempt`,
+          `plan ${scope.planId} handoff is ${handoff.state} \u2014 integration-accept requires an integrating attempt`,
           { plan_id: scope.planId, state: handoff.state },
         );
       }
@@ -3389,7 +3389,7 @@ async function mutateIntegrationAccept(
       const checkout = assertIntegrationCheckout(anchors, scope.planId);
       proof = integrationProof(anchors.worktreePath, checkout.head, integration.base_sha, handoff.source_sha);
       if (proof.kind === "diverged") {
-        throw integrationDiverged(`plan ${scope.planId} integration cannot be proven — ${proof.reason}`, {
+        throw integrationDiverged(`plan ${scope.planId} integration cannot be proven \u2014 ${proof.reason}`, {
           plan_id: scope.planId,
           base: integration.base_sha,
           source: handoff.source_sha,
@@ -3397,7 +3397,7 @@ async function mutateIntegrationAccept(
       }
       if (proof.kind === "pending") {
         throw integrationUnresolved(
-          `plan ${scope.planId} integration shows no merge of ${handoff.source_sha} onto ${integration.base_sha} yet — run the coordinator merge, then accept`,
+          `plan ${scope.planId} integration shows no merge of ${handoff.source_sha} onto ${integration.base_sha} yet \u2014 run the coordinator merge, then accept`,
           { plan_id: scope.planId, base: integration.base_sha, source: handoff.source_sha },
         );
       }
@@ -3490,7 +3490,7 @@ async function mutateComplete(
       if (handoff.state !== "merged") {
         throw new CoordinationError(
           "coordination.invalid-transition",
-          `plan ${scope.planId} handoff is ${handoff.state} — complete requires a merged attempt`,
+          `plan ${scope.planId} handoff is ${handoff.state} \u2014 complete requires a merged attempt`,
           { plan_id: scope.planId, state: handoff.state },
         );
       }
@@ -3618,7 +3618,7 @@ async function classifyReconcile(
     }
     const proof = integrationProof(anchors.worktreePath, checkout.head, integration.base_sha, handoff.source_sha);
     if (proof.kind === "diverged") {
-      throw integrationDiverged(`plan ${planId} integration cannot be reconciled — ${proof.reason}`, {
+      throw integrationDiverged(`plan ${planId} integration cannot be reconciled \u2014 ${proof.reason}`, {
         plan_id: planId,
         base: integration.base_sha,
         source: handoff.source_sha,
@@ -3657,7 +3657,7 @@ async function classifyReconcile(
   }
   throw new CoordinationError(
     "coordination.invalid-transition",
-    `plan ${planId} handoff is ${handoff.state} — reconcile recovers only integrating, merged or completed attempts`,
+    `plan ${planId} handoff is ${handoff.state} \u2014 reconcile recovers only integrating, merged or completed attempts`,
     { plan_id: planId, state: handoff.state },
   );
 }
@@ -3731,12 +3731,12 @@ export async function replaceCoordinatedArtifact(input: CoordinatedReplacement):
   if (!isNonEmptyString(input.expectedVersion)) {
     throw new CoordinationError(
       "coordination.expected-version-required",
-      "a coordinated replacement requires expectedVersion (sha256:… or \"absent\")",
+      "a coordinated replacement requires expectedVersion (sha256:\u2026 or \"absent\")",
       {},
     );
   }
   if (input.expectedVersion !== "absent" && !isArtifactVersion(input.expectedVersion)) {
-    throw invalidInput(`expectedVersion must be "absent" or sha256:<hex> — got ${input.expectedVersion}`, {});
+    throw invalidInput(`expectedVersion must be "absent" or sha256:<hex> \u2014 got ${input.expectedVersion}`, {});
   }
   const kind = input.ref.kind;
   if (kind === "status") {
@@ -3752,7 +3752,7 @@ export async function replaceCoordinatedArtifact(input: CoordinatedReplacement):
   if (kind !== "snapshot") {
     throw new CoordinationError(
       "coordination.scoped-writer-required",
-      `kind ${kind} has no coordinated writer — a scoped replacement covers snapshot, status and residuals; ${kind} keeps its own writer`,
+      `kind ${kind} has no coordinated writer \u2014 a scoped replacement covers snapshot, status and residuals; ${kind} keeps its own writer`,
       { kind },
     );
   }
@@ -3789,7 +3789,7 @@ export async function replaceCoordinatedArtifact(input: CoordinatedReplacement):
   if (current.coordination === undefined) {
     throw new CoordinationError(
       "coordination.not-prepared",
-      `workflow ${current.id} has no coordinator binding — a coordinated snapshot replacement requires one`,
+      `workflow ${current.id} has no coordinator binding \u2014 a coordinated snapshot replacement requires one`,
       { workflow_id: current.id },
     );
   }
@@ -3804,7 +3804,7 @@ export async function replaceCoordinatedArtifact(input: CoordinatedReplacement):
   }
   const gate = validateWorkflowSnapshot(input.payload);
   if (!gate.ok) {
-    throw invalidInput(`snapshot payload fails validation — ${summarize(gate.violations)}`, {
+    throw invalidInput(`snapshot payload fails validation \u2014 ${summarize(gate.violations)}`, {
       violations: gate.violations.map((entry) => entry.code),
     });
   }
@@ -3821,7 +3821,7 @@ export async function replaceCoordinatedArtifact(input: CoordinatedReplacement):
 function artifactVersionConflict(path: string, expected: string, actual: string): CoordinationError {
   return new CoordinationError(
     "coordination.version-conflict",
-    `${path} is at version ${actual}, expected ${expected} — re-read it (\`persist get --versioned\`) and retry`,
+    `${path} is at version ${actual}, expected ${expected} \u2014 re-read it (\`persist get --versioned\`) and retry`,
     { expected, actual, path },
   );
 }
@@ -3849,7 +3849,7 @@ function registeredWorkflowEntries(harnessRoot: string, doc: unknown, statusPath
     if (!isPlainObject(entry) || !isNonEmptyString(entry.id) || !isNonEmptyString(entry.dir)) {
       throw new CoordinationError(
         "coordination.store",
-        `root ${statusPath} holds a malformed workflow entry — refusing to classify coordination ownership`,
+        `root ${statusPath} holds a malformed workflow entry \u2014 refusing to classify coordination ownership`,
         { path: statusPath },
       );
     }
@@ -3960,7 +3960,7 @@ async function replaceRootStatus(input: CoordinatedReplacement, harnessRoot: str
   const statusDoc = input.payload as StatusV2Doc;
   const gate = validateStatusV2(statusDoc, { harnessDir: harnessRoot });
   if (!gate.ok) {
-    throw invalidInput(`status payload fails validation — ${summarize(gate.violations)}`, {
+    throw invalidInput(`status payload fails validation \u2014 ${summarize(gate.violations)}`, {
       violations: gate.violations.map((entry) => entry.code),
     });
   }
@@ -3975,7 +3975,7 @@ async function replaceRootStatus(input: CoordinatedReplacement, harnessRoot: str
       const currentOwnership = coordinatedOwnershipOf(lockedEntries, currentEntries);
       if (currentOwnership.workflows.length > 0) {
         throw scopedWriterRequired(
-          `refusing to replace ${statusPath}: it registers coordinated workflows ${currentOwnership.workflows.join(", ")} — the scoped writers own those rows`,
+          `refusing to replace ${statusPath}: it registers coordinated workflows ${currentOwnership.workflows.join(", ")} \u2014 the scoped writers own those rows`,
           { path: statusPath, workflows: currentOwnership.workflows, side: "current" },
         );
       }
@@ -4012,7 +4012,7 @@ async function replaceProjectRegister(input: CoordinatedReplacement, harnessRoot
   if (!isPlainObject(input.payload)) throw invalidInput("a project register payload must be an object");
   const gate = validateProjectRegister(input.payload);
   if (!gate.ok) {
-    throw invalidInput(`project register payload fails validation — ${summarize(gate.violations)}`, {
+    throw invalidInput(`project register payload fails validation \u2014 ${summarize(gate.violations)}`, {
       violations: gate.violations.map((entry) => entry.code),
     });
   }
@@ -4037,7 +4037,7 @@ async function replaceProjectRegister(input: CoordinatedReplacement, harnessRoot
           const coordinated = registerBucketKeys(doc).filter((key) => ownership.plans.has(key));
           if (coordinated.length > 0) {
             throw scopedWriterRequired(
-              `refusing to replace ${registerPath}: ${side} buckets ${coordinated.join(", ")} belong to coordinated plans — use residual-add/residual-close`,
+              `refusing to replace ${registerPath}: ${side} buckets ${coordinated.join(", ")} belong to coordinated plans \u2014 use residual-add/residual-close`,
               { path: registerPath, plans: coordinated, side },
             );
           }

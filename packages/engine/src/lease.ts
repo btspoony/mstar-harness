@@ -447,7 +447,7 @@ export function transferLease(row: PlanRow, from: string, to: string): LeaseTran
         violation(
           "high",
           "lease.transfer.missing",
-          "holder transfer requires an active execution_lease object — nothing to transfer",
+          "holder transfer requires an active execution_lease object \u2014 nothing to transfer",
         ),
       ],
     };

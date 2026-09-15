@@ -188,7 +188,7 @@ export function assertProtectedWriteAuthorized(
   if (isWriteAuthorized(canonical, operation)) return;
   throw new CoordinationError(
     "coordination.direct-write-refused",
-    `${canonical} is a protected coordination document (${kind}) — a raw store.${operation} is refused; use the coordination API (bind/prepare/progress/residual/handoff/accept/return/complete) or the locked writer`,
+    `${canonical} is a protected coordination document (${kind}) \u2014 a raw store.${operation} is refused; use the coordination API (bind/prepare/progress/residual/handoff/accept/return/complete) or the locked writer`,
     { path: canonical, operation, kind },
   );
 }
@@ -199,7 +199,7 @@ export function assertExactKeys(value: Record<string, unknown>, allowed: readonl
   if (extra.length > 0) {
     throw new CoordinationError(
       "coordination.forbidden-field",
-      `${what} accepts only ${allowed.join(", ")} — unexpected key(s): ${extra.join(", ")}`,
+      `${what} accepts only ${allowed.join(", ")} \u2014 unexpected key(s): ${extra.join(", ")}`,
       { what, unexpected: extra, allowed: [...allowed] },
     );
   }

@@ -167,7 +167,7 @@ function requireFlag(raw: string | undefined, flag: string, verb: string, what: 
 function requireAbsolutePath(raw: string | undefined, flag: string, verb: string, what: string): string {
   const value = requireFlag(raw, flag, verb, what);
   if (!isAbsolute(value)) {
-    throw new SddScriptError(`${flag} must be an absolute path — got ${JSON.stringify(value)}`, 2);
+    throw new SddScriptError(`${flag} must be an absolute path \u2014 got ${JSON.stringify(value)}`, 2);
   }
   return value;
 }
@@ -181,11 +181,11 @@ function parseExpect(raw: string | undefined, verb: string): number {
     );
   }
   if (!/^\d+$/.test(raw)) {
-    throw new SddScriptError(`--expect must be a nonnegative integer revision — got ${JSON.stringify(raw)}`, 2);
+    throw new SddScriptError(`--expect must be a nonnegative integer revision \u2014 got ${JSON.stringify(raw)}`, 2);
   }
   const revision = Number(raw);
   if (!Number.isSafeInteger(revision)) {
-    throw new SddScriptError(`--expect is out of range — got ${JSON.stringify(raw)}`, 2);
+    throw new SddScriptError(`--expect is out of range \u2014 got ${JSON.stringify(raw)}`, 2);
   }
   return revision;
 }
@@ -194,7 +194,7 @@ function parseExpect(raw: string | undefined, verb: string): number {
 function parseExpectedVersion(raw: string | undefined, flag: string, verb: string): string {
   const value = requireFlag(raw, flag, verb, "version");
   if (value === "absent" || /^sha256:[0-9a-f]{64}$/.test(value)) return value;
-  throw new SddScriptError(`${flag} must be "absent" or sha256:<64 lowercase hex> — got ${JSON.stringify(value)}`, 2);
+  throw new SddScriptError(`${flag} must be "absent" or sha256:<64 lowercase hex> \u2014 got ${JSON.stringify(value)}`, 2);
 }
 
 /** JSON payload input is strict: absolute, present, parseable. */
@@ -360,7 +360,7 @@ function printView(verb: string, view: PlanCoordinationView, json: boolean): voi
   if (liveHandoff !== undefined) console.error(`plan ${verb}: handoff id ${liveHandoff}`);
   if (scope === null) {
     console.error(
-      `plan ${verb}: this row is not prepared yet — run \`mstar plan prepare --session ${view.session_file} --plan <id> --assignment <absolute-md> --expect ${view.revision}\``,
+      `plan ${verb}: this row is not prepared yet \u2014 run \`mstar plan prepare --session ${view.session_file} --plan <id> --assignment <absolute-md> --expect ${view.revision}\``,
     );
   } else {
     console.error(`plan ${verb}: worktree ${scope.worktreePath} (branch ${scope.workingBranch})`);
@@ -448,7 +448,7 @@ function handoffOperation(options: PlanCliOptions, kind: TransitionKind): PlanCo
  */
 function handoffMismatch(verb: string, planId: string, live: string, named: string): Error {
   const error = new Error(
-    `plan ${verb}: row ${planId} carries handoff ${live} — refusing the --handoff ${named} this call names`,
+    `plan ${verb}: row ${planId} carries handoff ${live} \u2014 refusing the --handoff ${named} this call names`,
   );
   return Object.assign(error, {
     code: "coordination.handoff-mismatch",
@@ -468,7 +468,7 @@ function bindInputOf(options: PlanCliOptions): BindPlanSessionInput {
   const resume = options.resume as string | undefined;
   const harness = options.harness as string | undefined;
   if (harness !== undefined && !isAbsolute(harness)) {
-    throw new SddScriptError(`--harness must be an absolute path — got ${JSON.stringify(harness)}`, 2);
+    throw new SddScriptError(`--harness must be an absolute path \u2014 got ${JSON.stringify(harness)}`, 2);
   }
   const families = [
     coordinator,
@@ -535,7 +535,7 @@ export function registerPlanCommands(program: Command): void {
   plan
     .command("bind")
     .description(
-      "Bind the scoped session for one plan — fresh `--workflow/--plan` or `--assignment` claim (both addresses resolve " +
+      "Bind the scoped session for one plan \u2014 fresh `--workflow/--plan` or `--assignment` claim (both addresses resolve " +
         "the same prepared row), fresh `--coordinator` bootstrap, or explicit `--resume` of an existing session file " +
         "(read-only: no ownership change, no takeover)",
     )
