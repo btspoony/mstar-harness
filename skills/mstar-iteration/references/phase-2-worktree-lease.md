@@ -56,6 +56,8 @@ starts at **Phase 2 entry**.
 
 SSOT = `{WORKFLOW_DIR}/<id>/snapshot.json` + `{PLAN_DIR}/`。todos 只追踪本轮下一步。
 
+Phase/gate 转换时按 **`mstar-host`**「Phase-transition todo refresh (host-agnostic)」刷新：先按 snapshot / plan 证据勾掉已完成条目，保留未决 gate 条目，再追加下一批条目；todos 只是投影，不授权状态转换。
+
 **Scoped route**：todos 是 **plan-local 任务列表**（本 plan 的 task / gate），**不**追加 `phase-3-*` / `phase-4-*` / `phase-5-*` / `phase-6-*`；scoped finish = handoff → **`plan-scoped-pm.md`** §4–§5。
 
 ## 2.2 Read backlog
