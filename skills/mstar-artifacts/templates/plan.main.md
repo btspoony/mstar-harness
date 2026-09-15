@@ -14,7 +14,7 @@
 
 ## Global Constraints
 
-[Project requirements — version floors, naming, exact values — copied verbatim from spec. Every task includes them. Verification scope follows `mstar-harness-core` § 定向执行与验证边界: only changed behavior and direct contracts; no local full suites without explicit user permission.]
+[Project requirements — version floors, naming, exact values — copied verbatim from spec. Every task includes them. Verification scope follows `mstar-harness-core` § 定向执行与验证边界: only changed behavior and direct contracts; no local full suites without explicit user permission. Never assign real-browser/device/installed-deployment E2E evidence as a task or a gate of a development plan; each layer proves itself with its own unit/integration tests. Real-environment verification lives only in a separately requested `mstar-e2e` workflow, whose named scenarios are that workflow's own plan rows.]
 
 ---
 
