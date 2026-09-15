@@ -1207,12 +1207,17 @@ statusCommand
   .option("--workflow <id>", "Workflow id to close ({WORKFLOW_DIR}/<id>/snapshot.json)")
   .option("--harness <path>", "Harness dir override (default: resolved control {HARNESS_DIR})")
   .option("--ended-at <date>", "Terminal ended_at timestamp (YYYY-MM-DD or RFC3339; default: today)")
-  .action(async (options: { workflow?: string; harness?: string; endedAt?: string }) => {
+  .option("--session <path>", "Absolute coordinator session JSON envelope path (required to close a coordinated workflow)")
+  .action(async (options: { workflow?: string; harness?: string; endedAt?: string; session?: string }) => {
     try {
       const workflowId = options.workflow;
       if (workflowId === undefined || workflowId.trim() === "") {
-        throw new SddScriptError("usage: status workflow-close --workflow <id> [--harness <path>] [--ended-at <date>]", 2);
+        throw new SddScriptError(
+          "usage: status workflow-close --workflow <id> [--harness <path>] [--ended-at <date>] [--session <path>]",
+          2,
+        );
       }
+      const sessionPath = resolveSessionFlag(options.session);
       // Shared workflow-id guard — the same contract every other `--workflow <id>`
       // verb applies via `resolveSnapshotPath` (reject ""/./.. and separators) so a
       // hostile id never reaches the path join below. Defense-in-depth on the write
@@ -1239,7 +1244,10 @@ statusCommand
       const pre = readWorkflowSnapshot(snapshotDir);
       const wasTerminal = isTerminalSnapshot(pre.snapshot);
       const endedAt = options.endedAt ?? todayString();
-      const closed = await closeWorkflow(workflowId, snapshotDir, { endedAt });
+      const closed = await closeWorkflow(workflowId, snapshotDir, {
+        endedAt,
+        ...(sessionPath !== undefined ? { sessionPath } : {}),
+      });
       // Fixed ordering: unregister only AFTER the durable terminal write.
       // Missing root/id removal is already idempotent inside the root lock —
       // never pre-read and skipped; the pre-state is read only for the report.

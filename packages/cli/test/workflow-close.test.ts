@@ -12,7 +12,10 @@
  *   an unregister failure AFTER the durable snapshot write reports a partial
  *   close and a fixed-root retry finishes the unregister without changing
  *   `ended_at`.
- * - exit 2 usage: missing `--workflow`.
+ * - exit 2 usage: missing `--workflow`, a relative `--session`.
+ * - a coordinated snapshot closes only for its bound coordinator envelope
+ *   (`--session <path>`, spec §C4): a missing/mismatched envelope refuses
+ *   with `coordination.session-mismatch` before the unfinished-row gate.
  * - exit 1: a hostile workflow id is rejected up front by the shared
  *   `assertWorkflowId` guard (same convention as every other
  *   `--workflow <id>` verb).
@@ -301,13 +304,58 @@ describe("mstar status workflow-close — coordinated-writer boundary", () => {
     });
   }
 
-  test("uncoordinated close keeps its contract: terminal write then root unregister (exit 0)", () => {
+  /** Write the coordinator envelope the snapshot binds to; return its path. */
+  function writeCoordinatorSession(harness: string): string {
+    const sessionsDir = join(harness, "workflows", WORKFLOW_ID, "sessions");
+    const sessionPath = join(sessionsDir, "coordinator.json");
+    mkdirSync(sessionsDir, { recursive: true });
+    writeFileSync(
+      sessionPath,
+      JSON.stringify(
+        {
+          schema_version: 1,
+          role: "coordinator",
+          session_id: "11111111-2222-3333-4444-555555555555",
+          workflow_id: WORKFLOW_ID,
+          harness_root: harness,
+        },
+        null,
+        2,
+      ),
+    );
+    return sessionPath;
+  }
+
+  test("a coordinated snapshot closes for its bound coordinator session (exit 0)", () => {
     setupHarness((harness, { snapshot, root }) => {
-      const result = runCli(closeArgs(harness, ["--ended-at", "2026-09-12"]));
+      writeFileSync(snapshot, JSON.stringify(coordinatedSnapshotDoc(harness, "Done"), null, 2), "utf8");
+      const sessionPath = writeCoordinatorSession(harness);
+
+      const result = runCli(closeArgs(harness, ["--ended-at", "2026-09-12", "--session", sessionPath]));
       expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe("");
       const doc = JSON.parse(readFileSync(snapshot, "utf8")) as Record<string, unknown>;
       expect(doc.status).toBe("completed");
+      expect(doc.ended_at).toBe("2026-09-12");
       expect((JSON.parse(readFileSync(root, "utf8")) as Record<string, unknown>).workflows).toEqual([]);
+    });
+  });
+
+  test("a coordinated snapshot without --session refuses even when every row is Done (exit 1, bytes + root intact)", () => {
+    setupHarness((harness, { snapshot, root }) => {
+      const fixture = coordinatedSnapshotDoc(harness, "Done");
+      writeFileSync(snapshot, JSON.stringify(fixture, null, 2), "utf8");
+      writeCoordinatorSession(harness);
+
+      const result = runCli(closeArgs(harness));
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("is coordinated");
+      expect(result.stderr).toContain("--session <coordinator envelope>");
+      // The row gate is not what refused this close: rows are Done.
+      expect(result.stderr).not.toContain("every plan row must be Done");
+      expect(readFileSync(snapshot, "utf8")).toBe(JSON.stringify(fixture, null, 2));
+      const rootAfter = JSON.parse(readFileSync(root, "utf8")) as Record<string, unknown>;
+      expect(rootAfter.workflows).toHaveLength(1);
     });
   });
 
@@ -315,13 +363,27 @@ describe("mstar status workflow-close — coordinated-writer boundary", () => {
     setupHarness((harness, { snapshot, root }) => {
       const fixture = coordinatedSnapshotDoc(harness, "InReview");
       writeFileSync(snapshot, JSON.stringify(fixture, null, 2), "utf8");
+      const sessionPath = writeCoordinatorSession(harness);
 
-      const result = runCli(closeArgs(harness));
+      const result = runCli(closeArgs(harness, ["--session", sessionPath]));
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("every plan row must be Done");
       expect(readFileSync(snapshot, "utf8")).toBe(JSON.stringify(fixture, null, 2));
       const rootAfter = JSON.parse(readFileSync(root, "utf8")) as Record<string, unknown>;
       expect(rootAfter.workflows).toHaveLength(1);
+    });
+  });
+
+  test("--session must be absolute: a relative path is a usage error before any read (exit 2)", () => {
+    setupHarness((harness, { snapshot }) => {
+      const fixture = coordinatedSnapshotDoc(harness, "Done");
+      writeFileSync(snapshot, JSON.stringify(fixture, null, 2), "utf8");
+      writeCoordinatorSession(harness);
+
+      const result = runCli(closeArgs(harness, ["--session", "workflows/coordinator.json"]));
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain("--session must be an absolute path");
+      expect(readFileSync(snapshot, "utf8")).toBe(JSON.stringify(fixture, null, 2));
     });
   });
 });
