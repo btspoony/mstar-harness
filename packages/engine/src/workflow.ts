@@ -572,15 +572,22 @@ export async function writeWorkflowSnapshot(
  * (spec §C4) — the `mstar persist replace snapshot` door authenticates on the
  * session envelope, and a replacement can never add or drop the
  * `coordination` block (the field-scoped merge already pins it to disk).
+ * `CloseWorkflowOptions.sessionPath` reaches the same seam, so the refusal
+ * names the operation that was refused.
  */
-function assertCoordinatedSnapshotWriter(stored: unknown, snapshotPath: string, sessionPath: string | undefined): void {
+function assertCoordinatedSnapshotWriter(
+  stored: unknown,
+  snapshotPath: string,
+  sessionPath: string | undefined,
+  action = "replacement",
+): void {
   const coordination = isPlainObject(stored) ? stored.coordination : undefined;
   if (coordination === undefined) return;
   const bound = isPlainObject(coordination) && isPlainObject(coordination.coordinator) ? coordination.coordinator.session_file : undefined;
   if (sessionPath === undefined || typeof bound !== "string" || canonicalTarget(sessionPath) !== canonicalTarget(bound)) {
     throw new CoordinationError(
       "coordination.session-mismatch",
-      `snapshot ${snapshotPath} is coordinated — replacement requires --session <coordinator envelope>`,
+      `snapshot ${snapshotPath} is coordinated — ${action} requires --session <coordinator envelope>`,
       { path: snapshotPath, expected: bound, actual: sessionPath },
     );
   }
@@ -655,7 +662,18 @@ export function isTerminalSnapshot(doc: WorkflowSnapshot): boolean {
   return (WORKFLOW_TERMINAL_STATUSES as readonly string[]).includes(doc.status);
 }
 
-export type CloseWorkflowOptions = { endedAt: string };
+export type CloseWorkflowOptions = {
+  endedAt: string;
+  /**
+   * Canonical coordinator session envelope path (spec §C4). Required when the
+   * stored snapshot is coordinated: the close writes the snapshot, so only the
+   * snapshot's own bound coordinator may pass. A missing/mismatched envelope
+   * refuses the close with `coordination.session-mismatch` before anything is
+   * written. Non-coordinated snapshots ignore it; an already-terminal snapshot
+   * is returned unchanged (no write, no authorization needed).
+   */
+  sessionPath?: string;
+};
 
 function isCloseTimestamp(value: string): boolean {
   if (typeof value !== "string") return false;
@@ -670,6 +688,9 @@ function isCloseTimestamp(value: string): boolean {
 /**
  * Complete the latest snapshot under its write lock. Never releases leases.
  * A valid terminal snapshot is returned unchanged, including failed/stopped.
+ * A coordinated snapshot is closed only by its own bound coordinator
+ * (spec §C4) — the same envelope seam as `writeWorkflowSnapshot` — so a plan
+ * actor or a bare CLI call can never complete a lifecycle it does not own.
  */
 export async function closeWorkflow(workflowId: string, dir: string, opts: CloseWorkflowOptions): Promise<WorkflowSnapshot> {
   if (!isCloseTimestamp(opts.endedAt)) {
@@ -688,6 +709,11 @@ export async function closeWorkflow(workflowId: string, dir: string, opts: Close
       throw new Error(`workflow snapshot identity mismatch: expected ${workflowId}, got ${snapshot.id}`);
     }
     if (isTerminalSnapshot(snapshot)) return snapshot;
+    // Authorization sits on the write path only: a terminal snapshot returned
+    // above is never written. For a coordinated snapshot the stored payload
+    // (not the normalized view) carries the `coordination` block, exactly as
+    // the replacement door reads it.
+    assertCoordinatedSnapshotWriter(doc, snapshotPath, opts.sessionPath, "close");
     if (snapshot.plans.some((row) => row.status !== "Done")) {
       throw new Error("refusing to close workflow: every plan row must be Done");
     }

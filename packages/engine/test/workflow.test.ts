@@ -668,3 +668,123 @@ describe("closeWorkflow", () => {
     expect(isTerminalSnapshot({ status: "paused" } as never)).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// coordinated-writer — create-only snapshot writes (spec C4)
+// ---------------------------------------------------------------------------
+
+describe("coordinated-writer — create-only snapshot writes", () => {
+  test("creates the snapshot when the target is absent", async () => {
+    const root = tmpRoot("coordinated-writer-create-absent-");
+    setArtifactStore(createFsStore(root));
+    const dir = join(root, "workflows", "00000819-workflow-engine-core");
+    try {
+      await writeWorkflowSnapshot(validSnapshot(), dir, { createOnly: true });
+      expect(existsSync(join(dir, WORKFLOW_SNAPSHOT_FILE))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("refuses an existing snapshot and leaves its bytes unchanged", async () => {
+    const root = tmpRoot("coordinated-writer-create-existing-");
+    setArtifactStore(createFsStore(root));
+    const dir = join(root, "workflows", "00000819-workflow-engine-core");
+    const snapshotPath = join(dir, WORKFLOW_SNAPSHOT_FILE);
+    try {
+      await writeWorkflowSnapshot(validSnapshot(), dir, { createOnly: true });
+      const before = readFileSync(snapshotPath, "utf8");
+      await expect(writeWorkflowSnapshot(validSnapshot(), dir, { createOnly: true })).rejects.toMatchObject({
+        code: "coordination.version-conflict",
+      });
+      expect(readFileSync(snapshotPath, "utf8")).toBe(before);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// coordinated-writer — coordinated close authorization (spec C4)
+// ---------------------------------------------------------------------------
+
+describe("coordinated-writer — coordinated close authorization", () => {
+  const id = "00000101-close-coordinated";
+  const endedAt = "2026-09-12T10:20:30+08:00";
+  const roots: string[] = [];
+  afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
+
+  /** Coordinator-bound, all-rows-Done running snapshot + the matching envelope. */
+  function fixture(overrides: Record<string, unknown> = {}) {
+    const root = tmpRoot("workflow-close-coordinated-");
+    roots.push(root);
+    const dir = join(root, "workflows", id);
+    const sessions = join(dir, "sessions");
+    mkdirSync(sessions, { recursive: true });
+    const sessionFile = join(sessions, "s-1.json");
+    const otherSessionFile = join(sessions, "s-2.json");
+    for (const file of [sessionFile, otherSessionFile]) {
+      writeFileSync(file, JSON.stringify({ session_id: `s-${file === sessionFile ? 1 : 2}` }) + "\n");
+    }
+    const path = join(dir, WORKFLOW_SNAPSHOT_FILE);
+    const snapshot = validSnapshot({
+      id,
+      type: "plan",
+      status: "running",
+      ended_at: undefined,
+      coordination: { coordinator: { session_id: "s-1", session_file: sessionFile, bound_at: "2026-09-15T00:00:00Z" } },
+      ...overrides,
+    });
+    writeFileSync(path, JSON.stringify(snapshot, null, 4) + "\n");
+    setArtifactStore(createFsStore(root));
+    return { root, dir, path, sessionFile, otherSessionFile, snapshot };
+  }
+
+  test("refuses to close a coordinated workflow with no session and leaves the bytes unchanged", async () => {
+    const { dir, path, sessionFile } = fixture();
+    const before = readFileSync(path, "utf8");
+    await expect(closeWorkflow(id, dir, { endedAt })).rejects.toMatchObject({
+      code: "coordination.session-mismatch",
+      details: { path, expected: sessionFile, actual: undefined },
+    });
+    expect(readFileSync(path, "utf8")).toBe(before);
+  });
+
+  test("refuses to close a coordinated workflow from a foreign session and leaves the bytes unchanged", async () => {
+    const { dir, path, otherSessionFile } = fixture();
+    const before = readFileSync(path, "utf8");
+    await expect(closeWorkflow(id, dir, { endedAt, sessionPath: otherSessionFile })).rejects.toMatchObject({
+      code: "coordination.session-mismatch",
+      details: { path, actual: otherSessionFile },
+    });
+    expect(readFileSync(path, "utf8")).toBe(before);
+  });
+
+  test("closes a coordinated workflow for its bound coordinator and preserves the binding", async () => {
+    const { dir, path, sessionFile, snapshot } = fixture();
+    const closed = await closeWorkflow(id, dir, { endedAt, sessionPath: sessionFile });
+    expect(closed).toEqual({ ...JSON.parse(JSON.stringify(snapshot)), status: "completed", ended_at: endedAt, updated_at: endedAt });
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual(closed);
+  });
+
+  test("refuses a coordinated close while any plan row is not Done and leaves the bytes unchanged", async () => {
+    const { dir, path, sessionFile } = fixture({ plans: [legacyRow({ status: "InProgress" })] });
+    const before = readFileSync(path, "utf8");
+    await expect(closeWorkflow(id, dir, { endedAt, sessionPath: sessionFile })).rejects.toThrow(/every plan row must be Done/);
+    expect(readFileSync(path, "utf8")).toBe(before);
+  });
+
+  test("returns an already-terminal coordinated snapshot unchanged without a session", async () => {
+    const { dir, path } = fixture({ status: "completed", ended_at: "2026-09-11" });
+    const before = readFileSync(path, "utf8");
+    expect((await closeWorkflow(id, dir, { endedAt })).status).toBe("completed");
+    expect(readFileSync(path, "utf8")).toBe(before);
+  });
+
+  test("closes an uncoordinated workflow with no session (unchanged behavior)", async () => {
+    const { dir, path, snapshot } = fixture({ coordination: undefined });
+    const closed = await closeWorkflow(id, dir, { endedAt });
+    expect(closed).toEqual({ ...JSON.parse(JSON.stringify(snapshot)), status: "completed", ended_at: endedAt, updated_at: endedAt });
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual(closed);
+  });
+});

@@ -42,9 +42,10 @@ import { basename, join, resolve } from "node:path";
 import { readJson, SEVERITY_ORDER, type GateResult, type Severity, type ValidationResult } from "./core.js";
 import { parseCompassFrontmatterText } from "./iteration.js";
 import { withStatusWriteLock } from "./lease.js";
-import { withProtectedWrite } from "./coordination-write.js";
-import { assertFsStorePath, getArtifactStore } from "./store.js";
-import { isOpenResidual, normalizeSeverity, validateResidual, type ResidualEntry } from "./status.js";
+import { CoordinationError, isPlainObject, readArtifactBytes, withProtectedWrite } from "./coordination-write.js";
+import { assertFsStorePath, getArtifactStore, resolveArtifactPath, type ArtifactStore } from "./store.js";
+import { isOpenResidual, normalizeSeverity, validateResidual, type ResidualEntry, type WorkflowEntry } from "./status.js";
+import { WORKFLOW_SNAPSHOT_FILE } from "./workflow.js";
 
 /** Roadmap file name inside `projects/<id>/` ( — writer contract). */
 export const PROJECT_ROADMAP_FILE = "roadmap.md";
@@ -144,10 +145,6 @@ function todayString(): string {
   const month = String(now.getMonth() + 1).padStart(2, "0");
   const day = String(now.getDate()).padStart(2, "0");
   return `${now.getFullYear()}-${month}-${day}`;
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function violation(severity: Severity, code: string, message: string, fix?: string): ValidationResult {
@@ -391,6 +388,67 @@ export type CloseProjectRegisterEntryOpts = {
 };
 
 /**
+ * The legacy backlog helpers are NOT part of the scoped coordination route
+ * (spec §C4): a plan key that a registered coordinated workflow owns is
+ * refused with `coordination.scoped-writer-required` before the next-free-key
+ * loop / the in-place close, directing the caller to `residual-add` /
+ * `residual-close`. Uncoordinated keys keep the legacy backlog behaviour.
+ *
+ * Protection discovery follows the mandated acquisition order (spec §C3): the
+ * root register is locked first (the registered workflow set cannot move), the
+ * snapshots carrying the plan key are locked next, and the protected-plan set
+ * is re-derived under those locks before the destination register lock is
+ * taken. A bare scan before locking the register would race a new
+ * prepare/bind and is forbidden.
+ */
+async function withScopedPlanKeyGuard<T>(
+  store: ArtifactStore,
+  registerPath: string,
+  planKey: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  const harnessRoot = (store as ArtifactStore & { root?: string }).root;
+// Custom (non-Fs) stores own their mapping and are rejected by the scoped
+// coordination APIs elsewhere; the legacy backlog path keeps its contract.
+  if (harnessRoot === undefined) return withStatusWriteLock(registerPath, run);
+  const statusPath = resolveArtifactPath(harnessRoot, { kind: "status", key: "root" });
+  return withStatusWriteLock(statusPath, async () => {
+    const rootDoc = readJson(statusPath);
+    const entries = Array.isArray(rootDoc.workflows) ? (rootDoc.workflows as WorkflowEntry[]) : [];
+    const owningSnapshots: Record<string, true> = {};
+    for (const entry of entries) {
+      if (typeof entry?.id !== "string" || typeof entry?.dir !== "string") continue;
+      const snapshotPath = join(harnessRoot, entry.dir, WORKFLOW_SNAPSHOT_FILE);
+      const snapshot = readArtifactBytes(snapshotPath)?.payload;
+      if (!isPlainObject(snapshot) || !Array.isArray(snapshot.plans)) continue;
+      if (snapshot.plans.some((row) => isPlainObject(row) && row.id === planKey)) owningSnapshots[snapshotPath] = true;
+    }
+    const snapshotPaths = Object.keys(owningSnapshots).sort();
+    const locked = snapshotPaths.reduceRight<() => Promise<T>>(
+      (next, snapshotPath) => () => withStatusWriteLock(snapshotPath, next),
+      async () => {
+        for (const snapshotPath of snapshotPaths) {
+          const snapshot = readArtifactBytes(snapshotPath)?.payload;
+          if (!isPlainObject(snapshot) || !Array.isArray(snapshot.plans)) continue;
+          const coordinated = snapshot.plans.some(
+            (row) => isPlainObject(row) && row.id === planKey && row.coordination !== undefined,
+          );
+          if (coordinated) {
+            throw new CoordinationError(
+              "coordination.scoped-writer-required",
+              `${planKey} is a coordinated plan key \u2014 the legacy backlog helpers cannot write it; use residual-add/residual-close`,
+              { plan_id: planKey, path: snapshotPath },
+            );
+          }
+        }
+        return withStatusWriteLock(registerPath, run);
+      },
+    );
+    return locked();
+  });
+}
+
+/**
  * Append residual entries to a project register: resolve `<projectDir>/residuals.json` and run the WHOLE
  * critical section inside `withStatusWriteLock(registerPath, ...)` (lease.ts —
  * the `<register dir>/.status-write.lockdir/` lock is reused, never
@@ -429,7 +487,7 @@ export async function appendProjectRegisterEntries(
  // it up front (mirrors writeWorkflowSnapshot) so a first-time project dir
  // does not fail the lock acquisition with ENOENT.
   mkdirSync(opts.projectDir, { recursive: true });
-  return withStatusWriteLock(registerPath, async () => {
+  return withScopedPlanKeyGuard(store, registerPath, opts.basePlanKey, async () => {
     const doc = readJson(registerPath) as ProjectRegisterDoc;
     const entriesMap = doc.entries ?? {};
  // Port of the python next-free-key loop (pr-review.md): first free
@@ -502,7 +560,7 @@ export async function closeProjectRegisterEntry(opts: CloseProjectRegisterEntryO
   assertFsStorePath(store, { kind: "residuals", key: projectKey }, registerPath);
  // See appendProjectRegisterEntries — the lockdir needs its parent to exist.
   mkdirSync(opts.projectDir, { recursive: true });
-  return withStatusWriteLock(registerPath, async () => {
+  return withScopedPlanKeyGuard(store, registerPath, opts.planKey, async () => {
     const doc = readJson(registerPath) as ProjectRegisterDoc;
     const planEntries = doc.entries?.[opts.planKey];
     if (!Array.isArray(planEntries)) {

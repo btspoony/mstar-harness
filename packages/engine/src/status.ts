@@ -37,7 +37,7 @@ import { dirname, join, resolve, sep } from "node:path";
 import { readJson, SEVERITY_ORDER, type GateResult, type Severity, type ValidationResult } from "./core.js";
 import { resolveIterationDir } from "./path.js";
 import { withStatusWriteLock } from "./lease.js";
-import { withProtectedWrite } from "./coordination-write.js";
+import { CoordinationError, isPlainObject, withProtectedWrite } from "./coordination-write.js";
 import { assertFsStorePath, getArtifactStore } from "./store.js";
 import { parseEnforcementFlag, type EnforcementFlag } from "./dispatch.js";
 import { loadMstarc } from "./mstarc.js";
@@ -124,10 +124,6 @@ const PLAN_STATUSES = ["Todo", "InProgress", "InReview", "Blocked", "Done"] as c
 const RESIDUAL_DECISIONS = ["defer", "accept", "risk-accepted"] as const;
 const RESIDUAL_LIFECYCLES = ["open", "resolved", "waived", "superseded", "duplicate"] as const;
 const RESIDUAL_REQUIRED_FIELDS = ["id", "title", "severity", "source", "scope", "decision", "owner", "target", "tracking"] as const;
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function violation(severity: Severity, code: string, message: string, fix?: string): ValidationResult {
   return { ok: false, severity, code, message, fix };
@@ -688,6 +684,11 @@ export const validateStatus = validateStatusV2;
  * an invalid entry would fail `validateStatusV2` anyway, but the explicit
  * gate keeps the pre-lock fail-fast contract of `registerWorkflow`).
  *
+ * Replacing an existing entry additionally takes that entry's snapshot lock
+ * (spec §C3 root → snapshot order, `withRegisteredSnapshotLock`) and holds it
+ * across the root write; callers must therefore hold the root lock only, not
+ * a snapshot lock.
+ *
  * Async-only (architect-locked 2026-08-27): the durable write goes through
  * `getArtifactStore().put({ kind: "status", key: "root", ... })` inside the
  * caller's lock — the store is the persist backend, never a second lock.
@@ -718,18 +719,96 @@ export async function registerWorkflowEntryLocked(statusPath: string, entry: Wor
     );
   }
   const existing = doc.workflows.findIndex((wf) => wf.id === entry.id);
-  if (existing >= 0) {
-    doc.workflows[existing] = entry;
-  } else {
+  /**
+   * Finalize the root document: bump `updated_at`, validate the whole v2
+   * document (per-snapshot invariants included) and persist through the
+   * private protected-write context. Runs inside the caller's root lock — and
+   * inside the target snapshot lock when the call started from an existing
+   * entry (spec §C3 root → snapshot), so the coordination decision behind the
+   * replacement still holds when these bytes land.
+   */
+  const commit = async (): Promise<StatusV2Doc> => {
+    doc.updated_at = todayString();
+    const gate = validateStatusV2(doc, { harnessDir });
+    if (!gate.ok) {
+      throw new Error(`refusing to write invalid status.json: ${gate.violations.map((v) => v.message).join("; ")}`);
+    }
+    await withProtectedWrite(statusPath, "put", () => store.put({ kind: "status", key: "root", payload: doc }));
+    return doc;
+  };
+  if (existing < 0) {
     doc.workflows.push(entry);
+    return commit();
   }
-  doc.updated_at = todayString();
-  const gate = validateStatusV2(doc, { harnessDir });
-  if (!gate.ok) {
-    throw new Error(`refusing to write invalid status.json: ${gate.violations.map((v) => v.message).join("; ")}`);
+  // A register call must not re-point an existing COORDINATED workflow
+  // (spec §C4): its snapshot is the coordination authority, so replacing the
+  // entry's identity would detach the coordination record from the file it
+  // lives in. Uncoordinated entries keep the idempotent upsert below.
+  //
+  // The identification is re-taken UNDER the snapshot lock (spec §C3 root →
+  // snapshot order) with that lock held across the root replacement: a bind
+  // holds only the snapshot lock, so deciding from a bare read taken earlier
+  // in this root-locked section can miss a coordination block added in
+  // between and re-point a workflow another coordinator owns.
+  const prior = doc.workflows[existing];
+  return withRegisteredSnapshotLock(harnessDir, prior, async (snapshot) => {
+    const priorCoordination = snapshot?.coordination;
+    if (isPlainObject(priorCoordination) && isPlainObject(priorCoordination.coordinator)) {
+      const drifted = (["dir", "type", "started_at"] as const).filter((field) => prior[field] !== entry[field]);
+      if (drifted.length > 0) {
+        throw new CoordinationError(
+          "coordination.invalid-transition",
+          `refusing to re-register workflow ${JSON.stringify(entry.id)}: it is coordinated and its ${drifted.join("/")} must not change`,
+          { workflow_id: entry.id, fields: [...drifted] },
+        );
+      }
+    }
+    doc.workflows[existing] = entry;
+    return commit();
+  });
+}
+
+/**
+ * Run `fn` with the registered entry's snapshot lock held, reading the
+ * snapshot INSIDE that lock (spec §C3: root → snapshot acquisition order).
+ * A binder holds the snapshot lock only, so re-taking the coordination
+ * identification here — rather than trusting a bare read taken earlier in the
+ * caller's root-locked section — closes the window in which a bind lands
+ * between the read and the root replacement. `fn` runs while the lock is
+ * still held, so the caller's root write cannot be raced by a concurrent bind
+ * either.
+ *
+ * A missing snapshot carries no coordination block (a bind requires an
+ * existing snapshot), so it is passed through as `undefined` without
+ * creating a lockdir inside a directory that does not exist.
+ */
+async function withRegisteredSnapshotLock<T>(
+  harnessDir: string,
+  entry: WorkflowEntry,
+  fn: (snapshot: Record<string, unknown> | undefined) => Promise<T>,
+): Promise<T> {
+  if (typeof entry.dir !== "string") return fn(undefined);
+  const snapshotPath = join(harnessDir, entry.dir, WORKFLOW_SNAPSHOT_FILE);
+  if (!existsSync(snapshotPath)) return fn(undefined);
+  return withStatusWriteLock(snapshotPath, () => fn(readRegisteredSnapshot(snapshotPath)));
+}
+
+/**
+ * Read a workflow snapshot for the coordination checks above. Callers reach
+ * it under the snapshot's `withStatusWriteLock` whenever the snapshot exists
+ * (`withRegisteredSnapshotLock`), so the value returned is the one the
+ * guarded decision and the root write are made on. A missing or malformed
+ * snapshot yields `undefined` — the tolerant read of the root writers is
+ * preserved.
+ */
+function readRegisteredSnapshot(snapshotPath: string): Record<string, unknown> | undefined {
+  if (!existsSync(snapshotPath)) return undefined;
+  try {
+    const parsed = JSON.parse(readFileSync(snapshotPath, "utf8")) as unknown;
+    return isPlainObject(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
   }
-  await withProtectedWrite(statusPath, "put", () => store.put({ kind: "status", key: "root", payload: doc }));
-  return doc;
 }
 
 /**
@@ -762,7 +841,10 @@ export async function registerWorkflow(root: string, entry: WorkflowEntry): Prom
  * `withStatusWriteLock`, bumping root `updated_at` only when an entry was
  * actually removed. The final document is validated (removal-at-terminal
  * invariant included) before the write — a v1 root is refused with the
- * `mstar migrate` hint.
+ * `mstar migrate` hint. Removing a registered entry additionally takes that
+ * entry's snapshot lock (spec §C3 root → snapshot order) and holds it across
+ * the root write, so the coordination check cannot be raced by a concurrent
+ * bind.
  *
  * Fails loud when the active FsStore would resolve its
  * `status.json` to a path other than the caller's root — the no-op branches
@@ -792,18 +874,40 @@ export async function unregisterWorkflow(root: string, id: string): Promise<Stat
         "refusing to modify status.json: workflows must be an array \u2014 a v1 root must be migrated first (run `mstar migrate`)",
       );
     }
-    const remaining = doc.workflows.filter((wf) => wf.id !== id);
-    if (remaining.length === doc.workflows.length) {
-      return doc; // idempotent no-op — nothing removed, no write
-    }
-    doc.workflows = remaining;
-    doc.updated_at = todayString();
-    const gate = validateStatusV2(doc, { harnessDir });
-    if (!gate.ok) {
-      throw new Error(`refusing to write invalid status.json: ${gate.violations.map((v) => v.message).join("; ")}`);
-    }
-    await withProtectedWrite(statusPath, "put", () => store.put({ kind: "status", key: "root", payload: doc }));
-    return doc;
+    // Unregistering a RUNNING coordinated workflow is refused (spec §C4): its
+    // coordinator still owns the plan rows and leases, so the root entry must
+    // not be removed underneath it. Terminal coordinated workflows are
+    // unaffected. An absent id stays the idempotent no-op below.
+    //
+    // The identification is re-taken UNDER the target snapshot lock (spec §C3
+    // root → snapshot order) with that lock held across the root replacement:
+    // a bind holds only the snapshot lock, so deciding from a bare read taken
+    // earlier in this root-locked section can miss a coordination block added
+    // in between and remove a workflow that is being taken over.
+    const target = doc.workflows.find((wf) => wf.id === id);
+    if (target === undefined) return doc; // idempotent no-op — nothing removed, no write
+    return withRegisteredSnapshotLock(harnessDir, target, async (snapshot) => {
+      const targetCoordination = snapshot?.coordination;
+      if (
+        isPlainObject(targetCoordination) &&
+        isPlainObject(targetCoordination.coordinator) &&
+        snapshot?.status === "running"
+      ) {
+        throw new CoordinationError(
+          "coordination.invalid-transition",
+          `refusing to unregister workflow ${JSON.stringify(id)}: it is coordinated and still running`,
+          { workflow_id: id },
+        );
+      }
+      doc.workflows = doc.workflows.filter((wf) => wf.id !== id);
+      doc.updated_at = todayString();
+      const gate = validateStatusV2(doc, { harnessDir });
+      if (!gate.ok) {
+        throw new Error(`refusing to write invalid status.json: ${gate.violations.map((v) => v.message).join("; ")}`);
+      }
+      await withProtectedWrite(statusPath, "put", () => store.put({ kind: "status", key: "root", payload: doc }));
+      return doc;
+    });
   });
 }
 

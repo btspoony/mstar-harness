@@ -15,14 +15,15 @@
  * requirements.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync, writeFileSync, type Dirent } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmdirSync, writeFileSync, type Dirent } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 import type { GateResult, ValidationResult } from "./core.js";
-import { writeJson } from "./core.js";
 import { withStatusWriteLock } from "./lease.js";
+import { readArtifactBytes, withProtectedWrite } from "./coordination-write.js";
 import { assertSafePathComponent } from "./path.js";
+import { getArtifactStore } from "./store.js";
 import { registerWorkflowEntryLocked, validateWorkflowEntry, type PlanRow, type WorkflowEntry } from "./status.js";
-import { WORKFLOW_SNAPSHOT_FILE, type WorkflowSnapshot } from "./workflow.js";
+import { WORKFLOW_SNAPSHOT_FILE, writeWorkflowSnapshot, type WorkflowSnapshot } from "./workflow.js";
 
 function violation(severity: ValidationResult["severity"], code: string, message: string, fix?: string): ValidationResult {
   return { ok: false, severity, code, message, fix };
@@ -1203,16 +1204,17 @@ export type PromoteAuditPlansOptions = {
  * same root lock `registerWorkflow` uses — so the guard is check-then-act
  * safe: two concurrent same-id promotes cannot both pass it (one writes
  * and registers; the other re-checks under the lock and refuses). The
- * snapshot is written directly with `writeJson` under the root lock (never
- * a nested `writeWorkflowSnapshot` — its own snapshot-dir lock would be a
- * second serialization point; the root lock must be THE serialization
- * point). The root upsert replicates `registerWorkflow` semantics inline
+ * snapshot is written create-only through the routed
+ * `writeWorkflowSnapshot(snapshot, dir, { createOnly: true })`, whose own
+ * snapshot-dir lock nests inside the root lock (root → snapshot is the
+ * documented acquisition order). The root upsert replicates
+ * `registerWorkflow` semantics inline
  * via the shared `registerWorkflowEntryLocked` helper (calling
  * `registerWorkflow` itself would re-enter the non-reentrant root lock).
  *
- * On any failure inside the lock, the partial snapshot + now-empty
- * workflow dir are rolled back so a retry converges after the root
- * conflict is resolved.
+ * On any failure inside the lock, the snapshot this call created (and only
+ * that exact byte version) plus the now-empty workflow dir are rolled back so
+ * a retry converges after the root conflict is resolved.
  */
 export async function promoteAuditPlans(
   outDir: string,
@@ -1241,6 +1243,7 @@ export async function promoteAuditPlans(
   const statusPath = join(harnessDir, "status.json");
   const workflowDir = join(harnessDir, "workflows", workflowId);
   const snapshotPath = join(workflowDir, WORKFLOW_SNAPSHOT_FILE);
+  const store = getArtifactStore();
 
   const planFiles = resolveSelectedPlanFiles(outDir, selected);
   const indexRows = readExecutionOrderIndex(outDir);
@@ -1284,11 +1287,10 @@ export async function promoteAuditPlans(
  // upsert are ONE atomic section under the root status.json write lock —
  // the same serialization point `registerWorkflow` uses. The guard is the
  // lock's first statement, so two concurrent same-id promotes cannot both
- // pass it (check-then-act closed). The snapshot is written directly with
- // writeJson (atomic temp+rename) instead of `writeWorkflowSnapshot`, whose
- // own snapshot-dir lock would split the serialization point; nesting that
- // second lock is technically safe (different lockdir) but would let the
- // re-promote guard and the snapshot write serialize separately.
+ // pass it (check-then-act closed). The snapshot goes through the routed
+ // create-only writer, whose snapshot-dir lock nests inside this root lock
+ // (root → snapshot): the root lock stays the serialization point for the
+ // guard and the root upsert, and the snapshot can never be replaced.
   await withStatusWriteLock(statusPath, async () => {
     if (existsSync(snapshotPath)) {
       throw new Error(
@@ -1297,12 +1299,30 @@ export async function promoteAuditPlans(
           `remove that workflow before promoting again`,
       );
     }
-    mkdirSync(workflowDir, { recursive: true });
+    let createdVersion: string | undefined;
     try {
-      writeJson(snapshotPath, snapshot);
+      // Create-only (`absent`) under the root lock: the snapshot is written
+      // through the routed writer, which validates it, refuses to replace an
+      // existing document and enters the private protected-write context
+      // (spec §C4). The snapshot's own lock nests inside the root lock --
+      // root → snapshot is the documented acquisition order.
+      await writeWorkflowSnapshot(snapshot, workflowDir, { createOnly: true });
+      createdVersion = readArtifactBytes(snapshotPath)?.version;
       await registerWorkflowEntryLocked(statusPath, entry);
     } catch (error) {
-      rmSync(snapshotPath, { force: true });
+      // Roll back ONLY the exact snapshot version this call created, under
+      // the snapshot lock: a snapshot another writer changed in the meantime
+      // is never deleted.
+      if (createdVersion !== undefined) {
+        await withStatusWriteLock(snapshotPath, async () => {
+          const current = readArtifactBytes(snapshotPath);
+          if (current === undefined || current.version !== createdVersion) return;
+          const remove = store.delete?.bind(store);
+          if (remove !== undefined) {
+            await withProtectedWrite(snapshotPath, "delete", () => remove({ kind: "snapshot", key: workflowId }));
+          }
+        });
+      }
       try {
  // Remove the workflow dir only when empty — a concurrent writer's
  // snapshot/rows are never destroyed; rmdirSync throws ENOTEMPTY if
