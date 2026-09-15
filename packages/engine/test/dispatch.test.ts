@@ -20,6 +20,12 @@
  * seats)` values that are not `N/A`; the cap may only tighten the default:
  * `mstar-harness-core` SKILL.md
  * § "定向执行与验证边界" + `mstar-review-qc` SKILL.md § "席位预算与截断（PM）".
+ * - Task budget (implement / ops rounds) — the exact complement of the
+ * review/audit rounds (implement/ops, including non-audit docs/Prepare and
+ * orientation roles) must carry a non-empty `Task budget
+ * (implement / ops rounds)` / `Task budget` value that is not `N/A`
+ * (presence-only; adequacy stays in PM's Prepare check): capacity contract
+ * spec § A1–A3.
  * - Default-protected-branch gate — no writable work on `main`/`master`
  * unless the Assignment carries an explicit `Branch policy: direct on
  * <branch> — <reason>` exception: `mstar-branch-worktree` SKILL.md
@@ -59,6 +65,7 @@ const VALID_ASSIGNMENT = `## Assignment
 **Delegation**: forbidden
 **Task category**: logic
 **Working branch**: feature/foo
+**Task budget (implement / ops rounds)**: S — one implementer round closing the declared Files and gates
 **Plan Path**: .mstar/plans/20260808-example.md
 `;
 
@@ -93,6 +100,7 @@ Execute as: fullstack-dev
 Delegation: forbidden
 Task category: logic
 Working branch: feature/foo
+Task budget: S — one implementer round
 `;
     const result = validateAssignmentFields(text);
     expect(result.ok).toBe(true);
@@ -138,6 +146,7 @@ Working branch: feature/foo
 - **Delegation**: forbidden
 - **Task category**: logic
 - **Working branch**: feature/foo
+- **Task budget (implement / ops rounds)**: S — one implementer round
 `;
     const r = validateAssignmentFields(text);
     expect(r.ok).toBe(true);
@@ -195,21 +204,26 @@ Working branch: feature/foo
 });
 
 describe("validateAssignmentFields — branch-form matrix (writable)", () => {
+ // Implement/ops rounds must carry the Task budget capacity field (spec § A1)
+ // — every otherwise-valid fixture here gains it so the branch-form cases
+ // stay the only thing under test.
+  const TASK_BUDGET = { "Task budget (implement / ops rounds)": "S — one focused implementer round" };
+
   test("Working branch: <existing> is a valid single form", () => {
-    const r = validateAssignmentFields(assignment({ "Working branch": "feature/foo" }));
+    const r = validateAssignmentFields(assignment({ "Working branch": "feature/foo", ...TASK_BUDGET }));
     expect(r.ok).toBe(true);
   });
 
   test("Working branch: create <new> from <base> is valid (branch base)", () => {
     const r = validateAssignmentFields(
-      assignment({ "Working branch": "create feature/part2 from feature/foo" }),
+      assignment({ "Working branch": "create feature/part2 from feature/foo", ...TASK_BUDGET }),
     );
     expect(r.ok).toBe(true);
   });
 
   test("Working branch: create <new> from current is valid (current HEAD base)", () => {
     const r = validateAssignmentFields(
-      assignment({ "Working branch": "create feature/bar from current" }),
+      assignment({ "Working branch": "create feature/bar from current", ...TASK_BUDGET }),
     );
     expect(r.ok).toBe(true);
   });
@@ -221,6 +235,7 @@ describe("validateAssignmentFields — branch-form matrix (writable)", () => {
 **Delegation**: forbidden
 **Task category**: logic
 **Branch policy**: direct on main — team hotfix convention
+**Task budget (implement / ops rounds)**: S — one focused implementer round
 `;
     const r = validateAssignmentFields(text);
     expect(r.ok).toBe(true);
@@ -233,6 +248,7 @@ describe("validateAssignmentFields — branch-form matrix (writable)", () => {
 **Delegation**: forbidden
 **Task category**: logic
 **Branch policy**: direct on main - team hotfix convention
+**Task budget (implement / ops rounds)**: S — one focused implementer round
 `;
     const r = validateAssignmentFields(text);
     expect(r.ok).toBe(true);
@@ -245,6 +261,7 @@ describe("validateAssignmentFields — branch-form matrix (writable)", () => {
 **Delegation**: forbidden
 **Task category**: logic
 **Branch policy**: direct on main -- team hotfix convention
+**Task budget (implement / ops rounds)**: S — one focused implementer round
 `;
     const r = validateAssignmentFields(text);
     expect(r.ok).toBe(true);
@@ -257,6 +274,7 @@ describe("validateAssignmentFields — branch-form matrix (writable)", () => {
 **Delegation**: forbidden
 **Task category**: logic
 **Branch policy**: direct on main – team hotfix convention
+**Task budget (implement / ops rounds)**: S — one focused implementer round
 `;
     const r = validateAssignmentFields(text);
     expect(r.ok).toBe(true);
@@ -270,6 +288,7 @@ describe("validateAssignmentFields — branch-form matrix (writable)", () => {
 **Task category**: logic
 **Working branch**: 
 **Branch policy**: direct on main — team hotfix convention
+**Task budget (implement / ops rounds)**: S — one focused implementer round
 `;
     const r = validateAssignmentFields(text);
     expect(r.ok).toBe(true);
@@ -320,21 +339,27 @@ describe("validateAssignmentFields — branch-form matrix (writable)", () => {
   });
 
   test("create form with dangling words is not a create-form match (treated as existing branch)", () => {
-    const r = validateAssignmentFields(assignment({ "Working branch": "create foo from bar extra" }));
+    const r = validateAssignmentFields(
+      assignment({ "Working branch": "create foo from bar extra", "Task budget (implement / ops rounds)": "S" }),
+    );
     expect(r.ok).toBe(true);
     expect(r.violations.some((v) => v.code === "assignment.field.branch-missing-base")).toBe(false);
   });
 
   test("existing branch names that merely start with 'create' pass as existing-branch forms", () => {
     for (const name of ["created", "create/foo", "create-user-flow"]) {
-      const r = validateAssignmentFields(assignment({ "Working branch": name }));
+      const r = validateAssignmentFields(
+        assignment({ "Working branch": name, "Task budget (implement / ops rounds)": "S" }),
+      );
       expect(r.ok).toBe(true);
       expect(r.violations.some((v) => v.code === "assignment.field.branch-missing-base")).toBe(false);
     }
   });
 
   test("capitalized create form 'Create new-branch from main' is a valid create form", () => {
-    const r = validateAssignmentFields(assignment({ "Working branch": "Create new-branch from main" }));
+    const r = validateAssignmentFields(
+      assignment({ "Working branch": "Create new-branch from main", "Task budget (implement / ops rounds)": "S" }),
+    );
     expect(r.ok).toBe(true);
     expect(r.violations.some((v) => v.code === "assignment.field.branch-missing-base")).toBe(false);
   });
@@ -397,6 +422,7 @@ describe("validateAssignmentFields — branch-form matrix (writable)", () => {
 **Execute as**: scout
 **Delegation**: forbidden
 **Task category**: deep
+**Task budget (implement / ops rounds)**: XS — one orientation round
 `;
     const r = validateAssignmentFields(text, { writable: false });
     expect(r.ok).toBe(true);
@@ -487,6 +513,7 @@ describe("validateAssignmentFields — review-seat / audit round bounding gate",
 **Delegation**: forbidden
 **Task category**: logic
 **Working branch**: feature/impl
+**Task budget (implement / ops rounds)**: S — one focused implementer round
 `;
     expect(validateAssignmentFields(text).ok).toBe(true);
   });
@@ -615,6 +642,7 @@ Reproduce this shape in your own header:
 **Execute as**: fullstack-dev
 **Delegation**: forbidden
 **Task category**: logic
+**Task budget (implement / ops rounds)**: S — one focused implementer round
 
 ## Task 1: Implement
 
@@ -623,6 +651,160 @@ Reproduce this shape in your own header:
     expect(validateAssignmentFields(text).violations.map((v) => v.code)).toEqual([
       "assignment.field.branch-missing",
     ]);
+  });
+});
+
+describe("Task budget assignment gate", () => {
+ // Capacity contract spec § A1–A3: the exact complement of the review/audit
+ // branch — implement/ops rounds (including non-audit docs/Prepare and
+ // orientation roles) must declare `Task budget`, presence-only. Same
+ // normalized `role` / `auditRound` values; `writable: false` is NOT a
+ // capacity exemption; adequacy stays in PM's Prepare check.
+  const BUDGET = "S — one implementer round closing the declared Files and gates";
+  const taskBudgetViolations = (text: string, opts: Parameters<typeof validateAssignmentFields>[1] = {}) =>
+    validateAssignmentFields(text, opts).violations.filter((v) => v.code === "assignment.field.task-budget-missing");
+
+  test("absent Task budget → assignment.field.task-budget-missing (high, actionable fix)", () => {
+    const r = validateAssignmentFields(assignment({}));
+    expect(r.ok).toBe(false);
+    expect(r.violations.map((v) => v.code)).toEqual(["assignment.field.task-budget-missing"]);
+    const v = r.violations[0]!;
+    expect(v.severity).toBe("high");
+    expect(v.message).toContain("Task budget");
+    expect(v.message).toContain("the field is absent");
+    expect(v.fix).toContain("Task budget (implement / ops rounds)");
+    expect(v.fix).toContain("A1");
+  });
+
+  test("empty Task budget value fails (the field is empty)", () => {
+    const violations = taskBudgetViolations(assignment({ "Task budget (implement / ops rounds)": "" }));
+    expect(violations).toHaveLength(1);
+    expect(violations[0]!.message).toContain("the field is empty");
+  });
+
+  test("N/A never satisfies the gate (case-insensitive)", () => {
+    for (const value of ["N/A", "n/a", "N/a"]) {
+      const violations = taskBudgetViolations(assignment({ "Task budget (implement / ops rounds)": value }));
+      expect(violations).toHaveLength(1);
+      expect(violations[0]!.message).toContain('the value is "N/A"');
+    }
+  });
+
+  test("parenthesized contract label satisfies the gate (byte-exact A1 label)", () => {
+    expect(validateAssignmentFields(assignment({ "Task budget (implement / ops rounds)": BUDGET })).ok).toBe(true);
+  });
+
+  test("bare bold `Task budget` label also satisfies the gate", () => {
+    expect(validateAssignmentFields(assignment({ "Task budget": BUDGET })).ok).toBe(true);
+  });
+
+  test("presence-only: any non-empty non-N/A value passes — adequacy stays in PM's Prepare check", () => {
+    expect(validateAssignmentFields(assignment({ "Task budget (implement / ops rounds)": "when it is done" })).ok).toBe(true);
+  });
+
+  test("label match is case-sensitive — lowercase **task budget** is not the field", () => {
+    const violations = taskBudgetViolations(assignment({ "task budget": BUDGET }));
+    expect(violations).toHaveLength(1);
+  });
+
+  test("plain parenthesized label is NOT recognized (bold-label grammar only — plain grammar not widened)", () => {
+    const text = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Working branch**: feature/foo
+Task budget (implement / ops rounds): ${BUDGET}
+`;
+    expect(parseAssignmentFields(text).taskBudget).toBeUndefined();
+    expect(taskBudgetViolations(text)).toHaveLength(1);
+  });
+
+  test("last recognized header occurrence wins (across both supported labels)", () => {
+    const text = `## Assignment
+
+**Task budget (implement / ops rounds)**: first value
+- **Task budget**: second value
+`;
+    expect(parseAssignmentFields(text).taskBudget).toBe("second value");
+  });
+
+  test("body-only Task budget cannot satisfy the gate (header region only)", () => {
+    const text = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Working branch**: feature/foo
+
+## Task 1: Implement
+
+Copy this into your own header:
+**Task budget (implement / ops rounds)**: ${BUDGET}
+`;
+    expect(taskBudgetViolations(text)).toHaveLength(1);
+  });
+
+  test("a body example cannot replace a valid header value", () => {
+    const text = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Working branch**: feature/foo
+**Task budget**: header value
+
+## Task 1: Implement
+
+Example Assignment snippet: **Task budget**: body example
+`;
+    expect(parseAssignmentFields(text).taskBudget).toBe("header value");
+    expect(validateAssignmentFields(text).ok).toBe(true);
+  });
+
+  test("normalized review role is exempt from the Task budget gate (round-bounding fields still required)", () => {
+    const r = validateAssignmentFields(assignment({ "Execute as": "@QC-Specialist (security lens)" }));
+    expect(r.violations.some((v) => v.code === "assignment.field.task-budget-missing")).toBe(false);
+    expect(r.violations.map((v) => v.code)).toEqual([
+      "assignment.field.budget-missing",
+      "assignment.field.return-shape-missing",
+    ]);
+  });
+
+  test("audit Task category is exempt from the Task budget gate", () => {
+    const r = validateAssignmentFields(assignment({ "Execute as": "architect", "Task category": "audit" }));
+    expect(r.violations.some((v) => v.code === "assignment.field.task-budget-missing")).toBe(false);
+    expect(r.violations.map((v) => v.code)).toEqual([
+      "assignment.field.budget-missing",
+      "assignment.field.return-shape-missing",
+    ]);
+  });
+
+  test("audit_secondary stays an audit round — exempt", () => {
+    const r = validateAssignmentFields(assignment({ "Execute as": "architect", "Task category": "audit_secondary" }));
+    expect(r.violations.some((v) => v.code === "assignment.field.task-budget-missing")).toBe(false);
+  });
+
+  test("`auditing` is NOT an audit round — the Task budget gate applies", () => {
+    const r = validateAssignmentFields(assignment({ "Execute as": "fullstack-dev", "Task category": "auditing" }));
+    expect(r.violations.map((v) => v.code)).toEqual(["assignment.field.task-budget-missing"]);
+  });
+
+  test("non-audit docs round (Prepare/docs specialist) receives the field requirement", () => {
+    const r = validateAssignmentFields(assignment({ "Execute as": "product-manager", "Task category": "docs" }));
+    expect(r.violations.map((v) => v.code)).toEqual(["assignment.field.task-budget-missing"]);
+  });
+
+  test("read-only orientation role is not exempt; writable:false is not a capacity exemption (A3)", () => {
+    const text = assignment({ "Execute as": "scout", "Task category": "deep", "Working branch": undefined });
+    expect(validateAssignmentFields(text, { writable: false }).violations.map((v) => v.code)).toEqual([
+      "assignment.field.task-budget-missing",
+    ]);
+    expect(
+      validateAssignmentFields(assignment({ "Execute as": "scout", "Task category": "deep", "Task budget": "XS — one orientation round" }), {
+        writable: false,
+      }).ok,
+    ).toBe(true);
   });
 });
 
@@ -1273,6 +1455,7 @@ describe("composeDispatchGate — shared host dispatch-gate composition", () => 
 **Execute as**: fullstack-dev
 **Delegation**: forbidden
 **Task category**: logic
+**Task budget (implement / ops rounds)**: S — one focused implementer round
 `;
 
   test("shaped writable assignment, no caller binding (target-only host) → shaped true, ok, no violations", () => {
@@ -1407,6 +1590,7 @@ An example Assignment template line: **Enforcement**: hard
 **Delegation**: forbidden
 **Task category**: logic
 **Working branch**: feature/foo
+**Task budget (implement / ops rounds)**: S — one focused implementer round
 **Enforcement**: hard
 `;
     const result = composeDispatchGate(text, { caller: "project-manager" });

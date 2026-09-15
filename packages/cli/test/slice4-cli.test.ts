@@ -1416,6 +1416,7 @@ describe("project-root path resolution — all six dev commands with relative ar
 **Delegation**: forbidden
 **Task category**: logic
 **Working branch**: feature/foo
+**Task budget (implement / ops rounds)**: S — one focused implementer round
 **Plan Path**: .mstar/plans/20260808-example.md
 `;
 
