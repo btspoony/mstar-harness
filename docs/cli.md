@@ -229,7 +229,8 @@ Exit codes:
 Persist one JSON coordination doc through the pluggable **ArtifactStore** (engine `@mstar-harness/engine` — `ArtifactStore` / `ArtifactKind` / `createFsStore` / `setArtifactStore` / `getArtifactStore` / `loadStoreModule`). The default `FsStore` maps kinds to the existing `{HARNESS_DIR}` paths and keeps the atomic temp+rename write semantics; integrations can mount their own store in-process (`setArtifactStore`) or per-command via `--store` / `MSTAR_STORE_MODULE`.
 
 - `mstar-harness persist <kind> --key <key> [--file <path>|--stdin] [--store <module>] [--schema <id>]`
-- `mstar-harness persist get <kind> --key <key> [--validate] [--store <module>]`
+- `mstar-harness persist status|snapshot|residuals --key <key> --expect-version <absent|sha256:<hex>> [--file <path>|--stdin] [--session <absolute-coordinator-envelope>] [--store <module>]`
+- `mstar-harness persist get <kind> --key <key> [--validate] [--versioned] [--store <module>]`
 - `mstar-harness persist list <kind> [--store <module>]`
 - `mstar-harness persist delete <kind> --key <key> [--store <module>]`
 
@@ -253,9 +254,15 @@ Default `FsStore` path table:
 
 `persist get` prints the stored payload JSON (pretty-printed) on stdout and exits 0; a missing document exits 1 (`persist get <kind>/<key>: no stored document` on stderr). Stdout is payload JSON only — notes and violations never mix into it, so agents can pipe the output. With `--validate`, the same per-kind validator as the put gate runs on the fetched payload (no second validator): a valid document exits 0 with the payload on stdout and `validation: ok` on stderr; `json` accepts `--validate` as a parse-only no-op (`json: parse-only` on stderr); an invalid document exits 1 with stdout empty and the same violations list as put on stderr. FsStore persists payloads verbatim; integrity checks live at the write gate and at `persist get --validate`.
 
+`persist get --versioned` reads through the engine's **coordinated artifact port** and prints `{payload,version}` instead of the bare payload: `version` is the `sha256:<64 lowercase hex>` digest of the exact bytes read, or the literal `"absent"` when the document does not exist (payload `null` there) — the precondition token a first coordinated write needs. It requires the active local `FsStore`; an injected `--store` / `MSTAR_STORE_MODULE` module is refused (`coordination.local-store-required`, exit 1) because no same-host CAS is promised on a pluggable module.
+
+**Protected-writer boundary.** `status`, `snapshot` and `residuals` are coordination documents: their bytes are written by the engine's locked coordination writers, so the `FsStore` refuses a bare `put`/`delete` on them (and on any `json` alias whose canonical target is one of those files) with `coordination.direct-write-refused` (exit 1, nothing written). This applies to `persist <kind>` and `persist delete`; `mstar status workflow-close` is the lifecycle route for a finished workflow, not `persist delete`.
+
 `persist list` prints the stored keys only — one per line, ascending, with **no header** (the kind is already the argv; pipe-friendly). An empty kind prints nothing and exits 0. Enumeration reports what exists: a missing backing file or directory yields an empty list, and every listed key round-trips through `persist get` — `status` lists `root` iff `{HARNESS_DIR}/status.json` exists; `review` is the union of `{HARNESS_DIR}/sdd/_reviews/*.json` keys and plan-shaped `{HARNESS_DIR}/sdd/<key>/review/report.json` directories. `json` keys are absolute paths and cannot be listed — a usage error (exit 2) raised before enumeration.
 
-`persist delete` removes the stored document and prints `deleted <kind>/<key>`. Deleting an absent document is an idempotent no-op (same output, exit 0) and there is no confirmation prompt. `status` deletes `{HARNESS_DIR}/status.json` — allowed; it is a normal store doc, not privileged.
+`persist delete` removes the stored document and prints `deleted <kind>/<key>`. Deleting an absent document is an idempotent no-op (same output, exit 0) and there is no confirmation prompt. It keeps that contract for the unprotected kinds (`review`, unrelated `json`); the protected kinds above refuse instead (`coordination.direct-write-refused`), so an accidental `persist delete status` can never drop the root register.
+
+**Coordinated replacement.** The versioned face for those kinds is `persist <kind> --expect-version <version>`, where `<version>` is exactly the token `persist get --versioned` returned — `absent` for a document that does not exist yet, else its `sha256:<64 hex>` digest. `--expect-version` is **required** for a protected kind (a bare `persist status` is refused, exit 2) and never replaces the bare `put` path silently; the engine's locked writer owns the bytes, so the CLI never calls `put` on those targets. A missing token refuses `coordination.expected-version-required`, a token that no longer matches refuses `coordination.version-conflict` (someone wrote in between — the write is lost, not merged), and an injected `--store` / `MSTAR_STORE_MODULE` module refuses `coordination.local-store-required` (no same-host CAS); every refusal leaves the authoritative bytes untouched. A coordinated `snapshot` replacement additionally requires `--session <absolute-coordinator-envelope>`: replacing the workflow snapshot is a coordinator write (`coordination.session-role` for a plan session, `--session must be an absolute path` for a relative one).
 
 All three faces go through the same `--store` / `MSTAR_STORE_MODULE` injection path as put/get. An injected store without the optional `list` or `delete` member is a usage error (exit 2, probed before the call) — never a TypeError.
 
@@ -263,9 +270,9 @@ Exit codes (binding):
 
 | Code | When |
 |------|------|
-| `0` | put OK (`persist <kind>/<key>: OK`); get printed the payload (with or without `--validate`); delete succeeded or no-op; list printed keys (including none) |
-| `1` | get miss; get `--validate` invalid; put invalid payload; put payload file missing / not valid JSON; stored file unparseable JSON on get; FsStore `doc.schema` rejection; store-module load failure; harness dir not found |
-| `2` | usage: unknown kind; missing `--key`; `--file` + `--stdin` together; `persist list json`; injected store missing `list` / `delete` |
+| `0` | put OK (`persist <kind>/<key>: OK`); get printed the payload (with or without `--validate`); get `--versioned` printed `{payload,version}` (a missing document is `version: "absent"`, payload `null`); delete succeeded or no-op; list printed keys (including none) |
+| `1` | get miss; get `--validate` invalid; put invalid payload; put payload file missing / not valid JSON; stored file unparseable JSON on get; FsStore `doc.schema` rejection; store-module load failure; harness dir not found; protected-write refusal on a `put`/`delete` of a coordination document (`status` / `snapshot` / `residuals` or a `json` alias of one) — `coordination.direct-write-refused`; `--versioned` on an injected store module — `coordination.local-store-required`; coordinated replacement refusals — `coordination.expected-version-required` (no `--expect-version`), `coordination.version-conflict` (stale token), `coordination.session-role` / a snapshot replacement without `--session`, `coordination.local-store-required` (injected store) |
+| `2` | usage: unknown kind; missing `--key`; missing `--expect-version` on a protected kind; `--expect-version` on `review` / `json`; `--session` that is not an absolute path; `--file` + `--stdin` together; `persist list json`; injected store missing `list` / `delete` |
 
 #### Persist a review envelope
 
@@ -301,9 +308,85 @@ JSON
 
 `persist review/<key>: OK` on success; `persist get review --key <key>` prints the stored envelope. An invalid envelope is refused before any write — e.g. inspector M1 vocab `"verdict": "approve"` fails with `refusing to persist invalid review document: [high] review.inspector-vocab: ...` (exit 1), a `tally.verdict` that disagrees with the top-level `verdict` fails with `review.verdict-tally-mismatch`, and a provided `tally` that is not the full `computePrTally` shape (missing `scorePct`, counts, or `chatHeader`; wrong types; unknown verdict) fails with `review.tally-malformed`.
 
+### `mstar-harness plan`
+
+Scoped plan coordination: one workflow snapshot stays the process authority, the engine owns every scope / ownership / revision / transition / Git verdict under the same-host write lock, and this verb family is the thin transport for it. In: `/iteration-drive --assignment <path>` / `--workflow <id> --plan <id>`; the optional resume form is below.
+
+Session identity is never a flag: `--session <absolute-json>` names an engine-generated envelope, and the engine re-checks it against the snapshot inside the lock. There is no `--force`, no holder/role input, no takeover and no lease-release verb.
+
+```text
+mstar plan bind --coordinator --workflow <id> [--harness <absolute-path>] [--json]
+mstar plan bind --assignment <absolute-md-path> [--json]
+mstar plan bind --workflow <id> --plan <id> [--harness <absolute-path>] [--json]
+mstar plan bind --resume <absolute-session-json-path> [--json]
+mstar plan show --session <absolute-session-json-path> [--plan <id>] [--json]
+mstar plan prepare --session <coordinator-session> --plan <id> --assignment <absolute-md-path> --expect <revision> [--json]
+mstar plan progress --session <plan-session> --file <absolute-json-path> --expect <revision> [--json]
+mstar plan residual-add --session <plan-session> --file <absolute-json-path> --expect <revision> --expect-register <version> [--json]
+mstar plan residual-close --session <plan-session> --entry <id> --note <text> --expect <revision> --expect-register <version> [--json]
+mstar plan handoff --session <plan-session> --file <absolute-json-path> --expect <revision> [--json]
+mstar plan accept --session <coordinator-session> --plan <id> --handoff <id> --expect <revision> [--json]
+mstar plan return --session <coordinator-session> --plan <id> --handoff <id> --reason <text> --expect <revision> [--json]
+mstar plan integration-start --session <coordinator-session> --plan <id> --handoff <id> --expect <revision> [--json]
+mstar plan integration-accept --session <coordinator-session> --plan <id> --handoff <id> --expect <revision> [--json]
+mstar plan complete --session <coordinator-session> --plan <id> --handoff <id> --expect <revision> [--json]
+mstar plan reconcile --session <coordinator-session> --plan <id> --handoff <id> --expect <revision> [--json]
+```
+
+`--expect` is the row's `coordination.revision` from `show` (`0` while a row is not yet coordinated), never the snapshot schema version or a date; `--expect-register` is the `register_version` from `show` — the literal `absent` for a register that does not exist yet, else the exact `sha256:<64 lowercase hex>` token. `bind` is the only verb without `--expect`: it reads, checks and claims atomically against current ownership.
+
+Two address forms reach the same prepared row: the pinned Assignment (`--assignment`) and the `--workflow/--plan` pair (which reads the row's registered Assignment path). A second fresh claim of the same row fails with `coordination.duplicate-holder` naming the live session; `bind --resume <session>` reports the current context read-only and never reacquires a released lease. `prepare` (coordinator) registers the reviewed Assignment and releases that plan's dependencies.
+
+`--handoff <id>` is mandatory on the six coordinator transitions and must be the row's **live** handoff id — the one `plan handoff` minted and `plan show --json` reports. The CLI checks the flag against the row before calling the engine and refuses a *different* live id with `coordination.handoff-mismatch` (exit 1, nothing written); the engine re-checks the handoff inside the lock, so the row stays the authority and the flag can never invent one.
+
+JSON success is `{ok:true, operation, workflow_id, plan_id?, revision?, snapshot_version?, session_file, session_id, role, handoff_id?, state?, outcome?}`; `show` additionally returns `register_version`, `scope`, `row`, `allowed_operations` and, once a handoff exists, the row's live `handoff_id` with its `state` and `attempt`. JSON failure is `{ok:false, operation, code, message, workflow_id?, plan_id?, holder?, path?, expected?, actual?}`. JSON goes to stdout with no color or banner; in human mode stdout stays empty and the summary goes to stderr.
+
+Exit codes (binding):
+
+| Code | When |
+|------|------|
+| `0` | operation succeeded (including an idempotent no-op and a read-only resume) |
+| `1` | engine refusal: scope / path / identity / session mismatch, duplicate holder, stale revision or register version, invalid transition, missing or stale evidence, Git proof, lock, store — always with a stable `coordination.*` `code` and no change to authoritative bytes |
+| `2` | usage: missing or mixed address forms, unknown flag, non-numeric `--expect`, an `--expect-register` that is neither `absent` nor a version token, a relative path where an absolute one is required, or an unreadable/unparseable payload file |
+
+Worked example (synthetic ids; a plan session drives its own row, the coordinator drives the lifecycle):
+
+```sh
+# 1. Coordinator bootstrap: main worktree (or the recorded integration worktree) only.
+mstar plan bind --coordinator --workflow wf-demo --json
+# → {"ok":true,"operation":"bind","workflow_id":"wf-demo","role":"coordinator",...,"session_file":"…/sessions/<uuid>.json","outcome":"bound"}
+
+# 2. Register the reviewed Assignment for one plan (revision 0 = not yet coordinated).
+mstar plan prepare --session …/sessions/<coordinator>.json --plan plan-a \
+  --assignment /control/.mstar/sdd/plan-a/assignment.md --expect 0 --json
+# → {"ok":true,"operation":"prepare","revision":1,…,"outcome":"prepared"}
+
+# 3. Bind the plan session and report its scope + allowed operations.
+mstar plan bind --workflow wf-demo --plan plan-a --json
+mstar plan show --session …/sessions/<plan>.json --json
+# → {"ok":true,"operation":"show","plan_id":"plan-a","revision":1,"snapshot_version":"sha256:…",
+#    "register_version":"absent","scope":{…},"allowed_operations":[…,"progress","handoff"]}
+
+# 4. Mutate only this row (progress + this plan's register bucket).
+mstar plan progress --session …/sessions/<plan>.json --file ./progress.json --expect 1 --json
+mstar plan residual-add --session …/sessions/<plan>.json --file ./entries.json --expect 2 --expect-register absent --json
+```
+
+The coordinator half of the lifecycle — `handoff` (plan side, leaves the row `InReview`), then `accept` (ownership transfer, not integration acceptance) → `integration-start` (reads the clean recorded integration checkout, refuses any foreign merge lease, and records the current integration HEAD as `base_sha` plus the immutable source pin) → the coordinator's own explicit pinned `git merge --no-ff --no-edit <source-sha>` in that recorded integration worktree → `integration-accept` → `complete`, with `reconcile` as the explicit crash path and `return` for a failed attempt — transports the same A2 shape. The attempt is recorded and pinned **before** Git runs — that is what makes a crash mid-merge reconcilable, and why a retried `integration-start` never moves `base_sha`. State verbs never run the merge themselves.
+
 ## Maintainer Commands
 
 Engine-backed harness checks for maintainers (thin wrappers — business logic lives in `@mstar-harness/engine`). Each command mirrors an engine validator that skill engine-check callouts cite; exit codes follow the CLI convention (0 = OK, 1 = violations/data errors, 2 = usage).
+
+### `mstar-harness status workflow-close`
+
+Close one workflow lifecycle after its delivery PR merged: `closeWorkflow` writes the terminal snapshot under the snapshot lock, then `unregisterWorkflow` removes the root `status.json` entry idempotently. Dangling leases and unfinished plan rows refuse before any write, a fully closed retry rewrites nothing, and a failed unregister reports a partial close a re-run finishes.
+
+```text
+mstar-harness status workflow-close --workflow <id> [--harness <path>] [--ended-at <date>] [--session <path>]
+```
+
+`--session <absolute-json>` is the coordinator envelope that authorizes closing a **coordinated** workflow: the engine's close gate runs before the unfinished-row check, so a coordinated workflow refuses a session-less close with `snapshot <path> is coordinated — close requires --session <coordinator envelope>` (exit 1, nothing written) instead of reporting the plan rows. A plan envelope is not sufficient — only the workflow's coordinator may close it. An uncoordinated workflow closes with or without the flag, exactly as before; `--session` with a relative path is a usage error (exit 2).
 
 ### `mstar-harness status tech-debt`
 
@@ -404,7 +487,10 @@ Exit codes:
 
 ## Harness Slash Commands (not CLI subcommands)
 
-`/codebase-audit`, `/amazing-pr-review`, and the `/iteration-*` commands ship with the harness plugin (`commands/*.md`), not the `mstar-harness` CLI binary. Host availability: dsh / omp / OpenCode / Cursor load them from the plugin; Kimi / ZCode expose `/morning-star-harness:<name>`; Codex installs them as project-local skills (`--scope project`). See the command-loading table in [README.md](../README.md#codebase-audit).
+`/codebase-audit`, `/amazing-pr-review`, and the `/iteration-*` commands ship with the harness plugin (`commands/*.md`), not the `mstar-harness` CLI binary. Host availability: dsh / omp / OpenCode / Cursor load them from the plugin; Kimi / ZCode expose `/morning-star-harness:<name>`; Codex installs them as project-local skills (`--scope project`). See the command-loading table in [README.md](../README.md#audit-review--verification).
+
+All six commands — purpose, argument forms, host notes, and the scoped `/iteration-drive` route — are indexed in [`commands.md`](commands.md); the sections below keep the CLI-side detail.
+
 ### `/amazing-pr-review`
 
 Deep, evidence-first review of a pull request / branch / diff before merge → one verdict (`ship it` / `needs fixes` / `blocked`). Worktree-isolated and read-only; findings that can fix become self-contained plans (`{PLAN_DIR}/audit-<YYYY-MM-DD>/`) for the normal Prepare → Execute flow. When a PR number exists, the command's main agent posts a mandatory GitHub Review (`COMMENT` event) with line comments on findings at Stage 3 synthesis — SSOT → `mstar-audit` `pr` variant → `references/pr-review.md`. Runs at one of three strengths — `quick` / `default` / `deep` — chosen by an explicit keyword or inferred from the change shape (`references/pr-review.md` § Review depth (tiers)): `quick` = 1 seat, collect + review in one pass (tiny-mechanical diffs); `default` = 2 domain seats, collection folded in — the no-flag landing tier for small code PRs; `deep` = the full three-stage pipeline (collect → domain review → main-agent synthesis), 4–7 seats. Multi-PR input reviews only the first PR at its resolved tier; remaining PRs are queued as audit todos for the next session — one session = one PR (§ Batch sibling PRs).

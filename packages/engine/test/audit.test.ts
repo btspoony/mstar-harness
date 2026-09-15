@@ -9,7 +9,7 @@
  */
 import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
 import { randomBytes } from "node:crypto";
 import { createJwt, createOpenSshPrivateKey, createRsaPrivateKey } from "./fixtures/credentials.js";
@@ -1289,5 +1289,46 @@ describe("supplyChainChecks action-unpinned trailing comment (fix round)", () =>
       "jobs:\n  b:\n    steps:\n      - uses: some/action@main\n      - uses: some/other@v4\n",
     );
     expect(r.kinds.filter((f) => f.kind === "action-unpinned").length).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// coordinated-writer — promoteAuditPlans writes create-only (spec C4)
+// ---------------------------------------------------------------------------
+
+describe("coordinated-writer — promoteAuditPlans create-only snapshot", () => {
+  test("refuses to replace an existing snapshot and leaves its bytes unchanged", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "coordinated-writer-promote-"));
+    try {
+      const harnessDir = join(tmp, "harness");
+      setArtifactStore(createFsStore(harnessDir));
+      const outDir = join(harnessDir, "plans", "audit-2026-09-15");
+      scaffoldAuditPlan(
+        outDir,
+        [
+          {
+            title: "Fix N+1 query in order list",
+            category: "perf" as const,
+            impact: "Every order-list render issues 1+N queries.",
+            effort: "M" as const,
+            risk: "MED" as const,
+            confidence: "HIGH" as const,
+            evidence: ["src/orders.ts:42"],
+            priority: "P1" as const,
+          },
+        ],
+        { date: "2026-09-15" },
+      );
+      const snapshotPath = join(harnessDir, "workflows", "audit-2026-09-15", WORKFLOW_SNAPSHOT_FILE);
+      mkdirSync(dirname(snapshotPath), { recursive: true });
+      const foreign = '{\n  "schema_version": 1,\n  "id": "audit-2026-09-15",\n  "type": "plan",\n  "status": "running",\n  "started_at": "2026-09-15T00:00:00Z",\n  "updated_at": "2026-09-15",\n  "plans": []\n}\n';
+      writeFileSync(snapshotPath, foreign, "utf8");
+
+      await expect(promoteAuditPlans(outDir, ["001"], { harnessDir })).rejects.toThrow(/already exists/);
+      expect(readFileSync(snapshotPath, "utf8")).toBe(foreign);
+    } finally {
+      setArtifactStore(undefined);
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });

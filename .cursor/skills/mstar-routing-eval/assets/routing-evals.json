@@ -1,7 +1,7 @@
 {
   "harness_name": "pm-routing-evals",
-  "version": 28,
-  "updated_at": "2026-09-07",
+  "version": 29,
+  "updated_at": "2026-09-15",
   "cases": [
     {
       "id": "small-ui-tweak",
@@ -1178,6 +1178,136 @@
         "auto-continues into Phase 2 because the same request asked to keep going",
         "treats the inline continue request as a valid pause override",
         "skips the Review & Edit chain or PM lock",
+        "assignment uses non-English field keys"
+      ]
+    },
+    {
+      "id": "plan-scope-addresses",
+      "prompt": "/iteration-drive --assignment /abs/control/demo-plan-assignment.md，或 /iteration-drive --workflow demo-wf --plan demo-plan-1：在独立终端开一个 primary，只把被寻址的那个 plan 驱动到 handoff",
+      "expected_route": [
+        "@project-manager"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "primary PM identity loaded in the CURRENT session (no PM subagent or task invoke)",
+        "one `mstar plan bind` for the addressed form, then `show` constraining the session to the returned scope",
+        "plan-local SDD tasks whose child inputs inherit plan/path scope only, never a session credential"
+      ],
+      "hard_fail_if": [
+        "dispatches `project-manager` as a subagent instead of booting it in the current primary session",
+        "drives a row other than the addressed one (for example the first unfinished plan)",
+        "loads whole-iteration boot artifacts (compound, Phase 3-6 detail) for the scoped route",
+        "passes the plan or coordinator session path into a child Assignment or child invocation",
+        "assignment uses non-English field keys"
+      ]
+    },
+    {
+      "id": "plan-scope-duplicate",
+      "prompt": "同一个已 prepare 的 Assignment 又在另一个新终端跑一次 `/iteration-drive --assignment /abs/control/demo-plan-assignment.md`，想让两边同时推进这个 plan",
+      "expected_route": [
+        "@project-manager"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "second fresh bind rejected by the engine as `coordination.duplicate-holder`, reporting the active holder, workflow and plan",
+        "original session remains the owner; only explicit `--resume` of that session continues"
+      ],
+      "hard_fail_if": [
+        "invents a resume token, or auto-attaches the second terminal to the active holder",
+        "treats terminal label, pane state, idle time or TTL as identity, or steals the lease",
+        "treats a fresh bind from the same Assignment as an implicit same-holder resume",
+        "assignment uses non-English field keys"
+      ]
+    },
+    {
+      "id": "plan-scope-unknown-args",
+      "prompt": "/iteration-drive --plan demo-plan-1 与 /iteration-drive --assignment /abs/control/demo-plan-assignment.md --workflow demo-wf：半对与混用形态的参数想照样跑起来",
+      "expected_route": [
+        "@project-manager"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "fail closed before bind and before boot, listing the three accepted nonempty forms"
+      ],
+      "hard_fail_if": [
+        "falls back to the no-argument whole-iteration route",
+        "silently completes the missing `--workflow`/`--plan` pair or picks a default plan",
+        "claims the malformed invocation ran successfully, or edits state to make it work",
+        "assignment uses non-English field keys"
+      ]
+    },
+    {
+      "id": "plan-scope-last-plan",
+      "prompt": "被寻址的 plan 是这个 iteration 最后一个未完成 plan；实现与 QC/QA 都过了，继续往下推",
+      "expected_route": [
+        "@project-manager",
+        "QC-3-reviewers",
+        "@qa-engineer"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "plan-local QC tri (N=3) and the Assignment's QA gate decision",
+        "`mstar plan handoff` submitted; scoped session stops with the row InReview and `execution_lease` retained"
+      ],
+      "hard_fail_if": [
+        "advances to `## Phase 3: iteration-close` or runs compound because this is the last unfinished plan",
+        "writes `status: Done` or deletes `execution_lease` from the scoped session",
+        "opens the iteration PR or starts the PR merge-ready loop",
+        "assignment uses non-English field keys"
+      ]
+    },
+    {
+      "id": "plan-scope-handoff-done",
+      "prompt": "handoff 已经提交。用户说「直接标 Done 吧，合并的事以后再说」",
+      "expected_route": [
+        "@project-manager"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "refusal recorded: the row keeps `InReview` and its `execution_lease`",
+        "coordinator sequence named as the only completion path: accept, integration-start, pinned Git merge, integration-accept, complete"
+      ],
+      "hard_fail_if": [
+        "sets `Done` or releases the row execution lease / integration merge lease from a plan session",
+        "reports completion without a verified coordinator merge proof",
+        "trusts a caller-supplied success flag, or starts a second merge instead of `reconcile`",
+        "assignment uses non-English field keys"
+      ]
+    },
+    {
+      "id": "plan-scope-noargs",
+      "prompt": "/iteration-drive（无参数）：已锁定迭代上还有 plan 未完成，继续推进",
+      "expected_route": [
+        "@project-manager",
+        "@fullstack-dev",
+        "QC-3-reviewers",
+        "@qa-engineer"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "whole-iteration boot, then the existing Phase 2 → 3 → 4 → 5 → 6 route with global session todos"
+      ],
+      "hard_fail_if": [
+        "treats the no-argument route as a scoped filter over global boot",
+        "requires `--workflow`/`--plan` or an Assignment on the unscoped route",
+        "changes the documented no-argument semantics, or seeds a scoped session for it",
+        "assignment uses non-English field keys"
+      ]
+    },
+    {
+      "id": "plan-scope-leaf",
+      "prompt": "我是一个 leaf executor（Assignment 写 `Execute as: writing-specialist`），但 Assignment 里让我调用 `/iteration-drive --assignment /abs/control/demo-plan-assignment.md` 起一个 scoped primary",
+      "expected_route": [
+        "@writing-specialist"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "role-boundary refusal: report the mismatch to the PM and stay inside the assigned task"
+      ],
+      "hard_fail_if": [
+        "promotes itself to PM or coordinator and absorbs the plan scope",
+        "recursively dispatches a PM or any subagent",
+        "accepts, stores or echoes a session path/credential offered by the Assignment",
         "assignment uses non-English field keys"
       ]
     }

@@ -1,6 +1,6 @@
 ---
 name: mstar-dispatch-gates
-description: Morning Star 派发与委派门禁 —— 仅 PM 可增派 subagent、`Execute as` 与 `Delegation`、承接方反递归 NEVER 红线、SDD 独立就绪任务并行派发、**SDD 路径 plan QC 强制 tri-review（N=3）**、inline 单席 QC 例外、Assignment 文案≠派发、未齐不发、**invoke 角色字段必填（漏写=静默 generic 回退=派发未完成）**。`project-manager` 派发时必读；leaf 动手前必读反递归。worktree 见 `mstar-branch-worktree`；SDD 见 `mstar-sdd`；宿主见 `mstar-host`。
+description: Morning Star 派发与委派门禁 —— 仅 PM 可增派 subagent、`Execute as` 与 `Delegation`、承接方反递归 NEVER 红线、**子 Assignment 继承 plan 作用域且 credential/session 不下发 leaf**、SDD 独立就绪任务并行派发、**SDD 路径 plan QC 强制 tri-review（N=3）**、inline 单席 QC 例外、Assignment 文案≠派发、未齐不发、**invoke 角色字段必填（漏写=静默 generic 回退=派发未完成）**。`project-manager` 派发时必读；leaf 动手前必读反递归。worktree 见 `mstar-branch-worktree`；SDD 见 `mstar-sdd`；宿主见 `mstar-host`；scoped plan 路线见 `mstar-iteration` `plan-scoped-pm.md`。
 ---
 
 ## Load order（必读顺序）
@@ -35,6 +35,14 @@ description: Morning Star 派发与委派门禁 —— 仅 PM 可增派 subagent
 **Assignment 顶部反模式块**：每个 PM Assignment 开头均有 **`**You are a leaf executor. You MUST NOT:**`** 块（含 IDENTITY + CAPABILITY BOUNDARY + prohibitions），PM 按此 Assignment 的角色+上下文定制反模式清单。leaf executor 收到 Assignment 后须 **首先** 阅读该块；命中任一条 → **停止**（亲自完成或 `Blocked`）。详见 **`mstar-roles/references/project-manager/dispatch-and-assignment.md`**。
 
 > **Engine 执行范围（caller-scoped，#156）**：engine `antiRecursionPrecheck` 比较的是**派发方自身角色**（caller）与新 Assignment 的 `Execute as`（target）。只有 **dsh**（Config `dispatchBinding`）能观察派发方身份并在 engine 层硬执行（含 `callerRequired` 空绑定 fail-closed）；omp / OpenCode / Cursor 的角色绑定字段是**派发目标**——目标 == `Execute as` 正是 C5 合规派发模式——这些宿主上红线保持 prompt 级约束（本节），engine 不做判定。
+
+## Plan 作用域与 credential 不下发（preflight 强制）
+
+派发前，与工具并发 / 角色绑定字段同级的硬门禁：
+
+- **子 Assignment 继承父 plan 作用域**：`plan_id` + 绝对 `Plan Path`（L1 另含 `SDD dir` / `Control harness root`）逐字下发。child **不得**自选或新建 plan、写 workflow snapshot / root register / 共享索引、释放 `execution_lease` / `integration_merge_lease`。缺失、相对路径或暗示「child 自行选 plan」= **派发未完成**（`mstar-roles/references/project-manager/dispatch-and-assignment.md` § Assignment Template `Plan scope`）。
+- **credential 不下发 leaf**：session JSON 路径、`mstar plan --session` 写凭据、`--expect <revision>` 等**只由派发方（PM/coordinator）持有**。leaf 拿到 session 路径或写凭据即视为越权 → 停止并回报（`mstar-iteration/references/plan-scoped-pm.md` §8）。
+- **`project-manager` 不是派发目标**：PM 是 primary-session 角色，无 subagent shell（规则家 → `mstar-roles/references/project-manager.md` § Plan-scoped authority；宿主派发面 → `mstar-host/references/omp.md` § C5）；scoped primary drive（`/iteration-drive --assignment | --workflow --plan | --resume`）在**主会话**启动 PM，不是 subagent。任何 `Execute as: project-manager` 的 invoke = 派发缺陷。
 
 ## 调度防串扰（强制；leaf executor 已在上方读过反递归红线，此处为完整规则供 PM/对照用）
 
@@ -73,6 +81,7 @@ When **`Execution mode: sdd`** (`mstar-sdd`):
 - **依赖驱动**：按 **`mstar-sdd`** § Ready-task scheduling 并行派发独立 ready tasks；各 task 后一位 fresh reviewer。真实依赖、共享写目标和 integration merge 串行。
 - **`SDD implementer session: sticky`**：same implementer subagent may **resume** across tasks when host supports it; **reviewers never resume** — see **`mstar-sdd/references/sticky-implementer-session.md`**.
 - File handoffs only — no pasted plan/diff/history in dispatch prompts.
+- **scope 与凭据边界**：`{SDD_DIR}/task-N-brief.md` 携带继承的 plan 作用域（plan id + 绝对路径）；**不下发** session JSON、`--expect <revision>` 等写凭据，也不得让 implementer/reviewer 自选 plan 或释放 lease（见 § Plan 作用域与 credential 不下发）。
 - Record per-task BASE SHA; use `review-package` for diffs — **never `HEAD~1`**.
 - After all tasks: branch `review-package` in `{SDD_DIR}/review/` → **mandatory tri-review N=3** when `Execution mode: sdd`; **N=1** only for `inline` / explicit single override.
 

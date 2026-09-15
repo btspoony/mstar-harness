@@ -10,7 +10,8 @@
  */
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { synthesizeReview } from "@mstar-harness/engine";
@@ -168,44 +169,52 @@ function recordingStoreModuleSource(envVar: string): string {
   ].join("\n");
 }
 
+/**
+ * `persist put` is the ArtifactStore persist port; the protected kinds
+ * (`status` / `snapshot` / `residuals`) are coordination documents, so they
+ * have exactly one writer: the engine's locked replacement behind
+ * `--expect-version` (spec §C4). A bare put of such a kind is refused at the
+ * CLI flag gate — usage exit 2, nothing written, existing bytes intact — and
+ * an injected `--store` module is refused too, because the replacement needs
+ * the default local FsStore's same-host CAS contract. Fixture cases that only
+ * need existing bytes write the backing file directly.
+ */
 describe("mstar persist — FsStore round-trip in a temp harness dir (MSTAR_HARNESS_DIR)", () => {
-  test("snapshot put then get round-trips", () => {
+  test("a protected snapshot put without --expect-version is a usage error and writes nothing", () => {
     withTempDir((dir) => {
-      const payloadFile = writePayload(dir, "snapshot.json", SNAPSHOT_PAYLOAD);
+      const payloadFile = writePayload(dir, "payload.json", SNAPSHOT_PAYLOAD);
       const put = runCli(["persist", "snapshot", "--key", "wf-1", "--file", payloadFile], { env: harnessEnv(dir) });
-      expect(put.exitCode).toBe(0);
-      expect(put.stdout).toContain("persist snapshot/wf-1: OK");
-      expect(existsSync(join(dir, "workflows", "wf-1", "snapshot.json"))).toBe(true);
+      expect(put.exitCode).toBe(2);
+      expect(put.stderr).toContain("--expect-version");
+      expect(put.stderr).toContain("is a coordinated artifact");
+      expect(existsSync(join(dir, "workflows", "wf-1", "snapshot.json"))).toBe(false);
+      expect(put.stdout).toBe("");
 
       const get = runCli(["persist", "get", "snapshot", "--key", "wf-1"], { env: harnessEnv(dir) });
-      expect(get.exitCode).toBe(0);
-      expect(JSON.parse(get.stdout)).toEqual(SNAPSHOT_PAYLOAD);
+      expect(get.exitCode).toBe(1);
+      expect(get.stderr).toContain("no stored document");
     });
   });
 
-  test("status put then get round-trips at {HARNESS_DIR}/status.json (key root)", () => {
+  test("a protected status put without --expect-version is refused and {HARNESS_DIR}/status.json is never created", () => {
     withTempDir((dir) => {
-      const payloadFile = writePayload(dir, "status.json", STATUS_PAYLOAD);
+      const payloadFile = writePayload(dir, "payload.json", STATUS_PAYLOAD);
       const put = runCli(["persist", "status", "--key", "root", "--file", payloadFile], { env: harnessEnv(dir) });
-      expect(put.exitCode).toBe(0);
-      expect(existsSync(join(dir, "status.json"))).toBe(true);
-
-      const get = runCli(["persist", "get", "status", "--key", "root"], { env: harnessEnv(dir) });
-      expect(get.exitCode).toBe(0);
-      expect(JSON.parse(get.stdout)).toEqual(STATUS_PAYLOAD);
+      expect(put.exitCode).toBe(2);
+      expect(put.stderr).toContain("--expect-version");
+      expect(existsSync(join(dir, "status.json"))).toBe(false);
     });
   });
 
-  test("residuals put then get round-trips at {PROJECT_DIR}/<key>/residuals.json", () => {
+  test("a protected residuals put without --expect-version is refused and no register is created", () => {
     withTempDir((dir) => {
-      const payloadFile = writePayload(dir, "residuals.json", RESIDUALS_PAYLOAD);
-      const put = runCli(["persist", "residuals", "--key", "proj-1", "--file", payloadFile], { env: harnessEnv(dir) });
-      expect(put.exitCode).toBe(0);
-      expect(existsSync(join(dir, "projects", "proj-1", "residuals.json"))).toBe(true);
-
-      const get = runCli(["persist", "get", "residuals", "--key", "proj-1"], { env: harnessEnv(dir) });
-      expect(get.exitCode).toBe(0);
-      expect(JSON.parse(get.stdout)).toEqual(RESIDUALS_PAYLOAD);
+      const payloadFile = writePayload(dir, "payload.json", RESIDUALS_PAYLOAD);
+      const put = runCli(["persist", "residuals", "--key", "proj-1", "--file", payloadFile], {
+        env: harnessEnv(dir),
+      });
+      expect(put.exitCode).toBe(2);
+      expect(put.stderr).toContain("--expect-version");
+      expect(existsSync(join(dir, "projects", "proj-1", "residuals.json"))).toBe(false);
     });
   });
 
@@ -261,7 +270,10 @@ describe("mstar persist — validators run before put", () => {
   test("status validator rejects a v1 document (exit 1, no write)", () => {
     withTempDir((dir) => {
       const payloadFile = writePayload(dir, "v1.json", { version: 1, plans: [] });
-      const r = runCli(["persist", "status", "--key", "root", "--file", payloadFile], { env: harnessEnv(dir) });
+      const r = runCli(
+        ["persist", "status", "--key", "root", "--file", payloadFile, "--expect-version", "absent"],
+        { env: harnessEnv(dir) },
+      );
       expect(r.exitCode).toBe(1);
       expect(r.stderr).toContain("refusing to persist invalid status document");
       expect(existsSync(join(dir, "status.json"))).toBe(false);
@@ -271,7 +283,21 @@ describe("mstar persist — validators run before put", () => {
   test("snapshot validator rejects a doc missing schema_version (exit 1, no write)", () => {
     withTempDir((dir) => {
       const payloadFile = writePayload(dir, "bad-snapshot.json", { id: "wf-1", plans: [] });
-      const r = runCli(["persist", "snapshot", "--key", "wf-1", "--file", payloadFile], { env: harnessEnv(dir) });
+      const r = runCli(
+        [
+          "persist",
+          "snapshot",
+          "--key",
+          "wf-1",
+          "--file",
+          payloadFile,
+          "--expect-version",
+          "absent",
+          "--session",
+          join(dir, "coordinator.json"),
+        ],
+        { env: harnessEnv(dir) },
+      );
       expect(r.exitCode).toBe(1);
       expect(r.stderr).toContain("refusing to persist invalid snapshot document");
       expect(existsSync(join(dir, "workflows", "wf-1", "snapshot.json"))).toBe(false);
@@ -281,7 +307,10 @@ describe("mstar persist — validators run before put", () => {
   test("residuals validator rejects a non-register document (exit 1, no write)", () => {
     withTempDir((dir) => {
       const payloadFile = writePayload(dir, "bad-residuals.json", { nope: 1 });
-      const r = runCli(["persist", "residuals", "--key", "proj-1", "--file", payloadFile], { env: harnessEnv(dir) });
+      const r = runCli(
+        ["persist", "residuals", "--key", "proj-1", "--file", payloadFile, "--expect-version", "absent"],
+        { env: harnessEnv(dir) },
+      );
       expect(r.exitCode).toBe(1);
       expect(r.stderr).toContain("refusing to persist invalid residuals document");
       expect(existsSync(join(dir, "projects", "proj-1", "residuals.json"))).toBe(false);
@@ -414,9 +443,22 @@ describe("mstar persist — usage errors", () => {
   test("--file and --stdin together → usage, exit 2", () => {
     withTempDir((dir) => {
       const payloadFile = writePayload(dir, "payload.json", { a: 1 });
-      const r = runCli(["persist", "snapshot", "--key", "k", "--file", payloadFile, "--stdin"], {
-        env: harnessEnv(dir),
-      });
+      const r = runCli(
+        [
+          "persist",
+          "snapshot",
+          "--key",
+          "k",
+          "--file",
+          payloadFile,
+          "--stdin",
+          "--expect-version",
+          "absent",
+          "--session",
+          join(dir, "coordinator.json"),
+        ],
+        { env: harnessEnv(dir) },
+      );
       expect(r.exitCode).toBe(2);
       expect(r.stderr).toContain("mutually exclusive");
     });
@@ -424,9 +466,21 @@ describe("mstar persist — usage errors", () => {
 
   test("missing payload file → exit 1", () => {
     withTempDir((dir) => {
-      const r = runCli(["persist", "snapshot", "--key", "k", "--file", join(dir, "no-such.json")], {
-        env: harnessEnv(dir),
-      });
+      const r = runCli(
+        [
+          "persist",
+          "snapshot",
+          "--key",
+          "k",
+          "--file",
+          join(dir, "no-such.json"),
+          "--expect-version",
+          "absent",
+          "--session",
+          join(dir, "coordinator.json"),
+        ],
+        { env: harnessEnv(dir) },
+      );
       expect(r.exitCode).toBe(1);
       expect(r.stderr).toContain("payload file not found");
     });
@@ -444,29 +498,41 @@ describe("mstar persist get — absent document", () => {
 });
 
 describe("mstar persist — --stdin and default-stdin payloads", () => {
-  test("--stdin reads the payload from stdin", () => {
+  test("--stdin reads the payload from stdin: a coordinated replacement is attempted only once the bytes parsed", () => {
     withTempDir((dir) => {
-      const put = runCliWithInput(["persist", "snapshot", "--key", "wf-stdin", "--stdin"], {
+      const gate = ["--expect-version", "absent", "--session", join(dir, "coordinator.json")];
+      const put = runCliWithInput(["persist", "snapshot", "--key", "wf-stdin", "--stdin", ...gate], {
         env: harnessEnv(dir),
         input: JSON.stringify(SNAPSHOT_PAYLOAD),
       });
-      expect(put.exitCode).toBe(0);
-      expect(existsSync(join(dir, "workflows", "wf-stdin", "snapshot.json"))).toBe(true);
+      // The coordinated refusal can only happen after stdin was read AND parsed
+      // AND validated — a transport failure would report differently.
+      expect(put.exitCode).toBe(1);
+      expect(put.stderr).not.toContain("not valid JSON");
+      expect(existsSync(join(dir, "workflows", "wf-stdin", "snapshot.json"))).toBe(false);
 
-      const get = runCli(["persist", "get", "snapshot", "--key", "wf-stdin"], { env: harnessEnv(dir) });
-      expect(get.exitCode).toBe(0);
-      expect(JSON.parse(get.stdout)).toEqual(SNAPSHOT_PAYLOAD);
+      const malformed = runCliWithInput(["persist", "snapshot", "--key", "wf-stdin", "--stdin", ...gate], {
+        env: harnessEnv(dir),
+        input: "{not json",
+      });
+      expect(malformed.exitCode).toBe(1);
+      expect(malformed.stderr).toContain("not valid JSON");
     });
   });
 
-  test("no --file / --stdin flag defaults to stdin", () => {
+  test("no --file / --stdin flag defaults to stdin (unprotected kind writes end-to-end)", () => {
     withTempDir((dir) => {
-      const put = runCliWithInput(["persist", "snapshot", "--key", "wf-default"], {
+      const target = join(dir, "loose.json");
+      const put = runCliWithInput(["persist", "json", "--key", target], {
         env: harnessEnv(dir),
-        input: JSON.stringify(SNAPSHOT_PAYLOAD),
+        input: JSON.stringify({ anything: ["goes", 1] }),
       });
       expect(put.exitCode).toBe(0);
-      expect(existsSync(join(dir, "workflows", "wf-default", "snapshot.json"))).toBe(true);
+      expect(JSON.parse(readFileSync(target, "utf8"))).toEqual({ anything: ["goes", 1] });
+
+      const get = runCli(["persist", "get", "json", "--key", target], { env: harnessEnv(dir) });
+      expect(get.exitCode).toBe(0);
+      expect(JSON.parse(get.stdout)).toEqual({ anything: ["goes", 1] });
     });
   });
 });
@@ -477,21 +543,21 @@ describe("mstar persist — --store / MSTAR_STORE_MODULE module injection", () =
       const moduleFile = join(dir, "store-mod.ts");
       writeFileSync(moduleFile, storeModuleSource("PERSIST_MODULE_FILE"), "utf8");
       const outFile = join(dir, "module-out.json");
-      const payloadFile = writePayload(dir, "snapshot.json", SNAPSHOT_PAYLOAD);
+      const payloadFile = writePayload(dir, "review.json", REVIEW_PAYLOAD);
 
-      const put = runCli(["persist", "snapshot", "--key", "mod-1", "--file", payloadFile, "--store", moduleFile], {
+      const put = runCli(["persist", "review", "--key", "mod-1", "--file", payloadFile, "--store", moduleFile], {
         env: { PERSIST_MODULE_FILE: outFile },
       });
       expect(put.exitCode).toBe(0);
       // The put went through the module (module-out.json), not the FsStore.
       expect(existsSync(outFile)).toBe(true);
-      expect(JSON.parse(readFileSync(outFile, "utf8"))).toEqual({ key: "mod-1", payload: SNAPSHOT_PAYLOAD });
+      expect(JSON.parse(readFileSync(outFile, "utf8"))).toEqual({ key: "mod-1", payload: REVIEW_PAYLOAD });
 
-      const get = runCli(["persist", "get", "snapshot", "--key", "mod-1", "--store", moduleFile], {
+      const get = runCli(["persist", "get", "review", "--key", "mod-1", "--store", moduleFile], {
         env: { PERSIST_MODULE_FILE: outFile },
       });
       expect(get.exitCode).toBe(0);
-      expect(JSON.parse(get.stdout)).toEqual(SNAPSHOT_PAYLOAD);
+      expect(JSON.parse(get.stdout)).toEqual(REVIEW_PAYLOAD);
     });
   });
 
@@ -500,19 +566,19 @@ describe("mstar persist — --store / MSTAR_STORE_MODULE module injection", () =
       const moduleFile = join(dir, "store-mod.ts");
       writeFileSync(moduleFile, storeModuleSource("PERSIST_MODULE_FILE"), "utf8");
       const outFile = join(dir, "module-out.json");
-      const payloadFile = writePayload(dir, "snapshot.json", SNAPSHOT_PAYLOAD);
+      const payloadFile = writePayload(dir, "review.json", REVIEW_PAYLOAD);
 
-      const put = runCli(["persist", "snapshot", "--key", "mod-env", "--file", payloadFile], {
+      const put = runCli(["persist", "review", "--key", "mod-env", "--file", payloadFile], {
         env: { MSTAR_STORE_MODULE: moduleFile, PERSIST_MODULE_FILE: outFile },
       });
       expect(put.exitCode).toBe(0);
       expect(existsSync(outFile)).toBe(true);
 
-      const get = runCli(["persist", "get", "snapshot", "--key", "mod-env"], {
+      const get = runCli(["persist", "get", "review", "--key", "mod-env"], {
         env: { MSTAR_STORE_MODULE: moduleFile, PERSIST_MODULE_FILE: outFile },
       });
       expect(get.exitCode).toBe(0);
-      expect(JSON.parse(get.stdout)).toEqual(SNAPSHOT_PAYLOAD);
+      expect(JSON.parse(get.stdout)).toEqual(REVIEW_PAYLOAD);
     });
   });
 
@@ -524,9 +590,9 @@ describe("mstar persist — --store / MSTAR_STORE_MODULE module injection", () =
       writeFileSync(moduleB, storeModuleSource("PERSIST_MODULE_FILE_B"), "utf8");
       const outA = join(dir, "out-a.json");
       const outB = join(dir, "out-b.json");
-      const payloadFile = writePayload(dir, "snapshot.json", SNAPSHOT_PAYLOAD);
+      const payloadFile = writePayload(dir, "review.json", REVIEW_PAYLOAD);
 
-      const r = runCli(["persist", "snapshot", "--key", "mod-2", "--file", payloadFile, "--store", moduleB], {
+      const r = runCli(["persist", "review", "--key", "mod-2", "--file", payloadFile, "--store", moduleB], {
         env: { MSTAR_STORE_MODULE: moduleA, PERSIST_MODULE_FILE_A: outA, PERSIST_MODULE_FILE_B: outB },
       });
       expect(r.exitCode).toBe(0);
@@ -537,8 +603,8 @@ describe("mstar persist — --store / MSTAR_STORE_MODULE module injection", () =
 
   test("--store with a URI scheme is rejected before any import", () => {
     withTempDir((dir) => {
-      const payloadFile = writePayload(dir, "snapshot.json", SNAPSHOT_PAYLOAD);
-      const r = runCli(["persist", "snapshot", "--key", "k", "--file", payloadFile, "--store", "http://example.com/s.mjs"], {
+      const payloadFile = writePayload(dir, "review.json", REVIEW_PAYLOAD);
+      const r = runCli(["persist", "review", "--key", "k", "--file", payloadFile, "--store", "http://example.com/s.mjs"], {
         env: harnessEnv(dir),
       });
       expect(r.exitCode).toBe(1);
@@ -611,12 +677,11 @@ describe("mstar persist — --schema under the D3 fail-loud store contract", () 
 describe("mstar persist list — D4/D5 enumeration face", () => {
   test("snapshot keys print one per line ascending, no header (D5)", () => {
     withTempDir((dir) => {
-      const payloadFile = writePayload(dir, "snapshot.json", SNAPSHOT_PAYLOAD);
+      // Existing bytes are the fixture: enumeration is the subject here, not
+      // the protected write face.
       for (const key of ["wf-2", "wf-10", "wf-1"]) {
-        const put = runCli(["persist", "snapshot", "--key", key, "--file", payloadFile], {
-          env: harnessEnv(dir),
-        });
-        expect(put.exitCode).toBe(0);
+        mkdirSync(join(dir, "workflows", key), { recursive: true });
+        writeFileSync(join(dir, "workflows", key, "snapshot.json"), JSON.stringify(SNAPSHOT_PAYLOAD), "utf8");
       }
       const list = runCli(["persist", "list", "snapshot"], { env: harnessEnv(dir) });
       expect(list.exitCode).toBe(0);
@@ -648,11 +713,7 @@ describe("mstar persist list — D4/D5 enumeration face", () => {
       expect(missing.exitCode).toBe(0);
       expect(missing.stdout).toBe("");
 
-      const payloadFile = writePayload(dir, "status.json", STATUS_PAYLOAD);
-      const put = runCli(["persist", "status", "--key", "root", "--file", payloadFile], {
-        env: harnessEnv(dir),
-      });
-      expect(put.exitCode).toBe(0);
+      writePayload(dir, "status.json", STATUS_PAYLOAD);
       const list = runCli(["persist", "list", "status"], { env: harnessEnv(dir) });
       expect(list.exitCode).toBe(0);
       expect(list.stdout).toBe("root\n");
@@ -717,11 +778,7 @@ function deletingStoreModuleSource(envVar: string): string {
 describe("mstar persist get --validate + persist delete — D1/D2 faces", () => {
   test("valid status doc + --validate → exit 0; stdout is payload JSON only; stderr note validation: ok (D1)", () => {
     withTempDir((dir) => {
-      const payloadFile = writePayload(dir, "status.json", STATUS_PAYLOAD);
-      const put = runCli(["persist", "status", "--key", "root", "--file", payloadFile], {
-        env: harnessEnv(dir),
-      });
-      expect(put.exitCode).toBe(0);
+      writePayload(dir, "status.json", STATUS_PAYLOAD);
       const get = runCli(["persist", "get", "status", "--key", "root", "--validate"], {
         env: harnessEnv(dir),
       });
@@ -780,44 +837,59 @@ describe("mstar persist get --validate + persist delete — D1/D2 faces", () => 
     });
   });
 
-  test("delete after put → exit 0, stdout deleted <kind>/<key>; a later get misses (D2)", () => {
+  test("delete of a protected kind refuses and leaves the bytes untouched (lifecycle close is not deletion)", () => {
     withTempDir((dir) => {
-      const payloadFile = writePayload(dir, "snapshot.json", SNAPSHOT_PAYLOAD);
-      const put = runCli(["persist", "snapshot", "--key", "wf-1", "--file", payloadFile], {
-        env: harnessEnv(dir),
-      });
-      expect(put.exitCode).toBe(0);
+      mkdirSync(join(dir, "workflows", "wf-1"), { recursive: true });
+      const snapshotPath = join(dir, "workflows", "wf-1", "snapshot.json");
+      writeFileSync(snapshotPath, JSON.stringify(SNAPSHOT_PAYLOAD), "utf8");
+
       const del = runCli(["persist", "delete", "snapshot", "--key", "wf-1"], { env: harnessEnv(dir) });
-      expect(del.exitCode).toBe(0);
-      expect(del.stdout).toBe("deleted snapshot/wf-1\n");
-      const get = runCli(["persist", "get", "snapshot", "--key", "wf-1"], { env: harnessEnv(dir) });
-      expect(get.exitCode).toBe(1);
-      expect(get.stderr).toContain("no stored document");
+      expect(del.exitCode).toBe(1);
+      expect(del.stderr).toContain("is a protected coordination document (snapshot)");
+      expect(del.stderr).toContain("refused");
+      expect(readFileSync(snapshotPath, "utf8")).toBe(JSON.stringify(SNAPSHOT_PAYLOAD));
     });
   });
 
-  test("delete of an absent key → success exit 0 with the same stdout (idempotent, no prompt) (D2)", () => {
+  test("delete of an absent protected key refuses too — the refusal is kind-scoped, not existence-scoped", () => {
     withTempDir((dir) => {
       const del = runCli(["persist", "delete", "snapshot", "--key", "never-existed"], {
         env: harnessEnv(dir),
       });
-      expect(del.exitCode).toBe(0);
-      expect(del.stdout).toBe("deleted snapshot/never-existed\n");
+      expect(del.exitCode).toBe(1);
+      expect(del.stderr).toContain("is a protected coordination document (snapshot)");
     });
   });
 
-  test("status kind delete removes {HARNESS_DIR}/status.json (allowed) (D2)", () => {
+  test("status kind delete refuses and keeps {HARNESS_DIR}/status.json (lifecycle close is not deletion)", () => {
     withTempDir((dir) => {
-      const payloadFile = writePayload(dir, "payload.json", STATUS_PAYLOAD);
-      const put = runCli(["persist", "status", "--key", "root", "--file", payloadFile], {
+      writePayload(dir, "status.json", STATUS_PAYLOAD);
+      const del = runCli(["persist", "delete", "status", "--key", "root"], { env: harnessEnv(dir) });
+      expect(del.exitCode).toBe(1);
+      expect(del.stderr).toContain("is a protected coordination document (root)");
+      expect(readFileSync(join(dir, "status.json"), "utf8")).toBe(JSON.stringify(STATUS_PAYLOAD));
+    });
+  });
+
+  test("delete of an unprotected kind still deletes (review keeps its existing behavior)", () => {
+    withTempDir((dir) => {
+      const payloadFile = writePayload(dir, "review.json", REVIEW_PAYLOAD);
+      const put = runCli(["persist", "review", "--key", "review-abc", "--file", payloadFile], {
         env: harnessEnv(dir),
       });
       expect(put.exitCode).toBe(0);
-      const del = runCli(["persist", "delete", "status", "--key", "root"], { env: harnessEnv(dir) });
+      const target = join(dir, "sdd", "_reviews", "review-abc.json");
+      expect(existsSync(target)).toBe(true);
+
+      const del = runCli(["persist", "delete", "review", "--key", "review-abc"], { env: harnessEnv(dir) });
       expect(del.exitCode).toBe(0);
-      expect(del.stdout).toBe("deleted status/root\n");
-      const get = runCli(["persist", "get", "status", "--key", "root"], { env: harnessEnv(dir) });
-      expect(get.exitCode).toBe(1);
+      expect(del.stdout).toBe("deleted review/review-abc\n");
+      expect(existsSync(target)).toBe(false);
+
+      // Idempotent for an unprotected kind: an already-absent key is a no-op.
+      const again = runCli(["persist", "delete", "review", "--key", "review-abc"], { env: harnessEnv(dir) });
+      expect(again.exitCode).toBe(0);
+      expect(again.stdout).toBe("deleted review/review-abc\n");
     });
   });
 
@@ -860,6 +932,105 @@ describe("mstar persist get --validate + persist delete — D1/D2 faces", () => 
       expect(del.exitCode).toBe(0);
       expect(del.stdout).toBe("deleted status/root\n");
       expect(JSON.parse(readFileSync(recording, "utf8"))).toEqual({ kind: "status", key: "root" });
+    });
+  });
+});
+
+describe("mstar persist coordinated-writer — protected bytes stay behind the boundary", () => {
+  test("a protected put without --expect-version never writes the document", () => {
+    withTempDir((dir) => {
+      const payloadFile = writePayload(dir, "payload.json", STATUS_PAYLOAD);
+      const put = runCli(["persist", "status", "--key", "root", "--file", payloadFile], {
+        env: harnessEnv(dir),
+      });
+      expect(put.exitCode).toBe(2);
+      expect(put.stderr).toContain("--expect-version");
+      expect(existsSync(join(dir, "status.json"))).toBe(false);
+    });
+  });
+
+  test("an existing protected document survives a stale token byte-for-byte, and its own token replaces it", () => {
+    withTempDir((dir) => {
+      const original = JSON.stringify({ ...STATUS_PAYLOAD, updated_at: "2026-01-01" });
+      writeFileSync(join(dir, "status.json"), original, "utf8");
+      const payloadFile = writePayload(dir, "payload.json", STATUS_PAYLOAD);
+
+      // "absent" is the first-write token: stale the moment the document exists.
+      const stale = runCli(
+        ["persist", "status", "--key", "root", "--file", payloadFile, "--expect-version", "absent"],
+        { env: harnessEnv(dir) },
+      );
+      expect(stale.exitCode).toBe(1);
+      expect(stale.stderr).toContain("is at version sha256:");
+      expect(stale.stderr).toContain("expected absent");
+      expect(readFileSync(join(dir, "status.json"), "utf8")).toBe(original);
+
+      // The token persist get --versioned reports is the one that writes.
+      const versioned = runCli(["persist", "get", "status", "--key", "root", "--versioned"], {
+        env: harnessEnv(dir),
+      });
+      expect(versioned.exitCode).toBe(0);
+      const { version } = JSON.parse(versioned.stdout) as { version: string };
+      expect(version).toMatch(/^sha256:[0-9a-f]{64}$/);
+
+      const replaced = runCli(
+        ["persist", "status", "--key", "root", "--file", payloadFile, "--expect-version", version],
+        { env: harnessEnv(dir) },
+      );
+      expect(replaced.exitCode).toBe(0);
+      expect(JSON.parse(readFileSync(join(dir, "status.json"), "utf8"))).toEqual(STATUS_PAYLOAD);
+      expect(STATUS_PAYLOAD).not.toEqual(JSON.parse(original));
+    });
+  });
+
+  test("a json alias of a protected target is refused by canonical path, not by kind name", () => {
+    withTempDir((dir) => {
+      const payloadFile = writePayload(dir, "payload.json", STATUS_PAYLOAD);
+      const put = runCli(
+        ["persist", "json", "--key", join(dir, "status.json"), "--file", payloadFile],
+        { env: harnessEnv(dir) },
+      );
+      expect(put.exitCode).toBe(1);
+      expect(put.stderr).toContain("is a protected coordination document (root)");
+      expect(existsSync(join(dir, "status.json"))).toBe(false);
+    });
+  });
+
+  test("--versioned returns the exact sha256 byte version of the stored bytes", () => {
+    withTempDir((dir) => {
+      const stored = `${JSON.stringify(STATUS_PAYLOAD, null, 2)}\n`;
+      writeFileSync(join(dir, "status.json"), stored, "utf8");
+      const expected = `sha256:${createHash("sha256").update(stored, "utf8").digest("hex")}`;
+
+      const read = runCli(["persist", "get", "status", "--key", "root", "--versioned"], {
+        env: harnessEnv(dir),
+      });
+      expect(read.exitCode).toBe(0);
+      const parsed = JSON.parse(read.stdout) as { payload: unknown; version: string };
+      expect(parsed.version).toBe(expected);
+      expect(parsed.payload).toEqual(STATUS_PAYLOAD);
+    });
+  });
+
+  test("--versioned reports the absent token for a missing document (the first-create precondition)", () => {
+    withTempDir((dir) => {
+      const read = runCli(["persist", "get", "snapshot", "--key", "wf-none", "--versioned"], {
+        env: harnessEnv(dir),
+      });
+      expect(read.exitCode).toBe(0);
+      expect(JSON.parse(read.stdout)).toEqual({ payload: null, version: "absent" });
+    });
+  });
+
+  test("--versioned refuses a pluggable store module (no same-host CAS on a remote module)", () => {
+    withTempDir((dir) => {
+      const moduleFile = join(dir, "store-mod.ts");
+      writeFileSync(moduleFile, storeModuleSource("PERSIST_MODULE_FILE"), "utf8");
+      const read = runCli(["persist", "get", "snapshot", "--key", "wf-1", "--versioned", "--store", moduleFile], {
+        env: { ...harnessEnv(dir), PERSIST_MODULE_FILE: join(dir, "recording.json") },
+      });
+      expect(read.exitCode).toBe(1);
+      expect(read.stderr).toContain("local-store-required");
     });
   });
 });

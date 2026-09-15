@@ -365,6 +365,12 @@ child's settle notification** → next dispatch. When a dispatched child owns th
 critical path, the correct action is to **wait** — not to open another unit of
 work against the same worktree.
 
+The **scoped plan route** changes none of this: `/iteration-drive --assignment |
+--workflow --plan | --resume` still never arms a goal on dsh, and its
+progression stays the plan-scoped native workflow (`mstar plan bind → progress →
+handoff`, coordinator `accept` / `integration-*` / `complete`) —
+`mstar-iteration/references/plan-scoped-pm.md`.
+
 ### QC default
 
 - **`Execution mode: sdd`**: **N=3** seats — one per QC seat (`qc-specialist`,

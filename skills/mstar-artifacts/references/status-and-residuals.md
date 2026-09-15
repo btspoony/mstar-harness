@@ -94,9 +94,10 @@ Canonical vs legacy residual definitions → **`mstar-artifacts` SKILL.md**（"`
 - The example above depicts the **held** state (both leases populated, illustrative placeholder values) and passes `validateWorkflowSnapshot`; the released state is **key absence** (delete-key-on-release below), never `null` or `{}`, and enum scalars (`type` / `status` / plan-row `status`) are always single values — the full enum sets are `type`: `plan | iteration`, snapshot `status`: `running | paused | completed | failed | stopped`, plan-row `status`: `Todo | InProgress | InReview | Blocked | Done`.
 
 - `plans[]` rows are the **legacy PlanRow shape verbatim** (unknown row fields preserved, never re-bucketed). Per-row `execution_lease` stays on the row; `integration_merge_lease` is **top-level** (the v1 root-`metadata` home is gone).
+- **Scoped coordination (optional):** top-level `coordination.coordinator` plus per-row `coordination` (`revision` / `prepared` / `session` / `progress` / `handoff`) appear only on the scoped route — field table, session envelopes and version rules → § Plan-scoped coordination below.
 - Terminal statuses (`completed` / `failed` / `stopped`) require `ended_at` and no dangling leases.
 - **Completed close (Phase 6)** runs `mstar status workflow-close --workflow <id> [--harness <path>] [--ended-at <date>]`: engine `closeWorkflow` rereads the latest snapshot under the snapshot write lock, refuses any dangling lease / non-`Done` row (fail-loud, bytes unchanged), writes `completed` + `ended_at`, then unregisters the root entry. Unregister failure after the snapshot write is a reported **partial close** — retry finishes unregister without rewriting `ended_at`; a fully closed retry rewrites neither file. An already-terminal `failed` / `stopped` snapshot keeps its actual status (close never fabricates `completed`).
-- **Physical cleanup is out of close's scope**: it is the separate `mstar worktree cleanup --workflow <id> …` verb (dry-run default), run in its own timing lane — same-round after a plan's integration merge (Phase 2) or after §6.1–§6.3 + PR merged (Phase 6). Close and cleanup never release leases — owners release manually before either. Guard/decision codes (`cleanup.keep.*`, `cleanup.refuse.*`, `cleanup.remove.merged`) → **`mstar-branch-worktree`**「Worktree / branch cleanup」.
+- **Physical cleanup is out of close's scope**: it is the separate `mstar worktree cleanup --workflow <id> …` verb (dry-run default), run in its own timing lane — same-round after a plan's integration merge (Phase 2) or after §6.1–§6.3 + PR merged (Phase 6). Close and cleanup never release leases — on the scoped route the plan row's lease is moved/deleted by `mstar plan accept | return | complete` (never by close or cleanup, and never by a standalone release verb); on the whole-iteration route the owner releases before either. Guard/decision codes (`cleanup.keep.*`, `cleanup.refuse.*`, `cleanup.remove.merged`) → **`mstar-branch-worktree`**「Worktree / branch cleanup」.
 - `execution_policy` keys are copied from v1 root `metadata` at migrate; values are accepted-but-opaque this iteration (no semantic gate).
 - `notes`: a plan row's `notes` array is the **legacy verbatim copy** preserved at migrate; the **runtime ledger is `notes.jsonl`** in the workflow dir (see `workflows/<id>/notes.jsonl` below). New notes append to the ledger only — never dual-write the row `notes`.
 
@@ -308,11 +309,11 @@ Optional when a plan is not owned; **required** while a Phase 2 session owns wri
 | `working_branch` | non-empty string | Yes | Feature branch at `worktree_path`; MUST agree with Assignment **`Working branch`**. |
 | `session_label` | string | No | Human display only — **MUST NOT** authorize or compare ownership. |
 
-Writers **delete** `execution_lease` on release; `null` and tombstone objects are invalid.
+Writers **delete** `execution_lease` on release; `null` and tombstone objects are invalid. On the scoped route the deletion happens **only** through `mstar plan accept | return | complete` (§ Plan-scoped coordination) — never by hand.
 
 **Ownership survives release**: later `mstar worktree cleanup` attributes a released plan row through the retained row `metadata.working_branch` / `metadata.worktree_path` and retained track Assignments — never by branch-name inference. Guard codes and the cleanup contract → **`mstar-branch-worktree`**「Worktree / branch cleanup」.
 
-V1: **manual release only** — omit `expires_at`; readers **MUST NOT** treat unknown or draft `expires_at` as authority to steal or release.
+V1: **manual release only** — omit `expires_at`; readers **MUST NOT** treat unknown or draft `expires_at` as authority to steal or release. There is also **no standalone release verb / flag**: on the scoped route a plan session's lease moves only through the `accept` → (`integration-start` → `integration-accept`) → `complete` sequence, or returns to the plan session on `return`; `--force`, takeover and TTL/idle theft do not exist.
 
 ### Snapshot top-level fields
 
@@ -342,7 +343,7 @@ Leases live in the **workflow snapshot** `{WORKFLOW_DIR}/<id>/snapshot.json` (`p
 
 **Protocol home (single canonical copy):** the full lease protocol prose — same-host exclusive write lock, hard gate, claim-before-`InProgress`, hold/release/override, integration merge protocol, orphan recovery, lease prohibitions — lives in **`mstar-engine-legacy`** `references/lease-protocol.md` (engine-absent fallback). The Phase 2 iteration-command **execution checklist** → **`mstar-iteration`** `references/phase-2-worktree-lease.md`. This file carries the **field semantics** only (tables below + the lockdir location summary).
 
-**Same-host exclusive write lock (snapshot / root):** all control-path lease mutations (execution claim/release/transfer, plan-status transitions that touch leases, `integration_merge_lease` claim/release) **MUST** run inside a same-host exclusive write lock for the full read-check-replace-verify sequence. Engine writers handle this automatically (`writeWorkflowSnapshot` / `registerWorkflow` acquire `<status-file dir>/.status-write.lockdir/` next to the file — for snapshots the lockdir lands inside `workflows/<id>/`). Prefer the engine-check commands below over hand-rolled `flock` snippets; the atomic-mkdir alternative (`.status-write.lockdir/` in the same directory as the file) remains the documented fallback when no engine writer exists. Hard gate, cross-host exception and pre-dispatch re-verify → `mstar-engine-legacy/references/lease-protocol.md`.
+**Same-host exclusive write lock (snapshot / root):** all control-path lease mutations (execution claim/release/transfer, plan-status transitions that touch leases, `integration_merge_lease` claim/release) **MUST** run inside a same-host exclusive write lock for the full read-check-replace-verify sequence. Engine writers handle this automatically (`writeWorkflowSnapshot` / `registerWorkflow` acquire `<status-file dir>/.status-write.lockdir/` next to the file — for snapshots the lockdir lands inside `workflows/<id>/`). The lock protects only callers that **actually acquire it**: scoped verbs run their whole read-check-replace-verify inside the same lockdir, whereas a hand-written update that bypasses `writeWorkflowSnapshot` is both unprotected and unauthorized (`coordination.direct-write-refused`). Prefer the engine-check commands below over hand-rolled `flock` snippets; the atomic-mkdir alternative (`.status-write.lockdir/` in the same directory as the file) remains the documented fallback when no engine writer exists. On the **scoped route** that fallback does not reopen a manual path: the verbs own the lock (`mstar plan bind | progress | residual-add | residual-close | handoff | accept | return | integration-start | integration-accept | complete | reconcile`), a missing CLI **fails closed** instead of degrading to hand-written flock/atomic-mkdir, and read-only validators stay checks — never mutation substitutes. Hard gate, cross-host exception and pre-dispatch re-verify → `mstar-engine-legacy/references/lease-protocol.md`.
 
 > **Lease Engine-check:** single canonical callout in `mstar-artifacts` `SKILL.md`（Engine-check lease 行）— pointer only, do not re-vendor.
 
@@ -361,7 +362,58 @@ Single global lease authorizing one plan feature branch integration into `branch
 
 ### Claim-before-`InProgress`, hold/release/override, integration merge, orphan recovery, prohibitions
 
-These are **full-protocol prose** — the single canonical copy lives in **`mstar-engine-legacy`** `references/lease-protocol.md` (engine-absent fallback); the Phase 2 iteration-command **execution checklist** is **`mstar-iteration`** `references/phase-2-worktree-lease.md`. This file carries the field semantics (tables above) and the engine checks only — do not re-state the protocol here. `V1: manual release only` — omit `expires_at`; readers **MUST NOT** treat unknown or draft `expires_at` as authority to steal or release (see the `execution_lease` field table).
+These are **full-protocol prose** — the single canonical copy lives in **`mstar-engine-legacy`** `references/lease-protocol.md` (engine-absent fallback); the Phase 2 iteration-command **execution checklist** is **`mstar-iteration`** `references/phase-2-worktree-lease.md`. This file carries the field semantics (tables above) and the engine checks only — do not re-state the protocol here. `V1: manual release only` — omit `expires_at`; readers **MUST NOT** treat unknown or draft `expires_at` as authority to steal or release (see the `execution_lease` field table). On the **scoped route** this prose is executed only through the verbs — `bind` (claim), `accept` / `return` (transfer / give-back), `integration-start` → `integration-accept` (merge), `complete` (release both) — with **no** override / `--force` / TTL path and no standalone release verb; the runtime contract is § Plan-scoped coordination above, and the legacy prose is the engine-absent fallback only.
+
+---
+
+## Plan-scoped coordination (bind / revision / session / handoff) — sole runtime field home
+
+The scoped route（`/iteration-drive --assignment | --workflow <id> --plan <id> | --resume <session.json>` → `mstar plan …`）keeps **one process authority**: the same workflow snapshot (`workflows/<id>/snapshot.json`) and the same root `status.json` — no per-plan snapshot clone, database, daemon or second status copy. This section is the **single runtime home** for the coordination / session / handoff / revision fields; command flags and exit codes → `docs/cli.md`; route semantics → **`mstar-iteration`** `references/plan-scoped-pm.md`; engine API shapes → `packages/engine/src/coordination.ts`.
+
+### Snapshot fields
+
+| Level | Field | Type | Semantics |
+| --- | --- | --- | --- |
+| top | `coordination.coordinator` | object | `{ session_id, session_file, bound_at }` — one coordinator per workflow; a second fresh coordinator bind fails exactly like a duplicate plan holder. Created only from the verified main worktree or the recorded integration worktree, with a registered running iteration. |
+| row | `coordination.revision` | nonnegative integer | Optimistic-concurrency token; absent `coordination` = `0`. **`--expect <revision>` always means this row value** — never snapshot `schema_version` or a date. |
+| row | `coordination.prepared` | object | `{ assignment_path, assignment_sha256, plan_sha256, qa_gate, findings_cleanup, prepared_by, prepared_at }` — the reviewed-Assignment authorization. Hashes are SHA-256 of the exact UTF-8 bytes; after claim the Assignment is immutable and every show/resume/mutation rechecks its hash — a changed file fails `coordination.assignment-stale` without changing state. |
+| row | `coordination.session` | object | `{ session_id, session_file, bound_at }` — the bound plan-PM session; the UUID is engine-allocated, never derived from plan, assignment path, PID or terminal label. |
+| row | `coordination.progress` | object | `{ status, summary, evidence_paths[], track_branches? }`; `status` ∈ `InProgress` / `InReview` / `Blocked` only; nonblank `summary`; evidence paths must be existing canonical absolute artifacts inside this plan's resolved plan/SDD area; `track_branches` must belong to its recorded L2 Assignments/worktrees. |
+| row | `coordination.handoff` | object | Immutable submitted handoff record: engine-generated UUID / attempt / timestamps plus Git pins and evidence hashes. Input can never set state, holder or target. |
+
+### Session envelopes and credentials
+
+- Session JSON lives at `<resolved-workflow-dir>/<workflow-id>/sessions/<session-id>.json`, created exclusively, mode `0600`.
+- It is a **credential / pointer**, not a second process-SSOT copy: session identity, resolved harness root and pointers — never copied snapshot state, never a portable handoff address. Cross-primary handoff references are readable absolute **control-root filesystem paths**; `local://` is not portable.
+- Session paths and `--expect` revisions stay with the dispatching PM/coordinator and are **never** handed to a leaf implementer/reviewer (`mstar-dispatch-gates` § Plan 作用域与 credential 不下发).
+- Supported writers are cooperative same-machine interfaces, not a filesystem sandbox: copying a session file or editing protected files by hand is not prevented, and is not an authorized path.
+
+### Revision and version protocol
+
+- `--expect <revision>` (row) and `--expect-register <version>` (register; artifact version = `sha256:<64 lowercase hex>`, missing = `absent`) are required by every mutating verb. `bind` is the only exception: it checks and claims atomically against current ownership without a caller snapshot, and `--resume` returns context without changing ownership or revision.
+- Every row operation **except residual-only writes** increments only that row's revision. A sibling plan's mutation leaves this row's revision untouched; a stale same-row expectation fails `coordination.version-conflict`.
+- Global coordinator binding takes the snapshot lock but increments no row revision — it changes only top `coordination.coordinator` and `updated_at`.
+- No automatic retry / rebase exists for caller replacements: missing version = `coordination.expected-version-required`, mismatch = version conflict, and no mtime / date / schema version is ever used as CAS.
+- Residual writes touch only `entries[<planId>]` and bump no snapshot revision, so there is no two-document commit pretending to be atomic.
+
+### Verbs and row / register ownership
+
+| Actor | May write |
+| --- | --- |
+| coordinator — `mstar plan prepare · accept · return · integration-start · integration-accept · complete · reconcile` | selected row `coordination.prepared` and handoff transitions, `status`, both coordination leases, `Done` |
+| plan session — `mstar plan progress · residual-add · residual-close · handoff` | its own row `status` + `coordination.progress`, `metadata.track_branches`, its `entries[<planId>]` register bucket, and the handoff record |
+| anyone else | nothing scoped — sibling rows, lifecycle anchors, root register, `execution_policy`, `compass_ref`, shared indexes, the iteration PR and Phase 3–6 stay on the coordinator / global route |
+
+- **State machine:** `Todo → InProgress` (bind) → `InReview` (handoff; lease kept) → `accepted` → `integrating` → `merged` → `completed` ⇒ `Done`. `progress` allows only `InProgress → InProgress | InReview | Blocked`, `Blocked → Blocked | InProgress`, and `InReview → InReview | InProgress | Blocked` **before** handoff — never `Todo` / `Done` / lease removal. After handoff, all scoped progress/residual mutations are rejected until `return`.
+- **`complete` is the one atomic write** that sets `Done` (with verified Git proof and the findings gate), retains row `metadata.working_branch` / `metadata.worktree_path` and existing `track_branches`, and deletes the row `execution_lease` plus the coordinator's `integration_merge_lease`. `accept` is ownership transfer only — no merge, no `Done`; `integration-accept` keeps both leases and `InReview` until `complete`.
+- **Legacy helpers refuse coordinated keys:** `appendProjectRegisterEntries` / `closeProjectRegisterEntry` / backlog next-free-key and `persist` replacements reject an existing coordinated plan bucket with `coordination.scoped-writer-required` (directing the caller to `residual-add` / `residual-close`), and hand writes to protected snapshot / register / root targets are refused with `coordination.direct-write-refused`. Root and global lifecycle operations stay on the existing coordinator route and are never `mutatePlanCoordination` targets.
+- Read-only validators (`mstar lease verify`, `mstar lease verify-integration`, `mstar worktree check`, `mstar status validate`) remain **checks** — never mutation substitutes.
+
+### Reconcile outcomes (crash recovery)
+
+Per-state `reconcile` outcome **and** the recovery action it requires are **route semantics, not fields**: single canonical copy → **`mstar-iteration`** `references/plan-scoped-pm.md` §6.7（outcome table）with §7（`show` refresh before a stale retry）. The `retry-ready` path therefore resumes `show` → `integration-start`（re-pin `base_sha`, re-acquire the merge lease）→ the coordinator's `git merge --no-ff` → `integration-accept` — **never a bare merge**.
+
+Reconciliation observes **Git ancestry / HEAD facts** in the recorded repository and never trusts a caller's success flag, and never performs a second merge. A crash after `complete` but before CLI output is handled by `show` + `reconcile`; a crash before the session binding leaves only an inert envelope. `return` after a failed merge requires an explicit Git abort plus reconcile first — a merge lease is never discarded while Git may still be in flight. Lost credentials or an abandoned active owner need explicit human recovery outside the normal verbs; no automatic takeover flag is introduced.
 
 ---
 
@@ -395,7 +447,7 @@ These are **full-protocol prose** — the single canonical copy lives in **`msta
 | ------ | ----- | ---- |
 | Implement fix | `@fullstack-dev` / assignee | Completion Report cites R# + evidence |
 | Verify | `@qa-engineer` when **`QA gate: mandatory`**; else PM per acceptance checklist | Regression / acceptance; open R# close requires verify before close |
-| Write the register | **`@project-manager`** or **`@qa-engineer`** | After verification; waivers after PM + user/architect alignment |
+| Write the register | **`@project-manager`** or **`@qa-engineer`** | After verification; waivers after PM + user/architect alignment. On the scoped route the write is the `residual-add` / `residual-close` verb, never a hand edit |
 
 Do not claim “R3 fixed” in chat/plan only without SSOT update.
 
@@ -405,15 +457,15 @@ PM should register open items after **`Approve with residuals`**; QA should stat
 
 After **`closed_at`**, **`closure_note`**, and PM/QA confirm close:
 
-1. Set `lifecycle` / `closed_at` / `closure_note` on the entry **in place** in the register (`projects/<id>/residuals.json` → `entries[<plan-id>]`).
-2. Optional: delete the entry from the register instead when the team prefers an empty open list — the closed record's `lifecycle` + `closed_at` is the durable record either way.
+1. Close through the **domain call**: `mstar plan residual-close --session <plan-session> --entry <id> --note <text> --expect <revision> --expect-register <version>` on the scoped route (legacy `closeProjectRegisterEntry` under lock elsewhere). It sets `lifecycle` / `closed_at` / `closure_note` **in place** in `entries[<plan-id>]`, requires a nonblank evidence-bearing note, and bumps no snapshot revision. A coordinated plan bucket rejects the legacy helper with `coordination.scoped-writer-required`; hand edits are not an authorized path.
+2. Optional: delete the entry from the register instead when the team prefers an empty open list — the closed record's `lifecycle` + `closed_at` is the durable record either way. (A coordinated bucket keeps its entries; close, do not delete.)
 3. Delete empty **`plan-id`** keys; update root `updated_at`; optional milestone entry in the workflow `notes.jsonl`.
 
 Closed records live in the register + durable plan summaries; raw review bundles are ephemeral and not part of the long-term record.
 
 ### Short in-place close (transition only)
 
-May set `lifecycle` / `closed_*` in the register for one PR; same milestone close/delete as above.
+May set `lifecycle` / `closed_*` in the register for one PR — through `mstar plan residual-close` (or `residual-add` with a new entry) when the plan is coordinated; same milestone close/delete as above.
 
 ### Hard delete
 

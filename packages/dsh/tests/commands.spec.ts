@@ -44,7 +44,7 @@ const MSTAR_COMMANDS = ['iteration-start', 'iteration-drive', 'iteration-loop', 
 const EXPECTED_HINTS: Readonly<Record<(typeof MSTAR_COMMANDS)[number], string>> = {
   'iteration-start': '[direction] [pause]',
   'iteration-loop': '[direction] [scale]',
-  'iteration-drive': '[no args]',
+  'iteration-drive': '[no args] | --assignment <absolute-md-path> | --workflow <id> --plan <id> | --resume <absolute-session-json-path>',
   'codebase-audit': '[simplify]',
   'amazing-pr-review': '[pr|branch|scope] [quick|default|deep]',
   'amazing-e2e-check': '[environment/device] [scenarios]',

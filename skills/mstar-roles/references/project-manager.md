@@ -27,6 +27,12 @@ Detailed procedures are moved to `references/project-manager/*.md`.
 - Subagents report to you; you own route selection, dispatch, gate decisions, and closure.
 - Default mode is delegate-first.
 
+### Plan-scoped authority (bounded)
+
+- **PM never runs as a subagent**（**single home for this rule** — `mstar-dispatch-gates` § Plan 作用域与 credential 不下发, `project-manager/dispatch-and-assignment.md` and `mstar-iteration/references/plan-scoped-pm.md` §2 point here）. PM is the **primary-session** seat on every host: no `project-manager` **subagent shell** ships in any tracked shell surface（`agents/*.md`, `codex/agents/*.toml`）, and the only PM shell in the tree is OpenCode's **`mode: primary`** seat `packages/opencode/agents/project-manager.md` — a primary seat, **not** a `task` dispatch target（host dispatch surface → `mstar-host/references/omp.md` § C5: on omp no agent shell for PM ships, `mode: primary` is OpenCode-only）. A **leaf** that receives `pm` / `project-manager` / `iteration-drive` wording (role name, handoff prose, `QA gate` field, routing table, multi-track narrative) is **not** being promoted: the leaf stays inside its own task, reports the mismatch, and does **not** dispatch, invoke, or absorb PM scope (`mstar-dispatch-gates` § role boundary / anti-recursion).
+- **Scope is inherited, never self-expanded.** Every child Assignment inherits its parent's plan scope. A child may not select or prepare a plan, mutate the workflow snapshot / root register / shared indexes, release leases, or open PR / close phases — only its own task and its declared write paths.
+- **Scoped primary drive**（`/iteration-drive --assignment|--workflow/--plan|--resume`）runs **in the primary session** (never as a subagent): `mstar plan bind` → `show`, then the session is bounded to that plan's writable surface — no sibling rows, no lifecycle anchors, no Phase 3–6, and its finish is a **handoff**, not `Done` → **`mstar-iteration/references/plan-scoped-pm.md`**.
+
 ---
 
 ## PM Execution Boundary
@@ -89,7 +95,7 @@ Detailed conflict priority and dev allocation:
 - Runtime/behavior change requires a recorded **`QA gate`** decision by default (`mandatory` or `pm-acceptance` per `qa-trigger-matrix.md`).
 - Report-only QA may skip QC tri-review only when no implementation/test/config artifact is committed.
 - Product-docs-only and tech-spec-only can skip QC tri-review only with explicit `QC: skipped — <reason>`.
-- Plan `Done` sign-off authority: `project-manager` or `qa-engineer` only.
+- Plan `Done` sign-off authority: `project-manager` or `qa-engineer` only. On the scoped route `Done` is written **only** through the coordinator's `mstar plan complete` (one atomic write after a pinned, verified Git merge) — a plan session never sets it.
 
 ---
 
@@ -128,6 +134,8 @@ If any item below matches, fix the dispatch/plan state or mark `Blocked`—do **
 - **NEVER** mark plan `Done` on runtime/behavior change without `QA gate: mandatory` fulfilled or completed PM acceptance checklist (`qa-trigger-matrix.md`).
 - **NEVER** run tests/repro in the PM orchestration thread to substitute for `QA gate: mandatory` dispatch.
 - **NEVER** let non-PM/non-QA roles mark plan `Done`.
+- **NEVER** dispatch from a leaf or promote a leaf into PM/coordinator scope: PM/iteration-drive wording (or `Delegation: forbidden`) reaching a child is a **boundary**, not an invitation — report the mismatch and stay inside the assigned task (`mstar-dispatch-gates` § 承接方反递归).
+- **NEVER** exceed plan scope as a scoped PM/session: no sibling rows, lifecycle anchors, `execution_policy`, `compass_ref`, root `status.json` / shared-index writes, and no `execution_lease` / `integration_merge_lease` release. Finish = `mstar plan handoff`; `Done` + lease deletion belong to the coordinator's `mstar plan complete` (`mstar-iteration/references/plan-scoped-pm.md` §3–§5).
 - **NEVER** accept “temporary workaround”, “follow-up later”, “next plan”, or “split into batches” as narrative-only scope management. If work is deferred or staged, write the roadmap/tracking location before implement GO or Done.
 - **NEVER** perform specialist document edits in the PM thread when host invoke is required — that is `dispatch incomplete` (`mstar-dispatch-gates`, `mstar-iteration/references/phase-1-prepare.md` §1.6).
 - **NEVER** mark the last plan `Done` and then create a PR or declare the iteration complete without **`## Phase 3: iteration-close`** and `mstar-iteration/references/phase-3-iteration-close.md` §3.1–§3.5 checklists.
@@ -154,6 +162,7 @@ If any item below matches, fix the dispatch/plan state or mark `Blocked`—do **
 | **`/pm`** or **`pm` skill** (Codex, Cursor; OpenCode when no command) | This shim → **`project-manager.md`** § Required Reading + topic skills on demand |
 | **Cursor / OpenCode** host iteration `commands/` | Command Boot + **`project-manager.md`** — iteration lifecycle only; **not** required for ordinary per-plan PM |
 | **OpenCode** (no command, not `/pm`) | `project-manager` + `mstar-host` → `opencode.md` |
+| **`/iteration-drive --assignment` / `--workflow --plan` / `--resume`**（scoped primary） | **`mstar-iteration/references/plan-scoped-pm.md`** — bind → `show` → constrain to the returned scope; finish = handoff; coordinator sequence for accept/integration/complete |
 
 **Dispatch-first**, iteration branch policy（`iteration_base_branch` / `spec_integration_branch` / `target_branch`）, Autonomous Execute → **`mstar-iteration/references/phase-2-worktree-lease.md`**. Routing, gates, Task Board, QC, templates → this file + topic `mstar-*` skills.
 

@@ -85,6 +85,8 @@ Manual install / path layout: [`INSTALL.md`](INSTALL.md). CLI flags: [`docs/cli.
 
 Three entry shapes: **without iteration** (single plan / hotfix), **with iteration** (multi-plan Phase 1–5), or **audit, review & verification** (discover work, assess changes, or run requested E2E checks).
 
+Full command reference: [`docs/commands.md`](docs/commands.md).
+
 ### General (without iteration)
 
 Enter PM, then run the per-plan cycle: `Prepare → Execute → QC → QA gate → Done`.
@@ -106,6 +108,24 @@ Enter PM, then run the per-plan cycle: `Prepare → Execute → QC → QA gate �
 | `/iteration-start [direction] [pause]` | Start a new iteration: Phase 1 (interactive grill-me), then auto-continue Phase 2→6.<br>`direction` — optional hint (still interactive).<br>`pause` — stop after Phase 1; resume with `/iteration-drive`. |
 | `/iteration-drive` | Resume Phase 2→6 on an already-locked iteration. |
 | `/iteration-loop [direction] [scale]` | Full Phase 1→6 autonomous (no grill-me).<br>`direction` — optional free text.<br>`scale` — `S` / `M` / `L` / `XL` (default `M`). |
+
+### Scoped plan session
+
+The same command takes a scope, to drive **one** prepared plan from an independent terminal instead of the whole iteration:
+
+| Command | When |
+|---------|------|
+| `/iteration-drive --assignment <absolute-assignment-md-path>` | Fresh scoped entry, addressed by the coordinator's prepared Assignment. |
+| `/iteration-drive --workflow <workflow-id> --plan <plan-id>` | Fresh scoped entry, addressing the prepared row directly. |
+| `/iteration-drive --resume <absolute-session-json-path>` | Explicit resume of the already bound session — the only resume form. |
+
+The scoped session binds exactly one plan, drives its tasks through the normal per-plan gates, and stops at a durable **handoff**: the row keeps `InReview`, and the coordinator alone records `Done` with both lease releases after it verifies the merge. A second fresh entry for the same plan is rejected as a duplicate holder — only explicit `--resume` of the original session continues. Any other nonempty argument shape fails closed; no arguments keep the whole-iteration route above.
+
+The second terminal is transport, not a dependency: any terminal works, and a multiplexer such as Herdr or tmux is optional — nothing reads pane state, TTL or terminal labels for ownership.
+
+The coordinator's half — `prepare`, then `accept` → `integration-start` → pinned merge → `integration-accept` → `complete`, with `reconcile` as the crash path — runs the `mstar plan` verbs; flags, JSON envelopes and exit codes: [`docs/cli.md`](docs/cli.md#mstar-harness-plan).
+
+Recipe: [`docs/commands.md`](docs/commands.md#iteration-drive).
 
 ### Audit, review & verification
 

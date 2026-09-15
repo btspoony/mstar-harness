@@ -14,7 +14,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { select } from "@inquirer/prompts";
 import pc from "picocolors";
-import { Command } from "commander";
+import { Command, CommanderError } from "commander";
 import {
   assertDefaultBranchProtected,
   assertIndexRows,
@@ -63,10 +63,14 @@ import {
   PROJECT_REGISTER_FILE,
   promoteAuditPlans,
   pushCadenceProbe,
+  readCoordinatedArtifact,
   readMainWorktree,
   readWorkflowSnapshot,
+  replaceCoordinatedArtifact,
   resolveHarnessDir,
+  resolveProcessHarnessDir as resolveEngineProcessHarnessDir,
   resolveProjectDir,
+  resolveScaffoldDirs,
   resolveSddExecutionContext,
   resolveSkillRoot,
   resolveSpecsDir,
@@ -110,6 +114,7 @@ import {
   WORKFLOW_SNAPSHOT_FILE,
   _DEFAULT_PROJECT,
   type ArtifactKind,
+  type ArtifactStore,
   type AuditCategory,
   type AuditEffort,
   type AuditFinding,
@@ -132,6 +137,7 @@ import {
 } from "@mstar-harness/engine";
 import { verifyPlanExecutionLease } from "./lease-verify";
 import { registerSddEvidenceCommands } from "./sdd-evidence";
+import { planUsageFailurePayload, registerPlanCommands } from "./plan-coordination";
 import { runMigrateCommand, type MigrateCliOptions } from "./commands/migrate";
 import { validateAgentPlugin } from "./agent-plugins";
 import { buildModelAssignments } from "./assignment";
@@ -425,9 +431,18 @@ function gitWorkspaceRoot(startDir: string): string {
   return startDir;
 }
 
-function runScaffold(pathArg: string | undefined) {
+async function runScaffold(pathArg: string | undefined) {
   const root = pathArg ? path.resolve(pathArg) : process.cwd();
-  const harnessDir = scaffoldHarness(root);
+  // Store-root pinning (spec §C4): `scaffoldHarness` writes the initial
+  // protected documents (status.json, projects/_default/residuals.json)
+  // create-only through the ACTIVE ArtifactStore under fail-loud path
+  // agreement (`assertFsStorePath`). The default store resolves from the cwd,
+  // so it diverges from the scaffold target whenever `pathArg` is not the
+  // cwd and the write refuses. `resolveScaffoldDirs` is the exact resolution
+  // `scaffoldHarness` performs internally (`.mstarc` + MSTAR_HARNESS_DIR
+  // honored), so the pinned root is always the target root.
+  setArtifactStore(createFsStore(resolveScaffoldDirs(root).harnessDir));
+  const harnessDir = await scaffoldHarness(root);
   const projectDir = resolveProjectDir(root, { harnessDir });
   const created: string[] = [];
   const skipped: string[] = [];
@@ -816,8 +831,8 @@ harnessCommand
       "(skipped for non-.mstar layouts), and write a minimal {HARNESS_DIR}/AGENTS.md when absent",
   )
   .argument("[path]", "Root to scaffold (default: cwd)")
-  .action((pathArg?: string) => {
-    runScaffold(pathArg);
+  .action(async (pathArg?: string) => {
+    await runScaffold(pathArg);
   });
 
 program
@@ -894,25 +909,34 @@ const statusCommand = program
  * Process-harness resolution starts at the verified MAIN worktree: the
  * process SSOT (`status.json` / `workflows/`) lives at the main checkout,
  * so a tracked-results `.mstar/` (e.g. `knowledge/`) in a linked feature
- * checkout can never win discovery. An explicit `--harness` override wins
- * unchanged; a non-Git cwd (standalone harness layout) keeps the
- * local probe only when no linked-checkout .git file is found in its ancestors;
- * degraded Git must not turn a linked checkout into a standalone root.
+ * checkout can never win discovery.
+ *
+ * The policy itself lives in the engine (`resolveProcessHarnessDir`, spec
+ * §C1) so the scoped `mstar plan` transport and these unscoped verbs share
+ * one implementation: an explicit `--harness` override wins unchanged; a
+ * non-Git cwd (standalone harness layout) keeps the local probe only when no
+ * linked-checkout `.git` file is found in its ancestors; degraded Git must
+ * not turn a linked checkout into a standalone root.
  */
-function resolveProcessHarnessDir(harnessArg?: string, main?: ReturnType<typeof readMainWorktree>): string | null {
-  if (harnessArg) return path.resolve(harnessArg);
-  if (main === undefined) main = readMainWorktree();
-  if (main === null) {
-    for (let dir = process.cwd();; dir = path.dirname(dir)) {
-      try {
-        if (fs.statSync(path.join(dir, ".git")).isFile()) throw new Error("cannot verify main worktree for linked checkout");
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      }
-      if (path.dirname(dir) === dir) break;
-    }
+function resolveProcessHarnessDir(harnessArg?: string): string | null {
+  return resolveEngineProcessHarnessDir(process.cwd(), harnessArg);
+}
+
+/**
+ * `--session <path>` on the coordination-write verbs (`status workflow-close`,
+ * `persist`): the coordinator envelope that authorizes the write. Like the plan
+ * family's `--session`, the path must be absolute — the engine compares
+ * canonical targets, so a relative path would silently mean "relative to
+ * whatever cwd this process runs with". Absent stays absent: an uncoordinated
+ * workflow closes, and a status/residual replacement is validated, exactly as
+ * before.
+ */
+function resolveSessionFlag(raw: string | undefined): string | undefined {
+  if (raw === undefined) return undefined;
+  if (!path.isAbsolute(raw)) {
+    throw new SddScriptError(`--session must be an absolute path \u2014 got ${JSON.stringify(raw)}`, 2);
   }
-  return resolveHarnessDir(main !== null ? main.root : process.cwd());
+  return raw;
 }
 
 /** Resolve the status.json path: explicit arg wins, else the resolved {HARNESS_DIR}. */
@@ -1183,12 +1207,17 @@ statusCommand
   .option("--workflow <id>", "Workflow id to close ({WORKFLOW_DIR}/<id>/snapshot.json)")
   .option("--harness <path>", "Harness dir override (default: resolved control {HARNESS_DIR})")
   .option("--ended-at <date>", "Terminal ended_at timestamp (YYYY-MM-DD or RFC3339; default: today)")
-  .action(async (options: { workflow?: string; harness?: string; endedAt?: string }) => {
+  .option("--session <path>", "Absolute coordinator session JSON envelope path (required to close a coordinated workflow)")
+  .action(async (options: { workflow?: string; harness?: string; endedAt?: string; session?: string }) => {
     try {
       const workflowId = options.workflow;
       if (workflowId === undefined || workflowId.trim() === "") {
-        throw new SddScriptError("usage: status workflow-close --workflow <id> [--harness <path>] [--ended-at <date>]", 2);
+        throw new SddScriptError(
+          "usage: status workflow-close --workflow <id> [--harness <path>] [--ended-at <date>] [--session <path>]",
+          2,
+        );
       }
+      const sessionPath = resolveSessionFlag(options.session);
       // Shared workflow-id guard — the same contract every other `--workflow <id>`
       // verb applies via `resolveSnapshotPath` (reject ""/./.. and separators) so a
       // hostile id never reaches the path join below. Defense-in-depth on the write
@@ -1215,7 +1244,10 @@ statusCommand
       const pre = readWorkflowSnapshot(snapshotDir);
       const wasTerminal = isTerminalSnapshot(pre.snapshot);
       const endedAt = options.endedAt ?? todayString();
-      const closed = await closeWorkflow(workflowId, snapshotDir, { endedAt });
+      const closed = await closeWorkflow(workflowId, snapshotDir, {
+        endedAt,
+        ...(sessionPath !== undefined ? { sessionPath } : {}),
+      });
       // Fixed ordering: unregister only AFTER the durable terminal write.
       // Missing root/id removal is already idempotent inside the root lock —
       // never pre-read and skipped; the pre-state is read only for the report.
@@ -1286,6 +1318,16 @@ const persistCommand = program
 /** Persist kinds (unknown kind is a usage error, exit 2). */
 const PERSIST_KINDS: readonly string[] = ["status", "snapshot", "residuals", "review", "json"];
 
+/**
+ * Kinds the coordination boundary protects: their local bytes belong to the
+ * engine's locked writers, so the CLI's only put face is the versioned
+ * replacement below (a bare `put` refuses with
+ * `coordination.direct-write-refused`). The `json` alias of one of these
+ * files keeps the plain put and its store refusal — the alias is a
+ * path-shaped key, not a coordinated ref.
+ */
+const COORDINATED_PERSIST_KINDS: readonly ArtifactKind[] = ["status", "snapshot", "residuals"];
+
 function parsePersistKind(kind: string): ArtifactKind {
   if (PERSIST_KINDS.includes(kind)) return kind as ArtifactKind;
   throw new SddScriptError(
@@ -1296,6 +1338,62 @@ function parsePersistKind(kind: string): ArtifactKind {
       `  unknown kind ${JSON.stringify(kind)} \u2014 expected status | snapshot | residuals | review | json`,
     2,
   );
+}
+
+/**
+ * Classify a put against the coordinated-artifact boundary and narrow its
+ * contract. Coordinated kinds (`status` / `snapshot` / `residuals`) require
+ * the caller's exact byte version — `absent` for a first create, else the
+ * `sha256:<hex>` the versioned read reported — and a snapshot replacement
+ * additionally requires the coordinator envelope that binds the writer
+ * (the engine refuses a plan session). Flags that do not belong to the
+ * request's write face fail closed rather than being dropped silently.
+ */
+function resolvePersistWrite(
+  kind: ArtifactKind,
+  options: { expectVersion?: string; session?: string; schema?: string },
+): { coordinated: false } | { coordinated: true; expectVersion: string; sessionPath?: string } {
+  const sessionPath = resolveSessionFlag(options.session);
+  if (!COORDINATED_PERSIST_KINDS.includes(kind)) {
+    if (options.expectVersion !== undefined || sessionPath !== undefined) {
+      throw new SddScriptError(
+        `usage: --expect-version / --session replace coordinated artifacts (status | snapshot | residuals) \u2014 ${kind} keeps its existing writer`,
+        2,
+      );
+    }
+    return { coordinated: false };
+  }
+  if (options.expectVersion === undefined) {
+    throw new SddScriptError(
+      `usage: persist ${kind} --key <key> --expect-version <absent|sha256:<hex>> [--file <path>|--stdin]` +
+        `${kind === "snapshot" ? " --session <coordinator-session>" : ""}\n` +
+        `  ${kind} is a coordinated artifact: only the engine's locked replacement writes it`,
+      2,
+    );
+  }
+  if (options.schema !== undefined) {
+    throw new SddScriptError(
+      `usage: --schema does not apply to a coordinated ${kind} replacement \u2014 the engine writes the document, not a store envelope`,
+      2,
+    );
+  }
+  if (kind === "snapshot") {
+    if (sessionPath === undefined) {
+      throw new SddScriptError(
+        "usage: persist snapshot --key <workflow-id> --expect-version <version> --session <coordinator-session> \u2014 " +
+          "a coordinated snapshot replacement is authorized by its coordinator envelope",
+        2,
+      );
+    }
+    return { coordinated: true, expectVersion: options.expectVersion, sessionPath };
+  }
+  if (sessionPath !== undefined) {
+    throw new SddScriptError(
+      `usage: --session applies to a coordinated snapshot replacement only \u2014 ${kind} takes no coordinator envelope`,
+      2,
+    );
+  }
+  return { coordinated: true, expectVersion: options.expectVersion };
 }
 
 /** Inject the store module from --store (wins) or MSTAR_STORE_MODULE; no
@@ -1353,8 +1451,21 @@ persistCommand
   .option("--stdin", "Read the payload JSON from stdin")
   .option("--store <module>", "Store module path (filesystem only; overrides MSTAR_STORE_MODULE)")
   .option("--schema <id>", "Optional schema id stored on the artifact doc (e.g. mstar.review/v1); stored only by store modules that persist it \u2014 the default FsStore rejects it (exit 1)")
+  .option("--expect-version <version>", 'Exact byte version of the document being replaced (status | snapshot | residuals): "absent" or sha256:<hex> from `persist get --versioned`')
+  .option("--session <path>", "Absolute coordinator session envelope path (required to replace a coordinated snapshot)")
   .action(
-    async (kind: string, options: { key?: string; file?: string; stdin?: boolean; store?: string; schema?: string }) => {
+    async (
+      kind: string,
+      options: {
+        key?: string;
+        file?: string;
+        stdin?: boolean;
+        store?: string;
+        schema?: string;
+        expectVersion?: string;
+        session?: string;
+      },
+    ) => {
       try {
         const parsedKind = parsePersistKind(kind);
         if (options.key === undefined) {
@@ -1363,6 +1474,9 @@ persistCommand
             2,
           );
         }
+        // Flag contract first: a coordinated put must refuse a missing
+        // precondition before it blocks on stdin.
+        const write = resolvePersistWrite(parsedKind, options);
         const raw = readPersistPayload(options);
         let payload: unknown;
         try {
@@ -1372,12 +1486,35 @@ persistCommand
         }
         validatePersistPayload(parsedKind, payload);
         await resolvePersistStore(options.store);
-        await getArtifactStore().put({
-          kind: parsedKind,
-          key: options.key,
-          payload,
-          ...(options.schema !== undefined ? { schema: options.schema } : {}),
-        });
+        const store = getArtifactStore();
+        // Protected kinds (`status` / `snapshot` / `residuals`, and any
+        // `json` alias of those files) go through the FsStore boundary: only
+        // the engine's locked writers may write them. The replacement face
+        // runs inside the engine's own lock + same-host CAS check, so the
+        // boundary and the replacement always agree on the harness root.
+        if (write.coordinated) {
+          const root = (store as ArtifactStore & { root?: unknown }).root;
+          if (typeof root !== "string") {
+            throw new Error(
+              "coordination.local-store-required: persist --expect-version replaces coordinated artifacts " +
+                "through the default local FsStore only \u2014 a pluggable --store module has no same-host CAS contract",
+            );
+          }
+          await replaceCoordinatedArtifact({
+            harnessRoot: root,
+            ref: { kind: parsedKind, key: options.key },
+            payload,
+            expectedVersion: write.expectVersion,
+            ...(write.sessionPath !== undefined ? { sessionPath: write.sessionPath } : {}),
+          });
+        } else {
+          await store.put({
+            kind: parsedKind,
+            key: options.key,
+            payload,
+            ...(options.schema !== undefined ? { schema: options.schema } : {}),
+          });
+        }
         console.log(pc.green(`persist ${parsedKind}/${options.key}: OK`));
       } catch (error) {
         failScript(error, "persist");
@@ -1396,25 +1533,46 @@ persistCommand
  // --validate has no parent twin, so it is declared here and read from the
  // action's own options.
   .option("--validate", "Run the kind's validator on the fetched payload (notes on stderr; invalid \u2192 exit 1)")
-  .action(async (kind: string, options: { validate?: boolean }, command: Command) => {
+  .option(
+    "--versioned",
+    "Read through the coordinated artifact port and print {payload,version}: the sha256 byte version of the exact bytes read, " +
+      "or \"absent\" for a missing document (payload null). Requires the active local FsStore (--store/MSTAR_STORE_MODULE is " +
+      "refused: no same-host CAS is promised on a pluggable module)",
+  )
+  .action(async (kind: string, options: { validate?: boolean; versioned?: boolean }, command: Command) => {
     try {
       const parsedKind = parsePersistKind(kind);
       const parentOpts = command.parent?.opts() ?? {};
       const key = typeof parentOpts.key === "string" ? parentOpts.key : undefined;
       const store = typeof parentOpts.store === "string" ? parentOpts.store : undefined;
       if (key === undefined) {
-        throw new SddScriptError("usage: persist get <kind> --key <key> [--validate] [--store <module>]", 2);
+        throw new SddScriptError("usage: persist get <kind> --key <key> [--validate] [--versioned] [--store <module>]", 2);
       }
       await resolvePersistStore(store);
+      if (options.versioned === true) {
+        const artifactStore = getArtifactStore();
+        const root = (artifactStore as ArtifactStore & { root?: unknown }).root;
+        if (typeof root !== "string") {
+          throw new Error(
+            "coordination.local-store-required: persist get --versioned reads coordinated artifacts from the default local FsStore only \u2014 a pluggable --store module has no same-host CAS contract",
+          );
+        }
+        const read = await readCoordinatedArtifact(root, { kind: parsedKind, key });
+        // Spec §C3: the artifact version of a missing document is the token
+        // `absent` (it is the precondition value a first create needs), so a
+        // versioned read reports it instead of failing the read.
+        console.log(JSON.stringify({ payload: read.payload ?? null, version: read.version }, null, 2));
+        return;
+      }
       const payload = await getArtifactStore().get({ kind: parsedKind, key });
       if (payload === undefined) {
         throw new Error(`persist get ${parsedKind}/${key}: no stored document`);
       }
       if (options.validate === true) {
- // D1: reuse the put-gate validator (no second validator home). An
- // invalid doc throws BEFORE stdout is written, so stdout stays
- // payload-JSON-only and stderr carries the same violations list as
- // put. json is parse-only — the helper returns without validating.
+        // D1: reuse the put-gate validator (no second validator home). An
+        // invalid doc throws BEFORE stdout is written, so stdout stays
+        // payload-JSON-only and stderr carries the same violations list as
+        // put. json is parse-only — the helper returns without validating.
         validatePersistPayload(parsedKind, payload);
         console.error(parsedKind === "json" ? "json: parse-only" : "validation: ok");
       }
@@ -2124,7 +2282,7 @@ worktreeCommand
         const integrationOverride = options.integration ?? options.control;
         const main = readMainWorktree();
         if (main !== null) console.log(`main worktree: ${main.root} on branch "${main.branch}" (observed)`);
-        const harnessDir = resolveProcessHarnessDir(options.harness, main);
+        const harnessDir = resolveProcessHarnessDir(options.harness);
         if (harnessDir === null) throw new Error("harness directory not found");
         const snapshotPath = resolveSnapshotPath(options.workflow, harnessDir);
         const read = readSnapshotForCheck(snapshotPath);
@@ -2802,7 +2960,7 @@ worktreeCommand
       }
       const main = readMainWorktree();
       if (main === null) throw new Error("cannot resolve the main worktree of the current repository \u2014 run inside the repo");
-      const harnessDir = resolveProcessHarnessDir(options.harness, main);
+      const harnessDir = resolveProcessHarnessDir(options.harness);
       if (harnessDir === null) throw new Error("harness directory not found");
       const snapshotPath = resolveSnapshotPath(options.workflow, harnessDir);
       const workflowRoot = resolveWorkflowDir(harnessDir, { harnessDir });
@@ -5203,7 +5361,24 @@ prReviewCommand
     }
   });
 
+// `mstar plan` — the scoped plan-coordination transport (spec §A2). It owns
+// the scoped verbs only; the unscoped lifecycle verbs above are unchanged.
+registerPlanCommands(program);
+
 program.parseAsync(process.argv).catch((error: unknown) => {
+  // Usage-class commander errors are exit 2, not exit 1, for the verb
+  // families that opted into `exitOverride` (the `mstar plan` transport):
+  // unknown options and excess arguments are input-shape failures there.
+  // Commander already wrote the message (and help text) to stderr; with
+  // `--json` the invocation still gets the A2 failure object on stdout.
+  if (error instanceof CommanderError) {
+    if (process.argv.includes("--json")) {
+      const payload = planUsageFailurePayload(process.argv, error.message);
+      if (payload !== null) console.log(payload);
+    }
+    process.exitCode = error.exitCode === 0 ? 0 : 2;
+    return;
+  }
   console.error(pc.red(`Setup failed: ${(error as Error).message}`));
   process.exitCode = 1;
 });

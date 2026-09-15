@@ -28,6 +28,17 @@
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import type { GateResult, Severity, ValidationResult } from "./core.js";
+import {
+  CoordinationError,
+  canonicalTarget,
+  isArtifactVersion,
+  isPlainObject,
+  readArtifactBytes,
+  validateRowCoordination,
+  validateSnapshotCoordination,
+  withProtectedWrite,
+  type SnapshotCoordination,
+} from "./coordination-write.js";
 import { validateExecutionLease, validateIntegrationMergeLease, withStatusWriteLock, type IntegrationMergeLease } from "./lease.js";
 import { validatePlanRow, type PlanRow } from "./status.js";
 import { assertFsStorePath, getArtifactStore, type ArtifactStore } from "./store.js";
@@ -101,10 +112,24 @@ export type WorkflowSnapshot = {
   integration_worktree_path?: string;
   legacy_metadata?: Record<string, unknown>;
   compass_ref?: string;
+  /**
+   * Snapshot-level coordination block ( — scoped plan-PM coordination).
+   * Present only on a coordinated lifecycle: it carries the workflow's
+   * coordinator binding (session id + canonical envelope path). The block
+   * is validated strictly (`validateSnapshotCoordination`) and may only be
+   * changed by the locked coordination writer.
+   */
+  coordination?: SnapshotCoordination;
 };
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+/** Stable JSON for change detection (sorted keys, recursive). */
+export function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (isPlainObject(value)) {
+    const keys = Object.keys(value).sort();
+    return `{${keys.map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "undefined";
 }
 
 function violation(severity: Severity, code: string, message: string, fix?: string): ValidationResult {
@@ -244,7 +269,18 @@ export function validateWorkflowSnapshot(doc: unknown): GateResult {
       if (isPlainObject(row) && row.execution_lease !== undefined) {
         violations.push(...validateExecutionLease(row.execution_lease).violations);
       }
+      // Row-level coordination block (scoped plan coordination) — strict:
+      // unknown keys, malformed handoffs/progress/bindings are refused here
+      // so a malformed coordination state can never be persisted.
+      if (isPlainObject(row) && row.coordination !== undefined) {
+        violations.push(...validateRowCoordination(row.coordination, `plans[${String(row.id)}].coordination`));
+      }
     }
+  }
+
+  // Snapshot-level coordination block (the workflow's coordinator binding).
+  if (doc.coordination !== undefined) {
+    violations.push(...validateSnapshotCoordination(doc.coordination));
   }
 
   if (doc.execution_policy !== undefined) {
@@ -428,8 +464,35 @@ function normalizeWorkflowSnapshot(doc: unknown, snapshotPath: string): Workflow
 }
 
 /**
- * Write a workflow snapshot as a whole-rewrite of `dir/snapshot.json` under
- * `withStatusWriteLock(snapshotPath)` ( — the `.status-write.lockdir`
+ * Writer contract (spec §C4). `expectedVersion` is the CAS token — the exact
+ * on-disk artifact version (`sha256:<64 hex>`), or `"absent"` for
+ * create-only. `createOnly` is the locked `absent` shorthand used by the
+ * scaffold/migrate/audit writers: an existing document (even an empty or
+ * malformed one) is never silently replaced.
+ *
+ * Omitting `expectedVersion` means create-only, NOT "replace whatever is
+ * there": there is no missing-version compatibility fallback, so an existing
+ * snapshot still refuses with `coordination.expected-version-required`.
+ *
+ * The delta allowed here is `phase` + `updated_at` and nothing else — a
+ * coordinator persists its phase projection through this writer without ever
+ * gaining a backdoor to row owners, leases, lifecycle scalars or branch
+ * anchors. Lifecycle terminal changes belong to `closeWorkflow` (spec §C4).
+ */
+export type WriteWorkflowSnapshotOptions = {
+  expectedVersion?: string;
+  createOnly?: boolean;
+  /**
+   * Canonical coordinator session envelope path (spec §C4). Required when the
+   * stored snapshot is coordinated: only the snapshot's own bound coordinator
+   * may pass, and the `coordination` block itself is never part of the delta.
+   */
+  sessionPath?: string;
+};
+
+/**
+ * Write a workflow snapshot as a field-scoped update of `dir/snapshot.json`
+ * under `withStatusWriteLock(snapshotPath)` ( — the `.status-write.lockdir`
  * lands inside `workflows/<id>/`, dirname of the snapshot; no harness-root
  * pollution). The snapshot is validated first — an invalid snapshot throws
  * and nothing is written. `dir` is created recursively. The durable write
@@ -442,11 +505,29 @@ function normalizeWorkflowSnapshot(doc: unknown, snapshotPath: string): Workflow
  * whose target root differs from the active store's root MUST
  * `setArtifactStore(createFsStore(root))` first.
  */
-export async function writeWorkflowSnapshot(snapshot: WorkflowSnapshot, dir: string): Promise<void> {
+export async function writeWorkflowSnapshot(
+  snapshot: WorkflowSnapshot,
+  dir: string,
+  opts: WriteWorkflowSnapshotOptions = {},
+): Promise<void> {
   const gate = validateWorkflowSnapshot(snapshot);
   if (!gate.ok) {
     const detail = gate.violations.map((v) => v.message).join("; ");
     throw new Error(`refusing to write invalid workflow snapshot: ${detail}`);
+  }
+  if (opts.expectedVersion !== undefined && !isArtifactVersion(opts.expectedVersion)) {
+    throw new CoordinationError(
+      "coordination.invalid-input",
+      `expectedVersion must be "absent" or sha256:<64 hex> \u2014 got ${JSON.stringify(opts.expectedVersion)}`,
+      { expected: opts.expectedVersion },
+    );
+  }
+  if (opts.createOnly === true && opts.expectedVersion !== undefined && opts.expectedVersion !== "absent") {
+    throw new CoordinationError(
+      "coordination.invalid-input",
+      `createOnly implies expectedVersion "absent" \u2014 got ${JSON.stringify(opts.expectedVersion)}`,
+      { expected: opts.expectedVersion },
+    );
   }
   const snapshotPath = join(dir, WORKFLOW_SNAPSHOT_FILE);
   // Fail-loud path agreement : the lockdir serializes
@@ -466,19 +547,114 @@ export async function writeWorkflowSnapshot(snapshot: WorkflowSnapshot, dir: str
   // The store put is the durable write inside the lock; the store is never a
   // second lock (architect-locked 2026-08-27: locks stay with callers).
   await withStatusWriteLock(snapshotPath, async () => {
-    await validateAndPutWorkflowSnapshot(store, snapshot);
+    const current = readArtifactBytes(snapshotPath);
+    const currentVersion = current?.version ?? "absent";
+    // Create-only is the default: an omitted token can create but never
+    // replace, so no caller reaches a locked CAS by accident (spec §C4 — no
+    // missing-version compatibility fallback).
+    const required = opts.createOnly === true ? "absent" : opts.expectedVersion ?? "absent";
+    if (required !== currentVersion) {
+      const missingToken = opts.createOnly !== true && opts.expectedVersion === undefined;
+      throw new CoordinationError(
+        missingToken ? "coordination.expected-version-required" : "coordination.version-conflict",
+        missingToken
+          ? `snapshot ${snapshotPath} already exists \u2014 replace it with an explicit expectedVersion (its current version is ${currentVersion}) or write a new snapshot`
+          : `snapshot ${snapshotPath} is at ${currentVersion}, writer required ${required}`,
+        { path: snapshotPath, expected: required, actual: currentVersion },
+      );
+    }
+    const payload = current === undefined ? snapshot : mergePhaseProjection(current.payload, snapshot);
+    assertCoordinatedSnapshotWriter(current?.payload, snapshotPath, opts.sessionPath);
+    await withProtectedWrite(snapshotPath, "put", () =>
+      store.put({ kind: "snapshot", key: snapshot.id, payload }),
+    );
   });
 }
 
+/**
+ * Coordinated snapshots are replaced only by their own bound coordinator
+ * (spec §C4) — the `mstar persist replace snapshot` door authenticates on the
+ * session envelope, and a replacement can never add or drop the
+ * `coordination` block (the field-scoped merge already pins it to disk).
+ * `CloseWorkflowOptions.sessionPath` reaches the same seam, so the refusal
+ * names the operation that was refused.
+ */
+function assertCoordinatedSnapshotWriter(
+  stored: unknown,
+  snapshotPath: string,
+  sessionPath: string | undefined,
+  action = "replacement",
+): void {
+  const coordination = isPlainObject(stored) ? stored.coordination : undefined;
+  if (coordination === undefined) return;
+  const bound = isPlainObject(coordination) && isPlainObject(coordination.coordinator) ? coordination.coordinator.session_file : undefined;
+  if (sessionPath === undefined || typeof bound !== "string" || canonicalTarget(sessionPath) !== canonicalTarget(bound)) {
+    throw new CoordinationError(
+      "coordination.session-mismatch",
+      `snapshot ${snapshotPath} is coordinated \u2014 ${action} requires --session <coordinator envelope>`,
+      { path: snapshotPath, expected: bound, actual: sessionPath },
+    );
+  }
+}
 
-/** Shared by writers that already hold the snapshot lock. */
-async function validateAndPutWorkflowSnapshot(store: ArtifactStore, snapshot: WorkflowSnapshot): Promise<void> {
+/**
+ * Apply the field-scoped delta contract against the stored document: only
+ * `phase` + `updated_at` may differ (spec §C4 line 152). Every other field —
+ * plan rows, leases, the coordination block, branch anchors, lifecycle
+ * scalars — is taken from disk, so this writer can never drop or rewrite them
+ * implicitly, and lifecycle terminal changes stay on `closeWorkflow`.
+ */
+function mergePhaseProjection(stored: unknown, incoming: WorkflowSnapshot): WorkflowSnapshot {
+  if (!isPlainObject(stored)) {
+    throw new CoordinationError(
+      "coordination.version-conflict",
+      "stored workflow snapshot is not an object \u2014 refusing a field-scoped rewrite over it",
+      {},
+    );
+  }
+  const allowed: string[] = ["phase", "updated_at"];
+  const keys = new Set([...Object.keys(stored), ...Object.keys(incoming as Record<string, unknown>)]);
+  const drifted = [...keys].filter(
+    (key) =>
+      !allowed.includes(key) &&
+      stableJson(stored[key]) !== stableJson((incoming as unknown as Record<string, unknown>)[key]),
+  );
+  if (drifted.length > 0) {
+    throw new CoordinationError(
+      "coordination.direct-write-refused",
+      `refusing snapshot write: field(s) ${drifted.join(", ")} differ from disk \u2014 this writer may only change ${allowed.join(", ")}`,
+      { fields: drifted, allowed },
+    );
+  }
+  const next: Record<string, unknown> = { ...stored };
+  for (const key of allowed) {
+    const value = (incoming as unknown as Record<string, unknown>)[key];
+    if (value === undefined) delete next[key];
+    else next[key] = value;
+  }
+  return next as unknown as WorkflowSnapshot;
+}
+
+
+
+/**
+ * Shared by writers that already hold the snapshot lock. `snapshotPath` is the
+ * canonical target of the put: the store boundary refuses an unauthorized
+ * write to a protected document, so the write is recorded inside
+ * `withProtectedWrite` (spec §C4 — durable protected writes route through the
+ * store inside the locked coordination context).
+ */
+async function validateAndPutWorkflowSnapshot(
+  store: ArtifactStore,
+  snapshot: WorkflowSnapshot,
+  snapshotPath: string,
+): Promise<void> {
   const gate = validateWorkflowSnapshot(snapshot);
   if (!gate.ok) {
     const detail = gate.violations.map((v) => `${v.code}: ${v.message}`).join("; ");
     throw new WorkflowSnapshotValidationError(`refusing to write invalid workflow snapshot: ${detail}`, gate.violations);
   }
-  await store.put({ kind: "snapshot", key: snapshot.id, payload: snapshot });
+  await withProtectedWrite(snapshotPath, "put", () => store.put({ kind: "snapshot", key: snapshot.id, payload: snapshot }));
 }
 
 /** Terminal enum predicate only; callers validate document shape separately. */
@@ -486,7 +662,18 @@ export function isTerminalSnapshot(doc: WorkflowSnapshot): boolean {
   return (WORKFLOW_TERMINAL_STATUSES as readonly string[]).includes(doc.status);
 }
 
-export type CloseWorkflowOptions = { endedAt: string };
+export type CloseWorkflowOptions = {
+  endedAt: string;
+  /**
+   * Canonical coordinator session envelope path (spec §C4). Required when the
+   * stored snapshot is coordinated: the close writes the snapshot, so only the
+   * snapshot's own bound coordinator may pass. A missing/mismatched envelope
+   * refuses the close with `coordination.session-mismatch` before anything is
+   * written. Non-coordinated snapshots ignore it; an already-terminal snapshot
+   * is returned unchanged (no write, no authorization needed).
+   */
+  sessionPath?: string;
+};
 
 function isCloseTimestamp(value: string): boolean {
   if (typeof value !== "string") return false;
@@ -501,6 +688,9 @@ function isCloseTimestamp(value: string): boolean {
 /**
  * Complete the latest snapshot under its write lock. Never releases leases.
  * A valid terminal snapshot is returned unchanged, including failed/stopped.
+ * A coordinated snapshot is closed only by its own bound coordinator
+ * (spec §C4) — the same envelope seam as `writeWorkflowSnapshot` — so a plan
+ * actor or a bare CLI call can never complete a lifecycle it does not own.
  */
 export async function closeWorkflow(workflowId: string, dir: string, opts: CloseWorkflowOptions): Promise<WorkflowSnapshot> {
   if (!isCloseTimestamp(opts.endedAt)) {
@@ -519,12 +709,17 @@ export async function closeWorkflow(workflowId: string, dir: string, opts: Close
       throw new Error(`workflow snapshot identity mismatch: expected ${workflowId}, got ${snapshot.id}`);
     }
     if (isTerminalSnapshot(snapshot)) return snapshot;
+    // Authorization sits on the write path only: a terminal snapshot returned
+    // above is never written. For a coordinated snapshot the stored payload
+    // (not the normalized view) carries the `coordination` block, exactly as
+    // the replacement door reads it.
+    assertCoordinatedSnapshotWriter(doc, snapshotPath, opts.sessionPath, "close");
     if (snapshot.plans.some((row) => row.status !== "Done")) {
       throw new Error("refusing to close workflow: every plan row must be Done");
     }
     const completed: WorkflowSnapshot = { ...snapshot, status: "completed", ended_at: opts.endedAt, updated_at: opts.endedAt };
     // Strict terminal validation refuses both lease kinds without deleting them.
-    await validateAndPutWorkflowSnapshot(store, completed);
+    await validateAndPutWorkflowSnapshot(store, completed, snapshotPath);
     return completed;
   });
 }

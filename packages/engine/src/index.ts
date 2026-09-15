@@ -449,3 +449,34 @@ export { assertFsStorePath, createFsStore, getArtifactStore, loadStoreModule, re
 export { collectActiveLifecycleBranches, scanActiveLifecycleBranches, type ActiveLifecycleScan } from "./lifecycle-branches.js";
 
 export { WorkflowSnapshotValidationError } from "./workflow.js";
+
+export {
+  CoordinationError,
+  bindPlanSession,
+  mutatePlanCoordination,
+  readCoordinatedArtifact,
+  readPlanCoordination,
+  readSessionEnvelope,
+  replaceCoordinatedArtifact,
+  resolvePlanScope,
+  resolveProcessHarnessDir,
+} from "./coordination.js";
+export type {
+  BindPlanSessionInput,
+  CoordinatedReplacement,
+  CoordinationRequest,
+  CoordinationResult,
+  CoordinationRole,
+  CoordinationSession,
+  HandoffEvidence,
+  PlanCoordinationOperation,
+  PlanCoordinationView,
+  PlanScopeInput,
+  PrepareCoordinationRequest,
+  ProgressCoordinationRequest,
+  ResidualAddCoordinationRequest,
+  ResidualCloseCoordinationRequest,
+  ResidualInput,
+  ResolvedPlanScope,
+  VersionedArtifact,
+} from "./coordination.js";
