@@ -862,8 +862,10 @@ function toInReview(fixture: Fixture, planSession: string, summary: string): voi
 function submitHandoff(fixture: IntegrationFixture, planSession: string): string {
   const payload = join(fixture.root, "handoff.json");
   writeJson(payload, {
+    // Spec §D: the plan session supplies revisions and evidence paths only —
+    // `worktree_path` is derived by the engine from the row/scope (T1-D-012),
+    // and the engine refuses it as an unexpected key.
     source_sha: fixture.sourceSha,
-    worktree_path: fixture.worktreePath,
     review_base: fixture.baseSha,
     review_head: fixture.sourceSha,
     qc: { decision: "Approve", reports: [fixture.qcReport], consolidated: fixture.qcConsolidated },
