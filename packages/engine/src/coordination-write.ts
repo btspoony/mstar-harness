@@ -61,6 +61,7 @@ export const COORDINATION_ERROR_CODES = [
   "coordination.direct-write-refused",
   "coordination.scoped-writer-required",
   "coordination.unknown-operation",
+  "coordination.not-implemented",
   "coordination.lock",
   "coordination.store",
 ] as const;
