@@ -144,7 +144,7 @@ Default process artifacts are **gitignored** (`mstar-conventions`「Git 跟踪�
 - A feature worktree's same-looking `{HARNESS_DIR}` path is **not** the SSOT — **never** treat it as the source of plans/status/SDD, and **never** bootstrap a second process-SSOT copy there.
 - Absolute **`Worktree path`** (feature) MUST appear in the writable Assignment and in `execution_lease.worktree_path` before first writable implement dispatch for that plan.
 - When L1 lease gate is active (not `Worktree mode: waived`), Assignment **`Plan Path`** and **`SDD dir`** MUST be **absolute paths under the control harness root** (not relative `.mstar/...` resolved from the feature cwd). Prefer also writing **`Control harness root: <main-repo-root>/{HARNESS_DIR}`**.
-- Writable dispatch for a plan requires a **verified** `execution_lease` (same read-check-replace-verify discipline as the iteration reference). Full claim tables are **not** duplicated here.
+- Writable dispatch for a plan requires a **verified** `execution_lease` (same read-check-replace-verify discipline as the iteration reference). Full claim tables are **not** duplicated here. Scoped route: the plan session is established by `mstar plan bind` (claim executed inside its own lock) and scope is read from the returned row — hand-written snapshot updates are not a path (`mstar-iteration` `references/plan-scoped-pm.md` §2/§8).
 
 **Anti-pattern (forbidden)**
 
@@ -242,7 +242,7 @@ mstar worktree cleanup --workflow <id> [--harness <path>] [--apply] [--remote] [
 - **信任模型**：`--harness <path>` 为操作者提供且受信——dry-run 与 `--apply` 的全部状态事实（snapshot、lease、行归属元数据、protected 锚点）均读自该目录。
 - **坏 sibling 不再阻塞，且不丢保护**：扫描 `workflows/*/snapshot.json` 时，**非选中**的坏 snapshot 不会让命令失败（exit 1）。**JSON 可解析但校验失败**者以**降级保守形态**入安全集：只携带具保护性的声明（`branch.base` / `branch.integration` / `branch.target`、lifecycle worktree path、merge / execution lease、行 ownership 元数据），且 lifecycle 与行状态一律强制为非终态——故只会**增加** keep/refuse 判定，绝不减少（它保护的分支/worktree 会被 `cleanup.keep.protected-ref` 或 `cleanup.refuse.*` 拦住）。**完全不可解析**者声明不可知：默认 **withhold 全部 remove**（改判 `cleanup.refuse.unreadable-snapshot`，plan 仍完整打印），仅当操作者给出 `--ignore-unreadable-snapshots` 断言时才按可读 snapshot 判定。**选中** workflow 自身 snapshot 不可读仍是探测失败（exit 1）；任何坏 snapshot 的字节**永不**被修复、改写或删除。
 
-**Ownership（禁止命名推断）**：候选归属只来自 snapshot 行元数据（`plans[].execution_lease`；lease 释放后为保留的行 `metadata.working_branch` / `metadata.worktree_path` 与 retained track Assignments）或已验证的显式 `--worktree` 断言。归属缺失 / 歧义 / 他属 → `cleanup.refuse.foreign-worktree` / `cleanup.refuse.foreign-branch`。**归属生产者义务（owner=PM）**：设 `Done` 并删除 `execution_lease` 的**同一 locked update** 内，owner 必须把 `metadata.working_branch` + `metadata.worktree_path` 持久化到该 plan 行（值以本轮 Assignment 为准）——这是 lease 释放后 ownership 检查读取的持久归属；缺失时已 merge 的 Done 行也会被 `cleanup.refuse.foreign-*` 拒绝，回收只能靠手工补写快照。
+**Ownership（禁止命名推断）**：候选归属只来自 snapshot 行元数据（`plans[].execution_lease`；lease 释放后为保留的行 `metadata.working_branch` / `metadata.worktree_path` 与 retained track Assignments）或已验证的显式 `--worktree` 断言。归属缺失 / 歧义 / 他属 → `cleanup.refuse.foreign-worktree` / `cleanup.refuse.foreign-branch`。**归属生产者义务（owner=PM）**：设 `Done` 并删除 `execution_lease` 的**同一 locked update** 内，owner 必须把 `metadata.working_branch` + `metadata.worktree_path` 持久化到该 plan 行（值以本轮 Assignment 为准）——这是 lease 释放后 ownership 检查读取的持久归属；缺失时已 merge 的 Done 行也会被 `cleanup.refuse.foreign-*` 拒绝。scoped 路线上这条义务由 coordinator 的 `mstar plan complete` 一次原子写入承担（`Done` + 保留 `metadata.working_branch` / `metadata.worktree_path` / `track_branches` + 删除 `execution_lease` 与 `integration_merge_lease`）；whole-iteration 路线仍是 owner 的同一 locked update。**禁止**手工补写快照来修归属——scoped 路线回到 `mstar plan complete` / `reconcile`（`mstar-iteration` `references/plan-scoped-pm.md` §6）。
 
 **合并证据硬前置**：本地资格 = `git branch --merged <base>` 成员资格，base 取候选自己的锚（plan/track → `branch.integration`；standalone plan / integration 分支 → `branch.target`）。远端证据绑定 {branch, tip, base} **同一分支化身**；当前 harness 无 PR-merged 记录源（`prMerged` 恒为 null）→ 远端仅走 tip-ancestor 历史残留路线。squash-only（tip 非 base 祖先）**保留并报告，绝不 `git branch -D`**；旧 merged PR 不能授权已复用分支的新化身。
 
@@ -252,7 +252,7 @@ mstar worktree cleanup --workflow <id> [--harness <path>] [--apply] [--remote] [
 
 **顺序（--apply；worktree 移除 ≠ 分支删除）**：普通 `git worktree remove`（**永不 force**）移除 eligible attached worktree → **重新探测 + 重新规划** → 删除**现已**未检出的分支（`git branch -d`，**永不 `-D`**）→ 远端 expected-OID compare-and-delete（`git push --force-with-lease=refs/heads/<branch>:<observed-oid> origin :refs/heads/<branch>`；ref 已移动 → `cleanup.refuse.facts-changed`，**不**自动用新 OID 重试）。dry-run 打印 worktree `remove` + 其分支 `refuse(checked-out)` 是合法状态。**禁止**全局 `git worktree prune`（会动 foreign 注册）；Git 调用默认在 main worktree root，`git branch -d` 在该分支证据 base 的检出处执行（`-d` merged-into-HEAD 语义所需）——任何 Git 调用**永不位于移除候选内**。
 
-**Lease 释放是手工 owner 动作、cleanup 范围外**：cleanup（与 close）**从不**释放 lease；owner 先手工释放再清理，释放后归属靠保留的行元数据 / Assignments 维持。
+**Lease 的释放/转移在 cleanup 范围外，且没有独立 release 动词**：cleanup（与 close）**从不**释放 lease。scoped 路线由 `mstar plan accept`（转移）→ `integration-start` / `integration-accept` → `complete`（一次原子删除两 lease）或 `return`（交回 plan session）完成；whole-iteration 路线由 owner 释放。释放后归属靠保留的行元数据 / Assignments 维持。
 
 **两条时序车道（唯一合法时机）**：
 
@@ -263,13 +263,14 @@ mstar worktree cleanup --workflow <id> [--harness <path>] [--apply] [--remote] [
 
 ## Workflow
 
-主链：**PM 唯一分支决策**（`Working branch` / `Branch policy`，写进 Assignment）→ 实现者在 feature worktree 写产品编辑（L1：control root（主 checkout）管进程 SSOT、integration worktree 管 merge、feature 管源码）→ **QC 前**全部待审提交归并到**单一 `Working branch` `HEAD`** → 派 QC 三审 / QA 时共用**同一套对齐字段**（`Review cwd` / `Working branch` / `plan_id` / `Review range` / `Diff basis`，逐字相同）→ 集成分支 merge 串行（`integration_merge_lease`，在 integration worktree 执行）。并发写流在派发**前**完成 worktree 隔离（L1 跨 plan / L2 同 plan）；主 worktree 驻留分支 = 计划头记录的 **`Main worktree branch`**，全程不切换。
+主链：**PM 唯一分支决策**（`Working branch` / `Branch policy`，写进 Assignment）→ 实现者在 feature worktree 写产品编辑（L1：control root（主 checkout）管进程 SSOT、integration worktree 管 merge、feature 管源码）→ **QC 前**全部待审提交归并到**单一 `Working branch` `HEAD`** → 派 QC 三审 / QA 时共用**同一套对齐字段**（`Review cwd` / `Working branch` / `plan_id` / `Review range` / `Diff basis`，逐字相同）→ 集成分支 merge 串行（`integration_merge_lease`，在 integration worktree 执行；scoped 路线：`mstar plan integration-start` → 显式 `git -C <integration-path> merge --no-ff --no-edit <pinned-source-sha>` → `integration-accept` → `complete`，`reconcile` 是唯一恢复动词）。并发写流在派发**前**完成 worktree 隔离（L1 跨 plan / L2 同 plan）；主 worktree 驻留分支 = 计划头记录的 **`Main worktree branch`**，全程不切换。
 
 ## References
 
 - 派发与反递归红线 → **`mstar-dispatch-gates`**
 - SDD implement 波次（file handoff / reviewer）→ **`mstar-sdd`**
 - 迭代 Phase 2 integration worktree + lease 细则 → **`mstar-iteration`** §2（`references/phase-2-worktree-lease.md`）
+- scoped plan 路线（bind / scope 边界 / handoff / coordinator merge 序列 / reconcile）→ **`mstar-iteration`** `references/plan-scoped-pm.md`
 
 ### L1 refusal diagnostics across hosts
 

@@ -101,7 +101,7 @@ Single-task shorthand may exist depending on host version — always match the l
 
 ### Notes
 
-- PM is the **primary** orchestration seat via the `pm` skill (no PM agent shell is bundled here — the `mode: primary` shell is OpenCode-only, `packages/opencode/agents/`). Do not dispatch PM-to-PM via `task` unless the live schema explicitly lists it **and** the Assignment requires it.
+- PM is the **primary** orchestration seat via the `pm` skill (no PM agent shell is bundled here — the `mode: primary` shell is OpenCode-only, `packages/opencode/agents/`). Do not dispatch PM-to-PM via `task` unless the live schema explicitly lists it **and** the Assignment requires it. The **scoped primary route** (`/iteration-drive --assignment | --workflow --plan | --resume`) likewise runs in the **primary session** — it is never a `task` target, and a plan session may not reach sibling rows, the root register / shared projections, or Phase 3–6 (`mstar-iteration` `references/plan-scoped-pm.md`).
 - Host generics (`scout`, `reviewer`, `designer`, …) remain useful for non-role orientation / assist — they do not replace a listed Morning Star role agent for role-owned deliverables.
 
 ### Role binding in prompt (C5b — required)
