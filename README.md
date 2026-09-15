@@ -107,6 +107,22 @@ Enter PM, then run the per-plan cycle: `Prepare → Execute → QC → QA gate �
 | `/iteration-drive` | Resume Phase 2→6 on an already-locked iteration. |
 | `/iteration-loop [direction] [scale]` | Full Phase 1→6 autonomous (no grill-me).<br>`direction` — optional free text.<br>`scale` — `S` / `M` / `L` / `XL` (default `M`). |
 
+### Scoped plan session
+
+The same command takes a scope, to drive **one** prepared plan from an independent terminal instead of the whole iteration:
+
+| Command | When |
+|---------|------|
+| `/iteration-drive --assignment <absolute-assignment-md-path>` | Fresh scoped entry, addressed by the coordinator's prepared Assignment. |
+| `/iteration-drive --workflow <workflow-id> --plan <plan-id>` | Fresh scoped entry, addressing the prepared row directly. |
+| `/iteration-drive --resume <absolute-session-json-path>` | Explicit resume of the already bound session — the only resume form. |
+
+The scoped session binds exactly one plan, drives its tasks through the normal per-plan gates, and stops at a durable **handoff**: the row keeps `InReview`, and the coordinator alone records `Done` with both lease releases after it verifies the merge. A second fresh entry for the same plan is rejected as a duplicate holder — only explicit `--resume` of the original session continues. Any other nonempty argument shape fails closed; no arguments keep the whole-iteration route above.
+
+The second terminal is transport, not a dependency: any terminal works, and a multiplexer such as Herdr or tmux is optional — nothing reads pane state, TTL or terminal labels for ownership.
+
+Recipe: [`docs/plan-scoped-pm.md`](docs/plan-scoped-pm.md).
+
 ### Audit, review & verification
 
 The audit and review commands are read-only and advisory; findings can become plans for Prepare → Execute. SSOT → `mstar-audit` (variants: `codebase-audit`, `pr`).

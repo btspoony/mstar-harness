@@ -108,6 +108,22 @@ Codex 角色链接修复与具名子代理验证：[Codex 安装](INSTALL.md#cod
 | `/iteration-drive` | 在已锁定的迭代上恢复 / 继续推进 Phase 2→6。 |
 | `/iteration-loop [direction] [scale]` | Phase 1→6 全自动（无 grill-me）。<br>`direction` — 可选自由文本。<br>`scale` — `S` / `M` / `L` / `XL`（默认 `M`）。 |
 
+### Plan 级 scoped 会话
+
+同一条命令可带上 scope，在独立终端里只驱动**一个**已 prepare 的 plan，而不是整个迭代：
+
+| 命令 | 何时 |
+|------|------|
+| `/iteration-drive --assignment <绝对 assignment md 路径>` | 全新 scoped 入口，按 coordinator 准备好的 Assignment 寻址。 |
+| `/iteration-drive --workflow <workflow-id> --plan <plan-id>` | 全新 scoped 入口，直接寻址已 prepare 的那一行。 |
+| `/iteration-drive --resume <绝对 session json 路径>` | 显式恢复已绑定的会话——唯一的恢复形态。 |
+
+scoped 会话只绑定一个 plan，按其任务走常规 per-plan 门禁，止于一次可持久化的 **handoff**：该行保持 `InReview`，仅由 coordinator 在验证合并后一次性写入 `Done` 并释放两个 lease。同一 plan 的第二次 fresh 入口会以重复持有被拒绝——只有对原会话的显式 `--resume` 才能继续。其他任何非空参数形态一律 fail closed；无参数则走上方的整迭代路线。
+
+第二个终端只是传输方式，不是依赖：任意终端均可，Herdr 或 tmux 之类的多路复用器是可选的——所有权不读 pane 状态、TTL 或终端标签。
+
+配方：[`docs/plan-scoped-pm.md`](docs/plan-scoped-pm.md)。
+
 ### 审计、Review 与验证
 
 审计与 Review 命令提供只读建议；发现可转为 plan 进入 Prepare → Execute。SSOT → `mstar-audit`（变体：`codebase-audit`、`pr`）。
