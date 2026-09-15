@@ -85,6 +85,8 @@ Manual install / path layout: [`INSTALL.md`](INSTALL.md). CLI flags: [`docs/cli.
 
 Three entry shapes: **without iteration** (single plan / hotfix), **with iteration** (multi-plan Phase 1–5), or **audit, review & verification** (discover work, assess changes, or run requested E2E checks).
 
+Full command reference: [`docs/commands.md`](docs/commands.md).
+
 ### General (without iteration)
 
 Enter PM, then run the per-plan cycle: `Prepare → Execute → QC → QA gate → Done`.
@@ -123,7 +125,7 @@ The second terminal is transport, not a dependency: any terminal works, and a mu
 
 The coordinator's half — `prepare`, then `accept` → `integration-start` → pinned merge → `integration-accept` → `complete`, with `reconcile` as the crash path — runs the `mstar plan` verbs; flags, JSON envelopes and exit codes: [`docs/cli.md`](docs/cli.md#mstar-harness-plan).
 
-Recipe: [`docs/plan-scoped-pm.md`](docs/plan-scoped-pm.md).
+Recipe: [`docs/commands.md`](docs/commands.md#iteration-drive).
 
 ### Audit, review & verification
 

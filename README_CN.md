@@ -86,6 +86,8 @@ Codex 角色链接修复与具名子代理验证：[Codex 安装](INSTALL.md#cod
 
 三种入口：**不跑迭代**（单 plan / hotfix）、**跑迭代**（多 plan Phase 1–5）、或 **审计、Review 与验证**（发现工作、评估变更，或执行明确请求的 E2E 检查）。
 
+完整命令参考：[`docs/commands.md`](docs/commands.md)。
+
 ### 通用（不跑迭代）
 
 进入 PM，然后走 per-plan 循环：`Prepare → Execute → QC → QA gate → Done`。
@@ -124,7 +126,7 @@ scoped 会话只绑定一个 plan，按其任务走常规 per-plan 门禁，止�
 
 coordinator 一侧——`prepare`，随后 `accept` → `integration-start` → 固定 pin 的合并 → `integration-accept` → `complete`，崩溃走 `reconcile`——由 `mstar plan` 动词执行；标志、JSON 报文与退出码：[`docs/cli.md`](docs/cli.md#mstar-harness-plan)。
 
-配方：[`docs/plan-scoped-pm.md`](docs/plan-scoped-pm.md)。
+配方：[`docs/commands.md`](docs/commands.md#iteration-drive)。
 
 ### 审计、Review 与验证
 
