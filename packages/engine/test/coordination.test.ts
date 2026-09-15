@@ -1430,6 +1430,35 @@ describe("git-reconciliation", () => {
       "coordination.evidence-stale",
     );
   }, 30000);
+
+  test("a force-moved integration HEAD voids an already-integrated proof (T1-E-008)", async () => {
+    const fixture = await acceptedFixture();
+
+    // The source reaches the integration branch *before* the attempt is pinned,
+    // so the recorded base already carries it: the source is its ancestor and
+    // the attempt would otherwise prove itself from the pinned objects alone.
+    const pinnedBase = mergeFeature(fixture);
+    const started = await coordinatorCall(fixture, PLAN_ID, { kind: "integration-start" });
+    expect(started.outcome).toBe("integrating");
+    expect(recordField(handoffFields(planRowOf(fixture, PLAN_ID)), "integration").base_sha).toBe(pinnedBase);
+
+    // The integration branch is force-moved below the pinned base. That commit
+    // is still an object of the repository, but no longer reachable from the
+    // current HEAD, so no merge in this checkout belongs to the attempt.
+    git(["reset", "-q", "--hard", fixture.baseSha], fixture.integrationPath);
+    expect(headOf(fixture.integrationPath)).toBe(fixture.baseSha);
+
+    const before = readFileSync(fixture.snapshotPath);
+    expect(await errorCodeOf(() => coordinatorCall(fixture, PLAN_ID, { kind: "integration-accept" }))).toBe(
+      "coordination.integration-diverged",
+    );
+    // The refusal is non-advancing: no result is recorded and the attempt stays
+    // open, so the leases and InReview are kept rather than half-released.
+    expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
+    const refused = handoffFields(planRowOf(fixture, PLAN_ID));
+    expect(refused.state).toBe("integrating");
+    expect(recordField(refused, "integration").result_sha).toBeUndefined();
+  }, 30000);
 });
 
 /**
