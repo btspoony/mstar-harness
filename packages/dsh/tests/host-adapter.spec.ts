@@ -58,6 +58,7 @@ const VALID_WRITABLE = `## Assignment
 **Delegation**: forbidden
 **Task category**: logic
 **Working branch**: feature/dsh-host-adapter
+**Task budget (implement / ops rounds)**: S — one focused implementer round
 
 Do the thing, evidence-first.
 `
@@ -78,6 +79,7 @@ const SCOUT_NO_BRANCH = `## Assignment
 **Execute as**: scout
 **Delegation**: n/a
 **Task category**: deep
+**Task budget (implement / ops rounds)**: XS — one orientation round
 
 Survey the codebase, report only.
 `

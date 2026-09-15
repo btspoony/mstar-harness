@@ -62,6 +62,7 @@ const VALID_FORK = `## Assignment
 **Task category**: logic
 **Working branch**: feature/00000814-dsh-fallbacks-integration
 **Plan Path**: /proj/plans/00000814-fork-gate.md
+**Task budget (implement / ops rounds)**: S — one focused implementer round
 
 ## Task 3
 
