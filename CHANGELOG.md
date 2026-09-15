@@ -8,6 +8,17 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ## [Unreleased]
 
+## [3.9.3] - 2026-09-15
+
+### Harness
+
+- Added a **provenance guard** to drift-lint: the tracked repo text face (`.md` full text, `.ts` comment lines — leading comment lines plus trailing `//` comments, detected after masking string and template literals via the shared comment mask and with no whitespace requirement, with `://` URL sequences excluded) is scanned with the engine provenance finder, and dated plan/iteration ids or dated local-harness paths on it now fail CI with a `file:line` row. The walk intersects with `git ls-files`, so untracked local files never fail the guard (`.mstar/sdd/…` deeplinks remain under the skill-lint ephemeral check, which covers the skills corpus). Assembled release surfaces (`.changes/archive/`, `CHANGELOG*.md`) are exempt as historical record.
+- Scoped the E2E evidence boundary to development plans: `mstar-harness-core` § 定向执行与验证边界, `mstar-phase-gates` § 最小证据要求, `mstar-artifacts` plan-quality-bar + `plan.main.md`, and `mstar-e2e` now agree that real-browser / device / installed-deployment E2E is never a development plan's task nor any gate's evidence obligation — it lives only in a separately requested `mstar-e2e` workflow, whose named scenario rows are that workflow's own plan rows, while each layer proves itself through its own unit/integration tests.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, the portable Agent Plugins manifest, and both marketplace manifests: **→ 3.9.3**.
+
 ## [3.9.2] - 2026-09-14
 
 ### Harness
