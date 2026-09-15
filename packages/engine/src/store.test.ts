@@ -109,6 +109,18 @@ function authorizedStore(store: ArtifactStore & { root: string }): ArtifactStore
   };
 }
 
+/**
+ * Narrow `delete` to its required form for the protected-kind probes:
+ * `ArtifactStore.delete` is optional (read-only stores omit the port), the
+ * FsStore under test implements it, and a missing port must fail the probe
+ * loudly instead of being read as a refused write.
+ */
+function requiredDelete(store: ArtifactStore): (ref: ArtifactRef) => Promise<void> {
+  const remove = store.delete;
+  if (remove === undefined) throw new Error("the FsStore under test must implement delete");
+  return (ref) => remove.call(store, ref);
+}
+
 beforeEach(() => {
   setArtifactStore(undefined);
   delete process.env[ENV_KEY];
@@ -872,6 +884,7 @@ describe("coordinated-writer — protected FsStore boundary", () => {
     const root = tmpRoot("coordinated-writer-store-");
     try {
       const store = createFsStore(root);
+      const remove = requiredDelete(store);
       const statusPath = join(root, "status.json");
       const payload = { version: 2, updated_at: "2026-09-15", workflows: [] };
       await authorizedStore(store).put({ kind: "status", key: "root", payload });
@@ -880,7 +893,7 @@ describe("coordinated-writer — protected FsStore boundary", () => {
       await expect(
         store.put({ kind: "status", key: "root", payload: { ...payload, updated_at: "2000-01-01" } }),
       ).rejects.toMatchObject({ code: "coordination.direct-write-refused" });
-      await expect(store.delete({ kind: "status", key: "root" })).rejects.toMatchObject({
+      await expect(remove({ kind: "status", key: "root" })).rejects.toMatchObject({
         code: "coordination.direct-write-refused",
       });
       expect(readFileSync(statusPath)).toEqual(before);
@@ -890,7 +903,7 @@ describe("coordinated-writer — protected FsStore boundary", () => {
         await expect(store.put({ ...ref, payload: { probe: true } })).rejects.toMatchObject({
           code: "coordination.direct-write-refused",
         });
-        await expect(store.delete(ref)).rejects.toMatchObject({ code: "coordination.direct-write-refused" });
+        await expect(remove(ref)).rejects.toMatchObject({ code: "coordination.direct-write-refused" });
       }
       expect(existsSync(join(root, "workflows", "wf-1", "snapshot.json"))).toBe(false);
       expect(existsSync(join(root, "projects", "p1", "residuals.json"))).toBe(false);

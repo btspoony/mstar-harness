@@ -43,6 +43,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, 
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { createFsStore, setArtifactStore } from "../src/store.js";
+import { CoordinationError, artifactVersion } from "../src/coordination-write.js";
 import { readJson, writeJson } from "../src/core.js";
 import { parseCompassFrontmatterText } from "../src/iteration.js";
 import { withStatusWriteLock } from "../src/lease.js";
@@ -946,8 +947,25 @@ describe("migration commit point under the root write lock", () => {
     try {
       const statusPath = join(root, "status.json");
       const plan = migrateHarnessTree(root);
-      const applyPromise = applyMigratePlan(plan);
       let applySettledWhileLockHeld = false;
+      // The apply is a global multi-document writer (root + snapshots +
+      // register), so it holds the root lock for the whole phase (spec §C3
+      // root → snapshot → register); the third party acquires it FIRST.
+      // Genuine delay required (integration test): the engine's
+      // cross-process lockdir polling cannot be driven with deterministic
+      // timers, and the apply must get a chance to reach the lock.
+      const holder = withStatusWriteLock(statusPath, async () => {
+        await Bun.sleep(250);
+        // Root must NOT be replaced while a third party holds the root lock,
+        // and the apply must still be pending BEFORE its first write: the
+        // fixed code waits; the pre-fix bare writeJson settles and clobbers
+        // here, and a commit-point-only lock still archives first.
+        const statusDoc = readJson(statusPath) as { version?: unknown };
+        expect(statusDoc.version).toBe(1);
+        expect(existsSync(join(root, ARCHIVED_STATUS_V1_FILE))).toBe(false);
+        expect(applySettledWhileLockHeld).toBe(false);
+      });
+      const applyPromise = applyMigratePlan(plan);
       void applyPromise.then(
         () => {
           applySettledWhileLockHeld = true;
@@ -956,22 +974,42 @@ describe("migration commit point under the root write lock", () => {
           applySettledWhileLockHeld = true;
         },
       );
-      await withStatusWriteLock(statusPath, async () => {
-        // Genuine delay required (integration test): the engine's
-        // cross-process lockdir polling cannot be driven with deterministic
-        // timers, and the apply must get a chance to reach its commit point.
-        await Bun.sleep(250);
-        // Root must NOT be replaced while a third party holds the root lock,
-        // and the apply must still be pending at its commit point: the fixed
-        // code waits; the pre-fix bare writeJson settles and clobbers here.
-        const statusDoc = readJson(statusPath) as { version?: unknown };
-        expect(statusDoc.version).toBe(1);
-        expect(applySettledWhileLockHeld).toBe(false);
-      });
+      await holder;
       const result = await applyPromise;
       expect(result.applied).toBe(true);
       const statusDoc = readJson(statusPath) as { version?: unknown };
       expect(statusDoc.version).toBe(2);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a source rewritten after planning is refused by the byte-version CAS with zero writes", async () => {
+    const root = fixtureTree();
+    try {
+      const statusPath = join(root, "status.json");
+      const plan = migrateHarnessTree(root);
+      // Still schema version 1, different bytes: a concurrent v1 writer
+      // touched the root after the plan was built, which the `version === 2`
+      // check alone cannot see — only the plan's recorded byte version can.
+      const concurrent = readJson(statusPath) as Record<string, unknown>;
+      writeJson(statusPath, { ...concurrent, harness_root: "/somewhere/else" });
+      const changedBytes = readFileSync(statusPath);
+      expect(artifactVersion(changedBytes)).not.toBe(plan.sourceVersion);
+
+      const error = await applyMigratePlan(plan).catch((failure: unknown) => failure);
+      expect(error).toBeInstanceOf(CoordinationError);
+      expect((error as CoordinationError).code).toBe("coordination.version-conflict");
+      expect((error as CoordinationError).details).toMatchObject({
+        path: statusPath,
+        expected: plan.sourceVersion,
+        actual: artifactVersion(changedBytes),
+      });
+      // The refusal is inert: the source keeps the concurrent bytes, and the
+      // additive phase never started (archiving the v1 root is its first
+      // step, so an absent archive proves no write happened).
+      expect(readFileSync(statusPath).equals(changedBytes)).toBe(true);
+      expect(existsSync(join(root, ARCHIVED_STATUS_V1_FILE))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -493,7 +493,12 @@ export async function scaffoldHarness(root: string): Promise<string> {
     (payload) =>
       isPlainObject(payload)
         ? validateStatusV2(payload as StatusV2Doc, { harnessDir })
-        : { ok: false, severity: "high", code: "scaffold.status-shape", message: "status.json must be a JSON object" },
+        : {
+            ok: false,
+            violations: [
+              { ok: false, severity: "high", code: "scaffold.status-shape", message: "status.json must be a JSON object" },
+            ],
+          },
   );
 // v3 project layer: `projects/_default/` is scaffolded (the fallback
 // project for project-less flows); other project ids and `workflows/`

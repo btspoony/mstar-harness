@@ -54,7 +54,7 @@ import { readJson, writeJson } from "../src/core.js";
 import type { GateResult, ValidationResult } from "../src/core.js";
 import type { WorkflowEntry } from "../src/status.js";
 import type { FindingsCleanupMode, TechDebtRollup } from "../src/project.js";
-import { writeWorkflowSnapshot } from "../src/workflow.js";
+import { WORKFLOW_SNAPSHOT_FILE, writeWorkflowSnapshot } from "../src/workflow.js";
 
 const FIXTURES = join(import.meta.dir, "fixtures");
 const EMPTY_TEMPLATE = join(FIXTURES, "status.empty.json");
@@ -1308,6 +1308,60 @@ describe("coordinated-writer — coordinated root-register refusals", () => {
       await registerWorkflow(statusPath, entry);
       await unregisterWorkflow(statusPath, "wf-plain");
       expect(existsSync(join(root, "status.json"))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // The two cases below pin the root → snapshot acquisition order (spec §C3):
+  // the coordination identification is re-taken from a snapshot read under the
+  // snapshot lock, held across the root replacement. The held lockdir below is
+  // a concurrent binder: it adds the coordination block while the root writer
+  // is already inside its root-locked section, so a decision made from an
+  // earlier bare read would remove / re-point a workflow being taken over.
+  async function uncoordinatedRegistered(prefix: string): Promise<{ root: string; statusPath: string; snapshotDir: string; snapshotPath: string; lockDir: string; before: string }> {
+    const root = harnessRoot(prefix);
+    const statusPath = join(root, "status.json");
+    const snapshotDir = join(root, "workflows", COORDINATED_ID);
+    await writeWorkflowSnapshot({ ...COORDINATED_SNAPSHOT, coordination: undefined } as never, snapshotDir);
+    await registerWorkflow(statusPath, COORDINATED_ENTRY);
+    return {
+      root,
+      statusPath,
+      snapshotDir,
+      snapshotPath: join(snapshotDir, WORKFLOW_SNAPSHOT_FILE),
+      lockDir: join(snapshotDir, ".status-write.lockdir"),
+      before: readFileSync(statusPath, "utf8"),
+    };
+  }
+
+  test("refuses to unregister a workflow whose snapshot gains coordination while the root write is in flight", async () => {
+    const { root, statusPath, snapshotPath, lockDir, before } = await uncoordinatedRegistered(
+      "coordinated-writer-status-lockorder-unregister-",
+    );
+    try {
+      mkdirSync(lockDir, { recursive: true }); // the binder is inside its critical section
+      const pending = unregisterWorkflow(statusPath, COORDINATED_ID);
+      writeJson(snapshotPath, COORDINATED_SNAPSHOT); // the bind lands
+      rmSync(lockDir, { recursive: true, force: true }); // the binder commits and releases
+      await expect(pending).rejects.toMatchObject({ code: "coordination.invalid-transition" });
+      expect(readFileSync(statusPath, "utf8")).toBe(before);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("refuses to re-point a workflow whose snapshot gains coordination while the root write is in flight", async () => {
+    const { root, statusPath, snapshotPath, lockDir, before } = await uncoordinatedRegistered(
+      "coordinated-writer-status-lockorder-repoint-",
+    );
+    try {
+      mkdirSync(lockDir, { recursive: true });
+      const pending = registerWorkflow(statusPath, { ...COORDINATED_ENTRY, dir: "workflows/moved" });
+      writeJson(snapshotPath, COORDINATED_SNAPSHOT);
+      rmSync(lockDir, { recursive: true, force: true });
+      await expect(pending).rejects.toMatchObject({ code: "coordination.invalid-transition" });
+      expect(readFileSync(statusPath, "utf8")).toBe(before);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

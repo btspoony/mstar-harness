@@ -89,7 +89,7 @@ import { parseCompassFrontmatterText } from "./iteration.js";
 import { withStatusWriteLock } from "./lease.js";
 import { assertSafePathComponent, resolveProjectDir, resolveWorkflowDir } from "./path.js";
 import { _DEFAULT_PROJECT, PROJECT_REGISTER_FILE, PROJECT_ROADMAP_FILE, validateProjectRegister, type ProjectRegisterDoc, type ProjectRegisterEntry } from "./project.js";
-import { assertFsStorePath, getArtifactStore } from "./store.js";
+import { assertFsStorePath, getArtifactStore, type ArtifactStore } from "./store.js";
 import { CoordinationError, readArtifactBytes, withProtectedWrite } from "./coordination-write.js";
 import {
   isOpenResidual,
@@ -199,6 +199,14 @@ export type MigratePlan = {
  */
   projectDir: string;
   dryRun: boolean;
+  /**
+   * Byte version (`sha256:…`, or `"absent"`) of the source `status.json` this
+   * plan was derived from (spec §C3 source-version CAS). The executor
+   * re-reads the source under the root lock before its first write and
+   * refuses a root whose bytes moved after planning — a still-v1 document
+   * changed by another writer is never silently replaced.
+   */
+  sourceVersion: string;
  /** Root status.json already at `version: 2` -> nothing to plan/apply. */
   alreadyMigrated: boolean;
  /** Human message (no-op reason when `alreadyMigrated`). */
@@ -643,7 +651,12 @@ export function migrateHarnessTree(root: string, opts: MigrateOptions = {}): Mig
   const projectDir = resolveProjectDir(harnessDir, { harnessDir });
   const projectId = opts.projectId ?? _DEFAULT_PROJECT;
   const statusPath = join(harnessDir, MIGRATE_STATUS_FILE);
-  const legacy = readJson(statusPath) as StatusDoc;
+ // Payload and byte version come from ONE read: the executor re-checks that
+ // version under the root lock (spec §C3), so the plan must record the exact
+ // bytes its additive writes were derived from.
+  const source = readArtifactBytes(statusPath);
+  const sourceVersion = source?.version ?? "absent";
+  const legacy = (source?.payload ?? {}) as StatusDoc;
 
   if (legacy.version === 2) {
     const updatedAt = typeof legacy.updated_at === "string" && legacy.updated_at !== "" ? legacy.updated_at : "1970-01-01";
@@ -652,6 +665,7 @@ export function migrateHarnessTree(root: string, opts: MigrateOptions = {}): Mig
       workflowDir,
       projectDir,
       dryRun: opts.dryRun === true,
+      sourceVersion,
       alreadyMigrated: true,
       message: `no-op: ${statusPath} is already at schema version 2 (migrated) \u2014 nothing to do`,
       snapshots: [],
@@ -828,6 +842,7 @@ export function migrateHarnessTree(root: string, opts: MigrateOptions = {}): Mig
     workflowDir,
     projectDir,
     dryRun: opts.dryRun === true,
+    sourceVersion,
     alreadyMigrated: false,
     message: `planned migration of ${snapshots.length} lifecycles (${steps.length} steps)`,
     snapshots,
@@ -877,8 +892,6 @@ export async function applyMigratePlan(plan: MigratePlan): Promise<MigrateResult
       `refusing to apply migration: plan workflowDir/projectDir must be absolute (got ${JSON.stringify(plan.workflowDir)} / ${JSON.stringify(plan.projectDir)})`,
     );
   }
-  const workflowTargetOf = (canonicalFile: string): string => join(workflowRoot, relative("workflows", canonicalFile));
-  const projectTargetOf = (canonicalFile: string): string => join(projectRoot, relative("projects", canonicalFile));
 
  // Defense-in-depth at the write boundary (Phase-5 F1
  // extended): the planner already refuses unsafe ids via
@@ -904,6 +917,57 @@ export async function applyMigratePlan(plan: MigratePlan): Promise<MigrateResult
   }
 
   const store = getArtifactStore();
+
+ // The apply is a MULTI-document write (archive → snapshots → notes →
+ // register → roadmap → root v2 replacement), so it runs under the ROOT
+ // lock in the mandated acquisition order root → snapshot → register
+ // (spec §C3) — the root is locked FIRST and the snapshot/register locks are
+ // taken inside it, never the other way round. Holding it for the whole
+ // phase buys two things: the root writers (`registerWorkflow` /
+ // `unregisterWorkflow`, a concurrent `migrate`) cannot interleave with the
+ // commit, and the source byte-version re-check below is atomic with every
+ // write derived from that source — a still-v1 `status.json` whose bytes
+ // moved after planning is refused with NOTHING written instead of having
+ // its snapshots/register written and then its replacement refused.
+ // `withStatusWriteLock` is not reentrant: nothing inside may re-take it.
+  return withStatusWriteLock(statusPath, () => applyMigratePlanLocked(plan, statusPath, store, workflowRoot, projectRoot));
+}
+
+/**
+ * Locked half of `applyMigratePlan`: the source byte-version re-check plus
+ * the whole additive phase and the root v2 replacement. Assumes the root
+ * lock on `statusPath` is held (see the caller) and performs ZERO writes
+ * before that re-check passes.
+ */
+async function applyMigratePlanLocked(
+  plan: MigratePlan,
+  statusPath: string,
+  store: ArtifactStore,
+  workflowRoot: string,
+  projectRoot: string,
+): Promise<MigrateResult> {
+  const workflowTargetOf = (canonicalFile: string): string => join(workflowRoot, relative("workflows", canonicalFile));
+  const projectTargetOf = (canonicalFile: string): string => join(projectRoot, relative("projects", canonicalFile));
+
+ // Source byte-version CAS (spec §C3): the plan records the byte version of
+ // the exact `status.json` read it was derived from. Under the root lock, a
+ // root a concurrent migrate already committed is the idempotent no-op;
+ // any other movement of those bytes is refused before the first write, so
+ // the archived copy and every additive write always match the source the
+ // plan describes.
+  const source = readArtifactBytes(statusPath);
+  const sourcePayload = source?.payload;
+  if (isPlainObject(sourcePayload) && sourcePayload.version === 2) {
+    return { applied: false, message: "no-op: status.json already at schema version 2 (migrated) — nothing to do" };
+  }
+  const sourceVersion = source?.version ?? "absent";
+  if (sourceVersion !== plan.sourceVersion) {
+    throw new CoordinationError(
+      "coordination.version-conflict",
+      `refusing to apply migration: ${statusPath} changed since the plan was built (planned ${plan.sourceVersion}, found ${sourceVersion}) \u2014 re-run the plan against the current root`,
+      { path: statusPath, expected: plan.sourceVersion, actual: sourceVersion },
+    );
+  }
 
  // 1. Archive the v1 root BEFORE anything else touches it (never deleted
  // without that copy).
@@ -990,30 +1054,22 @@ export async function applyMigratePlan(plan: MigratePlan): Promise<MigrateResult
     writeFileSync(filePath, plan.roadmap.content, "utf8");
   }
 
- // 6. Root v2 replacement — the COMMIT POINT (last step), serialized with
- // the root writers (`registerWorkflow`/`unregisterWorkflow`) under the
- // root-file `withStatusWriteLock`. The version re-check INSIDE the lock
- // turns a stale plan (a concurrent migrate committed first) into a no-op
- // instead of an overwrite of a root that may already hold registered
- // workflows, and the write itself goes through the private protected-write
- // context (a raw writeJson here would bypass the store boundary).
+ // 6. Root v2 replacement — the COMMIT POINT (last step), already serialized
+ // with the root writers by the caller's root lock; the source version
+ // re-check at the top of this function turned a stale plan into a no-op
+ // before the first write. The gate runs HERE (not before the additive
+ // phase) because it validates the planned v2 root against the snapshots
+ // this same run just wrote; the write itself goes through the private
+ // protected-write context (a raw writeJson here would bypass the store
+ // boundary).
   const rootGate = validateStatusV2(plan.rootV2.data, { harnessDir: plan.root });
   if (!rootGate.ok) {
     throw new Error(`refusing to apply migration: invalid v2 root: ${rootGate.violations.map((v) => v.message).join("; ")}`);
   }
-  return withStatusWriteLock(statusPath, async () => {
-    const latest = readJson(statusPath) as { version?: unknown };
-    if (latest.version === 2) {
-      return {
-        applied: false,
-        message: "no-op: status.json already at schema version 2 (migrated) — nothing to do",
-      };
-    }
-    assertFsStorePath(store, { kind: "status", key: "root" }, statusPath);
-    await withProtectedWrite(statusPath, "put", () => store.put({ kind: "status", key: "root", payload: plan.rootV2.data }));
-    return {
-      applied: true,
-      message: `migrated ${plan.snapshots.length} lifecycles into workflows/, project layer seeded, root status.json replaced (v1 archived to ${plan.archive.file})`,
-    };
-  });
+  assertFsStorePath(store, { kind: "status", key: "root" }, statusPath);
+  await withProtectedWrite(statusPath, "put", () => store.put({ kind: "status", key: "root", payload: plan.rootV2.data }));
+  return {
+    applied: true,
+    message: `migrated ${plan.snapshots.length} lifecycles into workflows/, project layer seeded, root status.json replaced (v1 archived to ${plan.archive.file})`,
+  };
 }
