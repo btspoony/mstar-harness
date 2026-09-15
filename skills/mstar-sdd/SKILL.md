@@ -52,6 +52,7 @@ Dispatch independent ready tasks concurrently after L2 worktree isolation. Keep 
 2. `mstar sdd workspace <plan-id>` → `SDD_DIR`（iteration L1 从 feature cwd 调用时：`MSTAR_CONTROL_ROOT=<main-repo-root>`（= **Git 派生的主 worktree 根**；先完成派生验证，fail-closed 守卫在其后）或 `mstar sdd workspace <plan-id> <main-repo-root>`；显式值必须与派生主根 canonicalize 一致，integration/外来检出被拒而非静默重定向；probe 以 v2 根 `status.json`（`workflows[]`）或 workflow snapshot 存在为准，linked worktree 缺文件会 fail closed）
 3. `mstar sdd task-brief <plan> N` → brief file
 4. Dispatch implementer:
+    - Copy the plan task's budget into the Assignment header field **`Task budget (implement / ops rounds)`** (canonical template → `mstar-roles/references/project-manager/dispatch-and-assignment.md`; one-round capacity criterion → `mstar-artifacts/references/plan-quality-bar.md` item 7) — header region only, before the body markers
     - **`SDD implementer session: fresh`** (default) — new subagent; templates: `references/implementer-prompt.md`
     - **`SDD implementer session: sticky`** — first task: same as fresh + write `{SDD_DIR}/implementer-session.json` with `host_agent_id`; later tasks: host **resume** + `references/implementer-continuation-prompt.md` (see **`references/sticky-implementer-session.md`**)
 5. On `DONE`: `mstar sdd review-package BASE HEAD` → diff file
@@ -72,8 +73,8 @@ Detail: **`references/file-handoffs.md`**.
 |--------|-----------|
 | DONE | review-package → task reviewer |
 | DONE_WITH_CONCERNS | read concerns; fix scope issues before review |
-| NEEDS_CONTEXT | provide context; re-dispatch |
-| BLOCKED | more context, higher tier, split task, or escalate human — **never** same-model blind retry |
+| NEEDS_CONTEXT | provide context; re-dispatch. Budget overrun (the declared round cannot close its Files and gates) → split the task per `mstar-artifacts/references/plan-quality-bar.md` item 7 and re-dispatch with a fresh budget |
+| BLOCKED | more context, higher tier, split task, or escalate human — **never** same-model blind retry. Budget overrun → split the task per `mstar-artifacts/references/plan-quality-bar.md` item 7 and re-dispatch with a fresh budget |
 
 ## Reviewer ⚠️ items
 

@@ -72,7 +72,7 @@ description: Morning Star 派发与委派门禁 —— 仅 PM 可增派 subagent
 
 在支持具名角色 / Task 的宿主上，`## Assignment` **正文不会**拉起子会话。PM 须在**同一条 assistant 消息**（或宿主等价机制）发出与 Assignment **条数一致**的 invoke / Task；仅打印 Markdown = **分派未完成**。**几条 Assignment ⇒ 几次 tool 调用**（默认同消息并行）。
 
-> **Engine check (when available):** run `mstar dispatch validate <assignment-file> [--branch <branch>]` (or `import { validateAssignmentFields, assertDefaultBranchProtected } from "@mstar-harness/engine"` in a host hook) to validate the Assignment field contract and the default-branch gate (normative default-branch prose: **`mstar-branch-worktree`** SKILL.md § "Git 功能分支门禁（业务仓库）" — this skill covers dispatch mechanics only). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check (when available):** run `mstar dispatch validate <assignment-file> [--branch <branch>]` (or `import { validateAssignmentFields, assertDefaultBranchProtected } from "@mstar-harness/engine"` in a host hook) to validate the Assignment field contract — including the canonical **`Task budget (implement / ops rounds)`** header field on non-review / non-audit rounds: presence-only in the header region, absent / empty / `N/A` → validation fail (field guidance → `mstar-roles/references/project-manager/dispatch-and-assignment.md`; capacity criterion → `mstar-artifacts/references/plan-quality-bar.md` item 7) — and the default-branch gate (normative default-branch prose: **`mstar-branch-worktree`** SKILL.md § "Git 功能分支门禁（业务仓库）" — this skill covers dispatch mechanics only). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 ## SDD implement 波次（PM only）
 
