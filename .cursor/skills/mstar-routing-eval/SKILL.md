@@ -100,6 +100,13 @@ description: "[Cursor maint] Morning Star 路由与 prompt 迭代评估 —— �
 - **跨 plan 并行无 same-host 锁**：跨主机 / 无共享 flock 仍 dispatch 跨 plan 并行可写 implement，且 **无** 用户本轮 `Cross-host lease race: accepted`（或等价）+ audit `plans[].notes`；应 **Blocked** 或改为 **`Plan parallelism: serial`**（见 **`mstar-artifacts`** · **`mstar-iteration`** §2.0 #5）— **含 `Worktree mode: waived`**
 - **`Worktree mode: waived` 误作并行授权**：Assignment 含 waived 且无 same-host 锁、无 serial、无 `Cross-host lease race: accepted` + audit 仍 dispatch 跨 plan 并行可写 implement
 - **invoke 角色字段缺失（静默 generic 回退）**：已发 Task/subagent invoke，但 item 漏写与 **`Execute as`** 匹配的角色绑定字段（omp **`agent`** / Cursor **`subagent_type`** / OpenCode **`subagent`** / Kimi·ZCode **`subagent_type`**）⇒ 宿主静默回退 generic worker，却因 count=N 通过而误判「派发完成」（见 **`mstar-dispatch-gates`**、**`mstar-host/references/parallel-dispatch.md`**）。**N=1 顺序 Review-&-Edit 链**最易触发——count 门恒过，字段门是唯一保护
+- **scoped 会话越界**：作用域 PM 已绑定指定 plan 仍驱动非指定行（例如第一个未完成 plan）；或把 `project-manager` 当 subagent 派发而非在当前主会话 boot；或为 scoped 路由加载整迭代 boot 产物（compound、Phase 3-6 细则）；或把 plan / coordinator 会话路径传进 child Assignment 或 child invoke（case `plan-scope-addresses` · 见 **`mstar-iteration`** → `references/plan-scoped-pm.md`）
+- **重复 fresh claim 被当 resume**：第二个终端对同一 Assignment 再 bind 时发明 resume token 或自动挂到活跃 holder；或把终端标签、pane 状态、idle 时长、TTL 当身份，或抢 lease；或把同一 Assignment 的 fresh bind 当隐式 same-holder resume（期望 engine 以 `coordination.duplicate-holder` 拒绝；case `plan-scope-duplicate` · 见 **`mstar-iteration`** → `references/plan-scoped-pm.md`）
+- **未知或残缺参数回退整迭代**：`--workflow`/`--plan` 残缺、混合或未知时回退到无参整迭代路由；或静默补全缺项、挑默认 plan；或声称畸形调用执行成功、改状态让它「成功」（case `plan-scope-unknown-args` · 见 **`mstar-iteration`** → `references/plan-scoped-pm.md`）
+- **无参路由被 scoped 化**：把无参路由当作对 global boot 的 scoped 过滤；或在无参路由上要求 `--workflow`/`--plan` 或 Assignment；或为它 seed 一个 scoped session（case `plan-scope-noargs` · 见 **`mstar-iteration`** → `references/plan-scoped-pm.md`）
+- **最后一个 plan 越权收尾**：因是最后一个未完成 plan 而进入 `## Phase 3: iteration-close` 或跑 compound；或从 scoped session 写 `status: Done`、删 `execution_lease`；或开迭代 PR、启动 PR merge-ready loop（期望停在 `mstar plan handoff` 后的 `InReview`；case `plan-scope-last-plan` · 见 **`mstar-iteration`** → `references/plan-scoped-pm.md`）
+- **scoped session 自证 Done**：plan session 置 `Done` 或释放行 execution lease / integration merge lease；或没有已验证的 coordinator merge proof 就报完成；或信任调用方给的成功标志、用第二次 merge 代替 `reconcile`（case `plan-scope-handoff-done` · 见 **`mstar-iteration`** → `references/plan-scoped-pm.md`）
+- **leaf 升格或收凭据**：leaf 自升为 PM / coordinator 并吸收 plan scope；或递归派发 PM 或任何 subagent；或接受、保存、回显 Assignment 给的 session path / credential（case `plan-scope-leaf` · 见 **`mstar-dispatch-gates`**）
 
 ## 3. 迭代规则
 
@@ -228,4 +235,4 @@ description: "[Cursor maint] Morning Star 路由与 prompt 迭代评估 —— �
 
 ## Assets
 
-- `assets/routing-evals.json` — PM 路由回归场景集（结构：`cases[].prompt / expected_route / must_have_artifacts / hard_fail_if`）。评估时用 `cat` 或 `jq` 读取；**更新场景集须与本 skill 同 PR 维护**以避免版本漂移。
+- `assets/routing-evals.json` — PM 路由回归场景集（结构：`cases[].prompt / expected_route / must_have_artifacts / hard_fail_if`）。评估时用 `cat` 或 `jq` 读取；**更新场景集须与本 skill 同 PR 维护**以避免版本漂移。本 skill 侧的维护事实：场景集当前为 **`version` 29 · 56 例**（含 `plan-scope-*` 7 例，其防守信号登记在 § 2）；数字以场景集文件为准，此处只随更新改写。
