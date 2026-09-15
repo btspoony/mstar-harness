@@ -384,7 +384,6 @@ function leaseHolder(row: Record<string, unknown>): string | undefined {
 /** Handoff evidence the way a plan session submits it: paths and revisions. */
 type HandoffEvidence = {
   source_sha: string;
-  worktree_path: string;
   review_base: string;
   review_head: string;
   qc: { decision: string; reports: string[]; consolidated: string };
@@ -401,7 +400,6 @@ function handoffEvidenceOf(fixture: GitFixture, sourceSha: string): HandoffEvide
   writeText(qa, "# qa pass\n");
   return {
     source_sha: sourceSha,
-    worktree_path: fixture.worktreePath,
     review_base: fixture.baseSha,
     review_head: sourceSha,
     qc: { decision: "Approve", reports, consolidated },
@@ -925,7 +923,7 @@ describe("residual-ownership", () => {
       operation: { kind: "residual-add", entries: [residual("r-3")] as never, expectedRegisterVersion: "absent" },
     }),
       ),
-    ).toBe("coordination.register-version-conflict");
+    ).toBe("coordination.version-conflict");
     // A missing precondition is refused outright (never a blind write).
     expect(
       await errorCodeOf(() =>
@@ -1010,7 +1008,7 @@ describe("residual-ownership", () => {
         "    console.log(`added ${residualId}`);",
         "    process.exit(0);",
         "  } catch (error) {",
-        "    if (error && error.code === \"coordination.register-version-conflict\") continue;",
+        "    if (error && error.code === \"coordination.version-conflict\") continue;",
         "    console.error(error);",
         "    process.exit(2);",
         "  }",
