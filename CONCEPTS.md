@@ -36,6 +36,9 @@ The two concurrency tokens guarding the **protected documents** — the coordina
 A **row revision** is a monotonic counter on one plan row, advanced only when that row changes, so two sessions mutating different rows of the same snapshot both persist and only a re-write of the same row conflicts. An **artifact version** is the hash of a document's exact on-disk bytes (`absent` before its first write) and guards whole-document replacement. A caller passes the row revision to plan mutations and the artifact version to document replacement; a missing token is refused rather than read as "replace whatever is there", and a stale token is a loud conflict carrying expected and actual values. Related: Workflow lifecycle, Project register.
 *Avoid:* document revision (ambiguous between the two), mtime or date as a version.
 
+### Task budget (implement / ops rounds)
+The implementer-side capacity contract field on a canonical Assignment: **one implementer round** within which the declared Files list and verification gates close (bare `Task budget` accepted), citing the existing Effort band — never a wall-clock target or numeric-minutes table. Presence is enforced fail-level by the dispatch validator for the implement/ops complement (`assignment.field.task-budget-missing`, severity `high`); review/audit rounds keep their separate `Budget` / `Return shape` fields, and orientation roles are not exempt. A multi-session estimate is not an exemption — the plan declares a split point — and budget pressure never shortens assigned scoped verification. Related: Review seat layers.
+
 ## Agent list (dsh panel)
 
 ### Emphasis
