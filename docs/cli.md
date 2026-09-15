@@ -487,7 +487,10 @@ Exit codes:
 
 ## Harness Slash Commands (not CLI subcommands)
 
-`/codebase-audit`, `/amazing-pr-review`, and the `/iteration-*` commands ship with the harness plugin (`commands/*.md`), not the `mstar-harness` CLI binary. Host availability: dsh / omp / OpenCode / Cursor load them from the plugin; Kimi / ZCode expose `/morning-star-harness:<name>`; Codex installs them as project-local skills (`--scope project`). See the command-loading table in [README.md](../README.md#codebase-audit).
+`/codebase-audit`, `/amazing-pr-review`, and the `/iteration-*` commands ship with the harness plugin (`commands/*.md`), not the `mstar-harness` CLI binary. Host availability: dsh / omp / OpenCode / Cursor load them from the plugin; Kimi / ZCode expose `/morning-star-harness:<name>`; Codex installs them as project-local skills (`--scope project`). See the command-loading table in [README.md](../README.md#audit-review-verification).
+
+All six commands — purpose, argument forms, host notes, and the scoped `/iteration-drive` route — are indexed in [`commands.md`](commands.md); the sections below keep the CLI-side detail.
+
 ### `/amazing-pr-review`
 
 Deep, evidence-first review of a pull request / branch / diff before merge → one verdict (`ship it` / `needs fixes` / `blocked`). Worktree-isolated and read-only; findings that can fix become self-contained plans (`{PLAN_DIR}/audit-<YYYY-MM-DD>/`) for the normal Prepare → Execute flow. When a PR number exists, the command's main agent posts a mandatory GitHub Review (`COMMENT` event) with line comments on findings at Stage 3 synthesis — SSOT → `mstar-audit` `pr` variant → `references/pr-review.md`. Runs at one of three strengths — `quick` / `default` / `deep` — chosen by an explicit keyword or inferred from the change shape (`references/pr-review.md` § Review depth (tiers)): `quick` = 1 seat, collect + review in one pass (tiny-mechanical diffs); `default` = 2 domain seats, collection folded in — the no-flag landing tier for small code PRs; `deep` = the full three-stage pipeline (collect → domain review → main-agent synthesis), 4–7 seats. Multi-PR input reviews only the first PR at its resolved tier; remaining PRs are queued as audit todos for the next session — one session = one PR (§ Batch sibling PRs).
