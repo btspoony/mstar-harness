@@ -668,3 +668,38 @@ describe("closeWorkflow", () => {
     expect(isTerminalSnapshot({ status: "paused" } as never)).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// coordinated-writer — create-only snapshot writes (spec C4)
+// ---------------------------------------------------------------------------
+
+describe("coordinated-writer — create-only snapshot writes", () => {
+  test("creates the snapshot when the target is absent", async () => {
+    const root = tmpRoot("coordinated-writer-create-absent-");
+    setArtifactStore(createFsStore(root));
+    const dir = join(root, "workflows", "00000819-workflow-engine-core");
+    try {
+      await writeWorkflowSnapshot(validSnapshot(), dir, { createOnly: true });
+      expect(existsSync(join(dir, WORKFLOW_SNAPSHOT_FILE))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("refuses an existing snapshot and leaves its bytes unchanged", async () => {
+    const root = tmpRoot("coordinated-writer-create-existing-");
+    setArtifactStore(createFsStore(root));
+    const dir = join(root, "workflows", "00000819-workflow-engine-core");
+    const snapshotPath = join(dir, WORKFLOW_SNAPSHOT_FILE);
+    try {
+      await writeWorkflowSnapshot(validSnapshot(), dir, { createOnly: true });
+      const before = readFileSync(snapshotPath, "utf8");
+      await expect(writeWorkflowSnapshot(validSnapshot(), dir, { createOnly: true })).rejects.toMatchObject({
+        code: "coordination.version-conflict",
+      });
+      expect(readFileSync(snapshotPath, "utf8")).toBe(before);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
