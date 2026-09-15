@@ -1696,4 +1696,48 @@ describe("seam-regressions", () => {
     expect(handed.outcome).toBe("handed-off");
     expect(handoffFields(planRowOf(fixture, PLAN_ID)).worktree_path).toBe(fixture.worktreePath);
   });
+
+  test("a foreign merge lease is never reused or released (QC2-S2)", async () => {
+    // A plan that has merged while holding the workflow's single merge lease for
+    // its own attempt.
+    const fixture = await acceptedFixture();
+    await coordinatorCall(fixture, PLAN_ID, { kind: "integration-start" });
+    const mergeSha = mergeFeature(fixture);
+    await coordinatorCall(fixture, PLAN_ID, { kind: "integration-accept" });
+    const ownLease = recordField(snapshotOf(fixture), "integration_merge_lease");
+    expect(ownLease.plan_id).toBe(PLAN_ID);
+    const writeLease = (overrides: Record<string, unknown>): void => {
+      writeJson(fixture.snapshotPath, {
+        ...snapshotOf(fixture),
+        integration_merge_lease: { ...ownLease, ...overrides },
+      });
+    };
+
+    // The slot is workflow-wide, so a holder match is not ownership: a lease
+    // naming another plan is refused, and the foreign claim survives intact.
+    writeLease({ plan_id: PEER_PLAN_ID, source_branch: "feature/plan-b" });
+    const foreign = readFileSync(fixture.snapshotPath);
+    expect(await errorCodeOf(() => coordinatorCall(fixture, PLAN_ID, { kind: "complete" }))).toBe(
+      "coordination.invalid-transition",
+    );
+    expect(readFileSync(fixture.snapshotPath).equals(foreign)).toBe(true);
+    expect(planRowOf(fixture, PLAN_ID).status).toBe("InReview");
+
+    // One plan can integrate more than once, so a lease for another source
+    // branch of this same plan is not this attempt's claim either.
+    writeLease({ source_branch: "feature/plan-a-old" });
+    const stale = readFileSync(fixture.snapshotPath);
+    expect(await errorCodeOf(() => coordinatorCall(fixture, PLAN_ID, { kind: "complete" }))).toBe(
+      "coordination.invalid-transition",
+    );
+    expect(readFileSync(fixture.snapshotPath).equals(stale)).toBe(true);
+    expect(recordField(snapshotOf(fixture), "integration_merge_lease").source_branch).toBe("feature/plan-a-old");
+
+    // The attempt's own lease is still completable, and completing releases it.
+    writeLease({});
+    const done = await coordinatorCall(fixture, PLAN_ID, { kind: "complete" });
+    expect(done.outcome).toBe("completed");
+    expect(recordField(handoffFields(planRowOf(fixture, PLAN_ID)), "integration").result_sha).toBe(mergeSha);
+    expect(snapshotOf(fixture).integration_merge_lease).toBeUndefined();
+  }, 30000);
 });

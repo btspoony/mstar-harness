@@ -3128,8 +3128,32 @@ function requireIntegration(handoff: PlanHandoff, planId: string): HandoffIntegr
   return integration;
 }
 
-/** The workflow's merge lease: absent, or this coordinator's (spec §E). */
-function assertMergeLease(snapshot: WorkflowSnapshot, session: CoordinationSession, planId: string): void {
+/**
+ * The workflow's merge lease, but only when it names THIS attempt (spec §E).
+ * The lease is a single workflow-wide top-level claim, so a holder match alone
+ * is not ownership: a lease that names another plan, or another source branch,
+ * belongs to a different attempt and must never be released or re-pinned by
+ * this one — the same plan can integrate more than once.
+ */
+function mergeLeaseOfAttempt(
+  snapshot: WorkflowSnapshot,
+  planId: string,
+  handoff: PlanHandoff,
+): IntegrationMergeLease | undefined {
+  const lease = snapshot.integration_merge_lease;
+  if (lease === undefined) return undefined;
+  if (lease.plan_id !== planId) return undefined;
+  if (lease.source_branch !== handoff.source_branch) return undefined;
+  return lease;
+}
+
+/** The workflow's merge lease is absent, or this coordinator's own for this attempt (spec §E). */
+function assertMergeLease(
+  snapshot: WorkflowSnapshot,
+  session: CoordinationSession,
+  planId: string,
+  handoff: PlanHandoff,
+): void {
   const lease = snapshot.integration_merge_lease;
   if (lease === undefined) return;
   if (lease.holder !== session.session_id) {
@@ -3137,6 +3161,18 @@ function assertMergeLease(snapshot: WorkflowSnapshot, session: CoordinationSessi
       "coordination.session-mismatch",
       `plan ${planId} integration is held by ${lease.holder}, not ${session.session_id}`,
       { plan_id: planId, holder: lease.holder, session_id: session.session_id },
+    );
+  }
+  if (lease.plan_id !== planId || lease.source_branch !== handoff.source_branch) {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `plan ${planId} merge lease claims plan ${lease.plan_id} source ${lease.source_branch}, not this attempt (${planId} source ${handoff.source_branch}) — a foreign claim is never reused or released`,
+      {
+        plan_id: planId,
+        holder_plan_id: lease.plan_id,
+        holder_source_branch: lease.source_branch,
+        source_branch: handoff.source_branch,
+      },
     );
   }
 }
@@ -3182,7 +3218,7 @@ async function mutateIntegrationStart(
       // must never proceed on a row nobody holds (spec §D/§E — both leases stay
       // until complete, so an absent one means ownership was lost).
       assertExecutionHolder(context.row, session.session_id, scope.planId, "integration-start");
-      assertMergeLease(context.snapshot, session, scope.planId);
+      assertMergeLease(context.snapshot, session, scope.planId, handoff);
       assertIntegrationCheckout(integrationAnchors(context.snapshot, scope.planId), scope.planId);
     },
     mutate: (context) => {
@@ -3272,7 +3308,7 @@ async function mutateIntegrationAccept(
       }
       assertEvidenceDigests(handoff);
       assertExecutionHolder(context.row, session.session_id, scope.planId, "integration-accept");
-      assertMergeLease(context.snapshot, session, scope.planId);
+      assertMergeLease(context.snapshot, session, scope.planId, handoff);
       const integration = requireIntegration(handoff, scope.planId);
       const anchors = integrationAnchors(context.snapshot, scope.planId);
       const checkout = assertIntegrationCheckout(anchors, scope.planId);
@@ -3347,10 +3383,13 @@ function completeRow(
   assertViolationFree(validateRowCoordination(nextCoordination), `plan ${scope.planId} coordination`);
   const nextRow: PlanRow = { ...context.row, status: "Done", coordination: nextCoordination };
   delete nextRow.execution_lease;
+  // Only this attempt's own claim is released: a lease naming another plan or
+  // another source branch is not this completion's to drop (spec §E).
+  const release = mergeLeaseOfAttempt(context.snapshot, scope.planId, handoff);
   return {
     row: nextRow,
     coordination: nextCoordination,
-    dropTopLevel: ["integration_merge_lease"],
+    dropTopLevel: release === undefined ? [] : ["integration_merge_lease"],
   };
 }
 
@@ -3398,7 +3437,7 @@ async function mutateComplete(
       assertEvidenceDigests(handoff);
       await assertFindingsClosed(scope, prepared, "complete");
       assertExecutionHolder(context.row, session.session_id, scope.planId, "complete");
-      assertMergeLease(context.snapshot, session, scope.planId);
+      assertMergeLease(context.snapshot, session, scope.planId, handoff);
       const integration = requireIntegration(handoff, scope.planId);
       const anchors = integrationAnchors(context.snapshot, scope.planId);
       const checkout = assertIntegrationCheckout(anchors, scope.planId);
@@ -3489,7 +3528,7 @@ async function classifyReconcile(
     // row, so the coordinator must still hold the execution lease it received
     // at accept (spec §E — nothing is replayed into ownership).
     assertExecutionHolder(context.row, session.session_id, planId, "reconcile");
-    assertMergeLease(context.snapshot, session, planId);
+    assertMergeLease(context.snapshot, session, planId, handoff);
     const merged = async (resultSha: string): Promise<ReconcilePlan> => {
       await assertFindingsClosed(scope, prepared, "complete");
       return {
@@ -3529,11 +3568,13 @@ async function classifyReconcile(
         };
         assertViolationFree(validateRowCoordination(nextCoordination), `plan ${planId} coordination`);
         // InReview and the coordinator's execution lease stay: only the
-        // abandoned attempt's artifacts are released.
+        // abandoned attempt's own artifacts are released (a lease naming
+        // another plan or branch is not this attempt's claim).
+        const release = mergeLeaseOfAttempt(current.snapshot, planId, currentHandoff);
         return {
           row: { ...current.row, coordination: nextCoordination },
           coordination: nextCoordination,
-          dropTopLevel: ["integration_merge_lease"],
+          dropTopLevel: release === undefined ? [] : ["integration_merge_lease"],
         };
       },
     };
