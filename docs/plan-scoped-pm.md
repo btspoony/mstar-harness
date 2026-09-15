@@ -2,18 +2,21 @@
 
 Drive **one** prepared plan from an independent terminal instead of the whole iteration. The scoped session binds a single plan through the CLI, runs the normal per-plan gates (implement → plan QC tri → QA gate), and stops at a durable **handoff**. `Done` and both lease releases stay with the iteration coordinator, which verifies the merge first.
 
-> **Status: interface skeleton.** The command forms on this page are the frozen interface. Executable detail — flags, exit codes, JSON envelopes, rejection codes and the examples that depend on them — is owned by the CLI reference and is completed together with the `mstar plan` section of [`docs/cli.md`](cli.md). No statement on this page was verified by running a CLI command.
+The scope rides on the `mstar plan` verb family. Thirteen verbs ship, and who may call them is the whole point of the feature:
+
+| Caller | Verbs | What it owns |
+|--------|-------|--------------|
+| Coordinator seat | `bind --coordinator`, `prepare` | one seat per workflow; registers the reviewed Assignment on the target row |
+| Fresh scoped entry | `bind --assignment` / `bind --workflow --plan` | the first claim of a prepared row |
+| Resumed session | `bind --resume`, `show` | reading the row, its scope and its allowed operations |
+| **Plan session writes** | `progress`, `residual-add`, `residual-close`, `handoff` | its own row and its own register bucket only |
+| **Coordinator transitions** | `accept`, `return`, `integration-start`, `integration-accept`, `complete`, `reconcile` | the lifecycle around the merge |
+
+Exact flags, JSON envelopes, rejection codes and exit codes live in the CLI reference — [`mstar-harness plan`](cli.md#mstar-harness-plan) — and are not repeated here. Session identity is never a flag: `--session <absolute-json>` names an engine-generated envelope that the engine re-checks against the snapshot inside its lock. There is no `--force`, no holder input, no takeover and no lease-release verb.
 
 ## Coordinator preparation
 
-The coordinator holds one seat per workflow and registers the reviewed Assignment on the target row before any plan session starts.
-
-```bash
-mstar plan bind --coordinator --workflow <workflow-id> [--harness <absolute-path>] [--json]
-mstar plan prepare --session <coordinator-session> --plan <plan-id> --assignment <absolute-md-path> --expect <revision> [--json]
-```
-
-`prepare` is preparation, not a second business plan: dependency and task readiness stay PM judgment. The prepared Assignment is immutable while the plan is claimed, so amending it means stopping the writable work, restoring the pinned file and re-preparing.
+The coordinator holds one seat per workflow. It runs `bind --coordinator` once, then `prepare` for the plan, which registers the reviewed Assignment on that row and releases its dependencies. That is preparation, not a second business plan: dependency and task readiness stay PM judgment. The prepared Assignment is immutable while the plan is claimed, so amending it means stopping the writable work, restoring the pinned file and re-preparing.
 
 ## Fresh scoped entry
 
@@ -25,47 +28,33 @@ mstar plan prepare --session <coordinator-session> --plan <plan-id> --assignment
 
 The first two are the fresh addressing forms and resolve the same registered Assignment; the third resumes an already bound session and is the only resume form. Duplicate flags, unknown flags, positional arguments, missing or blank values, mixed forms and a partial `--workflow`/`--plan` pair fail closed before any claim — they never widen to the whole-iteration route. No arguments at all keep the existing whole-iteration route.
 
-Each form binds once; the plan session is then re-read with `show` and constrained to the returned scope:
+Each form binds once, and the session then re-reads with `show` and is constrained to the returned scope: the loaded skills, the child Assignments, the backlog, the goal text and every writable path. A second fresh entry for the same plan fails with the active holder; only explicit `--resume` of the original session continues, and the scoped session never passes a session credential to a child.
 
-```bash
-mstar plan bind --assignment <absolute-md-path> [--json]
-mstar plan bind --workflow <workflow-id> --plan <plan-id> [--harness <absolute-path>] [--json]
-mstar plan bind --resume <absolute-session-json-path> [--json]
-mstar plan show --session <plan-session-json-path> [--json]
-mstar plan show --session <coordinator-session-json-path> --plan <plan-id> [--json]
-```
+## What a scoped session may not touch
 
-A second fresh entry for the same plan fails with the active holder; only explicit `--resume` of the original session continues, and the scoped session never passes a session credential to a child.
+A scoped session owns one **row**, not the workflow. It reads with `show` and writes only `progress`, `residual-add`, `residual-close` and `handoff`, plus its own bucket in the project register. Sibling rows, the snapshot's lifecycle anchors, the root `status.json` register, the shared knowledge/iteration indexes, the iteration PR and Phase 3–6 stay with the coordinator; no scoped verb performs a raw snapshot or register write.
 
-## Plan-local progress
+The writable surface, the field ownership and the lock rules are stated once, in [`skills/mstar-iteration/references/plan-scoped-pm.md`](../skills/mstar-iteration/references/plan-scoped-pm.md) and [`skills/mstar-artifacts/references/status-and-residuals.md`](../skills/mstar-artifacts/references/status-and-residuals.md).
 
-```bash
-mstar plan progress      --session <plan-session> --file <absolute-json-path> --expect <revision> [--json]
-mstar plan residual-add  --session <plan-session> --file <absolute-json-path> --expect <revision> --expect-register <version> [--json]
-mstar plan residual-close --session <plan-session> --entry <id> --note <text> --expect <revision> --expect-register <version> [--json]
-mstar plan handoff       --session <plan-session> --file <absolute-json-path> --expect <revision> [--json]
-```
+## Every mutation carries the revision it read
 
-`--expect` is the row revision read from `show`, not the snapshot schema version or a date. `handoff` is the scoped finish line: the row keeps `InReview` and its `execution_lease`, and the session stops there — including for the last unfinished plan. A plan session never writes `Done`.
+Every mutating verb takes the row revision it read from `show` — passed as `--expect`, and `0` for a row whose coordination record is still absent, never the snapshot schema version or a date — and the residual verbs additionally take the project register's byte version from the same call (`--expect-register`, the literal `absent` before that register exists). `bind` is the only verb without that precondition, because it reads, checks and claims atomically against current ownership.
 
-## Coordinator completion
+A write whose precondition no longer holds is refused instead of overwriting, so a stale retry refreshes with `show` first. Row revision and document byte versions are separate preconditions and never substitute for each other.
 
-```bash
-mstar plan accept             --session <coordinator-session> --plan <id> --handoff <id> --expect <revision> [--json]
-mstar plan return             --session <coordinator-session> --plan <id> --handoff <id> --reason <text> --expect <revision> [--json]
-mstar plan integration-start  --session <coordinator-session> --plan <id> --handoff <id> --expect <revision> [--json]
-mstar plan integration-accept --session <coordinator-session> --plan <id> --handoff <id> --expect <revision> [--json]
-mstar plan complete           --session <coordinator-session> --plan <id> --handoff <id> --expect <revision> [--json]
-mstar plan reconcile          --session <coordinator-session> --plan <id> --handoff <id> --expect <revision> [--json]
-```
+## Completion belongs to the coordinator
 
-Between `integration-start` and `integration-accept` the coordinator performs the pinned merge itself, as an argument-array Git call — never shell interpolation, no squash, no rebase, no branch-name merge:
+`handoff` is the scoped finish line: the row keeps `InReview` and its `execution_lease`, and the session stops there — including for the last unfinished plan. A plan session never writes `Done`, and a request to mark `Done` before the merge is rejected: completion comes from the coordinator's `complete` after a verified merge.
+
+The coordinator half is a fixed order: `accept` (execution ownership transfers, still no merge) → `integration-start` (pins the attempt and its base before Git runs) → the pinned merge → `integration-accept` (records the verified result, both leases still held) → `complete` (the single atomic write that sets `Done` and releases both leases). `return` hands a submitted or accepted handoff back to the plan owner with a reason.
+
+The merge is the coordinator's own Git action — an argument array, never shell interpolation — with no squash, no rebase and no branch-name merge:
 
 ```bash
 git -C <integration-worktree-path> merge --no-ff --no-edit <pinned-source-sha>
 ```
 
-`complete` is the single atomic write that sets `Done` and releases both leases. After a crash, `reconcile` observes Git ancestry and the recorded pins instead of trusting a success flag; merged but uncleaned state is not `Done`.
+`--handoff <id>` must be the row's live handoff id — the one `plan handoff` minted and `show` reports — and the row stays the authority, so a different id is refused rather than trusted. After a crash, `reconcile` observes Git ancestry and the recorded pins instead of trusting a success flag; merged but uncleaned state is not `Done`, and an interrupted attempt is classified (retry-ready, completed, or a refusal that preserves every lease) without a second merge.
 
 ## Transport is optional
 
@@ -73,6 +62,6 @@ The second terminal is transport, not a dependency. Any terminal works; Herdr or
 
 ## Reference
 
-- Executable flags, exit codes and JSON envelopes: [`docs/cli.md`](cli.md) — the `mstar plan` section is delivered by the CLI task.
-- Runtime route contract: `skills/mstar-iteration/references/plan-scoped-pm.md`.
-- Row/session/handoff fields and ownership: `skills/mstar-artifacts/references/status-and-residuals.md`.
+- Executable flags, exit codes, JSON envelopes and rejection codes: [`mstar-harness plan`](cli.md#mstar-harness-plan) in the CLI guide.
+- Runtime route contract, scope boundary and coordinator sequence: [`skills/mstar-iteration/references/plan-scoped-pm.md`](../skills/mstar-iteration/references/plan-scoped-pm.md).
+- Row/session/handoff fields and ownership: [`skills/mstar-artifacts/references/status-and-residuals.md`](../skills/mstar-artifacts/references/status-and-residuals.md).
