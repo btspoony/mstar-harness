@@ -30,7 +30,7 @@
  * through `get`).
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -859,6 +859,56 @@ describe("loadStoreModule", () => {
       await expect(loadStoreModule(filePath)).rejects.toThrow(/does not export an ArtifactStore/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// coordinated-writer — the protected-write boundary (spec C4)
+// ---------------------------------------------------------------------------
+
+describe("coordinated-writer — protected FsStore boundary", () => {
+  test("refuses a raw put/delete on every protected kind and leaves the bytes unchanged", async () => {
+    const root = tmpRoot("coordinated-writer-store-");
+    try {
+      const store = createFsStore(root);
+      const statusPath = join(root, "status.json");
+      const payload = { version: 2, updated_at: "2026-09-15", workflows: [] };
+      await authorizedStore(store).put({ kind: "status", key: "root", payload });
+      const before = readFileSync(statusPath);
+
+      await expect(
+        store.put({ kind: "status", key: "root", payload: { ...payload, updated_at: "2000-01-01" } }),
+      ).rejects.toMatchObject({ code: "coordination.direct-write-refused" });
+      await expect(store.delete({ kind: "status", key: "root" })).rejects.toMatchObject({
+        code: "coordination.direct-write-refused",
+      });
+      expect(readFileSync(statusPath)).toEqual(before);
+
+      // A snapshot/register direct write is refused too — and creates nothing.
+      for (const ref of [{ kind: "snapshot", key: "wf-1" }, { kind: "residuals", key: "p1" }] as const) {
+        await expect(store.put({ ...ref, payload: { probe: true } })).rejects.toMatchObject({
+          code: "coordination.direct-write-refused",
+        });
+        await expect(store.delete(ref)).rejects.toMatchObject({ code: "coordination.direct-write-refused" });
+      }
+      expect(existsSync(join(root, "workflows", "wf-1", "snapshot.json"))).toBe(false);
+      expect(existsSync(join(root, "projects", "p1", "residuals.json"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("accepts the same write from inside the authorized context", async () => {
+    const root = tmpRoot("coordinated-writer-store-authorized-");
+    try {
+      const store = createFsStore(root);
+      await withProtectedWrite(join(root, "status.json"), "put", () =>
+        store.put({ kind: "status", key: "root", payload: { version: 2, updated_at: "2026-09-15", workflows: [] } }),
+      );
+      expect(existsSync(join(root, "status.json"))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });

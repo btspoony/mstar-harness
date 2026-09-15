@@ -37,7 +37,7 @@ import { dirname, join, resolve, sep } from "node:path";
 import { readJson, SEVERITY_ORDER, type GateResult, type Severity, type ValidationResult } from "./core.js";
 import { resolveIterationDir } from "./path.js";
 import { withStatusWriteLock } from "./lease.js";
-import { withProtectedWrite } from "./coordination-write.js";
+import { CoordinationError, isPlainObject, withProtectedWrite } from "./coordination-write.js";
 import { assertFsStorePath, getArtifactStore } from "./store.js";
 import { parseEnforcementFlag, type EnforcementFlag } from "./dispatch.js";
 import { loadMstarc } from "./mstarc.js";
@@ -719,6 +719,22 @@ export async function registerWorkflowEntryLocked(statusPath: string, entry: Wor
   }
   const existing = doc.workflows.findIndex((wf) => wf.id === entry.id);
   if (existing >= 0) {
+    // A register call must not re-point an existing COORDINATED workflow
+    // (spec §C4): its snapshot is the coordination authority, so replacing the
+    // entry's identity would detach the coordination record from the file it
+    // lives in. Uncoordinated entries keep the idempotent upsert below.
+    const prior = doc.workflows[existing];
+    const priorCoordination = readRegisteredSnapshot(harnessDir, prior)?.coordination;
+    if (isPlainObject(priorCoordination) && isPlainObject(priorCoordination.coordinator)) {
+      const drifted = (["dir", "type", "started_at"] as const).filter((field) => prior[field] !== entry[field]);
+      if (drifted.length > 0) {
+        throw new CoordinationError(
+          "coordination.invalid-transition",
+          `refusing to re-register workflow ${JSON.stringify(entry.id)}: it is coordinated and its ${drifted.join("/")} must not change`,
+          { workflow_id: entry.id, fields: [...drifted] },
+        );
+      }
+    }
     doc.workflows[existing] = entry;
   } else {
     doc.workflows.push(entry);
@@ -730,6 +746,24 @@ export async function registerWorkflowEntryLocked(statusPath: string, entry: Wor
   }
   await withProtectedWrite(statusPath, "put", () => store.put({ kind: "status", key: "root", payload: doc }));
   return doc;
+}
+
+/**
+ * Read the stored snapshot of a registered workflow entry (spec §C4). Called
+ * only in root-locked sections, so the registered set cannot move underneath
+ * the caller. A missing or malformed snapshot yields `undefined` — the root
+ * readers' existing tolerant behaviour is preserved.
+ */
+function readRegisteredSnapshot(harnessDir: string, entry: WorkflowEntry): Record<string, unknown> | undefined {
+  if (typeof entry.dir !== "string") return undefined;
+  const snapshotPath = join(harnessDir, entry.dir, WORKFLOW_SNAPSHOT_FILE);
+  if (!existsSync(snapshotPath)) return undefined;
+  try {
+    const parsed = JSON.parse(readFileSync(snapshotPath, "utf8")) as unknown;
+    return isPlainObject(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -790,6 +824,24 @@ export async function unregisterWorkflow(root: string, id: string): Promise<Stat
     if (!Array.isArray(doc.workflows)) {
       throw new Error(
         "refusing to modify status.json: workflows must be an array \u2014 a v1 root must be migrated first (run `mstar migrate`)",
+      );
+    }
+    // Unregistering a RUNNING coordinated workflow is refused (spec §C4): its
+    // coordinator still owns the plan rows and leases, so the root entry must
+    // not be removed underneath it. Terminal coordinated workflows are
+    // unaffected. An absent id stays the idempotent no-op below.
+    const target = doc.workflows.find((wf) => wf.id === id);
+    const targetSnapshot = target === undefined ? undefined : readRegisteredSnapshot(harnessDir, target);
+    const targetCoordination = targetSnapshot?.coordination;
+    if (
+      isPlainObject(targetCoordination) &&
+      isPlainObject(targetCoordination.coordinator) &&
+      targetSnapshot?.status === "running"
+    ) {
+      throw new CoordinationError(
+        "coordination.invalid-transition",
+        `refusing to unregister workflow ${JSON.stringify(id)}: it is coordinated and still running`,
+        { workflow_id: id },
       );
     }
     const remaining = doc.workflows.filter((wf) => wf.id !== id);

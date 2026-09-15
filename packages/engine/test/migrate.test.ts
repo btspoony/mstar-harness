@@ -41,7 +41,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { createFsStore, setArtifactStore } from "../src/store.js";
 import { readJson, writeJson } from "../src/core.js";
 import { parseCompassFrontmatterText } from "../src/iteration.js";
@@ -1166,6 +1166,58 @@ describe("cross-class lifecycle-id collisions", () => {
     const root = fixtureTree();
     try {
       expect(() => migrateHarnessTree(root, { projectId: "v3.0.0" })).toThrow(/lifecycle id collision/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// coordinated-writer — the migration is additive-only (spec C4)
+// ---------------------------------------------------------------------------
+
+describe("coordinated-writer — migration is additive-only", () => {
+  test("accepts a byte-equivalent snapshot already on disk and still commits the root", async () => {
+    const root = fixtureTree();
+    try {
+      const plan = migrateHarnessTree(root);
+      const first = plan.snapshots[0]!;
+      const snapshotDir = dirname(join(plan.workflowDir, relative("workflows", first.file)));
+      // A previous run of the same deterministic plan left this snapshot behind.
+      writeJson(join(snapshotDir, WORKFLOW_SNAPSHOT_FILE), first.data);
+
+      const result = await applyMigratePlan(plan);
+      expect(result.applied).toBe(true);
+      expect(readJson(join(root, "status.json")).version).toBe(2);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("refuses a foreign register at the planned destination and leaves the v1 root intact", async () => {
+    const root = fixtureTree();
+    try {
+      // The shared fixture carries no open residuals; seed one so the plan
+      // has a project register to write (the register is a protected doc).
+      const v1Path = join(root, "status.json");
+      const v1 = readJson(v1Path);
+      v1.residual_findings = { "00000814-dsh-fallbacks-integration": [residual()] };
+      writeJson(v1Path, v1);
+
+      const plan = migrateHarnessTree(root);
+      const register = plan.register;
+      expect(register).not.toBeNull();
+      const registerPath = join(plan.projectDir, relative("projects", register!.file));
+      mkdirSync(dirname(registerPath), { recursive: true });
+      const foreign = '{\n  "entries": {\n    "foreign": []\n  }\n}\n';
+      writeFileSync(registerPath, foreign, "utf8");
+      const rootBefore = readFileSync(join(root, "status.json"), "utf8");
+
+      await expect(applyMigratePlan(plan)).rejects.toThrow(/already exists with different content/);
+
+      // The commit point never ran: the v1 root and the foreign bytes survive.
+      expect(readFileSync(join(root, "status.json"), "utf8")).toBe(rootBefore);
+      expect(readFileSync(registerPath, "utf8")).toBe(foreign);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

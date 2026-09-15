@@ -31,14 +31,18 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { readJson, writeJson, type ValidationResult } from "./core.js";
+import type { GateResult, ValidationResult } from "./core.js";
 import { loadMstarc, type MstarcConfig } from "./mstarc.js";
-// Call-time-only cycle with project.ts (project.ts → status.ts → path.ts):
-// none of the cycle members dereferences the other's bindings during module
-// evaluation — the constants are used only inside scaffoldHarness — so the
-// ESM live-binding cycle is safe (same pattern as the status.ts ↔ workflow.ts
-// cycle documented in status.ts).
-import { _DEFAULT_PROJECT, PROJECT_REGISTER_FILE, PROJECT_ROADMAP_FILE } from "./project.js";
+// Call-time-only cycles with project.ts / status.ts (both → path.ts): none of
+// the cycle members dereferences the other's bindings during module
+// evaluation — the constants and the validators are used only inside
+// scaffoldHarness — so the ESM live-binding cycle is safe (same pattern as
+// the status.ts ↔ workflow.ts cycle documented in status.ts).
+import { _DEFAULT_PROJECT, PROJECT_REGISTER_FILE, PROJECT_ROADMAP_FILE, validateProjectRegister } from "./project.js";
+import { validateStatusV2, type StatusV2Doc } from "./status.js";
+import { withStatusWriteLock } from "./lease.js";
+import { assertFsStorePath, getArtifactStore, type ArtifactRef, type ArtifactStore } from "./store.js";
+import { CoordinationError, isPlainObject, readArtifactBytes, withProtectedWrite } from "./coordination-write.js";
 
 /**
  * Options for `resolveHarnessDir`.
@@ -464,20 +468,36 @@ const EMPTY_REGISTER_TEMPLATE: Record<string, unknown> = {
  * `.mstarc`-declared `project_dir`) with a valid `roadmap.md` + empty
  * `residuals.json` (plan-conventions § 初始化 Plan 目录;
  * mstar-project-governance § `_default` 回退). Idempotent: an existing
- * non-empty `status.json`, `roadmap.md`, or `residuals.json` is never
- * clobbered; re-running on an initialized tree only creates missing
- * pieces. Returns the absolute resolved harness dir.
+ * `roadmap.md` is never clobbered, and re-running on an initialized tree only
+ * creates missing pieces. Returns the absolute resolved harness dir.
+ *
+ * The two coordination documents (`status.json`, `_default/residuals.json`)
+ * are written create-only through the active `ArtifactStore` inside the
+ * private protected-write context, serialized on the target's
+ * `withStatusWriteLock` (spec §C4): a concurrent writer's bytes are never
+ * replaced, and an existing empty/malformed document fails validation instead
+ * of being silently reinitialized. Callers whose target root differs from the
+ * active store's root MUST `setArtifactStore(createFsStore(<harnessRoot>))`
+ * first (same contract as the other routed writers). No scoped session or
+ * coordination record is created here.
  */
-export function scaffoldHarness(root: string): string {
+export async function scaffoldHarness(root: string): Promise<string> {
   const { harnessDir, projectDir } = resolveScaffoldDirs(root);
   for (const dir of SCAFFOLD_DIRS) mkdirSync(join(harnessDir, dir), { recursive: true });
-  const statusPath = join(harnessDir, "status.json");
- // readJson treats a missing file as `{}`, so a missing (or empty) status.json
- // is replaced with the empty template; anything with content is preserved.
-  if (Object.keys(readJson(statusPath)).length === 0) writeJson(statusPath, EMPTY_STATUS_TEMPLATE);
- // v3 project layer: `projects/_default/` is scaffolded (the fallback
- // project for project-less flows); other project ids and `workflows/`
- // stay on-demand (engine writers create them).
+  const store = getArtifactStore();
+  await scaffoldProtectedDoc(
+    store,
+    { kind: "status", key: "root" },
+    join(harnessDir, "status.json"),
+    EMPTY_STATUS_TEMPLATE,
+    (payload) =>
+      isPlainObject(payload)
+        ? validateStatusV2(payload as StatusV2Doc, { harnessDir })
+        : { ok: false, severity: "high", code: "scaffold.status-shape", message: "status.json must be a JSON object" },
+  );
+// v3 project layer: `projects/_default/` is scaffolded (the fallback
+// project for project-less flows); other project ids and `workflows/`
+// stay on-demand (engine writers create them).
   const defaultProjectDir = join(projectDir, _DEFAULT_PROJECT);
   mkdirSync(defaultProjectDir, { recursive: true });
   const roadmapPath = join(defaultProjectDir, PROJECT_ROADMAP_FILE);
@@ -485,9 +505,55 @@ export function scaffoldHarness(root: string): string {
     const created = new Date().toISOString().slice(0, 10);
     writeFileSync(roadmapPath, ROADMAP_TEMPLATE.replace("{created_at}", created), "utf8");
   }
-  const registerPath = join(defaultProjectDir, PROJECT_REGISTER_FILE);
-  if (Object.keys(readJson(registerPath)).length === 0) writeJson(registerPath, EMPTY_REGISTER_TEMPLATE);
+  await scaffoldProtectedDoc(
+    store,
+    { kind: "residuals", key: _DEFAULT_PROJECT },
+    join(defaultProjectDir, PROJECT_REGISTER_FILE),
+    EMPTY_REGISTER_TEMPLATE,
+    (payload) => validateProjectRegister(payload),
+  );
   return harnessDir;
+}
+
+/**
+ * Create one bootstrap document create-only (spec §C4): the target is written
+ * from `template` ONLY when it is absent. Existing state is never replaced —
+ * an existing empty or malformed document fails validation instead of being
+ * silently reinitialized, so a concurrent writer's bytes always survive.
+ *
+ * The write is serialized on the target's `withStatusWriteLock` and runs
+ * inside the private protected-write context, because `status.json` /
+ * `residuals.json` are coordination documents the `FsStore` boundary refuses
+ * to write outside it. No scoped session or coordination record is created.
+ */
+async function scaffoldProtectedDoc(
+  store: ArtifactStore,
+  ref: ArtifactRef,
+  target: string,
+  template: Record<string, unknown>,
+  validate: (payload: unknown) => GateResult,
+): Promise<void> {
+  assertFsStorePath(store, ref, target);
+// The lockdir lands inside the target's dirname — create it up front so a
+// first-time harness/project dir does not fail acquisition with ENOENT.
+  mkdirSync(dirname(target), { recursive: true });
+  await withStatusWriteLock(target, async () => {
+    const existing = readArtifactBytes(target);
+    if (existing === undefined) {
+      await withProtectedWrite(target, "put", () => store.put({ ...ref, payload: template }));
+      return;
+    }
+    const gate = validate(existing.payload);
+    if (!gate.ok) {
+      throw new CoordinationError(
+        "coordination.invalid-input",
+        `refusing to scaffold ${target}: the document already exists but is invalid (${gate.violations
+          .map((violation) => violation.message)
+          .join("; ")}) — scaffold never replaces existing state`,
+        { path: target },
+      );
+    }
+  });
 }
 
 /**

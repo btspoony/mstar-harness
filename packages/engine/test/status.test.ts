@@ -1221,3 +1221,95 @@ describe("resolveMstarcEnforcement / resolveRepoEnforcement — `.mstarc` [confi
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// coordinated-writer — coordinated root-register refusals (spec C4)
+// ---------------------------------------------------------------------------
+
+describe("coordinated-writer — coordinated root-register refusals", () => {
+  const COORDINATED_ID = "wf-coordinated";
+  const COORDINATED_SNAPSHOT = {
+    schema_version: 1,
+    id: COORDINATED_ID,
+    type: "plan",
+    status: "running",
+    started_at: "2026-09-15T00:00:00Z",
+    updated_at: "2026-09-15",
+    plans: [],
+    coordination: {
+      coordinator: { session_id: "s-1", session_file: "/abs/sessions/s-1.json", bound_at: "2026-09-15T00:00:00Z" },
+    },
+  };
+  const COORDINATED_ENTRY: WorkflowEntry = {
+    id: COORDINATED_ID,
+    type: "plan",
+    started_at: "2026-09-15T00:00:00Z",
+    dir: `workflows/${COORDINATED_ID}`,
+  };
+
+  async function registeredCoordinatedWorkflow(root: string): Promise<void> {
+    await writeWorkflowSnapshot(COORDINATED_SNAPSHOT as never, join(root, "workflows", COORDINATED_ID));
+    await registerWorkflow(join(root, "status.json"), COORDINATED_ENTRY);
+  }
+
+  test("refuses to unregister a running coordinated workflow and leaves the root bytes unchanged", async () => {
+    const root = harnessRoot("coordinated-writer-status-unregister-");
+    try {
+      await registeredCoordinatedWorkflow(root);
+      const statusPath = join(root, "status.json");
+      const before = readFileSync(statusPath, "utf8");
+      await expect(unregisterWorkflow(join(root, "status.json"), COORDINATED_ID)).rejects.toMatchObject({
+        code: "coordination.invalid-transition",
+      });
+      expect(readFileSync(statusPath, "utf8")).toBe(before);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("refuses to re-point a coordinated workflow entry and leaves the root bytes unchanged", async () => {
+    const root = harnessRoot("coordinated-writer-status-repoint-");
+    try {
+      await registeredCoordinatedWorkflow(root);
+      const statusPath = join(root, "status.json");
+      const before = readFileSync(statusPath, "utf8");
+      await expect(
+        registerWorkflow(join(root, "status.json"), { ...COORDINATED_ENTRY, dir: "workflows/moved" }),
+      ).rejects.toMatchObject({ code: "coordination.invalid-transition" });
+      expect(readFileSync(statusPath, "utf8")).toBe(before);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("still unregisters and re-registers an uncoordinated workflow", async () => {
+    const root = harnessRoot("coordinated-writer-status-plain-");
+    try {
+      const entry: WorkflowEntry = {
+        id: "wf-plain",
+        type: "plan",
+        started_at: "2026-09-15T00:00:00Z",
+        dir: "workflows/wf-plain",
+      };
+      await writeWorkflowSnapshot(
+        {
+          schema_version: 1,
+          id: "wf-plain",
+          type: "plan",
+          status: "running",
+          started_at: "2026-09-15T00:00:00Z",
+          updated_at: "2026-09-15",
+          plans: [],
+        } as never,
+        join(root, "workflows", "wf-plain"),
+      );
+      const statusPath = join(root, "status.json");
+      await registerWorkflow(statusPath, entry);
+      await registerWorkflow(statusPath, entry);
+      await unregisterWorkflow(statusPath, "wf-plain");
+      expect(existsSync(join(root, "status.json"))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

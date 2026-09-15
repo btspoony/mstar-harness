@@ -22,6 +22,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as core from "../src/core.js";
 import { createFsStore, setArtifactStore } from "../src/store.js";
+import { writeWorkflowSnapshot } from "../src/workflow.js";
 import {
   PROJECT_REGISTER_FILE,
   appendProjectRegisterEntries,
@@ -420,6 +421,91 @@ describe("fail-loud path agreement  — register writers vs the active store roo
     } finally {
       rmSync(root, { recursive: true, force: true });
       rmSync(other, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// coordinated-writer — a coordinated plan key is refused before the
+// next-free-key loop / the in-place close (spec C4)
+// ---------------------------------------------------------------------------
+
+describe("coordinated-writer — the legacy backlog helpers refuse coordinated plan keys", () => {
+  /**
+   * Register one coordinated workflow whose row id is `planId`, using the
+   * validated writers so the fixtures match what the guard actually reads:
+   * root register -> snapshot row carrying a `coordination` block.
+   */
+  async function seedCoordinatedWorkflow(root: string, planId: string): Promise<void> {
+    const workflowId = "wf-coordinated";
+    await writeWorkflowSnapshot(
+      {
+        schema_version: 1,
+        id: workflowId,
+        type: "plan",
+        status: "running",
+        started_at: "2026-09-15T00:00:00Z",
+        updated_at: "2026-09-15",
+        plans: [{ id: planId, title: "Coordinated plan", file: "plans/plan.md", status: "Todo", coordination: { revision: 1 } }],
+      } as never,
+      join(root, "workflows", workflowId),
+    );
+    core.writeJson(join(root, "status.json"), {
+      version: 2,
+      updated_at: "2026-09-15",
+      workflows: [{ id: workflowId, type: "plan", started_at: "2026-09-15T00:00:00Z", dir: `workflows/${workflowId}` }],
+    });
+  }
+
+  test("append onto a coordinated plan key refuses and leaves the register bytes unchanged", async () => {
+    const { root, dir } = harnessProject("coordinated-writer-append-");
+    try {
+      await seedCoordinatedWorkflow(root, "plan-a");
+      const content = seedRegister(dir);
+      await expect(
+        appendProjectRegisterEntries({ projectDir: dir, basePlanKey: "plan-a", entries: [residualEntry()] as never }),
+      ).rejects.toMatchObject({ code: "coordination.scoped-writer-required" });
+      expect(readFileSync(registerPath(dir), "utf8")).toBe(content);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("close on a coordinated plan key refuses and leaves the register bytes unchanged", async () => {
+    const { root, dir } = harnessProject("coordinated-writer-close-");
+    try {
+      await seedCoordinatedWorkflow(root, "plan-a");
+      const doc = {
+        entries: { "plan-a": [residualEntry({ id: "R-9", source_plan: "plan-a" })] },
+      };
+      const content = `${JSON.stringify(doc, null, 2)}\n`;
+      writeFileSync(registerPath(dir), content, "utf8");
+      await expect(
+        closeProjectRegisterEntry({
+          projectDir: dir,
+          planKey: "plan-a",
+          entryId: "R-9",
+          closureNote: "should never land",
+        }),
+      ).rejects.toMatchObject({ code: "coordination.scoped-writer-required" });
+      expect(readFileSync(registerPath(dir), "utf8")).toBe(content);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("an uncoordinated base key is still appended and bumped normally", async () => {
+    const { root, dir } = harnessProject("coordinated-writer-uncoordinated-");
+    try {
+      await seedCoordinatedWorkflow(root, "plan-a");
+      const appended = await appendProjectRegisterEntries({
+        projectDir: dir,
+        basePlanKey: "plan-z",
+        entries: [residualEntry()] as never,
+      });
+      expect(appended.key).toBe("plan-z");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });
