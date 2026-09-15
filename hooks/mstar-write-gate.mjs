@@ -11,16 +11,16 @@ import { readFileSync as readFileSync2, statSync } from "node:fs";
 import { dirname as dirname2, isAbsolute, join as join2, relative, resolve as resolve2 } from "node:path";
 import { existsSync as existsSync8, mkdirSync as mkdirSync5, readdirSync as readdirSync5, readFileSync as readFileSync8, realpathSync as realpathSync3, statSync as statSync3, writeFileSync as writeFileSync3 } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { basename as basename4, dirname as dirname5, isAbsolute as isAbsolute6, join as join9, relative as relative2, resolve as resolve8 } from "node:path";
+import { basename as basename5, dirname as dirname6, isAbsolute as isAbsolute6, join as join10, relative as relative2, resolve as resolve8 } from "node:path";
 import { existsSync as existsSync5, readFileSync as readFileSync5, readdirSync as readdirSync2, realpathSync as realpathSync2 } from "node:fs";
-import { dirname as dirname4, join as join6, resolve as resolve6, sep as sep2 } from "node:path";
+import { dirname as dirname5, join as join7, resolve as resolve6, sep as sep2 } from "node:path";
 import { dirname as dirname3, isAbsolute as isAbsolute2, join as join3, resolve as resolve3 } from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
-import { isAbsolute as isAbsolute3, resolve as resolve4 } from "node:path";
-import { isAbsolute as isAbsolute5, join as join5 } from "node:path";
+import { basename as basename2, dirname as dirname4, isAbsolute as isAbsolute3, join as join4, resolve as resolve4 } from "node:path";
+import { isAbsolute as isAbsolute5, join as join6 } from "node:path";
 import { existsSync as existsSync11, statSync as statSync5 } from "node:fs";
-import { basename as basename7, dirname as dirname9, join as join13, relative as relative4, resolve as resolve11 } from "node:path";
+import { basename as basename8, dirname as dirname10, join as join14, relative as relative4, resolve as resolve11 } from "node:path";
 var SEVERITY_ORDER = ["critical", "high", "medium", "low", "nit"];
 function readJson(filePath) {
   if (!existsSync(filePath))
@@ -777,7 +777,7 @@ function validateStatusV2(docOrPath, opts = {}) {
   if (typeof docOrPath === "string") {
     try {
       doc = readJson(docOrPath);
-      harnessDir = dirname4(resolve6(docOrPath));
+      harnessDir = dirname5(resolve6(docOrPath));
     } catch (error) {
       return {
         ok: false,
@@ -844,8 +844,8 @@ function validateStatusV2(docOrPath, opts = {}) {
     for (const entry of doc.workflows) {
       if (!isPlainObject2(entry) || typeof entry.dir !== "string")
         continue;
-      const relSnapshot = join6(entry.dir, WORKFLOW_SNAPSHOT_FILE);
-      const snapshotPath = join6(harnessDir, relSnapshot);
+      const relSnapshot = join7(entry.dir, WORKFLOW_SNAPSHOT_FILE);
+      const snapshotPath = join7(harnessDir, relSnapshot);
       const label = typeof entry.id === "string" ? entry.id : relSnapshot;
       let physical;
       try {
@@ -892,7 +892,7 @@ function resolveCompassEnforcement(harnessDir) {
   for (const entry of entries) {
     if (!entry.isDirectory())
       continue;
-    const compassPath = join6(iterationsDir, entry.name, "delivery-compass.md");
+    const compassPath = join7(iterationsDir, entry.name, "delivery-compass.md");
     if (!existsSync5(compassPath))
       continue;
     let content;
@@ -913,7 +913,7 @@ function resolveCompassEnforcement(harnessDir) {
 }
 function resolveMstarcEnforcement(harnessDir) {
   const dir = resolve6(harnessDir);
-  const rc = loadMstarc(dir, dirname4(dir));
+  const rc = loadMstarc(dir, dirname5(dir));
   const value = rc?.config.enforcement;
   if (value === "hard")
     return { hard: true, source: "mstarc" };
@@ -993,13 +993,13 @@ function resolveHarnessDir(startDir = process.cwd(), opts = {}) {
   for (;; ) {
     if (!isAtOrBelow2(dir, boundary))
       return null;
-    for (const candidate of [join9(dir, ".mstar"), join9(dir, ".agents"), join9(dir, ".plans"), join9(dir, "plans")]) {
+    for (const candidate of [join10(dir, ".mstar"), join10(dir, ".agents"), join10(dir, ".plans"), join10(dir, "plans")]) {
       if (isDirectory(candidate))
         return candidate;
     }
     if (dir === boundary)
       return null;
-    const parent = dirname5(dir);
+    const parent = dirname6(dir);
     if (parent === dir)
       return null;
     dir = parent;
@@ -1017,7 +1017,7 @@ function defaultWorkspaceRoot(startDir) {
     let boundary = startDir;
     for (const segment of cdup.split(/[\\/]/)) {
       if (segment && segment !== ".")
-        boundary = dirname5(boundary);
+        boundary = dirname6(boundary);
     }
     return resolve8(boundary);
   } catch {}
@@ -1029,7 +1029,7 @@ function isAtOrBelow2(dir, root) {
 }
 function mstarcDirOverride(harnessDir, key) {
   const dir = resolve8(harnessDir);
-  const rc = loadMstarc(dir, dirname5(dir));
+  const rc = loadMstarc(dir, dirname6(dir));
   const declared = rc?.config[key];
   return declared ? resolve8(rc.dir, declared) : null;
 }
@@ -1037,7 +1037,7 @@ function resolveIterationDir(harnessDir) {
   const declared = mstarcDirOverride(harnessDir, "iterationDir");
   if (declared !== null)
     return declared;
-  return join9(resolve8(harnessDir), "iterations");
+  return join10(resolve8(harnessDir), "iterations");
 }
 function resolveHarnessSubdir(startDir, opts, key, fallback) {
   const harness = resolveHarnessDir(startDir, opts);
@@ -1045,7 +1045,7 @@ function resolveHarnessSubdir(startDir, opts, key, fallback) {
     throw new Error(`harness dir not found from ${resolve8(startDir)} — cannot resolve the ${fallback} dir (run \`mstar harness scaffold\`, pass opts.harnessDir, or set MSTAR_HARNESS_DIR)`);
   }
   const declared = mstarcDirOverride(harness, key);
-  return declared !== null ? declared : join9(resolve8(harness), fallback);
+  return declared !== null ? declared : join10(resolve8(harness), fallback);
 }
 function resolveWorkflowDir(startDir = process.cwd(), opts = {}) {
   return resolveHarnessSubdir(startDir, opts, "workflowDir", "workflows");
@@ -1092,7 +1092,7 @@ var SNAPSHOT_FILE = "snapshot.json";
 var REGISTER_FILE = "residuals.json";
 function hasEntry(dir, name) {
   try {
-    statSync5(join13(dir, name));
+    statSync5(join14(dir, name));
     return true;
   } catch {
     return false;
@@ -1114,7 +1114,7 @@ function resolveHarnessRootOf(target) {
   for (;; ) {
     if (hasHarnessRootMarkers(dir))
       return dir;
-    const parent = dirname9(dir);
+    const parent = dirname10(dir);
     if (parent === dir)
       return null;
     dir = parent;
@@ -1124,7 +1124,7 @@ function harnessDocKindOfTarget(targetPath) {
   if (typeof targetPath !== "string" || targetPath.trim() === "")
     return null;
   const resolved = resolve11(targetPath);
-  const name = basename7(resolved);
+  const name = basename8(resolved);
   if (name !== STATUS_FILE && name !== SNAPSHOT_FILE && name !== REGISTER_FILE)
     return null;
   const classify = (harnessDir2) => {
@@ -1137,8 +1137,8 @@ function harnessDocKindOfTarget(targetPath) {
       workflowDir = resolveWorkflowDir(harnessDir2, { harnessDir: harnessDir2 });
       projectDir = resolveProjectDir(harnessDir2, { harnessDir: harnessDir2 });
     } catch {
-      workflowDir = join13(harnessDir2, "workflows");
-      projectDir = join13(harnessDir2, "projects");
+      workflowDir = join14(harnessDir2, "workflows");
+      projectDir = join14(harnessDir2, "projects");
     }
     if (name === SNAPSHOT_FILE && /^[^/]+\/snapshot\.json$/.test(relative4(workflowDir, resolved))) {
       return { harnessDir: harnessDir2, kind: "snapshot" };
@@ -1148,8 +1148,8 @@ function harnessDocKindOfTarget(targetPath) {
     }
     return null;
   };
-  const probeRoot = resolveHarnessRootOf(dirname9(resolved));
-  const harnessDir = probeRoot ?? resolveHarnessDir(dirname9(resolved));
+  const probeRoot = resolveHarnessRootOf(dirname10(resolved));
+  const harnessDir = probeRoot ?? resolveHarnessDir(dirname10(resolved));
   if (harnessDir === null)
     return null;
   const classified = classify(harnessDir);
@@ -1157,7 +1157,7 @@ function harnessDocKindOfTarget(targetPath) {
     return classified;
   if (probeRoot === null)
     return null;
-  const fallbackDir = resolveHarnessDir(dirname9(resolved));
+  const fallbackDir = resolveHarnessDir(dirname10(resolved));
   if (fallbackDir === null || fallbackDir === probeRoot)
     return null;
   return classify(fallbackDir);
@@ -1171,7 +1171,7 @@ function oversizedViolation(filePath) {
     ok: false,
     severity: "high",
     code: "status.oversized",
-    message: `${basename7(filePath)} exceeds the ${MAX_STATUS_CONTENT_LENGTH}-byte (2 MiB) coordination-document validation budget — repair out of band or disable for this session with MSTAR_WRITE_GATE=off`
+    message: `${basename8(filePath)} exceeds the ${MAX_STATUS_CONTENT_LENGTH}-byte (2 MiB) coordination-document validation budget — repair out of band or disable for this session with MSTAR_WRITE_GATE=off`
   };
 }
 function validateStatusWriteDoc(content, filePath, kind, options = {}) {
@@ -1199,7 +1199,7 @@ function validateStatusWriteDoc(content, filePath, kind, options = {}) {
           ok: false,
           severity: "high",
           code: "status.invalid-json",
-          message: `${basename7(filePath)} content must be a JSON object`
+          message: `${basename8(filePath)} content must be a JSON object`
         }
       ];
     }
