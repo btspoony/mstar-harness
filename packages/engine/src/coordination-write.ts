@@ -48,7 +48,6 @@ export const COORDINATION_ERROR_CODES = [
   "coordination.session-role",
   "coordination.version-conflict",
   "coordination.expected-version-required",
-  "coordination.register-version-conflict",
   "coordination.invalid-transition",
   "coordination.invalid-input",
   "coordination.forbidden-field",

@@ -1431,3 +1431,186 @@ describe("git-reconciliation", () => {
     );
   }, 30000);
 });
+
+/**
+ * Regression cases for the merged-state seam review (fix round 2). Each title
+ * carries the finding id it pins, so a reverted fix turns exactly that case red.
+ */
+describe("seam-regressions", () => {
+  /** A prepared plan whose bound session holds the row's execution lease. */
+  async function claimedPlan(): Promise<GitFixture> {
+    const fixture = gitFixture();
+    await preparePlan(fixture, PLAN_ID);
+    await bindPlan(fixture, PLAN_ID);
+    claimExecutionLease(fixture, PLAN_ID, fixture.planSession);
+    return fixture;
+  }
+
+  /** Drop the execution lease from a row the way a released owner leaves it. */
+  function dropLease(fixture: Fixture, planId: string): void {
+    updatePlanRow(fixture, planId, (row) => {
+      const { execution_lease, ...rest } = row;
+      return rest;
+    });
+  }
+
+  test("prepare refuses a row that still carries an execution lease (T1-D-005)", async () => {
+    const fixture = makeFixture();
+    await ensureCoordinator(fixture);
+    updatePlanRow(fixture, PLAN_ID, (row) => {
+      const claimed = claimLease(row as never, "session-held", {
+        worktree_path: fixture.worktreePath,
+        working_branch: "feature/plan-a",
+      });
+      if (!claimed.ok) throw new Error("claim failed");
+      return claimed.row;
+    });
+
+    const before = readFileSync(fixture.snapshotPath);
+    expect(await errorCodeOf(() => preparePlan(fixture, PLAN_ID))).toBe("coordination.duplicate-holder");
+    // The row is still unprepared: the refusal never sealed a second owner.
+    expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
+    const row = planRowOf(fixture, PLAN_ID);
+    expect(row.coordination).toBeUndefined();
+    expect(leaseHolder(row)).toBe("session-held");
+  });
+
+  test("a plan-owned write needs the row lease, while show and resume stay readable (T1-D-007)", async () => {
+    const fixture = await claimedPlan();
+    dropLease(fixture, PLAN_ID);
+
+    // Reads stay available: a completed row carries no lease yet must report.
+    const view = await readPlanCoordination(fixture.planSession, PLAN_ID, fixture.root);
+    expect(Array.isArray(view.allowed_operations)).toBe(true);
+
+    const before = readFileSync(fixture.snapshotPath);
+    const code = await errorCodeOf(() =>
+      mutatePlanCoordination({
+        sessionPath: fixture.planSession,
+        planId: PLAN_ID,
+        expectedRevision: view.revision,
+        operation: {
+          kind: "residual-add",
+          entries: [residual("r-lease")] as never,
+          expectedRegisterVersion: view.register_version,
+        },
+      }),
+    );
+    expect(["coordination.invalid-transition", "coordination.session-mismatch"]).toContain(code);
+    expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
+    expect(existsSync(fixture.registerPath)).toBe(false);
+  });
+
+  test("accept refuses instead of no-op'ing when the row lease is gone (T1-E-006)", async () => {
+    const fixture = await claimedPlan();
+    updatePlanRow(fixture, PLAN_ID, (row) => ({ ...row, status: "InReview" }));
+    expect((await handoffCall(fixture, handoffEvidenceOf(fixture, fixture.planSha))).outcome).toBe("handed-off");
+    dropLease(fixture, PLAN_ID);
+
+    const before = readFileSync(fixture.snapshotPath);
+    const code = await errorCodeOf(() => coordinatorCall(fixture, PLAN_ID, { kind: "accept" }));
+    expect(["coordination.invalid-transition", "coordination.session-mismatch"]).toContain(code);
+    // The state never advances: still InReview, handoff still merely submitted.
+    expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
+    const row = planRowOf(fixture, PLAN_ID);
+    expect(row.status).toBe("InReview");
+    expect(handoffFields(row).state).toBe("submitted");
+  });
+
+  test("return of a submitted handoff leaves the plan session holding its own lease (T1-D-004)", async () => {
+    const fixture = await claimedPlan();
+    updatePlanRow(fixture, PLAN_ID, (row) => ({ ...row, status: "InReview" }));
+    const planSessionId = readJson(fixture.planSession).session_id;
+    expect((await handoffCall(fixture, handoffEvidenceOf(fixture, fixture.planSha))).outcome).toBe("handed-off");
+
+    // A handoff that was never accepted goes back to the session that sealed it.
+    expect((await coordinatorCall(fixture, PLAN_ID, { kind: "return", reason: "rework" })).outcome).toBe("returned");
+    const row = planRowOf(fixture, PLAN_ID);
+    expect(row.status).toBe("InProgress");
+    expect(leaseHolder(row)).toBe(planSessionId);
+    expect(handoffFields(row).state).toBe("returned");
+  });
+
+  test("a coordinated row addressed only by its legacy plan_id is protected (T1-OWN-003)", async () => {
+    const fixture = makeFixture();
+    const harnessRoot = realpathSync(fixture.harness);
+    await preparePlan(fixture, PLAN_ID);
+    updatePlanRow(fixture, PLAN_ID, (row) => {
+      const { id, ...rest } = row;
+      return { ...rest, plan_id: id };
+    });
+
+    expect(
+      await errorCodeOf(() =>
+        replaceCoordinatedArtifact({
+          harnessRoot,
+          ref: { kind: "residuals", key: PROJECT_ID } as const,
+          payload: { entries: { [PLAN_ID]: [storedResidual(PLAN_ID, "r-guard")] } },
+          expectedVersion: "absent",
+        }),
+      ),
+    ).toBe("coordination.scoped-writer-required");
+    expect(existsSync(fixture.registerPath)).toBe(false);
+  });
+
+  test("a malformed existing register fails closed instead of reading as empty (T1-C3-009)", async () => {
+    const fixture = makeFixture();
+    await preparePlan(fixture, PLAN_ID);
+    await bindPlan(fixture, PLAN_ID);
+    claimExecutionLease(fixture, PLAN_ID, fixture.planSession);
+    const view = await readPlanCoordination(fixture.planSession, PLAN_ID, fixture.root);
+    expect(view.register_version).toBe("absent");
+
+    writeText(fixture.registerPath, "{}\n");
+    const corrupted = readFileSync(fixture.registerPath);
+    const snapshotBefore = readFileSync(fixture.snapshotPath);
+    expect(
+      await errorCodeOf(() =>
+        mutatePlanCoordination({
+          sessionPath: fixture.planSession,
+          planId: PLAN_ID,
+          expectedRevision: view.revision,
+          operation: {
+            kind: "residual-add",
+            entries: [residual("r-x")] as never,
+            expectedRegisterVersion: artifactVersion(corrupted),
+          },
+        }),
+      ),
+    ).toBe("coordination.store");
+    expect(readFileSync(fixture.registerPath).equals(corrupted)).toBe(true);
+    expect(readFileSync(fixture.snapshotPath).equals(snapshotBefore)).toBe(true);
+  });
+
+  test("a replacement that retains an existing uncoordinated workflow is judged, not rejected (T1-C4-011)", async () => {
+    const fixture = makeFixture();
+    const harnessRoot = realpathSync(fixture.harness);
+    const statusPath = join(harnessRoot, "status.json");
+    const before = readFileSync(statusPath);
+
+    // Fresh entry objects for the very same workflow the root already names:
+    // the guard judges the document set, not the caller's instances.
+    const replaced = await replaceCoordinatedArtifact({
+      harnessRoot,
+      ref: { kind: "status", key: "root" } as const,
+      payload: readJson(statusPath),
+      expectedVersion: artifactVersion(before),
+    });
+    expect(replaced.version).toBe(artifactVersion(readFileSync(statusPath)));
+    expect(readJson(statusPath).workflows).toEqual([expect.objectContaining({ id: WORKFLOW_ID })]);
+  });
+
+  test("handoff evidence must not carry a top-level worktree_path (T1-D-012)", async () => {
+    const fixture = await claimedPlan();
+    updatePlanRow(fixture, PLAN_ID, (row) => ({ ...row, status: "InReview" }));
+    const evidence = handoffEvidenceOf(fixture, fixture.planSha);
+
+    // The worktree is derived from the scope; a caller-supplied one is refused.
+    expect(
+      await errorCodeOf(() => handoffCall(fixture, { ...evidence, worktree_path: fixture.worktreePath } as never)),
+    ).toBe("coordination.forbidden-field");
+    const handed = await handoffCall(fixture, evidence);
+    expect(handed.outcome).toBe("handed-off");
+    expect(handoffFields(planRowOf(fixture, PLAN_ID)).worktree_path).toBe(fixture.worktreePath);
+  });
+});
