@@ -110,6 +110,7 @@ per-plan Done 是 per-plan 的闭环终点；compound 是迭代级收口活动�
 - Prepare 阶段证据：问题定义、歧义结论、plan 链接。
 - Execute 阶段证据：tasks 清单、实现自检、审查/验证证据。
 - 结论证据：不得仅写"done"，必须可复核（命令、输出、截图或复现步骤）。
+- **证据与变更同层。** 单测/集成测试是 plan task 的默认证据；**开发 plan** 中，真实浏览器、真机、安装/部署 E2E **不写成 task，也不构成任何 gate 的证据义务**——各层自行测试，缺环境如实记为未验证。这类验证的**唯一**落点是用户显式请求的独立 `mstar-e2e` workflow：该 workflow 自身以 plan 注册并承载命名场景，是此边界的合法例外（授权来源见 `mstar-harness-core` § 定向执行与验证边界）。issue/需求/验收文本中出现的端到端场景**不构成**在开发 plan 中加 task 的授权。
 
 ## References
 

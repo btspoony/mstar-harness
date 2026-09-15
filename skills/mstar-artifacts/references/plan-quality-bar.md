@@ -21,7 +21,7 @@ Before a plan is locked, verify every item:
 
 ### 2. Verification gates
 
-Each verification step names the changed behavior, exact scoped command and expected result, or reusable evidence with its applicability. Use only checks needed for this change; discovering a repository command does not make it a gate. Scope authority → `mstar-harness-core` § 定向执行与验证边界.
+Each verification step names the changed behavior, exact scoped command and expected result, or reusable evidence with its applicability. Use only checks needed for this change; discovering a repository command does not make it a gate. Scope authority → `mstar-harness-core` § 定向执行与验证边界. Verification gates stay inside the change's own layer: a development plan's task never gates on real-browser, device, or installed-deployment E2E — that verification lives only in a separately requested `mstar-e2e` workflow, whose own scenario rows are its legitimate tasks.
 
 | Pattern | Weak (do not use) | Strong (scope first) |
 |---------|-------------------|----------------------|
