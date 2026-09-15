@@ -6,6 +6,17 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [3.9.3] - 2026-09-15
+
+### Changed
+
+- Added a **provenance-citation finder** to the engine: `findProvenanceCitations` reports dated plan/iteration id tokens and dated local-harness deeplinks in tracked text. Example slugs, version tokens, placeholder shapes, plain dates and undated layout lines are never reported, and sdd deeplinks stay owned by the existing ephemeral-citation check.
+- Exposed the scan on the CLI as `mstar lint --type provenance <target>`: an explicit-only content type (inference never selects it) that applies the finder to the target file or the directory walk's calibrated text face (`.md`/`.ts` — ordinary-named docs like `README.md` are collected too), with unchanged exit semantics (1 = citations found, 2 = usage). `docs/cli.md` registers the new `--type` value.
+
+- Version alignment with harness **3.9.3**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **3.9.3**.
+
 ## [3.9.2] - 2026-09-14
 
 ### Harness

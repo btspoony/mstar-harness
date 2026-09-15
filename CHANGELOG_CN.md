@@ -6,6 +6,17 @@
 
 ## [Unreleased]
 
+## [3.9.3] - 2026-09-15
+
+### Harness
+
+- drift-lint 新增**溯源门禁**：对仓库已跟踪文本面（`.md` 全文、`.ts` 注释行——行首注释行加行尾 `//` 注释，先经共享注释掩蔽器掩蔽字符串与模板字面量再检测且不要求前置空白，`://` URL 序列除外）运行引擎溯源发现器，文本面上的带日期 plan/迭代 ID 或本地 harness 路径都会以 `file:line` 行形式使 CI 失败。遍历与 `git ls-files` 求交集，未跟踪的本地文件不会使门禁失败（`.mstar/sdd/…` 深链仍归 skill 语料的临时引用检查管辖）；已装配的发布面（`.changes/archive/`、`CHANGELOG*.md`）作为历史记录豁免。
+- 把 E2E 证据边界限定在开发 plan 内：`mstar-harness-core` § 定向执行与验证边界、`mstar-phase-gates` § 最小证据要求、`mstar-artifacts` 的 plan-quality-bar 与 `plan.main.md`、以及 `mstar-e2e` 现口径一致——真实浏览器/真机/安装部署 E2E 永不是开发 plan 的 task，也不是任何 gate 的证据义务；它只存在于用户显式请求的独立 `mstar-e2e` workflow，其命名场景即该 workflow 自身的 plan rows，各层则以自身单测/集成测试自证。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 3.9.3**。
+
 ## [3.9.2] - 2026-09-14
 
 ### Harness
