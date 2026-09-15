@@ -450,13 +450,18 @@ async function coordinatorCall(
   fixture: Fixture,
   planId: string,
   operation: Record<string, unknown>,
+  /** A deliberately stale id, to prove the engine re-checks the named handoff. */
+  namedHandoffId?: string,
 ): Promise<CoordinationResult> {
   const view = await readPlanCoordination(fixture.coordinatorSession, planId, fixture.root);
+  const handoffId = namedHandoffId ?? view.row?.coordination?.handoff?.id;
   return mutatePlanCoordination({
     sessionPath: fixture.coordinatorSession,
     planId,
     expectedRevision: view.revision,
-    operation: operation as never,
+    // The CLI sends the id it read with the operation; the engine re-checks it
+    // under its own lock, so every coordinator transition names one.
+    operation: (handoffId === undefined ? operation : { handoffId, ...operation }) as never,
   });
 }
 
@@ -1739,6 +1744,36 @@ describe("seam-regressions", () => {
     expect(done.outcome).toBe("completed");
     expect(recordField(handoffFields(planRowOf(fixture, PLAN_ID)), "integration").result_sha).toBe(mergeSha);
     expect(snapshotOf(fixture).integration_merge_lease).toBeUndefined();
+  }, 30000);
+
+  test("a replaced handoff is never transitioned by a command that named the old one (QC1-F-001)", async () => {
+    const fixture = await acceptedFixture();
+    const replaced = handoffFields(planRowOf(fixture, PLAN_ID)).id;
+    expect((await coordinatorCall(fixture, PLAN_ID, { kind: "return", reason: "rework requested" })).outcome).toBe("returned");
+    writeText(join(fixture.worktreePath, "slice.txt"), "slice B v2\n");
+    git(["add", "-A"], fixture.worktreePath);
+    git(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "fix: rework"], fixture.worktreePath);
+    updatePlanRow(fixture, PLAN_ID, (row) => ({ ...row, status: "InReview" }));
+    await handoffCall(fixture, handoffEvidenceOf(fixture, headOf(fixture.worktreePath)));
+    const live = handoffFields(planRowOf(fixture, PLAN_ID));
+    expect(live.id).not.toBe(replaced);
+    expect(live.attempt).toBe(2);
+
+    // The id the caller read is a precondition of the mutation, not a hint: a
+    // coordinator that read the replaced attempt can no longer act on whatever
+    // is live when its command finally reaches the lock.
+    const before = readFileSync(fixture.snapshotPath);
+    expect(await errorCodeOf(() => coordinatorCall(fixture, PLAN_ID, { kind: "accept" }, replaced))).toBe(
+      "coordination.invalid-transition",
+    );
+    expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
+    const row = planRowOf(fixture, PLAN_ID);
+    expect(row.status).toBe("InReview");
+    expect(handoffFields(row).id).toBe(live.id);
+    expect(handoffFields(row).state).toBe("submitted");
+
+    // The named live attempt is the one the command may act on.
+    expect((await coordinatorCall(fixture, PLAN_ID, { kind: "accept" })).outcome).toBe("accepted");
   }, 30000);
 
   test("a git that answers with a failure still reports a repository fact, not an environment fault (QC3-001)", async () => {

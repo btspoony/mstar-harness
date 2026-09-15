@@ -2283,40 +2283,46 @@ export async function mutatePlanCoordination(request: CoordinationRequest): Prom
       });
     }
     case "accept": {
-      assertExactKeys(operation, ["kind"], "accept operation");
+      assertExactKeys(operation, ["kind", "handoffId"], "accept operation");
       return mutateAccept(await coordinatorScope(session, request.planId, kind), session, sessionAbs, {
+        handoffId: namedHandoffId(operation),
         expectedRevision,
       });
     }
     case "return": {
-      assertExactKeys(operation, ["kind", "reason"], "return operation");
+      assertExactKeys(operation, ["kind", "handoffId", "reason"], "return operation");
       if (!isNonEmptyString(operation.reason)) throw invalidInput("return requires a non-empty reason");
       return mutateReturn(await coordinatorScope(session, request.planId, kind), session, sessionAbs, {
+        handoffId: namedHandoffId(operation),
         reason: operation.reason,
         expectedRevision,
       });
     }
     case "integration-start": {
-      assertExactKeys(operation, ["kind"], "integration-start operation");
+      assertExactKeys(operation, ["kind", "handoffId"], "integration-start operation");
       return mutateIntegrationStart(await coordinatorScope(session, request.planId, kind), session, sessionAbs, {
+        handoffId: namedHandoffId(operation),
         expectedRevision,
       });
     }
     case "integration-accept": {
-      assertExactKeys(operation, ["kind"], "integration-accept operation");
+      assertExactKeys(operation, ["kind", "handoffId"], "integration-accept operation");
       return mutateIntegrationAccept(await coordinatorScope(session, request.planId, kind), session, sessionAbs, {
+        handoffId: namedHandoffId(operation),
         expectedRevision,
       });
     }
     case "complete": {
-      assertExactKeys(operation, ["kind"], "complete operation");
+      assertExactKeys(operation, ["kind", "handoffId"], "complete operation");
       return mutateComplete(await coordinatorScope(session, request.planId, kind), session, sessionAbs, {
+        handoffId: namedHandoffId(operation),
         expectedRevision,
       });
     }
     case "reconcile": {
-      assertExactKeys(operation, ["kind"], "reconcile operation");
+      assertExactKeys(operation, ["kind", "handoffId"], "reconcile operation");
       return mutateReconcile(await coordinatorScope(session, request.planId, kind), session, sessionAbs, {
+        handoffId: namedHandoffId(operation),
         expectedRevision,
       });
     }
@@ -2655,13 +2661,34 @@ function readHandoffEvidence(value: unknown): HandoffEvidenceInput {
   };
 }
 
-/** The recorded handoff of a plan, or a refusal when the row has none. */
-function requireHandoff(context: RowContext, planId: string): PlanHandoff {
+/** The handoff id a coordinator transition names; the mutation re-checks it under the lock. */
+function namedHandoffId(operation: { handoffId?: unknown }): string {
+  if (!isNonEmptyString(operation.handoffId)) {
+    throw invalidInput("a coordinator transition requires the non-empty handoffId it names");
+  }
+  return operation.handoffId;
+}
+
+/**
+ * The handoff of a plan the operation named, or a refusal when the row has none
+ * or holds a different one. This runs inside the row lock: the id the caller
+ * read before the call is a precondition of the mutation, never a hint — a
+ * concurrent `return` plus a fresh handoff leaves the new attempt untouched
+ * (spec §B).
+ */
+function requireHandoff(context: RowContext, planId: string, namedHandoffId: string): PlanHandoff {
   const handoff = context.coordination?.handoff;
   if (handoff === undefined) {
     throw new CoordinationError("coordination.invalid-transition", `plan ${planId} has no handoff to transition`, {
       plan_id: planId,
     });
+  }
+  if (handoff.id !== namedHandoffId) {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `plan ${planId} handoff ${handoff.id} is not the handoff this command named (${namedHandoffId}) — a replaced handoff is a different attempt`,
+      { plan_id: planId, expected: namedHandoffId, actual: handoff.id },
+    );
   }
   return handoff;
 }
@@ -2873,7 +2900,7 @@ function transferRowLease(row: PlanRow, from: string, to: string, what: string, 
   return transferred.row;
 }
 
-type AcceptRequest = { expectedRevision: number };
+type AcceptRequest = { handoffId: string; expectedRevision: number };
 
 async function mutateAccept(
   scope: ResolvedPlanScope,
@@ -2885,7 +2912,7 @@ async function mutateAccept(
     expectedRevision: request.expectedRevision,
     precheck: (context) => {
       assertCoordinatorBinding(session, sessionPath, context.snapshot);
-      const handoff = requireHandoff(context, scope.planId);
+      const handoff = requireHandoff(context, scope.planId, request.handoffId);
       if (handoff.state !== "submitted") {
         throw new CoordinationError(
           "coordination.invalid-transition",
@@ -2904,7 +2931,7 @@ async function mutateAccept(
       assertEvidenceDigests(handoff);
     },
     mutate: (context) => {
-      const handoff = requireHandoff(context, scope.planId);
+      const handoff = requireHandoff(context, scope.planId, request.handoffId);
       const row = transferRowLease(context.row, handoff.submitted_by, session.session_id, "accept", scope.planId);
       const nextCoordination: RowCoordination = {
         ...(context.coordination ?? { revision: 0 }),
@@ -2926,7 +2953,7 @@ async function mutateAccept(
   };
 }
 
-type ReturnRequest = { reason: string; expectedRevision: number };
+type ReturnRequest = { handoffId: string; reason: string; expectedRevision: number };
 
 async function mutateReturn(
   scope: ResolvedPlanScope,
@@ -2938,7 +2965,7 @@ async function mutateReturn(
     expectedRevision: request.expectedRevision,
     precheck: (context) => {
       assertCoordinatorBinding(session, sessionPath, context.snapshot);
-      const handoff = requireHandoff(context, scope.planId);
+      const handoff = requireHandoff(context, scope.planId, request.handoffId);
       if (handoff.state !== "submitted" && handoff.state !== "accepted") {
         throw new CoordinationError(
           "coordination.invalid-transition",
@@ -2948,7 +2975,7 @@ async function mutateReturn(
       }
     },
     mutate: (context) => {
-      const handoff = requireHandoff(context, scope.planId);
+      const handoff = requireHandoff(context, scope.planId, request.handoffId);
       // The lease follows the record (spec §D): handoff keeps the plan's lease,
       // accept moves it to the coordinator, so a return from `submitted` only
       // proves the plan session still holds it, while a return from `accepted`
@@ -3234,7 +3261,7 @@ function proofRepository(candidates: readonly (string | undefined)[]): string | 
   return undefined;
 }
 
-type IntegrationStartRequest = { expectedRevision: number };
+type IntegrationStartRequest = { handoffId: string; expectedRevision: number };
 
 /**
  * Start one integration attempt (spec §E): claim the workflow's merge lease,
@@ -3252,7 +3279,7 @@ async function mutateIntegrationStart(
     expectedRevision: request.expectedRevision,
     precheck: (context) => {
       assertCoordinatorBinding(session, sessionPath, context.snapshot);
-      const handoff = requireHandoff(context, scope.planId);
+      const handoff = requireHandoff(context, scope.planId, request.handoffId);
       if (handoff.state !== "accepted" && handoff.state !== "integrating") {
         throw new CoordinationError(
           "coordination.invalid-transition",
@@ -3270,7 +3297,7 @@ async function mutateIntegrationStart(
       assertIntegrationCheckout(integrationAnchors(context.snapshot, scope.planId), scope.planId);
     },
     mutate: (context) => {
-      const handoff = requireHandoff(context, scope.planId);
+      const handoff = requireHandoff(context, scope.planId, request.handoffId);
       // A started attempt is never re-pinned: the recorded base stays the one
       // the coordinator merged onto.
       if (handoff.state === "integrating") return null;
@@ -3321,7 +3348,7 @@ async function mutateIntegrationStart(
   };
 }
 
-type IntegrationAcceptRequest = { expectedRevision: number };
+type IntegrationAcceptRequest = { handoffId: string; expectedRevision: number };
 
 /**
  * Accept the finished integration (spec §E): prove the merge from the pinned
@@ -3339,7 +3366,7 @@ async function mutateIntegrationAccept(
     expectedRevision: request.expectedRevision,
     precheck: (context) => {
       assertCoordinatorBinding(session, sessionPath, context.snapshot);
-      const handoff = requireHandoff(context, scope.planId);
+      const handoff = requireHandoff(context, scope.planId, request.handoffId);
       if (handoff.state !== "integrating") {
         throw new CoordinationError(
           "coordination.invalid-transition",
@@ -3376,7 +3403,7 @@ async function mutateIntegrationAccept(
       }
     },
     mutate: (context) => {
-      const handoff = requireHandoff(context, scope.planId);
+      const handoff = requireHandoff(context, scope.planId, request.handoffId);
       const integration = requireIntegration(handoff, scope.planId);
       if (proof.kind !== "proven") return null;
       const merged: HandoffIntegration = { ...integration, result_sha: proof.resultSha, verified_at: nowIso() };
@@ -3441,7 +3468,7 @@ function completeRow(
   };
 }
 
-type CompleteRequest = { expectedRevision: number };
+type CompleteRequest = { handoffId: string; expectedRevision: number };
 
 /**
  * Complete a merged plan (spec §E): re-prove the recorded result, re-check the
@@ -3459,7 +3486,7 @@ async function mutateComplete(
     expectedRevision: request.expectedRevision,
     precheck: async (context) => {
       assertCoordinatorBinding(session, sessionPath, context.snapshot);
-      const handoff = requireHandoff(context, scope.planId);
+      const handoff = requireHandoff(context, scope.planId, request.handoffId);
       if (handoff.state !== "merged") {
         throw new CoordinationError(
           "coordination.invalid-transition",
@@ -3492,7 +3519,7 @@ async function mutateComplete(
       assertRecordedResult(anchors.worktreePath, scope.planId, integration, handoff.source_sha, checkout.head);
     },
     mutate: (context) => {
-      const handoff = requireHandoff(context, scope.planId);
+      const handoff = requireHandoff(context, scope.planId, request.handoffId);
       const integration = requireIntegration(handoff, scope.planId);
       const resultSha = assertRecordedResult(
         integration.worktree_path,
@@ -3546,6 +3573,7 @@ async function classifyReconcile(
   scope: ResolvedPlanScope,
   session: CoordinationSession,
   handoff: PlanHandoff,
+  expectedHandoffId: string,
 ): Promise<ReconcilePlan> {
   const planId = scope.planId;
   const prepared = context.coordination?.prepared;
@@ -3581,7 +3609,7 @@ async function classifyReconcile(
       await assertFindingsClosed(scope, prepared, "complete");
       return {
         outcome: "completed",
-        apply: (current) => completeRow(current, scope, requireHandoff(current, planId), resultSha),
+        apply: (current) => completeRow(current, scope, requireHandoff(current, planId, expectedHandoffId), resultSha),
       };
     };
     if (handoff.state === "merged") {
@@ -3606,7 +3634,7 @@ async function classifyReconcile(
     return {
       outcome: "retry-ready",
       apply: (current) => {
-        const currentHandoff = requireHandoff(current, planId);
+        const currentHandoff = requireHandoff(current, planId, expectedHandoffId);
         const returned: PlanHandoff = { ...currentHandoff, state: "accepted" };
         delete returned.integration;
         const nextCoordination: RowCoordination = {
@@ -3634,7 +3662,7 @@ async function classifyReconcile(
   );
 }
 
-type ReconcileRequest = { expectedRevision: number };
+type ReconcileRequest = { handoffId: string; expectedRevision: number };
 
 /**
  * Reconcile one crash-interrupted integration attempt (spec §E). Reconciliation
@@ -3651,8 +3679,8 @@ async function mutateReconcile(
     expectedRevision: request.expectedRevision,
     precheck: async (context) => {
       assertCoordinatorBinding(session, sessionPath, context.snapshot);
-      const handoff = requireHandoff(context, scope.planId);
-      plan = await classifyReconcile(context, scope, session, handoff);
+      const handoff = requireHandoff(context, scope.planId, request.handoffId);
+      plan = await classifyReconcile(context, scope, session, handoff, request.handoffId);
     },
     mutate: (context) => plan.apply(context),
   });
