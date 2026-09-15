@@ -42,6 +42,7 @@ import { basename, join, resolve } from "node:path";
 import { readJson, SEVERITY_ORDER, type GateResult, type Severity, type ValidationResult } from "./core.js";
 import { parseCompassFrontmatterText } from "./iteration.js";
 import { withStatusWriteLock } from "./lease.js";
+import { withProtectedWrite } from "./coordination-write.js";
 import { assertFsStorePath, getArtifactStore } from "./store.js";
 import { isOpenResidual, normalizeSeverity, validateResidual, type ResidualEntry } from "./status.js";
 
@@ -478,7 +479,7 @@ export async function appendProjectRegisterEntries(
         `refusing to write invalid project register: ${gate.violations.map((v) => v.message).join("; ")}`,
       );
     }
-    await store.put({ kind: "residuals", key: projectKey, payload: register });
+    await withProtectedWrite(registerPath, "put", () => store.put({ kind: "residuals", key: projectKey, payload: register }));
     return { ok: true as const, key };
   });
 }
@@ -531,7 +532,7 @@ export async function closeProjectRegisterEntry(opts: CloseProjectRegisterEntryO
         `refusing to write invalid project register: ${gate.violations.map((v) => v.message).join("; ")}`,
       );
     }
-    await store.put({ kind: "residuals", key: projectKey, payload: register });
+    await withProtectedWrite(registerPath, "put", () => store.put({ kind: "residuals", key: projectKey, payload: register }));
     return { ok: true as const };
   });
 }

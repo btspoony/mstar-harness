@@ -83,7 +83,7 @@ export type ClaimLeaseFields = {
 export type LeaseTransition = {
   ok: boolean;
   row: PlanRow;
-  outcome?: "claimed" | "resumed" | "released";
+  outcome?: "claimed" | "resumed" | "released" | "transferred";
   violations: ValidationResult[];
 };
 
@@ -424,6 +424,55 @@ export function releaseLease(row: PlanRow, holder: string): LeaseTransition {
   }
   const { execution_lease: _dropped, ...rest } = row;
   return { ok: true, row: rest, outcome: "released", violations: [] };
+}
+
+/**
+ * Holder transfer for the scoped coordination `accept` transition (spec §D):
+ * move an ACTIVE `execution_lease` to another holder verbatim — same
+ * `claimed_at`, `worktree_path`, `working_branch`, extra fields preserved;
+ * only `holder` changes. Deliberately NOT `claimLease`: there is no
+ * Todo/Blocked → InProgress transition and no steal path here. The locked
+ * coordination writer has already authenticated the receiving holder as the
+ * workflow's coordinator, so `from` must still match the stored holder — a
+ * mismatched `from` is `lease.transfer.other-holder` and leaves the row
+ * untouched.
+ */
+export function transferLease(row: PlanRow, from: string, to: string): LeaseTransition {
+  const lease = row.execution_lease;
+  if (!isPlainObject(lease)) {
+    return {
+      ok: false,
+      row,
+      violations: [
+        violation(
+          "high",
+          "lease.transfer.missing",
+          "holder transfer requires an active execution_lease object — nothing to transfer",
+        ),
+      ],
+    };
+  }
+  if (lease.holder !== from) {
+    return {
+      ok: false,
+      row,
+      violations: [
+        violation(
+          "high",
+          "lease.transfer.other-holder",
+          `execution_lease held by ${JSON.stringify(lease.holder)}, transfer expected ${JSON.stringify(from)}`,
+        ),
+      ],
+    };
+  }
+  if (typeof to !== "string" || to.trim() === "") {
+    return {
+      ok: false,
+      row,
+      violations: [violation("high", "lease.transfer.invalid-holder", "transfer target holder must be a non-empty string")],
+    };
+  }
+  return { ok: true, row: { ...row, execution_lease: { ...lease, holder: to } }, outcome: "transferred", violations: [] };
 }
 
 /**

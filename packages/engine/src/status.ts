@@ -37,6 +37,7 @@ import { dirname, join, resolve, sep } from "node:path";
 import { readJson, SEVERITY_ORDER, type GateResult, type Severity, type ValidationResult } from "./core.js";
 import { resolveIterationDir } from "./path.js";
 import { withStatusWriteLock } from "./lease.js";
+import { withProtectedWrite } from "./coordination-write.js";
 import { assertFsStorePath, getArtifactStore } from "./store.js";
 import { parseEnforcementFlag, type EnforcementFlag } from "./dispatch.js";
 import { loadMstarc } from "./mstarc.js";
@@ -727,7 +728,7 @@ export async function registerWorkflowEntryLocked(statusPath: string, entry: Wor
   if (!gate.ok) {
     throw new Error(`refusing to write invalid status.json: ${gate.violations.map((v) => v.message).join("; ")}`);
   }
-  await store.put({ kind: "status", key: "root", payload: doc });
+  await withProtectedWrite(statusPath, "put", () => store.put({ kind: "status", key: "root", payload: doc }));
   return doc;
 }
 
@@ -801,7 +802,7 @@ export async function unregisterWorkflow(root: string, id: string): Promise<Stat
     if (!gate.ok) {
       throw new Error(`refusing to write invalid status.json: ${gate.violations.map((v) => v.message).join("; ")}`);
     }
-    await store.put({ kind: "status", key: "root", payload: doc });
+    await withProtectedWrite(statusPath, "put", () => store.put({ kind: "status", key: "root", payload: doc }));
     return doc;
   });
 }

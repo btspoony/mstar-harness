@@ -8,8 +8,9 @@
  */
 import { existsSync, readdirSync, unlinkSync } from "node:fs";
 import type { Dirent } from "node:fs";
-import { isAbsolute, join, resolve } from "node:path";
+import { basename, isAbsolute, join, resolve, sep } from "node:path";
 import { readJson, writeJson } from "./core.js";
+import { assertProtectedWriteAuthorized, canonicalTarget, type ProtectedWriteKind } from "./coordination-write.js";
 import {
   assertSafePathComponent,
   resolveHarnessDir,
@@ -123,6 +124,25 @@ function readDirEntries(dir: string): Dirent[] {
   }
 }
 
+/** Protected document class of a resolved target (spec §C4): the coordination
+ * documents the scoped writers own. Kinds map directly; a `json` alias
+ * (`--json <abs path>`, symlink) is classified by its CANONICAL target
+ * against the resolved protected roots, so no alias can dodge the boundary.
+ * `review` and unrelated `json` keep current behavior. */
+function protectedKindOf(root: string, ref: ArtifactRef, filePath: string): ProtectedWriteKind | null {
+  if (ref.kind === "status") return "root";
+  if (ref.kind === "snapshot") return "snapshot";
+  if (ref.kind === "residuals") return "register";
+  if (ref.kind !== "json") return null;
+  const canonical = canonicalTarget(filePath);
+  if (canonical === canonicalTarget(resolveArtifactPath(root, { kind: "status", key: "root" }))) return "root";
+  const workflowDir = canonicalTarget(resolveWorkflowDir(root, { harnessDir: root }));
+  if (basename(canonical) === "snapshot.json" && canonical.startsWith(`${workflowDir}${sep}`)) return "snapshot";
+  const projectDir = canonicalTarget(resolveProjectDir(root, { harnessDir: root }));
+  if (basename(canonical) === "residuals.json" && canonical.startsWith(`${projectDir}${sep}`)) return "register";
+  return null;
+}
+
 /** Resolve the get-path for `key` through the single path table, or
  * `undefined` when the name is outside the safe path-component charset.
  * Enumeration probes every discovered name through this guard: a stray unsafe
@@ -161,7 +181,15 @@ export function createFsStore(harnessRoot: string): ArtifactStore & { root: stri
           "FsStore does not persist schema ids \u2014 omit --schema or inject a store module that persists it",
         );
       }
-      writeJson(resolveArtifactPath(root, doc), doc.payload);
+      const filePath = resolveArtifactPath(root, doc);
+ // Protected-write boundary (spec §C4): the coordination documents
+ // (`status.json`, a workflow `snapshot.json`, a project
+ // `residuals.json`) accept writes only from inside the private
+ // authorization context the locked writers open. Everything else —
+ // including a `json`/symlink alias of a protected file — refuses.
+      const protectedKind = protectedKindOf(root, doc, filePath);
+      if (protectedKind !== null) assertProtectedWriteAuthorized(filePath, "put", protectedKind);
+      writeJson(filePath, doc.payload);
     },
     async get<T = unknown>(ref: ArtifactRef): Promise<T | undefined> {
       const filePath = resolveArtifactPath(root, ref);
@@ -170,6 +198,8 @@ export function createFsStore(harnessRoot: string): ArtifactStore & { root: stri
     },
     async delete(ref: ArtifactRef): Promise<void> {
       const filePath = resolveArtifactPath(root, ref);
+      const protectedKind = protectedKindOf(root, ref, filePath);
+      if (protectedKind !== null) assertProtectedWriteAuthorized(filePath, "delete", protectedKind);
       if (existsSync(filePath)) unlinkSync(filePath);
     },
     async list(kind: ArtifactKind): Promise<ArtifactRef[]> {
