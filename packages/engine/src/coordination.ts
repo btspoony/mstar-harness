@@ -1015,7 +1015,7 @@ async function withRowCommit(
     expectedRevision: number | null;
     /** `prepare` rewrites the pin itself, so it may not re-check the old hash. */
     freshness?: boolean;
-    precheck: (context: RowContext) => void;
+    precheck: (context: RowContext) => void | Promise<void>;
     mutate: (context: RowContext) => RowCommit | null | Promise<RowCommit | null>;
   },
 ): Promise<{ snapshot: WorkflowSnapshot; row: PlanRow; outcome: string }> {
@@ -1039,7 +1039,7 @@ async function withRowCommit(
     if (opts.freshness !== false && coordination?.prepared !== undefined) {
       assertPreparedFresh(scope, coordination.prepared);
     }
-    opts.precheck(context);
+    await opts.precheck(context);
     if (opts.expectedRevision !== null && context.revision !== opts.expectedRevision) {
       throw new CoordinationError(
         "coordination.version-conflict",
@@ -2622,11 +2622,11 @@ function requireHandoff(context: RowContext, planId: string): PlanHandoff {
  * The Assignment QA gate, the evidence containment and the findings cleanup
  * gate a handoff must clear (spec §D).
  */
-function assertHandoffGates(
+async function assertHandoffGates(
   scope: ResolvedPlanScope,
   prepared: PreparedCoordination,
   input: HandoffEvidenceInput,
-): void {
+): Promise<void> {
   if (input.qa_gate !== prepared.qa_gate) {
     throw new CoordinationError(
       "coordination.assignment-stale",
@@ -2635,18 +2635,32 @@ function assertHandoffGates(
     );
   }
   assertEvidenceInsidePlan(scope, input.evidence_paths);
-  assertFindingsClosed(scope, prepared, "hand off");
+  await assertFindingsClosed(scope, prepared, "hand off");
 }
 
 /**
  * The findings cleanup gate of a prepared plan (spec §D/§E): handoff and
  * completion both demand it, so a plan returned for rework cannot complete
  * while the findings it was told to close are still open.
+ *
+ * The register is read **under its own write lock** (§C3). The caller already
+ * holds the snapshot lock, so the order is always snapshot → register, and a
+ * concurrent residual write cannot slip between the gate and the row commit it
+ * authorizes. A register that does not exist yet is still a valid empty read.
  */
-function assertFindingsClosed(scope: ResolvedPlanScope, prepared: PreparedCoordination, what: string): void {
-  const register = readRegister(scope.harnessRoot, scope.projectId);
-  const gate = findingsCleanupGate(register.doc, scope.planId, {
-    mode: prepared.findings_cleanup === "zero-residual" ? "zero-residual" : "allow-residual",
+async function assertFindingsClosed(
+  scope: ResolvedPlanScope,
+  prepared: PreparedCoordination,
+  what: string,
+): Promise<void> {
+  const path = registerPathOf(scope.harnessRoot, scope.projectId);
+  // The project directory is created by the first write; the lock needs it first.
+  mkdirSync(dirname(path), { recursive: true });
+  const gate = await withStatusWriteLock(path, () => {
+    const register = readRegister(scope.harnessRoot, scope.projectId);
+    return findingsCleanupGate(register.doc, scope.planId, {
+      mode: prepared.findings_cleanup === "zero-residual" ? "zero-residual" : "allow-residual",
+    });
   });
   if (!gate.ok) {
     throw new CoordinationError(
@@ -2721,7 +2735,7 @@ async function mutateHandoff(
   const input = readHandoffEvidence(request.evidence);
   const result = await withRowCommit(scope, {
     expectedRevision: request.expectedRevision,
-    precheck: (context) => {
+    precheck: async (context) => {
       assertRowBinding(session, sessionPath, context.row, scope.planId);
       const coordination = context.coordination ?? { revision: 0 };
       const prepared = coordination.prepared;
@@ -2749,7 +2763,7 @@ async function mutateHandoff(
         );
       }
       assertHandoffGitProof(scope, input, "handoff");
-      assertHandoffGates(scope, prepared, input);
+      await assertHandoffGates(scope, prepared, input);
     },
     mutate: (context) => {
       const coordination = context.coordination ?? { revision: 0 };
@@ -3356,7 +3370,7 @@ async function mutateComplete(
 ): Promise<CoordinationResult> {
   const result = await withRowCommit(scope, {
     expectedRevision: request.expectedRevision,
-    precheck: (context) => {
+    precheck: async (context) => {
       assertCoordinatorBinding(session, sessionPath, context.snapshot);
       const handoff = requireHandoff(context, scope.planId);
       if (handoff.state !== "merged") {
@@ -3382,7 +3396,7 @@ async function mutateComplete(
         );
       }
       assertEvidenceDigests(handoff);
-      assertFindingsClosed(scope, prepared, "complete");
+      await assertFindingsClosed(scope, prepared, "complete");
       assertExecutionHolder(context.row, session.session_id, scope.planId, "complete");
       assertMergeLease(context.snapshot, session, scope.planId);
       const integration = requireIntegration(handoff, scope.planId);
@@ -3440,12 +3454,12 @@ type ReconcilePlan = { outcome: string; apply: (context: RowContext) => RowCommi
  * - `completed` with a valid recorded proof is a read-only no-op: replay never
  *   resurrects ownership or rewrites timestamps.
  */
-function classifyReconcile(
+async function classifyReconcile(
   context: RowContext,
   scope: ResolvedPlanScope,
   session: CoordinationSession,
   handoff: PlanHandoff,
-): ReconcilePlan {
+): Promise<ReconcilePlan> {
   const planId = scope.planId;
   const prepared = context.coordination?.prepared;
   if (prepared === undefined) {
@@ -3476,8 +3490,8 @@ function classifyReconcile(
     // at accept (spec §E — nothing is replayed into ownership).
     assertExecutionHolder(context.row, session.session_id, planId, "reconcile");
     assertMergeLease(context.snapshot, session, planId);
-    const merged = (resultSha: string): ReconcilePlan => {
-      assertFindingsClosed(scope, prepared, "complete");
+    const merged = async (resultSha: string): Promise<ReconcilePlan> => {
+      await assertFindingsClosed(scope, prepared, "complete");
       return {
         outcome: "completed",
         apply: (current) => completeRow(current, scope, requireHandoff(current, planId), resultSha),
@@ -3485,7 +3499,7 @@ function classifyReconcile(
     };
     if (handoff.state === "merged") {
       const resultSha = assertRecordedResult(anchors.worktreePath, planId, integration, handoff.source_sha, checkout.head);
-      return merged(resultSha);
+      return await merged(resultSha);
     }
     const proof = integrationProof(anchors.worktreePath, checkout.head, integration.base_sha, handoff.source_sha);
     if (proof.kind === "diverged") {
@@ -3495,7 +3509,7 @@ function classifyReconcile(
         source: handoff.source_sha,
       });
     }
-    if (proof.kind === "proven") return merged(proof.resultSha);
+    if (proof.kind === "proven") return await merged(proof.resultSha);
     if (checkout.head !== integration.base_sha) {
       throw integrationDiverged(
         `plan ${planId} integration HEAD ${checkout.head} moved past the attempt base ${integration.base_sha} without a merge of ${handoff.source_sha}`,
@@ -3546,10 +3560,10 @@ async function mutateReconcile(
   let plan: ReconcilePlan = { outcome: "unchanged", apply: () => null };
   const result = await withRowCommit(scope, {
     expectedRevision: request.expectedRevision,
-    precheck: (context) => {
+    precheck: async (context) => {
       assertCoordinatorBinding(session, sessionPath, context.snapshot);
       const handoff = requireHandoff(context, scope.planId);
-      plan = classifyReconcile(context, scope, session, handoff);
+      plan = await classifyReconcile(context, scope, session, handoff);
     },
     mutate: (context) => plan.apply(context),
   });
