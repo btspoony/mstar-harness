@@ -41,6 +41,7 @@ import {
   validateWorkflowSnapshot,
   writeWorkflowSnapshot,
 } from "../src/workflow.js";
+import { artifactVersion, CoordinationError } from "../src/coordination-write.js";
 import { createFsStore, setArtifactStore, type ArtifactDoc, type ArtifactStore } from "../src/store.js";
 
 function tmpRoot(prefix: string): string {
@@ -49,6 +50,17 @@ function tmpRoot(prefix: string): string {
 afterEach(() => {
   setArtifactStore(undefined);
 });
+
+/** The stable coordination error code of a refusal, or a failed assertion. */
+async function refusalCode(run: () => Promise<unknown>): Promise<string> {
+  try {
+    await run();
+  } catch (error) {
+    if (error instanceof CoordinationError) return error.code;
+    throw error;
+  }
+  throw new Error("expected the call to be refused");
+}
 
 function violationsOf(result: GateResult): string[] {
   return result.violations.map((v) => v.code);
@@ -495,18 +507,63 @@ describe("writeWorkflowSnapshot — whole-rewrite under withStatusWriteLock", ()
     rmSync(root, { recursive: true, force: true });
   });
 
-  test("overwrites an existing snapshot (whole-rewrite)", async () => {
+  test("an existing snapshot needs the CAS token — an omitted one may only create (T1-CAS-001)", async () => {
     const root = tmpRoot("workflow-writer-");
     setArtifactStore(createFsStore(root));
     const dir = join(root, "workflows", "00000819-workflow-engine-core");
     mkdirSync(dir, { recursive: true });
+    const path = join(dir, WORKFLOW_SNAPSHOT_FILE);
     const first = validSnapshot({ updated_at: "2026-08-19T10:00:00Z" });
     const second = validSnapshot({ updated_at: "2026-08-19T11:00:00Z" });
     await writeWorkflowSnapshot(first as never, dir);
-    await writeWorkflowSnapshot(second as never, dir);
-    const written = JSON.parse(readFileSync(join(dir, WORKFLOW_SNAPSHOT_FILE), "utf8"));
+    const onDisk = readFileSync(path, "utf8");
+    const version = artifactVersion(onDisk);
+    // The forbidden missing-version fallback: an existing document is never
+    // replaced by a caller that named no version.
+    expect(await refusalCode(() => writeWorkflowSnapshot(second as never, dir))).toBe(
+      "coordination.expected-version-required",
+    );
+    expect(readFileSync(path, "utf8")).toBe(onDisk);
+    // A stale token is a conflict, not a retry.
+    const stale = `sha256:${"0".repeat(64)}`;
+    expect(await refusalCode(() => writeWorkflowSnapshot(second as never, dir, { expectedVersion: stale }))).toBe(
+      "coordination.version-conflict",
+    );
+    expect(readFileSync(path, "utf8")).toBe(onDisk);
+    // The exact token replaces, and only phase/updated_at may differ.
+    await writeWorkflowSnapshot(second as never, dir, { expectedVersion: version });
+    const written = JSON.parse(readFileSync(path, "utf8"));
     expect(written.updated_at).toBe("2026-08-19T11:00:00Z");
     expect(written).toEqual(second);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test("a replacement may not change anything but phase and updated_at (T1-CAS-002)", async () => {
+    const root = tmpRoot("workflow-writer-fields-");
+    setArtifactStore(createFsStore(root));
+    const dir = join(root, "workflows", "00000819-workflow-engine-core");
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, WORKFLOW_SNAPSHOT_FILE);
+    const stored = validSnapshot({ updated_at: "2026-08-19T10:00:00Z" });
+    await writeWorkflowSnapshot(stored as never, dir);
+    const version = artifactVersion(readFileSync(path, "utf8"));
+    const tampered = {
+      ...stored,
+      status: "completed",
+      ended_at: "2026-08-19",
+      started_at: "2020-01-01",
+      updated_at: "2026-08-19T11:00:00Z",
+    };
+    expect(await refusalCode(() => writeWorkflowSnapshot(tampered as never, dir, { expectedVersion: version }))).toBe(
+      "coordination.direct-write-refused",
+    );
+    const projected = { ...stored, phase: "Phase 3", updated_at: "2026-08-19T11:00:00Z" };
+    await writeWorkflowSnapshot(projected as never, dir, { expectedVersion: version });
+    const written = JSON.parse(readFileSync(path, "utf8"));
+    expect(written.phase).toBe("Phase 3");
+    expect(written.updated_at).toBe("2026-08-19T11:00:00Z");
+    expect(written.status).toBe(stored.status);
+    expect(written.ended_at).toEqual(stored.ended_at);
     rmSync(root, { recursive: true, force: true });
   });
 

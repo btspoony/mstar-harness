@@ -464,26 +464,24 @@ function normalizeWorkflowSnapshot(doc: unknown, snapshotPath: string): Workflow
 }
 
 /**
- * Snapshot scalar fields a phase-advancing caller may additionally change on
- * top of the always-allowed `phase` / `updated_at`. Everything else must come
- * back byte-identical to disk (spec §C4: the writer refuses to drop any plan
- * row, lease, coordination block or track-branch metadata it was not
- * explicitly given authority over).
- */
-export type SnapshotField = "status" | "ended_at" | "type" | "started_at";
-
-/**
  * Writer contract (spec §C4). `expectedVersion` is the CAS token — the exact
  * on-disk artifact version (`sha256:<64 hex>`), or `"absent"` for
  * create-only. `createOnly` is the locked `absent` shorthand used by the
  * scaffold/migrate/audit writers: an existing document (even an empty or
- * malformed one) is never silently replaced. `authority` widens the allowed
- * scalar delta; the coordination writer does not go through this function.
+ * malformed one) is never silently replaced.
+ *
+ * Omitting `expectedVersion` means create-only, NOT "replace whatever is
+ * there": there is no missing-version compatibility fallback, so an existing
+ * snapshot still refuses with `coordination.expected-version-required`.
+ *
+ * The delta allowed here is `phase` + `updated_at` and nothing else — a
+ * coordinator persists its phase projection through this writer without ever
+ * gaining a backdoor to row owners, leases, lifecycle scalars or branch
+ * anchors. Lifecycle terminal changes belong to `closeWorkflow` (spec §C4).
  */
 export type WriteWorkflowSnapshotOptions = {
   expectedVersion?: string;
   createOnly?: boolean;
-  authority?: readonly SnapshotField[];
   /**
    * Canonical coordinator session envelope path (spec §C4). Required when the
    * stored snapshot is coordinated: only the snapshot's own bound coordinator
@@ -551,15 +549,21 @@ export async function writeWorkflowSnapshot(
   await withStatusWriteLock(snapshotPath, async () => {
     const current = readArtifactBytes(snapshotPath);
     const currentVersion = current?.version ?? "absent";
-    const required = opts.createOnly === true ? "absent" : opts.expectedVersion;
-    if (required !== undefined && required !== currentVersion) {
+    // Create-only is the default: an omitted token can create but never
+    // replace, so no caller reaches a locked CAS by accident (spec §C4 — no
+    // missing-version compatibility fallback).
+    const required = opts.createOnly === true ? "absent" : opts.expectedVersion ?? "absent";
+    if (required !== currentVersion) {
+      const missingToken = opts.createOnly !== true && opts.expectedVersion === undefined;
       throw new CoordinationError(
-        "coordination.version-conflict",
-        `snapshot ${snapshotPath} is at ${currentVersion}, writer required ${required}`,
+        missingToken ? "coordination.expected-version-required" : "coordination.version-conflict",
+        missingToken
+          ? `snapshot ${snapshotPath} already exists — replace it with an explicit expectedVersion (its current version is ${currentVersion}) or write a new snapshot`
+          : `snapshot ${snapshotPath} is at ${currentVersion}, writer required ${required}`,
         { path: snapshotPath, expected: required, actual: currentVersion },
       );
     }
-    const payload = current === undefined ? snapshot : mergeAuthorizedSnapshot(current.payload, snapshot, opts.authority ?? []);
+    const payload = current === undefined ? snapshot : mergePhaseProjection(current.payload, snapshot);
     assertCoordinatedSnapshotWriter(current?.payload, snapshotPath, opts.sessionPath);
     await withProtectedWrite(snapshotPath, "put", () =>
       store.put({ kind: "snapshot", key: snapshot.id, payload }),
@@ -595,16 +599,12 @@ function assertCoordinatedSnapshotWriter(
 
 /**
  * Apply the field-scoped delta contract against the stored document: only
- * `phase` + `updated_at` (plus the caller's explicit `authority`) may differ.
- * Every other field — plan rows, leases, the coordination block, track-branch
- * metadata, branch anchors — is taken from disk, so an authorized writer can
- * never drop or rewrite them implicitly.
+ * `phase` + `updated_at` may differ (spec §C4 line 152). Every other field —
+ * plan rows, leases, the coordination block, branch anchors, lifecycle
+ * scalars — is taken from disk, so this writer can never drop or rewrite them
+ * implicitly, and lifecycle terminal changes stay on `closeWorkflow`.
  */
-function mergeAuthorizedSnapshot(
-  stored: unknown,
-  incoming: WorkflowSnapshot,
-  authority: readonly SnapshotField[],
-): WorkflowSnapshot {
+function mergePhaseProjection(stored: unknown, incoming: WorkflowSnapshot): WorkflowSnapshot {
   if (!isPlainObject(stored)) {
     throw new CoordinationError(
       "coordination.version-conflict",
@@ -612,7 +612,7 @@ function mergeAuthorizedSnapshot(
       {},
     );
   }
-  const allowed: string[] = ["phase", "updated_at", ...authority];
+  const allowed: string[] = ["phase", "updated_at"];
   const keys = new Set([...Object.keys(stored), ...Object.keys(incoming as Record<string, unknown>)]);
   const drifted = [...keys].filter(
     (key) =>
