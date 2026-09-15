@@ -121,6 +121,8 @@ The scoped session binds exactly one plan, drives its tasks through the normal p
 
 The second terminal is transport, not a dependency: any terminal works, and a multiplexer such as Herdr or tmux is optional — nothing reads pane state, TTL or terminal labels for ownership.
 
+The coordinator's half — `prepare`, then `accept` → `integration-start` → pinned merge → `integration-accept` → `complete`, with `reconcile` as the crash path — runs the `mstar plan` verbs; flags, JSON envelopes and exit codes: [`docs/cli.md`](docs/cli.md#mstar-harness-plan).
+
 Recipe: [`docs/plan-scoped-pm.md`](docs/plan-scoped-pm.md).
 
 ### Audit, review & verification

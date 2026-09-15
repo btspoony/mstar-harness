@@ -122,6 +122,8 @@ scoped 会话只绑定一个 plan，按其任务走常规 per-plan 门禁，止�
 
 第二个终端只是传输方式，不是依赖：任意终端均可，Herdr 或 tmux 之类的多路复用器是可选的——所有权不读 pane 状态、TTL 或终端标签。
 
+coordinator 一侧——`prepare`，随后 `accept` → `integration-start` → 固定 pin 的合并 → `integration-accept` → `complete`，崩溃走 `reconcile`——由 `mstar plan` 动词执行；标志、JSON 报文与退出码：[`docs/cli.md`](docs/cli.md#mstar-harness-plan)。
+
 配方：[`docs/plan-scoped-pm.md`](docs/plan-scoped-pm.md)。
 
 ### 审计、Review 与验证
