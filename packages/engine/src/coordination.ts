@@ -16,10 +16,10 @@
  *
  * Implemented operations: `prepare`, `progress`, `residual-add`,
  * `residual-close`, `handoff`, `accept`, `return`, `integration-start`,
- * `integration-accept`, `complete`, `reconcile`. The non-snapshot
- * `replaceCoordinatedArtifact` kinds (status, project register, review bytes)
- * are refused with `coordination.not-implemented` until the protected-writer
- * cutover lands; they are never advertised and never no-op silently (§B
+ * `integration-accept`, `complete`, `reconcile`. `replaceCoordinatedArtifact`
+ * covers the snapshot, status and project-register kinds; `review`/`json` are
+ * not coordinated artifacts and refuse with
+ * `coordination.scoped-writer-required` rather than no-op silently (§B
  * "unimplemented operations must be absent, not stubbed").
  *
  * ## Lock order (spec §C3)
@@ -36,6 +36,7 @@ import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
+import type { GateResult } from "./core.js";
 import {
   CoordinationError,
   assertExactKeys,
@@ -84,6 +85,13 @@ import { readWorkflowSnapshot, validateWorkflowSnapshot, writeWorkflowSnapshot, 
 /* ------------------------------------------------------------------------ *
  * § Types — public surface
  * ------------------------------------------------------------------------ */
+
+/**
+ * Re-exported from the storage layer because this module is the public entry
+ * point for the scoped writers: callers catch `CoordinationError` and branch
+ * on its `code` without importing the storage layer directly.
+ */
+export { CoordinationError };
 
 /** Bind roles: one coordinator per lifecycle, one plan session per plan. */
 export type CoordinationRole = "plan-pm" | "coordinator";
@@ -228,9 +236,9 @@ export type HandoffEvidence = {
 };
 
 /**
- * The operation surface (spec §B). Slice A implements the first four kinds and
- * refuses the rest with `coordination.not-implemented` — they are typed so the
- * shape is stable, never silently accepted.
+ * The operation surface (spec §B): every kind is implemented and typed, so an
+ * unknown shape is refused as `coordination.invalid-input` rather than
+ * silently accepted.
  */
 export type PlanCoordinationOperation =
   | { kind: "prepare"; assignmentPath: string }
@@ -340,14 +348,6 @@ function isClaimableStatus(status: string): boolean {
 
 function invalidInput(message: string, details: Record<string, unknown> = {}): CoordinationError {
   return new CoordinationError("coordination.invalid-input", message, details);
-}
-
-function notImplemented(kind: string, hint: string): CoordinationError {
-  return new CoordinationError(
-    "coordination.not-implemented",
-    `${kind} is not implemented in this slice — ${hint}`,
-    { operation: kind },
-  );
 }
 
 function summarize(violations: readonly { code: string; message: string }[]): string {
@@ -1315,17 +1315,26 @@ export async function readCoordinatedArtifact(
   const path = resolveArtifactPath(root, ref);
   const bytes = readArtifactBytes(path);
   if (bytes === undefined) return { payload: undefined, version: "absent" };
-  if (ref.kind === "snapshot" && bytes.payload !== undefined) {
-    const gate = validateWorkflowSnapshot(bytes.payload);
-    if (!gate.ok) {
-      throw new CoordinationError(
-        "coordination.store",
-        `snapshot ${path} fails validation — ${summarize(gate.violations)}`,
-        { path, violations: gate.violations.map((entry) => entry.code) },
-      );
-    }
-  }
+  if (bytes.payload !== undefined) assertStoredArtifact(ref.kind, bytes.payload, path, root);
   return { payload: bytes.payload, version: bytes.version };
+}
+
+/**
+ * Validate a stored artifact against its kind's owner validator. The read
+ * surface fails loud on invalid content instead of handing out a document the
+ * scoped writers would refuse to write back.
+ */
+function assertStoredArtifact(kind: string, payload: unknown, path: string, harnessRoot: string): void {
+  let gate: GateResult | undefined;
+  if (kind === "snapshot") gate = validateWorkflowSnapshot(payload);
+  else if (kind === "status") gate = validateStatusV2(payload as StatusV2Doc, { harnessDir: harnessRoot });
+  else if (kind === "residuals") gate = validateProjectRegister(payload);
+  if (gate === undefined || gate.ok) return;
+  throw new CoordinationError(
+    "coordination.store",
+    `${kind} ${path} fails validation — ${summarize(gate.violations)}`,
+    { path, kind, violations: gate.violations.map((entry) => entry.code) },
+  );
 }
 
 /* ------------------------------------------------------------------------ *
@@ -3469,10 +3478,13 @@ async function mutateReconcile(
  * ------------------------------------------------------------------------ */
 
 /**
- * Replace a coordinated artifact with an exact-version precondition (spec §B).
- * Slice A implements the snapshot kind through the canonical snapshot writer
- * (which re-checks the coordinator session and CASes the byte version); other
- * kinds refuse rather than no-op.
+ * Replace a coordinated artifact with an exact-version precondition (spec §B,
+ * §C4 line 156). Snapshot replacement goes through the canonical snapshot
+ * writer (coordinator session, phase-only delta, locked CAS); the root status
+ * and a project register are written with the same byte-version CAS under
+ * root → snapshot → destination locks, refusing any document that carries
+ * coordinated ownership. `review`/`json` are not coordinated artifacts, so
+ * they refuse explicitly instead of silently no-opping.
  */
 export async function replaceCoordinatedArtifact(input: CoordinatedReplacement): Promise<VersionedArtifact> {
   assertExactKeys(
@@ -3496,10 +3508,22 @@ export async function replaceCoordinatedArtifact(input: CoordinatedReplacement):
   if (input.expectedVersion !== "absent" && !isArtifactVersion(input.expectedVersion)) {
     throw invalidInput(`expectedVersion must be "absent" or sha256:<hex> — got ${input.expectedVersion}`, {});
   }
-  if (input.ref.kind !== "snapshot") {
-    throw notImplemented(
-      `replace:${input.ref.kind}`,
-      "this slice replaces only coordinated workflow snapshots; status/register/review replacement lands with the protected writers",
+  const kind = input.ref.kind;
+  if (kind === "status") {
+    const root = canonicalizeNearestExisting(input.harnessRoot);
+    await replaceRootStatus(input, root);
+    return readCoordinatedArtifact(root, input.ref);
+  }
+  if (kind === "residuals") {
+    const root = canonicalizeNearestExisting(input.harnessRoot);
+    await replaceProjectRegister(input, root);
+    return readCoordinatedArtifact(root, input.ref);
+  }
+  if (kind !== "snapshot") {
+    throw new CoordinationError(
+      "coordination.scoped-writer-required",
+      `kind ${kind} has no coordinated writer — a scoped replacement covers snapshot, status and residuals; ${kind} keeps its own writer`,
+      { kind },
     );
   }
   const harnessRoot = canonicalizeNearestExisting(input.harnessRoot);
@@ -3562,4 +3586,223 @@ export async function replaceCoordinatedArtifact(input: CoordinatedReplacement):
     sessionPath: canonicalTarget(input.sessionPath),
   });
   return readCoordinatedArtifact(harnessRoot, input.ref);
+}
+
+function artifactVersionConflict(path: string, expected: string, actual: string): CoordinationError {
+  return new CoordinationError(
+    "coordination.version-conflict",
+    `${path} is at version ${actual}, expected ${expected} — re-read it (\`persist get --versioned\`) and retry`,
+    { expected, actual, path },
+  );
+}
+
+function scopedWriterRequired(message: string, details: Record<string, unknown>): CoordinationError {
+  return new CoordinationError("coordination.scoped-writer-required", message, details);
+}
+
+/** One workflow a root status doc registers, with its resolved snapshot path. */
+type WorkflowEntryRef = { id: string; dir: string; snapshotPath: string };
+
+/** Coordination ownership discovered from validated workflow snapshots. */
+type CoordinatedOwnership = { workflows: string[]; plans: Set<string> };
+
+/**
+ * The workflow entries one root status doc registers (spec §C "protection
+ * discovery"). Entries are engine-written and harness-relative; a malformed
+ * one refuses the replacement rather than silently dropping a protected
+ * workflow from the discovered set.
+ */
+function registeredWorkflowEntries(harnessRoot: string, doc: unknown, statusPath: string): WorkflowEntryRef[] {
+  const workflows = isPlainObject(doc) && Array.isArray(doc.workflows) ? doc.workflows : [];
+  const entries: WorkflowEntryRef[] = [];
+  for (const entry of workflows) {
+    if (!isPlainObject(entry) || !isNonEmptyString(entry.id) || !isNonEmptyString(entry.dir)) {
+      throw new CoordinationError(
+        "coordination.store",
+        `root ${statusPath} holds a malformed workflow entry — refusing to classify coordination ownership`,
+        { path: statusPath },
+      );
+    }
+    if (isAbsolute(entry.dir) || entry.dir.split(/[\\/]+/).includes("..")) {
+      throw new CoordinationError(
+        "coordination.store",
+        `root ${statusPath} holds a workflow entry whose dir ${JSON.stringify(entry.dir)} is not harness-relative`,
+        { path: statusPath, dir: entry.dir },
+      );
+    }
+    entries.push({ id: entry.id, dir: entry.dir, snapshotPath: join(harnessRoot, entry.dir, "snapshot.json") });
+  }
+  entries.sort((left, right) =>
+    canonicalizeNearestExisting(left.snapshotPath).localeCompare(canonicalizeNearestExisting(right.snapshotPath)),
+  );
+  return entries;
+}
+
+/**
+ * Hold every entry's snapshot lock, in canonical path order, across `run`
+ * (spec §C lock order: root → snapshots → destination). Holding them through
+ * the destination write is what keeps the discovered protected set stable.
+ */
+async function withSnapshotLocks<T>(entries: readonly WorkflowEntryRef[], run: () => Promise<T>): Promise<T> {
+  const next = entries[0];
+  if (next === undefined) return run();
+  return withStatusWriteLock(next.snapshotPath, () => withSnapshotLocks(entries.slice(1), run));
+}
+
+/**
+ * Ownership of the entries whose snapshot locks are held. Reading a snapshot
+ * outside that set would be the unlocked scan spec §C forbids, so it refuses.
+ */
+function coordinatedOwnershipOf(
+  locked: readonly WorkflowEntryRef[],
+  subset: readonly WorkflowEntryRef[],
+): CoordinatedOwnership {
+  const workflows: string[] = [];
+  const plans = new Set<string>();
+  for (const entry of subset) {
+    if (!locked.includes(entry)) {
+      throw new CoordinationError(
+        "coordination.store",
+        `snapshot ${entry.snapshotPath} was not locked before the protection discovery`,
+        { path: entry.snapshotPath },
+      );
+    }
+    const snapshot = readSnapshot(dirname(entry.snapshotPath));
+    if (snapshot.coordination === undefined) continue;
+    workflows.push(entry.id);
+    for (const row of snapshot.plans ?? []) {
+      if (!isPlainObject(row)) continue;
+      const coordination = row.coordination;
+      if (isPlainObject(coordination) && coordination.prepared !== undefined) plans.add(String(row.id));
+    }
+  }
+  return { workflows, plans };
+}
+
+/** The workflow entries both documents name, deduplicated by snapshot path. */
+function lockableEntries(...groups: readonly WorkflowEntryRef[][]): WorkflowEntryRef[] {
+  const byPath = new Map<string, WorkflowEntryRef>();
+  for (const entry of groups.flat()) if (!byPath.has(entry.snapshotPath)) byPath.set(entry.snapshotPath, entry);
+  return [...byPath.values()].sort((left, right) =>
+    canonicalizeNearestExisting(left.snapshotPath).localeCompare(canonicalizeNearestExisting(right.snapshotPath)),
+  );
+}
+
+/** Bucket keys (plan ids) a project register doc holds, if any. */
+function registerBucketKeys(doc: unknown): string[] {
+  if (!isPlainObject(doc)) return [];
+  const entries = doc.entries;
+  return isPlainObject(entries) ? Object.keys(entries) : [];
+}
+
+/**
+ * Replace the root status.json under its own lock (spec §C2 line 156). The
+ * whole-writer cutover refuses any root that registers a coordinated workflow
+ * — current or proposed — because those rows belong to the scoped writers.
+ */
+async function replaceRootStatus(input: CoordinatedReplacement, harnessRoot: string): Promise<void> {
+  const store = localStore(harnessRoot);
+  const statusPath = resolveArtifactPath(harnessRoot, input.ref);
+  const fromTable = resolveArtifactPath(harnessRoot, { kind: "status", key: "root" });
+  if (canonicalizeNearestExisting(fromTable) !== canonicalizeNearestExisting(statusPath)) {
+    throw new CoordinationError(
+      "coordination.path-mismatch",
+      `resolved status path ${statusPath} is not the store's ${fromTable}`,
+      { expected: fromTable, actual: statusPath },
+    );
+  }
+  if (!isPlainObject(input.payload)) throw invalidInput("a status payload must be an object");
+  // The store's status slot is typed; `validateStatusV2` below is what proves
+  // the payload actually carries that shape before anything is written.
+  const statusDoc = input.payload as StatusV2Doc;
+  const gate = validateStatusV2(statusDoc, { harnessDir: harnessRoot });
+  if (!gate.ok) {
+    throw invalidInput(`status payload fails validation — ${summarize(gate.violations)}`, {
+      violations: gate.violations.map((entry) => entry.code),
+    });
+  }
+  await withStatusWriteLock(statusPath, async () => {
+    const current = readArtifactBytes(statusPath);
+    const version = current === undefined ? "absent" : current.version;
+    if (version !== input.expectedVersion) throw artifactVersionConflict(statusPath, input.expectedVersion, version);
+    const currentEntries = registeredWorkflowEntries(harnessRoot, current?.payload, statusPath);
+    const proposedEntries = registeredWorkflowEntries(harnessRoot, input.payload, statusPath);
+    const lockedEntries = lockableEntries(currentEntries, proposedEntries);
+    await withSnapshotLocks(lockedEntries, async () => {
+      const currentOwnership = coordinatedOwnershipOf(lockedEntries, currentEntries);
+      if (currentOwnership.workflows.length > 0) {
+        throw scopedWriterRequired(
+          `refusing to replace ${statusPath}: it registers coordinated workflows ${currentOwnership.workflows.join(", ")} — the scoped writers own those rows`,
+          { path: statusPath, workflows: currentOwnership.workflows, side: "current" },
+        );
+      }
+      const proposedOwnership = coordinatedOwnershipOf(lockedEntries, proposedEntries);
+      if (proposedOwnership.workflows.length > 0) {
+        throw scopedWriterRequired(
+          `refusing to replace ${statusPath} with a root that registers coordinated workflows ${proposedOwnership.workflows.join(", ")}`,
+          { path: statusPath, workflows: proposedOwnership.workflows, side: "proposed" },
+        );
+      }
+      await withProtectedWrite(statusPath, "put", () => store.put({ kind: "status", key: "root", payload: statusDoc }));
+    });
+  });
+}
+
+/**
+ * Replace one project register under root → snapshot → register locks (spec
+ * §C2 line 156): a bucket keyed by a plan id some coordinated workflow
+ * prepared is refused — current or proposed — so a legacy helper can never
+ * rewrite or bump coordinated residuals.
+ */
+async function replaceProjectRegister(input: CoordinatedReplacement, harnessRoot: string): Promise<void> {
+  const store = localStore(harnessRoot);
+  const projectId = input.ref.key;
+  const registerPath = resolveArtifactPath(harnessRoot, input.ref);
+  const fromTable = resolveArtifactPath(harnessRoot, { kind: "residuals", key: projectId });
+  if (canonicalizeNearestExisting(fromTable) !== canonicalizeNearestExisting(registerPath)) {
+    throw new CoordinationError(
+      "coordination.path-mismatch",
+      `resolved register path ${registerPath} is not the store's ${fromTable}`,
+      { expected: fromTable, actual: registerPath },
+    );
+  }
+  if (!isPlainObject(input.payload)) throw invalidInput("a project register payload must be an object");
+  const gate = validateProjectRegister(input.payload);
+  if (!gate.ok) {
+    throw invalidInput(`project register payload fails validation — ${summarize(gate.violations)}`, {
+      violations: gate.violations.map((entry) => entry.code),
+    });
+  }
+  const statusPath = resolveArtifactPath(harnessRoot, { kind: "status", key: "root" });
+  // The project directory is created by the first write; the lock needs it first.
+  mkdirSync(dirname(registerPath), { recursive: true });
+  await withStatusWriteLock(statusPath, async () => {
+    const rootBytes = readArtifactBytes(statusPath);
+    const rootEntries = registeredWorkflowEntries(harnessRoot, rootBytes?.payload, statusPath);
+    await withSnapshotLocks(rootEntries, async () => {
+      const ownership = coordinatedOwnershipOf(rootEntries, rootEntries);
+      await withStatusWriteLock(registerPath, async () => {
+        const current = readArtifactBytes(registerPath);
+        const version = current === undefined ? "absent" : current.version;
+        if (version !== input.expectedVersion) throw artifactVersionConflict(registerPath, input.expectedVersion, version);
+        // The protected set was discovered under root + snapshot locks that are
+        // still held, so rechecking it here against the frozen set is enough.
+        for (const [side, doc] of [
+          ["current", current?.payload],
+          ["proposed", input.payload],
+        ] as const) {
+          const coordinated = registerBucketKeys(doc).filter((key) => ownership.plans.has(key));
+          if (coordinated.length > 0) {
+            throw scopedWriterRequired(
+              `refusing to replace ${registerPath}: ${side} buckets ${coordinated.join(", ")} belong to coordinated plans — use residual-add/residual-close`,
+              { path: registerPath, plans: coordinated, side },
+            );
+          }
+        }
+        await withProtectedWrite(registerPath, "put", () =>
+          store.put({ kind: "residuals", key: projectId, payload: input.payload }),
+        );
+      });
+    });
+  });
 }

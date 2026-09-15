@@ -451,6 +451,7 @@ export { collectActiveLifecycleBranches, scanActiveLifecycleBranches, type Activ
 export { WorkflowSnapshotValidationError } from "./workflow.js";
 
 export {
+  CoordinationError,
   bindPlanSession,
   mutatePlanCoordination,
   readCoordinatedArtifact,

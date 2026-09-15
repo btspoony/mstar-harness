@@ -18,10 +18,13 @@
  * - Spec §D — residual writes are scoped to `entries[<plan-id>]`: the engine
  *   generates provenance (`source_plan` / `lifecycle_id` / `registered_at`)
  *   and never touches a sibling plan's bucket.
- * - Slice A boundary — the operations still owed by slice B (`handoff`,
- *   `accept`, `return`, `integration-*`, `complete`, `reconcile`) are neither
- *   advertised in `allowed_operations` nor silently no-ops: they refuse with
- *   the stable code `coordination.not-implemented`.
+ * - Slice B surface — every spec §D/§E operation is implemented: a plan
+ *   session may hand off, and the coordinator verbs (`accept`, `return`,
+ *   `integration-start`, `integration-accept`, `complete`, `reconcile`) are
+ *   neither advertised to a plan session nor reachable from one.
+ * - Spec §C4 `replaceCoordinatedArtifact` — snapshot, status and project
+ *   register replacements are byte-version CASed and refuse any document that
+ *   carries coordinated ownership (`protected-writers`).
  *
  * Fixture discipline: the temp root is `realpathSync`-ed before any path is
  * derived from it, because the engine compares `realpathSync` worktree roots
@@ -37,12 +40,14 @@ import { dirname, join } from "node:path";
 import {
   bindPlanSession,
   mutatePlanCoordination,
+  readCoordinatedArtifact,
   readPlanCoordination,
+  replaceCoordinatedArtifact,
   resolvePlanScope,
   type CoordinationResult,
   type PlanCoordinationView,
 } from "../src/coordination.js";
-import { CoordinationError } from "../src/coordination-write.js";
+import { CoordinationError, artifactVersion } from "../src/coordination-write.js";
 import { claimLease } from "../src/lease.js";
 import { createFsStore, setArtifactStore } from "../src/store.js";
 
@@ -164,7 +169,7 @@ function makeFixture(): Fixture {
 
   writeJson(join(harness, "status.json"), {
     version: 2,
-    updated_at: "2026-09-15T00:00:00Z",
+    updated_at: "2026-09-15",
     workflows: [{ id: WORKFLOW_ID, status: "running", type: "iteration", started_at: "2026-09-15T00:00:00Z", dir: `workflows/${WORKFLOW_ID}` }],
   });
   writeJson(snapshotPath, {
@@ -530,9 +535,10 @@ describe("binding", () => {
 
     const view = await readPlanCoordination(fixture.planSession, PLAN_ID, fixture.root);
     expect([...view.allowed_operations].sort()).toEqual(["handoff", "progress", "residual-add", "residual-close"]);
-    // All seven spec §D operations exist now; the coordinator verbs are simply
-    // not reachable — nor advertised — from a plan session.
-    for (const kind of ["accept", "return", "integration-start", "integration-accept", "complete", "reconcile"]) {
+    // Every coordinator verb exists now; none is reachable — or advertised —
+    // from a plan session, `prepare` included (spec §D assigns it to the
+    // coordinator, not to the plan).
+    for (const kind of ["prepare", "accept", "return", "integration-start", "integration-accept", "complete", "reconcile"]) {
       expect(view.allowed_operations).not.toContain(kind);
       expect(
         await errorCodeOf(() =>
@@ -1038,4 +1044,392 @@ describe("residual-ownership", () => {
     expect(registerBucket(fixture, PLAN_ID).map((entry) => entry.id)).toEqual(["r-a"]);
     expect(registerBucket(fixture, PEER_PLAN_ID).map((entry) => entry.id)).toEqual(["r-b"]);
   });
+});
+
+/** A register bucket entry as the engine persists it (provenance included). */
+function storedResidual(planId: string, id: string): Record<string, unknown> {
+  return { ...residual(id), source_plan: planId, registered_at: "2026-09-15" };
+}
+
+describe("protected-writers", () => {
+  const STATUS_REF = { kind: "status", key: "root" } as const;
+  const REGISTER_REF = { kind: "residuals", key: PROJECT_ID } as const;
+
+  test("the root status is replaced under an exact byte-version precondition", async () => {
+    const fixture = makeFixture();
+    const harnessRoot = realpathSync(fixture.harness);
+    const statusPath = join(harnessRoot, "status.json");
+    const original = readFileSync(statusPath);
+    const empty = { version: 2, updated_at: "2026-09-16", workflows: [] };
+
+    // An uncoordinated root is a legitimate target, and the returned version is
+    // the version of the bytes just written.
+    const replaced = await replaceCoordinatedArtifact({
+      harnessRoot,
+      ref: STATUS_REF,
+      payload: empty,
+      expectedVersion: artifactVersion(original),
+    });
+    expect(replaced.payload).toEqual(empty);
+    expect(replaced.version).toBe(artifactVersion(readFileSync(statusPath)));
+    expect(await readCoordinatedArtifact(harnessRoot, STATUS_REF)).toEqual({
+      payload: empty,
+      version: replaced.version,
+    });
+
+    // The superseded version is refused, and a failed CAS leaves the file alone.
+    const before = readFileSync(statusPath);
+    expect(
+      await errorCodeOf(() =>
+        replaceCoordinatedArtifact({ harnessRoot, ref: STATUS_REF, payload: empty, expectedVersion: artifactVersion(original) }),
+      ),
+    ).toBe("coordination.version-conflict");
+    expect(readFileSync(statusPath).equals(before)).toBe(true);
+  });
+
+  test("a root that registers a coordinated workflow is refused on either side", async () => {
+    const fixture = makeFixture();
+    await ensureCoordinator(fixture);
+    const harnessRoot = realpathSync(fixture.harness);
+    const statusPath = join(harnessRoot, "status.json");
+    const coordinated = readFileSync(statusPath);
+    const registered = (JSON.parse(coordinated.toString("utf8")) as { workflows: unknown[] }).workflows;
+
+    // Current side: the root on disk registers a coordinated workflow.
+    expect(
+      await errorCodeOf(() =>
+        replaceCoordinatedArtifact({
+          harnessRoot,
+          ref: STATUS_REF,
+          payload: readJson(statusPath),
+          expectedVersion: artifactVersion(coordinated),
+        }),
+      ),
+    ).toBe("coordination.scoped-writer-required");
+    expect(readFileSync(statusPath).equals(coordinated)).toBe(true);
+
+    // Proposed side: the current root registers nothing coordinated, the
+    // replacement would re-register the coordinated workflow.
+    const plain = { version: 2, updated_at: "2026-09-17", workflows: [] };
+    writeJson(statusPath, plain);
+    const uncoordinated = readFileSync(statusPath);
+    expect(
+      await errorCodeOf(() =>
+        replaceCoordinatedArtifact({
+          harnessRoot,
+          ref: STATUS_REF,
+          payload: { ...plain, workflows: registered },
+          expectedVersion: artifactVersion(uncoordinated),
+        }),
+      ),
+    ).toBe("coordination.scoped-writer-required");
+    expect(readFileSync(statusPath).equals(uncoordinated)).toBe(true);
+  });
+
+  test("a register is replaceable only while no coordinated plan owns a bucket", async () => {
+    const fixture = makeFixture();
+    const harnessRoot = realpathSync(fixture.harness);
+    const legacyBucket = [storedResidual(PEER_PLAN_ID, "r-legacy")];
+
+    // A register that predates coordination: the only bucket belongs to a plan
+    // the coordinated workflow never prepared.
+    writeJson(fixture.registerPath, { entries: { [PEER_PLAN_ID]: legacyBucket } });
+    const legacy = readFileSync(fixture.registerPath);
+    const owned = await replaceCoordinatedArtifact({
+      harnessRoot,
+      ref: REGISTER_REF,
+      payload: { entries: { [PEER_PLAN_ID]: [...legacyBucket, storedResidual(PEER_PLAN_ID, "r-next")] } },
+      expectedVersion: artifactVersion(legacy),
+    });
+    expect(owned.version).toBe(artifactVersion(readFileSync(fixture.registerPath)));
+    expect(registerBucket(fixture, PEER_PLAN_ID).map((entry) => entry.id)).toEqual(["r-legacy", "r-next"]);
+
+    // A stale byte version is refused, and the file is left alone.
+    const before = readFileSync(fixture.registerPath);
+    expect(
+      await errorCodeOf(() =>
+        replaceCoordinatedArtifact({ harnessRoot, ref: REGISTER_REF, payload: { entries: {} }, expectedVersion: artifactVersion(legacy) }),
+      ),
+    ).toBe("coordination.version-conflict");
+    expect(readFileSync(fixture.registerPath).equals(before)).toBe(true);
+
+    // Prepare the plan in the coordinated workflow, then propose a bucket for
+    // it: the proposed side refuses before anything is written.
+    await preparePlan(fixture, PLAN_ID);
+    expect(
+      await errorCodeOf(() =>
+        replaceCoordinatedArtifact({
+          harnessRoot,
+          ref: REGISTER_REF,
+          payload: {
+            entries: {
+              [PEER_PLAN_ID]: [...legacyBucket, storedResidual(PEER_PLAN_ID, "r-next")],
+              [PLAN_ID]: [storedResidual(PLAN_ID, "r-scoped")],
+            },
+          },
+          expectedVersion: artifactVersion(before),
+        }),
+      ),
+    ).toBe("coordination.scoped-writer-required");
+    expect(readFileSync(fixture.registerPath).equals(before)).toBe(true);
+
+    // Once the scoped writer owns a bucket, even a like-for-like replacement is
+    // refused: the register is no longer a whole-writer target.
+    const session = (await bindPlan(fixture, PLAN_ID)).session_file;
+    const view = await readPlanCoordination(session, PLAN_ID, fixture.root);
+    await mutatePlanCoordination({
+      sessionPath: session,
+      planId: PLAN_ID,
+      expectedRevision: view.revision,
+      operation: { kind: "residual-add", entries: [residual("r-scoped")] as never, expectedRegisterVersion: view.register_version },
+    });
+    expect(registerBucket(fixture, PLAN_ID).map((entry) => entry.id)).toEqual(["r-scoped"]);
+    const ownedBytes = readFileSync(fixture.registerPath);
+    expect(
+      await errorCodeOf(() =>
+        replaceCoordinatedArtifact({
+          harnessRoot,
+          ref: REGISTER_REF,
+          payload: readJson(fixture.registerPath),
+          expectedVersion: artifactVersion(ownedBytes),
+        }),
+      ),
+    ).toBe("coordination.scoped-writer-required");
+    expect(readFileSync(fixture.registerPath).equals(ownedBytes)).toBe(true);
+
+    // The read surface reports the version of the bytes it validated, and
+    // refuses to hand back a document the register schema rejects.
+    expect(await readCoordinatedArtifact(harnessRoot, REGISTER_REF)).toEqual({
+      payload: readJson(fixture.registerPath),
+      version: artifactVersion(ownedBytes),
+    });
+    writeText(fixture.registerPath, "{\n  \"entries\": {\n    \"plan-a\": [{}]\n  }\n}\n");
+    expect(await errorCodeOf(() => readCoordinatedArtifact(harnessRoot, REGISTER_REF))).toBe("coordination.store");
+  });
+
+  test("uncoordinated kinds refuse explicitly and a plan session cannot replace a snapshot", async () => {
+    const fixture = makeFixture();
+    await preparePlan(fixture, PLAN_ID);
+    await ensureCoordinator(fixture);
+    const harnessRoot = realpathSync(fixture.harness);
+
+    // Kinds that keep their own writer are refused, never silently no-oped.
+    for (const ref of [{ kind: "review", key: PLAN_ID } as const, { kind: "json", key: join(harnessRoot, "loose.json") } as const]) {
+      expect(
+        await errorCodeOf(() => replaceCoordinatedArtifact({ harnessRoot, ref, payload: {}, expectedVersion: "absent" })),
+      ).toBe("coordination.scoped-writer-required");
+    }
+
+    // A coordinated snapshot is replaceable by the coordinator only: a plan
+    // session is refused before the payload is even considered.
+    const snapshotRef = { kind: "snapshot", key: WORKFLOW_ID } as const;
+    const snapshotPath = join(harnessRoot, "workflows", WORKFLOW_ID, "snapshot.json");
+    const snapshot = readJson(snapshotPath);
+    const version = artifactVersion(readFileSync(snapshotPath));
+    const planSession = (await bindPlan(fixture, PLAN_ID)).session_file;
+    for (const sessionPath of [undefined, planSession]) {
+      expect(
+        await errorCodeOf(() =>
+          replaceCoordinatedArtifact({ harnessRoot, ref: snapshotRef, payload: snapshot, expectedVersion: version, sessionPath }),
+        ),
+      ).toBe("coordination.session-role");
+    }
+  });
+});
+
+/** The coordinator merge: a real two-parent merge of the pinned source. */
+function mergeFeature(fixture: GitFixture): string {
+  git(
+    ["-c", "user.email=t@t", "-c", "user.name=t", "merge", "-q", "--no-ff", fixture.planSha, "-m", "Merge plan-a"],
+    fixture.integrationPath,
+  );
+  return headOf(fixture.integrationPath);
+}
+
+/** A fixture handed off and accepted: the state integration starts from. */
+async function acceptedFixture(): Promise<GitFixture> {
+  const fixture = gitFixture();
+  await preparePlan(fixture, PLAN_ID);
+  await bindPlan(fixture, PLAN_ID);
+  claimExecutionLease(fixture, PLAN_ID, fixture.planSession);
+  updatePlanRow(fixture, PLAN_ID, (row) => ({ ...row, status: "InReview" }));
+  await handoffCall(fixture, handoffEvidenceOf(fixture, fixture.planSha));
+  await coordinatorCall(fixture, PLAN_ID, { kind: "accept" });
+  return fixture;
+}
+
+/** A row with the fields the completion delta owns stripped out. */
+function retainedRow(fixture: GitFixture): Record<string, unknown> {
+  const row = { ...planRowOf(fixture, PLAN_ID) };
+  delete row.status;
+  delete row.coordination;
+  delete row.execution_lease;
+  return row;
+}
+
+describe("git-reconciliation", () => {
+  test("integration start pins the base, accept proves the merge, complete releases both leases", async () => {
+    const fixture = await acceptedFixture();
+    const coordinatorSessionId = readJson(fixture.coordinatorSession).session_id;
+
+    // An integration checkout that is dirty or on the wrong branch is never
+    // merged into: the recorded target is re-checked, not assumed.
+    writeText(join(fixture.integrationPath, "scratch.txt"), "wip\n");
+    expect(await errorCodeOf(() => coordinatorCall(fixture, PLAN_ID, { kind: "integration-start" }))).toBe(
+      "coordination.integration-unresolved",
+    );
+    rmSync(join(fixture.integrationPath, "scratch.txt"), { force: true });
+    git(["checkout", "-q", "-b", "stray-branch"], fixture.integrationPath);
+    expect(await errorCodeOf(() => coordinatorCall(fixture, PLAN_ID, { kind: "integration-start" }))).toBe(
+      "coordination.integration-diverged",
+    );
+    git(["checkout", "-q", "integration/plan-a"], fixture.integrationPath);
+    expect(headOf(fixture.integrationPath)).toBe(fixture.baseSha);
+
+    const started = await coordinatorCall(fixture, PLAN_ID, { kind: "integration-start" });
+    expect(started.outcome).toBe("integrating");
+    const startedRow = planRowOf(fixture, PLAN_ID);
+    expect(startedRow.status).toBe("InReview");
+    expect(leaseHolder(startedRow)).toBe(coordinatorSessionId);
+    const attempt = recordField(handoffFields(startedRow), "integration");
+    expect(attempt.target_branch).toBe("integration/plan-a");
+    expect(attempt.worktree_path).toBe(fixture.integrationPath);
+    expect(attempt.base_sha).toBe(fixture.baseSha);
+    expect(attempt.result_sha).toBeUndefined();
+    expect(typeof attempt.started_at).toBe("string");
+    const lease = recordField(snapshotOf(fixture), "integration_merge_lease");
+    expect(lease.holder).toBe(coordinatorSessionId);
+    expect(lease.plan_id).toBe(PLAN_ID);
+    expect(lease.source_branch).toBe("feature/plan-a");
+    expect(lease.target_branch).toBe("integration/plan-a");
+
+    // Retrying a started attempt re-verifies and never re-pins the base.
+    const pinned = readFileSync(fixture.snapshotPath, "utf8");
+    const retry = await coordinatorCall(fixture, PLAN_ID, { kind: "integration-start" });
+    expect(retry.outcome).toBe("already-integrating");
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(pinned);
+
+    // Nothing is proven by intent: an unmerged branch is not accepted.
+    expect(await errorCodeOf(() => coordinatorCall(fixture, PLAN_ID, { kind: "integration-accept" }))).toBe(
+      "coordination.integration-unresolved",
+    );
+
+    const mergeSha = mergeFeature(fixture);
+    const accepted = await coordinatorCall(fixture, PLAN_ID, { kind: "integration-accept" });
+    expect(accepted.outcome).toBe("merged");
+    const mergedRow = planRowOf(fixture, PLAN_ID);
+    expect(mergedRow.status).toBe("InReview");
+    expect(leaseHolder(mergedRow)).toBe(coordinatorSessionId);
+    expect(recordField(snapshotOf(fixture), "integration_merge_lease").holder).toBe(coordinatorSessionId);
+    const mergedHandoff = handoffFields(mergedRow);
+    expect(mergedHandoff.state).toBe("merged");
+    expect(recordField(mergedHandoff, "integration").result_sha).toBe(mergeSha);
+
+    // Complete is the one delta that releases both leases and sets Done.
+    const retainedBefore = retainedRow(fixture);
+    const completed = await coordinatorCall(fixture, PLAN_ID, { kind: "complete" });
+    expect(completed.outcome).toBe("completed");
+    const doneRow = planRowOf(fixture, PLAN_ID);
+    expect(doneRow.status).toBe("Done");
+    expect(doneRow.execution_lease).toBeUndefined();
+    expect(snapshotOf(fixture).integration_merge_lease).toBeUndefined();
+    const doneHandoff = handoffFields(doneRow);
+    expect(doneHandoff.state).toBe("completed");
+    expect(recordField(doneHandoff, "integration").result_sha).toBe(mergeSha);
+    expect(typeof doneHandoff.completed_at).toBe("string");
+    // Branch and worktree metadata survive: that is what authorizes cleanup.
+    expect(retainedRow(fixture)).toEqual(retainedBefore);
+
+    // Replay is read-only: nothing is re-acquired, nothing is rewritten.
+    const doneBytes = readFileSync(fixture.snapshotPath, "utf8");
+    const replayed = await coordinatorCall(fixture, PLAN_ID, { kind: "reconcile" });
+    expect(replayed.outcome).toBe("already-completed");
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(doneBytes);
+  }, 30000);
+
+  test("reconcile classifies an interrupted attempt and never merges", async () => {
+    // Started, nothing merged, base unmoved: the attempt is abandoned, not repaired.
+    const retry = await acceptedFixture();
+    await coordinatorCall(retry, PLAN_ID, { kind: "integration-start" });
+    const retried = await coordinatorCall(retry, PLAN_ID, { kind: "reconcile" });
+    expect(retried.outcome).toBe("retry-ready");
+    const retryRow = planRowOf(retry, PLAN_ID);
+    expect(retryRow.status).toBe("InReview");
+    expect(leaseHolder(retryRow)).toBe(readJson(retry.coordinatorSession).session_id);
+    const retryHandoff = handoffFields(retryRow);
+    expect(retryHandoff.state).toBe("accepted");
+    expect(retryHandoff.integration).toBeUndefined();
+    expect(snapshotOf(retry).integration_merge_lease).toBeUndefined();
+    expect(await errorCodeOf(() => coordinatorCall(retry, PLAN_ID, { kind: "complete" }))).toBe("coordination.invalid-transition");
+
+    // A restarted attempt that does merge reconciles to the same completion
+    // delta, in one write.
+    const restarted = await coordinatorCall(retry, PLAN_ID, { kind: "integration-start" });
+    expect(restarted.outcome).toBe("integrating");
+    const provenSha = mergeFeature(retry);
+    const reconciled = await coordinatorCall(retry, PLAN_ID, { kind: "reconcile" });
+    expect(reconciled.outcome).toBe("completed");
+    const provenRow = planRowOf(retry, PLAN_ID);
+    expect(provenRow.status).toBe("Done");
+    expect(provenRow.execution_lease).toBeUndefined();
+    expect(snapshotOf(retry).integration_merge_lease).toBeUndefined();
+    expect(recordField(handoffFields(provenRow), "integration").result_sha).toBe(provenSha);
+
+    // A base that moved without a merge of the pinned source is divergence.
+    const diverged = await acceptedFixture();
+    await coordinatorCall(diverged, PLAN_ID, { kind: "integration-start" });
+    git(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "unrelated"], diverged.integrationPath);
+    expect(await errorCodeOf(() => coordinatorCall(diverged, PLAN_ID, { kind: "reconcile" }))).toBe(
+      "coordination.integration-diverged",
+    );
+
+    // A crash between accept and complete re-proves the *recorded* result.
+    const merged = await acceptedFixture();
+    await coordinatorCall(merged, PLAN_ID, { kind: "integration-start" });
+    const recordedSha = mergeFeature(merged);
+    await coordinatorCall(merged, PLAN_ID, { kind: "integration-accept" });
+    const afterAccept = await coordinatorCall(merged, PLAN_ID, { kind: "reconcile" });
+    expect(afterAccept.outcome).toBe("completed");
+    const mergedDoneRow = planRowOf(merged, PLAN_ID);
+    expect(mergedDoneRow.status).toBe("Done");
+    expect(recordField(handoffFields(mergedDoneRow), "integration").result_sha).toBe(recordedSha);
+  }, 30000);
+
+  test("the merge lease is exclusive, the anchors are recorded, and the evidence stays sealed", async () => {
+    // A foreign holder owns the merge lease: no takeover, no queueing.
+    const leased = await acceptedFixture();
+    writeJson(leased.snapshotPath, {
+      ...snapshotOf(leased),
+      integration_merge_lease: {
+        holder: "coordinator-of-another-workflow",
+        claimed_at: "2026-09-15T00:00:00Z",
+        plan_id: PLAN_ID,
+        source_branch: "feature/plan-a",
+        target_branch: "integration/plan-a",
+      },
+    });
+    expect(await errorCodeOf(() => coordinatorCall(leased, PLAN_ID, { kind: "integration-start" }))).toBe(
+      "coordination.session-mismatch",
+    );
+
+    // Without a recorded integration target the call is unresolved, never
+    // guessed from the current branch.
+    const unanchored = await acceptedFixture();
+    const stripped = { ...snapshotOf(unanchored) };
+    delete stripped.integration_worktree_path;
+    writeJson(unanchored.snapshotPath, stripped);
+    expect(await errorCodeOf(() => coordinatorCall(unanchored, PLAN_ID, { kind: "integration-start" }))).toBe(
+      "coordination.integration-unresolved",
+    );
+
+    // Evidence sealed at handoff is re-verified after the merge: a rewritten
+    // report invalidates the attempt instead of being accepted.
+    const stale = await acceptedFixture();
+    await coordinatorCall(stale, PLAN_ID, { kind: "integration-start" });
+    mergeFeature(stale);
+    writeText(join(stale.sddDir, "review", "qc1.md"), "# rewritten after handoff\n");
+    expect(await errorCodeOf(() => coordinatorCall(stale, PLAN_ID, { kind: "integration-accept" }))).toBe(
+      "coordination.evidence-stale",
+    );
+  }, 30000);
 });
