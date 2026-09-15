@@ -60,6 +60,12 @@ On **dsh** only, read-only fan-out of **N ≥ 3** seats runs through the native 
 
 Goal text is a session-level objective only: `{HARNESS_DIR}` / `{PLAN_DIR}` / `status.json` remain SSOT, and goal completion is **not** harness Done. Mirror goal success criteria into the SSOT plan; when the goal changes, update goal text and the SSOT in the same round.
 
+## Phase-transition todo refresh (host-agnostic)
+
+At **every phase transition** (Prepare → Execute → InReview waves → Phase 3 close → Phase 4 PR → Phase 5 merge-ready → Phase 6 post-merge; likewise per-plan gate crossings), the PM refreshes the host session `todo` list **before the next action or dispatch**: close only the finished phase's **completed** entries, preserve any still-pending gate or future-phase item, and append the next phase's entries. Scoped primary sessions project only their assigned plan through handoff — never global Phase 3–6 tasks (`mstar-iteration` `references/command-shared-invariants.md` § Session todos; `references/phase-2-worktree-lease.md` §2.1).
+
+`todo` entries are a projection, not SSOT: they reflect existing snapshot phase / plan states and named plan/gate evidence, and cannot authorize or invent a state transition. Snapshot and plan artifacts remain the state authorities; this is freshness discipline, not a new host hook, tool, or deterministic enforcement mechanism.
+
 ## Resolve loaded skill root
 
 Docs name assets as skill **`<name>`** → `scripts/…` / `references/…`. **Resolve the loaded skill directory first** — do **not** open `skills/<name>/…` from a consumer app cwd (that layout exists in the harness source / plugin package only).

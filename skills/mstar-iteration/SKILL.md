@@ -99,7 +99,7 @@ Phase 6: post-merge close —— PR merged 后 §6.1–§6.4
 - 实际 Git ≠ `working_branch` → **同轮**更新 plan + snapshot + `execution_lease.working_branch`（如适用）
 - **跨 plan implement 并行安全闸**与 **integration merge 串行** → `references/phase-2-worktree-lease.md` §2.0 #5 /「Multi-plan parallelism」（**无论** `Worktree mode: waived`）
 - plan 内 SDD 独立 ready tasks **并行**，真实依赖与共享写目标串行 — phase-2 reference §2.4、§2.5、`mstar-sdd` Ready-task scheduling
-- **zero-residual（默认）**：单 plan QC findings 尽量当轮清干净；仅真 blocker 才 defer（须 Durable Roadmap）— 见 **`mstar-artifacts`** Findings cleanup modes
+- **allow-residual（默认）**：open R# 先登记 project register，且各决策面披露（清单 + severity + 跟踪位置；close 面另含 blocker-defer 标记）；unresolved `critical` 仍阻断 Approve；`zero-residual` 为显式 opt-in（可修当轮清干净，仅真 blocker-defer + Durable Roadmap）— 登记与披露职责 → **`mstar-artifacts`** Findings cleanup modes
 - iteration 命令共享的 PM invariants / preflight / todos / STOP → **`references/command-shared-invariants.md`**
 
 **Push cadence（§5.1a HARD）**：本地可提前修，**禁止**在 CI / AI review 波次未结束时 `git push` — 细则 → `references/phase-4-5-pr-delivery.md` §5.1a。

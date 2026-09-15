@@ -32,7 +32,7 @@ description: "Morning Star plan harness artifacts — `{PLAN_DIR}` main plans an
 - **Fail-loud handoff**: findings must pass `validateResidual` (per entry) / `validateProjectRegister` (register) before registration; snapshots and the v2 root pass `validateWorkflowSnapshot` / `validateStatus` (`mstar status validate`); malformed → reject + rewrite → **`references/status-and-residuals.md`** (“Fail-loud handoff contract”).
 - **Lifecycle**: open → verified close **in place** in the register (`lifecycle` / `closed_at` / `closure_note`); machine **`severity`** enum in reference. v1 `archived/residuals/` + `archive-residuals` are retired.
 
-- **Findings cleanup**: Assignment **`Findings cleanup: zero-residual | allow-residual`** (the `metadata.findings_cleanup` mirror is deleted); iteration Phase 2 defaults to **`zero-residual`** → **`references/status-and-residuals.md`** (“Findings cleanup modes”).
+- **Findings cleanup**: Assignment **`Findings cleanup: zero-residual | allow-residual`** (the `metadata.findings_cleanup` mirror is deleted); iteration Phase 2 defaults to **`allow-residual`** (register + disclose duties apply) → **`references/status-and-residuals.md`** (“Findings cleanup modes”).
 
 > **Engine check (when available):** run `mstar status findings-cleanup <plan-id> [--project <id>] [--mode zero-residual|allow-residual]` (or import `findingsCleanupGate` from `@mstar-harness/engine` in a host hook) to enforce the Findings cleanup mode above against the plan's register entries. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
@@ -53,7 +53,7 @@ Field semantics, severity mapping, findings cleanup modes, archive flow, and `jq
 ## Decision Rules
 
 - residual **severity** 是机器字段 SSOT（`references/status-and-residuals.md`）；每条新 finding 只登记 project register（`projects/<id>/residuals.json` → `entries[<plan-id>]`），v1 根级 `residual_findings` 仅 legacy 只读，**禁止**双写。
-- **`Findings cleanup: zero-residual`** 默认（迭代 Phase 2）：可修 findings 当轮 fix → re-review 清干净；仅真 blocker 可 defer 且须 Durable Roadmap。
+- **`Findings cleanup: allow-residual`** 默认（迭代 Phase 2）：open R# 先登记 project register，且各决策面披露（清单 + severity + 跟踪位置；close 面另含 blocker-defer 标记）；unresolved `critical` 仍阻断 Approve；`zero-residual` 为显式 opt-in —— 细则 → **`references/status-and-residuals.md`**「Findings cleanup modes」。
 - 登记前必须过 `validateResidual` / `validateProjectRegister` / `validateStatus`（fail-loud handoff）；malformed → reject + rewrite。
 - **计划行 / register 只经 domain call 修改**：scoped 路线使用 `mstar plan …` 动词（带 `--session` 与 `--expect`），手写 snapshot / register 会被拒（`coordination.direct-write-refused` / `coordination.scoped-writer-required`）；只读校验器（`mstar lease verify` / `mstar worktree check`）是检查而非修改替代。
 

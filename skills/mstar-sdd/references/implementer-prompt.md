@@ -69,5 +69,6 @@ Dispatch:
     - Verification: affected test files, command, actual output (red/green for executable bug fixes), OR the complete scoped-check block from file-handoffs.md for non-executable docs/policy
     - Reused evidence: original range and reason it remains applicable
     - Files changed
+    - Residuals disclosure: open R# list — id + severity + tracking location (`N/A — none open` when none); duty → `mstar-artifacts` Findings cleanup modes
     - Self-review notes
 ```

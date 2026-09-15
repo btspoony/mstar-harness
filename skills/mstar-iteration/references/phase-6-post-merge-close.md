@@ -39,7 +39,7 @@ mstar status workflow-close --workflow <id> [--harness <path>] [--ended-at <date
 2. compass `## Plans` + `{ITERATION_DIR}/README.md` 索引
 3. project roadmap / register
 
-- **禁止**伪造 `Done` 行、**禁止**为对齐而 close open residual —— 真实 remaining finding 阻塞 zero-residual 交付，而不是被静默关闭；reconciliation **不发明** Done/closed
+- **禁止**伪造 `Done` 行、**禁止**为对齐而 close open residual —— reconciliation **不发明** Done/closed，也不为对齐关闭条目或放宽 `zero-residual` 规则；`allow-residual` 下已登记且披露的非阻断 open R# **保持 open**，不随 lifecycle 终结而“随之关闭”（真实 remaining finding 阻塞交付，而不是被静默关闭）
 - **禁止**把新 tracked 产品/文档 commit 夹带进 Phase 6 —— 新发现的产品修复另开授权 workflow
 
 ## §6.4 Cleanup handoff（最后一步；显式、不自动）

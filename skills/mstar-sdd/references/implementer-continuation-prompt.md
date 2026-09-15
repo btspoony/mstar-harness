@@ -38,7 +38,7 @@ Dispatch:
 
     ## Report file
 
-    Write your full report to: [REPORT_FILE]
+    Write your full report to: [REPORT_FILE] — follow the fresh implementer prompt's report format (`implementer-prompt.md` § Report format), including the residuals-disclosure row.
 
     ## Scope and stop
 
