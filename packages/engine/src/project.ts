@@ -44,7 +44,14 @@ import { parseCompassFrontmatterText } from "./iteration.js";
 import { withStatusWriteLock } from "./lease.js";
 import { CoordinationError, isPlainObject, readArtifactBytes, withProtectedWrite } from "./coordination-write.js";
 import { assertFsStorePath, getArtifactStore, resolveArtifactPath, type ArtifactStore } from "./store.js";
-import { isOpenResidual, normalizeSeverity, validateResidual, type ResidualEntry, type WorkflowEntry } from "./status.js";
+import {
+  isOpenResidual,
+  normalizeSeverity,
+  rowPlanIds,
+  validateResidual,
+  type ResidualEntry,
+  type WorkflowEntry,
+} from "./status.js";
 import { WORKFLOW_SNAPSHOT_FILE } from "./workflow.js";
 
 /** Roadmap file name inside `projects/<id>/` ( — writer contract). */
@@ -421,7 +428,9 @@ async function withScopedPlanKeyGuard<T>(
       const snapshotPath = join(harnessRoot, entry.dir, WORKFLOW_SNAPSHOT_FILE);
       const snapshot = readArtifactBytes(snapshotPath)?.payload;
       if (!isPlainObject(snapshot) || !Array.isArray(snapshot.plans)) continue;
-      if (snapshot.plans.some((row) => isPlainObject(row) && row.id === planKey)) owningSnapshots[snapshotPath] = true;
+      // A row answers to `id` and/or the legacy `plan_id` — a protected key
+      // must never go unrecognized because it sits in the non-preferred slot.
+      if (snapshot.plans.some((row) => rowPlanIds(row).includes(planKey))) owningSnapshots[snapshotPath] = true;
     }
     const snapshotPaths = Object.keys(owningSnapshots).sort();
     const locked = snapshotPaths.reduceRight<() => Promise<T>>(
@@ -431,7 +440,7 @@ async function withScopedPlanKeyGuard<T>(
           const snapshot = readArtifactBytes(snapshotPath)?.payload;
           if (!isPlainObject(snapshot) || !Array.isArray(snapshot.plans)) continue;
           const coordinated = snapshot.plans.some(
-            (row) => isPlainObject(row) && row.id === planKey && row.coordination !== undefined,
+            (row) => rowPlanIds(row).includes(planKey) && row.coordination !== undefined,
           );
           if (coordinated) {
             throw new CoordinationError(

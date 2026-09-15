@@ -37,7 +37,7 @@ import { dirname, join, resolve, sep } from "node:path";
 import { readJson, SEVERITY_ORDER, type GateResult, type Severity, type ValidationResult } from "./core.js";
 import { resolveIterationDir } from "./path.js";
 import { withStatusWriteLock } from "./lease.js";
-import { CoordinationError, isPlainObject, withProtectedWrite } from "./coordination-write.js";
+import { CoordinationError, isNonEmptyString, isPlainObject, withProtectedWrite } from "./coordination-write.js";
 import { assertFsStorePath, getArtifactStore } from "./store.js";
 import { parseEnforcementFlag, type EnforcementFlag } from "./dispatch.js";
 import { loadMstarc } from "./mstarc.js";
@@ -119,6 +119,29 @@ export type PlanRow = {
 };
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Every plan id a `plans[]` row can be addressed by (status-and-residuals.md
+ * § Compatibility: read accepts `id` or the legacy `plan_id`; write prefers
+ * `id`). Both non-empty keys are reported, in canonical-first order: a row
+ * whose two keys disagree is ambiguous (`status.plan-row.dual-id`), and an
+ * ownership guard keyed on one of them would let the other escape protection.
+ * Empty strings never count; a non-object or a row carrying neither key has
+ * no address.
+ */
+export function rowPlanIds(row: unknown): string[] {
+  if (!isPlainObject(row)) return [];
+  const ids: string[] = [];
+  for (const value of [row.id, row.plan_id]) {
+    if (isNonEmptyString(value)) ids.push(value);
+  }
+  return [...new Set(ids)];
+}
+
+/** The canonical single plan id of a row — `id`, else legacy `plan_id`. */
+export function rowPlanId(row: unknown): string | undefined {
+  return rowPlanIds(row)[0];
+}
 
 const PLAN_STATUSES = ["Todo", "InProgress", "InReview", "Blocked", "Done"] as const;
 const RESIDUAL_DECISIONS = ["defer", "accept", "risk-accepted"] as const;
