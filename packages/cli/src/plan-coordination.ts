@@ -253,6 +253,18 @@ function handoffStateOf(view: PlanCoordinationView | undefined): string | undefi
 }
 
 /**
+ * `id` of the row's live handoff, when the operation produced a view. This is
+ * the engine's own id — the one a coordinator passes to `--handoff` — and the
+ * only place the CLI surfaces it: `plan handoff --json` mints it, `show`
+ * keeps reporting the row's status/state (spec §A2).
+ */
+function handoffIdOf(view: PlanCoordinationView | undefined): string | undefined {
+  const coordination = asRecord(asRecord(view?.row)?.coordination);
+  const id = asRecord(coordination?.handoff)?.id;
+  return typeof id === "string" ? id : undefined;
+}
+
+/**
  * The A2 success payload. `snapshot_version` is mandatory on every success:
  * when the operation produced a plan-row view it comes from that view, and
  * when it did not — a fresh or resumed coordinator bind has no selected row —
@@ -260,11 +272,7 @@ function handoffStateOf(view: PlanCoordinationView | undefined): string | undefi
  * call just wrote. Both are the engine's version of the exact bytes; nothing
  * is synthesized here.
  */
-async function successPayload(
-  verb: string,
-  result: CoordinationResult,
-  extra: { handoff_id?: string } = {},
-): Promise<Record<string, unknown>> {
+async function successPayload(verb: string, result: CoordinationResult): Promise<Record<string, unknown>> {
   const view = result.view;
   const payload: Record<string, unknown> = {
     ok: true,
@@ -285,20 +293,16 @@ async function successPayload(
             key: result.session.workflow_id,
           })
         ).version;
-  if (extra.handoff_id !== undefined) payload.handoff_id = extra.handoff_id;
+  const handoffId = handoffIdOf(view);
+  if (handoffId !== undefined) payload.handoff_id = handoffId;
   const state = handoffStateOf(view);
   if (state !== undefined) payload.state = state;
   if (result.outcome !== undefined) payload.outcome = result.outcome;
   return payload;
 }
 
-async function printSuccess(
-  verb: string,
-  result: CoordinationResult,
-  json: boolean,
-  extra: { handoff_id?: string } = {},
-): Promise<void> {
-  const payload = await successPayload(verb, result, extra);
+async function printSuccess(verb: string, result: CoordinationResult, json: boolean): Promise<void> {
+  const payload = await successPayload(verb, result);
   if (json) {
     console.log(JSON.stringify(payload));
     return;
@@ -321,6 +325,7 @@ async function printSuccess(
  */
 function printView(verb: string, view: PlanCoordinationView, json: boolean): void {
   const state = handoffStateOf(view);
+  const liveHandoff = handoffIdOf(view);
   if (json) {
     const payload: Record<string, unknown> = {
       ok: true,
@@ -337,6 +342,7 @@ function printView(verb: string, view: PlanCoordinationView, json: boolean): voi
       allowed_operations: view.allowed_operations,
     };
     if (view.session.plan_id !== undefined) payload.plan_id = view.session.plan_id;
+    if (liveHandoff !== undefined) payload.handoff_id = liveHandoff;
     if (state !== undefined) payload.state = state;
     console.log(JSON.stringify(payload));
     return;
@@ -351,6 +357,7 @@ function printView(verb: string, view: PlanCoordinationView, json: boolean): voi
   console.error(`plan ${verb}: row ${String(view.row.id)} status ${String(view.row.status)}, revision ${view.revision}`);
   console.error(`plan ${verb}: snapshot ${view.snapshot_version}, register ${view.register_version}`);
   if (state !== undefined) console.error(`plan ${verb}: handoff state ${state}`);
+  if (liveHandoff !== undefined) console.error(`plan ${verb}: handoff id ${liveHandoff}`);
   if (scope === null) {
     console.error(
       `plan ${verb}: this row is not prepared yet — run \`mstar plan prepare --session ${view.session_file} --plan <id> --assignment <absolute-md> --expect ${view.revision}\``,
@@ -400,6 +407,10 @@ async function mutate(
   const expectedRevision = parseExpect(options.expect as string | undefined, verb);
   const handoffId = options.handoff as string | undefined;
   const concrete = operation(options);
+  if (handoffId !== undefined && planId !== undefined) {
+    const live = handoffIdOf(await readPlanCoordination(sessionPath, planId));
+    if (live !== undefined && live !== handoffId) throw handoffMismatch(verb, planId, live, handoffId);
+  }
   pinSessionRoot(sessionPath);
   const result = await mutatePlanCoordination({
     sessionPath,
@@ -407,18 +418,43 @@ async function mutate(
     expectedRevision,
     operation: concrete,
   });
-  await printSuccess(verb, result, json, handoffId !== undefined ? { handoff_id: handoffId } : {});
+  await printSuccess(verb, result, json);
 }
 
 /** The coordinator transition verbs registered by one shared flag surface. */
 type TransitionKind = "accept" | "return" | "integration-start" | "integration-accept" | "complete" | "reconcile";
 
-/** The `--handoff <id>` operation shared by the coordinator transition verbs. */
+/**
+ * The coordinator transition operation. `--handoff <id>` is mandatory (spec
+ * §A2) and is *acted on* rather than forwarded: the engine's landed
+ * transition contract takes `kind` (plus `reason`) only and re-derives the
+ * row's live handoff itself — see `assertLiveHandoff` for the flag's
+ * assertion. Sending `handoffId` fails the engine's own key check
+ * (`coordination.forbidden-field`).
+ */
 function handoffOperation(options: PlanCliOptions, kind: TransitionKind): PlanCoordinationOperation {
   const handoffId = requireFlag(options.handoff as string | undefined, "--handoff", kind, "handoff-id");
-  if (kind !== "return") return { kind, handoffId };
+  if (kind !== "return") return { kind } as PlanCoordinationOperation;
   const reason = requireFlag(options.reason as string | undefined, "--reason", kind, "text");
-  return { kind, handoffId, reason };
+  return { kind, reason } as PlanCoordinationOperation;
+}
+
+/**
+ * The `--handoff <id>` assertion (spec §A2: the coordinator names the handoff
+ * it is acting on). A flag that names a different live handoff is refused —
+ * a re-handoff bumps `attempt`, so acting on a replaced one would complete
+ * the wrong attempt. A row that carries no handoff at all is left to the
+ * engine's `coordination.invalid-transition`, whose message is the accurate
+ * one for that state.
+ */
+function handoffMismatch(verb: string, planId: string, live: string, named: string): Error {
+  const error = new Error(
+    `plan ${verb}: row ${planId} carries handoff ${live} — refusing the --handoff ${named} this call names`,
+  );
+  return Object.assign(error, {
+    code: "coordination.handoff-mismatch",
+    details: { plan_id: planId, expected: live, actual: named },
+  });
 }
 
 /**
@@ -653,7 +689,7 @@ export function registerPlanCommands(program: Command): void {
       .description(`${description} (coordinator session)`)
       .option("--session <path>", "Absolute coordinator session JSON envelope path")
       .option("--plan <id>", "Plan id")
-      .option("--handoff <id>", "Handoff id");
+      .option("--handoff <id>", "Handoff id this call acts on (must be the row's live handoff; `plan show --json` reports it)");
     if (kind === "return") command.option("--reason <text>", "Return reason");
     command
       .option("--expect <revision>", "Row coordination.revision from `mstar plan show`")

@@ -8,10 +8,11 @@
  * is read from disk after each call, never from the CLI's own claim.
  *
  * Groups: `entry-forms`, `strict-input`, `linked-control-root`,
- * `scoped-operations`. The `integration-recovery` group (handoff → accept →
- * integration-start → explicit merge → integration-accept → complete →
- * reconcile) is not present: the engine's row verbs for it are unlanded and
- * refuse with `coordination.not-implemented` — see the task report.
+ * `scoped-operations`, `integration-recovery`. The last one drives the whole
+ * §D/§E chain against real Git worktrees (handoff → accept →
+ * integration-start → operator merge → integration-accept → complete, plus the
+ * crash `reconcile` legs); the merge itself is always the test's own Git call,
+ * never the CLI's.
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
@@ -747,4 +748,308 @@ describe("mstar plan — scoped-operations", () => {
     expect(jsonOf(refused).code).toBe("coordination.session-role");
     expect(snapshotBytes(fixture)).toBe(before);
   });
+});
+
+const INTEGRATION_BRANCH = "integration/plan-a";
+
+/** Every recovery case drives 10+ CLI subprocesses; 5s is a load-dependent coin flip. */
+const RECOVERY_TIMEOUT = 120_000;
+
+/** `git` with stdout captured — these fixtures need pins, not side effects. */
+function gitOut(args: string[], cwd: string): string {
+  return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+}
+
+/** Commit with the fixture's identity pinned (no ambient Git config reads). */
+function gitCommit(cwd: string, message: string): void {
+  git(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", message], cwd);
+}
+
+interface IntegrationFixture extends Fixture {
+  /** The recorded base the coordinator merges onto (main's first commit). */
+  baseSha: string;
+  /** The plan worktree HEAD handed off as `source_sha`. */
+  sourceSha: string;
+  integrationPath: string;
+  qcReport: string;
+  qcConsolidated: string;
+  qaReport: string;
+}
+
+/**
+ * Real-Git fixture for the recovery group. The handoff/integration/complete
+ * verbs read an actual plan checkout, an actual integration checkout and the
+ * pinned objects they name, so the shared fixture's placeholder directories are
+ * replaced by worktrees and the snapshot is given the anchors
+ * `integrationAnchors` requires (`branch.integration` +
+ * `integration_worktree_path`). The upgrade runs before the first bind, so no
+ * writer's version precondition is invalidated by it.
+ */
+function makeIntegrationFixture(): IntegrationFixture {
+  const fixture = makeFixture();
+  const baseSha = gitOut(["rev-parse", "HEAD"], fixture.root);
+
+  rmSync(fixture.worktreePath, { recursive: true, force: true });
+  git(["worktree", "add", "-q", "-b", "feature/plan-a", fixture.worktreePath], fixture.root);
+  writeText(join(fixture.worktreePath, "slice.txt"), "plan a slice\n");
+  git(["add", "slice.txt"], fixture.worktreePath);
+  gitCommit(fixture.worktreePath, "plan a: slice");
+  const sourceSha = gitOut(["rev-parse", "HEAD"], fixture.worktreePath);
+
+  const integrationPath = join(fixture.root, "wt-integration");
+  git(["worktree", "add", "-q", "-b", INTEGRATION_BRANCH, integrationPath, "main"], fixture.root);
+  // The integration checkout starts on the recorded base: integration-start
+  // pins whatever HEAD it finds, and this pin must be the merge's first parent.
+  expect(gitOut(["rev-parse", "HEAD"], integrationPath)).toBe(baseSha);
+
+  const snapshot = readJson(fixture.snapshotPath);
+  snapshot.branch = { base: "main", integration: INTEGRATION_BRANCH };
+  snapshot.integration_worktree_path = integrationPath;
+  writeJson(fixture.snapshotPath, snapshot);
+
+  const sdd = join(fixture.harness, "sdd", PLAN_ID);
+  const qcReport = join(sdd, "qc1.md");
+  const qcConsolidated = join(sdd, "qc.md");
+  const qaReport = join(sdd, "qa.md");
+  writeText(qcReport, "# QC 1\ndecision: Approve\n");
+  writeText(qcConsolidated, "# QC consolidated\ndecision: Approve\n");
+  writeText(qaReport, "# QA\nverdict: pass\n");
+
+  return { ...fixture, baseSha, sourceSha, integrationPath, qcReport, qcConsolidated, qaReport };
+}
+
+/** One row of the authoritative snapshot (never the CLI's own claim). */
+function rowOf(fixture: Fixture, planId: string = PLAN_ID): Record<string, unknown> {
+  const plans = readJson(fixture.snapshotPath).plans as Array<Record<string, unknown>>;
+  const row = plans.find((entry) => entry.id === planId);
+  if (row === undefined) throw new Error(`row ${planId} missing from ${fixture.snapshotPath}`);
+  return row;
+}
+
+/** The row's recorded handoff state, read from disk. */
+function recordedHandoffState(fixture: Fixture, planId: string = PLAN_ID): unknown {
+  const coordination = rowOf(fixture, planId).coordination as Record<string, unknown> | undefined;
+  const handoff = coordination?.handoff as Record<string, unknown> | undefined;
+  return handoff?.state;
+}
+
+/** Drive the row to InReview through its own plan session (Todo → InProgress → InReview). */
+function toInReview(fixture: Fixture, planSession: string, summary: string): void {
+  for (const status of ["InProgress", "InReview"]) {
+    const payload = join(fixture.root, `progress-${status}.json`);
+    writeJson(payload, { status, summary, evidence_paths: [fixture.evidencePath] });
+    const moved = runCli(
+      [
+        "plan",
+        "progress",
+        "--session",
+        planSession,
+        "--file",
+        payload,
+        "--expect",
+        String(rowRevision(fixture, planSession)),
+        "--json",
+      ],
+      fixture.root,
+    );
+    expect(moved.exitCode).toBe(0);
+    expect(jsonOf(moved).ok).toBe(true);
+    expect(recordedHandoffState(fixture)).toBeUndefined();
+  }
+}
+
+/** Submit the pinned handoff and return the engine's own handoff id. */
+function submitHandoff(fixture: IntegrationFixture, planSession: string): string {
+  const payload = join(fixture.root, "handoff.json");
+  writeJson(payload, {
+    source_sha: fixture.sourceSha,
+    worktree_path: fixture.worktreePath,
+    review_base: fixture.baseSha,
+    review_head: fixture.sourceSha,
+    qc: { decision: "Approve", reports: [fixture.qcReport], consolidated: fixture.qcConsolidated },
+    qa: { gate: "mandatory", decision: "pass", report: fixture.qaReport },
+  });
+  const handed = runCli(
+    [
+      "plan",
+      "handoff",
+      "--session",
+      planSession,
+      "--file",
+      payload,
+      "--expect",
+      String(rowRevision(fixture, planSession)),
+      "--json",
+    ],
+    fixture.root,
+  );
+  expect(handed.exitCode).toBe(0);
+  const result = jsonOf(handed);
+  expect(result.outcome).toBe("handed-off");
+  expect(typeof result.handoff_id).toBe("string");
+  return String(result.handoff_id);
+}
+
+/** The row's live handoff id as the coordinator's `show` reports it. */
+function liveHandoffId(fixture: Fixture, coordinator: string): string {
+  const view = runCli(["plan", "show", "--session", coordinator, "--plan", PLAN_ID, "--json"], fixture.root);
+  expect(view.exitCode).toBe(0);
+  const view2 = jsonOf(view);
+  expect(typeof view2.handoff_id).toBe("string");
+  return String(view2.handoff_id);
+}
+
+/** One coordinator transition through the shared flag surface. */
+function transition(fixture: Fixture, verb: string, coordinator: string, handoffId: string): RunResult {
+  return runCli(
+    [
+      "plan",
+      verb,
+      "--session",
+      coordinator,
+      "--plan",
+      PLAN_ID,
+      "--handoff",
+      handoffId,
+      "--expect",
+      String(rowRevision(fixture, coordinator, PLAN_ID)),
+      "--json",
+    ],
+    fixture.root,
+  );
+}
+
+/** The operator's merge — the CLI never runs one. */
+function mergePlanA(fixture: IntegrationFixture): void {
+  git(["-c", "user.email=t@t", "-c", "user.name=t", "merge", "--no-ff", "-m", "merge plan a", "feature/plan-a"], fixture.integrationPath);
+}
+
+/** The chain up to a handed-off, accepted, started attempt (`merge` optional). */
+function attemptOf(
+  fixture: IntegrationFixture,
+  options: { merge: boolean },
+): { coordinator: string; handoffId: string } {
+  const coordinator = bindCoordinator(fixture);
+  preparePlan(fixture, coordinator, PLAN_ID);
+  const planSession = bindPlan(fixture, PLAN_ID);
+  toInReview(fixture, planSession, "slice ready for review");
+  const handoffId = submitHandoff(fixture, planSession);
+
+  // The handoff id `plan handoff` minted is the row's live id, and the one the
+  // coordinator transitions act on.
+  expect(liveHandoffId(fixture, coordinator)).toBe(handoffId);
+
+  const accepted = transition(fixture, "accept", coordinator, handoffId);
+  expect(accepted.exitCode).toBe(0);
+  expect(jsonOf(accepted).state).toBe("accepted");
+  // Accept is the transfer of execution ownership, never a merge.
+  expect(gitOut(["rev-parse", "HEAD"], fixture.integrationPath)).toBe(fixture.baseSha);
+
+  const started = transition(fixture, "integration-start", coordinator, handoffId);
+  expect(started.exitCode).toBe(0);
+  expect(jsonOf(started).state).toBe("integrating");
+  if (options.merge) mergePlanA(fixture);
+  return { coordinator, handoffId };
+}
+
+/** The workflow's merge lease is gone once the attempt is over. */
+function expectMergeLeaseReleased(fixture: Fixture): void {
+  expect(readJson(fixture.snapshotPath).integration_merge_lease).toBeUndefined();
+}
+
+/** Completion releases both leases: nothing owns the row or the merge any more. */
+function expectReleased(fixture: Fixture): void {
+  expectMergeLeaseReleased(fixture);
+  expect(rowOf(fixture).execution_lease).toBeUndefined();
+}
+
+describe("mstar plan — integration-recovery", () => {
+  test("handoff → accept → integration-start → merge → integration-accept → complete ends Done", () => {
+    const fixture = makeIntegrationFixture();
+    const { coordinator, handoffId } = attemptOf(fixture, { merge: true });
+
+    const mergeSha = gitOut(["rev-parse", "HEAD"], fixture.integrationPath);
+    // The proven attempt is the two-parent merge of the pinned base then source.
+    expect(gitOut(["rev-list", "--parents", "-n", "1", "HEAD"], fixture.integrationPath).split(" ")).toEqual([
+      mergeSha,
+      fixture.baseSha,
+      fixture.sourceSha,
+    ]);
+
+    const merged = transition(fixture, "integration-accept", coordinator, handoffId);
+    expect(merged.exitCode).toBe(0);
+    expect(jsonOf(merged).state).toBe("merged");
+    // Integration is verified, not completed: the leases and InReview stay.
+    expect(rowOf(fixture).status).toBe("InReview");
+    expect(rowOf(fixture).execution_lease).toBeDefined();
+
+    const completed = transition(fixture, "complete", coordinator, handoffId);
+    expect(completed.exitCode).toBe(0);
+    const done = jsonOf(completed);
+    expect(done.outcome).toBe("completed");
+    expect(rowOf(fixture).status).toBe("Done");
+    expect(recordedHandoffState(fixture)).toBe("completed");
+    expectReleased(fixture);
+  }, RECOVERY_TIMEOUT);
+
+  test("reconcile completes an attempt whose merge already landed, without a second merge", () => {
+    const fixture = makeIntegrationFixture();
+    const { coordinator, handoffId } = attemptOf(fixture, { merge: true });
+
+    const head = gitOut(["rev-parse", "HEAD"], fixture.integrationPath);
+    const reconciled = transition(fixture, "reconcile", coordinator, handoffId);
+    expect(reconciled.exitCode).toBe(0);
+    expect(jsonOf(reconciled).outcome).toBe("completed");
+    expect(rowOf(fixture).status).toBe("Done");
+    expectReleased(fixture);
+
+    // Recovery observed Git; it never merged again and never re-pinned.
+    expect(gitOut(["rev-parse", "HEAD"], fixture.integrationPath)).toBe(head);
+    expect(gitOut(["rev-list", "--count", "--first-parent", `${fixture.baseSha}..HEAD`], fixture.integrationPath)).toBe("1");
+
+    // Replaying the crash recovery of a finished attempt is a read-only no-op.
+    const replay = transition(fixture, "reconcile", coordinator, handoffId);
+    expect(replay.exitCode).toBe(0);
+    expect(jsonOf(replay).outcome).toBe("already-completed");
+    expect(gitOut(["rev-parse", "HEAD"], fixture.integrationPath)).toBe(head);
+  }, RECOVERY_TIMEOUT);
+
+  test("reconcile releases an unmerged attempt as retry-ready and the retry re-pins", () => {
+    const fixture = makeIntegrationFixture();
+    const { coordinator, handoffId } = attemptOf(fixture, { merge: false });
+
+    const reconciled = transition(fixture, "reconcile", coordinator, handoffId);
+    expect(reconciled.exitCode).toBe(0);
+    expect(jsonOf(reconciled).outcome).toBe("retry-ready");
+    // Only the abandoned attempt is released: the row keeps InReview and its
+    // execution lease, and the handoff goes back to accepted.
+    expect(rowOf(fixture).status).toBe("InReview");
+    expect(rowOf(fixture).execution_lease).toBeDefined();
+    expect(recordedHandoffState(fixture)).toBe("accepted");
+    expectMergeLeaseReleased(fixture);
+
+    const retried = transition(fixture, "integration-start", coordinator, handoffId);
+    expect(retried.exitCode).toBe(0);
+    expect(jsonOf(retried).state).toBe("integrating");
+    expect(gitOut(["rev-parse", "HEAD"], fixture.integrationPath)).toBe(fixture.baseSha);
+
+    mergePlanA(fixture);
+    const merged = transition(fixture, "integration-accept", coordinator, handoffId);
+    expect(merged.exitCode).toBe(0);
+    expect(jsonOf(merged).state).toBe("merged");
+  }, RECOVERY_TIMEOUT);
+
+  test("integration-accept refuses an attempt with no merge of the pinned source", () => {
+    const fixture = makeIntegrationFixture();
+    const { coordinator, handoffId } = attemptOf(fixture, { merge: false });
+    const before = snapshotBytes(fixture);
+
+    const refused = transition(fixture, "integration-accept", coordinator, handoffId);
+    expect(refused.exitCode).toBe(1);
+    const refusal = jsonOf(refused);
+    expect(refusal.ok).toBe(false);
+    expect(refusal.code).toBe("coordination.integration-unresolved");
+    expect(recordedHandoffState(fixture)).toBe("integrating");
+    expect(snapshotBytes(fixture)).toBe(before);
+  }, RECOVERY_TIMEOUT);
 });
