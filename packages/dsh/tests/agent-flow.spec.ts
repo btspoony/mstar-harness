@@ -89,6 +89,7 @@ const VALID_PLANNED = `## Assignment
 **Task category**: logic
 **Working branch**: feature/agent-flow
 **Plan Path**: /proj/plans/00000810-agent-flow.md
+**Task budget (implement / ops rounds)**: S — one focused implementer round
 
 ## Task 2
 

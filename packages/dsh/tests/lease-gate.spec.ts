@@ -52,6 +52,7 @@ const SDD_ASSIGNMENT = `## Assignment
 **Plan Path**: /srv/plans/${PLAN_ID}.md
 **Worktree path**: ${WORKTREE}
 **Working branch**: ${BRANCH}
+**Task budget (implement / ops rounds)**: S — one focused implementer round
 
 Do the thing, evidence-first.
 `
@@ -79,6 +80,7 @@ const INLINE_ASSIGNMENT = `## Assignment
 **Plan Path**: /srv/plans/${PLAN_ID}.md
 **Worktree path**: ${WORKTREE}
 **Working branch**: ${BRANCH}
+**Task budget (implement / ops rounds)**: S — one focused implementer round
 
 Do the thing, evidence-first.
 `
@@ -97,6 +99,7 @@ const SDD_NO_PLAN = `## Assignment
 **Task category**: logic
 **Execution mode**: sdd
 **Working branch**: ${BRANCH}
+**Task budget (implement / ops rounds)**: S — one focused implementer round
 
 Do the thing, evidence-first.
 `
@@ -122,6 +125,7 @@ const SCOUT_SDD = `## Assignment
 **Execute as**: scout
 **Delegation**: n/a
 **Task category**: deep
+**Task budget (implement / ops rounds)**: XS — one orientation round
 **Execution mode**: sdd
 **Plan Path**: /srv/plans/${PLAN_ID}.md
 
@@ -138,6 +142,7 @@ const SDD_VIA_SDD_DIR = `## Assignment
 **SDD dir**: /srv/sdd/${PLAN_ID}
 **Worktree path**: ${WORKTREE}
 **Working branch**: ${BRANCH}
+**Task budget (implement / ops rounds)**: S — one focused implementer round
 
 Do the thing, evidence-first.
 `
@@ -465,6 +470,7 @@ describe('dispatch gate — Assignment header-region scoping ', () => {
 **Plan Path**: /srv/plans/${PLAN_ID}.md
 **Worktree path**: ${WORKTREE}
 **Working branch**: ${BRANCH}
+**Task budget (implement / ops rounds)**: S — one focused implementer round
 
 # Target
 
@@ -483,6 +489,7 @@ Do the thing. Quoted examples must never leak into header fields:
 **Plan Path**: /srv/plans/${PLAN_ID}.md
 **Worktree path**: ${WORKTREE}
 **Working branch**: ${BRANCH}
+**Task budget (implement / ops rounds)**: S — one focused implementer round
 
 # Target
 
@@ -499,6 +506,7 @@ Do the thing. Quoted example must not trigger the lease gate:
 **Execution mode**: sdd
 **Worktree path**: ${WORKTREE}
 **Working branch**: ${BRANCH}
+**Task budget (implement / ops rounds)**: S — one focused implementer round
 
 # Target
 
