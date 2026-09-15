@@ -2980,15 +2980,20 @@ function assertIntegrationCheckout(anchors: IntegrationAnchors, planId: string):
   return checkout;
 }
 
-/** Parents of one pinned commit in a repository. */
-function commitParents(path: string, sha: string): string[] | undefined {
-  const line = gitRead(path, ["rev-list", "--parents", "-n", "1", sha]);
-  if (line === undefined) return undefined;
+/** The parent ids carried by one `<sha> <parent>…` rev-list line. */
+function parentIdsOf(line: string): string[] {
   return line
     .split(" ")
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0)
     .slice(1);
+}
+
+/** Parents of one pinned commit in a repository. */
+function commitParents(path: string, sha: string): string[] | undefined {
+  const line = gitRead(path, ["rev-list", "--parents", "-n", "1", sha]);
+  if (line === undefined) return undefined;
+  return parentIdsOf(line);
 }
 
 /** What proving one integration attempt from the pinned objects yields (spec §E). */
@@ -3024,18 +3029,20 @@ function integrationProof(path: string, head: string, baseSha: string, sourceSha
     };
   }
   if (gitIsAncestor(path, sourceSha, baseSha)) return { kind: "proven", resultSha: baseSha };
-  const range = gitRead(path, ["rev-list", "--first-parent", `${baseSha}..${head}`]);
+  const range = gitRead(path, ["rev-list", "--first-parent", "--parents", `${baseSha}..${head}`]);
   if (range === undefined) {
     return { kind: "diverged", reason: `the first-parent path ${baseSha}..HEAD is unreadable` };
   }
+  // One call carries the parents of every commit on the path: the proof never
+  // spawns a Git process per commit, and a commit whose parents the repository
+  // cannot report is a diverged path rather than a silently skipped candidate.
   const candidates = range
     .split("\n")
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0)
-    .filter((sha) => {
-      const parents = commitParents(path, sha);
-      return parents !== undefined && parents.length === 2 && parents[0] === baseSha && parents[1] === sourceSha;
-    });
+    .map((line) => line.split(" ").map((entry) => entry.trim()).filter((entry) => entry.length > 0))
+    .filter((ids) => ids.length === 3 && ids[1] === baseSha && ids[2] === sourceSha)
+    .map((ids) => ids[0]);
   if (candidates.length === 0) return { kind: "pending" };
   if (candidates.length > 1) {
     return {
