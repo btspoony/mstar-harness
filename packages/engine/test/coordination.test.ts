@@ -34,7 +34,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -47,7 +47,7 @@ import {
   type CoordinationResult,
   type PlanCoordinationView,
 } from "../src/coordination.js";
-import { CoordinationError, artifactVersion } from "../src/coordination-write.js";
+import { CoordinationError, artifactVersion, withProtectedWrite } from "../src/coordination-write.js";
 import { claimLease, withStatusWriteLock } from "../src/lease.js";
 import { createFsStore, setArtifactStore } from "../src/store.js";
 
@@ -1249,6 +1249,43 @@ describe("protected-writers", () => {
       ).toBe("coordination.session-role");
     }
   });
+
+  test("a json alias through a symlinked parent cannot create a not-yet-existing protected file (PR241-G4)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "coordination-alias-parent-"));
+    try {
+      // The protected ROOT exists (`workflows/`) but the leaf does not, and the
+      // alias parent is a symlink onto the canonical root itself. A class
+      // decision that falls back to the lexical path lets that alias land
+      // outside the protected prefix and create the protected file.
+      const canonical = realpathSync(root);
+      mkdirSync(join(canonical, "workflows"), { recursive: true });
+      symlinkSync(canonical, join(canonical, "alias"), "dir");
+      const snapshotPath = join(canonical, "workflows", WORKFLOW_ID, "snapshot.json");
+      const snapshotAlias = join(canonical, "alias", "workflows", WORKFLOW_ID, "snapshot.json");
+      const statusAlias = join(canonical, "alias", "status.json");
+      const store = createFsStore(canonical);
+
+      await expect(store.put({ kind: "json", key: snapshotAlias, payload: { id: WORKFLOW_ID } })).rejects.toMatchObject({
+        code: "coordination.direct-write-refused",
+      });
+      await expect(store.put({ kind: "json", key: statusAlias, payload: { version: 2 } })).rejects.toMatchObject({
+        code: "coordination.direct-write-refused",
+      });
+      // Refuse-before-write: neither protected document nor its directory exists.
+      expect(existsSync(snapshotPath)).toBe(false);
+      expect(existsSync(join(canonical, "status.json"))).toBe(false);
+
+      // Unprotected aliases still write (the walk must not over-block), and the
+      // protected path itself stays writable from the authorized context.
+      await store.put({ kind: "json", key: join(canonical, "alias", "notes.json"), payload: { note: "escape hatch" } });
+      const notes = await store.get<Record<string, string>>({ kind: "json", key: join(canonical, "alias", "notes.json") });
+      expect(notes).toEqual({ note: "escape hatch" });
+      await withProtectedWrite(snapshotPath, "put", () => store.put({ kind: "json", key: snapshotAlias, payload: { id: WORKFLOW_ID } }));
+      expect(existsSync(snapshotPath)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 /** The coordinator merge: a real two-parent merge of the pinned source. */
@@ -1474,6 +1511,37 @@ describe("git-reconciliation", () => {
     const refused = handoffFields(planRowOf(fixture, PLAN_ID));
     expect(refused.state).toBe("integrating");
     expect(recordField(refused, "integration").result_sha).toBeUndefined();
+  }, 30000);
+
+  test("a merged attempt is never completed on a proof the live HEAD stopped reaching (PR241-G2)", async () => {
+    const fixture = await acceptedFixture();
+    await coordinatorCall(fixture, PLAN_ID, { kind: "integration-start" });
+    const mergeSha = mergeFeature(fixture);
+    const accepted = await coordinatorCall(fixture, PLAN_ID, { kind: "integration-accept" });
+    expect(accepted.outcome).toBe("merged");
+    expect(recordField(handoffFields(planRowOf(fixture, PLAN_ID)), "integration").result_sha).toBe(mergeSha);
+
+    // The recorded merge is still an object of the repository, but the
+    // integration branch is force-moved below it. `complete` must re-prove the
+    // recorded result against the HEAD it reads in its own locked precheck —
+    // a final write that only re-reads the recorded bytes would accept it.
+    git(["reset", "-q", "--hard", fixture.baseSha], fixture.integrationPath);
+    expect(headOf(fixture.integrationPath)).toBe(fixture.baseSha);
+
+    const before = readFileSync(fixture.snapshotPath);
+    expect(await errorCodeOf(() => coordinatorCall(fixture, PLAN_ID, { kind: "complete" }))).toBe(
+      "coordination.integration-diverged",
+    );
+    expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
+    expect(planRowOf(fixture, PLAN_ID).status).toBe("InReview");
+    expect(handoffFields(planRowOf(fixture, PLAN_ID)).state).toBe("merged");
+
+    // The replay path carries the same gate: reconcile re-reads the branch HEAD
+    // instead of completing from the recorded bytes alone.
+    expect(await errorCodeOf(() => coordinatorCall(fixture, PLAN_ID, { kind: "reconcile" }))).toBe(
+      "coordination.integration-diverged",
+    );
+    expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
   }, 30000);
 });
 
