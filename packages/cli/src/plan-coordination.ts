@@ -25,6 +25,7 @@ import {
   bindPlanSession,
   createFsStore,
   mutatePlanCoordination,
+  readCoordinatedArtifact,
   readPlanCoordination,
   readSessionEnvelope,
   resolveProcessHarnessDir,
@@ -86,6 +87,43 @@ function failurePayload(
     if (details?.[key] !== undefined) payload[key] = details[key];
   }
   return JSON.stringify(payload);
+}
+
+/** Every verb this family registers (spec §A2 — no aliases). */
+const PLAN_VERBS: Record<string, true> = {
+  bind: true,
+  show: true,
+  prepare: true,
+  progress: true,
+  "residual-add": true,
+  "residual-close": true,
+  handoff: true,
+  accept: true,
+  return: true,
+  "integration-start": true,
+  "integration-accept": true,
+  complete: true,
+  reconcile: true,
+};
+
+/**
+ * A2 usage-failure object for a commander-level error (unknown option, excess
+ * argument) raised by this verb family. Commander raises those before any
+ * action runs, so the shared parse catch cannot know which operation the argv
+ * addressed and recovers it from the argv instead. Returns `null` when the
+ * argv is not a `mstar plan` invocation, so unrelated commands never receive a
+ * plan-shaped payload.
+ */
+export function planUsageFailurePayload(argv: readonly string[], message: string): string | null {
+  const planIndex = argv.indexOf("plan");
+  if (planIndex === -1) return null;
+  const verb = argv.slice(planIndex + 1).find((token) => !token.startsWith("-"));
+  return JSON.stringify({
+    ok: false,
+    operation: verb !== undefined && PLAN_VERBS[verb] === true ? verb : "plan",
+    code: "usage",
+    message,
+  });
 }
 
 /**
@@ -214,11 +252,19 @@ function handoffStateOf(view: PlanCoordinationView | undefined): string | undefi
   return typeof state === "string" ? state : undefined;
 }
 
-function successPayload(
+/**
+ * The A2 success payload. `snapshot_version` is mandatory on every success:
+ * when the operation produced a plan-row view it comes from that view, and
+ * when it did not — a fresh or resumed coordinator bind has no selected row —
+ * it comes from the engine's own artifact read of the workflow snapshot the
+ * call just wrote. Both are the engine's version of the exact bytes; nothing
+ * is synthesized here.
+ */
+async function successPayload(
   verb: string,
   result: CoordinationResult,
   extra: { handoff_id?: string } = {},
-): Record<string, unknown> {
+): Promise<Record<string, unknown>> {
   const view = result.view;
   const payload: Record<string, unknown> = {
     ok: true,
@@ -229,12 +275,16 @@ function successPayload(
     role: result.session.role,
   };
   if (result.session.plan_id !== undefined) payload.plan_id = result.session.plan_id;
-  // Both byte versions come from the view the operation produced; a fresh
-  // coordinator bind has no plan row to read yet, so neither is claimed.
-  if (view !== undefined) {
-    payload.revision = view.revision;
-    payload.snapshot_version = view.snapshot_version;
-  }
+  if (view !== undefined) payload.revision = view.revision;
+  payload.snapshot_version =
+    view !== undefined
+      ? view.snapshot_version
+      : (
+          await readCoordinatedArtifact(result.session.harness_root, {
+            kind: "snapshot",
+            key: result.session.workflow_id,
+          })
+        ).version;
   if (extra.handoff_id !== undefined) payload.handoff_id = extra.handoff_id;
   const state = handoffStateOf(view);
   if (state !== undefined) payload.state = state;
@@ -242,13 +292,13 @@ function successPayload(
   return payload;
 }
 
-function printSuccess(
+async function printSuccess(
   verb: string,
   result: CoordinationResult,
   json: boolean,
   extra: { handoff_id?: string } = {},
-): void {
-  const payload = successPayload(verb, result, extra);
+): Promise<void> {
+  const payload = await successPayload(verb, result, extra);
   if (json) {
     console.log(JSON.stringify(payload));
     return;
@@ -357,7 +407,7 @@ async function mutate(
     expectedRevision,
     operation: concrete,
   });
-  printSuccess(verb, result, json, handoffId !== undefined ? { handoff_id: handoffId } : {});
+  await printSuccess(verb, result, json, handoffId !== undefined ? { handoff_id: handoffId } : {});
 }
 
 /** The coordinator transition verbs registered by one shared flag surface. */
@@ -469,7 +519,7 @@ export function registerPlanCommands(program: Command): void {
         async (json) => {
           const input = bindInputOf(options);
           pinProcessRoot("harnessDir" in input ? input.harnessDir : undefined);
-          printSuccess("bind", await bindPlanSession(input), json);
+          await printSuccess("bind", await bindPlanSession(input), json);
         },
       ),
     );
@@ -534,15 +584,17 @@ export function registerPlanCommands(program: Command): void {
     .option("--json", "Machine-readable JSON on stdout")
     .action(async (options: PlanCliOptions) =>
       runVerb("residual-add", options, {}, (json) =>
-        mutate("residual-add", options, json, false, (opts) => ({
-          kind: "residual-add",
-          entries: readJsonPayload(opts.file as string | undefined, "--file", "residual-add") as ResidualEntriesPayload,
-          expectedRegisterVersion: parseExpectedVersion(
+        mutate("residual-add", options, json, false, (opts) => {
+          // Every flag is validated before any file I/O: a malformed
+          // `--expect-register` must reject as usage without reading --file.
+          const expectedRegisterVersion = parseExpectedVersion(
             opts.expectRegister as string | undefined,
             "--expect-register",
             "residual-add",
-          ),
-        })),
+          );
+          const entries = readJsonPayload(opts.file as string | undefined, "--file", "residual-add") as ResidualEntriesPayload;
+          return { kind: "residual-add", entries, expectedRegisterVersion };
+        }),
       ),
     );
 

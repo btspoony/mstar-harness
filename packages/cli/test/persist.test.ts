@@ -172,50 +172,50 @@ function recordingStoreModuleSource(envVar: string): string {
 /**
  * `persist put` is the ArtifactStore persist port; the protected kinds
  * (`status` / `snapshot` / `residuals`) are coordination documents, so the
- * FsStore boundary accepts them only from the engine's locked writers. Their
- * versioned replacement face (`--expect-version` → the coordinated
- * replacement port) is the engine capability these round-trip cases depend
- * on; the fixture-based cases below that only need existing bytes write the
- * backing file directly instead.
+ * FsStore boundary refuses a bare put — these cases pin that refusal (exit 1,
+ * nothing written, existing bytes intact) rather than the old success. The
+ * versioned `--expect-version` replacement face for these kinds lands once the
+ * engine exposes the remaining `replaceCoordinatedArtifact` kinds; fixture
+ * cases that only need existing bytes write the backing file directly.
  */
 describe("mstar persist — FsStore round-trip in a temp harness dir (MSTAR_HARNESS_DIR)", () => {
-  test("snapshot put then get round-trips", () => {
+  test("a protected snapshot put is refused at the boundary and writes nothing", () => {
     withTempDir((dir) => {
-      const payloadFile = writePayload(dir, "snapshot.json", SNAPSHOT_PAYLOAD);
+      const payloadFile = writePayload(dir, "payload.json", SNAPSHOT_PAYLOAD);
       const put = runCli(["persist", "snapshot", "--key", "wf-1", "--file", payloadFile], { env: harnessEnv(dir) });
-      expect(put.exitCode).toBe(0);
-      expect(put.stdout).toContain("persist snapshot/wf-1: OK");
-      expect(existsSync(join(dir, "workflows", "wf-1", "snapshot.json"))).toBe(true);
+      expect(put.exitCode).toBe(1);
+      expect(put.stderr).toContain("is a protected coordination document (snapshot)");
+      expect(put.stderr).toContain("raw store.put is refused");
+      expect(existsSync(join(dir, "workflows", "wf-1", "snapshot.json"))).toBe(false);
+      expect(put.stdout).toBe("");
 
       const get = runCli(["persist", "get", "snapshot", "--key", "wf-1"], { env: harnessEnv(dir) });
-      expect(get.exitCode).toBe(0);
-      expect(JSON.parse(get.stdout)).toEqual(SNAPSHOT_PAYLOAD);
+      expect(get.exitCode).toBe(1);
+      expect(get.stderr).toContain("no stored document");
     });
   });
 
-  test("status put then get round-trips at {HARNESS_DIR}/status.json (key root)", () => {
+  test("a protected status put is refused and {HARNESS_DIR}/status.json is never created", () => {
     withTempDir((dir) => {
-      const payloadFile = writePayload(dir, "status.json", STATUS_PAYLOAD);
+      const payloadFile = writePayload(dir, "payload.json", STATUS_PAYLOAD);
       const put = runCli(["persist", "status", "--key", "root", "--file", payloadFile], { env: harnessEnv(dir) });
-      expect(put.exitCode).toBe(0);
-      expect(existsSync(join(dir, "status.json"))).toBe(true);
-
-      const get = runCli(["persist", "get", "status", "--key", "root"], { env: harnessEnv(dir) });
-      expect(get.exitCode).toBe(0);
-      expect(JSON.parse(get.stdout)).toEqual(STATUS_PAYLOAD);
+      expect(put.exitCode).toBe(1);
+      expect(put.stderr).toContain("is a protected coordination document (root)");
+      expect(put.stderr).toContain("raw store.put is refused");
+      expect(existsSync(join(dir, "status.json"))).toBe(false);
     });
   });
 
-  test("residuals put then get round-trips at {PROJECT_DIR}/<key>/residuals.json", () => {
+  test("a protected residuals put is refused and no register is created", () => {
     withTempDir((dir) => {
-      const payloadFile = writePayload(dir, "residuals.json", RESIDUALS_PAYLOAD);
-      const put = runCli(["persist", "residuals", "--key", "proj-1", "--file", payloadFile], { env: harnessEnv(dir) });
-      expect(put.exitCode).toBe(0);
-      expect(existsSync(join(dir, "projects", "proj-1", "residuals.json"))).toBe(true);
-
-      const get = runCli(["persist", "get", "residuals", "--key", "proj-1"], { env: harnessEnv(dir) });
-      expect(get.exitCode).toBe(0);
-      expect(JSON.parse(get.stdout)).toEqual(RESIDUALS_PAYLOAD);
+      const payloadFile = writePayload(dir, "payload.json", RESIDUALS_PAYLOAD);
+      const put = runCli(["persist", "residuals", "--key", "proj-1", "--file", payloadFile], {
+        env: harnessEnv(dir),
+      });
+      expect(put.exitCode).toBe(1);
+      expect(put.stderr).toContain("is a protected coordination document (register)");
+      expect(put.stderr).toContain("raw store.put is refused");
+      expect(existsSync(join(dir, "projects", "proj-1", "residuals.json"))).toBe(false);
     });
   });
 
@@ -454,29 +454,40 @@ describe("mstar persist get — absent document", () => {
 });
 
 describe("mstar persist — --stdin and default-stdin payloads", () => {
-  test("--stdin reads the payload from stdin", () => {
+  test("--stdin reads the payload from stdin: a protected kind reaches the boundary and is refused there", () => {
     withTempDir((dir) => {
       const put = runCliWithInput(["persist", "snapshot", "--key", "wf-stdin", "--stdin"], {
         env: harnessEnv(dir),
         input: JSON.stringify(SNAPSHOT_PAYLOAD),
       });
-      expect(put.exitCode).toBe(0);
-      expect(existsSync(join(dir, "workflows", "wf-stdin", "snapshot.json"))).toBe(true);
+      // The boundary refusal can only happen after stdin was read AND parsed
+      // AND validated — a transport failure would report differently.
+      expect(put.exitCode).toBe(1);
+      expect(put.stderr).toContain("raw store.put is refused");
+      expect(existsSync(join(dir, "workflows", "wf-stdin", "snapshot.json"))).toBe(false);
 
-      const get = runCli(["persist", "get", "snapshot", "--key", "wf-stdin"], { env: harnessEnv(dir) });
-      expect(get.exitCode).toBe(0);
-      expect(JSON.parse(get.stdout)).toEqual(SNAPSHOT_PAYLOAD);
+      const malformed = runCliWithInput(["persist", "snapshot", "--key", "wf-stdin", "--stdin"], {
+        env: harnessEnv(dir),
+        input: "{not json",
+      });
+      expect(malformed.exitCode).toBe(1);
+      expect(malformed.stderr).toContain("not valid JSON");
     });
   });
 
-  test("no --file / --stdin flag defaults to stdin", () => {
+  test("no --file / --stdin flag defaults to stdin (unprotected kind writes end-to-end)", () => {
     withTempDir((dir) => {
-      const put = runCliWithInput(["persist", "snapshot", "--key", "wf-default"], {
+      const target = join(dir, "loose.json");
+      const put = runCliWithInput(["persist", "json", "--key", target], {
         env: harnessEnv(dir),
-        input: JSON.stringify(SNAPSHOT_PAYLOAD),
+        input: JSON.stringify({ anything: ["goes", 1] }),
       });
       expect(put.exitCode).toBe(0);
-      expect(existsSync(join(dir, "workflows", "wf-default", "snapshot.json"))).toBe(true);
+      expect(JSON.parse(readFileSync(target, "utf8"))).toEqual({ anything: ["goes", 1] });
+
+      const get = runCli(["persist", "get", "json", "--key", target], { env: harnessEnv(dir) });
+      expect(get.exitCode).toBe(0);
+      expect(JSON.parse(get.stdout)).toEqual({ anything: ["goes", 1] });
     });
   });
 });

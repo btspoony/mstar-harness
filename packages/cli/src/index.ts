@@ -136,7 +136,7 @@ import {
 } from "@mstar-harness/engine";
 import { verifyPlanExecutionLease } from "./lease-verify";
 import { registerSddEvidenceCommands } from "./sdd-evidence";
-import { registerPlanCommands } from "./plan-coordination";
+import { planUsageFailurePayload, registerPlanCommands } from "./plan-coordination";
 import { runMigrateCommand, type MigrateCliOptions } from "./commands/migrate";
 import { validateAgentPlugin } from "./agent-plugins";
 import { buildModelAssignments } from "./assignment";
@@ -5245,8 +5245,13 @@ program.parseAsync(process.argv).catch((error: unknown) => {
   // Usage-class commander errors are exit 2, not exit 1, for the verb
   // families that opted into `exitOverride` (the `mstar plan` transport):
   // unknown options and excess arguments are input-shape failures there.
-  // Commander already wrote the message (and help text) to stderr.
+  // Commander already wrote the message (and help text) to stderr; with
+  // `--json` the invocation still gets the A2 failure object on stdout.
   if (error instanceof CommanderError) {
+    if (process.argv.includes("--json")) {
+      const payload = planUsageFailurePayload(process.argv, error.message);
+      if (payload !== null) console.log(payload);
+    }
     process.exitCode = error.exitCode === 0 ? 0 : 2;
     return;
   }

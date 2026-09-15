@@ -381,13 +381,32 @@ describe("mstar plan — strict-input", () => {
       ["plan", "complete", "--session", "/tmp/nope.json", "--plan", PLAN_ID, "--handoff", "h1"],
       ["plan", "accept", "--session", "/tmp/nope.json", "--plan", PLAN_ID, "--expect", "1"],
       ["plan", "return", "--session", "/tmp/nope.json", "--plan", PLAN_ID, "--handoff", "h1", "--expect", "1"],
-      ["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--json", "--nope"],
     ];
     for (const args of cases) {
       const result = runCli(args, fixture.root);
       expect({ args, exitCode: result.exitCode }).toEqual({ args, exitCode: 2 });
+      // Without --json the usage failure stays human: stdout is machine-only.
       expect(result.stdout).toBe("");
     }
+  });
+
+  test("a commander-level usage failure still carries the A2 failure object under --json", () => {
+    const fixture = makeFixture();
+    const unknownFlag = runCli(
+      ["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--json", "--nope"],
+      fixture.root,
+    );
+    expect(unknownFlag.exitCode).toBe(2);
+    const payload = jsonOf(unknownFlag);
+    expect(payload.ok).toBe(false);
+    expect(payload.operation).toBe("bind");
+    expect(payload.code).toBe("usage");
+    expect(String(payload.message)).toContain("unknown option '--nope'");
+
+    // A group-level failure (no verb yet) reports the family itself.
+    const groupLevel = runCli(["plan", "--json", "--nope"], fixture.root);
+    expect(groupLevel.exitCode).toBe(2);
+    expect(jsonOf(groupLevel).operation).toBe("plan");
   });
 
   test("a non-numeric or negative --expect is a usage error, not an engine refusal", () => {
