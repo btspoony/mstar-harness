@@ -245,7 +245,7 @@ The v1 `plans[].metadata.findings_cleanup` mirror is **deleted** in v3 — no du
 
 | Context | Default |
 | ------- | ------- |
-| Formal **iteration Phase 2** (Autonomous Execute) | `zero-residual` (compass or Assignment may override to `allow-residual`) |
+| Formal **iteration Phase 2** (Autonomous Execute) | `allow-residual` (compass or Assignment may still override, including to `zero-residual`) |
 | Standalone `/pm`, hotfix, `Execution mode: inline` | `allow-residual` |
 
 ### `zero-residual` (clean-session)
@@ -260,9 +260,14 @@ Intent: clear findings in the current plan session whenever possible. Open resid
 6. **`waived` / `risk-accepted`**: still require PM + user/architect alignment; **close in the register** (do not leave open). Prefer a cheap fix over waive-as-shortcut.
 7. Plan **Done**: prefer an empty `entries[<plan_id>]` in the register. If any open entries remain, **every** one must be blocker-defer + roadmap and none may be `critical` (item 4); otherwise keep `InReview` / `Blocked`.
 
-### `allow-residual` (legacy default)
+### `allow-residual`
 
-Non-blocking register entries — `severity` below `critical` on the §3 axis — may ship with open entries and `Approve with residuals` when no unresolved `critical` remains (existing residual lifecycle unchanged).
+Non-blocking register entries — `severity` below `critical` on the §3 axis — may ship with open entries and `Approve with residuals` when no unresolved `critical` remains (existing residual lifecycle unchanged). This is the default mode (see Defaults above; `zero-residual` is the explicit opt-in). Registration and disclosure are hard duties under `allow-residual` — they replace the speed-vs-discipline tradeoff, not the audit trail:
+
+1. **Register before InReview exit**: every open R# is entered in the project register `{PROJECT_DIR}/<id>/residuals.json` → `entries[<plan-id>]` with machine-enum `severity` before the plan leaves InReview.
+2. **Disclose on every decision surface**: every consolidated QC decision, Completion Report, and Status Update states the residual situation — the list, each entry's `severity`, and its tracking location. Silence about open residuals is a gate violation, not a style issue; when nothing is open, say `N/A — none open`.
+3. **Critical still blocks**: an unresolved `critical` blocks `Approve`; `medium` / `low` / `nit` may be registered and carried (fix-now remains preferred when cheap).
+4. **Close-time disclosure**: close-time artifacts carry the same residual list with `id` + `severity` + tracking location + blocker-defer flag — each plan's durable `## Review Gate Summary` (main plan), the iteration compass `## Quality Gate Summary`, and the PR delivery body (`N/A — none open` when empty). A close without these disclosures is not a close. Disclosure does not override critical-blocking, explicit `zero-residual` requirements, or register lifecycle rules: terminalizing a workflow never silently closes its open findings. `mstar status tech-debt` remains the cross-iteration visibility rollup.
 
 > **Engine check (when available):** run `mstar status findings-cleanup <plan-id> [--project <id>] [--mode zero-residual|allow-residual]` (or import `findingsCleanupGate` from `@mstar-harness/engine` in a host hook) to enforce the mode above against the plan's register entries. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 

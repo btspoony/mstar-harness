@@ -9,8 +9,9 @@
 1. 打印 **`## Phase 4: PR delivery`**
 2. Resolve target：snapshot `branch.target`（`target_branch`；compass frontmatter 镜像）；缺失 → **STOP**，问用户
 3. 创建 PR：`spec_integration_branch` → `target_branch`
-4. 记录 PR URL / number（Phase 5 会话 SSOT）
-5. **Immediately** 进入 **Phase 5** — **Phase 4 exit ≠ 迭代交付完成**
+4. PR 正文须含 residual 披露节：本迭代各 plan 的 open R# 清单（id + severity + 跟踪位置 + blocker-defer 标记；无 open 时写 `N/A — none open`）—— 职责 → **`mstar-artifacts`**「Findings cleanup modes」
+5. 记录 PR URL / number（Phase 5 会话 SSOT）
+6. **Immediately** 进入 **Phase 5** — **Phase 4 exit ≠ 迭代交付完成**
 
 ---
 

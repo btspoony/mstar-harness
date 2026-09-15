@@ -31,7 +31,7 @@ PM 在迭代内全部 plan Done 后执行。**本 Phase 在 integration worktree
 **STOP**: 打印下方 checklist，且全部为 `[x]` 后，才可进入 §3.2 Compound。
 
 - [ ] 所有 compass 中登记的 plan 在 workflow snapshot（`{WORKFLOW_DIR}/<id>/snapshot.json`）均为 `Done`
-- [ ] 所有 plan 的 residual findings 已收口：优先 empty register 条目（`projects/<id>/residuals.json` → `entries[<plan-id>]`）；若仍有 open R#，须均为 Phase 2 `zero-residual` 允许的 blocker-defer + roadmap，或已 closed（`lifecycle` / `closed_at` / `closure_note`，见 `mstar-artifacts` Findings cleanup modes）
+- [ ] 所有 plan 的 residual findings 已按各自 Assignment `Findings cleanup` mode 收口：优先 empty register 条目（`projects/<id>/residuals.json` → `entries[<plan-id>]`）；`allow-residual` 下已登记且披露的非阻断 open R# 可保持 open，`zero-residual` 下仅允许 blocker-defer + roadmap，或已 closed（`lifecycle` / `closed_at` / `closure_note`）；任一 plan 有 unresolved `critical` → 不得通过本项（见 `mstar-artifacts` Findings cleanup modes）
 - [ ] compass `## Plans` 表状态列已与 snapshot 同步
 - [ ] 迭代 `## Acceptance Criteria` 已达成或显式豁免（compass 或对话记录原因）
 - [ ] compass shape 已满足（frontmatter + `## Roadmap Position` + close 占位节）
@@ -65,7 +65,7 @@ PM 批量触发后须：
 
 1. compass **YAML frontmatter**：`status: completed`，`end_date: YYYY-MM-DD`（必须；见 §3.0.5）
 2. 更新 `{ITERATION_DIR}/README.md` 索引中该迭代行 Status 为 `completed`
-3. 填充 compass `## Quality Gate Summary`、`## Compound Round Summary` 与 `## Iteration Retrospective (minimal)`（见模板）
+3. 填充 compass `## Quality Gate Summary`、`## Compound Round Summary` 与 `## Iteration Retrospective (minimal)`（见模板）；`## Quality Gate Summary` 须含 residual 披露 —— 每个 plan 的 open R# 清单（id + severity + 跟踪位置 + blocker-defer 标记；无 open 时写 `N/A — none open`；unresolved `critical` 仍阻断完成）
 
 ## 3.5 Close exit checklist + commit
 
@@ -76,7 +76,7 @@ PM 打印 **iteration-close exit checklist**；全部为 `[x]` 后方可 `git co
 - [ ] §3.1 前置 gate 已打印并满足
 - [ ] §3.2 compound 完成；**`<iteration-id>/` package 已盘点**（提升 / 保留 / 跳过已记入 Compound Summary）；新增 knowledge doc 均已登记 `{KNOWLEDGE_DIR}/README.md`（或已记录无可结晶原因）
 - [ ] §3.3 `## Roadmap Position` current iteration 已标 `delivered`；tracker / STRATEGY 已按需更新
-- [ ] §3.4 frontmatter `status: completed` + `end_date`；Quality Gate Summary + Compound Summary + Retrospective 已填
+- [ ] §3.4 frontmatter `status: completed` + `end_date`；Quality Gate Summary（含 open R# 披露：id + severity + 跟踪位置 + blocker-defer 标记；无 open 时 `N/A — none open`；unresolved `critical` 仍阻断）+ Compound Summary + Retrospective 已填
 - [ ] 当前分支是 `spec_integration_branch`
 - [ ] PR base = snapshot `branch.target`（`target_branch`，与 compass frontmatter 一致）；**不是**未记录的 `main`
 

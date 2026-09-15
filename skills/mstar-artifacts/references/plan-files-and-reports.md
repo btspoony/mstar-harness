@@ -42,7 +42,7 @@ Raw bundle files may disappear after the working context is gone. Before Done, P
   - `Review bundle`: `{SDD_DIR}/review/`
   - `QC inputs`: `qc1.md` / `qc2.md` / `qc3.md` or `qc.md`
   - `Blocking result`: fixed / none / deferred with reason
-  - `Residual findings`: R# ids + short titles + owner/target
+  - `Residual findings`: each open R# — id + short title + severity + tracking location (register `entries[<plan-id>]`) + owner/target + blocker-defer flag (`N/A — none open` when none)
 - Main plan `## QA Gate Summary` when QA applies:
   - `QA gate` / `QA mode`
   - evidence reused vs newly run checks
