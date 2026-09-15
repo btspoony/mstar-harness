@@ -9,6 +9,7 @@ Dispatch:
   Role: <Execute as role-id>          # omp agent / Cursor subagent_type / OpenCode subagent → mstar-host C5
   Name: <CamelCaseId>                 # omp/Cursor name
   Model: [REQUIRED — per Model tier in Assignment and mstar-sdd SKILL]
+  Assignment header: canonical fields (`mstar-roles/references/project-manager/dispatch-and-assignment.md`) — MUST include **`Task budget (implement / ops rounds)`**: <budget copied from the plan task> in the header region, before the first Task heading / horizontal rule / `#` heading of the body; a `Task budget` string only inside the body section cannot satisfy the engine header gate
   Prompt body:
     <SUBAGENT-STOP> Skip PM orchestration skills. You are a leaf implementer.</SUBAGENT-STOP>
 
@@ -46,6 +47,8 @@ Dispatch:
     ## Scope and stop
 
     Use only the brief's owned files, relevant inputs and named checks. Do not restart global exploration, extend the task, or run local full suites without the user's explicit scoped permission. Reuse unaffected evidence. Stop once the assigned acceptance criteria are evidenced; report concrete missing context instead of over-analyzing settled work.
+
+    **Task budget / overrun**: the Assignment header above declares **`Task budget (implement / ops rounds)`** — one implementer round closing this task's Files and verification gates (value copied from the plan task; validated in the header region only, so a `Task budget` string inside this body section cannot satisfy the engine header gate). If the declared round cannot close its Files and verification gates, stop adding work and return `NEEDS_CONTEXT` or `BLOCKED` — persist on disk the completed steps, the remaining implementation and its pending checks, evidence paths, worktree/branch state, and the concrete boundary reached; an incomplete round never reports `DONE` / `DONE_WITH_CONCERNS` as a substitute for the remaining work. **Budget pressure MUST NOT shorten or waive any assigned scoped verification.** Split/re-dispatch authority → `mstar-artifacts/references/plan-quality-bar.md` item 7.
 
     ## Your job
 
