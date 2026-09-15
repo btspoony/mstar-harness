@@ -523,28 +523,17 @@ describe("binding", () => {
     expect(await errorCodeOf(() => bindPlan(fixture, PEER_PLAN_ID))).toBe("coordination.not-prepared");
   });
 
-  test("unimplemented operations are refused, never advertised, and never silently no-op", async () => {
+  test("the operation surface is closed, role-scoped and never advertised to the wrong seat", async () => {
     const fixture = makeFixture();
     await preparePlan(fixture, PLAN_ID);
     await bindPlan(fixture, PLAN_ID);
 
     const view = await readPlanCoordination(fixture.planSession, PLAN_ID, fixture.root);
     expect([...view.allowed_operations].sort()).toEqual(["handoff", "progress", "residual-add", "residual-close"]);
-    for (const kind of ["integration-start", "integration-accept", "complete", "reconcile"]) {
+    // All seven spec §D operations exist now; the coordinator verbs are simply
+    // not reachable — nor advertised — from a plan session.
+    for (const kind of ["accept", "return", "integration-start", "integration-accept", "complete", "reconcile"]) {
       expect(view.allowed_operations).not.toContain(kind);
-      expect(
-        await errorCodeOf(() =>
-          mutatePlanCoordination({
-            sessionPath: fixture.planSession,
-            planId: PLAN_ID,
-            expectedRevision: view.revision,
-            operation: { kind } as never,
-          }),
-        ),
-      ).toBe("coordination.not-implemented");
-    }
-    // Coordinator verbs are implemented and scoped: a plan session cannot issue them.
-    for (const kind of ["accept", "return"]) {
       expect(
         await errorCodeOf(() =>
           mutatePlanCoordination({

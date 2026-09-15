@@ -12,15 +12,15 @@
  * - `mutatePlanCoordination` / `replaceCoordinatedArtifact` — the two locked
  *   writers.
  *
- * ## Slice A scope
+ * ## Operation scope
  *
  * Implemented operations: `prepare`, `progress`, `residual-add`,
- * `residual-close`. The remaining spec §D operations (`handoff`, `accept`,
- * `return`, `integration-start`, `integration-accept`, `complete`,
- * `reconcile`) and non-snapshot artifact replacements are typed but refused
- * with `coordination.not-implemented`, are never advertised in
- * `allowed_operations`, and never no-op silently (§B "unimplemented
- * operations must be absent, not stubbed").
+ * `residual-close`, `handoff`, `accept`, `return`, `integration-start`,
+ * `integration-accept`, `complete`, `reconcile`. The non-snapshot
+ * `replaceCoordinatedArtifact` kinds (status, project register, review bytes)
+ * are refused with `coordination.not-implemented` until the protected-writer
+ * cutover lands; they are never advertised and never no-op silently (§B
+ * "unimplemented operations must be absent, not stubbed").
  *
  * ## Lock order (spec §C3)
  *
@@ -58,7 +58,7 @@ import {
   type PreparedCoordination,
   type RowCoordination,
 } from "./coordination-write.js";
-import { claimLease, transferLease, withStatusWriteLock } from "./lease.js";
+import { claimLease, transferLease, withStatusWriteLock, type IntegrationMergeLease } from "./lease.js";
 import {
   assertSafePathComponent,
   canonicalizeNearestExisting,
@@ -297,10 +297,6 @@ const IMPLEMENTED_OPERATIONS: Record<string, true> = {
   handoff: true,
   accept: true,
   return: true,
-};
-
-/** Spec §D operation kinds that exist in the type surface but are not built. */
-const UNIMPLEMENTED_OPERATIONS: Record<string, true> = {
   "integration-start": true,
   "integration-accept": true,
   complete: true,
@@ -2165,12 +2161,6 @@ export async function mutatePlanCoordination(request: CoordinationRequest): Prom
     throw invalidInput("expectedRevision belongs to the request, not the operation");
   }
   const kind = operation.kind;
-  if (UNIMPLEMENTED_OPERATIONS[kind] === true) {
-    throw notImplemented(
-      kind,
-      "implemented operations in this slice are prepare, progress, residual-add, residual-close, handoff, accept, return",
-    );
-  }
   if (IMPLEMENTED_OPERATIONS[kind] !== true) {
     throw new CoordinationError("coordination.unknown-operation", `${kind} is not a coordination operation`, {
       operation: kind,
@@ -2230,6 +2220,30 @@ export async function mutatePlanCoordination(request: CoordinationRequest): Prom
       if (!isNonEmptyString(operation.reason)) throw invalidInput("return requires a non-empty reason");
       return mutateReturn(await coordinatorScope(session, request.planId, kind), session, sessionAbs, {
         reason: operation.reason,
+        expectedRevision,
+      });
+    }
+    case "integration-start": {
+      assertExactKeys(operation, ["kind"], "integration-start operation");
+      return mutateIntegrationStart(await coordinatorScope(session, request.planId, kind), session, sessionAbs, {
+        expectedRevision,
+      });
+    }
+    case "integration-accept": {
+      assertExactKeys(operation, ["kind"], "integration-accept operation");
+      return mutateIntegrationAccept(await coordinatorScope(session, request.planId, kind), session, sessionAbs, {
+        expectedRevision,
+      });
+    }
+    case "complete": {
+      assertExactKeys(operation, ["kind"], "complete operation");
+      return mutateComplete(await coordinatorScope(session, request.planId, kind), session, sessionAbs, {
+        expectedRevision,
+      });
+    }
+    case "reconcile": {
+      assertExactKeys(operation, ["kind"], "reconcile operation");
+      return mutateReconcile(await coordinatorScope(session, request.planId, kind), session, sessionAbs, {
         expectedRevision,
       });
     }
@@ -2306,7 +2320,6 @@ async function coordinatorScope(
   );
 }
 
-/** Scope of the plan a session mutates: a plan session mutates only its own row. */
 /** Scope of the plan a session mutates: a plan session mutates only its own row. */
 async function sessionScope(session: CoordinationSession): Promise<ResolvedPlanScope> {
   if (session.role === "coordinator") {
@@ -2550,6 +2563,15 @@ function assertHandoffGates(
     );
   }
   assertEvidenceInsidePlan(scope, input.evidence_paths);
+  assertFindingsClosed(scope, prepared, "hand off");
+}
+
+/**
+ * The findings cleanup gate of a prepared plan (spec §D/§E): handoff and
+ * completion both demand it, so a plan returned for rework cannot complete
+ * while the findings it was told to close are still open.
+ */
+function assertFindingsClosed(scope: ResolvedPlanScope, prepared: PreparedCoordination, what: string): void {
   const register = readRegister(scope.harnessRoot, scope.projectId);
   const gate = findingsCleanupGate(register.doc, scope.planId, {
     mode: prepared.findings_cleanup === "zero-residual" ? "zero-residual" : "allow-residual",
@@ -2557,9 +2579,32 @@ function assertHandoffGates(
   if (!gate.ok) {
     throw new CoordinationError(
       "coordination.invalid-transition",
-      `plan ${scope.planId} cannot hand off while findings are open (${prepared.findings_cleanup}): ${summarize(gate.violations)}`,
+      `plan ${scope.planId} cannot ${what} while findings are open (${prepared.findings_cleanup}): ${summarize(gate.violations)}`,
       { plan_id: scope.planId, findings_cleanup: prepared.findings_cleanup },
     );
+  }
+}
+
+/**
+ * Revalidate the hash pins of a sealed handoff (spec §D/§E): accept,
+ * integration-start, integration-accept and complete all re-check that the QC
+ * and QA reports still are the bytes their verdicts were recorded against.
+ */
+function assertEvidenceDigests(handoff: PlanHandoff): void {
+  for (const ref of [...handoff.qc.reports, handoff.qc.consolidated, handoff.qa.report]) {
+    let actual: string | undefined;
+    try {
+      actual = evidenceRefOf(ref.path).sha256;
+    } catch {
+      actual = undefined;
+    }
+    if (actual !== ref.sha256) {
+      throw new CoordinationError(
+        "coordination.evidence-stale",
+        `handoff evidence ${ref.path} no longer matches its recorded digest`,
+        { path: ref.path, expected: ref.sha256, actual },
+      );
+    }
   }
 }
 
@@ -2659,7 +2704,12 @@ async function mutateHandoff(
         },
         qa: { gate: input.qa_gate, decision: "pass", report: input.qa_report },
       };
-      const nextCoordination: RowCoordination = { ...coordination, handoff: record };
+      const nextCoordination: RowCoordination = {
+        ...coordination,
+        revision: context.revision + 1,
+        handoff: record,
+      };
+      assertViolationFree(validateRowCoordination(nextCoordination), `plan ${scope.planId} coordination`);
       // The execution lease stays with the plan session: handoff is not release.
       return { row: { ...context.row, coordination: nextCoordination }, coordination: nextCoordination };
     },
@@ -2720,14 +2770,17 @@ async function mutateAccept(
         );
       }
       assertFeatureCheckout(scope, handoff.source_sha, "accept");
+      assertEvidenceDigests(handoff);
     },
     mutate: (context) => {
       const handoff = requireHandoff(context, scope.planId);
       const row = transferRowLease(context.row, handoff.submitted_by, session.session_id, "accept", scope.planId);
       const nextCoordination: RowCoordination = {
         ...(context.coordination ?? { revision: 0 }),
+        revision: context.revision + 1,
         handoff: { ...handoff, state: "accepted", accepted_by: session.session_id, accepted_at: nowIso() },
       };
+      assertViolationFree(validateRowCoordination(nextCoordination), `plan ${scope.planId} coordination`);
       // InReview is preserved: the coordinator now holds the row.
       return { row: { ...row, coordination: nextCoordination }, coordination: nextCoordination };
     },
@@ -2768,8 +2821,10 @@ async function mutateReturn(
       const row = transferRowLease(context.row, session.session_id, handoff.submitted_by, "return", scope.planId);
       const nextCoordination: RowCoordination = {
         ...(context.coordination ?? { revision: 0 }),
+        revision: context.revision + 1,
         handoff: { ...handoff, state: "returned", returned_at: nowIso(), return_reason: request.reason },
       };
+      assertViolationFree(validateRowCoordination(nextCoordination), `plan ${scope.planId} coordination`);
       // A returned plan is being worked on again: InProgress, same session.
       const nextRow: PlanRow = { ...row, status: "InProgress", coordination: nextCoordination };
       return { row: nextRow, coordination: nextCoordination };
@@ -2782,6 +2837,630 @@ async function mutateReturn(
     session_file: sessionPath,
     outcome: "returned",
     view: buildView(scope.harnessRoot, scope.workflowId, scope.projectId, scope, result.snapshot, result.row, session, sessionPath),
+  };
+}
+
+/* ------------------------------------------------------------------------ *
+ * § Integration, complete and reconcile (spec §E)
+ * ------------------------------------------------------------------------ */
+
+/** The integration anchors the snapshot names for a workflow (spec §E). */
+type IntegrationAnchors = { targetBranch: string; worktreePath: string };
+
+function integrationUnresolved(message: string, details: Record<string, unknown>): CoordinationError {
+  return new CoordinationError("coordination.integration-unresolved", message, details);
+}
+
+function integrationDiverged(message: string, details: Record<string, unknown>): CoordinationError {
+  return new CoordinationError("coordination.integration-diverged", message, details);
+}
+
+/**
+ * The recorded integration target of a workflow (spec §E). A missing anchor is
+ * an unresolved integration — never guessed from the current branch.
+ */
+function integrationAnchors(snapshot: WorkflowSnapshot, planId: string): IntegrationAnchors {
+  const targetBranch = snapshot.branch?.integration;
+  const worktreePath = snapshot.integration_worktree_path;
+  if (!isNonEmptyString(targetBranch) || !isNonEmptyString(worktreePath)) {
+    throw integrationUnresolved(
+      `plan ${planId} has no integration target — the snapshot must name branch.integration and integration_worktree_path`,
+      { plan_id: planId },
+    );
+  }
+  return { targetBranch, worktreePath: canonicalTarget(worktreePath) };
+}
+
+/**
+ * The recorded integration checkout: readable, on its recorded target branch,
+ * and free of uncommitted changes or half-finished Git operations (spec §E).
+ */
+function assertIntegrationCheckout(anchors: IntegrationAnchors, planId: string): GitCheckout {
+  const checkout = gitCheckout(anchors.worktreePath);
+  if (checkout === undefined) {
+    throw integrationDiverged(
+      `plan ${planId} integration checkout ${anchors.worktreePath} is not a readable Git worktree`,
+      { plan_id: planId, worktree_path: anchors.worktreePath },
+    );
+  }
+  const branch = gitRead(anchors.worktreePath, ["rev-parse", "--abbrev-ref", "HEAD"]);
+  if (branch !== anchors.targetBranch) {
+    throw integrationDiverged(
+      `plan ${planId} integration checkout ${anchors.worktreePath} is on ${branch || "a detached HEAD"}, not the recorded target ${anchors.targetBranch}`,
+      { plan_id: planId, expected: anchors.targetBranch, actual: branch },
+    );
+  }
+  if (checkout.operation !== undefined || !checkout.clean) {
+    throw integrationUnresolved(
+      `plan ${planId} integration checkout ${anchors.worktreePath} ${
+        checkout.operation === undefined ? "has uncommitted changes" : `has an unfinished ${checkout.operation}`
+      } — finish or abort it, then retry`,
+      { plan_id: planId, operation: checkout.operation, head: checkout.head },
+    );
+  }
+  return checkout;
+}
+
+/** Parents of one pinned commit in a repository. */
+function commitParents(path: string, sha: string): string[] | undefined {
+  const line = gitRead(path, ["rev-list", "--parents", "-n", "1", sha]);
+  if (line === undefined) return undefined;
+  return line
+    .split(" ")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+    .slice(1);
+}
+
+/** What proving one integration attempt from the pinned objects yields (spec §E). */
+type IntegrationProof =
+  | { kind: "proven"; resultSha: string }
+  | { kind: "pending" }
+  | { kind: "diverged"; reason: string };
+
+/**
+ * Prove the attempt from the pinned objects (spec §E): either the source was
+ * already an ancestor of the recorded base, or the first-parent path from the
+ * base to the current integration HEAD carries exactly one merge whose parents
+ * are exactly base then source. Zero candidates is `pending` (nothing merged
+ * yet); several are `diverged` — a result is never picked out of a set.
+ */
+function integrationProof(path: string, baseSha: string, sourceSha: string): IntegrationProof {
+  if (!gitObjectExists(path, baseSha)) {
+    return { kind: "diverged", reason: `the pinned base ${baseSha} is unavailable` };
+  }
+  if (!gitObjectExists(path, sourceSha)) {
+    return { kind: "diverged", reason: `the pinned source ${sourceSha} is unavailable` };
+  }
+  if (gitIsAncestor(path, sourceSha, baseSha)) return { kind: "proven", resultSha: baseSha };
+  const range = gitRead(path, ["rev-list", "--first-parent", `${baseSha}..HEAD`]);
+  if (range === undefined) {
+    return { kind: "diverged", reason: `the first-parent path ${baseSha}..HEAD is unreadable` };
+  }
+  const candidates = range
+    .split("\n")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+    .filter((sha) => {
+      const parents = commitParents(path, sha);
+      return parents !== undefined && parents.length === 2 && parents[0] === baseSha && parents[1] === sourceSha;
+    });
+  if (candidates.length === 0) return { kind: "pending" };
+  if (candidates.length > 1) {
+    return {
+      kind: "diverged",
+      reason: `${candidates.length} merges of ${sourceSha} onto ${baseSha} exist (${candidates.join(", ")})`,
+    };
+  }
+  return { kind: "proven", resultSha: candidates[0] };
+}
+
+/**
+ * Verify the recorded result of a finished attempt (spec §E): the recorded
+ * commit is an object of the repository, is either the recorded base (the
+ * source was already an ancestor) or exactly the two-parent merge of base then
+ * source, and stays reachable from the current target HEAD when one is known.
+ */
+function assertRecordedResult(
+  path: string,
+  planId: string,
+  integration: HandoffIntegration,
+  sourceSha: string,
+  head: string | undefined,
+): string {
+  const baseSha = integration.base_sha;
+  const resultSha = integration.result_sha;
+  if (!isNonEmptyString(resultSha)) {
+    throw integrationUnresolved(`plan ${planId} integration attempt has no recorded result`, { plan_id: planId });
+  }
+  if (!gitObjectExists(path, resultSha) || !gitObjectExists(path, baseSha) || !gitObjectExists(path, sourceSha)) {
+    throw integrationDiverged(
+      `plan ${planId} recorded result ${resultSha} is not an object of ${path} together with its pins`,
+      { plan_id: planId, result: resultSha, base: baseSha, source: sourceSha, path },
+    );
+  }
+  if (head !== undefined && !gitIsAncestor(path, resultSha, head)) {
+    throw integrationDiverged(
+      `plan ${planId} recorded result ${resultSha} is not reachable from the integration HEAD ${head}`,
+      { plan_id: planId, result: resultSha, head },
+    );
+  }
+  if (resultSha === baseSha) {
+    if (!gitIsAncestor(path, sourceSha, baseSha)) {
+      throw integrationDiverged(
+        `plan ${planId} recorded result is the base ${baseSha} but ${sourceSha} never was its ancestor`,
+        { plan_id: planId, result: resultSha, source: sourceSha },
+      );
+    }
+    return resultSha;
+  }
+  const parents = commitParents(path, resultSha);
+  if (parents === undefined || parents.length !== 2 || parents[0] !== baseSha || parents[1] !== sourceSha) {
+    throw integrationDiverged(
+      `plan ${planId} recorded result ${resultSha} carries parents ${JSON.stringify(parents ?? null)}, expected [${baseSha}, ${sourceSha}]`,
+      { plan_id: planId, result: resultSha, parents: parents ?? null },
+    );
+  }
+  return resultSha;
+}
+
+/** The integration attempt recorded on a handoff, or a refusal (spec §E). */
+function requireIntegration(handoff: PlanHandoff, planId: string): HandoffIntegration {
+  const integration = handoff.integration;
+  if (integration === undefined) {
+    throw integrationUnresolved(`plan ${planId} handoff ${handoff.id} has no integration attempt`, {
+      plan_id: planId,
+      handoff_id: handoff.id,
+    });
+  }
+  return integration;
+}
+
+/** The workflow's merge lease: absent, or this coordinator's (spec §E). */
+function assertMergeLease(snapshot: WorkflowSnapshot, session: CoordinationSession, planId: string): void {
+  const lease = snapshot.integration_merge_lease;
+  if (lease === undefined) return;
+  if (lease.holder !== session.session_id) {
+    throw new CoordinationError(
+      "coordination.session-mismatch",
+      `plan ${planId} integration is held by ${lease.holder}, not ${session.session_id}`,
+      { plan_id: planId, holder: lease.holder, session_id: session.session_id },
+    );
+  }
+}
+
+/** A readable repository for pinned-object proof, most specific first (spec §E). */
+function proofRepository(candidates: readonly (string | undefined)[]): string | undefined {
+  for (const candidate of candidates) {
+    if (!isNonEmptyString(candidate)) continue;
+    if (gitCheckout(candidate) !== undefined) return candidate;
+  }
+  return undefined;
+}
+
+type IntegrationStartRequest = { expectedRevision: number };
+
+/**
+ * Start one integration attempt (spec §E): claim the workflow's merge lease,
+ * record the attempt base and the source pin before Git runs, and keep the row
+ * InReview with the coordinator's execution ownership. A retry of an already
+ * started attempt re-verifies the pins and returns without moving the base.
+ */
+async function mutateIntegrationStart(
+  scope: ResolvedPlanScope,
+  session: CoordinationSession,
+  sessionPath: string,
+  request: IntegrationStartRequest,
+): Promise<CoordinationResult> {
+  const result = await withRowCommit(scope, {
+    expectedRevision: request.expectedRevision,
+    precheck: (context) => {
+      assertCoordinatorBinding(session, sessionPath, context.snapshot);
+      const handoff = requireHandoff(context, scope.planId);
+      if (handoff.state !== "accepted" && handoff.state !== "integrating") {
+        throw new CoordinationError(
+          "coordination.invalid-transition",
+          `plan ${scope.planId} handoff is ${handoff.state} — integration-start requires accepted (or a started attempt to re-verify)`,
+          { plan_id: scope.planId, state: handoff.state },
+        );
+      }
+      assertEvidenceDigests(handoff);
+      assertFeatureCheckout(scope, handoff.source_sha, "integration-start");
+      assertMergeLease(context.snapshot, session, scope.planId);
+      assertIntegrationCheckout(integrationAnchors(context.snapshot, scope.planId), scope.planId);
+    },
+    mutate: (context) => {
+      const handoff = requireHandoff(context, scope.planId);
+      // A started attempt is never re-pinned: the recorded base stays the one
+      // the coordinator merged onto.
+      if (handoff.state === "integrating") return null;
+      const anchors = integrationAnchors(context.snapshot, scope.planId);
+      const checkout = assertIntegrationCheckout(anchors, scope.planId);
+      const integration: HandoffIntegration = {
+        target_branch: anchors.targetBranch,
+        worktree_path: anchors.worktreePath,
+        base_sha: checkout.head,
+        started_at: nowIso(),
+      };
+      const nextCoordination: RowCoordination = {
+        ...(context.coordination ?? { revision: 0 }),
+        revision: context.revision + 1,
+        handoff: { ...handoff, state: "integrating", integration },
+      };
+      assertViolationFree(validateRowCoordination(nextCoordination), `plan ${scope.planId} coordination`);
+      const lease: IntegrationMergeLease = {
+        holder: session.session_id,
+        claimed_at: nowIso(),
+        plan_id: scope.planId,
+        source_branch: handoff.source_branch,
+        target_branch: anchors.targetBranch,
+      };
+      return {
+        row: { ...context.row, coordination: nextCoordination },
+        coordination: nextCoordination,
+        topLevel: { integration_merge_lease: lease },
+      };
+    },
+  });
+  return {
+    ok: true,
+    operation: "integration-start",
+    session,
+    session_file: sessionPath,
+    outcome: result.outcome === "mutated" ? "integrating" : "already-integrating",
+    view: buildView(
+      scope.harnessRoot,
+      scope.workflowId,
+      scope.projectId,
+      scope,
+      result.snapshot,
+      result.row,
+      session,
+      sessionPath,
+    ),
+  };
+}
+
+type IntegrationAcceptRequest = { expectedRevision: number };
+
+/**
+ * Accept the finished integration (spec §E): prove the merge from the pinned
+ * objects, record the observed result, and keep both leases and InReview until
+ * complete. Nothing is proven by the branch merely existing.
+ */
+async function mutateIntegrationAccept(
+  scope: ResolvedPlanScope,
+  session: CoordinationSession,
+  sessionPath: string,
+  request: IntegrationAcceptRequest,
+): Promise<CoordinationResult> {
+  let proof: IntegrationProof = { kind: "pending" };
+  const result = await withRowCommit(scope, {
+    expectedRevision: request.expectedRevision,
+    precheck: (context) => {
+      assertCoordinatorBinding(session, sessionPath, context.snapshot);
+      const handoff = requireHandoff(context, scope.planId);
+      if (handoff.state !== "integrating") {
+        throw new CoordinationError(
+          "coordination.invalid-transition",
+          `plan ${scope.planId} handoff is ${handoff.state} — integration-accept requires an integrating attempt`,
+          { plan_id: scope.planId, state: handoff.state },
+        );
+      }
+      if (rowStatusOf(context.row) !== "InReview") {
+        throw new CoordinationError(
+          "coordination.invalid-transition",
+          `integration-accept requires ${scope.planId} to still be InReview`,
+          { plan_id: scope.planId, status: context.row.status },
+        );
+      }
+      assertEvidenceDigests(handoff);
+      assertMergeLease(context.snapshot, session, scope.planId);
+      const integration = requireIntegration(handoff, scope.planId);
+      const anchors = integrationAnchors(context.snapshot, scope.planId);
+      assertIntegrationCheckout(anchors, scope.planId);
+      proof = integrationProof(anchors.worktreePath, integration.base_sha, handoff.source_sha);
+      if (proof.kind === "diverged") {
+        throw integrationDiverged(`plan ${scope.planId} integration cannot be proven — ${proof.reason}`, {
+          plan_id: scope.planId,
+          base: integration.base_sha,
+          source: handoff.source_sha,
+        });
+      }
+      if (proof.kind === "pending") {
+        throw integrationUnresolved(
+          `plan ${scope.planId} integration shows no merge of ${handoff.source_sha} onto ${integration.base_sha} yet — run the coordinator merge, then accept`,
+          { plan_id: scope.planId, base: integration.base_sha, source: handoff.source_sha },
+        );
+      }
+    },
+    mutate: (context) => {
+      const handoff = requireHandoff(context, scope.planId);
+      const integration = requireIntegration(handoff, scope.planId);
+      if (proof.kind !== "proven") return null;
+      const merged: HandoffIntegration = { ...integration, result_sha: proof.resultSha, verified_at: nowIso() };
+      const nextCoordination: RowCoordination = {
+        ...(context.coordination ?? { revision: 0 }),
+        revision: context.revision + 1,
+        handoff: { ...handoff, state: "merged", integration: merged },
+      };
+      assertViolationFree(validateRowCoordination(nextCoordination), `plan ${scope.planId} coordination`);
+      // Both leases and InReview stay: complete releases them (spec §E).
+      return { row: { ...context.row, coordination: nextCoordination }, coordination: nextCoordination };
+    },
+  });
+  return {
+    ok: true,
+    operation: "integration-accept",
+    session,
+    session_file: sessionPath,
+    outcome: "merged",
+    view: buildView(
+      scope.harnessRoot,
+      scope.workflowId,
+      scope.projectId,
+      scope,
+      result.snapshot,
+      result.row,
+      session,
+      sessionPath,
+    ),
+  };
+}
+
+/**
+ * The atomic completion delta (spec §E): `Done`, the retained branch/worktree
+ * metadata and `track_branches`, the completed handoff, and one write that
+ * releases the row's execution lease and this workflow's merge lease. Cleanup
+ * authority is what the retained metadata preserves — the leases do not.
+ */
+function completeRow(
+  context: RowContext,
+  scope: ResolvedPlanScope,
+  handoff: PlanHandoff,
+  resultSha: string,
+): RowCommit {
+  const integration = requireIntegration(handoff, scope.planId);
+  const completed: HandoffIntegration = { ...integration, result_sha: resultSha, verified_at: nowIso() };
+  const nextCoordination: RowCoordination = {
+    ...(context.coordination ?? { revision: 0 }),
+    revision: context.revision + 1,
+    handoff: { ...handoff, state: "completed", integration: completed, completed_at: nowIso() },
+  };
+  assertViolationFree(validateRowCoordination(nextCoordination), `plan ${scope.planId} coordination`);
+  const nextRow: PlanRow = { ...context.row, status: "Done", coordination: nextCoordination };
+  delete nextRow.execution_lease;
+  return {
+    row: nextRow,
+    coordination: nextCoordination,
+    dropTopLevel: ["integration_merge_lease"],
+  };
+}
+
+type CompleteRequest = { expectedRevision: number };
+
+/**
+ * Complete a merged plan (spec §E): re-prove the recorded result, re-check the
+ * evidence digests and the findings gate, then apply the completion delta.
+ * After integration started the proof is the pinned objects alone — a feature
+ * worktree that authorized cleanup may already be gone.
+ */
+async function mutateComplete(
+  scope: ResolvedPlanScope,
+  session: CoordinationSession,
+  sessionPath: string,
+  request: CompleteRequest,
+): Promise<CoordinationResult> {
+  const result = await withRowCommit(scope, {
+    expectedRevision: request.expectedRevision,
+    precheck: (context) => {
+      assertCoordinatorBinding(session, sessionPath, context.snapshot);
+      const handoff = requireHandoff(context, scope.planId);
+      if (handoff.state !== "merged") {
+        throw new CoordinationError(
+          "coordination.invalid-transition",
+          `plan ${scope.planId} handoff is ${handoff.state} — complete requires a merged attempt`,
+          { plan_id: scope.planId, state: handoff.state },
+        );
+      }
+      if (rowStatusOf(context.row) !== "InReview") {
+        throw new CoordinationError(
+          "coordination.invalid-transition",
+          `complete requires ${scope.planId} to still be InReview`,
+          { plan_id: scope.planId, status: context.row.status },
+        );
+      }
+      const prepared = context.coordination?.prepared;
+      if (prepared === undefined) {
+        throw new CoordinationError(
+          "coordination.not-prepared",
+          `plan ${scope.planId} is not prepared in this workflow`,
+          { plan_id: scope.planId },
+        );
+      }
+      assertEvidenceDigests(handoff);
+      assertFindingsClosed(scope, prepared, "complete");
+      assertMergeLease(context.snapshot, session, scope.planId);
+      const integration = requireIntegration(handoff, scope.planId);
+      const anchors = integrationAnchors(context.snapshot, scope.planId);
+      const checkout = assertIntegrationCheckout(anchors, scope.planId);
+      assertRecordedResult(anchors.worktreePath, scope.planId, integration, handoff.source_sha, checkout.head);
+    },
+    mutate: (context) => {
+      const handoff = requireHandoff(context, scope.planId);
+      const integration = requireIntegration(handoff, scope.planId);
+      const resultSha = assertRecordedResult(
+        integration.worktree_path,
+        scope.planId,
+        integration,
+        handoff.source_sha,
+        undefined,
+      );
+      return completeRow(context, scope, handoff, resultSha);
+    },
+  });
+  return {
+    ok: true,
+    operation: "complete",
+    session,
+    session_file: sessionPath,
+    outcome: "completed",
+    view: buildView(
+      scope.harnessRoot,
+      scope.workflowId,
+      scope.projectId,
+      scope,
+      result.snapshot,
+      result.row,
+      session,
+      sessionPath,
+    ),
+  };
+}
+
+/** One reconcile decision: its outcome label and the delta it applies. */
+type ReconcilePlan = { outcome: string; apply: (context: RowContext) => RowCommit | null };
+
+/**
+ * Classify one un-reconciled attempt (spec §E) and never run a merge:
+ *
+ * - `integrating` with the base unmoved and the source unmerged is
+ *   `retry-ready`: back to `accepted`, the attempt block and this holder's
+ *   merge lease released, the row still InReview with its execution lease.
+ * - `integrating` with a proven result, and `merged` with a still-valid
+ *   recorded proof, complete normally (the same atomic delta).
+ * - an unfinished or dirty integration checkout is left untouched
+ *   (`integration-unresolved`), as is a moved branch, an unexpected parent
+ *   graph, several matching merges or unavailable objects
+ *   (`integration-diverged`) — nothing is repaired by guessing.
+ * - `completed` with a valid recorded proof is a read-only no-op: replay never
+ *   resurrects ownership or rewrites timestamps.
+ */
+function classifyReconcile(
+  context: RowContext,
+  scope: ResolvedPlanScope,
+  session: CoordinationSession,
+  handoff: PlanHandoff,
+): ReconcilePlan {
+  const planId = scope.planId;
+  const prepared = context.coordination?.prepared;
+  if (prepared === undefined) {
+    throw new CoordinationError("coordination.not-prepared", `plan ${planId} is not prepared in this workflow`, {
+      plan_id: planId,
+    });
+  }
+  if (handoff.state === "completed") {
+    const integration = requireIntegration(handoff, planId);
+    const repository = proofRepository([integration.worktree_path, handoff.worktree_path, session.harness_root]);
+    if (repository === undefined) {
+      throw integrationDiverged(`plan ${planId} has no readable integration repository to re-verify ${integration.result_sha}`, {
+        plan_id: planId,
+        worktree_path: integration.worktree_path,
+      });
+    }
+    const head = gitRead(repository, ["rev-parse", integration.target_branch]);
+    assertRecordedResult(repository, planId, integration, handoff.source_sha, head);
+    return { outcome: "already-completed", apply: () => null };
+  }
+  if (handoff.state === "integrating" || handoff.state === "merged") {
+    assertEvidenceDigests(handoff);
+    const integration = requireIntegration(handoff, planId);
+    const anchors = integrationAnchors(context.snapshot, planId);
+    const checkout = assertIntegrationCheckout(anchors, planId);
+    assertMergeLease(context.snapshot, session, planId);
+    const merged = (resultSha: string): ReconcilePlan => {
+      assertFindingsClosed(scope, prepared, "complete");
+      return {
+        outcome: "completed",
+        apply: (current) => completeRow(current, scope, requireHandoff(current, planId), resultSha),
+      };
+    };
+    if (handoff.state === "merged") {
+      const resultSha = assertRecordedResult(anchors.worktreePath, planId, integration, handoff.source_sha, checkout.head);
+      return merged(resultSha);
+    }
+    const proof = integrationProof(anchors.worktreePath, integration.base_sha, handoff.source_sha);
+    if (proof.kind === "diverged") {
+      throw integrationDiverged(`plan ${planId} integration cannot be reconciled — ${proof.reason}`, {
+        plan_id: planId,
+        base: integration.base_sha,
+        source: handoff.source_sha,
+      });
+    }
+    if (proof.kind === "proven") return merged(proof.resultSha);
+    if (checkout.head !== integration.base_sha) {
+      throw integrationDiverged(
+        `plan ${planId} integration HEAD ${checkout.head} moved past the attempt base ${integration.base_sha} without a merge of ${handoff.source_sha}`,
+        { plan_id: planId, base: integration.base_sha, head: checkout.head },
+      );
+    }
+    return {
+      outcome: "retry-ready",
+      apply: (current) => {
+        const currentHandoff = requireHandoff(current, planId);
+        const returned: PlanHandoff = { ...currentHandoff, state: "accepted" };
+        delete returned.integration;
+        const nextCoordination: RowCoordination = {
+          ...(current.coordination ?? { revision: 0 }),
+          revision: current.revision + 1,
+          handoff: returned,
+        };
+        assertViolationFree(validateRowCoordination(nextCoordination), `plan ${planId} coordination`);
+        // InReview and the coordinator's execution lease stay: only the
+        // abandoned attempt's artifacts are released.
+        return {
+          row: { ...current.row, coordination: nextCoordination },
+          coordination: nextCoordination,
+          dropTopLevel: ["integration_merge_lease"],
+        };
+      },
+    };
+  }
+  throw new CoordinationError(
+    "coordination.invalid-transition",
+    `plan ${planId} handoff is ${handoff.state} — reconcile recovers only integrating, merged or completed attempts`,
+    { plan_id: planId, state: handoff.state },
+  );
+}
+
+type ReconcileRequest = { expectedRevision: number };
+
+/**
+ * Reconcile one crash-interrupted integration attempt (spec §E). Reconciliation
+ * classifies and completes; it never merges, never re-pins and never guesses.
+ */
+async function mutateReconcile(
+  scope: ResolvedPlanScope,
+  session: CoordinationSession,
+  sessionPath: string,
+  request: ReconcileRequest,
+): Promise<CoordinationResult> {
+  let plan: ReconcilePlan = { outcome: "unchanged", apply: () => null };
+  const result = await withRowCommit(scope, {
+    expectedRevision: request.expectedRevision,
+    precheck: (context) => {
+      assertCoordinatorBinding(session, sessionPath, context.snapshot);
+      const handoff = requireHandoff(context, scope.planId);
+      plan = classifyReconcile(context, scope, session, handoff);
+    },
+    mutate: (context) => plan.apply(context),
+  });
+  return {
+    ok: true,
+    operation: "reconcile",
+    session,
+    session_file: sessionPath,
+    outcome: plan.outcome,
+    view: buildView(
+      scope.harnessRoot,
+      scope.workflowId,
+      scope.projectId,
+      scope,
+      result.snapshot,
+      result.row,
+      session,
+      sessionPath,
+    ),
   };
 }
 
