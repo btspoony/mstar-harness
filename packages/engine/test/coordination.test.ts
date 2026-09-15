@@ -48,7 +48,7 @@ import {
   type PlanCoordinationView,
 } from "../src/coordination.js";
 import { CoordinationError, artifactVersion } from "../src/coordination-write.js";
-import { claimLease } from "../src/lease.js";
+import { claimLease, withStatusWriteLock } from "../src/lease.js";
 import { createFsStore, setArtifactStore } from "../src/store.js";
 
 const WORKFLOW_ID = "wf-plana";
@@ -222,6 +222,17 @@ function makeFixture(): Fixture {
     snapshotPath,
     registerPath,
   };
+}
+
+/**
+ * A bounded real-time window. Only the S1 lock-ordering case uses it, and only
+ * because the interleave it asserts is between two live lock acquisitions: a
+ * finding has to land inside the window in which a handoff is in flight.
+ */
+async function sleep(ms: number): Promise<void> {
+  const { promise, resolve } = Promise.withResolvers<void>();
+  setTimeout(resolve, ms);
+  return promise;
 }
 
 async function errorCodeOf(run: () => Promise<unknown>): Promise<string> {
@@ -439,13 +450,18 @@ async function coordinatorCall(
   fixture: Fixture,
   planId: string,
   operation: Record<string, unknown>,
+  /** A deliberately stale id, to prove the engine re-checks the named handoff. */
+  namedHandoffId?: string,
 ): Promise<CoordinationResult> {
   const view = await readPlanCoordination(fixture.coordinatorSession, planId, fixture.root);
+  const handoffId = namedHandoffId ?? view.row?.coordination?.handoff?.id;
   return mutatePlanCoordination({
     sessionPath: fixture.coordinatorSession,
     planId,
     expectedRevision: view.revision,
-    operation: operation as never,
+    // The CLI sends the id it read with the operation; the engine re-checks it
+    // under its own lock, so every coordinator transition names one.
+    operation: (handoffId === undefined ? operation : { handoffId, ...operation }) as never,
   });
 }
 
@@ -1462,6 +1478,49 @@ describe("git-reconciliation", () => {
 });
 
 /**
+ * S1 regression — the findings cleanup gate is evaluated **under the project
+ * register write lock** (spec §C3, snapshot → register). Handoff is authorized
+ * by that read, so an unlocked gate can be invalidated by a residual write that
+ * lands between the read and the row commit it authorizes.
+ *
+ * The wall clock is the subject of this case: the finding has to land inside
+ * the window in which the handoff is in flight, which no fake clock can express
+ * (the interleave is between two real lock acquisitions). The holder keeps the
+ * register lock for a short bounded window and writes the finding before
+ * releasing it — the locked gate waits and observes it, while an unlocked gate
+ * has already read `absent` and let the handoff through.
+ */
+describe("findings-gate-locking", () => {
+  test("a finding that lands while the handoff waits for the register lock still refuses it", async () => {
+    const fixture = gitFixture();
+    await preparePlan(fixture, PLAN_ID);
+    await bindPlan(fixture, PLAN_ID);
+    claimExecutionLease(fixture, PLAN_ID, fixture.planSession);
+    updatePlanRow(fixture, PLAN_ID, (row) => ({ ...row, status: "InReview" }));
+    const evidence = handoffEvidenceOf(fixture, fixture.planSha);
+    // The register directory exists but holds nothing yet, so the unlocked
+    // read this case has to defeat resolves to the absent register.
+    mkdirSync(dirname(fixture.registerPath), { recursive: true });
+
+    const landing = withStatusWriteLock(fixture.registerPath, async () => {
+      await sleep(1000);
+      // An unresolved Critical blocks approval under either cleanup mode.
+      writeJson(fixture.registerPath, {
+        entries: { [PLAN_ID]: [{ ...storedResidual(PLAN_ID, "R1"), severity: "critical" }] },
+      });
+    });
+
+    const before = readFileSync(fixture.snapshotPath);
+    expect(await errorCodeOf(() => handoffCall(fixture, evidence))).toBe("coordination.invalid-transition");
+    await landing;
+    // The refusal is non-advancing: the row keeps InReview and its lease, and no
+    // handoff is sealed under a finding the plan was told to close.
+    expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
+    expect(planRowOf(fixture, PLAN_ID).status).toBe("InReview");
+  }, 30000);
+});
+
+/**
  * Regression cases for the merged-state seam review (fix round 2). Each title
  * carries the finding id it pins, so a reverted fix turns exactly that case red.
  */
@@ -1642,4 +1701,89 @@ describe("seam-regressions", () => {
     expect(handed.outcome).toBe("handed-off");
     expect(handoffFields(planRowOf(fixture, PLAN_ID)).worktree_path).toBe(fixture.worktreePath);
   });
+
+  test("a foreign merge lease is never reused or released (QC2-S2)", async () => {
+    // A plan that has merged while holding the workflow's single merge lease for
+    // its own attempt.
+    const fixture = await acceptedFixture();
+    await coordinatorCall(fixture, PLAN_ID, { kind: "integration-start" });
+    const mergeSha = mergeFeature(fixture);
+    await coordinatorCall(fixture, PLAN_ID, { kind: "integration-accept" });
+    const ownLease = recordField(snapshotOf(fixture), "integration_merge_lease");
+    expect(ownLease.plan_id).toBe(PLAN_ID);
+    const writeLease = (overrides: Record<string, unknown>): void => {
+      writeJson(fixture.snapshotPath, {
+        ...snapshotOf(fixture),
+        integration_merge_lease: { ...ownLease, ...overrides },
+      });
+    };
+
+    // The slot is workflow-wide, so a holder match is not ownership: a lease
+    // naming another plan is refused, and the foreign claim survives intact.
+    writeLease({ plan_id: PEER_PLAN_ID, source_branch: "feature/plan-b" });
+    const foreign = readFileSync(fixture.snapshotPath);
+    expect(await errorCodeOf(() => coordinatorCall(fixture, PLAN_ID, { kind: "complete" }))).toBe(
+      "coordination.invalid-transition",
+    );
+    expect(readFileSync(fixture.snapshotPath).equals(foreign)).toBe(true);
+    expect(planRowOf(fixture, PLAN_ID).status).toBe("InReview");
+
+    // One plan can integrate more than once, so a lease for another source
+    // branch of this same plan is not this attempt's claim either.
+    writeLease({ source_branch: "feature/plan-a-old" });
+    const stale = readFileSync(fixture.snapshotPath);
+    expect(await errorCodeOf(() => coordinatorCall(fixture, PLAN_ID, { kind: "complete" }))).toBe(
+      "coordination.invalid-transition",
+    );
+    expect(readFileSync(fixture.snapshotPath).equals(stale)).toBe(true);
+    expect(recordField(snapshotOf(fixture), "integration_merge_lease").source_branch).toBe("feature/plan-a-old");
+
+    // The attempt's own lease is still completable, and completing releases it.
+    writeLease({});
+    const done = await coordinatorCall(fixture, PLAN_ID, { kind: "complete" });
+    expect(done.outcome).toBe("completed");
+    expect(recordField(handoffFields(planRowOf(fixture, PLAN_ID)), "integration").result_sha).toBe(mergeSha);
+    expect(snapshotOf(fixture).integration_merge_lease).toBeUndefined();
+  }, 30000);
+
+  test("a replaced handoff is never transitioned by a command that named the old one (QC1-F-001)", async () => {
+    const fixture = await acceptedFixture();
+    const replaced = handoffFields(planRowOf(fixture, PLAN_ID)).id;
+    expect((await coordinatorCall(fixture, PLAN_ID, { kind: "return", reason: "rework requested" })).outcome).toBe("returned");
+    writeText(join(fixture.worktreePath, "slice.txt"), "slice B v2\n");
+    git(["add", "-A"], fixture.worktreePath);
+    git(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "fix: rework"], fixture.worktreePath);
+    updatePlanRow(fixture, PLAN_ID, (row) => ({ ...row, status: "InReview" }));
+    await handoffCall(fixture, handoffEvidenceOf(fixture, headOf(fixture.worktreePath)));
+    const live = handoffFields(planRowOf(fixture, PLAN_ID));
+    expect(live.id).not.toBe(replaced);
+    expect(live.attempt).toBe(2);
+
+    // The id the caller read is a precondition of the mutation, not a hint: a
+    // coordinator that read the replaced attempt can no longer act on whatever
+    // is live when its command finally reaches the lock.
+    const before = readFileSync(fixture.snapshotPath);
+    expect(await errorCodeOf(() => coordinatorCall(fixture, PLAN_ID, { kind: "accept" }, replaced))).toBe(
+      "coordination.invalid-transition",
+    );
+    expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
+    const row = planRowOf(fixture, PLAN_ID);
+    expect(row.status).toBe("InReview");
+    expect(handoffFields(row).id).toBe(live.id);
+    expect(handoffFields(row).state).toBe("submitted");
+
+    // The named live attempt is the one the command may act on.
+    expect((await coordinatorCall(fixture, PLAN_ID, { kind: "accept" })).outcome).toBe("accepted");
+  }, 30000);
+
+  test("a git that answers with a failure still reports a repository fact, not an environment fault (QC3-001)", async () => {
+    const fixture = await acceptedFixture();
+    rmSync(fixture.worktreePath, { recursive: true, force: true });
+    // git exits non-zero here: the repository was reachable and said "no such
+    // worktree", so the refusal stays a Git-fact refusal (`not-in-git`) — the
+    // new environment code must not swallow it.
+    expect(await errorCodeOf(() => coordinatorCall(fixture, PLAN_ID, { kind: "integration-start" }))).toBe(
+      "coordination.not-in-git",
+    );
+  }, 30000);
 });

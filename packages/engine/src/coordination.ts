@@ -1015,7 +1015,7 @@ async function withRowCommit(
     expectedRevision: number | null;
     /** `prepare` rewrites the pin itself, so it may not re-check the old hash. */
     freshness?: boolean;
-    precheck: (context: RowContext) => void;
+    precheck: (context: RowContext) => void | Promise<void>;
     mutate: (context: RowContext) => RowCommit | null | Promise<RowCommit | null>;
   },
 ): Promise<{ snapshot: WorkflowSnapshot; row: PlanRow; outcome: string }> {
@@ -1039,7 +1039,7 @@ async function withRowCommit(
     if (opts.freshness !== false && coordination?.prepared !== undefined) {
       assertPreparedFresh(scope, coordination.prepared);
     }
-    opts.precheck(context);
+    await opts.precheck(context);
     if (opts.expectedRevision !== null && context.revision !== opts.expectedRevision) {
       throw new CoordinationError(
         "coordination.version-conflict",
@@ -2283,40 +2283,46 @@ export async function mutatePlanCoordination(request: CoordinationRequest): Prom
       });
     }
     case "accept": {
-      assertExactKeys(operation, ["kind"], "accept operation");
+      assertExactKeys(operation, ["kind", "handoffId"], "accept operation");
       return mutateAccept(await coordinatorScope(session, request.planId, kind), session, sessionAbs, {
+        handoffId: namedHandoffId(operation),
         expectedRevision,
       });
     }
     case "return": {
-      assertExactKeys(operation, ["kind", "reason"], "return operation");
+      assertExactKeys(operation, ["kind", "handoffId", "reason"], "return operation");
       if (!isNonEmptyString(operation.reason)) throw invalidInput("return requires a non-empty reason");
       return mutateReturn(await coordinatorScope(session, request.planId, kind), session, sessionAbs, {
+        handoffId: namedHandoffId(operation),
         reason: operation.reason,
         expectedRevision,
       });
     }
     case "integration-start": {
-      assertExactKeys(operation, ["kind"], "integration-start operation");
+      assertExactKeys(operation, ["kind", "handoffId"], "integration-start operation");
       return mutateIntegrationStart(await coordinatorScope(session, request.planId, kind), session, sessionAbs, {
+        handoffId: namedHandoffId(operation),
         expectedRevision,
       });
     }
     case "integration-accept": {
-      assertExactKeys(operation, ["kind"], "integration-accept operation");
+      assertExactKeys(operation, ["kind", "handoffId"], "integration-accept operation");
       return mutateIntegrationAccept(await coordinatorScope(session, request.planId, kind), session, sessionAbs, {
+        handoffId: namedHandoffId(operation),
         expectedRevision,
       });
     }
     case "complete": {
-      assertExactKeys(operation, ["kind"], "complete operation");
+      assertExactKeys(operation, ["kind", "handoffId"], "complete operation");
       return mutateComplete(await coordinatorScope(session, request.planId, kind), session, sessionAbs, {
+        handoffId: namedHandoffId(operation),
         expectedRevision,
       });
     }
     case "reconcile": {
-      assertExactKeys(operation, ["kind"], "reconcile operation");
+      assertExactKeys(operation, ["kind", "handoffId"], "reconcile operation");
       return mutateReconcile(await coordinatorScope(session, request.planId, kind), session, sessionAbs, {
+        handoffId: namedHandoffId(operation),
         expectedRevision,
       });
     }
@@ -2437,17 +2443,65 @@ const HANDOFF_QA_GATES: readonly string[] = ["mandatory", "pm-acceptance"];
 type GitCheckout = { head: string; clean: boolean; operation: string | undefined };
 
 /**
+ * How long one read-only Git read may take. The snapshot write lock waits 30s,
+ * so a `git` that never answers (a stalled filesystem, a contended lock) has to
+ * give up well short of it rather than hold the row for the whole budget.
+ */
+const GIT_READ_TIMEOUT_MS = 10_000;
+
+/**
+ * One own property of an unknown thrown value, read without asserting a shape.
+ */
+function propertyOf(value: unknown, key: string): unknown {
+  if (typeof value !== "object" || value === null) return undefined;
+  return Object.entries(value).find(([name]) => name === key)?.[1];
+}
+
+/**
+ * The environment could not answer a Git read — a missing or non-executable
+ * `git`, or a read that outlived its timeout. That says nothing about whether a
+ * branch merged or diverged, so it is refused as its own failure instead of
+ * being reported as repository state (spec §E — nothing is repaired by
+ * guessing).
+ */
+function gitUnavailable(cwd: string, args: readonly string[], error: unknown): CoordinationError {
+  const code = propertyOf(error, "code");
+  const signal = propertyOf(error, "signal");
+  const message = propertyOf(error, "message");
+  const timedOut = code === "ETIMEDOUT";
+  const cause = timedOut
+    ? `git did not answer within ${GIT_READ_TIMEOUT_MS}ms${typeof signal === "string" ? ` (${signal})` : ""}`
+    : typeof code === "string"
+      ? code
+      : typeof message === "string"
+        ? message
+        : String(error);
+  return new CoordinationError(
+    "coordination.git-unavailable",
+    `cannot read Git state at ${cwd} (git ${args.join(" ")}): ${cause}`,
+    { path: cwd, command: `git ${args.join(" ")}`, cause },
+  );
+}
+
+/**
  * One read-only `git` read. Every argument is a separate argv entry, so branch
  * names, worktree paths and revisions never reach a shell.
+ *
+ * A non-zero exit is the repository answering — no such object, not an
+ * ancestor, not a worktree — and resolves to `undefined`. An error without an
+ * exit status means `git` itself never answered, which is refused rather than
+ * folded into `undefined` (see `gitUnavailable`).
  */
 function gitRead(cwd: string, args: readonly string[]): string | undefined {
   try {
     return execFileSync("git", ["-C", cwd, ...args], {
       stdio: ["ignore", "pipe", "pipe"],
       encoding: "utf8",
+      timeout: GIT_READ_TIMEOUT_MS,
     }).trim();
-  } catch {
-    return undefined;
+  } catch (error) {
+    if (typeof propertyOf(error, "status") === "number") return undefined;
+    throw gitUnavailable(cwd, args, error);
   }
 }
 
@@ -2607,13 +2661,34 @@ function readHandoffEvidence(value: unknown): HandoffEvidenceInput {
   };
 }
 
-/** The recorded handoff of a plan, or a refusal when the row has none. */
-function requireHandoff(context: RowContext, planId: string): PlanHandoff {
+/** The handoff id a coordinator transition names; the mutation re-checks it under the lock. */
+function namedHandoffId(operation: { handoffId?: unknown }): string {
+  if (!isNonEmptyString(operation.handoffId)) {
+    throw invalidInput("a coordinator transition requires the non-empty handoffId it names");
+  }
+  return operation.handoffId;
+}
+
+/**
+ * The handoff of a plan the operation named, or a refusal when the row has none
+ * or holds a different one. This runs inside the row lock: the id the caller
+ * read before the call is a precondition of the mutation, never a hint — a
+ * concurrent `return` plus a fresh handoff leaves the new attempt untouched
+ * (spec §B).
+ */
+function requireHandoff(context: RowContext, planId: string, namedHandoffId: string): PlanHandoff {
   const handoff = context.coordination?.handoff;
   if (handoff === undefined) {
     throw new CoordinationError("coordination.invalid-transition", `plan ${planId} has no handoff to transition`, {
       plan_id: planId,
     });
+  }
+  if (handoff.id !== namedHandoffId) {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `plan ${planId} handoff ${handoff.id} is not the handoff this command named (${namedHandoffId}) — a replaced handoff is a different attempt`,
+      { plan_id: planId, expected: namedHandoffId, actual: handoff.id },
+    );
   }
   return handoff;
 }
@@ -2622,11 +2697,11 @@ function requireHandoff(context: RowContext, planId: string): PlanHandoff {
  * The Assignment QA gate, the evidence containment and the findings cleanup
  * gate a handoff must clear (spec §D).
  */
-function assertHandoffGates(
+async function assertHandoffGates(
   scope: ResolvedPlanScope,
   prepared: PreparedCoordination,
   input: HandoffEvidenceInput,
-): void {
+): Promise<void> {
   if (input.qa_gate !== prepared.qa_gate) {
     throw new CoordinationError(
       "coordination.assignment-stale",
@@ -2635,18 +2710,32 @@ function assertHandoffGates(
     );
   }
   assertEvidenceInsidePlan(scope, input.evidence_paths);
-  assertFindingsClosed(scope, prepared, "hand off");
+  await assertFindingsClosed(scope, prepared, "hand off");
 }
 
 /**
  * The findings cleanup gate of a prepared plan (spec §D/§E): handoff and
  * completion both demand it, so a plan returned for rework cannot complete
  * while the findings it was told to close are still open.
+ *
+ * The register is read **under its own write lock** (§C3). The caller already
+ * holds the snapshot lock, so the order is always snapshot → register, and a
+ * concurrent residual write cannot slip between the gate and the row commit it
+ * authorizes. A register that does not exist yet is still a valid empty read.
  */
-function assertFindingsClosed(scope: ResolvedPlanScope, prepared: PreparedCoordination, what: string): void {
-  const register = readRegister(scope.harnessRoot, scope.projectId);
-  const gate = findingsCleanupGate(register.doc, scope.planId, {
-    mode: prepared.findings_cleanup === "zero-residual" ? "zero-residual" : "allow-residual",
+async function assertFindingsClosed(
+  scope: ResolvedPlanScope,
+  prepared: PreparedCoordination,
+  what: string,
+): Promise<void> {
+  const path = registerPathOf(scope.harnessRoot, scope.projectId);
+  // The project directory is created by the first write; the lock needs it first.
+  mkdirSync(dirname(path), { recursive: true });
+  const gate = await withStatusWriteLock(path, () => {
+    const register = readRegister(scope.harnessRoot, scope.projectId);
+    return findingsCleanupGate(register.doc, scope.planId, {
+      mode: prepared.findings_cleanup === "zero-residual" ? "zero-residual" : "allow-residual",
+    });
   });
   if (!gate.ok) {
     throw new CoordinationError(
@@ -2721,7 +2810,7 @@ async function mutateHandoff(
   const input = readHandoffEvidence(request.evidence);
   const result = await withRowCommit(scope, {
     expectedRevision: request.expectedRevision,
-    precheck: (context) => {
+    precheck: async (context) => {
       assertRowBinding(session, sessionPath, context.row, scope.planId);
       const coordination = context.coordination ?? { revision: 0 };
       const prepared = coordination.prepared;
@@ -2749,7 +2838,7 @@ async function mutateHandoff(
         );
       }
       assertHandoffGitProof(scope, input, "handoff");
-      assertHandoffGates(scope, prepared, input);
+      await assertHandoffGates(scope, prepared, input);
     },
     mutate: (context) => {
       const coordination = context.coordination ?? { revision: 0 };
@@ -2811,7 +2900,7 @@ function transferRowLease(row: PlanRow, from: string, to: string, what: string, 
   return transferred.row;
 }
 
-type AcceptRequest = { expectedRevision: number };
+type AcceptRequest = { handoffId: string; expectedRevision: number };
 
 async function mutateAccept(
   scope: ResolvedPlanScope,
@@ -2823,7 +2912,7 @@ async function mutateAccept(
     expectedRevision: request.expectedRevision,
     precheck: (context) => {
       assertCoordinatorBinding(session, sessionPath, context.snapshot);
-      const handoff = requireHandoff(context, scope.planId);
+      const handoff = requireHandoff(context, scope.planId, request.handoffId);
       if (handoff.state !== "submitted") {
         throw new CoordinationError(
           "coordination.invalid-transition",
@@ -2842,7 +2931,7 @@ async function mutateAccept(
       assertEvidenceDigests(handoff);
     },
     mutate: (context) => {
-      const handoff = requireHandoff(context, scope.planId);
+      const handoff = requireHandoff(context, scope.planId, request.handoffId);
       const row = transferRowLease(context.row, handoff.submitted_by, session.session_id, "accept", scope.planId);
       const nextCoordination: RowCoordination = {
         ...(context.coordination ?? { revision: 0 }),
@@ -2864,7 +2953,7 @@ async function mutateAccept(
   };
 }
 
-type ReturnRequest = { reason: string; expectedRevision: number };
+type ReturnRequest = { handoffId: string; reason: string; expectedRevision: number };
 
 async function mutateReturn(
   scope: ResolvedPlanScope,
@@ -2876,7 +2965,7 @@ async function mutateReturn(
     expectedRevision: request.expectedRevision,
     precheck: (context) => {
       assertCoordinatorBinding(session, sessionPath, context.snapshot);
-      const handoff = requireHandoff(context, scope.planId);
+      const handoff = requireHandoff(context, scope.planId, request.handoffId);
       if (handoff.state !== "submitted" && handoff.state !== "accepted") {
         throw new CoordinationError(
           "coordination.invalid-transition",
@@ -2886,7 +2975,7 @@ async function mutateReturn(
       }
     },
     mutate: (context) => {
-      const handoff = requireHandoff(context, scope.planId);
+      const handoff = requireHandoff(context, scope.planId, request.handoffId);
       // The lease follows the record (spec §D): handoff keeps the plan's lease,
       // accept moves it to the coordinator, so a return from `submitted` only
       // proves the plan session still holds it, while a return from `accepted`
@@ -2980,15 +3069,20 @@ function assertIntegrationCheckout(anchors: IntegrationAnchors, planId: string):
   return checkout;
 }
 
-/** Parents of one pinned commit in a repository. */
-function commitParents(path: string, sha: string): string[] | undefined {
-  const line = gitRead(path, ["rev-list", "--parents", "-n", "1", sha]);
-  if (line === undefined) return undefined;
+/** The parent ids carried by one `<sha> <parent>…` rev-list line. */
+function parentIdsOf(line: string): string[] {
   return line
     .split(" ")
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0)
     .slice(1);
+}
+
+/** Parents of one pinned commit in a repository. */
+function commitParents(path: string, sha: string): string[] | undefined {
+  const line = gitRead(path, ["rev-list", "--parents", "-n", "1", sha]);
+  if (line === undefined) return undefined;
+  return parentIdsOf(line);
 }
 
 /** What proving one integration attempt from the pinned objects yields (spec §E). */
@@ -3024,18 +3118,20 @@ function integrationProof(path: string, head: string, baseSha: string, sourceSha
     };
   }
   if (gitIsAncestor(path, sourceSha, baseSha)) return { kind: "proven", resultSha: baseSha };
-  const range = gitRead(path, ["rev-list", "--first-parent", `${baseSha}..${head}`]);
+  const range = gitRead(path, ["rev-list", "--first-parent", "--parents", `${baseSha}..${head}`]);
   if (range === undefined) {
     return { kind: "diverged", reason: `the first-parent path ${baseSha}..HEAD is unreadable` };
   }
+  // One call carries the parents of every commit on the path: the proof never
+  // spawns a Git process per commit, and a commit whose parents the repository
+  // cannot report is a diverged path rather than a silently skipped candidate.
   const candidates = range
     .split("\n")
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0)
-    .filter((sha) => {
-      const parents = commitParents(path, sha);
-      return parents !== undefined && parents.length === 2 && parents[0] === baseSha && parents[1] === sourceSha;
-    });
+    .map((line) => line.split(" ").map((entry) => entry.trim()).filter((entry) => entry.length > 0))
+    .filter((ids) => ids.length === 3 && ids[1] === baseSha && ids[2] === sourceSha)
+    .map((ids) => ids[0]);
   if (candidates.length === 0) return { kind: "pending" };
   if (candidates.length > 1) {
     return {
@@ -3107,8 +3203,32 @@ function requireIntegration(handoff: PlanHandoff, planId: string): HandoffIntegr
   return integration;
 }
 
-/** The workflow's merge lease: absent, or this coordinator's (spec §E). */
-function assertMergeLease(snapshot: WorkflowSnapshot, session: CoordinationSession, planId: string): void {
+/**
+ * The workflow's merge lease, but only when it names THIS attempt (spec §E).
+ * The lease is a single workflow-wide top-level claim, so a holder match alone
+ * is not ownership: a lease that names another plan, or another source branch,
+ * belongs to a different attempt and must never be released or re-pinned by
+ * this one — the same plan can integrate more than once.
+ */
+function mergeLeaseOfAttempt(
+  snapshot: WorkflowSnapshot,
+  planId: string,
+  handoff: PlanHandoff,
+): IntegrationMergeLease | undefined {
+  const lease = snapshot.integration_merge_lease;
+  if (lease === undefined) return undefined;
+  if (lease.plan_id !== planId) return undefined;
+  if (lease.source_branch !== handoff.source_branch) return undefined;
+  return lease;
+}
+
+/** The workflow's merge lease is absent, or this coordinator's own for this attempt (spec §E). */
+function assertMergeLease(
+  snapshot: WorkflowSnapshot,
+  session: CoordinationSession,
+  planId: string,
+  handoff: PlanHandoff,
+): void {
   const lease = snapshot.integration_merge_lease;
   if (lease === undefined) return;
   if (lease.holder !== session.session_id) {
@@ -3116,6 +3236,18 @@ function assertMergeLease(snapshot: WorkflowSnapshot, session: CoordinationSessi
       "coordination.session-mismatch",
       `plan ${planId} integration is held by ${lease.holder}, not ${session.session_id}`,
       { plan_id: planId, holder: lease.holder, session_id: session.session_id },
+    );
+  }
+  if (lease.plan_id !== planId || lease.source_branch !== handoff.source_branch) {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `plan ${planId} merge lease claims plan ${lease.plan_id} source ${lease.source_branch}, not this attempt (${planId} source ${handoff.source_branch}) — a foreign claim is never reused or released`,
+      {
+        plan_id: planId,
+        holder_plan_id: lease.plan_id,
+        holder_source_branch: lease.source_branch,
+        source_branch: handoff.source_branch,
+      },
     );
   }
 }
@@ -3129,7 +3261,7 @@ function proofRepository(candidates: readonly (string | undefined)[]): string | 
   return undefined;
 }
 
-type IntegrationStartRequest = { expectedRevision: number };
+type IntegrationStartRequest = { handoffId: string; expectedRevision: number };
 
 /**
  * Start one integration attempt (spec §E): claim the workflow's merge lease,
@@ -3147,7 +3279,7 @@ async function mutateIntegrationStart(
     expectedRevision: request.expectedRevision,
     precheck: (context) => {
       assertCoordinatorBinding(session, sessionPath, context.snapshot);
-      const handoff = requireHandoff(context, scope.planId);
+      const handoff = requireHandoff(context, scope.planId, request.handoffId);
       if (handoff.state !== "accepted" && handoff.state !== "integrating") {
         throw new CoordinationError(
           "coordination.invalid-transition",
@@ -3161,11 +3293,11 @@ async function mutateIntegrationStart(
       // must never proceed on a row nobody holds (spec §D/§E — both leases stay
       // until complete, so an absent one means ownership was lost).
       assertExecutionHolder(context.row, session.session_id, scope.planId, "integration-start");
-      assertMergeLease(context.snapshot, session, scope.planId);
+      assertMergeLease(context.snapshot, session, scope.planId, handoff);
       assertIntegrationCheckout(integrationAnchors(context.snapshot, scope.planId), scope.planId);
     },
     mutate: (context) => {
-      const handoff = requireHandoff(context, scope.planId);
+      const handoff = requireHandoff(context, scope.planId, request.handoffId);
       // A started attempt is never re-pinned: the recorded base stays the one
       // the coordinator merged onto.
       if (handoff.state === "integrating") return null;
@@ -3216,7 +3348,7 @@ async function mutateIntegrationStart(
   };
 }
 
-type IntegrationAcceptRequest = { expectedRevision: number };
+type IntegrationAcceptRequest = { handoffId: string; expectedRevision: number };
 
 /**
  * Accept the finished integration (spec §E): prove the merge from the pinned
@@ -3234,7 +3366,7 @@ async function mutateIntegrationAccept(
     expectedRevision: request.expectedRevision,
     precheck: (context) => {
       assertCoordinatorBinding(session, sessionPath, context.snapshot);
-      const handoff = requireHandoff(context, scope.planId);
+      const handoff = requireHandoff(context, scope.planId, request.handoffId);
       if (handoff.state !== "integrating") {
         throw new CoordinationError(
           "coordination.invalid-transition",
@@ -3251,7 +3383,7 @@ async function mutateIntegrationAccept(
       }
       assertEvidenceDigests(handoff);
       assertExecutionHolder(context.row, session.session_id, scope.planId, "integration-accept");
-      assertMergeLease(context.snapshot, session, scope.planId);
+      assertMergeLease(context.snapshot, session, scope.planId, handoff);
       const integration = requireIntegration(handoff, scope.planId);
       const anchors = integrationAnchors(context.snapshot, scope.planId);
       const checkout = assertIntegrationCheckout(anchors, scope.planId);
@@ -3271,7 +3403,7 @@ async function mutateIntegrationAccept(
       }
     },
     mutate: (context) => {
-      const handoff = requireHandoff(context, scope.planId);
+      const handoff = requireHandoff(context, scope.planId, request.handoffId);
       const integration = requireIntegration(handoff, scope.planId);
       if (proof.kind !== "proven") return null;
       const merged: HandoffIntegration = { ...integration, result_sha: proof.resultSha, verified_at: nowIso() };
@@ -3326,14 +3458,17 @@ function completeRow(
   assertViolationFree(validateRowCoordination(nextCoordination), `plan ${scope.planId} coordination`);
   const nextRow: PlanRow = { ...context.row, status: "Done", coordination: nextCoordination };
   delete nextRow.execution_lease;
+  // Only this attempt's own claim is released: a lease naming another plan or
+  // another source branch is not this completion's to drop (spec §E).
+  const release = mergeLeaseOfAttempt(context.snapshot, scope.planId, handoff);
   return {
     row: nextRow,
     coordination: nextCoordination,
-    dropTopLevel: ["integration_merge_lease"],
+    dropTopLevel: release === undefined ? [] : ["integration_merge_lease"],
   };
 }
 
-type CompleteRequest = { expectedRevision: number };
+type CompleteRequest = { handoffId: string; expectedRevision: number };
 
 /**
  * Complete a merged plan (spec §E): re-prove the recorded result, re-check the
@@ -3349,9 +3484,9 @@ async function mutateComplete(
 ): Promise<CoordinationResult> {
   const result = await withRowCommit(scope, {
     expectedRevision: request.expectedRevision,
-    precheck: (context) => {
+    precheck: async (context) => {
       assertCoordinatorBinding(session, sessionPath, context.snapshot);
-      const handoff = requireHandoff(context, scope.planId);
+      const handoff = requireHandoff(context, scope.planId, request.handoffId);
       if (handoff.state !== "merged") {
         throw new CoordinationError(
           "coordination.invalid-transition",
@@ -3375,16 +3510,16 @@ async function mutateComplete(
         );
       }
       assertEvidenceDigests(handoff);
-      assertFindingsClosed(scope, prepared, "complete");
+      await assertFindingsClosed(scope, prepared, "complete");
       assertExecutionHolder(context.row, session.session_id, scope.planId, "complete");
-      assertMergeLease(context.snapshot, session, scope.planId);
+      assertMergeLease(context.snapshot, session, scope.planId, handoff);
       const integration = requireIntegration(handoff, scope.planId);
       const anchors = integrationAnchors(context.snapshot, scope.planId);
       const checkout = assertIntegrationCheckout(anchors, scope.planId);
       assertRecordedResult(anchors.worktreePath, scope.planId, integration, handoff.source_sha, checkout.head);
     },
     mutate: (context) => {
-      const handoff = requireHandoff(context, scope.planId);
+      const handoff = requireHandoff(context, scope.planId, request.handoffId);
       const integration = requireIntegration(handoff, scope.planId);
       const resultSha = assertRecordedResult(
         integration.worktree_path,
@@ -3433,12 +3568,13 @@ type ReconcilePlan = { outcome: string; apply: (context: RowContext) => RowCommi
  * - `completed` with a valid recorded proof is a read-only no-op: replay never
  *   resurrects ownership or rewrites timestamps.
  */
-function classifyReconcile(
+async function classifyReconcile(
   context: RowContext,
   scope: ResolvedPlanScope,
   session: CoordinationSession,
   handoff: PlanHandoff,
-): ReconcilePlan {
+  expectedHandoffId: string,
+): Promise<ReconcilePlan> {
   const planId = scope.planId;
   const prepared = context.coordination?.prepared;
   if (prepared === undefined) {
@@ -3468,17 +3604,17 @@ function classifyReconcile(
     // row, so the coordinator must still hold the execution lease it received
     // at accept (spec §E — nothing is replayed into ownership).
     assertExecutionHolder(context.row, session.session_id, planId, "reconcile");
-    assertMergeLease(context.snapshot, session, planId);
-    const merged = (resultSha: string): ReconcilePlan => {
-      assertFindingsClosed(scope, prepared, "complete");
+    assertMergeLease(context.snapshot, session, planId, handoff);
+    const merged = async (resultSha: string): Promise<ReconcilePlan> => {
+      await assertFindingsClosed(scope, prepared, "complete");
       return {
         outcome: "completed",
-        apply: (current) => completeRow(current, scope, requireHandoff(current, planId), resultSha),
+        apply: (current) => completeRow(current, scope, requireHandoff(current, planId, expectedHandoffId), resultSha),
       };
     };
     if (handoff.state === "merged") {
       const resultSha = assertRecordedResult(anchors.worktreePath, planId, integration, handoff.source_sha, checkout.head);
-      return merged(resultSha);
+      return await merged(resultSha);
     }
     const proof = integrationProof(anchors.worktreePath, checkout.head, integration.base_sha, handoff.source_sha);
     if (proof.kind === "diverged") {
@@ -3488,7 +3624,7 @@ function classifyReconcile(
         source: handoff.source_sha,
       });
     }
-    if (proof.kind === "proven") return merged(proof.resultSha);
+    if (proof.kind === "proven") return await merged(proof.resultSha);
     if (checkout.head !== integration.base_sha) {
       throw integrationDiverged(
         `plan ${planId} integration HEAD ${checkout.head} moved past the attempt base ${integration.base_sha} without a merge of ${handoff.source_sha}`,
@@ -3498,7 +3634,7 @@ function classifyReconcile(
     return {
       outcome: "retry-ready",
       apply: (current) => {
-        const currentHandoff = requireHandoff(current, planId);
+        const currentHandoff = requireHandoff(current, planId, expectedHandoffId);
         const returned: PlanHandoff = { ...currentHandoff, state: "accepted" };
         delete returned.integration;
         const nextCoordination: RowCoordination = {
@@ -3508,11 +3644,13 @@ function classifyReconcile(
         };
         assertViolationFree(validateRowCoordination(nextCoordination), `plan ${planId} coordination`);
         // InReview and the coordinator's execution lease stay: only the
-        // abandoned attempt's artifacts are released.
+        // abandoned attempt's own artifacts are released (a lease naming
+        // another plan or branch is not this attempt's claim).
+        const release = mergeLeaseOfAttempt(current.snapshot, planId, currentHandoff);
         return {
           row: { ...current.row, coordination: nextCoordination },
           coordination: nextCoordination,
-          dropTopLevel: ["integration_merge_lease"],
+          dropTopLevel: release === undefined ? [] : ["integration_merge_lease"],
         };
       },
     };
@@ -3524,7 +3662,7 @@ function classifyReconcile(
   );
 }
 
-type ReconcileRequest = { expectedRevision: number };
+type ReconcileRequest = { handoffId: string; expectedRevision: number };
 
 /**
  * Reconcile one crash-interrupted integration attempt (spec §E). Reconciliation
@@ -3539,10 +3677,10 @@ async function mutateReconcile(
   let plan: ReconcilePlan = { outcome: "unchanged", apply: () => null };
   const result = await withRowCommit(scope, {
     expectedRevision: request.expectedRevision,
-    precheck: (context) => {
+    precheck: async (context) => {
       assertCoordinatorBinding(session, sessionPath, context.snapshot);
-      const handoff = requireHandoff(context, scope.planId);
-      plan = classifyReconcile(context, scope, session, handoff);
+      const handoff = requireHandoff(context, scope.planId, request.handoffId);
+      plan = await classifyReconcile(context, scope, session, handoff, request.handoffId);
     },
     mutate: (context) => plan.apply(context),
   });

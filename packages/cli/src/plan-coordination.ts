@@ -426,17 +426,16 @@ type TransitionKind = "accept" | "return" | "integration-start" | "integration-a
 
 /**
  * The coordinator transition operation. `--handoff <id>` is mandatory (spec
- * §A2) and is *acted on* rather than forwarded: the engine's landed
- * transition contract takes `kind` (plus `reason`) only and re-derives the
- * row's live handoff itself — see `assertLiveHandoff` for the flag's
- * assertion. Sending `handoffId` fails the engine's own key check
- * (`coordination.forbidden-field`).
+ * §A2) and travels with the operation, so the engine re-checks the named id
+ * against the row *inside* its own lock: the read below is only an early,
+ * friendlier refusal for a stale flag, never the assertion (a concurrent
+ * `return` plus a fresh handoff cannot be transitioned by this command).
  */
 function handoffOperation(options: PlanCliOptions, kind: TransitionKind): PlanCoordinationOperation {
   const handoffId = requireFlag(options.handoff as string | undefined, "--handoff", kind, "handoff-id");
-  if (kind !== "return") return { kind } as PlanCoordinationOperation;
+  if (kind !== "return") return { kind, handoffId } as PlanCoordinationOperation;
   const reason = requireFlag(options.reason as string | undefined, "--reason", kind, "text");
-  return { kind, reason } as PlanCoordinationOperation;
+  return { kind, handoffId, reason } as PlanCoordinationOperation;
 }
 
 /**
