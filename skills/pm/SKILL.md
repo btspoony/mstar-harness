@@ -20,6 +20,8 @@ description: "PM entry shim — force project-manager orchestration when user in
 
 **Iteration lifecycle** (optional): host `commands/` may sequence Phase 1–5; semantics SSOT → **`mstar-iteration`**. Not required for ordinary PM work.
 
+**Scoped drive** (optional): `/iteration-drive --assignment <abs.md>` | `--workflow <id> --plan <id>` | `--resume <session.json>` (no args = unchanged whole-iteration route) — the PM boots **in the primary session**, binds one plan (`mstar plan bind` → `show`) and is bounded to that plan's scope; finish is a handoff, not `Done` → **`mstar-iteration`** `references/plan-scoped-pm.md`. Any other non-empty argument form fails closed.
+
 **Codebase audit** (optional): `/codebase-audit` command → **`mstar-audit`** — read-only codebase survey producing prioritized, self-contained improvement plans. Output feeds iteration-start §1 Research or normal Prepare → Execute. Dispatched by PM under `Task category: audit`.
 
 Detect host → **`mstar-host`** → `references/codex.md` | `cursor.md` | `opencode.md` | `kimi.md` | `zcode.md` | `omp.md`.

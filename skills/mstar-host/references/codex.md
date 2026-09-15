@@ -2,7 +2,7 @@
 
 Load when **`mstar-host`** detection resolves **codex** (Codex app/CLI session, `/plan` / `/goal` slash commands, Goal tools, or Codex tool namespaces such as `functions.*`, `codex_app.*`, `tool_search`, `image_gen`, or Browser plugin tools).
 
-Plan Mode: read **`references/_shared/plan-mode-bridge-core.md`** when Codex Plan Mode (`/plan`) is active. Goal Mode (`/goal`, goal tools, or goal progress controls) follows the host-agnostic **`/goal`** rule in `mstar-host` SKILL.md — applicability is by the `/goal` command, not host identity. Codex session plans, UI todos, and goal text are not durable harness SSOT.
+Plan Mode: read **`references/_shared/plan-mode-bridge-core.md`** when Codex Plan Mode (`/plan`) is active. Goal Mode (`/goal`, goal tools, or goal progress controls) follows the host-agnostic **`/goal`** rule in `mstar-host` SKILL.md — applicability is by the `/goal` command, not host identity. On the scoped route (`/iteration-drive --assignment | --workflow --plan | --resume`) the goal is that **plan's scope only** — never the iteration flow, sibling plans, or Phase 3–6. Codex session plans, UI todos, and goal text are not durable harness SSOT.
 
 Parallel PM dispatch: read **`parallel-dispatch.md`** only when Codex exposes an actual multi-agent / Task-style invocation tool. If no callable invoke tool exists, Assignment Markdown is coordination text only; do **not** claim subagent dispatch.
 

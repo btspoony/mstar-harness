@@ -22,6 +22,8 @@ Phase 2–5 全程有效（drive + loop 共有的行）：
 
 派发细则 → **`mstar-dispatch-gates`** + **`mstar-host`**。Phase 3 细则 → **`mstar-iteration/references/phase-3-iteration-close.md`** + **`mstar-compound`**。
 
+**Scoped primary route 例外**（`references/plan-scoped-pm.md`）：scoped plan 会话只驱动**本 plan**——不 seed 全局 phase todos，不做「最后一个 plan `Done` → Phase 3」判断，不加载 compound；其 finish 是 **durable handoff**，`Done`、lease 删除与 Phase 3–6 归 coordinator。
+
 ## Assignment preflight（bash 块 — byte-identical 共享副本）
 
 `mstar-harness` bin 未安装时静默跳过；在每次 implement/QC/QA 派发前（**SDD** 下为最新 `{SDD_DIR}/task-N-brief.md` 或临时写盘的 Assignment）校验。模式由迭代 compass frontmatter 的 `enforcement` 键决定（Slice 5）：
@@ -41,6 +43,8 @@ if command -v mstar-harness >/dev/null 2>&1; then mstar-harness dispatch validat
 > 路径必须加引号且替换为具体文件（如最新 `{SDD_DIR}/task-N-brief.md`，勿留尖括号）——agent 代入的路径不得进入 shell 无引号展开。
 
 ## Session todos（重叠行；drive + loop 共有）
+
+**Scoped primary route 不 seed 本表任何条目**：其 session todos 是 plan-local 任务列表，finish = handoff，**不**追加 `phase-3-*` / `phase-4-*` / `phase-5-*` / `phase-6-*` → **`plan-scoped-pm.md`** §4–§5。下表仅适用于整迭代路线（no-args `iteration-drive` / `iteration-loop`）。
 
 | Todo id | 何时追加 | 何时可勾掉 |
 |---------|----------|------------|

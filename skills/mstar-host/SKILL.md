@@ -56,6 +56,7 @@ On **dsh** only, read-only fan-out of **N ≥ 3** seats runs through the native 
 
 - **Advancing an iteration**: set the goal to **complete the entire iteration flow** (`iteration-start → per-plan cycles → iteration-close → PR delivery → PR merge-ready loop`). Do not set a sub-stage goal (e.g. "finish Phase 1 only").
 - **Advancing non-iteration work** (single plan / hotfix / one-off task): set the goal to **complete the entire per-plan flow** (`specify → clarify → plan → tasks → implement → plan QC tri + QA gate → Done`). Do not set a sub-stage goal (e.g. "write the plan" or "implement one task").
+- **Scoped primary route** (`/iteration-drive --assignment | --workflow <id> --plan <id> | --resume <session.json>`): the goal is the **active plan scope only** — `mstar plan bind` → constrain → tasks → per-task review → plan QC tri / QA → `mstar plan handoff`. Never set a goal that spans the iteration flow, sibling plans, or Phase 3–6: those stay in the coordinator's own primary session, not this plan-scoped one (`mstar-iteration` `references/plan-scoped-pm.md` §5).
 
 Goal text is a session-level objective only: `{HARNESS_DIR}` / `{PLAN_DIR}` / `status.json` remain SSOT, and goal completion is **not** harness Done. Mirror goal success criteria into the SSOT plan; when the goal changes, update goal text and the SSOT in the same round.
 
