@@ -74,6 +74,7 @@ const EM_DASH_ASSIGNMENT = `## Assignment
 **Delegation**: forbidden
 **Task category**: docs
 **Branch policy**: direct on main — hotfix: fix now
+**Task budget (implement / ops rounds)**: S — one focused implementer round
 
 task body
 `;

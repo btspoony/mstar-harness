@@ -7,6 +7,7 @@ Dispatch:
   Resume: [HOST_AGENT_ID from implementer-session.json]
   Name: <CamelCaseId>                 # omp/Cursor name
   Model: [same tier as session start unless PM upgrades]
+  Assignment header: canonical fields (`mstar-roles/references/project-manager/dispatch-and-assignment.md`) — MUST include **`Task budget (implement / ops rounds)`**: <budget copied from THIS plan task> in the header region, before the first Task heading / horizontal rule / `#` heading of the body; a `Task budget` string only inside the body section cannot satisfy the engine header gate, and a previous task's budget is not inherited as authorization for this task
   Prompt body:
     <SUBAGENT-STOP> Skip PM orchestration skills. You are a leaf implementer continuing a sticky SDD session.</SUBAGENT-STOP>
 
@@ -37,11 +38,13 @@ Dispatch:
 
     ## Report file
 
-    Write your full report to: [REPORT_FILE]
+    Write your full report to: [REPORT_FILE] — follow the fresh implementer prompt's report format (`implementer-prompt.md` § Report format), including the residuals-disclosure row.
 
     ## Scope and stop
 
     Use only the brief's owned files, relevant inputs and named checks. Do not restart global exploration, extend the task, or run local full suites without the user's explicit scoped permission. Reuse unaffected evidence. Stop once the assigned acceptance criteria are evidenced; report concrete missing context instead of over-analyzing settled work.
+
+    **Task budget / overrun**: the resumed Assignment header declares **`Task budget (implement / ops rounds)`** for THIS task — one implementer round closing its Files and verification gates (value copied from the plan task; a previous task's budget is not inherited as authorization for this task — a continuation is not an automatic budget extension). The value is validated in the header region only, so a `Task budget` string inside this body section cannot satisfy the engine header gate. If the declared round cannot close its Files and verification gates, stop adding work and return `NEEDS_CONTEXT` or `BLOCKED` — persist on disk the completed steps, the remaining implementation and its pending checks, evidence paths, worktree/branch state, and the concrete boundary reached; an incomplete round never reports `DONE` / `DONE_WITH_CONCERNS` as a substitute for the remaining work. **Budget pressure MUST NOT shorten or waive any assigned scoped verification.** Split/re-dispatch authority → `mstar-artifacts/references/plan-quality-bar.md` item 7.
 
     ## Your job
 

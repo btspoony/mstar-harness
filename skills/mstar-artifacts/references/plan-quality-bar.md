@@ -76,6 +76,15 @@ Do not add repository-wide build/test/lint/typecheck gates for insurance. Full s
 
 "Works correctly" is not a done criterion.
 
+### 7. Task shape / session fit
+
+Each task fits **one focused implementer round** — the round closes the task's declared Files list and verification gates, not a slice of them:
+
+- **Effort (agent-oriented)** — every task cites its band from the existing XS–XL scale (`mstar-conventions/references/effort-estimation.md`). A size estimate and a one-round closure assertion are distinct: a multi-session band never authorizes a multi-round task — split until each task can close its own Files and gates.
+- **Named split point** — every task states where it breaks if one-round closure fails, so PM can split without re-deriving the boundary.
+- **Split strategies** — apply the review split shapes (`mstar-audit/references/pr-review.md` § Sizing & change shape) to task boundaries, each slice with explicit interfaces and independent proof: stack · by file group · horizontal (shared code first) · vertical (full-stack slices). They shape task boundaries; PR line-count thresholds stay review-owned.
+- **Verification is not the shock absorber** — **Budget pressure MUST NOT shorten or waive any assigned scoped verification.** If the round cannot close, stop and report for split/re-dispatch instead of cutting checks.
+
 ## Relationship to existing plan elements
 
 | This quality bar | Existing mstar element |
@@ -86,6 +95,7 @@ Do not add repository-wide build/test/lint/typecheck gates for insurance. Full s
 | STOP conditions | New — not previously formalized |
 | Drift check | SDD `BASE_SHA` — generalized to all plans |
 | Done criteria | `plan.main.md` per-step checkboxes — elevated to machine-checkable |
+| Task shape / session fit | `plan.main.md` per-task **Effort (agent-oriented)** / **Split point** slots + `mstar-phase-gates` capacity quick-check — one-round Files-plus-gates closure per task |
 
 ## When to apply
 

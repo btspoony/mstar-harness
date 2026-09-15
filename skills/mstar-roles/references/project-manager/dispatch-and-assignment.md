@@ -112,7 +112,7 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 **QA gate**: mandatory | pm-acceptance | report-only — see `references/project-manager/qa-trigger-matrix.md`
 **QA gate reason**: <tier label, e.g. hotfix-inline | small-feature-clean-qc | mandatory-medium-feature>
 **QA mode**: acceptance-only | targeted | report-only | N/A — required when `QA gate: mandatory` or `report-only`
-**Findings cleanup**: zero-residual | allow-residual — **default `zero-residual` on formal iteration Phase 2**; **default `allow-residual`** for standalone `/pm`, hotfix, `Execution mode: inline` (override via Assignment or `plans[].metadata.findings_cleanup`; SSOT → `mstar-artifacts` Findings cleanup modes)
+**Findings cleanup**: zero-residual | allow-residual — **default `allow-residual` on formal iteration Phase 2** and for standalone `/pm`, hotfix, `Execution mode: inline`; `zero-residual` is the explicit opt-in override via compass or Assignment (Assignment wins; SSOT → `mstar-artifacts` Findings cleanup modes)
 **Why this agent**: <role-fit>
 **PM Task Board coverage**: <task ids>
 **Roadmap / deferred scope**: <required when staged, partial, or temporary; otherwise N/A>
@@ -123,7 +123,8 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 - In: <owned files/symbols, directly affected interfaces; finding + fix delta for re-review>
 - Out: <excluded work and specific boundary>
 **Inputs**: <brief, diff, relevant knowledge, reusable evidence with original range>
-**Budget (review / QC seats)**: <expansion cap (file opens / wall clock) — may only tighten the default in `mstar-harness-core` § 定向执行与验证边界, never loosen it; `N/A` on implement / ops rounds>
+**Budget (review / QC seats)**: <expansion cap (file opens / wall clock) — may only tighten the default in `mstar-harness-core` § 定向执行与验证边界, never loosen it; `N/A` on implement / ops rounds — those rounds declare the distinct sibling **`Task budget (implement / ops rounds)`** field below>
+**Task budget (implement / ops rounds)**: <one implementer round closing this task's declared Files list and verification gates, citing the task's `Effort (agent-oriented)` band (`mstar-conventions/references/effort-estimation.md`); required on every non-review, non-audit round — the exact complement of the review-seat `Budget` / audit-round fields above, so non-audit docs/Prepare specialists and orientation roles also declare it, and `writable: false` is not a capacity exemption; the engine check is presence-only on this header region before the body, not prose adequacy; a multi-session Effort band never authorizes a multi-round task — split per `mstar-artifacts/references/plan-quality-bar.md` item 7>
 **Return shape (review / QC seats)**: <what the seat returns and how it stops — verdict + findings shape; a clean round returns `findings: []` explicitly instead of prose; `N/A` when the round produces no findings>
 **Severity bar**: <what this round must treat as blocking — the blocking classes are unsafe-to-ship or significant tech debt; class definitions and the full report-section mapping → `mstar-artifacts` `references/status-and-residuals.md`; `N/A` on rounds with no findings>
 **Input provenance**: <how the seat grounds its claims — the command plus observed output for a `declared` / `recorded` / `written` artifact claim, and provenance for an asserted `path:line` citation; `N/A` when the round asserts neither>
@@ -181,6 +182,7 @@ Do **not** waive worktree because default-gitignored `plans/` are missing under 
 **Artifacts**: ...
 **Validation**: ...
 **Issues/Risks**: ...
+**Residuals disclosure**: <open R# list — id + severity + tracking location; `N/A — none open` when none>
 **Plan Update**: ...
 **Handoff**: narrative to `project-manager` (not auto-dispatch)
 **Git**: <commit lines or N/A>
@@ -203,6 +205,7 @@ Do **not** waive worktree because default-gitignored `plans/` are missing under 
 **Blockers**: ...
 **Decisions needed**: ...
 **Evidence Snapshot**: ...
+**Residuals disclosure**: <open R# list — id + severity + tracking location; `N/A — none open` when none>
 **PM Acceptance**: <required block when QA gate: pm-acceptance before Done — see qa-trigger-matrix.md>
 **Effort note (agent-oriented)**: ...
 ```

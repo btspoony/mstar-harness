@@ -20,6 +20,10 @@
 
 ### Task 1: [Component Name]
 
+**Effort (agent-oriented):** [XS–XL band per `mstar-conventions/references/effort-estimation.md` — a size estimate, not a round ceiling]
+
+**Split point:** [where the task splits if it cannot close its Files and gates in one round — capacity criterion → `mstar-artifacts/references/plan-quality-bar.md` item 7 (Task shape / session fit)]
+
 **Files:**
 - Create: `exact/path/to/file`
 - Modify: `exact/path/existing.py`
@@ -63,6 +67,7 @@ Reuse unaffected evidence with its original range and applicability; do not repe
 1. **Spec coverage:** every spec requirement maps to a task
 2. **Placeholder check:** task-owned paths/checks are concrete; executable tests have a real case, docs/policy have scoped evidence
 3. **Type consistency:** names match across tasks
+4. **Capacity (task shape / session fit):** every task closes its declared Files and verification gates in one implementer round — effort band declared, split point named, budget pressure never shortens verification (`mstar-artifacts/references/plan-quality-bar.md` item 7)
 
 ## SDD runtime (ephemeral)
 

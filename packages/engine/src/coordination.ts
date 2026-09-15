@@ -719,7 +719,15 @@ function scopeFromAssignment(
   options: ScopeResolutionOptions,
 ): ResolvedPlanScope {
   const harnessRoot = assignment.controlHarnessRoot;
-  const processRoot = resolveProcessHarnessDir(cwd);
+  // The Git-dependent process-root re-derivation cross-checks only callers
+  // that bring no root of their own. Every session-scoped path (resume, read,
+  // bind, and the sessionScope/coordinatorScope mutations) pins `chosenRoot`
+  // to the root the session recorded and validated at bind time — re-deriving
+  // it through Git from `session.harness_root` would probe from inside the
+  // harness dir, so with `git` missing the guess lands on a nested candidate
+  // and refuses as scope-mismatch before the operation's own proof can answer
+  // (spec §D2: unavailable Git is the operation's `git-unavailable`).
+  const processRoot = options.chosenRoot === undefined ? resolveProcessHarnessDir(cwd) : null;
   if (processRoot !== null && canonicalTarget(processRoot) !== harnessRoot) {
     throw new CoordinationError(
       "coordination.scope-mismatch",
@@ -2252,8 +2260,14 @@ export async function mutatePlanCoordination(request: CoordinationRequest): Prom
       }
       const assignment = parseAssignmentFile(operation.assignmentPath);
       // The session's own harness root is the anchor: mutations never depend on
-      // the caller's process cwd.
-      const scope = scopeFromAssignment(assignment, session.harness_root, { requirePrepared: false });
+      // the caller's process cwd. Pinning chosenRoot keeps prepare off the
+      // Git-dependent process-root re-derivation too — with git unavailable
+      // the degraded probe must not masquerade as a scope mismatch; the Git
+      // read itself surfaces coordination.git-unavailable.
+      const scope = scopeFromAssignment(assignment, session.harness_root, {
+        requirePrepared: false,
+        chosenRoot: session.harness_root,
+      });
       if (request.planId !== undefined && request.planId !== scope.planId) {
         throw new CoordinationError(
           "coordination.scope-mismatch",

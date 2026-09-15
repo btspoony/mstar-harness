@@ -38,8 +38,8 @@ description: "Morning Star QC orchestration — **SDD mandatory plan QC tri-revi
 ## Residual Findings 留档门禁（PM）
 
 - 先读 Assignment **`Findings cleanup`**（`plans[].metadata.findings_cleanup` mirror 已删——Assignment 是唯一 mode 来源）→ **`mstar-artifacts/references/status-and-residuals.md`**「Findings cleanup modes」。
-- **`Findings cleanup: zero-residual`**（iteration Phase 2 默认）：可修 **Warning / Suggestion / Critical** → **fix-now + targeted re-review**，**禁止**把可修项登记为 open R# 或用 `Approve with residuals` 收口；**`nit`** 当场修或丢弃（无 R#）。仅 **真 blocker-defer**（外部依赖 / 须下轮产品决策 / 用户本轮显式 defer + Durable Roadmap）可登记 open R#（`decision: defer`）。此时 `Approve with residuals` **仅**允许剩余项全是该类 defer，且**不含 `critical`**（不安全后果本次 merge 可达，见上文「Findings cleanup modes」）；`critical` 当场修复，或走显式 risk acceptance 并在 register 内关闭，**不得**作为批准遗留项。
-- **`Findings cleanup: allow-residual`**（standalone / hotfix / inline 默认）：阻断项修复后仍有 **Warning / Suggestion** 或技术债 → 必须留档；**`Approve with residuals`** 仅当无 open **Critical**；PM 汇总结论须含 residual 清单与跟踪位置。
+- **`Findings cleanup: zero-residual`**（显式 opt-in）：可修 **Warning / Suggestion / Critical** → **fix-now + targeted re-review**，**禁止**把可修项登记为 open R# 或用 `Approve with residuals` 收口；**`nit`** 当场修或丢弃（无 R#）。仅 **真 blocker-defer**（外部依赖 / 须下轮产品决策 / 用户本轮显式 defer + Durable Roadmap）可登记 open R#（`decision: defer`）。此时 `Approve with residuals` **仅**允许剩余项全是该类 defer，且**不含 `critical`**（不安全后果本次 merge 可达，见上文「Findings cleanup modes」）；`critical` 当场修复，或走显式 risk acceptance 并在 register 内关闭，**不得**作为批准遗留项。
+- **`Findings cleanup: allow-residual`**（iteration Phase 2 / standalone / hotfix / inline 默认）：阻断项修复后仍有 **Warning / Suggestion** 或技术债 → 必须留档，open R# 在离 InReview 前登记 register；**`Approve with residuals`** 仅当无 open **Critical**；PM 汇总结论与各报告面须披露 residual 清单 —— 每条含 id + severity + 跟踪位置（close 面另含 blocker-defer 标记；无 open 时 `N/A — none open`）。
 - **`severity`** 仅允许 `mstar-artifacts/references/status-and-residuals.md` 枚举。
 - **Open SSOT**：`{PROJECT_DIR}/<id>/residuals.json`（默认 `{HARNESS_DIR}/projects/<id>/`；无项目流程 `_default`）→ `entries[<plan-id>]`；PM 在 consolidated 决策分配 **R1…** 并写入。关闭 → 在 register 内 **in place** 置 `lifecycle` / `closed_at` / `closure_note`（v1 `archived/residuals/` 与 `archive-residuals` 已移除）。
 - 主 plan 仅作人类索引；不得作为唯一 SSOT。
@@ -52,7 +52,7 @@ description: "Morning Star QC orchestration — **SDD mandatory plan QC tri-revi
 
 ## PM consolidated 门禁（摘要）
 
-Leaf reviewers apply verdict per **`mstar-roles/references/qc-specialist/report-template.md`**. PM **`{SDD_DIR}/review/qc-consolidated.md`** synthesizes tri (or single-seat `qc.md`) into one gate decision for implement fix waves and QA gate, then records the durable summary in the main plan / workflow snapshot artifacts.
+Leaf reviewers apply verdict per **`mstar-roles/references/qc-specialist/report-template.md`**. PM **`{SDD_DIR}/review/qc-consolidated.md`** synthesizes tri (or single-seat `qc.md`) into one gate decision for implement fix waves and QA gate, then records the durable summary in the main plan / workflow snapshot artifacts. The consolidated decision also discloses the residual situation — open list + each severity + tracking location (`N/A — none open` when none) — per the **`Findings cleanup`** duties (`mstar-artifacts`「Findings cleanup modes」).
 
 ### 覆盖语义（未提及 = 未审查）
 
@@ -66,7 +66,7 @@ Leaf reviewers apply verdict per **`mstar-roles/references/qc-specialist/report-
 - **截断报告保留 verdict。** 席位因触达预算而声明 `Truncated coverage:` 时，其 verdict 有效，PM **不得**因此升级为 `Unconfirmed`——`Unconfirmed` 仍是证据通道失败态（见上条传导规则）。
 - **未覆盖范围不改写门禁。** 席位 verdict 只涵盖其已审范围：当 Assignment 范围未被完整覆盖时，**gate decision 不得为 `Approve`**。PM 二选一——把未覆盖范围按 targeted re-review 重新派发（席位在预算内补完），或显式收窄 `Review range` 并把收窄依据记入 `qc-consolidated.md` 后再收敛。截断范围仍按「未提及 = 未审查」在 `qc-consolidated.md` 中如实标注 `unreviewed`，PM 不重审无关内容来补全它。
 
-> **Engine check (when available):** run `mstar qc validate-report <report.md>` on each seat report (and `mstar dispatch validate <assignment-file>` for the Assignment-side round-bounding gate — `Budget` + `Return shape` on review / audit rounds; or `import { validateQcReport } from "@mstar-harness/engine"` in a host hook). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check (when available):** run `mstar qc validate-report <report.md>` on each seat report (and `mstar dispatch validate <assignment-file>` for the Assignment-side round-bounding gate — `Budget` + `Return shape` on review / audit rounds, plus the canonical **`Task budget (implement / ops rounds)`** capacity field on non-review / non-audit rounds; field guidance → `mstar-roles/references/project-manager/dispatch-and-assignment.md`; the review caps above are unchanged; or `import { validateQcReport } from "@mstar-harness/engine"` in a host hook). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 ## 证据规则（PM · consolidated 输入）
 

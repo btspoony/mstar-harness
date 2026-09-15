@@ -88,9 +88,9 @@ Register 文档形状（`entries[<plan-id>]` 数组 JSON）、**9 个必填字�
 
 ### Findings cleanup（与 Assignment 联动）
 
-- Assignment **`Findings cleanup: zero-residual | allow-residual`** 是唯一 mode 来源（`metadata.findings_cleanup` mirror 已删）；迭代 Phase 2 默认 `zero-residual`。
-- `zero-residual`：可修 findings 当轮 fix → re-review 清干净；仅真 blocker 可 defer 且须 Durable Roadmap + `target`（`critical` 不属 defer —— 定义 → **`mstar-artifacts`**「Findings cleanup modes」）；`nit` 必须当场修或删；waived/risk-accepted 必须关闭，不得留 open。
-- `allow-residual`：仅 unresolved **critical** 阻止 Approve。
+- Assignment **`Findings cleanup: zero-residual | allow-residual`** 是唯一 mode 来源（`metadata.findings_cleanup` mirror 已删）；迭代 Phase 2 默认 `allow-residual`。
+- `allow-residual`（默认）：仅 unresolved **critical** 阻止 Approve；open R# 须在离 InReview 前登记 project register，且各决策面披露（id + severity + 跟踪位置；close 面另含 blocker-defer 标记）—— 登记与披露职责 → **`mstar-artifacts`**「Findings cleanup modes」。
+- `zero-residual`（显式 opt-in）：可修 findings 当轮 fix → re-review 清干净；仅真 blocker 可 defer 且须 Durable Roadmap + `target`（`critical` 不属 defer —— 定义 → **`mstar-artifacts`**「Findings cleanup modes」）；`nit` 必须当场修或删；waived/risk-accepted 必须关闭，不得留 open。
 - mode 全文与 enforcement → **`mstar-artifacts`** `references/status-and-residuals.md`（「Findings cleanup modes」+ 其 engine check）。
 
 ## Workflow

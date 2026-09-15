@@ -84,6 +84,7 @@ const VALID_WRITABLE = `## Assignment
 **Delegation**: forbidden
 **Task category**: logic
 **Working branch**: feature/dsh-package-core
+**Task budget (implement / ops rounds)**: S — one focused implementer round
 
 Do the thing, evidence-first.
 `

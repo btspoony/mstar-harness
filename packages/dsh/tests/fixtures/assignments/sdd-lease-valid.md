@@ -7,5 +7,6 @@
 **Plan Path**: plans/e2e-lease-plan.md
 **Worktree path**: /dsh-e2e/lease-worktree
 **Working branch**: feature/e2e-lease
+**Task budget (implement / ops rounds)**: S — one focused implementer round
 
 Do the thing, evidence-first.

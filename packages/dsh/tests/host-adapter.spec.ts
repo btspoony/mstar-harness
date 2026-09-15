@@ -58,6 +58,7 @@ const VALID_WRITABLE = `## Assignment
 **Delegation**: forbidden
 **Task category**: logic
 **Working branch**: feature/dsh-host-adapter
+**Task budget (implement / ops rounds)**: S — one focused implementer round
 
 Do the thing, evidence-first.
 `
@@ -78,6 +79,7 @@ const SCOUT_NO_BRANCH = `## Assignment
 **Execute as**: scout
 **Delegation**: n/a
 **Task category**: deep
+**Task budget (implement / ops rounds)**: XS — one orientation round
 
 Survey the codebase, report only.
 `
@@ -142,6 +144,57 @@ const BARE_FIELDS = { workingBranch: 'feature/x' } satisfies AssignmentFields
 const BARE_FIELDS_TEXT = `## Assignment
 
 **Working branch**: feature/x
+`
+
+/** Implement-round fields WITH a typed Task budget — the fields→text
+ * normalization must round-trip the § A1 label (PR wave 3: the serializer
+ * silently dropped it, false-firing `assignment.field.task-budget-missing`). */
+const IMPLEMENT_FIELDS_WITH_BUDGET = {
+  executeAs: 'fullstack-dev',
+  delegation: 'forbidden',
+  taskCategory: 'logic',
+  workingBranch: 'feature/typed-budget',
+  taskBudget: 'S — one focused implementer round',
+} satisfies AssignmentFields
+
+/** The canonical text form of IMPLEMENT_FIELDS_WITH_BUDGET (engine header grammar). */
+const IMPLEMENT_FIELDS_WITH_BUDGET_TEXT = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Task budget (implement / ops rounds)**: S — one focused implementer round
+**Working branch**: feature/typed-budget
+`
+
+/** The same implement round WITHOUT the Task budget — guards the gate itself. */
+const IMPLEMENT_FIELDS_NO_BUDGET = {
+  executeAs: 'fullstack-dev',
+  delegation: 'forbidden',
+  taskCategory: 'logic',
+  workingBranch: 'feature/typed-budget',
+} satisfies AssignmentFields
+
+/** Review-seat fields WITH the typed round-bounding pair — same serializer
+ * class as the Task budget drop (review seats read `budget` / `returnShape`). */
+const REVIEW_SEAT_FIELDS = {
+  executeAs: 'qc-specialist',
+  delegation: 'forbidden',
+  taskCategory: 'logic',
+  workingBranch: 'feature/typed-budget',
+  budget: '12 file opens or 10 minutes',
+  returnShape: 'verdict + findings; a clean round returns findings: []',
+} satisfies AssignmentFields
+
+/** The canonical text form of REVIEW_SEAT_FIELDS. */
+const REVIEW_SEAT_FIELDS_TEXT = `## Assignment
+
+**Execute as**: qc-specialist
+**Delegation**: forbidden
+**Task category**: logic
+**Working branch**: feature/typed-budget
+**Budget (review / QC seats)**: 12 file opens or 10 minutes
+**Return shape (review / QC seats)**: verdict + findings; a clean round returns findings: []
 `
 
 /* ---------------------------------- helpers ---------------------------------- */
@@ -413,6 +466,40 @@ describe('beforeDispatch — dispatch gate validation path (same codes as tools/
         'assignment.field.missing-task-category',
       ]),
     )
+  })
+
+  it('typed Task budget survives the fields→text normalization (§ A1) — and its absence still fails the gate', async () => {
+    // Non-colliding caller binding so anti-recursion stays out of the picture
+    // (default empty binding fails every dispatch with empty-binding).
+    booted = await bootApp({ dispatchBinding: 'qc-specialist' })
+    const adapter = makeAdapter({ config: { dispatchBinding: 'qc-specialist' } })
+
+    // (a) fields WITH taskBudget round-trip losslessly — the rebuilt header
+    // carries the canonical label, so no false task-budget-missing fires and
+    // the codes match the equivalent hand-written text exactly.
+    const withBudget = await adapter.beforeDispatch(IMPLEMENT_FIELDS_WITH_BUDGET)
+    const withBudgetText = await adapter.beforeDispatch(IMPLEMENT_FIELDS_WITH_BUDGET_TEXT)
+    expect(withBudget.ok).toBe(true)
+    expect(withBudget.violations.map((v) => v.code)).not.toContain('assignment.field.task-budget-missing')
+    expect(withBudget.violations).toEqual(withBudgetText.violations)
+
+    // (b) the same implement round WITHOUT the field — the gate itself must
+    // still flag it (the serializer must not paper over a real omission).
+    const noBudget = await adapter.beforeDispatch(IMPLEMENT_FIELDS_NO_BUDGET)
+    expect(noBudget.ok).toBe(false)
+    expect(noBudget.violations.map((v) => v.code)).toContain('assignment.field.task-budget-missing')
+  })
+
+  it('typed review-seat Budget / Return shape survive the same fields→text normalization', async () => {
+    booted = await bootApp({ dispatchBinding: 'fullstack-dev' })
+    const adapter = makeAdapter({ config: { dispatchBinding: 'fullstack-dev' } })
+
+    const fromFields = await adapter.beforeDispatch(REVIEW_SEAT_FIELDS)
+    const fromText = await adapter.beforeDispatch(REVIEW_SEAT_FIELDS_TEXT)
+    expect(fromFields.ok).toBe(true)
+    expect(fromFields.violations).toEqual(fromText.violations)
+    expect(fromFields.violations.map((v) => v.code)).not.toContain('assignment.field.budget-missing')
+    expect(fromFields.violations.map((v) => v.code)).not.toContain('assignment.field.return-shape-missing')
   })
 
   it('header-region scoping holds for BOTH paths — a body-quoted direct-on exception is invisible to the listener AND the adapter (parity)', async () => {

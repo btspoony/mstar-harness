@@ -46,6 +46,7 @@ const VALID_WRITABLE = `## Assignment
 **Delegation**: forbidden
 **Task category**: logic
 **Working branch**: feature/dsh-package-core
+**Task budget (implement / ops rounds)**: S — one focused implementer round
 
 Do the thing, evidence-first.
 `
@@ -185,6 +186,7 @@ const BODY_QUOTED_FIELDS = `## Assignment
 **Execute as**: scout
 **Delegation**: n/a
 **Task category**: deep
+**Task budget (implement / ops rounds)**: XS — one orientation round
 
 ## Task
 
@@ -572,11 +574,14 @@ describe('dispatch gate — parity with the opencode validated field set', () =>
 
     // Same engine fns as packages/opencode validateDispatchAssignment →
     // identical codes by construction; assert the concrete set here.
+    // The Task-budget gate applies to implement rounds regardless of the
+    // missing core fields (opencode parity, 435c6fc6).
     expect(violationCodes(advisories[0]).sort()).toEqual([
       'assignment.field.branch-missing',
       'assignment.field.missing-delegation',
       'assignment.field.missing-execute-as',
       'assignment.field.missing-task-category',
+      'assignment.field.task-budget-missing',
     ])
     // Severities match the engine contract (critical only for anti-recursion).
     expect(advisories[0]!.result.violations.every((v) => v.severity === 'high')).toBe(true)

@@ -170,6 +170,7 @@ const TRACK_ASSIGNMENT_HEADER = `## Assignment
 **Execute as**: fullstack-dev
 **Delegation**: forbidden
 **Task category**: logic
+**Task budget (implement / ops rounds)**: S — one focused implementer round
 `
 
 /** Build an Assignment with a set of extra header lines (track declarations). */
@@ -628,6 +629,7 @@ describe('dispatch gate — worktree L1 integration topology (canonical reader +
 **Plan Path**: plans/l1-plan.md
 **Worktree path**: ${worktree}
 **Working branch**: feature/a
+**Task budget (implement / ops rounds)**: S — one focused implementer round
 
 Do the thing, evidence-first.
 `
@@ -762,6 +764,7 @@ describe('dispatch gate — worktree hostile inputs + header-region scoping', ()
 **Task category**: logic
 **Working branch**: feature/a
 **Worktree path**: ${a}
+**Task budget (implement / ops rounds)**: S — one focused implementer round
 
 ## Task
 

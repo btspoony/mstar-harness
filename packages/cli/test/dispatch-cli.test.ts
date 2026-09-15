@@ -80,6 +80,7 @@ const VALID_ASSIGNMENT = `## Assignment
 **Delegation**: forbidden
 **Task category**: logic
 **Working branch**: feature/foo
+**Task budget (implement / ops rounds)**: S — one implementer round closing the declared Files and gates
 **Plan Path**: .mstar/plans/20260808-example.md
 `;
 
@@ -89,6 +90,10 @@ function assignment(overrides: Record<string, string>): string {
     Delegation: "forbidden",
     "Task category": "logic",
     "Working branch": "feature/foo",
+    // Implement/ops rounds must carry the Task budget capacity field
+    // (capacity contract spec § A1) — every fixture built here is a
+    // non-review/non-audit round.
+    "Task budget (implement / ops rounds)": "S — one focused implementer round",
   };
   const merged = { ...base, ...overrides };
   const lines = ["## Assignment", ""];
@@ -105,6 +110,19 @@ describe("mstar dispatch validate — Assignment field + default-branch gate", (
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("dispatch validate: OK");
       expect(result.stderr).toBe("");
+    });
+  });
+
+  test("otherwise-valid implement assignment without Task budget → assignment.field.task-budget-missing, exit 1", () => {
+    const withoutTaskBudget = VALID_ASSIGNMENT.replace(
+      "**Task budget (implement / ops rounds)**: S — one implementer round closing the declared Files and gates\n",
+      "",
+    );
+    withAssignment(withoutTaskBudget, (file) => {
+      const result = runCli(["dispatch", "validate", file]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("assignment.field.task-budget-missing");
+      expect(result.stdout).not.toContain("OK");
     });
   });
 
@@ -265,6 +283,7 @@ describe("mstar dispatch validate — Assignment field + default-branch gate", (
 **Execute as**: scout
 **Delegation**: forbidden
 **Task category**: deep
+**Task budget (implement / ops rounds)**: XS — one orientation round
 `;
     withAssignment(scout, (file) => {
       const result = runCli(["dispatch", "validate", file]);
@@ -280,6 +299,7 @@ describe("mstar dispatch validate — Assignment field + default-branch gate", (
 **Execute as**: scout
 **Delegation**: forbidden
 **Task category**: deep
+**Task budget (implement / ops rounds)**: XS — one orientation round
 `;
     withAssignment(scout, (file) => {
       const result = runCli(["dispatch", "validate", file, "--branch", "main"]);
@@ -293,6 +313,7 @@ describe("mstar dispatch validate — Assignment field + default-branch gate", (
 **Execute as**: Scout
 **Delegation**: forbidden
 **Task category**: deep
+**Task budget (implement / ops rounds)**: XS — one orientation round
 `;
     withAssignment(scout, (file) => {
       const result = runCli(["dispatch", "validate", file]);

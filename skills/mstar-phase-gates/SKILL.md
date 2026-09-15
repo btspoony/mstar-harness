@@ -27,7 +27,7 @@ description: "Morning Star Spec-Driven 双阶段门禁：Prepare（`specify → 
 ### B. Execute：`plan(locked) → tasks → implement`
 
 - **`plan(locked)`** — 冻结基线；实现中出现新约束时**先回写 plan 再继续**。
-- **`tasks`** — 含依赖顺序、并行标记、完成判据；每任务可追踪到 plan、roadmap 批次与验收标准。
+- **`tasks`** — 含依赖顺序、并行标记、完成判据；每任务可追踪到 plan、roadmap 批次与验收标准。每任务还须满足单轮容量判据（声明 Effort band、单轮闭合其 Files 与验证门、写明 split point）→ **`mstar-artifacts/references/plan-quality-bar.md`** item 7（Task shape / session fit）。
   - **并行标签**：≥2 条实现轨同时分派 → `Dispatch mode: parallel independent tracks`；同仓可写并发 → `Worktree isolation: required`（清单 **`mstar-branch-worktree`** → **`references/parallel-writable-pre-dispatch.md`**）。
 - **`implement`** — 按 tasks 顺序执行；多 task plan **默认** `Execution mode: sdd`（`mstar-sdd`）；hotfix 可 `inline`。完成进入 `InReview`；遵循 **`mstar-coding-behavior`**。
 
@@ -49,7 +49,7 @@ description: "Morning Star Spec-Driven 双阶段门禁：Prepare（`specify → 
 
 - **`plan locked`**
   - 最小动作：在 plan 或 notes 记录当前锁定版本（日期或 hash）。
-  - **Plan 质量门**（新 plan / 大改）：无 placeholder（`...`、`TBD`、`etc.`）；含 **Global Constraints** 与 per-task **Interfaces**；PM self-review 三问（每 task 可独立验证？依赖顺序清晰？无隐含假设？）— 见 `mstar-artifacts/templates/plan.main.md` + **`mstar-artifacts/references/plan-quality-bar.md`**（自包含/验证门/STOP 条件/drift check/done criteria）。
+  - **Plan 质量门**（新 plan / 大改）：无 placeholder（`...`、`TBD`、`etc.`）；含 **Global Constraints** 与 per-task **Interfaces**；PM self-review 四问（每 task 可独立验证？依赖顺序清晰？无隐含假设？每 task 可单轮闭合其 Files 与验证门 — Task shape / session fit？→ **`mstar-artifacts/references/plan-quality-bar.md`** item 7）— 见 `mstar-artifacts/templates/plan.main.md` + **`mstar-artifacts/references/plan-quality-bar.md`**（自包含/验证门/STOP 条件/drift check/done criteria）。
 - **`implement`**
   - 最小产物：实现 diff、自检证据、回报与 handoff；行为准则 → **`mstar-coding-behavior`**；编辑纪律 → 上文「可验证编辑与上下文纪律」。
   - **知识库 / 迭代 compass**：**默认**开工前扫 `{KNOWLEDGE_DIR}/README.md` 索引（若存在）并阅读与当轮相关的 **Active** 行（**即使 metadata 无 knowledge 链接**）；若 `plans[].metadata` 登记了 `primary_spec` / `spec_refs` / `iteration_compass` / `iteration_refs`，所链接文档**仍须**阅读；两类阅读均须在回报中说明已对齐 → **`mstar-conventions`** · **`mstar-artifacts/references/knowledge-and-designs.md`**。
@@ -93,6 +93,7 @@ per-plan Done 是 per-plan 的闭环终点；compound 是迭代级收口活动�
 8. Assignment 是否含 **`Task category`**（实现类任务）并与 Owner 一致？
 9. 若中途出现 plan drift，是否先回写再继续？
 10. 实现说明中是否体现"最小耐久切片 + 手术式改动 + 可验证检查"？
+11. 每个任务是否满足容量判据：声明 Effort band、单轮闭合其 Files 与验证门、写明 split point（Task shape / session fit → `mstar-artifacts/references/plan-quality-bar.md` item 7）？
 
 **任一项为「否」时，`Gate decision` 必须是 `blocked`**。
 

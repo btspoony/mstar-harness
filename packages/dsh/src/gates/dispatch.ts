@@ -1102,16 +1102,25 @@ export async function preExecuteListener(
 /**
  * Rebuild the canonical Assignment HEADER text from parsed fields (the
  * engine's OWN header grammar — `parseAssignmentFields` reads exactly these
- * labels — so the engine parsers round-trip losslessly). The host hook's
- * engine-typed input is `AssignmentFields`; the shared gate core validates
- * assignment TEXT, so the fields form is normalized to text before gating.
+ * labels — so the engine parsers round-trip losslessly). Every typed
+ * `AssignmentFields` slot is emitted under its canonical header label: the
+ * implement/ops `Task budget` (capacity contract spec § A1) after
+ * `Task category`, and the review-seat `Budget` / `Return shape` round
+ * bounds after the branch forms — dropping any of them would false-fire the
+ * corresponding `assignment.field.*-missing` gate on a host that passed the
+ * typed form. The host hook's engine-typed input is `AssignmentFields`; the
+ * shared gate core validates assignment TEXT, so the fields form is
+ * normalized to text before gating.
  */
 export function assignmentTextFromFields(fields: AssignmentFields): string {
   const lines = ['## Assignment', '']
   if (fields.executeAs !== undefined) lines.push(`**Execute as**: ${fields.executeAs}`)
   if (fields.delegation !== undefined) lines.push(`**Delegation**: ${fields.delegation}`)
   if (fields.taskCategory !== undefined) lines.push(`**Task category**: ${fields.taskCategory}`)
+  if (fields.taskBudget !== undefined) lines.push(`**Task budget (implement / ops rounds)**: ${fields.taskBudget}`)
   if (fields.workingBranch !== undefined) lines.push(`**Working branch**: ${fields.workingBranch}`)
   if (fields.branchPolicy !== undefined) lines.push(`**Branch policy**: ${fields.branchPolicy}`)
+  if (fields.budget !== undefined) lines.push(`**Budget (review / QC seats)**: ${fields.budget}`)
+  if (fields.returnShape !== undefined) lines.push(`**Return shape (review / QC seats)**: ${fields.returnShape}`)
   return lines.join('\n')
 }

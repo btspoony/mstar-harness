@@ -49,7 +49,7 @@ Use this reference when PM is dispatching QC, consolidating review verdicts, or 
 
 **Decision**: Approve | Request Changes | Needs Discussion | Unconfirmed
 **Blocking Items**: {list or None}
-**Residual Findings**: {list with owner/target date, or None}
+**Residual Findings**: {each open item: id + severity + tracking location + owner/target date, or `N/A — none open`}
 **Assigned Fix Owners**: {role list}
 **Next Step**: {back to dev fix | to QA verification}
 ```
@@ -65,7 +65,7 @@ Use this reference when PM is dispatching QC, consolidating review verdicts, or 
 
 Read Assignment **`Findings cleanup`** first (`mstar-artifacts` — Findings cleanup modes).
 
-### When `Findings cleanup: zero-residual`
+### When `Findings cleanup: zero-residual` (explicit opt-in)
 
 - Prefer **fix-now + targeted re-review** for Critical / Warning / Suggestion that can be fixed this session.
 - **NEVER** park fixable findings as open R# or use `Approve with residuals` for them.
@@ -73,14 +73,16 @@ Read Assignment **`Findings cleanup`** first (`mstar-artifacts` — Findings cle
 - `nit`: fix or drop (no R#).
 - Plan Done: prefer empty open list; any remaining open R# must all be blocker-defer + roadmap — never a `critical` (`mstar-artifacts` Findings cleanup modes).
 
-### When `Findings cleanup: allow-residual` (or unset outside iteration Phase 2)
+### When `Findings cleanup: allow-residual` (default)
 
-When blocking issues are fixed but non-blocking warnings/suggestions remain:
+The default mode (iteration Phase 2 included; `zero-residual` is the explicit opt-in). When blocking issues are fixed but non-blocking warnings/suggestions remain:
 
-- Must register residual findings (do not leave as chat-only).
+- Must register residual findings in the project register before the plan leaves InReview (do not leave as chat-only).
 - Severity enum must follow `mstar-artifacts` SSOT.
 - Canonical store: `{PROJECT_DIR}/<id>/residuals.json` (default `{HARNESS_DIR}/projects/<id>/`; project-less flows `_default`) -> `entries[<plan-id>]`.
 - Required durable gate summary in main plan should list R# ids and decisions, but never replace canonical entries.
+- Every consolidated QC decision, Completion Report, and Status Update discloses the residual situation — the list, each entry's severity, and its tracking location (`N/A — none open` when none). Silence about open residuals is a gate violation.
+- Close-time artifacts (main plan `## Review Gate Summary`, compass `## Quality Gate Summary`, PR body) carry the same list plus a blocker-defer flag; a close without these disclosures is not a close. Disclosure never closes entries and never overrides critical blocking or explicit `zero-residual` rules.
 
 Each residual record should include:
 
