@@ -78,6 +78,17 @@ export type AssignmentFields = {
    * violation code per field so the PM sees exactly which label is missing.
    */
   returnShape?: string;
+  /**
+   * `Task budget (implement / ops rounds)` — the declared capacity of ONE
+   * implementer round closing the task's declared Files list and verification
+   * gates (capacity contract spec § A1/A2; the value cites the task's
+   * `Effort (agent-oriented)` band). Required, presence-only, on the exact
+   * complement of the review/audit rounds — implement/ops rounds including
+   * non-audit docs/Prepare specialists and orientation roles. The value is
+   * prose; it is never parsed numerically (adequacy stays in PM's Prepare
+   * check).
+   */
+  taskBudget?: string;
 };
 
 export type ValidateAssignmentFieldsOptions = {
@@ -134,6 +145,14 @@ const BUDGET_LABELS: readonly string[] = ["Budget (review / QC seats)", "Budget"
 /** Labels carrying the review-seat `Return shape` (same parenthesized + bare pair). */
 const RETURN_SHAPE_LABELS: readonly string[] = ["Return shape (review / QC seats)", "Return shape"];
 
+/**
+ * Labels carrying the implement/ops-round `Task budget` (capacity contract
+ * spec § A1: the parenthesized contract label plus the accepted bare form).
+ * The parenthesized label parses through the bold-label grammar only; the
+ * bare label works bold or plain — the plain-label grammar is not widened.
+ */
+const TASK_BUDGET_LABELS: readonly string[] = ["Task budget (implement / ops rounds)", "Task budget"];
+
 function violation(severity: Severity, code: string, message: string, fix?: string): ValidationResult {
   return { ok: false, severity, code, message, fix };
 }
@@ -183,6 +202,7 @@ export function parseAssignmentFields(assignmentText: string): AssignmentFields 
     else if (label === "Branch policy") fields.branchPolicy = value;
     else if (BUDGET_LABELS.includes(label)) fields.budget = value;
     else if (RETURN_SHAPE_LABELS.includes(label)) fields.returnShape = value;
+    else if (TASK_BUDGET_LABELS.includes(label)) fields.taskBudget = value;
   }
   return fields;
 }
@@ -404,7 +424,10 @@ export function isReadOnlyAssignmentRole(roleId: string): boolean {
  * non-empty values (paste-only shells are caught here — every field missing).
  * Review-seat and audit rounds must additionally declare both round-bounding
  * fields, `Budget (review / QC seats)` and `Return shape (review / QC
- * seats)` (one violation code per missing label). Writable assignments must
+ * seats)` (one violation code per missing label). The complement — every
+ * implement/ops round, including non-audit docs/Prepare and orientation
+ * roles — must declare `Task budget (implement / ops rounds)`, presence-only.
+ * Writable assignments must
  * carry EXACTLY ONE branch form; `create <new>`
  * from <base>` without `<base>` (incl. the dangling `create <new> from`
  * / `create from <base>` typos) and `Branch policy` without branch/reason
@@ -469,6 +492,27 @@ export function validateAssignmentFields(assignmentText: string, opts: ValidateA
       if (missing === undefined) continue;
       violations.push(
         violation("high", field.code, `${subject} must declare a round ${field.label} \u2014 ${missing}`, field.fix),
+      );
+    }
+  }
+
+// Implement/ops rounds declare capacity (capacity contract spec § A1–A3): the
+// exact complement of the review/audit branch above — the SAME normalized
+// `role` / `auditRound` values, no second role whitelist and no lifecycle
+// phase field. Non-audit docs/Prepare specialists and orientation roles sit
+// here too, and `writable: false` only waives the branch-form gate, never
+// this field. Presence-only: absent, empty or `N/A` fails; numeric/semantic
+// adequacy stays in PM's Prepare check.
+  if (!reviewSeat && !auditRound) {
+    const missing = describeAbsence(fields.taskBudget);
+    if (missing !== undefined) {
+      violations.push(
+        violation(
+          "high",
+          "assignment.field.task-budget-missing",
+          `implement/ops round "${role}" must declare a Task budget \u2014 ${missing}`,
+          'add "**Task budget (implement / ops rounds)**: <one implementer round closing the task\'s declared Files list and verification gates> \u2014 capacity contract spec \u00a7 A1/A2"',
+        ),
       );
     }
   }

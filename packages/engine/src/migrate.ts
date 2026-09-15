@@ -82,7 +82,7 @@
  * twice (silent overwrite at apply); the plan is refused fail-loud with
  * the conflict list.
  */
-import { copyFileSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { readJson } from "./core.js";
 import { parseCompassFrontmatterText } from "./iteration.js";
@@ -934,6 +934,34 @@ export async function applyMigratePlan(plan: MigratePlan): Promise<MigrateResult
 }
 
 /**
+ * Raw-byte ownership guard for the migration's non-JSON targets (archive
+ * copy, JSONL notes, Markdown roadmap): absent -> exclusive create;
+ * byte-identical (a previous run of this same deterministic plan) ->
+ * converge untouched; divergent foreign bytes -> refused under the root
+ * lock, never overwritten. Unlike the snapshot/register guards, the
+ * comparison is raw bytes — these files are preserved verbatim, never
+ * re-serialized through `stableJson`.
+ */
+function writeRawMigrateTarget(filePath: string, expected: Buffer): void {
+  mkdirSync(dirname(filePath), { recursive: true });
+  try {
+    writeFileSync(filePath, expected, { flag: "wx" });
+    return;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  }
+ // Exclusive-create collision: re-read and compare raw bytes — never overwrite.
+  const existing = readFileSync(filePath);
+  if (Buffer.compare(existing, expected) !== 0) {
+    throw new CoordinationError(
+      "coordination.version-conflict",
+      `refusing to apply migration: ${filePath} already exists with different content \u2014 migration is additive-only`,
+      { path: filePath },
+    );
+  }
+}
+
+/**
  * Locked half of `applyMigratePlan`: the source byte-version re-check plus
  * the whole additive phase and the root v2 replacement. Assumes the root
  * lock on `statusPath` is held (see the caller) and performs ZERO writes
@@ -970,9 +998,12 @@ async function applyMigratePlanLocked(
   }
 
  // 1. Archive the v1 root BEFORE anything else touches it (never deleted
- // without that copy).
-  mkdirSync(join(plan.root, dirname(plan.archive.file)), { recursive: true });
-  copyFileSync(statusPath, join(plan.root, plan.archive.file));
+ // without that copy). The copy is an owned raw target like the ones
+ // below: the CAS-checked v1 source bytes (this read sits under the same
+ // root lock the CAS ran under) exclusively create the archive, a
+ // byte-identical leftover converges, a foreign archive is refused —
+ // never overwritten.
+  writeRawMigrateTarget(join(plan.root, plan.archive.file), readFileSync(statusPath));
 
  // 2. Workflow snapshots (additive, create-only). Validation happens inside
  // writeWorkflowSnapshot — the writer fails closed before any write, so
@@ -999,12 +1030,11 @@ async function applyMigratePlanLocked(
     }
   }
 
- // 3. Notes ledgers (additive).
+ // 3. Notes ledgers (additive; raw-byte ownership guard — the JSONL bytes
+ // are preserved verbatim, never re-serialized).
   for (const notes of plan.notesFiles) {
-    const filePath = workflowTargetOf(notes.file);
-    mkdirSync(dirname(filePath), { recursive: true });
     const content = notes.lines.length > 0 ? `${notes.lines.join("\n")}\n` : "";
-    writeFileSync(filePath, content, "utf8");
+    writeRawMigrateTarget(workflowTargetOf(notes.file), Buffer.from(content, "utf8"));
   }
 
  // 4. Project register (additive; validated before the write).
@@ -1047,11 +1077,10 @@ async function applyMigratePlanLocked(
     }
   }
 
- // 5. Roadmap seeds (additive).
+ // 5. Roadmap seeds (additive; raw-byte ownership guard on the resolved
+ // seed; `roadmap === null` writes no seed).
   if (plan.roadmap !== null) {
-    const filePath = projectTargetOf(plan.roadmap.file);
-    mkdirSync(dirname(filePath), { recursive: true });
-    writeFileSync(filePath, plan.roadmap.content, "utf8");
+    writeRawMigrateTarget(projectTargetOf(plan.roadmap.file), Buffer.from(plan.roadmap.content, "utf8"));
   }
 
  // 6. Root v2 replacement — the COMMIT POINT (last step), already serialized

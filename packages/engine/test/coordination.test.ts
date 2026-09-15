@@ -34,7 +34,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -1854,4 +1854,221 @@ describe("seam-regressions", () => {
       "coordination.not-in-git",
     );
   }, 30000);
+});
+
+/**
+ * R2 — `gitRead` subprocess failure classification (spec §D2). A Git read that
+ * never answers is unavailable evidence, not a repository answer: only a
+ * numeric non-zero exit resolves to `undefined`; a read outliving the 10,000 ms
+ * production timeout must surface the distinct public
+ * `coordination.git-unavailable` code through an existing public operation.
+ *
+ * Each case prepares a valid handoff (real Git available) and then submits the
+ * public handoff operation from its own child Bun process whose `PATH` holds
+ * only that case's fixture directory, so the engine's real `execFileSync`
+ * classifies a real subprocess outcome while the runner's PATH never changes.
+ * Scope resolution consults Git before the handoff proof runs, so the fixture
+ * `git` answers the scope probes by delegating to the real Git binary and
+ * fails only the read `gitRead` itself makes — the documented production
+ * scenario (a stalled filesystem, a contended lock). The hanging shim
+ * exec-replaces into the runner's own Bun binary, so the killed child is the
+ * shim itself and the fixture's cleanup reaps it.
+ */
+describe("gitRead subprocess failure classification", () => {
+  /** How long a case child may run before the test kills and reaps it. */
+  const CHILD_DEADLINE_MS = 60_000;
+
+  /** What the child prints: the public operation's outcome or error shape. */
+  type ChildHandoffReport = { outcome?: string; name?: string; code?: string; message?: string; cause?: string };
+
+  /** A prepared, leased InReview plan with valid handoff evidence on disk. */
+  async function handoffReadyFixture(): Promise<GitFixture> {
+    const fixture = gitFixture();
+    await preparePlan(fixture, PLAN_ID);
+    await bindPlan(fixture, PLAN_ID);
+    claimExecutionLease(fixture, PLAN_ID, fixture.planSession);
+    updatePlanRow(fixture, PLAN_ID, (row) => ({ ...row, status: "InReview" }));
+    return fixture;
+  }
+
+  function writeExecutable(path: string, lines: string[]): void {
+    writeText(path, `${lines.join("\n")}\n`);
+    chmodSync(path, 0o755);
+  }
+
+  /**
+   * The fixture `git`: records every invocation, delegates to the real Git
+   * binary, and handles only the target read (`git -C <worktree> rev-parse
+   * HEAD`, the first read of the handoff proof) with the given body — so the
+   * child really resolves `git` through its isolated PATH while the scope
+   * probes still answer like the environment they model.
+   */
+  function writeFixtureGit(
+    binDir: string,
+    recordPath: string,
+    worktreePath: string,
+    targetBody: string[],
+  ): void {
+    writeExecutable(join(binDir, "git"), [
+      "#!/bin/sh",
+      `printf '%s\\n' "$*" >> ${JSON.stringify(recordPath)}`,
+      `if [ "$1" = "-C" ] && [ "$2" = ${JSON.stringify(worktreePath)} ] && [ "$3" = "rev-parse" ] && [ "$4" = "HEAD" ]; then`,
+      ...targetBody.map((line) => `  ${line}`),
+      "fi",
+      `exec /usr/bin/git "$@"`,
+    ]);
+  }
+
+  /**
+   * Resume the prepared plan session in one child process and submit the
+   * public handoff with `PATH` pointing only at `binDir`. The child reports
+   * the surfaced error shape (code, cause, message) as one JSON line.
+   */
+  async function handoffInChildWithBinDir(
+    fixture: GitFixture,
+    evidence: HandoffEvidence,
+    binDir: string,
+  ): Promise<{ report: ChildHandoffReport; stderr: string; elapsedMs: number }> {
+    const evidencePath = join(fixture.root, "handoff-evidence.json");
+    writeJson(evidencePath, evidence);
+    const scriptPath = join(fixture.root, "child-handoff.ts");
+    writeText(scriptPath, [
+      `import { readFileSync } from "node:fs";`,
+      `import { bindPlanSession, mutatePlanCoordination, readPlanCoordination } from ${JSON.stringify(join(import.meta.dir, "..", "src", "coordination.ts"))};`,
+      `import { createFsStore, setArtifactStore } from ${JSON.stringify(join(import.meta.dir, "..", "src", "store.ts"))};`,
+      `const [root, harness, planId, sessionPath, evidencePath] = process.argv.slice(2);`,
+      `setArtifactStore(createFsStore(harness));`,
+      `const resumed = await bindPlanSession({ resumePath: sessionPath, cwd: root });`,
+      `if (resumed.outcome !== "resumed") throw new Error("bad resume: " + String(resumed.outcome));`,
+      `const view = await readPlanCoordination(sessionPath, planId, root);`,
+      `const evidence = JSON.parse(readFileSync(evidencePath, "utf8"));`,
+      `try {`,
+      `  const handed = await mutatePlanCoordination({`,
+      `    sessionPath,`,
+      `    planId,`,
+      `    expectedRevision: view.revision,`,
+      `    operation: { kind: "handoff", evidence },`,
+      `  });`,
+      `  console.log(JSON.stringify({ outcome: handed.outcome }));`,
+      `} catch (error) {`,
+      `  const code = (error as { code?: unknown } | null)?.code;`,
+      `  const cause = ((error as { details?: unknown } | null)?.details as { cause?: unknown } | undefined)?.cause;`,
+      `  console.log(JSON.stringify({`,
+      `    name: error instanceof Error ? error.name : typeof error,`,
+      `    code: typeof code === "string" ? code : undefined,`,
+      `    message: error instanceof Error ? error.message : String(error),`,
+      `    cause: typeof cause === "string" ? cause : undefined,`,
+      `  }));`,
+      `}`,
+      ``,
+    ].join("\n"));
+
+    const startedAt = Date.now();
+    const child = Bun.spawn(
+      [process.execPath, scriptPath, fixture.root, fixture.harness, PLAN_ID, fixture.planSession, evidencePath],
+      {
+        cwd: fixture.root,
+        stdout: "pipe",
+        stderr: "pipe",
+        // The child resolves `git` through this PATH alone; the runner's own
+        // PATH is never modified. (A minimal hand-built env makes the child
+        // Bun process die of SIGTERM at startup on macOS, so the runner env
+        // is carried and only PATH is re-pointed.)
+        env: { ...process.env, PATH: binDir },
+      },
+    );
+    const exitedInTime = await Promise.race([
+      child.exited.then(() => true),
+      sleep(CHILD_DEADLINE_MS).then(() => false),
+    ]);
+    if (!exitedInTime) child.kill();
+    const exitCode = await child.exited;
+    const elapsedMs = Date.now() - startedAt;
+    const stdout = await new Response(child.stdout).text();
+    const stderr = await new Response(child.stderr).text();
+    expect(exitCode, `child stderr: ${stderr}\nchild stdout: ${stdout}`).toBe(0);
+    return { report: JSON.parse(stdout) as ChildHandoffReport, stderr, elapsedMs };
+  }
+
+  test("a non-zero git exit stays a repository fact (not-in-git), not git-unavailable", async () => {
+    const fixture = await handoffReadyFixture();
+    const evidence = handoffEvidenceOf(fixture, fixture.planSha);
+    const binDir = join(fixture.root, "bin-nonzero");
+    const recordPath = join(fixture.root, "shim-invocations.log");
+    mkdirSync(binDir);
+    writeFixtureGit(binDir, recordPath, fixture.worktreePath, ["exit 3"]);
+
+    const snapshotBefore = readFileSync(fixture.snapshotPath);
+    const { report } = await handoffInChildWithBinDir(fixture, evidence, binDir);
+
+    // The isolated PATH really was in effect: the scope probes went through
+    // the fixture git, and the target read reached the handoff proof.
+    const shims = readFileSync(recordPath, "utf8");
+    expect(shims).toContain("worktree list");
+    expect(shims).toContain("-C " + fixture.worktreePath + " rev-parse HEAD");
+    // `git` answered the proof's read with a numeric status, so `gitRead`
+    // resolves `undefined` and the feature-checkout proof keeps its existing
+    // repository-answer code rather than the environment code.
+    expect(report.code).toBe("coordination.not-in-git");
+    expect(report.code).not.toBe("coordination.git-unavailable");
+    expect(report.message).toContain(fixture.worktreePath);
+    // The refusal is non-advancing: the InReview row and its lease are intact.
+    expect(readFileSync(fixture.snapshotPath).equals(snapshotBefore)).toBe(true);
+  }, 15000);
+
+  test("a git read that outlives the production timeout is refused as git-unavailable", async () => {
+    const fixture = await handoffReadyFixture();
+    const evidence = handoffEvidenceOf(fixture, fixture.planSha);
+    const binDir = join(fixture.root, "bin-hanging");
+    const recordPath = join(fixture.root, "shim-invocations.log");
+    mkdirSync(binDir);
+    // The target read exec-replaces into the runner's own Bun binary: no
+    // /usr/bin/env, no PATH-resolved sleep, no recursive git, and the process
+    // the production timeout kills is the direct child itself.
+    const hangScript = join(fixture.root, "hang-forever.js");
+    writeText(hangScript, "setInterval(() => {}, 600000);\n");
+    writeFixtureGit(binDir, recordPath, fixture.worktreePath, [
+      `exec ${JSON.stringify(process.execPath)} ${JSON.stringify(hangScript)}`,
+    ]);
+
+    const snapshotBefore = readFileSync(fixture.snapshotPath);
+    const { report, elapsedMs } = await handoffInChildWithBinDir(fixture, evidence, binDir);
+
+    // The shim really ran, and hung on the handoff proof's read.
+    const shims = readFileSync(recordPath, "utf8");
+    expect(shims).toContain("worktree list");
+    expect(shims).toContain("-C " + fixture.worktreePath + " rev-parse HEAD");
+    // The refusal came from the production timeout firing, not an instant
+    // failure, and stays inside the child deadline with cleanup margin.
+    expect(elapsedMs).toBeGreaterThanOrEqual(9_000);
+    expect(elapsedMs).toBeLessThan(CHILD_DEADLINE_MS);
+    expect(report.code).toBe("coordination.git-unavailable");
+    // The cause is the timed-out read — the distinct unavailable-Git cause.
+    expect(report.cause).toContain("git did not answer within 10000ms");
+    expect(readFileSync(fixture.snapshotPath).equals(snapshotBefore)).toBe(true);
+  }, 90_000);
+
+  test("a missing git executable is refused as git-unavailable at the handoff proof", async () => {
+    const fixture = await handoffReadyFixture();
+    const evidence = handoffEvidenceOf(fixture, fixture.planSha);
+    // An isolated PATH dir with nothing in it: the child's spawn of `git`
+    // fails for real (ENOENT) — no shim, no mock, no production helper.
+    const binDir = join(fixture.root, "bin-empty");
+    mkdirSync(binDir);
+
+    const snapshotBefore = readFileSync(fixture.snapshotPath);
+    const { report } = await handoffInChildWithBinDir(fixture, evidence, binDir);
+
+    // The refusal carries the spawn failure, not a repository answer: the
+    // proof's read never ran, so nothing can claim a branch fact.
+    expect(report.code).toBe("coordination.git-unavailable");
+    expect(report.code).not.toBe("coordination.not-in-git");
+    expect(report.cause).toContain("ENOENT");
+    // The failed read is the handoff proof's own read at the pinned worktree,
+    // proving the failure surfaced at the public handoff operation.
+    expect(report.message).toContain(fixture.worktreePath);
+    expect(report.message).toContain("git rev-parse HEAD");
+    // The refusal is non-advancing: the InReview row and its lease are intact.
+    expect(readFileSync(fixture.snapshotPath).equals(snapshotBefore)).toBe(true);
+  }, 15000);
 });
