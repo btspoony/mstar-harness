@@ -487,7 +487,7 @@ Exit codes:
 
 ## Harness Slash Commands (not CLI subcommands)
 
-`/codebase-audit`, `/amazing-pr-review`, and the `/iteration-*` commands ship with the harness plugin (`commands/*.md`), not the `mstar-harness` CLI binary. Host availability: dsh / omp / OpenCode / Cursor load them from the plugin; Kimi / ZCode expose `/morning-star-harness:<name>`; Codex installs them as project-local skills (`--scope project`). See the command-loading table in [README.md](../README.md#audit-review-verification).
+`/codebase-audit`, `/amazing-pr-review`, and the `/iteration-*` commands ship with the harness plugin (`commands/*.md`), not the `mstar-harness` CLI binary. Host availability: dsh / omp / OpenCode / Cursor load them from the plugin; Kimi / ZCode expose `/morning-star-harness:<name>`; Codex installs them as project-local skills (`--scope project`). See the command-loading table in [README.md](../README.md#audit-review--verification).
 
 All six commands — purpose, argument forms, host notes, and the scoped `/iteration-drive` route — are indexed in [`commands.md`](commands.md); the sections below keep the CLI-side detail.
 

@@ -410,7 +410,7 @@ npx @mstar-harness/cli plugin validate --root ~/.mstar/harness
    - ZCode: use `/morning-star-harness:pm` or `/skill:pm` (no session auto-load).
    - omp: use `/skill:pm` (no session auto-load).
 
-2. **Run an iteration** (see [README — Harness Commands](README.md#harness-commands))
+2. **Run an iteration** (see [README — Iteration](README.md#iteration))
    - **Deep / first iteration:** `/iteration-start` (Phase 1 grill-me → auto-continues Phase 2→5; `pause` to stop after Phase 1).
    - **Resume interrupted iteration:** `/iteration-drive` (Phase 2→5 re-entry).
    - **Fast autonomous loop:** `/iteration-loop` (Phase 1→5, optional `direction` + `scale`).
