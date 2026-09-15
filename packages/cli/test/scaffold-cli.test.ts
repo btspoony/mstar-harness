@@ -79,6 +79,19 @@ function gitInit(root: string): void {
   writeFileSync(join(root, ".git", "config"), "[core]\n\trepositoryformatversion = 0\n");
 }
 
+/**
+ * Minimal valid v2 status document (the engine's own scaffold template). The
+ * create-only scaffold contract validates an existing `status.json` instead of
+ * silently reinitializing it, so a case that overwrites the document only to
+ * observe `.gitignore` semantics must restore a valid one before re-running.
+ */
+const VALID_STATUS_V2 = `{
+  "version": 2,
+  "updated_at": "1970-01-01",
+  "workflows": []
+}
+`;
+
 /** Canonical `.mstar/` fence entries (ignore + re-include), verbatim from plan-conventions § Git 跟踪策略. */
 const MSTAR_FENCE_ENTRIES = [
   ".mstar/**",
@@ -765,7 +778,10 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
       expect(ignored.exitCode).toBe(0);
       expect(ignored.stdout.toString()).toContain(".mstar/**");
 
-      // Idempotent: second run changes nothing.
+      // Idempotent: second run changes nothing. The overwritten status.json
+      // above is a gitignore fixture; the create-only scaffold contract
+      // validates an existing document, so restore a valid one first.
+      writeFileSync(join(root, ".mstar", "status.json"), VALID_STATUS_V2, "utf8");
       const second = runScaffold([root]);
       expect(second.exitCode).toBe(0);
       expect(second.stdout).not.toContain("created: .gitignore");
@@ -845,7 +861,8 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
       expect(ignored.exitCode).toBe(0);
       expect(ignored.stdout.toString()).toContain(".mstar/**");
 
-      // Idempotent: second run changes nothing.
+      // Idempotent: second run changes nothing (see the restore note above).
+      writeFileSync(join(root, ".mstar", "status.json"), VALID_STATUS_V2, "utf8");
       const second = runScaffold([root]);
       expect(second.exitCode).toBe(0);
       expect(second.stdout).not.toContain("created: .gitignore");
@@ -945,6 +962,23 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
       expect(second.exitCode).toBe(0);
       expect(second.stdout).toContain("skipped: .gitignore (canonical harness snippet already present)");
       expect(readFileSync(join(root, ".gitignore"), "utf8")).toBe(gitignore);
+    });
+  });
+
+  test("an existing malformed status.json is refused, never reinitialized (create-only bootstrap)", () => {
+    withRoot((root) => {
+      expect(runScaffold([root]).exitCode).toBe(0);
+      // Replace the bootstrapped document with a v1-shaped one: the
+      // create-only contract validates what is on disk instead of
+      // overwriting it (spec §C4), so the bytes must survive untouched.
+      writeFileSync(join(root, ".mstar", "status.json"), "{}\n", "utf8");
+
+      const second = runScaffold([root]);
+      expect(second.exitCode).toBe(1);
+      expect(second.stderr).toContain("scaffold never replaces existing state");
+      expect(readFileSync(join(root, ".mstar", "status.json"), "utf8")).toBe("{}\n");
+      // The refusal happens before the manifest is reported as created.
+      expect(second.stdout).not.toContain("created:");
     });
   });
 });

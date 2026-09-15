@@ -279,6 +279,54 @@ describe("mstar status workflow-close", () => {
 });
 
 /**
+ * The close verb under the coordinated-writer cutover: a snapshot carrying the
+ * `coordination` block must still be refused *before* any byte is written when
+ * a pre-existing gate fails, and an uncoordinated close keeps its contract.
+ * The coordinator-session transport for a coordinated close is an engine-side
+ * seam (see the task report); these cases pin only what the CLI can guarantee
+ * today — a refusal never mutates the snapshot or the root entry.
+ */
+describe("mstar status workflow-close — coordinated-writer boundary", () => {
+  /** Snapshot whose row is done, with a well-formed coordinator binding. */
+  function coordinatedSnapshotDoc(harness: string, rowStatus: string): Record<string, unknown> {
+    return snapshotDoc({
+      coordination: {
+        coordinator: {
+          session_id: "11111111-2222-3333-4444-555555555555",
+          session_file: join(harness, "workflows", WORKFLOW_ID, "sessions", "coordinator.json"),
+          bound_at: "2026-09-15T00:00:00Z",
+        },
+      },
+      plans: [{ id: "plan-a", title: "Plan A", file: "plans/plan-a.md", status: rowStatus }],
+    });
+  }
+
+  test("uncoordinated close keeps its contract: terminal write then root unregister (exit 0)", () => {
+    setupHarness((harness, { snapshot, root }) => {
+      const result = runCli(closeArgs(harness, ["--ended-at", "2026-09-12"]));
+      expect(result.exitCode).toBe(0);
+      const doc = JSON.parse(readFileSync(snapshot, "utf8")) as Record<string, unknown>;
+      expect(doc.status).toBe("completed");
+      expect((JSON.parse(readFileSync(root, "utf8")) as Record<string, unknown>).workflows).toEqual([]);
+    });
+  });
+
+  test("a coordinated snapshot with an unfinished row refuses before writing anything (bytes + root intact)", () => {
+    setupHarness((harness, { snapshot, root }) => {
+      const fixture = coordinatedSnapshotDoc(harness, "InReview");
+      writeFileSync(snapshot, JSON.stringify(fixture, null, 2), "utf8");
+
+      const result = runCli(closeArgs(harness));
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("every plan row must be Done");
+      expect(readFileSync(snapshot, "utf8")).toBe(JSON.stringify(fixture, null, 2));
+      const rootAfter = JSON.parse(readFileSync(root, "utf8")) as Record<string, unknown>;
+      expect(rootAfter.workflows).toHaveLength(1);
+    });
+  });
+});
+
+/**
  * CLI `mstar iteration gate --phase 6` — the additive post-merge close
  * local-state gate form (P2 T4). Thin wrapper over engine
  * `evaluatePostMergeClose`: no `--compass` required (standalone plans have
