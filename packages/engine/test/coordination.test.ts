@@ -2047,4 +2047,28 @@ describe("gitRead subprocess failure classification", () => {
     expect(report.cause).toContain("git did not answer within 10000ms");
     expect(readFileSync(fixture.snapshotPath).equals(snapshotBefore)).toBe(true);
   }, 90_000);
+
+  test("a missing git executable is refused as git-unavailable at the handoff proof", async () => {
+    const fixture = await handoffReadyFixture();
+    const evidence = handoffEvidenceOf(fixture, fixture.planSha);
+    // An isolated PATH dir with nothing in it: the child's spawn of `git`
+    // fails for real (ENOENT) — no shim, no mock, no production helper.
+    const binDir = join(fixture.root, "bin-empty");
+    mkdirSync(binDir);
+
+    const snapshotBefore = readFileSync(fixture.snapshotPath);
+    const { report } = await handoffInChildWithBinDir(fixture, evidence, binDir);
+
+    // The refusal carries the spawn failure, not a repository answer: the
+    // proof's read never ran, so nothing can claim a branch fact.
+    expect(report.code).toBe("coordination.git-unavailable");
+    expect(report.code).not.toBe("coordination.not-in-git");
+    expect(report.cause).toContain("ENOENT");
+    // The failed read is the handoff proof's own read at the pinned worktree,
+    // proving the failure surfaced at the public handoff operation.
+    expect(report.message).toContain(fixture.worktreePath);
+    expect(report.message).toContain("git rev-parse HEAD");
+    // The refusal is non-advancing: the InReview row and its lease are intact.
+    expect(readFileSync(fixture.snapshotPath).equals(snapshotBefore)).toBe(true);
+  }, 15000);
 });
