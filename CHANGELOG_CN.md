@@ -6,6 +6,37 @@
 
 ## [Unreleased]
 
+## [3.10.0] - 2026-09-16
+
+### Harness
+
+- 落地四处按 register 驱动的文档修正：恢复 Phase-6 阻塞句中的 `zero-residual` 限定语、修正 Session-todos 指针措辞、将 L4 QA 残留核验输入引用改为 project register、对齐 plan 模板 `Main worktree branch` 表头与解析器文档形式。
+- 正式迭代 Phase 2 的 findings-cleanup 默认值由 **zero-residual** 翻转为 **allow-residual**，并附带强制的登记与披露义务：所有未决 finding 在 QC 决议、Completion/Status 报告与 leaf/SDD 报告格式中携带 id + severity + 跟踪位置；收口面（主 plan Review Gate Summary、compass Quality Gate Summary、PR 正文）增加 blocker-defer 标记。显式 `zero-residual` 选择加入、未决 critical 阻断与 Phase-6 禁止伪造关闭的规则保持不变。
+- 规范 Assignment 契约新增 **Task budget (implement / ops rounds)** 字段：SDD fresh/continuation 提示要求在任务正文标记前携带该 header，并重复超支升级指令与 `plan-quality-bar.md` 第 7 条的强制「不得缩短已指派验证」规则；上一任务的预算不得被继承。
+- `NEEDS_CONTEXT` / `BLOCKED` 上的预算超支现按 plan-quality-bar 第 7 条路由至 PM 拆单重派（`mstar-sdd`）；`mstar-review-qc` 与 `mstar-dispatch-gates` 的 engine-check 注记指向同一 presence-only 要求。
+- 新增**实现者任务容量判据**（`Task shape / session fit`，plan-quality-bar 第 7 条）：一个实现轮次须闭合任务的 Files 与各门禁，闭合不了必须写明拆分点；预算压力不得缩短任何已指派的定向验证。
+- 判据接入 `mstar-phase-gates`（tasks 条目、自检问题、quick-check 项），主 plan 模板新增每任务 **Effort (agent-oriented)** / **Split point** 栏位；`effort-estimation.md` 的任务级估算指向第 7 条。
+- 将**阶段转换 `todo` 刷新纪律**沉淀为宿主无关规则：在每个阶段/门禁转换后、下一个动作或派发前刷新会话 todos，只关闭已完成条目，保留未决门禁并播种下一阶段——todos 始终是 snapshot/plan 状态的投影，不是第二状态存储。
+- 在权威 Phase 2 procedure（`mstar-iteration/references/phase-2-worktree-lease.md` §2.4）新增具名的 **`Rescheduling checkpoint`**：五个冻结 reason（`before-wait`、`result-settled`、`dependency-changed`、`ownership-changed`、`capacity-changed`）与六步决策程序 —— 在等待无关 running child 之前启动全部已授权独立 ready work，真依赖在已审 commit 进入 dependent 的 assigned base 前保持阻塞，并允许一次有理由的 native wait（无轮询、无重复提醒）。`mstar-sdd` § Ready-task scheduling 与 PM 角色新增短指针；不新增调度器、ready-state register 或 engine schema。
+- 新增六个 `phase2-*` 路由回归场景（version 30 · 62 例）及其回归信号（每条指向 §2.4 home），并记录这些场景与受影响的 `plan-scope-duplicate` / `plan-scope-last-plan` / `plan-scope-leaf` 场景的 before/after 行为证据。该证据为**单样本**、且**服务模型未独立证明**，因此**既不建立 model compliance，也不建立行为收益**。
+- 将**每计划交付尾部**接入常规路线（冻结契约 `mstar-artifacts/references/plan-workflow-lifecycle-contract.md`）：承诺时注册 → 计划锁定前知识回执 → 执行/验收 → compound 处置（`created`/`updated`/有理由 `skipped`）→ 开发类 PR 提交 → merge-ready 里程碑 → 核实合并 → 终态关闭/注销。独立开发 plan 现在走同一交付生命周期；iteration 子 plan 行与 plan-scoped 会话权限不变。
+- **本仓库自身不再跟踪 harness specs。** `.mstar/specs/` 在此目录恢复为仅本地存在（`.gitignore` 回到单条 `.mstar/` 规则），迭代收尾扫描不再可能把本地产物提交进 harness 源仓库历史。下游仓库不受影响：`mstar harness scaffold` 片段、coordination 写门禁与解析链仍把 `{HARNESS_DIR}/specs/` 视为可跟踪的结果。
+- **plan workflow 生命周期契约迁入 skill 语料。** 其语义（交付类型声明、生命周期阶段、证据契约、engine seam 清单）现为 skill reference `mstar-artifacts/references/plan-workflow-lifecycle-contract.md`。engine 模块注释、CLI help 文案、测试与引用它的运行时 skills 均指向该路径，而不再指向仓库本地的 harness spec。
+- **两份过程 spec 留在 project 语料。** `omp-phase2-instances.md` 与 `phase2-proactive-scheduling.md` 是已有 runtime 指引（`mstar-host/references/omp.md` § Phase-2 plan instances；`mstar-iteration/references/phase-2-worktree-lease.md` §2.4）背后的过程来源，因此保留为 project reference 而不复制进 skill 语料 —— 对它们的引用改指上述 runtime home。
+
+### Changed
+
+- 为 `@mstar-harness/omp` 新增可选启用的 **coordinator 模型交接**：新的扩展入口（`extensions/model-handoff.js`，经 manifest `omp.extensions` 发布，engine 内联，唯一宿主 import 由运行中的宿主解析），以及原生插件设置 `modelHandoff`（默认关闭）与 `handoffTarget`（`@default` \| `@smol`）。被绑定的 coordinator 会话在**新**迭代开始时先切到 `@slow` 再做实质性 Prepare；Phase 1 完整完成后（专家回执齐备、Prepare 已冻结、独立且分支匹配的 integration checkout、必需推送已验证）仅该会话切换一次到已保存的目标角色。普通对话、leaf 会话与 plan-scoped 会话保持无动作；不写角色映射、goal 目标或 workflow 状态；等待期间的手动模型变更只取消该会话本次交接。
+- 固定本包的 OMP 宿主契约：可选 peer 与开发依赖 `@oh-my-pi/pi-coding-agent@18.2.1`、Bun 下限 `>=1.3.14`，并新增 `bundle-smoke` 用例——解包已发布 tarball，在未安装 engine 包的可支配宿主根中经由宿主自身的插件发现、扩展加载器与自定义工具加载器驱动它。它取代了此前基于源码文本的 bundle 断言（符号存在、无裸 engine import）。
+- 在 OMP 宿主参考与包 README 中记录原生 `/settings` → Plugins 路径、持久化及其 user-scope 限制（project-only 安装没有原生设置行）、支持的入口与模式、coordinator 绑定、完整 Phase 1 就绪条件、取消、重放与失败语义。
+- 为 `@mstar-harness/omp` 新增可选启用的 **Phase-2 plan instances**：新的扩展入口（`extensions/phase2-orchestration.js`，经 manifest `omp.extensions` 发布，engine 内联，唯一宿主 import 由运行中的宿主解析），以及原生插件设置 `phase2PlanInstances`（默认关闭，**仅**为额外 primary 启动授权）与可配置的 `maxPlanInstances`（正整数安全值，默认 2、最小 1、**无上限 2**；存在但畸形的值会显式失败且不授权任何启动）。Phase-2 协调者会话对**同一观测状态**最多收到一次有界提醒——观测键在消息前落盘，未变化的相同状态不再触发，无定时器、无轮询，原生完成投递始终权威。
+- 新增 `mstar_phase2` 记账工具及其本地传输意图 journal（`<workflow dir>/omp-launches.json`，version 1）：`bind`（协调者 Phase-2 首个宿主动作）、`checkpoint`（按当时采样确认共享重调度检查点，使用冻结的五个 reason），以及 `reserve-launch` / `record-launch`——严格 `reserved → starting → created → submitting → submitted` 迁移，每一步都在其 pane / OMP 启动 / prompt 副作用**之前**落盘；占用按 plan id 去重计为「自有待启动 intent ∪ 活跃 plan primary」，对照最新 cap；`refused` / `uncertain` 绝不盲目重试。编译代码只做准入与记账：不 spawn、不 merge、不重写 workflow 状态、不释放 lease。
+- 在 OMP 宿主参考、包 README 与 scoped-plan PM 传输小节中记录原生 `/settings` → Plugins 路径（及其 user-scope 限制——project-only 安装没有原生设置行）、仅启动的开关语义、容量语义、显式 bind/checkpoint/intent 调用序列，以及可选、由 skill 驱动的 Herdr/tmux 传输：前置校验（skill 确实存在且已读 + CLI + 匹配的托管环境；在没有 tmux skill 时 tmux 保持不可用）、在 prepared worktree 以非聚焦方式创建 pane、原样复用返回的不透明 target、一次绝对路径 `/iteration-drive --assignment` 提交且不传递协调者凭据，以及 `agent_not_ready`、超时或提交停滞的终止处理。传输证据明确标注为模拟，而非原生 E2E。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 3.10.0**。
+
 ## [3.9.4] - 2026-09-15
 
 ### Harness
