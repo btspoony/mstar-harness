@@ -4386,7 +4386,7 @@ function prepareAdmission(harnessRoot: string, workflowId: string, snapshot: Wor
     };
   }
   for (const row of snapshot.plans) {
-    const planId = rowPlanId(row) ?? "";
+    const planId = rowPlanIds(row)[0] ?? "";
     const status = rowStatusOf(row);
     if (status !== "Todo") {
       return {
@@ -4906,7 +4906,7 @@ function readPreparePatch(
   // left unregistered (spec § Admission and mutation step 6).
   const proposedIds = [
     ...context.snapshot.plans.flatMap((row) => rowPlanIds(row)),
-    ...rows.map((row) => rowPlanId(row) ?? ""),
+    ...rows.map((row) => rowPlanIds(row)[0] ?? ""),
   ];
   if (!samePlanIdSet(context.compass.planIds, proposedIds)) {
     const missing = context.compass.planIds.filter((id) => !proposedIds.includes(id));
@@ -4975,7 +4975,7 @@ export async function showPrepareWorkflow(
       workflowId: scope.workflowId,
       snapshotVersion: version,
       compassVersion: compass.version,
-      planIds: snapshot.plans.map((row) => rowPlanId(row) ?? ""),
+      planIds: snapshot.plans.map((row) => rowPlanIds(row)[0] ?? ""),
       allowed: admission.ok,
       blockers: admission.ok ? [] : [`${admission.reason}: ${admission.message}`],
     },
@@ -5064,7 +5064,7 @@ export async function amendPrepareWorkflow(
     }
     await commitSnapshot(scope.harnessRoot, scope.workflowId, scope.snapshotPath, next);
     return {
-      planIds: next.plans.map((row) => rowPlanId(row) ?? ""),
+      planIds: next.plans.map((row) => rowPlanIds(row)[0] ?? ""),
       compassVersion: compass.version,
     };
   });
