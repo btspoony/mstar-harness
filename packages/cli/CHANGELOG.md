@@ -6,6 +6,23 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [3.10.0] - 2026-09-16
+
+### Changed
+
+- Close now **consults the registered delivery kind's evidence before writing the terminal snapshot** (seam S3): a `development` workflow without its compound disposition, PR identity or PM-recorded verified-merge evidence, and a `verification/report-only` workflow without the fulfilment of its registered completion policy, refuse the close with zero writes — the workflow stays `running`, registered and resumable. The read-only Phase-6 gate runs the same consultation, so gate and close never disagree.
+- Added the authorized recording seam `mstar workflow evidence --workflow <id> --file <payload.json> [--session <path>]` plus the snapshot `delivery` evidence block: stage-by-stage recording under the snapshot lock, coordinator-gated exactly like the close (a coordinated workflow is written only for its own bound envelope) and idempotent — re-recording identical evidence rewrites nothing.
+- SDD admission accepts only an **active registered row** as registration evidence: a plan id retained solely in a terminal snapshot is now refused with `sdd.context.plan-not-registered` like an unregistered one, so a completed plan id can no longer be reused by riding its own history. Roots without a v2 register keep the legacy standalone policy.
+- `mstar workflow register --branch-source` now records **`branch.source`** instead of `branch.base`; `branch.base` keeps its protected-base semantics (cleanup Rule 2 protected refs, L1 main-worktree residency fallback), so a standalone plan's delivery branch is no longer pinned as an undeletable protected ref.
+- `mstar migrate --delivery-kind` declares exactly **one** lifted lifecycle: a v1 tree whose lift would stamp that single declaration onto 2+ ACTIVE standalone plans is refused as usage (exit 2, plan ids listed, zero writes) and migrates in **batches of one declared plan**. The declaration is one delivery identity (kind + delivery anchors + completion policy), so it can no longer be copied onto lifecycles it does not describe; terminal (`completed`) lifts stay exempt from the count, as before.
+- `mstar workflow evidence --declare-kind` now **fills a MISSING delivery anchor only**: a supplied `--branch-source`/`--branch-target` equal to the registered value restates it (idempotent), while a conflicting value is refused with the field named (`branch.source` / `branch.target`) and zero writes. The one-time backfill of a historical kind-less snapshot can therefore never re-point it at a different delivery than the anchors it already registers.
+- Added the guarded **Prepare workflow amendment** (`showPrepareWorkflow` / `amendPrepareWorkflow`; CLI `mstar workflow show-prepare` / `amend-prepare`) — a coordinator-only entry that appends approved unique Todo plan rows and records the reviewed integration checkout plus the sole editable `execution_policy.plan_parallelism`. Both raw-byte CAS tokens (snapshot and reviewed compass) are required even on the first amendment, refusals are mutation-free with `coordination.prepare-amendment.{stale,invalid-patch,not-prepare,execution-started,duplicate-plan,invalid-plan,compass-mismatch,invalid-worktree}`, every existing row and unknown field is preserved by value, and there is no force or replacement-snapshot path.
+- Documented the entry in `docs/cli.md` (flags, patch payload, refusal codes, exit codes, stop conditions) with pointers from `mstar-artifacts` and `mstar-iteration`.
+
+- Version alignment with harness **3.10.0**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **3.10.0**.
+
 ## [3.9.4] - 2026-09-15
 
 ### Changed
