@@ -4264,16 +4264,43 @@ type PrepareCompass = {
 };
 
 /**
+ * One optional compass declaration (`spec_integration_branch`,
+ * `integration_worktree_path`) of an amendment-reviewed compass. Absence
+ * leaves the declaration unset — there is then nothing to compare — while a
+ * key that is present without a usable value (a YAML list, a number, an empty
+ * value) refuses: the declaration feeds an agreement check, so a malformed
+ * value must never read as no declaration at all.
+ */
+function prepareCompassDeclaration(
+  frontmatter: Record<string, unknown>,
+  key: string,
+  workflowId: string,
+  path: string,
+): string | undefined {
+  const value = frontmatter[key];
+  if (value === undefined) return undefined;
+  if (!isNonEmptyString(value)) {
+    throw prepareAmendmentRefusal(
+      "compass-mismatch",
+      `workflow ${workflowId} compass ${path} declares a malformed ${key} \u2014 every declaration must be a non-empty string`,
+      { workflow_id: workflowId, path, field: key, actual: value },
+    );
+  }
+  return value;
+}
+
+/**
  * Read the workflow's own reviewed compass (`snapshot.compass_ref`) and the
  * declarations an amendment must agree with (§ Admission and mutation step 6).
  * The token is the raw-byte SHA-256 of the Markdown (`sha256Bytes`), rendered
  * in the same `sha256:<hex>` form as the snapshot version. A missing, escaping,
  * unreadable or unparsable compass refuses, and so does one that does not
- * declare its own `iteration_id` or whose `plans` list is malformed (an entry
- * that is not a non-empty string) or repeats an id: the reviewed declaration is
- * read exactly as written — never filtered, deduplicated or borrowed from
- * another lifecycle — because an unverifiable declaration cannot approve a
- * structural delta.
+ * declares its own `iteration_id` or whose `plans` list is malformed (an entry
+ * that is not a non-empty string) or repeats an id, or whose
+ * `spec_integration_branch` / `integration_worktree_path` is present but not a
+ * non-empty string: the reviewed declaration is read exactly as written —
+ * never filtered, deduplicated or borrowed from another lifecycle — because an
+ * unverifiable declaration cannot approve a structural delta.
  */
 function readPrepareCompass(harnessRoot: string, snapshot: WorkflowSnapshot): PrepareCompass {
   const ref = snapshot.compass_ref;
@@ -4356,14 +4383,18 @@ function readPrepareCompass(harnessRoot: string, snapshot: WorkflowSnapshot): Pr
       { workflow_id: snapshot.id, path, plans: planIds },
     );
   }
-  const compass: PrepareCompass = {
+  // A declaration that is present is read exactly as written: a value that is
+  // not a usable string refuses here rather than vanishing, so the agreement
+  // checks further down can never be skipped by a malformed key.
+  const specIntegrationBranch = prepareCompassDeclaration(frontmatter, "spec_integration_branch", snapshot.id, path);
+  const integrationWorktreePath = prepareCompassDeclaration(frontmatter, "integration_worktree_path", snapshot.id, path);
+  return {
     path,
     version: `sha256:${sha256Bytes(bytes)}`,
     planIds,
+    ...(specIntegrationBranch !== undefined ? { specIntegrationBranch } : {}),
+    ...(integrationWorktreePath !== undefined ? { integrationWorktreePath } : {}),
   };
-  if (isNonEmptyString(frontmatter.spec_integration_branch)) compass.specIntegrationBranch = frontmatter.spec_integration_branch;
-  if (isNonEmptyString(frontmatter.integration_worktree_path)) compass.integrationWorktreePath = frontmatter.integration_worktree_path;
-  return compass;
 }
 
 /** Admitted, or the reason an amendment must not run. */
@@ -4455,33 +4486,60 @@ function prepareAdmission(harnessRoot: string, workflowId: string, snapshot: Wor
 }
 
 /**
- * The headers one plan markdown declares, keyed by lowercased label — the
- * idiom `parseAssignmentFile` uses for Assignment headers, widened to the
+ * The plan-markdown labels the amendment actually consults. Every other
+ * `Label: value` line is plan-body content, and a real multi-task plan repeats
+ * those per task (`**Files:**`, `**Interfaces:**`, `**Task budget:**`) with a
+ * different value each time — so a repeated label outside this set is not a
+ * declaration conflict.
+ */
+const PLAN_CONSULTED_HEADERS: Record<string, true> = {
+  plan_id: true,
+  "main worktree branch": true,
+  "working branch": true,
+};
+
+/**
+ * The consulted headers one plan markdown declares, keyed by lowercased label —
+ * the idiom `parseAssignmentFile` uses for Assignment headers, widened to the
  * forms real plan documents actually use: the colon inside the bold
  * (`**plan_id:** value`, the dominant form in `{PLAN_DIR}`) and the colon
  * after it (`**Main worktree branch**: value`). A plain `Label: value` line is
  * accepted too. Fenced code is skipped so a quoted example is never read as a
- * declaration, and the same label twice with different values refuses instead
- * of silently picking one.
+ * declaration, and a consulted label twice with different values refuses
+ * instead of silently picking one.
  */
 function planHeadersOf(planPath: string, planId: string): Map<string, string> {
   const headers = new Map<string, string>();
-  let fenced = false;
+  // The fence is tracked by its marker character and run length: it is closed
+  // only by a run of the same character at least as long, so a `~~~` example is
+  // never read as a declaration and a shorter backtick run inside a longer
+  // fence cannot close it early.
+  let marker: string | undefined;
+  let markerLength = 0;
   for (const raw of readFileSync(planPath, "utf8").split(/\r?\n/)) {
     const line = raw.trim();
-    if (line.startsWith("```")) {
-      fenced = !fenced;
+    const fence = /^(`{3,}|~{3,})/.exec(line);
+    if (fence !== null) {
+      const run = fence[1]!;
+      if (marker === undefined) {
+        marker = run.charAt(0);
+        markerLength = run.length;
+      } else if (run.charAt(0) === marker && run.length >= markerLength) {
+        marker = undefined;
+      }
       continue;
     }
-    if (fenced) continue;
+    if (marker !== undefined) continue;
     // `**Label:** value` / `**Label**: value` / `Label: value`: the label may
     // not contain `:` or `*` (those are the markup), and the value starts at
     // the first non-space character after the closing markup and colon.
     const match = /^\*{0,2}([^:*]+?)\*{0,2}:\*{0,2}\s*(\S.*)$/.exec(line);
     if (match === null) continue;
     const label = match[1]!.trim();
+    const key = label.toLowerCase();
+    if (PLAN_CONSULTED_HEADERS[key] !== true) continue;
     const value = match[2]!.trim();
-    const prior = headers.get(label.toLowerCase());
+    const prior = headers.get(key);
     if (prior !== undefined && prior !== value) {
       throw prepareAmendmentRefusal(
         "invalid-plan",
@@ -4489,7 +4547,7 @@ function planHeadersOf(planPath: string, planId: string): Map<string, string> {
         { plan_id: planId, header: label },
       );
     }
-    headers.set(label.toLowerCase(), value);
+    headers.set(key, value);
   }
   return headers;
 }
@@ -4863,8 +4921,8 @@ function samePlanIdSet(left: readonly string[], right: readonly string[]): boole
  * compass (§ Admission and mutation steps 4–6): unknown keys, duplicate or
  * colliding ids, malformed metadata, escaping or missing references,
  * mismatched plan headers, a patch that changes nothing, a plan set the
- * compass does not declare, and an integration checkout the workflow does not
- * own all refuse here — before anything is written.
+ * compass does not declare, and an integration branch or checkout the
+ * workflow does not own all refuse here — before anything is written.
  */
 function readPreparePatch(
   patch: unknown,
@@ -4966,6 +5024,22 @@ function readPreparePatch(
       `the patch changes nothing on workflow ${context.snapshot.id} \u2014 it appends no plan, records no new integration checkout and no different plan parallelism`,
       { workflow_id: context.snapshot.id },
     );
+  }
+  // The reviewed declaration binds the workflow's own recorded integration
+  // branch too, and no amendment edits that anchor — so the comparison belongs
+  // here, where every patch is validated, and not only on the per-append path:
+  // an amendment that appends nothing (a policy or checkout recording) must
+  // refuse a workflow whose recorded branch contradicts the reviewed compass
+  // just the same (spec § Admission and mutation step 6).
+  if (context.compass.specIntegrationBranch !== undefined) {
+    const recordedBranch = context.snapshot.branch?.integration;
+    if (!isNonEmptyString(recordedBranch) || recordedBranch !== context.compass.specIntegrationBranch) {
+      throw prepareAmendmentRefusal(
+        "compass-mismatch",
+        `workflow ${context.snapshot.id} records integration branch ${JSON.stringify(recordedBranch ?? null)}, but the reviewed compass ${context.compass.path} declares ${context.compass.specIntegrationBranch}`,
+        { expected: context.compass.specIntegrationBranch, actual: recordedBranch ?? null },
+      );
+    }
   }
   // The reviewed declaration binds the checkout this commit would leave in
   // place — the patch's own validated path when it names one, otherwise the
