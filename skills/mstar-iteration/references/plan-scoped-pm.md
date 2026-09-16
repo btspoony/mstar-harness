@@ -177,3 +177,5 @@ The scoped route **requires** `mstar plan …`. Without it（engine/CLI absent o
 ## 11. Transport（optional）
 
 Herdr / tmux (or any multiplexer) is only a way to open a terminal. It is **not** a prerequisite, dependency, ownership signal or session identity. Nothing in this route reads pane state, TTL or terminal labels to decide ownership.
+
+On **omp** only, the optional skill-driven extra-primary launch protocol — native `phase2PlanInstances` opt-in, the `mstar_phase2` bind/checkpoint/reserve/record calls, non-focus pane creation at the prepared worktree, the absolute `--assignment` submission and terminal uncertainty handling — is documented in **`mstar-host` → `references/omp.md` § Phase-2 plan instances**. It is optional there too and adds no load-order dependency here.
