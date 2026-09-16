@@ -515,7 +515,7 @@ function phase6PlanSnapshot(overrides: Record<string, unknown> = {}): SnapshotDo
     ended_at: "2026-09-12",
     updated_at: "2026-09-12",
     delivery_kind: "development",
-    branch: { base: "feature/plan-a", target: "main" },
+    branch: { source: "feature/plan-a", target: "main" },
     plans: [{ id: "plan-a", title: "Plan A", file: "plans/plan-a.md", status: "Done" }],
     ...overrides,
   };
@@ -567,7 +567,10 @@ describe("evaluatePostMergeClose — plan-type delivery-kind consultation (plan-
   });
 
   test("development plan with missing branch anchors → PHASE6_DELIVERY_EVIDENCE_INCOMPLETE (incomplete registration, not an exempt workflow, §1)", () => {
-    for (const branch of [undefined, { base: "feature/plan-a" }, { target: "main" }]) {
+    // `branch.base` is the protected base anchor, never the delivery source:
+    // a legacy snapshot with the feature branch under `base` no longer
+    // satisfies the development registration evidence.
+    for (const branch of [undefined, { source: "feature/plan-a" }, { base: "feature/plan-a", target: "main" }]) {
       const result = evaluatePostMergeClose(phase6PlanSnapshot({ branch }), phase6Root([]));
       expect(result.ok).toBe(false);
       const incomplete = result.violations.find((v) => v.code === "PHASE6_DELIVERY_EVIDENCE_INCOMPLETE");

@@ -120,7 +120,7 @@ describe("mstar workflow register", () => {
         status: "running",
         delivery_kind: "development",
         project: "engine",
-        branch: { base: "feature/20260916-plan-cli-example", target: "main" },
+        branch: { source: "feature/20260916-plan-cli-example", target: "main" },
       });
       expect(doc.plans).toEqual([
         { id: "20260916-plan-cli-example", title: "CLI example plan", file: "plans/20260916-plan-cli-example.md", status: "Todo" },

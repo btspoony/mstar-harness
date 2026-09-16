@@ -86,7 +86,20 @@ export type WorkflowExecutionPolicy = {
 
 /** Iteration branch anchors ( — from root metadata anchors). */
 export type WorkflowBranchAnchors = {
+  /**
+   * Protected base anchor: the branch the lifecycle starts from (iteration
+   * `iteration_base_branch`). Cleanup Rule 2 never deletes it and L1 uses it
+   * as the explicit main-worktree residency fallback — it is NEVER a
+   * feature/working branch (`registerPlanWorkflow` records the plan's
+   * delivery branch under `source`).
+   */
   base?: string;
+  /**
+   * Source branch of a standalone `type: plan` delivery, recorded at
+   * registration (`--branch-source`). Semantically a delivery branch, not a
+   * protected base anchor: cleanup/L1 consumers keep reading `base`.
+   */
+  source?: string;
   integration?: string;
   target?: string;
 };
@@ -328,7 +341,7 @@ export function validateWorkflowSnapshot(doc: unknown): GateResult {
     if (!isPlainObject(doc.branch)) {
       violations.push(violation("medium", "workflow.snapshot.invalid-branch", "branch must be an object"));
     } else {
-      for (const key of ["base", "integration", "target"] as const) {
+      for (const key of ["base", "source", "integration", "target"] as const) {
         if (doc.branch[key] !== undefined && (typeof doc.branch[key] !== "string" || doc.branch[key].trim() === "")) {
           violations.push(violation("medium", "workflow.snapshot.invalid-branch", `branch.${key} must be a non-empty string`));
         }
@@ -801,7 +814,7 @@ export type RegisterPlanWorkflowOptions = {
   deliveryKind: WorkflowDeliveryKind;
   /** Project register id recorded on the snapshot (contract §3 register row). */
   project?: string;
-  /** Source branch. Required together with `branchTarget` for `development`. */
+  /** Source branch of the delivery, recorded as `branch.source`. Required together with `branchTarget` for `development`. */
   branchSource?: string;
   /** Target branch. Required together with `branchSource` for `development`. */
   branchTarget?: string;
@@ -963,8 +976,13 @@ export async function registerPlanWorkflow(
   if (options.project !== undefined) snapshot.project = options.project;
   if (options.completionPolicy !== undefined) snapshot.completion_policy = options.completionPolicy;
   if (options.branchSource !== undefined || options.branchTarget !== undefined) {
+    // `branchSource` is the plan's DELIVERY branch (`branch.source`) — never
+    // `branch.base`, whose consumers (cleanup Rule 2 protected refs, L1
+    // main-residency fallback) treat it as a protected base anchor: writing a
+    // feature branch there made the ref undeletable and pointed L1's
+    // residency expectation at the feature branch.
     snapshot.branch = {
-      ...(options.branchSource !== undefined ? { base: options.branchSource } : {}),
+      ...(options.branchSource !== undefined ? { source: options.branchSource } : {}),
       ...(options.branchTarget !== undefined ? { target: options.branchTarget } : {}),
     };
   }

@@ -419,7 +419,7 @@ describe("mstar iteration gate --phase 6", () => {
           // closed fixture carries the complete development registration
           // shape (`registerPlanWorkflow` records delivery_kind + branches).
           delivery_kind: "development",
-          branch: { base: "feature/plan-a", target: "main" },
+          branch: { source: "feature/plan-a", target: "main" },
         }),
         root: rootDoc(),
       },

@@ -943,7 +943,7 @@ describe("registerPlanWorkflow — generic registration producer (seam S1)", () 
       updated_at: "2026-09-16",
       delivery_kind: "development",
       project: "engine",
-      branch: { base: "feature/20260916-plan-example", target: "main" },
+      branch: { source: "feature/20260916-plan-example", target: "main" },
     });
     // One owned plan row, Todo — registration does not authorize implementation.
     expect(snapshot.plans).toEqual([{ id: "20260916-plan-example", title: "Example plan", file: "plans/20260916-plan-example.md", status: "Todo" }]);

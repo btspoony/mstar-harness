@@ -629,14 +629,17 @@ export function evaluatePostMergeClose(snapshotDoc: SnapshotDoc, rootDoc: unknow
       );
     } else if (kind === "development") {
       const branch = isPlainObject(snapshotDoc.branch) ? snapshotDoc.branch : undefined;
-      const base = branch?.base;
+      // Delivery anchors live on `branch.source`/`branch.target` (the plan's
+      // delivery branch) — `branch.base` stays the protected base anchor
+      // cleanup/L1 consume, never the feature branch.
+      const source = branch?.source;
       const target = branch?.target;
-      if (typeof base !== "string" || base.trim() === "" || typeof target !== "string" || target.trim() === "") {
+      if (typeof source !== "string" || source.trim() === "" || typeof target !== "string" || target.trim() === "") {
         violations.push(
           violation(
             "high",
             "PHASE6_DELIVERY_EVIDENCE_INCOMPLETE",
-            `Workflow '${String(workflowId)}' declares delivery_kind 'development' with incomplete registration evidence (branch.base/branch.target missing) \u2014 a development workflow with missing branch fields is incomplete registration, not an exempt workflow (plan-workflow-lifecycle-contract \u00a71)`,
+            `Workflow '${String(workflowId)}' declares delivery_kind 'development' with incomplete registration evidence (branch.source/branch.target missing) \u2014 a development workflow with missing branch fields is incomplete registration, not an exempt workflow (plan-workflow-lifecycle-contract \u00a71)`,
             "Complete the registration evidence (source/target branches) via the register path, then re-run 'mstar iteration gate --phase 6 --workflow <id>'",
           ),
         );
