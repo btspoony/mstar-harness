@@ -20,6 +20,7 @@ mstar status workflow-close --workflow <id> [--harness <path>] [--ended-at <date
 
 - 引擎 `closeWorkflow`：在 snapshot 写锁内**重读最新快照** → identity/shape 校验 → 已 valid terminal 则 no-op；否则要求全部 plan 行 `Done` 且**无任何** `execution_lease` / `integration_merge_lease` → 写 `completed` + `ended_at`
 - fail-loud：dangling lease / 非 `Done` 行 / snapshot 缺失或身份不符 → exit 1，**snapshot 字节不变**（无部分写）
+- **`type: plan` 交付证据 consult**：写终态**前** engine 咨询已注册 delivery kind 的证据（`consultDeliveryEvidence`）——`development` 缺 compound 处置 / PR 身份 / 已核实合并记录，或 `verification/report-only` 缺其完成策略的履行记录 → `PHASE6_DELIVERY_*` 拒绝，snapshot 保持 `running`、根条目保持注册（字节不变、可恢复）；补齐用 `mstar workflow evidence --workflow <id> --file <payload.json> [--session <path>]`（与 close 同一 coordinator-session 门、幂等）。write path 与 read-only `mstar iteration gate --phase 6` **共享同一实现**，两侧判定不走偏
 - **禁止**为通过 close 释放 lease —— lease release 是独立的 owner 动作，close 从不释放（甚至 caller 自己的）
 - `--ended-at` 省略时由 CLI 提供当天时间戳；引擎不接受自身时钟读数
 
@@ -51,7 +52,7 @@ mstar status workflow-close --workflow <id> [--harness <path>] [--ended-at <date
 - **lease 释放是手工 owner 动作、cleanup 范围外**：§6.1 close 已拒绝 dangling lease，但 cleanup 仍**从不**替 owner 释放——残留 lease 的候选只会得到 `cleanup.refuse.active-lease`；先手工释放，再重跑 dry-run/apply
 - squash-merged 分支（tip 非 base 祖先）→ STOP → residual；禁止 `git branch -D`
 
-Phase-6 gate 只查**本地 state**（valid terminal shape + 无 dangling lease + root 条目已注销），**不**验证远端 merged 证据，**不**检查物理清理是否完成。
+Phase-6 gate 只查**本地 state**（valid terminal shape + 无 dangling lease + root 条目已注销 + `type: plan` 交付证据，§6.1），**不**验证远端 merged 证据，**不**检查物理清理是否完成。
 
 > **Engine check (when available):** run `mstar iteration gate --phase 6 --workflow <id>` (or `import { evaluatePostMergeClose } from "@mstar-harness/engine"` in a host hook) to gate the local post-merge close state（valid terminal shape + 无 dangling lease + root 条目已注销；稳定码 `PHASE6_*`；invalid/unreadable root 不是条目已注销的证明）. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
