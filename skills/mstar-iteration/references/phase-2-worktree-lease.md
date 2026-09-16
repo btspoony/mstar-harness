@@ -22,7 +22,7 @@ serial cross-plan **implement** scheduling while the worktree + lease gates rema
 required.
 
 Phase 1 Review & Edit may edit uncommitted docs on the primary checkout under the Prepare policy (bounded exception; the main worktree never switches branch). The integration-worktree + lease gate
-starts at **Phase 2 entry**.
+starts at **Phase 2 entry** — Phase 1 did walk §2.3's integration-worktree checklist once at its end (`iteration-start` §6, which carries the `phase-1-lock` marker), but the gate those steps guard opens only when Phase 2's per-plan loop begins.
 
 **Phase scope**：本参考仅约束 **Phase 2**（含 serial integration merge 与「control root / integration worktree 禁止产品编辑 / 每 plan feature worktree」）。**Phase 5** PR merge-ready 修复同样 **不**直接在 integration checkout 上改——产品修复走独立 fix feature worktree，review 后 merge 回 integration worktree → **`phase-4-5-pr-delivery.md`** §5.0。
 
@@ -46,13 +46,11 @@ starts at **Phase 2 entry**.
 
 ## 2.1 Session todos（派发前设护栏）
 
-每个 plan wave 启动前设定 host todos，防止范围漂移：
+每个 plan wave 启动前设定 host session todos，防止范围漂移（具体 todo / plan UI 工具名 → active host reference）：
 
-| Host | 工具 | 最小集合 |
-|------|------|---------|
-| **Cursor** | `TodoWrite` / CreatePlan todos | 当前 `plan_id`；下一批 gates（implement/QC/**QA gate**）；分支 checkpoint；**仅剩 1 个非 Done plan 时追加 `phase-3-iteration-close`**（open 直至 §3.5）；Phase 4 后 **`phase-5-pr-merge-ready`**（open 直至 §5.5） |
-| **Codex** | `update_plan` / Goal UI | 同上 |
-| **OpenCode** | host todo/plan UI（如有） | 同上 |
+| 宿主会话 | 工具 | 最小集合 |
+|----------|------|---------|
+| 任意宿主（有 session todo / plan UI 时） | 宿主自身的 session todo / plan UI | 当前 `plan_id`；下一批 gates（implement/QC/**QA gate**）；分支 checkpoint；**仅剩 1 个非 Done plan 时追加 `phase-3-iteration-close`**（open 直至 §3.5）；Phase 4 后 **`phase-5-pr-merge-ready`**（open 直至 §5.5） |
 
 SSOT = `{WORKFLOW_DIR}/<id>/snapshot.json` + `{PLAN_DIR}/`。todos 只追踪本轮下一步。
 
@@ -70,8 +68,7 @@ Phase/gate 转换时按 **`mstar-host`**「Phase-transition todo refresh (host-a
 
 ## 2.3 Branch anchors + integration branch + integration worktree（Phase 2 入口）
 
-<!-- host-hook: phase-2-entry -->
-> Execute the active host reference's `## Host hooks` declaration for `phase-2-entry`; this file defines no host action.
+本节的 integration-worktree checklist **也被 Phase 1 路线复用**（`iteration-start` §6）—— 在该路线上它承载 `phase-1-lock` marker，且**不**触发 `phase-2-entry`。
 
 **Branch anchors 解析顺序**（任一环节缺失则 STOP，**禁止**默认 `main`/`master`）：
 
@@ -126,6 +123,11 @@ claim, release, transfer, plan-status transition, or merge-lease mutation.
 control **`Plan Path`** / **`SDD dir`** in Assignments
 (`mstar-branch-worktree` 「Harness path SSOT under default gitignore」).
 
+<!-- host-hook: phase-1-lock -->
+> Execute the active host reference's `## Host hooks` declaration for `phase-1-lock`; this file defines no host action.
+>
+> 本 anchor 在 **Phase 1 路线**上触发**一次**，且只在本 checklist 走完 push 之后：步骤 3–5 已建立独立的 integration checkout 并记录 `integration_worktree_path`，已 review 的改动在该 checkout 上 commit，`spec_integration_branch` 已 push（Phase 1 的 `iteration-start` §6 复用的就是本 checklist）。Phase 2 resume 走到同一 section 时**不**重新触发，也**不**需要重新调用 —— 该 anchor 已在 Phase 1 完成（精确的重复调用语义与拒绝码 → active host reference）。
+
 ### Same-host exclusive write lock
 
 All control-path lease mutations (claim, release, transfer, merge-lease
@@ -179,6 +181,11 @@ snapshot and re-verify `execution_lease` holder + paths match this session;
 mismatch → **STOP**.
 
 > **Lease Engine-check:** canonical callout lives in `mstar-artifacts` `SKILL.md`（Engine-check lease 行）— this file carries the execution checklist only.
+
+<!-- host-hook: phase-2-entry -->
+> Execute the active host reference's `## Host hooks` declaration for `phase-2-entry`; this file defines no host action.
+>
+> 这是 **Phase 2 execute/resume entry**：§2.0 五道闸与 §2.3 的 branch / worktree 解析之后的第一个 Phase 2 动作，位于 per-plan loop 之前。Phase 1 的 `iteration-start` §6 只**复用** §2.3 的 integration-worktree 步骤，**不**触发本 anchor。
 
 ## 2.4 Per-plan loop（直到全部 Done）
 

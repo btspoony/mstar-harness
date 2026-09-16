@@ -72,9 +72,9 @@ Shared lifecycle skills name **host-agnostic anchors** — named moments at whic
 
 | Anchor | Moment |
 |--------|--------|
-| `iteration-entry` | first preparation action of a new iteration |
-| `phase-1-lock` | Phase 1 completion — the PM lock, after the Review & Edit chain |
-| `phase-2-entry` | first host action of Phase 2 |
+| `iteration-entry` | first preparation action of a new iteration — reached only once the workflow is registered and its id known |
+| `phase-1-lock` | Phase 1 completion — once the integration worktree exists, the reviewed changes are committed there and that branch is pushed (the PM lock alone is not the moment) |
+| `phase-2-entry` | the Phase 2 execute/resume entry — after the §2.0 gates, before the per-plan loop; **not** the Phase-1-reused integration-worktree step |
 | `rescheduling-checkpoint` | each `Rescheduling checkpoint` re-evaluation |
 
 **Execution rule.** At each anchor the PM executes whatever the **active host reference** declares under its own `## Host hooks` section for that anchor. A host reference that declares nothing for an anchor means **no-op**: never invent an action, never substitute another host's declaration, and never treat an absent declaration as permission to skip the anchor's shared step.
@@ -86,13 +86,13 @@ Shared lifecycle skills name **host-agnostic anchors** — named moments at whic
 > Execute the active host reference's `## Host hooks` declaration for `<anchor>`; this file defines no host action.
 ```
 
-Carrier locations — the four markers in the shared corpus:
+Carrier locations — the four markers in the shared corpus (all four live under `skills/`, never in `commands/`):
 
 | File | Location | Anchor |
 |------|----------|--------|
-| `mstar-iteration/references/phase-1-prepare.md` | §1.1 head | `iteration-entry` |
-| `mstar-iteration/references/phase-1-prepare.md` | §1.6 tail, after the PM-lock step | `phase-1-lock` |
-| `mstar-iteration/references/phase-2-worktree-lease.md` | §2.3 head | `phase-2-entry` |
+| `mstar-iteration/references/phase-1-prepare.md` | §1.5 tail, after the v2 status registration (the workflow id exists there) | `iteration-entry` |
+| `mstar-iteration/references/phase-2-worktree-lease.md` | §2.3 「Integration worktree (Phase 2 entry) + control root」 checklist tail, after the integration checkout, the reviewed changes and the push — the Phase 1 route reaches it through `iteration-start` §6, which carries only a pointer | `phase-1-lock` |
+| `mstar-iteration/references/phase-2-worktree-lease.md` | immediately before the `## 2.4 Per-plan loop` heading (the Phase 2 execute/resume entry; §2.3 is the Phase-1-reused step and triggers nothing) | `phase-2-entry` |
 | `mstar-iteration/references/phase-2-worktree-lease.md` | `### Rescheduling checkpoint` | `rescheduling-checkpoint` (the five frozen reason names are handed off verbatim) |
 
 **Prohibition (shared text).** Shared `mstar-*` skill text outside `mstar-host/**` MUST NOT name a host (`omp`, `oh-my-pi`, `dsh`, `OpenCode`, `Cursor`, `Codex`, `Kimi`, `ZCode`), a host tool/field name (`subagent`, `subagent_type`, `tasks[]`, `ask`, `hub`), a native settings key (`modelHandoff`, `phase2PlanInstances`, `maxPlanInstances`), or an extension file name. Capability phrasing ("when the host exposes an invoke tool") is the only permitted form; host names belong to this skill and `references/<host>.md`.
