@@ -11,6 +11,10 @@
  * - `readPlanCoordination` / `readCoordinatedArtifact` — reads.
  * - `mutatePlanCoordination` / `replaceCoordinatedArtifact` — the two locked
  *   writers.
+ * - `showPrepareWorkflow` / `amendPrepareWorkflow` — the workflow-level guard
+ *   for a Prepare lifecycle that must register newly approved plan rows and
+ *   the reviewed integration checkout without a generic snapshot replacement
+ *   (spec: the guarded, coordinator-authenticated Prepare-stage amendment).
  *
  * ## Operation scope
  *
@@ -84,10 +88,18 @@ import {
   type ProjectRegisterDoc,
   type ProjectRegisterEntry,
 } from "./project.js";
-import { rowPlanIds, validateResidual, validateStatusV2, type PlanRow, type StatusV2Doc } from "./status.js";
+import { parseCompassFrontmatterText } from "./iteration.js";
+import { rowPlanIds, validatePlanRow, validateResidual, validateStatusV2, type PlanRow, type StatusV2Doc } from "./status.js";
 import { getArtifactStore, resolveArtifactPath, type ArtifactRef, type ArtifactStore } from "./store.js";
-import { readMainWorktree, type MainWorktreeInfo } from "./worktree.js";
-import { readWorkflowSnapshot, validateWorkflowSnapshot, writeWorkflowSnapshot, type WorkflowSnapshot } from "./workflow.js";
+import { isDistinctCheckout, readMainWorktree, type MainWorktreeInfo } from "./worktree.js";
+import {
+  readWorkflowSnapshot,
+  validateWorkflowSnapshot,
+  writeWorkflowSnapshot,
+  type WorkflowBranchAnchors,
+  type WorkflowExecutionPolicy,
+  type WorkflowSnapshot,
+} from "./workflow.js";
 
 /* ------------------------------------------------------------------------ *
  * § Types — public surface
@@ -1401,8 +1413,12 @@ type BindContext = {
   workflowId: string;
 };
 
-/** Root register check (spec §C1): the workflow must be an active entry. */
-function assertRootRegisterEntry(harnessRoot: string, workflowId: string): void {
+/**
+ * Root register check (spec §C1): the workflow must be an active entry. The
+ * entry is returned so callers that must re-check its declared lifecycle
+ * status (the Prepare amendment) read the same document this check accepted.
+ */
+function assertRootRegisterEntry(harnessRoot: string, workflowId: string): Record<string, unknown> {
   const store = localStore(harnessRoot);
   const path = resolveArtifactPath(harnessRoot, { kind: "status", key: "root" });
   if (!existsSync(path)) {
@@ -1427,6 +1443,8 @@ function assertRootRegisterEntry(harnessRoot: string, workflowId: string): void 
       { path, workflow_id: workflowId },
     );
   }
+  // Boundary cast: the predicate above proved a plain object.
+  return entry as Record<string, unknown>;
 }
 
 /** Coordinator residency (spec §C1): main worktree or recorded integration worktree. */
@@ -4062,4 +4080,1181 @@ async function replaceProjectRegister(input: CoordinatedReplacement, harnessRoot
       });
     });
   });
+}
+
+/* ------------------------------------------------------------------------ *
+ * § Prepare workflow amendment (show-prepare / amend-prepare)
+ * ------------------------------------------------------------------------ */
+
+/**
+ * The guarded, coordinator-authenticated Prepare-stage amendment (§ New API and
+ * CLI, frozen). One approved plan row: the plan markdown that carries it plus
+ * the metadata the row records. Nothing else is addressable — the verb cannot
+ * edit an existing row.
+ */
+export type PreparePlanAppend = Readonly<{
+  id: string;
+  title: string;
+  file: string;
+  metadata: Readonly<{
+    primary_spec: string;
+    spec_refs: readonly string[];
+    iteration_compass: string;
+    iteration_refs: readonly string[];
+    working_branch: string;
+    spec_integration_branch: string;
+    merge_target: string;
+  }>;
+}>;
+
+/**
+ * The whole structural delta one amendment may apply (§ Admission and mutation
+ * step 5): the caller's main-worktree branch, the approved plan appends, the
+ * reviewed integration checkout, and the single approved execution-policy key.
+ */
+export type PrepareWorkflowPatch = Readonly<{
+  mainWorktreeBranch: string;
+  appendPlans: readonly PreparePlanAppend[];
+  integrationWorktreePath?: string;
+  planParallelism?: "serial" | "parallel";
+}>;
+
+/** What a coordinator observes about one workflow before amending it. */
+export type PrepareWorkflowView = Readonly<{
+  workflowId: string;
+  /** `sha256:<64 hex>` of the snapshot bytes (the amendment CAS token). */
+  snapshotVersion: string;
+  /** `sha256:<64 hex>` of the reviewed compass Markdown bytes (CAS token). */
+  compassVersion: string;
+  /** Plan ids in row order — including this call's own appends on success. */
+  planIds: readonly string[];
+  /** `true` when `amendPrepareWorkflow` is admitted with fresh tokens. */
+  allowed: boolean;
+  /** One `<reason>: <message>` line per admission blocker; empty when allowed. */
+  blockers: readonly string[];
+}>;
+
+/** Success shape of the verb: the existing envelope with a workflow view. */
+export type PrepareWorkflowResult = Omit<CoordinationResult, "view"> & { view: PrepareWorkflowView };
+
+/** Refusal reasons of the Prepare amendment (spec § Admission and mutation). */
+type PrepareAmendmentReason =
+  | "stale"
+  | "invalid-patch"
+  | "not-prepare"
+  | "execution-started"
+  | "duplicate-plan"
+  | "invalid-plan"
+  | "compass-mismatch"
+  | "invalid-worktree";
+
+/** One `coordination.prepare-amendment.<reason>` code (`coordination-write.ts`). */
+type PrepareAmendmentCode = `coordination.prepare-amendment.${PrepareAmendmentReason}`;
+
+/** Prepare stage the amendment requires; every other phase refuses. */
+const PREPARE_PHASE = "phase-1-prepare";
+
+/**
+ * Patch keys the amendment accepts. Any other key is an arbitrary-field
+ * attempt, not a future-proof extension (spec § Admission and mutation step 4).
+ */
+const PREPARE_PATCH_KEYS: readonly string[] = [
+  "mainWorktreeBranch",
+  "appendPlans",
+  "integrationWorktreePath",
+  "planParallelism",
+];
+
+/** One plan append carries exactly these fields — no runtime row state. */
+const PREPARE_APPEND_KEYS: readonly string[] = ["id", "title", "file", "metadata"];
+
+/** Row metadata the amendment may record (spec § New API and CLI, frozen). */
+const PREPARE_APPEND_METADATA_KEYS: readonly string[] = [
+  "primary_spec",
+  "spec_refs",
+  "iteration_compass",
+  "iteration_refs",
+  "working_branch",
+  "spec_integration_branch",
+  "merge_target",
+];
+
+/** The only `plan_parallelism` values the approved concurrency contract names. */
+const PLAN_PARALLELISM_VALUES: readonly string[] = ["serial", "parallel"];
+
+function prepareAmendmentRefusal(
+  reason: PrepareAmendmentReason,
+  message: string,
+  details: Record<string, unknown> = {},
+): CoordinationError {
+  const code: PrepareAmendmentCode = `coordination.prepare-amendment.${reason}`;
+  return new CoordinationError(code, message, details);
+}
+
+/** The addressed workflow of one workflow-level verb. */
+type PrepareWorkflowScope = {
+  session: CoordinationSession;
+  /** Canonical envelope path (the result's `session_file`). */
+  sessionPath: string;
+  harnessRoot: string;
+  workflowId: string;
+  snapshotPath: string;
+};
+
+/**
+ * Resolve the workflow one coordinator envelope addresses (§ Admission and
+ * mutation step 1). The envelope's own `harness_root` and `workflow_id` are
+ * the only address: no caller-supplied root or workflow id retargets it. The
+ * active store must be that root and the process root must agree, so a linked
+ * checkout's own artifacts can never be read as the control root. Every
+ * refusal here is an existing auth/scope error, never a new one.
+ */
+function prepareWorkflowScope(sessionPath: string, cwd: string): PrepareWorkflowScope {
+  const session = readSessionEnvelope(sessionPath);
+  if (session.role !== "coordinator") {
+    throw new CoordinationError(
+      "coordination.session-role",
+      `workflow Prepare verbs require a coordinator session, not ${session.role}`,
+      { actual: session.role },
+    );
+  }
+  const harnessRoot = canonicalizeNearestExisting(session.harness_root);
+  localStore(harnessRoot);
+  const processRoot = resolveProcessHarnessDir(cwd);
+  if (processRoot !== null && canonicalTarget(processRoot) !== harnessRoot) {
+    throw new CoordinationError(
+      "coordination.scope-mismatch",
+      `session ${session.session_id} belongs to harness root ${harnessRoot}, but this process resolves ${canonicalTarget(processRoot)}`,
+      { expected: harnessRoot, actual: canonicalTarget(processRoot) },
+    );
+  }
+  const workflowId = safePlanId(session.workflow_id, "workflow_id");
+  const snapshotPath = assertSnapshotPath(harnessRoot, workflowId, snapshotPathOf(harnessRoot, workflowId));
+  return { session, sessionPath: canonicalTarget(sessionPath), harnessRoot, workflowId, snapshotPath };
+}
+
+/**
+ * The stored snapshot plus the byte version of the file it came from. The
+ * version is the CAS token of the exact bytes on disk; the payload comes from
+ * the canonical reader (strict validation, one in-memory legacy-alias
+ * normalization). Both reads happen inside one locked section for a writer —
+ * the snapshot lock, not an editor or power-loss transaction, is this
+ * verb's boundary (spec § Admission and mutation step 7).
+ */
+function readPrepareSnapshot(snapshotPath: string): { snapshot: WorkflowSnapshot; version: string } {
+  const bytes = readArtifactBytes(snapshotPath);
+  if (bytes === undefined) {
+    throw new CoordinationError("coordination.workflow-not-found", `workflow snapshot not found: ${snapshotPath}`, {
+      path: snapshotPath,
+    });
+  }
+  return { snapshot: readSnapshot(dirname(snapshotPath)), version: bytes.version };
+}
+
+/** The reviewed compass of a workflow plus the declarations it binds. */
+type PrepareCompass = {
+  /** Canonical compass path (`snapshot.compass_ref` resolved). */
+  path: string;
+  /** `sha256:<64 hex>` of the Markdown bytes — the compass CAS token. */
+  version: string;
+  /** `plans:` frontmatter ids, validated as declared (non-empty, unique). */
+  planIds: readonly string[];
+  specIntegrationBranch?: string;
+  integrationWorktreePath?: string;
+};
+
+/**
+ * One optional compass declaration (`spec_integration_branch`,
+ * `integration_worktree_path`) of an amendment-reviewed compass. Absence
+ * leaves the declaration unset — there is then nothing to compare — while a
+ * key that is present without a usable value (a YAML list, a number, an empty
+ * value) refuses: the declaration feeds an agreement check, so a malformed
+ * value must never read as no declaration at all.
+ */
+function prepareCompassDeclaration(
+  frontmatter: Record<string, unknown>,
+  key: string,
+  workflowId: string,
+  path: string,
+): string | undefined {
+  const value = frontmatter[key];
+  if (value === undefined) return undefined;
+  if (!isNonEmptyString(value)) {
+    throw prepareAmendmentRefusal(
+      "compass-mismatch",
+      `workflow ${workflowId} compass ${path} declares a malformed ${key} \u2014 every declaration must be a non-empty string`,
+      { workflow_id: workflowId, path, field: key, actual: value },
+    );
+  }
+  return value;
+}
+
+/**
+ * Read the workflow's own reviewed compass (`snapshot.compass_ref`) and the
+ * declarations an amendment must agree with (§ Admission and mutation step 6).
+ * The token is the raw-byte SHA-256 of the Markdown (`sha256Bytes`), rendered
+ * in the same `sha256:<hex>` form as the snapshot version. A missing, escaping,
+ * unreadable or unparsable compass refuses, and so does one that does not
+ * declares its own `iteration_id` or whose `plans` list is malformed (an entry
+ * that is not a non-empty string) or repeats an id, or whose
+ * `spec_integration_branch` / `integration_worktree_path` is present but not a
+ * non-empty string: the reviewed declaration is read exactly as written —
+ * never filtered, deduplicated or borrowed from another lifecycle — because an
+ * unverifiable declaration cannot approve a structural delta.
+ */
+function readPrepareCompass(harnessRoot: string, snapshot: WorkflowSnapshot): PrepareCompass {
+  const ref = snapshot.compass_ref;
+  if (!isNonEmptyString(ref) || isAbsolute(ref)) {
+    throw prepareAmendmentRefusal(
+      "compass-mismatch",
+      `workflow ${snapshot.id} declares no usable compass_ref \u2014 the amendment requires the reviewed iteration compass`,
+      { workflow_id: snapshot.id, actual: ref ?? null },
+    );
+  }
+  const root = canonicalizeNearestExisting(harnessRoot);
+  const path = canonicalTarget(join(harnessRoot, ref));
+  if (!isWithin(root, path)) {
+    throw prepareAmendmentRefusal(
+      "compass-mismatch",
+      `workflow ${snapshot.id} compass_ref ${JSON.stringify(ref)} resolves outside the harness root ${root}`,
+      { workflow_id: snapshot.id, path, expected: ref },
+    );
+  }
+  let bytes: Buffer;
+  try {
+    bytes = readFileSync(path);
+  } catch (error) {
+    throw prepareAmendmentRefusal(
+      "compass-mismatch",
+      `workflow ${snapshot.id} compass ${path} is unreadable: ${errorMessage(error)}`,
+      { workflow_id: snapshot.id, path },
+    );
+  }
+  let frontmatter: Record<string, unknown>;
+  try {
+    frontmatter = parseCompassFrontmatterText(bytes.toString("utf8"), path);
+  } catch (error) {
+    throw prepareAmendmentRefusal(
+      "compass-mismatch",
+      `workflow ${snapshot.id} compass ${path} has no parsable frontmatter: ${errorMessage(error)}`,
+      { workflow_id: snapshot.id, path },
+    );
+  }
+  // The declaration is read exactly as written. A missing lifecycle identity
+  // cannot bind the compass to this workflow, and a malformed or repeated plan
+  // entry means the reviewed list is not the exact set it appears to be — none
+  // of that is repaired by filtering or deduplicating before the comparison.
+  const iterationId = frontmatter.iteration_id;
+  if (!isNonEmptyString(iterationId)) {
+    throw prepareAmendmentRefusal(
+      "compass-mismatch",
+      `workflow ${snapshot.id} compass ${path} declares no iteration_id \u2014 a lifecycle amends only its own compass`,
+      { workflow_id: snapshot.id, path, actual: iterationId ?? null },
+    );
+  }
+  if (iterationId !== snapshot.id) {
+    throw prepareAmendmentRefusal(
+      "compass-mismatch",
+      `compass ${path} declares iteration_id ${iterationId}, not workflow ${snapshot.id} \u2014 a lifecycle amends only its own compass`,
+      { workflow_id: snapshot.id, expected: snapshot.id, actual: iterationId },
+    );
+  }
+  const declaredPlans: unknown = frontmatter.plans;
+  if (!Array.isArray(declaredPlans) || declaredPlans.length === 0) {
+    throw prepareAmendmentRefusal(
+      "compass-mismatch",
+      `workflow ${snapshot.id} compass ${path} declares no plan ids in its frontmatter \u2014 the amendment cannot verify the approved plan set`,
+      { workflow_id: snapshot.id, path, actual: declaredPlans ?? null },
+    );
+  }
+  const malformed = declaredPlans.filter((entry) => !isNonEmptyString(entry));
+  if (malformed.length > 0) {
+    throw prepareAmendmentRefusal(
+      "compass-mismatch",
+      `workflow ${snapshot.id} compass ${path} declares ${malformed.length} malformed plan id(s) \u2014 every plans entry must be a non-empty string`,
+      { workflow_id: snapshot.id, path, plans: declaredPlans },
+    );
+  }
+  const planIds = declaredPlans as readonly string[];
+  if (new Set(planIds).size !== planIds.length) {
+    throw prepareAmendmentRefusal(
+      "compass-mismatch",
+      `workflow ${snapshot.id} compass ${path} declares the same plan id more than once \u2014 the reviewed plan set is not a multiset`,
+      { workflow_id: snapshot.id, path, plans: planIds },
+    );
+  }
+  // A declaration that is present is read exactly as written: a value that is
+  // not a usable string refuses here rather than vanishing, so the agreement
+  // checks further down can never be skipped by a malformed key.
+  const specIntegrationBranch = prepareCompassDeclaration(frontmatter, "spec_integration_branch", snapshot.id, path);
+  const integrationWorktreePath = prepareCompassDeclaration(frontmatter, "integration_worktree_path", snapshot.id, path);
+  return {
+    path,
+    version: `sha256:${sha256Bytes(bytes)}`,
+    planIds,
+    ...(specIntegrationBranch !== undefined ? { specIntegrationBranch } : {}),
+    ...(integrationWorktreePath !== undefined ? { integrationWorktreePath } : {}),
+  };
+}
+
+/** Admitted, or the reason an amendment must not run. */
+type PrepareAdmission =
+  | { ok: true }
+  | { ok: false; reason: PrepareAmendmentReason; message: string; details: Record<string, unknown> };
+
+/**
+ * The Prepare/no-execution admission (§ Admission and mutation step 3): the
+ * lifecycle is running in `phase-1-prepare`, its root register entry is still
+ * an active one, and NO execution ownership exists anywhere in the document —
+ * no row lease, no row coordination block (preparation, session binding,
+ * progress/QC evidence, handoff and reconcile state all live there), no row
+ * that left `Todo`/progress 0, and no workflow-level merge lease. A row that
+ * carries evidence refuses here; resetting it to Todo would erase nothing and
+ * is exactly what this verb must not do.
+ */
+function prepareAdmission(harnessRoot: string, workflowId: string, snapshot: WorkflowSnapshot): PrepareAdmission {
+  const entry = assertRootRegisterEntry(harnessRoot, workflowId);
+  if (isNonEmptyString(entry.status) && entry.status !== "running") {
+    return {
+      ok: false,
+      reason: "not-prepare",
+      message: `root register entry ${workflowId} is ${entry.status} \u2014 the amendment is available only while the lifecycle runs`,
+      details: { workflow_id: workflowId, status: entry.status },
+    };
+  }
+  if (snapshot.status !== "running") {
+    return {
+      ok: false,
+      reason: "not-prepare",
+      message: `workflow ${workflowId} is ${snapshot.status} \u2014 the amendment is available only in Prepare`,
+      details: { workflow_id: workflowId, status: snapshot.status },
+    };
+  }
+  if (snapshot.phase !== PREPARE_PHASE) {
+    return {
+      ok: false,
+      reason: "not-prepare",
+      message: `workflow ${workflowId} is in ${snapshot.phase ?? "no declared phase"}, not ${PREPARE_PHASE}`,
+      details: { workflow_id: workflowId, expected: PREPARE_PHASE, actual: snapshot.phase ?? null },
+    };
+  }
+  if (snapshot.integration_merge_lease !== undefined) {
+    return {
+      ok: false,
+      reason: "execution-started",
+      message: `workflow ${workflowId} carries an integration merge lease \u2014 execution ownership already exists`,
+      details: { workflow_id: workflowId },
+    };
+  }
+  for (const row of snapshot.plans) {
+    const planId = rowPlanIds(row)[0] ?? "";
+    const status = rowStatusOf(row);
+    if (status !== "Todo") {
+      return {
+        ok: false,
+        reason: "execution-started",
+        message: `plan ${planId} is ${status} \u2014 the amendment is available only while every row is Todo`,
+        details: { workflow_id: workflowId, plan_id: planId, actual: status },
+      };
+    }
+    if (row.progress !== undefined && row.progress !== 0) {
+      return {
+        ok: false,
+        reason: "execution-started",
+        message: `plan ${planId} reports progress ${JSON.stringify(row.progress)} \u2014 the amendment must not rewrite executed work`,
+        details: { workflow_id: workflowId, plan_id: planId, actual: row.progress },
+      };
+    }
+    if (row.execution_lease !== undefined) {
+      return {
+        ok: false,
+        reason: "execution-started",
+        message: `plan ${planId} carries an execution lease \u2014 the plan has an owner and is no longer in Prepare`,
+        details: { workflow_id: workflowId, plan_id: planId, holder: isPlainObject(row.execution_lease) ? row.execution_lease.holder : null },
+      };
+    }
+    if (row.coordination !== undefined) {
+      return {
+        ok: false,
+        reason: "execution-started",
+        message: `plan ${planId} carries a coordination block \u2014 preparation or execution evidence already exists for this row`,
+        details: { workflow_id: workflowId, plan_id: planId, revision: rowCoordinationOf(row)?.revision ?? null },
+      };
+    }
+  }
+  return { ok: true };
+}
+
+/**
+ * The plan-markdown labels the amendment actually consults. Every other
+ * `Label: value` line is plan-body content, and a real multi-task plan repeats
+ * those per task (`**Files:**`, `**Interfaces:**`, `**Task budget:**`) with a
+ * different value each time — so a repeated label outside this set is not a
+ * declaration conflict.
+ */
+const PLAN_CONSULTED_HEADERS: Record<string, true> = {
+  plan_id: true,
+  "main worktree branch": true,
+  "working branch": true,
+};
+
+/**
+ * The consulted headers one plan markdown declares, keyed by lowercased label —
+ * the idiom `parseAssignmentFile` uses for Assignment headers, widened to the
+ * forms real plan documents actually use: the colon inside the bold
+ * (`**plan_id:** value`, the dominant form in `{PLAN_DIR}`) and the colon
+ * after it (`**Main worktree branch**: value`). A plain `Label: value` line is
+ * accepted too. Fenced code is skipped so a quoted example is never read as a
+ * declaration, and a consulted label twice with different values refuses
+ * instead of silently picking one.
+ */
+function planHeadersOf(planPath: string, planId: string): Map<string, string> {
+  const headers = new Map<string, string>();
+  // The fence is tracked by its marker character and run length: it is closed
+  // only by a run of the same character at least as long, so a `~~~` example is
+  // never read as a declaration and a shorter backtick run inside a longer
+  // fence cannot close it early.
+  let marker: string | undefined;
+  let markerLength = 0;
+  for (const raw of readFileSync(planPath, "utf8").split(/\r?\n/)) {
+    const line = raw.trim();
+    const fence = /^(`{3,}|~{3,})/.exec(line);
+    if (fence !== null) {
+      const run = fence[1]!;
+      if (marker === undefined) {
+        marker = run.charAt(0);
+        markerLength = run.length;
+      } else if (run.charAt(0) === marker && run.length >= markerLength) {
+        marker = undefined;
+      }
+      continue;
+    }
+    if (marker !== undefined) continue;
+    // `**Label:** value` / `**Label**: value` / `Label: value`: the label may
+    // not contain `:` or `*` (those are the markup), and the value starts at
+    // the first non-space character after the closing markup and colon.
+    const match = /^\*{0,2}([^:*]+?)\*{0,2}:\*{0,2}\s*(\S.*)$/.exec(line);
+    if (match === null) continue;
+    const label = match[1]!.trim();
+    const key = label.toLowerCase();
+    if (PLAN_CONSULTED_HEADERS[key] !== true) continue;
+    const value = match[2]!.trim();
+    const prior = headers.get(key);
+    if (prior !== undefined && prior !== value) {
+      throw prepareAmendmentRefusal(
+        "invalid-plan",
+        `plan ${planId} markdown declares conflicting "${label}" headers (${prior} vs ${value})`,
+        { plan_id: planId, header: label },
+      );
+    }
+    headers.set(key, value);
+  }
+  return headers;
+}
+
+/**
+ * One plan metadata reference: absolute, inside the harness root (canonical,
+ * so a symlink out of it is an escape), and an existing file. `iteration_compass`
+ * is additionally required to BE this workflow's compass — the caller checks
+ * that, because only it knows the resolved compass path.
+ */
+function prepareReferencePath(harnessRoot: string, value: unknown, field: string, planId: string): string {
+  if (!isNonEmptyString(value) || !isAbsolute(value)) {
+    throw prepareAmendmentRefusal(
+      "invalid-plan",
+      `plan ${planId} ${field} must be an absolute path \u2014 got ${JSON.stringify(value ?? null)}`,
+      { plan_id: planId, field, actual: value ?? null },
+    );
+  }
+  const canonical = canonicalTarget(value);
+  if (!isWithin(canonicalizeNearestExisting(harnessRoot), canonical)) {
+    throw prepareAmendmentRefusal(
+      "invalid-plan",
+      `plan ${planId} ${field} ${canonical} escapes the harness root ${harnessRoot}`,
+      { plan_id: planId, field, path: canonical, expected: harnessRoot },
+    );
+  }
+  if (!existsSync(canonical) || !statSync(canonical).isFile()) {
+    throw prepareAmendmentRefusal("invalid-plan", `plan ${planId} ${field} does not exist: ${canonical}`, {
+      plan_id: planId,
+      field,
+      path: canonical,
+    });
+  }
+  return canonical;
+}
+
+/** A list-valued metadata reference; every entry obeys the single-path rule. */
+function prepareReferenceList(harnessRoot: string, value: unknown, field: string, planId: string): string[] {
+  if (!Array.isArray(value)) {
+    throw prepareAmendmentRefusal(
+      "invalid-plan",
+      `plan ${planId} ${field} must be an array of absolute paths \u2014 got ${JSON.stringify(value ?? null)}`,
+      { plan_id: planId, field, actual: value ?? null },
+    );
+  }
+  return value.map((entry, index) => prepareReferencePath(harnessRoot, entry, `${field}[${index}]`, planId));
+}
+
+/** One required non-empty string metadata value. */
+function prepareMetadataString(metadata: Record<string, unknown>, key: string, planId: string): string {
+  const value = metadata[key];
+  if (!isNonEmptyString(value)) {
+    throw prepareAmendmentRefusal(
+      "invalid-plan",
+      `plan ${planId} metadata.${key} must be a non-empty string \u2014 got ${JSON.stringify(value ?? null)}`,
+      { plan_id: planId, field: `metadata.${key}`, actual: value ?? null },
+    );
+  }
+  return value;
+}
+
+/**
+ * One appended plan, validated against its own plan markdown, the workflow's
+ * recorded anchors and the reviewed compass (§ Admission and mutation steps 4
+ * and 6). The row is constructed here — Todo, progress 0, the project-manager
+ * owner, a creation timestamp — so no runtime field can travel through the
+ * patch.
+ */
+function readPlanAppend(
+  value: unknown,
+  context: { harnessRoot: string; snapshot: WorkflowSnapshot; compass: PrepareCompass; mainWorktreeBranch: string },
+): PlanRow {
+  if (!isPlainObject(value)) {
+    throw prepareAmendmentRefusal("invalid-plan", "every appendPlans entry must be an object", { actual: value ?? null });
+  }
+  const unexpected = Object.keys(value).filter((key) => !PREPARE_APPEND_KEYS.includes(key));
+  if (unexpected.length > 0) {
+    throw prepareAmendmentRefusal(
+      "invalid-plan",
+      `a plan append accepts only ${PREPARE_APPEND_KEYS.join(", ")} \u2014 unexpected key(s): ${unexpected.join(", ")}`,
+      { allowed: [...PREPARE_APPEND_KEYS], unexpected },
+    );
+  }
+  const id = value.id;
+  if (!isNonEmptyString(id)) {
+    throw prepareAmendmentRefusal("invalid-plan", `a plan append requires a non-empty id \u2014 got ${JSON.stringify(id ?? null)}`, {
+      actual: id ?? null,
+    });
+  }
+  try {
+    assertSafePathComponent(id, "plan id");
+  } catch (error) {
+    throw prepareAmendmentRefusal("invalid-plan", `plan id ${JSON.stringify(id)} is not a safe path component: ${errorMessage(error)}`, {
+      plan_id: id,
+    });
+  }
+  const title = value.title;
+  if (!isNonEmptyString(title)) {
+    throw prepareAmendmentRefusal("invalid-plan", `plan ${id} requires a non-empty title`, { plan_id: id, actual: title ?? null });
+  }
+  const declaredFile = value.file;
+  if (!isNonEmptyString(declaredFile) || !isAbsolute(declaredFile)) {
+    throw prepareAmendmentRefusal(
+      "invalid-plan",
+      `plan ${id} file must be the absolute plan path \u2014 got ${JSON.stringify(declaredFile ?? null)}`,
+      { plan_id: id, actual: declaredFile ?? null },
+    );
+  }
+  // The PlanRow `file` convention, resolved by the plan resolver: the row's own
+  // plan file is `{PLAN_DIR}/<plan-id>.md`. This is the only path field — the
+  // patch introduces no second absolute-path key (spec § Admission step 4).
+  const planPath = canonicalTarget(declaredFile);
+  const planDir = canonicalizeNearestExisting(resolvePlanDir(context.harnessRoot));
+  if (dirname(planPath) !== planDir || basename(planPath) !== `${id}.md`) {
+    throw prepareAmendmentRefusal(
+      "invalid-plan",
+      `plan ${id} file ${planPath} is not ${join(planDir, `${id}.md`)}`,
+      { plan_id: id, expected: join(planDir, `${id}.md`), actual: planPath },
+    );
+  }
+  if (!existsSync(planPath) || !statSync(planPath).isFile()) {
+    throw prepareAmendmentRefusal("invalid-plan", `plan ${id} markdown not found: ${planPath}`, { plan_id: id, path: planPath });
+  }
+  const headers = planHeadersOf(planPath, id);
+  const declaredPlanId = headers.get("plan_id");
+  if (declaredPlanId === undefined) {
+    throw prepareAmendmentRefusal(
+      "invalid-plan",
+      `plan ${id} markdown ${planPath} declares no plan_id header \u2014 the row cannot be traced to its reviewed plan`,
+      { plan_id: id, path: planPath },
+    );
+  }
+  if (declaredPlanId !== id) {
+    throw prepareAmendmentRefusal(
+      "invalid-plan",
+      `plan append id ${id} does not match the plan markdown header plan_id ${declaredPlanId} (${planPath})`,
+      { plan_id: id, expected: id, actual: declaredPlanId, path: planPath },
+    );
+  }
+
+  const metadata = value.metadata;
+  if (!isPlainObject(metadata)) {
+    throw prepareAmendmentRefusal("invalid-plan", `plan ${id} metadata must be an object`, { plan_id: id, actual: metadata ?? null });
+  }
+  const unexpectedMetadata = Object.keys(metadata).filter((key) => !PREPARE_APPEND_METADATA_KEYS.includes(key));
+  if (unexpectedMetadata.length > 0) {
+    throw prepareAmendmentRefusal(
+      "invalid-plan",
+      `plan ${id} metadata accepts only ${PREPARE_APPEND_METADATA_KEYS.join(", ")} \u2014 unexpected key(s): ${unexpectedMetadata.join(", ")}`,
+      { plan_id: id, allowed: [...PREPARE_APPEND_METADATA_KEYS], unexpected: unexpectedMetadata },
+    );
+  }
+  const primarySpec = prepareReferencePath(context.harnessRoot, metadata.primary_spec, "metadata.primary_spec", id);
+  const specRefs = prepareReferenceList(context.harnessRoot, metadata.spec_refs, "metadata.spec_refs", id);
+  const iterationCompass = prepareReferencePath(context.harnessRoot, metadata.iteration_compass, "metadata.iteration_compass", id);
+  if (iterationCompass !== context.compass.path) {
+    throw prepareAmendmentRefusal(
+      "compass-mismatch",
+      `plan ${id} metadata.iteration_compass ${iterationCompass} is not this workflow's reviewed compass ${context.compass.path}`,
+      { plan_id: id, expected: context.compass.path, actual: iterationCompass },
+    );
+  }
+  const iterationRefs = prepareReferenceList(context.harnessRoot, metadata.iteration_refs, "metadata.iteration_refs", id);
+  const workingBranch = prepareMetadataString(metadata, "working_branch", id);
+  const specIntegrationBranch = prepareMetadataString(metadata, "spec_integration_branch", id);
+  const mergeTarget = prepareMetadataString(metadata, "merge_target", id);
+
+  // Branch metadata must match the reviewed plan and the lifecycle it joins: a
+  // row never claims the main, integration or target branch as its own work.
+  const anchors: WorkflowBranchAnchors = context.snapshot.branch ?? {};
+  for (const [label, branch] of [
+    ["branch.base", anchors.base],
+    ["branch.integration", anchors.integration],
+    ["branch.target", anchors.target],
+  ] as const) {
+    if (isNonEmptyString(branch) && branch === workingBranch) {
+      throw prepareAmendmentRefusal(
+        "invalid-plan",
+        `plan ${id} metadata.working_branch ${workingBranch} is the workflow's ${label} \u2014 a plan row owns its own feature branch`,
+        { plan_id: id, field: "metadata.working_branch", actual: workingBranch },
+      );
+    }
+  }
+  // The plan document is the reviewed authority for the branch metadata: both
+  // headers are required, and an absent one is never treated as agreement with
+  // the branches the append itself claims.
+  const declaredWorking = headers.get("working branch");
+  if (declaredWorking === undefined) {
+    throw prepareAmendmentRefusal(
+      "invalid-plan",
+      `plan ${id} markdown ${planPath} declares no Working branch header \u2014 the appended row's branch metadata cannot be verified against the reviewed plan`,
+      { plan_id: id, field: "metadata.working_branch", path: planPath },
+    );
+  }
+  if (declaredWorking !== workingBranch) {
+    throw prepareAmendmentRefusal(
+      "invalid-plan",
+      `plan ${id} metadata.working_branch ${workingBranch} does not match the Working branch declared by ${planPath} (${declaredWorking})`,
+      { plan_id: id, expected: declaredWorking, actual: workingBranch, path: planPath },
+    );
+  }
+  const declaredMain = headers.get("main worktree branch");
+  if (declaredMain === undefined) {
+    throw prepareAmendmentRefusal(
+      "invalid-plan",
+      `plan ${id} markdown ${planPath} declares no Main worktree branch header \u2014 the amendment cannot verify the branch the reviewed plan was written against`,
+      { plan_id: id, field: "mainWorktreeBranch", path: planPath },
+    );
+  }
+  if (declaredMain !== context.mainWorktreeBranch) {
+    throw prepareAmendmentRefusal(
+      "invalid-plan",
+      `plan ${id} metadata records main worktree branch ${context.mainWorktreeBranch}, but ${planPath} declares ${declaredMain}`,
+      { plan_id: id, expected: declaredMain, actual: context.mainWorktreeBranch, path: planPath },
+    );
+  }
+  if (isNonEmptyString(anchors.integration)) {
+    for (const [field, recorded] of [
+      ["metadata.spec_integration_branch", specIntegrationBranch],
+      ["metadata.merge_target", mergeTarget],
+    ] as const) {
+      if (recorded !== anchors.integration) {
+        throw prepareAmendmentRefusal(
+          "invalid-plan",
+          `plan ${id} ${field} ${recorded} is not the workflow's integration branch ${anchors.integration}`,
+          { plan_id: id, expected: anchors.integration, actual: recorded },
+        );
+      }
+    }
+  }
+  if (context.compass.specIntegrationBranch !== undefined && specIntegrationBranch !== context.compass.specIntegrationBranch) {
+    throw prepareAmendmentRefusal(
+      "compass-mismatch",
+      `plan ${id} metadata.spec_integration_branch ${specIntegrationBranch} is not the reviewed compass integration branch ${context.compass.specIntegrationBranch}`,
+      { plan_id: id, expected: context.compass.specIntegrationBranch, actual: specIntegrationBranch },
+    );
+  }
+
+  const row: PlanRow = {
+    id,
+    title,
+    file: planPath,
+    status: "Todo",
+    owner: "project-manager",
+    progress: 0,
+    created_at: nowIso(),
+    metadata: {
+      primary_spec: primarySpec,
+      spec_refs: specRefs,
+      iteration_compass: iterationCompass,
+      iteration_refs: iterationRefs,
+      working_branch: workingBranch,
+      spec_integration_branch: specIntegrationBranch,
+      merge_target: mergeTarget,
+    },
+  };
+  const gate = validatePlanRow(row);
+  if (!gate.ok) {
+    throw prepareAmendmentRefusal("invalid-plan", `constructed row ${id} fails plan-row validation \u2014 ${summarize(gate.violations)}`, {
+      plan_id: id,
+      violations: gate.violations.map((entry) => entry.code),
+    });
+  }
+  return row;
+}
+
+/**
+ * The recorded integration checkout (§ Admission and mutation step 5): real and
+ * canonical, a distinct Git checkout of the repository that owns the validated
+ * control harness root, and actually on the workflow's recorded
+ * `branch.integration`. Nothing is created, switched, fetched or cleaned — a
+ * wrong or aliased checkout refuses instead.
+ */
+function readIntegrationWorktreePath(
+  value: unknown,
+  context: { harnessRoot: string; snapshot: WorkflowSnapshot; main: MainWorktreeInfo },
+): string {
+  const refuse = (message: string, details: Record<string, unknown> = {}): never => {
+    throw prepareAmendmentRefusal("invalid-worktree", message, details);
+  };
+  if (!isNonEmptyString(value) || !isAbsolute(value)) {
+    return refuse(`integrationWorktreePath must be an absolute path \u2014 got ${JSON.stringify(value ?? null)}`, {
+      actual: value ?? null,
+    });
+  }
+  const path = canonicalTarget(value);
+  if (!existsSync(path) || !statSync(path).isDirectory()) {
+    return refuse(`integration checkout ${path} does not exist`, { path, expected: value });
+  }
+  const mainRoot = canonicalTarget(context.main.root);
+  const control = canonicalizeNearestExisting(context.harnessRoot);
+  // The repository that owns the validated control harness root is the only
+  // anchor this proof may use. A coordinator envelope can be presented from a
+  // different clone of the same project, whose own repository — and whose own
+  // checkouts — are not this lifecycle's; anchoring on the repository enclosing
+  // the caller's cwd alone would record that clone's checkout. So the caller's
+  // enclosing repository must be the control root's repository, and so must the
+  // candidate.
+  const controlRepo = readMainWorktree(control);
+  if (controlRepo === null) {
+    return refuse(
+      `the control harness root ${control} has no readable Git main worktree \u2014 the integration checkout cannot be proven to be a checkout of this repository`,
+      { path, harness_root: control },
+    );
+  }
+  const controlMainRoot = canonicalTarget(controlRepo.root);
+  if (controlMainRoot !== mainRoot) {
+    return refuse(
+      `this call runs from the main worktree of ${mainRoot}, not the repository owning the control harness root ${control} (${controlMainRoot}) \u2014 the recorded checkout must belong to that repository`,
+      { path, expected: controlMainRoot, actual: mainRoot },
+    );
+  }
+  if (path === mainRoot || path === control) {
+    return refuse(`integration checkout ${path} is the main/control checkout \u2014 a dedicated integration worktree is required`, {
+      path,
+      expected: `a checkout distinct from ${mainRoot}`,
+    });
+  }
+  const repo = readMainWorktree(path);
+  if (repo === null || canonicalTarget(repo.root) !== controlMainRoot) {
+    return refuse(
+      `integration checkout ${path} is not a checkout of the repository owning the control harness root ${control} (${controlMainRoot})`,
+      {
+        path,
+        expected: controlMainRoot,
+        actual: repo === null ? null : canonicalTarget(repo.root),
+      },
+    );
+  }
+  if (!isDistinctCheckout(context.main.root, path)) {
+    return refuse(`integration checkout ${path} is not a distinct checkout (same Git checkout as ${mainRoot})`, {
+      path,
+      expected: `a checkout distinct from ${mainRoot}`,
+    });
+  }
+  const integrationBranch = context.snapshot.branch?.integration;
+  if (!isNonEmptyString(integrationBranch)) {
+    return refuse(
+      `workflow ${context.snapshot.id} records no branch.integration \u2014 the integration checkout cannot be verified`,
+      { workflow_id: context.snapshot.id, path },
+    );
+  }
+  const branch = gitRead(path, ["rev-parse", "--abbrev-ref", "HEAD"]);
+  if (branch !== integrationBranch) {
+    return refuse(
+      `integration checkout ${path} is on ${branch === undefined ? "an unreadable checkout" : branch || "a detached HEAD"}, not the recorded ${integrationBranch}`,
+      { path, expected: integrationBranch, actual: branch ?? null },
+    );
+  }
+  return path;
+}
+
+/** The validated delta of one amendment. */
+type PrepareProposal = {
+  rows: PlanRow[];
+  integrationWorktreePath?: string;
+  planParallelism?: string;
+};
+
+/** Set-equality over plan ids (declaration order is never a requirement). */
+function samePlanIdSet(left: readonly string[], right: readonly string[]): boolean {
+  const leftSet = new Set(left);
+  const rightSet = new Set(right);
+  if (leftSet.size !== rightSet.size) return false;
+  for (const id of leftSet) if (!rightSet.has(id)) return false;
+  return true;
+}
+
+/**
+ * The patch, validated against the workflow, the plan files and the reviewed
+ * compass (§ Admission and mutation steps 4–6): unknown keys, duplicate or
+ * colliding ids, malformed metadata, escaping or missing references,
+ * mismatched plan headers, a patch that changes nothing, a plan set the
+ * compass does not declare, and an integration branch or checkout the
+ * workflow does not own all refuse here — before anything is written.
+ */
+function readPreparePatch(
+  patch: unknown,
+  context: { harnessRoot: string; snapshot: WorkflowSnapshot; compass: PrepareCompass; main: MainWorktreeInfo },
+): PrepareProposal {
+  if (!isPlainObject(patch)) {
+    throw prepareAmendmentRefusal("invalid-patch", "the amendment patch must be an object", { actual: patch ?? null });
+  }
+  const unexpected = Object.keys(patch).filter((key) => !PREPARE_PATCH_KEYS.includes(key));
+  if (unexpected.length > 0) {
+    throw prepareAmendmentRefusal(
+      "invalid-patch",
+      `the amendment patch accepts only ${PREPARE_PATCH_KEYS.join(", ")} \u2014 unexpected key(s): ${unexpected.join(", ")}`,
+      { allowed: [...PREPARE_PATCH_KEYS], unexpected },
+    );
+  }
+  const mainWorktreeBranch = patch.mainWorktreeBranch;
+  if (!isNonEmptyString(mainWorktreeBranch)) {
+    throw prepareAmendmentRefusal(
+      "invalid-patch",
+      `the amendment patch requires mainWorktreeBranch as a non-empty string \u2014 got ${JSON.stringify(mainWorktreeBranch ?? null)}`,
+      { actual: mainWorktreeBranch ?? null },
+    );
+  }
+  // The caller's checkout identity: the Git-derived main worktree must be on
+  // the branch this patch declares. `branch.base` is a recorded anchor, not
+  // residency, so it is never the expectation here.
+  if (context.main.branch !== mainWorktreeBranch) {
+    throw new CoordinationError(
+      "coordination.scope-mismatch",
+      `the main worktree ${context.main.root} is on ${context.main.branch === "" ? "a detached HEAD" : context.main.branch}, but this amendment declares ${mainWorktreeBranch}`,
+      { expected: mainWorktreeBranch, actual: context.main.branch },
+    );
+  }
+  const rawAppends = patch.appendPlans;
+  if (!Array.isArray(rawAppends)) {
+    throw prepareAmendmentRefusal("invalid-patch", "the amendment patch requires appendPlans as an array", {
+      actual: rawAppends ?? null,
+    });
+  }
+  const requestedParallelism = patch.planParallelism;
+  if (
+    requestedParallelism !== undefined &&
+    !(isNonEmptyString(requestedParallelism) && PLAN_PARALLELISM_VALUES.includes(requestedParallelism))
+  ) {
+    throw prepareAmendmentRefusal(
+      "invalid-patch",
+      `planParallelism must be one of ${PLAN_PARALLELISM_VALUES.join(" | ")} \u2014 got ${JSON.stringify(requestedParallelism ?? null)}`,
+      { allowed: [...PLAN_PARALLELISM_VALUES], actual: requestedParallelism ?? null },
+    );
+  }
+  const planParallelism: string | undefined = isNonEmptyString(requestedParallelism) ? requestedParallelism : undefined;
+
+  // Duplicate ids are refused as their own reason: an id already registered in
+  // the workflow (old rows are preserved by value, never replaced) or the same
+  // id twice in one patch.
+  const existingIds = new Set(context.snapshot.plans.flatMap((row) => rowPlanIds(row)));
+  const declaredIds = new Set<string>();
+  for (const entry of rawAppends) {
+    const id = isPlainObject(entry) ? entry.id : undefined;
+    if (!isNonEmptyString(id)) continue; // the entry's own shape refuses below
+    if (existingIds.has(id)) {
+      throw prepareAmendmentRefusal(
+        "duplicate-plan",
+        `plan ${id} is already a row of workflow ${context.snapshot.id} \u2014 the amendment appends new rows and never replaces existing ones`,
+        { plan_id: id, workflow_id: context.snapshot.id },
+      );
+    }
+    if (declaredIds.has(id)) {
+      throw prepareAmendmentRefusal("duplicate-plan", `plan ${id} appears twice in one patch`, { plan_id: id });
+    }
+    declaredIds.add(id);
+  }
+
+  const rows = rawAppends.map((entry) =>
+    readPlanAppend(entry, {
+      harnessRoot: context.harnessRoot,
+      snapshot: context.snapshot,
+      compass: context.compass,
+      mainWorktreeBranch,
+    }),
+  );
+  const integrationWorktreePath =
+    patch.integrationWorktreePath === undefined
+      ? undefined
+      : readIntegrationWorktreePath(patch.integrationWorktreePath, context);
+
+  const recordedPath = isNonEmptyString(context.snapshot.integration_worktree_path)
+    ? canonicalTarget(context.snapshot.integration_worktree_path)
+    : undefined;
+  const recordedParallelism = isPlainObject(context.snapshot.execution_policy)
+    ? context.snapshot.execution_policy.plan_parallelism
+    : undefined;
+  const changesPath = integrationWorktreePath !== undefined && integrationWorktreePath !== recordedPath;
+  const changesPolicy = planParallelism !== undefined && planParallelism !== recordedParallelism;
+  if (rows.length === 0 && !changesPath && !changesPolicy) {
+    throw prepareAmendmentRefusal(
+      "invalid-patch",
+      `the patch changes nothing on workflow ${context.snapshot.id} \u2014 it appends no plan, records no new integration checkout and no different plan parallelism`,
+      { workflow_id: context.snapshot.id },
+    );
+  }
+  // The reviewed declaration binds the workflow's own recorded integration
+  // branch too, and no amendment edits that anchor — so the comparison belongs
+  // here, where every patch is validated, and not only on the per-append path:
+  // an amendment that appends nothing (a policy or checkout recording) must
+  // refuse a workflow whose recorded branch contradicts the reviewed compass
+  // just the same (spec § Admission and mutation step 6).
+  if (context.compass.specIntegrationBranch !== undefined) {
+    const recordedBranch = context.snapshot.branch?.integration;
+    if (!isNonEmptyString(recordedBranch) || recordedBranch !== context.compass.specIntegrationBranch) {
+      throw prepareAmendmentRefusal(
+        "compass-mismatch",
+        `workflow ${context.snapshot.id} records integration branch ${JSON.stringify(recordedBranch ?? null)}, but the reviewed compass ${context.compass.path} declares ${context.compass.specIntegrationBranch}`,
+        { expected: context.compass.specIntegrationBranch, actual: recordedBranch ?? null },
+      );
+    }
+  }
+  // The reviewed declaration binds the checkout this commit would leave in
+  // place — the patch's own validated path when it names one, otherwise the
+  // recorded path the spread preserves. Comparing the *effective* path is what
+  // makes both a retained conflict (patch omits the field) and a still
+  // unrecorded declaration refuse, while an explicit correction that names the
+  // reviewed checkout in the same call stays lawful (spec § Admission and
+  // mutation step 6).
+  if (context.compass.integrationWorktreePath !== undefined) {
+    const declaredPath = canonicalTarget(context.compass.integrationWorktreePath);
+    const effectivePath = integrationWorktreePath ?? recordedPath;
+    if (effectivePath !== declaredPath) {
+      throw prepareAmendmentRefusal(
+        "compass-mismatch",
+        `workflow ${context.snapshot.id} would record integration checkout ${effectivePath ?? "(none)"}, but the reviewed compass ${context.compass.path} declares ${declaredPath}`,
+        { path: effectivePath ?? null, expected: declaredPath, actual: effectivePath ?? null },
+      );
+    }
+  }
+
+  // The resulting workflow must declare exactly the plan set the reviewed
+  // compass declares: not one undeclared row, and none of the compass's plans
+  // left unregistered (spec § Admission and mutation step 6).
+  const proposedIds = [
+    ...context.snapshot.plans.flatMap((row) => rowPlanIds(row)),
+    ...rows.map((row) => rowPlanIds(row)[0] ?? ""),
+  ];
+  if (!samePlanIdSet(context.compass.planIds, proposedIds)) {
+    const missing = context.compass.planIds.filter((id) => !proposedIds.includes(id));
+    const undeclared = proposedIds.filter((id) => !context.compass.planIds.includes(id));
+    throw prepareAmendmentRefusal(
+      "compass-mismatch",
+      `the amended workflow's plan ids must match the reviewed compass ${context.compass.path} exactly \u2014 missing: ${missing.join(", ") || "(none)"}; not declared by the compass: ${undeclared.join(", ") || "(none)"}`,
+      { expected: [...context.compass.planIds], actual: proposedIds, missing, undeclared },
+    );
+  }
+  return {
+    rows,
+    ...(integrationWorktreePath !== undefined ? { integrationWorktreePath } : {}),
+    ...(planParallelism !== undefined ? { planParallelism } : {}),
+  };
+}
+
+/** The raw-byte version token one amendment call must present. */
+function prepareVersionToken(value: unknown, field: string): string {
+  if (!isNonEmptyString(value)) {
+    throw invalidInput(`prepare amendment ${field} is required \u2014 read it from \`show-prepare\``, { field });
+  }
+  const bare = value.startsWith("sha256:") ? value.slice("sha256:".length) : value;
+  if (!/^[0-9a-f]{64}$/.test(bare)) {
+    throw invalidInput(
+      `prepare amendment ${field} must be a raw-byte sha256 version ("sha256:<64 hex>" or "<64 hex>") \u2014 got ${JSON.stringify(value)}`,
+      { field },
+    );
+  }
+  return value;
+}
+
+/** Digest of a token that may carry the `sha256:` prefix (compare-only). */
+function prepareVersionDigest(token: string): string {
+  return token.startsWith("sha256:") ? token.slice("sha256:".length) : token;
+}
+
+/**
+ * Read the workflow-level Prepare view of one coordinator-bound workflow
+ * (spec § New API and CLI). Read-only: no snapshot lock, nothing written. The
+ * two byte versions are the tokens `amendPrepareWorkflow` requires, and
+ * `allowed`/`blockers` report the Prepare/no-execution admission exactly as the
+ * mutation evaluates it — an inadmissible *lifecycle state* is readable, not an
+ * error, so a caller can inspect a workflow before deciding to amend it.
+ * Problems that make the documents or the caller's identity unusable — a
+ * missing/foreign/mismatched envelope, an unregistered or unreadable snapshot,
+ * an unreadable or borrowed compass — still refuse with their own code, because
+ * no trustworthy answer can be produced from them.
+ */
+export async function showPrepareWorkflow(
+  input: Readonly<{ sessionPath: string; cwd?: string }>,
+): Promise<PrepareWorkflowResult> {
+  assertExactKeys(input as unknown as Record<string, unknown>, ["sessionPath", "cwd"], "prepare workflow read");
+  const cwd = input.cwd ?? process.cwd();
+  const scope = prepareWorkflowScope(input.sessionPath, cwd);
+  const { snapshot, version } = readPrepareSnapshot(scope.snapshotPath);
+  assertCoordinatorBinding(scope.session, scope.sessionPath, snapshot);
+  const compass = readPrepareCompass(scope.harnessRoot, snapshot);
+  const admission = prepareAdmission(scope.harnessRoot, scope.workflowId, snapshot);
+  return {
+    ok: true,
+    operation: "show-prepare",
+    session: scope.session,
+    session_file: scope.sessionPath,
+    view: {
+      workflowId: scope.workflowId,
+      snapshotVersion: version,
+      compassVersion: compass.version,
+      planIds: snapshot.plans.map((row) => rowPlanIds(row)[0] ?? ""),
+      allowed: admission.ok,
+      blockers: admission.ok ? [] : [`${admission.reason}: ${admission.message}`],
+    },
+  };
+}
+
+/**
+ * Apply one approved Prepare structural amendment (spec § Admission and
+ * mutation). The CAS read, both version comparisons, the admission, the whole
+ * patch validation, the compass recheck and the single atomic write all run
+ * under the canonical snapshot write lock, so two callers presenting the same
+ * tokens cannot both succeed: the loser inspects the winner's bytes and
+ * refuses as `stale`. Every refusal happens before any write — the protected
+ * snapshot, root register, other workflows and the compass stay byte-identical.
+ *
+ * A lock that cannot be acquired refuses explicitly (the shared
+ * `withStatusWriteLock` Blocked error); Git-unavailable probes refuse through
+ * the existing `coordination.git-unavailable`.
+ */
+export async function amendPrepareWorkflow(
+  input: Readonly<{
+    sessionPath: string;
+    cwd?: string;
+    expectedSnapshotVersion: string;
+    expectedCompassVersion: string;
+    patch: PrepareWorkflowPatch;
+  }>,
+): Promise<PrepareWorkflowResult> {
+  assertExactKeys(
+    input as unknown as Record<string, unknown>,
+    ["sessionPath", "cwd", "expectedSnapshotVersion", "expectedCompassVersion", "patch"],
+    "prepare amendment input",
+  );
+  const cwd = input.cwd ?? process.cwd();
+  const expectedSnapshotVersion = prepareVersionToken(input.expectedSnapshotVersion, "expectedSnapshotVersion");
+  const expectedCompassVersion = prepareVersionToken(input.expectedCompassVersion, "expectedCompassVersion");
+  const scope = prepareWorkflowScope(input.sessionPath, cwd);
+  const committed = await withStatusWriteLock(scope.snapshotPath, async () => {
+    const { snapshot, version } = readPrepareSnapshot(scope.snapshotPath);
+    assertCoordinatorBinding(scope.session, scope.sessionPath, snapshot);
+    const main = assertCoordinatorResidency(cwd, snapshot);
+    // Both byte versions are compared against the bytes inspected inside this
+    // locked section (spec § Admission and mutation step 3).
+    if (prepareVersionDigest(version) !== prepareVersionDigest(expectedSnapshotVersion)) {
+      throw prepareAmendmentRefusal(
+        "stale",
+        `snapshot ${scope.snapshotPath} is at ${version}, this call expected ${expectedSnapshotVersion} \u2014 re-read \`workflow show-prepare\` and review again`,
+        { path: scope.snapshotPath, expected: expectedSnapshotVersion, actual: version },
+      );
+    }
+    const compass = readPrepareCompass(scope.harnessRoot, snapshot);
+    if (prepareVersionDigest(compass.version) !== prepareVersionDigest(expectedCompassVersion)) {
+      throw prepareAmendmentRefusal(
+        "stale",
+        `compass ${compass.path} is at ${compass.version}, this call expected ${expectedCompassVersion} \u2014 re-read \`workflow show-prepare\` and review again`,
+        { path: compass.path, expected: expectedCompassVersion, actual: compass.version },
+      );
+    }
+    const admission = prepareAdmission(scope.harnessRoot, scope.workflowId, snapshot);
+    if (!admission.ok) throw prepareAmendmentRefusal(admission.reason, admission.message, admission.details);
+    const proposal = readPreparePatch(input.patch, { harnessRoot: scope.harnessRoot, snapshot, compass, main });
+    // Old rows and unknown fields are taken from disk by value — only the new
+    // rows, the requested whitelist projections and `updated_at` are new. The
+    // policy copy carries the stored object's own keys, so keys this verb may
+    // not edit survive it.
+    const executionPolicy: WorkflowExecutionPolicy = { ...(snapshot.execution_policy ?? {}) };
+    if (proposal.planParallelism !== undefined) executionPolicy.plan_parallelism = proposal.planParallelism;
+    const next: WorkflowSnapshot = {
+      ...snapshot,
+      updated_at: nowIso(),
+      plans: [...snapshot.plans, ...proposal.rows],
+      ...(proposal.integrationWorktreePath !== undefined
+        ? { integration_worktree_path: proposal.integrationWorktreePath }
+        : {}),
+      ...(proposal.planParallelism !== undefined ? { execution_policy: executionPolicy } : {}),
+    };
+    // The reviewed declaration must still be the bytes this call inspected when
+    // the amendment lands (spec § Admission and mutation step 7).
+    const rechecked = readPrepareCompass(scope.harnessRoot, snapshot);
+    if (prepareVersionDigest(rechecked.version) !== prepareVersionDigest(compass.version)) {
+      throw prepareAmendmentRefusal(
+        "stale",
+        `compass ${compass.path} changed while this amendment was being applied (${compass.version} \u2192 ${rechecked.version}) \u2014 re-read \`workflow show-prepare\` and review again`,
+        { path: compass.path, expected: compass.version, actual: rechecked.version },
+      );
+    }
+    await commitSnapshot(scope.harnessRoot, scope.workflowId, scope.snapshotPath, next);
+    // The returned CAS token is read from the bytes this call just wrote,
+    // inside the critical section: a version read after the lock is released
+    // could name a competing commit that landed in between, while the reported
+    // plan ids and compass version would still be this call's.
+    const written = readArtifactBytes(scope.snapshotPath);
+    if (written === undefined) {
+      throw new CoordinationError(
+        "coordination.store",
+        `snapshot ${scope.snapshotPath} is unreadable after this call committed it`,
+        { path: scope.snapshotPath },
+      );
+    }
+    return {
+      planIds: next.plans.map((row) => rowPlanIds(row)[0] ?? ""),
+      compassVersion: compass.version,
+      snapshotVersion: written.version,
+    };
+  });
+  return {
+    ok: true,
+    operation: "amend-prepare",
+    session: scope.session,
+    session_file: scope.sessionPath,
+    outcome: "amended",
+    // The delta only appends admissible Todo rows and records the requested
+    // path/policy, so the workflow stays admissible after the commit.
+    view: {
+      workflowId: scope.workflowId,
+      snapshotVersion: committed.snapshotVersion,
+      compassVersion: committed.compassVersion,
+      planIds: committed.planIds,
+      allowed: true,
+      blockers: [],
+    },
+  };
 }
