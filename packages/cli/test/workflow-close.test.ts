@@ -67,7 +67,12 @@ function closeArgs(harness: string, extra: string[] = []): string[] {
   return ["status", "workflow-close", "--workflow", WORKFLOW_ID, "--harness", harness, ...extra];
 }
 
-/** Minimal valid running snapshot whose single plan row is fully Done. */
+/**
+ * Minimal valid running snapshot whose single plan row is fully Done, carrying
+ * the COMPLETE registered delivery shape the close consults (contract
+ * §1/§4c/§4d/§4f: delivery kind, delivery anchors, collected evidence).
+ * Override a member to pin a refusal.
+ */
 function snapshotDoc(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     schema_version: 1,
@@ -76,6 +81,13 @@ function snapshotDoc(overrides: Record<string, unknown> = {}): Record<string, un
     status: "running",
     started_at: "2026-08-01",
     updated_at: "2026-08-19",
+    delivery_kind: "development",
+    branch: { source: "feature/plan-a", target: "main" },
+    delivery: {
+      compound: { outcome: "created" },
+      pr: { repo: "btspoony/mstar-harness", head: "feature/plan-a", target: "main" },
+      merge: { provider: "github", evidence: "PR #244 verified merged at 2c792c01" },
+    },
     plans: [{ id: "plan-a", title: "Plan A", file: "plans/plan-a.md", status: "Done" }],
     ...overrides,
   };
@@ -409,20 +421,11 @@ describe("mstar iteration gate --phase 6", () => {
         expect(result.stderr).toBe("");
         expect(result.stdout).toContain("phase 6 (post-merge close): OK");
       },
-      {
-        snapshot: snapshotDoc({
-          status: "completed",
-          ended_at: "2026-09-12",
-          updated_at: "2026-09-12",
-          // Seam S3 (plan-workflow-lifecycle-contract §6 S3): the phase-6
-          // gate consults the registered delivery-kind evidence — this
-          // closed fixture carries the complete development registration
-          // shape (`registerPlanWorkflow` records delivery_kind + branches).
-          delivery_kind: "development",
-          branch: { base: "feature/plan-a", target: "main" },
-        }),
-        root: rootDoc(),
-      },
+      // Seam S3 (plan-workflow-lifecycle-contract §6 S3): the phase-6 gate
+      // consults the registered delivery-kind evidence — the shared
+      // `snapshotDoc()` fixture carries the complete development shape
+      // (kind + delivery anchors + collected evidence).
+      { snapshot: snapshotDoc({ status: "completed", ended_at: "2026-09-12", updated_at: "2026-09-12" }), root: rootDoc() },
     );
   });
 
@@ -514,5 +517,134 @@ describe("mstar iteration gate --phase 6", () => {
         }),
       },
     );
+  });
+});
+
+/**
+ * CLI `mstar workflow evidence` — the authorized delivery-evidence recording
+ * verb (plan-workflow-lifecycle-contract §3/§4c/§4d/§4f, seam S3). Thin
+ * wrapper over engine `recordWorkflowDelivery`: the payload JSON is merged
+ * into the snapshot's `delivery` block under the snapshot lock, so evidence is
+ * collected stage by stage and the close consultation can pass. Contract
+ * pinned here:
+ * - exit 0: recording the missing member lets the close succeed end to end,
+ *   and re-recording identical evidence rewrites nothing.
+ * - exit 1: a coordinated snapshot is written only for its own bound
+ *   coordinator envelope (`--session`), and a partial/incoherent payload is
+ *   refused by the engine with no byte change.
+ * - exit 2: usage — a missing/relative/malformed `--file`.
+ */
+describe("mstar workflow evidence", () => {
+  const evidenceArgs = (harness: string, payload: string, extra: string[] = []): string[] =>
+    ["workflow", "evidence", "--workflow", WORKFLOW_ID, "--file", payload, "--harness", harness, ...extra];
+
+  /** Write a delivery-evidence payload into the fixture harness; returns its absolute path. */
+  function writePayload(harness: string, body: unknown): string {
+    const payload = join(harness, "delivery-evidence.json");
+    writeFileSync(payload, JSON.stringify(body), "utf8");
+    return payload;
+  }
+
+  /** The shared fixture minus one member — the evidence the close must refuse on. */
+  function withoutMember(member: string): Record<string, unknown> {
+    const delivery = { ...(snapshotDoc().delivery as Record<string, unknown>) };
+    delete delivery[member];
+    return snapshotDoc({ delivery });
+  }
+
+  test("records the missing member, is idempotent, and unblocks the close (exit 0)", () => {
+    setupHarness((harness, { snapshot, root }) => {
+      writeFileSync(snapshot, JSON.stringify(withoutMember("merge"), null, 2), "utf8");
+      const beforeSnapshot = readFileSync(snapshot, "utf8");
+      const beforeRoot = readFileSync(root, "utf8");
+
+      // The close refuses first — incomplete delivery, zero writes.
+      const refused = runCli(closeArgs(harness, ["--ended-at", "2026-09-12"]));
+      expect(refused.exitCode).toBe(1);
+      expect(refused.stderr).toContain("PHASE6_DELIVERY_EVIDENCE_INCOMPLETE");
+      expect(refused.stderr).toContain("delivery.merge");
+      expect(refused.stderr).toContain("mstar workflow evidence");
+      expect(readFileSync(snapshot, "utf8")).toBe(beforeSnapshot);
+      expect(readFileSync(root, "utf8")).toBe(beforeRoot);
+
+      const payload = writePayload(harness, {
+        merge: { provider: "github", evidence: "PR #244 verified merged at 2c792c01" },
+      });
+      const recorded = runCli(evidenceArgs(harness, payload, ["--at", "2026-09-12T01:00:00Z"]));
+      expect(recorded.exitCode).toBe(0);
+      expect(recorded.stderr).toBe("");
+      expect(recorded.stdout).toContain(`workflow evidence: OK \u2014 ${WORKFLOW_ID} delivery evidence recorded`);
+
+      // Idempotent re-recording: same evidence, no rewrite (byte-identical).
+      const afterRecord = readFileSync(snapshot, "utf8");
+      const again = runCli(evidenceArgs(harness, payload, ["--at", "2026-09-13T01:00:00Z"]));
+      expect(again.exitCode).toBe(0);
+      expect(again.stdout).toContain("already carries this delivery evidence");
+      expect(readFileSync(snapshot, "utf8")).toBe(afterRecord);
+
+      // The close now completes and unregisters the root entry.
+      const closed = runCli(closeArgs(harness, ["--ended-at", "2026-09-12"]));
+      expect(closed.exitCode).toBe(0);
+      const doc = JSON.parse(readFileSync(snapshot, "utf8")) as Record<string, unknown>;
+      expect(doc.status).toBe("completed");
+      expect(doc.ended_at).toBe("2026-09-12");
+      // Fixture JSON read back from disk — the delivery block is a plain object.
+      const delivery = doc.delivery as Record<string, unknown>;
+      expect(delivery.merge).toEqual({
+        provider: "github",
+        evidence: "PR #244 verified merged at 2c792c01",
+      });
+      const rootAfter = JSON.parse(readFileSync(root, "utf8")) as { workflows: unknown[] };
+      expect(rootAfter.workflows).toEqual([]);
+    });
+  });
+
+  test("a coordinated workflow refuses without its bound coordinator envelope (exit 1, bytes unchanged)", () => {
+    setupHarness((harness, { snapshot }) => {
+      const sessionFile = join(harness, "workflows", WORKFLOW_ID, "sessions", "coordinator.json");
+      mkdirSync(join(harness, "workflows", WORKFLOW_ID, "sessions"), { recursive: true });
+      writeFileSync(sessionFile, JSON.stringify({ schema_version: 1, role: "coordinator", session_id: "s-1", workflow_id: WORKFLOW_ID, harness_root: harness }), "utf8");
+      const coordinated = snapshotDoc({
+        // No evidence collected yet — the recording seam is what fills it.
+        delivery: undefined,
+        coordination: { coordinator: { session_id: "s-1", session_file: sessionFile, bound_at: "2026-09-15T00:00:00Z" } },
+      });
+      writeFileSync(snapshot, JSON.stringify(coordinated, null, 2), "utf8");
+      const payload = writePayload(harness, { compound: { outcome: "created" } });
+      const before = readFileSync(snapshot, "utf8");
+
+      const refused = runCli(evidenceArgs(harness, payload));
+      expect(refused.exitCode).toBe(1);
+      // The refusal names the authorization seam (the same one the close uses).
+      expect(refused.stderr).toContain("is coordinated");
+      expect(refused.stderr).toContain("--session <coordinator envelope>");
+      expect(readFileSync(snapshot, "utf8")).toBe(before);
+
+      const recorded = runCli(evidenceArgs(harness, payload, ["--session", sessionFile, "--at", "2026-09-12T01:00:00Z"]));
+      expect(recorded.exitCode).toBe(0);
+      const stored = JSON.parse(readFileSync(snapshot, "utf8")) as Record<string, unknown>;
+      expect(stored.delivery).toEqual({ compound: { outcome: "created" } });
+    });
+  });
+
+  test("usage refusals stay exit 2 and never touch the snapshot", () => {
+    setupHarness((harness, { snapshot }) => {
+      const before = readFileSync(snapshot, "utf8");
+      // Missing --file.
+      const missing = runCli(["workflow", "evidence", "--workflow", WORKFLOW_ID, "--harness", harness]);
+      expect(missing.exitCode).toBe(2);
+      expect(missing.stderr).toContain("--file is required");
+      // Relative --file.
+      const relative = runCli(evidenceArgs(harness, "delivery-evidence.json"));
+      expect(relative.exitCode).toBe(2);
+      expect(relative.stderr).toContain("--file must be an absolute path");
+      // Malformed JSON payload.
+      const badPath = join(harness, "bad.json");
+      writeFileSync(badPath, "{ not json", "utf8");
+      const malformed = runCli(evidenceArgs(harness, badPath));
+      expect(malformed.exitCode).toBe(1);
+      expect(malformed.stderr).toContain("not valid JSON");
+      expect(readFileSync(snapshot, "utf8")).toBe(before);
+    });
   });
 });

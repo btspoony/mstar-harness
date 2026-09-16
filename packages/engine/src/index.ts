@@ -110,9 +110,13 @@ export {
 } from "./lease.js";
 export type {
   CloseWorkflowOptions,
+  RecordWorkflowDeliveryOptions,
+  RecordWorkflowDeliveryResult,
   RegisterPlanWorkflowOptions,
   RegisterPlanWorkflowResult,
   WorkflowBranchAnchors,
+  WorkflowCompoundOutcome,
+  WorkflowDeliveryEvidence,
   WorkflowDeliveryKind,
   WorkflowExecutionPolicy,
   WorkflowLifecycleStatus,
@@ -122,9 +126,12 @@ export type {
 } from "./workflow.js";
 export {
   closeWorkflow,
+  consultDeliveryEvidence,
   isTerminalSnapshot,
   LEGACY_WORKTREE_PATH_CODE,
+  recordWorkflowDelivery,
   registerPlanWorkflow,
+  WORKFLOW_COMPOUND_OUTCOMES,
   WORKFLOW_DELIVERY_KINDS,
   WORKFLOW_LIFECYCLE_STATUSES,
   WORKFLOW_LIFECYCLE_TYPES,

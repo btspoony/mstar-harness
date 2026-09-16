@@ -1340,13 +1340,14 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
     }
   });
 
-  test("a plan matching only unregistered (terminal) snapshots gets the standalone branch policy", () => {
+  test("a plan matching only unregistered (terminal) snapshots is refused; an active row passes; a legacy root is unchanged (§4b/§6 S2)", () => {
     const root = tmpRoot("sdd-ctx-terminal-only-");
     try {
       const f = executionFixture(root);
- // The register names a different live workflow; the plan's only snapshot
- // row belongs to a retained completed lifecycle and carries a stale
- // lease that must NOT satisfy lease enforcement.
+      // The register names a different live workflow; the plan's only snapshot
+      // row belongs to a retained completed lifecycle and carries a stale
+      // lease. A terminal row is history, never registration evidence — and
+      // its stale lease must not satisfy lease enforcement either.
       writeStatusRegister(f, ["wf-other"]);
       writeSnapshot(f, "wf-other", [
         { id: "another-plan", title: "other plan", file: "plans/another-plan.md", status: "InProgress" },
@@ -1359,6 +1360,33 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
           status: "Done",
           execution_lease: executionLease(f, { worktree_path: f.primary, working_branch: "main" }),
         },
+      ]);
+      const err = errOf(() => resolveSddExecutionContext(contextOf(f)));
+      expect(err.exitCode).toBe(1);
+      expect(err.message).toContain("sdd.context.plan-not-registered");
+
+      // An ACTIVE registered row IS registration evidence: the same plan id
+      // under the register resolves (its lease governs).
+      writeStatusRegister(f, ["wf-live"]);
+      writeSnapshot(f, "wf-live", [
+        {
+          id: PLAN_ID,
+          title: "live",
+          file: `plans/${PLAN_ID}.md`,
+          status: "InProgress",
+          execution_lease: executionLease(f),
+        },
+      ]);
+      expect(resolveSddExecutionContext(contextOf(f)).planId).toBe(PLAN_ID);
+
+      // Legacy root: no v2 register at all → the standalone policy applies
+      // byte-for-byte. The retained terminal row (now lease-free, so nothing
+      // register-governed is consulted and no lease check is demanded) keeps
+      // the legacy first-match behavior: the plan resolves on branch
+      // alignment exactly as before this change.
+      rmSync(join(f.harnessDir, "status.json"));
+      writeSnapshot(f, "wf-finished", [
+        { id: PLAN_ID, title: "finished", file: `plans/${PLAN_ID}.md`, status: "Done" },
       ]);
       expect(resolveSddExecutionContext(contextOf(f)).planId).toBe(PLAN_ID);
     } finally {

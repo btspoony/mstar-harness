@@ -515,7 +515,14 @@ function phase6PlanSnapshot(overrides: Record<string, unknown> = {}): SnapshotDo
     ended_at: "2026-09-12",
     updated_at: "2026-09-12",
     delivery_kind: "development",
-    branch: { base: "feature/plan-a", target: "main" },
+    branch: { source: "feature/plan-a", target: "main" },
+    // Collected delivery evidence (contract §4c/§4d/§4f) — the close
+    // consultation requires all three for a development workflow.
+    delivery: {
+      compound: { outcome: "created" },
+      pr: { repo: "btspoony/mstar-harness", head: "feature/plan-a", target: "main" },
+      merge: { provider: "github", evidence: "PR #244 verified merged at 2c792c01" },
+    },
     plans: [{ id: "plan-a", title: "Plan A", file: "plans/plan-a.md", status: "Done" }],
     ...overrides,
   };
@@ -528,9 +535,15 @@ describe("evaluatePostMergeClose — plan-type delivery-kind consultation (plan-
     expect(result.violations).toEqual([]);
   });
 
-  test("registered verification/report-only plan with its recorded completion policy → closeable (no forced PR, §1/§7)", () => {
+  test("registered verification/report-only plan with its recorded completion policy and fulfilment → closeable (no forced PR, §1/§7)", () => {
+    const policy = "acceptance report at reports/wf-plan-1.md";
     const result = evaluatePostMergeClose(
-      phase6PlanSnapshot({ delivery_kind: "verification/report-only", completion_policy: "acceptance report at reports/wf-plan-1.md", branch: undefined }),
+      phase6PlanSnapshot({
+        delivery_kind: "verification/report-only",
+        completion_policy: policy,
+        branch: undefined,
+        delivery: { completion: { policy, evidence: "reports/wf-plan-1.md (sha256:9f2c…)" } },
+      }),
       phase6Root([]),
     );
     expect(result.ok).toBe(true);
@@ -567,7 +580,10 @@ describe("evaluatePostMergeClose — plan-type delivery-kind consultation (plan-
   });
 
   test("development plan with missing branch anchors → PHASE6_DELIVERY_EVIDENCE_INCOMPLETE (incomplete registration, not an exempt workflow, §1)", () => {
-    for (const branch of [undefined, { base: "feature/plan-a" }, { target: "main" }]) {
+    // `branch.base` is the protected base anchor, never the delivery source:
+    // a legacy snapshot with the feature branch under `base` no longer
+    // satisfies the development registration evidence.
+    for (const branch of [undefined, { source: "feature/plan-a" }, { base: "feature/plan-a", target: "main" }]) {
       const result = evaluatePostMergeClose(phase6PlanSnapshot({ branch }), phase6Root([]));
       expect(result.ok).toBe(false);
       const incomplete = result.violations.find((v) => v.code === "PHASE6_DELIVERY_EVIDENCE_INCOMPLETE");
@@ -585,6 +601,72 @@ describe("evaluatePostMergeClose — plan-type delivery-kind consultation (plan-
     const incomplete = result.violations.find((v) => v.code === "PHASE6_DELIVERY_EVIDENCE_INCOMPLETE");
     expect(incomplete).toBeDefined();
     expect(incomplete!.message).toContain("verification/report-only");
+  });
+
+  test("development delivery evidence missing any member → PHASE6_DELIVERY_EVIDENCE_INCOMPLETE naming the missing item (§4c/§4d/§4f)", () => {
+    const complete = {
+      compound: { outcome: "updated" },
+      pr: { repo: "btspoony/mstar-harness", head: "feature/plan-a", target: "main" },
+      merge: { provider: "github", evidence: "PR #244 verified merged at 2c792c01" },
+    };
+    const cases: Array<[string, string]> = [
+      ["compound", "delivery.compound"],
+      ["pr", "delivery.pr"],
+      ["merge", "delivery.merge"],
+    ];
+    for (const [member, expected] of cases) {
+      const delivery: Record<string, unknown> = { ...complete };
+      delete delivery[member];
+      const result = evaluatePostMergeClose(phase6PlanSnapshot({ delivery }), phase6Root([]));
+      expect(result.ok).toBe(false);
+      const incomplete = result.violations.find((v) => v.code === "PHASE6_DELIVERY_EVIDENCE_INCOMPLETE");
+      expect(incomplete).toBeDefined();
+      expect(incomplete!.message).toContain("development");
+      expect(incomplete!.message).toContain(expected);
+      // The refusal names the authorized recording seam, not an inferred fix.
+      expect(incomplete!.fix).toContain("mstar workflow evidence");
+    }
+  });
+
+  test("the fulfilment record must name the registered completion policy → PHASE6_DELIVERY_EVIDENCE_INCOMPLETE (§1)", () => {
+    const result = evaluatePostMergeClose(
+      phase6PlanSnapshot({
+        delivery_kind: "verification/report-only",
+        completion_policy: "acceptance report at reports/wf-plan-1.md",
+        delivery: { completion: { policy: "some other policy", evidence: "reports/elsewhere.md" } },
+      }),
+      phase6Root([]),
+    );
+    expect(result.ok).toBe(false);
+    const incomplete = result.violations.find((v) => v.code === "PHASE6_DELIVERY_EVIDENCE_INCOMPLETE");
+    expect(incomplete).toBeDefined();
+    expect(incomplete!.message).toContain("delivery.completion.policy");
+  });
+
+  test("a malformed delivery block is the validator's refusal → PHASE6_INVALID_SNAPSHOT (reasoned skip is mandatory, §4c)", () => {
+    const result = evaluatePostMergeClose(
+      phase6PlanSnapshot({ delivery: { compound: { outcome: "skipped" } } }),
+      phase6Root([]),
+    );
+    expect(result.ok).toBe(false);
+    expect(result.violations.some((v) => v.code === "PHASE6_INVALID_SNAPSHOT")).toBe(true);
+    expect(result.violations.some((v) => v.code === "PHASE6_DELIVERY_EVIDENCE_INCOMPLETE")).toBe(false);
+    // A reasoned skip IS valid evidence.
+    const complete = {
+      compound: { outcome: "created" },
+      pr: { repo: "btspoony/mstar-harness", head: "feature/plan-a", target: "main" },
+      merge: { provider: "github", evidence: "PR #244 verified merged at 2c792c01" },
+    };
+    const reasoned = evaluatePostMergeClose(
+      phase6PlanSnapshot({
+        delivery: {
+          ...complete,
+          compound: { outcome: "skipped", reason: "no new knowledge \u2014 the overlapping doc was updated in place" },
+        },
+      }),
+      phase6Root([]),
+    );
+    expect(reasoned.ok).toBe(true);
   });
 
   test("terminal plan workflow with a dangling row lease → PHASE6_DANGLING_LEASE (type-generic probe, close never releases leases)", () => {
@@ -616,6 +698,18 @@ describe("evaluatePostMergeClose — plan-type delivery-kind consultation (plan-
     );
     expect(result.ok).toBe(true);
     expect(result.violations).toEqual([]);
+  });
+
+  test("failed/stopped plan workflows are never demanded delivery evidence → gate PASSES with NO evidence and NO registered kind (§5)", () => {
+    for (const status of ["failed", "stopped"]) {
+      const result = evaluatePostMergeClose(
+        // Nothing collected at all: no delivery kind, no anchors, no evidence.
+        phase6PlanSnapshot({ status, delivery_kind: undefined, branch: undefined, delivery: undefined }),
+        phase6Root([]),
+      );
+      expect(result.ok).toBe(true);
+      expect(result.violations).toEqual([]);
+    }
   });
 
   test("refused plan close stays registered/resumable: the root entry is still reported alongside the delivery refusal", () => {

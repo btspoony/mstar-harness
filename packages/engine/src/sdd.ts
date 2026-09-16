@@ -755,24 +755,15 @@ function recordedMainWorktreeBranch(planFile: string): string {
  * Outcome of the workflow plan-row lookup: the governing row from the single
  * registered active workflow holding the plan (`row`) plus the governing
  * snapshot document (its integration topology feeds L1) and the readable
- * ACTIVE snapshots (the lifecycle-owned branch set), no active workflow at
- * all (`none` — standalone branch policy applies, except the admission
- * refusal for never-mentioned plans on a register-governed root), or the
- * plan claimed by more than one registered active workflow (`ambiguous` —
- * fail-closed).
+ * ACTIVE snapshots (the lifecycle-owned branch set), no registered active
+ * workflow row at all (`none` — standalone branch policy applies, except the
+ * admission refusal for plans without an active registration on a
+ * register-governed root), or the plan claimed by more than one registered
+ * active workflow (`ambiguous` — fail-closed).
  */
 type WorkflowPlanRowMatch =
   | {
       kind: "none";
-      /**
-       * The plan has a row in at least one readable snapshot — retained
-       * terminal history (a stale-lease-bearing Done row, an interrupted
-       * registration). It is never registration evidence, but a plan with
-       * NO row in ANY snapshot is refused at admission on a
-       * register-governed root (lifecycle contract §6 S2) instead of
-       * silently continuing on branch alignment.
-       */
-      planRowInSnapshot: boolean;
     }
   | {
       kind: "row";
@@ -874,13 +865,14 @@ function readActiveWorkflowIds(controlHarnessRoot: string): Set<string> | null {
  * ambiguous — returned as `kind: "ambiguous"` so the caller fails closed
  * instead of silently picking one;
  * - a match ONLY in snapshots that are not registered active (retained
- * terminal lifecycles) is `kind: "none"` — a terminal snapshot must never
- * satisfy lease enforcement; `planRowInSnapshot` records that the plan HAS
- * retained snapshot history, distinguishing it from a plan mentioned by no
- * snapshot at all (the admission refusal input, contract §6 S2);
+ *   terminal lifecycles, an interrupted registration) is `kind: "none"` — a
+ *   terminal snapshot must never satisfy lease enforcement, and (contract
+ *   §4b/§6 S2) a retained row is NOT registration evidence either: it is
+ *   refused at admission exactly like a plan no snapshot mentions, so a
+ *   completed plan id can never be reused by riding its own history;
  * - without a v2 register the legacy behavior is unchanged: the first
- * snapshot mentioning the plan wins (the ownership set is every readable
- * snapshot — no register to distinguish active from terminal).
+ *   snapshot mentioning the plan wins (the ownership set is every readable
+ *   snapshot — no register to distinguish active from terminal).
  *
  * Unreadable/malformed snapshots are skipped (consistent with
  * `hasWorkflowSnapshot`): an unreadable snapshot cannot establish an active
@@ -891,16 +883,16 @@ function findWorkflowPlanRow(controlHarnessRoot: string, planId: string): Workfl
   try {
     workflowsDir = resolveWorkflowDir(controlHarnessRoot, { harnessDir: controlHarnessRoot });
   } catch {
-    return { kind: "none", planRowInSnapshot: false };
+    return { kind: "none" };
   }
-  if (!isDirectory(workflowsDir)) return { kind: "none", planRowInSnapshot: false };
+  if (!isDirectory(workflowsDir)) return { kind: "none" };
   let workflowIds: string[];
   try {
     workflowIds = readdirSync(workflowsDir, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name);
   } catch {
-    return { kind: "none", planRowInSnapshot: false };
+    return { kind: "none" };
   }
   const registeredActive = readActiveWorkflowIds(controlHarnessRoot);
   const scanned: { workflowId: string; doc: Record<string, unknown> }[] = [];
@@ -932,7 +924,7 @@ function findWorkflowPlanRow(controlHarnessRoot: string, planId: string): Workfl
       }
     }
   }
-  if (matches.length === 0) return { kind: "none", planRowInSnapshot: false };
+  if (matches.length === 0) return { kind: "none" };
   if (registeredActive === null) {
     return {
       kind: "row",
@@ -943,7 +935,10 @@ function findWorkflowPlanRow(controlHarnessRoot: string, planId: string): Workfl
     };
   }
   const active = matches.filter((m) => registeredActive.has(m.workflowId));
-  if (active.length === 0) return { kind: "none", planRowInSnapshot: true }; // only unregistered (terminal) snapshots mention the plan
+  // Only retained (unregistered) snapshots mention the plan: a terminal
+  // snapshot's row is never registration evidence (contract §4b/§6 S2) — the
+  // caller refuses this exactly like a plan no snapshot mentions.
+  if (active.length === 0) return { kind: "none" };
   if (active.length > 1) {
     return { kind: "ambiguous", workflowIds: active.map((m) => m.workflowId) };
   }
@@ -1001,12 +996,13 @@ function findWorkflowPlanRow(controlHarnessRoot: string, planId: string): Workfl
  * standalone branch policy applies (`assertBranchAlignment`) — an
  * InProgress row without lease is the orphan refusal. The one admission
  * exception (lifecycle contract §4b/§6 S2): on a register-governed harness
- * root (readable v2 `status.json` `workflows[]`), a plan with NO row in
- * ANY workflow snapshot is an unregistered normal-route plan — refused
- * with `sdd.context.plan-not-registered` and the register/recovery path;
- * branch alignment alone never substitutes for registration. Roots
- * without a v2 register and plans with retained snapshot rows keep the
- * standalone policy.
+ * root (readable v2 `status.json` `workflows[]`), a plan with NO active
+ * registered row is an unregistered normal-route plan — refused with
+ * `sdd.context.plan-not-registered` and the register/recovery path; branch
+ * alignment never substitutes for registration, and a plan id retained only
+ * in a terminal snapshot is refused the same way (a retained row is history,
+ * not registration evidence — §4b). Roots without a v2 register keep the
+ * standalone policy byte-for-byte.
  *
  * Throws `SddScriptError` — exit 2 when the declared context itself is
  * malformed (non-absolute path, identity/composition mismatch, missing plan
@@ -1161,12 +1157,12 @@ export function resolveSddExecutionContext(input: SddExecutionContext): SddExecu
     ]);
   }
 
- // (The sddDir escape classification ran with the composition check above;
- // from here `canonicalSddDir === canonicalComposedSddDir` — the canonical
- // form of the composition produced from the canonical control harness
- // root, so no separate escape check.)
+// (The sddDir escape classification ran with the composition check above;
+// from here `canonicalSddDir === canonicalComposedSddDir` — the canonical
+// form of the composition produced from the canonical control harness
+// root, so no separate escape check.)
 
- // Register readability gates the whole resolution (lifecycle contract §6
+// Register readability gates the whole resolution (lifecycle contract §6
  // S2, fail-closed like the S1 register and PHASE6_INVALID_ROOT refusals):
  // a PRESENT-but-unreadable/non-v2 status.json is a damaged control root —
  // the row scan cannot distinguish a live lifecycle from a retained
@@ -1259,28 +1255,23 @@ export function resolveSddExecutionContext(input: SddExecutionContext): SddExecu
  // § Orphan recovery) — fail with the reused violation, never invent a lease.
     throwGateFail(verifyPlanExecutionLease(match.row, planId).violations);
   } else {
- // Standalone (no active workflow row, or a non-InProgress row without a
- // lease): existing branch policy only — no lease mandate. Admission
- // exception (lifecycle contract §4b/§6 S2): on a register-governed root
- // (readable v2 `status.json` `workflows[]` — the readability gate above
- // already refused the damaged case), a plan with no registration
- // evidence in ANY snapshot is an unregistered normal-route plan and is
- // refused — registration is the precondition, never inferred, and branch
- // alignment alone is no silent bypass. Roots without a v2 register
- // (legacy standalone) and plans with retained snapshot rows (terminal
- // lifecycles — whose stale leases must not satisfy enforcement either
- // way) keep the standalone policy byte-for-byte.
-    if (
-      match.kind === "none" &&
-      !match.planRowInSnapshot &&
-      registerState.state === "readable"
-    ) {
+    // Standalone (no registered active workflow row, or a non-InProgress row
+    // without a lease): existing branch policy only — no lease mandate.
+    // Admission exception (lifecycle contract §4b/§6 S2): on a
+    // register-governed root (readable v2 `status.json` `workflows[]` — the
+    // readability gate above already refused the damaged case), a plan with
+    // no ACTIVE registered row is an unregistered normal-route plan and is
+    // refused — registration is the precondition, never inferred, and
+    // neither branch alignment nor a retained terminal snapshot's row is a
+    // silent bypass. Roots without a v2 register (legacy standalone) keep
+    // the standalone policy byte-for-byte.
+    if (match.kind === "none" && registerState.state === "readable") {
       throwGateFail([
         contextViolation(
           "high",
           "sdd.context.plan-not-registered",
-          `plan "${planId}" has no registration evidence in any workflow snapshot of the control harness's workflow register \u2014 ` +
-            "on the normal plan route, SDD execution requires a registered running workflow row (plan-workflow-lifecycle contract \u00a76 S2): " +
+          `plan "${planId}" has no active registered workflow row in the control harness's workflow register \u2014 ` +
+            "on the normal plan route, SDD execution requires a registered running workflow row (plan-workflow-lifecycle contract \u00a76 S2; a retained terminal snapshot's row is history, never registration evidence): " +
             "register it with `mstar workflow register --workflow <id> --plan-id <id> --plan-title <title> --plan-file <path> " +
             `--delivery-kind <${WORKFLOW_DELIVERY_KINDS.join("|")}> ...` +
             "` (`registerPlanWorkflow`), then retry \u2014 registration is create-only and preserves prior state; " +

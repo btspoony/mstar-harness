@@ -66,6 +66,7 @@ import {
   readCoordinatedArtifact,
   readMainWorktree,
   readWorkflowSnapshot,
+  recordWorkflowDelivery,
   registerPlanWorkflow,
   replaceCoordinatedArtifact,
   resolveHarnessDir,
@@ -1201,13 +1202,17 @@ statusCommand
   .command("workflow-close")
   .description(
     "Close one workflow lifecycle after its delivery tail completes — type-generic: iterations and standalone " +
-      "`type: plan` workflows close through this same verb (engine-backed: closeWorkflow writes the " +
-      "terminal snapshot under the snapshot lock, then unregisterWorkflow removes the root status.json entry " +
-      "idempotently; dangling leases and unfinished plan rows refuse before any write; a fully closed retry " +
-      "rewrites nothing; a failed unregister reports a partial close and a re-run finishes it. " +
-      "Standalone plan workflows: the registered delivery kind is consulted by the phase-6 gate — verify the " +
-      "close state with 'mstar iteration gate --phase 6 --workflow <id>' (development requires the registered " +
-      "source/target branches; verification/report-only the recorded completion policy). " +
+      "`type: plan` workflows close through this same verb (engine-backed: closeWorkflow consults the registered " +
+      "delivery evidence, then writes the terminal snapshot under the snapshot lock, then unregisterWorkflow " +
+      "removes the root status.json entry idempotently; dangling leases, unfinished plan rows and incomplete " +
+      "delivery evidence refuse before any write; a fully closed retry rewrites nothing; a failed unregister " +
+      "reports a partial close and a re-run finishes it. " +
+      "Standalone plan workflows: the close consults the delivery evidence BEFORE writing — a `development` " +
+      "workflow needs its registered source/target branches plus the recorded compound disposition, PR identity " +
+      "and verified-merge evidence (`mstar workflow evidence --workflow <id> --file <payload.json>`, §4c/§4d/§4f); " +
+      "`verification/report-only` needs its recorded completion policy plus its fulfilment record. The same " +
+      "consultation backs the read-only check 'mstar iteration gate --phase 6 --workflow <id>', so gate and " +
+      "close never disagree. " +
       "Exit 0 success, 1 gate/IO refusal, 2 usage)",
   )
   .option("--workflow <id>", "Workflow id to close ({WORKFLOW_DIR}/<id>/snapshot.json)")
@@ -1303,7 +1308,8 @@ statusCommand
 const workflowCommand = program
   .command("workflow")
   .description(
-    "Workflow lifecycle verbs (engine-backed): registration of standalone plan workflows. " +
+    "Workflow lifecycle verbs (engine-backed): registration of standalone plan workflows and the recording of " +
+      "their delivery evidence. " +
       "Terminal close stays on `status workflow-close`",
   );
 
@@ -1404,6 +1410,96 @@ workflowCommand
       }
     },
   );
+
+/**
+ * `--file <payload.json>` for the delivery-evidence verb: the payload is a
+ * PARTIAL `delivery` block (`{compound:{…}}`, `{pr:{…}}`, `{merge:{…}}` or
+ * `{completion:{…}}`), merged into the stored block by the engine. Absolute,
+ * present and parseable — the shape itself is the engine's refusal, so a
+ * malformed member never reaches the snapshot as a silent drop.
+ */
+function readJsonPayloadFile(raw: string | undefined, flag: string, verb: string): Record<string, unknown> {
+  if (raw === undefined || raw.trim() === "") {
+    throw new SddScriptError(`${flag} is required (absolute path of the delivery-evidence JSON payload)`, 2);
+  }
+  if (!path.isAbsolute(raw)) {
+    throw new SddScriptError(`${flag} must be an absolute path \u2014 got ${JSON.stringify(raw)}`, 2);
+  }
+  if (!fs.existsSync(raw)) {
+    throw new SddScriptError(`${flag} not found: ${raw}`, 2);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fs.readFileSync(raw, "utf8"));
+  } catch (error) {
+    throw new Error(`${verb}: ${flag} payload is not valid JSON (${(error as Error).message})`);
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`${verb}: ${flag} payload must be a JSON object (the delivery-evidence members to record)`);
+  }
+  return parsed as Record<string, unknown>;
+}
+
+workflowCommand
+  .command("evidence")
+  .description(
+    "Record the delivery-kind evidence a standalone `type: plan` workflow is closed against " +
+      "(plan-workflow-lifecycle-contract \u00a73/\u00a74c/\u00a74d/\u00a74f; engine-backed). The payload JSON is merged " +
+      "into the snapshot's `delivery` block under the snapshot lock, so evidence can be recorded stage by stage: " +
+      "`development` records the compound disposition (\u00a74c, before the PR head is finalized), the PR identity " +
+      "(\u00a74d, at submission) and the PM's verified-merge record (\u00a74f \u2014 the engine never verifies the " +
+      "remote merge itself); `verification/report-only` records the fulfilment of its registered completion " +
+      "policy (\u00a71). Authorized exactly like the close: a coordinated workflow's snapshot is written only for " +
+      "its own bound coordinator envelope (--session). Idempotent \u2014 re-recording identical evidence rewrites " +
+      "nothing. Exit 0 success/no-op, 1 gate/IO refusal, 2 usage",
+  )
+  .option("--workflow <id>", "Workflow id ({WORKFLOW_DIR}/<id>/snapshot.json)")
+  .option("--file <path>", "Absolute path of the delivery-evidence JSON payload")
+  .option("--session <path>", "Absolute coordinator session JSON envelope path (required to write a coordinated workflow)")
+  .option("--at <timestamp>", "Recording timestamp (YYYY-MM-DD or RFC3339; default: now)")
+  .option("--harness <path>", "Harness dir override (default: resolved control {HARNESS_DIR})")
+  .action(async (options: { workflow?: string; file?: string; session?: string; at?: string; harness?: string }) => {
+    try {
+      const workflowId = options.workflow;
+      if (workflowId === undefined || workflowId.trim() === "") {
+        throw new SddScriptError(
+          "usage: workflow evidence --workflow <id> --file <payload.json> [--session <path>] [--at <ts>] [--harness <path>]",
+          2,
+        );
+      }
+      // Flag contract first (usage, exit 2) — a malformed invocation never
+      // reads the harness or the snapshot.
+      const evidence = readJsonPayloadFile(options.file, "--file", "workflow evidence");
+      const sessionPath = resolveSessionFlag(options.session);
+      // Shared workflow-id guard, identical to every other `--workflow <id>`
+      // verb (reject ""/./.. and separators) — the engine's identity check and
+      // store key guard would refuse later regardless.
+      assertWorkflowId(workflowId);
+      const harnessDir = resolveProcessHarnessDir(options.harness);
+      if (!harnessDir) {
+        throw new Error(`harness dir not found from ${process.cwd()} \u2014 pass --harness <path>`);
+      }
+      // Store-root pinning (see `status workflow-close`): the evidence write
+      // routes through the active ArtifactStore with fail-loud path
+      // agreement, so the control harness root resolved above MUST be pinned.
+      setArtifactStore(createFsStore(harnessDir));
+      const snapshotDir = path.join(resolveWorkflowDir(harnessDir, { harnessDir }), workflowId);
+      const result = await recordWorkflowDelivery(workflowId, snapshotDir, {
+        evidence,
+        ...(sessionPath !== undefined ? { sessionPath } : {}),
+        ...(options.at !== undefined ? { at: options.at } : {}),
+      });
+      console.log(
+        pc.green(
+          result.written
+            ? `workflow evidence: OK \u2014 ${workflowId} delivery evidence recorded (${Object.keys(evidence).join(", ")})`
+            : `workflow evidence: OK \u2014 ${workflowId} already carries this delivery evidence (nothing rewritten)`,
+        ),
+      );
+    } catch (error) {
+      failScript(error, "workflow evidence");
+    }
+  });
 
 const migrateCommand = program
   .command("migrate")

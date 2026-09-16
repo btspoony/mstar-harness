@@ -45,7 +45,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { GateResult, Severity, ValidationResult } from "./core.js";
 import { validateStatusV2, type StatusV2Doc } from "./status.js";
-import { LEGACY_WORKTREE_PATH_CODE, WORKFLOW_DELIVERY_KINDS, isTerminalSnapshot, validateWorkflowSnapshot, type WorkflowSnapshot } from "./workflow.js";
+import { LEGACY_WORKTREE_PATH_CODE, consultDeliveryEvidence, isTerminalSnapshot, validateWorkflowSnapshot, type WorkflowSnapshot } from "./workflow.js";
 
 const COMPASS_STATUSES = ["active", "locked", "completed"] as const;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -540,26 +540,34 @@ function hasLeftoverLease(snapshotDoc: SnapshotDoc): boolean {
  * `PHASE6_PLAN_ROW_NOT_DONE`.
  *
  * Plan-type delivery-kind consultation (seam S3, contract §6 S3 + §4g): a
- * terminal `type: plan` snapshot also consults the delivery-kind evidence
- * recorded at registration — plan rows are the owned plan (no compass
- * input) and remote merge verification stays excluded by contract (§4f is
- * the PM's separate check). The kind is never inferred (§1): a plan
- * workflow without a registered `delivery_kind` has no close-verifiable
- * delivery evidence — for a legacy terminal snapshot this is outside the
- * gate's automated recovery, because the create-only register cannot
- * backfill terminal bytes, so the remediation names the owner
+ * terminal `type: plan` snapshot also consults the delivery evidence recorded
+ * over the lifecycle — plan rows are the owned plan (no compass input) and
+ * remote merge verification stays excluded by contract (§4f is the PM's
+ * separate check). The consultation is the shared pure function
+ * `consultDeliveryEvidence` (workflow.ts), which `closeWorkflow` runs before
+ * writing a terminal snapshot — one implementation, so this read-only gate
+ * and the write path can never disagree. It runs for a `completed` close ONLY:
+ * `failed`/`stopped` closes are never demanded delivery evidence (§5 — failure
+ * closes through its explicit status with a recorded reason and is never
+ * treated as delivered), exactly as `closeWorkflow` preserves an
+ * already-terminal snapshot unchanged without consulting; the type-generic
+ * dangling-lease probe still covers every terminal status. The kind is never
+ * inferred (§1): a plan workflow without a registered `delivery_kind` has no
+ * close-verifiable delivery evidence — for a legacy terminal snapshot this is
+ * outside the gate's automated recovery, because the create-only register
+ * cannot backfill terminal bytes, so the remediation names the owner
  * snapshot-amendment path (the audit-promotion grandfather population is
- * disclosed there) instead of the register verb — and a registered kind
- * with incomplete registration
- * evidence (`development` without its declared source/target branches,
- * `verification/report-only` without the recorded completion policy)
- * refuses the same way — missing fields are incomplete registration, not
- * an exempt workflow. A `completed` close additionally requires every
- * owned plan row `Done` (the post-write mirror of `closeWorkflow`'s
- * all-rows-Done guard, §3 terminal stage); `failed`/`stopped` lifecycles
- * keep their statuses and row states (§5 — never rewritten as
- * successfully completed). Every refusal is read-only: the workflow stays
- * registered/resumable.
+ * disclosed there) instead of the register verb — and a registered kind with
+ * incomplete delivery evidence (`development` without its registered
+ * source/target branches, its compound disposition, its PR identity or the
+ * PM's verified-merge record; `verification/report-only` without the recorded
+ * completion policy or its fulfilment record) refuses the same way — missing
+ * fields are incomplete registration, not an exempt workflow. A `completed`
+ * close additionally requires every owned plan row `Done` (the post-write
+ * mirror of `closeWorkflow`'s all-rows-Done guard, §3 terminal stage);
+ * `failed`/`stopped` lifecycles keep their statuses and row states (§5 —
+ * never rewritten as successfully completed). Every refusal is read-only: the
+ * workflow stays registered/resumable.
  */
 export function evaluatePostMergeClose(snapshotDoc: SnapshotDoc, rootDoc: unknown): GateResult {
   const violations: ValidationResult[] = [];
@@ -608,56 +616,23 @@ export function evaluatePostMergeClose(snapshotDoc: SnapshotDoc, rootDoc: unknow
     );
   }
   const workflowId = isPlainObject(snapshotDoc) && typeof snapshotDoc.id === "string" ? snapshotDoc.id : null;
-  // Plan-type delivery-kind consultation (seam S3 — see the doc comment).
-  // Runs on shape-valid terminal documents only: an invalid document is
-  // already PHASE6_INVALID_SNAPSHOT, and the validator owns enum validity
-  // (an out-of-enum delivery_kind never reaches this block as shape-ok).
-  if (shapeOk && terminal && isPlainObject(snapshotDoc) && snapshotDoc.type === "plan") {
-    const kind = snapshotDoc.delivery_kind;
-    if (typeof kind !== "string" || !(WORKFLOW_DELIVERY_KINDS as readonly string[]).includes(kind)) {
-      violations.push(
-        violation(
-          "high",
-          "PHASE6_DELIVERY_KIND_UNREGISTERED",
-          `Workflow '${String(workflowId)}' is type 'plan' but carries no registered delivery_kind \u2014 a plan workflow declares its delivery kind at registration (plan-workflow-lifecycle-contract \u00a71), so this terminal snapshot's delivery evidence cannot be consulted`,
-          // Truthful recovery (the register verb is a dead end here):
-          // `registerPlanWorkflow` is create-only and its recovery identity
-          // (status + delivery_kind) can never match a terminal snapshot, so
-          // the remediation names the owner snapshot amendment instead.
-          "Delivery evidence is declared at registration, before execution \u2014 'mstar workflow register' cannot backfill a terminal snapshot (create-only; snapshot bytes are preserved, so re-registration refuses), leaving a legacy terminal snapshot without a delivery_kind outside this gate's automated recovery: repair requires an explicit owner snapshot amendment recording the declared kind (the known affected population \u2014 audit-promotion's grandfathered type: plan snapshots \u2014 is disclosed as a residual by plan QC), then re-run 'mstar iteration gate --phase 6 --workflow <id>'",
-        ),
-      );
-    } else if (kind === "development") {
-      const branch = isPlainObject(snapshotDoc.branch) ? snapshotDoc.branch : undefined;
-      const base = branch?.base;
-      const target = branch?.target;
-      if (typeof base !== "string" || base.trim() === "" || typeof target !== "string" || target.trim() === "") {
-        violations.push(
-          violation(
-            "high",
-            "PHASE6_DELIVERY_EVIDENCE_INCOMPLETE",
-            `Workflow '${String(workflowId)}' declares delivery_kind 'development' with incomplete registration evidence (branch.base/branch.target missing) \u2014 a development workflow with missing branch fields is incomplete registration, not an exempt workflow (plan-workflow-lifecycle-contract \u00a71)`,
-            "Complete the registration evidence (source/target branches) via the register path, then re-run 'mstar iteration gate --phase 6 --workflow <id>'",
-          ),
-        );
-      }
-    } else {
-      const policy = snapshotDoc.completion_policy;
-      if (typeof policy !== "string" || policy.trim() === "") {
-        violations.push(
-          violation(
-            "high",
-            "PHASE6_DELIVERY_EVIDENCE_INCOMPLETE",
-            `Workflow '${String(workflowId)}' declares delivery_kind 'verification/report-only' without the recorded completion_policy \u2014 the completion policy recorded at registration names the evidence that completes the workflow (plan-workflow-lifecycle-contract \u00a71)`,
-            "Record the named completion-policy evidence via the register path, then re-run 'mstar iteration gate --phase 6 --workflow <id>'",
-          ),
-        );
-      }
-    }
-    // Completed close only: every owned plan row Done (§3 terminal stage).
-    // failed/stopped lifecycles keep their row states (§5) and are never
-    // demanded Done here — that would rewrite a failure as a delivery.
-    if (snapshotDoc.status === "completed" && Array.isArray(snapshotDoc.plans)) {
+  // Plan-type delivery evidence, COMPLETED closes only (seam S3 — see the doc
+  // comment). Runs on shape-valid terminal documents: an invalid document is
+  // already PHASE6_INVALID_SNAPSHOT, and the validator owns enum validity (an
+  // out-of-enum delivery_kind never reaches this block as shape-ok). The
+  // consultation itself is `consultDeliveryEvidence` — the SAME pure function
+  // `closeWorkflow` runs before its terminal write, so this gate's verdict and
+  // the close refusal cannot drift apart.
+  //
+  // `failed` / `stopped` closes are NEVER demanded delivery evidence (§5: a
+  // failure closes through its explicit status with a recorded reason and is
+  // never treated as delivered) — exactly as `closeWorkflow` preserves an
+  // already-terminal snapshot unchanged without consulting. The type-generic
+  // dangling-lease probe above keeps running for every terminal status.
+  if (shapeOk && terminal && isPlainObject(snapshotDoc) && snapshotDoc.type === "plan" && snapshotDoc.status === "completed") {
+    violations.push(...consultDeliveryEvidence(snapshotDoc as unknown as WorkflowSnapshot));
+    // Every owned plan row Done (§3 terminal stage).
+    if (Array.isArray(snapshotDoc.plans)) {
       for (const row of snapshotDoc.plans) {
         if (isPlainObject(row) && row.status !== PLAN_STATUS_DONE) {
           violations.push(
