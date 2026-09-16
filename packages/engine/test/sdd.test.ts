@@ -1390,6 +1390,42 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
     }
   });
 
+  test("a PRESENT-but-unreadable register refuses admission closed (a damaged status.json is never 'no register', §6 S2)", () => {
+    const root = tmpRoot("sdd-ctx-register-corrupt-");
+    try {
+      const f = executionFixture(root);
+ // status.json exists but is malformed — exactly the damaged-register state
+ // where the admission gate used to silently downgrade to legacy
+ // branch-alignment-only, while S1 and PHASE6_INVALID_ROOT refuse closed.
+      writeFileSync(join(f.harnessDir, "status.json"), "{ corrupted", "utf8");
+      const err = errOf(() => resolveSddExecutionContext(contextOf(f)));
+      expect(err.exitCode).toBe(1);
+      expect(err.message).toContain("sdd.context.register-unreadable");
+ // The refusal names the repair path for the damaged root, not the
+ // registration verb.
+      expect(err.message).toContain("mstar migrate");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a present-but-non-v2 register refuses admission closed with the same code (a v1 root must be migrated, not ignored)", () => {
+    const root = tmpRoot("sdd-ctx-register-v1-");
+    try {
+      const f = executionFixture(root);
+      writeFileSync(
+        join(f.harnessDir, "status.json"),
+        JSON.stringify({ version: 1, updated_at: "2026-09-07", plans: [] }),
+        "utf8",
+      );
+      const err = errOf(() => resolveSddExecutionContext(contextOf(f)));
+      expect(err.exitCode).toBe(1);
+      expect(err.message).toContain("sdd.context.register-unreadable");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("registration clears the refusal: register then retry proceeds, prior state preserved (S2 recovery path)", async () => {
     const root = tmpRoot("sdd-ctx-register-recovery-");
     try {
