@@ -942,16 +942,41 @@ export async function applyMigratePlan(plan: MigratePlan): Promise<MigrateResult
  * comparison is raw bytes — these files are preserved verbatim, never
  * re-serialized through `stableJson`.
  */
+/**
+ * Wrap a raw fs failure on a migration target in the coordination.*
+ * vocabulary — every fs error leaving {@link writeRawMigrateTarget} carries
+ * the envelope; thrown before the root v2 replacement, so refuse-before-
+ * commit semantics are unchanged.
+ */
+function rawTargetStoreError(filePath: string, error: unknown): CoordinationError {
+  return new CoordinationError(
+    "coordination.store",
+    `cannot write migration target ${filePath}: ${error instanceof Error ? error.message : String(error)}`,
+    { path: filePath },
+  );
+}
+
 function writeRawMigrateTarget(filePath: string, expected: Buffer): void {
-  mkdirSync(dirname(filePath), { recursive: true });
+  try {
+    mkdirSync(dirname(filePath), { recursive: true });
+  } catch (error) {
+    throw rawTargetStoreError(filePath, error);
+  }
   try {
     writeFileSync(filePath, expected, { flag: "wx" });
     return;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw rawTargetStoreError(filePath, error);
   }
  // Exclusive-create collision: re-read and compare raw bytes — never overwrite.
-  const existing = readFileSync(filePath);
+  let existing: Buffer;
+  try {
+    existing = readFileSync(filePath);
+  } catch (error) {
+    // EEXIST but the re-read failed (the "existing target" is e.g. a
+    // directory, where O_EXCL reports EEXIST before EISDIR can).
+    throw rawTargetStoreError(filePath, error);
+  }
   if (Buffer.compare(existing, expected) !== 0) {
     throw new CoordinationError(
       "coordination.version-conflict",

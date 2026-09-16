@@ -1463,4 +1463,29 @@ describe("raw-byte target-ownership guards (archive / notes / roadmap)", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  test("a non-EEXIST raw-target failure (EISDIR) surfaces in the coordination.* envelope, root still untouched", async () => {
+    const root = fixtureTree();
+    try {
+      const plan = migrateHarnessTree(root);
+      const v1Bytes = readFileSync(join(root, "status.json"));
+      // The archive target path exists as a DIRECTORY, so the exclusive
+      // create fails with EISDIR — not the byte-compare path, and not a
+      // vocabulary error the earlier guards produce.
+      const archivePath = join(root, ARCHIVED_STATUS_V1_FILE);
+      mkdirSync(archivePath, { recursive: true });
+
+      const failure = await applyMigratePlan(plan).then(() => null, (error: unknown) => error);
+      expect(failure).toBeInstanceOf(CoordinationError);
+      expect((failure as CoordinationError).code).toBe("coordination.store");
+      expect((failure as CoordinationError).message).toContain(archivePath);
+
+      // Refuse-before-commit is preserved: the raw error never escaped, and
+      // the root v1 replacement never ran (raw bytes unchanged).
+      expect(Buffer.compare(readFileSync(join(root, "status.json")), v1Bytes)).toBe(0);
+      expect(existsSync(join(root, plan.snapshots[0]!.file))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
