@@ -69,6 +69,9 @@ ZCode C5/C5b SSOT is **this file** — do **not** load `_shared/host-role-bindin
 
 Paste-only Assignment **without** an invoke call is **not** dispatch. Anti-recursion NEVER: leaf executors are already `Execute as` — no recursive invoke of the same role; Assignment wins (`Delegation: forbidden` unless stated). Independent ready implementers may run concurrently after isolation; scheduling → **`parallel-dispatch.md`** § SDD implement.
 
+**Role-binding field:** **`subagent_type`** — the bare Morning Star role id per C5 (`general-purpose` / `Explore` fallbacks); the thin role shell still needs the C5b prompt binding above.
+**Engine scope (#156):** no engine dispatch gate observes caller identity here (the binding field carries the **invoke target**, not the dispatching seat), so this red line stays **prompt-level** (`mstar-dispatch-gates` § 承接方反递归红线). Caller-side hard enforcement exists only where the host declares a dispatcher binding (`dsh.md`).
+
 ZCode invoke shape (same turn):
 
 ```text

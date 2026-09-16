@@ -321,6 +321,12 @@ assignees = N `subagent` calls = N independent delegations** (dispatch-gate
 dispatched Assignment). Paste-only Assignment without an invoke is **not**
 dispatch.
 
+**Role-binding field:** none — binding is **prompt-only** on dsh (the tool has
+no role field; the header region of the Assignment body is what the gate and
+the role-persona channel read, so `Execute as` / `Act as` + skill load must be
+in the prompt). A dispatch that drops those lines has no field to fall back on
+— it is a bare delegation.
+
 **Execution: concurrent dispatch REQUIRES background mode.** The `subagent`
 tool does **not** declare `isConcurrencySafe` → fail-closed `exclusive`
 classification, so same-message invokes are issued one-at-a-time (the next
@@ -489,6 +495,15 @@ The dsh web client resolves slash commands against a client-side lexicon driven 
   enforcement with no binding, the plugin logs the absence AND every
   Assignment-shaped dispatch fails closed (`dispatch.anti-recursion.
   empty-binding` → deny) until the binding is set.
+- **Caller-scoped engine enforcement (the dsh-only half of issue #156).** That
+  binding is what makes the precheck real here: with a declared dispatcher
+  identity the engine compares the **dispatching seat's own role** against the
+  Assignment `Execute as` and hard-enforces it (`callerRequired` — an unset
+  binding fails closed, never skipped). Hosts whose reference declares **no**
+  dispatcher binding expose only the **spawn target** in their role-binding
+  field — and target == `Execute as` is the compliant C5 pattern — so there the
+  leg is skipped and the red line stays **prompt-level**
+  (`mstar-dispatch-gates` § 承接方反递归红线).
 
 ## Files, shell, and approvals
 

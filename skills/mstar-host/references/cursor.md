@@ -67,6 +67,9 @@ When Assignment has **`SDD implementer session: sticky`** (`mstar-sdd/references
 
 Cursor PM dispatch = **`Task`** with `subagent_type` matching the Assignment `Execute as` role. Flat JSON field shape → **Task invoke schema (Cursor)** below.
 
+**Role-binding field:** **`subagent_type`** (flat sibling of `prompt`) — must equal the Assignment `Execute as`.
+**Engine scope (#156):** Cursor exposes no dispatcher identity, so the caller-scoped `antiRecursionPrecheck` leg is **skipped** on this host — the binding field carries the **spawn target**, and target == `Execute as` is the compliant C5 pattern — and the red line stays **prompt-level** (`mstar-dispatch-gates` § 承接方反递归红线). Caller-side hard enforcement exists only where the host declares a dispatcher binding (`dsh.md`).
+
 - **1 Assignment ⇒ 1 Task**; parallel batches ⇒ **N Tasks in one message** → **`parallel-dispatch.md`** (`mstar-dispatch-gates`).
 - Paste-only: Assignment Markdown **does not** start work; PM thread **must not** implement, review, or edit specialist deliverables by loading another role reference in the same session (`Acting as role: …` is **not** dispatch) → **`parallel-dispatch.md`** § Paste-only failure.
 - No callable `Task` / subagent for required work → **`Blocked`** — report to user; do not substitute in-thread execution.

@@ -21,7 +21,7 @@ description: Morning Star 派发与委派门禁 —— 仅 PM 可增派 subagent
 
 **共享红线**（doc-level 并行拆分 ≠ N 个 subagent；Handoff / 路由措辞 / 角色提及 ≠ invoke；工具可用 ≠ 授权；仅 PM 可分派；非 `Delegation: allowed` 不得调用同角色 / 兄弟角色）以 **`mstar-roles/references/_shared/leaf-executor-core.md`**「Shared anti-recursion NEVER」+「Non-Recursive Dispatch Rule (shared shape)」为唯一权威清单（standard preset 下已随角色 ref 在上下文中；explicit `none` 下该 leaf 边界仍可达）。本节保留 dispatch 专属条目：
 
-- **NEVER** 在本会话内调用 Task / subagent，且其 `subagent_type` **等于**你当前的 **`Execute as`** 角色 id（同角色递归）。
+- **NEVER** 在本会话内调用 Task / subagent，且其角色绑定字段**等于**你当前的 **`Execute as`** 角色 id（同角色递归）。
 - **DO NOT** 在 Assignment 缺少 `Execute as` / `Delegation` / `Who runs this turn` 时自行「补齐」为 PM；缺字段时按 **leaf executor** 解释：亲自完成或 **`Blocked`**。
 - **DO NOT** 用「Assignment 太长 / 像编排稿」当作分派依据；先交付本会话任务再回报，分派由 PM 下一轮决定。
 
@@ -29,12 +29,12 @@ description: Morning Star 派发与委派门禁 —— 仅 PM 可增派 subagent
 
 1. 我此刻的 **`Execute as`** 是什么？
 2. Assignment 是否写了 **`Delegation: allowed (...)`**？没有 → **禁止**任何 Task / subagent。
-3. 下一动作是不是「Task / subagent_type=…」？是 → 停手，改为 Read / Write / Shell / Edit，或 **`Blocked`**。
+3. 下一动作是不是「发起一次带角色绑定字段的 invoke」？是 → 停手，改为 Read / Write / Shell / Edit，或 **`Blocked`**。
 4. 命中任一 NEVER → 写 `## Blocked — recursive dispatch refused (<which NEVER>)` 回报 PM，**不**继续 invoke。
 
 **Assignment 顶部反模式块**：每个 PM Assignment 开头均有 **`**You are a leaf executor. You MUST NOT:**`** 块（含 IDENTITY + CAPABILITY BOUNDARY + prohibitions），PM 按此 Assignment 的角色+上下文定制反模式清单。leaf executor 收到 Assignment 后须 **首先** 阅读该块；命中任一条 → **停止**（亲自完成或 `Blocked`）。详见 **`mstar-roles/references/project-manager/dispatch-and-assignment.md`**。
 
-> **Engine 执行范围（caller-scoped，#156）**：engine `antiRecursionPrecheck` 比较的是**派发方自身角色**（caller）与新 Assignment 的 `Execute as`（target）。只有 **dsh**（Config `dispatchBinding`）能观察派发方身份并在 engine 层硬执行（含 `callerRequired` 空绑定 fail-closed）；omp / OpenCode / Cursor 的角色绑定字段是**派发目标**——目标 == `Execute as` 正是 C5 合规派发模式——这些宿主上红线保持 prompt 级约束（本节），engine 不做判定。
+> **Engine 执行范围（caller-scoped，#156）**：engine `antiRecursionPrecheck` 比较的是**派发方自身角色**（caller）与新 Assignment 的 `Execute as`（target）。能否在 engine 层做这个判定取决于宿主是否向 engine 提供派发方身份（dispatcher binding）：**提供方**在 hard enforcement 下真正硬执行（含 caller 空绑定 fail-closed）；**不提供方**的角色绑定字段携带的是**派发目标**——目标 == `Execute as` 正是 C5 合规派发模式——这些宿主上红线保持 prompt 级约束（本节），engine 不做判定。当前宿主属于哪一类、字段名与 fail-closed 细节 → 当前宿主的 **`mstar-host` reference**（角色绑定字段 / engine 判定范围两行）。
 
 ## Plan 作用域与 credential 不下发（preflight 强制）
 
@@ -42,14 +42,14 @@ description: Morning Star 派发与委派门禁 —— 仅 PM 可增派 subagent
 
 - **子 Assignment 继承父 plan 作用域**：`plan_id` + 绝对 `Plan Path`（L1 另含 `SDD dir` / `Control harness root`）逐字下发。child **不得**自选或新建 plan、写 workflow snapshot / root register / 共享索引、释放 `execution_lease` / `integration_merge_lease`。缺失、相对路径或暗示「child 自行选 plan」= **派发未完成**（`mstar-roles/references/project-manager/dispatch-and-assignment.md` § Assignment Template `Plan scope`）。
 - **credential 不下发 leaf**：session JSON 路径、`mstar plan --session` 写凭据、`--expect <revision>` 等**只由派发方（PM/coordinator）持有**。leaf 拿到 session 路径或写凭据即视为越权 → 停止并回报（`mstar-iteration/references/plan-scoped-pm.md` §8）。
-- **`project-manager` 不是派发目标**：PM 是 primary-session 角色，无 subagent shell（规则家 → `mstar-roles/references/project-manager.md` § Plan-scoped authority；宿主派发面 → `mstar-host/references/omp.md` § C5）；scoped primary drive（`/iteration-drive --assignment | --workflow --plan | --resume`）在**主会话**启动 PM，不是 subagent。任何 `Execute as: project-manager` 的 invoke = 派发缺陷。
+- **`project-manager` 不是派发目标**：PM 是 primary-session 角色，无 subagent shell（规则家 → `mstar-roles/references/project-manager.md` § Plan-scoped authority；宿主派发面 → 当前宿主的 **`mstar-host` reference**（角色绑定 / 派发小节））；scoped primary drive（`/iteration-drive --assignment | --workflow --plan | --resume`）在**主会话**启动 PM，不是 subagent。任何 `Execute as: project-manager` 的 invoke = 派发缺陷。
 
 ## 调度防串扰（强制；leaf executor 已在上方读过反递归红线，此处为完整规则供 PM/对照用）
 
 - 只有 **`project-manager`** 可以决定增加/并行 subagent；承接方**默认不得二次分派**。
-- **`Execute as: <role-id>`** = 承接方**亲自**完成本单，**不是**再起同名 subagent 或嵌套同 `subagent_type` 的 Task（禁止**递归误派**）。
+- **`Execute as: <role-id>`** = 承接方**亲自**完成本单，**不是**再起同名 subagent 或嵌套同角色绑定字段的 Task（禁止**递归误派**）。
 - 额外代理仅以 **`Delegation: allowed (...)`** 为准；未显式写时视为 **`Delegation: forbidden`**。
-- Assignment 正文中的 role 引用：默认 **plain id**（`product-manager`）；OpenCode 见 **`mstar-host/references/opencode.md`** § Role-mention hygiene。
+- Assignment 正文中的 role 引用：默认 **plain id**（`product-manager`）。个别宿主会把堆叠的角色提及扩写成系统行——该宿主的 mention hygiene 规则见其 **`mstar-host` reference**。
 - 承接方若判断必须增加 subagent，应先回报 **`Blocked`** 请 PM 重分派。
 - Per-task informal review, when PM explicitly allows it, must not use `qc-specialist*`; use `code-reviewer` (generic fallback only when the role agent is absent on the host) or PM-marked informal `qa-engineer`. Formal QC remains `mstar-review-qc`.
 
@@ -64,7 +64,7 @@ description: Morning Star 派发与委派门禁 —— 仅 PM 可增派 subagent
 - **QC 单席（例外）**：`Execution mode: inline`（hotfix 等），或 Assignment 显式 `QC mode: single` / `QC mode: single — override: <reason>` → `qc-specialist` ×1，`N=1`，写 `{SDD_DIR}/review/qc.md`。
 - **QC targeted re-review**：Assignment 含 **`QC re-review: targeted — reviewers: …`** 时，**N** = 所列席位数（1–3），同条消息发满 **N**。
 - **先自检再发送**：发送前核对「Assignment 条数 = 本条消息中的实际 **派发** 调用条数」。
-- **先自检字段再发送（与 count 同级门禁）**：核对**每条** invoke 都携带与 **`Execute as`** 匹配的角色绑定字段——omp **`agent`** / Cursor **`subagent_type`** / OpenCode **`subagent`** / Kimi·ZCode **`subagent_type`**；宿主列以 **`mstar-host`** §Detect active host 的 tool-shape 检测为准（禁以 config 路径/仓库内容判定）。**漏写或取默认通用值**（omp 漏 `agent` ⇒ 自动回退 generic `task`，无报错）= **派发未完成**，与 paste-only（零 invoke）**同等级**：当场补齐重发，不得进入下一 gate。**N=1 顺序链（Review & Edit）不豁免**——count 门在 N=1 恒过，**字段门是唯一保护**。
+- **先自检字段再发送（与 count 同级门禁）**：核对**每条** invoke 都携带与 **`Execute as`** 匹配的角色绑定字段——**字段名以当前宿主的 `mstar-host` reference 为准**（共享文本不假定任何宿主的字段名）；宿主判定以 **`mstar-host`** §Detect active host 的 tool-shape 检测为准（禁以 config 路径/仓库内容判定）。**漏写或取默认通用值**（部分宿主会**静默回退 generic worker**、无报错）= **派发未完成**，与 paste-only（零 invoke）**同等级**：当场补齐重发，不得进入下一 gate。**N=1 顺序链（Review & Edit）不豁免**——count 门在 N=1 恒过，**字段门是唯一保护**。
 - **前置步骤与派发回合分离（防串行 rollout）**：为派发准备的 **`bash` / `read` / `glob` / `grep`**（如 `merge-base`、`Review range`、`git rev-parse`）**不计入** `N` 次派发；可在上一条仅含准备的消息完成。准备完成后，**下一条派发消息**须**一次性**含 **`N` 次** Task / subagent invoke。**禁止**先发 `1` 次、等返回再补发其余 `N-1` 次。
 - **未齐不发（emit zero until batch-ready）**：宿主支持批调用且需并发 `N≥2` 而当前 payload 只齐 `1` 条时，本条应发 **`0` 条派发 invoke`**（可继续 read/bash 补齐），**禁止**「先发一个顶一下」；`N` 份 payload 就绪后**单次消息发满 `N`**。见 **`mstar-host`** → `references/parallel-dispatch.md`（具备 invoke / Task / subagent 工具的宿主共用）。
 
@@ -128,7 +128,7 @@ When **`Execution mode: sdd`** (`mstar-sdd`):
 - Review-and-edit 链未完成即 commit integration 分支；PM 代做专业角色编辑而不 invoke。
 - Phase 1 review-and-edit 链三角色并行派发，或未等上一角色返回即派发下一角色。
 - Assignment 已写、invoke 为零（paste-only）却进入下一 gate。
-- Task/subagent item 漏写角色绑定字段（omp 漏 `agent` / Cursor 漏 `subagent_type` / OpenCode 漏 `subagent`）⇒ **静默回退 generic worker**，却因 count=N 通过而误判「派发完成」；属 paste-only 同级的 **dispatch-incomplete**。N=1 顺序 Review-&-Edit 链最易在此漏字段。
+- Task/subagent item 漏写角色绑定字段（字段名与静默回退行为以当前宿主的 `mstar-host` reference 为准）⇒ **静默回退 generic worker**，却因 count=N 通过而误判「派发完成」；属 paste-only 同级的 **dispatch-incomplete**。N=1 顺序 Review-&-Edit 链最易在此漏字段。
 
 ## Workflow
 
