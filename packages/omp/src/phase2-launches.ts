@@ -39,8 +39,11 @@
  * active engine plan-primary bindings, so a plan that is both pending and bound
  * counts once and two asynchronous starts cannot both take the last slot. A
  * durable handoff (`submitted` / `accepted` / `integrating` / `merged` /
- * `completed`) proves the child reached its scoped stop and releases the plan;
- * `returned` reactivates it. Lowering the cap pauses further side-effecting
+ * `completed`) releases a plan **only for the identity it actually belongs to**
+ * — the row's own bound session, or an intent whose recorded plan, prepared
+ * Assignment pin, launching coordinator, handing-off session and assigned
+ * checkout all match. `returned` reactivates it, and a stale or foreign intent
+ * is never silently reclaimed. Lowering the cap pauses further side-effecting
  * transitions without editing, revoking or killing anything that exists.
  *
  * `uncertain` is terminal and stays occupied: a malformed response, a timeout
@@ -416,43 +419,81 @@ function rowCoordinationOf(row: PlanRow): Record<string, unknown> | null {
   return coordination as Record<string, unknown>;
 }
 
-/** A durable handoff proves the child reached its scoped stop (spec §C). */
-function durableHandoffStateOf(row: PlanRow): string | null {
+/** The row's persisted durable handoff record, or null when absent/non-durable. */
+function durableHandoffOf(row: PlanRow): Record<string, unknown> | null {
   const handoff = rowCoordinationOf(row)?.handoff;
   if (typeof handoff !== "object" || handoff === null) return null;
-  const state = (handoff as Record<string, unknown>).state;
-  return typeof state === "string" && DURABLE_HANDOFF_STATES[state] === true ? state : null;
+  const record = handoff as Record<string, unknown>;
+  return typeof record.state === "string" && DURABLE_HANDOFF_STATES[record.state] === true ? record : null;
+}
+
+/** The row's bound plan session, or null when absent/malformed. */
+function boundSessionOf(row: PlanRow): Record<string, unknown> | null {
+  const session = rowCoordinationOf(row)?.session;
+  if (typeof session !== "object" || session === null) return null;
+  return nonEmpty((session as Record<string, unknown>).session_id) ? (session as Record<string, unknown>) : null;
 }
 
 /** Real `coordination.session` plus execution authority of the same session. */
 function hasActiveBinding(row: PlanRow): boolean {
-  const coordination = rowCoordinationOf(row);
-  const session = coordination?.session;
-  if (typeof session !== "object" || session === null) return false;
-  const sessionId = (session as Record<string, unknown>).session_id;
-  if (!nonEmpty(sessionId)) return false;
+  const session = boundSessionOf(row);
+  if (session === null) return false;
   const lease = (row as Record<string, unknown>).execution_lease;
   if (typeof lease !== "object" || lease === null) return false;
-  return (lease as Record<string, unknown>).holder === sessionId;
+  return (lease as Record<string, unknown>).holder === session.session_id;
+}
+
+/**
+ * True only when this row's OWN durable handoff proves its bound plan session
+ * reached the scoped stop: the handoff was submitted by exactly the session the
+ * row is bound to. An unbound or foreign handoff proves nothing and keeps the
+ * row occupied.
+ */
+function boundSessionReachedStop(row: PlanRow): boolean {
+  const handoff = durableHandoffOf(row);
+  const session = boundSessionOf(row);
+  return handoff !== null && session !== null && handoff.submitted_by === session.session_id;
+}
+
+/**
+ * True only when a durable handoff by THIS launch's child proves the intent
+ * reached its scoped stop. Identity is matched term by term — plan row,
+ * prepared Assignment pin, the launching coordinator, the bound plan session
+ * that handed off, and the launch's own assigned checkout. Any mismatch
+ * (prepared-hash drift, another session, another attempt, another worktree) is
+ * NOT a release: the intent keeps occupying its slot until a durable handoff
+ * matches or an explicit observation discharges it.
+ */
+function intentReachedStop(snapshot: WorkflowSnapshot, intent: LaunchIntent): boolean {
+  const row = findPlanRow(snapshot, intent.planId);
+  if (row === null) return false;
+  if (snapshot.coordination?.coordinator?.session_id !== intent.coordinatorSessionId) return false;
+  const prepared = preparedOf(row);
+  if (prepared === null || prepared.assignment_sha256 !== intent.preparedHash) return false;
+  const handoff = durableHandoffOf(row);
+  const session = boundSessionOf(row);
+  if (handoff === null || session === null) return false;
+  if (handoff.submitted_by !== session.session_id) return false;
+  return handoff.worktree_path === intent.worktreePath;
 }
 
 /**
  * Occupancy set: each plan id counted once, whether it is pending in the journal
  * or bound in the engine. `refused` intents never occupy (the refusal proved no
- * process/prompt exists); a durable handoff releases the plan even while its
- * intent or a coordinator lease remains.
+ * process/prompt exists). A durable handoff releases the plan only for the
+ * identity it actually belongs to: the row's own binding, or an intent whose
+ * recorded plan/prepared pin/coordinator/session-checkout identity matches that
+ * handoff. A stale or foreign intent is never silently reclaimed.
  */
 function occupancyOf(snapshot: WorkflowSnapshot, intents: readonly LaunchIntent[]): Set<string> {
   const occupied = new Set<string>();
   for (const row of snapshot.plans) {
     const planId = planIdOf(row);
-    if (planId === null || durableHandoffStateOf(row) !== null) continue;
-    if (hasActiveBinding(row)) occupied.add(planId);
+    if (planId === null) continue;
+    if (hasActiveBinding(row) && !boundSessionReachedStop(row)) occupied.add(planId);
   }
   for (const intent of intents) {
-    if (intent.state === "refused") continue;
-    const row = findPlanRow(snapshot, intent.planId);
-    if (row !== null && durableHandoffStateOf(row) !== null) continue;
+    if (intent.state === "refused" || intentReachedStop(snapshot, intent)) continue;
     occupied.add(intent.planId);
   }
   return occupied;
@@ -669,11 +710,7 @@ export async function reservePlanLaunch(
     // Duplicate identical request: the recorded intent is returned without
     // another authorization, so it never consumes a second slot. Any other
     // outstanding intent for this plan is a duplicate owner and refuses.
-    const live = doc.intents.filter((entry) => {
-      if (entry.planId !== planId || entry.state === "refused") return false;
-      const entryRow = findPlanRow(snapshot, entry.planId);
-      return !(entryRow !== null && durableHandoffStateOf(entryRow) !== null);
-    });
+    const live = doc.intents.filter((entry) => entry.planId === planId && entry.state !== "refused" && !intentReachedStop(snapshot, entry));
     const identical = live.find((entry) => entry.preparedHash === preparedHash);
     if (identical !== undefined) return { ok: true, intent: identical, applied: false };
     if (live.length > 0) {

@@ -321,6 +321,30 @@ function refusalOf(outcome: PlanLaunchResult): { code: string; message: string }
   return outcome;
 }
 
+/** The plan row's current prepared Assignment pin (what a launch must match). */
+function preparedHashOf(fixture: Fixture, planId: string): string {
+  const coordination = planRowOf(fixture, planId).coordination as Record<string, unknown> | undefined;
+  const prepared = coordination?.prepared as Record<string, unknown> | undefined;
+  if (typeof prepared?.assignment_sha256 !== "string") throw new Error(`plan ${planId} has no prepared pin`);
+  return prepared.assignment_sha256;
+}
+
+/**
+ * Recovered journal entries this plugin cannot re-derive from the engine: the
+ * journal is this module's own transport document, so a stale or foreign
+ * record is exactly the state a replay has to survive.
+ */
+function appendJournalIntents(fixture: Fixture, entries: Array<Record<string, unknown>>): void {
+  const doc = readJson(fixture.journalPath);
+  writeJson(fixture.journalPath, { ...doc, intents: [...(doc.intents as unknown[]), ...entries] });
+}
+
+/** Reserve, record the transport transitions, then let the child bind and stop. */
+async function driveChildToScopedStop(fixture: Fixture, planId: PlanId, intentId: string): Promise<string> {
+  await submitLaunch(fixture, intentId, `pane-${planId}`);
+  return handOffPlan(fixture, planId);
+}
+
 function intentOf(outcome: PlanLaunchResult): LaunchIntent {
   if (!outcome.ok) throw new Error(`expected the launch call to succeed: ${outcome.code}: ${outcome.message}`);
   return outcome.intent;
@@ -612,6 +636,70 @@ describe("phase2 launch admission journal", () => {
     delete process.env.TMUX;
     expect(refusalOf(await reserveFor(fixture, "plan-b", { skill: { name: "", source: "" } })).code).toBe("launch.invalid-request");
     expect(journalIntents(fixture).some((entry) => entry.planId === "plan-b")).toBe(false);
+  });
+
+  test("identity-matched handoff releases its own launch intent", async () => {
+    const fixture = await bindFixture();
+    writeSettings(fixture, { enabled: true, cap: 2 });
+
+    const a = intentOf(await reserveFor(fixture, "plan-a"));
+    await driveChildToScopedStop(fixture, "plan-a", a.id);
+
+    // The handoff was submitted by exactly plan-a's bound session, for the
+    // prepared pin and the checkout this launch recorded: it releases the slot.
+    expect(intentOf(await reserveFor(fixture, "plan-b")).state).toBe("reserved");
+    expect(intentOf(await reserveFor(fixture, "plan-c")).state).toBe("reserved");
+    expect(refusalOf(await reserveFor(fixture, "plan-d")).code).toBe("launch.capacity-exceeded");
+
+    // Released, never deleted: the transport record survives its plan's stop.
+    const released = journalIntents(fixture).find((entry) => entry.id === a.id);
+    expect(released?.state).toBe("submitted");
+    expect(released?.target).toBe("pane-plan-a");
+  });
+
+  test("mismatched prepared pin keeps a stale intent occupying capacity", async () => {
+    const fixture = await bindFixture();
+    writeSettings(fixture, { enabled: true, cap: 2 });
+
+    const a = intentOf(await reserveFor(fixture, "plan-a"));
+    await driveChildToScopedStop(fixture, "plan-a", a.id);
+
+    // A recovered intent from an earlier prepared revision: the row's durable
+    // handoff belongs to the CURRENT pin, so it cannot reclaim this record, and
+    // the recovered record keeps occupying plan-a.
+    appendJournalIntents(fixture, [{ ...a, id: "phase2-launch:plan-a:0", preparedHash: "0".repeat(64) }]);
+
+    expect(intentOf(await reserveFor(fixture, "plan-b")).state).toBe("reserved");
+    const refused = refusalOf(await reserveFor(fixture, "plan-c"));
+    expect(refused.code).toBe("launch.capacity-exceeded");
+    expect(refused.message).toContain("plan-a");
+    // Nothing was silently reclaimed to make room.
+    expect(journalIntents(fixture).filter((entry) => entry.planId === "plan-a").length).toBe(2);
+  });
+
+  test("foreign or other-attempt handoff stays occupied until an explicit release", async () => {
+    const fixture = await bindFixture();
+    writeSettings(fixture, { enabled: true, cap: 2 });
+
+    const a = intentOf(await reserveFor(fixture, "plan-a"));
+    await driveChildToScopedStop(fixture, "plan-a", a.id);
+
+    // A recovered intent whose recorded checkout is NOT the one that handed off:
+    // the durable handoff belongs to another launch/attempt, so it must not
+    // discharge this record even though the prepared pin and plan match.
+    expect(preparedHashOf(fixture, "plan-a")).toBe(a.preparedHash);
+    const foreign = { ...a, id: "phase2-launch:plan-a:0", state: "reserved", worktreePath: fixture.worktrees["plan-b"]! };
+    appendJournalIntents(fixture, [foreign]);
+
+    expect(intentOf(await reserveFor(fixture, "plan-b")).state).toBe("reserved");
+    expect(refusalOf(await reserveFor(fixture, "plan-c")).code).toBe("launch.capacity-exceeded");
+
+    // The only release for such a record is an explicit observation — the
+    // operator's recovery proves no pane/prompt ever existed.
+    const released = intentOf(await recordFor(fixture, "phase2-launch:plan-a:0", "refused"));
+    expect(released.state).toBe("refused");
+    expect(intentOf(await reserveFor(fixture, "plan-c")).state).toBe("reserved");
+    expect(journalIntents(fixture).map((entry) => entry.state)).toEqual(["submitted", "refused", "reserved", "reserved"]);
   });
 
   test("assigned worktree must be a distinct same-repository checkout", async () => {
