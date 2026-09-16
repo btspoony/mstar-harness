@@ -14,7 +14,7 @@
  * - `showPrepareWorkflow` / `amendPrepareWorkflow` — the workflow-level guard
  *   for a Prepare lifecycle that must register newly approved plan rows and
  *   the reviewed integration checkout without a generic snapshot replacement
- *   (spec `prepare-workflow-amendment.md`).
+ *   (spec: the guarded, coordinator-authenticated Prepare-stage amendment).
  *
  * ## Operation scope
  *
@@ -4087,9 +4087,10 @@ async function replaceProjectRegister(input: CoordinatedReplacement, harnessRoot
  * ------------------------------------------------------------------------ */
 
 /**
- * `prepare-workflow-amendment.md` § New API and CLI, frozen. One approved plan
- * row: the plan markdown that carries it plus the metadata the row records.
- * Nothing else is addressable — the verb cannot edit an existing row.
+ * The guarded, coordinator-authenticated Prepare-stage amendment (§ New API and
+ * CLI, frozen). One approved plan row: the plan markdown that carries it plus
+ * the metadata the row records. Nothing else is addressable — the verb cannot
+ * edit an existing row.
  */
 export type PreparePlanAppend = Readonly<{
   id: string;

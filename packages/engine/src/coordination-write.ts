@@ -64,9 +64,9 @@ export const COORDINATION_ERROR_CODES = [
   "coordination.not-implemented",
   "coordination.lock",
   "coordination.store",
-  // Prepare amendment refusals (spec `prepare-workflow-amendment.md` § Admission
-  // and mutation): one code per documented reason, so a caller branches on the
-  // exact refusal instead of parsing the message.
+  // Prepare amendment refusals (the guarded Prepare-stage amendment contract
+  // § Admission and mutation): one code per documented reason, so a caller
+  // branches on the exact refusal instead of parsing the message.
   "coordination.prepare-amendment.stale",
   "coordination.prepare-amendment.invalid-patch",
   "coordination.prepare-amendment.not-prepare",

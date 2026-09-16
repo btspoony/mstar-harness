@@ -2080,11 +2080,11 @@ describe("gitRead subprocess failure classification", () => {
 });
 
 /* ------------------------------------------------------------------ *
- * Prepare workflow amendment — `prepare-workflow-amendment.md`
- * § Admission and mutation. Every case drives the real engine against a
- * temporary Git repository, a genuine coordinator bind, a real integration
- * worktree and a reviewed compass, and asserts the protected bytes rather than
- * implementation text.
+ * Prepare workflow amendment — the guarded, coordinator-authenticated
+ * Prepare-stage amendment contract § Admission and mutation. Every case drives
+ * the real engine against a temporary Git repository, a genuine coordinator
+ * bind, a real integration worktree and a reviewed compass, and asserts the
+ * protected bytes rather than implementation text.
  * ------------------------------------------------------------------ */
 
 const PREPARE_WORKFLOW = "wf-prepare";
@@ -2092,7 +2092,7 @@ const PREPARE_PEER = "wf-peer";
 const PREPARE_ROW = "plan-prepare";
 const PREPARE_APPEND = "plan-append";
 const PREPARE_UNREVIEWED = "plan-unreviewed";
-const PREPARE_SPEC = "prepare-workflow-amendment.md";
+const PREPARE_SPEC = "amendment-contract.md";
 const PREPARE_INTEGRATION_BRANCH = "integration/wf-prepare";
 
 type PrepareFixture = {

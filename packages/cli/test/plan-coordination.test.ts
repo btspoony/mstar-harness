@@ -1226,16 +1226,17 @@ describe("mstar plan — integration-recovery", () => {
 
 /* ------------------------------------------------------------------ *
  * Prepare workflow amendment — the `mstar workflow show-prepare` /
- * `amend-prepare` transport (`prepare-workflow-amendment.md` § New API and
- * CLI). Real subprocesses against a temporary Git repository, so the JSON,
- * the exit codes and the protected bytes on disk are what these cases assert.
+ * `amend-prepare` transport of the guarded Prepare-stage amendment contract
+ * (§ New API and CLI). Real subprocesses against a temporary Git repository, so
+ * the JSON, the exit codes and the protected bytes on disk are what these cases
+ * assert.
  * ------------------------------------------------------------------ */
 
 const PREPARE_WORKFLOW = "wf-prepare";
 const PREPARE_PEER = "wf-peer";
 const PREPARE_ROW = "plan-prepare";
 const PREPARE_APPEND = "plan-append";
-const PREPARE_SPEC = "prepare-workflow-amendment.md";
+const PREPARE_SPEC = "amendment-contract.md";
 const PREPARE_INTEGRATION_BRANCH = "integration/wf-prepare";
 
 interface PrepareFixture {
