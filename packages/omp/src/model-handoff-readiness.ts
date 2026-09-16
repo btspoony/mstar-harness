@@ -25,8 +25,10 @@
  * `execution_policy.push_policy` is deliberately not consulted: it is
  * accepted-but-opaque engine data and supplies no push waiver — the remote tip
  * comes from read-only `git ls-remote` output, never from a cached tracking
- * ref. The coordinator envelope is read only for this checkpoint and is never
- * forwarded into another input, notice or report.
+ * ref, and the same query is repeated in the closing re-sample so a remote
+ * advanced while the checkpoint runs cannot report ready. The coordinator
+ * envelope is read only for this checkpoint and is never forwarded into another
+ * input, notice or report.
  *
  * Every read is bounded to artifacts derived from the bound workflow: the bound
  * snapshot/compass paths are compared with the re-derived ones *before* the root
@@ -831,6 +833,10 @@ export async function inspectPhase1Readiness(
 
   // --- item 4: the required push (remote tip equals the live HEAD) ----------
   // A missing checkout or unreadable HEAD already refused as `worktree-invalid`.
+  // The remote query is kept as a re-probeable fact so the closing re-sample
+  // repeats it (item 5) — a remote advanced while the checkpoint runs must not
+  // report ready.
+  let remoteTip: (() => string | null) | null = null;
   if (integrationPath !== null && head !== null) {
     const upstream = gitLine(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], integrationPath);
     const remote = gitLine(["config", "--get", `branch.${integrationBranch}.remote`], integrationPath);
@@ -838,19 +844,21 @@ export async function inspectPhase1Readiness(
     if (upstream === null || remote === null || ref === null || !ref.startsWith("refs/heads/")) {
       fail("push-unverified");
     } else {
-      const probe = git(["ls-remote", "--exit-code", remote, ref], integrationPath);
-      const line = probe.ok
-        ? probe.stdout
-            .split("\n")
-            .map((entry) => entry.trim())
-            .find((entry) => entry !== "")
-        : undefined;
-      const tip = line === undefined ? null : line.split(/\s+/)[0]!;
+      remoteTip = () => {
+        const probe = git(["ls-remote", "--exit-code", remote, ref], integrationPath!);
+        if (!probe.ok) return null;
+        const line = probe.stdout
+          .split("\n")
+          .map((entry) => entry.trim())
+          .find((entry) => entry !== "");
+        return line === undefined ? null : (line.split(/\s+/)[0] ?? null);
+      };
+      const tip = record(remoteTip);
       if (tip === null || tip !== head) fail("push-unverified");
     }
   }
 
-  // --- item 5: re-sample the sampled identity and the Git facts -------------
+  // --- item 5: re-sample the sampled identity, the Git facts and the remote --
   // Every pinned artifact must still have the same logical identity (kind and
   // raw link target), the same canonical target inside the same allowed roots
   // and the same content hash; any difference refuses.
@@ -860,6 +868,14 @@ export async function inspectPhase1Readiness(
   }
   for (const fact of facts) {
     if (fact.probe() !== fact.expected) fail("evidence-changed");
+  }
+  if (remoteTip !== null) {
+    // Same closing step as the artifact re-sample: query the remote again and
+    // require the tip to still equal the live HEAD (`head` was itself re-probed
+    // by the fact loop above, so a local move already refused as changed).
+    const tip = remoteTip();
+    const liveHead = gitLine(["rev-parse", "HEAD"], integrationPath!);
+    if (tip === null || liveHead === null || tip !== liveHead) fail("push-unverified");
   }
 
   if (codes.size > 0 || head === null) return { ready: false, codes: orderedCodes(codes) };
