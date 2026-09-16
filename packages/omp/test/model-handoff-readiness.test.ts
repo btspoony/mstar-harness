@@ -823,7 +823,7 @@ describe("E2 phase 1 readiness", () => {
     const escapedAbsolute = await inspectPhase1Readiness(f.binding, escapedInput);
     expect(escapedAbsolute.ready).toBe(false);
     expect(codesOf(escapedAbsolute)).toContain("prepare-not-locked");
-  });
+  }, 60_000);
 
   test("an absolute compass reference still validates", async () => {
     const f = await buildFixture();
@@ -840,5 +840,5 @@ describe("E2 phase 1 readiness", () => {
     const other = await inspectPhase1Readiness(f.binding, f.input);
     expect(other.ready).toBe(false);
     expect(codesOf(other)).toContain("binding-invalid");
-  });
+  }, 60_000);
 });

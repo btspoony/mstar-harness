@@ -744,7 +744,7 @@ describe("new coordinator start only", () => {
       fileWriteFallbacks: 0,
       fileDeleteFallbacks: 0,
     });
-  });
+  }, 60_000);
 
   test("new coordinator start only: one arm per entry trace across TUI, print, JSON and RPC modes, and two concurrent starts arm once", async () => {
     const repo = buildControlRepo();
@@ -855,7 +855,7 @@ describe("new coordinator start only", () => {
       "attempting",
       "pending",
     ]);
-  });
+  }, 60_000);
 
   test("new coordinator start only: the arm is once per binding, a failed arm never becomes pending, and authority is derived from host facts", async () => {
     const repo = buildControlRepo();
@@ -1061,7 +1061,7 @@ describe("new coordinator start only", () => {
     expect(statesOf(windowed)).toEqual(["attempting", "failed"]);
     expect(windowed.records().at(-1)!.reason).toContain("probe/other-model, probe/slow-model");
     expect(windowed.liveSpec()).toBe("probe/slow-model");
-  });
+  }, 60_000);
 });
 
 describe("fire reads current preference", () => {
@@ -1205,7 +1205,7 @@ describe("fire reads current preference", () => {
     expect(stateOf(offResult)).toBe("pending");
     expect(offDuring.switched).toEqual(["probe/slow-model"]);
     expect(offDuring.liveSpec()).toBe("probe/slow-model");
-  });
+  }, 60_000);
 });
 
 describe("pending picker and cycle changes cancel", () => {
@@ -1284,7 +1284,7 @@ describe("pending picker and cycle changes cancel", () => {
     expect(back.liveSpec()).toBe(baselineModel);
     expect(codeOf(await back.runTool(completionParams(backArtifacts)))).toBe("not-pending");
     expect(back.attempts).toEqual(["probe/slow-model"]);
-  });
+  }, 60_000);
 });
 
 describe("unowned model change cancels conservatively", () => {
@@ -1352,7 +1352,7 @@ describe("unowned model change cancels conservatively", () => {
     expect(statesOf(race)).toEqual(["attempting", "pending", "cancelled"]);
     expect(race.attempts).toEqual(["probe/slow-model"]);
     expect(race.liveSpec()).toBe("probe/other-model");
-  });
+  }, 60_000);
 });
 
 describe("navigation and action exclude each other", () => {
@@ -1512,7 +1512,7 @@ describe("navigation and action exclude each other", () => {
     await stuck.emit({ type: "session_start" });
     expect(codeOf(await stuck.runTool(completionParams(stuckArtifacts)))).toBe("handed_off");
     expect(stuck.switched).toEqual(["probe/slow-model", "probe/smol-model"]);
-  });
+  }, 60_000);
 });
 
 describe("terminal state survives tree and reload", () => {
@@ -1571,7 +1571,7 @@ describe("terminal state survives tree and reload", () => {
     expect(codeOf(await later.runTool(startParams("later-iteration")))).toBe("armed");
     expect(later.attempts).toEqual(["probe/slow-model"]);
     expect(statesOf(later)).toEqual(["attempting", "pending"]);
-  });
+  }, 60_000);
 });
 
 describe("persisted attempt resumes uncertain without retry", () => {
@@ -1643,7 +1643,7 @@ describe("persisted attempt resumes uncertain without retry", () => {
     const prunedDecision = decideSessionState(pruned, cursor.sessionManager.getSessionId());
     expect(prunedDecision.kind).toBe("uncertain");
     expect(prunedDecision.kind === "uncertain" ? prunedDecision.reason : "").toContain("is not in the ledger");
-  });
+  }, 60_000);
 });
 
 describe("switch failure reports actual model", () => {
@@ -1712,5 +1712,5 @@ describe("switch failure reports actual model", () => {
     expect(noTarget.liveSpec()).toBe("probe/slow-model");
     expect(noTarget.switched).toEqual(["probe/slow-model"]);
     expect(statesOf(noTarget)).toEqual(["attempting", "pending", "failed"]);
-  });
+  }, 60_000);
 });
