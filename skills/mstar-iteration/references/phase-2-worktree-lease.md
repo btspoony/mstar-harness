@@ -181,7 +181,40 @@ mismatch → **STOP**.
 
 **跨 plan 默认**（**无论** `Worktree mode: waived`）：**不同 `plan_id` 可并行 implement** 须满足 §2.0 #5 跨 plan 并行安全闸——(a) coordination 路径 same-host 独占写锁可用且每次 status/协调变更持锁，或 (b) **`Plan parallelism: serial`**（waived 时默认），或 (c) 用户本轮 `Cross-host lease race: accepted` + audit `notes`；否则 Assignment 仍写并行 → **Blocked**。**merge 入 `spec_integration_branch` 仍串行**（snapshot 顶层 `integration_merge_lease`；waived 时无 merge lease 仍须串行 merge）。未 waive 时 **禁止**无 verified `execution_lease` 的跨 plan 可写派发。
 
-对每个本轮要推进的 active `plan_id`（可交错/并行，非强制 plan A 全 Done 再 plan B）：
+### Rescheduling checkpoint（主动调度检查点）
+
+Phase 2 缺的不是新调度器，而是一个**具名的重新评估时刻** —— `Rescheduling checkpoint` 就是它。本文件是 procedure 的**唯一 home**：**不**新增 scheduler / DAG / 第二 ready-state register，判断仍由 PM 按下列步骤做出，结果只落在 PM 正常 transcript / ledger。
+
+**五个冻结 reason**（checkpoint 触发词；OMP 侧 `mstar_phase2` checkpoint receipt 消费**同一词汇**，但只记录「已按本 procedure 评估」的事实 + decision/reason —— 它**不**推断依赖就绪、**不**选择派发；**禁止**自造同义词）：
+
+| reason | 触发时刻 |
+| --- | --- |
+| `before-wait` | 进入任何 wait **之前** |
+| `result-settled` | 结果落定后：子任务完成、review 返回，或消费已返回结果 |
+| `dependency-changed` | 依赖事实变化（例如已审 prerequisite 已进入 dependent 的 assigned base） |
+| `ownership-changed` | ownership 事实变化（lease claim / release / transfer、handoff / accept、作用域 holder 变化） |
+| `capacity-changed` | 容量事实变化（槽位因完成释放、primary 起停、可选 transport 可用性变化） |
+
+**决策步骤**（每次 checkpoint 按序执行）：
+
+1. **用户 steering 与真实 blocker 优先于**任何调度续行；已返回结果**只消费一次**并判定其 acceptance —— **禁止**把 job completion 当作 accepted work。
+2. **确定作用域**：iteration coordinator 同时考虑其**已准备的独立 plan** 与 plan 本地 task；scoped plan primary 只考虑**自己的 tasks**（`plan-scoped-pm.md`）。任一方都**不得**把自己提升为对方的权限。
+3. **排除不可派发项**：已派发 / 已有 owner / 已终结 / 未准备 / 契约已漂移 / 真依赖未满足。prerequisite 仅在**已审 / 已接受 commit 进入 dependent task 的 assigned base** 时才满足（`mstar-sdd` § Dependent-task readiness）。活动 Assignment 的 scope 与 `BASE_SHA` **不可变**；**仅未派发**工作可 re-split / 重排，且依赖 / 接口变化须在派发前写回。
+4. **对剩余有用工作套用约束**：当前用户 / plan 的 serial 策略、task 容量、plan-primary 容量、engine scope / revision / lease 校验、same-host 锁与 L1/L2 隔离（首段 §2.0 #5）。**成立的具体串行边**：共享文件 / session / ledger、缺集成接口；**不成立**：task 编号、无关的 QC / QA。
+5. **启动完整已授权 ready batch**：默认传输是**原生 background task** —— transport 被禁用 / 不可用**不**关闭 task 并发；已准备的独立 plan 可走条件性 primary transport。只有 coordinator 的 integration merge 串行。
+6. **没有有用且已授权动作 → native wait 一次**，并写下真实 wait reason：`dependency` / `ownership` / `capacity` / `user-blocked` / `no-ready-work`。
+
+**结果记录**：正常 PM transcript / ledger 的一行即可 —— checkpoint reason、考虑过的作用域、已派发 ID 或具体 wait / block reason。**禁止**：重复完成投递、tick 计数、「still waiting」报告、对**不变的空 ready 集合**反复自证或重跑同一推理、为保持忙碌而造工作、timer / 轮询循环。等待是合法结论 —— 同一组未变事实**只陈述一次**；只有新事实（显式用户消息、新的已接受结果、dependency / ownership / capacity 观察变化）才重新打开 checkpoint，「turn 结束」不是理由。
+
+**checkpoint 不放宽任何既有安全条件**：
+
+- 原生 background task 仍是默认 task 传输；额外 primary 是可选 plan 级工具，只受其自身配置 gate。
+- `ctx.isIdle()` 仅表示未在流式输出，**不**代表没有未落定的 task / bash / eval job 或 plan primary；native adaptive wait 与 completion delivery 仍由宿主控制，**禁止**自建轮询替代。
+- lease / revision / ownership 语义不变：**禁止**重复 owned / running / completed 工作、偷 lease、改活动 base；pane idle / age / 终端标签**不是** ownership 或完成依据（§ Execution lease · Hold, release, override）。
+- integration merge 入 `spec_integration_branch` 仍**串行**；跨 plan 并行仍受本节首段跨 plan 安全闸约束。
+- `execution_policy` 取值（如 `serial`）是 accepted-but-opaque：**禁止**描述为引擎强制的线性调度器；实际策略从当前用户 / plan 推导，并保留显式 serial 约束。
+
+对每个本轮要推进的 active `plan_id`（**可交错 / 并行**是默认读法：非强制 plan A 全 Done 再 plan B，plan 编号或 task 编号本身都不是串行理由）：
 
 1. **Claim / resume — execution lease**（§2.0 #5 未 waive）：按下方「Execution lease」claim/resume 规则——同 `holder` → resume（校验 `worktree_path` / `working_branch` 与 Assignment 一致）；异 `holder` → **Blocked**；`InProgress` 无 lease → **STOP** 升级（孤儿恢复 → **`mstar-artifacts`**）；verify 通过前 **禁止**可写派发。**Scoped route**：fresh claim 的唯一入口是 `mstar plan bind`（`--assignment` / `--workflow --plan`）——同 plan 的第二个 fresh 形态 → `coordination.duplicate-holder`；续接只经 `mstar plan bind --resume`，且为**只读校验**（不重新获取 ownership、不重启执行、不改 revision；无自动 attach / fallback plan / TTL 夺取）。
 2. **Plan start — feature worktree + branch**：创建/校验 dedicated feature worktree（默认 `<repoRoot>/.worktrees/<plan-id>-<slug>`）；Assignment 须含绝对 `Worktree path` + `Working branch`（与 lease 一致）。plan 内多可写并行轨 → **`mstar-branch-worktree`** **`references/parallel-writable-pre-dispatch.md`**

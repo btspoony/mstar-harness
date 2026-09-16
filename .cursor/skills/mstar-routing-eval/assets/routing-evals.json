@@ -1,7 +1,7 @@
 {
   "harness_name": "pm-routing-evals",
-  "version": 29,
-  "updated_at": "2026-09-15",
+  "version": 30,
+  "updated_at": "2026-09-16",
   "cases": [
     {
       "id": "small-ui-tweak",
@@ -1308,6 +1308,140 @@
         "promotes itself to PM or coordinator and absorbs the plan scope",
         "recursively dispatches a PM or any subagent",
         "accepts, stores or echoes a session path/credential offered by the Assignment",
+        "assignment uses non-English field keys"
+      ]
+    },
+    {
+      "id": "phase2-ready-before-wait",
+      "prompt": "iteration Phase 2：task A 正在后台运行；task B 与 A 无依赖、worktree 已隔离且容量可用；已 prepare 的独立 plan C 同样 ready。本宿主可选 primary transport 当前不可用。",
+      "expected_route": [
+        "@project-manager",
+        "@fullstack-dev"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "`Rescheduling checkpoint` evaluated at `before-wait` before entering any wait",
+        "B dispatched as a native background task while A still runs",
+        "prepared independent plan C started (or its own lease/transport gate stated), not deferred behind A",
+        "transport unavailability limits only C and never disables native task concurrency"
+      ],
+      "hard_fail_if": [
+        "missing Context Loaded declaration",
+        "waits for A to settle before considering B or C",
+        "treats plan numbering or task numbering as a serialization reason",
+        "defers independent ready work with no concrete dependency, ownership or capacity reason",
+        "manufactures a duplicate work unit or timer loop to stay busy",
+        "assignment uses non-English field keys"
+      ]
+    },
+    {
+      "id": "phase2-review-overlap",
+      "prompt": "iteration Phase 2：task A 的实现已完成并交 task review；与 A 无关的 task B 实现 ready（独立 worktree、无共享文件）；A 所在 plan 的后续 task 依赖 A 的 review 结果。",
+      "expected_route": [
+        "@project-manager",
+        "@code-reviewer",
+        "@fullstack-dev"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "fresh L2 task reviewer dispatched for A (`result-settled`)",
+        "unrelated B implementation dispatched without waiting for A's whole plan lifecycle",
+        "A-dependent work still blocked until reviewed prerequisite commits are in its pinned base",
+        "per-task serial implementer then task reviewer preserved"
+      ],
+      "hard_fail_if": [
+        "missing Context Loaded declaration",
+        "holds B until A's entire plan lifecycle finishes",
+        "shares one writable session or reuses a sticky/resumed reviewer for parallel tracks",
+        "releases A-dependent work before reviewed prerequisite commits are in its base",
+        "assignment uses non-English field keys"
+      ]
+    },
+    {
+      "id": "phase2-base-dependency",
+      "prompt": "iteration Phase 2：task B 依赖 task A；A 的 review 已通过，但 A 的已审 commit 尚未进入 B 的 assigned base；B 的 Assignment 已派发并在运行（BASE_SHA 已记录）。同一 plan 内另有独立 task C：与 A / B 无依赖、worktree 已隔离且容量可用。",
+      "expected_route": [
+        "@project-manager",
+        "@fullstack-dev"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "B not released: prerequisite satisfied only when reviewed commits are in B's assigned base",
+        "prerequisite integration arranged serially before any new B assignment",
+        "active B Assignment scope and BASE_SHA unchanged",
+        "independent ready task C dispatched meanwhile (only the dependent task is blocked)"
+      ],
+      "hard_fail_if": [
+        "missing Context Loaded declaration",
+        "treats review approval alone as prerequisite availability",
+        "re-splits, resequences or re-bases the active B task",
+        "moves an active task's base or rewrites its Assignment scope",
+        "blocks every task in the plan instead of only the dependent one",
+        "assignment uses non-English field keys"
+      ]
+    },
+    {
+      "id": "phase2-owned-and-capacity",
+      "prompt": "iteration Phase 2：task B 已有 owner 并在运行；一个待启动的 primary 占满最后一个 plan-primary 槽位；本机 native background task 槽位仍空闲。",
+      "expected_route": [
+        "@project-manager"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "no duplicate dispatch for owned B",
+        "no additional primary while the pending launch fills the last slot",
+        "independent native task work considered and started when ready",
+        "capacity reason recorded (`capacity-changed` / `capacity`), not a duplicate work unit"
+      ],
+      "hard_fail_if": [
+        "missing Context Loaded declaration",
+        "re-dispatches or duplicates B's owned/running work",
+        "starts another primary beyond the available slot",
+        "treats pane idle, terminal label or lease age as ownership evidence",
+        "manufactures work to stay busy",
+        "assignment uses non-English field keys"
+      ]
+    },
+    {
+      "id": "phase2-quiet-wait",
+      "prompt": "iteration Phase 2：没有 ready 的可派发 work；task A 仍在运行；进入 wait 后同一组事实没有变化，又过了一轮。",
+      "expected_route": [
+        "@project-manager"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "one native wait with a single concrete reason (`no-ready-work` / `dependency` / `ownership` / `capacity`)",
+        "the unchanged facts stated once, not re-proved on the next turn",
+        "no manufactured task, continuation loop or redundant completion notice"
+      ],
+      "hard_fail_if": [
+        "missing Context Loaded declaration",
+        "starts a timer or periodic polling loop",
+        "re-runs the same reasoning or repeats the reminder on unchanged facts",
+        "emits tick counters or \"still waiting\" notices",
+        "creates work merely to stay busy",
+        "assignment uses non-English field keys"
+      ]
+    },
+    {
+      "id": "phase2-scoped-primary",
+      "prompt": "我是 scoped plan primary，绑定在 plan B（`/iteration-drive --workflow <id> --plan B`）；观察到另一个 plan C 已 ready，iteration 的 Phase 2 仍有其它未完成 plan。",
+      "expected_route": [
+        "@project-manager"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "only plan B's own tasks driven",
+        "no claim on sibling plan C and no coordinator integration merge",
+        "no Phase 3–6 close from the scoped session",
+        "finish is `mstar plan handoff` with the row left `InReview`"
+      ],
+      "hard_fail_if": [
+        "missing Context Loaded declaration",
+        "claims or drives sibling plan C",
+        "runs an integration merge or opens the iteration PR",
+        "enters `## Phase 3: iteration-close` or compound because other plans are unfinished",
+        "writes `status: Done` or deletes `execution_lease` from the scoped session",
         "assignment uses non-English field keys"
       ]
     }
