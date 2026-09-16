@@ -2552,6 +2552,100 @@ describe("Prepare workflow amendment", () => {
     expect(refusal.details.actual).toBe("main");
   });
 
+  test("only the consulted headers refuse a conflict, and a fence closes only on its own marker", async () => {
+    // A real multi-task plan repeats its body labels — `**Files:**`,
+    // `**Interfaces:**`, `**Task budget:**` — with a different value per task.
+    // Only the labels this verb consults are declarations, so the repeat is
+    // plan content and the document stays appendable.
+    const multiTask = makePrepareFixture();
+    await ensurePrepareCoordinator(multiTask);
+    writeText(
+      join(multiTask.planDir, `${PREPARE_APPEND}.md`),
+      [
+        `# Plan ${PREPARE_APPEND}`,
+        "",
+        `**plan_id:** ${PREPARE_APPEND}`,
+        "**Status:** Todo",
+        "**Main worktree branch:** main",
+        `**Working branch:** feature/${PREPARE_APPEND}`,
+        "",
+        "## Task 1",
+        "",
+        "**Files:** packages/engine/src/coordination.ts",
+        "**Task budget:** 60k",
+        "",
+        "## Task 2",
+        "",
+        "**Files:** packages/cli/src/plan-coordination.ts",
+        "**Task budget:** 20k",
+        "",
+      ].join("\n"),
+    );
+
+    const amended = await amendPrepare(multiTask, preparePatchOf(multiTask));
+
+    expect(amended.view.planIds).toEqual([PREPARE_ROW, PREPARE_APPEND]);
+
+    // A consulted label repeated with a different value is still a conflict.
+    const conflicting = makePrepareFixture();
+    await ensurePrepareCoordinator(conflicting);
+    writeText(
+      join(conflicting.planDir, `${PREPARE_APPEND}.md`),
+      [
+        `# Plan ${PREPARE_APPEND}`,
+        "",
+        `**plan_id:** ${PREPARE_APPEND}`,
+        "**plan_id:** plan-other",
+        "**Status:** Todo",
+        "**Main worktree branch:** main",
+        `**Working branch:** feature/${PREPARE_APPEND}`,
+        "",
+        "Body.",
+        "",
+      ].join("\n"),
+    );
+
+    const conflict = await prepareRefusalOf(() => amendPrepare(conflicting, preparePatchOf(conflicting)));
+
+    expect(conflict.code).toBe("coordination.prepare-amendment.invalid-plan");
+    expect(conflict.details.header).toBe("plan_id");
+
+    // A fenced example is never a declaration, whatever marker opened the
+    // block: a `~~~` block is not read at all, and a shorter backtick run
+    // inside a longer fence does not close it early.
+    const fenceCases: ReadonlyArray<{ name: string; lines: readonly string[] }> = [
+      { name: "tilde-fence", lines: ["~~~md", "**plan_id:** plan-example", "~~~"] },
+      { name: "shorter-run-inside-longer-fence", lines: ["````md", "```", "**plan_id:** plan-example", "```", "````"] },
+    ];
+
+    for (const fenceCase of fenceCases) {
+      const fixture = makePrepareFixture();
+      await ensurePrepareCoordinator(fixture);
+      writeText(
+        join(fixture.planDir, `${PREPARE_APPEND}.md`),
+        [
+          `# Plan ${PREPARE_APPEND}`,
+          "",
+          `**plan_id:** ${PREPARE_APPEND}`,
+          "**Status:** Todo",
+          "**Main worktree branch:** main",
+          `**Working branch:** feature/${PREPARE_APPEND}`,
+          "",
+          ...fenceCase.lines,
+          "",
+          "Body.",
+          "",
+        ].join("\n"),
+      );
+
+      const fenced = await amendPrepare(fixture, preparePatchOf(fixture));
+
+      expect(`${fenceCase.name}: ${fenced.view.planIds.join()}`).toBe(
+        `${fenceCase.name}: ${[PREPARE_ROW, PREPARE_APPEND].join()}`,
+      );
+    }
+  }, 30000);
+
   test("both reviewed branch headers are required on an appended plan", async () => {
     // The plan document is the reviewed authority for the branch metadata: an
     // absent header is never treated as agreement with the branches the append
@@ -2962,9 +3056,10 @@ describe("Prepare workflow amendment", () => {
 
   test("the reviewed compass must declare its lifecycle identity and a clean plan list", async () => {
     // A compass that is not bound to this lifecycle, or whose `plans` list is
-    // malformed, cannot authorize a structural delta: the declaration is either
-    // read exactly as written or refused, never filtered or deduplicated into a
-    // declaration it does not make.
+    // malformed, or whose branch / checkout declaration is present without a
+    // usable value, cannot authorize a structural delta: the declaration is
+    // either read exactly as written or refused, never filtered, deduplicated
+    // or silently dropped into a declaration it does not make.
     const compassCases: ReadonlyArray<{ name: string; frontmatter: readonly string[] }> = [
       {
         name: "missing-iteration-id",
@@ -2997,6 +3092,32 @@ describe("Prepare workflow amendment", () => {
           `  - ${PREPARE_ROW}`,
           `  - ${PREPARE_APPEND}`,
           '  - ""',
+        ],
+      },
+      {
+        name: "malformed-integration-branch",
+        frontmatter: [
+          `iteration_id: ${PREPARE_WORKFLOW}`,
+          "status: locked",
+          "spec_integration_branch:",
+          `  - ${PREPARE_INTEGRATION_BRANCH}`,
+          "  - integration/second",
+          "plans:",
+          `  - ${PREPARE_ROW}`,
+          `  - ${PREPARE_APPEND}`,
+        ],
+      },
+      {
+        name: "malformed-integration-worktree-path",
+        frontmatter: [
+          `iteration_id: ${PREPARE_WORKFLOW}`,
+          "status: locked",
+          `spec_integration_branch: ${PREPARE_INTEGRATION_BRANCH}`,
+          "integration_worktree_path:",
+          "  - /tmp/wt-one",
+          "plans:",
+          `  - ${PREPARE_ROW}`,
+          `  - ${PREPARE_APPEND}`,
         ],
       },
     ];
@@ -3094,6 +3215,48 @@ describe("Prepare workflow amendment", () => {
 
     expect(correctedResult.view.planIds).toEqual([PREPARE_ROW, PREPARE_APPEND]);
     expect(prepareSnapshotOf(corrected).integration_worktree_path).toBe(corrected.integrationPath);
+  }, 30000);
+
+  test("a compass integration branch that disagrees with the workflow's recorded branch refuses a patch that appends nothing", async () => {
+    // The declaration is compared where every patch is validated, so an
+    // amendment that only records the policy or the checkout cannot commit a
+    // workflow whose recorded integration branch contradicts it.
+    const declaredBranch = "integration/declared-elsewhere";
+    const patchCases: ReadonlyArray<{ name: string; patch: (fixture: PrepareFixture) => Record<string, unknown> }> = [
+      {
+        name: "policy-only",
+        patch: (fixture) => preparePatchOf(fixture, { appendPlans: [], planParallelism: "parallel" }),
+      },
+      {
+        name: "checkout-only",
+        patch: (fixture) => preparePatchOf(fixture, { appendPlans: [], integrationWorktreePath: fixture.integrationPath }),
+      },
+    ];
+
+    for (const patchCase of patchCases) {
+      const fixture = makePrepareFixture();
+      await ensurePrepareCoordinator(fixture);
+      // The compass declares only the already-registered plan, so the patch
+      // below changes exactly one thing: the policy or the recorded checkout.
+      writeText(
+        fixture.compassPath,
+        readFileSync(fixture.compassPath, "utf8")
+          .replace(`  - ${PREPARE_APPEND}\n`, "")
+          .replace(`spec_integration_branch: ${PREPARE_INTEGRATION_BRANCH}`, `spec_integration_branch: ${declaredBranch}`),
+      );
+      const before = protectedBytes(fixture);
+
+      const refusal = await prepareRefusalOf(() => amendPrepare(fixture, patchCase.patch(fixture)));
+
+      expect(`${patchCase.name}: ${refusal.code}`).toBe(
+        `${patchCase.name}: coordination.prepare-amendment.compass-mismatch`,
+      );
+      expect(`${patchCase.name}: ${String(refusal.details.expected)}`).toBe(`${patchCase.name}: ${declaredBranch}`);
+      expect(`${patchCase.name}: ${String(refusal.details.actual)}`).toBe(
+        `${patchCase.name}: ${PREPARE_INTEGRATION_BRANCH}`,
+      );
+      expect(protectedBytes(fixture)).toEqual(before);
+    }
   }, 30000);
 
   test("the integration checkout must be a distinct real checkout of this repository on branch.integration", async () => {
