@@ -3014,6 +3014,21 @@ describe("Prepare workflow amendment", () => {
     const amended = await amendPrepare(aligned, alignedPatch);
 
     expect(amended.view.planIds).toEqual([PREPARE_ROW, PREPARE_APPEND]);
+
+    // Control: the check targets the path this commit would leave, so naming
+    // the reviewed checkout in the patch is a lawful correction of a stale
+    // recording — the old recorded value is replaced, not compared.
+    const corrected = makePrepareFixture();
+    await ensurePrepareCoordinator(corrected);
+    writeText(corrected.compassPath, withDeclaredPath(corrected.integrationPath));
+    const staleDoc = prepareSnapshotOf(corrected);
+    staleDoc.integration_worktree_path = join(corrected.root, "wt-integration-old");
+    writeJson(corrected.snapshotPath, staleDoc);
+
+    const correctedResult = await amendPrepare(corrected, preparePatchOf(corrected));
+
+    expect(correctedResult.view.planIds).toEqual([PREPARE_ROW, PREPARE_APPEND]);
+    expect(prepareSnapshotOf(corrected).integration_worktree_path).toBe(corrected.integrationPath);
   }, 30000);
 
   test("the integration checkout must be a distinct real checkout of this repository on branch.integration", async () => {

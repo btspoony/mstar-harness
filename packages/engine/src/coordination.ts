@@ -4256,9 +4256,8 @@ type PrepareCompass = {
   path: string;
   /** `sha256:<64 hex>` of the Markdown bytes — the compass CAS token. */
   version: string;
-  /** `plans:` frontmatter ids, in declared order. */
+  /** `plans:` frontmatter ids, validated as declared (non-empty, unique). */
   planIds: readonly string[];
-  iterationId?: string;
   specIntegrationBranch?: string;
   integrationWorktreePath?: string;
 };
@@ -4268,9 +4267,12 @@ type PrepareCompass = {
  * declarations an amendment must agree with (§ Admission and mutation step 6).
  * The token is the raw-byte SHA-256 of the Markdown (`sha256Bytes`), rendered
  * in the same `sha256:<hex>` form as the snapshot version. A missing, escaping,
- * unreadable or unparsable compass refuses: an unverifiable declaration cannot
- * approve a structural delta, and a compass is never borrowed from another
- * lifecycle.
+ * unreadable or unparsable compass refuses, and so does one that does not
+ * declare its own `iteration_id` or whose `plans` list is malformed (an entry
+ * that is not a non-empty string) or repeats an id: the reviewed declaration is
+ * read exactly as written — never filtered, deduplicated or borrowed from
+ * another lifecycle — because an unverifiable declaration cannot approve a
+ * structural delta.
  */
 function readPrepareCompass(harnessRoot: string, snapshot: WorkflowSnapshot): PrepareCompass {
   const ref = snapshot.compass_ref;
@@ -4310,29 +4312,56 @@ function readPrepareCompass(harnessRoot: string, snapshot: WorkflowSnapshot): Pr
       { workflow_id: snapshot.id, path },
     );
   }
-  const declaredPlans = Array.isArray(frontmatter.plans) ? frontmatter.plans.filter(isNonEmptyString) : [];
-  if (declaredPlans.length === 0) {
+  // The declaration is read exactly as written. A missing lifecycle identity
+  // cannot bind the compass to this workflow, and a malformed or repeated plan
+  // entry means the reviewed list is not the exact set it appears to be — none
+  // of that is repaired by filtering or deduplicating before the comparison.
+  const iterationId = frontmatter.iteration_id;
+  if (!isNonEmptyString(iterationId)) {
+    throw prepareAmendmentRefusal(
+      "compass-mismatch",
+      `workflow ${snapshot.id} compass ${path} declares no iteration_id \u2014 a lifecycle amends only its own compass`,
+      { workflow_id: snapshot.id, path, actual: iterationId ?? null },
+    );
+  }
+  if (iterationId !== snapshot.id) {
+    throw prepareAmendmentRefusal(
+      "compass-mismatch",
+      `compass ${path} declares iteration_id ${iterationId}, not workflow ${snapshot.id} \u2014 a lifecycle amends only its own compass`,
+      { workflow_id: snapshot.id, expected: snapshot.id, actual: iterationId },
+    );
+  }
+  const declaredPlans: unknown = frontmatter.plans;
+  if (!Array.isArray(declaredPlans) || declaredPlans.length === 0) {
     throw prepareAmendmentRefusal(
       "compass-mismatch",
       `workflow ${snapshot.id} compass ${path} declares no plan ids in its frontmatter \u2014 the amendment cannot verify the approved plan set`,
-      { workflow_id: snapshot.id, path },
+      { workflow_id: snapshot.id, path, actual: declaredPlans ?? null },
+    );
+  }
+  const malformed = declaredPlans.filter((entry) => !isNonEmptyString(entry));
+  if (malformed.length > 0) {
+    throw prepareAmendmentRefusal(
+      "compass-mismatch",
+      `workflow ${snapshot.id} compass ${path} declares ${malformed.length} malformed plan id(s) \u2014 every plans entry must be a non-empty string`,
+      { workflow_id: snapshot.id, path, plans: declaredPlans },
+    );
+  }
+  const planIds = declaredPlans as readonly string[];
+  if (new Set(planIds).size !== planIds.length) {
+    throw prepareAmendmentRefusal(
+      "compass-mismatch",
+      `workflow ${snapshot.id} compass ${path} declares the same plan id more than once \u2014 the reviewed plan set is not a multiset`,
+      { workflow_id: snapshot.id, path, plans: planIds },
     );
   }
   const compass: PrepareCompass = {
     path,
     version: `sha256:${sha256Bytes(bytes)}`,
-    planIds: declaredPlans,
+    planIds,
   };
-  if (isNonEmptyString(frontmatter.iteration_id)) compass.iterationId = frontmatter.iteration_id;
   if (isNonEmptyString(frontmatter.spec_integration_branch)) compass.specIntegrationBranch = frontmatter.spec_integration_branch;
   if (isNonEmptyString(frontmatter.integration_worktree_path)) compass.integrationWorktreePath = frontmatter.integration_worktree_path;
-  if (compass.iterationId !== undefined && compass.iterationId !== snapshot.id) {
-    throw prepareAmendmentRefusal(
-      "compass-mismatch",
-      `compass ${path} declares iteration_id ${compass.iterationId}, not workflow ${snapshot.id} \u2014 a lifecycle amends only its own compass`,
-      { workflow_id: snapshot.id, expected: snapshot.id, actual: compass.iterationId },
-    );
-  }
   return compass;
 }
 
@@ -4643,8 +4672,18 @@ function readPlanAppend(
       );
     }
   }
+  // The plan document is the reviewed authority for the branch metadata: both
+  // headers are required, and an absent one is never treated as agreement with
+  // the branches the append itself claims.
   const declaredWorking = headers.get("working branch");
-  if (declaredWorking !== undefined && declaredWorking !== workingBranch) {
+  if (declaredWorking === undefined) {
+    throw prepareAmendmentRefusal(
+      "invalid-plan",
+      `plan ${id} markdown ${planPath} declares no Working branch header \u2014 the appended row's branch metadata cannot be verified against the reviewed plan`,
+      { plan_id: id, field: "metadata.working_branch", path: planPath },
+    );
+  }
+  if (declaredWorking !== workingBranch) {
     throw prepareAmendmentRefusal(
       "invalid-plan",
       `plan ${id} metadata.working_branch ${workingBranch} does not match the Working branch declared by ${planPath} (${declaredWorking})`,
@@ -4652,7 +4691,14 @@ function readPlanAppend(
     );
   }
   const declaredMain = headers.get("main worktree branch");
-  if (declaredMain !== undefined && declaredMain !== context.mainWorktreeBranch) {
+  if (declaredMain === undefined) {
+    throw prepareAmendmentRefusal(
+      "invalid-plan",
+      `plan ${id} markdown ${planPath} declares no Main worktree branch header \u2014 the amendment cannot verify the branch the reviewed plan was written against`,
+      { plan_id: id, field: "mainWorktreeBranch", path: planPath },
+    );
+  }
+  if (declaredMain !== context.mainWorktreeBranch) {
     throw prepareAmendmentRefusal(
       "invalid-plan",
       `plan ${id} metadata records main worktree branch ${context.mainWorktreeBranch}, but ${planPath} declares ${declaredMain}`,
@@ -4895,16 +4941,23 @@ function readPreparePatch(
       { workflow_id: context.snapshot.id },
     );
   }
-  if (
-    context.compass.integrationWorktreePath !== undefined &&
-    integrationWorktreePath !== undefined &&
-    integrationWorktreePath !== canonicalTarget(context.compass.integrationWorktreePath)
-  ) {
-    throw prepareAmendmentRefusal(
-      "compass-mismatch",
-      `the requested integration checkout ${integrationWorktreePath} is not the reviewed compass declaration ${context.compass.integrationWorktreePath}`,
-      { expected: canonicalTarget(context.compass.integrationWorktreePath), actual: integrationWorktreePath },
-    );
+  // The reviewed declaration binds the checkout this commit would leave in
+  // place — the patch's own validated path when it names one, otherwise the
+  // recorded path the spread preserves. Comparing the *effective* path is what
+  // makes both a retained conflict (patch omits the field) and a still
+  // unrecorded declaration refuse, while an explicit correction that names the
+  // reviewed checkout in the same call stays lawful (spec § Admission and
+  // mutation step 6).
+  if (context.compass.integrationWorktreePath !== undefined) {
+    const declaredPath = canonicalTarget(context.compass.integrationWorktreePath);
+    const effectivePath = integrationWorktreePath ?? recordedPath;
+    if (effectivePath !== declaredPath) {
+      throw prepareAmendmentRefusal(
+        "compass-mismatch",
+        `workflow ${context.snapshot.id} would record integration checkout ${effectivePath ?? "(none)"}, but the reviewed compass ${context.compass.path} declares ${declaredPath}`,
+        { path: effectivePath ?? null, expected: declaredPath, actual: effectivePath ?? null },
+      );
+    }
   }
 
   // The resulting workflow must declare exactly the plan set the reviewed
