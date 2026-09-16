@@ -1410,7 +1410,65 @@ describe("navigation and action exclude each other", () => {
     expect(harness.liveSpec()).toBe("probe/smol-model");
     expect(statesOf(harness)).toEqual(["attempting", "pending", "attempting", "handed_off"]);
 
-    // --- Navigation arriving *first* fences the action ---
+    // The arm invocation is guarded by the same semantics as the target one: a
+    // navigation arriving while it is in flight is refused, and no observation
+    // during that await may terminalize the running attempt or notify the
+    // coordinator as uncertain.
+    const armNavRepo = buildControlRepo();
+    writePluginOverrides(armNavRepo.main, { modelHandoff: true, handoffTarget: "@default" });
+    const armNav = await createHarness({
+      cwd: armNavRepo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(armNavRepo.main),
+    });
+    await armNav.emitInput("/iteration-start arm navigation", "interactive");
+    const releaseArm = armNav.metadata.hold();
+    const armInvoked = armNav.nextAction();
+    const arming = armNav.runTool(startParams("arm-nav-iteration"));
+    await armInvoked;
+    expect(statesOf(armNav)).toEqual(["attempting"]);
+
+    const rawDuringArm = armNav.rawHandlerResult("session_before_tree", {
+      preparation: {},
+      signal: new AbortController().signal,
+    });
+    expect(rawDuringArm).toEqual({ cancel: true });
+    expect(isPromiseLike(rawDuringArm)).toBe(false);
+    await armNav.emit({ type: "session_before_tree", preparation: {}, signal: new AbortController().signal });
+    // Observation opportunities during the await must not invent a terminal state.
+    await armNav.emit({ type: "agent_end", messages: [] });
+    await armNav.emitInput("still arming", "interactive");
+    expect(statesOf(armNav)).toEqual(["attempting"]);
+    expect(armNav.notices().some((line) => line.includes("navigation was refused"))).toBe(true);
+    expect(armNav.notices().filter((line) => line.includes("uncertain") || line.includes("suspended"))).toHaveLength(0);
+
+    releaseArm();
+    expect(codeOf(await arming)).toBe("armed");
+    expect(statesOf(armNav)).toEqual(["attempting", "pending"]);
+    expect(armNav.attempts).toEqual(["probe/slow-model"]);
+    await armNav.emit({ type: "session_start" });
+    expect(statesOf(armNav)).toEqual(["attempting", "pending"]);
+
+    // Navigation arriving *first* keeps the arm action from starting at all: no
+    // attempt record, no model action, and the same call succeeds afterwards.
+    const preNavRepo = buildControlRepo();
+    writePluginOverrides(preNavRepo.main, { modelHandoff: true, handoffTarget: "@default" });
+    const preNav = await createHarness({
+      cwd: preNavRepo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(preNavRepo.main),
+    });
+    await preNav.emit({ type: "session_before_tree", preparation: {}, signal: new AbortController().signal });
+    const suspendedArm = await preNav.runTool(startParams("pre-nav-iteration"));
+    expect(codeOf(suspendedArm)).toBe("suspended");
+    expect(stateOf(suspendedArm)).toBe("none");
+    expect(preNav.records()).toHaveLength(0);
+    expect(preNav.attempts).toHaveLength(0);
+    await preNav.emit({ type: "session_tree", newLeafId: "leaf-1", oldLeafId: null });
+    expect(codeOf(await preNav.runTool(startParams("pre-nav-iteration")))).toBe("armed");
+    expect(statesOf(preNav)).toEqual(["attempting", "pending"]);
+
+    // --- Navigation arriving *first* fences the target action ---
     const fenceRepo = buildControlRepo();
     writePluginOverrides(fenceRepo.main, { modelHandoff: true, handoffTarget: "@default" });
     const fence = await createHarness({

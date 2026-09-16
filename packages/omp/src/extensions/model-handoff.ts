@@ -673,18 +673,23 @@ export default function modelHandoff(pi: ExtensionAPI): void {
   };
 
   /** Refuse to start an action now; the suspension stays pending and becomes visible once. */
-  const suspend = (reason: string): ToolOutcome => {
+  const suspend = (reason: string, state: "pending" | "none"): ToolOutcome => {
     if (!gate.suspensionNotified) {
       gate.suspensionNotified = true;
       notice(
-        `model handoff suspended for this coordinator session: ${reason}. No model action was taken; the binding stays pending until the session settles.`,
+        `model handoff suspended for this coordinator session: ${reason}. No model action was taken; ${
+          state === "pending" ? "the binding stays pending until the session settles" : "no binding was created"
+        }.`,
       );
     }
-    return outcome(false, true, `the handoff check was suspended: ${reason}. Nothing was switched; the binding stays pending.`, {
-      code: "suspended",
-      state: "pending",
-      reason,
-    });
+    return outcome(
+      false,
+      true,
+      `the handoff check was suspended: ${reason}. Nothing was switched; ${
+        state === "pending" ? "the binding stays pending" : "no binding was created"
+      }.`,
+      { code: "suspended", state, reason },
+    );
   };
 
   /** Refused start: durable notice plus a visible tool result; no binding is written. */
@@ -697,6 +702,7 @@ export default function modelHandoff(pi: ExtensionAPI): void {
 
   const armOnce = async (params: ToolParams, ctx: ExtensionContext): Promise<ToolOutcome> => {
     const sessionId = sessionIdOf(ctx);
+    const generation = gate.generation;
     const decision = reconstruct(ctx);
 
     if (attemptIsRunning(decision)) {
@@ -728,6 +734,8 @@ export default function modelHandoff(pi: ExtensionAPI): void {
     // disabled preference creates no record and no model action. Enabling the
     // preference never arms by itself (no settings-change callback exists here).
     const settings = await readHandoffSettings(ctx.cwd);
+    const afterSettings = suspensionReason(ctx, sessionId, generation);
+    if (afterSettings !== null) return suspend(afterSettings, "none");
     if (!settings.ok) {
       return outcome(false, true, `the model-handoff preference could not be read: ${settings.message}`, {
         code: "settings-read-failed",
@@ -785,6 +793,13 @@ export default function modelHandoff(pi: ExtensionAPI): void {
       );
     }
 
+    // The arm invocation is guarded exactly like the target invocation: a
+    // navigation that arrives first keeps the arm from starting at all (no
+    // attempt record, no reservation effect), and a navigation that arrives while
+    // the arm is in flight is refused by the navigation handler.
+    const beforeArmGate = suspensionReason(ctx, sessionId, generation);
+    if (beforeArmGate !== null) return suspend(beforeArmGate, "none");
+
     // Attempt-before-action: the arm attempt is durable before `@slow` is selected.
     const beforeArm = lastModelChangeIndex(ctx.sessionManager.getEntries());
     const attempt: HandoffRecord = {
@@ -815,11 +830,19 @@ export default function modelHandoff(pi: ExtensionAPI): void {
     const slowSpec = modelSpecOf(slow);
 
     let switched = false;
+    let armFailure: string | null = null;
+    gate.actionInFlight = true;
     try {
       switched = await pi.setModel(slow);
     } catch (error) {
-      terminalize(attempt, "failed", `selecting ${slowSpec} failed: ${String(error)}`, liveSpecOf(ctx));
-      return outcome(false, true, `selecting ${SLOW_SPEC} (${slowSpec}) failed: ${String(error)}`, {
+      armFailure = String(error);
+    } finally {
+      gate.actionInFlight = false;
+    }
+
+    if (armFailure !== null) {
+      terminalize(attempt, "failed", `selecting ${slowSpec} failed: ${armFailure}`, liveSpecOf(ctx));
+      return outcome(false, true, `selecting ${SLOW_SPEC} (${slowSpec}) failed: ${armFailure}`, {
         code: "slow-selection-failed",
         state: "failed",
       });
@@ -983,7 +1006,7 @@ export default function modelHandoff(pi: ExtensionAPI): void {
     // Fire-time preference re-read (spec §Full Phase 1 handoff).
     const settings = await readHandoffSettings(ctx.cwd);
     const afterSettings = suspensionReason(ctx, sessionId, generation);
-    if (afterSettings !== null) return suspend(afterSettings);
+    if (afterSettings !== null) return suspend(afterSettings, "pending");
     if (!settings.ok) {
       return outcome(
         false,
@@ -1007,13 +1030,13 @@ export default function modelHandoff(pi: ExtensionAPI): void {
     // E2 readiness checkpoint (frozen contract; read-only).
     const readiness = await handoffSeams.inspectReadiness(record.binding, completion);
     const afterReadiness = suspensionReason(ctx, sessionId, generation);
-    if (afterReadiness !== null) return suspend(afterReadiness);
+    if (afterReadiness !== null) return suspend(afterReadiness, "pending");
 
     // Re-read the preference *after* the asynchronous checkpoint: the value that
     // decides the destination and the enablement is never a cached one.
     const refreshed = await readHandoffSettings(ctx.cwd);
     const afterRefresh = suspensionReason(ctx, sessionId, generation);
-    if (afterRefresh !== null) return suspend(afterRefresh);
+    if (afterRefresh !== null) return suspend(afterRefresh, "pending");
     if (!refreshed.ok) {
       return outcome(
         false,
@@ -1046,7 +1069,7 @@ export default function modelHandoff(pi: ExtensionAPI): void {
 
     /* ---- Final window: no `await` from here to the public setModel call. ---- */
     const finalSuspension = suspensionReason(ctx, sessionId, generation);
-    if (finalSuspension !== null) return suspend(finalSuspension);
+    if (finalSuspension !== null) return suspend(finalSuspension, "pending");
 
     const live = liveSpecOf(ctx);
     const cancelReason = pendingCancellationReason(ctx.sessionManager.getEntries(), record, live);

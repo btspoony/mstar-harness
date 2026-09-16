@@ -766,4 +766,79 @@ describe("E2 phase 1 readiness", () => {
     expect(codesOf(escaped)).toContain("review-evidence-missing");
     expect(realpathSync(link)).toBe(realpathSync(outside));
   });
+
+  test("relative snapshot paths resolve against the harness root, never the process cwd", async () => {
+    const f = await buildFixture();
+
+    // The fixture's snapshot stores an absolute plan file and the engine's own
+    // relative `compass_ref`; the process cwd is a different tree from the
+    // harness, so a cwd-based resolution could not pass this control.
+    expect(process.cwd() === f.harness || process.cwd().startsWith(`${f.harness}/`)).toBe(false);
+    const control = await inspectPhase1Readiness(f.binding, f.input);
+    expect(control.ready).toBe(true);
+    if (!control.ready) throw new Error(`unexpected refusal: ${control.codes.join(", ")}`);
+
+    // Snapshot pointer values are harness-root relative by the engine's own
+    // convention (`snapshot.compass_ref` must be relative and resolves against
+    // the harness root with containment; `plans[].file` is stored the same way).
+    // Rewriting the registered plan row to a harness-relative value must stay
+    // ready, from a cwd that is not the harness root.
+    const snapshot = JSON.parse(text(snapshotPathOf(f))) as { plans: Record<string, unknown>[] };
+    const planId = f.planIds[0]!;
+    writeJson(snapshotPathOf(f), {
+      ...snapshot,
+      plans: snapshot.plans.map((row) => ({ ...row, file: join("plans", `${planId}.md`) })),
+    });
+    const relative = await inspectPhase1Readiness(f.binding, f.input);
+    expect(relative.ready).toBe(true);
+    if (!relative.ready) throw new Error(`unexpected refusal: ${relative.codes.join(", ")}`);
+
+    // A relative value that leaves the harness root is refused even when the
+    // receipt names that escaped path: relative resolution is a *base*, not a
+    // blanket acceptance, and containment still decides.
+    const outsidePlans = join(f.main, "outside-plans");
+    mkdirSync(outsidePlans, { recursive: true });
+    const escapedPlan = join(outsidePlans, "escaped.md");
+    writeFileSync(escapedPlan, "# escaped plan\n");
+    const escapedInput = {
+      ...f.input,
+      plans: [{ ...f.input.plans[0]!, planPath: escapedPlan }],
+    } as unknown as Phase1CompletionInput;
+    const escapedSnapshot = JSON.parse(text(snapshotPathOf(f))) as { plans: Record<string, unknown>[] };
+    writeJson(snapshotPathOf(f), {
+      ...escapedSnapshot,
+      plans: escapedSnapshot.plans.map((row) => ({ ...row, file: join("..", "outside-plans", "escaped.md") })),
+    });
+    const escapedRelative = await inspectPhase1Readiness(f.binding, escapedInput);
+    expect(escapedRelative.ready).toBe(false);
+    expect(codesOf(escapedRelative)).toContain("prepare-not-locked");
+
+    // The same escaped target named absolutely is refused identically: absolute
+    // values are taken as written and containment decides.
+    const absoluteSnapshot = JSON.parse(text(snapshotPathOf(f))) as { plans: Record<string, unknown>[] };
+    writeJson(snapshotPathOf(f), {
+      ...absoluteSnapshot,
+      plans: absoluteSnapshot.plans.map((row) => ({ ...row, file: escapedPlan })),
+    });
+    const escapedAbsolute = await inspectPhase1Readiness(f.binding, escapedInput);
+    expect(escapedAbsolute.ready).toBe(false);
+    expect(codesOf(escapedAbsolute)).toContain("prepare-not-locked");
+  });
+
+  test("an absolute compass reference still validates", async () => {
+    const f = await buildFixture();
+
+    // `snapshot.compass_ref` is canonically relative; an absolute pointer that
+    // resolves to exactly the bound compass is still accepted (the identity
+    // check is what decides, not the textual form).
+    patchSnapshot(f, { compass_ref: compassPathOf(f) });
+    const readiness = await inspectPhase1Readiness(f.binding, f.input);
+    expect(readiness.ready).toBe(true);
+
+    // An absolute pointer to a different file is refused.
+    patchSnapshot(f, { compass_ref: join(f.root, "elsewhere-compass.md") });
+    const other = await inspectPhase1Readiness(f.binding, f.input);
+    expect(other.ready).toBe(false);
+    expect(codesOf(other)).toContain("binding-invalid");
+  });
 });

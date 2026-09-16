@@ -640,9 +640,15 @@ export async function inspectPhase1Readiness(
   }
   if (!validateCompassFrontmatter(compass).ok) fail("binding-invalid");
   if (compass.iteration_id !== binding.workflowId) fail("binding-invalid");
+  // `snapshot.compass_ref` is canonically harness-root relative (the engine's
+  // amendment reader requires exactly that); an absolute pointer is still accepted
+  // here as long as it resolves to the *bound* compass path, so this checkpoint
+  // never refuses a self-consistent snapshot whose form the writer chose.
   if (
     !isNonEmptyString(snapshot.compass_ref) ||
-    canonicalizeNearestExisting(join(harnessRoot, snapshot.compass_ref)) !== compassFile.real
+    canonicalizeNearestExisting(
+      isAbsolute(snapshot.compass_ref) ? snapshot.compass_ref : join(harnessRoot, snapshot.compass_ref),
+    ) !== compassFile.real
   ) {
     fail("binding-invalid");
   }
@@ -700,13 +706,23 @@ export async function inspectPhase1Readiness(
     for (const plan of receiptPlans) {
       const row = rows.find((candidate) => rowId(candidate) === plan.planId);
       const registeredFile = isPlainObject(row) && isNonEmptyString(row.file) ? row.file : null;
+      // Relative snapshot pointer values are resolved against the **harness root**,
+      // which is the snapshot's own documented convention — the engine's amendment
+      // reader requires `compass_ref` to be relative and resolves it as
+      // `join(harnessRoot, ref)` under a harness-root containment check
+      // (`packages/engine/src/coordination.ts` `readPrepareCompass`), and its
+      // migration writes snapshot pointers harness-relative (`migrate.ts`). Never
+      // against `process.cwd()`, which is unrelated to the bound control root.
+      // Absolute values are taken as written; containment below still decides.
+      const registeredFileAbs =
+        registeredFile === null || isAbsolute(registeredFile) ? registeredFile : join(harnessRoot, registeredFile);
       const planFile = sample(plan.planPath, "prepare-not-locked", [planArea]);
       const evidenceFile = sample(plan.prepareEvidencePath, "prepare-not-locked", [iterationArea, planArea]);
       // Each plan occurs exactly once (checked above), with its registered file.
       if (
-        registeredFile === null ||
+        registeredFileAbs === null ||
         planFile === null ||
-        canonicalizeNearestExisting(registeredFile) !== planFile.real ||
+        canonicalizeNearestExisting(registeredFileAbs) !== planFile.real ||
         !isUnder(planFile.real, planArea)
       ) {
         fail("prepare-not-locked");
