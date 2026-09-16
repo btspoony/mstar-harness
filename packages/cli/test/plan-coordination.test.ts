@@ -17,7 +17,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
@@ -1621,4 +1621,61 @@ describe("Prepare workflow amendment", () => {
     expect(payload.workflow_id).toBe(PREPARE_WORKFLOW);
     expect(readText(fixture.snapshotPath)).toBe(before);
   });
+
+  test("a usage payload names the family the caller invoked, not an argv value equal to a family token", () => {
+    const fixture = makePrepareFixture();
+    const before = readText(fixture.snapshotPath);
+    // Both invocations carry an argv value equal to the *other* family token
+    // (`--session plan` is the usage error itself), so only the command the
+    // caller actually ran may decide the payload's family.
+    const usageCases: Array<{ name: string; args: string[]; operation: string }> = [
+      {
+        name: "workflow-with-a-plan-valued-flag",
+        args: ["workflow", "amend-prepare", "--session", "plan", "--force", "--json"],
+        operation: "amend-prepare",
+      },
+      {
+        name: "plan-with-a-workflow-valued-flag",
+        args: ["plan", "show", "--session", "workflow", "--force", "--json"],
+        operation: "show",
+      },
+    ];
+
+    for (const usageCase of usageCases) {
+      const result = runCli(usageCase.args, fixture.root);
+      expect(`${usageCase.name}: ${result.exitCode}`).toBe(`${usageCase.name}: 2`);
+      const payload = jsonOf(result);
+      expect(`${usageCase.name}: ${String(payload.ok)}`).toBe(`${usageCase.name}: false`);
+      expect(`${usageCase.name}: ${String(payload.code)}`).toBe(`${usageCase.name}: usage`);
+      expect(`${usageCase.name}: ${String(payload.operation)}`).toBe(`${usageCase.name}: ${usageCase.operation}`);
+    }
+    expect(readText(fixture.snapshotPath)).toBe(before);
+  }, 30000);
+
+  test("an unexpected workflow-family failure carries the workflow family's own code", () => {
+    const fixture = makePrepareFixture();
+    const view = jsonOf(runCli(showPrepareArgs(fixture), fixture.root));
+    const before = readText(fixture.snapshotPath);
+    const appendPlan = join(fixture.planDir, `${PREPARE_APPEND}.md`);
+    // The append's plan markdown turns unreadable after the engine's own
+    // existence check, so the failure is not a coordination refusal: it exits
+    // through the unexpected-error path, which must still name the family the
+    // caller ran (and must not have written anything).
+    chmodSync(appendPlan, 0o000);
+    try {
+      const failed = runCli(
+        amendPrepareArgs(fixture, { snapshot: String(view.snapshot_version), compass: String(view.compass_version) }),
+        fixture.root,
+      );
+
+      expect(failed.exitCode).toBe(1);
+      const payload = jsonOf(failed);
+      expect(payload.ok).toBe(false);
+      expect(payload.operation).toBe("amend-prepare");
+      expect(payload.code).toBe("workflow.internal-error");
+      expect(readText(fixture.snapshotPath)).toBe(before);
+    } finally {
+      chmodSync(appendPlan, 0o644);
+    }
+  }, 30000);
 });

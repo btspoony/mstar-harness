@@ -142,28 +142,31 @@ function familyOf(verb: string): string {
   return WORKFLOW_VERBS[verb] === true ? "workflow" : "plan";
 }
 
+/** The command token's position in `process.argv` (program, script, command). */
+const COMMAND_POSITION = 2;
+
 /**
  * Usage-failure object for a commander-level error (unknown option, excess
  * argument) raised by the scoped families this module registers — the `plan`
  * row verbs and the `workflow` Prepare verbs. Commander raises those before
  * any action runs, so the shared parse catch cannot know which operation the
- * argv addressed and recovers it from the argv instead. Returns `null` when
- * the argv is not one of those invocations, so unrelated commands never
- * receive a coordination-shaped payload.
+ * argv addressed and recovers the family from the command position instead:
+ * only the command slot decides, never a token found anywhere in the argv, so
+ * a flag value equal to another family's token (`--session plan`, a relative
+ * path that is itself the usage error) cannot make the payload claim it.
+ * Returns `null` when the command position is not one of those families, so
+ * unrelated invocations never receive a coordination-shaped payload.
  */
 export function planUsageFailurePayload(argv: readonly string[], message: string): string | null {
-  for (const family of SCOPED_VERB_FAMILIES) {
-    const index = argv.indexOf(family.token);
-    if (index === -1) continue;
-    const verb = argv.slice(index + 1).find((token) => !token.startsWith("-"));
-    return JSON.stringify({
-      ok: false,
-      operation: verb !== undefined && family.verbs[verb] === true ? verb : family.token,
-      code: "usage",
-      message,
-    });
-  }
-  return null;
+  const family = SCOPED_VERB_FAMILIES.find((entry) => entry.token === argv[COMMAND_POSITION]);
+  if (family === undefined) return null;
+  const verb = argv.slice(COMMAND_POSITION + 1).find((token) => !token.startsWith("-"));
+  return JSON.stringify({
+    ok: false,
+    operation: verb !== undefined && family.verbs[verb] === true ? verb : family.token,
+    code: "usage",
+    message,
+  });
 }
 
 /**
@@ -171,6 +174,8 @@ export function planUsageFailurePayload(argv: readonly string[], message: string
  * own exit code, 2 for the checks below), a `coordination.*` error is the
  * engine's runtime refusal (exit 1), anything else is an unexpected failure
  * (exit 1) that still keeps machine-readable JSON valid when `--json` is on.
+ * Every line names the family the caller actually ran — this one included, so
+ * a workflow-verb failure never reports a `plan.*` code.
  */
 function failPlan(verb: string, error: unknown, json: boolean, context: PlanFailureContext): void {
   const family = familyOf(verb);
@@ -188,7 +193,7 @@ function failPlan(verb: string, error: unknown, json: boolean, context: PlanFail
     process.exitCode = 1;
     return;
   }
-  if (json) console.log(failurePayload(verb, "plan.internal-error", message, context));
+  if (json) console.log(failurePayload(verb, `${family}.internal-error`, message, context));
   else console.error(pc.red(`${family} ${verb} failed: ${message}`));
   process.exitCode = 1;
 }

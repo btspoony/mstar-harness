@@ -416,20 +416,20 @@ Patch payload (`--input`; `{PLAN_DIR}` / `{HARNESS_DIR}` / `{ITERATION_DIR}` sta
 
 - `mainWorktreeBranch` and `appendPlans` are required; `integrationWorktreePath` and `planParallelism` (`serial` | `parallel`) are optional. Any other key refuses, and a patch that appends nothing and changes neither the recorded checkout nor the parallelism refuses as a no-op.
 - Each appended row is constructed by the engine — `Todo`, progress 0, `project-manager`, current creation timestamp — so no runtime row field travels in the patch. Its plan markdown must declare `plan_id`, `Main worktree branch` and `Working branch` headers agreeing with the patch metadata and the branch this call declares.
-- Effect: the approved rows are appended and the reviewed integration checkout / `plan_parallelism` are recorded. Every existing row and unknown field survives **by value**; only the appended rows, those two requested projections and the snapshot `updated_at` change. No branch or worktree is created, switched, fetched or cleaned.
+- Effect: the approved rows are appended and the reviewed integration checkout / `plan_parallelism` are recorded. Every existing row and unknown field survives **by value**; only the appended rows, those two requested projections and the snapshot `updated_at` change — with the single engine-owned exception that the `mstar-artifacts` `references/status-and-residuals.md`「Prepare workflow amendment」section names. No branch or worktree is created, switched, fetched or cleaned.
 
 Refusals (exit 1, mutation-free — the protected snapshot, root register, other workflows and the compass stay byte-identical):
 
 | `code` | When |
 |--------|------|
 | `coordination.prepare-amendment.stale` | either byte version no longer matches the bytes inspected inside the lock (also: the compass changed while the amendment was being applied) |
-| `coordination.prepare-amendment.not-prepare` | the workflow is not `running` in `phase-1-prepare`, or its root register entry is no longer active |
+| `coordination.prepare-amendment.not-prepare` | the workflow is not `running` in `phase-1-prepare`, or its root register entry is not `running` — `paused` is active in the root register but is not admissible here, and the refusal carries the entry's observed status |
 | `coordination.prepare-amendment.execution-started` | execution ownership exists: a non-`Todo` row, row progress ≠ 0, a row `execution_lease`, a row `coordination` block, or a top-level `integration_merge_lease` |
 | `coordination.prepare-amendment.duplicate-plan` | an appended id is already a row of this workflow, or appears twice in one patch |
 | `coordination.prepare-amendment.invalid-patch` | unknown or missing patch keys, an unknown `planParallelism` value, or a patch that changes nothing |
 | `coordination.prepare-amendment.invalid-plan` | an append's own shape/id/metadata, a `file` that is not `{PLAN_DIR}/<id>.md`, a missing or mismatched plan header, a missing/escaping reference, or a `working_branch` equal to one of the workflow's branch anchors |
 | `coordination.prepare-amendment.compass-mismatch` | an unusable, malformed or foreign compass, or a plan set / `spec_integration_branch` the reviewed compass does not declare — plus, **only when the compass declares its own `integration_worktree_path`**, the checkout this call would leave recorded |
-| `coordination.prepare-amendment.invalid-worktree` | **only when the patch supplies `integrationWorktreePath`** and that path fails validation: absent, the main/control checkout, not a distinct checkout of the same repository, not on the recorded `branch.integration`, or a workflow recording no `branch.integration` to verify it against (omitting the field never triggers this) |
+| `coordination.prepare-amendment.invalid-worktree` | **only when the patch supplies `integrationWorktreePath`** and that path fails validation: absent, the main/control checkout, not a distinct checkout of the repository owning the control harness root (which must also be the repository the caller runs from), not on the recorded `branch.integration`, or a workflow recording no `branch.integration` to verify it against (omitting the field never triggers this) |
 
 Existing auth/scope refusals keep their own codes: `coordination.session-role` (not a coordinator envelope), `coordination.not-prepared` (the workflow has no coordinator binding), `coordination.session-mismatch`, `coordination.scope-mismatch`, `coordination.workflow-not-found`, `coordination.invalid-transition` (the proposed snapshot fails validation), `coordination.git-unavailable`, and the shared lock failure.
 

@@ -4758,9 +4758,10 @@ function readPlanAppend(
 
 /**
  * The recorded integration checkout (§ Admission and mutation step 5): real and
- * canonical, a distinct Git checkout of this repository, and actually on the
- * workflow's recorded `branch.integration`. Nothing is created, switched,
- * fetched or cleaned — a wrong or aliased checkout refuses instead.
+ * canonical, a distinct Git checkout of the repository that owns the validated
+ * control harness root, and actually on the workflow's recorded
+ * `branch.integration`. Nothing is created, switched, fetched or cleaned — a
+ * wrong or aliased checkout refuses instead.
  */
 function readIntegrationWorktreePath(
   value: unknown,
@@ -4780,6 +4781,27 @@ function readIntegrationWorktreePath(
   }
   const mainRoot = canonicalTarget(context.main.root);
   const control = canonicalizeNearestExisting(context.harnessRoot);
+  // The repository that owns the validated control harness root is the only
+  // anchor this proof may use. A coordinator envelope can be presented from a
+  // different clone of the same project, whose own repository — and whose own
+  // checkouts — are not this lifecycle's; anchoring on the repository enclosing
+  // the caller's cwd alone would record that clone's checkout. So the caller's
+  // enclosing repository must be the control root's repository, and so must the
+  // candidate.
+  const controlRepo = readMainWorktree(control);
+  if (controlRepo === null) {
+    return refuse(
+      `the control harness root ${control} has no readable Git main worktree \u2014 the integration checkout cannot be proven to be a checkout of this repository`,
+      { path, harness_root: control },
+    );
+  }
+  const controlMainRoot = canonicalTarget(controlRepo.root);
+  if (controlMainRoot !== mainRoot) {
+    return refuse(
+      `this call runs from the main worktree of ${mainRoot}, not the repository owning the control harness root ${control} (${controlMainRoot}) \u2014 the recorded checkout must belong to that repository`,
+      { path, expected: controlMainRoot, actual: mainRoot },
+    );
+  }
   if (path === mainRoot || path === control) {
     return refuse(`integration checkout ${path} is the main/control checkout \u2014 a dedicated integration worktree is required`, {
       path,
@@ -4787,12 +4809,15 @@ function readIntegrationWorktreePath(
     });
   }
   const repo = readMainWorktree(path);
-  if (repo === null || canonicalTarget(repo.root) !== mainRoot) {
-    return refuse(`integration checkout ${path} is not a checkout of the main repository ${mainRoot}`, {
-      path,
-      expected: mainRoot,
-      actual: repo === null ? null : canonicalTarget(repo.root),
-    });
+  if (repo === null || canonicalTarget(repo.root) !== controlMainRoot) {
+    return refuse(
+      `integration checkout ${path} is not a checkout of the repository owning the control harness root ${control} (${controlMainRoot})`,
+      {
+        path,
+        expected: controlMainRoot,
+        actual: repo === null ? null : canonicalTarget(repo.root),
+      },
+    );
   }
   if (!isDistinctCheckout(context.main.root, path)) {
     return refuse(`integration checkout ${path} is not a distinct checkout (same Git checkout as ${mainRoot})`, {
@@ -5123,14 +5148,24 @@ export async function amendPrepareWorkflow(
       );
     }
     await commitSnapshot(scope.harnessRoot, scope.workflowId, scope.snapshotPath, next);
+    // The returned CAS token is read from the bytes this call just wrote,
+    // inside the critical section: a version read after the lock is released
+    // could name a competing commit that landed in between, while the reported
+    // plan ids and compass version would still be this call's.
+    const written = readArtifactBytes(scope.snapshotPath);
+    if (written === undefined) {
+      throw new CoordinationError(
+        "coordination.store",
+        `snapshot ${scope.snapshotPath} is unreadable after this call committed it`,
+        { path: scope.snapshotPath },
+      );
+    }
     return {
       planIds: next.plans.map((row) => rowPlanIds(row)[0] ?? ""),
       compassVersion: compass.version,
+      snapshotVersion: written.version,
     };
   });
-  // The returned snapshot version is the engine's own read of the bytes this
-  // call just committed — never a synthesized token.
-  const written = await readCoordinatedArtifact(scope.harnessRoot, { kind: "snapshot", key: scope.workflowId });
   return {
     ok: true,
     operation: "amend-prepare",
@@ -5141,7 +5176,7 @@ export async function amendPrepareWorkflow(
     // path/policy, so the workflow stays admissible after the commit.
     view: {
       workflowId: scope.workflowId,
-      snapshotVersion: written.version,
+      snapshotVersion: committed.snapshotVersion,
       compassVersion: committed.compassVersion,
       planIds: committed.planIds,
       allowed: true,

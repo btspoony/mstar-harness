@@ -51,10 +51,10 @@ import {
   type PrepareWorkflowPatch,
   type PrepareWorkflowResult,
 } from "../src/coordination.js";
-import { CoordinationError, artifactVersion, withProtectedWrite } from "../src/coordination-write.js";
+import { CoordinationError, artifactVersion, readArtifactBytes, withProtectedWrite } from "../src/coordination-write.js";
 import { claimLease, withStatusWriteLock } from "../src/lease.js";
 import { registerWorkflow } from "../src/status.js";
-import { createFsStore, setArtifactStore } from "../src/store.js";
+import { createFsStore, setArtifactStore, type ArtifactDoc, type ArtifactRef, type ArtifactStore } from "../src/store.js";
 import { writeWorkflowSnapshot, type WorkflowSnapshot } from "../src/workflow.js";
 
 const WORKFLOW_ID = "wf-plana";
@@ -2270,11 +2270,11 @@ async function amendPrepare(fixture: PrepareFixture, patch: unknown): Promise<Pr
 function amendWith(
   fixture: PrepareFixture,
   patch: unknown,
-  tokens: { snapshotVersion: string; compassVersion: string; sessionPath?: string },
+  tokens: { snapshotVersion: string; compassVersion: string; sessionPath?: string; cwd?: string },
 ): Promise<PrepareWorkflowResult> {
   return amendPrepareWorkflow({
     sessionPath: tokens.sessionPath ?? fixture.coordinatorSession,
-    cwd: fixture.root,
+    cwd: tokens.cwd ?? fixture.root,
     expectedSnapshotVersion: tokens.snapshotVersion,
     expectedCompassVersion: tokens.compassVersion,
     patch: patch as unknown as PrepareWorkflowPatch,
@@ -2296,6 +2296,68 @@ async function failureOf(run: () => Promise<unknown>): Promise<Error> {
     return error instanceof Error ? error : new Error(String(error));
   }
   throw new Error("expected the call to fail");
+}
+
+/**
+ * A store double standing in for a harness where a competing writer is active.
+ *
+ * A competing writer reaches the snapshot the moment the write lock is free, so
+ * a version read taken *after* the critical section can name that writer's
+ * commit instead of this call's. The double publishes its own valid version of
+ * the document this call committed at the engine's next store consultation once
+ * the commit is on disk and the lockdir is gone — the earliest point the engine
+ * itself hands control back after the commit. `publishCompetitor` drives the
+ * same commit explicitly, so a case asserts which commit the returned token
+ * names without depending on when the engine consults the store again.
+ */
+class CompetingCommitStore implements ArtifactStore {
+  /** Byte version of the snapshot this call committed. */
+  commitVersion = "";
+  /** Byte version of the competing commit (empty until it lands). */
+  competingVersion = "";
+  private committed: Record<string, unknown> | undefined;
+  private published = false;
+
+  constructor(
+    private readonly inner: ArtifactStore & { root: string },
+    private readonly snapshotPath: string,
+    private readonly lockDir: string,
+    private readonly competitorStamp: string,
+  ) {}
+
+  get root(): string {
+    this.publish();
+    return this.inner.root;
+  }
+
+  async put(doc: ArtifactDoc): Promise<void> {
+    await this.inner.put(doc);
+    if (doc.kind !== "snapshot") return;
+    this.committed = doc.payload as Record<string, unknown>;
+    this.commitVersion = readArtifactBytes(this.snapshotPath)?.version ?? "";
+  }
+
+  async get<T = unknown>(ref: ArtifactRef): Promise<T | undefined> {
+    return this.inner.get<T>(ref);
+  }
+
+  /** Commit the competitor's version now — the writer that took the free lock. */
+  publishCompetitor(): string {
+    this.publish();
+    return this.competingVersion;
+  }
+
+  private publish(): void {
+    // The lock is the competitor's only gate: while this call holds it no other
+    // writer can commit, so only a free lock is the window.
+    if (this.committed === undefined || this.published || existsSync(this.lockDir)) return;
+    this.published = true;
+    writeFileSync(
+      this.snapshotPath,
+      `${JSON.stringify({ ...this.committed, updated_at: this.competitorStamp }, null, 2)}\n`,
+    );
+    this.competingVersion = readArtifactBytes(this.snapshotPath)?.version ?? "";
+  }
 }
 
 /** Every protected artifact one refused amendment must leave untouched. */
@@ -3079,6 +3141,72 @@ describe("Prepare workflow amendment", () => {
       );
       expect(protectedBytes(fixture)).toEqual(before);
     }
+  }, 30000);
+
+  test("the recorded checkout is proven against the repository owning the control harness root, never the caller's clone", async () => {
+    const fixture = makePrepareFixture();
+    await ensurePrepareCoordinator(fixture);
+
+    // A second clone of the same project: its own repository, its own `main`
+    // and its own real checkout on the workflow's recorded branch.integration —
+    // the checkout the caller's clone could otherwise record as this
+    // lifecycle's integration worktree.
+    const clonePath = realpathSync(mkdtempSync(join(tmpdir(), "mstar-prepare-clone-")));
+    rmSync(clonePath, { recursive: true, force: true });
+    git(["clone", "-q", fixture.root, clonePath], tmpdir());
+    const clone = realpathSync(clonePath);
+    roots.push(clone);
+    const cloneCheckout = join(clone, "wt-integration");
+    git(["worktree", "add", "-q", "-b", PREPARE_INTEGRATION_BRANCH, cloneCheckout], clone);
+
+    const view = await prepareViewOf(fixture);
+    const before = protectedBytes(fixture);
+
+    const refusal = await prepareRefusalOf(() =>
+      amendWith(fixture, preparePatchOf(fixture, { integrationWorktreePath: cloneCheckout }), {
+        snapshotVersion: view.view.snapshotVersion,
+        compassVersion: view.view.compassVersion,
+        cwd: clone,
+      }),
+    );
+
+    expect(refusal.code).toBe("coordination.prepare-amendment.invalid-worktree");
+    expect(protectedBytes(fixture)).toEqual(before);
+    expect(prepareSnapshotOf(fixture).integration_worktree_path).toBeUndefined();
+
+    // The legitimate call from the control root's own repository still records
+    // that repository's reviewed checkout.
+    const amended = await amendPrepare(fixture, preparePatchOf(fixture, { integrationWorktreePath: fixture.integrationPath }));
+    expect(amended.view.planIds).toEqual([PREPARE_ROW, PREPARE_APPEND]);
+    expect(prepareSnapshotOf(fixture).integration_worktree_path).toBe(fixture.integrationPath);
+  }, 30000);
+
+  test("the returned snapshot version names the commit this call made, never a competing commit", async () => {
+    const fixture = makePrepareFixture();
+    await ensurePrepareCoordinator(fixture);
+    const view = await prepareViewOf(fixture);
+    const lockDir = join(dirname(fixture.snapshotPath), ".status-write.lockdir");
+    const store = new CompetingCommitStore(
+      createFsStore(fixture.harness),
+      fixture.snapshotPath,
+      lockDir,
+      "2099-01-01T00:00:00.000Z",
+    );
+    setArtifactStore(store);
+
+    const amended = await amendWith(fixture, preparePatchOf(fixture), {
+      snapshotVersion: view.view.snapshotVersion,
+      compassVersion: view.view.compassVersion,
+    });
+
+    // The returned token is the byte version of this call's own commit, not the
+    // state the snapshot was left in afterwards.
+    expect(amended.view.snapshotVersion).toBe(store.commitVersion);
+    const competitor = store.publishCompetitor();
+    expect(competitor).not.toBe("");
+    expect(competitor).not.toBe(store.commitVersion);
+    expect(amended.view.snapshotVersion).toBe(store.commitVersion);
+    expect(readArtifactBytes(fixture.snapshotPath)?.version).toBe(competitor);
   }, 30000);
 
   test("unknown patch keys, malformed values and a no-op patch refuse as invalid-patch", async () => {
