@@ -1,7 +1,7 @@
 /**
  * Phase-2 settings normalization and bounded reminder decision — scoped contract
  * checks for `packages/omp/src/phase2-orchestration.ts` (plan
- * `20260916-omp-phase2-instances` T1, primary spec §B/§C).
+ * the registered Phase-2 instances plan T1, primary spec §B/§C).
  *
  * The decision cases are pure. They pin the once-per-changed-state latch, the
  * owner/phase and unavailable-snapshot inertness, native-delivery suppression,

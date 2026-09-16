@@ -4,7 +4,7 @@
  *
  * Primary spec: `{SPECS_DIR}/omp-phase2-instances.md` §A (native observation),
  * §B (reminder event/latch) and §C (capacity/reservation); plan
- * `20260916-omp-phase2-instances` T3. The two decisions this module consumes
+ * the registered Phase-2 instances plan T3. The two decisions this module consumes
  * live next to it and are not re-implemented here:
  *
  * - `./phase2-orchestration` (T1) owns the native settings decode and

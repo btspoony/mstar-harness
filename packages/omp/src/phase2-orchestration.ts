@@ -3,8 +3,7 @@
  * bounded reminder decision.
  *
  * Primary spec: `{SPECS_DIR}/omp-phase2-instances.md` §B (reminder event and
- * latch contract) and §C (capacity/settings); plan `20260916-omp-phase2-instances`
- * T1. Two pure surfaces:
+ * latch contract) and §C (capacity/settings); plan: the registered Phase-2 instances plan, Task 1. Two pure surfaces:
  *
  * - `decodePhase2Settings` / `readPhase2Settings` normalize the native
  *   `@mstar-harness/omp` preference pair `phase2PlanInstances` /

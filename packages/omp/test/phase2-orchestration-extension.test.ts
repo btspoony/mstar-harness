@@ -1,6 +1,6 @@
 /**
  * Phase-2 host adapter tests — `packages/omp/src/extensions/phase2-orchestration.ts`
- * (plan `20260916-omp-phase2-instances` T3; primary spec §A native observation,
+ * (plan the registered Phase-2 instances plan T3; primary spec §A native observation,
  * §B reminder event/latch, §C capacity/journal).
  *
  * ## What is real here, and what the test supplies

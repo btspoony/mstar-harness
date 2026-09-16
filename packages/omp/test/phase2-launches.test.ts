@@ -1,6 +1,6 @@
 /**
  * Phase-2 launch admission journal — scoped checks for
- * `packages/omp/src/phase2-launches.ts` (plan `20260916-omp-phase2-instances`
+ * `packages/omp/src/phase2-launches.ts` (plan the registered Phase-2 instances plan
  * T2; primary spec §C capacity/reservation and §D transport boundary).
  *
  * Fixture discipline: every coordination fact these cases assert on is created
