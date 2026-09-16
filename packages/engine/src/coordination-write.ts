@@ -64,6 +64,17 @@ export const COORDINATION_ERROR_CODES = [
   "coordination.not-implemented",
   "coordination.lock",
   "coordination.store",
+  // Prepare amendment refusals (the guarded Prepare-stage amendment contract
+  // § Admission and mutation): one code per documented reason, so a caller
+  // branches on the exact refusal instead of parsing the message.
+  "coordination.prepare-amendment.stale",
+  "coordination.prepare-amendment.invalid-patch",
+  "coordination.prepare-amendment.not-prepare",
+  "coordination.prepare-amendment.execution-started",
+  "coordination.prepare-amendment.duplicate-plan",
+  "coordination.prepare-amendment.invalid-plan",
+  "coordination.prepare-amendment.compass-mismatch",
+  "coordination.prepare-amendment.invalid-worktree",
 ] as const;
 
 export type CoordinationErrorCode = (typeof COORDINATION_ERROR_CODES)[number];
