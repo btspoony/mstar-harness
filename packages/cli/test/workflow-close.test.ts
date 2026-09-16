@@ -713,4 +713,40 @@ describe("mstar workflow evidence", () => {
       expect(readFileSync(root, "utf8")).not.toBe(beforeRoot);
     });
   });
+
+  test("--declare-kind: a supplied anchor conflicting with a registered one is refused, the identical value restates it (§1)", () => {
+    setupHarness((harness, { snapshot }) => {
+      // Kind-less, but already carrying the delivery anchors of an earlier
+      // producer-shaped write: the declaration fills the kind, never re-points
+      // the delivery.
+      writeFileSync(
+        snapshot,
+        JSON.stringify(
+          snapshotDoc({ delivery_kind: undefined, branch: { source: "feature/registered", target: "main" }, delivery: undefined }),
+          null,
+          2,
+        ),
+        "utf8",
+      );
+      const before = readFileSync(snapshot, "utf8");
+
+      const conflicting = runCli([
+        "workflow", "evidence", "--workflow", WORKFLOW_ID,
+        "--declare-kind", "development", "--branch-source", "feature/other", "--branch-target", "main", "--harness", harness,
+      ]);
+      expect(conflicting.exitCode).toBe(1);
+      expect(conflicting.stderr).toContain('branch.source is already "feature/registered"');
+      expect(readFileSync(snapshot, "utf8")).toBe(before);
+
+      const restated = runCli([
+        "workflow", "evidence", "--workflow", WORKFLOW_ID,
+        "--declare-kind", "development", "--branch-source", "feature/registered", "--branch-target", "main",
+        "--at", "2026-09-16T03:00:00Z", "--harness", harness,
+      ]);
+      expect(restated.exitCode).toBe(0);
+      const stored = JSON.parse(readFileSync(snapshot, "utf8")) as Record<string, unknown>;
+      expect(stored.delivery_kind).toBe("development");
+      expect(stored.branch).toEqual({ source: "feature/registered", target: "main" });
+    });
+  });
 });

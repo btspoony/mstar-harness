@@ -423,6 +423,7 @@ describe("mstar migrate --json — machine-readable output", () => {
  */
 describe("mstar migrate — delivery kind for ACTIVE standalone plan lifts", () => {
   const ACTIVE_ID = "00000819-fixture-standalone-active";
+  const SECOND_ACTIVE_ID = "00000820-fixture-standalone-active-2";
 
   /** The v1 fixture plus one ACTIVE (InProgress -> running) standalone plan row. */
   function activeRowTree(): string {
@@ -439,6 +440,24 @@ describe("mstar migrate — delivery kind for ACTIVE standalone plan lifts", () 
       },
     ]);
     doc.plans = plans;
+    writeFileSync(statusPath, JSON.stringify(doc, null, 2), "utf8");
+    return root;
+  }
+
+  /** The v1 fixture plus TWO ACTIVE standalone plan rows (distinct plans). */
+  function twoActiveRowTree(): string {
+    const root = activeRowTree();
+    const statusPath = join(root, "status.json");
+    const doc = readJsonFile(statusPath);
+    doc.plans = (doc.plans as Array<Record<string, unknown>>).concat([
+      {
+        id: SECOND_ACTIVE_ID,
+        file: `.mstar/plans/${SECOND_ACTIVE_ID}.md`,
+        title: "Fixture standalone active row 2",
+        status: "Todo",
+        created_at: "2026-08-20",
+      },
+    ]);
     writeFileSync(statusPath, JSON.stringify(doc, null, 2), "utf8");
     return root;
   }
@@ -474,6 +493,34 @@ describe("mstar migrate — delivery kind for ACTIVE standalone plan lifts", () 
       expect(r.exitCode).toBe(1);
       expect(r.stderr).toContain("delivery source and target branches");
       expect(existsSync(join(root, "workflows"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("one declaration for 2+ ACTIVE standalone lifts is refused as usage (exit 2, ids listed, zero writes)", () => {
+    const root = twoActiveRowTree();
+    try {
+      const before = treeFiles(root);
+      const args = [
+        "migrate", "--path", root,
+        "--delivery-kind", "development", "--branch-source", "feature/standalone", "--branch-target", "main",
+      ];
+      const refused = runCli(args);
+      expect(refused.exitCode).toBe(2);
+      expect(refused.stderr).toContain("a single delivery declaration cannot describe 2 active standalone plan lifts");
+      expect(refused.stderr).toContain(ACTIVE_ID);
+      expect(refused.stderr).toContain(SECOND_ACTIVE_ID);
+      expect(refused.stderr).toContain("batches of one declared plan");
+      expect(treeFiles(root)).toEqual(before);
+
+      // The JSON shape keeps the plan-phase contract for the refusal.
+      const json = runCli([...args, "--json"]);
+      expect(json.exitCode).toBe(2);
+      const doc = JSON.parse(json.stdout) as Record<string, unknown>;
+      expect(doc).toMatchObject({ ok: false, phase: "plan", exitCode: 2 });
+      expect(String(doc.error)).toContain(SECOND_ACTIVE_ID);
+      expect(treeFiles(root)).toEqual(before);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

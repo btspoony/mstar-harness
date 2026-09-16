@@ -1465,7 +1465,10 @@ workflowCommand
       "merge itself); `verification/report-only` records the fulfilment of its registered completion policy (\u00a71). " +
       "With --declare-kind, an ACTIVE `type: plan` snapshot that carries no kind (audit promotion / v1 lift from " +
       "before the producers declared one) receives its kind and its per-kind evidence ONCE \u2014 a second declaration, " +
-      "even with the same value, and any terminal snapshot, are refused. Authorized exactly like the close: a " +
+      "even with the same value, and any terminal snapshot, are refused. A supplied --branch-source/--branch-target " +
+      "fills a missing delivery anchor or restates the registered one; a value conflicting with an anchor the " +
+      "snapshot already carries is refused (the registered anchor is the delivery identity, never overwritten). " +
+      "Authorized exactly like the close: a " +
       "coordinated workflow's snapshot is written only for its own bound coordinator envelope (--session). " +
       "Exit 0 success/no-op, 1 gate/IO refusal, 2 usage",
   )
@@ -1568,13 +1571,16 @@ const migrateCommand = program
   .command("migrate")
   .description(
     "Migrate a v1 {HARNESS_DIR} status.json tree to v2 (engine-backed; exit 0 ok/idempotent no-op, 1 plan-invalid, " +
-      "2 usage (missing --delivery-kind for an ACTIVE standalone plan lift) / apply-failure). " +
+      "2 usage (missing --delivery-kind for an ACTIVE standalone plan lift, or one declaration for 2+ such lifts) / " +
+      "apply-failure). " +
       "--delivery-kind declares the lifted ACTIVE plan workflows' kind (contract \u00a71/\u00a74a); " +
-      "`development` needs --branch-source/--branch-target, `verification/report-only` --completion-policy",
+      "`development` needs --branch-source/--branch-target, `verification/report-only` --completion-policy. " +
+      "It is ONE delivery identity, so a tree whose lift creates 2+ ACTIVE standalone plans is refused (exit 2, ids " +
+      "listed) \u2014 migrate in batches of one declared plan",
   )
   .option("--dry-run", "Print the migration step plan (source \u2192 destination) + planned-document validation warnings without writing anything")
   .option("--path <root>", "Harness root to migrate (default: resolved {HARNESS_DIR}, else cwd)")
-  .option("--delivery-kind <kind>", `Delivery kind for lifted ACTIVE standalone plan snapshots: ${WORKFLOW_DELIVERY_KINDS.join(" | ")}`)
+  .option("--delivery-kind <kind>", `Delivery kind for lifted ACTIVE standalone plan snapshots (exactly one such lift per run): ${WORKFLOW_DELIVERY_KINDS.join(" | ")}`)
   .option("--branch-source <branch>", "Delivery source branch recorded as branch.source (required for development)")
   .option("--branch-target <branch>", "Delivery target branch recorded as branch.target (required for development)")
   .option("--completion-policy <text>", "Completion policy for verification/report-only lifts (required for that kind)")

@@ -705,38 +705,48 @@ describe("applyMigratePlan — executor on a copied fixture tree", () => {
 });
 
 describe("residual lift + status-mapping fixture (derived from the snapshot fixture)", () => {
-  /** Real fixture + synthetic standalone rows (Todo/InProgress/Blocked) + a
+  /** The synthetic standalone rows the fixture can add (status mapping). */
+  const MAPPED_ROWS: Record<"todo" | "running" | "blocked", Record<string, unknown>> = {
+    todo: {
+      id: "00000819-fixture-standalone-todo",
+      file: ".mstar/plans/00000819-fixture-standalone-todo.md",
+      title: "Fixture standalone Todo row",
+      status: "Todo",
+      created_at: "2026-08-19",
+    },
+    running: {
+      id: "00000819-fixture-standalone-running",
+      file: ".mstar/plans/00000819-fixture-standalone-running.md",
+      title: "Fixture standalone InProgress row",
+      status: "InProgress",
+      created_at: "2026-08-19",
+    },
+    blocked: {
+      id: "00000819-fixture-standalone-blocked",
+      file: ".mstar/plans/00000819-fixture-standalone-blocked.md",
+      title: "Fixture standalone Blocked row",
+      status: "Blocked",
+      created_at: "2026-08-19",
+    },
+  };
+
+  /**
+   * Real fixture + synthetic standalone rows (Todo/InProgress/Blocked) + a
    * non-empty residual_findings map covering: single-entry plan (iteration-
    * grouped -> lifecycle_id), multi-entry plan (ALL open residuals kept,
    * sorted by id, array schema), closed entries (never
-   * lifted), and empty arrays (skipped). */
-  function mappedTree(): string {
+   * lifted), and empty arrays (skipped).
+   *
+   * `standalone` selects which synthetic rows the tree carries: the single
+   * declaration a migration run takes may describe exactly ONE ACTIVE
+   * standalone lift (§1/G5), so a test that APPLIES the plan passes one row,
+   * while the status-mapping assertions use all three.
+   */
+  function mappedTree(standalone: readonly ("todo" | "running" | "blocked")[] = ["todo", "running", "blocked"]): string {
     const root = fixtureTree();
     const statusPath = join(root, "status.json");
     const doc = readJson(statusPath);
-    const plans = (doc.plans as Record<string, unknown>[]).concat([
-      {
-        id: "00000819-fixture-standalone-todo",
-        file: ".mstar/plans/00000819-fixture-standalone-todo.md",
-        title: "Fixture standalone Todo row",
-        status: "Todo",
-        created_at: "2026-08-19",
-      },
-      {
-        id: "00000819-fixture-standalone-running",
-        file: ".mstar/plans/00000819-fixture-standalone-running.md",
-        title: "Fixture standalone InProgress row",
-        status: "InProgress",
-        created_at: "2026-08-19",
-      },
-      {
-        id: "00000819-fixture-standalone-blocked",
-        file: ".mstar/plans/00000819-fixture-standalone-blocked.md",
-        title: "Fixture standalone Blocked row",
-        status: "Blocked",
-        created_at: "2026-08-19",
-      },
-    ]);
+    const plans = (doc.plans as Record<string, unknown>[]).concat(standalone.map((key) => MAPPED_ROWS[key]));
     doc.plans = plans;
     doc.residual_findings = {
       "00000814-dsh-fallbacks-integration": [residual({ id: "R1" })],
@@ -773,16 +783,33 @@ describe("residual lift + status-mapping fixture (derived from the snapshot fixt
       expect(parsed.text).toContain("00000819-fixture-standalone-todo not started");
       expect(parsed.text).toContain("paused");
 
-      const result = await applyMigratePlan(plan);
-      expect(result.applied).toBe(true);
-      expect(readJson(join(root, "workflows", "00000819-fixture-standalone-todo", WORKFLOW_SNAPSHOT_FILE)).status).toBe("paused");
+      // The three ACTIVE standalone lifts cannot share the single declaration
+      // this plan carries (G5): the plan is not applicable and nothing is
+      // written — the migration splits into one declared plan per run.
+      expect(plan.deliveryKindAmbiguous).toEqual([
+        "00000819-fixture-standalone-blocked",
+        "00000819-fixture-standalone-running",
+        "00000819-fixture-standalone-todo",
+      ]);
+      await expect(applyMigratePlan(plan)).rejects.toThrow(/cannot describe 3 active standalone plan lifts/);
+      expect(existsSync(join(root, "workflows"))).toBe(false);
+
+      // A tree with ONE ACTIVE standalone lift applies and lands the mapped
+      // (paused) snapshot — the apply path itself is unchanged.
+      const single = mappedTree(["todo"]);
+      try {
+        expect((await applyMigratePlan(planOf(single))).applied).toBe(true);
+        expect(readJson(join(single, "workflows", "00000819-fixture-standalone-todo", WORKFLOW_SNAPSHOT_FILE)).status).toBe("paused");
+      } finally {
+        rmSync(single, { recursive: true, force: true });
+      }
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
   test("open residuals lift into projects/_default/residuals.json keyed by plan id with provenance (arrays)", async () => {
-    const root = mappedTree();
+    const root = mappedTree(["todo"]);
     try {
       const plan = planOf(root);
       expect(plan.register).not.toBeNull();
@@ -834,7 +861,7 @@ describe("residual lift + status-mapping fixture (derived from the snapshot fixt
   });
 
   test("projectId option routes register + roadmap to the chosen project", async () => {
-    const root = mappedTree();
+    const root = mappedTree(["todo"]);
     try {
       const plan = planOf(root, { projectId: "acme" });
       expect(plan.register!.file).toBe("projects/acme/residuals.json");
@@ -848,7 +875,7 @@ describe("residual lift + status-mapping fixture (derived from the snapshot fixt
   });
 
   test("archived residual files are legacy history — never lifted, never touched", async () => {
-    const root = mappedTree();
+    const root = mappedTree(["todo"]);
     try {
       const archivedResidualsBefore = snapshotTree(join(root, "archived", "residuals"));
       const plan = planOf(root);
@@ -1518,6 +1545,7 @@ describe("raw-byte target-ownership guards (archive / notes / roadmap)", () => {
 describe("migrateHarnessTree — delivery kind on standalone plan lifts", () => {
   const ACTIVE = new Set(["running", "paused"]);
   const ACTIVE_ID = "00000819-fixture-standalone-active";
+  const SECOND_ACTIVE_ID = "00000820-fixture-standalone-active-2";
 
   /** Real fixture + one ACTIVE (InProgress -> running) standalone plan row. */
   function activeTree(): string {
@@ -1573,6 +1601,87 @@ describe("migrateHarnessTree — delivery kind on standalone plan lifts", () => 
       expect(existsSync(join(root, "workflows"))).toBe(false);
       expect(existsSync(join(root, ARCHIVED_STATUS_V1_FILE))).toBe(false);
       expect(Buffer.compare(readFileSync(join(root, "status.json")), before)).toBe(0);
+    } finally {
+      setArtifactStore(undefined);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  /** The fixture plus a SECOND ACTIVE (Todo -> paused) standalone plan row. */
+  function twoActiveTree(): string {
+    const root = activeTree();
+    const statusPath = join(root, "status.json");
+    const doc = readJson(statusPath);
+    const plans = (doc.plans as Record<string, unknown>[]).concat([
+      {
+        id: SECOND_ACTIVE_ID,
+        file: `.mstar/plans/${SECOND_ACTIVE_ID}.md`,
+        title: "Fixture standalone active row 2",
+        status: "Todo",
+        created_at: "2026-08-20",
+      },
+    ]);
+    doc.plans = plans;
+    writeJson(statusPath, doc);
+    return root;
+  }
+
+  test("one declaration cannot describe 2+ ACTIVE standalone lifts: the plan reports the ambiguity and apply refuses with zero writes", async () => {
+    const root = twoActiveTree();
+    try {
+      setArtifactStore(createFsStore(root));
+      const plan = migrateHarnessTree(root, {
+        deliveryKind: "development",
+        branchSource: "feature/standalone",
+        branchTarget: "main",
+      });
+      // Both ACTIVE lifts (running + paused) would take the single declaration;
+      // the terminal one is exempt and never counted.
+      expect(plan.deliveryKindAmbiguous).toEqual([ACTIVE_ID, SECOND_ACTIVE_ID]);
+      // The ambiguity is what makes the plan inapplicable — not a missing flag.
+      expect(plan.deliveryKindRequired).toEqual([]);
+      const before = readFileSync(join(root, "status.json"));
+      await expect(applyMigratePlan(plan)).rejects.toThrow(
+        /one delivery declaration cannot describe 2 active standalone plan lifts/,
+      );
+      // Zero writes: no snapshot dir, no archive, the v1 root bytes stay.
+      expect(existsSync(join(root, "workflows"))).toBe(false);
+      expect(existsSync(join(root, ARCHIVED_STATUS_V1_FILE))).toBe(false);
+      expect(Buffer.compare(readFileSync(join(root, "status.json")), before)).toBe(0);
+    } finally {
+      setArtifactStore(undefined);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a terminal lift never consumes the declaration quota: one ACTIVE + one completed row stays applicable", async () => {
+    const root = twoActiveTree();
+    try {
+      // The second row finishes before the lift (Done -> completed), leaving
+      // exactly ONE lifecycle the single declaration describes.
+      const statusPath = join(root, "status.json");
+      const doc = readJson(statusPath);
+      doc.plans = (doc.plans as Record<string, unknown>[]).map((row) =>
+        row.id === SECOND_ACTIVE_ID ? { ...row, status: "Done", done_at: "2026-08-21" } : row,
+      );
+      writeJson(statusPath, doc);
+      setArtifactStore(createFsStore(root));
+      const plan = migrateHarnessTree(root, {
+        deliveryKind: "development",
+        branchSource: "feature/standalone",
+        branchTarget: "main",
+      });
+      expect(plan.deliveryKindAmbiguous).toEqual([]);
+      expect(plan.deliveryKindRequired).toEqual([]);
+      expect(plan.snapshots.find((s) => s.id === ACTIVE_ID)!.data.delivery_kind).toBe("development");
+      // The completed lift declares nothing and is not amended.
+      expect(plan.snapshots.find((s) => s.id === SECOND_ACTIVE_ID)!.data.delivery_kind).toBeUndefined();
+
+      const applied = await applyMigratePlan(plan);
+      expect(applied.applied).toBe(true);
+      const lifted = JSON.parse(readFileSync(join(root, "workflows", ACTIVE_ID, "snapshot.json"), "utf8")) as Record<string, unknown>;
+      expect(lifted.delivery_kind).toBe("development");
+      expect(lifted.branch).toEqual({ source: "feature/standalone", target: "main" });
     } finally {
       setArtifactStore(undefined);
       rmSync(root, { recursive: true, force: true });
