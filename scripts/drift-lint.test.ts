@@ -367,6 +367,46 @@ describe("buildCliCommandInventory — enumerated .argument composites (SP3 fix 
   });
 });
 
+describe("buildCliCommandInventory — detached group declarations (`new Command` + attach)", () => {
+  /** The shape `packages/cli/src/index.ts` uses for its `workflow` verbs: the
+   * group is built detached (an eager `program.command("workflow")` aborts the
+   * whole CLI with commander's duplicate-command error when the scoped
+   * registrar already owns that group name) and attached at the end of the
+   * registration pass. */
+  const DETACHED_GROUP_SRC = [
+    'const workflowCommand = new Command("workflow").description("Workflow lifecycle verbs");',
+    "workflowCommand",
+    '  .command("register")',
+    '  .description("Register a standalone plan workflow")',
+    "  .action(async () => {});",
+    "workflowCommand",
+    '  .command("evidence")',
+    '  .description("Record the delivery evidence")',
+    "  .action(async () => {});",
+    "function attachWorkflowGroup(target: Command): void {",
+    "  target.addCommand(workflowCommand);",
+    "}",
+  ].join("\n");
+
+  test("a detached group attached via addCommand resolves its verbs (no false parent failures)", () => {
+    const { cliCommands, failures } = buildCliCommandInventory(DETACHED_GROUP_SRC);
+    expect(failures).toEqual([]);
+    expect(cliCommands.has("workflow")).toBe(true);
+    expect(cliCommands.has("workflow register")).toBe(true);
+    expect(cliCommands.has("workflow evidence")).toBe(true);
+  });
+
+  test("an orphan detached group is never registered: its verbs stay unknown parents (fail loud)", () => {
+    const { cliCommands, failures } = buildCliCommandInventory(
+      'const ghostCommand = new Command("ghost");\nghostCommand\n  .command("haunt")\n  .action(async () => {});',
+    );
+    expect(cliCommands.has("ghost")).toBe(false);
+    expect(failures).toEqual([
+      expect.stringContaining('CLI parent of "ghostCommand.command("haunt")" is not a known command var'),
+    ]);
+  });
+});
+
 describe("checkCalloutDuplication — Guard 6 Engine-check callout dedup", () => {
  /** One Engine-check callout blockquote with `body` as its content. */
   const callout = (body: string) =>

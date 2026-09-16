@@ -1202,15 +1202,15 @@ statusCommand
 statusCommand
   .command("workflow-close")
   .description(
-    "Close one workflow lifecycle after its delivery tail completes — type-generic: iterations and standalone " +
+    "Close one workflow lifecycle after its delivery tail completes \u2014 type-generic: iterations and standalone " +
       "`type: plan` workflows close through this same verb (engine-backed: closeWorkflow consults the registered " +
       "delivery evidence, then writes the terminal snapshot under the snapshot lock, then unregisterWorkflow " +
       "removes the root status.json entry idempotently; dangling leases, unfinished plan rows and incomplete " +
       "delivery evidence refuse before any write; a fully closed retry rewrites nothing; a failed unregister " +
       "reports a partial close and a re-run finishes it. " +
-      "Standalone plan workflows: the close consults the delivery evidence BEFORE writing — a `development` " +
+      "Standalone plan workflows: the close consults the delivery evidence BEFORE writing \u2014 a `development` " +
       "workflow needs its registered source/target branches plus the recorded compound disposition, PR identity " +
-      "and verified-merge evidence (`mstar workflow evidence --workflow <id> --file <payload.json>`, §4c/§4d/§4f); " +
+      "and verified-merge evidence (`mstar workflow evidence --workflow <id> --file <payload.json>`, \u00a74c/\u00a74d/\u00a74f); " +
       "`verification/report-only` needs its recorded completion policy plus its fulfilment record. The same " +
       "consultation backs the read-only check 'mstar iteration gate --phase 6 --workflow <id>', so gate and " +
       "close never disagree. " +
@@ -1331,7 +1331,7 @@ workflowCommand
   .description(
     "Register a standalone plan workflow (plan-workflow-lifecycle-contract seam S1, engine-backed): " +
       "create-only `type: plan` snapshot + {HARNESS_DIR}/status.json root entry under one lock. Records the " +
-      "owned plan (one Todo row — registration does not authorize implementation), project, delivery kind, " +
+      "owned plan (one Todo row \u2014 registration does not authorize implementation), project, delivery kind, " +
       "source/target branches and optional coordinator. `development` requires --branch-source/--branch-target; " +
       "`verification/report-only` requires --completion-policy. Re-running after a crash between snapshot " +
       "creation and registration recovers: the existing snapshot bytes are kept and only the root entry is " +
