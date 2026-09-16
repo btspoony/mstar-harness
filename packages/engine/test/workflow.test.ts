@@ -886,6 +886,7 @@ describe("recordWorkflowDelivery — authorized delivery-evidence recording (sea
     { name: "a member outside the declared kind", evidence: { completion: { policy: "p", evidence: "e" } } },
     { name: "a malformed member", evidence: { compound: { outcome: "skipped" } } },
     { name: "an unknown member", evidence: { ticket: "x" } },
+    { name: "an absent member value (never a silent clear)", evidence: { compound: undefined } },
   ])("refuses $name before any write", async ({ evidence }) => {
     const { dir, path } = fixture();
     const before = readFileSync(path, "utf8");

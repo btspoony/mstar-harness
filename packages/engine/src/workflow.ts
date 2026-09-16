@@ -1077,6 +1077,15 @@ export async function recordWorkflowDelivery(
       "recordWorkflowDelivery: options.evidence must name at least one of compound | pr | merge | completion",
     );
   }
+  // A member is only ever ADDED or replaced by recording: an object-valued
+  // member may not carry an absent value, which would silently erase recorded
+  // evidence from a protected document instead of leaving it untouched.
+  const nonObject = members.filter((member) => !isPlainObject(evidence[member]));
+  if (nonObject.length > 0) {
+    throw new Error(
+      `refusing to record delivery evidence: member(s) ${nonObject.join(", ")} must be objects \u2014 omit a member to leave it untouched`,
+    );
+  }
   const shapeViolations = deliveryEvidenceViolations(evidence, "evidence");
   if (shapeViolations.length > 0) {
     throw new Error(`refusing to record invalid delivery evidence: ${shapeViolations.map((v) => v.message).join("; ")}`);
