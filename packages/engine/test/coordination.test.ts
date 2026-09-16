@@ -2485,6 +2485,39 @@ describe("Prepare workflow amendment", () => {
     expect(refusal.details.actual).toBe("main");
   });
 
+  test("both reviewed branch headers are required on an appended plan", async () => {
+    // The plan document is the reviewed authority for the branch metadata: an
+    // absent header is never treated as agreement with the branches the append
+    // itself claims.
+    const planCases: ReadonlyArray<{ name: string; lines: readonly string[] }> = [
+      {
+        name: "missing-working-branch",
+        lines: [`**plan_id:** ${PREPARE_APPEND}`, "**Status:** Todo", "**Main worktree branch:** main"],
+      },
+      {
+        name: "missing-main-worktree-branch",
+        lines: [`**plan_id:** ${PREPARE_APPEND}`, "**Status:** Todo", `**Working branch:** feature/${PREPARE_APPEND}`],
+      },
+    ];
+
+    for (const planCase of planCases) {
+      const fixture = makePrepareFixture();
+      await ensurePrepareCoordinator(fixture);
+      writeText(
+        join(fixture.planDir, `${PREPARE_APPEND}.md`),
+        [`# Plan ${PREPARE_APPEND}`, "", ...planCase.lines, "", "Body.", ""].join("\n"),
+      );
+      const before = protectedBytes(fixture);
+
+      const refusal = await prepareRefusalOf(() => amendPrepare(fixture, preparePatchOf(fixture)));
+
+      expect(`${planCase.name}: ${refusal.code}`).toBe(
+        `${planCase.name}: coordination.prepare-amendment.invalid-plan`,
+      );
+      expect(protectedBytes(fixture)).toEqual(before);
+    }
+  });
+
   test("two amendments presenting the same tokens race under the lock: exactly one commits, the loser is stale", async () => {
     const fixture = makePrepareFixture();
     await ensurePrepareCoordinator(fixture);
@@ -2858,6 +2891,129 @@ describe("Prepare workflow amendment", () => {
     writeText(declaredNone.compassPath, `---\niteration_id: ${PREPARE_WORKFLOW}\nstatus: locked\n---\n`);
     const declaredNoneRefusal = await prepareRefusalOf(() => amendPrepare(declaredNone, preparePatchOf(declaredNone)));
     expect(declaredNoneRefusal.code).toBe("coordination.prepare-amendment.compass-mismatch");
+  }, 30000);
+
+  test("the reviewed compass must declare its lifecycle identity and a clean plan list", async () => {
+    // A compass that is not bound to this lifecycle, or whose `plans` list is
+    // malformed, cannot authorize a structural delta: the declaration is either
+    // read exactly as written or refused, never filtered or deduplicated into a
+    // declaration it does not make.
+    const compassCases: ReadonlyArray<{ name: string; frontmatter: readonly string[] }> = [
+      {
+        name: "missing-iteration-id",
+        frontmatter: [
+          "status: locked",
+          `spec_integration_branch: ${PREPARE_INTEGRATION_BRANCH}`,
+          "target_branch: main",
+          "plans:",
+          `  - ${PREPARE_ROW}`,
+          `  - ${PREPARE_APPEND}`,
+        ],
+      },
+      {
+        name: "duplicate-plan-entry",
+        frontmatter: [
+          `iteration_id: ${PREPARE_WORKFLOW}`,
+          "status: locked",
+          "plans:",
+          `  - ${PREPARE_ROW}`,
+          `  - ${PREPARE_APPEND}`,
+          `  - ${PREPARE_APPEND}`,
+        ],
+      },
+      {
+        name: "empty-plan-entry",
+        frontmatter: [
+          `iteration_id: ${PREPARE_WORKFLOW}`,
+          "status: locked",
+          "plans:",
+          `  - ${PREPARE_ROW}`,
+          `  - ${PREPARE_APPEND}`,
+          '  - ""',
+        ],
+      },
+    ];
+
+    for (const compassCase of compassCases) {
+      const fixture = makePrepareFixture();
+      await ensurePrepareCoordinator(fixture);
+      writeText(fixture.compassPath, ["---", ...compassCase.frontmatter, "---", ""].join("\n"));
+      const before = protectedBytes(fixture);
+
+      const refusal = await prepareRefusalOf(() => amendPrepare(fixture, preparePatchOf(fixture)));
+
+      expect(`${compassCase.name}: ${refusal.code}`).toBe(
+        `${compassCase.name}: coordination.prepare-amendment.compass-mismatch`,
+      );
+      expect(protectedBytes(fixture)).toEqual(before);
+    }
+  });
+
+  test("a compass-declared integration checkout is compared even when the patch omits the path", async () => {
+    const withDeclaredPath = (path: string): string =>
+      [
+        "---",
+        `iteration_id: ${PREPARE_WORKFLOW}`,
+        "status: locked",
+        `spec_integration_branch: ${PREPARE_INTEGRATION_BRANCH}`,
+        "target_branch: main",
+        `integration_worktree_path: ${path}`,
+        "plans:",
+        `  - ${PREPARE_ROW}`,
+        `  - ${PREPARE_APPEND}`,
+        "---",
+        "",
+      ].join("\n");
+
+    // A workflow whose recorded checkout disagrees with its reviewed compass
+    // refuses the append even though the patch never names a path.
+    const conflicting = makePrepareFixture();
+    await ensurePrepareCoordinator(conflicting);
+    const reviewedPath = join(conflicting.root, "wt-integration-reviewed");
+    git(["worktree", "add", "-q", "-b", "integration/wf-prepare-reviewed", reviewedPath], conflicting.root);
+    const olderPath = join(conflicting.root, "wt-integration-old");
+    git(["worktree", "add", "-q", "-b", "integration/wf-prepare-old", olderPath], conflicting.root);
+    writeText(conflicting.compassPath, withDeclaredPath(reviewedPath));
+    const recorded = prepareSnapshotOf(conflicting);
+    recorded.integration_worktree_path = olderPath;
+    writeJson(conflicting.snapshotPath, recorded);
+    const conflictingBefore = protectedBytes(conflicting);
+    const conflictingPatch = preparePatchOf(conflicting);
+    delete conflictingPatch.integrationWorktreePath;
+
+    const refusal = await prepareRefusalOf(() => amendPrepare(conflicting, conflictingPatch));
+
+    expect(refusal.code).toBe("coordination.prepare-amendment.compass-mismatch");
+    expect(protectedBytes(conflicting)).toEqual(conflictingBefore);
+
+    // The declaration is the reviewed state, so a workflow that has not
+    // recorded the reviewed checkout yet refuses the same way.
+    const unrecorded = makePrepareFixture();
+    await ensurePrepareCoordinator(unrecorded);
+    writeText(unrecorded.compassPath, withDeclaredPath(unrecorded.integrationPath));
+    const unrecordedBefore = protectedBytes(unrecorded);
+    const unrecordedPatch = preparePatchOf(unrecorded);
+    delete unrecordedPatch.integrationWorktreePath;
+
+    const unrecordedRefusal = await prepareRefusalOf(() => amendPrepare(unrecorded, unrecordedPatch));
+
+    expect(unrecordedRefusal.code).toBe("coordination.prepare-amendment.compass-mismatch");
+    expect(protectedBytes(unrecorded)).toEqual(unrecordedBefore);
+
+    // Control: the same path-omitting append is admitted once the recorded
+    // checkout IS the reviewed one.
+    const aligned = makePrepareFixture();
+    await ensurePrepareCoordinator(aligned);
+    writeText(aligned.compassPath, withDeclaredPath(aligned.integrationPath));
+    const alignedDoc = prepareSnapshotOf(aligned);
+    alignedDoc.integration_worktree_path = aligned.integrationPath;
+    writeJson(aligned.snapshotPath, alignedDoc);
+    const alignedPatch = preparePatchOf(aligned);
+    delete alignedPatch.integrationWorktreePath;
+
+    const amended = await amendPrepare(aligned, alignedPatch);
+
+    expect(amended.view.planIds).toEqual([PREPARE_ROW, PREPARE_APPEND]);
   }, 30000);
 
   test("the integration checkout must be a distinct real checkout of this repository on branch.integration", async () => {
