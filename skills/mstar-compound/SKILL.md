@@ -29,7 +29,7 @@ Knowledge that isn't captured evaporates when the session ends. Knowledge that i
 
 ## Integration with mstar lifecycle
 
-Compound 在迭代收口时触发（`mstar-iteration` § iteration-close），不在 per-plan Done 后单独执行：`iteration-start → [plan lifecycle × N] → iteration-close → mstar-compound（per-iteration round）→ {KNOWLEDGE_DIR} → feeds next iteration's specify/plan`。迭代内所有 plan Done 后，PM 回顾整轮迭代可结晶知识，批量 compound。per-plan Done 是 per-plan 闭环终点；compound 是迭代级收口活动。独立交付 development plan 并行负有 disposition 义务：交付 PR head 定稿前在其交付分支/worktree 运行 review，结果 ∈ {`created` / `updated` / reasoned `skipped`} 记录在 workflow 上——reasoned skipped 是有效结果，高重叠时更新既有文档而非新建，**不强制新文档**。语义权威 → `{SPECS_DIR}/plan-workflow-lifecycle-contract.md`。
+Compound 在迭代收口时触发（`mstar-iteration` § iteration-close），不在 per-plan Done 后单独执行：`iteration-start → [plan lifecycle × N] → iteration-close → mstar-compound（per-iteration round）→ {KNOWLEDGE_DIR} → feeds next iteration's specify/plan`。迭代内所有 plan Done 后，PM 回顾整轮迭代可结晶知识，批量 compound。per-plan Done 是 per-plan 闭环终点；compound 是迭代级收口活动。独立交付 development plan 并行负有 disposition 义务：交付 PR head 定稿前在其交付分支/worktree 运行 review，结果 ∈ {`created` / `updated` / reasoned `skipped`} 记录在 workflow 上——reasoned skipped 是有效结果，高重叠时更新既有文档而非新建，**不强制新文档**。语义权威 → `mstar-artifacts/references/plan-workflow-lifecycle-contract.md`。
 
 ### Iteration package promotion（iteration-close 强制盘点）
 

@@ -23,7 +23,7 @@ description: "Morning Star Spec-Driven 双阶段门禁：Prepare（`specify → 
   - **意图门禁**：锁 plan 前须能书面写清**真实目标 / 成功判据 / 非目标**三项；否则 Prepare 未通过。
   - **长期方案优先**：默认先设计目标状态，再裁剪本轮可交付切片；不得以“临时方案 / 混合方案 / 以后再说”替代目标设计。
   - **Durable Roadmap Gate**：若本轮只做部分范围，plan 必须写明 roadmap（批次、依赖、暂缓项、owner/触发条件、最终完成定义）。只有一句“后续再做 / next plan”视为未通过 plan gate。
-  - **Recall receipt（锁 plan 前）**：记录相关 knowledge/research 输入——复用与被否决策一并注明；无适用输入时**如实记空**。不做全库扫描、不发明知识；收据缺失不进入 plan lock。语义 → `{SPECS_DIR}/plan-workflow-lifecycle-contract.md`。
+  - **Recall receipt（锁 plan 前）**：记录相关 knowledge/research 输入——复用与被否决策一并注明；无适用输入时**如实记空**。不做全库扫描、不发明知识；收据缺失不进入 plan lock。语义 → `mstar-artifacts/references/plan-workflow-lifecycle-contract.md`。
 
 ### B. Execute：`plan(locked) → tasks → implement`
 
@@ -73,7 +73,7 @@ per-plan 门禁通过后，PM 在**迭代层面**管理以下活动（不计入 
 - **迭代驱动**（`mstar-iteration` § Phase 2 Autonomous Execute）：per-plan 派发循环（分支→实现→QC→**QA gate**→Done→合并），跨 plan 进度追踪，更新 compass 中各 plan 状态。
 - **迭代收口**（`mstar-iteration` § Phase 3 iteration-close）：迭代内所有 plan Done 后，执行一轮知识结晶（`mstar-compound`）沉淀迭代经验，更新 roadmap，标记迭代完成。
 
-per-plan Done 是 per-plan 的闭环终点；compound 是迭代级收口活动，不影响 per-plan 状态判定。此句不否定独立交付 plan 的 disposition 义务——它在交付 PR head 定稿前运行（迭代内 plan 行不各自触发）；语义权威 → `{SPECS_DIR}/plan-workflow-lifecycle-contract.md`。
+per-plan Done 是 per-plan 的闭环终点；compound 是迭代级收口活动，不影响 per-plan 状态判定。此句不否定独立交付 plan 的 disposition 义务——它在交付 PR head 定稿前运行（迭代内 plan 行不各自触发）；语义权威 → `mstar-artifacts/references/plan-workflow-lifecycle-contract.md`。
 
 > **Engine check (when available):** run `mstar iteration gate --workflow <id> --compass <delivery-compass.md>` (or `import { evaluatePhaseGate } from "@mstar-harness/engine"` in a host hook) to evaluate the iteration phase-transition gate (Phase 2 → 3 → 4) against the workflow snapshot when iteration-level activities above are reached — per-plan Prepare/Execute gate judgment stays prompt. On `fail` (gate-blocking violations) -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 

@@ -60,7 +60,7 @@ export const WORKFLOW_TERMINAL_STATUSES = ["completed", "failed", "stopped"] as 
 export const WORKFLOW_LIFECYCLE_TYPES = ["plan", "iteration"] as const;
 
 /**
- * Delivery kinds declared at registration (plan-workflow-lifecycle-contract
+ * Delivery kinds declared at registration (mstar-artifacts/references/plan-workflow-lifecycle-contract.md
  * §1). The declared kind is recorded at registration and never inferred
  * retroactively; `development` carries the full PR/merge delivery lifecycle,
  * `verification/report-only` follows the explicit completion policy recorded
@@ -182,7 +182,7 @@ export type WorkflowSnapshot = {
    */
   coordination?: SnapshotCoordination;
   /**
-   * Delivery kind declared at registration (plan-workflow-lifecycle-contract
+   * Delivery kind declared at registration (mstar-artifacts/references/plan-workflow-lifecycle-contract.md
    * §1). Recorded by the registration producer; never inferred from runtime
    * behavior or from the presence/absence of other fields.
    */
@@ -498,7 +498,7 @@ export function validateWorkflowSnapshot(doc: unknown): GateResult {
     );
   }
 
-  // Registration-declared fields (plan-workflow-lifecycle-contract §1/§3):
+  // Registration-declared fields (mstar-artifacts/references/plan-workflow-lifecycle-contract.md §1/§3):
   // delivery kind is an enum, project/completion_policy are non-empty
   // strings. All optional at the schema level (iteration snapshots and
   // pre-contract snapshots carry none); the registration producer enforces
@@ -924,7 +924,7 @@ export function consultDeliveryEvidence(snapshot: WorkflowSnapshot): ValidationR
       violation(
         "high",
         "PHASE6_DELIVERY_KIND_UNREGISTERED",
-        `Workflow '${workflowId}' is type 'plan' but carries no registered delivery_kind \u2014 a plan workflow declares its delivery kind at registration (plan-workflow-lifecycle-contract \u00a71), so this snapshot's delivery evidence cannot be consulted`,
+        `Workflow '${workflowId}' is type 'plan' but carries no registered delivery_kind \u2014 a plan workflow declares its delivery kind at registration (mstar-artifacts/references/plan-workflow-lifecycle-contract.md \u00a71), so this snapshot's delivery evidence cannot be consulted`,
         // The still-active population (audit promotion / the v1 lift minted
         // active snapshots before their producers declared a kind) is repaired
         // by the one-time declaration seam; a TERMINAL snapshot cannot be
@@ -979,7 +979,7 @@ export function consultDeliveryEvidence(snapshot: WorkflowSnapshot): ValidationR
     violation(
       "high",
       "PHASE6_DELIVERY_EVIDENCE_INCOMPLETE",
-      `Workflow '${workflowId}' declares delivery_kind '${kind}' but its delivery evidence is incomplete \u2014 missing: ${missing.join(", ")} (plan-workflow-lifecycle-contract \u00a73 lifecycle stages + \u00a74c/\u00a74d/\u00a74f)`,
+      `Workflow '${workflowId}' declares delivery_kind '${kind}' but its delivery evidence is incomplete \u2014 missing: ${missing.join(", ")} (mstar-artifacts/references/plan-workflow-lifecycle-contract.md \u00a73 lifecycle stages + \u00a74c/\u00a74d/\u00a74f)`,
       fix,
     );
   const record = `Record the missing evidence with 'mstar workflow evidence --workflow ${workflowId} --file <payload.json>' (add --session <coordinator envelope> for a coordinated workflow)`;
@@ -1075,7 +1075,7 @@ export async function closeWorkflow(workflowId: string, dir: string, opts: Close
 }
 
 // ---------------------------------------------------------------------------
-// Delivery evidence recording (plan-workflow-lifecycle-contract §3/§4c/§4d/
+// Delivery evidence recording (mstar-artifacts/references/plan-workflow-lifecycle-contract.md §3/§4c/§4d/
 // §4f, seam S3): the authorized write seam that fills the snapshot's
 // `delivery` block, stage by stage, before the close consults it.
 // ---------------------------------------------------------------------------
@@ -1218,7 +1218,7 @@ export async function recordWorkflowDelivery(
 }
 
 // ---------------------------------------------------------------------------
-// Delivery-kind declaration (plan-workflow-lifecycle-contract §1/§4a; seam S3
+// Delivery-kind declaration (mstar-artifacts/references/plan-workflow-lifecycle-contract.md §1/§4a; seam S3
 // population): the authorized ONE-TIME backfill for an ACTIVE `type: plan`
 // snapshot whose producer predates the kind — audit promotion and the v1 lift
 // minted active snapshots without one, which the close consultation (correctly)
@@ -1344,7 +1344,7 @@ export async function declareWorkflowDeliveryKind(
 }
 
 // ---------------------------------------------------------------------------
-// Generic registration producer (plan-workflow-lifecycle-contract §2/§4a,
+// Generic registration producer (mstar-artifacts/references/plan-workflow-lifecycle-contract.md §2/§4a,
 // seam S1): create-only `type: plan` snapshot + root `workflows[]` entry
 // under one lock, mirroring the audit-promotion primitive sequence
 // (`promoteAuditPlans`): snapshot create-only → `registerWorkflowEntryLocked`

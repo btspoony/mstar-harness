@@ -1329,7 +1329,7 @@ const workflowCommand = new Command("workflow").description(
 workflowCommand
   .command("register")
   .description(
-    "Register a standalone plan workflow (plan-workflow-lifecycle-contract seam S1, engine-backed): " +
+    "Register a standalone plan workflow (mstar-artifacts/references/plan-workflow-lifecycle-contract.md seam S1, engine-backed): " +
       "create-only `type: plan` snapshot + {HARNESS_DIR}/status.json root entry under one lock. Records the " +
       "owned plan (one Todo row \u2014 registration does not authorize implementation), project, delivery kind, " +
       "source/target branches and optional coordinator. `development` requires --branch-source/--branch-target; " +
@@ -1457,7 +1457,7 @@ workflowCommand
   .command("evidence")
   .description(
     "Record the delivery-kind evidence a standalone `type: plan` workflow is closed against, or declare the delivery " +
-      "kind of an ACTIVE kind-less snapshot (plan-workflow-lifecycle-contract \u00a71/\u00a73/\u00a74a/\u00a74c/\u00a74d/\u00a74f; " +
+      "kind of an ACTIVE kind-less snapshot (mstar-artifacts/references/plan-workflow-lifecycle-contract.md \u00a71/\u00a73/\u00a74a/\u00a74c/\u00a74d/\u00a74f; " +
       "engine-backed). With --file, the payload JSON is merged into the snapshot's `delivery` block under the " +
       "snapshot lock, so evidence can be recorded stage by stage: `development` records the compound disposition " +
       "(\u00a74c, before the PR head is finalized), the PR identity (\u00a74d, at submission \u2014 recorded once, pinned to " +
@@ -3957,7 +3957,7 @@ auditCommand
     "Promote selected audit plans into the v2 workflow lifecycle: write the workflow snapshot " +
       "(type plan, Todo rows, the declared delivery kind + its evidence) then register the workflow in " +
       "{HARNESS_DIR}/status.json. --delivery-kind is required: the promoted lifecycle declares its kind at " +
-      "registration (plan-workflow-lifecycle-contract \u00a71/\u00a74a), never inferred and never defaulted \u2014 " +
+      "registration (mstar-artifacts/references/plan-workflow-lifecycle-contract.md \u00a71/\u00a74a), never inferred and never defaulted \u2014 " +
       "`development` requires --branch-source/--branch-target, `verification/report-only` --completion-policy. " +
       "(exit 2 on usage, 1 when the harness dir cannot be resolved)",
   )

@@ -1,6 +1,6 @@
 /**
  * CLI `mstar workflow register` — the generic standalone-plan registration
- * producer (plan-workflow-lifecycle-contract seam S1; engine-backed).
+ * producer (mstar-artifacts/references/plan-workflow-lifecycle-contract.md seam S1; engine-backed).
  *
  * Thin wrapper over engine `registerPlanWorkflow` (create-only `type: plan`
  * snapshot + root `workflows[]` entry under one lock, mirroring the
