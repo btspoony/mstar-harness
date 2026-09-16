@@ -502,6 +502,137 @@ describe("evaluatePostMergeClose — Phase 6 post-merge close local-state gate (
   });
 });
 
+/** Minimal registered + closed standalone plan snapshot (contract §1/§6 S3 shape from `registerPlanWorkflow`). */
+function phase6PlanSnapshot(overrides: Record<string, unknown> = {}): SnapshotDoc {
+  return {
+    schema_version: 1,
+    id: "wf-plan-1",
+    type: "plan",
+    status: "completed",
+    started_at: "2026-08-19T08:00:00Z",
+    ended_at: "2026-09-12",
+    updated_at: "2026-09-12",
+    delivery_kind: "development",
+    branch: { base: "feature/plan-a", target: "main" },
+    plans: [{ id: "plan-a", title: "Plan A", file: "plans/plan-a.md", status: "Done" }],
+    ...overrides,
+  };
+}
+
+describe("evaluatePostMergeClose — plan-type delivery-kind consultation (plan-workflow-lifecycle-contract §6 S3)", () => {
+  test("registered development plan: Done owned row + registered kind + complete evidence + no leases + root entry gone → closeable", () => {
+    const result = evaluatePostMergeClose(phase6PlanSnapshot(), phase6Root([]));
+    expect(result.ok).toBe(true);
+    expect(result.violations).toEqual([]);
+  });
+
+  test("registered verification/report-only plan with its recorded completion policy → closeable (no forced PR, §1/§7)", () => {
+    const result = evaluatePostMergeClose(
+      phase6PlanSnapshot({ delivery_kind: "verification/report-only", completion_policy: "acceptance report at reports/wf-plan-1.md", branch: undefined }),
+      phase6Root([]),
+    );
+    expect(result.ok).toBe(true);
+    expect(result.violations).toEqual([]);
+  });
+
+  test("completed plan workflow with a not-Done owned row → PHASE6_PLAN_ROW_NOT_DONE (a completed close requires every row Done)", () => {
+    const result = evaluatePostMergeClose(
+      phase6PlanSnapshot({
+        plans: [{ id: "plan-a", title: "Plan A", file: "plans/plan-a.md", status: "InProgress" }],
+      }),
+      phase6Root([]),
+    );
+    expect(result.ok).toBe(false);
+    const notDone = result.violations.find((v) => v.code === "PHASE6_PLAN_ROW_NOT_DONE");
+    expect(notDone).toBeDefined();
+    expect(notDone!.message).toContain("plan-a");
+    expect(notDone!.message).toContain("InProgress");
+  });
+
+  test("terminal plan workflow without a registered delivery kind → PHASE6_DELIVERY_KIND_UNREGISTERED (the kind is never inferred, §1)", () => {
+    const result = evaluatePostMergeClose(phase6PlanSnapshot({ delivery_kind: undefined }), phase6Root([]));
+    expect(result.ok).toBe(false);
+    const unregistered = result.violations.find((v) => v.code === "PHASE6_DELIVERY_KIND_UNREGISTERED");
+    expect(unregistered).toBeDefined();
+    expect(unregistered!.message).toContain("wf-plan-1");
+  });
+
+  test("delivery kind outside the registered enum is the validator's refusal → PHASE6_INVALID_SNAPSHOT (gate and validator agree)", () => {
+    const result = evaluatePostMergeClose(phase6PlanSnapshot({ delivery_kind: "wing-it" }), phase6Root([]));
+    expect(result.ok).toBe(false);
+    expect(result.violations.some((v) => v.code === "PHASE6_INVALID_SNAPSHOT")).toBe(true);
+    expect(result.violations.some((v) => v.code === "PHASE6_DELIVERY_KIND_UNREGISTERED")).toBe(false);
+  });
+
+  test("development plan with missing branch anchors → PHASE6_DELIVERY_EVIDENCE_INCOMPLETE (incomplete registration, not an exempt workflow, §1)", () => {
+    for (const branch of [undefined, { base: "feature/plan-a" }, { target: "main" }]) {
+      const result = evaluatePostMergeClose(phase6PlanSnapshot({ branch }), phase6Root([]));
+      expect(result.ok).toBe(false);
+      const incomplete = result.violations.find((v) => v.code === "PHASE6_DELIVERY_EVIDENCE_INCOMPLETE");
+      expect(incomplete).toBeDefined();
+      expect(incomplete!.message).toContain("development");
+    }
+  });
+
+  test("verification/report-only plan without the recorded completion policy → PHASE6_DELIVERY_EVIDENCE_INCOMPLETE (§1)", () => {
+    const result = evaluatePostMergeClose(
+      phase6PlanSnapshot({ delivery_kind: "verification/report-only", completion_policy: undefined }),
+      phase6Root([]),
+    );
+    expect(result.ok).toBe(false);
+    const incomplete = result.violations.find((v) => v.code === "PHASE6_DELIVERY_EVIDENCE_INCOMPLETE");
+    expect(incomplete).toBeDefined();
+    expect(incomplete!.message).toContain("verification/report-only");
+  });
+
+  test("terminal plan workflow with a dangling row lease → PHASE6_DANGLING_LEASE (type-generic probe, close never releases leases)", () => {
+    const result = evaluatePostMergeClose(
+      phase6PlanSnapshot({
+        plans: [
+          {
+            id: "plan-a",
+            title: "Plan A",
+            file: "plans/plan-a.md",
+            status: "Done",
+            execution_lease: { holder: "dev-1", claimed_at: "2026-08-19T08:00:00Z", worktree_path: "/tmp/wt/plan-a" },
+          },
+        ],
+      }),
+      phase6Root([]),
+    );
+    expect(result.ok).toBe(false);
+    expect(result.violations.some((v) => v.code === "PHASE6_DANGLING_LEASE")).toBe(true);
+  });
+
+  test("failed plan workflow keeps its status and row state and passes (§5 — failure closes are never rewritten as completed)", () => {
+    const result = evaluatePostMergeClose(
+      phase6PlanSnapshot({
+        status: "failed",
+        plans: [{ id: "plan-a", title: "Plan A", file: "plans/plan-a.md", status: "Todo" }],
+      }),
+      phase6Root([]),
+    );
+    expect(result.ok).toBe(true);
+    expect(result.violations).toEqual([]);
+  });
+
+  test("refused plan close stays registered/resumable: the root entry is still reported alongside the delivery refusal", () => {
+    const result = evaluatePostMergeClose(
+      phase6PlanSnapshot({ delivery_kind: undefined }),
+      phase6Root([{ id: "wf-plan-1", type: "plan", started_at: "2026-08-19T08:00:00Z", dir: "workflows/wf-plan-1" }]),
+    );
+    expect(result.ok).toBe(false);
+    expect(result.violations.some((v) => v.code === "PHASE6_DELIVERY_KIND_UNREGISTERED")).toBe(true);
+    expect(result.violations.some((v) => v.code === "PHASE6_ROOT_ENTRY_PRESENT")).toBe(true);
+  });
+
+  test("iteration-type snapshots stay outside the consultation: no delivery kind required (zero iteration drift)", () => {
+    const result = evaluatePostMergeClose(phase6Snapshot(), phase6Root([]));
+    expect(result.ok).toBe(true);
+    expect(result.violations.some((v) => v.code === "PHASE6_DELIVERY_KIND_UNREGISTERED")).toBe(false);
+  });
+});
+
 describe("pushCadenceProbe — §5.1a push gate (never push while CI or AI review wave is running)", () => {
   test("CI idle and no review wave → push allowed", () => {
     const result = pushCadenceProbe(false, false);

@@ -410,7 +410,17 @@ describe("mstar iteration gate --phase 6", () => {
         expect(result.stdout).toContain("phase 6 (post-merge close): OK");
       },
       {
-        snapshot: snapshotDoc({ status: "completed", ended_at: "2026-09-12", updated_at: "2026-09-12" }),
+        snapshot: snapshotDoc({
+          status: "completed",
+          ended_at: "2026-09-12",
+          updated_at: "2026-09-12",
+          // Seam S3 (plan-workflow-lifecycle-contract §6 S3): the phase-6
+          // gate consults the registered delivery-kind evidence — this
+          // closed fixture carries the complete development registration
+          // shape (`registerPlanWorkflow` records delivery_kind + branches).
+          delivery_kind: "development",
+          branch: { base: "feature/plan-a", target: "main" },
+        }),
         root: rootDoc(),
       },
     );
