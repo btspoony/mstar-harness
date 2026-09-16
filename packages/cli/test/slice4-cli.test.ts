@@ -26,13 +26,14 @@ const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
  * CLI suites — engine dir resolution must not leak into fixtures).
  * MSTAR_CLI_PROJECT_ROOT / INIT_CWD are pinned too: `resolveCliPath`
  * (audit-002) reads them ahead of PWD, so an ambient value would redirect
- * every relative-path fixture spuriously. TZ is pinned to the test process's
- * own frame (tracked residual): `bun test` runs this
- * process in UTC when TZ is unset, while a bare subprocess would fall back to
- * the system zone — the two frames diverge across the local calendar-day
+ * every relative-path fixture spuriously. TZ is pinned to the child's own
+ * frame (tracked residual): with TZ unset a bare subprocess would fall back
+ * to the system zone, and any frame split crosses the local calendar-day
  * boundary (00:00–08:00 in positive-offset zones), breaking the backlog
  * `registered_at`/`closed_at` date assertions. An explicit ambient TZ is
- * propagated so both sides always share one frame. */
+ * propagated, and the date assertions read the SAME frame through
+ * `todayInChildFrame()` instead of the test process's runner-dependent
+ * local zone (bun <1.4 ran it in the system zone; bun >=1.4 pins UTC). */
 function cliEnv(): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
@@ -1907,12 +1908,24 @@ describe("mstar status findings-cleanup — project-register cleanup-mode gate (
 // mstar status backlog-register / backlog-close — project-register backlog
 // ---------------------------------------------------------------------------
 
-/** Local calendar date YYYY-MM-DD — same convention as the CLI's `registered_at` fill. */
-function todayLocal(): string {
-  const now = new Date();
-  const month = String(now.getMonth() + 1).padStart(2, "0");
-  const day = String(now.getDate()).padStart(2, "0");
-  return `${now.getFullYear()}-${month}-${day}`;
+/** Local calendar date YYYY-MM-DD — same convention as the CLI's `registered_at` fill.
+ *
+ * Computed in the SAME frame `cliEnv()` pins the CLI child to (ambient `TZ`
+ * when set, else UTC) — never the test process's own local zone. That frame
+ * is runner-version-dependent when `TZ` is unset (bun <1.4 ran the test
+ * process in the system zone; bun >=1.4 pins UTC), so a strict comparison
+ * against the process-local date failed whenever the two frames straddled
+ * the local calendar-day boundary (00:00–08:00 in positive-offset zones) —
+ * the PR #243 backlog register/close flakes. */
+function todayInChildFrame(): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: process.env.TZ ?? "UTC",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const get = (type: string): string => parts.find((part) => part.type === type)!.value;
+  return `${get("year")}-${get("month")}-${get("day")}`;
 }
 
 /** One deferred-PR residual JSON string (nine fields; provenance is CLI-filled). */
@@ -1956,7 +1969,7 @@ describe("mstar status backlog-register — project-register backlog append (eng
           expect(entry).toHaveProperty(field);
         }
         expect(entry.source_plan).toBe(key);
-        expect(entry.registered_at).toBe(todayLocal());
+        expect(entry.registered_at).toBe(todayInChildFrame());
       }
       expect(validateProjectRegister(register).ok).toBe(true);
     });
@@ -2050,7 +2063,7 @@ describe("mstar status backlog-close — project-register backlog close (engine-
       const register = readRegister(dir);
       const entry = ((register.entries as Record<string, unknown[]>)[key] as Array<Record<string, unknown>>)[0];
       expect(entry.lifecycle).toBe("resolved");
-      expect(entry.closed_at).toBe(todayLocal());
+      expect(entry.closed_at).toBe(todayInChildFrame());
       expect(entry.closure_note).toBe("closed by backlog close");
       expect(validateProjectRegister(register).ok).toBe(true);
     });
