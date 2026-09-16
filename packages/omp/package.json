@@ -26,7 +26,7 @@
   ],
   "scripts": {
     "bundle-assets": "bun run scripts/bundle-harness-assets.ts",
-    "build": "bun run bundle-assets && rm -rf dist hooks tools extensions && bun build src/hooks/pre/mstar-gates.ts --target node --outfile dist/hooks/pre/mstar-gates.js && bun build src/extensions/model-handoff.ts --target node --external '@oh-my-pi/*' --outfile dist/extensions/model-handoff.js && bun build src/tools/mstar_status_validate/index.ts --target node --outfile dist/tools/mstar_status_validate/index.js && bun build src/tools/mstar_worktree_check/index.ts --target node --outfile dist/tools/mstar_worktree_check/index.js && bun build src/tools/mstar_dispatch_validate/index.ts --target node --outfile dist/tools/mstar_dispatch_validate/index.js && bun build src/tools/mstar_iteration_gate/index.ts --target node --outfile dist/tools/mstar_iteration_gate/index.js && bun build src/tools/mstar_lease_verify/index.ts --target node --outfile dist/tools/mstar_lease_verify/index.js && bun build src/tools/mstar_path_resolve/index.ts --target node --outfile dist/tools/mstar_path_resolve/index.js && bunx tsc && cp -R dist/hooks hooks && cp -R dist/extensions extensions && mkdir -p tools && cp dist/tools/mstar_status_validate/index.js tools/mstar_status_validate.js && cp dist/tools/mstar_worktree_check/index.js tools/mstar_worktree_check.js && cp dist/tools/mstar_dispatch_validate/index.js tools/mstar_dispatch_validate.js && cp dist/tools/mstar_iteration_gate/index.js tools/mstar_iteration_gate.js && cp dist/tools/mstar_lease_verify/index.js tools/mstar_lease_verify.js && cp dist/tools/mstar_path_resolve/index.js tools/mstar_path_resolve.js",
+    "build": "bun run bundle-assets && rm -rf dist hooks tools extensions && bun build src/hooks/pre/mstar-gates.ts --target node --outfile dist/hooks/pre/mstar-gates.js && bun build src/extensions/model-handoff.ts --target node --external '@oh-my-pi/*' --outfile dist/extensions/model-handoff.js && bun build src/extensions/phase2-orchestration.ts --target node --external '@oh-my-pi/*' --outfile dist/extensions/phase2-orchestration.js && bun build src/tools/mstar_status_validate/index.ts --target node --outfile dist/tools/mstar_status_validate/index.js && bun build src/tools/mstar_worktree_check/index.ts --target node --outfile dist/tools/mstar_worktree_check/index.js && bun build src/tools/mstar_dispatch_validate/index.ts --target node --outfile dist/tools/mstar_dispatch_validate/index.js && bun build src/tools/mstar_iteration_gate/index.ts --target node --outfile dist/tools/mstar_iteration_gate/index.js && bun build src/tools/mstar_lease_verify/index.ts --target node --outfile dist/tools/mstar_lease_verify/index.js && bun build src/tools/mstar_path_resolve/index.ts --target node --outfile dist/tools/mstar_path_resolve/index.js && bunx tsc && cp -R dist/hooks hooks && cp -R dist/extensions extensions && mkdir -p tools && cp dist/tools/mstar_status_validate/index.js tools/mstar_status_validate.js && cp dist/tools/mstar_worktree_check/index.js tools/mstar_worktree_check.js && cp dist/tools/mstar_dispatch_validate/index.js tools/mstar_dispatch_validate.js && cp dist/tools/mstar_iteration_gate/index.js tools/mstar_iteration_gate.js && cp dist/tools/mstar_lease_verify/index.js tools/mstar_lease_verify.js && cp dist/tools/mstar_path_resolve/index.js tools/mstar_path_resolve.js",
     "test": "bun test",
     "prepublishOnly": "bun run build"
   },
@@ -44,12 +44,30 @@
       },
       "handoffTarget": {
         "type": "enum",
-        "values": ["@default", "@smol"],
+        "values": [
+          "@default",
+          "@smol"
+        ],
         "default": "@default",
         "description": "Coordinator model after a completed Phase 1. Used only when modelHandoff is enabled."
+      },
+      "phase2PlanInstances": {
+        "type": "boolean",
+        "default": false,
+        "description": "Allow Phase-2 coordinators to launch additional plan-scoped primary sessions up to maxPlanInstances. Off by default; native background tasks and bounded scheduling reminders are independent."
+      },
+      "maxPlanInstances": {
+        "type": "number",
+        "default": 2,
+        "min": 1,
+        "step": 1,
+        "description": "Maximum concurrently active plan-scoped primary sessions (owned pending launches included; iteration coordinator and task subagents excluded). Lowering it stops new launches without killing active work."
       }
     },
-    "extensions": ["./extensions/model-handoff.js"]
+    "extensions": [
+      "./extensions/model-handoff.js",
+      "./extensions/phase2-orchestration.js"
+    ]
   },
   "publishConfig": {
     "access": "public"
