@@ -644,7 +644,73 @@ describe("mstar workflow evidence", () => {
       const malformed = runCli(evidenceArgs(harness, badPath));
       expect(malformed.exitCode).toBe(1);
       expect(malformed.stderr).toContain("not valid JSON");
+      // The two modes are exclusive, and the declared kind is an enum.
+      const both = runCli([
+        "workflow", "evidence", "--workflow", WORKFLOW_ID, "--file", badPath,
+        "--declare-kind", "development", "--branch-source", "feature/a", "--branch-target", "main", "--harness", harness,
+      ]);
+      expect(both.exitCode).toBe(2);
+      expect(both.stderr).toContain("not both");
+      const unknownKind = runCli(["workflow", "evidence", "--workflow", WORKFLOW_ID, "--declare-kind", "wing-it", "--harness", harness]);
+      expect(unknownKind.exitCode).toBe(2);
+      expect(unknownKind.stderr).toContain("--declare-kind must be one of");
       expect(readFileSync(snapshot, "utf8")).toBe(before);
+    });
+  });
+
+  test("--declare-kind: the one-time declaration unblocks the close end to end (kind never inferred, §1/§4a)", () => {
+    setupHarness((harness, { snapshot, root }) => {
+      // The audit-promotion / v1-lift shape: active, no kind, no anchors, no evidence.
+      writeFileSync(snapshot, JSON.stringify(snapshotDoc({ delivery_kind: undefined, branch: undefined, delivery: undefined }), null, 2), "utf8");
+      const beforeRoot = readFileSync(root, "utf8");
+
+      // The close refuses: no declared kind (and it is never inferred).
+      const refused = runCli(closeArgs(harness, ["--ended-at", "2026-09-12"]));
+      expect(refused.exitCode).toBe(1);
+      expect(refused.stderr).toContain("PHASE6_DELIVERY_KIND_UNREGISTERED");
+
+      // An incoherent declaration is refused by the shared per-kind rule.
+      const incoherent = runCli([
+        "workflow", "evidence", "--workflow", WORKFLOW_ID, "--declare-kind", "development", "--branch-source", "feature/a", "--harness", harness,
+      ]);
+      expect(incoherent.exitCode).toBe(1);
+      expect(incoherent.stderr).toContain("delivery source and target branches");
+
+      const declared = runCli([
+        "workflow", "evidence", "--workflow", WORKFLOW_ID,
+        "--declare-kind", "development", "--branch-source", "feature/plan-a", "--branch-target", "main",
+        "--at", "2026-09-12T01:00:00Z", "--harness", harness,
+      ]);
+      expect(declared.exitCode).toBe(0);
+      expect(declared.stdout).toContain(`workflow evidence: OK \u2014 ${WORKFLOW_ID} delivery kind declared (development`);
+
+      // One-time: a second declaration is refused, even with the same kind.
+      const again = runCli([
+        "workflow", "evidence", "--workflow", WORKFLOW_ID,
+        "--declare-kind", "development", "--branch-source", "feature/plan-a", "--branch-target", "main", "--harness", harness,
+      ]);
+      expect(again.exitCode).toBe(1);
+      expect(again.stderr).toContain("already declares");
+
+      // Record the evidence, then close: the declaration, the anchors and every
+      // member agree, so the close completes and the gate passes.
+      const payload = writePayload(harness, {
+        compound: { outcome: "created" },
+        pr: { repo: "btspoony/mstar-harness", head: "feature/plan-a", target: "main" },
+        merge: { provider: "github", evidence: "PR #244 verified merged at 2c792c01" },
+      });
+      expect(runCli(evidenceArgs(harness, payload)).exitCode).toBe(0);
+
+      const closed = runCli(closeArgs(harness, ["--ended-at", "2026-09-12"]));
+      expect(closed.exitCode).toBe(0);
+      const stored = JSON.parse(readFileSync(snapshot, "utf8")) as Record<string, unknown>;
+      expect(stored.status).toBe("completed");
+      expect(stored.delivery_kind).toBe("development");
+      const gate = runCli(["iteration", "gate", "--phase", "6", "--workflow", WORKFLOW_ID, "--harness", harness]);
+      expect(gate.exitCode).toBe(0);
+      expect(gate.stdout).toContain("phase 6 (post-merge close): OK");
+      // The declaration never touched the root register (nothing was unregistered yet).
+      expect(readFileSync(root, "utf8")).not.toBe(beforeRoot);
     });
   });
 });

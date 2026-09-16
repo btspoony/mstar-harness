@@ -110,6 +110,8 @@ export {
 } from "./lease.js";
 export type {
   CloseWorkflowOptions,
+  DeclareWorkflowDeliveryKindOptions,
+  DeliveryRegistrationEvidence,
   RecordWorkflowDeliveryOptions,
   RecordWorkflowDeliveryResult,
   RegisterPlanWorkflowOptions,
@@ -125,8 +127,10 @@ export type {
   WorkflowSnapshotRead,
 } from "./workflow.js";
 export {
+  assertDeliveryRegistrationCoherence,
   closeWorkflow,
   consultDeliveryEvidence,
+  declareWorkflowDeliveryKind,
   isTerminalSnapshot,
   LEGACY_WORKTREE_PATH_CODE,
   recordWorkflowDelivery,

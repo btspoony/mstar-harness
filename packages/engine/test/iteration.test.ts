@@ -643,6 +643,34 @@ describe("evaluatePostMergeClose — plan-type delivery-kind consultation (plan-
     expect(incomplete!.message).toContain("delivery.completion.policy");
   });
 
+  test("a contradictory PR identity → PHASE6_DELIVERY_EVIDENCE_INCOMPLETE naming the mismatched field (§4d)", () => {
+    const anchors = { source: "feature/plan-a", target: "main" };
+    const complete = {
+      compound: { outcome: "created" },
+      pr: { repo: "btspoony/mstar-harness", head: anchors.source, target: anchors.target },
+      merge: { provider: "github", evidence: "PR #244 verified merged at 2c792c01" },
+    };
+    const mismatches: Array<[string, Record<string, string>, string]> = [
+      ["delivery.pr.head", { repo: "btspoony/mstar-harness", head: "feature/other", target: "main" }, anchors.source],
+      ["delivery.pr.target", { repo: "btspoony/mstar-harness", head: "feature/plan-a", target: "release/9" }, anchors.target],
+    ];
+    for (const [expected, pr, registered] of mismatches) {
+      const result = evaluatePostMergeClose(
+        phase6PlanSnapshot({ branch: anchors, delivery: { ...complete, pr } }),
+        phase6Root([]),
+      );
+      expect(result.ok).toBe(false);
+      const incomplete = result.violations.find((v) => v.code === "PHASE6_DELIVERY_EVIDENCE_INCOMPLETE");
+      expect(incomplete).toBeDefined();
+      expect(incomplete!.message).toContain(expected);
+      // The refusal names BOTH the recorded value and the registered anchor.
+      expect(incomplete!.message).toContain(registered);
+    }
+    // The matching identity passes the same consultation (no false refusal).
+    const matching = evaluatePostMergeClose(phase6PlanSnapshot({ branch: anchors, delivery: complete }), phase6Root([]));
+    expect(matching.ok).toBe(true);
+  });
+
   test("a malformed delivery block is the validator's refusal → PHASE6_INVALID_SNAPSHOT (reasoned skip is mandatory, §4c)", () => {
     const result = evaluatePostMergeClose(
       phase6PlanSnapshot({ delivery: { compound: { outcome: "skipped" } } }),
@@ -742,12 +770,13 @@ describe("evaluatePostMergeClose — plan-type delivery-kind consultation (plan-
     expect(gate.ok).toBe(false);
     const unregistered = gate.violations.find((v) => v.code === "PHASE6_DELIVERY_KIND_UNREGISTERED");
     expect(unregistered).toBeDefined();
- // The remediation states the truth: the register verb cannot backfill a
- // terminal snapshot (create-only, snapshot bytes preserved), so repair is
- // an explicit owner snapshot amendment, and the audit-promotion
- // grandfather population limitation is disclosed — it does not send the
- // operator into the register dead end.
-    expect(unregistered!.fix).toContain("cannot backfill");
+// The remediation states the truth: a still-ACTIVE kind-less workflow has the
+// one-time declaration seam, while a TERMINAL snapshot cannot be backfilled
+// (the register verb is create-only, the declaration refuses a closed
+// lifecycle), so its repair is an explicit owner snapshot amendment — the
+// refusal never sends the operator into the register dead end.
+    expect(unregistered!.fix).toContain("--declare-kind");
+    expect(unregistered!.fix).toContain("TERMINAL legacy snapshot cannot be backfilled");
     expect(unregistered!.fix).toContain("owner snapshot amendment");
     expect(unregistered!.fix).toContain("audit-promotion");
  // Pinning the dead end itself: registering over the legacy terminal

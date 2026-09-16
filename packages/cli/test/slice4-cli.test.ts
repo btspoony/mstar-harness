@@ -1012,7 +1012,14 @@ describe("mstar audit promote — v2 workflow registration for selected plans", 
   test("selected plan → snapshot with one Todo row + status.json type plan, exit 0", () => {
     withTempDir((dir) => {
       const { harnessDir, outDir } = scaffoldFixture(dir);
-      const result = runCli(["audit", "promote", outDir, "--plans", "001", "--harness", harnessDir]);
+      const result = runCli(["audit", "promote", outDir, "--plans", "001", "--harness", harnessDir,
+        "--delivery-kind",
+        "development",
+        "--branch-source",
+        "feature/audit-plans",
+        "--branch-target",
+        "main",
+      ]);
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("audit promote: OK");
       expect(result.stdout).toContain("workflow audit-2026-08-08");
@@ -1045,11 +1052,25 @@ describe("mstar audit promote — v2 workflow registration for selected plans", 
   });
 
   test("missing <audit-dir> or --plans → usage, exit 2", () => {
-    const noDir = runCli(["audit", "promote"]);
+    const noDir = runCli(["audit", "promote",
+        "--delivery-kind",
+        "development",
+        "--branch-source",
+        "feature/audit-plans",
+        "--branch-target",
+        "main",
+      ]);
     expect(noDir.exitCode).toBe(2);
     expect(noDir.stderr).toContain("usage: audit promote <audit-dir> --plans <ids>");
 
-    const noPlans = runCli(["audit", "promote", "audit-2026-08-08"]);
+    const noPlans = runCli(["audit", "promote", "audit-2026-08-08",
+        "--delivery-kind",
+        "development",
+        "--branch-source",
+        "feature/audit-plans",
+        "--branch-target",
+        "main",
+      ]);
     expect(noPlans.exitCode).toBe(2);
     expect(noPlans.stderr).toContain("usage: audit promote <audit-dir> --plans <ids>");
   });
@@ -1057,7 +1078,14 @@ describe("mstar audit promote — v2 workflow registration for selected plans", 
   test("missing harness → exit 1 with the --harness / MSTAR_HARNESS_DIR message", () => {
     withTempDir((dir) => {
       const { outDir } = scaffoldFixture(dir);
-      const result = runCli(["audit", "promote", outDir, "--plans", "001"], { cwd: dir });
+      const result = runCli(["audit", "promote", outDir, "--plans", "001",
+        "--delivery-kind",
+        "development",
+        "--branch-source",
+        "feature/audit-plans",
+        "--branch-target",
+        "main",
+      ], { cwd: dir });
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("pass --harness or set MSTAR_HARNESS_DIR");
     });
@@ -1076,6 +1104,12 @@ describe("mstar audit promote — v2 workflow registration for selected plans", 
         "audit-2026-08-08-custom",
         "--harness",
         harnessDir,
+        "--delivery-kind",
+        "development",
+        "--branch-source",
+        "feature/audit-plans",
+        "--branch-target",
+        "main",
       ]);
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("workflow audit-2026-08-08-custom");
@@ -1088,7 +1122,14 @@ describe("mstar audit promote — v2 workflow registration for selected plans", 
   test("re-promote of the same workflow id → exit 1, names the snapshot path, first rows intact", () => {
     withTempDir((dir) => {
       const { harnessDir, outDir } = scaffoldFixture(dir);
-      const first = runCli(["audit", "promote", outDir, "--plans", "001", "--harness", harnessDir]);
+      const first = runCli(["audit", "promote", outDir, "--plans", "001", "--harness", harnessDir,
+        "--delivery-kind",
+        "development",
+        "--branch-source",
+        "feature/audit-plans",
+        "--branch-target",
+        "main",
+      ]);
       expect(first.exitCode).toBe(0);
 
       const snapshotPath = join(harnessDir, "workflows", "audit-2026-08-08", "snapshot.json");
@@ -1096,7 +1137,14 @@ describe("mstar audit promote — v2 workflow registration for selected plans", 
 
       // Second promote (different subset) must refuse with exit 1 and name
       // the existing snapshot path — no silent whole-rewrite.
-      const second = runCli(["audit", "promote", outDir, "--plans", "002", "--harness", harnessDir]);
+      const second = runCli(["audit", "promote", outDir, "--plans", "002", "--harness", harnessDir,
+        "--delivery-kind",
+        "development",
+        "--branch-source",
+        "feature/audit-plans",
+        "--branch-target",
+        "main",
+      ]);
       expect(second.exitCode).toBe(1);
       expect(second.stderr).toContain("already exists");
       expect(second.stderr).toContain(snapshotPath);

@@ -98,9 +98,12 @@ import {
   type StatusV2Doc,
 } from "./status.js";
 import {
+  WORKFLOW_DELIVERY_KINDS,
   WORKFLOW_SNAPSHOT_FILE,
+  assertDeliveryRegistrationCoherence,
   stableJson,
   writeWorkflowSnapshot,
+  type WorkflowDeliveryKind,
   type WorkflowLifecycleStatus,
   type WorkflowLifecycleType,
   type WorkflowSnapshot,
@@ -176,6 +179,21 @@ export type MigrateOptions = {
   dryRun?: boolean;
  /** Project id for the register/roadmap home (default `_default`). */
   projectId?: string;
+  /**
+   * Delivery kind declared for the ACTIVE standalone plan snapshots this lift
+   * produces (contract §1/§4a). A v1 `plans[]` row becomes a `type: plan`
+   * lifecycle, so its delivery kind is declared at registration and never
+   * inferred: the CLI/API caller passes it explicitly, and a lift that would
+   * create an active kind-less plan snapshot without it is refused (see
+   * `MigratePlan.deliveryKindRequired`).
+   */
+  deliveryKind?: WorkflowDeliveryKind;
+  /** Delivery source branch, recorded as `branch.source`. Required for `development`. */
+  branchSource?: string;
+  /** Delivery target branch, recorded as `branch.target`. Required for `development`. */
+  branchTarget?: string;
+  /** Completion policy for `verification/report-only` lifts. Required for that kind. */
+  completionPolicy?: string;
 };
 
 /** Full migration plan: every write is described; the executor applies it. */
@@ -212,6 +230,17 @@ export type MigratePlan = {
  /** Human message (no-op reason when `alreadyMigrated`). */
   message: string;
   snapshots: MigrateSnapshot[];
+  /**
+   * Ids of the ACTIVE (running/paused) standalone plan snapshots this lift
+   * would create WITHOUT a declared delivery kind — i.e. the v1 rows lifted
+   * before the operator passed `opts.deliveryKind`. Non-empty means the plan is
+   * NOT applicable: `applyMigratePlan` refuses it (a close path could never
+   * complete such a lifecycle), and the CLI reports the missing flag as usage
+   * (exit 2) before any write. Terminal (completed) lifted snapshots are exempt
+   * — a finished lifecycle declares nothing (§1; the legacy terminal dead end
+   * is documented, not amended here).
+   */
+  deliveryKindRequired: string[];
   notesFiles: MigrateNotesFile[];
   register: MigrateRegister | null;
   roadmap: MigrateRoadmap | null;
@@ -405,11 +434,20 @@ function buildIterationSnapshot(
   };
 }
 
-/** Build one standalone plan snapshot (row status mapping; Todo -> paused + note). */
+/**
+ * Build one standalone plan snapshot (row status mapping; Todo -> paused + note).
+ *
+ * `declaration` carries the caller-declared delivery kind (with its per-kind
+ * evidence) and is applied to the ACTIVE statuses only (`running`/`paused`):
+ * those become live `type: plan` lifecycles, so they must declare their kind at
+ * registration (contract §1/§4a). A `completed` v1 row lifts without one — a
+ * finished lifecycle declares nothing, and amending it is not this lift's job.
+ */
 function buildStandaloneSnapshot(
   row: Record<string, unknown>,
   rootUpdatedAt: string,
   migrationNotes: string[],
+  declaration: { deliveryKind?: WorkflowDeliveryKind; branchSource?: string; branchTarget?: string; completionPolicy?: string } = {},
 ): MigrateSnapshot {
   const id = rowIdOf(row) ?? "<unnamed>";
   const statusValue = row.status;
@@ -437,6 +475,16 @@ function buildStandaloneSnapshot(
     updated_at: status === "completed" ? endedAt : updatedAt,
     plans: [row],
   };
+  if (status !== "completed" && declaration.deliveryKind !== undefined) {
+    snapshot.delivery_kind = declaration.deliveryKind;
+    if (declaration.branchSource !== undefined || declaration.branchTarget !== undefined) {
+      snapshot.branch = {
+        ...(declaration.branchSource !== undefined ? { source: declaration.branchSource } : {}),
+        ...(declaration.branchTarget !== undefined ? { target: declaration.branchTarget } : {}),
+      };
+    }
+    if (declaration.completionPolicy !== undefined) snapshot.completion_policy = declaration.completionPolicy;
+  }
 
   return {
     id,
@@ -650,6 +698,28 @@ export function migrateHarnessTree(root: string, opts: MigrateOptions = {}): Mig
   const workflowDir = resolveWorkflowDir(harnessDir, { harnessDir });
   const projectDir = resolveProjectDir(harnessDir, { harnessDir });
   const projectId = opts.projectId ?? _DEFAULT_PROJECT;
+  // The delivery declaration for lifted ACTIVE plan snapshots (contract
+  // §1/§4a): the caller passes the kind explicitly — a code-side default would
+  // be retroactive inference — and the shared coherence rule rejects an
+  // incomplete one (a `development` without anchors, a
+  // `verification/report-only` without its completion policy) before any write.
+  if (
+    opts.deliveryKind !== undefined &&
+    !(WORKFLOW_DELIVERY_KINDS as readonly string[]).includes(opts.deliveryKind)
+  ) {
+    throw new Error(
+      `refusing to migrate: options.deliveryKind must be one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")} \u2014 got ${JSON.stringify(opts.deliveryKind)}`,
+    );
+  }
+  if (opts.deliveryKind !== undefined) {
+    assertDeliveryRegistrationCoherence(opts.deliveryKind, opts, "migrate");
+  }
+  const declaration = {
+    deliveryKind: opts.deliveryKind,
+    branchSource: opts.branchSource,
+    branchTarget: opts.branchTarget,
+    completionPolicy: opts.completionPolicy,
+  };
   const statusPath = join(harnessDir, MIGRATE_STATUS_FILE);
  // Payload and byte version come from ONE read: the executor re-checks that
  // version under the root lock (spec §C3), so the plan must record the exact
@@ -669,6 +739,7 @@ export function migrateHarnessTree(root: string, opts: MigrateOptions = {}): Mig
       alreadyMigrated: true,
       message: `no-op: ${statusPath} is already at schema version 2 (migrated) \u2014 nothing to do`,
       snapshots: [],
+      deliveryKindRequired: [],
       notesFiles: [],
       register: null,
       roadmap: null,
@@ -740,8 +811,18 @@ export function migrateHarnessTree(root: string, opts: MigrateOptions = {}): Mig
  // 2. Standalone snapshots for unregistered rows.
   for (const row of rows) {
     const id = rowIdOf(row);
-    if (id !== null && !byPlan.has(id)) snapshots.push(buildStandaloneSnapshot(row, rootUpdatedAt, migrationNotes));
+    if (id !== null && !byPlan.has(id)) snapshots.push(buildStandaloneSnapshot(row, rootUpdatedAt, migrationNotes, declaration));
   }
+
+  // Active standalone plan snapshots must carry the caller-declared kind: a v1
+  // row lifts into a live `type: plan` lifecycle whose close consultation
+  // requires one (contract §1/§4a), and no later seam can declare it for a
+  // snapshot the lift already wrote without a kind. Non-empty ⇒ the plan is not
+  // applicable: `applyMigratePlan` refuses it and the CLI reports the missing
+  // `--delivery-kind` as usage before any write. Terminal lifts are exempt.
+  const deliveryKindRequired = snapshots
+    .filter((snapshot) => snapshot.type === "plan" && snapshot.status !== "completed" && snapshot.data.delivery_kind === undefined)
+    .map((snapshot) => snapshot.id);
 
  // 2b. Cross-class lifecycle-id uniqueness (Phase-5 F2, Greptile P1):
  // plan rows are unique within plans[] (guard above) and compass ids are
@@ -846,6 +927,7 @@ export function migrateHarnessTree(root: string, opts: MigrateOptions = {}): Mig
     alreadyMigrated: false,
     message: `planned migration of ${snapshots.length} lifecycles (${steps.length} steps)`,
     snapshots,
+    deliveryKindRequired,
     notesFiles,
     register,
     roadmap,
@@ -871,6 +953,18 @@ export function migrateHarnessTree(root: string, opts: MigrateOptions = {}): Mig
 export async function applyMigratePlan(plan: MigratePlan): Promise<MigrateResult> {
   if (plan.dryRun) {
     return { applied: false, message: `dry-run: ${plan.steps.length} steps planned (source \u2192 destination), zero writes` };
+  }
+  // A plan that would lift ACTIVE standalone plan snapshots without a declared
+  // delivery kind is not applicable (contract §1/§4a): the apply boundary is
+  // the API caller's guard too — the CLI reports the same condition as usage
+  // before any write, and neither path may create a lifecycle no close could
+  // complete.
+  if (plan.deliveryKindRequired.length > 0) {
+    throw new Error(
+      `refusing to apply migration: ${plan.deliveryKindRequired.length} active standalone plan snapshot(s) ` +
+        `(${plan.deliveryKindRequired.join(", ")}) would be lifted without a declared delivery kind \u2014 ` +
+        `re-plan with an explicit deliveryKind (CLI: --delivery-kind <${WORKFLOW_DELIVERY_KINDS.join("|")}>)`,
+    );
   }
   const statusPath = join(plan.root, MIGRATE_STATUS_FILE);
   const current = readJson(statusPath);

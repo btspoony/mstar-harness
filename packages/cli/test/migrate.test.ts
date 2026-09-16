@@ -413,3 +413,69 @@ describe("mstar migrate --json — machine-readable output", () => {
     }
   });
 });
+
+/**
+ * Delivery kind for ACTIVE standalone plan lifts (plan-workflow-lifecycle-
+ * contract §1/§4a): a v1 `plans[]` row lifts into a live `type: plan`
+ * lifecycle, so its kind is a caller-declared input — the lift refuses as
+ * usage (exit 2) when it would create an active kind-less plan snapshot, and
+ * the declared kind + anchors land on the lifted snapshot.
+ */
+describe("mstar migrate — delivery kind for ACTIVE standalone plan lifts", () => {
+  const ACTIVE_ID = "00000819-fixture-standalone-active";
+
+  /** The v1 fixture plus one ACTIVE (InProgress -> running) standalone plan row. */
+  function activeRowTree(): string {
+    const root = fixtureTree();
+    const statusPath = join(root, "status.json");
+    const doc = readJsonFile(statusPath);
+    const plans = (doc.plans as Array<Record<string, unknown>>).concat([
+      {
+        id: ACTIVE_ID,
+        file: `.mstar/plans/${ACTIVE_ID}.md`,
+        title: "Fixture standalone active row",
+        status: "InProgress",
+        created_at: "2026-08-19",
+      },
+    ]);
+    doc.plans = plans;
+    writeFileSync(statusPath, JSON.stringify(doc, null, 2), "utf8");
+    return root;
+  }
+
+  test("without --delivery-kind the ACTIVE lift is refused as usage (exit 2, zero writes)", () => {
+    const root = activeRowTree();
+    try {
+      const before = treeFiles(root);
+      const refused = runCli(["migrate", "--path", root]);
+      expect(refused.exitCode).toBe(2);
+      expect(refused.stderr).toContain("would be lifted without a declared delivery kind");
+      expect(refused.stderr).toContain(ACTIVE_ID);
+      expect(treeFiles(root)).toEqual(before);
+
+      const declared = runCli([
+        "migrate", "--path", root,
+        "--delivery-kind", "development", "--branch-source", "feature/standalone", "--branch-target", "main",
+      ]);
+      expect(declared.exitCode).toBe(0);
+      const snapshot = readJsonFile(join(root, "workflows", ACTIVE_ID, "snapshot.json"));
+      expect(snapshot.status).toBe("running");
+      expect(snapshot.delivery_kind).toBe("development");
+      expect(snapshot.branch).toEqual({ source: "feature/standalone", target: "main" });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("an incoherent declaration is plan-invalid (exit 1): development needs both anchors", () => {
+    const root = activeRowTree();
+    try {
+      const r = runCli(["migrate", "--path", root, "--delivery-kind", "development", "--branch-source", "feature/a"]);
+      expect(r.exitCode).toBe(1);
+      expect(r.stderr).toContain("delivery source and target branches");
+      expect(existsSync(join(root, "workflows"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
