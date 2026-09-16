@@ -27,12 +27,27 @@ Maintainers / local checkouts: `omp plugin link /path/to/mstar-harness/packages/
 | Path in package | Contents |
 |-----------------|----------|
 | `hooks/pre/mstar-gates.js` | `tool_call` pre-hook — blocking enforcement gate for harness coordination-document writes and task dispatches |
+| `extensions/model-handoff.js` | Coordinator model-handoff extension (native opt-in settings `modelHandoff` / `handoffTarget`, tool `mstar_model_handoff`) — off by default; see below |
 | `tools/mstar_*.js` | Six model-callable validator tools (`mstar_status_validate`, `mstar_dispatch_validate`, `mstar_lease_verify`, `mstar_path_resolve`, `mstar_iteration_gate`, `mstar_worktree_check`) |
 | `skills/` | `mstar-harness-core`, `mstar-iteration`, `mstar-sdd`, roles, phase/dispatch gates, … |
 | `commands/` | `/iteration-start`, `/iteration-drive`, `/iteration-loop`, `/codebase-audit`, `/amazing-pr-review` |
 | `agents/` | Subagent role shells (`fullstack-dev`, `qc-specialist`, …) — no PM shell; the `mode: primary` project-manager seat is OpenCode-only |
 
-The engine is **bundled inline** into every hook/tool bundle at build time — the installed package has no runtime `@mstar-harness/engine` resolution, so module link can never fail on a missing package.
+The engine is **bundled inline** into every hook/tool/extension bundle at build time — the installed package has no runtime `@mstar-harness/engine` resolution, so module link can never fail on a missing package. The host package is the reverse: `extensions/model-handoff.js` keeps its one `@oh-my-pi/pi-coding-agent` import external and resolves it against the running host (the host provides that module for extensions), declared as an **optional peer** and developed against the host version pinned in `peerDependencies`.
+
+## Model handoff (opt-in)
+
+Coordinator sessions can start every new Morning Star iteration on `@slow` (Prepare) and continue that same session on a cheaper role once Phase 1 is complete.
+
+1. `/settings` → **Plugins** → **`@mstar-harness/omp`** → set **`modelHandoff`** to `true` (default `false`) and pick **`handoffTarget`** — `@default` (default) or `@smol`. These are the host's native plugin-settings rows; there is no activation command and no second settings file.
+2. Saved preferences persist across sessions in the host plugin-settings store. Merely installing or updating this package changes no model.
+3. On a real **new iteration start** in the coordinator session, this session is armed with `@slow` before substantive Prepare work. Ordinary chat, unrelated commands, subagent/leaf sessions, plan-scoped (`/iteration-drive --assignment …`) sessions and other hosts stay untouched.
+4. After a **complete Phase 1** — the specialist returns for that iteration, PM-locked Prepare, a distinct matching integration checkout and the required integration push — the same session switches once to `handoffTarget`.
+5. Picking a model yourself while the switch is still waiting cancels that pending switch for this session; the saved preference stays and later iterations still apply it. Failures (unresolvable role, refused host selection, incomplete readiness) stay visible in the session, keep the model the session actually has, and are never retried in a loop. No role mapping, goal or workflow state is written — only the session's model.
+
+**Scope limitation (host behaviour, not configurable here):** the native `/settings` → Plugins panel lists **user-scope** plugin installs. A `--scope project` install is used by omp but has no row in that panel; use the user-scope install above. The extension reads the saved preference through the host's exported settings helper, so a project-scoped runtime still honours the preference you saved there.
+
+Requires omp's `@oh-my-pi/pi-coding-agent` (optional peer, `peerDependencies`) and Bun `>=1.3.14`. The peer is optional so the package installs on any host: the hooks, tools, skills and commands carry no runtime host import and are unaffected by this entry's host resolution.
 
 ## Quick start
 
@@ -56,7 +71,7 @@ bun install
 bun run omp:build   # bundle-assets + dist bundles + root discovery mirrors
 ```
 
-Plugin sources: `packages/omp/src/hooks/pre/mstar-gates.ts` + `packages/omp/src/tools/mstar_*/index.ts` (moved here from the repo root 2026-09-03).
+Plugin sources: `packages/omp/src/hooks/pre/mstar-gates.ts` + `packages/omp/src/tools/mstar_*/index.ts` (moved here from the repo root 2026-09-03) + `packages/omp/src/extensions/model-handoff.ts` (model-handoff extension).
 
 ## License
 

@@ -11,6 +11,7 @@
   "type": "module",
   "files": [
     "dist",
+    "extensions",
     "harness-skills",
     "harness-commands",
     "harness-agents",
@@ -25,12 +26,12 @@
   ],
   "scripts": {
     "bundle-assets": "bun run scripts/bundle-harness-assets.ts",
-    "build": "bun run bundle-assets && rm -rf dist hooks tools && bun build src/hooks/pre/mstar-gates.ts --target node --outfile dist/hooks/pre/mstar-gates.js && bun build src/tools/mstar_status_validate/index.ts --target node --outfile dist/tools/mstar_status_validate/index.js && bun build src/tools/mstar_worktree_check/index.ts --target node --outfile dist/tools/mstar_worktree_check/index.js && bun build src/tools/mstar_dispatch_validate/index.ts --target node --outfile dist/tools/mstar_dispatch_validate/index.js && bun build src/tools/mstar_iteration_gate/index.ts --target node --outfile dist/tools/mstar_iteration_gate/index.js && bun build src/tools/mstar_lease_verify/index.ts --target node --outfile dist/tools/mstar_lease_verify/index.js && bun build src/tools/mstar_path_resolve/index.ts --target node --outfile dist/tools/mstar_path_resolve/index.js && bunx tsc && cp -R dist/hooks hooks && mkdir -p tools && cp dist/tools/mstar_status_validate/index.js tools/mstar_status_validate.js && cp dist/tools/mstar_worktree_check/index.js tools/mstar_worktree_check.js && cp dist/tools/mstar_dispatch_validate/index.js tools/mstar_dispatch_validate.js && cp dist/tools/mstar_iteration_gate/index.js tools/mstar_iteration_gate.js && cp dist/tools/mstar_lease_verify/index.js tools/mstar_lease_verify.js && cp dist/tools/mstar_path_resolve/index.js tools/mstar_path_resolve.js",
+    "build": "bun run bundle-assets && rm -rf dist hooks tools extensions && bun build src/hooks/pre/mstar-gates.ts --target node --outfile dist/hooks/pre/mstar-gates.js && bun build src/extensions/model-handoff.ts --target node --external '@oh-my-pi/*' --outfile dist/extensions/model-handoff.js && bun build src/tools/mstar_status_validate/index.ts --target node --outfile dist/tools/mstar_status_validate/index.js && bun build src/tools/mstar_worktree_check/index.ts --target node --outfile dist/tools/mstar_worktree_check/index.js && bun build src/tools/mstar_dispatch_validate/index.ts --target node --outfile dist/tools/mstar_dispatch_validate/index.js && bun build src/tools/mstar_iteration_gate/index.ts --target node --outfile dist/tools/mstar_iteration_gate/index.js && bun build src/tools/mstar_lease_verify/index.ts --target node --outfile dist/tools/mstar_lease_verify/index.js && bun build src/tools/mstar_path_resolve/index.ts --target node --outfile dist/tools/mstar_path_resolve/index.js && bunx tsc && cp -R dist/hooks hooks && cp -R dist/extensions extensions && mkdir -p tools && cp dist/tools/mstar_status_validate/index.js tools/mstar_status_validate.js && cp dist/tools/mstar_worktree_check/index.js tools/mstar_worktree_check.js && cp dist/tools/mstar_dispatch_validate/index.js tools/mstar_dispatch_validate.js && cp dist/tools/mstar_iteration_gate/index.js tools/mstar_iteration_gate.js && cp dist/tools/mstar_lease_verify/index.js tools/mstar_lease_verify.js && cp dist/tools/mstar_path_resolve/index.js tools/mstar_path_resolve.js",
     "test": "bun test",
     "prepublishOnly": "bun run build"
   },
   "engines": {
-    "bun": ">=1.2.17"
+    "bun": ">=1.3.14"
   },
   "omp": {
     "name": "morning-star-harness",
@@ -47,12 +48,22 @@
         "default": "@default",
         "description": "Coordinator model after a completed Phase 1. Used only when modelHandoff is enabled."
       }
-    }
+    },
+    "extensions": ["./extensions/model-handoff.js"]
   },
   "publishConfig": {
     "access": "public"
   },
+  "peerDependencies": {
+    "@oh-my-pi/pi-coding-agent": "18.2.1"
+  },
+  "peerDependenciesMeta": {
+    "@oh-my-pi/pi-coding-agent": {
+      "optional": true
+    }
+  },
   "devDependencies": {
-    "@mstar-harness/engine": "workspace:*"
+    "@mstar-harness/engine": "workspace:*",
+    "@oh-my-pi/pi-coding-agent": "18.2.1"
   }
 }
