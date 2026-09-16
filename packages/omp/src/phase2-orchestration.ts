@@ -74,23 +74,31 @@ function invalidPhase2Setting(key: string, requirement: string, value: unknown):
  * `phase2PlanInstances` must be a boolean and `maxPlanInstances` must be a
  * positive safe integer. There is deliberately no upper bound: the schema
  * declares the setting configurable, so `2` is a default, not a ceiling.
- * Unknown keys in the record belong to other features and are ignored.
+ * A key's **presence is decided by own property, not by its value**: only a
+ * genuinely absent key takes the schema default, so a programmatic caller
+ * passing `{ maxPlanInstances: undefined }` gets a refusal rather than a silent
+ * `2`. Unknown keys in the record belong to other features and are ignored.
  */
 export function decodePhase2Settings(raw: Record<string, unknown>): Phase2SettingsResult {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     return invalidPhase2Setting("plugin settings", "an object", raw);
   }
 
-  const phase2PlanInstances = raw.phase2PlanInstances === undefined
-    ? DEFAULT_PHASE2_PLAN_INSTANCES
-    : raw.phase2PlanInstances;
+  // Presence is decided by own property, never by the value: a programmatic
+  // caller sending `{ maxPlanInstances: undefined }` sent a key whose value is
+  // malformed, so it refuses instead of silently taking the schema default. The
+  // native path deserializes JSON, which cannot carry `undefined` at all — this
+  // boundary exists because the decoder is exported.
+  const phase2PlanInstances = Object.prototype.hasOwnProperty.call(raw, "phase2PlanInstances")
+    ? raw.phase2PlanInstances
+    : DEFAULT_PHASE2_PLAN_INSTANCES;
   if (typeof phase2PlanInstances !== "boolean") {
     return invalidPhase2Setting("phase2PlanInstances", "a boolean", raw.phase2PlanInstances);
   }
 
-  const maxPlanInstances = raw.maxPlanInstances === undefined
-    ? DEFAULT_MAX_PLAN_INSTANCES
-    : raw.maxPlanInstances;
+  const maxPlanInstances = Object.prototype.hasOwnProperty.call(raw, "maxPlanInstances")
+    ? raw.maxPlanInstances
+    : DEFAULT_MAX_PLAN_INSTANCES;
   if (typeof maxPlanInstances !== "number" || !Number.isSafeInteger(maxPlanInstances) || maxPlanInstances < 1) {
     return invalidPhase2Setting("maxPlanInstances", "a positive safe integer", raw.maxPlanInstances);
   }
@@ -219,7 +227,17 @@ export type ReminderContext = Readonly<{
  * "silent" whenever the observation is unavailable, unowned, suppressed,
  * replayed, blocked, or carries no opportunity; "remind" only for a changed
  * (or still-running) opportunity the coordinator has not been told about yet.
- * Emitting is the caller's job: it records the key before sending.
+ * Pure: it neither persists nor invents state.
+ *
+ * **Caller contract (T3).** This latch is the only baseline a change can be
+ * detected against. `remindedKeys` is recorded by the caller for each emission
+ * (before sending, per spec §B) and `acknowledgedKey` by a real `checkpoint`
+ * operation; replaying those entries on reconstruction is what lets a later
+ * *idle* change be recognized. An adapter that records no latch can see an
+ * idle-only change never — that is the caller's obligation, not a hidden
+ * default here, and the reason the first idle sample with an empty latch is
+ * silent by design (spec §B: emission requires running work or a changed
+ * engine/transport observation).
  */
 export function decidePhase2Reminder(
   state: ReminderState,
@@ -247,9 +265,11 @@ export function decidePhase2Reminder(
   if (state.remindedKeys.includes(observation.key)) return "silent";
 
   // An opportunity is running work, or a real change against the latched
-  // baseline (capacity freed, dependency/ownership changed). With no baseline
-  // there is nothing to have changed, and an idle first sample is not an
-  // overlooked opportunity.
+  // baseline (capacity freed, dependency/ownership changed). The baseline is
+  // `state` itself — a key the caller recorded for a real emission
+  // (`remindedKeys`) or a real checkpoint (`acknowledgedKey`). With no latched
+  // key there is nothing this sample can differ from, and an idle first sample
+  // is not an overlooked opportunity (spec §B conjunct).
   const hasLatchedBaseline = state.acknowledgedKey !== null || state.remindedKeys.length > 0;
   if (!observation.hasRunningJobs && !hasLatchedBaseline) return "silent";
 
