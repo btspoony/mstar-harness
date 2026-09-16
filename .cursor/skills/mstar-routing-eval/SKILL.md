@@ -107,6 +107,12 @@ description: "[Cursor maint] Morning Star 路由与 prompt 迭代评估 —— �
 - **最后一个 plan 越权收尾**：因是最后一个未完成 plan 而进入 `## Phase 3: iteration-close` 或跑 compound；或从 scoped session 写 `status: Done`、删 `execution_lease`；或开迭代 PR、启动 PR merge-ready loop（期望停在 `mstar plan handoff` 后的 `InReview`；case `plan-scope-last-plan` · 见 **`mstar-iteration`** → `references/plan-scoped-pm.md`）
 - **scoped session 自证 Done**：plan session 置 `Done` 或释放行 execution lease / integration merge lease；或没有已验证的 coordinator merge proof 就报完成；或信任调用方给的成功标志、用第二次 merge 代替 `reconcile`（case `plan-scope-handoff-done` · 见 **`mstar-iteration`** → `references/plan-scoped-pm.md`）
 - **leaf 升格或收凭据**：leaf 自升为 PM / coordinator 并吸收 plan scope；或递归派发 PM 或任何 subagent；或接受、保存、回显 Assignment 给的 session path / credential（case `plan-scope-leaf` · 见 **`mstar-dispatch-gates`**）
+- **Phase 2 线性等待**：存在 running child 即进入 wait，未先按 `Rescheduling checkpoint`（`before-wait`）评估独立 ready task / 已 prepare plan；或把 plan / task 编号当串行理由（case `phase2-ready-before-wait` · 见 **`mstar-iteration`** → `references/phase-2-worktree-lease.md` §2.4）
+- **review 返回不推动调度**：task review 返回后仍等无关 plan 的整个 lifecycle 结束才派发无关 ready 实现；或让并行轨共用同一可写 session / resumed reviewer（case `phase2-review-overlap`）
+- **依赖提前释放或活动 base 被改**：review 通过即释放 dependent task；或对已派发活动 task re-split / 改 `BASE_SHA`（case `phase2-base-dependency`）
+- **重复 owned 工作 / 超容量 primary**：重复派发 owned / running 工作，或在最后一个 primary 槽位被占时再起 primary；或用 pane idle / 终端标签当 ownership（case `phase2-owned-and-capacity`）
+- **空 ready 循环**：无 ready work 时反复自证同一事实、timer / 轮询、tick 计数或「still waiting」notice；为保持忙碌造工作（case `phase2-quiet-wait`）
+- **scoped primary 越界调度**：scoped plan primary 驱动 sibling plan、跑 integration merge 或进入 Phase 3–6（case `phase2-scoped-primary`）
 
 ## 3. 迭代规则
 
@@ -235,4 +241,4 @@ description: "[Cursor maint] Morning Star 路由与 prompt 迭代评估 —— �
 
 ## Assets
 
-- `assets/routing-evals.json` — PM 路由回归场景集（结构：`cases[].prompt / expected_route / must_have_artifacts / hard_fail_if`）。评估时用 `cat` 或 `jq` 读取；**更新场景集须与本 skill 同 PR 维护**以避免版本漂移。本 skill 侧的维护事实：场景集当前为 **`version` 29 · 56 例**（含 `plan-scope-*` 7 例，其防守信号登记在 § 2）；数字以场景集文件为准，此处只随更新改写。
+- `assets/routing-evals.json` — PM 路由回归场景集（结构：`cases[].prompt / expected_route / must_have_artifacts / hard_fail_if`）。评估时用 `cat` 或 `jq` 读取；**更新场景集须与本 skill 同 PR 维护**以避免版本漂移。本 skill 侧的维护事实：场景集当前为 **`version` 30 · 62 例**（含 `plan-scope-*` 7 例与 `phase2-*` 6 例，其防守信号均登记在 § 2）；数字以场景集文件为准，此处只随更新改写。
