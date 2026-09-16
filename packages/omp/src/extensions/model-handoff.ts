@@ -10,6 +10,34 @@
  * navigation around an invoked model action, and recovers a durable attempt as
  * `uncertain`.
  *
+ * ## Authority is derived from host facts, never claimed by the caller
+ *
+ * The `mstar_model_handoff` start input carries **no authority, intent or entry
+ * declaration**. Before anything is reserved or armed, `deriveStartAuthority`
+ * reads host and engine facts only and refuses when they do not hold:
+ *
+ * - the host session must not be a leaf/subagent session (`session_init` in its
+ *   ledger);
+ * - the last host-observed entry route must not be the scoped-plan PM family
+ *   (`/iteration-drive …`), whose contract is "restore an existing binding
+ *   only, never retro-arm";
+ * - the workflow's own session envelopes
+ *   (`{WORKFLOW_DIR}/<id>/sessions/*.json`, read-only through the engine's
+ *   `readSessionEnvelope`) must not describe this session as a `plan-pm`
+ *   session, must not bind the named workflow to a *different* coordinator
+ *   session, and must not bind this session to a different workflow;
+ * - the root register's other non-terminal workflows must not already name this
+ *   session as their coordinator.
+ *
+ * What that blocks: a task session, a session whose explicit entry was the
+ * scoped-plan route, a `plan-pm` session, a session that is demonstrably not the
+ * named workflow's coordinator, and a session already coordinating another
+ * running workflow. What it does **not** do: it is not cryptographic proof of
+ * caller identity. For a brand-new iteration there is no envelope yet, so a
+ * caller inside a genuine coordinator session can still invoke the tool — that is
+ * the frozen E1 trusted-assertion boundary (Task 2's trust split), and this
+ * module does not claim to strengthen it.
+ *
  * ## What this module may claim — and what it must not
  *
  * The host exposes no attributed model-selection event and no cancellation for
@@ -37,18 +65,23 @@
  * terminal binding cannot be resurrected by tree navigation.
  *
  * - **Arm** (`mstar_model_handoff` `{operation:"start"}`): the PM's first
- *   preparation action. A false/absent preference is inert and writes nothing;
- *   the explicit E1 reservation is validated by
- *   `packages/omp/src/model-handoff-readiness.ts`; the arm attempt is recorded,
- *   `@slow` is selected once through `pi.setModel`, and `pending` is entered
- *   only when the live model *and* the newest ledger entry agree on `@slow`.
+ *   preparation action. A false/absent preference is inert and writes nothing.
+ *   The arm is single-entry in memory (`armInFlight`) *and* re-checks the
+ *   durable state after every `await`, so two concurrent starts cannot both
+ *   reserve and arm. The arm attempt is recorded, `@slow` is selected once
+ *   through `pi.setModel`, and `pending` is entered only when the live model
+ *   agrees **and** every `model_change` entry recorded after the pre-arm cursor
+ *   describes `@slow` (an away-and-back inside the arm window is a conflict).
  * - **Fire** (`{operation:"phase1-complete"}`): re-reads the preference, runs
- *   the frozen E2 readiness checkpoint, then performs — synchronously, with no
- *   `await` in between — the final pending scan, the `pending → attempting`
- *   record append, the navigation-guard arm and the single public `setModel`.
+ *   the frozen E2 readiness checkpoint, **re-reads the preference again** after
+ *   that asynchronous work (a settings edit during readiness is honored), then
+ *   performs — synchronously, with no `await` in between — the final pending
+ *   scan, the `pending → attempting` record append, the navigation-guard arm and
+ *   the single public `setModel`.
  * - **Observation** (`input`, `before_agent_start`, `tool_result`, `agent_end`,
  *   navigation-before events, reconstruction) only ever *cancels*; it never
- *   switches a model and never selects `@slow` again.
+ *   switches a model, never re-selects `@slow`, and is skipped while this
+ *   instance's own action is in flight.
  * - **Navigation**: while an action is in flight, a navigation-before handler
  *   returns `{ cancel: true }` immediately (no `await` inside the handler — an
  *   extension-handler timeout would otherwise let navigation continue). When
@@ -60,9 +93,18 @@
  *
  * The extension never writes role mappings, thinking level, service tiers, goal
  * state, workflow lifecycle or another session's model, and it never shadows a
- * native command or key.
+ * native command, registers a command/shortcut/flag or intercepts a key.
  */
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { dirname, isAbsolute, join } from "node:path";
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@oh-my-pi/pi-coding-agent";
+import {
+  WORKFLOW_SNAPSHOT_FILE,
+  WORKFLOW_TERMINAL_STATUSES,
+  readSessionEnvelope,
+  readWorkflowSnapshot,
+  validateStatusV2,
+} from "@mstar-harness/engine";
 import { inspectPhase1Readiness, reserveHandoffBinding } from "../model-handoff-readiness";
 import type {
   HandoffBinding,
@@ -83,6 +125,23 @@ const TOOL_NAME = "mstar_model_handoff";
 const SLOW_SPEC = "@slow";
 /** Record schema version; bumped only by a deliberate migration. */
 const RECORD_VERSION = 1;
+/** Root register file inside the harness dir (v2 `status.json`). */
+const STATUS_FILE = "status.json";
+/** Session envelopes of one workflow live in `<workflow-dir>/sessions/`. */
+const SESSION_DIR = "sessions";
+
+/**
+ * Route families read from the host's own `InputEvent`. The scoped-plan PM
+ * family (`/iteration-drive …`) is restore-only and must never arm; the two
+ * iteration commands are the two arming entry forms. Anything else (natural
+ * language, skill loading, RPC/extension input) carries no route and is labelled
+ * `skill-start` for E1's frozen `entry` field. The route can only *refuse* or
+ * *label* — it never authorizes: authorization is the host/engine derivation
+ * below.
+ */
+const SCOPED_PLAN_ROUTE_RE = /^\/iteration-drive(?:[\s]|$)/;
+const ITERATION_START_RE = /^\/iteration-start(?:[\s]|$)/;
+const ITERATION_LOOP_RE = /^\/iteration-loop(?:[\s]|$)/;
 
 /** Non-pending states: a binding in one of these is never re-armed or retried. */
 export type HandoffTerminalState = "handed_off" | "cancelled" | "failed" | "uncertain";
@@ -176,13 +235,26 @@ function indexOfEntry(entries: readonly SessionEntry[], entryId: string | null):
   return entries.findIndex((entry) => entry.id === entryId);
 }
 
-/** Newest `model_change` entry in recorded order, or `null` when history has none. */
-function lastModelChange(entries: readonly SessionEntry[]): Readonly<{ id: string; model: string }> | null {
+/** Index of the newest `model_change` entry in recorded order, or `-1` when history has none. */
+function lastModelChangeIndex(entries: readonly SessionEntry[]): number {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index];
-    if (entry !== undefined && entry.type === "model_change") return { id: entry.id, model: entry.model };
+    if (entry !== undefined && entry.type === "model_change") return index;
   }
-  return null;
+  return -1;
+}
+
+/** Every `model_change` entry recorded after `cursor` (the arm's own window). */
+function modelChangesAfter(
+  entries: readonly SessionEntry[],
+  cursor: number,
+): readonly Readonly<{ id: string; model: string }>[] {
+  const changes = [];
+  for (let index = cursor + 1; index < entries.length; index += 1) {
+    const entry = entries[index];
+    if (entry !== undefined && entry.type === "model_change") changes.push({ id: entry.id, model: entry.model });
+  }
+  return changes;
 }
 
 /**
@@ -242,6 +314,182 @@ export function pendingCancellationReason(
   return null;
 }
 
+/* ------------------------------------------------------ host entry route --- */
+
+type RouteKind = HandoffEntry | "scoped-plan";
+
+type RouteObservation = Readonly<{ kind: RouteKind; text: string }>;
+
+/** Route family of one host-observed input, or `null` when it carries no route. */
+function routeOf(text: string): RouteKind | null {
+  const trimmed = text.trim();
+  if (SCOPED_PLAN_ROUTE_RE.test(trimmed)) return "scoped-plan";
+  if (ITERATION_START_RE.test(trimmed)) return "iteration-start";
+  if (ITERATION_LOOP_RE.test(trimmed)) return "iteration-loop";
+  return null;
+}
+
+/* --------------------------------------------------- start authority ------ */
+
+type AuthorityRefusalCode =
+  | "task-session"
+  | "scoped-plan-route"
+  | "plan-pm-session"
+  | "coordinator-elsewhere"
+  | "envelope-invalid"
+  | "register-invalid";
+
+type AuthorityDecision =
+  | Readonly<{ ok: true }>
+  | Readonly<{ ok: false; code: AuthorityRefusalCode; message: string }>;
+
+/** One engine session envelope, reduced to the fields this adapter derives from. */
+type WorkflowEnvelope = Readonly<{
+  path: string;
+  sessionId: string;
+  workflowId: string;
+  role: "coordinator" | "plan-pm";
+}>;
+
+/** Read-only engine facts inside one workflow dir: envelope path, session id, workflow id, role. */
+function readWorkflowEnvelopes(workflowDir: string): readonly WorkflowEnvelope[] {
+  const sessionsDir = join(workflowDir, SESSION_DIR);
+  if (!existsSync(sessionsDir)) return [];
+  const envelopes: WorkflowEnvelope[] = [];
+  for (const name of readdirSync(sessionsDir).sort()) {
+    if (!name.endsWith(".json")) continue;
+    const path = join(sessionsDir, name);
+    const envelope = readSessionEnvelope(path); // throws coordination.session-* on malformed input
+    envelopes.push({
+      path,
+      sessionId: envelope.session_id,
+      workflowId: envelope.workflow_id,
+      role: envelope.role,
+    });
+  }
+  return envelopes;
+}
+
+/**
+ * Host-derived authority for one explicit new-iteration start. Read-only: engine
+ * envelopes, the root register and the workflows it names are read, never
+ * written. Any failure refuses the start with a visible code — the caller cannot
+ * claim authority, and a caller that supplies none cannot forge any.
+ */
+export function deriveStartAuthority(args: {
+  sessionId: string;
+  binding: HandoffBinding;
+  taskSession: boolean;
+  route: RouteObservation | null;
+}): AuthorityDecision {
+  const { sessionId, binding, taskSession, route } = args;
+  if (sessionId === "") {
+    return { ok: false, code: "task-session", message: "the host session has no id" };
+  }
+  if (taskSession) {
+    return {
+      ok: false,
+      code: "task-session",
+      message: "this session is a leaf/subagent (task) session, not the iteration coordinator",
+    };
+  }
+  if (route !== null && route.kind === "scoped-plan") {
+    return {
+      ok: false,
+      code: "scoped-plan-route",
+      message: `the last host-observed entry of this session is the scoped-plan PM route ${JSON.stringify(route.text)}; that route restores an existing binding and never arms a new one`,
+    };
+  }
+
+  const workflowDir = dirname(binding.snapshotPath);
+  let envelopes: readonly WorkflowEnvelope[];
+  try {
+    envelopes = readWorkflowEnvelopes(workflowDir);
+  } catch (error) {
+    return {
+      ok: false,
+      code: "envelope-invalid",
+      message: `a session envelope under ${join(workflowDir, SESSION_DIR)} could not be read: ${String(error)}`,
+    };
+  }
+  for (const envelope of envelopes) {
+    if (envelope.sessionId === sessionId) {
+      if (envelope.role === "plan-pm") {
+        return {
+          ok: false,
+          code: "plan-pm-session",
+          message: `this session holds a plan-pm envelope for workflow ${envelope.workflowId}; a scoped-plan PM session never arms the iteration handoff`,
+        };
+      }
+      if (envelope.workflowId !== binding.workflowId) {
+        return {
+          ok: false,
+          code: "coordinator-elsewhere",
+          message: `this session is the coordinator of workflow ${envelope.workflowId}, not of ${binding.workflowId}`,
+        };
+      }
+      continue;
+    }
+    if (envelope.role === "coordinator" && envelope.workflowId === binding.workflowId) {
+      return {
+        ok: false,
+        code: "coordinator-elsewhere",
+        message: `workflow ${binding.workflowId} is bound to coordinator session ${envelope.sessionId}, not to this session`,
+      };
+    }
+  }
+
+  const registerPath = join(binding.harnessRoot, STATUS_FILE);
+  if (!existsSync(registerPath)) return { ok: true };
+  const register = validateStatusV2(registerPath, { harnessDir: binding.harnessRoot });
+  if (!register.ok) {
+    return {
+      ok: false,
+      code: "register-invalid",
+      message: `the root register ${registerPath} is not a valid v2 coordination document`,
+    };
+  }
+  let rows: readonly unknown[] = [];
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(registerPath, "utf8"));
+    rows = isPlainObject(parsed) && Array.isArray(parsed.workflows) ? parsed.workflows : [];
+  } catch (error) {
+    return {
+      ok: false,
+      code: "register-invalid",
+      message: `the root register ${registerPath} could not be read: ${String(error)}`,
+    };
+  }
+  for (const row of rows) {
+    if (!isPlainObject(row) || typeof row.id !== "string" || row.id === binding.workflowId) continue;
+    const rowDir =
+      typeof row.dir === "string" && row.dir !== ""
+        ? isAbsolute(row.dir)
+          ? row.dir
+          : join(binding.harnessRoot, row.dir)
+        : join(binding.harnessRoot, "workflows", row.id);
+    let snapshot;
+    try {
+      snapshot = readWorkflowSnapshot(rowDir).snapshot;
+    } catch (error) {
+      return {
+        ok: false,
+        code: "register-invalid",
+        message: `registered workflow ${row.id} at ${rowDir} could not be read: ${String(error)}`,
+      };
+    }
+    const coordinator = snapshot.coordination?.coordinator?.session_id;
+    if (coordinator === sessionId && !(WORKFLOW_TERMINAL_STATUSES as readonly string[]).includes(snapshot.status)) {
+      return {
+        ok: false,
+        code: "coordinator-elsewhere",
+        message: `this session is the coordinator of the ${snapshot.status} workflow ${row.id}; one session coordinates one iteration`,
+      };
+    }
+  }
+  return { ok: true };
+}
+
 /**
  * In-memory operation gate (spec §B1). Never persisted: a refused navigation or
  * a fence that never clears is a per-process condition, not session truth.
@@ -256,6 +504,8 @@ type Gate = {
   generation: number;
   /** One durable notice per suspension episode. */
   suspensionNotified: boolean;
+  /** One arm at a time in this instance; cleared only in `finally`. */
+  armInFlight: boolean;
 };
 
 /** Plugin-local attempt id (`operationId`), never host provenance. */
@@ -263,15 +513,22 @@ function newOperationId(action: HandoffAction): string {
   return `${action}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+/** Tool result shape every path returns (the host renders it in TUI/print/JSON/RPC alike). */
+type ToolOutcome = Readonly<{ ok: boolean; isError: boolean; text: string; details: Record<string, unknown> }>;
+
 /**
- * Whether the host session is a leaf/subagent (task) session rather than a
- * coordinator. A task session records `session_init`; a user *fork* carries a
- * `parentSession` header but no `session_init`, and the record's session-ID
- * filter already denies a fork the parent's authority — so the header alone is
- * deliberately not used as the marker.
+ * Test seam for the awaited readiness step, following this package's own
+ * convention (`mstar-gates`' `dispatchGateLoader`,
+ * `mstar_lease_verify`'s `workflowDirResolverLoader`). The runtime behavior is
+ * the real E2 checkpoint; a probe replaces `inspectReadiness` only to hold that
+ * step open and prove that the preference is re-read *after* it.
  */
-function isTaskSession(ctx: ExtensionContext): boolean {
-  return ctx.sessionManager.getEntries().some((entry) => entry.type === "session_init");
+export const handoffSeams = {
+  inspectReadiness: inspectPhase1Readiness,
+};
+
+function outcome(ok: boolean, isError: boolean, text: string, details: Record<string, unknown> = {}): ToolOutcome {
+  return { ok, isError, text, details };
 }
 
 /**
@@ -287,25 +544,19 @@ function resolveSpec<T>(models: Readonly<{ resolve: (spec: string) => T | undefi
   }
 }
 
-/** Tool result shape every path returns (the host renders it in TUI/print/JSON/RPC alike). */
-type ToolOutcome = Readonly<{ ok: boolean; isError: boolean; text: string; details: Record<string, unknown> }>;
-
-function outcome(ok: boolean, isError: boolean, text: string, details: Record<string, unknown> = {}): ToolOutcome {
-  return { ok, isError, text, details };
-}
-
 /** Frozen role/report tuple accepted from the PM's completion call. */
 type ToolSpecialistReceipt = Readonly<{ role: string; agentId: string; resultRef: string; reportPath: string }>;
 /** Frozen per-plan Prepare evidence accepted from the PM's completion call. */
 type ToolPlanEvidence = Readonly<{ planId: string; planPath: string; prepareEvidencePath: string }>;
 
-/** Tool parameters: `{operation:"start"} | {operation:"phase1-complete"}` and their frozen fields. */
+/**
+ * Tool parameters. The start operation takes **only** the explicitly named
+ * workflow id: authority, intent and the entry route are host-derived, so there
+ * is no field a caller could use to declare them.
+ */
 type ToolParams = {
   operation: "start" | "phase1-complete";
   workflowId: string;
-  entry?: HandoffEntry;
-  intent?: "new-iteration";
-  authority?: "coordinator";
   coordinatorSessionPath?: string;
   mainWorktreeBranch?: string;
   reviews?: readonly ToolSpecialistReceipt[];
@@ -319,7 +570,10 @@ export default function modelHandoff(pi: ExtensionAPI): void {
     navigationPending: false,
     generation: 0,
     suspensionNotified: false,
+    armInFlight: false,
   };
+  /** The last host-observed entry route of this session (in-memory, not durable). */
+  let lastRoute: RouteObservation | null = null;
 
   /** Durable coordinator-visible notice; never log-only, never throws into the host. */
   const notice = (text: string): void => {
@@ -345,6 +599,9 @@ export default function modelHandoff(pi: ExtensionAPI): void {
     }
   };
 
+  const sessionIdOf = (ctx: ExtensionContext): string => ctx.sessionManager.getSessionId();
+  const liveSpecOf = (ctx: ExtensionContext): ModelSpec | null => modelSpecOf(ctx.models.current());
+
   /** Transition a binding to a terminal state, durably and visibly. */
   const terminalize = (
     record: HandoffRecord,
@@ -367,15 +624,22 @@ export default function modelHandoff(pi: ExtensionAPI): void {
     return appended;
   };
 
+  /** The latest durable record is an attempt this instance is still running. */
+  const attemptIsRunning = (decision: SessionStateDecision): boolean =>
+    gate.actionInFlight && decision.kind === "uncertain" && decision.record.state === "attempting";
+
   /**
    * Restore durable state for the session now attached to `ctx` **without**
    * switching anything: an interrupted attempt becomes `uncertain`, a pending
-   * binding is restored as it is, a terminal binding stays terminal.
+   * binding is restored as it is, a terminal binding stays terminal. An attempt
+   * this instance is still running is never mislabelled uncertain — only a
+   * genuine resume (a fresh instance with no action in flight) reaches that
+   * transition.
    */
   const reconstruct = (ctx: ExtensionContext): SessionStateDecision => {
-    const decision = decideSessionState(ctx.sessionManager.getEntries(), ctx.sessionManager.getSessionId());
-    if (decision.kind === "uncertain") {
-      terminalize(decision.record, "uncertain", decision.reason, modelSpecOf(ctx.models.current()));
+    const decision = decideSessionState(ctx.sessionManager.getEntries(), sessionIdOf(ctx));
+    if (decision.kind === "uncertain" && !attemptIsRunning(decision)) {
+      terminalize(decision.record, "uncertain", decision.reason, liveSpecOf(ctx));
     }
     return decision;
   };
@@ -383,18 +647,19 @@ export default function modelHandoff(pi: ExtensionAPI): void {
   /**
    * Pending observation opportunity (spec §B1): cancel a waiting handoff when
    * the ledger or the live model moved away from the armed baseline. Never
-   * switches a model, and a no-op while an action is in flight (the state is
-   * `attempting` then, which the replay rule does not treat as pending).
+   * switches a model, and a no-op while this instance's own action is in flight
+   * (that action is already invoked; there is nothing left to cancel).
    */
   const observePending = (ctx: ExtensionContext): void => {
+    if (gate.actionInFlight) return;
     const entries = ctx.sessionManager.getEntries();
-    const decision = decideSessionState(entries, ctx.sessionManager.getSessionId());
+    const decision = decideSessionState(entries, sessionIdOf(ctx));
     if (decision.kind === "uncertain") {
-      terminalize(decision.record, "uncertain", decision.reason, modelSpecOf(ctx.models.current()));
+      terminalize(decision.record, "uncertain", decision.reason, liveSpecOf(ctx));
       return;
     }
     if (decision.kind !== "pending") return;
-    const live = modelSpecOf(ctx.models.current());
+    const live = liveSpecOf(ctx);
     const reason = pendingCancellationReason(entries, decision.record, live);
     if (reason !== null) terminalize(decision.record, "cancelled", reason, live);
   };
@@ -403,7 +668,7 @@ export default function modelHandoff(pi: ExtensionAPI): void {
   const suspensionReason = (ctx: ExtensionContext, sessionId: string, generation: number): string | null => {
     if (gate.navigationPending) return "a session navigation is in progress";
     if (gate.generation !== generation) return "the session changed while the handoff was being checked";
-    if (ctx.sessionManager.getSessionId() !== sessionId) return "the session id changed while the handoff was being checked";
+    if (sessionIdOf(ctx) !== sessionId) return "the session id changed while the handoff was being checked";
     return null;
   };
 
@@ -422,12 +687,26 @@ export default function modelHandoff(pi: ExtensionAPI): void {
     });
   };
 
+  /** Refused start: durable notice plus a visible tool result; no binding is written. */
+  const refuseStart = (code: string, message: string): ToolOutcome => {
+    notice(`model handoff start refused for this session (${code}): ${message}. No model action was taken.`);
+    return outcome(false, true, `the new-iteration handoff start was refused (${code}): ${message}`, { code });
+  };
+
   /* --------------------------------------------------------------- arm --- */
 
-  const arm = async (params: ToolParams, ctx: ExtensionContext): Promise<ToolOutcome> => {
-    const sessionId = ctx.sessionManager.getSessionId();
+  const armOnce = async (params: ToolParams, ctx: ExtensionContext): Promise<ToolOutcome> => {
+    const sessionId = sessionIdOf(ctx);
     const decision = reconstruct(ctx);
 
+    if (attemptIsRunning(decision)) {
+      return outcome(
+        false,
+        true,
+        "a model action from a previous handoff invocation is still running in this session; nothing was changed.",
+        { code: "in-flight", state: "attempting" },
+      );
+    }
     if (decision.kind === "pending" || decision.kind === "uncertain") {
       return outcome(
         false,
@@ -463,19 +742,19 @@ export default function modelHandoff(pi: ExtensionAPI): void {
       );
     }
 
-    // E1: the explicit new-start binding is a trusted PM assertion checked
-    // against host facts; the reservation is session-local and writes nothing.
+    // E1 reserves the derived paths for the explicitly named workflow; the
+    // reservation is session-local and writes nothing.
+    const taskSession = ctx.sessionManager.getEntries().some((entry) => entry.type === "session_init");
     const bindingInput: HandoffBindingInput = {
       workflowId: params.workflowId,
-      entry: params.entry ?? "iteration-start",
-      intent: params.intent ?? "new-iteration",
-      authority: params.authority ?? "coordinator",
+      entry: lastRoute !== null && lastRoute.kind !== "scoped-plan" ? lastRoute.kind : "skill-start",
+      // Supplied by this adapter, never by the caller: they are E1's frozen input
+      // shape for an explicit new-iteration start, and the derivation below is
+      // what has to hold before they are true.
+      intent: "new-iteration",
+      authority: "coordinator",
     };
-    const reservation = await reserveHandoffBinding(bindingInput, {
-      sessionId,
-      cwd: ctx.cwd,
-      taskSession: isTaskSession(ctx),
-    });
+    const reservation = await reserveHandoffBinding(bindingInput, { sessionId, cwd: ctx.cwd, taskSession });
     if (!reservation.ok) {
       return outcome(
         false,
@@ -485,8 +764,29 @@ export default function modelHandoff(pi: ExtensionAPI): void {
       );
     }
 
+    // Host-derived authority (no caller-supplied claim anywhere on this path).
+    const authority = deriveStartAuthority({
+      sessionId,
+      binding: reservation.binding,
+      taskSession,
+      route: lastRoute,
+    });
+    if (!authority.ok) return refuseStart(authority.code, authority.message);
+
+    // Durable re-check after every await: a concurrent arm (this instance or
+    // another one over the same session) must be visible here as a binding.
+    const concurrent = decideSessionState(ctx.sessionManager.getEntries(), sessionId);
+    if (concurrent.kind !== "none") {
+      return outcome(
+        false,
+        true,
+        `this session already holds a ${concurrent.kind} model-handoff binding; the second start was refused without a model action.`,
+        { code: "already-bound", state: concurrent.kind, workflowId: concurrent.record.binding.workflowId },
+      );
+    }
+
     // Attempt-before-action: the arm attempt is durable before `@slow` is selected.
-    const beforeArm = lastModelChange(ctx.sessionManager.getEntries());
+    const beforeArm = lastModelChangeIndex(ctx.sessionManager.getEntries());
     const attempt: HandoffRecord = {
       version: RECORD_VERSION,
       binding: reservation.binding,
@@ -506,7 +806,7 @@ export default function modelHandoff(pi: ExtensionAPI): void {
 
     const slow = resolveSpec(ctx.models, SLOW_SPEC);
     if (slow === undefined) {
-      terminalize(attempt, "failed", `cannot resolve ${SLOW_SPEC} in this session's model configuration`, modelSpecOf(ctx.models.current()));
+      terminalize(attempt, "failed", `cannot resolve ${SLOW_SPEC} in this session's model configuration`, liveSpecOf(ctx));
       return outcome(false, true, `cannot resolve ${SLOW_SPEC}; the session model is unchanged and no handoff is pending.`, {
         code: "slow-unresolved",
         state: "failed",
@@ -518,7 +818,7 @@ export default function modelHandoff(pi: ExtensionAPI): void {
     try {
       switched = await pi.setModel(slow);
     } catch (error) {
-      terminalize(attempt, "failed", `selecting ${slowSpec} failed: ${String(error)}`, modelSpecOf(ctx.models.current()));
+      terminalize(attempt, "failed", `selecting ${slowSpec} failed: ${String(error)}`, liveSpecOf(ctx));
       return outcome(false, true, `selecting ${SLOW_SPEC} (${slowSpec}) failed: ${String(error)}`, {
         code: "slow-selection-failed",
         state: "failed",
@@ -529,45 +829,46 @@ export default function modelHandoff(pi: ExtensionAPI): void {
         attempt,
         "failed",
         `the host refused the ${slowSpec} selection (no configured auth for it)`,
-        modelSpecOf(ctx.models.current()),
+        liveSpecOf(ctx),
       );
       return outcome(
         false,
         true,
         `the host refused the ${SLOW_SPEC} selection (${slowSpec}); the session keeps its actual model and no handoff is pending.`,
-        { code: "slow-selection-refused", state: "failed", actualModel: modelSpecOf(ctx.models.current()) },
+        { code: "slow-selection-refused", state: "failed", actualModel: liveSpecOf(ctx) },
       );
     }
 
-    // Pending requires nonconflicting model/history evidence: the live model and
-    // the newest ledger entry must both describe the armed role, and that entry
-    // must be the arm's own transition unless history already said `@slow`.
-    const afterArm = lastModelChange(ctx.sessionManager.getEntries());
-    const liveAfterArm = modelSpecOf(ctx.models.current());
-    const historyAgrees =
-      afterArm !== null &&
-      afterArm.model === slowSpec &&
-      (beforeArm === null || afterArm.id !== beforeArm.id || beforeArm.model === slowSpec);
-    if (liveAfterArm !== slowSpec || !historyAgrees) {
+    // Pending requires nonconflicting model/history evidence: the live model must
+    // be `@slow` *and* every transition recorded after the pre-arm cursor must
+    // describe `@slow`. A change away and back inside that window is a conflict
+    // even though the current value looks right.
+    const afterEntries = ctx.sessionManager.getEntries();
+    const window = modelChangesAfter(afterEntries, beforeArm);
+    const liveAfterArm = liveSpecOf(ctx);
+    const agreed = window.every((change) => change.model === slowSpec);
+    const windowModels = window.map((change) => change.model);
+    if (liveAfterArm !== slowSpec || window.length === 0 || !agreed) {
       terminalize(
         attempt,
         "failed",
-        `conflicting model/history evidence after arming ${SLOW_SPEC}: live ${liveAfterArm ?? "unknown"}, newest ledger entry ${afterArm?.model ?? "none"}`,
+        `conflicting model/history evidence after arming ${SLOW_SPEC}: live ${liveAfterArm ?? "unknown"}, transitions recorded after the pre-arm cursor ${windowModels.length === 0 ? "(none)" : windowModels.join(", ")}`,
         liveAfterArm,
       );
       return outcome(
         false,
         true,
-        `the ${SLOW_SPEC} arm could not be confirmed (live ${liveAfterArm ?? "unknown"}, ledger ${afterArm?.model ?? "none"}); no handoff is pending.`,
+        `the ${SLOW_SPEC} arm could not be confirmed (live ${liveAfterArm ?? "unknown"}, arm-window transitions ${windowModels.length === 0 ? "none" : windowModels.join(", ")}); no handoff is pending.`,
         { code: "arm-evidence-conflict", state: "failed", actualModel: liveAfterArm },
       );
     }
 
+    const baseline = window.at(-1)!.id;
     if (
       !appendRecord({
         ...attempt,
         state: "pending",
-        baselineModelChangeId: afterArm.id,
+        baselineModelChangeId: baseline,
         observedModel: slowSpec,
         reason: null,
       })
@@ -586,12 +887,27 @@ export default function modelHandoff(pi: ExtensionAPI): void {
         code: "armed",
         state: "pending",
         workflowId: reservation.binding.workflowId,
+        entry: bindingInput.entry,
         sessionId,
-        baselineModelChangeId: afterArm.id,
+        baselineModelChangeId: baseline,
         observedModel: slowSpec,
         handoffTarget: settings.value.handoffTarget,
       },
     );
+  };
+
+  const arm = async (params: ToolParams, ctx: ExtensionContext): Promise<ToolOutcome> => {
+    if (gate.armInFlight) {
+      return outcome(false, true, "another model-handoff arm is already in progress in this session.", {
+        code: "arm-in-flight",
+      });
+    }
+    gate.armInFlight = true;
+    try {
+      return await armOnce(params, ctx);
+    } finally {
+      gate.armInFlight = false;
+    }
   };
 
   /* -------------------------------------------------------------- fire --- */
@@ -627,10 +943,18 @@ export default function modelHandoff(pi: ExtensionAPI): void {
   };
 
   const fire = async (params: ToolParams, ctx: ExtensionContext): Promise<ToolOutcome> => {
-    const sessionId = ctx.sessionManager.getSessionId();
+    const sessionId = sessionIdOf(ctx);
     const generation = gate.generation;
     const decision = reconstruct(ctx);
 
+    if (attemptIsRunning(decision)) {
+      return outcome(
+        false,
+        true,
+        "a model action from a previous handoff invocation is still running in this session; nothing was changed and no attempt was recorded.",
+        { code: "in-flight", state: "attempting" },
+      );
+    }
     if (decision.kind !== "pending") {
       const described = decision.kind === "none" ? "no binding" : `${decision.kind} (${decision.record.binding.workflowId})`;
       return outcome(false, true, `no pending model handoff exists for this coordinator session: ${described}.`, {
@@ -681,9 +1005,36 @@ export default function modelHandoff(pi: ExtensionAPI): void {
     }
 
     // E2 readiness checkpoint (frozen contract; read-only).
-    const readiness = await inspectPhase1Readiness(record.binding, completion);
+    const readiness = await handoffSeams.inspectReadiness(record.binding, completion);
     const afterReadiness = suspensionReason(ctx, sessionId, generation);
     if (afterReadiness !== null) return suspend(afterReadiness);
+
+    // Re-read the preference *after* the asynchronous checkpoint: the value that
+    // decides the destination and the enablement is never a cached one.
+    const refreshed = await readHandoffSettings(ctx.cwd);
+    const afterRefresh = suspensionReason(ctx, sessionId, generation);
+    if (afterRefresh !== null) return suspend(afterRefresh);
+    if (!refreshed.ok) {
+      return outcome(
+        false,
+        true,
+        `the model-handoff preference could not be read after the readiness checkpoint: ${refreshed.message}. Nothing was switched; the handoff stays pending.`,
+        { code: "settings-read-failed", state: "pending" },
+      );
+    }
+    if (!refreshed.value.modelHandoff) {
+      notice(
+        `model handoff skipped for this coordinator session: modelHandoff was turned off while Phase 1 was being checked. ${SLOW_SPEC} stays in place.`,
+      );
+      return outcome(
+        false,
+        false,
+        "modelHandoff is off in native settings; the automatic target switch was skipped and the binding stays pending.",
+        { code: "preference-off", state: "pending" },
+      );
+    }
+    const handoffTarget = refreshed.value.handoffTarget;
+
     if (!readiness.ready) {
       return outcome(
         false,
@@ -697,7 +1048,7 @@ export default function modelHandoff(pi: ExtensionAPI): void {
     const finalSuspension = suspensionReason(ctx, sessionId, generation);
     if (finalSuspension !== null) return suspend(finalSuspension);
 
-    const live = modelSpecOf(ctx.models.current());
+    const live = liveSpecOf(ctx);
     const cancelReason = pendingCancellationReason(ctx.sessionManager.getEntries(), record, live);
     if (cancelReason !== null) {
       terminalize(record, "cancelled", cancelReason, live);
@@ -708,18 +1059,13 @@ export default function modelHandoff(pi: ExtensionAPI): void {
       });
     }
 
-    const target = resolveSpec(ctx.models, settings.value.handoffTarget);
+    const target = resolveSpec(ctx.models, handoffTarget);
     if (target === undefined) {
-      terminalize(
-        record,
-        "failed",
-        `cannot resolve ${settings.value.handoffTarget} in this session's model configuration`,
-        live,
-      );
+      terminalize(record, "failed", `cannot resolve ${handoffTarget} in this session's model configuration`, live);
       return outcome(
         false,
         true,
-        `cannot resolve ${settings.value.handoffTarget}; the session keeps ${live ?? "its actual model"} and the binding is failed (no retry).`,
+        `cannot resolve ${handoffTarget}; the session keeps ${live ?? "its actual model"} and the binding is failed (no retry).`,
         { code: "target-unresolved", state: "failed", actualModel: live },
       );
     }
@@ -754,7 +1100,7 @@ export default function modelHandoff(pi: ExtensionAPI): void {
     }
 
     if (failure !== null || !switched) {
-      const actual = modelSpecOf(ctx.models.current());
+      const actual = liveSpecOf(ctx);
       const reason =
         failure !== null ? `the handoff to ${targetSpec} threw: ${failure}` : `the host did not switch to ${targetSpec}`;
       terminalize(attempt, "failed", reason, actual);
@@ -765,7 +1111,7 @@ export default function modelHandoff(pi: ExtensionAPI): void {
       });
     }
 
-    const actual = modelSpecOf(ctx.models.current());
+    const actual = liveSpecOf(ctx);
     const appended = appendRecord({
       ...attempt,
       state: "handed_off",
@@ -800,14 +1146,11 @@ export default function modelHandoff(pi: ExtensionAPI): void {
     name: TOOL_NAME,
     label: "Model handoff",
     description:
-      'Morning Star coordinator model handoff. `{operation:"start"}` is the PM\'s first preparation action of a new iteration: it arms @slow for this coordinator session when the native modelHandoff preference is enabled. `{operation:"phase1-complete"}` is the completion checkpoint: it validates the frozen Phase 1 evidence and then switches only this coordinator session to the saved handoffTarget. Not a user activation command; no role mapping, goal or workflow state is written.',
+      'Morning Star coordinator model handoff. `{operation:"start"}` is the PM\'s first preparation action of a new iteration: it arms @slow for this coordinator session when the native modelHandoff preference is enabled, and the coordinator authority for it is derived from host/engine facts (task-session ledger, the workflow\'s session envelopes and the root register) rather than from the call. `{operation:"phase1-complete"}` is the completion checkpoint: it validates the frozen Phase 1 evidence and then switches only this coordinator session to the saved handoffTarget. Not a user activation command; no role mapping, goal or workflow state is written.',
     parameters: z
       .object({
         operation: z.enum(["start", "phase1-complete"]),
         workflowId: z.string(),
-        entry: z.enum(["iteration-start", "iteration-loop", "skill-start"]).optional(),
-        intent: z.literal("new-iteration").optional(),
-        authority: z.literal("coordinator").optional(),
         coordinatorSessionPath: z.string().optional(),
         mainWorktreeBranch: z.string().optional(),
         reviews: z.array(specialistReceipt).optional(),
@@ -837,8 +1180,13 @@ export default function modelHandoff(pi: ExtensionAPI): void {
 
   /* ------------------------------------------------------------ events --- */
 
-  // Pending observation opportunities: scan only, never switch.
-  pi.on("input", (_event, ctx) => {
+  // The host's own input event is the only source of the entry route: it is
+  // observed here and can only refuse (`/iteration-drive …`) or label the frozen
+  // E1 `entry` field. It never authorizes anything.
+  pi.on("input", (event, ctx) => {
+    const text = typeof event.text === "string" ? event.text : "";
+    const kind = routeOf(text);
+    if (kind !== null) lastRoute = { kind, text: text.trim() };
     observePending(ctx);
   });
   pi.on("before_agent_start", (_event, ctx) => {

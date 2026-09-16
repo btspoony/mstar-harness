@@ -3,49 +3,60 @@
  *
  * ## What is real here, and what the test supplies
  *
- * Real host objects in disposable temporary storage (never the operator's
- * session, settings, credentials or repository):
+ * The extension is loaded and driven by the **host's own machinery**, not by a
+ * hand-written stand-in API:
  *
- * - `SessionManager` — a real session file and ledger; ids, `model_change`
- *   entries, `custom` records and `custom_message` notices are the host's own
- *   writes (`appendModelChange`, `appendCustomEntry`, `appendCustomMessageEntry`
- *   — the exact calls `pi.appendEntry` / `AgentSession.sendCustomMessage` make).
- * - `ModelControls` — the host's own picker/role-cycle implementation
- *   (`setModel`, `cycleRoleModels`); `pi.setModel` is wired to it the way
- *   `extension-ui-controller.ts` wires the public API (auth lookup, then the
- *   session model switch). The auth/metadata step is the brief's controlled
- *   barrier: `refreshSelectedModelMetadata` awaits a gate the test releases.
- * - `Settings.isolated` role mappings plus the real `ctx.models` facade, so
- *   `@slow`/`@smol`/`@default` resolve through the host's own role resolver.
- * - The real `getPluginSettings` reader through a **project** override file in
- *   the fixture root (the user-scope round trip belongs to Task 1, and writing
- *   the operator's `~/.omp` is forbidden here).
- * - The real E1/E2 modules (`reserveHandoffBinding`, `inspectPhase1Readiness`)
- *   and real Git facts (a disposable repository, a linked integration worktree,
- *   a local bare remote).
+ * - `loadExtensionFromFactory` binds the module's real factory through the
+ *   host's `ConcreteExtensionAPI` (real injected `pi.zod`, real `on` /
+ *   `registerTool`, real registration registry on the returned `Extension`).
+ * - `ExtensionRunner` is the host's runner: it builds every `ExtensionContext`,
+ *   dispatches the events (`emit`, `emitInput`, `emitBeforeAgentStart`,
+ *   `emitToolResult`) to the registered handlers, honors cancellation results
+ *   and enforces the host's handler timeouts. `initialize(actions, …)` is the
+ *   host's own wiring entry point, and `mode` is its parameter.
+ * - `RegisteredToolAdapter` is the host's tool adapter, so tool invocation,
+ *   parameter order and result shape are the host's.
+ * - `SessionManager` writes the real session file and ledger: ids,
+ *   `model_change` entries, `custom` records and `custom_message` notices
+ *   (`appendModelChange`, `appendCustomEntry`, `appendCustomMessageEntry` —
+ *   the same calls `pi.appendEntry` / `AgentSession.sendCustomMessage` make).
+ * - `ModelControls` is the host's picker/role-cycle implementation; the
+ *   `setModel` action is wired exactly as `extension-ui-controller.ts` wires it
+ *   (auth lookup, then the session model switch).
+ * - `Settings.isolated` role mappings plus the real `ctx.models` facade, the real
+ *   `getPluginSettings` reader (project override layer), the real E1/E2 modules,
+ *   and real Git facts in disposable repositories.
  *
- * The test supplies only what the harness cannot produce: **event delivery**
- * (the captured `pi.on` handlers are invoked the way the host runner invokes
- * them) and the **controlled auth/metadata barrier**. No TUI, provider request
- * or credential is involved, and no model action is claimed for any development
- * session.
+ * Supplied by the test: the `ModelRegistry` double (no credentials may be used),
+ * the **controlled auth/metadata barrier** inside it, the action implementations
+ * for the three effects this extension uses (the rest throw, proving non-use),
+ * and the fact that no live agent loop drives the events. **No TUI/print/JSON/RPC
+ * process was started** — process-level loading evidence is handed to T4/QA.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { ExtensionContext, SessionEntry } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionActions, ExtensionContext, ExtensionContextActions, ExtensionMode, SessionEntry } from "@oh-my-pi/pi-coding-agent";
+import {
+  ExtensionRunner,
+  RegisteredToolAdapter,
+  loadExtensionFromFactory,
+} from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
+import { ExtensionRuntime } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createExtensionModelQuery } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/model-api";
 import type { ModelControlsHost } from "@oh-my-pi/pi-coding-agent/session/model-controls";
 import { ModelControls } from "@oh-my-pi/pi-coding-agent/session/model-controls";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import modelHandoff, {
+import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
+import modelHandoffFactory, {
   HANDOFF_CUSTOM_TYPE,
   HANDOFF_NOTICE_CUSTOM_TYPE,
   decideSessionState,
+  handoffSeams,
   readSessionRecords,
 } from "../src/extensions/model-handoff";
 import type { HandoffRecord } from "../src/extensions/model-handoff";
@@ -55,11 +66,14 @@ import type { HandoffRecord } from "../src/extensions/model-handoff";
 const SCRATCH: string[] = [];
 /** The module resolves the harness through the engine's documented precedence. */
 const HARNESS_ENV = process.env.MSTAR_HARNESS_DIR;
+/** The readiness step is only ever held open; the real checkpoint still runs. */
+const REAL_INSPECT_READINESS = handoffSeams.inspectReadiness;
 
 beforeAll(() => {
   delete process.env.MSTAR_HARNESS_DIR;
 });
 afterAll(() => {
+  handoffSeams.inspectReadiness = REAL_INSPECT_READINESS;
   if (HARNESS_ENV !== undefined) process.env.MSTAR_HARNESS_DIR = HARNESS_ENV;
   for (const dir of SCRATCH) rmSync(dir, { recursive: true, force: true });
 });
@@ -126,33 +140,12 @@ function testModel(id: string): TestModel {
   };
 }
 
-/** The host's own `Model` type, taken from the signature it appears in. */
-type HostModel = Parameters<ModelControls["setModel"]>[0];
+/** The host's own `Model` type, taken from the action signature it appears in. */
+type HostModel = Parameters<ExtensionActions["setModel"]>[0];
 /** The fixture builds exactly the fields the host selection code reads. */
 const asHostModel = (model: TestModel): HostModel => model as unknown as HostModel;
 
 const PICKER_MODEL = testModel("picker-model");
-
-/* ------------------------------------------------------------------ zod ----- */
-
-type ZodModule = Readonly<{ z: { object: (shape: Record<string, unknown>) => { strict: () => unknown } } }>;
-
-let zodShim: ZodModule | null = null;
-
-/**
- * The schema builder the host itself injects (`ExtensionAPI.zod` is
- * `@oh-my-pi/omptype/zod`), resolved through the installed host package so the
- * schema under test is the real one — including strict unknown-key rejection.
- * A static import is impossible from this package: the shim is a dependency of
- * the installed host, not of `@mstar-harness/omp`.
- */
-async function loadZod(): Promise<ZodModule> {
-  if (zodShim !== null) return zodShim;
-  const hostEntry = import.meta.resolve("@oh-my-pi/pi-coding-agent");
-  const hostDir = new URL("./", hostEntry).pathname;
-  zodShim = (await import(Bun.resolveSync("@oh-my-pi/omptype/zod", hostDir))) as ZodModule;
-  return zodShim;
-}
 
 /* -------------------------------------------------------------- fixtures ---- */
 
@@ -216,15 +209,21 @@ type Artifacts = Readonly<{
 
 const SPECIALISTS = ["product-manager", "architect", "writing-specialist"] as const;
 
+/** The workflow's session envelope directory (the coordinator-authority evidence). */
+function sessionsDirOf(repo: ControlRepo, workflowId: string): string {
+  return join(repo.harness, "workflows", workflowId, "sessions");
+}
+
 /** The lawful workflow creation the coordinator performs after a reservation. */
 function createWorkflowArtifacts(repo: ControlRepo, sessionId: string, workflowId: string): Artifacts {
   const planIds = [`${workflowId}-plan`];
   const workflowDir = join(repo.harness, "workflows", workflowId);
   const guidesDir = join(repo.harness, "iterations", workflowId, "guides");
-  mkdirSync(join(workflowDir, "sessions"), { recursive: true });
+  const sessionsDir = join(workflowDir, "sessions");
+  mkdirSync(sessionsDir, { recursive: true });
   mkdirSync(guidesDir, { recursive: true });
 
-  const envelopePath = join(workflowDir, "sessions", `${sessionId}.json`);
+  const envelopePath = join(sessionsDir, `${sessionId}.json`);
   writeJson(envelopePath, {
     schema_version: 1,
     role: "coordinator",
@@ -301,7 +300,9 @@ function createWorkflowArtifacts(repo: ControlRepo, sessionId: string, workflowI
 
 /* --------------------------------------------------------------- harness ---- */
 
-type HostMode = "tui" | "print" | "json" | "rpc";
+const TOOL_NAME = "mstar_model_handoff";
+
+type HostMode = ExtensionMode;
 
 type ToolResult = Readonly<{
   content: readonly Readonly<{ type: string; text: string }>[];
@@ -314,6 +315,19 @@ type ToolParams = Record<string, unknown>;
 type Harness = Readonly<{
   sessionManager: SessionManager;
   controls: ModelControls;
+  runner: ExtensionRunner;
+  /** The host-registered extension object (handlers, tools, commands, …). */
+  registeredCounts: () => Readonly<{
+    handlers: readonly string[];
+    tools: readonly string[];
+    commands: number;
+    shortcuts: number;
+    flags: number;
+    messageRenderers: number;
+    composerShapes: number;
+    fileWriteFallbacks: number;
+    fileDeleteFallbacks: number;
+  }>;
   cwd: string;
   mode: HostMode;
   /** Every `pi.setModel` invocation the extension made (accepted or refused). */
@@ -330,28 +344,17 @@ type Harness = Readonly<{
   ledger: () => readonly SessionEntry[];
   records: () => readonly HandoffRecord[];
   notices: () => readonly string[];
-  emit: (event: string, payload?: Record<string, unknown>) => unknown;
+  /** The raw (unawaited) return value of a registered navigation handler. */
+  rawHandlerResult: (event: string, payload: Record<string, unknown>) => unknown;
+  emit: (event: Record<string, unknown>) => Promise<unknown>;
+  emitInput: (text: string, source?: "interactive" | "rpc" | "extension") => Promise<void>;
+  emitBeforeAgentStart: (prompt: string) => Promise<unknown>;
+  emitToolResult: (toolCallId: string, toolName: string, isError: boolean) => Promise<unknown>;
   runTool: (params: ToolParams) => Promise<ToolResult>;
+  /** The tool definition invoked directly, bypassing schema validation (forgery probe). */
+  runRawTool: (params: ToolParams) => Promise<ToolResult>;
   /** `safeParse` through the extension's own registered parameter schema. */
   validate: (params: ToolParams) => { success: boolean; message?: string };
-  useSession: (manager: SessionManager) => void;
-}>;
-
-type Handler = (event: unknown, ctx: unknown) => unknown;
-
-type RegisteredTool = Readonly<{
-  name: string;
-  parameters: {
-    safeParse: (value: unknown) => { success: boolean; error?: { message?: string } };
-    parse: (value: unknown) => unknown;
-  };
-  execute: (
-    toolCallId: string,
-    params: unknown,
-    signal: undefined,
-    onUpdate: undefined,
-    ctx: unknown,
-  ) => Promise<ToolResult>;
 }>;
 
 async function createHarness(options: {
@@ -364,7 +367,6 @@ async function createHarness(options: {
   /** Authenticated models this session sees; defaults to the five fixture models. */
   availableIds?: readonly string[];
 }): Promise<Harness> {
-  const zod = await loadZod();
   const settings = Settings.isolated({
     modelRoles: options.modelRoles ?? { slow: "probe/slow-model", default: "probe/default-model", smol: "probe/smol-model" },
   });
@@ -405,8 +407,8 @@ async function createHarness(options: {
     },
   };
 
-  // The controlled host double implements the members `ModelControls` reads
-  // (auth, metadata barrier, live model, real session manager and settings).
+  // The controlled host double: no credential is read or written, and the
+  // metadata step is the barrier the brief allows.
   const registry = {
     getAvailable: () => available,
     hasConfiguredAuth: () => auth.allowed,
@@ -443,36 +445,47 @@ async function createHarness(options: {
   const controls = new ModelControls(controlsHost as unknown as ModelControlsHost, { thinkingLevel: undefined });
   const models = createExtensionModelQuery(registry as unknown as ModelRegistry, settings, () => asHostModel(liveModel));
 
-  const handlers = new Map<string, Handler[]>();
-  let tool: RegisteredTool | null = null;
+  // The extension is bound by the host's own loader with the host's runtime.
+  const runtime = new ExtensionRuntime();
+  const extension = await loadExtensionFromFactory(
+    modelHandoffFactory,
+    options.cwd,
+    new EventBus(),
+    runtime,
+    "mstar-harness-model-handoff",
+  );
+  const runner = new ExtensionRunner(
+    [extension],
+    runtime,
+    options.cwd,
+    sessionManager,
+    registry as unknown as ModelRegistry,
+    undefined,
+    settings,
+  );
 
-  const pi = {
-    zod,
-    logger: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
-    on: (event: string, handler: Handler) => {
-      const list = handlers.get(event) ?? [];
-      list.push(handler);
-      handlers.set(event, list);
+  const session = (): SessionManager => runner.sessionManager;
+
+  // Unsupported actions throw: an extension that touched one would fail loudly.
+  const unsupported = (name: string) => () => {
+    throw new Error(`${name} must not be called by the model-handoff extension`);
+  };
+  const actions: ExtensionActions = {
+    // The durable effects the real actions perform (the host's own writers).
+    sendMessage: (message) => {
+      session().appendCustomMessageEntry(message.customType, message.content, message.display, message.details);
     },
-    registerTool: (definition: RegisteredTool) => {
-      tool = definition;
+    appendEntry: (customType, data) => {
+      session().appendCustomEntry(customType, data);
     },
-    // The durable writes the real actions perform: `sessionManager.appendCustomEntry`
-    // for `pi.appendEntry`, `appendCustomMessageEntry` for `sendCustomMessage`.
-    appendEntry: (customType: string, data?: unknown) => {
-      testContext.sessionManager.appendCustomEntry(customType, data);
-    },
-    sendMessage: (payload: { customType?: string; content?: string; display?: boolean; details?: unknown }) => {
-      testContext.sessionManager.appendCustomMessageEntry(
-        payload.customType,
-        payload.content,
-        payload.display,
-        payload.details,
-      );
-    },
-    // The real extension action: auth lookup, then the session model switch
-    // (`ModelControls.setModel`, the picker/cycle implementation).
-    setModel: async (model: HostModel) => {
+    sendUserMessage: unsupported("sendUserMessage"),
+    setLabel: unsupported("setLabel"),
+    getActiveTools: unsupported("getActiveTools"),
+    getAllTools: unsupported("getAllTools"),
+    setActiveTools: unsupported("setActiveTools"),
+    getCommands: unsupported("getCommands"),
+    // Exactly the wiring `extension-ui-controller.ts` gives the public API.
+    setModel: async (model) => {
       attempts.push(`${model.provider}/${model.id}`);
       for (const waiter of actionWaiters.splice(0)) waiter();
       if (!auth.allowed) return false;
@@ -480,25 +493,49 @@ async function createHarness(options: {
       switched.push(`${model.provider}/${model.id}`);
       return true;
     },
+    getThinkingLevel: unsupported("getThinkingLevel"),
+    setThinkingLevel: unsupported("setThinkingLevel"),
+    getSessionName: unsupported("getSessionName"),
+    setSessionName: unsupported("setSessionName"),
   };
-
-  const testContext = {
-    cwd: options.cwd,
-    hasUI: true,
-    mode: options.mode ?? "tui",
-    sessionManager,
-    models,
-    ui: { notify: () => {} },
+  const contextActions: ExtensionContextActions = {
+    getModel: () => asHostModel(liveModel),
+    isIdle: () => true,
+    abort: () => {},
+    hasPendingMessages: () => false,
+    shutdown: () => {},
+    getContextUsage: () => undefined,
+    compact: async () => {},
+    getSystemPrompt: () => [],
   };
-  // The double exposes the subset of `ExtensionContext` the extension consumes
-  // (cwd, sessionManager, models, mode); the cast is confined to this boundary.
-  const extensionContext = testContext as unknown as ExtensionContext;
+  runner.initialize(actions, contextActions, undefined, undefined, options.mode ?? "tui");
 
-  modelHandoff(pi as unknown as Parameters<typeof modelHandoff>[0]);
+  const registeredTool = extension.tools.get(TOOL_NAME);
+  if (registeredTool === undefined) throw new Error("the host registered no model-handoff tool");
+  const adapter = new RegisteredToolAdapter(registeredTool, runner);
+
+  const runToolCall = async (params: ToolParams): Promise<ToolResult> => {
+    const parsed = registeredTool.definition.parameters.parse(params);
+    // `RegisteredToolAdapter` is the host's adapter: it forwards to the
+    // definition with the host's own parameter order and context.
+    return (await adapter.execute("fixture-tool-call", parsed, undefined, undefined)) as ToolResult;
+  };
 
   return {
-    sessionManager,
+    sessionManager: runner.sessionManager,
     controls,
+    runner,
+    registeredCounts: () => ({
+      handlers: [...extension.handlers.keys()].sort(),
+      tools: [...extension.tools.keys()].sort(),
+      commands: extension.commands.size,
+      shortcuts: extension.shortcuts.size,
+      flags: extension.flags.size,
+      messageRenderers: extension.messageRenderers.size,
+      composerShapes: extension.composerShapes.size,
+      fileWriteFallbacks: extension.fileWriteFallbackHandlers.length,
+      fileDeleteFallbacks: extension.fileDeleteFallbackHandlers.length,
+    }),
     cwd: options.cwd,
     mode: options.mode ?? "tui",
     attempts,
@@ -513,41 +550,48 @@ async function createHarness(options: {
     },
     auth,
     metadata,
-    ledger: () => testContext.sessionManager.getEntries(),
-    records: () => readSessionRecords(testContext.sessionManager.getEntries(), testContext.sessionManager.getSessionId()),
+    ledger: () => runner.sessionManager.getEntries(),
+    records: () =>
+      readSessionRecords(runner.sessionManager.getEntries(), runner.sessionManager.getSessionId()),
     notices: () =>
-      testContext.sessionManager
+      runner.sessionManager
         .getEntries()
         .flatMap((entry) =>
           entry.type === "custom_message" && entry.customType === HANDOFF_NOTICE_CUSTOM_TYPE
             ? [typeof entry.content === "string" ? entry.content : JSON.stringify(entry.content)]
             : [],
         ),
-    emit: (event: string, payload: Record<string, unknown> = {}) => {
-      let first: unknown;
-      for (const handler of handlers.get(event) ?? []) {
-        const result = handler({ type: event, ...payload }, extensionContext);
-        if (first === undefined && result !== undefined) first = result;
-      }
-      return first;
+    rawHandlerResult: (event: string, payload: Record<string, unknown>) => {
+      const handler = extension.handlers.get(event)?.[0];
+      if (handler === undefined) throw new Error(`no ${event} handler was registered`);
+      // Deliberately NOT awaited: this asserts the handler's own synchronicity.
+      return handler({ type: event, ...payload } as never, runner.createContext());
     },
-    runTool: async (params: ToolParams) => {
-      if (tool === null) throw new Error("the extension registered no tool");
-      return tool.execute("fixture-tool-call", tool.parameters.parse(params), undefined, undefined, extensionContext);
+    emit: (event: Record<string, unknown>) => runner.emit(event as never),
+    emitInput: async (text: string, source: "interactive" | "rpc" | "extension" = "interactive") => {
+      await runner.emitInput(text, undefined, source);
     },
+    emitBeforeAgentStart: (prompt: string) => runner.emitBeforeAgentStart(prompt, undefined, []),
+    emitToolResult: (toolCallId: string, toolName: string, isError: boolean) =>
+      runner.emitToolResult({ type: "tool_result", toolCallId, toolName, input: {}, content: [], isError } as never),
+    runTool: runToolCall,
+    runRawTool: async (params: ToolParams) =>
+      (await registeredTool.definition.execute(
+        "fixture-raw-call",
+        params,
+        undefined,
+        undefined,
+        runner.createContext(),
+      )) as ToolResult,
     validate: (params: ToolParams) => {
-      if (tool === null) throw new Error("the extension registered no tool");
-      const parsed = tool.parameters.safeParse(params);
+      const parsed = registeredTool.definition.parameters.safeParse(params);
       return parsed.success ? { success: true } : { success: false, message: parsed.error?.message ?? "" };
-    },
-    useSession: (manager: SessionManager) => {
-      testContext.sessionManager = manager;
     },
   };
 }
 
-function startParams(workflowId: string, entry: "iteration-start" | "iteration-loop" | "skill-start"): ToolParams {
-  return { operation: "start", workflowId, entry, intent: "new-iteration", authority: "coordinator" };
+function startParams(workflowId: string): ToolParams {
+  return { operation: "start", workflowId };
 }
 
 function completionParams(artifacts: Artifacts): ToolParams {
@@ -589,7 +633,11 @@ function isPromiseLike(value: unknown): boolean {
 describe("new coordinator start only", () => {
   test("new coordinator start only: ordinary chat, unrelated commands, task and scoped-plan PM sessions and mid-flight enable cause no model action", async () => {
     const repo = buildControlRepo();
-    const harness = await createHarness({ cwd: repo.main, sessionDir: scratchDir("unused-"), sessionManager: newSession(repo.main) });
+    const harness = await createHarness({
+      cwd: repo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(repo.main),
+    });
 
     const before = {
       register: readFileSync(join(repo.harness, "status.json"), "utf8"),
@@ -597,22 +645,20 @@ describe("new coordinator start only", () => {
       iterations: readdirSync(join(repo.harness, "iterations")).sort(),
     };
 
-    // Ordinary chat, unrelated commands, natural-language starts, scoped-plan PM
-    // routes and RPC/extension-sourced input: none of these is workflow
-    // ownership, and the extension never classifies prose or a visible command
-    // string. Arming happens only through the explicit PM first-action call.
-    const entryTraces: readonly (readonly [string, Record<string, unknown>])[] = [
-      ["input", { text: "hello, can you explain how the harness works?", source: "interactive" }],
-      ["input", { text: "/iteration-start ship the adapter --pause", source: "interactive" }],
-      ["input", { text: "/iteration-loop autonomous", source: "interactive" }],
-      ["input", { text: "/iteration-drive --resume 20260916-omp-model-handoff", source: "interactive" }],
-      ["input", { text: "start a new morning star iteration for the fixture", source: "rpc" }],
-      ["input", { text: "please load the mstar-iteration skill and begin", source: "extension" }],
-      ["before_agent_start", { prompt: "do the thing", systemPrompt: [] }],
-      ["tool_result", { toolName: "read", isError: false }],
-      ["agent_end", {}],
+    // Ordinary chat, unrelated commands, natural-language starts and RPC input
+    // arrive as the host's own input events. None of them is workflow ownership;
+    // arming happens only through the explicit PM first-action call.
+    const entryTraces: readonly (readonly [string, "interactive" | "rpc" | "extension"])[] = [
+      ["hello, can you explain how the harness works?", "interactive"],
+      ["/iteration-start ship the adapter --pause", "interactive"],
+      ["/iteration-loop autonomous", "interactive"],
+      ["start a new morning star iteration for the fixture", "rpc"],
+      ["please load the mstar-iteration skill and begin", "extension"],
     ];
-    for (const [event, payload] of entryTraces) harness.emit(event, payload);
+    for (const [text, source] of entryTraces) await harness.emitInput(text, source);
+    await harness.emitBeforeAgentStart("do the thing");
+    await harness.emitToolResult("call-1", "read", false);
+    await harness.emit({ type: "agent_end", messages: [] });
 
     expect(harness.records()).toHaveLength(0);
     expect(harness.notices()).toHaveLength(0);
@@ -622,15 +668,41 @@ describe("new coordinator start only", () => {
     expect(readdirSync(join(repo.harness, "workflows")).sort()).toEqual(before.workflows);
     expect(readdirSync(join(repo.harness, "iterations")).sort()).toEqual(before.iterations);
 
-    // Mid-flight enable: turning the native preference on does not retro-arm,
-    // and it does not start observing anything either.
+    // Mid-flight enable: turning the native preference on does not retro-arm and
+    // does not start observing anything.
     writePluginOverrides(repo.main, { modelHandoff: true, handoffTarget: "@smol" });
-    for (const [event, payload] of entryTraces) harness.emit(event, payload);
+    await harness.emitInput("continue", "interactive");
     expect(harness.records()).toHaveLength(0);
     expect(harness.attempts).toHaveLength(0);
 
-    // A native task/focused-agent session (`session_init` in its own ledger) is
-    // refused by E1 even with the preference enabled.
+    // An *explicitly* scoped-plan PM session: the host observed that route, and
+    // the start is refused from host facts alone — the caller supplies no
+    // authority field it could have lied in.
+    const scoped = await createHarness({
+      cwd: repo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(repo.main),
+    });
+    await scoped.emitInput("/iteration-drive --assignment .mstar/assignments/a.md", "interactive");
+    const scopedRefusal = await scoped.runTool(startParams("scoped-iteration"));
+    expect(codeOf(scopedRefusal)).toBe("scoped-plan-route");
+    expect(scopedRefusal.isError).toBe(true);
+    expect(scoped.records()).toHaveLength(0);
+    expect(scoped.attempts).toHaveLength(0);
+    expect(scoped.notices().some((line) => line.includes("start refused"))).toBe(true);
+
+    // `/iteration-drive` with no arguments is the restore-only form: it must
+    // never retro-arm either.
+    const restore = await createHarness({
+      cwd: repo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(repo.main),
+    });
+    await restore.emitInput("/iteration-drive", "interactive");
+    expect(codeOf(await restore.runTool(startParams("restore-iteration")))).toBe("scoped-plan-route");
+    expect(restore.attempts).toHaveLength(0);
+
+    // A native task/focused-agent session (`session_init` in its own ledger).
     const taskSession = newSession(repo.main);
     taskSession.appendSessionInit({ systemPrompt: "task", task: "scout the repo", tools: ["read"], agent: "scout" });
     const taskHarness = await createHarness({
@@ -639,32 +711,57 @@ describe("new coordinator start only", () => {
       sessionManager: taskSession,
       mode: "json",
     });
-    const refused = await taskHarness.runTool(startParams("task-session-iteration", "skill-start"));
+    const refused = await taskHarness.runTool(startParams("task-session-iteration"));
     expect(codeOf(refused)).toBe("not-coordinator");
     expect(refused.isError).toBe(true);
     expect(taskHarness.records()).toHaveLength(0);
     expect(taskHarness.attempts).toHaveLength(0);
     expect(taskHarness.notices()).toHaveLength(0);
+
+    // What the extension registers: exactly the frozen events and one tool, and
+    // no command, shortcut, flag, renderer or file-write seam at all.
+    expect(harness.registeredCounts()).toEqual({
+      handlers: [
+        "agent_end",
+        "before_agent_start",
+        "input",
+        "session_before_branch",
+        "session_before_switch",
+        "session_before_tree",
+        "session_branch",
+        "session_shutdown",
+        "session_start",
+        "session_switch",
+        "session_tree",
+        "tool_result",
+      ],
+      tools: [TOOL_NAME],
+      commands: 0,
+      shortcuts: 0,
+      flags: 0,
+      messageRenderers: 0,
+      composerShapes: 0,
+      fileWriteFallbacks: 0,
+      fileDeleteFallbacks: 0,
+    });
   });
 
-  test("new coordinator start only: one arm per entry trace, identical across TUI, print, JSON and RPC modes", async () => {
+  test("new coordinator start only: one arm per entry trace across TUI, print, JSON and RPC modes, and two concurrent starts arm once", async () => {
     const repo = buildControlRepo();
     writePluginOverrides(repo.main, { modelHandoff: true, handoffTarget: "@default" });
     const modes: readonly HostMode[] = ["tui", "print", "json", "rpc"];
     const traces = [
-      { workflowId: "trace-slash-start", entry: "iteration-start" as const },
-      { workflowId: "trace-loop-start", entry: "iteration-loop" as const },
-      { workflowId: "trace-skill-start", entry: "skill-start" as const },
-      { workflowId: "trace-print-start", entry: "iteration-start" as const },
-      { workflowId: "trace-json-start", entry: "iteration-start" as const },
-      { workflowId: "trace-rpc-start", entry: "iteration-start" as const },
-      { workflowId: "trace-skill-second", entry: "skill-start" as const },
+      { workflowId: "trace-slash-start", input: "/iteration-start ship it", entry: "iteration-start" as const },
+      { workflowId: "trace-loop-start", input: "/iteration-loop autonomous", entry: "iteration-loop" as const },
+      { workflowId: "trace-skill-start", input: "please start a new morning star iteration", entry: "skill-start" as const },
+      { workflowId: "trace-print-start", input: "/iteration-start print mode", entry: "iteration-start" as const },
+      { workflowId: "trace-json-start", input: "/iteration-loop json mode", entry: "iteration-loop" as const },
+      { workflowId: "trace-rpc-start", input: "begin the iteration via rpc", entry: "skill-start" as const },
+      { workflowId: "trace-skill-second", input: "load the mstar-iteration skill and begin", entry: "skill-start" as const },
     ];
 
-    // Separate bounded PM entry traces: a slash start, an autonomous loop start
-    // and a skill start are not distinguished by any parser — the PM's explicit
-    // first-action call is the only entry — and each adapter mode behaves the
-    // same because the tool result is mode-independent.
+    // The caller cannot declare authority, intent or the entry route: those keys
+    // are not in the tool's schema at all.
     const armed: Array<{ harness: Harness; workflowId: string }> = [];
     for (const [index, trace] of traces.entries()) {
       const harness = await createHarness({
@@ -673,19 +770,24 @@ describe("new coordinator start only", () => {
         sessionManager: newSession(repo.main),
         mode: modes[index % modes.length]!,
       });
-      const result = await harness.runTool(startParams(trace.workflowId, trace.entry));
+      expect(harness.validate({ ...startParams(trace.workflowId), authority: "coordinator" }).success).toBe(false);
+      expect(harness.validate({ ...startParams(trace.workflowId), intent: "new-iteration" }).success).toBe(false);
+      expect(harness.validate({ ...startParams(trace.workflowId), entry: "iteration-loop" }).success).toBe(false);
+      expect(harness.validate(startParams(trace.workflowId)).success).toBe(true);
+
+      // The entry route comes from the host's own input event for this session.
+      await harness.emitInput(trace.input, "interactive");
+      const result = await harness.runTool(startParams(trace.workflowId));
       expect(codeOf(result)).toBe("armed");
       expect(stateOf(result)).toBe("pending");
+      expect(result.details.mstarModelHandoff?.entry).toBe(trace.entry);
       expect(harness.mode).toBe(modes[index % modes.length]!);
       expect(harness.attempts).toEqual(["probe/slow-model"]);
       expect(harness.liveSpec()).toBe("probe/slow-model");
-      // Exactly one `@slow` selection, one durable arm attempt and one durable
-      // pending record whose baseline cursor is the real arm transition.
       expect(statesOf(harness)).toEqual(["attempting", "pending"]);
       const [attempt, pending] = harness.records();
       expect(attempt).toMatchObject({ action: "arm", baselineModelChangeId: null, observedModel: null });
       expect(pending).toMatchObject({ action: "arm", observedModel: "probe/slow-model" });
-      // The E2 receipt is optional and belongs only to an invoked action.
       expect(attempt!.receipt).toBeUndefined();
       expect(pending!.receipt).toBeUndefined();
       expect(pending!.binding.workflowId).toBe(trace.workflowId);
@@ -694,8 +796,8 @@ describe("new coordinator start only", () => {
       armed.push({ harness, workflowId: trace.workflowId });
     }
 
-    // The completion checkpoint is exercised through the same four adapter modes:
-    // the result is mode-independent, and each session switches only itself.
+    // The completion checkpoint runs through the same four adapter modes; each
+    // session switches only itself.
     for (const [index, mode] of modes.entries()) {
       const entry = armed[index]!;
       const artifacts = createWorkflowArtifacts(repo, entry.harness.sessionManager.getSessionId(), entry.workflowId);
@@ -712,36 +814,50 @@ describe("new coordinator start only", () => {
         before.map((count, position) => (position === index ? count + 1 : count)),
       );
     }
-    // Every traced entry holds its own session: no session id is reused and no
-    // firing session touched another session's model.
     const sessionIds = new Set(armed.map((entry) => entry.harness.sessionManager.getSessionId()));
     expect(sessionIds.size).toBe(armed.length);
-    expect(armed.length).toBe(traces.length);
 
-    // A false preference is inert: no record, no model action, no notice.
-    const offRepo = buildControlRepo();
-    const offHarness = await createHarness({
-      cwd: offRepo.main,
+    // Two concurrent starts in one session: the in-memory arm guard refuses the
+    // second entry before it can reserve anything, and exactly one arm happens.
+    const raceRepo = buildControlRepo();
+    writePluginOverrides(raceRepo.main, { modelHandoff: true, handoffTarget: "@default" });
+    const race = await createHarness({
+      cwd: raceRepo.main,
       sessionDir: scratchDir("unused-"),
-      sessionManager: newSession(offRepo.main),
+      sessionManager: newSession(raceRepo.main),
     });
-    const inert = await offHarness.runTool(startParams("off-iteration", "iteration-start"));
-    expect(codeOf(inert)).toBe("preference-off");
-    expect(inert.isError).toBe(false);
-    expect(offHarness.records()).toHaveLength(0);
-    expect(offHarness.attempts).toHaveLength(0);
-    expect(offHarness.notices()).toHaveLength(0);
+    await race.emitInput("/iteration-start concurrent", "interactive");
+    const [first, second] = await Promise.all([
+      race.runTool(startParams("concurrent-iteration")),
+      race.runTool(startParams("concurrent-iteration")),
+    ]);
+    expect([codeOf(first), codeOf(second)].sort()).toEqual(["arm-in-flight", "armed"]);
+    expect(race.attempts).toEqual(["probe/slow-model"]);
+    expect(race.ledger().filter((entry) => entry.type === "model_change" && entry.model === "probe/slow-model")).toHaveLength(1);
+    expect(statesOf(race)).toEqual(["attempting", "pending"]);
 
-    // A malformed saved preference refuses visibly instead of being coerced.
-    writePluginOverrides(offRepo.main, { modelHandoff: "yes", handoffTarget: "@smol" });
-    const malformed = await offHarness.runTool(startParams("bad-preference-iteration", "iteration-start"));
-    expect(codeOf(malformed)).toBe("settings-read-failed");
-    expect(malformed.isError).toBe(true);
-    expect(offHarness.records()).toHaveLength(0);
-    expect(offHarness.attempts).toHaveLength(0);
+    // Two *instances* over the same durable session share no memory, so the
+    // durable re-check is what has to refuse the loser.
+    const crossRepo = buildControlRepo();
+    writePluginOverrides(crossRepo.main, { modelHandoff: true, handoffTarget: "@default" });
+    const crossSession = newSession(crossRepo.main);
+    const crossA = await createHarness({ cwd: crossRepo.main, sessionDir: scratchDir("unused-"), sessionManager: crossSession });
+    const crossB = await createHarness({ cwd: crossRepo.main, sessionDir: scratchDir("unused-"), sessionManager: crossSession });
+    const [crossFirst, crossSecond] = await Promise.all([
+      crossA.runTool(startParams("cross-iteration")),
+      crossB.runTool(startParams("cross-iteration")),
+    ]);
+    expect([codeOf(crossFirst), codeOf(crossSecond)].sort()).toEqual(["already-bound", "armed"]);
+    const crossActions = [...crossA.attempts, ...crossB.attempts];
+    expect(crossActions).toEqual(["probe/slow-model"]);
+    expect(crossSession.getEntries().filter((entry) => entry.type === "model_change" && entry.model === "probe/slow-model")).toHaveLength(1);
+    expect(readSessionRecords(crossSession.getEntries(), crossSession.getSessionId()).map((record) => record.state)).toEqual([
+      "attempting",
+      "pending",
+    ]);
   });
 
-  test("new coordinator start only: the arm is once per binding, and a failed arm never becomes pending", async () => {
+  test("new coordinator start only: the arm is once per binding, a failed arm never becomes pending, and authority is derived from host facts", async () => {
     const repo = buildControlRepo();
     writePluginOverrides(repo.main, { modelHandoff: true, handoffTarget: "@default" });
     const harness = await createHarness({
@@ -750,24 +866,17 @@ describe("new coordinator start only", () => {
       sessionManager: newSession(repo.main),
     });
 
-    const first = await harness.runTool(startParams("once-iteration", "iteration-start"));
+    await harness.emitInput("/iteration-start once", "interactive");
+    const first = await harness.runTool(startParams("once-iteration"));
     expect(codeOf(first)).toBe("armed");
     expect(harness.attempts).toEqual(["probe/slow-model"]);
-
-    // Strict parameter validation: an unknown operation or an unknown key is
-    // rejected by the registered schema before any code path runs.
-    expect(harness.validate({ operation: "activate", workflowId: "once-iteration" }).success).toBe(false);
-    expect(harness.validate({ ...startParams("once-iteration", "iteration-start"), extra: true }).success).toBe(false);
-    expect(harness.validate(startParams("once-iteration", "iteration-start")).success).toBe(true);
-
-    const second = await harness.runTool(startParams("once-iteration", "iteration-start"));
+    const second = await harness.runTool(startParams("once-iteration"));
     expect(codeOf(second)).toBe("already-bound");
     expect(harness.attempts).toEqual(["probe/slow-model"]);
     expect(statesOf(harness)).toEqual(["attempting", "pending"]);
 
     // Arm failure: no role mapping exists in this session, so `@slow` cannot be
-    // resolved (a role that maps to an unavailable model refuses the same way).
-    // The arm must not leave a pending overwrite behind.
+    // resolved (a role mapped to an unavailable model refuses the same way).
     const brokenRepo = buildControlRepo();
     writePluginOverrides(brokenRepo.main, { modelHandoff: true, handoffTarget: "@default" });
     const broken = await createHarness({
@@ -776,14 +885,13 @@ describe("new coordinator start only", () => {
       sessionManager: newSession(brokenRepo.main),
       modelRoles: {},
     });
-    const unresolved = await broken.runTool(startParams("broken-iteration", "iteration-start"));
+    const unresolved = await broken.runTool(startParams("broken-iteration"));
     expect(codeOf(unresolved)).toBe("slow-unresolved");
     expect(broken.attempts).toHaveLength(0);
     expect(statesOf(broken)).toEqual(["attempting", "failed"]);
     expect(broken.records().at(-1)!.reason).toContain("cannot resolve @slow");
 
-    // Missing auth at arm time: the public host action reports `false`, the arm
-    // fails, the session keeps its model and nothing is pending.
+    // Missing auth at arm time: the public host action reports `false`.
     const noAuthRepo = buildControlRepo();
     writePluginOverrides(noAuthRepo.main, { modelHandoff: true, handoffTarget: "@default" });
     const noAuth = await createHarness({
@@ -792,7 +900,7 @@ describe("new coordinator start only", () => {
       sessionManager: newSession(noAuthRepo.main),
     });
     noAuth.auth.allowed = false;
-    const refusedArm = await noAuth.runTool(startParams("no-auth-iteration", "iteration-start"));
+    const refusedArm = await noAuth.runTool(startParams("no-auth-iteration"));
     expect(codeOf(refusedArm)).toBe("slow-selection-refused");
     expect(noAuth.liveSpec()).toBe("probe/default-model");
     expect(statesOf(noAuth)).toEqual(["attempting", "failed"]);
@@ -803,11 +911,161 @@ describe("new coordinator start only", () => {
     expect(codeOf(fireAfterFailure)).toBe("not-pending");
     expect(broken.attempts).toHaveLength(0);
     expect(broken.liveSpec()).toBe("probe/default-model");
+
+    // --- Host-derived authority ---
+    // A control: without any envelope this session arms (the fixture is lawful).
+    const controlRepo = buildControlRepo();
+    writePluginOverrides(controlRepo.main, { modelHandoff: true, handoffTarget: "@default" });
+    const control = await createHarness({
+      cwd: controlRepo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(controlRepo.main),
+    });
+    expect(codeOf(await control.runTool(startParams("authority-control")))).toBe("armed");
+
+    // A plan-pm envelope for this session refuses the start.
+    const planPmRepo = buildControlRepo();
+    writePluginOverrides(planPmRepo.main, { modelHandoff: true, handoffTarget: "@default" });
+    const planPmSession = newSession(planPmRepo.main);
+    const planPm = await createHarness({
+      cwd: planPmRepo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: planPmSession,
+    });
+    const planPmDir = sessionsDirOf(planPmRepo, "plan-pm-iteration");
+    mkdirSync(planPmDir, { recursive: true });
+    writeJson(join(planPmDir, `${planPmSession.getSessionId()}.json`), {
+      schema_version: 1,
+      role: "plan-pm",
+      session_id: planPmSession.getSessionId(),
+      workflow_id: "plan-pm-iteration",
+      plan_id: "some-plan",
+      harness_root: planPmRepo.harness,
+    });
+    const planPmRefusal = await planPm.runTool(startParams("plan-pm-iteration"));
+    expect(codeOf(planPmRefusal)).toBe("plan-pm-session");
+    expect(planPm.attempts).toHaveLength(0);
+    expect(statesOf(planPm)).toHaveLength(0);
+    expect(planPm.notices().some((line) => line.includes("plan-pm-session"))).toBe(true);
+
+    // Forgery probe: even a *raw* call that bypasses schema validation and
+    // carries every former authority claim cannot arm — the adapter never reads
+    // those fields, so the host derivation still decides.
+    const forged = await planPm.runRawTool({
+      operation: "start",
+      workflowId: "plan-pm-iteration",
+      authority: "coordinator",
+      intent: "new-iteration",
+      entry: "iteration-start",
+    });
+    expect(codeOf(forged)).toBe("plan-pm-session");
+    expect(planPm.attempts).toHaveLength(0);
+    expect(statesOf(planPm)).toHaveLength(0);
+
+    // The same forged call in a session with no disqualifying host fact still
+    // arms, so the refusal above is caused by the derivation and not by the
+    // extra keys.
+    const forgeControl = await createHarness({
+      cwd: controlRepo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(controlRepo.main),
+    });
+    const forgedControl = await forgeControl.runRawTool({
+      operation: "start",
+      workflowId: "forge-control-iteration",
+      authority: "coordinator",
+      intent: "new-iteration",
+      entry: "iteration-start",
+    });
+    expect(codeOf(forgedControl)).toBe("armed");
+    expect(forgedControl.details.mstarModelHandoff?.entry).toBe("skill-start");
+
+    // The named workflow is bound to a *different* coordinator session.
+    const otherCoordinatorRepo = buildControlRepo();
+    writePluginOverrides(otherCoordinatorRepo.main, { modelHandoff: true, handoffTarget: "@default" });
+    const otherCoordinator = await createHarness({
+      cwd: otherCoordinatorRepo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(otherCoordinatorRepo.main),
+    });
+    const boundDir = sessionsDirOf(otherCoordinatorRepo, "bound-elsewhere");
+    mkdirSync(boundDir, { recursive: true });
+    writeJson(join(boundDir, "someone-else.json"), {
+      schema_version: 1,
+      role: "coordinator",
+      session_id: "someone-else-session",
+      workflow_id: "bound-elsewhere",
+      harness_root: otherCoordinatorRepo.harness,
+    });
+    const elsewhere = await otherCoordinator.runTool(startParams("bound-elsewhere"));
+    expect(codeOf(elsewhere)).toBe("coordinator-elsewhere");
+    expect(otherCoordinator.attempts).toHaveLength(0);
+
+    // The register names this session as the coordinator of another *running*
+    // workflow: one session coordinates one iteration.
+    const busyRepo = buildControlRepo();
+    writePluginOverrides(busyRepo.main, { modelHandoff: true, handoffTarget: "@default" });
+    const busySession = newSession(busyRepo.main);
+    const busy = await createHarness({
+      cwd: busyRepo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: busySession,
+    });
+    const otherWorkflowDir = join(busyRepo.harness, "workflows", "other-running-iteration");
+    mkdirSync(otherWorkflowDir, { recursive: true });
+    writeJson(join(otherWorkflowDir, "snapshot.json"), {
+      schema_version: 1,
+      id: "other-running-iteration",
+      type: "iteration",
+      status: "running",
+      started_at: "2026-09-16",
+      updated_at: "2026-09-16T00:00:00.000Z",
+      plans: [],
+      coordination: {
+        coordinator: {
+          session_id: busySession.getSessionId(),
+          session_file: join(otherWorkflowDir, "sessions", `${busySession.getSessionId()}.json`),
+          bound_at: "2026-09-16T00:00:00.000Z",
+        },
+      },
+    });
+    writeRegister(busyRepo.harness, [busyRepo.siblingId, "other-running-iteration"]);
+    const busyRefusal = await busy.runTool(startParams("busy-iteration"));
+    expect(codeOf(busyRefusal)).toBe("coordinator-elsewhere");
+    expect(busy.attempts).toHaveLength(0);
+    expect(busy.notices().some((line) => line.includes("coordinator-elsewhere"))).toBe(true);
+
+    // --- Arm-window history ---
+    // A model change away and back *inside* the arm window is a conflict even
+    // though the live model looks right at the end.
+    const windowRepo = buildControlRepo();
+    writePluginOverrides(windowRepo.main, { modelHandoff: true, handoffTarget: "@default" });
+    const windowSession = newSession(windowRepo.main);
+    const windowed = await createHarness({
+      cwd: windowRepo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: windowSession,
+    });
+    const held = windowed.metadata.hold();
+    const invoked = windowed.nextAction();
+    const arming = windowed.runTool(startParams("window-iteration"));
+    await invoked;
+    // The arm's own transition is still parked at the metadata gate: a foreign
+    // away-and-back lands in the same window.
+    windowSession.appendModelChange("probe/other-model", "default");
+    windowSession.appendModelChange("probe/slow-model", "default");
+    windowed.setLiveModel("slow-model");
+    held();
+    const windowedResult = await arming;
+    expect(codeOf(windowedResult)).toBe("arm-evidence-conflict");
+    expect(statesOf(windowed)).toEqual(["attempting", "failed"]);
+    expect(windowed.records().at(-1)!.reason).toContain("probe/other-model, probe/slow-model");
+    expect(windowed.liveSpec()).toBe("probe/slow-model");
   });
 });
 
 describe("fire reads current preference", () => {
-  test("fire reads current preference: destination, enablement and readiness are re-derived at fire time, and fire is one-shot", async () => {
+  test("fire reads current preference: destination, enablement, readiness and a settings edit during the readiness checkpoint are honored", async () => {
     const repo = buildControlRepo();
     writePluginOverrides(repo.main, { modelHandoff: true, handoffTarget: "@default" });
     const harness = await createHarness({
@@ -816,7 +1074,8 @@ describe("fire reads current preference", () => {
       sessionManager: newSession(repo.main),
     });
 
-    const armed = await harness.runTool(startParams("pref-iteration", "iteration-start"));
+    await harness.emitInput("/iteration-start pref", "interactive");
+    const armed = await harness.runTool(startParams("pref-iteration"));
     expect(codeOf(armed)).toBe("armed");
     const artifacts = createWorkflowArtifacts(repo, harness.sessionManager.getSessionId(), "pref-iteration");
 
@@ -827,17 +1086,14 @@ describe("fire reads current preference", () => {
     expect(harness.switched).toEqual(["probe/slow-model", "probe/smol-model"]);
     expect(harness.liveSpec()).toBe("probe/smol-model");
     expect(statesOf(harness)).toEqual(["attempting", "pending", "attempting", "handed_off"]);
-    // The invocation record carries the frozen E2 receipt.
     expect(harness.records().at(-1)!.receipt).toBeDefined();
-    expect(harness.records().at(-2)!.receipt).toBeDefined();
 
     // A one-shot binding never fires twice.
-    const again = await harness.runTool(completionParams(artifacts));
-    expect(codeOf(again)).toBe("not-pending");
+    expect(codeOf(await harness.runTool(completionParams(artifacts)))).toBe("not-pending");
     expect(harness.switched).toHaveLength(2);
 
-    // Disabled before fire: the target switch is skipped, `@slow` stays, and the
-    // preference edit does not terminalize the pending binding.
+    // Disabled before fire: skipped, still pending; re-enabled: the same binding
+    // fires.
     const secondRepo = buildControlRepo();
     writePluginOverrides(secondRepo.main, { modelHandoff: true, handoffTarget: "@smol" });
     const second = await createHarness({
@@ -845,7 +1101,7 @@ describe("fire reads current preference", () => {
       sessionDir: scratchDir("unused-"),
       sessionManager: newSession(secondRepo.main),
     });
-    await second.runTool(startParams("pref-off-iteration", "iteration-start"));
+    await second.runTool(startParams("pref-off-iteration"));
     const secondArtifacts = createWorkflowArtifacts(secondRepo, second.sessionManager.getSessionId(), "pref-off-iteration");
     writePluginOverrides(secondRepo.main, { modelHandoff: false, handoffTarget: "@smol" });
     const suppressed = await second.runTool(completionParams(secondArtifacts));
@@ -853,16 +1109,11 @@ describe("fire reads current preference", () => {
     expect(stateOf(suppressed)).toBe("pending");
     expect(second.switched).toEqual(["probe/slow-model"]);
     expect(second.notices().some((line) => line.includes("modelHandoff is off"))).toBe(true);
-    expect(statesOf(second)).toEqual(["attempting", "pending"]);
-
-    // Re-enabled while still pending and not cancelled: the same binding fires.
     writePluginOverrides(secondRepo.main, { modelHandoff: true, handoffTarget: "@smol" });
-    const refired = await second.runTool(completionParams(secondArtifacts));
-    expect(codeOf(refired)).toBe("handed_off");
+    expect(codeOf(await second.runTool(completionParams(secondArtifacts)))).toBe("handed_off");
     expect(second.switched).toEqual(["probe/slow-model", "probe/smol-model"]);
 
-    // Readiness is re-derived, never remembered: missing evidence refuses, and
-    // the binding still fires once the evidence is intact again.
+    // Readiness is re-derived, never remembered.
     const thirdRepo = buildControlRepo();
     writePluginOverrides(thirdRepo.main, { modelHandoff: true, handoffTarget: "@default" });
     const third = await createHarness({
@@ -870,7 +1121,7 @@ describe("fire reads current preference", () => {
       sessionDir: scratchDir("unused-"),
       sessionManager: newSession(thirdRepo.main),
     });
-    await third.runTool(startParams("pref-ready-iteration", "iteration-start"));
+    await third.runTool(startParams("pref-ready-iteration"));
     const thirdArtifacts = createWorkflowArtifacts(thirdRepo, third.sessionManager.getSessionId(), "pref-ready-iteration");
     const reportPath = thirdArtifacts.reviews[1]!.reportPath;
     rmSync(reportPath);
@@ -880,9 +1131,80 @@ describe("fire reads current preference", () => {
     expect((notReady.details.mstarModelHandoff?.codes as readonly string[]).includes("review-evidence-missing")).toBe(true);
     expect(third.switched).toEqual(["probe/slow-model"]);
     writeFileSync(reportPath, "returned payload — architect\n");
-    const ready = await third.runTool(completionParams(thirdArtifacts));
-    expect(codeOf(ready)).toBe("handed_off");
+    expect(codeOf(await third.runTool(completionParams(thirdArtifacts)))).toBe("handed_off");
     expect(third.switched).toEqual(["probe/slow-model", "probe/default-model"]);
+
+    // --- A settings edit that lands while the readiness checkpoint is running ---
+    // The awaited checkpoint is held open (the module's documented test seam), so
+    // the edit provably happens after the first read and before the second.
+    const duringRepo = buildControlRepo();
+    writePluginOverrides(duringRepo.main, { modelHandoff: true, handoffTarget: "@default" });
+    const during = await createHarness({
+      cwd: duringRepo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(duringRepo.main),
+    });
+    await during.runTool(startParams("during-readiness-iteration"));
+    const duringArtifacts = createWorkflowArtifacts(duringRepo, during.sessionManager.getSessionId(), "during-readiness-iteration");
+
+    let releaseCheckpoint: (() => void) | undefined;
+    let enterCheckpoint: (() => void) | undefined;
+    const checkpointOpen = new Promise<void>((resolve) => {
+      releaseCheckpoint = resolve;
+    });
+    const checkpointEntered = new Promise<void>((resolve) => {
+      enterCheckpoint = resolve;
+    });
+    handoffSeams.inspectReadiness = async (binding, input) => {
+      enterCheckpoint?.();
+      await checkpointOpen;
+      return REAL_INSPECT_READINESS(binding, input);
+    };
+    const duringFire = during.runTool(completionParams(duringArtifacts));
+    // The checkpoint is only entered after the *first* preference read resolved,
+    // so this edit provably lands inside the awaited window.
+    await checkpointEntered;
+    writePluginOverrides(duringRepo.main, { modelHandoff: true, handoffTarget: "@smol" });
+    releaseCheckpoint?.();
+    const duringResult = await duringFire;
+    handoffSeams.inspectReadiness = REAL_INSPECT_READINESS;
+    expect(codeOf(duringResult)).toBe("handed_off");
+    expect(during.switched).toEqual(["probe/slow-model", "probe/smol-model"]);
+
+    // The same window with the preference turned off: the destination switch is
+    // suppressed from the re-read, not from a cached value.
+    const offRepo = buildControlRepo();
+    writePluginOverrides(offRepo.main, { modelHandoff: true, handoffTarget: "@smol" });
+    const offDuring = await createHarness({
+      cwd: offRepo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(offRepo.main),
+    });
+    await offDuring.runTool(startParams("off-during-iteration"));
+    const offArtifacts = createWorkflowArtifacts(offRepo, offDuring.sessionManager.getSessionId(), "off-during-iteration");
+    let releaseSecond: (() => void) | undefined;
+    let enterSecond: (() => void) | undefined;
+    const secondOpen = new Promise<void>((resolve) => {
+      releaseSecond = resolve;
+    });
+    const secondEntered = new Promise<void>((resolve) => {
+      enterSecond = resolve;
+    });
+    handoffSeams.inspectReadiness = async (binding, input) => {
+      enterSecond?.();
+      await secondOpen;
+      return REAL_INSPECT_READINESS(binding, input);
+    };
+    const offFire = offDuring.runTool(completionParams(offArtifacts));
+    await secondEntered;
+    writePluginOverrides(offRepo.main, { modelHandoff: false, handoffTarget: "@smol" });
+    releaseSecond?.();
+    const offResult = await offFire;
+    handoffSeams.inspectReadiness = REAL_INSPECT_READINESS;
+    expect(codeOf(offResult)).toBe("preference-off");
+    expect(stateOf(offResult)).toBe("pending");
+    expect(offDuring.switched).toEqual(["probe/slow-model"]);
+    expect(offDuring.liveSpec()).toBe("probe/slow-model");
   });
 });
 
@@ -895,7 +1217,8 @@ describe("pending picker and cycle changes cancel", () => {
       sessionDir: scratchDir("unused-"),
       sessionManager: newSession(repo.main),
     });
-    const armed = await harness.runTool(startParams("picker-iteration", "iteration-start"));
+
+    const armed = await harness.runTool(startParams("picker-iteration"));
     expect(codeOf(armed)).toBe("armed");
     const artifacts = createWorkflowArtifacts(repo, harness.sessionManager.getSessionId(), "picker-iteration");
     const pendingRecord = harness.records().at(-1)!;
@@ -904,7 +1227,7 @@ describe("pending picker and cycle changes cancel", () => {
     expect(harness.ledger().some((entry) => entry.id === baseline)).toBe(true);
 
     // The arm's own transition must not cancel its own pending window.
-    harness.emit("input", { text: "next", source: "interactive" });
+    await harness.emitInput("next", "interactive");
     expect(statesOf(harness)).toEqual(["attempting", "pending"]);
 
     // The real picker path (`ModelControls.setModel`, the implementation behind
@@ -913,23 +1236,20 @@ describe("pending picker and cycle changes cancel", () => {
     expect(harness.liveSpec()).toBe("probe/picker-model");
     expect(harness.ledger().some((entry) => entry.type === "model_change" && entry.model === "probe/picker-model")).toBe(true);
 
-    harness.emit("agent_end", {});
+    await harness.emit({ type: "agent_end", messages: [] });
     const cancelled = harness.records().at(-1)!;
     expect(cancelled.state).toBe("cancelled");
     expect(cancelled.reason).toContain("unowned model change to probe/picker-model");
     expect(harness.notices().some((line) => line.includes("model handoff cancelled"))).toBe(true);
-    // No target action was ever attempted: the only `pi.setModel` call is the arm.
     expect(harness.attempts).toEqual(["probe/slow-model"]);
 
-    const afterCancel = await harness.runTool(completionParams(artifacts));
-    expect(codeOf(afterCancel)).toBe("not-pending");
+    expect(codeOf(await harness.runTool(completionParams(artifacts)))).toBe("not-pending");
     expect(harness.attempts).toEqual(["probe/slow-model"]);
     expect(harness.liveSpec()).toBe("probe/picker-model");
 
     // Re-enabling the preference cannot resurrect a cancelled binding.
     writePluginOverrides(repo.main, { modelHandoff: true, handoffTarget: "@smol" });
-    const afterReEnable = await harness.runTool(completionParams(artifacts));
-    expect(codeOf(afterReEnable)).toBe("not-pending");
+    expect(codeOf(await harness.runTool(completionParams(artifacts)))).toBe("not-pending");
     expect(harness.attempts).toEqual(["probe/slow-model"]);
 
     // Away and back: the real role-cycle path returns the session to the armed
@@ -941,7 +1261,7 @@ describe("pending picker and cycle changes cancel", () => {
       sessionDir: scratchDir("unused-"),
       sessionManager: newSession(backRepo.main),
     });
-    const backArmed = await back.runTool(startParams("away-back-iteration", "iteration-start"));
+    const backArmed = await back.runTool(startParams("away-back-iteration"));
     expect(codeOf(backArmed)).toBe("armed");
     const backArtifacts = createWorkflowArtifacts(backRepo, back.sessionManager.getSessionId(), "away-back-iteration");
     const baselineModel = back.liveSpec();
@@ -957,13 +1277,12 @@ describe("pending picker and cycle changes cancel", () => {
       "probe/slow-model",
     ]);
 
-    back.emit("tool_result", { toolName: "bash", isError: false });
+    await back.emitToolResult("call-2", "bash", false);
     const awayBack = back.records().at(-1)!;
     expect(awayBack.state).toBe("cancelled");
     expect(awayBack.reason).toContain("unowned model change to probe/picker-model");
     expect(back.liveSpec()).toBe(baselineModel);
-    const backFire = await back.runTool(completionParams(backArtifacts));
-    expect(codeOf(backFire)).toBe("not-pending");
+    expect(codeOf(await back.runTool(completionParams(backArtifacts)))).toBe("not-pending");
     expect(back.attempts).toEqual(["probe/slow-model"]);
   });
 });
@@ -977,15 +1296,14 @@ describe("unowned model change cancels conservatively", () => {
       sessionDir: scratchDir("unused-"),
       sessionManager: newSession(repo.main),
     });
-    await harness.runTool(startParams("unowned-iteration", "iteration-start"));
+    await harness.runTool(startParams("unowned-iteration"));
     expect(statesOf(harness)).toEqual(["attempting", "pending"]);
-    const artifacts = createWorkflowArtifacts(repo, harness.sessionManager.getSessionId(), "unowned-iteration");
 
     // Another extension / host path appends a native model change: the extension
     // cannot attribute it, so it cancels conservatively and says so.
     harness.sessionManager.appendModelChange("probe/other-model", "temporary");
     harness.setLiveModel("other-model");
-    harness.emit("before_agent_start", { prompt: "go", systemPrompt: [] });
+    await harness.emitBeforeAgentStart("go");
     const byHistory = harness.records().at(-1)!;
     expect(byHistory.state).toBe("cancelled");
     expect(byHistory.reason).toContain("unowned model change to probe/other-model");
@@ -1002,16 +1320,15 @@ describe("unowned model change cancels conservatively", () => {
       sessionDir: scratchDir("unused-"),
       sessionManager: newSession(liveRepo.main),
     });
-    await live.runTool(startParams("live-only-iteration", "iteration-start"));
+    await live.runTool(startParams("live-only-iteration"));
     const liveArtifacts = createWorkflowArtifacts(liveRepo, live.sessionManager.getSessionId(), "live-only-iteration");
     live.setLiveModel("default-model");
     expect(live.ledger().filter((entry) => entry.type === "model_change")).toHaveLength(1);
-    live.emit("input", { text: "still there?", source: "interactive" });
+    await live.emitInput("still there?", "interactive");
     const byLive = live.records().at(-1)!;
     expect(byLive.state).toBe("cancelled");
     expect(byLive.reason).toContain("the live model is probe/default-model, not the armed baseline probe/slow-model");
-    const liveFire = await live.runTool(completionParams(liveArtifacts));
-    expect(codeOf(liveFire)).toBe("not-pending");
+    expect(codeOf(await live.runTool(completionParams(liveArtifacts)))).toBe("not-pending");
     expect(live.attempts).toEqual(["probe/slow-model"]);
 
     // A change that lands while the awaited settings/readiness work runs is
@@ -1023,7 +1340,7 @@ describe("unowned model change cancels conservatively", () => {
       sessionDir: scratchDir("unused-"),
       sessionManager: newSession(raceRepo.main),
     });
-    await race.runTool(startParams("race-iteration", "iteration-start"));
+    await race.runTool(startParams("race-iteration"));
     const raceArtifacts = createWorkflowArtifacts(raceRepo, race.sessionManager.getSessionId(), "race-iteration");
     const pendingFire = race.runTool(completionParams(raceArtifacts));
     // The fire path suspends on its first real read; this synchronous change
@@ -1039,7 +1356,7 @@ describe("unowned model change cancels conservatively", () => {
 });
 
 describe("navigation and action exclude each other", () => {
-  test("navigation and action exclude each other: navigation during an action is refused immediately, and an earlier navigation fences the action", async () => {
+  test("navigation and action exclude each other: navigation during an action is refused immediately, an earlier navigation fences the action, and an overlapping checkpoint never mislabels a running attempt", async () => {
     const repo = buildControlRepo();
     writePluginOverrides(repo.main, { modelHandoff: true, handoffTarget: "@smol" });
     const harness = await createHarness({
@@ -1047,7 +1364,7 @@ describe("navigation and action exclude each other", () => {
       sessionDir: scratchDir("unused-"),
       sessionManager: newSession(repo.main),
     });
-    await harness.runTool(startParams("nav-iteration", "iteration-start"));
+    await harness.runTool(startParams("nav-iteration"));
     const artifacts = createWorkflowArtifacts(repo, harness.sessionManager.getSessionId(), "nav-iteration");
 
     // --- Navigation arriving *during* an invoked action ---
@@ -1055,24 +1372,37 @@ describe("navigation and action exclude each other", () => {
     const invoked = harness.nextAction();
     const firing = harness.runTool(completionParams(artifacts));
     await invoked;
-    // The attempt record is appended synchronously *before* the action is
-    // invoked, so the durable state is already `attempting` here.
     expect(harness.records().at(-1)!.state).toBe("attempting");
     expect(harness.liveSpec()).toBe("probe/slow-model");
 
-    const duringAction = harness.emit("session_before_tree", {
+    // The handler's own raw return is synchronous: a promise-like value would
+    // mean it waited inside the event handler, where the host enforces a timeout.
+    const raw = harness.rawHandlerResult("session_before_tree", { preparation: {}, signal: new AbortController().signal });
+    expect(raw).toEqual({ cancel: true });
+    expect(isPromiseLike(raw)).toBe(false);
+    // …and the host's runner agrees, for every guarded navigation event.
+    const duringAction = await harness.emit({
+      type: "session_before_tree",
       preparation: { targetId: "root", oldLeafId: null, commonAncestorId: null, entriesToSummarize: [], userWantsSummary: false },
+      signal: new AbortController().signal,
     });
-    // Refused synchronously: a promise-like return would mean the handler waited
-    // inside the event handler, where the host enforces a handler timeout.
     expect(duringAction).toEqual({ cancel: true });
-    expect(isPromiseLike(duringAction)).toBe(false);
     expect(harness.notices().some((line) => line.includes("navigation was refused"))).toBe(true);
     for (const event of ["session_before_switch", "session_before_branch"]) {
-      const refused = harness.emit(event, { reason: "new", entryId: "root" });
+      const refused = await harness.emit(
+        event === "session_before_switch"
+          ? { type: event, reason: "new" }
+          : { type: event, entryId: "root" },
+      );
       expect(refused).toEqual({ cancel: true });
-      expect(isPromiseLike(refused)).toBe(false);
     }
+
+    // A completion checkpoint that overlaps the running action must not
+    // mislabel it uncertain.
+    const overlapping = await harness.runTool(completionParams(artifacts));
+    expect(codeOf(overlapping)).toBe("in-flight");
+    expect(harness.records().at(-1)!.state).toBe("attempting");
+    expect(statesOf(harness)).toEqual(["attempting", "pending", "attempting"]);
 
     release();
     const fired = await firing;
@@ -1088,11 +1418,11 @@ describe("navigation and action exclude each other", () => {
       sessionDir: scratchDir("unused-"),
       sessionManager: newSession(fenceRepo.main),
     });
-    await fence.runTool(startParams("fence-iteration", "iteration-start"));
+    await fence.runTool(startParams("fence-iteration"));
     const fenceArtifacts = createWorkflowArtifacts(fenceRepo, fence.sessionManager.getSessionId(), "fence-iteration");
 
-    // No action in flight: the navigation is allowed and only advances the fence.
-    expect(fence.emit("session_before_tree", { preparation: {} })).toBeUndefined();
+    const allowed = await fence.emit({ type: "session_before_tree", preparation: {}, signal: new AbortController().signal });
+    expect(allowed).toBeUndefined();
     const suspended = await fence.runTool(completionParams(fenceArtifacts));
     expect(codeOf(suspended)).toBe("suspended");
     expect(stateOf(suspended)).toBe("pending");
@@ -1100,15 +1430,13 @@ describe("navigation and action exclude each other", () => {
     expect(fence.notices().some((line) => line.includes("handoff suspended"))).toBe(true);
     expect(statesOf(fence)).toEqual(["attempting", "pending"]);
 
-    // The matching post-event clears the fence and replays state; the same
-    // completion call now fires, proving the fence was the only blocker.
-    fence.emit("session_tree", { newLeafId: "leaf-1", oldLeafId: "leaf-2" });
+    await fence.emit({ type: "session_tree", newLeafId: "leaf-1", oldLeafId: "leaf-2" });
     const afterFence = await fence.runTool(completionParams(fenceArtifacts));
     expect(codeOf(afterFence)).toBe("handed_off");
     expect(fence.switched).toEqual(["probe/slow-model", "probe/default-model"]);
 
-    // A navigation that never completes (another extension cancelled it) leaves
-    // a visible suspended condition; a reload recovers it.
+    // A navigation that never completes leaves a visible suspended condition; a
+    // reload recovers it.
     const stuckRepo = buildControlRepo();
     writePluginOverrides(stuckRepo.main, { modelHandoff: true, handoffTarget: "@smol" });
     const stuck = await createHarness({
@@ -1116,16 +1444,15 @@ describe("navigation and action exclude each other", () => {
       sessionDir: scratchDir("unused-"),
       sessionManager: newSession(stuckRepo.main),
     });
-    await stuck.runTool(startParams("stuck-iteration", "iteration-start"));
+    await stuck.runTool(startParams("stuck-iteration"));
     const stuckArtifacts = createWorkflowArtifacts(stuckRepo, stuck.sessionManager.getSessionId(), "stuck-iteration");
-    stuck.emit("session_before_switch", { reason: "resume", targetSessionFile: "/tmp/elsewhere.jsonl" });
+    await stuck.emit({ type: "session_before_switch", reason: "resume", targetSessionFile: "/tmp/elsewhere.jsonl" });
     const stuckFire = await stuck.runTool(completionParams(stuckArtifacts));
     expect(codeOf(stuckFire)).toBe("suspended");
     expect(stuck.attempts).toEqual(["probe/slow-model"]);
     expect(stuck.notices().some((line) => line.includes("handoff suspended"))).toBe(true);
-    stuck.emit("session_start", {});
-    const recovered = await stuck.runTool(completionParams(stuckArtifacts));
-    expect(codeOf(recovered)).toBe("handed_off");
+    await stuck.emit({ type: "session_start" });
+    expect(codeOf(await stuck.runTool(completionParams(stuckArtifacts)))).toBe("handed_off");
     expect(stuck.switched).toEqual(["probe/slow-model", "probe/smol-model"]);
   });
 });
@@ -1136,30 +1463,26 @@ describe("terminal state survives tree and reload", () => {
     writePluginOverrides(repo.main, { modelHandoff: true, handoffTarget: "@smol" });
     const session = newSession(repo.main);
     const harness = await createHarness({ cwd: repo.main, sessionDir: scratchDir("unused-"), sessionManager: session });
-    await harness.runTool(startParams("terminal-iteration", "iteration-start"));
+    await harness.runTool(startParams("terminal-iteration"));
     const artifacts = createWorkflowArtifacts(repo, session.getSessionId(), "terminal-iteration");
     expect(codeOf(await harness.runTool(completionParams(artifacts)))).toBe("handed_off");
     const settled = statesOf(harness);
     const actions = [...harness.attempts];
 
-    // Tree navigation inside the same session restores the terminal state from
-    // the full ledger (the active branch alone would lose it).
-    harness.emit("session_tree", { newLeafId: "leaf-9", oldLeafId: "leaf-3" });
-    harness.emit("session_start", {});
+    await harness.emit({ type: "session_tree", newLeafId: "leaf-9", oldLeafId: "leaf-3" });
+    await harness.emit({ type: "session_start" });
     expect(statesOf(harness)).toEqual(settled);
     expect(harness.attempts).toEqual(actions);
     expect(harness.ledger().filter((entry) => entry.type === "model_change" && entry.model === "probe/slow-model")).toHaveLength(1);
 
-    const refire = await harness.runTool(completionParams(artifacts));
-    expect(codeOf(refire)).toBe("not-pending");
-    const rearm = await harness.runTool(startParams("terminal-iteration", "iteration-start"));
-    expect(codeOf(rearm)).toBe("already-bound");
+    expect(codeOf(await harness.runTool(completionParams(artifacts)))).toBe("not-pending");
+    expect(codeOf(await harness.runTool(startParams("terminal-iteration")))).toBe("already-bound");
     expect(harness.attempts).toEqual(actions);
 
     // A fork gets a new session id: the copied records carry the parent's
-    // session id, so the fork has no authority and no pending binding. A fresh
-    // session defers file creation, so the durable file is materialized with the
-    // host's own `ensureOnDisk` before the fork reads it.
+    // session id, so the fork has no authority. A fresh session defers file
+    // creation, so the durable file is materialized with the host's own
+    // `ensureOnDisk` before the fork reads it.
     await session.ensureOnDisk();
     const sessionFile = session.getSessionFile();
     expect(sessionFile).toBeDefined();
@@ -1175,21 +1498,19 @@ describe("terminal state survives tree and reload", () => {
       sessionDir: scratchDir("unused-"),
       sessionManager: forked,
     });
-    fork.emit("session_switch", { reason: "fork", previousSessionFile: sessionFile });
-    const forkFire = await fork.runTool(completionParams(artifacts));
-    expect(codeOf(forkFire)).toBe("not-pending");
+    await fork.emit({ type: "session_switch", reason: "fork", previousSessionFile: sessionFile });
+    expect(codeOf(await fork.runTool(completionParams(artifacts)))).toBe("not-pending");
     expect(fork.attempts).toHaveLength(0);
     expect(fork.liveSpec()).toBe("probe/default-model");
 
     // A later new iteration in a *new* coordinator session still arms from the
-    // saved preference (the terminated binding is not inherited, it is replaced).
+    // saved preference.
     const later = await createHarness({
       cwd: repo.main,
       sessionDir: scratchDir("unused-"),
       sessionManager: newSession(repo.main),
     });
-    const laterArm = await later.runTool(startParams("later-iteration", "iteration-start"));
-    expect(codeOf(laterArm)).toBe("armed");
+    expect(codeOf(await later.runTool(startParams("later-iteration")))).toBe("armed");
     expect(later.attempts).toEqual(["probe/slow-model"]);
     expect(statesOf(later)).toEqual(["attempting", "pending"]);
   });
@@ -1201,7 +1522,7 @@ describe("persisted attempt resumes uncertain without retry", () => {
     writePluginOverrides(repo.main, { modelHandoff: true, handoffTarget: "@smol" });
     const session = newSession(repo.main);
     const harness = await createHarness({ cwd: repo.main, sessionDir: scratchDir("unused-"), sessionManager: session });
-    await harness.runTool(startParams("attempt-iteration", "iteration-start"));
+    await harness.runTool(startParams("attempt-iteration"));
     const artifacts = createWorkflowArtifacts(repo, session.getSessionId(), "attempt-iteration");
 
     // The target action is invoked and then interrupted: the metadata barrier
@@ -1223,22 +1544,20 @@ describe("persisted attempt resumes uncertain without retry", () => {
       sessionManager: harness.sessionManager,
       initialModelId: "slow-model",
     });
-    resumed.emit("session_start", {});
+    await resumed.emit({ type: "session_start" });
     const uncertain = resumed.records().at(-1)!;
     expect(uncertain.state).toBe("uncertain");
     expect(uncertain.action).toBe("handoff");
     expect(uncertain.reason).toContain("no recorded outcome");
     expect(resumed.notices().some((line) => line.includes("handoff uncertain"))).toBe(true);
-    // Neither `@slow` nor the target is retried, and the actual model is kept.
     expect(resumed.attempts).toHaveLength(0);
     expect(resumed.liveSpec()).toBe("probe/slow-model");
 
-    const afterResume = await resumed.runTool(completionParams(artifacts));
-    expect(codeOf(afterResume)).toBe("not-pending");
+    expect(codeOf(await resumed.runTool(completionParams(artifacts)))).toBe("not-pending");
     expect(resumed.attempts).toHaveLength(0);
 
     // Replaying the same reconstruction appends nothing new (terminal is stable).
-    resumed.emit("session_start", {});
+    await resumed.emit({ type: "session_start" });
     expect(statesOf(resumed)).toEqual(["attempting", "pending", "attempting", "uncertain"]);
     expect(resumed.attempts).toHaveLength(0);
 
@@ -1249,7 +1568,7 @@ describe("persisted attempt resumes uncertain without retry", () => {
     expect(resumed.attempts).toHaveLength(0);
 
     // A missing armed baseline cursor is uncertainty, not a reason to reset the
-    // observation window (a truncated or rewritten ledger is the real-world case).
+    // observation window (a truncated or rewritten ledger is the real case).
     const cursorRepo = buildControlRepo();
     writePluginOverrides(cursorRepo.main, { modelHandoff: true, handoffTarget: "@default" });
     const cursor = await createHarness({
@@ -1257,7 +1576,7 @@ describe("persisted attempt resumes uncertain without retry", () => {
       sessionDir: scratchDir("unused-"),
       sessionManager: newSession(cursorRepo.main),
     });
-    await cursor.runTool(startParams("cursor-iteration", "iteration-start"));
+    await cursor.runTool(startParams("cursor-iteration"));
     const entries = cursor.ledger();
     const baseline = cursor.records().at(-1)!.baselineModelChangeId;
     expect(decideSessionState(entries, cursor.sessionManager.getSessionId()).kind).toBe("pending");
@@ -1278,13 +1597,12 @@ describe("switch failure reports actual model", () => {
       sessionDir: scratchDir("unused-"),
       sessionManager: newSession(repo.main),
     });
-    await harness.runTool(startParams("fail-iteration", "iteration-start"));
+    await harness.runTool(startParams("fail-iteration"));
     const artifacts = createWorkflowArtifacts(repo, harness.sessionManager.getSessionId(), "fail-iteration");
     const armedModel = harness.liveSpec();
 
     // Missing auth at fire time: the public action reports `false`. The session
-    // keeps the model it actually has, the failure is visible, and nothing is
-    // rolled back to the pre-arm model.
+    // keeps the model it actually has, and nothing is rolled back.
     harness.auth.allowed = false;
     const refused = await harness.runTool(completionParams(artifacts));
     expect(codeOf(refused)).toBe("switch-refused");
@@ -1298,9 +1616,7 @@ describe("switch failure reports actual model", () => {
     expect(failed.reason).toContain("probe/smol-model");
     expect(harness.notices().some((line) => line.includes(armedModel))).toBe(true);
 
-    // No retry loop: a second completion call is refused and attempts nothing.
-    const retry = await harness.runTool(completionParams(artifacts));
-    expect(codeOf(retry)).toBe("not-pending");
+    expect(codeOf(await harness.runTool(completionParams(artifacts)))).toBe("not-pending");
     expect(harness.attempts).toEqual(["probe/slow-model", "probe/smol-model"]);
 
     // A throwing switch reports the throw and the actual model.
@@ -1311,7 +1627,7 @@ describe("switch failure reports actual model", () => {
       sessionDir: scratchDir("unused-"),
       sessionManager: newSession(throwRepo.main),
     });
-    await throwing.runTool(startParams("throw-iteration", "iteration-start"));
+    await throwing.runTool(startParams("throw-iteration"));
     const throwArtifacts = createWorkflowArtifacts(throwRepo, throwing.sessionManager.getSessionId(), "throw-iteration");
     throwing.metadata.failNext = true;
     const threw = await throwing.runTool(completionParams(throwArtifacts));
@@ -1331,7 +1647,7 @@ describe("switch failure reports actual model", () => {
       sessionManager: newSession(noTargetRepo.main),
       modelRoles: { slow: "probe/slow-model", default: "probe/default-model", smol: "probe/gone-model" },
     });
-    await noTarget.runTool(startParams("no-target-iteration", "iteration-start"));
+    await noTarget.runTool(startParams("no-target-iteration"));
     const noTargetArtifacts = createWorkflowArtifacts(noTargetRepo, noTarget.sessionManager.getSessionId(), "no-target-iteration");
     const unresolved = await noTarget.runTool(completionParams(noTargetArtifacts));
     expect(codeOf(unresolved)).toBe("target-unresolved");
