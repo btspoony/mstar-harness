@@ -853,9 +853,13 @@ function nonEmptyString(value: unknown): value is string {
  * read-only, no writes; the input snapshot is consumed as read.
  *
  * Only `type: plan` lifecycles consult (an iteration declares no delivery
- * kind — §1). The DECLARED kind decides the required evidence; nothing is
- * inferred from which fields happen to be present, and a missing field is
- * incomplete registration, never an exemption (§1):
+ * kind — §1); WHEN the consultation runs is the caller's rule, and both
+ * callers scope it to a delivered lifecycle: `closeWorkflow` consults the
+ * running snapshot it is about to complete, and the Phase-6 gate consults a
+ * `completed` terminal snapshot. A `failed`/`stopped` close is therefore never
+ * demanded delivery evidence (§5). The DECLARED kind decides the required
+ * evidence; nothing is inferred from which fields happen to be present, and a
+ * missing field is incomplete registration, never an exemption (§1):
  *
  * - no registered `delivery_kind` → `PHASE6_DELIVERY_KIND_UNREGISTERED` (a
  *   legacy terminal snapshot cannot be backfilled: the register producer is

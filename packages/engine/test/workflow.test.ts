@@ -814,6 +814,31 @@ describe("closeWorkflow", () => {
     expect(retried.ended_at).toBe(endedAt);
     expect(readFileSync(path, "utf8")).toBe(after);
   });
+
+  test.each(["failed", "stopped"])(
+    "an already-terminal %s snapshot is preserved and never demanded delivery evidence (gate and close agree, §5)",
+    async (status) => {
+      // Failure/abandonment close: no delivery kind, no anchors, no evidence.
+      const { dir, path } = fixture({
+        status,
+        ended_at: "2026-09-11",
+        delivery_kind: undefined,
+        branch: undefined,
+        delivery: undefined,
+        plans: [legacyRow({ status: "Blocked" })],
+      });
+      const before = readFileSync(path, "utf8");
+      const closed = await closeWorkflow(id, dir, { endedAt });
+      expect(closed.status).toBe(status);
+      expect(readFileSync(path, "utf8")).toBe(before);
+      // The same bytes read by the read-only gate reach the same verdict: a
+      // failure close is never treated as a delivery.
+      const onDisk = JSON.parse(before) as Record<string, unknown>;
+      const gate = evaluatePostMergeClose(onDisk, { version: 2, updated_at: "2026-09-12", workflows: [] });
+      expect(gate.ok).toBe(true);
+      expect(gate.violations).toEqual([]);
+    },
+  );
 });
 
 describe("recordWorkflowDelivery — authorized delivery-evidence recording (seam S3)", () => {

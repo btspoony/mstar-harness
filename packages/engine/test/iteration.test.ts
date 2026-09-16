@@ -700,6 +700,18 @@ describe("evaluatePostMergeClose — plan-type delivery-kind consultation (plan-
     expect(result.violations).toEqual([]);
   });
 
+  test("failed/stopped plan workflows are never demanded delivery evidence → gate PASSES with NO evidence and NO registered kind (§5)", () => {
+    for (const status of ["failed", "stopped"]) {
+      const result = evaluatePostMergeClose(
+        // Nothing collected at all: no delivery kind, no anchors, no evidence.
+        phase6PlanSnapshot({ status, delivery_kind: undefined, branch: undefined, delivery: undefined }),
+        phase6Root([]),
+      );
+      expect(result.ok).toBe(true);
+      expect(result.violations).toEqual([]);
+    }
+  });
+
   test("refused plan close stays registered/resumable: the root entry is still reported alongside the delivery refusal", () => {
     const result = evaluatePostMergeClose(
       phase6PlanSnapshot({ delivery_kind: undefined }),

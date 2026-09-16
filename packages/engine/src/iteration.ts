@@ -546,11 +546,16 @@ function hasLeftoverLease(snapshotDoc: SnapshotDoc): boolean {
  * separate check). The consultation is the shared pure function
  * `consultDeliveryEvidence` (workflow.ts), which `closeWorkflow` runs before
  * writing a terminal snapshot — one implementation, so this read-only gate
- * and the write path can never disagree. The kind is never inferred (§1): a
- * plan workflow without a registered `delivery_kind` has no close-verifiable
- * delivery evidence — for a legacy terminal snapshot this is outside the
- * gate's automated recovery, because the create-only register cannot
- * backfill terminal bytes, so the remediation names the owner
+ * and the write path can never disagree. It runs for a `completed` close ONLY:
+ * `failed`/`stopped` closes are never demanded delivery evidence (§5 — failure
+ * closes through its explicit status with a recorded reason and is never
+ * treated as delivered), exactly as `closeWorkflow` preserves an
+ * already-terminal snapshot unchanged without consulting; the type-generic
+ * dangling-lease probe still covers every terminal status. The kind is never
+ * inferred (§1): a plan workflow without a registered `delivery_kind` has no
+ * close-verifiable delivery evidence — for a legacy terminal snapshot this is
+ * outside the gate's automated recovery, because the create-only register
+ * cannot backfill terminal bytes, so the remediation names the owner
  * snapshot-amendment path (the audit-promotion grandfather population is
  * disclosed there) instead of the register verb — and a registered kind with
  * incomplete delivery evidence (`development` without its registered
@@ -611,19 +616,23 @@ export function evaluatePostMergeClose(snapshotDoc: SnapshotDoc, rootDoc: unknow
     );
   }
   const workflowId = isPlainObject(snapshotDoc) && typeof snapshotDoc.id === "string" ? snapshotDoc.id : null;
-  // Plan-type delivery-kind consultation (seam S3 — see the doc comment).
-  // Runs on shape-valid terminal documents only: an invalid document is
-  // already PHASE6_INVALID_SNAPSHOT, and the validator owns enum validity
-  // (an out-of-enum delivery_kind never reaches this block as shape-ok). The
+  // Plan-type delivery evidence, COMPLETED closes only (seam S3 — see the doc
+  // comment). Runs on shape-valid terminal documents: an invalid document is
+  // already PHASE6_INVALID_SNAPSHOT, and the validator owns enum validity (an
+  // out-of-enum delivery_kind never reaches this block as shape-ok). The
   // consultation itself is `consultDeliveryEvidence` — the SAME pure function
   // `closeWorkflow` runs before its terminal write, so this gate's verdict and
   // the close refusal cannot drift apart.
-  if (shapeOk && terminal && isPlainObject(snapshotDoc) && snapshotDoc.type === "plan") {
+  //
+  // `failed` / `stopped` closes are NEVER demanded delivery evidence (§5: a
+  // failure closes through its explicit status with a recorded reason and is
+  // never treated as delivered) — exactly as `closeWorkflow` preserves an
+  // already-terminal snapshot unchanged without consulting. The type-generic
+  // dangling-lease probe above keeps running for every terminal status.
+  if (shapeOk && terminal && isPlainObject(snapshotDoc) && snapshotDoc.type === "plan" && snapshotDoc.status === "completed") {
     violations.push(...consultDeliveryEvidence(snapshotDoc as unknown as WorkflowSnapshot));
-    // Completed close only: every owned plan row Done (§3 terminal stage).
-    // failed/stopped lifecycles keep their row states (§5) and are never
-    // demanded Done here — that would rewrite a failure as a delivery.
-    if (snapshotDoc.status === "completed" && Array.isArray(snapshotDoc.plans)) {
+    // Every owned plan row Done (§3 terminal stage).
+    if (Array.isArray(snapshotDoc.plans)) {
       for (const row of snapshotDoc.plans) {
         if (isPlainObject(row) && row.status !== PLAN_STATUS_DONE) {
           violations.push(
