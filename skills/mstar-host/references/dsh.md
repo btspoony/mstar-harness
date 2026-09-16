@@ -360,10 +360,14 @@ armed and the agent is idle, and it knows nothing about running subagents, so
 an operator who arms `/goal` manually can still get rounds firing while a
 dispatched child owns the critical path.
 
-**Phase 2 continuous execution is a PM-local loop**: dispatch → **wait for the
-child's settle notification** → next dispatch. When a dispatched child owns the
-critical path, the correct action is to **wait** — not to open another unit of
-work against the same worktree.
+**Phase 2 continuous execution is a PM-local loop**, not a one-wave-at-a-time
+queue: each child's settle notification is a **`result-settled`
+`Rescheduling checkpoint`** — run that checkpoint and dispatch what is already
+ready and authorized (independent plans and plan-local tasks, each in its own
+isolated track) before waiting, and wait only when it finds none. Waiting stays
+the correct action for work a running child already owns — never open another
+unit of work **against the same worktree**. Procedure (and its frozen reason
+vocabulary) → `mstar-iteration/references/phase-2-worktree-lease.md` §2.4.
 
 The **scoped plan route** changes none of this: `/iteration-drive --assignment |
 --workflow --plan | --resume` still never arms a goal on dsh, and its
