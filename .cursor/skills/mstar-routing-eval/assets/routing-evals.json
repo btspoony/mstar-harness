@@ -1359,16 +1359,17 @@
     },
     {
       "id": "phase2-base-dependency",
-      "prompt": "iteration Phase 2：task B 依赖 task A；A 的 review 已通过，但 A 的已审 commit 尚未进入 B 的 assigned base；B 的 Assignment 已派发并在运行（BASE_SHA 已记录）。",
+      "prompt": "iteration Phase 2：task B 依赖 task A；A 的 review 已通过，但 A 的已审 commit 尚未进入 B 的 assigned base；B 的 Assignment 已派发并在运行（BASE_SHA 已记录）。同一 plan 内另有独立 task C：与 A / B 无依赖、worktree 已隔离且容量可用。",
       "expected_route": [
-        "@project-manager"
+        "@project-manager",
+        "@fullstack-dev"
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
         "B not released: prerequisite satisfied only when reviewed commits are in B's assigned base",
         "prerequisite integration arranged serially before any new B assignment",
         "active B Assignment scope and BASE_SHA unchanged",
-        "independent ready work continues meanwhile"
+        "independent ready task C dispatched meanwhile (only the dependent task is blocked)"
       ],
       "hard_fail_if": [
         "missing Context Loaded declaration",
