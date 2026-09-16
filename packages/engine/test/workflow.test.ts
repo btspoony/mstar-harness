@@ -1145,8 +1145,10 @@ describe("registerPlanWorkflow — generic registration producer (seam S1)", () 
       updated_at: "2026-09-16",
       delivery_kind: "development",
       project: "engine",
-      branch: { source: "feature/20260916-plan-example", target: "main" },
     });
+    // The delivery branch lands on `branch.source`; `branch.base` (the
+    // protected base anchor cleanup Rule 2 / L1 consume) stays unset.
+    expect(snapshot.branch).toEqual({ source: "feature/20260916-plan-example", target: "main" });
     // One owned plan row, Todo — registration does not authorize implementation.
     expect(snapshot.plans).toEqual([{ id: "20260916-plan-example", title: "Example plan", file: "plans/20260916-plan-example.md", status: "Todo" }]);
 
