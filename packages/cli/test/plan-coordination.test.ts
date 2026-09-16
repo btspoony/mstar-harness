@@ -1598,4 +1598,26 @@ describe("Prepare workflow amendment", () => {
     // The stale-read route still works: the review can be re-read and re-applied.
     expect(jsonOf(runCli(showPrepareArgs(fixture), fixture.root)).allowed).toBe(true);
   });
+
+  test("a workflow refusal carries the addressed workflow id from the engine details", () => {
+    const fixture = makePrepareFixture();
+    const view = jsonOf(runCli(showPrepareArgs(fixture), fixture.root));
+    const before = readText(fixture.snapshotPath);
+    // The reviewed compass disappears between the read and the amendment, so
+    // the engine refusal carries the addressed workflow in its own details.
+    rmSync(fixture.compassPath);
+
+    const refused = runCli(
+      amendPrepareArgs(fixture, { snapshot: String(view.snapshot_version), compass: String(view.compass_version) }),
+      fixture.root,
+    );
+
+    expect(refused.exitCode).toBe(1);
+    const payload = jsonOf(refused);
+    expect(payload.ok).toBe(false);
+    expect(payload.operation).toBe("amend-prepare");
+    expect(payload.code).toBe("coordination.prepare-amendment.compass-mismatch");
+    expect(payload.workflow_id).toBe(PREPARE_WORKFLOW);
+    expect(readText(fixture.snapshotPath)).toBe(before);
+  });
 });
