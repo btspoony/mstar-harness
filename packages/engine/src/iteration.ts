@@ -545,7 +545,12 @@ function hasLeftoverLease(snapshotDoc: SnapshotDoc): boolean {
  * input) and remote merge verification stays excluded by contract (§4f is
  * the PM's separate check). The kind is never inferred (§1): a plan
  * workflow without a registered `delivery_kind` has no close-verifiable
- * delivery evidence, and a registered kind with incomplete registration
+ * delivery evidence — for a legacy terminal snapshot this is outside the
+ * gate's automated recovery, because the create-only register cannot
+ * backfill terminal bytes, so the remediation names the owner
+ * snapshot-amendment path (the audit-promotion grandfather population is
+ * disclosed there) instead of the register verb — and a registered kind
+ * with incomplete registration
  * evidence (`development` without its declared source/target branches,
  * `verification/report-only` without the recorded completion policy)
  * refuses the same way — missing fields are incomplete registration, not
@@ -615,7 +620,11 @@ export function evaluatePostMergeClose(snapshotDoc: SnapshotDoc, rootDoc: unknow
           "high",
           "PHASE6_DELIVERY_KIND_UNREGISTERED",
           `Workflow '${String(workflowId)}' is type 'plan' but carries no registered delivery_kind \u2014 a plan workflow declares its delivery kind at registration (plan-workflow-lifecycle-contract \u00a71), so this terminal snapshot's delivery evidence cannot be consulted`,
-          "Register the workflow with its delivery kind ('mstar workflow register') or repair the snapshot, then re-run 'mstar iteration gate --phase 6 --workflow <id>'",
+          // Truthful recovery (the register verb is a dead end here):
+          // `registerPlanWorkflow` is create-only and its recovery identity
+          // (status + delivery_kind) can never match a terminal snapshot, so
+          // the remediation names the owner snapshot amendment instead.
+          "Delivery evidence is declared at registration, before execution \u2014 'mstar workflow register' cannot backfill a terminal snapshot (create-only; snapshot bytes are preserved, so re-registration refuses), leaving a legacy terminal snapshot without a delivery_kind outside this gate's automated recovery: repair requires an explicit owner snapshot amendment recording the declared kind (the known affected population \u2014 audit-promotion's grandfathered type: plan snapshots \u2014 is disclosed as a residual by plan QC), then re-run 'mstar iteration gate --phase 6 --workflow <id>'",
         ),
       );
     } else if (kind === "development") {
