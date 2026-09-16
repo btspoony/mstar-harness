@@ -66,6 +66,7 @@ import {
   readCoordinatedArtifact,
   readMainWorktree,
   readWorkflowSnapshot,
+  registerPlanWorkflow,
   replaceCoordinatedArtifact,
   resolveHarnessDir,
   resolveProcessHarnessDir as resolveEngineProcessHarnessDir,
@@ -111,6 +112,7 @@ import {
   validateStatus,
   validateStatusV2,
   validateWorkflowSnapshot,
+  WORKFLOW_DELIVERY_KINDS,
   WORKFLOW_SNAPSHOT_FILE,
   _DEFAULT_PROJECT,
   type ArtifactKind,
@@ -1198,10 +1200,14 @@ statusCommand
 statusCommand
   .command("workflow-close")
   .description(
-    "Close one workflow lifecycle after its delivery PR merged (engine-backed: closeWorkflow writes the " +
+    "Close one workflow lifecycle after its delivery tail completes — type-generic: iterations and standalone " +
+      "`type: plan` workflows close through this same verb (engine-backed: closeWorkflow writes the " +
       "terminal snapshot under the snapshot lock, then unregisterWorkflow removes the root status.json entry " +
       "idempotently; dangling leases and unfinished plan rows refuse before any write; a fully closed retry " +
       "rewrites nothing; a failed unregister reports a partial close and a re-run finishes it. " +
+      "Standalone plan workflows: the registered delivery kind is consulted by the phase-6 gate — verify the " +
+      "close state with 'mstar iteration gate --phase 6 --workflow <id>' (development requires the registered " +
+      "source/target branches; verification/report-only the recorded completion policy). " +
       "Exit 0 success, 1 gate/IO refusal, 2 usage)",
   )
   .option("--workflow <id>", "Workflow id to close ({WORKFLOW_DIR}/<id>/snapshot.json)")
@@ -1293,6 +1299,111 @@ statusCommand
     );
     process.exitCode = 1;
   });
+
+const workflowCommand = program
+  .command("workflow")
+  .description(
+    "Workflow lifecycle verbs (engine-backed): registration of standalone plan workflows. " +
+      "Terminal close stays on `status workflow-close`",
+  );
+
+workflowCommand
+  .command("register")
+  .description(
+    "Register a standalone plan workflow (plan-workflow-lifecycle-contract seam S1, engine-backed): " +
+      "create-only `type: plan` snapshot + {HARNESS_DIR}/status.json root entry under one lock. Records the " +
+      "owned plan (one Todo row — registration does not authorize implementation), project, delivery kind, " +
+      "source/target branches and optional coordinator. `development` requires --branch-source/--branch-target; " +
+      "`verification/report-only` requires --completion-policy. Re-running after a crash between snapshot " +
+      "creation and registration recovers: the existing snapshot bytes are kept and only the root entry is " +
+      "written. Exit 0 success, 1 gate/IO refusal (no partial activation), 2 usage",
+  )
+  .option("--workflow <id>", "Workflow id (single safe path component)")
+  .option("--plan-id <id>", "Owned plan id (one independently owned plan per workflow on the normal route)")
+  .option("--plan-title <title>", "Owned plan title")
+  .option("--plan-file <path>", "Owned plan file path recorded on the row")
+  .option("--delivery-kind <kind>", `Delivery kind declared at registration (contract \u00a71): ${WORKFLOW_DELIVERY_KINDS.join(" | ")}`)
+  .option("--project <id>", "Project register id recorded on the snapshot")
+  .option("--branch-source <branch>", "Source branch (required for development)")
+  .option("--branch-target <branch>", "Target branch (required for development)")
+  .option("--completion-policy <text>", "Completion evidence policy (required for verification/report-only)")
+  .option("--started-at <timestamp>", "Registration timestamp (YYYY-MM-DD or RFC3339; default: now)")
+  .option("--harness <path>", "Harness dir override (default: resolved control {HARNESS_DIR})")
+  .action(
+    async (options: {
+      workflow?: string;
+      planId?: string;
+      planTitle?: string;
+      planFile?: string;
+      deliveryKind?: string;
+      project?: string;
+      branchSource?: string;
+      branchTarget?: string;
+      completionPolicy?: string;
+      startedAt?: string;
+      harness?: string;
+    }) => {
+      try {
+        const usage =
+          "usage: workflow register --workflow <id> --plan-id <id> --plan-title <title> --plan-file <path> " +
+          `--delivery-kind <${WORKFLOW_DELIVERY_KINDS.join("|")}> [--project <id>] [--branch-source <branch>] ` +
+          "[--branch-target <branch>] [--completion-policy <text>] [--started-at <ts>] [--harness <dir>]";
+        const missing = (
+          [
+            ["--workflow", options.workflow],
+            ["--plan-id", options.planId],
+            ["--plan-title", options.planTitle],
+            ["--plan-file", options.planFile],
+            ["--delivery-kind", options.deliveryKind],
+          ] as const
+        )
+          .filter(([, value]) => value === undefined || value.trim() === "")
+          .map(([flag]) => flag);
+        if (missing.length > 0) {
+          throw new SddScriptError(`missing required option(s): ${missing.join(", ")}\n${usage}`, 2);
+        }
+        if (!(WORKFLOW_DELIVERY_KINDS as readonly string[]).includes(options.deliveryKind!)) {
+          throw new SddScriptError(
+            `--delivery-kind must be one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")} \u2014 got ${JSON.stringify(options.deliveryKind)}\n${usage}`,
+            2,
+          );
+        }
+        // Shared workflow-id guard — the same contract every other `--workflow <id>`
+        // verb applies (reject ""/./.. and separators) so a hostile id never
+        // reaches the path join below (uniform exit 1, "invalid workflow id").
+        assertWorkflowId(options.workflow!);
+        const harnessDir = resolveProcessHarnessDir(options.harness);
+        if (!harnessDir) {
+          throw new Error(`harness dir not found from ${process.cwd()} \u2014 pass --harness <path>`);
+        }
+        // Store-root pinning (see `status workflow-close`): the register
+        // producer writes through the active ArtifactStore with fail-loud
+        // path agreement — the control harness root resolved above must
+        // ALWAYS be pinned as the store root.
+        setArtifactStore(createFsStore(harnessDir));
+        const result = await registerPlanWorkflow(options.workflow!, {
+          harnessDir,
+          plan: { id: options.planId!, title: options.planTitle!, file: options.planFile! },
+          deliveryKind: options.deliveryKind as (typeof WORKFLOW_DELIVERY_KINDS)[number],
+          ...(options.project !== undefined ? { project: options.project } : {}),
+          ...(options.branchSource !== undefined ? { branchSource: options.branchSource } : {}),
+          ...(options.branchTarget !== undefined ? { branchTarget: options.branchTarget } : {}),
+          ...(options.completionPolicy !== undefined ? { completionPolicy: options.completionPolicy } : {}),
+          ...(options.startedAt !== undefined ? { startedAt: options.startedAt } : {}),
+        });
+        console.log(
+          pc.green(
+            result.recovered
+              ? `workflow register: OK \u2014 ${result.workflowId} recovered (registration completed for the existing snapshot; its bytes were preserved)`
+              : `workflow register: OK \u2014 ${result.workflowId} registered`,
+          ),
+        );
+        console.log(`  snapshot: ${result.snapshotPath}`);
+      } catch (error) {
+        failScript(error, "workflow register");
+      }
+    },
+  );
 
 const migrateCommand = program
   .command("migrate")
