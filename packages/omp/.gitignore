@@ -1,5 +1,5 @@
 dist/
-extensions/
+/extensions/
 harness-skills/
 harness-commands/
 harness-agents/
