@@ -4,7 +4,9 @@ node_modules
 /.pnpm-store/
 secrets.env
 .secrets/
-.mstar/
+.mstar/**
+!.mstar/specs/
+!.mstar/specs/**
 .gitnexus/
 
 # ZCode client workspace state

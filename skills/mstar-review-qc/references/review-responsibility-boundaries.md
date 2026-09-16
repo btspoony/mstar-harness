@@ -7,7 +7,7 @@
 | **L1** Implementer | dev subagent | Per task | Write code + affected unit evidence; non-executable docs/policy may use `scoped-check` | `task-N-brief.md` |
 | **L2** Task reviewer | `code-reviewer` (default; generic fallback when the host agent list lacks it) — PM-dispatched subagent (SDD) | Per task, after implementer | Spec + quality for **one task** (diff-first; no full suite) | brief, report, **task-level** diff |
 | **L3** Plan QC tri (cross-review) | `qc-specialist` + `qc-specialist-2` + `qc-specialist-3` | After **all** tasks on branch | **Code-review seat** — diff, language/logic, security & contract lenses on **the assigned change and directly affected interfaces**; **not** the test-execution path | Branch `review-package` MERGE_BASE..HEAD |
-| **L4** QA | `qa-engineer` when **`QA gate: mandatory`**; else PM acceptance | After QC gate | DoD acceptance, residual verify, named affected **unit-test** verification only, Done recommendation | Review bundle + plan + **L1 evidence** + `status.json` |
+| **L4** QA | `qa-engineer` when **`QA gate: mandatory`**; else PM acceptance | After QC gate | DoD acceptance, residual verify, named affected **unit-test** verification only, Done recommendation | Review bundle + plan + **L1 evidence** + project register |
 
 PM sets **`QA gate`** per `mstar-roles/references/project-manager/qa-trigger-matrix.md`. L4 execution when dispatched → `mstar-roles/references/qa-engineer/acceptance-gate.md`.
 

@@ -39,7 +39,7 @@ mstar status workflow-close --workflow <id> [--harness <path>] [--ended-at <date
 2. compass `## Plans` + `{ITERATION_DIR}/README.md` 索引
 3. project roadmap / register
 
-- **禁止**伪造 `Done` 行、**禁止**为对齐而 close open residual —— reconciliation **不发明** Done/closed，也不为对齐关闭条目或放宽 `zero-residual` 规则；`allow-residual` 下已登记且披露的非阻断 open R# **保持 open**，不随 lifecycle 终结而“随之关闭”（真实 remaining finding 阻塞交付，而不是被静默关闭）
+- **禁止**伪造 `Done` 行、**禁止**为对齐而 close open residual —— reconciliation **不发明** Done/closed，也不为对齐关闭条目或放宽 `zero-residual` 规则；`allow-residual` 下已登记且披露的非阻断 open R# **保持 open**，不随 lifecycle 终结而“随之关闭”（真实 remaining finding 阻塞 `zero-residual` 交付，而不是被静默关闭）
 - **禁止**把新 tracked 产品/文档 commit 夹带进 Phase 6 —— 新发现的产品修复另开授权 workflow
 
 ## §6.4 Cleanup handoff（最后一步；显式、不自动）
@@ -57,6 +57,7 @@ Phase-6 gate 只查**本地 state**（valid terminal shape + 无 dangling lease 
 
 ## Standalone plans & abandonment
 
+- 独立 plan 交付生命周期的语义权威（注册 → 交付尾段 → verified merge → terminal close）→ 冻结契约 `{SPECS_DIR}/plan-workflow-lifecycle-contract.md`；本节仅固定 close 侧契约（同一命令 close、本地 gate 不验证远端 merged 证据）
 - `type: plan` 独立 lifecycle 在其 PR merge 后用**同一** completed-close 命令关闭（无第二 verb、无 `--outcome` / `--force`）
 - abandoned lifecycle **不得**静默跑 completed close：已 terminal（`failed` / `stopped`）的 snapshot 保持原状态，CLI 如实报告实际 status；completed close 只属于 verified-merged 完成
 

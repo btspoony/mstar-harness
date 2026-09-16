@@ -10,7 +10,7 @@
 
 **Execution:** mstar-sdd | inline
 
-**Main worktree branch:** [recorded residency of the primary checkout (main worktree) — PM observes and records before the lifecycle writes, then passes it unchanged in writable Assignments; never invented at check time, and never `branch.base` (that is a creation/merge anchor, not a residency fact)]
+**Main worktree branch**: [recorded residency of the primary checkout (main worktree) — PM observes and records before the lifecycle writes, then passes it unchanged in writable Assignments; never invented at check time, and never `branch.base` (that is a creation/merge anchor, not a residency fact)]
 
 ## Global Constraints
 

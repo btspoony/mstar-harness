@@ -32,7 +32,7 @@ description: Morning Star (启明星) harness **生命周期 / 授权语义权�
 
 ## 最小交付循环
 
-**per-plan**：`specify → clarify → plan` → `plan(locked) → tasks → implement`（多 task 默认 SDD）→ plan QC tri + **QA gate**（`mandatory` 派 QA 或 `pm-acceptance`）→ Done（`inline` 单席例外）。阶段细则 → **`mstar-phase-gates`**；QA 分级 → **`mstar-roles/references/project-manager/qa-trigger-matrix.md`**。
+**per-plan**：`specify → clarify → plan` → `plan(locked) → tasks → implement`（多 task 默认 SDD）→ plan QC tri + **QA gate**（`mandatory` 派 QA 或 `pm-acceptance`）→ Done（`inline` 单席例外）。阶段细则 → **`mstar-phase-gates`**；QA 分级 → **`mstar-roles/references/project-manager/qa-trigger-matrix.md`**。独立交付 development plan 在 Done 后继续交付尾段 `compound disposition → submit PR → merge-ready（resumable milestone）→ verify merge → terminal close/unregister/reconcile`（`verification/report-only` 按注册声明的替代完成政策，无强制 PR；注册与尾段语义/失败行为的权威 = 冻结契约 **`{SPECS_DIR}/plan-workflow-lifecycle-contract.md`**，PM 步骤序列 → **`mstar-roles/references/project-manager/plan-management.md`**）。迭代内 plan 行不各自走尾段，迭代整体走一次（见下行）。
 
 **迭代级**：`iteration-start → [per-plan cycle × N] → iteration-close → PR delivery → PR merge-ready loop`。细则 → **`mstar-iteration`**。
 
@@ -72,7 +72,7 @@ PM 在 Assignment 写 **`Task category`**（主类 + 可选 `secondary`）：
 | `docs` | `@product-manager` / `@architect` / `@writing-specialist` |
 | `audit` | `@code-reviewer`（mstar-audit 承载；大型仓库经 Assignment `Delegation: allowed (scout/explore only, read-only)` 扇出只读 scout；read-only advisory；不进入状态机） |
 
-**硬规则**：`quick` **从不**跳过 `specify → clarify → plan`；禁止把新 CLI/API/多模块/新测例标为 `quick`。已启用 `{HARNESS_DIR}` 时，首次 implement 前须有主 plan 路径 + `status.json` 登记（见 **`mstar-conventions`**）。
+**硬规则**：`quick` **从不**跳过 `specify → clarify → plan`；禁止把新 CLI/API/多模块/新测例标为 `quick`。已启用 `{HARNESS_DIR}` 时，首次 implement 前须有主 plan 路径 + `status.json` 登记（见 **`mstar-conventions`**）。workflow 注册本身是 authorized domain operation（经授权 producer 的引擎原语，不自创第二注册机制），语义 → 冻结契约 `{SPECS_DIR}/plan-workflow-lifecycle-contract.md`。
 
 ## `@explore` 边界
 
