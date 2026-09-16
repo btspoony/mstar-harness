@@ -34,7 +34,20 @@
   },
   "omp": {
     "name": "morning-star-harness",
-    "description": "Morning Star multi-agent harness skills and iteration commands for omp."
+    "description": "Morning Star multi-agent harness skills and iteration commands for omp.",
+    "settings": {
+      "modelHandoff": {
+        "type": "boolean",
+        "default": false,
+        "description": "When enabled, each new Morning Star iteration uses @slow for Prepare, then switches this coordinator session to handoffTarget after Phase 1 fully completes. Off by default."
+      },
+      "handoffTarget": {
+        "type": "enum",
+        "values": ["@default", "@smol"],
+        "default": "@default",
+        "description": "Coordinator model after a completed Phase 1. Used only when modelHandoff is enabled."
+      }
+    }
   },
   "publishConfig": {
     "access": "public"
