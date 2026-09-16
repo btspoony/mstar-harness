@@ -1097,6 +1097,43 @@ describe("declareWorkflowDeliveryKind — one-time kind declaration (seam S3 pop
     expect(readFileSync(path, "utf8")).toBe(after);
   });
 
+  test("a supplied anchor never overwrites a registered one: a conflict is refused with the field named, an identical value restates it (§1)", async () => {
+    const both = fixture({ branch: { source: "feature/registered", target: "main" } });
+    const before = readFileSync(both.path, "utf8");
+    await expect(
+      declareWorkflowDeliveryKind(id, both.dir, { deliveryKind: "development", branchSource: "feature/other", branchTarget: "main" }),
+    ).rejects.toThrow(/branch\.source is already "feature\/registered"/);
+    await expect(
+      declareWorkflowDeliveryKind(id, both.dir, { deliveryKind: "development", branchSource: "feature/registered", branchTarget: "release" }),
+    ).rejects.toThrow(/branch\.target is already "main"/);
+    // A refusal writes nothing: the registered anchors stay the snapshot's.
+    expect(readFileSync(both.path, "utf8")).toBe(before);
+
+    // Identical supplied values restate the registered anchors — the
+    // declaration completes over them instead of being refused.
+    const declared = await declareWorkflowDeliveryKind(id, both.dir, {
+      deliveryKind: "development",
+      branchSource: "feature/registered",
+      branchTarget: "main",
+      at: "2026-09-16T03:00:00Z",
+    });
+    expect(declared.branch).toEqual({ source: "feature/registered", target: "main" });
+    // The declaration stays ONE-TIME over the registered anchors too.
+    await expect(
+      declareWorkflowDeliveryKind(id, both.dir, { deliveryKind: "development", branchSource: "feature/registered", branchTarget: "main" }),
+    ).rejects.toThrow(/already declares/);
+
+    // A partially anchored snapshot keeps the registered anchor and gets the
+    // missing one filled — the rule is per field, not all-or-nothing.
+    const sourceOnly = fixture({ branch: { source: "feature/registered" } });
+    const filled = await declareWorkflowDeliveryKind(id, sourceOnly.dir, {
+      deliveryKind: "development",
+      branchSource: "feature/registered",
+      branchTarget: "main",
+    });
+    expect(filled.branch).toEqual({ source: "feature/registered", target: "main" });
+  });
+
   test("an incomplete declaration is refused before any write (shared per-kind coherence, §1)", async () => {
     const { dir, path } = fixture();
     const before = readFileSync(path, "utf8");

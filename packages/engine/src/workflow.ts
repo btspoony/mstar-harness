@@ -1260,8 +1260,11 @@ export type DeclareWorkflowDeliveryKindOptions = {
  * The declaration carries the kind's own evidence through the shared
  * `assertDeliveryRegistrationCoherence` rule, so it cannot mint an unclosable
  * lifecycle (a `development` kind needs its delivery anchors, a
- * `verification/report-only` kind its completion policy). The write lands in
- * the snapshot lock through the same protected writer as the close.
+ * `verification/report-only` kind its completion policy). A supplied delivery
+ * anchor either FILLS the missing one or restates the value the snapshot
+ * already registers; a contradicting value is refused, so the declaration can
+ * never re-point a lifecycle at another delivery. The write lands in the
+ * snapshot lock through the same protected writer as the close.
  */
 export async function declareWorkflowDeliveryKind(
   workflowId: string,
@@ -1309,10 +1312,29 @@ export async function declareWorkflowDeliveryKind(
     }
     // Existing anchors are preserved (an iteration-shaped `base`/`integration`
     // on an odd snapshot is never dropped); the validated document guarantees
-    // string-valued anchor keys.
+    // string-valued anchor keys. A supplied anchor either FILLS the missing one
+    // or restates the registered value — never replaces it: a kind-less
+    // historical snapshot may already carry `branch.source`/`branch.target`,
+    // and those anchors are the delivery identity its close is consulted
+    // against (§1/§3), so a contradicting declaration must not re-point the
+    // delivery at another branch. Restating the same value stays allowed
+    // (idempotent); a conflicting value is refused with the field named.
     const branch: Record<string, unknown> = isPlainObject(snapshot.branch) ? { ...snapshot.branch } : {};
-    if (opts.branchSource !== undefined) branch.source = opts.branchSource;
-    if (opts.branchTarget !== undefined) branch.target = opts.branchTarget;
+    for (const [anchor, supplied] of [
+      ["source", opts.branchSource],
+      ["target", opts.branchTarget],
+    ] as const) {
+      if (supplied === undefined) continue;
+      const registered = branch[anchor];
+      if (registered !== undefined && registered !== supplied) {
+        throw new Error(
+          `refusing to declare a delivery kind for workflow ${JSON.stringify(workflowId)}: branch.${anchor} is already ` +
+            `${JSON.stringify(registered)} \u2014 the supplied ${JSON.stringify(supplied)} conflicts with the anchor the snapshot ` +
+            `registers, and the registered delivery anchor is never overwritten (\u00a71)`,
+        );
+      }
+      branch[anchor] = supplied;
+    }
     const next: WorkflowSnapshot = { ...snapshot, delivery_kind: kind, updated_at: at };
     if (Object.keys(branch).length > 0) next.branch = branch as WorkflowBranchAnchors;
     if (opts.completionPolicy !== undefined) next.completion_policy = opts.completionPolicy;

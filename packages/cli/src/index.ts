@@ -1465,7 +1465,10 @@ workflowCommand
       "merge itself); `verification/report-only` records the fulfilment of its registered completion policy (\u00a71). " +
       "With --declare-kind, an ACTIVE `type: plan` snapshot that carries no kind (audit promotion / v1 lift from " +
       "before the producers declared one) receives its kind and its per-kind evidence ONCE \u2014 a second declaration, " +
-      "even with the same value, and any terminal snapshot, are refused. Authorized exactly like the close: a " +
+      "even with the same value, and any terminal snapshot, are refused. A supplied --branch-source/--branch-target " +
+      "fills a missing delivery anchor or restates the registered one; a value conflicting with an anchor the " +
+      "snapshot already carries is refused (the registered anchor is the delivery identity, never overwritten). " +
+      "Authorized exactly like the close: a " +
       "coordinated workflow's snapshot is written only for its own bound coordinator envelope (--session). " +
       "Exit 0 success/no-op, 1 gate/IO refusal, 2 usage",
   )
