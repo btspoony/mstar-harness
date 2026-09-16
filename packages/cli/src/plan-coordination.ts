@@ -128,9 +128,9 @@ const WORKFLOW_VERBS: Record<string, true> = {
 };
 
 /** The scoped coordination families this module registers, with their verbs. */
-const SCOPED_VERB_FAMILIES: ReadonlyArray<{ token: string; verbs: Record<string, true> }> = [
-  { token: "plan", verbs: PLAN_VERBS },
-  { token: "workflow", verbs: WORKFLOW_VERBS },
+const SCOPED_VERB_FAMILIES: ReadonlyArray<{ family: string; verbs: Record<string, true> }> = [
+  { family: "plan", verbs: PLAN_VERBS },
+  { family: "workflow", verbs: WORKFLOW_VERBS },
 ];
 
 /**
@@ -158,12 +158,12 @@ const COMMAND_POSITION = 2;
  * unrelated invocations never receive a coordination-shaped payload.
  */
 export function planUsageFailurePayload(argv: readonly string[], message: string): string | null {
-  const family = SCOPED_VERB_FAMILIES.find((entry) => entry.token === argv[COMMAND_POSITION]);
-  if (family === undefined) return null;
+  const matched = SCOPED_VERB_FAMILIES.find((entry) => entry.family === argv[COMMAND_POSITION]);
+  if (matched === undefined) return null;
   const verb = argv.slice(COMMAND_POSITION + 1).find((token) => !token.startsWith("-"));
   return JSON.stringify({
     ok: false,
-    operation: verb !== undefined && family.verbs[verb] === true ? verb : family.token,
+    operation: verb !== undefined && matched.verbs[verb] === true ? verb : matched.family,
     code: "usage",
     message,
   });
