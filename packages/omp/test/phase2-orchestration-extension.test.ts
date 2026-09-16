@@ -87,6 +87,7 @@ import phase2OrchestrationFactory, {
   PHASE2_CUSTOM_TYPE,
   PHASE2_NOTICE_CUSTOM_TYPE,
   derivePhase2State,
+  phase2Seams,
   readPhase2Records,
   type Phase2Record,
 } from "../src/extensions/phase2-orchestration";
@@ -904,9 +905,9 @@ describe("phase2 host adapter", () => {
 
     // Same when a delivery is queued or in flight: never duplicated.
     const parkedDelivery = Promise.withResolvers<void>();
-    jobs.registerDeliverySink(OWNER, async () => {
-      // Parked on purpose: the host's delivery state stays pending for the
-      // remainder of the case, which is exactly the condition to test.
+    const stopSink = jobs.registerDeliverySink(OWNER, async () => {
+      // Parked on purpose: the host's delivery state stays pending until this
+      // sub-case is done, which is exactly the condition to test.
       await parkedDelivery.promise;
     });
     const settleTwo = startJob(jobs, "job-2", "second background compile");
@@ -915,6 +916,46 @@ describe("phase2 host adapter", () => {
     expect(snapshotOfJobs(jobs).delivery.delivering || snapshotOfJobs(jobs).delivery.queued > 0).toBe(true);
     await harness.emitAgentEnd();
     expect(harness.advisories()).toHaveLength(1);
+    stopSink();
+
+    // A job that settles while the decision is still awaiting the settings read
+    // is not swallowed by that decision's consumption: the ids consumed are
+    // exactly the ones the decision sampled.
+    const beforeRace = harness.advisories().length;
+    const heldSettings = Promise.withResolvers<void>();
+    const realReadSettings = phase2Seams.readSettings;
+    let seamEntered = false;
+    phase2Seams.readSettings = async (cwd) => {
+      seamEntered = true;
+      await heldSettings.promise;
+      return realReadSettings(cwd);
+    };
+    const settleThree = startJob(jobs, "job-3", "third background compile");
+    const inFlight = harness.emitAgentEnd();
+    // Advance the emission to the held settings read without wall-clock waits.
+    for (let tick = 0; tick < 2000 && !seamEntered; tick += 1) await Promise.resolve();
+    expect(seamEntered).toBe(true);
+    settleThree();
+    await awaitSettled(jobs, "job-3");
+    heldSettings.resolve();
+    await inFlight;
+    phase2Seams.readSettings = realReadSettings;
+
+    // This turn may have nudged for the still-running observation, at most once.
+    const afterRace = harness.advisories().length;
+    expect(afterRace - beforeRace).toBeLessThanOrEqual(1);
+    expect(snapshotOfJobs(jobs).recent.some((job) => job.id === "job-3")).toBe(true);
+    // The settle is native delivery's, so the next turn must not nudge a second
+    // time — under a second-snapshot consumption it would.
+    await harness.emitAgentEnd();
+    expect(harness.advisories()).toHaveLength(afterRace);
+
+    // Nothing delivered at all is still a real opportunity: reminded once, then
+    // bounded by the latch.
+    startJob(jobs, "job-4", "fourth background compile");
+    await harness.emitAgentEnd();
+    await harness.emitAgentEnd();
+    expect(harness.advisories().length - afterRace).toBeLessThanOrEqual(1);
 
     // No completion text is ever reproduced by the plugin notice.
     for (const advisory of harness.advisories()) {
