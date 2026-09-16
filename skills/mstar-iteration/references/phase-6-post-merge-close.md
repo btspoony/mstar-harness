@@ -59,7 +59,7 @@ Phase-6 gate 只查**本地 state**（valid terminal shape + 无 dangling lease 
 
 ## Standalone plans & abandonment
 
-- 独立 plan 交付生命周期的语义权威（注册 → 交付尾段 → verified merge → terminal close）→ 冻结契约 `{SPECS_DIR}/plan-workflow-lifecycle-contract.md`；本节仅固定 close 侧契约（同一命令 close、本地 gate 不验证远端 merged 证据）
+- 独立 plan 交付生命周期的语义权威（注册 → 交付尾段 → verified merge → terminal close）→ 冻结契约 `mstar-artifacts/references/plan-workflow-lifecycle-contract.md`；本节仅固定 close 侧契约（同一命令 close、本地 gate 不验证远端 merged 证据）
 - `type: plan` 独立 lifecycle 在其 PR merge 后用**同一** completed-close 命令关闭（无第二 verb、无 `--outcome` / `--force`）
 - abandoned lifecycle **不得**静默跑 completed close：已 terminal（`failed` / `stopped`）的 snapshot 保持原状态，CLI 如实报告实际 status；completed close 只属于 verified-merged 完成
 

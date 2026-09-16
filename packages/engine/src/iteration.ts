@@ -639,7 +639,7 @@ export function evaluatePostMergeClose(snapshotDoc: SnapshotDoc, rootDoc: unknow
             violation(
               "high",
               "PHASE6_PLAN_ROW_NOT_DONE",
-              `Workflow '${String(workflowId)}' is completed but owned plan row '${String(row.id)}' is ${JSON.stringify(row.status)} \u2014 a completed close requires every plan row Done (plan-workflow-lifecycle-contract \u00a73 terminal stage)`,
+              `Workflow '${String(workflowId)}' is completed but owned plan row '${String(row.id)}' is ${JSON.stringify(row.status)} \u2014 a completed close requires every plan row Done (mstar-artifacts/references/plan-workflow-lifecycle-contract.md \u00a73 terminal stage)`,
               "Bring the owned plan row to Done (or close the lifecycle as failed/stopped with a recorded reason), then re-run 'mstar iteration gate --phase 6 --workflow <id>'",
             ),
           );

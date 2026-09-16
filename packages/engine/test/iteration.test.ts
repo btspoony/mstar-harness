@@ -528,7 +528,7 @@ function phase6PlanSnapshot(overrides: Record<string, unknown> = {}): SnapshotDo
   };
 }
 
-describe("evaluatePostMergeClose — plan-type delivery-kind consultation (plan-workflow-lifecycle-contract §6 S3)", () => {
+describe("evaluatePostMergeClose — plan-type delivery-kind consultation (mstar-artifacts/references/plan-workflow-lifecycle-contract.md §6 S3)", () => {
   test("registered development plan: Done owned row + registered kind + complete evidence + no leases + root entry gone → closeable", () => {
     const result = evaluatePostMergeClose(phase6PlanSnapshot(), phase6Root([]));
     expect(result.ok).toBe(true);

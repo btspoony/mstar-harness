@@ -421,7 +421,7 @@ describe("mstar iteration gate --phase 6", () => {
         expect(result.stderr).toBe("");
         expect(result.stdout).toContain("phase 6 (post-merge close): OK");
       },
-      // Seam S3 (plan-workflow-lifecycle-contract §6 S3): the phase-6 gate
+      // Seam S3 (mstar-artifacts/references/plan-workflow-lifecycle-contract.md §6 S3): the phase-6 gate
       // consults the registered delivery-kind evidence — the shared
       // `snapshotDoc()` fixture carries the complete development shape
       // (kind + delivery anchors + collected evidence).
@@ -522,7 +522,7 @@ describe("mstar iteration gate --phase 6", () => {
 
 /**
  * CLI `mstar workflow evidence` — the authorized delivery-evidence recording
- * verb (plan-workflow-lifecycle-contract §3/§4c/§4d/§4f, seam S3). Thin
+ * verb (mstar-artifacts/references/plan-workflow-lifecycle-contract.md §3/§4c/§4d/§4f, seam S3). Thin
  * wrapper over engine `recordWorkflowDelivery`: the payload JSON is merged
  * into the snapshot's `delivery` block under the snapshot lock, so evidence is
  * collected stage by stage and the close consultation can pass. Contract

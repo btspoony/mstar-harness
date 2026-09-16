@@ -15,6 +15,7 @@ description: "Morning Star plan harness artifacts — `{PLAN_DIR}` main plans an
 | Plan template (Global Constraints, Interfaces) | `templates/plan.main.md` |
 | knowledge / iterations / specs boundaries and indexes | `references/knowledge-and-designs.md` |
 | `status.json` (v2 root), workflow snapshots, plan-scoped `coordination` / session / handoff / revision schema, project register, residual severity / lifecycle, engine-check queries | `references/status-and-residuals.md` |
+| Plan-level workflow lifecycle: delivery-kind declaration, stages, evidence contracts, engine seams | `references/plan-workflow-lifecycle-contract.md` |
 | Empty-repo `status.json` template | `templates/status.empty.json` (`templates/README.md`) |
 | Tech-debt rollup (read-only) | `mstar status tech-debt [path]` (engine `techDebtRollup`; see `references/status-and-residuals.md`) |
 
@@ -66,3 +67,4 @@ Field semantics, severity mapping, findings cleanup modes, archive flow, and `jq
 - `references/plan-files-and-reports.md` — 主 plan / review bundle 命名、QC 波次、durable summaries
 - `references/status-and-residuals.md` — `status.json` (v2), workflow snapshots, plan-scoped coordination (bind / revision / session / handoff / reconcile), project register, residual severity / lifecycle / engine-check queries
 - `references/knowledge-and-designs.md` — knowledge / iterations / specs 边界与索引
+- `references/plan-workflow-lifecycle-contract.md` — plan-level workflow lifecycle contract: delivery-kind declaration, stages, evidence contracts, engine seams

@@ -739,7 +739,7 @@ describe("phase2 host adapter", () => {
     const advisories = harness.advisories();
     expect(advisories).toHaveLength(1);
     expect(advisories[0]!.options).toMatchObject({ triggerTurn: true, deliverAs: "followUp" });
-    expect(advisories[0]!.content).toContain("phase2-proactive-scheduling.md");
+    expect(advisories[0]!.content).toContain("phase-2-worktree-lease.md");
     expect(advisories[0]!.content).toContain("observation, not a dispatch");
     // It points at the checkpoint; it never asserts that a plan is ready.
     expect(advisories[0]!.content).not.toContain("plan-a");

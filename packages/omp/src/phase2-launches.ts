@@ -2,9 +2,8 @@
  * Phase-2 launch admission — the local transport-intent journal for extra
  * plan-scoped primary sessions.
  *
- * Primary spec: `{SPECS_DIR}/omp-phase2-instances.md` §C (capacity, reservation
- * and recovery) + §D (skill-driven transport boundary); plan
- * the registered Phase-2 instances plan T2. This module owns exactly one file —
+ * Primary spec: `mstar-host/references/omp.md` § Phase-2 plan instances (capacity,
+ * reservation and recovery, and the skill-driven transport boundary). This module owns exactly one file —
  * `{WORKFLOW_DIR}/<workflow-id>/omp-launches.json` — and that file is transport
  * bookkeeping only: never lifecycle state, never a second ownership truth, and
  * never a substitute for the engine's scope/lease/handoff verbs.

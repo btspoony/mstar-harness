@@ -1,5 +1,5 @@
 /**
- * Plan-scoped coordination core (`.mstar/specs/plan-scoped-pm.md` §B–§D).
+ * Plan-scoped coordination core (mstar-iteration/references/plan-scoped-pm.md).
  *
  * Public surface of the scoped plan-PM route:
  *
