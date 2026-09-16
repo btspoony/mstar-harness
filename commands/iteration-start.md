@@ -105,13 +105,13 @@ PM must print this block before §6; all `[ ]` must be `[x]`:
 - [ ] product-manager / architect / writing-specialist invokes completed — 编辑 compass / plans / specs / **`<iteration-id>/` package**；**未**向 `{KNOWLEDGE_DIR}/` 新增
 - [ ] PM final lock: compass `status: locked`; Prepare gates pass (blocked plans documented)
 - [ ] Branch policy locked: `iteration_base_branch` / `spec_integration_branch` / `target_branch` recorded in compass / `status.json`
-- [ ] **THEN**: transfer reviewed changes + commit + push `iteration/<iteration-id>` **in the integration worktree** (never the primary checkout)
+- [ ] **THEN**（§6 按 §2.3 checklist step 7 执行）：已 review 的本轮改动在该 integration checkout 上 commit，`iteration/<iteration-id>` 已 push —— never the primary checkout
 
 ## 6. Integration Branch
 
-Per **`mstar-iteration/references/phase-2-worktree-lease.md` §2.3**：create the **integration worktree** — a dedicated linked checkout **distinct from the primary checkout**（`git worktree add <path> -b <spec_integration_branch> <iteration_base_branch>`；primary 分支**不**切换）；register `iteration_base_branch` / `spec_integration_branch` / `target_branch` in compass frontmatter **and** `status.json` metadata；record the observed primary branch as **`Main worktree branch`** in the main plan header；**transfer only the reviewed §5 changes** into the integration worktree, commit there, then restore the primary checkout's corresponding uncommitted docs without switching its branch（Phase-1 bounded exception → `phase-1-prepare.md` §1.6；**不得**搬运无关用户改动）；push。**STOP** if `iteration_base_branch` / `target_branch` missing — never default `main`/`master`.
+**Call site — do not restate the sequence.** Execute **`mstar-iteration/references/phase-2-worktree-lease.md` §2.3**「Integration worktree (Phase 2 entry) + control root」checklist **steps 1–7** —— 该 checklist 是「建立独立 integration checkout → 记录 `integration_worktree_path` → **step 7** transfer 已 review 的本轮改动、在该 checkout 上 commit、push `spec_integration_branch`」序列的**唯一 home**（本命令只做 call site，不再重述这三步）。本命令另记两件 command 层事实：register `iteration_base_branch` / `spec_integration_branch` / `target_branch` in compass frontmatter **and** `status.json` metadata；record the observed primary branch as **`Main worktree branch`** in the main plan header。**STOP** if `iteration_base_branch` / `target_branch` missing — never default `main`/`master`.
 
-**Phase 1 完成 anchor（pointer only — 本命令不承载 marker）**：`push` 之后必须执行 `phase-1-lock` 的 host 动作 —— 其 marker 与触发条件由 **`mstar-iteration/references/phase-2-worktree-lease.md` §2.3**「Integration worktree (Phase 2 entry) + control root」checklist tail 承载（integration checkout 已记录 + `spec_integration_branch` 已 push 才算走到该点）。
+**Phase 1 完成 anchor（pointer only — 本命令不承载 marker）**：checklist **step 7** 走完后必须执行 `phase-1-lock` 的 host 动作 —— 其 marker 与触发条件由 **`mstar-iteration/references/phase-2-worktree-lease.md` §2.3**「Integration worktree (Phase 2 entry) + control root」checklist tail 承载。
 
 **Parenthetical**：本处引用的 §2.3 是 **Phase 1** 步骤 —— 它**不**触发 `phase-2-entry` anchor（后者只在 Phase 2 execute/resume entry、即 §2.4 之前触发）；Phase 2 resume 再次走到 §2.3 时 `phase-1-lock` 已在 Phase 1 完成，不再重复调用。
 

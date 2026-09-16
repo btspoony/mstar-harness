@@ -91,7 +91,7 @@ Carrier locations — the four markers in the shared corpus (all four live under
 | File | Location | Anchor |
 |------|----------|--------|
 | `mstar-iteration/references/phase-1-prepare.md` | §1.5 tail, after the v2 status registration (the workflow id exists there) | `iteration-entry` |
-| `mstar-iteration/references/phase-2-worktree-lease.md` | §2.3 「Integration worktree (Phase 2 entry) + control root」 checklist tail, after the integration checkout, the reviewed changes and the push — the Phase 1 route reaches it through `iteration-start` §6, which carries only a pointer | `phase-1-lock` |
+| `mstar-iteration/references/phase-2-worktree-lease.md` | §2.3 「Integration worktree (Phase 2 entry) + control root」 checklist tail, after step 7 (transfer + commit + push) — the Phase 1 route reaches it through `iteration-start` §6, which carries a pointer only | `phase-1-lock` |
 | `mstar-iteration/references/phase-2-worktree-lease.md` | immediately before the `## 2.4 Per-plan loop` heading (the Phase 2 execute/resume entry; §2.3 is the Phase-1-reused step and triggers nothing) | `phase-2-entry` |
 | `mstar-iteration/references/phase-2-worktree-lease.md` | `### Rescheduling checkpoint` | `rescheduling-checkpoint` (the five frozen reason names are handed off verbatim) |
 
