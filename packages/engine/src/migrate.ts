@@ -241,6 +241,19 @@ export type MigratePlan = {
    * is documented, not amended here).
    */
   deliveryKindRequired: string[];
+  /**
+   * Ids of the ACTIVE (running/paused) standalone plan snapshots the single
+   * `opts.deliveryKind` declaration would be stamped onto when MORE THAN ONE
+   * lift qualifies. The declaration is one (kind, anchors, policy) tuple — one
+   * delivery identity, and the kind is per-workflow registration evidence (§1)
+   * — so it cannot describe several lifecycles at once. Non-empty means the
+   * plan is NOT applicable: `applyMigratePlan` refuses it and the CLI reports
+   * the ambiguity as usage (exit 2) before any write, so the operator migrates
+   * the tree in batches of one declared plan instead of pinning one identity
+   * onto several. Empty when no declaration was given or exactly one lift
+   * qualifies; terminal lifts are exempt like `deliveryKindRequired`.
+   */
+  deliveryKindAmbiguous: string[];
   notesFiles: MigrateNotesFile[];
   register: MigrateRegister | null;
   roadmap: MigrateRoadmap | null;
@@ -740,6 +753,7 @@ export function migrateHarnessTree(root: string, opts: MigrateOptions = {}): Mig
       message: `no-op: ${statusPath} is already at schema version 2 (migrated) \u2014 nothing to do`,
       snapshots: [],
       deliveryKindRequired: [],
+      deliveryKindAmbiguous: [],
       notesFiles: [],
       register: null,
       roadmap: null,
@@ -823,6 +837,24 @@ export function migrateHarnessTree(root: string, opts: MigrateOptions = {}): Mig
   const deliveryKindRequired = snapshots
     .filter((snapshot) => snapshot.type === "plan" && snapshot.status !== "completed" && snapshot.data.delivery_kind === undefined)
     .map((snapshot) => snapshot.id);
+
+  // The declaration is ONE (kind, anchors, policy) tuple — a single delivery
+  // identity, and the kind is per-workflow registration evidence (§1) — so it
+  // describes exactly one lifted lifecycle. A v1 tree whose lift creates 2+
+  // ACTIVE standalone plan snapshots cannot be declared in one run: stamping
+  // the tuple onto all of them would pin one branch/policy identity onto
+  // lifecycles it may not describe. The count guard reports those candidates
+  // instead of choosing for the operator — the plan is not applicable (apply
+  // refuses, the CLI reports usage, exit 2) and the tree migrates in batches of
+  // one declared plan. Terminal lifts are exempt, like `deliveryKindRequired`.
+  const declaredKindTargets =
+    declaration.deliveryKind === undefined
+      ? []
+      : snapshots
+          .filter((snapshot) => snapshot.type === "plan" && snapshot.status !== "completed" && snapshot.data.delivery_kind !== undefined)
+          .map((snapshot) => snapshot.id)
+          .sort(compareIds);
+  const deliveryKindAmbiguous = declaredKindTargets.length > 1 ? declaredKindTargets : [];
 
  // 2b. Cross-class lifecycle-id uniqueness (Phase-5 F2, Greptile P1):
  // plan rows are unique within plans[] (guard above) and compass ids are
@@ -928,6 +960,7 @@ export function migrateHarnessTree(root: string, opts: MigrateOptions = {}): Mig
     message: `planned migration of ${snapshots.length} lifecycles (${steps.length} steps)`,
     snapshots,
     deliveryKindRequired,
+    deliveryKindAmbiguous,
     notesFiles,
     register,
     roadmap,
@@ -953,6 +986,18 @@ export function migrateHarnessTree(root: string, opts: MigrateOptions = {}): Mig
 export async function applyMigratePlan(plan: MigratePlan): Promise<MigrateResult> {
   if (plan.dryRun) {
     return { applied: false, message: `dry-run: ${plan.steps.length} steps planned (source \u2192 destination), zero writes` };
+  }
+  // A single declaration describes ONE delivery identity, so a plan that would
+  // stamp it onto 2+ active standalone lifts is not applicable — the apply
+  // boundary refuses it too (the CLI reports the same condition as usage
+  // before any write), checked first because the operator DID pass a
+  // declaration and the batch split is the actionable reason.
+  if (plan.deliveryKindAmbiguous.length > 0) {
+    throw new Error(
+      `refusing to apply migration: one delivery declaration cannot describe ` +
+        `${plan.deliveryKindAmbiguous.length} active standalone plan lifts (${plan.deliveryKindAmbiguous.join(", ")}) \u2014 ` +
+        `migrate them in batches of one declared lifecycle (CLI: run migrate once per plan, each with its own --delivery-kind)`,
+    );
   }
   // A plan that would lift ACTIVE standalone plan snapshots without a declared
   // delivery kind is not applicable (contract §1/§4a): the apply boundary is

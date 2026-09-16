@@ -8,7 +8,8 @@
  * - 1 = plan-invalid (planner refused: no/unrecognized v1 status.json,
  * unliftable or duplicate plans[] rows, unsafe ids, an incoherent
  * delivery declaration)
- * - 2 = usage (an ACTIVE standalone plan lift without --delivery-kind) or
+ * - 2 = usage (an ACTIVE standalone plan lift without --delivery-kind, or a
+ * single declaration that cannot describe 2+ ACTIVE standalone plan lifts) or
  * apply-failure (executor threw mid-apply; the root v2 replacement
  * is the commit point, so the v1 root stays intact for a re-run)
  *
@@ -27,7 +28,10 @@
  * lifted live `type: plan` lifecycle must declare one, and the caller passes
  * it explicitly — never inferred, never defaulted in code. A tree whose lift
  * would create an active kind-less plan snapshot is refused as usage (exit 2)
- * before any write.
+ * before any write. The declaration is ONE identity, so it may describe
+ * exactly one lift: a tree with 2+ ACTIVE standalone plans is refused as
+ * usage (exit 2, plan ids listed) and migrates in batches of one — no
+ * per-plan flag syntax exists on purpose.
  */
 import {
   applyMigratePlan,
@@ -136,6 +140,26 @@ export async function runMigrateCommand(options: MigrateCliOptions): Promise<voi
     } else {
       console.log(pc.yellow(`migrate: ${plan.message}`));
     }
+    return;
+  }
+
+  // One declaration is ONE delivery identity (kind + anchors + policy), so it
+  // can describe exactly one lifted lifecycle. A tree whose lift would create
+  // 2+ ACTIVE standalone plans is refused as usage (exit 2) before any write,
+  // with the plan ids: the operator migrates in batches of one instead of
+  // pinning one identity onto several lifecycles (the engine's apply boundary
+  // refuses the same plan).
+  if (plan.deliveryKindAmbiguous.length > 0) {
+    const message =
+      `a single delivery declaration cannot describe ${plan.deliveryKindAmbiguous.length} active standalone plan lifts ` +
+      `(${plan.deliveryKindAmbiguous.join(", ")}) \u2014 migrate them in batches of one declared plan, ` +
+      `running migrate once per plan with that plan's own --delivery-kind evidence`;
+    if (options.json) {
+      console.log(JSON.stringify({ ok: false, root, phase: "plan", exitCode: 2, error: message }));
+    } else {
+      console.error(pc.red(`migrate: ${message}`));
+    }
+    process.exitCode = 2;
     return;
   }
 
