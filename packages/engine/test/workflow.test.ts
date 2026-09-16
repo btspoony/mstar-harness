@@ -38,11 +38,14 @@ import {
   isTerminalSnapshot,
   WORKFLOW_SNAPSHOT_FILE,
   readWorkflowSnapshot,
+  registerPlanWorkflow,
   validateWorkflowSnapshot,
   writeWorkflowSnapshot,
+  type RegisterPlanWorkflowOptions,
 } from "../src/workflow.js";
 import { artifactVersion, CoordinationError } from "../src/coordination-write.js";
 import { createFsStore, setArtifactStore, type ArtifactDoc, type ArtifactStore } from "../src/store.js";
+import { validateStatus } from "../src/status.js";
 
 function tmpRoot(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix));
@@ -855,8 +858,268 @@ describe("coordinated-writer — coordinated close authorization", () => {
 
   test("closes an uncoordinated workflow with no session (unchanged behavior)", async () => {
     const { dir, path, snapshot } = fixture({ coordination: undefined });
-    const closed = await closeWorkflow(id, dir, { endedAt });
+    const closed = await closeWorkflow(id, dir, { endedAt, sessionPath: undefined });
     expect(closed).toEqual({ ...JSON.parse(JSON.stringify(snapshot)), status: "completed", ended_at: endedAt, updated_at: endedAt });
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual(closed);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// registerPlanWorkflow — generic registration producer (seam S1, contract
+// §2/§4a/§6): create-only `type: plan` snapshot + root entry under one lock,
+// mirroring the audit-promotion primitive sequence; refusals never leave
+// partial activation; crash/retry recovery preserves identity/timestamps.
+// ---------------------------------------------------------------------------
+
+describe("validateWorkflowSnapshot — registration-declared fields (contract §1)", () => {
+  test("valid delivery_kind / project / completion_policy pass on any snapshot type", () => {
+    for (const type of ["plan", "iteration"] as const) {
+      const snapshot = validSnapshot({
+        type,
+        delivery_kind: "development",
+        project: "engine",
+        completion_policy: "acceptance report at plans/x/report.md",
+      });
+      expect(validateWorkflowSnapshot(snapshot).ok).toBe(true);
+    }
+    expect(validateWorkflowSnapshot(validSnapshot({ delivery_kind: "verification/report-only" })).ok).toBe(true);
+  });
+
+  test("unknown delivery_kind is refused (never inferred, never free-form)", () => {
+    expectViolations(validateWorkflowSnapshot(validSnapshot({ delivery_kind: "stealth" })), "workflow.snapshot.invalid-delivery-kind");
+    expectViolations(validateWorkflowSnapshot(validSnapshot({ delivery_kind: 7 })), "workflow.snapshot.invalid-delivery-kind");
+  });
+
+  test("empty project / completion_policy are refused", () => {
+    expectViolations(validateWorkflowSnapshot(validSnapshot({ project: "" })), "workflow.snapshot.invalid-project");
+    expectViolations(validateWorkflowSnapshot(validSnapshot({ completion_policy: "" })), "workflow.snapshot.invalid-completion-policy");
+  });
+});
+
+describe("registerPlanWorkflow — generic registration producer (seam S1)", () => {
+  const id = "20260916-plan-register-fixture";
+  const roots: string[] = [];
+  afterEach(() => {
+    setArtifactStore(undefined);
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  function harness(): { root: string; statusPath: string; dir: string; snapshotPath: string } {
+    const root = tmpRoot("workflow-register-");
+    roots.push(root);
+    setArtifactStore(createFsStore(root));
+    return { root, statusPath: join(root, "status.json"), dir: join(root, "workflows", id), snapshotPath: join(root, "workflows", id, WORKFLOW_SNAPSHOT_FILE) };
+  }
+
+  function options(root: string, overrides: Partial<RegisterPlanWorkflowOptions> = {}): RegisterPlanWorkflowOptions {
+    return {
+      harnessDir: root,
+      plan: { id: "20260916-plan-example", title: "Example plan", file: "plans/20260916-plan-example.md" },
+      deliveryKind: "development",
+      project: "engine",
+      branchSource: "feature/20260916-plan-example",
+      branchTarget: "main",
+      startedAt: "2026-09-16T00:00:00.000Z",
+      ...overrides,
+    };
+  }
+
+  test("registers a standalone development plan: snapshot + root entry under one lock, fields recorded", async () => {
+    const { root, statusPath, snapshotPath } = harness();
+    const result = await registerPlanWorkflow(id, options(root));
+
+    expect(result.recovered).toBe(false);
+    expect(result.workflowId).toBe(id);
+    expect(result.snapshotPath).toBe(snapshotPath);
+    expect(existsSync(snapshotPath)).toBe(true);
+
+    const snapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as Record<string, unknown>;
+    expect(snapshot).toMatchObject({
+      schema_version: 1,
+      id,
+      type: "plan",
+      status: "running",
+      started_at: "2026-09-16T00:00:00.000Z",
+      updated_at: "2026-09-16",
+      delivery_kind: "development",
+      project: "engine",
+      branch: { base: "feature/20260916-plan-example", target: "main" },
+    });
+    // One owned plan row, Todo — registration does not authorize implementation.
+    expect(snapshot.plans).toEqual([{ id: "20260916-plan-example", title: "Example plan", file: "plans/20260916-plan-example.md", status: "Todo" }]);
+
+    const rootDoc = JSON.parse(readFileSync(statusPath, "utf8")) as Record<string, unknown>;
+    expect(rootDoc.workflows).toEqual([{ id, type: "plan", started_at: "2026-09-16T00:00:00.000Z", dir: `workflows/${id}` }]);
+
+    // Both documents validate against the harness (root+snapshot pairing).
+    expect(validateWorkflowSnapshot(snapshot).ok).toBe(true);
+    expect(validateStatus(statusPath).ok).toBe(true);
+  });
+
+  test("second register refuses without mutating bytes (create-only idempotence)", async () => {
+    const { root, statusPath, snapshotPath } = harness();
+    await registerPlanWorkflow(id, options(root));
+    const beforeSnapshot = readFileSync(snapshotPath, "utf8");
+    const beforeRoot = readFileSync(statusPath, "utf8");
+
+    await expect(registerPlanWorkflow(id, options(root))).rejects.toThrow(/already registered/);
+    expect(readFileSync(snapshotPath, "utf8")).toBe(beforeSnapshot);
+    expect(readFileSync(statusPath, "utf8")).toBe(beforeRoot);
+  });
+
+  test.each([
+    { name: "development without branches", overrides: { deliveryKind: "development", branchSource: undefined, branchTarget: undefined } },
+    { name: "development with target only", overrides: { deliveryKind: "development", branchSource: undefined } },
+    { name: "verification/report-only without completion policy", overrides: { deliveryKind: "verification/report-only", branchSource: undefined, branchTarget: undefined } },
+    { name: "unknown delivery kind", overrides: { deliveryKind: "stealth" } },
+    { name: "missing plan title", overrides: { plan: { id: "p", title: "", file: "plans/p.md" } } },
+  ])("missing required fields refuse before any write: $name", async ({ overrides }) => {
+    const { root } = harness();
+    await expect(registerPlanWorkflow(id, options(root, overrides as Partial<RegisterPlanWorkflowOptions>))).rejects.toThrow(
+      /registerPlanWorkflow/,
+    );
+    // Refusal before any write — no partial activation anywhere.
+    expect(existsSync(join(root, "workflows"))).toBe(false);
+    expect(existsSync(join(root, "status.json"))).toBe(false);
+  });
+
+  test("a failed register write rolls back the created snapshot so a retry converges", async () => {
+    const { root, statusPath, snapshotPath } = harness();
+    // Conflicting root state (same trick as the audit-promotion W-001 case):
+    // a listed workflow whose snapshot is missing fails validateStatusV2 for
+    // the whole document — the refusal fires only AFTER this call already
+    // wrote its own snapshot, so the rollback is what prevents a partial
+    // activation.
+    const staleRoot = {
+      version: 2,
+      updated_at: "2026-09-15",
+      workflows: [{ id: "other-wf", type: "plan", started_at: "2026-09-15T00:00:00.000Z", dir: "workflows/other-wf" }],
+    };
+    mkdirSync(root, { recursive: true });
+    writeFileSync(statusPath, JSON.stringify(staleRoot, null, 2));
+
+    await expect(registerPlanWorkflow(id, options(root))).rejects.toThrow(/invalid status\.json/);
+    // Rollback: only this call's created snapshot (and its now-empty dir) are gone.
+    expect(existsSync(snapshotPath)).toBe(false);
+    expect(existsSync(join(root, "workflows", id))).toBe(false);
+    expect(existsSync(join(root, "workflows", "other-wf"))).toBe(false);
+    // Root bytes survive the failed register.
+    expect(readFileSync(statusPath, "utf8")).toBe(JSON.stringify(staleRoot, null, 2));
+
+    // Retry after the root conflict is resolved converges end-to-end.
+    writeFileSync(statusPath, JSON.stringify({ version: 2, updated_at: "2026-09-15", workflows: [] }, null, 2));
+    const retry = await registerPlanWorkflow(id, options(root));
+    expect(retry.recovered).toBe(false);
+    expect(existsSync(snapshotPath)).toBe(true);
+    expect(validateStatus(statusPath).ok).toBe(true);
+  });
+
+  test("rollback removes only the exact snapshot version this call created", async () => {
+    const { root, statusPath, snapshotPath } = harness();
+    // A foreign writer changes the snapshot between this call's create and
+    // its rollback (injected through the store's status put): the rollback
+    // must recognize the version drift and leave that snapshot alone.
+    const fs = createFsStore(root);
+    const corrupting: ArtifactStore = {
+      root,
+      async put(doc: ArtifactDoc): Promise<void> {
+        if (doc.kind === "status") {
+          const current = JSON.parse(readFileSync(snapshotPath, "utf8")) as Record<string, unknown>;
+          writeFileSync(snapshotPath, JSON.stringify({ ...current, phase: "foreign-write" }, null, 2) + "\n");
+          throw new Error("injected root write failure");
+        }
+        return fs.put(doc);
+      },
+      async get<T>(ref): Promise<T | undefined> {
+        return fs.get<T>(ref);
+      },
+      async delete(ref): Promise<void> {
+        return fs.delete(ref);
+      },
+    };
+    setArtifactStore(corrupting);
+
+    await expect(registerPlanWorkflow(id, options(root))).rejects.toThrow(/injected root write failure/);
+    // The foreign-version snapshot survives; the dir is not force-removed.
+    expect(existsSync(snapshotPath)).toBe(true);
+    expect(JSON.parse(readFileSync(snapshotPath, "utf8")).phase).toBe("foreign-write");
+    expect(existsSync(join(root, "workflows", id))).toBe(true);
+    expect(existsSync(statusPath)).toBe(false);
+  });
+
+  test("crash between snapshot creation and registration: retry preserves identity, timestamps, ownership", async () => {
+    const { root, statusPath, snapshotPath } = harness();
+    // Round 1: a successful registration, then simulate the crash — the root
+    // write is lost while the snapshot survived.
+    const first = await registerPlanWorkflow(id, options(root, { coordinator: { session_id: "s-1", session_file: join(root, "sessions", "s-1.json") } }));
+    expect(first.recovered).toBe(false);
+    const orphanBytes = readFileSync(snapshotPath, "utf8");
+    const orphan = JSON.parse(orphanBytes) as Record<string, unknown>;
+    writeFileSync(statusPath, JSON.stringify({ version: 2, updated_at: "2026-09-01", workflows: [] }, null, 2));
+
+    // Round 2: re-running the producer completes the registration without
+    // duplicating identity — the snapshot bytes (identity, timestamps,
+    // coordinator ownership) are preserved verbatim. The retry runs with a
+    // fresh clock (no explicit startedAt): the orphan's timestamps must win.
+    const { startedAt: _retryClock, ...retryOptions } = options(root, {
+      coordinator: { session_id: "s-1", session_file: join(root, "sessions", "s-1.json") },
+    });
+    const retry = await registerPlanWorkflow(id, retryOptions);
+    expect(retry.recovered).toBe(true);
+    expect(readFileSync(snapshotPath, "utf8")).toBe(orphanBytes);
+
+    const rootDoc = JSON.parse(readFileSync(statusPath, "utf8")) as Record<string, unknown>;
+    expect(rootDoc.workflows).toEqual([{ id, type: "plan", started_at: orphan.started_at, dir: `workflows/${id}` }]);
+    expect(validateStatus(statusPath).ok).toBe(true);
+  });
+
+  test("recovery refuses an orphan snapshot with a different registration identity", async () => {
+    const { root, statusPath, snapshotPath } = harness();
+    await registerPlanWorkflow(id, options(root, { deliveryKind: "development", project: "engine" }));
+    const before = readFileSync(snapshotPath, "utf8");
+    // The orphan belongs to a different registration (different delivery kind).
+    const foreign = JSON.parse(before) as Record<string, unknown>;
+    foreign.delivery_kind = "verification/report-only";
+    foreign.completion_policy = "report at plans/x/report.md";
+    writeFileSync(snapshotPath, JSON.stringify(foreign, null, 2));
+    writeFileSync(statusPath, JSON.stringify({ version: 2, updated_at: "2026-09-01", workflows: [] }, null, 2));
+
+    await expect(registerPlanWorkflow(id, options(root, { deliveryKind: "development", project: "engine" }))).rejects.toThrow(
+      /different registration identity/,
+    );
+    // Neither the foreign snapshot nor the root moved.
+    expect(readFileSync(snapshotPath, "utf8")).toBe(JSON.stringify(foreign, null, 2));
+    expect((JSON.parse(readFileSync(statusPath, "utf8")) as Record<string, unknown>).workflows).toEqual([]);
+  });
+
+  test("records an optional coordinator binding at registration (validated strictly)", async () => {
+    const { root, statusPath, snapshotPath } = harness();
+    const sessionFile = join(root, "sessions", "coordinator.json");
+    await registerPlanWorkflow(id, options(root, { coordinator: { session_id: "s-9", session_file: sessionFile } }));
+    const snapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as Record<string, unknown>;
+    expect(snapshot.coordination).toEqual({
+      coordinator: { session_id: "s-9", session_file: sessionFile, bound_at: "2026-09-16T00:00:00.000Z" },
+    });
+    expect(validateWorkflowSnapshot(snapshot).ok).toBe(true);
+    expect(validateStatus(statusPath).ok).toBe(true);
+  });
+
+  test("unreadable root (malformed JSON) refuses and rolls back — no partial activation", async () => {
+    const { root, statusPath, snapshotPath } = harness();
+    mkdirSync(root, { recursive: true });
+    writeFileSync(statusPath, "{invalid", "utf8");
+    const before = readFileSync(statusPath, "utf8");
+
+    await expect(registerPlanWorkflow(id, options(root))).rejects.toThrow(/Invalid JSON/);
+    expect(existsSync(snapshotPath)).toBe(false);
+    expect(existsSync(join(root, "workflows", id))).toBe(false);
+    expect(readFileSync(statusPath, "utf8")).toBe(before);
+  });
+
+  test("hostile workflow id is refused by the path-component guard", async () => {
+    const { root } = harness();
+    await expect(registerPlanWorkflow("../escape", options(root))).rejects.toThrow(/safe path component/);
+    expect(existsSync(join(root, "workflows"))).toBe(false);
+    expect(existsSync(join(root, "escape"))).toBe(false);
   });
 });

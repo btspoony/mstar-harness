@@ -110,7 +110,10 @@ export {
 } from "./lease.js";
 export type {
   CloseWorkflowOptions,
+  RegisterPlanWorkflowOptions,
+  RegisterPlanWorkflowResult,
   WorkflowBranchAnchors,
+  WorkflowDeliveryKind,
   WorkflowExecutionPolicy,
   WorkflowLifecycleStatus,
   WorkflowLifecycleType,
@@ -121,6 +124,8 @@ export {
   closeWorkflow,
   isTerminalSnapshot,
   LEGACY_WORKTREE_PATH_CODE,
+  registerPlanWorkflow,
+  WORKFLOW_DELIVERY_KINDS,
   WORKFLOW_LIFECYCLE_STATUSES,
   WORKFLOW_LIFECYCLE_TYPES,
   WORKFLOW_SNAPSHOT_FILE,
