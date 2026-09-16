@@ -1,10 +1,8 @@
-# Plan workflow lifecycle contract (frozen)
+# Plan workflow lifecycle contract
 
-- **Status:** Frozen. Authoritative semantics for plan-level workflow delivery. Corpus surfaces cite it pointer-level; engine/CLI seams implement against it (§6). Where corpus prose and this contract disagree on lifecycle semantics, this contract is the wording authority until formally amended.
-- **Engine references:** the `packages/engine/src/*` line ranges below describe the sources as of the freeze. Treat them as orientation, not as stable anchors — re-read the module before relying on a range.
-- **§7 provenance:** the scope-decision table's direction and reason columns are adopted verbatim from the survey that preceded this freeze. The locked answers are binding.
-- **Boundary:** this contract owns semantics only. It implements nothing. Product-source edits are out of scope here by design; the seams it names in §6 are specified, not built, in this document.
-- **Owner:** PM. The contract belongs to the role, not to an individual plan or project.
+**Frozen.** The authoritative semantics for plan-level workflow delivery: what a `type: plan` workflow declares at registration, the stages it walks, the evidence each stage owes, and the engine seams that enforce them (§6). Corpus surfaces cite this file pointer-level instead of restating it; where a skill's prose and this contract disagree on lifecycle semantics, this contract is the wording authority until it is formally amended.
+
+This file owns semantics only — it implements nothing, and product-source edits are out of scope by design. The `packages/engine/src/*` line ranges below describe the sources as of the freeze: treat them as orientation, not as stable anchors, and re-read the module before relying on a range.
 
 ## Foundational distinctions
 
