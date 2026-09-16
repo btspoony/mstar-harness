@@ -36,6 +36,7 @@ import type { GateResult } from "../src/core.js";
 import {
   closeWorkflow,
   consultDeliveryEvidence,
+  declareWorkflowDeliveryKind,
   isTerminalSnapshot,
   WORKFLOW_SNAPSHOT_FILE,
   readWorkflowSnapshot,
@@ -1019,6 +1020,149 @@ describe("recordWorkflowDelivery — authorized delivery-evidence recording (sea
     const recorded = await recordWorkflowDelivery(id, dir, { evidence, sessionPath: sessionFile });
     expect(recorded.written).toBe(true);
     expect(JSON.parse(readFileSync(path, "utf8")).delivery).toEqual(evidence);
+  });
+});
+
+describe("declareWorkflowDeliveryKind — one-time kind declaration (seam S3 population)", () => {
+  const id = "00000103-declare-fixture";
+  const roots: string[] = [];
+  afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
+  /** An ACTIVE kind-less plan snapshot — the audit-promotion / v1-lift shape. */
+  function fixture(overrides: Record<string, unknown> = {}) {
+    const root = tmpRoot("workflow-declare-");
+    roots.push(root);
+    const dir = join(root, "workflows", id);
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, WORKFLOW_SNAPSHOT_FILE);
+    const snapshot = validSnapshot({
+      id,
+      type: "plan",
+      status: "running",
+      ended_at: undefined,
+      plans: [legacyRow({ status: "Done" })],
+      ...overrides,
+    });
+    writeFileSync(path, JSON.stringify(snapshot, null, 4) + "\n");
+    setArtifactStore(createFsStore(root));
+    return { root, dir, path, snapshot };
+  }
+
+  test("declares the kind + anchors once, then the full delivery tail closes end to end (declare → record → close → gate)", async () => {
+    // The audit-promotion / v1-lift shape: active, no kind, no anchors.
+    const { root, dir, path } = fixture({ branch: undefined });
+    // The close refuses first: no declared kind, so no consultable evidence.
+    await expect(closeWorkflow(id, dir, { endedAt: "2026-09-12" })).rejects.toThrow(/PHASE6_DELIVERY_KIND_UNREGISTERED/);
+
+    const declared = await declareWorkflowDeliveryKind(id, dir, {
+      deliveryKind: "development",
+      branchSource: "feature/audit-plans",
+      branchTarget: "main",
+      at: "2026-09-12T01:00:00Z",
+    });
+    expect(declared.delivery_kind).toBe("development");
+    expect(declared.branch).toEqual({ source: "feature/audit-plans", target: "main" });
+    expect(declared.updated_at).toBe("2026-09-12T01:00:00Z");
+
+    // The close now consults the kind: evidence is still missing.
+    await expect(closeWorkflow(id, dir, { endedAt: "2026-09-12" })).rejects.toThrow(/PHASE6_DELIVERY_EVIDENCE_INCOMPLETE/);
+    await recordWorkflowDelivery(id, dir, {
+      evidence: {
+        compound: { outcome: "created" },
+        pr: { repo: "btspoony/mstar-harness", head: "feature/audit-plans", target: "main" },
+        merge: { provider: "github", evidence: "PR #244 verified merged at 2c792c01" },
+      },
+      at: "2026-09-12T02:00:00Z",
+    });
+    const closed = await closeWorkflow(id, dir, { endedAt: "2026-09-12" });
+    expect(closed.status).toBe("completed");
+    // The declared kind, its anchors and every recorded member agree: the
+    // read-only gate passes on the closed bytes.
+    const onDisk = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    const gate = evaluatePostMergeClose(onDisk, { version: 2, updated_at: "2026-09-12", workflows: [] });
+    expect(gate.violations).toEqual([]);
+    expect(gate.ok).toBe(true);
+    expect(existsSync(join(root, "status.json"))).toBe(false);
+  });
+
+  test("the declaration is ONE-TIME: a second one is refused, even with the same kind (bytes unchanged)", async () => {
+    const { dir, path } = fixture();
+    await declareWorkflowDeliveryKind(id, dir, { deliveryKind: "development", branchSource: "feature/a", branchTarget: "main" });
+    const after = readFileSync(path, "utf8");
+    for (const second of [
+      { deliveryKind: "development", branchSource: "feature/other", branchTarget: "main" },
+      { deliveryKind: "verification/report-only", completionPolicy: "acceptance report" },
+    ] as const) {
+      await expect(declareWorkflowDeliveryKind(id, dir, second)).rejects.toThrow(/already declares/);
+    }
+    expect(readFileSync(path, "utf8")).toBe(after);
+  });
+
+  test("an incomplete declaration is refused before any write (shared per-kind coherence, §1)", async () => {
+    const { dir, path } = fixture();
+    const before = readFileSync(path, "utf8");
+    await expect(declareWorkflowDeliveryKind(id, dir, { deliveryKind: "development", branchSource: "feature/a" })).rejects.toThrow(
+      /delivery source and target branches/,
+    );
+    await expect(declareWorkflowDeliveryKind(id, dir, { deliveryKind: "verification/report-only" })).rejects.toThrow(
+      /completion policy/,
+    );
+    await expect(declareWorkflowDeliveryKind(id, dir, { deliveryKind: "wing-it" as never })).rejects.toThrow(/deliveryKind must be one of/);
+    expect(readFileSync(path, "utf8")).toBe(before);
+  });
+
+  test("a terminal snapshot and a non-plan lifecycle are refused (the terminal dead end is never amended, §5)", async () => {
+    const terminal = fixture({ status: "completed", ended_at: "2026-09-11" });
+    await expect(
+      declareWorkflowDeliveryKind(id, terminal.dir, { deliveryKind: "development", branchSource: "feature/a", branchTarget: "main" }),
+    ).rejects.toThrow(/is terminal/);
+    const iteration = fixture({ type: "iteration" });
+    await expect(
+      declareWorkflowDeliveryKind(id, iteration.dir, { deliveryKind: "development", branchSource: "feature/a", branchTarget: "main" }),
+    ).rejects.toThrow(/only a type: plan lifecycle/);
+  });
+
+  test("a coordinated snapshot is declared only by its bound coordinator envelope", async () => {
+    const root = tmpRoot("workflow-declare-coordinated-");
+    roots.push(root);
+    const dir = join(root, "workflows", id);
+    const sessions = join(dir, "sessions");
+    mkdirSync(sessions, { recursive: true });
+    const sessionFile = join(sessions, "s-1.json");
+    writeFileSync(sessionFile, JSON.stringify({ session_id: "s-1" }));
+    const path = join(dir, WORKFLOW_SNAPSHOT_FILE);
+    writeFileSync(
+      path,
+      JSON.stringify(
+        validSnapshot({
+          id,
+          type: "plan",
+          status: "running",
+          ended_at: undefined,
+          coordination: { coordinator: { session_id: "s-1", session_file: sessionFile, bound_at: "2026-09-15T00:00:00Z" } },
+        }),
+        null,
+        2,
+      ),
+    );
+    setArtifactStore(createFsStore(root));
+    const declaration = { deliveryKind: "development", branchSource: "feature/a", branchTarget: "main" } as const;
+    const before = readFileSync(path, "utf8");
+    await expect(declareWorkflowDeliveryKind(id, dir, declaration)).rejects.toMatchObject({ code: "coordination.session-mismatch" });
+    expect(readFileSync(path, "utf8")).toBe(before);
+    const declared = await declareWorkflowDeliveryKind(id, dir, { ...declaration, sessionPath: sessionFile });
+    expect(declared.delivery_kind).toBe("development");
+    // The declaration ADDS the delivery anchors — the snapshot's other anchors
+    // (base/integration) are preserved, never dropped.
+    expect(declared.branch).toEqual({
+      base: "main",
+      integration: "spec_integration_branch",
+      source: "feature/a",
+      target: "main",
+    });
+    expect(JSON.parse(readFileSync(path, "utf8"))).toMatchObject({
+      delivery_kind: "development",
+      coordination: { coordinator: { session_id: "s-1" } },
+    });
   });
 });
 

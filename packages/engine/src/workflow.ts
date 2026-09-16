@@ -845,6 +845,47 @@ function nonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim() !== "";
 }
 
+/** Delivery-registration inputs every producer declares (contract §1/§4a). */
+export type DeliveryRegistrationEvidence = {
+  branchSource?: string;
+  branchTarget?: string;
+  completionPolicy?: string;
+};
+
+/**
+ * Per-kind registration-evidence coherence (contract §1) — the ONE rule shared
+ * by every producer that declares a delivery kind at registration time:
+ * `registerPlanWorkflow` (the normal-entry producer), `promoteAuditPlans`
+ * (audit promotion) and `migrateHarnessTree` (v1 lift), plus the one-time
+ * `declareWorkflowDeliveryKind` backfill for active kind-less snapshots.
+ * Lockstep here is the point: a `development` workflow declares BOTH delivery
+ * anchors and a `verification/report-only` workflow declares the completion
+ * policy that completes it — missing fields are incomplete registration, never
+ * an exemption, and a producer that drifted would otherwise mint an
+ * unclosable lifecycle. `what` prefixes the refusal (the caller's own name).
+ */
+export function assertDeliveryRegistrationCoherence(
+  kind: WorkflowDeliveryKind,
+  evidence: DeliveryRegistrationEvidence,
+  what: string,
+): void {
+  if (kind === "development" && (!nonEmptyString(evidence.branchSource) || !nonEmptyString(evidence.branchTarget))) {
+    throw new Error(
+      `${what}: a development workflow requires its delivery source and target branches (--branch-source/--branch-target) \u2014 missing branch fields are incomplete registration, not an exempt workflow (contract \u00a71/\u00a74a)`,
+    );
+  }
+  if (kind === "verification/report-only" && !nonEmptyString(evidence.completionPolicy)) {
+    throw new Error(
+      `${what}: a verification/report-only workflow requires the completion policy (--completion-policy) naming the evidence that completes it (contract \u00a71)`,
+    );
+  }
+  for (const [field, value] of Object.entries({ branchSource: evidence.branchSource, branchTarget: evidence.branchTarget, completionPolicy: evidence.completionPolicy })) {
+    if (value !== undefined && !nonEmptyString(value)) {
+      throw new Error(`${what}: ${field} must be a non-empty string when given`);
+    }
+  }
+}
+
 /**
  * Delivery-kind evidence consultation (seam S3 — contract §4g + §6 S3): the
  * ONE implementation behind both the read-only Phase-6 gate
@@ -884,11 +925,13 @@ export function consultDeliveryEvidence(snapshot: WorkflowSnapshot): ValidationR
         "high",
         "PHASE6_DELIVERY_KIND_UNREGISTERED",
         `Workflow '${workflowId}' is type 'plan' but carries no registered delivery_kind \u2014 a plan workflow declares its delivery kind at registration (plan-workflow-lifecycle-contract \u00a71), so this snapshot's delivery evidence cannot be consulted`,
-        // Truthful recovery (the register verb is a dead end here):
-        // `registerPlanWorkflow` is create-only and its recovery identity
-        // (status + delivery_kind) can never match a terminal snapshot, so
-        // the remediation names the owner snapshot amendment instead.
-        "Delivery evidence is declared at registration, before execution \u2014 'mstar workflow register' cannot backfill a terminal snapshot (create-only; snapshot bytes are preserved, so re-registration refuses), leaving a legacy terminal snapshot without a delivery_kind outside this gate's automated recovery: repair requires an explicit owner snapshot amendment recording the declared kind (the known affected population \u2014 audit-promotion's grandfathered type: plan snapshots \u2014 is disclosed as a residual by plan QC), then re-run the close / 'mstar iteration gate --phase 6 --workflow <id>'",
+        // The still-active population (audit promotion / the v1 lift minted
+        // active snapshots before their producers declared a kind) is repaired
+        // by the one-time declaration seam; a TERMINAL snapshot cannot be
+        // (declare refuses a closed lifecycle, and the create-only register
+        // can never match a terminal registration identity), so its repair
+        // stays the explicit owner amendment.
+        "Delivery evidence is declared at registration, before execution. A still-ACTIVE kind-less workflow is repaired by the authorized one-time declaration 'mstar workflow evidence --workflow <id> --declare-kind <development|verification/report-only> [--branch-source <b> --branch-target <b> | --completion-policy <text>] [--session <envelope>]' (declared once, never re-declared); a TERMINAL legacy snapshot cannot be backfilled \u2014 'mstar workflow register' is create-only and its registration identity can never match a terminal snapshot \u2014 so repair requires an explicit owner snapshot amendment recording the declared kind (the known affected population \u2014 audit-promotion's grandfathered type: plan snapshots \u2014 is disclosed as a residual by plan QC), then re-run the close / 'mstar iteration gate --phase 6 --workflow <id>'",
       ),
     ];
   }
@@ -1175,6 +1218,110 @@ export async function recordWorkflowDelivery(
 }
 
 // ---------------------------------------------------------------------------
+// Delivery-kind declaration (plan-workflow-lifecycle-contract §1/§4a; seam S3
+// population): the authorized ONE-TIME backfill for an ACTIVE `type: plan`
+// snapshot whose producer predates the kind — audit promotion and the v1 lift
+// minted active snapshots without one, which the close consultation (correctly)
+// refuses and no create-only producer can repair.
+// ---------------------------------------------------------------------------
+
+export type DeclareWorkflowDeliveryKindOptions = {
+  /** The declared kind (contract §1). Required — never inferred. */
+  deliveryKind: WorkflowDeliveryKind;
+  /** Delivery source branch, recorded as `branch.source`. Required for `development`. */
+  branchSource?: string;
+  /** Delivery target branch, recorded as `branch.target`. Required for `development`. */
+  branchTarget?: string;
+  /** Completion policy naming the evidence that completes the workflow. Required for `verification/report-only`. */
+  completionPolicy?: string;
+  /**
+   * Canonical coordinator session envelope path (spec §C4) — the same
+   * authority seam `closeWorkflow` and `recordWorkflowDelivery` use: a
+   * coordinated snapshot is written only by its own bound coordinator. An
+   * uncoordinated snapshot has no coordinator binding to authenticate (the
+   * historical audit-promotion / migrate population is exactly that), so it
+   * keeps the harness-owner stance the close already applies.
+   */
+  sessionPath?: string;
+  /** Declaration timestamp (YYYY-MM-DD or RFC3339). Default: now. */
+  at?: string;
+};
+
+/**
+ * Declare the delivery kind (and its per-kind registration evidence) of an
+ * ACTIVE `type: plan` snapshot whose producer declared none — the one-time
+ * upgrade seam for the historical population (contract §1/§4a). ONE-TIME by
+ * construction: the kind is registration evidence that is never inferred
+ * retroactively (§1), so a second declaration is refused even with the same
+ * value, and a terminal snapshot is refused outright (§5 — a closed lifecycle
+ * is never amended; the legacy terminal dead end keeps its documented
+ * owner-amendment path).
+ *
+ * The declaration carries the kind's own evidence through the shared
+ * `assertDeliveryRegistrationCoherence` rule, so it cannot mint an unclosable
+ * lifecycle (a `development` kind needs its delivery anchors, a
+ * `verification/report-only` kind its completion policy). The write lands in
+ * the snapshot lock through the same protected writer as the close.
+ */
+export async function declareWorkflowDeliveryKind(
+  workflowId: string,
+  dir: string,
+  opts: DeclareWorkflowDeliveryKindOptions,
+): Promise<WorkflowSnapshot> {
+  const kind = opts.deliveryKind;
+  if (typeof kind !== "string" || !(WORKFLOW_DELIVERY_KINDS as readonly string[]).includes(kind)) {
+    throw new Error(
+      `declareWorkflowDeliveryKind: deliveryKind must be one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")} \u2014 got ${JSON.stringify(kind)}`,
+    );
+  }
+  assertDeliveryRegistrationCoherence(kind, opts, "declareWorkflowDeliveryKind");
+  const at = opts.at ?? new Date().toISOString();
+  if (!isCloseTimestamp(at)) {
+    throw new Error("declareWorkflowDeliveryKind: options.at must be a valid YYYY-MM-DD date or RFC3339 timestamp");
+  }
+  const snapshotPath = join(dir, WORKFLOW_SNAPSHOT_FILE);
+  const store = getArtifactStore();
+  const ref = { kind: "snapshot" as const, key: workflowId };
+  assertFsStorePath(store, ref, snapshotPath);
+  mkdirSync(dir, { recursive: true });
+  return withStatusWriteLock(snapshotPath, async () => {
+    const doc = await store.get(ref);
+    if (doc === undefined) throw new Error(`workflow snapshot not found: ${snapshotPath}`);
+    const { snapshot } = normalizeWorkflowSnapshot(doc, snapshotPath);
+    if (snapshot.id !== workflowId) {
+      throw new Error(`workflow snapshot identity mismatch: expected ${workflowId}, got ${snapshot.id}`);
+    }
+    if (isTerminalSnapshot(snapshot)) {
+      throw new Error(
+        `refusing to declare a delivery kind for workflow ${JSON.stringify(workflowId)}: the lifecycle is terminal (${snapshot.status}) \u2014 a closed lifecycle is never amended (\u00a75); a terminal snapshot without a registered kind stays on the documented owner-amendment path`,
+      );
+    }
+    assertCoordinatedSnapshotWriter(doc, snapshotPath, opts.sessionPath, "delivery-kind declaration");
+    if (snapshot.type !== "plan") {
+      throw new Error(
+        `refusing to declare a delivery kind for workflow ${JSON.stringify(workflowId)}: only a type: plan lifecycle declares one (got type ${JSON.stringify(snapshot.type)})`,
+      );
+    }
+    if (snapshot.delivery_kind !== undefined) {
+      throw new Error(
+        `refusing to declare a delivery kind for workflow ${JSON.stringify(workflowId)}: it already declares ${JSON.stringify(snapshot.delivery_kind)} \u2014 the kind is registration evidence, declared once and never re-inferred (\u00a71)`,
+      );
+    }
+    // Existing anchors are preserved (an iteration-shaped `base`/`integration`
+    // on an odd snapshot is never dropped); the validated document guarantees
+    // string-valued anchor keys.
+    const branch: Record<string, unknown> = isPlainObject(snapshot.branch) ? { ...snapshot.branch } : {};
+    if (opts.branchSource !== undefined) branch.source = opts.branchSource;
+    if (opts.branchTarget !== undefined) branch.target = opts.branchTarget;
+    const next: WorkflowSnapshot = { ...snapshot, delivery_kind: kind, updated_at: at };
+    if (Object.keys(branch).length > 0) next.branch = branch as WorkflowBranchAnchors;
+    if (opts.completionPolicy !== undefined) next.completion_policy = opts.completionPolicy;
+    await validateAndPutWorkflowSnapshot(store, next, snapshotPath);
+    return next;
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Generic registration producer (plan-workflow-lifecycle-contract §2/§4a,
 // seam S1): create-only `type: plan` snapshot + root `workflows[]` entry
 // under one lock, mirroring the audit-promotion primitive sequence
@@ -1303,18 +1450,10 @@ export async function registerPlanWorkflow(
       `registerPlanWorkflow: options.deliveryKind must be one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")} \u2014 got ${JSON.stringify(deliveryKind)}`,
     );
   }
-  // Contract §1: missing branch fields never select or waive a kind. A
-  // development workflow declares its delivery path at registration.
-  if (deliveryKind === "development" && (typeof options.branchSource !== "string" || options.branchSource.trim() === "" || typeof options.branchTarget !== "string" || options.branchTarget.trim() === "")) {
-    throw new Error(
-      "registerPlanWorkflow: a development workflow requires --branch-source and --branch-target at registration \u2014 missing branch fields are incomplete registration, not an exempt workflow",
-    );
-  }
-  if (deliveryKind === "verification/report-only" && (typeof options.completionPolicy !== "string" || options.completionPolicy.trim() === "")) {
-    throw new Error(
-      "registerPlanWorkflow: a verification/report-only workflow requires --completion-policy naming the evidence that completes it (contract \u00a71)",
-    );
-  }
+  // Contract §1: missing branch fields never select or waive a kind — the
+  // shared per-kind coherence rule (the same one audit promotion, migrate and
+  // the one-time kind declaration enforce).
+  assertDeliveryRegistrationCoherence(deliveryKind, options, "registerPlanWorkflow");
   for (const field of ["project", "branchSource", "branchTarget"] as const) {
     const value = options[field];
     if (value !== undefined && (typeof value !== "string" || value.trim() === "")) {
