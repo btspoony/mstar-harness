@@ -1,8 +1,8 @@
 # Plan workflow lifecycle contract
 
-**Frozen.** The authoritative semantics for plan-level workflow delivery: what a `type: plan` workflow declares at registration, the stages it walks, the evidence each stage owes, and the engine seams that enforce them (§6). Corpus surfaces cite this file pointer-level instead of restating it; where a skill's prose and this contract disagree on lifecycle semantics, this contract is the wording authority until it is formally amended.
+The authoritative semantics for plan-level workflow delivery: what a `type: plan` workflow declares at registration, the stages it walks, the evidence each stage owes, and the engine seams that enforce them (§6). Corpus surfaces cite this file pointer-level instead of restating it; where a skill's prose and this contract disagree on lifecycle semantics, this contract is the wording authority until it is formally amended.
 
-This file owns semantics only — it implements nothing, and product-source edits are out of scope by design. The `packages/engine/src/*` line ranges below describe the sources as of the freeze: treat them as orientation, not as stable anchors, and re-read the module before relying on a range.
+This file owns semantics only. The `packages/engine/src/*` line ranges below are orientation, not stable anchors — re-read the module before relying on a range.
 
 ## Foundational distinctions
 
@@ -25,14 +25,14 @@ Binding rules:
 
 - The declared kind is recorded at registration. It is never inferred retroactively from runtime behavior, from the presence or absence of fields, or from convenience.
 - Absence of `branch.target` (or of any other registration field) is not an implicit exemption. Missing fields never select a kind and never waive the declared obligation; a `development` workflow with missing branch fields is incomplete registration, not an exempt workflow.
-- Verification/report-only workflows follow their locked explicit completion policy, not an accidental PR exemption inferred from missing fields.
+- Verification/report-only workflows follow their recorded explicit completion policy, not an accidental PR exemption inferred from missing fields.
 - An iteration uses the same outer lifecycle around its multiple plan rows (§3). Its child plan rows are not standalone workflows and gain no independent delivery PR obligation.
 
 ## 2. Cardinality stance
 
 - The new normal route is **one independently owned development plan per `type: plan` workflow**. A `type: plan` label alone does not establish cardinality; this contract fixes it for the new normal route only.
-- **Inventory at baseline.** The known multi-row `type: plan` producer is audit promotion (`promoteAuditPlans`), which constructs one plan row per selected plan file (`packages/engine/src/audit.ts:1250-1272`). Existing specialized producers are `audit promote` and `migrate`; no generic normal-entry register command exists at baseline.
-- **Locked decision:** audit promotion is explicitly **grandfathered** as a multi-row specialized producer. No schema-level one-row invariant is imposed in this round; the producer keeps working and is not silently broken. Any future schema tightening must migrate audit promotion off the multi-row shape first, and must re-inventory producers before enforcement. Until such a migration lands, the one-plan norm governs the new normal route and new registrations, not the grandfathered producer.
+- **Producers.** The known multi-row `type: plan` producer is audit promotion (`promoteAuditPlans`), which constructs one plan row per selected plan file (`packages/engine/src/audit.ts:1250-1272`). Existing specialized producers are `audit promote` and `migrate`; the generic normal-entry register producer is seam S1 (§6).
+- **Decision:** audit promotion is explicitly **grandfathered** as a multi-row specialized producer. No schema-level one-row invariant is imposed on the grandfathered producer; it keeps working and is not silently broken. Any future schema tightening must migrate audit promotion off the multi-row shape first, and must re-inventory producers before enforcement. Until such a migration lands, the one-plan norm governs the new normal route and new registrations, not the grandfathered producer.
 
 ## 3. Lifecycle stages
 
@@ -60,7 +60,7 @@ register → recall → prepare/lock → execute + review/acceptance → compoun
 
 **(a) Registration is an authorized domain operation.** It writes the create-only snapshot and the root entry under one lock. The primitive reference is the audit-promotion sequence `packages/engine/src/audit.ts:1250-1324`: plan-row/snapshot construction, entry validation, then the atomic root-lock section — create-only `writeWorkflowSnapshot` → `registerWorkflowEntryLocked`, with rollback that removes only the exact snapshot version that call created. The generic producer (seam S1) reuses these primitives; it does not invent a second registration mechanism.
 
-**(b) Admission consumes registration.** At baseline, `packages/engine/src/sdd.ts:1185-1194` falls back to branch-alignment-only when no active workflow row applies, or a non-InProgress row has no lease — so the SDD seam does not enforce the prose registration obligation. Contract: on the normal plan route that fallback closes with a precise refusal code, and the refusal documents the registration command and the recovery path (seam S2). Registration/recovery semantics: a crash between snapshot creation and root registration leaves no partial activation; recovery re-runs the authorized producer without duplicating identity.
+**(b) Admission consumes registration.** `packages/engine/src/sdd.ts:1185-1194` falls back to branch-alignment-only when no active workflow row applies, or a non-InProgress row has no lease — so the SDD seam does not enforce the registration obligation by itself. On the normal plan route that fallback closes with a precise refusal code, and the refusal documents the registration command and the recovery path (seam S2). Registration/recovery semantics: a crash between snapshot creation and root registration leaves no partial activation; recovery re-runs the authorized producer without duplicating identity.
 
 **(c) Compound disposition.** The outcome ∈ {`created`, `updated`, reasoned `skipped`} is recorded on the workflow before PR head finalization. Engine checks can validate the disposition and referenced artifacts; that is not semantic-quality proof. Existing compound document/index validation is reused as-is.
 
@@ -70,12 +70,12 @@ register → recall → prepare/lock → execute + review/acceptance → compoun
 
 **(f) Verified merge.** A PM check, never the close verb. It distinguishes opened, mergeable, and merged; missing or unavailable provider evidence is not accepted as merged.
 
-**(g) Terminal close.** Existing `closeWorkflow` semantics (`packages/engine/src/workflow.ts:665-725`): close-timestamp validation, snapshot identity check, coordinated-writer authority, every row `Done`, strict terminal validation that refuses leases without deleting them, and idempotent preservation of an existing valid terminal snapshot (including `failed`/`stopped`); it never releases leases. Ordering per phase-6 (`packages/engine/src/iteration.ts:514-616` reuse): snapshot terminal → unregister → reconcile. The local gate deliberately does not verify remote merge — that verification is the PM's separate check in (f). At baseline `closeWorkflow` does not inspect PR or compound evidence; seam S3 adds exactly that delivery-kind evidence consultation while reusing every existing guard.
+**(g) Terminal close.** Existing `closeWorkflow` semantics (`packages/engine/src/workflow.ts:665-725`): close-timestamp validation, snapshot identity check, coordinated-writer authority, every row `Done`, strict terminal validation that refuses leases without deleting them, and idempotent preservation of an existing valid terminal snapshot (including `failed`/`stopped`); it never releases leases. Ordering per phase-6 (`packages/engine/src/iteration.ts:514-616` reuse): snapshot terminal → unregister → reconcile. The local gate deliberately does not verify remote merge — that verification is the PM's separate check in (f). `closeWorkflow` does not inspect PR or compound evidence; seam S3 adds exactly that delivery-kind evidence consultation while reusing every existing guard.
 
 ## 5. Failure and abandonment
 
 - Failure and abandonment close through explicit `failed`/`stopped` statuses with a recorded reason. They are never rewritten as successfully completed.
-- `closeWorkflow` preserves an existing valid terminal snapshot unchanged, including `failed`/`stopped` (baseline idempotence, kept by this contract).
+- `closeWorkflow` preserves an existing valid terminal snapshot unchanged, including `failed`/`stopped` — idempotence this contract keeps.
 - Close never releases leases. Another owner's lease is not released to force closure; strict terminal validation refuses leases without deleting them.
 - Scoped and plan-scoped sessions cannot mutate lifecycle anchors or close sibling workflows (foundational distinctions, third meaning).
 
@@ -89,22 +89,22 @@ Acceptance checks: a standalone development plan registers before execution; a m
 **S2 — Admission consumption.** The SDD admission fallback (`packages/engine/src/sdd.ts:1185-1194`) closes on the normal plan route: execution without a registered running workflow row is refused with a precise refusal code, and the refusal documents the registration command and recovery path.
 Acceptance checks: an unregistered plan's execution is refused, not silently continued on branch alignment alone; the refusal names registration and recovery; no partial activation is treated as success.
 
-**S3 — Standalone close path.** The close path consults the registered delivery kind's evidence before completing. The local post-merge gate is already snapshot-type-generic at baseline; the delta is the delivery-kind evidence consultation, reusing `closeWorkflow` guards and phase-6 ordering unchanged.
+**S3 — Standalone close path.** The close path consults the registered delivery kind's evidence before completing. The local post-merge gate is snapshot-type-generic; the delta is the delivery-kind evidence consultation, reusing `closeWorkflow` guards and phase-6 ordering unchanged.
 Acceptance checks: a registered `development` workflow with missing or incomplete delivery evidence refuses the close and stays registered/resumable; `Done` rows without required PR/compound evidence cannot be used to declare the workflow delivered; close retry after the terminal write preserves the original timestamp; `failed`/`stopped` workflows are never rewritten as successfully completed; close never releases leases; crash/retry between terminal write and unregister preserves identity, timestamps, ownership and resumability.
 
-**Explicit deferral.** Mid-lifecycle advancement-gate breadth is deferred: per-stage engine gates across recall, prepare/lock, execute, compound disposition, and PR submission are not in this round. `evaluatePhaseGate` stays iteration-shaped. The process obligations for those stages are carried by corpus pointers to this contract; only registration admission (S2) and terminal evidence (S3) are wired into code, plus the S1 producer. This deferral is explicit and deliberate, not an omission.
+**Explicit deferral.** Mid-lifecycle advancement-gate breadth is deferred: per-stage engine gates across recall, prepare/lock, execute, compound disposition and PR submission are not part of this contract. `evaluatePhaseGate` stays iteration-shaped. The process obligations for those stages are carried by corpus pointers to this contract; only registration admission (S2) and terminal evidence (S3) are wired into code, plus the S1 producer.
 
-## 7. Scope decisions (locked)
+## 7. Scope decisions
 
-The direction and reason columns record the reasoning behind each locked answer; the locked answers are binding. There are no open decisions in this table.
+The direction and reason columns record the reasoning behind each answer; the answers are binding. There are no open decisions in this table.
 
-| Decision | Locked answer | Direction | Reason |
+| Decision | Answer | Direction | Reason |
 |---|---|---|---|
-| Does every `type: plan` mean a development PR? | **Locked: No.** Delivery kind is declared at registration (§1). Development plans require PR; verification/report-only workflows follow the explicit alternative completion policy recorded at registration. | Declare the delivery obligation explicitly for the workflow's purpose. Development plans require PR; verification/report-only workflows need an explicit alternative completion contract. | `type: plan` is also used for independent verification. Do not force empty PRs or make absence of `branch.target` an implicit escape hatch. The strict universal alternative is possible but must be consciously selected. |
-| Is `type: plan` exactly one plan row? | **Locked: One independently owned development plan per workflow for the new normal route; audit promotion grandfathered as an explicitly inventoried multi-row producer (§2).** | Prefer one independently owned development plan for the new normal route; inventory current multi-row producers before tightening schema. | A type label alone does not establish cardinality. Audit promotion must be considered before enforcing a one-row invariant. |
-| Where does compound run for a standalone plan? | **Locked: On its delivery branch/worktree, before the PR head is finalized (§3, §4c).** | On its delivery branch/worktree before the PR head is finalized. | Do not invent an iteration compass or extra integration branch solely to reuse iteration-close. Preserve control-root process artifacts versus tracked-result write ownership. |
-| What completes the workflow? | **Locked: Verified merge plus common close; PR submission and merge-ready remain resumable milestones (§3, §4e–g).** | Verified merge plus common close; PR submission and merge-ready remain resumable milestones. | Preserves the stronger existing post-merge-close semantics. A user request to submit a PR is not authorization to merge it. |
-| How should failure/abandonment close? | **Locked: Explicit failed/stopped handling with reason, never successful completed-close; no lease release by close (§5).** | Explicit failed/stopped handling with reason, never successful completed-close. | Preserve the existing distinction and do not release another owner's lease to force closure. |
+| Does every `type: plan` mean a development PR? | **No.** Delivery kind is declared at registration (§1). Development plans require PR; verification/report-only workflows follow the explicit alternative completion policy recorded at registration. | Declare the delivery obligation explicitly for the workflow's purpose. Development plans require PR; verification/report-only workflows need an explicit alternative completion contract. | `type: plan` is also used for independent verification. Do not force empty PRs or make absence of `branch.target` an implicit escape hatch. The strict universal alternative is possible but must be consciously selected. |
+| Is `type: plan` exactly one plan row? | **One independently owned development plan per workflow for the new normal route; audit promotion grandfathered as an explicitly inventoried multi-row producer (§2).** | Prefer one independently owned development plan for the new normal route; inventory current multi-row producers before tightening schema. | A type label alone does not establish cardinality. Audit promotion must be considered before enforcing a one-row invariant. |
+| Where does compound run for a standalone plan? | **On its delivery branch/worktree, before the PR head is finalized (§3, §4c).** | On its delivery branch/worktree before the PR head is finalized. | Do not invent an iteration compass or extra integration branch solely to reuse iteration-close. Preserve control-root process artifacts versus tracked-result write ownership. |
+| What completes the workflow? | **Verified merge plus common close; PR submission and merge-ready remain resumable milestones (§3, §4e–g).** | Verified merge plus common close; PR submission and merge-ready remain resumable milestones. | Preserves the stronger existing post-merge-close semantics. A user request to submit a PR is not authorization to merge it. |
+| How should failure/abandonment close? | **Explicit failed/stopped handling with reason, never successful completed-close; no lease release by close (§5).** | Explicit failed/stopped handling with reason, never successful completed-close. | Preserve the existing distinction and do not release another owner's lease to force closure. |
 
 ## Binding negatives
 
