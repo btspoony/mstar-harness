@@ -841,4 +841,55 @@ describe("E2 phase 1 readiness", () => {
     expect(other.ready).toBe(false);
     expect(codesOf(other)).toContain("binding-invalid");
   }, 60_000);
+
+  test("a remote advanced inside the checkpoint window refuses", async () => {
+    const f = await buildFixture();
+    const baseline = await inspectPhase1Readiness(f.binding, f.input);
+    expect(baseline.ready).toBe(true);
+    if (!baseline.ready) throw new Error(`unexpected refusal: ${baseline.codes.join(", ")}`);
+
+    // A side commit that exists only in the bare remote: the transport wrapper
+    // advances `snapshot.branch.integration` to it on the checkpoint's *second*
+    // remote query — after the first one already matched the live HEAD — so the
+    // advance lands strictly inside the window the closing re-sample must cover.
+    const bare = join(f.root, "remote.git");
+    writeFileSync(join(f.main, "advance.txt"), "advance\n");
+    git(["add", "advance.txt"], f.main);
+    git(["commit", "-qm", "advance"], f.main);
+    const advanceSha = git(["rev-parse", "HEAD"], f.main);
+    git(["push", "-q", bare, `${advanceSha}:refs/heads/advance`], f.main);
+
+    const counter = join(f.root, "upload-pack-calls");
+    const wrapper = join(f.root, "advancing-upload-pack.sh");
+    writeFileSync(
+      wrapper,
+      [
+        "#!/bin/sh",
+        `if [ -f ${JSON.stringify(counter)} ]; then`,
+        `  git -C ${JSON.stringify(bare)} update-ref ${JSON.stringify(`refs/heads/${f.integrationBranch}`)} ${advanceSha}`,
+        "else",
+        `  : > ${JSON.stringify(counter)}`,
+        "fi",
+        'exec "$(git --exec-path)/git-upload-pack" "$@"',
+        "",
+      ].join("\n"),
+    );
+    chmodSync(wrapper, 0o755);
+    git(["config", "remote.origin.uploadpack", wrapper], f.integration);
+
+    const advanced = await inspectPhase1Readiness(f.binding, f.input);
+    expect(advanced.ready).toBe(false);
+    expect(codesOf(advanced)).toContain("push-unverified");
+    // The window really moved the remote (the checkpoint queried it a second
+    // time) and the integration checkout itself did not move.
+    expect(git(["rev-parse", `refs/heads/${f.integrationBranch}`], bare)).toBe(advanceSha);
+    expect(git(["rev-parse", "HEAD"], f.integration)).toBe(baseline.integrationHead);
+
+    // With the wrapper gone the advance is still visible: the push is no longer
+    // verified, which is the readable reason behind the refusal code.
+    git(["config", "--unset", "remote.origin.uploadpack"], f.integration);
+    const stillRefused = await inspectPhase1Readiness(f.binding, f.input);
+    expect(stillRefused.ready).toBe(false);
+    expect(codesOf(stillRefused)).toContain("push-unverified");
+  }, 60_000);
 });
