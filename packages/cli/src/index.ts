@@ -1200,10 +1200,14 @@ statusCommand
 statusCommand
   .command("workflow-close")
   .description(
-    "Close one workflow lifecycle after its delivery PR merged (engine-backed: closeWorkflow writes the " +
+    "Close one workflow lifecycle after its delivery tail completes — type-generic: iterations and standalone " +
+      "`type: plan` workflows close through this same verb (engine-backed: closeWorkflow writes the " +
       "terminal snapshot under the snapshot lock, then unregisterWorkflow removes the root status.json entry " +
       "idempotently; dangling leases and unfinished plan rows refuse before any write; a fully closed retry " +
       "rewrites nothing; a failed unregister reports a partial close and a re-run finishes it. " +
+      "Standalone plan workflows: the registered delivery kind is consulted by the phase-6 gate — verify the " +
+      "close state with 'mstar iteration gate --phase 6 --workflow <id>' (development requires the registered " +
+      "source/target branches; verification/report-only the recorded completion policy). " +
       "Exit 0 success, 1 gate/IO refusal, 2 usage)",
   )
   .option("--workflow <id>", "Workflow id to close ({WORKFLOW_DIR}/<id>/snapshot.json)")

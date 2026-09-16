@@ -45,7 +45,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { GateResult, Severity, ValidationResult } from "./core.js";
 import { validateStatusV2, type StatusV2Doc } from "./status.js";
-import { LEGACY_WORKTREE_PATH_CODE, isTerminalSnapshot, validateWorkflowSnapshot, type WorkflowSnapshot } from "./workflow.js";
+import { LEGACY_WORKTREE_PATH_CODE, WORKFLOW_DELIVERY_KINDS, isTerminalSnapshot, validateWorkflowSnapshot, type WorkflowSnapshot } from "./workflow.js";
 
 const COMPASS_STATUSES = ["active", "locked", "completed"] as const;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -535,7 +535,26 @@ function hasLeftoverLease(snapshotDoc: SnapshotDoc): boolean {
  * `evaluatePhaseGate` / `PhaseGateResult` (Phase 2–5 exit codes stay
  * intact). Stable machine codes: `PHASE6_NOT_TERMINAL`,
  * `PHASE6_ROOT_ENTRY_PRESENT`, `PHASE6_DANGLING_LEASE`,
- * `PHASE6_INVALID_SNAPSHOT`, `PHASE6_INVALID_ROOT`.
+ * `PHASE6_INVALID_SNAPSHOT`, `PHASE6_INVALID_ROOT`,
+ * `PHASE6_DELIVERY_KIND_UNREGISTERED`, `PHASE6_DELIVERY_EVIDENCE_INCOMPLETE`,
+ * `PHASE6_PLAN_ROW_NOT_DONE`.
+ *
+ * Plan-type delivery-kind consultation (seam S3, contract §6 S3 + §4g): a
+ * terminal `type: plan` snapshot also consults the delivery-kind evidence
+ * recorded at registration — plan rows are the owned plan (no compass
+ * input) and remote merge verification stays excluded by contract (§4f is
+ * the PM's separate check). The kind is never inferred (§1): a plan
+ * workflow without a registered `delivery_kind` has no close-verifiable
+ * delivery evidence, and a registered kind with incomplete registration
+ * evidence (`development` without its declared source/target branches,
+ * `verification/report-only` without the recorded completion policy)
+ * refuses the same way — missing fields are incomplete registration, not
+ * an exempt workflow. A `completed` close additionally requires every
+ * owned plan row `Done` (the post-write mirror of `closeWorkflow`'s
+ * all-rows-Done guard, §3 terminal stage); `failed`/`stopped` lifecycles
+ * keep their statuses and row states (§5 — never rewritten as
+ * successfully completed). Every refusal is read-only: the workflow stays
+ * registered/resumable.
  */
 export function evaluatePostMergeClose(snapshotDoc: SnapshotDoc, rootDoc: unknown): GateResult {
   const violations: ValidationResult[] = [];
@@ -584,6 +603,66 @@ export function evaluatePostMergeClose(snapshotDoc: SnapshotDoc, rootDoc: unknow
     );
   }
   const workflowId = isPlainObject(snapshotDoc) && typeof snapshotDoc.id === "string" ? snapshotDoc.id : null;
+  // Plan-type delivery-kind consultation (seam S3 — see the doc comment).
+  // Runs on shape-valid terminal documents only: an invalid document is
+  // already PHASE6_INVALID_SNAPSHOT, and the validator owns enum validity
+  // (an out-of-enum delivery_kind never reaches this block as shape-ok).
+  if (shapeOk && terminal && isPlainObject(snapshotDoc) && snapshotDoc.type === "plan") {
+    const kind = snapshotDoc.delivery_kind;
+    if (typeof kind !== "string" || !(WORKFLOW_DELIVERY_KINDS as readonly string[]).includes(kind)) {
+      violations.push(
+        violation(
+          "high",
+          "PHASE6_DELIVERY_KIND_UNREGISTERED",
+          `Workflow '${String(workflowId)}' is type 'plan' but carries no registered delivery_kind \u2014 a plan workflow declares its delivery kind at registration (plan-workflow-lifecycle-contract \u00a71), so this terminal snapshot's delivery evidence cannot be consulted`,
+          "Register the workflow with its delivery kind ('mstar workflow register') or repair the snapshot, then re-run 'mstar iteration gate --phase 6 --workflow <id>'",
+        ),
+      );
+    } else if (kind === "development") {
+      const branch = isPlainObject(snapshotDoc.branch) ? snapshotDoc.branch : undefined;
+      const base = branch?.base;
+      const target = branch?.target;
+      if (typeof base !== "string" || base.trim() === "" || typeof target !== "string" || target.trim() === "") {
+        violations.push(
+          violation(
+            "high",
+            "PHASE6_DELIVERY_EVIDENCE_INCOMPLETE",
+            `Workflow '${String(workflowId)}' declares delivery_kind 'development' with incomplete registration evidence (branch.base/branch.target missing) \u2014 a development workflow with missing branch fields is incomplete registration, not an exempt workflow (plan-workflow-lifecycle-contract \u00a71)`,
+            "Complete the registration evidence (source/target branches) via the register path, then re-run 'mstar iteration gate --phase 6 --workflow <id>'",
+          ),
+        );
+      }
+    } else {
+      const policy = snapshotDoc.completion_policy;
+      if (typeof policy !== "string" || policy.trim() === "") {
+        violations.push(
+          violation(
+            "high",
+            "PHASE6_DELIVERY_EVIDENCE_INCOMPLETE",
+            `Workflow '${String(workflowId)}' declares delivery_kind 'verification/report-only' without the recorded completion_policy \u2014 the completion policy recorded at registration names the evidence that completes the workflow (plan-workflow-lifecycle-contract \u00a71)`,
+            "Record the named completion-policy evidence via the register path, then re-run 'mstar iteration gate --phase 6 --workflow <id>'",
+          ),
+        );
+      }
+    }
+    // Completed close only: every owned plan row Done (§3 terminal stage).
+    // failed/stopped lifecycles keep their row states (§5) and are never
+    // demanded Done here — that would rewrite a failure as a delivery.
+    if (snapshotDoc.status === "completed" && Array.isArray(snapshotDoc.plans)) {
+      for (const row of snapshotDoc.plans) {
+        if (isPlainObject(row) && row.status !== PLAN_STATUS_DONE) {
+          violations.push(
+            violation(
+              "high",
+              "PHASE6_PLAN_ROW_NOT_DONE",
+              `Workflow '${String(workflowId)}' is completed but owned plan row '${String(row.id)}' is ${JSON.stringify(row.status)} \u2014 a completed close requires every plan row Done (plan-workflow-lifecycle-contract \u00a73 terminal stage)`,
+              "Bring the owned plan row to Done (or close the lifecycle as failed/stopped with a recorded reason), then re-run 'mstar iteration gate --phase 6 --workflow <id>'",
+            ),
+          );
+        }
+      }
+    }
+  }
   // Full v2 root validation, not a minimal "workflows is an array" probe: a
   // malformed registry (non-v2 version, missing `updated_at`, malformed
   // `workflows[]` entries) must fail closed as PHASE6_INVALID_ROOT — an
