@@ -258,23 +258,26 @@ export function readPhase2Records(entries: readonly SessionEntry[], sessionId: s
 
 /**
  * Replay this session's durable state: the newest binding plus the reminder
- * latch that belongs to it. Records for a *different* workflow than the current
- * binding are ignored, so a stale binding from an earlier lifecycle cannot keep
- * a key acknowledged or a block asserted in the new one.
+ * latch that belongs to it. Only records written **after** that binding are
+ * counted — a rebind (a new coordinator envelope for the same workflow) starts a
+ * fresh latch, so an earlier block or acknowledgment cannot suppress the new
+ * binding's valid opportunities, and records for a different workflow cannot
+ * either.
  */
 export function derivePhase2State(entries: readonly SessionEntry[], sessionId: string): Phase2SessionState {
   const records = readPhase2Records(entries, sessionId);
-  let binding: Phase2BindingRecord | null = null;
-  for (const record of records) {
-    if (record.kind === "bind") binding = record;
+  let bindingIndex = -1;
+  for (const [index, record] of records.entries()) {
+    if (record.kind === "bind") bindingIndex = index;
   }
-  if (binding === null) {
+  if (bindingIndex === -1) {
     return { binding: null, reminder: { acknowledgedKey: null, remindedKeys: [], blocked: false } };
   }
+  const binding = records[bindingIndex] as Phase2BindingRecord;
   let acknowledgedKey: string | null = null;
   let blocked = false;
   const remindedKeys: string[] = [];
-  for (const record of records) {
+  for (const record of records.slice(bindingIndex + 1)) {
     if (record.workflowId !== binding.workflowId) continue;
     if (record.kind === "checkpoint") {
       blocked = record.decision === "blocked";

@@ -840,6 +840,43 @@ describe("phase2 host adapter", () => {
     expect(harness.advisories()).toHaveLength(3);
     expect(reminderKeys(harness)).toHaveLength(3);
 
+    // A rebind starts a fresh latch. Blocked/acknowledged state recorded before
+    // the newest binding must not suppress the new binding's opportunities.
+    // (The rebind record is appended through the host's own ledger writer —
+    // `appendCustomEntry`, the same call `pi.appendEntry` makes — because the
+    // engine refuses to bind a coordinated lifecycle to a second envelope; the
+    // sequence is exactly what a coordinator's second `bind` writes.)
+    const blockedAgain = await harness.runTool({
+      operation: "checkpoint",
+      reason: "dependency-changed",
+      decision: "blocked",
+      note: "blocked before the rebind",
+    });
+    expect(blockedAgain.details.mstarPhase2).toMatchObject({ blocked: true });
+    startJob(jobs, "job-5", "pre-rebind slice");
+    await harness.emitAgentEnd();
+    expect(harness.advisories()).toHaveLength(3);
+
+    const envelopeSessionId = String(readJson(fixture.coordinatorSession).session_id);
+    harness.sessionManager.appendCustomEntry(PHASE2_CUSTOM_TYPE, {
+      version: 1,
+      kind: "bind",
+      workflowId: WORKFLOW_ID,
+      hostSessionId: harness.sessionManager.getSessionId(),
+      coordinatorSessionPath: fixture.coordinatorSession,
+      coordinatorSessionId: envelopeSessionId,
+      harnessRoot: fixture.harness,
+    });
+    const rebound = derivePhase2State(harness.ledger(), harness.sessionManager.getSessionId());
+    expect(rebound.reminder).toEqual({ acknowledgedKey: null, remindedKeys: [], blocked: false });
+
+    // The observation that the old block suppressed is now eligible again…
+    await harness.emitAgentEnd();
+    expect(harness.advisories()).toHaveLength(4);
+    // …and the fresh latch bounds it exactly as before.
+    await harness.emitAgentEnd();
+    expect(harness.advisories()).toHaveLength(4);
+
     settleOne();
     await awaitSettled(jobs, "job-1");
   });
