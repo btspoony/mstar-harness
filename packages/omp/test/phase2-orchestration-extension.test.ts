@@ -950,16 +950,64 @@ describe("phase2 host adapter", () => {
     expect(checkpoint.isError).toBe(true);
     expect(codeOf(checkpoint)).toBe("phase2.phase-inactive");
 
-    // (e) The named snapshot going away disables the observation too: no
-    // guessed key, no advisory, one bounded diagnostic — and the tool says so.
+    // (e) The bound envelope is re-read on every probe: a same-path replacement
+    // (a new engine session id) makes the binding not-current — the checkpoint
+    // refuses, the reminder stays silent, and nothing is written as a handoff.
+    const originalEnvelope = readFileSync(fixture.coordinatorSession, "utf8");
     await writeSnapshot(fixture, { phase: "phase-2-execute" });
+    const originalSnapshot = readFileSync(fixture.snapshotPath, "utf8");
+    writeJson(fixture.coordinatorSession, {
+      ...(JSON.parse(originalEnvelope) as Record<string, unknown>),
+      session_id: "replacement-session-id",
+    });
+    const superseded = await harness.runTool({
+      operation: "checkpoint",
+      reason: "ownership-changed",
+      decision: "wait",
+      note: "the bound envelope was replaced on disk",
+    });
+    expect(superseded.isError).toBe(true);
+    expect(codeOf(superseded)).toBe("phase2.ownership-drift");
+    expect(String(superseded.content[0]!.text)).toContain("marked not-current");
+    // The event path is inert for the same reason, and says so once.
+    await harness.emitAgentEnd();
+    expect(harness.advisories()).toEqual([]);
+    expect(harness.noticeTexts().at(-1)).toContain("phase2.ownership-drift");
+
+    // Re-reading a restored envelope clears the mark: the binding is current again.
+    writeFileSync(fixture.coordinatorSession, originalEnvelope);
+    const restored = await harness.runTool({
+      operation: "checkpoint",
+      reason: "ownership-changed",
+      decision: "wait",
+      note: "the original envelope is back",
+    });
+    expect(codeOf(restored)).toBe("recorded");
+
+    // (f) The named snapshot going away disables the observation too: no
+    // guessed key, no advisory, one bounded diagnostic — and the tool says so.
     rmSync(fixture.snapshotPath);
     await harness.emitAgentEnd();
     expect(harness.advisories()).toEqual([]);
     expect(harness.noticeTexts().at(-1)).toContain("phase2.snapshot-unreadable");
     expect(await harness.runTool(bindParams(fixture))).toMatchObject({ isError: true });
 
-    // (f) A terminal lifecycle is refused outright, before ownership is even
+    // (g) A missing envelope is the other half of the same rule.
+    writeFileSync(fixture.snapshotPath, originalSnapshot);
+    rmSync(fixture.coordinatorSession);
+    await harness.emitAgentEnd();
+    expect(harness.advisories()).toEqual([]);
+    expect(harness.noticeTexts().at(-1)).toContain("phase2.envelope-unreadable");
+    const unreadable = await harness.runTool({
+      operation: "checkpoint",
+      reason: "before-wait",
+      decision: "wait",
+      note: "the bound envelope is gone",
+    });
+    expect(codeOf(unreadable)).toBe("phase2.envelope-unreadable");
+    writeFileSync(fixture.coordinatorSession, originalEnvelope);
+
+    // (h) A terminal lifecycle is refused outright, before ownership is even
     // consulted, and records nothing.
     const closedEnvelope = makeClosedWorkflow(fixture);
     const terminal = await harness.runTool({
@@ -969,7 +1017,7 @@ describe("phase2 host adapter", () => {
     });
     expect(terminal.isError).toBe(true);
     expect(codeOf(terminal)).toBe("phase2.workflow-terminal");
-    expect(harness.records()).toHaveLength(1);
+    expect(harness.records().filter((record) => record.kind === "bind")).toHaveLength(1);
   });
 
   test("journal replay preserves uncertain launch", async () => {

@@ -148,7 +148,7 @@ interface RuntimeReport {
   };
   bindUnreadableEnvelope: { ok: boolean; isError: boolean; code: string | null; message: string };
   checkpointUnbound: { ok: boolean; isError: boolean; code: string | null; message: string };
-  settings: { before: Record<string, unknown>; after: Record<string, unknown>; invalidCapacityAccepted: boolean | null };
+  settings: { mode: string; observed: Record<string, unknown>; invalidCapacityAccepted: boolean | null };
   source: { errors: string[]; tools: string[]; handlers: string[] };
   hook: { errors: string[]; handlers: string[]; toolCallHandlers: number; benignResult: string | null };
   tools: { loaded: string[]; errors: string[]; pathResolve: string };
@@ -162,7 +162,12 @@ interface RuntimeReport {
  * disposable root, so a broken redirect fails the test instead of touching the
  * operator's real host state.
  */
-function loadPackedRuntime(hostRoot: string, pluginsRoot: string, project: string): RuntimeReport {
+function loadPackedRuntime(
+  hostRoot: string,
+  pluginsRoot: string,
+  project: string,
+  settingsMode: "read" | "write",
+): RuntimeReport {
   const script = `
 import { existsSync } from "node:fs";
 import { readFileSync } from "node:fs";
@@ -176,6 +181,7 @@ const pluginsRoot = process.env.MSTAR_BUNDLE_PLUGINS;
 const sourceEntry = process.env.MSTAR_BUNDLE_SOURCE;
 const pluginName = ${JSON.stringify(PLUGIN_NAME)};
 const settingKeys = ${JSON.stringify(SETTING_KEYS)};
+const settingsMode = process.env.MSTAR_BUNDLE_SETTINGS_MODE ?? "read";
 
 // Refuse to run against anything but the disposable host root this test seeded.
 const seed = await getPluginSettings(${JSON.stringify(SENTINEL_PLUGIN)}, project);
@@ -285,11 +291,13 @@ const report = await (async () => {
     note: "probe",
   });
 
-  // Native settings exercised for real: absent keys mean the schema defaults,
-  // and a declared key persists through the host's own settings path.
-  const before = await getPluginSettings(pluginName, project);
-  await new PluginManager(project).setPluginSetting(pluginName, "phase2PlanInstances", true);
-  const after = await getPluginSettings(pluginName, project);
+  // Native settings exercised for real. This process either writes through the
+  // host's own settings path or freshly reads what a *previous* process wrote,
+  // so persistence is proven across sessions rather than inside one cache.
+  if (settingsMode === "write") {
+    await new PluginManager(project).setPluginSetting(pluginName, "phase2PlanInstances", true);
+  }
+  const observed = await getPluginSettings(pluginName, project);
   const capacitySchema = packedManifestSettings?.maxPlanInstances;
   const invalidCapacityAccepted =
     capacitySchema === undefined ? null : validateSetting(0, capacitySchema).valid === true;
@@ -342,8 +350,8 @@ const report = await (async () => {
     bindUnreadableEnvelope,
     checkpointUnbound,
     settings: {
-      before: Object.fromEntries(settingKeys.map((key) => [key, before?.[key] ?? null])),
-      after: Object.fromEntries(settingKeys.map((key) => [key, after?.[key] ?? null])),
+      mode: settingsMode,
+      observed: Object.fromEntries(settingKeys.map((key) => [key, observed?.[key] ?? null])),
       invalidCapacityAccepted,
     },
     source: {
@@ -379,6 +387,7 @@ console.log(${JSON.stringify(RESULT_MARKER)} + JSON.stringify(report));
       MSTAR_BUNDLE_PROJECT: project,
       MSTAR_BUNDLE_PLUGINS: pluginsRoot,
       MSTAR_BUNDLE_SOURCE: SOURCE_ENTRY,
+      MSTAR_BUNDLE_SETTINGS_MODE: settingsMode,
     },
     encoding: "utf8",
     timeout: 180_000,
@@ -487,7 +496,12 @@ describe("@mstar-harness/omp packed artifact", () => {
       );
 
       unpackPacked(pkgRoot);
-      const report = loadPackedRuntime(hostRoot, pluginsRoot, project);
+      // Two child processes: the first writes the declared key through the
+      // host's own settings path and exits; a *fresh* process then loads the
+      // packed artifact again and must read the persisted value. Same-process
+      // read-after-write could pass on a memory cache, session survival cannot.
+      const writeReport = loadPackedRuntime(hostRoot, pluginsRoot, project, "write");
+      const report = loadPackedRuntime(hostRoot, pluginsRoot, project, "read");
       const host = resolvedHost();
 
       // The exercised host artifact is the packed plugin's pinned optional peer.
@@ -541,10 +555,14 @@ describe("@mstar-harness/omp packed artifact", () => {
       expect(report.bindUnreadableEnvelope.message.length).toBeGreaterThan(0);
       expect(report.checkpointUnbound).toMatchObject({ ok: false, isError: true, code: "phase2.not-bound" });
 
-      // Native settings API exercised for real: absent keys mean defaults, the
-      // declared key persists, and the declared minimum refuses a malformed cap.
-      expect(report.settings.before).toEqual({ phase2PlanInstances: null, maxPlanInstances: null });
-      expect(report.settings.after).toEqual({ phase2PlanInstances: true, maxPlanInstances: null });
+      // Native settings API exercised for real, across sessions: the writing
+      // process observed its own write, and the fresh process that never wrote
+      // anything still reads it from the host's settings store. Keys that were
+      // never declared stay absent (the schema defaults apply), and the declared
+      // minimum refuses a malformed capacity.
+      expect(writeReport.settings).toMatchObject({ mode: "write", observed: { phase2PlanInstances: true } });
+      expect(report.settings.mode).toBe("read");
+      expect(report.settings.observed).toEqual({ phase2PlanInstances: true, maxPlanInstances: null });
       expect(report.settings.invalidCapacityAccepted).toBe(false);
 
       // Source entry parity: the same host loader binds the TS source to the
