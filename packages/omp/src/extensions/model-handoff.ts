@@ -783,13 +783,24 @@ export default function modelHandoff(pi: ExtensionAPI): void {
 
     // Durable re-check after every await: a concurrent arm (this instance or
     // another one over the same session) must be visible here as a binding.
+    // A *terminal* record for a different workflow is not an active binding —
+    // the saved preference still arms `@slow` for a later iteration in this
+    // reused coordinator session.
     const concurrent = decideSessionState(ctx.sessionManager.getEntries(), sessionId);
-    if (concurrent.kind !== "none") {
+    if (concurrent.kind === "pending" || concurrent.kind === "uncertain") {
       return outcome(
         false,
         true,
         `this session already holds a ${concurrent.kind} model-handoff binding; the second start was refused without a model action.`,
         { code: "already-bound", state: concurrent.kind, workflowId: concurrent.record.binding.workflowId },
+      );
+    }
+    if (concurrent.kind === "terminal" && concurrent.record.binding.workflowId === params.workflowId) {
+      return outcome(
+        false,
+        true,
+        `workflow ${params.workflowId} already has a ${concurrent.state} handoff binding in this session; a terminal binding is never re-armed.`,
+        { code: "already-bound", state: concurrent.state, workflowId: params.workflowId },
       );
     }
 
@@ -984,7 +995,28 @@ export default function modelHandoff(pi: ExtensionAPI): void {
         code: "not-pending",
       });
     }
-    const record = decision.record;
+    let record = decision.record;
+
+    /** After every await: refuse to fire if the ledger left `pending`. */
+    const stillPending = (): ToolOutcome | null => {
+      const liveDecision = reconstruct(ctx);
+      if (liveDecision.kind === "pending" && liveDecision.record.operationId === record.operationId) {
+        record = liveDecision.record;
+        return null;
+      }
+      if (liveDecision.kind === "terminal" && liveDecision.state === "cancelled") {
+        return outcome(false, false, `the pending handoff was cancelled: ${liveDecision.record.reason}.`, {
+          code: "cancelled",
+          state: "cancelled",
+          actualModel: liveSpecOf(ctx),
+        });
+      }
+      const described =
+        liveDecision.kind === "none" ? "no binding" : `${liveDecision.kind} (${liveDecision.record.binding.workflowId})`;
+      return outcome(false, true, `no pending model handoff exists for this coordinator session: ${described}.`, {
+        code: "not-pending",
+      });
+    };
     if (params.workflowId !== record.binding.workflowId) {
       return outcome(
         false,
@@ -1007,6 +1039,8 @@ export default function modelHandoff(pi: ExtensionAPI): void {
     const settings = await readHandoffSettings(ctx.cwd);
     const afterSettings = suspensionReason(ctx, sessionId, generation);
     if (afterSettings !== null) return suspend(afterSettings, "pending");
+    const afterSettingsLedger = stillPending();
+    if (afterSettingsLedger !== null) return afterSettingsLedger;
     if (!settings.ok) {
       return outcome(
         false,
@@ -1031,12 +1065,16 @@ export default function modelHandoff(pi: ExtensionAPI): void {
     const readiness = await handoffSeams.inspectReadiness(record.binding, completion);
     const afterReadiness = suspensionReason(ctx, sessionId, generation);
     if (afterReadiness !== null) return suspend(afterReadiness, "pending");
+    const afterReadinessLedger = stillPending();
+    if (afterReadinessLedger !== null) return afterReadinessLedger;
 
     // Re-read the preference *after* the asynchronous checkpoint: the value that
     // decides the destination and the enablement is never a cached one.
     const refreshed = await readHandoffSettings(ctx.cwd);
     const afterRefresh = suspensionReason(ctx, sessionId, generation);
     if (afterRefresh !== null) return suspend(afterRefresh, "pending");
+    const afterRefreshLedger = stillPending();
+    if (afterRefreshLedger !== null) return afterRefreshLedger;
     if (!refreshed.ok) {
       return outcome(
         false,
@@ -1070,6 +1108,8 @@ export default function modelHandoff(pi: ExtensionAPI): void {
     /* ---- Final window: no `await` from here to the public setModel call. ---- */
     const finalSuspension = suspensionReason(ctx, sessionId, generation);
     if (finalSuspension !== null) return suspend(finalSuspension, "pending");
+    const finalLedger = stillPending();
+    if (finalLedger !== null) return finalLedger;
 
     const live = liveSpecOf(ctx);
     const cancelReason = pendingCancellationReason(ctx.sessionManager.getEntries(), record, live);

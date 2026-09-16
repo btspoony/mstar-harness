@@ -81,11 +81,11 @@
  * ## Lifecycle
  *
  * - `input` marks explicit steering and clears a recorded block.
- * - `before_agent_start` / `tool_result` only consume native-result coverage
- *   (the recently settled ids the host's delivery already owns).
  * - `agent_end` is the sole emission point: at most one `pi.sendMessage`
  *   advisory (`{triggerTurn:true, deliverAs:"followUp"}`) per **changed**
- *   observation, recorded with `appendEntry` before it is sent.
+ *   observation, recorded with `appendEntry` before it is sent. Native-result
+ *   coverage is sampled first, then those settled ids are marked consumed, so a
+ *   tool-using turn cannot hide the jobs the host just delivered.
  * - session start/switch/branch/tree reconstruct from the ledger with the exact
  *   host session identity; `session_shutdown` invalidates the callback
  *   generation so a late asynchronous sample can never emit into a dead one.
@@ -626,8 +626,9 @@ export default function phase2Orchestration(pi: ExtensionAPI): void {
 
   /**
    * Consume native-result coverage: the ids the host's completion delivery owns
-   * for this session are marked seen, so a later sample never mistakes an
-   * already-delivered result for a fresh opportunity.
+   * for this session are marked seen *after* `decidePhase2Reminder` has used
+   * them, so a later sample never mistakes an already-delivered result for a
+   * fresh opportunity and the emission sample itself still sees them.
    */
   const consumeNativeResults = (ctx: ExtensionContext): void => {
     const snapshot = ctx.getAsyncJobSnapshot();
@@ -659,6 +660,11 @@ export default function phase2Orchestration(pi: ExtensionAPI): void {
       snapshotAvailable: sampled.observation !== null,
     });
     gate.userTurn = false;
+    // Consume only after the decision has seen this sample's terminals. Marking
+    // them on `tool_result` / `before_agent_start` emptied `recentTerminalIds`
+    // before `agent_end`, so native-delivery silence never fired and a
+    // `triggerTurn` follow-up duplicated the host's own completion.
+    consumeNativeResults(ctx);
     if (decision === "silent") return;
 
     // Record-before-send: the latch is durable before the advisory can be seen.
@@ -992,15 +998,7 @@ export default function phase2Orchestration(pi: ExtensionAPI): void {
     });
   });
 
-  // Sampling boundaries that only consume native-result coverage.
-  pi.on("before_agent_start", (_event, ctx) => {
-    consumeNativeResults(ctx);
-  });
-  pi.on("tool_result", (_event, ctx) => {
-    consumeNativeResults(ctx);
-  });
-
-  // The one emission point.
+  // The one emission point (native-result coverage is consumed inside it).
   pi.on("agent_end", async (_event, ctx) => {
     await emitAdvisory(ctx);
   });

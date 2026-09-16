@@ -1352,6 +1352,51 @@ describe("unowned model change cancels conservatively", () => {
     expect(statesOf(race)).toEqual(["attempting", "pending", "cancelled"]);
     expect(race.attempts).toEqual(["probe/slow-model"]);
     expect(race.liveSpec()).toBe("probe/other-model");
+
+    // A ledger terminal written while readiness is awaited (observation handler)
+    // must stop the fire path even when live model and history still look armed.
+    const ledgerRepo = buildControlRepo();
+    writePluginOverrides(ledgerRepo.main, { modelHandoff: true, handoffTarget: "@default" });
+    const ledger = await createHarness({
+      cwd: ledgerRepo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(ledgerRepo.main),
+    });
+    await ledger.runTool(startParams("ledger-race-iteration"));
+    const ledgerArtifacts = createWorkflowArtifacts(
+      ledgerRepo,
+      ledger.sessionManager.getSessionId(),
+      "ledger-race-iteration",
+    );
+    const pending = ledger.records().at(-1)!;
+    expect(pending.state).toBe("pending");
+    let releaseLedger: (() => void) | undefined;
+    let enterLedger: (() => void) | undefined;
+    const ledgerOpen = new Promise<void>((resolve) => {
+      releaseLedger = resolve;
+    });
+    const ledgerEntered = new Promise<void>((resolve) => {
+      enterLedger = resolve;
+    });
+    handoffSeams.inspectReadiness = async (binding, input) => {
+      enterLedger?.();
+      await ledgerOpen;
+      return REAL_INSPECT_READINESS(binding, input);
+    };
+    const ledgerFire = ledger.runTool(completionParams(ledgerArtifacts));
+    await ledgerEntered;
+    ledger.sessionManager.appendCustomEntry(HANDOFF_CUSTOM_TYPE, {
+      ...pending,
+      state: "cancelled",
+      reason: "an observation handler terminalized this binding while fire awaited",
+    });
+    releaseLedger?.();
+    const ledgerResult = await ledgerFire;
+    handoffSeams.inspectReadiness = REAL_INSPECT_READINESS;
+    expect(codeOf(ledgerResult)).toBe("cancelled");
+    expect(ledger.attempts).toEqual(["probe/slow-model"]);
+    expect(ledger.switched).toEqual(["probe/slow-model"]);
+    expect(statesOf(ledger).at(-1)).toBe("cancelled");
   }, 60_000);
 });
 
@@ -1571,6 +1616,37 @@ describe("terminal state survives tree and reload", () => {
     expect(codeOf(await later.runTool(startParams("later-iteration")))).toBe("armed");
     expect(later.attempts).toEqual(["probe/slow-model"]);
     expect(statesOf(later)).toEqual(["attempting", "pending"]);
+  }, 60_000);
+
+  test("a reused coordinator session arms a later workflow after the previous binding is terminal", async () => {
+    const repo = buildControlRepo();
+    writePluginOverrides(repo.main, { modelHandoff: true, handoffTarget: "@smol" });
+    const harness = await createHarness({
+      cwd: repo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(repo.main),
+    });
+    await harness.emitInput("/iteration-start first", "interactive");
+    expect(codeOf(await harness.runTool(startParams("first-iteration")))).toBe("armed");
+    const first = createWorkflowArtifacts(repo, harness.sessionManager.getSessionId(), "first-iteration");
+    expect(codeOf(await harness.runTool(completionParams(first)))).toBe("handed_off");
+    expect(statesOf(harness).at(-1)).toBe("handed_off");
+    expect(harness.liveSpec()).toBe("probe/smol-model");
+
+    const firstSnapshotPath = join(repo.harness, "workflows", "first-iteration", "snapshot.json");
+    const firstSnapshot = JSON.parse(readFileSync(firstSnapshotPath, "utf8")) as Record<string, unknown>;
+    firstSnapshot.status = "completed";
+    writeJson(firstSnapshotPath, firstSnapshot);
+
+    await harness.emitInput("/iteration-start second", "interactive");
+    const later = await harness.runTool(startParams("second-iteration"));
+    expect(codeOf(later)).toBe("armed");
+    expect(later.details.mstarModelHandoff).toMatchObject({
+      workflowId: "second-iteration",
+      state: "pending",
+    });
+    expect(harness.liveSpec()).toBe("probe/slow-model");
+    expect(harness.attempts.filter((model) => model === "probe/slow-model")).toHaveLength(2);
   }, 60_000);
 });
 

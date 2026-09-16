@@ -102,7 +102,6 @@ const OWNER = "primary-coordinator";
 /** The extension's frozen event wiring: sampling boundaries, one emission point, navigation. */
 const PHASE2_EVENTS = [
   "agent_end",
-  "before_agent_start",
   "input",
   "session_before_branch",
   "session_before_switch",
@@ -112,7 +111,6 @@ const PHASE2_EVENTS = [
   "session_start",
   "session_switch",
   "session_tree",
-  "tool_result",
 ];
 
 type PlanId = (typeof PLAN_IDS)[number];
@@ -894,9 +892,12 @@ describe("phase2 host adapter", () => {
     expect(harness.advisories()).toHaveLength(1);
 
     // The job settles: the host's own delivery owns that completion, so the
-    // plugin stays silent for the observation that contains it.
+    // plugin stays silent for the observation that contains it — including when
+    // this coordinator turn also produced tool results before `agent_end`.
     settle();
     await awaitSettled(jobs, "job-1");
+    await harness.emitToolResult("tool-settled");
+    await harness.emitBeforeAgentStart("continue after native delivery");
     await harness.emitAgentEnd();
     expect(harness.advisories()).toHaveLength(1);
     expect(harness.noticeTexts()).toEqual([]);

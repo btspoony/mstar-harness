@@ -351,8 +351,6 @@ const PHASE2_TOOL = "mstar_phase2";
 /** The Phase-2 extension's frozen event wiring, in registration order. */
 const PHASE2_EVENTS = [
   "input",
-  "before_agent_start",
-  "tool_result",
   "agent_end",
   "session_before_switch",
   "session_before_branch",
