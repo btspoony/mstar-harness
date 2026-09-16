@@ -428,8 +428,8 @@ Refusals (exit 1, mutation-free — the protected snapshot, root register, other
 | `coordination.prepare-amendment.duplicate-plan` | an appended id is already a row of this workflow, or appears twice in one patch |
 | `coordination.prepare-amendment.invalid-patch` | unknown or missing patch keys, an unknown `planParallelism` value, or a patch that changes nothing |
 | `coordination.prepare-amendment.invalid-plan` | an append's own shape/id/metadata, a `file` that is not `{PLAN_DIR}/<id>.md`, a missing or mismatched plan header, a missing/escaping reference, or a `working_branch` equal to one of the workflow's branch anchors |
-| `coordination.prepare-amendment.compass-mismatch` | an unusable, malformed or foreign compass, or a plan set, integration branch or integration checkout the reviewed compass does not declare |
-| `coordination.prepare-amendment.invalid-worktree` | the recorded integration checkout is absent, is the main/control checkout, is not a distinct checkout of the same repository, or is not on `branch.integration` |
+| `coordination.prepare-amendment.compass-mismatch` | an unusable, malformed or foreign compass, or a plan set / `spec_integration_branch` the reviewed compass does not declare — plus, **only when the compass declares its own `integration_worktree_path`**, the checkout this call would leave recorded |
+| `coordination.prepare-amendment.invalid-worktree` | **only when the patch supplies `integrationWorktreePath`** and that path fails validation: absent, the main/control checkout, not a distinct checkout of the same repository, not on the recorded `branch.integration`, or a workflow recording no `branch.integration` to verify it against (omitting the field never triggers this) |
 
 Existing auth/scope refusals keep their own codes: `coordination.session-role` (not a coordinator envelope), `coordination.not-prepared` (the workflow has no coordinator binding), `coordination.session-mismatch`, `coordination.scope-mismatch`, `coordination.workflow-not-found`, `coordination.invalid-transition` (the proposed snapshot fails validation), `coordination.git-unavailable`, and the shared lock failure.
 
