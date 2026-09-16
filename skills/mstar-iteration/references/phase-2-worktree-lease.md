@@ -70,6 +70,9 @@ Phase/gate 转换时按 **`mstar-host`**「Phase-transition todo refresh (host-a
 
 ## 2.3 Branch anchors + integration branch + integration worktree（Phase 2 入口）
 
+<!-- host-hook: phase-2-entry -->
+> Execute the active host reference's `## Host hooks` declaration for `phase-2-entry`; this file defines no host action.
+
 **Branch anchors 解析顺序**（任一环节缺失则 STOP，**禁止**默认 `main`/`master`）：
 
 1. workflow snapshot → `branch.base`（`iteration_base_branch`）、`branch.target`（`target_branch`）、`branch.integration`（`spec_integration_branch`）；plan 行 → `metadata.spec_integration_branch`
@@ -183,9 +186,12 @@ mismatch → **STOP**.
 
 ### Rescheduling checkpoint（主动调度检查点）
 
+<!-- host-hook: rescheduling-checkpoint -->
+> Execute the active host reference's `## Host hooks` declaration for `rescheduling-checkpoint`; this file defines no host action.
+
 Phase 2 缺的不是新调度器，而是一个**具名的重新评估时刻** —— `Rescheduling checkpoint` 就是它。本文件是 procedure 的**唯一 home**：**不**新增 scheduler / DAG / 第二 ready-state register，判断仍由 PM 按下列步骤做出，结果只落在 PM 正常 transcript / ledger。
 
-**五个冻结 reason**（checkpoint 触发词；OMP 侧 `mstar_phase2` checkpoint receipt 消费**同一词汇**，但只记录「已按本 procedure 评估」的事实 + decision/reason —— 它**不**推断依赖就绪、**不**选择派发；**禁止**自造同义词）：
+**五个冻结 reason**（checkpoint 触发词；宿主若在 `rescheduling-checkpoint` 锚点声明 receipt，消费的是**同一词汇** —— 该 receipt 只记录「已按本 procedure 评估」的事实 + decision/reason，**不**推断依赖就绪、**不**选择派发；**禁止**自造同义词 —— 锚点契约 → **`mstar-host`**「Host hooks (anchor contract)」）：
 
 | reason | 触发时刻 |
 | --- | --- |

@@ -6,6 +6,9 @@ PM 在新迭代启动时执行。
 
 ## 1.1 收集上下文
 
+<!-- host-hook: iteration-entry -->
+> Execute the active host reference's `## Host hooks` declaration for `iteration-entry`; this file defines no host action.
+
 1. 读 `{ITERATION_DIR}/README.md`（若存在），了解历史迭代
 2. 读 `STRATEGY.md`（若存在），对齐战略方向（见 `mstar-strategy`）
 3. 读 `{KNOWLEDGE_DIR}/README.md`（若存在），将索引中的 **Active** 行视为 Research 候选（**不**要求阅读全部 knowledge 正文）
@@ -157,3 +160,6 @@ Phase 1 与 §1.6 须遵守 **`references/iteration-artifact-boundaries.md`**（
 **Uncommitted-docs exception（bounded — Phase 1 only）**：Review & Edit 链的文档编辑（compass / plans / specs / `<iteration-id>/` package）可以**未提交**状态落在主 checkout（control root = 主 worktree）——这是 worktree 默认在 Phase 1 的唯一例外，主 checkout 分支**不**切换、不产生 feature commit。**§6 创建 integration worktree 后**：只把**已 review 的本轮文档改动** transfer 到 integration worktree 并在其上 commit（tracked results 写在目标分支所在的检出），随后恢复主 checkout 上对应的未提交文档改动（不切分支）；**禁止**搬运主 checkout 上无关的既有用户改动。
 
 **反模式**：PM 线程代替三角色完成全部编辑而不 invoke；或将本链三角色并行派发 —— 见 **`mstar-roles/references/_shared/leaf-executor-core.md`**「Shared anti-recursion NEVER」。
+
+<!-- host-hook: phase-1-lock -->
+> Execute the active host reference's `## Host hooks` declaration for `phase-1-lock`; this file defines no host action.

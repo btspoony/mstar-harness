@@ -64,7 +64,38 @@ Goal text is a session-level objective only: `{HARNESS_DIR}` / `{PLAN_DIR}` / `s
 
 At **every phase transition** (Prepare → Execute → InReview waves → Phase 3 close → Phase 4 PR → Phase 5 merge-ready → Phase 6 post-merge; likewise per-plan gate crossings), the PM refreshes the host session `todo` list **before the next action or dispatch**: close only the finished phase's **completed** entries, preserve any still-pending gate or future-phase item, and append the next phase's entries. Scoped primary sessions project only their assigned plan through handoff — never global Phase 3–6 tasks (`mstar-iteration` `references/command-shared-invariants.md` § Session todos; `references/phase-2-worktree-lease.md` §2.1).
 
-`todo` entries are a projection, not SSOT: they reflect existing snapshot phase / plan states and named plan/gate evidence, and cannot authorize or invent a state transition. Snapshot and plan artifacts remain the state authorities; this is freshness discipline, not a new host hook, tool, or deterministic enforcement mechanism.
+`todo` entries are a projection, not SSOT: they reflect existing snapshot phase / plan states and named plan/gate evidence, and cannot authorize or invent a state transition. Snapshot and plan artifacts remain the state authorities; this is freshness discipline, not a new host hook anchor, tool, or deterministic enforcement mechanism.
+
+## Host hooks (anchor contract)
+
+Shared lifecycle skills name **host-agnostic anchors** — named moments at which the active host obliges the PM to run a host-defined coordinator action. The anchor vocabulary is frozen and carries no host identity: tool names, exact parameters, prerequisites, refusal codes, native settings and auto-trigger scope live **only** in `references/<host>.md`.
+
+| Anchor | Moment |
+|--------|--------|
+| `iteration-entry` | first preparation action of a new iteration |
+| `phase-1-lock` | Phase 1 completion — the PM lock, after the Review & Edit chain |
+| `phase-2-entry` | first host action of Phase 2 |
+| `rescheduling-checkpoint` | each `Rescheduling checkpoint` re-evaluation |
+
+**Execution rule.** At each anchor the PM executes whatever the **active host reference** declares under its own `## Host hooks` section for that anchor. A host reference that declares nothing for an anchor means **no-op**: never invent an action, never substitute another host's declaration, and never treat an absent declaration as permission to skip the anchor's shared step.
+
+**Marker form.** A shared file that owns an anchor carries a comment marker plus a one-line pointer — neither names a host or a tool:
+
+```markdown
+<!-- host-hook: <anchor> -->
+> Execute the active host reference's `## Host hooks` declaration for `<anchor>`; this file defines no host action.
+```
+
+Carrier locations — the four markers in the shared corpus:
+
+| File | Location | Anchor |
+|------|----------|--------|
+| `mstar-iteration/references/phase-1-prepare.md` | §1.1 head | `iteration-entry` |
+| `mstar-iteration/references/phase-1-prepare.md` | §1.6 tail, after the PM-lock step | `phase-1-lock` |
+| `mstar-iteration/references/phase-2-worktree-lease.md` | §2.3 head | `phase-2-entry` |
+| `mstar-iteration/references/phase-2-worktree-lease.md` | `### Rescheduling checkpoint` | `rescheduling-checkpoint` (the five frozen reason names are handed off verbatim) |
+
+**Prohibition (shared text).** Shared `mstar-*` skill text outside `mstar-host/**` MUST NOT name a host (`omp`, `oh-my-pi`, `dsh`, `OpenCode`, `Cursor`, `Codex`, `Kimi`, `ZCode`), a host tool/field name (`subagent`, `subagent_type`, `tasks[]`, `ask`, `hub`), a native settings key (`modelHandoff`, `phase2PlanInstances`, `maxPlanInstances`), or an extension file name. Capability phrasing ("when the host exposes an invoke tool") is the only permitted form; host names belong to this skill and `references/<host>.md`.
 
 ## Resolve loaded skill root
 
