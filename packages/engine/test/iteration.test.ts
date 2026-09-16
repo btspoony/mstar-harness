@@ -643,6 +643,34 @@ describe("evaluatePostMergeClose — plan-type delivery-kind consultation (plan-
     expect(incomplete!.message).toContain("delivery.completion.policy");
   });
 
+  test("a contradictory PR identity → PHASE6_DELIVERY_EVIDENCE_INCOMPLETE naming the mismatched field (§4d)", () => {
+    const anchors = { source: "feature/plan-a", target: "main" };
+    const complete = {
+      compound: { outcome: "created" },
+      pr: { repo: "btspoony/mstar-harness", head: anchors.source, target: anchors.target },
+      merge: { provider: "github", evidence: "PR #244 verified merged at 2c792c01" },
+    };
+    const mismatches: Array<[string, Record<string, string>, string]> = [
+      ["delivery.pr.head", { repo: "btspoony/mstar-harness", head: "feature/other", target: "main" }, anchors.source],
+      ["delivery.pr.target", { repo: "btspoony/mstar-harness", head: "feature/plan-a", target: "release/9" }, anchors.target],
+    ];
+    for (const [expected, pr, registered] of mismatches) {
+      const result = evaluatePostMergeClose(
+        phase6PlanSnapshot({ branch: anchors, delivery: { ...complete, pr } }),
+        phase6Root([]),
+      );
+      expect(result.ok).toBe(false);
+      const incomplete = result.violations.find((v) => v.code === "PHASE6_DELIVERY_EVIDENCE_INCOMPLETE");
+      expect(incomplete).toBeDefined();
+      expect(incomplete!.message).toContain(expected);
+      // The refusal names BOTH the recorded value and the registered anchor.
+      expect(incomplete!.message).toContain(registered);
+    }
+    // The matching identity passes the same consultation (no false refusal).
+    const matching = evaluatePostMergeClose(phase6PlanSnapshot({ branch: anchors, delivery: complete }), phase6Root([]));
+    expect(matching.ok).toBe(true);
+  });
+
   test("a malformed delivery block is the validator's refusal → PHASE6_INVALID_SNAPSHOT (reasoned skip is mandatory, §4c)", () => {
     const result = evaluatePostMergeClose(
       phase6PlanSnapshot({ delivery: { compound: { outcome: "skipped" } } }),

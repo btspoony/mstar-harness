@@ -899,7 +899,25 @@ export function consultDeliveryEvidence(snapshot: WorkflowSnapshot): ValidationR
     if (!nonEmptyString(branch?.source)) missing.push("branch.source");
     if (!nonEmptyString(branch?.target)) missing.push("branch.target");
     if (!isPlainObject(delivery?.compound)) missing.push("delivery.compound (compound disposition, \u00a74c)");
-    if (!isPlainObject(delivery?.pr)) missing.push("delivery.pr (PR repo/head/target identity, \u00a74d)");
+    const pr = isPlainObject(delivery?.pr) ? delivery.pr : undefined;
+    if (pr === undefined) {
+      missing.push("delivery.pr (PR repo/head/target identity, \u00a74d)");
+    } else {
+      // §4d: the identity recorded at submission IS the delivery the workflow
+      // was registered for. Presence alone let a contradictory pair (a PR for
+      // a different head/target) satisfy the close; `repo` is required but its
+      // value is the recorder's own (no canonical repo to compare against).
+      if (nonEmptyString(branch?.source) && pr.head !== branch.source) {
+        missing.push(
+          `delivery.pr.head (recorded ${JSON.stringify(pr.head)}, registered branch.source ${JSON.stringify(branch.source)} \u2014 \u00a74d: the recorded PR identity must be the registered delivery)`,
+        );
+      }
+      if (nonEmptyString(branch?.target) && pr.target !== branch.target) {
+        missing.push(
+          `delivery.pr.target (recorded ${JSON.stringify(pr.target)}, registered branch.target ${JSON.stringify(branch.target)} \u2014 \u00a74d: the recorded PR identity must be the registered delivery)`,
+        );
+      }
+    }
     if (!isPlainObject(delivery?.merge)) missing.push("delivery.merge (PM-recorded verified-merge evidence, \u00a74f)");
   } else {
     const policy = snapshot.completion_policy;
@@ -1058,6 +1076,8 @@ export type RecordWorkflowDeliveryResult = {
  *   `delivery_kind`: the evidence belongs to the declared kind (§1);
  * - evidence the declared kind does not use (e.g. a completion record on a
  *   `development` workflow) — the declared kind is authoritative;
+ * - a rewrite of the recorded PR identity (§4d records it once at submission:
+ *   an identical re-record is idempotent, a different pair is refused);
  * - an empty patch or a malformed member: nothing is silently dropped.
  *
  * Idempotent and re-entrant: re-recording the exact stored evidence performs
@@ -1130,6 +1150,20 @@ export async function recordWorkflowDelivery(
       );
     }
     const stored = isPlainObject(snapshot.delivery) ? snapshot.delivery : {};
+    // §4d immutability: the PR identity is recorded ONCE at submission — a
+    // different pair is a different delivery, not an evidence update, and a
+    // later payload must not be able to swap it (which would also let a
+    // contradictory identity reach the close). An identical re-record stays
+    // idempotent (`written: false` below); the compound disposition and the
+    // merge evidence remain updatable (a corrected disposition and a re-read
+    // merge record are legitimate evolutions).
+    const recordedPr = isPlainObject(stored.pr) ? stored.pr : undefined;
+    const incomingPr = isPlainObject(evidence.pr) ? evidence.pr : undefined;
+    if (recordedPr !== undefined && incomingPr !== undefined && stableJson(recordedPr) !== stableJson(incomingPr)) {
+      throw new Error(
+        `refusing to rewrite the recorded PR identity of workflow ${JSON.stringify(workflowId)}: \u00a74d records it once at submission \u2014 recorded ${JSON.stringify(recordedPr)}, refused ${JSON.stringify(incomingPr)} (a different PR is a different delivery, not an evidence update)`,
+      );
+    }
     const merged = { ...stored, ...evidence } as WorkflowDeliveryEvidence;
     if (stableJson(snapshot.delivery ?? null) === stableJson(merged)) {
       return { snapshot, written: false };

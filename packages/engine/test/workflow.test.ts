@@ -772,6 +772,18 @@ describe("closeWorkflow", () => {
     { name: "development without the PR identity", overrides: { delivery: { ...registeredDelivery.delivery, pr: undefined } } },
     { name: "development without verified-merge evidence", overrides: { delivery: { ...registeredDelivery.delivery, merge: undefined } } },
     { name: "development without the delivery anchors", overrides: { branch: undefined } },
+    {
+      name: "development with a PR identity for another head",
+      overrides: {
+        delivery: { ...registeredDelivery.delivery, pr: { repo: "btspoony/mstar-harness", head: "feature/other", target: "main" } },
+      },
+    },
+    {
+      name: "development with a PR identity for another target",
+      overrides: {
+        delivery: { ...registeredDelivery.delivery, pr: { repo: "btspoony/mstar-harness", head: "feature/fixture", target: "release/9" } },
+      },
+    },
     { name: "verification/report-only without fulfilment", overrides: { delivery_kind: "verification/report-only", branch: undefined, completion_policy: "acceptance report", delivery: undefined } },
   ])("refuses an incomplete delivery before any write: $name", async ({ overrides }) => {
     const { dir, path } = fixture(overrides);
@@ -893,6 +905,45 @@ describe("recordWorkflowDelivery — authorized delivery-evidence recording (sea
     const again = await recordWorkflowDelivery(id, dir, { evidence, at: "2026-09-13T01:00:00Z" });
     expect(again.written).toBe(false);
     expect(readFileSync(path, "utf8")).toBe(after);
+  });
+
+  test("the recorded PR identity is immutable except for an identical re-record (§4d)", async () => {
+    const { dir, path } = fixture();
+    const pr = { repo: "btspoony/mstar-harness", head: "feature/fixture", target: "main" };
+    expect((await recordWorkflowDelivery(id, dir, { evidence: { pr }, at: "2026-09-12T01:00:00Z" })).written).toBe(true);
+    const afterRecord = readFileSync(path, "utf8");
+    // Identical re-record: idempotent, no write.
+    expect((await recordWorkflowDelivery(id, dir, { evidence: { pr }, at: "2026-09-13T01:00:00Z" })).written).toBe(false);
+    expect(readFileSync(path, "utf8")).toBe(afterRecord);
+    // A different identity is refused — a later payload cannot swap the PR.
+    await expect(
+      recordWorkflowDelivery(id, dir, { evidence: { pr: { ...pr, head: "feature/other" } } }),
+    ).rejects.toThrow(/refusing to rewrite the recorded PR identity/);
+    await expect(
+      recordWorkflowDelivery(id, dir, { evidence: { pr: { ...pr, target: "release/9" } } }),
+    ).rejects.toThrow(/refusing to rewrite the recorded PR identity/);
+    expect(readFileSync(path, "utf8")).toBe(afterRecord);
+  });
+
+  test("the compound disposition and the merge record stay updatable (legitimate evolution)", async () => {
+    const { dir, path } = fixture();
+    await recordWorkflowDelivery(id, dir, { evidence: { compound: { outcome: "created" } }, at: "2026-09-12T01:00:00Z" });
+    const corrected = await recordWorkflowDelivery(id, dir, {
+      evidence: { compound: { outcome: "skipped", reason: "overlapping doc updated in place" } },
+      at: "2026-09-12T02:00:00Z",
+    });
+    expect(corrected.written).toBe(true);
+    expect(corrected.snapshot.delivery).toEqual({ compound: { outcome: "skipped", reason: "overlapping doc updated in place" } });
+    const reread = await recordWorkflowDelivery(id, dir, {
+      evidence: { merge: { provider: "github", evidence: "PR #244 verified merged at 2c792c01" } },
+      at: "2026-09-12T03:00:00Z",
+    });
+    expect(reread.written).toBe(true);
+    const stored = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    expect(stored.delivery).toEqual({
+      compound: { outcome: "skipped", reason: "overlapping doc updated in place" },
+      merge: { provider: "github", evidence: "PR #244 verified merged at 2c792c01" },
+    });
   });
 
   test("recording the complete evidence makes the close succeed end to end", async () => {
