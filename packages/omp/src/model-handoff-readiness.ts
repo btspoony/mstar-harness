@@ -28,12 +28,22 @@
  * ref. The coordinator envelope is read only for this checkpoint and is never
  * forwarded into another input, notice or report.
  *
+ * Every read is bounded to artifacts derived from the bound workflow: the bound
+ * snapshot/compass paths are compared with the re-derived ones *before* the root
+ * register or any artifact is opened. Each named artifact is then pinned on
+ * three independent identities — the logical path with its lstat kind and raw
+ * symlink target, the canonical target, and the content hash of the bytes read
+ * through the logical path — and all three are re-checked before success, so a
+ * retargeted symlink or a rewritten file inside the checkpoint window refuses
+ * (`evidence-changed`, or the artifact's containment code when it escaped its
+ * allowed roots).
+ *
  * Read-only by construction: files are read, Git is probed with read-only
  * commands, and nothing is written anywhere.
  */
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readlinkSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, sep } from "node:path";
 import {
   canonicalizeNearestExisting,
@@ -321,8 +331,28 @@ export type Phase1Readiness =
   | { ready: true; binding: HandoffBinding; integrationHead: string; receipt: Phase1Receipt }
   | { ready: false; codes: readonly Phase1RefusalCode[] };
 
-/** One already-sampled regular file: canonical path, bytes, CAS version. */
-type SampledFile = { real: string; bytes: Buffer; size: number; version: string };
+/**
+ * One sampled artifact, pinned on three independent identities so a change
+ * made during the checkpoint cannot slip past the final re-sample: the
+ * **logical** path exactly as named by the caller (with its own lstat kind and,
+ * when it is a symlink, the raw link target), the **canonical** path it resolves
+ * to, and the **content** hash of the bytes read through the logical path.
+ */
+type ArtifactPin = {
+  logical: string;
+  link: string | null;
+  real: string;
+  bytes: Buffer;
+  size: number;
+  version: string;
+  /** Refusal code when this artifact escapes its allowed roots. */
+  containment: Phase1RefusalCode;
+  /** Canonical roots this artifact must stay inside. */
+  roots: readonly string[];
+};
+
+/** What `pinArtifact` observes: the three identities plus the size. */
+type ArtifactObservation = Omit<ArtifactPin, "containment" | "roots">;
 
 /** `sha256:<64 hex>` — the engine's artifact version form. */
 function versionOf(bytes: Uint8Array): string {
@@ -330,30 +360,25 @@ function versionOf(bytes: Uint8Array): string {
 }
 
 /**
- * Read an absolute path through its realpath; `null` when it is relative,
- * missing, dangling, not a regular file or unreadable. Containment is checked
- * on the returned canonical path, so a symlink that escapes an area is refused
- * rather than trusted.
+ * Observe an absolute path without losing its logical identity: `null` when it
+ * is relative, missing, dangling, not a regular file or unreadable. Bytes are
+ * read through the logical path (so a retargeted symlink is observed as what it
+ * now is) and the canonical target is recorded for containment checks.
  */
-function readRegularFile(path: unknown): SampledFile | null {
+function pinArtifact(path: unknown): ArtifactObservation | null {
   if (!isNonEmptyString(path) || !isAbsolute(path)) return null;
+  let link: string | null = null;
   let real: string;
   try {
+    if (lstatSync(path).isSymbolicLink()) link = readlinkSync(path);
+    if (!statSync(path).isFile()) return null;
     real = realpathSync(path);
   } catch {
     return null;
   }
-  let size: number;
   try {
-    const stats = statSync(real);
-    if (!stats.isFile()) return null;
-    size = stats.size;
-  } catch {
-    return null;
-  }
-  try {
-    const bytes = readFileSync(real);
-    return { real, bytes, size, version: versionOf(bytes) };
+    const bytes = readFileSync(path);
+    return { logical: path, link, real, bytes, size: bytes.byteLength, version: versionOf(bytes) };
   } catch {
     return null;
   }
@@ -426,12 +451,30 @@ export async function inspectPhase1Readiness(
     codes.add(code);
   };
 
-  // Sampled identity (spec items 2 and 5).
-  const samples = new Map<string, SampledFile>();
-  const sample = (path: unknown): SampledFile | null => {
-    const file = readRegularFile(path);
-    if (file !== null && !samples.has(file.real)) samples.set(file.real, file);
-    return file;
+  // Pinned artifact identity (spec items 2 and 5). Each artifact keeps its
+  // logical path, its raw link target, its canonical target and a content hash,
+  // so a retargeted symlink cannot hide a change from the final re-sample.
+  const samples = new Map<string, ArtifactPin>();
+  const sample = (path: unknown, containment: Phase1RefusalCode, roots: readonly string[]): ArtifactPin | null => {
+    const observed = pinArtifact(path);
+    if (observed === null) return null;
+    const existing = samples.get(observed.logical);
+    if (existing !== undefined) return existing;
+    const pin: ArtifactPin = { ...observed, containment, roots };
+    samples.set(pin.logical, pin);
+    return pin;
+  };
+  /** `null` when the artifact is unchanged; otherwise the code to refuse with. */
+  const driftOf = (pin: ArtifactPin): Phase1RefusalCode | null => {
+    const fresh = pinArtifact(pin.logical);
+    if (fresh === null) return "evidence-changed";
+    if (fresh.link !== pin.link || fresh.real !== pin.real) {
+      // The logical name now resolves somewhere else. When the new target is
+      // outside this artifact's allowed roots the containment class applies
+      // (frozen code union — no new code); otherwise it is a changed artifact.
+      return pin.roots.some((root) => isUnder(fresh.real, root)) ? "evidence-changed" : pin.containment;
+    }
+    return fresh.version === pin.version ? null : "evidence-changed";
   };
   const facts: Readonly<{ expected: string | null; probe: () => string | null }>[] = [];
   const record = (probe: () => string | null): string | null => {
@@ -505,18 +548,21 @@ export async function inspectPhase1Readiness(
   const iterationArea = join(iterationDir, binding.workflowId);
   const expectedSnapshot = canonicalizeNearestExisting(join(workflowDir, binding.workflowId, WORKFLOW_SNAPSHOT_FILE));
   const expectedCompass = canonicalizeNearestExisting(join(iterationDir, binding.workflowId, COMPASS_FILE));
+  // Ownership before any artifact read: the bound paths must be exactly the ones
+  // that follow from the Git-derived control root and the explicitly named
+  // workflow. A binding that names any other location is refused here, before
+  // the root register, the snapshot or the compass is even opened.
   if (
     canonicalizeNearestExisting(binding.snapshotPath) !== expectedSnapshot ||
     canonicalizeNearestExisting(binding.compassPath) !== expectedCompass
   ) {
-    fail("binding-invalid");
+    return { ready: false, codes: ["binding-invalid"] };
   }
 
-  // Root register: the named entry must exist, be valid v2 and point at the
-  // very snapshot path the binding names.
+  // From here every read is bounded to artifacts derived from that binding.
   const statusPath = join(harnessRoot, STATUS_FILE);
-  const statusFile = sample(statusPath);
-  const snapshotFile = sample(binding.snapshotPath);
+  const statusFile = sample(statusPath, "binding-invalid", [harnessRoot]);
+  const snapshotFile = sample(binding.snapshotPath, "binding-invalid", [workflowDir]);
   if (statusFile === null || snapshotFile === null) {
     fail("binding-invalid");
   } else {
@@ -539,7 +585,9 @@ export async function inspectPhase1Readiness(
 
   let snapshot: WorkflowSnapshot;
   try {
-    snapshot = readWorkflowSnapshot(dirname(snapshotFile.real)).snapshot;
+    // Read through the bound logical path, so the validated document is exactly
+    // the pinned artifact.
+    snapshot = readWorkflowSnapshot(dirname(snapshotFile.logical)).snapshot;
   } catch {
     return { ready: false, codes: ["binding-invalid"] };
   }
@@ -558,7 +606,7 @@ export async function inspectPhase1Readiness(
   ) {
     fail("binding-invalid");
   }
-  const envelopeFile = sample(input.coordinatorSessionPath);
+  const envelopeFile = sample(input.coordinatorSessionPath, "binding-invalid", [harnessRoot]);
   if (envelopeFile === null) {
     fail("binding-invalid");
   } else {
@@ -579,14 +627,14 @@ export async function inspectPhase1Readiness(
     }
   }
 
-  const compassFile = sample(binding.compassPath);
+  const compassFile = sample(binding.compassPath, "binding-invalid", [iterationDir]);
   if (compassFile === null) {
     fail("binding-invalid");
     return { ready: false, codes: orderedCodes(codes) };
   }
   let compass: Record<string, unknown> = {};
   try {
-    compass = parseCompassFrontmatter(compassFile.real);
+    compass = parseCompassFrontmatter(compassFile.logical);
   } catch {
     fail("binding-invalid");
   }
@@ -652,8 +700,8 @@ export async function inspectPhase1Readiness(
     for (const plan of receiptPlans) {
       const row = rows.find((candidate) => rowId(candidate) === plan.planId);
       const registeredFile = isPlainObject(row) && isNonEmptyString(row.file) ? row.file : null;
-      const planFile = sample(plan.planPath);
-      const evidenceFile = sample(plan.prepareEvidencePath);
+      const planFile = sample(plan.planPath, "prepare-not-locked", [planArea]);
+      const evidenceFile = sample(plan.prepareEvidencePath, "prepare-not-locked", [iterationArea, planArea]);
       // Each plan occurs exactly once (checked above), with its registered file.
       if (
         registeredFile === null ||
@@ -700,7 +748,7 @@ export async function inspectPhase1Readiness(
       const tuple = `${role}\u0000${review.agentId}\u0000${review.resultRef}`;
       if (tuples.has(tuple)) fail("review-evidence-missing");
       tuples.add(tuple);
-      const report = sample(review.reportPath);
+      const report = sample(review.reportPath, "review-evidence-missing", [iterationArea]);
       if (report === null || report.size === 0 || !isUnder(report.real, iterationArea) || reports.has(report.real)) {
         fail("review-evidence-missing");
         return;
@@ -787,25 +835,28 @@ export async function inspectPhase1Readiness(
   }
 
   // --- item 5: re-sample the sampled identity and the Git facts -------------
-  let changed = false;
-  for (const file of samples.values()) {
-    const fresh = readRegularFile(file.real);
-    if (fresh === null || fresh.version !== file.version) changed = true;
+  // Every pinned artifact must still have the same logical identity (kind and
+  // raw link target), the same canonical target inside the same allowed roots
+  // and the same content hash; any difference refuses.
+  for (const pin of samples.values()) {
+    const drift = driftOf(pin);
+    if (drift !== null) fail(drift);
   }
   for (const fact of facts) {
-    if (fact.probe() !== fact.expected) changed = true;
+    if (fact.probe() !== fact.expected) fail("evidence-changed");
   }
-  if (changed) fail("evidence-changed");
 
   if (codes.size > 0 || head === null) return { ready: false, codes: orderedCodes(codes) };
+  const artifactVersions: { path: string; version: string }[] = [];
+  for (const pin of samples.values()) {
+    if (!artifactVersions.some((row) => row.path === pin.real)) {
+      artifactVersions.push({ path: pin.real, version: pin.version });
+    }
+  }
   return {
     ready: true,
     binding,
     integrationHead: head,
-    receipt: {
-      input,
-      binding,
-      artifactVersions: [...samples.values()].map((file) => ({ path: file.real, version: file.version })),
-    },
+    receipt: { input, binding, artifactVersions },
   };
 }

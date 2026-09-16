@@ -25,12 +25,14 @@ import {
   readdirSync,
   realpathSync,
   rmSync,
+  statSync,
   symlinkSync,
   unlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
 import { inspectPhase1Readiness, reserveHandoffBinding } from "../src/model-handoff-readiness";
 import type { HandoffBinding, HandoffBindingInput, Phase1CompletionInput, Phase1Readiness } from "../src/model-handoff-readiness";
 
@@ -68,6 +70,15 @@ function writeJson(path: string, value: unknown): void {
 /** CAS version of a file's current bytes, computed independently of the module. */
 function sha256(path: string): string {
   return `sha256:${createHash("sha256").update(readFileSync(path)).digest("hex")}`;
+}
+
+/** Age a file's atime so a later read stays observable under Linux `relatime`. */
+function ageAtime(path: string): void {
+  utimesSync(path, new Date(Date.now() - 3_600_000), new Date());
+}
+
+function atimeOf(path: string): number {
+  return statSync(path).atimeMs;
 }
 
 function codesOf(readiness: Phase1Readiness): readonly string[] {
@@ -232,11 +243,11 @@ async function buildFixture(options: { workflowId?: string; planIds?: readonly s
   return { root, main, harness, integration, integrationBranch, workflowId, siblingId, sessionId, planIds, reportPaths, binding, input };
 }
 
-function writeRegister(harness: string, ids: readonly string[]): void {
+function writeRegister(harness: string, ids: readonly string[], dirs: Record<string, string> = {}): void {
   writeJson(join(harness, "status.json"), {
     version: 2,
     updated_at: "2026-09-16",
-    workflows: ids.map((id) => ({ id, type: "iteration", started_at: "2026-09-16", dir: `workflows/${id}` })),
+    workflows: ids.map((id) => ({ id, type: "iteration", started_at: "2026-09-16", dir: dirs[id] ?? `workflows/${id}` })),
   });
 }
 
@@ -621,6 +632,56 @@ describe("E2 phase 1 readiness", () => {
     expect(codesOf(await inspectPhase1Readiness(featureRoot, f.input))).toContain("binding-invalid");
   });
 
+  test("a binding whose paths leave the derived workflow is refused before any artifact read", async () => {
+    const f = await buildFixture();
+    expect((await inspectPhase1Readiness(f.binding, f.input)).ready).toBe(true);
+
+    // A complete, register-consistent copy of this workflow at a location the
+    // binding may not name. It references the same coordinator envelope,
+    // integration checkout, plan files, Prepare evidence and review copies, so
+    // the refusal below is about *which paths may be opened*, not about the
+    // content being wrong.
+    const decoyWorkflowDir = join(f.harness, "decoy", "workflows", f.workflowId);
+    const decoyIterationDir = join(f.harness, "decoy", "iterations", f.workflowId);
+    mkdirSync(decoyWorkflowDir, { recursive: true });
+    mkdirSync(decoyIterationDir, { recursive: true });
+    const decoySnapshotPath = join(decoyWorkflowDir, "snapshot.json");
+    const decoyCompassPath = join(decoyIterationDir, "delivery-compass.md");
+    const realSnapshot = JSON.parse(text(snapshotPathOf(f))) as Record<string, unknown>;
+    writeJson(decoySnapshotPath, { ...realSnapshot, compass_ref: `decoy/iterations/${f.workflowId}/delivery-compass.md` });
+    writeFileSync(decoyCompassPath, text(compassPathOf(f)));
+    // The register is made to agree with the decoy, so the register-agreement
+    // check alone cannot be what rejects the foreign binding.
+    writeRegister(f.harness, [f.siblingId, f.workflowId], { [f.workflowId]: `decoy/workflows/${f.workflowId}` });
+
+    // Read-boundary sentinels: the two bound artifact paths the binding names
+    // and the root register. Each is aged explicitly (`relatime` only refreshes
+    // an atime older than the file's mtime), and a twin file read by this test
+    // proves that a read really shows up as an atime change here — so the
+    // "unchanged atime" assertions below cannot pass vacuously.
+    const twin = join(f.root, "atime-control.txt");
+    writeFileSync(twin, "control\n");
+    const registerPath = join(f.harness, "status.json");
+    const sentinels = [decoySnapshotPath, decoyCompassPath, registerPath];
+    for (const path of [...sentinels, twin]) ageAtime(path);
+    const before = new Map(sentinels.map((path) => [path, atimeOf(path)]));
+    const controlBefore = atimeOf(twin);
+    expect(readFileSync(twin, "utf8")).toBe("control\n");
+    expect(atimeOf(twin)).toBeGreaterThan(controlBefore);
+
+    const foreign = { ...f.binding, snapshotPath: decoySnapshotPath, compassPath: decoyCompassPath } as HandoffBinding;
+    const readiness = await inspectPhase1Readiness(foreign, f.input);
+    expect(codesOf(readiness)).toEqual(["binding-invalid"]);
+    for (const path of sentinels) expect(atimeOf(path)).toBe(before.get(path));
+
+    // The sentinel really was a complete alternative tree.
+    const decoy = JSON.parse(text(decoySnapshotPath)) as Record<string, unknown>;
+    expect(decoy.id).toBe(f.workflowId);
+    expect({ ...decoy, compass_ref: realSnapshot.compass_ref }).toEqual(realSnapshot);
+    const register = JSON.parse(text(registerPath)) as { workflows: { id: string; dir: string }[] };
+    expect(register.workflows.find((row) => row.id === f.workflowId)?.dir).toBe(`decoy/workflows/${f.workflowId}`);
+  });
+
   test("changed evidence refuses", async () => {
     const f = await buildFixture();
     const baseline = await inspectPhase1Readiness(f.binding, f.input);
@@ -654,5 +715,55 @@ describe("E2 phase 1 readiness", () => {
     expect(recovered.ready).toBe(true);
     if (!recovered.ready) throw new Error(`unexpected refusal: ${recovered.codes.join(", ")}`);
     expect(recovered.receipt.artifactVersions.find((entry) => entry.path === realpathSync(report))?.version).toBe(sha256(report));
+  });
+
+  test("a symlink retargeted inside the checkpoint window refuses", async () => {
+    const f = await buildFixture();
+    const guides = join(f.harness, "iterations", f.workflowId, "guides");
+    const link = join(guides, "pm-return-link.md");
+    const firstTarget = join(guides, "pm-return-payload.md");
+    writeFileSync(firstTarget, "linked payload\n");
+    symlinkSync(firstTarget, link);
+    const linkedInput = {
+      ...f.input,
+      reviews: [{ ...f.input.reviews[0]!, reportPath: link }, f.input.reviews[1]!, f.input.reviews[2]!],
+    } as unknown as Phase1CompletionInput;
+
+    const baseline = await inspectPhase1Readiness(f.binding, linkedInput);
+    expect(baseline.ready).toBe(true);
+    if (!baseline.ready) throw new Error(`unexpected refusal: ${baseline.codes.join(", ")}`);
+    expect(baseline.receipt.artifactVersions.some((entry) => entry.path === realpathSync(link))).toBe(true);
+
+    // Same deterministic window as above, but the wrapper retargets the
+    // symlink instead of rewriting a file: the logical name keeps resolving to
+    // a regular file the old byte-hash-only re-sample would never notice.
+    const retarget = async (destination: string): Promise<Phase1Readiness> => {
+      const wrapper = join(f.root, `retarget-${basename(destination)}.sh`);
+      writeFileSync(
+        wrapper,
+        `#!/bin/sh\nln -sfn ${JSON.stringify(destination)} ${JSON.stringify(link)}\nexec "$(git --exec-path)/git-upload-pack" "$@"\n`,
+      );
+      chmodSync(wrapper, 0o755);
+      git(["config", "remote.origin.uploadpack", wrapper], f.integration);
+      const readiness = await inspectPhase1Readiness(f.binding, linkedInput);
+      git(["config", "--unset", "remote.origin.uploadpack"], f.integration);
+      return readiness;
+    };
+
+    // Retargeted to another legitimate file of the same iteration area.
+    const otherPayload = join(guides, "other-payload.md");
+    writeFileSync(otherPayload, "another legitimate payload\n");
+    const inRepo = await retarget(otherPayload);
+    expect(inRepo.ready).toBe(false);
+    expect(codesOf(inRepo)).toContain("evidence-changed");
+    expect(realpathSync(link)).toBe(realpathSync(otherPayload));
+
+    // Retargeted outside this iteration's area: the containment class applies.
+    const outside = join(f.root, "outside-return.md");
+    writeFileSync(outside, "outside the iteration area\n");
+    const escaped = await retarget(outside);
+    expect(escaped.ready).toBe(false);
+    expect(codesOf(escaped)).toContain("review-evidence-missing");
+    expect(realpathSync(link)).toBe(realpathSync(outside));
   });
 });
