@@ -2334,7 +2334,12 @@ function prepareAppendOf(
   };
 }
 
-/** One patch: the approved append plus whatever the case overrides. */
+/**
+ * One patch: the approved append plus whatever the case overrides. The base
+ * patch is append-only — it names no integration checkout and no policy — so a
+ * case that needs either supplies it explicitly and a case that omits them
+ * exercises the omission deliberately.
+ */
 function preparePatchOf(fixture: PrepareFixture, overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     mainWorktreeBranch: "main",
@@ -2977,11 +2982,10 @@ describe("Prepare workflow amendment", () => {
     const recorded = prepareSnapshotOf(conflicting);
     recorded.integration_worktree_path = olderPath;
     writeJson(conflicting.snapshotPath, recorded);
+    // The helper's base patch is append-only (it names no path and no policy),
+    // so these cases exercise the omission the finding is about.
     const conflictingBefore = protectedBytes(conflicting);
-    const conflictingPatch = preparePatchOf(conflicting);
-    delete conflictingPatch.integrationWorktreePath;
-
-    const refusal = await prepareRefusalOf(() => amendPrepare(conflicting, conflictingPatch));
+    const refusal = await prepareRefusalOf(() => amendPrepare(conflicting, preparePatchOf(conflicting)));
 
     expect(refusal.code).toBe("coordination.prepare-amendment.compass-mismatch");
     expect(protectedBytes(conflicting)).toEqual(conflictingBefore);
@@ -2992,10 +2996,8 @@ describe("Prepare workflow amendment", () => {
     await ensurePrepareCoordinator(unrecorded);
     writeText(unrecorded.compassPath, withDeclaredPath(unrecorded.integrationPath));
     const unrecordedBefore = protectedBytes(unrecorded);
-    const unrecordedPatch = preparePatchOf(unrecorded);
-    delete unrecordedPatch.integrationWorktreePath;
 
-    const unrecordedRefusal = await prepareRefusalOf(() => amendPrepare(unrecorded, unrecordedPatch));
+    const unrecordedRefusal = await prepareRefusalOf(() => amendPrepare(unrecorded, preparePatchOf(unrecorded)));
 
     expect(unrecordedRefusal.code).toBe("coordination.prepare-amendment.compass-mismatch");
     expect(protectedBytes(unrecorded)).toEqual(unrecordedBefore);
@@ -3008,10 +3010,8 @@ describe("Prepare workflow amendment", () => {
     const alignedDoc = prepareSnapshotOf(aligned);
     alignedDoc.integration_worktree_path = aligned.integrationPath;
     writeJson(aligned.snapshotPath, alignedDoc);
-    const alignedPatch = preparePatchOf(aligned);
-    delete alignedPatch.integrationWorktreePath;
 
-    const amended = await amendPrepare(aligned, alignedPatch);
+    const amended = await amendPrepare(aligned, preparePatchOf(aligned));
 
     expect(amended.view.planIds).toEqual([PREPARE_ROW, PREPARE_APPEND]);
 
@@ -3025,7 +3025,10 @@ describe("Prepare workflow amendment", () => {
     staleDoc.integration_worktree_path = join(corrected.root, "wt-integration-old");
     writeJson(corrected.snapshotPath, staleDoc);
 
-    const correctedResult = await amendPrepare(corrected, preparePatchOf(corrected));
+    const correctedResult = await amendPrepare(
+      corrected,
+      preparePatchOf(corrected, { integrationWorktreePath: corrected.integrationPath }),
+    );
 
     expect(correctedResult.view.planIds).toEqual([PREPARE_ROW, PREPARE_APPEND]);
     expect(prepareSnapshotOf(corrected).integration_worktree_path).toBe(corrected.integrationPath);
