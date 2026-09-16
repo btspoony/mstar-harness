@@ -4426,10 +4426,13 @@ function prepareAdmission(harnessRoot: string, workflowId: string, snapshot: Wor
 
 /**
  * The headers one plan markdown declares, keyed by lowercased label — the
- * idiom `parseAssignmentFile` uses for Assignment headers, with `_`/digits
- * admitted for `plan_id`. Fenced code is skipped so a quoted example is never
- * read as a declaration, and the same label twice with different values
- * refuses instead of silently picking one.
+ * idiom `parseAssignmentFile` uses for Assignment headers, widened to the
+ * forms real plan documents actually use: the colon inside the bold
+ * (`**plan_id:** value`, the dominant form in `{PLAN_DIR}`) and the colon
+ * after it (`**Main worktree branch**: value`). A plain `Label: value` line is
+ * accepted too. Fenced code is skipped so a quoted example is never read as a
+ * declaration, and the same label twice with different values refuses instead
+ * of silently picking one.
  */
 function planHeadersOf(planPath: string, planId: string): Map<string, string> {
   const headers = new Map<string, string>();
@@ -4441,7 +4444,10 @@ function planHeadersOf(planPath: string, planId: string): Map<string, string> {
       continue;
     }
     if (fenced) continue;
-    const match = /^\*{0,2}([A-Za-z][A-Za-z0-9_ ]*?)\*{0,2}:\s*(\S.*)$/.exec(line);
+    // `**Label:** value` / `**Label**: value` / `Label: value`: the label may
+    // not contain `:` or `*` (those are the markup), and the value starts at
+    // the first non-space character after the closing markup and colon.
+    const match = /^\*{0,2}([^:*]+?)\*{0,2}:\*{0,2}\s*(\S.*)$/.exec(line);
     if (match === null) continue;
     const label = match[1]!.trim();
     const value = match[2]!.trim();

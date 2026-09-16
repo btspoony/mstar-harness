@@ -2435,6 +2435,56 @@ describe("Prepare workflow amendment", () => {
     expect(afterView.view.allowed).toBe(true);
   });
 
+  test("both real plan-header forms are read by value: `**Label:** v` and `**Label**: v`", async () => {
+    // Every other case writes the dominant form (the colon inside the bold).
+    // The bootstrap plan's own header block writes the colon after the bold,
+    // and its branch fields must read the same.
+    const colonAfterBold = makePrepareFixture();
+    await ensurePrepareCoordinator(colonAfterBold);
+    writeText(
+      join(colonAfterBold.planDir, `${PREPARE_APPEND}.md`),
+      [
+        `# Plan ${PREPARE_APPEND}`,
+        "",
+        `**plan_id:** ${PREPARE_APPEND}`,
+        "**Status:** Todo",
+        "**Main worktree branch**: main",
+        `**Working branch:** feature/${PREPARE_APPEND}`,
+        "",
+        "Body.",
+        "",
+      ].join("\n"),
+    );
+
+    const amended = await amendPrepare(colonAfterBold, preparePatchOf(colonAfterBold));
+
+    expect(amended.view.planIds).toEqual([PREPARE_ROW, PREPARE_APPEND]);
+    expect(prepareSnapshotOf(colonAfterBold).plans).toHaveLength(2);
+
+    // The same form declaring another branch refuses: the parsed value is
+    // compared, never swallowed into the markup.
+    const mismatch = makePrepareFixture();
+    await ensurePrepareCoordinator(mismatch);
+    writeText(
+      join(mismatch.planDir, `${PREPARE_APPEND}.md`),
+      [
+        `# Plan ${PREPARE_APPEND}`,
+        "",
+        `**plan_id:** ${PREPARE_APPEND}`,
+        "**Main worktree branch**: trunk",
+        `**Working branch**: feature/${PREPARE_APPEND}`,
+        "",
+        "Body.",
+        "",
+      ].join("\n"),
+    );
+
+    const refusal = await prepareRefusalOf(() => amendPrepare(mismatch, preparePatchOf(mismatch)));
+    expect(refusal.code).toBe("coordination.prepare-amendment.invalid-plan");
+    expect(refusal.details.expected).toBe("trunk");
+    expect(refusal.details.actual).toBe("main");
+  });
+
   test("two amendments presenting the same tokens race under the lock: exactly one commits, the loser is stale", async () => {
     const fixture = makePrepareFixture();
     await ensurePrepareCoordinator(fixture);
