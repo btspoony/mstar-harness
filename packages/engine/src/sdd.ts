@@ -803,30 +803,59 @@ function normalizeSnapshotWorktreePath(doc: Record<string, unknown>): Record<str
 }
 
 /**
+ * Register readability for the admission gate (lifecycle contract §6 S2):
+ *
+ * - `absent` — no root `status.json`: the legacy standalone policy applies
+ *   byte-for-byte (no register → no registration demand);
+ * - `readable` — a v2 register was read; `activeIds` is the registered
+ *   ACTIVE lifecycle id set driving the admission-refusal predicate;
+ * - `unreadable` — the file is PRESENT but not a readable v2 register
+ *   (malformed JSON, non-v2 version, missing `workflows[]`). This is a
+ *   damaged control root, never "no register": S1 (`registerPlanWorkflow`)
+ *   and the phase-6 gate (`PHASE6_INVALID_ROOT`) refuse closed on the same
+ *   condition, and admission refuses with them instead of silently
+ *   downgrading to branch-alignment-only exactly when the register is
+ *   damaged.
+ *
+ * Read-only.
+ */
+type WorkflowRegisterState =
+  | { state: "absent" }
+  | { state: "readable"; activeIds: Set<string> }
+  | { state: "unreadable" };
+
+function classifyWorkflowRegisterState(controlHarnessRoot: string): WorkflowRegisterState {
+  const statusPath = join(controlHarnessRoot, "status.json");
+  if (!isFile(statusPath)) return { state: "absent" };
+  let doc: unknown;
+  try {
+    doc = readJson(statusPath);
+  } catch {
+    return { state: "unreadable" };
+  }
+  if (!isPlainObject(doc) || doc.version !== 2 || !Array.isArray(doc.workflows)) return { state: "unreadable" };
+  const activeIds = new Set<string>();
+  for (const entry of doc.workflows) {
+    if (isPlainObject(entry) && typeof entry.id === "string") activeIds.add(entry.id);
+  }
+  return { state: "readable", activeIds };
+}
+
+/**
  * Registered active workflow ids from the v2 root `status.json`
  * (`{HARNESS_DIR}/status.json` — the same harness root the snapshots live
  * under). The `workflows[]` list holds ACTIVE lifecycles only
  * (removal-at-terminal), so it is the register that decides which retained
  * snapshot is live. Returns `null` when no v2 register is present or
  * readable (missing file, malformed JSON, non-v2 document, missing
- * `workflows[]`) — the caller then keeps the legacy first-match behavior.
- * Read-only.
+ * `workflows[]`) — callers that cannot distinguish absence from damage keep
+ * the legacy behavior; the admission gate uses
+ * `classifyWorkflowRegisterState` instead and refuses on the damaged case
+ * (contract §6 S2). Read-only.
  */
 function readActiveWorkflowIds(controlHarnessRoot: string): Set<string> | null {
-  const statusPath = join(controlHarnessRoot, "status.json");
-  if (!isFile(statusPath)) return null;
-  let doc: unknown;
-  try {
-    doc = readJson(statusPath);
-  } catch {
-    return null;
-  }
-  if (!isPlainObject(doc) || doc.version !== 2 || !Array.isArray(doc.workflows)) return null;
-  const ids = new Set<string>();
-  for (const entry of doc.workflows) {
-    if (isPlainObject(entry) && typeof entry.id === "string") ids.add(entry.id);
-  }
-  return ids;
+  const register = classifyWorkflowRegisterState(controlHarnessRoot);
+  return register.state === "readable" ? register.activeIds : null;
 }
 
 /**
@@ -1137,6 +1166,27 @@ export function resolveSddExecutionContext(input: SddExecutionContext): SddExecu
  // form of the composition produced from the canonical control harness
  // root, so no separate escape check.)
 
+ // Register readability gates the whole resolution (lifecycle contract §6
+ // S2, fail-closed like the S1 register and PHASE6_INVALID_ROOT refusals):
+ // a PRESENT-but-unreadable/non-v2 status.json is a damaged control root —
+ // the row scan cannot distinguish a live lifecycle from a retained
+ // terminal one over it, so admission refuses instead of silently
+ // downgrading to branch-alignment-only. An ABSENT register keeps the
+ // standalone policy byte-for-byte. Classified once and reused by the
+ // admission exception below (one register read per resolution).
+  const registerState = classifyWorkflowRegisterState(canonicalControlHarnessRoot);
+  if (registerState.state === "unreadable") {
+    throwGateFail([
+      contextViolation(
+        "critical",
+        "sdd.context.register-unreadable",
+        `control harness root "${canonicalControlHarnessRoot}" has a status.json that is present but not a readable v2 workflow register (malformed JSON, non-v2 version, or missing workflows[]) \u2014 ` +
+          "a damaged register is never treated as \"no register\": registered active lifecycles cannot be resolved over it, so execution is refused (plan-workflow-lifecycle contract \u00a76 S2) instead of silently continuing on branch alignment alone",
+        "repair or migrate the control root's status.json to the v2 shape ('mstar migrate' / register repair), then retry the execution",
+      ),
+    ]);
+  }
+
  // Branch/lease policy: verified lease when an active workflow supplies one,
  // standalone branch alignment otherwise (spec A3 — no new global lease mandate).
   const match = findWorkflowPlanRow(canonicalControlHarnessRoot, planId);
@@ -1212,7 +1262,8 @@ export function resolveSddExecutionContext(input: SddExecutionContext): SddExecu
  // Standalone (no active workflow row, or a non-InProgress row without a
  // lease): existing branch policy only — no lease mandate. Admission
  // exception (lifecycle contract §4b/§6 S2): on a register-governed root
- // (readable v2 `status.json` `workflows[]`), a plan with no registration
+ // (readable v2 `status.json` `workflows[]` — the readability gate above
+ // already refused the damaged case), a plan with no registration
  // evidence in ANY snapshot is an unregistered normal-route plan and is
  // refused — registration is the precondition, never inferred, and branch
  // alignment alone is no silent bypass. Roots without a v2 register
@@ -1222,7 +1273,7 @@ export function resolveSddExecutionContext(input: SddExecutionContext): SddExecu
     if (
       match.kind === "none" &&
       !match.planRowInSnapshot &&
-      readActiveWorkflowIds(canonicalControlHarnessRoot) !== null
+      registerState.state === "readable"
     ) {
       throwGateFail([
         contextViolation(
