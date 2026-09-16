@@ -400,6 +400,22 @@ async function awaitSettled(jobs: AsyncJobManager, id: string): Promise<void> {
   if (job.status === "running") throw new Error(`job ${id} resolved without a terminal status`);
 }
 
+/**
+ * Wait until the host reports no queued and no in-flight delivery. A parked
+ * delivery sink is released by resolving its own promise; this then advances the
+ * manager's delivery loop on microtask ticks alone (no wall-clock waits) until
+ * the delivery state is clean, so a later assertion cannot pass merely because
+ * a delivery is still pending.
+ */
+async function awaitDeliveryDrain(jobs: AsyncJobManager): Promise<void> {
+  for (let tick = 0; tick < 20_000; tick += 1) {
+    const delivery = snapshotOfJobs(jobs).delivery;
+    if (delivery.queued === 0 && !delivery.delivering && delivery.pendingJobIds.length === 0) return;
+    await Promise.resolve();
+  }
+  throw new Error("the host delivery never drained");
+}
+
 /** The host's own owner-filtered projection (`AgentSession.getAsyncJobSnapshot`). */
 function snapshotOfJobs(jobs: AsyncJobManager): AsyncJobSnapshot {
   type Item = AsyncJobSnapshot["running"][number];
@@ -916,7 +932,13 @@ describe("phase2 host adapter", () => {
     expect(snapshotOfJobs(jobs).delivery.delivering || snapshotOfJobs(jobs).delivery.queued > 0).toBe(true);
     await harness.emitAgentEnd();
     expect(harness.advisories()).toHaveLength(1);
+    // Release the parked delivery and wait for the host to report a clean
+    // delivery state: the race sub-case below must not pass merely because a
+    // delivery is still pending (that alone would silence it).
+    parkedDelivery.resolve();
+    await awaitDeliveryDrain(jobs);
     stopSink();
+    expect(snapshotOfJobs(jobs).delivery).toMatchObject({ queued: 0, delivering: false, pendingJobIds: [] });
 
     // A job that settles while the decision is still awaiting the settings read
     // is not swallowed by that decision's consumption: the ids consumed are
@@ -941,21 +963,25 @@ describe("phase2 host adapter", () => {
     await inFlight;
     phase2Seams.readSettings = realReadSettings;
 
-    // This turn may have nudged for the still-running observation, at most once.
+    // The decision sampled job-3 as running, so this turn nudges exactly once
+    // for that changed observation — and with nothing pending, the nudge cannot
+    // be suppressed by a delivery.
     const afterRace = harness.advisories().length;
-    expect(afterRace - beforeRace).toBeLessThanOrEqual(1);
+    expect(afterRace - beforeRace).toBe(1);
     expect(snapshotOfJobs(jobs).recent.some((job) => job.id === "job-3")).toBe(true);
     // The settle is native delivery's, so the next turn must not nudge a second
-    // time — under a second-snapshot consumption it would.
+    // time — under a second-snapshot consumption it would (that id would have
+    // been consumed by the race turn and the settled state would look new).
     await harness.emitAgentEnd();
     expect(harness.advisories()).toHaveLength(afterRace);
 
     // Nothing delivered at all is still a real opportunity: reminded once, then
-    // bounded by the latch.
+    // bounded by the latch. Exact counts, so a silent no-op cannot pass.
     startJob(jobs, "job-4", "fourth background compile");
     await harness.emitAgentEnd();
+    expect(harness.advisories()).toHaveLength(afterRace + 1);
     await harness.emitAgentEnd();
-    expect(harness.advisories().length - afterRace).toBeLessThanOrEqual(1);
+    expect(harness.advisories()).toHaveLength(afterRace + 1);
 
     // No completion text is ever reproduced by the plugin notice.
     for (const advisory of harness.advisories()) {
