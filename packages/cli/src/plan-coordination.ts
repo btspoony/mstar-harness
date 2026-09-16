@@ -46,6 +46,14 @@ import {
 /** Detail keys the A2 failure shape may carry, in spec order. */
 const FAILURE_DETAIL_KEYS = ["holder", "path", "expected", "actual"] as const;
 
+/**
+ * The workflow family additionally forwards the addressed workflow from the
+ * engine's own refusal details. The identity comes from the refusal that was
+ * actually thrown — an engine error that does not carry one is never decorated
+ * with a guessed id — and the plan family's key set is unchanged.
+ */
+const WORKFLOW_FAILURE_DETAIL_KEYS = [...FAILURE_DETAIL_KEYS, "workflow_id"] as const;
+
 /** JSON payload types owned by the exported engine request shapes. */
 type ProgressPayload = ProgressCoordinationRequest["progress"];
 type ResidualEntriesPayload = ResidualAddCoordinationRequest["entries"];
@@ -87,8 +95,11 @@ function failurePayload(
   const payload: Record<string, unknown> = { ok: false, operation: verb, code, message };
   if (context.workflow_id !== undefined) payload.workflow_id = context.workflow_id;
   if (context.plan_id !== undefined) payload.plan_id = context.plan_id;
-  for (const key of FAILURE_DETAIL_KEYS) {
-    if (details?.[key] !== undefined) payload[key] = details[key];
+  // The caller's own context wins: an engine detail never overwrites the
+  // identity this invocation already addressed.
+  const detailKeys = familyOf(verb) === "workflow" ? WORKFLOW_FAILURE_DETAIL_KEYS : FAILURE_DETAIL_KEYS;
+  for (const key of detailKeys) {
+    if (details?.[key] !== undefined && payload[key] === undefined) payload[key] = details[key];
   }
   return JSON.stringify(payload);
 }
