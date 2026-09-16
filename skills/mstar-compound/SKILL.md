@@ -13,7 +13,7 @@ description: Morning Star 知识结晶 —— 将已解决问题的经验沉淀�
 
 After solving a non-trivial problem, `mstar-compound` captures the learning as a structured document in `{KNOWLEDGE_DIR}`, so future plan research, debugging, and implementation can find and reuse it.
 
-**In the mstar lifecycle**, compound is triggered at iteration-close (`mstar-iteration` § Phase 3), not per-plan Done. It can also be invoked standalone for ad-hoc captures outside formal iterations. Standalone delivery plans additionally owe a compound disposition before their delivery PR head is finalized (see「Integration with mstar lifecycle」).
+**In the mstar lifecycle**, compound is triggered at iteration-close (`mstar-iteration` § Phase 3), not per-plan Done. It can also be invoked standalone for ad-hoc captures outside formal iterations. Standalone development plans additionally owe a compound disposition before their delivery PR head is finalized (see「Integration with mstar lifecycle」).
 
 Knowledge that isn't captured evaporates when the session ends. Knowledge that is captured but not discoverable is equally lost. This skill addresses both.
 
