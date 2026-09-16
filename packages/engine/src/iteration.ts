@@ -45,7 +45,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { GateResult, Severity, ValidationResult } from "./core.js";
 import { validateStatusV2, type StatusV2Doc } from "./status.js";
-import { LEGACY_WORKTREE_PATH_CODE, isTerminalSnapshot, validateWorkflowSnapshot, type WorkflowSnapshot } from "./workflow.js";
+import { LEGACY_WORKTREE_PATH_CODE, consultDeliveryEvidence, isTerminalSnapshot, validateWorkflowSnapshot, type WorkflowSnapshot } from "./workflow.js";
 
 const COMPASS_STATUSES = ["active", "locked", "completed"] as const;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -535,7 +535,39 @@ function hasLeftoverLease(snapshotDoc: SnapshotDoc): boolean {
  * `evaluatePhaseGate` / `PhaseGateResult` (Phase 2–5 exit codes stay
  * intact). Stable machine codes: `PHASE6_NOT_TERMINAL`,
  * `PHASE6_ROOT_ENTRY_PRESENT`, `PHASE6_DANGLING_LEASE`,
- * `PHASE6_INVALID_SNAPSHOT`, `PHASE6_INVALID_ROOT`.
+ * `PHASE6_INVALID_SNAPSHOT`, `PHASE6_INVALID_ROOT`,
+ * `PHASE6_DELIVERY_KIND_UNREGISTERED`, `PHASE6_DELIVERY_EVIDENCE_INCOMPLETE`,
+ * `PHASE6_PLAN_ROW_NOT_DONE`.
+ *
+ * Plan-type delivery-kind consultation (seam S3, contract §6 S3 + §4g): a
+ * terminal `type: plan` snapshot also consults the delivery evidence recorded
+ * over the lifecycle — plan rows are the owned plan (no compass input) and
+ * remote merge verification stays excluded by contract (§4f is the PM's
+ * separate check). The consultation is the shared pure function
+ * `consultDeliveryEvidence` (workflow.ts), which `closeWorkflow` runs before
+ * writing a terminal snapshot — one implementation, so this read-only gate
+ * and the write path can never disagree. It runs for a `completed` close ONLY:
+ * `failed`/`stopped` closes are never demanded delivery evidence (§5 — failure
+ * closes through its explicit status with a recorded reason and is never
+ * treated as delivered), exactly as `closeWorkflow` preserves an
+ * already-terminal snapshot unchanged without consulting; the type-generic
+ * dangling-lease probe still covers every terminal status. The kind is never
+ * inferred (§1): a plan workflow without a registered `delivery_kind` has no
+ * close-verifiable delivery evidence — for a legacy terminal snapshot this is
+ * outside the gate's automated recovery, because the create-only register
+ * cannot backfill terminal bytes, so the remediation names the owner
+ * snapshot-amendment path (the audit-promotion grandfather population is
+ * disclosed there) instead of the register verb — and a registered kind with
+ * incomplete delivery evidence (`development` without its registered
+ * source/target branches, its compound disposition, its PR identity or the
+ * PM's verified-merge record; `verification/report-only` without the recorded
+ * completion policy or its fulfilment record) refuses the same way — missing
+ * fields are incomplete registration, not an exempt workflow. A `completed`
+ * close additionally requires every owned plan row `Done` (the post-write
+ * mirror of `closeWorkflow`'s all-rows-Done guard, §3 terminal stage);
+ * `failed`/`stopped` lifecycles keep their statuses and row states (§5 —
+ * never rewritten as successfully completed). Every refusal is read-only: the
+ * workflow stays registered/resumable.
  */
 export function evaluatePostMergeClose(snapshotDoc: SnapshotDoc, rootDoc: unknown): GateResult {
   const violations: ValidationResult[] = [];
@@ -584,6 +616,37 @@ export function evaluatePostMergeClose(snapshotDoc: SnapshotDoc, rootDoc: unknow
     );
   }
   const workflowId = isPlainObject(snapshotDoc) && typeof snapshotDoc.id === "string" ? snapshotDoc.id : null;
+  // Plan-type delivery evidence, COMPLETED closes only (seam S3 — see the doc
+  // comment). Runs on shape-valid terminal documents: an invalid document is
+  // already PHASE6_INVALID_SNAPSHOT, and the validator owns enum validity (an
+  // out-of-enum delivery_kind never reaches this block as shape-ok). The
+  // consultation itself is `consultDeliveryEvidence` — the SAME pure function
+  // `closeWorkflow` runs before its terminal write, so this gate's verdict and
+  // the close refusal cannot drift apart.
+  //
+  // `failed` / `stopped` closes are NEVER demanded delivery evidence (§5: a
+  // failure closes through its explicit status with a recorded reason and is
+  // never treated as delivered) — exactly as `closeWorkflow` preserves an
+  // already-terminal snapshot unchanged without consulting. The type-generic
+  // dangling-lease probe above keeps running for every terminal status.
+  if (shapeOk && terminal && isPlainObject(snapshotDoc) && snapshotDoc.type === "plan" && snapshotDoc.status === "completed") {
+    violations.push(...consultDeliveryEvidence(snapshotDoc as unknown as WorkflowSnapshot));
+    // Every owned plan row Done (§3 terminal stage).
+    if (Array.isArray(snapshotDoc.plans)) {
+      for (const row of snapshotDoc.plans) {
+        if (isPlainObject(row) && row.status !== PLAN_STATUS_DONE) {
+          violations.push(
+            violation(
+              "high",
+              "PHASE6_PLAN_ROW_NOT_DONE",
+              `Workflow '${String(workflowId)}' is completed but owned plan row '${String(row.id)}' is ${JSON.stringify(row.status)} \u2014 a completed close requires every plan row Done (plan-workflow-lifecycle-contract \u00a73 terminal stage)`,
+              "Bring the owned plan row to Done (or close the lifecycle as failed/stopped with a recorded reason), then re-run 'mstar iteration gate --phase 6 --workflow <id>'",
+            ),
+          );
+        }
+      }
+    }
+  }
   // Full v2 root validation, not a minimal "workflows is an array" probe: a
   // malformed registry (non-v2 version, missing `updated_at`, malformed
   // `workflows[]` entries) must fail closed as PHASE6_INVALID_ROOT — an

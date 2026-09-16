@@ -496,13 +496,13 @@ export function validateAssignmentFields(assignmentText: string, opts: ValidateA
     }
   }
 
-// Implement/ops rounds declare capacity (capacity contract spec § A1–A3): the
-// exact complement of the review/audit branch above — the SAME normalized
-// `role` / `auditRound` values, no second role whitelist and no lifecycle
-// phase field. Non-audit docs/Prepare specialists and orientation roles sit
-// here too, and `writable: false` only waives the branch-form gate, never
-// this field. Presence-only: absent, empty or `N/A` fails; numeric/semantic
-// adequacy stays in PM's Prepare check.
+  // Implement/ops rounds declare capacity (capacity contract spec § A1–A3): the
+  // exact complement of the review/audit branch above — the SAME normalized
+  // `role` / `auditRound` values, no second role whitelist and no lifecycle
+  // phase field. Non-audit docs/Prepare specialists and orientation roles sit
+  // here too, and `writable: false` only waives the branch-form gate, never
+  // this field. Presence-only: absent, empty or `N/A` fails; numeric/semantic
+  // adequacy stays in PM's Prepare check.
   if (!reviewSeat && !auditRound) {
     const missing = describeAbsence(fields.taskBudget);
     if (missing !== undefined) {

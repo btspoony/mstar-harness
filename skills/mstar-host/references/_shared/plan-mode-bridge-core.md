@@ -49,6 +49,8 @@ Not allowed in the parent Build session by default: product implementation, test
 | **`spec-register`** | Register plan in SSOT | New root `workflows[]` entry (`{HARNESS_DIR}/status.json` v2) + `plans[]` row in `{WORKFLOW_DIR}/<id>/snapshot.json` (`id`, `status`, `file`, `metadata`); spec stub in `{SPECS_DIR}` or plan frontmatter |
 | **`mirror-plan`** | SSOT main plan file | `{PLAN_DIR}/<plan-id>-<name>.md` with task checkboxes aligned to the host plan body |
 
+`spec-register` is an authorized domain operation (engine producer primitives), declares the workflow's delivery kind, and blocks implementation until complete — plan-mode resumes owe the same registration obligation. Semantics → `{SPECS_DIR}/plan-workflow-lifecycle-contract.md`.
+
 After the host plan is created, keep the host plan body and mirror file **in sync** when scope changes (update both in the same coordination round).
 
 ## Implement todo completion gate (every code todo)

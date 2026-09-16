@@ -13,7 +13,7 @@ description: Morning Star 知识结晶 —— 将已解决问题的经验沉淀�
 
 After solving a non-trivial problem, `mstar-compound` captures the learning as a structured document in `{KNOWLEDGE_DIR}`, so future plan research, debugging, and implementation can find and reuse it.
 
-**In the mstar lifecycle**, compound is triggered at iteration-close (`mstar-iteration` § Phase 3), not per-plan Done. It can also be invoked standalone for ad-hoc captures outside formal iterations.
+**In the mstar lifecycle**, compound is triggered at iteration-close (`mstar-iteration` § Phase 3), not per-plan Done. It can also be invoked standalone for ad-hoc captures outside formal iterations. Standalone development plans additionally owe a compound disposition before their delivery PR head is finalized (see「Integration with mstar lifecycle」).
 
 Knowledge that isn't captured evaporates when the session ends. Knowledge that is captured but not discoverable is equally lost. This skill addresses both.
 
@@ -29,7 +29,7 @@ Knowledge that isn't captured evaporates when the session ends. Knowledge that i
 
 ## Integration with mstar lifecycle
 
-Compound 在迭代收口时触发（`mstar-iteration` § iteration-close），不在 per-plan Done 后单独执行：`iteration-start → [plan lifecycle × N] → iteration-close → mstar-compound（per-iteration round）→ {KNOWLEDGE_DIR} → feeds next iteration's specify/plan`。迭代内所有 plan Done 后，PM 回顾整轮迭代可结晶知识，批量 compound。per-plan Done 是 per-plan 闭环终点；compound 是迭代级收口活动。
+Compound 在迭代收口时触发（`mstar-iteration` § iteration-close），不在 per-plan Done 后单独执行：`iteration-start → [plan lifecycle × N] → iteration-close → mstar-compound（per-iteration round）→ {KNOWLEDGE_DIR} → feeds next iteration's specify/plan`。迭代内所有 plan Done 后，PM 回顾整轮迭代可结晶知识，批量 compound。per-plan Done 是 per-plan 闭环终点；compound 是迭代级收口活动。独立交付 development plan 并行负有 disposition 义务：交付 PR head 定稿前在其交付分支/worktree 运行 review，结果 ∈ {`created` / `updated` / reasoned `skipped`} 记录在 workflow 上——reasoned skipped 是有效结果，高重叠时更新既有文档而非新建，**不强制新文档**。语义权威 → `{SPECS_DIR}/plan-workflow-lifecycle-contract.md`。
 
 ### Iteration package promotion（iteration-close 强制盘点）
 
@@ -49,9 +49,9 @@ Compound 在迭代收口时触发（`mstar-iteration` § iteration-close），�
 
 ## When to use / Skip
 
-**Use**：迭代收口（`mstar-iteration` § iteration-close）批量回顾；独立触发（非迭代或紧急，任何非平凡问题解决后）；重大 bug 修复后（`mstar-iteration` 未启用时手动）。
+**Use**：迭代收口（`mstar-iteration` § iteration-close）批量回顾；独立触发（非迭代或紧急，任何非平凡问题解决后）；重大 bug 修复后（`mstar-iteration` 未启用时手动）；独立 development plan 交付前的 disposition review（PR head 定稿前，见「Integration with mstar lifecycle」）。
 
-**Skip**：自检 ≤2 Yes；Q5 高重叠（更新已有而非新建）；纯机械工作（格式化、依赖升级、typo）；问题未经验证。
+**Skip**：自检 ≤2 Yes；Q5 高重叠（更新已有而非新建）；纯机械工作（格式化、依赖升级、typo）；问题未经验证。独立交付 plan 的 disposition 义务不因跳过结晶而消失——结晶跳过时以 reasoned `skipped` 记录结果（记录在 workflow，见「Integration with mstar lifecycle」）。
 
 ## Two tracks
 

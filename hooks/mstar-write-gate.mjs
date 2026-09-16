@@ -9,18 +9,18 @@ import { isAbsolute as isAbsolute4, join, relative as relative3 } from "node:pat
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { readFileSync as readFileSync2, statSync } from "node:fs";
 import { dirname as dirname2, isAbsolute, join as join2, relative, resolve as resolve2 } from "node:path";
-import { existsSync as existsSync8, mkdirSync as mkdirSync5, readdirSync as readdirSync5, readFileSync as readFileSync8, realpathSync as realpathSync3, statSync as statSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import { existsSync as existsSync8, mkdirSync as mkdirSync5, readdirSync as readdirSync6, readFileSync as readFileSync8, realpathSync as realpathSync3, statSync as statSync3, writeFileSync as writeFileSync3 } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { basename as basename5, dirname as dirname6, isAbsolute as isAbsolute6, join as join10, relative as relative2, resolve as resolve8 } from "node:path";
-import { existsSync as existsSync5, readFileSync as readFileSync5, readdirSync as readdirSync2, realpathSync as realpathSync2 } from "node:fs";
-import { dirname as dirname5, join as join7, resolve as resolve6, sep as sep2 } from "node:path";
+import { basename as basename5, dirname as dirname6, isAbsolute as isAbsolute6, join as join10, relative as relative2, resolve as resolve9 } from "node:path";
+import { existsSync as existsSync5, readFileSync as readFileSync5, readdirSync as readdirSync3, realpathSync as realpathSync2 } from "node:fs";
+import { dirname as dirname5, join as join7, resolve as resolve7, sep as sep2 } from "node:path";
 import { dirname as dirname3, isAbsolute as isAbsolute2, join as join3, resolve as resolve3 } from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
 import { basename as basename2, dirname as dirname4, isAbsolute as isAbsolute3, join as join4, resolve as resolve4 } from "node:path";
-import { isAbsolute as isAbsolute5, join as join6 } from "node:path";
+import { isAbsolute as isAbsolute5, join as join6, resolve as resolve6 } from "node:path";
 import { existsSync as existsSync11, statSync as statSync5 } from "node:fs";
-import { basename as basename8, dirname as dirname10, join as join14, relative as relative4, resolve as resolve11 } from "node:path";
+import { basename as basename8, dirname as dirname10, join as join14, relative as relative4, resolve as resolve12 } from "node:path";
 var SEVERITY_ORDER = ["critical", "high", "medium", "low", "nit"];
 function readJson(filePath) {
   if (!existsSync(filePath))
@@ -512,6 +512,8 @@ var WORKFLOW_SNAPSHOT_FILE = "snapshot.json";
 var WORKFLOW_LIFECYCLE_STATUSES = ["running", "paused", "completed", "failed", "stopped"];
 var WORKFLOW_TERMINAL_STATUSES = ["completed", "failed", "stopped"];
 var WORKFLOW_LIFECYCLE_TYPES = ["plan", "iteration"];
+var WORKFLOW_DELIVERY_KINDS = ["development", "verification/report-only"];
+var WORKFLOW_COMPOUND_OUTCOMES = ["created", "updated", "skipped"];
 function violation3(severity, code, message, fix) {
   return { ok: false, severity, code, message, fix };
 }
@@ -526,6 +528,61 @@ function validateWorktreePathValue(violations, value, field) {
   if (typeof value !== "string" || value.trim() === "" || !isAbsolute5(value)) {
     violations.push(violation3("high", "workflow.snapshot.invalid-integration-worktree-path", `${field} must be a non-empty absolute path — got ${JSON.stringify(value)}`, "record the absolute integration checkout path (integration_worktree_path)"));
   }
+}
+function deliveryEvidenceViolations(value, what) {
+  const violations = [];
+  const invalid2 = (message) => {
+    violations.push(violation3("medium", "workflow.snapshot.invalid-delivery-evidence", `${what}: ${message}`));
+  };
+  if (!isPlainObject2(value)) {
+    invalid2("must be an object");
+    return violations;
+  }
+  const members = ["compound", "pr", "merge", "completion"];
+  const unknownMembers = Object.keys(value).filter((key) => !members.includes(key));
+  if (unknownMembers.length > 0)
+    invalid2(`unknown member(s) ${unknownMembers.join(", ")} — expected ${members.join(" | ")}`);
+  const compound = value.compound;
+  if (compound !== undefined) {
+    if (!isPlainObject2(compound))
+      invalid2("compound must be an object");
+    else {
+      const unknown = Object.keys(compound).filter((key) => key !== "outcome" && key !== "reason");
+      if (unknown.length > 0)
+        invalid2(`compound has unknown key(s) ${unknown.join(", ")}`);
+      if (typeof compound.outcome !== "string" || !WORKFLOW_COMPOUND_OUTCOMES.includes(compound.outcome)) {
+        invalid2(`compound.outcome must be one of ${WORKFLOW_COMPOUND_OUTCOMES.join(" | ")} — got ${JSON.stringify(compound.outcome)}`);
+      } else if (compound.outcome === "skipped" && (typeof compound.reason !== "string" || compound.reason.trim() === "")) {
+        invalid2("compound reason is required when the disposition outcome is 'skipped' (contract §4c)");
+      } else if (compound.reason !== undefined && (typeof compound.reason !== "string" || compound.reason.trim() === "")) {
+        invalid2("compound.reason must be a non-empty string when given");
+      }
+    }
+  }
+  const stringMembers = {
+    pr: ["repo", "head", "target"],
+    merge: ["provider", "evidence"],
+    completion: ["policy", "evidence"]
+  };
+  for (const member of ["pr", "merge", "completion"]) {
+    const block = value[member];
+    if (block === undefined)
+      continue;
+    if (!isPlainObject2(block)) {
+      invalid2(`${member} must be an object`);
+      continue;
+    }
+    const fields = stringMembers[member];
+    const unknown = Object.keys(block).filter((key) => !fields.includes(key));
+    if (unknown.length > 0)
+      invalid2(`${member} has unknown key(s) ${unknown.join(", ")}`);
+    for (const field of fields) {
+      if (typeof block[field] !== "string" || block[field].trim() === "") {
+        invalid2(`${member}.${field} must be a non-empty string`);
+      }
+    }
+  }
+  return violations;
 }
 function validateWorkflowSnapshot(doc) {
   const violations = [];
@@ -592,7 +649,7 @@ function validateWorkflowSnapshot(doc) {
     if (!isPlainObject2(doc.branch)) {
       violations.push(violation3("medium", "workflow.snapshot.invalid-branch", "branch must be an object"));
     } else {
-      for (const key of ["base", "integration", "target"]) {
+      for (const key of ["base", "source", "integration", "target"]) {
         if (doc.branch[key] !== undefined && (typeof doc.branch[key] !== "string" || doc.branch[key].trim() === "")) {
           violations.push(violation3("medium", "workflow.snapshot.invalid-branch", `branch.${key} must be a non-empty string`));
         }
@@ -617,6 +674,20 @@ function validateWorkflowSnapshot(doc) {
   }
   if (doc.compass_ref !== undefined) {
     validateNonEmptyString2(violations, doc.compass_ref, "compass_ref", "workflow.snapshot.missing-compass-ref", "workflow.snapshot.invalid-compass-ref");
+  }
+  if (doc.delivery_kind !== undefined) {
+    if (typeof doc.delivery_kind !== "string" || !WORKFLOW_DELIVERY_KINDS.includes(doc.delivery_kind)) {
+      violations.push(violation3("medium", "workflow.snapshot.invalid-delivery-kind", `delivery_kind must be one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")} — got ${JSON.stringify(doc.delivery_kind)}`));
+    }
+  }
+  if (doc.project !== undefined) {
+    validateNonEmptyString2(violations, doc.project, "project", "workflow.snapshot.missing-project", "workflow.snapshot.invalid-project");
+  }
+  if (doc.completion_policy !== undefined) {
+    validateNonEmptyString2(violations, doc.completion_policy, "completion_policy", "workflow.snapshot.missing-completion-policy", "workflow.snapshot.invalid-completion-policy");
+  }
+  if (doc.delivery !== undefined) {
+    violations.push(...deliveryEvidenceViolations(doc.delivery, "delivery"));
   }
   const terminal = typeof doc.status === "string" && WORKFLOW_TERMINAL_STATUSES.includes(doc.status);
   if (terminal) {
@@ -777,7 +848,7 @@ function validateStatusV2(docOrPath, opts = {}) {
   if (typeof docOrPath === "string") {
     try {
       doc = readJson(docOrPath);
-      harnessDir = dirname5(resolve6(docOrPath));
+      harnessDir = dirname5(resolve7(docOrPath));
     } catch (error) {
       return {
         ok: false,
@@ -885,7 +956,7 @@ function resolveCompassEnforcement(harnessDir) {
     return { hard: false, source: "none" };
   let entries;
   try {
-    entries = readdirSync2(iterationsDir, { withFileTypes: true });
+    entries = readdirSync3(iterationsDir, { withFileTypes: true });
   } catch {
     return { hard: false, source: "none" };
   }
@@ -912,7 +983,7 @@ function resolveCompassEnforcement(harnessDir) {
   return { hard: false, source: "none" };
 }
 function resolveMstarcEnforcement(harnessDir) {
-  const dir = resolve6(harnessDir);
+  const dir = resolve7(harnessDir);
   const rc = loadMstarc(dir, dirname5(dir));
   const value = rc?.config.enforcement;
   if (value === "hard")
@@ -981,14 +1052,14 @@ function validateProjectRegister(doc) {
   return { ok: violations.length === 0, violations };
 }
 function resolveHarnessDir(startDir = process.cwd(), opts = {}) {
-  const start = resolve8(startDir);
+  const start = resolve9(startDir);
   const explicit = opts.harnessDir ?? process.env.MSTAR_HARNESS_DIR;
   if (explicit)
-    return resolve8(start, explicit);
-  const boundary = resolve8(start, opts.workspaceRoot ?? defaultWorkspaceRoot(start));
+    return resolve9(start, explicit);
+  const boundary = resolve9(start, opts.workspaceRoot ?? defaultWorkspaceRoot(start));
   const rc = loadMstarc(start, boundary);
   if (rc !== null && rc.config.harnessDir)
-    return resolve8(rc.dir, rc.config.harnessDir);
+    return resolve9(rc.dir, rc.config.harnessDir);
   let dir = start;
   for (;; ) {
     if (!isAtOrBelow2(dir, boundary))
@@ -1019,7 +1090,7 @@ function defaultWorkspaceRoot(startDir) {
       if (segment && segment !== ".")
         boundary = dirname6(boundary);
     }
-    return resolve8(boundary);
+    return resolve9(boundary);
   } catch {}
   return startDir;
 }
@@ -1028,24 +1099,24 @@ function isAtOrBelow2(dir, root) {
   return rel === "" || !rel.startsWith("..") && !isAbsolute6(rel);
 }
 function mstarcDirOverride(harnessDir, key) {
-  const dir = resolve8(harnessDir);
+  const dir = resolve9(harnessDir);
   const rc = loadMstarc(dir, dirname6(dir));
   const declared = rc?.config[key];
-  return declared ? resolve8(rc.dir, declared) : null;
+  return declared ? resolve9(rc.dir, declared) : null;
 }
 function resolveIterationDir(harnessDir) {
   const declared = mstarcDirOverride(harnessDir, "iterationDir");
   if (declared !== null)
     return declared;
-  return join10(resolve8(harnessDir), "iterations");
+  return join10(resolve9(harnessDir), "iterations");
 }
 function resolveHarnessSubdir(startDir, opts, key, fallback) {
   const harness = resolveHarnessDir(startDir, opts);
   if (harness === null) {
-    throw new Error(`harness dir not found from ${resolve8(startDir)} — cannot resolve the ${fallback} dir (run \`mstar harness scaffold\`, pass opts.harnessDir, or set MSTAR_HARNESS_DIR)`);
+    throw new Error(`harness dir not found from ${resolve9(startDir)} — cannot resolve the ${fallback} dir (run \`mstar harness scaffold\`, pass opts.harnessDir, or set MSTAR_HARNESS_DIR)`);
   }
   const declared = mstarcDirOverride(harness, key);
-  return declared !== null ? declared : join10(resolve8(harness), fallback);
+  return declared !== null ? declared : join10(resolve9(harness), fallback);
 }
 function resolveWorkflowDir(startDir = process.cwd(), opts = {}) {
   return resolveHarnessSubdir(startDir, opts, "workflowDir", "workflows");
@@ -1110,7 +1181,7 @@ function hasHarnessRootMarkers(dir) {
   }
 }
 function resolveHarnessRootOf(target) {
-  let dir = resolve11(target);
+  let dir = resolve12(target);
   for (;; ) {
     if (hasHarnessRootMarkers(dir))
       return dir;
@@ -1123,7 +1194,7 @@ function resolveHarnessRootOf(target) {
 function harnessDocKindOfTarget(targetPath) {
   if (typeof targetPath !== "string" || targetPath.trim() === "")
     return null;
-  const resolved = resolve11(targetPath);
+  const resolved = resolve12(targetPath);
   const name = basename8(resolved);
   if (name !== STATUS_FILE && name !== SNAPSHOT_FILE && name !== REGISTER_FILE)
     return null;

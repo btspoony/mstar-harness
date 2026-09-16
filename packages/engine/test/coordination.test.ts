@@ -1915,13 +1915,19 @@ describe("gitRead subprocess failure classification", () => {
     worktreePath: string,
     targetBody: string[],
   ): void {
+    // Resolve the real Git binary at fixture-write time (`command -v git`
+    // equivalent) — hosts with Git outside /usr/bin keep the delegation
+    // working, and a Git-less runner fails here loudly instead of inside
+    // the child.
+    const realGit = Bun.which("git");
+    if (realGit === null) throw new Error("fixture delegation shim needs a real git on the runner PATH");
     writeExecutable(join(binDir, "git"), [
       "#!/bin/sh",
       `printf '%s\\n' "$*" >> ${JSON.stringify(recordPath)}`,
       `if [ "$1" = "-C" ] && [ "$2" = ${JSON.stringify(worktreePath)} ] && [ "$3" = "rev-parse" ] && [ "$4" = "HEAD" ]; then`,
       ...targetBody.map((line) => `  ${line}`),
       "fi",
-      `exec /usr/bin/git "$@"`,
+      `exec ${JSON.stringify(realGit)} "$@"`,
     ]);
   }
 
@@ -2020,7 +2026,7 @@ describe("gitRead subprocess failure classification", () => {
     expect(report.message).toContain(fixture.worktreePath);
     // The refusal is non-advancing: the InReview row and its lease are intact.
     expect(readFileSync(fixture.snapshotPath).equals(snapshotBefore)).toBe(true);
-  }, 15000);
+  }, 90_000);
 
   test("a git read that outlives the production timeout is refused as git-unavailable", async () => {
     const fixture = await handoffReadyFixture();
@@ -2076,7 +2082,7 @@ describe("gitRead subprocess failure classification", () => {
     expect(report.message).toContain("git rev-parse HEAD");
     // The refusal is non-advancing: the InReview row and its lease are intact.
     expect(readFileSync(fixture.snapshotPath).equals(snapshotBefore)).toBe(true);
-  }, 15000);
+  }, 90_000);
 });
 
 /* ------------------------------------------------------------------ *

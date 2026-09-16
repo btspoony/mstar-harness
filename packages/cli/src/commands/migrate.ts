@@ -6,8 +6,11 @@
  * Exit-code contract:
  * - 0 = ok, or idempotent no-op (root status.json already at schema v2)
  * - 1 = plan-invalid (planner refused: no/unrecognized v1 status.json,
- * unliftable or duplicate plans[] rows, unsafe ids)
- * - 2 = apply-failure (executor threw mid-apply; the root v2 replacement
+ * unliftable or duplicate plans[] rows, unsafe ids, an incoherent
+ * delivery declaration)
+ * - 2 = usage (an ACTIVE standalone plan lift without --delivery-kind, or a
+ * single declaration that cannot describe 2+ ACTIVE standalone plan lifts) or
+ * apply-failure (executor threw mid-apply; the root v2 replacement
  * is the commit point, so the v1 root stays intact for a re-run)
  *
  * `--path` defaults to the resolved `{HARNESS_DIR}` (auto-discovery, same
@@ -19,6 +22,16 @@
  * planned documents and surfaces violations as warnings (apply-time rejections are visible before any write), and writes nothing;
  * `--json` emits the machine-readable shape on stdout for both success
  * and failure paths.
+ *
+ * `--delivery-kind` (with its per-kind evidence) declares the kind of the
+ * ACTIVE standalone plan snapshots the lift produces (contract §1/§4a): a
+ * lifted live `type: plan` lifecycle must declare one, and the caller passes
+ * it explicitly — never inferred, never defaulted in code. A tree whose lift
+ * would create an active kind-less plan snapshot is refused as usage (exit 2)
+ * before any write. The declaration is ONE identity, so it may describe
+ * exactly one lift: a tree with 2+ ACTIVE standalone plans is refused as
+ * usage (exit 2, plan ids listed) and migrates in batches of one — no
+ * per-plan flag syntax exists on purpose.
  */
 import {
   applyMigratePlan,
@@ -28,15 +41,24 @@ import {
   setArtifactStore,
   validateProjectRegister,
   validateWorkflowSnapshot,
+  WORKFLOW_DELIVERY_KINDS,
   type MigratePlan,
 } from "@mstar-harness/engine";
 import { resolve } from "node:path";
 import pc from "picocolors";
 
+/** The engine's delivery-kind union, narrowed from the runtime enum. */
+type DeliveryKind = (typeof WORKFLOW_DELIVERY_KINDS)[number];
+
 export type MigrateCliOptions = {
   dryRun?: boolean;
   path?: string;
   json?: boolean;
+  /** Delivery kind declared for ACTIVE standalone plan lifts (contract §1/§4a). */
+  deliveryKind?: string;
+  branchSource?: string;
+  branchTarget?: string;
+  completionPolicy?: string;
 };
 
 /**
@@ -80,7 +102,13 @@ export async function runMigrateCommand(options: MigrateCliOptions): Promise<voi
 
   let plan: MigratePlan;
   try {
-    plan = migrateHarnessTree(root, { dryRun: options.dryRun === true });
+    plan = migrateHarnessTree(root, {
+      dryRun: options.dryRun === true,
+      ...(options.deliveryKind !== undefined ? { deliveryKind: options.deliveryKind as DeliveryKind } : {}),
+      ...(options.branchSource !== undefined ? { branchSource: options.branchSource } : {}),
+      ...(options.branchTarget !== undefined ? { branchTarget: options.branchTarget } : {}),
+      ...(options.completionPolicy !== undefined ? { completionPolicy: options.completionPolicy } : {}),
+    });
   } catch (error) {
     const message = (error as Error).message;
     if (options.json) {
@@ -112,6 +140,44 @@ export async function runMigrateCommand(options: MigrateCliOptions): Promise<voi
     } else {
       console.log(pc.yellow(`migrate: ${plan.message}`));
     }
+    return;
+  }
+
+  // One declaration is ONE delivery identity (kind + anchors + policy), so it
+  // can describe exactly one lifted lifecycle. A tree whose lift would create
+  // 2+ ACTIVE standalone plans is refused as usage (exit 2) before any write,
+  // with the plan ids: the operator migrates in batches of one instead of
+  // pinning one identity onto several lifecycles (the engine's apply boundary
+  // refuses the same plan).
+  if (plan.deliveryKindAmbiguous.length > 0) {
+    const message =
+      `a single delivery declaration cannot describe ${plan.deliveryKindAmbiguous.length} active standalone plan lifts ` +
+      `(${plan.deliveryKindAmbiguous.join(", ")}) \u2014 migrate them in batches of one declared plan, ` +
+      `running migrate once per plan with that plan's own --delivery-kind evidence`;
+    if (options.json) {
+      console.log(JSON.stringify({ ok: false, root, phase: "plan", exitCode: 2, error: message }));
+    } else {
+      console.error(pc.red(`migrate: ${message}`));
+    }
+    process.exitCode = 2;
+    return;
+  }
+
+  // A lift that would create ACTIVE standalone plan snapshots without a
+  // declared delivery kind is not applicable (contract §1/§4a): the caller
+  // passes the kind explicitly, so the missing flag is a USAGE error (exit 2)
+  // reported before any write — for the dry-run inspection form too.
+  if (plan.deliveryKindRequired.length > 0) {
+    const message =
+      `${plan.deliveryKindRequired.length} active standalone plan snapshot(s) would be lifted without a declared delivery kind ` +
+      `(${plan.deliveryKindRequired.join(", ")}) \u2014 pass --delivery-kind <${WORKFLOW_DELIVERY_KINDS.join("|")}> with its evidence ` +
+      `(development: --branch-source/--branch-target; verification/report-only: --completion-policy)`;
+    if (options.json) {
+      console.log(JSON.stringify({ ok: false, root, phase: "plan", exitCode: 2, error: message }));
+    } else {
+      console.error(pc.red(`migrate: ${message}`));
+    }
+    process.exitCode = 2;
     return;
   }
 

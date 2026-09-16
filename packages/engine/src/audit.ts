@@ -23,7 +23,7 @@ import { readArtifactBytes, withProtectedWrite } from "./coordination-write.js";
 import { assertSafePathComponent } from "./path.js";
 import { getArtifactStore } from "./store.js";
 import { registerWorkflowEntryLocked, validateWorkflowEntry, type PlanRow, type WorkflowEntry } from "./status.js";
-import { WORKFLOW_SNAPSHOT_FILE, writeWorkflowSnapshot, type WorkflowSnapshot } from "./workflow.js";
+import { WORKFLOW_SNAPSHOT_FILE, assertDeliveryRegistrationCoherence, writeWorkflowSnapshot, WORKFLOW_DELIVERY_KINDS, type WorkflowDeliveryKind, type WorkflowSnapshot } from "./workflow.js";
 
 function violation(severity: ValidationResult["severity"], code: string, message: string, fix?: string): ValidationResult {
   return { ok: false, severity, code, message, fix };
@@ -1183,6 +1183,20 @@ export type PromoteAuditPlansOptions = {
   harnessDir: string;
  /** Default: basename of `outDir` (e.g. `audit-2026-08-22`). */
   workflowId?: string;
+  /**
+   * Delivery kind declared for the promoted plans (contract §1/§4a). Required —
+   * the promoted lifecycle is a `type: plan` workflow, so its delivery kind is
+   * declared at registration, never inferred and never defaulted in code (an
+   * audit promotion that left it unset minted an active snapshot no close path
+   * could complete).
+   */
+  deliveryKind: WorkflowDeliveryKind;
+  /** Delivery source branch, recorded as `branch.source`. Required for `development`. */
+  branchSource?: string;
+  /** Delivery target branch, recorded as `branch.target`. Required for `development`. */
+  branchTarget?: string;
+  /** Completion policy for `verification/report-only` promotions. Required for that kind. */
+  completionPolicy?: string;
 };
 
 /**
@@ -1227,6 +1241,19 @@ export async function promoteAuditPlans(
   if (typeof options.harnessDir !== "string" || options.harnessDir.trim() === "") {
     throw new Error("promoteAuditPlans: options.harnessDir is required (must contain status.json + workflows/)");
   }
+  // Contract §1/§4a: the promoted lifecycle declares its delivery kind here —
+  // the SAME per-kind coherence rule the normal-entry register enforces, so a
+  // promotion can never mint an unclosable `development` (or a
+  // `verification/report-only` without its completion policy).
+  if (
+    typeof options.deliveryKind !== "string" ||
+    !(WORKFLOW_DELIVERY_KINDS as readonly string[]).includes(options.deliveryKind)
+  ) {
+    throw new Error(
+      `promoteAuditPlans: options.deliveryKind must be one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")} \u2014 got ${JSON.stringify(options.deliveryKind)} (a promoted plan workflow declares its delivery kind at registration; it is never inferred and never defaulted)`,
+    );
+  }
+  assertDeliveryRegistrationCoherence(options.deliveryKind, options, "promoteAuditPlans");
 
   const workflowId = options.workflowId ?? basename(resolve(outDir));
   assertSafePathComponent(workflowId, "workflow id");
@@ -1269,7 +1296,15 @@ export async function promoteAuditPlans(
     started_at: now.toISOString(),
     updated_at: now.toISOString().slice(0, 10),
     plans,
+    delivery_kind: options.deliveryKind,
   };
+  if (options.branchSource !== undefined || options.branchTarget !== undefined) {
+    snapshot.branch = {
+      ...(options.branchSource !== undefined ? { source: options.branchSource } : {}),
+      ...(options.branchTarget !== undefined ? { target: options.branchTarget } : {}),
+    };
+  }
+  if (options.completionPolicy !== undefined) snapshot.completion_policy = options.completionPolicy;
   const entry: WorkflowEntry = {
     id: workflowId,
     type: "plan",

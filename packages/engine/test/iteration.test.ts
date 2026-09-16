@@ -49,6 +49,8 @@ import {
 } from "../src/iteration.js";
 import type { SnapshotDoc } from "../src/iteration.js";
 import { readJson } from "../src/core.js";
+import { registerPlanWorkflow } from "../src/workflow.js";
+import { createFsStore, setArtifactStore } from "../src/store.js";
 
 const REAL_STATUS_PATH = join(import.meta.dir, "fixtures", "status.real-shape.json");
 
@@ -499,6 +501,313 @@ describe("evaluatePostMergeClose — Phase 6 post-merge close local-state gate (
     expect(result.transition).toBe("phase-2-execute");
     expect(result.ok).toBe(true);
     expect(result.violations).toEqual([]);
+  });
+});
+
+/** Minimal registered + closed standalone plan snapshot (contract §1/§6 S3 shape from `registerPlanWorkflow`). */
+function phase6PlanSnapshot(overrides: Record<string, unknown> = {}): SnapshotDoc {
+  return {
+    schema_version: 1,
+    id: "wf-plan-1",
+    type: "plan",
+    status: "completed",
+    started_at: "2026-08-19T08:00:00Z",
+    ended_at: "2026-09-12",
+    updated_at: "2026-09-12",
+    delivery_kind: "development",
+    branch: { source: "feature/plan-a", target: "main" },
+    // Collected delivery evidence (contract §4c/§4d/§4f) — the close
+    // consultation requires all three for a development workflow.
+    delivery: {
+      compound: { outcome: "created" },
+      pr: { repo: "btspoony/mstar-harness", head: "feature/plan-a", target: "main" },
+      merge: { provider: "github", evidence: "PR #244 verified merged at 2c792c01" },
+    },
+    plans: [{ id: "plan-a", title: "Plan A", file: "plans/plan-a.md", status: "Done" }],
+    ...overrides,
+  };
+}
+
+describe("evaluatePostMergeClose — plan-type delivery-kind consultation (plan-workflow-lifecycle-contract §6 S3)", () => {
+  test("registered development plan: Done owned row + registered kind + complete evidence + no leases + root entry gone → closeable", () => {
+    const result = evaluatePostMergeClose(phase6PlanSnapshot(), phase6Root([]));
+    expect(result.ok).toBe(true);
+    expect(result.violations).toEqual([]);
+  });
+
+  test("registered verification/report-only plan with its recorded completion policy and fulfilment → closeable (no forced PR, §1/§7)", () => {
+    const policy = "acceptance report at reports/wf-plan-1.md";
+    const result = evaluatePostMergeClose(
+      phase6PlanSnapshot({
+        delivery_kind: "verification/report-only",
+        completion_policy: policy,
+        branch: undefined,
+        delivery: { completion: { policy, evidence: "reports/wf-plan-1.md (sha256:9f2c…)" } },
+      }),
+      phase6Root([]),
+    );
+    expect(result.ok).toBe(true);
+    expect(result.violations).toEqual([]);
+  });
+
+  test("completed plan workflow with a not-Done owned row → PHASE6_PLAN_ROW_NOT_DONE (a completed close requires every row Done)", () => {
+    const result = evaluatePostMergeClose(
+      phase6PlanSnapshot({
+        plans: [{ id: "plan-a", title: "Plan A", file: "plans/plan-a.md", status: "InProgress" }],
+      }),
+      phase6Root([]),
+    );
+    expect(result.ok).toBe(false);
+    const notDone = result.violations.find((v) => v.code === "PHASE6_PLAN_ROW_NOT_DONE");
+    expect(notDone).toBeDefined();
+    expect(notDone!.message).toContain("plan-a");
+    expect(notDone!.message).toContain("InProgress");
+  });
+
+  test("terminal plan workflow without a registered delivery kind → PHASE6_DELIVERY_KIND_UNREGISTERED (the kind is never inferred, §1)", () => {
+    const result = evaluatePostMergeClose(phase6PlanSnapshot({ delivery_kind: undefined }), phase6Root([]));
+    expect(result.ok).toBe(false);
+    const unregistered = result.violations.find((v) => v.code === "PHASE6_DELIVERY_KIND_UNREGISTERED");
+    expect(unregistered).toBeDefined();
+    expect(unregistered!.message).toContain("wf-plan-1");
+  });
+
+  test("delivery kind outside the registered enum is the validator's refusal → PHASE6_INVALID_SNAPSHOT (gate and validator agree)", () => {
+    const result = evaluatePostMergeClose(phase6PlanSnapshot({ delivery_kind: "wing-it" }), phase6Root([]));
+    expect(result.ok).toBe(false);
+    expect(result.violations.some((v) => v.code === "PHASE6_INVALID_SNAPSHOT")).toBe(true);
+    expect(result.violations.some((v) => v.code === "PHASE6_DELIVERY_KIND_UNREGISTERED")).toBe(false);
+  });
+
+  test("development plan with missing branch anchors → PHASE6_DELIVERY_EVIDENCE_INCOMPLETE (incomplete registration, not an exempt workflow, §1)", () => {
+    // `branch.base` is the protected base anchor, never the delivery source:
+    // a legacy snapshot with the feature branch under `base` no longer
+    // satisfies the development registration evidence.
+    for (const branch of [undefined, { source: "feature/plan-a" }, { base: "feature/plan-a", target: "main" }]) {
+      const result = evaluatePostMergeClose(phase6PlanSnapshot({ branch }), phase6Root([]));
+      expect(result.ok).toBe(false);
+      const incomplete = result.violations.find((v) => v.code === "PHASE6_DELIVERY_EVIDENCE_INCOMPLETE");
+      expect(incomplete).toBeDefined();
+      expect(incomplete!.message).toContain("development");
+    }
+  });
+
+  test("verification/report-only plan without the recorded completion policy → PHASE6_DELIVERY_EVIDENCE_INCOMPLETE (§1)", () => {
+    const result = evaluatePostMergeClose(
+      phase6PlanSnapshot({ delivery_kind: "verification/report-only", completion_policy: undefined }),
+      phase6Root([]),
+    );
+    expect(result.ok).toBe(false);
+    const incomplete = result.violations.find((v) => v.code === "PHASE6_DELIVERY_EVIDENCE_INCOMPLETE");
+    expect(incomplete).toBeDefined();
+    expect(incomplete!.message).toContain("verification/report-only");
+  });
+
+  test("development delivery evidence missing any member → PHASE6_DELIVERY_EVIDENCE_INCOMPLETE naming the missing item (§4c/§4d/§4f)", () => {
+    const complete = {
+      compound: { outcome: "updated" },
+      pr: { repo: "btspoony/mstar-harness", head: "feature/plan-a", target: "main" },
+      merge: { provider: "github", evidence: "PR #244 verified merged at 2c792c01" },
+    };
+    const cases: Array<[string, string]> = [
+      ["compound", "delivery.compound"],
+      ["pr", "delivery.pr"],
+      ["merge", "delivery.merge"],
+    ];
+    for (const [member, expected] of cases) {
+      const delivery: Record<string, unknown> = { ...complete };
+      delete delivery[member];
+      const result = evaluatePostMergeClose(phase6PlanSnapshot({ delivery }), phase6Root([]));
+      expect(result.ok).toBe(false);
+      const incomplete = result.violations.find((v) => v.code === "PHASE6_DELIVERY_EVIDENCE_INCOMPLETE");
+      expect(incomplete).toBeDefined();
+      expect(incomplete!.message).toContain("development");
+      expect(incomplete!.message).toContain(expected);
+      // The refusal names the authorized recording seam, not an inferred fix.
+      expect(incomplete!.fix).toContain("mstar workflow evidence");
+    }
+  });
+
+  test("the fulfilment record must name the registered completion policy → PHASE6_DELIVERY_EVIDENCE_INCOMPLETE (§1)", () => {
+    const result = evaluatePostMergeClose(
+      phase6PlanSnapshot({
+        delivery_kind: "verification/report-only",
+        completion_policy: "acceptance report at reports/wf-plan-1.md",
+        delivery: { completion: { policy: "some other policy", evidence: "reports/elsewhere.md" } },
+      }),
+      phase6Root([]),
+    );
+    expect(result.ok).toBe(false);
+    const incomplete = result.violations.find((v) => v.code === "PHASE6_DELIVERY_EVIDENCE_INCOMPLETE");
+    expect(incomplete).toBeDefined();
+    expect(incomplete!.message).toContain("delivery.completion.policy");
+  });
+
+  test("a contradictory PR identity → PHASE6_DELIVERY_EVIDENCE_INCOMPLETE naming the mismatched field (§4d)", () => {
+    const anchors = { source: "feature/plan-a", target: "main" };
+    const complete = {
+      compound: { outcome: "created" },
+      pr: { repo: "btspoony/mstar-harness", head: anchors.source, target: anchors.target },
+      merge: { provider: "github", evidence: "PR #244 verified merged at 2c792c01" },
+    };
+    const mismatches: Array<[string, Record<string, string>, string]> = [
+      ["delivery.pr.head", { repo: "btspoony/mstar-harness", head: "feature/other", target: "main" }, anchors.source],
+      ["delivery.pr.target", { repo: "btspoony/mstar-harness", head: "feature/plan-a", target: "release/9" }, anchors.target],
+    ];
+    for (const [expected, pr, registered] of mismatches) {
+      const result = evaluatePostMergeClose(
+        phase6PlanSnapshot({ branch: anchors, delivery: { ...complete, pr } }),
+        phase6Root([]),
+      );
+      expect(result.ok).toBe(false);
+      const incomplete = result.violations.find((v) => v.code === "PHASE6_DELIVERY_EVIDENCE_INCOMPLETE");
+      expect(incomplete).toBeDefined();
+      expect(incomplete!.message).toContain(expected);
+      // The refusal names BOTH the recorded value and the registered anchor.
+      expect(incomplete!.message).toContain(registered);
+    }
+    // The matching identity passes the same consultation (no false refusal).
+    const matching = evaluatePostMergeClose(phase6PlanSnapshot({ branch: anchors, delivery: complete }), phase6Root([]));
+    expect(matching.ok).toBe(true);
+  });
+
+  test("a malformed delivery block is the validator's refusal → PHASE6_INVALID_SNAPSHOT (reasoned skip is mandatory, §4c)", () => {
+    const result = evaluatePostMergeClose(
+      phase6PlanSnapshot({ delivery: { compound: { outcome: "skipped" } } }),
+      phase6Root([]),
+    );
+    expect(result.ok).toBe(false);
+    expect(result.violations.some((v) => v.code === "PHASE6_INVALID_SNAPSHOT")).toBe(true);
+    expect(result.violations.some((v) => v.code === "PHASE6_DELIVERY_EVIDENCE_INCOMPLETE")).toBe(false);
+    // A reasoned skip IS valid evidence.
+    const complete = {
+      compound: { outcome: "created" },
+      pr: { repo: "btspoony/mstar-harness", head: "feature/plan-a", target: "main" },
+      merge: { provider: "github", evidence: "PR #244 verified merged at 2c792c01" },
+    };
+    const reasoned = evaluatePostMergeClose(
+      phase6PlanSnapshot({
+        delivery: {
+          ...complete,
+          compound: { outcome: "skipped", reason: "no new knowledge \u2014 the overlapping doc was updated in place" },
+        },
+      }),
+      phase6Root([]),
+    );
+    expect(reasoned.ok).toBe(true);
+  });
+
+  test("terminal plan workflow with a dangling row lease → PHASE6_DANGLING_LEASE (type-generic probe, close never releases leases)", () => {
+    const result = evaluatePostMergeClose(
+      phase6PlanSnapshot({
+        plans: [
+          {
+            id: "plan-a",
+            title: "Plan A",
+            file: "plans/plan-a.md",
+            status: "Done",
+            execution_lease: { holder: "dev-1", claimed_at: "2026-08-19T08:00:00Z", worktree_path: "/tmp/wt/plan-a" },
+          },
+        ],
+      }),
+      phase6Root([]),
+    );
+    expect(result.ok).toBe(false);
+    expect(result.violations.some((v) => v.code === "PHASE6_DANGLING_LEASE")).toBe(true);
+  });
+
+  test("failed plan workflow keeps its status and row state and passes (§5 — failure closes are never rewritten as completed)", () => {
+    const result = evaluatePostMergeClose(
+      phase6PlanSnapshot({
+        status: "failed",
+        plans: [{ id: "plan-a", title: "Plan A", file: "plans/plan-a.md", status: "Todo" }],
+      }),
+      phase6Root([]),
+    );
+    expect(result.ok).toBe(true);
+    expect(result.violations).toEqual([]);
+  });
+
+  test("failed/stopped plan workflows are never demanded delivery evidence → gate PASSES with NO evidence and NO registered kind (§5)", () => {
+    for (const status of ["failed", "stopped"]) {
+      const result = evaluatePostMergeClose(
+        // Nothing collected at all: no delivery kind, no anchors, no evidence.
+        phase6PlanSnapshot({ status, delivery_kind: undefined, branch: undefined, delivery: undefined }),
+        phase6Root([]),
+      );
+      expect(result.ok).toBe(true);
+      expect(result.violations).toEqual([]);
+    }
+  });
+
+  test("refused plan close stays registered/resumable: the root entry is still reported alongside the delivery refusal", () => {
+    const result = evaluatePostMergeClose(
+      phase6PlanSnapshot({ delivery_kind: undefined }),
+      phase6Root([{ id: "wf-plan-1", type: "plan", started_at: "2026-08-19T08:00:00Z", dir: "workflows/wf-plan-1" }]),
+    );
+    expect(result.ok).toBe(false);
+    expect(result.violations.some((v) => v.code === "PHASE6_DELIVERY_KIND_UNREGISTERED")).toBe(true);
+    expect(result.violations.some((v) => v.code === "PHASE6_ROOT_ENTRY_PRESENT")).toBe(true);
+  });
+
+  test("legacy terminal snapshot without a delivery_kind is a documented dead end: the gate refuses and 'mstar workflow register' cannot backfill it (§1)", async () => {
+ // On-disk legacy state — a pre-contract terminal `type: plan` snapshot with
+ // no delivery_kind — in the post-close orphan shape (root entry already
+ // gone), read back from bytes exactly as the gate consumes them.
+    const root = tmpRoot("phase6-legacy-terminal-");
+    const snapshotDir = join(root, "workflows", "wf-plan-1");
+    mkdirSync(snapshotDir, { recursive: true });
+    writeFileSync(
+      join(snapshotDir, "snapshot.json"),
+      JSON.stringify(phase6PlanSnapshot({ delivery_kind: undefined })),
+      "utf8",
+    );
+    writeFileSync(join(root, "status.json"), JSON.stringify(phase6Root([])), "utf8");
+    const gate = evaluatePostMergeClose(
+      readJson(join(snapshotDir, "snapshot.json")) as SnapshotDoc,
+      readJson(join(root, "status.json")),
+    );
+    expect(gate.ok).toBe(false);
+    const unregistered = gate.violations.find((v) => v.code === "PHASE6_DELIVERY_KIND_UNREGISTERED");
+    expect(unregistered).toBeDefined();
+// The remediation states the truth: a still-ACTIVE kind-less workflow has the
+// one-time declaration seam, while a TERMINAL snapshot cannot be backfilled
+// (the register verb is create-only, the declaration refuses a closed
+// lifecycle), so its repair is an explicit owner snapshot amendment — the
+// refusal never sends the operator into the register dead end.
+    expect(unregistered!.fix).toContain("--declare-kind");
+    expect(unregistered!.fix).toContain("TERMINAL legacy snapshot cannot be backfilled");
+    expect(unregistered!.fix).toContain("owner snapshot amendment");
+    expect(unregistered!.fix).toContain("audit-promotion");
+ // Pinning the dead end itself: registering over the legacy terminal
+ // snapshot refuses — the recovery identity (status + delivery_kind) can
+ // never match a constructed registration, and create-only never rewrites
+ // the existing bytes.
+    setArtifactStore(createFsStore(root));
+    try {
+      let refusal = "";
+      try {
+        await registerPlanWorkflow("wf-plan-1", {
+          harnessDir: root,
+          plan: { id: "plan-a", title: "Plan A", file: "plans/plan-a.md" },
+          deliveryKind: "development",
+          branchSource: "main",
+          branchTarget: "feature/plan-a",
+        });
+      } catch (error) {
+        refusal = error instanceof Error ? error.message : String(error);
+      }
+      expect(refusal).toContain("different registration identity");
+    } finally {
+      setArtifactStore(undefined);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("iteration-type snapshots stay outside the consultation: no delivery kind required (zero iteration drift)", () => {
+    const result = evaluatePostMergeClose(phase6Snapshot(), phase6Root([]));
+    expect(result.ok).toBe(true);
+    expect(result.violations.some((v) => v.code === "PHASE6_DELIVERY_KIND_UNREGISTERED")).toBe(false);
   });
 });
 

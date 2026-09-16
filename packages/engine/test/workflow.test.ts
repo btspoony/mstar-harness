@@ -35,14 +35,21 @@ import { join } from "node:path";
 import type { GateResult } from "../src/core.js";
 import {
   closeWorkflow,
+  consultDeliveryEvidence,
+  declareWorkflowDeliveryKind,
   isTerminalSnapshot,
   WORKFLOW_SNAPSHOT_FILE,
   readWorkflowSnapshot,
+  recordWorkflowDelivery,
+  registerPlanWorkflow,
   validateWorkflowSnapshot,
   writeWorkflowSnapshot,
+  type RegisterPlanWorkflowOptions,
 } from "../src/workflow.js";
+import { evaluatePostMergeClose } from "../src/iteration.js";
 import { artifactVersion, CoordinationError } from "../src/coordination-write.js";
 import { createFsStore, setArtifactStore, type ArtifactDoc, type ArtifactStore } from "../src/store.js";
+import { validateStatus } from "../src/status.js";
 
 function tmpRoot(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix));
@@ -112,6 +119,22 @@ function validSnapshot(overrides: Record<string, unknown> = {}): Record<string, 
     ...overrides,
   };
 }
+
+/**
+ * Complete registered delivery evidence for a `type: plan` snapshot
+ * (contract §1/§4c/§4d/§4f): the delivery kind, the delivery anchors and the
+ * three collected evidence members the close consultation requires. Spread it
+ * into a plan-snapshot fixture; override single members to pin a refusal.
+ */
+const registeredDelivery = {
+  delivery_kind: "development",
+  branch: { source: "feature/fixture", target: "main" },
+  delivery: {
+    compound: { outcome: "created" },
+    pr: { repo: "btspoony/mstar-harness", head: "feature/fixture", target: "main" },
+    merge: { provider: "github", evidence: "PR #244 verified merged at 2c792c01" },
+  },
+};
 
 describe("validateWorkflowSnapshot — schema basics", () => {
   test("valid terminal iteration snapshot with compass ref + execution_policy + verbatim legacy rows passes", () => {
@@ -642,7 +665,7 @@ describe("closeWorkflow", () => {
     const dir = join(root, "workflows", id);
     mkdirSync(dir, { recursive: true });
     const path = join(dir, WORKFLOW_SNAPSHOT_FILE);
-    const snapshot = validSnapshot({ id, status: "running", ended_at: undefined, ...overrides });
+    const snapshot = validSnapshot({ id, type: "plan", status: "running", ended_at: undefined, ...registeredDelivery, ...overrides });
     writeFileSync(path, JSON.stringify(snapshot, null, 4) + "\n");
     setArtifactStore(createFsStore(root));
     return { root, dir, path, snapshot };
@@ -739,6 +762,445 @@ describe("closeWorkflow", () => {
     expect(isTerminalSnapshot({ status: "running" } as never)).toBe(false);
     expect(isTerminalSnapshot({ status: "paused" } as never)).toBe(false);
   });
+
+  // Delivery-kind evidence consultation on the WRITE path (seam S3, contract
+  // §4g): the close refuses an incomplete delivery before writing anything,
+  // and the read-only Phase-6 gate reaches the same verdict for the same
+  // snapshot because both run `consultDeliveryEvidence`.
+  test.each([
+    { name: "no registered delivery kind", overrides: { delivery_kind: undefined } },
+    { name: "development without the compound disposition", overrides: { delivery: { ...registeredDelivery.delivery, compound: undefined } } },
+    { name: "development without the PR identity", overrides: { delivery: { ...registeredDelivery.delivery, pr: undefined } } },
+    { name: "development without verified-merge evidence", overrides: { delivery: { ...registeredDelivery.delivery, merge: undefined } } },
+    { name: "development without the delivery anchors", overrides: { branch: undefined } },
+    {
+      name: "development with a PR identity for another head",
+      overrides: {
+        delivery: { ...registeredDelivery.delivery, pr: { repo: "btspoony/mstar-harness", head: "feature/other", target: "main" } },
+      },
+    },
+    {
+      name: "development with a PR identity for another target",
+      overrides: {
+        delivery: { ...registeredDelivery.delivery, pr: { repo: "btspoony/mstar-harness", head: "feature/fixture", target: "release/9" } },
+      },
+    },
+    { name: "verification/report-only without fulfilment", overrides: { delivery_kind: "verification/report-only", branch: undefined, completion_policy: "acceptance report", delivery: undefined } },
+  ])("refuses an incomplete delivery before any write: $name", async ({ overrides }) => {
+    const { dir, path } = fixture(overrides);
+    const before = readFileSync(path, "utf8");
+    let refusal = "";
+    try {
+      await closeWorkflow(id, dir, { endedAt });
+    } catch (error) {
+      refusal = (error as Error).message;
+    }
+    expect(refusal).toContain("refusing to close workflow");
+    expect(refusal).toMatch(/PHASE6_DELIVERY_KIND_UNREGISTERED|PHASE6_DELIVERY_EVIDENCE_INCOMPLETE/);
+    // The refusal names the recording seam (§4c/§4d/§4f) — never an inferred fix.
+    const expectedFix = refusal.includes("PHASE6_DELIVERY_KIND_UNREGISTERED") ? "owner snapshot amendment" : "mstar workflow evidence";
+    expect(refusal).toContain(expectedFix);
+    // Zero writes: the snapshot keeps its bytes and is still resumable.
+    expect(readFileSync(path, "utf8")).toBe(before);
+    expect(JSON.parse(readFileSync(path, "utf8")).status).toBe("running");
+    // One shared consultation (never two rule sets): the close refusal and the
+    // read-only Phase-6 gate republish the SAME violation for the same
+    // snapshot.
+    const onDisk = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    const consulted = consultDeliveryEvidence(onDisk as never);
+    expect(consulted.length).toBeGreaterThan(0);
+    expect(refusal).toContain(consulted[0]!.code);
+    const terminalGate = evaluatePostMergeClose(
+      { ...onDisk, status: "completed", ended_at: "2026-09-12" },
+      { version: 2, updated_at: "2026-09-12", workflows: [] },
+    );
+    expect(terminalGate.ok).toBe(false);
+    expect(terminalGate.violations.map((v) => v.code)).toContain(consulted[0]!.code);
+  });
+
+  test("close retry after the terminal write preserves the original timestamp byte-for-byte", async () => {
+    const { dir, path } = fixture();
+    const closed = await closeWorkflow(id, dir, { endedAt });
+    expect(closed.status).toBe("completed");
+    const after = readFileSync(path, "utf8");
+    const retried = await closeWorkflow(id, dir, { endedAt: "2027-01-01" });
+    expect(retried.ended_at).toBe(endedAt);
+    expect(readFileSync(path, "utf8")).toBe(after);
+  });
+
+  test.each(["failed", "stopped"])(
+    "an already-terminal %s snapshot is preserved and never demanded delivery evidence (gate and close agree, §5)",
+    async (status) => {
+      // Failure/abandonment close: no delivery kind, no anchors, no evidence.
+      const { dir, path } = fixture({
+        status,
+        ended_at: "2026-09-11",
+        delivery_kind: undefined,
+        branch: undefined,
+        delivery: undefined,
+        plans: [legacyRow({ status: "Blocked" })],
+      });
+      const before = readFileSync(path, "utf8");
+      const closed = await closeWorkflow(id, dir, { endedAt });
+      expect(closed.status).toBe(status);
+      expect(readFileSync(path, "utf8")).toBe(before);
+      // The same bytes read by the read-only gate reach the same verdict: a
+      // failure close is never treated as a delivery.
+      const onDisk = JSON.parse(before) as Record<string, unknown>;
+      const gate = evaluatePostMergeClose(onDisk, { version: 2, updated_at: "2026-09-12", workflows: [] });
+      expect(gate.ok).toBe(true);
+      expect(gate.violations).toEqual([]);
+    },
+  );
+});
+
+describe("recordWorkflowDelivery — authorized delivery-evidence recording (seam S3)", () => {
+  const id = "00000102-evidence-fixture";
+  const roots: string[] = [];
+  afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
+  function fixture(overrides: Record<string, unknown> = {}) {
+    const root = tmpRoot("workflow-evidence-");
+    roots.push(root);
+    const dir = join(root, "workflows", id);
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, WORKFLOW_SNAPSHOT_FILE);
+    const snapshot = validSnapshot({
+      id,
+      type: "plan",
+      status: "running",
+      ended_at: undefined,
+      delivery_kind: "development",
+      branch: { source: "feature/fixture", target: "main" },
+      ...overrides,
+    });
+    writeFileSync(path, JSON.stringify(snapshot, null, 4) + "\n");
+    setArtifactStore(createFsStore(root));
+    return { root, dir, path, snapshot };
+  }
+
+  test("records the evidence stage by stage, merging instead of replacing", async () => {
+    const { dir, path } = fixture();
+    const compound = await recordWorkflowDelivery(id, dir, { evidence: { compound: { outcome: "skipped", reason: "overlapping doc updated in place" } }, at: "2026-09-12T01:00:00Z" });
+    expect(compound.written).toBe(true);
+    const pr = await recordWorkflowDelivery(id, dir, {
+      evidence: { pr: { repo: "btspoony/mstar-harness", head: "feature/fixture", target: "main" } },
+      at: "2026-09-12T02:00:00Z",
+    });
+    expect(pr.written).toBe(true);
+    const stored = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    expect(stored.delivery).toEqual({
+      compound: { outcome: "skipped", reason: "overlapping doc updated in place" },
+      pr: { repo: "btspoony/mstar-harness", head: "feature/fixture", target: "main" },
+    });
+    expect(stored.updated_at).toBe("2026-09-12T02:00:00Z");
+    // The lifecycle scalars are untouched — only the delivery evidence grows.
+    expect(stored.status).toBe("running");
+    expect(stored.branch).toEqual({ source: "feature/fixture", target: "main" });
+  });
+
+  test("re-recording identical evidence rewrites nothing (idempotent, re-entrant)", async () => {
+    const { dir, path } = fixture();
+    const evidence = { merge: { provider: "github", evidence: "PR #244 verified merged at 2c792c01" } };
+    await recordWorkflowDelivery(id, dir, { evidence, at: "2026-09-12T01:00:00Z" });
+    const after = readFileSync(path, "utf8");
+    const again = await recordWorkflowDelivery(id, dir, { evidence, at: "2026-09-13T01:00:00Z" });
+    expect(again.written).toBe(false);
+    expect(readFileSync(path, "utf8")).toBe(after);
+  });
+
+  test("the recorded PR identity is immutable except for an identical re-record (§4d)", async () => {
+    const { dir, path } = fixture();
+    const pr = { repo: "btspoony/mstar-harness", head: "feature/fixture", target: "main" };
+    expect((await recordWorkflowDelivery(id, dir, { evidence: { pr }, at: "2026-09-12T01:00:00Z" })).written).toBe(true);
+    const afterRecord = readFileSync(path, "utf8");
+    // Identical re-record: idempotent, no write.
+    expect((await recordWorkflowDelivery(id, dir, { evidence: { pr }, at: "2026-09-13T01:00:00Z" })).written).toBe(false);
+    expect(readFileSync(path, "utf8")).toBe(afterRecord);
+    // A different identity is refused — a later payload cannot swap the PR.
+    await expect(
+      recordWorkflowDelivery(id, dir, { evidence: { pr: { ...pr, head: "feature/other" } } }),
+    ).rejects.toThrow(/refusing to rewrite the recorded PR identity/);
+    await expect(
+      recordWorkflowDelivery(id, dir, { evidence: { pr: { ...pr, target: "release/9" } } }),
+    ).rejects.toThrow(/refusing to rewrite the recorded PR identity/);
+    expect(readFileSync(path, "utf8")).toBe(afterRecord);
+  });
+
+  test("the compound disposition and the merge record stay updatable (legitimate evolution)", async () => {
+    const { dir, path } = fixture();
+    await recordWorkflowDelivery(id, dir, { evidence: { compound: { outcome: "created" } }, at: "2026-09-12T01:00:00Z" });
+    const corrected = await recordWorkflowDelivery(id, dir, {
+      evidence: { compound: { outcome: "skipped", reason: "overlapping doc updated in place" } },
+      at: "2026-09-12T02:00:00Z",
+    });
+    expect(corrected.written).toBe(true);
+    expect(corrected.snapshot.delivery).toEqual({ compound: { outcome: "skipped", reason: "overlapping doc updated in place" } });
+    const reread = await recordWorkflowDelivery(id, dir, {
+      evidence: { merge: { provider: "github", evidence: "PR #244 verified merged at 2c792c01" } },
+      at: "2026-09-12T03:00:00Z",
+    });
+    expect(reread.written).toBe(true);
+    const stored = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    expect(stored.delivery).toEqual({
+      compound: { outcome: "skipped", reason: "overlapping doc updated in place" },
+      merge: { provider: "github", evidence: "PR #244 verified merged at 2c792c01" },
+    });
+  });
+
+  test("recording the complete evidence makes the close succeed end to end", async () => {
+    const { dir, path } = fixture({ plans: [legacyRow({ status: "Done" })] });
+    // The close refuses first: evidence has not been collected yet.
+    await expect(closeWorkflow(id, dir, { endedAt: "2026-09-12" })).rejects.toThrow(/PHASE6_DELIVERY_EVIDENCE_INCOMPLETE/);
+    await recordWorkflowDelivery(id, dir, { evidence: registeredDelivery.delivery, at: "2026-09-12T01:00:00Z" });
+    const closed = await closeWorkflow(id, dir, { endedAt: "2026-09-12" });
+    expect(closed.status).toBe("completed");
+    expect(closed.delivery).toEqual(registeredDelivery.delivery);
+    expect(JSON.parse(readFileSync(path, "utf8")).status).toBe("completed");
+  });
+
+  test.each([
+    { name: "an empty patch", evidence: {} },
+    { name: "a member outside the declared kind", evidence: { completion: { policy: "p", evidence: "e" } } },
+    { name: "a malformed member", evidence: { compound: { outcome: "skipped" } } },
+    { name: "an unknown member", evidence: { ticket: "x" } },
+    { name: "an absent member value (never a silent clear)", evidence: { compound: undefined } },
+  ])("refuses $name before any write", async ({ evidence }) => {
+    const { dir, path } = fixture();
+    const before = readFileSync(path, "utf8");
+    await expect(recordWorkflowDelivery(id, dir, { evidence: evidence as never })).rejects.toThrow(/refusing to record|must name at least one/);
+    expect(readFileSync(path, "utf8")).toBe(before);
+  });
+
+  test("refuses an iteration snapshot and a terminal plan snapshot (evidence belongs to a live declared kind, §1/§5)", async () => {
+    const iteration = fixture({ type: "iteration", delivery_kind: undefined });
+    await expect(
+      recordWorkflowDelivery(id, iteration.dir, { evidence: { pr: { repo: "r", head: "h", target: "t" } } }),
+    ).rejects.toThrow(/only a type: plan lifecycle with a registered delivery_kind/);
+    const root = tmpRoot("workflow-evidence-terminal-");
+    roots.push(root);
+    const dir = join(root, "workflows", id);
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, WORKFLOW_SNAPSHOT_FILE);
+    writeFileSync(path, JSON.stringify({ ...iteration.snapshot, type: "plan", status: "completed", ended_at: "2026-09-12" }, null, 2));
+    setArtifactStore(createFsStore(root));
+    const before = readFileSync(path, "utf8");
+    await expect(
+      recordWorkflowDelivery(id, dir, { evidence: { pr: { repo: "r", head: "h", target: "t" } } }),
+    ).rejects.toThrow(/is terminal/);
+    expect(readFileSync(path, "utf8")).toBe(before);
+  });
+
+  test("a coordinated workflow is written only for its own bound coordinator envelope", async () => {
+    const root = tmpRoot("workflow-evidence-coordinated-");
+    roots.push(root);
+    const dir = join(root, "workflows", id);
+    const sessions = join(dir, "sessions");
+    mkdirSync(sessions, { recursive: true });
+    const sessionFile = join(sessions, "s-1.json");
+    const foreign = join(sessions, "s-2.json");
+    writeFileSync(sessionFile, JSON.stringify({ session_id: "s-1" }));
+    writeFileSync(foreign, JSON.stringify({ session_id: "s-2" }));
+    const path = join(dir, WORKFLOW_SNAPSHOT_FILE);
+    const snapshot = validSnapshot({
+      id,
+      type: "plan",
+      status: "running",
+      ended_at: undefined,
+      delivery_kind: "development",
+      branch: { source: "feature/fixture", target: "main" },
+      coordination: { coordinator: { session_id: "s-1", session_file: sessionFile, bound_at: "2026-09-15T00:00:00Z" } },
+    });
+    writeFileSync(path, JSON.stringify(snapshot, null, 4));
+    setArtifactStore(createFsStore(root));
+    const before = readFileSync(path, "utf8");
+    const evidence = { compound: { outcome: "created" as const } };
+    await expect(recordWorkflowDelivery(id, dir, { evidence })).rejects.toMatchObject({ code: "coordination.session-mismatch" });
+    await expect(recordWorkflowDelivery(id, dir, { evidence, sessionPath: foreign })).rejects.toMatchObject({ code: "coordination.session-mismatch" });
+    expect(readFileSync(path, "utf8")).toBe(before);
+    const recorded = await recordWorkflowDelivery(id, dir, { evidence, sessionPath: sessionFile });
+    expect(recorded.written).toBe(true);
+    expect(JSON.parse(readFileSync(path, "utf8")).delivery).toEqual(evidence);
+  });
+});
+
+describe("declareWorkflowDeliveryKind — one-time kind declaration (seam S3 population)", () => {
+  const id = "00000103-declare-fixture";
+  const roots: string[] = [];
+  afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
+  /** An ACTIVE kind-less plan snapshot — the audit-promotion / v1-lift shape. */
+  function fixture(overrides: Record<string, unknown> = {}) {
+    const root = tmpRoot("workflow-declare-");
+    roots.push(root);
+    const dir = join(root, "workflows", id);
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, WORKFLOW_SNAPSHOT_FILE);
+    const snapshot = validSnapshot({
+      id,
+      type: "plan",
+      status: "running",
+      ended_at: undefined,
+      plans: [legacyRow({ status: "Done" })],
+      ...overrides,
+    });
+    writeFileSync(path, JSON.stringify(snapshot, null, 4) + "\n");
+    setArtifactStore(createFsStore(root));
+    return { root, dir, path, snapshot };
+  }
+
+  test("declares the kind + anchors once, then the full delivery tail closes end to end (declare → record → close → gate)", async () => {
+    // The audit-promotion / v1-lift shape: active, no kind, no anchors.
+    const { root, dir, path } = fixture({ branch: undefined });
+    // The close refuses first: no declared kind, so no consultable evidence.
+    await expect(closeWorkflow(id, dir, { endedAt: "2026-09-12" })).rejects.toThrow(/PHASE6_DELIVERY_KIND_UNREGISTERED/);
+
+    const declared = await declareWorkflowDeliveryKind(id, dir, {
+      deliveryKind: "development",
+      branchSource: "feature/audit-plans",
+      branchTarget: "main",
+      at: "2026-09-12T01:00:00Z",
+    });
+    expect(declared.delivery_kind).toBe("development");
+    expect(declared.branch).toEqual({ source: "feature/audit-plans", target: "main" });
+    expect(declared.updated_at).toBe("2026-09-12T01:00:00Z");
+
+    // The close now consults the kind: evidence is still missing.
+    await expect(closeWorkflow(id, dir, { endedAt: "2026-09-12" })).rejects.toThrow(/PHASE6_DELIVERY_EVIDENCE_INCOMPLETE/);
+    await recordWorkflowDelivery(id, dir, {
+      evidence: {
+        compound: { outcome: "created" },
+        pr: { repo: "btspoony/mstar-harness", head: "feature/audit-plans", target: "main" },
+        merge: { provider: "github", evidence: "PR #244 verified merged at 2c792c01" },
+      },
+      at: "2026-09-12T02:00:00Z",
+    });
+    const closed = await closeWorkflow(id, dir, { endedAt: "2026-09-12" });
+    expect(closed.status).toBe("completed");
+    // The declared kind, its anchors and every recorded member agree: the
+    // read-only gate passes on the closed bytes.
+    const onDisk = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    const gate = evaluatePostMergeClose(onDisk, { version: 2, updated_at: "2026-09-12", workflows: [] });
+    expect(gate.violations).toEqual([]);
+    expect(gate.ok).toBe(true);
+    expect(existsSync(join(root, "status.json"))).toBe(false);
+  });
+
+  test("the declaration is ONE-TIME: a second one is refused, even with the same kind (bytes unchanged)", async () => {
+    const { dir, path } = fixture();
+    await declareWorkflowDeliveryKind(id, dir, { deliveryKind: "development", branchSource: "feature/a", branchTarget: "main" });
+    const after = readFileSync(path, "utf8");
+    for (const second of [
+      { deliveryKind: "development", branchSource: "feature/other", branchTarget: "main" },
+      { deliveryKind: "verification/report-only", completionPolicy: "acceptance report" },
+    ] as const) {
+      await expect(declareWorkflowDeliveryKind(id, dir, second)).rejects.toThrow(/already declares/);
+    }
+    expect(readFileSync(path, "utf8")).toBe(after);
+  });
+
+  test("a supplied anchor never overwrites a registered one: a conflict is refused with the field named, an identical value restates it (§1)", async () => {
+    const both = fixture({ branch: { source: "feature/registered", target: "main" } });
+    const before = readFileSync(both.path, "utf8");
+    await expect(
+      declareWorkflowDeliveryKind(id, both.dir, { deliveryKind: "development", branchSource: "feature/other", branchTarget: "main" }),
+    ).rejects.toThrow(/branch\.source is already "feature\/registered"/);
+    await expect(
+      declareWorkflowDeliveryKind(id, both.dir, { deliveryKind: "development", branchSource: "feature/registered", branchTarget: "release" }),
+    ).rejects.toThrow(/branch\.target is already "main"/);
+    // A refusal writes nothing: the registered anchors stay the snapshot's.
+    expect(readFileSync(both.path, "utf8")).toBe(before);
+
+    // Identical supplied values restate the registered anchors — the
+    // declaration completes over them instead of being refused.
+    const declared = await declareWorkflowDeliveryKind(id, both.dir, {
+      deliveryKind: "development",
+      branchSource: "feature/registered",
+      branchTarget: "main",
+      at: "2026-09-16T03:00:00Z",
+    });
+    expect(declared.branch).toEqual({ source: "feature/registered", target: "main" });
+    // The declaration stays ONE-TIME over the registered anchors too.
+    await expect(
+      declareWorkflowDeliveryKind(id, both.dir, { deliveryKind: "development", branchSource: "feature/registered", branchTarget: "main" }),
+    ).rejects.toThrow(/already declares/);
+
+    // A partially anchored snapshot keeps the registered anchor and gets the
+    // missing one filled — the rule is per field, not all-or-nothing.
+    const sourceOnly = fixture({ branch: { source: "feature/registered" } });
+    const filled = await declareWorkflowDeliveryKind(id, sourceOnly.dir, {
+      deliveryKind: "development",
+      branchSource: "feature/registered",
+      branchTarget: "main",
+    });
+    expect(filled.branch).toEqual({ source: "feature/registered", target: "main" });
+  });
+
+  test("an incomplete declaration is refused before any write (shared per-kind coherence, §1)", async () => {
+    const { dir, path } = fixture();
+    const before = readFileSync(path, "utf8");
+    await expect(declareWorkflowDeliveryKind(id, dir, { deliveryKind: "development", branchSource: "feature/a" })).rejects.toThrow(
+      /delivery source and target branches/,
+    );
+    await expect(declareWorkflowDeliveryKind(id, dir, { deliveryKind: "verification/report-only" })).rejects.toThrow(
+      /completion policy/,
+    );
+    await expect(declareWorkflowDeliveryKind(id, dir, { deliveryKind: "wing-it" as never })).rejects.toThrow(/deliveryKind must be one of/);
+    expect(readFileSync(path, "utf8")).toBe(before);
+  });
+
+  test("a terminal snapshot and a non-plan lifecycle are refused (the terminal dead end is never amended, §5)", async () => {
+    const terminal = fixture({ status: "completed", ended_at: "2026-09-11" });
+    await expect(
+      declareWorkflowDeliveryKind(id, terminal.dir, { deliveryKind: "development", branchSource: "feature/a", branchTarget: "main" }),
+    ).rejects.toThrow(/is terminal/);
+    const iteration = fixture({ type: "iteration" });
+    await expect(
+      declareWorkflowDeliveryKind(id, iteration.dir, { deliveryKind: "development", branchSource: "feature/a", branchTarget: "main" }),
+    ).rejects.toThrow(/only a type: plan lifecycle/);
+  });
+
+  test("a coordinated snapshot is declared only by its bound coordinator envelope", async () => {
+    const root = tmpRoot("workflow-declare-coordinated-");
+    roots.push(root);
+    const dir = join(root, "workflows", id);
+    const sessions = join(dir, "sessions");
+    mkdirSync(sessions, { recursive: true });
+    const sessionFile = join(sessions, "s-1.json");
+    writeFileSync(sessionFile, JSON.stringify({ session_id: "s-1" }));
+    const path = join(dir, WORKFLOW_SNAPSHOT_FILE);
+    writeFileSync(
+      path,
+      JSON.stringify(
+        validSnapshot({
+          id,
+          type: "plan",
+          status: "running",
+          ended_at: undefined,
+          coordination: { coordinator: { session_id: "s-1", session_file: sessionFile, bound_at: "2026-09-15T00:00:00Z" } },
+        }),
+        null,
+        2,
+      ),
+    );
+    setArtifactStore(createFsStore(root));
+    const declaration = { deliveryKind: "development", branchSource: "feature/a", branchTarget: "main" } as const;
+    const before = readFileSync(path, "utf8");
+    await expect(declareWorkflowDeliveryKind(id, dir, declaration)).rejects.toMatchObject({ code: "coordination.session-mismatch" });
+    expect(readFileSync(path, "utf8")).toBe(before);
+    const declared = await declareWorkflowDeliveryKind(id, dir, { ...declaration, sessionPath: sessionFile });
+    expect(declared.delivery_kind).toBe("development");
+    // The declaration ADDS the delivery anchors — the snapshot's other anchors
+    // (base/integration) are preserved, never dropped.
+    expect(declared.branch).toEqual({
+      base: "main",
+      integration: "spec_integration_branch",
+      source: "feature/a",
+      target: "main",
+    });
+    expect(JSON.parse(readFileSync(path, "utf8"))).toMatchObject({
+      delivery_kind: "development",
+      coordination: { coordinator: { session_id: "s-1" } },
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -805,6 +1267,7 @@ describe("coordinated-writer — coordinated close authorization", () => {
       status: "running",
       ended_at: undefined,
       coordination: { coordinator: { session_id: "s-1", session_file: sessionFile, bound_at: "2026-09-15T00:00:00Z" } },
+      ...registeredDelivery,
       ...overrides,
     });
     writeFileSync(path, JSON.stringify(snapshot, null, 4) + "\n");
@@ -855,8 +1318,270 @@ describe("coordinated-writer — coordinated close authorization", () => {
 
   test("closes an uncoordinated workflow with no session (unchanged behavior)", async () => {
     const { dir, path, snapshot } = fixture({ coordination: undefined });
-    const closed = await closeWorkflow(id, dir, { endedAt });
+    const closed = await closeWorkflow(id, dir, { endedAt, sessionPath: undefined });
     expect(closed).toEqual({ ...JSON.parse(JSON.stringify(snapshot)), status: "completed", ended_at: endedAt, updated_at: endedAt });
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual(closed);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// registerPlanWorkflow — generic registration producer (seam S1, contract
+// §2/§4a/§6): create-only `type: plan` snapshot + root entry under one lock,
+// mirroring the audit-promotion primitive sequence; refusals never leave
+// partial activation; crash/retry recovery preserves identity/timestamps.
+// ---------------------------------------------------------------------------
+
+describe("validateWorkflowSnapshot — registration-declared fields (contract §1)", () => {
+  test("valid delivery_kind / project / completion_policy pass on any snapshot type", () => {
+    for (const type of ["plan", "iteration"] as const) {
+      const snapshot = validSnapshot({
+        type,
+        delivery_kind: "development",
+        project: "engine",
+        completion_policy: "acceptance report at plans/x/report.md",
+      });
+      expect(validateWorkflowSnapshot(snapshot).ok).toBe(true);
+    }
+    expect(validateWorkflowSnapshot(validSnapshot({ delivery_kind: "verification/report-only" })).ok).toBe(true);
+  });
+
+  test("unknown delivery_kind is refused (never inferred, never free-form)", () => {
+    expectViolations(validateWorkflowSnapshot(validSnapshot({ delivery_kind: "stealth" })), "workflow.snapshot.invalid-delivery-kind");
+    expectViolations(validateWorkflowSnapshot(validSnapshot({ delivery_kind: 7 })), "workflow.snapshot.invalid-delivery-kind");
+  });
+
+  test("empty project / completion_policy are refused", () => {
+    expectViolations(validateWorkflowSnapshot(validSnapshot({ project: "" })), "workflow.snapshot.invalid-project");
+    expectViolations(validateWorkflowSnapshot(validSnapshot({ completion_policy: "" })), "workflow.snapshot.invalid-completion-policy");
+  });
+});
+
+describe("registerPlanWorkflow — generic registration producer (seam S1)", () => {
+  const id = "20260916-plan-register-fixture";
+  const roots: string[] = [];
+  afterEach(() => {
+    setArtifactStore(undefined);
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  function harness(): { root: string; statusPath: string; dir: string; snapshotPath: string } {
+    const root = tmpRoot("workflow-register-");
+    roots.push(root);
+    setArtifactStore(createFsStore(root));
+    return { root, statusPath: join(root, "status.json"), dir: join(root, "workflows", id), snapshotPath: join(root, "workflows", id, WORKFLOW_SNAPSHOT_FILE) };
+  }
+
+  function options(root: string, overrides: Partial<RegisterPlanWorkflowOptions> = {}): RegisterPlanWorkflowOptions {
+    return {
+      harnessDir: root,
+      plan: { id: "20260916-plan-example", title: "Example plan", file: "plans/20260916-plan-example.md" },
+      deliveryKind: "development",
+      project: "engine",
+      branchSource: "feature/20260916-plan-example",
+      branchTarget: "main",
+      startedAt: "2026-09-16T00:00:00.000Z",
+      ...overrides,
+    };
+  }
+
+  test("registers a standalone development plan: snapshot + root entry under one lock, fields recorded", async () => {
+    const { root, statusPath, snapshotPath } = harness();
+    const result = await registerPlanWorkflow(id, options(root));
+
+    expect(result.recovered).toBe(false);
+    expect(result.workflowId).toBe(id);
+    expect(result.snapshotPath).toBe(snapshotPath);
+    expect(existsSync(snapshotPath)).toBe(true);
+
+    const snapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as Record<string, unknown>;
+    expect(snapshot).toMatchObject({
+      schema_version: 1,
+      id,
+      type: "plan",
+      status: "running",
+      started_at: "2026-09-16T00:00:00.000Z",
+      updated_at: "2026-09-16",
+      delivery_kind: "development",
+      project: "engine",
+    });
+    // The delivery branch lands on `branch.source`; `branch.base` (the
+    // protected base anchor cleanup Rule 2 / L1 consume) stays unset.
+    expect(snapshot.branch).toEqual({ source: "feature/20260916-plan-example", target: "main" });
+    // One owned plan row, Todo — registration does not authorize implementation.
+    expect(snapshot.plans).toEqual([{ id: "20260916-plan-example", title: "Example plan", file: "plans/20260916-plan-example.md", status: "Todo" }]);
+
+    const rootDoc = JSON.parse(readFileSync(statusPath, "utf8")) as Record<string, unknown>;
+    expect(rootDoc.workflows).toEqual([{ id, type: "plan", started_at: "2026-09-16T00:00:00.000Z", dir: `workflows/${id}` }]);
+
+    // Both documents validate against the harness (root+snapshot pairing).
+    expect(validateWorkflowSnapshot(snapshot).ok).toBe(true);
+    expect(validateStatus(statusPath).ok).toBe(true);
+  });
+
+  test("second register refuses without mutating bytes (create-only idempotence)", async () => {
+    const { root, statusPath, snapshotPath } = harness();
+    await registerPlanWorkflow(id, options(root));
+    const beforeSnapshot = readFileSync(snapshotPath, "utf8");
+    const beforeRoot = readFileSync(statusPath, "utf8");
+
+    await expect(registerPlanWorkflow(id, options(root))).rejects.toThrow(/already registered/);
+    expect(readFileSync(snapshotPath, "utf8")).toBe(beforeSnapshot);
+    expect(readFileSync(statusPath, "utf8")).toBe(beforeRoot);
+  });
+
+  test.each([
+    { name: "development without branches", overrides: { deliveryKind: "development", branchSource: undefined, branchTarget: undefined } },
+    { name: "development with target only", overrides: { deliveryKind: "development", branchSource: undefined } },
+    { name: "verification/report-only without completion policy", overrides: { deliveryKind: "verification/report-only", branchSource: undefined, branchTarget: undefined } },
+    { name: "unknown delivery kind", overrides: { deliveryKind: "stealth" } },
+    { name: "missing plan title", overrides: { plan: { id: "p", title: "", file: "plans/p.md" } } },
+  ])("missing required fields refuse before any write: $name", async ({ overrides }) => {
+    const { root } = harness();
+    await expect(registerPlanWorkflow(id, options(root, overrides as Partial<RegisterPlanWorkflowOptions>))).rejects.toThrow(
+      /registerPlanWorkflow/,
+    );
+    // Refusal before any write — no partial activation anywhere.
+    expect(existsSync(join(root, "workflows"))).toBe(false);
+    expect(existsSync(join(root, "status.json"))).toBe(false);
+  });
+
+  test("a failed register write rolls back the created snapshot so a retry converges", async () => {
+    const { root, statusPath, snapshotPath } = harness();
+    // Conflicting root state (same trick as the audit-promotion W-001 case):
+    // a listed workflow whose snapshot is missing fails validateStatusV2 for
+    // the whole document — the refusal fires only AFTER this call already
+    // wrote its own snapshot, so the rollback is what prevents a partial
+    // activation.
+    const staleRoot = {
+      version: 2,
+      updated_at: "2026-09-15",
+      workflows: [{ id: "other-wf", type: "plan", started_at: "2026-09-15T00:00:00.000Z", dir: "workflows/other-wf" }],
+    };
+    mkdirSync(root, { recursive: true });
+    writeFileSync(statusPath, JSON.stringify(staleRoot, null, 2));
+
+    await expect(registerPlanWorkflow(id, options(root))).rejects.toThrow(/invalid status\.json/);
+    // Rollback: only this call's created snapshot (and its now-empty dir) are gone.
+    expect(existsSync(snapshotPath)).toBe(false);
+    expect(existsSync(join(root, "workflows", id))).toBe(false);
+    expect(existsSync(join(root, "workflows", "other-wf"))).toBe(false);
+    // Root bytes survive the failed register.
+    expect(readFileSync(statusPath, "utf8")).toBe(JSON.stringify(staleRoot, null, 2));
+
+    // Retry after the root conflict is resolved converges end-to-end.
+    writeFileSync(statusPath, JSON.stringify({ version: 2, updated_at: "2026-09-15", workflows: [] }, null, 2));
+    const retry = await registerPlanWorkflow(id, options(root));
+    expect(retry.recovered).toBe(false);
+    expect(existsSync(snapshotPath)).toBe(true);
+    expect(validateStatus(statusPath).ok).toBe(true);
+  });
+
+  test("rollback removes only the exact snapshot version this call created", async () => {
+    const { root, statusPath, snapshotPath } = harness();
+    // A foreign writer changes the snapshot between this call's create and
+    // its rollback (injected through the store's status put): the rollback
+    // must recognize the version drift and leave that snapshot alone.
+    const fs = createFsStore(root);
+    const corrupting: ArtifactStore = {
+      root,
+      async put(doc: ArtifactDoc): Promise<void> {
+        if (doc.kind === "status") {
+          const current = JSON.parse(readFileSync(snapshotPath, "utf8")) as Record<string, unknown>;
+          writeFileSync(snapshotPath, JSON.stringify({ ...current, phase: "foreign-write" }, null, 2) + "\n");
+          throw new Error("injected root write failure");
+        }
+        return fs.put(doc);
+      },
+      async get<T>(ref): Promise<T | undefined> {
+        return fs.get<T>(ref);
+      },
+      async delete(ref): Promise<void> {
+        return fs.delete(ref);
+      },
+    };
+    setArtifactStore(corrupting);
+
+    await expect(registerPlanWorkflow(id, options(root))).rejects.toThrow(/injected root write failure/);
+    // The foreign-version snapshot survives; the dir is not force-removed.
+    expect(existsSync(snapshotPath)).toBe(true);
+    expect(JSON.parse(readFileSync(snapshotPath, "utf8")).phase).toBe("foreign-write");
+    expect(existsSync(join(root, "workflows", id))).toBe(true);
+    expect(existsSync(statusPath)).toBe(false);
+  });
+
+  test("crash between snapshot creation and registration: retry preserves identity, timestamps, ownership", async () => {
+    const { root, statusPath, snapshotPath } = harness();
+    // Round 1: a successful registration, then simulate the crash — the root
+    // write is lost while the snapshot survived.
+    const first = await registerPlanWorkflow(id, options(root, { coordinator: { session_id: "s-1", session_file: join(root, "sessions", "s-1.json") } }));
+    expect(first.recovered).toBe(false);
+    const orphanBytes = readFileSync(snapshotPath, "utf8");
+    const orphan = JSON.parse(orphanBytes) as Record<string, unknown>;
+    writeFileSync(statusPath, JSON.stringify({ version: 2, updated_at: "2026-09-01", workflows: [] }, null, 2));
+
+    // Round 2: re-running the producer completes the registration without
+    // duplicating identity — the snapshot bytes (identity, timestamps,
+    // coordinator ownership) are preserved verbatim. The retry runs with a
+    // fresh clock (no explicit startedAt): the orphan's timestamps must win.
+    const { startedAt: _retryClock, ...retryOptions } = options(root, {
+      coordinator: { session_id: "s-1", session_file: join(root, "sessions", "s-1.json") },
+    });
+    const retry = await registerPlanWorkflow(id, retryOptions);
+    expect(retry.recovered).toBe(true);
+    expect(readFileSync(snapshotPath, "utf8")).toBe(orphanBytes);
+
+    const rootDoc = JSON.parse(readFileSync(statusPath, "utf8")) as Record<string, unknown>;
+    expect(rootDoc.workflows).toEqual([{ id, type: "plan", started_at: orphan.started_at, dir: `workflows/${id}` }]);
+    expect(validateStatus(statusPath).ok).toBe(true);
+  });
+
+  test("recovery refuses an orphan snapshot with a different registration identity", async () => {
+    const { root, statusPath, snapshotPath } = harness();
+    await registerPlanWorkflow(id, options(root, { deliveryKind: "development", project: "engine" }));
+    const before = readFileSync(snapshotPath, "utf8");
+    // The orphan belongs to a different registration (different delivery kind).
+    const foreign = JSON.parse(before) as Record<string, unknown>;
+    foreign.delivery_kind = "verification/report-only";
+    foreign.completion_policy = "report at plans/x/report.md";
+    writeFileSync(snapshotPath, JSON.stringify(foreign, null, 2));
+    writeFileSync(statusPath, JSON.stringify({ version: 2, updated_at: "2026-09-01", workflows: [] }, null, 2));
+
+    await expect(registerPlanWorkflow(id, options(root, { deliveryKind: "development", project: "engine" }))).rejects.toThrow(
+      /different registration identity/,
+    );
+    // Neither the foreign snapshot nor the root moved.
+    expect(readFileSync(snapshotPath, "utf8")).toBe(JSON.stringify(foreign, null, 2));
+    expect((JSON.parse(readFileSync(statusPath, "utf8")) as Record<string, unknown>).workflows).toEqual([]);
+  });
+
+  test("records an optional coordinator binding at registration (validated strictly)", async () => {
+    const { root, statusPath, snapshotPath } = harness();
+    const sessionFile = join(root, "sessions", "coordinator.json");
+    await registerPlanWorkflow(id, options(root, { coordinator: { session_id: "s-9", session_file: sessionFile } }));
+    const snapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as Record<string, unknown>;
+    expect(snapshot.coordination).toEqual({
+      coordinator: { session_id: "s-9", session_file: sessionFile, bound_at: "2026-09-16T00:00:00.000Z" },
+    });
+    expect(validateWorkflowSnapshot(snapshot).ok).toBe(true);
+    expect(validateStatus(statusPath).ok).toBe(true);
+  });
+
+  test("unreadable root (malformed JSON) refuses and rolls back — no partial activation", async () => {
+    const { root, statusPath, snapshotPath } = harness();
+    mkdirSync(root, { recursive: true });
+    writeFileSync(statusPath, "{invalid", "utf8");
+    const before = readFileSync(statusPath, "utf8");
+
+    await expect(registerPlanWorkflow(id, options(root))).rejects.toThrow(/Invalid JSON/);
+    expect(existsSync(snapshotPath)).toBe(false);
+    expect(existsSync(join(root, "workflows", id))).toBe(false);
+    expect(readFileSync(statusPath, "utf8")).toBe(before);
+  });
+
+  test("hostile workflow id is refused by the path-component guard", async () => {
+    const { root } = harness();
+    await expect(registerPlanWorkflow("../escape", options(root))).rejects.toThrow(/safe path component/);
+    expect(existsSync(join(root, "workflows"))).toBe(false);
+    expect(existsSync(join(root, "escape"))).toBe(false);
   });
 });

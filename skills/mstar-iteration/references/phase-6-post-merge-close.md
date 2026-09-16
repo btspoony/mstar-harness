@@ -20,6 +20,8 @@ mstar status workflow-close --workflow <id> [--harness <path>] [--ended-at <date
 
 - 引擎 `closeWorkflow`：在 snapshot 写锁内**重读最新快照** → identity/shape 校验 → 已 valid terminal 则 no-op；否则要求全部 plan 行 `Done` 且**无任何** `execution_lease` / `integration_merge_lease` → 写 `completed` + `ended_at`
 - fail-loud：dangling lease / 非 `Done` 行 / snapshot 缺失或身份不符 → exit 1，**snapshot 字节不变**（无部分写）
+- **`type: plan` 交付证据 consult**：写终态**前** engine 咨询已注册 delivery kind 的证据（`consultDeliveryEvidence`）——`development` 缺 compound 处置 / PR 身份 / 已核实合并记录（或 PR 的 `head`/`target` 不等于注册的 `branch.source`/`branch.target`），或 `verification/report-only` 缺其完成策略的履行记录 → `PHASE6_DELIVERY_*` 拒绝，snapshot 保持 `running`、根条目保持注册（字节不变、可恢复）；补齐用 `mstar workflow evidence --workflow <id> --file <payload.json> [--session <path>]`（与 close 同一 coordinator-session 门、幂等；**PR 身份一次写入**，compound/merge 可覆写）。仅 `completed` close 咨询：`failed`/`stopped` 永不要求交付证据（§5）。write path 与 read-only `mstar iteration gate --phase 6` **共享同一实现**，两侧判定不走偏
+- **kind 在注册期显式声明**（§1/§4a）：`workflow register` / `audit promote --delivery-kind`（必填）/ `migrate --delivery-kind`（会产生 ACTIVE 无 kind plan 快照却缺 flag → exit 2；声明是**一个**交付身份，故一次 lift 若产生 2+ 个 ACTIVE standalone plan 同样以 exit 2 拒绝并列出 plan id —— 分批迁移，每批单 plan 声明）——绝不推断、绝不在代码内默认；`development` 需 `--branch-source`/`--branch-target`，`verification/report-only` 需 `--completion-policy`。历史遗留在 **ACTIVE** 无 kind 快照用 `mstar workflow evidence --workflow <id> --declare-kind <kind> [--branch-source <b> --branch-target <b> | --completion-policy <text>] [--session <path>]` 一次性修复（二次声明含同值一律拒绝、terminal 快照拒绝；supplied 锚只**填缺失**或与已注册锚同值复述，冲突值拒绝——已注册锚即交付身份，永不覆盖；legacy **terminal** 无 kind 死路按既有 owner amendment 路径）
 - **禁止**为通过 close 释放 lease —— lease release 是独立的 owner 动作，close 从不释放（甚至 caller 自己的）
 - `--ended-at` 省略时由 CLI 提供当天时间戳；引擎不接受自身时钟读数
 
@@ -39,7 +41,7 @@ mstar status workflow-close --workflow <id> [--harness <path>] [--ended-at <date
 2. compass `## Plans` + `{ITERATION_DIR}/README.md` 索引
 3. project roadmap / register
 
-- **禁止**伪造 `Done` 行、**禁止**为对齐而 close open residual —— reconciliation **不发明** Done/closed，也不为对齐关闭条目或放宽 `zero-residual` 规则；`allow-residual` 下已登记且披露的非阻断 open R# **保持 open**，不随 lifecycle 终结而“随之关闭”（真实 remaining finding 阻塞交付，而不是被静默关闭）
+- **禁止**伪造 `Done` 行、**禁止**为对齐而 close open residual —— reconciliation **不发明** Done/closed，也不为对齐关闭条目或放宽 `zero-residual` 规则；`allow-residual` 下已登记且披露的非阻断 open R# **保持 open**，不随 lifecycle 终结而“随之关闭”（真实 remaining finding 阻塞 `zero-residual` 交付，而不是被静默关闭）
 - **禁止**把新 tracked 产品/文档 commit 夹带进 Phase 6 —— 新发现的产品修复另开授权 workflow
 
 ## §6.4 Cleanup handoff（最后一步；显式、不自动）
@@ -51,12 +53,13 @@ mstar status workflow-close --workflow <id> [--harness <path>] [--ended-at <date
 - **lease 释放是手工 owner 动作、cleanup 范围外**：§6.1 close 已拒绝 dangling lease，但 cleanup 仍**从不**替 owner 释放——残留 lease 的候选只会得到 `cleanup.refuse.active-lease`；先手工释放，再重跑 dry-run/apply
 - squash-merged 分支（tip 非 base 祖先）→ STOP → residual；禁止 `git branch -D`
 
-Phase-6 gate 只查**本地 state**（valid terminal shape + 无 dangling lease + root 条目已注销），**不**验证远端 merged 证据，**不**检查物理清理是否完成。
+Phase-6 gate 只查**本地 state**（valid terminal shape + 无 dangling lease + root 条目已注销 + `type: plan` 交付证据，§6.1），**不**验证远端 merged 证据，**不**检查物理清理是否完成。
 
 > **Engine check (when available):** run `mstar iteration gate --phase 6 --workflow <id>` (or `import { evaluatePostMergeClose } from "@mstar-harness/engine"` in a host hook) to gate the local post-merge close state（valid terminal shape + 无 dangling lease + root 条目已注销；稳定码 `PHASE6_*`；invalid/unreadable root 不是条目已注销的证明）. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 ## Standalone plans & abandonment
 
+- 独立 plan 交付生命周期的语义权威（注册 → 交付尾段 → verified merge → terminal close）→ 冻结契约 `{SPECS_DIR}/plan-workflow-lifecycle-contract.md`；本节仅固定 close 侧契约（同一命令 close、本地 gate 不验证远端 merged 证据）
 - `type: plan` 独立 lifecycle 在其 PR merge 后用**同一** completed-close 命令关闭（无第二 verb、无 `--outcome` / `--force`）
 - abandoned lifecycle **不得**静默跑 completed close：已 terminal（`failed` / `stopped`）的 snapshot 保持原状态，CLI 如实报告实际 status；completed close 只属于 verified-merged 完成
 

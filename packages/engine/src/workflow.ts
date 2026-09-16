@@ -25,9 +25,9 @@
  *   `.status-write.lockdir` lands inside `workflows/<id>/` (dirname of the
  *   snapshot), no harness-root pollution.
  */
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
-import type { GateResult, Severity, ValidationResult } from "./core.js";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmdirSync } from "node:fs";
+import { isAbsolute, join, resolve } from "node:path";
+import { readJson, type GateResult, type Severity, type ValidationResult } from "./core.js";
 import {
   CoordinationError,
   canonicalTarget,
@@ -40,7 +40,11 @@ import {
   type SnapshotCoordination,
 } from "./coordination-write.js";
 import { validateExecutionLease, validateIntegrationMergeLease, withStatusWriteLock, type IntegrationMergeLease } from "./lease.js";
-import { validatePlanRow, type PlanRow } from "./status.js";
+import { assertSafePathComponent } from "./path.js";
+// Call-time-only cycle with status.ts (status.ts imports the snapshot consts
+// from this module): neither module dereferences the other's bindings during
+// module evaluation, so the ESM live-binding cycle is safe (see status.ts).
+import { registerWorkflowEntryLocked, validatePlanRow, validateWorkflowEntry, type PlanRow, type WorkflowEntry } from "./status.js";
 import { assertFsStorePath, getArtifactStore, type ArtifactStore } from "./store.js";
 
 /** Snapshot file name inside `workflows/<id>/` ( — writer contract). */
@@ -54,6 +58,50 @@ export const WORKFLOW_TERMINAL_STATUSES = ["completed", "failed", "stopped"] as 
 
 /** Lifecycle type enum ( — id reuses the orchestration id). */
 export const WORKFLOW_LIFECYCLE_TYPES = ["plan", "iteration"] as const;
+
+/**
+ * Delivery kinds declared at registration (plan-workflow-lifecycle-contract
+ * §1). The declared kind is recorded at registration and never inferred
+ * retroactively; `development` carries the full PR/merge delivery lifecycle,
+ * `verification/report-only` follows the explicit completion policy recorded
+ * alongside it.
+ */
+export const WORKFLOW_DELIVERY_KINDS = ["development", "verification/report-only"] as const;
+
+export type WorkflowDeliveryKind = (typeof WORKFLOW_DELIVERY_KINDS)[number];
+
+/**
+ * Compound disposition outcomes (contract §4c): `created` / `updated` /
+ * reasoned `skipped`. The disposition is recorded on the workflow before the
+ * PR head is finalized, so the delivery evidence names the compound outcome
+ * it was taken from.
+ */
+export const WORKFLOW_COMPOUND_OUTCOMES = ["created", "updated", "skipped"] as const;
+
+export type WorkflowCompoundOutcome = (typeof WORKFLOW_COMPOUND_OUTCOMES)[number];
+
+/**
+ * Delivery evidence recorded on the snapshot (contract §3 lifecycle stages,
+ * §4c/§4d/§4f, seam S3). Each member is recorded by its owner at its own
+ * stage through the authorized write seam (`recordWorkflowDelivery`), and the
+ * close consultation reads the block for the DECLARED delivery kind — never
+ * inferring a kind from which members happen to be present (§1):
+ *
+ * - `compound` — compound disposition (§4c), recorded before the PR head is
+ *   finalized; `skipped` carries the mandatory reason;
+ * - `pr` — PR identity recorded at submission (§4d): repo/head/target. A
+ *   local commit or a pre-existing unrelated PR does not satisfy it;
+ * - `merge` — the PM's verified-merge record (§4f): the provider evidence
+ *   they checked. The engine NEVER verifies the remote merge itself;
+ * - `completion` — the fulfilment record of the `completion_policy` recorded
+ *   at registration (§1) for `verification/report-only` workflows.
+ */
+export type WorkflowDeliveryEvidence = {
+  compound?: { outcome: WorkflowCompoundOutcome; reason?: string };
+  pr?: { repo: string; head: string; target: string };
+  merge?: { provider: string; evidence: string };
+  completion?: { policy: string; evidence: string };
+};
 
 export type WorkflowLifecycleStatus = (typeof WORKFLOW_LIFECYCLE_STATUSES)[number];
 export type WorkflowLifecycleType = (typeof WORKFLOW_LIFECYCLE_TYPES)[number];
@@ -71,7 +119,20 @@ export type WorkflowExecutionPolicy = {
 
 /** Iteration branch anchors ( — from root metadata anchors). */
 export type WorkflowBranchAnchors = {
+  /**
+   * Protected base anchor: the branch the lifecycle starts from (iteration
+   * `iteration_base_branch`). Cleanup Rule 2 never deletes it and L1 uses it
+   * as the explicit main-worktree residency fallback — it is NEVER a
+   * feature/working branch (`registerPlanWorkflow` records the plan's
+   * delivery branch under `source`).
+   */
   base?: string;
+  /**
+   * Source branch of a standalone `type: plan` delivery, recorded at
+   * registration (`--branch-source`). Semantically a delivery branch, not a
+   * protected base anchor: cleanup/L1 consumers keep reading `base`.
+   */
+  source?: string;
   integration?: string;
   target?: string;
 };
@@ -120,6 +181,27 @@ export type WorkflowSnapshot = {
    * changed by the locked coordination writer.
    */
   coordination?: SnapshotCoordination;
+  /**
+   * Delivery kind declared at registration (plan-workflow-lifecycle-contract
+   * §1). Recorded by the registration producer; never inferred from runtime
+   * behavior or from the presence/absence of other fields.
+   */
+  delivery_kind?: WorkflowDeliveryKind;
+  /** Project register id recorded at registration (contract §3 register row). */
+  project?: string;
+  /**
+   * Explicit completion policy for `verification/report-only` workflows,
+   * recorded at registration (contract §1): names the evidence that completes
+   * the workflow (e.g. acceptance artifacts or the report location).
+   */
+  completion_policy?: string;
+  /**
+   * Delivery evidence collected over the lifecycle (contract §3/§4c/§4d/§4f,
+   * seam S3). Optional at the schema level — it is populated stage by stage
+   * through `recordWorkflowDelivery` and consulted by the close path (and the
+   * read-only phase-6 gate) for the declared `delivery_kind`.
+   */
+  delivery?: WorkflowDeliveryEvidence;
 };
 
 /** Stable JSON for change detection (sorted keys, recursive). */
@@ -166,6 +248,68 @@ function validateWorktreePathValue(violations: ValidationResult[], value: unknow
       ),
     );
   }
+}
+
+/**
+ * Validate the optional `delivery` block (contract §3/§4c/§4d/§4f): known
+ * members only, each member an exact-key object of non-empty strings, the
+ * compound outcome inside the recorded enum and `skipped` carrying its
+ * mandatory reason. Structural validation only — WHICH members the declared
+ * delivery kind requires is the consultation's rule
+ * (`consultDeliveryEvidence`), so a partially filled block stays writable
+ * while it is being collected.
+ */
+function deliveryEvidenceViolations(value: unknown, what: string): ValidationResult[] {
+  const violations: ValidationResult[] = [];
+  const invalid = (message: string): void => {
+    violations.push(violation("medium", "workflow.snapshot.invalid-delivery-evidence", `${what}: ${message}`));
+  };
+  if (!isPlainObject(value)) {
+    invalid("must be an object");
+    return violations;
+  }
+  const members = ["compound", "pr", "merge", "completion"] as const;
+  const unknownMembers = Object.keys(value).filter((key) => !(members as readonly string[]).includes(key));
+  if (unknownMembers.length > 0) invalid(`unknown member(s) ${unknownMembers.join(", ")} \u2014 expected ${members.join(" | ")}`);
+
+  const compound = value.compound;
+  if (compound !== undefined) {
+    if (!isPlainObject(compound)) invalid("compound must be an object");
+    else {
+      const unknown = Object.keys(compound).filter((key) => key !== "outcome" && key !== "reason");
+      if (unknown.length > 0) invalid(`compound has unknown key(s) ${unknown.join(", ")}`);
+      if (typeof compound.outcome !== "string" || !(WORKFLOW_COMPOUND_OUTCOMES as readonly string[]).includes(compound.outcome)) {
+        invalid(`compound.outcome must be one of ${WORKFLOW_COMPOUND_OUTCOMES.join(" | ")} \u2014 got ${JSON.stringify(compound.outcome)}`);
+      } else if (compound.outcome === "skipped" && (typeof compound.reason !== "string" || compound.reason.trim() === "")) {
+        invalid("compound reason is required when the disposition outcome is 'skipped' (contract \u00a74c)");
+      } else if (compound.reason !== undefined && (typeof compound.reason !== "string" || compound.reason.trim() === "")) {
+        invalid("compound.reason must be a non-empty string when given");
+      }
+    }
+  }
+
+  const stringMembers: Record<"pr" | "merge" | "completion", readonly string[]> = {
+    pr: ["repo", "head", "target"],
+    merge: ["provider", "evidence"],
+    completion: ["policy", "evidence"],
+  };
+  for (const member of ["pr", "merge", "completion"] as const) {
+    const block = value[member];
+    if (block === undefined) continue;
+    if (!isPlainObject(block)) {
+      invalid(`${member} must be an object`);
+      continue;
+    }
+    const fields = stringMembers[member];
+    const unknown = Object.keys(block).filter((key) => !fields.includes(key));
+    if (unknown.length > 0) invalid(`${member} has unknown key(s) ${unknown.join(", ")}`);
+    for (const field of fields) {
+      if (typeof block[field] !== "string" || block[field].trim() === "") {
+        invalid(`${member}.${field} must be a non-empty string`);
+      }
+    }
+  }
+  return violations;
 }
 
 /**
@@ -299,7 +443,7 @@ export function validateWorkflowSnapshot(doc: unknown): GateResult {
     if (!isPlainObject(doc.branch)) {
       violations.push(violation("medium", "workflow.snapshot.invalid-branch", "branch must be an object"));
     } else {
-      for (const key of ["base", "integration", "target"] as const) {
+      for (const key of ["base", "source", "integration", "target"] as const) {
         if (doc.branch[key] !== undefined && (typeof doc.branch[key] !== "string" || doc.branch[key].trim() === "")) {
           violations.push(violation("medium", "workflow.snapshot.invalid-branch", `branch.${key} must be a non-empty string`));
         }
@@ -352,6 +496,41 @@ export function validateWorkflowSnapshot(doc: unknown): GateResult {
       "workflow.snapshot.missing-compass-ref",
       "workflow.snapshot.invalid-compass-ref",
     );
+  }
+
+  // Registration-declared fields (plan-workflow-lifecycle-contract §1/§3):
+  // delivery kind is an enum, project/completion_policy are non-empty
+  // strings. All optional at the schema level (iteration snapshots and
+  // pre-contract snapshots carry none); the registration producer enforces
+  // the per-kind requirements at registration time.
+  if (doc.delivery_kind !== undefined) {
+    if (typeof doc.delivery_kind !== "string" || !(WORKFLOW_DELIVERY_KINDS as readonly string[]).includes(doc.delivery_kind)) {
+      violations.push(
+        violation(
+          "medium",
+          "workflow.snapshot.invalid-delivery-kind",
+          `delivery_kind must be one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")} \u2014 got ${JSON.stringify(doc.delivery_kind)}`,
+        ),
+      );
+    }
+  }
+  if (doc.project !== undefined) {
+    validateNonEmptyString(violations, doc.project, "project", "workflow.snapshot.missing-project", "workflow.snapshot.invalid-project");
+  }
+  if (doc.completion_policy !== undefined) {
+    validateNonEmptyString(
+      violations,
+      doc.completion_policy,
+      "completion_policy",
+      "workflow.snapshot.missing-completion-policy",
+      "workflow.snapshot.invalid-completion-policy",
+    );
+  }
+  // Delivery evidence (contract §3/§4c/§4d/§4f): structure only — the
+  // per-kind completeness rule lives in `consultDeliveryEvidence`, shared by
+  // the close path and the read-only phase-6 gate.
+  if (doc.delivery !== undefined) {
+    violations.push(...deliveryEvidenceViolations(doc.delivery, "delivery"));
   }
 
   // Terminal invariants (): ended_at present, no dangling leases.
@@ -662,6 +841,157 @@ export function isTerminalSnapshot(doc: WorkflowSnapshot): boolean {
   return (WORKFLOW_TERMINAL_STATUSES as readonly string[]).includes(doc.status);
 }
 
+function nonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim() !== "";
+}
+
+/** Delivery-registration inputs every producer declares (contract §1/§4a). */
+export type DeliveryRegistrationEvidence = {
+  branchSource?: string;
+  branchTarget?: string;
+  completionPolicy?: string;
+};
+
+/**
+ * Per-kind registration-evidence coherence (contract §1) — the ONE rule shared
+ * by every producer that declares a delivery kind at registration time:
+ * `registerPlanWorkflow` (the normal-entry producer), `promoteAuditPlans`
+ * (audit promotion) and `migrateHarnessTree` (v1 lift), plus the one-time
+ * `declareWorkflowDeliveryKind` backfill for active kind-less snapshots.
+ * Lockstep here is the point: a `development` workflow declares BOTH delivery
+ * anchors and a `verification/report-only` workflow declares the completion
+ * policy that completes it — missing fields are incomplete registration, never
+ * an exemption, and a producer that drifted would otherwise mint an
+ * unclosable lifecycle. `what` prefixes the refusal (the caller's own name).
+ */
+export function assertDeliveryRegistrationCoherence(
+  kind: WorkflowDeliveryKind,
+  evidence: DeliveryRegistrationEvidence,
+  what: string,
+): void {
+  if (kind === "development" && (!nonEmptyString(evidence.branchSource) || !nonEmptyString(evidence.branchTarget))) {
+    throw new Error(
+      `${what}: a development workflow requires its delivery source and target branches (--branch-source/--branch-target) \u2014 missing branch fields are incomplete registration, not an exempt workflow (contract \u00a71/\u00a74a)`,
+    );
+  }
+  if (kind === "verification/report-only" && !nonEmptyString(evidence.completionPolicy)) {
+    throw new Error(
+      `${what}: a verification/report-only workflow requires the completion policy (--completion-policy) naming the evidence that completes it (contract \u00a71)`,
+    );
+  }
+  for (const [field, value] of Object.entries({ branchSource: evidence.branchSource, branchTarget: evidence.branchTarget, completionPolicy: evidence.completionPolicy })) {
+    if (value !== undefined && !nonEmptyString(value)) {
+      throw new Error(`${what}: ${field} must be a non-empty string when given`);
+    }
+  }
+}
+
+/**
+ * Delivery-kind evidence consultation (seam S3 — contract §4g + §6 S3): the
+ * ONE implementation behind both the read-only Phase-6 gate
+ * (`evaluatePostMergeClose`) and the close write path (`closeWorkflow`), so
+ * the gate's verdict and the close's refusal can never drift apart. Pure,
+ * read-only, no writes; the input snapshot is consumed as read.
+ *
+ * Only `type: plan` lifecycles consult (an iteration declares no delivery
+ * kind — §1); WHEN the consultation runs is the caller's rule, and both
+ * callers scope it to a delivered lifecycle: `closeWorkflow` consults the
+ * running snapshot it is about to complete, and the Phase-6 gate consults a
+ * `completed` terminal snapshot. A `failed`/`stopped` close is therefore never
+ * demanded delivery evidence (§5). The DECLARED kind decides the required
+ * evidence; nothing is inferred from which fields happen to be present, and a
+ * missing field is incomplete registration, never an exemption (§1):
+ *
+ * - no registered `delivery_kind` → `PHASE6_DELIVERY_KIND_UNREGISTERED` (a
+ *   legacy terminal snapshot cannot be backfilled: the register producer is
+ *   create-only and preserves the terminal bytes);
+ * - `development` → the registered `branch.source`/`branch.target` plus the
+ *   collected `delivery` evidence: compound disposition (§4c), PR identity
+ *   (§4d) and the PM's verified-merge record (§4f — the engine never verifies
+ *   the remote merge itself);
+ * - `verification/report-only` → the recorded `completion_policy` plus its
+ *   fulfilment record, which must name that same policy (§1).
+ *
+ * Everything missing is named in one refusal (`PHASE6_DELIVERY_EVIDENCE_INCOMPLETE`)
+ * whose fix hint points at the authorized recording seam.
+ */
+export function consultDeliveryEvidence(snapshot: WorkflowSnapshot): ValidationResult[] {
+  if (snapshot.type !== "plan") return [];
+  const workflowId = nonEmptyString(snapshot.id) ? snapshot.id : "<unknown>";
+  const kind = snapshot.delivery_kind;
+  if (typeof kind !== "string" || !(WORKFLOW_DELIVERY_KINDS as readonly string[]).includes(kind)) {
+    return [
+      violation(
+        "high",
+        "PHASE6_DELIVERY_KIND_UNREGISTERED",
+        `Workflow '${workflowId}' is type 'plan' but carries no registered delivery_kind \u2014 a plan workflow declares its delivery kind at registration (plan-workflow-lifecycle-contract \u00a71), so this snapshot's delivery evidence cannot be consulted`,
+        // The still-active population (audit promotion / the v1 lift minted
+        // active snapshots before their producers declared a kind) is repaired
+        // by the one-time declaration seam; a TERMINAL snapshot cannot be
+        // (declare refuses a closed lifecycle, and the create-only register
+        // can never match a terminal registration identity), so its repair
+        // stays the explicit owner amendment.
+        "Delivery evidence is declared at registration, before execution. A still-ACTIVE kind-less workflow is repaired by the authorized one-time declaration 'mstar workflow evidence --workflow <id> --declare-kind <development|verification/report-only> [--branch-source <b> --branch-target <b> | --completion-policy <text>] [--session <envelope>]' (declared once, never re-declared); a TERMINAL legacy snapshot cannot be backfilled \u2014 'mstar workflow register' is create-only and its registration identity can never match a terminal snapshot \u2014 so repair requires an explicit owner snapshot amendment recording the declared kind (the known affected population \u2014 audit-promotion's grandfathered type: plan snapshots \u2014 is disclosed as a residual by plan QC), then re-run the close / 'mstar iteration gate --phase 6 --workflow <id>'",
+      ),
+    ];
+  }
+  const branch = isPlainObject(snapshot.branch) ? snapshot.branch : undefined;
+  const delivery = isPlainObject(snapshot.delivery) ? snapshot.delivery : undefined;
+  const missing: string[] = [];
+  if (kind === "development") {
+    if (!nonEmptyString(branch?.source)) missing.push("branch.source");
+    if (!nonEmptyString(branch?.target)) missing.push("branch.target");
+    if (!isPlainObject(delivery?.compound)) missing.push("delivery.compound (compound disposition, \u00a74c)");
+    const pr = isPlainObject(delivery?.pr) ? delivery.pr : undefined;
+    if (pr === undefined) {
+      missing.push("delivery.pr (PR repo/head/target identity, \u00a74d)");
+    } else {
+      // §4d: the identity recorded at submission IS the delivery the workflow
+      // was registered for. Presence alone let a contradictory pair (a PR for
+      // a different head/target) satisfy the close; `repo` is required but its
+      // value is the recorder's own (no canonical repo to compare against).
+      if (nonEmptyString(branch?.source) && pr.head !== branch.source) {
+        missing.push(
+          `delivery.pr.head (recorded ${JSON.stringify(pr.head)}, registered branch.source ${JSON.stringify(branch.source)} \u2014 \u00a74d: the recorded PR identity must be the registered delivery)`,
+        );
+      }
+      if (nonEmptyString(branch?.target) && pr.target !== branch.target) {
+        missing.push(
+          `delivery.pr.target (recorded ${JSON.stringify(pr.target)}, registered branch.target ${JSON.stringify(branch.target)} \u2014 \u00a74d: the recorded PR identity must be the registered delivery)`,
+        );
+      }
+    }
+    if (!isPlainObject(delivery?.merge)) missing.push("delivery.merge (PM-recorded verified-merge evidence, \u00a74f)");
+  } else {
+    const policy = snapshot.completion_policy;
+    if (!nonEmptyString(policy)) missing.push("completion_policy (the recorded alternative completion policy, \u00a71)");
+    const completion = isPlainObject(delivery?.completion) ? delivery.completion : undefined;
+    if (completion === undefined) {
+      missing.push("delivery.completion (the fulfilment record of the registered policy, \u00a71)");
+    } else if (nonEmptyString(policy) && completion.policy !== policy) {
+      missing.push(
+        `delivery.completion.policy (\u00a71 \u2014 recorded ${JSON.stringify(completion.policy)}, registered completion_policy ${JSON.stringify(policy)})`,
+      );
+    }
+  }
+  if (missing.length === 0) return [];
+  const incomplete = (fix: string): ValidationResult =>
+    violation(
+      "high",
+      "PHASE6_DELIVERY_EVIDENCE_INCOMPLETE",
+      `Workflow '${workflowId}' declares delivery_kind '${kind}' but its delivery evidence is incomplete \u2014 missing: ${missing.join(", ")} (plan-workflow-lifecycle-contract \u00a73 lifecycle stages + \u00a74c/\u00a74d/\u00a74f)`,
+      fix,
+    );
+  const record = `Record the missing evidence with 'mstar workflow evidence --workflow ${workflowId} --file <payload.json>' (add --session <coordinator envelope> for a coordinated workflow)`;
+  return [
+    kind === "development"
+      ? incomplete(
+          `${record}: the compound disposition (\u00a74c, before the PR head is finalized), the PR identity (\u00a74d, at submission) and the verified-merge record (\u00a74f, the PM's own check \u2014 the engine never verifies the remote merge). Done rows alone are not delivery evidence`,
+        )
+      : incomplete(`${record}: the fulfilment record must name the registered completion policy and its evidence (\u00a71)`),
+  ];
+}
+
 export type CloseWorkflowOptions = {
   endedAt: string;
   /**
@@ -687,10 +1017,23 @@ function isCloseTimestamp(value: string): boolean {
 
 /**
  * Complete the latest snapshot under its write lock. Never releases leases.
- * A valid terminal snapshot is returned unchanged, including failed/stopped.
+ * A valid terminal snapshot is returned unchanged, including failed/stopped
+ * (idempotent preservation — nothing is rewritten, not even the timestamp).
  * A coordinated snapshot is closed only by its own bound coordinator
  * (spec §C4) — the same envelope seam as `writeWorkflowSnapshot` — so a plan
  * actor or a bare CLI call can never complete a lifecycle it does not own.
+ *
+ * Before the terminal write the close consults the registered delivery
+ * kind's evidence through `consultDeliveryEvidence` — the SAME pure function
+ * the read-only Phase-6 gate runs (contract §4g/§6 S3), so the gate's verdict
+ * and this refusal can never disagree. An incomplete delivery (a
+ * `development` workflow without its compound disposition / PR identity /
+ * verified-merge record, a `verification/report-only` workflow without the
+ * fulfilment of its recorded completion policy) throws with every missing
+ * item named and ZERO writes: the snapshot stays `running` and the root entry
+ * stays registered, so the workflow remains resumable. The local close never
+ * verifies a remote merge (§4f keeps that as the PM's separate check) and
+ * never releases leases.
  */
 export async function closeWorkflow(workflowId: string, dir: string, opts: CloseWorkflowOptions): Promise<WorkflowSnapshot> {
   if (!isCloseTimestamp(opts.endedAt)) {
@@ -717,9 +1060,562 @@ export async function closeWorkflow(workflowId: string, dir: string, opts: Close
     if (snapshot.plans.some((row) => row.status !== "Done")) {
       throw new Error("refusing to close workflow: every plan row must be Done");
     }
+    const deliveryViolations = consultDeliveryEvidence(snapshot);
+    if (deliveryViolations.length > 0) {
+      const detail = deliveryViolations
+        .map((v) => `${v.code}: ${v.message}${v.fix !== undefined ? ` (fix: ${v.fix})` : ""}`)
+        .join("; ");
+      throw new Error(`refusing to close workflow: ${detail}`);
+    }
     const completed: WorkflowSnapshot = { ...snapshot, status: "completed", ended_at: opts.endedAt, updated_at: opts.endedAt };
     // Strict terminal validation refuses both lease kinds without deleting them.
     await validateAndPutWorkflowSnapshot(store, completed, snapshotPath);
     return completed;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Delivery evidence recording (plan-workflow-lifecycle-contract §3/§4c/§4d/
+// §4f, seam S3): the authorized write seam that fills the snapshot's
+// `delivery` block, stage by stage, before the close consults it.
+// ---------------------------------------------------------------------------
+
+export type RecordWorkflowDeliveryOptions = {
+  /**
+   * Partial delivery-evidence patch: only the named members are merged into
+   * the stored block, so the compound disposition, the PR identity and the
+   * merge record can be recorded at their own lifecycle stages without
+   * rewriting each other. At least one member is required.
+   */
+  evidence: WorkflowDeliveryEvidence;
+  /**
+   * Canonical coordinator session envelope path (spec §C4) — the same
+   * authority seam `closeWorkflow` uses: a coordinated snapshot is written
+   * only by its own bound coordinator. Non-coordinated snapshots have no
+   * coordinator to bind and ignore it.
+   */
+  sessionPath?: string;
+  /** Recording timestamp (YYYY-MM-DD or RFC3339). Default: now. */
+  at?: string;
+};
+
+export type RecordWorkflowDeliveryResult = {
+  snapshot: WorkflowSnapshot;
+  /** `false` when the recorded evidence already matched disk — nothing was written. */
+  written: boolean;
+};
+
+/**
+ * Record (or extend) the delivery evidence on a `type: plan` workflow's
+ * snapshot, under the snapshot write lock: the close path's consultation is
+ * only as good as the evidence recorded here, so this is the seam that makes
+ * a `development` close possible at all.
+ *
+ * Refusals (before any write):
+ * - a terminal snapshot: delivery evidence is collected BEFORE the close, and
+ *   a terminal lifecycle is never amended (§5 — no rewriting a closed
+ *   lifecycle);
+ * - a lifecycle other than `type: plan`, or one without a registered
+ *   `delivery_kind`: the evidence belongs to the declared kind (§1);
+ * - evidence the declared kind does not use (e.g. a completion record on a
+ *   `development` workflow) — the declared kind is authoritative;
+ * - a rewrite of the recorded PR identity (§4d records it once at submission:
+ *   an identical re-record is idempotent, a different pair is refused);
+ * - an empty patch or a malformed member: nothing is silently dropped.
+ *
+ * Idempotent and re-entrant: re-recording the exact stored evidence performs
+ * NO write and returns the snapshot as read (the timestamp is untouched), so
+ * a retried recording never produces a spurious revision. The write itself
+ * routes through the same protected-writer path as the close (the store's
+ * locked put inside the snapshot lock).
+ */
+export async function recordWorkflowDelivery(
+  workflowId: string,
+  dir: string,
+  opts: RecordWorkflowDeliveryOptions,
+): Promise<RecordWorkflowDeliveryResult> {
+  const evidence: unknown = opts.evidence;
+  if (!isPlainObject(evidence)) {
+    throw new Error("recordWorkflowDelivery: options.evidence must be an object naming at least one delivery-evidence member");
+  }
+  const members = Object.keys(evidence);
+  if (members.length === 0) {
+    throw new Error(
+      "recordWorkflowDelivery: options.evidence must name at least one of compound | pr | merge | completion",
+    );
+  }
+  // A member is only ever ADDED or replaced by recording: an object-valued
+  // member may not carry an absent value, which would silently erase recorded
+  // evidence from a protected document instead of leaving it untouched.
+  const nonObject = members.filter((member) => !isPlainObject(evidence[member]));
+  if (nonObject.length > 0) {
+    throw new Error(
+      `refusing to record delivery evidence: member(s) ${nonObject.join(", ")} must be objects \u2014 omit a member to leave it untouched`,
+    );
+  }
+  const shapeViolations = deliveryEvidenceViolations(evidence, "evidence");
+  if (shapeViolations.length > 0) {
+    throw new Error(`refusing to record invalid delivery evidence: ${shapeViolations.map((v) => v.message).join("; ")}`);
+  }
+  const at = opts.at ?? new Date().toISOString();
+  if (!isCloseTimestamp(at)) {
+    throw new Error("recordWorkflowDelivery: options.at must be a valid YYYY-MM-DD date or RFC3339 timestamp");
+  }
+  const snapshotPath = join(dir, WORKFLOW_SNAPSHOT_FILE);
+  const store = getArtifactStore();
+  const ref = { kind: "snapshot" as const, key: workflowId };
+  assertFsStorePath(store, ref, snapshotPath);
+  mkdirSync(dir, { recursive: true });
+  return withStatusWriteLock(snapshotPath, async () => {
+    const doc = await store.get(ref);
+    if (doc === undefined) throw new Error(`workflow snapshot not found: ${snapshotPath}`);
+    const { snapshot } = normalizeWorkflowSnapshot(doc, snapshotPath);
+    if (snapshot.id !== workflowId) {
+      throw new Error(`workflow snapshot identity mismatch: expected ${workflowId}, got ${snapshot.id}`);
+    }
+    if (isTerminalSnapshot(snapshot)) {
+      throw new Error(
+        `refusing to record delivery evidence for workflow ${JSON.stringify(workflowId)}: the lifecycle is terminal (${snapshot.status}) \u2014 delivery evidence is recorded before the close and a closed lifecycle is never amended`,
+      );
+    }
+    assertCoordinatedSnapshotWriter(doc, snapshotPath, opts.sessionPath, "delivery-evidence write");
+    const kind = snapshot.delivery_kind;
+    if (snapshot.type !== "plan" || (kind !== "development" && kind !== "verification/report-only")) {
+      throw new Error(
+        `refusing to record delivery evidence for workflow ${JSON.stringify(workflowId)}: only a type: plan lifecycle with a registered delivery_kind carries delivery evidence (got type ${JSON.stringify(snapshot.type)} / delivery_kind ${JSON.stringify(kind)}) \u2014 the kind is declared at registration and never inferred (\u00a71)`,
+      );
+    }
+    const allowed = kind === "development" ? ["compound", "pr", "merge"] : ["completion"];
+    const unused = members.filter((member) => !allowed.includes(member));
+    if (unused.length > 0) {
+      throw new Error(
+        `refusing to record delivery evidence for workflow ${JSON.stringify(workflowId)}: member(s) ${unused.join(", ")} do not belong to the declared delivery_kind '${kind}' (expected ${allowed.join(" | ")})`,
+      );
+    }
+    const stored = isPlainObject(snapshot.delivery) ? snapshot.delivery : {};
+    // §4d immutability: the PR identity is recorded ONCE at submission — a
+    // different pair is a different delivery, not an evidence update, and a
+    // later payload must not be able to swap it (which would also let a
+    // contradictory identity reach the close). An identical re-record stays
+    // idempotent (`written: false` below); the compound disposition and the
+    // merge evidence remain updatable (a corrected disposition and a re-read
+    // merge record are legitimate evolutions).
+    const recordedPr = isPlainObject(stored.pr) ? stored.pr : undefined;
+    const incomingPr = isPlainObject(evidence.pr) ? evidence.pr : undefined;
+    if (recordedPr !== undefined && incomingPr !== undefined && stableJson(recordedPr) !== stableJson(incomingPr)) {
+      throw new Error(
+        `refusing to rewrite the recorded PR identity of workflow ${JSON.stringify(workflowId)}: \u00a74d records it once at submission \u2014 recorded ${JSON.stringify(recordedPr)}, refused ${JSON.stringify(incomingPr)} (a different PR is a different delivery, not an evidence update)`,
+      );
+    }
+    const merged = { ...stored, ...evidence } as WorkflowDeliveryEvidence;
+    if (stableJson(snapshot.delivery ?? null) === stableJson(merged)) {
+      return { snapshot, written: false };
+    }
+    const next: WorkflowSnapshot = { ...snapshot, delivery: merged, updated_at: at };
+    await validateAndPutWorkflowSnapshot(store, next, snapshotPath);
+    return { snapshot: next, written: true };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Delivery-kind declaration (plan-workflow-lifecycle-contract §1/§4a; seam S3
+// population): the authorized ONE-TIME backfill for an ACTIVE `type: plan`
+// snapshot whose producer predates the kind — audit promotion and the v1 lift
+// minted active snapshots without one, which the close consultation (correctly)
+// refuses and no create-only producer can repair.
+// ---------------------------------------------------------------------------
+
+export type DeclareWorkflowDeliveryKindOptions = {
+  /** The declared kind (contract §1). Required — never inferred. */
+  deliveryKind: WorkflowDeliveryKind;
+  /** Delivery source branch, recorded as `branch.source`. Required for `development`. */
+  branchSource?: string;
+  /** Delivery target branch, recorded as `branch.target`. Required for `development`. */
+  branchTarget?: string;
+  /** Completion policy naming the evidence that completes the workflow. Required for `verification/report-only`. */
+  completionPolicy?: string;
+  /**
+   * Canonical coordinator session envelope path (spec §C4) — the same
+   * authority seam `closeWorkflow` and `recordWorkflowDelivery` use: a
+   * coordinated snapshot is written only by its own bound coordinator. An
+   * uncoordinated snapshot has no coordinator binding to authenticate (the
+   * historical audit-promotion / migrate population is exactly that), so it
+   * keeps the harness-owner stance the close already applies.
+   */
+  sessionPath?: string;
+  /** Declaration timestamp (YYYY-MM-DD or RFC3339). Default: now. */
+  at?: string;
+};
+
+/**
+ * Declare the delivery kind (and its per-kind registration evidence) of an
+ * ACTIVE `type: plan` snapshot whose producer declared none — the one-time
+ * upgrade seam for the historical population (contract §1/§4a). ONE-TIME by
+ * construction: the kind is registration evidence that is never inferred
+ * retroactively (§1), so a second declaration is refused even with the same
+ * value, and a terminal snapshot is refused outright (§5 — a closed lifecycle
+ * is never amended; the legacy terminal dead end keeps its documented
+ * owner-amendment path).
+ *
+ * The declaration carries the kind's own evidence through the shared
+ * `assertDeliveryRegistrationCoherence` rule, so it cannot mint an unclosable
+ * lifecycle (a `development` kind needs its delivery anchors, a
+ * `verification/report-only` kind its completion policy). A supplied delivery
+ * anchor either FILLS the missing one or restates the value the snapshot
+ * already registers; a contradicting value is refused, so the declaration can
+ * never re-point a lifecycle at another delivery. The write lands in the
+ * snapshot lock through the same protected writer as the close.
+ */
+export async function declareWorkflowDeliveryKind(
+  workflowId: string,
+  dir: string,
+  opts: DeclareWorkflowDeliveryKindOptions,
+): Promise<WorkflowSnapshot> {
+  const kind = opts.deliveryKind;
+  if (typeof kind !== "string" || !(WORKFLOW_DELIVERY_KINDS as readonly string[]).includes(kind)) {
+    throw new Error(
+      `declareWorkflowDeliveryKind: deliveryKind must be one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")} \u2014 got ${JSON.stringify(kind)}`,
+    );
+  }
+  assertDeliveryRegistrationCoherence(kind, opts, "declareWorkflowDeliveryKind");
+  const at = opts.at ?? new Date().toISOString();
+  if (!isCloseTimestamp(at)) {
+    throw new Error("declareWorkflowDeliveryKind: options.at must be a valid YYYY-MM-DD date or RFC3339 timestamp");
+  }
+  const snapshotPath = join(dir, WORKFLOW_SNAPSHOT_FILE);
+  const store = getArtifactStore();
+  const ref = { kind: "snapshot" as const, key: workflowId };
+  assertFsStorePath(store, ref, snapshotPath);
+  mkdirSync(dir, { recursive: true });
+  return withStatusWriteLock(snapshotPath, async () => {
+    const doc = await store.get(ref);
+    if (doc === undefined) throw new Error(`workflow snapshot not found: ${snapshotPath}`);
+    const { snapshot } = normalizeWorkflowSnapshot(doc, snapshotPath);
+    if (snapshot.id !== workflowId) {
+      throw new Error(`workflow snapshot identity mismatch: expected ${workflowId}, got ${snapshot.id}`);
+    }
+    if (isTerminalSnapshot(snapshot)) {
+      throw new Error(
+        `refusing to declare a delivery kind for workflow ${JSON.stringify(workflowId)}: the lifecycle is terminal (${snapshot.status}) \u2014 a closed lifecycle is never amended (\u00a75); a terminal snapshot without a registered kind stays on the documented owner-amendment path`,
+      );
+    }
+    assertCoordinatedSnapshotWriter(doc, snapshotPath, opts.sessionPath, "delivery-kind declaration");
+    if (snapshot.type !== "plan") {
+      throw new Error(
+        `refusing to declare a delivery kind for workflow ${JSON.stringify(workflowId)}: only a type: plan lifecycle declares one (got type ${JSON.stringify(snapshot.type)})`,
+      );
+    }
+    if (snapshot.delivery_kind !== undefined) {
+      throw new Error(
+        `refusing to declare a delivery kind for workflow ${JSON.stringify(workflowId)}: it already declares ${JSON.stringify(snapshot.delivery_kind)} \u2014 the kind is registration evidence, declared once and never re-inferred (\u00a71)`,
+      );
+    }
+    // Existing anchors are preserved (an iteration-shaped `base`/`integration`
+    // on an odd snapshot is never dropped); the validated document guarantees
+    // string-valued anchor keys. A supplied anchor either FILLS the missing one
+    // or restates the registered value — never replaces it: a kind-less
+    // historical snapshot may already carry `branch.source`/`branch.target`,
+    // and those anchors are the delivery identity its close is consulted
+    // against (§1/§3), so a contradicting declaration must not re-point the
+    // delivery at another branch. Restating the same value stays allowed
+    // (idempotent); a conflicting value is refused with the field named.
+    const branch: Record<string, unknown> = isPlainObject(snapshot.branch) ? { ...snapshot.branch } : {};
+    for (const [anchor, supplied] of [
+      ["source", opts.branchSource],
+      ["target", opts.branchTarget],
+    ] as const) {
+      if (supplied === undefined) continue;
+      const registered = branch[anchor];
+      if (registered !== undefined && registered !== supplied) {
+        throw new Error(
+          `refusing to declare a delivery kind for workflow ${JSON.stringify(workflowId)}: branch.${anchor} is already ` +
+            `${JSON.stringify(registered)} \u2014 the supplied ${JSON.stringify(supplied)} conflicts with the anchor the snapshot ` +
+            `registers, and the registered delivery anchor is never overwritten (\u00a71)`,
+        );
+      }
+      branch[anchor] = supplied;
+    }
+    const next: WorkflowSnapshot = { ...snapshot, delivery_kind: kind, updated_at: at };
+    if (Object.keys(branch).length > 0) next.branch = branch as WorkflowBranchAnchors;
+    if (opts.completionPolicy !== undefined) next.completion_policy = opts.completionPolicy;
+    await validateAndPutWorkflowSnapshot(store, next, snapshotPath);
+    return next;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Generic registration producer (plan-workflow-lifecycle-contract §2/§4a,
+// seam S1): create-only `type: plan` snapshot + root `workflows[]` entry
+// under one lock, mirroring the audit-promotion primitive sequence
+// (`promoteAuditPlans`): snapshot create-only → `registerWorkflowEntryLocked`
+// → rollback removes only the exact snapshot version this call created.
+// ---------------------------------------------------------------------------
+
+/** Options for `registerPlanWorkflow`. `harnessDir` is required — the
+ * snapshot and `status.json` live under the harness root. */
+export type RegisterPlanWorkflowOptions = {
+  /** Absolute harness dir that contains `status.json` + `workflows/`. Required. */
+  harnessDir: string;
+  /** The owned plan (contract §2: one independently owned plan per workflow on the new normal route). */
+  plan: { id: string; title: string; file: string };
+  /** Delivery kind declared at registration (contract §1). Required — never inferred. */
+  deliveryKind: WorkflowDeliveryKind;
+  /** Project register id recorded on the snapshot (contract §3 register row). */
+  project?: string;
+  /** Source branch of the delivery, recorded as `branch.source`. Required together with `branchTarget` for `development`. */
+  branchSource?: string;
+  /** Target branch. Required together with `branchSource` for `development`. */
+  branchTarget?: string;
+  /**
+   * Completion policy for `verification/report-only` workflows (contract §1):
+   * names the evidence that completes the workflow. Required for that kind.
+   */
+  completionPolicy?: string;
+  /**
+   * Pre-existing coordinator binding recorded at registration. Optional —
+   * binding a NEW coordinator session stays on the authorized `bind` seam
+   * (`coordination.ts`); this only records an already-held binding.
+   */
+  coordinator?: { session_id: string; session_file: string };
+  /** Registration timestamp (YYYY-MM-DD or RFC3339). Default: now. */
+  startedAt?: string;
+};
+
+export type RegisterPlanWorkflowResult = {
+  workflowId: string;
+  snapshotPath: string;
+  /**
+   * True when this call completed a registration whose snapshot already
+   * existed (crash between snapshot creation and root registration): the
+   * existing snapshot bytes — identity, timestamps, ownership — were kept
+   * and only the root entry was written (contract §4b recovery).
+   */
+  recovered: boolean;
+};
+
+/**
+ * Identity subset compared on recovery (contract §4b: re-running the producer
+ * must not duplicate identity). Timestamps (`started_at`/`updated_at`/`bound_at`)
+ * are excluded by design — the orphaned snapshot's timestamps are preserved,
+ * not rewritten, and a retry does not fail merely because the clock moved.
+ */
+function planWorkflowRegistrationIdentity(snapshot: WorkflowSnapshot): string {
+  const coordinator = snapshot.coordination?.coordinator;
+  return stableJson({
+    type: snapshot.type,
+    status: snapshot.status,
+    delivery_kind: snapshot.delivery_kind ?? null,
+    project: snapshot.project ?? null,
+    completion_policy: snapshot.completion_policy ?? null,
+    branch: snapshot.branch ?? null,
+    plans: snapshot.plans,
+    coordinator: coordinator ? { session_id: coordinator.session_id, session_file: coordinator.session_file } : null,
+  });
+}
+
+/**
+ * Register a standalone plan workflow (seam S1 — the generic normal-entry
+ * producer). Builds the create-only `type: plan` snapshot (workflow id, the
+ * owned plan as its single Todo row, project, delivery kind, source/target
+ * branches, optional coordinator) and the root `workflows[]` entry, then
+ * writes BOTH under one atomic section of the root `withStatusWriteLock`
+ * — the same serialization point `registerWorkflow` uses — mirroring
+ * `promoteAuditPlans`'s primitive sequence: create-only
+ * `writeWorkflowSnapshot` (its snapshot-dir lock nests inside the root lock,
+ * root → snapshot is the documented acquisition order) →
+ * `registerWorkflowEntryLocked`, with rollback that removes ONLY the exact
+ * snapshot version this call created (plus the now-empty workflow dir), so a
+ * failed register write is never treated as partial activation success.
+ *
+ * Refusals (fail-loud, no partial activation):
+ * - existing id: the workflow is already registered (snapshot + root entry) —
+ *   registration is create-only, never a re-registration;
+ * - unreadable root: a malformed/v1 `status.json` refuses (the created
+ *   snapshot is rolled back first);
+ * - missing required fields: id/plan/delivery-kind shape per the existing
+ *   snapshot validators; `development` additionally requires source+target
+ *   branches (contract §1 — a development workflow with missing branch
+ *   fields is incomplete registration, not an exempt workflow) and
+ *   `verification/report-only` requires the completion policy.
+ *
+ * Crash/retry recovery (contract §4b): a crash between snapshot creation and
+ * root registration leaves the snapshot orphaned (no root entry = no
+ * activation). Re-running this producer with the same registration identity
+ * completes the registration against the EXISTING snapshot bytes — identity,
+ * timestamps and ownership are preserved, never rewritten. An existing
+ * snapshot with a DIFFERENT registration identity refuses (it belongs to
+ * another registration).
+ *
+ * The caller must pin the artifact store to the harness root first
+ * (`setArtifactStore(createFsStore(harnessDir))`) when the active store's
+ * root could differ — the routed writers fail loud on a path mismatch.
+ */
+export async function registerPlanWorkflow(
+  workflowId: string,
+  options: RegisterPlanWorkflowOptions,
+): Promise<RegisterPlanWorkflowResult> {
+  if (typeof options.harnessDir !== "string" || options.harnessDir.trim() === "") {
+    throw new Error("registerPlanWorkflow: options.harnessDir is required (must contain status.json + workflows/)");
+  }
+  assertSafePathComponent(workflowId, "workflow id");
+  const { plan, deliveryKind } = options;
+  if (!isPlainObject(plan)) {
+    throw new Error("registerPlanWorkflow: options.plan is required (the owned plan: id, title, file)");
+  }
+  for (const field of ["id", "title", "file"] as const) {
+    if (typeof plan[field] !== "string" || plan[field].trim() === "") {
+      throw new Error(`registerPlanWorkflow: options.plan.${field} must be a non-empty string`);
+    }
+  }
+  if (typeof deliveryKind !== "string" || !(WORKFLOW_DELIVERY_KINDS as readonly string[]).includes(deliveryKind)) {
+    throw new Error(
+      `registerPlanWorkflow: options.deliveryKind must be one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")} \u2014 got ${JSON.stringify(deliveryKind)}`,
+    );
+  }
+  // Contract §1: missing branch fields never select or waive a kind — the
+  // shared per-kind coherence rule (the same one audit promotion, migrate and
+  // the one-time kind declaration enforce).
+  assertDeliveryRegistrationCoherence(deliveryKind, options, "registerPlanWorkflow");
+  for (const field of ["project", "branchSource", "branchTarget"] as const) {
+    const value = options[field];
+    if (value !== undefined && (typeof value !== "string" || value.trim() === "")) {
+      throw new Error(`registerPlanWorkflow: options.${field} must be a non-empty string when given`);
+    }
+  }
+  if (options.coordinator !== undefined) {
+    const { coordinator } = options;
+    if (typeof coordinator.session_id !== "string" || coordinator.session_id.trim() === "") {
+      throw new Error("registerPlanWorkflow: options.coordinator.session_id must be a non-empty string");
+    }
+    if (typeof coordinator.session_file !== "string" || !isAbsolute(coordinator.session_file)) {
+      throw new Error("registerPlanWorkflow: options.coordinator.session_file must be an absolute path");
+    }
+  }
+  const startedAt = options.startedAt ?? new Date().toISOString();
+  if (!isCloseTimestamp(startedAt)) {
+    throw new Error("registerPlanWorkflow: options.startedAt must be a valid YYYY-MM-DD date or RFC3339 timestamp");
+  }
+
+  const harnessDir = resolve(options.harnessDir);
+  const statusPath = join(harnessDir, "status.json");
+  const workflowDir = join(harnessDir, "workflows", workflowId);
+  const snapshotPath = join(workflowDir, WORKFLOW_SNAPSHOT_FILE);
+  const store = getArtifactStore();
+
+  const planRow: PlanRow = { id: plan.id, title: plan.title, file: plan.file, status: "Todo" };
+  const snapshot: WorkflowSnapshot = {
+    schema_version: 1,
+    id: workflowId,
+    type: "plan",
+    status: "running",
+    started_at: startedAt,
+    updated_at: startedAt.slice(0, 10),
+    plans: [planRow],
+    delivery_kind: deliveryKind,
+  };
+  if (options.project !== undefined) snapshot.project = options.project;
+  if (options.completionPolicy !== undefined) snapshot.completion_policy = options.completionPolicy;
+  if (options.branchSource !== undefined || options.branchTarget !== undefined) {
+    // `branchSource` is the plan's DELIVERY branch (`branch.source`) — never
+    // `branch.base`, whose consumers (cleanup Rule 2 protected refs, L1
+    // main-residency fallback) treat it as a protected base anchor: writing a
+    // feature branch there made the ref undeletable and pointed L1's
+    // residency expectation at the feature branch.
+    snapshot.branch = {
+      ...(options.branchSource !== undefined ? { source: options.branchSource } : {}),
+      ...(options.branchTarget !== undefined ? { target: options.branchTarget } : {}),
+    };
+  }
+  if (options.coordinator !== undefined) {
+    snapshot.coordination = {
+      coordinator: { session_id: options.coordinator.session_id, session_file: options.coordinator.session_file, bound_at: startedAt },
+    };
+  }
+  const entry: WorkflowEntry = {
+    id: workflowId,
+    type: "plan",
+    started_at: snapshot.started_at,
+    dir: `workflows/${workflowId}`,
+  };
+  const entryGate = validateWorkflowEntry(entry);
+  if (!entryGate.ok) {
+    throw new Error(
+      `refusing to register invalid workflow entry: ${entryGate.violations.map((v) => v.message).join("; ")}`,
+    );
+  }
+
+  return withStatusWriteLock(statusPath, async (): Promise<RegisterPlanWorkflowResult> => {
+    if (existsSync(snapshotPath)) {
+      const rootDoc = readJson(statusPath);
+      const workflows = Array.isArray(rootDoc.workflows) ? rootDoc.workflows : [];
+      if (workflows.some((candidate) => isPlainObject(candidate) && candidate.id === workflowId)) {
+        throw new Error(
+          `refusing to register workflow ${JSON.stringify(workflowId)}: it is already registered ` +
+            `(snapshot at ${snapshotPath}, root entry in ${statusPath}) \u2014 registration is create-only; ` +
+            `remove that workflow before registering again`,
+        );
+      }
+      // Crash/retry recovery (contract §4b): the snapshot exists but the root
+      // has no entry — no activation happened. Complete the registration
+      // against the EXISTING snapshot bytes; an identity mismatch refuses
+      // instead of adopting a foreign registration.
+      const existing = readWorkflowSnapshot(workflowDir);
+      if (planWorkflowRegistrationIdentity(existing.snapshot) !== planWorkflowRegistrationIdentity(snapshot)) {
+        throw new Error(
+          `refusing to register workflow ${JSON.stringify(workflowId)}: snapshot ${snapshotPath} already exists ` +
+            `with a different registration identity \u2014 remove that workflow or register under a different id`,
+        );
+      }
+      const recoveryEntry: WorkflowEntry = {
+        id: workflowId,
+        type: "plan",
+        started_at: existing.snapshot.started_at,
+        dir: `workflows/${workflowId}`,
+      };
+      const recoveryGate = validateWorkflowEntry(recoveryEntry);
+      if (!recoveryGate.ok) {
+        throw new Error(
+          `refusing to register invalid workflow entry: ${recoveryGate.violations.map((v) => v.message).join("; ")}`,
+        );
+      }
+      await registerWorkflowEntryLocked(statusPath, recoveryEntry);
+      return { workflowId, snapshotPath, recovered: true };
+    }
+    let createdVersion: string | undefined;
+    try {
+      // Create-only (`absent`) under the root lock: the snapshot is written
+      // through the routed writer, which validates it and refuses to replace
+      // an existing document (spec §C4). The snapshot's own lock nests inside
+      // the root lock — root → snapshot is the documented acquisition order.
+      await writeWorkflowSnapshot(snapshot, workflowDir, { createOnly: true });
+      createdVersion = readArtifactBytes(snapshotPath)?.version;
+      await registerWorkflowEntryLocked(statusPath, entry);
+    } catch (error) {
+      // Roll back ONLY the exact snapshot version this call created, under
+      // the snapshot lock: a snapshot another writer changed in the meantime
+      // is never deleted.
+      if (createdVersion !== undefined) {
+        await withStatusWriteLock(snapshotPath, async () => {
+          const current = readArtifactBytes(snapshotPath);
+          if (current === undefined || current.version !== createdVersion) return;
+          const remove = store.delete?.bind(store);
+          if (remove !== undefined) {
+            await withProtectedWrite(snapshotPath, "delete", () => remove({ kind: "snapshot", key: workflowId }));
+          }
+        });
+      }
+      try {
+        // Remove the workflow dir only when empty — a concurrent writer's
+        // snapshot/rows are never destroyed; rmdirSync throws ENOTEMPTY if
+        // content appeared between the readdir and the removal.
+        if (readdirSync(workflowDir).length === 0) {
+          rmdirSync(workflowDir);
+        }
+      } catch {
+        // Dir non-empty or already gone — leave it; never force-remove.
+      }
+      throw error;
+    }
+    return { workflowId, snapshotPath, recovered: false };
   });
 }

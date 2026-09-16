@@ -40,6 +40,20 @@ If legacy plan directories already exist, reuse them; avoid dual-structure dupli
 - After each Completion Report: update status before next dispatch (`report-to-status` hard gate).
 - On entering `InReview`: ensure review bundle path (`{SDD_DIR}/review/`) and aligned review metadata are set; write durable gate summaries back to the main plan/status artifacts.
 - On `Done`: ensure residual lifecycle state is consistent (open vs archived).
+- At plan commitment: register the workflow through the authorized producer (create-only snapshot + root `workflows[]` entry under one lock) and declare its delivery kind — `development`, or `verification/report-only` with its recorded completion policy:
+  ```text
+  mstar workflow register --workflow <id> --plan-id <id> --plan-title <title> --plan-file <path>
+    --delivery-kind <development|verification/report-only> [--project <id>]
+    [--branch-source <branch> --branch-target <branch> | --completion-policy <text>]
+    [--started-at <ts>] [--harness <dir>]
+  ```
+  The kind is declared here, never inferred (§1): `development` requires `--branch-source` + `--branch-target`, `verification/report-only` requires `--completion-policy`. The same `--delivery-kind` input is required by the specialized producers `audit promote` and (for the ACTIVE plan snapshots it lifts) `migrate` — and it is ONE delivery identity, so a `migrate` run whose lift creates 2+ ACTIVE standalone plans is refused (ids listed) and the tree migrates in batches of one declared plan. An **ACTIVE** `type: plan` snapshot that predates this (no registered kind — e.g. an old audit promotion or v1 lift) is repaired ONCE, before its close:
+  ```text
+  mstar workflow evidence --workflow <id> --declare-kind <development|verification/report-only>
+    [--branch-source <branch> --branch-target <branch> | --completion-policy <text>] [--session <path>]
+  ```
+  The declaration is one-time (a second one, even with the same kind, is refused) and refuses a terminal snapshot; a supplied `--branch-source`/`--branch-target` fills a MISSING anchor or restates the registered one — a value conflicting with an anchor the snapshot already carries is refused (the registered anchor is the delivery identity, never overwritten); delivery evidence itself is recorded with `mstar workflow evidence --workflow <id> --file <payload.json>` (PR identity recorded once; `head`/`target` must be the registered `branch.source`/`branch.target`).
+- Delivery tail (standalone `development` plans, after Done): compound disposition (`created` / `updated` / reasoned `skipped`; review → **`mstar-compound`**) on the delivery branch before the PR head is finalized → submit PR with its identity (repo / head / target) recorded → merge-ready declared (resumable milestone; workflow stays registered) → PM-verified merge (provider evidence; never the close verb) → common close reusing the post-merge-close ordering (`mstar-iteration/references/phase-6-post-merge-close.md`). Stage semantics and failure behavior → frozen contract `{SPECS_DIR}/plan-workflow-lifecycle-contract.md`.
 
 ## PM Plan / Status NEVER
 
@@ -49,6 +63,7 @@ If legacy plan directories already exist, reuse them; avoid dual-structure dupli
 ## Stage Transitions
 
 - Non-hotfix path: `specify -> clarify -> plan -> tasks -> implement -> InReview -> Done`
+- Standalone development plans: row `Done` is not workflow completion — the delivery tail (see PM Responsibilities) runs to verified merge + terminal close before the workflow closes.
 - Hotfix path may be compressed, but requires post-fix clarify/RCA follow-up note.
 - New constraints during implement: write back to plan before continuing.
 

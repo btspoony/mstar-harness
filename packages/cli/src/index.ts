@@ -32,6 +32,7 @@ import {
   closeProjectRegisterEntry,
   closeWorkflow,
   completenessLevel,
+  declareWorkflowDeliveryKind,
   createFsStore,
   detectHarnessKind,
   detectHost,
@@ -66,6 +67,8 @@ import {
   readCoordinatedArtifact,
   readMainWorktree,
   readWorkflowSnapshot,
+  recordWorkflowDelivery,
+  registerPlanWorkflow,
   replaceCoordinatedArtifact,
   resolveHarnessDir,
   resolveProcessHarnessDir as resolveEngineProcessHarnessDir,
@@ -111,6 +114,7 @@ import {
   validateStatus,
   validateStatusV2,
   validateWorkflowSnapshot,
+  WORKFLOW_DELIVERY_KINDS,
   WORKFLOW_SNAPSHOT_FILE,
   _DEFAULT_PROJECT,
   type ArtifactKind,
@@ -1198,10 +1202,18 @@ statusCommand
 statusCommand
   .command("workflow-close")
   .description(
-    "Close one workflow lifecycle after its delivery PR merged (engine-backed: closeWorkflow writes the " +
-      "terminal snapshot under the snapshot lock, then unregisterWorkflow removes the root status.json entry " +
-      "idempotently; dangling leases and unfinished plan rows refuse before any write; a fully closed retry " +
-      "rewrites nothing; a failed unregister reports a partial close and a re-run finishes it. " +
+    "Close one workflow lifecycle after its delivery tail completes \u2014 type-generic: iterations and standalone " +
+      "`type: plan` workflows close through this same verb (engine-backed: closeWorkflow consults the registered " +
+      "delivery evidence, then writes the terminal snapshot under the snapshot lock, then unregisterWorkflow " +
+      "removes the root status.json entry idempotently; dangling leases, unfinished plan rows and incomplete " +
+      "delivery evidence refuse before any write; a fully closed retry rewrites nothing; a failed unregister " +
+      "reports a partial close and a re-run finishes it. " +
+      "Standalone plan workflows: the close consults the delivery evidence BEFORE writing \u2014 a `development` " +
+      "workflow needs its registered source/target branches plus the recorded compound disposition, PR identity " +
+      "and verified-merge evidence (`mstar workflow evidence --workflow <id> --file <payload.json>`, \u00a74c/\u00a74d/\u00a74f); " +
+      "`verification/report-only` needs its recorded completion policy plus its fulfilment record. The same " +
+      "consultation backs the read-only check 'mstar iteration gate --phase 6 --workflow <id>', so gate and " +
+      "close never disagree. " +
       "Exit 0 success, 1 gate/IO refusal, 2 usage)",
   )
   .option("--workflow <id>", "Workflow id to close ({WORKFLOW_DIR}/<id>/snapshot.json)")
@@ -1294,13 +1306,284 @@ statusCommand
     process.exitCode = 1;
   });
 
+/**
+ * `mstar workflow` — the lifecycle verbs this module owns (`register`, seam S1,
+ * and `evidence`, seam S3), built on a DETACHED group that is attached at the
+ * end of the registration pass (`attachWorkflowGroup`, after every other
+ * registrar ran).
+ *
+ * The group is never created eagerly with `program.command("workflow")`: when
+ * another registrar already owns a `workflow` group (the merged main owns one
+ * for the Prepare amendment verbs `show-prepare` / `amend-prepare`), creating a
+ * second one makes commander throw
+ * `cannot add command 'workflow' as already have command 'workflow'` — which
+ * aborts `mstar --help` and every other verb, not just this family. One group
+ * carries every workflow verb.
+ */
+const workflowCommand = new Command("workflow").description(
+  "Workflow lifecycle verbs (engine-backed): registration of standalone plan workflows and the recording of " +
+    "their delivery evidence. " +
+    "Terminal close stays on `status workflow-close`",
+);
+
+workflowCommand
+  .command("register")
+  .description(
+    "Register a standalone plan workflow (plan-workflow-lifecycle-contract seam S1, engine-backed): " +
+      "create-only `type: plan` snapshot + {HARNESS_DIR}/status.json root entry under one lock. Records the " +
+      "owned plan (one Todo row \u2014 registration does not authorize implementation), project, delivery kind, " +
+      "source/target branches and optional coordinator. `development` requires --branch-source/--branch-target; " +
+      "`verification/report-only` requires --completion-policy. Re-running after a crash between snapshot " +
+      "creation and registration recovers: the existing snapshot bytes are kept and only the root entry is " +
+      "written. Exit 0 success, 1 gate/IO refusal (no partial activation), 2 usage",
+  )
+  .option("--workflow <id>", "Workflow id (single safe path component)")
+  .option("--plan-id <id>", "Owned plan id (one independently owned plan per workflow on the normal route)")
+  .option("--plan-title <title>", "Owned plan title")
+  .option("--plan-file <path>", "Owned plan file path recorded on the row")
+  .option("--delivery-kind <kind>", `Delivery kind declared at registration (contract \u00a71): ${WORKFLOW_DELIVERY_KINDS.join(" | ")}`)
+  .option("--project <id>", "Project register id recorded on the snapshot")
+  .option("--branch-source <branch>", "Source branch (required for development)")
+  .option("--branch-target <branch>", "Target branch (required for development)")
+  .option("--completion-policy <text>", "Completion evidence policy (required for verification/report-only)")
+  .option("--started-at <timestamp>", "Registration timestamp (YYYY-MM-DD or RFC3339; default: now)")
+  .option("--harness <path>", "Harness dir override (default: resolved control {HARNESS_DIR})")
+  .action(
+    async (options: {
+      workflow?: string;
+      planId?: string;
+      planTitle?: string;
+      planFile?: string;
+      deliveryKind?: string;
+      project?: string;
+      branchSource?: string;
+      branchTarget?: string;
+      completionPolicy?: string;
+      startedAt?: string;
+      harness?: string;
+    }) => {
+      try {
+        const usage =
+          "usage: workflow register --workflow <id> --plan-id <id> --plan-title <title> --plan-file <path> " +
+          `--delivery-kind <${WORKFLOW_DELIVERY_KINDS.join("|")}> [--project <id>] [--branch-source <branch>] ` +
+          "[--branch-target <branch>] [--completion-policy <text>] [--started-at <ts>] [--harness <dir>]";
+        const missing = (
+          [
+            ["--workflow", options.workflow],
+            ["--plan-id", options.planId],
+            ["--plan-title", options.planTitle],
+            ["--plan-file", options.planFile],
+            ["--delivery-kind", options.deliveryKind],
+          ] as const
+        )
+          .filter(([, value]) => value === undefined || value.trim() === "")
+          .map(([flag]) => flag);
+        if (missing.length > 0) {
+          throw new SddScriptError(`missing required option(s): ${missing.join(", ")}\n${usage}`, 2);
+        }
+        if (!(WORKFLOW_DELIVERY_KINDS as readonly string[]).includes(options.deliveryKind!)) {
+          throw new SddScriptError(
+            `--delivery-kind must be one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")} \u2014 got ${JSON.stringify(options.deliveryKind)}\n${usage}`,
+            2,
+          );
+        }
+        // Shared workflow-id guard — the same contract every other `--workflow <id>`
+        // verb applies (reject ""/./.. and separators) so a hostile id never
+        // reaches the path join below (uniform exit 1, "invalid workflow id").
+        assertWorkflowId(options.workflow!);
+        const harnessDir = resolveProcessHarnessDir(options.harness);
+        if (!harnessDir) {
+          throw new Error(`harness dir not found from ${process.cwd()} \u2014 pass --harness <path>`);
+        }
+        // Store-root pinning (see `status workflow-close`): the register
+        // producer writes through the active ArtifactStore with fail-loud
+        // path agreement — the control harness root resolved above must
+        // ALWAYS be pinned as the store root.
+        setArtifactStore(createFsStore(harnessDir));
+        const result = await registerPlanWorkflow(options.workflow!, {
+          harnessDir,
+          plan: { id: options.planId!, title: options.planTitle!, file: options.planFile! },
+          deliveryKind: options.deliveryKind as (typeof WORKFLOW_DELIVERY_KINDS)[number],
+          ...(options.project !== undefined ? { project: options.project } : {}),
+          ...(options.branchSource !== undefined ? { branchSource: options.branchSource } : {}),
+          ...(options.branchTarget !== undefined ? { branchTarget: options.branchTarget } : {}),
+          ...(options.completionPolicy !== undefined ? { completionPolicy: options.completionPolicy } : {}),
+          ...(options.startedAt !== undefined ? { startedAt: options.startedAt } : {}),
+        });
+        console.log(
+          pc.green(
+            result.recovered
+              ? `workflow register: OK \u2014 ${result.workflowId} recovered (registration completed for the existing snapshot; its bytes were preserved)`
+              : `workflow register: OK \u2014 ${result.workflowId} registered`,
+          ),
+        );
+        console.log(`  snapshot: ${result.snapshotPath}`);
+      } catch (error) {
+        failScript(error, "workflow register");
+      }
+    },
+  );
+
+/**
+ * `--file <payload.json>` for the delivery-evidence verb: the payload is a
+ * PARTIAL `delivery` block (`{compound:{…}}`, `{pr:{…}}`, `{merge:{…}}` or
+ * `{completion:{…}}`), merged into the stored block by the engine. Absolute,
+ * present and parseable — the shape itself is the engine's refusal, so a
+ * malformed member never reaches the snapshot as a silent drop.
+ */
+function readJsonPayloadFile(raw: string | undefined, flag: string, verb: string): Record<string, unknown> {
+  if (raw === undefined || raw.trim() === "") {
+    throw new SddScriptError(`${flag} is required (absolute path of the delivery-evidence JSON payload)`, 2);
+  }
+  if (!path.isAbsolute(raw)) {
+    throw new SddScriptError(`${flag} must be an absolute path \u2014 got ${JSON.stringify(raw)}`, 2);
+  }
+  if (!fs.existsSync(raw)) {
+    throw new SddScriptError(`${flag} not found: ${raw}`, 2);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fs.readFileSync(raw, "utf8"));
+  } catch (error) {
+    throw new Error(`${verb}: ${flag} payload is not valid JSON (${(error as Error).message})`);
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`${verb}: ${flag} payload must be a JSON object (the delivery-evidence members to record)`);
+  }
+  return parsed as Record<string, unknown>;
+}
+
+workflowCommand
+  .command("evidence")
+  .description(
+    "Record the delivery-kind evidence a standalone `type: plan` workflow is closed against, or declare the delivery " +
+      "kind of an ACTIVE kind-less snapshot (plan-workflow-lifecycle-contract \u00a71/\u00a73/\u00a74a/\u00a74c/\u00a74d/\u00a74f; " +
+      "engine-backed). With --file, the payload JSON is merged into the snapshot's `delivery` block under the " +
+      "snapshot lock, so evidence can be recorded stage by stage: `development` records the compound disposition " +
+      "(\u00a74c, before the PR head is finalized), the PR identity (\u00a74d, at submission \u2014 recorded once, pinned to " +
+      "the registered delivery) and the PM's verified-merge record (\u00a74f \u2014 the engine never verifies the remote " +
+      "merge itself); `verification/report-only` records the fulfilment of its registered completion policy (\u00a71). " +
+      "With --declare-kind, an ACTIVE `type: plan` snapshot that carries no kind (audit promotion / v1 lift from " +
+      "before the producers declared one) receives its kind and its per-kind evidence ONCE \u2014 a second declaration, " +
+      "even with the same value, and any terminal snapshot, are refused. A supplied --branch-source/--branch-target " +
+      "fills a missing delivery anchor or restates the registered one; a value conflicting with an anchor the " +
+      "snapshot already carries is refused (the registered anchor is the delivery identity, never overwritten). " +
+      "Authorized exactly like the close: a " +
+      "coordinated workflow's snapshot is written only for its own bound coordinator envelope (--session). " +
+      "Exit 0 success/no-op, 1 gate/IO refusal, 2 usage",
+  )
+  .option("--workflow <id>", "Workflow id ({WORKFLOW_DIR}/<id>/snapshot.json)")
+  .option("--file <path>", "Absolute path of the delivery-evidence JSON payload (record mode)")
+  .option("--declare-kind <kind>", `Declare the delivery kind of an ACTIVE kind-less plan snapshot (one-time): ${WORKFLOW_DELIVERY_KINDS.join(" | ")}`)
+  .option("--branch-source <branch>", "Delivery source branch recorded as branch.source (declare mode; required for development)")
+  .option("--branch-target <branch>", "Delivery target branch recorded as branch.target (declare mode; required for development)")
+  .option("--completion-policy <text>", "Completion policy for verification/report-only (declare mode; required for that kind)")
+  .option("--session <path>", "Absolute coordinator session JSON envelope path (required to write a coordinated workflow)")
+  .option("--at <timestamp>", "Recording/declaration timestamp (YYYY-MM-DD or RFC3339; default: now)")
+  .option("--harness <path>", "Harness dir override (default: resolved control {HARNESS_DIR})")
+  .action(
+    async (options: {
+      workflow?: string;
+      file?: string;
+      declareKind?: string;
+      branchSource?: string;
+      branchTarget?: string;
+      completionPolicy?: string;
+      session?: string;
+      at?: string;
+      harness?: string;
+    }) => {
+    try {
+      const workflowId = options.workflow;
+      const usage =
+        "usage: workflow evidence --workflow <id> (--file <payload.json> | --declare-kind <kind> " +
+        "[--branch-source <branch> --branch-target <branch> | --completion-policy <text>]) " +
+        "[--session <path>] [--at <ts>] [--harness <path>]";
+      if (workflowId === undefined || workflowId.trim() === "") {
+        throw new SddScriptError(usage, 2);
+      }
+      // The two modes are exclusive: recording delivery evidence and declaring
+      // the kind are separate one-way acts (§4a vs §4c/§4d/§4f).
+      const declareKind = options.declareKind;
+      const declaring = declareKind !== undefined;
+      if (declaring && options.file !== undefined) {
+        throw new SddScriptError(`pass either --file (record evidence) or --declare-kind (one-time declaration), not both\n${usage}`, 2);
+      }
+      if (declaring && !(WORKFLOW_DELIVERY_KINDS as readonly string[]).includes(declareKind)) {
+        throw new SddScriptError(
+          `--declare-kind must be one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")} \u2014 got ${JSON.stringify(declareKind)}\n${usage}`,
+          2,
+        );
+      }
+      // Flag contract first (usage, exit 2) — a malformed invocation never
+      // reads the harness or the snapshot. The per-kind evidence a declaration
+      // needs (delivery anchors / completion policy) is enforced by the engine
+      // through the shared registration-coherence rule.
+      const evidence = declaring ? undefined : readJsonPayloadFile(options.file, "--file", "workflow evidence");
+      const sessionPath = resolveSessionFlag(options.session);
+      // Shared workflow-id guard, identical to every other `--workflow <id>`
+      // verb (reject ""/./.. and separators) — the engine's identity check and
+      // store key guard would refuse later regardless.
+      assertWorkflowId(workflowId);
+      const harnessDir = resolveProcessHarnessDir(options.harness);
+      if (!harnessDir) {
+        throw new Error(`harness dir not found from ${process.cwd()} \u2014 pass --harness <path>`);
+      }
+      // Store-root pinning (see `status workflow-close`): the evidence write
+      // routes through the active ArtifactStore with fail-loud path
+      // agreement, so the control harness root resolved above MUST be pinned.
+      setArtifactStore(createFsStore(harnessDir));
+      const snapshotDir = path.join(resolveWorkflowDir(harnessDir, { harnessDir }), workflowId);
+      if (declaring) {
+        const declared = await declareWorkflowDeliveryKind(workflowId, snapshotDir, {
+          deliveryKind: declareKind as (typeof WORKFLOW_DELIVERY_KINDS)[number],
+          ...(options.branchSource !== undefined ? { branchSource: options.branchSource } : {}),
+          ...(options.branchTarget !== undefined ? { branchTarget: options.branchTarget } : {}),
+          ...(options.completionPolicy !== undefined ? { completionPolicy: options.completionPolicy } : {}),
+          ...(sessionPath !== undefined ? { sessionPath } : {}),
+          ...(options.at !== undefined ? { at: options.at } : {}),
+        });
+        console.log(
+          pc.green(
+            `workflow evidence: OK \u2014 ${workflowId} delivery kind declared (${String(declared.delivery_kind)}; declared once, never re-declared)`,
+          ),
+        );
+        return;
+      }
+      const result = await recordWorkflowDelivery(workflowId, snapshotDir, {
+        evidence: evidence!,
+        ...(sessionPath !== undefined ? { sessionPath } : {}),
+        ...(options.at !== undefined ? { at: options.at } : {}),
+      });
+      console.log(
+        pc.green(
+          result.written
+            ? `workflow evidence: OK \u2014 ${workflowId} delivery evidence recorded (${Object.keys(evidence!).join(", ")})`
+            : `workflow evidence: OK \u2014 ${workflowId} already carries this delivery evidence (nothing rewritten)`,
+        ),
+      );
+    } catch (error) {
+      failScript(error, "workflow evidence");
+    }
+  });
+
 const migrateCommand = program
   .command("migrate")
   .description(
-    "Migrate a v1 {HARNESS_DIR} status.json tree to v2 (engine-backed; exit 0 ok/idempotent no-op, 1 plan-invalid, 2 apply-failure)",
+    "Migrate a v1 {HARNESS_DIR} status.json tree to v2 (engine-backed; exit 0 ok/idempotent no-op, 1 plan-invalid, " +
+      "2 usage (missing --delivery-kind for an ACTIVE standalone plan lift, or one declaration for 2+ such lifts) / " +
+      "apply-failure). " +
+      "--delivery-kind declares the lifted ACTIVE plan workflows' kind (contract \u00a71/\u00a74a); " +
+      "`development` needs --branch-source/--branch-target, `verification/report-only` --completion-policy. " +
+      "It is ONE delivery identity, so a tree whose lift creates 2+ ACTIVE standalone plans is refused (exit 2, ids " +
+      "listed) \u2014 migrate in batches of one declared plan",
   )
   .option("--dry-run", "Print the migration step plan (source \u2192 destination) + planned-document validation warnings without writing anything")
   .option("--path <root>", "Harness root to migrate (default: resolved {HARNESS_DIR}, else cwd)")
+  .option("--delivery-kind <kind>", `Delivery kind for lifted ACTIVE standalone plan snapshots (exactly one such lift per run): ${WORKFLOW_DELIVERY_KINDS.join(" | ")}`)
+  .option("--branch-source <branch>", "Delivery source branch recorded as branch.source (required for development)")
+  .option("--branch-target <branch>", "Delivery target branch recorded as branch.target (required for development)")
+  .option("--completion-policy <text>", "Completion policy for verification/report-only lifts (required for that kind)")
   .option("--json", "Machine-readable JSON output")
   .action(async (options: MigrateCliOptions) => {
     await runMigrateCommand(options);
@@ -3672,24 +3955,57 @@ auditCommand
   .command("promote")
   .description(
     "Promote selected audit plans into the v2 workflow lifecycle: write the workflow snapshot " +
-      "(type plan, Todo rows) then register the workflow in {HARNESS_DIR}/status.json " +
+      "(type plan, Todo rows, the declared delivery kind + its evidence) then register the workflow in " +
+      "{HARNESS_DIR}/status.json. --delivery-kind is required: the promoted lifecycle declares its kind at " +
+      "registration (plan-workflow-lifecycle-contract \u00a71/\u00a74a), never inferred and never defaulted \u2014 " +
+      "`development` requires --branch-source/--branch-target, `verification/report-only` --completion-policy. " +
       "(exit 2 on usage, 1 when the harness dir cannot be resolved)",
   )
   .argument("[audit-dir]", "audit-<date>/ directory under {PLAN_DIR}")
   .option("--plans <ids>", "Comma-separated selected plan ids (README Plan column `001`, stem, or basename)")
   .option("--workflow <id>", "Workflow id (default: audit-<date> basename)")
+  .option("--delivery-kind <kind>", `Delivery kind declared for the promoted plans (required): ${WORKFLOW_DELIVERY_KINDS.join(" | ")}`)
+  .option("--branch-source <branch>", "Delivery source branch recorded as branch.source (required for development)")
+  .option("--branch-target <branch>", "Delivery target branch recorded as branch.target (required for development)")
+  .option("--completion-policy <text>", "Completion policy naming the evidence that completes the workflow (required for verification/report-only)")
   .option("--harness <dir>", "Harness dir containing status.json (default: resolveHarnessDir() / MSTAR_HARNESS_DIR)")
-  .action(async (auditDir: string | undefined, options: { plans?: string; workflow?: string; harness?: string }) => {
+  .action(
+    async (
+      auditDir: string | undefined,
+      options: {
+        plans?: string;
+        workflow?: string;
+        deliveryKind?: string;
+        branchSource?: string;
+        branchTarget?: string;
+        completionPolicy?: string;
+        harness?: string;
+      },
+    ) => {
     try {
+      const usage =
+        "usage: audit promote <audit-dir> --plans <ids> --delivery-kind <kind> [--workflow <id>] " +
+        "[--branch-source <branch> --branch-target <branch> | --completion-policy <text>] [--harness <dir>]";
  // Optional flag + explicit check (same as `lease verify-integration`):
  // commander's own missing-requiredOption error exits 1, which would
  // bypass the usage contract (exit 2) \u2014 validate in-handler instead.
       if (!auditDir) {
-        throw new SddScriptError("usage: audit promote <audit-dir> --plans <ids> [--workflow <id>] [--harness <dir>]", 2);
+        throw new SddScriptError(usage, 2);
       }
       const selected = parseCsv(options.plans);
       if (!selected || selected.length === 0) {
-        throw new SddScriptError("usage: audit promote <audit-dir> --plans <ids> [--workflow <id>] [--harness <dir>]", 2);
+        throw new SddScriptError(usage, 2);
+      }
+      // The delivery declaration is a USAGE requirement (exit 2) before any
+      // I/O: the promoted lifecycle declares its kind here (contract §1/§4a).
+      if (options.deliveryKind === undefined || options.deliveryKind.trim() === "") {
+        throw new SddScriptError(`missing required option: --delivery-kind <${WORKFLOW_DELIVERY_KINDS.join("|")}>\n${usage}`, 2);
+      }
+      if (!(WORKFLOW_DELIVERY_KINDS as readonly string[]).includes(options.deliveryKind)) {
+        throw new SddScriptError(
+          `--delivery-kind must be one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")} \u2014 got ${JSON.stringify(options.deliveryKind)}\n${usage}`,
+          2,
+        );
       }
       const outDir = resolveCliPath(auditDir);
       if (!fs.existsSync(outDir)) {
@@ -3702,7 +4018,11 @@ auditCommand
       setArtifactStore(createFsStore(harnessDir));
       const result = await promoteAuditPlans(outDir, selected, {
         harnessDir,
+        deliveryKind: options.deliveryKind as (typeof WORKFLOW_DELIVERY_KINDS)[number],
         ...(options.workflow !== undefined ? { workflowId: options.workflow } : {}),
+        ...(options.branchSource !== undefined ? { branchSource: options.branchSource } : {}),
+        ...(options.branchTarget !== undefined ? { branchTarget: options.branchTarget } : {}),
+        ...(options.completionPolicy !== undefined ? { completionPolicy: options.completionPolicy } : {}),
       });
       console.log(pc.green(`audit promote: OK \u2014 workflow ${result.workflowId} registered`));
       console.log(`  snapshot: ${result.snapshotPath}`);
@@ -5369,6 +5689,26 @@ registerPlanCommands(program);
 // scoped transport (one coordinator envelope, one engine call, the shared
 // argument/failure protocol), registered by the same module.
 registerWorkflowCommands(program);
+
+/**
+ * Attach the detached `mstar workflow` group built above (see its declaration).
+ * Run AFTER every other registrar so an already-created `workflow` group is
+ * visible: this module's verbs then join that group instead of creating a
+ * second one (commander aborts the whole CLI on a duplicate command name). The
+ * existing group's blurb stays its owner's — commander lists every subcommand
+ * row regardless, so the help surface remains truthful; the merged tree's
+ * blurb may be merged at integration time.
+ */
+function attachWorkflowGroup(target: Command): void {
+  const existing = target.commands.find((command) => command.name() === "workflow");
+  if (existing === undefined) {
+    target.addCommand(workflowCommand);
+    return;
+  }
+  for (const verb of workflowCommand.commands) existing.addCommand(verb);
+}
+
+attachWorkflowGroup(program);
 
 program.parseAsync(process.argv).catch((error: unknown) => {
   // Usage-class commander errors are exit 2, not exit 1, for the verb
