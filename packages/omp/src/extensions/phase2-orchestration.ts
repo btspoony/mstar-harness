@@ -377,6 +377,8 @@ type SamplingResult = Readonly<{
   observation: Phase2Observation | null;
   /** The first refusal, for a bounded diagnostic; `null` when the sample was complete. */
   refusal: Readonly<{ code: string; message: string }> | null;
+  /** Every terminal id **this sample** saw in `recent`; the decision consumes exactly these. */
+  terminalIds: readonly string[];
 }>;
 
 /** `null` when `snapshot.status` is terminal. */
@@ -492,6 +494,16 @@ function refuse(code: string, message: string): ToolOutcome {
 /** An empty observation, used only together with `snapshotAvailable: false`. */
 const NO_OBSERVATION: Phase2Observation = { key: "", hasRunningJobs: false, nativeDeliveryPending: false, recentTerminalIds: [] };
 
+/**
+ * Test seam for the awaited settings read, following this package's own
+ * precedent (the model-handoff adapter's readiness seam). The read sits between
+ * the snapshot a decision is taken against and the moment its ids are consumed,
+ * so a test can hold it open and settle a job inside that window.
+ */
+export const phase2Seams = {
+  readSettings: readPhase2Settings,
+};
+
 export default function phase2Orchestration(pi: ExtensionAPI): void {
   const z = pi.zod;
   /** Per-process state: a gate/fence and the coverage of native results already seen. */
@@ -575,7 +587,8 @@ export default function phase2Orchestration(pi: ExtensionAPI): void {
    * yields `observation: null` — never a key derived from a partial read.
    */
   const sample = async (ctx: ExtensionContext, binding: Phase2BindingRecord, probe: WorkflowProbe): Promise<SamplingResult> => {
-    if (!probe.ok) return { ownedPhase2: false, observation: null, refusal: { code: probe.code, message: probe.message } };
+    if (!probe.ok)
+      return { ownedPhase2: false, observation: null, refusal: { code: probe.code, message: probe.message }, terminalIds: [] };
 
     const snapshot = ctx.getAsyncJobSnapshot();
     if (snapshot === null) {
@@ -586,15 +599,17 @@ export default function phase2Orchestration(pi: ExtensionAPI): void {
           code: "phase2.snapshot-unavailable",
           message: "the host async-job snapshot is unavailable for this session; null is not \"no jobs\"",
         },
+        terminalIds: [],
       };
     }
 
-    const settings = await readPhase2Settings(ctx.cwd);
+    const settings = await phase2Seams.readSettings(ctx.cwd);
     if (!settings.ok) {
       return {
         ownedPhase2: true,
         observation: null,
         refusal: { code: `phase2.${settings.reason}`, message: settings.message },
+        terminalIds: [],
       };
     }
 
@@ -621,21 +636,8 @@ export default function phase2Orchestration(pi: ExtensionAPI): void {
         recentTerminalIds,
       },
       refusal: null,
+      terminalIds,
     };
-  };
-
-  /**
-   * Consume native-result coverage: the ids the host's completion delivery owns
-   * for this session are marked seen *after* `decidePhase2Reminder` has used
-   * them, so a later sample never mistakes an already-delivered result for a
-   * fresh opportunity and the emission sample itself still sees them.
-   */
-  const consumeNativeResults = (ctx: ExtensionContext): void => {
-    const snapshot = ctx.getAsyncJobSnapshot();
-    if (snapshot === null) return;
-    for (const job of snapshot.recent) {
-      if (job.status !== "running") consumedTerminalIds.add(job.id);
-    }
   };
 
   /**
@@ -660,11 +662,13 @@ export default function phase2Orchestration(pi: ExtensionAPI): void {
       snapshotAvailable: sampled.observation !== null,
     });
     gate.userTurn = false;
-    // Consume only after the decision has seen this sample's terminals. Marking
-    // them on `tool_result` / `before_agent_start` emptied `recentTerminalIds`
-    // before `agent_end`, so native-delivery silence never fired and a
-    // `triggerTurn` follow-up duplicated the host's own completion.
-    consumeNativeResults(ctx);
+    // Consume exactly the terminals the decision used — this sample's own ids,
+    // never a second snapshot taken after the settings await. A job that settles
+    // inside that window stays unconsumed: the decision saw it as running (so
+    // this turn can still be nudged about the changed opportunity), and the next
+    // turn sees a freshly delivered terminal, which stays silent rather than
+    // nudging a second time.
+    for (const id of sampled.terminalIds) consumedTerminalIds.add(id);
     if (decision === "silent") return;
 
     // Record-before-send: the latch is durable before the advisory can be seen.
