@@ -110,7 +110,7 @@ In invoke-based hosts (OpenCode / Cursor Task / Codex with callable multi-agent 
 
 Host invoke/dispatch details: `mstar-host` → active host reference and `references/parallel-dispatch.md`.
 
-**dsh:** mstar **stops arming** a goal — dsh progress is the native workflow (workflow snapshot phases + dispatch gates + **subagent settle notifications**), never a `/goal` objective or goal round loop. Phase 2 is a PM-local loop (dispatch → wait for the child's settle notification → next dispatch); a dispatched child owning the critical path means **wait**, not a duplicate work unit. Rule → `mstar-host` → `references/dsh.md`.
+**dsh:** mstar **stops arming** a goal — dsh progress is the native workflow (workflow snapshot phases + dispatch gates + **subagent settle notifications**), never a `/goal` objective or goal round loop. Phase 2 progression is the **`Rescheduling checkpoint`** (a settle notification is a `result-settled` one): dispatch the ready independent work before any wait; waiting is right when a dispatched child already owns that work — **never** a duplicate unit of work against the same worktree. Procedure → `mstar-iteration` `references/phase-2-worktree-lease.md` §2.4; rule → `mstar-host` → `references/dsh.md`.
 
 Dispatch mechanics and templates:
 `references/project-manager/dispatch-and-assignment.md`.
