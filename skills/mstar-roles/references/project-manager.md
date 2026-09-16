@@ -110,7 +110,7 @@ In invoke-based hosts (OpenCode / Cursor Task / Codex with callable multi-agent 
 
 Host invoke/dispatch details: `mstar-host` → active host reference and `references/parallel-dispatch.md`.
 
-**dsh:** mstar **stops arming** a goal — dsh progress is the native workflow (workflow snapshot phases + dispatch gates + **subagent settle notifications**), never a `/goal` objective or goal round loop. Phase 2 is a PM-local loop (dispatch → wait for the child's settle notification → next dispatch); a dispatched child owning the critical path means **wait**, not a duplicate work unit. Rule → `mstar-host` → `references/dsh.md`.
+**dsh:** mstar **stops arming** a goal — dsh progress is the native workflow (workflow snapshot phases + dispatch gates + **subagent settle notifications**), never a `/goal` objective or goal round loop. Phase 2 is a PM-local loop: run the **`Rescheduling checkpoint`** before any wait so independent ready work starts first, then wait for the settle notification; a dispatched child owning the critical path means **wait**, not a duplicate work unit (`mstar-iteration/references/phase-2-worktree-lease.md` §2.4). Rule → `mstar-host` → `references/dsh.md`.
 
 Dispatch mechanics and templates:
 `references/project-manager/dispatch-and-assignment.md`.
@@ -164,7 +164,7 @@ If any item below matches, fix the dispatch/plan state or mark `Blocked`—do **
 | **OpenCode** (no command, not `/pm`) | `project-manager` + `mstar-host` → `opencode.md` |
 | **`/iteration-drive --assignment` / `--workflow --plan` / `--resume`**（scoped primary） | **`mstar-iteration/references/plan-scoped-pm.md`** — bind → `show` → constrain to the returned scope; finish = handoff; coordinator sequence for accept/integration/complete |
 
-**Dispatch-first**, iteration branch policy（`iteration_base_branch` / `spec_integration_branch` / `target_branch`）, Autonomous Execute → **`mstar-iteration/references/phase-2-worktree-lease.md`**. Routing, gates, Task Board, QC, templates → this file + topic `mstar-*` skills.
+**Dispatch-first**, iteration branch policy（`iteration_base_branch` / `spec_integration_branch` / `target_branch`）, Autonomous Execute → **`mstar-iteration/references/phase-2-worktree-lease.md`**；Phase 2 的 **`Rescheduling checkpoint`**（何时重新评估可派发 work、五个冻结 reason、wait reason）→ 该文件 §2.4。Routing, gates, Task Board, QC, templates → this file + topic `mstar-*` skills.
 
 ---
 
