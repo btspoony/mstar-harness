@@ -1592,8 +1592,8 @@ describe("Prepare workflow amendment", () => {
     expect(refused.exitCode).toBe(1);
     const payload = jsonOf(refused);
     expect(payload.ok).toBe(false);
+    expect(payload.operation).toBe("amend-prepare");
     expect(payload.code).toBe("coordination.prepare-amendment.duplicate-plan");
-    expect(payload.plan_id).toBe(PREPARE_ROW);
     expect(readText(fixture.snapshotPath)).toBe(before);
     // The stale-read route still works: the review can be re-read and re-applied.
     expect(jsonOf(runCli(showPrepareArgs(fixture), fixture.root)).allowed).toBe(true);
