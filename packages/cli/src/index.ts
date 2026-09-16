@@ -1305,13 +1305,25 @@ statusCommand
     process.exitCode = 1;
   });
 
-const workflowCommand = program
-  .command("workflow")
-  .description(
-    "Workflow lifecycle verbs (engine-backed): registration of standalone plan workflows and the recording of " +
-      "their delivery evidence. " +
-      "Terminal close stays on `status workflow-close`",
-  );
+/**
+ * `mstar workflow` — the lifecycle verbs this module owns (`register`, seam S1,
+ * and `evidence`, seam S3), built on a DETACHED group that is attached at the
+ * end of the registration pass (`attachWorkflowGroup`, after every other
+ * registrar ran).
+ *
+ * The group is never created eagerly with `program.command("workflow")`: when
+ * another registrar already owns a `workflow` group (the merged main owns one
+ * for the Prepare amendment verbs `show-prepare` / `amend-prepare`), creating a
+ * second one makes commander throw
+ * `cannot add command 'workflow' as already have command 'workflow'` — which
+ * aborts `mstar --help` and every other verb, not just this family. One group
+ * carries every workflow verb.
+ */
+const workflowCommand = new Command("workflow").description(
+  "Workflow lifecycle verbs (engine-backed): registration of standalone plan workflows and the recording of " +
+    "their delivery evidence. " +
+    "Terminal close stays on `status workflow-close`",
+);
 
 workflowCommand
   .command("register")
@@ -5571,6 +5583,26 @@ prReviewCommand
 // `mstar plan` — the scoped plan-coordination transport (spec §A2). It owns
 // the scoped verbs only; the unscoped lifecycle verbs above are unchanged.
 registerPlanCommands(program);
+
+/**
+ * Attach the detached `mstar workflow` group built above (see its declaration).
+ * Run AFTER every other registrar so an already-created `workflow` group is
+ * visible: this module's verbs then join that group instead of creating a
+ * second one (commander aborts the whole CLI on a duplicate command name). The
+ * existing group's blurb stays its owner's — commander lists every subcommand
+ * row regardless, so the help surface remains truthful; the merged tree's
+ * blurb may be merged at integration time.
+ */
+function attachWorkflowGroup(target: Command): void {
+  const existing = target.commands.find((command) => command.name() === "workflow");
+  if (existing === undefined) {
+    target.addCommand(workflowCommand);
+    return;
+  }
+  for (const verb of workflowCommand.commands) existing.addCommand(verb);
+}
+
+attachWorkflowGroup(program);
 
 program.parseAsync(process.argv).catch((error: unknown) => {
   // Usage-class commander errors are exit 2, not exit 1, for the verb
