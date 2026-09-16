@@ -1637,6 +1637,7 @@ describe("terminal state survives tree and reload", () => {
     const firstSnapshot = JSON.parse(readFileSync(firstSnapshotPath, "utf8")) as Record<string, unknown>;
     firstSnapshot.status = "completed";
     writeJson(firstSnapshotPath, firstSnapshot);
+    writeRegister(repo.harness, [repo.siblingId]);
 
     await harness.emitInput("/iteration-start second", "interactive");
     const later = await harness.runTool(startParams("second-iteration"));
