@@ -141,7 +141,7 @@ import {
 } from "@mstar-harness/engine";
 import { verifyPlanExecutionLease } from "./lease-verify";
 import { registerSddEvidenceCommands } from "./sdd-evidence";
-import { planUsageFailurePayload, registerPlanCommands } from "./plan-coordination";
+import { planUsageFailurePayload, registerPlanCommands, registerWorkflowCommands } from "./plan-coordination";
 import { runMigrateCommand, type MigrateCliOptions } from "./commands/migrate";
 import { validateAgentPlugin } from "./agent-plugins";
 import { buildModelAssignments } from "./assignment";
@@ -5678,6 +5678,11 @@ prReviewCommand
 // `mstar plan` — the scoped plan-coordination transport (spec §A2). It owns
 // the scoped verbs only; the unscoped lifecycle verbs above are unchanged.
 registerPlanCommands(program);
+
+// `mstar workflow` — the workflow-level Prepare amendment verbs: the same
+// scoped transport (one coordinator envelope, one engine call, the shared
+// argument/failure protocol), registered by the same module.
+registerWorkflowCommands(program);
 
 /**
  * Attach the detached `mstar workflow` group built above (see its declaration).

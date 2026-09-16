@@ -468,6 +468,7 @@ export { WorkflowSnapshotValidationError } from "./workflow.js";
 
 export {
   CoordinationError,
+  amendPrepareWorkflow,
   bindPlanSession,
   mutatePlanCoordination,
   readCoordinatedArtifact,
@@ -476,6 +477,7 @@ export {
   replaceCoordinatedArtifact,
   resolvePlanScope,
   resolveProcessHarnessDir,
+  showPrepareWorkflow,
 } from "./coordination.js";
 export type {
   BindPlanSessionInput,
@@ -489,6 +491,10 @@ export type {
   PlanCoordinationView,
   PlanScopeInput,
   PrepareCoordinationRequest,
+  PreparePlanAppend,
+  PrepareWorkflowPatch,
+  PrepareWorkflowResult,
+  PrepareWorkflowView,
   ProgressCoordinationRequest,
   ResidualAddCoordinationRequest,
   ResidualCloseCoordinationRequest,

@@ -22,6 +22,7 @@ import { isAbsolute } from "node:path";
 import pc from "picocolors";
 import {
   SddScriptError,
+  amendPrepareWorkflow,
   bindPlanSession,
   createFsStore,
   mutatePlanCoordination,
@@ -30,17 +31,28 @@ import {
   readSessionEnvelope,
   resolveProcessHarnessDir,
   setArtifactStore,
+  showPrepareWorkflow,
   type BindPlanSessionInput,
   type CoordinationResult,
   type HandoffEvidence,
   type PlanCoordinationOperation,
   type PlanCoordinationView,
+  type PrepareWorkflowPatch,
+  type PrepareWorkflowResult,
   type ProgressCoordinationRequest,
   type ResidualAddCoordinationRequest,
 } from "@mstar-harness/engine";
 
 /** Detail keys the A2 failure shape may carry, in spec order. */
 const FAILURE_DETAIL_KEYS = ["holder", "path", "expected", "actual"] as const;
+
+/**
+ * The workflow family additionally forwards the addressed workflow from the
+ * engine's own refusal details. The identity comes from the refusal that was
+ * actually thrown — an engine error that does not carry one is never decorated
+ * with a guessed id — and the plan family's key set is unchanged.
+ */
+const WORKFLOW_FAILURE_DETAIL_KEYS = [...FAILURE_DETAIL_KEYS, "workflow_id"] as const;
 
 /** JSON payload types owned by the exported engine request shapes. */
 type ProgressPayload = ProgressCoordinationRequest["progress"];
@@ -83,8 +95,11 @@ function failurePayload(
   const payload: Record<string, unknown> = { ok: false, operation: verb, code, message };
   if (context.workflow_id !== undefined) payload.workflow_id = context.workflow_id;
   if (context.plan_id !== undefined) payload.plan_id = context.plan_id;
-  for (const key of FAILURE_DETAIL_KEYS) {
-    if (details?.[key] !== undefined) payload[key] = details[key];
+  // The caller's own context wins: an engine detail never overwrites the
+  // identity this invocation already addressed.
+  const detailKeys = familyOf(verb) === "workflow" ? WORKFLOW_FAILURE_DETAIL_KEYS : FAILURE_DETAIL_KEYS;
+  for (const key of detailKeys) {
+    if (details?.[key] !== undefined && payload[key] === undefined) payload[key] = details[key];
   }
   return JSON.stringify(payload);
 }
@@ -106,21 +121,49 @@ const PLAN_VERBS: Record<string, true> = {
   reconcile: true,
 };
 
+/** Every verb of the workflow Prepare family (spec § New API and CLI — no aliases). */
+const WORKFLOW_VERBS: Record<string, true> = {
+  "show-prepare": true,
+  "amend-prepare": true,
+};
+
+/** The scoped coordination families this module registers, with their verbs. */
+const SCOPED_VERB_FAMILIES: ReadonlyArray<{ family: string; verbs: Record<string, true> }> = [
+  { family: "plan", verbs: PLAN_VERBS },
+  { family: "workflow", verbs: WORKFLOW_VERBS },
+];
+
 /**
- * A2 usage-failure object for a commander-level error (unknown option, excess
- * argument) raised by this verb family. Commander raises those before any
- * action runs, so the shared parse catch cannot know which operation the argv
- * addressed and recovers it from the argv instead. Returns `null` when the
- * argv is not a `mstar plan` invocation, so unrelated commands never receive a
- * plan-shaped payload.
+ * The command family one scoped verb belongs to. The `workflow` Prepare verbs
+ * are the only ones outside the `plan` row family, so a failure line names the
+ * command the caller actually ran.
+ */
+function familyOf(verb: string): string {
+  return WORKFLOW_VERBS[verb] === true ? "workflow" : "plan";
+}
+
+/** The command token's position in `process.argv` (program, script, command). */
+const COMMAND_POSITION = 2;
+
+/**
+ * Usage-failure object for a commander-level error (unknown option, excess
+ * argument) raised by the scoped families this module registers — the `plan`
+ * row verbs and the `workflow` Prepare verbs. Commander raises those before
+ * any action runs, so the shared parse catch cannot know which operation the
+ * argv addressed and recovers the family from the command position instead:
+ * only the command slot decides, never a token found anywhere in the argv, so
+ * a flag value equal to another family's token (`--session plan`, a relative
+ * path that is itself the usage error) cannot make the payload claim it.
+ * Returns `null` when the command position is not one of those families, so
+ * unrelated invocations never receive a coordination-shaped payload.
  */
 export function planUsageFailurePayload(argv: readonly string[], message: string): string | null {
-  const planIndex = argv.indexOf("plan");
-  if (planIndex === -1) return null;
-  const verb = argv.slice(planIndex + 1).find((token) => !token.startsWith("-"));
+  const matched = SCOPED_VERB_FAMILIES.find((entry) => entry.family === argv[COMMAND_POSITION]);
+  if (matched === undefined) return null;
+  const verb = argv.slice(COMMAND_POSITION + 1).find((token) => !token.startsWith("-"));
   return JSON.stringify({
     ok: false,
-    operation: verb !== undefined && PLAN_VERBS[verb] === true ? verb : "plan",
+    operation: verb !== undefined && matched.verbs[verb] === true ? verb : matched.family,
     code: "usage",
     message,
   });
@@ -131,11 +174,14 @@ export function planUsageFailurePayload(argv: readonly string[], message: string
  * own exit code, 2 for the checks below), a `coordination.*` error is the
  * engine's runtime refusal (exit 1), anything else is an unexpected failure
  * (exit 1) that still keeps machine-readable JSON valid when `--json` is on.
+ * Every line names the family the caller actually ran — this one included, so
+ * a workflow-verb failure never reports a `plan.*` code.
  */
 function failPlan(verb: string, error: unknown, json: boolean, context: PlanFailureContext): void {
+  const family = familyOf(verb);
   if (error instanceof SddScriptError) {
     if (json) console.log(failurePayload(verb, "usage", error.message, context));
-    else console.error(pc.red(`plan ${verb}: ${error.message}`));
+    else console.error(pc.red(`${family} ${verb}: ${error.message}`));
     process.exitCode = error.exitCode;
     return;
   }
@@ -143,12 +189,12 @@ function failPlan(verb: string, error: unknown, json: boolean, context: PlanFail
   const message = error instanceof Error ? error.message : String(error);
   if (coordination !== null) {
     if (json) console.log(failurePayload(verb, coordination.code, message, context, coordination.details));
-    else console.error(pc.red(`plan ${verb}: ${message}`));
+    else console.error(pc.red(`${family} ${verb}: ${message}`));
     process.exitCode = 1;
     return;
   }
-  if (json) console.log(failurePayload(verb, "plan.internal-error", message, context));
-  else console.error(pc.red(`plan ${verb} failed: ${message}`));
+  if (json) console.log(failurePayload(verb, `${family}.internal-error`, message, context));
+  else console.error(pc.red(`${family} ${verb} failed: ${message}`));
   process.exitCode = 1;
 }
 
@@ -158,7 +204,7 @@ function failPlan(verb: string, error: unknown, json: boolean, context: PlanFail
 
 function requireFlag(raw: string | undefined, flag: string, verb: string, what: string): string {
   if (raw === undefined || raw.trim() === "") {
-    throw new SddScriptError(`usage: plan ${verb} requires ${flag} <${what}>`, 2);
+    throw new SddScriptError(`usage: ${familyOf(verb)} ${verb} requires ${flag} <${what}>`, 2);
   }
   return raw;
 }
@@ -728,4 +774,150 @@ export function registerPlanCommands(program: Command): void {
   // this verb family instead of commander's default exit 1; the shared
   // CommanderError mapping lives with the top-level parse call.
   for (const command of [plan, ...plan.commands]) command.exitOverride();
+}
+
+/* ------------------------------------------------------------------------ *
+ * § mstar workflow — the Prepare amendment transport
+ * ------------------------------------------------------------------------ */
+
+/** The raw-byte version token one workflow-verb flag carries. */
+function parsePrepareVersion(raw: string | undefined, flag: string, verb: string): string {
+  const value = requireFlag(raw, flag, verb, "sha256-version");
+  const bare = value.startsWith("sha256:") ? value.slice("sha256:".length) : value;
+  if (!/^[0-9a-f]{64}$/.test(bare)) {
+    throw new SddScriptError(
+      `${flag} must be a raw-byte sha256 version ("sha256:<64 lowercase hex>" or "<64 lowercase hex>") \u2014 got ${JSON.stringify(value)}`,
+      2,
+    );
+  }
+  return value;
+}
+
+/**
+ * The workflow-view success payload (spec § New API and CLI): the view a
+ * coordinator acts on — both byte versions, the current plan ids and the
+ * admission verdict. This is deliberately not the row-only success renderer:
+ * the result carries a workflow view and no plan row.
+ */
+function printWorkflowView(verb: string, result: PrepareWorkflowResult, json: boolean): void {
+  const view = result.view;
+  if (json) {
+    const payload: Record<string, unknown> = {
+      ok: true,
+      operation: verb,
+      workflow_id: view.workflowId,
+      session_file: result.session_file,
+      session_id: result.session.session_id,
+      role: result.session.role,
+      snapshot_version: view.snapshotVersion,
+      compass_version: view.compassVersion,
+      plan_ids: view.planIds,
+      allowed: view.allowed,
+      blockers: view.blockers,
+    };
+    if (result.outcome !== undefined) payload.outcome = result.outcome;
+    console.log(JSON.stringify(payload));
+    return;
+  }
+  // Human mode keeps stdout machine-only: the readable summary is diagnostic.
+  console.error(
+    pc.green(
+      `workflow ${verb}: ${result.session.role} session ${result.session.session_id} (workflow ${view.workflowId})`,
+    ),
+  );
+  console.error(`workflow ${verb}: session file ${result.session_file}`);
+  console.error(`workflow ${verb}: snapshot ${view.snapshotVersion}, compass ${view.compassVersion}`);
+  console.error(`workflow ${verb}: plans ${view.planIds.join(", ") || "(none)"}`);
+  console.error(
+    `workflow ${verb}: ${view.allowed ? "amendment admissible" : `blocked \u2014 ${view.blockers.join("; ")}`}`,
+  );
+  if (result.outcome !== undefined) console.error(`workflow ${verb}: ${result.outcome}`);
+}
+
+/**
+ * `mstar workflow` — the workflow-level Prepare amendment verbs (spec § New API
+ * and CLI). They live in this module because they are the same scoped
+ * coordination transport: one coordinator envelope, one engine call, the same
+ * argument/failure protocol (success exit 0, refusal exit 1 with the JSON
+ * failure object, usage exit 2). There is no force/replace/init/fallback flag.
+ */
+export function registerWorkflowCommands(program: Command): void {
+  const workflow = program
+    .command("workflow")
+    .description(
+      "Workflow-level Prepare amendment: read the current snapshot/compass byte versions and the admission view " +
+        "(`show-prepare`), then apply one approved structural delta (`amend-prepare`) (engine-backed; JSON on stdout " +
+        "with --json, diagnostics on stderr; exit 0 ok, 1 refusal, 2 usage)",
+    )
+    .exitOverride();
+
+  workflow
+    .command("show-prepare")
+    .description(
+      "Read the Prepare amendment view of one coordinator-bound workflow: both byte versions, the current plan ids " +
+        "and whether an amendment is admissible (read-only: no lock, no write)",
+    )
+    .option("--session <path>", "Absolute coordinator session JSON envelope path")
+    .option("--json", "Machine-readable JSON on stdout")
+    .action(async (options: PlanCliOptions) =>
+      runVerb("show-prepare", options, {}, async (json) => {
+        const sessionPath = requireAbsolutePath(
+          options.session as string | undefined,
+          "--session",
+          "show-prepare",
+          "session-json-path",
+        );
+        pinSessionRoot(sessionPath);
+        printWorkflowView("show-prepare", await showPrepareWorkflow({ sessionPath, cwd: process.cwd() }), json);
+      }),
+    );
+
+  workflow
+    .command("amend-prepare")
+    .description(
+      "Append approved Todo plan rows, record the reviewed integration checkout and the approved plan parallelism " +
+        "(coordinator session; both byte versions from `workflow show-prepare` are required)",
+    )
+    .option("--session <path>", "Absolute coordinator session JSON envelope path")
+    .option("--expect-snapshot <sha256>", "Current snapshot byte version from `workflow show-prepare`")
+    .option("--expect-compass <sha256>", "Current compass byte version from `workflow show-prepare`")
+    .option("--input <path>", "Absolute path of the PrepareWorkflowPatch JSON payload")
+    .option("--json", "Machine-readable JSON on stdout")
+    .action(async (options: PlanCliOptions) =>
+      runVerb("amend-prepare", options, {}, async (json) => {
+        // Every flag is validated before any engine I/O (exit 2): a malformed
+        // token or payload path must never surface as a store refusal (exit 1).
+        const sessionPath = requireAbsolutePath(
+          options.session as string | undefined,
+          "--session",
+          "amend-prepare",
+          "session-json-path",
+        );
+        const expectedSnapshotVersion = parsePrepareVersion(
+          options.expectSnapshot as string | undefined,
+          "--expect-snapshot",
+          "amend-prepare",
+        );
+        const expectedCompassVersion = parsePrepareVersion(
+          options.expectCompass as string | undefined,
+          "--expect-compass",
+          "amend-prepare",
+        );
+        const patch = readJsonPayload(options.input as string | undefined, "--input", "amend-prepare") as PrepareWorkflowPatch;
+        pinSessionRoot(sessionPath);
+        printWorkflowView(
+          "amend-prepare",
+          await amendPrepareWorkflow({
+            sessionPath,
+            cwd: process.cwd(),
+            expectedSnapshotVersion,
+            expectedCompassVersion,
+            patch,
+          }),
+          json,
+        );
+      }),
+    );
+
+  for (const command of [workflow, ...workflow.commands]) command.exitOverride();
 }

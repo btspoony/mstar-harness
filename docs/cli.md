@@ -374,6 +374,94 @@ mstar plan residual-add --session …/sessions/<plan>.json --file ./entries.json
 
 The coordinator half of the lifecycle — `handoff` (plan side, leaves the row `InReview`), then `accept` (ownership transfer, not integration acceptance) → `integration-start` (reads the clean recorded integration checkout, refuses any foreign merge lease, and records the current integration HEAD as `base_sha` plus the immutable source pin) → the coordinator's own explicit pinned `git merge --no-ff --no-edit <source-sha>` in that recorded integration worktree → `integration-accept` → `complete`, with `reconcile` as the explicit crash path and `return` for a failed attempt — transports the same A2 shape. The attempt is recorded and pinned **before** Git runs — that is what makes a crash mid-merge reconcilable, and why a retried `integration-start` never moves `base_sha`. State verbs never run the merge themselves.
 
+### `mstar-harness workflow`
+
+The **guarded Prepare amendment** transport: one coordinator envelope, one engine call, and the same argument/failure protocol as `plan` (success exit 0, refusal exit 1 with the JSON failure object, usage exit 2). It is the only lawful way to register an approved scope expansion on an already-created workflow — not a scheduler, not a general snapshot replacement. When it is admissible, what it may change and the byte-version contract → **`mstar-artifacts`** `references/status-and-residuals.md`「Prepare workflow amendment」.
+
+Session identity is never a flag: `--session <absolute-json>` names the **coordinator** envelope created by `mstar plan bind --coordinator --workflow <id>`, and it is the only address — the workflow id and harness root are read from the envelope, and no caller-supplied root or id retargets them.
+
+```text
+mstar workflow show-prepare --session <absolute-coordinator-json-path> [--json]
+mstar workflow amend-prepare --session <absolute-coordinator-json-path> \
+  --expect-snapshot <sha256> --expect-compass <sha256> --input <absolute-patch-json-path> [--json]
+```
+
+`show-prepare` is read-only (no lock, no write) and returns the two CAS tokens plus the admission verdict: an inadmissible *lifecycle state* is reported as `allowed:false` with one `<reason>: <message>` line per blocker, not as an error, so a workflow can be inspected before deciding to amend it. `amend-prepare` requires **both** tokens — the raw-byte versions of the snapshot and of the workflow's reviewed compass Markdown — even on the first amendment. Each is `sha256:<64 lowercase hex>` (the bare 64-hex form is also accepted) and is a **byte version**, never a `plan` row `coordination.revision`.
+
+Patch payload (`--input`; `{PLAN_DIR}` / `{HARNESS_DIR}` / `{ITERATION_DIR}` stand for the resolved absolute paths):
+
+```json
+{
+  "mainWorktreeBranch": "<the main worktree's branch>",
+  "appendPlans": [
+    {
+      "id": "<new-plan-id>",
+      "title": "<title>",
+      "file": "{PLAN_DIR}/<new-plan-id>.md",
+      "metadata": {
+        "primary_spec": "{HARNESS_DIR}/specs/<spec>.md",
+        "spec_refs": ["{HARNESS_DIR}/specs/<spec>.md"],
+        "iteration_compass": "{ITERATION_DIR}/<workflow-id>/delivery-compass.md",
+        "iteration_refs": ["{ITERATION_DIR}/<workflow-id>/delivery-compass.md"],
+        "working_branch": "<feature branch>",
+        "spec_integration_branch": "<snapshot branch.integration>",
+        "merge_target": "<snapshot branch.integration>"
+      }
+    }
+  ],
+  "integrationWorktreePath": "<absolute integration checkout>",
+  "planParallelism": "serial"
+}
+```
+
+- `mainWorktreeBranch` and `appendPlans` are required; `integrationWorktreePath` and `planParallelism` (`serial` | `parallel`) are optional. Any other key refuses, and a patch that appends nothing and changes neither the recorded checkout nor the parallelism refuses as a no-op.
+- Each appended row is constructed by the engine — `Todo`, progress 0, `project-manager`, current creation timestamp — so no runtime row field travels in the patch. Its plan markdown must declare `plan_id`, `Main worktree branch` and `Working branch` headers agreeing with the patch metadata and the branch this call declares.
+- Effect: the approved rows are appended and the reviewed integration checkout / `plan_parallelism` are recorded. Every existing row and unknown field survives **by value**; only the appended rows, those two requested projections and the snapshot `updated_at` change — with the single engine-owned exception that the `mstar-artifacts` `references/status-and-residuals.md`「Prepare workflow amendment」section names. No branch or worktree is created, switched, fetched or cleaned.
+
+Refusals (exit 1, mutation-free — the protected snapshot, root register, other workflows and the compass stay byte-identical):
+
+| `code` | When |
+|--------|------|
+| `coordination.prepare-amendment.stale` | either byte version no longer matches the bytes inspected inside the lock (also: the compass changed while the amendment was being applied) |
+| `coordination.prepare-amendment.not-prepare` | the workflow is not `running` in `phase-1-prepare`, or its root register entry is not `running` — `paused` is active in the root register but is not admissible here, and the refusal carries the entry's observed status |
+| `coordination.prepare-amendment.execution-started` | execution ownership exists: a non-`Todo` row, row progress ≠ 0, a row `execution_lease`, a row `coordination` block, or a top-level `integration_merge_lease` |
+| `coordination.prepare-amendment.duplicate-plan` | an appended id is already a row of this workflow, or appears twice in one patch |
+| `coordination.prepare-amendment.invalid-patch` | unknown or missing patch keys, an unknown `planParallelism` value, or a patch that changes nothing |
+| `coordination.prepare-amendment.invalid-plan` | an append's own shape/id/metadata, a `file` that is not `{PLAN_DIR}/<id>.md`, a missing or mismatched plan header, a missing/escaping reference, or a `working_branch` equal to one of the workflow's branch anchors |
+| `coordination.prepare-amendment.compass-mismatch` | an unusable, malformed or foreign compass, or a plan set / `spec_integration_branch` the reviewed compass does not declare — plus, **only when the compass declares its own `integration_worktree_path`**, the checkout this call would leave recorded |
+| `coordination.prepare-amendment.invalid-worktree` | **only when the patch supplies `integrationWorktreePath`** and that path fails validation: absent, the main/control checkout, not a distinct checkout of the repository owning the control harness root (which must also be the repository the caller runs from), not on the recorded `branch.integration`, or a workflow recording no `branch.integration` to verify it against (omitting the field never triggers this) |
+
+Existing auth/scope refusals keep their own codes: `coordination.session-role` (not a coordinator envelope), `coordination.not-prepared` (the workflow has no coordinator binding), `coordination.session-mismatch`, `coordination.scope-mismatch`, `coordination.workflow-not-found`, `coordination.invalid-transition` (the proposed snapshot fails validation), `coordination.git-unavailable`, and the shared lock failure.
+
+JSON success is `{ok:true, operation, workflow_id, session_file, session_id, role, snapshot_version, compass_version, plan_ids, allowed, blockers}` — plus `outcome: "amended"` on `amend-prepare`. JSON failure is the shared A2 shape `{ok:false, operation, code, message, workflow_id?, holder?, path?, expected?, actual?}`. JSON goes to stdout with no color or banner; in human mode stdout stays empty and the summary goes to stderr.
+
+Exit codes (binding):
+
+| Code | When |
+|------|------|
+| `0` | the read succeeded, or the amendment committed (returning fresh versions) |
+| `1` | engine refusal — any `code` above, always with no change to authoritative bytes |
+| `2` | usage: a missing `--session` / `--expect-snapshot` / `--expect-compass` / `--input`, an unknown flag, a relative path where an absolute one is required, a malformed version token, or an unreadable/unparseable payload file |
+
+**Stop conditions — a stale token is recovered by re-reading, never by forcing.** Re-run `show-prepare`, review the new bytes, then call `amend-prepare` with the fresh tokens. There is no `--force`, no `--replace`, no `--init` and no fallback flag, and no replacement-snapshot path: a workflow that already owns execution, has left Prepare, or is not bound to this coordinator session cannot be amended at all.
+
+Worked example (synthetic ids):
+
+```sh
+# 1. Coordinator bootstrap: main worktree (or the recorded integration worktree) only.
+mstar plan bind --coordinator --workflow wf-demo --json
+
+# 2. Read both byte versions and the admission view of this Prepare workflow.
+mstar workflow show-prepare --session …/sessions/<coordinator>.json --json
+# → {"ok":true,"operation":"show-prepare","workflow_id":"wf-demo","snapshot_version":"sha256:…",
+#    "compass_version":"sha256:…","plan_ids":["plan-a"],"allowed":true,"blockers":[]}
+
+# 3. Apply the approved delta with exactly those tokens.
+mstar workflow amend-prepare --session …/sessions/<coordinator>.json \
+  --expect-snapshot sha256:… --expect-compass sha256:… --input /control/.mstar/plans/patch.json --json
+# → {"ok":true,"operation":"amend-prepare","outcome":"amended","plan_ids":["plan-a","plan-b"],…}
+```
+
 ## Maintainer Commands
 
 Engine-backed harness checks for maintainers (thin wrappers — business logic lives in `@mstar-harness/engine`). Each command mirrors an engine validator that skill engine-check callouts cite; exit codes follow the CLI convention (0 = OK, 1 = violations/data errors, 2 = usage).
