@@ -101,5 +101,6 @@ Authoring convention: **`mstar-skill-authoring`** § Skill-relative script and a
 ## References
 
 - 各宿主适配细则 → `references/<host>.md`（cursor / opencode / omp / dsh / kimi / zcode / codex；计划模式另见 plan-mode bridge references）
+- OMP Phase-2 编排契约（机会提醒 / 容量 / 条件启动）→ `references/omp-phase2-instances.md`
 - invoke-capable 宿主并行派发 → `references/parallel-dispatch.md`
 - 角色加载与参数 → **`mstar-roles`**

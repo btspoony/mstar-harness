@@ -2,8 +2,8 @@
  * Phase-2 opportunity orchestration — native settings normalization and the
  * bounded reminder decision.
  *
- * Primary spec: `{SPECS_DIR}/omp-phase2-instances.md` §B (reminder event and
- * latch contract) and §C (capacity/settings); plan: the registered Phase-2 instances plan, Task 1. Two pure surfaces:
+ * Primary spec: `mstar-host/references/omp-phase2-instances.md` §B (reminder event and
+ * latch contract) and §C (capacity/settings). Two pure surfaces:
  *
  * - `decodePhase2Settings` / `readPhase2Settings` normalize the native
  *   `@mstar-harness/omp` preference pair `phase2PlanInstances` /

@@ -2,9 +2,8 @@
  * phase2-orchestration — omp extension: the native `mstar_phase2` tool and the
  * bounded host lifecycle adapter for Phase-2 opportunity reminders.
  *
- * Primary spec: `{SPECS_DIR}/omp-phase2-instances.md` §A (native observation),
- * §B (reminder event/latch) and §C (capacity/reservation); plan
- * the registered Phase-2 instances plan T3. The two decisions this module consumes
+ * Primary spec: `mstar-host/references/omp-phase2-instances.md` §A (native observation),
+ * §B (reminder event/latch) and §C (capacity/reservation). The two decisions this module consumes
  * live next to it and are not re-implemented here:
  *
  * - `./phase2-orchestration` (T1) owns the native settings decode and
@@ -138,7 +137,7 @@ const JOURNAL_FILE = "omp-launches.json";
 /** The advisory body: a pointer to the shared checkpoint, and nothing more. */
 const ADVISORY_TEXT = [
   "Phase-2 opportunity reminder: run the shared rescheduling checkpoint",
-  "({SPECS_DIR}/phase2-proactive-scheduling.md) and honor any blocker before dispatching.",
+  "(mstar-iteration/references/phase-2-proactive-scheduling.md) and honor any blocker before dispatching.",
   "This is an observation, not a dispatch: it asserts nothing about any plan being ready.",
 ].join(" ");
 
