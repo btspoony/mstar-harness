@@ -60,4 +60,4 @@ Use isolated child Bun processes launched via absolute `process.execPath`, each 
 
 **D3 — Verification floor (the engine plan's tasks).** Worktree readiness preamble per iter-20260915 precedent (`bun install --frozen-lockfile`, engine build, `tsc --noEmit` exit 0) before first typecheck/test; scoped test selectors only; no local full suites without explicit user authorization.
 
-**D4 — Not riding along.** Engine register R3 `dead-code-sweep` (low — `coordination.not-implemented` registered in `COORDINATION_ERROR_CODES` with zero throw sites) stays open: target remains a dedicated hygiene sweep under the engine roadmap goal `dead-code-sweep`. The locked ride-along decision is R1 + R2 only; R3 is disclosed here so iteration-close tech-debt rollup does not read as an oversight.
+**D4 — Not riding along (delivered later).** Engine register R3 `dead-code-sweep` was disclosed here as not riding along with the locked R1 + R2 decision; it was subsequently delivered by iter-20260916-plan-lifecycle-closure (dead codes removed from `COORDINATION_ERROR_CODES`). This note is retained as the audit trail for the original locked decision.
