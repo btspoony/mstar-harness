@@ -428,7 +428,17 @@ export function buildEngineExportNames(engineIndex: string): Set<string> {
  * `.command("name")` path (single tokens plus `parent child` composites)
  * and every enumerated `.argument("<name>", "tok1 | tok2 | ...")` token as a
  * `parent tok` composite (e.g. `persist review` from `persist <kind>` with
- * kind = "status | snapshot | residuals | review | json"). */
+ * kind = "status | snapshot | residuals | review | json").
+ *
+ * Declaration forms recognized as a command var:
+ * - `const X = program.command("p")` — the eager group/subcommand form;
+ * - `const X = new Command("p")` — the DETACHED group form, used when the
+ *   group must not be created eagerly (`program.command("p")` aborts the
+ *   whole CLI with commander's duplicate-command error when another
+ *   registrar owns the same group name). A detached group counts only when
+ *   the same source attaches it (`addCommand(X)`), so an orphan declaration
+ *   never inflates the citation table.
+ */
 export function buildCliCommandInventory(cliSrc: string): {
   cliCommands: Set<string>;
   failures: string[];
@@ -436,6 +446,15 @@ export function buildCliCommandInventory(cliSrc: string): {
   const cliCommands = new Set<string>();
   const varPaths = new Map<string, string>();
   const failures: string[] = [];
+  // Detached groups first (pre-pass): their verb chains appear BEFORE the
+  // attach statement, so the parent lookup below must already know the path.
+  const attachedVars = new Set<string>();
+  for (const attach of cliSrc.matchAll(/addCommand\(\s*(\w+)\s*\)/g)) attachedVars.add(attach[1]!);
+  for (const detached of cliSrc.matchAll(/const\s+(\w+)\s*=\s*new\s+Command\(\s*"([a-z-]+)"\s*\)/g)) {
+    if (!attachedVars.has(detached[1]!)) continue;
+    varPaths.set(detached[1]!, detached[2]!);
+    cliCommands.add(detached[2]!);
+  }
  // One pass keeps document order: `.command` advances the current chain
  // path (`const X = program.command("p")` or `X.command("sub")`), a
  // receiver-less `.command`/`.argument` hangs off that chain, and `.action`
