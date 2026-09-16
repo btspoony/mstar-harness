@@ -16,6 +16,7 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -1221,4 +1222,380 @@ describe("mstar plan — integration-recovery", () => {
     expect(recordedHandoffState(fixture)).toBe("integrating");
     expect(snapshotBytes(fixture)).toBe(before);
   }, RECOVERY_TIMEOUT);
+});
+
+/* ------------------------------------------------------------------ *
+ * Prepare workflow amendment — the `mstar workflow show-prepare` /
+ * `amend-prepare` transport (`prepare-workflow-amendment.md` § New API and
+ * CLI). Real subprocesses against a temporary Git repository, so the JSON,
+ * the exit codes and the protected bytes on disk are what these cases assert.
+ * ------------------------------------------------------------------ */
+
+const PREPARE_WORKFLOW = "wf-prepare";
+const PREPARE_PEER = "wf-peer";
+const PREPARE_ROW = "plan-prepare";
+const PREPARE_APPEND = "plan-append";
+const PREPARE_SPEC = "prepare-workflow-amendment.md";
+const PREPARE_INTEGRATION_BRANCH = "integration/wf-prepare";
+
+interface PrepareFixture {
+  root: string;
+  harness: string;
+  snapshotPath: string;
+  statusPath: string;
+  compassPath: string;
+  integrationPath: string;
+  peerSnapshotPath: string;
+  patchPath: string;
+  planDir: string;
+  specPath: string;
+  coordinator: string;
+}
+
+/** SHA-256 of a file's exact bytes, computed independently of the CLI. */
+function sha256OfFile(path: string): string {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+/** A Prepare lifecycle with one Todo row, a reviewed compass and a real integration checkout. */
+function makePrepareFixture(): PrepareFixture {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "mstar-prepare-cli-")));
+  roots.push(root);
+  git(["init", "-q", "-b", "main"], root);
+  git(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], root);
+
+  const harness = join(root, ".mstar");
+  const snapshotPath = join(harness, "workflows", PREPARE_WORKFLOW, "snapshot.json");
+  const peerSnapshotPath = join(harness, "workflows", PREPARE_PEER, "snapshot.json");
+  const statusPath = join(harness, "status.json");
+  const compassPath = join(harness, "iterations", PREPARE_WORKFLOW, "delivery-compass.md");
+  const integrationPath = join(root, "wt-integration");
+  const planDir = join(harness, "plans");
+  const specPath = join(harness, "specs", PREPARE_SPEC);
+  const patchPath = join(root, "patch.json");
+
+  for (const id of [PREPARE_ROW, PREPARE_APPEND]) {
+    writeText(
+      join(planDir, `${id}.md`),
+      [
+        `# Plan ${id}`,
+        "",
+        `**plan_id:** ${id}`,
+        "**Status:** Todo",
+        "**Main worktree branch:** main",
+        `**Working branch:** feature/${id}`,
+        "",
+        "Body.",
+        "",
+      ].join("\n"),
+    );
+  }
+  writeText(specPath, "# primary spec\n");
+  writeText(
+    compassPath,
+    [
+      "---",
+      `iteration_id: ${PREPARE_WORKFLOW}`,
+      "status: locked",
+      "iteration_base_branch: main",
+      `spec_integration_branch: ${PREPARE_INTEGRATION_BRANCH}`,
+      "target_branch: main",
+      "plans:",
+      `  - ${PREPARE_ROW}`,
+      `  - ${PREPARE_APPEND}`,
+      "---",
+      "",
+      "# Compass",
+      "",
+    ].join("\n"),
+  );
+  git(["worktree", "add", "-q", "-b", PREPARE_INTEGRATION_BRANCH, integrationPath], root);
+
+  writeJson(statusPath, {
+    version: 2,
+    updated_at: "2026-09-16",
+    workflows: [
+      {
+        id: PREPARE_WORKFLOW,
+        status: "running",
+        type: "iteration",
+        started_at: "2026-09-16",
+        dir: `workflows/${PREPARE_WORKFLOW}`,
+      },
+      { id: PREPARE_PEER, status: "running", type: "iteration", started_at: "2026-09-16", dir: `workflows/${PREPARE_PEER}` },
+    ],
+  });
+  writeJson(snapshotPath, {
+    schema_version: 1,
+    id: PREPARE_WORKFLOW,
+    type: "iteration",
+    status: "running",
+    phase: "phase-1-prepare",
+    started_at: "2026-09-16",
+    updated_at: "2026-09-16",
+    compass_ref: `iterations/${PREPARE_WORKFLOW}/delivery-compass.md`,
+    branch: { base: "main", integration: PREPARE_INTEGRATION_BRANCH, target: "main" },
+    execution_policy: { plan_parallelism: "serial", worktree_mode: "required" },
+    plans: [{ id: PREPARE_ROW, title: `Plan ${PREPARE_ROW}`, file: join(planDir, `${PREPARE_ROW}.md`), status: "Todo" }],
+  });
+  writeJson(peerSnapshotPath, {
+    schema_version: 1,
+    id: PREPARE_PEER,
+    type: "iteration",
+    status: "running",
+    phase: "phase-1-prepare",
+    started_at: "2026-09-16",
+    updated_at: "2026-09-16",
+    plans: [{ id: "plan-peer", title: "Plan peer", file: join(planDir, "plan-peer.md"), status: "Todo" }],
+  });
+  writeJson(patchPath, preparePatchOf({ planDir, specPath, compassPath, integrationPath }));
+
+  const bound = runCli(["plan", "bind", "--coordinator", "--workflow", PREPARE_WORKFLOW, "--json"], root);
+  expect(bound.exitCode).toBe(0);
+  const coordinator = String(jsonOf(bound).session_file);
+
+  return {
+    root,
+    harness,
+    snapshotPath,
+    statusPath,
+    compassPath,
+    integrationPath,
+    peerSnapshotPath,
+    patchPath,
+    planDir,
+    specPath,
+    coordinator,
+  };
+}
+
+/** The paths one approved patch carries (the fixture's own reviewed references). */
+type PreparePaths = {
+  planDir: string;
+  specPath: string;
+  compassPath: string;
+  integrationPath: string;
+};
+
+/** The approved delta: append one Todo row, record the checkout and the policy. */
+function preparePatchOf(paths: PreparePaths): Record<string, unknown> {
+  return {
+    mainWorktreeBranch: "main",
+    appendPlans: [
+      {
+        id: PREPARE_APPEND,
+        title: `Plan ${PREPARE_APPEND}`,
+        file: join(paths.planDir, `${PREPARE_APPEND}.md`),
+        metadata: {
+          primary_spec: paths.specPath,
+          spec_refs: [paths.specPath],
+          iteration_compass: paths.compassPath,
+          iteration_refs: [paths.compassPath],
+          working_branch: `feature/${PREPARE_APPEND}`,
+          spec_integration_branch: PREPARE_INTEGRATION_BRANCH,
+          merge_target: PREPARE_INTEGRATION_BRANCH,
+        },
+      },
+    ],
+    integrationWorktreePath: paths.integrationPath,
+    planParallelism: "parallel",
+  };
+}
+
+/** The `show-prepare` argv one case drives. */
+function showPrepareArgs(fixture: PrepareFixture, json = true): string[] {
+  return [
+    "workflow",
+    "show-prepare",
+    "--session",
+    fixture.coordinator,
+    ...(json ? ["--json"] : []),
+  ];
+}
+
+/** The `amend-prepare` argv one case drives (tokens and payload supplied). */
+function amendPrepareArgs(
+  fixture: PrepareFixture,
+  tokens: { snapshot: string; compass: string; patch?: string },
+  json = true,
+): string[] {
+  return [
+    "workflow",
+    "amend-prepare",
+    "--session",
+    fixture.coordinator,
+    "--expect-snapshot",
+    tokens.snapshot,
+    "--expect-compass",
+    tokens.compass,
+    "--input",
+    tokens.patch ?? fixture.patchPath,
+    ...(json ? ["--json"] : []),
+  ];
+}
+
+describe("Prepare workflow amendment", () => {
+  test("show-prepare reports the byte versions and amend-prepare applies the approved delta with a readback", () => {
+    const fixture = makePrepareFixture();
+    const peerBefore = readText(fixture.peerSnapshotPath);
+    const statusBefore = readText(fixture.statusPath);
+
+    const show = runCli(showPrepareArgs(fixture), fixture.root);
+    expect(show.exitCode).toBe(0);
+    const view = jsonOf(show);
+    expect(view.ok).toBe(true);
+    expect(view.operation).toBe("show-prepare");
+    expect(view.role).toBe("coordinator");
+    expect(view.workflow_id).toBe(PREPARE_WORKFLOW);
+    expect(view.allowed).toBe(true);
+    expect(view.blockers).toEqual([]);
+    expect(view.plan_ids).toEqual([PREPARE_ROW]);
+    expect(view.snapshot_version).toBe(`sha256:${sha256OfFile(fixture.snapshotPath)}`);
+    expect(view.compass_version).toBe(`sha256:${sha256OfFile(fixture.compassPath)}`);
+
+    const amend = runCli(
+      amendPrepareArgs(fixture, { snapshot: String(view.snapshot_version), compass: String(view.compass_version) }),
+      fixture.root,
+    );
+    expect(amend.exitCode).toBe(0);
+    const amended = jsonOf(amend);
+    expect(amended.ok).toBe(true);
+    expect(amended.operation).toBe("amend-prepare");
+    expect(amended.outcome).toBe("amended");
+    expect(amended.allowed).toBe(true);
+    expect(amended.plan_ids).toEqual([PREPARE_ROW, PREPARE_APPEND]);
+    expect(amended.compass_version).toBe(view.compass_version);
+    expect(amended.snapshot_version).not.toBe(view.snapshot_version);
+    expect(amended.snapshot_version).toBe(`sha256:${sha256OfFile(fixture.snapshotPath)}`);
+
+    // The readback: the authoritative snapshot and a second show agree, and the
+    // unrelated workflow / root register were never written.
+    const snapshot = readJson(fixture.snapshotPath);
+    expect((snapshot.plans as Array<Record<string, unknown>>).map((row) => row.id)).toEqual([
+      PREPARE_ROW,
+      PREPARE_APPEND,
+    ]);
+    expect(snapshot.integration_worktree_path).toBe(fixture.integrationPath);
+    expect(snapshot.execution_policy).toEqual({ plan_parallelism: "parallel", worktree_mode: "required" });
+    const readback = jsonOf(runCli(showPrepareArgs(fixture), fixture.root));
+    expect(readback.snapshot_version).toBe(amended.snapshot_version);
+    expect(readback.plan_ids).toEqual([PREPARE_ROW, PREPARE_APPEND]);
+    expect(readText(fixture.peerSnapshotPath)).toBe(peerBefore);
+    expect(readText(fixture.statusPath)).toBe(statusBefore);
+  }, 30000);
+
+  test("every required flag, malformed token and unknown flag is a usage error (exit 2)", () => {
+    const fixture = makePrepareFixture();
+    const snapshotVersion = `sha256:${sha256OfFile(fixture.snapshotPath)}`;
+    const compassVersion = `sha256:${sha256OfFile(fixture.compassPath)}`;
+    const before = readText(fixture.snapshotPath);
+    const usageCases: Array<{ name: string; args: string[]; operation: string }> = [
+      { name: "missing-session", args: ["workflow", "show-prepare", "--json"], operation: "show-prepare" },
+      {
+        name: "missing-expect-snapshot",
+        args: [
+          "workflow", "amend-prepare", "--session", fixture.coordinator,
+          "--expect-compass", compassVersion, "--input", fixture.patchPath, "--json",
+        ],
+        operation: "amend-prepare",
+      },
+      {
+        name: "missing-expect-compass",
+        args: [
+          "workflow", "amend-prepare", "--session", fixture.coordinator,
+          "--expect-snapshot", snapshotVersion, "--input", fixture.patchPath, "--json",
+        ],
+        operation: "amend-prepare",
+      },
+      {
+        name: "missing-input",
+        args: [
+          "workflow", "amend-prepare", "--session", fixture.coordinator,
+          "--expect-snapshot", snapshotVersion, "--expect-compass", compassVersion, "--json",
+        ],
+        operation: "amend-prepare",
+      },
+      {
+        name: "malformed-token",
+        args: [
+          "workflow", "amend-prepare", "--session", fixture.coordinator,
+          "--expect-snapshot", "not-a-version", "--expect-compass", compassVersion,
+          "--input", fixture.patchPath, "--json",
+        ],
+        operation: "amend-prepare",
+      },
+      {
+        name: "unknown-flag",
+        args: ["workflow", "amend-prepare", "--session", fixture.coordinator, "--force", "--json"],
+        operation: "amend-prepare",
+      },
+    ];
+
+    for (const usageCase of usageCases) {
+      const result = runCli(usageCase.args, fixture.root);
+      expect(`${usageCase.name}: ${result.exitCode}`).toBe(`${usageCase.name}: 2`);
+      const payload = jsonOf(result);
+      expect(`${usageCase.name}: ${String(payload.ok)}`).toBe(`${usageCase.name}: false`);
+      expect(`${usageCase.name}: ${String(payload.code)}`).toBe(`${usageCase.name}: usage`);
+      expect(`${usageCase.name}: ${String(payload.operation)}`).toBe(`${usageCase.name}: ${usageCase.operation}`);
+    }
+    // No usage case reached the engine.
+    expect(readText(fixture.snapshotPath)).toBe(before);
+  }, 60000);
+
+  test("a stale compass token refuses with the structured failure and leaves the protected bytes byte-identical", () => {
+    const fixture = makePrepareFixture();
+    const view = jsonOf(runCli(showPrepareArgs(fixture), fixture.root));
+    const before = readText(fixture.snapshotPath);
+    const beforeStatus = readText(fixture.statusPath);
+    const stale = `sha256:${"0".repeat(64)}`;
+
+    const refused = runCli(
+      amendPrepareArgs(fixture, { snapshot: String(view.snapshot_version), compass: stale }),
+      fixture.root,
+    );
+
+    expect(refused.exitCode).toBe(1);
+    const payload = jsonOf(refused);
+    expect(payload.ok).toBe(false);
+    expect(payload.operation).toBe("amend-prepare");
+    expect(payload.code).toBe("coordination.prepare-amendment.stale");
+    expect(payload.expected).toBe(stale);
+    expect(payload.actual).toBe(view.compass_version);
+    expect(readText(fixture.snapshotPath)).toBe(before);
+    expect(readText(fixture.statusPath)).toBe(beforeStatus);
+
+    // Human mode keeps stdout machine-only and names the family it refused.
+    const human = runCli(
+      amendPrepareArgs(fixture, { snapshot: String(view.snapshot_version), compass: stale }, false),
+      fixture.root,
+    );
+    expect(human.exitCode).toBe(1);
+    expect(human.stdout).toBe("");
+    expect(human.stderr).toContain("workflow amend-prepare:");
+    expect(readText(fixture.snapshotPath)).toBe(before);
+  });
+
+  test("a duplicate plan id refuses through the CLI while the read stays available", () => {
+    const fixture = makePrepareFixture();
+    const view = jsonOf(runCli(showPrepareArgs(fixture), fixture.root));
+    const patch = preparePatchOf(fixture);
+    const appends = patch.appendPlans as Array<Record<string, unknown>>;
+    writeJson(fixture.patchPath, { ...patch, appendPlans: [{ ...appends[0]!, id: PREPARE_ROW }] });
+    const before = readText(fixture.snapshotPath);
+
+    const refused = runCli(
+      amendPrepareArgs(fixture, { snapshot: String(view.snapshot_version), compass: String(view.compass_version) }),
+      fixture.root,
+    );
+
+    expect(refused.exitCode).toBe(1);
+    const payload = jsonOf(refused);
+    expect(payload.ok).toBe(false);
+    expect(payload.code).toBe("coordination.prepare-amendment.duplicate-plan");
+    expect(payload.plan_id).toBe(PREPARE_ROW);
+    expect(readText(fixture.snapshotPath)).toBe(before);
+    // The stale-read route still works: the review can be re-read and re-applied.
+    expect(jsonOf(runCli(showPrepareArgs(fixture), fixture.root)).allowed).toBe(true);
+  });
 });

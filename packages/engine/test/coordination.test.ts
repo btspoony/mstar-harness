@@ -38,18 +38,24 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSy
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
+  amendPrepareWorkflow,
   bindPlanSession,
   mutatePlanCoordination,
   readCoordinatedArtifact,
   readPlanCoordination,
   replaceCoordinatedArtifact,
   resolvePlanScope,
+  showPrepareWorkflow,
   type CoordinationResult,
   type PlanCoordinationView,
+  type PrepareWorkflowPatch,
+  type PrepareWorkflowResult,
 } from "../src/coordination.js";
 import { CoordinationError, artifactVersion, withProtectedWrite } from "../src/coordination-write.js";
 import { claimLease, withStatusWriteLock } from "../src/lease.js";
+import { registerWorkflow } from "../src/status.js";
 import { createFsStore, setArtifactStore } from "../src/store.js";
+import { writeWorkflowSnapshot, type WorkflowSnapshot } from "../src/workflow.js";
 
 const WORKFLOW_ID = "wf-plana";
 const PLAN_ID = "plan-a";
@@ -2071,4 +2077,921 @@ describe("gitRead subprocess failure classification", () => {
     // The refusal is non-advancing: the InReview row and its lease are intact.
     expect(readFileSync(fixture.snapshotPath).equals(snapshotBefore)).toBe(true);
   }, 15000);
+});
+
+/* ------------------------------------------------------------------ *
+ * Prepare workflow amendment — `prepare-workflow-amendment.md`
+ * § Admission and mutation. Every case drives the real engine against a
+ * temporary Git repository, a genuine coordinator bind, a real integration
+ * worktree and a reviewed compass, and asserts the protected bytes rather than
+ * implementation text.
+ * ------------------------------------------------------------------ */
+
+const PREPARE_WORKFLOW = "wf-prepare";
+const PREPARE_PEER = "wf-peer";
+const PREPARE_ROW = "plan-prepare";
+const PREPARE_APPEND = "plan-append";
+const PREPARE_UNREVIEWED = "plan-unreviewed";
+const PREPARE_SPEC = "prepare-workflow-amendment.md";
+const PREPARE_INTEGRATION_BRANCH = "integration/wf-prepare";
+
+type PrepareFixture = {
+  root: string;
+  harness: string;
+  workflowDir: string;
+  snapshotPath: string;
+  statusPath: string;
+  compassPath: string;
+  integrationPath: string;
+  peerSnapshotPath: string;
+  planDir: string;
+  specPath: string;
+  /** Filled in by the first coordinator bind (the engine picks the path). */
+  coordinatorSession: string;
+};
+
+/** A plan markdown carrying the headers the amendment cross-checks. */
+function preparePlanMarkdown(input: { id: string; workingBranch: string; mainBranch?: string }): string {
+  return [
+    `# Plan ${input.id}`,
+    "",
+    `**plan_id:** ${input.id}`,
+    "**Status:** Todo",
+    `**Main worktree branch:** ${input.mainBranch ?? "main"}`,
+    `**Working branch:** ${input.workingBranch}`,
+    "",
+    "Body.",
+    "",
+  ].join("\n");
+}
+
+/**
+ * A Prepare lifecycle that the amendment is meant to serve: one Todo row with
+ * no coordination state, `phase-1-prepare`, a reviewed compass declaring two
+ * plans, a real distinct integration checkout, and a sibling workflow whose
+ * bytes must never move.
+ */
+function makePrepareFixture(): PrepareFixture {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "mstar-prepare-amend-")));
+  roots.push(root);
+  git(["init", "-q", "-b", "main"], root);
+  git(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], root);
+
+  const harness = join(root, ".mstar");
+  const workflowDir = join(harness, "workflows", PREPARE_WORKFLOW);
+  const snapshotPath = join(workflowDir, "snapshot.json");
+  const statusPath = join(harness, "status.json");
+  const compassPath = join(harness, "iterations", PREPARE_WORKFLOW, "delivery-compass.md");
+  const integrationPath = join(root, "wt-integration");
+  const peerSnapshotPath = join(harness, "workflows", PREPARE_PEER, "snapshot.json");
+  const planDir = join(harness, "plans");
+  const specPath = join(harness, "specs", PREPARE_SPEC);
+
+  for (const id of [PREPARE_ROW, PREPARE_APPEND, PREPARE_UNREVIEWED]) {
+    writeText(join(planDir, `${id}.md`), preparePlanMarkdown({ id, workingBranch: `feature/${id}` }));
+  }
+  writeText(specPath, "# primary spec\n");
+  writeText(
+    compassPath,
+    [
+      "---",
+      `iteration_id: ${PREPARE_WORKFLOW}`,
+      "status: locked",
+      "iteration_base_branch: main",
+      `spec_integration_branch: ${PREPARE_INTEGRATION_BRANCH}`,
+      "target_branch: main",
+      "plans:",
+      `  - ${PREPARE_ROW}`,
+      `  - ${PREPARE_APPEND}`,
+      "---",
+      "",
+      "# Compass",
+      "",
+    ].join("\n"),
+  );
+  // The reviewed integration checkout: a real, distinct checkout on the
+  // workflow's own integration branch.
+  git(["worktree", "add", "-q", "-b", PREPARE_INTEGRATION_BRANCH, integrationPath], root);
+
+  writeJson(statusPath, {
+    version: 2,
+    updated_at: "2026-09-16",
+    workflows: [
+      {
+        id: PREPARE_WORKFLOW,
+        status: "running",
+        type: "iteration",
+        started_at: "2026-09-16",
+        dir: `workflows/${PREPARE_WORKFLOW}`,
+      },
+      {
+        id: PREPARE_PEER,
+        status: "running",
+        type: "iteration",
+        started_at: "2026-09-16",
+        dir: `workflows/${PREPARE_PEER}`,
+      },
+    ],
+  });
+  writeJson(snapshotPath, {
+    schema_version: 1,
+    id: PREPARE_WORKFLOW,
+    type: "iteration",
+    status: "running",
+    phase: "phase-1-prepare",
+    started_at: "2026-09-16",
+    updated_at: "2026-09-16",
+    compass_ref: `iterations/${PREPARE_WORKFLOW}/delivery-compass.md`,
+    branch: { base: "main", integration: PREPARE_INTEGRATION_BRANCH, target: "main" },
+    execution_policy: { plan_parallelism: "serial", worktree_mode: "required" },
+    plans: [planRow(PREPARE_ROW, PROJECT_ID, `feature/${PREPARE_ROW}`)],
+  });
+  writeJson(peerSnapshotPath, {
+    schema_version: 1,
+    id: PREPARE_PEER,
+    type: "iteration",
+    status: "running",
+    phase: "phase-1-prepare",
+    started_at: "2026-09-16",
+    updated_at: "2026-09-16",
+    plans: [planRow("plan-peer", PROJECT_ID)],
+  });
+
+  setArtifactStore(createFsStore(harness));
+  return {
+    root,
+    harness,
+    workflowDir,
+    snapshotPath,
+    statusPath,
+    compassPath,
+    integrationPath,
+    peerSnapshotPath,
+    planDir,
+    specPath,
+    coordinatorSession: "",
+  };
+}
+
+/** The authoritative snapshot document, with its row array narrowed. */
+function prepareSnapshotOf(fixture: PrepareFixture): { plans: Array<Record<string, unknown>> } & Record<string, unknown> {
+  const doc = readJson(fixture.snapshotPath);
+  if (!Array.isArray(doc.plans)) throw new Error("prepare fixture snapshot has no plans array");
+  return doc as { plans: Array<Record<string, unknown>> } & Record<string, unknown>;
+}
+
+/** Bind the lifecycle coordinator once per fixture (the engine picks the path). */
+async function ensurePrepareCoordinator(fixture: PrepareFixture): Promise<string> {
+  if (fixture.coordinatorSession === "") {
+    const bound = await bindPlanSession({
+      coordinator: true,
+      workflowId: PREPARE_WORKFLOW,
+      harnessDir: fixture.harness,
+      cwd: fixture.root,
+    });
+    expect(bound.ok).toBe(true);
+    fixture.coordinatorSession = bound.session_file;
+  }
+  return fixture.coordinatorSession;
+}
+
+/** The workflow-level view (`show-prepare`) through a coordinator envelope. */
+function prepareViewOf(fixture: PrepareFixture, sessionPath = fixture.coordinatorSession): Promise<PrepareWorkflowResult> {
+  return showPrepareWorkflow({ sessionPath, cwd: fixture.root });
+}
+
+/** Amend with the tokens a fresh view reports (the reviewed-token route). */
+async function amendPrepare(fixture: PrepareFixture, patch: unknown): Promise<PrepareWorkflowResult> {
+  const view = await prepareViewOf(fixture);
+  return amendWith(fixture, patch, { snapshotVersion: view.view.snapshotVersion, compassVersion: view.view.compassVersion });
+}
+
+/** Amend with the exact tokens the caller already holds. */
+function amendWith(
+  fixture: PrepareFixture,
+  patch: unknown,
+  tokens: { snapshotVersion: string; compassVersion: string; sessionPath?: string },
+): Promise<PrepareWorkflowResult> {
+  return amendPrepareWorkflow({
+    sessionPath: tokens.sessionPath ?? fixture.coordinatorSession,
+    cwd: fixture.root,
+    expectedSnapshotVersion: tokens.snapshotVersion,
+    expectedCompassVersion: tokens.compassVersion,
+    patch: patch as unknown as PrepareWorkflowPatch,
+  });
+}
+
+/** The refusal code and details of a call that must refuse. */
+async function prepareRefusalOf(run: () => Promise<unknown>): Promise<{ code: string; details: Record<string, unknown> }> {
+  const failure = await failureOf(run);
+  if (failure instanceof CoordinationError) return { code: failure.code, details: failure.details };
+  throw failure;
+}
+
+/** The error any failing call throws (`registerWorkflow` throws a plain Error). */
+async function failureOf(run: () => Promise<unknown>): Promise<Error> {
+  try {
+    await run();
+  } catch (error) {
+    return error instanceof Error ? error : new Error(String(error));
+  }
+  throw new Error("expected the call to fail");
+}
+
+/** Every protected artifact one refused amendment must leave untouched. */
+function protectedBytes(fixture: PrepareFixture): Record<string, string> {
+  return {
+    snapshot: readFileSync(fixture.snapshotPath, "utf8"),
+    status: readFileSync(fixture.statusPath, "utf8"),
+    compass: readFileSync(fixture.compassPath, "utf8"),
+    peer: readFileSync(fixture.peerSnapshotPath, "utf8"),
+    session: readFileSync(fixture.coordinatorSession, "utf8"),
+  };
+}
+
+/** One plan append carrying this workflow's own references. */
+function prepareAppendOf(
+  fixture: PrepareFixture,
+  id: string,
+  entry: Record<string, unknown> = {},
+  metadata: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    id,
+    title: `Plan ${id}`,
+    file: join(fixture.planDir, `${id}.md`),
+    metadata: {
+      primary_spec: fixture.specPath,
+      spec_refs: [fixture.specPath],
+      iteration_compass: fixture.compassPath,
+      iteration_refs: [fixture.compassPath],
+      working_branch: `feature/${id}`,
+      spec_integration_branch: PREPARE_INTEGRATION_BRANCH,
+      merge_target: PREPARE_INTEGRATION_BRANCH,
+      ...metadata,
+    },
+    ...entry,
+  };
+}
+
+/** One patch: the approved append plus whatever the case overrides. */
+function preparePatchOf(fixture: PrepareFixture, overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    mainWorktreeBranch: "main",
+    appendPlans: [prepareAppendOf(fixture, PREPARE_APPEND)],
+    ...overrides,
+  };
+}
+
+describe("Prepare workflow amendment", () => {
+  test("show-prepare reports the raw-byte versions and the admission view of a Prepare workflow", async () => {
+    const fixture = makePrepareFixture();
+    await ensurePrepareCoordinator(fixture);
+    const before = protectedBytes(fixture);
+
+    const view = await prepareViewOf(fixture);
+
+    expect(view.ok).toBe(true);
+    expect(view.operation).toBe("show-prepare");
+    expect(view.session.role).toBe("coordinator");
+    expect(view.session_file).toBe(fixture.coordinatorSession);
+    expect(view.view.workflowId).toBe(PREPARE_WORKFLOW);
+    expect(view.view.planIds).toEqual([PREPARE_ROW]);
+    expect(view.view.allowed).toBe(true);
+    expect(view.view.blockers).toEqual([]);
+    // The tokens are the bytes on disk, computed independently here.
+    expect(view.view.snapshotVersion).toBe(`sha256:${sha256OfFile(fixture.snapshotPath)}`);
+    expect(view.view.compassVersion).toBe(`sha256:${sha256OfFile(fixture.compassPath)}`);
+    // A read writes nothing.
+    expect(protectedBytes(fixture)).toEqual(before);
+  });
+
+  test("amend-prepare appends the approved row and records the integration checkout and parallelism, preserving every prior value", async () => {
+    const fixture = makePrepareFixture();
+    await ensurePrepareCoordinator(fixture);
+    const before = protectedBytes(fixture);
+    const beforeSnapshot = prepareSnapshotOf(fixture);
+    const oldRow = beforeSnapshot.plans[0]!;
+    const beforeView = await prepareViewOf(fixture);
+
+    const amended = await amendPrepare(
+      fixture,
+      preparePatchOf(fixture, { integrationWorktreePath: fixture.integrationPath, planParallelism: "parallel" }),
+    );
+
+    expect(amended.ok).toBe(true);
+    expect(amended.operation).toBe("amend-prepare");
+    expect(amended.outcome).toBe("amended");
+    expect(amended.view.allowed).toBe(true);
+    expect(amended.view.blockers).toEqual([]);
+    expect(amended.view.planIds).toEqual([PREPARE_ROW, PREPARE_APPEND]);
+    expect(amended.view.compassVersion).toBe(beforeView.view.compassVersion);
+    expect(amended.view.snapshotVersion).not.toBe(beforeView.view.snapshotVersion);
+    expect(amended.view.snapshotVersion).toBe(`sha256:${sha256OfFile(fixture.snapshotPath)}`);
+
+    const after = prepareSnapshotOf(fixture);
+    // The prior row is preserved by value and by position; nothing is rewritten.
+    expect(after.plans[0]).toEqual(oldRow);
+    expect(after.plans).toHaveLength(2);
+    const appended = after.plans[1]!;
+    expect(appended.id).toBe(PREPARE_APPEND);
+    expect(appended.plan_id).toBeUndefined();
+    expect(appended.title).toBe(`Plan ${PREPARE_APPEND}`);
+    expect(appended.file).toBe(join(fixture.planDir, `${PREPARE_APPEND}.md`));
+    expect(appended.status).toBe("Todo");
+    expect(appended.owner).toBe("project-manager");
+    expect(appended.progress).toBe(0);
+    expect(appended.execution_lease).toBeUndefined();
+    expect(appended.coordination).toBeUndefined();
+    expect(typeof appended.created_at).toBe("string");
+    expect(appended.metadata).toEqual({
+      primary_spec: fixture.specPath,
+      spec_refs: [fixture.specPath],
+      iteration_compass: fixture.compassPath,
+      iteration_refs: [fixture.compassPath],
+      working_branch: `feature/${PREPARE_APPEND}`,
+      spec_integration_branch: PREPARE_INTEGRATION_BRANCH,
+      merge_target: PREPARE_INTEGRATION_BRANCH,
+    });
+    // Only the whitelisted projections and `updated_at` moved; the lifecycle
+    // anchors, the coordinator binding and the sibling workflow did not.
+    expect(after.integration_worktree_path).toBe(fixture.integrationPath);
+    expect(after.execution_policy).toEqual({ plan_parallelism: "parallel", worktree_mode: "required" });
+    expect(after.branch).toEqual({ base: "main", integration: PREPARE_INTEGRATION_BRANCH, target: "main" });
+    expect(after.compass_ref).toBe(`iterations/${PREPARE_WORKFLOW}/delivery-compass.md`);
+    expect(after.coordination).toEqual(beforeSnapshot.coordination);
+    expect(after.started_at).toBe("2026-09-16");
+    expect(after.phase).toBe("phase-1-prepare");
+    expect(after.status).toBe("running");
+    expect(readFileSync(fixture.statusPath, "utf8")).toBe(before.status);
+    expect(readFileSync(fixture.compassPath, "utf8")).toBe(before.compass);
+    expect(readFileSync(fixture.peerSnapshotPath, "utf8")).toBe(before.peer);
+    expect(readFileSync(fixture.coordinatorSession, "utf8")).toBe(before.session);
+
+    // A second show reports exactly the committed bytes.
+    const afterView = await prepareViewOf(fixture);
+    expect(afterView.view.planIds).toEqual([PREPARE_ROW, PREPARE_APPEND]);
+    expect(afterView.view.snapshotVersion).toBe(amended.view.snapshotVersion);
+    expect(afterView.view.allowed).toBe(true);
+  });
+
+  test("two amendments presenting the same tokens race under the lock: exactly one commits, the loser is stale", async () => {
+    const fixture = makePrepareFixture();
+    await ensurePrepareCoordinator(fixture);
+    const view = await prepareViewOf(fixture);
+    const patch = preparePatchOf(fixture, { planParallelism: "parallel" });
+    const tokens = { snapshotVersion: view.view.snapshotVersion, compassVersion: view.view.compassVersion };
+
+    const results = await Promise.allSettled([
+      amendWith(fixture, patch, tokens),
+      amendWith(fixture, patch, tokens),
+    ]);
+
+    const fulfilled = results.filter((entry) => entry.status === "fulfilled");
+    const rejected = results.filter((entry): entry is PromiseRejectedResult => entry.status === "rejected");
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect((rejected[0]!.reason as CoordinationError).code).toBe("coordination.prepare-amendment.stale");
+
+    // Exactly one delta landed: the rows are the winner's, and the snapshot on
+    // disk is the version the winner returned.
+    const winner = fulfilled[0] as PromiseFulfilledResult<PrepareWorkflowResult>;
+    expect(prepareSnapshotOf(fixture).plans.map((row) => row.id)).toEqual([PREPARE_ROW, PREPARE_APPEND]);
+    expect(winner.value.view.snapshotVersion).toBe(`sha256:${sha256OfFile(fixture.snapshotPath)}`);
+  });
+
+  test("a stale snapshot or compass token refuses as stale and leaves every protected byte untouched", async () => {
+    for (const staleToken of ["snapshot", "compass"] as const) {
+      const fixture = makePrepareFixture();
+      await ensurePrepareCoordinator(fixture);
+      const view = await prepareViewOf(fixture);
+      const before = protectedBytes(fixture);
+      const stale = `sha256:${"0".repeat(64)}`;
+
+      const refusal = await prepareRefusalOf(() =>
+        amendWith(fixture, preparePatchOf(fixture), {
+          snapshotVersion: staleToken === "snapshot" ? stale : view.view.snapshotVersion,
+          compassVersion: staleToken === "compass" ? stale : view.view.compassVersion,
+        }),
+      );
+
+      expect(refusal.code).toBe("coordination.prepare-amendment.stale");
+      expect(refusal.details.expected).toBe(stale);
+      expect(protectedBytes(fixture)).toEqual(before);
+    }
+  });
+
+  test("a plan-pm, forged, relocated or foreign-root envelope refuses with the existing auth errors", async () => {
+    const fixture = makePrepareFixture();
+    await ensurePrepareCoordinator(fixture);
+    const view = await prepareViewOf(fixture);
+    const sessionDir = dirname(fixture.coordinatorSession);
+    const envelope = (overrides: Record<string, unknown>): string => {
+      const path = join(sessionDir, `${String(overrides.session_id)}.json`);
+      writeJson(path, {
+        schema_version: 1,
+        role: "coordinator",
+        session_id: "11111111-1111-1111-1111-111111111111",
+        workflow_id: PREPARE_WORKFLOW,
+        harness_root: fixture.harness,
+        ...overrides,
+      });
+      return path;
+    };
+
+    // A real envelope of the wrong role.
+    const planPm = envelope({ role: "plan-pm", session_id: "plan-pm-envelope", plan_id: PREPARE_ROW });
+    expect((await prepareRefusalOf(() => prepareViewOf(fixture, planPm))).code).toBe("coordination.session-role");
+
+    // A forged coordinator envelope: a session id the snapshot never bound.
+    const forged = envelope({ session_id: "22222222-2222-2222-2222-222222222222" });
+    expect(
+      (
+        await prepareRefusalOf(() =>
+          amendWith(fixture, preparePatchOf(fixture), {
+            snapshotVersion: view.view.snapshotVersion,
+            compassVersion: view.view.compassVersion,
+            sessionPath: forged,
+          }),
+        )
+      ).code,
+    ).toBe("coordination.session-mismatch");
+
+    // The bound session at another path: identity is the canonical file, never a copy.
+    const relocated = join(fixture.root, "relocated-envelope.json");
+    writeText(relocated, readFileSync(fixture.coordinatorSession, "utf8"));
+    expect((await prepareRefusalOf(() => prepareViewOf(fixture, relocated))).code).toBe("coordination.session-mismatch");
+
+    // An envelope claiming another harness root: the active store is the control root.
+    const foreign = envelope({ session_id: "33333333-3333-3333-3333-333333333333", harness_root: join(fixture.root, "other-harness") });
+    expect((await prepareRefusalOf(() => prepareViewOf(fixture, foreign))).code).toBe("coordination.path-mismatch");
+  });
+
+  test("an unregistered workflow refuses before the read or the amendment can proceed", async () => {
+    const fixture = makePrepareFixture();
+    await ensurePrepareCoordinator(fixture);
+    const view = await prepareViewOf(fixture);
+    const root = readJson(fixture.statusPath);
+    root.workflows = (root.workflows as Array<Record<string, unknown>>).filter((entry) => entry.id !== PREPARE_WORKFLOW);
+    writeJson(fixture.statusPath, root);
+    const before = protectedBytes(fixture);
+
+    expect((await prepareRefusalOf(() => prepareViewOf(fixture))).code).toBe("coordination.workflow-not-found");
+    expect(
+      (
+        await prepareRefusalOf(() =>
+          amendWith(fixture, preparePatchOf(fixture), {
+            snapshotVersion: view.view.snapshotVersion,
+            compassVersion: view.view.compassVersion,
+          }),
+        )
+      ).code,
+    ).toBe("coordination.workflow-not-found");
+    expect(protectedBytes(fixture).snapshot).toBe(before.snapshot);
+  });
+
+  test("a non-Prepare phase, a terminal lifecycle, a progressed row or any lease/handoff state refuses without mutation", async () => {
+    const admissionCases: ReadonlyArray<{
+      name: string;
+      code: string;
+      patchSnapshot: (doc: { plans: Array<Record<string, unknown>> } & Record<string, unknown>, fixture: PrepareFixture) => void;
+    }> = [
+      {
+        name: "phase-2",
+        code: "coordination.prepare-amendment.not-prepare",
+        patchSnapshot: (doc) => {
+          doc.phase = "phase-2-execute";
+        },
+      },
+      {
+        name: "terminal",
+        code: "coordination.prepare-amendment.not-prepare",
+        patchSnapshot: (doc) => {
+          doc.status = "completed";
+          doc.ended_at = "2026-09-16";
+        },
+      },
+      {
+        name: "row-in-progress",
+        code: "coordination.prepare-amendment.execution-started",
+        patchSnapshot: (doc) => {
+          doc.plans[0]!.status = "InProgress";
+        },
+      },
+      {
+        name: "row-progress",
+        code: "coordination.prepare-amendment.execution-started",
+        patchSnapshot: (doc) => {
+          doc.plans[0]!.progress = 40;
+        },
+      },
+      {
+        name: "row-execution-lease",
+        code: "coordination.prepare-amendment.execution-started",
+        patchSnapshot: (doc, fixture) => {
+          doc.plans[0]!.execution_lease = {
+            holder: "11111111-1111-1111-1111-111111111111",
+            claimed_at: "2026-09-16T00:00:00Z",
+            worktree_path: join(fixture.root, "wt-row"),
+            working_branch: "feature/plan-prepare",
+          };
+        },
+      },
+      {
+        name: "row-coordination",
+        code: "coordination.prepare-amendment.execution-started",
+        patchSnapshot: (doc) => {
+          doc.plans[0]!.coordination = { revision: 1 };
+        },
+      },
+      {
+        name: "integration-merge-lease",
+        code: "coordination.prepare-amendment.execution-started",
+        patchSnapshot: (doc) => {
+          doc.integration_merge_lease = {
+            holder: "11111111-1111-1111-1111-111111111111",
+            claimed_at: "2026-09-16T00:00:00Z",
+            plan_id: PREPARE_ROW,
+            source_branch: "feature/plan-prepare",
+            target_branch: PREPARE_INTEGRATION_BRANCH,
+          };
+        },
+      },
+    ];
+
+    for (const admissionCase of admissionCases) {
+      const fixture = makePrepareFixture();
+      await ensurePrepareCoordinator(fixture);
+      const view = await prepareViewOf(fixture);
+      const doc = prepareSnapshotOf(fixture);
+      admissionCase.patchSnapshot(doc, fixture);
+      writeJson(fixture.snapshotPath, doc);
+      const before = protectedBytes(fixture);
+
+      const refusal = await prepareRefusalOf(() =>
+        amendWith(fixture, preparePatchOf(fixture), {
+          snapshotVersion: `sha256:${sha256OfFile(fixture.snapshotPath)}`,
+          compassVersion: view.view.compassVersion,
+        }),
+      );
+
+      // The case name names the state; the code names the refusal reason.
+      expect(`${admissionCase.name}: ${refusal.code}`).toBe(`${admissionCase.name}: ${admissionCase.code}`);
+      expect(protectedBytes(fixture)).toEqual(before);
+
+      // The read reports the same state as a blocker instead of a refusal.
+      const readOnly = await prepareViewOf(fixture);
+      expect(readOnly.view.allowed).toBe(false);
+      expect(readOnly.view.blockers).toHaveLength(1);
+    }
+  }, 30000);
+
+  test("duplicate plan ids refuse: an existing row id and a repetition inside one patch", async () => {
+    const existing = makePrepareFixture();
+    await ensurePrepareCoordinator(existing);
+    const existingRefusal = await prepareRefusalOf(() =>
+      amendPrepare(existing, preparePatchOf(existing, { appendPlans: [prepareAppendOf(existing, PREPARE_ROW)] })),
+    );
+    expect(existingRefusal.code).toBe("coordination.prepare-amendment.duplicate-plan");
+    expect(existingRefusal.details.plan_id).toBe(PREPARE_ROW);
+
+    const repeated = makePrepareFixture();
+    await ensurePrepareCoordinator(repeated);
+    const repeatedRefusal = await prepareRefusalOf(() =>
+      amendPrepare(
+        repeated,
+        preparePatchOf(repeated, {
+          appendPlans: [prepareAppendOf(repeated, PREPARE_APPEND), prepareAppendOf(repeated, PREPARE_APPEND)],
+        }),
+      ),
+    );
+    expect(repeatedRefusal.code).toBe("coordination.prepare-amendment.duplicate-plan");
+  });
+
+  test("plan appends refuse unsafe ids, wrong plan files, mismatched headers and escaping or missing references", async () => {
+    const invalidPlanCases: ReadonlyArray<{
+      name: string;
+      prepare?: (fixture: PrepareFixture) => void;
+      patch: (fixture: PrepareFixture) => Record<string, unknown>;
+    }> = [
+      {
+        name: "unsafe-id",
+        patch: (fixture) =>
+          preparePatchOf(fixture, { appendPlans: [prepareAppendOf(fixture, PREPARE_APPEND, { id: ".." })] }),
+      },
+      {
+        name: "file-outside-plan-dir",
+        patch: (fixture) =>
+          preparePatchOf(fixture, {
+            appendPlans: [prepareAppendOf(fixture, PREPARE_APPEND, { file: join(fixture.root, "elsewhere.md") })],
+          }),
+      },
+      {
+        name: "file-not-the-plan-id",
+        patch: (fixture) =>
+          preparePatchOf(fixture, {
+            appendPlans: [
+              prepareAppendOf(fixture, PREPARE_APPEND, { file: join(fixture.planDir, `${PREPARE_UNREVIEWED}.md`) }),
+            ],
+          }),
+      },
+      {
+        name: "header-id-mismatch",
+        prepare: (fixture) => {
+          writeText(join(fixture.planDir, `${PREPARE_APPEND}.md`), preparePlanMarkdown({ id: "plan-other", workingBranch: `feature/${PREPARE_APPEND}` }));
+        },
+        patch: (fixture) => preparePatchOf(fixture),
+      },
+      {
+        name: "metadata-unexpected-key",
+        patch: (fixture) =>
+          preparePatchOf(fixture, {
+            appendPlans: [prepareAppendOf(fixture, PREPARE_APPEND, {}, { execution_mode: "sdd" })],
+          }),
+      },
+      {
+        name: "working-branch-mismatch",
+        patch: (fixture) =>
+          preparePatchOf(fixture, {
+            appendPlans: [prepareAppendOf(fixture, PREPARE_APPEND, {}, { working_branch: "feature/somewhere-else" })],
+          }),
+      },
+      {
+        name: "main-branch-header-mismatch",
+        prepare: (fixture) => {
+          writeText(join(fixture.planDir, `${PREPARE_APPEND}.md`), preparePlanMarkdown({ id: PREPARE_APPEND, workingBranch: `feature/${PREPARE_APPEND}`, mainBranch: "trunk" }));
+        },
+        patch: (fixture) => preparePatchOf(fixture),
+      },
+      {
+        name: "spec-outside-harness",
+        patch: (fixture) =>
+          preparePatchOf(fixture, {
+            appendPlans: [
+              prepareAppendOf(fixture, PREPARE_APPEND, {}, { primary_spec: join(fixture.root, "outside-spec.md") }),
+            ],
+          }),
+      },
+      {
+        name: "spec-missing",
+        patch: (fixture) =>
+          preparePatchOf(fixture, {
+            appendPlans: [
+              prepareAppendOf(fixture, PREPARE_APPEND, {}, { spec_refs: [join(fixture.harness, "specs", "missing.md")] }),
+            ],
+          }),
+      },
+      {
+        name: "integration-branch-mismatch",
+        patch: (fixture) =>
+          preparePatchOf(fixture, {
+            appendPlans: [prepareAppendOf(fixture, PREPARE_APPEND, {}, { merge_target: "main" })],
+          }),
+      },
+    ];
+
+    for (const invalidCase of invalidPlanCases) {
+      const fixture = makePrepareFixture();
+      await ensurePrepareCoordinator(fixture);
+      invalidCase.prepare?.(fixture);
+      const before = protectedBytes(fixture);
+
+      const refusal = await prepareRefusalOf(() => amendPrepare(fixture, invalidCase.patch(fixture)));
+
+      expect(`${invalidCase.name}: ${refusal.code}`).toBe(
+        `${invalidCase.name}: coordination.prepare-amendment.invalid-plan`,
+      );
+      expect(protectedBytes(fixture)).toEqual(before);
+    }
+  }, 60000);
+
+  test("the proposal must match the reviewed compass exactly", async () => {
+    const undeclared = makePrepareFixture();
+    await ensurePrepareCoordinator(undeclared);
+    const undeclaredRefusal = await prepareRefusalOf(() =>
+      amendPrepare(undeclared, preparePatchOf(undeclared, { appendPlans: [prepareAppendOf(undeclared, PREPARE_UNREVIEWED)] })),
+    );
+    expect(undeclaredRefusal.code).toBe("coordination.prepare-amendment.compass-mismatch");
+    expect(undeclaredRefusal.details.undeclared).toEqual([PREPARE_UNREVIEWED]);
+
+    // The compass declares a plan this patch leaves unregistered.
+    const incomplete = makePrepareFixture();
+    await ensurePrepareCoordinator(incomplete);
+    writeText(
+      incomplete.compassPath,
+      readFileSync(incomplete.compassPath, "utf8").replace(`  - ${PREPARE_APPEND}\n`, `  - ${PREPARE_APPEND}\n  - ${PREPARE_UNREVIEWED}\n`),
+    );
+    const incompleteRefusal = await prepareRefusalOf(() => amendPrepare(incomplete, preparePatchOf(incomplete)));
+    expect(incompleteRefusal.code).toBe("coordination.prepare-amendment.compass-mismatch");
+    expect(incompleteRefusal.details.missing).toEqual([PREPARE_UNREVIEWED]);
+
+    // Another lifecycle's compass: the ref itself is refused, not silently used.
+    const borrowed = makePrepareFixture();
+    await ensurePrepareCoordinator(borrowed);
+    const otherCompass = join(borrowed.harness, "iterations", "iter-other", "delivery-compass.md");
+    writeText(otherCompass, readFileSync(borrowed.compassPath, "utf8").replace(`iteration_id: ${PREPARE_WORKFLOW}`, "iteration_id: iter-other"));
+    const borrowedRefusal = await prepareRefusalOf(() =>
+      amendPrepare(borrowed, preparePatchOf(borrowed, { appendPlans: [prepareAppendOf(borrowed, PREPARE_APPEND, {}, { iteration_compass: otherCompass })] })),
+    );
+    expect(borrowedRefusal.code).toBe("coordination.prepare-amendment.compass-mismatch");
+
+    // A missing compass cannot approve anything.
+    const missing = makePrepareFixture();
+    await ensurePrepareCoordinator(missing);
+    rmSync(missing.compassPath);
+    const missingRefusal = await prepareRefusalOf(() => amendPrepare(missing, preparePatchOf(missing)));
+    expect(missingRefusal.code).toBe("coordination.prepare-amendment.compass-mismatch");
+
+    // A compass that declares no plan ids.
+    const declaredNone = makePrepareFixture();
+    await ensurePrepareCoordinator(declaredNone);
+    writeText(declaredNone.compassPath, `---\niteration_id: ${PREPARE_WORKFLOW}\nstatus: locked\n---\n`);
+    const declaredNoneRefusal = await prepareRefusalOf(() => amendPrepare(declaredNone, preparePatchOf(declaredNone)));
+    expect(declaredNoneRefusal.code).toBe("coordination.prepare-amendment.compass-mismatch");
+  }, 30000);
+
+  test("the integration checkout must be a distinct real checkout of this repository on branch.integration", async () => {
+    const otherRoot = realpathSync(mkdtempSync(join(tmpdir(), "mstar-prepare-other-")));
+    roots.push(otherRoot);
+    git(["init", "-q", "-b", "main"], otherRoot);
+    git(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], otherRoot);
+    const otherWorktree = join(otherRoot, "wt-other");
+    git(["worktree", "add", "-q", "-b", PREPARE_INTEGRATION_BRANCH, otherWorktree], otherRoot);
+
+    const worktreeCases: ReadonlyArray<{ name: string; path: (fixture: PrepareFixture) => string }> = [
+      { name: "missing-path", path: (fixture) => join(fixture.root, "no-such-checkout") },
+      { name: "main-checkout", path: (fixture) => fixture.root },
+      { name: "control-root", path: (fixture) => fixture.harness },
+      {
+        name: "same-checkout-alias",
+        path: (fixture) => {
+          mkdirSync(join(fixture.root, "subdir"));
+          return join(fixture.root, "subdir");
+        },
+      },
+      {
+        name: "wrong-branch",
+        path: (fixture) => {
+          const path = join(fixture.root, "wt-elsewhere");
+          git(["worktree", "add", "-q", "-b", "feature/elsewhere", path], fixture.root);
+          return path;
+        },
+      },
+      { name: "other-repository", path: () => otherWorktree },
+    ];
+
+    for (const worktreeCase of worktreeCases) {
+      const fixture = makePrepareFixture();
+      await ensurePrepareCoordinator(fixture);
+      const candidate = worktreeCase.path(fixture);
+      const before = protectedBytes(fixture);
+
+      const refusal = await prepareRefusalOf(() =>
+        amendPrepare(fixture, preparePatchOf(fixture, { integrationWorktreePath: candidate })),
+      );
+
+      expect(`${worktreeCase.name}: ${refusal.code}`).toBe(
+        `${worktreeCase.name}: coordination.prepare-amendment.invalid-worktree`,
+      );
+      expect(protectedBytes(fixture)).toEqual(before);
+    }
+  }, 30000);
+
+  test("unknown patch keys, malformed values and a no-op patch refuse as invalid-patch", async () => {
+    const cases: ReadonlyArray<{ name: string; patch: (fixture: PrepareFixture) => Record<string, unknown> }> = [
+      { name: "unknown-key", patch: (fixture) => preparePatchOf(fixture, { replacePlans: [] }) },
+      { name: "missing-main-branch", patch: (fixture) => preparePatchOf(fixture, { mainWorktreeBranch: undefined }) },
+      { name: "appends-not-an-array", patch: (fixture) => preparePatchOf(fixture, { appendPlans: "plan-append" }) },
+      { name: "bad-parallelism", patch: (fixture) => preparePatchOf(fixture, { planParallelism: "maybe" }) },
+      { name: "empty-patch", patch: (fixture) => preparePatchOf(fixture, { appendPlans: [] }) },
+    ];
+
+    for (const patchCase of cases) {
+      const fixture = makePrepareFixture();
+      await ensurePrepareCoordinator(fixture);
+      const before = protectedBytes(fixture);
+
+      const refusal = await prepareRefusalOf(() => amendPrepare(fixture, patchCase.patch(fixture)));
+
+      expect(`${patchCase.name}: ${refusal.code}`).toBe(
+        `${patchCase.name}: coordination.prepare-amendment.invalid-patch`,
+      );
+      expect(protectedBytes(fixture)).toEqual(before);
+    }
+
+    // A patch that re-states the recorded path and policy changes nothing. The
+    // compass declares only the already-registered row, so the path can be
+    // recorded on its own before the no-op is attempted.
+    const noop = makePrepareFixture();
+    await ensurePrepareCoordinator(noop);
+    writeText(
+      noop.compassPath,
+      readFileSync(noop.compassPath, "utf8").replace(`  - ${PREPARE_APPEND}\n`, ""),
+    );
+    await amendPrepare(noop, preparePatchOf(noop, { appendPlans: [], integrationWorktreePath: noop.integrationPath }));
+    const before = protectedBytes(noop);
+    const noopRefusal = await prepareRefusalOf(() =>
+      amendPrepare(
+        noop,
+        preparePatchOf(noop, { appendPlans: [], integrationWorktreePath: noop.integrationPath, planParallelism: "serial" }),
+      ),
+    );
+    expect(noopRefusal.code).toBe("coordination.prepare-amendment.invalid-patch");
+    expect(protectedBytes(noop)).toEqual(before);
+  }, 30000);
+
+  test("the caller's main worktree branch is verified from Git, not from the snapshot's branch.base", async () => {
+    const fixture = makePrepareFixture();
+    await ensurePrepareCoordinator(fixture);
+    const before = protectedBytes(fixture);
+
+    const refusal = await prepareRefusalOf(() =>
+      amendPrepare(fixture, preparePatchOf(fixture, { mainWorktreeBranch: "release" })),
+    );
+
+    expect(refusal.code).toBe("coordination.scope-mismatch");
+    expect(refusal.details.expected).toBe("release");
+    expect(refusal.details.actual).toBe("main");
+    expect(protectedBytes(fixture)).toEqual(before);
+  });
+
+  test("the generic snapshot writers still refuse the same row delta", async () => {
+    const fixture = makePrepareFixture();
+    await ensurePrepareCoordinator(fixture);
+    const current = prepareSnapshotOf(fixture);
+    const before = protectedBytes(fixture);
+    const version = `sha256:${sha256OfFile(fixture.snapshotPath)}`;
+    const proposed = {
+      ...current,
+      updated_at: "2026-09-16T12:00:00.000Z",
+      plans: [...current.plans, { id: "plan-smuggled", title: "Smuggled", file: "plans/plan-smuggled.md", status: "Todo" }],
+    } as unknown as WorkflowSnapshot;
+
+    const generic = await prepareRefusalOf(() =>
+      writeWorkflowSnapshot(proposed, fixture.workflowDir, { expectedVersion: version, sessionPath: fixture.coordinatorSession }),
+    );
+    expect(generic.code).toBe("coordination.direct-write-refused");
+    expect(protectedBytes(fixture)).toEqual(before);
+
+    const replacement = await prepareRefusalOf(() =>
+      replaceCoordinatedArtifact({
+        harnessRoot: fixture.harness,
+        ref: { kind: "snapshot", key: PREPARE_WORKFLOW },
+        payload: proposed,
+        expectedVersion: version,
+        sessionPath: fixture.coordinatorSession,
+      }),
+    );
+    expect(replacement.code).toBe("coordination.direct-write-refused");
+    expect(protectedBytes(fixture)).toEqual(before);
+  });
+
+  test("the create-only + register bootstrap route stops on registration failure and never executes the unregistered orphan", async () => {
+    const fixture = makePrepareFixture();
+    const orphanId = "wf-orphan";
+    const orphanDir = join(fixture.harness, "workflows", orphanId);
+    const orphanSnapshotPath = join(orphanDir, "snapshot.json");
+    const orphan: WorkflowSnapshot = {
+      schema_version: 1,
+      id: orphanId,
+      type: "iteration",
+      status: "running",
+      phase: "phase-1-prepare",
+      started_at: "2026-09-16",
+      updated_at: "2026-09-16",
+      plans: [planRow("plan-orphan", PROJECT_ID)],
+    };
+    // Creation succeeds …
+    await writeWorkflowSnapshot(orphan, orphanDir, { createOnly: true });
+    const createdBytes = readFileSync(orphanSnapshotPath, "utf8");
+    // … and registration fails on a root document that cannot be written (a
+    // duplicate workflow id), leaving the created snapshot unregistered.
+    const root = readJson(fixture.statusPath);
+    const workflows = root.workflows as Array<Record<string, unknown>>;
+    root.workflows = [...workflows, workflows[1]!];
+    writeJson(fixture.statusPath, root);
+    const statusBytes = readFileSync(fixture.statusPath, "utf8");
+
+    const registerFailure = await failureOf(() =>
+      registerWorkflow(fixture.statusPath, {
+        id: orphanId,
+        type: "iteration",
+        started_at: "2026-09-16",
+        dir: `workflows/${orphanId}`,
+      }),
+    );
+    expect(registerFailure.message).toContain("status.json");
+    // The failed registration wrote nothing, and the orphan grants nothing: no
+    // execution path admits a workflow the root never registered.
+    expect(readFileSync(fixture.statusPath, "utf8")).toBe(statusBytes);
+    const bindRefusal = await prepareRefusalOf(() =>
+      bindPlanSession({ coordinator: true, workflowId: orphanId, harnessDir: fixture.harness, cwd: fixture.root }),
+    );
+    expect(bindRefusal.code).toBe("coordination.workflow-not-found");
+
+    // Retrying creation never overwrites the created bytes.
+    const recreate = await prepareRefusalOf(() => writeWorkflowSnapshot(orphan, orphanDir, { createOnly: true }));
+    expect(recreate.code).toBe("coordination.version-conflict");
+    expect(readFileSync(orphanSnapshotPath, "utf8")).toBe(createdBytes);
+  });
 });
