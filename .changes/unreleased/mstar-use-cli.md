@@ -5,7 +5,7 @@ packages: root
 
 - Added the **`mstar-use-cli`** skill as the agent-facing CLI SSOT: a task→command-family index, the precondition ladder (harness-root resolution, control root vs feature worktree, neutral cwd, session envelope, revision and byte tokens), the two canonical sequences (versioned read-modify-write, plan completion), and how to read exit `0` / `1` / `2` — including the argument parser's exit `1` for a missing required argument. Flags are never restated: each command's own `--help` owns them.
 
-- Retired **`docs/cli.md`**: its install-only material (Codex agent files, install path layout) moved into `INSTALL.md`, the rest is owned by the new skill, and every live pointer (`README` / `README_CN`, `INSTALL`, `docs/commands`, package and Cursor notes) now targets that SSOT. No redirect page and no compatibility layer remain.
+- Retired **`docs/cli.md`** by splitting it by audience instead of redirecting: its two install-only sections (Codex agent files, install path layout) moved into `INSTALL.md`, where its own install cross-references plus `packages/cli/AGENTS.md` and `.cursor/LOCAL-VALIDATION.md` now resolve to in-file anchors. The CLI-contract pointers — `README` / `README_CN`, `docs/commands.md`, and the runtime skill references — now point at the **`mstar-use-cli`** skill. The old file is deleted outright: no redirect page and no compatibility layer.
 
 - Extended the **drift guard's CLI inventory** past the CLI entry module into the plan / workflow / sdd registration modules — 16 command paths that were previously invisible, including 13 `plan` verbs — so citing those verbs is now checked instead of silently passing. The same check (declared bin prefix plus a real command path) now also scans the new skill's own markdown, not only the Engine-check callouts.
 
@@ -16,7 +16,7 @@ packages: root
 <!-- CN -->
 - 新增 **`mstar-use-cli`** skill，作为 CLI 的 agent 面向 SSOT：任务→命令族索引、前置条件阶梯（harness root 解析、control root 与 feature worktree、neutral cwd、session envelope、revision 与 byte token）、两条规范序列（带版本的 read-modify-write、plan 完成序列），以及退出码 `0` / `1` / `2` 的读法——含参数解析器对缺参返回 `1` 的例外。**不复述 flags**：一律以各命令自身 `--help` 为准。
 
-- **`docs/cli.md` 退役**：仅属安装的内容（Codex agent files、install path layout）迁入 `INSTALL.md`，其余由新 skill 承接，所有活指针（`README` / `README_CN`、`INSTALL`、`docs/commands`、包内与 Cursor 说明）改向该 SSOT。不保留跳转页，也不留兼容层。
+- **`docs/cli.md` 退役**，内容按读者分流而非跳转：仅属安装的两节（Codex agent files、install path layout）迁入 `INSTALL.md`，其自身的安装交叉引用与 `packages/cli/AGENTS.md`、`.cursor/LOCAL-VALIDATION.md` 现由该文件的文内锚点承接。CLI 契约指针——`README` / `README_CN`、`docs/commands.md` 与各 runtime skill 引用——改向 **`mstar-use-cli`** skill。旧文件直接删除：不保留跳转页，也不留兼容层。
 
 - **漂移守卫的 CLI inventory 扩容**：从 CLI 主入口扩展到 plan / workflow / sdd 注册模块——新增 16 条此前不可见的命令路径（含 13 个 `plan` 动词）——引用这些动词现被校验，不再静默通过。同一套校验（声明 bin 前缀 + 真实命令路径）现在也扫描新 skill 自身的 markdown，而不只覆盖 Engine-check callout。
 
