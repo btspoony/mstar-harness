@@ -20,7 +20,8 @@ Dispatch:
 
     ## Destinations (absolute — read-only review)
 
-    - Control harness root: [CONTROL_ROOT] — implementer report [REPORT_FILE], diff [DIFF_FILE] are control artifacts.
+    - Control harness root: [CONTROL_ROOT] — implementer report [IMPLEMENTER_REPORT] and diff [DIFF_FILE] are control artifacts you read.
+    - **Your output — `REPORT_FILE` = [REPORT_FILE]**, i.e. `${SDD_DIR}/task-N-review.md`: write your full review there, and it is the only file you write. It is a different file from the implementer's report — never write or overwrite [IMPLEMENTER_REPORT].
     - Feature worktree under review: [FEATURE_CWD] on branch [WORKING_BRANCH] — you do not write there or anywhere except [REPORT_FILE].
     - The diff was produced by the bound `mstar sdd review-package --context [CONTEXT_FILE]` (git probed in the feature worktree, artifact written to the control sddDir).
     - First step: confirm the paths above are absolute and present; if a path is missing or relative, report NEEDS_CONTEXT instead of guessing.
@@ -28,9 +29,9 @@ Dispatch:
     Global constraints (verbatim):
     [GLOBAL_CONSTRAINTS]
 
-    ## Implementer report
+    ## Implementer report (input — not your output)
 
-    [REPORT_FILE] — treat claims as unverified until checked against diff.
+    [IMPLEMENTER_REPORT] — treat claims as unverified until checked against diff.
 
     ## Diff
 
@@ -48,10 +49,21 @@ Dispatch:
     assigned acceptance questions are answered.
     The task diff plus directly affected interfaces are this review's budget
     (default bounded-seat cap → `mstar-harness-core` § 定向执行与验证边界);
-    when it is reached, stop there and return the assessment for what was
-    reviewed plus a `Truncated coverage: <what was not covered>` line.
+    when it is reached, stop expanding there and disclose the cut once, in the
+    report `## Scope`, as `- Truncated coverage: <budget reached; specific
+    interfaces/files left unexamined>`; keep the assessment earned for what you
+    did review. On a complete review omit that line entirely — never emit it
+    with a negation value, because consumers read the label's presence.
+    A budget stop is not a failed evidence channel: never describe it as
+    `Unconfirmed`, and never downgrade an earned verdict or invent a finding
+    because coverage ended.
 
     ## Output
+
+    Write all of it to [REPORT_FILE].
+
+    ## Scope            # only when a bound actually stopped expansion; a complete review omits this section and its label
+    - `- Truncated coverage: <budget reached; specific interfaces/files left unexamined>`
 
     ### Spec Compliance
     - ✅ Spec compliant | ❌ Issues found (file:line)
@@ -65,5 +77,7 @@ Dispatch:
     ### Assessment
     **Task quality:** Approved | Needs fixes
 ```
+
+The reviewer always writes that full report to `REPORT_FILE` (`${SDD_DIR}/task-N-review.md`) and returns only a compact pointer plus the assessment to PM — a completed task under `Execution mode: sdd` has no conversation-only L2 output, and `REPORT_FILE` here is never the implementer's `task-N-report.md`. The `## Scope` line is the only truncation disclosure; a truncated review keeps the `Task quality` it earned for checked scope, and PM cannot mark the whole task complete while assigned review scope remains uncovered.
 
 Re-review after fixes checks both verdicts only for the raised findings and fix delta; unchanged evidence remains reusable. PM resolves all ⚠️ items before marking task complete.

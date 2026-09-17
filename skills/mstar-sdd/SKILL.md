@@ -58,8 +58,8 @@ Dispatch independent ready tasks concurrently after L2 worktree isolation. Keep 
     - **`SDD implementer session: fresh`** (default) — new subagent; templates: `references/implementer-prompt.md`
     - **`SDD implementer session: sticky`** — first task: same as fresh + write `{SDD_DIR}/implementer-session.json` with `host_agent_id`; later tasks: host **resume** + `references/implementer-continuation-prompt.md` (see **`references/sticky-implementer-session.md`**)
 5. On `DONE`: `mstar sdd review-package BASE HEAD` → diff file
-6. Dispatch **fresh** task reviewer — role **`code-reviewer`** (L2; **not** `qc-specialist*`; host fallback generic + C5b → `mstar-host` C5) — brief, report, diff, Global Constraints — `references/task-reviewer-prompt.md` — **never** sticky resume for reviewers
-7. Fix loop for Critical/Important; re-review until approved
+6. Dispatch **fresh** task reviewer — role **`code-reviewer`** (L2; **not** `qc-specialist*`; host fallback generic + C5b → `mstar-host` C5) — brief, implementer report, diff, Global Constraints, and the reviewer's own output **`REPORT_FILE`** = `{SDD_DIR}/task-N-review.md` — `references/task-reviewer-prompt.md` — **never** sticky resume for reviewers
+7. Fix loop for Critical/Important; re-review until approved. Then PM reads `{SDD_DIR}/task-N-review.md` — the always-on L2 report, never the implementer's `task-N-report.md` — before appending step 8: the earned `Task quality` and partial findings stand for the reviewed scope, but assigned review scope left uncovered blocks task-complete and dependent release, so PM routes the remaining scope through a fresh/tightened reviewer dispatch; it never overwrites an `Approved` earned for checked scope or invents `Needs fixes` because the budget ended
 8. Append `progress.md`; record ledger progress through the **domain call** (`mstar plan progress --session <session.json> --file <absolute-json-path> --expect <revision>` on the scoped route; direct snapshot edit only on a non-scoped legacy route where the CLI is absent) plus `implementer-session.json` `last_task` if sticky — snapshot/revision semantics → `mstar-artifacts` `references/status-and-residuals.md`; scoped route → `mstar-iteration/references/plan-scoped-pm.md` §4/§7
 9. Release dependent tasks only after reviewed prerequisite commits are present in their assigned base, per Dependent-task readiness above; independent ready tasks need not wait
 
@@ -111,7 +111,7 @@ Host mapping → **`mstar-host`** references (`model` / Task field).
 
 PM at start: `cat {SDD_DIR}/progress.md`. Tasks marked complete are DONE — do not re-dispatch after compaction.
 
-PM appends on clean review: `Task N: complete (<base>..<head>, review clean)`.
+PM appends on clean review: `Task N: complete (<base>..<head>, review clean, review: task-N-review.md)` — the entry names the L2 report path the review closed on.
 
 Minor findings → `## Minor (for plan QC)` section in same file.
 
@@ -125,6 +125,8 @@ Minor findings → `## Minor (for plan QC)` section in same file.
 - `HEAD~1` as review BASE
 - Pre-judge reviewer ("do not flag", "at most Minor")
 - Skip task review or accept missing verdict
+- Accept the L2 verdict from the message alone, or write L2 output to the implementer's `task-N-report.md` (the report is `{SDD_DIR}/task-N-review.md`)
+- Mark a task complete or release dependents while the assigned L2 review scope is uncovered
 - Re-dispatch tasks listed complete in ledger
 - PM thread implements instead of subagent dispatch
 - Sticky **resume** for task reviewers
