@@ -377,13 +377,124 @@ describe("checkUseCliSkillCliCitations — mstar-use-cli skill scan (Task 3)", (
   });
 
   test("real mstar-use-cli corpus passes with supplemented inventory", () => {
-    const files = readUseCliSkillMarkdown(REPO_ROOT);
+    const { files, failures } = readUseCliSkillMarkdown(REPO_ROOT);
+    expect(failures).toEqual([]);
     expect(files.length).toBeGreaterThan(0);
-    const { failures } = checkUseCliSkillCliCitations(files, {
+    const { failures: citeFailures } = checkUseCliSkillCliCitations(files, {
       cliCommands: inventory(),
       binNames: binNames(),
     });
-    expect(failures).toEqual([]);
+    expect(citeFailures).toEqual([]);
+  });
+
+  test("readUseCliSkillMarkdown scans repoRoot when process cwd differs (D2)", () => {
+    const outer = mkdtempSync(join(tmpdir(), "drift-use-cli-cwd-"));
+    const prev = process.cwd();
+    try {
+      process.chdir(outer);
+      const { files, failures } = readUseCliSkillMarkdown(REPO_ROOT);
+      expect(failures).toEqual([]);
+      expect(files.length).toBe(5);
+      expect(files.every((f) => f.rel.startsWith("skills/mstar-use-cli/"))).toBe(true);
+    } finally {
+      process.chdir(prev);
+      rmSync(outer, { recursive: true, force: true });
+    }
+  });
+
+  test("missing use-cli skill dir returns one explicit failure row (D1 guard-or-clear)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "drift-use-cli-missing-"));
+    try {
+      const { files, failures } = readUseCliSkillMarkdown(dir);
+      expect(files).toEqual([]);
+      expect(failures.length).toBe(1);
+      expect(failures[0]).toContain("skills/mstar-use-cli is missing");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("empty use-cli skill dir returns one explicit failure row (D1 zero-md)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "drift-use-cli-empty-"));
+    try {
+      mkdirSync(join(dir, "skills", "mstar-use-cli"), { recursive: true });
+      const { files, failures } = readUseCliSkillMarkdown(dir);
+      expect(files).toEqual([]);
+      expect(failures.length).toBe(1);
+      expect(failures[0]).toContain("contains no .md files");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("drift-lint executable — use-cli scan wiring (Task 3 fix round)", () => {
+  const REPO_ROOT = join(import.meta.dir, "..");
+  const SCRIPT = join(REPO_ROOT, "scripts/drift-lint.ts");
+
+  test("clean repo exits 0 and reports use-cli skill file scan count (D3)", () => {
+    const out = execFileSync("bun", [SCRIPT], { cwd: REPO_ROOT, encoding: "utf8" });
+    expect(out).toMatch(/\d+ use-cli skill files/);
+    expect(out).toContain("full-text citations");
+  });
+
+  test("running outside repo root does not exit 0 silently (D1/D2 executable)", () => {
+    const outer = mkdtempSync(join(tmpdir(), "drift-use-cli-exec-"));
+    try {
+      let failed = false;
+      try {
+        execFileSync("bun", [SCRIPT], { cwd: outer, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+      } catch (error) {
+        failed = true;
+        const err = error as { status?: number };
+        expect(err.status).toBe(1);
+      }
+      expect(failed).toBe(true);
+    } finally {
+      rmSync(outer, { recursive: true, force: true });
+    }
+  });
+
+  test("temp fixture with fabricated CLI citation fails the executable guard (D3)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "drift-use-cli-fixture-"));
+    try {
+      for (const rel of [
+        "packages/engine/src/index.ts",
+        "packages/cli/src/index.ts",
+        "packages/cli/package.json",
+        "packages/cli/src/plan-coordination.ts",
+        "packages/cli/src/sdd-evidence.ts",
+        "skills/mstar-use-cli/SKILL.md",
+        "skills/mstar-use-cli/references/checks-and-lints.md",
+        "README.md",
+        "README_CN.md",
+      ]) {
+        const dest = join(dir, rel);
+        mkdirSync(join(dest, ".."), { recursive: true });
+        writeFileSync(dest, readFileSync(join(REPO_ROOT, rel), "utf8"));
+      }
+      writeFileSync(
+        join(dir, "skills/mstar-use-cli/SKILL.md"),
+        "run `mstar plan totally-fake-verb` here\n",
+      );
+      const checks = readFileSync(join(REPO_ROOT, AUDIT_CATEGORY_DOC), "utf8");
+      writeFileSync(join(dir, AUDIT_CATEGORY_DOC), checks);
+      const skillMd = readFileSync(join(REPO_ROOT, "skills/mstar-harness-core/SKILL.md"), "utf8");
+      mkdirSync(join(dir, "skills/mstar-harness-core"), { recursive: true });
+      writeFileSync(join(dir, "skills/mstar-harness-core/SKILL.md"), skillMd);
+      let failed = false;
+      try {
+        execFileSync("bun", [SCRIPT], { cwd: dir, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+      } catch (error) {
+        failed = true;
+        const err = error as { status?: number; stderr?: string };
+        expect(err.status).toBe(1);
+        expect(String(err.stderr ?? "")).toMatch(/totally-fake-verb/);
+      }
+      expect(failed).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

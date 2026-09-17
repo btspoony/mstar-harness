@@ -648,16 +648,65 @@ export type UseCliSkillScanResult = {
   failures: string[];
 };
 
-/** Every `.md` file under skills/mstar-use-cli/ for Guard 1 forward. */
-export function readUseCliSkillMarkdown(repoRoot: string): Array<{ rel: string; text: string }> {
-  try {
-    return collectFiles(USE_CLI_SKILL_DIR, ".md").map((file) => ({
-      rel: relative(repoRoot, file),
-      text: readFileSync(file, "utf8"),
-    }));
-  } catch {
-    return [];
+/** Recursively collect `ext` files under `join(repoRoot, dir)` (not process cwd). */
+function collectFilesUnder(repoRoot: string, dir: string, ext: string): string[] {
+  const out: string[] = [];
+  const entries = readdirSync(join(repoRoot, dir), { withFileTypes: true });
+  for (const entry of entries) {
+    const relDir = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      out.push(...collectFilesUnder(repoRoot, relDir, ext));
+    } else if (entry.name.endsWith(ext)) {
+      out.push(join(repoRoot, relDir));
+    }
   }
+  return out;
+}
+
+/** Every `.md` file under skills/mstar-use-cli/ for Guard 1 forward.
+ * Guard-or-clear-error (mirrors `readRolesCorpus` / `readDeclaredBins`): a
+ * missing skill tree, an unreadable traversal, a read failure, or zero
+ * markdown files each return explicit failure rows — never an empty scan
+ * that lets the guard pass silently. */
+export function readUseCliSkillMarkdown(
+  repoRoot: string,
+): { files: Array<{ rel: string; text: string }>; failures: string[] } {
+  const failures: string[] = [];
+  const skillDirAbs = join(repoRoot, USE_CLI_SKILL_DIR);
+  try {
+    if (!statSync(skillDirAbs).isDirectory()) {
+      failures.push(
+        `drift: ${USE_CLI_SKILL_DIR} exists but is not a directory (use-cli skill scan skipped)`,
+      );
+      return { files: [], failures };
+    }
+  } catch {
+    failures.push(`drift: ${USE_CLI_SKILL_DIR} is missing (use-cli skill scan skipped)`);
+    return { files: [], failures };
+  }
+
+  let paths: string[];
+  try {
+    paths = collectFilesUnder(repoRoot, USE_CLI_SKILL_DIR, ".md");
+  } catch (error) {
+    failures.push(`use-cli: traverse ${USE_CLI_SKILL_DIR} - ${(error as Error).message}`);
+    return { files: [], failures };
+  }
+  if (paths.length === 0) {
+    failures.push(`drift: ${USE_CLI_SKILL_DIR} contains no .md files (use-cli skill scan skipped)`);
+    return { files: [], failures };
+  }
+
+  const files: Array<{ rel: string; text: string }> = [];
+  for (const file of paths) {
+    const rel = relative(repoRoot, file);
+    try {
+      files.push({ rel, text: readFileSync(file, "utf8") });
+    } catch (error) {
+      failures.push(`use-cli: read ${rel} - ${(error as Error).message}`);
+    }
+  }
+  return { files, failures };
 }
 
 /** Guard 1 forward — full-text CLI citations in skills/mstar-use-cli/**. */
@@ -1095,9 +1144,10 @@ if (import.meta.main) {
   cliCitationsChecked += forward.cliCitationsChecked;
   for (const row of forward.failures) fail(row);
 
-  const useCliFiles = readUseCliSkillMarkdown(root);
+  const { files: useCliFiles, failures: useCliReadFailures } = readUseCliSkillMarkdown(root);
+  for (const row of useCliReadFailures) fail(row);
   const useCliScan =
-    manifestFailures.length === 0
+    manifestFailures.length === 0 && useCliReadFailures.length === 0
       ? checkUseCliSkillCliCitations(useCliFiles, { cliCommands, binNames })
       : { filesScanned: useCliFiles.length, cliCitationsChecked: 0, failures: [] as string[] };
   cliCitationsChecked += useCliScan.cliCitationsChecked;
