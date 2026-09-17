@@ -1732,3 +1732,276 @@ export async function registerPlanWorkflow(
     return { workflowId, snapshotPath, recovered: false };
   });
 }
+
+/** Options for `registerIterationWorkflow`. `harnessDir` is required — the
+ * snapshot and `status.json` live under the harness root. */
+export type RegisterIterationWorkflowOptions = {
+  /** Absolute harness dir that contains `status.json` + `workflows/`. Required. */
+  harnessDir: string;
+  /** Harness-relative compass ref recorded on the snapshot, e.g. `iterations/<id>/delivery-compass.md`. Required. */
+  compassRef: string;
+  /** The three iteration branch anchors. All three required. */
+  branch: { base: string; integration: string; target: string };
+  /** Initial plan rows. At least one. Every row is written `status: "Todo"`. */
+  rows: Array<{ id: string; title: string; file: string }>;
+  /** Project register id recorded on the snapshot. */
+  project?: string;
+  /** Registration timestamp (YYYY-MM-DD or RFC3339). Default: now. */
+  startedAt?: string;
+};
+
+export type RegisterIterationWorkflowResult = {
+  workflowId: string;
+  snapshotPath: string;
+  /**
+   * True on orphan recovery: existing snapshot bytes/timestamps are preserved
+   * and only the missing root entry is written.
+   */
+  recovered: boolean;
+};
+
+/**
+ * Identity subset compared on iteration registration recovery (the plan
+ * producer's `planWorkflowRegistrationIdentity` sibling). Adds the snapshot
+ * `id` itself — comparing only the path is insufficient — and the
+ * `{ session_id, session_file }` coordinator projection: a candidate never
+ * carries a coordinator, so an already-bound orphan refuses rather than
+ * silently attaching another owner's workflow. Timestamps stay excluded —
+ * the orphan's timestamps are preserved, not rewritten.
+ */
+function iterationWorkflowRegistrationIdentity(snapshot: WorkflowSnapshot): string {
+  const coordinator = snapshot.coordination?.coordinator;
+  return stableJson({
+    id: snapshot.id,
+    type: snapshot.type,
+    status: snapshot.status,
+    compass_ref: snapshot.compass_ref ?? null,
+    branch: snapshot.branch ?? null,
+    project: snapshot.project ?? null,
+    plans: snapshot.plans,
+    coordinator: coordinator ? { session_id: coordinator.session_id, session_file: coordinator.session_file } : null,
+  });
+}
+
+/**
+ * Register an iteration workflow (seam S1 sibling of `registerPlanWorkflow`).
+ * Builds the create-only `type: iteration` snapshot (workflow id, compass
+ * ref, the three branch anchors, Todo rows whose `metadata` —
+ * `iteration_refs`, `spec_integration_branch`, `merge_target` — is derived
+ * from the already-required compass/integration inputs; registration never
+ * authorizes implementation) and the root `workflows[]` entry, then writes
+ * BOTH under one atomic section of the root `withStatusWriteLock` — the same
+ * create-only `writeWorkflowSnapshot(..., { createOnly: true })` →
+ * `registerWorkflowEntryLocked` primitive sequence the plan producer uses —
+ * with rollback that removes ONLY the exact snapshot version this call
+ * created (plus the now-empty workflow dir; a non-empty directory is never
+ * force-removed).
+ *
+ * Refusals (fail-loud, before any write): non-empty `workflowId`
+ * (`assertSafePathComponent`), `harnessDir`, `compassRef`, all three branch
+ * anchors, `project` when given, and each row's `id`/`title`/`file`;
+ * non-empty row array; duplicate row ids; a SUPPLIED row `status` (a
+ * requested state transition is never treated as successful registration);
+ * `startedAt` must be a valid YYYY-MM-DD / RFC3339 timestamp. Rows are
+ * constructed from the declared fields — untrusted row objects are never
+ * spread.
+ *
+ * Already-registered refusals: inside the root lock, an existing entry for
+ * the requested id refuses BEFORE either branch — including a stale entry
+ * whose snapshot is missing. This producer is not the low-level upsert and
+ * does not repair/repoint an existing identity. Malformed/v1 roots refuse
+ * without replacing their bytes.
+ *
+ * Crash/retry recovery: a snapshot without its root entry (an orphan)
+ * re-registers only when `iterationWorkflowRegistrationIdentity` matches —
+ * the existing snapshot's bytes and timestamps are preserved verbatim and
+ * the root entry is written with the orphan's `started_at` (`recovered:
+ * true`). A differing identity (including a mismatched snapshot id or an
+ * existing coordinator binding) refuses; a failed recovery root write never
+ * deletes the orphan.
+ *
+ * The caller must pin the artifact store to the harness root first
+ * (`setArtifactStore(createFsStore(harnessDir))`) when the active store's
+ * root could differ — the routed writers fail loud on a path mismatch.
+ */
+export async function registerIterationWorkflow(
+  workflowId: string,
+  options: RegisterIterationWorkflowOptions,
+): Promise<RegisterIterationWorkflowResult> {
+  const refuse = (detail: string): Error =>
+    new Error(`registerIterationWorkflow: ${detail}`);
+  if (typeof options !== "object" || options === null || Array.isArray(options)) {
+    throw refuse("options must be an object (harnessDir, compassRef, branch, rows)");
+  }
+  if (typeof options.harnessDir !== "string" || options.harnessDir.trim() === "") {
+    throw refuse("options.harnessDir is required (must contain status.json + workflows/)");
+  }
+  assertSafePathComponent(workflowId, "workflow id");
+  if (typeof options.compassRef !== "string" || options.compassRef.trim() === "") {
+    throw refuse("options.compassRef must be a non-empty string");
+  }
+  if (typeof options.branch !== "object" || options.branch === null || Array.isArray(options.branch)) {
+    throw refuse("options.branch must be an object (base, integration, target)");
+  }
+  for (const anchor of ["base", "integration", "target"] as const) {
+    const value = options.branch[anchor];
+    if (typeof value !== "string" || value.trim() === "") {
+      throw refuse(`options.branch.${anchor} must be a non-empty string`);
+    }
+  }
+  if (options.project !== undefined && (typeof options.project !== "string" || options.project.trim() === "")) {
+    throw refuse("options.project must be a non-empty string when given");
+  }
+  const rows = options.rows;
+  if (!Array.isArray(rows) || rows.length === 0) {
+    throw refuse("options.rows must be a non-empty array of { id, title, file }");
+  }
+  const seenRowIds = new Set<string>();
+  for (const row of rows) {
+    if (typeof row !== "object" || row === null || Array.isArray(row)) {
+      throw refuse("each row must be an object ({ id, title, file })");
+    }
+    for (const field of ["id", "title", "file"] as const) {
+      if (typeof row[field] !== "string" || row[field].trim() === "") {
+        throw refuse(`each row.${field} must be a non-empty string`);
+      }
+    }
+    if ("status" in row) {
+      throw refuse(
+        `row ${JSON.stringify(row.id)} supplies a status \u2014 rows are always written status "Todo"; ` +
+          "a state transition is requested through the lifecycle seams, never at registration",
+      );
+    }
+    if (seenRowIds.has(row.id)) {
+      throw refuse(`duplicate row id ${JSON.stringify(row.id)} \u2014 plan row ids are unique per workflow`);
+    }
+    seenRowIds.add(row.id);
+  }
+  const startedAt = options.startedAt ?? new Date().toISOString();
+  if (!isCloseTimestamp(startedAt)) {
+    throw refuse("options.startedAt must be a valid YYYY-MM-DD date or RFC3339 timestamp");
+  }
+
+  const harnessDir = resolve(options.harnessDir);
+  const statusPath = join(harnessDir, "status.json");
+  const workflowDir = join(harnessDir, "workflows", workflowId);
+  const snapshotPath = join(workflowDir, WORKFLOW_SNAPSHOT_FILE);
+  const store = getArtifactStore();
+
+  const snapshot: WorkflowSnapshot = {
+    schema_version: 1,
+    id: workflowId,
+    type: "iteration",
+    status: "running",
+    started_at: startedAt,
+    updated_at: startedAt.slice(0, 10),
+    compass_ref: options.compassRef,
+    branch: { base: options.branch.base, integration: options.branch.integration, target: options.branch.target },
+    plans: rows.map((r) => ({
+      id: r.id,
+      title: r.title,
+      file: r.file,
+      status: "Todo",
+      metadata: {
+        iteration_refs: [options.compassRef],
+        spec_integration_branch: options.branch.integration,
+        merge_target: options.branch.integration,
+      },
+    })),
+  };
+  if (options.project !== undefined) snapshot.project = options.project;
+
+  const entry: WorkflowEntry = {
+    id: workflowId,
+    type: "iteration",
+    started_at: snapshot.started_at,
+    dir: `workflows/${workflowId}`,
+  };
+  const entryGate = validateWorkflowEntry(entry);
+  if (!entryGate.ok) {
+    throw new Error(
+      `refusing to register invalid workflow entry: ${entryGate.violations.map((v) => v.message).join("; ")}`,
+    );
+  }
+
+  return withStatusWriteLock(statusPath, async (): Promise<RegisterIterationWorkflowResult> => {
+    // Already-registered refusal BEFORE both branches — including a stale
+    // entry whose snapshot is missing: an existing identity is never
+    // repaired, re-pointed or duplicated.
+    const rootDoc = readJson(statusPath);
+    const workflows = Array.isArray(rootDoc.workflows) ? rootDoc.workflows : [];
+    if (workflows.some((candidate) => isPlainObject(candidate) && candidate.id === workflowId)) {
+      throw new Error(
+        `refusing to register workflow ${JSON.stringify(workflowId)}: it is already registered ` +
+          `(root entry in ${statusPath}) \u2014 registration is create-only; ` +
+          "remove that workflow before registering again",
+      );
+    }
+    if (existsSync(snapshotPath)) {
+      // Crash/retry recovery: the snapshot exists but the root has no entry —
+      // no activation happened. Complete the registration against the
+      // EXISTING snapshot bytes; an identity mismatch refuses instead of
+      // adopting a foreign registration.
+      const existing = readWorkflowSnapshot(workflowDir);
+      if (
+        existing.snapshot.id !== workflowId ||
+        iterationWorkflowRegistrationIdentity(existing.snapshot) !== iterationWorkflowRegistrationIdentity(snapshot)
+      ) {
+        throw new Error(
+          `refusing to register workflow ${JSON.stringify(workflowId)}: snapshot ${snapshotPath} already exists ` +
+            "with a different registration identity \u2014 remove that workflow or register under a different id",
+        );
+      }
+      const recoveryEntry: WorkflowEntry = {
+        id: workflowId,
+        type: "iteration",
+        started_at: existing.snapshot.started_at,
+        dir: `workflows/${workflowId}`,
+      };
+      const recoveryGate = validateWorkflowEntry(recoveryEntry);
+      if (!recoveryGate.ok) {
+        throw new Error(
+          `refusing to register invalid workflow entry: ${recoveryGate.violations.map((v) => v.message).join("; ")}`,
+        );
+      }
+      await registerWorkflowEntryLocked(statusPath, recoveryEntry);
+      return { workflowId, snapshotPath, recovered: true };
+    }
+    let createdVersion: string | undefined;
+    try {
+      // Create-only (`absent`) under the root lock: the snapshot is written
+      // through the routed writer, which validates it and refuses to replace
+      // an existing document (spec §C4). The snapshot's own lock nests inside
+      // the root lock — root → snapshot is the documented acquisition order.
+      await writeWorkflowSnapshot(snapshot, workflowDir, { createOnly: true });
+      createdVersion = readArtifactBytes(snapshotPath)?.version;
+      await registerWorkflowEntryLocked(statusPath, entry);
+    } catch (error) {
+      // Roll back ONLY the exact snapshot version this call created, under
+      // the snapshot lock: a snapshot another writer changed in the meantime
+      // is never deleted.
+      if (createdVersion !== undefined) {
+        await withStatusWriteLock(snapshotPath, async () => {
+          const current = readArtifactBytes(snapshotPath);
+          if (current === undefined || current.version !== createdVersion) return;
+          const remove = store.delete?.bind(store);
+          if (remove !== undefined) {
+            await withProtectedWrite(snapshotPath, "delete", () => remove({ kind: "snapshot", key: workflowId }));
+          }
+        });
+      }
+      try {
+        // Remove the workflow dir only when empty — a concurrent writer's
+        // snapshot/rows are never destroyed; rmdirSync throws ENOTEMPTY if
+        // content appeared between the readdir and the removal.
+        if (readdirSync(workflowDir).length === 0) {
+          rmdirSync(workflowDir);
+        }
+      } catch {
+        // Dir non-empty or already gone — leave it; never force-remove.
+      }
+      throw error;
+    }
+    return { workflowId, snapshotPath, recovered: false };
+  });
+}

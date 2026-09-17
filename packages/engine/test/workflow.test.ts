@@ -41,9 +41,11 @@ import {
   WORKFLOW_SNAPSHOT_FILE,
   readWorkflowSnapshot,
   recordWorkflowDelivery,
+  registerIterationWorkflow,
   registerPlanWorkflow,
   validateWorkflowSnapshot,
   writeWorkflowSnapshot,
+  type RegisterIterationWorkflowOptions,
   type RegisterPlanWorkflowOptions,
 } from "../src/workflow.js";
 import { evaluatePostMergeClose } from "../src/iteration.js";
@@ -1624,6 +1626,378 @@ describe("registerPlanWorkflow — generic registration producer (seam S1)", () 
   test("hostile workflow id is refused by the path-component guard", async () => {
     const { root } = harness();
     await expect(registerPlanWorkflow("../escape", options(root))).rejects.toThrow(/safe path component/);
+    expect(existsSync(join(root, "workflows"))).toBe(false);
+    expect(existsSync(join(root, "escape"))).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// registerIterationWorkflow — iteration registration producer (seam S1
+// sibling): create-only `type: iteration` snapshot (compass ref, three branch
+// anchors, Todo rows with §1.5-derived metadata) + root entry under one lock,
+// same primitive sequence as registerPlanWorkflow; stale-same-id refusal
+// before BOTH branches; recovery identity includes coordinator ownership.
+// ---------------------------------------------------------------------------
+
+describe("registerIterationWorkflow — iteration registration producer", () => {
+  const id = "20260918-iteration-register-fixture";
+  const roots: string[] = [];
+  afterEach(() => {
+    setArtifactStore(undefined);
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  function harness(): { root: string; statusPath: string; dir: string; snapshotPath: string } {
+    const root = tmpRoot("iteration-register-");
+    roots.push(root);
+    setArtifactStore(createFsStore(root));
+    return { root, statusPath: join(root, "status.json"), dir: join(root, "workflows", id), snapshotPath: join(root, "workflows", id, WORKFLOW_SNAPSHOT_FILE) };
+  }
+
+  function options(root: string, overrides: Partial<RegisterIterationWorkflowOptions> = {}): RegisterIterationWorkflowOptions {
+    return {
+      harnessDir: root,
+      compassRef: "iterations/20260918-fixture/delivery-compass.md",
+      branch: { base: "main", integration: "feature/20260918-iteration-fixture", target: "main" },
+      rows: [
+        { id: "20260918-iteration-register-cli", title: "Engine producer", file: "plans/one.md" },
+        { id: "20260918-iteration-register-cli-2", title: "CLI verb", file: "plans/two.md" },
+      ],
+      project: "engine",
+      startedAt: "2026-09-18T00:00:00.000Z",
+      ...overrides,
+    };
+  }
+
+  function emptyRoot(): string {
+    return JSON.stringify({ version: 2, updated_at: "2026-09-01", workflows: [] }, null, 2);
+  }
+
+  test("registers an iteration: ordered Todo rows with derived metadata, anchors, compass, project — recovered false", async () => {
+    const { root, statusPath, snapshotPath } = harness();
+    const result = await registerIterationWorkflow(id, options(root));
+
+    expect(result.recovered).toBe(false);
+    expect(result.workflowId).toBe(id);
+    expect(result.snapshotPath).toBe(snapshotPath);
+    expect(existsSync(snapshotPath)).toBe(true);
+
+    const snapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as Record<string, unknown>;
+    // RFC3339 startedAt derives a date-only updated_at.
+    expect(snapshot).toMatchObject({
+      schema_version: 1,
+      id,
+      type: "iteration",
+      status: "running",
+      started_at: "2026-09-18T00:00:00.000Z",
+      updated_at: "2026-09-18",
+      compass_ref: "iterations/20260918-fixture/delivery-compass.md",
+      project: "engine",
+    });
+    expect(snapshot.branch).toEqual({ base: "main", integration: "feature/20260918-iteration-fixture", target: "main" });
+    expect(snapshot.delivery_kind).toBeUndefined();
+    // Rows keep order, are forced Todo, and carry §1.5-derived metadata.
+    expect(snapshot.plans).toEqual([
+      {
+        id: "20260918-iteration-register-cli",
+        title: "Engine producer",
+        file: "plans/one.md",
+        status: "Todo",
+        metadata: {
+          iteration_refs: ["iterations/20260918-fixture/delivery-compass.md"],
+          spec_integration_branch: "feature/20260918-iteration-fixture",
+          merge_target: "feature/20260918-iteration-fixture",
+        },
+      },
+      {
+        id: "20260918-iteration-register-cli-2",
+        title: "CLI verb",
+        file: "plans/two.md",
+        status: "Todo",
+        metadata: {
+          iteration_refs: ["iterations/20260918-fixture/delivery-compass.md"],
+          spec_integration_branch: "feature/20260918-iteration-fixture",
+          merge_target: "feature/20260918-iteration-fixture",
+        },
+      },
+    ]);
+
+    const rootDoc = JSON.parse(readFileSync(statusPath, "utf8")) as Record<string, unknown>;
+    expect(rootDoc.workflows).toEqual([{ id, type: "iteration", started_at: "2026-09-18T00:00:00.000Z", dir: `workflows/${id}` }]);
+
+    expect(validateWorkflowSnapshot(snapshot).ok).toBe(true);
+    expect(validateStatus(statusPath).ok).toBe(true);
+  });
+
+  test("date-only startedAt is valid; a plan producer registration in a separate harness stays type plan", async () => {
+    const iteration = harness();
+    const r1 = await registerIterationWorkflow(id, options(iteration.root, { startedAt: "2026-09-18" }));
+    expect(r1.recovered).toBe(false);
+    const snapshot = JSON.parse(readFileSync(iteration.snapshotPath, "utf8")) as Record<string, unknown>;
+    expect(snapshot.started_at).toBe("2026-09-18");
+    expect(snapshot.updated_at).toBe("2026-09-18");
+
+    // Type isolation: the plan producer registers a type: plan workflow under
+    // the same id in a SEPARATE harness — never two successes under one id.
+    const planRoot = tmpRoot("iteration-register-plan-isolation-");
+    roots.push(planRoot);
+    setArtifactStore(createFsStore(planRoot));
+    const r2 = await registerPlanWorkflow(id, {
+      harnessDir: planRoot,
+      plan: { id: "p-1", title: "P", file: "plans/p.md" },
+      deliveryKind: "development",
+      branchSource: "feature/p",
+      branchTarget: "main",
+      startedAt: "2026-09-18T00:00:00.000Z",
+    });
+    expect(r2.recovered).toBe(false);
+    const planSnapshot = JSON.parse(readFileSync(join(planRoot, "workflows", id, WORKFLOW_SNAPSHOT_FILE), "utf8")) as Record<string, unknown>;
+    expect(planSnapshot.type).toBe("plan");
+    expect(planSnapshot.compass_ref).toBeUndefined();
+  });
+
+  test("a failed root registration rolls the created snapshot back; retry after fixing converges; malformed/v1 roots keep their bytes", async () => {
+    const { root, statusPath, snapshotPath } = harness();
+    const staleRoot = {
+      version: 2,
+      updated_at: "2026-09-15",
+      workflows: [{ id: "other-wf", type: "plan", started_at: "2026-09-15T00:00:00.000Z", dir: "workflows/other-wf" }],
+    };
+    mkdirSync(root, { recursive: true });
+    writeFileSync(statusPath, JSON.stringify(staleRoot, null, 2));
+
+    await expect(registerIterationWorkflow(id, options(root))).rejects.toThrow(/invalid status\.json/);
+    expect(existsSync(snapshotPath)).toBe(false);
+    expect(existsSync(join(root, "workflows", id))).toBe(false);
+    expect(readFileSync(statusPath, "utf8")).toBe(JSON.stringify(staleRoot, null, 2));
+
+    // Retry after fixing the stale root converges.
+    writeFileSync(statusPath, emptyRoot());
+    const retry = await registerIterationWorkflow(id, options(root));
+    expect(retry.recovered).toBe(false);
+    expect(existsSync(snapshotPath)).toBe(true);
+    expect(validateStatus(statusPath).ok).toBe(true);
+
+    // Malformed JSON root refuses without replacing its bytes.
+    const { root: badRoot, statusPath: badStatus, snapshotPath: badSnapshot } = harness();
+    mkdirSync(badRoot, { recursive: true });
+    writeFileSync(badStatus, "{invalid", "utf8");
+    await expect(registerIterationWorkflow(id, options(badRoot))).rejects.toThrow(/Invalid JSON/);
+    expect(existsSync(badSnapshot)).toBe(false);
+    expect(readFileSync(badStatus, "utf8")).toBe("{invalid");
+
+    // A v1 root refuses without replacing its bytes.
+    const { root: v1Root, statusPath: v1Status, snapshotPath: v1Snapshot } = harness();
+    mkdirSync(v1Root, { recursive: true });
+    writeFileSync(v1Status, JSON.stringify({ version: 1, updated_at: "2026-09-01", workflows: [] }, null, 2));
+    await expect(registerIterationWorkflow(id, options(v1Root))).rejects.toThrow(/invalid status\.json/);
+    expect(existsSync(v1Snapshot)).toBe(false);
+    expect(JSON.parse(readFileSync(v1Status, "utf8")).version).toBe(1);
+  });
+
+  test("rollback removes only the exact snapshot version this call created", async () => {
+    const { root, statusPath, snapshotPath } = harness();
+    const fs = createFsStore(root);
+    const corrupting: ArtifactStore = {
+      root,
+      async put(doc: ArtifactDoc): Promise<void> {
+        if (doc.kind === "status") {
+          const current = JSON.parse(readFileSync(snapshotPath, "utf8")) as Record<string, unknown>;
+          writeFileSync(snapshotPath, JSON.stringify({ ...current, phase: "foreign-write" }, null, 2) + "\n");
+          throw new Error("injected root write failure");
+        }
+        return fs.put(doc);
+      },
+      async get<T>(ref): Promise<T | undefined> {
+        return fs.get<T>(ref);
+      },
+      async delete(ref): Promise<void> {
+        return fs.delete(ref);
+      },
+    };
+    setArtifactStore(corrupting);
+
+    await expect(registerIterationWorkflow(id, options(root))).rejects.toThrow(/injected root write failure/);
+    // The foreign-version snapshot survives; the dir is not force-removed.
+    expect(existsSync(snapshotPath)).toBe(true);
+    expect(JSON.parse(readFileSync(snapshotPath, "utf8")).phase).toBe("foreign-write");
+    expect(existsSync(join(root, "workflows", id))).toBe(true);
+    expect(existsSync(statusPath)).toBe(false);
+  });
+
+  test("create-only id collisions refuse without changing either document — including a stale same-id root entry", async () => {
+    const { root, statusPath, snapshotPath } = harness();
+    await registerIterationWorkflow(id, options(root));
+    const beforeSnapshot = readFileSync(snapshotPath, "utf8");
+    const beforeRoot = readFileSync(statusPath, "utf8");
+
+    await expect(registerIterationWorkflow(id, options(root))).rejects.toThrow(/already registered/);
+    expect(readFileSync(snapshotPath, "utf8")).toBe(beforeSnapshot);
+    expect(readFileSync(statusPath, "utf8")).toBe(beforeRoot);
+
+    // Stale same-id root entry whose snapshot is missing: refused before the
+    // create branch — no replacement snapshot is created and the stale entry
+    // is never rewritten.
+    const { root: staleRootDir, statusPath: staleStatus } = harness();
+    mkdirSync(staleRootDir, { recursive: true });
+    writeFileSync(staleStatus, JSON.stringify({
+      version: 2,
+      updated_at: "2026-09-17",
+      workflows: [{ id, type: "iteration", started_at: "2026-09-17T00:00:00.000Z", dir: `workflows/${id}` }],
+    }, null, 2));
+
+    await expect(registerIterationWorkflow(id, options(staleRootDir))).rejects.toThrow(/already registered/);
+    expect(existsSync(join(staleRootDir, "workflows", id))).toBe(false);
+    expect(JSON.parse(readFileSync(staleStatus, "utf8")).workflows).toEqual([
+      { id, type: "iteration", started_at: "2026-09-17T00:00:00.000Z", dir: `workflows/${id}` },
+    ]);
+  });
+
+  test("matching orphan recovery preserves bytes; a failed recovery root write never deletes the orphan", async () => {
+    const { root, statusPath, snapshotPath } = harness();
+    const first = await registerIterationWorkflow(id, options(root));
+    expect(first.recovered).toBe(false);
+    const orphanBytes = readFileSync(snapshotPath, "utf8");
+    const orphan = JSON.parse(orphanBytes) as Record<string, unknown>;
+    writeFileSync(statusPath, emptyRoot());
+
+    // Retry with a fresh clock (no explicit startedAt): the orphan's
+    // timestamps win and the snapshot bytes stay verbatim.
+    const { startedAt: _retryClock, ...retryOptions } = options(root);
+    const retry = await registerIterationWorkflow(id, retryOptions);
+    expect(retry.recovered).toBe(true);
+    expect(readFileSync(snapshotPath, "utf8")).toBe(orphanBytes);
+
+    const rootDoc = JSON.parse(readFileSync(statusPath, "utf8")) as Record<string, unknown>;
+    expect(rootDoc.workflows).toEqual([{ id, type: "iteration", started_at: orphan.started_at, dir: `workflows/${id}` }]);
+    expect(validateStatus(statusPath).ok).toBe(true);
+
+    // Recovery root-write failure: the orphan snapshot is never deleted.
+    const { root: failRoot, statusPath: failStatus, snapshotPath: failSnapshot } = harness();
+    await registerIterationWorkflow(id, options(failRoot));
+    const orphan2Bytes = readFileSync(failSnapshot, "utf8");
+    writeFileSync(failStatus, emptyRoot());
+    const fs = createFsStore(failRoot);
+    setArtifactStore({
+      root: failRoot,
+      async put(doc: ArtifactDoc): Promise<void> {
+        if (doc.kind === "status") throw new Error("injected recovery root failure");
+        return fs.put(doc);
+      },
+      async get<T>(ref): Promise<T | undefined> {
+        return fs.get<T>(ref);
+      },
+      async delete(ref): Promise<void> {
+        return fs.delete(ref);
+      },
+    });
+    const { startedAt: _c2, ...recoverOptions } = options(failRoot);
+    await expect(registerIterationWorkflow(id, recoverOptions)).rejects.toThrow(/injected recovery root failure/);
+    expect(readFileSync(failSnapshot, "utf8")).toBe(orphan2Bytes);
+    expect((JSON.parse(readFileSync(failStatus, "utf8")) as Record<string, unknown>).workflows).toEqual([]);
+  });
+
+  test("foreign orphan refusals: compass, branch, project, rows, snapshot id, coordinator; key order alone recovers", async () => {
+    // Row identity/order mismatch refuses.
+    {
+      const { root, statusPath, snapshotPath } = harness();
+      await registerIterationWorkflow(id, options(root));
+      const before = readFileSync(snapshotPath, "utf8");
+      writeFileSync(statusPath, emptyRoot());
+      const foreignRows = [...options(root).rows].reverse();
+      await expect(registerIterationWorkflow(id, options(root, { rows: foreignRows }))).rejects.toThrow(
+        /different registration identity/,
+      );
+      expect(readFileSync(snapshotPath, "utf8")).toBe(before);
+      expect((JSON.parse(readFileSync(statusPath, "utf8")) as Record<string, unknown>).workflows).toEqual([]);
+    }
+    // Compass / branch / project mismatch refuses with bytes unchanged.
+    for (const overrides of [
+      { compassRef: "iterations/other/delivery-compass.md" },
+      { branch: { base: "main", integration: "feature/other", target: "main" } },
+      { project: undefined },
+    ] as Partial<RegisterIterationWorkflowOptions>[]) {
+      const { root, statusPath, snapshotPath } = harness();
+      await registerIterationWorkflow(id, options(root));
+      const before = readFileSync(snapshotPath, "utf8");
+      writeFileSync(statusPath, emptyRoot());
+      await expect(registerIterationWorkflow(id, options(root, overrides))).rejects.toThrow(/different registration identity/);
+      expect(readFileSync(snapshotPath, "utf8")).toBe(before);
+    }
+    // A snapshot id differing from the requested id refuses even when the
+    // rest of the identity matches.
+    {
+      const { root, statusPath, snapshotPath } = harness();
+      await registerIterationWorkflow(id, options(root));
+      const before = readFileSync(snapshotPath, "utf8");
+      const misId = JSON.parse(before) as Record<string, unknown>;
+      misId.id = "some-other-id";
+      writeFileSync(snapshotPath, JSON.stringify(misId, null, 2));
+      writeFileSync(statusPath, emptyRoot());
+      await expect(registerIterationWorkflow(id, options(root))).rejects.toThrow(/different registration identity/);
+    }
+    // An already-bound orphan refuses: the candidate carries no coordinator.
+    {
+      const { root, statusPath, snapshotPath } = harness();
+      await registerIterationWorkflow(id, options(root));
+      const before = readFileSync(snapshotPath, "utf8");
+      const bound = JSON.parse(before) as Record<string, unknown>;
+      bound.coordination = { coordinator: { session_id: "s-1", session_file: join(root, "sessions", "s-1.json"), bound_at: "2026-09-18T00:00:00.000Z" } };
+      writeFileSync(snapshotPath, JSON.stringify(bound, null, 2));
+      writeFileSync(statusPath, emptyRoot());
+      await expect(registerIterationWorkflow(id, options(root))).rejects.toThrow(/different registration identity/);
+      expect(readFileSync(snapshotPath, "utf8")).toBe(JSON.stringify(bound, null, 2));
+    }
+    // JSON object-key order alone must NOT cause a mismatch: a reordered
+    // orphan with identical identity recovers.
+    {
+      const { root, statusPath, snapshotPath } = harness();
+      await registerIterationWorkflow(id, options(root));
+      const orphanBytes = readFileSync(snapshotPath, "utf8");
+      const reordered: Record<string, unknown> = {};
+      for (const key of [...Object.keys(JSON.parse(orphanBytes) as Record<string, unknown>)].reverse()) {
+        reordered[key] = (JSON.parse(orphanBytes) as Record<string, unknown>)[key];
+      }
+      writeFileSync(snapshotPath, JSON.stringify(reordered, null, 2));
+      writeFileSync(statusPath, emptyRoot());
+      const { startedAt: _c, ...noClock } = options(root);
+      const retry = await registerIterationWorkflow(id, noClock);
+      expect(retry.recovered).toBe(true);
+      expect(JSON.parse(readFileSync(snapshotPath, "utf8"))).toEqual(JSON.parse(orphanBytes));
+    }
+  });
+
+  test("input refusals happen before any write", async () => {
+    const { root } = harness();
+    const cases: Array<{ name: string; id?: string; options: Partial<RegisterIterationWorkflowOptions> }> = [
+      { name: "blank harnessDir", options: { harnessDir: "  " } },
+      { name: "blank compassRef", options: { compassRef: "" } },
+      { name: "branch object missing", options: { branch: undefined as unknown as RegisterIterationWorkflowOptions["branch"] } },
+      { name: "blank branch base", options: { branch: { base: "", integration: "feature/x", target: "main" } } },
+      { name: "blank branch integration", options: { branch: { base: "main", integration: " ", target: "main" } } },
+      { name: "blank branch target", options: { branch: { base: "main", integration: "feature/x", target: "" } } },
+      { name: "blank project", options: { project: "" } },
+      { name: "empty rows", options: { rows: [] } },
+      { name: "rows not an array", options: { rows: "nope" as unknown as RegisterIterationWorkflowOptions["rows"] } },
+      { name: "row not an object", options: { rows: ["nope" as unknown as RegisterIterationWorkflowOptions["rows"][number]] } },
+      { name: "row missing title", options: { rows: [{ id: "r", title: "", file: "plans/r.md" }] } },
+      { name: "row missing file", options: { rows: [{ id: "r", title: "R", file: "" }] } },
+      { name: "duplicate row ids", options: { rows: [{ id: "r", title: "R", file: "a.md" }, { id: "r", title: "R2", file: "b.md" }] } },
+      { name: "supplied row status", options: { rows: [{ id: "r", title: "R", file: "a.md", status: "InProgress" } as unknown as RegisterIterationWorkflowOptions["rows"][number]] } },
+      { name: "invalid startedAt", options: { startedAt: "not-a-date" } },
+    ];
+    for (const c of cases) {
+      await expect(registerIterationWorkflow(c.id ?? id, options(root, c.options))).rejects.toThrow(/registerIterationWorkflow/);
+    }
+    // No partial activation anywhere: engine domain refusals (not CLI
+    // transport errors) fired before any artifact was created.
+    expect(existsSync(join(root, "workflows"))).toBe(false);
+    expect(existsSync(join(root, "status.json"))).toBe(false);
+  });
+
+  test("hostile workflow id is refused by the path-component guard", async () => {
+    const { root } = harness();
+    await expect(registerIterationWorkflow("../escape", options(root))).rejects.toThrow(/safe path component/);
     expect(existsSync(join(root, "workflows"))).toBe(false);
     expect(existsSync(join(root, "escape"))).toBe(false);
   });

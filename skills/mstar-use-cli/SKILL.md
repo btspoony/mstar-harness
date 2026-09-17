@@ -53,6 +53,7 @@ Find the task, run the family, then read its owning skill for the rules around i
 | Run the pinned integration and record Done; recover a crashed attempt | `mstar plan integration-start`, `mstar plan integration-accept`, `mstar plan complete`, `mstar plan reconcile` | `mstar-branch-worktree`, `mstar-iteration` |
 | Amend an approved Prepare scope | `mstar workflow show-prepare`, `mstar workflow amend-prepare` | `mstar-artifacts` |
 | Register a standalone plan workflow; record delivery evidence | `mstar workflow register`, `mstar workflow evidence` | `mstar-artifacts` |
+| Register an iteration workflow | `mstar iteration register` | `mstar-artifacts` (lifecycle semantics) |
 | Close one finished lifecycle (terminal snapshot + root unregister) | `mstar status workflow-close` | `mstar-iteration` (Phase 6) |
 | Validate a coordination document before trusting or replacing it | `mstar status validate` | `mstar-artifacts` |
 | Read the residual rollup; enforce a plan's findings-cleanup mode; register or close deferred backlog | `mstar status tech-debt`, `mstar status findings-cleanup`, `mstar status backlog-register`, `mstar status backlog-close` | `mstar-project-governance`, `mstar-artifacts` |

@@ -150,9 +150,9 @@ owner 取值仅限 Phase 1 链：`product-manager` / `architect` / `writing-spec
 
 iteration 正式全流程**必须**登记 `{HARNESS_DIR}/status.json`（v2 根）+ `{WORKFLOW_DIR}/<id>/snapshot.json`：
 
-- 根 `status.json` `workflows[]` 增一条 active entry：`{ "id": "<iteration-id>", "type": "iteration", "started_at", "dir": "workflows/<iteration-id>" }`（engine `registerWorkflow`）。
+- 用 **`mstar iteration register`** 一次写入两份文档：create-only 的 `type: "iteration"` snapshot（`{WORKFLOW_DIR}/<id>/snapshot.json`）+ 根 `status.json` `workflows[]` active entry（`{ "id": "<iteration-id>", "type": "iteration", "started_at", "dir": "workflows/<iteration-id>" }`），二者在同一把根锁内完成。snapshot 已存在而 root entry 缺失（两次写入之间崩溃）时，重跑即恢复：保留既有 snapshot 字节，只补写缺失的 root entry。必填输入：workflow id、compass ref、三个 branch anchors、Todo plan 行（registration 从不授权实现）。store-pinning / 写入顺序 / rollback 语义 → **`mstar-artifacts`** `references/plan-workflow-lifecycle-contract.md` §4a。flag 集合与措辞以命令 help 为准（`mstar iteration register --help`），本文件不复述。
 - snapshot 顶层 `branch` anchors：`base`（= `iteration_base_branch`，创建 `spec_integration_branch` 的祖先 ref——**不是**隐式 `main`）、`integration`（= `spec_integration_branch`）、`target`（= iteration-close 后 PR 的目标分支）。
-- 各 plan 行 `metadata.iteration_refs`、`spec_integration_branch`、`merge_target`（`merge_target` 通常为 `spec_integration_branch`）。
+- 各 plan 行 `metadata.iteration_refs`、`spec_integration_branch`、`merge_target`（`merge_target` 通常为 `spec_integration_branch`）由 producer 从 compass / integration 输入**派生**——PM 无需也不应手工构造这些字段。
 
 compass frontmatter 的 `iteration_base_branch` / `target_branch` **必须与** snapshot `branch` 一致；若仅写在 compass 而 snapshot 缺失，Phase 2 §2.3 同轮 backfill。
 
