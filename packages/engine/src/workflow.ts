@@ -1233,7 +1233,7 @@ export async function recordWorkflowDelivery(
         const detail = violation(
           "high",
           "PHASE6_PLAN_ROW_NOT_DONE",
-          `owned plan row(s) ${rowDetail} are not Done — every plan row must be Done before the delivery tail (${tailMembers.join(", ")}) is recorded (mstar-artifacts/references/plan-workflow-lifecycle-contract.md §3: row Done → compound disposition → PR identity → verified-merge record)`,
+          `owned plan row(s) ${rowDetail} are not Done - every plan row must be Done before the delivery tail (${tailMembers.join(", ")}) is recorded (mstar-artifacts/references/plan-workflow-lifecycle-contract.md section 3: row Done -> compound disposition -> PR identity -> verified-merge record)`,
           `Bring every owned plan row to Done, then record delivery evidence with 'mstar workflow evidence --workflow ${workflowId} --file <payload.json>'`,
         );
         throw new Error(
