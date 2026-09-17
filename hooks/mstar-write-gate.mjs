@@ -272,7 +272,7 @@ function validatePlanProgress(value, what = "coordination.progress") {
   }
   return violations;
 }
-function validatePlanHandoff(value, what = "coordination.handoff") {
+function validatePlanHandoff(value, what = "coordination.handoff", route = "integration") {
   if (!isPlainObject2(value))
     return [invalid("coordination.row.handoff-shape", `${what} must be an object`)];
   const allowed = [
@@ -412,7 +412,25 @@ function validatePlanHandoff(value, what = "coordination.handoff") {
     }
   }
   if ((value.state === "integrating" || value.state === "merged" || value.state === "completed") && value.integration === undefined) {
-    violations.push(invalid("coordination.row.handoff-field", `${what}.state ${String(value.state)} requires integration`));
+    if (route === "standalone-development" && value.state === "completed") {
+      if (value.completed_at === undefined) {
+        violations.push(invalid("coordination.row.handoff-field", `${what}.state completed requires completed_at for a standalone handoff`));
+      }
+      if (!isNonEmptyString(value.accepted_at)) {
+        violations.push(invalid("coordination.row.handoff-field", `${what}.accepted_at is required for a standalone completed handoff`));
+      }
+      if (!isNonEmptyString(value.accepted_by)) {
+        violations.push(invalid("coordination.row.handoff-field", `${what}.accepted_by is required for a standalone completed handoff`));
+      }
+      if (value.qc === undefined) {
+        violations.push(invalid("coordination.row.handoff-field", `${what}.qc is required for a standalone completed handoff`));
+      }
+      if (value.qa === undefined) {
+        violations.push(invalid("coordination.row.handoff-field", `${what}.qa is required for a standalone completed handoff`));
+      }
+    } else {
+      violations.push(invalid("coordination.row.handoff-field", `${what}.state ${String(value.state)} requires integration`));
+    }
   }
   return violations;
 }
@@ -448,7 +466,7 @@ function validatePreparedCoordination(value, what = "coordination.prepared") {
   }
   return violations;
 }
-function validateRowCoordination(value, what = "coordination") {
+function validateRowCoordination(value, what = "coordination", route = "integration") {
   if (!isPlainObject2(value))
     return [invalid("coordination.row.shape", `${what} must be an object`)];
   const allowed = ["revision", "prepared", "session", "progress", "handoff"];
@@ -467,7 +485,7 @@ function validateRowCoordination(value, what = "coordination") {
   if (value.progress !== undefined)
     violations.push(...validatePlanProgress(value.progress, `${what}.progress`));
   if (value.handoff !== undefined)
-    violations.push(...validatePlanHandoff(value.handoff, `${what}.handoff`));
+    violations.push(...validatePlanHandoff(value.handoff, `${what}.handoff`, route));
   if (value.handoff !== undefined && value.session === undefined) {
     violations.push(invalid("coordination.row.handoff-field", `${what}.handoff requires a bound plan session`));
   }
@@ -514,6 +532,45 @@ var WORKFLOW_TERMINAL_STATUSES = ["completed", "failed", "stopped"];
 var WORKFLOW_LIFECYCLE_TYPES = ["plan", "iteration"];
 var WORKFLOW_DELIVERY_KINDS = ["development", "verification/report-only"];
 var WORKFLOW_COMPOUND_OUTCOMES = ["created", "updated", "skipped"];
+function isStandaloneDevelopmentWorkflow(snapshot) {
+  return snapshot.type === "plan" && snapshot.delivery_kind === "development" && Array.isArray(snapshot.plans) && snapshot.plans.length === 1;
+}
+function rowValidationRouteForSnapshot(snapshot, row) {
+  if (isStandaloneDevelopmentWorkflow(snapshot) && snapshot.plans[0]?.id === row.id) {
+    return "standalone-development";
+  }
+  return "integration";
+}
+function validateStandaloneCompletedCoherence(snapshot, row) {
+  const violations = [];
+  if (!isStandaloneDevelopmentWorkflow(snapshot) || row.id !== snapshot.plans[0]?.id)
+    return violations;
+  const coordination = row.coordination;
+  if (!isPlainObject2(coordination) || !isPlainObject2(coordination.handoff))
+    return violations;
+  const handoff = coordination.handoff;
+  if (handoff.state !== "completed" || handoff.integration !== undefined)
+    return violations;
+  if (row.status !== "Done") {
+    violations.push(violation3("high", "coordination.row.handoff-field", `standalone completed handoff requires row ${String(row.id)} to be Done`));
+  }
+  if (row.execution_lease !== undefined) {
+    violations.push(violation3("high", "coordination.row.handoff-field", `standalone completed handoff requires no execution lease on row ${String(row.id)}`));
+  }
+  if (snapshot.integration_merge_lease !== undefined) {
+    violations.push(violation3("high", "coordination.row.handoff-field", "standalone completed handoff requires no integration_merge_lease on the snapshot"));
+  }
+  const source = snapshot.branch?.source;
+  const target = snapshot.branch?.target;
+  if (!isNonEmptyString(source) || !isNonEmptyString(target)) {
+    violations.push(violation3("high", "coordination.row.handoff-field", "standalone completed handoff requires nonblank branch.source and branch.target"));
+  } else {
+    if (handoff.source_branch !== source) {
+      violations.push(violation3("high", "coordination.row.handoff-field", `standalone completed handoff source_branch ${String(handoff.source_branch)} must equal branch.source ${source}`));
+    }
+  }
+  return violations;
+}
 function violation3(severity, code, message, fix) {
   return { ok: false, severity, code, message, fix };
 }
@@ -624,13 +681,17 @@ function validateWorkflowSnapshot(doc) {
   } else if (!Array.isArray(doc.plans)) {
     violations.push(violation3("high", "workflow.snapshot.invalid-plans", "plans must be an array of legacy plan rows"));
   } else {
+    const snapshotDoc = doc;
     for (const row of doc.plans) {
       violations.push(...validatePlanRow(row).violations);
       if (isPlainObject2(row) && row.execution_lease !== undefined) {
         violations.push(...validateExecutionLease(row.execution_lease).violations);
       }
       if (isPlainObject2(row) && row.coordination !== undefined) {
-        violations.push(...validateRowCoordination(row.coordination, `plans[${String(row.id)}].coordination`));
+        const planRow = row;
+        const route = rowValidationRouteForSnapshot(snapshotDoc, planRow);
+        violations.push(...validateRowCoordination(row.coordination, `plans[${String(row.id)}].coordination`, route));
+        violations.push(...validateStandaloneCompletedCoherence(snapshotDoc, planRow));
       }
     }
   }
