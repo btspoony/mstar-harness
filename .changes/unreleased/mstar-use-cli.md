@@ -13,7 +13,7 @@ packages: root
 
 - Granted the **QC seats and `code-reviewer`** read-only CLI validators in their bash allowlist (`qc validate-report`, `lint`, `dispatch validate`, `worktree qc-alignment`, `status validate`, `lease verify`), removing the contradiction where a skill required a machine-checked gate the seat had no permission to run.
 
-- Updated the **host support tiers** in the README pair: **`dsh = omp ≥ ZCode = OpenCode = Cursor > Kimi > Codex`**. ZCode now shares a tier with OpenCode and Cursor because its plugin hooks enforce the branch/worktree gates and the engine-backed coordination-write gate at tool-call time — runtime integration in the same class as OpenCode's.
+- Updated the **host support tiers** in the README pair: **`dsh = omp ≥ ZCode = OpenCode = Cursor > Kimi > Codex`**. ZCode now shares a tier with OpenCode and Cursor: its plugin hooks enforce the default-branch commit guard, the bare-force-push guard and the engine-backed coordination-write gate at tool-call time — runtime integration in the same class as OpenCode's. Worktree isolation stays skill guidance rather than a hook-enforced check.
 
 <!-- CN -->
 - 新增 **`mstar-use-cli`** skill，作为 CLI 的 agent 面向 SSOT：任务→命令族索引、前置条件阶梯（harness root 解析、control root 与 feature worktree、neutral cwd、session envelope、revision 与 byte token）、两条规范序列（带版本的 read-modify-write、plan 完成序列），以及退出码 `0` / `1` / `2` 的读法——含参数解析器对缺参返回 `1` 的例外。**不复述 flags**：一律以各命令自身 `--help` 为准。
@@ -26,4 +26,4 @@ packages: root
 
 - **QC 三席与 `code-reviewer`** 的 bash 白名单获得只读 CLI 校验命令（`qc validate-report`、`lint`、`dispatch validate`、`worktree qc-alignment`、`status validate`、`lease verify`），消除「skill 要求席位跑机器门禁、席位却无权限执行」的矛盾。
 
-- **README 双语对更新了宿主支持等级**：**`dsh = omp ≥ ZCode = OpenCode = Cursor > Kimi > Codex`**。ZCode 升入与 OpenCode、Cursor 并列的档位：其插件 hooks 已在工具调用时执行分支/worktree 门禁与引擎背书的协调写入门禁，属与 OpenCode 同一档的运行期集成。
+- **README 双语对更新了宿主支持等级**：**`dsh = omp ≥ ZCode = OpenCode = Cursor > Kimi > Codex`**。ZCode 升入与 OpenCode、Cursor 并列的档位：其插件 hooks 在工具调用时执行默认分支 commit 守卫、裸 force push 守卫与引擎背书的协调写入门禁，属与 OpenCode 同一档的运行期集成。worktree 隔离仍由 skill 指导承载，尚未由 hook 强制。
