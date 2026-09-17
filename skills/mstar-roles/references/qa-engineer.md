@@ -27,7 +27,7 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 
 ## Core QA Gate Duties
 
-Before sign-off: validate phase-gate prerequisites, Assignment metadata alignment, and reproducible evidence for any **new** checks. Mode/mapping rules → **`references/qa-engineer/acceptance-gate.md`**. Retained `sdd evidence` bundles are integrity-checked and mapped read-only (captured-evidence mapping columns → **`references/qa-engineer/acceptance-gate.md`** § Captured evidence mapping); QA never repeats a captured child command, and manual historical evidence is never converted into a v1 runner record.
+Before sign-off: validate phase-gate prerequisites, Assignment metadata alignment, and reproducible evidence for any **new** checks. Mode/mapping rules → **`references/qa-engineer/acceptance-gate.md`**. Retained `sdd evidence` bundles are integrity-checked and mapped read-only (captured-evidence mapping → **`references/qa-engineer/acceptance-gate.md`** § Captured evidence mapping); QA never repeats a captured child command, and manual historical evidence is never converted into a v1 runner record.
 
 ## Branch & Review Context Gate
 
@@ -62,8 +62,8 @@ An Assignment that names no output path is not an exemption — the default abov
 - Truncated coverage: {present only when a bound actually stopped expansion — name the required ACs/interfaces left unchecked; omit this line on a complete run. Truncation is not `Unconfirmed`}
 
 ## Acceptance Criteria (AC → evidence → result)
-| AC | evidence reference | result | coverage |
-| --- | --- | --- | --- |
+| AC | run/manual reference | original input identity | integrity | outcome | target applicability and reason | coverage judgment | targeted gap |
+| --- | --- | --- | --- | --- | --- | --- | --- |
 
 ## Findings
 ## Reproduction steps
@@ -72,7 +72,7 @@ An Assignment that names no output path is not an exemption — the default abov
 ## Recommended owners
 ```
 
-The acceptance AC mapping uses the evidence columns defined in **`references/qa-engineer/acceptance-gate.md`** § Captured evidence mapping (`AC | run/manual reference | original input identity | integrity | outcome | target applicability and reason | coverage judgment | targeted gap`).
+Every assigned AC gets a row of that table with all eight columns recorded — a column that does not apply is written `n/a` / `not-assessed`, never dropped. What each column must contain for a retained `sdd evidence` bundle is defined in **`references/qa-engineer/acceptance-gate.md`** § Captured evidence mapping.
 
 ## Skill Preset (PM-Activated)
 

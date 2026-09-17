@@ -34,10 +34,7 @@ When **`QA mode: acceptance-only`**:
 
 ### Captured evidence mapping (`sdd evidence`)
 
-Retained `sdd evidence` bundles are consumed read-only: QA integrity-checks and maps the evidence — it never repeats the captured child command (exact command shapes and exit meanings → `mstar-sdd/references/file-handoffs.md` § Verification evidence). Map every AC with all columns:
-
-| AC | run/manual reference | original input identity | integrity | outcome | target applicability and reason | coverage judgment | targeted gap |
-| --- | --- | --- | --- | --- | --- | --- | --- |
+Retained `sdd evidence` bundles are consumed read-only: QA integrity-checks and maps the evidence — it never repeats the captured child command (exact command shapes, exit meanings and the four separate `verify` outputs → `mstar-sdd/references/file-handoffs.md` § Verification evidence). Map every AC with all columns of the report's AC table (**`references/qa-engineer.md`** § QA Report Landing and Template); for a retained bundle each column carries:
 
 - **Run/manual reference**: `{SDD_DIR}/evidence/<run-uuid>/` with the record and raw `stdout.log`/`stderr.log` paths — or the manual report/CI citation with provenance.
 - **Original input identity**: the recorded run's Git HEAD plus declared-input digest from `record.json` — the basis any target comparison reuses.
@@ -62,7 +59,7 @@ Ceiling and scope authority → **`mstar-harness-core`** § 定向执行与验�
 
 - **Label only a real cut.** Emit `- Truncated coverage: <budget reached; specific ACs/interfaces not covered>` in the report `## Scope` only when a bound actually stopped expansion, naming the required ACs/interfaces left unchecked, and record those ACs as unverified. Omit the line on a complete run — a negation value is still a line, and consumers read the label's presence, not its wording.
 - **Exhaustion is not a channel failure.** A cap stop never rewrites an observed result, never becomes `Unconfirmed`, and never invents new QA vocabulary. A required evidence channel that is unavailable is a verification gap, handled by the existing `Blocked` result.
-- **Coverage readback, per assigned AC.** A checked AC keeps its observed outcome and its evidence reference, including a witnessed failure; a required AC left without supported evidence is recorded as unverified and is not a pass.
+- **Coverage readback, per assigned AC.** A checked AC keeps its observed `outcome` and its `run/manual reference`, including a witnessed failure; a required AC left without supported evidence is recorded as unverified and is not a pass.
 
 | Readback | Required coverage | Result |
 | --- | --- | --- |
