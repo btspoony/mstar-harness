@@ -216,4 +216,4 @@ Apply where the repo actually has the surface. Absence is not a finding.
 - **Static evidence required:** every finding carries `file:line` and the code shape — the pattern plus the attacker-controlled input. No evidence, no finding.
 - Runtime-dependent claims are labeled exactly **requires runtime verification** and go to the audit index's **Needs verification** section — never reported as confirmed.
 - Findings use the standard finding format (**`references/finding-format.md`**); the Impact field must state the concrete attack scenario ("Send this request, get this result").
-- State what was NOT audited (effort level, unread packages, deployed-version assumptions) in the report, per the playbook's audit contract.
+- Record what was and was not audited as Coverage rows in the report — one row per material review question, never a bare "not audited" disclaimer — per **`references/codebase-audit.md`** § Coverage contract.
