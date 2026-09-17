@@ -51,6 +51,7 @@ import {
   isPlainObject,
   readArtifactBytes,
   sha256Bytes,
+  validatePlanHandoff,
   validatePlanProgress,
   validatePreparedCoordination,
   validateRowCoordination,
@@ -93,8 +94,11 @@ import { rowPlanIds, validatePlanRow, validateResidual, validateStatusV2, type P
 import { getArtifactStore, resolveArtifactPath, type ArtifactRef, type ArtifactStore } from "./store.js";
 import { isDistinctCheckout, readMainWorktree, type MainWorktreeInfo } from "./worktree.js";
 import {
+  isStandaloneDevelopmentWorkflow,
+  rowValidationRoute,
   readWorkflowSnapshot,
   validateWorkflowSnapshot,
+  WORKFLOW_TERMINAL_STATUSES,
   writeWorkflowSnapshot,
   type WorkflowBranchAnchors,
   type WorkflowExecutionPolicy,
@@ -270,6 +274,7 @@ export type PlanCoordinationOperation =
   | { kind: "integration-start"; handoffId: string }
   | { kind: "integration-accept"; handoffId: string }
   | { kind: "complete"; handoffId: string }
+  | { kind: "repair-delivery-source"; handoffId: string }
   | { kind: "reconcile"; handoffId: string };
 
 /** One whole coordination request: one session, one operation, one precondition. */
@@ -327,6 +332,7 @@ const IMPLEMENTED_OPERATIONS: Record<string, true> = {
   "integration-start": true,
   "integration-accept": true,
   complete: true,
+  "repair-delivery-source": true,
   reconcile: true,
 };
 
@@ -1233,7 +1239,11 @@ function allowedOperations(
         out.push("accept", "return");
         break;
       case "accepted":
-        out.push("return", "integration-start");
+        if (isStandaloneDevelopmentWorkflow(snapshot)) {
+          out.push("return", "complete", "repair-delivery-source");
+        } else {
+          out.push("return", "integration-start");
+        }
         break;
       case "integrating":
         out.push("integration-accept", "complete", "reconcile");
@@ -2351,6 +2361,13 @@ export async function mutatePlanCoordination(request: CoordinationRequest): Prom
         expectedRevision,
       });
     }
+    case "repair-delivery-source": {
+      assertExactKeys(operation, ["kind", "handoffId"], "repair-delivery-source operation");
+      return mutateRepairDeliverySource(await coordinatorScope(session, request.planId, kind), session, sessionAbs, {
+        handoffId: namedHandoffId(operation),
+        expectedRevision,
+      });
+    }
     case "reconcile": {
       assertExactKeys(operation, ["kind", "handoffId"], "reconcile operation");
       return mutateReconcile(await coordinatorScope(session, request.planId, kind), session, sessionAbs, {
@@ -2394,6 +2411,7 @@ const COORDINATOR_OPERATIONS: readonly string[] = [
   "integration-start",
   "integration-accept",
   "complete",
+  "repair-delivery-source",
   "reconcile",
 ];
 
@@ -3468,6 +3486,619 @@ async function mutateIntegrationAccept(
   };
 }
 
+
+function validateRowCoordinationInContext(context: RowContext, coordination: RowCoordination, what: string): void {
+  assertViolationFree(validateRowCoordination(coordination, what, rowValidationRoute(context.snapshot, context.row)), what);
+}
+
+function standaloneDeliveryAnchors(snapshot: WorkflowSnapshot, planId: string): { source: string; target: string } {
+  const source = snapshot.branch?.source;
+  const target = snapshot.branch?.target;
+  if (!isNonEmptyString(source) || !isNonEmptyString(target)) {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `plan ${planId} has no delivery anchors \u2014 the snapshot must name branch.source and branch.target`,
+      { plan_id: planId },
+    );
+  }
+  return { source, target };
+}
+
+function assertStandaloneRoute(snapshot: WorkflowSnapshot, planId: string, what: string): void {
+  if (!isStandaloneDevelopmentWorkflow(snapshot)) {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `${what} requires a standalone development workflow for plan ${planId}`,
+      { plan_id: planId },
+    );
+  }
+}
+
+function assertNoIntegrationContamination(
+  context: RowContext,
+  planId: string,
+  handoff: PlanHandoff,
+  what: string,
+  code: CoordinationError["code"] = "coordination.invalid-transition",
+): void {
+  if (handoff.integration !== undefined) {
+    throw new CoordinationError(
+      code,
+      `${what} refuses plan ${planId} because the handoff already carries an integration record`,
+      { plan_id: planId },
+    );
+  }
+  if (context.snapshot.integration_worktree_path !== undefined) {
+    throw new CoordinationError(
+      code,
+      `${what} refuses plan ${planId} because the snapshot names integration_worktree_path`,
+      { plan_id: planId },
+    );
+  }
+  if (isNonEmptyString(context.snapshot.branch?.integration)) {
+    throw new CoordinationError(
+      code,
+      `${what} refuses plan ${planId} because the snapshot names branch.integration`,
+      { plan_id: planId, integration: context.snapshot.branch?.integration },
+    );
+  }
+  if (context.snapshot.integration_merge_lease !== undefined) {
+    throw new CoordinationError(
+      code,
+      `${what} refuses plan ${planId} because the snapshot carries an integration merge lease`,
+      { plan_id: planId },
+    );
+  }
+}
+
+function assertAcceptedReviewDecision(handoff: PlanHandoff, planId: string, what: string): void {
+  if (handoff.qc.decision !== "Approve" && handoff.qc.decision !== "Approve with residuals") {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `${what} requires an accepted QC decision for plan ${planId} \u2014 got ${handoff.qc.decision}`,
+      { plan_id: planId, decision: handoff.qc.decision },
+    );
+  }
+  if (handoff.qa.decision !== "pass") {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `${what} requires QA decision pass for plan ${planId} \u2014 got ${handoff.qa.decision}`,
+      { plan_id: planId, decision: handoff.qa.decision },
+    );
+  }
+}
+
+function assertStandaloneBranchIdentity(
+  context: RowContext,
+  scope: ResolvedPlanScope,
+  handoff: PlanHandoff,
+  anchors: { source: string; target: string },
+  what: string,
+  requireLease = true,
+): void {
+  const worktree = canonicalTarget(scope.worktreePath);
+  if (handoff.source_branch !== anchors.source) {
+    throw new CoordinationError(
+      "coordination.scope-mismatch",
+      `${what} requires handoff.source_branch ${handoff.source_branch} to equal the registered delivery source ${anchors.source}`,
+      { plan_id: scope.planId, expected: anchors.source, actual: handoff.source_branch },
+    );
+  }
+  if (requireLease) {
+    const lease = requireExecutionLease(context.row, scope.planId, what);
+    if (scope.workingBranch !== anchors.source) {
+      throw new CoordinationError(
+        "coordination.scope-mismatch",
+        `${what} requires the prepared working branch ${scope.workingBranch} to equal the registered delivery source ${anchors.source}`,
+        { plan_id: scope.planId, expected: anchors.source, actual: scope.workingBranch },
+      );
+    }
+    if (lease.working_branch !== anchors.source) {
+      throw new CoordinationError(
+        "coordination.scope-mismatch",
+        `${what} requires the execution lease working branch ${lease.working_branch} to equal the registered delivery source ${anchors.source}`,
+        { plan_id: scope.planId, expected: anchors.source, actual: lease.working_branch },
+      );
+    }
+    if (canonicalTarget(lease.worktree_path) !== worktree) {
+      throw new CoordinationError(
+        "coordination.path-mismatch",
+        `${what} requires the execution lease worktree ${lease.worktree_path} to equal the prepared scope ${worktree}`,
+        { plan_id: scope.planId, expected: worktree, actual: lease.worktree_path },
+      );
+    }
+  }
+  if (canonicalTarget(handoff.worktree_path) !== worktree) {
+    throw new CoordinationError(
+      "coordination.path-mismatch",
+      `${what} requires the handoff worktree ${handoff.worktree_path} to equal the prepared scope ${worktree}`,
+      { plan_id: scope.planId, expected: worktree, actual: handoff.worktree_path },
+    );
+  }
+  const metadata = context.row.metadata;
+  if (isPlainObject(metadata) && metadata.working_branch !== undefined && metadata.working_branch !== anchors.source) {
+    throw new CoordinationError(
+      "coordination.scope-mismatch",
+      `${what} requires row metadata.working_branch to equal the registered delivery source ${anchors.source}`,
+      { plan_id: scope.planId, expected: anchors.source, actual: metadata.working_branch },
+    );
+  }
+  if (isPlainObject(metadata) && metadata.worktree_path !== undefined && canonicalTarget(String(metadata.worktree_path)) !== worktree) {
+    throw new CoordinationError(
+      "coordination.path-mismatch",
+      `${what} requires row metadata.worktree_path to equal the prepared scope ${worktree}`,
+      { plan_id: scope.planId, expected: worktree, actual: metadata.worktree_path },
+    );
+  }
+}
+
+function assertStandaloneSourceGitProof(scope: ResolvedPlanScope, handoff: PlanHandoff, sourceBranch: string, what: string): void {
+  assertFeatureCheckout(scope, handoff.source_sha, what);
+  const branch = gitRead(scope.worktreePath, ["rev-parse", "--abbrev-ref", "HEAD"]);
+  if (branch !== sourceBranch) {
+    throw gitProof(
+      `${what} requires the plan worktree ${scope.worktreePath} to be on ${sourceBranch} \u2014 got ${branch || "a detached HEAD"}`,
+      { plan_id: scope.planId, expected: sourceBranch, actual: branch },
+    );
+  }
+  const refTip = gitRead(scope.worktreePath, ["rev-parse", `refs/heads/${sourceBranch}`]);
+  if (refTip !== handoff.source_sha) {
+    throw gitProof(
+      `${what} requires refs/heads/${sourceBranch} to resolve to the pinned source ${handoff.source_sha} \u2014 got ${refTip || "missing"}`,
+      { plan_id: scope.planId, expected: handoff.source_sha, actual: refTip },
+    );
+  }
+  if (handoff.review_head !== handoff.source_sha) {
+    throw gitProof(
+      `${what} requires review_head to be the pinned source ${handoff.source_sha} \u2014 got ${handoff.review_head}`,
+      { plan_id: scope.planId, source_sha: handoff.source_sha, review_head: handoff.review_head },
+    );
+  }
+  if (!gitObjectExists(scope.worktreePath, handoff.review_base)) {
+    throw gitProof(`${what} review base ${handoff.review_base} is not a commit of ${scope.worktreePath}`, {
+      plan_id: scope.planId,
+      review_base: handoff.review_base,
+    });
+  }
+  if (!gitIsAncestor(scope.worktreePath, handoff.review_base, handoff.review_head)) {
+    throw gitProof(
+      `${what} review range ${handoff.review_base}..${handoff.review_head} is not an ancestry`,
+      { plan_id: scope.planId, review_base: handoff.review_base, review_head: handoff.review_head },
+    );
+  }
+}
+
+async function assertStandaloneCompletionPrecheck(
+  context: RowContext,
+  scope: ResolvedPlanScope,
+  session: CoordinationSession,
+  handoff: PlanHandoff,
+): Promise<void> {
+  assertStandaloneRoute(context.snapshot, scope.planId, "complete");
+  if (context.snapshot.status !== "running") {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `complete requires workflow ${context.snapshot.id} to still be running \u2014 got ${context.snapshot.status}`,
+      { workflow_id: context.snapshot.id, status: context.snapshot.status },
+    );
+  }
+  if (handoff.state !== "accepted") {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `plan ${scope.planId} handoff is ${handoff.state} \u2014 standalone complete requires an accepted handoff`,
+      { plan_id: scope.planId, state: handoff.state },
+    );
+  }
+  if (rowStatusOf(context.row) !== "InReview") {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `complete requires ${scope.planId} to still be InReview`,
+      { plan_id: scope.planId, status: context.row.status },
+    );
+  }
+  const prepared = context.coordination?.prepared;
+  if (prepared === undefined) {
+    throw new CoordinationError(
+      "coordination.not-prepared",
+      `plan ${scope.planId} is not prepared in this workflow`,
+      { plan_id: scope.planId },
+    );
+  }
+  assertNoIntegrationContamination(context, scope.planId, handoff, "complete");
+  assertEvidenceDigests(handoff);
+  assertAcceptedReviewDecision(handoff, scope.planId, "complete");
+  if (handoff.qa.gate !== prepared.qa_gate) {
+    throw new CoordinationError(
+      "coordination.assignment-stale",
+      `complete qa.gate ${handoff.qa.gate} is not the Assignment's QA gate ${prepared.qa_gate}`,
+      { plan_id: scope.planId, expected: prepared.qa_gate, actual: handoff.qa.gate },
+    );
+  }
+  await assertFindingsClosed(scope, prepared, "complete");
+  assertExecutionHolder(context.row, session.session_id, scope.planId, "complete");
+  const anchors = standaloneDeliveryAnchors(context.snapshot, scope.planId);
+  assertStandaloneBranchIdentity(context, scope, handoff, anchors, "complete");
+  assertStandaloneSourceGitProof(scope, handoff, anchors.source, "complete");
+}
+
+
+function requireAcceptedHandoffForRepair(
+  context: RowContext,
+  planId: string,
+  namedHandoffId: string,
+): PlanHandoff {
+  const handoff = context.coordination?.handoff;
+  if (
+    handoff === undefined ||
+    handoff.id !== namedHandoffId ||
+    handoff.state !== "accepted" ||
+    rowStatusOf(context.row) !== "InReview"
+  ) {
+    throw new CoordinationError(
+      "coordination.delivery-source-repair.no-accepted-handoff",
+      `repair-delivery-source requires plan ${planId} to carry the named accepted handoff while InReview`,
+      { plan_id: planId, handoff_id: namedHandoffId, state: handoff?.state, status: context.row.status },
+    );
+  }
+  return handoff;
+}
+
+function assertRepairNotTerminal(snapshot: WorkflowSnapshot): void {
+  if ((WORKFLOW_TERMINAL_STATUSES as readonly string[]).includes(snapshot.status)) {
+    throw new CoordinationError(
+      "coordination.delivery-source-repair.terminal",
+      `repair-delivery-source refuses workflow ${snapshot.id} in terminal status ${snapshot.status}`,
+      { workflow_id: snapshot.id, status: snapshot.status },
+    );
+  }
+}
+
+function assertLegacyRepairShape(
+  snapshot: WorkflowSnapshot,
+  planId: string,
+  handoff: PlanHandoff,
+): { target: string; candidateSource: string } {
+  const source = snapshot.branch?.source;
+  const target = snapshot.branch?.target;
+  if (!isNonEmptyString(source) || !isNonEmptyString(target)) {
+    throw new CoordinationError(
+      "coordination.delivery-source-repair.not-legacy-shape",
+      `repair-delivery-source requires nonblank delivery anchors on plan ${planId}`,
+      { plan_id: planId },
+    );
+  }
+  const candidateSource = handoff.source_branch;
+  if (!isNonEmptyString(candidateSource)) {
+    throw new CoordinationError(
+      "coordination.delivery-source-repair.not-legacy-shape",
+      `repair-delivery-source requires the accepted handoff to name a nonblank source branch for plan ${planId}`,
+      { plan_id: planId },
+    );
+  }
+  if (source === candidateSource) {
+    throw new CoordinationError(
+      "coordination.delivery-source-repair.already-aligned",
+      `repair-delivery-source refuses plan ${planId} because branch.source already equals the accepted handoff source ${candidateSource}`,
+      { plan_id: planId, source, candidate: candidateSource },
+    );
+  }
+  if (source !== target) {
+    throw new CoordinationError(
+      "coordination.delivery-source-repair.not-legacy-shape",
+      `repair-delivery-source requires the legacy shape branch.source === branch.target for plan ${planId} \u2014 got source ${source} and target ${target}`,
+      { plan_id: planId, source, target },
+    );
+  }
+  return { target, candidateSource };
+}
+
+function assertRepairBranchIdentity(
+  context: RowContext,
+  scope: ResolvedPlanScope,
+  handoff: PlanHandoff,
+  candidateSource: string,
+  what: string,
+): void {
+  const worktree = canonicalTarget(scope.worktreePath);
+  if (handoff.source_branch !== candidateSource) {
+    throw new CoordinationError(
+      "coordination.scope-mismatch",
+      `${what} requires handoff.source_branch ${handoff.source_branch} to equal the candidate delivery source ${candidateSource}`,
+      { plan_id: scope.planId, expected: candidateSource, actual: handoff.source_branch },
+    );
+  }
+  const lease = requireExecutionLease(context.row, scope.planId, what);
+  if (scope.workingBranch !== candidateSource) {
+    throw new CoordinationError(
+      "coordination.scope-mismatch",
+      `${what} requires the prepared working branch ${scope.workingBranch} to equal the candidate delivery source ${candidateSource}`,
+      { plan_id: scope.planId, expected: candidateSource, actual: scope.workingBranch },
+    );
+  }
+  if (lease.working_branch !== candidateSource) {
+    throw new CoordinationError(
+      "coordination.scope-mismatch",
+      `${what} requires the execution lease working branch ${lease.working_branch} to equal the candidate delivery source ${candidateSource}`,
+      { plan_id: scope.planId, expected: candidateSource, actual: lease.working_branch },
+    );
+  }
+  if (canonicalTarget(lease.worktree_path) !== worktree) {
+    throw new CoordinationError(
+      "coordination.path-mismatch",
+      `${what} requires the execution lease worktree ${lease.worktree_path} to equal the prepared scope ${worktree}`,
+      { plan_id: scope.planId, expected: worktree, actual: lease.worktree_path },
+    );
+  }
+  if (canonicalTarget(handoff.worktree_path) !== worktree) {
+    throw new CoordinationError(
+      "coordination.path-mismatch",
+      `${what} requires the handoff worktree ${handoff.worktree_path} to equal the prepared scope ${worktree}`,
+      { plan_id: scope.planId, expected: worktree, actual: handoff.worktree_path },
+    );
+  }
+  const metadata = context.row.metadata;
+  if (isPlainObject(metadata) && metadata.working_branch !== undefined && metadata.working_branch !== candidateSource) {
+    throw new CoordinationError(
+      "coordination.scope-mismatch",
+      `${what} requires row metadata.working_branch to equal the candidate delivery source ${candidateSource}`,
+      { plan_id: scope.planId, expected: candidateSource, actual: metadata.working_branch },
+    );
+  }
+  if (isPlainObject(metadata) && metadata.worktree_path !== undefined && canonicalTarget(String(metadata.worktree_path)) !== worktree) {
+    throw new CoordinationError(
+      "coordination.path-mismatch",
+      `${what} requires row metadata.worktree_path to equal the prepared scope ${worktree}`,
+      { plan_id: scope.planId, expected: worktree, actual: metadata.worktree_path },
+    );
+  }
+}
+
+function assertDeliveryPrCompatible(
+  snapshot: WorkflowSnapshot,
+  candidateSource: string,
+  registeredTarget: string,
+  planId: string,
+): void {
+  const pr = snapshot.delivery?.pr;
+  if (pr === undefined) return;
+  if (pr.head !== candidateSource || pr.target !== registeredTarget) {
+    throw new CoordinationError(
+      "coordination.delivery-source-repair.pr-conflict",
+      `repair-delivery-source refuses plan ${planId} because stored PR identity head ${JSON.stringify(pr.head)} target ${JSON.stringify(pr.target)} conflicts with candidate source ${candidateSource} and registered target ${registeredTarget}`,
+      { plan_id: planId, pr_head: pr.head, pr_target: pr.target, candidate: candidateSource, target: registeredTarget },
+    );
+  }
+}
+
+function assertRepairDeliverySourceAdmission(context: RowContext, scope: ResolvedPlanScope): void {
+  if (!isStandaloneDevelopmentWorkflow(context.snapshot)) {
+    throw new CoordinationError(
+      "coordination.delivery-source-repair.unsupported-workflow",
+      `repair-delivery-source requires a single-row standalone development workflow for plan ${scope.planId}`,
+      { plan_id: scope.planId, workflow_id: context.snapshot.id },
+    );
+  }
+  assertRepairNotTerminal(context.snapshot);
+  if (context.snapshot.status === "paused") {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `repair-delivery-source refuses paused workflow ${context.snapshot.id}`,
+      { workflow_id: context.snapshot.id, status: context.snapshot.status },
+    );
+  }
+  if (context.snapshot.status !== "running") {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `repair-delivery-source requires workflow ${context.snapshot.id} to still be running \u2014 got ${context.snapshot.status}`,
+      { workflow_id: context.snapshot.id, status: context.snapshot.status },
+    );
+  }
+}
+
+async function assertRepairDeliverySourcePrecheck(
+  context: RowContext,
+  scope: ResolvedPlanScope,
+  session: CoordinationSession,
+  handoff: PlanHandoff,
+): Promise<void> {
+  assertNoIntegrationContamination(
+    context,
+    scope.planId,
+    handoff,
+    "repair-delivery-source",
+    "coordination.delivery-source-repair.not-legacy-shape",
+  );
+  const prepared = context.coordination?.prepared;
+  if (prepared === undefined) {
+    throw new CoordinationError(
+      "coordination.not-prepared",
+      `plan ${scope.planId} is not prepared in this workflow`,
+      { plan_id: scope.planId },
+    );
+  }
+  assertEvidenceDigests(handoff);
+  assertAcceptedReviewDecision(handoff, scope.planId, "repair-delivery-source");
+  if (handoff.qa.gate !== prepared.qa_gate) {
+    throw new CoordinationError(
+      "coordination.assignment-stale",
+      `repair-delivery-source qa.gate ${handoff.qa.gate} is not the Assignment's QA gate ${prepared.qa_gate}`,
+      { plan_id: scope.planId, expected: prepared.qa_gate, actual: handoff.qa.gate },
+    );
+  }
+  await assertFindingsClosed(scope, prepared, "repair-delivery-source");
+  assertExecutionHolder(context.row, session.session_id, scope.planId, "repair-delivery-source");
+  const { target, candidateSource } = assertLegacyRepairShape(context.snapshot, scope.planId, handoff);
+  assertRepairBranchIdentity(context, scope, handoff, candidateSource, "repair-delivery-source");
+  assertDeliveryPrCompatible(context.snapshot, candidateSource, target, scope.planId);
+  assertStandaloneSourceGitProof(scope, handoff, candidateSource, "repair-delivery-source");
+}
+
+function repairDeliverySourceRow(
+  context: RowContext,
+  scope: ResolvedPlanScope,
+  candidateSource: string,
+): RowCommit {
+  const nextCoordination: RowCoordination = {
+    ...(context.coordination ?? { revision: 0 }),
+    revision: context.revision + 1,
+  };
+  validateRowCoordinationInContext(context, nextCoordination, `plan ${scope.planId} coordination`);
+  const currentBranch = context.snapshot.branch ?? {};
+  return {
+    row: { ...context.row, coordination: nextCoordination },
+    coordination: nextCoordination,
+    topLevel: {
+      branch: { ...currentBranch, source: candidateSource },
+    },
+  };
+}
+
+type RepairDeliverySourceRequest = { handoffId: string; expectedRevision: number };
+
+async function mutateRepairDeliverySource(
+  scope: ResolvedPlanScope,
+  session: CoordinationSession,
+  sessionPath: string,
+  request: RepairDeliverySourceRequest,
+): Promise<CoordinationResult> {
+  const result = await withRowCommit(scope, {
+    expectedRevision: request.expectedRevision,
+    precheck: async (context) => {
+      assertCoordinatorBinding(session, sessionPath, context.snapshot);
+      assertRepairDeliverySourceAdmission(context, scope);
+      const handoff = requireAcceptedHandoffForRepair(context, scope.planId, request.handoffId);
+      await assertRepairDeliverySourcePrecheck(context, scope, session, handoff);
+    },
+    mutate: (context) => {
+      const handoff = requireAcceptedHandoffForRepair(context, scope.planId, request.handoffId);
+      const { candidateSource } = assertLegacyRepairShape(context.snapshot, scope.planId, handoff);
+      return repairDeliverySourceRow(context, scope, candidateSource);
+    },
+  });
+  return {
+    ok: true,
+    operation: "repair-delivery-source",
+    session,
+    session_file: sessionPath,
+    outcome: "delivery-source-repaired",
+    view: buildView(
+      scope.harnessRoot,
+      scope.workflowId,
+      scope.projectId,
+      scope,
+      result.snapshot,
+      result.row,
+      session,
+      sessionPath,
+    ),
+  };
+}
+
+function completeStandaloneRow(context: RowContext, scope: ResolvedPlanScope, handoff: PlanHandoff): RowCommit {
+  const metadata = isPlainObject(context.row.metadata) ? { ...context.row.metadata } : {};
+  metadata.working_branch = handoff.source_branch;
+  metadata.worktree_path = handoff.worktree_path;
+  const nextCoordination: RowCoordination = {
+    ...(context.coordination ?? { revision: 0 }),
+    revision: context.revision + 1,
+    handoff: { ...handoff, state: "completed", completed_at: nowIso() },
+  };
+  validateRowCoordinationInContext(context, nextCoordination, `plan ${scope.planId} coordination`);
+  const nextRow: PlanRow = { ...context.row, status: "Done", metadata, coordination: nextCoordination };
+  delete nextRow.execution_lease;
+  return { row: nextRow, coordination: nextCoordination };
+}
+
+function assertStandaloneCompletedReplay(
+  context: RowContext,
+  scope: ResolvedPlanScope,
+  handoff: PlanHandoff,
+): void {
+  assertStandaloneRoute(context.snapshot, scope.planId, "reconcile");
+  if (rowStatusOf(context.row) !== "Done") {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `reconcile requires ${scope.planId} to be Done for a standalone completed replay`,
+      { plan_id: scope.planId, status: context.row.status },
+    );
+  }
+  if (context.row.execution_lease !== undefined) {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `reconcile requires no execution lease on ${scope.planId} for a standalone completed replay`,
+      { plan_id: scope.planId },
+    );
+  }
+  if (context.snapshot.integration_merge_lease !== undefined) {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `reconcile requires no integration merge lease for a standalone completed replay of ${scope.planId}`,
+      { plan_id: scope.planId },
+    );
+  }
+  assertNoIntegrationContamination(context, scope.planId, handoff, "reconcile");
+  const storedHandoffViolations = validatePlanHandoff(
+    handoff,
+    `plan ${scope.planId} coordination.handoff`,
+    "standalone-development",
+  );
+  const storedHandoffFailure = storedHandoffViolations.find((entry) => !entry.ok);
+  if (storedHandoffFailure !== undefined) {
+    throw new CoordinationError(
+      storedHandoffFailure.code as CoordinationError["code"],
+      storedHandoffFailure.message,
+      { plan_id: scope.planId },
+    );
+  }
+  const anchors = standaloneDeliveryAnchors(context.snapshot, scope.planId);
+  assertStandaloneBranchIdentity(context, scope, handoff, anchors, "reconcile", false);
+  const repository = proofRepository([handoff.worktree_path, scope.worktreePath, scope.harnessRoot]);
+  if (repository !== undefined && !gitObjectExists(repository, handoff.source_sha)) {
+    throw gitProof(
+      `reconcile cannot re-verify the pinned standalone source ${handoff.source_sha} for plan ${scope.planId}`,
+      { plan_id: scope.planId, source_sha: handoff.source_sha },
+    );
+  }
+}
+
+async function assertIterationCompletionPrecheck(
+  context: RowContext,
+  scope: ResolvedPlanScope,
+  session: CoordinationSession,
+  handoff: PlanHandoff,
+): Promise<void> {
+  if (handoff.state !== "merged") {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `plan ${scope.planId} handoff is ${handoff.state} \u2014 complete requires a merged attempt`,
+      { plan_id: scope.planId, state: handoff.state },
+    );
+  }
+  if (rowStatusOf(context.row) !== "InReview") {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `complete requires ${scope.planId} to still be InReview`,
+      { plan_id: scope.planId, status: context.row.status },
+    );
+  }
+  const prepared = context.coordination?.prepared;
+  if (prepared === undefined) {
+    throw new CoordinationError(
+      "coordination.not-prepared",
+      `plan ${scope.planId} is not prepared in this workflow`,
+      { plan_id: scope.planId },
+    );
+  }
+  assertEvidenceDigests(handoff);
+  await assertFindingsClosed(scope, prepared, "complete");
+  assertExecutionHolder(context.row, session.session_id, scope.planId, "complete");
+  assertMergeLease(context.snapshot, session, scope.planId, handoff);
+  const integration = requireIntegration(handoff, scope.planId);
+  const anchors = integrationAnchors(context.snapshot, scope.planId);
+  const checkout = assertIntegrationCheckout(anchors, scope.planId);
+  assertRecordedResult(anchors.worktreePath, scope.planId, integration, handoff.source_sha, checkout.head);
+}
+
 /**
  * The atomic completion delta (spec §E): `Done`, the retained branch/worktree
  * metadata and `track_branches`, the completed handoff, and one write that
@@ -3502,6 +4133,13 @@ function completeRow(
 
 type CompleteRequest = { handoffId: string; expectedRevision: number };
 
+let completeStandaloneMutateGapForTest: (() => void) | undefined;
+
+/** Test-only hook to observe the precheck→mutate gap in standalone complete. */
+export function setCompleteStandaloneMutateGapForTest(callback: (() => void) | undefined): void {
+  completeStandaloneMutateGapForTest = callback;
+}
+
 /**
  * Complete a merged plan (spec §E): re-prove the recorded result, re-check the
  * evidence digests and the findings gate, then apply the completion delta.
@@ -3519,39 +4157,20 @@ async function mutateComplete(
     precheck: async (context) => {
       assertCoordinatorBinding(session, sessionPath, context.snapshot);
       const handoff = requireHandoff(context, scope.planId, request.handoffId);
-      if (handoff.state !== "merged") {
-        throw new CoordinationError(
-          "coordination.invalid-transition",
-          `plan ${scope.planId} handoff is ${handoff.state} \u2014 complete requires a merged attempt`,
-          { plan_id: scope.planId, state: handoff.state },
-        );
+      if (isStandaloneDevelopmentWorkflow(context.snapshot)) {
+        await assertStandaloneCompletionPrecheck(context, scope, session, handoff);
+        return;
       }
-      if (rowStatusOf(context.row) !== "InReview") {
-        throw new CoordinationError(
-          "coordination.invalid-transition",
-          `complete requires ${scope.planId} to still be InReview`,
-          { plan_id: scope.planId, status: context.row.status },
-        );
-      }
-      const prepared = context.coordination?.prepared;
-      if (prepared === undefined) {
-        throw new CoordinationError(
-          "coordination.not-prepared",
-          `plan ${scope.planId} is not prepared in this workflow`,
-          { plan_id: scope.planId },
-        );
-      }
-      assertEvidenceDigests(handoff);
-      await assertFindingsClosed(scope, prepared, "complete");
-      assertExecutionHolder(context.row, session.session_id, scope.planId, "complete");
-      assertMergeLease(context.snapshot, session, scope.planId, handoff);
-      const integration = requireIntegration(handoff, scope.planId);
-      const anchors = integrationAnchors(context.snapshot, scope.planId);
-      const checkout = assertIntegrationCheckout(anchors, scope.planId);
-      assertRecordedResult(anchors.worktreePath, scope.planId, integration, handoff.source_sha, checkout.head);
+      await assertIterationCompletionPrecheck(context, scope, session, handoff);
     },
     mutate: (context) => {
       const handoff = requireHandoff(context, scope.planId, request.handoffId);
+      if (isStandaloneDevelopmentWorkflow(context.snapshot)) {
+        completeStandaloneMutateGapForTest?.();
+        const anchors = standaloneDeliveryAnchors(context.snapshot, scope.planId);
+        assertStandaloneSourceGitProof(scope, handoff, anchors.source, "complete");
+        return completeStandaloneRow(context, scope, handoff);
+      }
       const integration = requireIntegration(handoff, scope.planId);
       const resultSha = assertRecordedResult(
         integration.worktree_path,
@@ -3615,6 +4234,10 @@ async function classifyReconcile(
     });
   }
   if (handoff.state === "completed") {
+    if (isStandaloneDevelopmentWorkflow(context.snapshot)) {
+      assertStandaloneCompletedReplay(context, scope, handoff);
+      return { outcome: "already-completed", apply: () => null };
+    }
     const integration = requireIntegration(handoff, planId);
     const repository = proofRepository([integration.worktree_path, handoff.worktree_path, session.harness_root]);
     if (repository === undefined) {

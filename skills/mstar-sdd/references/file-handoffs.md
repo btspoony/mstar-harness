@@ -33,7 +33,7 @@ PM runs context-dependent `mstar sdd workspace`, `task-brief`, and `review-packa
    - One line scene-setting (where task fits)
    - Absolute brief path: read first — verbatim requirements
    - Interfaces / decisions brief cannot know
-   - Absolute report path: `$SDD_DIR/task-N-report.md`
+   - Absolute report path: `$SDD_DIR/task-N-report.md` — the implementer's own output slot and L2's **input**; the reviewer's separate output is `$SDD_DIR/task-N-review.md`
    - Absolute control root, feature cwd, branch and plan paths, plus task-specific brief/report/diff paths fixed for this dispatch; the context path is PM coordination metadata, not a leaf checkout selector
    - **Inherited plan scope, no credentials**: the handoff restates the inherited plan id + absolute paths and nothing more — a leaf neither selects a plan nor writes the workflow snapshot / root register / leases. Session JSON, `mstar plan --session` write credentials and `--expect <revision>` are PM/coordinator-only and **never** appear in a leaf prompt (`mstar-iteration/references/plan-scoped-pm.md` §8)
    - `Model tier` → host-specific model (required)
@@ -41,7 +41,7 @@ PM runs context-dependent `mstar sdd workspace`, `task-brief`, and `review-packa
 
 ## Implementer report file
 
-Implementer writes full report to `task-N-report.md`. Return to PM only:
+Implementer writes full report to `task-N-report.md` — its own output, and an **input** to L2; the task reviewer never writes this path and never overwrites it. Return to PM only:
 
 - Status: `DONE` | `DONE_WITH_CONCERNS` | `NEEDS_CONTEXT` | `BLOCKED`
 - Commits (SHAs)
@@ -94,9 +94,15 @@ PM sets `FEATURE_CWD` from the completed task's immutable Assignment `Worktree p
 
 1. `HEAD_SHA=$(git -C "$FEATURE_CWD" rev-parse HEAD)`
 2. `mstar sdd review-package "$BASE_SHA" "$HEAD_SHA" --context "$SDD_DIR/context.json"` — context `featureCwd` must equal the same `$FEATURE_CWD` used for `HEAD_SHA`; probes git there, writes the diff into the control sddDir, prints absolute paths.
-3. Dispatch task reviewer with: brief path, report path, diff path, Global Constraints (verbatim from plan).
+3. Dispatch task reviewer with: brief path, implementer report path (`task-N-report.md` — an input it reads), diff path, **`REPORT_FILE` = `$SDD_DIR/task-N-review.md`** (the reviewer's own output — a different file, never the implementer's slot), Global Constraints (verbatim from plan).
 
 **Never use `HEAD~1` as BASE** — multi-commit tasks truncate.
+
+## Task review report file (L2 output)
+
+The fresh task reviewer writes its full report to `task-N-review.md` — always, for every completed task under `Execution mode: sdd`: not optional, never conversation-only, separate from the implementer report it reads. Body sections and `Task quality` verdict → **`task-reviewer-prompt.md`**. This file is the L2 output only — not formal QC (`{SDD_DIR}/review/qcN.md`) and not QA, and no consumer silently searches another basename.
+
+PM reads that named report before marking the task complete, and the ledger entry below records it. Partial findings and the `Task quality` verdict earned for the reviewed scope stay valid; assigned review scope left uncovered does **not**: PM routes the remaining scope through a fresh/tightened reviewer dispatch and does not append task-complete or release dependent work. A coverage gap is never converted into an invented code defect, and an `Approved` earned for checked scope is never overwritten.
 
 ## Bound child launch (CLI-launchable children)
 
@@ -127,10 +133,10 @@ The per-task fix loop applies the same fix-round mechanics as plan-level QC fix 
 On clean task review, PM alone appends to `$SDD_DIR/progress.md`:
 
 ```text
-Task N: complete (<base>..<head>, review clean)
+Task N: complete (<base>..<head>, review clean, review: task-N-review.md)
 ```
 
-Minor findings: append under `## Minor (for plan QC)` in same file.
+The entry names the L2 report path the review closed on. Minor findings: append under `## Minor (for plan QC)` in same file.
 
 ## Plan-level QC package
 

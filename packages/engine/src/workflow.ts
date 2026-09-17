@@ -32,11 +32,13 @@ import {
   CoordinationError,
   canonicalTarget,
   isArtifactVersion,
+  isNonEmptyString,
   isPlainObject,
   readArtifactBytes,
   validateRowCoordination,
   validateSnapshotCoordination,
   withProtectedWrite,
+  type RowValidationRoute,
   type SnapshotCoordination,
 } from "./coordination-write.js";
 import { validateExecutionLease, validateIntegrationMergeLease, withStatusWriteLock, type IntegrationMergeLease } from "./lease.js";
@@ -203,6 +205,83 @@ export type WorkflowSnapshot = {
    */
   delivery?: WorkflowDeliveryEvidence;
 };
+
+
+/** True exactly for a single-row standalone development plan workflow (spec A1). */
+export function isStandaloneDevelopmentWorkflow(snapshot: WorkflowSnapshot): boolean {
+  return (
+    snapshot.type === "plan" &&
+    snapshot.delivery_kind === "development" &&
+    Array.isArray(snapshot.plans) &&
+    snapshot.plans.length === 1
+  );
+}
+
+/** Classify row coordination validation: standalone development vs integration delivery. */
+export function rowValidationRoute(snapshot: WorkflowSnapshot, row: PlanRow): RowValidationRoute {
+  if (isStandaloneDevelopmentWorkflow(snapshot) && snapshot.plans[0]?.id === row.id) {
+    return "standalone-development";
+  }
+  return "integration";
+}
+
+function validateStandaloneCompletedCoherence(snapshot: WorkflowSnapshot, row: PlanRow): ValidationResult[] {
+  const violations: ValidationResult[] = [];
+  if (!isStandaloneDevelopmentWorkflow(snapshot) || row.id !== snapshot.plans[0]?.id) return violations;
+  const coordination = row.coordination;
+  if (!isPlainObject(coordination) || !isPlainObject(coordination.handoff)) return violations;
+  const handoff = coordination.handoff as Record<string, unknown>;
+  if (handoff.state !== "completed" || handoff.integration !== undefined) return violations;
+  if (row.status !== "Done") {
+    violations.push(
+      violation(
+        "high",
+        "coordination.row.handoff-field",
+        `standalone completed handoff requires row ${String(row.id)} to be Done`,
+      ),
+    );
+  }
+  if (row.execution_lease !== undefined) {
+    violations.push(
+      violation(
+        "high",
+        "coordination.row.handoff-field",
+        `standalone completed handoff requires no execution lease on row ${String(row.id)}`,
+      ),
+    );
+  }
+  if (snapshot.integration_merge_lease !== undefined) {
+    violations.push(
+      violation(
+        "high",
+        "coordination.row.handoff-field",
+        "standalone completed handoff requires no integration_merge_lease on the snapshot",
+      ),
+    );
+  }
+  const source = snapshot.branch?.source;
+  const target = snapshot.branch?.target;
+  if (!isNonEmptyString(source) || !isNonEmptyString(target)) {
+    violations.push(
+      violation(
+        "high",
+        "coordination.row.handoff-field",
+        "standalone completed handoff requires nonblank branch.source and branch.target",
+      ),
+    );
+  } else {
+    if (handoff.source_branch !== source) {
+      violations.push(
+        violation(
+          "high",
+          "coordination.row.handoff-field",
+          `standalone completed handoff source_branch ${String(handoff.source_branch)} must equal branch.source ${source}`,
+        ),
+      );
+    }
+  }
+  return violations;
+}
 
 /** Stable JSON for change detection (sorted keys, recursive). */
 export function stableJson(value: unknown): string {
@@ -408,6 +487,7 @@ export function validateWorkflowSnapshot(doc: unknown): GateResult {
   } else if (!Array.isArray(doc.plans)) {
     violations.push(violation("high", "workflow.snapshot.invalid-plans", "plans must be an array of legacy plan rows"));
   } else {
+    const snapshotDoc = doc as WorkflowSnapshot;
     for (const row of doc.plans) {
       violations.push(...validatePlanRow(row).violations);
       if (isPlainObject(row) && row.execution_lease !== undefined) {
@@ -417,7 +497,10 @@ export function validateWorkflowSnapshot(doc: unknown): GateResult {
       // unknown keys, malformed handoffs/progress/bindings are refused here
       // so a malformed coordination state can never be persisted.
       if (isPlainObject(row) && row.coordination !== undefined) {
-        violations.push(...validateRowCoordination(row.coordination, `plans[${String(row.id)}].coordination`));
+        const planRow = row as PlanRow;
+        const route = rowValidationRoute(snapshotDoc, planRow);
+        violations.push(...validateRowCoordination(row.coordination, `plans[${String(row.id)}].coordination`, route));
+        violations.push(...validateStandaloneCompletedCoherence(snapshotDoc, planRow));
       }
     }
   }

@@ -27,7 +27,7 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 
 ## Core QA Gate Duties
 
-Before sign-off: validate phase-gate prerequisites, Assignment metadata alignment, and reproducible evidence for any **new** checks. Mode/mapping rules → **`references/qa-engineer/acceptance-gate.md`**. Retained `sdd evidence` bundles are integrity-checked and mapped read-only (captured-evidence mapping columns → **`references/qa-engineer/acceptance-gate.md`** § Captured evidence mapping); QA never repeats a captured child command, and manual historical evidence is never converted into a v1 runner record.
+Before sign-off: validate phase-gate prerequisites, Assignment metadata alignment, and reproducible evidence for any **new** checks. Mode/mapping rules → **`references/qa-engineer/acceptance-gate.md`**. Retained `sdd evidence` bundles are integrity-checked and mapped read-only (captured-evidence mapping → **`references/qa-engineer/acceptance-gate.md`** § Captured evidence mapping); QA never repeats a captured child command, and manual historical evidence is never converted into a v1 runner record.
 
 ## Branch & Review Context Gate
 
@@ -35,14 +35,36 @@ Before sign-off: validate phase-gate prerequisites, Assignment metadata alignmen
 - Do not validate on a mismatched checkout
 - Same-repo concurrent write scenarios require worktree discipline
 
-## QA Report Template (Report-only)
+## Budget and Stopping (hard)
 
-When Assignment provides a report path, write report-only output under `{SDD_DIR}/review/` (for example `qa.md`) unless PM explicitly chooses tracked report archive mode.
+Scope and numeric-ceiling authority → **`mstar-harness-core`** § 定向执行与验证边界; this role adds its own stop/return duty, never a second cap. Honour the Assignment **`Budget`** and **`Return shape`**; when `Budget` is omitted the core default applies — it may be tightened, never loosened. Follow past the assigned QA scope only on a must-fix trail.
+
+- **Stop expanding on either bound.** Keep every outcome and finding already earned: a checked AC result (pass or fail) and a witnessed failure stay in the report and the AC map — truncation never rewrites, erases or downgrades an observed result. A clean checked subset may return `findings: []`; that describes the checked scope only, never full mandatory acceptance. Never invent elapsed time or file counts to justify a stop.
+- **Disclose the cut once, in the report `## Scope`.** When a bound actually stopped expansion, emit `- Truncated coverage: <budget reached; specific ACs/interfaces not covered>`, naming the required ACs/interfaces left unchecked, and record those ACs as unverified. On a complete run, omit the line entirely — do not emit it with a negation value either, because consumers read the label's presence, not its wording.
+- **A cap stop is not a failed evidence channel.** Exhaustion is never described as `Unconfirmed` and never invents new QA result vocabulary; a required evidence channel that is unavailable is recorded under verification gaps and returns the existing `Blocked` result. Uncovered required acceptance always returns `Blocked` — never a whole-scope pass, never `Done`; hand PM the targeted remaining scope.
+
+Acceptance readback and the durable mapping → **`references/qa-engineer/acceptance-gate.md`**.
+
+## QA Report Landing and Template
+
+Mandatory QA always writes `${SDD_DIR}/review/qa.md` (or the Assignment's explicit same-directory basename) with its AC → evidence → result mapping; report-only is a mode, not a condition for mandatory report landing.
+
+An Assignment that names no output path is not an exemption — the default above still applies, and mandatory acceptance is never conversation-only. `report-only` is a QA mode, not an authority: an advisory report never confers mandatory acceptance, and no filename confers `Done`. `Review archive mode: tracked reports` changes where the report is retained, not the obligation above.
 
 ```markdown
-# QA Report (Report-only)
+# QA Report
 
-## Scope tested
+## Scope
+- QA gate / QA mode: {mandatory | report-only} / {acceptance-only | targeted | report-only}
+- Review range / Diff basis: {exact copy from Assignment}
+- Working branch (verified): {name}
+- Review cwd (verified): {path from git rev-parse --show-toplevel}
+- Truncated coverage: {present only when a bound actually stopped expansion — name the required ACs/interfaces left unchecked; omit this line on a complete run. Truncation is not `Unconfirmed`}
+
+## Acceptance Criteria (AC → evidence → result)
+| AC | run/manual reference | original input identity | integrity | outcome | target applicability and reason | coverage judgment | targeted gap |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+
 ## Findings
 ## Reproduction steps
 ## Evidence
@@ -50,7 +72,7 @@ When Assignment provides a report path, write report-only output under `{SDD_DIR
 ## Recommended owners
 ```
 
-The acceptance AC mapping uses the evidence columns defined in **`references/qa-engineer/acceptance-gate.md`** § Captured evidence mapping (`AC | run/manual reference | original input identity | integrity | outcome | target applicability and reason | coverage judgment | targeted gap`).
+Every assigned AC gets a row of that table with all eight columns recorded — a column that does not apply is written `n/a` / `not-assessed`, never dropped. What each column must contain for a retained `sdd evidence` bundle is defined in **`references/qa-engineer/acceptance-gate.md`** § Captured evidence mapping.
 
 ## Skill Preset (PM-Activated)
 
