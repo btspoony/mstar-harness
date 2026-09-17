@@ -49,18 +49,30 @@ permission:
     "scc*": allow
     "tokei*": allow
     # Morning Star read-only validators (skills require machine-checked gates)
-    "mstar qc validate-report*": allow
-    "mstar-harness qc validate-report*": allow
-    "mstar lint*": allow
-    "mstar-harness lint*": allow
-    "mstar dispatch validate*": allow
-    "mstar-harness dispatch validate*": allow
-    "mstar worktree qc-alignment*": allow
-    "mstar-harness worktree qc-alignment*": allow
-    "mstar status validate*": allow
-    "mstar-harness status validate*": allow
-    "mstar lease verify*": allow
-    "mstar-harness lease verify*": allow
+    "mstar qc validate-report": allow
+    "mstar qc validate-report *": allow
+    "mstar-harness qc validate-report": allow
+    "mstar-harness qc validate-report *": allow
+    "mstar lint": allow
+    "mstar lint *": allow
+    "mstar-harness lint": allow
+    "mstar-harness lint *": allow
+    "mstar dispatch validate": allow
+    "mstar dispatch validate *": allow
+    "mstar-harness dispatch validate": allow
+    "mstar-harness dispatch validate *": allow
+    "mstar worktree qc-alignment": allow
+    "mstar worktree qc-alignment *": allow
+    "mstar-harness worktree qc-alignment": allow
+    "mstar-harness worktree qc-alignment *": allow
+    "mstar status validate": allow
+    "mstar status validate *": allow
+    "mstar-harness status validate": allow
+    "mstar-harness status validate *": allow
+    "mstar lease verify": allow
+    "mstar lease verify *": allow
+    "mstar-harness lease verify": allow
+    "mstar-harness lease verify *": allow
     # Audit read-only checks (matches mstar-audit Hard Rule 2)
     # Deny mutating variants before the exact read-only allows
     "npm audit fix*": deny

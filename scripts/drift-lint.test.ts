@@ -329,7 +329,7 @@ describe("checkEngineCallouts — Guard 1 CLI citation binary-prefix check", () 
 describe("supplementCliCommandInventory — scoped registrar paths (Task 3)", () => {
   const REPO_ROOT = join(import.meta.dir, "..");
 
-  test("index.ts inventory stays at 93 paths; supplement adds 16 scoped paths", () => {
+  test("index.ts inventory stays at 93 paths; supplement adds 18 scoped paths", () => {
     const cliSrc = readFileSync(join(REPO_ROOT, "packages/cli/src/index.ts"), "utf8");
     const { cliCommands: base, failures: baseFailures } = buildCliCommandInventory(cliSrc);
     expect(baseFailures).toEqual([]);
@@ -340,7 +340,9 @@ describe("supplementCliCommandInventory — scoped registrar paths (Task 3)", ()
     expect(merged.has("plan handoff")).toBe(true);
     expect(merged.has("workflow show-prepare")).toBe(true);
     expect(merged.has("sdd evidence")).toBe(true);
-    expect(merged.size - base.size).toBe(16);
+    expect(merged.has("sdd evidence capture")).toBe(true);
+    expect(merged.has("sdd evidence verify")).toBe(true);
+    expect(merged.size - base.size).toBe(18);
   });
 });
 

@@ -31,7 +31,7 @@ A coordinated replacement is two commands, and the token from the first is the o
 mstar persist get snapshot --key <workflow-id> --versioned
 
 # 2. replace exactly those bytes
-mstar persist snapshot --key <workflow-id> --expect-version sha256:<64-hex> --file payload.json
+mstar persist snapshot --key <workflow-id> --expect-version sha256:<64-hex> --file payload.json --session <coordinator-envelope>
 ```
 
 - The versioned read prints the payload together with its version: the digest of the exact bytes read, or the literal `absent` with a null payload when the document does not exist yet. `absent` is therefore a real token, not a missing value.

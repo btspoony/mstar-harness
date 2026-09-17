@@ -595,6 +595,12 @@ export function supplementCliCommandInventory(
     failures.push('drift: registerSddEvidenceCommands missing .command("evidence")');
   } else {
     cliCommands.add("sdd evidence");
+    if (subcmds.includes("capture")) {
+      cliCommands.add("sdd evidence capture");
+    }
+    if (subcmds.includes("verify")) {
+      cliCommands.add("sdd evidence verify");
+    }
   }
   return { failures };
 }
