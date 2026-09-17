@@ -6,6 +6,19 @@
 
 ## [Unreleased]
 
+## [3.10.2] - 2026-09-17
+
+### Harness
+
+- 引擎现于 `recordWorkflowDelivery` 写入边界**拒绝交付尾证据**（`compound`、PR 标识、`merge`），只要任一 plan 行尚未 `Done`——执行生命周期契约已声明的顺序。门禁仅作用于写入：幂等重录跳过；已携带证据的快照不受影响。
+- **计划模板**、PM 必读清单与 PM 自检现包含 scoped 引擎生命周期序列与证据顺序（`compound` / PR / `merge` 仅在行 `Done` 之后记录）。
+- **独立 `development` 计划**现将只读 phase-6 门禁输出声明为 merge-ready 前置条件；迭代工作流仍沿用 Phase 4/5 退出清单。
+- 残留项 **R2**（独立计划无集成锚点无法到达 `Done`）仍开放——模板明确在已提交/已接受交接处诚实停止，而非伪造终态。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 3.10.2**。
+
 ## [3.10.1] - 2026-09-17
 
 ### Harness
