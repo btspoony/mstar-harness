@@ -6,7 +6,6 @@ Use when PM continues **`SDD implementer session: sticky`** for Task N>1. Host: 
 Dispatch:
   Resume: [HOST_AGENT_ID from implementer-session.json]
   Name: <CamelCaseId>                 # omp/Cursor name
-  Model: [same tier as session start unless PM upgrades]
   Assignment header: canonical fields (`mstar-roles/references/project-manager/dispatch-and-assignment.md`) — MUST include **`Task budget (implement / ops rounds)`**: <budget copied from THIS plan task> in the header region, before the first Task heading / horizontal rule / `#` heading of the body; a `Task budget` string only inside the body section cannot satisfy the engine header gate, and a previous task's budget is not inherited as authorization for this task
   Prompt body:
     <SUBAGENT-STOP> Skip PM orchestration skills. You are a leaf implementer continuing a sticky SDD session.</SUBAGENT-STOP>

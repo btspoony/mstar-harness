@@ -8,7 +8,6 @@ For **sticky** continuation (task 2+), use **`implementer-continuation-prompt.md
 Dispatch:
   Role: <Execute as role-id>          # omp agent / Cursor subagent_type / OpenCode subagent → mstar-host C5
   Name: <CamelCaseId>                 # omp/Cursor name
-  Model: [REQUIRED — per Model tier in Assignment and mstar-sdd SKILL]
   Assignment header: canonical fields (`mstar-roles/references/project-manager/dispatch-and-assignment.md`) — MUST include **`Task budget (implement / ops rounds)`**: <budget copied from the plan task> in the header region, before the first Task heading / horizontal rule / `#` heading of the body; a `Task budget` string only inside the body section cannot satisfy the engine header gate
   Prompt body:
     <SUBAGENT-STOP> Skip PM orchestration skills. You are a leaf implementer.</SUBAGENT-STOP>

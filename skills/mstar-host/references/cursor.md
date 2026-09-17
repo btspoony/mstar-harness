@@ -100,7 +100,7 @@ Cursor’s live **Task** tool expects a **flat** JSON argument object. `prompt` 
 | `prompt` | yes | Full Assignment Markdown string (IDENTITY, gates, Plan Path, Working branch, …) |
 | `subagent_type` | yes | Must equal Assignment `Execute as` (Morning Star role id when using custom agents) |
 | `description` | recommended | Short UI title only (3–5 words); never the Assignment body |
-| `model` | optional | Host slug from Assignment **Model tier** mapping |
+| `model` | optional | Host slug for the **session's own model policy** — host-owned and optional; mstar prescribes no tier. Omit to inherit the host default |
 | `run_in_background` | optional | Default false unless PM intentionally backgrounds |
 | `resume` | sticky continue only | Omit on fresh dispatch; see sticky section |
 
@@ -168,18 +168,6 @@ Implementation roles use `mstar-coding-behavior` for RCA, test-first checks, rev
 
 - Single-seat and tri-review need identical `plan_id` and review scope fields.
 - Task parallelism does not relax branch/worktree isolation.
-
-## Model tier (SDD + QC)
-
-Map Assignment **`Model tier`** to Task `model` (host-specific slugs):
-
-| Tier | Typical use |
-|------|-------------|
-| `fast` | Transcription tasks; 1–2 file mechanical edits |
-| `standard` | SDD prose implementer; task reviewer floor; plan QC tri seats |
-| `capable` | Large branch QC diff; integration judgment |
-
-**Turn count beats token price** — reviewers and prose implementers use `standard` floor minimum. See `mstar-sdd` SKILL.
 
 ## Project rules
 

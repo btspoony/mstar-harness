@@ -87,7 +87,6 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 **SDD implementer session**: fresh | sticky | N/A — **default `fresh`**; `sticky` reuses same implementer subagent across tasks (reviewers stay fresh). See `mstar-sdd/references/sticky-implementer-session.md`
 **SDD dir**: absolute `<main-repo-root>/{HARNESS_DIR}/sdd/<plan-id>/` (control harness root) when L1 lease gate active | `{HARNESS_DIR}/sdd/<plan-id>/` when waived / single checkout | N/A
 **SDD context file**: absolute `<SDD dir>/context.json` when `Execution mode: sdd` | N/A — destination contract consumed by `mstar sdd exec --context` / `--context` producers (`mstar-sdd/references/file-handoffs.md`)
-**Model tier**: fast | standard | capable | N/A
 **Skill presets**: `standard` | <explicit skill list> | none — activates the `Execute as` role's preset from its `Skill Preset (PM-Activated)` section; default `standard` for implementation / QC / QA rounds unless the route is trivial
 **QC mode**: full tri-review | single | N/A — **default `full tri-review` when `Execution mode: sdd`**; `single` only for `inline` / override
 **Review package path**: <branch-review diff file> | N/A
@@ -228,5 +227,5 @@ The **scoped primary route** never appears as a subagent invoke on any host: `/i
 **NEVER（SDD）**：
 
 - 把整份 plan 或 T1–Tn 全文贴进 **一个** `fullstack-dev` leaf Assignment。
-- 省略 `Execution mode` / `SDD dir` / `Model tier` 却期望 SDD 产物（`progress.md`、per-task review）。
+- 省略 `Execution mode` / `SDD dir` 却期望 SDD 产物（`progress.md`、per-task review）。
 - 期望 leaf `fullstack-dev` 载入 `mstar-sdd` 并自编排 per-task 循环 — **编排仅 PM**（`mstar-iteration` §2.4–2.5）。

@@ -76,23 +76,11 @@ Detail: **`references/file-handoffs.md`**.
 | DONE | review-package → task reviewer |
 | DONE_WITH_CONCERNS | read concerns; fix scope issues before review |
 | NEEDS_CONTEXT | provide context; re-dispatch. Budget overrun (the declared round cannot close its Files and gates) → split the task per `mstar-artifacts/references/plan-quality-bar.md` item 7 and re-dispatch with a fresh budget |
-| BLOCKED | more context, higher tier, split task, or escalate human — **never** same-model blind retry. Budget overrun → split the task per `mstar-artifacts/references/plan-quality-bar.md` item 7 and re-dispatch with a fresh budget |
+| BLOCKED | more context, split task, or escalate human — **never** same-model blind retry. Budget overrun → split the task per `mstar-artifacts/references/plan-quality-bar.md` item 7 and re-dispatch with a fresh budget |
 
 ## Reviewer ⚠️ items
 
 `⚠️ Cannot verify from diff` does not block other findings. PM must resolve each before task complete.
-
-## Model tier
-
-| Tier | Use |
-|------|-----|
-| fast | Transcription (complete code in plan); 1–2 file mechanical |
-| standard | Prose implementer; task reviewer (floor) |
-| capable | Integration judgment; plan QC on large branch diff |
-
-**Turn count beats token price:** use `standard` floor for reviewers and prose implementers. **Always name model on dispatch** — omitted model inherits session default (often most expensive).
-
-Host mapping → **`mstar-host`** references (`model` / Task field).
 
 ## After all tasks
 
