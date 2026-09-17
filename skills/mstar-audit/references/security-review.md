@@ -264,6 +264,73 @@ Apply where the repo actually has the surface. Absence is not a finding.
 - Stale authorization beyond sessions: authorization state cached outside the session — grants materialized in tokens, group membership in long-lived jobs, capability URLs issued before a revocation that never reach them. Revocation must propagate to every consumer of the grant, or the finding stands.
 - Retention & deletion guarantees: missing TTL alone is **not** a finding — it is a Hardening note. A retention finding requires an explicit access/deletion/revocation guarantee the code claims plus a demonstrated breach: an unauthorized reader, or a subsequent operation the guarantee said was impossible. Incomplete deletion (record deleted, blob/cache/index/analytics copy left) remains a finding when it demonstrably breaches the declared boundary — which copy, which reader.
 
+### 9i. Desktop, mobile & local IPC
+
+Reportable path requires a **lower-trust caller, a privileged consumer, and an unauthorized effect** — all three. Same-user arbitrary plugin/app installation is not a boundary (any user can run code as themselves); look for a distinct protected principal or a capability boundary the caller should not cross.
+
+**Webview & renderer surfaces**
+
+- Webview navigation & privileged bridges: a webview granted bridge/native-API access (`addJavascriptInterface`, `WKScriptMessageHandler`, Electron `ipcRenderer` in the renderer) that can be steered by navigation to attacker-influenced content — the bridge must be gated on a verified, first-party origin/page, not on "the webview exists". **Exclusion:** bridge messages validated against an origin allowlist checked at message time, or the bridge exposing no capability beyond what the page already has, refutes.
+- Renderer/process isolation: privileged work (file access, token handling) executed in the same process/trust domain as untrusted rendered content — name the capability the renderer process gains. Site-process isolation or contextIsolation enabled with no node/IPC escape refutes.
+
+**Entry & address handling**
+
+- Deep-link ownership & account binding: a custom-scheme/universal-link handler that accepts an action (login confirm, token consumption, account switch) without binding the link to the expecting account/session — an attacker-sent link acting on the victim's account is the finding. **Exclusion:** the handler re-verifying the acting account against the link's target before executing refutes.
+- URI normalization: scheme/host/path parsed differently by the entry handler and the privileged consumer (scheme confusion on `intent://`-style URIs, case/percent-encoding surviving into an allowlist check). The effect must be reaching a consumer the declared scheme excludes; a canonicalizing parser refutes.
+
+**Local IPC channels**
+
+- Named pipe / socket access controls: a locally exposed pipe/socket performing privileged work with peer checks absent or checkable by connection alone (filesystem permissions on the socket path as the only gate, world-accessible service sockets). **Exclusion:** the server verifying peer credentials/uid at accept time and binding them to the request's authority refutes.
+- Binder/D-Bus/XPC interfaces: exported/registered IPC methods whose validators check the *caller-claimed* parameter but not the *caller* — privileged method reachable from any app/session. **Exclusion:** per-caller policy (`XPCConnection` audit, Binder `checkCallingPermission`/uid checks, D-Bus policy) enforced on the interface refutes.
+- IPC peer credentials vs payload identity: the peer's OS-level credential (uid, pid, connection attestation) is the only caller identity; identity *claimed in the payload* (a username, tenant ID, "admin" flag field) is an assertion, not authentication. A privileged consumer trusting the payload's claim while the peer credential belongs to a lower-trust sender is the finding. **Exclusion:** the consumer comparing the verified peer credential against the payload claim and rejecting mismatch refutes.
+
+**Secrets, files & installation**
+
+- Keychain/keystore access groups: credentials stored under an access group/keychain-sharing entitlement readable by other apps/binaries of the same team signing different products — name the second consumer. Distinct access groups or single-consumer storage refutes.
+- Shared-file & temp-path ownership: privileged code reading/writing a predictable world-writable or group-writable path (temp file symlink swap, cache poisoning feeding a privileged read). **Exclusion:** `O_CREAT|O_EXCL`/`O_NOFOLLOW`-style creation or a user-private directory refutes.
+- Installer/updater authority: an installer, updater, or privileged helper executing payloads (scripts, binaries, package contents) whose placement a lower-trust writer can influence (writable staging dir, unsigned payload, mutable download verified only at first run). **Exclusion:** signature verification at execution time by the privileged side, over a path the untrusted writer cannot write, refutes.
+- Merged manifest/entitlement overrides: the effective policy is the merge of platform manifest, build config, and overlay files — an override layer (build type, product flavor, debug overlay) adding a permission, exported component, or entitlement the source declaration does not show. Inspect the merged effective artifact in the repo; a merge you cannot determine from checked-in files is **requires runtime verification** (Needs verification lead).
+- Extension permissions: a browser/editor/agent extension granted host permissions whose content or background code can act with the host app's authority beyond the permission's stated scope (all-URLs permission plus message-passing bridge to any page). **Exclusion:** the extension's privileged paths verifying message origin/sender against the declared scope refutes.
+
+**Cross-app actions**
+
+- Clipboard consumers: privileged features auto-consuming clipboard contents (token/OTP paste, "open link from clipboard") where any lower-trust app controls the clipboard. The check is the privileged action on attacker-chosen content; clipboard access being common is not itself a finding.
+- Intent forwarding/redirection: an exported component forwarding attacker-supplied intents/bundles to privileged internals (intent redirection, nested `Intent` extras executed with the app's identity). **Exclusion:** the forwarding component re-granting only its own (unprivileged) permissions or validating the target refutes.
+- Exported background services: exported services/receivers performing sensitive work (sync, backup, account ops) invocable by another app with attacker-chosen parameters. **Exclusion:** permission-protected exports, or parameter validation binding the action to the caller's own account, refutes.
+- Notification actions: action buttons/quick replies executed with app privileges but content influenceable by another app's notifications (action routed by notification extras an attacker's notification also carries). **Exclusion:** the handler verifying the notification's identity/ownership before executing its action refutes.
+
+### 9j. Memory safety & binary
+
+Source review only — no sanitizer/fuzzer execution steps. Trace untrusted data from the parser/FFI boundary through **size/unit conversion → allocation → ownership transfer → alias use → release**; a finding names the broken step and the supported effect.
+
+- Integer boundaries: subtraction underflow (length minus length), size multiplication without overflow check, narrowing conversions (`size_t` → `u32`), negative-to-unsigned casts, and sentinel values (`-1` as length/count) flowing into allocation or copy sizes. The converted value must reach an allocation/copy/index to count; a rejected or clamped path refutes.
+- Ownership & lifetime: stale aliases after transfer (use-after-free), double-free, observers draining a collection while a worker iterates, reference-count manipulation on shared objects across threads (racy `retain`/`release`), and TOCTOU where the file/handle is re-validated then reopened. Name the second use or second release; a single-owner discipline refutes.
+- ABI & layout: cross-language structs/enums whose layout, size, or discriminants disagree across the boundary (`#[repr(C)]` mismatch, enum value out of the declared range, unwind across an FFI frame, thread-affinity violations when passing handles). The effect must be a real misread/misdispatch, not a stylistic portability note.
+- Loader & image trust: dynamic-loader search order trusting a writable directory (`PATH`/`LD_LIBRARY_PATH`/relative rpath), verify-then-open mismatches (signature checked on one path, file loaded from another), and malformed metadata/relocations trusted by a custom loader. Classify as unauthorized image load only when the writable path reaches the load; an unverifiable runtime search order stays **requires runtime verification**.
+- JIT & double-fetch: generated code consistency with the data it validates (bounds check compiled against one snapshot, executed against another), and double-fetch/user-copy patterns where shared or user memory is read twice with the size/bounds check between reads. A single read or kernel-side copy-in refutes.
+
+**Effect classification:** claim only the effect the source shows — invalid read/write, stale alias reuse, wrong-object dispatch, uninitialized output, unauthorized image load, deadlock, or safe termination. Unprovable effects downgrade to a Needs verification lead, never to confirmed.
+
+**Exclusions (each on its own terms):**
+- Stack allocation alone is not a leak — stack memory is reclaimed by return; a leak claim needs the buffer's address or contents escaping the frame.
+- Language-permitted output variance (unspecified iteration order, float reassociation, hash seed differences) is not a vulnerability without a security-relevant consumer of the variance.
+- Safe malformed-input rejection (parse error → clean abort) is not corruption; the finding requires malformed input accepted or misparsed into a wrong-but-valid state.
+
+### 9k. Availability & resource exhaustion
+
+A finding requires the full chain: an **input → cost path**, an **absent effective upper bound**, and **harm to another principal, a shared service, or shared spend**. A bounded same-user cost alone is hardening. Check the whole path for existing bounds before blaming the missing service-local rate limiter — another layer (gateway limit, queue cap, DB constraint, tenant quota) bounding the path refutes.
+
+- Input-to-cost bounds: body/message/file size limits, parse depth/complexity caps, and effective (not declared) upper bounds — a config constant that the actual path bypasses is absence, not a bound.
+- Superlinear parsing & ReDoS: quadratic string handling, backtracking regexes on user input (`(a+)+$` shapes on request paths), nested decode loops. A linear parser or a pre-size-gated input refutes.
+- Decompression & amplification: multi-stage/multiplier decompression without output caps, query/fan-out amplification (one request triggering N upstream calls with attacker-chosen N). Bounded fan-out or an output-side cap refutes.
+- Aggregate buffering & cardinality: per-item bounded but aggregate unbounded (unbounded in-memory accumulation, session/map growth, metric cardinality explosion from attacker-chosen label values). Eviction or a global cap refutes.
+- Leak families: shared FD/handle/temp-file leaks on error paths, and work that survives cancellation (abandoned requests still consuming DB/worker capacity — a cancelled request whose query keeps running is the finding). Cleanup on the error/cancel path refutes.
+- Asymmetric & pre-auth work: expensive operations (crypto, signature verification, password hashing) reachable pre-authentication where the cost ratio favors the attacker. Existing early cheap rejection refutes.
+- Quota & reset semantics: quota windows/reset boundaries the caller can exploit (quota reset mid-burst, per-request quota ignoring aggregate spend), mismatch between the metered unit and the actual cost unit. Aligned metering refutes.
+- Pool & supervisor scope: pool starvation by one tenant's slow work (connection/worker pools without per-principal fairness), fatal errors taking down a shared supervisor, retry storms on failure (unbounded retries amplifying an outage), fail-open recovery, and capacity rollback that restores stale state. Fair scheduling or bounded retry with backoff refutes.
+
+Never prescribe stress-testing or pressure shared/live services — this is static review of the cost path only.
+
 ## 10. Deployment & environment caveats
 
 - Dev-only setups: do NOT report missing TLS, missing HSTS, or dev-mode cookies (no `Secure`) in local/dev contexts. HSTS recommendations carry a lasting-lockout risk — give only with full context (domains, subdomains, rollout plan).
@@ -287,7 +354,18 @@ Apply where the repo actually has the surface. Absence is not a finding.
 
 ## 12. Verification & reporting
 
-- **Static evidence required:** every finding carries `file:line` and the code shape — the pattern plus the attacker-controlled input. No evidence, no finding.
 - Runtime-dependent claims are labeled exactly **requires runtime verification** and go to the audit index's **Needs verification** section — never reported as confirmed.
 - Findings use the standard finding format (**`references/finding-format.md`**); the Impact field must state the concrete attack scenario ("Send this request, get this result").
 - Record what was and was not audited as Coverage rows in the report — one row per material review question, never a bare "not audited" disclaimer — per **`references/codebase-audit.md`** § Coverage contract.
+
+## 14. Protocol, RPC & messaging invariants
+
+Grouped invariants for RPC frameworks, message queues, and event streams. Groups contain related checks — this is not a second domain catalogue. Protocol disagreement alone is not a finding: **accepted unauthorized effect is required; safe rejection by either endpoint refutes that path.** Behavior that cannot be verified from source stays a Needs verification lead, never a downgraded confirmed claim.
+
+- **Peer identity and authority.** An internal network location, schema validity, or successful deserialization does not authenticate the producer or principal. Compare the verified envelope identity (mTLS peer, SASL principal, signed envelope) against body-claimed identity (`user_id`, `tenant`, `on_behalf_of` fields) and control-plane authority (admin topics, management APIs). **Exclusion:** an explicit authenticated binding — envelope identity verified and bound to the operation before dispatch — refutes the claim.
+- **Endpoint coverage.** Authorization enforced on the primary method does not cover sibling surfaces: trace interceptors/middleware through streaming methods, reflection/health/metadata endpoints, and gateway-transcoded paths (REST-over-gRPC annotations, protocol bridges). **Exclusion:** absence of a reachable weaker path — every sibling route passing through the same interceptor chain or an equivalent check — refutes the bypass.
+- **Resource and stream authorization.** Per-item authorization on unary calls must also hold per-item within continuing streams (server/client/bidi streams, batch consumers), and topic/queue ACLs must match the tenant model (a shared topic readable by any tenant's consumers). Payload tenant labels alone are not isolation — **but** a consumer that itself enforces tenant checks on every delivered message closes the path; an enforcing consumer refutes.
+- **Correlation and ordering.** Correlation/request IDs must bind to the originating request and principal, not merely be present; then examine ack/commit ordering — accepting a stale, out-of-order, or replayed message into authorized state (idempotency-key without principal binding, offsets committed before the side effect, out-of-order writes winning). **Exclusion:** accepted *unauthorized* state is required — mere parser disagreement or rejected duplicates refutes.
+- **Failure channels.** Dead-letter queues, error topics, and retry buffers inherit producers' sensitive payloads and are frequently readable by wider audiences than the source topic; retained secrets/PII in DLQs past the source's retention scope is the finding. **Exclusion:** private, correctly scoped diagnostics (DLQ ACLs matching or tighter than the source, redacted payloads) refutes disclosure.
+- **Two-sided protocol enforcement.** Trace both producer and consumer sides of the contract, including replay and ordering validation on the consuming side — a producer that signs and a consumer that ignores the signature is an unenforced contract. **Exclusion:** safe rejection on *either* side (producer refusing to emit malformed frames, or consumer validating and dead-lettering them) blocks confirmation of the path; where the repo shows only one side, unverified behavior of the other stays a Needs verification lead.
+
