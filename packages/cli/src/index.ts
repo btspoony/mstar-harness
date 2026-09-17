@@ -2435,7 +2435,7 @@ iterationCommand
         if (command.args.length > 0) {
           throw new SddScriptError(`unexpected argument(s): ${command.args.join(", ")}\n${usage}`, 2);
         }
-        const missing = (
+        const missing: string[] = (
           [
             ["--workflow", options.workflow],
             ["--compass-ref", options.compassRef],
