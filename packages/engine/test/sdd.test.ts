@@ -4,7 +4,7 @@
  * `mstar sdd workspace|task-brief|review-package`).
  *
  * Spec sources (each test cites the skill/reference section it enforces):
- * - Per-task loop, BASE_SHA rule, progress ledger, model tiers, red flags:
+ * - Per-task loop, BASE_SHA rule, progress ledger, red flags:
  * `skills/mstar-sdd/SKILL.md` § Per-task loop, § Progress ledger,
  * § Red flags (NEVER) — `HEAD~1` as review BASE, resume without
  * `host_agent_id`, re-dispatch of completed tasks, skip task review.

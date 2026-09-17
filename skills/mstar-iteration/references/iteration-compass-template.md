@@ -31,7 +31,7 @@ plans: []
 
 ## Open Questions
 
-> Unresolved items, each owned by a Phase 1 chain role and cleared before the §1.6 lock. Write `None` in place of the table when there are no open questions.
+> Unresolved items, each owned by a Phase 1 chain role. Row disposition before the §1.6 lock → `phase-1-prepare.md` §1.3. Write `None` in place of the table when there are no open questions.
 
 | # | Question | Owner | Blocking? |
 |---|----------|-------|-----------|
@@ -62,8 +62,8 @@ Status values: `Todo` | `InProgress` | `InReview` | `Done` | `Blocked`
 
 ## Non-Goals
 
-- <明确排除项 1>
-- <明确排除项 2>
+- <明确排除项 1> — <排除理由>
+- <明确排除项 2> — <排除理由>
 
 ## Roadmap Position
 
@@ -141,9 +141,9 @@ Notes:
 | `## Plans` table | Yes | Phase 2 (sync status), Phase 3 (final) |
 | `## Milestones` | Recommended | Phase 1, Phase 2 (update) |
 | `## Acceptance Criteria` | Yes | Phase 1 |
-| `## Non-Goals` | Yes | Phase 1 |
+| `## Non-Goals` | Yes | Phase 1; each entry carries its rationale |
 | `## Decisions` | Yes | Phase 1 draft (appended in Phase 2); settled items with rationale and source |
-| `## Open Questions` | Yes（`None` allowed） | Phase 1 draft; each item carries an owner from the Phase 1 chain and is cleared before the §1.6 lock |
+| `## Open Questions` | Yes（`None` allowed） | Phase 1 draft; each item carries an owner from the Phase 1 chain — row disposition before the lock → `phase-1-prepare.md` §1.3 |
 | `## Roadmap Position` | **Yes** | Phase 1（必填节，非散落于 general context prose）；Phase 3 §3.3（current iteration → `delivered`） |
 | `## Risk Register` | Optional | Phase 1, Phase 2 (update) |
 | Iteration package (`guides/` / `specs/`) | Optional | Phase 1 §1.5.5; root index one row → `{ITERATION_DIR}/README.md` |

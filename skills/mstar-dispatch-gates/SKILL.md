@@ -111,7 +111,7 @@ When **`Execution mode: sdd`** (`mstar-sdd`):
 当 PM 派发**文档编辑类**专业角色（如 product-manager、architect、writing-specialist）直接修订 harness 产物时：
 
 - PM 写初稿；各角色通过宿主 invoke **直接编辑**目标文件（**不**另写仅评论式 `reports/` 替代修订）。
-- **`Inputs`（Phase 1 review-and-edit Assignment）**：PM 初稿 = **骨架 + 完整上下文**；深度契约、marker 语法与 owner 词汇 → **`mstar-iteration/references/phase-1-prepare.md`** §1.3（本文件不重述其形态）。该轮 Assignment 的 **`Inputs`** 必须携带：初稿路径（+ compass 路径）；方向决策 —— 或指向 compass `## Decisions` 的指针；带 owner 的 open questions —— 或指向 `## Open Questions` 的指针；非目标理由；**该角色 own 的 marker 清单**（`TODO(owner: …)`，对应 §1.6 的清除义务与报数）。承接方看不到 PM 会话：这些字段缺一，角色就只能从零重推它看不见的上下文。
+- **`Inputs`（Phase 1 review-and-edit Assignment）**：PM 初稿 = **骨架 + 完整上下文**；深度契约、marker 语法与 owner 词汇 → **`mstar-iteration/references/phase-1-prepare.md`** §1.3（本文件不重述其形态）。该轮 Assignment 的 **`Inputs`** 必须携带：初稿路径（+ compass 路径）；方向决策 —— 或指向 compass `## Decisions` 的指针；带 owner 的 open questions —— 或指向 `## Open Questions` 的指针；非目标理由；**该角色 own 的 marker 清单**（`TODO(owner: …)`；清除义务随清单下发 —— 承接方须在自己的 Completion Report 中报出**清除计数 / 重新归属计数**，义务全文 → **`mstar-iteration/references/phase-1-prepare.md`** §1.6）。承接方看不到 PM 会话：这些字段缺一，角色就只能从零重推它看不见的上下文。
 - **1 Assignment ⇒ 1 invoke**。
 - **Phase 1 Review & Edit chain**（`mstar-iteration` §1.6）：主产出 **`{SPECS_DIR}/`** + **`{ITERATION_DIR}/<iteration-id>/`** package；**禁止** start 链向 `{KNOWLEDGE_DIR}/` 新增。close 时 **`mstar-compound`** 提升 package → knowledge。
 - 其他彼此独立、无先后依赖的文档编辑任务：可并行（同条消息发满 N），见 **`parallel-dispatch.md`**。
