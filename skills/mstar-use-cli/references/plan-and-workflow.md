@@ -84,6 +84,8 @@ Common prefix: **handoff** (plan side, leaves the row InReview) → **accept** (
 
 A retried start never moves the recorded base; that is what makes the pinned attempt, not the retry, the unit of recovery.
 
+The handoff is a **byte-level pin**, not just a pointer: the digest of every report it names is taken at submission, so a cited report that changes afterwards — even by appending a section — refuses the completion step with a stale-evidence code. Finalize the QC and QA reports before handing off. When a report genuinely must change after a handoff, `return` the handoff, re-sign it against the new bytes, and let the coordinator `accept` again; there is no way to complete against the old pin.
+
 Walkthrough with synthetic ids — a plan session drives its own row, the coordinator drives the lifecycle, and each token is read from the state the previous step left:
 
 ```sh
