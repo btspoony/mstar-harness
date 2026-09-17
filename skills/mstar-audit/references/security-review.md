@@ -134,6 +134,14 @@ Apply where the repo actually has the surface. Absence is not a finding.
 - Password-reset tokens must be bound to the account, single-use, and expiring; token logged, unbound, or non-expiring is a finding.
 - Session fixation: no session rotation on privilege change (login, privilege escalation) — the pre-auth session survives privilege gain.
 - Session lifecycle: cookies without expiry or sliding refresh, sessions never invalidated server-side on logout, tokens valid after password change — stale credentials outlive the privilege change that should kill them.
+- OAuth/OIDC callback binding: check each protection is present AND bound — `state` matches the initiating session, PKCE `verifier`/`challenge` pair, `nonce` inside the ID token, `redirect_uri` exact-match validated, and multi-IdP login picks the account the flow started for. A callback that accepts the code without tying it to the session that began the flow (login CSRF, code swap between accounts) is the finding; the protocol being present is not.
+- SAML response binding: the identity consumed must be the verified object — the signed element (Response vs Assertion) is the one whose NameID/attributes are read, canonicalization is specified, validity window and audience/recipient (`Audience`, `Recipient`, `Destination`) match the service. Signature on one element while consuming the other is the finding; "SAML is complex" is not.
+- MFA enrollment & assurance: enrollment or reset paths that a first-factor-only caller can reach, downgrade of a declared assurance level on sensitive actions, and step-up challenges not bound to the specific action being approved (a generic re-auth that approves a different, attacker-chosen operation).
+- WebAuthn/passkey verification: challenge must be fresh and server-generated, RP ID / origin must match the relying party, credential ID must belong to the authenticating user, and `userHandle` must be checked on resident-key flows. Skipping any of these server-side is the finding; WebAuthn used on a plain password field adds nothing either way.
+- Account linking & identity collision: linking flows keyed on email or a provider-supplied identifier that can match an existing account the caller does not own (pre-verify the identifier at each provider before auto-link); recovery paths that trust the same collision-prone match.
+- Recovery surface breadth: audit every reset path, not just the public form — support/admin tools, backup codes, device/email/phone changes. Contact-info changes and code issuance that do not invalidate existing sessions/backup codes leave the attacker's foothold intact; that is the finding.
+- API keys: key scope must bind to the resource set it is used against (a key scoped to project A reading project B is a finding); publishable-vs-secret distinction — a publishable key reaching a server-side-only context is noise, a secret key reaching a client bundle is a finding (§6 for values).
+- mTLS & certificate lifecycle: the verified peer certificate must map to the application identity the request claims (a valid cert for any tenant is not tenant auth); revocation/expiry checks that fail open on a fetch error are the finding, a documented fail-closed path is not. **Exclusion:** name the specific missing binding; "uses OAuth/SAML/MFA" is never itself a finding, and a protocol mentioned in config without a reachable code path is not a surface.
 
 ### Web protocol
 
@@ -141,6 +149,9 @@ Apply where the repo actually has the surface. Absence is not a finding.
 - Host / `X-Forwarded-*` trust: password-reset links built from the `Host` header (host-header poisoning); `X-Forwarded-For` used for authz decisions without a trusted-proxy boundary.
 - Cache poisoning via unkeyed input: request headers that alter the response but are missing from the cache key.
 - Method/path normalization: routing that distinguishes `GET` vs `POST` where middleware runs on one method only; trailing-slash and case-insensitive duplicates of the same route with different checks.
+- Cache deception / private-response caching: an authenticated (or cookie-bearing) response stored by a shared cache under a path an attacker can make the victim request — look for cache keys that strip query strings/extension normalization (`.js`/`.png` suffix tricks) and `Cache-Control` on authed responses. Not a finding when the authed response is explicitly non-cacheable, the path is not attacker-choosable, or an effective upstream control separates private from cacheable responses.
+- Response-header injection: attacker-controlled values flowing into header-setting calls (`Set-Cookie`, `Location`, custom headers) carrying CR/LF or other control characters. A framework that strips/rejects control characters in header values refutes the concrete path.
+- CSRF inventory breadth: cover every cookie-authenticated mutation — legacy endpoints predating the CSRF layer, `method-override` parameters that swap methods around middleware, login CSRF (attacker logs the victim into the attacker's account). A safely rejected request (origin check, token bound to session) or an effective upstream control refutes the concrete path; absence of a token on a same-site-only, non-mutating route is not a finding.
 
 ### Business logic & abuse
 
@@ -151,6 +162,10 @@ Apply where the repo actually has the surface. Absence is not a finding.
 - Missing rate limits on auth/reset/expensive endpoints — respecting the deployment model: a CDN-layer or API-gateway rate limit is valid architecture, do not flag its absence at the service layer when it exists elsewhere.
 - **Idempotency and replay:** retried webhooks, replayed requests, and double-submission on payment/order paths — check the idempotency key is bound to the actor, not just present.
 - **Mass action surfaces:** bulk update/delete/export endpoints that skip the per-item checks single-item endpoints enforce.
+- Numeric manipulation: sign flips, zero/negative quantities, integer overflow, floating-point precision, string-to-number coercion on price/quantity/credit paths — reachable only when the computed value is trusted downstream (balance, limit, entitlement). Unusual arithmetic on a display-only value is not a finding.
+- Partial-failure rollback: multi-step writes (payment + order, transfer legs, quota + record) where one side commits and the other fails or is retried — the surviving half must not confer value. A transaction boundary or compensating action on the failure path refutes it.
+- Time boundaries: expiry comparisons (`<` vs `<=`), clock-skew tolerance windows, timezone-dependent "end of day" cutoffs, backdated/future timestamps accepted from input where the server's clock is the intended authority. The effect must be an unauthorized state reached through the time gap, not a stylistic preference.
+- Default & fallback posture: missing config, disabled flags, or dependency outages that fall back to allow/open/zero-cost instead of deny; migration-era code paths still reachable. The failure branch must be reachable and grant something real; a closed fallback is not a finding. **Exclusion:** require reachable unauthorized state or financial effect — an odd-but-bounded computation with no trust consequence is noise.
 
 ### Client-side
 
@@ -161,6 +176,12 @@ Apply where the repo actually has the surface. Absence is not a finding.
 - CORS: reflected origin with `Access-Control-Allow-Credentials: true` → flag; a bare `*` wildcard without credentials is not a finding.
 - Client-stored state: tokens in `localStorage` are a note in most apps (XSS is the real boundary); flag only when a CSRF-exposed or multi-origin surface makes them reachable.
 - History and referrer: sensitive identifiers in URLs leak through `Referer` to third parties; flag when the identifiers gate access.
+- DOM clobbering: attacker-retained markup (an injection sink that persists in the page) whose named elements/ids collide with script-referenced globals or `document.*` lookups — requires BOTH the retained markup AND a security-relevant consumer (a config value, permission flag, or sink argument read through the clobbered name). Clobbered names with no consumer are not a finding.
+- Cross-site WebSocket: `new WebSocket(url)` on a cookie-authenticated endpoint without origin validation on the handshake — the browser sends cookies cross-site. A server that validates `Origin` (or the app is not cookie-authenticated) refutes it.
+- Service workers: registration scope wider than the pages it intercepts, and cache-identity confusion — a worker serving cached responses keyed without URL/version/tenant discrimination can serve one user's or one version's response to another. Not a finding when scope is narrowly registered and cache keys are complete.
+- Cross-context storage: `localStorage`/`sessionStorage`/`BroadcastChannel`/shared workers reachable from other same-origin contexts (other apps on the same origin, stale tabs continuing to act after logout). Flag when a lower-privilege same-origin app reads another's data or a stale tab retains authorization; same-app session restoration is not.
+- `window.name` and URL fragments: values carried across navigations/origins (`window.name`, `#fragment`) consumed as configuration, redirect targets, or rendered content. Consumption as page data with the page's own trust is not a finding; crossing a trust boundary into a sink is.
+- XS-Leaks: requires a concrete secret-bearing predicate a cross-site principal can evaluate — an error/size/status/timing difference that answers yes/no about another user's data (e.g. search results distinguishing "exists", cross-origin frame counting a protected page). Generic timing variance or response-time jitter without the predicate is not a finding.
 
 ### AI/LLM features
 
@@ -174,6 +195,14 @@ Apply where the repo actually has the surface. Absence is not a finding.
 - Guardrail prompts are not security controls; the enforcement boundary is the handler, not the system prompt.
 - Model-scope escalation: a model that can read more than its user (shared tool session, service-account context) turns any prompt into a privilege edge — name the capability the user lacks.
 - Streaming and caching: LLM responses cached or logged without redaction can persist PII beyond the request lifecycle; check the cache key and retention like any other store.
+- Persistent memory poisoning: injected content written to durable memory (saved notes, learned preferences, stored summaries) only counts when a reachable consumer later acts on it — name the reader and the action it drives. Memory nothing reads back is not a finding.
+- Role / provenance confusion: content from a lower-trust source rendered or treated as system/developer role (tool output formatted as system messages, retrieved docs injected above user turns). Name the lower-trust author and the privilege the role label grants it.
+- Action & approval binding: confirmations must bind to the specific action payload — a "yes" approving a different tool call than the one shown, or an approval captured before the action is finalized, is the finding.
+- Tool-schema vs dispatcher disagreement: the declared tool schema (params, constraints) differing from what the dispatcher actually passes/executes — the dispatcher's path is the real attack surface; a correct schema with a diverging executor is the finding.
+- Sub-agent & MCP trust inheritance: a sub-agent or MCP server inheriting the parent's authority (service identity, tenant scope, credentials) without its own checks — name the execution principal and the capability it gains beyond its caller's intent.
+- Peer identity & metadata-as-policy: peer-supplied identity claims or metadata (agent names, labels, capability announcements) treated as authorization decisions. Metadata describes; it does not authorize — a policy decision made from attacker-writable metadata is the finding.
+- Cross-session / cross-tenant context bleed: conversation history, cached context, or workspace state shared across sessions or tenants — the query/retrieval boundary must enforce isolation (§9h applies to the store).
+- **Exclusion:** for every fold above, name the lower-trust author, the execution principal, and the capability gained. "Prompt injection is possible" alone remains insufficient — the existing first bullet governs.
 
 ### Supply chain & CI/CD
 
@@ -184,6 +213,19 @@ Apply where the repo actually has the surface. Absence is not a finding.
 - Never recommend forced remediation (`audit fix --force`, `npm audit fix --force`) — it bumps majors without review.
 - Registry scope: private registries used for public packages, registry mixing in one manifest, and packages pulled from unauthenticated mirrors.
 - Publish provenance: npm/GitHub provenance attestations absent on release-critical packages is a note, not a finding, unless the supply chain is the repo's product.
+- CI configuration is authorization code: read workflow files as policy — what untrusted input (`pull_request_target`, `issue_comment`, forks) can trigger, what secrets/capabilities/checkouts each trigger reaches. Compare untrusted-event triggers against protected-event triggers; a privileged step reachable from an untrusted trigger is the finding.
+- Cache/artifact/workspace trust mixing: caches or artifacts written by untrusted runs restored into privileged ones (`actions/cache` keyed on branch an attacker can push to, artifacts downloaded without run-source checks, workspace state persisting across jobs with different trust).
+- Expression/command confusion: `workflow_run`/event JSON fields (`title`, `branch`, `head_commit.message`) interpolated into `run:` shell or script contexts; matrix values derived from untrusted event payloads. `${{ }}` in a `run:` block is untrusted input at a shell sink.
+- Build-context inclusion: secrets or env needed by one build stage placed in a context (Docker build context, artifact upload scope) readable by a wider stage/consumer than intended.
+- Promotion digest binding: the digest attested/built must equal the digest promoted/deployed — promotion flows that re-resolve a tag instead of pinning the built digest lose the binding.
+- Attestation claims: signature/attestation verification must check identity claims (subject, repo, workflow, issuer), not just that a signature exists; verifying an attacker-attested artifact is not verification.
+- Fail-closed lifecycle: expiry, revocation, and rotation of tokens/signing keys that fail open on fetch/refresh errors; an updater that accepts metadata when the timestamp/rotation check errors is the finding.
+- Updater integrity: update metadata verification (signer, version monotonicity, rollback acceptance) and atomic install — a partially applied update executable on the failure path is the finding.
+- Extension/plugin hooks: hooks or plugin entry points that run before trust checks (pre-install scripts, extension init with host credentials) — order of execution vs order of validation is the check.
+- Error-path policy: failure branches of CI steps and deploy scripts that retry open, skip verification, or dump secrets into logs/artifacts on error.
+- Source/namespace confusion: dependency resolved from a different registry/source/namespace than the manifest declares (scope squatting on internal namespaces, mirror override, `--registry` on the CLI but not in the lock).
+- Mutable build inputs: floating refs (`@main`, `latest`, branch pins) in actions, base images, or dependency specs feeding privileged builds.
+- **Exclusion:** reproducibility is not authenticity — a reproducible build of attacker-chosen inputs proves nothing. Dependency mutability, a CVE, or missing least privilege alone is not proof of a reachable exploit; name the trust/authority failure an attacker reaches.
 
 ### Infra configs
 
@@ -192,14 +234,35 @@ Apply where the repo actually has the surface. Absence is not a finding.
 - Debug modes and default credentials in production config: actuator/debug endpoints exposed, default admin passwords, verbose stack traces.
 - Network exposure: services binding `0.0.0.0` without a stated reason, admin/management ports on public interfaces, health or metrics endpoints answering unauthenticated requests with internal state.
 - Backend service config: database connections over plaintext, missing auth on internal caches/queues (Redis, RabbitMQ), and service-to-service credentials embedded in source.
+- Workload identity / IAM: role or service-account permissions judged against what the workload actually calls, not the class "too broad"; an unused permission without a reachable abuse path is a Hardening note.
+- Cross-account role binding: assume-role/impersonation paths must bind external ID / audience / tenant condition — a role assumable by any principal in the trusted account is the finding.
+- Application trust in metadata: platform-injected headers/labels/annotations (mesh headers, task metadata, k8s labels) consumed for authorization inside the application — the platform attests placement, not permission; an app-level decision made from them is the finding.
+- Mesh/proxy escapes: alternate ports bypassing the sidecar, health/readiness paths exempt from auth but serving state, fail-open modes on the mesh or proxy config.
+- Metadata-service reachability: workloads that can reach the cloud metadata service (IMDS) with credentials-returning routes, and IMDSv2-style mitigations absent where the runtime supports them.
+- Admission & restore/upgrade paths: policy that enforces at admission but not on restore-from-backup, upgrade, or direct-API mutation of the same objects — the object can enter through a path the policy does not gate.
+- Namespace/label trust: isolation or authorization derived from namespace names or labels an unprivileged principal can create or relabel.
+- Security-control precedence: two controls of different strength covering the same path (a restrictive NetworkPolicy plus an allow-all default, an RBAC deny plus a wildcard role) — the effective weakest control governs; name which one the request actually meets.
+- Credential renewal & outage fallback: token/secret renewal paths that on outage fall back to the previous (or unauthenticated) credential instead of failing closed.
+- Signed references & object policies: signed URLs / pre-signed objects scoped wider than the feature that issues them (wildcard resources, long TTLs, no method restriction); object/store ACLs disagreeing with the application's tenant model.
+- Event-source identity: consumers trusting event payloads' claimed identity without verifying the source binding; replay of already-processed events; dead-letter queues readable or retained beyond the source's trust scope.
+- Edge vs origin mismatch: CDN/edge runtime behavior (rewrites, header normalization, auth at edge) that the origin does not assume — origin trusting an edge-only header, or edge passing paths the origin router normalizes differently.
+- **Evidence discipline:** inspect already-available effective configs/manifests and source precedence (repo files, rendered artifacts checked in, `kubectl get -o yaml` output the repo records); **never run** deployment/render/build commands during an audit. Manifest-only assumptions or unknown provider defaults remain **requires runtime verification** (§12), not lower-severity confirmed findings.
 
-### Privacy / retention
+### Data isolation & lifecycle
 
 - PII classification: name the fields that are PII here (identity, credentials, money, contact, content) before assessing.
-- Retention: personal-data stores need a TTL and a working deletion path — backups, caches, and indexes included; a deletion function that misses any of these is a finding.
 - Sensitive fields in API responses or logs: tokens, money fields, PII in debug output, structured logs without redaction.
-- Deletion-path verification: an API that deletes the record but leaves the file, the blob, or the analytics event is a retention finding even when the primary store is clean.
 - Export surfaces: bulk export, backup, and data-portability endpoints that return more than the requesting tenant owns are both a privacy and an IDOR risk.
+- Record lineage: trace one record's copies across write/query/cache/index/event/export/backup/delete/restore — every hop must carry the original's access boundary. A hop that drops or widens it (cache keyed without tenant, index without ACL filter, export without scope) is the finding.
+- Composite-key & namespace collision: keys/namespaces combining tenant + resource where attacker-chosen components can collide across tenants (string concatenation without separator or escaping, shared global sequences) — the collision must let a lower-trust principal read or write the other tenant's record to count.
+- Policy vs query disagreement: the declared isolation policy (RLS, row filter, tenant middleware) differing from what the actual query path enforces — a raw-query or admin-code path skipping the tenant filter is the finding even when the standard ORM path is clean.
+- Blob & signed-reference scope: stored objects reachable through references (signed URLs, IDs, paths) granting wider access than the owning record's ACL; derived copies (thumbnails, exports, embeddings) inheriting store defaults instead of the source's ACL.
+- Import/restore authority expansion: import or restore flows executing with more authority than the calling user (system identity, cross-tenant targets, unvalidated ownership on the imported records) — the imported data must land inside the caller's boundary.
+- Migration & backfill ownership: migrations/backfills/rollbacks that read or write across tenant boundaries, or set ownership/tenant fields by assumption rather than source-of-truth lookup; rollback code is code — audit it like a write path.
+- Backup/replication drift: replicas or backups with a different access boundary than the primary (broader readers, weaker auth, longer retention) — data whose protection ends where the replica begins is a boundary breach, not a lifecycle preference.
+- Tombstones & re-registration: soft-deleted records resurrected by ID reuse or re-registration, or visible through views/queries that don't filter the tombstone; deletion must survive the identifier's reuse.
+- Stale authorization beyond sessions: authorization state cached outside the session — grants materialized in tokens, group membership in long-lived jobs, capability URLs issued before a revocation that never reach them. Revocation must propagate to every consumer of the grant, or the finding stands.
+- Retention & deletion guarantees: missing TTL alone is **not** a finding — it is a Hardening note. A retention finding requires an explicit access/deletion/revocation guarantee the code claims plus a demonstrated breach: an unauthorized reader, or a subsequent operation the guarantee said was impossible. Incomplete deletion (record deleted, blob/cache/index/analytics copy left) remains a finding when it demonstrably breaches the declared boundary — which copy, which reader.
 
 ## 10. Deployment & environment caveats
 
