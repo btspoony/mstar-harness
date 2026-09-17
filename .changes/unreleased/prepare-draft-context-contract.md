@@ -1,0 +1,19 @@
+---
+category: Harness
+packages: root
+---
+
+- Contracted the **Phase 1 PM draft** (`mstar-iteration` §1.3): it is the context carrier a dispatched role reads from disk, never from the PM's conversation, so it must now carry the locked direction, the settled decisions, the open questions with their owners, the non-goal rationale, the constraint sources, the acceptance seed and the branch policy — while option analysis, module/interface detail, per-task decomposition and plan-level technical design may legitimately stay coarse.
+- Sanctioned exactly **one** unfinished form during Prepare: the owned `TODO(owner: <role-id>)` marker, defined once in §1.3 with its owner vocabulary limited to the Phase 1 chain — `product-manager` / `architect` / `writing-specialist` / `PM`. Only a marker pointing at an owner may stand in for unfinished detail, and it must be cleared — or explicitly re-owned to `PM` and raised to the user — before the compass reaches `status: locked`. An unowned `TBD` / `...` / `etc.` remains forbidden at every stage.
+- Added two required compass sections, `## Decisions` (decision + rationale + source) and `## Open Questions` (each item with an owner and a blocking flag; `None` when empty), immediately after `## Scope` in both the template and the §1.3 inline scaffold, with their `## Fields guide` rows.
+- Gave every Phase 1 editing role a **marker-clearing duty** (§1.6 and the artifact-boundaries table): a role discharges the markers naming it in its own edit pass, re-owns to `PM` whatever it cannot close, and reports the cleared/re-owned counts; `writing-specialist` additionally runs the closing no-marker check that precedes the compass lock.
+- Stated the **Prepare-writing bar** in `mstar-artifacts/references/plan-quality-bar.md` as the mirror image of "write for a zero-context executor" — the draft and the compass are the context carrier, and no role-owned marker survives the compass lock. `mstar-phase-gates` now names the gate timing: the no-placeholder judgment runs at `plan(locked)`, while the marker clearing deadline is the compass `status: locked`; the ban itself is unchanged.
+- Required a Phase 1 review-and-edit Assignment's **`Inputs`** to carry the draft path, the direction decisions (or a pointer to compass `## Decisions`), the open questions with their owners, the non-goal rationale, and the list of markers the role owns — and added "dispatch an editing role without decisions / open questions" to the anti-pattern list, since such a role can only re-derive context it cannot see.
+
+<!-- CN -->
+- 确立 **Phase 1 PM 初稿契约**（`mstar-iteration` §1.3）：初稿是被派发角色从磁盘读取的上下文载体，而非来自 PM 会话，因此必须携带锁定方向、已决事项、带 owner 的未决事项、非目标理由、约束来源、acceptance seed 与 branch policy；而候选方案分析、模块/接口细节、per-task 分解与 plan 级技术设计可以合法留粗。
+- 为 Prepare 阶段**只认定一种**未完成形态：带 owner 的 `TODO(owner: <role-id>)` marker —— 语法只在 §1.3 定义一次，owner 取值限定 Phase 1 链（`product-manager` / `architect` / `writing-specialist` / `PM`）。只有指向 owner 的 marker 可以代替未完成细节，且必须在 compass 到达 `status: locked` 前清除，或显式重新归属给 `PM` 并上报用户。无 owner 的 `TBD` / `...` / `etc.` 在任何阶段仍然禁止。
+- compass 新增两个必需节 —— `## Decisions`（决策 + 依据 + 来源）与 `## Open Questions`（每条带 owner 与 blocking 标记；无未决项写 `None`），在模板与 §1.3 内联脚手架中均紧随 `## Scope`，并补入各自 `## Fields guide` 行。
+- 为每个 Phase 1 编辑角色加上 **marker 清除义务**（§1.6 与 artifact-boundaries 表格）：角色在自身编辑轮中清除 owner 指向自己的 marker，无法清除的重新归属给 `PM`，并报出已清除/已重新归属的数量；`writing-specialist` 另承担 compass lock 之前的「无 marker 残留」收口核对。
+- 在 `mstar-artifacts/references/plan-quality-bar.md` 写明 **Prepare 写作侧标准**，作为「为无上下文执行者写作」的镜像：初稿与 compass 就是上下文载体，compass lock 前不得残留角色 own 的 marker。`mstar-phase-gates` 现明确门禁时点：无 placeholder 的判定在 `plan(locked)` 执行，marker 的清除期限是 compass 的 `status: locked`；禁令本身未变。
+- 要求 Phase 1 review-and-edit Assignment 的 **`Inputs`** 携带初稿路径、方向决策（或指向 compass `## Decisions` 的指针）、带 owner 的 open questions、非目标理由，以及该角色 own 的 marker 清单；并把「派发编辑角色却不给方向决策 / open questions」列入反模式清单 —— 该角色只能重推它看不到的上下文。

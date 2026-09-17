@@ -1,7 +1,7 @@
 {
   "harness_name": "pm-routing-evals",
-  "version": 30,
-  "updated_at": "2026-09-16",
+  "version": 31,
+  "updated_at": "2026-09-17",
   "cases": [
     {
       "id": "small-ui-tweak",
@@ -483,7 +483,6 @@
         "Context Loaded declaration",
         "Execution mode: sdd",
         "SDD dir path",
-        "Model tier on implement Assignment",
         "serial implementer then task reviewer per task",
         "plan QC tri N=3 after all tasks (Execution mode: sdd implies tri) + branch review-package",
         "progress.md ledger"

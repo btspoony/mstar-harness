@@ -31,7 +31,7 @@ PM 在新迭代启动时执行。
 
 ### Direction lock modes
 
-compass/plans 初稿落盘前，必须锁定**单一**迭代方向、成功标准、非目标，并确认 delivery branch policy；决策写入 compass `## Scope` / `## Acceptance Criteria` / `## Non-Goals` 与 Delivery Branch Policy。
+compass/plans 初稿落盘前，必须锁定**单一**迭代方向、成功标准、非目标，并确认 delivery branch policy；决策写入 compass `## Scope` / `## Acceptance Criteria` / `## Non-Goals` 与 Delivery Branch Policy。**已决事项**另须落入 compass **`## Decisions`**（每条 = `decision` + `rationale` + `source`：user instruction / grill-me / autonomous ranking），**未决事项**落入 **`## Open Questions`**（每条带 owner —— `product-manager` / `architect` / `writing-specialist` / `PM` —— 与 blocking 标记；无未决项写 `None`）。两节形态 → **`references/iteration-compass-template.md`**；初稿深度与清除义务 → §1.3 **Draft contract**。
 
 | Mode | 何时选用 | 行为 |
 |------|----------|------|
@@ -72,6 +72,18 @@ plans: []
 ## Scope
 <本迭代要锁定的 spec 点>
 
+## Decisions
+
+| # | Decision | Rationale | Source |
+|---|----------|-----------|--------|
+| D1 | <已决事项> | <依据> | user instruction / grill-me / autonomous ranking |
+
+## Open Questions
+
+| # | Question | Owner | Blocking? |
+|---|----------|-------|-----------|
+| Q1 | <未决事项> | product-manager / architect / writing-specialist / PM | Yes / No |
+
 ## Plans
 
 | plan_id | Name | Status | Notes |
@@ -103,6 +115,26 @@ plans: []
 ```
 
 > **Engine check (when available):** import `validateCompassFrontmatter` from `@mstar-harness/engine` in a host hook to validate the compass frontmatter above (no CLI form yet). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+
+### Draft contract（PM 初稿的深度契约）
+
+PM 的初稿是**上下文载体**：被派发角色看不到 PM 的会话，只从磁盘读（`delivery-compass.md` + plans + `<iteration-id>/` package）。所以初稿按 **「骨架 + 完整上下文」** 交付，深度边界如下。
+
+**(i) 初稿必须携带**：锁定方向；已决事项（→ compass `## Decisions`）；带 owner 的未决事项（→ `## Open Questions`）；**非目标及其理由**；约束来源（用户指令 / 既有 spec / knowledge / roadmap）；acceptance seed（可长成 `## Acceptance Criteria` 的条目）；branch policy。
+
+**(ii) 初稿可以合法留粗**：候选方案分析、模块/接口细节、per-task 分解、plan 级技术设计。这些**标记**为待补，**不**编造。留粗是允许的；**不加标记**则不允许 —— 未标记的空洞无人认领，等于把上下文缺口丢给一个看不到会话的承接方。
+
+**(iii) 标记形态（语法只在本节定义；其它文件按 path + 节号引用本处）**：
+
+```text
+<!-- TODO(owner: <role-id>): <what is missing and what must be decided> -->
+```
+
+owner 取值仅限 Phase 1 链：`product-manager` / `architect` / `writing-specialist` / `PM`（需回到用户决策时）。**无 owner 的 `TBD` / `...` / `etc.` 在任何阶段都仍然禁止** —— 没有 owner，就没有清除它的地方。
+
+**(iv) 清除期限**：compass `status: locked` 是终线。lock 前，owner 属于链条三角色的 marker **必须**全部清除；无法清除的，在 lock 前**显式重新归属给 `PM`** 并上报用户（`PM` 归属项是 lock 之后唯一允许存在的 marker 形态）。**禁止**静默删除，也**禁止**让无 owner 的 placeholder 越过终线。各角色的清除义务与报数 → §1.6。
+
+**(v) `## Open Questions` 行的处置**：§1.2 落盘的每一行在终线前必须落到三者之一：收敛为已决事项（撤出该行并计入 `## Decisions`）；或转入 (iii) 的 marker 形态（行的 owner 即 marker 的 owner，随 (iv) 一同清除或重新归属给 `PM`）；或**显式重新归属给 `PM`** 并上报用户。**禁止**静默删除行 —— 与 (iv) 共用同一终线。`Blocking?` 决定该行**能否**越过终线：标记 `Yes` 的行**必须**在 lock 前收敛为已决事项，**不论**它本会重新归属给谁；不能收敛即 Prepare 未通过（`Gate decision: blocked`），compass **不得**置 `status: locked`。lock 之后 `## Open Questions` 中唯一允许存在的行，即**非阻塞**且 owner 为 `PM` 的行。行转入 marker 形态后，其清除义务与报数按 §1.6 计。
 
 ## 1.4 更新索引
 
@@ -154,6 +186,8 @@ Phase 1 与 §1.6 须遵守 **`references/iteration-artifact-boundaries.md`**（
 1. **product-manager** → **architect** → **writing-specialist** 已按序 invoke 编辑 compass、plans、`{SPECS_DIR}/` 与 **`{ITERATION_DIR}/<iteration-id>/`** package（guides/specs，按需）；**不得**在 start 链向 `{KNOWLEDGE_DIR}/` 新增
 2. **writing-specialist** 完成 **corpus hygiene**：仅本轮修改的 `{SPECS_DIR}/` / iteration package 与直接相关 knowledge 引用；错放迁回 **`<iteration-id>/`** package；细则 → **`iteration-corpus-hygiene.md`**、**`iteration-artifact-boundaries.md`**
 3. PM 将 compass `status` 设为 `locked`，并确认各 plan 的 Prepare gate（specify / clarify / plan）
+
+**Marker 清除义务（§1.3，每个被派发角色）**：角色在自己这一轮编辑中**必须**清除 owner 指向自己的 marker，无法清除的在完成前**重新归属给 `PM`** 并写明理由；两种情况都在 Completion Report 中报出**清除计数**（已清 N / 已重新归属 M）。**writing-specialist** 额外承担**收口核对**：除显式重新归属给 `PM` 的 marker 外，**无** marker 残留（语法的唯一 home 是 §1.3；本行不重述其形态）—— 该核对是 PM 置 `status: locked` 的前置。
 
 **顺序理由**：产品范围与优先级 → 架构与长期契约（specs）→ 行文、规格库卫生与错放纠正（在 PM/architect 定稿后核对受影响文档）。本共享产物链存在真实依赖；独立文档可按 ownership 隔离并行。早期全局探索的既有结果复用，不因每次编辑重新扫全库。角色名写法（role id 提及 hygiene）→ active host reference（**`mstar-host`** → `references/<host>.md`）。
 

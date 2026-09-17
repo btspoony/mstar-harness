@@ -59,7 +59,7 @@ Execute **`mstar-host`** → active host 的 **plan-mode bridge**（其 "mstar-i
 
 Command-unique 补充（bridge 未枚举）：
 
-- **空白脚手架字段**：Direction / Scope / Acceptance Criteria / Non-Goals / Delivery Branch Policy（`iteration_base_branch` / `spec_integration_branch` / `target_branch`）/ Plans / Feedback log / Deferred grill log
+- **空白脚手架字段**：Direction / Scope / Decisions / Open Questions / Acceptance Criteria / Non-Goals / Delivery Branch Policy（`iteration_base_branch` / `spec_integration_branch` / `target_branch`）/ Plans / Feedback log / Deferred grill log
 - **Build 才勾的 todos**（顺序）：`harness-init` → `finalize-compass-plans`（同一 session plan 落成 compass + plans + `status.json` 登记 + 索引）→ review-edit-product-manager → review-edit-architect → review-edit-writing-specialist → `pm-lock` → `integration-branch`
 
 ## 非 Plan 路径从这里继续 ↓

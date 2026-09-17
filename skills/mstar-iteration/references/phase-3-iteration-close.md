@@ -19,6 +19,7 @@ PM 在迭代内全部 plan Done 后执行。**本 Phase 在 integration worktree
 | 检查 | 缺则补齐 |
 |------|----------|
 | YAML frontmatter：`iteration_id`, `start_date`, `status` | 从文件名 / 正文提取；收口前 `status` 保持 `active` 或 `locked` |
+| `## Decisions` / `## Open Questions`（模板中紧跟 `## Scope`） | 从 general context / 正文迁移为本节，无内容则按模板补节；行处置 → `phase-1-prepare.md` §1.3 |
 | `## Roadmap Position` | 从 general context / roadmap prose 迁移为本节 |
 | `## Quality Gate Summary` | 按模板补占位，§3.4 填写 |
 | `## Compound Round Summary` | 按模板补占位，§3.4 填写 |

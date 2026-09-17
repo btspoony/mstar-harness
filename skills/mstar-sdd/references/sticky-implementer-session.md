@@ -21,7 +21,6 @@ SSOT for mode selection and host resume → this file. Per-task artifacts → **
 **Execution mode**: sdd
 **SDD implementer session**: sticky | fresh
 **SDD dir**: `{HARNESS_DIR}/sdd/<plan-id>/`
-**Model tier**: standard
 **Execute as**: fullstack-dev
 **Working branch**: <branch>
 **Covers task**: N | N–M   # single task id for this dispatch turn
