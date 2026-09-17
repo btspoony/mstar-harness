@@ -698,7 +698,7 @@ describe("mstar audit scaffold — plan directory from findings JSON", () => {
             category: "security",
             description: "User-controlled CSV export interpolates raw SQL.",
             confidence: "HIGH",
-            evidence: ["src/export.ts:88 — f-string builds the query", "src/export.ts:120 — same sink in the retry path"],
+            evidence: ["src/export.ts:88 — f-string builds the query", "src/export.ts:120 — same sink in the retry path", "  padded entry — rendered exactly as supplied  "],
             fixSketch: "Parameterize both call sites.",
             verification: "bun test packages/api/test/export.test.ts",
           },
@@ -715,6 +715,9 @@ describe("mstar audit scaffold — plan directory from findings JSON", () => {
       expect(plan).toContain("## Evidence");
       expect(plan).toContain("- src/export.ts:88 — f-string builds the query");
       expect(plan).toContain("- src/export.ts:120 — same sink in the retry path");
+      // Leading/trailing whitespace in a supplied entry is preserved as-is —
+      // trimming is only used for the non-empty validation check.
+      expect(plan).toContain("-   padded entry — rendered exactly as supplied  ");
       // ...and fixSketch/verification render too.
       expect(plan).toContain("## Fix sketch");
       expect(plan).toContain("Parameterize both call sites.");
@@ -729,7 +732,7 @@ describe("mstar audit scaffold — plan directory from findings JSON", () => {
     });
   });
 
-  test("absent confidence/evidence defaults to MED/[] — no Confidence Status line, no Evidence section", () => {
+  test("absent confidence/evidence defaults to MED/[] — legacy plan/index byte-identical with pinned date/SHA", () => {
     withTempDir((dir) => {
       const findingsFile = join(dir, "findings.json");
       writeFileSync(findingsFile, JSON.stringify([{ title: "Add index", priority: "P2", effort: "XS", risk: "LOW", category: "tech-debt", description: "Index the audit table." }]));
@@ -737,8 +740,48 @@ describe("mstar audit scaffold — plan directory from findings JSON", () => {
       const result = runCli(["audit", "scaffold", findingsFile, "--dir", outDir, "--sha", "deadbee", "--date", "2026-08-08"]);
       expect(result.exitCode).toBe(0);
       const plan = readFileSync(join(outDir, "001-add-index.md"), "utf8");
+      // Focused legacy-shape assertions.
       expect(plan).not.toContain("**Confidence**");
       expect(plan).not.toContain("## Evidence");
+      // Full byte-identical baseline: with date/SHA pinned, the legacy
+      // (no-confidence, no-evidence) document must not drift at all.
+      const expectedPlan = `# Add index
+
+## Status
+- **Priority**: P2
+- **Effort**: XS
+- **Risk**: LOW
+- **Depends on**: none
+- **Category**: tech-debt
+- **Planned at**: commit \`deadbee\`, 2026-08-08
+
+## Impact
+Index the audit table.
+`;
+      expect(plan).toBe(expectedPlan);
+      const readme = readFileSync(join(outDir, "README.md"), "utf8");
+      // The row's trailing "| MED |  |" (empty Evidence cell, two spaces) is
+      // part of the pinned bytes — a legacy-shape regression fails here.
+      expect(readme).toContain("| 001 | Add index | tech-debt | Index the audit table. | XS | LOW | MED |  |");
+      const expectedReadme = `# Audit Report — repo @ deadbee (2026-08-08)
+
+## Findings
+
+| # | Finding | Category | Impact | Effort | Risk | Confidence | Evidence |
+|---|---------|----------|--------|--------|------|------------|----------|
+| 001 | Add index | tech-debt | Index the audit table. | XS | LOW | MED |  |
+
+## Execution order & status
+
+| Plan | Title | Priority | Effort | Depends on | Status |
+|------|-------|----------|--------|------------|--------|
+| 001 | Add index | P2 | XS | none | TODO |
+
+## Red-team dispositions
+
+- <finding>: <survived / refuted / hallucination-dropped / uncovered-kept>, <one-line reason>
+`;
+      expect(readme).toBe(expectedReadme);
     });
   });
 

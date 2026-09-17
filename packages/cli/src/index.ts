@@ -4119,7 +4119,8 @@ function parseAuditScaffoldInput(text: string): AuditScaffoldInput {
     if (rawEvidence !== undefined && (!Array.isArray(rawEvidence) || rawEvidence.some((e) => typeof e !== "string" || e.trim() === ""))) {
       throw new SddScriptError(`usage: audit scaffold \u2014 findings[${index}].evidence must be an array of non-empty strings`, 2);
     }
-    const evidence: string[] = rawEvidence === undefined ? [] : (rawEvidence as string[]).map((e) => (e as string).trim());
+    // Trim only for the non-empty check — supplied entries render as given.
+    const evidence: string[] = rawEvidence === undefined ? [] : (rawEvidence as string[]);
  // Optional free-text fields: supplied values must be visible strings.
     const freeText = (field: string): string | undefined => {
       const raw = finding[field];
