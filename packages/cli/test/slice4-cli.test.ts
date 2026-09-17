@@ -931,6 +931,139 @@ Index the audit table.
       expect(result.stderr).toContain("findings file not found");
     });
   });
+
+  test("enriched finding (fingerprint/trace/severity/object evidence) renders metadata; legacy row shows — cells", () => {
+    withTempDir((dir) => {
+      const findingsFile = join(dir, "findings.json");
+      writeFileSync(
+        findingsFile,
+        JSON.stringify([
+          { title: "Legacy row", priority: "P2", effort: "S", risk: "LOW", category: "tests", description: "Legacy finding." },
+          {
+            title: "Unparameterized sink in export path",
+            priority: "P1",
+            effort: "S",
+            risk: "HIGH",
+            category: "security",
+            description: "User-controlled CSV export interpolates raw SQL.",
+            confidence: "MED",
+            fingerprint: "sql-export-sink",
+            evidence: ["src/export.ts:88 — f-string builds the query", { file: "src/export.ts", line: 120, description: "same sink in the retry path" }],
+            trace: [
+              { kind: "entrypoint", file: "src/routes/export.ts", line: 10, scope: "GET /export", description: "query param reaches the exporter" },
+              { kind: "propagation", file: "src/export.ts", line: 64, scope: "buildQuery", description: "parameter concatenated into SQL" },
+              { kind: "sink", file: "src/export.ts", line: 88, scope: "runExport", description: "query executed" },
+            ],
+            severity: { likelihood: "high", impact: "high", overall: "medium" },
+          },
+        ]),
+      );
+      const outDir = join(dir, "audit-2026-08-08");
+      const result = runCli(["audit", "scaffold", findingsFile, "--dir", outDir, "--sha", "deadbee", "--date", "2026-08-08"]);
+      expect(result.exitCode).toBe(0);
+      const plan = readFileSync(join(outDir, "002-unparameterized-sink-in-export-path.md"), "utf8");
+      expect(plan).toContain("- **Fingerprint**: sql-export-sink");
+      expect(plan).toContain("- **Likelihood**: high");
+      expect(plan).toContain("- **Severity impact**: high");
+      expect(plan).toContain("- **Severity**: medium");
+      // enriched MED confidence is persisted (§8)
+      expect(plan).toContain("- **Confidence**: MED");
+      expect(plan).toContain("- src/export.ts:120 — same sink in the retry path");
+      expect(plan).toContain("| entrypoint | src/routes/export.ts:10 | GET /export — query param reaches the exporter |");
+      expect(plan).toContain("## Impact"); // prose impact retained alongside structured severity
+      expect(validateAuditStatusBlocks(plan).ok).toBe(true);
+      const readme = readFileSync(join(outDir, "README.md"), "utf8");
+      expect(readme).toContain("Evidence | Fingerprint | Likelihood | Severity impact | Severity |");
+      expect(readme).toContain("| 001 | Legacy row | tests | Legacy finding. | S | LOW | MED |  | — | — | — | — |");
+      expect(readme).toContain("| sql-export-sink | high | high | medium |");
+    });
+  });
+
+  test("invalid optional-field states → usage, exit 2", () => {
+    for (const bad of [
+      { fingerprint: null },
+      { fingerprint: 42 },
+      { fingerprint: "" },
+      { trace: "not-an-array" },
+      { trace: [] },
+      { trace: [{ kind: "entrypoint", file: "src/a.ts", line: 1, description: "missing scope" }] },
+      { trace: [{ kind: "middle", file: "src/a.ts", line: 1, scope: "s", description: "bad kind" }] },
+      { severity: { likelihood: "high", impact: "high" } },
+      { severity: { likelihood: "high", impact: "high", overall: "CERTAIN" } },
+      { evidence: [{ line: 1, description: "missing file" }] },
+      { evidence: [{ file: "src/a.ts", line: "88", description: "d" }] },
+      { evidence: [{ file: "src/a.ts", line: 0, description: "d" }] },
+      { evidence: [{ file: "src/a.ts", description: "   " }] },
+    ]) {
+      withTempDir((dir) => {
+        const findingsFile = join(dir, "findings.json");
+        writeFileSync(findingsFile, JSON.stringify([{ title: "X", priority: "P1", effort: "M", risk: "LOW", category: "perf", description: "d", ...bad }]));
+        const result = runCli(["audit", "scaffold", findingsFile, "--dir", join(dir, "out")]);
+        expect({ input: bad, exitCode: result.exitCode }).toEqual({ input: bad, exitCode: 2 });
+        // gate diagnostics never echo submitted values
+        expect(result.stderr).not.toContain("CERTAIN");
+        expect(result.stderr).not.toContain("src/a.ts");
+      });
+    }
+  });
+
+  test("gate rejections surface as usage exit 2 with field path only: ordering, unsafe path, secret fingerprint", () => {
+    withTempDir((dir) => {
+      const findingsFile = join(dir, "findings.json");
+      writeFileSync(
+        findingsFile,
+        JSON.stringify([
+          { title: "A", priority: "P1", effort: "M", risk: "LOW", category: "perf", description: "d", fingerprint: "zeta-first" },
+          { title: "B", priority: "P1", effort: "M", risk: "LOW", category: "perf", description: "d", fingerprint: "alpha-second" },
+        ]),
+      );
+      const result = runCli(["audit", "scaffold", findingsFile, "--dir", join(dir, "out")]);
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain("audit.finding.fingerprint.order");
+      expect(result.stderr).toContain("findings[1].fingerprint");
+      expect(existsSync(join(dir, "out"))).toBe(false); // zero new files on rejection
+    });
+    withTempDir((dir) => {
+      const findingsFile = join(dir, "findings.json");
+      writeFileSync(
+        findingsFile,
+        JSON.stringify([{ title: "X", priority: "P1", effort: "M", risk: "LOW", category: "perf", description: "d", evidence: [{ file: "../escape.ts", line: 1, description: "d" }] }]),
+      );
+      const result = runCli(["audit", "scaffold", findingsFile, "--dir", join(dir, "out")]);
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain("audit.finding.path.unsafe");
+      expect(result.stderr).not.toContain("../escape.ts");
+    });
+    withTempDir((dir) => {
+      const findingsFile = join(dir, "findings.json");
+      writeFileSync(
+        findingsFile,
+        JSON.stringify([{ title: "X", priority: "P1", effort: "M", risk: "LOW", category: "perf", description: "d", fingerprint: "AKIAIOSFODNN7EXAMPLE" }]),
+      );
+      const result = runCli(["audit", "scaffold", findingsFile, "--dir", join(dir, "out")]);
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain("audit.finding.fingerprint.secret");
+      expect(result.stderr).not.toContain("AKIAIOSFODNN7");
+    });
+  });
+
+  test("rejected batch leaves an existing README untouched", () => {
+    withTempDir((dir) => {
+      const outDir = join(dir, "audit-2026-08-08");
+      mkdirSync(outDir, { recursive: true });
+      const readme = join(outDir, "README.md");
+      writeFileSync(readme, "# pre-existing index\n");
+      const findingsFile = join(dir, "findings.json");
+      writeFileSync(
+        findingsFile,
+        JSON.stringify([{ title: "X", priority: "P1", effort: "M", risk: "LOW", category: "perf", description: "d", fingerprint: "-bad-grammar" }]),
+      );
+      const result = runCli(["audit", "scaffold", findingsFile, "--dir", outDir]);
+      expect(result.exitCode).toBe(2);
+      expect(readFileSync(readme, "utf8")).toBe("# pre-existing index\n");
+      expect(existsSync(join(outDir, "001-x.md"))).toBe(false);
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

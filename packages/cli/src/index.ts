@@ -123,9 +123,14 @@ import {
   type AuditCategory,
   type AuditEffort,
   type AuditConfidence,
+  type AuditEvidence,
   type AuditFinding,
   type AuditPriority,
   type AuditRisk,
+  type AuditSeverity,
+  type AuditSeverityRank,
+  type AuditTraceKind,
+  type AuditTraceStep,
   type GateResult,
   type HostId,
   type PrReportTarget,
@@ -4114,13 +4119,96 @@ function parseAuditScaffoldInput(text: string): AuditScaffoldInput {
     if (typeof confidence !== "string" || AUDIT_CONFIDENCES.find((c) => c === confidence) === undefined) {
       throw new SddScriptError(`usage: audit scaffold \u2014 findings[${index}].confidence must be one of ${AUDIT_CONFIDENCES.join("|")}`, 2);
     }
- // Optional evidence: array of visible strings; absence stays [].
+ // Optional evidence: array of visible strings or {file, line?, description}
+ // location objects (§3); absence stays []. Shape checks here; the safe-path
+ // / visible-text / secret-opaqueness predicates run in the engine gate and
+ // surface as usage exit 2 via the scaffold action's TypeError translation.
     const rawEvidence = finding.evidence;
-    if (rawEvidence !== undefined && (!Array.isArray(rawEvidence) || rawEvidence.some((e) => typeof e !== "string" || e.trim() === ""))) {
-      throw new SddScriptError(`usage: audit scaffold \u2014 findings[${index}].evidence must be an array of non-empty strings`, 2);
+    if (rawEvidence !== undefined && !Array.isArray(rawEvidence)) {
+      throw new SddScriptError(`usage: audit scaffold \u2014 findings[${index}].evidence must be an array of strings or {file, line?, description} objects`, 2);
     }
-    // Trim only for the non-empty check — supplied entries render as given.
-    const evidence: string[] = rawEvidence === undefined ? [] : (rawEvidence as string[]);
+    const evidence: (string | AuditEvidence)[] = (rawEvidence ?? []).map((item, itemIndex): string | AuditEvidence => {
+      if (typeof item === "string") {
+        if (item.trim() === "") {
+          throw new SddScriptError(`usage: audit scaffold \u2014 findings[${index}].evidence[${itemIndex}] must be a non-empty string or a {file, line?, description} object`, 2);
+        }
+        return item;
+      }
+      if (typeof item !== "object" || item === null || Array.isArray(item)) {
+        throw new SddScriptError(`usage: audit scaffold \u2014 findings[${index}].evidence[${itemIndex}] must be a non-empty string or a {file, line?, description} object`, 2);
+      }
+      const loc = item as Record<string, unknown>;
+      if (typeof loc.file !== "string" || loc.file === "") {
+        throw new SddScriptError(`usage: audit scaffold \u2014 findings[${index}].evidence[${itemIndex}].file is required and must be a repository-relative path`, 2);
+      }
+      if (loc.line !== undefined && (typeof loc.line !== "number" || !Number.isSafeInteger(loc.line) || loc.line <= 0)) {
+        throw new SddScriptError(`usage: audit scaffold \u2014 findings[${index}].evidence[${itemIndex}].line must be a positive integer when present`, 2);
+      }
+      if (typeof loc.description !== "string" || loc.description.trim() === "") {
+        throw new SddScriptError(`usage: audit scaffold \u2014 findings[${index}].evidence[${itemIndex}].description must be a non-empty string`, 2);
+      }
+      return {
+        file: loc.file,
+        ...(loc.line !== undefined ? { line: loc.line } : {}),
+        description: loc.description,
+      };
+    });
+ // Optional fingerprint: supplied values pass through untrimmed/unnormalized
+ // (§4); grammar/uniqueness/ordering are engine-gate duties.
+    const rawFingerprint = finding.fingerprint;
+    if (rawFingerprint !== undefined && (typeof rawFingerprint !== "string" || rawFingerprint === "")) {
+      throw new SddScriptError(`usage: audit scaffold \u2014 findings[${index}].fingerprint must be a non-empty string when present`, 2);
+    }
+ // Optional trace: array of {kind, file, line, scope, description} (§5);
+ // `[]` and topology violations are rejected by the engine gate.
+    const rawTrace = finding.trace;
+    if (rawTrace !== undefined && !Array.isArray(rawTrace)) {
+      throw new SddScriptError(`usage: audit scaffold \u2014 findings[${index}].trace must be an array of {kind, file, line, scope, description} objects`, 2);
+    }
+    const trace: AuditTraceStep[] | undefined = rawTrace === undefined ? undefined : (rawTrace as unknown[]).map((step, stepIndex): AuditTraceStep => {
+      if (typeof step !== "object" || step === null || Array.isArray(step)) {
+        throw new SddScriptError(`usage: audit scaffold \u2014 findings[${index}].trace[${stepIndex}] must be a {kind, file, line, scope, description} object`, 2);
+      }
+      const s = step as Record<string, unknown>;
+      if (!AUDIT_TRACE_KINDS.find((k) => k === s.kind)) {
+        throw new SddScriptError(`usage: audit scaffold \u2014 findings[${index}].trace[${stepIndex}].kind must be one of ${AUDIT_TRACE_KINDS.join("|")}`, 2);
+      }
+      if (typeof s.file !== "string" || s.file === "") {
+        throw new SddScriptError(`usage: audit scaffold \u2014 findings[${index}].trace[${stepIndex}].file is required and must be a repository-relative path`, 2);
+      }
+      if (typeof s.line !== "number" || !Number.isSafeInteger(s.line) || s.line <= 0) {
+        throw new SddScriptError(`usage: audit scaffold \u2014 findings[${index}].trace[${stepIndex}].line must be a positive integer`, 2);
+      }
+      if (typeof s.scope !== "string" || s.scope.trim() === "") {
+        throw new SddScriptError(`usage: audit scaffold \u2014 findings[${index}].trace[${stepIndex}].scope must be a non-empty string`, 2);
+      }
+      if (typeof s.description !== "string" || s.description.trim() === "") {
+        throw new SddScriptError(`usage: audit scaffold \u2014 findings[${index}].trace[${stepIndex}].description must be a non-empty string`, 2);
+      }
+      return { kind: s.kind as AuditTraceKind, file: s.file, line: s.line, scope: s.scope, description: s.description };
+    });
+ // Optional severity: all three ranks required from the AuditSeverityRank
+ // enum (§6); the overall ≤ impact ceiling is an engine-gate duty.
+    const rawSeverity = finding.severity;
+    if (rawSeverity !== undefined) {
+      if (typeof rawSeverity !== "object" || rawSeverity === null || Array.isArray(rawSeverity)) {
+        throw new SddScriptError(`usage: audit scaffold \u2014 findings[${index}].severity must be a {likelihood, impact, overall} object`, 2);
+      }
+      const sev = rawSeverity as Record<string, unknown>;
+      for (const field of ["likelihood", "impact", "overall"] as const) {
+        if (!AUDIT_SEVERITY_RANKS.find((r) => r === sev[field])) {
+          throw new SddScriptError(`usage: audit scaffold \u2014 findings[${index}].severity.${field} must be one of ${AUDIT_SEVERITY_RANKS.join("|")}`, 2);
+        }
+      }
+    }
+    const severity: AuditSeverity | undefined =
+      rawSeverity === undefined
+        ? undefined
+        : {
+            likelihood: (rawSeverity as Record<string, unknown>).likelihood as AuditSeverityRank,
+            impact: (rawSeverity as Record<string, unknown>).impact as AuditSeverityRank,
+            overall: (rawSeverity as Record<string, unknown>).overall as AuditSeverityRank,
+          };
  // Optional free-text fields: supplied values must be visible strings.
     const freeText = (field: string): string | undefined => {
       const raw = finding[field];
@@ -4145,6 +4233,9 @@ function parseAuditScaffoldInput(text: string): AuditScaffoldInput {
       ...(fixSketch !== undefined ? { fixSketch } : {}),
       ...(verification !== undefined ? { verification } : {}),
       ...(dependsOn !== undefined ? { dependsOn } : {}),
+      ...(rawFingerprint !== undefined ? { fingerprint: rawFingerprint as string } : {}),
+      ...(trace !== undefined ? { trace } : {}),
+      ...(severity !== undefined ? { severity } : {}),
     };
   });
 
@@ -4243,13 +4334,23 @@ auditCommand
       const outDir = options.dir !== undefined ? resolveCliPath(options.dir) : resolveCliPath(`audit-${date}`);
       const input = parseAuditScaffoldInput(fs.readFileSync(abs, "utf8"));
       const sha = resolveAuditShortSha(process.cwd(), options.sha);
-      const result = scaffoldAuditPlan(outDir, input.findings, {
-        date,
-        repoName: options.repo,
-        repoShortSha: sha,
-        needsVerification: input.needsVerification,
-        hardeningChecked: input.hardeningChecked,
-      });
+      let result;
+      try {
+        result = scaffoldAuditPlan(outDir, input.findings, {
+          date,
+          repoName: options.repo,
+          repoShortSha: sha,
+          needsVerification: input.needsVerification,
+          hardeningChecked: input.hardeningChecked,
+        });
+      } catch (error) {
+ // The engine gate's validation TypeError (stable `audit.finding.*` code +
+ // field path, thrown before any write) is a usage failure, not a crash.
+        if (error instanceof TypeError && error.message.includes("audit.finding.")) {
+          throw new SddScriptError(error.message, 2);
+        }
+        throw error;
+      }
       const count = result.files.length;
       console.log(pc.green(`audit scaffold: OK \u2014 ${count} plan file${count === 1 ? "" : "s"} in ${result.outDir}`));
       for (const file of result.files) console.log(`  created: ${file}`);
@@ -4474,6 +4575,10 @@ const AUDIT_PRIORITY_LOOKUP = lookupTable(AUDIT_PRIORITIES);
 const AUDIT_EFFORT_LOOKUP = lookupTable(AUDIT_EFFORTS);
 const AUDIT_RISK_LOOKUP = lookupTable(AUDIT_RISKS);
 const AUDIT_CATEGORY_LOOKUP = lookupTable(AUDIT_CATEGORIES);
+// audit-finding-contract.md §5/§6 — mirrors of the engine unions for the
+// CLI parser's usage errors (the type unions themselves live in the engine).
+const AUDIT_TRACE_KINDS = ["entrypoint", "propagation", "sink"] as const;
+const AUDIT_SEVERITY_RANKS = ["informational", "low", "medium", "high", "critical"] as const;
 
 /** Valid `host detect --signals` tokens (mstar-host detection table, ported
  * verbatim to the engine's ToolSignal enum). */

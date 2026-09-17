@@ -838,12 +838,39 @@ export type AuditFinding = {
   effort: AuditEffort;
   risk: AuditRisk;
   confidence: AuditConfidence;
-  evidence: readonly string[];
+  /** Free-text string (legacy form, rendered byte-for-byte) or a structured
+   * location. Authored JSON should prefer the structured form. */
+  evidence: readonly (string | AuditEvidence)[];
   priority: AuditPriority;
   fixSketch?: string;
   verification?: string;
   dependsOn?: string;
+  /** Source-derived root-cause identity (audit-finding-contract.md §4).
+   * Optional; never invented by the engine. */
+  fingerprint?: string;
+  /** Entry-point → propagation → sink path (§5). Supplements evidence. */
+  trace?: readonly AuditTraceStep[];
+  /** Author-supplied severity assessment (§6). Never inferred from
+   * priority/risk/confidence. */
+  severity?: AuditSeverity;
 };
+
+/** One structured evidence location. `file` is a safe repository-relative
+ * POSIX path; `line` is omitted when unknown (never invented). */
+export type AuditEvidence = { file: string; line?: number; description: string };
+
+/** Trace-step kind (§5): where data enters, how it travels, where it lands. */
+export type AuditTraceKind = "entrypoint" | "propagation" | "sink";
+
+/** One trace step. `line` is a positive safe integer; `scope` names the
+ * enclosing route/function/module. */
+export type AuditTraceStep = { kind: AuditTraceKind; file: string; line: number; scope: string; description: string };
+
+/** Severity rank ordinal labels (§6). Harness diagnostic `Severity` is a
+ * DIFFERENT enum (`nit`, no `informational`) — never conflate them. */
+export type AuditSeverityRank = "informational" | "low" | "medium" | "high" | "critical";
+
+export type AuditSeverity = { likelihood: AuditSeverityRank; impact: AuditSeverityRank; overall: AuditSeverityRank };
 
 /** Options for `scaffoldAuditPlan`. `plannedAt` defaults to the
  * `repoShortSha` + `date`; `date` defaults to today (YYYY-MM-DD). */
@@ -877,6 +904,183 @@ function slugify(title: string): string {
 
 const escapeCell = (value: string) => value.replace(/\|/g, "\\|");
 const truncate = (value: string, max: number) => (value.length > max ? `${value.slice(0, max)}\u2026` : value);
+/** Line-break collapse shared by the Status Evidence line and index rows
+ * (table-safe single-line text). */
+const collapseEvidenceWs = (value: string): string => value.replace(/\s*\r?\n\s*/g, " ");
+/** Render one evidence item: strings byte-for-byte; structured locations as
+ * `file:line — description`, or `file — description` when the line is
+ * omitted (never invented). */
+const evidenceText = (item: string | AuditEvidence): string =>
+  typeof item === "string" ? item : `${item.file}${item.line !== undefined ? `:${item.line}` : ""} \u2014 ${item.description}`;
+/** New metadata (§8): any optional field beyond the legacy shape. Its
+ * presence upgrades MED confidence to a persisted Status line. */
+const hasEnrichedMetadata = (finding: AuditFinding): boolean =>
+  finding.fingerprint !== undefined || finding.trace !== undefined || finding.severity !== undefined ||
+  finding.evidence.some((item) => typeof item !== "string");
+
+// ---------------------------------------------------------------------------
+// Finding gates — audit-finding-contract.md §§3–6 (deterministic only)
+// ---------------------------------------------------------------------------
+
+/** Fingerprint grammar (§4): source-derived identity token. */
+const AUDIT_FINGERPRINT_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$/;
+/** Rank ordinal for the §6 ceiling (`overall ≤ impact`). No numeric product. */
+const AUDIT_SEVERITY_ORDER: Record<AuditSeverityRank, number> = { informational: 0, low: 1, medium: 2, high: 3, critical: 4 };
+/** Default_Ignorable_Code_Point approximations (JS has no \p{DI} property):
+ * soft hyphen, CGJ, Arabic letter mark, hangul fillers, Mongolian FVS,
+ * ZW characters, bidi controls, joiners/deprecated format chars, BOM,
+ * halfwidth form, and the Unicode tags/variation-selector planes. */
+const DEFAULT_IGNORABLE_RE =
+  /[\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180E\u200B-\u200F\u202A-\u202E\u2060-\u2064\u206A-\u206F\u3164\uFEFF\uFFA0\uFFF0-\uFFF8\u{E0000}-\u{E007F}]/u;
+/** A lone UTF-16 surrogate is invalid anywhere (§3 deterministic predicates). */
+const LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+/** Visible content: ≥1 code point outside White_Space and
+ * Default_Ignorable_Code_Point; lone surrogates invalid. Multilingual text
+ * is never stripped. */
+function isVisibleText(value: string): boolean {
+  if (LONE_SURROGATE_RE.test(value)) return false;
+  for (const ch of value) {
+    if (!/\p{White_Space}/u.test(ch) && !DEFAULT_IGNORABLE_RE.test(ch)) return true;
+  }
+  return false;
+}
+
+/** Safe repository-relative POSIX path (§3): reject empty paths, absolute /
+ * drive / UNC paths, backslashes, control characters, empty / `.` / `..`
+ * segments, and segments ending in a dot or space. Never normalizes unsafe
+ * input into acceptance; never checks filesystem existence. */
+function safeAuditPath(value: string): boolean {
+  if (value === "") return false;
+  if (value.includes("\\")) return false;
+  if (/[\u0000-\u001F\u007F]/.test(value)) return false;
+  if (value.startsWith("/")) return false;
+  if (/^[A-Za-z]:/.test(value)) return false;
+  for (const segment of value.split("/")) {
+    if (segment === "" || segment === "." || segment === "..") return false;
+    if (segment.endsWith(".") || segment.endsWith(" ")) return false;
+  }
+  return true;
+}
+
+/**
+ * Deterministic finding gates (audit-finding-contract.md §§2–6): fingerprint
+ * grammar / exact uniqueness / ordinal ordering of the supplied subsequence,
+ * `severity.overall ≤ severity.impact`, nonempty trace topology, positive
+ * safe-integer trace lines, safe typed paths, visible well-formed text, and
+ * opaque-field credential rejection (a fingerprint or typed location that
+ * `redactSecrets` would alter is REJECTED, never redacted into a different
+ * identity). Contextual judgement (reportability, semantic exclusion,
+ * coverage) stays in skill prose (§2).
+ *
+ * Violation codes are stable `audit.finding.<family>.<rule>`; messages carry
+ * `findings[index].field` paths only — never raw submitted values. Pure:
+ * the input is never mutated and nothing is sorted or repaired.
+ */
+export function validateAuditFindingGates(findings: readonly AuditFinding[]): GateResult {
+  const violations: ValidationResult[] = [];
+  const seen = new Map<string, number>();
+  let previousFingerprint: string | undefined;
+
+  findings.forEach((finding, index) => {
+    const at = (field: string): string => `findings[${index}].${field}`;
+    const push = (code: string, field: string): void => {
+      violations.push(violation("high", code, `${at(field)} \u2014 ${code}`));
+    };
+
+ // §4 fingerprint: grammar, credential rejection, exact uniqueness,
+ // strict ASCII ordering of the supplied subsequence (absent ones skipped;
+ // out-of-order input is rejected, never sorted — positions control plan
+ // numbers and dependsOn).
+    if (finding.fingerprint !== undefined) {
+      if (!AUDIT_FINGERPRINT_RE.test(finding.fingerprint)) push("audit.finding.fingerprint.grammar", "fingerprint");
+      else if (redactSecrets(finding.fingerprint).text !== finding.fingerprint) push("audit.finding.fingerprint.secret", "fingerprint");
+      else {
+        const firstAt = seen.get(finding.fingerprint);
+        if (firstAt !== undefined) push("audit.finding.fingerprint.duplicate", "fingerprint");
+        else seen.set(finding.fingerprint, index);
+        if (previousFingerprint !== undefined && finding.fingerprint < previousFingerprint) {
+          push("audit.finding.fingerprint.order", "fingerprint");
+        }
+        previousFingerprint = finding.fingerprint;
+      }
+    }
+
+ // §6 severity ceiling: only `overall ≤ impact` is computed; invalid ranks
+ // are errors (no inference from priority/risk/confidence).
+    if (finding.severity !== undefined) {
+      const { likelihood, impact, overall } = finding.severity;
+      const rankOf = (r: string): number | undefined => AUDIT_SEVERITY_ORDER[r as AuditSeverityRank];
+      for (const [field, value] of [
+        ["likelihood", likelihood],
+        ["impact", impact],
+        ["overall", overall],
+      ] as const) {
+        if (rankOf(value) === undefined) push("audit.finding.severity.rank", `severity.${field}`);
+      }
+      const impactRank = rankOf(impact);
+      const overallRank = rankOf(overall);
+      if (impactRank !== undefined && overallRank !== undefined && overallRank > impactRank) {
+        push("audit.finding.severity.overall-exceeds-impact", "severity.overall");
+      }
+    }
+
+    const textViolation = (field: string, value: string | undefined): void => {
+      if (value === undefined) return;
+      if (LONE_SURROGATE_RE.test(value)) push("audit.finding.text.surrogate", field);
+      else if (!isVisibleText(value)) push("audit.finding.text.invisible", field);
+    };
+
+ // §5 trace: nonempty array; length 1 allows entrypoint|sink; length >1
+ // requires first entrypoint, last sink, propagation between.
+    if (finding.trace !== undefined) {
+      if (finding.trace.length === 0) push("audit.finding.trace.empty", "trace");
+      else {
+        const kinds = finding.trace.map((s) => s.kind);
+        const topologyOk =
+          finding.trace.length === 1
+            ? kinds[0] === "entrypoint" || kinds[0] === "sink"
+            : kinds[0] === "entrypoint" && kinds[kinds.length - 1] === "sink" && kinds.slice(1, -1).every((k) => k === "propagation");
+        if (!topologyOk) push("audit.finding.trace.topology", "trace");
+        finding.trace.forEach((step, stepIndex) => {
+          const stepAt = `trace[${stepIndex}]`;
+          if (typeof step.line !== "number" || !Number.isSafeInteger(step.line) || step.line <= 0) {
+            push("audit.finding.trace.line", `${stepAt}.line`);
+          }
+          if (!safeAuditPath(step.file)) push("audit.finding.path.unsafe", `${stepAt}.file`);
+          else if (redactSecrets(step.file).text !== step.file) push("audit.finding.path.secret", `${stepAt}.file`);
+          textViolation(`${stepAt}.scope`, step.scope);
+          textViolation(`${stepAt}.description`, step.description);
+        });
+      }
+    }
+
+ // §3 typed evidence objects
+    finding.evidence.forEach((item, itemIndex) => {
+      if (typeof item === "string") {
+        textViolation(`evidence[${itemIndex}]`, item);
+        return;
+      }
+      if (!safeAuditPath(item.file)) push("audit.finding.path.unsafe", `evidence[${itemIndex}].file`);
+      else if (redactSecrets(item.file).text !== item.file) push("audit.finding.path.secret", `evidence[${itemIndex}].file`);
+      textViolation(`evidence[${itemIndex}].description`, item.description);
+    });
+
+ // §3 visible-text predicate on finding text fields (title, impact, supplied
+ // fixSketch / verification).
+    textViolation("title", finding.title);
+    textViolation("impact", finding.impact);
+    textViolation("fixSketch", finding.fixSketch);
+    textViolation("verification", finding.verification);
+    finding.trace?.forEach((step, stepIndex) => {
+      const stepAt = `trace[${stepIndex}]`;
+      textViolation(`${stepAt}.scope`, step.scope);
+      textViolation(`${stepAt}.description`, step.description);
+    });
+  });
+
+  return { ok: violations.length === 0, violations };
+}
 
 /** Render one numbered plan file from a finding (self-contained; no
  * placeholder tokens, per plan-quality-bar). The `## Evidence` section is
@@ -890,19 +1094,38 @@ function renderPlanFile(finding: AuditFinding, plannedAt: { commit: string; date
     `- **Priority**: ${finding.priority}`,
     `- **Effort**: ${finding.effort}`,
     `- **Risk**: ${finding.risk}`,
-    ...(finding.confidence !== "MED" ? [`- **Confidence**: ${finding.confidence}`] : []),
+ // §8: MED confidence is persisted only when enriched metadata is present;
+ // legacy MED/string-evidence findings stay byte-identical.
+    ...(finding.confidence !== "MED" || hasEnrichedMetadata(finding) ? [`- **Confidence**: ${finding.confidence}`] : []),
+    ...(finding.fingerprint !== undefined ? [`- **Fingerprint**: ${finding.fingerprint}`] : []),
+    ...(finding.severity !== undefined
+      ? [`- **Likelihood**: ${finding.severity.likelihood}`, `- **Severity impact**: ${finding.severity.impact}`, `- **Severity**: ${finding.severity.overall}`]
+      : []),
     `- **Depends on**: ${finding.dependsOn ?? "none"}`,
     `- **Category**: ${finding.category}`,
-    ...(finding.evidence.length > 0
-      ? [`- **Evidence**: ${finding.evidence[0].replace(/\s*\r?\n\s*/g, " ")}`]
-      : []),
+    ...(finding.evidence.length > 0 ? [`- **Evidence**: ${collapseEvidenceWs(evidenceText(finding.evidence[0]))}`] : []),
     `- **Planned at**: commit \`${plannedAt.commit}\`, ${plannedAt.date}`,
     "",
     "## Impact",
     finding.impact,
   ];
   if (finding.evidence.length > 0) {
-    sections.push("", "## Evidence", ...finding.evidence.map((e) => `- ${e}`));
+    sections.push("", "## Evidence", ...finding.evidence.map((item) => `- ${evidenceText(item)}`));
+  }
+  if (finding.trace !== undefined) {
+ // §8: optional trace table; cells escape pipes and encode line breaks
+ // (\\n) so no extra table rows can be created.
+    sections.push(
+      "",
+      "## Trace",
+      "",
+      "| Kind | Location | Scope / Description |",
+      "|------|----------|---------------------|",
+      ...finding.trace.map(
+        (step) =>
+          `| ${escapeCell(step.kind)} | ${escapeCell(`${step.file}:${step.line}`)} | ${escapeCell(`${step.scope} \u2014 ${step.description}`).replace(/\r?\n/g, "\\n")} |`,
+      ),
+    );
   }
   if (finding.fixSketch !== undefined) {
     sections.push("", "## Fix sketch", finding.fixSketch);
@@ -937,7 +1160,15 @@ function redactFinding(finding: AuditFinding): AuditFinding {
     ...finding,
     title: redactText(finding.title),
     impact: redactText(finding.impact),
-    evidence: finding.evidence.map(redactText),
+ // String evidence redacts normally; structured locations redact the
+ // description only — file/line are opaque identity/location fields the
+ // gate already verified unaltered by redaction (§8).
+    evidence: finding.evidence.map((item) =>
+      typeof item === "string" ? redactText(item) : { ...item, description: redactText(item.description) },
+    ),
+    ...(finding.trace !== undefined
+      ? { trace: finding.trace.map((step) => ({ ...step, scope: redactText(step.scope), description: redactText(step.description) })) }
+      : {}),
     ...(finding.fixSketch !== undefined ? { fixSketch: redactText(finding.fixSketch) } : {}),
     ...(finding.verification !== undefined ? { verification: redactText(finding.verification) } : {}),
   };
@@ -985,16 +1216,41 @@ function renderIndex(params: {
   date: string;
   repoName: string;
   repoShortSha: string;
-  rows: { num: string; title: string; category: string; impact: string; effort: string; risk: string; confidence: string; evidence: string; priority: string; dependsOn: string }[];
+  rows: {
+    num: string;
+    title: string;
+    category: string;
+    impact: string;
+    effort: string;
+    risk: string;
+    confidence: string;
+    evidence: string;
+    priority: string;
+    dependsOn: string;
+    fingerprint?: string;
+    likelihood?: string;
+    severityImpact?: string;
+    severity?: string;
+  }[];
   rejected: readonly { title: string; reason: string }[];
   needsVerification: readonly string[];
   hardeningChecked: readonly string[];
 }): string {
   const { date, repoName, repoShortSha, rows, rejected, needsVerification, hardeningChecked } = params;
+ // §8: the Fingerprint column appears if any displayed row carries one; the
+ // severity columns are appended after (retained prose) Impact when any row
+ // has severity. Unrated rows show `—`; legacy-only batches keep the old
+ // header bytes exactly.
+  const showFingerprint = rows.some((r) => r.fingerprint !== undefined);
+  const showSeverity = rows.some((r) => r.likelihood !== undefined || r.severityImpact !== undefined || r.severity !== undefined);
+  const cell = (value: string | undefined): string => escapeCell(value ?? "\u2014");
   const findingsRows = rows
     .map(
       (r) =>
-        `| ${r.num} | ${escapeCell(r.title)} | ${r.category} | ${escapeCell(truncate(r.impact, 80))} | ${r.effort} | ${r.risk} | ${r.confidence} | ${escapeCell(truncate(r.evidence, 80))} |`,
+        `| ${r.num} | ${escapeCell(r.title)} | ${r.category} | ${escapeCell(truncate(r.impact, 80))} | ${r.effort} | ${r.risk} | ${r.confidence} | ${escapeCell(truncate(r.evidence, 80))}` +
+        (showFingerprint ? ` | ${cell(r.fingerprint)}` : "") +
+        (showSeverity ? ` | ${cell(r.likelihood)} | ${cell(r.severityImpact)} | ${cell(r.severity)}` : "") +
+        " |",
     )
     .join("\n");
   const directionRows = rows
@@ -1011,8 +1267,14 @@ function renderIndex(params: {
     "",
     "## Findings",
     "",
-    "| # | Finding | Category | Impact | Effort | Risk | Confidence | Evidence |",
-    "|---|---------|----------|--------|--------|------|------------|----------|",
+    "| # | Finding | Category | Impact | Effort | Risk | Confidence | Evidence" +
+      (showFingerprint ? " | Fingerprint" : "") +
+      (showSeverity ? " | Likelihood | Severity impact | Severity" : "") +
+      " |",
+    "|---|---------|----------|--------|--------|------|------------|----------" +
+      (showFingerprint ? "|------------" : "") +
+      (showSeverity ? "|------------|-----------------|----------" : "") +
+      "|",
     findingsRows,
   ];
   if (directionRows !== "") {
@@ -1065,6 +1327,14 @@ export function scaffoldAuditPlan(
 ): ScaffoldAuditPlanResult {
   const date = options.date ?? new Date().toISOString().slice(0, 10);
   const plannedAt = options.plannedAt ?? { commit: options.repoShortSha ?? "unknown", date };
+ // Contract §3 integration: the deterministic gates run BEFORE the first
+ // mkdirSync/write — a rejected batch causes zero new files and leaves any
+ // existing README untouched. Direct engine callers get the same gate.
+  const gate = validateAuditFindingGates(findings);
+  if (!gate.ok) {
+    const first = gate.violations[0];
+    throw new TypeError(`invalid audit findings \u2014 ${first.code}: ${first.message}`);
+  }
   mkdirSync(outDir, { recursive: true });
   const existingReadme = join(outDir, "README.md");
   const carried = existsSync(existingReadme)
@@ -1113,6 +1383,13 @@ export function scaffoldAuditPlan(
       evidence: fields.get("Evidence") ?? "\u2014",
       priority: fields.get("Priority") ?? "\u2014",
       dependsOn: fields.get("Depends on") ?? "\u2014",
+ // §8 rebuild: stored metadata survives a no-new-findings rerun; legacy
+ // rows without the lines keep their undefined fallback (`—` only when a
+ // metadata column exists at all).
+      fingerprint: fields.get("Fingerprint"),
+      likelihood: fields.get("Likelihood"),
+      severityImpact: fields.get("Severity impact"),
+      severity: fields.get("Severity"),
     };
   });
 
@@ -1128,13 +1405,20 @@ export function scaffoldAuditPlan(
       row.effort = finding.effort;
       row.risk = finding.risk;
       row.confidence = finding.confidence;
-      row.evidence = finding.evidence[0] ?? "";
+      row.evidence = finding.evidence.length > 0 ? collapseEvidenceWs(evidenceText(finding.evidence[0])) : "";
  // priority/dependsOn are finding-authoritative too (regression from
  // the D-1 redaction wave: these two were dropped from the override,
  // leaving the row dependent on re-parsing the just-written Status
  // block instead of the redacted finding).
       row.priority = finding.priority;
       row.dependsOn = finding.dependsOn ?? "none";
+ // New findings carry their metadata into the index (finding-authoritative,
+ // same as priority/dependsOn above); rows without it keep the parsed
+ // fallbacks.
+      row.fingerprint = finding.fingerprint;
+      row.likelihood = finding.severity?.likelihood;
+      row.severityImpact = finding.severity?.impact;
+      row.severity = finding.severity?.overall;
     }
   });
 
