@@ -8,6 +8,19 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ## [Unreleased]
 
+## [3.10.2] - 2026-09-17
+
+### Harness
+
+- The engine now **refuses delivery-tail evidence** (`compound`, PR identity, `merge`) at the `recordWorkflowDelivery` write seam while any plan row is not `Done` — enforcing the order the lifecycle contract already declared. The gate is write-time only: idempotent re-records skip it and existing snapshots that already carry evidence are unchanged.
+- The **plan template**, PM required reading, and PM self-review now carry the scoped engine lifecycle sequence and the evidence order (`compound` / PR / `merge` recorded only after the row is `Done`).
+- **Standalone `development` plans** now declare the read-only phase-6 gate output as a merge-ready precondition; iteration workflows keep their Phase 4/5 exit checklist unchanged.
+- Residual **R2** (standalone plans cannot reach `Done` without integration anchors) remains open — the template states the honest stop at a submitted/accepted handoff instead of fabricating a terminal state.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, the portable Agent Plugins manifest, and both marketplace manifests: **→ 3.10.2**.
+
 ## [3.10.1] - 2026-09-17
 
 ### Harness
