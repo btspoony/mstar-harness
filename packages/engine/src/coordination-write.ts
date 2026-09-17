@@ -73,6 +73,12 @@ export const COORDINATION_ERROR_CODES = [
   "coordination.prepare-amendment.invalid-plan",
   "coordination.prepare-amendment.compass-mismatch",
   "coordination.prepare-amendment.invalid-worktree",
+  "coordination.delivery-source-repair.unsupported-workflow",
+  "coordination.delivery-source-repair.terminal",
+  "coordination.delivery-source-repair.no-accepted-handoff",
+  "coordination.delivery-source-repair.already-aligned",
+  "coordination.delivery-source-repair.not-legacy-shape",
+  "coordination.delivery-source-repair.pr-conflict",
 ] as const;
 
 export type CoordinationErrorCode = (typeof COORDINATION_ERROR_CODES)[number];
@@ -403,8 +409,15 @@ export function validatePlanProgress(value: unknown, what = "coordination.progre
   return violations;
 }
 
+/** Route-aware stored handoff validation (spec A5). Default remains strict integration. */
+export type RowValidationRoute = "integration" | "standalone-development";
+
 /** Validate a stored `PlanHandoff`, including its state/field coherence. */
-export function validatePlanHandoff(value: unknown, what = "coordination.handoff"): ValidationResult[] {
+export function validatePlanHandoff(
+  value: unknown,
+  what = "coordination.handoff",
+  route: RowValidationRoute = "integration",
+): ValidationResult[] {
   if (!isPlainObject(value)) return [invalid("coordination.row.handoff-shape", `${what} must be an object`)];
   const allowed = [
     "id",
@@ -549,7 +562,35 @@ export function validatePlanHandoff(value: unknown, what = "coordination.handoff
     }
   }
   if ((value.state === "integrating" || value.state === "merged" || value.state === "completed") && value.integration === undefined) {
-    violations.push(invalid("coordination.row.handoff-field", `${what}.state ${String(value.state)} requires integration`));
+    if (route === "standalone-development" && value.state === "completed") {
+      if (value.completed_at === undefined) {
+        violations.push(
+          invalid("coordination.row.handoff-field", `${what}.state completed requires completed_at for a standalone handoff`),
+        );
+      }
+      if (!isNonEmptyString(value.accepted_at)) {
+        violations.push(
+          invalid("coordination.row.handoff-field", `${what}.accepted_at is required for a standalone completed handoff`),
+        );
+      }
+      if (!isNonEmptyString(value.accepted_by)) {
+        violations.push(
+          invalid("coordination.row.handoff-field", `${what}.accepted_by is required for a standalone completed handoff`),
+        );
+      }
+      if (value.qc === undefined) {
+        violations.push(
+          invalid("coordination.row.handoff-field", `${what}.qc is required for a standalone completed handoff`),
+        );
+      }
+      if (value.qa === undefined) {
+        violations.push(
+          invalid("coordination.row.handoff-field", `${what}.qa is required for a standalone completed handoff`),
+        );
+      }
+    } else {
+      violations.push(invalid("coordination.row.handoff-field", `${what}.state ${String(value.state)} requires integration`));
+    }
   }
   return violations;
 }
@@ -588,7 +629,11 @@ export function validatePreparedCoordination(value: unknown, what = "coordinatio
 }
 
 /** Validate one plan row's `coordination` object (spec §C2). */
-export function validateRowCoordination(value: unknown, what = "coordination"): ValidationResult[] {
+export function validateRowCoordination(
+  value: unknown,
+  what = "coordination",
+  route: RowValidationRoute = "integration",
+): ValidationResult[] {
   if (!isPlainObject(value)) return [invalid("coordination.row.shape", `${what} must be an object`)];
   const allowed = ["revision", "prepared", "session", "progress", "handoff"];
   const violations: ValidationResult[] = [];
@@ -602,7 +647,7 @@ export function validateRowCoordination(value: unknown, what = "coordination"): 
   if (value.prepared !== undefined) violations.push(...validatePreparedCoordination(value.prepared, `${what}.prepared`));
   if (value.session !== undefined) violations.push(...validateBinding(value.session, `${what}.session`));
   if (value.progress !== undefined) violations.push(...validatePlanProgress(value.progress, `${what}.progress`));
-  if (value.handoff !== undefined) violations.push(...validatePlanHandoff(value.handoff, `${what}.handoff`));
+  if (value.handoff !== undefined) violations.push(...validatePlanHandoff(value.handoff, `${what}.handoff`, route));
   if (value.handoff !== undefined && value.session === undefined) {
     violations.push(invalid("coordination.row.handoff-field", `${what}.handoff requires a bound plan session`));
   }

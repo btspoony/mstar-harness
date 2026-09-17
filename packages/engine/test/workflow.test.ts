@@ -1628,3 +1628,115 @@ describe("registerPlanWorkflow — generic registration producer (seam S1)", () 
     expect(existsSync(join(root, "escape"))).toBe(false);
   });
 });
+
+describe("standalone-completion-shape", () => {
+  function standaloneCompletedHandoff(sourceBranch = "feature/fixture") {
+    const sha = "a".repeat(40);
+    const digest = "c".repeat(64);
+    const qaDigest = "d".repeat(64);
+    return {
+      id: "handoff-standalone",
+      attempt: 1,
+      state: "completed",
+      submitted_by: "plan-session",
+      submitted_at: "2026-09-15T00:00:00Z",
+      source_branch: sourceBranch,
+      source_sha: sha,
+      worktree_path: "/tmp/standalone-wt",
+      review_base: "b".repeat(40),
+      review_head: sha,
+      qc: {
+        decision: "Approve",
+        reports: [{ path: "/tmp/qc1.md", sha256: digest }],
+        consolidated: { path: "/tmp/qc.md", sha256: digest },
+      },
+      qa: { gate: "mandatory", decision: "pass", report: { path: "/tmp/qa.md", sha256: qaDigest } },
+      accepted_by: "coordinator",
+      accepted_at: "2026-09-15T01:00:00Z",
+      completed_at: "2026-09-15T02:00:00Z",
+    };
+  }
+
+  function standaloneCompletedRow(sourceBranch = "feature/fixture") {
+    return {
+      ...legacyRow({ status: "Done", done_at: "2026-09-15" }),
+      coordination: {
+        revision: 3,
+        session: {
+          session_id: "plan-session",
+          session_file: "/tmp/plan-session.json",
+          bound_at: "2026-09-15T00:00:00Z",
+        },
+        handoff: standaloneCompletedHandoff(sourceBranch),
+      },
+    };
+  }
+
+  function standaloneSnapshot(overrides: Record<string, unknown> = {}) {
+    return validSnapshot({
+      type: "plan",
+      delivery_kind: "development",
+      status: "running",
+      ended_at: undefined,
+      branch: { source: "feature/fixture", target: "main" },
+      integration_worktree_path: undefined,
+      integration_merge_lease: undefined,
+      plans: [standaloneCompletedRow()],
+      ...overrides,
+    });
+  }
+
+  test("accepts the precise standalone completed handoff without integration", () => {
+    const snapshot = standaloneSnapshot();
+    delete (snapshot as Record<string, unknown>).integration_worktree_path;
+    const result = validateWorkflowSnapshot(snapshot);
+    expect(result.ok).toBe(true);
+    expect(result.violations).toEqual([]);
+  });
+
+  test("refuses the same completed shape on the iteration route", () => {
+    const snapshot = validSnapshot({
+      type: "iteration",
+      status: "running",
+      ended_at: undefined,
+      plans: [standaloneCompletedRow()],
+    });
+    expectViolations(validateWorkflowSnapshot(snapshot), "coordination.row.handoff-field");
+  });
+
+  test("refuses standalone completion copied to non-development or multi-row plan workflows", () => {
+    const auditCopy = standaloneSnapshot({ delivery_kind: "audit", plans: [standaloneCompletedRow()] });
+    expectViolations(validateWorkflowSnapshot(auditCopy), "coordination.row.handoff-field");
+
+    const multiRow = standaloneSnapshot({
+      plans: [standaloneCompletedRow(), legacyRow({ id: "plan-b", plan_id: "plan-b", status: "Todo", done_at: undefined })],
+    });
+    expectViolations(validateWorkflowSnapshot(multiRow), "coordination.row.handoff-field");
+  });
+
+  test("refuses standalone completed coherence when source_branch disagrees with branch.source", () => {
+    const snapshot = standaloneSnapshot({ plans: [standaloneCompletedRow("feature/other")] });
+    expectViolations(validateWorkflowSnapshot(snapshot), "coordination.row.handoff-field");
+  });
+
+  test("refuses standalone completed handoff missing acceptance or QC/QA seals", () => {
+    for (const field of ["accepted_at", "accepted_by", "qc", "qa"] as const) {
+      const handoff = { ...standaloneCompletedHandoff() } as Record<string, unknown>;
+      delete handoff[field];
+      const row = standaloneCompletedRow();
+      const snapshot = standaloneSnapshot({
+        plans: [
+          {
+            ...row,
+            coordination: {
+              ...(row.coordination as Record<string, unknown>),
+              handoff,
+            },
+          },
+        ],
+      });
+      expectViolations(validateWorkflowSnapshot(snapshot), "coordination.row.handoff-field");
+    }
+  });
+});
+

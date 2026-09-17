@@ -113,3 +113,10 @@ The direction and reason columns record the reasoning behind each answer; the an
 - No silent completion anywhere. Every stage transition records its evidence; failure renders the workflow blocked/active, never implicitly done.
 - No cleanup authorization is implied by lifecycle completion: worktree/branch deletion stays explicit and ownership/merge-guarded, exactly as the existing post-merge-close contract requires.
 - Close never releases leases, and terminal `failed`/`stopped` states are never rewritten as `completed` (§5).
+
+> Amendment 2026-09-17 (recorded at PM lock): **legacy delivery-source correction.**
+>
+> Legacy source correction is a distinct coordinator-owned domain operation for a running, single-row standalone development workflow whose registered source erroneously equals its target. It derives the replacement source only from that row's already-accepted, evidence-pinned handoff and verifies the source Git ref/commit. Under the existing snapshot lock and expected row revision it may replace only `branch.source`, advance that row's coordination revision and update snapshot `updated_at`. All PR/merge evidence, statuses, leases, timestamps other than `updated_at`, target and handoff pins remain unchanged. It cannot record Done, delivery success or remote merge. Missing proof, foreign authority, terminal state, a nonmatching legacy shape, or a repeat after correction refuses without writes. Future registrations must name the true delivery source; this is not their normal lifecycle step.
+>
+> This extends §4a (registration is an authorized domain operation) with a bounded repair for pre-existing snapshots only, and leaves §5 (failure and abandonment) and the Binding negatives above untouched.
+
