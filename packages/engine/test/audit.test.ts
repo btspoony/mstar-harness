@@ -910,8 +910,16 @@ describe("validateAuditFindingGates", () => {
     expect(gate.violations.map((v) => v.code)).toContain("audit.finding.fingerprint.grammar");
   });
 
+  test("fingerprint with trailing LF or CR fails the grammar (JS $-anchor hole closed)", () => {
+    for (const fp of ["valid-id\n", "valid-id\r", "valid-id\r\n"]) {
+      const gate = validateAuditFindingGates([enrichedFinding({ fingerprint: fp })]);
+      expect(gate.violations.map((v) => v.code)).toContain("audit.finding.fingerprint.grammar");
+    }
+    expect(validateAuditFindingGates([enrichedFinding({ fingerprint: "valid-id" })]).ok).toBe(true);
+  });
+
   test("credential-bearing fingerprint is REJECTED, not redacted into another identity", () => {
-    const gate = validateAuditFindingGates([enrichedFinding({ fingerprint: "AKIAIOSFODNN7EXAMPLE" })]);
+    const gate = validateAuditFindingGates([enrichedFinding({ fingerprint: "leak-AKIAIOSFODNN7EXAMPLE" })]);
     expect(gate.ok).toBe(false);
     expect(gate.violations.map((v) => v.code)).toContain("audit.finding.fingerprint.secret");
     // the violation names the field path, never the value
@@ -1007,6 +1015,22 @@ describe("validateAuditFindingGates", () => {
     expect(gate.violations.some((v) => v.code === "audit.finding.text.invisible")).toBe(true);
     const surrogate = validateAuditFindingGates([legacyFinding({ impact: "ok \uD800 here" })]);
     expect(surrogate.violations.map((v) => v.code)).toContain("audit.finding.text.surrogate");
+  });
+
+  test("variation-selector-only text is invisible-only → audit.finding.text.invisible", () => {
+    for (const vs of ["\uFE0F", "\u{E0100}\u{E01EF}", "\uFE00"]) {
+      const gate = validateAuditFindingGates([legacyFinding({ title: vs })]);
+      expect(gate.violations.some((v) => v.code === "audit.finding.text.invisible")).toBe(true);
+    }
+  });
+
+  test("C1 control characters in typed paths → audit.finding.path.unsafe", () => {
+    for (const file of ["src/\u0085file.ts", "src/\u009Ffile.ts", "\u0080x.ts"]) {
+      const gate = validateAuditFindingGates([
+        enrichedFinding({ evidence: [{ file, line: 1, description: "d" }] }),
+      ]);
+      expect(gate.violations.some((v) => v.code === "audit.finding.path.unsafe")).toBe(true);
+    }
   });
 
   test("valid multilingual visible text is not stripped or rejected", () => {

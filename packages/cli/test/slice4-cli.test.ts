@@ -1038,11 +1038,13 @@ Index the audit table.
       const findingsFile = join(dir, "findings.json");
       writeFileSync(
         findingsFile,
-        JSON.stringify([{ title: "X", priority: "P1", effort: "M", risk: "LOW", category: "perf", description: "d", fingerprint: "AKIAIOSFODNN7EXAMPLE" }]),
+        JSON.stringify([{ title: "X", priority: "P1", effort: "M", risk: "LOW", category: "perf", description: "d", fingerprint: "leak-AKIAIOSFODNN7EXAMPLE" }]),
       );
       const result = runCli(["audit", "scaffold", findingsFile, "--dir", join(dir, "out")]);
       expect(result.exitCode).toBe(2);
+      // grammar-valid but credential-shaped: the secret rule fires (not grammar)
       expect(result.stderr).toContain("audit.finding.fingerprint.secret");
+      expect(result.stderr).not.toContain("audit.finding.fingerprint.grammar");
       expect(result.stderr).not.toContain("AKIAIOSFODNN7");
     });
   });

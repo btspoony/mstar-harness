@@ -922,8 +922,11 @@ const hasEnrichedMetadata = (finding: AuditFinding): boolean =>
 // Finding gates — audit-finding-contract.md §§3–6 (deterministic only)
 // ---------------------------------------------------------------------------
 
-/** Fingerprint grammar (§4): source-derived identity token. */
-const AUDIT_FINGERPRINT_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$/;
+/** Fingerprint grammar (§4): source-derived identity token. The lookahead
+ * before `$` closes JS's before-trailing-newline end-anchor hole, so a
+ * fingerprint ending in LF/CR fails the grammar instead of being rendered
+ * into plan metadata. */
+const AUDIT_FINGERPRINT_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]*(?!\n)$/;
 /** Rank ordinal for the §6 ceiling (`overall ≤ impact`). No numeric product. */
 const AUDIT_SEVERITY_ORDER: Record<AuditSeverityRank, number> = { informational: 0, low: 1, medium: 2, high: 3, critical: 4 };
 /** Default_Ignorable_Code_Point approximations (JS has no \p{DI} property):
@@ -931,7 +934,7 @@ const AUDIT_SEVERITY_ORDER: Record<AuditSeverityRank, number> = { informational:
  * ZW characters, bidi controls, joiners/deprecated format chars, BOM,
  * halfwidth form, and the Unicode tags/variation-selector planes. */
 const DEFAULT_IGNORABLE_RE =
-  /[\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180E\u200B-\u200F\u202A-\u202E\u2060-\u2064\u206A-\u206F\u3164\uFEFF\uFFA0\uFFF0-\uFFF8\u{E0000}-\u{E007F}]/u;
+  /[\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180E\u200B-\u200F\u202A-\u202E\u2060-\u2064\u206A-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0\uFFF0-\uFFF8\u{E0000}-\u{E007F}\u{E0100}-\u{E01EF}]/u;
 /** A lone UTF-16 surrogate is invalid anywhere (§3 deterministic predicates). */
 const LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
@@ -953,7 +956,7 @@ function isVisibleText(value: string): boolean {
 function safeAuditPath(value: string): boolean {
   if (value === "") return false;
   if (value.includes("\\")) return false;
-  if (/[\u0000-\u001F\u007F]/.test(value)) return false;
+  if (/[\u0000-\u001F\u007F-\u009F]/.test(value)) return false;
   if (value.startsWith("/")) return false;
   if (/^[A-Za-z]:/.test(value)) return false;
   for (const segment of value.split("/")) {
@@ -1072,11 +1075,8 @@ export function validateAuditFindingGates(findings: readonly AuditFinding[]): Ga
     textViolation("impact", finding.impact);
     textViolation("fixSketch", finding.fixSketch);
     textViolation("verification", finding.verification);
-    finding.trace?.forEach((step, stepIndex) => {
-      const stepAt = `trace[${stepIndex}]`;
-      textViolation(`${stepAt}.scope`, step.scope);
-      textViolation(`${stepAt}.description`, step.description);
-    });
+    // trace step text fields are validated in the §5 loop above — no
+    // duplicate pass (one bad field must yield one violation).
   });
 
   return { ok: violations.length === 0, violations };
