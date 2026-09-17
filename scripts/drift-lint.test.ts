@@ -46,6 +46,7 @@ import { join, relative } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { AUDIT_CATEGORIES } from "../packages/engine/src/index.ts";
 import {
+  AUDIT_CATEGORY_DOC,
   buildCliCommandInventory,
   buildEngineExportNames,
   checkBilingualContentParity,
@@ -55,6 +56,7 @@ import {
   checkFiveQuestionCorpus,
   checkProvenanceScan,
   checkRolesCorpus,
+  checkUseCliSkillCliCitations,
   citesKnowledgeConventions,
   collectProvenanceScanFiles,
   evaluateBilingualGuard,
@@ -63,6 +65,8 @@ import {
   readDeclaredBins,
   readRolesCorpus,
   readTrackedFiles,
+  readUseCliSkillMarkdown,
+  supplementCliCommandInventory,
 } from "./drift-lint.ts";
 
 describe("checkBilingualPairing — README pairing logic (guard 2)", () => {
@@ -183,9 +187,9 @@ describe("evaluateBilingualGuard — CI fail-loudly vs local skip", () => {
   });
 });
 
-describe("extractCategoryRowTokens — docs/cli.md `<category>` row (guard 1)", () => {
-  test("real docs/cli.md <category> row yields exactly AUDIT_CATEGORIES", () => {
-    const cliMd = readFileSync(join(import.meta.dir, "..", "docs", "cli.md"), "utf8");
+describe("extractCategoryRowTokens — checks-and-lints `<category>` row (guard 1)", () => {
+  test("real checks-and-lints.md <category> row yields exactly AUDIT_CATEGORIES", () => {
+    const cliMd = readFileSync(join(import.meta.dir, "..", AUDIT_CATEGORY_DOC), "utf8");
     const row = cliMd.split(/\r?\n/).find((l) => /^\|\s*`<category>`\s*\|/.test(l));
     expect(row).toBeDefined();
     expect(extractCategoryRowTokens(row!)).toEqual([...AUDIT_CATEGORIES]);
@@ -317,6 +321,68 @@ describe("checkEngineCallouts — Guard 1 CLI citation binary-prefix check", () 
     });
     expect(calloutsChecked).toBe(49);
     expect(cliCitationsChecked).toBe(48);
+    expect(failures).toEqual([]);
+  });
+});
+
+describe("supplementCliCommandInventory — scoped registrar paths (Task 3)", () => {
+  const REPO_ROOT = join(import.meta.dir, "..");
+
+  test("index.ts inventory stays at 93 paths; supplement adds 16 scoped paths", () => {
+    const cliSrc = readFileSync(join(REPO_ROOT, "packages/cli/src/index.ts"), "utf8");
+    const { cliCommands: base, failures: baseFailures } = buildCliCommandInventory(cliSrc);
+    expect(baseFailures).toEqual([]);
+    expect(base.size).toBe(93);
+    const merged = new Set(base);
+    const { failures } = supplementCliCommandInventory(merged, REPO_ROOT);
+    expect(failures).toEqual([]);
+    expect(merged.has("plan handoff")).toBe(true);
+    expect(merged.has("workflow show-prepare")).toBe(true);
+    expect(merged.has("sdd evidence")).toBe(true);
+    expect(merged.size - base.size).toBe(16);
+  });
+});
+
+describe("checkUseCliSkillCliCitations — mstar-use-cli skill scan (Task 3)", () => {
+  const REPO_ROOT = join(import.meta.dir, "..");
+  const inventory = () => {
+    const cliSrc = readFileSync(join(REPO_ROOT, "packages/cli/src/index.ts"), "utf8");
+    const { cliCommands, failures } = buildCliCommandInventory(cliSrc);
+    expect(failures).toEqual([]);
+    supplementCliCommandInventory(cliCommands, REPO_ROOT);
+    return cliCommands;
+  };
+  const binNames = () => {
+    const { binNames, failures } = readDeclaredBins(join(REPO_ROOT, "packages/cli/package.json"));
+    expect(failures).toEqual([]);
+    return binNames;
+  };
+
+  test("fabricated command path in the use-cli skill fails", () => {
+    const { failures } = checkUseCliSkillCliCitations(
+      [{ rel: "skills/mstar-use-cli/SKILL.md", text: "run `mstar plan totally-fake-verb` here" }],
+      { cliCommands: inventory(), binNames: binNames() },
+    );
+    expect(failures.length).toBe(1);
+    expect(failures[0]).toContain('unknown CLI command "mstar plan totally-fake-verb"');
+  });
+
+  test("correct plan verb citation passes (inventory supplement regression)", () => {
+    const { failures, cliCitationsChecked } = checkUseCliSkillCliCitations(
+      [{ rel: "skills/mstar-use-cli/SKILL.md", text: "then `mstar plan handoff` with tokens" }],
+      { cliCommands: inventory(), binNames: binNames() },
+    );
+    expect(cliCitationsChecked).toBe(1);
+    expect(failures).toEqual([]);
+  });
+
+  test("real mstar-use-cli corpus passes with supplemented inventory", () => {
+    const files = readUseCliSkillMarkdown(REPO_ROOT);
+    expect(files.length).toBeGreaterThan(0);
+    const { failures } = checkUseCliSkillCliCitations(files, {
+      cliCommands: inventory(),
+      binNames: binNames(),
+    });
     expect(failures).toEqual([]);
   });
 });

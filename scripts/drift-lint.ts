@@ -6,11 +6,14 @@
  * real skill files.
  *
  * Guards added by the mechanical-verification pass:
- * 1. docs audit enum — `/codebase-audit` category tokens in docs/cli.md
- * (the `<category>` keyword-table row) and README.md / README_CN.md
- * (the category-focus list) must be real AUDIT_CATEGORIES members;
- * docs/cli.md must enumerate the full nine (fabrications like `deps`
- * and omissions like a missing `bug` / `direction` both fail).
+ * 1. docs audit enum — `/codebase-audit` category tokens in
+ * skills/mstar-use-cli/references/checks-and-lints.md (the `<category>`
+ * keyword-table row) and README.md / README_CN.md (the category-focus
+ * list) must be real AUDIT_CATEGORIES members; the checks-and-lints row
+ * must enumerate the full nine (fabrications like `deps` and omissions
+ * like a missing `bug` / `direction` both fail). Guard 1 forward also
+ * scans skills/mstar-use-cli/** markdown for declared-bin prefixes and
+ * real CLI paths (Engine-check callout bodies elsewhere are unchanged).
  * 2. README bilingual pairing — README.md and README_CN.md must change
  * together over the committed range merge-base(origin/main, HEAD)..HEAD
  * (AGENTS.md bilingual rule); skipped silently when git has no range
@@ -532,6 +535,146 @@ export function buildCliCommandInventory(cliSrc: string): {
   return { cliCommands, failures };
 }
 
+/** Audit `<category>` keyword-table row — migrated from docs/cli.md. */
+export const AUDIT_CATEGORY_DOC = "skills/mstar-use-cli/references/checks-and-lints.md";
+
+/** Markdown tree scanned by Guard 1 forward beyond Engine-check callouts. */
+export const USE_CLI_SKILL_DIR = "skills/mstar-use-cli";
+
+/**
+ * Supplement the index.ts inventory with commands registered outside that
+ * file: PLAN_VERBS / WORKFLOW_VERBS tables in plan-coordination.ts (SSOT
+ * for scoped verbs) and the `sdd evidence` subtree in sdd-evidence.ts
+ * (parsed from registerSddEvidenceCommands `.command(...)` calls).
+ */
+export function supplementCliCommandInventory(
+  cliCommands: Set<string>,
+  repoRoot: string,
+): { failures: string[] } {
+  const failures: string[] = [];
+  const planCoordPath = join(repoRoot, "packages/cli/src/plan-coordination.ts");
+  let planCoordSrc: string;
+  try {
+    planCoordSrc = readFileSync(planCoordPath, "utf8");
+  } catch {
+    failures.push(
+      "drift: could not read packages/cli/src/plan-coordination.ts for scoped verb-table inventory",
+    );
+    return { failures };
+  }
+  for (const { table, family } of [
+    { table: "PLAN_VERBS", family: "plan" },
+    { table: "WORKFLOW_VERBS", family: "workflow" },
+  ] as const) {
+    const re = new RegExp(`const\\s+${table}:\\s*Record<[^>]+>\\s*=\\s*\\{([^}]*)\\}`);
+    const m = planCoordSrc.match(re);
+    if (!m) {
+      failures.push(`drift: could not parse ${table} in plan-coordination.ts`);
+      continue;
+    }
+    for (const vm of m[1].matchAll(/(?:"([^"]+)"|([a-z][a-z0-9-]*))\s*:\s*true/g)) {
+      cliCommands.add(`${family} ${vm[1] ?? vm[2]}`);
+    }
+  }
+
+  const sddPath = join(repoRoot, "packages/cli/src/sdd-evidence.ts");
+  let sddSrc: string;
+  try {
+    sddSrc = readFileSync(sddPath, "utf8");
+  } catch {
+    failures.push("drift: could not read packages/cli/src/sdd-evidence.ts for sdd evidence inventory");
+    return { failures };
+  }
+  const fnMatch = sddSrc.match(/export function registerSddEvidenceCommands[\s\S]*?^}/m);
+  if (!fnMatch) {
+    failures.push("drift: could not locate registerSddEvidenceCommands in sdd-evidence.ts");
+    return { failures };
+  }
+  const subcmds = [...fnMatch[0].matchAll(/\.command\(\s*"([a-z-]+)"\s*\)/g)].map((x) => x[1]);
+  if (!subcmds.includes("evidence")) {
+    failures.push('drift: registerSddEvidenceCommands missing .command("evidence")');
+  } else {
+    cliCommands.add("sdd evidence");
+  }
+  return { failures };
+}
+
+/** 1-based line number for a character index in `text`. */
+function lineNumberAt(text: string, index: number): number {
+  return text.slice(0, index).split(/\r?\n/).length;
+}
+
+/**
+ * Backticked CLI citations — declared bin plus inventory path. Shared by
+ * Engine-check callout bodies and the mstar-use-cli skill scan surface.
+ */
+export function checkCliCitationsInText(
+  rel: string,
+  text: string,
+  opts: { cliCommands: Set<string>; binNames: string[]; lineBase?: number },
+): { cliCitationsChecked: number; failures: string[] } {
+  const failures: string[] = [];
+  let cliCitationsChecked = 0;
+  const bins = new Set(opts.binNames);
+  const lineBase = opts.lineBase ?? 0;
+
+  for (const cm of text.matchAll(/`([a-z][a-z0-9-]*)[ \t]+([a-z-]+(?:[ \t]+[a-z-]+)?)/g)) {
+    const bin = cm[1];
+    const cmd = cm[2];
+    if (!bins.has(bin)) {
+      // Shorthand like `persist get` (no bin) and fence-tag artifacts are not CLI citations.
+      if (!bin.startsWith("mstar")) continue;
+      const line = lineBase + lineNumberAt(text, cm.index ?? 0);
+      failures.push(
+        `${rel}:${line} citation binary "${bin}" is not a declared CLI bin (${opts.binNames.join(" | ")})`,
+      );
+      continue;
+    }
+    cliCitationsChecked++;
+    const line = lineBase + lineNumberAt(text, cm.index ?? 0);
+    if (!opts.cliCommands.has(cmd)) {
+      failures.push(
+        `${rel}:${line} citation references unknown CLI command "${bin} ${cmd}" (known: ${[...opts.cliCommands].sort().join(", ")})`,
+      );
+    }
+  }
+
+  return { cliCitationsChecked, failures };
+}
+
+export type UseCliSkillScanResult = {
+  filesScanned: number;
+  cliCitationsChecked: number;
+  failures: string[];
+};
+
+/** Every `.md` file under skills/mstar-use-cli/ for Guard 1 forward. */
+export function readUseCliSkillMarkdown(repoRoot: string): Array<{ rel: string; text: string }> {
+  try {
+    return collectFiles(USE_CLI_SKILL_DIR, ".md").map((file) => ({
+      rel: relative(repoRoot, file),
+      text: readFileSync(file, "utf8"),
+    }));
+  } catch {
+    return [];
+  }
+}
+
+/** Guard 1 forward — full-text CLI citations in skills/mstar-use-cli/**. */
+export function checkUseCliSkillCliCitations(
+  files: Array<{ rel: string; text: string }>,
+  opts: { cliCommands: Set<string>; binNames: string[] },
+): UseCliSkillScanResult {
+  const failures: string[] = [];
+  let cliCitationsChecked = 0;
+  for (const { rel, text } of files) {
+    const row = checkCliCitationsInText(rel, text, opts);
+    cliCitationsChecked += row.cliCitationsChecked;
+    failures.push(...row.failures);
+  }
+  return { filesScanned: files.length, cliCitationsChecked, failures };
+}
+
 /** Declared CLI bin names — the manifest is SSOT, never a hardcoded list.
  * Guard-or-clear-error (mirrors `readRolesCorpus`): a missing / corrupt /
  * bin-less manifest returns one explicit failure row, never a silent skip —
@@ -585,7 +728,6 @@ export function checkEngineCallouts(
   const failures: string[] = [];
   let calloutsChecked = 0;
   let cliCitationsChecked = 0;
-  const bins = new Set(opts.binNames);
 
   for (const { rel, text } of files) {
     const lines = text.split(/\r?\n/);
@@ -606,26 +748,14 @@ export function checkEngineCallouts(
       if (!run.text.includes("**Engine check (when available):**")) continue;
       calloutsChecked++;
 
- // Backticked CLI citations — anchored to the opening backtick so the
- // prefix capture is exact (prose word pairs are never counted as
- // citations). `<bin> <cmd>` with at most a two-word command path,
- // preserving the pre-existing match surface (`mstar audit scaffold
- // <file>` → prefix `mstar`, path `audit scaffold`).
-      for (const cm of run.text.matchAll(/`([a-z][a-z0-9-]*)\s+([a-z-]+(?:\s+[a-z-]+)?)/g)) {
-        const bin = cm[1];
-        const cmd = cm[2];
-        cliCitationsChecked++;
-        if (!bins.has(bin)) {
-          failures.push(
-            `${rel}:${run.start + 1} citation binary "${bin}" is not a declared CLI bin (${opts.binNames.join(" | ")})`,
-          );
-          continue;
-        }
-        if (!opts.cliCommands.has(cmd)) {
-          failures.push(
-            `${rel}:${run.start + 1} callout references unknown CLI command "${bin} ${cmd}" (known: ${[...opts.cliCommands].sort().join(", ")})`,
-          );
-        }
+      const cited = checkCliCitationsInText(rel, run.text, {
+        cliCommands: opts.cliCommands,
+        binNames: opts.binNames,
+        lineBase: run.start,
+      });
+      cliCitationsChecked += cited.cliCitationsChecked;
+      for (const row of cited.failures) {
+        failures.push(row.replace(" citation references ", " callout references "));
       }
 
       for (const im of run.text.matchAll(/import\s*\{([^}]*)\}\s*from\s*"@mstar-harness\/engine"/g)) {
@@ -936,6 +1066,7 @@ if (import.meta.main) {
   const cliSrc = readFileSync(join(root, "packages/cli/src/index.ts"), "utf8");
   const { cliCommands, failures: cliInventoryFailures } = buildCliCommandInventory(cliSrc);
   for (const row of cliInventoryFailures) fail(row);
+  for (const row of supplementCliCommandInventory(cliCommands, root).failures) fail(row);
 
  /* ------------------------------------------------------------------ */
  /* Forward: skill callouts → engine exports + CLI commands + bins */
@@ -963,6 +1094,14 @@ if (import.meta.main) {
   calloutsChecked += forward.calloutsChecked;
   cliCitationsChecked += forward.cliCitationsChecked;
   for (const row of forward.failures) fail(row);
+
+  const useCliFiles = readUseCliSkillMarkdown(root);
+  const useCliScan =
+    manifestFailures.length === 0
+      ? checkUseCliSkillCliCitations(useCliFiles, { cliCommands, binNames })
+      : { filesScanned: useCliFiles.length, cliCitationsChecked: 0, failures: [] as string[] };
+  cliCitationsChecked += useCliScan.cliCitationsChecked;
+  for (const row of useCliScan.failures) fail(row);
 
  // Guard 6: Engine-check callout dedup — the same normalized callout body
  // must not appear in more than one file (canonical copy + pointers; a
@@ -1086,10 +1225,10 @@ if (import.meta.main) {
 
   /**
  * Category tokens in docs must be real `AUDIT_CATEGORIES` members, and
- * docs/cli.md must enumerate the full set:
- * - docs/cli.md: the `<category>` keyword-table row (set equality — a
- * fabricated token like `deps` fails, and so does an omission such as
- * a missing `bug` / `direction`).
+ * the migrated checks-and-lints row must enumerate the full set:
+ * - skills/mstar-use-cli/references/checks-and-lints.md: the `<category>`
+ * keyword-table row (set equality — a fabricated token like `deps` fails,
+ * and so does an omission such as a missing `bug` / `direction`).
  * - README.md / README_CN.md: the category-focus list in the audit usage
  * line ("category focus (…)" / "按类别聚焦（…）") — membership only,
  * the list is illustrative (`…`).
@@ -1101,22 +1240,26 @@ if (import.meta.main) {
   let categoryTokensChecked = 0;
 
   {
-    const file = "docs/cli.md";
-    const lines = readFileSync(join(root, file), "utf8").split(/\r?\n/);
-    const rowIdx = lines.findIndex((l) => /^\|\s*`<category>`\s*\|/.test(l));
-    if (rowIdx === -1) {
-      fail(`${file}: could not locate the \`<category>\` keyword-table row (expected a row starting with \`| \`<category>\` |\`)`);
+    const file = AUDIT_CATEGORY_DOC;
+    if (!exists(file)) {
+      fail(`${file}: missing audit category doc (expected the migrated <category> row)`);
     } else {
-      const tokens = extractCategoryRowTokens(lines[rowIdx]);
-      categoryTokensChecked += tokens.length;
-      for (const t of tokens) {
-        if (!auditCategories.has(t)) {
-          fail(`${file}:${rowIdx + 1} category token "${t}" is not an AUDIT_CATEGORY (valid: ${AUDIT_CATEGORIES.join(", ")})`);
+      const lines = readFileSync(join(root, file), "utf8").split(/\r?\n/);
+      const rowIdx = lines.findIndex((l) => /^\|\s*`<category>`\s*\|/.test(l));
+      if (rowIdx === -1) {
+        fail(`${file}: could not locate the \`<category>\` keyword-table row (expected a row starting with \`| \`<category>\` |\`)`);
+      } else {
+        const tokens = extractCategoryRowTokens(lines[rowIdx]);
+        categoryTokensChecked += tokens.length;
+        for (const t of tokens) {
+          if (!auditCategories.has(t)) {
+            fail(`${file}:${rowIdx + 1} category token "${t}" is not an AUDIT_CATEGORY (valid: ${AUDIT_CATEGORIES.join(", ")})`);
+          }
         }
-      }
-      for (const c of AUDIT_CATEGORIES) {
-        if (!tokens.includes(c)) {
-          fail(`${file}:${rowIdx + 1} category table omits AUDIT_CATEGORY "${c}" — add \`${c}\` to the <category> row`);
+        for (const c of AUDIT_CATEGORIES) {
+          if (!tokens.includes(c)) {
+            fail(`${file}:${rowIdx + 1} category table omits AUDIT_CATEGORY "${c}" — add \`${c}\` to the <category> row`);
+          }
         }
       }
     }
@@ -1228,12 +1371,12 @@ if (import.meta.main) {
     console.error(`drift-lint: ${failures.length} violation(s) found\n`);
     for (const f of failures) console.error(`  ✗ ${f}`);
     console.error(
-      `\nchecked ${calloutsChecked} Engine-check callouts (${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins) against ${engineExports.size} engine exports and ${cliCommands.size} CLI commands; ${categoryTokensChecked} audit category tokens; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files (${ephemeralCitationsFound} ephemeral citations); ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations)`,
+      `\nchecked ${calloutsChecked} Engine-check callouts (${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins; ${useCliScan.filesScanned} use-cli skill files with ${useCliScan.cliCitationsChecked} full-text citations) against ${engineExports.size} engine exports and ${cliCommands.size} CLI commands; ${categoryTokensChecked} audit category tokens; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files (${ephemeralCitationsFound} ephemeral citations); ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations)`,
     );
     process.exit(1);
   }
 
   console.log(
-    `drift-lint: OK — ${calloutsChecked} Engine-check callouts reference real exports (${engineExports.size}) and CLI commands (${cliCommands.size}); ${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins; engine spec citations resolve; ${categoryTokensChecked} audit category tokens match AUDIT_CATEGORIES; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files clean of ephemeral citations; ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations)`,
+    `drift-lint: OK — ${calloutsChecked} Engine-check callouts reference real exports (${engineExports.size}) and CLI commands (${cliCommands.size}); ${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins (${useCliScan.filesScanned} use-cli skill files, ${useCliScan.cliCitationsChecked} full-text citations); engine spec citations resolve; ${categoryTokensChecked} audit category tokens match AUDIT_CATEGORIES; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files clean of ephemeral citations; ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations)`,
   );
 }
