@@ -46,7 +46,7 @@ Raw bundle files may disappear after the working context is gone. Before Done, P
   - `Review range / Diff basis`
   - `Review bundle`: `{SDD_DIR}/review/`
   - `QC inputs`: `qc1.md` / `qc2.md` / `qc3.md` or `qc.md`
-  - `Task reviews`: compact per completed task — task number + review range + earned `Task quality` + report pointer (`task-N-review.md` → `{SDD_DIR}/task-N-review.md`); required because the raw per-task file disappears with the bundle. The pointer names the L2 report, never the implementer's `task-N-report.md`
+  - `Task reviews`: compact per completed task — task number + review range + earned `Task quality` + report pointer (`task-N-review.md` → `{SDD_DIR}/task-N-review.md`); required for handoff once `{SDD_DIR}` is unavailable. The L2 report file lives at the SDD root (outside `{SDD_DIR}/review/`); bundle cleanup removes only the ephemeral `review/` artifacts. The pointer names the L2 report, never the implementer's `task-N-report.md`
   - `Blocking result`: fixed / none / deferred with reason
   - `Residual findings`: each open R# — id + short title + severity + tracking location (register `entries[<plan-id>]`) + owner/target + blocker-defer flag (`N/A — none open` when none)
 - Main plan `## QA Gate Summary` when QA applies:

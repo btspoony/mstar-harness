@@ -217,7 +217,8 @@ export function isStandaloneDevelopmentWorkflow(snapshot: WorkflowSnapshot): boo
   );
 }
 
-function rowValidationRouteForSnapshot(snapshot: WorkflowSnapshot, row: PlanRow): RowValidationRoute {
+/** Classify row coordination validation: standalone development vs integration delivery. */
+export function rowValidationRoute(snapshot: WorkflowSnapshot, row: PlanRow): RowValidationRoute {
   if (isStandaloneDevelopmentWorkflow(snapshot) && snapshot.plans[0]?.id === row.id) {
     return "standalone-development";
   }
@@ -497,7 +498,7 @@ export function validateWorkflowSnapshot(doc: unknown): GateResult {
       // so a malformed coordination state can never be persisted.
       if (isPlainObject(row) && row.coordination !== undefined) {
         const planRow = row as PlanRow;
-        const route = rowValidationRouteForSnapshot(snapshotDoc, planRow);
+        const route = rowValidationRoute(snapshotDoc, planRow);
         violations.push(...validateRowCoordination(row.coordination, `plans[${String(row.id)}].coordination`, route));
         violations.push(...validateStandaloneCompletedCoherence(snapshotDoc, planRow));
       }
