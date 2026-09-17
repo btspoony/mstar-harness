@@ -326,23 +326,68 @@ describe("checkEngineCallouts — Guard 1 CLI citation binary-prefix check", () 
   });
 });
 
+/** Paths registered outside index.ts — mirrors supplementCliCommandInventory sources. */
+function deriveScopedRegistrarPaths(repoRoot: string): Set<string> {
+  const paths = new Set<string>();
+  const planCoordSrc = readFileSync(join(repoRoot, "packages/cli/src/plan-coordination.ts"), "utf8");
+  for (const { table, family } of [
+    { table: "PLAN_VERBS", family: "plan" },
+    { table: "WORKFLOW_VERBS", family: "workflow" },
+  ] as const) {
+    const re = new RegExp(`const\\s+${table}:\\s*Record<[^>]+>\\s*=\\s*\\{([^}]*)\\}`);
+    const m = planCoordSrc.match(re);
+    if (m) {
+      for (const vm of m[1].matchAll(/(?:"([^"]+)"|([a-z][a-z0-9-]*))\s*:\s*true/g)) {
+        paths.add(`${family} ${vm[1] ?? vm[2]}`);
+      }
+    }
+  }
+  const sddSrc = readFileSync(join(repoRoot, "packages/cli/src/sdd-evidence.ts"), "utf8");
+  const fnMatch = sddSrc.match(/export function registerSddEvidenceCommands[\s\S]*?^}/m);
+  if (fnMatch) {
+    const subcmds = [...fnMatch[0].matchAll(/\.command\(\s*"([a-z-]+)"\s*\)/g)].map((x) => x[1]);
+    if (subcmds.includes("evidence")) {
+      paths.add("sdd evidence");
+      if (subcmds.includes("capture")) paths.add("sdd evidence capture");
+      if (subcmds.includes("verify")) paths.add("sdd evidence verify");
+    }
+  }
+  return paths;
+}
+
 describe("supplementCliCommandInventory — scoped registrar paths (Task 3)", () => {
   const REPO_ROOT = join(import.meta.dir, "..");
 
-  test("index.ts inventory stays at 93 paths; supplement adds 18 scoped paths", () => {
+  // Locks parse success, representative scoped paths, and the supplement delta
+  // relationship — not exact inventory counts. New CLI verbs may land in index.ts
+  // or scoped verb tables legitimately; exact totals would rot on every addition.
+  test("index.ts static inventory + supplement scoped paths (lower bounds + source-derived containment)", () => {
     const cliSrc = readFileSync(join(REPO_ROOT, "packages/cli/src/index.ts"), "utf8");
     const { cliCommands: base, failures: baseFailures } = buildCliCommandInventory(cliSrc);
     expect(baseFailures).toEqual([]);
-    expect(base.size).toBe(93);
+    expect(base.size).toBeGreaterThanOrEqual(80);
+    for (const top of ["persist", "sdd", "status", "workflow", "iteration"]) {
+      expect(base.has(top)).toBe(true);
+    }
+
     const merged = new Set(base);
     const { failures } = supplementCliCommandInventory(merged, REPO_ROOT);
     expect(failures).toEqual([]);
+
     expect(merged.has("plan handoff")).toBe(true);
     expect(merged.has("workflow show-prepare")).toBe(true);
     expect(merged.has("sdd evidence")).toBe(true);
     expect(merged.has("sdd evidence capture")).toBe(true);
     expect(merged.has("sdd evidence verify")).toBe(true);
-    expect(merged.size - base.size).toBe(18);
+
+    const expectedScoped = deriveScopedRegistrarPaths(REPO_ROOT);
+    expect(expectedScoped.size).toBeGreaterThanOrEqual(15);
+    for (const path of expectedScoped) {
+      expect(merged.has(path)).toBe(true);
+    }
+
+    const novelFromSupplement = [...expectedScoped].filter((p) => !base.has(p));
+    expect(merged.size - base.size).toBe(novelFromSupplement.length);
   });
 });
 
