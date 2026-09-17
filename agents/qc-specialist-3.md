@@ -36,6 +36,19 @@ permission:
     "cloc*": allow
     "scc*": allow
     "tokei*": allow
+    # Morning Star read-only validators (skills require machine-checked gates)
+    "mstar qc validate-report*": allow
+    "mstar-harness qc validate-report*": allow
+    "mstar lint*": allow
+    "mstar-harness lint*": allow
+    "mstar dispatch validate*": allow
+    "mstar-harness dispatch validate*": allow
+    "mstar worktree qc-alignment*": allow
+    "mstar-harness worktree qc-alignment*": allow
+    "mstar status validate*": allow
+    "mstar-harness status validate*": allow
+    "mstar lease verify*": allow
+    "mstar-harness lease verify*": allow
   task:
     "*": deny
     explore: allow
