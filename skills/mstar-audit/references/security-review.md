@@ -15,9 +15,20 @@ Method behind the Security category. Load when the category focus is `security`,
 
 - Every security finding must state a concrete attack scenario: **who the attacker is, what they send or do, and what they gain** — "An unauthenticated caller sends `POST /api/orders` with `qty=0`, gets a negative-balance order."
 - "Potentially exploitable" / "theoretically" means the research is not done — name the actor, the request, and the effect, or downgrade the finding.
-- **Severity = likelihood × impact**, both judged from code evidence. A famous vulnerability class on an unreachable path is a hardening note, not a HIGH.
+- **Severity is a likelihood × impact calibration, not a numeric multiplication** — judge each axis from code evidence, then place the finding on the anchor scale below; there is no formula to compute.
 - **Likelihood is judged from the repo's reality:** an endpoint behind a corporate VPN with no external callers is lower likelihood than the same shape on a public API; the code evidence stays the same, the rating does not.
 - **Impact is judged on the data, not the class:** SQL injection into a read-only lookup table is MEDIUM; the same class on a payment mutation is HIGH. Name what the attacker actually gains.
+- **Severity anchors — rank the confirmed effect, not the vulnerability class:**
+  - `critical` — compromise beyond the affected identity without prior trust: unauthenticated code execution, authentication bypass granting admin, cross-tenant write of protected data.
+  - `high` — an explicit security boundary defeated (authentication, authorization, tenant isolation, sandbox, inter-component trust boundary): a lower-trust principal performs an action it must not.
+  - `medium` — real but confined impact: privileged access required, narrow data exposure, single-object mutation, or a boundary other deployed layers still guard.
+  - `low` — minor information disclosure or weakened posture with no demonstrated unauthorized action.
+  - `informational` — hygiene and correct-by-construction observations. **Informational anchors do not promote hardening notes or unverified security leads into findings** — those stay in the audit index (hardening rule above, §12 Needs verification).
+- **Anti-strengthening — never upgrade the effect class:**
+  - A crash or single-request denial is availability disruption, not code execution — do not rate it as execution-class.
+  - Ordinary load (large but bounded requests) is not shared-service harm; escalation requires cost imposed on other principals or shared infrastructure.
+  - Behavior affecting only the same principal (the user corrupts their own data, self-XSS, confusion over their own token) is not privilege escalation — an effect on another principal or protected shared state is required.
+- **Scaffold field gate:** the finding scaffold enforces `severity.overall ≤ severity.impact` as a rank comparison (engine gate in `packages/engine/src/audit.ts`, violation `audit.finding.severity.overall-exceeds-impact`). It validates field consistency only — it does not verify that the impact is real; that stays reviewer judgment.
 - **HIGH vs MEDIUM discriminator:** the flaw defeats an explicit security boundary (authentication, authorization, tenant isolation, sandbox, trust boundary between components) → HIGH. It needs privileged access, a confined blast radius, or uncommon preconditions → MEDIUM.
 - **A defense-in-depth gap where another layer already prevents exploitation is a Hardening note in the audit index's "Hardening & checked notes" section, not a findings row** — never severity-inflate it. Hardening notes get one index line and no plan unless the user asks.
 - **Confidence is per-claim, not per-category:** a repo with one sloppy auth check is not "insecure" — each row stands on its own evidence.
@@ -97,21 +108,21 @@ Per-file scanning misses flows. After the per-file pass:
 
 Each angle is a reading lens, not a claim:
 
-- **Attack the sad path:** error, fallback, and retry branches skip validation — read the catch, the default case, the failure handler.
-- **Boundary values:** token expiry moment, exactly-at-limit sizes, multibyte vs byte limits, pagination edges.
-- **Implicit trust between components:** DB assumes API validated, worker assumes service A authorized, renderer assumes sanitize-on-write.
-- **Wrong order / replay:** flows that assume sequence — reuse-after-consume tokens, replayable webhooks, unbounded resend.
-- **Concurrency two-at-once:** double-spend, check-then-act, idempotency races on concurrent initialization.
-- **Parser disagreement:** router vs app normalization, extension vs MIME vs magic bytes, double URL-decoding.
-- **Trust in derived values:** cache keys built from user input, lookup tables keyed by attacker-chosen strings, IDs exposed in URLs that also gate authorization.
-- **Delegated checks:** validation that runs in the client, the test suite, or a sibling service but not on the production path — the enforcement point must be where the request lands.
-- **Round-trip survival:** stored → retrieved escaping drift that defeats earlier sanitization.
-- **Config posture:** missing config falling back to insecure defaults, env overriding a security control, first-run setup defaults, feature-flag defaults.
-- **Follow the money/privilege:** parallel paths to the same state change with weaker checks (alias routes, second entrypoints with fewer guards).
-- **Leaked context:** differential errors, timing, or response sizes → enumeration of users, resources, internal structure.
-- **Params overriding security-relevant defaults:** `debug=1`, `skip_auth`, `allow_*` knobs on request paths.
-- **Unhandled input shapes:** arrays where scalars are expected, extra keys in JSON bodies, oversized/malformed encodings reaching parsers that fail open.
-- **Unverified claims driving decisions:** client-set headers trusted server-side, `is_admin` hardcoded client-side, signature-verified but actor-unchecked tokens.
+- **Attack the sad path:** error, fallback, and retry branches skip validation — read the catch, the default case, the failure handler. `Signal:` grep `catch` / `except` / `else` branches adjacent to `validate` / `verify` calls that return a default instead of rejecting.
+- **Boundary values:** token expiry moment, exactly-at-limit sizes, multibyte vs byte limits, pagination edges. `Signal:` comparison operators at limits — `<=` vs `<` against `max*` / `limit` / `exp` / `length` / `count` identifiers.
+- **Implicit trust between components:** DB assumes API validated, worker assumes service A authorized, renderer assumes sanitize-on-write. `Signal:` cross-module parameters or fields named `trusted*`, `verified*`, `sanitized*`, `checked*` consumed downstream without a re-check.
+- **Wrong order / replay:** flows that assume sequence — reuse-after-consume tokens, replayable webhooks, unbounded resend. `Signal:` `consumed` / `used` / `redeemed` state columns or `eventId` / `idempotencyKey` dedup lookups that are read without an atomic claim (compare-and-set, unique constraint).
+- **Concurrency two-at-once:** double-spend, check-then-act, idempotency races on concurrent initialization. `Signal:` a read (`SELECT`, `.get(`) of balance/quota/state followed by a later write with no transaction, lock, or version check in between; `getOrCreate` / upsert on init paths.
+- **Parser disagreement:** router vs app normalization, extension vs MIME vs magic bytes, double URL-decoding. `Signal:` two decode/normalize calls over the same input — repeated `decodeURIComponent` / `urldecode`, `path` vs `url.parse().pathname` splits, `extname` vs `mimetype` vs content-sniff checks.
+- **Trust in derived values:** cache keys built from user input, lookup tables keyed by attacker-chosen strings, IDs exposed in URLs that also gate authorization. `Signal:` template-literal key construction — `` `${ `` interpolations feeding `cacheKey` / `key` / `Map` / dict indexing from request fields.
+- **Delegated checks:** validation that runs in the client, the test suite, or a sibling service but not on the production path — the enforcement point must be where the request lands. `Signal:` an authorization predicate (`is_admin`, `can_edit`, role checks) present in client bundles or `*.test.*` files with no corresponding server-side check at the handler.
+- **Round-trip survival:** stored → retrieved escaping drift that defeats earlier sanitization. `Signal:` `escape` / `sanitize` / `encodeURIComponent` at the write path with a raw render read later at `innerHTML` / `v-html` / `dangerouslySetInnerHTML` sinks.
+- **Config posture:** missing config falling back to insecure defaults, env overriding a security control, first-run setup defaults, feature-flag defaults. `Signal:` env reads with fallback defaults — `process.env` / `os.environ` followed by `||` / `or` / `??`, and flag names containing `DEBUG`, `SKIP`, `INSECURE`, `DISABLE`, defaulting truthy.
+- **Follow the money/privilege:** parallel paths to the same state change with weaker checks (alias routes, second entrypoints with fewer guards). `Signal:` a second writer to the same target — another route/RPC/job issuing `UPDATE` / `.save(` / `.update(` on the same table or state the guarded path writes, with fewer middleware layers.
+- **Leaked context:** differential errors, timing, or response sizes → enumeration of users, resources, internal structure. `Signal:` distinct outcomes for missing vs forbidden (`NotFound` vs `Unauthorized` branches), `err.message` interpolated into client responses, and secret comparisons using `===` / `==` instead of `timingSafeEqual` / constant-time compare.
+- **Params overriding security-relevant defaults:** `debug=1`, `skip_auth`, `allow_*` knobs on request paths. `Signal:` request query/body keys matched against security-named flags — `debug`, `skip`, `bypass`, `allow`, `admin`, `impersonate` read on handler paths.
+- **Unhandled input shapes:** arrays where scalars are expected, extra keys in JSON bodies, oversized/malformed encodings reaching parsers that fail open. `Signal:` `...body` / `...request.data` spread into model/ORM constructors, `JSON.parse` without schema validation, scalar-typed fields consumed in loops/queries without `Array.isArray` guards.
+- **Unverified claims driving decisions:** client-set headers trusted server-side, `is_admin` hardcoded client-side, signature-verified but actor-unchecked tokens. `Signal:` `jwt.decode` (not `verify`) or a signature check whose payload fields (`sub`, `user_id`, `scope`) are then trusted without binding to the presenting principal.
 
 ## 9. Category expansions beyond playbook § 2
 
