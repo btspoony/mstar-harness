@@ -118,13 +118,14 @@ import {
   type ReminderState,
 } from "../phase2-orchestration";
 import { recordPlanLaunch, reservePlanLaunch, type PlanLaunchResult } from "../phase2-launches";
+import { PHASE2_NOTICE_CUSTOM_TYPE, fallbackNotice, formatNotice, statusNotice } from "../notices";
 
 /** Ledger `customType` of this feature's decision records (the only writer). */
 export const PHASE2_CUSTOM_TYPE = "mstar:phase2";
 /** `customType` of the bounded Phase-2 advisory (`agent_end`, triggerTurn+followUp). */
 export const PHASE2_ADVISORY_CUSTOM_TYPE = "mstar:phase2-advisory";
 /** `customType` of a bounded diagnostic notice — informational, never a continuation. */
-export const PHASE2_NOTICE_CUSTOM_TYPE = "mstar:phase2-notice";
+export { PHASE2_NOTICE_CUSTOM_TYPE };
 /** The exact accepted engine phase label for "this coordinator is executing Phase 2". */
 export const PHASE2_PHASE = "phase-2-execute";
 /** The single tool this extension registers (never an activation command). */
@@ -365,9 +366,12 @@ function journalFactsOf(workflowDir: string): string {
  * Engine probes (read-only; ownership and phase are re-read every time)
  * ------------------------------------------------------------------------- */
 
+/** The observed lifecycle a diagnostic may cite — only from a successfully read snapshot. */
+type ObservedStatus = Readonly<{ workflowId: string; status: string }>;
+
 type WorkflowProbe =
   | Readonly<{ ok: true; workflowDir: string; snapshot: WorkflowSnapshot }>
-  | Readonly<{ ok: false; code: string; message: string }>;
+  | Readonly<{ ok: false; code: string; message: string; observed?: ObservedStatus }>;
 
 type SamplingResult = Readonly<{
   /** The bound coordinator owns a live workflow in `phase-2-execute`. */
@@ -375,7 +379,7 @@ type SamplingResult = Readonly<{
   /** The computed observation, or `null` when any required read failed (never a guessed key). */
   observation: Phase2Observation | null;
   /** The first refusal, for a bounded diagnostic; `null` when the sample was complete. */
-  refusal: Readonly<{ code: string; message: string }> | null;
+  refusal: Readonly<{ code: string; message: string; observed?: ObservedStatus }> | null;
   /** Every terminal id **this sample** saw in `recent`; the decision consumes exactly these. */
   terminalIds: readonly string[];
 }>;
@@ -443,13 +447,15 @@ function probeWorkflow(ctx: ExtensionContext, binding: Phase2BindingRecord, requ
       ok: false,
       code: "phase2.workflow-mismatch",
       message: `the snapshot at ${workflowDir} describes workflow ${snapshot.id}, not ${binding.workflowId}`,
+      observed: { workflowId: snapshot.id, status: snapshot.status },
     };
   }
   if (workflowIsTerminal(snapshot)) {
     return {
       ok: false,
       code: "phase2.workflow-terminal",
-      message: `workflow ${snapshot.id} is ${snapshot.status}; the Phase-2 observation disables itself on a terminal lifecycle`,
+      message: `workflow ${snapshot.id} is ${snapshot.status}`,
+      observed: { workflowId: snapshot.id, status: snapshot.status },
     };
   }
   const coordinator = snapshot.coordination?.coordinator;
@@ -462,6 +468,7 @@ function probeWorkflow(ctx: ExtensionContext, binding: Phase2BindingRecord, requ
       ok: false,
       code: "phase2.ownership-drift",
       message: `workflow ${snapshot.id} is bound to coordinator envelope ${coordinator?.session_file ?? "(none)"} (session ${coordinator?.session_id ?? "(none)"}), not to ${binding.coordinatorSessionPath} (session ${envelope.session_id})`,
+      observed: { workflowId: snapshot.id, status: snapshot.status },
     };
   }
   if (requirePhase2 && (snapshot.status !== "running" || snapshot.phase !== PHASE2_PHASE)) {
@@ -469,6 +476,7 @@ function probeWorkflow(ctx: ExtensionContext, binding: Phase2BindingRecord, requ
       ok: false,
       code: "phase2.phase-inactive",
       message: `workflow ${snapshot.id} is ${snapshot.status} at phase ${JSON.stringify(snapshot.phase ?? null)}; the Phase-2 observation requires "${PHASE2_PHASE}"`,
+      observed: { workflowId: snapshot.id, status: snapshot.status },
     };
   }
   return { ok: true, workflowDir, snapshot };
@@ -529,11 +537,17 @@ export default function phase2Orchestration(pi: ExtensionAPI): void {
     }
   };
 
-  /** One bounded diagnostic per code and generation: repeated identical refusals stay silent. */
-  const diagnose = (code: string, message: string): void => {
+  /**
+   * One bounded diagnostic per code and generation: repeated identical refusals
+   * stay silent. The title comes from the shared notice shape — a status title
+   * only when a successfully read snapshot supplied the observed id/status,
+   * otherwise a fallback that asserts no workflow status.
+   */
+  const diagnose = (code: string, message: string, observed?: ObservedStatus): void => {
     if (gate.reported.has(code)) return;
     gate.reported.add(code);
-    notice(`Phase-2 observation inactive (${code}): ${message}`);
+    const detail = `${message} (${code})`;
+    notice(formatNotice(observed === undefined ? fallbackNotice({ subject: "the Phase-2 observation", detail }) : statusNotice({ ...observed, detail })));
   };
 
   const appendRecord = (record: Phase2Record): boolean => {
@@ -587,8 +601,14 @@ export default function phase2Orchestration(pi: ExtensionAPI): void {
    */
   const sample = async (ctx: ExtensionContext, binding: Phase2BindingRecord, probe: WorkflowProbe): Promise<SamplingResult> => {
     if (!probe.ok)
-      return { ownedPhase2: false, observation: null, refusal: { code: probe.code, message: probe.message }, terminalIds: [] };
+      return {
+        ownedPhase2: false,
+        observation: null,
+        refusal: { code: probe.code, message: probe.message, observed: probe.observed },
+        terminalIds: [],
+      };
 
+    const observed: ObservedStatus = { workflowId: probe.snapshot.id, status: probe.snapshot.status };
     const snapshot = ctx.getAsyncJobSnapshot();
     if (snapshot === null) {
       return {
@@ -597,6 +617,7 @@ export default function phase2Orchestration(pi: ExtensionAPI): void {
         refusal: {
           code: "phase2.snapshot-unavailable",
           message: "the host async-job snapshot is unavailable for this session; null is not \"no jobs\"",
+          observed,
         },
         terminalIds: [],
       };
@@ -607,7 +628,7 @@ export default function phase2Orchestration(pi: ExtensionAPI): void {
       return {
         ownedPhase2: true,
         observation: null,
-        refusal: { code: `phase2.${settings.reason}`, message: settings.message },
+        refusal: { code: `phase2.${settings.reason}`, message: settings.message, observed },
         terminalIds: [],
       };
     }
@@ -651,7 +672,7 @@ export default function phase2Orchestration(pi: ExtensionAPI): void {
     const probed = probeOwnership(ctx, state.binding, true);
     const sampled = await sample(ctx, state.binding, probed);
     if (generation !== gate.generation || gate.navigationPending) return;
-    if (sampled.refusal !== null) diagnose(sampled.refusal.code, sampled.refusal.message);
+    if (sampled.refusal !== null) diagnose(sampled.refusal.code, sampled.refusal.message, sampled.refusal.observed);
 
     const observation = sampled.observation ?? NO_OBSERVATION;
     const decision = decidePhase2Reminder(state.reminder, observation, {
@@ -835,7 +856,7 @@ export default function phase2Orchestration(pi: ExtensionAPI): void {
       return refuse(probe.code, `${probe.message}. The checkpoint was not recorded.${staleHint()}`);
     }
     const sampled = await sample(ctx, state.binding, probe);
-    if (sampled.refusal !== null) diagnose(sampled.refusal.code, sampled.refusal.message);
+    if (sampled.refusal !== null) diagnose(sampled.refusal.code, sampled.refusal.message, sampled.refusal.observed);
     const key = sampled.observation?.key ?? null;
     const blocked = params.decision === "blocked";
     if (
