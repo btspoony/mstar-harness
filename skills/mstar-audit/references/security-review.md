@@ -18,18 +18,18 @@ Method behind the Security category. Load when the category focus is `security`,
 - **Severity is a likelihood × impact calibration, not a numeric multiplication** — judge each axis from code evidence, then place the finding on the anchor scale below; there is no formula to compute.
 - **Likelihood is judged from the repo's reality:** an endpoint behind a corporate VPN with no external callers is lower likelihood than the same shape on a public API; the code evidence stays the same, the rating does not.
 - **Impact is judged on the data, not the class:** SQL injection into a read-only lookup table is MEDIUM; the same class on a payment mutation is HIGH. Name what the attacker actually gains.
-- **Severity anchors — rank the confirmed effect, not the vulnerability class:**
-  - `critical` — compromise beyond the affected identity without prior trust: unauthenticated code execution, authentication bypass granting admin, cross-tenant write of protected data.
-  - `high` — an explicit security boundary defeated (authentication, authorization, tenant isolation, sandbox, inter-component trust boundary): a lower-trust principal performs an action it must not.
-  - `medium` — real but confined impact: privileged access required, narrow data exposure, single-object mutation, or a boundary other deployed layers still guard.
-  - `low` — minor information disclosure or weakened posture with no demonstrated unauthorized action.
-  - `informational` — hygiene and correct-by-construction observations. **Informational anchors do not promote hardening notes or unverified security leads into findings** — those stay in the audit index (hardening rule above, §12 Needs verification).
+- **Severity anchors — rank the confirmed effect, not the vulnerability class.** Rank order is `informational` < `low` < `medium` < `high` < `critical`:
+  - `informational` — a substantiated minimal-impact observation. **Informational anchors do not promote hardening notes or unverified security leads into findings** — those stay in the audit index (hardening rule above, §12 Needs verification).
+  - `low` — a demonstrated minimal gain or non-secret internal disclosure.
+  - `medium` — a demonstrated boundary violation with limited blast radius or uncommon preconditions.
+  - `high` — a demonstrated defeat of an explicit security boundary (authentication, authorization, tenant isolation, sandbox, inter-component trust boundary) **with substantial consequences** — a lower-trust principal performs an action it must not, and real damage follows. An explicit-control defeat without substantial consequences stays `medium`.
+  - `critical` — demonstrated unauthenticated code execution, full data-store access or arbitrary account takeover.
 - **Anti-strengthening — never upgrade the effect class:**
   - A crash or single-request denial is availability disruption, not code execution — do not rate it as execution-class.
   - Ordinary load (large but bounded requests) is not shared-service harm; escalation requires cost imposed on other principals or shared infrastructure.
   - Behavior affecting only the same principal (the user corrupts their own data, self-XSS, confusion over their own token) is not privilege escalation — an effect on another principal or protected shared state is required.
 - **Scaffold field gate:** the finding scaffold enforces `severity.overall ≤ severity.impact` as a rank comparison (engine gate in `packages/engine/src/audit.ts`, violation `audit.finding.severity.overall-exceeds-impact`). It validates field consistency only — it does not verify that the impact is real; that stays reviewer judgment.
-- **HIGH vs MEDIUM discriminator:** the flaw defeats an explicit security boundary (authentication, authorization, tenant isolation, sandbox, trust boundary between components) → HIGH. It needs privileged access, a confined blast radius, or uncommon preconditions → MEDIUM.
+- **HIGH vs MEDIUM discriminator:** an explicit security boundary (authentication, authorization, tenant isolation, sandbox, trust boundary between components) defeated **with real, substantial consequences** → HIGH; the same shape with a confined blast radius or uncommon preconditions → MEDIUM.
 - **A defense-in-depth gap where another layer already prevents exploitation is a Hardening note in the audit index's "Hardening & checked notes" section, not a findings row** — never severity-inflate it. Hardening notes get one index line and no plan unless the user asks.
 - **Confidence is per-claim, not per-category:** a repo with one sloppy auth check is not "insecure" — each row stands on its own evidence.
 - A finding needs both halves: the vulnerable pattern at `file:line` *and* a confirmed attacker-controlled input reaching it (§4). Either half unproven → keep researching (§3) or park it in the audit index's **Needs verification** section (§12).
