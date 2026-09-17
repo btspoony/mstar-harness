@@ -62,9 +62,8 @@ Dispatch:
 
     Write all of it to [REPORT_FILE].
 
-    ## Scope
-    - Task, diff range and interfaces actually reviewed
-    - `- Truncated coverage: <...>` — only when a bound actually stopped expansion; omit the line otherwise
+    ## Scope            # only when a bound actually stopped expansion; a complete review omits this section and its label
+    - `- Truncated coverage: <budget reached; specific interfaces/files left unexamined>`
 
     ### Spec Compliance
     - ✅ Spec compliant | ❌ Issues found (file:line)
