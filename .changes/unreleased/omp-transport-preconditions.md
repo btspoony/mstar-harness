@@ -1,0 +1,15 @@
+---
+category: Changed
+packages: root, omp
+---
+
+- Documented the producer of the prepared Assignment in the OMP host reference: the `reserve-launch` admission clause and the optional transport section now name **`mstar plan prepare`** as the coordinator step that writes `coordination.prepared` and its pinned `coordination.prepared.assignment_path`, define the transport placeholder as that absolute path, add an ordered summary of the extra-primary route (registered `Todo` row → existing feature worktree → coordinator bound → prepare → `reserve-launch` → the journaled record-before-side-effect transitions and pane/start/submission sequence), and state the admission windows — row admission closes with Phase 1 (earlier once any row starts preparation or execution), while an already-registered eligible row may still be prepared during Phase 2.
+- Added the host-agnostic precondition to the scoped-plan PM transport note: a conditional extra-primary launch is available only for a plan row the coordinator has already registered and prepared, and whose feature worktree exists — a row that does not yet exist cannot be launched, because row admission closes with Phase 1.
+- Added the **six-item scoped-route dispatch checklist** to the OMP host reference's optional transport section: a fresh target session, a prepared (not merely registered) row, handover content frozen before preparation with only the Assignment hash re-checked at bind (`coordination.assignment-stale`), a single initial submission, readback-confirmed execution with single-key recovery only, and post-bind steering — bounding *exactly once* to the initial command. The trailing-Enter behavior stays a field observation of a transport CLI this repository does not own.
+- Named the **supported cross-session dispatch path** in the shared dispatch gates: concurrency across separate primary sessions or terminals has exactly one supported form — the scoped route with a prepared Assignment as a fresh session's first instruction; a coordinator-authored leaf Assignment sent through a terminal prompt is unsupported because it bypasses scoped boot, lease ownership and handoff.
+
+<!-- CN -->
+- 在 OMP 宿主参考中写明 prepared Assignment 的生产者：`reserve-launch` 准入子句与可选传输小节现命名 **`mstar plan prepare`** 为写入 `coordination.prepared` 及其固定 `coordination.prepared.assignment_path` 的协调者步骤，把传输占位符定义为该绝对路径，补充额外 primary 路线的有序摘要（已注册的 `Todo` 行 → 存在的 feature worktree → 协调者已绑定 → prepare → `reserve-launch` → 既有先记账后副作用的迁移与 pane/启动/提交序列），并写明准入窗口——行准入随 Phase 1 关闭（任何行开始准备或执行时更早关闭），而已注册的合格行仍可在 Phase 2 期间被准备。
+- 在 scoped-plan PM 传输小节补充宿主无关前置条件：条件性额外 primary 启动仅适用于协调者已注册且已准备、feature worktree 已存在的 plan 行；尚不存在的行无法被启动，因为行准入随 Phase 1 关闭。
+- 在 OMP 宿主参考的可选传输小节新增**六项 scoped-route 派发清单**：全新目标会话、已准备（而非仅注册）的行、交接内容在准备前定稿且 bind 仅复核 Assignment 哈希（`coordination.assignment-stale`）、初始命令仅提交一次、读回确认执行且仅在明确未执行时单键恢复、绑定后仅以 steering 补充上下文——*exactly once* 仅约束初始命令。尾随 Enter 行为仍是对本仓库不拥有的传输 CLI 的现场观察。
+- 在共享派发门禁中写明**跨会话派发的受支持路径**：跨独立主会话/终端的并发只有一种受支持形式——以 prepared Assignment 作为全新会话第一条指令的 scoped route；经终端提示词下发协调者自拟的 leaf Assignment 不受支持，因为它绕过 scoped 启动、lease 归属与 handoff 交接。
