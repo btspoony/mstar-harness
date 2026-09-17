@@ -395,7 +395,7 @@ function remoteFixture(prefix: string): { root: string; bare: string; mainBranch
  * and a controlled base landscape. B=5 distinct base strings (3 dangling;
  * 2 resolving to the SAME commit OID ⇒ V=1), R owned remote candidates
  * (default 4), of which one is owned by a dangling base (fail-closed), one
- * is a genuine non-ancestor, two are ancestors sharing a tip (memo case).
+ * is a genuine non-ancestor, two are ancestors sharing a tip (same-tip case).
  * Unowned origin/<main> exists but needs no evidence row.
  *
  * `candidates` scales the candidate count without changing V (counts must
@@ -767,6 +767,26 @@ describe("mstar worktree cleanup — bounded evidence probes", () => {
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("refuse | remote-branch | origin/unmerged-1 | cleanup.refuse.unmerged");
       expect(result.stdout).not.toContain("remove | remote-branch | origin/unmerged-1");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  test("same tip OID across candidates: only the branch its own sweep attests is positive", () => {
+    // merged-1 and merged-2 share one tip OID. If merged-2's ref vanishes
+    // between inventory and the sweeps, only merged-1 is attested by the
+    // positive sweep. Evidence must never carry merged-1's attestation over
+    // to merged-2 by tip identity: merged-2 stays indeterminate (refuse),
+    // never cleanup.remove.merged.
+    const fx = probeFixture("mstar-cleanup-probe-sametip-");
+    const home = dirname(fx.root);
+    const shim = installGitShim(home, { vanish: "merged-2" });
+    try {
+      const result = runCli(["worktree", "cleanup", "--workflow", "wf-3", "--harness", fx.root, "--remote"], fx.root, shim.env);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("remove | remote-branch | origin/merged-1 | cleanup.remove.merged");
+      expect(result.stdout).toContain("refuse | remote-branch | origin/merged-2 | cleanup.refuse.unmerged");
+      expect(result.stdout).not.toContain("remove | remote-branch | origin/merged-2");
     } finally {
       rmSync(home, { recursive: true, force: true });
     }

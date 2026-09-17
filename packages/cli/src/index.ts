@@ -2782,9 +2782,6 @@ type CleanupEvidenceOptions = { remoteRequested: boolean; verbose: boolean };
 /** A remote candidate bound to its OWNER base (never the full R×B matrix). */
 type CleanupRemoteCandidate = { branch: string; tip: string; base: string };
 
-/** Ancestry answers keyed by tip OID, then base OID — valid within one pass. */
-type CleanupAncestryMemo = Map<string, Map<string, boolean | null>>;
-
 /** Explicit candidate-universe request assembled from CLI flags. */
 type CleanupScopeRequest = {
   workflowId: string;
@@ -3081,8 +3078,9 @@ function cleanupResolveBases(mainRoot: string, bases: readonly string[]): Cleanu
  * Bounded mechanism per pass: for each distinct resolved owner-base OID one
  * positive `for-each-ref --merged` sweep answers every candidate whose exact
  * ref+OID appears; the residual is answered by one `--no-merged` sweep.
- * Answers are memoized by (tip OID, base OID) within this call only — a
- * memoized answer proves the same commit-graph question, not ownership.
+ * Every candidate is decided ONLY by its own ref's attestation in those
+ * sweeps — no cross-candidate reuse: two candidates sharing a tip OID are
+ * independent, because a sweep attests a specific branch ref, not an OID.
  * A failed positive sweep leaves its pairs indeterminate (no expensive
  * per-pair fallback); a failed negative sweep keeps positive evidence and
  * leaves only its residual indeterminate. Anything not attested by a
@@ -3098,7 +3096,6 @@ function cleanupProbeRemoteEvidence(
   if (!options.remoteRequested || candidates.length === 0) return [];
   const oidByBase = new Map(bases.resolved.map((entry) => [entry.base, entry.oid]));
   const unresolvedBases = new Set(bases.unresolved.map((entry) => entry.base));
-  const memo: CleanupAncestryMemo = new Map();
   const evidence: { branch: string; tip: string; base: string; ancestor: boolean; prMerged: boolean | null }[] = [];
   // At most one aggregated note per remote candidate (never per pair),
   // keeping non-verbose evidence notes ≤ bases + candidates.
@@ -3116,12 +3113,6 @@ function cleanupProbeRemoteEvidence(
         console.error(pc.yellow(`worktree cleanup: note: ancestry of ${candidate.branch} against ${JSON.stringify(candidate.base)}: ${detail}`));
       }
     }
-  };
-  const answer = (tip: string, baseOid: string): boolean | null | undefined => memo.get(tip)?.get(baseOid);
-  const remember = (tip: string, baseOid: string, value: boolean | null): void => {
-    const byTip = memo.get(tip) ?? new Map<string, boolean | null>();
-    byTip.set(baseOid, value);
-    memo.set(tip, byTip);
   };
   const sweep = (mode: "--merged" | "--no-merged", baseOid: string): Map<string, string> | null => {
     try {
@@ -3154,14 +3145,8 @@ function cleanupProbeRemoteEvidence(
     const positiveFailed = positive === null;
     const residual: CleanupRemoteCandidate[] = [];
     for (const candidate of group) {
-      const cached = answer(candidate.tip, baseOid);
-      if (cached !== undefined) {
-        record(candidate, cached, cached ? "ancestor" : "not an ancestor (memoized)");
-        continue;
-      }
       const attested = !positiveFailed && positive!.get(`refs/remotes/origin/${candidate.branch}`) === candidate.tip;
       if (attested) {
-        remember(candidate.tip, baseOid, true);
         record(candidate, true, "ancestor");
       } else {
         residual.push(candidate);
@@ -3173,10 +3158,8 @@ function cleanupProbeRemoteEvidence(
     const negative = positiveFailed ? null : sweep("--no-merged", baseOid);
     for (const candidate of residual) {
       if (negative !== null && negative.get(`refs/remotes/origin/${candidate.branch}`) === candidate.tip) {
-        remember(candidate.tip, baseOid, false);
         record(candidate, false, "not an ancestor");
       } else {
-        remember(candidate.tip, baseOid, null);
         const detail = positiveFailed
           ? "positive membership sweep failed \u2014 no evidence row recorded (candidates refuse)"
           : "observed tip is not attested by either membership sweep \u2014 no evidence row recorded (candidates refuse)";
