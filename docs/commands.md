@@ -113,8 +113,8 @@ The second terminal is transport, not a dependency. Any terminal works; Herdr or
 
 #### Ownership and references
 
-- Runtime route contract, scope boundary and coordinator sequence: `mstar-iteration` → [`references/plan-scoped-pm.md`](../skills/mstar-iteration/references/plan-scoped-pm.md).
-- Row, session and handoff fields and ownership: `mstar-artifacts` → [`references/status-and-residuals.md`](../skills/mstar-artifacts/references/status-and-residuals.md).
+- Runtime route contract, scope boundary and coordinator sequence: the **`mstar-iteration`** skill → `references/plan-scoped-pm.md`.
+- Row, session and handoff fields and ownership: the **`mstar-artifacts`** skill → `references/status-and-residuals.md`.
 - Executable flags, exit codes, JSON envelopes and rejection codes: the **`mstar-use-cli`** skill → `references/plan-and-workflow.md`.
 
 ## /iteration-loop
