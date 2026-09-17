@@ -47,7 +47,7 @@ description: Morning Star (启明星) harness **生命周期 / 授权语义权�
 | **实现/审查/运维** | 本 skill + `mstar-coding-behavior` + 角色 ref | 有 git 写：`mstar-branch-worktree`；有 plan 路径：`mstar-conventions`；**PM** 派 QC 前：`mstar-review-qc`；**`qc-specialist*`**：`mstar-roles` → `references/qc-specialist/`；`qa-engineer`：`references/qa-engineer/`；改 status/residual：`mstar-artifacts`；UI：`mstar-design-md`；知识库：`mstar-compound`（PM） |
 | **leaf 承接方** | 上栏 + **`mstar-dispatch-gates`**（反递归节） | — |
 
-Routing eval（Cursor 插件内回归用，**非**运行时必读）→ `.cursor/skills/mstar-routing-eval/`。
+Routing eval（宿主插件内回归用，**非**运行时必读）→ `.cursor/skills/mstar-routing-eval/`。
 
 ## 状态机
 
@@ -114,20 +114,12 @@ PM 在 Assignment 写 **`Task category`**（主类 + 可选 `secondary`）：
 
 ## 宿主 `mstar-host`
 
-Read **`mstar-host`** after this skill; detect host per its table, then Read the matching reference.
-
-| 宿主 | 要点 |
-|------|------|
-| OpenCode | `question`、**task tool**（**subagent** 参数）→ `references/opencode.md` |
-| Cursor | Task 并行 QC；Plan 双写 → `references/cursor.md` · `cursor-plan-mode-bridge.md` |
-| Codex | plugin skills、sandbox/apply_patch/tool discovery；无 invoke 工具时不声称 subagent dispatch → `references/codex.md` |
-| Kimi | `Agent`/`AgentSwarm`（仅 `coder`/`explore`/`plan`）；角色绑定在 prompt（C5b）；Plan 双写 → `references/kimi.md` · `kimi-plan-mode-bridge.md` |
-| 其它 | 同 `mstar-host` skill；按工具信号选 reference |
+Read **`mstar-host`** after this skill; it detects the active host and routes to the matching reference — host names, tool shapes and per-host entry details live only there（本表不重复维护）。
 
 ## 版本对齐（CLI ↔ host 插件）
 
 - 全局 CLI 与已安装的宿主插件**独立升级**；版本漂移是已知故障源（skills/commands 与 CLI 预期不再匹配）。
-- 检查：`mstar-harness doctor --target <host>`（全部宿主已实现：opencode / cursor / codex / zcode / omp / dsh / kimi）。
+- 检查：`mstar-harness doctor --target <host>`（各宿主 target 名 = `mstar-host` 检测表中该宿主的 id；已实现的宿主以 `mstar-host` 与 CLI `--help` 为准）。
 - **CLI 较新** → 提示用户更新宿主插件；**插件较新** → 提示用户更新全局 CLI（`npm i -g @mstar-harness/cli@latest`）。
 - 触发纪律：harness 行为异常/疑似过期、已知新版本发布后、或用户要求时运行——**不是**每个会话都跑。
 

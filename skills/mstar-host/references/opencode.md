@@ -28,6 +28,9 @@ Harness **dispatch** on OpenCode = **one or more `task` tool calls**, each with 
 | `Execute as: <role-id>` | **`subagent`** on **task tool** = same agent id |
 | Parallel batch **N** | **N task tool** calls in **one assistant message** when the host allows (`parallel-dispatch.md`) |
 
+**Role-binding field:** **`subagent`** on the **task tool** (singular — there is no batch array here); it must equal the Assignment `Execute as`.
+**Engine scope (#156):** OpenCode exposes no dispatcher identity, so the caller-scoped `antiRecursionPrecheck` leg is **skipped** on this host — the binding field carries the **spawn target**, and target == `Execute as` is the compliant C5 pattern — and the red line stays **prompt-level** (`mstar-dispatch-gates` § 承接方反递归红线). Caller-side hard enforcement exists only where the host declares a dispatcher binding (`dsh.md`).
+
 PM workflow: finalize Assignment → **call task tool** with **subagent** + generated prompt → wait for subagent Completion Report → update plan / status.
 
 **SDD sticky implementer:** if the task tool exposes **resume** / agent id, follow **`mstar-sdd/references/sticky-implementer-session.md`** and the active host reference. If resume is **not** available, use **micro-batch** (2–3 tasks, one invoke) or **`SDD implementer session: fresh`** per task — do not assume sticky without host support.

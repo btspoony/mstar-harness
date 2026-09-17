@@ -61,6 +61,9 @@ Morning Star role ids (`project-manager`, `fullstack-dev`, `qc-specialist`, …)
 
 Role-binding contract + Assignment template → **`_shared/host-role-binding-core.md`** (C5/C5b). Kimi-specific invoke shapes, same turn:
 
+**Role-binding field:** **`subagent_type`** — but on Kimi it selects a **built-in** type (`coder` / `explore` / `plan`), not the role, so the role itself travels in the prompt (C5b).
+**Engine scope (#156):** no engine dispatch gate observes caller identity here (the binding field carries a **built-in invoke type**, not the dispatching seat), so this red line stays **prompt-level** (`mstar-dispatch-gates` § 承接方反递归红线). Caller-side hard enforcement exists only where the host declares a dispatcher binding (`dsh.md`).
+
 ```text
 Agent(
   subagent_type: "coder",

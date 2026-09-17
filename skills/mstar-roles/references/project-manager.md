@@ -4,7 +4,7 @@ Before any non-trivial PM action, read in order:
 
 1. `mstar-harness-core` (entry, state machine, Task category, skill index)
 2. `mstar-dispatch-gates` + `mstar-phase-gates` (dispatch + Prepare/Execute gates)
-3. Host adapter: `mstar-host` (detect host; Read `references/opencode.md`, `cursor.md`, or `codex.md`)
+3. Host adapter: **`mstar-host`** (detect the active host; then Read the reference that detection resolves to)
 4. `mstar-conventions` (path discovery, init, Spec branch summary)
 5. `mstar-review-qc` (same coordination round, **before** any QC dispatch)
 6. **`mstar-sdd`** when implement uses **`Execution mode: sdd`**
@@ -29,7 +29,7 @@ Detailed procedures are moved to `references/project-manager/*.md`.
 
 ### Plan-scoped authority (bounded)
 
-- **PM never runs as a subagent**（**single home for this rule** — `mstar-dispatch-gates` § Plan 作用域与 credential 不下发, `project-manager/dispatch-and-assignment.md` and `mstar-iteration/references/plan-scoped-pm.md` §2 point here）. PM is the **primary-session** seat on every host: no `project-manager` **subagent shell** ships in any tracked shell surface（`agents/*.md`, `codex/agents/*.toml`）, and the only PM shell in the tree is OpenCode's **`mode: primary`** seat `packages/opencode/agents/project-manager.md` — a primary seat, **not** a `task` dispatch target（host dispatch surface → `mstar-host/references/omp.md` § C5: on omp no agent shell for PM ships, `mode: primary` is OpenCode-only）. A **leaf** that receives `pm` / `project-manager` / `iteration-drive` wording (role name, handoff prose, `QA gate` field, routing table, multi-track narrative) is **not** being promoted: the leaf stays inside its own task, reports the mismatch, and does **not** dispatch, invoke, or absorb PM scope (`mstar-dispatch-gates` § role boundary / anti-recursion).
+- **PM never runs as a subagent**（**single home for this rule** — `mstar-dispatch-gates` § Plan 作用域与 credential 不下发, `project-manager/dispatch-and-assignment.md` and `mstar-iteration/references/plan-scoped-pm.md` §2 point here）. PM is the **primary-session** seat on every host: no `project-manager` **subagent shell** ships in any tracked shell surface, and no host's role-binding field may ever target `project-manager` — a primary seat is not a dispatch target（per-host seat / shell forms → the active `mstar-host` reference, role-binding and dispatch section）. A **leaf** that receives `pm` / `project-manager` / `iteration-drive` wording (role name, handoff prose, `QA gate` field, routing table, multi-track narrative) is **not** being promoted: the leaf stays inside its own task, reports the mismatch, and does **not** dispatch, invoke, or absorb PM scope (`mstar-dispatch-gates` § role boundary / anti-recursion).
 - **Scope is inherited, never self-expanded.** Every child Assignment inherits its parent's plan scope. A child may not select or prepare a plan, mutate the workflow snapshot / root register / shared indexes, release leases, or open PR / close phases — only its own task and its declared write paths.
 - **Scoped primary drive**（`/iteration-drive --assignment|--workflow/--plan|--resume`）runs **in the primary session** (never as a subagent): `mstar plan bind` → `show`, then the session is bounded to that plan's writable surface — no sibling rows, no lifecycle anchors, no Phase 3–6, and its finish is a **handoff**, not `Done` → **`mstar-iteration/references/plan-scoped-pm.md`**.
 
@@ -101,7 +101,7 @@ Detailed conflict priority and dev allocation:
 
 ## Host Dispatch Rule (Critical)
 
-In invoke-based hosts (OpenCode / Cursor Task / Codex with callable multi-agent tools):
+In invoke-based hosts (any host whose active reference exposes a callable invoke / delegation tool):
 
 - Assignment markdown alone is not dispatch.
 - Each independent Assignment needs one matching invoke.
@@ -110,7 +110,7 @@ In invoke-based hosts (OpenCode / Cursor Task / Codex with callable multi-agent 
 
 Host invoke/dispatch details: `mstar-host` → active host reference and `references/parallel-dispatch.md`.
 
-**dsh:** mstar **stops arming** a goal — dsh progress is the native workflow (workflow snapshot phases + dispatch gates + **subagent settle notifications**), never a `/goal` objective or goal round loop. Phase 2 progression is the **`Rescheduling checkpoint`** (a settle notification is a `result-settled` one): dispatch the ready independent work before any wait; waiting is right when a dispatched child already owns that work — **never** a duplicate unit of work against the same worktree. Procedure → `mstar-iteration` `references/phase-2-worktree-lease.md` §2.4; rule → `mstar-host` → `references/dsh.md`.
+**Native-workflow hosts:** when the active host reference declares a native workflow driver instead of a goal loop, iteration progress is that workflow (workflow snapshot phases + dispatch gates + child **settle notifications**), never a goal-round loop. Phase 2 progression is then the **`Rescheduling checkpoint`** (a child settle is a `result-settled` one): dispatch the ready independent work before any wait; waiting is right when a dispatched child already owns that work — **never** a duplicate unit of work against the same worktree. Procedure → `mstar-iteration` `references/phase-2-worktree-lease.md` §2.4; host declaration and its per-step rules → the active `mstar-host` reference.
 Dispatch mechanics and templates:
 `references/project-manager/dispatch-and-assignment.md`.
 
@@ -156,11 +156,13 @@ If any item below matches, fix the dispatch/plan state or mark `Blocked`—do **
 
 ### PM entry sessions
 
-| Entry | Next reads |
+Entry spellings differ per host — the active `mstar-host` reference owns them (its PM entry / skill loading section: command form, skill invocation form, session auto-load behavior). This table carries the routing only.
+
+| Entry surface | Next reads |
 |-------|------------|
-| **`/pm`** or **`pm` skill** (Codex, Cursor; OpenCode when no command) | This shim → **`project-manager.md`** § Required Reading + topic skills on demand |
-| **Cursor / OpenCode** host iteration `commands/` | Command Boot + **`project-manager.md`** — iteration lifecycle only; **not** required for ordinary per-plan PM |
-| **OpenCode** (no command, not `/pm`) | `project-manager` + `mstar-host` → `opencode.md` |
+| Host ships a **`/pm`** command or exposes this **`pm`** skill | This shim → **`project-manager.md`** § Required Reading + topic skills on demand |
+| Host iteration `commands/` (where shipped) | Command Boot + **`project-manager.md`** — iteration lifecycle only; **not** required for ordinary per-plan PM |
+| Host with no command entry | `project-manager` + `mstar-host` → the active host reference |
 | **`/iteration-drive --assignment` / `--workflow --plan` / `--resume`**（scoped primary） | **`mstar-iteration/references/plan-scoped-pm.md`** — bind → `show` → constrain to the returned scope; finish = handoff; coordinator sequence for accept/integration/complete |
 
 **Dispatch-first**, iteration branch policy（`iteration_base_branch` / `spec_integration_branch` / `target_branch`）, Autonomous Execute → **`mstar-iteration/references/phase-2-worktree-lease.md`**；Phase 2 的 **`Rescheduling checkpoint`**（何时重新评估可派发 work、五个冻结 reason、wait reason）→ 该文件 §2.4。Routing, gates, Task Board, QC, templates → this file + topic `mstar-*` skills.
@@ -301,7 +303,7 @@ Minimum invariants:
 - User conversation follows user language.
 - PM Assignment body can be Chinese by default.
 - Technical artifacts/reports/code/config/commit messages default to English unless user asks otherwise.
-- Keep **all role references** as plain role id (no `@`) in Assignment body — including `Execute as`, routing narrative, `QA gate`, and anti-pattern examples. Host invoke uses task tool `subagent` matching `Execute as` per `mstar-host` (OpenCode: `opencode.md` § Role-mention hygiene).
+- Keep **all role references** as plain role id (no `@`) in Assignment body — including `Execute as`, routing narrative, `QA gate`, and anti-pattern examples. On an invoke-based host the Assignment role reaches that host's role-binding field (field name and mention hygiene → the active `mstar-host` reference).
 
 ---
 

@@ -42,25 +42,25 @@ Start a new Morning Star harness iteration. **Phase 1 is not complete until the 
 
 | 宿主上下文 | 走哪条 |
 |------------|--------|
-| **Cursor Plan mode**（CreatePlan / Plan 会话活跃） | §0 Boot → **§P** — **先**空白 CreatePlan，再 **feedback-driven** 自主改同一份 plan；grill-me **仅**在用户明确结束反馈后、仍有阻塞疑问时；**Build 前不执行** Review 链 / commit / integration 分支 |
-| **其它**（Agent、OpenCode、非 Plan） | §0 Boot → §1–§6（Research → Explore → grill-me → Write → Review → branch） |
+| **宿主 Plan mode**（Plan 会话活跃） | §0 Boot → **§P** — **先**空白 session plan，再 **feedback-driven** 自主改同一份 plan；grill-me **仅**在用户明确结束反馈后、仍有阻塞疑问时；**Build 前不执行** Review 链 / commit / integration 分支 |
+| **其它**（非 Plan 会话） | §0 Boot → §1–§6（Research → Explore → grill-me → Write → Review → branch） |
 
 **Both paths converge at §6**（integration worktree）。Default → §7 auto-continue Phase 2→6；`pause` → command ends at §6.
 
 ## 0. Boot
 
-按 **`mstar-iteration`** Load order 加载（`mstar-harness-core` → `mstar-roles` → `references/project-manager.md` → `mstar-iteration`（route map：start → **`references/phase-1-prepare.md`**）+ `mstar-phase-gates` + `mstar-dispatch-gates` + `mstar-conventions/artifacts` + `mstar-host` → active host reference）。Cursor Plan mode 另读 **`cursor-plan-mode-bridge.md`**（`mstar-iteration` Phase 1 in Plan mode）。完整 load list → **`mstar-roles`**。
+按 **`mstar-iteration`** Load order 加载（`mstar-harness-core` → `mstar-roles` → `references/project-manager.md` → `mstar-iteration`（route map：start → **`references/phase-1-prepare.md`**）+ `mstar-phase-gates` + `mstar-dispatch-gates` + `mstar-conventions/artifacts` + `mstar-host` → active host reference）。Plan 会话另读 **active host reference 的 plan-mode bridge**（`mstar-iteration` Phase 1 in Plan mode）。完整 load list → **`mstar-roles`**。
 
-**若 Cursor Plan mode 活跃 → 进入 §P；否则继续 §1。**
+**若宿主 Plan mode 活跃 → 进入 §P；否则继续 §1。**
 
-## P. Cursor Plan mode（Phase 1 scaffold → feedback loop → deferred grill → Build）
+## P. 宿主 Plan mode（Phase 1 scaffold → feedback loop → deferred grill → Build）
 
-Execute **`mstar-host/references/cursor-plan-mode-bridge.md`** § **"mstar-iteration Phase 1 in Plan mode"**（Detect / 语义 / Single CreatePlan URI（HARD）/ Research → Early CreatePlan → Feedback loop → Feedback-close deferred grill → Pre-Build / Build 全流程 SSOT）。
+Execute **`mstar-host`** → active host 的 **plan-mode bridge**（其 "mstar-iteration Phase 1 in Plan mode" 等价节：Detect / 语义 / single session-plan（HARD，只允许一份）/ Research → early session plan → Feedback loop → Feedback-close deferred grill → Pre-Build / Build 全流程 SSOT）。
 
 Command-unique 补充（bridge 未枚举）：
 
 - **空白脚手架字段**：Direction / Scope / Acceptance Criteria / Non-Goals / Delivery Branch Policy（`iteration_base_branch` / `spec_integration_branch` / `target_branch`）/ Plans / Feedback log / Deferred grill log
-- **Build 才勾的 todos**（顺序）：`harness-init` → `finalize-compass-plans`（同一 CreatePlan 落成 compass + plans + `status.json` 登记 + 索引）→ review-edit-product-manager → review-edit-architect → review-edit-writing-specialist → `pm-lock` → `integration-branch`
+- **Build 才勾的 todos**（顺序）：`harness-init` → `finalize-compass-plans`（同一 session plan 落成 compass + plans + `status.json` 登记 + 索引）→ review-edit-product-manager → review-edit-architect → review-edit-writing-specialist → `pm-lock` → `integration-branch`
 
 ## 非 Plan 路径从这里继续 ↓
 
@@ -74,7 +74,7 @@ Scope **2–4** candidates targeting **product completeness**（default to defer
 
 ## 3. Lock Direction — bundled `grill-me`
 
-> **非 Plan 路径**。Cursor Plan mode 用 §P feedback loop + deferred grill（主路径不是 grill）。
+> **非 Plan 路径**。Plan mode 用 §P feedback loop + deferred grill（主路径不是 grill）。
 
 **Direction lock mode: `interactive`**（`mstar-iteration/references/phase-1-prepare.md` §1.2 默认；本命令不使用 `autonomous`）。This command bundles a **non-`mstar-*`** skill at `skills/grill-me/SKILL.md` — **only this command step** references it.
 
@@ -86,7 +86,7 @@ Produce harness artifacts per **`mstar-iteration/references/phase-1-prepare.md` 
 
 ## 5. Review & Edit Chain（HARD GATE — do not commit before this）
 
-Execute **`mstar-iteration/references/phase-1-prepare.md` §1.6**（SSOT）：顺序 `product-manager` → `architect` → `writing-specialist` → PM lock（**禁止**并行三 roles；OpenCode plain role id — `mstar-host/references/opencode.md`）；**禁止** `{KNOWLEDGE_DIR}/` 新增；writing-specialist corpus hygiene（`iteration-artifact-boundaries.md` + `iteration-corpus-hygiene.md`）。Tool rule → **`mstar-dispatch-gates`** specialist review-and-edit（每 role 1 invoke，等磁盘修订返回）。Exception: user explicitly waives subagent dispatch ("PM-only review").
+Execute **`mstar-iteration/references/phase-1-prepare.md` §1.6**（SSOT）：顺序 `product-manager` → `architect` → `writing-specialist` → PM lock（**禁止**并行三 roles；角色名提及写法 → active host reference）；**禁止** `{KNOWLEDGE_DIR}/` 新增；writing-specialist corpus hygiene（`iteration-artifact-boundaries.md` + `iteration-corpus-hygiene.md`）。Tool rule → **`mstar-dispatch-gates`** specialist review-and-edit（每 role 1 invoke，等磁盘修订返回）。Exception: user explicitly waives subagent dispatch ("PM-only review").
 
 **Assignment preflight**：每次 invoke 前按 **`mstar-iteration/references/command-shared-invariants.md`** 执行（warn-only + `enforcement: hard` fail-fast；bin 缺失静默跳过）。
 
@@ -105,11 +105,15 @@ PM must print this block before §6; all `[ ]` must be `[x]`:
 - [ ] product-manager / architect / writing-specialist invokes completed — 编辑 compass / plans / specs / **`<iteration-id>/` package**；**未**向 `{KNOWLEDGE_DIR}/` 新增
 - [ ] PM final lock: compass `status: locked`; Prepare gates pass (blocked plans documented)
 - [ ] Branch policy locked: `iteration_base_branch` / `spec_integration_branch` / `target_branch` recorded in compass / `status.json`
-- [ ] **THEN**: transfer reviewed changes + commit + push `iteration/<iteration-id>` **in the integration worktree** (never the primary checkout)
+- [ ] **THEN**（§6 按 §2.3 checklist step 7 执行）：已 review 的本轮改动在该 integration checkout 上 commit，`iteration/<iteration-id>` 已 push —— never the primary checkout
 
 ## 6. Integration Branch
 
-Per **`mstar-iteration/references/phase-2-worktree-lease.md` §2.3**：create the **integration worktree** — a dedicated linked checkout **distinct from the primary checkout**（`git worktree add <path> -b <spec_integration_branch> <iteration_base_branch>`；primary 分支**不**切换）；register `iteration_base_branch` / `spec_integration_branch` / `target_branch` in compass frontmatter **and** `status.json` metadata；record the observed primary branch as **`Main worktree branch`** in the main plan header；**transfer only the reviewed §5 changes** into the integration worktree, commit there, then restore the primary checkout's corresponding uncommitted docs without switching its branch（Phase-1 bounded exception → `phase-1-prepare.md` §1.6；**不得**搬运无关用户改动）；push。**STOP** if `iteration_base_branch` / `target_branch` missing — never default `main`/`master`.
+**Call site — do not restate the sequence.** Execute **`mstar-iteration/references/phase-2-worktree-lease.md` §2.3**「Integration worktree (Phase 2 entry) + control root」checklist **steps 1–7** —— 该 checklist 是该序列的**唯一 home**。本命令另记两件 command 层事实：register `iteration_base_branch` / `spec_integration_branch` / `target_branch` in compass frontmatter **and** `status.json` metadata；record the observed primary branch as **`Main worktree branch`** in the main plan header。**STOP** if `iteration_base_branch` / `target_branch` missing — never default `main`/`master`。
+
+**Phase 1 完成 anchor（pointer only — 本命令不承载 marker）**：checklist **step 7** 走完后必须执行 `phase-1-lock` 的 host 动作 —— 其 marker 与触发条件由 **`mstar-iteration/references/phase-2-worktree-lease.md` §2.3**「Integration worktree (Phase 2 entry) + control root」checklist tail 承载。
+
+**Parenthetical**：本处引用的 §2.3 是 **Phase 1** 步骤 —— 它**不**触发 `phase-2-entry` anchor（后者只在 Phase 2 execute/resume entry、即 §2.4 之前触发）；Phase 2 resume 再次走到 §2.3 时 `phase-1-lock` 已在 Phase 1 完成，不再重复调用。
 
 ---
 

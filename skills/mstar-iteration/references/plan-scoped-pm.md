@@ -35,7 +35,7 @@ Scoped boot does **not** load `mstar-compound` or the Phase 3–6 detail files m
 
 ## 2. Scoped boot
 
-1. **Load PM identity in the current primary session**: `mstar-harness-core` → `mstar-roles` → `references/project-manager.md`. No PM subagent is spawned or dispatched for any address form — PM runs in the **primary session** on every host（rule home → `mstar-roles/references/project-manager.md` § Plan-scoped authority；omp dispatch surface → `mstar-host/references/omp.md` § C5）.
+1. **Load PM identity in the current primary session**: `mstar-harness-core` → `mstar-roles` → `references/project-manager.md`. No PM subagent is spawned or dispatched for any address form — PM runs in the **primary session** on every host（rule home → `mstar-roles/references/project-manager.md` § Plan-scoped authority；dispatch surface → the active host reference（`mstar-host`）§ C5）.
 2. **Bind once**, matching the form exactly:
 
    ```bash
@@ -178,4 +178,4 @@ The scoped route **requires** `mstar plan …`. Without it（engine/CLI absent o
 
 Herdr / tmux (or any multiplexer) is only a way to open a terminal. It is **not** a prerequisite, dependency, ownership signal or session identity. Nothing in this route reads pane state, TTL or terminal labels to decide ownership.
 
-On **omp** only, the optional skill-driven extra-primary launch protocol — native `phase2PlanInstances` opt-in, the `mstar_phase2` bind/checkpoint/reserve/record calls, non-focus pane creation at the prepared worktree, the absolute `--assignment` submission and terminal uncertainty handling — is documented in **`mstar-host` → `references/omp.md` § Phase-2 plan instances**. It is optional there too and adds no load-order dependency here.
+Where the active host reference declares an optional skill-driven extra-primary launch protocol (its native opt-in, its bind/checkpoint/reserve/record calls, non-focus pane creation at the prepared worktree, the absolute `--assignment` submission and terminal uncertainty handling), **`mstar-host`** → that reference's Phase-2 section is the only home for those calls; this file defines none of them. The protocol stays optional there too and adds no load-order dependency here.

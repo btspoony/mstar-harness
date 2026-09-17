@@ -126,6 +126,11 @@ compass frontmatter 的 `iteration_base_branch` / `target_branch` **必须与** 
 
 **中途增减范围（已存在且仍在 Prepare 的 workflow）**：用户/产品批准的范围扩张**不得**手改受保护状态。先以 `mstar plan bind --coordinator --workflow <id>` 建立该 workflow 的 coordinator 会话，再经受守卫入口 `mstar workflow show-prepare` 读取快照与 compass 两个字节版本，并以 `mstar workflow amend-prepare` 追加已批准的 Todo 行、登记已 review 的 integration checkout 与 `plan_parallelism`（仅 Prepare 且无执行所有权时可用；无 force/replace/init 通道）。守卫与字段权威 → **`mstar-artifacts`** `references/status-and-residuals.md`「Prepare workflow amendment」；forms / exit codes → `docs/cli.md` § `mstar-harness workflow`。
 
+<!-- host-hook: iteration-entry -->
+> Execute the active host reference's `## Host hooks` declaration for `iteration-entry`; this file defines no host action.
+>
+> 本 anchor 只在 workflow 已登记到 v2 状态面（本条完成）**且其 id 已知**之后执行 —— 登记之前没有可用的 workflow id。
+
 ## 1.5.5 产物边界（specs · iterations · knowledge）
 
 Phase 1 与 §1.6 须遵守 **`references/iteration-artifact-boundaries.md`**（HARD）：
@@ -150,10 +155,12 @@ Phase 1 与 §1.6 须遵守 **`references/iteration-artifact-boundaries.md`**（
 2. **writing-specialist** 完成 **corpus hygiene**：仅本轮修改的 `{SPECS_DIR}/` / iteration package 与直接相关 knowledge 引用；错放迁回 **`<iteration-id>/`** package；细则 → **`iteration-corpus-hygiene.md`**、**`iteration-artifact-boundaries.md`**
 3. PM 将 compass `status` 设为 `locked`，并确认各 plan 的 Prepare gate（specify / clarify / plan）
 
-**顺序理由**：产品范围与优先级 → 架构与长期契约（specs）→ 行文、规格库卫生与错放纠正（在 PM/architect 定稿后核对受影响文档）。本共享产物链存在真实依赖；独立文档可按 ownership 隔离并行。早期全局探索的既有结果复用，不因每次编辑重新扫全库。OpenCode：plain role id — **`mstar-host/references/opencode.md`** § Role-mention hygiene。
+**顺序理由**：产品范围与优先级 → 架构与长期契约（specs）→ 行文、规格库卫生与错放纠正（在 PM/architect 定稿后核对受影响文档）。本共享产物链存在真实依赖；独立文档可按 ownership 隔离并行。早期全局探索的既有结果复用，不因每次编辑重新扫全库。角色名写法（role id 提及 hygiene）→ active host reference（**`mstar-host`** → `references/<host>.md`）。
 
 **完成证据** = 磁盘上的 compass / plans / specs / iteration 文档修订 + specs（与既有 knowledge）卫生/归档（如有）+ 索引与 metadata 更新 + compass `status: locked`。**不**要求单独的迭代审查报告——迭代审查的 SSOT 是被编辑的文档本身，无 per-plan QC 式审计链。
 
-**Uncommitted-docs exception（bounded — Phase 1 only）**：Review & Edit 链的文档编辑（compass / plans / specs / `<iteration-id>/` package）可以**未提交**状态落在主 checkout（control root = 主 worktree）——这是 worktree 默认在 Phase 1 的唯一例外，主 checkout 分支**不**切换、不产生 feature commit。**§6 创建 integration worktree 后**：只把**已 review 的本轮文档改动** transfer 到 integration worktree 并在其上 commit（tracked results 写在目标分支所在的检出），随后恢复主 checkout 上对应的未提交文档改动（不切分支）；**禁止**搬运主 checkout 上无关的既有用户改动。
+**Uncommitted-docs exception（bounded — Phase 1 only）**：Review & Edit 链的文档编辑（compass / plans / specs / `<iteration-id>/` package）可以**未提交**状态落在主 checkout（control root = 主 worktree）——这是 worktree 默认在 Phase 1 的唯一例外，主 checkout 分支**不**切换、不产生 feature commit。该例外在 **§6 的 integration-worktree 步骤**结束，其 transfer / commit / restore 序列的**唯一 home** 是 **`phase-2-worktree-lease.md` §2.3 checklist step 7**：只搬运**已 review 的本轮文档改动**，commit 落在 integration checkout，主 checkout 上对应的未提交改动随后恢复（不切分支）；**禁止**搬运主 checkout 上无关的既有用户改动。
 
 **反模式**：PM 线程代替三角色完成全部编辑而不 invoke；或将本链三角色并行派发 —— 见 **`mstar-roles/references/_shared/leaf-executor-core.md`**「Shared anti-recursion NEVER」。
+
+**Phase 1 完成 anchor（`phase-1-lock`）不在本文件触发**：compass `status: locked` 只是它的前置之一 —— 它只在 integration worktree 已建立（并记录 `integration_worktree_path`）、已 review 的改动在该 checkout 上 commit、且 `spec_integration_branch` 已 push 之后才执行，因此其 marker 由 **`phase-2-worktree-lease.md` §2.3**「Integration worktree (Phase 2 entry) + control root」checklist tail 承载（Phase 1 路线经 `iteration-start` §6 走到该 checklist）。
