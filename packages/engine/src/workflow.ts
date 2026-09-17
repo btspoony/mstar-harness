@@ -1868,12 +1868,12 @@ export async function registerIterationWorkflow(
     }
     if ("status" in row) {
       throw refuse(
-        `row ${JSON.stringify(row.id)} supplies a status — rows are always written status "Todo"; ` +
+        `row ${JSON.stringify(row.id)} supplies a status \u2014 rows are always written status "Todo"; ` +
           "a state transition is requested through the lifecycle seams, never at registration",
       );
     }
     if (seenRowIds.has(row.id)) {
-      throw refuse(`duplicate row id ${JSON.stringify(row.id)} — plan row ids are unique per workflow`);
+      throw refuse(`duplicate row id ${JSON.stringify(row.id)} \u2014 plan row ids are unique per workflow`);
     }
     seenRowIds.add(row.id);
   }
@@ -1933,7 +1933,7 @@ export async function registerIterationWorkflow(
     if (workflows.some((candidate) => isPlainObject(candidate) && candidate.id === workflowId)) {
       throw new Error(
         `refusing to register workflow ${JSON.stringify(workflowId)}: it is already registered ` +
-          `(root entry in ${statusPath}) — registration is create-only; ` +
+          `(root entry in ${statusPath}) \u2014 registration is create-only; ` +
           "remove that workflow before registering again",
       );
     }
@@ -1949,7 +1949,7 @@ export async function registerIterationWorkflow(
       ) {
         throw new Error(
           `refusing to register workflow ${JSON.stringify(workflowId)}: snapshot ${snapshotPath} already exists ` +
-            "with a different registration identity — remove that workflow or register under a different id",
+            "with a different registration identity \u2014 remove that workflow or register under a different id",
         );
       }
       const recoveryEntry: WorkflowEntry = {
