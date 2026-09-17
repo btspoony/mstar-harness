@@ -1723,6 +1723,124 @@ describe("persisted attempt resumes uncertain without retry", () => {
   }, 60_000);
 });
 
+describe("registered attach and shared notice shape", () => {
+  test("registered attach: a genuinely registered workflow with its own snapshot arms and hands off, a foreign coordinator refuses already-bound without any action, and notices carry the shared title shape", async () => {
+    // --- Lawful attach: the register row, the own snapshot and this session's
+    // coordinator envelope all exist *before* the start call (the real anchor
+    // after Prepare §1.5). The structural branch is host-derived; the caller
+    // supplies only the workflow id.
+    const repo = buildControlRepo();
+    writePluginOverrides(repo.main, { modelHandoff: true, handoffTarget: "@default" });
+    const harness = await createHarness({
+      cwd: repo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(repo.main),
+    });
+    const artifacts = createWorkflowArtifacts(repo, harness.sessionManager.getSessionId(), "attach-iteration");
+    const armed = await harness.runTool(startParams("attach-iteration"));
+    expect(codeOf(armed)).toBe("armed");
+    expect(stateOf(armed)).toBe("pending");
+    expect(harness.attempts).toEqual(["probe/slow-model"]);
+    expect(statesOf(harness)).toEqual(["attempting", "pending"]);
+
+    // After authority approval the unchanged one-shot protocol completes:
+    // readiness → handed_off.
+    const fired = await harness.runTool(completionParams(artifacts));
+    expect(codeOf(fired)).toBe("handed_off");
+    expect(statesOf(harness)).toEqual(["attempting", "pending", "attempting", "handed_off"]);
+
+    // The notice channel is unchanged, and the completion notice (a bound site
+    // with an own snapshot) carries a status-bearing title: observed id and
+    // status verbatim, with the handoff condition preserved in the detail.
+    expect(
+      harness.ledger().some((entry) => entry.type === "custom_message" && entry.customType === HANDOFF_NOTICE_CUSTOM_TYPE),
+    ).toBe(true);
+    const completeNotice = harness.notices().find((line) => line.includes("model handoff complete"));
+    expect(completeNotice).toBeDefined();
+    expect(completeNotice).toContain("Workflow attach-iteration is running:");
+    expect(completeNotice).toContain("model handoff complete for this coordinator session");
+
+    // --- A snapshot-free (unsampled) title is a fallback: it names the observed
+    // condition and asserts no workflow status.
+    const fenceRepo = buildControlRepo();
+    writePluginOverrides(fenceRepo.main, { modelHandoff: true, handoffTarget: "@default" });
+    const fenced = await createHarness({
+      cwd: fenceRepo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(fenceRepo.main),
+    });
+    await fenced.emit({ type: "session_before_tree", preparation: {}, signal: new AbortController().signal });
+    const suspended = await fenced.runTool(startParams("fence-attach-iteration"));
+    expect(codeOf(suspended)).toBe("suspended");
+    const suspendedNotice = fenced.notices()[0]!;
+    expect(suspendedNotice).toContain("handoff suspended");
+    expect(suspendedNotice).toContain("needs attention: ");
+    expect(suspendedNotice).not.toContain("Workflow fence-attach-iteration is");
+
+    // --- Foreign-coordinator attach: the registered workflow's own envelope
+    // names a different coordinator session. The observable outcome is
+    // `already-bound` with the original detail, and zero model action or record.
+    const foreignRepo = buildControlRepo();
+    writePluginOverrides(foreignRepo.main, { modelHandoff: true, handoffTarget: "@default" });
+    const foreign = await createHarness({
+      cwd: foreignRepo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(foreignRepo.main),
+    });
+    createWorkflowArtifacts(foreignRepo, "someone-else-session", "foreign-bound");
+    const refused = await foreign.runTool(startParams("foreign-bound"));
+    expect(codeOf(refused)).toBe("already-bound");
+    expect(String(refused.content[0]?.text)).toContain(
+      "workflow foreign-bound is bound to coordinator session someone-else-session, not to this session",
+    );
+    expect(foreign.attempts).toHaveLength(0);
+    expect(foreign.records()).toHaveLength(0);
+    expect(foreign.notices().some((line) => line.includes("already-bound"))).toBe(true);
+
+    // --- Attach structural failure: the register names the workflow but its own
+    // snapshot is missing — never adopted, never a fallback into reservation.
+    const ghostRepo = buildControlRepo();
+    writePluginOverrides(ghostRepo.main, { modelHandoff: true, handoffTarget: "@default" });
+    const ghost = await createHarness({
+      cwd: ghostRepo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(ghostRepo.main),
+    });
+    writeRegister(ghostRepo.harness, [ghostRepo.siblingId, "ghost-iteration"]);
+    expect(codeOf(await ghost.runTool(startParams("ghost-iteration")))).toBe("invalid-root");
+    expect(ghost.attempts).toHaveLength(0);
+    expect(ghost.records()).toHaveLength(0);
+
+    // --- The unregistered reservation path keeps its refusal vocabulary
+    // byte-for-byte: an existing snapshot without a register row refuses
+    // `already-bound` with the exact frozen message template.
+    const staleRepo = buildControlRepo();
+    writePluginOverrides(staleRepo.main, { modelHandoff: true, handoffTarget: "@default" });
+    const stale = await createHarness({
+      cwd: staleRepo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(staleRepo.main),
+    });
+    mkdirSync(join(staleRepo.harness, "workflows", "stale-iteration"), { recursive: true });
+    writeJson(join(staleRepo.harness, "workflows", "stale-iteration", "snapshot.json"), {
+      schema_version: 1,
+      id: "stale-iteration",
+      type: "iteration",
+      status: "running",
+      started_at: "2026-09-16",
+      updated_at: "2026-09-16T00:00:00.000Z",
+      plans: [],
+    });
+    const staleRefusal = await stale.runTool(startParams("stale-iteration"));
+    expect(codeOf(staleRefusal)).toBe("already-bound");
+    const staleText = String(staleRefusal.content[0]?.text);
+    expect(staleText.startsWith("the new-iteration handoff binding was refused (already-bound): a workflow snapshot already exists at ")).toBe(true);
+    expect(staleText.endsWith(join("workflows", "stale-iteration", "snapshot.json"))).toBe(true);
+    expect(stale.attempts).toHaveLength(0);
+    expect(stale.records()).toHaveLength(0);
+  }, 60_000);
+});
+
 describe("switch failure reports actual model", () => {
   test("switch failure reports actual model: refused and throwing switches fail visibly with no retry and no restore", async () => {
     const repo = buildControlRepo();
