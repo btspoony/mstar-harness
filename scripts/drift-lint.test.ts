@@ -557,10 +557,48 @@ describe("drift-lint executable — use-cli scan wiring (Task 3 fix round)", () 
   const REPO_ROOT = join(import.meta.dir, "..");
   const SCRIPT = join(REPO_ROOT, "scripts/drift-lint.ts");
 
+  /** Guard 2 environment row when merge-base(origin/main, HEAD) cannot run under GITHUB_ACTIONS. */
+  const README_BILINGUAL_ENV_VIOLATION =
+    "README bilingual pairing guard: no git range in CI (merge-base failed or origin/main missing) — the drift-lint job must checkout with fetch-depth: 0 so the pairing check can run (PR runs are the enforcement surface)";
+
+  function runDriftLintExecutable(): { status: number; combined: string; violations: string[] } {
+    let stdout = "";
+    let stderr = "";
+    let status = 0;
+    try {
+      stdout = execFileSync("bun", [SCRIPT], {
+        cwd: REPO_ROOT,
+        encoding: "utf8",
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+    } catch (error) {
+      const err = error as { status?: number; stdout?: string | Buffer; stderr?: string | Buffer };
+      status = err.status ?? 1;
+      stdout = String(err.stdout ?? "");
+      stderr = String(err.stderr ?? "");
+    }
+    const violations: string[] = [];
+    for (const line of stderr.split(/\r?\n/)) {
+      const m = line.match(/^\s+✗\s+(.+)$/);
+      if (m) violations.push(m[1]);
+    }
+    return { status, combined: stdout + stderr, violations };
+  }
+
   test("clean repo exits 0 and reports use-cli skill file scan count (D3)", () => {
-    const out = execFileSync("bun", [SCRIPT], { cwd: REPO_ROOT, encoding: "utf8" });
-    expect(out).toMatch(/\d+ use-cli skill files/);
-    expect(out).toContain("full-text citations");
+    // Guard 2 needs merge-base(origin/main, HEAD). The dedicated drift-lint job checks out
+    // with fetch-depth: 0; the validate job does not, so CI may surface exactly this
+    // environment row while the use-cli scan still runs. That is documented guard behavior
+    // (see evaluateBilingualGuard), not a wiring defect — tolerate only this row here.
+    const { status, combined, violations } = runDriftLintExecutable();
+    expect(combined).toMatch(/\d+ use-cli skill files/);
+    expect(combined).toContain("full-text citations");
+    if (violations.length === 0) {
+      expect(status).toBe(0);
+      return;
+    }
+    expect(violations).toEqual([README_BILINGUAL_ENV_VIOLATION]);
+    expect(status).toBe(1);
   });
 
   test("running outside repo root does not exit 0 silently (D1/D2 executable)", () => {
