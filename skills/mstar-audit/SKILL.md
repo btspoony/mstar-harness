@@ -61,7 +61,7 @@ Full codebase audit: nine-category fan-out across **`references/audit-playbook.m
 2. **Simpler explanation** — does a simpler explanation cover the same evidence?
 3. **Evidence verifiability** — open the cited `file:line` and check it actually supports the claim.
 
-Dispose per the five-state rule (single-pass version — the four dispositions below implement the survey's five-state semantics: uncovered-keep == 未提及保留; never-drop == 全空/null 回流):
+Dispose each attacked finding into exactly one of the four dispositions below:
 
 - **Survived** — passes to vet unchanged.
 - **Refuted** — drop, and record in the index's "considered and rejected" section: `- <finding>: not worth doing because <one line>`.
