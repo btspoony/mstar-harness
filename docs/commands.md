@@ -47,9 +47,9 @@ Between the three iteration commands: `iteration-start` covers Phase 1 with an i
 
 ### Scoped plan session
 
-Drive **one** prepared plan from an independent terminal instead of the whole iteration. The scoped session binds a single plan through the CLI, runs the normal per-plan gates (implement → plan QC tri → QA gate), and stops at a durable **handoff**. `Done` and both lease releases stay with the iteration coordinator, which verifies the merge first.
+Drive **one** prepared plan from an independent terminal instead of the whole iteration. The scoped session binds a single plan through the CLI, runs the normal per-plan gates (implement → plan QC tri → QA gate), and stops at a durable **handoff**. A plan session never writes `Done`; the coordinator runs `complete` after `accept` — on the **iteration** route after a verified merge, on the **standalone development** route straight from the accepted handoff (no merge, only the row execution lease).
 
-The scope rides on the `mstar plan` verb family. Thirteen verbs ship, and who may call them is the whole point of the feature:
+The scope rides on the `mstar plan` verb family; the table below enumerates each verb and who may call it — that ownership model is the whole point of the feature:
 
 | Caller | Verbs | What it owns |
 |--------|-------|--------------|

@@ -53,6 +53,7 @@ import {
   checkBilingualContentParity,
   checkBilingualPairing,
   checkCalloutDuplication,
+  checkCliCitationsInText,
   checkEngineCallouts,
   checkFiveQuestionCorpus,
   checkProvenanceScan,
@@ -388,6 +389,82 @@ describe("supplementCliCommandInventory — scoped registrar paths (Task 3)", ()
 
     const novelFromSupplement = [...expectedScoped].filter((p) => !base.has(p));
     expect(merged.size - base.size).toBe(novelFromSupplement.length);
+  });
+});
+
+
+describe("checkCliCitationsInText — depth-aware nested command validation (Greptile F1)", () => {
+  const binNames = ["mstar", "mstar-harness"];
+  const cliCommands = new Set([
+    "persist",
+    "persist get",
+    "sdd",
+    "sdd evidence",
+    "sdd evidence capture",
+    "sdd evidence verify",
+    "plan handoff",
+  ]);
+
+  test("unknown third-level token under a command with children fails", () => {
+    const { failures, cliCitationsChecked } = checkCliCitationsInText(
+      "fixture.md",
+      "run `mstar sdd evidence totally-fake` here",
+      { cliCommands, binNames },
+    );
+    expect(cliCitationsChecked).toBe(1);
+    expect(failures).toEqual([
+      expect.stringContaining('unknown CLI command "mstar sdd evidence totally-fake"'),
+    ]);
+  });
+
+  test("third token after a leaf command is treated as an argument value, not a subcommand", () => {
+    const { failures, cliCitationsChecked } = checkCliCitationsInText(
+      "fixture.md",
+      "run `mstar persist get snapshot` here",
+      { cliCommands, binNames },
+    );
+    expect(cliCitationsChecked).toBe(1);
+    expect(failures).toEqual([]);
+  });
+});
+
+describe("supplementCliCommandInventory — verb-table comment stripping (Greptile F2)", () => {
+  test("commented verb keys in PLAN_VERBS are not ingested into inventory", () => {
+    const dir = mkdtempSync(join(tmpdir(), "drift-verb-comment-"));
+    try {
+      const planCoord = `const PLAN_VERBS: Record<string, true> = {
+  bind: true,
+  // retired-command: true
+};
+const WORKFLOW_VERBS: Record<string, true> = {
+  "show-prepare": true,
+};
+export function registerPlanCommands() {}
+`;
+      const sddEvidence = readFileSync(
+        join(import.meta.dir, "..", "packages/cli/src/sdd-evidence.ts"),
+        "utf8",
+      );
+      mkdirSync(join(dir, "packages/cli/src"), { recursive: true });
+      writeFileSync(join(dir, "packages/cli/src/plan-coordination.ts"), planCoord);
+      writeFileSync(join(dir, "packages/cli/src/sdd-evidence.ts"), sddEvidence);
+
+      const cliCommands = new Set<string>(["plan bind"]);
+      const { failures } = supplementCliCommandInventory(cliCommands, dir);
+      expect(failures).toEqual([]);
+      expect(cliCommands.has("plan retired-command")).toBe(false);
+      expect(cliCommands.has("plan bind")).toBe(true);
+
+      const { failures: citeFailures } = checkCliCitationsInText(
+        "fixture.md",
+        "run `mstar plan retired-command` here",
+        { cliCommands, binNames: ["mstar"] },
+      );
+      expect(citeFailures.length).toBe(1);
+      expect(citeFailures[0]).toContain('unknown CLI command "mstar plan retired-command"');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

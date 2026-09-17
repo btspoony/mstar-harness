@@ -542,6 +542,66 @@ export const AUDIT_CATEGORY_DOC = "skills/mstar-use-cli/references/checks-and-li
 export const USE_CLI_SKILL_DIR = "skills/mstar-use-cli";
 
 /**
+ * Strip `//` whole-line and end-of-line comments from verb-table object text.
+ * PLAN_VERBS / WORKFLOW_VERBS use only `"name": true` or bare `name: true` entries —
+ * no string values embed `//`, so line-based stripping cannot truncate a real verb key.
+ */
+function stripLineCommentsFromVerbTableBody(body: string): string {
+  return body
+    .split(/\r?\n/)
+    .map((line) => {
+      const slash = line.indexOf("//");
+      return slash === -1 ? line : line.slice(0, slash);
+    })
+    .join("\n");
+}
+
+/** Direct subcommand tokens registered under `prefix` in `cliCommands`. */
+function directChildVerbs(cliCommands: Set<string>, prefix: string): Set<string> {
+  const children = new Set<string>();
+  const needle = `${prefix} `;
+  for (const entry of cliCommands) {
+    if (!entry.startsWith(needle)) continue;
+    const rest = entry.slice(needle.length);
+    if (!rest) continue;
+    children.add(rest.split(" ")[0]!);
+  }
+  return children;
+}
+
+/**
+ * Depth-aware CLI path validation for backticked citations. Walks token-by-token:
+ * when the current prefix has child commands in the inventory, the next token
+ * must match one of them; when it has no children, further tokens are argument
+ * values (e.g. `persist get snapshot` where `snapshot` is a `--key` value, not a
+ * subcommand). Extends to arbitrary depth without hard-coding layer counts.
+ */
+function longestInventoryPrefix(cliCommands: Set<string>, tokens: string[]): string | null {
+  for (let len = tokens.length; len >= 1; len--) {
+    const candidate = tokens.slice(0, len).join(" ");
+    if (cliCommands.has(candidate)) return candidate;
+  }
+  return null;
+}
+
+function validateCliCommandTokens(cliCommands: Set<string>, tokens: string[]): string | null {
+  if (tokens.length === 0) return "";
+  const matched = longestInventoryPrefix(cliCommands, tokens);
+  if (matched === null) return tokens.join(" ");
+  const consumed = matched.split(" ").length;
+  let path = matched;
+  for (let i = consumed; i < tokens.length; i++) {
+    const children = directChildVerbs(cliCommands, path);
+    if (children.size === 0) break;
+    const next = tokens[i]!;
+    if (!children.has(next)) return `${path} ${next}`;
+    path = `${path} ${next}`;
+    if (!cliCommands.has(path)) return path;
+  }
+  return null;
+}
+
+/**
  * Supplement the index.ts inventory with commands registered outside that
  * file: PLAN_VERBS / WORKFLOW_VERBS tables in plan-coordination.ts (SSOT
  * for scoped verbs) and the `sdd evidence` subtree in sdd-evidence.ts
@@ -572,7 +632,8 @@ export function supplementCliCommandInventory(
       failures.push(`drift: could not parse ${table} in plan-coordination.ts`);
       continue;
     }
-    for (const vm of m[1].matchAll(/(?:"([^"]+)"|([a-z][a-z0-9-]*))\s*:\s*true/g)) {
+    const tableBody = stripLineCommentsFromVerbTableBody(m[1]);
+    for (const vm of tableBody.matchAll(/(?:"([^"]+)"|([a-z][a-z0-9-]*))\s*:\s*true/g)) {
       cliCommands.add(`${family} ${vm[1] ?? vm[2]}`);
     }
   }
@@ -624,9 +685,10 @@ export function checkCliCitationsInText(
   const bins = new Set(opts.binNames);
   const lineBase = opts.lineBase ?? 0;
 
-  for (const cm of text.matchAll(/`([a-z][a-z0-9-]*)[ \t]+([a-z-]+(?:[ \t]+[a-z-]+)?)/g)) {
+  const citationRe = /`([a-z][a-z0-9-]*)[ \t]+([a-z][a-z0-9-]*(?:[ \t]+[a-z][a-z0-9-]*)*)/g;
+  for (const cm of text.matchAll(citationRe)) {
     const bin = cm[1];
-    const cmd = cm[2];
+    const tokens = cm[2]!.trim().split(/[ \t]+/);
     if (!bins.has(bin)) {
       // Shorthand like `persist get` (no bin) and fence-tag artifacts are not CLI citations.
       if (!bin.startsWith("mstar")) continue;
@@ -638,9 +700,10 @@ export function checkCliCitationsInText(
     }
     cliCitationsChecked++;
     const line = lineBase + lineNumberAt(text, cm.index ?? 0);
-    if (!opts.cliCommands.has(cmd)) {
+    const unknownPath = validateCliCommandTokens(opts.cliCommands, tokens);
+    if (unknownPath !== null) {
       failures.push(
-        `${rel}:${line} citation references unknown CLI command "${bin} ${cmd}" (known: ${[...opts.cliCommands].sort().join(", ")})`,
+        `${rel}:${line} citation references unknown CLI command "${bin} ${unknownPath}" (known: ${[...opts.cliCommands].sort().join(", ")})`,
       );
     }
   }
