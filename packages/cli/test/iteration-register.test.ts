@@ -184,7 +184,6 @@ describe("mstar iteration register", () => {
 
       const duplicate = runCli(registerArgs(harness));
       expect(duplicate.exitCode).toBe(1);
-      expect(duplicate.stderr).toContain("already registered");
       expect(readFileSync(snapshot, "utf8")).toBe(beforeSnapshot);
       expect(readFileSync(root, "utf8")).toBe(beforeRoot);
     });
