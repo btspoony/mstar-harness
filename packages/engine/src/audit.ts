@@ -1023,7 +1023,10 @@ export function validateAuditFindingGates(findings: readonly AuditFinding[]): Ga
  // strict ASCII ordering of the supplied subsequence (absent ones skipped;
  // out-of-order input is rejected, never sorted — positions control plan
  // numbers and dependsOn).
-    if (finding.fingerprint != null) {
+    // Omission (absent key) is the only benign case: a supplied `null` or
+    // any wrong type must enter this block and fail the grammar/shape check
+    // as a usage error (`!= null` would silently treat `null` as omitted).
+    if (finding.fingerprint !== undefined) {
       const fingerprint = finding.fingerprint;
       if (typeof fingerprint !== "string" || !AUDIT_FINGERPRINT_RE.test(fingerprint)) push("audit.finding.fingerprint.grammar", "fingerprint");
       else if (redactSecrets(fingerprint).text !== fingerprint) push("audit.finding.fingerprint.secret", "fingerprint");
