@@ -1125,6 +1125,37 @@ describe("phase2 host adapter", () => {
     expect(harness.records().filter((record) => record.kind === "bind")).toHaveLength(1);
   });
 
+  test("terminal diagnostic uses the shared status title, not a fixed prefix", async () => {
+    const fixture = await buildFixture();
+    const jobs = new AsyncJobManager({});
+    const harness = await createHarness({ sessionManager: newSession(fixture.root), jobs, cwd: fixture.root });
+    expect(codeOf(await harness.runTool(bindParams(fixture)))).toBe("bound");
+
+    // The bound workflow goes terminal on disk: the probe read the snapshot
+    // successfully, so the notice carries its id and status as evidence.
+    const endedAt = new Date().toISOString();
+    const terminal = {
+      ...JSON.parse(readFileSync(fixture.snapshotPath, "utf8")) as Record<string, unknown>,
+      status: "completed",
+      ended_at: endedAt,
+    };
+    writeJson(fixture.snapshotPath, terminal);
+    await harness.emitAgentEnd();
+
+    expect(harness.advisories()).toEqual([]);
+    expect(harness.noticeTexts()).toHaveLength(1);
+    const notice = harness.noticeTexts()[0]!;
+    expect(notice).toContain(WORKFLOW_ID);
+    expect(notice).toContain("completed");
+    expect(notice).toContain("phase2.workflow-terminal");
+    // No fixed prefix, and no detail sentence asserting a current Phase-2 position.
+    expect(notice).not.toContain("Phase-2");
+    expect(notice).not.toContain("observation inactive");
+    // The dedup stands: one notice per code per generation.
+    await harness.emitAgentEnd();
+    expect(harness.noticeTexts()).toHaveLength(1);
+  });
+
   test("journal replay preserves uncertain launch", async () => {
     const fixture = await buildFixture();
     writeSettings(fixture, { enabled: true, cap: 2 });
