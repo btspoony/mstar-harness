@@ -234,11 +234,12 @@ Default process artifacts are **gitignored** (`mstar-conventions`「Git 跟踪�
 生命周期末端的物理回收（feature/integration worktree、本地/远端分支删除）的 ownership 与守卫规则**只在本节**；两条时序车道的 call site（Phase-2 同轮 / Phase-6 收尾）只引用本节，不复制规则。命令（**dry-run 默认**；无 fetch / prune / 任何写入）：
 
 ```text
-mstar worktree cleanup --workflow <id> [--harness <path>] [--apply] [--remote] [--worktree <path>] [--ignore-unreadable-snapshots]
+mstar worktree cleanup --workflow <id> [--harness <path>] [--apply] [--remote] [--worktree <path>] [--all-workflows] [--verbose] [--ignore-unreadable-snapshots]
 ```
 
 - dry-run 逐候选打印 `verdict | kind | ref | reason` 后结束；`--apply` 只执行当前 `remove` 行。Exit：0 = 合法 dry-run / eligible 移除全部成功；1 = 探测/变更失败；2 = usage。失败行**永不扩大范围**；受保护/拒绝行保持可见。
-- `--worktree <path>` 可重复：既收窄 worktree 候选集，也是**操作者所有权断言**——必须匹配记录的生命周期分支与同仓 checkout 身份，不能认领其他 lifecycle 的 worktree。`--remote` 只决定是否纳入 `origin/*` 删除候选；安全探测（integration 证据）无论是否 `--remote` 都会收集。
+- **候选范围（默认 scoped）**：默认候选只来自**选中 workflow 的记录归属**（snapshot 行元数据或已验证的 `--worktree` 断言）；`--all-workflows` 恢复**全量扫**（含未记录 ref 与所有 workflow 的候选）。`--worktree <path>` 可重复：既收窄 worktree 候选集，也是**操作者所有权断言**——必须匹配记录的生命周期分支与同仓 checkout 身份，不能认领其他 lifecycle 的 worktree；带 `--worktree` 时本地分支候选进一步收窄到与保留断言 owner 精确同属的分支（无命中的断言 owner ⇒ 无分支候选，**没有**全量回退；missing / 越界的断言路径只产出一条 note，不构造目标）。
+- `--remote` 只决定是否纳入 `origin/*` 删除候选；**本地**合并证据（`git branch --merged <base>` 成员资格）**无论是否 `--remote` 都会无条件收集**，**远端** integration 证据仅在使用 `--remote` 时收集。证据探测**有界**：base 解析一次、每个去重 base OID 至多一组 membership sweep + pass 内不可变备忘录，`--verbose` 追加逐对 ancestry 诊断（不改变候选与判定）。
 - **信任模型**：`--harness <path>` 为操作者提供且受信——dry-run 与 `--apply` 的全部状态事实（snapshot、lease、行归属元数据、protected 锚点）均读自该目录。
 - **坏 sibling 不再阻塞，且不丢保护**：扫描 `workflows/*/snapshot.json` 时，**非选中**的坏 snapshot 不会让命令失败（exit 1）。**JSON 可解析但校验失败**者以**降级保守形态**入安全集：只携带具保护性的声明（`branch.base` / `branch.integration` / `branch.target`、lifecycle worktree path、merge / execution lease、行 ownership 元数据），且 lifecycle 与行状态一律强制为非终态——故只会**增加** keep/refuse 判定，绝不减少（它保护的分支/worktree 会被 `cleanup.keep.protected-ref` 或 `cleanup.refuse.*` 拦住）。**完全不可解析**者声明不可知：默认 **withhold 全部 remove**（改判 `cleanup.refuse.unreadable-snapshot`，plan 仍完整打印），仅当操作者给出 `--ignore-unreadable-snapshots` 断言时才按可读 snapshot 判定。**选中** workflow 自身 snapshot 不可读仍是探测失败（exit 1）；任何坏 snapshot 的字节**永不**被修复、改写或删除。
 

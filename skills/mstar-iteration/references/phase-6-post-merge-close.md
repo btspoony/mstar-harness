@@ -49,7 +49,7 @@ mstar status workflow-close --workflow <id> [--harness <path>] [--ended-at <date
 物理清理（integration worktree / 本地分支 / 远端分支删除）是 §6.1–§6.3 之后的**显式独立步骤**——即 **timing lane 2**：valid terminal close + PR verified merged 之后才清理 integration 面。Phase 6 只固定顺序与守卫，不在本 phase 内实现删除：
 
 - cleanup **永不自动**、永不绕过 ownership / merge-evidence 守卫 —— 契约本体（ownership、合并证据、refusals、apply 顺序）唯一 home → **`mstar-branch-worktree`**「Worktree / branch cleanup」；本节只放 call site，不复制规则
-- `mstar worktree cleanup --workflow <id> [--harness <path>] [--apply] [--remote] [--worktree <path>]` —— dry-run 默认，逐候选打印 `verdict | kind | ref | reason`；先 dry-run 核对受保护行全部 `keep`/`refuse`，再 `--apply`
+- `mstar worktree cleanup --workflow <id> [--harness <path>] [--apply] [--remote] [--worktree <path>] [--all-workflows] [--verbose] [--ignore-unreadable-snapshots]` —— dry-run 默认，逐候选打印 `verdict | kind | ref | reason`（标志语义、默认候选范围与守卫本体见上方 owning-contract 指针）；先 dry-run 核对受保护行全部 `keep`/`refuse`，再 `--apply`
 - **lease 释放是手工 owner 动作、cleanup 范围外**：§6.1 close 已拒绝 dangling lease，但 cleanup 仍**从不**替 owner 释放——残留 lease 的候选只会得到 `cleanup.refuse.active-lease`；先手工释放，再重跑 dry-run/apply
 - squash-merged 分支（tip 非 base 祖先）→ STOP → residual；禁止 `git branch -D`
 

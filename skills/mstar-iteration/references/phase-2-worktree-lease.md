@@ -283,7 +283,7 @@ Phase 2 缺的不是新调度器，而是一个**具名的重新评估时刻** �
 integration merge 成功且 plan 行 `Done`、`execution_lease` 已删除的**同一轮**，即可回收该 plan/track 的 feature worktree + 已合并分支 —— **父迭代仍在运行不影响资格**：不存在「父须终结」的一刀切，这是 cleanup 的明确设计而非遗漏。命令与守卫契约本体（ownership、合并证据、refusals、apply 顺序）→ **`mstar-branch-worktree`**「Worktree / branch cleanup」（唯一 home；本节只放 call site）：
 
 ```text
-mstar worktree cleanup --workflow <id> [--harness <path>] [--apply] [--worktree <path>]
+mstar worktree cleanup --workflow <id> [--harness <path>] [--apply] [--remote] [--worktree <path>] [--all-workflows] [--verbose] [--ignore-unreadable-snapshots]
 ```
 
 - 先 dry-run 看 `verdict | kind | ref | reason`（merge 刚完成 → 该 Done 行 eligible）；`--apply` 才变更。lane 1 只清**本地面**（无 `--remote`；远端残留留给 Phase 6）。
