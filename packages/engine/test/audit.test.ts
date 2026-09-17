@@ -910,6 +910,25 @@ describe("validateAuditFindingGates", () => {
     expect(gate.violations.map((v) => v.code)).toContain("audit.finding.fingerprint.grammar");
   });
 
+  test("supplied fingerprint: null is a usage error, not silent omission", () => {
+    const gate = validateAuditFindingGates([{ ...enrichedFinding(), fingerprint: null } as unknown as AuditFinding]);
+    expect(gate.ok).toBe(false);
+    expect(gate.violations.map((v) => v.code)).toContain("audit.finding.fingerprint.grammar");
+    expect(gate.violations.some((v) => v.message.includes("findings[0].fingerprint"))).toBe(true);
+  });
+
+  test("supplied severity: null → audit.finding.severity.shape; supplied trace: null → audit.finding.trace.shape", () => {
+    const severityGate = validateAuditFindingGates([{ ...enrichedFinding(), severity: null } as unknown as AuditFinding]);
+    expect(severityGate.violations.map((v) => v.code)).toContain("audit.finding.severity.shape");
+    const traceGate = validateAuditFindingGates([{ ...enrichedFinding(), trace: null } as unknown as AuditFinding]);
+    expect(traceGate.violations.map((v) => v.code)).toContain("audit.finding.trace.shape");
+  });
+
+  test("omitted fingerprint / severity / trace remain benign (pass gates)", () => {
+    const { fingerprint: _f, severity: _s, trace: _t, ...omitted } = enrichedFinding();
+    expect(validateAuditFindingGates([omitted]).ok).toBe(true);
+  });
+
   test("fingerprint with any trailing line terminator fails the grammar (true end-of-input anchor)", () => {
     for (const fp of ["valid-id\n", "valid-id\r", "valid-id\r\n", "valid-id\u2028", "valid-id\u2029", "valid-id "]) {
       const gate = validateAuditFindingGates([enrichedFinding({ fingerprint: fp })]);
@@ -1193,6 +1212,21 @@ describe("scaffoldAuditPlan — gate integration + additive rendering", () => {
     expect((thrown as TypeError).message).toContain("findings[1].fingerprint");
     expect(readdirSync(out).sort()).toEqual(["README.md"]);
     expect(readFileSync(readme, "utf8")).toBe("# pre-existing index\n");
+  });
+
+  test("supplied fingerprint: null → gate violation TypeError before any write (never silent omission)", () => {
+    const out = join(tmp, "audit-fingerprint-null");
+    mkdirSync(out, { recursive: true });
+    let thrown: unknown;
+    try {
+      scaffoldAuditPlan(out, [{ ...enrichedFinding(), fingerprint: null } as unknown as AuditFinding], { date: "2026-09-18" });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(TypeError);
+    expect((thrown as TypeError).message).toContain("audit.finding.fingerprint.grammar");
+    expect((thrown as TypeError).message).toContain("findings[0].fingerprint");
+    expect(readdirSync(out)).toEqual([]);
   });
 
   test("enriched finding renders Fingerprint/Likelihood/Severity Status lines, Trace table, structured evidence bullets; prose Impact retained", () => {
