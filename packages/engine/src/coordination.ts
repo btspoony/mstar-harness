@@ -98,6 +98,7 @@ import {
   isStandaloneDevelopmentWorkflow,
   readWorkflowSnapshot,
   validateWorkflowSnapshot,
+  WORKFLOW_TERMINAL_STATUSES,
   writeWorkflowSnapshot,
   type WorkflowBranchAnchors,
   type WorkflowExecutionPolicy,
@@ -273,6 +274,7 @@ export type PlanCoordinationOperation =
   | { kind: "integration-start"; handoffId: string }
   | { kind: "integration-accept"; handoffId: string }
   | { kind: "complete"; handoffId: string }
+  | { kind: "repair-delivery-source"; handoffId: string }
   | { kind: "reconcile"; handoffId: string };
 
 /** One whole coordination request: one session, one operation, one precondition. */
@@ -330,6 +332,7 @@ const IMPLEMENTED_OPERATIONS: Record<string, true> = {
   "integration-start": true,
   "integration-accept": true,
   complete: true,
+  "repair-delivery-source": true,
   reconcile: true,
 };
 
@@ -1237,7 +1240,7 @@ function allowedOperations(
         break;
       case "accepted":
         if (isStandaloneDevelopmentWorkflow(snapshot)) {
-          out.push("return", "complete");
+          out.push("return", "complete", "repair-delivery-source");
         } else {
           out.push("return", "integration-start");
         }
@@ -2358,6 +2361,13 @@ export async function mutatePlanCoordination(request: CoordinationRequest): Prom
         expectedRevision,
       });
     }
+    case "repair-delivery-source": {
+      assertExactKeys(operation, ["kind", "handoffId"], "repair-delivery-source operation");
+      return mutateRepairDeliverySource(await coordinatorScope(session, request.planId, kind), session, sessionAbs, {
+        handoffId: namedHandoffId(operation),
+        expectedRevision,
+      });
+    }
     case "reconcile": {
       assertExactKeys(operation, ["kind", "handoffId"], "reconcile operation");
       return mutateReconcile(await coordinatorScope(session, request.planId, kind), session, sessionAbs, {
@@ -2401,6 +2411,7 @@ const COORDINATOR_OPERATIONS: readonly string[] = [
   "integration-start",
   "integration-accept",
   "complete",
+  "repair-delivery-source",
   "reconcile",
 ];
 
@@ -3709,6 +3720,269 @@ async function assertStandaloneCompletionPrecheck(
   const anchors = standaloneDeliveryAnchors(context.snapshot, scope.planId);
   assertStandaloneBranchIdentity(context, scope, handoff, anchors, "complete");
   assertStandaloneSourceGitProof(scope, handoff, anchors.source, "complete");
+}
+
+
+function requireAcceptedHandoffForRepair(
+  context: RowContext,
+  planId: string,
+  namedHandoffId: string,
+): PlanHandoff {
+  const handoff = context.coordination?.handoff;
+  if (
+    handoff === undefined ||
+    handoff.id !== namedHandoffId ||
+    handoff.state !== "accepted" ||
+    rowStatusOf(context.row) !== "InReview"
+  ) {
+    throw new CoordinationError(
+      "coordination.delivery-source-repair.no-accepted-handoff",
+      `repair-delivery-source requires plan ${planId} to carry the named accepted handoff while InReview`,
+      { plan_id: planId, handoff_id: namedHandoffId, state: handoff?.state, status: context.row.status },
+    );
+  }
+  return handoff;
+}
+
+function assertRepairNotTerminal(snapshot: WorkflowSnapshot): void {
+  if ((WORKFLOW_TERMINAL_STATUSES as readonly string[]).includes(snapshot.status)) {
+    throw new CoordinationError(
+      "coordination.delivery-source-repair.terminal",
+      `repair-delivery-source refuses workflow ${snapshot.id} in terminal status ${snapshot.status}`,
+      { workflow_id: snapshot.id, status: snapshot.status },
+    );
+  }
+}
+
+function assertLegacyRepairShape(
+  snapshot: WorkflowSnapshot,
+  planId: string,
+  handoff: PlanHandoff,
+): { registeredSource: string; target: string; candidateSource: string } {
+  const source = snapshot.branch?.source;
+  const target = snapshot.branch?.target;
+  if (!isNonEmptyString(source) || !isNonEmptyString(target)) {
+    throw new CoordinationError(
+      "coordination.delivery-source-repair.not-legacy-shape",
+      `repair-delivery-source requires nonblank delivery anchors on plan ${planId}`,
+      { plan_id: planId },
+    );
+  }
+  const candidateSource = handoff.source_branch;
+  if (!isNonEmptyString(candidateSource)) {
+    throw new CoordinationError(
+      "coordination.delivery-source-repair.not-legacy-shape",
+      `repair-delivery-source requires the accepted handoff to name a nonblank source branch for plan ${planId}`,
+      { plan_id: planId },
+    );
+  }
+  if (source === candidateSource) {
+    throw new CoordinationError(
+      "coordination.delivery-source-repair.already-aligned",
+      `repair-delivery-source refuses plan ${planId} because branch.source already equals the accepted handoff source ${candidateSource}`,
+      { plan_id: planId, source, candidate: candidateSource },
+    );
+  }
+  if (source !== target) {
+    throw new CoordinationError(
+      "coordination.delivery-source-repair.not-legacy-shape",
+      `repair-delivery-source requires the legacy shape branch.source === branch.target for plan ${planId} — got source ${source} and target ${target}`,
+      { plan_id: planId, source, target },
+    );
+  }
+  return { registeredSource: source, target, candidateSource };
+}
+
+function assertRepairBranchIdentity(
+  context: RowContext,
+  scope: ResolvedPlanScope,
+  handoff: PlanHandoff,
+  candidateSource: string,
+  what: string,
+): void {
+  const worktree = canonicalTarget(scope.worktreePath);
+  if (handoff.source_branch !== candidateSource) {
+    throw new CoordinationError(
+      "coordination.scope-mismatch",
+      `${what} requires handoff.source_branch ${handoff.source_branch} to equal the candidate delivery source ${candidateSource}`,
+      { plan_id: scope.planId, expected: candidateSource, actual: handoff.source_branch },
+    );
+  }
+  const lease = requireExecutionLease(context.row, scope.planId, what);
+  if (scope.workingBranch !== candidateSource) {
+    throw new CoordinationError(
+      "coordination.scope-mismatch",
+      `${what} requires the prepared working branch ${scope.workingBranch} to equal the candidate delivery source ${candidateSource}`,
+      { plan_id: scope.planId, expected: candidateSource, actual: scope.workingBranch },
+    );
+  }
+  if (lease.working_branch !== candidateSource) {
+    throw new CoordinationError(
+      "coordination.scope-mismatch",
+      `${what} requires the execution lease working branch ${lease.working_branch} to equal the candidate delivery source ${candidateSource}`,
+      { plan_id: scope.planId, expected: candidateSource, actual: lease.working_branch },
+    );
+  }
+  if (canonicalTarget(lease.worktree_path) !== worktree) {
+    throw new CoordinationError(
+      "coordination.path-mismatch",
+      `${what} requires the execution lease worktree ${lease.worktree_path} to equal the prepared scope ${worktree}`,
+      { plan_id: scope.planId, expected: worktree, actual: lease.worktree_path },
+    );
+  }
+  if (canonicalTarget(handoff.worktree_path) !== worktree) {
+    throw new CoordinationError(
+      "coordination.path-mismatch",
+      `${what} requires the handoff worktree ${handoff.worktree_path} to equal the prepared scope ${worktree}`,
+      { plan_id: scope.planId, expected: worktree, actual: handoff.worktree_path },
+    );
+  }
+  const metadata = context.row.metadata;
+  if (isPlainObject(metadata) && metadata.working_branch !== undefined && metadata.working_branch !== candidateSource) {
+    throw new CoordinationError(
+      "coordination.scope-mismatch",
+      `${what} requires row metadata.working_branch to equal the candidate delivery source ${candidateSource}`,
+      { plan_id: scope.planId, expected: candidateSource, actual: metadata.working_branch },
+    );
+  }
+  if (isPlainObject(metadata) && metadata.worktree_path !== undefined && canonicalTarget(String(metadata.worktree_path)) !== worktree) {
+    throw new CoordinationError(
+      "coordination.path-mismatch",
+      `${what} requires row metadata.worktree_path to equal the prepared scope ${worktree}`,
+      { plan_id: scope.planId, expected: worktree, actual: metadata.worktree_path },
+    );
+  }
+}
+
+function assertDeliveryPrCompatible(
+  snapshot: WorkflowSnapshot,
+  candidateSource: string,
+  registeredTarget: string,
+  planId: string,
+): void {
+  const pr = snapshot.delivery?.pr;
+  if (pr === undefined) return;
+  if (pr.head !== candidateSource || pr.target !== registeredTarget) {
+    throw new CoordinationError(
+      "coordination.delivery-source-repair.pr-conflict",
+      `repair-delivery-source refuses plan ${planId} because stored PR identity head ${JSON.stringify(pr.head)} target ${JSON.stringify(pr.target)} conflicts with candidate source ${candidateSource} and registered target ${registeredTarget}`,
+      { plan_id: planId, pr_head: pr.head, pr_target: pr.target, candidate: candidateSource, target: registeredTarget },
+    );
+  }
+}
+
+async function assertRepairDeliverySourcePrecheck(
+  context: RowContext,
+  scope: ResolvedPlanScope,
+  session: CoordinationSession,
+  handoff: PlanHandoff,
+): Promise<void> {
+  if (!isStandaloneDevelopmentWorkflow(context.snapshot)) {
+    throw new CoordinationError(
+      "coordination.delivery-source-repair.unsupported-workflow",
+      `repair-delivery-source requires a single-row standalone development workflow for plan ${scope.planId}`,
+      { plan_id: scope.planId, workflow_id: context.snapshot.id },
+    );
+  }
+  assertRepairNotTerminal(context.snapshot);
+  if (context.snapshot.status === "paused") {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `repair-delivery-source refuses paused workflow ${context.snapshot.id}`,
+      { workflow_id: context.snapshot.id, status: context.snapshot.status },
+    );
+  }
+  if (context.snapshot.status !== "running") {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `repair-delivery-source requires workflow ${context.snapshot.id} to still be running — got ${context.snapshot.status}`,
+      { workflow_id: context.snapshot.id, status: context.snapshot.status },
+    );
+  }
+  assertNoIntegrationContamination(context, scope.planId, handoff, "repair-delivery-source");
+  const prepared = context.coordination?.prepared;
+  if (prepared === undefined) {
+    throw new CoordinationError(
+      "coordination.not-prepared",
+      `plan ${scope.planId} is not prepared in this workflow`,
+      { plan_id: scope.planId },
+    );
+  }
+  assertEvidenceDigests(handoff);
+  assertAcceptedReviewDecision(handoff, scope.planId, "repair-delivery-source");
+  if (handoff.qa.gate !== prepared.qa_gate) {
+    throw new CoordinationError(
+      "coordination.assignment-stale",
+      `repair-delivery-source qa.gate ${handoff.qa.gate} is not the Assignment's QA gate ${prepared.qa_gate}`,
+      { plan_id: scope.planId, expected: prepared.qa_gate, actual: handoff.qa.gate },
+    );
+  }
+  await assertFindingsClosed(scope, prepared, "repair-delivery-source");
+  assertExecutionHolder(context.row, session.session_id, scope.planId, "repair-delivery-source");
+  const { target, candidateSource } = assertLegacyRepairShape(context.snapshot, scope.planId, handoff);
+  assertRepairBranchIdentity(context, scope, handoff, candidateSource, "repair-delivery-source");
+  assertDeliveryPrCompatible(context.snapshot, candidateSource, target, scope.planId);
+  assertStandaloneSourceGitProof(scope, handoff, candidateSource, "repair-delivery-source");
+}
+
+function repairDeliverySourceRow(
+  context: RowContext,
+  scope: ResolvedPlanScope,
+  candidateSource: string,
+): RowCommit {
+  const nextCoordination: RowCoordination = {
+    ...(context.coordination ?? { revision: 0 }),
+    revision: context.revision + 1,
+  };
+  validateRowCoordinationInContext(context, nextCoordination, `plan ${scope.planId} coordination`);
+  const currentBranch = context.snapshot.branch ?? {};
+  return {
+    row: { ...context.row, coordination: nextCoordination },
+    coordination: nextCoordination,
+    topLevel: {
+      branch: { ...currentBranch, source: candidateSource },
+    },
+  };
+}
+
+type RepairDeliverySourceRequest = { handoffId: string; expectedRevision: number };
+
+async function mutateRepairDeliverySource(
+  scope: ResolvedPlanScope,
+  session: CoordinationSession,
+  sessionPath: string,
+  request: RepairDeliverySourceRequest,
+): Promise<CoordinationResult> {
+  const result = await withRowCommit(scope, {
+    expectedRevision: request.expectedRevision,
+    precheck: async (context) => {
+      assertCoordinatorBinding(session, sessionPath, context.snapshot);
+      const handoff = requireAcceptedHandoffForRepair(context, scope.planId, request.handoffId);
+      await assertRepairDeliverySourcePrecheck(context, scope, session, handoff);
+    },
+    mutate: (context) => {
+      const handoff = requireAcceptedHandoffForRepair(context, scope.planId, request.handoffId);
+      const { candidateSource } = assertLegacyRepairShape(context.snapshot, scope.planId, handoff);
+      return repairDeliverySourceRow(context, scope, candidateSource);
+    },
+  });
+  return {
+    ok: true,
+    operation: "repair-delivery-source",
+    session,
+    session_file: sessionPath,
+    outcome: "delivery-source-repaired",
+    view: buildView(
+      scope.harnessRoot,
+      scope.workflowId,
+      scope.projectId,
+      scope,
+      result.snapshot,
+      result.row,
+      session,
+      sessionPath,
+    ),
+  };
 }
 
 function completeStandaloneRow(context: RowContext, scope: ResolvedPlanScope, handoff: PlanHandoff): RowCommit {

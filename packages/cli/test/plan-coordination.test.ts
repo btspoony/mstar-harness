@@ -1435,6 +1435,144 @@ function amendPrepareArgs(
   ];
 }
 
+
+interface StandaloneRepairFixture extends Fixture {
+  baseSha: string;
+  sourceSha: string;
+  coordinator: string;
+  planSession: string;
+  qcReport: string;
+  qcConsolidated: string;
+  qaReport: string;
+}
+
+function makeStandaloneRepairFixture(withPr = false): StandaloneRepairFixture {
+  const fixture = makeFixture();
+  const baseSha = gitOut(["rev-parse", "HEAD"], fixture.root);
+  rmSync(fixture.worktreePath, { recursive: true, force: true });
+  git(["worktree", "add", "-q", "-b", "feature/plan-a", fixture.worktreePath], fixture.root);
+  writeText(join(fixture.worktreePath, "standalone.txt"), "standalone slice\n");
+  git(["add", "standalone.txt"], fixture.worktreePath);
+  gitCommit(fixture.worktreePath, "plan a: standalone");
+  const sourceSha = gitOut(["rev-parse", "HEAD"], fixture.worktreePath);
+
+  const snapshot: Record<string, unknown> = {
+    schema_version: 1,
+    id: WORKFLOW_ID,
+    type: "plan",
+    delivery_kind: "development",
+    status: "running",
+    started_at: "2026-09-15T00:00:00Z",
+    updated_at: "2026-09-15T00:00:00Z",
+    branch: { source: "main", target: "main" },
+    plans: [planRow(PLAN_ID, "feature/plan-a")],
+  };
+  if (withPr) {
+    snapshot.delivery = {
+      compound: { outcome: "skipped", reason: "fixture probe" },
+      pr: { repo: "btspoony/mstar-harness", head: "feature/plan-a", target: "main" },
+      merge: { provider: "github", evidence: "PR #999 verified merged" },
+    };
+  }
+  writeJson(join(fixture.harness, "status.json"), {
+    version: 2,
+    updated_at: "2026-09-15T00:00:00Z",
+    workflows: [{ id: WORKFLOW_ID, status: "running", type: "plan", started_at: "2026-09-15T00:00:00Z", dir: `workflows/${WORKFLOW_ID}` }],
+  });
+  writeJson(fixture.snapshotPath, snapshot);
+
+  const sdd = join(fixture.harness, "sdd", PLAN_ID);
+  const qcReport = join(sdd, "review", "qc1.md");
+  const qcConsolidated = join(sdd, "review", "qc.md");
+  const qaReport = join(sdd, "qa.md");
+  writeText(qcReport, "# QC 1\ndecision: Approve\n");
+  writeText(qcConsolidated, "# QC consolidated\ndecision: Approve\n");
+  writeText(qaReport, "# QA\nverdict: pass\n");
+
+  const coordinator = bindCoordinator(fixture);
+  preparePlan(fixture, coordinator, PLAN_ID);
+  const planSession = bindPlan(fixture, PLAN_ID);
+  toInReview(fixture, planSession, "standalone ready");
+  const handoffId = submitHandoff(
+    { ...fixture, baseSha, sourceSha, integrationPath: "", qcReport, qcConsolidated, qaReport } as IntegrationFixture,
+    planSession,
+  );
+  const accepted = transition(fixture, "accept", coordinator, handoffId);
+  expect(accepted.exitCode).toBe(0);
+  expect(jsonOf(accepted).state).toBe("accepted");
+
+  return { ...fixture, baseSha, sourceSha, coordinator, planSession, qcReport, qcConsolidated, qaReport };
+}
+
+function snapshotWithoutRepairDeltaCli(snapshot: Record<string, unknown>): Record<string, unknown> {
+  const copy = JSON.parse(JSON.stringify(snapshot)) as Record<string, unknown>;
+  delete copy.updated_at;
+  const branch = copy.branch as Record<string, unknown> | undefined;
+  if (branch !== undefined) delete branch.source;
+  const plans = copy.plans as Array<Record<string, unknown>>;
+  const coordination = plans[0]?.coordination as Record<string, unknown> | undefined;
+  if (coordination !== undefined) delete coordination.revision;
+  return copy;
+}
+
+
+describe("legacy-delivery-source-repair", () => {
+  test("CLI repair succeeds with exact flags and preserves delivery bytes", () => {
+    const fixture = makeStandaloneRepairFixture(true);
+    const before = readJson(fixture.snapshotPath);
+    const handoffId = liveHandoffId(fixture, fixture.coordinator);
+    const repaired = transition(fixture, "repair-delivery-source", fixture.coordinator, handoffId);
+    expect(repaired.exitCode).toBe(0);
+    const payload = jsonOf(repaired);
+    expect(payload.ok).toBe(true);
+    expect(payload.operation).toBe("repair-delivery-source");
+    expect(payload.outcome).toBe("delivery-source-repaired");
+    const after = readJson(fixture.snapshotPath);
+    expect(after.branch).toEqual({ source: "feature/plan-a", target: "main" });
+    expect(after.delivery).toEqual(before.delivery);
+    expect(snapshotWithoutRepairDeltaCli(after)).toEqual(snapshotWithoutRepairDeltaCli(before));
+  });
+
+  test("CLI refuses unknown replacement flags as usage errors", () => {
+    const fixture = makeStandaloneRepairFixture(false);
+    const handoffId = liveHandoffId(fixture, fixture.coordinator);
+    const before = snapshotBytes(fixture);
+    for (const extra of [["--branch-source", "feature/plan-a"], ["--force"], ["--status", "Done"]]) {
+      const refused = runCli(
+        [
+          "plan",
+          "repair-delivery-source",
+          "--session",
+          fixture.coordinator,
+          "--plan",
+          PLAN_ID,
+          "--handoff",
+          handoffId,
+          "--expect",
+          String(rowRevision(fixture, fixture.coordinator, PLAN_ID)),
+          "--json",
+          ...extra,
+        ],
+        fixture.root,
+      );
+      expect(refused.exitCode).toBe(2);
+      expect(jsonOf(refused).code).toBe("usage");
+      expect(snapshotBytes(fixture)).toBe(before);
+    }
+  });
+
+  test("CLI second repair with fresh revision refuses already-aligned", () => {
+    const fixture = makeStandaloneRepairFixture(false);
+    const handoffId = liveHandoffId(fixture, fixture.coordinator);
+    expect(transition(fixture, "repair-delivery-source", fixture.coordinator, handoffId).exitCode).toBe(0);
+    const aligned = snapshotBytes(fixture);
+    const second = transition(fixture, "repair-delivery-source", fixture.coordinator, handoffId);
+    expect(second.exitCode).toBe(1);
+    expect(jsonOf(second).code).toBe("coordination.delivery-source-repair.already-aligned");
+    expect(snapshotBytes(fixture)).toBe(aligned);
+  });
+});
+
 describe("Prepare workflow amendment", () => {
   test("show-prepare reports the byte versions and amend-prepare applies the approved delta with a readback", () => {
     const fixture = makePrepareFixture();

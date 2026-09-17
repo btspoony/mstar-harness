@@ -73,6 +73,12 @@ export const COORDINATION_ERROR_CODES = [
   "coordination.prepare-amendment.invalid-plan",
   "coordination.prepare-amendment.compass-mismatch",
   "coordination.prepare-amendment.invalid-worktree",
+  "coordination.delivery-source-repair.unsupported-workflow",
+  "coordination.delivery-source-repair.terminal",
+  "coordination.delivery-source-repair.no-accepted-handoff",
+  "coordination.delivery-source-repair.already-aligned",
+  "coordination.delivery-source-repair.not-legacy-shape",
+  "coordination.delivery-source-repair.pr-conflict",
 ] as const;
 
 export type CoordinationErrorCode = (typeof COORDINATION_ERROR_CODES)[number];

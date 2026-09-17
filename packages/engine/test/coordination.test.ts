@@ -1354,6 +1354,45 @@ async function acceptedStandaloneFixture(): Promise<GitFixture> {
   return fixture;
 }
 
+
+/** Legacy wrong-source shape: registered source equals target while the handoff names the feature branch. */
+function wrongSourceLegacyGitFixture(withPr = false): GitFixture {
+  const fixture = standaloneGitFixture();
+  const snapshot = snapshotOf(fixture);
+  snapshot.branch = { source: "main", target: "main" };
+  if (withPr) {
+    snapshot.delivery = {
+      compound: { outcome: "skipped", reason: "fixture probe" },
+      pr: { repo: "btspoony/mstar-harness", head: "feature/plan-a", target: "main" },
+      merge: { provider: "github", evidence: "PR #999 verified merged" },
+    };
+  }
+  writeJson(fixture.snapshotPath, snapshot);
+  return fixture;
+}
+
+async function wrongSourceAcceptedFixture(withPr = false): Promise<GitFixture> {
+  const fixture = wrongSourceLegacyGitFixture(withPr);
+  await preparePlan(fixture, PLAN_ID);
+  await bindPlan(fixture, PLAN_ID);
+  claimExecutionLease(fixture, PLAN_ID, fixture.planSession);
+  updatePlanRow(fixture, PLAN_ID, (row) => ({ ...row, status: "InReview" }));
+  await handoffCall(fixture, handoffEvidenceOf(fixture, fixture.planSha));
+  await coordinatorCall(fixture, PLAN_ID, { kind: "accept" });
+  return fixture;
+}
+
+function snapshotWithoutRepairDelta(snapshot: Record<string, unknown>): Record<string, unknown> {
+  const copy = JSON.parse(JSON.stringify(snapshot)) as Record<string, unknown>;
+  delete copy.updated_at;
+  const branch = copy.branch as Record<string, unknown> | undefined;
+  if (branch !== undefined) delete branch.source;
+  const plans = copy.plans as Array<Record<string, unknown>>;
+  const coordination = plans[0]?.coordination as Record<string, unknown> | undefined;
+  if (coordination !== undefined) delete coordination.revision;
+  return copy;
+}
+
 /** A fixture handed off and accepted: the state integration starts from. */
 async function acceptedFixture(): Promise<GitFixture> {
   const fixture = gitFixture();
@@ -1733,6 +1772,137 @@ describe("standalone-development-completion", () => {
     expect(await errorCodeOf(() => coordinatorCall(unanchored, PLAN_ID, { kind: "integration-start" }))).toBe(
       "coordination.integration-unresolved",
     );
+  }, 30000);
+});
+
+
+describe("legacy-delivery-source-repair", () => {
+  test("repairs only branch.source, row revision and updated_at while preserving PR/merge evidence", async () => {
+    const fixture = await wrongSourceAcceptedFixture(true);
+    const before = readFileSync(fixture.snapshotPath);
+    const beforeView = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
+    const repaired = await coordinatorCall(fixture, PLAN_ID, { kind: "repair-delivery-source" });
+    expect(repaired.outcome).toBe("delivery-source-repaired");
+    const after = snapshotOf(fixture);
+    expect(after.branch).toEqual({ source: "feature/plan-a", target: "main" });
+    expect(planRowOf(fixture, PLAN_ID).status).toBe("InReview");
+    expect(handoffFields(planRowOf(fixture, PLAN_ID)).state).toBe("accepted");
+    expect(after.delivery).toEqual(JSON.parse(before.toString()).delivery);
+    expect(snapshotWithoutRepairDelta(after)).toEqual(snapshotWithoutRepairDelta(JSON.parse(before.toString())));
+    expect(beforeView.revision + 1).toBe((await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root)).revision);
+    expect(typeof after.updated_at).toBe("string");
+    expect(after.updated_at).not.toBe(JSON.parse(before.toString()).updated_at);
+  }, 30000);
+
+  test("repairs identity on a fixture without PR/merge evidence", async () => {
+    const fixture = await wrongSourceAcceptedFixture(false);
+    const before = readFileSync(fixture.snapshotPath);
+    const repaired = await coordinatorCall(fixture, PLAN_ID, { kind: "repair-delivery-source" });
+    expect(repaired.outcome).toBe("delivery-source-repaired");
+    expect(snapshotOf(fixture).branch).toEqual({ source: "feature/plan-a", target: "main" });
+    expect(snapshotWithoutRepairDelta(snapshotOf(fixture))).toEqual(snapshotWithoutRepairDelta(JSON.parse(before.toString())));
+  }, 30000);
+
+  test("fresh-token second application refuses already-aligned without writes", async () => {
+    const fixture = await wrongSourceAcceptedFixture(false);
+    await coordinatorCall(fixture, PLAN_ID, { kind: "repair-delivery-source" });
+    const aligned = readFileSync(fixture.snapshotPath);
+    expect(await errorCodeOf(() => coordinatorCall(fixture, PLAN_ID, { kind: "repair-delivery-source" }))).toBe(
+      "coordination.delivery-source-repair.already-aligned",
+    );
+    expect(readFileSync(fixture.snapshotPath).equals(aligned)).toBe(true);
+  }, 30000);
+
+  test("terminal, paused, unsupported, non-legacy and PR-conflict refusals are mutation-free", async () => {
+    const terminal = await wrongSourceAcceptedFixture(false);
+    const terminalSnap = snapshotOf(terminal);
+    terminalSnap.status = "failed";
+    terminalSnap.ended_at = "2026-09-15T01:00:00Z";
+    terminalSnap.plans = (terminalSnap.plans as Array<Record<string, unknown>>).map((row) => {
+      const { execution_lease, ...rest } = row;
+      return rest;
+    });
+    writeJson(terminal.snapshotPath, terminalSnap);
+    const beforeTerminal = readFileSync(terminal.snapshotPath);
+    expect(await errorCodeOf(() => coordinatorCall(terminal, PLAN_ID, { kind: "repair-delivery-source" }))).toBe(
+      "coordination.delivery-source-repair.terminal",
+    );
+    expect(readFileSync(terminal.snapshotPath).equals(beforeTerminal)).toBe(true);
+
+    const paused = await wrongSourceAcceptedFixture(false);
+    writeJson(paused.snapshotPath, { ...snapshotOf(paused), status: "paused" });
+    const beforePaused = readFileSync(paused.snapshotPath);
+    expect(await errorCodeOf(() => coordinatorCall(paused, PLAN_ID, { kind: "repair-delivery-source" }))).toBe(
+      "coordination.invalid-transition",
+    );
+    expect(readFileSync(paused.snapshotPath).equals(beforePaused)).toBe(true);
+
+    const iteration = await acceptedFixture();
+    const beforeIteration = readFileSync(iteration.snapshotPath);
+    expect(await errorCodeOf(() => coordinatorCall(iteration, PLAN_ID, { kind: "repair-delivery-source" }))).toBe(
+      "coordination.delivery-source-repair.unsupported-workflow",
+    );
+    expect(readFileSync(iteration.snapshotPath).equals(beforeIteration)).toBe(true);
+
+    const alignedShape = await acceptedStandaloneFixture();
+    const beforeAligned = readFileSync(alignedShape.snapshotPath);
+    expect(await errorCodeOf(() => coordinatorCall(alignedShape, PLAN_ID, { kind: "repair-delivery-source" }))).toBe(
+      "coordination.delivery-source-repair.already-aligned",
+    );
+    expect(readFileSync(alignedShape.snapshotPath).equals(beforeAligned)).toBe(true);
+
+    const prConflict = await wrongSourceAcceptedFixture(true);
+    const conflictSnap = snapshotOf(prConflict);
+    conflictSnap.delivery = {
+      ...(conflictSnap.delivery as Record<string, unknown>),
+      pr: { repo: "btspoony/mstar-harness", head: "main", target: "main" },
+    };
+    writeJson(prConflict.snapshotPath, conflictSnap);
+    const beforeConflict = readFileSync(prConflict.snapshotPath);
+    expect(await errorCodeOf(() => coordinatorCall(prConflict, PLAN_ID, { kind: "repair-delivery-source" }))).toBe(
+      "coordination.delivery-source-repair.pr-conflict",
+    );
+    expect(readFileSync(prConflict.snapshotPath).equals(beforeConflict)).toBe(true);
+  }, 30000);
+
+  test("stale revision, dirty checkout and missing accepted handoff refuse without protected-byte changes", async () => {
+    const fixture = await wrongSourceAcceptedFixture(false);
+    const view = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
+    const before = readFileSync(fixture.snapshotPath);
+    expect(
+      await errorCodeOf(() =>
+        mutatePlanCoordination({
+          sessionPath: fixture.coordinatorSession,
+          planId: PLAN_ID,
+          expectedRevision: view.revision - 1,
+          operation: { kind: "repair-delivery-source", handoffId: view.row?.coordination?.handoff?.id ?? "missing" },
+        }),
+      ),
+    ).toBe("coordination.version-conflict");
+    expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
+
+    const dirty = await wrongSourceAcceptedFixture(false);
+    writeText(join(dirty.worktreePath, "scratch.txt"), "wip\n");
+    const beforeDirty = readFileSync(dirty.snapshotPath);
+    expect(await errorCodeOf(() => coordinatorCall(dirty, PLAN_ID, { kind: "repair-delivery-source" }))).toBe(
+      "coordination.git-proof",
+    );
+    expect(readFileSync(dirty.snapshotPath).equals(beforeDirty)).toBe(true);
+
+    const noHandoff = await wrongSourceAcceptedFixture(false);
+    const staleHandoffId = String(handoffFields(planRowOf(noHandoff, PLAN_ID)).id);
+    updatePlanRow(noHandoff, PLAN_ID, (row) => {
+      const coordination = { ...(row.coordination as Record<string, unknown>) };
+      delete coordination.handoff;
+      return { ...row, coordination };
+    });
+    const beforeNoHandoff = readFileSync(noHandoff.snapshotPath);
+    expect(
+      await errorCodeOf(() =>
+        coordinatorCall(noHandoff, PLAN_ID, { kind: "repair-delivery-source" }, staleHandoffId),
+      ),
+    ).toBe("coordination.delivery-source-repair.no-accepted-handoff");
+    expect(readFileSync(noHandoff.snapshotPath).equals(beforeNoHandoff)).toBe(true);
   }, 30000);
 });
 

@@ -118,6 +118,7 @@ const PLAN_VERBS: Record<string, true> = {
   "integration-start": true,
   "integration-accept": true,
   complete: true,
+  "repair-delivery-source": true,
   reconcile: true,
 };
 
@@ -471,7 +472,7 @@ async function mutate(
 }
 
 /** The coordinator transition verbs registered by one shared flag surface. */
-type TransitionKind = "accept" | "return" | "integration-start" | "integration-accept" | "complete" | "reconcile";
+type TransitionKind = "accept" | "return" | "integration-start" | "integration-accept" | "complete" | "repair-delivery-source" | "reconcile";
 
 /**
  * The coordinator transition operation. `--handoff <id>` is mandatory (spec
@@ -751,6 +752,7 @@ export function registerPlanCommands(program: Command): void {
     ["integration-start", "Record the integration attempt and pin its base before any Git merge (Git stays the operator's action)"],
     ["integration-accept", "Verify the pinned Git result of the started integration attempt (never runs a merge)"],
     ["complete", "Record Done atomically and release both leases after verified Git proof"],
+    ["repair-delivery-source", "Correct a legacy registered delivery source from the accepted handoff without changing statuses or evidence"],
     ["reconcile", "Observe Git after a crash and finish the attempt without a second merge, or refuse and keep state"],
   ] as const) {
     const command = plan
