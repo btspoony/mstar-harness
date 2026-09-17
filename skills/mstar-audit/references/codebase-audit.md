@@ -27,7 +27,7 @@ Audit depth follows the **effort level** (default `standard`; set with `quick` /
 | Categories | correctness, security, tests | all nine | all nine |
 | Findings | top ~6, HIGH-confidence only | full table | full table incl. LOW-confidence "investigate" items |
 
-Whatever the level, state in the final report what was *not* audited.
+Whatever the level, record what was examined and what was not in the final report's **Coverage** section (see § Output format) — one row per material review question, never a bare "not everything was audited" disclaimer.
 
 Every finding follows **`references/finding-format.md`** — read it before the first finding.
 
@@ -48,7 +48,7 @@ Plan-file layout, Status block, commit stamp, and handoff follow the shared cont
 
 **Excerpts come from your own reads, never from a subagent's report.** Before writing each plan, open every cited file yourself — subagent line numbers and attributions are leads, not facts.
 
-If an audit directory from a previous run exists, **reconcile, don't duplicate**: read its `README.md`, keep numbering monotonic, skip findings already planned or listed as rejected, mark superseded plans stale.
+If an audit directory from a previous run exists, **reconcile, don't duplicate**: read its `README.md`, keep numbering monotonic, skip findings already planned or listed as rejected, mark superseded plans stale. When finalizing the index, write the **Coverage** section per § Output format — and mind the scaffold ordering documented there, since `mstar audit scaffold` rebuilds the README and does not preserve Coverage.
 
 Plans generated from `simplify` / removal findings must carry **behavior-preservation verification gates**: existing tests pass *unmodified*, and characterization tests come first where coverage is thin (playbook §4). When the simplification would touch more than ~500 lines, recommend a codemod/automation pass rather than manual edits.
 
@@ -67,6 +67,16 @@ Plans generated from `simplify` / removal findings must carry **behavior-preserv
 ## Direction (separate)
 
 [2-4 grounded suggestions with evidence and trade-offs]
+
+## Coverage
+
+| # | Unit (surface × boundary/invariant × subsystem × category) | Status | Evidence / check | Reason / gap |
+|---|---|---|---|---|
+| C1 | order route × owner binding × API × security | covered | `src/orders.ts:42` → verified lookup binds order and actor; unauthorized branch rejects | — |
+| C2 | webhook × signature verification × worker × security | blocked | `src/hooks.ts:18` → found verifier call; deployment key source unavailable | Missing deployed key configuration; see Needs verification lead "webhook provenance" |
+| C3 | export job × tenant scope × worker × security | deferred | — | Not examined within the assigned worker-path scope |
+
+Coverage is partial. Not examined: export tenant scope. Unresolved: webhook deployment key source. No previous coverage record was available.
 
 ## Needs verification
 
@@ -95,6 +105,28 @@ Plans generated from `simplify` / removal findings must carry **behavior-preserv
 
 - <finding>: <survived / refuted / hallucination-dropped / uncovered-kept>, <one-line reason>
 ```
+
+### Coverage contract
+
+The Coverage table records which material review questions this run examined, could not examine, or did not attempt. The rows above are a **synthetic example**, not evidence from any particular repository.
+
+**Unit.** A row is one *material review question*, described as surface × boundary/invariant × subsystem × category. It is not the Cartesian product of those lists — write the questions a competent reviewer would actually ask, not every combination. For security work the boundary is the control or invariant checked (entry surface × owner binding × API × security). For non-security categories the boundary is the affected operation and property (list rendering × bounded query count × orders UI × perf); do not invent fictitious attackers for `next`, `docs`, `simplify`, or performance work. The `C1`/`C2` labels are author-maintained and report-local — they need not survive another run and imply no generated identity. The descriptive Unit cell is what human reviewers reconcile against.
+
+**Statuses.** Exactly five final statuses:
+
+| Status | Meaning |
+|---|---|
+| `covered` | Actually examined this run. Requires a reviewed repository `file:line`, the invariant checked, and the observed result — in the cell or in evidence it links. `covered` means examined, **not clean**: the row may carry a confirmed finding. A runtime-dependent unresolved claim makes the row `blocked`, not `covered` with an optimistic footnote. |
+| `blocked` | Attempted but stopped. Record whatever was examined, if anything; when access failed before the first read, the Evidence cell may be `—`. The Reason cell names the concrete missing fact/access/dependency, linking a Needs-verification lead when one exists. |
+| `deferred` | In scope but not examined this run. Evidence cell is `—` or a link to explicitly identified prior evidence — never passed off as this run's work. Reason states why it was not examined. |
+| `out_of_scope` | Material surface deliberately outside the declared scope; Reason says why. |
+| `not_applicable` | The surface does not exist or the question does not apply; a short recon reference when available, never a fabricated check. |
+
+A check is a compact sentence: cited location → question/invariant → observed static result. If an already-authorized, side-effect-free command contributed, identify that command and its result; this adds no new execution permission. Link fuller prose (Needs verification, Hardening & checked notes, a finding) when a cell would become unwieldy — keep each fact in one place rather than duplicating it across cells.
+
+**Completeness.** `covered` requires a reviewed path and an actual check/result; every non-covered row requires a concrete reason. Split a materially unexamined sub-question into its own row rather than hiding it under a `covered` parent. A quick/scoped/truncated run states partial explicitly; a broader run never implies unlisted surfaces are clean. Close with an uncounted partial/gap summary that names the gaps already in the table — no numeric tallies, no aggregate path unions, no extra bookkeeping columns. Scope completeness and evidence sufficiency remain reviewer judgments, not guarantees delivered by this table.
+
+**Scaffold boundary.** `mstar audit scaffold` rebuilds the README index from scratch and carries over only the two security-disposition sections (Needs verification, Hardening & checked notes) — it has **no** coverage input or preservation API and does not validate Coverage. Therefore: read and retain the prior coverage from the existing index **before** invoking the scaffold; after the final scaffold, restore/reconcile the Coverage section into the rebuilt README and write this run's rows. If the scaffold must run again, repeat that ordering. Missing prior coverage is reported as unavailable in the closing summary — never reconstructed from memory.
 
 > **Engine check (when available):** run `mstar audit scaffold <findings-file> [--dir <out-dir>]` (or `import { scaffoldAuditPlan, validateAuditFindingGates, validateAuditStatusBlocks } from "@mstar-harness/engine"` in a host hook) to scaffold the `audit-<date>/` plan directory (numbered plan files + README index) from findings, redact credentials from audit excerpts, and run the deterministic finding gates (`validateAuditFindingGates`) before anything is written. The scaffold emits Status blocks that conform to the contract, but it does not re-validate existing plan files: validating audit Status blocks per **`mstar-audit` SKILL.md** `## Plan output (all variants)` is done by a host hook explicitly calling `validateAuditStatusBlocks` (also from `@mstar-harness/engine`) — the CLI command itself never invokes it. The findings file may be a bare array or `{findings, needsVerification?, hardeningChecked?}`; the finding-object field contract — JSON-to-engine mapping, absent-field defaults, string vs structured evidence, fingerprint/trace/severity — is owned by **`mstar-audit` references/finding-format.md § Machine-readable findings file**. Carrier acceptance is engine work; reportability, finding/lead exclusion, and coverage stay reviewer judgement — the engine enforces none of them. Disposition policy: a supplied `needsVerification` / `hardeningChecked` set is authoritative and replaces its index section on rebuild (resolved leads are removed by dropping them); an omitted field carries the previous section's entries over, so hand-added security dispositions survive an index rebuild. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
