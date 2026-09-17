@@ -2,7 +2,7 @@
 
 The slash commands this repository ships live in [`commands/`](../commands). This page indexes all six: what each one does, the argument form it accepts, which sibling to reach for, and the skill that owns its semantics.
 
-Two boundaries hold across the page. All six are **user entry points** — a command boots `project-manager` in your current session, and none of them is a subagent target: a leaf executor that receives one refuses it on role grounds. And this page is a **router, not a second protocol home** — every behavioural rule stays with its owning skill, while the `mstar-harness` binary reference (install, `init`, `doctor`, the `plan` verbs) stays in [`cli.md`](cli.md).
+Two boundaries hold across the page. All six are **user entry points** — a command boots `project-manager` in your current session, and none of them is a subagent target: a leaf executor that receives one refuses it on role grounds. And this page is a **router, not a second protocol home** — every behavioural rule stays with its owning skill, while the `mstar-harness` binary reference — the `plan` verbs, flags and exit codes — stays with the **`mstar-use-cli`** skill, and install / `init` / `doctor` with [`INSTALL.md`](../INSTALL.md).
 
 | Command | Purpose | Owning skill |
 |---------|---------|--------------|
@@ -115,7 +115,7 @@ The second terminal is transport, not a dependency. Any terminal works; Herdr or
 
 - Runtime route contract, scope boundary and coordinator sequence: `mstar-iteration` → [`references/plan-scoped-pm.md`](../skills/mstar-iteration/references/plan-scoped-pm.md).
 - Row, session and handoff fields and ownership: `mstar-artifacts` → [`references/status-and-residuals.md`](../skills/mstar-artifacts/references/status-and-residuals.md).
-- Executable flags, exit codes, JSON envelopes and rejection codes: [`mstar-harness plan`](cli.md#mstar-harness-plan) in the CLI guide.
+- Executable flags, exit codes, JSON envelopes and rejection codes: the **`mstar-use-cli`** skill → `references/plan-and-workflow.md`.
 
 ## /iteration-loop
 

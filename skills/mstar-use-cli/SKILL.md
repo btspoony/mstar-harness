@@ -111,18 +111,22 @@ mstar persist snapshot --key <workflow-id> --expect-version sha256:<64-hex> --fi
 
 `status` always uses the key `root`; `residuals` takes the project id; replacing a coordinated snapshot also needs the coordinator envelope. For a document that does not exist yet the token is the literal `absent`.
 
-Plan completion, coordinator side, after the plan session handed off:
+Plan completion, coordinator side, after the plan session handed off. The engine picks one of **two routes** from the workflow's own type and delivery kind — never from anchors that happen to be missing:
 
 ```sh
 mstar plan handoff --session <plan-session.json> --file handoff.json --expect <revision>
 mstar plan accept --session <coordinator.json> --plan <plan-id> --handoff <live-handoff-id> --expect <revision>
+
+# iteration route only (type: iteration, or any non-standalone workflow)
 mstar plan integration-start --session <coordinator.json> --plan <plan-id> --handoff <live-handoff-id> --expect <revision>
 git merge --no-ff --no-edit <source-sha>          # operator action, in the recorded integration worktree
 mstar plan integration-accept --session <coordinator.json> --plan <plan-id> --handoff <live-handoff-id> --expect <revision>
+
+# both routes end here; a standalone development plan completes straight from the accepted handoff
 mstar plan complete --session <coordinator.json> --plan <plan-id> --handoff <live-handoff-id> --expect <revision>
 ```
 
-`mstar plan return` handles a failed attempt; `mstar plan reconcile` finishes an attempt after a crash without a second merge. Every `--expect` comes from a fresh read, because the previous call consumed the revision. Per-step preconditions and failure behavior: `references/plan-and-workflow.md`.
+`complete` releases only the row's lease on the standalone route and both leases on the iteration route; a standalone workflow stays running until its delivery evidence and the workflow close. `mstar plan return` handles a failed attempt; `mstar plan reconcile` finishes an attempt after a crash without a second merge — on the standalone route it only replays an already-completed row. `repair-delivery-source` exists solely for pre-fix snapshots whose registered source branch wrongly equals the target. Every `--expect` comes from a fresh read, because the previous call consumed the revision. Per-step preconditions and failure behavior: `references/plan-and-workflow.md`.
 
 ## Decision Rules
 

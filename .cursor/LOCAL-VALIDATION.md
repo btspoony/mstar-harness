@@ -52,4 +52,4 @@ git rev-parse HEAD | xargs -I{} bun run cli:dev -- sdd review-package {} {}
 - Do not use absolute paths in `plugin.json`.
 - Do not reference files outside this repository root.
 - Ensure all referenced directories exist in the current branch.
-- Cursor **cannot load symlinked plugin roots** — local/global install must be a real directory (see `docs/cli.md` § Install path layout).
+- Cursor **cannot load symlinked plugin roots** — local/global install must be a real directory (see `INSTALL.md` § Install path layout).

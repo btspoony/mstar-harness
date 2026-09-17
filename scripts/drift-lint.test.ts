@@ -5,9 +5,10 @@
  * - evaluateBilingualGuard — the CI fail-loudly contract (GITHUB_ACTIONS
  * env injection): a null range fails in CI, skips locally; an empty range
  * (direct-to-main push) skips by design; a non-empty range runs the check.
- * - extractCategoryRowTokens (guard 1) — the docs/cli.md `<category>` row
- * yields exactly AUDIT_CATEGORIES; fabricated tokens are kept for the
- * membership check; `Category` / `<category>` placeholders are filtered.
+ * - extractCategoryRowTokens (guard 1) — the `<category>` row in the CLI
+ * skill's reference yields exactly AUDIT_CATEGORIES; fabricated tokens are
+ * kept for the membership check; `Category` / `<category>` placeholders are
+ * filtered.
  * - citesKnowledgeConventions (W-2) — the exemption is anchored to the
  * cited token itself (the citation path starts with `conventions/`);
  * proximity alone no longer exempts unrelated citations.
@@ -71,11 +72,11 @@ import {
 
 describe("checkBilingualPairing — README pairing logic (guard 2)", () => {
   test("both READMEs changed passes", () => {
-    expect(checkBilingualPairing(["README.md", "README_CN.md", "docs/cli.md"])).toEqual([]);
+    expect(checkBilingualPairing(["README.md", "README_CN.md", "docs/commands.md"])).toEqual([]);
   });
 
   test("neither README changed passes", () => {
-    expect(checkBilingualPairing(["docs/cli.md", "scripts/drift-lint.ts"])).toEqual([]);
+    expect(checkBilingualPairing(["docs/commands.md", "scripts/drift-lint.ts"])).toEqual([]);
   });
 
   test("empty change list passes", () => {

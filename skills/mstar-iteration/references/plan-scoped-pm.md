@@ -3,7 +3,7 @@
 **Single home for the scoped route.** This file owns: accepted addressing forms, scoped boot, the plan-local driving loop, the scoped stop, and the coordinator command sequence. It does **not** own field/schema tables, executable flag syntax, or Assignment header templates.
 
 - Command frontmatter/argument surface → **`commands/iteration-drive.md`**
-- Executable flags, exit codes, JSON envelopes → **`docs/cli.md`**（CLI owner）
+- Executable flags, exit codes, JSON envelopes → **`mstar-use-cli`**（CLI owner）
 - `coordination` / session / handoff / revision fields and row/register ownership → **`mstar-artifacts/references/status-and-residuals.md`**（sole runtime schema home）
 - Portable primary Assignment header → **`mstar-roles/references/project-manager/dispatch-and-assignment.md`**
 - Dispatch mechanics, isolation gates → **`mstar-dispatch-gates`**, **`mstar-sdd`**, **`mstar-branch-worktree`**

@@ -18,7 +18,7 @@ What lives elsewhere: field schemas, snapshot shape and lifecycle semantics belo
 | Session | Verbs |
 |---|---|
 | plan session | `mstar plan show`, `mstar plan progress`, `mstar plan residual-add`, `mstar plan residual-close`, `mstar plan handoff` |
-| coordinator session | `mstar plan prepare`, `mstar plan accept`, `mstar plan return`, `mstar plan integration-start`, `mstar plan integration-accept`, `mstar plan complete`, `mstar plan reconcile`, `mstar workflow show-prepare`, `mstar workflow amend-prepare`, `mstar workflow evidence` |
+| coordinator session | `mstar plan prepare`, `mstar plan accept`, `mstar plan return`, `mstar plan integration-start`, `mstar plan integration-accept`, `mstar plan complete`, `mstar plan reconcile`, `mstar plan repair-delivery-source`, `mstar workflow show-prepare`, `mstar workflow amend-prepare`, `mstar workflow evidence` |
 | either (bootstrap / read / claim) | `mstar plan bind` |
 
 A plan session mutates only its own row and its own register bucket. It never prepares itself: registration of the reviewed Assignment is the coordinator's act, and it is what releases the row's dependencies.
@@ -62,17 +62,25 @@ All plan and workflow refusals are mutation-free: the authoritative bytes are un
 
 ## Completion sequence
 
-The plan session hands off; the coordinator drives the rest. Each arrow is one command, each command needs a token read from the immediately preceding state, and Git is the operator's action, never a side effect of a verb.
+The plan session hands off; the coordinator drives the rest. The engine selects **one of two routes** from the workflow's own type and delivery kind — never inferred from anchors that happen to be absent.
+
+| Route | When | After `accept` | What `complete` does |
+|---|---|---|---|
+| **Iteration** | `type: iteration`, or any non-standalone workflow | `integration-start` → the operator's pinned `git merge --no-ff` in the recorded integration checkout → `integration-accept` → `complete` | Done, the handoff completed, and **both** leases released — the row's execution lease and the workflow's integration-merge lease |
+| **Standalone development** | `type: plan` with `delivery_kind: development` owning exactly one row | `complete` straight from the accepted handoff — no integration verb, no merge record | Done and the handoff completed with no integration record; only the row's execution lease is released, and the workflow stays running until its delivery evidence and the close |
+
+Common prefix: **handoff** (plan side, leaves the row InReview) → **accept** (ownership transfer, not integration acceptance). Each command needs a token read from the immediately preceding state, and Git is the operator's action, never a side effect of a verb.
 
 | Step | Session | What it records | Notes |
 |---|---|---|---|
 | handoff | plan | the immutable pinned handoff; the row stays InReview | the plan's finish line; execution ownership has not moved yet |
 | accept | coordinator | execution ownership transfers to the coordinator | no merge happens here; this is ownership, not integration acceptance |
-| integration-start | coordinator | the integration attempt and its pinned base, before any Git runs | reads the clean recorded integration checkout and refuses a foreign merge lease; the attempt is pinned *before* Git so a crash mid-merge stays reconcilable |
-| merge | operator | the merge itself | an explicit pinned merge in the recorded integration worktree |
-| integration-accept | coordinator | verified evidence of the pinned Git result | never runs a merge and never completes the row |
-| complete | coordinator | Done, atomically, and both leases released | one write for the state and the leases |
-| return / reconcile | coordinator | a failed attempt / crash recovery | `return` restores the plan owner; `reconcile` observes Git and finishes the attempt without a second merge, or refuses and keeps state |
+| integration-start | coordinator | the integration attempt and its pinned base, before any Git runs | **iteration route only**; reads the clean recorded integration checkout and refuses a foreign merge lease — the attempt is pinned *before* Git so a crash mid-merge stays reconcilable |
+| merge | operator | the merge itself | **iteration route only**; an explicit pinned merge in the recorded integration worktree |
+| integration-accept | coordinator | verified evidence of the pinned Git result | **iteration route only**; never runs a merge and never completes the row |
+| complete | coordinator | Done, atomically | the last step of **either** route: it releases only the row's execution lease on the standalone route, and both leases on the iteration route |
+| return / reconcile | coordinator | a failed attempt / crash recovery | `return` restores the plan owner; `reconcile` observes Git and finishes the iteration attempt without a second merge — on the standalone route it only replays an already-completed row |
+| repair-delivery-source | coordinator | a corrected `branch.source` only | **not a normal step**: a pre-fix-snapshot exception for a registered source that wrongly equals the target, derived from the sealed accepted handoff, never replayable |
 
 A retried start never moves the recorded base; that is what makes the pinned attempt, not the retry, the unit of recovery.
 
@@ -95,11 +103,15 @@ mstar plan progress --session <plan-session.json> --file progress.json --expect 
 mstar plan residual-add --session <plan-session.json> --file entries.json --expect <revision> --expect-register absent --json
 mstar plan handoff --session <plan-session.json> --file handoff.json --expect <revision> --json
 
-# coordinator: ownership, then the pinned integration attempt
+# coordinator: ownership
 mstar plan accept --session <coordinator-session.json> --plan plan-a --handoff <live-handoff-id> --expect <revision> --json
+
+# iteration route only: pin the attempt, merge, verify the pinned result
 mstar plan integration-start --session <coordinator-session.json> --plan plan-a --handoff <live-handoff-id> --expect <revision> --json
 git merge --no-ff --no-edit <source-sha>
 mstar plan integration-accept --session <coordinator-session.json> --plan plan-a --handoff <live-handoff-id> --expect <revision> --json
+
+# both routes end here; a standalone development plan reaches this line straight from accept
 mstar plan complete --session <coordinator-session.json> --plan plan-a --handoff <live-handoff-id> --expect <revision> --json
 ```
 
@@ -135,6 +147,7 @@ A read that reports `allowed: false` is an answer, not a failure: fix the blocke
 - Registration is create-only: it writes the workflow snapshot and the root register entry under one lock, recording the owned plan row, the project, the declared delivery kind and the branch anchors. The delivery kind is **declared, never inferred**, and each kind requires its own evidence declaration at registration. Re-running after a crash between the two writes recovers: existing snapshot bytes are kept and only the root entry is written.
 - Delivery evidence is recorded stage by stage: a payload is merged into the snapshot's delivery block under the snapshot lock. The PR identity is recorded once and pinned to the registered branch anchors; a conflicting anchor is refused rather than overwritten. Declaring the kind of an older kind-less snapshot is a one-time act and refuses a terminal snapshot.
 - Both verbs are authorized like the close: a coordinated workflow's document is written only for its own bound coordinator envelope; otherwise the call refuses without changing bytes.
+- A registered `branch.source` cannot be amended by ordinary evidence: the evidence verb merges only the delivery block, and the one-time kind declaration refuses a value that conflicts with an already-registered anchor. The single exception is the legacy repair verb, which replaces **only** `branch.source` on a pre-fix snapshot whose registered source wrongly equals its target, derived from the sealed accepted handoff — it records no Done, no delivery success and no remote merge, and it is not a general anchor editor.
 - The close consults this evidence *before* writing the terminal state, so a gate and the close can never disagree. Close order, refusal conditions and the root unregister: `references/status-and-registers.md`.
 
 ## Exit codes

@@ -535,7 +535,7 @@ export function buildCliCommandInventory(cliSrc: string): {
   return { cliCommands, failures };
 }
 
-/** Audit `<category>` keyword-table row — migrated from docs/cli.md. */
+/** Audit `<category>` keyword-table row — owned by the `mstar-use-cli` skill. */
 export const AUDIT_CATEGORY_DOC = "skills/mstar-use-cli/references/checks-and-lints.md";
 
 /** Markdown tree scanned by Guard 1 forward beyond Engine-check callouts. */

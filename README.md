@@ -79,7 +79,7 @@ Codex agent-link repair and named-role verification: [Codex installation](INSTAL
 
 The repo ships a portable **Agent Plugins v1.0.0** manifest (`plugin.json`) at its root; `skills/` is the Agent Skills component — verify it with `npx @mstar-harness/cli plugin validate`.
 
-Manual install / path layout: [`INSTALL.md`](INSTALL.md). CLI flags: [`docs/cli.md`](docs/cli.md).
+Manual install / path layout: [`INSTALL.md`](INSTALL.md). CLI flags: the **`mstar-use-cli`** skill.
 
 ## Use
 
@@ -123,7 +123,7 @@ The scoped session binds exactly one plan, drives its tasks through the normal p
 
 The second terminal is transport, not a dependency: any terminal works, and a multiplexer such as Herdr or tmux is optional — nothing reads pane state, TTL or terminal labels for ownership.
 
-The coordinator's half — `prepare`, then `accept` → `integration-start` → pinned merge → `integration-accept` → `complete`, with `reconcile` as the crash path — runs the `mstar plan` verbs; flags, JSON envelopes and exit codes: [`docs/cli.md`](docs/cli.md#mstar-harness-plan).
+The coordinator's half — `prepare`, then `accept` → `integration-start` → pinned merge → `integration-accept` → `complete`, with `reconcile` as the crash path — runs the `mstar plan` verbs; flags, JSON envelopes and exit codes: **`mstar-use-cli`** → `references/plan-and-workflow.md`.
 
 Recipe: [`docs/commands.md`](docs/commands.md#iteration-drive).
 
