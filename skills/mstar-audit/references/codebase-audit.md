@@ -48,7 +48,15 @@ Plan-file layout, Status block, commit stamp, and handoff follow the shared cont
 
 **Excerpts come from your own reads, never from a subagent's report.** Before writing each plan, open every cited file yourself — subagent line numbers and attributions are leads, not facts.
 
-If an audit directory from a previous run exists, **reconcile, don't duplicate**: read its `README.md`, keep numbering monotonic, skip findings already planned or listed as rejected, mark superseded plans stale. When finalizing the index, write the **Coverage** section per § Output format — and mind the scaffold ordering documented there, since `mstar audit scaffold` rebuilds the README and does not preserve Coverage.
+If an audit directory from a previous run exists, read its `README.md` before planning this run and carry the prior record over under five rules:
+
+1. **Prior `covered` is priority input, not fresh evidence.** Unchanged prior evidence may shape where this run looks, but a unit not re-examined this run is `deferred` with an explicit reference to the prior evidence and a reason — never marked `covered` this run. Do not relabel earlier checks as current work.
+2. **Prior `deferred`, `blocked` and `out_of_scope` units become current work when now in scope.** They are priority input for this run, never suppression keys.
+3. **A prior rejected claim suppresses only the exact claim with unchanged relevant evidence and control assumptions.** It never exempts the whole unit; changed evidence reopens the question.
+4. **Prior quick/scoped/truncated runs contribute only their recorded evidence and gaps; partial or missing prior coverage implies no clean remainder** — missing coverage means unknown, not clean.
+5. **Match finding fingerprints where present.** A re-considered claim keeps its fingerprint identity even if its disposition changes; legacy findings without fingerprints are compared by evidence and root cause, and never assigned a fabricated identity. The scaffold keeps numbering monotonic and never upserts or re-sorts prior rows; new plans get the next numbers in caller order.
+
+When finalizing the index, write the **Coverage** section per § Output format — and mind the scaffold ordering documented there, since `mstar audit scaffold` rebuilds the README and does not preserve Coverage.
 
 Plans generated from `simplify` / removal findings must carry **behavior-preservation verification gates**: existing tests pass *unmodified*, and characterization tests come first where coverage is thin (playbook §4). When the simplification would touch more than ~500 lines, recommend a codemod/automation pass rather than manual edits.
 
@@ -63,6 +71,8 @@ Plans generated from `simplify` / removal findings must carry **behavior-preserv
 
 | # | Finding | Category | Impact | Effort | Risk | Confidence | Evidence |
 |---|---------|----------|--------|--------|------|------------|----------|
+
+The base table has the seven columns above; `Impact` is always prose — what goes wrong and who pays — never a numeric or category label. When at least one displayed finding carries a fingerprint, an optional `Fingerprint` column is appended after `Evidence`; when at least one carries a structured severity, the three columns `Likelihood | Severity impact | Severity` are appended after it (matching `finding-format.md` § Rendering consequences: `# | Finding | Category | Impact | Effort | Risk | Confidence | Evidence [| Fingerprint][| Likelihood | Severity impact | Severity]`). These columns are table-wide: a row without the metadata shows `—` in the new cells, and a table where no row carries it keeps the base header exactly. A fingerprint is optional author-chosen identity per `finding-format.md`; the scaffold never invents one and never re-sorts rows by it.
 
 ## Direction (separate)
 
@@ -83,6 +93,8 @@ Coverage is partial. Not examined: export tenant scope. Unresolved: webhook depl
 [MEDIUM-confidence or runtime-dependent leads — mainly from the Security pass (`references/security-review.md`). One line each; these are not findings and get no plan until verified:]
 
 - <lead>: what to verify, how (the exact check), evidence so far (`file:line`).
+
+**Finding / lead exclusivity.** The same causal claim is either a reportable finding or a Needs-verification lead in the current report — never both. This is a semantic judgment by the author, over the causal claim, not over titles: similar wording is not proof of identity, and different wording does not prove two claims. Nothing enforces this mechanically; the lead carrier has no fingerprint field (a lead's prose may cite one, which the scaffold does not parse). A blocked Coverage row may link a lead, but that does not promote the lead to a finding; a runtime-dependent security claim stays here as requires-runtime-verification until resolved.
 
 ## Hardening & checked notes
 
