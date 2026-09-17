@@ -947,6 +947,49 @@ describe("recordWorkflowDelivery — authorized delivery-evidence recording (sea
     });
   });
 
+  test("refuses delivery-tail evidence when any owned plan row is not Done (write-time gate, §3)", async () => {
+    const { dir, path } = fixture({ plans: [legacyRow({ status: "Todo", done_at: undefined })] });
+    const before = readFileSync(path, "utf8");
+    await expect(
+      recordWorkflowDelivery(id, dir, { evidence: { compound: { outcome: "created" } }, at: "2026-09-12T01:00:00Z" }),
+    ).rejects.toThrow(/PHASE6_PLAN_ROW_NOT_DONE/);
+    expect(readFileSync(path, "utf8")).toBe(before);
+  });
+
+  test("records delivery-tail evidence once every owned plan row is Done", async () => {
+    const { dir, path } = fixture({ plans: [legacyRow({ status: "Done" })] });
+    const result = await recordWorkflowDelivery(id, dir, {
+      evidence: { compound: { outcome: "created" } },
+      at: "2026-09-12T01:00:00Z",
+    });
+    expect(result.written).toBe(true);
+    expect(JSON.parse(readFileSync(path, "utf8")).delivery).toEqual({ compound: { outcome: "created" } });
+  });
+
+  test("grandfathering: pre-existing delivery evidence with non-Done rows is untouched and close consultation is unchanged", async () => {
+    const { dir, path } = fixture({
+      plans: [legacyRow({ status: "Todo", done_at: undefined })],
+      delivery: registeredDelivery.delivery,
+    });
+    const before = readFileSync(path, "utf8");
+    const again = await recordWorkflowDelivery(id, dir, { evidence: registeredDelivery.delivery, at: "2026-09-13T01:00:00Z" });
+    expect(again.written).toBe(false);
+    expect(readFileSync(path, "utf8")).toBe(before);
+    await expect(
+      recordWorkflowDelivery(id, dir, { evidence: { compound: { outcome: "updated" } } }),
+    ).rejects.toThrow(/PHASE6_PLAN_ROW_NOT_DONE/);
+    expect(readFileSync(path, "utf8")).toBe(before);
+    await expect(closeWorkflow(id, dir, { endedAt: "2026-09-12" })).rejects.toThrow(/every plan row must be Done/);
+    const onDisk = JSON.parse(before) as Record<string, unknown>;
+    const gate = evaluatePostMergeClose(
+      { ...onDisk, status: "completed", ended_at: "2026-09-12" },
+      { version: 2, updated_at: "2026-09-12", workflows: [] },
+    );
+    expect(gate.ok).toBe(false);
+    expect(gate.violations.map((v) => v.code)).toContain("PHASE6_PLAN_ROW_NOT_DONE");
+    expect(gate.violations.map((v) => v.code)).not.toContain("PHASE6_DELIVERY_EVIDENCE_INCOMPLETE");
+  });
+
   test("recording the complete evidence makes the close succeed end to end", async () => {
     const { dir, path } = fixture({ plans: [legacyRow({ status: "Done" })] });
     // The close refuses first: evidence has not been collected yet.
