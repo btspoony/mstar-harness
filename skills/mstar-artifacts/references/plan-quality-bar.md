@@ -85,6 +85,10 @@ Each task fits **one focused implementer round** — the round closes the task's
 - **Split strategies** — apply the review split shapes (`mstar-audit/references/pr-review.md` § Sizing & change shape) to task boundaries, each slice with explicit interfaces and independent proof: stack · by file group · horizontal (shared code first) · vertical (full-stack slices). They shape task boundaries; PR line-count thresholds stay review-owned.
 - **Verification is not the shock absorber** — **Budget pressure MUST NOT shorten or waive any assigned scoped verification.** If the round cannot close, stop and report for split/re-dispatch instead of cutting checks.
 
+### 8. Engine lifecycle ownership
+
+**Who advances this row's engine state, at which step, and what evidence records each transition?** The plan answers it explicitly: the scoped verb sequence it will be driven through, the delivery-tail evidence order (`compound` disposition → PR identity → verified merge, recorded **after** the row is `Done`), and — when the snapshot declares no integration anchors — that the row stops at an accepted handoff rather than promising a terminal state it cannot reach. Semantics → `mstar-artifacts/references/plan-workflow-lifecycle-contract.md`; PM step sequence → `mstar-roles/references/project-manager/plan-management.md`.
+
 ## Relationship to existing plan elements
 
 | This quality bar | Existing mstar element |
@@ -96,6 +100,7 @@ Each task fits **one focused implementer round** — the round closes the task's
 | Drift check | SDD `BASE_SHA` — generalized to all plans |
 | Done criteria | `plan.main.md` per-step checkboxes — elevated to machine-checkable |
 | Task shape / session fit | `plan.main.md` per-task **Effort (agent-oriented)** / **Split point** slots + `mstar-phase-gates` capacity quick-check — one-round Files-plus-gates closure per task |
+| Engine lifecycle ownership | `plan.main.md` **Engine lifecycle** block — scoped verb sequence, delivery-tail evidence order, and the no-integration-anchors conditional |
 
 ## When to apply
 

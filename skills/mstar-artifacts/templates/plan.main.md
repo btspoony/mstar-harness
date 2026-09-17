@@ -16,6 +16,16 @@
 
 [Project requirements — version floors, naming, exact values — copied verbatim from spec. Every task includes them. Verification scope follows `mstar-harness-core` § 定向执行与验证边界: only changed behavior and direct contracts; no local full suites without explicit user permission. Never assign real-browser/device/installed-deployment E2E evidence as a task or a gate of a development plan; each layer proves itself with its own unit/integration tests. Real-environment verification lives only in a separately requested `mstar-e2e` workflow, whose named scenarios are that workflow's own plan rows.]
 
+## Engine lifecycle
+
+Who advances this plan row's engine state, and what records each transition:
+
+- **Scoped sequence** — one engine verb per transition; never a hand-edited snapshot: `bind --coordinator` → `prepare` → `bind` → `progress` → `handoff` → `accept` → `integration-start` → Git merge → `integration-accept` → `complete`.
+- **Evidence order** — `compound` disposition, PR identity and merge evidence are recorded **after** the row is `Done`; the engine refuses those writes while any plan row is not `Done`. The delivery tail runs on a completed row, never ahead of it.
+- **Snapshot declares no integration anchors** → the row cannot reach `Done` today: stop at a submitted/accepted handoff, report the blockage to the coordinator, and never fabricate a terminal state (`Done`, `completed`, PR identity, merge record).
+
+Semantics and failure behavior → `mstar-artifacts/references/plan-workflow-lifecycle-contract.md`; PM step sequence → `mstar-roles/references/project-manager/plan-management.md`.
+
 ---
 
 ### Task 1: [Component Name]
