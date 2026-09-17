@@ -56,7 +56,6 @@ import {
   validatePreparedCoordination,
   validateRowCoordination,
   withProtectedWrite,
-  type RowValidationRoute,
   type EvidenceRef,
   type HandoffIntegration,
   type HandoffState,
@@ -96,6 +95,7 @@ import { getArtifactStore, resolveArtifactPath, type ArtifactRef, type ArtifactS
 import { isDistinctCheckout, readMainWorktree, type MainWorktreeInfo } from "./worktree.js";
 import {
   isStandaloneDevelopmentWorkflow,
+  rowValidationRoute,
   readWorkflowSnapshot,
   validateWorkflowSnapshot,
   WORKFLOW_TERMINAL_STATUSES,
@@ -3487,15 +3487,8 @@ async function mutateIntegrationAccept(
 }
 
 
-function rowValidationRoute(context: RowContext): RowValidationRoute {
-  if (isStandaloneDevelopmentWorkflow(context.snapshot) && context.snapshot.plans[0]?.id === context.scope.planId) {
-    return "standalone-development";
-  }
-  return "integration";
-}
-
 function validateRowCoordinationInContext(context: RowContext, coordination: RowCoordination, what: string): void {
-  assertViolationFree(validateRowCoordination(coordination, what, rowValidationRoute(context)), what);
+  assertViolationFree(validateRowCoordination(coordination, what, rowValidationRoute(context.snapshot, context.row)), what);
 }
 
 function standaloneDeliveryAnchors(snapshot: WorkflowSnapshot, planId: string): { source: string; target: string } {
@@ -4166,6 +4159,9 @@ async function mutateComplete(
     mutate: (context) => {
       const handoff = requireHandoff(context, scope.planId, request.handoffId);
       if (isStandaloneDevelopmentWorkflow(context.snapshot)) {
+        (globalThis as { __mstarCompleteStandaloneMutateGap__?: () => void }).__mstarCompleteStandaloneMutateGap__?.();
+        const anchors = standaloneDeliveryAnchors(context.snapshot, scope.planId);
+        assertStandaloneSourceGitProof(scope, handoff, anchors.source, "complete");
         return completeStandaloneRow(context, scope, handoff);
       }
       const integration = requireIntegration(handoff, scope.planId);

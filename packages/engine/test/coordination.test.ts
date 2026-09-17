@@ -1740,6 +1740,22 @@ describe("standalone-development-completion", () => {
     expect(readFileSync(dirty.snapshotPath).equals(beforeDirty)).toBe(true);
   }, 30000);
 
+  test("a standalone source checkout moved after precheck never completes with stale git evidence", async () => {
+    const fixture = await acceptedStandaloneFixture();
+    const before = readFileSync(fixture.snapshotPath);
+    const gap = globalThis as { __mstarCompleteStandaloneMutateGap__?: () => void };
+    gap.__mstarCompleteStandaloneMutateGap__ = () => {
+      git(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "advance"], fixture.worktreePath);
+    };
+    try {
+      expect(await errorCodeOf(() => coordinatorCall(fixture, PLAN_ID, { kind: "complete" }))).toBe("coordination.git-proof");
+      expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
+      expect(planRowOf(fixture, PLAN_ID).status).toBe("InReview");
+    } finally {
+      delete gap.__mstarCompleteStandaloneMutateGap__;
+    }
+  }, 30000);
+
   test("reconcile refuses malformed standalone completed handoff missing acceptance seals", async () => {
     const fixture = await acceptedStandaloneFixture();
     await coordinatorCall(fixture, PLAN_ID, { kind: "complete" });

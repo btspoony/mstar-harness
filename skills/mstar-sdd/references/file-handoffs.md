@@ -104,8 +104,6 @@ The fresh task reviewer writes its full report to `task-N-review.md` — always,
 
 PM reads that named report before marking the task complete, and the ledger entry below records it. Partial findings and the `Task quality` verdict earned for the reviewed scope stay valid; assigned review scope left uncovered does **not**: PM routes the remaining scope through a fresh/tightened reviewer dispatch and does not append task-complete or release dependent work. A coverage gap is never converted into an invented code defect, and an `Approved` earned for checked scope is never overwritten.
 
-**Never use `HEAD~1` as BASE** — multi-commit tasks truncate.
-
 ## Bound child launch (CLI-launchable children)
 
 **PM-only serialized launch:** when the implementer is a CLI command rather than a hosted subagent, PM holds the serialized context operation through context validation and child spawn, using the launch Assignment's fixed checkout/branch. Do not rotate context until the launch resolves. Hosted leaves never use this entry for their assigned checks; they run allowed commands directly from their verified assigned feature workdir and branch:

@@ -535,7 +535,7 @@ var WORKFLOW_COMPOUND_OUTCOMES = ["created", "updated", "skipped"];
 function isStandaloneDevelopmentWorkflow(snapshot) {
   return snapshot.type === "plan" && snapshot.delivery_kind === "development" && Array.isArray(snapshot.plans) && snapshot.plans.length === 1;
 }
-function rowValidationRouteForSnapshot(snapshot, row) {
+function rowValidationRoute(snapshot, row) {
   if (isStandaloneDevelopmentWorkflow(snapshot) && snapshot.plans[0]?.id === row.id) {
     return "standalone-development";
   }
@@ -689,7 +689,7 @@ function validateWorkflowSnapshot(doc) {
       }
       if (isPlainObject2(row) && row.coordination !== undefined) {
         const planRow = row;
-        const route = rowValidationRouteForSnapshot(snapshotDoc, planRow);
+        const route = rowValidationRoute(snapshotDoc, planRow);
         violations.push(...validateRowCoordination(row.coordination, `plans[${String(row.id)}].coordination`, route));
         violations.push(...validateStandaloneCompletedCoherence(snapshotDoc, planRow));
       }
