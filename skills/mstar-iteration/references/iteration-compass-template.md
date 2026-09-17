@@ -21,6 +21,22 @@ plans: []
 - <spec point 1>
 - <spec point 2>
 
+## Decisions
+
+> Settled direction-lock items — the record a dispatched role reads instead of re-deriving context from a conversation it never saw.
+
+| # | Decision | Rationale | Source |
+|---|----------|-----------|--------|
+| D1 | <settled decision> | <why it was settled this way> | user instruction / grill-me / autonomous ranking |
+
+## Open Questions
+
+> Unresolved items, each owned by a Phase 1 chain role and cleared before the §1.6 lock. Write `None` in place of the table when there are no open questions.
+
+| # | Question | Owner | Blocking? |
+|---|----------|-------|-----------|
+| Q1 | <open question> | product-manager / architect / writing-specialist / PM | Yes / No |
+
 ## Plans
 
 | plan_id | Name | Status | Notes |
@@ -126,6 +142,8 @@ Notes:
 | `## Milestones` | Recommended | Phase 1, Phase 2 (update) |
 | `## Acceptance Criteria` | Yes | Phase 1 |
 | `## Non-Goals` | Yes | Phase 1 |
+| `## Decisions` | Yes | Phase 1 draft (appended in Phase 2); settled items with rationale and source |
+| `## Open Questions` | Yes（`None` allowed） | Phase 1 draft; each item carries an owner from the Phase 1 chain and is cleared before the §1.6 lock |
 | `## Roadmap Position` | **Yes** | Phase 1（必填节，非散落于 general context prose）；Phase 3 §3.3（current iteration → `delivered`） |
 | `## Risk Register` | Optional | Phase 1, Phase 2 (update) |
 | Iteration package (`guides/` / `specs/`) | Optional | Phase 1 §1.5.5; root index one row → `{ITERATION_DIR}/README.md` |

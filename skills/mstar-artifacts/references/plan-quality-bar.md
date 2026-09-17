@@ -8,6 +8,19 @@ SDD implementers start with a fresh session — they have not seen the Prepare c
 
 The plan is the spec. Everything the executor needs must be in the file or reachable from a file path it names.
 
+## Prepare-writing bar (Phase 1 editing roles)
+
+The Phase 1 editing roles (`product-manager` → `architect` → `writing-specialist`) carry the mirror-image obligation of the principle above: **they are the ones who write the context carrier.** The PM draft and the compass are the artifact a fresh session reads, and a dispatched Phase 1 role works from disk — never from the PM's conversation. A decision that lives only in that conversation is invisible to the role, which will re-derive it wrong.
+
+So the draft is held to the same self-containment standard as a plan:
+
+- **Context first, depth second.** Locked direction, settled decisions, open questions with owners, non-goal rationale, constraint sources, acceptance seed, branch policy. Coarse detail is legitimate; an *unmarked* hole is not — it has no owner and no place to be discharged.
+- **Every unfinished part carries its owner.** The marker grammar is defined once, in `mstar-iteration/references/phase-1-prepare.md` §1.3 (`TODO(owner: …)`); this file cites it and does not restate it.
+- **An editing role discharges the markers naming it** in its own edit pass, re-owning to `PM` whatever it cannot close, and reports the count.
+- **No marker survives the lock.** Cleared (or explicitly re-owned to `PM` and raised to the user) before compass `status: locked` — never silently dropped.
+
+The unowned-`TBD` ban is unchanged at every stage.
+
 ## Quality checklist
 
 Before a plan is locked, verify every item:

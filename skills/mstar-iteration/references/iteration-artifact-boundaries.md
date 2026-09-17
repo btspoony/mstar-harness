@@ -78,11 +78,13 @@ iteration-close (§3.2)
 
 ## §1.6 各角色编辑范围
 
-| 角色 | 必须编辑 | 禁止 |
-|------|----------|------|
-| **product-manager** | compass、plans、`{SPECS_DIR}/`、`{ITERATION_DIR}/<iteration-id>/`（guides/specs） | `{KNOWLEDGE_DIR}/` **新增**；迭代草案写入 `{SPECS_DIR}/` |
-| **architect** | 同上 + package `specs/` 技术向 | 同上；在 `{SPECS_DIR}/` 堆实施踩坑 |
-| **writing-specialist** | 当轮文档 + `{SPECS_DIR}/` corpus hygiene + 既有 knowledge 卫生 | 代替 compound **提升**；跳过 specs 全库审查 |
+| 角色 | 必须编辑 | 禁止 | Draft markers it must clear |
+|------|----------|------|------------------------------|
+| **product-manager** | compass、plans、`{SPECS_DIR}/`、`{ITERATION_DIR}/<iteration-id>/`（guides/specs） | `{KNOWLEDGE_DIR}/` **新增**；迭代草案写入 `{SPECS_DIR}/` | 产品范围 / 优先级 / 验收类 marker |
+| **architect** | 同上 + package `specs/` 技术向 | 同上；在 `{SPECS_DIR}/` 堆实施踩坑 | 架构 / 契约 / 技术设计类 marker |
+| **writing-specialist** | 当轮文档 + `{SPECS_DIR}/` corpus hygiene + 既有 knowledge 卫生 | 代替 compound **提升**；跳过 specs 全库审查 | 行文与 corpus hygiene 类 marker，外加收口「无 marker 残留」核对 |
+
+> 新增列是**清除义务**（marker 语法与 owner 词汇 → **`phase-1-prepare.md`** §1.3；义务正文 → §1.6），**不**改变上方「必须编辑」的写入范围。
 
 Phase 2 执行期：各角色可继续向 **`<iteration-id>/`** 追加 guides/specs；**仍不**直写 `{KNOWLEDGE_DIR}/`。
 
