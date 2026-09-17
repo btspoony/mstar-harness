@@ -17,7 +17,7 @@ So the draft is held to the same self-containment standard as a plan:
 - **Context first, depth second.** Locked direction, settled decisions, open questions with owners, non-goal rationale, constraint sources, acceptance seed, branch policy. Coarse detail is legitimate; an *unmarked* hole is not — it has no owner and no place to be discharged.
 - **Every unfinished part carries its owner.** The marker grammar is defined once, in `mstar-iteration/references/phase-1-prepare.md` §1.3 (`TODO(owner: …)`); this file cites it and does not restate it.
 - **An editing role discharges the markers naming it** in its own edit pass, re-owning to `PM` whatever it cannot close, and reports the count.
-- **No marker survives the lock.** Cleared (or explicitly re-owned to `PM` and raised to the user) before compass `status: locked` — never silently dropped.
+- **No role-owned marker survives the compass lock.** Cleared (or explicitly re-owned to `PM` and raised to the user) before compass `status: locked` — never silently dropped.
 
 The unowned-`TBD` ban is unchanged at every stage.
 

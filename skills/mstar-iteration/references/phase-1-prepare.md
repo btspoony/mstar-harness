@@ -72,6 +72,18 @@ plans: []
 ## Scope
 <本迭代要锁定的 spec 点>
 
+## Decisions
+
+| # | Decision | Rationale | Source |
+|---|----------|-----------|--------|
+| D1 | <已决事项> | <依据> | user instruction / grill-me / autonomous ranking |
+
+## Open Questions
+
+| # | Question | Owner | Blocking? |
+|---|----------|-------|-----------|
+| Q1 | <未决事项> | product-manager / architect / writing-specialist / PM | Yes / No |
+
 ## Plans
 
 | plan_id | Name | Status | Notes |
