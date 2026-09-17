@@ -68,6 +68,7 @@ import {
   readMainWorktree,
   readWorkflowSnapshot,
   recordWorkflowDelivery,
+  registerIterationWorkflow,
   registerPlanWorkflow,
   replaceCoordinatedArtifact,
   resolveHarnessDir,
@@ -2282,7 +2283,7 @@ registerSddEvidenceCommands(sddCommand);
 
 const iterationCommand = program
   .command("iteration")
-  .description("iteration phase-gate + push-cadence checks (engine-backed)");
+  .description("iteration phase-gate + push-cadence checks and workflow registration (engine-backed)");
 
 /** Print one §3.1 entry / §3.5 exit checklist gate (OK or FAIL + violations). */
 function printChecklist(label: string, gate: GateResult): void {
@@ -2379,6 +2380,125 @@ iterationCommand
     }
     process.exitCode = 1;
   });
+
+/**
+ * `mstar iteration register` — seam S1 sibling of `mstar workflow register`:
+ * a thin wrapper over engine `registerIterationWorkflow` (create-only
+ * `type: iteration` snapshot + root entry under one root lock, with
+ * byte-preserving orphan recovery). Transport shape errors (missing/blank
+ * flags, malformed/non-object `--row` JSON) are usage exit 2; engine
+ * domain refusals (duplicate ids, invalid fields, hostile workflow id,
+ * stale/malformed roots) are exit 1. The verb-local `exitOverride()` routes
+ * unknown flags / missing option values / excess arguments through the
+ * shared `CommanderError` → exit 2 handler while help stays exit 0.
+ */
+iterationCommand
+  .command("register")
+  .exitOverride()
+  .description(
+    "Register an iteration workflow (seam S1 sibling of `workflow register`, engine-backed): " +
+      "create-only `type: iteration` snapshot + {HARNESS_DIR}/status.json root entry under one lock. " +
+      "Records the compass ref, the three branch anchors (--branch-base/--branch-integration/--branch-target) " +
+      "and Todo plan rows (--row <json>, repeatable {id,title,file} \u2014 registration never authorizes implementation). " +
+      "Re-running after a crash between snapshot creation and registration recovers: the existing snapshot " +
+      "bytes are kept and only the root entry is written. Exit 0 success, 1 engine/IO refusal (no partial " +
+      "activation), 2 usage",
+  )
+  .option("--workflow <id>", "Workflow id (single safe path component)")
+  .option("--compass-ref <path>", "Harness-relative compass ref recorded on the snapshot (e.g. iterations/<id>/delivery-compass.md)")
+  .option("--branch-base <branch>", "Iteration base branch anchor")
+  .option("--branch-integration <branch>", "Iteration integration branch anchor")
+  .option("--branch-target <branch>", "Iteration target branch anchor")
+  .option("--row <json>", "Plan row JSON object {id,title,file} \u2014 repeatable, order preserved", collectEntries, [])
+  .option("--project <id>", "Project register id recorded on the snapshot")
+  .option("--started-at <timestamp>", "Registration timestamp (YYYY-MM-DD or RFC3339; default: now)")
+  .option("--harness <path>", "Harness dir override (default: resolved control {HARNESS_DIR})")
+  .action(
+    async (options: {
+      workflow?: string;
+      compassRef?: string;
+      branchBase?: string;
+      branchIntegration?: string;
+      branchTarget?: string;
+      row?: string[];
+      project?: string;
+      startedAt?: string;
+      harness?: string;
+    }, command: Command) => {
+      try {
+        const usage =
+          "usage: iteration register --workflow <id> --compass-ref <path> --branch-base <branch> " +
+          "--branch-integration <branch> --branch-target <branch> --row <json> [--row <json> ...] " +
+          "[--project <id>] [--started-at <ts>] [--harness <dir>]";
+        // Excess operands are not variadic here: a positional argument is a
+        // usage error, not silently-ignored input.
+        if (command.args.length > 0) {
+          throw new SddScriptError(`unexpected argument(s): ${command.args.join(", ")}\n${usage}`, 2);
+        }
+        const missing = (
+          [
+            ["--workflow", options.workflow],
+            ["--compass-ref", options.compassRef],
+            ["--branch-base", options.branchBase],
+            ["--branch-integration", options.branchIntegration],
+            ["--branch-target", options.branchTarget],
+          ] as const
+        )
+          .filter(([, value]) => value === undefined || value.trim() === "")
+          .map(([flag]) => flag);
+        const rowsRaw = options.row ?? [];
+        if (rowsRaw.length === 0) missing.push("--row");
+        if (missing.length > 0) {
+          throw new SddScriptError(`missing required option(s): ${missing.join(", ")}\n${usage}`, 2);
+        }
+        // Transport shape is the CLI's refusal (exit 2) — malformed or
+        // non-object row JSON never reaches the engine, whose own field
+        // refusals (missing/blank/duplicate/supplied-status) stay exit 1.
+        const rows = rowsRaw.map((raw, index) => {
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(raw);
+          } catch (error) {
+            throw new SddScriptError(`--row[${index}] is not valid JSON: ${(error as Error).message}\n${usage}`, 2);
+          }
+          if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+            throw new SddScriptError(`--row[${index}] must be a JSON object {id,title,file} \u2014 got ${JSON.stringify(raw)}\n${usage}`, 2);
+          }
+          return parsed as { id: string; title: string; file: string };
+        });
+        // Shared workflow-id guard — the same contract every other
+        // `--workflow <id>` verb applies (uniform exit 1, "invalid workflow id").
+        assertWorkflowId(options.workflow!);
+        const harnessDir = resolveProcessHarnessDir(options.harness);
+        if (!harnessDir) {
+          throw new Error(`harness dir not found from ${process.cwd()} \u2014 pass --harness <path>`);
+        }
+        // Store-root pinning (see `workflow register`): the registration
+        // producer writes through the active ArtifactStore with fail-loud
+        // path agreement — the control harness root resolved above must
+        // ALWAYS be pinned as the store root.
+        setArtifactStore(createFsStore(harnessDir));
+        const result = await registerIterationWorkflow(options.workflow!, {
+          harnessDir,
+          compassRef: options.compassRef!,
+          branch: { base: options.branchBase!, integration: options.branchIntegration!, target: options.branchTarget! },
+          rows,
+          ...(options.project !== undefined ? { project: options.project } : {}),
+          ...(options.startedAt !== undefined ? { startedAt: options.startedAt } : {}),
+        });
+        console.log(
+          pc.green(
+            result.recovered
+              ? `iteration register: OK \u2014 ${result.workflowId} recovered (registration completed for the existing snapshot; its bytes were preserved)`
+              : `iteration register: OK \u2014 ${result.workflowId} registered`,
+          ),
+        );
+        console.log(`  snapshot: ${result.snapshotPath}`);
+      } catch (error) {
+        failScript(error, "iteration register");
+      }
+    },
+  );
 
 const dispatchCommand = program
   .command("dispatch")
