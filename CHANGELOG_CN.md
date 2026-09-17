@@ -6,6 +6,19 @@
 
 ## [Unreleased]
 
+## [3.10.1] - 2026-09-17
+
+### Harness
+
+- 在宿主适配 skill 中新增宿主无关的**宿主钩子锚点**契约——`iteration-entry` / `phase-1-lock` / `phase-2-entry` / `rescheduling-checkpoint`——每个锚点由共享生命周期引用中的标记承载，并按当前宿主引用解析。
+- OMP 宿主引用现按锚点声明此前仅有文档、从未接线的协调器调用，协调器会话会真正执行它们。
+- 清理了四个密度最高的共享文件中残留的宿主名泄漏；被迁出的逐宿主角色绑定字段与引擎作用域细节现落在宿主引用中。
+- 剩余的语料清理登记为 roadmap 目标（`host-seam-corpus-cleanup`）。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 3.10.1**。
+
 ## [3.10.0] - 2026-09-16
 
 ### Harness
