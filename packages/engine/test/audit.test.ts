@@ -910,11 +910,12 @@ describe("validateAuditFindingGates", () => {
     expect(gate.violations.map((v) => v.code)).toContain("audit.finding.fingerprint.grammar");
   });
 
-  test("fingerprint with trailing LF or CR fails the grammar (JS $-anchor hole closed)", () => {
-    for (const fp of ["valid-id\n", "valid-id\r", "valid-id\r\n"]) {
+  test("fingerprint with any trailing line terminator fails the grammar (true end-of-input anchor)", () => {
+    for (const fp of ["valid-id\n", "valid-id\r", "valid-id\r\n", "valid-id\u2028", "valid-id\u2029", "valid-id "]) {
       const gate = validateAuditFindingGates([enrichedFinding({ fingerprint: fp })]);
       expect(gate.violations.map((v) => v.code)).toContain("audit.finding.fingerprint.grammar");
     }
+    // positive control: a clean id still passes
     expect(validateAuditFindingGates([enrichedFinding({ fingerprint: "valid-id" })]).ok).toBe(true);
   });
 
@@ -1020,6 +1021,19 @@ describe("validateAuditFindingGates", () => {
   test("variation-selector-only text is invisible-only → audit.finding.text.invisible", () => {
     for (const vs of ["\uFE0F", "\u{E0100}\u{E01EF}", "\uFE00"]) {
       const gate = validateAuditFindingGates([legacyFinding({ title: vs })]);
+      expect(gate.violations.some((v) => v.code === "audit.finding.text.invisible")).toBe(true);
+    }
+  });
+
+  test("full Default_Ignorable_Code_Point set: newly added ranges are invisible-only", () => {
+    // representative code point from each range the previous table missed
+    for (const cp of ["\u180F", "\u2065", "\u2069", "\u{1BCA0}", "\u{1D173}", "\u{E0080}", "\u{E0FFF}", "\u{E01EF}"]) {
+      const gate = validateAuditFindingGates([legacyFinding({ title: cp })]);
+      expect(gate.violations.some((v) => v.code === "audit.finding.text.invisible")).toBe(true);
+    }
+    // invisible-only rejections for previously covered ranges still hold
+    for (const cp of ["\u00AD", "\u061C", "\u115F", "\u17B4", "\u200B", "\u202E", "\u3164", "\uFEFF", "\uFFA0", "\uFFF8"]) {
+      const gate = validateAuditFindingGates([legacyFinding({ title: cp })]);
       expect(gate.violations.some((v) => v.code === "audit.finding.text.invisible")).toBe(true);
     }
   });

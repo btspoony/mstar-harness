@@ -922,19 +922,22 @@ const hasEnrichedMetadata = (finding: AuditFinding): boolean =>
 // Finding gates — audit-finding-contract.md §§3–6 (deterministic only)
 // ---------------------------------------------------------------------------
 
-/** Fingerprint grammar (§4): source-derived identity token. The lookahead
- * before `$` closes JS's before-trailing-newline end-anchor hole, so a
- * fingerprint ending in LF/CR fails the grammar instead of being rendered
- * into plan metadata. */
-const AUDIT_FINGERPRINT_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]*(?!\n)$/;
+/** Fingerprint grammar (§4): source-derived identity token. The trailing
+ * `(?![\s\S])` is JS's true end-of-input assertion (\z): a bare `$` would
+ * also match before a final CR/LS/PS, letting a value like "valid-id\r"
+ * slip through into plan metadata. */
+const AUDIT_FINGERPRINT_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]*(?![\s\S])/;
 /** Rank ordinal for the §6 ceiling (`overall ≤ impact`). No numeric product. */
 const AUDIT_SEVERITY_ORDER: Record<AuditSeverityRank, number> = { informational: 0, low: 1, medium: 2, high: 3, critical: 4 };
-/** Default_Ignorable_Code_Point approximations (JS has no \p{DI} property):
- * soft hyphen, CGJ, Arabic letter mark, hangul fillers, Mongolian FVS,
- * ZW characters, bidi controls, joiners/deprecated format chars, BOM,
- * halfwidth form, and the Unicode tags/variation-selector planes. */
+/** Default_Ignorable_Code_Point (JS has no \p{DI} property): the exact
+ * Unicode property set — soft hyphen, CGJ, Arabic letter mark, hangul
+ * fillers, Khmer vowel modifiers, Mongolian FVS, ZW characters, bidi
+ * controls, joiners/deprecated/interlinear format chars, Hangul filler,
+ * variation selectors, BOM, halfwidth form, halfwidth junk, CJK compat
+ * ideograph filler, linear-B format, and the full tags/variation-selector
+ * supplementary planes (U+E0000–U+E0FFF covers U+E0100–U+E01EF). */
 const DEFAULT_IGNORABLE_RE =
-  /[\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180E\u200B-\u200F\u202A-\u202E\u2060-\u2064\u206A-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0\uFFF0-\uFFF8\u{E0000}-\u{E007F}\u{E0100}-\u{E01EF}]/u;
+  /[\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180F\u200B-\u200F\u202A-\u202E\u2060-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0\uFFF0-\uFFF8\u{1BCA0}-\u{1BCA3}\u{1D173}-\u{1D17A}\u{E0000}-\u{E0FFF}]/u;
 /** A lone UTF-16 surrogate is invalid anywhere (§3 deterministic predicates). */
 const LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
