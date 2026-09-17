@@ -120,11 +120,11 @@ Codex 角色链接修复与具名子代理验证：[Codex 安装](INSTALL.md#cod
 | `/iteration-drive --workflow <workflow-id> --plan <plan-id>` | 全新 scoped 入口，直接寻址已 prepare 的那一行。 |
 | `/iteration-drive --resume <绝对 session json 路径>` | 显式恢复已绑定的会话——唯一的恢复形态。 |
 
-scoped 会话只绑定一个 plan，按其任务走常规 per-plan 门禁，止于一次可持久化的 **handoff**：该行保持 `InReview`，仅由 coordinator 在验证合并后一次性写入 `Done` 并释放两个 lease。同一 plan 的第二次 fresh 入口会以重复持有被拒绝——只有对原会话的显式 `--resume` 才能继续。其他任何非空参数形态一律 fail closed；无参数则走上方的整迭代路线。
+scoped 会话只绑定一个 plan，按其任务走常规 per-plan 门禁，止于一次可持久化的 **handoff**：该行保持 `InReview`，仅由 coordinator 写入 `Done`——迭代路线是在验证合并之后，standalone development 路线则直接从已接受的 handoff 完成。同一 plan 的第二次 fresh 入口会以重复持有被拒绝——只有对原会话的显式 `--resume` 才能继续。其他任何非空参数形态一律 fail closed；无参数则走上方的整迭代路线。
 
 第二个终端只是传输方式，不是依赖：任意终端均可，Herdr 或 tmux 之类的多路复用器是可选的——所有权不读 pane 状态、TTL 或终端标签。
 
-coordinator 一侧——`prepare`，随后 `accept` → `integration-start` → 固定 pin 的合并 → `integration-accept` → `complete`，崩溃走 `reconcile`——由 `mstar plan` 动词执行；标志、JSON 报文与退出码：**`mstar-use-cli`** → `references/plan-and-workflow.md`。
+coordinator 一侧——`prepare`，随后 `accept`，再按路线走：迭代路线 `integration-start` → 固定 pin 的合并 → `integration-accept` → `complete`，standalone development 路线直接从已接受的 handoff 执行 `complete`，崩溃走 `reconcile`——由 `mstar plan` 动词执行；标志、JSON 报文与退出码：**`mstar-use-cli`** → `references/plan-and-workflow.md`。
 
 配方：[`docs/commands.md`](docs/commands.md#iteration-drive)。
 

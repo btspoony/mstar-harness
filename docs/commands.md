@@ -57,7 +57,7 @@ The scope rides on the `mstar plan` verb family. Thirteen verbs ship, and who ma
 | Fresh scoped entry | `bind --assignment` / `bind --workflow --plan` | the first claim of a prepared row |
 | Resumed session | `bind --resume`, `show` | reading the row, its scope and its allowed operations |
 | **Plan session writes** | `progress`, `residual-add`, `residual-close`, `handoff` | its own row and its own register bucket only |
-| **Coordinator transitions** | `accept`, `return`, `integration-start`, `integration-accept`, `complete`, `reconcile` | the lifecycle around the merge |
+| **Coordinator transitions** | `accept`, `return`, `integration-start`, `integration-accept`, `complete`, `reconcile`, `repair-delivery-source` | the lifecycle around completion: `integration-start` / `integration-accept` are iteration-route only, and the repair verb is a legacy exception rather than a normal step |
 
 Session identity is never a flag: `--session <absolute-json>` names an engine-generated envelope that the engine re-checks against the snapshot inside its lock. There is no `--force`, no holder input, no takeover and no lease-release verb.
 
@@ -91,11 +91,11 @@ A write whose precondition no longer holds is refused instead of overwriting, so
 
 #### Finish and completion
 
-`handoff` is the scoped finish line: the row keeps `InReview` and its `execution_lease`, and the session stops there — including for the last unfinished plan. A plan session never writes `Done`, and a request to mark `Done` before the merge is rejected: completion comes from the coordinator's `complete` after a verified merge.
+`handoff` is the scoped finish line: the row keeps `InReview` and its `execution_lease`, and the session stops there — including for the last unfinished plan. A plan session never writes `Done`, and a request to mark `Done` before the lifecycle completes is rejected: completion comes from the coordinator's `complete` — after a verified merge on the iteration route, or straight from the accepted handoff on the standalone development route.
 
-The coordinator half is a fixed order: `accept` (execution ownership transfers, still no merge) → `integration-start` (pins the attempt and its base before Git runs) → the pinned merge → `integration-accept` (records the verified result, both leases still held) → `complete` (the single atomic write that sets `Done` and releases both leases). `return` hands a submitted or accepted handoff back to the plan owner with a reason.
+The coordinator half starts the same way on both routes — `accept` (execution ownership transfers, still no merge) — and then follows the route the engine selects from the workflow's own type and delivery kind, never from anchors that happen to be missing. On the **iteration** route: `integration-start` (pins the attempt and its base before Git runs) → the pinned merge → `integration-accept` (records the verified result, both leases still held) → `complete`. On the **standalone development** route `complete` runs straight from the accepted handoff, with no integration record and no merge lease. `complete` is the single atomic write that sets `Done`: it releases both leases on the iteration route and only the row's execution lease on the standalone route, where the workflow stays running until its delivery evidence and the close. `return` hands a submitted or accepted handoff back to the plan owner with a reason.
 
-The merge is the coordinator's own Git action — an argument array, never shell interpolation — with no squash, no rebase and no branch-name merge:
+On the iteration route the merge is the coordinator's own Git action — an argument array, never shell interpolation — with no squash, no rebase and no branch-name merge:
 
 ```bash
 git -C <integration-worktree-path> merge --no-ff --no-edit <pinned-source-sha>

@@ -119,11 +119,11 @@ The same command takes a scope, to drive **one** prepared plan from an independe
 | `/iteration-drive --workflow <workflow-id> --plan <plan-id>` | Fresh scoped entry, addressing the prepared row directly. |
 | `/iteration-drive --resume <absolute-session-json-path>` | Explicit resume of the already bound session — the only resume form. |
 
-The scoped session binds exactly one plan, drives its tasks through the normal per-plan gates, and stops at a durable **handoff**: the row keeps `InReview`, and the coordinator alone records `Done` with both lease releases after it verifies the merge. A second fresh entry for the same plan is rejected as a duplicate holder — only explicit `--resume` of the original session continues. Any other nonempty argument shape fails closed; no arguments keep the whole-iteration route above.
+The scoped session binds exactly one plan, drives its tasks through the normal per-plan gates, and stops at a durable **handoff**: the row keeps `InReview`, and the coordinator alone records `Done` — after a verified merge on the iteration route, or straight from the accepted handoff on the standalone development route. A second fresh entry for the same plan is rejected as a duplicate holder — only explicit `--resume` of the original session continues. Any other nonempty argument shape fails closed; no arguments keep the whole-iteration route above.
 
 The second terminal is transport, not a dependency: any terminal works, and a multiplexer such as Herdr or tmux is optional — nothing reads pane state, TTL or terminal labels for ownership.
 
-The coordinator's half — `prepare`, then `accept` → `integration-start` → pinned merge → `integration-accept` → `complete`, with `reconcile` as the crash path — runs the `mstar plan` verbs; flags, JSON envelopes and exit codes: **`mstar-use-cli`** → `references/plan-and-workflow.md`.
+The coordinator's half — `prepare`, then `accept`, and from there the iteration route (`integration-start` → pinned merge → `integration-accept` → `complete`) or the standalone development route (`complete` straight from the accepted handoff), with `reconcile` as the crash path — runs the `mstar plan` verbs; flags, JSON envelopes and exit codes: **`mstar-use-cli`** → `references/plan-and-workflow.md`.
 
 Recipe: [`docs/commands.md`](docs/commands.md#iteration-drive).
 
