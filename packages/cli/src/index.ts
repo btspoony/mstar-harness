@@ -3099,7 +3099,7 @@ function cleanupProbeRemoteEvidence(
   const oidByBase = new Map(bases.resolved.map((entry) => [entry.base, entry.oid]));
   const unresolvedBases = new Set(bases.unresolved.map((entry) => entry.base));
   const memo: CleanupAncestryMemo = new Map();
-  const evidence: CleanupFacts["remoteEvidence"] = [];
+  const evidence: { branch: string; tip: string; base: string; ancestor: boolean; prMerged: boolean | null }[] = [];
   // At most one aggregated note per remote candidate (never per pair),
   // keeping non-verbose evidence notes ≤ bases + candidates.
   const summaries = new Map<string, { notAncestor: number; indeterminate: number }>();
