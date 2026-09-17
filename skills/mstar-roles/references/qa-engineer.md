@@ -80,7 +80,7 @@ External topic skills below are **presets activated by PM**, not unconditional r
 
 1. `mstar-harness-core` → `mstar-coding-behavior` → `mstar-dispatch-gates` + `mstar-branch-worktree` (anti-recursion; checkout alignment with QC)
 2. Host adapter: `mstar-host` (detect; Read `references/opencode.md`, `cursor.md`, or `codex.md`)
-3. On demand: `mstar-artifacts` (closing R#); `mstar-conventions` (paths); `mstar-design-md` (map supplied UI evidence to DESIGN.md; no environment execution); `mstar-phase-gates` (Assignment references verification phase); review bundle files and QC consolidated inputs named in Assignment
+3. On demand: `mstar-artifacts` (closing R#); `mstar-conventions` (paths); `mstar-design-md` (map supplied UI evidence to DESIGN.md; no environment execution); `mstar-phase-gates` (Assignment references verification phase); `mstar-use-cli` (round runs or interprets CLI commands — closing a register row, reading a gate verdict's exit code); review bundle files and QC consolidated inputs named in Assignment
 
 ## Completion Report
 

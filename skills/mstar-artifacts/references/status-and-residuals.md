@@ -375,7 +375,7 @@ These are **full-protocol prose** — the single canonical copy lives in **`msta
 
 ## Plan-scoped coordination (bind / revision / session / handoff) — sole runtime field home
 
-The scoped route（`/iteration-drive --assignment | --workflow <id> --plan <id> | --resume <session.json>` → `mstar plan …`）keeps **one process authority**: the same workflow snapshot (`workflows/<id>/snapshot.json`) and the same root `status.json` — no per-plan snapshot clone, database, daemon or second status copy. This section is the **single runtime home** for the coordination / session / handoff / revision fields; command flags and exit codes → `docs/cli.md`; route semantics → **`mstar-iteration`** `references/plan-scoped-pm.md`; engine API shapes → `packages/engine/src/coordination.ts`.
+The scoped route（`/iteration-drive --assignment | --workflow <id> --plan <id> | --resume <session.json>` → `mstar plan …`）keeps **one process authority**: the same workflow snapshot (`workflows/<id>/snapshot.json`) and the same root `status.json` — no per-plan snapshot clone, database, daemon or second status copy. This section is the **single runtime home** for the coordination / session / handoff / revision fields; command flags and exit codes → **`mstar-use-cli`**; route semantics → **`mstar-iteration`** `references/plan-scoped-pm.md`; engine API shapes → `packages/engine/src/coordination.ts`.
 
 ### Snapshot fields
 
@@ -436,7 +436,7 @@ Reconciliation observes **Git ancestry / HEAD facts** in the recorded repository
 
 **Both byte tokens, always.** The amendment carries the current raw-byte SHA-256 of the **snapshot bytes** and of the workflow's reviewed **compass Markdown bytes** (`sha256:<64 lowercase hex>`, read from the read-only `show-prepare`); both are required even on the first amendment, and neither is a per-plan `coordination.revision`. The compass token binds the reviewed declaration: the resulting plan-id **set** must equal the compass `plans:` list exactly, and its `spec_integration_branch` / `integration_worktree_path` declarations must agree with what the call would leave recorded. The compass is re-read immediately before the single atomic commit.
 
-**Refusals are mutation-free.** `coordination.prepare-amendment.{stale, invalid-patch, not-prepare, execution-started, duplicate-plan, invalid-plan, compass-mismatch, invalid-worktree}` (`coordination-write.ts`), plus the existing auth/scope errors; when each fires, the exact exit code and payload → `docs/cli.md` § `mstar-harness workflow`. The protected snapshot, root register, other workflows and the compass stay byte-identical.
+**Refusals are mutation-free.** `coordination.prepare-amendment.{stale, invalid-patch, not-prepare, execution-started, duplicate-plan, invalid-plan, compass-mismatch, invalid-worktree}` (`coordination-write.ts`), plus the existing auth/scope errors; when each fires, the exact exit code and payload → **`mstar-use-cli`** `references/plan-and-workflow.md`. The protected snapshot, root register, other workflows and the compass stay byte-identical.
 
 **Prepare-only, no force.** Recovery from a `stale` token is re-read `show-prepare` → review again → retry with the fresh tokens. There is no force, no replacement snapshot, no reset and no hand-editing workaround for a workflow that has left Prepare or already owns execution.
 

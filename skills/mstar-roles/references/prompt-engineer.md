@@ -53,7 +53,7 @@ Topic skills below are **presets activated by PM**, not unconditional role depen
 1. `mstar-harness-core` → `mstar-dispatch-gates`
 2. Harness-text editing trigger (activation implies): read **all** topic skills you touch — at minimum `mstar-phase-gates`, `mstar-conventions`, `mstar-artifacts`, `mstar-branch-worktree`, `mstar-review-qc`, `mstar-coding-behavior`, plus host adapters — so prompts stay aligned with SSOT and do not re-duplicate rules
 3. New skill / major skill rewrite / trigger-description change (activation implies): MUST read `mstar-skill-authoring` before editing
-4. Typically: `mstar-conventions` (path symbols in examples)
+4. Typically: `mstar-conventions` (path symbols in examples); `mstar-use-cli` (round runs or interprets CLI commands — the roles / skill lints this role invokes, reading a validator's exit code)
 5. Host: `mstar-host` (detect; `references/opencode.md` | `cursor.md` | `codex.md`)
 
 ## Completion Report

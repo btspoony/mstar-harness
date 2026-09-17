@@ -58,7 +58,7 @@ Topic skills below are **presets activated by PM**, not unconditional role depen
 
 1. `mstar-harness-core` → `mstar-coding-behavior` → `mstar-dispatch-gates`
 2. Typically: `mstar-conventions` (paths + spec metadata)
-3. On demand: `mstar-branch-worktree` (repo writes); `mstar-phase-gates` (Execute / hotfix when referenced in assignment); `mstar-design-md` (styled UI — read DESIGN.md tokens before writing components)
+3. On demand: `mstar-branch-worktree` (repo writes); `mstar-phase-gates` (Execute / hotfix when referenced in assignment); `mstar-design-md` (styled UI — read DESIGN.md tokens before writing components); `mstar-use-cli` (task must run or interpret CLI commands — path resolution, a verification command, reading a refusal or exit code)
 4. Host: `mstar-host` (detect; `references/opencode.md` | `cursor.md` | `codex.md`)
 
 ## Completion Report

@@ -5,9 +5,10 @@
  * - evaluateBilingualGuard — the CI fail-loudly contract (GITHUB_ACTIONS
  * env injection): a null range fails in CI, skips locally; an empty range
  * (direct-to-main push) skips by design; a non-empty range runs the check.
- * - extractCategoryRowTokens (guard 1) — the docs/cli.md `<category>` row
- * yields exactly AUDIT_CATEGORIES; fabricated tokens are kept for the
- * membership check; `Category` / `<category>` placeholders are filtered.
+ * - extractCategoryRowTokens (guard 1) — the `<category>` row in the CLI
+ * skill's reference yields exactly AUDIT_CATEGORIES; fabricated tokens are
+ * kept for the membership check; `Category` / `<category>` placeholders are
+ * filtered.
  * - citesKnowledgeConventions (W-2) — the exemption is anchored to the
  * cited token itself (the citation path starts with `conventions/`);
  * proximity alone no longer exempts unrelated citations.
@@ -46,15 +47,18 @@ import { join, relative } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { AUDIT_CATEGORIES } from "../packages/engine/src/index.ts";
 import {
+  AUDIT_CATEGORY_DOC,
   buildCliCommandInventory,
   buildEngineExportNames,
   checkBilingualContentParity,
   checkBilingualPairing,
   checkCalloutDuplication,
+  checkCliCitationsInText,
   checkEngineCallouts,
   checkFiveQuestionCorpus,
   checkProvenanceScan,
   checkRolesCorpus,
+  checkUseCliSkillCliCitations,
   citesKnowledgeConventions,
   collectProvenanceScanFiles,
   evaluateBilingualGuard,
@@ -63,15 +67,17 @@ import {
   readDeclaredBins,
   readRolesCorpus,
   readTrackedFiles,
+  readUseCliSkillMarkdown,
+  supplementCliCommandInventory,
 } from "./drift-lint.ts";
 
 describe("checkBilingualPairing — README pairing logic (guard 2)", () => {
   test("both READMEs changed passes", () => {
-    expect(checkBilingualPairing(["README.md", "README_CN.md", "docs/cli.md"])).toEqual([]);
+    expect(checkBilingualPairing(["README.md", "README_CN.md", "docs/commands.md"])).toEqual([]);
   });
 
   test("neither README changed passes", () => {
-    expect(checkBilingualPairing(["docs/cli.md", "scripts/drift-lint.ts"])).toEqual([]);
+    expect(checkBilingualPairing(["docs/commands.md", "scripts/drift-lint.ts"])).toEqual([]);
   });
 
   test("empty change list passes", () => {
@@ -183,9 +189,9 @@ describe("evaluateBilingualGuard — CI fail-loudly vs local skip", () => {
   });
 });
 
-describe("extractCategoryRowTokens — docs/cli.md `<category>` row (guard 1)", () => {
-  test("real docs/cli.md <category> row yields exactly AUDIT_CATEGORIES", () => {
-    const cliMd = readFileSync(join(import.meta.dir, "..", "docs", "cli.md"), "utf8");
+describe("extractCategoryRowTokens — checks-and-lints `<category>` row (guard 1)", () => {
+  test("real checks-and-lints.md <category> row yields exactly AUDIT_CATEGORIES", () => {
+    const cliMd = readFileSync(join(import.meta.dir, "..", AUDIT_CATEGORY_DOC), "utf8");
     const row = cliMd.split(/\r?\n/).find((l) => /^\|\s*`<category>`\s*\|/.test(l));
     expect(row).toBeDefined();
     expect(extractCategoryRowTokens(row!)).toEqual([...AUDIT_CATEGORIES]);
@@ -318,6 +324,340 @@ describe("checkEngineCallouts — Guard 1 CLI citation binary-prefix check", () 
     expect(calloutsChecked).toBe(49);
     expect(cliCitationsChecked).toBe(48);
     expect(failures).toEqual([]);
+  });
+});
+
+/** Paths registered outside index.ts — mirrors supplementCliCommandInventory sources. */
+function deriveScopedRegistrarPaths(repoRoot: string): Set<string> {
+  const paths = new Set<string>();
+  const planCoordSrc = readFileSync(join(repoRoot, "packages/cli/src/plan-coordination.ts"), "utf8");
+  for (const { table, family } of [
+    { table: "PLAN_VERBS", family: "plan" },
+    { table: "WORKFLOW_VERBS", family: "workflow" },
+  ] as const) {
+    const re = new RegExp(`const\\s+${table}:\\s*Record<[^>]+>\\s*=\\s*\\{([^}]*)\\}`);
+    const m = planCoordSrc.match(re);
+    if (m) {
+      for (const vm of m[1].matchAll(/(?:"([^"]+)"|([a-z][a-z0-9-]*))\s*:\s*true/g)) {
+        paths.add(`${family} ${vm[1] ?? vm[2]}`);
+      }
+    }
+  }
+  const sddSrc = readFileSync(join(repoRoot, "packages/cli/src/sdd-evidence.ts"), "utf8");
+  const fnMatch = sddSrc.match(/export function registerSddEvidenceCommands[\s\S]*?^}/m);
+  if (fnMatch) {
+    const subcmds = [...fnMatch[0].matchAll(/\.command\(\s*"([a-z-]+)"\s*\)/g)].map((x) => x[1]);
+    if (subcmds.includes("evidence")) {
+      paths.add("sdd evidence");
+      if (subcmds.includes("capture")) paths.add("sdd evidence capture");
+      if (subcmds.includes("verify")) paths.add("sdd evidence verify");
+    }
+  }
+  return paths;
+}
+
+describe("supplementCliCommandInventory — scoped registrar paths (Task 3)", () => {
+  const REPO_ROOT = join(import.meta.dir, "..");
+
+  // Locks parse success, representative scoped paths, and the supplement delta
+  // relationship — not exact inventory counts. New CLI verbs may land in index.ts
+  // or scoped verb tables legitimately; exact totals would rot on every addition.
+  test("index.ts static inventory + supplement scoped paths (lower bounds + source-derived containment)", () => {
+    const cliSrc = readFileSync(join(REPO_ROOT, "packages/cli/src/index.ts"), "utf8");
+    const { cliCommands: base, failures: baseFailures } = buildCliCommandInventory(cliSrc);
+    expect(baseFailures).toEqual([]);
+    expect(base.size).toBeGreaterThanOrEqual(80);
+    for (const top of ["persist", "sdd", "status", "workflow", "iteration"]) {
+      expect(base.has(top)).toBe(true);
+    }
+
+    const merged = new Set(base);
+    const { failures } = supplementCliCommandInventory(merged, REPO_ROOT);
+    expect(failures).toEqual([]);
+
+    expect(merged.has("plan handoff")).toBe(true);
+    expect(merged.has("workflow show-prepare")).toBe(true);
+    expect(merged.has("sdd evidence")).toBe(true);
+    expect(merged.has("sdd evidence capture")).toBe(true);
+    expect(merged.has("sdd evidence verify")).toBe(true);
+
+    const expectedScoped = deriveScopedRegistrarPaths(REPO_ROOT);
+    expect(expectedScoped.size).toBeGreaterThanOrEqual(15);
+    for (const path of expectedScoped) {
+      expect(merged.has(path)).toBe(true);
+    }
+
+    const novelFromSupplement = [...expectedScoped].filter((p) => !base.has(p));
+    expect(merged.size - base.size).toBe(novelFromSupplement.length);
+  });
+});
+
+
+describe("checkCliCitationsInText — depth-aware nested command validation (Greptile F1)", () => {
+  const binNames = ["mstar", "mstar-harness"];
+  const cliCommands = new Set([
+    "persist",
+    "persist get",
+    "sdd",
+    "sdd evidence",
+    "sdd evidence capture",
+    "sdd evidence verify",
+    "plan handoff",
+  ]);
+
+  test("unknown third-level token under a command with children fails", () => {
+    const { failures, cliCitationsChecked } = checkCliCitationsInText(
+      "fixture.md",
+      "run `mstar sdd evidence totally-fake` here",
+      { cliCommands, binNames },
+    );
+    expect(cliCitationsChecked).toBe(1);
+    expect(failures).toEqual([
+      expect.stringContaining('unknown CLI command "mstar sdd evidence totally-fake"'),
+    ]);
+  });
+
+  test("third token after a leaf command is treated as an argument value, not a subcommand", () => {
+    const { failures, cliCitationsChecked } = checkCliCitationsInText(
+      "fixture.md",
+      "run `mstar persist get snapshot` here",
+      { cliCommands, binNames },
+    );
+    expect(cliCitationsChecked).toBe(1);
+    expect(failures).toEqual([]);
+  });
+});
+
+describe("supplementCliCommandInventory — verb-table comment stripping (Greptile F2)", () => {
+  test("commented verb keys in PLAN_VERBS are not ingested into inventory", () => {
+    const dir = mkdtempSync(join(tmpdir(), "drift-verb-comment-"));
+    try {
+      const planCoord = `const PLAN_VERBS: Record<string, true> = {
+  bind: true,
+  // retired-command: true
+};
+const WORKFLOW_VERBS: Record<string, true> = {
+  "show-prepare": true,
+};
+export function registerPlanCommands() {}
+`;
+      const sddEvidence = readFileSync(
+        join(import.meta.dir, "..", "packages/cli/src/sdd-evidence.ts"),
+        "utf8",
+      );
+      mkdirSync(join(dir, "packages/cli/src"), { recursive: true });
+      writeFileSync(join(dir, "packages/cli/src/plan-coordination.ts"), planCoord);
+      writeFileSync(join(dir, "packages/cli/src/sdd-evidence.ts"), sddEvidence);
+
+      const cliCommands = new Set<string>(["plan bind"]);
+      const { failures } = supplementCliCommandInventory(cliCommands, dir);
+      expect(failures).toEqual([]);
+      expect(cliCommands.has("plan retired-command")).toBe(false);
+      expect(cliCommands.has("plan bind")).toBe(true);
+
+      const { failures: citeFailures } = checkCliCitationsInText(
+        "fixture.md",
+        "run `mstar plan retired-command` here",
+        { cliCommands, binNames: ["mstar"] },
+      );
+      expect(citeFailures.length).toBe(1);
+      expect(citeFailures[0]).toContain('unknown CLI command "mstar plan retired-command"');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("checkUseCliSkillCliCitations — mstar-use-cli skill scan (Task 3)", () => {
+  const REPO_ROOT = join(import.meta.dir, "..");
+  const inventory = () => {
+    const cliSrc = readFileSync(join(REPO_ROOT, "packages/cli/src/index.ts"), "utf8");
+    const { cliCommands, failures } = buildCliCommandInventory(cliSrc);
+    expect(failures).toEqual([]);
+    supplementCliCommandInventory(cliCommands, REPO_ROOT);
+    return cliCommands;
+  };
+  const binNames = () => {
+    const { binNames, failures } = readDeclaredBins(join(REPO_ROOT, "packages/cli/package.json"));
+    expect(failures).toEqual([]);
+    return binNames;
+  };
+
+  test("fabricated command path in the use-cli skill fails", () => {
+    const { failures } = checkUseCliSkillCliCitations(
+      [{ rel: "skills/mstar-use-cli/SKILL.md", text: "run `mstar plan totally-fake-verb` here" }],
+      { cliCommands: inventory(), binNames: binNames() },
+    );
+    expect(failures.length).toBe(1);
+    expect(failures[0]).toContain('unknown CLI command "mstar plan totally-fake-verb"');
+  });
+
+  test("correct plan verb citation passes (inventory supplement regression)", () => {
+    const { failures, cliCitationsChecked } = checkUseCliSkillCliCitations(
+      [{ rel: "skills/mstar-use-cli/SKILL.md", text: "then `mstar plan handoff` with tokens" }],
+      { cliCommands: inventory(), binNames: binNames() },
+    );
+    expect(cliCitationsChecked).toBe(1);
+    expect(failures).toEqual([]);
+  });
+
+  test("real mstar-use-cli corpus passes with supplemented inventory", () => {
+    const { files, failures } = readUseCliSkillMarkdown(REPO_ROOT);
+    expect(failures).toEqual([]);
+    expect(files.length).toBeGreaterThan(0);
+    const { failures: citeFailures } = checkUseCliSkillCliCitations(files, {
+      cliCommands: inventory(),
+      binNames: binNames(),
+    });
+    expect(citeFailures).toEqual([]);
+  });
+
+  test("readUseCliSkillMarkdown scans repoRoot when process cwd differs (D2)", () => {
+    const outer = mkdtempSync(join(tmpdir(), "drift-use-cli-cwd-"));
+    const prev = process.cwd();
+    try {
+      process.chdir(outer);
+      const { files, failures } = readUseCliSkillMarkdown(REPO_ROOT);
+      expect(failures).toEqual([]);
+      expect(files.length).toBe(5);
+      expect(files.every((f) => f.rel.startsWith("skills/mstar-use-cli/"))).toBe(true);
+    } finally {
+      process.chdir(prev);
+      rmSync(outer, { recursive: true, force: true });
+    }
+  });
+
+  test("missing use-cli skill dir returns one explicit failure row (D1 guard-or-clear)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "drift-use-cli-missing-"));
+    try {
+      const { files, failures } = readUseCliSkillMarkdown(dir);
+      expect(files).toEqual([]);
+      expect(failures.length).toBe(1);
+      expect(failures[0]).toContain("skills/mstar-use-cli is missing");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("empty use-cli skill dir returns one explicit failure row (D1 zero-md)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "drift-use-cli-empty-"));
+    try {
+      mkdirSync(join(dir, "skills", "mstar-use-cli"), { recursive: true });
+      const { files, failures } = readUseCliSkillMarkdown(dir);
+      expect(files).toEqual([]);
+      expect(failures.length).toBe(1);
+      expect(failures[0]).toContain("contains no .md files");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("drift-lint executable — use-cli scan wiring (Task 3 fix round)", () => {
+  const REPO_ROOT = join(import.meta.dir, "..");
+  const SCRIPT = join(REPO_ROOT, "scripts/drift-lint.ts");
+
+  /** Guard 2 environment row when merge-base(origin/main, HEAD) cannot run under GITHUB_ACTIONS. */
+  const README_BILINGUAL_ENV_VIOLATION =
+    "README bilingual pairing guard: no git range in CI (merge-base failed or origin/main missing) — the drift-lint job must checkout with fetch-depth: 0 so the pairing check can run (PR runs are the enforcement surface)";
+
+  function runDriftLintExecutable(): { status: number; combined: string; violations: string[] } {
+    let stdout = "";
+    let stderr = "";
+    let status = 0;
+    try {
+      stdout = execFileSync("bun", [SCRIPT], {
+        cwd: REPO_ROOT,
+        encoding: "utf8",
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+    } catch (error) {
+      const err = error as { status?: number; stdout?: string | Buffer; stderr?: string | Buffer };
+      status = err.status ?? 1;
+      stdout = String(err.stdout ?? "");
+      stderr = String(err.stderr ?? "");
+    }
+    const violations: string[] = [];
+    for (const line of stderr.split(/\r?\n/)) {
+      const m = line.match(/^\s+✗\s+(.+)$/);
+      if (m) violations.push(m[1]);
+    }
+    return { status, combined: stdout + stderr, violations };
+  }
+
+  test("clean repo exits 0 and reports use-cli skill file scan count (D3)", () => {
+    // Guard 2 needs merge-base(origin/main, HEAD). The dedicated drift-lint job checks out
+    // with fetch-depth: 0; the validate job does not, so CI may surface exactly this
+    // environment row while the use-cli scan still runs. That is documented guard behavior
+    // (see evaluateBilingualGuard), not a wiring defect — tolerate only this row here.
+    const { status, combined, violations } = runDriftLintExecutable();
+    expect(combined).toMatch(/\d+ use-cli skill files/);
+    expect(combined).toContain("full-text citations");
+    if (violations.length === 0) {
+      expect(status).toBe(0);
+      return;
+    }
+    expect(violations).toEqual([README_BILINGUAL_ENV_VIOLATION]);
+    expect(status).toBe(1);
+  });
+
+  test("running outside repo root does not exit 0 silently (D1/D2 executable)", () => {
+    const outer = mkdtempSync(join(tmpdir(), "drift-use-cli-exec-"));
+    try {
+      let failed = false;
+      try {
+        execFileSync("bun", [SCRIPT], { cwd: outer, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+      } catch (error) {
+        failed = true;
+        const err = error as { status?: number };
+        expect(err.status).toBe(1);
+      }
+      expect(failed).toBe(true);
+    } finally {
+      rmSync(outer, { recursive: true, force: true });
+    }
+  });
+
+  test("temp fixture with fabricated CLI citation fails the executable guard (D3)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "drift-use-cli-fixture-"));
+    try {
+      for (const rel of [
+        "packages/engine/src/index.ts",
+        "packages/cli/src/index.ts",
+        "packages/cli/package.json",
+        "packages/cli/src/plan-coordination.ts",
+        "packages/cli/src/sdd-evidence.ts",
+        "skills/mstar-use-cli/SKILL.md",
+        "skills/mstar-use-cli/references/checks-and-lints.md",
+        "README.md",
+        "README_CN.md",
+      ]) {
+        const dest = join(dir, rel);
+        mkdirSync(join(dest, ".."), { recursive: true });
+        writeFileSync(dest, readFileSync(join(REPO_ROOT, rel), "utf8"));
+      }
+      writeFileSync(
+        join(dir, "skills/mstar-use-cli/SKILL.md"),
+        "run `mstar plan totally-fake-verb` here\n",
+      );
+      const checks = readFileSync(join(REPO_ROOT, AUDIT_CATEGORY_DOC), "utf8");
+      writeFileSync(join(dir, AUDIT_CATEGORY_DOC), checks);
+      const skillMd = readFileSync(join(REPO_ROOT, "skills/mstar-harness-core/SKILL.md"), "utf8");
+      mkdirSync(join(dir, "skills/mstar-harness-core"), { recursive: true });
+      writeFileSync(join(dir, "skills/mstar-harness-core/SKILL.md"), skillMd);
+      let failed = false;
+      try {
+        execFileSync("bun", [SCRIPT], { cwd: dir, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+      } catch (error) {
+        failed = true;
+        const err = error as { status?: number; stderr?: string };
+        expect(err.status).toBe(1);
+        expect(String(err.stderr ?? "")).toMatch(/totally-fake-verb/);
+      }
+      expect(failed).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

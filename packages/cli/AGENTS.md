@@ -25,4 +25,4 @@ This `packages/cli` directory hosts the standalone `@mstar-harness/cli` package 
 - Do not modify user secrets or credential files.
 - For config writes, only touch the target-specific install/config file chosen by user input
   (`opencode.json`, Cursor plugin paths, Codex personal marketplace metadata, or Kimi plugin install notes).
-- **Cursor plugin paths must be real git checkouts** — not symlinks. Cursor does not load symlinked plugin roots; see `docs/cli.md` § Install path layout.
+- **Cursor plugin paths must be real git checkouts** — not symlinks. Cursor does not load symlinked plugin roots; see `INSTALL.md` § Install path layout.

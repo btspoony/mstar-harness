@@ -31,7 +31,7 @@ English / [中文](README_CN.md)
 - **One engine across hosts** — the same engine + skills power dsh (DeepSeek Harness), omp, OpenCode, Cursor, Kimi Code, ZCode, and Codex
 - **Agent Plugin packaging** — one-command install; portable across any Agent Plugins v1.0.0 client
 - **Pluggable JSON persistence** — coordination docs (`status.json`, workflow snapshots, project residuals, review envelopes) persist through an `ArtifactStore`; the default `FsStore` keeps the existing `.mstar/` paths, and integrations mount their own store via `MSTAR_STORE_MODULE` / `--store` / in-process `setArtifactStore`
-- **Recommended host** (best → usable): **dsh = omp ≥ OpenCode ≥ Cursor > Kimi = ZCode > Codex**
+- **Recommended host** (best → usable): **dsh = omp ≥ ZCode = OpenCode = Cursor > Kimi > Codex**
 
 **What ships**
 
@@ -79,7 +79,7 @@ Codex agent-link repair and named-role verification: [Codex installation](INSTAL
 
 The repo ships a portable **Agent Plugins v1.0.0** manifest (`plugin.json`) at its root; `skills/` is the Agent Skills component — verify it with `npx @mstar-harness/cli plugin validate`.
 
-Manual install / path layout: [`INSTALL.md`](INSTALL.md). CLI flags: [`docs/cli.md`](docs/cli.md).
+Manual install / path layout: [`INSTALL.md`](INSTALL.md). CLI flags: the **`mstar-use-cli`** skill.
 
 ## Use
 
@@ -119,11 +119,11 @@ The same command takes a scope, to drive **one** prepared plan from an independe
 | `/iteration-drive --workflow <workflow-id> --plan <plan-id>` | Fresh scoped entry, addressing the prepared row directly. |
 | `/iteration-drive --resume <absolute-session-json-path>` | Explicit resume of the already bound session — the only resume form. |
 
-The scoped session binds exactly one plan, drives its tasks through the normal per-plan gates, and stops at a durable **handoff**: the row keeps `InReview`, and the coordinator alone records `Done` with both lease releases after it verifies the merge. A second fresh entry for the same plan is rejected as a duplicate holder — only explicit `--resume` of the original session continues. Any other nonempty argument shape fails closed; no arguments keep the whole-iteration route above.
+The scoped session binds exactly one plan, drives its tasks through the normal per-plan gates, and stops at a durable **handoff**: the row keeps `InReview`, and the coordinator alone records `Done` — after a verified merge on the iteration route, or straight from the accepted handoff on the standalone development route. A second fresh entry for the same plan is rejected as a duplicate holder — only explicit `--resume` of the original session continues. Any other nonempty argument shape fails closed; no arguments keep the whole-iteration route above.
 
 The second terminal is transport, not a dependency: any terminal works, and a multiplexer such as Herdr or tmux is optional — nothing reads pane state, TTL or terminal labels for ownership.
 
-The coordinator's half — `prepare`, then `accept` → `integration-start` → pinned merge → `integration-accept` → `complete`, with `reconcile` as the crash path — runs the `mstar plan` verbs; flags, JSON envelopes and exit codes: [`docs/cli.md`](docs/cli.md#mstar-harness-plan).
+The coordinator's half — `prepare`, then `accept`, and from there the iteration route (`integration-start` → pinned merge → `integration-accept` → `complete`) or the standalone development route (`complete` straight from the accepted handoff), with `reconcile` as the crash path — runs the `mstar plan` verbs; flags, JSON envelopes and exit codes: **`mstar-use-cli`** → `references/plan-and-workflow.md`.
 
 Recipe: [`docs/commands.md`](docs/commands.md#iteration-drive).
 

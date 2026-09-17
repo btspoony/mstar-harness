@@ -124,7 +124,7 @@ iteration 正式全流程**必须**登记 `{HARNESS_DIR}/status.json`（v2 根�
 
 compass frontmatter 的 `iteration_base_branch` / `target_branch` **必须与** snapshot `branch` 一致；若仅写在 compass 而 snapshot 缺失，Phase 2 §2.3 同轮 backfill。
 
-**中途增减范围（已存在且仍在 Prepare 的 workflow）**：用户/产品批准的范围扩张**不得**手改受保护状态。先以 `mstar plan bind --coordinator --workflow <id>` 建立该 workflow 的 coordinator 会话，再经受守卫入口 `mstar workflow show-prepare` 读取快照与 compass 两个字节版本，并以 `mstar workflow amend-prepare` 追加已批准的 Todo 行、登记已 review 的 integration checkout 与 `plan_parallelism`（仅 Prepare 且无执行所有权时可用；无 force/replace/init 通道）。守卫与字段权威 → **`mstar-artifacts`** `references/status-and-residuals.md`「Prepare workflow amendment」；forms / exit codes → `docs/cli.md` § `mstar-harness workflow`。
+**中途增减范围（已存在且仍在 Prepare 的 workflow）**：用户/产品批准的范围扩张**不得**手改受保护状态。先以 `mstar plan bind --coordinator --workflow <id>` 建立该 workflow 的 coordinator 会话，再经受守卫入口 `mstar workflow show-prepare` 读取快照与 compass 两个字节版本，并以 `mstar workflow amend-prepare` 追加已批准的 Todo 行、登记已 review 的 integration checkout 与 `plan_parallelism`（仅 Prepare 且无执行所有权时可用；无 force/replace/init 通道）。守卫与字段权威 → **`mstar-artifacts`** `references/status-and-residuals.md`「Prepare workflow amendment」；forms / exit codes → **`mstar-use-cli`** `references/plan-and-workflow.md`。
 
 <!-- host-hook: iteration-entry -->
 > Execute the active host reference's `## Host hooks` declaration for `iteration-entry`; this file defines no host action.

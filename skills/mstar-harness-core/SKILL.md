@@ -43,8 +43,8 @@ description: Morning Star (启明星) harness **生命周期 / 授权语义权�
 | 角色 | 始终 | 按任务追加（典型） |
 |------|------|-------------------|
 | **全部** | 加载选择 → **`mstar-roles`**（hub § Load Order；本 skill = 生命周期/授权权威，`mstar-roles` hub bootstrap 是 core-first 的唯一例外） | — |
-| **`@project-manager`** | 本 skill | `mstar-dispatch-gates`、`mstar-phase-gates`、`mstar-conventions`、`mstar-roles`；implement 波次 `mstar-sdd`；派 QC 前 `mstar-review-qc`；并行/审查 `mstar-branch-worktree`；plan/status/review bundle `mstar-artifacts`；UI 类 plan Prepare 阶段 `mstar-design-md`（DESIGN.md 门禁）；新建/大改 skill 时 `mstar-skill-authoring`；迭代管理 `mstar-iteration`（Phase 1–5）；战略性工作 `mstar-strategy`；`audit` 类请求 `mstar-audit`（执行归 `@code-reviewer`）。**不**读 `mstar-coding-behavior` |
-| **实现/审查/运维** | 本 skill + `mstar-coding-behavior` + 角色 ref | 有 git 写：`mstar-branch-worktree`；有 plan 路径：`mstar-conventions`；**PM** 派 QC 前：`mstar-review-qc`；**`qc-specialist*`**：`mstar-roles` → `references/qc-specialist/`；`qa-engineer`：`references/qa-engineer/`；改 status/residual：`mstar-artifacts`；UI：`mstar-design-md`；知识库：`mstar-compound`（PM） |
+| **`@project-manager`** | 本 skill | `mstar-dispatch-gates`、`mstar-phase-gates`、`mstar-conventions`、`mstar-roles`；implement 波次 `mstar-sdd`；派 QC 前 `mstar-review-qc`；并行/审查 `mstar-branch-worktree`；plan/status/review bundle `mstar-artifacts`；UI 类 plan Prepare 阶段 `mstar-design-md`（DESIGN.md 门禁）；新建/大改 skill 时 `mstar-skill-authoring`；迭代管理 `mstar-iteration`（Phase 1–5）；战略性工作 `mstar-strategy`；`audit` 类请求 `mstar-audit`（执行归 `@code-reviewer`）；跑/解读 CLI 命令时 `mstar-use-cli`。**不**读 `mstar-coding-behavior` |
+| **实现/审查/运维** | 本 skill + `mstar-coding-behavior` + 角色 ref | 有 git 写：`mstar-branch-worktree`；有 plan 路径：`mstar-conventions`；**PM** 派 QC 前：`mstar-review-qc`；**`qc-specialist*`**：`mstar-roles` → `references/qc-specialist/`；`qa-engineer`：`references/qa-engineer/`；改 status/residual：`mstar-artifacts`；UI：`mstar-design-md`；知识库：`mstar-compound`（PM）；跑/解读 CLI 命令时（各 leaf 角色按任务）：`mstar-use-cli` |
 | **leaf 承接方** | 上栏 + **`mstar-dispatch-gates`**（反递归节） | — |
 
 Routing eval（宿主插件内回归用，**非**运行时必读）→ `.cursor/skills/mstar-routing-eval/`。
@@ -91,6 +91,7 @@ PM 在 Assignment 写 **`Task category`**（主类 + 可选 `secondary`）：
 | Skill | 职责 |
 |-------|------|
 | `mstar-harness-core` | 本文件：入口、状态机、Task category、explore、索引、护栏 |
+| `mstar-use-cli` | CLI 契约（agent 面向）：任务→命令族索引、前置条件阶梯、两条协议序列、退出码 0 / 1 / 2 与稳定拒绝码读法；flags 一律以命令自身 `--help` 为准 |
 | `mstar-phase-gates` | per-plan 双阶段门禁：Prepare/Execute、意图门禁、hotfix、可验证编辑 |
 | `mstar-iteration` | 迭代管理：Phase 1–5（start / Autonomous Execute / iteration-close / PR delivery / PR merge-ready loop） |
 | `mstar-dispatch-gates` | 派发、Delegation、反递归、依赖与隔离驱动并行、SDD 路径 plan QC 强制 tri |

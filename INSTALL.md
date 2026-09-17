@@ -62,7 +62,7 @@ npx @mstar-harness/cli doctor --target cursor --scope global
 
 Restart Cursor or run **Developer: Reload Window** after install.
 
-**Layout note:** Cursor does **not** discover symlinked plugin directories. The CLI maintains a shared checkout at `~/.mstar/harness` and a **separate real git checkout** at the Cursor plugin path. See [Install path layout](docs/cli.md#install-path-layout) in [`docs/cli.md`](docs/cli.md).
+**Layout note:** Cursor does **not** discover symlinked plugin directories. The CLI maintains a shared checkout at `~/.mstar/harness` and a **separate real git checkout** at the Cursor plugin path. See [Install path layout](#install-path-layout).
 
 ### Codex
 
@@ -91,7 +91,7 @@ codex plugin marketplace add btspoony/mstar-harness --ref main
 codex plugin add morning-star-harness@mstar-repo
 ```
 
-Custom agent TOMLs must be regular files: Codex can discover a symlinked role but fail to load it when invoked. Re-run `init` with the installed scope to repair legacy links; see [agent refresh behavior](docs/cli.md#codex-agent-files). After `doctor` passes, ask Codex to use `fullstack-dev` for a short read-only task and confirm that the named subagent actually starts.
+Custom agent TOMLs must be regular files: Codex can discover a symlinked role but fail to load it when invoked. Re-run `init` with the installed scope to repair legacy links; see [agent refresh behavior](#codex-agent-files). After `doctor` passes, ask Codex to use `fullstack-dev` for a short read-only task and confirm that the named subagent actually starts.
 
 #### Codex: project vs global scope
 
@@ -100,7 +100,13 @@ Custom agent TOMLs must be regular files: Codex can discover a symlinked role bu
 | **Project** | Installed as project-local skills under `.agents/skills/<name>/SKILL.md` (symlinked from harness `commands/`; gitignored by CLI) |
 | **Global** | **Not** installed (avoids polluting other projects); `init` prints a warning — re-run with `--scope project` to enable |
 
-Full CLI flags, `doctor` checks, and path tables: [`docs/cli.md`](docs/cli.md).
+#### Codex: agent files
+
+Re-run `init --target codex --scope global` (or `project`) to install from the current `~/.mstar/harness/codex/agents/` source. Identical bytes are left untouched. A differing regular file is backed up as `<role>.toml.<uuid>.bak` before atomic replacement; a legacy symlink to the expected harness source is replaced without writing through it. Unrelated symlinks, non-file destinations, and a symlinked agent directory are refused.
+
+`init` does not pull an existing source checkout: refresh that checkout first when upgrading agent definitions, then re-run `init`. Project iteration skill symlinks are unchanged. After `doctor --target codex --scope <global|project>` passes, have Codex invoke a named role (for example, `fullstack-dev` on a short read-only task) and confirm that it starts; role discovery alone is insufficient.
+
+Full CLI flags: the **`mstar-use-cli`** skill. `doctor` checks and the path tables: each target's own section above and [Install path layout](#install-path-layout) below.
 
 ### ZCode
 
@@ -204,6 +210,26 @@ dsh plugin --profile web add dsh-llm-fallbacks
 - dsh profiles are machine-global; `--scope` is accepted by the shared interface but has no dsh surface.
 - `doctor --target dsh` reports each plugin row as `uninstalled` / `disabled` / `mounted` / `drifted` and exits non-zero when any row is uninstalled or disabled, or when the `dsh-llm-fallbacks` row is `drifted` (profile install ≠ the pinned version; the note names both versions and `init --target dsh` repairs it).
 - Enter PM with the `pm` skill. Host adapter: **`mstar-host`** → `references/dsh.md` (`skill://mstar-host/references/dsh.md`).
+
+## Install path layout
+
+Cursor **does not discover symlinked plugin directories**. Use real directories at the plugin paths below.
+
+| Path | Host | Layout | Notes |
+| --- | --- | --- | --- |
+| `~/.mstar/harness` | Codex (agent `.toml` source), OpenCode dev bundle | git checkout | Codex agent `.toml` files are **copied as regular files** from here into `~/.codex/agents/`; the Codex marketplace itself is git-sourced (`btspoony/mstar-harness`) |
+| `~/.cursor/plugins/local/morning-star-harness` | Cursor global plugin | **git checkout (real dir)** | **Not** a symlink to `~/.mstar/harness`; `init` clones or `git pull`s here |
+| `.cursor/plugins/morning-star-harness` | Cursor project plugin | **git checkout (real dir)** | gitignored; same clone/pull behavior as global |
+
+`init --target cursor` maintains **two** checkouts: `~/.mstar/harness` (shared with Codex) and the Cursor plugin path (independent clone, kept in sync via `git pull` on each init).
+
+**Maintainers** editing this repository in a separate workspace should refresh the Cursor plugin checkout after merging:
+
+```bash
+cd ~/.cursor/plugins/local/morning-star-harness && git pull --ff-only
+```
+
+Or re-run `npx @mstar-harness/cli init --target cursor --scope global`.
 
 ## Manual install
 
@@ -419,6 +445,6 @@ npx @mstar-harness/cli plugin validate --root ~/.mstar/harness
 
 ## Further reading
 
-- CLI reference: [`docs/cli.md`](docs/cli.md)
+- CLI reference: the **`mstar-use-cli`** skill (`skill://mstar-use-cli`)
 - OpenCode package install: [`packages/opencode/INSTALL.md`](packages/opencode/INSTALL.md)
 - User guide (narrative): [`README.md`](README.md) / [`README_CN.md`](README_CN.md)
