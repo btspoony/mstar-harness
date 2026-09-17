@@ -3521,31 +3521,37 @@ function assertStandaloneRoute(snapshot: WorkflowSnapshot, planId: string, what:
   }
 }
 
-function assertNoIntegrationContamination(context: RowContext, planId: string, handoff: PlanHandoff, what: string): void {
+function assertNoIntegrationContamination(
+  context: RowContext,
+  planId: string,
+  handoff: PlanHandoff,
+  what: string,
+  code: CoordinationError["code"] = "coordination.invalid-transition",
+): void {
   if (handoff.integration !== undefined) {
     throw new CoordinationError(
-      "coordination.invalid-transition",
+      code,
       `${what} refuses plan ${planId} because the handoff already carries an integration record`,
       { plan_id: planId },
     );
   }
   if (context.snapshot.integration_worktree_path !== undefined) {
     throw new CoordinationError(
-      "coordination.invalid-transition",
+      code,
       `${what} refuses plan ${planId} because the snapshot names integration_worktree_path`,
       { plan_id: planId },
     );
   }
   if (isNonEmptyString(context.snapshot.branch?.integration)) {
     throw new CoordinationError(
-      "coordination.invalid-transition",
+      code,
       `${what} refuses plan ${planId} because the snapshot names branch.integration`,
       { plan_id: planId, integration: context.snapshot.branch?.integration },
     );
   }
   if (context.snapshot.integration_merge_lease !== undefined) {
     throw new CoordinationError(
-      "coordination.invalid-transition",
+      code,
       `${what} refuses plan ${planId} because the snapshot carries an integration merge lease`,
       { plan_id: planId },
     );
@@ -3758,7 +3764,7 @@ function assertLegacyRepairShape(
   snapshot: WorkflowSnapshot,
   planId: string,
   handoff: PlanHandoff,
-): { registeredSource: string; target: string; candidateSource: string } {
+): { target: string; candidateSource: string } {
   const source = snapshot.branch?.source;
   const target = snapshot.branch?.target;
   if (!isNonEmptyString(source) || !isNonEmptyString(target)) {
@@ -3790,7 +3796,7 @@ function assertLegacyRepairShape(
       { plan_id: planId, source, target },
     );
   }
-  return { registeredSource: source, target, candidateSource };
+  return { target, candidateSource };
 }
 
 function assertRepairBranchIdentity(
@@ -3871,12 +3877,7 @@ function assertDeliveryPrCompatible(
   }
 }
 
-async function assertRepairDeliverySourcePrecheck(
-  context: RowContext,
-  scope: ResolvedPlanScope,
-  session: CoordinationSession,
-  handoff: PlanHandoff,
-): Promise<void> {
+function assertRepairDeliverySourceAdmission(context: RowContext, scope: ResolvedPlanScope): void {
   if (!isStandaloneDevelopmentWorkflow(context.snapshot)) {
     throw new CoordinationError(
       "coordination.delivery-source-repair.unsupported-workflow",
@@ -3899,7 +3900,21 @@ async function assertRepairDeliverySourcePrecheck(
       { workflow_id: context.snapshot.id, status: context.snapshot.status },
     );
   }
-  assertNoIntegrationContamination(context, scope.planId, handoff, "repair-delivery-source");
+}
+
+async function assertRepairDeliverySourcePrecheck(
+  context: RowContext,
+  scope: ResolvedPlanScope,
+  session: CoordinationSession,
+  handoff: PlanHandoff,
+): Promise<void> {
+  assertNoIntegrationContamination(
+    context,
+    scope.planId,
+    handoff,
+    "repair-delivery-source",
+    "coordination.delivery-source-repair.not-legacy-shape",
+  );
   const prepared = context.coordination?.prepared;
   if (prepared === undefined) {
     throw new CoordinationError(
@@ -3957,6 +3972,7 @@ async function mutateRepairDeliverySource(
     expectedRevision: request.expectedRevision,
     precheck: async (context) => {
       assertCoordinatorBinding(session, sessionPath, context.snapshot);
+      assertRepairDeliverySourceAdmission(context, scope);
       const handoff = requireAcceptedHandoffForRepair(context, scope.planId, request.handoffId);
       await assertRepairDeliverySourcePrecheck(context, scope, session, handoff);
     },

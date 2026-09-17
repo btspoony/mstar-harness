@@ -1904,6 +1904,57 @@ describe("legacy-delivery-source-repair", () => {
     ).toBe("coordination.delivery-source-repair.no-accepted-handoff");
     expect(readFileSync(noHandoff.snapshotPath).equals(beforeNoHandoff)).toBe(true);
   }, 30000);
+
+  test("terminal and paused admission precede missing-handoff refusal", async () => {
+    const terminal = await wrongSourceAcceptedFixture(false);
+    const terminalSnap = snapshotOf(terminal);
+    terminalSnap.status = "failed";
+    terminalSnap.ended_at = "2026-09-15T01:00:00Z";
+    terminalSnap.plans = (terminalSnap.plans as Array<Record<string, unknown>>).map((row) => {
+      const { execution_lease, ...rest } = row;
+      const coordination = { ...(row.coordination as Record<string, unknown>) };
+      delete coordination.handoff;
+      return { ...rest, coordination };
+    });
+    writeJson(terminal.snapshotPath, terminalSnap);
+    const beforeTerminal = readFileSync(terminal.snapshotPath);
+    expect(
+      await errorCodeOf(() =>
+        coordinatorCall(terminal, PLAN_ID, { kind: "repair-delivery-source" }, "missing-handoff"),
+      ),
+    ).toBe("coordination.delivery-source-repair.terminal");
+    expect(readFileSync(terminal.snapshotPath).equals(beforeTerminal)).toBe(true);
+
+    const paused = await wrongSourceAcceptedFixture(false);
+    const pausedSnap = snapshotOf(paused);
+    pausedSnap.status = "paused";
+    pausedSnap.plans = (pausedSnap.plans as Array<Record<string, unknown>>).map((row) => {
+      const coordination = { ...(row.coordination as Record<string, unknown>) };
+      delete coordination.handoff;
+      return { ...row, coordination };
+    });
+    writeJson(paused.snapshotPath, pausedSnap);
+    const beforePaused = readFileSync(paused.snapshotPath);
+    expect(
+      await errorCodeOf(() =>
+        coordinatorCall(paused, PLAN_ID, { kind: "repair-delivery-source" }, "missing-handoff"),
+      ),
+    ).toBe("coordination.invalid-transition");
+    expect(readFileSync(paused.snapshotPath).equals(beforePaused)).toBe(true);
+  }, 30000);
+
+  test("integration contamination refuses not-legacy-shape for repair", async () => {
+    const fixture = await wrongSourceAcceptedFixture(false);
+    writeJson(fixture.snapshotPath, {
+      ...snapshotOf(fixture),
+      integration_worktree_path: join(fixture.root, "extra-integration"),
+    });
+    const before = readFileSync(fixture.snapshotPath);
+    expect(await errorCodeOf(() => coordinatorCall(fixture, PLAN_ID, { kind: "repair-delivery-source" }))).toBe(
+      "coordination.delivery-source-repair.not-legacy-shape",
+    );
+    expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
+  }, 30000);
 });
 
 describe("findings-gate-locking", () => {
