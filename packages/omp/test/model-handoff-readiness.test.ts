@@ -516,6 +516,42 @@ describe("E1 registered attachment (attach mode)", () => {
     expect(restored.ok).toBe(true);
   });
 
+  test("attach refuses invalid-root on a terminal or non-iteration workflow snapshot", async () => {
+    const f = await buildFixture();
+    const snapshotPath = snapshotPathOf(f);
+    const bytes = JSON.parse(text(snapshotPath));
+
+    // Terminal status: attach never adopts a completed workflow. The register
+    // gate already refuses a terminal-listed snapshot (removal-at-terminal),
+    // so only the frozen refusal code is asserted here; the attach-side
+    // running-iteration check is the second, defense-in-depth layer.
+    writeJson(snapshotPath, { ...bytes, status: "completed" });
+    const completed = await attach(f);
+    expect(completed.ok === false && completed.code).toBe("invalid-root");
+
+    // Non-iteration type: a plan workflow is not attachable (the register
+    // cross-check refuses the mismatched type the same way).
+    writeJson(snapshotPath, { ...bytes, type: "plan" });
+    const plan = await attach(f);
+    expect(plan.ok === false && plan.code).toBe("invalid-root");
+
+    // A register-valid non-running status (paused) passes the register gate
+    // and must be refused by the attach-side eligibility check itself.
+    writeJson(snapshotPath, { ...bytes, status: "paused" });
+    const paused = await attach(f);
+    expect(paused.ok === false && paused.code).toBe("invalid-root");
+    if (!paused.ok) {
+      expect(paused.message).toBe(
+        `workflow ${f.workflowId} snapshot at ${canonicalize(snapshotPath)} is not a running iteration (status paused, type iteration)`,
+      );
+    }
+
+    // Restore: the same state attaches again.
+    writeJson(snapshotPath, bytes);
+    const restored = await attach(f);
+    expect(restored.ok).toBe(true);
+  });
+
   test("attach still honors the shared input and host refusals", async () => {
     const f = await buildFixture();
     const wrongAuthority = await reserveHandoffBinding(

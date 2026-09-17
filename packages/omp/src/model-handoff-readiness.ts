@@ -324,6 +324,15 @@ export async function reserveHandoffBinding(
       if (snapshot.id !== workflowId) {
         return bindingRefusal("invalid-root", `the workflow snapshot at ${snapshotPath} does not name workflow ${workflowId}`);
       }
+      // Attachment requires an actually active iteration: a terminal or
+      // non-iteration workflow is never adopted as a structural candidate
+      // (the running-iteration check must not wait for Phase-1 readiness).
+      if (snapshot.status !== "running" || snapshot.type !== "iteration") {
+        return bindingRefusal(
+          "invalid-root",
+          `workflow ${workflowId} snapshot at ${snapshotPath} is not a running iteration (status ${snapshot.status}, type ${snapshot.type})`,
+        );
+      }
     } catch {
       return bindingRefusal("invalid-root", `the workflow snapshot is not readable: ${snapshotPath}`);
     }
