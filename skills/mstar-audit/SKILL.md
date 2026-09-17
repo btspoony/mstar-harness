@@ -61,7 +61,7 @@ Full codebase audit: nine-category fan-out across **`references/audit-playbook.m
 2. **Simpler explanation** — does a simpler explanation cover the same evidence?
 3. **Evidence verifiability** — open the cited `file:line` and check it actually supports the claim.
 
-Dispose per the five-state rule (single-pass version — the four dispositions below implement the survey's five-state semantics: uncovered-keep == 未提及保留; never-drop == 全空/null 回流):
+Dispose each attacked finding into exactly one of the four dispositions below:
 
 - **Survived** — passes to vet unchanged.
 - **Refuted** — drop, and record in the index's "considered and rejected" section: `- <finding>: not worth doing because <one line>`.
@@ -90,7 +90,7 @@ Do not write 30 plans nobody asked for. If running non-interactively (no user av
 
 The output contract is common; per-variant output shapes live in the variant reference.
 
-- **Full codebase audit**: audit index `README.md` template (findings table, direction, execution order & status, considered-and-rejected, red-team dispositions) and the `mstar audit scaffold` Engine-check callout → **`references/codebase-audit.md`** § Output format. Plan writing → **`## Plan output (all variants)`** below.
+- **Full codebase audit**: audit index `README.md` template (findings table, direction, Coverage table, execution order & status, considered-and-rejected, red-team dispositions, plus the Needs verification and Hardening & checked notes disposition sections) and the `mstar audit scaffold` Engine-check callout → **`references/codebase-audit.md`** § Output format. Plan writing → **`## Plan output (all variants)`** below.
 - **PR review**: `findings` / `verdict` / `score_pct` / `tally` / `evidence` / `unverified` / `next` / `notes` / `comments` → **`references/pr-review.md`** § Output shape.
 - Every finding follows **`references/finding-format.md`** — read it before the first finding.
 

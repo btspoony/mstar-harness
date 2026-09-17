@@ -336,9 +336,14 @@ export type {
   AuditCategory,
   AuditConfidence,
   AuditEffort,
+  AuditEvidence,
   AuditFinding,
   AuditPriority,
   AuditRisk,
+  AuditSeverity,
+  AuditSeverityRank,
+  AuditTraceKind,
+  AuditTraceStep,
   PromoteAuditPlansOptions,
   RedactResult,
   ScaffoldAuditPlanOptions,
@@ -359,6 +364,7 @@ export {
   scaffoldAuditPlan,
   scanSecrets,
   supplyChainChecks,
+  validateAuditFindingGates,
   validateAuditStatusBlocks,
 } from "./audit.js";
 export {

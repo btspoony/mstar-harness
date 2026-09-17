@@ -1,0 +1,9 @@
+---
+category: Harness
+packages: root, cli, engine
+---
+
+- Audit scaffold findings files now preserve what the auditor supplied: the CLI parser maps `description` → `impact`, keeps explicit `confidence` and `evidence` (previously discarded), and accepts optional `fingerprint`, `trace`, and `severity` metadata plus structured `{file, line?, description}` evidence locations, with documented absent-field defaults (`MED` confidence, `[]` evidence). A new deterministic engine gate `validateAuditFindingGates` (fingerprint grammar/uniqueness/ordering, `severity.overall ≤ severity.impact`, trace topology, safe typed paths, visible-text predicates, credential rejection on opaque fields) runs inside `scaffoldAuditPlan` before any file is written; invalid findings exit 2 with field-path diagnostics and no partial output. Legacy string-evidence input remains supported. The durable field contract is published in `skills/mstar-audit/references/finding-format.md` (§ Machine-readable findings file), the scaffold engine-check callout in `references/codebase-audit.md` was updated for the real gates and their limits, and the five-state attack wording in `mstar-audit` SKILL.md was tightened to its four actual dispositions.
+
+<!-- CN -->
+- 审计脚手架的 findings 文件现在保留审计者提供的全部内容：CLI 解析器将 `description` 映射为 `impact`，保留此前被丢弃的显式 `confidence` 与 `evidence`，并接受可选的 `fingerprint`、`trace`、`severity` 元数据及结构化 `{file, line?, description}` 证据位置，缺省字段有明确默认值（confidence 为 `MED`、evidence 为 `[]`）。新增确定性引擎门禁 `validateAuditFindingGates`（指纹语法/唯一性/排序、`severity.overall ≤ severity.impact`、trace 拓扑、安全类型化路径、可见文本谓词、不透明字段凭据拒绝），在 `scaffoldAuditPlan` 写入任何文件之前执行；非法 findings 以退出码 2 终止，诊断只含字段路径、不输出部分产物。旧式字符串证据输入继续受支持。持久字段契约发布于 `skills/mstar-audit/references/finding-format.md`（§ Machine-readable findings file），`references/codebase-audit.md` 的脚手架引擎检查说明已按真实门禁及其边界更新，`mstar-audit` SKILL.md 中五状态攻击措辞收紧为其实际的四种处置。

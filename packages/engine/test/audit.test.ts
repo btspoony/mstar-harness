@@ -19,8 +19,10 @@ import {
   scaffoldAuditPlan,
   scanSecrets,
   supplyChainChecks,
+  validateAuditFindingGates,
   validateAuditStatusBlocks,
 } from "../src/audit.js";
+import type { AuditFinding } from "../src/audit.js";
 import { createFsStore, setArtifactStore } from "../src/store.js";
 import { readJson } from "../src/core.js";
 import { validateStatus } from "../src/status.js";
@@ -723,6 +725,43 @@ describe("scaffoldAuditPlan", () => {
     expect(readme).toContain("- Checked and clean: hand cleared sink");
   });
 
+  test("non-default confidence persists in a Status line and survives a no-new-findings rebuild", () => {
+    const out = join(tmp, "audit-2026-08-28");
+    scaffoldAuditPlan(
+      out,
+      [
+        {
+          title: "Unparameterized sink",
+          category: "security" as const,
+          impact: "Raw SQL in the export path.",
+          effort: "S" as const,
+          risk: "HIGH" as const,
+          confidence: "HIGH" as const,
+          evidence: ["src/export.ts:88 — f-string builds the query", "src/export.ts:120 — retry path"],
+          priority: "P1" as const,
+        },
+      ],
+      { date: "2026-08-28" },
+    );
+    const plan = readFileSync(join(out, "001-unparameterized-sink.md"), "utf8");
+    expect(plan).toContain("- **Confidence**: HIGH");
+    expect(validateAuditStatusBlocks(plan).ok).toBe(true);
+    expect(readFileSync(join(out, "README.md"), "utf8")).toContain("| HIGH | src/export.ts:88 — f-string builds the query |");
+    // Default output unchanged: MED findings render NO Confidence Status line.
+    scaffoldAuditPlan(
+      out,
+      [{ title: "Default confidence", category: "docs" as const, impact: "d", effort: "XS" as const, risk: "LOW" as const, confidence: "MED" as const, evidence: [], priority: "P3" as const }],
+      { date: "2026-08-29" },
+    );
+    expect(readFileSync(join(out, "002-default-confidence.md"), "utf8")).not.toContain("**Confidence**");
+    // Rebuild with NO new findings: the index row recovers HIGH from the
+    // persisted Status line instead of degrading to "—".
+    scaffoldAuditPlan(out, [], { date: "2026-08-30" });
+    const readme = readFileSync(join(out, "README.md"), "utf8");
+    expect(readme).toContain("| 001 | Unparameterized sink | security |");
+    expect(readme).toContain("| HIGH | src/export.ts:88 — f-string builds the query |");
+  });
+
   test("D-1: scaffold redacts credentials from finding evidence/fix sketch (Hard Rule 4)", () => {
     const out = join(tmp, "audit-2026-08-25");
     const result = scaffoldAuditPlan(
@@ -783,6 +822,532 @@ describe("scaffoldAuditPlan", () => {
 // (snapshot written BEFORE registerWorkflow; validateStatus + snapshot
 // validators pass on the promoted artifacts)
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Finding gates + additive metadata (audit-finding-contract.md §§3–8)
+// ---------------------------------------------------------------------------
+
+/** Legacy-shape finding (string evidence, no metadata) — the baseline. */
+function legacyFinding(overrides: Partial<AuditFinding> = {}): AuditFinding {
+  return {
+    title: "Fix N+1 query",
+    category: "perf",
+    impact: "Queries explode on the dashboard.",
+    effort: "S",
+    risk: "LOW",
+    confidence: "MED",
+    evidence: ["src/orders.ts:42 — raw loop"],
+    priority: "P1",
+    ...overrides,
+  };
+}
+
+/** Fully enriched finding exercising every optional field. */
+function enrichedFinding(overrides: Partial<AuditFinding> = {}): AuditFinding {
+  return {
+    title: "Unparameterized sink in export path",
+    category: "security",
+    impact: "User-controlled CSV export interpolates raw SQL.",
+    effort: "S",
+    risk: "HIGH",
+    confidence: "HIGH",
+    evidence: [
+      "src/export.ts:88 — f-string builds the query",
+      { file: "src/export.ts", line: 120, description: "same sink in the retry path" },
+    ],
+    priority: "P1",
+    fingerprint: "sql-export-sink",
+    trace: [
+      { kind: "entrypoint", file: "src/routes/export.ts", line: 10, scope: "GET /export", description: "query param reaches the exporter" },
+      { kind: "propagation", file: "src/export.ts", line: 64, scope: "buildQuery", description: "parameter concatenated into SQL" },
+      { kind: "sink", file: "src/export.ts", line: 88, scope: "runExport", description: "query executed" },
+    ],
+    severity: { likelihood: "high", impact: "high", overall: "high" },
+    ...overrides,
+  };
+}
+
+describe("validateAuditFindingGates", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "engine-audit-gates-"));
+  afterAll(() => rmSync(tmp, { recursive: true, force: true }));
+
+  test("legacy and enriched batches pass; the gate does not mutate its input", () => {
+    const findings = [legacyFinding(), enrichedFinding()];
+    const snapshot = JSON.stringify(findings);
+    const gate = validateAuditFindingGates(findings);
+    expect({ ok: gate.ok, violations: gate.violations.map((v) => v.code) }).toEqual({ ok: true, violations: [] });
+    expect(JSON.stringify(findings)).toBe(snapshot);
+  });
+
+  test("duplicate fingerprint → audit.finding.fingerprint.duplicate with field path only", () => {
+    const gate = validateAuditFindingGates([
+      enrichedFinding(),
+      legacyFinding({ title: "Second instance", fingerprint: "sql-export-sink" }),
+    ]);
+    expect(gate.ok).toBe(false);
+    expect(gate.violations.map((v) => v.code)).toContain("audit.finding.fingerprint.duplicate");
+    expect(gate.violations.some((v) => v.message.includes("findings[1].fingerprint"))).toBe(true);
+    expect(gate.violations.some((v) => v.message.includes("sql-export-sink"))).toBe(false);
+  });
+
+  test("out-of-order supplied fingerprints → audit.finding.fingerprint.order (reject, never sort)", () => {
+    const gate = validateAuditFindingGates([
+      enrichedFinding({ fingerprint: "zeta-auth-bypass" }),
+      legacyFinding({ title: "Earlier identity", fingerprint: "alpha-open-redirect" }),
+    ]);
+    expect(gate.ok).toBe(false);
+    expect(gate.violations.map((v) => v.code)).toContain("audit.finding.fingerprint.order");
+  });
+
+  test("mixed legacy/enriched batch with only one fingerprint passes ordering", () => {
+    const gate = validateAuditFindingGates([legacyFinding(), enrichedFinding()]);
+    expect(gate.ok).toBe(true);
+  });
+
+  test("fingerprint grammar violation → audit.finding.fingerprint.grammar", () => {
+    const gate = validateAuditFindingGates([enrichedFinding({ fingerprint: "-starts-with-dash" })]);
+    expect(gate.ok).toBe(false);
+    expect(gate.violations.map((v) => v.code)).toContain("audit.finding.fingerprint.grammar");
+  });
+
+  test("supplied fingerprint: null is a usage error, not silent omission", () => {
+    const gate = validateAuditFindingGates([{ ...enrichedFinding(), fingerprint: null } as unknown as AuditFinding]);
+    expect(gate.ok).toBe(false);
+    expect(gate.violations.map((v) => v.code)).toContain("audit.finding.fingerprint.grammar");
+    expect(gate.violations.some((v) => v.message.includes("findings[0].fingerprint"))).toBe(true);
+  });
+
+  test("supplied severity: null → audit.finding.severity.shape; supplied trace: null → audit.finding.trace.shape", () => {
+    const severityGate = validateAuditFindingGates([{ ...enrichedFinding(), severity: null } as unknown as AuditFinding]);
+    expect(severityGate.violations.map((v) => v.code)).toContain("audit.finding.severity.shape");
+    const traceGate = validateAuditFindingGates([{ ...enrichedFinding(), trace: null } as unknown as AuditFinding]);
+    expect(traceGate.violations.map((v) => v.code)).toContain("audit.finding.trace.shape");
+  });
+
+  test("omitted fingerprint / severity / trace remain benign (pass gates)", () => {
+    const { fingerprint: _f, severity: _s, trace: _t, ...omitted } = enrichedFinding();
+    expect(validateAuditFindingGates([omitted]).ok).toBe(true);
+  });
+
+  test("fingerprint with any trailing line terminator fails the grammar (true end-of-input anchor)", () => {
+    for (const fp of ["valid-id\n", "valid-id\r", "valid-id\r\n", "valid-id\u2028", "valid-id\u2029", "valid-id "]) {
+      const gate = validateAuditFindingGates([enrichedFinding({ fingerprint: fp })]);
+      expect(gate.violations.map((v) => v.code)).toContain("audit.finding.fingerprint.grammar");
+    }
+    // positive control: a clean id still passes
+    expect(validateAuditFindingGates([enrichedFinding({ fingerprint: "valid-id" })]).ok).toBe(true);
+  });
+
+  test("credential-bearing fingerprint is REJECTED, not redacted into another identity", () => {
+    const gate = validateAuditFindingGates([enrichedFinding({ fingerprint: "leak-AKIAIOSFODNN7EXAMPLE" })]);
+    expect(gate.ok).toBe(false);
+    expect(gate.violations.map((v) => v.code)).toContain("audit.finding.fingerprint.secret");
+    // the violation names the field path, never the value
+    expect(gate.violations.some((v) => v.message.includes("AKIAIOSFODNN7"))).toBe(false);
+  });
+
+  test("severity.overall > severity.impact → audit.finding.severity.overall-exceeds-impact", () => {
+    const gate = validateAuditFindingGates([
+      enrichedFinding({ severity: { likelihood: "low", impact: "medium", overall: "high" } }),
+    ]);
+    expect(gate.ok).toBe(false);
+    expect(gate.violations.map((v) => v.code)).toContain("audit.finding.severity.overall-exceeds-impact");
+  });
+
+  test("severity.overall ≤ impact passes; no overall-vs-likelihood gate exists", () => {
+    const gate = validateAuditFindingGates([
+      enrichedFinding({ severity: { likelihood: "critical", impact: "low", overall: "low" } }),
+    ]);
+    expect(gate.ok).toBe(true);
+  });
+
+  test("empty trace → audit.finding.trace.empty (missing vs empty distinction)", () => {
+    const gate = validateAuditFindingGates([enrichedFinding({ trace: [] })]);
+    expect(gate.ok).toBe(false);
+    expect(gate.violations.map((v) => v.code)).toContain("audit.finding.trace.empty");
+  });
+
+  test("singleton trace accepts entrypoint or sink but not propagation", () => {
+    expect(validateAuditFindingGates([enrichedFinding({ trace: [{ kind: "sink", file: "src/a.ts", line: 1, scope: "s", description: "d" }] })]).ok).toBe(true);
+    const gate = validateAuditFindingGates([
+      enrichedFinding({ trace: [{ kind: "propagation", file: "src/a.ts", line: 1, scope: "s", description: "d" }] }),
+    ]);
+    expect(gate.violations.map((v) => v.code)).toContain("audit.finding.trace.topology");
+  });
+
+  test("multi-step trace topology: entrypoint first, sink last, propagation between", () => {
+    expect(validateAuditFindingGates([enrichedFinding()]).ok).toBe(true);
+    const gate = validateAuditFindingGates([
+      enrichedFinding({
+        trace: [
+          { kind: "propagation", file: "src/a.ts", line: 1, scope: "s", description: "d" },
+          { kind: "propagation", file: "src/b.ts", line: 2, scope: "s", description: "d" },
+          { kind: "sink", file: "src/c.ts", line: 3, scope: "s", description: "d" },
+        ],
+      }),
+    ]);
+    expect(gate.violations.map((v) => v.code)).toContain("audit.finding.trace.topology");
+  });
+
+  test("non-positive or non-safe trace lines → audit.finding.trace.line", () => {
+    for (const line of [0, -1, 1.5]) {
+      const gate = validateAuditFindingGates([
+        enrichedFinding({ trace: [{ kind: "sink", file: "src/a.ts", line, scope: "s", description: "d" }] }),
+      ]);
+      expect(gate.violations.map((v) => v.code)).toContain("audit.finding.trace.line");
+    }
+  });
+
+  test("non-positive, fractional or unsafe evidence lines → audit.finding.evidence.line; scaffoldAuditPlan rejects via direct engine call", () => {
+    for (const line of [0, -3, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      const gate = validateAuditFindingGates([
+        enrichedFinding({ evidence: [{ file: "src/a.ts", line, description: "d" }] }),
+      ]);
+      expect(gate.violations.map((v) => v.code)).toContain("audit.finding.evidence.line");
+    }
+    // omitted line stays legal; the CLI parser already validates, so the
+    // direct-engine path (which skips it) must carry the gate itself
+    expect(validateAuditFindingGates([enrichedFinding()]).ok).toBe(true);
+    const out = join(tmp, "audit-evidence-line");
+    for (const line of [0, -3, 1.5]) {
+      expect(() =>
+        scaffoldAuditPlan(out, [enrichedFinding({ evidence: [{ file: "src/a.ts", line, description: "d" }] })], { date: "2026-09-05" }),
+      ).toThrow(/audit\.finding\.evidence\.line/);
+    }
+  });
+
+  test("unsafe typed paths → audit.finding.path.unsafe (typed file fields only, never prose)", () => {
+    for (const file of ["../evil.ts", "/abs/x.ts", "C:\\x\\y.ts", "a//b.ts", "a/./b.ts", "a/../b.ts", "a/trailing./b.ts", "a/trailing /b.ts", "", "src/\ud800a.ts"]) {
+      const gate = validateAuditFindingGates([
+        enrichedFinding({ evidence: [{ file, line: 1, description: "d" }] }),
+      ]);
+      expect(gate.violations.some((v) => v.code === "audit.finding.path.unsafe")).toBe(true);
+    }
+    // a lone surrogate in a trace file is rejected with a field-path diagnostic too
+    const surrogateTrace = validateAuditFindingGates([
+      enrichedFinding({ trace: [{ kind: "sink", file: "src/\ud800a.ts", line: 1, scope: "s", description: "d" }] }),
+    ]);
+    expect(surrogateTrace.violations.map((v) => v.code)).toContain("audit.finding.path.unsafe");
+    expect(surrogateTrace.violations.some((v) => v.message.includes("trace[0].file"))).toBe(true);
+    // legacy string evidence with path-looking prose is NOT path-checked
+    expect(validateAuditFindingGates([legacyFinding({ evidence: ["see C:\\secrets\\.env line 3"] })]).ok).toBe(true);
+  });
+
+  test("credential-bearing typed location is rejected, not redacted", () => {
+    const gate = validateAuditFindingGates([
+      enrichedFinding({ trace: [{ kind: "sink", file: "src/AKIAIOSFODNN7EXAMPLE.ts", line: 1, scope: "s", description: "d" }] }),
+    ]);
+    expect(gate.violations.map((v) => v.code)).toContain("audit.finding.path.secret");
+    expect(gate.violations.some((v) => v.message.includes("AKIAIOSFODNN7"))).toBe(false);
+  });
+
+  test("invisible-only text → audit.finding.text.invisible; lone surrogate → text.surrogate", () => {
+    const zwsp = "\u200B\u00AD\uFEFF";
+    for (const [field, value] of [
+      ["title", zwsp],
+      ["impact", zwsp],
+    ] as const) {
+      const gate = validateAuditFindingGates([legacyFinding({ [field]: value } as Partial<AuditFinding>)]);
+      expect(gate.violations.some((v) => v.code === "audit.finding.text.invisible")).toBe(true);
+    }
+    // trailing whitespace around visible content is fine
+    expect(validateAuditFindingGates([legacyFinding({ title: "  visible  " })]).ok).toBe(true);
+    // invisible-only string evidence and trace scope are caught too
+    const gate = validateAuditFindingGates([
+      enrichedFinding({ trace: [{ kind: "sink", file: "src/a.ts", line: 1, scope: zwsp, description: "d" }] }),
+    ]);
+    expect(gate.violations.some((v) => v.code === "audit.finding.text.invisible")).toBe(true);
+    const surrogate = validateAuditFindingGates([legacyFinding({ impact: "ok \uD800 here" })]);
+    expect(surrogate.violations.map((v) => v.code)).toContain("audit.finding.text.surrogate");
+  });
+
+  test("variation-selector-only text is invisible-only → audit.finding.text.invisible", () => {
+    for (const vs of ["\uFE0F", "\u{E0100}\u{E01EF}", "\uFE00"]) {
+      const gate = validateAuditFindingGates([legacyFinding({ title: vs })]);
+      expect(gate.violations.some((v) => v.code === "audit.finding.text.invisible")).toBe(true);
+    }
+  });
+
+  test("full Default_Ignorable_Code_Point set: newly added ranges are invisible-only", () => {
+    // representative code point from each range the previous table missed
+    for (const cp of ["\u180F", "\u2065", "\u2069", "\u{1BCA0}", "\u{1D173}", "\u{E0080}", "\u{E0FFF}", "\u{E01EF}"]) {
+      const gate = validateAuditFindingGates([legacyFinding({ title: cp })]);
+      expect(gate.violations.some((v) => v.code === "audit.finding.text.invisible")).toBe(true);
+    }
+    // invisible-only rejections for previously covered ranges still hold
+    for (const cp of ["\u00AD", "\u061C", "\u115F", "\u17B4", "\u200B", "\u202E", "\u3164", "\uFEFF", "\uFFA0", "\uFFF8"]) {
+      const gate = validateAuditFindingGates([legacyFinding({ title: cp })]);
+      expect(gate.violations.some((v) => v.code === "audit.finding.text.invisible")).toBe(true);
+    }
+  });
+
+  test("C1 control characters in typed paths → audit.finding.path.unsafe", () => {
+    for (const file of ["src/\u0085file.ts", "src/\u009Ffile.ts", "\u0080x.ts"]) {
+      const gate = validateAuditFindingGates([
+        enrichedFinding({ evidence: [{ file, line: 1, description: "d" }] }),
+      ]);
+      expect(gate.violations.some((v) => v.code === "audit.finding.path.unsafe")).toBe(true);
+    }
+  });
+
+  test("valid multilingual visible text is not stripped or rejected", () => {
+    const gate = validateAuditFindingGates([
+      legacyFinding({ title: "注文クエリの N+1 問題", impact: "整序リストで注文ごとにクエリが発行されます。" }),
+    ]);
+    expect(gate.ok).toBe(true);
+  });
+
+  // Runtime shape guards (§3): JavaScript callers bypass type-checking, so a
+  // runtime-malformed carrier must yield a stable `audit.finding.*` violation
+  // with a field path — never a native TypeError. Malformed carriers are
+  // built via casts exactly as a JS caller would deliver them.
+  const malformed = (overrides: Record<string, unknown>): AuditFinding =>
+    ({ ...legacyFinding(), ...overrides }) as unknown as AuditFinding;
+  const codesOf = (findings: readonly AuditFinding[]): string[] =>
+    validateAuditFindingGates(findings).violations.map((v) => v.code);
+
+  test("non-array findings → audit.finding.shape; scaffoldAuditPlan rejects via direct engine call", () => {
+    const out = join(tmp, "audit-shape-findings");
+    expect(() => scaffoldAuditPlan(out, "nope" as unknown as AuditFinding[], { date: "2026-09-15" })).toThrow(
+      /invalid audit findings — audit\.finding\.shape: findings — audit\.finding\.shape/,
+    );
+  });
+
+  test("non-object finding → audit.finding.shape at findings[index], no dereference", () => {
+    for (const finding of [null, 7, "x"]) {
+      const gate = validateAuditFindingGates([finding as unknown as AuditFinding]);
+      expect(gate.ok).toBe(false);
+      expect(gate.violations.map((v) => v.code)).toEqual(["audit.finding.shape"]);
+      expect(gate.violations[0].message.startsWith("findings[0] — ")).toBe(true);
+    }
+  });
+
+  test("evidence: null / primitive / non-array carriers → stable codes, never TypeError", () => {
+    expect(codesOf([malformed({ evidence: [null] })])).toContain("audit.finding.evidence.shape");
+    expect(codesOf([malformed({ evidence: [42] })])).toContain("audit.finding.evidence.shape");
+    expect(codesOf([malformed({ evidence: "see src/a.ts" })])).toContain("audit.finding.evidence.shape");
+    expect(codesOf([malformed({ evidence: undefined })])).toContain("audit.finding.evidence.shape");
+    // positive control: string evidence stays legal
+    expect(validateAuditFindingGates([legacyFinding()]).ok).toBe(true);
+    const out = join(tmp, "audit-shape-evidence");
+    expect(() => scaffoldAuditPlan(out, [malformed({ evidence: [null] })], { date: "2026-09-15" })).toThrow(
+      /audit\.finding\.evidence\.shape: findings\[0\]\.evidence\[0\]/,
+    );
+  });
+
+  test("evidence object with absent or non-string file/description → path.unsafe / text.type", () => {
+    expect(codesOf([malformed({ evidence: [{ line: 1, description: "d" }] })])).toContain("audit.finding.path.unsafe");
+    expect(codesOf([malformed({ evidence: [{ file: 7, description: "d" }] })])).toContain("audit.finding.path.unsafe");
+    const descGate = validateAuditFindingGates([malformed({ evidence: [{ file: "src/a.ts", description: 42 }] })]);
+    expect(descGate.violations.map((v) => v.code)).toContain("audit.finding.text.type");
+    expect(descGate.violations.some((v) => v.message.includes("evidence[0].description"))).toBe(true);
+  });
+
+  test("trace: non-array carrier and non-object steps → audit.finding.trace.shape", () => {
+    expect(codesOf([malformed({ trace: "src/a.ts" })])).toContain("audit.finding.trace.shape");
+    expect(codesOf([malformed({ trace: [null] })])).toContain("audit.finding.trace.shape");
+    expect(codesOf([malformed({ trace: [42] })])).toContain("audit.finding.trace.shape");
+    const stepGate = validateAuditFindingGates([malformed({ trace: [null] })]);
+    expect(stepGate.violations.some((v) => v.message.includes("trace[0]"))).toBe(true);
+    const out = join(tmp, "audit-shape-trace");
+    // scaffoldAuditPlan reports the gate's first violation (topology sorts
+    // before the per-step pass) — still a stable code, never a TypeError.
+    expect(() => scaffoldAuditPlan(out, [malformed({ trace: [42] })], { date: "2026-09-15" })).toThrow(
+      /invalid audit findings — audit\.finding\.trace\.\w+/,
+    );
+  });
+
+  test("trace step with missing or non-string required text members → trace.shape / text.type", () => {
+    expect(codesOf([malformed({ trace: [{ kind: "sink", file: "src/a.ts", line: 1 }] })])).toContain(
+      "audit.finding.trace.shape",
+    );
+    const nonString = validateAuditFindingGates([
+      malformed({ trace: [{ kind: "sink", file: "src/a.ts", line: 1, scope: 9, description: "d" }] }),
+    ]);
+    expect(nonString.violations.map((v) => v.code)).toContain("audit.finding.text.type");
+    expect(nonString.violations.some((v) => v.message.includes("trace[0].scope"))).toBe(true);
+  });
+
+  test("severity: non-object carrier → audit.finding.severity.shape; non-enum ranks keep audit.finding.severity.rank", () => {
+    for (const severity of [null, "high", 3]) {
+      const gate = validateAuditFindingGates([malformed({ severity })]);
+      expect(gate.ok).toBe(false);
+      expect(gate.violations.map((v) => v.code)).toContain("audit.finding.severity.shape");
+      expect(gate.violations.some((v) => v.message.includes("findings[0].severity"))).toBe(true);
+    }
+    expect(codesOf([malformed({ severity: { likelihood: "catastrophic", impact: "high", overall: "low" } })])).toContain(
+      "audit.finding.severity.rank",
+    );
+    // positive control: a well-formed severity still passes
+    expect(validateAuditFindingGates([enrichedFinding()]).ok).toBe(true);
+  });
+
+  test("shape diagnostics never carry submitted values", () => {
+    const gate = validateAuditFindingGates([malformed({ evidence: [null], trace: [42], severity: "secret-value" })]);
+    expect(gate.ok).toBe(false);
+    for (const v of gate.violations) {
+      expect(v.message).not.toContain("secret-value");
+      expect(v.message).toMatch(/^findings\[\d+\]/);
+    }
+  });
+});
+
+describe("scaffoldAuditPlan — gate integration + additive rendering", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "engine-audit-scaffold-gates-"));
+  afterAll(() => rmSync(tmp, { recursive: true, force: true }));
+
+  test("gate failure throws TypeError with code + field path BEFORE any write; existing README untouched", () => {
+    const out = join(tmp, "audit-gate-fail");
+    mkdirSync(out, { recursive: true });
+    const readme = join(out, "README.md");
+    writeFileSync(readme, "# pre-existing index\n");
+    let thrown: unknown;
+    try {
+      scaffoldAuditPlan(out, [enrichedFinding(), legacyFinding({ fingerprint: "aa-late" })], { date: "2026-09-01" });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(TypeError);
+    expect((thrown as TypeError).message).toContain("audit.finding.fingerprint.order");
+    expect((thrown as TypeError).message).toContain("findings[1].fingerprint");
+    expect(readdirSync(out).sort()).toEqual(["README.md"]);
+    expect(readFileSync(readme, "utf8")).toBe("# pre-existing index\n");
+  });
+
+  test("supplied fingerprint: null → gate violation TypeError before any write (never silent omission)", () => {
+    const out = join(tmp, "audit-fingerprint-null");
+    mkdirSync(out, { recursive: true });
+    let thrown: unknown;
+    try {
+      scaffoldAuditPlan(out, [{ ...enrichedFinding(), fingerprint: null } as unknown as AuditFinding], { date: "2026-09-18" });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(TypeError);
+    expect((thrown as TypeError).message).toContain("audit.finding.fingerprint.grammar");
+    expect((thrown as TypeError).message).toContain("findings[0].fingerprint");
+    expect(readdirSync(out)).toEqual([]);
+  });
+
+  test("enriched finding renders Fingerprint/Likelihood/Severity Status lines, Trace table, structured evidence bullets; prose Impact retained", () => {
+    const out = join(tmp, "audit-2026-09-02");
+    scaffoldAuditPlan(out, [enrichedFinding()], { date: "2026-09-02", repoShortSha: "deadbee" });
+    const plan = readFileSync(join(out, "001-unparameterized-sink-in-export-path.md"), "utf8");
+    expect(plan).toContain("- **Fingerprint**: sql-export-sink");
+    expect(plan).toContain("- **Confidence**: HIGH");
+    expect(plan).toContain("- **Likelihood**: high");
+    expect(plan).toContain("- **Severity impact**: high");
+    expect(plan).toContain("- **Severity**: high");
+    expect(plan).toContain("## Impact");
+    expect(plan).toContain("User-controlled CSV export interpolates raw SQL.");
+    // string evidence bullets byte-for-byte; object evidence renders file:line — description
+    expect(plan).toContain("- src/export.ts:88 — f-string builds the query");
+    expect(plan).toContain("- src/export.ts:120 — same sink in the retry path");
+    // Trace table with Kind | Location | Scope / Description
+    expect(plan).toContain("## Trace");
+    expect(plan).toContain("| entrypoint | src/routes/export.ts:10 | GET /export — query param reaches the exporter |");
+    expect(plan).toContain("| sink | src/export.ts:88 | runExport — query executed |");
+    // still round-trips through the Status validator
+    expect(validateAuditStatusBlocks(plan).ok).toBe(true);
+  });
+
+  test("trace table cells escape pipes and encode embedded line breaks (\\n and lone \\r) without extra rows", () => {
+    const out = join(tmp, "audit-2026-09-03");
+    scaffoldAuditPlan(
+      out,
+      [
+        enrichedFinding({
+          trace: [
+            { kind: "sink", file: "src/a.ts", line: 1, scope: "with | pipe", description: "line one\nline two\rcol three" },
+          ],
+        }),
+      ],
+      { date: "2026-09-03" },
+    );
+    const plan = readFileSync(join(out, "001-unparameterized-sink-in-export-path.md"), "utf8");
+    expect(plan).toContain("| sink | src/a.ts:1 | with \\| pipe — line one\\nline two\\ncol three |");
+    expect(plan).toContain("## Impact"); // exactly one row: the encoded break never starts a new table line
+    expect(plan).not.toContain("\r"); // a lone CR never survives into a written cell
+  });
+
+  test("MED confidence with no metadata writes no Confidence line; enriched MED finding does", () => {
+    const out = join(tmp, "audit-2026-09-04");
+    scaffoldAuditPlan(
+      out,
+      [
+        legacyFinding({ title: "Legacy shape" }),
+        enrichedFinding({ confidence: "MED", title: "Enriched default confidence" }),
+      ],
+      { date: "2026-09-04" },
+    );
+    const legacy = readFileSync(join(out, "001-legacy-shape.md"), "utf8");
+    expect(legacy).not.toContain("**Confidence**");
+    expect(legacy).not.toContain("## Trace");
+    expect(legacy).not.toContain("**Fingerprint**");
+    const enriched = readFileSync(join(out, "002-enriched-default-confidence.md"), "utf8");
+    expect(enriched).toContain("- **Confidence**: MED");
+  });
+
+  test("index gains Fingerprint / Likelihood / Severity impact / Severity columns only when a row has them; unrated rows show —", () => {
+    const out = join(tmp, "audit-2026-09-05");
+    scaffoldAuditPlan(out, [legacyFinding({ title: "Legacy row" }), enrichedFinding()], {
+      date: "2026-09-05",
+      repoShortSha: "deadbee",
+    });
+    const readme = readFileSync(join(out, "README.md"), "utf8");
+    expect(readme).toContain("| # | Finding | Category | Impact | Effort | Risk | Confidence | Evidence | Fingerprint | Likelihood | Severity impact | Severity |");
+    // prose Impact column retained; legacy row shows — in the new cells
+    expect(readme).toContain("| 001 | Legacy row | perf | Queries explode on the dashboard. | S | LOW | MED | src/orders.ts:42 — raw loop | — | — | — | — |");
+    expect(readme).toContain("| 002 | Unparameterized sink in export path | security | User-controlled CSV export interpolates raw SQL. | S | HIGH | HIGH | src/export.ts:88 — f-string builds the query | sql-export-sink | high | high | high |");
+  });
+
+  test("legacy-only batch keeps the old index header (no empty new columns)", () => {
+    const out = join(tmp, "audit-2026-09-06");
+    scaffoldAuditPlan(out, [legacyFinding()], { date: "2026-09-06", repoShortSha: "deadbee" });
+    const readme = readFileSync(join(out, "README.md"), "utf8");
+    expect(readme).toContain("| # | Finding | Category | Impact | Effort | Risk | Confidence | Evidence |\n");
+    expect(readme).not.toContain("Fingerprint");
+  });
+
+  test("rerun with no new findings retains stored fingerprint/severity/confidence; legacy row fallbacks unchanged", () => {
+    const out = join(tmp, "audit-2026-09-07");
+    scaffoldAuditPlan(out, [legacyFinding({ title: "Legacy row" }), enrichedFinding()], {
+      date: "2026-09-07",
+      repoShortSha: "deadbee",
+    });
+    const before = readFileSync(join(out, "README.md"), "utf8");
+    // rerun: no new findings, no plan file rewritten; the README is rebuilt
+    // from the stored Status lines — fingerprint/severity/confidence of
+    // enriched rows survive, legacy rows keep their fallbacks ("see plan
+    // file" impact, "—" confidence — pre-existing rebuild behavior).
+    const result = scaffoldAuditPlan(out, [], { date: "2026-09-07", repoShortSha: "deadbee" });
+    expect(result.files).toEqual([]);
+    expect(result.nextNumber).toBe(3);
+    const rebuilt = readFileSync(join(out, "README.md"), "utf8");
+    expect(rebuilt).not.toBe(before); // finding-authoritative overrides no longer apply; parsed storage drives the rows
+    expect(rebuilt).toContain("| 002 | Unparameterized sink in export path | security | see plan file | S | HIGH | HIGH | src/export.ts:88 — f-string builds the query | sql-export-sink | high | high | high |");
+    expect(rebuilt).toContain("| 001 | Legacy row | perf | see plan file | S | LOW | — | src/orders.ts:42 — raw loop | — | — | — | — |");
+    // a second empty rerun is byte-stable — rebuild-from-storage converged
+    scaffoldAuditPlan(out, [], { date: "2026-09-07", repoShortSha: "deadbee" });
+    expect(readFileSync(join(out, "README.md"), "utf8")).toBe(rebuilt);
+  });
+
+  test("secret-bearing structured description is redacted normally; opaque files/fingerprints never altered", () => {
+    const out = join(tmp, "audit-2026-09-08b");
+    scaffoldAuditPlan(
+      out,
+      [
+        enrichedFinding({
+          evidence: [{ file: "src/config.ts", line: 3, description: "AWS key AKIAIOSFODNN7EXAMPLE committed" }],
+        }),
+      ],
+      { date: "2026-09-08" },
+    );
+    const plan = readFileSync(join(out, "001-unparameterized-sink-in-export-path.md"), "utf8");
+    expect(plan).not.toContain("AKIAIOSFODNN7EXAMPLE");
+    expect(plan).toContain("- src/config.ts:3 —");
+  });
+});
 
 describe("promoteAuditPlans", () => {
   const tmp = mkdtempSync(join(tmpdir(), "engine-audit-promote-"));
