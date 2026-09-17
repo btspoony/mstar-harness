@@ -620,7 +620,9 @@ describe("mstar worktree cleanup — bounded evidence probes", () => {
     const home = dirname(fx.root);
     const shim = installGitShim(home);
     try {
-      const result = runCli(["worktree", "cleanup", "--workflow", "wf-3", "--harness", fx.root, "--remote"], fx.root, shim.env);
+      // Full-sweep mode: dangling-owner is owned by wf-gone, outside wf-3's
+      // default universe — its fail-closed row needs the full sweep.
+      const result = runCli(["worktree", "cleanup", "--workflow", "wf-3", "--harness", fx.root, "--remote", "--all-workflows"], fx.root, shim.env);
       expect(result.exitCode).toBe(0);
       const counts = membershipHistogram(readGitLog(shim.logPath));
       expect(counts.ancestry).toBe(0);
@@ -708,8 +710,8 @@ describe("mstar worktree cleanup — bounded evidence probes", () => {
     const plain = installGitShim(home);
     const verbose = installGitShim(home);
     try {
-      const quiet = runCli(["worktree", "cleanup", "--workflow", "wf-3", "--harness", fx.root, "--remote"], fx.root, plain.env);
-      const loud = runCli(["worktree", "cleanup", "--workflow", "wf-3", "--harness", fx.root, "--remote", "--verbose"], fx.root, verbose.env);
+      const quiet = runCli(["worktree", "cleanup", "--workflow", "wf-3", "--harness", fx.root, "--remote", "--all-workflows"], fx.root, plain.env);
+      const loud = runCli(["worktree", "cleanup", "--workflow", "wf-3", "--harness", fx.root, "--remote", "--all-workflows", "--verbose"], fx.root, verbose.env);
       expect(quiet.exitCode).toBe(0);
       expect(loud.exitCode).toBe(0);
       expect(decisionRows(loud.stdout)).toEqual(decisionRows(quiet.stdout));
@@ -835,7 +837,9 @@ describe("mstar worktree cleanup — dry-run is a byte-for-byte no-op", () => {
     try {
       const beforeRefs = refInventory(fx.root);
       const beforeWt = git(["worktree", "list", "--porcelain"], fx.root);
-      const result = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root], fx.root);
+      // Full-sweep visibility assertions (foreign rows, main keep rows) run
+      // in --all-workflows mode; the default universe is workflow-scoped.
+      const result = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root, "--all-workflows"], fx.root);
       expect(result.exitCode).toBe(0);
       // Eligible Done+merged attached worktree removes; its branch refuses checked-out until replan.
       expect(result.stdout).toContain(`remove | worktree | ${fx.doneWt} | cleanup.remove.merged`);
@@ -870,7 +874,7 @@ describe("mstar worktree cleanup — dry-run is a byte-for-byte no-op", () => {
     try {
       const beforeRefs = refInventory(fx.root);
       const beforeBare = refInventory(fx.bare);
-      const result = runCli(["worktree", "cleanup", "--workflow", "wf-2", "--harness", fx.root, "--remote"], fx.root);
+      const result = runCli(["worktree", "cleanup", "--workflow", "wf-2", "--harness", fx.root, "--remote", "--all-workflows"], fx.root);
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("remove | local-branch | iteration/wf-2 | cleanup.remove.merged");
       expect(result.stdout).toContain("remove | remote-branch | origin/iteration/wf-2 | cleanup.remove.merged");
@@ -1207,7 +1211,9 @@ describe("mstar worktree cleanup — exit contract", () => {
       const badPath = join(badDir, "snapshot.json");
       writeFileSync(badPath, "{ not json");
 
-      const dry = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root], fx.root);
+      // Full sweep: the foreign-visibility rows need --all-workflows; the
+      // unreadable-sibling withholding applies in every mode.
+      const dry = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root, "--all-workflows"], fx.root);
       expect(dry.exitCode).toBe(0);
       expect(dry.stderr).toContain("cannot be parsed");
       expect(dry.stderr).toContain("wf-bad/snapshot.json");
@@ -1263,7 +1269,8 @@ describe("mstar worktree cleanup — exit contract", () => {
         JSON.stringify({ schema_version: 1, id: "wf-bad-schema", branch: { base: "feature/done-a" } }),
       );
 
-      const dry = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root], fx.root);
+      // Full sweep: the foreign-worktree visibility row needs --all-workflows.
+      const dry = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root, "--all-workflows"], fx.root);
       expect(dry.exitCode).toBe(0);
       expect(dry.stderr).toContain("kept in degraded form");
       expect(dry.stderr).toContain("workflow.snapshot.missing-type");
@@ -1278,4 +1285,346 @@ describe("mstar worktree cleanup — exit contract", () => {
       rmSync(fx.root, { recursive: true, force: true });
     }
   });
+});
+
+/**
+ * Candidate-scope fixture: two standalone-plan workflows with explicit
+ * candidate universes and every scoping edge the contract names.
+ *
+ * Workflow A (`wf-a`, completed plan) has two rows:
+ * - a1 (Done): working branch `feature/a1-work` (also duplicated in its own
+ *   track_branches — identical claims must collapse), retained tracks
+ *   `feature/a1-track-1/2/3`, ambiguous track `feature/a1-ambiguous` (also
+ *   claimed by B), and an asserted worktree `wt-a1`.
+ * - a2 (Done): working branch `feature/a2-work` + worktree `wt-a2` — a
+ *   SIBLING row a1's scope must not select.
+ * Workflow B (`wf-b`, RUNNING plan) owns `wt-b`/`feature/b-work` under an
+ * ACTIVE lease, tracks `feature/b-track` and `feature/a1-ambiguous`, and its
+ * base anchor PROTECTS `feature/a1-track-1` — B's safety declarations must
+ * refuse/keep in-scope A targets in every mode.
+ * `wt-lost` hosts a1's recorded track `feature/a1-track-3` but records NO
+ * path (discovery-only candidate); `wt-foreign`/`feature/stranger` are
+ * wholly unrecorded.
+ */
+function scopeFixture(prefix: string): {
+  root: string;
+  mainBranch: string;
+  wtA1: string;
+  wtA2: string;
+  wtB: string;
+  wtLost: string;
+  wtForeign: string;
+} {
+  const root = tmpRoot(prefix);
+  git(["init", "-q"], root);
+  git(["config", "user.email", "cleanup-test@example.com"], root);
+  git(["config", "user.name", "Cleanup Test"], root);
+  writeFileSync(join(root, "base.txt"), "base\n");
+  git(["add", "-A"], root);
+  git(["commit", "-q", "-m", "base commit"], root);
+  const mainBranch = git(["branch", "--show-current"], root);
+
+  // Retained tracks anchored at the base commit stay ancestors of main (merged).
+  for (const branch of ["feature/a1-track-1", "feature/a1-track-2", "feature/a1-ambiguous", "feature/b-track"]) {
+    git(["branch", branch, mainBranch], root);
+  }
+
+  const addMergedWorktree = (name: string, branch: string): string => {
+    const wtPath = join(root, name);
+    git(["worktree", "add", "-q", wtPath, "-b", branch], root);
+    writeFileSync(join(wtPath, `${name}.txt`), `${name} work\n`);
+    git(["add", "-A"], wtPath);
+    git(["commit", "-q", "-m", `${name} work`], wtPath);
+    git(["merge", "-q", "--no-ff", "-m", `merge ${branch}`, branch], root);
+    return wt(worktreeList(root), name).path;
+  };
+  const wtA1 = addMergedWorktree("wt-a1", "feature/a1-work");
+  const wtA2 = addMergedWorktree("wt-a2", "feature/a2-work");
+  const wtB = addMergedWorktree("wt-b", "feature/b-work");
+  // wt-lost checks out a1's RETAINED TRACK; the worktree path is recorded nowhere.
+  git(["branch", "feature/a1-track-3", `${mainBranch}~1`], root);
+  const wtLostRaw = join(root, "wt-lost");
+  git(["worktree", "add", "-q", wtLostRaw, "feature/a1-track-3"], root);
+  writeFileSync(join(wtLostRaw, "lost.txt"), "lost work\n");
+  git(["add", "-A"], wtLostRaw);
+  git(["commit", "-q", "-m", "lost work"], wtLostRaw);
+  git(["merge", "-q", "--no-ff", "-m", "merge a1-track-3", "feature/a1-track-3"], root);
+  const wtLost = wt(worktreeList(root), "wt-lost").path;
+  const wtForeign = addMergedWorktree("wt-foreign", "feature/stranger");
+
+  const workflows = join(root, "workflows");
+  execFileSync("mkdir", ["-p", join(workflows, "wf-a"), join(workflows, "wf-b")]);
+  // Canonical main-worktree path as git spells it (macOS /var vs /private/var).
+  const canonicalRoot = worktreeList(root)[0]!.path;
+  writeFileSync(
+    join(workflows, "wf-a", "snapshot.json"),
+    JSON.stringify(
+      {
+        schema_version: 1,
+        id: "wf-a",
+        type: "plan",
+        status: "completed",
+        started_at: "2026-09-10",
+        ended_at: "2026-09-11",
+        updated_at: "2026-09-11",
+        branch: { base: mainBranch, target: mainBranch },
+        plans: [
+          row("plan-a1", "Done", {
+            metadata: {
+              working_branch: "feature/a1-work",
+              track_branches: [
+                "feature/a1-work", // duplicate identical claim — must stay one owner
+                "feature/a1-track-1",
+                "feature/a1-track-2",
+                "feature/a1-track-3",
+                "feature/a1-ambiguous", // cross-owner: B also records it
+              ],
+              worktree_path: wtA1,
+            },
+          }),
+          row("plan-a2", "Done", { metadata: { working_branch: "feature/a2-work", worktree_path: wtA2 } }),
+        ],
+      },
+      null,
+      2,
+    ),
+  );
+  writeFileSync(
+    join(workflows, "wf-b", "snapshot.json"),
+    JSON.stringify(
+      {
+        schema_version: 1,
+        id: "wf-b",
+        type: "plan",
+        status: "running",
+        started_at: "2026-09-12",
+        updated_at: "2026-09-12",
+        // B's base anchor PROTECTS an in-scope A track (cross-workflow safety).
+        branch: { base: "feature/a1-track-1", target: mainBranch },
+        plans: [
+          row("plan-b1", "InProgress", {
+            execution_lease: lease(wtB, "feature/b-work"),
+            metadata: { track_branches: ["feature/a1-ambiguous", "feature/b-track"] },
+          }),
+        ],
+      },
+      null,
+      2,
+    ),
+  );
+  return { root: canonicalRoot, mainBranch, wtA1, wtA2, wtB, wtLost, wtForeign };
+}
+
+describe("mstar worktree cleanup — candidate scope", () => {
+  test("default dry run lists exactly workflow A's candidates (exact array)", () => {
+    const fx = scopeFixture("mstar-cleanup-scope-default-");
+    try {
+      const result = runCli(["worktree", "cleanup", "--workflow", "wf-a", "--harness", fx.root], fx.root);
+      expect(result.exitCode).toBe(0);
+      expect(decisionRows(result.stdout)).toEqual([
+        `remove | worktree | ${fx.wtA1} | cleanup.remove.merged`,
+        `remove | worktree | ${fx.wtA2} | cleanup.remove.merged`,
+        // Discovered only via its recorded checked-out branch: visible, unowned, refused.
+        `refuse | worktree | ${fx.wtLost} | cleanup.refuse.foreign-worktree`,
+        `refuse | local-branch | feature/a1-ambiguous | cleanup.refuse.foreign-branch`,
+        // B's base anchor keeps this A track even in A's own scope.
+        "keep | local-branch | feature/a1-track-1 | cleanup.keep.protected-ref",
+        "remove | local-branch | feature/a1-track-2 | cleanup.remove.merged",
+        "refuse | local-branch | feature/a1-track-3 | cleanup.refuse.checked-out",
+        "refuse | local-branch | feature/a1-work | cleanup.refuse.checked-out",
+        // a2's branch IS an A candidate (its own row); B/unrecorded omitted.
+        "refuse | local-branch | feature/a2-work | cleanup.refuse.checked-out",
+      ]);
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  test("--all-workflows restores the full sweep with cross-workflow safety intact (exact array)", () => {
+    const fx = scopeFixture("mstar-cleanup-scope-all-");
+    try {
+      const result = runCli(["worktree", "cleanup", "--workflow", "wf-a", "--harness", fx.root, "--all-workflows"], fx.root);
+      expect(result.exitCode).toBe(0);
+      expect(decisionRows(result.stdout)).toEqual([
+        `keep | worktree | ${fx.root} | cleanup.keep.main-worktree`,
+        `remove | worktree | ${fx.wtA1} | cleanup.remove.merged`,
+        `remove | worktree | ${fx.wtA2} | cleanup.remove.merged`,
+        `refuse | worktree | ${fx.wtB} | cleanup.refuse.active-lease`,
+        `refuse | worktree | ${fx.wtForeign} | cleanup.refuse.foreign-worktree`,
+        `refuse | worktree | ${fx.wtLost} | cleanup.refuse.foreign-worktree`,
+        "refuse | local-branch | feature/a1-ambiguous | cleanup.refuse.foreign-branch",
+        "keep | local-branch | feature/a1-track-1 | cleanup.keep.protected-ref",
+        "remove | local-branch | feature/a1-track-2 | cleanup.remove.merged",
+        "refuse | local-branch | feature/a1-track-3 | cleanup.refuse.checked-out",
+        "refuse | local-branch | feature/a1-work | cleanup.refuse.checked-out",
+        "refuse | local-branch | feature/a2-work | cleanup.refuse.checked-out",
+        "refuse | local-branch | feature/b-track | cleanup.refuse.non-terminal",
+        "refuse | local-branch | feature/b-work | cleanup.refuse.active-lease",
+        "refuse | local-branch | feature/stranger | cleanup.refuse.foreign-branch",
+        `keep | local-branch | ${fx.mainBranch} | cleanup.keep.protected-ref`,
+      ]);
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  test("--worktree narrows worktrees and selects branches only by exact retained owner", () => {
+    const fx = scopeFixture("mstar-cleanup-scope-wt-");
+    try {
+      const result = runCli(["worktree", "cleanup", "--workflow", "wf-a", "--harness", fx.root, "--worktree", fx.wtA1], fx.root);
+      expect(result.exitCode).toBe(0);
+      expect(decisionRows(result.stdout)).toEqual([
+        `remove | worktree | ${fx.wtA1} | cleanup.remove.merged`,
+        // a1's exact claim set: ambiguous (matching claim) stays visible but
+        // unowned; a1's retained tracks survive — including the one checked
+        // out in the un-asserted wt-lost.
+        "refuse | local-branch | feature/a1-ambiguous | cleanup.refuse.foreign-branch",
+        "keep | local-branch | feature/a1-track-1 | cleanup.keep.protected-ref",
+        "remove | local-branch | feature/a1-track-2 | cleanup.remove.merged",
+        "refuse | local-branch | feature/a1-track-3 | cleanup.refuse.checked-out",
+        "refuse | local-branch | feature/a1-work | cleanup.refuse.checked-out",
+        // NOT selected: sibling row a2 (worktree nor branch), any B row,
+        // the unrecorded worktree/branch, the default branch.
+      ]);
+      expect(result.stdout).not.toContain(`| ${fx.wtA2} |`);
+      expect(result.stdout).not.toContain("feature/a2-work");
+      expect(result.stdout).not.toContain(fx.wtB);
+      expect(result.stdout).not.toContain("feature/b-work");
+      expect(result.stdout).not.toContain("feature/b-track");
+      expect(result.stdout).not.toContain(fx.wtForeign);
+      expect(result.stdout).not.toContain("feature/stranger");
+      expect(result.stdout).not.toContain(`keep | worktree | ${fx.root}`);
+      expect(result.stdout).not.toContain(`| ${fx.mainBranch} |`);
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  test("repeated --worktree paths behave exactly like one", () => {
+    const fx = scopeFixture("mstar-cleanup-scope-repeat-");
+    try {
+      const single = runCli(["worktree", "cleanup", "--workflow", "wf-a", "--harness", fx.root, "--worktree", fx.wtA1], fx.root);
+      const repeated = runCli(
+        ["worktree", "cleanup", "--workflow", "wf-a", "--harness", fx.root, "--worktree", fx.wtA1, "--worktree", fx.wtA1],
+        fx.root,
+      );
+      expect(single.exitCode).toBe(0);
+      expect(repeated.exitCode).toBe(0);
+      expect(decisionRows(repeated.stdout)).toEqual(decisionRows(single.stdout));
+      // One diagnostic per distinct path at most — a duplicate adds none.
+      expect(evidenceNotes(repeated.stderr)).toEqual(evidenceNotes(single.stderr));
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  test("--all-workflows --worktree narrows by exact owner, not a workflow override", () => {
+    const fx = scopeFixture("mstar-cleanup-scope-allwt-");
+    try {
+      const result = runCli(
+        ["worktree", "cleanup", "--workflow", "wf-a", "--harness", fx.root, "--all-workflows", "--worktree", fx.wtB],
+        fx.root,
+      );
+      expect(result.exitCode).toBe(0);
+      expect(decisionRows(result.stdout)).toEqual([
+        // The asserted B worktree is inspected under the SAME guards.
+        `refuse | worktree | ${fx.wtB} | cleanup.refuse.active-lease`,
+        // Exact owner (wf-b, plan-b1): its tracks plus the ambiguous branch
+        // that carries a matching claim (still unowned).
+        "refuse | local-branch | feature/a1-ambiguous | cleanup.refuse.foreign-branch",
+        "refuse | local-branch | feature/b-track | cleanup.refuse.non-terminal",
+        "refuse | local-branch | feature/b-work | cleanup.refuse.active-lease",
+      ]);
+      expect(result.stdout).not.toContain(fx.wtA1);
+      expect(result.stdout).not.toContain("feature/a1-track-2");
+      expect(result.stdout).not.toContain(fx.wtA2);
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  test("a missing or out-of-universe asserted path emits one diagnostic and fabricates no target", () => {
+    const fx = scopeFixture("mstar-cleanup-scope-missing-");
+    try {
+      const missing = runCli(
+        ["worktree", "cleanup", "--workflow", "wf-a", "--harness", fx.root, "--worktree", "/definitely/not/a/worktree"],
+        fx.root,
+      );
+      expect(missing.exitCode).toBe(0);
+      expect(decisionRows(missing.stdout)).toEqual([]);
+      const missingNotes = evidenceNotes(missing.stderr);
+      expect(missingNotes).toHaveLength(1);
+      expect(missingNotes[0]).toContain("does not match an inventoried worktree");
+
+      // The B worktree asserted under workflow A is outside A's universe.
+      const foreignPath = runCli(["worktree", "cleanup", "--workflow", "wf-a", "--harness", fx.root, "--worktree", fx.wtB], fx.root);
+      expect(foreignPath.exitCode).toBe(0);
+      expect(decisionRows(foreignPath.stdout)).toEqual([]);
+      const foreignNotes = evidenceNotes(foreignPath.stderr);
+      expect(foreignNotes).toHaveLength(1);
+      expect(foreignNotes[0]).toContain("outside workflow wf-a");
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  test("assertion recovery attributes the path-less recorded worktree; discovery alone only refuses", () => {
+    const fx = scopeFixture("mstar-cleanup-scope-recover-");
+    try {
+      // Default mode discovers wt-lost via its recorded branch — refused unowned.
+      const dry = runCli(["worktree", "cleanup", "--workflow", "wf-a", "--harness", fx.root], fx.root);
+      expect(dry.stdout).toContain(`refuse | worktree | ${fx.wtLost} | cleanup.refuse.foreign-worktree`);
+      expect(dry.stdout).not.toContain(`remove | worktree | ${fx.wtLost}`);
+
+      // The verified assertion attributes it via the recorded checked-out
+      // branch — and nothing else becomes owned by that recovery.
+      const result = runCli(["worktree", "cleanup", "--workflow", "wf-a", "--harness", fx.root, "--worktree", fx.wtLost], fx.root);
+      expect(result.exitCode).toBe(0);
+      expect(decisionRows(result.stdout)).toEqual([
+        `remove | worktree | ${fx.wtLost} | cleanup.remove.merged`,
+        "refuse | local-branch | feature/a1-ambiguous | cleanup.refuse.foreign-branch",
+        "keep | local-branch | feature/a1-track-1 | cleanup.keep.protected-ref",
+        "remove | local-branch | feature/a1-track-2 | cleanup.remove.merged",
+        "refuse | local-branch | feature/a1-track-3 | cleanup.refuse.checked-out",
+        "refuse | local-branch | feature/a1-work | cleanup.refuse.checked-out",
+      ]);
+      expect(result.stdout).not.toContain("feature/a2-work");
+      expect(result.stdout).not.toContain("feature/b-track");
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  test("--apply keeps the retained owner set across the removed worktree's re-probe", () => {
+    const fx = scopeFixture("mstar-cleanup-scope-apply-");
+    try {
+      const applied = runCli(
+        ["worktree", "cleanup", "--workflow", "wf-a", "--harness", fx.root, "--apply", "--worktree", fx.wtA1],
+        fx.root,
+      );
+      expect(applied.exitCode).toBe(0);
+      // Pass 1 removes the asserted worktree; after the re-probe the SAME
+      // owner key (wf-a, plan-a1) still selects its working branch and
+      // retained merged track — even though the path is gone.
+      expect(applied.stdout).toContain(`apply: removed worktree ${fx.wtA1}`);
+      expect(applied.stdout).toContain("apply: deleted branch feature/a1-work");
+      expect(applied.stdout).toContain("apply: deleted branch feature/a1-track-2");
+      expect(git(["worktree", "list", "--porcelain"], fx.root)).not.toContain(fx.wtA1);
+      expect(git(["for-each-ref", "refs/heads/feature/a1-work"], fx.root)).toBe("");
+      expect(git(["for-each-ref", "refs/heads/feature/a1-track-2"], fx.root)).toBe("");
+      // The sibling row a2 is NEVER selected by a1's owner key.
+      expect(applied.stdout).not.toContain(`apply: removed worktree ${fx.wtA2}`);
+      expect(applied.stdout).not.toContain("apply: deleted branch feature/a2-work");
+      expect(git(["worktree", "list", "--porcelain"], fx.root)).toContain(fx.wtA2);
+      expect(git(["for-each-ref", "refs/heads/feature/a2-work"], fx.root)).not.toBe("");
+      // Protected, ambiguous, checked-out and B-owned branches all survive.
+      for (const branch of ["feature/a1-track-1", "feature/a1-track-3", "feature/a1-ambiguous", "feature/b-track", "feature/b-work", "feature/stranger"]) {
+        expect(git(["for-each-ref", `refs/heads/${branch}`], fx.root)).not.toBe("");
+      }
+      expect(git(["worktree", "list", "--porcelain"], fx.root)).toContain(fx.wtLost);
+      expect(git(["worktree", "list", "--porcelain"], fx.root)).toContain(fx.wtB);
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true });
+    }
+  }, 30000);
 });

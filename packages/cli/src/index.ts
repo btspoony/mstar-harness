@@ -2785,6 +2785,28 @@ type CleanupRemoteCandidate = { branch: string; tip: string; base: string };
 /** Ancestry answers keyed by tip OID, then base OID — valid within one pass. */
 type CleanupAncestryMemo = Map<string, Map<string, boolean | null>>;
 
+/** Explicit candidate-universe request assembled from CLI flags. */
+type CleanupScopeRequest = {
+  workflowId: string;
+  allWorkflows: boolean;
+  /** Canonical asserted `--worktree` paths (empty when the flag is absent). */
+  asserted: ReadonlySet<string>;
+};
+
+/**
+ * Resolved candidate scope. Selection NEVER assigns ownership: the safety
+ * universe (all snapshots, all worktree records, all leases/protected
+ * anchors) stays in facts. `assertedOwners` holds the exact owner keys
+ * `(workflowId, planId-or-absent)` of actual, in-universe asserted worktrees,
+ * retained once before the first plan for branch narrowing — a selection
+ * filter, never a cached ownership grant; attribution is recomputed from
+ * fresh snapshots on every pass.
+ */
+type CleanupCandidateScope = CleanupScopeRequest & {
+  scoped: boolean;
+  assertedOwners: readonly CleanupOwner[];
+};
+
 type CleanupOwner = NonNullable<CleanupTarget["owner"]>;
 
 /** Realpath when the entry exists (macOS /var vs /private/var), resolve otherwise. */
@@ -3248,16 +3270,104 @@ function cleanupProbe(input: CleanupProbeInput): CleanupProbe {
 }
 
 /**
+ * Worktree candidate membership for the requested universe. Default mode
+ * (scoped to the selected workflow) keeps a worktree iff one of its recorded
+ * path claims belongs to the workflow, or — discovery only — it has zero
+ * path claims and its checked-out branch is claimed there (still unowned
+ * unless explicitly asserted). `--worktree` intersects with the asserted
+ * paths in both modes. No naming/path-neighbor inference: claims only.
+ */
+function cleanupWorktreeCandidate(
+  worktree: CleanupProbeWorktree,
+  scope: Pick<CleanupScopeRequest, "workflowId" | "allWorkflows" | "asserted">,
+  snapshots: readonly WorkflowSnapshot[],
+): boolean {
+  if (scope.asserted.size > 0 && !scope.asserted.has(cleanupPathKey(worktree.path))) return false;
+  const claims = cleanupWorktreeClaims(worktree.path, snapshots);
+  if (claims.length > 0) return scope.allWorkflows || claims.some((claim) => claim.workflowId === scope.workflowId);
+  if (scope.allWorkflows) return true;
+  const checkedOut = worktree.branch ?? "";
+  if (checkedOut === "") return false;
+  return cleanupBranchClaims(checkedOut, snapshots).some((claim) => claim.workflowId === scope.workflowId);
+}
+
+/**
+ * Branch candidate membership. Default mode keeps a branch iff one of its
+ * recorded claims belongs to the selected workflow (an ambiguous claim that
+ * includes it stays visible and unowned). With `--worktree`, the branch must
+ * additionally carry a claim IDENTICAL to one retained asserted owner —
+ * a row's working and track branches survive, sibling rows and other
+ * lifecycles do not. No asserted owner ⇒ no branch candidates, never a
+ * fallback to the full sweep.
+ */
+function cleanupBranchCandidate(
+  claims: readonly CleanupOwner[],
+  scope: Pick<CleanupCandidateScope, "workflowId" | "allWorkflows" | "asserted" | "assertedOwners">,
+): boolean {
+  if (!scope.allWorkflows && !claims.some((claim) => claim.workflowId === scope.workflowId)) return false;
+  if (scope.asserted.size === 0) return true;
+  const ownerKeys = new Set(scope.assertedOwners.map((owner) => JSON.stringify(owner)));
+  return claims.some((claim) => ownerKeys.has(JSON.stringify(claim)));
+}
+
+/**
+ * Resolve the explicit candidate scope once from the first probe. Ownership
+ * itself is recomputed from fresh snapshots on every pass; only the exact
+ * asserted owner keys persist here (re-plan lifetime across `--apply`
+ * re-probes, so a removed asserted worktree keeps its branch in scope).
+ * Per-path assertion problems get at most one diagnostic each; nothing is
+ * fabricated for a missing or out-of-universe path.
+ */
+function cleanupResolveScope(
+  probe: Pick<CleanupProbe, "selected" | "snapshots" | "worktrees">,
+  request: CleanupScopeRequest,
+): CleanupCandidateScope {
+  const assertedOwners: CleanupOwner[] = [];
+  for (const key of request.asserted) {
+    const worktree = probe.worktrees.find((candidate) => cleanupPathKey(candidate.path) === key);
+    if (worktree === undefined) {
+      console.error(
+        pc.yellow(
+          `worktree cleanup: note: --worktree ${key} does not match an inventoried worktree \u2014 no target is fabricated for it`,
+        ),
+      );
+      continue;
+    }
+    if (!cleanupWorktreeCandidate(worktree, request, probe.snapshots)) {
+      console.error(
+        pc.yellow(
+          `worktree cleanup: note: --worktree ${key} is outside workflow ${request.workflowId}'s candidate scope \u2014 select its actual --workflow or rerun with --all-workflows --worktree to inspect it under the same guards`,
+        ),
+      );
+      continue;
+    }
+    // Same attribution the builder applies, including the explicit-assertion
+    // fallback via the recorded checked-out branch. Ambiguous or wholly
+    // unowned assertions contribute no branch-owner key.
+    let attribution = cleanupDistinctOwner(cleanupWorktreeClaims(worktree.path, probe.snapshots));
+    if (attribution.owner === null && !attribution.ambiguous) {
+      const checkedOut = worktree.branch ?? "";
+      if (checkedOut !== "") attribution = cleanupDistinctOwner(cleanupBranchClaims(checkedOut, probe.snapshots));
+    }
+    if (attribution.owner !== null) assertedOwners.push(attribution.owner);
+  }
+  return { ...request, scoped: !request.allWorkflows, assertedOwners };
+}
+
+/**
  * Candidates + facts for the planner. Worktree ownership comes from path
  * claims (lease/metadata `worktree_path`, lifecycle integration path); a
  * verified explicit `--worktree` assertion additionally attributes a path
  * whose checked-out branch is recorded by exactly one snapshot row (a
  * released lease leaves the branch, not the path, in the snapshot). Branch
  * ownership comes from recorded branches only — never inferred from naming.
+ * Candidate membership comes from the resolved scope (workflow universe,
+ * full sweep, asserted-path intersection and retained owner keys); the
+ * safety facts below always carry EVERY snapshot and worktree record.
  */
 function cleanupBuildFacts(
   probe: CleanupProbe,
-  scope: { scoped: boolean; asserted: ReadonlySet<string> },
+  scope: CleanupCandidateScope,
   options: CleanupEvidenceOptions,
 ): { facts: CleanupFacts; branchBase: Map<string, string> } {
   /** The planner's merged-evidence base for a target's owner (same rule for local deletion cwd and remote pairs). */
@@ -3270,7 +3380,7 @@ function cleanupBuildFacts(
   const targets: CleanupTarget[] = [];
   const notes = new Set<string>();
   for (const worktree of probe.worktrees) {
-    if (scope.scoped && !scope.asserted.has(cleanupPathKey(worktree.path))) continue;
+    if (!cleanupWorktreeCandidate(worktree, scope, probe.snapshots)) continue;
     let attribution = cleanupDistinctOwner(cleanupWorktreeClaims(worktree.path, probe.snapshots));
     if (attribution.owner === null && !attribution.ambiguous && scope.asserted.has(cleanupPathKey(worktree.path))) {
       const checkedOut = worktree.branch ?? "";
@@ -3282,7 +3392,9 @@ function cleanupBuildFacts(
     targets.push({ kind: "worktree", ref: worktree.path, branch: worktree.branch ?? "", tip: worktree.tip, owner: attribution.owner });
   }
   for (const local of probe.localBranches) {
-    const attribution = cleanupDistinctOwner(cleanupBranchClaims(local.branch, probe.snapshots));
+    const claims = cleanupBranchClaims(local.branch, probe.snapshots);
+    if (!cleanupBranchCandidate(claims, scope)) continue;
+    const attribution = cleanupDistinctOwner(claims);
     if (attribution.ambiguous) {
       notes.add(`branch ${local.branch} is claimed by more than one snapshot row \u2014 treated as unowned (refuses)`);
     }
@@ -3291,7 +3403,9 @@ function cleanupBuildFacts(
   const remoteCandidates: CleanupRemoteCandidate[] = [];
   if (options.remoteRequested) {
     for (const remote of probe.remoteBranches) {
-      const attribution = cleanupDistinctOwner(cleanupBranchClaims(remote.branch, probe.snapshots));
+      const claims = cleanupBranchClaims(remote.branch, probe.snapshots);
+      if (!cleanupBranchCandidate(claims, scope)) continue;
+      const attribution = cleanupDistinctOwner(claims);
       if (attribution.ambiguous) {
         notes.add(`remote branch ${remote.branch} is claimed by more than one snapshot row \u2014 treated as unowned (refuses)`);
       }
@@ -3371,31 +3485,39 @@ worktreeCommand
   .description(
     "Plan (and with --apply execute) guarded worktree/branch cleanup for a workflow: merged-evidence-only branch deletion with " +
       "active-lease / checked-out / foreign / dirty / non-terminal refusals; dry-run by default (no fetch/prune/write), prints " +
-      "`verdict | kind | ref | reason` (exit 0 valid dry-run / successful removals, 1 probe/mutation failure, 2 usage)",
+      "`verdict | kind | ref | reason` (exit 0 valid dry-run / successful removals, 1 probe/mutation failure, 2 usage). " +
+      "By default candidates come from the selected workflow's recorded claims; --all-workflows sweeps everything.",
   )
-  .option("--workflow <id>", "Workflow id whose snapshot drives ownership and protected refs (required)")
+  .option(
+    "--workflow <id>",
+    "Workflow id whose snapshot drives ownership and protected refs (required); without --all-workflows, candidates are limited to this workflow's recorded claims",
+  )
   .option("--harness <path>", "Harness dir override (default: process-harness discovery from the verified main worktree)")
   .option(
     "--apply",
     "Execute current remove rows: git worktree remove (never force; evidence-base hosts deferred) \u2192 re-probe/re-plan \u2192 git branch -d (never -D) from the evidence-base checkout \u2192 remote compare-and-delete \u2192 deferred integration worktree removal \u2192 re-probe/re-plan newly released local branches",
   )
   .option("--remote", "Include remote-branch candidates (refs/remotes/origin) with expected-OID compare-and-delete")
-  .option("--verbose", "Print per-pair ancestry diagnostics; no change to candidates or decisions")
   .option(
     "--worktree <path>",
-    "Limit worktree candidates to this path (repeatable); also asserts ownership for a released-lease worktree matched to its recorded branch",
+    "Limit worktree candidates to this path (repeatable); also narrows branch candidates to the asserted worktrees' exact recorded owners, and asserts ownership for a released-lease worktree matched to its recorded branch",
     (value: string, previous: string[]) => [...previous, value],
     [] as string[],
   )
   .option(
+    "--all-workflows",
+    "Include candidates from all workflows and unrecorded refs; --worktree still narrows by exact owner",
+  )
+  .option("--verbose", "Print per-pair ancestry diagnostics; no change to candidates or decisions")
+  .option(
     "--ignore-unreadable-snapshots",
     "Operator assertion: judge candidates against the readable snapshots only even when a sibling snapshot cannot be parsed at all (its declarations are unknown, so removals are otherwise withheld as cleanup.refuse.unreadable-snapshot)",
   )
-  .action((options: { workflow?: string; harness?: string; apply?: boolean; remote?: boolean; verbose?: boolean; worktree?: string[]; ignoreUnreadableSnapshots?: boolean }) => {
+  .action((options: { workflow?: string; harness?: string; apply?: boolean; remote?: boolean; verbose?: boolean; allWorkflows?: boolean; worktree?: string[]; ignoreUnreadableSnapshots?: boolean }) => {
     try {
       if (!options.workflow) {
         throw new SddScriptError(
-          "usage: worktree cleanup --workflow <id> [--harness <path>] [--apply] [--remote] [--worktree <path>] [--ignore-unreadable-snapshots]",
+          "usage: worktree cleanup --workflow <id> [--harness <path>] [--apply] [--remote] [--worktree <path>] [--all-workflows] [--verbose] [--ignore-unreadable-snapshots]",
           2,
         );
       }
@@ -3405,8 +3527,9 @@ worktreeCommand
       if (harnessDir === null) throw new Error("harness directory not found");
       const snapshotPath = resolveSnapshotPath(options.workflow, harnessDir);
       const workflowRoot = resolveWorkflowDir(harnessDir, { harnessDir });
-      const scope = {
-        scoped: (options.worktree?.length ?? 0) > 0,
+      const scopeRequest: CleanupScopeRequest = {
+        workflowId: options.workflow,
+        allWorkflows: options.allWorkflows === true,
         asserted: new Set((options.worktree ?? []).map((candidate) => cleanupPathKey(candidate))),
       };
       const probeInput: CleanupProbeInput = {
@@ -3419,6 +3542,20 @@ worktreeCommand
       const ignoreUnreadableSiblings = options.ignoreUnreadableSnapshots === true;
       const evidenceOptions: CleanupEvidenceOptions = { remoteRequested: options.remote === true, verbose: options.verbose === true };
       const probe1 = cleanupProbe(probeInput);
+      // The scope resolves once, before the first plan; its asserted owner
+      // keys survive --apply re-probes. Safety facts refresh every pass.
+      const scope = cleanupResolveScope(probe1, scopeRequest);
+      const scopeOmitted =
+        probe1.worktrees.filter((worktree) => !cleanupWorktreeCandidate(worktree, scope, probe1.snapshots)).length +
+        probe1.localBranches.filter((local) => !cleanupBranchCandidate(cleanupBranchClaims(local.branch, probe1.snapshots), scope)).length +
+        (evidenceOptions.remoteRequested
+          ? probe1.remoteBranches.filter((remote) => !cleanupBranchCandidate(cleanupBranchClaims(remote.branch, probe1.snapshots), scope)).length
+          : 0);
+      console.error(
+        pc.yellow(
+          `worktree cleanup: scope ${scope.scoped ? `workflow ${options.workflow}` : "all workflows"} \u2014 asserted paths: ${scope.asserted.size}, candidates omitted: ${scopeOmitted}; rerun with --all-workflows${evidenceOptions.remoteRequested ? " --remote" : ""} for the full sweep`,
+        ),
+      );
       const built1 = cleanupBuildFacts(probe1, scope, evidenceOptions);
       const plan1 = cleanupGuardUnreadableSiblings(planWorktreeCleanup(probe1.selected, built1.facts), probe1, ignoreUnreadableSiblings);
       cleanupPrintPlan(`worktree cleanup (workflow ${options.workflow}): plan`, plan1);
