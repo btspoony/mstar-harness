@@ -330,6 +330,7 @@ mstar plan return --session <coordinator-session> --plan <id> --handoff <id> --r
 mstar plan integration-start --session <coordinator-session> --plan <id> --handoff <id> --expect <revision> [--json]
 mstar plan integration-accept --session <coordinator-session> --plan <id> --handoff <id> --expect <revision> [--json]
 mstar plan complete --session <coordinator-session> --plan <id> --handoff <id> --expect <revision> [--json]
+mstar plan repair-delivery-source --session <coordinator-session> --plan <id> --handoff <id> --expect <revision> [--json]
 mstar plan reconcile --session <coordinator-session> --plan <id> --handoff <id> --expect <revision> [--json]
 ```
 
@@ -337,7 +338,7 @@ mstar plan reconcile --session <coordinator-session> --plan <id> --handoff <id> 
 
 Two address forms reach the same prepared row: the pinned Assignment (`--assignment`) and the `--workflow/--plan` pair (which reads the row's registered Assignment path). A second fresh claim of the same row fails with `coordination.duplicate-holder` naming the live session; `bind --resume <session>` reports the current context read-only and never reacquires a released lease. `prepare` (coordinator) registers the reviewed Assignment and releases that plan's dependencies.
 
-`--handoff <id>` is mandatory on the six coordinator transitions and must be the row's **live** handoff id — the one `plan handoff` minted and `plan show --json` reports. The CLI checks the flag against the row before calling the engine and refuses a *different* live id with `coordination.handoff-mismatch` (exit 1, nothing written); the engine re-checks the handoff inside the lock, so the row stays the authority and the flag can never invent one.
+`--handoff <id>` is mandatory on the seven coordinator transitions and must be the row's **live** handoff id — the one `plan handoff` minted and `plan show --json` reports. The CLI checks the flag against the row before calling the engine and refuses a *different* live id with `coordination.handoff-mismatch` (exit 1, nothing written); the engine re-checks the handoff inside the lock, so the row stays the authority and the flag can never invent one.
 
 JSON success is `{ok:true, operation, workflow_id, plan_id?, revision?, snapshot_version?, session_file, session_id, role, handoff_id?, state?, outcome?}`; `show` additionally returns `register_version`, `scope`, `row`, `allowed_operations` and, once a handoff exists, the row's live `handoff_id` with its `state` and `attempt`. JSON failure is `{ok:false, operation, code, message, workflow_id?, plan_id?, holder?, path?, expected?, actual?}`. JSON goes to stdout with no color or banner; in human mode stdout stays empty and the summary goes to stderr.
 
@@ -372,7 +373,20 @@ mstar plan progress --session …/sessions/<plan>.json --file ./progress.json --
 mstar plan residual-add --session …/sessions/<plan>.json --file ./entries.json --expect 2 --expect-register absent --json
 ```
 
-The coordinator half of the lifecycle — `handoff` (plan side, leaves the row `InReview`), then `accept` (ownership transfer, not integration acceptance) → `integration-start` (reads the clean recorded integration checkout, refuses any foreign merge lease, and records the current integration HEAD as `base_sha` plus the immutable source pin) → the coordinator's own explicit pinned `git merge --no-ff --no-edit <source-sha>` in that recorded integration worktree → `integration-accept` → `complete`, with `reconcile` as the explicit crash path and `return` for a failed attempt — transports the same A2 shape. The attempt is recorded and pinned **before** Git runs — that is what makes a crash mid-merge reconcilable, and why a retried `integration-start` never moves `base_sha`. State verbs never run the merge themselves.
+The coordinator half shares one flag surface but follows **two completion routes** the engine selects from the workflow snapshot (never from missing anchors):
+
+| Route | When | Coordinator sequence after `accept` | What `complete` does |
+| --- | --- | --- | --- |
+| **Iteration** | `type: iteration` (or any non-standalone workflow) | `integration-start` → coordinator `git merge --no-ff` in the recorded integration checkout → `integration-accept` → `complete` | Sets `Done`, completes the handoff, releases the row `execution_lease` **and** the workflow `integration_merge_lease` |
+| **Standalone development** | `type: plan`, `delivery_kind: development`, exactly one owned row | `complete` directly from the accepted handoff (no integration verbs) | Sets `Done`, completes the handoff without an integration record, releases only the row `execution_lease`; the workflow stays `running` until ordinary delivery evidence and `status workflow-close` |
+
+Common prefix: `handoff` (plan side, leaves the row `InReview`) → `accept` (ownership transfer, not integration acceptance). `return` hands a submitted or accepted handoff back to the plan owner. `reconcile` is the explicit crash path — on the iteration route it observes the merge checkout and either finishes (`completed`), abandons (`retry-ready`), or replays (`already-completed`); on the standalone route it only replays an already-completed row as a byte-identical `already-completed` no-op.
+
+**Legacy delivery-source repair (not a normal step).** `repair-delivery-source` is a coordinator-only exception for pre-fix snapshots whose registered `branch.source` erroneously equals `branch.target` while the accepted handoff names the true feature branch. It replaces **only** `branch.source` under the row revision lock, derived from the sealed accepted handoff — there is no `--branch-source`, `--force`, or status flag, and it never records `Done`, delivery success, or remote merge. A successful repair is intentionally not replayable; continue with ordinary `complete`. Future registrations must record the true delivery source at `workflow register` time.
+
+**What cannot amend a registered source.** `workflow evidence --file` only merges the delivery block and cannot change branch anchors. `workflow evidence --declare-kind --branch-source` is a one-time kind declaration for snapshots that never recorded a delivery kind — it refuses when a kind is already declared and refuses a `--branch-source` that conflicts with a registered anchor. Registration is create-only. Use `repair-delivery-source` only for the legacy wrong-source-equals-target shape above; it is not a general anchor editor.
+
+On the iteration route the attempt is recorded and pinned **before** Git runs — that is what makes a crash mid-merge reconcilable, and why a retried `integration-start` never moves `base_sha`. State verbs never run the merge themselves.
 
 ### `mstar-harness workflow`
 

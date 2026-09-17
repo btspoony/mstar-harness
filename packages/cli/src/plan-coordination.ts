@@ -744,16 +744,31 @@ export function registerPlanCommands(program: Command): void {
       ),
     );
 
-  // The six coordinator transitions share one flag surface; `return` alone
+  // The seven coordinator transitions share one flag surface; `return` alone
   // carries a reason.
   for (const [kind, description] of [
     ["accept", "Accept a submitted handoff: execution ownership transfers to the coordinator, no merge yet"],
     ["return", "Return a submitted/accepted handoff to the plan owner and restore its execution holder"],
-    ["integration-start", "Record the integration attempt and pin its base before any Git merge (Git stays the operator's action)"],
-    ["integration-accept", "Verify the pinned Git result of the started integration attempt (never runs a merge)"],
-    ["complete", "Record Done atomically and release both leases after verified Git proof"],
-    ["repair-delivery-source", "Correct a legacy registered delivery source from the accepted handoff without changing statuses or evidence"],
-    ["reconcile", "Observe Git after a crash and finish the attempt without a second merge, or refuse and keep state"],
+    [
+      "integration-start",
+      "Iteration route only: record the integration attempt and pin its base before any Git merge (Git stays the operator's action)",
+    ],
+    [
+      "integration-accept",
+      "Iteration route only: verify the pinned Git result of the started integration attempt (never runs a merge)",
+    ],
+    [
+      "complete",
+      "Record row Done after verified Git proof — iteration route releases both leases after a merged handoff; standalone development completes from the accepted handoff without integration and releases only the row lease (workflow stays running)",
+    ],
+    [
+      "repair-delivery-source",
+      "Legacy-only: replace a wrong registered delivery source (source === target) from the accepted handoff pin — never Done, delivery evidence, or a user-supplied branch; not a normal lifecycle step",
+    ],
+    [
+      "reconcile",
+      "Crash recovery: iteration route observes the merge checkout and finishes or abandons the attempt; standalone development only replays an already-completed row as a no-write already-completed",
+    ],
   ] as const) {
     const command = plan
       .command(kind)

@@ -1516,6 +1516,104 @@ function snapshotWithoutRepairDeltaCli(snapshot: Record<string, unknown>): Recor
 }
 
 
+
+interface StandaloneCompletionFixture extends Fixture {
+  baseSha: string;
+  sourceSha: string;
+  coordinator: string;
+  planSession: string;
+  qcReport: string;
+  qcConsolidated: string;
+  qaReport: string;
+}
+
+function makeStandaloneCompletionFixture(): StandaloneCompletionFixture {
+  const fixture = makeFixture();
+  const baseSha = gitOut(["rev-parse", "HEAD"], fixture.root);
+  rmSync(fixture.worktreePath, { recursive: true, force: true });
+  git(["worktree", "add", "-q", "-b", "feature/plan-a", fixture.worktreePath], fixture.root);
+  writeText(join(fixture.worktreePath, "standalone-complete.txt"), "standalone completion slice\n");
+  git(["add", "standalone-complete.txt"], fixture.worktreePath);
+  gitCommit(fixture.worktreePath, "plan a: standalone complete");
+  const sourceSha = gitOut(["rev-parse", "HEAD"], fixture.worktreePath);
+
+  writeJson(join(fixture.harness, "status.json"), {
+    version: 2,
+    updated_at: "2026-09-15T00:00:00Z",
+    workflows: [{ id: WORKFLOW_ID, status: "running", type: "plan", started_at: "2026-09-15T00:00:00Z", dir: `workflows/${WORKFLOW_ID}` }],
+  });
+  writeJson(fixture.snapshotPath, {
+    schema_version: 1,
+    id: WORKFLOW_ID,
+    type: "plan",
+    delivery_kind: "development",
+    status: "running",
+    started_at: "2026-09-15T00:00:00Z",
+    updated_at: "2026-09-15T00:00:00Z",
+    branch: { source: "feature/plan-a", target: "main" },
+    plans: [planRow(PLAN_ID, "feature/plan-a")],
+  });
+
+  const sdd = join(fixture.harness, "sdd", PLAN_ID);
+  const qcReport = join(sdd, "review", "qc1.md");
+  const qcConsolidated = join(sdd, "review", "qc.md");
+  const qaReport = join(sdd, "qa.md");
+  writeText(qcReport, "# QC 1\ndecision: Approve\n");
+  writeText(qcConsolidated, "# QC consolidated\ndecision: Approve\n");
+  writeText(qaReport, "# QA\nverdict: pass\n");
+
+  const coordinator = bindCoordinator(fixture);
+  preparePlan(fixture, coordinator, PLAN_ID);
+  const planSession = bindPlan(fixture, PLAN_ID);
+  toInReview(fixture, planSession, "standalone ready for completion");
+  const handoffId = submitHandoff(
+    { ...fixture, baseSha, sourceSha, integrationPath: "", qcReport, qcConsolidated, qaReport } as IntegrationFixture,
+    planSession,
+  );
+  const accepted = transition(fixture, "accept", coordinator, handoffId);
+  expect(accepted.exitCode).toBe(0);
+  expect(jsonOf(accepted).state).toBe("accepted");
+
+  return { ...fixture, baseSha, sourceSha, coordinator, planSession, qcReport, qcConsolidated, qaReport };
+}
+
+describe("standalone-development-completion", () => {
+  test("CLI accept → complete ends Done without integration and keeps workflow running", () => {
+    const fixture = makeStandaloneCompletionFixture();
+    const handoffId = liveHandoffId(fixture, fixture.coordinator);
+    const beforeBytes = snapshotBytes(fixture);
+
+    const refusedStart = transition(fixture, "integration-start", fixture.coordinator, handoffId);
+    expect(refusedStart.exitCode).toBe(1);
+    expect(snapshotBytes(fixture)).toBe(beforeBytes);
+
+    const completed = transition(fixture, "complete", fixture.coordinator, handoffId);
+    expect(completed.exitCode).toBe(0);
+    const done = jsonOf(completed);
+    expect(done.outcome).toBe("completed");
+    expect(rowOf(fixture).status).toBe("Done");
+    expect(recordedHandoffState(fixture)).toBe("completed");
+    expect(rowOf(fixture).execution_lease).toBeUndefined();
+    expect(readJson(fixture.snapshotPath).integration_merge_lease).toBeUndefined();
+    expect(readJson(fixture.snapshotPath).status).toBe("running");
+    const coordination = rowOf(fixture).coordination as Record<string, unknown>;
+    const handoff = coordination.handoff as Record<string, unknown>;
+    expect(handoff.integration).toBeUndefined();
+  }, RECOVERY_TIMEOUT);
+
+  test("CLI reconcile replays an already-completed standalone row as already-completed", () => {
+    const fixture = makeStandaloneCompletionFixture();
+    const handoffId = liveHandoffId(fixture, fixture.coordinator);
+    expect(transition(fixture, "complete", fixture.coordinator, handoffId).exitCode).toBe(0);
+    const afterComplete = snapshotBytes(fixture);
+
+    const replay = transition(fixture, "reconcile", fixture.coordinator, handoffId);
+    expect(replay.exitCode).toBe(0);
+    expect(jsonOf(replay).outcome).toBe("already-completed");
+    expect(snapshotBytes(fixture)).toBe(afterComplete);
+  }, RECOVERY_TIMEOUT);
+});
+
 describe("legacy-delivery-source-repair", () => {
   test("CLI repair succeeds with exact flags and preserves delivery bytes", () => {
     const fixture = makeStandaloneRepairFixture(true);
