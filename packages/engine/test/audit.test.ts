@@ -979,13 +979,37 @@ describe("validateAuditFindingGates", () => {
     }
   });
 
+  test("non-positive, fractional or unsafe evidence lines → audit.finding.evidence.line; scaffoldAuditPlan rejects via direct engine call", () => {
+    for (const line of [0, -3, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      const gate = validateAuditFindingGates([
+        enrichedFinding({ evidence: [{ file: "src/a.ts", line, description: "d" }] }),
+      ]);
+      expect(gate.violations.map((v) => v.code)).toContain("audit.finding.evidence.line");
+    }
+    // omitted line stays legal; the CLI parser already validates, so the
+    // direct-engine path (which skips it) must carry the gate itself
+    expect(validateAuditFindingGates([enrichedFinding()]).ok).toBe(true);
+    const out = join(tmp, "audit-evidence-line");
+    for (const line of [0, -3, 1.5]) {
+      expect(() =>
+        scaffoldAuditPlan(out, [enrichedFinding({ evidence: [{ file: "src/a.ts", line, description: "d" }] })], { date: "2026-09-05" }),
+      ).toThrow(/audit\.finding\.evidence\.line/);
+    }
+  });
+
   test("unsafe typed paths → audit.finding.path.unsafe (typed file fields only, never prose)", () => {
-    for (const file of ["../evil.ts", "/abs/x.ts", "C:\\x\\y.ts", "a//b.ts", "a/./b.ts", "a/../b.ts", "a/trailing./b.ts", "a/trailing /b.ts", ""]) {
+    for (const file of ["../evil.ts", "/abs/x.ts", "C:\\x\\y.ts", "a//b.ts", "a/./b.ts", "a/../b.ts", "a/trailing./b.ts", "a/trailing /b.ts", "", "src/\ud800a.ts"]) {
       const gate = validateAuditFindingGates([
         enrichedFinding({ evidence: [{ file, line: 1, description: "d" }] }),
       ]);
       expect(gate.violations.some((v) => v.code === "audit.finding.path.unsafe")).toBe(true);
     }
+    // a lone surrogate in a trace file is rejected with a field-path diagnostic too
+    const surrogateTrace = validateAuditFindingGates([
+      enrichedFinding({ trace: [{ kind: "sink", file: "src/\ud800a.ts", line: 1, scope: "s", description: "d" }] }),
+    ]);
+    expect(surrogateTrace.violations.map((v) => v.code)).toContain("audit.finding.path.unsafe");
+    expect(surrogateTrace.violations.some((v) => v.message.includes("trace[0].file"))).toBe(true);
     // legacy string evidence with path-looking prose is NOT path-checked
     expect(validateAuditFindingGates([legacyFinding({ evidence: ["see C:\\secrets\\.env line 3"] })]).ok).toBe(true);
   });
@@ -1099,22 +1123,23 @@ describe("scaffoldAuditPlan — gate integration + additive rendering", () => {
     expect(validateAuditStatusBlocks(plan).ok).toBe(true);
   });
 
-  test("trace table cells escape pipes and encode embedded line breaks without extra rows", () => {
+  test("trace table cells escape pipes and encode embedded line breaks (\\n and lone \\r) without extra rows", () => {
     const out = join(tmp, "audit-2026-09-03");
     scaffoldAuditPlan(
       out,
       [
         enrichedFinding({
           trace: [
-            { kind: "sink", file: "src/a.ts", line: 1, scope: "with | pipe", description: "line one\nline two" },
+            { kind: "sink", file: "src/a.ts", line: 1, scope: "with | pipe", description: "line one\nline two\rcol three" },
           ],
         }),
       ],
       { date: "2026-09-03" },
     );
     const plan = readFileSync(join(out, "001-unparameterized-sink-in-export-path.md"), "utf8");
-    expect(plan).toContain("| sink | src/a.ts:1 | with \\| pipe — line one\\nline two |");
+    expect(plan).toContain("| sink | src/a.ts:1 | with \\| pipe — line one\\nline two\\ncol three |");
     expect(plan).toContain("## Impact"); // exactly one row: the encoded break never starts a new table line
+    expect(plan).not.toContain("\r"); // a lone CR never survives into a written cell
   });
 
   test("MED confidence with no metadata writes no Confidence line; enriched MED finding does", () => {

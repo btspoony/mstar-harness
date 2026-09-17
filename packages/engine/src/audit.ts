@@ -906,7 +906,7 @@ const escapeCell = (value: string) => value.replace(/\|/g, "\\|");
 const truncate = (value: string, max: number) => (value.length > max ? `${value.slice(0, max)}\u2026` : value);
 /** Line-break collapse shared by the Status Evidence line and index rows
  * (table-safe single-line text). */
-const collapseEvidenceWs = (value: string): string => value.replace(/\s*\r?\n\s*/g, " ");
+const collapseEvidenceWs = (value: string): string => value.replace(/\s*[\r\n]\s*/g, " ");
 /** Render one evidence item: strings byte-for-byte; structured locations as
  * `file:line — description`, or `file — description` when the line is
  * omitted (never invented). */
@@ -960,6 +960,10 @@ function safeAuditPath(value: string): boolean {
   if (value === "") return false;
   if (value.includes("\\")) return false;
   if (/[\u0000-\u001F\u007F-\u009F]/.test(value)) return false;
+  // A lone surrogate is invalid UTF-8 on write: it would silently become
+  // U+FFFD, so the persisted location must never differ from the supplied
+  // one. Falls under the same `audit.finding.path.unsafe` code family.
+  if (LONE_SURROGATE_RE.test(value)) return false;
   if (value.startsWith("/")) return false;
   if (/^[A-Za-z]:/.test(value)) return false;
   for (const segment of value.split("/")) {
@@ -1069,6 +1073,9 @@ export function validateAuditFindingGates(findings: readonly AuditFinding[]): Ga
       }
       if (!safeAuditPath(item.file)) push("audit.finding.path.unsafe", `evidence[${itemIndex}].file`);
       else if (redactSecrets(item.file).text !== item.file) push("audit.finding.path.secret", `evidence[${itemIndex}].file`);
+      if (item.line !== undefined && (typeof item.line !== "number" || !Number.isSafeInteger(item.line) || item.line <= 0)) {
+        push("audit.finding.evidence.line", `evidence[${itemIndex}].line`);
+      }
       textViolation(`evidence[${itemIndex}].description`, item.description);
     });
 
@@ -1126,7 +1133,7 @@ function renderPlanFile(finding: AuditFinding, plannedAt: { commit: string; date
       "|------|----------|---------------------|",
       ...finding.trace.map(
         (step) =>
-          `| ${escapeCell(step.kind)} | ${escapeCell(`${step.file}:${step.line}`)} | ${escapeCell(`${step.scope} \u2014 ${step.description}`).replace(/\r?\n/g, "\\n")} |`,
+          `| ${escapeCell(step.kind)} | ${escapeCell(`${step.file}:${step.line}`)} | ${escapeCell(`${step.scope} \u2014 ${step.description}`).replace(/\r\n|\r|\n/g, "\\n")} |`,
       ),
     );
   }
