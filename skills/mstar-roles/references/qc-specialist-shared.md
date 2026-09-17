@@ -102,7 +102,7 @@ Role-owned procedures — **always read with this file, never preset-gated**: `r
 
 1. `mstar-harness-core` → `mstar-dispatch-gates` + `mstar-branch-worktree` → `mstar-artifacts` (review bundle paths and naming)
 2. Host: `mstar-host` → active host reference
-3. On demand: `mstar-conventions` (paths); `mstar-design-md` (UI vs DESIGN.md)
+3. On demand: `mstar-conventions` (paths); `mstar-design-md` (UI vs DESIGN.md); `mstar-use-cli` (seat runs or interprets a CLI check — report validation, checkout alignment, reading a refusal code)
 
 ## Completion Report
 

@@ -134,7 +134,7 @@ Topic skills below are **presets activated by PM**, not unconditional role depen
    - Mode A (SDD task reviewer): `mstar-sdd` → `references/task-reviewer-prompt.md`, `references/file-handoffs.md`
    - Mode B (audit executor): `mstar-audit` SKILL.md (common core) + `references/codebase-audit.md`
    - Mode C (PR review): `mstar-audit` SKILL.md + `references/pr-review.md` + `mstar-branch-worktree` (worktree isolation)
-3. Paths: `mstar-conventions`; add `mstar-artifacts` (plan-quality-bar) when writing audit plans
+3. Paths: `mstar-conventions`; add `mstar-artifacts` (plan-quality-bar) when writing audit plans; add `mstar-use-cli` when the round runs or interprets CLI commands (audit plan scaffold/promote, PR-review helpers, reading a refusal code)
 4. Host: `mstar-host` (detect; active host reference)
 
 ## Completion Report

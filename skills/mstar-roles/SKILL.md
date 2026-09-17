@@ -43,14 +43,15 @@ PM-owned activation; the omission / `none` / named-preset / resume / unknown-pre
 
 | Role | Preset menu |
 | --- | --- |
-| `project-manager` | `mstar-dispatch-gates`, `mstar-phase-gates`, `mstar-conventions`, `mstar-roles` ref; + `references/project-manager/qa-trigger-matrix.md` for QA gate tiers; + `mstar-review-qc` before QC; + `mstar-branch-worktree` / `mstar-artifacts` as the round requires; + `mstar-skill-authoring` for skill work; + `mstar-iteration` for iteration lifecycle (start/drive/close); + `mstar-strategy` for strategic alignment; + `mstar-compound` / `mstar-compound-refresh` pre-loaded by `mstar-iteration` § iteration-close |
-| `fullstack-dev*`, `frontend-dev` | `mstar-coding-behavior`, `mstar-dispatch-gates`, `mstar-branch-worktree` (if repo writes); plan path symbols from `mstar-conventions` (minimal); `mstar-design-md` when implementing styled UI |
-| `qc-specialist*` | Presets: `mstar-branch-worktree`, `mstar-artifacts` (review bundle paths); `mstar-design-md` when reviewing UI. Role-owned (never gated): `references/qc-specialist/` workflow/checklist/template (+ lenses on demand) |
-| `qa-engineer` | Presets: `mstar-branch-worktree`, `mstar-artifacts` (closing R#); `mstar-design-md` when verifying visual output. Role-owned (never gated): `references/qa-engineer/acceptance-gate.md` |
-| `architect`, `product-manager` | `mstar-phase-gates` (Prepare), `mstar-artifacts` (knowledge/specs); `mstar-design-md` (creator + design intent); `mstar-strategy` (STRATEGY.md creation/maintenance) |
-| `code-reviewer` | `mstar-sdd` (per-task review mode); `mstar-audit` (audit mode: full workflow); `mstar-conventions` (paths); `mstar-artifacts` (plan-quality-bar for audit plans) |
-| `ops-engineer` | `mstar-coding-behavior`, `mstar-branch-worktree` |
-| `prompt-engineer` | All topic skills when editing harness text |
+| `project-manager` | `mstar-dispatch-gates`, `mstar-phase-gates`, `mstar-conventions`, `mstar-roles` ref; + `references/project-manager/qa-trigger-matrix.md` for QA gate tiers; + `mstar-review-qc` before QC; + `mstar-branch-worktree` / `mstar-artifacts` as the round requires; + `mstar-skill-authoring` for skill work; + `mstar-iteration` for iteration lifecycle (start/drive/close); + `mstar-strategy` for strategic alignment; + `mstar-use-cli` when the round runs or interprets CLI commands; + `mstar-compound` / `mstar-compound-refresh` pre-loaded by `mstar-iteration` § iteration-close |
+| `fullstack-dev*`, `frontend-dev` | `mstar-coding-behavior`, `mstar-dispatch-gates`, `mstar-branch-worktree` (if repo writes); plan path symbols from `mstar-conventions` (minimal); `mstar-design-md` when implementing styled UI; `mstar-use-cli` when the round runs or interprets CLI commands |
+| `qc-specialist*` | Presets: `mstar-branch-worktree`, `mstar-artifacts` (review bundle paths); `mstar-design-md` when reviewing UI; `mstar-use-cli` when the round runs or interprets CLI commands. Role-owned (never gated): `references/qc-specialist/` workflow/checklist/template (+ lenses on demand) |
+| `qa-engineer` | Presets: `mstar-branch-worktree`, `mstar-artifacts` (closing R#); `mstar-design-md` when verifying visual output; `mstar-use-cli` when the round runs or interprets CLI commands. Role-owned (never gated): `references/qa-engineer/acceptance-gate.md` |
+| `architect` | `mstar-phase-gates` (Prepare), `mstar-artifacts` (knowledge/specs); `mstar-design-md` (creator + design intent); `mstar-strategy` (STRATEGY.md creation/maintenance); `mstar-use-cli` when the round runs or interprets CLI commands |
+| `product-manager` | `mstar-phase-gates` (Prepare), `mstar-artifacts` (knowledge/specs); `mstar-design-md` (creator + design intent); `mstar-strategy` (STRATEGY.md creation/maintenance) |
+| `code-reviewer` | `mstar-sdd` (per-task review mode); `mstar-audit` (audit mode: full workflow); `mstar-conventions` (paths); `mstar-artifacts` (plan-quality-bar for audit plans); `mstar-use-cli` when the round runs or interprets CLI commands |
+| `ops-engineer` | `mstar-coding-behavior`, `mstar-branch-worktree`; `mstar-use-cli` when the round runs or interprets CLI commands |
+| `prompt-engineer` | All topic skills when editing harness text; `mstar-use-cli` when the round runs or interprets CLI commands |
 
 Use skill names (not absolute filesystem paths) in role references.
 
