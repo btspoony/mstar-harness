@@ -3497,7 +3497,7 @@ function standaloneDeliveryAnchors(snapshot: WorkflowSnapshot, planId: string): 
   if (!isNonEmptyString(source) || !isNonEmptyString(target)) {
     throw new CoordinationError(
       "coordination.invalid-transition",
-      `plan ${planId} has no delivery anchors — the snapshot must name branch.source and branch.target`,
+      `plan ${planId} has no delivery anchors \u2014 the snapshot must name branch.source and branch.target`,
       { plan_id: planId },
     );
   }
@@ -3555,14 +3555,14 @@ function assertAcceptedReviewDecision(handoff: PlanHandoff, planId: string, what
   if (handoff.qc.decision !== "Approve" && handoff.qc.decision !== "Approve with residuals") {
     throw new CoordinationError(
       "coordination.invalid-transition",
-      `${what} requires an accepted QC decision for plan ${planId} — got ${handoff.qc.decision}`,
+      `${what} requires an accepted QC decision for plan ${planId} \u2014 got ${handoff.qc.decision}`,
       { plan_id: planId, decision: handoff.qc.decision },
     );
   }
   if (handoff.qa.decision !== "pass") {
     throw new CoordinationError(
       "coordination.invalid-transition",
-      `${what} requires QA decision pass for plan ${planId} — got ${handoff.qa.decision}`,
+      `${what} requires QA decision pass for plan ${planId} \u2014 got ${handoff.qa.decision}`,
       { plan_id: planId, decision: handoff.qa.decision },
     );
   }
@@ -3637,20 +3637,20 @@ function assertStandaloneSourceGitProof(scope: ResolvedPlanScope, handoff: PlanH
   const branch = gitRead(scope.worktreePath, ["rev-parse", "--abbrev-ref", "HEAD"]);
   if (branch !== sourceBranch) {
     throw gitProof(
-      `${what} requires the plan worktree ${scope.worktreePath} to be on ${sourceBranch} — got ${branch || "a detached HEAD"}`,
+      `${what} requires the plan worktree ${scope.worktreePath} to be on ${sourceBranch} \u2014 got ${branch || "a detached HEAD"}`,
       { plan_id: scope.planId, expected: sourceBranch, actual: branch },
     );
   }
   const refTip = gitRead(scope.worktreePath, ["rev-parse", `refs/heads/${sourceBranch}`]);
   if (refTip !== handoff.source_sha) {
     throw gitProof(
-      `${what} requires refs/heads/${sourceBranch} to resolve to the pinned source ${handoff.source_sha} — got ${refTip || "missing"}`,
+      `${what} requires refs/heads/${sourceBranch} to resolve to the pinned source ${handoff.source_sha} \u2014 got ${refTip || "missing"}`,
       { plan_id: scope.planId, expected: handoff.source_sha, actual: refTip },
     );
   }
   if (handoff.review_head !== handoff.source_sha) {
     throw gitProof(
-      `${what} requires review_head to be the pinned source ${handoff.source_sha} — got ${handoff.review_head}`,
+      `${what} requires review_head to be the pinned source ${handoff.source_sha} \u2014 got ${handoff.review_head}`,
       { plan_id: scope.planId, source_sha: handoff.source_sha, review_head: handoff.review_head },
     );
   }
@@ -3678,14 +3678,14 @@ async function assertStandaloneCompletionPrecheck(
   if (context.snapshot.status !== "running") {
     throw new CoordinationError(
       "coordination.invalid-transition",
-      `complete requires workflow ${context.snapshot.id} to still be running — got ${context.snapshot.status}`,
+      `complete requires workflow ${context.snapshot.id} to still be running \u2014 got ${context.snapshot.status}`,
       { workflow_id: context.snapshot.id, status: context.snapshot.status },
     );
   }
   if (handoff.state !== "accepted") {
     throw new CoordinationError(
       "coordination.invalid-transition",
-      `plan ${scope.planId} handoff is ${handoff.state} — standalone complete requires an accepted handoff`,
+      `plan ${scope.planId} handoff is ${handoff.state} \u2014 standalone complete requires an accepted handoff`,
       { plan_id: scope.planId, state: handoff.state },
     );
   }
@@ -3785,7 +3785,7 @@ function assertLegacyRepairShape(
   if (source !== target) {
     throw new CoordinationError(
       "coordination.delivery-source-repair.not-legacy-shape",
-      `repair-delivery-source requires the legacy shape branch.source === branch.target for plan ${planId} — got source ${source} and target ${target}`,
+      `repair-delivery-source requires the legacy shape branch.source === branch.target for plan ${planId} \u2014 got source ${source} and target ${target}`,
       { plan_id: planId, source, target },
     );
   }
@@ -3889,7 +3889,7 @@ function assertRepairDeliverySourceAdmission(context: RowContext, scope: Resolve
   if (context.snapshot.status !== "running") {
     throw new CoordinationError(
       "coordination.invalid-transition",
-      `repair-delivery-source requires workflow ${context.snapshot.id} to still be running — got ${context.snapshot.status}`,
+      `repair-delivery-source requires workflow ${context.snapshot.id} to still be running \u2014 got ${context.snapshot.status}`,
       { workflow_id: context.snapshot.id, status: context.snapshot.status },
     );
   }
@@ -4070,7 +4070,7 @@ async function assertIterationCompletionPrecheck(
   if (handoff.state !== "merged") {
     throw new CoordinationError(
       "coordination.invalid-transition",
-      `plan ${scope.planId} handoff is ${handoff.state} — complete requires a merged attempt`,
+      `plan ${scope.planId} handoff is ${handoff.state} \u2014 complete requires a merged attempt`,
       { plan_id: scope.planId, state: handoff.state },
     );
   }
@@ -4133,6 +4133,13 @@ function completeRow(
 
 type CompleteRequest = { handoffId: string; expectedRevision: number };
 
+let completeStandaloneMutateGapForTest: (() => void) | undefined;
+
+/** Test-only hook to observe the precheck→mutate gap in standalone complete. */
+export function setCompleteStandaloneMutateGapForTest(callback: (() => void) | undefined): void {
+  completeStandaloneMutateGapForTest = callback;
+}
+
 /**
  * Complete a merged plan (spec §E): re-prove the recorded result, re-check the
  * evidence digests and the findings gate, then apply the completion delta.
@@ -4159,7 +4166,7 @@ async function mutateComplete(
     mutate: (context) => {
       const handoff = requireHandoff(context, scope.planId, request.handoffId);
       if (isStandaloneDevelopmentWorkflow(context.snapshot)) {
-        (globalThis as { __mstarCompleteStandaloneMutateGap__?: () => void }).__mstarCompleteStandaloneMutateGap__?.();
+        completeStandaloneMutateGapForTest?.();
         const anchors = standaloneDeliveryAnchors(context.snapshot, scope.planId);
         assertStandaloneSourceGitProof(scope, handoff, anchors.source, "complete");
         return completeStandaloneRow(context, scope, handoff);
