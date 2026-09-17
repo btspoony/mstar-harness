@@ -101,12 +101,12 @@ Protected document, versioned read-modify-write:
 
 ```sh
 # 1. read the current bytes and their version token
-mstar persist get snapshot --key <workflow-id> --versioned --json
+mstar persist get snapshot --key <workflow-id> --versioned
 
 # 2. modify the payload locally, keeping the document's schema intact
 
 # 3. replace it against exactly that token (nothing is merged)
-mstar persist snapshot --key <workflow-id> --expect-version sha256:<64-hex> --file payload.json
+mstar persist snapshot --key <workflow-id> --expect-version sha256:<64-hex> --file payload.json --session <coordinator-envelope>
 ```
 
 `status` always uses the key `root`; `residuals` takes the project id; replacing a coordinated snapshot also needs the coordinator envelope. For a document that does not exist yet the token is the literal `absent`.
@@ -131,7 +131,7 @@ mstar plan complete --session <coordinator.json> --plan <plan-id> --handoff <liv
 - **The argument parser can exit 1 for a missing required argument**, which lands inside the refusal range: the message reads `error: missing required argument '<name>'`. Read the message, not only the number, before treating an exit as a gate refusal or as a usage error. Commands that validate their own required arguments print a `usage:` line and exit 2 even for a missing argument, so the two shapes coexist in the same CLI.
 - **Flags come from the CLI help, never from this skill.** Run the group help, or the verb help, before guessing an option; the group help is also the authority for which verbs exist at all.
 - **Refusals are mutation-free, so they are recoverable by reading.** Re-read the document, then retry with fresh tokens. There is no force, no replace and no takeover flag to escalate to.
-- **JSON goes to stdout, diagnostics to stderr.** With the machine-readable flag, stdout carries only the object (no color, no banner); in human mode stdout stays empty and the summary goes to stderr. Piping stdout is therefore safe, and an empty stdout in human mode is not a failure signal by itself.
+- **Streams follow the family — never carry one family's split to another.** In the plan and workflow families, JSON goes to stdout with no color or banner, and in human mode stdout stays empty with the readable summary on stderr; piping their stdout is safe, and an empty stdout there is not a failure signal by itself. Outside those two families the successful result is a human-readable line on **stdout** — `status validate` prints `<path>: OK`, `host detect` prints `host: <id>`, and the checklist-style validators and lints print `<label>: OK` — while diagnostics, violation rows and refusals go to stderr.
 - **The globally installed CLI runs the published engine build**, which can differ from the engine checked out in the workspace. Install health does not prove content equality: a healthy setup check can pass while the command behaviour comes from a different build. When a result looks stale or contradicts workspace source, follow the version-alignment path in `mstar-harness-core` instead of trusting the command blindly.
 - **Never write a lifecycle state or a lease by editing a document.** Done and lease release go through the completion verb; the protected coordination documents refuse direct writes by design.
 - **Never hand write credentials to a leaf.** Session envelopes and revision tokens are coordinator/PM material; the scoped-drive rules in `mstar-iteration` own that boundary.
