@@ -134,7 +134,7 @@ owner 取值仅限 Phase 1 链：`product-manager` / `architect` / `writing-spec
 
 **(iv) 清除期限**：compass `status: locked` 是终线。lock 前，owner 属于链条三角色的 marker **必须**全部清除；无法清除的，在 lock 前**显式重新归属给 `PM`** 并上报用户（`PM` 归属项是 lock 之后唯一允许存在的 marker 形态）。**禁止**静默删除，也**禁止**让无 owner 的 placeholder 越过终线。各角色的清除义务与报数 → §1.6。
 
-**(v) `## Open Questions` 行的处置**：§1.2 落盘的每一行在终线前必须落到三者之一：收敛为已决事项（撤出该行并计入 `## Decisions`）；或转入 (iii) 的 marker 形态（行的 owner 即 marker 的 owner，随 (iv) 一同清除或重新归属给 `PM`）；或**显式重新归属给 `PM`** 并上报用户。**禁止**静默删除行 —— 与 (iv) 共用同一终线，lock 之后 `## Open Questions` 中唯一允许存在的行即 owner 为 `PM` 的行。行转入 marker 形态后，其清除义务与报数按 §1.6 计。
+**(v) `## Open Questions` 行的处置**：§1.2 落盘的每一行在终线前必须落到三者之一：收敛为已决事项（撤出该行并计入 `## Decisions`）；或转入 (iii) 的 marker 形态（行的 owner 即 marker 的 owner，随 (iv) 一同清除或重新归属给 `PM`）；或**显式重新归属给 `PM`** 并上报用户。**禁止**静默删除行 —— 与 (iv) 共用同一终线。`Blocking?` 决定该行**能否**越过终线：标记 `Yes` 的行**必须**在 lock 前收敛为已决事项，**不论**它本会重新归属给谁；不能收敛即 Prepare 未通过（`Gate decision: blocked`），compass **不得**置 `status: locked`。lock 之后 `## Open Questions` 中唯一允许存在的行，即**非阻塞**且 owner 为 `PM` 的行。行转入 marker 形态后，其清除义务与报数按 §1.6 计。
 
 ## 1.4 更新索引
 

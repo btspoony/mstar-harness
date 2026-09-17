@@ -1,7 +1,7 @@
 {
   "harness_name": "pm-routing-evals",
-  "version": 30,
-  "updated_at": "2026-09-16",
+  "version": 31,
+  "updated_at": "2026-09-17",
   "cases": [
     {
       "id": "small-ui-tweak",
