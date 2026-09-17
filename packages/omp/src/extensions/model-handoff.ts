@@ -99,10 +99,12 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@oh-my-pi/pi-coding-agent";
 import {
-  WORKFLOW_SNAPSHOT_FILE,
   WORKFLOW_TERMINAL_STATUSES,
+  canonicalizeNearestExisting,
+  readMainWorktree,
   readSessionEnvelope,
   readWorkflowSnapshot,
+  resolveHarnessDir,
   validateStatusV2,
 } from "@mstar-harness/engine";
 import { inspectPhase1Readiness, reserveHandoffBinding } from "../model-handoff-readiness";
@@ -114,11 +116,16 @@ import type {
   Phase1Receipt,
 } from "../model-handoff-readiness";
 import { readHandoffSettings } from "../model-handoff-settings";
+import { HANDOFF_NOTICE_CUSTOM_TYPE, fallbackNotice, formatNotice, statusNotice } from "../notices";
+import type { NoticeTitle } from "../notices";
 
 /** Ledger `customType` of the durable handoff record (the only writer). */
 export const HANDOFF_CUSTOM_TYPE = "mstar:model-handoff";
-/** Ledger `customType` of the durable coordinator-visible notice. */
-export const HANDOFF_NOTICE_CUSTOM_TYPE = "mstar:model-handoff-notice";
+/**
+ * Ledger `customType` of the durable coordinator-visible notice. The literal is
+ * declared once in the shared notice module; this is its unchanged re-export.
+ */
+export { HANDOFF_NOTICE_CUSTOM_TYPE } from "../notices";
 /** Tool the PM calls as its first preparation action and at the completion checkpoint. */
 const TOOL_NAME = "mstar_model_handoff";
 /** Model role armed at iteration entry (spec §Iteration entry). */
@@ -341,7 +348,19 @@ type AuthorityRefusalCode =
 
 type AuthorityDecision =
   | Readonly<{ ok: true }>
-  | Readonly<{ ok: false; code: AuthorityRefusalCode; message: string }>;
+  | Readonly<{
+      ok: false;
+      code: AuthorityRefusalCode;
+      message: string;
+      /**
+       * Internal typed discriminator for exactly one decision: the named
+       * workflow's own coordinator envelope names a *different* session. It is
+       * not a refusal code and not exported; only the registered-attach branch
+       * maps it to the observable `already-bound` outcome. No other decision
+       * carries it, and nothing matches error prose to recover it.
+       */
+      reason?: "foreign-coordinator";
+    }>;
 
 /** One engine session envelope, reduced to the fields this adapter derives from. */
 type WorkflowEnvelope = Readonly<{
@@ -434,6 +453,7 @@ export function deriveStartAuthority(args: {
       return {
         ok: false,
         code: "coordinator-elsewhere",
+        reason: "foreign-coordinator",
         message: `workflow ${binding.workflowId} is bound to coordinator session ${envelope.sessionId}, not to this session`,
       };
     }
@@ -488,6 +508,53 @@ export function deriveStartAuthority(args: {
     }
   }
   return { ok: true };
+}
+
+/**
+ * Structural branch selector, derived by this adapter from the validated root
+ * register for the explicitly named workflow id. It is never public tool input
+ * and never an authority grant: `reserveHandoffBinding` revalidates the
+ * register row and the own snapshot in `attach` mode, and a stale `reserve`
+ * selection is still fenced by the register-row refusal there. An absent
+ * register reserves; an unreadable or malformed register also classifies as
+ * `reserve`, so its own frozen `invalid-root` refusal applies unchanged.
+ */
+function bindingModeFor(workflowId: string, cwd: string): "reserve" | "attach" {
+  try {
+    const main = readMainWorktree(cwd);
+    if (main === null || !isNonEmpty(main.root)) return "reserve";
+    const resolved = resolveHarnessDir(main.root);
+    if (resolved === null) return "reserve";
+    const harnessRoot = canonicalizeNearestExisting(resolved);
+    const statusPath = join(harnessRoot, STATUS_FILE);
+    if (!existsSync(statusPath)) return "reserve";
+    if (!validateStatusV2(statusPath).ok) return "reserve";
+    const doc: unknown = JSON.parse(readFileSync(statusPath, "utf8"));
+    const rows = isPlainObject(doc) && Array.isArray(doc.workflows) ? doc.workflows : [];
+    return rows.some((row) => isPlainObject(row) && row.id === workflowId) ? "attach" : "reserve";
+  } catch {
+    return "reserve";
+  }
+}
+
+function isNonEmpty(value: unknown): value is string {
+  return typeof value === "string" && value.trim() !== "";
+}
+
+/**
+ * Presentation-only sample of the bound workflow's own snapshot status, for
+ * notice titles only. It never gates a model action, never changes authority
+ * or readiness facts, and is re-read fresh at notice time (never cached). A
+ * missing or unreadable snapshot yields `null` — the notice then falls back
+ * and asserts no workflow status instead of guessing one.
+ */
+function observedWorkflowStatus(binding: HandoffBinding): Readonly<{ id: string; status: string }> | null {
+  try {
+    const snapshot = readWorkflowSnapshot(dirname(binding.snapshotPath)).snapshot;
+    return { id: snapshot.id, status: snapshot.status };
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -575,13 +642,30 @@ export default function modelHandoff(pi: ExtensionAPI): void {
   /** The last host-observed entry route of this session (in-memory, not durable). */
   let lastRoute: RouteObservation | null = null;
 
-  /** Durable coordinator-visible notice; never log-only, never throws into the host. */
-  const notice = (text: string): void => {
+  /**
+   * Durable coordinator-visible notice; never log-only, never throws into the
+   * host. Every notice uses the shared Morning Star title shape
+   * (`statusNotice`/`fallbackNotice` rendered through `formatNotice`), so a
+   * title either states the observed workflow id and status or asserts no
+   * status at all.
+   */
+  const notice = (title: NoticeTitle): void => {
     try {
-      pi.sendMessage({ customType: HANDOFF_NOTICE_CUSTOM_TYPE, content: text, display: true });
+      pi.sendMessage({ customType: HANDOFF_NOTICE_CUSTOM_TYPE, content: formatNotice(title), display: true });
     } catch {
       // An unavailable notice channel at teardown must not break the caller.
     }
+  };
+
+  /** Skipped-fire notice at a bound site: sampled title, condition preserved in the detail. */
+  const notifySkipped = (binding: HandoffBinding, condition: string, tail: string): void => {
+    const observed = observedWorkflowStatus(binding);
+    const detail = `model handoff skipped for this coordinator session: ${condition}. ${tail}`;
+    notice(
+      observed !== null
+        ? statusNotice({ workflowId: observed.id, status: observed.status, detail })
+        : fallbackNotice({ subject: "Model handoff skipped", detail }),
+    );
   };
 
   /**
@@ -616,10 +700,17 @@ export default function modelHandoff(pi: ExtensionAPI): void {
       observedModel,
       reason,
     });
+    // A bound site: sample the workflow's own snapshot for the title. The
+    // binding itself is not status evidence, so a missing/unreadable snapshot
+    // falls back instead of guessing a status.
+    const observed = observedWorkflowStatus(record.binding);
+    const detail = appended
+      ? `model handoff ${state} for this coordinator session: ${reason}. The session keeps ${observedModel ?? "its actual model"}; the saved preference is unchanged and later iterations still apply it.`
+      : `model handoff ${state} for this coordinator session (the session record could not be appended): ${reason}. The session keeps ${observedModel ?? "its actual model"}.`;
     notice(
-      appended
-        ? `model handoff ${state} for this coordinator session: ${reason}. The session keeps ${observedModel ?? "its actual model"}; the saved preference is unchanged and later iterations still apply it.`
-        : `model handoff ${state} for this coordinator session (the session record could not be appended): ${reason}. The session keeps ${observedModel ?? "its actual model"}.`,
+      observed !== null
+        ? statusNotice({ workflowId: observed.id, status: observed.status, detail })
+        : fallbackNotice({ subject: `Model handoff ${state}`, detail }),
     );
     return appended;
   };
@@ -676,10 +767,15 @@ export default function modelHandoff(pi: ExtensionAPI): void {
   const suspend = (reason: string, state: "pending" | "none"): ToolOutcome => {
     if (!gate.suspensionNotified) {
       gate.suspensionNotified = true;
+      // Deliberately snapshot-free: a suspension is this seat's condition, not
+      // workflow status evidence.
       notice(
-        `model handoff suspended for this coordinator session: ${reason}. No model action was taken; ${
-          state === "pending" ? "the binding stays pending until the session settles" : "no binding was created"
-        }.`,
+        fallbackNotice({
+          subject: "Model handoff suspended",
+          detail: `${reason}. No model action was taken; ${
+            state === "pending" ? "the binding stays pending until the session settles" : "no binding was created"
+          }.`,
+        }),
       );
     }
     return outcome(
@@ -694,7 +790,14 @@ export default function modelHandoff(pi: ExtensionAPI): void {
 
   /** Refused start: durable notice plus a visible tool result; no binding is written. */
   const refuseStart = (code: string, message: string): ToolOutcome => {
-    notice(`model handoff start refused for this session (${code}): ${message}. No model action was taken.`);
+    // Deliberately snapshot-free: a refusal reports this seat's derivation, not
+    // workflow status.
+    notice(
+      fallbackNotice({
+        subject: `Model handoff start refused (${code})`,
+        detail: `${message}. No model action was taken.`,
+      }),
+    );
     return outcome(false, true, `the new-iteration handoff start was refused (${code}): ${message}`, { code });
   };
 
@@ -750,8 +853,11 @@ export default function modelHandoff(pi: ExtensionAPI): void {
       );
     }
 
-    // E1 reserves the derived paths for the explicitly named workflow; the
-    // reservation is session-local and writes nothing.
+    // E1 resolves the derived paths for the explicitly named workflow. The
+    // structural branch is derived here from the validated root register —
+    // never from the caller: unregistered ids reserve, registered ids attach
+    // to their existing own snapshot. The reservation is session-local and
+    // writes nothing; adoption authority is decided solely below.
     const taskSession = ctx.sessionManager.getEntries().some((entry) => entry.type === "session_init");
     const bindingInput: HandoffBindingInput = {
       workflowId: params.workflowId,
@@ -762,7 +868,8 @@ export default function modelHandoff(pi: ExtensionAPI): void {
       intent: "new-iteration",
       authority: "coordinator",
     };
-    const reservation = await reserveHandoffBinding(bindingInput, { sessionId, cwd: ctx.cwd, taskSession });
+    const mode = bindingModeFor(params.workflowId, ctx.cwd);
+    const reservation = await reserveHandoffBinding(bindingInput, { sessionId, cwd: ctx.cwd, taskSession }, mode);
     if (!reservation.ok) {
       return outcome(
         false,
@@ -779,7 +886,16 @@ export default function modelHandoff(pi: ExtensionAPI): void {
       taskSession,
       route: lastRoute,
     });
-    if (!authority.ok) return refuseStart(authority.code, authority.message);
+    if (!authority.ok) {
+      // Attach only: a foreign coordinator of the named registered workflow is
+      // the user-approved observable `already-bound` outcome, with the original
+      // detail preserved. The mapping matches the typed discriminator only —
+      // never error prose — and every other decision keeps its own code.
+      if (mode === "attach" && authority.reason === "foreign-coordinator") {
+        return refuseStart("already-bound", authority.message);
+      }
+      return refuseStart(authority.code, authority.message);
+    }
 
     // Durable re-check after every await: a concurrent arm (this instance or
     // another one over the same session) must be visible here as a binding.
@@ -1050,9 +1166,9 @@ export default function modelHandoff(pi: ExtensionAPI): void {
       );
     }
     if (!settings.value.modelHandoff) {
-      notice(
-        `model handoff skipped for this coordinator session: modelHandoff is off in native settings. ${SLOW_SPEC} stays in place. Re-enabling it before Phase 1 completes can still fire this binding.`,
-      );
+      // Bound site with a pending binding: title from the own-workflow snapshot
+      // sample (presentation only), falling back when it is not readable.
+      notifySkipped(record.binding, "modelHandoff is off in native settings", `${SLOW_SPEC} stays in place. Re-enabling it before Phase 1 completes can still fire this binding.`);
       return outcome(
         false,
         false,
@@ -1084,8 +1200,10 @@ export default function modelHandoff(pi: ExtensionAPI): void {
       );
     }
     if (!refreshed.value.modelHandoff) {
-      notice(
-        `model handoff skipped for this coordinator session: modelHandoff was turned off while Phase 1 was being checked. ${SLOW_SPEC} stays in place.`,
+      notifySkipped(
+        record.binding,
+        "modelHandoff is off in native settings",
+        `${SLOW_SPEC} stays in place; the preference was turned off while Phase 1 was being checked.`,
       );
       return outcome(
         false,
@@ -1181,8 +1299,14 @@ export default function modelHandoff(pi: ExtensionAPI): void {
       observedModel: actual,
       reason: `Phase 1 complete for ${record.binding.workflowId}; the coordinator continues on ${targetSpec}`,
     });
+    // Bound site with a completed binding: the completion notice title carries
+    // the observed workflow id and status from its own snapshot.
+    const completedObserved = observedWorkflowStatus(record.binding);
+    const completedDetail = `model handoff complete for this coordinator session: ${SLOW_SPEC} was used for Prepare and the session now runs ${actual ?? targetSpec} after a verified full Phase 1 of ${record.binding.workflowId}.${appended ? "" : " (The completion record could not be appended.)"}`;
     notice(
-      `model handoff complete for this coordinator session: ${SLOW_SPEC} was used for Prepare and the session now runs ${actual ?? targetSpec} after a verified full Phase 1 of ${record.binding.workflowId}.${appended ? "" : " (The completion record could not be appended.)"}`,
+      completedObserved !== null
+        ? statusNotice({ workflowId: completedObserved.id, status: completedObserved.status, detail: completedDetail })
+        : fallbackNotice({ subject: "Model handoff complete", detail: completedDetail }),
     );
     return outcome(
       true,
@@ -1270,8 +1394,14 @@ export default function modelHandoff(pi: ExtensionAPI): void {
    */
   const beforeNavigation = (ctx: ExtensionContext): { cancel: true } | undefined => {
     if (gate.actionInFlight) {
+      // Deliberately snapshot-free: this reports the in-flight action, never a
+      // workflow status.
       notice(
-        "model handoff is finishing; the navigation was refused so the invoked model action is not interrupted. Retry the navigation in a moment.",
+        fallbackNotice({
+          subject: "Model handoff",
+          detail:
+            "the navigation was refused so the invoked model action is not interrupted. Retry the navigation in a moment.",
+        }),
       );
       return { cancel: true };
     }

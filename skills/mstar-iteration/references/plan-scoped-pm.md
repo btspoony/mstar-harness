@@ -179,3 +179,5 @@ The scoped route **requires** `mstar plan …`. Without it（engine/CLI absent o
 Herdr / tmux (or any multiplexer) is only a way to open a terminal. It is **not** a prerequisite, dependency, ownership signal or session identity. Nothing in this route reads pane state, TTL or terminal labels to decide ownership.
 
 Where the active host reference declares an optional skill-driven extra-primary launch protocol (its native opt-in, its bind/checkpoint/reserve/record calls, non-focus pane creation at the prepared worktree, the absolute `--assignment` submission and terminal uncertainty handling), **`mstar-host`** → that reference's Phase-2 section is the only home for those calls; this file defines none of them. The protocol stays optional there too and adds no load-order dependency here.
+
+Such a conditional extra-primary launch is available only for a plan row the coordinator has already registered **and** prepared, and whose feature worktree exists; a row that does not yet exist cannot be launched, because row admission closes with Phase 1. Registration and preparation are distinct row states — the launch precondition is a prepared row, never registration alone.

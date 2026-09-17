@@ -147,6 +147,7 @@ async function buildFixture(options: { workflowId?: string; planIds?: readonly s
   const reservation = await reserveHandoffBinding(
     { workflowId, entry: "iteration-start", intent: "new-iteration", authority: "coordinator" },
     { sessionId, cwd: main, taskSession: false },
+    "reserve",
   );
   if (!reservation.ok) throw new Error(`fixture reservation refused: ${reservation.code} ${reservation.message}`);
   const binding = reservation.binding;
@@ -259,6 +260,11 @@ function compassPathOf(fixture: Fixture): string {
   return join(fixture.harness, "iterations", fixture.workflowId, "delivery-compass.md");
 }
 
+/** The module derives refusal paths canonically (`realpath` of the nearest existing ancestor). */
+function canonicalize(path: string): string {
+  return realpathSync(dirname(path)) === dirname(path) ? path : join(realpathSync(dirname(path)), basename(path));
+}
+
 function patchSnapshot(fixture: Fixture, patch: Record<string, unknown>): void {
   const path = snapshotPathOf(fixture);
   const doc = JSON.parse(text(path)) as Record<string, unknown>;
@@ -290,6 +296,7 @@ describe("E1 explicit binding", () => {
     const result = await reserveHandoffBinding(
       { workflowId: "fixture-later-iteration", entry: "iteration-loop", intent: "new-iteration", authority: "coordinator" },
       { sessionId: f.sessionId, cwd: f.main, taskSession: false },
+      "reserve",
     );
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error(`${result.code}: ${result.message}`);
@@ -311,6 +318,7 @@ describe("E1 explicit binding", () => {
     const viaAlias = await reserveHandoffBinding(
       { workflowId: "fixture-alias-iteration", entry: "skill-start", intent: "new-iteration", authority: "coordinator" },
       { sessionId: f.sessionId, cwd: alias, taskSession: false },
+      "reserve",
     );
     expect(viaAlias.ok).toBe(true);
     if (!viaAlias.ok) throw new Error(`${viaAlias.code}: ${viaAlias.message}`);
@@ -321,6 +329,7 @@ describe("E1 explicit binding", () => {
     const linked = await reserveHandoffBinding(
       { workflowId: "fixture-linked-iteration", entry: "iteration-start", intent: "new-iteration", authority: "coordinator" },
       { sessionId: f.sessionId, cwd: f.integration, taskSession: false },
+      "reserve",
     );
     expect(linked.ok).toBe(false);
     if (linked.ok) throw new Error("a linked worktree must not host the coordinator");
@@ -334,6 +343,7 @@ describe("E1 explicit binding", () => {
       reserveHandoffBinding(
         input as unknown as HandoffBindingInput,
         hostOverride as unknown as Parameters<typeof reserveHandoffBinding>[1],
+        "reserve",
       );
     const start = (workflowId: string) => ({ workflowId, entry: "iteration-start", intent: "new-iteration", authority: "coordinator" });
 
@@ -405,6 +415,157 @@ describe("E1 explicit binding", () => {
     const absent = await attempt(start("fixture-registerless"));
     expect(absent.ok).toBe(true);
     writeFileSync(registerPath, goodRegister);
+
+    // The three unregistered-path refusal message templates stay byte-identical.
+    const registerHit = await attempt(start(f.siblingId));
+    expect(registerHit.ok === false && registerHit.message).toBe(
+      `workflow ${f.siblingId} is already registered in the root register — a new start never adopts it`,
+    );
+    const snapshotHit = await attempt(start("fixture-orphan"));
+    expect(snapshotHit.ok === false && snapshotHit.message).toBe(
+      `a workflow snapshot already exists at ${canonicalize(join(f.harness, "workflows", "fixture-orphan", "snapshot.json"))}`,
+    );
+    const compassHit = await attempt(start("fixture-compass-only"));
+    expect(compassHit.ok === false && compassHit.message).toBe(
+      `an iteration compass already exists at ${canonicalize(join(f.harness, "iterations", "fixture-compass-only", "delivery-compass.md"))}`,
+    );
+  });
+});
+
+describe("E1 registered attachment (attach mode)", () => {
+  const attach = (f: Fixture, workflowId = f.workflowId) =>
+    reserveHandoffBinding(
+      { workflowId, entry: "iteration-start", intent: "new-iteration", authority: "coordinator" },
+      { sessionId: f.sessionId, cwd: f.main, taskSession: false },
+      "attach",
+    );
+
+  test("a genuinely registered workflow with its own snapshot returns a structural candidate", async () => {
+    const f = await buildFixture();
+    // Control: the same state still refuses in reserve mode.
+    const reserve = await reserveHandoffBinding(
+      { workflowId: f.workflowId, entry: "iteration-start", intent: "new-iteration", authority: "coordinator" },
+      { sessionId: f.sessionId, cwd: f.main, taskSession: false },
+      "reserve",
+    );
+    expect(reserve.ok).toBe(false);
+    if (!reserve.ok) expect(reserve.code).toBe("already-bound");
+
+    const realHarness = realpathSync(f.harness);
+    const registerPath = join(f.harness, "status.json");
+    const registerBefore = text(registerPath);
+    const result = await attach(f);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(`${result.code}: ${result.message}`);
+    expect(result.binding.workflowId).toBe(f.workflowId);
+    expect(result.binding.sessionId).toBe(f.sessionId);
+    expect(result.binding.controlRoot).toBe(realpathSync(f.main));
+    expect(result.binding.harnessRoot).toBe(realHarness);
+    expect(result.binding.snapshotPath).toBe(realpathSync(snapshotPathOf(f)));
+    expect(result.binding.compassPath).toBe(join(realHarness, "iterations", f.workflowId, "delivery-compass.md"));
+
+    // Attachment is structural: nothing is written and no artifact moves.
+    expect(text(registerPath)).toBe(registerBefore);
+    expect(statSync(snapshotPathOf(f)).isFile()).toBe(true);
+    expect(statSync(compassPathOf(f)).isFile()).toBe(true);
+  });
+
+  test("attach refuses invalid-root on absent or mismatched registration", async () => {
+    const f = await buildFixture();
+    const registerPath = join(f.harness, "status.json");
+
+    // The row names another workflow directory: wrong canonical snapshot path.
+    writeRegister(f.harness, [f.siblingId, f.workflowId], { [f.workflowId]: `workflows/${f.siblingId}` });
+    const mismatched = await attach(f);
+    expect(mismatched.ok).toBe(false);
+    if (!mismatched.ok) expect(mismatched.code).toBe("invalid-root");
+
+    // The named row is gone from a valid register.
+    writeRegister(f.harness, [f.siblingId]);
+    const unregistered = await attach(f);
+    expect(unregistered.ok).toBe(false);
+    if (!unregistered.ok) expect(unregistered.code).toBe("invalid-root");
+
+    // The register itself is absent: attachment always requires registration.
+    unlinkSync(registerPath);
+    const noRegister = await attach(f);
+    expect(noRegister.ok).toBe(false);
+    if (!noRegister.ok) expect(noRegister.code).toBe("invalid-root");
+  });
+
+  test("attach refuses invalid-root on a missing or mismatched own snapshot", async () => {
+    const f = await buildFixture();
+
+    // The registered snapshot vanished.
+    const snapshotPath = snapshotPathOf(f);
+    const bytes = text(snapshotPath);
+    unlinkSync(snapshotPath);
+    const vanished = await attach(f);
+    expect(vanished.ok).toBe(false);
+    if (!vanished.ok) expect(vanished.code).toBe("invalid-root");
+
+    // The snapshot exists but names another workflow.
+    writeJson(snapshotPath, { ...JSON.parse(bytes), id: f.siblingId });
+    const mismatchedId = await attach(f);
+    expect(mismatchedId.ok).toBe(false);
+    if (!mismatchedId.ok) expect(mismatchedId.code).toBe("invalid-root");
+
+    // Restore: the same state attaches again.
+    writeJson(snapshotPath, JSON.parse(bytes));
+    const restored = await attach(f);
+    expect(restored.ok).toBe(true);
+  });
+
+  test("attach refuses invalid-root on a terminal or non-iteration workflow snapshot", async () => {
+    const f = await buildFixture();
+    const snapshotPath = snapshotPathOf(f);
+    const bytes = JSON.parse(text(snapshotPath));
+
+    // Terminal status: attach never adopts a completed workflow. The register
+    // gate already refuses a terminal-listed snapshot (removal-at-terminal),
+    // so only the frozen refusal code is asserted here; the attach-side
+    // running-iteration check is the second, defense-in-depth layer.
+    writeJson(snapshotPath, { ...bytes, status: "completed" });
+    const completed = await attach(f);
+    expect(completed.ok === false && completed.code).toBe("invalid-root");
+
+    // Non-iteration type: a plan workflow is not attachable (the register
+    // cross-check refuses the mismatched type the same way).
+    writeJson(snapshotPath, { ...bytes, type: "plan" });
+    const plan = await attach(f);
+    expect(plan.ok === false && plan.code).toBe("invalid-root");
+
+    // A register-valid non-running status (paused) passes the register gate
+    // and must be refused by the attach-side eligibility check itself.
+    writeJson(snapshotPath, { ...bytes, status: "paused" });
+    const paused = await attach(f);
+    expect(paused.ok === false && paused.code).toBe("invalid-root");
+    if (!paused.ok) {
+      expect(paused.message).toBe(
+        `workflow ${f.workflowId} snapshot at ${canonicalize(snapshotPath)} is not a running iteration (status paused, type iteration)`,
+      );
+    }
+
+    // Restore: the same state attaches again.
+    writeJson(snapshotPath, bytes);
+    const restored = await attach(f);
+    expect(restored.ok).toBe(true);
+  });
+
+  test("attach still honors the shared input and host refusals", async () => {
+    const f = await buildFixture();
+    const wrongAuthority = await reserveHandoffBinding(
+      { workflowId: f.workflowId, entry: "iteration-start", intent: "new-iteration", authority: "leaf" },
+      { sessionId: f.sessionId, cwd: f.main, taskSession: false },
+      "attach",
+    );
+    expect(wrongAuthority.ok === false && wrongAuthority.code).toBe("not-coordinator");
+    const linked = await reserveHandoffBinding(
+      { workflowId: f.workflowId, entry: "iteration-start", intent: "new-iteration", authority: "coordinator" },
+      { sessionId: f.sessionId, cwd: f.integration, taskSession: false },
+      "attach",
+    );
+    expect(linked.ok === false && linked.code).toBe("invalid-root");
   });
 });
 

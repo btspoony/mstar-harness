@@ -44,6 +44,11 @@ description: Morning Star 派发与委派门禁 —— 仅 PM 可增派 subagent
 - **credential 不下发 leaf**：session JSON 路径、`mstar plan --session` 写凭据、`--expect <revision>` 等**只由派发方（PM/coordinator）持有**。leaf 拿到 session 路径或写凭据即视为越权 → 停止并回报（`mstar-iteration/references/plan-scoped-pm.md` §8）。
 - **`project-manager` 不是派发目标**：PM 是 primary-session 角色，无 subagent shell（规则家 → `mstar-roles/references/project-manager.md` § Plan-scoped authority；宿主派发面 → 当前宿主的 **`mstar-host` reference**（角色绑定 / 派发小节））；scoped primary drive（`/iteration-drive --assignment | --workflow --plan | --resume`）在**主会话**启动 PM，不是 subagent。任何 `Execute as: project-manager` 的 invoke = 派发缺陷。
 
+## 跨会话 primary 并发：唯一受支持形式（scoped route）
+
+- 跨**独立主会话 / 终端**的并发只有一种受支持形式：**scoped route** —— 由已准备（prepared）的 Assignment 作为**全新会话的第一条指令**启动该会话。通过终端提示词下发自拟的 leaf Assignment **不是**受支持的派发路径：它绕过 scoped 启动、lease 归属与 handoff 交接。
+- 本边界不取代宿主的原生 leaf 派发，也不重复 N-invocation 机制（→ **`mstar-host`** → `references/parallel-dispatch.md`）；该路线的操作前置清单由宿主 reference 独有承载。
+
 ## 调度防串扰（强制；leaf executor 已在上方读过反递归红线，此处为完整规则供 PM/对照用）
 
 - 只有 **`project-manager`** 可以决定增加/并行 subagent；承接方**默认不得二次分派**。
