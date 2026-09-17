@@ -20,7 +20,12 @@ QC/QA 原始过程报告默认是 **ephemeral review bundle**，置于 `{SDD_DIR
 | QC 单席报告（**`inline` / hotfix 例外**） | `qc.md` |
 | QC 汇总结论（tri 模式） | `qc-consolidated.md` |
 | QA 验收报告（`QA gate: mandatory`） | `qa.md`（或 Assignment 指定的同目录 basename） |
+| L2 task review 报告（**`Execution mode: sdd`，每个已完成 task**） | `../task-N-review.md` |
+| Implementer 报告（**`Execution mode: sdd`**） | `../task-N-report.md` |
 
+后两行的 `../` 是**必需**前缀：这两份 artifact 落在 `{SDD_DIR}` 根，**不在** review bundle 内。按上表表头解析，`../task-N-review.md` = **`{SDD_DIR}/task-N-review.md`**，`../task-N-report.md` = **`{SDD_DIR}/task-N-report.md`**；漏掉该前缀（即让它们落在 `{SDD_DIR}/review/` 下）就是错误解析。两者由不同角色写、互不覆盖：implementer 始终写 `task-N-report.md` —— 它是 L2 的**输入**，永不被 L2 覆盖，也不能充当独立审查；fresh L2 task reviewer 始终写 `task-N-review.md`（`Execution mode: sdd` 下每个已完成 task 都必有，不是可选、也不是只留在对话里）。**不存在**接受任一 basename 的 fallback。
+
+Mandatory QA always writes `${SDD_DIR}/review/qa.md` (or the Assignment's explicit same-directory basename) with its AC → evidence → result mapping; report-only is a mode, not a condition for mandatory report landing.
 
 ## SDD 运行时（不入 reports）
 
@@ -41,10 +46,12 @@ Raw bundle files may disappear after the working context is gone. Before Done, P
   - `Review range / Diff basis`
   - `Review bundle`: `{SDD_DIR}/review/`
   - `QC inputs`: `qc1.md` / `qc2.md` / `qc3.md` or `qc.md`
+  - `Task reviews`: compact per completed task — task number + review range + earned `Task quality` + report pointer (`task-N-review.md` → `{SDD_DIR}/task-N-review.md`); required because the raw per-task file disappears with the bundle. The pointer names the L2 report, never the implementer's `task-N-report.md`
   - `Blocking result`: fixed / none / deferred with reason
   - `Residual findings`: each open R# — id + short title + severity + tracking location (register `entries[<plan-id>]`) + owner/target + blocker-defer flag (`N/A — none open` when none)
 - Main plan `## QA Gate Summary` when QA applies:
   - `QA gate` / `QA mode`
+  - acceptance trace: compact AC → evidence → result mapping + coverage/gap disclosure + exact report pointer (`qa.md` → `{SDD_DIR}/review/qa.md`)
   - evidence reused vs newly run checks
   - related R# closure recommendations
 - `{PROJECT_DIR}/<id>/residuals.json` (default `{HARNESS_DIR}/projects/<id>/`): open R# machine SSOT — `entries[<plan-id>]`.

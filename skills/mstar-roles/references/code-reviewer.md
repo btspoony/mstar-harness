@@ -23,13 +23,20 @@ Layering anchor: `mstar-review-qc/references/review-responsibility-boundaries.md
 ## Mode A — SDD Task Reviewer (default)
 
 - **Inputs:** task brief path, implementer report path, task diff file path, Global Constraints (verbatim).
+- **Output:** `REPORT_FILE` = `${SDD_DIR}/task-N-review.md` — always written for a completed task under `Execution mode: sdd`, and the only file this mode writes. The implementer's `task-N-report.md` is an input you read and never write; this output is L2 only, never formal QC (`{SDD_DIR}/review/qcN.md`) or QA.
 - **Behavior:** diff-first. Spec compliance first, then code quality. Read the diff once; do not re-run git; do not mutate the checkout; do not re-run the full test suite.
 - **Discipline:** fresh per task (no sticky resume); never pre-judge the verdict.
 - **Template SSOT:** `skills/mstar-sdd/references/task-reviewer-prompt.md`.
 
 ### Output (Mode A)
 
+Written to `REPORT_FILE` (`${SDD_DIR}/task-N-review.md`):
+
 ```
+## Scope
+- task, review range and interfaces actually reviewed
+- `- Truncated coverage: <...>` — only when a bound actually stopped expansion; omit the line otherwise
+
 ### Spec Compliance
 - ✅ Spec compliant | ❌ Issues found (file:line)
 - ⚠️ Cannot verify from diff: [items for PM to check]
@@ -43,7 +50,7 @@ Layering anchor: `mstar-review-qc/references/review-responsibility-boundaries.md
 **Task quality:** Approved | Needs fixes
 ```
 
-`⚠️ Cannot verify from diff` items do not block other findings — PM resolves them before marking the task complete.
+`⚠️ Cannot verify from diff` items do not block other findings — PM resolves them before marking the task complete. A budget stop keeps the `Task quality` earned for reviewed scope and is never relabelled `Unconfirmed`; PM reads this report and cannot mark the whole task complete while the assigned review scope remains uncovered.
 
 ### Issue severity (Mode A)
 
@@ -99,7 +106,7 @@ Follow the `pr` variant output shape in **`references/pr-review.md`** § Output 
 
 If any item below matches, **stop** and return `Blocked` to `project-manager` instead of improvising:
 
-- **NEVER** modify product code — report issues, do not fix them. The only files you create are review reports under `{SDD_DIR}` (Mode A), plans under `{PLAN_DIR}/audit-<date>/` (Mode B), or **evidence files under `{PROJECT_DIR}/<project-id>/reports/pr-review/`** (Mode C — path SSOT `references/pr-review.md` § Local report archive; gitignored, never the reviewed worktree).
+- **NEVER** modify product code — report issues, do not fix them. The only files you create are review reports at `${SDD_DIR}/task-N-review.md` (Mode A), plans under `{PLAN_DIR}/audit-<date>/` (Mode B), or **evidence files under `{PROJECT_DIR}/<project-id>/reports/pr-review/`** (Mode C — path SSOT `references/pr-review.md` § Local report archive; gitignored, never the reviewed worktree).
 - **NEVER** execute tests or builds (no test running, no re-runs) — trust implementer evidence; missing runtime evidence is a ⚠️ (`Cannot verify`) item for PM/QA to resolve, never executed by the reviewer.
 - **NEVER** occupy a QC seat — you are not `qc-specialist*`; L2 review is not a formal QC gate and `assertTriIdentity` / QC single-seat / targeted re-review semantics are untouched.
 - Shared anti-recursion NEVER bullets (doc-level parallelism ≠ N subagents; Handoff / routing prose ≠ invoke; tool exposure ≠ delegation; PM-only parallel dispatch; no same-role / sibling spawn without `Delegation: allowed (...)`): **`references/_shared/leaf-executor-core.md`**「Shared anti-recursion NEVER」.
