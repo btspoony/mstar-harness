@@ -1077,6 +1077,100 @@ describe("validateAuditFindingGates", () => {
     ]);
     expect(gate.ok).toBe(true);
   });
+
+  // Runtime shape guards (§3): JavaScript callers bypass type-checking, so a
+  // runtime-malformed carrier must yield a stable `audit.finding.*` violation
+  // with a field path — never a native TypeError. Malformed carriers are
+  // built via casts exactly as a JS caller would deliver them.
+  const malformed = (overrides: Record<string, unknown>): AuditFinding =>
+    ({ ...legacyFinding(), ...overrides }) as unknown as AuditFinding;
+  const codesOf = (findings: readonly AuditFinding[]): string[] =>
+    validateAuditFindingGates(findings).violations.map((v) => v.code);
+
+  test("non-array findings → audit.finding.shape; scaffoldAuditPlan rejects via direct engine call", () => {
+    const out = join(tmp, "audit-shape-findings");
+    expect(() => scaffoldAuditPlan(out, "nope" as unknown as AuditFinding[], { date: "2026-09-15" })).toThrow(
+      /invalid audit findings — audit\.finding\.shape: findings — audit\.finding\.shape/,
+    );
+  });
+
+  test("non-object finding → audit.finding.shape at findings[index], no dereference", () => {
+    for (const finding of [null, 7, "x"]) {
+      const gate = validateAuditFindingGates([finding as unknown as AuditFinding]);
+      expect(gate.ok).toBe(false);
+      expect(gate.violations.map((v) => v.code)).toEqual(["audit.finding.shape"]);
+      expect(gate.violations[0].message.startsWith("findings[0] — ")).toBe(true);
+    }
+  });
+
+  test("evidence: null / primitive / non-array carriers → stable codes, never TypeError", () => {
+    expect(codesOf([malformed({ evidence: [null] })])).toContain("audit.finding.evidence.shape");
+    expect(codesOf([malformed({ evidence: [42] })])).toContain("audit.finding.evidence.shape");
+    expect(codesOf([malformed({ evidence: "see src/a.ts" })])).toContain("audit.finding.evidence.shape");
+    expect(codesOf([malformed({ evidence: undefined })])).toContain("audit.finding.evidence.shape");
+    // positive control: string evidence stays legal
+    expect(validateAuditFindingGates([legacyFinding()]).ok).toBe(true);
+    const out = join(tmp, "audit-shape-evidence");
+    expect(() => scaffoldAuditPlan(out, [malformed({ evidence: [null] })], { date: "2026-09-15" })).toThrow(
+      /audit\.finding\.evidence\.shape: findings\[0\]\.evidence\[0\]/,
+    );
+  });
+
+  test("evidence object with absent or non-string file/description → path.unsafe / text.type", () => {
+    expect(codesOf([malformed({ evidence: [{ line: 1, description: "d" }] })])).toContain("audit.finding.path.unsafe");
+    expect(codesOf([malformed({ evidence: [{ file: 7, description: "d" }] })])).toContain("audit.finding.path.unsafe");
+    const descGate = validateAuditFindingGates([malformed({ evidence: [{ file: "src/a.ts", description: 42 }] })]);
+    expect(descGate.violations.map((v) => v.code)).toContain("audit.finding.text.type");
+    expect(descGate.violations.some((v) => v.message.includes("evidence[0].description"))).toBe(true);
+  });
+
+  test("trace: non-array carrier and non-object steps → audit.finding.trace.shape", () => {
+    expect(codesOf([malformed({ trace: "src/a.ts" })])).toContain("audit.finding.trace.shape");
+    expect(codesOf([malformed({ trace: [null] })])).toContain("audit.finding.trace.shape");
+    expect(codesOf([malformed({ trace: [42] })])).toContain("audit.finding.trace.shape");
+    const stepGate = validateAuditFindingGates([malformed({ trace: [null] })]);
+    expect(stepGate.violations.some((v) => v.message.includes("trace[0]"))).toBe(true);
+    const out = join(tmp, "audit-shape-trace");
+    // scaffoldAuditPlan reports the gate's first violation (topology sorts
+    // before the per-step pass) — still a stable code, never a TypeError.
+    expect(() => scaffoldAuditPlan(out, [malformed({ trace: [42] })], { date: "2026-09-15" })).toThrow(
+      /invalid audit findings — audit\.finding\.trace\.\w+/,
+    );
+  });
+
+  test("trace step with missing or non-string required text members → trace.shape / text.type", () => {
+    expect(codesOf([malformed({ trace: [{ kind: "sink", file: "src/a.ts", line: 1 }] })])).toContain(
+      "audit.finding.trace.shape",
+    );
+    const nonString = validateAuditFindingGates([
+      malformed({ trace: [{ kind: "sink", file: "src/a.ts", line: 1, scope: 9, description: "d" }] }),
+    ]);
+    expect(nonString.violations.map((v) => v.code)).toContain("audit.finding.text.type");
+    expect(nonString.violations.some((v) => v.message.includes("trace[0].scope"))).toBe(true);
+  });
+
+  test("severity: non-object carrier → audit.finding.severity.shape; non-enum ranks keep audit.finding.severity.rank", () => {
+    for (const severity of [null, "high", 3]) {
+      const gate = validateAuditFindingGates([malformed({ severity })]);
+      expect(gate.ok).toBe(false);
+      expect(gate.violations.map((v) => v.code)).toContain("audit.finding.severity.shape");
+      expect(gate.violations.some((v) => v.message.includes("findings[0].severity"))).toBe(true);
+    }
+    expect(codesOf([malformed({ severity: { likelihood: "catastrophic", impact: "high", overall: "low" } })])).toContain(
+      "audit.finding.severity.rank",
+    );
+    // positive control: a well-formed severity still passes
+    expect(validateAuditFindingGates([enrichedFinding()]).ok).toBe(true);
+  });
+
+  test("shape diagnostics never carry submitted values", () => {
+    const gate = validateAuditFindingGates([malformed({ evidence: [null], trace: [42], severity: "secret-value" })]);
+    expect(gate.ok).toBe(false);
+    for (const v of gate.violations) {
+      expect(v.message).not.toContain("secret-value");
+      expect(v.message).toMatch(/^findings\[\d+\]/);
+    }
+  });
 });
 
 describe("scaffoldAuditPlan — gate integration + additive rendering", () => {

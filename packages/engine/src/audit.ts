@@ -941,6 +941,13 @@ const DEFAULT_IGNORABLE_RE =
 /** A lone UTF-16 surrogate is invalid anywhere (§3 deterministic predicates). */
 const LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
+/** Runtime shape guard (§3): JavaScript callers bypass type-checking, so
+ * every carrier is shape-checked before any field is dereferenced — a
+ * malformed carrier yields a stable `audit.finding.*.shape` violation, not
+ * a native TypeError. Arrays are not plain objects. */
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
 /** Visible content: ≥1 code point outside White_Space and
  * Default_Ignorable_Code_Point; lone surrogates invalid. Multilingual text
  * is never stripped. */
@@ -957,6 +964,7 @@ function isVisibleText(value: string): boolean {
  * segments, and segments ending in a dot or space. Never normalizes unsafe
  * input into acceptance; never checks filesystem existence. */
 function safeAuditPath(value: string): boolean {
+  if (typeof value !== "string") return false; // runtime shape (JS callers)
   if (value === "") return false;
   if (value.includes("\\")) return false;
   if (/[\u0000-\u001F\u007F-\u009F]/.test(value)) return false;
@@ -992,35 +1000,52 @@ export function validateAuditFindingGates(findings: readonly AuditFinding[]): Ga
   const seen = new Map<string, number>();
   let previousFingerprint: string | undefined;
 
+ // Runtime shape (JS callers): findings itself must be an array.
+  if (!Array.isArray(findings)) {
+    violations.push(violation("high", "audit.finding.shape", "findings \u2014 audit.finding.shape"));
+    return { ok: false, violations };
+  }
+
   findings.forEach((finding, index) => {
     const at = (field: string): string => `findings[${index}].${field}`;
     const push = (code: string, field: string): void => {
       violations.push(violation("high", code, `${at(field)} \u2014 ${code}`));
     };
 
+ // Runtime shape: a non-object finding cannot be dereferenced safely (JS
+ // callers bypass type-checking) — one stable violation, no field paths.
+    if (!isPlainObject(finding)) {
+      violations.push(violation("high", "audit.finding.shape", `findings[${index}] \u2014 audit.finding.shape`));
+      return;
+    }
+
  // §4 fingerprint: grammar, credential rejection, exact uniqueness,
  // strict ASCII ordering of the supplied subsequence (absent ones skipped;
  // out-of-order input is rejected, never sorted — positions control plan
  // numbers and dependsOn).
-    if (finding.fingerprint !== undefined) {
-      if (!AUDIT_FINGERPRINT_RE.test(finding.fingerprint)) push("audit.finding.fingerprint.grammar", "fingerprint");
-      else if (redactSecrets(finding.fingerprint).text !== finding.fingerprint) push("audit.finding.fingerprint.secret", "fingerprint");
+    if (finding.fingerprint != null) {
+      const fingerprint = finding.fingerprint;
+      if (typeof fingerprint !== "string" || !AUDIT_FINGERPRINT_RE.test(fingerprint)) push("audit.finding.fingerprint.grammar", "fingerprint");
+      else if (redactSecrets(fingerprint).text !== fingerprint) push("audit.finding.fingerprint.secret", "fingerprint");
       else {
-        const firstAt = seen.get(finding.fingerprint);
+        const firstAt = seen.get(fingerprint);
         if (firstAt !== undefined) push("audit.finding.fingerprint.duplicate", "fingerprint");
-        else seen.set(finding.fingerprint, index);
-        if (previousFingerprint !== undefined && finding.fingerprint < previousFingerprint) {
+        else seen.set(fingerprint, index);
+        if (previousFingerprint !== undefined && fingerprint < previousFingerprint) {
           push("audit.finding.fingerprint.order", "fingerprint");
         }
-        previousFingerprint = finding.fingerprint;
+        previousFingerprint = fingerprint;
       }
     }
 
  // §6 severity ceiling: only `overall ≤ impact` is computed; invalid ranks
  // are errors (no inference from priority/risk/confidence).
     if (finding.severity !== undefined) {
+      if (!isPlainObject(finding.severity)) {
+        push("audit.finding.severity.shape", "severity");
+      } else {
       const { likelihood, impact, overall } = finding.severity;
-      const rankOf = (r: string): number | undefined => AUDIT_SEVERITY_ORDER[r as AuditSeverityRank];
+      const rankOf = (r: unknown): number | undefined => AUDIT_SEVERITY_ORDER[r as AuditSeverityRank];
       for (const [field, value] of [
         ["likelihood", likelihood],
         ["impact", impact],
@@ -1033,20 +1058,23 @@ export function validateAuditFindingGates(findings: readonly AuditFinding[]): Ga
       if (impactRank !== undefined && overallRank !== undefined && overallRank > impactRank) {
         push("audit.finding.severity.overall-exceeds-impact", "severity.overall");
       }
+      }
     }
 
-    const textViolation = (field: string, value: string | undefined): void => {
+    const textViolation = (field: string, value: unknown): void => {
       if (value === undefined) return;
-      if (LONE_SURROGATE_RE.test(value)) push("audit.finding.text.surrogate", field);
+      if (typeof value !== "string") push("audit.finding.text.type", field);
+      else if (LONE_SURROGATE_RE.test(value)) push("audit.finding.text.surrogate", field);
       else if (!isVisibleText(value)) push("audit.finding.text.invisible", field);
     };
 
  // §5 trace: nonempty array; length 1 allows entrypoint|sink; length >1
  // requires first entrypoint, last sink, propagation between.
     if (finding.trace !== undefined) {
-      if (finding.trace.length === 0) push("audit.finding.trace.empty", "trace");
+      if (!Array.isArray(finding.trace)) push("audit.finding.trace.shape", "trace");
+      else if (finding.trace.length === 0) push("audit.finding.trace.empty", "trace");
       else {
-        const kinds = finding.trace.map((s) => s.kind);
+        const kinds = finding.trace.map((s) => (isPlainObject(s) ? s.kind : undefined));
         const topologyOk =
           finding.trace.length === 1
             ? kinds[0] === "entrypoint" || kinds[0] === "sink"
@@ -1054,25 +1082,39 @@ export function validateAuditFindingGates(findings: readonly AuditFinding[]): Ga
         if (!topologyOk) push("audit.finding.trace.topology", "trace");
         finding.trace.forEach((step, stepIndex) => {
           const stepAt = `trace[${stepIndex}]`;
+          if (!isPlainObject(step)) {
+            push("audit.finding.trace.shape", stepAt);
+            return;
+          }
           if (typeof step.line !== "number" || !Number.isSafeInteger(step.line) || step.line <= 0) {
             push("audit.finding.trace.line", `${stepAt}.line`);
           }
-          if (!safeAuditPath(step.file)) push("audit.finding.path.unsafe", `${stepAt}.file`);
-          else if (redactSecrets(step.file).text !== step.file) push("audit.finding.path.secret", `${stepAt}.file`);
-          textViolation(`${stepAt}.scope`, step.scope);
-          textViolation(`${stepAt}.description`, step.description);
+          const stepFile = step.file;
+          if (typeof stepFile !== "string" || !safeAuditPath(stepFile)) push("audit.finding.path.unsafe", `${stepAt}.file`);
+          else if (redactSecrets(stepFile).text !== stepFile) push("audit.finding.path.secret", `${stepAt}.file`);
+          if (step.scope === undefined) push("audit.finding.trace.shape", `${stepAt}.scope`);
+          else textViolation(`${stepAt}.scope`, step.scope);
+          if (step.description === undefined) push("audit.finding.trace.shape", `${stepAt}.description`);
+          else textViolation(`${stepAt}.description`, step.description);
         });
       }
     }
 
  // §3 typed evidence objects
+    if (!Array.isArray(finding.evidence)) push("audit.finding.evidence.shape", "evidence");
+    else
     finding.evidence.forEach((item, itemIndex) => {
       if (typeof item === "string") {
         textViolation(`evidence[${itemIndex}]`, item);
         return;
       }
-      if (!safeAuditPath(item.file)) push("audit.finding.path.unsafe", `evidence[${itemIndex}].file`);
-      else if (redactSecrets(item.file).text !== item.file) push("audit.finding.path.secret", `evidence[${itemIndex}].file`);
+      if (!isPlainObject(item)) {
+        push("audit.finding.evidence.shape", `evidence[${itemIndex}]`);
+        return;
+      }
+      const itemFile = item.file;
+      if (typeof itemFile !== "string" || !safeAuditPath(itemFile)) push("audit.finding.path.unsafe", `evidence[${itemIndex}].file`);
+      else if (redactSecrets(itemFile).text !== itemFile) push("audit.finding.path.secret", `evidence[${itemIndex}].file`);
       if (item.line !== undefined && (typeof item.line !== "number" || !Number.isSafeInteger(item.line) || item.line <= 0)) {
         push("audit.finding.evidence.line", `evidence[${itemIndex}].line`);
       }
