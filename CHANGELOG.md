@@ -8,6 +8,21 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ## [Unreleased]
 
+## [3.10.3] - 2026-09-17
+
+### Harness
+
+- Added the **`mstar-use-cli`** skill as the agent-facing CLI SSOT: a task→command-family index, the precondition ladder (harness-root resolution, control root vs feature worktree, neutral cwd, session envelope, revision and byte tokens), the two canonical sequences (versioned read-modify-write, plan completion), and how to read exit `0` / `1` / `2` — including the argument parser's exit `1` for a missing required argument. Flags are never restated: each command's own `--help` owns them.
+- Retired **`docs/cli.md`** by splitting it by audience instead of redirecting: its two install-only sections (Codex agent files, install path layout) moved into `INSTALL.md`, where its own install cross-references plus `packages/cli/AGENTS.md` and `.cursor/LOCAL-VALIDATION.md` now resolve to in-file anchors. The CLI-contract pointers — `README` / `README_CN`, `docs/commands.md`, and the runtime skill references — now point at the **`mstar-use-cli`** skill. The old file is deleted outright: no redirect page and no compatibility layer.
+- Extended the **drift guard's CLI inventory** past the CLI entry module into the plan / workflow / sdd registration modules — 16 command paths that were previously invisible, including 13 `plan` verbs — so citing those verbs is now checked instead of silently passing. The same check (declared bin prefix plus a real command path) now also scans the new skill's own markdown, not only the Engine-check callouts.
+- Registered the skill in the **runtime load surface**: implementers, reviewers and QA, operations, architecture, harness-text work, and PM load `mstar-use-cli` in their preset menus / load table when the round runs or interprets CLI commands.
+- Granted the **QC seats and `code-reviewer`** read-only CLI validators in their bash allowlist (`qc validate-report`, `lint`, `dispatch validate`, `worktree qc-alignment`, `status validate`, `lease verify`), removing the contradiction where a skill required a machine-checked gate the seat had no permission to run.
+- Updated the **host support tiers** in the README pair: **`dsh = omp ≥ ZCode = OpenCode = Cursor > Kimi > Codex`**. ZCode now shares a tier with OpenCode and Cursor: its plugin hooks enforce the default-branch commit guard, the bare-force-push guard and the engine-backed coordination-write gate at tool-call time — runtime integration in the same class as OpenCode's. Worktree isolation stays skill guidance rather than a hook-enforced check.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, the portable Agent Plugins manifest, and both marketplace manifests: **→ 3.10.3**.
+
 ## [3.10.2] - 2026-09-17
 
 ### Harness

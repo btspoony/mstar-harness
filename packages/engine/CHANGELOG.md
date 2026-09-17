@@ -6,6 +6,20 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [3.10.3] - 2026-09-17
+
+### Changed
+
+- Added a **route-specific standalone completion path**: a `type: plan` / `development` workflow now reaches row `Done` from its own registered `branch.source` / `branch.target` instead of requiring an integration branch, while the iteration route keeps its mandatory integration anchors and the delivery-evidence ordering gate is unchanged.
+- Added the guarded, identity-only **`plan repair-delivery-source`** operation: it corrects a pre-existing snapshot whose registered delivery source is wrong, deriving the replacement only from that row's accepted handoff and changing nothing else — never `Done`, never delivery evidence, statuses or leases.
+- Gave the **QA seat the same budget-stop and truncation contract as the QC seats** (`Truncated coverage:` emitted only when the bound actually stopped expansion) and one mandatory report-landing obligation that reads identically in the role reference and the review-bundle naming table.
+- Bound the **L2 task-review output** to an always-on `${SDD_DIR}/task-N-review.md`, distinct from and never overwriting the implementer's `task-N-report.md`, and aligned every named producer and consumer on that basename.
+- Published both completion routes and the legacy-only repair across the CLI reference, the runtime lifecycle contract, the state/residual reference and the PM plan-management reference.
+
+- Version alignment with harness **3.10.3**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **3.10.3**.
+
 ## [3.10.2] - 2026-09-17
 
 ### Changed
