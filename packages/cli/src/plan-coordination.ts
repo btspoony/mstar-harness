@@ -759,11 +759,11 @@ export function registerPlanCommands(program: Command): void {
     ],
     [
       "complete",
-      "Record row Done after verified Git proof — iteration route releases both leases after a merged handoff; standalone development completes from the accepted handoff without integration and releases only the row lease (workflow stays running)",
+      "Record row Done after verified Git proof \u2014 iteration route releases both leases after a merged handoff; standalone development completes from the accepted handoff without integration and releases only the row lease (workflow stays running)",
     ],
     [
       "repair-delivery-source",
-      "Legacy-only: replace a wrong registered delivery source (source === target) from the accepted handoff pin — never Done, delivery evidence, or a user-supplied branch; not a normal lifecycle step",
+      "Legacy-only: replace a wrong registered delivery source (source === target) from the accepted handoff pin \u2014 never Done, delivery evidence, or a user-supplied branch; not a normal lifecycle step",
     ],
     [
       "reconcile",

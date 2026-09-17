@@ -45,6 +45,7 @@ import {
   readPlanCoordination,
   replaceCoordinatedArtifact,
   resolvePlanScope,
+  setCompleteStandaloneMutateGapForTest,
   showPrepareWorkflow,
   type CoordinationResult,
   type PlanCoordinationView,
@@ -1743,16 +1744,15 @@ describe("standalone-development-completion", () => {
   test("a standalone source checkout moved after precheck never completes with stale git evidence", async () => {
     const fixture = await acceptedStandaloneFixture();
     const before = readFileSync(fixture.snapshotPath);
-    const gap = globalThis as { __mstarCompleteStandaloneMutateGap__?: () => void };
-    gap.__mstarCompleteStandaloneMutateGap__ = () => {
+    setCompleteStandaloneMutateGapForTest(() => {
       git(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "advance"], fixture.worktreePath);
-    };
+    });
     try {
       expect(await errorCodeOf(() => coordinatorCall(fixture, PLAN_ID, { kind: "complete" }))).toBe("coordination.git-proof");
       expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
       expect(planRowOf(fixture, PLAN_ID).status).toBe("InReview");
     } finally {
-      delete gap.__mstarCompleteStandaloneMutateGap__;
+      setCompleteStandaloneMutateGapForTest(undefined);
     }
   }, 30000);
 
