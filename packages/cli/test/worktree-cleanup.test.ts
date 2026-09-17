@@ -14,7 +14,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -62,6 +62,112 @@ function runCli(args: string[], cwd: string, extraEnv: Record<string, string> = 
 
 function tmpRoot(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix));
+}
+
+/** `verdict | kind | ref | reason` lines only — never headers or notes. */
+function decisionRows(stdout: string): string[] {
+  return stdout.split(/\r?\n/).filter((line) => /^(keep|remove|refuse) \| /.test(line));
+}
+
+/** Evidence diagnostics only: ANSI-stripped `worktree cleanup: note: ` lines on stderr. */
+function evidenceNotes(stderr: string): string[] {
+  return stderr
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\x1b\[[0-9;]*m/g, ""))
+    .filter((line) => line.startsWith("worktree cleanup: note: "));
+}
+
+/** Actual child argv histogram — the membership cost of one CLI run. */
+interface ProbeHistogram {
+  ancestry: number;
+  resolve: number;
+  localMerged: number;
+  positive: number;
+  negative: number;
+}
+
+function membershipHistogram(entries: { cwd: string; argv: string[] }[]): ProbeHistogram {
+  const counts: ProbeHistogram = { ancestry: 0, resolve: 0, localMerged: 0, positive: 0, negative: 0 };
+  for (const entry of entries) {
+    const argv = entry.argv;
+    const text = argv.join(" ");
+    if (argv[0] === "merge-base" && argv[1] === "--is-ancestor") counts.ancestry++;
+    else if (argv[0] === "rev-parse" && argv[1] === "--verify" && argv[2] === "--quiet" && argv[argv.length - 1]?.endsWith("^{commit}")) counts.resolve++;
+    else if (argv[0] === "branch" && argv[1] === "--merged") counts.localMerged++;
+    else if (argv[0] === "for-each-ref" && text.includes("--merged") && argv[argv.length - 1] === "refs/remotes/origin") counts.positive++;
+    else if (argv[0] === "for-each-ref" && text.includes("--no-merged") && argv[argv.length - 1] === "refs/remotes/origin") counts.negative++;
+  }
+  return counts;
+}
+
+function readGitLog(logPath: string): { cwd: string; argv: string[] }[] {
+  return readFileSync(logPath, "utf8")
+    .split(/\r?\n/)
+    .filter((line) => line.trim() !== "")
+    .map((line) => JSON.parse(line) as { cwd: string; argv: string[] });
+}
+
+/**
+ * Git PATH shim: logs every child argv to a JSONL file outside any worktree,
+ * then forwards to the real Git with identical argv/env/stdio. Optional
+ * fault modes for fail-closed coverage:
+ * - fault "positive"/"negative": reject that membership sweep with exit 128.
+ * - vanish: delete a remote-tracking ref right after the inventory read and
+ *   before the first membership sweep (race between inventory and evidence).
+ * - dropTip: rewrite one branch's OID in the inventory stdout to a
+ *   well-formed but absent object (tip the graph cannot answer for).
+ */
+function installGitShim(home: string, mode: { fault?: "positive" | "negative"; vanish?: string; dropTip?: string } = {}): {
+  shimDir: string;
+  logPath: string;
+  env: Record<string, string>;
+} {
+  const shimDir = join(home, "git-shim");
+  mkdirSync(shimDir, { recursive: true });
+  const logPath = join(home, "git-log.jsonl");
+  const realGit = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+  writeFileSync(
+    join(shimDir, "git"),
+    `#!${process.execPath}
+const { appendFileSync, existsSync, writeFileSync } = require("node:fs");
+const { spawnSync } = require("node:child_process");
+const argv = process.argv.slice(2);
+appendFileSync(process.env.MSTAR_GIT_LOG, JSON.stringify({ cwd: process.cwd(), argv }) + "\\n");
+const text = argv.join(" ");
+const fault = process.env.MSTAR_GIT_FAULT || "";
+if (fault === "positive" && text.includes("--merged") && text.includes("refs/remotes/origin")) process.exit(128);
+if (fault === "negative" && text.includes("--no-merged")) process.exit(128);
+const isSweep = argv[0] === "for-each-ref" && (text.includes("--merged") || text.includes("--no-merged"));
+const vanish = process.env.MSTAR_GIT_VANISH_REF || "";
+if (vanish !== "" && isSweep && !existsSync(process.env.MSTAR_GIT_LOG + ".vanished")) {
+  const removed = spawnSync(process.env.MSTAR_REAL_GIT, ["update-ref", "-d", "refs/remotes/origin/" + vanish], { cwd: process.cwd() });
+  if ((removed.status ?? 1) === 0) writeFileSync(process.env.MSTAR_GIT_LOG + ".vanished", "1");
+}
+const isInventory = argv[0] === "for-each-ref" && !isSweep && text.includes("refs/remotes/origin");
+const dropTip = process.env.MSTAR_GIT_DROP_TIP || "";
+if (dropTip !== "" && isInventory) {
+  const out = spawnSync(process.env.MSTAR_REAL_GIT, argv, { cwd: process.cwd(), encoding: "utf8" });
+  const lines = (out.stdout || "")
+    .split("\\n")
+    .filter((l) => l.trim() !== "")
+    .map((l) => (l.startsWith("origin/" + dropTip + "\\t") ? "origin/" + dropTip + "\\t" + "0".repeat(40) : l));
+  process.stdout.write(lines.length > 0 ? lines.join("\\n") + "\\n" : "");
+  process.exit(out.status ?? 1);
+}
+const forwarded = spawnSync(process.env.MSTAR_REAL_GIT, argv, { stdio: "inherit" });
+process.exit(forwarded.status ?? 1);
+`,
+  );
+  chmodSync(join(shimDir, "git"), 0o755);
+  const env: Record<string, string> = {
+    PATH: `${shimDir}:${process.env.PATH ?? ""}`,
+    MSTAR_GIT_LOG: logPath,
+    MSTAR_REAL_GIT: realGit,
+  };
+  if (mode.fault !== undefined) env.MSTAR_GIT_FAULT = mode.fault;
+  if (mode.vanish !== undefined) env.MSTAR_GIT_VANISH_REF = mode.vanish;
+  if (mode.dropTip !== undefined) env.MSTAR_GIT_DROP_TIP = mode.dropTip;
+  return { shimDir, logPath, env };
 }
 
 function git(args: string[], cwd: string): string {
@@ -285,6 +391,409 @@ function remoteFixture(prefix: string): { root: string; bare: string; mainBranch
 }
 
 /**
+ * Probe-cost fixture: terminal iteration wf-3 with scoped remote candidates
+ * and a controlled base landscape. B=5 distinct base strings (3 dangling;
+ * 2 resolving to the SAME commit OID ⇒ V=1), R owned remote candidates
+ * (default 4), of which one is owned by a dangling base (fail-closed), one
+ * is a genuine non-ancestor, two are ancestors sharing a tip (same-tip case).
+ * Unowned origin/<main> exists but needs no evidence row.
+ *
+ * `candidates` scales the candidate count without changing V (counts must
+ * grow with B, never R×B); `extraDangling` adds 5 more dangling base
+ * strings (B=10, still V=1) for the same scaling proof.
+ */
+function probeFixture(
+  prefix: string,
+  opts: { candidates?: number; extraDangling?: number } = {},
+): { root: string; bare: string; mainBranch: string } {
+  const candidates = opts.candidates ?? 4;
+  const extraDangling = opts.extraDangling ?? 0;
+  const home = tmpRoot(prefix);
+  const bare = join(home, "origin.git");
+  git(["init", "-q", "--bare", bare], home);
+  const root = join(home, "repo");
+  git(["clone", "-q", bare, root], home);
+  git(["config", "user.email", "cleanup-test@example.com"], root);
+  git(["config", "user.name", "Cleanup Test"], root);
+  writeFileSync(join(root, "base.txt"), "base\n");
+  git(["add", "-A"], root);
+  git(["commit", "-q", "-m", "base commit"], root);
+  const mainBranch = git(["branch", "--show-current"], root);
+  git(["push", "-q", "-u", "origin", mainBranch], root);
+
+  const tmpWt = join(root, "wt-tmp");
+  git(["worktree", "add", "-q", tmpWt, "-b", "integration/wf-3"], root);
+  writeFileSync(join(tmpWt, "int.txt"), "integration work\n");
+  git(["add", "-A"], tmpWt);
+  git(["commit", "-q", "-m", "integration commit"], tmpWt);
+  const intTip = git(["rev-parse", "integration/wf-3"], tmpWt);
+  git(["push", "-q", "origin", "integration/wf-3"], tmpWt);
+  // The unmerged tip grows on a SEPARATE branch so the recorded base anchors
+  // ("integration/wf-3") keep resolving to intTip both locally and remotely.
+  const lateWt = join(root, "wt-late");
+  git(["worktree", "add", "-q", lateWt, "-b", "feature/late", "integration/wf-3"], root);
+  writeFileSync(join(lateWt, "late.txt"), "late work\n");
+  git(["add", "-A"], lateWt);
+  git(["commit", "-q", "-m", "unmerged commit"], lateWt);
+  const unmergedTip = git(["rev-parse", "feature/late"], lateWt);
+  git(["worktree", "remove", tmpWt], root);
+  git(["worktree", "remove", lateWt], root);
+
+  const merged: string[] = ["merged-1", "merged-2"];
+  const unmerged: string[] = ["unmerged-1"];
+  const danglingOwned: string[] = ["dangling-owner"];
+  for (let i = 5; i <= candidates; i++) (i % 2 === 0 ? merged : unmerged).push(`extra-${i}`);
+  // merged-1 is plan-a's working branch; merged-2 + extras ride its
+  // track_branches (same owner ⇒ same base). unmerged-1 is plan-b's;
+  // dangling-owner belongs to wf-gone under a dangling target anchor.
+  const extraTracks = ["merged-2", ...merged.slice(2), ...unmerged.slice(1)];
+  for (const branch of merged) git(["push", "-q", "origin", `${intTip}:refs/heads/${branch}`], root);
+  for (const branch of unmerged) git(["push", "-q", "origin", `${unmergedTip}:refs/heads/${branch}`], root);
+  for (const branch of danglingOwned) git(["push", "-q", "origin", `${intTip}:refs/heads/${branch}`], root);
+  git(["remote", "set-head", "origin", "-a"], root);
+
+  const writeSnapshot = (id: string, doc: Record<string, unknown>): void => {
+    const dir = join(root, "workflows", id);
+    execFileSync("mkdir", ["-p", dir]);
+    writeFileSync(join(dir, "snapshot.json"), JSON.stringify(doc, null, 2));
+  };
+  const planRow = (id: string, extra: Record<string, unknown>): Record<string, unknown> => ({
+    id,
+    title: `Plan ${id}`,
+    file: `plans/${id}.md`,
+    status: "Done",
+    ...extra,
+  });
+  writeSnapshot("wf-3", {
+    schema_version: 1,
+    id: "wf-3",
+    type: "iteration",
+    status: "completed",
+    started_at: "2026-09-11",
+    ended_at: "2026-09-12",
+    updated_at: "2026-09-12",
+    // Two DISTINCT base strings resolving to the SAME commit OID: V=1.
+    branch: { base: "refs/heads/integration/wf-3", integration: "integration/wf-3", target: "refs/heads/integration/wf-3" },
+    plans: [
+      planRow("plan-a", { metadata: { working_branch: merged[0], track_branches: extraTracks } }),
+      planRow("plan-b", { metadata: { working_branch: "unmerged-1" } }),
+    ],
+  });
+  // Dangling anchors: iteration/old-a + iteration/old-b (+5 more when asked).
+  writeSnapshot("wf-old", {
+    schema_version: 1,
+    id: "wf-old",
+    type: "plan",
+    status: "completed",
+    started_at: "2026-09-10",
+    ended_at: "2026-09-10",
+    updated_at: "2026-09-10",
+    branch: { integration: "iteration/old-a", target: "iteration/old-b" },
+    plans: [],
+  });
+  // Owns `dangling-owner` under a dangling target anchor.
+  writeSnapshot("wf-gone", {
+    schema_version: 1,
+    id: "wf-gone",
+    type: "plan",
+    status: "completed",
+    started_at: "2026-09-10",
+    ended_at: "2026-09-10",
+    updated_at: "2026-09-10",
+    branch: { base: "iteration/old-a", target: "iteration/deleted-base" },
+    plans: [planRow("plan-x", { metadata: { working_branch: "dangling-owner" } })],
+  });
+  if (extraDangling > 0) {
+    const danglingDoc = (id: string, integration: string, target: string): Record<string, unknown> => ({
+      schema_version: 1,
+      id,
+      type: "plan",
+      status: "completed",
+      started_at: "2026-09-10",
+      ended_at: "2026-09-10",
+      updated_at: "2026-09-10",
+      branch: { integration, target },
+      plans: [],
+    });
+    writeSnapshot("wf-old2", danglingDoc("wf-old2", "iteration/old-d", "iteration/old-e"));
+    writeSnapshot("wf-old3", danglingDoc("wf-old3", "iteration/old-f", "iteration/old-g"));
+    writeSnapshot("wf-old4", danglingDoc("wf-old4", "iteration/old-h", "iteration/old-e"));
+  }
+  return { root, bare, mainBranch };
+}
+
+/**
+ * All-dangling fixture: U=3 dangling base strings, R owned remote targets,
+ * NO resolvable evidence base at all — local membership and remote sweeps
+ * must be skipped entirely (0 membership spawns for unresolved bases).
+ */
+function danglingFixture(prefix: string, targetCount: number): { root: string; bare: string; mainBranch: string } {
+  const home = tmpRoot(prefix);
+  const bare = join(home, "origin.git");
+  git(["init", "-q", "--bare", bare], home);
+  const root = join(home, "repo");
+  git(["clone", "-q", bare, root], home);
+  git(["config", "user.email", "cleanup-test@example.com"], root);
+  git(["config", "user.name", "Cleanup Test"], root);
+  writeFileSync(join(root, "base.txt"), "base\n");
+  git(["add", "-A"], root);
+  git(["commit", "-q", "-m", "base commit"], root);
+  const mainBranch = git(["branch", "--show-current"], root);
+  git(["push", "-q", "-u", "origin", mainBranch], root);
+  const tmpWt = join(root, "wt-tmp");
+  git(["worktree", "add", "-q", tmpWt, "-b", "integration/wf-d"], root);
+  writeFileSync(join(tmpWt, "int.txt"), "work\n");
+  git(["add", "-A"], tmpWt);
+  git(["commit", "-q", "-m", "integration commit"], tmpWt);
+  const intTip = git(["rev-parse", "integration/wf-d"], tmpWt);
+  git(["worktree", "remove", tmpWt], root);
+  const targets: string[] = [];
+  for (let i = 1; i <= targetCount; i++) {
+    const name = `owned-${i}`;
+    git(["push", "-q", "origin", `${intTip}:refs/heads/${name}`], root);
+    targets.push(name);
+  }
+  git(["remote", "set-head", "origin", "-a"], root);
+  const writeSnapshot = (id: string, doc: Record<string, unknown>): void => {
+    const dir = join(root, "workflows", id);
+    execFileSync("mkdir", ["-p", dir]);
+    writeFileSync(join(dir, "snapshot.json"), JSON.stringify(doc, null, 2));
+  };
+  const planRow = (id: string, extra: Record<string, unknown>): Record<string, unknown> => ({
+    id,
+    title: `Plan ${id}`,
+    file: `plans/${id}.md`,
+    status: "Done",
+    ...extra,
+  });
+  writeSnapshot("wf-d", {
+    schema_version: 1,
+    id: "wf-d",
+    type: "plan",
+    status: "completed",
+    started_at: "2026-09-10",
+    ended_at: "2026-09-10",
+    updated_at: "2026-09-10",
+    branch: { integration: "iteration/gone-a", target: "iteration/gone-b" },
+    plans: [planRow("plan-1", { metadata: { track_branches: targets.slice(0, 6) } }), planRow("plan-2", { metadata: { track_branches: targets.slice(6) } })],
+  });
+  writeSnapshot("wf-d2", {
+    schema_version: 1,
+    id: "wf-d2",
+    type: "plan",
+    status: "completed",
+    started_at: "2026-09-10",
+    ended_at: "2026-09-10",
+    updated_at: "2026-09-10",
+    branch: { integration: "iteration/gone-c", target: "iteration/gone-b" },
+    plans: [],
+  });
+  return { root, bare, mainBranch };
+}
+
+describe("mstar worktree cleanup — bounded evidence probes", () => {
+  test("default dry run spawns zero ancestry and zero remote-membership probes", () => {
+    const fx = probeFixture("mstar-cleanup-probe-default-");
+    const home = dirname(fx.root);
+    const shim = installGitShim(home);
+    try {
+      const result = runCli(["worktree", "cleanup", "--workflow", "wf-3", "--harness", fx.root], fx.root, shim.env);
+      expect(result.exitCode).toBe(0);
+      const counts = membershipHistogram(readGitLog(shim.logPath));
+      expect(counts.ancestry).toBe(0);
+      expect(counts.positive).toBe(0);
+      expect(counts.negative).toBe(0);
+      // Local membership is unconditional (engine contract); V=1 ⇒ exactly one.
+      expect(counts.localMerged).toBe(1);
+      expect(counts.resolve).toBe(5);
+      // Without --remote there are NO remote candidates and no remote rows.
+      expect(result.stdout).not.toContain("| remote-branch |");
+      // Local integration branch is still judged with unconditional membership.
+      expect(result.stdout).toContain("remove | local-branch | integration/wf-3 | cleanup.remove.merged");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("--remote batches membership: zero pair spawns, bounded sweeps, owner-base row equivalence", () => {
+    const fx = probeFixture("mstar-cleanup-probe-remote-");
+    const home = dirname(fx.root);
+    const shim = installGitShim(home);
+    try {
+      // Full-sweep mode: dangling-owner is owned by wf-gone, outside wf-3's
+      // default universe — its fail-closed row needs the full sweep.
+      const result = runCli(["worktree", "cleanup", "--workflow", "wf-3", "--harness", fx.root, "--remote", "--all-workflows"], fx.root, shim.env);
+      expect(result.exitCode).toBe(0);
+      const counts = membershipHistogram(readGitLog(shim.logPath));
+      expect(counts.ancestry).toBe(0);
+      expect(counts.resolve).toBe(5); // B base resolutions, once per distinct string
+      expect(counts.localMerged).toBeLessThanOrEqual(1); // ≤V, V=1 (two aliases share one OID)
+      expect(counts.positive).toBeLessThanOrEqual(1);
+      expect(counts.negative).toBeLessThanOrEqual(1);
+      // Owner-base rows only (never the R×B matrix): same verdicts the
+      // pre-change probe printed for these stable facts.
+      expect(result.stdout).toContain("remove | remote-branch | origin/merged-1 | cleanup.remove.merged");
+      expect(result.stdout).toContain("remove | remote-branch | origin/merged-2 | cleanup.remove.merged");
+      expect(result.stdout).toContain("refuse | remote-branch | origin/unmerged-1 | cleanup.refuse.unmerged");
+      expect(result.stdout).toContain("refuse | remote-branch | origin/dangling-owner | cleanup.refuse.unmerged");
+      // Fail-closed: an unresolvable owner base never yields a row.
+      expect(result.stdout).not.toContain("remove | remote-branch | origin/dangling-owner");
+      // Note bound: 3 base notes + 2 candidate summaries ≤ B+R = 9, with
+      // separate indeterminate / not-an-ancestor labels.
+      const notes = evidenceNotes(result.stderr);
+      expect(notes.length).toBeLessThanOrEqual(5 + 4);
+      expect(notes.filter((note) => note.includes("does not resolve")).length).toBe(3);
+      expect(notes.some((note) => note.includes("not-an-ancestor"))).toBe(true);
+      expect(notes.some((note) => note.includes("indeterminate"))).toBe(true);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("scaling candidates never multiplies membership spawns by the base count", () => {
+    const fx = probeFixture("mstar-cleanup-probe-scale-", { candidates: 24, extraDangling: 1 });
+    const home = dirname(fx.root);
+    const shim = installGitShim(home);
+    try {
+      const result = runCli(["worktree", "cleanup", "--workflow", "wf-3", "--harness", fx.root, "--remote"], fx.root, shim.env);
+      expect(result.exitCode).toBe(0);
+      const counts = membershipHistogram(readGitLog(shim.logPath));
+      // B=10 distinct base strings, V=1, R=24: counts grow with B only.
+      expect(counts.ancestry).toBe(0);
+      expect(counts.resolve).toBe(10);
+      expect(counts.localMerged).toBeLessThanOrEqual(1);
+      expect(counts.positive).toBeLessThanOrEqual(1);
+      expect(counts.negative).toBeLessThanOrEqual(1);
+      expect(result.stdout).toContain("remove | remote-branch | origin/extra-6 | cleanup.remove.merged");
+      expect(result.stdout).toContain("refuse | remote-branch | origin/extra-5 | cleanup.refuse.unmerged");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  test("all-dangling bases: exactly U base notes, +R candidate summaries with --remote, zero membership spawns", () => {
+    const fx = danglingFixture("mstar-cleanup-probe-dangling-", 12);
+    const home = dirname(fx.root);
+    try {
+      const plain = installGitShim(home);
+      const dry = runCli(["worktree", "cleanup", "--workflow", "wf-d", "--harness", fx.root], fx.root, plain.env);
+      expect(dry.exitCode).toBe(0);
+      const dryCounts = membershipHistogram(readGitLog(plain.logPath));
+      expect(dryCounts.ancestry).toBe(0);
+      expect(dryCounts.localMerged).toBe(0);
+      expect(dryCounts.positive).toBe(0);
+      expect(dryCounts.negative).toBe(0);
+      const dryNotes = evidenceNotes(dry.stderr);
+      expect(dryNotes).toHaveLength(3); // exactly U base notes, nothing else
+
+      const remote = installGitShim(home);
+      const withRemote = runCli(["worktree", "cleanup", "--workflow", "wf-d", "--harness", fx.root, "--remote"], fx.root, remote.env);
+      expect(withRemote.exitCode).toBe(0);
+      const remoteCounts = membershipHistogram(readGitLog(remote.logPath));
+      expect(remoteCounts.ancestry).toBe(0);
+      expect(remoteCounts.localMerged).toBe(0); // 0 membership calls for unresolved bases
+      expect(remoteCounts.positive).toBe(0);
+      expect(remoteCounts.negative).toBe(0);
+      const remoteNotes = evidenceNotes(withRemote.stderr);
+      expect(remoteNotes).toHaveLength(3 + 12); // U base notes + R candidate summaries
+      for (let i = 1; i <= 12; i++) {
+        expect(withRemote.stdout).toContain(`refuse | remote-branch | origin/owned-${i} | cleanup.refuse.unmerged`);
+      }
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  test("--verbose prints per-pair details with the same decisions and the same Git histogram", () => {
+    const fx = probeFixture("mstar-cleanup-probe-verbose-");
+    const home = dirname(fx.root);
+    const plain = installGitShim(home);
+    const verbose = installGitShim(home);
+    try {
+      const quiet = runCli(["worktree", "cleanup", "--workflow", "wf-3", "--harness", fx.root, "--remote", "--all-workflows"], fx.root, plain.env);
+      const loud = runCli(["worktree", "cleanup", "--workflow", "wf-3", "--harness", fx.root, "--remote", "--all-workflows", "--verbose"], fx.root, verbose.env);
+      expect(quiet.exitCode).toBe(0);
+      expect(loud.exitCode).toBe(0);
+      expect(decisionRows(loud.stdout)).toEqual(decisionRows(quiet.stdout));
+      expect(membershipHistogram(readGitLog(verbose.logPath))).toEqual(membershipHistogram(readGitLog(plain.logPath)));
+      // Per-pair details for the named negative and missing-base pair —
+      // presence of diagnostics, not a wording snapshot.
+      expect(loud.stderr).toContain("not an ancestor");
+      expect(loud.stderr).toContain("dangling-owner");
+      expect(evidenceNotes(quiet.stderr).some((note) => note.includes("not an ancestor"))).toBe(false);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  test("fail-closed controls: absent tip, failed positive sweep, failed negative sweep", () => {
+    // A tip the graph cannot answer for (absent OID substituted in the
+      // inventory row) is indeterminate — never silently negative.
+      const dropped = probeFixture("mstar-cleanup-probe-droptip-");
+      const dropShim = installGitShim(dirname(dropped.root), { dropTip: "unmerged-1" });
+      const dropRun = runCli(["worktree", "cleanup", "--workflow", "wf-3", "--harness", dropped.root, "--remote"], dropped.root, dropShim.env);
+      expect(dropRun.exitCode).toBe(0);
+      expect(dropRun.stdout).toContain("refuse | remote-branch | origin/unmerged-1 | cleanup.refuse.unmerged");
+      expect(dropRun.stdout).not.toContain("remove | remote-branch | origin/unmerged-1");
+      rmSync(dirname(dropped.root), { recursive: true, force: true });
+
+      // A failed positive sweep leaves that base's pairs indeterminate —
+      // no fabricated negative, no removal rows.
+      const positive = probeFixture("mstar-cleanup-probe-faultpos-");
+      const positiveShim = installGitShim(dirname(positive.root), { fault: "positive" });
+      const positiveRun = runCli(["worktree", "cleanup", "--workflow", "wf-3", "--harness", positive.root, "--remote"], positive.root, positiveShim.env);
+      expect(positiveRun.exitCode).toBe(0);
+      expect(positiveRun.stdout).toContain("refuse | remote-branch | origin/merged-1 | cleanup.refuse.unmerged");
+      expect(positiveRun.stdout).not.toContain("remove | remote-branch | origin/merged-");
+      rmSync(dirname(positive.root), { recursive: true, force: true });
+
+      // A failed negative sweep retains positive evidence; only the
+      // residual pair becomes indeterminate.
+      const negative = probeFixture("mstar-cleanup-probe-faultneg-");
+      const negativeShim = installGitShim(dirname(negative.root), { fault: "negative" });
+      const negativeRun = runCli(["worktree", "cleanup", "--workflow", "wf-3", "--harness", negative.root, "--remote"], negative.root, negativeShim.env);
+      expect(negativeRun.exitCode).toBe(0);
+      expect(negativeRun.stdout).toContain("remove | remote-branch | origin/merged-1 | cleanup.remove.merged");
+      expect(negativeRun.stdout).toContain("refuse | remote-branch | origin/unmerged-1 | cleanup.refuse.unmerged");
+      rmSync(dirname(negative.root), { recursive: true, force: true });
+  }, 60000);
+
+  test("a remote-tracking ref vanishing between inventory and evidence is indeterminate, not negative", () => {
+    const fx = probeFixture("mstar-cleanup-probe-vanish-");
+    const home = dirname(fx.root);
+    const shim = installGitShim(home, { vanish: "unmerged-1" });
+    try {
+      const result = runCli(["worktree", "cleanup", "--workflow", "wf-3", "--harness", fx.root, "--remote"], fx.root, shim.env);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("refuse | remote-branch | origin/unmerged-1 | cleanup.refuse.unmerged");
+      expect(result.stdout).not.toContain("remove | remote-branch | origin/unmerged-1");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  test("same tip OID across candidates: only the branch its own sweep attests is positive", () => {
+    // merged-1 and merged-2 share one tip OID. If merged-2's ref vanishes
+    // between inventory and the sweeps, only merged-1 is attested by the
+    // positive sweep. Evidence must never carry merged-1's attestation over
+    // to merged-2 by tip identity: merged-2 stays indeterminate (refuse),
+    // never cleanup.remove.merged.
+    const fx = probeFixture("mstar-cleanup-probe-sametip-");
+    const home = dirname(fx.root);
+    const shim = installGitShim(home, { vanish: "merged-2" });
+    try {
+      const result = runCli(["worktree", "cleanup", "--workflow", "wf-3", "--harness", fx.root, "--remote"], fx.root, shim.env);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("remove | remote-branch | origin/merged-1 | cleanup.remove.merged");
+      expect(result.stdout).toContain("refuse | remote-branch | origin/merged-2 | cleanup.refuse.unmerged");
+      expect(result.stdout).not.toContain("remove | remote-branch | origin/merged-2");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  }, 30000);
+});
+
+/**
  * Terminal-iteration fixture for apply ordering: integration worktree still
  * present (branch iteration/wf-9, unmerged into main — squash-merge era) plus
  * a Done plan worktree whose branch is merged ONLY into the integration
@@ -348,7 +857,9 @@ describe("mstar worktree cleanup — dry-run is a byte-for-byte no-op", () => {
     try {
       const beforeRefs = refInventory(fx.root);
       const beforeWt = git(["worktree", "list", "--porcelain"], fx.root);
-      const result = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root], fx.root);
+      // Full-sweep visibility assertions (foreign rows, main keep rows) run
+      // in --all-workflows mode; the default universe is workflow-scoped.
+      const result = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root, "--all-workflows"], fx.root);
       expect(result.exitCode).toBe(0);
       // Eligible Done+merged attached worktree removes; its branch refuses checked-out until replan.
       expect(result.stdout).toContain(`remove | worktree | ${fx.doneWt} | cleanup.remove.merged`);
@@ -383,7 +894,7 @@ describe("mstar worktree cleanup — dry-run is a byte-for-byte no-op", () => {
     try {
       const beforeRefs = refInventory(fx.root);
       const beforeBare = refInventory(fx.bare);
-      const result = runCli(["worktree", "cleanup", "--workflow", "wf-2", "--harness", fx.root, "--remote"], fx.root);
+      const result = runCli(["worktree", "cleanup", "--workflow", "wf-2", "--harness", fx.root, "--remote", "--all-workflows"], fx.root);
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("remove | local-branch | iteration/wf-2 | cleanup.remove.merged");
       expect(result.stdout).toContain("remove | remote-branch | origin/iteration/wf-2 | cleanup.remove.merged");
@@ -720,7 +1231,9 @@ describe("mstar worktree cleanup — exit contract", () => {
       const badPath = join(badDir, "snapshot.json");
       writeFileSync(badPath, "{ not json");
 
-      const dry = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root], fx.root);
+      // Full sweep: the foreign-visibility rows need --all-workflows; the
+      // unreadable-sibling withholding applies in every mode.
+      const dry = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root, "--all-workflows"], fx.root);
       expect(dry.exitCode).toBe(0);
       expect(dry.stderr).toContain("cannot be parsed");
       expect(dry.stderr).toContain("wf-bad/snapshot.json");
@@ -776,7 +1289,8 @@ describe("mstar worktree cleanup — exit contract", () => {
         JSON.stringify({ schema_version: 1, id: "wf-bad-schema", branch: { base: "feature/done-a" } }),
       );
 
-      const dry = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root], fx.root);
+      // Full sweep: the foreign-worktree visibility row needs --all-workflows.
+      const dry = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root, "--all-workflows"], fx.root);
       expect(dry.exitCode).toBe(0);
       expect(dry.stderr).toContain("kept in degraded form");
       expect(dry.stderr).toContain("workflow.snapshot.missing-type");
@@ -791,4 +1305,346 @@ describe("mstar worktree cleanup — exit contract", () => {
       rmSync(fx.root, { recursive: true, force: true });
     }
   });
+});
+
+/**
+ * Candidate-scope fixture: two standalone-plan workflows with explicit
+ * candidate universes and every scoping edge the contract names.
+ *
+ * Workflow A (`wf-a`, completed plan) has two rows:
+ * - a1 (Done): working branch `feature/a1-work` (also duplicated in its own
+ *   track_branches — identical claims must collapse), retained tracks
+ *   `feature/a1-track-1/2/3`, ambiguous track `feature/a1-ambiguous` (also
+ *   claimed by B), and an asserted worktree `wt-a1`.
+ * - a2 (Done): working branch `feature/a2-work` + worktree `wt-a2` — a
+ *   SIBLING row a1's scope must not select.
+ * Workflow B (`wf-b`, RUNNING plan) owns `wt-b`/`feature/b-work` under an
+ * ACTIVE lease, tracks `feature/b-track` and `feature/a1-ambiguous`, and its
+ * base anchor PROTECTS `feature/a1-track-1` — B's safety declarations must
+ * refuse/keep in-scope A targets in every mode.
+ * `wt-lost` hosts a1's recorded track `feature/a1-track-3` but records NO
+ * path (discovery-only candidate); `wt-foreign`/`feature/stranger` are
+ * wholly unrecorded.
+ */
+function scopeFixture(prefix: string): {
+  root: string;
+  mainBranch: string;
+  wtA1: string;
+  wtA2: string;
+  wtB: string;
+  wtLost: string;
+  wtForeign: string;
+} {
+  const root = tmpRoot(prefix);
+  git(["init", "-q"], root);
+  git(["config", "user.email", "cleanup-test@example.com"], root);
+  git(["config", "user.name", "Cleanup Test"], root);
+  writeFileSync(join(root, "base.txt"), "base\n");
+  git(["add", "-A"], root);
+  git(["commit", "-q", "-m", "base commit"], root);
+  const mainBranch = git(["branch", "--show-current"], root);
+
+  // Retained tracks anchored at the base commit stay ancestors of main (merged).
+  for (const branch of ["feature/a1-track-1", "feature/a1-track-2", "feature/a1-ambiguous", "feature/b-track"]) {
+    git(["branch", branch, mainBranch], root);
+  }
+
+  const addMergedWorktree = (name: string, branch: string): string => {
+    const wtPath = join(root, name);
+    git(["worktree", "add", "-q", wtPath, "-b", branch], root);
+    writeFileSync(join(wtPath, `${name}.txt`), `${name} work\n`);
+    git(["add", "-A"], wtPath);
+    git(["commit", "-q", "-m", `${name} work`], wtPath);
+    git(["merge", "-q", "--no-ff", "-m", `merge ${branch}`, branch], root);
+    return wt(worktreeList(root), name).path;
+  };
+  const wtA1 = addMergedWorktree("wt-a1", "feature/a1-work");
+  const wtA2 = addMergedWorktree("wt-a2", "feature/a2-work");
+  const wtB = addMergedWorktree("wt-b", "feature/b-work");
+  // wt-lost checks out a1's RETAINED TRACK; the worktree path is recorded nowhere.
+  git(["branch", "feature/a1-track-3", `${mainBranch}~1`], root);
+  const wtLostRaw = join(root, "wt-lost");
+  git(["worktree", "add", "-q", wtLostRaw, "feature/a1-track-3"], root);
+  writeFileSync(join(wtLostRaw, "lost.txt"), "lost work\n");
+  git(["add", "-A"], wtLostRaw);
+  git(["commit", "-q", "-m", "lost work"], wtLostRaw);
+  git(["merge", "-q", "--no-ff", "-m", "merge a1-track-3", "feature/a1-track-3"], root);
+  const wtLost = wt(worktreeList(root), "wt-lost").path;
+  const wtForeign = addMergedWorktree("wt-foreign", "feature/stranger");
+
+  const workflows = join(root, "workflows");
+  execFileSync("mkdir", ["-p", join(workflows, "wf-a"), join(workflows, "wf-b")]);
+  // Canonical main-worktree path as git spells it (macOS /var vs /private/var).
+  const canonicalRoot = worktreeList(root)[0]!.path;
+  writeFileSync(
+    join(workflows, "wf-a", "snapshot.json"),
+    JSON.stringify(
+      {
+        schema_version: 1,
+        id: "wf-a",
+        type: "plan",
+        status: "completed",
+        started_at: "2026-09-10",
+        ended_at: "2026-09-11",
+        updated_at: "2026-09-11",
+        branch: { base: mainBranch, target: mainBranch },
+        plans: [
+          row("plan-a1", "Done", {
+            metadata: {
+              working_branch: "feature/a1-work",
+              track_branches: [
+                "feature/a1-work", // duplicate identical claim — must stay one owner
+                "feature/a1-track-1",
+                "feature/a1-track-2",
+                "feature/a1-track-3",
+                "feature/a1-ambiguous", // cross-owner: B also records it
+              ],
+              worktree_path: wtA1,
+            },
+          }),
+          row("plan-a2", "Done", { metadata: { working_branch: "feature/a2-work", worktree_path: wtA2 } }),
+        ],
+      },
+      null,
+      2,
+    ),
+  );
+  writeFileSync(
+    join(workflows, "wf-b", "snapshot.json"),
+    JSON.stringify(
+      {
+        schema_version: 1,
+        id: "wf-b",
+        type: "plan",
+        status: "running",
+        started_at: "2026-09-12",
+        updated_at: "2026-09-12",
+        // B's base anchor PROTECTS an in-scope A track (cross-workflow safety).
+        branch: { base: "feature/a1-track-1", target: mainBranch },
+        plans: [
+          row("plan-b1", "InProgress", {
+            execution_lease: lease(wtB, "feature/b-work"),
+            metadata: { track_branches: ["feature/a1-ambiguous", "feature/b-track"] },
+          }),
+        ],
+      },
+      null,
+      2,
+    ),
+  );
+  return { root: canonicalRoot, mainBranch, wtA1, wtA2, wtB, wtLost, wtForeign };
+}
+
+describe("mstar worktree cleanup — candidate scope", () => {
+  test("default dry run lists exactly workflow A's candidates (exact array)", () => {
+    const fx = scopeFixture("mstar-cleanup-scope-default-");
+    try {
+      const result = runCli(["worktree", "cleanup", "--workflow", "wf-a", "--harness", fx.root], fx.root);
+      expect(result.exitCode).toBe(0);
+      expect(decisionRows(result.stdout)).toEqual([
+        `remove | worktree | ${fx.wtA1} | cleanup.remove.merged`,
+        `remove | worktree | ${fx.wtA2} | cleanup.remove.merged`,
+        // Discovered only via its recorded checked-out branch: visible, unowned, refused.
+        `refuse | worktree | ${fx.wtLost} | cleanup.refuse.foreign-worktree`,
+        `refuse | local-branch | feature/a1-ambiguous | cleanup.refuse.foreign-branch`,
+        // B's base anchor keeps this A track even in A's own scope.
+        "keep | local-branch | feature/a1-track-1 | cleanup.keep.protected-ref",
+        "remove | local-branch | feature/a1-track-2 | cleanup.remove.merged",
+        "refuse | local-branch | feature/a1-track-3 | cleanup.refuse.checked-out",
+        "refuse | local-branch | feature/a1-work | cleanup.refuse.checked-out",
+        // a2's branch IS an A candidate (its own row); B/unrecorded omitted.
+        "refuse | local-branch | feature/a2-work | cleanup.refuse.checked-out",
+      ]);
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  test("--all-workflows restores the full sweep with cross-workflow safety intact (exact array)", () => {
+    const fx = scopeFixture("mstar-cleanup-scope-all-");
+    try {
+      const result = runCli(["worktree", "cleanup", "--workflow", "wf-a", "--harness", fx.root, "--all-workflows"], fx.root);
+      expect(result.exitCode).toBe(0);
+      expect(decisionRows(result.stdout)).toEqual([
+        `keep | worktree | ${fx.root} | cleanup.keep.main-worktree`,
+        `remove | worktree | ${fx.wtA1} | cleanup.remove.merged`,
+        `remove | worktree | ${fx.wtA2} | cleanup.remove.merged`,
+        `refuse | worktree | ${fx.wtB} | cleanup.refuse.active-lease`,
+        `refuse | worktree | ${fx.wtForeign} | cleanup.refuse.foreign-worktree`,
+        `refuse | worktree | ${fx.wtLost} | cleanup.refuse.foreign-worktree`,
+        "refuse | local-branch | feature/a1-ambiguous | cleanup.refuse.foreign-branch",
+        "keep | local-branch | feature/a1-track-1 | cleanup.keep.protected-ref",
+        "remove | local-branch | feature/a1-track-2 | cleanup.remove.merged",
+        "refuse | local-branch | feature/a1-track-3 | cleanup.refuse.checked-out",
+        "refuse | local-branch | feature/a1-work | cleanup.refuse.checked-out",
+        "refuse | local-branch | feature/a2-work | cleanup.refuse.checked-out",
+        "refuse | local-branch | feature/b-track | cleanup.refuse.non-terminal",
+        "refuse | local-branch | feature/b-work | cleanup.refuse.active-lease",
+        "refuse | local-branch | feature/stranger | cleanup.refuse.foreign-branch",
+        `keep | local-branch | ${fx.mainBranch} | cleanup.keep.protected-ref`,
+      ]);
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  test("--worktree narrows worktrees and selects branches only by exact retained owner", () => {
+    const fx = scopeFixture("mstar-cleanup-scope-wt-");
+    try {
+      const result = runCli(["worktree", "cleanup", "--workflow", "wf-a", "--harness", fx.root, "--worktree", fx.wtA1], fx.root);
+      expect(result.exitCode).toBe(0);
+      expect(decisionRows(result.stdout)).toEqual([
+        `remove | worktree | ${fx.wtA1} | cleanup.remove.merged`,
+        // a1's exact claim set: ambiguous (matching claim) stays visible but
+        // unowned; a1's retained tracks survive — including the one checked
+        // out in the un-asserted wt-lost.
+        "refuse | local-branch | feature/a1-ambiguous | cleanup.refuse.foreign-branch",
+        "keep | local-branch | feature/a1-track-1 | cleanup.keep.protected-ref",
+        "remove | local-branch | feature/a1-track-2 | cleanup.remove.merged",
+        "refuse | local-branch | feature/a1-track-3 | cleanup.refuse.checked-out",
+        "refuse | local-branch | feature/a1-work | cleanup.refuse.checked-out",
+        // NOT selected: sibling row a2 (worktree nor branch), any B row,
+        // the unrecorded worktree/branch, the default branch.
+      ]);
+      expect(result.stdout).not.toContain(`| ${fx.wtA2} |`);
+      expect(result.stdout).not.toContain("feature/a2-work");
+      expect(result.stdout).not.toContain(fx.wtB);
+      expect(result.stdout).not.toContain("feature/b-work");
+      expect(result.stdout).not.toContain("feature/b-track");
+      expect(result.stdout).not.toContain(fx.wtForeign);
+      expect(result.stdout).not.toContain("feature/stranger");
+      expect(result.stdout).not.toContain(`keep | worktree | ${fx.root}`);
+      expect(result.stdout).not.toContain(`| ${fx.mainBranch} |`);
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  test("repeated --worktree paths behave exactly like one", () => {
+    const fx = scopeFixture("mstar-cleanup-scope-repeat-");
+    try {
+      const single = runCli(["worktree", "cleanup", "--workflow", "wf-a", "--harness", fx.root, "--worktree", fx.wtA1], fx.root);
+      const repeated = runCli(
+        ["worktree", "cleanup", "--workflow", "wf-a", "--harness", fx.root, "--worktree", fx.wtA1, "--worktree", fx.wtA1],
+        fx.root,
+      );
+      expect(single.exitCode).toBe(0);
+      expect(repeated.exitCode).toBe(0);
+      expect(decisionRows(repeated.stdout)).toEqual(decisionRows(single.stdout));
+      // One diagnostic per distinct path at most — a duplicate adds none.
+      expect(evidenceNotes(repeated.stderr)).toEqual(evidenceNotes(single.stderr));
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  test("--all-workflows --worktree narrows by exact owner, not a workflow override", () => {
+    const fx = scopeFixture("mstar-cleanup-scope-allwt-");
+    try {
+      const result = runCli(
+        ["worktree", "cleanup", "--workflow", "wf-a", "--harness", fx.root, "--all-workflows", "--worktree", fx.wtB],
+        fx.root,
+      );
+      expect(result.exitCode).toBe(0);
+      expect(decisionRows(result.stdout)).toEqual([
+        // The asserted B worktree is inspected under the SAME guards.
+        `refuse | worktree | ${fx.wtB} | cleanup.refuse.active-lease`,
+        // Exact owner (wf-b, plan-b1): its tracks plus the ambiguous branch
+        // that carries a matching claim (still unowned).
+        "refuse | local-branch | feature/a1-ambiguous | cleanup.refuse.foreign-branch",
+        "refuse | local-branch | feature/b-track | cleanup.refuse.non-terminal",
+        "refuse | local-branch | feature/b-work | cleanup.refuse.active-lease",
+      ]);
+      expect(result.stdout).not.toContain(fx.wtA1);
+      expect(result.stdout).not.toContain("feature/a1-track-2");
+      expect(result.stdout).not.toContain(fx.wtA2);
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  test("a missing or out-of-universe asserted path emits one diagnostic and fabricates no target", () => {
+    const fx = scopeFixture("mstar-cleanup-scope-missing-");
+    try {
+      const missing = runCli(
+        ["worktree", "cleanup", "--workflow", "wf-a", "--harness", fx.root, "--worktree", "/definitely/not/a/worktree"],
+        fx.root,
+      );
+      expect(missing.exitCode).toBe(0);
+      expect(decisionRows(missing.stdout)).toEqual([]);
+      const missingNotes = evidenceNotes(missing.stderr);
+      expect(missingNotes).toHaveLength(1);
+      expect(missingNotes[0]).toContain("does not match an inventoried worktree");
+
+      // The B worktree asserted under workflow A is outside A's universe.
+      const foreignPath = runCli(["worktree", "cleanup", "--workflow", "wf-a", "--harness", fx.root, "--worktree", fx.wtB], fx.root);
+      expect(foreignPath.exitCode).toBe(0);
+      expect(decisionRows(foreignPath.stdout)).toEqual([]);
+      const foreignNotes = evidenceNotes(foreignPath.stderr);
+      expect(foreignNotes).toHaveLength(1);
+      expect(foreignNotes[0]).toContain("outside workflow wf-a");
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  test("assertion recovery attributes the path-less recorded worktree; discovery alone only refuses", () => {
+    const fx = scopeFixture("mstar-cleanup-scope-recover-");
+    try {
+      // Default mode discovers wt-lost via its recorded branch — refused unowned.
+      const dry = runCli(["worktree", "cleanup", "--workflow", "wf-a", "--harness", fx.root], fx.root);
+      expect(dry.stdout).toContain(`refuse | worktree | ${fx.wtLost} | cleanup.refuse.foreign-worktree`);
+      expect(dry.stdout).not.toContain(`remove | worktree | ${fx.wtLost}`);
+
+      // The verified assertion attributes it via the recorded checked-out
+      // branch — and nothing else becomes owned by that recovery.
+      const result = runCli(["worktree", "cleanup", "--workflow", "wf-a", "--harness", fx.root, "--worktree", fx.wtLost], fx.root);
+      expect(result.exitCode).toBe(0);
+      expect(decisionRows(result.stdout)).toEqual([
+        `remove | worktree | ${fx.wtLost} | cleanup.remove.merged`,
+        "refuse | local-branch | feature/a1-ambiguous | cleanup.refuse.foreign-branch",
+        "keep | local-branch | feature/a1-track-1 | cleanup.keep.protected-ref",
+        "remove | local-branch | feature/a1-track-2 | cleanup.remove.merged",
+        "refuse | local-branch | feature/a1-track-3 | cleanup.refuse.checked-out",
+        "refuse | local-branch | feature/a1-work | cleanup.refuse.checked-out",
+      ]);
+      expect(result.stdout).not.toContain("feature/a2-work");
+      expect(result.stdout).not.toContain("feature/b-track");
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  test("--apply keeps the retained owner set across the removed worktree's re-probe", () => {
+    const fx = scopeFixture("mstar-cleanup-scope-apply-");
+    try {
+      const applied = runCli(
+        ["worktree", "cleanup", "--workflow", "wf-a", "--harness", fx.root, "--apply", "--worktree", fx.wtA1],
+        fx.root,
+      );
+      expect(applied.exitCode).toBe(0);
+      // Pass 1 removes the asserted worktree; after the re-probe the SAME
+      // owner key (wf-a, plan-a1) still selects its working branch and
+      // retained merged track — even though the path is gone.
+      expect(applied.stdout).toContain(`apply: removed worktree ${fx.wtA1}`);
+      expect(applied.stdout).toContain("apply: deleted branch feature/a1-work");
+      expect(applied.stdout).toContain("apply: deleted branch feature/a1-track-2");
+      expect(git(["worktree", "list", "--porcelain"], fx.root)).not.toContain(fx.wtA1);
+      expect(git(["for-each-ref", "refs/heads/feature/a1-work"], fx.root)).toBe("");
+      expect(git(["for-each-ref", "refs/heads/feature/a1-track-2"], fx.root)).toBe("");
+      // The sibling row a2 is NEVER selected by a1's owner key.
+      expect(applied.stdout).not.toContain(`apply: removed worktree ${fx.wtA2}`);
+      expect(applied.stdout).not.toContain("apply: deleted branch feature/a2-work");
+      expect(git(["worktree", "list", "--porcelain"], fx.root)).toContain(fx.wtA2);
+      expect(git(["for-each-ref", "refs/heads/feature/a2-work"], fx.root)).not.toBe("");
+      // Protected, ambiguous, checked-out and B-owned branches all survive.
+      for (const branch of ["feature/a1-track-1", "feature/a1-track-3", "feature/a1-ambiguous", "feature/b-track", "feature/b-work", "feature/stranger"]) {
+        expect(git(["for-each-ref", `refs/heads/${branch}`], fx.root)).not.toBe("");
+      }
+      expect(git(["worktree", "list", "--porcelain"], fx.root)).toContain(fx.wtLost);
+      expect(git(["worktree", "list", "--porcelain"], fx.root)).toContain(fx.wtB);
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true });
+    }
+  }, 30000);
 });
