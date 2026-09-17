@@ -1701,6 +1701,23 @@ describe("standalone-development-completion", () => {
     expect(readFileSync(dirty.snapshotPath).equals(beforeDirty)).toBe(true);
   }, 30000);
 
+  test("reconcile refuses malformed standalone completed handoff missing acceptance seals", async () => {
+    const fixture = await acceptedStandaloneFixture();
+    await coordinatorCall(fixture, PLAN_ID, { kind: "complete" });
+    const row = planRowOf(fixture, PLAN_ID);
+    const handoff = { ...handoffFields(row) };
+    delete handoff.accepted_at;
+    updatePlanRow(fixture, PLAN_ID, (current) => ({
+      ...current,
+      coordination: { ...(current.coordination as Record<string, unknown>), handoff },
+    }));
+    const before = readFileSync(fixture.snapshotPath);
+    expect(await errorCodeOf(() => coordinatorCall(fixture, PLAN_ID, { kind: "reconcile" }))).toBe(
+      "coordination.store",
+    );
+    expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
+  }, 30000);
+
   test("iteration accepted handoff still refuses complete without integration (no standalone fallback)", async () => {
     const fixture = await acceptedFixture();
     const before = readFileSync(fixture.snapshotPath);

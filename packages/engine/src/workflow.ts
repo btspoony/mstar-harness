@@ -278,15 +278,6 @@ function validateStandaloneCompletedCoherence(snapshot: WorkflowSnapshot, row: P
         ),
       );
     }
-    if (target !== snapshot.branch?.target) {
-      violations.push(
-        violation(
-          "high",
-          "coordination.row.handoff-field",
-          "standalone completed handoff requires a coherent branch.target",
-        ),
-      );
-    }
   }
   return violations;
 }

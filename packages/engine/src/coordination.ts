@@ -51,6 +51,7 @@ import {
   isPlainObject,
   readArtifactBytes,
   sha256Bytes,
+  validatePlanHandoff,
   validatePlanProgress,
   validatePreparedCoordination,
   validateRowCoordination,
@@ -3753,6 +3754,19 @@ function assertStandaloneCompletedReplay(
     );
   }
   assertNoIntegrationContamination(context, scope.planId, handoff, "reconcile");
+  const storedHandoffViolations = validatePlanHandoff(
+    handoff,
+    `plan ${scope.planId} coordination.handoff`,
+    "standalone-development",
+  );
+  const storedHandoffFailure = storedHandoffViolations.find((entry) => !entry.ok);
+  if (storedHandoffFailure !== undefined) {
+    throw new CoordinationError(
+      storedHandoffFailure.code as CoordinationError["code"],
+      storedHandoffFailure.message,
+      { plan_id: scope.planId },
+    );
+  }
   const anchors = standaloneDeliveryAnchors(context.snapshot, scope.planId);
   assertStandaloneBranchIdentity(context, scope, handoff, anchors, "reconcile", false);
   const repository = proofRepository([handoff.worktree_path, scope.worktreePath, scope.harnessRoot]);

@@ -562,6 +562,26 @@ export function validatePlanHandoff(
           invalid("coordination.row.handoff-field", `${what}.state completed requires completed_at for a standalone handoff`),
         );
       }
+      if (!isNonEmptyString(value.accepted_at)) {
+        violations.push(
+          invalid("coordination.row.handoff-field", `${what}.accepted_at is required for a standalone completed handoff`),
+        );
+      }
+      if (!isNonEmptyString(value.accepted_by)) {
+        violations.push(
+          invalid("coordination.row.handoff-field", `${what}.accepted_by is required for a standalone completed handoff`),
+        );
+      }
+      if (value.qc === undefined) {
+        violations.push(
+          invalid("coordination.row.handoff-field", `${what}.qc is required for a standalone completed handoff`),
+        );
+      }
+      if (value.qa === undefined) {
+        violations.push(
+          invalid("coordination.row.handoff-field", `${what}.qa is required for a standalone completed handoff`),
+        );
+      }
     } else {
       violations.push(invalid("coordination.row.handoff-field", `${what}.state ${String(value.state)} requires integration`));
     }

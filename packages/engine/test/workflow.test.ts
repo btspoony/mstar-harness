@@ -1718,5 +1718,25 @@ describe("standalone-completion-shape", () => {
     const snapshot = standaloneSnapshot({ plans: [standaloneCompletedRow("feature/other")] });
     expectViolations(validateWorkflowSnapshot(snapshot), "coordination.row.handoff-field");
   });
+
+  test("refuses standalone completed handoff missing acceptance or QC/QA seals", () => {
+    for (const field of ["accepted_at", "accepted_by", "qc", "qa"] as const) {
+      const handoff = { ...standaloneCompletedHandoff() } as Record<string, unknown>;
+      delete handoff[field];
+      const row = standaloneCompletedRow();
+      const snapshot = standaloneSnapshot({
+        plans: [
+          {
+            ...row,
+            coordination: {
+              ...(row.coordination as Record<string, unknown>),
+              handoff,
+            },
+          },
+        ],
+      });
+      expectViolations(validateWorkflowSnapshot(snapshot), "coordination.row.handoff-field");
+    }
+  });
 });
 
