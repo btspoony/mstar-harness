@@ -8,6 +8,19 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ## [Unreleased]
 
+## [3.10.1] - 2026-09-17
+
+### Harness
+
+- Added a host-agnostic **host hook anchor** contract to the host-adapter skill — `iteration-entry`, `phase-1-lock`, `phase-2-entry`, `rescheduling-checkpoint` — each carried by a marker in the shared lifecycle references and resolved by the active host reference.
+- The OMP host reference now declares, per anchor, the coordinator calls that were previously documented but never wired, so a coordinator session actually executes them.
+- Removed shared-corpus host-name leaks from the four densest files; the relocated per-host role-binding field and engine-scope detail now lives in the host references.
+- The remaining corpus cleanup is tracked as a roadmap goal (`host-seam-corpus-cleanup`).
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, the portable Agent Plugins manifest, and both marketplace manifests: **→ 3.10.1**.
+
 ## [3.10.0] - 2026-09-16
 
 ### Harness
