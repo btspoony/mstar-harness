@@ -56,6 +56,28 @@ Scope authority → `mstar-harness-core` § 定向执行与验证边界. All QA 
 - Missing screenshot or other real-environment evidence: record the unverified behavior and a pending independent E2E request for PM. Never launch a browser/device/E2E, change roles, or block/reopen routine iteration QA solely for that separate workflow. Unit acceptance cannot claim real-environment acceptance.
 - User-authorized local full-suite execution belongs to a separate implementer/ops action; QA may consume its result but has no `full` mode. Refer the authorization scope to PM instead of executing it here.
 
+## Budget stop and coverage readback
+
+Ceiling and scope authority → **`mstar-harness-core`** § 定向执行与验证边界; the role wording is in `references/qa-engineer.md` § Budget and Stopping. Honour the Assignment **`Budget`** / **`Return shape`** and never widen the core default. A bound stop keeps the AC outcomes and findings already verified and never invents elapsed time or file counts.
+
+- **Label only a real cut.** Emit `- Truncated coverage: <budget reached; specific ACs/interfaces not covered>` in the report `## Scope` only when a bound actually stopped expansion, naming the required ACs/interfaces left unchecked, and record those ACs as unverified. Omit the line on a complete run — a negation value is still a line, and consumers read the label's presence, not its wording.
+- **Exhaustion is not a channel failure.** A cap stop never rewrites an observed result, never becomes `Unconfirmed`, and never invents new QA vocabulary. A required evidence channel that is unavailable is a verification gap, handled by the existing `Blocked` result.
+- **Coverage readback, per assigned AC.** A checked AC keeps its observed outcome and its evidence reference, including a witnessed failure; a required AC left without supported evidence is recorded as unverified and is not a pass.
+
+| Readback | Required coverage | Result |
+| --- | --- | --- |
+| Every assigned AC has supported evidence | covered | ordinary acceptance may proceed |
+| A required AC has no supported evidence (unverified, or its channel unavailable) | uncovered | return the existing **`Blocked`**; name the uncovered ACs and hand PM the targeted remaining scope |
+| An assigned AC failed with witnessed evidence | covered — the finding is retained | report the observed failure with its evidence; coverage ending never turns it into a coverage-only conclusion |
+
+A clean checked subset with `findings: []` is compatible with `unverified` ACs: `findings: []` describes the checked scope only and is never presented as full mandatory acceptance or `Done`.
+
+## Durable acceptance mapping (before Done)
+
+The landed report is the raw record; its landing obligation is defined once in `references/qa-engineer.md` § QA Report Landing and Template and is unchanged when the Assignment names no output path. Before `Done`, the report's compact AC → evidence → result mapping is preserved in the existing durable main-plan **`## QA Gate Summary`** (`mstar-artifacts/references/plan-files-and-reports.md`) — per-AC result, evidence reference, coverage/gap disclosure and the exact report pointer — which QA supplies from its report.
+
+Reuse that existing summary: no second archive, manifest or report format is created. Retain the raw report while the gate is active, so a later permitted bundle cleanup never leaves the only AC mapping in a deleted file.
+
 ## Unchanged hard duties
 
 Before sign-off or Done recommendation:
@@ -68,6 +90,8 @@ Before sign-off or Done recommendation:
 ## Report-only
 
 Use template in `references/qa-engineer.md`. May skip QC tri only when no implementation/test/config artifacts were committed.
+
+`report-only` is a mode, not the landing condition: the mandatory landing, scope/truncation disclosure and coverage readback above are unchanged, and an advisory report acquires no acceptance authority from its filename.
 
 ## Related
 
