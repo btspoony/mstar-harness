@@ -55,7 +55,13 @@ import { CoordinationError, artifactVersion, readArtifactBytes, withProtectedWri
 import { claimLease, withStatusWriteLock } from "../src/lease.js";
 import { registerWorkflow } from "../src/status.js";
 import { createFsStore, setArtifactStore, type ArtifactDoc, type ArtifactRef, type ArtifactStore } from "../src/store.js";
-import { writeWorkflowSnapshot, type WorkflowSnapshot } from "../src/workflow.js";
+import {
+  closeWorkflow,
+  recordWorkflowDelivery,
+  WORKFLOW_SNAPSHOT_FILE,
+  writeWorkflowSnapshot,
+  type WorkflowSnapshot,
+} from "../src/workflow.js";
 
 const WORKFLOW_ID = "wf-plana";
 const PLAN_ID = "plan-a";
@@ -1303,6 +1309,51 @@ function mergeFeature(fixture: GitFixture): string {
   return headOf(fixture.integrationPath);
 }
 
+/**
+ * A single-row standalone development workflow with a real feature checkout and
+ * delivery anchors only (no integration worktree or branch.integration).
+ */
+function standaloneGitFixture(): GitFixture {
+  const fixture = makeFixture() as GitFixture;
+  fixture.baseSha = headOf(fixture.root);
+  fixture.integrationPath = join(fixture.root, "wt-integration-unused");
+  rmSync(fixture.worktreePath, { recursive: true, force: true });
+  git(["worktree", "add", "-q", "-b", "feature/plan-a", fixture.worktreePath], fixture.root);
+  writeText(join(fixture.worktreePath, "standalone.txt"), "standalone slice\n");
+  git(["add", "-A"], fixture.worktreePath);
+  git(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "feat: standalone"], fixture.worktreePath);
+  fixture.planSha = headOf(fixture.worktreePath);
+  writeJson(join(fixture.harness, "status.json"), {
+    version: 2,
+    updated_at: "2026-09-15",
+    workflows: [{ id: WORKFLOW_ID, status: "running", type: "plan", started_at: "2026-09-15T00:00:00Z", dir: `workflows/${WORKFLOW_ID}` }],
+  });
+  writeJson(fixture.snapshotPath, {
+    schema_version: 1,
+    id: WORKFLOW_ID,
+    type: "plan",
+    delivery_kind: "development",
+    status: "running",
+    started_at: "2026-09-15T00:00:00Z",
+    updated_at: "2026-09-15T00:00:00Z",
+    branch: { source: "feature/plan-a", target: "main" },
+    plans: [planRow(PLAN_ID, PROJECT_ID, "feature/plan-a")],
+  });
+  return fixture;
+}
+
+/** Accepted standalone handoff: the state route-specific complete starts from. */
+async function acceptedStandaloneFixture(): Promise<GitFixture> {
+  const fixture = standaloneGitFixture();
+  await preparePlan(fixture, PLAN_ID);
+  await bindPlan(fixture, PLAN_ID);
+  claimExecutionLease(fixture, PLAN_ID, fixture.planSession);
+  updatePlanRow(fixture, PLAN_ID, (row) => ({ ...row, status: "InReview" }));
+  await handoffCall(fixture, handoffEvidenceOf(fixture, fixture.planSha));
+  await coordinatorCall(fixture, PLAN_ID, { kind: "accept" });
+  return fixture;
+}
+
 /** A fixture handed off and accepted: the state integration starts from. */
 async function acceptedFixture(): Promise<GitFixture> {
   const fixture = gitFixture();
@@ -1564,6 +1615,110 @@ describe("git-reconciliation", () => {
  * releasing it — the locked gate waits and observes it, while an unlocked gate
  * has already read `absent` and let the handoff through.
  */
+describe("standalone-development-completion", () => {
+  test("complete succeeds without integration fields and keeps the workflow running", async () => {
+    const fixture = await acceptedStandaloneFixture();
+    const view = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
+    expect(view.allowed_operations).toContain("complete");
+    expect(view.allowed_operations).not.toContain("integration-start");
+
+    const completed = await coordinatorCall(fixture, PLAN_ID, { kind: "complete" });
+    expect(completed.outcome).toBe("completed");
+    expect(snapshotOf(fixture).status).toBe("running");
+    const doneRow = planRowOf(fixture, PLAN_ID);
+    expect(doneRow.status).toBe("Done");
+    expect(doneRow.execution_lease).toBeUndefined();
+    const doneHandoff = handoffFields(doneRow);
+    expect(doneHandoff.state).toBe("completed");
+    expect(doneHandoff.integration).toBeUndefined();
+    expect(typeof doneHandoff.completed_at).toBe("string");
+    expect((doneRow.metadata as Record<string, unknown>).working_branch).toBe("feature/plan-a");
+    expect((doneRow.metadata as Record<string, unknown>).worktree_path).toBe(fixture.worktreePath);
+
+    const doneBytes = readFileSync(fixture.snapshotPath, "utf8");
+    const replayed = await coordinatorCall(fixture, PLAN_ID, { kind: "reconcile" });
+    expect(replayed.outcome).toBe("already-completed");
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(doneBytes);
+  }, 30000);
+
+  test("delivery evidence refuses before Done and succeeds after Done with a full registered tail", async () => {
+    const fixture = await acceptedStandaloneFixture();
+    const before = readFileSync(fixture.snapshotPath);
+    await expect(
+      recordWorkflowDelivery(WORKFLOW_ID, fixture.workflowDir, {
+        sessionPath: fixture.coordinatorSession,
+        evidence: { compound: { outcome: "created" } },
+        at: "2026-09-15T01:00:00Z",
+      }),
+    ).rejects.toThrow(/PHASE6_PLAN_ROW_NOT_DONE/);
+    expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
+
+    await coordinatorCall(fixture, PLAN_ID, { kind: "complete" });
+    await recordWorkflowDelivery(WORKFLOW_ID, fixture.workflowDir, {
+      sessionPath: fixture.coordinatorSession,
+      evidence: {
+        compound: { outcome: "created" },
+        pr: { repo: "btspoony/mstar-harness", head: "feature/plan-a", target: "main" },
+        merge: { provider: "github", evidence: "PR #999 verified merged" },
+      },
+      at: "2026-09-15T02:00:00Z",
+    });
+    const closed = await closeWorkflow(WORKFLOW_ID, fixture.workflowDir, {
+      sessionPath: fixture.coordinatorSession,
+      endedAt: "2026-09-15T03:00:00Z",
+    });
+    expect(closed.status).toBe("completed");
+    expect(closed.delivery?.merge?.provider).toBe("github");
+  }, 30000);
+
+  test("integration contamination, missing anchors and dirty checkout refuse without protected-byte changes", async () => {
+    const contaminated = await acceptedStandaloneFixture();
+    writeJson(contaminated.snapshotPath, {
+      ...snapshotOf(contaminated),
+      integration_worktree_path: join(contaminated.root, "extra-integration"),
+    });
+    const beforeContaminated = readFileSync(contaminated.snapshotPath);
+    expect(await errorCodeOf(() => coordinatorCall(contaminated, PLAN_ID, { kind: "complete" }))).toBe(
+      "coordination.invalid-transition",
+    );
+    expect(readFileSync(contaminated.snapshotPath).equals(beforeContaminated)).toBe(true);
+
+    const unanchored = await acceptedStandaloneFixture();
+    writeJson(unanchored.snapshotPath, {
+      ...snapshotOf(unanchored),
+      branch: { target: "main" },
+    });
+    const beforeUnanchored = readFileSync(unanchored.snapshotPath);
+    expect(await errorCodeOf(() => coordinatorCall(unanchored, PLAN_ID, { kind: "complete" }))).toBe(
+      "coordination.invalid-transition",
+    );
+    expect(readFileSync(unanchored.snapshotPath).equals(beforeUnanchored)).toBe(true);
+
+    const dirty = await acceptedStandaloneFixture();
+    writeText(join(dirty.worktreePath, "scratch.txt"), "wip\n");
+    const beforeDirty = readFileSync(dirty.snapshotPath);
+    expect(await errorCodeOf(() => coordinatorCall(dirty, PLAN_ID, { kind: "complete" }))).toBe("coordination.git-proof");
+    expect(readFileSync(dirty.snapshotPath).equals(beforeDirty)).toBe(true);
+  }, 30000);
+
+  test("iteration accepted handoff still refuses complete without integration (no standalone fallback)", async () => {
+    const fixture = await acceptedFixture();
+    const before = readFileSync(fixture.snapshotPath);
+    expect(await errorCodeOf(() => coordinatorCall(fixture, PLAN_ID, { kind: "complete" }))).toBe(
+      "coordination.invalid-transition",
+    );
+    expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
+
+    const unanchored = await acceptedFixture();
+    const stripped = { ...snapshotOf(unanchored) };
+    delete stripped.integration_worktree_path;
+    writeJson(unanchored.snapshotPath, stripped);
+    expect(await errorCodeOf(() => coordinatorCall(unanchored, PLAN_ID, { kind: "integration-start" }))).toBe(
+      "coordination.integration-unresolved",
+    );
+  }, 30000);
+});
+
 describe("findings-gate-locking", () => {
   test("a finding that lands while the handoff waits for the register lock still refuses it", async () => {
     const fixture = gitFixture();
