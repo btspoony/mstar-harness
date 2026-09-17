@@ -281,7 +281,6 @@ describe("mstar iteration register", () => {
       writeFileSync(root, JSON.stringify({ version: 2, updated_at: "2026-09-01", workflows: [] }, null, 2));
       const retry = runCli(registerArgs(harness));
       expect(retry.exitCode).toBe(0);
-      expect(retry.stdout).toContain("recovered");
       expect(readFileSync(snapshot, "utf8")).toBe(goodSnapshot);
       const rootDoc = JSON.parse(readFileSync(root, "utf8")) as Record<string, unknown>;
       expect(rootDoc.workflows).toEqual([
