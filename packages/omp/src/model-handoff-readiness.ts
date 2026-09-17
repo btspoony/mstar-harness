@@ -3,14 +3,15 @@
  * coordinator model handoff.
  *
  * E1 (`reserveHandoffBinding`) validates the explicit first-action assertion
- * (trusted PM input) against host/Git facts and reserves **paths**, never
+ * (trusted PM input) against host/Git facts and resolves **paths**, never
  * lifecycle state: it creates nothing, adopts nothing and mutates no workflow,
  * session or settings document. The workflow id is validated as a single safe
- * path component *before* any shared-state read, and the root register is read
- * for exactly one purpose — refusing an id that is already a named workflow.
- * Ownership is never inferred from rows (`workflows[0]`, latest-mtime or "the
- * unique new row" are not selection rules, and a sibling active workflow is
- * not a refusal reason).
+ * path component *before* any shared-state read. The required structural mode
+ * selects the branch: `reserve` reads the root register only to refuse an id
+ * that is already a named workflow, while `attach` revalidates the named
+ * active register row and its actual own snapshot. Ownership is never inferred
+ * from rows (`workflows[0]`, latest-mtime or "the unique new row" are not
+ * selection rules, and a sibling active workflow is not a refusal reason).
  *
  * E2 (`inspectPhase1Readiness`) re-reads the artifacts and Git facts the PM
  * asserted and refuses on any disagreement. Trust split (spec §E2): the PM
@@ -143,14 +144,28 @@ function bindingRefusal(code: HandoffRefusalCode, message: string): HandoffBindi
 }
 
 /**
- * Reserve the binding for one explicitly named new iteration. Pure reservation:
- * the returned paths are the *derived* locations a lawful workflow creation is
- * expected to fill, not validated lifecycle ownership (E2 checks that against
- * the coordinator envelope and the live artifacts).
+ * Structural route selection for the explicit first-action binding. Pure
+ * structure: the returned paths are the *derived* locations of the named
+ * workflow, never validated lifecycle ownership (adoption authority lives
+ * solely in the adapter's `deriveStartAuthority`; E2 checks the live
+ * artifacts against the coordinator envelope).
+ *
+ * - `"reserve"` — the unregistered path: the root register is read only to
+ *   reject an already-named id, and existing snapshot/compass artifacts are
+ *   refusals. An absent register permits the session reservation only.
+ * - `"attach"` — the registered path: the named active register row and its
+ *   actual own snapshot are revalidated; an existing own snapshot/compass is
+ *   expected, not a refusal. Absent/mismatched registration or snapshot
+ *   refuses `invalid-root`; there is no fallback into reservation.
+ *
+ * The mode is a structural selector derived by the adapter from the validated
+ * register — never public tool input and never proof of authority. No row or
+ * envelope is ever used to infer ownership.
  */
 export async function reserveHandoffBinding(
   input: HandoffBindingInput,
   host: Readonly<{ sessionId: string; cwd: string; taskSession: boolean }>,
+  mode: "reserve" | "attach",
 ): Promise<HandoffBindingResult> {
   // Trusted PM assertions first (spec §E1): intent, role and the new-start
   // entry are asserted, and the host facts a native task session cannot supply
@@ -238,11 +253,16 @@ export async function reserveHandoffBinding(
     return bindingRefusal("invalid-root", `cannot resolve the workflow/iteration paths: ${String(error)}`);
   }
 
-  // The root register is read only to reject an already-named id. An absent
-  // register permits the session reservation only; malformed register data
-  // refuses, and no row is ever used to infer ownership.
+  // The root register is validated and read for the mode's structural branch:
+  // `reserve` rejects an already-named id, `attach` revalidates the named row.
+  // Malformed register data refuses in both modes, and no row is ever used to
+  // infer ownership.
   const statusPath = join(harnessRoot, STATUS_FILE);
-  if (existsSync(statusPath)) {
+  if (!existsSync(statusPath)) {
+    if (mode === "attach") {
+      return bindingRefusal("invalid-root", `attach requires a registered workflow and the root register is absent: ${statusPath}`);
+    }
+  } else {
     const gate = validateStatusV2(statusPath);
     if (!gate.ok) {
       return bindingRefusal(
@@ -257,19 +277,56 @@ export async function reserveHandoffBinding(
       return bindingRefusal("invalid-root", `the root register is not readable: ${statusPath}`);
     }
     const entries = isPlainObject(doc) && Array.isArray(doc.workflows) ? doc.workflows : [];
-    if (entries.some((entry) => isPlainObject(entry) && entry.id === workflowId)) {
-      return bindingRefusal(
-        "already-bound",
-        `workflow ${workflowId} is already registered in the root register — a new start never adopts it`,
-      );
+    const own = entries.filter((entry) => isPlainObject(entry) && entry.id === workflowId);
+    if (mode === "reserve") {
+      if (own.length > 0) {
+        return bindingRefusal(
+          "already-bound",
+          `workflow ${workflowId} is already registered in the root register — a new start never adopts it`,
+        );
+      }
+    } else {
+      // Attach revalidates the named active register row rather than trusting
+      // the adapter's earlier classification: the row must exist and its
+      // registered directory must canonically resolve to the derived snapshot.
+      const row = own.length === 1 ? own[0]! : null;
+      const rowDir = row !== null && isNonEmptyString(row.dir) ? row.dir : null;
+      if (row === null || rowDir === null) {
+        return bindingRefusal("invalid-root", `attach requires exactly one active register row for workflow ${workflowId}`);
+      }
+      const listedSnapshot = canonicalizeNearestExisting(join(harnessRoot, rowDir, WORKFLOW_SNAPSHOT_FILE));
+      if (listedSnapshot !== snapshotPath) {
+        return bindingRefusal(
+          "invalid-root",
+          `the register row for workflow ${workflowId} does not resolve to its own snapshot: ${rowDir}`,
+        );
+      }
     }
   }
 
-  if (existsSync(snapshotPath)) {
-    return bindingRefusal("already-bound", `a workflow snapshot already exists at ${snapshotPath}`);
-  }
-  if (existsSync(compassPath)) {
-    return bindingRefusal("already-bound", `an iteration compass already exists at ${compassPath}`);
+  if (mode === "reserve") {
+    if (existsSync(snapshotPath)) {
+      return bindingRefusal("already-bound", `a workflow snapshot already exists at ${snapshotPath}`);
+    }
+    if (existsSync(compassPath)) {
+      return bindingRefusal("already-bound", `an iteration compass already exists at ${compassPath}`);
+    }
+  } else {
+    // Attach expects the workflow's own snapshot to actually exist and to name
+    // this workflow; a vanished or mismatched snapshot is never adopted. The
+    // existing own snapshot/compass is not itself a refusal — authority is
+    // decided solely by the adapter's `deriveStartAuthority`.
+    if (!existsSync(snapshotPath)) {
+      return bindingRefusal("invalid-root", `attach requires the registered workflow snapshot and it is missing: ${snapshotPath}`);
+    }
+    try {
+      const snapshot = readWorkflowSnapshot(dirname(snapshotPath)).snapshot;
+      if (snapshot.id !== workflowId) {
+        return bindingRefusal("invalid-root", `the workflow snapshot at ${snapshotPath} does not name workflow ${workflowId}`);
+      }
+    } catch {
+      return bindingRefusal("invalid-root", `the workflow snapshot is not readable: ${snapshotPath}`);
+    }
   }
 
   return {
