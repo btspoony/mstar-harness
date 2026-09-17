@@ -6,9 +6,10 @@ Before any non-trivial PM action, read in order:
 2. `mstar-dispatch-gates` + `mstar-phase-gates` (dispatch + Prepare/Execute gates)
 3. Host adapter: **`mstar-host`** (detect the active host; then Read the reference that detection resolves to)
 4. `mstar-conventions` (path discovery, init, Spec branch summary)
-5. `mstar-review-qc` (same coordination round, **before** any QC dispatch)
-6. **`mstar-sdd`** when implement uses **`Execution mode: sdd`**
-7. **On demand:** `mstar-branch-worktree` (parallel implement, QC/QA checkout); `mstar-artifacts` (`status.json` v2 root, workflow snapshots, R#); `mstar-artifacts` (InReview waves, review bundle naming)
+5. Plan lifecycle authority — `references/project-manager/plan-management.md` + **`mstar-artifacts`** `references/plan-workflow-lifecycle-contract.md`: who advances the plan row's engine state, the scoped verb sequence, and the evidence each transition records — read **before the first implement dispatch**, not first at close
+6. `mstar-review-qc` (same coordination round, **before** any QC dispatch)
+7. **`mstar-sdd`** when implement uses **`Execution mode: sdd`**
+8. **On demand:** `mstar-branch-worktree` (parallel implement, QC/QA checkout); `mstar-artifacts` (`status.json` v2 root, workflow snapshots, R#); `mstar-artifacts` (InReview waves, review bundle naming)
 
 **Not required:** `mstar-coding-behavior` (orchestration-only PM work).
 

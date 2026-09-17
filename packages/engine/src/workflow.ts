@@ -1121,7 +1121,15 @@ export type RecordWorkflowDeliveryResult = {
  *   `development` workflow) — the declared kind is authoritative;
  * - a rewrite of the recorded PR identity (§4d records it once at submission:
  *   an identical re-record is idempotent, a different pair is refused);
- * - an empty patch or a malformed member: nothing is silently dropped.
+ * - an empty patch or a malformed member: nothing is silently dropped;
+ * - compound / PR identity / verified-merge record while any owned plan row
+ *   is not `Done` (`PHASE6_PLAN_ROW_NOT_DONE` — contract §3: the delivery
+ *   tail runs after every row is Done; write-time only, see below).
+ *
+ * Grandfathering: the row-Done gate is write-time only. Snapshots that
+ * already carry delivery evidence while rows are not `Done` are never
+ * retro-invalidated; idempotent re-records return without consulting row
+ * state; `closeWorkflow` / `evaluatePostMergeClose` are unchanged.
  *
  * Idempotent and re-entrant: re-recording the exact stored evidence performs
  * NO write and returns the snapshot as read (the timestamp is untouched), so
@@ -1210,6 +1218,28 @@ export async function recordWorkflowDelivery(
     const merged = { ...stored, ...evidence } as WorkflowDeliveryEvidence;
     if (stableJson(snapshot.delivery ?? null) === stableJson(merged)) {
       return { snapshot, written: false };
+    }
+    // Write-time ordering gate (contract §3): compound / PR / merge are
+    // recorded after every owned plan row is Done. Grandfathering: this check
+    // runs only when the call would mutate `delivery`; snapshots that already
+    // carry evidence while rows are not Done are never retro-invalidated on
+    // read or close — idempotent re-records above return without consulting
+    // row state, and `closeWorkflow` / `evaluatePostMergeClose` are unchanged.
+    const tailMembers = members.filter((member) => member === "compound" || member === "pr" || member === "merge");
+    if (tailMembers.length > 0) {
+      const notDone = snapshot.plans.filter((row) => row.status !== "Done");
+      if (notDone.length > 0) {
+        const rowDetail = notDone.map((row) => `${row.id} (${JSON.stringify(row.status)})`).join(", ");
+        const detail = violation(
+          "high",
+          "PHASE6_PLAN_ROW_NOT_DONE",
+          `owned plan row(s) ${rowDetail} are not Done - every plan row must be Done before the delivery tail (${tailMembers.join(", ")}) is recorded (mstar-artifacts/references/plan-workflow-lifecycle-contract.md section 3: row Done -> compound disposition -> PR identity -> verified-merge record)`,
+          `Bring every owned plan row to Done, then record delivery evidence with 'mstar workflow evidence --workflow ${workflowId} --file <payload.json>'`,
+        );
+        throw new Error(
+          `refusing to record delivery evidence: ${detail.code}: ${detail.message}${detail.fix !== undefined ? ` (fix: ${detail.fix})` : ""}`,
+        );
+      }
     }
     const next: WorkflowSnapshot = { ...snapshot, delivery: merged, updated_at: at };
     await validateAndPutWorkflowSnapshot(store, next, snapshotPath);
