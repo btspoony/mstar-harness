@@ -890,8 +890,12 @@ function renderPlanFile(finding: AuditFinding, plannedAt: { commit: string; date
     `- **Priority**: ${finding.priority}`,
     `- **Effort**: ${finding.effort}`,
     `- **Risk**: ${finding.risk}`,
+    ...(finding.confidence !== "MED" ? [`- **Confidence**: ${finding.confidence}`] : []),
     `- **Depends on**: ${finding.dependsOn ?? "none"}`,
     `- **Category**: ${finding.category}`,
+    ...(finding.evidence.length > 0
+      ? [`- **Evidence**: ${finding.evidence[0].replace(/\s*\r?\n\s*/g, " ")}`]
+      : []),
     `- **Planned at**: commit \`${plannedAt.commit}\`, ${plannedAt.date}`,
     "",
     "## Impact",
@@ -1105,7 +1109,7 @@ export function scaffoldAuditPlan(
       impact: "see plan file",
       effort: fields.get("Effort") ?? "\u2014",
       risk: fields.get("Risk") ?? "\u2014",
-      confidence: "\u2014",
+      confidence: fields.get("Confidence") ?? "\u2014",
       evidence: fields.get("Evidence") ?? "\u2014",
       priority: fields.get("Priority") ?? "\u2014",
       dependsOn: fields.get("Depends on") ?? "\u2014",

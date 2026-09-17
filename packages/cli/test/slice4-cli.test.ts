@@ -684,6 +684,85 @@ describe("mstar audit scaffold — plan directory from findings JSON", () => {
     });
   });
 
+  test("supplied confidence + evidence + fixSketch + verification reach the plan and index (fidelity regression)", () => {
+    withTempDir((dir) => {
+      const findingsFile = join(dir, "findings.json");
+      writeFileSync(
+        findingsFile,
+        JSON.stringify([
+          {
+            title: "Unparameterized sink in export path",
+            priority: "P1",
+            effort: "S",
+            risk: "HIGH",
+            category: "security",
+            description: "User-controlled CSV export interpolates raw SQL.",
+            confidence: "HIGH",
+            evidence: ["src/export.ts:88 — f-string builds the query", "src/export.ts:120 — same sink in the retry path"],
+            fixSketch: "Parameterize both call sites.",
+            verification: "bun test packages/api/test/export.test.ts",
+          },
+        ]),
+      );
+      // Date/SHA pinned: the audit-<date> dir name and Planned-at line are calendar/SHA flake-proof.
+      const outDir = join(dir, "audit-2026-08-08");
+      const result = runCli(["audit", "scaffold", findingsFile, "--dir", outDir, "--sha", "deadbee", "--date", "2026-08-08"]);
+      expect(result.exitCode).toBe(0);
+      const plan = readFileSync(join(outDir, "001-unparameterized-sink-in-export-path.md"), "utf8");
+      // Explicit HIGH confidence is persisted in the Status block...
+      expect(plan).toContain("- **Confidence**: HIGH");
+      // ...all string evidence entries reach the plan (not just the first)...
+      expect(plan).toContain("## Evidence");
+      expect(plan).toContain("- src/export.ts:88 — f-string builds the query");
+      expect(plan).toContain("- src/export.ts:120 — same sink in the retry path");
+      // ...and fixSketch/verification render too.
+      expect(plan).toContain("## Fix sketch");
+      expect(plan).toContain("Parameterize both call sites.");
+      expect(plan).toContain("## Verification");
+      expect(plan).toContain("bun test packages/api/test/export.test.ts");
+      // Index row: HIGH confidence + first-evidence preview (not "—"/empty).
+      const readme = readFileSync(join(outDir, "README.md"), "utf8");
+      expect(readme).toContain("| 001 | Unparameterized sink in export path | security |");
+      expect(readme).toContain("| HIGH | src/export.ts:88 — f-string builds the query |");
+      // still round-trips through the engine validator
+      expect(validateAuditStatusBlocks(plan).ok).toBe(true);
+    });
+  });
+
+  test("absent confidence/evidence defaults to MED/[] — no Confidence Status line, no Evidence section", () => {
+    withTempDir((dir) => {
+      const findingsFile = join(dir, "findings.json");
+      writeFileSync(findingsFile, JSON.stringify([{ title: "Add index", priority: "P2", effort: "XS", risk: "LOW", category: "tech-debt", description: "Index the audit table." }]));
+      const outDir = join(dir, "audit-2026-08-08");
+      const result = runCli(["audit", "scaffold", findingsFile, "--dir", outDir, "--sha", "deadbee", "--date", "2026-08-08"]);
+      expect(result.exitCode).toBe(0);
+      const plan = readFileSync(join(outDir, "001-add-index.md"), "utf8");
+      expect(plan).not.toContain("**Confidence**");
+      expect(plan).not.toContain("## Evidence");
+    });
+  });
+
+  test("invalid confidence (null / wrong enum) and non-string evidence entries fail usage exit 2", () => {
+    for (const bad of [
+      { confidence: null },
+      { confidence: "CERTAIN" },
+      { evidence: "src/a.ts:1" },
+      { evidence: [42] },
+      { fixSketch: "" },
+      { verification: "   " },
+    ]) {
+      withTempDir((dir) => {
+        const findingsFile = join(dir, "findings.json");
+        writeFileSync(findingsFile, JSON.stringify([{ title: "X", priority: "P1", effort: "M", risk: "LOW", category: "perf", description: "d", ...bad }]));
+        const result = runCli(["audit", "scaffold", findingsFile, "--dir", join(dir, "out")]);
+        expect({ input: bad, exitCode: result.exitCode }).toEqual({ input: bad, exitCode: 2 });
+        // validation errors must not echo submitted values
+        expect(result.stderr).not.toContain("CERTAIN");
+        expect(result.stderr).not.toContain("src/a.ts:1");
+      });
+    }
+  });
+
   test("invalid dependsOn → usage, exit 2", () => {
     withTempDir((dir) => {
       const findingsFile = join(dir, "findings.json");

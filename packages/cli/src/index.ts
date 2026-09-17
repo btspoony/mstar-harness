@@ -25,6 +25,7 @@ import {
   checkSddAction,
   classifySkillLint,
   AUDIT_CATEGORIES,
+  AUDIT_CONFIDENCES,
   AUDIT_EFFORTS,
   AUDIT_PRIORITIES,
   AUDIT_RISKS,
@@ -121,6 +122,7 @@ import {
   type ArtifactStore,
   type AuditCategory,
   type AuditEffort,
+  type AuditConfidence,
   type AuditFinding,
   type AuditPriority,
   type AuditRisk,
@@ -4106,6 +4108,29 @@ function parseAuditScaffoldInput(text: string): AuditScaffoldInput {
     }
     const dependsOn =
       rawDependsOn === undefined ? undefined : /^\d{3}$/.test(rawDependsOn) ? `plans/${rawDependsOn}-*.md` : rawDependsOn;
+ // Optional confidence: explicit value wins; absence stays at the MED default.
+ // Errors name the field, never the submitted value.
+    const confidence = finding.confidence === undefined ? "MED" : finding.confidence;
+    if (typeof confidence !== "string" || AUDIT_CONFIDENCES.find((c) => c === confidence) === undefined) {
+      throw new SddScriptError(`usage: audit scaffold \u2014 findings[${index}].confidence must be one of ${AUDIT_CONFIDENCES.join("|")}`, 2);
+    }
+ // Optional evidence: array of visible strings; absence stays [].
+    const rawEvidence = finding.evidence;
+    if (rawEvidence !== undefined && (!Array.isArray(rawEvidence) || rawEvidence.some((e) => typeof e !== "string" || e.trim() === ""))) {
+      throw new SddScriptError(`usage: audit scaffold \u2014 findings[${index}].evidence must be an array of non-empty strings`, 2);
+    }
+    const evidence: string[] = rawEvidence === undefined ? [] : (rawEvidence as string[]).map((e) => (e as string).trim());
+ // Optional free-text fields: supplied values must be visible strings.
+    const freeText = (field: string): string | undefined => {
+      const raw = finding[field];
+      if (raw === undefined) return undefined;
+      if (typeof raw !== "string" || raw.trim() === "") {
+        throw new SddScriptError(`usage: audit scaffold \u2014 findings[${index}].${field} must be a non-empty string`, 2);
+      }
+      return raw.trim();
+    };
+    const fixSketch = freeText("fixSketch");
+    const verification = freeText("verification");
  // Enum memberships were validated above \u2014 cast the narrowed unions.
     return {
       title,
@@ -4113,10 +4138,12 @@ function parseAuditScaffoldInput(text: string): AuditScaffoldInput {
       impact,
       effort: effort as AuditEffort,
       risk: risk as AuditRisk,
-      confidence: "MED",
-      evidence: [],
+      confidence: confidence as AuditConfidence,
+      evidence,
       priority: priority as AuditPriority,
-      dependsOn,
+      ...(fixSketch !== undefined ? { fixSketch } : {}),
+      ...(verification !== undefined ? { verification } : {}),
+      ...(dependsOn !== undefined ? { dependsOn } : {}),
     };
   });
 

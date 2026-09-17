@@ -723,6 +723,43 @@ describe("scaffoldAuditPlan", () => {
     expect(readme).toContain("- Checked and clean: hand cleared sink");
   });
 
+  test("non-default confidence persists in a Status line and survives a no-new-findings rebuild", () => {
+    const out = join(tmp, "audit-2026-08-28");
+    scaffoldAuditPlan(
+      out,
+      [
+        {
+          title: "Unparameterized sink",
+          category: "security" as const,
+          impact: "Raw SQL in the export path.",
+          effort: "S" as const,
+          risk: "HIGH" as const,
+          confidence: "HIGH" as const,
+          evidence: ["src/export.ts:88 — f-string builds the query", "src/export.ts:120 — retry path"],
+          priority: "P1" as const,
+        },
+      ],
+      { date: "2026-08-28" },
+    );
+    const plan = readFileSync(join(out, "001-unparameterized-sink.md"), "utf8");
+    expect(plan).toContain("- **Confidence**: HIGH");
+    expect(validateAuditStatusBlocks(plan).ok).toBe(true);
+    expect(readFileSync(join(out, "README.md"), "utf8")).toContain("| HIGH | src/export.ts:88 — f-string builds the query |");
+    // Default output unchanged: MED findings render NO Confidence Status line.
+    scaffoldAuditPlan(
+      out,
+      [{ title: "Default confidence", category: "docs" as const, impact: "d", effort: "XS" as const, risk: "LOW" as const, confidence: "MED" as const, evidence: [], priority: "P3" as const }],
+      { date: "2026-08-29" },
+    );
+    expect(readFileSync(join(out, "002-default-confidence.md"), "utf8")).not.toContain("**Confidence**");
+    // Rebuild with NO new findings: the index row recovers HIGH from the
+    // persisted Status line instead of degrading to "—".
+    scaffoldAuditPlan(out, [], { date: "2026-08-30" });
+    const readme = readFileSync(join(out, "README.md"), "utf8");
+    expect(readme).toContain("| 001 | Unparameterized sink | security |");
+    expect(readme).toContain("| HIGH | src/export.ts:88 — f-string builds the query |");
+  });
+
   test("D-1: scaffold redacts credentials from finding evidence/fix sketch (Hard Rule 4)", () => {
     const out = join(tmp, "audit-2026-08-25");
     const result = scaffoldAuditPlan(
