@@ -17,7 +17,13 @@ import { randomBytes } from "node:crypto";
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { readJson, scaffoldAuditPlan, validateAuditStatusBlocks, validateProjectRegister } from "@mstar-harness/engine";
+import {
+  initializeStore,
+  openStore,
+  readJson,
+  scaffoldAuditPlan,
+  validateAuditStatusBlocks,
+} from "@mstar-harness/engine";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
 const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
@@ -26,14 +32,9 @@ const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
  * CLI suites — engine dir resolution must not leak into fixtures).
  * MSTAR_CLI_PROJECT_ROOT / INIT_CWD are pinned too: `resolveCliPath`
  * (audit-002) reads them ahead of PWD, so an ambient value would redirect
- * every relative-path fixture spuriously. TZ is pinned to the child's own
- * frame (tracked residual): with TZ unset a bare subprocess would fall back
- * to the system zone, and any frame split crosses the local calendar-day
- * boundary (00:00–08:00 in positive-offset zones), breaking the backlog
- * `registered_at`/`closed_at` date assertions. An explicit ambient TZ is
- * propagated, and the date assertions read the SAME frame through
- * `todayInChildFrame()` instead of the test process's runner-dependent
- * local zone (bun <1.4 ran it in the system zone; bun >=1.4 pins UTC). */
+ * every relative-path fixture spuriously. TZ stays pinned so a date any
+ * fixture records is read in the same frame the child wrote it (an explicit
+ * ambient TZ is propagated; the default is UTC). */
 function cliEnv(): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
@@ -2047,161 +2048,117 @@ describe("mstar status validate — v2 root + workflow snapshot (hard cutover)",
 });
 
 // ---------------------------------------------------------------------------
-// mstar status tech-debt — project-register rollup (audit-004 cutover)
+// mstar status tech-debt / findings-cleanup — issue-store authority (G2b)
 // ---------------------------------------------------------------------------
 
-/** Project register whose one open residual rolls up to total_open 1. */
-const REGISTER_ONE_OPEN = JSON.stringify(
-  {
-    entries: {
-      "demo-plan": [
-        {
-          id: "R1",
-          title: "Fix ordering bug",
-          severity: "high",
-          lifecycle: "open",
-          decision: "accept",
-          target: "next-iteration",
-          source: "qc",
-          scope: "plan",
-          owner: "dev",
-          tracking: "ticket",
-        },
-      ],
-    },
-  },
-  null,
-  2,
-);
-
-/** Write `projects/<id>/residuals.json` under `dir`; returns the project dir. */
-function writeRegister(dir: string, projectId: string, content: string): string {
-  const projectDir = join(dir, "projects", projectId);
-  mkdirSync(projectDir, { recursive: true });
-  writeFileSync(join(projectDir, "residuals.json"), content);
-  return dir;
+/** A CaptureInput payload for the unscoped `mstar issue add` entry. */
+function captureInputOf(occurrenceKey: string, severity: string): Record<string, unknown> {
+  return {
+    projectId: "_default",
+    title: `Finding ${occurrenceKey}`,
+    kind: "bug",
+    severity,
+    impact: "an acceptance is not met",
+    acceptance: "the finding is fixed and verified",
+    sourceIdentity: `slice4/${occurrenceKey}`,
+    rootCauseKey: "slice4-root-cause",
+    acceptanceKey: "slice4-acceptance",
+    occurrenceKey,
+    sourceKind: "qc",
+    location: "packages/cli/src/index.ts",
+    observedBehavior: "observed by the slice-4 fixture",
+    evidence: ["fixture evidence"],
+    discoveredAt: "2026-09-18T00:00:00Z",
+  };
 }
 
-describe("mstar status tech-debt — project-register rollup (v3 relocation)", () => {
-  test("prints the rollup over the project registers and exits 0 (informational)", () => {
+/**
+ * An ACTIVE issue store under `dir` holding one unscoped OPEN issue; returns
+ * the DB-assigned issue id. `store init` is create-only for a genuinely empty
+ * workspace, so it runs before any register-shaped file exists.
+ */
+function seedIssueStore(dir: string, severity = "high"): string {
+  const init = runCli(["store", "init", "--harness", dir, "--json"]);
+  expect(init.exitCode).toBe(0);
+  const payloadPath = join(dir, "capture.json");
+  writeFileSync(payloadPath, JSON.stringify(captureInputOf("occ-1", severity)), "utf8");
+  const added = runCli([
+    "issue", "add", "--harness", dir, "--operation-id", "slice4-capture-1", "--actor", "project-manager",
+    "--file", payloadPath, "--json",
+  ]);
+  expect(added.exitCode).toBe(0);
+  const envelope = JSON.parse(added.stdout) as { data?: { issueId?: unknown } };
+  const issueId = envelope.data?.issueId;
+  if (typeof issueId !== "string") throw new Error(`issue add returned no id: ${added.stdout}`);
+  return issueId;
+}
+
+describe("mstar status tech-debt — open-issue rollup over the issue store", () => {
+  test("rolls up the store's OPEN issues by severity and project, exit 0", () => {
     withTempDir((dir) => {
-      writeRegister(dir, "_default", REGISTER_ONE_OPEN);
-      const result = runCli(["status", "tech-debt", join(dir, "projects")]);
+      seedIssueStore(dir);
+      const result = runCli(["status", "tech-debt", "--harness", dir]);
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("total_open: 1");
-      expect(result.stdout).toContain('by_severity: {"critical":0,"high":1,"medium":0,"low":0,"nit":0}');
-      expect(result.stdout).toContain('by_target: {"next-iteration":1}');
-      expect(result.stdout).toContain('by_plan: {"demo-plan":1}');
-      expect(result.stdout).toContain("source of truth");
+      expect(result.stdout).toContain('by_severity: {"critical":0,"high":1,"medium":0,"low":0,"info":0}');
+      expect(result.stdout).toContain('by_project: {"_default":1}');
+      expect(result.stdout).toContain("store.db is the only findings authority");
       expect(result.stderr).toBe("");
     });
   });
 
-  test("no open entries → empty rollup, informational exit 0 (never DRIFT)", () => {
+  test("a missing store refuses instead of printing an empty rollup (exit 1)", () => {
     withTempDir((dir) => {
-      writeRegister(dir, "_default", JSON.stringify({ entries: {} }));
-      const result = runCli(["status", "tech-debt", join(dir, "projects")]);
-      expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("total_open: 0");
-      expect(result.stdout).toContain("source of truth");
+      const result = runCli(["status", "tech-debt", "--harness", dir]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("store.not-initialized");
+      expect(result.stdout).not.toContain("total_open");
     });
   });
 
-  test("missing project dir fails with exit 1", () => {
-    withTempDir((dir) => {
-      const result = runCli(["status", "tech-debt", join(dir, "nope")]);
+  test("a staged store is not the authority: the rollup refuses (exit 1)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "mstar-slice4-staged-"));
+    try {
+      const handle = await initializeStore({ harnessDir: dir });
+      handle.close();
+      const write = await openStore({ harnessDir: dir }, "write");
+      write.db.prepare("update store_meta set authority_state = 'staged' where id = 1").run();
+      write.close();
+      // A read in THIS process first: a child's first read of a store the
+      // runner just wrote intermittently fails to open (task-3 report §obs).
+      const seal = await openStore({ harnessDir: dir }, "read");
+      seal.close();
+
+      const result = runCli(["status", "tech-debt", "--harness", dir]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("project dir not found");
-    });
+      expect(result.stderr).toContain("store.not-active");
+      expect(result.stdout).not.toContain("total_open");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
-// ---------------------------------------------------------------------------
-// mstar status findings-cleanup — project-register gate (audit-004 cutover)
-// ---------------------------------------------------------------------------
-
-/** Register with one open non-critical residual under plan p1 — allow-residual passes. */
-const REGISTER_CLEANUP_ALLOW_PASS = JSON.stringify(
-  {
-    entries: {
-      p1: [
-        {
-          id: "R1",
-          title: "Style nit follow-up",
-          severity: "low",
-          lifecycle: "open",
-          decision: "accept",
-          target: "next-iteration",
-          source: "qc",
-          scope: "plan",
-          owner: "dev",
-          tracking: "ticket",
-        },
-      ],
-    },
-  },
-  null,
-  2,
-);
-
-/** Same register but the residual is critical — allow-residual blocks Approve. */
-const REGISTER_CLEANUP_ALLOW_FAIL = REGISTER_CLEANUP_ALLOW_PASS.replace('"severity": "low"', '"severity": "critical"');
-
-/** Register with a fixable open residual — zero-residual blocks it. */
-const REGISTER_CLEANUP_ZERO_FAIL = REGISTER_CLEANUP_ALLOW_PASS.replace('"severity": "low"', '"severity": "medium"').replace(
-  '"target": "next-iteration"',
-  '"target": ""',
-);
-
-describe("mstar status findings-cleanup — project-register cleanup-mode gate (v3 relocation)", () => {
-  test("allow-residual with non-critical open residual passes (exit 0)", () => {
+describe("mstar status findings-cleanup — issue-linkage gate over the issue store", () => {
+  test("an OPEN issue that is not linked to the plan does not block it (exit 0)", () => {
     withTempDir((dir) => {
-      writeRegister(dir, "_default", REGISTER_CLEANUP_ALLOW_PASS);
-      const result = runCli(["status", "findings-cleanup", "p1", "--harness", dir]);
-      expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("findings-cleanup p1: OK");
-    });
-  });
-
-  test("allow-residual with an unresolved critical fails (exit 1)", () => {
-    withTempDir((dir) => {
-      writeRegister(dir, "_default", REGISTER_CLEANUP_ALLOW_FAIL);
-      const result = runCli(["status", "findings-cleanup", "p1", "--harness", dir]);
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("findings-cleanup p1: FAIL (1 violation)");
-      expect(result.stderr).toContain("findings.allow-residual-critical");
-    });
-  });
-
-  test("zero-residual mode blocks a fixable open residual (exit 1)", () => {
-    withTempDir((dir) => {
-      writeRegister(dir, "_default", REGISTER_CLEANUP_ZERO_FAIL);
+      seedIssueStore(dir, "critical");
       const result = runCli(["status", "findings-cleanup", "p1", "--harness", dir, "--mode", "zero-residual"]);
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("findings.zero-residual-open-fixable");
-    });
-  });
-
-  test("no register entries for the plan → gate passes (exit 0)", () => {
-    withTempDir((dir) => {
-      writeRegister(dir, "_default", JSON.stringify({ entries: {} }));
-      const result = runCli(["status", "findings-cleanup", "p1", "--harness", dir]);
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("findings-cleanup p1: OK");
     });
   });
 
-  test("missing project register fails with exit 1", () => {
+  test("a missing store fails closed instead of passing as no findings (exit 1)", () => {
     withTempDir((dir) => {
       const result = runCli(["status", "findings-cleanup", "p1", "--harness", dir]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("project register not found");
+      expect(result.stderr).toContain("store.not-initialized");
     });
   });
 
-  test("invalid --mode is a usage error (exit 1)", () => {
+  test("invalid --mode is refused before any store access (exit 1)", () => {
     withTempDir((dir) => {
-      writeRegister(dir, "_default", REGISTER_CLEANUP_ALLOW_PASS);
       const result = runCli(["status", "findings-cleanup", "p1", "--harness", dir, "--mode", "bogus"]);
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("invalid --mode bogus");
@@ -2210,229 +2167,36 @@ describe("mstar status findings-cleanup — project-register cleanup-mode gate (
 });
 
 // ---------------------------------------------------------------------------
-// mstar status backlog-register / backlog-close — project-register backlog
+// mstar status backlog-register / backlog-close — removed in G2b
 // ---------------------------------------------------------------------------
 
-/** Local calendar date YYYY-MM-DD — same convention as the CLI's `registered_at` fill.
- *
- * Computed in the SAME frame `cliEnv()` pins the CLI child to (ambient `TZ`
- * when set, else UTC) — never the test process's own local zone. That frame
- * is runner-version-dependent when `TZ` is unset (bun <1.4 ran the test
- * process in the system zone; bun >=1.4 pins UTC), so a strict comparison
- * against the process-local date failed whenever the two frames straddled
- * the local calendar-day boundary (00:00–08:00 in positive-offset zones) —
- * the PR #243 backlog register/close flakes. */
-function todayInChildFrame(): string {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: process.env.TZ ?? "UTC",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date());
-  const get = (type: string): string => parts.find((part) => part.type === type)!.value;
-  return `${get("year")}-${get("month")}-${get("day")}`;
-}
-
-/** One deferred-PR residual JSON string (nine fields; provenance is CLI-filled). */
-function backlogEntryJson(id: string, pr: string): string {
-  return JSON.stringify({
-    id,
-    title: `pr-deep-review ${pr}`,
-    severity: "low",
-    source: "pr-deep-review batch input",
-    scope: `deep review of ${pr} in a new pr-deep-review session`,
-    decision: "defer",
-    owner: "project-manager",
-    target: "next session",
-    tracking: "pr-deep-review backlog",
-  });
-}
-
-/** Read `projects/<id>/residuals.json` under `dir` as a parsed object. */
-function readRegister(dir: string, projectId = "_default"): Record<string, unknown> {
-  return JSON.parse(readFileSync(join(dir, "projects", projectId, "residuals.json"), "utf8")) as Record<string, unknown>;
-}
-
-describe("mstar status backlog-register — project-register backlog append (engine-backed)", () => {
-  test("valid --entry JSON registers entries under the used key, prints the key, exit 0", () => {
-    withTempDir((dir) => {
-      const key = "pr-deep-review-2026-08-26";
-      const result = runCli([
-        "status", "backlog-register", "--harness", dir, "--key", key,
-        "--entry", backlogEntryJson(`${key}-1`, "owner/repo#123"),
-        "--entry", backlogEntryJson(`${key}-2`, "owner/repo#456"),
-      ]);
-      expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain(`under key ${key}`);
-      expect(result.stderr).toBe("");
-
-      const register = readRegister(dir);
-      const entries = (register.entries as Record<string, unknown[]>)[key] as Array<Record<string, unknown>>;
-      expect(entries).toHaveLength(2);
-      for (const entry of entries) {
-        for (const field of ["id", "title", "severity", "source", "scope", "decision", "owner", "target", "tracking", "source_plan", "registered_at"]) {
-          expect(entry).toHaveProperty(field);
-        }
-        expect(entry.source_plan).toBe(key);
-        expect(entry.registered_at).toBe(todayInChildFrame());
-      }
-      expect(validateProjectRegister(register).ok).toBe(true);
+describe("mstar status backlog-register / backlog-close — retired verbs name the replacement", () => {
+  for (const [verb, replacement] of [
+    ["backlog-register", "plan issue-add"],
+    ["backlog-close", "plan issue-close"],
+  ] as const) {
+    test(`${verb}: refuses with the migration path and writes no register (exit 1)`, () => {
+      withTempDir((dir) => {
+        const result = runCli(["status", verb, "--harness", dir, "--key", "k1", "--entry", "{}", "--id", "x"]);
+        expect(result.exitCode).toBe(1);
+        expect(result.stderr).toContain(`status ${verb}: removed`);
+        expect(result.stderr).toContain(`mstar ${replacement}`);
+        expect(existsSync(join(dir, "projects"))).toBe(false);
+      });
     });
-  });
-
-  test("missing --project defaults to _default", () => {
-    withTempDir((dir) => {
-      const key = "pr-deep-review-2026-08-26";
-      const result = runCli([
-        "status", "backlog-register", "--harness", dir, "--key", key,
-        "--entry", backlogEntryJson(`${key}-1`, "owner/repo#123"),
-      ]);
-      expect(result.exitCode).toBe(0);
-      const register = readRegister(dir, "_default");
-      expect((register.entries as Record<string, unknown[]>)[key]).toHaveLength(1);
-    });
-  });
-
-  test("no --entry is rejected with a clear error (exit 1)", () => {
-    withTempDir((dir) => {
-      const result = runCli(["status", "backlog-register", "--harness", dir, "--key", "k1"]);
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("at least one --entry is required");
-    });
-  });
-
-  test("invalid --entry JSON is rejected (exit 1)", () => {
-    withTempDir((dir) => {
-      const result = runCli(["status", "backlog-register", "--harness", dir, "--key", "k1", "--entry", "{not json"]);
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("not valid JSON");
-    });
-  });
-
-  test("explicit --project <non-_default> registers + validates under the given project id (exit 0)", () => {
-    withTempDir((dir) => {
-      const key = "pr-deep-review-2026-08-26";
-      const result = runCli([
-        "status", "backlog-register", "--harness", dir, "--project", "myproj", "--key", key,
-        "--entry", backlogEntryJson(`${key}-1`, "owner/repo#123"),
-      ]);
-      expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain(`under key ${key}`);
-      expect(result.stderr).toBe("");
-
-      const register = readRegister(dir, "myproj");
-      const entries = (register.entries as Record<string, unknown[]>)[key] as Array<Record<string, unknown>>;
-      expect(entries).toHaveLength(1);
-      expect(validateProjectRegister(register).ok).toBe(true);
-    });
-  });
-
-  test("--project ../evil is rejected by the id sanitizer (exit 1, no write)", () => {
-    withTempDir((dir) => {
-      const result = runCli([
-        "status", "backlog-register", "--harness", dir, "--project", "../evil", "--key", "k1",
-        "--entry", backlogEntryJson("k1-1", "owner/repo#123"),
-      ]);
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("invalid project id");
-    });
-  });
-
-  test("--project /abs is rejected by the id sanitizer (exit 1, no write)", () => {
-    withTempDir((dir) => {
-      const result = runCli([
-        "status", "backlog-register", "--harness", dir, "--project", "/abs", "--key", "k1",
-        "--entry", backlogEntryJson("k1-1", "owner/repo#123"),
-      ]);
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("invalid project id");
-    });
-  });
+  }
 });
 
-describe("mstar status backlog-close — project-register backlog close (engine-backed)", () => {
-  test("closes the entry in place (lifecycle resolved + closed_at + closure_note), exit 0", () => {
-    withTempDir((dir) => {
-      const key = "pr-deep-review-2026-08-26";
-      const id = `${key}-1`;
-      const registerResult = runCli([
-        "status", "backlog-register", "--harness", dir, "--key", key,
-        "--entry", backlogEntryJson(id, "owner/repo#123"),
-      ]);
-      expect(registerResult.exitCode).toBe(0);
-
-      const result = runCli(["status", "backlog-close", "--harness", dir, "--key", key, "--id", id]);
-      expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain(`resolved entry ${id}`);
-
-      const register = readRegister(dir);
-      const entry = ((register.entries as Record<string, unknown[]>)[key] as Array<Record<string, unknown>>)[0];
-      expect(entry.lifecycle).toBe("resolved");
-      expect(entry.closed_at).toBe(todayInChildFrame());
-      expect(entry.closure_note).toBe("closed by backlog close");
-      expect(validateProjectRegister(register).ok).toBe(true);
-    });
-  });
-
-  test("absent entry id fails loud (exit 1)", () => {
-    withTempDir((dir) => {
-      const key = "pr-deep-review-2026-08-26";
-      const registerResult = runCli([
-        "status", "backlog-register", "--harness", dir, "--key", key,
-        "--entry", backlogEntryJson(`${key}-1`, "owner/repo#123"),
-      ]);
-      expect(registerResult.exitCode).toBe(0);
-
-      const result = runCli(["status", "backlog-close", "--harness", dir, "--key", key, "--id", "no-such-id"]);
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("not found");
-    });
-  });
-
-  test("closing an already-resolved entry is a no-op re-stamp (exit 0, stays resolved) — engine behavior", () => {
-    withTempDir((dir) => {
-      const key = "pr-deep-review-2026-08-26";
-      const id = `${key}-1`;
-      const registerResult = runCli([
-        "status", "backlog-register", "--harness", dir, "--key", key,
-        "--entry", backlogEntryJson(id, "owner/repo#123"),
-      ]);
-      expect(registerResult.exitCode).toBe(0);
-
-      const first = runCli(["status", "backlog-close", "--harness", dir, "--key", key, "--id", id]);
-      expect(first.exitCode).toBe(0);
-
-      const second = runCli(["status", "backlog-close", "--harness", dir, "--key", key, "--id", id]);
-      expect(second.exitCode).toBe(0);
-      expect(second.stdout).toContain(`resolved entry ${id}`);
-
-      const register = readRegister(dir);
-      const entry = ((register.entries as Record<string, unknown[]>)[key] as Array<Record<string, unknown>>)[0];
-      expect(entry.lifecycle).toBe("resolved");
-      expect(validateProjectRegister(register).ok).toBe(true);
-    });
-  });
-
-  test("backlog-close --project ../evil is rejected by the id sanitizer (exit 1)", () => {
-    withTempDir((dir) => {
-      const result = runCli([
-        "status", "backlog-close", "--harness", dir, "--project", "../evil", "--key", "k1", "--id", "x",
-      ]);
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("invalid project id");
-    });
-  });
-});
 // ---------------------------------------------------------------------------
-// mstar status archive-residuals — removed in v3 (audit-004 cutover)
+// mstar status archive-residuals — removed (audit-004 cutover, re-pointed G2b)
 // ---------------------------------------------------------------------------
 
 describe("mstar status archive-residuals — removed command names the replacement", () => {
-  test("invocation errors and names the project-register replacement (exit 1)", () => {
+  test("invocation errors and names the issue-store replacement (exit 1)", () => {
     const result = runCli(["status", "archive-residuals"]);
     expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain("status archive-residuals: removed in v3");
-    expect(result.stderr).toContain("projects/<id>/residuals.json");
+    expect(result.stderr).toContain("status archive-residuals: removed");
+    expect(result.stderr).toContain("mstar plan issue-close");
   });
 });
 
