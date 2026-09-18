@@ -36,11 +36,19 @@ That command executes the CLI’s Bun-shebang bin, so it needs **Bun >=1.4.0** o
 
 The plugin resolves **only paths inside this package** — not `process.cwd()/skills`, so your app repo root does not affect harness loading.
 
-## Status write lint (hook coverage)
+## Coordination-write gate (hook coverage)
 
-The plugin registers a non-blocking `tool.execute.before` lint for `write`/`edit` tools that target `{HARNESS_DIR}/status.json`: the about-to-be-written (or current on-disk) document is validated against the engine `status.validateStatus` schema and violations are logged as warnings. The hook never blocks and never modifies the write.
+The plugin registers a `tool.execute.before` hook for `write`/`edit` tools that target harness coordination documents. It routes the target through the engine's DB-aware authority route before any document validation:
 
-Hook coverage follows the engine `resolveHarnessDir` resolution — a repo `.mstarc` `[config] harness_dir` (gitignored local config), else the probe order (`.mstar/` → `.agents/` → `.plans/`/`plans/` walking up from the target file). Repos whose harness root is not one of those names are **not** auto-discovered: set **`MSTAR_HARNESS_DIR`** in the OpenCode server environment (absolute path to the harness root) or declare it in `.mstarc` to enable the lint for such repos.
+- a direct write to the issue/catalog store (`{HARNESS_DIR}/store.db`, `-wal`, `-shm`) is **refused** (`store.direct-write-refused`);
+- a write to a retired project register while the store is the **active** authority is **refused** (`project.register.retired`); before activation (no store, or a staged store) the register keeps its ordinary shape validation;
+- an authority the route cannot read — below-floor runtime, missing `node:sqlite`, or a corrupt/busy store — **fails closed** (`store.authority-unavailable`, carrying the engine's own refusal code).
+
+Those three refusals are **unconditional**: they ignore the soft/hard enforcement axis, because re-creating a retired authority is not a document-validity question. Everything else keeps the original behaviour — `{HARNESS_DIR}/status.json` / snapshot writes are validated against the engine schema and reported as warnings, soft-enforced writes pass silently, and the hook never modifies a write.
+
+**Known limitation (host channel).** OpenCode's plugin API has no abort channel for `tool.execute.before`, so a refusal is surfaced as an error log with `hardBlocked: true` set in-process rather than as a blocked tool call. The decision is still made and still fails closed; hosts with a real block channel (omp, ZCode) enforce it. When OpenCode gains a refusal channel, the existing `hardBlocked` result is what gets wired to abort.
+
+Hook coverage follows the engine `resolveHarnessDir` resolution — a repo `.mstarc` `[config] harness_dir` (gitignored local config), else the probe order (`.mstar/` → `.agents/` → `.plans/`/`plans/` walking up from the target file). Repos whose harness root is not one of those names are **not** auto-discovered: set **`MSTAR_HARNESS_DIR`** in the OpenCode server environment (absolute path to the harness root) or declare it in `.mstarc` to enable the gate for such repos. The store API is loaded lazily, so the plugin still mounts on an engine that predates it.
 
 ## Dispatch presence lint (hook coverage)
 

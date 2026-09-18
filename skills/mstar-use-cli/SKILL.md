@@ -47,7 +47,7 @@ Find the task, run the family, then read its owning skill for the rules around i
 | Read a plan row: revision, byte versions, scoped paths, operations allowed now | `mstar plan show` | `mstar-iteration` (scoped drive), `mstar-artifacts` (fields) |
 | Claim or resume a scoped session; bootstrap a coordinator session | `mstar plan bind` | `mstar-iteration` |
 | Register a reviewed Assignment and release its dependencies | `mstar plan prepare` | `mstar-iteration` |
-| Update progress; open / close a residual in this plan's bucket | `mstar plan progress`, `mstar plan residual-add`, `mstar plan residual-close` | `mstar-sdd`, `mstar-artifacts` |
+| Update progress; capture findings on this plan as linked issues; close one with its disposition | `mstar plan progress`, `mstar plan issue-add`, `mstar plan issue-close` | `mstar-sdd`, `mstar-project-governance` (capture contract) |
 | Finish a plan (handoff; row stays InReview) | `mstar plan handoff` | `mstar-sdd`, `mstar-artifacts` |
 | Transfer execution ownership / return a handoff | `mstar plan accept`, `mstar plan return` | `mstar-iteration` |
 | Run the pinned integration and record Done; recover a crashed attempt | `mstar plan integration-start`, `mstar plan integration-accept`, `mstar plan complete`, `mstar plan reconcile` | `mstar-branch-worktree`, `mstar-iteration` |
@@ -56,7 +56,8 @@ Find the task, run the family, then read its owning skill for the rules around i
 | Register an iteration workflow | `mstar iteration register` | `mstar-artifacts` (lifecycle semantics) |
 | Close one finished lifecycle (terminal snapshot + root unregister) | `mstar status workflow-close` | `mstar-iteration` (Phase 6) |
 | Validate a coordination document before trusting or replacing it | `mstar status validate` | `mstar-artifacts` |
-| Read the residual rollup; enforce a plan's findings-cleanup mode; register or close deferred backlog | `mstar status tech-debt`, `mstar status findings-cleanup`, `mstar status backlog-register`, `mstar status backlog-close` | `mstar-project-governance`, `mstar-artifacts` |
+| Read the open-issue rollup; enforce a plan's findings-cleanup mode over the issues linked to it | `mstar status tech-debt`, `mstar status findings-cleanup` | `mstar-project-governance`, `mstar-artifacts` |
+| Run the staged migration into the issue/catalog store, or its backup / activation / retirement | the `store` group (`migrate` / `backup` / `activate` / `retire`) | `mstar-conventions` (store authority vs execution JSON); group help owns verbs and flags |
 | Read or replace a coordination document | `mstar persist get`, `mstar persist list`, `mstar persist <kind>` | `mstar-artifacts` |
 | Land or check a QC seat report | `mstar qc validate-report` | `mstar-review-qc` |
 | Validate an Assignment before dispatch | `mstar dispatch validate` | `mstar-dispatch-gates` |
@@ -91,7 +92,7 @@ Take the rungs in order. Each one fails closed: a command that cannot establish 
 2. **Residency.** Coordinator verbs belong to the main worktree — or to the recorded integration worktree where a sequence says so. Product edits stay in the feature worktree; process documents stay in the control root.
 3. **cwd neutrality.** Git-derived checks derive the main worktree and branch facts from the process cwd. Run them from a neutral cwd so the derivation matches what the snapshot recorded.
 4. **Identity.** `--session <absolute-json>` names an engine-generated envelope obtained from the bind verb; the engine re-checks it against its document inside the write lock. There is no force, no takeover, no holder or role input, and no lease-release verb. A resume is read-only. Write credentials stay with the coordinator: a session envelope or a revision token never reaches a leaf executor's assignment.
-5. **Tokens.** Three kinds, never interchangeable: a row revision and a register version (both from `mstar plan show --json`), and a document byte version (`mstar persist get --versioned`, `mstar workflow show-prepare`).
+5. **Tokens.** Never interchangeable: a row revision and a snapshot byte version (both from `mstar plan show --json`), and the issue revision a scoped issue close echoes back as `--expect-issue` (from `mstar plan issue-add` or `mstar issue show`).
 6. **Re-read after a refusal.** Refusals are mutation-free; a stale token is recovered by reading again, never by forcing or retrying blind.
 
 Full treatment of every rung, including the failure each one produces: `references/preconditions.md`.
@@ -112,7 +113,7 @@ mstar persist get snapshot --key <workflow-id> --versioned
 mstar persist snapshot --key <workflow-id> --expect-version sha256:<64-hex> --file payload.json --session <coordinator-envelope>
 ```
 
-`status` always uses the key `root`; `residuals` takes the project id; replacing a coordinated snapshot also needs the coordinator envelope. For a document that does not exist yet the token is the literal `absent`.
+`status` always uses the key `root`; the `residuals` kind still reads the migrated project register but refuses a replacement — that register is migration history and open items are store issues. Replacing a coordinated snapshot also needs the coordinator envelope. For a document that does not exist yet the token is the literal `absent`.
 
 Plan completion, coordinator side, after the plan session handed off. The engine picks one of **two routes** from the workflow's own type and delivery kind — never from anchors that happen to be missing:
 
@@ -161,7 +162,7 @@ A CLI claim is proven when:
 | Open | When |
 |---|---|
 | `references/plan-and-workflow.md` | plan / workflow families: verb and role boundaries, refusal codes, JSON envelopes, the completion sequence, the CAS read-modify-write shape |
-| `references/status-and-registers.md` | `status.json` root, workflow snapshot and project register: write surfaces, protection levels, versioned replacement, close order, residual lifecycle |
+| `references/status-and-registers.md` | `status.json` root and workflow snapshot: write surfaces, protection levels, versioned replacement, close order; the retired residual register (migration history) and the store-issued open items that replaced it |
 | `references/checks-and-lints.md` | maintainer validators and lints that skill callouts cite: what each checks, its owning skill, its exit codes |
 | `references/preconditions.md` | harness-root resolution, control root vs feature worktree, neutral cwd, session identity, tokens, and how each missing precondition presents itself |
 

@@ -15,6 +15,12 @@ Parallel PM dispatch: read **`parallel-dispatch.md`** only when Codex exposes an
 - Role files under root `agents/` are for hosts that load OpenCode/Cursor-style agent shells; Codex uses `codex/agents/*.toml` and still loads `mstar-roles` references directly.
 - Tool and plugin availability can be lazy-loaded or session-dependent. Use the tools actually present in the current session; do not infer capability from documentation alone.
 
+## Runtime and upgrade
+
+- **Runtime**: this host ships no bundled store-backed entrypoint — skills mount as text and Morning Star role subagents are TOML agent files, so the floor belongs to whatever executes: a harness CLI invoked from a Codex session runs through the installed binary's entrypoint (Bun shebang → **Bun >=1.4.0**; an explicit `node <bundle>` → **Node >=24.18.0**). A below-floor or missing-capability refusal is actionable; there is no transport or JSON fallback.
+- **Upgrade / reload**: re-run the project or global CLI install (`mstar-harness init --target codex --scope <global|project>`) so the installed skills and `~/.codex/agents/` (or project `.codex/agents/`) TOML files are rewritten, then start a new session. Verify install health with `mstar-harness doctor --target codex --scope <global|project>`.
+- **Readiness, not an action**: refreshing an *installed* copy is a bounded, authorized ops act — an authority flip first quiesces, then reloads/upgrades (or explicitly excludes) every installed reader/writer and attests the versions it saw. Editing harness docs or source performs none of it. If this host cannot reload safely, stop at the exact manual-restart step, have the user restart, then re-verify entrypoint/runtime/version/session identity read-only before the flip.
+
 ## Skill loading
 
 1. Read `mstar-harness-core`.

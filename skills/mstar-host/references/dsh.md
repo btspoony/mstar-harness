@@ -123,6 +123,12 @@ or a custom profile).
   verification or user-restart GUI acceptance belongs to an explicitly requested
   independent **`mstar-e2e`** workflow (`/amazing-e2e-check`), never an iteration QA gate.
 
+## Runtime and upgrade
+
+- **Runtime**: Bun-hosted host — the plugin, its gates and its in-process engine all run under dsh's Bun, floor **Bun >=1.4.0** with in-process native `node:sqlite`. Release-surface `enforcement` / `.mstarc` settings (see § Configuration) are gates, not a runtime floor: below-floor or missing-capability refuses actionably instead of degrading to a transport or JSON.
+- **Upgrade / reload**: `dsh plugin --profile web add <spec>` against the published version, or re-run `npx @mstar-harness/cli init --target dsh`; then reload the profile so the composed rows pick up the new build. The bundled `harness-skills/` mirror is a build-time sync — a checkout that has not run `bundle-assets` mounts no skills.
+- **Readiness, not an action**: refreshing an *installed* copy is a bounded, authorized ops act — an authority flip first quiesces, then reloads/upgrades (or explicitly excludes) every installed reader/writer and attests the versions it saw. Editing harness docs or source performs none of it. If this host cannot reload safely, stop at the exact manual-restart step, have the user restart, then re-verify entrypoint/runtime/version/session identity read-only before the flip.
+
 ## Skill loading
 
 1. On entry: invoke **`pm`** (skill name via the mstar provider) → **Read
@@ -164,7 +170,8 @@ The plugin wires the engine gates on dsh seams (all in-process):
 
 | Gate | Seam | Hard-mode channel |
 |------|------|-------------------|
-| Status gate | `fs/write-intent` + `fs/edit-intent` on `{HARNESS_DIR}/status.json` | repair-escape advisory (never vetoes the repairing write) |
+| Status gate | `fs/write-intent` + `fs/edit-intent` on `{HARNESS_DIR}/status.json` | repair-escape advisory (never vetoes the repairing write) — **except** the store-authority refusal class below |
+| Store authority in the status gate | inside the status gate's document classification (register kind, snapshot cleanup extension) | **typed veto under hard, and no repair escape**: when the findings-cleanup verdict cannot be read because the issue authority is missing (`store.not-initialized`), staged (`store.not-active`), corrupt, below-floor or busy, the write is vetoed (`status.veto` / `findings.cleanup-authority-unavailable`) — the repair is a store command (`mstar store init|upgrade|migrate`), never a document write |
 | Dispatch gate | `tools/pre-execute` on the `subagent` tool | `PreToolDecision { kind: 'deny', reason }` |
 | Lease gate | inside the dispatch gate (SDD / InProgress dispatches) | deny under hard |
 | Worktree L1/L2 | inside the dispatch gate | deny under hard |
@@ -177,13 +184,17 @@ flag, the repo `.mstarc` `[config] enforcement`, or the iteration compass
 frontmatter — escalates dispatch violations to
 a real veto; status/skill-lint writes are never hard-vetoed because the intent
 waterfall is content-blind (an already-invalid document is allowed as a
-repair escape). Config / `.mstarc` `soft` are the local rollbacks. Hard gates
-are never a global default.
+repair escape) — **except** the status gate's store-authority refusal class,
+whose veto rests on the authority being unreadable rather than on the
+document's content, so no content can repair it. The register kind itself
+stays synchronous shape validation: a project register is migration history,
+and a retired path is not a lookup. Config / `.mstarc` `soft` are the local
+rollbacks. Hard gates are never a global default.
 
 Every composed agent step carries ONE **`<mstar_engine_status>`** catalog
 message: the watermark (unified mstar version, harness dir, enforcement),
 the iteration phase-gate section when a steering compass resolved, and the
-workspace-state digest section (plan registry, open residuals,
+workspace-state digest section (plan registry, open issues from the store rollup,
 branch/policy anchors, active leases, knowledge digest, compass direction)
 when the workspace has a `status.json`. The row is digest-gated (once per
 turn, re-injected only when it changed) over one per-workspace TTL-cached

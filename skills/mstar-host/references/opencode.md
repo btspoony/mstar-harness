@@ -19,6 +19,13 @@ Parallel PM dispatch: **`parallel-dispatch.md`** (read in dispatch rounds).
 - **Named role subagents**: Morning Star roles configured under `opencode.json` `agent.<id>` — PM must **call the task tool** with **`subagent`** set to that agent id. Assignment Markdown alone does not open subagent sessions.
 - **Per-role models**: configurable per subagent in `opencode.json`.
 
+## Runtime and upgrade
+
+- **Runtime**: the published plugin is a `--target node` bundle that runs inside OpenCode's own Node process — floor **Node >=24.18.0** with in-process native `node:sqlite`. The store API is loaded lazily, so a plugin on an engine without the store surface still mounts (load), while a store-backed check refuses with upgrade guidance rather than dropping the gate. Below-floor or missing-capability refuses actionably; there is no transport or JSON fallback.
+- **Upgrade / reload**: change the plugin specifier in `opencode.json` (or re-run the installer CLI), then restart OpenCode. A harness **source** edit is not an install: the running plugin keeps serving its installed build until that restart.
+- **Readiness, not an action**: refreshing an *installed* copy is a bounded, authorized ops act — an authority flip first quiesces, then reloads/upgrades (or explicitly excludes) every installed reader/writer and attests the versions it saw. Editing harness docs or source performs none of it. If this host cannot reload safely, stop at the exact manual-restart step, have the user restart, then re-verify entrypoint/runtime/version/session identity read-only before the flip.
+- **Refusal channel (known limitation)**: this plugin's `tool.execute.before` wiring has no abort channel in the OpenCode plugin API, so an authority refusal (a direct `store.db` write, a retired register, an unreadable authority) is reported as an error log with `hardBlocked: true` set in-process rather than as a blocked tool call. The decision is still made and still fails closed — only the enforcement surface is advisory here. When OpenCode exposes a refusal channel, the decision is already in the right place to be wired to abort.
+
 ## PM dispatch (task tool + subagent)
 
 Harness **dispatch** on OpenCode = **one or more `task` tool calls**, each with **`subagent: <agent-id>`** (read the tool schema every session). N-parallel / 1-Assignment-1-invoke / paste-only mechanics → **`parallel-dispatch.md`**.

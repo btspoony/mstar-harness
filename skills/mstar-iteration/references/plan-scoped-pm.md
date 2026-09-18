@@ -4,7 +4,7 @@
 
 - Command frontmatter/argument surface → **`commands/iteration-drive.md`**
 - Executable flags, exit codes, JSON envelopes → **`mstar-use-cli`**（CLI owner）
-- `coordination` / session / handoff / revision fields and row/register ownership → **`mstar-artifacts/references/status-and-residuals.md`**（sole runtime schema home）
+- `coordination` / session / handoff / revision fields and row/issue ownership → **`mstar-artifacts/references/status-and-residuals.md`**（sole runtime schema home）
 - Portable primary Assignment header → **`mstar-roles/references/project-manager/dispatch-and-assignment.md`**
 - Dispatch mechanics, isolation gates → **`mstar-dispatch-gates`**, **`mstar-sdd`**, **`mstar-branch-worktree`**
 
@@ -53,19 +53,19 @@ Scoped boot does **not** load `mstar-compound` or the Phase 3–6 detail files m
    mstar plan show --session <coordinator-session.json> --plan <id> [--json]
    ```
 
-   `show` returns the selected row, resolved scoped paths, `allowed_operations`, snapshot byte version and project-register byte version, and `revision`. It never returns an editable sibling snapshot. A plan session passes no `--plan`; a coordinator session requires it.
+   `show` returns the selected row, resolved scoped paths, `allowed_operations`, the snapshot byte version, and `revision`. It never returns an editable sibling snapshot. A plan session passes no `--plan`; a coordinator session requires it.
 4. **Constrain everything that follows to that scope**: loaded skills, dispatched child inputs, session backlog, goal text, session todos, STOP conditions, and every writable path.
 5. **Stale input stops.** If a later `show` reports the Assignment hash changed, the session/scope/holder no longer matches, or the revision is behind, stop and report — do not re-bind silently and do not fall back to generic iteration drive.
 
 ## 3. Scope boundary (writable surface)
 
-A scoped actor writes **only its own row and its registered project residual bucket**. Concretely:
+A scoped actor writes **only its own row and the issues linked to it that it captures or closes**. Concretely:
 
 | Permitted | Forbidden |
 |---|---|
 | row `coordination.*`（`prepared` / `progress` / `handoff`）, row `status`, row `revision`, retained `metadata.working_branch` / `metadata.worktree_path` / `metadata.track_branches` | sibling rows, lifecycle anchors, snapshot `branch` / `integration_worktree_path` / `execution_policy`, `compass_ref` |
-| `entries[<planId>]` in `projects/<project-id>/residuals.json` via `residual-add` / `residual-close` | other register buckets, the v2 root `status.json` register, shared indexes (`{KNOWLEDGE_DIR}` / `{ITERATION_DIR}`), iteration PR, Phase 3–6 |
-| `progress` / `residual-add` / `residual-close` / `handoff`（plan session） | any raw `writeWorkflowSnapshot` / direct snapshot or register edit, `--force`, arbitrary holder input, takeover, a lease-release verb |
+| issues in `{HARNESS_DIR}/store.db` linked to this plan, via `issue-add` / `issue-close` | any other plan's issues, the retired `projects/<project-id>/residuals.json` register bucket, the v2 root `status.json` register, shared indexes (`{KNOWLEDGE_DIR}` / `{ITERATION_DIR}`), iteration PR, Phase 3–6 |
+| `progress` / `issue-add` / `issue-close` / `handoff`（plan session） | any raw `writeWorkflowSnapshot` / direct snapshot or register edit, `--force`, arbitrary holder input, takeover, a lease-release verb |
 
 Field semantics, ownership and lock rules → **`mstar-artifacts/references/status-and-residuals.md`**（「Plan coordination」）.
 
@@ -83,14 +83,15 @@ Drive the bound plan with the **existing** SDD / gate machinery; scope is inheri
    ```
 
    Allowed transitions: `InProgress` → `InProgress|InReview|Blocked`; `Blocked` → `Blocked|InProgress`; `InReview` → `InReview|InProgress|Blocked` **before handoff**. Never `Todo`/`Done`, never lease removal.
-5. **Residuals**（findings cleanup mode from the Assignment）:
+5. **Findings**（cleanup mode from the Assignment）: capture each finding as an issue **linked to this plan**, and close one with its disposition:
 
    ```bash
-   mstar plan residual-add   --session <plan-session> --file <absolute-json-path> --expect <revision> --expect-register <version> [--json]
-   mstar plan residual-close --session <plan-session> --entry <id> --note <text> --expect <revision> --expect-register <version> [--json]
+   mstar plan issue-add   --session <plan-session> --file <absolute-json-path> --expect <revision> [--json]
+   mstar plan issue-close --session <plan-session> --issue <id> --disposition <resolved|waived|duplicate|superseded> \
+     --file <absolute-json-path> --expect-issue <issue-revision> --expect <revision> [--json]
    ```
 
-   Register ownership, entry provenance and the fail-loud validation handoff → **`mstar-artifacts/references/status-and-residuals.md`**.
+   The capture contract — who captures, the idempotence by source identity, and the migration mapping for the retired register — is **`mstar-project-governance`「Issue capture」**; each report names the DB-assigned issue ids and revisions. The retired `residual-add` / `residual-close` verbs refuse and write nothing.
 
 **Backlog / goals / todos / STOP are plan-local**: the session backlog is this plan's tasks; goal text covers **this plan's** flow only（`mstar-host` § `/goal` directive）; todos are the plan's task list, and no global phase entry（Phase 3/PR/compound）is seeded; the STOP is the handoff in §5, not plan `Done`.
 
@@ -106,7 +107,7 @@ mstar plan handoff --session <plan-session> --file <absolute-json-path> --expect
 - The handoff record is immutable; the plan keeps its `execution_lease` and stays **`InReview`**.
 - **Then STOP the scoped session.** Handoff is the scoped finish line. Do **not** set `Done`, do **not** delete `execution_lease`, do **not** open Phase 3 / PR, do **not** run compound, and do **not** treat "last unfinished plan" as an exception that advances the iteration.
 - A user asking to mark `Done` before integration is rejected: `Done` + lease release is the coordinator's atomic completion after a verified merge（§6）.
-- After handoff, further `progress` / `residual-*` mutations are rejected by the engine until a coordinator `return`; the session reports the handoff id and waits.
+- After handoff, further `progress` / `issue-add` / `issue-close` mutations are rejected by the engine until a coordinator `return`; the session reports the handoff id and waits.
 
 ## 6. Coordinator sequence（one coordinator seat per workflow）
 
@@ -149,7 +150,7 @@ mstar plan reconcile         --session <coordinator-session> --plan <id> --hando
 - `--expect` is the nonnegative row `coordination.revision` from `show`（absent coordination = 0）— **not** the snapshot `schema_version` or a date.
 - Every mutating row verb requires it. A sibling row's mutation does not change this row's revision; same-row stale input fails `coordination.version-conflict`.
 - After any successful changed row mutation the revision increments **once**; a no-op replay does not increment it. The precondition is still checked on replay, so a stale retry first refreshes with `show`.
-- `bind` is the only exception（§2）. Document/register byte versions are separate CAS values（`--expect-register`, `--expect-version`）and never substitute for the row revision.
+- `bind` is the only exception（§2）. The snapshot byte version（`--expect-version`）and the issue revision（`--expect-issue`）are separate CAS values and never substitute for the row revision.
 
 ## 8. Sessions and credentials
 

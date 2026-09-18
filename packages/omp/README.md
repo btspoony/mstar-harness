@@ -26,7 +26,7 @@ Maintainers / local checkouts: `omp plugin link /path/to/mstar-harness/packages/
 
 | Path in package | Contents |
 |-----------------|----------|
-| `hooks/pre/mstar-gates.js` | `tool_call` pre-hook — blocking enforcement gate for harness coordination-document writes and task dispatches |
+| `hooks/pre/mstar-gates.js` | `tool_call` pre-hook — blocking enforcement gate for harness coordination-document writes and task dispatches. Its issue-authority refusals are **unconditional** in every enforcement mode: a direct write to `{HARNESS_DIR}/store.db` (`-wal`/`-shm` included), a write to a retired project register while the store is the active authority, and an unreadable authority (below-floor runtime, missing `node:sqlite`, corrupt or busy store — fails closed) |
 | `extensions/model-handoff.js` | Coordinator model-handoff extension (native opt-in settings `modelHandoff` / `handoffTarget`, tool `mstar_model_handoff`) — off by default; see below |
 | `extensions/phase2-orchestration.js` | Phase-2 orchestration extension (native launch opt-in `phase2PlanInstances` / `maxPlanInstances`, tool `mstar_phase2`) — extras off by default; see below |
 | `tools/mstar_*.js` | Six model-callable validator tools (`mstar_status_validate`, `mstar_dispatch_validate`, `mstar_lease_verify`, `mstar_path_resolve`, `mstar_iteration_gate`, `mstar_worktree_check`) |

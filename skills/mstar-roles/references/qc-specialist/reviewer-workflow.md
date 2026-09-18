@@ -10,7 +10,7 @@ Extension of `references/qc-specialist-shared.md`. Read when dispatched as `qc-s
 |----------------|-------------------------|
 | Diff / `git show` / read / grep reasoning | Run test suites or builds |
 | Flag missing or weak tests **in the change** | Re-execute implementer TDD or CI |
-| Structured findings + verdict | Close residuals or mark plan `Done` (L4 / PM) |
+| Structured findings + verdict | Close issues or mark plan `Done` (L4 / PM) |
 | Optional deep lenses (`deep-review-lenses.md`) | Substitute for `qa-engineer` acceptance |
 
 Layer SSOT → `mstar-review-qc/references/review-responsibility-boundaries.md`.
@@ -30,7 +30,7 @@ Layer SSOT → `mstar-review-qc/references/review-responsibility-boundaries.md`.
 3. Re-verify branch vs **`Working branch` / `Branch policy`** before concluding.
 4. **Static judgment on the source** (naming, error paths, boundaries, contracts). Default tooling = read/grep only. **Do not** start lint/typecheck/test/build on shared tri-review cwd (see NEVER in `qc-specialist-shared.md`).
 5. Apply only the **`reviewer-checklist.md`** items affected by the diff. Reuse unchanged L2 evidence; re-review only the assigned findings and fix delta. **Stop** when the assigned review questions are answered or the Assignment **`Budget`** is reached (default → `mstar-harness-core` § 定向执行与验证边界) — no repo-wide tracing to "be sure". A budget stop keeps the verdict and records `Truncated coverage:` in `## Scope`; it is never a reason to emit `Unconfirmed`.
-6. Produce structured findings with severity and evidence. PM maps report sections to register **`severity`** (`projects/<id>/residuals.json` → `entries[<plan-id>]`) per `mstar-artifacts/references/status-and-residuals.md` — do not invent non-canonical severity strings.
+6. Produce structured findings with severity and evidence. PM maps report sections to the machine **`severity`** of the issue it captures for that finding (`{HARNESS_DIR}/store.db`) per `mstar-artifacts/references/status-and-residuals.md` — do not invent non-canonical severity strings.
 7. **Write report:** Write `.md` to the Assignment-provided `{SDD_DIR}/review/` report path. Do not commit raw bundle reports unless Assignment explicitly says `Review archive mode: tracked reports`.
 8. **No stall:** When done, emit **Completion Report** in the same turn — no “notify PM?” choosers.
 
