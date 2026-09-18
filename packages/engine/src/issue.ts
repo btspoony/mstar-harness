@@ -1192,10 +1192,10 @@ export async function linkIssue(
 ): Promise<IssueReceipt> {
   knownRole(mutation.actor);
   if ("relation" in link) {
-    if (!RELATIONS[link.relation]) {
+    if (!Object.hasOwn(RELATIONS, link.relation)) {
       throw new IssueError("issue.scope-refused", "relation is not a contract vocabulary value");
     }
-  } else if (!PROVENANCE_KINDS[link.kind]) {
+  } else if (!Object.hasOwn(PROVENANCE_KINDS, link.kind)) {
     throw new IssueError("issue.scope-refused", "provenance kind is not a contract vocabulary value");
   }
   if ("kind" in link && (link.kind === "plan" || link.kind === "iteration")) {

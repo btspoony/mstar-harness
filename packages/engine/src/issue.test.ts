@@ -753,6 +753,32 @@ describe("disposition revision relation authorization", () => {
     expect((await getIssue(context, created.issueId)).provenance.every((row) => row.kind === "capture")).toBe(true);
   });
 
+  test("inherited Object.prototype keys are refused as relation and provenance kind", async () => {
+    const context = ctx("relation-inherited-");
+    await initializeStore(context).then((h) => h.close());
+    const created = await captureIssue(context, baseInput(), mut("cap-inherited"));
+    await expect(
+      linkIssue(
+        context,
+        created.issueId,
+        { relation: "toString", issueId: "I-000002" } as unknown as IssueLink,
+        pmMut("bad-rel-proto", { expectedRevision: created.revision }),
+      ),
+    ).rejects.toMatchObject({ code: "issue.scope-refused" });
+    await expect(
+      linkIssue(
+        context,
+        created.issueId,
+        { kind: "constructor", target: "T-1" } as unknown as IssueLink,
+        pmMut("bad-kind-proto", { expectedRevision: created.revision }),
+      ),
+    ).rejects.toMatchObject({ code: "issue.scope-refused" });
+    const after = await getIssue(context, created.issueId);
+    expect(after.relations).toEqual([]);
+    expect(after.provenance.every((row) => row.kind === "capture")).toBe(true);
+    expect(after.revision).toBe(created.revision);
+  });
+
   test("C3 verbs are reachable through the engine entrypoint", async () => {
     expect(typeof triageIssueFromIndex).toBe("function");
     expect(typeof closeIssueFromIndex).toBe("function");
