@@ -1,5 +1,5 @@
 /**
- * issue.test.ts — C2 proof: capture identity, occurrences and public reads.
+ * issue.test.ts — C2/C3 proof: capture, occurrences, reads, disposition.
  */
 import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -12,9 +12,12 @@ import {
   IssueError,
   appendOccurrence,
   captureIssue,
+  closeIssue,
   computeIdentityKey,
   getIssue,
+  linkIssue,
   listIssues,
+  triageIssue,
   type CaptureInput,
   type MutationContext,
 } from "./issue.js";
@@ -382,5 +385,281 @@ describe("failed capture leaves no partial finding", () => {
     await expect(captureIssue(context, baseInput({ title: "  " }), mut("bad"))).rejects.toBeInstanceOf(IssueError);
     const page = await listIssues(context, { disposition: "open" });
     expect(page.total).toBe(0);
+  });
+});
+
+function pmMut(operationId: string, extra: Partial<MutationContext> = {}): MutationContext {
+  return { operationId, actor: "project-manager", ...extra };
+}
+
+describe("disposition revision relation authorization", () => {
+  test("stale revision leaves issue and history unchanged", async () => {
+    const context = ctx("revision-stale-");
+    await initializeStore(context).then((h) => h.close());
+    const created = await captureIssue(context, baseInput(), mut("cap-1"));
+    await expect(
+      closeIssue(
+        context,
+        created.issueId,
+        "resolved",
+        { reason: "fixed", references: ["qa.md"] },
+        pmMut("close-stale", { expectedRevision: 0 }),
+      ),
+    ).rejects.toMatchObject({ code: "issue.revision-conflict" });
+    const detail = await getIssue(context, created.issueId);
+    expect(detail.disposition).toBe("open");
+    expect(detail.revision).toBe(created.revision);
+    expect(detail.transitions).toEqual([]);
+  });
+
+  test("unauthorized closure leaves issue and history unchanged", async () => {
+    const context = ctx("authorization-close-");
+    await initializeStore(context).then((h) => h.close());
+    const created = await captureIssue(context, baseInput(), mut("cap-2"));
+    await expect(
+      closeIssue(
+        context,
+        created.issueId,
+        "resolved",
+        { reason: "looks good", references: ["note"] },
+        { operationId: "close-leaf", actor: "fullstack-dev", expectedRevision: created.revision },
+      ),
+    ).rejects.toMatchObject({ code: "issue.scope-refused" });
+    await expect(
+      closeIssue(
+        context,
+        created.issueId,
+        "resolved",
+        { reason: "looks good", references: ["note"] },
+        { operationId: "close-arbitrary", actor: "root", expectedRevision: created.revision },
+      ),
+    ).rejects.toMatchObject({ code: "issue.scope-refused" });
+    const detail = await getIssue(context, created.issueId);
+    expect(detail.disposition).toBe("open");
+    expect(detail.transitions).toEqual([]);
+  });
+
+  test("valid closure records the exact evidence", async () => {
+    const context = ctx("disposition-evidence-");
+    await initializeStore(context).then((h) => h.close());
+    const created = await captureIssue(context, baseInput(), mut("cap-3"));
+    const evidence = {
+      reason: "acceptance met in qa-run-9",
+      references: ["qa/run-9.md"],
+      scope: "proj-a",
+    };
+    const closed = await closeIssue(
+      context,
+      created.issueId,
+      "resolved",
+      evidence,
+      pmMut("close-ok", { expectedRevision: created.revision }),
+    );
+    const detail = await getIssue(context, created.issueId);
+    expect(detail.disposition).toBe("resolved");
+    expect(detail.closureNote).toBe(evidence.reason);
+    expect(detail.revision).toBe(closed.revision);
+    expect(detail.transitions).toHaveLength(1);
+    expect(detail.transitions[0]?.toDisposition).toBe("resolved");
+    expect(detail.transitions[0]?.evidence).toEqual({
+      reason: evidence.reason,
+      scope: evidence.scope,
+      references: evidence.references,
+      canonicalIssueId: null,
+      alignmentRef: null,
+    });
+    const replay = await closeIssue(
+      context,
+      created.issueId,
+      "resolved",
+      evidence,
+      pmMut("close-ok", { expectedRevision: created.revision }),
+    );
+    expect(replay).toEqual(closed);
+    await expect(
+      closeIssue(
+        context,
+        created.issueId,
+        "waived",
+        { reason: "won't", references: [], scope: "proj-a", alignmentRef: "user-ok" },
+        pmMut("close-other", { expectedRevision: closed.revision }),
+      ),
+    ).rejects.toMatchObject({ code: "issue.invalid-disposition" });
+  });
+
+  test("duplicate and superseded require a canonical issue", async () => {
+    const context = ctx("disposition-canonical-");
+    await initializeStore(context).then((h) => h.close());
+    const original = await captureIssue(context, baseInput({ occurrenceKey: "orig" }), mut("cap-orig"));
+    const dup = await captureIssue(
+      context,
+      baseInput({ occurrenceKey: "dup", rootCauseKey: "other-cause" }),
+      mut("cap-dup"),
+    );
+    await expect(
+      closeIssue(
+        context,
+        dup.issueId,
+        "duplicate",
+        { reason: "same bug", references: [] },
+        pmMut("dup-missing", { expectedRevision: dup.revision }),
+      ),
+    ).rejects.toMatchObject({ code: "issue.invalid-disposition" });
+    await expect(
+      closeIssue(
+        context,
+        dup.issueId,
+        "duplicate",
+        { reason: "same bug", references: [], canonicalIssueId: "I-999999" },
+        pmMut("dup-missing-id", { expectedRevision: dup.revision }),
+      ),
+    ).rejects.toMatchObject({ code: "issue.not-found" });
+    const closed = await closeIssue(
+      context,
+      dup.issueId,
+      "duplicate",
+      { reason: "same bug", references: [], canonicalIssueId: original.issueId },
+      pmMut("dup-ok", { expectedRevision: dup.revision }),
+    );
+    const detail = await getIssue(context, dup.issueId);
+    expect(detail.disposition).toBe("duplicate");
+    expect(detail.relations.some((r) => r.relation === "duplicate-of" && r.toIssue === original.issueId)).toBe(true);
+    expect(closed.revision).toBe(dup.revision + 1);
+
+    const later = await captureIssue(
+      context,
+      baseInput({ occurrenceKey: "sup", rootCauseKey: "third-cause" }),
+      mut("cap-sup"),
+    );
+    await closeIssue(
+      context,
+      later.issueId,
+      "superseded",
+      { reason: "replaced", references: [], canonicalIssueId: original.issueId },
+      pmMut("sup-ok", { expectedRevision: later.revision }),
+    );
+    expect((await getIssue(context, later.issueId)).disposition).toBe("superseded");
+  });
+
+  test("terminal recurrence records an occurrence without reopening", async () => {
+    const context = ctx("disposition-recurrence-");
+    await initializeStore(context).then((h) => h.close());
+    const created = await captureIssue(context, baseInput(), mut("cap-term"));
+    await closeIssue(
+      context,
+      created.issueId,
+      "resolved",
+      { reason: "fixed", references: ["qa.md"] },
+      pmMut("close-term", { expectedRevision: created.revision }),
+    );
+    await appendOccurrence(
+      context,
+      created.issueId,
+      {
+        sourceIdentity: "qc/review.md",
+        rootCauseKey: "missing-null-check",
+        acceptanceKey: "null-guard-present",
+        occurrenceKey: "run-later",
+        sourceKind: "qc",
+        location: "packages/engine/src/store-db.ts:10",
+        observedBehavior: "throws on empty path",
+        evidence: ["again"],
+        discoveredAt: "2026-09-18T12:00:00.000Z",
+      },
+      mut("occ-later"),
+    );
+    const detail = await getIssue(context, created.issueId);
+    expect(detail.disposition).toBe("resolved");
+    expect(detail.occurrences).toHaveLength(2);
+  });
+
+  test("multi-plan obligation cannot be resolved from one linked plan alone", async () => {
+    const context = ctx("relation-multiplan-");
+    await initializeStore(context).then((h) => h.close());
+    const created = await captureIssue(context, baseInput(), mut("cap-mp"));
+    const sessionFile = join(context.harnessDir, "session.json");
+    writeFileSync(sessionFile, JSON.stringify({ execute_as: "project-manager" }), "utf8");
+    const afterPlan1 = await linkIssue(
+      context,
+      created.issueId,
+      { kind: "plan", target: "20260918-a" },
+      pmMut("link-a", { expectedRevision: created.revision, sessionFile }),
+    );
+    const afterPlan2 = await linkIssue(
+      context,
+      created.issueId,
+      { kind: "plan", target: "20260918-b" },
+      pmMut("link-b", { expectedRevision: afterPlan1.revision, sessionFile }),
+    );
+    await expect(
+      closeIssue(
+        context,
+        created.issueId,
+        "resolved",
+        { reason: "one plan done", references: ["20260918-a"] },
+        pmMut("close-one-plan", { expectedRevision: afterPlan2.revision }),
+      ),
+    ).rejects.toMatchObject({ code: "issue.invalid-disposition" });
+    expect((await getIssue(context, created.issueId)).disposition).toBe("open");
+
+    await closeIssue(
+      context,
+      created.issueId,
+      "resolved",
+      { reason: "both plans verified", references: ["20260918-a", "20260918-b"], scope: "all" },
+      pmMut("close-all-plans", { expectedRevision: afterPlan2.revision }),
+    );
+    expect((await getIssue(context, created.issueId)).disposition).toBe("resolved");
+  });
+
+  test("relation form refuses self-edges and canonicalizes related order", async () => {
+    const context = ctx("relation-related-");
+    await initializeStore(context).then((h) => h.close());
+    const a = await captureIssue(context, baseInput({ occurrenceKey: "a" }), mut("cap-a"));
+    const b = await captureIssue(
+      context,
+      baseInput({ occurrenceKey: "b", rootCauseKey: "other" }),
+      mut("cap-b"),
+    );
+    await expect(
+      linkIssue(context, a.issueId, { relation: "related", issueId: a.issueId }, pmMut("self", { expectedRevision: a.revision })),
+    ).rejects.toMatchObject({ code: "issue.scope-refused" });
+    const linked = await linkIssue(
+      context,
+      b.issueId,
+      { relation: "related", issueId: a.issueId },
+      pmMut("rel-1", { expectedRevision: b.revision }),
+    );
+    const replay = await linkIssue(
+      context,
+      b.issueId,
+      { relation: "related", issueId: a.issueId },
+      pmMut("rel-1", { expectedRevision: b.revision }),
+    );
+    expect(replay).toEqual(linked);
+    const detail = await getIssue(context, a.issueId);
+    expect(detail.relations).toHaveLength(1);
+    expect(detail.relations[0]?.fromIssue < detail.relations[0]?.toIssue).toBe(true);
+    expect(detail.relations[0]?.relation).toBe("related");
+  });
+
+  test("triage records kind severity impact owner acceptance without changing identity", async () => {
+    const context = ctx("revision-triage-");
+    await initializeStore(context).then((h) => h.close());
+    const created = await captureIssue(context, baseInput(), mut("cap-triage"));
+    const before = await getIssue(context, created.issueId);
+    await triageIssue(
+      context,
+      created.issueId,
+      { kind: "risk", severity: "medium", impact: "ops delay", acceptance: "runbook exists", owner: "ops", reason: "reclass" },
+      pmMut("triage-1", { expectedRevision: created.revision }),
+    );
+    const after = await getIssue(context, created.issueId);
+    expect(after.kind).toBe("risk");
+    expect(after.severity).toBe("medium");
+    expect(after.impact).toBe("ops delay");
+    expect(after.acceptance).toBe("runbook exists");
+    expect(after.owner).toBe("ops");
+    expect(after.identityKey).toBe(before.identityKey);
   });
 });
