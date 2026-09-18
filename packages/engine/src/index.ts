@@ -529,3 +529,17 @@ export {
   storeDbPath,
   upgradeStore,
 } from "./store-db.js";
+export type {
+  CaptureInput,
+  Disposition,
+  IssueDetail,
+  IssueErrorCode,
+  IssueFilter,
+  IssueKind,
+  IssuePage,
+  IssueReceipt,
+  MutationContext,
+  OccurrenceInput,
+  Severity,
+} from "./issue.js";
+export { IssueError, appendOccurrence, captureIssue, getIssue, listIssues } from "./issue.js";
