@@ -1,0 +1,167 @@
+/*
+ * Dashboard styles — token values come verbatim from DESIGN.md frontmatter
+ * (CSS custom properties are the implementation mapping; DESIGN.md is the SSOT).
+ */
+
+:root {
+  /* colors */
+  --color-background-100: #ffffff;
+  --color-background-200: #f5f7fa;
+  --color-background-300: #edf1f6;
+  --color-gray-400: #d5dce5;
+  --color-gray-600: #8995a6;
+  --color-gray-900: #506070;
+  --color-gray-1000: #1c2430;
+  --color-blue-700: #1756b8;
+  --color-blue-800: #12458f;
+  --color-blue-100: #eaf1ff;
+
+  /* spacing (8px rhythm; 8 inside groups, 16 between groups, 32 between sections) */
+  --space-2: 8px;
+  --space-4: 16px;
+  --space-8: 32px;
+
+  /* rounded */
+  --rounded-sm: 6px;
+
+  /* typography families */
+  --font-sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--color-background-200);
+  color: var(--color-gray-1000);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.6;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.heading-28 {
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+  margin: 0 0 var(--space-4);
+}
+
+/* Skip link — visible on focus only */
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  background: var(--color-background-100);
+  color: var(--color-blue-700);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--rounded-sm);
+  z-index: 10;
+}
+
+.skip-link:focus {
+  left: var(--space-4);
+  top: var(--space-4);
+}
+
+/* Header / navigation */
+.app-header {
+  background: var(--color-background-100);
+  border-bottom: 1px solid var(--color-gray-400);
+}
+
+.app-nav {
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: var(--space-2) var(--space-8);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.app-title {
+  font-weight: 600;
+  margin-right: var(--space-4);
+}
+
+.nav-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 var(--space-4);
+  border-radius: var(--rounded-sm);
+  color: var(--color-gray-1000);
+  text-decoration: none;
+}
+
+.nav-link:hover {
+  background: var(--color-background-200);
+}
+
+.nav-link.is-active {
+  color: var(--color-blue-700);
+  background: var(--color-blue-100);
+  font-weight: 600;
+}
+
+/* Main content */
+.app-main {
+  flex: 1;
+  width: 100%;
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: var(--space-8) var(--space-8);
+}
+
+.placeholder {
+  color: var(--color-gray-900);
+}
+
+/* Footer */
+.app-footer {
+  background: var(--color-background-100);
+  border-top: 1px solid var(--color-gray-400);
+  color: var(--color-gray-900);
+  font-size: 14px;
+  padding: var(--space-2) var(--space-8);
+}
+
+/* Focus visibility — never remove */
+:focus-visible {
+  outline: 2px solid var(--color-blue-700);
+  outline-offset: 2px;
+}
+
+/* Responsive: below 768px, side padding drops to 16px */
+@media (max-width: 767px) {
+  .app-nav,
+  .app-main,
+  .app-footer {
+    padding-left: var(--space-4);
+    padding-right: var(--space-4);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+  }
+}
