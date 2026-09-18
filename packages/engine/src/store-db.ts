@@ -502,12 +502,120 @@ create table catalog_execution_bindings(
 );
 `;
 
+/**
+ * Migration 3 — disposable execution/roadmap projection tables
+ * (state-projection-contract §5), appended through the runner above;
+ * migrations 1/2 stay untouched. Copying the whole model:
+ * issue/catalog tables are the authority and are never rebuilt, while every
+ * `projection_*` table holds ONE published generation selected by
+ * `projection_meta.generation` and may be dropped and rebuilt at any time.
+ *
+ * Column set is the contract's §5 list, nothing else: `projection_plans`
+ * stores execution status/progress/phase/done_at plus the catalog pin
+ * revision and deliberately NOT the editable title/path (catalog owns
+ * identity), and `projection_leases` stores presence/holder/worktree/expiry
+ * and never a session label or token payload.
+ *
+ * `projection_meta.format_version` is the frozen value 1 of the migration
+ * that created the table; `PROJECTION_FORMAT_VERSION` in `projection.ts` is
+ * the reader/writer's current version. A later bump therefore makes the
+ * existing generation invalid on sight (contract §5: a schema/format upgrade
+ * rebuilds on the next read instead of reinterpreting old rows as
+ * authority) — which is exactly why the value is baked into this immutable
+ * SQL rather than read from code.
+ *
+ * `freshness` starts 'unavailable' with a null generation: a store that has
+ * never published a projection must not look like a workspace with zero
+ * active work.
+ */
+export const MIGRATION_3_SQL = `
+create table projection_meta(
+  id integer primary key check (id = 1),
+  generation integer,
+  format_version integer not null check (format_version >= 1),
+  source_set_hash text,
+  built_at text,
+  checked_at text not null,
+  freshness text not null check (freshness in ('current','stale','unavailable')),
+  last_error_json text
+);
+create table projection_sources(
+  generation integer not null,
+  source_key text not null,
+  kind text not null check (kind in ('root','workflow','compass','roadmap')),
+  root_kind text not null check (root_kind in ('repository','harness','plans','iterations','specs','knowledge','projects')),
+  relative_path text not null,
+  sha256 text,
+  state text not null check (state in ('ok','missing','invalid','inaccessible')),
+  diagnostic text,
+  primary key (generation, source_key)
+);
+create table projection_workflows(
+  generation integer not null,
+  id text not null,
+  type text not null check (type in ('plan','iteration')),
+  status text not null,
+  phase text,
+  started_at text,
+  ended_at text,
+  updated_at text,
+  branch_base text,
+  branch_source text,
+  branch_integration text,
+  branch_target text,
+  active_registration integer not null check (active_registration in (0,1)),
+  primary key (generation, id)
+);
+create table projection_plans(
+  generation integer not null,
+  workflow_id text not null,
+  plan_id text not null,
+  status text,
+  progress text,
+  phase text,
+  done_at text,
+  catalog_pin_revision integer,
+  primary key (generation, workflow_id, plan_id)
+);
+create table projection_leases(
+  generation integer not null,
+  workflow_id text not null,
+  plan_id text not null,
+  kind text not null check (kind in ('execution','integration-merge')),
+  holder text,
+  worktree_path text,
+  expires_at text,
+  primary key (generation, workflow_id, plan_id, kind)
+);
+create table projection_compasses(
+  generation integer not null,
+  iteration_id text not null,
+  summary text,
+  milestones_json text not null,
+  started_at text,
+  ended_at text,
+  status text,
+  primary key (generation, iteration_id)
+);
+create table projection_roadmaps(
+  generation integer not null,
+  project_id text not null,
+  direction text,
+  goals_json text not null,
+  milestones_json text not null,
+  primary key (generation, project_id)
+);
+insert into projection_meta(id, generation, format_version, source_set_hash, built_at, checked_at, freshness, last_error_json)
+values (1, null, 1, null, null, strftime('%Y-%m-%dT%H:%M:%fZ','now'), 'unavailable', null);
+`;
+
 export type Migration = { version: number; name: string; sql: string };
 
 /** Ordered immutable migrations. Never mutate an applied entry — append only. */
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "issue-core", sql: MIGRATION_1_SQL },
   { version: 2, name: "catalog-authority", sql: MIGRATION_2_SQL },
+  { version: 3, name: "execution-projections", sql: MIGRATION_3_SQL },
 ];
 
 /** SHA-256 of the compiled migration SQL — what every applied row must match. */

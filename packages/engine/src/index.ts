@@ -670,3 +670,35 @@ export {
   registerCatalogExecution,
   resolveCatalogRegistrationState,
 } from "./catalog-registration.js";
+// Disposable execution/roadmap projections (plan 20260918-state-projection P5):
+// the ONE source-I/O boundary (`refreshProjections`) over the JSON execution
+// authority, plus its two halves -- the pure validated capture and the atomic
+// publication/last-good path. ADDITIVE export added by P5 because the engine
+// package's exports map is the only reachable surface for the read boundary
+// (P6) and for the CLI/dashboard transport.
+export type {
+  ProjectedCompass,
+  ProjectedLease,
+  ProjectedPlan,
+  ProjectedRoadmap,
+  ProjectedWorkflow,
+  ProjectionCapture,
+  ProjectionErrorCode,
+  ProjectionFreshness,
+  ProjectionMetadata,
+  ProjectionRows,
+  ProjectionSourceDigest,
+  ProjectionSourceKind,
+  ProjectionSourceLocation,
+  ProjectionSourceState,
+  RefreshReport,
+  SourceDiagnostic,
+} from "./projection.js";
+export {
+  PROJECTION_FORMAT_VERSION,
+  PROJECTION_ROOT_FILE,
+  ProjectionError,
+  captureProjectionSources,
+  publishProjectionCapture,
+  refreshProjections,
+} from "./projection.js";
