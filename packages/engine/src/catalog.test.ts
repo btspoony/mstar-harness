@@ -563,17 +563,26 @@ describe("migration 2", () => {
     );
   });
 
-  test("upgradeStore appends migration 2 to a store that still holds only migration 1", async () => {
+  test("upgradeStore appends every pending migration to a store that still holds only migration 1", async () => {
     const context = await initialized("migration-append-");
     const handle = await openStore(context, "write");
-    for (const table of ["catalog_execution_bindings", "catalog_links", "catalog_operations", "catalog_entities"]) {
-      handle.db.exec(`drop table ${table}`);
-    }
-    handle.db.prepare("delete from schema_version where version = 2").run();
+    // Downgrade to a v1-only store before the upgrade under test. The dropped
+    // table set and version rows are derived from the compiled MIGRATIONS, so
+    // this stays a v1 store when a migration is appended instead of needing a
+    // new literal table name (and a new version row delete) each time.
+    const createdAfterV1 = MIGRATIONS.filter((migration) => migration.version > 1)
+      .flatMap((migration) =>
+        [...migration.sql.matchAll(/create table ([a-z_][a-z0-9_]*)\s*\(/g)].map((match) => match[1]),
+      )
+      .reverse(); // dependents before the tables they reference (foreign_keys=ON)
+    for (const table of createdAfterV1) handle.db.exec(`drop table ${table}`);
+    handle.db.prepare("delete from schema_version where version > 1").run();
     handle.close();
     expect((await openStore(context, "read")).schemaVersion).toBe(1);
 
-    expect((await upgradeStore(context)).schemaVersion).toBe(2);
+    // The upgrade replays every pending migration and settles on the compiled
+    // migration count — never a hardcoded migration number.
+    expect((await upgradeStore(context)).schemaVersion).toBe(MIGRATIONS.length);
     await registerCatalogEntity(context, doc("doc-1"), op("upgrade-1"));
     expect((await listCatalog(context, { kind: "document" })).total).toBe(1);
   });
