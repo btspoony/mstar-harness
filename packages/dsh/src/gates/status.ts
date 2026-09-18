@@ -13,7 +13,7 @@
  * relative path; public exports (`StatusGateAdvisory`) are re-exported
  * verbatim by the entry.
  */
-import { existsSync, readdirSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import { basename, join, relative, resolve } from 'node:path'
 import { type Context } from '@deepseek-ai/cordis'
 import {
@@ -149,27 +149,31 @@ function resolveHard(harnessDir: string, config: Config): boolean {
  * register — the P2-fixed "one validator per kind" shape) plus the
  * snapshot-only `findingsCleanupGate` extension per plan row that
  * CONFIGURES a mode (the v1 per-plan-row cleanup gate relocated: plan rows
- * live on the snapshot, residuals on the project registers). Shared by
- * {@link validateStatusDoc} (the on-disk single-read path) and the host
- * adapter's `beforeStatusWrite` (the incoming document) — the fs-intent
- * gate, the adapter hook and the repair escape all surface the SAME
- * violation codes.
+ * live on the snapshot, the plan's linked OPEN issues live in the issue
+ * store). Shared by {@link validateStatusDoc} (the on-disk single-read path)
+ * and the host adapter's `beforeStatusWrite` (the incoming document) — the
+ * fs-intent gate, the adapter hook and the repair escape all surface the
+ * SAME violation codes.
+ *
+ * ASYNC because the cleanup extension reads the issue authority
+ * (`{HARNESS_DIR}/store.db`), the engine's async domain boundary. The
+ * register kind stays SYNCHRONOUS shape validation: a project register is
+ * migration history, and validating a document about to be written to that
+ * retired path is not a lookup.
  * @param kind - the target's {@link HarnessDocKind} (matching engine validator).
  * @param harnessDir - the resolved `{HARNESS_DIR}`; required for the
- * snapshot kind's cleanup extension (the registers it reads live under it),
- * otherwise unused.
+ * snapshot kind's cleanup extension (it is the store context), otherwise
+ * unused.
  */
-export function validateStatusValue(doc: unknown, kind: HarnessDocKind, harnessDir?: string | null): GateResult {
-  if (kind === 'snapshot') {
-    const base = validateWorkflowSnapshot(doc)
-    if (!base.ok) return base
-    if (harnessDir === null || harnessDir === undefined) return base
-    const violations = snapshotFindingsCleanupViolations(doc, harnessDir)
-    if (violations.length === 0) return base
-    return { ok: false, violations }
-  }
+export async function validateStatusValue(doc: unknown, kind: HarnessDocKind, harnessDir?: string | null): Promise<GateResult> {
   if (kind === 'register') return validateProjectRegister(doc)
-  return validateStatus(doc as StatusV2Doc)
+  if (kind !== 'snapshot') return validateStatus(doc as StatusV2Doc)
+  const base = validateWorkflowSnapshot(doc)
+  if (!base.ok) return base
+  if (harnessDir === null || harnessDir === undefined) return base
+  const violations = await snapshotFindingsCleanupViolations(doc, harnessDir)
+  if (violations.length === 0) return base
+  return { ok: false, violations }
 }
 
 /**
@@ -177,20 +181,23 @@ export function validateStatusValue(doc: unknown, kind: HarnessDocKind, harnessD
  * `metadata.findings_cleanup` CONFIGURES a mode (zero-residual /
  * allow-residual — the P2 mode-resolution contract: explicit mode wins,
  * the v1 `plans[].metadata.findings_cleanup` mirror is deleted, no
- * dual-track), run the engine `findingsCleanupGate(register, planId, …)`
- * against the project registers (`projects/<id>/residuals.json` entries
- * keyed by plan id — the snapshot plan linkage). The plan's register is
- * located across ALL project registers (workspace-level, same aggregation
- * as the catalog's residual rollup — the snapshot carries no project id);
- * no register entries for the plan → no open residuals → the gate passes.
- * Unreadable registers / a missing projects dir are skipped (advisory —
- * a broken register read must not brick the snapshot write gate).
+ * dual-track), run the engine `findingsCleanupGate(context, planId, …)`
+ * against the issue store: the plan's OPEN issues linked through
+ * `provenance(kind='plan', target=<plan-id>)`, the single findings authority
+ * (issue contract §4). A plan with no linked open issue passes.
+ *
+ * FAIL-CLOSED: the authority must be readable AND active. A missing
+ * (`store.not-initialized`), staged (`store.not-active`), corrupt
+ * (`store.corrupt`), below-floor or capability-less
+ * (`store.runtime-unsupported`), drifted (`store.schema-*`) or busy store is
+ * reported as a HIGH violation carrying the engine's own refusal message —
+ * NEVER as "no findings". The store is never replaced by a JSON fallback:
+ * the retired registers are migration history, not a second authority.
  */
-function snapshotFindingsCleanupViolations(doc: unknown, harnessDir: string): ValidationResult[] {
+async function snapshotFindingsCleanupViolations(doc: unknown, harnessDir: string): Promise<ValidationResult[]> {
   const record = asRecord(doc)
   if (record === undefined) return []
   const violations: ValidationResult[] = []
-  const registers = projectRegisterDocs(harnessDir)
   for (const row of Array.isArray(record.plans) ? record.plans : []) {
     const planRow = asRecord(row)
     const metadata = planRow === undefined ? undefined : asRecord(planRow.metadata)
@@ -198,35 +205,23 @@ function snapshotFindingsCleanupViolations(doc: unknown, harnessDir: string): Va
     if (mode !== 'zero-residual' && mode !== 'allow-residual') continue
     const planId = typeof planRow?.id === 'string' ? planRow.id : typeof planRow?.plan_id === 'string' ? planRow.plan_id : undefined
     if (planId === undefined) continue
-    for (const register of registers) {
-      violations.push(...findingsCleanupGate(register.doc as Parameters<typeof findingsCleanupGate>[0], planId, { mode }).violations)
+    try {
+      const gate = await findingsCleanupGate({ harnessDir }, planId, { mode })
+      violations.push(...gate.violations)
+    } catch (error) {
+      const code = (error as { code?: unknown } | null | undefined)?.code
+      violations.push({
+        ok: false,
+        severity: 'high',
+        code: 'findings.cleanup-authority-unavailable',
+        message:
+          `the findings cleanup gate for plan ${planId} cannot be evaluated: ` +
+          `${typeof code === 'string' && code !== '' ? `[${code}] ` : ''}${(error as Error).message}`,
+        fix: 'restore the issue store (mstar store init|upgrade|migrate) — an unreadable findings authority is never treated as no findings',
+      })
     }
   }
   return violations
-}
-
-/** Every readable project register doc under `projects/<id>/` (unreadable
- * registers skipped — advisory). */
-function projectRegisterDocs(harnessDir: string): Array<{ projectId: string; doc: unknown }> {
-  const projectsDir = resolveProjectDir(harnessDir, { harnessDir })
-  let entries
-  try {
-    entries = readdirSync(projectsDir, { withFileTypes: true })
-  } catch {
-    return []
-  }
-  const registers: Array<{ projectId: string; doc: unknown }> = []
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue
-    const registerPath = join(projectsDir, entry.name, PROJECT_REGISTER_FILE)
-    if (!existsSync(registerPath)) continue
-    try {
-      registers.push({ projectId: entry.name, doc: readJson(registerPath) })
-    } catch {
-      continue // unreadable register — skip (advisory)
-    }
-  }
-  return registers
 }
 
 /**
@@ -250,10 +245,10 @@ function projectRegisterDocs(harnessDir: string): Array<{ projectId: string; doc
  * @param path - the canonical coordination-document path (root status.json
  * / workflow snapshot / project register — the caller classifies it).
  * @param kind - the target's {@link HarnessDocKind}.
- * @param harnessDir - the resolved `{HARNESS_DIR}` (the snapshot kind's
- * cleanup extension needs it to locate the project registers).
+ * @param harnessDir - the resolved `{HARNESS_DIR}` (the store context of the
+ * snapshot kind's cleanup extension).
  */
-export function validateStatusDoc(path: string, kind: HarnessDocKind, harnessDir?: string | null): GateResult {
+export async function validateStatusDoc(path: string, kind: HarnessDocKind, harnessDir?: string | null): Promise<GateResult> {
   let doc: unknown
   try {
     doc = readJson(path)
@@ -268,7 +263,7 @@ export function validateStatusDoc(path: string, kind: HarnessDocKind, harnessDir
       }],
     }
   }
-  return validateStatusValue(doc, kind, harnessDir)
+  return await validateStatusValue(doc, kind, harnessDir)
 }
 
 /**
@@ -289,21 +284,21 @@ export function validateStatusDoc(path: string, kind: HarnessDocKind, harnessDir
  * untyped throw from the gate would spuriously block legitimate writes (the
  * fs waterfall has no error containment of its own).
  */
-function gateStatusIntent(
+async function gateStatusIntent(
   ctx: Context,
   harnessDir: string | null,
   config: Config,
   adapter: DshHostAdapter,
   operation: 'write' | 'edit',
   target: FsTarget,
-): void {
+): Promise<void> {
   try {
     if (harnessDir === null) return
     const kind = harnessDocKindOfTarget(harnessDir, target.displayPath)
     if (kind === null) return
     // The adapter owns the shared status-gate core (missing file = first
     // create = pass); this listener adds enforcement + observability.
-    const result = adapter.statusGate(target.displayPath, kind, harnessDir)
+    const result = await adapter.statusGate(target.displayPath, kind, harnessDir)
     const hard = resolveHard(harnessDir, config)
     const verdict = applyEnforcement(result, { hard })
     if (!verdict.ok) {
@@ -366,7 +361,7 @@ export async function writeIntentListener(
   actor: object | undefined,
   next: () => FsWriteIntent | undefined | Promise<FsWriteIntent | undefined>,
 ): Promise<FsWriteIntent | undefined> {
-  gateStatusIntent(ctx, resolver.forAgent(actorAgentOf(actor)), config, adapter, 'write', target)
+  await gateStatusIntent(ctx, resolver.forAgent(actorAgentOf(actor)), config, adapter, 'write', target)
   return await next()
 }
 
@@ -380,6 +375,6 @@ export async function editIntentListener(
   actor: object | undefined,
   next: () => { version: FsVersion } | undefined | Promise<{ version: FsVersion } | undefined>,
 ): Promise<{ version: FsVersion } | undefined> {
-  gateStatusIntent(ctx, resolver.forAgent(actorAgentOf(actor)), config, adapter, 'edit', target)
+  await gateStatusIntent(ctx, resolver.forAgent(actorAgentOf(actor)), config, adapter, 'edit', target)
   return await next()
 }

@@ -55,7 +55,7 @@ import type { SessionHint } from './workflow-selection.ts'
 // The dispatch gates are WRITE-path-adjacent (lease re-verify, worktree
 // L1, P-b attribution), so they use the ACTIVE-SET resolver only — the
 // terminal-mtime fallback stays catalog-read-only.
-import { resolveActiveWorkflow } from './workflow-selection.ts'
+import { catalogRegistrationRefusal, resolveActiveWorkflow } from './workflow-selection.ts'
 // The P-a/P-c policy + cache + the SHARED name normalization (plan
 //   Task 2 — the SINGLE four-tier decision point;
 // this module maps the verdict to the PreToolDecision refusal vocabulary).
@@ -1005,6 +1005,7 @@ function gateDispatch(
   config: Config,
   adapter: DshHostAdapter,
   exec: ToolExecution,
+  readHint?: () => SessionHintRead,
 ): PreToolDecision | undefined {
   const toolName = exec.name
   // The carrying session's hint — derived ONCE per tool call through the
@@ -1019,7 +1020,10 @@ function gateDispatch(
   // would charge every one of them a binding-store read for a hint no branch
   // reads. The thunk below memoizes the one derivation a gated call needs.
   let derived: SessionHintRead | undefined
-  const hintReadOf = (): SessionHintRead => (derived ??= adapter.sessionHintFor(exec.agent))
+  // The caller may own the memo (the listener shares ONE derivation with its
+  // catalog-registration veto — the D4 "derived only where the gate reads it,
+  // once per call" contract); otherwise this branch memoizes its own.
+  const hintReadOf: () => SessionHintRead = readHint ?? (() => (derived ??= adapter.sessionHintFor(exec.agent)))
   // WORKFLOW/RALPH BRANCH — BEFORE the subagent prompt branch: `workflow`/`ralph` carry no
   // `args.prompt`, so the prompt guard below would pass them through even
   // if the names were added to the dispatch-tool match list (W4 double
@@ -1063,6 +1067,52 @@ function gateDispatch(
 }
 
 /**
+ * The catalog-registration veto (state-projection contract §3 step 3): the
+ * SELECTED active workflow a writable dispatch addresses must have a committed
+ * catalog registration. The selection itself stays JSON-owned
+ * (`resolveActiveWorkflow`); this async addition only asks the store's
+ * registration journal whether that workflow is half-registered — a question
+ * JSON cannot answer. A refusal is UNCONDITIONAL (both enforcement modes): a
+ * workflow whose catalog delta was never published is not a soft-gate judgment
+ * call, and dispatching into it would write under a workspace the catalog does
+ * not yet describe.
+ *
+ * Fires only on a real dispatch call (a configured dispatch tool carrying an
+ * Assignment-shaped prompt), so the `tools/pre-execute` hot path pays nothing
+ * for unrelated tool calls; a session with no active selection, and a
+ * pre-activation workspace (no store, or a staged one), never reach the journal
+ * read at all.
+ */
+async function catalogRegistrationVeto(
+  ctx: Context,
+  harnessDir: string | null,
+  config: Config,
+  exec: ToolExecution,
+  readHint: () => SessionHintRead,
+): Promise<PreToolDecision | undefined> {
+  if (harnessDir === null) return undefined
+  if (!(config.dispatchTools ?? [...DEFAULT_DISPATCH_TOOLS]).includes(exec.name)) return undefined
+  const args = asRecord(exec.arguments)
+  const prompt = typeof args?.prompt === 'string' ? args.prompt : undefined
+  if (prompt === undefined || !isAssignmentShaped(assignmentHeaderRegion(prompt))) return undefined
+  const selection = resolveActiveWorkflow(harnessDir, readHint().hint)
+  if (selection.kind !== 'active') return undefined
+  const refusal = await catalogRegistrationRefusal(harnessDir, selection.workflowId)
+  if (refusal === null) return undefined
+  ctx.logger(DISPATCH_LOGGER).error(
+    `subagent dispatch (${exec.name}) refused — workflow ${selection.workflowId} is not fully registered:\n${refusal.code}: ${refusal.message}`,
+  )
+  return {
+    kind: 'deny',
+    reason: [
+      `subagent dispatch (${exec.name}) blocked — workflow ${selection.workflowId} has no committed catalog registration`,
+      `${refusal.code}: ${refusal.message}`,
+      'this refusal is unconditional (it is not the soft/hard enforcement axis): reconcile the registration, then dispatch',
+    ].join('\n'),
+  }
+}
+
+/**
  * `tools/pre-execute` listener. The waterfall refusal channel is the returned
  * decision: a deny is returned WITHOUT calling `next()` (short-circuits the
  * chain — downstream listeners and the registry default never run); every
@@ -1085,7 +1135,14 @@ export async function preExecuteListener(
 ): Promise<PreToolDecision> {
   let veto: PreToolDecision | undefined
   try {
-    veto = gateDispatch(ctx, resolver.forAgent(exec.agent), config, adapter, exec)
+    const harnessDir = resolver.forAgent(exec.agent)
+    // ONE session-hint derivation for the whole call, shared by the gate and
+    // the catalog-registration veto (D4: the durable binding store is read
+    // only where the gate actually reads it).
+    let hintRead: SessionHintRead | undefined
+    const readHint = (): SessionHintRead => (hintRead ??= adapter.sessionHintFor(exec.agent))
+    veto = gateDispatch(ctx, harnessDir, config, adapter, exec, readHint)
+    veto ??= await catalogRegistrationVeto(ctx, harnessDir, config, exec, readHint)
   } catch (error) {
     ctx.logger(DISPATCH_LOGGER).error(`dispatch gate aborted (degraded, dispatch allowed): ${(error as Error).message}`)
     try {

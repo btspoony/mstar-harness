@@ -21,10 +21,10 @@ import type {
   EnforcementFlag,
   FindingsCleanupMode,
   GateResult,
-  ProjectRegisterDoc,
   ResolveHarnessDirOptions,
   ResidualEntry,
   StatusV2Doc,
+  StoreContext,
 } from '@mstar-harness/engine'
 
 declare module '@deepseek-ai/cordis' {
@@ -90,17 +90,19 @@ export class DshMstar extends Service {
 
   /**
    * Findings cleanup gate for one plan (status-and-residuals.md § Findings
-   * cleanup modes; v3 relocation — the input is the project register
-   * `projects/<id>/residuals.json`, entries keyed by plan id; the v1
-   * `plans[].metadata.findings_cleanup` mirror is deleted — explicit
-   * `opts.mode` or `allow-residual`). Every OPEN register entry of the plan
-   * is checked.
-   * @param register - the parsed project register document.
-   * @param planId - the plan whose open residuals are checked.
+   * cleanup modes; issue-governance cutover — the input is the issue store
+   * `{HARNESS_DIR}/store.db`, and the plan's OPEN issues are the ones linked
+   * to it through `provenance(kind='plan', target=<plan-id>)`). A missing,
+   * staged, corrupt or unreadable authority refuses (`store.not-initialized`
+   * / `store.not-active` / `store.corrupt` / `store.runtime-unsupported`, …)
+   * — never an empty "no findings" gate. The retired project register is
+   * migration history and is not consulted.
+   * @param context - the store context (the resolved `{HARNESS_DIR}`).
+   * @param planId - the plan whose open linked issues are checked.
    * @param opts - explicit cleanup-mode override.
    */
-  findingsCleanupGate(register: ProjectRegisterDoc, planId: string, opts?: { mode?: FindingsCleanupMode }): GateResult {
-    return engineFindingsCleanupGate(register, planId, opts)
+  async findingsCleanupGate(context: StoreContext, planId: string, opts?: { mode?: FindingsCleanupMode }): Promise<GateResult> {
+    return await engineFindingsCleanupGate(context, planId, opts)
   }
 
   /**
