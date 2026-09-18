@@ -1,6 +1,7 @@
 /**
  * store-cutover.test.ts — G4b: the omp entrypoints' issue/catalog authority
- * boundary (plan `20260918-issue-governance-cutover`, task 7).
+ * boundary: what the store cutover refuses once it is the authority, and what
+ * it leaves untouched.
  *
  * What the cutover has to prove (task brief §Proof), for BOTH owned omp
  * entrypoints (the `tool_call` pre-hook and the `mstar_status_validate` tool):

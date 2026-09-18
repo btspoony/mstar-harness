@@ -1,4 +1,4 @@
-# Project Manager QC & Residuals Reference
+# Project Manager QC & Findings Reference
 
 Use this reference when PM is dispatching QC, consolidating review verdicts, or running the findings lifecycle (capture the confirmed ones as issues; close with a disposition).
 
@@ -29,7 +29,7 @@ Use this reference when PM is dispatching QC, consolidating review verdicts, or 
 2. **One** `qc-specialist` → `{SDD_DIR}/review/qc.md` (**N=1**).
 3. Targeted re-review updates same `qc.md`.
 
-## QC / Residual NEVER (PM)
+## QC / Findings NEVER (PM)
 
 - **NEVER** dispatch plan QC without a **branch** review-package file path (MERGE_BASE..HEAD).
 - **NEVER** use single-seat `qc.md` after **`Execution mode: sdd`** without documented user override.

@@ -1,6 +1,7 @@
 /**
  * store-cutover.test.ts — G4b: the OpenCode plugin's issue/catalog authority
- * boundary (plan `20260918-issue-governance-cutover`, task 7).
+ * boundary: what the store cutover refuses once it is the authority, and
+ * what it leaves untouched.
  *
  * The OpenCode binding owns the same two refusals as the omp write gate and
  * the ZCode hook, in this host's GateResult dialect (`hardBlocked: true` —

@@ -1,7 +1,7 @@
 /**
  * store-cutover.test.ts — G4b: the ZCode PreToolUse(Write|Edit) gate's
- * issue/catalog authority boundary (plan `20260918-issue-governance-cutover`,
- * task 7).
+ * issue/catalog authority boundary: what the store cutover refuses once it
+ * is the authority, and what it leaves untouched.
  *
  * Two runtimes are exercised deliberately:
  *

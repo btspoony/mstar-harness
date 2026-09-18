@@ -263,7 +263,7 @@ Before first implement dispatch:
 
 ---
 
-## QC / Residual / Plan Lifecycle
+## QC / Findings / Plan Lifecycle
 
 PM must:
 
