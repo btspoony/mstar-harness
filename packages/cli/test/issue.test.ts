@@ -14,6 +14,9 @@ import { initializeStore } from "@mstar-harness/engine";
 const CLI_ROOT = resolve(import.meta.dir, "..");
 const BUNDLE = join(CLI_ROOT, "dist/mstar-harness.js");
 const NODE_BIN = process.env.NODE_BIN ?? "node";
+const NODE_VERSION = spawnSync(NODE_BIN, ["--version"], { encoding: "utf8" }).stdout.trim();
+const BUN_VERSION = spawnSync("bun", ["--version"], { encoding: "utf8" }).stdout.trim();
+
 
 interface RunResult {
   exitCode: number | null;
@@ -91,6 +94,13 @@ async function makeHarness(): Promise<{ root: string; harness: string }> {
 }
 
 describe("mstar issue CLI bundle", () => {
+  test("records Node 24.18.0 and Bun 1.4.0 for this suite", () => {
+    // Evidence: subprocess launchers used below. Print so the report names them.
+    console.log(`issue.test runtimes NODE_BIN=${NODE_BIN} node=${NODE_VERSION} bun=${BUN_VERSION}`);
+    expect(NODE_VERSION).toBe("v24.18.0");
+    expect(BUN_VERSION).toBe("1.4.0");
+  });
+
   test("built bundle exists with bun shebang", () => {
     expect(existsSync(BUNDLE)).toBe(true);
     chmodSync(BUNDLE, 0o755);
@@ -281,6 +291,99 @@ describe("mstar issue CLI bundle", () => {
     expect(String(body.message)).toMatch(/24\.18\.0/);
     expect(String(body.message)).toMatch(/nodejs\.org|upgrade/i);
   });
+
+  test("malformed numeric list filters refuse as usage before store access", () => {
+    const root = mkdtempSync(join(tmpdir(), "mstar-issue-limit-"));
+    roots.push(root);
+    const harness = join(root, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    for (const args of [
+      ["--limit", "1x"],
+      ["--offset", "1x"],
+      ["--limit", "0"],
+    ] as const) {
+      const result = runBundle("node", ["issue", "list", ...args, "--harness", harness, "--json"], root);
+      expect(result.exitCode).toBe(2);
+      expect(jsonOf(result).ok).toBe(false);
+      expect(jsonOf(result).code).toBe("usage");
+      expect(existsSync(join(harness, "store.db"))).toBe(false);
+    }
+  });
+
+  test("wrong-typed optional triage field refuses usage and mutates nothing", async () => {
+    const { root, harness } = await makeHarness();
+    const file = join(root, "cap.json");
+    writeJson(file, capturePayload());
+    const add = runBundle("node", [
+      "issue",
+      "add",
+      "--file",
+      file,
+      "--operation-id",
+      "cap-1",
+      "--actor",
+      "project-manager",
+      "--harness",
+      harness,
+      "--json",
+    ], root);
+    expect(add.exitCode).toBe(0);
+    const created = jsonOf(add).data as { issueId: string; revision: number };
+    const triageFile = join(root, "triage.json");
+    writeJson(triageFile, { reason: "tighten severity", severity: 123 });
+    const result = runBundle("node", [
+      "issue",
+      "triage",
+      created.issueId,
+      "--file",
+      triageFile,
+      "--expect",
+      String(created.revision),
+      "--operation-id",
+      "triage-bad",
+      "--actor",
+      "project-manager",
+      "--harness",
+      harness,
+      "--json",
+    ], root);
+    expect(result.exitCode).toBe(2);
+    expect(jsonOf(result).code).toBe("usage");
+    const shown = runBundle("node", ["issue", "show", created.issueId, "--harness", harness, "--json"], root);
+    expect(shown.exitCode).toBe(0);
+    expect((jsonOf(shown).data as { revision: number }).revision).toBe(created.revision);
+  });
+
+  test("missing native sqlite capability refuses with actionable guidance", async () => {
+    const { root, harness } = await makeHarness();
+    const preload = join(root, "no-sqlite.mjs");
+    writeFileSync(
+      preload,
+      `import { registerHooks } from "node:module";
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (specifier === "node:sqlite") {
+      return { shortCircuit: true, url: "data:text/javascript,export const DatabaseSync = undefined;" };
+    }
+    return nextResolve(specifier, context);
+  },
+});
+`,
+    );
+    const result = runBundle(
+      "node",
+      ["issue", "list", "--harness", harness, "--json"],
+      root,
+      { nodeArgs: ["--import", `file://${preload}`] },
+    );
+    expect(result.exitCode).toBe(1);
+    const body = jsonOf(result);
+    expect(body.ok).toBe(false);
+    expect(body.code).toBe("store.runtime-unsupported");
+    expect(String(body.message)).toMatch(/node:sqlite/);
+    expect(String(body.message)).toMatch(/nodejs\.org|bun\.sh|upgrade/i);
+  });
+
 
   test("unrelated --help does not open SQLite", () => {
     const root = mkdtempSync(join(tmpdir(), "mstar-issue-help-"));

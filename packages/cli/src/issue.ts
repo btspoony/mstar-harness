@@ -133,7 +133,7 @@ function requireString(record: Record<string, unknown>, key: string): string {
 }
 
 function optionalString(record: Record<string, unknown>, key: string): string | undefined {
-  if (!(key in record) || record[key] === undefined || record[key] === null) return undefined;
+  if (!(key in record) || record[key] === undefined) return undefined;
   if (typeof record[key] !== "string") usage(`${key} must be a string when present`);
   return record[key] as string;
 }
@@ -242,8 +242,14 @@ function closureEvidenceOf(record: Record<string, unknown>): ClosureEvidence {
 
 function triageOf(record: Record<string, unknown>): IssueTriage {
   const patch: IssueTriage = { reason: requireString(record, "reason") };
-  if (typeof record.kind === "string") patch.kind = parseKind(record.kind);
-  if (typeof record.severity === "string") patch.severity = parseSeverity(record.severity);
+  if ("kind" in record && record.kind !== undefined) {
+    if (typeof record.kind !== "string") usage("kind must be a string when present");
+    patch.kind = parseKind(record.kind);
+  }
+  if ("severity" in record && record.severity !== undefined) {
+    if (typeof record.severity !== "string") usage("severity must be a string when present");
+    patch.severity = parseSeverity(record.severity);
+  }
   const impact = optionalString(record, "impact");
   if (impact !== undefined) patch.impact = impact;
   const acceptance = optionalString(record, "acceptance");
@@ -274,6 +280,20 @@ function linkOf(record: Record<string, unknown>): IssueLink {
   usage("link payload needs relation+issueId or kind+target");
 }
 
+function parsePagingInt(raw: string, flag: string, min: number, max?: number): number {
+  if (!/^\d+$/.test(raw)) usage(`${flag} must be a nonnegative integer — got ${JSON.stringify(raw)}`);
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value)) usage(`${flag} is out of range — got ${JSON.stringify(raw)}`);
+  if (value < min || (max !== undefined && value > max)) {
+    usage(
+      max === undefined
+        ? `${flag} must be >= ${min} — got ${JSON.stringify(raw)}`
+        : `${flag} must be ${min}..${max} — got ${JSON.stringify(raw)}`,
+    );
+  }
+  return value;
+}
+
 function listFilterOf(options: IssueCliOptions): IssueFilter {
   const filter: IssueFilter = {};
   if (typeof options.project === "string") filter.projectId = options.project;
@@ -281,16 +301,8 @@ function listFilterOf(options: IssueCliOptions): IssueFilter {
   if (typeof options.kind === "string") filter.kind = parseKind(options.kind);
   if (typeof options.severity === "string") filter.severity = parseSeverity(options.severity);
   if (typeof options.query === "string") filter.query = options.query;
-  if (typeof options.limit === "string") {
-    const limit = Number.parseInt(options.limit, 10);
-    if (!Number.isInteger(limit)) usage("--limit must be an integer");
-    filter.limit = limit;
-  }
-  if (typeof options.offset === "string") {
-    const offset = Number.parseInt(options.offset, 10);
-    if (!Number.isInteger(offset) || offset < 0) usage("--offset must be a nonnegative integer");
-    filter.offset = offset;
-  }
+  if (typeof options.limit === "string") filter.limit = parsePagingInt(options.limit, "--limit", 1, 200);
+  if (typeof options.offset === "string") filter.offset = parsePagingInt(options.offset, "--offset", 0);
   return filter;
 }
 
@@ -386,7 +398,8 @@ export function registerIssueCommands(program: Command): void {
     .option("--json", "Machine-readable envelope on stdout")
     .action(async (options: IssueCliOptions) =>
       runVerb("list", options, async (json) => {
-        const page = await listIssues(storeContext(options), listFilterOf(options));
+        const filter = listFilterOf(options);
+        const page = await listIssues(storeContext(options), filter);
         printSuccess(page, page.storeRevision, json);
       }),
     );
