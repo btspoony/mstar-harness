@@ -18,6 +18,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { resolveProcessHarnessDir } from "./coordination.js";
 import {
+  MIGRATIONS,
   MIN_BUN_VERSION,
   MIN_NODE_VERSION,
   StoreError,
@@ -253,7 +254,7 @@ describe("store-db L2 fix round", () => {
     expect(existsSync(join(dir, "store.db"))).toBe(false);
     const handle = await initializeStore({ harnessDir: dir });
     expect(handle.epoch).toBe(1);
-    expect(handle.schemaVersion).toBe(1);
+    expect(handle.schemaVersion).toBe(MIGRATIONS.length);
     const meta = handle.db.prepare("select authority_state, authority_epoch from store_meta where id = 1").get() as {
       authority_state?: string;
       authority_epoch?: number;
