@@ -624,3 +624,36 @@ export {
   planCatalogImport,
   verifyCatalogImport,
 } from "./catalog-import.js";
+// Catalog execution registration journal (plan 20260918-state-projection P3):
+// the ONE service that registers an execution (snapshot + root entry) together
+// with its catalog rows, publishes the catalog delta only after the execution
+// registration matches, and recovers or visibly refuses a half-written
+// registration (`mstar catalog reconcile`). ADDITIVE export added by P3
+// because the engine package's exports map is the only reachable surface for
+// the CLI transport and for the readers that must refuse a pending operation.
+export type {
+  CatalogExecutionAbort,
+  CatalogExecutionBinding,
+  CatalogExecutionBindingKind,
+  CatalogExecutionCatalogDelta,
+  CatalogExecutionKind,
+  CatalogExecutionPhase,
+  CatalogExecutionReceipt,
+  CatalogExecutionRequest,
+  CatalogExecutionWorkflow,
+  CatalogRegistrationErrorCode,
+  CatalogRegistrationState,
+  CatalogRevisions,
+  PendingCatalogRegistration,
+} from "./catalog-registration.js";
+export {
+  CATALOG_REGISTRATION_JOURNAL_VERSION,
+  CatalogRegistrationError,
+  abortCatalogExecution,
+  assertCatalogExecutionCommitted,
+  listPendingCatalogRegistrations,
+  readCatalogRevisions,
+  reconcileCatalogExecution,
+  registerCatalogExecution,
+  resolveCatalogRegistrationState,
+} from "./catalog-registration.js";

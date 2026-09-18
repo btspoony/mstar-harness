@@ -22,8 +22,11 @@ import {
   assertQcAlignment,
   assertSddTddTriple,
   assertTriIdentity,
+  abortCatalogExecution,
   checkSddAction,
   classifySkillLint,
+  CatalogError,
+  CatalogRegistrationError,
   AUDIT_CATEGORIES,
   AUDIT_CONFIDENCES,
   AUDIT_EFFORTS,
@@ -56,6 +59,7 @@ import {
   lintFrontmatter,
   lintLoadOrder,
   lintStrategySections,
+  listPendingCatalogRegistrations,
   loadStoreModule,
   parseAssignmentBranchForms,
   parseAssignmentFields,
@@ -68,6 +72,7 @@ import {
   readCoordinatedArtifact,
   readMainWorktree,
   readWorkflowSnapshot,
+  reconcileCatalogExecution,
   recordWorkflowDelivery,
   registerIterationWorkflow,
   registerPlanWorkflow,
@@ -6227,6 +6232,122 @@ registerWorkflowCommands(program);
 registerIssueCommands(program);
 
 registerCatalogCommands(program);
+
+/**
+ * `mstar catalog reconcile` — the recovery verb contract §2 lists and P2
+ * deferred (the journal it recovers is P3's). Attached to the EXISTING
+ * `mstar catalog` group created by `registerCatalogCommands`: the group's
+ * owner module is outside this round's file set, and commander aborts the
+ * whole CLI on a duplicate command name, so the verb joins that group instead
+ * of creating a second one (the same technique `attachWorkflowGroup` below
+ * uses for the detached `mstar workflow` group).
+ *
+ * Flags are owned by this command's own `--help`: `--operation-id <id>`
+ * recovers one pending operation, `--list` reports the pending operations
+ * without writing. Envelope and exit codes follow the catalog family
+ * (`{ok:true,data}` / `{ok:false,code,message}`, exit 0 success, 1
+ * domain/runtime/IO refusal, 2 usage).
+ */
+function registerCatalogReconcileCommand(target: Command): void {
+  const catalogGroup = target.commands.find((command) => command.name() === "catalog");
+  if (catalogGroup === undefined) {
+    throw new Error("registerCatalogReconcileCommand: the `catalog` command group must be registered first");
+  }
+  const usage =
+    "usage: catalog reconcile --operation-id <id> [--abort] [--harness <dir>] [--json]\n" +
+    "       catalog reconcile --list [--harness <dir>] [--json]";
+
+  // The group's own blurb enumerates its verbs (`catalog.ts`, outside this
+  // round's file set): keep the enumeration truthful now that it has a ninth.
+  catalogGroup.description(`${catalogGroup.description()} \`reconcile\` recovers a pending execution registration.`);
+
+  const printFailure = (error: unknown, json: boolean): void => {
+    if (error instanceof SddScriptError) {
+      if (json) console.log(JSON.stringify({ ok: false, code: "usage", message: error.message, details: { operation: "reconcile" } }));
+      else console.error(pc.red(`catalog reconcile: ${error.message}`));
+      process.exitCode = error.exitCode;
+      return;
+    }
+    if (error instanceof CatalogRegistrationError || error instanceof CatalogError || error instanceof StoreError) {
+      if (json) console.log(JSON.stringify({ ok: false, code: error.code, message: error.message, details: { operation: "reconcile" } }));
+      else console.error(pc.red(`catalog reconcile: ${error.message}`));
+      process.exitCode = 1;
+      return;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    if (json) console.log(JSON.stringify({ ok: false, code: "catalog.internal-error", message, details: { operation: "reconcile" } }));
+    else console.error(pc.red(`catalog reconcile failed: ${message}`));
+    process.exitCode = 1;
+  };
+
+  catalogGroup
+    .command("reconcile")
+    .exitOverride()
+    .description(
+      "Recover a pending execution registration (contract §3 step 4, engine-backed): re-checks the exact request identity and " +
+        "the recorded byte versions, finishes the writes the operation owns, publishes the catalog delta and commits. A " +
+        "committed operation returns its recorded receipt and writes nothing (idempotent); a state that cannot be finished " +
+        "without replacing or adopting bytes refuses `catalog.reconcile-conflict` and leaves everything in place. --list " +
+        "reports the pending operations without writing",
+    )
+    .option("--operation-id <id>", "Pending operation id to reconcile (named by the refusal that reported it)")
+    .option("--abort", "Abandon the pending operation instead of finishing it (refused once it wrote execution bytes)")
+    .option("--list", "List the pending registration operations, read-only")
+    .option("--harness <path>", "Harness dir override (default: resolved control {HARNESS_DIR})")
+    .option("--json", "Machine-readable envelope on stdout")
+    .action(async (options: { operationId?: string; abort?: boolean; list?: boolean; harness?: string; json?: boolean }) => {
+      const json = options.json === true;
+      try {
+        if (options.list === true && options.operationId !== undefined) {
+          throw new SddScriptError(`--list and --operation-id are mutually exclusive\n${usage}`, 2);
+        }
+        if (options.abort === true && options.operationId === undefined) {
+          throw new SddScriptError(`--abort requires --operation-id\n${usage}`, 2);
+        }
+        const harnessDir = resolveEngineProcessHarnessDir(process.cwd(), options.harness);
+        if (harnessDir === null) {
+          throw new Error(`harness dir not found from ${process.cwd()} — pass --harness <path>`);
+        }
+        const context = { harnessDir };
+        if (options.list === true) {
+          const pending = await listPendingCatalogRegistrations(context);
+          if (json) console.log(JSON.stringify({ ok: true, data: { pending } }));
+          else if (pending.length === 0) console.log("catalog reconcile: no pending registration operation");
+          else {
+            console.log(`catalog reconcile: ${pending.length} pending registration operation(s)`);
+            for (const entry of pending) {
+              console.log(`  ${entry.operationId}  ${entry.workflowId}  ${entry.kind}  ${entry.phase}  root-visible: ${entry.rootVisible}`);
+            }
+          }
+          return;
+        }
+        const operationId = options.operationId?.trim();
+        if (operationId === undefined || operationId === "") {
+          throw new SddScriptError(`--operation-id is required (or pass --list)\n${usage}`, 2);
+        }
+        // Store-root pinning (see `workflow register`): reconcile finishes the
+        // producer's writes through the active ArtifactStore, whose fail-loud
+        // path agreement requires the resolved harness root as its root.
+        setArtifactStore(createFsStore(harnessDir));
+        if (options.abort === true) {
+          const aborted = await abortCatalogExecution(context, operationId, "abandoned from the command line");
+          if (json) console.log(JSON.stringify({ ok: true, data: aborted }));
+          else console.log(pc.yellow(`catalog reconcile: ${aborted.workflowId} abandoned (operation ${aborted.operationId}) — nothing was written`));
+          return;
+        }
+        const receipt = await reconcileCatalogExecution(context, operationId);
+        if (json) console.log(JSON.stringify({ ok: true, data: receipt }));
+        else {
+          console.log(pc.green(`catalog reconcile: OK — ${receipt.workflowId} recovered (operation ${receipt.operationId})`));
+          console.log(`  catalog revision: ${receipt.catalogRevision}`);
+        }
+      } catch (error) {
+        printFailure(error, json);
+      }
+    });
+}
+
+registerCatalogReconcileCommand(program);
 
 /**
  * Attach the detached `mstar workflow` group built above (see its declaration).

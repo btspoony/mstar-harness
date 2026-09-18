@@ -835,6 +835,29 @@ function readRegisteredSnapshot(snapshotPath: string): Record<string, unknown> |
 }
 
 /**
+ * The root-visible active entry for `id`, or `undefined` when the root file is
+ * missing/empty or holds no entry for that id.
+ *
+ * A tolerant READ of the v2 root — the "is this workflow root-visible?"
+ * question the catalog registration journal and its pending-registration gate
+ * ask (`catalog-registration.ts`, contract §3 step 3/step 4). It deliberately
+ * does not validate: a malformed or v1 root stays the writers' and
+ * `validateStatusV2`'s refusal, because this reader must never turn a broken
+ * document into a silent "not registered". An unparseable root still THROWS
+ * (the same fail-loud `readJson` contract the root writers use) rather than
+ * reporting the workflow absent.
+ */
+export function findRegisteredWorkflow(harnessDir: string, id: string): WorkflowEntry | undefined {
+  if (typeof id !== "string" || id.trim() === "") return undefined;
+  const statusPath = join(resolve(harnessDir), "status.json");
+  if (!existsSync(statusPath)) return undefined;
+  const doc = readJson(statusPath);
+  const workflows = Array.isArray(doc.workflows) ? doc.workflows : [];
+  const entry = workflows.find((candidate) => isPlainObject(candidate) && candidate.id === id);
+  return isPlainObject(entry) ? (entry as WorkflowEntry) : undefined;
+}
+
+/**
  * Register one active workflow entry in the v2 root file ().
  * Idempotent upsert by entry `id` under the root-file `withStatusWriteLock`,
  * bumping root `updated_at`. A missing/empty root file is initialized from
