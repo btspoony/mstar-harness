@@ -6,6 +6,34 @@
 
 ## [Unreleased]
 
+## [3.11.0] - 2026-09-18
+
+### Harness
+
+- 全代码库审计报告现以 Coverage 表收尾：每个实质审查问题一行（表面 × 边界/不变量 × 子系统 × 类别），恰好五个最终状态——`covered` 要求给出实际读过的 `file:line`、所检查的不变量与观察结果；每个非 covered 行都必须给出具体理由，读前被阻塞或仅有先前证据的行如实呈现，而非编造证据。五个状态为 `covered`（已检查，不等于干净）、`blocked`、`deferred`、`out_of_scope`、`not_applicable`；收尾摘要只点名表中已有的缺口，不出现数字统计或聚合路径账本。Coverage 是由审查者核对的内容：`mstar audit scaffold` 重建索引时既不保留也不校验它，因此每次脚手架后须先读出先前 Coverage 再重新对账，且不得宣称存在引擎级形状校验。
+- 审计脚手架的 findings 文件现在保留审计者提供的全部内容：CLI 解析器将 `description` 映射为 `impact`，保留此前被丢弃的显式 `confidence` 与 `evidence`，并接受可选的 `fingerprint`、`trace`、`severity` 元数据及结构化 `{file, line?, description}` 证据位置，缺省字段有明确默认值（confidence 为 `MED`、evidence 为 `[]`）。新增确定性引擎门禁 `validateAuditFindingGates`（指纹语法/唯一性/排序、`severity.overall ≤ severity.impact`、trace 拓扑、安全类型化路径、可见文本谓词、不透明字段凭据拒绝），在 `scaffoldAuditPlan` 写入任何文件之前执行；非法 findings 以退出码 2 终止，诊断只含字段路径、不输出部分产物。旧式字符串证据输入继续受支持。持久字段契约发布于 `skills/mstar-audit/references/finding-format.md`（§ Machine-readable findings file），`references/codebase-audit.md` 的脚手架引擎检查说明已按真实门禁及其边界更新，`mstar-audit` SKILL.md 中五状态攻击措辞收紧为其实际的四种处置。
+- 确立 **Phase 1 PM 初稿契约**（`mstar-iteration` §1.3）：初稿是被派发角色从磁盘读取的上下文载体，而非来自 PM 会话，因此必须携带锁定方向、已决事项、带 owner 的未决事项、非目标理由、约束来源、acceptance seed 与 branch policy；而候选方案分析、模块/接口细节、per-task 分解与 plan 级技术设计可以合法留粗。
+- 为 Prepare 阶段**只认定一种**未完成形态：带 owner 的 `TODO(owner: <role-id>)` marker —— 语法只在 §1.3 定义一次，owner 取值限定 Phase 1 链（`product-manager` / `architect` / `writing-specialist` / `PM`）。只有指向 owner 的 marker 可以代替未完成细节，且必须在 compass 到达 `status: locked` 前清除，或显式重新归属给 `PM` 并上报用户。无 owner 的 `TBD` / `...` / `etc.` 在任何阶段仍然禁止。
+- compass 新增两个必需节 —— `## Decisions`（决策 + 依据 + 来源）与 `## Open Questions`（每条带 owner 与 blocking 标记；无未决项写 `None`），在模板与 §1.3 内联脚手架中均紧随 `## Scope`，并补入各自 `## Fields guide` 行。
+- 为每个 Phase 1 编辑角色加上 **marker 清除义务**（§1.6 与 artifact-boundaries 表格）：角色在自身编辑轮中清除 owner 指向自己的 marker，无法清除的重新归属给 `PM`，并报出已清除/已重新归属的数量；`writing-specialist` 另承担 compass lock 之前的「无 marker 残留」收口核对。
+- 在 `mstar-artifacts/references/plan-quality-bar.md` 写明 **Prepare 写作侧标准**，作为「为无上下文执行者写作」的镜像：初稿与 compass 就是上下文载体，compass lock 前不得残留角色 own 的 marker。`mstar-phase-gates` 现明确门禁时点：无 placeholder 的判定在 `plan(locked)` 执行，marker 的清除期限是 compass 的 `status: locked`；禁令本身未变。
+- 要求 Phase 1 review-and-edit Assignment 的 **`Inputs`** 携带初稿路径、方向决策（或指向 compass `## Decisions` 的指针）、带 owner 的 open questions、非目标理由，以及该角色 own 的 marker 清单；并把「派发编辑角色却不给方向决策 / open questions」列入反模式清单 —— 该角色只能重推它看不到的上下文。
+- 已删除 Assignment 的 **`Model tier`** 字段。该字段不可执行 —— skill 文档无法观测宿主实际运行哪个模型 —— 且没有任何机器校验它：engine 与 CLI 都不要求它，因此删除它无需运行期改动。
+- 一并删除该字段的两张宿主映射表及所有生产方/消费方引用：`mstar-sdd` 的档位章节（含其「派发时必须指明模型」规则）、三份 SDD dispatch prompt 模板与 sticky session 头部行中的 `Model:` 行、`file-handoffs` 的必需字段条目、Phase 2 的 per-task 派发步骤与「禁止省略该字段」的 Assignment 字段条款、Assignment 模板字段及其 SDD NEVER 提及、routing-eval 期望字符串，以及 `mstar-host/references/cursor.md` 中的档位章节。原先点名该字段的「禁止省略」条款现只覆盖 `Execution mode` / `SDD dir`。
+- 宿主原生的模型选择仍留在它原本所在之处，交由宿主与会话决定：Cursor 的 Task `model` 参数被记述为可选的宿主 slug，服务于会话自身的模型策略，不规定任何 mstar 档位；dsh `agent()` 与 omp model handoff 能力保持既有描述不变。
+- 安全审查深读指南（`skills/mstar-audit/references/security-review.md`）扩展覆盖面与误报纪律：§2 新增显式严重度锚点（informational → critical）与反升级规则；§8 侦查角度补充具体 `Signal:` 信号；§9a–§9h 类别折叠新增逐条排除与新增检查项（OAuth/SAML 绑定、WebAuthn、供应链/CI 信任、基础设施/IAM、数据隔离、AI/LLM 信任）；新增三个折叠——§9i 桌面/移动/本地 IPC、§9j 内存安全与二进制（仅源码审查）、§9k 可用性与资源耗尽；§12 新增「静态证据必需」规则；新增 §13「按类别排除规则」（自我注入、已存在权限检查、加密错误分支/仅写路径校验），并以一行指针把其余误报信号类别路由到各自归属章节；新增 §14 协议/RPC/消息不变量。
+
+### Changed
+
+- 在 OMP 宿主参考中写明 prepared Assignment 的生产者：`reserve-launch` 准入子句与可选传输小节现命名 **`mstar plan prepare`** 为写入 `coordination.prepared` 及其固定 `coordination.prepared.assignment_path` 的协调者步骤，把传输占位符定义为该绝对路径，补充额外 primary 路线的有序摘要（已注册的 `Todo` 行 → 存在的 feature worktree → 协调者已绑定 → prepare → `reserve-launch` → 既有先记账后副作用的迁移与 pane/启动/提交序列），并写明准入窗口——行准入随 Phase 1 关闭（任何行开始准备或执行时更早关闭），而已注册的合格行仍可在 Phase 2 期间被准备。
+- 在 scoped-plan PM 传输小节补充宿主无关前置条件：条件性额外 primary 启动仅适用于协调者已注册且已准备、feature worktree 已存在的 plan 行；尚不存在的行无法被启动，因为行准入随 Phase 1 关闭。
+- 在 OMP 宿主参考的可选传输小节新增**六项 scoped-route 派发清单**：全新目标会话、已准备（而非仅注册）的行、交接内容在准备前定稿且 bind 仅复核 Assignment 哈希（`coordination.assignment-stale`）、初始命令仅提交一次、读回确认执行且仅在明确未执行时单键恢复、绑定后仅以 steering 补充上下文——*exactly once* 仅约束初始命令。尾随 Enter 行为仍是对本仓库不拥有的传输 CLI 的现场观察。
+- 在共享派发门禁中写明**跨会话派发的受支持路径**：跨独立主会话/终端的并发只有一种受支持形式——以 prepared Assignment 作为全新会话第一条指令的 scoped route；经终端提示词下发协调者自拟的 leaf Assignment 不受支持，因为它绕过 scoped 启动、lease 归属与 handoff 交接。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 3.11.0**。
+
 ## [3.10.3] - 2026-09-17
 
 ### Harness

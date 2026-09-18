@@ -6,6 +6,21 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [3.11.0] - 2026-09-18
+
+### Harness
+
+- Audit scaffold findings files now preserve what the auditor supplied: the CLI parser maps `description` → `impact`, keeps explicit `confidence` and `evidence` (previously discarded), and accepts optional `fingerprint`, `trace`, and `severity` metadata plus structured `{file, line?, description}` evidence locations, with documented absent-field defaults (`MED` confidence, `[]` evidence). A new deterministic engine gate `validateAuditFindingGates` (fingerprint grammar/uniqueness/ordering, `severity.overall ≤ severity.impact`, trace topology, safe typed paths, visible-text predicates, credential rejection on opaque fields) runs inside `scaffoldAuditPlan` before any file is written; invalid findings exit 2 with field-path diagnostics and no partial output. Legacy string-evidence input remains supported. The durable field contract is published in `skills/mstar-audit/references/finding-format.md` (§ Machine-readable findings file), the scaffold engine-check callout in `references/codebase-audit.md` was updated for the real gates and their limits, and the five-state attack wording in `mstar-audit` SKILL.md was tightened to its four actual dispositions.
+- `mstar worktree cleanup` merge-evidence probing is now bounded: evidence bases resolve once, membership sweeps run at most once per distinct base OID with an immutable in-pass memo — no per-pair `merge-base --is-ancestor` spawns; `--verbose` adds per-pair ancestry diagnostics without changing candidates or decisions.
+- The default candidate scope is now the selected workflow's recorded claims; pass `--all-workflows` for the previous full sweep, and `--worktree <path>` additionally narrows branch candidates to the asserted worktrees' exact recorded owners.
+- Added **`registerIterationWorkflow`** to the engine: a sibling of `registerPlanWorkflow` that creates the `type: "iteration"` snapshot (compass ref, three branch anchors, Todo plan rows with §1.5-derived `iteration_refs` / `spec_integration_branch` / `merge_target` metadata) plus the root `status.json` entry inside one create-only, root-lock section — version-exact rollback, byte-preserving orphan recovery, and no change to the standalone plan producer.
+- Added the **`mstar iteration register`** CLI verb so an iteration can be registered from any checkout with no engine import (exit `0` ok / `1` engine refusal / `2` usage); `mstar workflow register` is unchanged.
+- Made the new path discoverable: `mstar-iteration` §1.5 now names the verb instead of a bare engine call, and `mstar-use-cli` indexes the iteration-registration family (its `mstar-harness-core` topic-index row was already wired in d7aca2f6).
+
+- Version alignment with harness **3.11.0**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **3.11.0**.
+
 ## [3.10.3] - 2026-09-17
 
 ### Changed
