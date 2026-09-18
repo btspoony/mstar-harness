@@ -6,6 +6,22 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [3.11.0] - 2026-09-18
+
+### Changed
+
+- Made `mstar_model_handoff {operation:"start"}` reachable for an already-registered, own, not-yet-armed workflow: the extension now selects the reservation or attachment branch from the validated root register itself, while coordinator authority stays derived solely from host/engine facts (`deriveStartAuthority`). A foreign coordinator of the named workflow now refuses with `already-bound` on the attach path; every other refusal code and the unregistered reservation path are byte-identical.
+- Aligned all model-handoff coordinator notices with the shared Morning Star title shape: status-bearing titles state the observed workflow id and status from its own snapshot; snapshot-free sites (suspension, start refusal, in-flight navigation refusal) use a fallback title that asserts no workflow status. `mstar:model-handoff-notice` and `mstar:model-handoff` literals are unchanged.
+- Documented the producer of the prepared Assignment in the OMP host reference: the `reserve-launch` admission clause and the optional transport section now name **`mstar plan prepare`** as the coordinator step that writes `coordination.prepared` and its pinned `coordination.prepared.assignment_path`, define the transport placeholder as that absolute path, add an ordered summary of the extra-primary route (registered `Todo` row → existing feature worktree → coordinator bound → prepare → `reserve-launch` → the journaled record-before-side-effect transitions and pane/start/submission sequence), and state the admission windows — row admission closes with Phase 1 (earlier once any row starts preparation or execution), while an already-registered eligible row may still be prepared during Phase 2.
+- Added the host-agnostic precondition to the scoped-plan PM transport note: a conditional extra-primary launch is available only for a plan row the coordinator has already registered and prepared, and whose feature worktree exists — a row that does not yet exist cannot be launched, because row admission closes with Phase 1.
+- Added the **six-item scoped-route dispatch checklist** to the OMP host reference's optional transport section: a fresh target session, a prepared (not merely registered) row, handover content frozen before preparation with only the Assignment hash re-checked at bind (`coordination.assignment-stale`), a single initial submission, readback-confirmed execution with single-key recovery only, and post-bind steering — bounding *exactly once* to the initial command. The trailing-Enter behavior stays a field observation of a transport CLI this repository does not own.
+- Named the **supported cross-session dispatch path** in the shared dispatch gates: concurrency across separate primary sessions or terminals has exactly one supported form — the scoped route with a prepared Assignment as a fresh session's first instruction; a coordinator-authored leaf Assignment sent through a terminal prompt is unsupported because it bypasses scoped boot, lease ownership and handoff.
+- Reshaped the **OMP diagnostic notices** onto one shared title shape (`packages/omp/src/notices.ts`): a status-bearing title states the observed workflow's `id` and `status` verbatim from a successfully read snapshot, and a fallback title names the observed condition while asserting no workflow status. The Phase-2 adapter now carries the typed observed id/status through its internal probe/sampling/diagnostic path instead of emitting the fixed `Phase-2 observation inactive` prefix, keeps the refusal code in the detail, and preserves the one-diagnostic-per-code-per-generation bound. The notice custom-type literals are declared only in the shared module.
+
+- Version alignment with harness **3.11.0**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **3.11.0**.
+
 ## [3.10.3] - 2026-09-17
 
 ### Changed
