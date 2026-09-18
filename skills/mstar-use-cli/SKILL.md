@@ -68,6 +68,7 @@ Find the task, run the family, then read its owning skill for the rules around i
 | SDD helpers: workspace, brief, branch diff package, bound launch, evidence capture | `mstar sdd workspace`, `mstar sdd task-brief`, `mstar sdd review-package`, `mstar sdd check-context`, `mstar sdd exec`, `mstar sdd evidence` | `mstar-sdd` |
 | Evaluate a phase-transition gate; probe push cadence | `mstar iteration gate`, `mstar iteration push-cadence` | `mstar-iteration`, `mstar-phase-gates` |
 | Resolve the harness / plan / SDD / workflow / project dirs | `mstar path resolve` | `mstar-conventions` |
+| Capture, list, show, occurrence, triage, terminal disposition, link, or export issues in `{HARNESS_DIR}/store.db` | `mstar issue …` | `mstar-conventions` (store path vs execution JSON); group help owns verbs and flags |
 | Detect the active host; resolve a loaded skill root | `mstar host detect`, `mstar host skill-root` | `mstar-host` |
 | Lint harness artifacts by content type | `mstar lint` | `mstar-skill-authoring`, `mstar-coding-behavior`, `mstar-strategy` |
 | Lint a skill's frontmatter and five-question body | `mstar skill lint` | `mstar-skill-authoring` |

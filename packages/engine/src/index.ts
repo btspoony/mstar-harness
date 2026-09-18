@@ -511,3 +511,48 @@ export type {
   ResolvedPlanScope,
   VersionedArtifact,
 } from "./coordination.js";
+export type { StoreContext, StoreErrorCode, StoreHandle, StoreRuntimeInfo, StoreDb } from "./store-db.js";
+// Issue-store boundary (plan 20260918-issue-store-core C1): lazily acquires
+// `node:sqlite` — importing this index never loads the driver or opens a DB.
+export {
+  MIGRATIONS,
+  MIN_BUN_VERSION,
+  MIN_NODE_VERSION,
+  SCHEMA_VERSION_TABLE_SQL,
+  StoreError,
+  assertStoreRuntimeSupported,
+  compareVersions,
+  detectStoreRuntime,
+  initializeStore,
+  migrationChecksum,
+  openStore,
+  storeDbPath,
+  upgradeStore,
+} from "./store-db.js";
+export type {
+  CaptureInput,
+  ClosureEvidence,
+  Disposition,
+  IssueDetail,
+  IssueErrorCode,
+  IssueFilter,
+  IssueKind,
+  IssueLink,
+  IssuePage,
+  IssueReceipt,
+  IssueTriage,
+  MutationContext,
+  OccurrenceInput,
+  Severity,
+  TerminalDisposition,
+} from "./issue.js";
+export {
+  IssueError,
+  appendOccurrence,
+  captureIssue,
+  closeIssue,
+  getIssue,
+  linkIssue,
+  listIssues,
+  triageIssue,
+} from "./issue.js";
