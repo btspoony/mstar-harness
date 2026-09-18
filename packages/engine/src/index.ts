@@ -515,6 +515,7 @@ export type { StoreContext, StoreErrorCode, StoreHandle, StoreRuntimeInfo, Store
 // Issue-store boundary (plan 20260918-issue-store-core C1): lazily acquires
 // `node:sqlite` — importing this index never loads the driver or opens a DB.
 export {
+  MIGRATION_2_SQL,
   MIGRATIONS,
   MIN_BUN_VERSION,
   MIN_NODE_VERSION,
@@ -556,3 +557,35 @@ export {
   listIssues,
   triageIssue,
 } from "./issue.js";
+// Catalog authority (plan 20260918-state-projection P1): catalog metadata is
+// the DB authority for project/iteration/plan/document identity, locations,
+// relations and archived/superseded lifecycle. No execution status, no
+// projection, no Markdown index.
+export type {
+  CatalogDetail,
+  CatalogDocumentKind,
+  CatalogEntity,
+  CatalogEntityInput,
+  CatalogEntityKind,
+  CatalogEntityPatch,
+  CatalogErrorCode,
+  CatalogFilter,
+  CatalogKey,
+  CatalogLifecycle,
+  CatalogLink,
+  CatalogLinkInput,
+  CatalogOperation,
+  CatalogPage,
+  CatalogReceipt,
+  CatalogRelation,
+  CatalogRootKind,
+} from "./catalog.js";
+export {
+  CatalogError,
+  catalogRootDir,
+  getCatalog,
+  linkCatalogEntities,
+  listCatalog,
+  registerCatalogEntity,
+  updateCatalogEntity,
+} from "./catalog.js";

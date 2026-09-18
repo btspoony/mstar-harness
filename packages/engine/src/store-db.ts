@@ -420,10 +420,95 @@ values (
 insert into issue_counter(id, next_value) values (1, 1);
 `;
 
+/**
+ * Migration 2 — catalog/registration tables (state-projection-contract §2),
+ * appended through the runner above; migration 1 is untouched. One typed
+ * entity table carries every catalog family, keyed by the composite
+ * `(kind, id)`.
+ *
+ * Boundary (contract §1): these tables hold catalog metadata only. There is
+ * no execution status/phase/progress/lease column anywhere here — the root
+ * active-workflow register and the snapshots stay the execution authority,
+ * and `catalog_execution_bindings` records the historical workflow
+ * association plus the frozen plan-input identity, nothing else.
+ *
+ * `catalog_entities.source_hash` is nullable: a registration may predate the
+ * document body (or the body may be missing), and readers disclose a missing
+ * location rather than refusing it.
+ */
+export const MIGRATION_2_SQL = `
+create table catalog_entities(
+  kind text not null check (kind in ('project','iteration','plan','document')),
+  id text not null,
+  title text not null,
+  description text,
+  root_kind text not null check (root_kind in ('repository','harness','plans','iterations','specs','knowledge','projects')),
+  relative_path text not null,
+  document_kind text check (document_kind in ('spec','knowledge','guide','compass','plan','roadmap','review','other')),
+  lifecycle text not null default 'active' check (lifecycle in ('active','archived','superseded')),
+  revision integer not null default 1 check (revision > 0),
+  registered_at text not null,
+  updated_at text not null,
+  source_hash text,
+  primary key (kind, id),
+  check (document_kind is null or kind = 'document')
+);
+create unique index catalog_entities_location on catalog_entities(kind, root_kind, relative_path);
+create index catalog_entities_document_kind on catalog_entities(document_kind) where document_kind is not null;
+create table catalog_links(
+  from_kind text not null check (from_kind in ('project','iteration','plan','document')),
+  from_id text not null,
+  relation text not null check (relation in ('belongs-to','documents','spec-ref','knowledge-ref','derived-from','supersedes')),
+  to_kind text not null check (to_kind in ('project','iteration','plan','document')),
+  to_id text not null,
+  ordinal integer,
+  primary key (from_kind, from_id, relation, to_kind, to_id),
+  foreign key (from_kind, from_id) references catalog_entities(kind, id),
+  foreign key (to_kind, to_id) references catalog_entities(kind, id),
+  check (from_kind != to_kind or from_id != to_id),
+  check (ordinal is null or ordinal >= 0),
+  check (
+    (relation = 'belongs-to' and from_kind in ('plan','iteration','document') and to_kind = 'project')
+    or (relation = 'belongs-to' and from_kind = 'plan' and to_kind = 'iteration')
+    or (relation = 'documents' and from_kind in ('iteration','project','plan') and to_kind = 'document')
+    or (relation in ('spec-ref','knowledge-ref','derived-from') and from_kind in ('plan','iteration','document') and to_kind = 'document')
+    or (relation = 'supersedes' and from_kind = to_kind)
+  )
+);
+create index catalog_links_target on catalog_links(to_kind, to_id);
+create table catalog_operations(
+  operation_id text primary key,
+  request_hash text not null,
+  phase text not null check (phase in ('prepared','execution-written','committed','aborted')),
+  catalog_delta_json text not null,
+  before_versions_json text not null,
+  after_versions_json text not null,
+  result_json text,
+  created_at text not null,
+  updated_at text not null
+);
+create table catalog_execution_bindings(
+  workflow_id text not null,
+  catalog_kind text not null check (catalog_kind in ('iteration','plan')),
+  catalog_id text not null,
+  workflow_root_kind text not null check (workflow_root_kind in ('repository','harness','plans','iterations','specs','knowledge','projects')),
+  workflow_relative_path text not null,
+  catalog_revision integer not null,
+  input_hash text not null,
+  pin_json text not null,
+  operation_id text not null,
+  primary key (workflow_id, catalog_kind, catalog_id),
+  foreign key (catalog_kind, catalog_id) references catalog_entities(kind, id)
+);
+`;
+
 export type Migration = { version: number; name: string; sql: string };
 
 /** Ordered immutable migrations. Never mutate an applied entry — append only. */
-export const MIGRATIONS: readonly Migration[] = [{ version: 1, name: "issue-core", sql: MIGRATION_1_SQL }];
+export const MIGRATIONS: readonly Migration[] = [
+  { version: 1, name: "issue-core", sql: MIGRATION_1_SQL },
+  { version: 2, name: "catalog-authority", sql: MIGRATION_2_SQL },
+];
 
 /** SHA-256 of the compiled migration SQL — what every applied row must match. */
 export function migrationChecksum(migration: Migration): string {
