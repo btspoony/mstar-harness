@@ -46,15 +46,18 @@ function cliEnv(): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (key === "MSTAR_HARNESS_DIR" || key === "MSTAR_CONTROL_ROOT" || key === "SDD_DIR") continue;
+    // The identity channel is per-case input: an ambient value (the test itself
+    // may run under a host that injects it) must never reach a fixture.
+    if (key === "MSTAR_HOST_SESSION_ID") continue;
     if (value !== undefined) env[key] = value;
   }
   return env;
 }
 
-function runCli(args: string[], cwd: string): RunResult {
+function runCli(args: string[], cwd: string, extraEnv: Record<string, string> = {}): RunResult {
   const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, ...args], {
     cwd,
-    env: cliEnv(),
+    env: { ...cliEnv(), ...extraEnv },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -367,6 +370,126 @@ describe("mstar plan — entry-forms", () => {
     expect(payload.revision).toBe(0);
     expect(payload.scope).toBeNull();
     expect(payload.allowed_operations).toContain("prepare");
+  });
+});
+
+describe("mstar plan — session identity", () => {
+  test("--session-id becomes the bound identity on both fresh address forms", () => {
+    const fixture = makeFixture();
+    const supplied = "host-session-coordinator";
+    const coordinated = runCli(
+      ["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--session-id", supplied, "--json"],
+      fixture.root,
+    );
+    expect(coordinated.exitCode).toBe(0);
+    const coordinatorPayload = jsonOf(coordinated);
+    expect(coordinatorPayload.session_id).toBe(supplied);
+    expect(String(coordinatorPayload.session_file)).toBe(join(fixture.harness, "workflows", WORKFLOW_ID, "sessions", `${supplied}.json`));
+    const coordinator = String(coordinatorPayload.session_file);
+    expect(readJson(coordinator).session_id).toBe(supplied);
+    // The identity reached the engine's own binding, not just the file name.
+    const coordination = readJson(fixture.snapshotPath).coordination as { coordinator?: { session_id?: string } };
+    expect(coordination.coordinator?.session_id).toBe(supplied);
+
+    preparePlan(fixture, coordinator, PLAN_ID);
+    const claimed = runCli(
+      ["plan", "bind", "--workflow", WORKFLOW_ID, "--plan", PLAN_ID, "--session-id", "host-session-plan-a", "--json"],
+      fixture.root,
+    );
+    expect(claimed.exitCode).toBe(0);
+    const planPayload = jsonOf(claimed);
+    expect(planPayload.session_id).toBe("host-session-plan-a");
+    expect(readJson(String(planPayload.session_file)).session_id).toBe("host-session-plan-a");
+  });
+
+  test("--session-id reaches the pinned-Assignment address form too", () => {
+    const fixture = makeFixture();
+    const coordinator = bindCoordinator(fixture);
+    preparePlan(fixture, coordinator, PLAN_ID);
+
+    const supplied = "host-session-assignment";
+    const bound = runCli(
+      ["plan", "bind", "--assignment", fixture.assignmentPath, "--session-id", supplied, "--json"],
+      fixture.root,
+    );
+    expect(bound.exitCode).toBe(0);
+    const payload = jsonOf(bound);
+    expect(payload.outcome).toBe("claimed");
+    expect(payload.session_id).toBe(supplied);
+    expect(readJson(String(payload.session_file)).session_id).toBe(supplied);
+  });
+
+  test("MSTAR_HOST_SESSION_ID supplies the identity when the flag is absent, and the flag wins", () => {
+    const fromEnv = makeFixture();
+    const envBound = runCli(
+      ["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--json"],
+      fromEnv.root,
+      { MSTAR_HOST_SESSION_ID: "host-session-env" },
+    );
+    expect(envBound.exitCode).toBe(0);
+    expect(jsonOf(envBound).session_id).toBe("host-session-env");
+
+    // The flag is the explicit input: it outranks the injected env.
+    const both = makeFixture();
+    const flagged = runCli(
+      ["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--session-id", "host-session-flag", "--json"],
+      both.root,
+      { MSTAR_HOST_SESSION_ID: "host-session-env" },
+    );
+    expect(flagged.exitCode).toBe(0);
+    expect(jsonOf(flagged).session_id).toBe("host-session-flag");
+  });
+
+  test("an empty or whitespace-only env value is absent, not an identity", () => {
+    for (const blank of ["", "   "]) {
+      const fixture = makeFixture();
+      const bound = runCli(
+        ["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--json"],
+        fixture.root,
+        { MSTAR_HOST_SESSION_ID: blank },
+      );
+      expect({ blank, exitCode: bound.exitCode }).toEqual({ blank, exitCode: 0 });
+      const generated = jsonOf(bound).session_id;
+      expect({ blank, uuid: typeof generated === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(generated) }).toEqual({
+        blank,
+        uuid: true,
+      });
+    }
+  });
+
+  test("--resume accepts no identity input (exit 2) and stays resumable", () => {
+    const fixture = makeFixture();
+    const coordinator = bindCoordinator(fixture);
+
+    for (const args of [
+      ["plan", "bind", "--resume", coordinator, "--session-id", "host-session-nope"],
+      ["plan", "bind", "--resume", coordinator, "--session-id", "host-session-nope", "--json"],
+    ]) {
+      const refused = runCli(args, fixture.root);
+      expect({ args, exitCode: refused.exitCode }).toEqual({ args, exitCode: 2 });
+    }
+    const json = runCli(["plan", "bind", "--resume", coordinator, "--session-id", "x", "--json"], fixture.root);
+    expect(jsonOf(json).code).toBe("usage");
+    // The refusal is the resume guard's own, not commander's unknown-option path.
+    expect(String(jsonOf(json).message)).toContain("--resume accepts no --session-id");
+
+    // Fail-closed means no side effect: the same envelope still resumes.
+    const resumed = runCli(["plan", "bind", "--resume", coordinator, "--json"], fixture.root);
+    expect(resumed.exitCode).toBe(0);
+    expect(jsonOf(resumed).outcome).toBe("resumed");
+    expect(jsonOf(resumed).session_id).toBe(readJson(coordinator).session_id);
+  });
+
+  test("--coordinator still refuses a flag that belongs to another address form", () => {
+    const fixture = makeFixture();
+    const refused = runCli(
+      ["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--plan", PLAN_ID, "--json"],
+      fixture.root,
+    );
+    expect(refused.exitCode).toBe(2);
+    expect(jsonOf(refused).code).toBe("usage");
+    // The refusal happened before the engine saw anything: nothing is bound.
+    expect(readJson(fixture.snapshotPath).coordination).toBeUndefined();
   });
 });
 

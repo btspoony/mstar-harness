@@ -34,7 +34,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -553,6 +553,115 @@ describe("binding", () => {
 
     // An unprepared plan cannot be bound at all.
     expect(await errorCodeOf(() => bindPlan(fixture, PEER_PLAN_ID))).toBe("coordination.not-prepared");
+  });
+
+  test("a caller-supplied session id is adopted as the identity and the envelope name on both bind paths", async () => {
+    const fixture = makeFixture();
+    const coordinatorId = "host-session-coordinator";
+    const coordinated = await bindPlanSession({
+      coordinator: true,
+      workflowId: WORKFLOW_ID,
+      harnessDir: fixture.harness,
+      cwd: fixture.root,
+      sessionId: coordinatorId,
+    });
+    fixture.coordinatorSession = coordinated.session_file;
+    expect(coordinated.session.session_id).toBe(coordinatorId);
+    expect(coordinated.session_file).toBe(join(fixture.workflowDir, "sessions", `${coordinatorId}.json`));
+    expect(readJson(coordinated.session_file).session_id).toBe(coordinatorId);
+    const snapshot = readJson(fixture.snapshotPath);
+    const coordination = snapshot.coordination as { coordinator?: { session_id?: string } };
+    expect(coordination.coordinator?.session_id).toBe(coordinatorId);
+
+    await preparePlan(fixture, PLAN_ID);
+    const planSessionId = "host-session-plan";
+    const claimed = await bindPlanSession({
+      scope: { workflowId: WORKFLOW_ID, planId: PLAN_ID, harnessDir: fixture.harness },
+      cwd: fixture.root,
+      sessionId: planSessionId,
+    });
+    expect(claimed.outcome).toBe("claimed");
+    expect(claimed.session.session_id).toBe(planSessionId);
+    expect(claimed.session_file).toBe(join(fixture.workflowDir, "sessions", `${planSessionId}.json`));
+    expect(readJson(claimed.session_file).session_id).toBe(planSessionId);
+    // The identity is the one every later call is matched against: the row
+    // records it as the binding and as the execution-lease holder.
+    const row = planRowOf(fixture, PLAN_ID);
+    const rowCoordination = row.coordination as { session?: { session_id?: string } };
+    expect(rowCoordination.session?.session_id).toBe(planSessionId);
+    expect(leaseHolder(row)).toBe(planSessionId);
+  });
+
+  test("an invalid supplied session id refuses before any write", async () => {
+    // `../escape` would leave the sessions directory, `''`/`.` are not file
+    // names, `a/b` adds a segment and 129 characters exceed the id contract.
+    for (const bad of ["../escape", "", "a/b", ".", "a".repeat(129)]) {
+      const fixture = makeFixture();
+      const before = readFileSync(fixture.snapshotPath, "utf8");
+      expect(
+        await errorCodeOf(() =>
+          bindPlanSession({
+            coordinator: true,
+            workflowId: WORKFLOW_ID,
+            harnessDir: fixture.harness,
+            cwd: fixture.root,
+            sessionId: bad,
+          }),
+        ),
+      ).toBe("coordination.invalid-session-id");
+      expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(before);
+      expect(existsSync(join(fixture.workflowDir, "sessions"))).toBe(false);
+    }
+
+    // The plan path shares the guard: the prepared row stays unclaimed and the
+    // sessions directory keeps exactly the envelopes it already had.
+    const fixture = makeFixture();
+    await preparePlan(fixture, PLAN_ID);
+    const sessionsDir = join(fixture.workflowDir, "sessions");
+    const envelopes = readdirSync(sessionsDir).sort();
+    const before = readFileSync(fixture.snapshotPath, "utf8");
+    expect(
+      await errorCodeOf(() =>
+        bindPlanSession({
+          scope: { workflowId: WORKFLOW_ID, planId: PLAN_ID, harnessDir: fixture.harness },
+          cwd: fixture.root,
+          sessionId: "a/b",
+        }),
+      ),
+    ).toBe("coordination.invalid-session-id");
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(before);
+    expect(readdirSync(sessionsDir).sort()).toEqual(envelopes);
+  });
+
+  test("an absent session id keeps the generated UUID identity, and a re-used one never overwrites an envelope", async () => {
+    const fixture = makeFixture();
+    const bound = await bindPlanSession({
+      coordinator: true,
+      workflowId: WORKFLOW_ID,
+      harnessDir: fixture.harness,
+      cwd: fixture.root,
+    });
+    expect(bound.session.session_id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+
+    // An envelope that already occupies the id is never replaced: the existing
+    // exclusive-create refusal reports it instead of hijacking the identity.
+    const fresh = makeFixture();
+    const orphan = join(fresh.workflowDir, "sessions", "host-session-orphan.json");
+    writeText(orphan, '{"stray":true}\n');
+    const before = readFileSync(fresh.snapshotPath, "utf8");
+    expect(
+      await errorCodeOf(() =>
+        bindPlanSession({
+          coordinator: true,
+          workflowId: WORKFLOW_ID,
+          harnessDir: fresh.harness,
+          cwd: fresh.root,
+          sessionId: "host-session-orphan",
+        }),
+      ),
+    ).toBe("coordination.session-mismatch");
+    expect(readFileSync(orphan, "utf8")).toBe('{"stray":true}\n');
+    expect(readFileSync(fresh.snapshotPath, "utf8")).toBe(before);
   });
 
   test("the operation surface is closed, role-scoped and never advertised to the wrong seat", async () => {

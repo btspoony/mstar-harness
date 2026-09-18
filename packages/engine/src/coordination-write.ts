@@ -46,6 +46,7 @@ export const COORDINATION_ERROR_CODES = [
   "coordination.session-mismatch",
   "coordination.session-not-found",
   "coordination.session-role",
+  "coordination.invalid-session-id",
   "coordination.version-conflict",
   "coordination.expected-version-required",
   "coordination.invalid-transition",
