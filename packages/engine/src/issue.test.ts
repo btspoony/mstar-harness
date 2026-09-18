@@ -1,13 +1,15 @@
 /**
  * issue.test.ts — C2/C3 proof: capture, occurrences, reads, disposition.
  */
-import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync, execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, test } from "bun:test";
-import { initializeStore, openStore } from "./store-db.js";
+import { bindPlanSession, mutatePlanCoordination, readPlanCoordination } from "./coordination.js";
+import { createFsStore, setArtifactStore } from "./store.js";
+import { initializeStore, openStore, type StoreContext } from "./store-db.js";
 import {
   IssueError,
   appendOccurrence,
@@ -430,31 +432,236 @@ describe("failed capture leaves no partial finding", () => {
   });
 });
 
-const SESSION_ROOT = mkdtempSync(join(ROOT, "sessions-"));
+/* -------------------------------------------------------------------------
+ * Live-workflow authority fixtures (contract §4)
+ *
+ * A privileged mutation is authorized only by the engine-issued session
+ * envelope of a live workflow, so these fixtures build a real control root (a
+ * Git repository, a running root register entry, a valid snapshot) and let the
+ * engine itself issue every envelope through `bindPlanSession`. Nothing here
+ * hand-writes a session file: a hand-written one is exactly what the refusal
+ * cases below must reject.
+ * ---------------------------------------------------------------------- */
 
-function pmMut(operationId: string, extra: Partial<MutationContext> = {}): MutationContext {
+const LIVE_WORKFLOW_ID = "wf-issue";
+const LIVE_PLAN_ID = "20260918-a";
+const LIVE_PEER_PLAN_ID = "20260918-b";
+
+type LiveAuthority = {
+  /** The harness dir that owns the fixture's store. */
+  harness: string;
+  workflowId: string;
+  planId: string;
+  peerPlanId: string;
+  /** The engine-issued lifecycle (`coordinator`) envelope. */
+  coordinatorSession: string;
+  /** Engine-issued `plan-pm` envelopes by plan id (`{}` unless `bindPlans`). */
+  planSessions: Record<string, string>;
+};
+
+function git(args: string[], cwd: string): void {
+  execFileSync("git", args, { cwd, stdio: ["ignore", "ignore", "ignore"] });
+}
+
+function writeJsonFile(path: string, value: unknown): void {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+function writeTextFile(path: string, text: string): void {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, text, "utf8");
+}
+
+/** Fixture JSON read (a JSON document written by the fixture or the engine). */
+function readJsonFile(path: string): Record<string, unknown> {
+  return JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+}
+
+/** The session id an envelope file records. */
+function sessionIdOf(path: string): string {
+  const sessionId = readJsonFile(path).session_id;
+  if (typeof sessionId !== "string" || sessionId === "") throw new Error(`fixture: no session_id in ${path}`);
+  return sessionId;
+}
+
+/** Fixture snapshot path of one authority. */
+function snapshotPathOf(authority: LiveAuthority): string {
+  return join(authority.harness, "workflows", authority.workflowId, "snapshot.json");
+}
+
+/** The pinned Assignment header block `parseAssignmentFile` accepts. */
+function assignmentText(input: {
+  harness: string;
+  workflowId: string;
+  planId: string;
+  planPath: string;
+  worktreePath: string;
+  sddDir: string;
+}): string {
+  return [
+    `# Assignment — ${input.planId}`,
+    "",
+    `**Control harness root**: ${input.harness}`,
+    `**Workflow id**: ${input.workflowId}`,
+    `**Plan id**: ${input.planId}`,
+    `**Plan Path**: ${input.planPath}`,
+    `**Worktree Path**: ${input.worktreePath}`,
+    `**Working branch**: feature/fixture-plan`,
+    `**SDD dir**: ${input.sddDir}`,
+    "**Execute as**: project-manager",
+    "**Execution scope**: plan",
+    "**Delegation**: allowed (plan-local subagents only)",
+    "**Prepare gate**: go",
+    "**QA gate**: mandatory",
+    "**Findings cleanup**: allow-residual",
+    "",
+    "Fixture plan.",
+    "",
+  ].join("\n");
+}
+
+/**
+ * A live workflow in its own control root, with the envelopes the engine
+ * issues for it: the lifecycle `coordinator` seat, plus each plan row's
+ * `plan-pm` seat when `bindPlans` is set (a plan bind requires a prepared
+ * plan). The store is initialized, so callers mutate it directly.
+ */
+async function liveAuthority(name: string, options: { bindPlans?: boolean } = {}): Promise<LiveAuthority> {
+  const root = realpathSync(mkdtempSync(join(ROOT, name)));
+  git(["init", "-q", "-b", "main"], root);
+  git(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], root);
+  const harness = join(root, ".mstar");
+  const workflowId = LIVE_WORKFLOW_ID;
+  const planIds = [LIVE_PLAN_ID, LIVE_PEER_PLAN_ID];
+  const workflowDir = join(harness, "workflows", workflowId);
+  mkdirSync(join(harness, "plans"), { recursive: true });
+  for (const planId of planIds) {
+    writeFileSync(join(harness, "plans", `${planId}.md`), `# ${planId}\n`);
+    mkdirSync(join(root, `wt-${planId}`), { recursive: true });
+  }
+  writeJsonFile(join(harness, "status.json"), {
+    version: 2,
+    updated_at: "2026-09-18",
+    workflows: [
+      { id: workflowId, status: "running", type: "iteration", started_at: "2026-09-18T00:00:00Z", dir: `workflows/${workflowId}` },
+    ],
+  });
+  writeJsonFile(join(workflowDir, "snapshot.json"), {
+    schema_version: 1,
+    id: workflowId,
+    type: "iteration",
+    status: "running",
+    started_at: "2026-09-18T00:00:00Z",
+    updated_at: "2026-09-18T00:00:00Z",
+    branch: { base: "main" },
+    plans: planIds.map((planId) => ({
+      id: planId,
+      plan_id: planId,
+      title: `Plan ${planId}`,
+      file: `.mstar/plans/${planId}.md`,
+      status: "Todo",
+    })),
+  });
+
+  const planSessions: Record<string, string> = {};
+  let coordinatorSession = "";
+  setArtifactStore(createFsStore(harness));
+  try {
+    coordinatorSession = (
+      await bindPlanSession({ coordinator: true, workflowId, harnessDir: harness, cwd: root })
+    ).session_file;
+    if (options.bindPlans === true) {
+      for (const planId of planIds) {
+        const sddDir = join(harness, "sdd", planId);
+        const assignmentPath = join(sddDir, "assignment.md");
+        writeTextFile(
+          assignmentPath,
+          assignmentText({
+            harness,
+            workflowId,
+            planId,
+            planPath: join(harness, "plans", `${planId}.md`),
+            worktreePath: join(root, `wt-${planId}`),
+            sddDir,
+          }),
+        );
+        const view = await readPlanCoordination(coordinatorSession, planId, root);
+        await mutatePlanCoordination({
+          sessionPath: coordinatorSession,
+          planId,
+          expectedRevision: view.revision,
+          operation: { kind: "prepare", assignmentPath },
+        });
+        planSessions[planId] = (
+          await bindPlanSession({ scope: { workflowId, planId, harnessDir: harness }, cwd: root })
+        ).session_file;
+      }
+    }
+  } finally {
+    setArtifactStore(undefined);
+  }
+  await initializeStore({ harnessDir: harness }).then((handle) => handle.close());
   return {
-    operationId,
-    actor: "project-manager",
-    sessionFile: writePlanPmEnvelope(SESSION_ROOT, "20260918-a"),
-    ...extra,
+    harness,
+    workflowId,
+    planId: LIVE_PLAN_ID,
+    peerPlanId: LIVE_PEER_PLAN_ID,
+    coordinatorSession,
+    planSessions,
   };
 }
 
-function writePlanPmEnvelope(dir: string, planId: string, workflowId = "wf-issue"): string {
-  const path = join(dir, `session-${planId}.json`);
-  writeFileSync(
-    path,
-    JSON.stringify({
-      schema_version: 1,
-      role: "plan-pm",
-      session_id: "11111111-1111-1111-1111-111111111111",
-      workflow_id: workflowId,
-      plan_id: planId,
-      harness_root: dir,
-    }),
-    "utf8",
-  );
+/** Finish the fixture's lifecycle: a terminal workflow holds no live authority. */
+function retireWorkflow(authority: LiveAuthority): void {
+  const path = snapshotPathOf(authority);
+  writeJsonFile(path, {
+    ...readJsonFile(path),
+    status: "completed",
+    ended_at: "2026-09-18T23:00:00Z",
+    updated_at: "2026-09-18T23:00:00Z",
+  });
+}
+
+/** Point the workflow's own coordinator record at another file (a tampered binding). */
+function rebindCoordinatorRecord(authority: LiveAuthority, sessionFile: string): void {
+  const path = snapshotPathOf(authority);
+  const snapshot = readJsonFile(path);
+  const coordination = snapshot.coordination;
+  if (typeof coordination !== "object" || coordination === null || !("coordinator" in coordination)) {
+    throw new Error(`fixture: ${path} carries no coordinator binding`);
+  }
+  const coordinator = coordination.coordinator;
+  if (typeof coordinator !== "object" || coordinator === null) {
+    throw new Error(`fixture: ${path} carries no coordinator binding`);
+  }
+  writeJsonFile(path, {
+    ...snapshot,
+    coordination: { ...coordination, coordinator: Object.assign({}, coordinator, { session_file: sessionFile }) },
+  });
+}
+
+/**
+ * A `project-manager` mutation authorized by one of the fixture's
+ * engine-issued envelopes: the lifecycle coordinator seat by default, a plan
+ * seat when `sessionFile` overrides it (plan provenance must match that seat's
+ * plan id).
+ */
+function pmMut(authority: LiveAuthority, operationId: string, extra: Partial<MutationContext> = {}): MutationContext {
+  return { operationId, actor: "project-manager", sessionFile: authority.coordinatorSession, ...extra };
+}
+
+/** A caller-written envelope, byte-shaped like the engine's, at any path. */
+function forgedEnvelope(dir: string, name: string, fields: Record<string, unknown>): string {
+  const path = join(dir, name);
+  writeJsonFile(path, {
+    schema_version: 1,
+    role: "plan-pm",
+    session_id: "11111111-1111-1111-1111-111111111111",
+    workflow_id: LIVE_WORKFLOW_ID,
+    plan_id: LIVE_PLAN_ID,
+    ...fields,
+  });
   return path;
 }
 
@@ -478,17 +685,16 @@ describe("capture authorization", () => {
   });
 
   test("the envelope proves the seat; the actor label is audited, never trusted", async () => {
-    const context = ctx("authorization-seat-");
-    await initializeStore(context).then((h) => h.close());
+    const authority = await liveAuthority("authorization-seat-");
+    const context: StoreContext = { harnessDir: authority.harness };
     const created = await captureIssue(context, baseInput(), mut("cap-seat"));
     const other = await captureIssue(context, baseInput({ occurrenceKey: "seat-b", rootCauseKey: "seat-other" }), mut("cap-seat-b"));
-    const session = writePlanPmEnvelope(context.harnessDir, "20260918-a");
     await expect(
       linkIssue(
         context,
         created.issueId,
         { relation: "related", issueId: other.issueId },
-        { operationId: "link-wrong-seat", actor: "qa-engineer", sessionFile: session, expectedRevision: created.revision },
+        { operationId: "link-wrong-seat", actor: "qa-engineer", sessionFile: authority.coordinatorSession, expectedRevision: created.revision },
       ),
     ).rejects.toMatchObject({ code: "issue.scope-refused" });
     await expect(
@@ -496,7 +702,7 @@ describe("capture authorization", () => {
         context,
         created.issueId,
         { severity: "low", reason: "downgrade" },
-        { operationId: "triage-inherited", actor: "toString", sessionFile: session, expectedRevision: created.revision },
+        { operationId: "triage-inherited", actor: "toString", sessionFile: authority.coordinatorSession, expectedRevision: created.revision },
       ),
     ).rejects.toMatchObject({ code: "issue.scope-refused" });
     const after = await getIssue(context, created.issueId);
@@ -507,14 +713,14 @@ describe("capture authorization", () => {
       context,
       created.issueId,
       { severity: "low", reason: "downgrade" },
-      pmMut("triage-envelope", { expectedRevision: created.revision }),
+      pmMut(authority, "triage-envelope", { expectedRevision: created.revision }),
     );
     expect(triaged.revision).toBe(created.revision + 1);
   });
 
   test("inherited Object.prototype keys are refused as kind, severity and disposition", async () => {
-    const context = ctx("vocabulary-inherited-");
-    await initializeStore(context).then((h) => h.close());
+    const authority = await liveAuthority("vocabulary-inherited-");
+    const context: StoreContext = { harnessDir: authority.harness };
     await expect(
       captureIssue(context, baseInput({ kind: "toString" as IssueKind }), mut("cap-proto-kind")),
     ).rejects.toMatchObject({ code: "issue.scope-refused" });
@@ -523,7 +729,7 @@ describe("capture authorization", () => {
     ).rejects.toMatchObject({ code: "issue.scope-refused" });
     const created = await captureIssue(context, baseInput(), mut("cap-vocab"));
     await expect(
-      triageIssue(context, created.issueId, { kind: "hasOwnProperty" as IssueKind, reason: "reclass" }, pmMut("triage-proto-kind", { expectedRevision: created.revision })),
+      triageIssue(context, created.issueId, { kind: "hasOwnProperty" as IssueKind, reason: "reclass" }, pmMut(authority, "triage-proto-kind", { expectedRevision: created.revision })),
     ).rejects.toMatchObject({ code: "issue.scope-refused" });
     await expect(listIssues(context, { disposition: "toString" as Disposition })).rejects.toMatchObject({
       code: "issue.scope-refused",
@@ -536,16 +742,16 @@ describe("capture authorization", () => {
 
 describe("disposition revision relation authorization", () => {
   test("stale revision leaves issue and history unchanged", async () => {
-    const context = ctx("revision-stale-");
-    await initializeStore(context).then((h) => h.close());
+    const authority = await liveAuthority("revision-stale-");
+    const context: StoreContext = { harnessDir: authority.harness };
     const created = await captureIssue(context, baseInput(), mut("cap-1"));
     await expect(
       closeIssue(
         context,
         created.issueId,
         "resolved",
-        { reason: "fixed", references: ["qa.md"] },
-        pmMut("close-stale", { expectedRevision: 0 }),
+        { reason: "fixed", references: ["qa.md"], alignmentRef: "qa gate" },
+        pmMut(authority, "close-stale", { expectedRevision: 0 }),
       ),
     ).rejects.toMatchObject({ code: "issue.revision-conflict" });
     const detail = await getIssue(context, created.issueId);
@@ -555,18 +761,16 @@ describe("disposition revision relation authorization", () => {
   });
 
   test("unauthorized closure leaves issue and history unchanged", async () => {
-    const context = ctx("authorization-close-");
-    await initializeStore(context).then((h) => h.close());
+    const authority = await liveAuthority("authorization-close-");
+    const context: StoreContext = { harnessDir: authority.harness };
     const created = await captureIssue(context, baseInput(), mut("cap-2"));
-    const session = writePlanPmEnvelope(context.harnessDir, "20260918-a");
-    const evidence = { reason: "looks good", references: ["note"] };
-    // A claimed seat the envelope does not prove — including a forged
-    // `project-manager` without any envelope — never closes the issue.
+    const evidence = { reason: "looks good", references: ["note"], alignmentRef: "qa gate" };
+    // A claimed seat the envelope does not prove never closes the issue.
     await expect(
       closeIssue(context, created.issueId, "resolved", evidence, {
         operationId: "close-leaf",
         actor: "fullstack-dev",
-        sessionFile: session,
+        sessionFile: authority.coordinatorSession,
         expectedRevision: created.revision,
       }),
     ).rejects.toMatchObject({ code: "issue.scope-refused" });
@@ -574,10 +778,12 @@ describe("disposition revision relation authorization", () => {
       closeIssue(context, created.issueId, "resolved", evidence, {
         operationId: "close-arbitrary",
         actor: "toString",
-        sessionFile: session,
+        sessionFile: authority.coordinatorSession,
         expectedRevision: created.revision,
       }),
     ).rejects.toMatchObject({ code: "issue.scope-refused" });
+    // A forged `project-manager` claim with no envelope at all, and a missing
+    // envelope path, refuse as before.
     await expect(
       closeIssue(context, created.issueId, "resolved", evidence, {
         operationId: "close-forged-pm",
@@ -593,6 +799,20 @@ describe("disposition revision relation authorization", () => {
         expectedRevision: created.revision,
       }),
     ).rejects.toMatchObject({ code: "issue.scope-refused" });
+    // A hand-written envelope that parses, names the store's own harness root
+    // and this workflow, and lies under the harness root — but sits outside the
+    // engine's issued path and was issued by nobody.
+    const handWritten = forgedEnvelope(authority.harness, "hand-written-session.json", {
+      harness_root: authority.harness,
+    });
+    await expect(
+      closeIssue(context, created.issueId, "resolved", evidence, {
+        operationId: "close-hand-written",
+        actor: "project-manager",
+        sessionFile: handWritten,
+        expectedRevision: created.revision,
+      }),
+    ).rejects.toMatchObject({ code: "issue.scope-refused" });
     const detail = await getIssue(context, created.issueId);
     expect(detail.disposition).toBe("open");
     expect(detail.transitions).toEqual([]);
@@ -600,20 +820,21 @@ describe("disposition revision relation authorization", () => {
   });
 
   test("valid closure records the exact evidence", async () => {
-    const context = ctx("disposition-evidence-");
-    await initializeStore(context).then((h) => h.close());
+    const authority = await liveAuthority("disposition-evidence-");
+    const context: StoreContext = { harnessDir: authority.harness };
     const created = await captureIssue(context, baseInput(), mut("cap-3"));
     const evidence = {
       reason: "acceptance met in qa-run-9",
       references: ["qa/run-9.md"],
       scope: "proj-a",
+      alignmentRef: "QA gate: Approve — qa/run-9.md",
     };
     const closed = await closeIssue(
       context,
       created.issueId,
       "resolved",
       evidence,
-      pmMut("close-ok", { expectedRevision: created.revision }),
+      pmMut(authority, "close-ok", { expectedRevision: created.revision }),
     );
     const detail = await getIssue(context, created.issueId);
     expect(detail.disposition).toBe("resolved");
@@ -626,14 +847,14 @@ describe("disposition revision relation authorization", () => {
       scope: evidence.scope,
       references: evidence.references,
       canonicalIssueId: null,
-      alignmentRef: null,
+      alignmentRef: evidence.alignmentRef,
     });
     const replay = await closeIssue(
       context,
       created.issueId,
       "resolved",
       evidence,
-      pmMut("close-ok", { expectedRevision: created.revision }),
+      pmMut(authority, "close-ok", { expectedRevision: created.revision }),
     );
     expect(replay).toEqual(closed);
     await expect(
@@ -642,14 +863,14 @@ describe("disposition revision relation authorization", () => {
         created.issueId,
         "waived",
         { reason: "won't", references: [], scope: "proj-a", alignmentRef: "user-ok" },
-        pmMut("close-other", { expectedRevision: closed.revision }),
+        pmMut(authority, "close-other", { expectedRevision: closed.revision }),
       ),
     ).rejects.toMatchObject({ code: "issue.invalid-disposition" });
   });
 
   test("duplicate and superseded require a canonical issue", async () => {
-    const context = ctx("disposition-canonical-");
-    await initializeStore(context).then((h) => h.close());
+    const authority = await liveAuthority("disposition-canonical-");
+    const context: StoreContext = { harnessDir: authority.harness };
     const original = await captureIssue(context, baseInput({ occurrenceKey: "orig" }), mut("cap-orig"));
     const dup = await captureIssue(
       context,
@@ -662,7 +883,7 @@ describe("disposition revision relation authorization", () => {
         dup.issueId,
         "duplicate",
         { reason: "same bug", references: [] },
-        pmMut("dup-missing", { expectedRevision: dup.revision }),
+        pmMut(authority, "dup-missing", { expectedRevision: dup.revision }),
       ),
     ).rejects.toMatchObject({ code: "issue.invalid-disposition" });
     await expect(
@@ -671,7 +892,7 @@ describe("disposition revision relation authorization", () => {
         dup.issueId,
         "duplicate",
         { reason: "same bug", references: [], canonicalIssueId: "I-999999" },
-        pmMut("dup-missing-id", { expectedRevision: dup.revision }),
+        pmMut(authority, "dup-missing-id", { expectedRevision: dup.revision }),
       ),
     ).rejects.toMatchObject({ code: "issue.not-found" });
     const closed = await closeIssue(
@@ -679,7 +900,7 @@ describe("disposition revision relation authorization", () => {
       dup.issueId,
       "duplicate",
       { reason: "same bug", references: [], canonicalIssueId: original.issueId },
-      pmMut("dup-ok", { expectedRevision: dup.revision }),
+      pmMut(authority, "dup-ok", { expectedRevision: dup.revision }),
     );
     const detail = await getIssue(context, dup.issueId);
     expect(detail.disposition).toBe("duplicate");
@@ -696,21 +917,21 @@ describe("disposition revision relation authorization", () => {
       later.issueId,
       "superseded",
       { reason: "replaced", references: [], canonicalIssueId: original.issueId },
-      pmMut("sup-ok", { expectedRevision: later.revision }),
+      pmMut(authority, "sup-ok", { expectedRevision: later.revision }),
     );
     expect((await getIssue(context, later.issueId)).disposition).toBe("superseded");
   });
 
   test("terminal recurrence records an occurrence without reopening", async () => {
-    const context = ctx("disposition-recurrence-");
-    await initializeStore(context).then((h) => h.close());
+    const authority = await liveAuthority("disposition-recurrence-");
+    const context: StoreContext = { harnessDir: authority.harness };
     const created = await captureIssue(context, baseInput(), mut("cap-term"));
     await closeIssue(
       context,
       created.issueId,
       "resolved",
-      { reason: "fixed", references: ["qa.md"] },
-      pmMut("close-term", { expectedRevision: created.revision }),
+      { reason: "fixed", references: ["qa.md"], alignmentRef: "PM acceptance — handoff evidence" },
+      pmMut(authority, "close-term", { expectedRevision: created.revision }),
     );
     await appendOccurrence(
       context,
@@ -734,30 +955,30 @@ describe("disposition revision relation authorization", () => {
   });
 
   test("multi-plan obligation cannot be resolved from one linked plan alone", async () => {
-    const context = ctx("relation-multiplan-");
-    await initializeStore(context).then((h) => h.close());
+    const authority = await liveAuthority("relation-multiplan-", { bindPlans: true });
+    const context: StoreContext = { harnessDir: authority.harness };
     const created = await captureIssue(context, baseInput(), mut("cap-mp"));
-    const sessionA = writePlanPmEnvelope(context.harnessDir, "20260918-a");
-    const sessionB = writePlanPmEnvelope(context.harnessDir, "20260918-b");
+    const sessionA = authority.planSessions[authority.planId]!;
+    const sessionB = authority.planSessions[authority.peerPlanId]!;
     const afterPlan1 = await linkIssue(
       context,
       created.issueId,
-      { kind: "plan", target: "20260918-a" },
-      pmMut("link-a", { expectedRevision: created.revision, sessionFile: sessionA }),
+      { kind: "plan", target: authority.planId },
+      pmMut(authority, "link-a", { expectedRevision: created.revision, sessionFile: sessionA }),
     );
     const afterPlan2 = await linkIssue(
       context,
       created.issueId,
-      { kind: "plan", target: "20260918-b" },
-      pmMut("link-b", { expectedRevision: afterPlan1.revision, sessionFile: sessionB }),
+      { kind: "plan", target: authority.peerPlanId },
+      pmMut(authority, "link-b", { expectedRevision: afterPlan1.revision, sessionFile: sessionB }),
     );
     await expect(
       closeIssue(
         context,
         created.issueId,
         "resolved",
-        { reason: "one plan done", references: ["20260918-a"] },
-        pmMut("close-one-plan", { expectedRevision: afterPlan2.revision }),
+        { reason: "one plan done", references: [authority.planId], alignmentRef: "QA gate: Approve" },
+        pmMut(authority, "close-one-plan", { expectedRevision: afterPlan2.revision }),
       ),
     ).rejects.toMatchObject({ code: "issue.invalid-disposition" });
     expect((await getIssue(context, created.issueId)).disposition).toBe("open");
@@ -766,15 +987,20 @@ describe("disposition revision relation authorization", () => {
       context,
       created.issueId,
       "resolved",
-      { reason: "both plans verified", references: ["20260918-a", "20260918-b"], scope: "all" },
-      pmMut("close-all-plans", { expectedRevision: afterPlan2.revision }),
+      {
+        reason: "both plans verified",
+        references: [authority.planId, authority.peerPlanId],
+        scope: "all",
+        alignmentRef: "QA gate: Approve",
+      },
+      pmMut(authority, "close-all-plans", { expectedRevision: afterPlan2.revision }),
     );
     expect((await getIssue(context, created.issueId)).disposition).toBe("resolved");
   });
 
   test("relation form refuses self-edges and canonicalizes related order", async () => {
-    const context = ctx("relation-related-");
-    await initializeStore(context).then((h) => h.close());
+    const authority = await liveAuthority("relation-related-");
+    const context: StoreContext = { harnessDir: authority.harness };
     const a = await captureIssue(context, baseInput({ occurrenceKey: "a" }), mut("cap-a"));
     const b = await captureIssue(
       context,
@@ -782,19 +1008,19 @@ describe("disposition revision relation authorization", () => {
       mut("cap-b"),
     );
     await expect(
-      linkIssue(context, a.issueId, { relation: "related", issueId: a.issueId }, pmMut("self", { expectedRevision: a.revision })),
+      linkIssue(context, a.issueId, { relation: "related", issueId: a.issueId }, pmMut(authority, "self", { expectedRevision: a.revision })),
     ).rejects.toMatchObject({ code: "issue.scope-refused" });
     const linked = await linkIssue(
       context,
       b.issueId,
       { relation: "related", issueId: a.issueId },
-      pmMut("rel-1", { expectedRevision: b.revision }),
+      pmMut(authority, "rel-1", { expectedRevision: b.revision }),
     );
     const replay = await linkIssue(
       context,
       b.issueId,
       { relation: "related", issueId: a.issueId },
-      pmMut("rel-1", { expectedRevision: b.revision }),
+      pmMut(authority, "rel-1", { expectedRevision: b.revision }),
     );
     expect(replay).toEqual(linked);
     const detail = await getIssue(context, a.issueId);
@@ -804,15 +1030,15 @@ describe("disposition revision relation authorization", () => {
   });
 
   test("triage records kind severity impact owner acceptance without changing identity", async () => {
-    const context = ctx("revision-triage-");
-    await initializeStore(context).then((h) => h.close());
+    const authority = await liveAuthority("revision-triage-");
+    const context: StoreContext = { harnessDir: authority.harness };
     const created = await captureIssue(context, baseInput(), mut("cap-triage"));
     const before = await getIssue(context, created.issueId);
     await triageIssue(
       context,
       created.issueId,
       { kind: "risk", severity: "medium", impact: "ops delay", acceptance: "runbook exists", owner: "ops", reason: "reclass" },
-      pmMut("triage-1", { expectedRevision: created.revision }),
+      pmMut(authority, "triage-1", { expectedRevision: created.revision }),
     );
     const after = await getIssue(context, created.issueId);
     expect(after.kind).toBe("risk");
@@ -823,59 +1049,177 @@ describe("disposition revision relation authorization", () => {
     expect(after.identityKey).toBe(before.identityKey);
   });
 
-  test("fabricated actor JSON is refused and a genuine envelope is accepted", async () => {
-    const context = ctx("authorization-session-");
-    await initializeStore(context).then((h) => h.close());
+  test("only the engine-issued envelope at its own path authorizes the mutation", async () => {
+    const authority = await liveAuthority("authority-binding-", { bindPlans: true });
+    const context: StoreContext = { harnessDir: authority.harness };
     const created = await captureIssue(context, baseInput(), mut("cap-authz"));
-    const fabricated = join(context.harnessDir, "fake.json");
-    writeFileSync(fabricated, JSON.stringify({ execute_as: "project-manager" }), "utf8");
+    const planSession = authority.planSessions[authority.planId]!;
+    const sessionId = sessionIdOf(planSession);
+    expect(planSession).toBe(
+      join(authority.harness, "workflows", authority.workflowId, "sessions", `${sessionId}.json`),
+    );
+
+    // (1) A byte-identical copy of the engine's own envelope at another path.
+    const copy = join(authority.harness, "copied-session.json");
+    writeFileSync(copy, readFileSync(planSession, "utf8"));
     await expect(
       linkIssue(
         context,
         created.issueId,
-        { kind: "plan", target: "20260918-a" },
-        pmMut("link-fake", { expectedRevision: created.revision, sessionFile: fabricated }),
+        { kind: "plan", target: authority.planId },
+        pmMut(authority, "link-copy", { expectedRevision: created.revision, sessionFile: copy }),
       ),
     ).rejects.toMatchObject({ code: "issue.scope-refused" });
-    const session = writePlanPmEnvelope(context.harnessDir, "20260918-a");
+
+    // (2) A hand-written envelope that parses, names this workflow, this plan
+    // and the store's own harness root, and lies under the harness root.
+    const handWritten = forgedEnvelope(authority.harness, "hand-written.json", {
+      harness_root: authority.harness,
+    });
+    await expect(
+      linkIssue(
+        context,
+        created.issueId,
+        { kind: "plan", target: authority.planId },
+        pmMut(authority, "link-hand-written", { expectedRevision: created.revision, sessionFile: handWritten }),
+      ),
+    ).rejects.toMatchObject({ code: "issue.scope-refused" });
+
+    // (3) At the engine's own path, but for a session id the workflow never
+    // recorded: the workflow's own record does not point at it.
+    const unrecorded = forgedEnvelope(join(authority.harness, "workflows", authority.workflowId, "sessions"), "22222222-2222-2222-2222-222222222222.json", {
+      harness_root: authority.harness,
+      session_id: "22222222-2222-2222-2222-222222222222",
+    });
+    await expect(
+      linkIssue(
+        context,
+        created.issueId,
+        { kind: "plan", target: authority.planId },
+        pmMut(authority, "link-unrecorded", { expectedRevision: created.revision, sessionFile: unrecorded }),
+      ),
+    ).rejects.toMatchObject({ code: "issue.scope-refused" });
+
+    // (4) A hand-written envelope whose harness_root is a foreign root refuses,
+    // even at its own canonical path inside that root.
+    const foreignRoot = join(authority.harness, "other-root");
+    const foreign = forgedEnvelope(join(foreignRoot, "workflows", authority.workflowId, "sessions"), `${sessionId}.json`, {
+      harness_root: foreignRoot,
+      session_id: sessionId,
+    });
+    await expect(
+      linkIssue(
+        context,
+        created.issueId,
+        { kind: "plan", target: authority.planId },
+        pmMut(authority, "link-foreign-root", { expectedRevision: created.revision, sessionFile: foreign }),
+      ),
+    ).rejects.toMatchObject({ code: "issue.scope-refused" });
+
+    const refused = await getIssue(context, created.issueId);
+    expect(refused.provenance.every((row) => row.kind !== "plan")).toBe(true);
+    expect(refused.revision).toBe(created.revision);
+
+    // (5) The engine-issued `plan-pm` envelope for that same plan authorizes
+    // the very same action.
     const linked = await linkIssue(
       context,
       created.issueId,
-      { kind: "plan", target: "20260918-a" },
-      pmMut("link-real", { expectedRevision: created.revision, sessionFile: session }),
+      { kind: "plan", target: authority.planId },
+      pmMut(authority, "link-issued", { expectedRevision: created.revision, sessionFile: planSession }),
     );
     expect(linked.revision).toBe(created.revision + 1);
-    expect((await getIssue(context, created.issueId)).provenance.some((row) => row.kind === "plan" && row.target === "20260918-a")).toBe(
-      true,
+    expect(
+      (await getIssue(context, created.issueId)).provenance.some(
+        (row) => row.kind === "plan" && row.target === authority.planId,
+      ),
+    ).toBe(true);
+  });
+
+  test("an envelope is refused when the workflow record or the lifecycle stops matching it", async () => {
+    // A finished lifecycle: the engine's own envelope holds no live authority.
+    const retired = await liveAuthority("authority-retired-");
+    const retiredContext: StoreContext = { harnessDir: retired.harness };
+    const retiredIssue = await captureIssue(retiredContext, baseInput(), mut("cap-retired"));
+    retireWorkflow(retired);
+    await expect(
+      triageIssue(
+        retiredContext,
+        retiredIssue.issueId,
+        { severity: "low", reason: "after the lifecycle ended" },
+        pmMut(retired, "triage-retired", { expectedRevision: retiredIssue.revision }),
+      ),
+    ).rejects.toMatchObject({ code: "issue.scope-refused" });
+    expect((await getIssue(retiredContext, retiredIssue.issueId)).severity).toBe("high");
+
+    // A live workflow whose own coordination record names another file.
+    const rebound = await liveAuthority("authority-rebound-");
+    const reboundContext: StoreContext = { harnessDir: rebound.harness };
+    const reboundIssue = await captureIssue(reboundContext, baseInput(), mut("cap-rebound"));
+    rebindCoordinatorRecord(rebound, join(rebound.harness, "elsewhere.json"));
+    await expect(
+      triageIssue(
+        reboundContext,
+        reboundIssue.issueId,
+        { severity: "low", reason: "rebound elsewhere" },
+        pmMut(rebound, "triage-rebound", { expectedRevision: reboundIssue.revision }),
+      ),
+    ).rejects.toMatchObject({ code: "issue.scope-refused" });
+    expect((await getIssue(reboundContext, reboundIssue.issueId)).revision).toBe(reboundIssue.revision);
+
+    // An envelope issued for a different control root never authorizes this
+    // store, even though that root's own workflow is live.
+    const other = await liveAuthority("authority-other-root-");
+    const second = await captureIssue(
+      reboundContext,
+      baseInput({ occurrenceKey: "other-root", rootCauseKey: "other-root" }),
+      mut("cap-other-root"),
     );
+    await expect(
+      triageIssue(
+        reboundContext,
+        second.issueId,
+        { severity: "low", reason: "foreign root" },
+        pmMut(other, "triage-other-root", { expectedRevision: second.revision }),
+      ),
+    ).rejects.toMatchObject({ code: "issue.scope-refused" });
+    expect((await getIssue(reboundContext, second.issueId)).revision).toBe(second.revision);
   });
 
   test("plan target that does not match the session plan_id is refused", async () => {
-    const context = ctx("authorization-identity-");
-    await initializeStore(context).then((h) => h.close());
+    const authority = await liveAuthority("authorization-identity-", { bindPlans: true });
+    const context: StoreContext = { harnessDir: authority.harness };
     const created = await captureIssue(context, baseInput(), mut("cap-id"));
-    const session = writePlanPmEnvelope(context.harnessDir, "20260918-bound");
+    const session = authority.planSessions[authority.planId]!;
     await expect(
       linkIssue(
         context,
         created.issueId,
         { kind: "plan", target: "20260918-other" },
-        pmMut("link-mismatch", { expectedRevision: created.revision, sessionFile: session }),
+        pmMut(authority, "link-mismatch", { expectedRevision: created.revision, sessionFile: session }),
       ),
     ).rejects.toMatchObject({ code: "issue.scope-refused" });
-    expect((await getIssue(context, created.issueId)).provenance.every((row) => row.kind !== "plan")).toBe(true);
+    // The same envelope stays authoritative for its own plan.
+    const linked = await linkIssue(
+      context,
+      created.issueId,
+      { kind: "plan", target: authority.planId },
+      pmMut(authority, "link-own-plan", { expectedRevision: created.revision, sessionFile: session }),
+    );
+    expect(linked.revision).toBe(created.revision + 1);
+    expect((await getIssue(context, created.issueId)).provenance.some((row) => row.target === "20260918-other")).toBe(false);
   });
 
   test("unsupported relation or provenance kind yields a domain refusal", async () => {
-    const context = ctx("relation-vocab-");
-    await initializeStore(context).then((h) => h.close());
+    const authority = await liveAuthority("relation-vocab-");
+    const context: StoreContext = { harnessDir: authority.harness };
     const created = await captureIssue(context, baseInput(), mut("cap-vocab"));
     await expect(
       linkIssue(
         context,
         created.issueId,
         { relation: "depends-on", issueId: "I-000002" } as unknown as IssueLink,
-        pmMut("bad-rel", { expectedRevision: created.revision }),
+        pmMut(authority, "bad-rel", { expectedRevision: created.revision }),
       ),
     ).rejects.toMatchObject({ code: "issue.scope-refused" });
     await expect(
@@ -883,7 +1227,7 @@ describe("disposition revision relation authorization", () => {
         context,
         created.issueId,
         { kind: "ticket", target: "T-1" } as unknown as IssueLink,
-        pmMut("bad-kind", { expectedRevision: created.revision }),
+        pmMut(authority, "bad-kind", { expectedRevision: created.revision }),
       ),
     ).rejects.toMatchObject({ code: "issue.scope-refused" });
     expect((await getIssue(context, created.issueId)).relations).toEqual([]);
@@ -891,15 +1235,15 @@ describe("disposition revision relation authorization", () => {
   });
 
   test("inherited Object.prototype keys are refused as relation and provenance kind", async () => {
-    const context = ctx("relation-inherited-");
-    await initializeStore(context).then((h) => h.close());
+    const authority = await liveAuthority("relation-inherited-");
+    const context: StoreContext = { harnessDir: authority.harness };
     const created = await captureIssue(context, baseInput(), mut("cap-inherited"));
     await expect(
       linkIssue(
         context,
         created.issueId,
         { relation: "toString", issueId: "I-000002" } as unknown as IssueLink,
-        pmMut("bad-rel-proto", { expectedRevision: created.revision }),
+        pmMut(authority, "bad-rel-proto", { expectedRevision: created.revision }),
       ),
     ).rejects.toMatchObject({ code: "issue.scope-refused" });
     await expect(
@@ -907,13 +1251,88 @@ describe("disposition revision relation authorization", () => {
         context,
         created.issueId,
         { kind: "constructor", target: "T-1" } as unknown as IssueLink,
-        pmMut("bad-kind-proto", { expectedRevision: created.revision }),
+        pmMut(authority, "bad-kind-proto", { expectedRevision: created.revision }),
       ),
     ).rejects.toMatchObject({ code: "issue.scope-refused" });
     const after = await getIssue(context, created.issueId);
     expect(after.relations).toEqual([]);
     expect(after.provenance.every((row) => row.kind === "capture")).toBe(true);
     expect(after.revision).toBe(created.revision);
+  });
+
+  test("a closure carrying QA-gate acceptance evidence is accepted and stays distinguishable", async () => {
+    const authority = await liveAuthority("closure-acceptance-");
+    const context: StoreContext = { harnessDir: authority.harness };
+    const created = await captureIssue(context, baseInput(), mut("cap-accept"));
+    // Acceptance evidence without the authority that accepted it records half of
+    // §4's requirement and refuses.
+    await expect(
+      closeIssue(
+        context,
+        created.issueId,
+        "resolved",
+        { reason: "the QA seat said so", references: ["sdd/plan/review/qa.md"] },
+        pmMut(authority, "close-no-authority", { expectedRevision: created.revision }),
+      ),
+    ).rejects.toMatchObject({ code: "issue.invalid-disposition" });
+    // Acceptance authority without acceptance evidence refuses too: neither half
+    // is a closure on its own.
+    await expect(
+      closeIssue(
+        context,
+        created.issueId,
+        "resolved",
+        { reason: "trust the gate", references: [], alignmentRef: "QA gate: Approve" },
+        pmMut(authority, "close-no-evidence", { expectedRevision: created.revision }),
+      ),
+    ).rejects.toMatchObject({ code: "issue.invalid-disposition" });
+    expect((await getIssue(context, created.issueId)).disposition).toBe("open");
+
+    // The QA gate's acceptance (§4's `qa-engineer` authority, supplied as
+    // evidence per §6) is expressible: the envelope-proven seat writes the
+    // closure and the QA acceptance is recorded verbatim in the history.
+    const qaAcceptance = "QA gate: Approve — .mstar/sdd/20260918-a/review/qa.md";
+    await closeIssue(
+      context,
+      created.issueId,
+      "resolved",
+      { reason: "acceptance met", references: ["sdd/20260918-a/review/qa.md"], alignmentRef: qaAcceptance },
+      pmMut(authority, "close-qa-gate", { expectedRevision: created.revision }),
+    );
+    const qaTransition = await getIssue(context, created.issueId);
+    expect(qaTransition.disposition).toBe("resolved");
+    expect(qaTransition.transitions).toHaveLength(1);
+    expect(qaTransition.transitions[0]?.evidence).toEqual({
+      reason: "acceptance met",
+      scope: null,
+      references: ["sdd/20260918-a/review/qa.md"],
+      canonicalIssueId: null,
+      alignmentRef: qaAcceptance,
+    });
+
+    // A PM-acceptance closure stays a different record: the two acceptance
+    // routes are distinguishable in the append-only history, never merged.
+    const second = await captureIssue(
+      context,
+      baseInput({ occurrenceKey: "pm-accept", rootCauseKey: "pm-accept-cause" }),
+      mut("cap-pm-accept"),
+    );
+    await closeIssue(
+      context,
+      second.issueId,
+      "resolved",
+      { reason: "PM verified the fix", references: ["sdd/20260918-a/handoff.md"], alignmentRef: "PM acceptance — handoff.md" },
+      pmMut(authority, "close-pm-accept", { expectedRevision: second.revision }),
+    );
+    const pmTransition = await getIssue(context, second.issueId);
+    expect(pmTransition.transitions[0]?.evidence).toEqual({
+      reason: "PM verified the fix",
+      scope: null,
+      references: ["sdd/20260918-a/handoff.md"],
+      canonicalIssueId: null,
+      alignmentRef: "PM acceptance — handoff.md",
+    });
+    expect(pmTransition.transitions[0]?.evidence).not.toEqual(qaTransition.transitions[0]?.evidence);
   });
 
   test("C3 verbs are reachable through the engine entrypoint", async () => {

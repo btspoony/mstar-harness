@@ -375,7 +375,7 @@ function mutationFlags(command: Command): Command {
 function authorizedFlags(command: Command): Command {
   return mutationFlags(command).option(
     "--session <path>",
-    "Absolute scoped session envelope authorizing this mutation (required)",
+    "Absolute engine-issued session envelope of a live workflow (workflows/<id>/sessions/<session_id>.json); required",
   );
 }
 
@@ -495,7 +495,11 @@ export function registerIssueCommands(program: Command): void {
     );
   };
 
-  closeVerb("close", "resolved", "Close as resolved (acceptance evidence required)");
+  closeVerb(
+    "close",
+    "resolved",
+    "Close as resolved (acceptance evidence in references plus the acceptance authority in alignmentRef)",
+  );
   closeVerb("waive", "waived", "Close as waived");
   closeVerb("duplicate", "duplicate", "Close as duplicate of a canonical issue");
   closeVerb("supersede", "superseded", "Close as superseded by a replacement issue");

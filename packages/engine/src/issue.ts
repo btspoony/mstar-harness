@@ -7,8 +7,18 @@
  * `issue.ambiguous-identity` instead of guessing a merge.
  */
 import { createHash } from "node:crypto";
+import { join } from "node:path";
 import { readSessionEnvelope, type CoordinationSession } from "./coordination.js";
+import type { CoordinatorBinding, RowCoordination } from "./coordination-write.js";
+import { canonicalizeNearestExisting, resolveWorkflowDir } from "./path.js";
+import { rowPlanIds } from "./status.js";
 import { openStore, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
+import {
+  WORKFLOW_SNAPSHOT_FILE,
+  isTerminalSnapshot,
+  readWorkflowSnapshot,
+  type WorkflowSnapshot,
+} from "./workflow.js";
 
 export type IssueKind = "bug" | "risk" | "improvement" | "request" | "decision" | "review-obligation";
 export type Severity = "critical" | "high" | "medium" | "low" | "info";
@@ -170,6 +180,16 @@ export type IssueTriage = {
   reason: string;
 };
 
+/**
+ * Closure evidence (contract §4/§5). `references` carry the acceptance
+ * evidence a `resolved` closure rests on; `alignmentRef` records the
+ * **authority** that supplied it — the QA gate's acceptance when the QA seat
+ * produced the evidence, or the PM acceptance record when it did not (§6:
+ * leaf audit/QC/QA seats return evidence and never write the store, so the QA
+ * gate is an evidence authority and the envelope-proven seat performs the
+ * write). `waived` keeps its own alignmentRef requirement (user/architect
+ * alignment), and duplicate/superseded name their canonical issue.
+ */
 export type ClosureEvidence = {
   reason: string;
   scope?: string;
@@ -237,6 +257,9 @@ const PROVENANCE_KINDS: Record<"plan" | "iteration" | "pr" | "report", true> = {
   pr: true,
   report: true,
 };
+
+/** Directory a workflow keeps its engine-issued session envelopes in. */
+const SESSION_DIR = "sessions";
 
 function sha256(text: string): string {
   return createHash("sha256").update(text, "utf8").digest("hex");
@@ -953,11 +976,40 @@ function requireCaptureSeat(actor: string): void {
 }
 
 /**
- * Validate the envelope that authorizes a privileged mutation (contract §4):
- * the role comes from the envelope, never from the request string.
+ * Bind the envelope that authorizes a privileged mutation to the engine's own
+ * record (contract §4: existing harness authorization semantics, not a new
+ * local auth service), then derive the seat from it.
+ *
+ * A JSON document that merely *parses* as an envelope is never a credential,
+ * so the caller cannot choose the authority file. The envelope must be the one
+ * the engine itself issues (`bindPlanSession`):
+ *
+ *  1. at its canonical path — `<store harness root>/workflows/<workflow_id>/
+ *     sessions/<session_id>.json`, the only path a bind ever writes, so a copy
+ *     anywhere else refuses;
+ *  2. under the harness root that owns this store — an envelope issued for
+ *     another control root refuses;
+ *  3. for a **live** workflow — the workflow's snapshot must exist, validate,
+ *     and not be terminal (`completed|failed|stopped`);
+ *  4. and that workflow's own coordination record must point back at exactly
+ *     this file and session id — the snapshot's `coordination.coordinator` for
+ *     a `coordinator` envelope, the named plan row's `coordination.session` for
+ *     a `plan-pm` envelope.
+ *
+ * Point 4 is the binding `assertCoordinatedSnapshotWriter` (`workflow.ts`)
+ * already enforces against a snapshot's recorded session file, and the one the
+ * scoped writers enforce through `assertCoordinatorBinding` /
+ * `assertRowBinding` (`coordination.ts`); the store applies the same rule to
+ * its own privileged verbs instead of inventing a signature scheme. It raises
+ * the authority artifact from "a file the caller picked" to "the engine's
+ * record for a live workflow": forging authority now requires rewriting the
+ * workflow's validated, engine-owned coordination record, not just dropping a
+ * plausible JSON file somewhere — the level of trust contract §4 accepts
+ * ("do not claim security against a user who directly controls the DB file").
  */
-function authorizeMutation(mutation: MutationContext): CoordinationSession {
-  const session = readScopedSession(mutation.sessionFile);
+function authorizeMutation(context: StoreContext, mutation: MutationContext): CoordinationSession {
+  const { session, sessionPath } = readScopedSession(mutation.sessionFile);
+  assertEngineIssuedSession(context.harnessDir, sessionPath, session);
   const seat = ENVELOPE_SEATS[session.role];
   if (mutation.actor.trim() !== seat) {
     throw new IssueError(
@@ -970,10 +1022,100 @@ function authorizeMutation(mutation: MutationContext): CoordinationSession {
 }
 
 /**
+ * The workflow directory of this session, and the one envelope path a bind
+ * ever issues for it (`bindPlanSession` → `{WORKFLOW_DIR}/<id>/sessions/
+ * <session_id>.json`).
+ */
+function issuedSessionLocation(session: CoordinationSession): { dir: string; path: string } {
+  const dir = join(resolveWorkflowDir(session.harness_root, { harnessDir: session.harness_root }), session.workflow_id);
+  return { dir, path: join(dir, SESSION_DIR, `${session.session_id}.json`) };
+}
+
+/** A §4 authority refusal — the store's existing code, never a new one. */
+function refuseAuthority(message: string): IssueError {
+  return new IssueError(
+    "issue.scope-refused",
+    `${message}. A privileged mutation is authorized only by the engine-issued session envelope of a live ` +
+      `workflow (contract §4); a file that merely parses as an envelope is not a credential.`,
+  );
+}
+
+/** The live workflow's snapshot, or a refusal (a terminal workflow authorizes nothing). */
+function liveSnapshotOf(
+  session: CoordinationSession,
+  sessionPath: string,
+  workflowDir: string,
+): WorkflowSnapshot {
+  let snapshot: WorkflowSnapshot;
+  try {
+    snapshot = readWorkflowSnapshot(workflowDir).snapshot;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw refuseAuthority(
+      `Session envelope ${sessionPath} names workflow ${session.workflow_id}, whose snapshot is not readable (${message})`,
+    );
+  }
+  if (snapshot.id !== session.workflow_id) {
+    throw refuseAuthority(
+      `Workflow snapshot ${join(workflowDir, WORKFLOW_SNAPSHOT_FILE)} records id ${JSON.stringify(snapshot.id)}, not the envelope's workflow_id ${JSON.stringify(session.workflow_id)}`,
+    );
+  }
+  if (isTerminalSnapshot(snapshot)) {
+    throw refuseAuthority(`Workflow ${snapshot.id} is ${snapshot.status} — a finished lifecycle holds no live authority`);
+  }
+  return snapshot;
+}
+
+/** The session binding of the one plan row `plan_id` addresses (or a refusal). */
+function planSessionBinding(snapshot: WorkflowSnapshot, session: CoordinationSession): CoordinatorBinding | undefined {
+  const planId = session.plan_id ?? "";
+  const rows = snapshot.plans.filter((row) => rowPlanIds(row).includes(planId));
+  if (rows.length !== 1) {
+    throw refuseAuthority(
+      `Session envelope names plan ${JSON.stringify(planId)}, which is ${rows.length === 0 ? "no row" : `${rows.length} rows`} of workflow ${snapshot.id}`,
+    );
+  }
+  // Boundary cast: `readWorkflowSnapshot` validated every row coordination
+  // block (`validateRowCoordination`), so a present `session` is a binding.
+  const coordination = rows[0]?.coordination as RowCoordination | undefined;
+  return coordination?.session;
+}
+
+/** Every §4 condition above, or a refusal. */
+function assertEngineIssuedSession(harnessDir: string, sessionPath: string, session: CoordinationSession): void {
+  if (canonicalizeNearestExisting(session.harness_root) !== canonicalizeNearestExisting(harnessDir)) {
+    throw refuseAuthority(
+      `Session envelope ${sessionPath} was issued for harness root ${session.harness_root}, not for the root that owns this store (${harnessDir})`,
+    );
+  }
+  const issued = issuedSessionLocation(session);
+  if (canonicalizeNearestExisting(sessionPath) !== canonicalizeNearestExisting(issued.path)) {
+    throw refuseAuthority(`Session envelope ${sessionPath} is not the engine-issued path ${issued.path}`);
+  }
+  const snapshot = liveSnapshotOf(session, sessionPath, issued.dir);
+  const binding = session.role === "coordinator" ? snapshot.coordination?.coordinator : planSessionBinding(snapshot, session);
+  if (binding === undefined) {
+    throw refuseAuthority(
+      session.role === "coordinator"
+        ? `Workflow ${snapshot.id} records no coordinator binding for ${issued.path}`
+        : `Plan ${JSON.stringify(session.plan_id)} of workflow ${snapshot.id} records no session binding for ${issued.path}`,
+    );
+  }
+  if (
+    binding.session_id !== session.session_id ||
+    canonicalizeNearestExisting(binding.session_file) !== canonicalizeNearestExisting(issued.path)
+  ) {
+    throw refuseAuthority(
+      `Workflow ${snapshot.id} records session ${binding.session_id} at ${binding.session_file}, not session ${session.session_id} at ${issued.path}`,
+    );
+  }
+}
+
+/**
  * Plan/iteration provenance uses the existing coordination session envelope.
  * Credentials are never written into SQLite.
  */
-function readScopedSession(sessionFile: string | undefined): CoordinationSession {
+function readScopedSession(sessionFile: string | undefined): { session: CoordinationSession; sessionPath: string } {
   if (!sessionFile) {
     throw new IssueError(
       "issue.scope-refused",
@@ -981,7 +1123,7 @@ function readScopedSession(sessionFile: string | undefined): CoordinationSession
     );
   }
   try {
-    return readSessionEnvelope(sessionFile);
+    return { session: readSessionEnvelope(sessionFile), sessionPath: sessionFile };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new IssueError("issue.scope-refused", message);
@@ -1024,16 +1166,37 @@ function requireExpectedRevision(mutation: MutationContext, current: number): vo
 }
 
 /**
- * Disposition-specific evidence requirements. Who may close is decided by
- * `authorizeMutation` before this runs: the envelope proves the PM seat, so a
- * `qa-engineer` closure would need a QA-seat envelope and `readSessionEnvelope`
- * issues only the two PM seats (contract §4).
+ * Disposition-specific evidence requirements (contract §4/§6).
+ *
+ * Who may close is decided by `authorizeMutation` before this runs: the
+ * envelope proves the seat, and an actor string is never authority. That is
+ * §4's whole execution route, because §6 makes the leaf QA seat an **evidence
+ * authority**, not a second execution credential — "leaf audit/QC/QA seats
+ * return evidence and never write the store". So when the QA gate is the
+ * authority for a `resolved` closure, the QA seat's acceptance arrives as this
+ * closure's evidence and the envelope-proven seat performs the write; the
+ * store therefore declares no unreachable `qa-engineer` credential path.
+ *
+ * `resolved` requires both halves of that evidence: the verification
+ * `references` (what was accepted) and the acceptance authority in
+ * `alignmentRef` (who accepted it — the QA gate's acceptance or the PM
+ * acceptance record). Recording the authority is what keeps a QA-gate-backed
+ * closure distinguishable in the append-only history from one resting on no
+ * acceptance evidence at all; without it, a `resolved` closure would record
+ * nothing about which §4 authority it was made under.
  */
 function assertClosureAuthority(disposition: TerminalDisposition, evidence: ClosureEvidence): void {
   requireNonblank("reason", evidence.reason);
   if (disposition === "resolved") {
     if (!evidence.references || evidence.references.length === 0) {
       throw new IssueError("issue.invalid-disposition", "resolved requires acceptance evidence in references");
+    }
+    if (!evidence.alignmentRef?.trim()) {
+      throw new IssueError(
+        "issue.invalid-disposition",
+        "resolved requires the acceptance authority in alignmentRef — the QA gate's acceptance (contract §4 " +
+          "`qa-engineer`, supplied as evidence per §6) or the PM acceptance record the references were verified under",
+      );
     }
     return;
   }
@@ -1085,7 +1248,7 @@ export async function triageIssue(
   if (patch.severity !== undefined && !Object.hasOwn(SEVERITIES, patch.severity)) {
     throw new IssueError("issue.scope-refused", "severity is not a contract vocabulary value");
   }
-  authorizeMutation(mutation);
+  authorizeMutation(context, mutation);
   const hash = requestHash("triageIssue", {
     issueId,
     patch,
@@ -1146,7 +1309,7 @@ export async function closeIssue(
   if (!Object.hasOwn(TERMINAL, disposition)) {
     throw new IssueError("issue.invalid-disposition", "Terminal dispositions are exactly resolved|waived|duplicate|superseded");
   }
-  authorizeMutation(mutation);
+  authorizeMutation(context, mutation);
   assertClosureAuthority(disposition, evidence);
   const hash = requestHash("closeIssue", {
     issueId,
@@ -1228,7 +1391,7 @@ export async function linkIssue(
   link: IssueLink,
   mutation: MutationContext,
 ): Promise<IssueReceipt> {
-  const session = authorizeMutation(mutation);
+  const session = authorizeMutation(context, mutation);
   if ("relation" in link) {
     if (!Object.hasOwn(RELATIONS, link.relation)) {
       throw new IssueError("issue.scope-refused", "relation is not a contract vocabulary value");

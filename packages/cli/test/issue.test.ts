@@ -93,13 +93,55 @@ async function makeHarness(): Promise<{ root: string; harness: string }> {
   return { root, harness };
 }
 
-/** The existing coordination session envelope authority for privileged verbs (contract §4). */
-function writeSessionEnvelope(root: string, harness: string, planId = "20260918-a"): string {
-  const path = join(root, "session.json");
+/**
+ * The canonical live-workflow authority the engine's own bind produces
+ * (contract §4): the session envelope at
+ * `workflows/<id>/sessions/<session_id>.json` plus that workflow's
+ * coordination record pointing at it.
+ */
+function writeBoundEnvelope(harness: string, planId = "20260918-a"): string {
+  const workflowId = "wf-issue";
+  const sessionId = "11111111-1111-1111-1111-111111111111";
+  const sessionPath = join(harness, "workflows", workflowId, "sessions", `${sessionId}.json`);
+  writeJson(sessionPath, {
+    schema_version: 1,
+    role: "plan-pm",
+    session_id: sessionId,
+    workflow_id: workflowId,
+    plan_id: planId,
+    harness_root: harness,
+  });
+  writeJson(join(harness, "workflows", workflowId, "snapshot.json"), {
+    schema_version: 1,
+    id: workflowId,
+    type: "iteration",
+    status: "running",
+    started_at: "2026-09-18T00:00:00Z",
+    updated_at: "2026-09-18T00:00:00Z",
+    plans: [
+      {
+        id: planId,
+        plan_id: planId,
+        title: `Plan ${planId}`,
+        file: `.mstar/plans/${planId}.md`,
+        status: "Todo",
+        coordination: {
+          revision: 1,
+          session: { session_id: sessionId, session_file: sessionPath, bound_at: "2026-09-18T00:00:00Z" },
+        },
+      },
+    ],
+  });
+  return sessionPath;
+}
+
+/** A caller-written envelope at an arbitrary path: parseable, never issued. */
+function writeHandWrittenEnvelope(root: string, harness: string, planId = "20260918-a"): string {
+  const path = join(root, "hand-written-session.json");
   writeJson(path, {
     schema_version: 1,
     role: "plan-pm",
-    session_id: "11111111-1111-1111-1111-111111111111",
+    session_id: "22222222-2222-2222-2222-222222222222",
     workflow_id: "wf-issue",
     plan_id: planId,
     harness_root: harness,
@@ -224,7 +266,11 @@ describe("mstar issue CLI bundle", () => {
     expect(add.exitCode).toBe(0);
     const created = jsonOf(add).data as { issueId: string; revision: number };
     const evidence = join(root, "close.json");
-    writeJson(evidence, { reason: "acceptance met", references: ["qa/run.md"] });
+    writeJson(evidence, {
+      reason: "acceptance met",
+      references: ["qa/run.md"],
+      alignmentRef: "QA gate: Approve — qa/run.md",
+    });
     const closeArgs = (operationId: string, actor: string, session?: string) => [
       "issue",
       "close",
@@ -246,8 +292,8 @@ describe("mstar issue CLI bundle", () => {
     const forged = runBundle("bun-shebang", closeArgs("close-forged", "project-manager"), root);
     expect(forged.exitCode).toBe(2);
     expect(jsonOf(forged).code).toBe("usage");
-    const session = writeSessionEnvelope(root, harness);
-    // A real envelope that does not prove the claimed seat refuses at the domain boundary.
+    const session = writeBoundEnvelope(harness);
+    // A bound envelope that does not prove the claimed seat refuses at the domain boundary.
     const wrongSeat = runBundle("node", closeArgs("close-qa", "qa-engineer", session), root);
     expect(wrongSeat.exitCode).toBe(1);
     expect(jsonOf(wrongSeat).ok).toBe(false);
@@ -255,11 +301,43 @@ describe("mstar issue CLI bundle", () => {
     const absentSession = runBundle("node", closeArgs("close-absent", "project-manager", join(root, "no-such-session.json")), root);
     expect(absentSession.exitCode).toBe(1);
     expect(jsonOf(absentSession).code).toBe("issue.scope-refused");
+    // A hand-written envelope with the right shape, role, plan and harness root,
+    // at an arbitrary path, is not an issued authority.
+    const handWritten = runBundle(
+      "node",
+      closeArgs("close-hand-written", "project-manager", writeHandWrittenEnvelope(root, harness)),
+      root,
+    );
+    expect(handWritten.exitCode).toBe(1);
+    expect(jsonOf(handWritten).code).toBe("issue.scope-refused");
     const refused = runBundle("bun-shebang", closeArgs("close-leaf", "fullstack-dev", session), root);
     expect(refused.exitCode).toBe(1);
     const refusal = jsonOf(refused);
     expect(refusal.ok).toBe(false);
     expect(refusal.code).toBe("issue.scope-refused");
+    // Acceptance evidence without the acceptance authority is not a closure.
+    const noAuthority = join(root, "close-no-authority.json");
+    writeJson(noAuthority, { reason: "acceptance met", references: ["qa/run.md"] });
+    const incomplete = runBundle("node", [
+      "issue",
+      "close",
+      created.issueId,
+      "--file",
+      noAuthority,
+      "--expect",
+      String(created.revision),
+      "--operation-id",
+      "close-no-authority",
+      "--actor",
+      "project-manager",
+      "--session",
+      session,
+      "--harness",
+      harness,
+      "--json",
+    ], root);
+    expect(incomplete.exitCode).toBe(1);
+    expect(jsonOf(incomplete).code).toBe("issue.invalid-disposition");
     const shown = runBundle("node", ["issue", "show", created.issueId, "--harness", harness, "--json"], root);
     expect(jsonOf(shown).data).toMatchObject({ disposition: "open", revision: created.revision });
     const ok = runBundle("node", closeArgs("close-pm", "project-manager", session), root);
@@ -267,6 +345,9 @@ describe("mstar issue CLI bundle", () => {
     expect(jsonOf(ok).ok).toBe(true);
     const after = runBundle("node", ["issue", "show", created.issueId, "--harness", harness, "--json"], root);
     expect(jsonOf(after).data).toMatchObject({ disposition: "resolved" });
+    // Boundary cast: the CLI's JSON envelope, read for one fixture assertion.
+    const resolved = jsonOf(after).data as { transitions: Array<{ evidence: { alignmentRef: string } }> };
+    expect(resolved.transitions[0]?.evidence.alignmentRef).toBe("QA gate: Approve — qa/run.md");
   });
 
   test("leaf capture is refused while an unscoped permitted capture succeeds", async () => {
@@ -327,7 +408,7 @@ describe("mstar issue CLI bundle", () => {
     const created = jsonOf(add).data as { issueId: string; revision: number };
     const triageFile = join(root, "triage.json");
     writeJson(triageFile, { reason: "reclass", severity: "low" });
-    const session = writeSessionEnvelope(root, harness);
+    const session = writeBoundEnvelope(harness);
     const result = runBundle("bun-shebang", [
       "issue",
       "triage",
@@ -446,7 +527,7 @@ describe("mstar issue CLI bundle", () => {
       "--actor",
       "project-manager",
       "--session",
-      writeSessionEnvelope(root, harness),
+      writeBoundEnvelope(harness),
       "--harness",
       harness,
       "--json",
