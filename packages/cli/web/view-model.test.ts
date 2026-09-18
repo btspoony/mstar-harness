@@ -500,6 +500,17 @@ describe("catalog and projection authority", () => {
     expect(stale.content).toEqual({ kind: "listed", total: 1 });
   });
 
+  test("row payloads served without a valid generation stay unavailable, never listed", () => {
+    // W-001: the list paints only on `listed`, so rows arriving alongside no
+    // valid generation must not become a listed state — the whole point of the
+    // "unreadable source is never rendered as work" STOP rule.
+    const rows = workflowListState(envelope({ items: [workflow()], total: 1 }, UNAVAILABLE_PROJECTION));
+    expect(rows.content).toEqual({ kind: "unavailable" });
+    expect(rows.disclosure).not.toBeNull();
+    // The identical payload with a published generation is the one listed case.
+    expect(workflowListState(envelope({ items: [workflow()], total: 1 })).content).toEqual({ kind: "listed", total: 1 });
+  });
+
   test("the iteration list stays catalog-driven while the execution projection is unavailable", () => {
     const listed = iterationListState(envelope({ items: [iteration()], total: 1 }, UNAVAILABLE_PROJECTION));
     expect(listed.content).toEqual({ kind: "listed", total: 1 });
