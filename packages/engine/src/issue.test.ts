@@ -19,8 +19,14 @@ import {
   listIssues,
   triageIssue,
   type CaptureInput,
+  type IssueLink,
   type MutationContext,
 } from "./issue.js";
+import {
+  closeIssue as closeIssueFromIndex,
+  linkIssue as linkIssueFromIndex,
+  triageIssue as triageIssueFromIndex,
+} from "./index.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-issue-test-"));
 const SRC_DIR = dirname(fileURLToPath(import.meta.url));
@@ -392,6 +398,23 @@ function pmMut(operationId: string, extra: Partial<MutationContext> = {}): Mutat
   return { operationId, actor: "project-manager", ...extra };
 }
 
+function writePlanPmEnvelope(dir: string, planId: string, workflowId = "wf-issue"): string {
+  const path = join(dir, `session-${planId}.json`);
+  writeFileSync(
+    path,
+    JSON.stringify({
+      schema_version: 1,
+      role: "plan-pm",
+      session_id: "11111111-1111-1111-1111-111111111111",
+      workflow_id: workflowId,
+      plan_id: planId,
+      harness_root: dir,
+    }),
+    "utf8",
+  );
+  return path;
+}
+
 describe("disposition revision relation authorization", () => {
   test("stale revision leaves issue and history unchanged", async () => {
     const context = ctx("revision-stale-");
@@ -577,19 +600,19 @@ describe("disposition revision relation authorization", () => {
     const context = ctx("relation-multiplan-");
     await initializeStore(context).then((h) => h.close());
     const created = await captureIssue(context, baseInput(), mut("cap-mp"));
-    const sessionFile = join(context.harnessDir, "session.json");
-    writeFileSync(sessionFile, JSON.stringify({ execute_as: "project-manager" }), "utf8");
+    const sessionA = writePlanPmEnvelope(context.harnessDir, "20260918-a");
+    const sessionB = writePlanPmEnvelope(context.harnessDir, "20260918-b");
     const afterPlan1 = await linkIssue(
       context,
       created.issueId,
       { kind: "plan", target: "20260918-a" },
-      pmMut("link-a", { expectedRevision: created.revision, sessionFile }),
+      pmMut("link-a", { expectedRevision: created.revision, sessionFile: sessionA }),
     );
     const afterPlan2 = await linkIssue(
       context,
       created.issueId,
       { kind: "plan", target: "20260918-b" },
-      pmMut("link-b", { expectedRevision: afterPlan1.revision, sessionFile }),
+      pmMut("link-b", { expectedRevision: afterPlan1.revision, sessionFile: sessionB }),
     );
     await expect(
       closeIssue(
@@ -661,5 +684,78 @@ describe("disposition revision relation authorization", () => {
     expect(after.acceptance).toBe("runbook exists");
     expect(after.owner).toBe("ops");
     expect(after.identityKey).toBe(before.identityKey);
+  });
+
+  test("fabricated actor JSON is refused and a genuine envelope is accepted", async () => {
+    const context = ctx("authorization-session-");
+    await initializeStore(context).then((h) => h.close());
+    const created = await captureIssue(context, baseInput(), mut("cap-authz"));
+    const fabricated = join(context.harnessDir, "fake.json");
+    writeFileSync(fabricated, JSON.stringify({ execute_as: "project-manager" }), "utf8");
+    await expect(
+      linkIssue(
+        context,
+        created.issueId,
+        { kind: "plan", target: "20260918-a" },
+        pmMut("link-fake", { expectedRevision: created.revision, sessionFile: fabricated }),
+      ),
+    ).rejects.toMatchObject({ code: "issue.scope-refused" });
+    const session = writePlanPmEnvelope(context.harnessDir, "20260918-a");
+    const linked = await linkIssue(
+      context,
+      created.issueId,
+      { kind: "plan", target: "20260918-a" },
+      pmMut("link-real", { expectedRevision: created.revision, sessionFile: session }),
+    );
+    expect(linked.revision).toBe(created.revision + 1);
+    expect((await getIssue(context, created.issueId)).provenance.some((row) => row.kind === "plan" && row.target === "20260918-a")).toBe(
+      true,
+    );
+  });
+
+  test("plan target that does not match the session plan_id is refused", async () => {
+    const context = ctx("authorization-identity-");
+    await initializeStore(context).then((h) => h.close());
+    const created = await captureIssue(context, baseInput(), mut("cap-id"));
+    const session = writePlanPmEnvelope(context.harnessDir, "20260918-bound");
+    await expect(
+      linkIssue(
+        context,
+        created.issueId,
+        { kind: "plan", target: "20260918-other" },
+        pmMut("link-mismatch", { expectedRevision: created.revision, sessionFile: session }),
+      ),
+    ).rejects.toMatchObject({ code: "issue.scope-refused" });
+    expect((await getIssue(context, created.issueId)).provenance.every((row) => row.kind !== "plan")).toBe(true);
+  });
+
+  test("unsupported relation or provenance kind yields a domain refusal", async () => {
+    const context = ctx("relation-vocab-");
+    await initializeStore(context).then((h) => h.close());
+    const created = await captureIssue(context, baseInput(), mut("cap-vocab"));
+    await expect(
+      linkIssue(
+        context,
+        created.issueId,
+        { relation: "depends-on", issueId: "I-000002" } as unknown as IssueLink,
+        pmMut("bad-rel", { expectedRevision: created.revision }),
+      ),
+    ).rejects.toMatchObject({ code: "issue.scope-refused" });
+    await expect(
+      linkIssue(
+        context,
+        created.issueId,
+        { kind: "ticket", target: "T-1" } as unknown as IssueLink,
+        pmMut("bad-kind", { expectedRevision: created.revision }),
+      ),
+    ).rejects.toMatchObject({ code: "issue.scope-refused" });
+    expect((await getIssue(context, created.issueId)).relations).toEqual([]);
+    expect((await getIssue(context, created.issueId)).provenance.every((row) => row.kind === "capture")).toBe(true);
+  });
+
+  test("C3 verbs are reachable through the engine entrypoint", async () => {
+    expect(typeof triageIssueFromIndex).toBe("function");
+    expect(typeof closeIssueFromIndex).toBe("function");
+    expect(typeof linkIssueFromIndex).toBe("function");
   });
 });

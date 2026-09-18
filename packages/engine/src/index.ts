@@ -531,15 +531,28 @@ export {
 } from "./store-db.js";
 export type {
   CaptureInput,
+  ClosureEvidence,
   Disposition,
   IssueDetail,
   IssueErrorCode,
   IssueFilter,
   IssueKind,
+  IssueLink,
   IssuePage,
   IssueReceipt,
+  IssueTriage,
   MutationContext,
   OccurrenceInput,
   Severity,
+  TerminalDisposition,
 } from "./issue.js";
-export { IssueError, appendOccurrence, captureIssue, getIssue, listIssues } from "./issue.js";
+export {
+  IssueError,
+  appendOccurrence,
+  captureIssue,
+  closeIssue,
+  getIssue,
+  linkIssue,
+  listIssues,
+  triageIssue,
+} from "./issue.js";

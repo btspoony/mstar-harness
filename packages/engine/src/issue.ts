@@ -6,8 +6,8 @@
  * identity lives in `occurrence_key`. Unknown semantic identity refuses
  * `issue.ambiguous-identity` instead of guessing a merge.
  */
-import { existsSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { readSessionEnvelope } from "./coordination.js";
 import { ROLE_MAPPING } from "./roles.js";
 import { openStore, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
 
@@ -225,6 +225,18 @@ const DISPOSITIONS: Record<Disposition, true> = {
   waived: true,
   duplicate: true,
   superseded: true,
+};
+const RELATIONS: Record<"related" | "blocks" | "duplicate-of" | "superseded-by", true> = {
+  related: true,
+  blocks: true,
+  "duplicate-of": true,
+  "superseded-by": true,
+};
+const PROVENANCE_KINDS: Record<"plan" | "iteration" | "pr" | "report", true> = {
+  plan: true,
+  iteration: true,
+  pr: true,
+  report: true,
 };
 
 function sha256(text: string): string {
@@ -912,39 +924,45 @@ function knownRole(actor: string): string {
   return role;
 }
 
-/** Existing session envelope check — reads the file, never writes credentials into SQLite. */
-function assertSessionAuthorization(sessionFile: string | undefined, actor: string, required: boolean): void {
+/**
+ * Plan/iteration provenance uses the existing coordination session envelope.
+ * Credentials are never written into SQLite.
+ */
+function readScopedSession(sessionFile: string | undefined) {
   if (!sessionFile) {
-    if (required) {
+    throw new IssueError(
+      "issue.scope-refused",
+      "Plan/iteration provenance requires an existing scoped session envelope; no session credential is written to the store.",
+    );
+  }
+  try {
+    return readSessionEnvelope(sessionFile);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new IssueError("issue.scope-refused", message);
+  }
+}
+
+/** Identity for new plan/iteration links is the validated envelope's plan_id / workflow_id (no catalog table in this plan). */
+function assertPlanIterationIdentity(
+  kind: "plan" | "iteration",
+  target: string,
+  sessionFile: string | undefined,
+): void {
+  const session = readScopedSession(sessionFile);
+  if (kind === "plan") {
+    if (session.role !== "plan-pm" || session.plan_id !== target) {
       throw new IssueError(
         "issue.scope-refused",
-        "Plan/iteration provenance requires an existing scoped session file; no session credential is written to the store.",
+        "New plan provenance must match the plan-pm session envelope plan_id; arbitrary targets are refused until catalog identity exists.",
       );
     }
     return;
   }
-  if (!existsSync(sessionFile)) {
-    throw new IssueError("issue.scope-refused", `Session file ${sessionFile} does not exist`);
-  }
-  let parsed: { execute_as?: unknown; role?: unknown; actor?: unknown };
-  try {
-    parsed = JSON.parse(readFileSync(sessionFile, "utf8")) as {
-      execute_as?: unknown;
-      role?: unknown;
-      actor?: unknown;
-    };
-  } catch {
-    throw new IssueError("issue.scope-refused", "Session file is not valid JSON");
-  }
-  const seated =
-    (typeof parsed.execute_as === "string" && parsed.execute_as) ||
-    (typeof parsed.role === "string" && parsed.role) ||
-    (typeof parsed.actor === "string" && parsed.actor) ||
-    "";
-  if (seated !== actor) {
+  if (session.workflow_id !== target) {
     throw new IssueError(
       "issue.scope-refused",
-      "Session seat does not match the mutation actor; existing harness session authorization refused the scoped operation.",
+      "New iteration provenance must match the session envelope workflow_id; arbitrary targets are refused until catalog identity exists.",
     );
   }
 }
@@ -1173,8 +1191,15 @@ export async function linkIssue(
   mutation: MutationContext,
 ): Promise<IssueReceipt> {
   knownRole(mutation.actor);
+  if ("relation" in link) {
+    if (!RELATIONS[link.relation]) {
+      throw new IssueError("issue.scope-refused", "relation is not a contract vocabulary value");
+    }
+  } else if (!PROVENANCE_KINDS[link.kind]) {
+    throw new IssueError("issue.scope-refused", "provenance kind is not a contract vocabulary value");
+  }
   if ("kind" in link && (link.kind === "plan" || link.kind === "iteration")) {
-    assertSessionAuthorization(mutation.sessionFile, mutation.actor, true);
+    assertPlanIterationIdentity(link.kind, requireNonblank("target", link.target), mutation.sessionFile);
   }
   const hash = requestHash("linkIssue", {
     issueId,
