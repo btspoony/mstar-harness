@@ -8,6 +8,8 @@
 
 **命名（推荐）**：`<plan-id>-<plan-name>.md`（例：`01-data-infrastructure.md`）。snapshot plan 行的 `file` 字段填相对仓库根或 `{PLAN_DIR}` 下的实际路径。
 
+**身份与路径权威**：plan 的 id / title / 文档路径 / project-iteration 归属与 spec/knowledge 关系是 **`{HARNESS_DIR}/store.db`** 的 catalog 行（contract §1；读法 `mstar catalog show plan <plan-id>`）。snapshot plan 行的 `id/title/file` 是 **prepare 时从某个 catalog revision 复制来的冻结执行输入**（`catalog_pin`），**不是**可独立编辑的第二份 catalog：catalog 路径/关系变更需经显式 prepare/rebind 才进入新的在途执行，进度更新不会改写在途输入。从 tracked 正文发现 plan 候选用 `mstar catalog discover`（只读提案，含显式 `unknowns`），review 后 `mstar catalog import` 登记。
+
 ## Review bundle（`{SDD_DIR}/review/`）
 
 QC/QA 原始过程报告默认是 **ephemeral review bundle**，置于 `{SDD_DIR}/review/`（即 `{HARNESS_DIR}/sdd/<plan-id>/review/`）。该目录随 `{SDD_DIR}` gitignored，不作为长期 git 审计链。

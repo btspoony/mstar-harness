@@ -28,10 +28,10 @@ iteration-close (§3.2)
 
 ```text
 {ITERATION_DIR}/
-  README.md                         # 根索引：每迭代一行 → 指向 <iteration-id>/
+  README.md                         # 散文导览（可选；不再作迭代登记表）
   <iteration-id>/
     delivery-compass.md             # 迭代状态 SSOT（frontmatter status）
-    README.md                       # 本迭代文档索引（有 guides/specs 时推荐）
+    README.md                       # 散文导览（可选；文档归属登记在 catalog）
     guides/                         # 探索笔记、过程指南、未锁定权衡
     specs/                          # 迭代级规格草案
 ```
@@ -41,12 +41,12 @@ iteration-close (§3.2)
 | **`delivery-compass.md`** | 范围、plans 表、验收、分支策略、close 摘要 | 长文探索正文（链到 `guides/` / `specs/`） |
 | **`guides/`** | 候选方案、调研、会议记录、实施过程说明 | 已锁定的仓库级规范 |
 | **`specs/`** | 本迭代演进中的规格、迭代内契约草稿 | 已锁定、跨迭代 `{SPECS_DIR}/` 级权威（应升格或已在 `{SPECS_DIR}/`） |
-| **`README.md`** | 本 package 内 documents 索引（单表即可） | 替代根 `{ITERATION_DIR}/README.md` |
+| **`README.md`** | 散文导览（可选；可留 package 说明、`Promoted to:` 标注） | 作为 documents 登记表（归属登记在 catalog，见下） |
 
-**索引**：
+**登记（DB 权威，contract §1/§4）**：
 
-- **`{ITERATION_DIR}/README.md`**：**一行 = 一次迭代**（指向 `<iteration-id>/` 目录，**不**再拆 compass 行 + workspace 行）。
-- **`<iteration-id>/README.md`**：列出本目录下 `guides/`、`specs/`（及其它文档）；模板 → **`iteration-workspace-readme-template.md`**。
+- 迭代 identity、compass 位置、description、project 归属，以及 package 内文档的 `documents` 关系 = `{HARNESS_DIR}/store.db` 的 catalog 行；读法 `mstar catalog show` / `mstar catalog list`，登记走 reviewed `mstar catalog discover` + `mstar catalog import`，或单行 `mstar catalog register` / `mstar catalog link`。
+- `{ITERATION_DIR}/README.md` 与 `<iteration-id>/README.md` 保留为**散文**（导览、`Promoted to:` 标注）；**不再**维护「一行 = 一次迭代」登记行或 package Documents 登记表。tracked 正文可从新 clone 用 `mstar catalog discover` 提议（含显式 `unknowns`），但 `store.db` 本地且默认 gitignored —— 完整 catalog 恢复需显式 `mstar catalog export` + reviewed import。
 
 **Compass 解析顺序**（读）：
 

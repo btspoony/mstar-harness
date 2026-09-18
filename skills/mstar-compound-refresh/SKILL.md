@@ -15,7 +15,7 @@ Knowledge documents in `{KNOWLEDGE_DIR}` age. Code changes, conventions evolve, 
 
 ## 产物与操作路径
 
-**SSOT**: `mstar-conventions/references/artifact-storage-paths.md`。本 skill 仅操作 `{HARNESS_DIR}/knowledge/**/*.md` + `{HARNESS_DIR}/knowledge/README.md` + `<repo-root>/CONCEPTS.md` + `{HARNESS_DIR}/status.json`（引用更新；v2 中知识引用挂在 workflow snapshot plan 行 `metadata.knowledge_refs`，见下）。**禁止**操作 `docs/`、`{PLAN_DIR}/`、`{ITERATION_DIR}/`、`{SPECS_DIR}/`。
+**SSOT**: `mstar-conventions/references/artifact-storage-paths.md`。本 skill 仅操作 `{HARNESS_DIR}/knowledge/**/*.md` + `{HARNESS_DIR}/knowledge/README.md`（**散文**，见 Phase 4）+ `<repo-root>/CONCEPTS.md` + `{HARNESS_DIR}/status.json`（引用更新；v2 中知识引用挂在 workflow snapshot plan 行 `metadata.knowledge_refs`，见下）。**禁止**操作 `docs/`、`{PLAN_DIR}/`、`{ITERATION_DIR}/`、`{SPECS_DIR}/`。
 
 > **Engine check (when available):** run `mstar compound validate <doc-path> --knowledge-dir <dir>` (or `import { scopeGuard, compoundRefreshScope } from "@mstar-harness/engine"` in a host hook) to resolve the allowed scope above (`{HARNESS_DIR}/knowledge/**`, `knowledge/README.md`, `<repo-root>/CONCEPTS.md`, `{HARNESS_DIR}/status.json`) and guard every write against it. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
@@ -102,10 +102,11 @@ For each doc, check:
 
 Classify each doc → Keep / Update / Consolidate / Replace / Delete. Apply changes.
 
-### Phase 4: Update indexes
+### Phase 4: Reconcile the catalog
 
-1. Update `{KNOWLEDGE_DIR}/README.md` index table — update Status column, add/remove rows.
-2. If a doc was linked from knowledge refs (workflow snapshot plan row `metadata.knowledge_refs` / v1 root `status.json` metadata), update the references.
+1. For every doc whose verdict changed its metadata or lifecycle (`Update` / `Consolidate` / `Replace` / `Delete`), update its catalog row: `mstar catalog update` for title/description/path/source hash and for the catalog lifecycle (`active` / `archived` / `superseded`), and `mstar catalog link` for provenance/supersession relations (identity is never patched; the revision guard is in `--help`). A doc deleted outside the iteration-start §1.6 archive gate leaves git history as its record — set/keep its catalog lifecycle so the row is not a silent dangling claim.
+2. A knowledge body with **no** catalog row is a completeness gap, not a pass: register it (`mstar catalog register`, or reviewed `mstar catalog discover` + `mstar catalog import`) or report it. `{KNOWLEDGE_DIR}/README.md` index tables are **not** maintained as a register — README is prose.
+3. If a doc was linked from knowledge refs (workflow snapshot plan row `metadata.knowledge_refs` / v1 root `status.json` metadata), update the references.
 
 ### Phase 5: Report
 
@@ -146,7 +147,7 @@ Read that file from the mstar-compound skill directory before Phase 6.
 
 ## Evidence
 
-正确结果 = 每篇候选文档有明确 verdict（Keep / Update / Consolidate / Replace / Delete）并落到产物：文档改动 + `{KNOWLEDGE_DIR}/README.md` 索引更新（Phase 4）+ 知识引用同步（workflow snapshot plan 行 `knowledge_refs`；v1 根 `status.json` legacy 引用） + 维护报告（Phase 5：reviewed / kept / updated / consolidated / replaced / deleted / flagged）+ `CONCEPTS.md` 对账（Phase 6）。
+正确结果 = 每篇候选文档有明确 verdict（Keep / Update / Consolidate / Replace / Delete）并落到产物：文档改动 + catalog 行对账（Phase 4：`mstar catalog update` / `register`，生命周期 `active` / `archived` / `superseded`）+ 知识引用同步（workflow snapshot plan 行 `knowledge_refs`；v1 根 `status.json` legacy 引用） + 维护报告（Phase 5：reviewed / kept / updated / consolidated / replaced / deleted / flagged）+ `CONCEPTS.md` 对账（Phase 6）。
 
 ## References
 

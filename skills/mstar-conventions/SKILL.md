@@ -104,11 +104,42 @@ enforcement=hard
 
 单 plan 的 QC/QA **原始过程报告**默认进入 **`{SDD_DIR}/review/`**（gitignored review bundle），非 `docs/`，也不默认进入 `{PLAN_DIR}`。主 plan 仅保留 durable gate summary；R# open 状态以 `{PROJECT_DIR}/<id>/residuals.json` 为 SSOT（根 `status.json` v2 仅 workflows 注册表）。细则 → **`mstar-artifacts`**。
 
-## Issue store 路径与权威分界
+## Issue/catalog store 路径与权威分界
 
 Issue 身份、证据、影响、处置、occurrences、关系与 provenance，以及 project/iteration/plan/document **catalog** 身份与关系，权威在 **`{HARNESS_DIR}/store.db`**（激活后）。执行路由、lease、session 凭证与冻结执行输入仍是根 `status.json` / workflow snapshot 等 **JSON**（`ArtifactStore` / 默认 `FsStore`）——不是 SQLite，也不把 `ArtifactStore` 改成通用 SQLite 后端。
 
-Store 落在 **control / process harness 根**，不随 feature worktree cwd。Help / 普通 validator / engine import **不**打开 SQLite。本 skill 只声明路径与权威分界；动词与标志以 `mstar issue --help` 为准（`mstar-use-cli` 索引族名）。文档本身不证明打包兼容或激活就绪。
+### Catalog 字段权威（contract §1）
+
+| 数据 | 权威 | 读法 |
+|------|------|------|
+| project / iteration / plan / document 的 identity、路径、kind、description、project/iteration 归属、spec/knowledge 关系、catalog 生命周期（`active` / `archived` / `superseded`） | **DB catalog** 行 | catalog 域 API；`mstar catalog list` / `mstar catalog show` |
+| 文档正文（compass 叙述、plan、spec/knowledge 内容、README 散文） | **文件** | 直接读文件 |
+| 根 `status.json` `workflows[]` 路由与 active 归属；snapshot 的 status/phase/branch/lease/coordination/session | **JSON 执行权威** | 既有校验读（门禁用）；dashboard 只读投影 |
+| snapshot 行 status/progress/task/QC/QA/done_at/branch/worktree | **JSON 执行权威** | 永不由 catalog 或投影刷新 |
+| snapshot `plans[].id/title/file` 与 `metadata` 引用 | prepare 时从某个 catalog revision 复制来的**冻结执行输入** | 不可当作 catalog 登记编辑；后续 catalog 变更不静默改写在途 plan |
+
+`store.db` 是进程本地（默认 gitignored），执行路由/lease/session 与冻结输入**不**进 SQLite。**激活前** legacy 索引仍是权威；store 未初始化/未激活时 catalog 查询**拒绝**（`store.not-initialized` / `store.not-active`），**不**读作「空 catalog」；切换由 cutover plan 的 activation 负责。
+
+### Markdown 索引退役（contract §4）
+
+`{ITERATION_DIR}/README.md` 的迭代行、`<iteration-id>/README.md` 的 Documents 表、`{SPECS_DIR}/README.md` / `{KNOWLEDGE_DIR}/README.md` 的登记表与 `{PLAN_DIR}` 目录索引**不再是有待维护的登记面**：README 与其它正文一样是**散文**（可留作导览），但没有任何「必须新增/维护一行」的义务；「某文档是否已登记、属于谁、什么类型、什么生命周期」一律查 catalog。
+
+### 职责：discover / import / register / query
+
+- **discover** — `mstar catalog discover` 只读提案：配置根的 tracked 正文 + legacy 索引行的 dry-run，写出 nothing，带 reviewed source hash、显式 `unknowns` 与拟退役索引节。
+- **import** — `mstar catalog import` 应用**已 review** 的 mapping；冲突或 reviewed source 漂移**整单拒绝**；不创建 workflow session、不退役索引。
+- **register / update / link** — 单行登记与元数据/关系变更走 catalog 域边界（`mstar catalog register` / `mstar catalog update` / `mstar catalog link`；identity 不可改，revision 守卫与可改字段见 help）。
+- **query** — `mstar catalog list` / `mstar catalog show`。
+- **reconcile** — 执行注册中断的收口（pending 状态 `catalog.registration-pending`，contract §3；只读列出见 help）。
+- **export** — `mstar catalog export` 是版本化 transport，**不是**持续维护的文件权威（回灌用 `mstar catalog import`）。
+
+动词、选项与标志一律以 `mstar catalog --help`（group help）为准，本文不复述；族名索引 → **`mstar-use-cli`**。
+
+### 跨 clone 限制（contract §4）
+
+`store.db` 是本地/进程产物，**仅凭 tracked 正文无法重建本地 catalog 历史**。`catalog discover` 枚举配置根的 tracked 正文并提取当前 title/path/content hash 与显式元数据作为**候选证据**，**从不**假设文件名编码 project/iteration 归属、归档状态、执行状态或 provenance——未声明的一律以显式 `unknowns`（identity / membership / document-kind / source-missing …）披露，需人工 review 后 import。新 clone 因此可以不依赖维护中的 Markdown 索引发现 tracked specs/knowledge；完整 catalog 恢复需要显式 `catalog export` + reviewed import。
+
+Store 落在 **control / process harness 根**，不随 feature worktree cwd。Help / 普通 validator / engine import **不**打开 SQLite。本 skill 只声明路径与权威分界；动词与标志以 `mstar issue --help` / `mstar catalog --help` 为准（`mstar-use-cli` 索引族名）。文档本身不证明打包兼容或激活就绪。
 
 ## 初始化 Plan 目录
 
@@ -213,7 +244,7 @@ Plans are written to **`{PLAN_DIR}`** when persistent plan tracking is enabled. 
 
 ## Evidence
 
-正确结果 = 落盘产物可复核：`{WORKFLOW_DIR}/<id>/snapshot.json` 含对应 plan 行（状态 + `metadata` 分支字段；根 `status.json` v2 仅 workflows 注册表，无 plan 行），plan 文件存在于 `{PLAN_DIR}`，`{HARNESS_DIR}/AGENTS.md` 分层与 gitignore 与本文约定一致（进程本地 / 结果共享），`mstar path resolve` 输出与路径符号表一致。
+正确结果 = 落盘产物可复核：`{WORKFLOW_DIR}/<id>/snapshot.json` 含对应 plan 行（状态 + `metadata` 分支字段；根 `status.json` v2 仅 workflows 注册表，无 plan 行），plan 文件存在于 `{PLAN_DIR}`，`{HARNESS_DIR}/AGENTS.md` 分层与 gitignore 与本文约定一致（进程本地 / 结果共享），`mstar path resolve` 输出与路径符号表一致，tracked 正文的 catalog 行（`mstar catalog show` / `mstar catalog list`）与其实际位置一致（store 激活后）。
 
 ## References
 
