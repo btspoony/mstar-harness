@@ -250,6 +250,9 @@ export {
   taskReportExists,
 } from "./sdd.js";
 export type {
+  CatalogCompletenessGap,
+  CatalogCompletenessReport,
+  CatalogCompletenessRoot,
   CompassDoc,
   PhaseGateOptions,
   PhaseGateResult,
@@ -257,12 +260,13 @@ export type {
   SnapshotDoc,
 } from "./iteration.js";
 export {
-  assertIndexRowObligations,
+  assertCatalogCompleteness,
   evaluatePhaseGate,
   evaluatePostMergeClose,
   parseCompassFrontmatter,
   parseCompassFrontmatterText,
   pushCadenceProbe,
+  readCatalogCompleteness,
   validateCompassFrontmatter,
 } from "./iteration.js";
 export type {
@@ -376,6 +380,7 @@ export {
   KNOWLEDGE_RESOLUTION_TYPES,
   KNOWLEDGE_SEVERITIES,
   assertIndexRows,
+  assertKnowledgeCatalogCompleteness,
   compoundRefreshScope,
   referenceExists,
   scopeGuard,
@@ -477,10 +482,15 @@ export { WorkflowSnapshotValidationError } from "./workflow.js";
 
 export {
   CoordinationError,
+  EXECUTION_PIN_CONFLICT_CODE,
+  ExecutionPinConflictError,
   amendPrepareWorkflow,
+  assertExecutionCatalogPin,
   bindPlanSession,
+  executionInputHash,
   mutatePlanCoordination,
   readCoordinatedArtifact,
+  readExecutionCatalogPin,
   readPlanCoordination,
   readSessionEnvelope,
   replaceCoordinatedArtifact,
@@ -490,11 +500,14 @@ export {
 } from "./coordination.js";
 export type {
   BindPlanSessionInput,
+  CatalogExecutionPin,
+  CatalogPinAbsence,
   CoordinatedReplacement,
   CoordinationRequest,
   CoordinationResult,
   CoordinationRole,
   CoordinationSession,
+  ExecutionCatalogPinState,
   HandoffEvidence,
   PlanCoordinationOperation,
   PlanCoordinationView,

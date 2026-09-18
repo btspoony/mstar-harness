@@ -1915,3 +1915,54 @@ describe("Prepare workflow amendment", () => {
     }
   }, 30000);
 });
+
+describe("mstar plan — catalog pin", () => {
+  test("catalog pin: a store-less prepare is disclosed as store-absent, and a planted pin refuses bind with the stable code", () => {
+    const fixture = makeFixture();
+    const coordinator = bindCoordinator(fixture);
+    preparePlan(fixture, coordinator, PLAN_ID);
+
+    // No catalog store exists in this fixture. The reader discloses that
+    // explicitly instead of reading the missing store as an empty catalog.
+    const view = runCli(["plan", "show", "--session", coordinator, "--plan", PLAN_ID, "--json"], fixture.root);
+    expect(view.exitCode).toBe(0);
+    expect(jsonOf(view).catalog_pin).toMatchObject({
+      source: null,
+      pin: null,
+      absence: "store-absent",
+      conflict: null,
+    });
+
+    // A generic snapshot metadata update plants a pin whose document hash does
+    // not match the frozen row: the engine neither repairs it nor follows it.
+    const snapshot = readJson(fixture.snapshotPath) as { plans: Array<Record<string, unknown>> };
+    const planted = { store_id: "store-x", entity_revision: 1, document_hash: "0".repeat(64), relation_hash: "0".repeat(64) };
+    writeJson(fixture.snapshotPath, {
+      ...snapshot,
+      plans: snapshot.plans.map((row) =>
+        row.id === PLAN_ID || row.plan_id === PLAN_ID
+          ? { ...row, metadata: { ...(row.metadata as Record<string, unknown>), catalog_pin: planted } }
+          : row,
+      ),
+    });
+
+    const shown = runCli(["plan", "show", "--session", coordinator, "--plan", PLAN_ID, "--json"], fixture.root);
+    expect(shown.exitCode).toBe(0);
+    const shownPayload = jsonOf(shown) as { catalog_pin: { conflict: string | null; pin: { entity_revision: number } } };
+    expect(shownPayload.catalog_pin.pin.entity_revision).toBe(1);
+    expect(shownPayload.catalog_pin.conflict).not.toBeNull();
+
+    // Execution start refuses with the engine's own code (exit 1, not an
+    // internal error), and writes no session.
+    const bound = runCli(["plan", "bind", "--workflow", WORKFLOW_ID, "--plan", PLAN_ID, "--json"], fixture.root);
+    expect(bound.exitCode).toBe(1);
+    const failure = jsonOf(bound);
+    expect(failure.ok).toBe(false);
+    expect(failure.code).toBe("catalog.execution-pin-conflict");
+    expect(failure.workflow_id).toBe(WORKFLOW_ID);
+
+    const human = runCli(["plan", "bind", "--workflow", WORKFLOW_ID, "--plan", PLAN_ID], fixture.root);
+    expect(human.exitCode).toBe(1);
+    expect(human.stderr).toContain("catalog.execution-pin-conflict");
+  });
+});

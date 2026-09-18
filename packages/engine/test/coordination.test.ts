@@ -38,8 +38,10 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSy
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
+  EXECUTION_PIN_CONFLICT_CODE,
   amendPrepareWorkflow,
   bindPlanSession,
+  executionInputHash,
   mutatePlanCoordination,
   readCoordinatedArtifact,
   readPlanCoordination,
@@ -47,11 +49,14 @@ import {
   resolvePlanScope,
   setCompleteStandaloneMutateGapForTest,
   showPrepareWorkflow,
+  type CatalogExecutionPin,
   type CoordinationResult,
   type PlanCoordinationView,
   type PrepareWorkflowPatch,
   type PrepareWorkflowResult,
 } from "../src/coordination.js";
+import { registerCatalogEntity, updateCatalogEntity } from "../src/catalog.js";
+import { initializeStore, openStore, type StoreContext } from "../src/store-db.js";
 import { CoordinationError, artifactVersion, readArtifactBytes, withProtectedWrite } from "../src/coordination-write.js";
 import { claimLease, withStatusWriteLock } from "../src/lease.js";
 import { registerWorkflow } from "../src/status.js";
@@ -3923,5 +3928,183 @@ describe("Prepare workflow amendment", () => {
     const recreate = await prepareRefusalOf(() => writeWorkflowSnapshot(orphan, orphanDir, { createOnly: true }));
     expect(recreate.code).toBe("coordination.version-conflict");
     expect(readFileSync(orphanSnapshotPath, "utf8")).toBe(createdBytes);
+  });
+});
+
+/* ------------------------------------------------------------------------ *
+ * Catalog execution pin (state-projection contract §1)
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Put a real catalog store behind the fixture's harness. The store context is
+ * the harness dir the scoped calls themselves resolve (`fixture.harness`), so
+ * the pin writer and the pin readers address the same database.
+ */
+async function storeBacked(fixture: Fixture, plans: string[] = [PLAN_ID]): Promise<StoreContext> {
+  const context: StoreContext = { harnessDir: fixture.harness };
+  const handle = await initializeStore(context);
+  handle.close();
+  for (const [index, planId] of plans.entries()) {
+    await registerCatalogEntity(
+      context,
+      { kind: "plan", id: planId, title: `Plan ${planId}`, rootKind: "plans", relativePath: `${planId}.md` },
+      { operationId: `reg-${planId}-${index}`, actor: "project-manager" },
+    );
+  }
+  return context;
+}
+
+/**
+ * The refusal of a call expected to hit the frozen-input pin. The pin conflict
+ * is its own documented code (`catalog.execution-pin-conflict`, contract §1),
+ * not a coordination-surface error, so this narrows on the stable `code` field
+ * exactly as a CLI consumer does.
+ */
+async function pinConflictOf(run: () => Promise<unknown>): Promise<{ code?: string; message: string }> {
+  try {
+    await run();
+  } catch (error) {
+    const code = (error as { code?: unknown }).code;
+    return { ...(typeof code === "string" ? { code } : {}), message: error instanceof Error ? error.message : String(error) };
+  }
+  throw new Error("expected the coordination call to fail");
+}
+
+/** The plan row as stored on disk (the frozen execution input). */
+function storedRow(fixture: Fixture, planId: string): Record<string, unknown> {
+  const snapshot = readJson(fixture.snapshotPath) as { plans: Array<Record<string, unknown>> };
+  return snapshot.plans.find((row) => row.id === planId || row.plan_id === planId)!;
+}
+
+function pinOf(row: Record<string, unknown>): CatalogExecutionPin {
+  return (row.metadata as Record<string, unknown>).catalog_pin as CatalogExecutionPin;
+}
+
+describe("catalog pin — frozen prepare inputs (state-projection contract §1)", () => {
+  test("catalog pin: prepare records the pin, and a later catalog move leaves the prepared execution stable", async () => {
+    const fixture = makeFixture();
+    const context = await storeBacked(fixture);
+    await preparePlan(fixture, PLAN_ID);
+
+    const row = storedRow(fixture, PLAN_ID);
+    const pin = pinOf(row);
+    const handle = await openStore(context, "read");
+    const storeId = handle.storeId;
+    handle.close();
+    expect(pin.store_id).toBe(storeId);
+    expect(pin.entity_revision).toBe(1);
+    expect(pin.document_hash).toBe(executionInputHash(row, PLAN_ID));
+
+    // The current catalog moves (a renamed title bumps the entity revision).
+    await updateCatalogEntity(context, { kind: "plan", id: PLAN_ID }, { title: "Renamed" }, 1, {
+      operationId: "upd-title",
+      actor: "project-manager",
+    });
+
+    const view = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
+    expect(view.catalog_pin?.pin).toEqual(pin);
+    expect(view.catalog_pin?.catalog_moved).toBe(true);
+    expect(view.catalog_pin?.current_revision).toBe(2);
+    expect(view.catalog_pin?.conflict).toBeNull();
+    // The frozen row itself never follows the catalog.
+    const after = storedRow(fixture, PLAN_ID);
+    expect(after.file).toBe(row.file);
+    expect(pinOf(after)).toEqual(pin);
+    // Execution may start on the pinned input.
+    const bound = await bindPlan(fixture, PLAN_ID);
+    expect(bound.outcome).toBe("claimed");
+  });
+
+  test("catalog pin: an authorized prepare records the new catalog revision, while the earlier pin stays frozen", async () => {
+    const fixture = makeFixture();
+    const context = await storeBacked(fixture, [PLAN_ID, PEER_PLAN_ID]);
+    await preparePlan(fixture, PLAN_ID);
+    const first = pinOf(storedRow(fixture, PLAN_ID));
+    // Both plan entities move on: their revisions (the pin's selection pointer)
+    // are now 2.
+    await updateCatalogEntity(context, { kind: "plan", id: PLAN_ID }, { title: "Renamed" }, 1, {
+      operationId: "upd-title-a",
+      actor: "project-manager",
+    });
+    await updateCatalogEntity(context, { kind: "plan", id: PEER_PLAN_ID }, { title: "Renamed" }, 1, {
+      operationId: "upd-title-b",
+      actor: "project-manager",
+    });
+
+    // The authorized prepare is the pin writer: a later prepare (another plan
+    // row of the same workflow) selects the CURRENT catalog revision.
+    await preparePlan(fixture, PEER_PLAN_ID);
+    const second = pinOf(storedRow(fixture, PEER_PLAN_ID));
+    expect(second.entity_revision).toBe(2);
+    expect(second.store_id).toBe(first.store_id);
+    expect(second.entity_revision).not.toBe(first.entity_revision);
+
+    // The already-prepared row keeps its own pin: a re-prepare of that row is
+    // refused (the frozen input is immutable), so the move cannot be applied
+    // retroactively.
+    const refused = await errorCodeOf(() => preparePlan(fixture, PLAN_ID));
+    expect(refused).toBe("coordination.invalid-transition");
+    expect(pinOf(storedRow(fixture, PLAN_ID))).toEqual(first);
+    const view = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
+    expect(view.catalog_pin?.pin).toEqual(first);
+    expect(view.catalog_pin?.catalog_moved).toBe(true);
+    expect(view.catalog_pin?.conflict).toBeNull();
+  });
+
+  test("catalog pin: a frozen input edited after preparation refuses and is never overwritten", async () => {
+    const fixture = makeFixture();
+    const context = await storeBacked(fixture);
+    await preparePlan(fixture, PLAN_ID);
+    const pinned = pinOf(storedRow(fixture, PLAN_ID));
+
+    // A generic snapshot metadata update (NOT an authorized prepare) re-points
+    // the row's document: the pin and the frozen input now disagree.
+    const snapshot = readJson(fixture.snapshotPath) as { plans: Array<Record<string, unknown>> };
+    snapshot.plans = snapshot.plans.map((row) =>
+      row.id === PLAN_ID || row.plan_id === PLAN_ID ? { ...row, file: `.mstar/plans/elsewhere.md` } : row,
+    );
+    writeJson(fixture.snapshotPath, snapshot);
+    const tamperedBytes = readFileSync(fixture.snapshotPath, "utf8");
+
+    const refusal = await pinConflictOf(() => bindPlan(fixture, PLAN_ID));
+    expect(refusal.code).toBe(EXECUTION_PIN_CONFLICT_CODE);
+    // Neither side is overwritten: the row keeps its edited bytes and the
+    // catalog keeps its own revision.
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(tamperedBytes);
+    const handle = await openStore(context, "read");
+    const catalogRevision = handle.db.prepare("select catalog_revision from store_meta where id = 1").get() as {
+      catalog_revision: number;
+    };
+    handle.close();
+    expect(catalogRevision.catalog_revision).toBe(1);
+    expect(pinned.entity_revision).toBe(1);
+
+    // The view discloses the conflict instead of hiding it.
+    const view = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
+    expect(view.catalog_pin?.conflict).not.toBeNull();
+    expect(view.catalog_pin?.pin).toEqual(pinned);
+  });
+
+  test("catalog pin: progress reporting does not invalidate the pin", async () => {
+    const fixture = makeFixture();
+    await storeBacked(fixture);
+    await preparePlan(fixture, PLAN_ID);
+    await bindPlan(fixture, PLAN_ID);
+    const pinned = pinOf(storedRow(fixture, PLAN_ID));
+
+    const view = await readPlanCoordination(fixture.planSession, undefined, fixture.root);
+    await mutatePlanCoordination({
+      sessionPath: fixture.planSession,
+      expectedRevision: view.revision,
+      operation: {
+        kind: "progress",
+        progress: { status: "InProgress", summary: "executing", evidence_paths: [] },
+      },
+    });
+
+    const after = await readPlanCoordination(fixture.planSession, undefined, fixture.root);
+    expect(after.catalog_pin?.conflict).toBeNull();
+    expect(after.catalog_pin?.pin).toEqual(pinned);
+    expect(pinOf(storedRow(fixture, PLAN_ID))).toEqual(pinned);
   });
 });
