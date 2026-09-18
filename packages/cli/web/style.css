@@ -227,34 +227,41 @@ body {
   border-radius: var(--rounded-sm);
 }
 
-.issue-table {
+/* Issue list, workflow list, iteration list: one flat data-table pattern. */
+.issue-table,
+.data-table {
   width: 100%;
   border-collapse: collapse;
   font-size: 14px;
   line-height: 1.5;
 }
 
-.issue-table caption {
+.issue-table caption,
+.data-table caption {
   padding: var(--space-3) var(--space-4);
   color: var(--color-gray-900);
   text-align: left;
 }
 
 .issue-table th,
-.issue-table td {
+.issue-table td,
+.data-table th,
+.data-table td {
   padding: var(--space-3) var(--space-4);
   border-top: 1px solid var(--color-gray-400);
   text-align: left;
   vertical-align: top;
 }
 
-.issue-table thead th {
+.issue-table thead th,
+.data-table thead th {
   border-top: none;
   color: var(--color-gray-900);
   font-weight: 600;
 }
 
-.issue-table tbody tr:hover {
+.issue-table tbody tr:hover,
+.data-table tbody tr:hover {
   background: var(--color-background-200);
 }
 
@@ -312,6 +319,21 @@ body {
   border-color: var(--color-purple-700);
 }
 
+/* Amber for a disclosed data gap: a missing catalog join, pin or execution row. */
+.badge[data-tone="warning"] {
+  color: var(--color-amber-700);
+  background: var(--color-amber-100);
+  border-color: var(--color-amber-700);
+}
+
+/* One row of join-disclosure badges, flush with the content it qualifies. */
+.badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: var(--space-2) 0 0;
+}
+
 .pager {
   display: flex;
   flex-wrap: wrap;
@@ -352,6 +374,16 @@ body {
   color: var(--color-amber-700);
   background: var(--color-amber-100);
   border-color: var(--color-amber-700);
+}
+
+/* One fact per line inside a stale/unavailable disclosure notice. */
+.notice-line {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.notice-line + .notice-line {
+  margin-top: var(--space-2);
 }
 
 .visually-hidden {

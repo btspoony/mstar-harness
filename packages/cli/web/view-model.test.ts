@@ -1,15 +1,29 @@
 /**
- * Issues view-model (plan 20260918-dashboard D3).
+ * View-model edges (plan 20260918-dashboard D3 + D4).
  *
- * The three edges the task brief names — filter defaults/round-trip, history
- * derived strictly from recorded events, and unknown dates — are checked here
- * against real DTO shapes. Rendering is D5's actual local browser smoke; no
- * test asserts a mocked HTML string.
+ * The edges the task briefs name — filter defaults/round-trip, history derived
+ * strictly from recorded events, unknown dates (D3), and the authority split
+ * between the catalog and the execution projection with its honest
+ * stale/unavailable disclosure (D4) — are checked here against real DTO shapes.
+ * Rendering is D5's actual local browser smoke; no test asserts a mocked HTML
+ * string.
  */
 import { describe, expect, test } from "bun:test";
-import type { IssueDetail, IssueFlow } from "@mstar-harness/engine";
+import type {
+  CatalogIdentityDTO,
+  IssueDetail,
+  IssueFlow,
+  IterationDTO,
+  IterationListDTO,
+  IterationPlanDTO,
+  ReadProjection,
+  RoadmapDTO,
+  WorkflowDTO,
+  WorkflowListDTO,
+} from "@mstar-harness/engine";
 
-import type { LoadState } from "./components";
+import type { Envelope, LoadState } from "./components";
+import { dataBadgeText, disclosureLines, pinState, pinText } from "./components";
 import { UNKNOWN_DATE, evidenceText, externalLinkHref, formatDate, migrationNote } from "./format";
 import {
   DEFAULT_ISSUE_FILTERS,
@@ -22,6 +36,9 @@ import {
   parseIssueQuery,
   transitionRows,
 } from "./views/issues";
+import { iterationExecutionState, iterationListState, iterationPlanRow } from "./views/iterations";
+import { roadmapProject, roadmapState } from "./views/roadmap";
+import { workflowListState } from "./views/workflows";
 
 type IssueOccurrence = IssueDetail["occurrences"][number];
 type IssueTransition = IssueDetail["transitions"][number];
@@ -29,6 +46,41 @@ type IssueProvenance = IssueDetail["provenance"][number];
 
 const RECORDED_AT = "2026-09-18T02:00:00.000Z";
 const IMPORT_LABEL = "Imported from projects/proj-a/residuals.json (proj-a / closed #R1)";
+
+/** The three projection health states the read boundary can disclose (contract §6). */
+const BUILT_AT = "2026-09-18T10:00:00.000Z";
+const CHECKED_AT = "2026-09-19T09:00:00.000Z";
+const CURRENT_PROJECTION: ReadProjection = {
+  generation: 4,
+  freshness: "current",
+  builtAt: BUILT_AT,
+  checkedAt: CHECKED_AT,
+  diagnostics: [],
+};
+const STALE_PROJECTION: ReadProjection = {
+  generation: 3,
+  freshness: "stale",
+  builtAt: BUILT_AT,
+  checkedAt: CHECKED_AT,
+  diagnostics: [
+    {
+      sourceKey: "workflows/20260918-dashboard/snapshot.json",
+      reason: "missing",
+      message: "the declared snapshot is missing",
+    },
+  ],
+};
+const UNAVAILABLE_PROJECTION: ReadProjection = {
+  generation: null,
+  freshness: "unavailable",
+  builtAt: null,
+  checkedAt: CHECKED_AT,
+  diagnostics: [{ sourceKey: "status.json", reason: "invalid", message: "status.json does not validate" }],
+};
+
+function envelope<T>(data: T, projection: ReadProjection = CURRENT_PROJECTION): Envelope<T> {
+  return { data, storeRevision: 12, catalogRevision: 5, projection };
+}
 
 function occurrence(id: number, discoveredAt: string | null, overrides: Partial<IssueOccurrence> = {}): IssueOccurrence {
   return {
@@ -126,7 +178,7 @@ const PROBE_FAILURE = "store.not-initialized: no store — initialize the issue 
 const PROBE_LOADING: LoadState<IssueFlow> = { status: "loading", envelope: null, message: null };
 const PROBE_FAILED: LoadState<IssueFlow> = { status: "error", envelope: null, message: PROBE_FAILURE };
 function probeReady(data: IssueFlow): LoadState<IssueFlow> {
-  return { status: "ready", envelope: { data, storeRevision: 1, catalogRevision: 0 }, message: null };
+  return { status: "ready", envelope: envelope(data), message: null };
 }
 
 describe("issue list filters", () => {
@@ -306,5 +358,234 @@ describe("unknown date", () => {
     expect(evidenceText({})).toBeNull();
     expect(evidenceText([])).toBeNull();
     expect(evidenceText(null)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// D4: the authority split between the catalog and the execution projection
+// ---------------------------------------------------------------------------
+
+function catalogIdentity(overrides: Partial<CatalogIdentityDTO> = {}): CatalogIdentityDTO {
+  return {
+    kind: "plan",
+    id: "20260918-dashboard",
+    title: "Local read-only dashboard",
+    description: null,
+    rootKind: "plans",
+    relativePath: "20260918-dashboard.md",
+    documentKind: null,
+    lifecycle: "active",
+    revision: 5,
+    registeredAt: RECORDED_AT,
+    updatedAt: RECORDED_AT,
+    ...overrides,
+  };
+}
+
+function workflow(overrides: Partial<WorkflowDTO> = {}): WorkflowDTO {
+  return {
+    id: "20260918-dashboard",
+    type: "plan",
+    status: "InProgress",
+    phase: "implement",
+    startedAt: RECORDED_AT,
+    endedAt: null,
+    updatedAt: RECORDED_AT,
+    branch: { base: "main", source: "feature/20260918-dashboard", integration: null, target: "main" },
+    activeRegistration: true,
+    catalog: catalogIdentity(),
+    plans: [],
+    badges: [],
+    ...overrides,
+  };
+}
+
+function iteration(overrides: Partial<IterationDTO> = {}): IterationDTO {
+  return {
+    iterationId: "iter-20260918-issue-store-dashboard",
+    catalog: catalogIdentity({
+      kind: "iteration",
+      id: "iter-20260918-issue-store-dashboard",
+      title: "Issue store and dashboard",
+      rootKind: "iterations",
+      relativePath: "iter-20260918-issue-store-dashboard",
+    }),
+    compass: null,
+    workflow: null,
+    plans: [],
+    documents: [],
+    badges: [],
+    ...overrides,
+  };
+}
+
+function iterationPlan(overrides: Partial<IterationPlanDTO> = {}): IterationPlanDTO {
+  return {
+    planId: "20260918-dashboard",
+    catalog: catalogIdentity(),
+    execution: null,
+    catalogPinRevision: null,
+    badges: [],
+    ...overrides,
+  };
+}
+
+function roadmap(overrides: Partial<RoadmapDTO> = {}): RoadmapDTO {
+  return {
+    projectId: "engine",
+    catalog: catalogIdentity({
+      kind: "project",
+      id: "engine",
+      title: "Engine",
+      rootKind: "projects",
+      relativePath: "engine/roadmap.md",
+      documentKind: "roadmap",
+    }),
+    direction: "One local store.",
+    goals: [{ text: "Ship phase 1", checked: false }],
+    milestones: ["Phase 1"],
+    badges: [],
+    ...overrides,
+  };
+}
+
+const EMPTY_WORKFLOWS: WorkflowListDTO = { items: [], total: 0 };
+const EMPTY_ITERATIONS: IterationListDTO = { items: [], total: 0 };
+
+describe("projection disclosure", () => {
+  test("a stale projection discloses source, reason and last successful build on every projected view", () => {
+    const views = [
+      workflowListState(envelope({ items: [workflow()], total: 1 }, STALE_PROJECTION)),
+      iterationListState(envelope({ items: [iteration()], total: 1 }, STALE_PROJECTION)),
+      roadmapState(envelope(roadmap(), STALE_PROJECTION)),
+    ];
+    for (const view of views) {
+      expect(view.disclosure).not.toBeNull();
+      const lines = disclosureLines(view.disclosure!);
+      expect(lines[0]).toContain("stale");
+      const copy = lines.join("\n");
+      expect(copy).toContain("workflows/20260918-dashboard/snapshot.json");
+      expect(copy).toContain("missing");
+      expect(copy).toContain(`Last successful build: ${BUILT_AT}.`);
+      expect(copy).toContain(`Last checked: ${CHECKED_AT}.`);
+    }
+  });
+
+  test("a current projection leaves every projected view nothing to disclose", () => {
+    expect(workflowListState(envelope(EMPTY_WORKFLOWS)).disclosure).toBeNull();
+    expect(iterationListState(envelope(EMPTY_ITERATIONS)).disclosure).toBeNull();
+    expect(roadmapState(envelope(roadmap())).disclosure).toBeNull();
+  });
+
+  test("a projection disclosure with no recorded diagnostic says so instead of naming a source", () => {
+    const lines = disclosureLines({ freshness: "unavailable", diagnostics: [], builtAt: null, checkedAt: "" });
+    expect(lines[0]).toContain("unavailable");
+    const copy = lines.join("\n");
+    expect(copy).toContain("No source diagnostic was recorded for this state.");
+    expect(copy).toContain("Last successful build: none recorded.");
+    expect(copy).toContain("Last checked: unknown.");
+  });
+});
+
+describe("catalog and projection authority", () => {
+  test("an unavailable first projection is not an empty workflow catalog", () => {
+    // No valid generation: the list says unavailable, never "no workflows".
+    expect(workflowListState(envelope(EMPTY_WORKFLOWS, UNAVAILABLE_PROJECTION)).content).toEqual({
+      kind: "unavailable",
+    });
+    // A published generation with no rows is the empty case…
+    expect(workflowListState(envelope(EMPTY_WORKFLOWS)).content).toEqual({ kind: "empty" });
+    // …and a stale retained generation still lists what it has.
+    const stale = workflowListState(envelope({ items: [workflow()], total: 1 }, STALE_PROJECTION));
+    expect(stale.content).toEqual({ kind: "listed", total: 1 });
+  });
+
+  test("the iteration list stays catalog-driven while the execution projection is unavailable", () => {
+    const listed = iterationListState(envelope({ items: [iteration()], total: 1 }, UNAVAILABLE_PROJECTION));
+    expect(listed.content).toEqual({ kind: "listed", total: 1 });
+    expect(listed.disclosure).not.toBeNull();
+    expect(iterationListState(envelope(EMPTY_ITERATIONS)).content).toEqual({ kind: "empty" });
+  });
+
+  test("an iteration with no execution row is not the same fact as an unavailable projection", () => {
+    // Absent execution data: a valid generation simply carries no row for it.
+    expect(iterationExecutionState(iteration(), CURRENT_PROJECTION)).toEqual({ kind: "not-started" });
+    // No valid generation: nothing is claimed about execution at all.
+    expect(iterationExecutionState(iteration(), UNAVAILABLE_PROJECTION)).toEqual({ kind: "unavailable" });
+    // The row case carries the projected values through unchanged.
+    const running = iteration({
+      workflow: { id: "iter-1", status: "InProgress", phase: "execute", activeRegistration: true },
+    });
+    expect(iterationExecutionState(running, CURRENT_PROJECTION)).toEqual({
+      kind: "row",
+      workflow: { id: "iter-1", status: "InProgress", phase: "execute", activeRegistration: true },
+    });
+  });
+
+  test("a plan with no execution row keeps its catalog membership and claims no pin", () => {
+    const row = iterationPlanRow(iterationPlan(), true);
+    expect(row.catalog?.title).toBe("Local read-only dashboard");
+    expect(row.execution).toEqual({ kind: "not-started" });
+    // The same row under an unavailable projection: unknown, not a claim.
+    expect(iterationPlanRow(iterationPlan(), false).execution).toEqual({ kind: "unknown" });
+  });
+
+  test("a missing prepared catalog pin is disclosed, never filled from the catalog revision", () => {
+    const unpinned = iterationPlanRow(
+      iterationPlan({
+        execution: { workflowId: "w", status: "InProgress", progress: null, phase: null, doneAt: null },
+        catalogPinRevision: null,
+        badges: ["catalog-pin-missing"],
+      }),
+      true,
+    );
+    expect(unpinned.execution.kind).toBe("row");
+    const pin = unpinned.execution.kind === "row" ? unpinned.execution.pin : null;
+    expect(pin).toEqual({ kind: "missing" });
+    // The catalog's current revision is 5; a missing pin never borrows it.
+    expect(pinText(pin!)).toContain("missing");
+    expect(pinText(pin!)).not.toContain("revision 5");
+
+    // A pin that predates the catalog row keeps both revisions in view.
+    expect(pinState(3, 5)).toEqual({ kind: "conflict", pin: 3, current: 5 });
+    expect(pinText({ kind: "conflict", pin: 3, current: 5 })).toContain("revision 3");
+    expect(pinState(5, 5)).toEqual({ kind: "pinned", revision: 5 });
+    // No catalog row to compare against: no conflict is claimed.
+    expect(pinState(3, null)).toEqual({ kind: "pinned", revision: 3 });
+  });
+
+  test("join badges name the missing catalog join instead of resolving it", () => {
+    expect(dataBadgeText(["catalog-pin-missing", "catalog-missing"])).toEqual([
+      "Prepared pin missing",
+      "No catalog row",
+    ]);
+    expect(dataBadgeText([])).toEqual([]);
+  });
+});
+
+describe("roadmap", () => {
+  test("the roadmap never guesses a project and distinguishes absent catalog content from an unavailable projection", () => {
+    expect(roadmapProject("")).toBeNull();
+    expect(roadmapProject("?project=")).toBeNull();
+    expect(roadmapProject("?project=%20")).toBeNull();
+    expect(roadmapProject("?project=engine")).toBe("engine");
+
+    // A valid generation with no roadmap row for the project: absent, not empty.
+    const withoutRow = roadmap({ direction: null, goals: [], milestones: [], badges: ["execution-unavailable"] });
+    const absent = roadmapState(envelope(withoutRow));
+    expect(absent.content.kind).toBe("absent");
+    expect(absent.disclosure).toBeNull();
+
+    // No valid generation at all: unavailable, even though the DTO looks the same.
+    const unavailable = roadmapState(envelope(withoutRow, UNAVAILABLE_PROJECTION));
+    expect(unavailable.content.kind).toBe("unavailable");
+    expect(unavailable.disclosure).not.toBeNull();
+
+    // Real projected content is the only case that claims the document's contents.
+    const ready = roadmapState(envelope(roadmap()));
+    expect(ready.content.kind).toBe("ready");
+    expect(ready.content.kind === "ready" ? ready.content.roadmap.goals : []).toEqual([
+      { text: "Ship phase 1", checked: false },
+    ]);
   });
 });

@@ -1,19 +1,30 @@
 /**
- * Shared dashboard primitives (plan 20260918-dashboard D3).
+ * Shared dashboard primitives (plan 20260918-dashboard D3; extended by D4).
  *
- * The read-envelope loader every view uses, plus the small presentational
- * pieces the Issues views compose. Nothing here reaches source JSON, the
- * filesystem or Markdown: every string is rendered as text by Preact, and the
- * API is the only data source (plan Global Constraints).
+ * The read-envelope loader every view uses, the small presentational pieces the
+ * views compose, and the authority/freshness vocabulary the projected
+ * Workflows, Iterations and Roadmap views disclose. Nothing here reaches source
+ * JSON, the filesystem or Markdown: every string is rendered as text by Preact,
+ * and the API is the only data source (plan Global Constraints).
  */
 import type { ComponentChildren } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import { html } from "htm/preact";
+import type { CatalogIdentityDTO, CatalogLifecycle, DashboardBadge, ReadProjection, SourceDiagnostic } from "@mstar-harness/engine";
 
 import { failureText } from "./format";
 
-/** The engine read envelope (state-projection contract §6) the views consume. */
-export type Envelope<T> = { data: T; storeRevision: number; catalogRevision: number };
+/**
+ * The engine read envelope (state-projection contract §6) the views consume:
+ * the view DTO, the revisions it was read at, and — for every view, projected
+ * or not — the projection health block a projected view has to disclose.
+ */
+export type Envelope<T> = {
+  data: T;
+  storeRevision: number;
+  catalogRevision: number;
+  projection: ReadProjection;
+};
 
 export type LoadState<T> =
   | { status: "loading"; envelope: null; message: null }
@@ -109,4 +120,199 @@ export function EmptyState(props: { children: ComponentChildren }) {
  */
 export function LiveRegion(props: { message: string }) {
   return html`<p class="visually-hidden" role="status" aria-live="polite">${props.message}</p>`;
+}
+
+// ---------------------------------------------------------------------------
+// Projection freshness (state-projection contract §6, DESIGN.md states)
+// ---------------------------------------------------------------------------
+
+/**
+ * True while the envelope carries no valid projection generation. That state is
+ * never "no work": the refresh publishes `generation` and `freshness` together,
+ * so this is the envelope's own `unavailable` disclosure, and it is what keeps
+ * an unread source from rendering as an empty list (plan D4 STOP rule).
+ */
+export function projectionUnavailable(projection: ReadProjection): boolean {
+  return projection.generation === null;
+}
+
+/**
+ * What a projected view discloses about its own freshness: the named sources
+ * and their reasons, the last successful build and the last check. `null` while
+ * the published generation is current — then nothing is withheld.
+ */
+export type Disclosure = {
+  freshness: "stale" | "unavailable";
+  diagnostics: readonly SourceDiagnostic[];
+  builtAt: string | null;
+  checkedAt: string;
+};
+
+export function projectionDisclosure(projection: ReadProjection): Disclosure | null {
+  if (projection.freshness === "current") return null;
+  return {
+    freshness: projection.freshness,
+    diagnostics: projection.diagnostics,
+    builtAt: projection.builtAt,
+    checkedAt: projection.checkedAt,
+  };
+}
+
+/**
+ * The disclosure's own copy (DESIGN.md "Stale projection"): what the reader is
+ * looking at, one named source + reason per recorded diagnostic, the last
+ * successful build time and the check time. A state with no recorded diagnostic
+ * says so instead of naming a source it does not have.
+ */
+export function disclosureLines(disclosure: Disclosure): string[] {
+  const lines = [
+    disclosure.freshness === "stale"
+      ? "Execution data is stale: the last successful projection is retained and shown."
+      : "Execution data is unavailable: no valid projection has been published yet.",
+  ];
+  if (disclosure.diagnostics.length === 0) {
+    lines.push("No source diagnostic was recorded for this state.");
+  } else {
+    for (const diagnostic of disclosure.diagnostics) {
+      lines.push(`Source ${diagnostic.sourceKey}: ${diagnostic.reason} — ${diagnostic.message}`);
+    }
+  }
+  lines.push(
+    disclosure.builtAt === null ? "Last successful build: none recorded." : `Last successful build: ${disclosure.builtAt}.`,
+  );
+  lines.push(disclosure.checkedAt === "" ? "Last checked: unknown." : `Last checked: ${disclosure.checkedAt}.`);
+  return lines;
+}
+
+/** Amber for a retained stale generation, red for no generation at all. */
+export function ProjectionNotice(props: { disclosure: Disclosure }) {
+  const disclosure = props.disclosure;
+  return html`<${Notice} tone=${disclosure.freshness === "stale" ? "warning" : "error"}>
+    ${disclosureLines(disclosure).map(
+      (line, index) => html`<p class="notice-line" key=${index}>${line}</p>`,
+    )}
+  </${Notice}>`;
+}
+
+// ---------------------------------------------------------------------------
+// Authority vocabulary (state-projection contract §1/§6)
+// ---------------------------------------------------------------------------
+
+/**
+ * The read boundary's explicit join disclosure: a missing catalog row, a
+ * missing or conflicting prepared pin, or absent execution data is named here,
+ * never silently resolved into a value the store did not give.
+ */
+const BADGE_LABELS: Record<DashboardBadge, string> = {
+  "catalog-missing": "No catalog row",
+  "catalog-pin-missing": "Prepared pin missing",
+  "catalog-pin-conflict": "Prepared pin differs from the catalog revision",
+  "execution-unavailable": "No execution data",
+};
+
+/** The disclosure vocabulary of one badge list, in the order the read boundary set it. */
+export function dataBadgeText(badges: readonly DashboardBadge[]): string[] {
+  return badges.map((badge) => BADGE_LABELS[badge]);
+}
+
+export function DataBadges(props: { badges: readonly DashboardBadge[] }) {
+  if (props.badges.length === 0) return null;
+  return html`<p class="badges">
+    ${dataBadgeText(props.badges).map((label, index) => html`<${Badge} key=${index} tone="warning">${label}</${Badge}>`)}
+  </p>`;
+}
+
+/** Archived/superseded stay visibly terminal; only `active` reads as current. */
+export function catalogLifecycleTone(lifecycle: CatalogLifecycle): "neutral" | "terminal" {
+  return lifecycle === "active" ? "neutral" : "terminal";
+}
+
+/**
+ * One catalog row's authoritative identity: title, description, location and
+ * catalog lifecycle. Nothing projected is rendered here — the execution
+ * projection never supplies these fields (contract §1).
+ */
+export function CatalogFacts(props: { catalog: CatalogIdentityDTO }) {
+  const catalog = props.catalog;
+  return html`<dl class="facts">
+    <${Field} label="Catalog title">${catalog.title}</${Field}>
+    ${catalog.description === null
+      ? null
+      : html`<${Field} label="Catalog description"><span class="prose">${catalog.description}</span></${Field}>`}
+    <${Field} label="Catalog location"
+      ><span class="mono">${`${catalog.rootKind}:${catalog.relativePath}`}</span></${Field}
+    >
+    <${Field} label="Catalog lifecycle"
+      ><${Badge} tone=${catalogLifecycleTone(catalog.lifecycle)}>${catalog.lifecycle}</${Badge}></${Field}
+    >
+    <${Field} label="Catalog revision"><span class="mono">${String(catalog.revision)}</span></${Field}>
+    <${Field} label="Catalog updated"><span class="mono">${catalog.updatedAt}</span></${Field}>
+  </dl>`;
+}
+
+/**
+ * One prepared catalog pin (contract §1): the frozen catalog revision an
+ * execution row was prepared from. `catalogRevision` is `null` when the catalog
+ * row itself is missing, in which case no comparison is claimed.
+ */
+export type PinState =
+  | { kind: "missing" }
+  | { kind: "pinned"; revision: number }
+  | { kind: "conflict"; pin: number; current: number };
+
+export function pinState(pinRevision: number | null, catalogRevision: number | null): PinState {
+  if (pinRevision === null) return { kind: "missing" };
+  if (catalogRevision !== null && catalogRevision !== pinRevision) {
+    return { kind: "conflict", pin: pinRevision, current: catalogRevision };
+  }
+  return { kind: "pinned", revision: pinRevision };
+}
+
+/** A missing pin is named as missing, never filled in from the catalog's current revision. */
+export function pinText(state: PinState): string {
+  switch (state.kind) {
+    case "missing":
+      return "Prepared pin missing: this execution row records no catalog revision, so no prepared input is confirmed.";
+    case "conflict":
+      return `Prepared pin conflict: prepared at catalog revision ${state.pin}, the catalog row is now revision ${state.current}.`;
+    case "pinned":
+      return `Prepared pin: this execution row was prepared at catalog revision ${state.revision}.`;
+  }
+}
+
+/** An absent projected value is named, never shown as an empty cell or a zero. */
+export function textOrAbsent(value: string | null): string {
+  return value === null || value.trim() === "" ? "Not recorded" : value;
+}
+
+// ---------------------------------------------------------------------------
+// Paging
+// ---------------------------------------------------------------------------
+
+/** Fixed dashboard page size: the read boundary's own list default (contract §6). */
+export const DASHBOARD_PAGE_SIZE = 50;
+
+/** Previous/next over one page of a list, with the shown range named. */
+export function Pager(props: { offset: number; count: number; total: number; onChange: (offset: number) => void }) {
+  return html`<div class="pager">
+    <button
+      type="button"
+      class="button-secondary"
+      disabled=${props.offset === 0}
+      onClick=${() => props.onChange(Math.max(0, props.offset - DASHBOARD_PAGE_SIZE))}
+    >
+      Previous
+    </button>
+    <p class="pager-summary">
+      Showing ${props.count === 0 ? 0 : props.offset + 1}–${props.offset + props.count} of ${props.total}
+    </p>
+    <button
+      type="button"
+      class="button-secondary"
+      disabled=${props.offset + props.count >= props.total}
+      onClick=${() => props.onChange(props.offset + DASHBOARD_PAGE_SIZE)}
+    >
+      Next
+    </button>
+  </div>`;
 }

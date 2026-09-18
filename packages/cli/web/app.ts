@@ -3,15 +3,18 @@
  * string served from /assets/app.js. Preact + htm template-tag components,
  * no JSX plugin, no CDN or remote assets (DESIGN.md, plan 20260918-dashboard).
  *
- * D3 wires the Issues destination (list + detail); D4 registers the remaining
- * three views in `WIRED_DESTINATIONS`, which is also what the navigation shows,
- * so no destination is ever a dead link.
+ * D3 wired the Issues destination; D4 registers the remaining three
+ * (Workflows, Iterations, Roadmap) so the four settled destinations are all
+ * reachable and no navigation entry is a dead link.
  */
 import { render } from "preact";
 import { html } from "htm/preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 
 import { IssueDetailView, IssuesView } from "./views/issues";
+import { IterationDetailView, IterationsView } from "./views/iterations";
+import { RoadmapView } from "./views/roadmap";
+import { WorkflowDetailView, WorkflowsView } from "./views/workflows";
 
 const NAV_ITEMS = [
   { id: "issues", label: "Issues" },
@@ -22,22 +25,80 @@ const NAV_ITEMS = [
 
 type DestinationId = (typeof NAV_ITEMS)[number]["id"];
 
-/** Destinations with a view module in this build. */
-const WIRED_DESTINATIONS: ReadonlyArray<DestinationId> = ["issues"];
+type Route =
+  | { name: "issues" }
+  | { name: "issue"; id: string }
+  | { name: "workflows" }
+  | { name: "workflow"; id: string }
+  | { name: "iterations" }
+  | { name: "iteration"; id: string }
+  | { name: "roadmap" };
 
-type Route = { name: "issues" } | { name: "issue"; id: string };
+/** Which navigation entry a route belongs to (details stay under their list). */
+const DESTINATION_OF: Record<Route["name"], DestinationId> = {
+  issues: "issues",
+  issue: "issues",
+  workflows: "workflows",
+  workflow: "workflows",
+  iterations: "iterations",
+  iteration: "iterations",
+  roadmap: "roadmap",
+};
 
-/** `#issue/<id>` selects the detail; anything else is the default landing. */
+/**
+ * `#<destination>` selects a list, `#<resource>/<id>` its detail; anything else
+ * is the default landing (Issues).
+ */
 function parseRoute(hash: string): Route {
   const segments = hash.replace(/^#/, "").split("/");
-  if (segments[0] === "issue" && segments[1] !== undefined && segments[1] !== "") {
+  const resource = segments[0];
+  const rawId = segments[1];
+  if (rawId !== undefined && rawId !== "") {
+    let id: string;
     try {
-      return { name: "issue", id: decodeURIComponent(segments[1]) };
+      id = decodeURIComponent(rawId);
     } catch {
       return { name: "issues" };
     }
+    if (resource === "issue") return { name: "issue", id };
+    if (resource === "workflow") return { name: "workflow", id };
+    if (resource === "iteration") return { name: "iteration", id };
+    return { name: "issues" };
   }
+  if (resource === "workflows") return { name: "workflows" };
+  if (resource === "iterations") return { name: "iterations" };
+  if (resource === "roadmap") return { name: "roadmap" };
   return { name: "issues" };
+}
+
+/** The one rendered slice for a route. */
+function Destination(props: {
+  route: Route;
+  returnFocusId: string | null;
+  onFocusRestored: () => void;
+  onOpenIssue: (id: string) => void;
+}) {
+  const route = props.route;
+  switch (route.name) {
+    case "issue":
+      return html`<${IssueDetailView} key=${route.id} id=${route.id} />`;
+    case "workflow":
+      return html`<${WorkflowDetailView} key=${route.id} id=${route.id} />`;
+    case "iteration":
+      return html`<${IterationDetailView} key=${route.id} id=${route.id} />`;
+    case "workflows":
+      return html`<${WorkflowsView} />`;
+    case "iterations":
+      return html`<${IterationsView} />`;
+    case "roadmap":
+      return html`<${RoadmapView} />`;
+    case "issues":
+      return html`<${IssuesView}
+        focusIssueId=${props.returnFocusId}
+        onFocusRestored=${props.onFocusRestored}
+        onOpenIssue=${props.onOpenIssue}
+      />`;
+  }
 }
 
 function App() {
@@ -55,14 +116,14 @@ function App() {
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
 
-  const active: DestinationId = route.name === "issue" ? "issues" : route.name;
+  const active = DESTINATION_OF[route.name];
 
   return html`
     <a class="skip-link" href="#main">Skip to content</a>
     <header class="app-header">
       <nav class="app-nav" aria-label="Primary">
         <span class="app-title">Morning Star</span>
-        ${NAV_ITEMS.filter((item) => WIRED_DESTINATIONS.includes(item.id)).map(
+        ${NAV_ITEMS.map(
           (item) => html`
             <a
               key=${item.id}
@@ -77,17 +138,16 @@ function App() {
       </nav>
     </header>
     <main id="main" class="app-main">
-      ${route.name === "issue"
-        ? html`<${IssueDetailView} key=${route.id} id=${route.id} />`
-        : html`<${IssuesView}
-            focusIssueId=${returnFocusId.current}
-            onFocusRestored=${() => {
-              returnFocusId.current = null;
-            }}
-            onOpenIssue=${(id: string) => {
-              returnFocusId.current = id;
-            }}
-          />`}
+      <${Destination}
+        route=${route}
+        returnFocusId=${returnFocusId.current}
+        onFocusRestored=${() => {
+          returnFocusId.current = null;
+        }}
+        onOpenIssue=${(id: string) => {
+          returnFocusId.current = id;
+        }}
+      />
     </main>
     <footer class="app-footer">Read-only · Make changes with the CLI</footer>
   `;
