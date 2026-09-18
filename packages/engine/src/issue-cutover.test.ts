@@ -129,14 +129,31 @@ describe("retired register persist — the raw store cannot recreate a project r
     expect(readFileSync(registerPath).equals(before)).toBe(true);
   });
 
+  test("issue authority: a json alias to a project register refuses on the read port too", async () => {
+    const { store, registerPath } = workspaceWithRegister("retired-read");
+    // A read is the same authority channel as a write: `get` runs the same
+    // canonical-target guard, so legacy register bytes never reach a consumer
+    // that bypasses the findings gate.
+    await expect(store.get({ kind: "json", key: registerPath })).rejects.toThrow(/json alias/);
+
+    const linkPath = join(dirname(registerPath), "register-link.json");
+    symlinkSync(registerPath, linkPath);
+    await expect(store.get({ kind: "json", key: linkPath })).rejects.toThrow(/json alias/);
+
+    await expect(store.get({ kind: "residuals", key: "proj-a" } as never)).rejects.toThrow(
+      /no longer persists project registers/,
+    );
+  });
+
   test("issue authority: the same file name outside the resolved project dir stays an ordinary json target", async () => {
     const { store } = workspaceWithRegister("retired-alias-control");
     const loosePath = join(store.root, "loose", "residuals.json");
     // The guard keys on the resolved PROJECT dir, not on the file name: an
-    // unrelated document with the same name stays writable, so the refusal is
-    // a boundary, not a blanket basename ban.
+    // unrelated document with the same name stays readable and writable, so the
+    // refusal is a boundary, not a blanket basename ban.
     await store.put({ kind: "json", key: loosePath, payload: { note: "ordinary" } });
     expect(existsSync(loosePath)).toBe(true);
+    expect(await store.get({ kind: "json", key: loosePath })).toEqual({ note: "ordinary" });
   });
 });
 

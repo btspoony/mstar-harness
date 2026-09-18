@@ -90,6 +90,7 @@ import { rowPlanIds, validatePlanRow, validateStatusV2, type PlanRow, type Statu
 import { getArtifactStore, resolveArtifactPath, type ArtifactRef, type ArtifactStore } from "./store.js";
 import { StoreError, openStore, type StoreContext, type StoreHandle } from "./store-db.js";
 import {
+  IssueError,
   captureIssue,
   closeIssue,
   linkIssue,
@@ -2509,6 +2510,11 @@ async function mutateResidualAdd(
  * append-only (no unlink verb), so a read-side scope check cannot race; it
  * still runs inside the row's locked section, after the session binding and
  * handoff checks have proven this session may mutate this row.
+ *
+ * The refusal surfaces the issue contract's stable code (`issue.scope-refused`,
+ * contract §4/§5 — foreign or unscoped mutation), not a coordination code: a
+ * consumer classifies scope refusals by the contract enum on every surface,
+ * and only the code changes — the check, its position and the message stay.
  */
 async function assertIssueLinkedToPlan(context: StoreContext, issueId: string, planId: string): Promise<void> {
   const handle = await openStore(context, "read");
@@ -2517,10 +2523,10 @@ async function assertIssueLinkedToPlan(context: StoreContext, issueId: string, p
       .prepare("select 1 as ok from provenance where issue_id = ? and kind = 'plan' and target = ?")
       .get(issueId, planId) as { ok: number } | undefined;
     if (!linked) {
-      throw invalidInput(`issue ${issueId} is not linked to plan ${planId} \u2014 a plan session closes only its own findings`, {
-        issue_id: issueId,
-        plan_id: planId,
-      });
+      throw new IssueError(
+        "issue.scope-refused",
+        `issue ${issueId} is not linked to plan ${planId} \u2014 a plan session closes only its own findings`,
+      );
     }
   } finally {
     handle.close();

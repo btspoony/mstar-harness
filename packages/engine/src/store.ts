@@ -223,6 +223,11 @@ export function createFsStore(harnessRoot: string): ArtifactStore & { root: stri
     },
     async get<T = unknown>(ref: ArtifactRef): Promise<T | undefined> {
       const filePath = resolveArtifactPath(root, ref);
+      // Read-surface symmetry (G2a): the same refusal as put/delete. A read
+      // through a `json` alias is the same authority channel — the runtime
+      // holds no register authority, so legacy register bytes never reach a
+      // consumer that bypasses the findings gate.
+      assertNotRetiredRegisterTarget(root, ref, filePath);
       if (!existsSync(filePath)) return undefined;
       return readJson(filePath) as unknown as T;
     },

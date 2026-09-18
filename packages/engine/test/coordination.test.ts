@@ -1130,7 +1130,8 @@ describe("issue-authority — scoped plan issue operations (G2a)", () => {
       ),
     ).toBe("store.operation-conflict");
 
-    // A plan session cannot close an issue linked to another plan.
+    // A plan session cannot close an issue linked to another plan: the refusal
+    // surfaces the issue contract's stable scope code, not a coordination code.
     const peerView = await readPlanCoordination(fixture.peerSession, PEER_PLAN_ID, fixture.root);
     expect(
       await errorCodeOf(() =>
@@ -1141,7 +1142,7 @@ describe("issue-authority — scoped plan issue operations (G2a)", () => {
           operation: closeOp("I-000001", 2) as never,
         }),
       ),
-    ).toBe("coordination.invalid-input");
+    ).toBe("issue.scope-refused");
   });
 });
 
