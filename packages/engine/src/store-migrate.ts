@@ -1,6 +1,6 @@
 /**
- * store-migrate.ts -- the read-only migration planner (plan
- * 20260918-issue-governance-cutover Task 1 G1a; issue-store-contract §3/§7).
+ * store-migrate.ts -- the read-only migration planner
+ * (issue-store-contract §3/§7).
  *
  * Boundaries this module owns, and does not cross:
  * - `planStoreMigration` is READ-ONLY over the named legacy source roots: the
@@ -438,7 +438,7 @@ export async function planStoreMigration(context: StoreContext): Promise<Migrati
 }
 
 // ---------------------------------------------------------------------------
-// Staged apply (§7, plan 20260918-issue-governance-cutover Task 2 G1b)
+// Staged apply (§7)
 // ---------------------------------------------------------------------------
 
 /** The stable legacy source tuple key used for ID mapping and reconciliation. */

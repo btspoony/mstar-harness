@@ -1,6 +1,5 @@
 /**
- * catalog.test.ts — P1 proof for the catalog authority (plan
- * 20260918-state-projection Task 1). Run with
+ * catalog.test.ts — proof for the catalog authority. Run with
  * `bun test packages/engine/src/catalog.test.ts`.
  *
  * The suite runs against the real catalog module, the real migration runner

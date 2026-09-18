@@ -1,13 +1,13 @@
 /**
- * issue-cutover.test.ts — G2a proof: the engine's issue authority cutover.
+ * issue-cutover.test.ts — proof: the engine's issue authority cutover.
  *
  * Spec sources:
- * - issue-store-contract.md §2/§5/§7 (the store is the only findings
+ * - the issue-store contract §2/§5/§7 (the store is the only findings
  *   authority; `apply ≠ activate`: a staged store is never an authority, and a
  *   missing or corrupt one is never an empty one) and §6 (capture duty).
- * - Plan `20260918-issue-governance-cutover` Global Constraints (the scoped
- *   residual writers and the `ArtifactStore` residual persist must cut over
- *   BEFORE activation) plus Task 3's hard invariants.
+ * - The cutover's global constraints (the scoped residual writers and the
+ *   `ArtifactStore` residual persist must cut over BEFORE activation) plus the
+ *   hard invariants this file proves.
  *
  * What this file proves, and what its neighbours own:
  * - HERE: no RAW write path can recreate a legacy register (the retired kind,

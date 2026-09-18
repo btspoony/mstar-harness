@@ -1,6 +1,6 @@
 /**
- * projection-sources.test.ts -- P5 proof for the PURE validated source
- * snapshot (plan 20260918-state-projection Task 5; contract §5).
+ * projection-sources.test.ts -- proof for the PURE validated source
+ * snapshot (contract §5).
  *
  * Every case runs against the real projection module, the real catalog/store
  * modules, the real migration runner and the real `node:sqlite` driver in a

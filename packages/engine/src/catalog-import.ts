@@ -1,7 +1,7 @@
 /**
  * catalog-import.ts -- explicit discovery/proposal, reviewed-mapping import and
- * versioned export transport over the catalog authority (plan
- * 20260918-state-projection Task 2 P2; state-projection-contract §2/§4).
+ * versioned export transport over the catalog authority
+ * (state-projection-contract §2/§4).
  *
  * Boundaries this module owns, and does not cross:
  * - Discovery is a PROPOSAL over the configured roots. It writes nothing, never

@@ -1,6 +1,6 @@
 /**
- * store-db.test.ts — C1 proof for the issue-store runtime boundary
- * (plan 20260918-issue-store-core). Run with `bun test packages/engine/src/store-db.test.ts`.
+ * store-db.test.ts — proof for the issue-store runtime boundary.
+ * Run with `bun test packages/engine/src/store-db.test.ts`.
  *
  * The scenario suite below is executed against the REAL store-db.ts
  * implementation and the REAL node:sqlite driver — twice: once in-process

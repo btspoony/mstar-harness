@@ -3,7 +3,7 @@
  * joins an execution registration (snapshot + root active-workflow entry, the
  * JSON execution authority) to its catalog rows (store.db, the catalog
  * authority) without ever reporting a half-registered workflow as success
- * (plan 20260918-state-projection Task 3 P3; state-projection-contract §3).
+ * (state-projection-contract §3).
  *
  * Why a journal at all: SQLite cannot commit a filesystem JSON write, so the
  * three writes — snapshot, root entry, catalog rows — are not one atomic unit.

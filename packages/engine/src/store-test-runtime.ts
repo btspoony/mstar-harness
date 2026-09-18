@@ -1,6 +1,6 @@
 /**
  * store-test-runtime.ts — TEST-ONLY runtime-process/bundle helper for the
- * issue-store boundary (plan 20260918-issue-store-core C1 proof).
+ * issue-store boundary.
  *
  * This module is bundled once per test run with `bun build --target node`
  * into a temporary directory and then executed as a child process under the

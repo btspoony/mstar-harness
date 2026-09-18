@@ -6426,7 +6426,7 @@ program.parseAsync(process.argv).catch((error: unknown) => {
     process.exitCode = error.exitCode === 0 ? 0 : 2;
     return;
   }
-  // Issue-store launch/capability boundary (plan 20260918-issue-store-core):
+  // Issue-store launch/capability boundary:
   // store refusals reach the CLI as `StoreError` from the engine's lazily
   // imported `node:sqlite` boundary. They are domain/runtime refusals
   // (contract §5): stable code + actionable message on stderr, exit 1 —

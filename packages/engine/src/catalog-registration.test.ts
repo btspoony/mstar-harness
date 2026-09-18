@@ -1,6 +1,6 @@
 /**
- * catalog-registration.test.ts — P3 proof for the execution registration
- * journal (plan 20260918-state-projection Task 3). Run with
+ * catalog-registration.test.ts — proof for the execution registration
+ * journal. Run with
  * `bun test packages/engine/src/catalog-registration.test.ts`.
  *
  * The suite runs against the real journal, the real execution producers, the

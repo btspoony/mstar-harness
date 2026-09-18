@@ -2125,10 +2125,10 @@ describe("standalone-completion-shape", () => {
 
 
 // ---------------------------------------------------------------------------
-// catalog registration — the P3 journal drives this producer (plan
-// 20260918-state-projection Task 3; state-projection-contract §3). The
-// producer keeps its own create-only/orphan/rollback semantics; these cases
-// prove the journal joins them to the catalog half with no split success.
+// catalog registration — the registration journal drives this producer
+// (state-projection-contract §3). The producer keeps its own
+// create-only/orphan/rollback semantics; these cases prove the journal joins
+// them to the catalog half with no split success.
 // ---------------------------------------------------------------------------
 describe("catalog registration — the journal joins this producer to the catalog", () => {
   const roots: string[] = [];

@@ -1,5 +1,6 @@
 /**
- * CLI issue cutover (plan 20260918-issue-governance-cutover, task G2b).
+ * CLI issue cutover: the retired register verbs and the store-backed findings
+ * authority.
  *
  * The scoped findings operations moved to `mstar plan issue-add|issue-close`
  * over the core issue domain, and the legacy register commands are gone. Every

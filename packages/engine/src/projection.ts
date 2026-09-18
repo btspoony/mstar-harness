@@ -1,7 +1,6 @@
 /**
  * projection.ts -- disposable execution/roadmap projections over the JSON
- * execution authority (state-projection-contract §5/§6, plan
- * 20260918-state-projection Task P5).
+ * execution authority (state-projection-contract §5/§6).
  *
  * The root `status.json`, the workflow snapshots and the catalog-linked
  * compass/roadmap documents stay the authority; everything this module

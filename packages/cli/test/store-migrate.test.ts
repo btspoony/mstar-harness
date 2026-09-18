@@ -1,6 +1,6 @@
 /**
  * CLI `mstar store` — in-process commander tests for the store lifecycle
- * family (plan 20260918-issue-governance-cutover Task 2 G1b).
+ * family (the migration transport).
  *
  * The commands run against a real engine and real registers in per-test
  * temporary harness roots; no bundle build and no live control root. The

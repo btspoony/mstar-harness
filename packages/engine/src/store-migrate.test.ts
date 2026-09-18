@@ -1,6 +1,6 @@
 /**
- * store-migrate.test.ts -- G1a proof for the read-only migration planner
- * (plan 20260918-issue-governance-cutover Task 1; issue-store-contract §3/§7).
+ * store-migrate.test.ts -- proof for the read-only migration planner
+ * (issue-store-contract §3/§7).
  *
  * The suite runs the real planner over real register fixtures in per-test
  * temporary harness roots. No database is created anywhere: the preview
