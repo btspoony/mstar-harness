@@ -589,3 +589,38 @@ export {
   registerCatalogEntity,
   updateCatalogEntity,
 } from "./catalog.js";
+// Catalog import/discovery/portability (plan 20260918-state-projection P2):
+// discovery is a read-only proposal, import applies a reviewed plan through
+// the catalog domain verbs, export is versioned transport. The CLI family
+// (contract §2 `mstar catalog ...`) consumes exactly this surface.
+export type {
+  CatalogExport,
+  CatalogImportConflict,
+  CatalogImportDrift,
+  CatalogImportEntityMapping,
+  CatalogImportEntityProposal,
+  CatalogImportErrorCode,
+  CatalogImportEvidence,
+  CatalogImportInput,
+  CatalogImportLinkProposal,
+  CatalogImportPlan,
+  CatalogImportProvenance,
+  CatalogImportReceipt,
+  CatalogImportReviewedLink,
+  CatalogImportRetirementSection,
+  CatalogImportSourceDigest,
+  CatalogImportUnknown,
+  CatalogImportUnknownCode,
+  CatalogImportVerification,
+} from "./catalog-import.js";
+export {
+  CATALOG_EXPORT_VERSION,
+  CATALOG_IMPORT_PLAN_VERSION,
+  CatalogImportError,
+  catalogExportToInputs,
+  discoverCatalog,
+  exportCatalog,
+  importCatalog,
+  planCatalogImport,
+  verifyCatalogImport,
+} from "./catalog-import.js";

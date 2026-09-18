@@ -151,6 +151,7 @@ import { verifyPlanExecutionLease } from "./lease-verify";
 import { registerSddEvidenceCommands } from "./sdd-evidence";
 import { planUsageFailurePayload, registerPlanCommands, registerWorkflowCommands } from "./plan-coordination";
 import { issueUsageFailurePayload, registerIssueCommands } from "./issue";
+import { catalogUsageFailurePayload, registerCatalogCommands } from "./catalog";
 import { runMigrateCommand, type MigrateCliOptions } from "./commands/migrate";
 import { validateAgentPlugin } from "./agent-plugins";
 import { buildModelAssignments } from "./assignment";
@@ -6225,6 +6226,8 @@ registerWorkflowCommands(program);
 
 registerIssueCommands(program);
 
+registerCatalogCommands(program);
+
 /**
  * Attach the detached `mstar workflow` group built above (see its declaration).
  * Run AFTER every other registrar so an already-created `workflow` group is
@@ -6253,7 +6256,7 @@ program.parseAsync(process.argv).catch((error: unknown) => {
   // `--json` the invocation still gets the A2 failure object on stdout.
   if (error instanceof CommanderError) {
     if (process.argv.includes("--json")) {
-      const payload = planUsageFailurePayload(process.argv, error.message) ?? issueUsageFailurePayload(process.argv, error.message);
+      const payload = planUsageFailurePayload(process.argv, error.message) ?? issueUsageFailurePayload(process.argv, error.message) ?? catalogUsageFailurePayload(process.argv, error.message);
       if (payload !== null) console.log(payload);
     }
     process.exitCode = error.exitCode === 0 ? 0 : 2;
