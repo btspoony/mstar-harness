@@ -138,6 +138,57 @@ async function mixedFixture(name: string): Promise<Fixture> {
   return fixture;
 }
 
+/**
+ * The real legacy shape: the control harness's own
+ * `iter-20260912-worktree-lifecycle-closure/README.md` carries a Documents
+ * table whose first row points outside the package (`../../sdd/...`), and its
+ * root iteration table can declare a path outside `{ITERATION_DIR}`. Neither
+ * may abort the proposal (§4).
+ */
+async function crossRootFixture(name: string): Promise<Fixture> {
+  const fixture = await freshWorkspace(name);
+  const { harness } = fixture;
+  write(
+    harness,
+    "iterations/README.md",
+    md(
+      "# Iterations",
+      "",
+      "| Iteration | Path | Description | Status |",
+      "|-----------|------|-------------|--------|",
+      "| `iter-alpha` | [`../../plans/`](../../plans/) | Alpha iteration package | `active` |",
+    ),
+  );
+  write(
+    harness,
+    "iterations/iter-alpha/README.md",
+    md(
+      "# iter-alpha",
+      "",
+      "Iteration package — `delivery-compass.md` + guides.",
+      "",
+      "## Documents",
+      "",
+      "| Document | Kind | Description | Status |",
+      "|----------|------|-------------|--------|",
+      "| [Phase 5 security status](../../sdd/pr226-security/status.md) | handoff | Cross-root history reference in the legacy table | current |",
+      "| [delivery-compass.md](delivery-compass.md) | compass | Delivery scope | active |",
+      "",
+      "## Plans (in `.mstar/plans/`)",
+      "",
+      "| plan_id | Priority | Compass ACs |",
+      "|---------|----------|-------------|",
+      "| [`20260918-alpha`](../../plans/20260918-alpha.md) | P0 | AC-1 |",
+    ),
+  );
+  write(harness, "iterations/iter-alpha/delivery-compass.md", md("---", "iteration_id: iter-alpha", "---", "", "# iter-alpha Delivery Compass"));
+  write(harness, "plans/20260918-alpha.md", md("# Alpha plan"));
+  // The cross-root target really exists: the row is unresolvable as a catalog
+  // location, not a missing source.
+  write(harness, "sdd/pr226-security/status.md", md("# Phase 5 security status", "", "Out-of-root document."));
+  return fixture;
+}
+
 function entityAt(plan: CatalogImportPlan, relativePath: string) {
   return plan.entities.find((proposal) => proposal.relativePath === relativePath);
 }
@@ -213,6 +264,43 @@ describe("catalog discovery", () => {
     expect(notesUnknowns.map((unknown) => unknown.code).sort()).toEqual(["identity", "membership"]);
     expect(notesUnknowns.every((unknown) => unknown.detail.length > 0)).toBe(true);
     expect(notes!.idAssigned).toBe(true);
+  });
+});
+
+describe("legacy cross-root index rows", () => {
+  test("retains them as disclosed unknowns and imports the resolvable remainder", async () => {
+    const fixture = await crossRootFixture("cross-root-");
+    const plan = await discoverCatalog(fixture.context);
+
+    // Every unresolvable row is retained, naming the source it was read from.
+    const retained = plan.unknowns.filter((unknown) => unknown.code === "reference-unresolvable");
+    expect(retained.map((unknown) => unknown.sourceKey).sort()).toEqual(["iterations:README.md", "iterations:iter-alpha/README.md"]);
+    expect(retained.every((unknown) => unknown.detail.length > 0)).toBe(true);
+    expect(retained.find((unknown) => unknown.sourceKey === "iterations:iter-alpha/README.md")!.detail).toContain(
+      "../../sdd/pr226-security/status.md",
+    );
+    expect(retained.find((unknown) => unknown.sourceKey === "iterations:README.md")!.detail).toContain("../../plans");
+    // The target file exists outside this catalog root: the row is retained for
+    // its unresolvable location, not misreported as a missing source.
+    expect(plan.unknowns.some((unknown) => unknown.code === "source-missing" && unknown.key.includes("pr226"))).toBe(false);
+
+    // Nothing was fabricated for the escape and nothing else was lost.
+    expect(plan.conflicts).toEqual([]);
+    expect(plan.entities.some((proposal) => proposal.relativePath.includes("pr226"))).toBe(false);
+    expect(entityAt(plan, "iter-alpha")?.kind).toBe("iteration");
+    expect(entityAt(plan, "20260918-alpha.md")?.kind).toBe("plan");
+    const compass = entityAt(plan, "iter-alpha/delivery-compass.md");
+    expect(compass).toBeDefined();
+    expect(plan.links).toHaveLength(1);
+    expect(plan.links[0]!.from).toEqual({ kind: "iteration", id: "iter-alpha" });
+    expect(plan.links[0]!.to).toEqual({ kind: "document", id: compass!.id });
+
+    // The import proceeds and carries the same disclosure to its receipt.
+    const receipt = await importCatalog(fixture.context, plan, { operationId: "imp-cross-root", actor: "project-manager" });
+    expect(receipt.entities.map((entity) => entity.id).sort()).toEqual(plan.entities.map((proposal) => proposal.id).sort());
+    expect(receipt.unknowns.filter((unknown) => unknown.code === "reference-unresolvable")).toHaveLength(2);
+    expect(await catalogRows(fixture.context)).toEqual({ entities: plan.entities.length, links: 1 });
+    expect((await getCatalog(fixture.context, { kind: "document", id: compass!.id })).entity.present).toBe(true);
   });
 });
 

@@ -6,7 +6,10 @@
  * Boundaries this module owns, and does not cross:
  * - Discovery is a PROPOSAL over the configured roots. It writes nothing, never
  *   reads through a symlink, and never treats a filename as project/iteration
- *   membership, archive state, execution status or provenance.
+ *   membership, archive state, execution status or provenance. A legacy index
+ *   row whose reference leaves its catalog root (a cross-root/history link) is
+ *   retained as an explicit unresolved-reference unknown, never a fatal plan
+ *   error and never a fabricated row (§4).
  * - Import applies a REVIEWED plan through the shared catalog domain verbs
  *   (P1 `registerCatalogEntity` / `linkCatalogEntities`), so every write keeps
  *   the store's epoch/role/idempotency/transaction rules. The reviewed source
@@ -16,9 +19,10 @@
  *   authority; live index retirement belongs to the cutover plan's G6.
  *
  * Identity sources (what a proposal's id may come from, §2):
- * - iteration / project package directory names and the canonical
+ * - iteration / project package directory names (a directory holding the
+ *   canonical `delivery-compass.md` / `roadmap.md` marker) and the canonical
  *   `{PLANS_DIR}/<plan-id>.md` plan-file convention: the harness's own layout
- *   identity (the same rule `assertIndexRowObligations` uses for iterations).
+ *   identity, read from the filesystem and not from a maintained index.
  * - an explicit id cell in a legacy index row (backticked first cell).
  * - otherwise the proposal carries a discovery-assigned `doc-<UUID>` and an
  *   explicit `identity` unknown; reimport attaches to the existing row at the
@@ -185,6 +189,7 @@ export type CatalogImportUnknownCode =
   | "source-missing"
   | "source-refused"
   | "reference-missing"
+  | "reference-unresolvable"
   | "duplicate-row";
 
 /** Metadata the import cannot recover from the reviewed sources (§4). */
@@ -310,18 +315,32 @@ function sha256(text: string): string {
 
 /** Canonical stored form of a root-relative path (§2), never absolute. */
 function normalizeRelativePath(raw: unknown, label: string): string {
-  if (typeof raw !== "string" || raw.trim() === "") throw invalidPlan(`${label} must be a nonblank relative path`);
+  const resolved = resolveRelativePath(raw, label);
+  if (!resolved.ok) throw invalidPlan(resolved.reason);
+  return resolved.relativePath;
+}
+
+type PathResolution = { ok: true; relativePath: string } | { ok: false; reason: string };
+
+/**
+ * Non-throwing core of `normalizeRelativePath`. A reviewed import input still
+ * fails hard on a bad path; a legacy index row may legitimately carry a
+ * cross-root/history reference (`../../plans/<id>.md`) that the caller retains
+ * as a disclosed unknown instead of losing the whole proposal (§4).
+ */
+function resolveRelativePath(raw: unknown, label: string): PathResolution {
+  if (typeof raw !== "string" || raw.trim() === "") return { ok: false, reason: `${label} must be a nonblank relative path` };
   const value = raw.trim().replace(/\\/g, "/");
-  if (value.includes("\0")) throw invalidPlan(`${label} contains a NUL byte`);
-  if (value.startsWith("/") || /^[A-Za-z]:\//.test(value)) throw invalidPlan(`${label} must be relative to its catalog root`);
+  if (value.includes("\0")) return { ok: false, reason: `${label} contains a NUL byte` };
+  if (value.startsWith("/") || /^[A-Za-z]:\//.test(value)) return { ok: false, reason: `${label} must be relative to its catalog root` };
   const parts: string[] = [];
   for (const part of value.split("/")) {
     if (part === "" || part === ".") continue;
-    if (part === "..") throw invalidPlan(`${label} must not traverse outside its catalog root`);
+    if (part === "..") return { ok: false, reason: `${label} must not traverse outside its catalog root` };
     parts.push(part);
   }
-  if (parts.length === 0) throw invalidPlan(`${label} must name a path inside its catalog root`);
-  return parts.join("/");
+  if (parts.length === 0) return { ok: false, reason: `${label} must name a path inside its catalog root` };
+  return { ok: true, relativePath: parts.join("/") };
 }
 
 /** Absolute destination of a root-relative catalog location. */
@@ -957,6 +976,33 @@ function noteRow(acc: Accumulator, sourceKey: string, rowCells: string[], line: 
   return true;
 }
 
+/**
+ * Resolve one legacy index row's reference into a catalog location. A row whose
+ * reference leaves its catalog root (a cross-root/history link) is a real
+ * legacy shape, not a plan error: it is retained as an explicit
+ * unresolved-reference unknown naming the source and line, and the resolvable
+ * remainder of the proposal proceeds (§4).
+ */
+function resolveRowLocation(
+  acc: Accumulator,
+  sourceKey: string,
+  label: string,
+  reference: string,
+  row: { cells: string[]; line: number },
+): string | null {
+  const resolved = resolveRelativePath(reference, label);
+  if (resolved.ok) return resolved.relativePath;
+  acc.unknowns.push({
+    code: "reference-unresolvable",
+    key: sourceKey,
+    detail:
+      `the index row ${JSON.stringify(cellText(row.cells[0] ?? ""))} (line ${row.line}) references ` +
+      `${JSON.stringify(reference)}, which is not a usable catalog location: ${resolved.reason}`,
+    sourceKey,
+  });
+  return null;
+}
+
 /** `| Iteration | Path | Description | Status |` -- the canonical iteration index. */
 function parseIterationRow(
   acc: Accumulator,
@@ -973,7 +1019,12 @@ function parseIterationRow(
   const declaredPath = cellReference(pathCell) ?? cellBacktickToken(pathCell);
   const descriptionCell = cellAt(row.cells, indexColumn(header, ["description"]));
   const statusCell = cellAt(row.cells, indexColumn(header, ["status"]));
-  const location = declaredPath === null ? id : normalizeRelativePath(declaredPath.replace(/\/+$/, ""), "index row path");
+  const declared =
+    declaredPath === null ? null : resolveRowLocation(acc, sourceKey, "index row path", declaredPath.replace(/\/+$/, ""), row);
+  // An unresolvable declared path falls back to the identity's canonical
+  // location, exactly as a row that declares no path at all does; the
+  // unresolved reference stays disclosed above.
+  const location = declared ?? id;
   const { lifecycle } = catalogLifecycleOf(statusCell);
   if (statusCell !== null && lifecycle === null) {
     acc.unknowns.push({
@@ -1023,7 +1074,8 @@ function parseDocumentRow(
   const reference = cellReference(row.cells[0] ?? "");
   if (reference === null) return;
   if (noteRow(acc, sourceKey, row.cells, row.line)) return;
-  const relativePath = normalizeRelativePath(reference.replace(/^\.\//, "").replace(/\/+$/, ""), "index row path");
+  const relativePath = resolveRowLocation(acc, sourceKey, "index row path", reference.replace(/^\.\//, "").replace(/\/+$/, ""), row);
+  if (relativePath === null) return;
   const sourceCell = cellAt(row.cells, indexColumn(header, ["source"]));
   const descriptionCell = cellAt(row.cells, indexColumn(header, ["description"]));
   const statusCell = cellAt(row.cells, indexColumn(header, ["status"]));
@@ -1083,7 +1135,14 @@ function parsePackageRow(
   const reference = cellReference(row.cells[0] ?? "");
   if (reference === null) return;
   if (noteRow(acc, sourceKey, row.cells, row.line)) return;
-  const relativePath = normalizeRelativePath(`${owner}/${reference.replace(/^\.\//, "").replace(/\/+$/, "")}`, "package row path");
+  const relativePath = resolveRowLocation(
+    acc,
+    sourceKey,
+    "package row path",
+    `${owner}/${reference.replace(/^\.\//, "").replace(/\/+$/, "")}`,
+    row,
+  );
+  if (relativePath === null) return;
   const declaredKindCell = cellAt(row.cells, indexColumn(header, ["kind"]));
   const declaredKind = declaredKindCell === null ? null : cellText(declaredKindCell).toLowerCase();
   const documentKind =
