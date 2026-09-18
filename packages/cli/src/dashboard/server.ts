@@ -20,8 +20,8 @@ import {
   dashboardFailure,
   readDashboardView,
   resolveDashboardRoute,
-  type DashboardView,
 } from "../store-read";
+import type { DashboardView } from "@mstar-harness/engine";
 import { dashboardCss, dashboardHtml, dashboardJs } from "./assets.generated";
 
 /** The exact CSP the plan fixes; identical on every response. */
