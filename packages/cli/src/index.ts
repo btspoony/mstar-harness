@@ -155,6 +155,7 @@ import { registerSddEvidenceCommands } from "./sdd-evidence";
 import { planUsageFailurePayload, registerPlanCommands, registerWorkflowCommands } from "./plan-coordination";
 import { issueUsageFailurePayload, registerIssueCommands } from "./issue";
 import { catalogUsageFailurePayload, registerCatalogCommands } from "./catalog";
+import { registerStoreCommands } from "./store-migrate";
 import { runMigrateCommand, type MigrateCliOptions } from "./commands/migrate";
 import { validateAgentPlugin } from "./agent-plugins";
 import { buildModelAssignments } from "./assignment";
@@ -6268,6 +6269,10 @@ registerWorkflowCommands(program);
 registerIssueCommands(program);
 
 registerCatalogCommands(program);
+
+// `mstar store` — the store lifecycle family (init/upgrade/migrate) over the
+// engine store boundary and the migration transport (contract §2/§7).
+registerStoreCommands(program);
 
 /**
  * `mstar catalog reconcile` — the recovery verb contract §2 lists and P2

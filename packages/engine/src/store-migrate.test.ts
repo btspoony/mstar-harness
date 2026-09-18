@@ -261,3 +261,315 @@ describe("legacy vocabulary mapping", () => {
     expect(manifest.blocksApply).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// G1b — staged apply, receipt and replay (issue contract §7)
+// ---------------------------------------------------------------------------
+
+import { readFileSync } from "node:fs";
+import { applyStoreMigration, StoreMigrationError as MigrationError } from "./store-migrate.js";
+import { openStore } from "./store-db.js";
+import { captureIssue } from "./issue.js";
+
+/** Write a register with exact raw bytes (for drift assertions). */
+function registerBytes(harness: string, project: string): Buffer {
+  return readFileSync(join(harness, "projects", project, "residuals.json"));
+}
+
+async function openStoreForTest(context: { harnessDir: string }) {
+  return openStore(context, "read");
+}
+
+async function createStagedApplyFixture(name: string): Promise<Fixture & { manifest: Awaited<ReturnType<typeof planStoreMigration>> }> {
+  const fixture = freshWorkspace(name);
+  writeRegister(fixture.harness, "_default", {
+    entries: {
+      "plan-alpha": [
+        entry({ id: "R1", severity: "critical", decision: "defer" }),
+        entry({ id: "R2", lifecycle: "resolved", decision: "accept", closed_at: "2026-09-02", closure_note: "fixed" }),
+      ],
+    },
+  });
+  writeRegister(fixture.harness, "engine", {
+    entries: { "plan-alpha": [entry({ id: "R1", severity: "medium" })] },
+  });
+  // A consistent catalog source so the same transaction also imports catalog
+  // rows (one iteration index row with its compass document).
+  write(
+    fixture.harness,
+    join("iterations", "README.md"),
+    [
+      "# Iterations",
+      "",
+      "| Iteration | Path | Description | Status |",
+      "|-----------|------|-------------|--------|",
+      "| `iter-one` | `iter-one/` | First iteration | `active` |",
+      "",
+    ].join("\n"),
+  );
+  write(fixture.harness, join("iterations", "iter-one", "delivery-compass.md"), "# iter-one compass\n");
+  const manifest = await planStoreMigration(fixture.context);
+  return { ...fixture, manifest };
+}
+
+function sqlAll(handle: { db: import("./store-db.js").StoreDb }, sql: string): Record<string, unknown>[] {
+  return handle.db.prepare(sql).all() as Record<string, unknown>[];
+}
+
+describe("store-migrate apply", () => {
+  test("apply imports the reviewed manifest into a staged store and an identical rerun replays the same IDs", async () => {
+    const { context, harness, manifest } = await createStagedApplyFixture("apply-replay-");
+
+    const receipt = await applyStoreMigration(context, manifest);
+
+    expect(receipt.replayed).toBe(false);
+    expect(receipt.phase).toBe("applied");
+    expect(receipt.counts.issues).toBe(manifest.mappings.length);
+    expect(receipt.counts.created).toBe(manifest.mappings.length);
+    expect(receipt.counts.updated).toBe(0);
+    expect(receipt.counts.open).toBe(2);
+    expect(receipt.counts.closed).toBe(1);
+
+    // The receipt's persistent ID mapping matches the applied rows exactly.
+    const handle = await openStoreForTest(context);
+    try {
+      const issues = sqlAll(handle, "select id, project_id, disposition, severity from issues order by id");
+      expect(issues.map((row) => row.id)).toEqual(receipt.issueIds.map((entry) => entry.issueId).sort());
+      // One capture occurrence per row; the closed row also carries its single
+      // imported terminal transition.
+      expect(sqlAll(handle, "select id from occurrences where imported = 1")).toHaveLength(3);
+      const transitions = sqlAll(handle, "select to_disposition, occurred_at from issue_transitions where imported = 1");
+      expect(transitions).toHaveLength(1);
+      expect(transitions[0]!.to_disposition).toBe("resolved");
+      expect(transitions[0]!.occurred_at).toBe("2026-09-02");
+      // The store stays staged and the catalog half imported.
+      const meta = handle.db.prepare("select authority_state, revision, catalog_revision from store_meta where id = 1").get() as Record<string, unknown>;
+      expect(meta.authority_state).toBe("staged");
+      expect(receipt.counts.catalogEntities).toBe(manifest.catalog.entities.length);
+      expect(manifest.catalog.entities.length).toBeGreaterThan(0);
+      expect(Number(meta.catalog_revision)).toBeGreaterThan(0);
+      // The counter sits past the deterministic first allocation (§3).
+      const counter = sqlAll(handle, "select next_value from issue_counter")[0] as { next_value: number };
+      expect(counter.next_value).toBeGreaterThan(3);
+      // One receipt row records the applied manifest + mapping.
+      const receipts = sqlAll(handle, "select manifest_hash, phase from migration_receipts");
+      expect(receipts).toHaveLength(1);
+      expect(receipts[0]!.manifest_hash).toBe(receipt.manifestHash);
+      expect(receipts[0]!.phase).toBe("applied");
+    } finally {
+      handle.close();
+    }
+
+    // Exact rerun of the identical manifest: replay returns the same IDs and
+    // counts with no additional writes.
+    const revisionBefore = receipt.storeRevision;
+    const replay = await applyStoreMigration(context, manifest);
+    expect(replay.replayed).toBe(true);
+    expect(replay.issueIds).toEqual(receipt.issueIds);
+    expect(replay.counts.issues).toBe(receipt.counts.issues);
+    expect(replay.counts.created).toBe(0);
+    expect(replay.storeRevision).toBe(revisionBefore);
+    void harness;
+  });
+
+  test("apply refuses source set and byte drift with no writes", async () => {
+    const { context, harness, manifest } = await createStagedApplyFixture("drift-");
+    const before = registerBytes(harness, "_default");
+
+    // Byte drift: one register changes after review.
+    writeRegister(harness, "_default", {
+      entries: {
+        "plan-alpha": [
+          entry({ id: "R1", severity: "critical", decision: "defer" }),
+          entry({ id: "R2", lifecycle: "resolved", decision: "accept", closed_at: "2026-09-02", closure_note: "fixed" }),
+          entry({ id: "R3" }),
+        ],
+      },
+    });
+    try {
+      await applyStoreMigration(context, manifest);
+      throw new Error("expected byte drift to refuse the apply");
+    } catch (error) {
+      expect(error).toBeInstanceOf(MigrationError);
+      expect((error as MigrationError).code).toBe("store.migration-source-changed");
+    }
+    // Source-set drift: a NEW register appears after review; the stale
+    // manifest no longer matches the source set.
+    writeRegister(harness, "omp-integration", { entries: { "plan-beta": [entry({ id: "R9" })] } });
+    try {
+      await applyStoreMigration(context, manifest);
+      throw new Error("expected source-set drift to refuse the apply");
+    } catch (error) {
+      expect(error).toBeInstanceOf(MigrationError);
+      expect((error as MigrationError).code).toBe("store.migration-source-changed");
+    }
+
+    // Nothing was written: no database file exists after either refusal.
+    expect(dbFilesUnder(harness)).toEqual([]);
+    expect(readFileSync(join(harness, "projects", "_default", "residuals.json")).equals(before)).toBe(false);
+  });
+
+  test("apply refuses an unresolved manifest and a live active store", async () => {
+    const blocked = freshWorkspace("blocked-");
+    writeRegister(blocked.harness, "engine", { entries: { "plan-alpha": [entry({ id: "R1", lifecycle: "archived" })] } });
+    const unresolved = await planStoreMigration(blocked.context);
+    try {
+      await applyStoreMigration(blocked.context, unresolved);
+      throw new Error("expected an unresolved manifest to refuse the apply");
+    } catch (error) {
+      expect((error as MigrationError).code).toBe("store.migration-unresolved");
+    }
+    expect(dbFilesUnder(blocked.harness)).toEqual([]);
+
+    // A live ACTIVE store refuses the reimport of an old manifest.
+    const { context, manifest } = await createStagedApplyFixture("active-guard-");
+    const { initializeStore } = await import("./store-db.js");
+    const active = await initializeStore(context);
+    active.close();
+    try {
+      await applyStoreMigration(context, manifest);
+      throw new Error("expected an active store to refuse the reimport");
+    } catch (error) {
+      expect((error as MigrationError).code).toBe("store.migration-active-store");
+    }
+  });
+
+  test("an injected mid-import failure rolls back the whole apply", async () => {
+    const { context, harness, manifest } = await createStagedApplyFixture("rollback-");
+    const previousRunner = process.env.MSTAR_STORE_TEST_RUNNER;
+    const previousHook = process.env.MSTAR_STORE_FAIL_MIGRATION_AFTER;
+    process.env.MSTAR_STORE_TEST_RUNNER = "1";
+    process.env.MSTAR_STORE_FAIL_MIGRATION_AFTER = "1";
+    try {
+      try {
+        await applyStoreMigration(context, manifest);
+        throw new Error("expected the injected failure to abort the apply");
+      } catch (error) {
+        expect((error as Error).message).toContain("induced migration failure");
+      }
+    } finally {
+      if (previousRunner === undefined) delete process.env.MSTAR_STORE_TEST_RUNNER;
+      else process.env.MSTAR_STORE_TEST_RUNNER = previousRunner;
+      if (previousHook === undefined) delete process.env.MSTAR_STORE_FAIL_MIGRATION_AFTER;
+      else process.env.MSTAR_STORE_FAIL_MIGRATION_AFTER = previousHook;
+    }
+
+    // No partial state survived: no issues, no receipt, counter and revision
+    // untouched — the transaction rolled back as one unit.
+    const handle = await openStoreForTest(context);
+    try {
+      expect(sqlAll(handle, "select id from issues")).toEqual([]);
+      expect(sqlAll(handle, "select id from migration_receipts")).toEqual([]);
+      expect(sqlAll(handle, "select id from occurrences")).toEqual([]);
+      const meta = handle.db.prepare("select revision, catalog_revision from store_meta where id = 1").get() as Record<string, number>;
+      expect(meta.revision).toBe(0);
+      expect(meta.catalog_revision).toBe(0);
+      expect(sqlAll(handle, "select next_value from issue_counter")[0]!.next_value).toBe(1);
+    } finally {
+      handle.close();
+    }
+
+    // The same manifest applies cleanly afterwards.
+    const receipt = await applyStoreMigration(context, manifest);
+    expect(receipt.replayed).toBe(false);
+    expect(receipt.counts.issues).toBe(manifest.mappings.length);
+    void harness;
+  });
+
+  test("a staged apply blocks ordinary issue mutations and leaves the current register authoritative", async () => {
+    const { context, harness, manifest } = await createStagedApplyFixture("staged-block-");
+    const registersBefore = ["_default", "engine"].map((project) => registerBytes(harness, project));
+    const receipt = await applyStoreMigration(context, manifest);
+    expect(receipt.replayed).toBe(false);
+
+    // Ordinary issue capture refuses a staged store: the current register
+    // remains the only live issue authority until activation.
+    try {
+      await captureIssue(context, {
+        projectId: "engine",
+        title: "New finding after migration",
+        kind: "bug",
+        severity: "high",
+        impact: "blocks activation",
+        acceptance: "no longer reproduces",
+        sourceIdentity: "qc/late.md",
+        rootCauseKey: "late-root-cause",
+        acceptanceKey: "fixed",
+        occurrenceKey: "run-late-1",
+        sourceKind: "qc",
+        location: "packages/engine/src/store-migrate.ts:1",
+        observedBehavior: "would bypass the staged barrier",
+        evidence: ["proof"],
+        discoveredAt: "2026-09-18T00:00:00.000Z",
+      }, { operationId: "op-late-1", actor: "project-manager" });
+      throw new Error("expected ordinary capture to refuse a staged store");
+    } catch (error) {
+      expect((error as Error).message).toContain("store.not-active");
+    }
+
+    // The register bytes were never written by the migration.
+    const registersAfter = ["_default", "engine"].map((project) => registerBytes(harness, project));
+    expect(registersAfter.map((buffer, index) => buffer.equals(registersBefore[index]!))).toEqual([true, true]);
+  });
+
+  test("a removed source row refuses reconciliation instead of blind deletion", async () => {
+    const { context, manifest } = await createStagedApplyFixture("removed-row-");
+    const first = await applyStoreMigration(context, manifest);
+    expect(first.counts.issues).toBe(3);
+
+    // A re-reviewed manifest that drops a previously imported row (a reviewed
+    // history-only decision) refuses rather than deleting the row silently.
+    const reduced = { ...manifest, mappings: manifest.mappings.slice(1) };
+    try {
+      await applyStoreMigration(context, reduced);
+      throw new Error("expected the removed row to refuse reconciliation");
+    } catch (error) {
+      expect(error).toBeInstanceOf(MigrationError);
+      expect((error as MigrationError).code).toBe("store.migration-row-removed");
+      expect((error as MigrationError).message).toContain("explicit reviewed disposition");
+    }
+  });
+
+  test("a changed staged manifest reconciles migration-owned data only", async () => {
+    const { context, harness, manifest } = await createStagedApplyFixture("reconcile-");
+    const first = await applyStoreMigration(context, manifest);
+    const originalId = first.issueIds.find((entry2) => entry2.source.entryId === "R1" && entry2.source.project === "_default")!.issueId;
+
+    // The source row changes (severity + title) and a fresh reviewed manifest
+    // is planned against the new bytes.
+    writeRegister(harness, "_default", {
+      entries: {
+        "plan-alpha": [
+          entry({ id: "R1", severity: "low", decision: "defer", title: "Renamed after review" }),
+          entry({ id: "R2", lifecycle: "resolved", decision: "accept", closed_at: "2026-09-02", closure_note: "fixed" }),
+        ],
+      },
+    });
+    writeRegister(harness, "engine", {
+      entries: { "plan-alpha": [entry({ id: "R1", severity: "medium" })] },
+    });
+    const revised = await planStoreMigration(context);
+    expect(revised.mappings).toHaveLength(3);
+
+    const second = await applyStoreMigration(context, revised);
+    expect(second.replayed).toBe(false);
+    expect(second.counts.updated).toBe(1);
+    expect(second.counts.created).toBe(0);
+
+    const handle = await openStoreForTest(context);
+    try {
+      const row = handle.db.prepare("select id, title, severity, created_at, identity_key, revision from issues where id = ?").get(originalId) as Record<string, unknown>;
+      expect(row.title).toBe("Renamed after review");
+      expect(row.severity).toBe("low");
+      // The persistent ID, the created_at and the revision survive: only the
+      // migration-owned columns reconciled.
+      expect(row.created_at).toBe(
+        (handle.db.prepare("select created_at from issues where id = ?").get(second.issueIds[0]!.issueId) as Record<string, unknown>).created_at,
+      );
+      expect(row.revision).toBe(1);
+    } finally {
+      handle.close();
+    }
+    void harness;
+  });
+});

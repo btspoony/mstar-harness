@@ -735,16 +735,20 @@ export type {
   WorkflowPlanDTO,
 } from "./store-read.js";
 export { StoreReadError, queryDashboard, queryIssueFlow, withStoreRead } from "./store-read.js";
-// Read-only migration planner (plan 20260918-issue-governance-cutover G1a):
-// the preview half of the store migration protocol (issue contract §7).
-// It enumerates the legacy residual registers through the configured project
-// resolver, classifies every row against the declared legacy vocabulary, and
-// embeds the P2 catalog dry-run inventory. Preview creates no DB and no
-// receipt; apply/retire belong to G1b/G5a. ADDITIVE export because the engine
-// package's exports map is the only reachable surface for the CLI transport.
+// Read-only migration planner (plan 20260918-issue-governance-cutover G1a)
+// plus the staged apply/receipt/replay half (G1b): the migration transport of
+// the store migration protocol (issue contract §7). It enumerates the legacy
+// residual registers through the configured project resolver, classifies
+// every row against the declared legacy vocabulary, embeds the P2 catalog
+// dry-run inventory, and applies a reviewed manifest in one transaction with
+// a persistent ID mapping. Preview creates no DB and no receipt; retire
+// belongs to G5a. ADDITIVE export because the engine package's exports map is
+// the only reachable surface for the CLI transport.
 export type {
   MigrationEntryMapping,
+  MigrationIdMapping,
   MigrationManifest,
+  MigrationReceipt,
   MigrationRetirement,
   MigrationSourceFile,
   MigrationSourceIdentity,
@@ -752,4 +756,11 @@ export type {
   MigrationVocabulary,
   StoreMigrationErrorCode,
 } from "./store-migrate.js";
-export { MIGRATION_MANIFEST_VERSION, MIGRATION_VOCABULARY, planStoreMigration, StoreMigrationError } from "./store-migrate.js";
+export {
+  MIGRATION_MANIFEST_VERSION,
+  MIGRATION_VOCABULARY,
+  applyStoreMigration,
+  migrationManifestHash,
+  planStoreMigration,
+  StoreMigrationError,
+} from "./store-migrate.js";
