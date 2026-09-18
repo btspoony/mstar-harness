@@ -168,6 +168,38 @@ describe("store-db L2 fix round", () => {
     }
   });
 
+  test("a competing initializer's store is refused, never opened or removed", async () => {
+    const dir = mkdtempSync(join(ROOT, "claim-window-"));
+    const path = join(dir, "store.db");
+    const previousRunner = process.env.MSTAR_STORE_TEST_RUNNER;
+    const previousBusy = process.env.MSTAR_STORE_BUSY_TIMEOUT_MS;
+    process.env.MSTAR_STORE_TEST_RUNNER = "1";
+    process.env.MSTAR_STORE_BUSY_TIMEOUT_MS = "1";
+    try {
+      // The initializer's lazy driver import is the window a competing
+      // initializer fills; this synchronous store (holding the write lock the
+      // loser would meet as `store.busy`) appears inside it.
+      const loser = initializeStore({ harnessDir: dir });
+      const winner = new DatabaseSync(path);
+      winner.exec("create table winner_keep(note text)");
+      winner.exec("insert into winner_keep(note) values ('keep-me')");
+      winner.exec("begin immediate");
+      await expect(loser).rejects.toMatchObject({ code: "store.already-exists" });
+      winner.exec("rollback");
+      winner.close();
+      expect(existsSync(path)).toBe(true);
+      const check = new DatabaseSync(path, { readOnly: true });
+      const row = check.prepare("select note from winner_keep").get() as { note?: string };
+      expect(row.note).toBe("keep-me");
+      check.close();
+    } finally {
+      if (previousRunner === undefined) delete process.env.MSTAR_STORE_TEST_RUNNER;
+      else process.env.MSTAR_STORE_TEST_RUNNER = previousRunner;
+      if (previousBusy === undefined) delete process.env.MSTAR_STORE_BUSY_TIMEOUT_MS;
+      else process.env.MSTAR_STORE_BUSY_TIMEOUT_MS = previousBusy;
+    }
+  });
+
   test("concurrent initializers do not depend on a racy pre-check", async () => {
     const dir = mkdtempSync(join(ROOT, "concurrent-"));
     const results = await Promise.allSettled([

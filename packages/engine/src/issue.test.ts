@@ -19,8 +19,12 @@ import {
   listIssues,
   triageIssue,
   type CaptureInput,
+  type Disposition,
+  type IssueKind,
   type IssueLink,
   type MutationContext,
+  type OccurrenceInput,
+  type Severity,
 } from "./issue.js";
 import {
   closeIssue as closeIssueFromIndex,
@@ -60,8 +64,24 @@ function baseInput(overrides: Partial<CaptureInput> = {}): CaptureInput {
   };
 }
 
-function mut(operationId: string, actor = "pm"): MutationContext {
+function mut(operationId: string, actor = "project-manager"): MutationContext {
   return { operationId, actor };
+}
+
+/** Observation half of `baseInput`; a recurrence differs only in these fields. */
+function occInput(overrides: Partial<OccurrenceInput> = {}): OccurrenceInput {
+  return {
+    sourceIdentity: "qc/review.md",
+    rootCauseKey: "missing-null-check",
+    acceptanceKey: "null-guard-present",
+    occurrenceKey: "run-1",
+    sourceKind: "qc",
+    location: "packages/engine/src/store-db.ts:10",
+    observedBehavior: "throws on empty path",
+    evidence: ["stack: TypeError"],
+    discoveredAt: "2026-09-18T10:00:00.000Z",
+    ...overrides,
+  };
 }
 
 describe("capture identity", () => {
@@ -111,7 +131,7 @@ const input = {
   evidence: ["stack: TypeError"],
   discoveredAt: "2026-09-18T10:00:00.000Z",
 };
-const receipt = await captureIssue(context, input, { operationId, actor: "pm" });
+const receipt = await captureIssue(context, input, { operationId, actor: "project-manager" });
 process.stdout.write(JSON.stringify(receipt));
 `,
     );
@@ -158,7 +178,7 @@ const input = {
   evidence: [],
   discoveredAt: "2026-09-18T10:00:00.000Z",
 };
-const receipt = await captureIssue(context, input, { operationId, actor: "pm" });
+const receipt = await captureIssue(context, input, { operationId, actor: "project-manager" });
 process.stdout.write(JSON.stringify(receipt));
 `,
     );
@@ -224,6 +244,22 @@ describe("occurrence replay and recurrence", () => {
     const detail = await getIssue(context, first.issueId);
     expect(detail.disposition).toBe("resolved");
     expect(detail.occurrences).toHaveLength(2);
+  });
+
+  test("a recurrence for a different root cause refuses without appending", async () => {
+    const context = ctx("occurrence-identity-");
+    await initializeStore(context).then((h) => h.close());
+    const created = await captureIssue(context, baseInput(), mut("cap-occ-id"));
+    await expect(
+      appendOccurrence(context, created.issueId, occInput({ rootCauseKey: "different-root-cause", occurrenceKey: "run-other" }), mut("occ-mismatch")),
+    ).rejects.toMatchObject({ code: "issue.ambiguous-identity" });
+    await expect(
+      appendOccurrence(context, created.issueId, occInput({ sourceIdentity: "other/source.md", occurrenceKey: "run-other" }), mut("occ-mismatch-src")),
+    ).rejects.toMatchObject({ code: "issue.ambiguous-identity" });
+    const detail = await getIssue(context, created.issueId);
+    expect(detail.occurrences).toHaveLength(1);
+    expect(detail.revision).toBe(created.revision);
+    expect(detail.identityKey).toBe(computeIdentityKey("proj-a", "qc/review.md", "missing-null-check", "null-guard-present"));
   });
 
   test("exact replay returns the existing occurrence and receipt", async () => {
@@ -394,8 +430,15 @@ describe("failed capture leaves no partial finding", () => {
   });
 });
 
+const SESSION_ROOT = mkdtempSync(join(ROOT, "sessions-"));
+
 function pmMut(operationId: string, extra: Partial<MutationContext> = {}): MutationContext {
-  return { operationId, actor: "project-manager", ...extra };
+  return {
+    operationId,
+    actor: "project-manager",
+    sessionFile: writePlanPmEnvelope(SESSION_ROOT, "20260918-a"),
+    ...extra,
+  };
 }
 
 function writePlanPmEnvelope(dir: string, planId: string, workflowId = "wf-issue"): string {
@@ -414,6 +457,82 @@ function writePlanPmEnvelope(dir: string, planId: string, workflowId = "wf-issue
   );
   return path;
 }
+
+describe("capture authorization", () => {
+  test("leaf seats cannot capture or append, and the PM seat captures without a plan", async () => {
+    const context = ctx("capture-seat-");
+    await initializeStore(context).then((h) => h.close());
+    for (const actor of ["fullstack-dev", "frontend-dev", "qc-specialist-2", "qa-engineer", "ops-engineer"]) {
+      await expect(captureIssue(context, baseInput(), mut("cap-leaf", actor))).rejects.toMatchObject({
+        code: "issue.scope-refused",
+      });
+    }
+    const created = await captureIssue(context, baseInput(), mut("cap-pm"));
+    expect(created.created).toBe(true);
+    await expect(appendOccurrence(context, created.issueId, occInput({ occurrenceKey: "leaf-occ" }), mut("occ-leaf", "qc-specialist"))).rejects.toMatchObject(
+      { code: "issue.scope-refused" },
+    );
+    const page = await listIssues(context, {});
+    expect(page.total).toBe(1);
+    expect((await getIssue(context, created.issueId)).occurrences).toHaveLength(1);
+  });
+
+  test("the envelope proves the seat; the actor label is audited, never trusted", async () => {
+    const context = ctx("authorization-seat-");
+    await initializeStore(context).then((h) => h.close());
+    const created = await captureIssue(context, baseInput(), mut("cap-seat"));
+    const other = await captureIssue(context, baseInput({ occurrenceKey: "seat-b", rootCauseKey: "seat-other" }), mut("cap-seat-b"));
+    const session = writePlanPmEnvelope(context.harnessDir, "20260918-a");
+    await expect(
+      linkIssue(
+        context,
+        created.issueId,
+        { relation: "related", issueId: other.issueId },
+        { operationId: "link-wrong-seat", actor: "qa-engineer", sessionFile: session, expectedRevision: created.revision },
+      ),
+    ).rejects.toMatchObject({ code: "issue.scope-refused" });
+    await expect(
+      triageIssue(
+        context,
+        created.issueId,
+        { severity: "low", reason: "downgrade" },
+        { operationId: "triage-inherited", actor: "toString", sessionFile: session, expectedRevision: created.revision },
+      ),
+    ).rejects.toMatchObject({ code: "issue.scope-refused" });
+    const after = await getIssue(context, created.issueId);
+    expect(after.revision).toBe(created.revision);
+    expect(after.severity).toBe("high");
+    expect(after.relations).toEqual([]);
+    const triaged = await triageIssue(
+      context,
+      created.issueId,
+      { severity: "low", reason: "downgrade" },
+      pmMut("triage-envelope", { expectedRevision: created.revision }),
+    );
+    expect(triaged.revision).toBe(created.revision + 1);
+  });
+
+  test("inherited Object.prototype keys are refused as kind, severity and disposition", async () => {
+    const context = ctx("vocabulary-inherited-");
+    await initializeStore(context).then((h) => h.close());
+    await expect(
+      captureIssue(context, baseInput({ kind: "toString" as IssueKind }), mut("cap-proto-kind")),
+    ).rejects.toMatchObject({ code: "issue.scope-refused" });
+    await expect(
+      captureIssue(context, baseInput({ severity: "constructor" as Severity }), mut("cap-proto-sev")),
+    ).rejects.toMatchObject({ code: "issue.scope-refused" });
+    const created = await captureIssue(context, baseInput(), mut("cap-vocab"));
+    await expect(
+      triageIssue(context, created.issueId, { kind: "hasOwnProperty" as IssueKind, reason: "reclass" }, pmMut("triage-proto-kind", { expectedRevision: created.revision })),
+    ).rejects.toMatchObject({ code: "issue.scope-refused" });
+    await expect(listIssues(context, { disposition: "toString" as Disposition })).rejects.toMatchObject({
+      code: "issue.scope-refused",
+    });
+    await expect(listIssues(context, { kind: "valueOf" as IssueKind })).rejects.toMatchObject({ code: "issue.scope-refused" });
+    expect((await listIssues(context, {})).total).toBe(1);
+    expect((await getIssue(context, created.issueId)).revision).toBe(created.revision);
+  });
+});
 
 describe("disposition revision relation authorization", () => {
   test("stale revision leaves issue and history unchanged", async () => {
@@ -439,27 +558,45 @@ describe("disposition revision relation authorization", () => {
     const context = ctx("authorization-close-");
     await initializeStore(context).then((h) => h.close());
     const created = await captureIssue(context, baseInput(), mut("cap-2"));
+    const session = writePlanPmEnvelope(context.harnessDir, "20260918-a");
+    const evidence = { reason: "looks good", references: ["note"] };
+    // A claimed seat the envelope does not prove — including a forged
+    // `project-manager` without any envelope — never closes the issue.
     await expect(
-      closeIssue(
-        context,
-        created.issueId,
-        "resolved",
-        { reason: "looks good", references: ["note"] },
-        { operationId: "close-leaf", actor: "fullstack-dev", expectedRevision: created.revision },
-      ),
+      closeIssue(context, created.issueId, "resolved", evidence, {
+        operationId: "close-leaf",
+        actor: "fullstack-dev",
+        sessionFile: session,
+        expectedRevision: created.revision,
+      }),
     ).rejects.toMatchObject({ code: "issue.scope-refused" });
     await expect(
-      closeIssue(
-        context,
-        created.issueId,
-        "resolved",
-        { reason: "looks good", references: ["note"] },
-        { operationId: "close-arbitrary", actor: "root", expectedRevision: created.revision },
-      ),
+      closeIssue(context, created.issueId, "resolved", evidence, {
+        operationId: "close-arbitrary",
+        actor: "toString",
+        sessionFile: session,
+        expectedRevision: created.revision,
+      }),
+    ).rejects.toMatchObject({ code: "issue.scope-refused" });
+    await expect(
+      closeIssue(context, created.issueId, "resolved", evidence, {
+        operationId: "close-forged-pm",
+        actor: "project-manager",
+        expectedRevision: created.revision,
+      }),
+    ).rejects.toMatchObject({ code: "issue.scope-refused" });
+    await expect(
+      closeIssue(context, created.issueId, "resolved", evidence, {
+        operationId: "close-missing-session",
+        actor: "project-manager",
+        sessionFile: join(context.harnessDir, "no-such-session.json"),
+        expectedRevision: created.revision,
+      }),
     ).rejects.toMatchObject({ code: "issue.scope-refused" });
     const detail = await getIssue(context, created.issueId);
     expect(detail.disposition).toBe("open");
     expect(detail.transitions).toEqual([]);
+    expect(detail.revision).toBe(created.revision);
   });
 
   test("valid closure records the exact evidence", async () => {

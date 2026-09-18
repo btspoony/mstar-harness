@@ -16,7 +16,7 @@
  * here — they arrive with later tasks on top of this boundary.
  */
 import { createHash } from "node:crypto";
-import { existsSync, unlinkSync } from "node:fs";
+import { closeSync, existsSync, openSync, unlinkSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { resolveProcessHarnessDir } from "./coordination.js";
 
@@ -649,9 +649,10 @@ export async function openStore(context: StoreContext, mode: "read" | "write"): 
 
 /**
  * Create-only initialization for a genuinely empty workspace (contract §2):
- * applies all migrations and flips the fresh store to an ACTIVE EMPTY state
- * (epoch 1) in one atomic unit. An existing database refuses
- * `store.already-exists` and is not touched; a failed init leaves no file.
+ * claims the path with an exclusive create, applies all migrations and flips
+ * the fresh store to an ACTIVE EMPTY state (epoch 1) in one atomic unit. A
+ * path this process did not create refuses `store.already-exists` and is not
+ * touched; a failed init cleans up only the file this process created.
  */
 export async function initializeStore(context: StoreContext): Promise<StoreHandle> {
   assertStoreRuntimeSupported();
@@ -662,11 +663,19 @@ export async function initializeStore(context: StoreContext): Promise<StoreHandl
       `An issue store already exists at ${dbPath}. "store init" is create-only and must not reuse ` +
         `store.not-initialized for an existing store; use the upgrade path for schema changes. Nothing was modified.`,
     );
-  // Refuse before any open so WAL/pragma setup cannot rewrite pre-existing bytes.
-  if (existsSync(dbPath)) {
-    throw alreadyExists();
+  // The exclusive create is the whole existence check: a competing
+  // initializer's store, a pre-existing file and the TOCTOU loser all refuse
+  // here, before any connect or pragma can rewrite those bytes — and only the
+  // process that won the create can ever unlink the file below.
+  await loadSqliteDriver();
+  let claim: number;
+  try {
+    claim = openSync(dbPath, "wx");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") throw alreadyExists();
+    refuseOpenFailure(error, dbPath);
   }
-  const createdFile = true;
+  closeSync(claim);
   let db: StoreDb | undefined;
   try {
     db = await connect(dbPath, "write");
@@ -713,14 +722,15 @@ export async function initializeStore(context: StoreContext): Promise<StoreHandl
         // closed after a connection-level failure
       }
     }
-    const skipUnlink = error instanceof StoreError && error.code === "store.already-exists";
-    if (createdFile && !skipUnlink) {
-      for (const suffix of ["", "-wal", "-shm"]) {
-        try {
-          unlinkSync(dbPath + suffix);
-        } catch {
-          // best-effort cleanup of our own failed create
-        }
+    // Only the process that won the exclusive create reaches this cleanup, so
+    // these paths are this process's own failed create — never a store a
+    // competing initializer won (`store.busy`/`store.corrupt` on a foreign
+    // path refuses at the claim above, without unlinking anything).
+    for (const suffix of ["", "-wal", "-shm"]) {
+      try {
+        unlinkSync(dbPath + suffix);
+      } catch {
+        // best-effort cleanup of our own failed create
       }
     }
     throw error;

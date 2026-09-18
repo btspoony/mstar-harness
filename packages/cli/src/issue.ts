@@ -168,18 +168,32 @@ function storeContext(options: IssueCliOptions): StoreContext {
   return { harnessDir };
 }
 
-function mutationOf(options: IssueCliOptions, withExpect: boolean): MutationContext {
-  const mutation: MutationContext = {
+/**
+ * Capture verbs carry the capturing seat and no plan scope (contract §4/§6:
+ * unscoped confirmed findings stay capturable without a plan).
+ */
+function captureMutationOf(options: IssueCliOptions): MutationContext {
+  return {
     operationId: requireFlag(
       typeof options.operationId === "string" ? options.operationId : undefined,
       "--operation-id",
       "idempotency key",
     ),
-    actor: requireFlag(typeof options.actor === "string" ? options.actor : undefined, "--actor", "harness role"),
+    actor: requireFlag(typeof options.actor === "string" ? options.actor : undefined, "--actor", "capturing seat"),
   };
-  if (typeof options.session === "string" && options.session.trim() !== "") {
-    mutation.sessionFile = options.session;
-  }
+}
+
+/**
+ * Privileged verbs are authorized by the session envelope, never by `--actor`
+ * alone: the envelope is required and the actor label must match its seat.
+ */
+function authorizedMutationOf(options: IssueCliOptions, withExpect: boolean): MutationContext {
+  const mutation = captureMutationOf(options);
+  mutation.sessionFile = requireFlag(
+    typeof options.session === "string" ? options.session : undefined,
+    "--session",
+    "authorizing session envelope path",
+  );
   if (withExpect) mutation.expectedRevision = parseExpect(typeof options.expect === "string" ? options.expect : undefined);
   return mutation;
 }
@@ -352,10 +366,17 @@ async function runVerb(verb: string, options: IssueCliOptions, body: (json: bool
 function mutationFlags(command: Command): Command {
   return command
     .option("--operation-id <id>", "Idempotent operation id")
-    .option("--actor <role>", "Harness role performing the mutation")
-    .option("--session <path>", "Absolute scoped session envelope path")
+    .option("--actor <role>", "Audit actor; must match the seat the mutation authorizes (capture: project-manager)")
     .option("--harness <path>", "Harness dir override")
     .option("--json", "Machine-readable envelope on stdout");
+}
+
+/** Privileged verbs additionally require the envelope that authorizes them. */
+function authorizedFlags(command: Command): Command {
+  return mutationFlags(command).option(
+    "--session <path>",
+    "Absolute scoped session envelope authorizing this mutation (required)",
+  );
 }
 
 function expectFlag(command: Command): Command {
@@ -379,7 +400,7 @@ export function registerIssueCommands(program: Command): void {
   ).action(async (options: IssueCliOptions) =>
     runVerb("add", options, async (json) => {
       const input = captureInputOf(asRecord(readJsonFile(typeof options.file === "string" ? options.file : undefined, "--file"), "CaptureInput"));
-      const receipt = await captureIssue(storeContext(options), input, mutationOf(options, false));
+      const receipt = await captureIssue(storeContext(options), input, captureMutationOf(options));
       printSuccess(receipt, receipt.storeRevision, json);
     }),
   );
@@ -431,13 +452,13 @@ export function registerIssueCommands(program: Command): void {
       const input = occurrenceInputOf(
         asRecord(readJsonFile(typeof options.file === "string" ? options.file : undefined, "--file"), "OccurrenceInput"),
       );
-      const receipt = await appendOccurrence(storeContext(options), issueIdOf(options, id), input, mutationOf(options, false));
+      const receipt = await appendOccurrence(storeContext(options), issueIdOf(options, id), input, captureMutationOf(options));
       printSuccess(receipt, receipt.storeRevision, json);
     }),
   );
 
   expectFlag(
-    mutationFlags(
+    authorizedFlags(
       issue
         .command("triage")
         .description("Update triage fields without changing identity")
@@ -448,14 +469,14 @@ export function registerIssueCommands(program: Command): void {
   ).action(async (id: string | undefined, options: IssueCliOptions) =>
     runVerb("triage", options, async (json) => {
       const patch = triageOf(asRecord(readJsonFile(typeof options.file === "string" ? options.file : undefined, "--file"), "IssueTriage"));
-      const receipt = await triageIssue(storeContext(options), issueIdOf(options, id), patch, mutationOf(options, true));
+      const receipt = await triageIssue(storeContext(options), issueIdOf(options, id), patch, authorizedMutationOf(options, true));
       printSuccess(receipt, receipt.storeRevision, json);
     }),
   );
 
   const closeVerb = (verb: "close" | "waive" | "duplicate" | "supersede", disposition: TerminalDisposition, description: string) => {
     expectFlag(
-      mutationFlags(
+      authorizedFlags(
         issue
           .command(verb)
           .description(description)
@@ -468,7 +489,7 @@ export function registerIssueCommands(program: Command): void {
         const evidence = closureEvidenceOf(
           asRecord(readJsonFile(typeof options.file === "string" ? options.file : undefined, "--file"), "ClosureEvidence"),
         );
-        const receipt = await closeIssue(storeContext(options), issueIdOf(options, id), disposition, evidence, mutationOf(options, true));
+        const receipt = await closeIssue(storeContext(options), issueIdOf(options, id), disposition, evidence, authorizedMutationOf(options, true));
         printSuccess(receipt, receipt.storeRevision, json);
       }),
     );
@@ -480,7 +501,7 @@ export function registerIssueCommands(program: Command): void {
   closeVerb("supersede", "superseded", "Close as superseded by a replacement issue");
 
   expectFlag(
-    mutationFlags(
+    authorizedFlags(
       issue
         .command("link")
         .description("Add a relation or typed provenance link")
@@ -491,7 +512,7 @@ export function registerIssueCommands(program: Command): void {
   ).action(async (id: string | undefined, options: IssueCliOptions) =>
     runVerb("link", options, async (json) => {
       const link = linkOf(asRecord(readJsonFile(typeof options.file === "string" ? options.file : undefined, "--file"), "IssueLink"));
-      const receipt = await linkIssue(storeContext(options), issueIdOf(options, id), link, mutationOf(options, true));
+      const receipt = await linkIssue(storeContext(options), issueIdOf(options, id), link, authorizedMutationOf(options, true));
       printSuccess(receipt, receipt.storeRevision, json);
     }),
   );

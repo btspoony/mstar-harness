@@ -93,6 +93,20 @@ async function makeHarness(): Promise<{ root: string; harness: string }> {
   return { root, harness };
 }
 
+/** The existing coordination session envelope authority for privileged verbs (contract §4). */
+function writeSessionEnvelope(root: string, harness: string, planId = "20260918-a"): string {
+  const path = join(root, "session.json");
+  writeJson(path, {
+    schema_version: 1,
+    role: "plan-pm",
+    session_id: "11111111-1111-1111-1111-111111111111",
+    workflow_id: "wf-issue",
+    plan_id: planId,
+    harness_root: harness,
+  });
+  return path;
+}
+
 describe("mstar issue CLI bundle", () => {
   test("records Node 24.18.0 and Bun 1.4.0 for this suite", () => {
     // Evidence: subprocess launchers used below. Print so the report names them.
@@ -207,10 +221,11 @@ describe("mstar issue CLI bundle", () => {
       harness,
       "--json",
     ], root);
+    expect(add.exitCode).toBe(0);
     const created = jsonOf(add).data as { issueId: string; revision: number };
     const evidence = join(root, "close.json");
     writeJson(evidence, { reason: "acceptance met", references: ["qa/run.md"] });
-    const refused = runBundle("bun-shebang", [
+    const closeArgs = (operationId: string, actor: string, session?: string) => [
       "issue",
       "close",
       created.issueId,
@@ -219,27 +234,69 @@ describe("mstar issue CLI bundle", () => {
       "--expect",
       String(created.revision),
       "--operation-id",
-      "close-leaf",
+      operationId,
       "--actor",
-      "fullstack-dev",
+      actor,
+      ...(session === undefined ? [] : ["--session", session]),
       "--harness",
       harness,
       "--json",
-    ], root);
+    ];
+    // A forged actor without the envelope: the envelope is required, not optional.
+    const forged = runBundle("bun-shebang", closeArgs("close-forged", "project-manager"), root);
+    expect(forged.exitCode).toBe(2);
+    expect(jsonOf(forged).code).toBe("usage");
+    const session = writeSessionEnvelope(root, harness);
+    // A real envelope that does not prove the claimed seat refuses at the domain boundary.
+    const wrongSeat = runBundle("node", closeArgs("close-qa", "qa-engineer", session), root);
+    expect(wrongSeat.exitCode).toBe(1);
+    expect(jsonOf(wrongSeat).ok).toBe(false);
+    expect(jsonOf(wrongSeat).code).toBe("issue.scope-refused");
+    const absentSession = runBundle("node", closeArgs("close-absent", "project-manager", join(root, "no-such-session.json")), root);
+    expect(absentSession.exitCode).toBe(1);
+    expect(jsonOf(absentSession).code).toBe("issue.scope-refused");
+    const refused = runBundle("bun-shebang", closeArgs("close-leaf", "fullstack-dev", session), root);
     expect(refused.exitCode).toBe(1);
     const refusal = jsonOf(refused);
     expect(refusal.ok).toBe(false);
     expect(refusal.code).toBe("issue.scope-refused");
-    const ok = runBundle("node", [
+    const shown = runBundle("node", ["issue", "show", created.issueId, "--harness", harness, "--json"], root);
+    expect(jsonOf(shown).data).toMatchObject({ disposition: "open", revision: created.revision });
+    const ok = runBundle("node", closeArgs("close-pm", "project-manager", session), root);
+    expect(ok.exitCode).toBe(0);
+    expect(jsonOf(ok).ok).toBe(true);
+    const after = runBundle("node", ["issue", "show", created.issueId, "--harness", harness, "--json"], root);
+    expect(jsonOf(after).data).toMatchObject({ disposition: "resolved" });
+  });
+
+  test("leaf capture is refused while an unscoped permitted capture succeeds", async () => {
+    const { root, harness } = await makeHarness();
+    const file = join(root, "cap.json");
+    writeJson(file, capturePayload());
+    const leaf = runBundle("node", [
       "issue",
-      "close",
-      created.issueId,
+      "add",
       "--file",
-      evidence,
-      "--expect",
-      String(created.revision),
+      file,
       "--operation-id",
-      "close-pm",
+      "cap-leaf",
+      "--actor",
+      "qc-specialist",
+      "--harness",
+      harness,
+      "--json",
+    ], root);
+    expect(leaf.exitCode).toBe(1);
+    expect(jsonOf(leaf).code).toBe("issue.scope-refused");
+    const empty = runBundle("bun-shebang", ["issue", "list", "--harness", harness, "--json"], root);
+    expect(jsonOf(empty).data).toMatchObject({ total: 0 });
+    const ok = runBundle("bun-shebang", [
+      "issue",
+      "add",
+      "--file",
+      file,
+      "--operation-id",
+      "cap-pm",
       "--actor",
       "project-manager",
       "--harness",
@@ -247,7 +304,52 @@ describe("mstar issue CLI bundle", () => {
       "--json",
     ], root);
     expect(ok.exitCode).toBe(0);
-    expect(jsonOf(ok).ok).toBe(true);
+    expect(jsonOf(ok).data).toMatchObject({ created: true, issueId: "I-000001" });
+  });
+
+  test("an inherited role name cannot triage despite a valid envelope", async () => {
+    const { root, harness } = await makeHarness();
+    const file = join(root, "cap.json");
+    writeJson(file, capturePayload());
+    const add = runBundle("node", [
+      "issue",
+      "add",
+      "--file",
+      file,
+      "--operation-id",
+      "cap-1",
+      "--actor",
+      "project-manager",
+      "--harness",
+      harness,
+      "--json",
+    ], root);
+    const created = jsonOf(add).data as { issueId: string; revision: number };
+    const triageFile = join(root, "triage.json");
+    writeJson(triageFile, { reason: "reclass", severity: "low" });
+    const session = writeSessionEnvelope(root, harness);
+    const result = runBundle("bun-shebang", [
+      "issue",
+      "triage",
+      created.issueId,
+      "--file",
+      triageFile,
+      "--expect",
+      String(created.revision),
+      "--operation-id",
+      "triage-proto",
+      "--actor",
+      "toString",
+      "--session",
+      session,
+      "--harness",
+      harness,
+      "--json",
+    ], root);
+    expect(result.exitCode).toBe(1);
+    expect(jsonOf(result).code).toBe("issue.scope-refused");
+    const shown = runBundle("node", ["issue", "show", created.issueId, "--harness", harness, "--json"], root);
+    expect(jsonOf(shown).data).toMatchObject({ severity: "high", revision: created.revision });
   });
 
   test("JSON exit behavior: success 0, domain 1, usage 2", async () => {
@@ -343,6 +445,8 @@ describe("mstar issue CLI bundle", () => {
       "triage-bad",
       "--actor",
       "project-manager",
+      "--session",
+      writeSessionEnvelope(root, harness),
       "--harness",
       harness,
       "--json",

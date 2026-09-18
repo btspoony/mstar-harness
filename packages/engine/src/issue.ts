@@ -7,8 +7,7 @@
  * `issue.ambiguous-identity` instead of guessing a merge.
  */
 import { createHash } from "node:crypto";
-import { readSessionEnvelope } from "./coordination.js";
-import { ROLE_MAPPING } from "./roles.js";
+import { readSessionEnvelope, type CoordinationSession } from "./coordination.js";
 import { openStore, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
 
 export type IssueKind = "bug" | "risk" | "improvement" | "request" | "decision" | "review-obligation";
@@ -479,7 +478,8 @@ export async function captureIssue(
   input: CaptureInput,
   mutation: MutationContext,
 ): Promise<IssueReceipt> {
-  if (!KINDS[input.kind] || !SEVERITIES[input.severity]) {
+  requireCaptureSeat(mutation.actor);
+  if (!Object.hasOwn(KINDS, input.kind) || !Object.hasOwn(SEVERITIES, input.severity)) {
     throw new IssueError("issue.scope-refused", "kind or severity is not a contract vocabulary value");
   }
   const title = requireNonblank("title", input.title);
@@ -586,6 +586,7 @@ export async function appendOccurrence(
   input: OccurrenceInput,
   mutation: MutationContext,
 ): Promise<IssueReceipt> {
+  requireCaptureSeat(mutation.actor);
   const cols = occurrenceColumns(input);
   const hash = requestHash("appendOccurrence", {
     issueId,
@@ -598,11 +599,19 @@ export async function appendOccurrence(
     const existingOp = lookupOperation(db, mutation.operationId);
     if (existingOp) return replayOrConflict(existingOp, hash);
 
-    const issue = db.prepare("select id, revision, disposition from issues where id = ?").get(issueId) as
-      | { id: string; revision: number; disposition: string }
+    const issue = db.prepare("select id, revision, disposition, project_id, identity_key from issues where id = ?").get(issueId) as
+      | { id: string; revision: number; disposition: string; project_id: string; identity_key: string }
       | undefined;
     if (!issue) {
       throw new IssueError("issue.not-found", `Issue ${issueId} does not exist`);
+    }
+    // A recurrence is another observation of the SAME identity (contract §3):
+    // a distinct source/root-cause/acceptance pair belongs to its own issue.
+    if (computeIdentityKey(issue.project_id, cols.sourceIdentity, cols.rootCauseKey, cols.acceptanceKey) !== issue.identity_key) {
+      throw new IssueError(
+        "issue.ambiguous-identity",
+        "The occurrence's source/root-cause/acceptance identity does not match this issue; refusing a guessed merge",
+      );
     }
 
     const existingOcc = findOccurrence(db, cols.occurrenceKey);
@@ -661,18 +670,18 @@ function bindFilter(filter: IssueFilter): { where: string; params: unknown[] } {
     params.push(filter.projectId);
   }
   const disposition = filter.disposition ?? "open";
-  if (!DISPOSITIONS[disposition]) {
+  if (!Object.hasOwn(DISPOSITIONS, disposition)) {
     throw new IssueError("issue.scope-refused", "disposition is not a contract vocabulary value");
   }
   clauses.push("issues.disposition = ?");
   params.push(disposition);
   if (filter.kind) {
-    if (!KINDS[filter.kind]) throw new IssueError("issue.scope-refused", "kind is not a contract vocabulary value");
+    if (!Object.hasOwn(KINDS, filter.kind)) throw new IssueError("issue.scope-refused", "kind is not a contract vocabulary value");
     clauses.push("issues.kind = ?");
     params.push(filter.kind);
   }
   if (filter.severity) {
-    if (!SEVERITIES[filter.severity]) {
+    if (!Object.hasOwn(SEVERITIES, filter.severity)) {
       throw new IssueError("issue.scope-refused", "severity is not a contract vocabulary value");
     }
     clauses.push("issues.severity = ?");
@@ -911,28 +920,64 @@ const TERMINAL: Record<TerminalDisposition, true> = {
   superseded: true,
 };
 
-const KNOWN_ROLES: Record<string, true> = Object.fromEntries(ROLE_MAPPING.map((row) => [row.agentId, true]));
+/**
+ * Seats an existing session envelope authorizes (contract §4: existing harness
+ * authorization semantics, not a new local auth service). Both roles
+ * `readSessionEnvelope` accepts are PM seats — `plan-pm` binds one plan,
+ * `coordinator` binds the lifecycle — so a validated envelope proves the
+ * `project-manager` seat. The requested actor stays an audit label: it must
+ * match the seat the envelope proves and is never the authority.
+ */
+const ENVELOPE_SEATS: Record<CoordinationSession["role"], string> = {
+  "plan-pm": "project-manager",
+  coordinator: "project-manager",
+};
 
-function knownRole(actor: string): string {
-  const role = actor.trim();
-  if (!KNOWN_ROLES[role]) {
+/**
+ * The seat that owns a confirmed outcome and may write it (contract §6): the
+ * PM seat orchestrates dispatch/consolidation, QC tri, iteration close and a
+ * PR-review round's Stage 3 synthesis. Leaf implementation/audit/QC/QA seats
+ * return evidence and never write the store, and unscoped capture needs no plan.
+ */
+const CAPTURE_SEAT = "project-manager";
+
+function requireCaptureSeat(actor: string): void {
+  const seat = requireNonblank("actor", actor);
+  if (seat !== CAPTURE_SEAT) {
     throw new IssueError(
       "issue.scope-refused",
-      `Actor "${actor}" is not a harness role; closure and scoped mutations refuse an arbitrary role string.`,
+      `Actor "${actor}" does not hold the ${CAPTURE_SEAT} seat. Capture is restricted to the seat that owns the ` +
+        `confirmed outcome; leaf seats return evidence and never write the store.`,
     );
   }
-  return role;
+}
+
+/**
+ * Validate the envelope that authorizes a privileged mutation (contract §4):
+ * the role comes from the envelope, never from the request string.
+ */
+function authorizeMutation(mutation: MutationContext): CoordinationSession {
+  const session = readScopedSession(mutation.sessionFile);
+  const seat = ENVELOPE_SEATS[session.role];
+  if (mutation.actor.trim() !== seat) {
+    throw new IssueError(
+      "issue.scope-refused",
+      `Actor "${mutation.actor}" is not the "${seat}" seat the session envelope authorizes; a privileged ` +
+        `mutation is authorized by the envelope, not by the actor label.`,
+    );
+  }
+  return session;
 }
 
 /**
  * Plan/iteration provenance uses the existing coordination session envelope.
  * Credentials are never written into SQLite.
  */
-function readScopedSession(sessionFile: string | undefined) {
+function readScopedSession(sessionFile: string | undefined): CoordinationSession {
   if (!sessionFile) {
     throw new IssueError(
       "issue.scope-refused",
-      "Plan/iteration provenance requires an existing scoped session envelope; no session credential is written to the store.",
+      "This mutation requires an existing scoped session envelope; no session credential is written to the store.",
     );
   }
   try {
@@ -947,9 +992,8 @@ function readScopedSession(sessionFile: string | undefined) {
 function assertPlanIterationIdentity(
   kind: "plan" | "iteration",
   target: string,
-  sessionFile: string | undefined,
+  session: CoordinationSession,
 ): void {
-  const session = readScopedSession(sessionFile);
   if (kind === "plan") {
     if (session.role !== "plan-pm" || session.plan_id !== target) {
       throw new IssueError(
@@ -979,25 +1023,21 @@ function requireExpectedRevision(mutation: MutationContext, current: number): vo
   }
 }
 
-function assertClosureAuthority(disposition: TerminalDisposition, actor: string, evidence: ClosureEvidence): void {
-  const role = knownRole(actor);
+/**
+ * Disposition-specific evidence requirements. Who may close is decided by
+ * `authorizeMutation` before this runs: the envelope proves the PM seat, so a
+ * `qa-engineer` closure would need a QA-seat envelope and `readSessionEnvelope`
+ * issues only the two PM seats (contract §4).
+ */
+function assertClosureAuthority(disposition: TerminalDisposition, evidence: ClosureEvidence): void {
   requireNonblank("reason", evidence.reason);
   if (disposition === "resolved") {
-    if (role !== "project-manager" && role !== "qa-engineer") {
-      throw new IssueError(
-        "issue.scope-refused",
-        "resolved requires project-manager or qa-engineer (per QA gate); unauthorized closure leaves the issue unchanged.",
-      );
-    }
     if (!evidence.references || evidence.references.length === 0) {
       throw new IssueError("issue.invalid-disposition", "resolved requires acceptance evidence in references");
     }
     return;
   }
   if (disposition === "waived") {
-    if (role !== "project-manager") {
-      throw new IssueError("issue.scope-refused", "waived requires the project-manager seat plus recorded alignment");
-    }
     if (!evidence.scope?.trim() || !evidence.alignmentRef?.trim()) {
       throw new IssueError(
         "issue.invalid-disposition",
@@ -1005,9 +1045,6 @@ function assertClosureAuthority(disposition: TerminalDisposition, actor: string,
       );
     }
     return;
-  }
-  if (role !== "project-manager") {
-    throw new IssueError("issue.scope-refused", `${disposition} requires the project-manager seat`);
   }
   if (!evidence.canonicalIssueId?.trim()) {
     throw new IssueError("issue.invalid-disposition", `${disposition} requires an existing canonical/replacement issue`);
@@ -1042,13 +1079,13 @@ export async function triageIssue(
   mutation: MutationContext,
 ): Promise<IssueReceipt> {
   requireNonblank("reason", patch.reason);
-  if (patch.kind !== undefined && !KINDS[patch.kind]) {
+  if (patch.kind !== undefined && !Object.hasOwn(KINDS, patch.kind)) {
     throw new IssueError("issue.scope-refused", "kind is not a contract vocabulary value");
   }
-  if (patch.severity !== undefined && !SEVERITIES[patch.severity]) {
+  if (patch.severity !== undefined && !Object.hasOwn(SEVERITIES, patch.severity)) {
     throw new IssueError("issue.scope-refused", "severity is not a contract vocabulary value");
   }
-  knownRole(mutation.actor);
+  authorizeMutation(mutation);
   const hash = requestHash("triageIssue", {
     issueId,
     patch,
@@ -1106,10 +1143,11 @@ export async function closeIssue(
   evidence: ClosureEvidence,
   mutation: MutationContext,
 ): Promise<IssueReceipt> {
-  if (!TERMINAL[disposition]) {
+  if (!Object.hasOwn(TERMINAL, disposition)) {
     throw new IssueError("issue.invalid-disposition", "Terminal dispositions are exactly resolved|waived|duplicate|superseded");
   }
-  assertClosureAuthority(disposition, mutation.actor, evidence);
+  authorizeMutation(mutation);
+  assertClosureAuthority(disposition, evidence);
   const hash = requestHash("closeIssue", {
     issueId,
     disposition,
@@ -1190,7 +1228,7 @@ export async function linkIssue(
   link: IssueLink,
   mutation: MutationContext,
 ): Promise<IssueReceipt> {
-  knownRole(mutation.actor);
+  const session = authorizeMutation(mutation);
   if ("relation" in link) {
     if (!Object.hasOwn(RELATIONS, link.relation)) {
       throw new IssueError("issue.scope-refused", "relation is not a contract vocabulary value");
@@ -1199,7 +1237,7 @@ export async function linkIssue(
     throw new IssueError("issue.scope-refused", "provenance kind is not a contract vocabulary value");
   }
   if ("kind" in link && (link.kind === "plan" || link.kind === "iteration")) {
-    assertPlanIterationIdentity(link.kind, requireNonblank("target", link.target), mutation.sessionFile);
+    assertPlanIterationIdentity(link.kind, requireNonblank("target", link.target), session);
   }
   const hash = requestHash("linkIssue", {
     issueId,
