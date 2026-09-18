@@ -69,11 +69,12 @@ Find the task, run the family, then read its owning skill for the rules around i
 | Evaluate a phase-transition gate; probe push cadence | `mstar iteration gate`, `mstar iteration push-cadence` | `mstar-iteration`, `mstar-phase-gates` |
 | Resolve the harness / plan / SDD / workflow / project dirs | `mstar path resolve` | `mstar-conventions` |
 | Capture, list, show, occurrence, triage, terminal disposition, link, or export issues in `{HARNESS_DIR}/store.db` | `mstar issue …` | `mstar-conventions` (store path vs execution JSON); group help owns verbs and flags |
+| Discover, import, register, query, export or reconcile the harness catalog (project/iteration/plan/document identity, paths, membership, spec/knowledge relations, lifecycle) in `{HARNESS_DIR}/store.db` | `mstar catalog …` | `mstar-conventions` (catalog vs execution JSON; Markdown index rows retired); group help owns verbs and flags |
 | Detect the active host; resolve a loaded skill root | `mstar host detect`, `mstar host skill-root` | `mstar-host` |
 | Lint harness artifacts by content type | `mstar lint` | `mstar-skill-authoring`, `mstar-coding-behavior`, `mstar-strategy` |
 | Lint a skill's frontmatter and five-question body | `mstar skill lint` | `mstar-skill-authoring` |
 | Validate the role mapping and load-order corpus | `mstar roles validate` | `mstar-roles` |
-| Validate a knowledge doc and its index row | `mstar compound validate` | `mstar-compound` |
+| Validate a knowledge doc's frontmatter and scope; the knowledge index-row assert is retired (refuses `compound.index.retired` → catalog completeness) | `mstar compound validate` | `mstar-compound` |
 | Validate DESIGN.md tokens and parity | `mstar design-md validate` | `mstar-design-md` |
 | Scaffold or promote audit plans; run static security checks | `mstar audit scaffold`, `mstar audit promote`, `mstar audit secret-scan`, `mstar audit supply-chain` | `mstar-audit` |
 | PR-review arithmetic, report path, saved-report validation, worktree setup | `mstar pr-review tally`, `mstar pr-review report-path`, `mstar pr-review validate-report`, `mstar pr-review worktree-setup` | `mstar-audit` (pr variant) |

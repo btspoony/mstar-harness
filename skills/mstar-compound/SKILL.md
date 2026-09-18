@@ -42,7 +42,7 @@ Compound 在迭代收口时触发（`mstar-iteration` § iteration-close），�
 | 1. Inventory | 列出 package 下全部 `.md`（除默认排除 compass）；读各文件 + package `README.md`（若有） |
 | 2. Triage | 每篇：**Promote** / **Keep snapshot** / **Skip**（理由写入 compound 摘要） |
 | 3. Promote | 值得跨迭代复用 → 走 Q1–Q8（或轻量判定）→ Phase 2 重叠检测 → Phase 3–6 **结构化重写**进 `{KNOWLEDGE_DIR}/`（**禁止**无改写整文件复制） |
-| 4. Trace | 源文件顶栏或 package README：`Promoted to: <knowledge-path>`；`{KNOWLEDGE_DIR}/README.md` 的 Source 可记 `iteration:<iteration-id>/<relpath>` |
+| 4. Trace | 源文件顶栏或 package README：`Promoted to: <knowledge-path>`；provenance 记在 catalog 关系（`mstar catalog link`，关系取 `derived-from`），**不**在 README 表格加列 |
 | 5. Summary | PM 写入 compass `## Compound Round Summary`：提升篇数、保留快照、跳过及原因 |
 
 **Promote 典型**：迭代 spec 已验证且指导未来实现；guide 含非显而易见过程知识或失败尝试。**Keep snapshot**：仅迭代史、已被 `{SPECS_DIR}/` 取代的草案、或自检 ≤2 Yes 的琐碎笔记。边界 SSOT → **`mstar-iteration/references/iteration-artifact-boundaries.md`**。
@@ -73,17 +73,17 @@ In Cursor, Full mode dispatches subagents via Task tool. PM selects mode.
 
 ## Workflow skeleton（Phase 1–7）
 
-完整步骤细节（Gather context / Overlap detection / Write document 含 frontmatter schema + path + validate / Discoverability check / CONCEPTS.md synergy / Update indexes / Refresh trigger）→ **`references/compound-workflow.md`**。每 Phase 一个关键决策：
+完整步骤细节（Gather context / Overlap detection / Write document 含 frontmatter schema + path + validate / Discoverability check / CONCEPTS.md synergy / Catalog registration / Refresh trigger）→ **`references/compound-workflow.md`**。每 Phase 一个关键决策：
 
 1. **Gather** — 读对话史 + iteration package；分类 track/category（`references/category-mapping.md`）
 2. **Overlap** — 高重叠 → 更新已有（加 `last_updated`）；中度 → 新建并标 consolidation review；低/无 → 正常新建
 3. **Write** — path + frontmatter（SSOT `references/schema.yaml`）+ body（`assets/resolution-template.md`）+ YAML validate
 4. **Discoverability** — 若 root `AGENTS.md`/`CLAUDE.md` 未提 `{KNOWLEDGE_DIR}`，提议最小补充（需用户同意；拒绝则仅跳过该编辑，doc 仍写）
 5. **CONCEPTS.md** — 项目特定领域词满足 qualifying bar 时提议入 `CONCEPTS.md`（规则见 `references/concepts-vocabulary.md`）；全仓 bootstrap 归 `mstar-compound-refresh`
-6. **Indexes** — `{KNOWLEDGE_DIR}/README.md` 加行（Document / Source Plan / Description / Status）；可选 workflow snapshot plan 行 `metadata.knowledge_refs`（`{WORKFLOW_DIR}/<id>/snapshot.json`）。**iteration-close gate**：每篇新 doc 必须 Phase 6
+6. **Catalog** — 新文档在 `{HARNESS_DIR}/store.db` 的 catalog 中登记为 `kind=document`（`document_kind=knowledge`）：单行 `mstar catalog register`，或 reviewed `mstar catalog discover` + `mstar catalog import`；provenance/supersession 用 `mstar catalog link`（`derived-from` / `supersedes` 关系）；生命周期变更用 `mstar catalog update`（`active` / `archived` / `superseded`；revision 守卫见 help）。**不再**要求 `{KNOWLEDGE_DIR}/README.md` 索引行（README 是散文，不是登记表）。可选 workflow snapshot plan 行 `metadata.knowledge_refs`（`{WORKFLOW_DIR}/<id>/snapshot.json`）。**iteration-close gate**：每篇新 doc 必须完成本 Phase
 7. **Refresh trigger** — 新知识暗示旧 doc 过时 → 推荐 `/pm compound-refresh <scope>`（不自动跑，仅 flag）
 
-> **Engine check (when available):** run `mstar compound validate <doc-path> [--knowledge-dir <dir>]` (or `import { validateSchemaYaml, assertIndexRows } from "@mstar-harness/engine"` in a host hook) to validate the frontmatter against `references/schema.yaml` (Phase 3 Write) and assert every doc has its `{KNOWLEDGE_DIR}/README.md` index row (Phase 6 Indexes). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check (when available):** run `mstar compound validate <doc-path> [--knowledge-dir <dir>]` (or `import { validateSchemaYaml, assertKnowledgeCatalogCompleteness } from "@mstar-harness/engine"` in a host hook) to validate the frontmatter against `references/schema.yaml` (Phase 3 Write) and assert that every knowledge body under `{KNOWLEDGE_DIR}` has a catalog row (Phase 6 Catalog, contract §4). The former README index-row assert is retired: the `assertIndexRows` export refuses actionably (`compound.index.retired`) instead of passing, and the `mstar compound validate --knowledge-dir` index-row check fails for the same reason. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 ## Support files
 
@@ -92,7 +92,7 @@ In Cursor, Full mode dispatches subagents via Task tool. PM selects mode.
 ## Skill dependencies
 
 - **`mstar-conventions`** — path symbols（`{KNOWLEDGE_DIR}`、`{HARNESS_DIR}`）
-- **`mstar-artifacts`** — workflow snapshot / project register linking、index maintenance
+- **`mstar-artifacts`** — workflow snapshot / project register linking、catalog 登记与生命周期（README index maintenance retired）
 - **`mstar-compound-refresh`** — capture 后知识维护；CONCEPTS.md 全仓 bootstrap
 
 ## NOT to do
@@ -106,4 +106,4 @@ In Cursor, Full mode dispatches subagents via Task tool. PM selects mode.
 
 ## Evidence
 
-正确结果 = 一篇**可发现**的结晶文档：`{KNOWLEDGE_DIR}/<category>/<slug>.md` 通过 `references/schema.yaml` frontmatter 校验（Phase 3 Write）+ `{KNOWLEDGE_DIR}/README.md` 索引行（Phase 6 Indexes，iteration-close 强制）+ 达标领域词入 `CONCEPTS.md`（Phase 5）+ 源文件 / package README 标注 `Promoted to: <knowledge-path>`（Phase 4 Trace）。
+正确结果 = 一篇**可发现**的结晶文档：`{KNOWLEDGE_DIR}/<category>/<slug>.md` 通过 `references/schema.yaml` frontmatter 校验（Phase 3 Write）+ catalog 登记为 `kind=document`（`document_kind=knowledge`，Phase 6 Catalog；`mstar catalog list` 可查到，iteration-close 强制）+ 达标领域词入 `CONCEPTS.md`（Phase 5）+ 源文件 / package README 标注 `Promoted to: <knowledge-path>`（Phase 4 Trace）。

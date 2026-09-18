@@ -1511,8 +1511,14 @@ export type RegisterPlanWorkflowResult = {
  * must not duplicate identity). Timestamps (`started_at`/`updated_at`/`bound_at`)
  * are excluded by design — the orphaned snapshot's timestamps are preserved,
  * not rewritten, and a retry does not fail merely because the clock moved.
+ *
+ * Shared with the catalog registration journal (`catalog-registration.ts`),
+ * which re-verifies the on-disk registration identity before it publishes the
+ * catalog delta (contract §3 step 3) — one definition of "which registration
+ * this is", never a second one. Audit promotions are `type: plan` snapshots
+ * and compare through this same subset.
  */
-function planWorkflowRegistrationIdentity(snapshot: WorkflowSnapshot): string {
+export function planWorkflowRegistrationIdentity(snapshot: WorkflowSnapshot): string {
   const coordinator = snapshot.coordination?.coordinator;
   return stableJson({
     type: snapshot.type,
@@ -1524,6 +1530,53 @@ function planWorkflowRegistrationIdentity(snapshot: WorkflowSnapshot): string {
     plans: snapshot.plans,
     coordinator: coordinator ? { session_id: coordinator.session_id, session_file: coordinator.session_file } : null,
   });
+}
+
+/**
+ * The create-only `type: plan` snapshot `registerPlanWorkflow` writes: the
+ * owned plan as its single `Todo` row, plus the declared delivery fields.
+ * Extracted so the catalog registration journal
+ * (`catalog-registration.ts`) recomputes the SAME registration identity for
+ * the reviewed request before it publishes a catalog delta — one snapshot
+ * definition, no second "which registration is this" source. Timestamps are
+ * outside the compared identity, so the clock a caller passes never affects
+ * the comparison.
+ */
+export function planWorkflowSnapshot(
+  workflowId: string,
+  options: RegisterPlanWorkflowOptions,
+  startedAt: string,
+): WorkflowSnapshot {
+  const planRow: PlanRow = { id: options.plan.id, title: options.plan.title, file: options.plan.file, status: "Todo" };
+  const snapshot: WorkflowSnapshot = {
+    schema_version: 1,
+    id: workflowId,
+    type: "plan",
+    status: "running",
+    started_at: startedAt,
+    updated_at: startedAt.slice(0, 10),
+    plans: [planRow],
+    delivery_kind: options.deliveryKind,
+  };
+  if (options.project !== undefined) snapshot.project = options.project;
+  if (options.completionPolicy !== undefined) snapshot.completion_policy = options.completionPolicy;
+  if (options.branchSource !== undefined || options.branchTarget !== undefined) {
+    // `branchSource` is the plan's DELIVERY branch (`branch.source`) — never
+    // `branch.base`, whose consumers (cleanup Rule 2 protected refs, L1
+    // main-residency fallback) treat it as a protected base anchor: writing a
+    // feature branch there made the ref undeletable and pointed L1's
+    // residency expectation at the feature branch.
+    snapshot.branch = {
+      ...(options.branchSource !== undefined ? { source: options.branchSource } : {}),
+      ...(options.branchTarget !== undefined ? { target: options.branchTarget } : {}),
+    };
+  }
+  if (options.coordinator !== undefined) {
+    snapshot.coordination = {
+      coordinator: { session_id: options.coordinator.session_id, session_file: options.coordinator.session_file, bound_at: startedAt },
+    };
+  }
+  return snapshot;
 }
 
 /**
@@ -1615,35 +1668,7 @@ export async function registerPlanWorkflow(
   const snapshotPath = join(workflowDir, WORKFLOW_SNAPSHOT_FILE);
   const store = getArtifactStore();
 
-  const planRow: PlanRow = { id: plan.id, title: plan.title, file: plan.file, status: "Todo" };
-  const snapshot: WorkflowSnapshot = {
-    schema_version: 1,
-    id: workflowId,
-    type: "plan",
-    status: "running",
-    started_at: startedAt,
-    updated_at: startedAt.slice(0, 10),
-    plans: [planRow],
-    delivery_kind: deliveryKind,
-  };
-  if (options.project !== undefined) snapshot.project = options.project;
-  if (options.completionPolicy !== undefined) snapshot.completion_policy = options.completionPolicy;
-  if (options.branchSource !== undefined || options.branchTarget !== undefined) {
-    // `branchSource` is the plan's DELIVERY branch (`branch.source`) — never
-    // `branch.base`, whose consumers (cleanup Rule 2 protected refs, L1
-    // main-residency fallback) treat it as a protected base anchor: writing a
-    // feature branch there made the ref undeletable and pointed L1's
-    // residency expectation at the feature branch.
-    snapshot.branch = {
-      ...(options.branchSource !== undefined ? { source: options.branchSource } : {}),
-      ...(options.branchTarget !== undefined ? { target: options.branchTarget } : {}),
-    };
-  }
-  if (options.coordinator !== undefined) {
-    snapshot.coordination = {
-      coordinator: { session_id: options.coordinator.session_id, session_file: options.coordinator.session_file, bound_at: startedAt },
-    };
-  }
+  const snapshot = planWorkflowSnapshot(workflowId, options, startedAt);
   const entry: WorkflowEntry = {
     id: workflowId,
     type: "plan",
@@ -1768,8 +1793,12 @@ export type RegisterIterationWorkflowResult = {
  * carries a coordinator, so an already-bound orphan refuses rather than
  * silently attaching another owner's workflow. Timestamps stay excluded —
  * the orphan's timestamps are preserved, not rewritten.
+ *
+ * Exported for the catalog registration journal
+ * (`catalog-registration.ts`), which re-verifies this exact identity before
+ * publishing a catalog delta (contract §3 step 3).
  */
-function iterationWorkflowRegistrationIdentity(snapshot: WorkflowSnapshot): string {
+export function iterationWorkflowRegistrationIdentity(snapshot: WorkflowSnapshot): string {
   const coordinator = snapshot.coordination?.coordinator;
   return stableJson({
     id: snapshot.id,
@@ -1781,6 +1810,43 @@ function iterationWorkflowRegistrationIdentity(snapshot: WorkflowSnapshot): stri
     plans: snapshot.plans,
     coordinator: coordinator ? { session_id: coordinator.session_id, session_file: coordinator.session_file } : null,
   });
+}
+
+/**
+ * The create-only `type: iteration` snapshot `registerIterationWorkflow`
+ * writes: compass ref, the three branch anchors and one `Todo` row per
+ * declared plan. Extracted for the same reason as
+ * `planWorkflowSnapshot` — the catalog registration journal re-verifies this
+ * exact registration identity before it publishes the catalog delta.
+ */
+export function iterationWorkflowSnapshot(
+  workflowId: string,
+  options: RegisterIterationWorkflowOptions,
+  startedAt: string,
+): WorkflowSnapshot {
+  const snapshot: WorkflowSnapshot = {
+    schema_version: 1,
+    id: workflowId,
+    type: "iteration",
+    status: "running",
+    started_at: startedAt,
+    updated_at: startedAt.slice(0, 10),
+    compass_ref: options.compassRef,
+    branch: { base: options.branch.base, integration: options.branch.integration, target: options.branch.target },
+    plans: options.rows.map((r) => ({
+      id: r.id,
+      title: r.title,
+      file: r.file,
+      status: "Todo",
+      metadata: {
+        iteration_refs: [options.compassRef],
+        spec_integration_branch: options.branch.integration,
+        merge_target: options.branch.integration,
+      },
+    })),
+  };
+  if (options.project !== undefined) snapshot.project = options.project;
+  return snapshot;
 }
 
 /**
@@ -1888,28 +1954,7 @@ export async function registerIterationWorkflow(
   const snapshotPath = join(workflowDir, WORKFLOW_SNAPSHOT_FILE);
   const store = getArtifactStore();
 
-  const snapshot: WorkflowSnapshot = {
-    schema_version: 1,
-    id: workflowId,
-    type: "iteration",
-    status: "running",
-    started_at: startedAt,
-    updated_at: startedAt.slice(0, 10),
-    compass_ref: options.compassRef,
-    branch: { base: options.branch.base, integration: options.branch.integration, target: options.branch.target },
-    plans: rows.map((r) => ({
-      id: r.id,
-      title: r.title,
-      file: r.file,
-      status: "Todo",
-      metadata: {
-        iteration_refs: [options.compassRef],
-        spec_integration_branch: options.branch.integration,
-        merge_target: options.branch.integration,
-      },
-    })),
-  };
-  if (options.project !== undefined) snapshot.project = options.project;
+  const snapshot = iterationWorkflowSnapshot(workflowId, options, startedAt);
 
   const entry: WorkflowEntry = {
     id: workflowId,

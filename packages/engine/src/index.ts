@@ -250,6 +250,9 @@ export {
   taskReportExists,
 } from "./sdd.js";
 export type {
+  CatalogCompletenessGap,
+  CatalogCompletenessReport,
+  CatalogCompletenessRoot,
   CompassDoc,
   PhaseGateOptions,
   PhaseGateResult,
@@ -257,12 +260,13 @@ export type {
   SnapshotDoc,
 } from "./iteration.js";
 export {
-  assertIndexRowObligations,
+  assertCatalogCompleteness,
   evaluatePhaseGate,
   evaluatePostMergeClose,
   parseCompassFrontmatter,
   parseCompassFrontmatterText,
   pushCadenceProbe,
+  readCatalogCompleteness,
   validateCompassFrontmatter,
 } from "./iteration.js";
 export type {
@@ -376,6 +380,7 @@ export {
   KNOWLEDGE_RESOLUTION_TYPES,
   KNOWLEDGE_SEVERITIES,
   assertIndexRows,
+  assertKnowledgeCatalogCompleteness,
   compoundRefreshScope,
   referenceExists,
   scopeGuard,
@@ -477,10 +482,15 @@ export { WorkflowSnapshotValidationError } from "./workflow.js";
 
 export {
   CoordinationError,
+  EXECUTION_PIN_CONFLICT_CODE,
+  ExecutionPinConflictError,
   amendPrepareWorkflow,
+  assertExecutionCatalogPin,
   bindPlanSession,
+  executionInputHash,
   mutatePlanCoordination,
   readCoordinatedArtifact,
+  readExecutionCatalogPin,
   readPlanCoordination,
   readSessionEnvelope,
   replaceCoordinatedArtifact,
@@ -490,11 +500,14 @@ export {
 } from "./coordination.js";
 export type {
   BindPlanSessionInput,
+  CatalogExecutionPin,
+  CatalogPinAbsence,
   CoordinatedReplacement,
   CoordinationRequest,
   CoordinationResult,
   CoordinationRole,
   CoordinationSession,
+  ExecutionCatalogPinState,
   HandoffEvidence,
   PlanCoordinationOperation,
   PlanCoordinationView,
@@ -515,6 +528,7 @@ export type { StoreContext, StoreErrorCode, StoreHandle, StoreRuntimeInfo, Store
 // Issue-store boundary (plan 20260918-issue-store-core C1): lazily acquires
 // `node:sqlite` — importing this index never loads the driver or opens a DB.
 export {
+  MIGRATION_2_SQL,
   MIGRATIONS,
   MIN_BUN_VERSION,
   MIN_NODE_VERSION,
@@ -556,3 +570,168 @@ export {
   listIssues,
   triageIssue,
 } from "./issue.js";
+// Catalog authority (plan 20260918-state-projection P1): catalog metadata is
+// the DB authority for project/iteration/plan/document identity, locations,
+// relations and archived/superseded lifecycle. No execution status, no
+// projection, no Markdown index.
+export type {
+  CatalogDetail,
+  CatalogDocumentKind,
+  CatalogEntity,
+  CatalogEntityInput,
+  CatalogEntityKind,
+  CatalogEntityPatch,
+  CatalogErrorCode,
+  CatalogFilter,
+  CatalogKey,
+  CatalogLifecycle,
+  CatalogLink,
+  CatalogLinkInput,
+  CatalogOperation,
+  CatalogPage,
+  CatalogReceipt,
+  CatalogRelation,
+  CatalogRootKind,
+} from "./catalog.js";
+export {
+  CatalogError,
+  catalogRootDir,
+  getCatalog,
+  linkCatalogEntities,
+  listCatalog,
+  registerCatalogEntity,
+  updateCatalogEntity,
+} from "./catalog.js";
+// Catalog import/discovery/portability (plan 20260918-state-projection P2):
+// discovery is a read-only proposal, import applies a reviewed plan through
+// the catalog domain verbs, export is versioned transport. The CLI family
+// (contract §2 `mstar catalog ...`) consumes exactly this surface.
+export type {
+  CatalogExport,
+  CatalogImportConflict,
+  CatalogImportDrift,
+  CatalogImportEntityMapping,
+  CatalogImportEntityProposal,
+  CatalogImportErrorCode,
+  CatalogImportEvidence,
+  CatalogImportInput,
+  CatalogImportLinkProposal,
+  CatalogImportPlan,
+  CatalogImportProvenance,
+  CatalogImportReceipt,
+  CatalogImportReviewedLink,
+  CatalogImportRetirementSection,
+  CatalogImportSourceDigest,
+  CatalogImportUnknown,
+  CatalogImportUnknownCode,
+  CatalogImportVerification,
+} from "./catalog-import.js";
+export {
+  CATALOG_EXPORT_VERSION,
+  CATALOG_IMPORT_PLAN_VERSION,
+  CatalogImportError,
+  catalogExportToInputs,
+  discoverCatalog,
+  exportCatalog,
+  importCatalog,
+  planCatalogImport,
+  verifyCatalogImport,
+} from "./catalog-import.js";
+// Catalog execution registration journal (plan 20260918-state-projection P3):
+// the ONE service that registers an execution (snapshot + root entry) together
+// with its catalog rows, publishes the catalog delta only after the execution
+// registration matches, and recovers or visibly refuses a half-written
+// registration (`mstar catalog reconcile`). ADDITIVE export added by P3
+// because the engine package's exports map is the only reachable surface for
+// the CLI transport and for the readers that must refuse a pending operation.
+export type {
+  CatalogExecutionAbort,
+  CatalogExecutionBinding,
+  CatalogExecutionBindingKind,
+  CatalogExecutionCatalogDelta,
+  CatalogExecutionKind,
+  CatalogExecutionPhase,
+  CatalogExecutionReceipt,
+  CatalogExecutionRequest,
+  CatalogExecutionWorkflow,
+  CatalogRegistrationErrorCode,
+  CatalogRegistrationState,
+  CatalogRevisions,
+  PendingCatalogRegistration,
+} from "./catalog-registration.js";
+export {
+  CATALOG_REGISTRATION_JOURNAL_VERSION,
+  CatalogRegistrationError,
+  abortCatalogExecution,
+  assertCatalogExecutionCommitted,
+  listPendingCatalogRegistrations,
+  readCatalogRevisions,
+  reconcileCatalogExecution,
+  registerCatalogExecution,
+  registerShippedCatalogExecution,
+  resolveCatalogRegistrationState,
+} from "./catalog-registration.js";
+// Disposable execution/roadmap projections (plan 20260918-state-projection P5):
+// the ONE source-I/O boundary (`refreshProjections`) over the JSON execution
+// authority, plus its two halves -- the pure validated capture and the atomic
+// publication/last-good path. ADDITIVE export added by P5 because the engine
+// package's exports map is the only reachable surface for the read boundary
+// (P6) and for the CLI/dashboard transport.
+export type {
+  ProjectedCompass,
+  ProjectedLease,
+  ProjectedPlan,
+  ProjectedRoadmap,
+  ProjectedWorkflow,
+  ProjectionCapture,
+  ProjectionErrorCode,
+  ProjectionFreshness,
+  ProjectionMetadata,
+  ProjectionRows,
+  ProjectionSourceDigest,
+  ProjectionSourceKind,
+  ProjectionSourceLocation,
+  ProjectionSourceState,
+  RefreshReport,
+  SourceDiagnostic,
+} from "./projection.js";
+export {
+  PROJECTION_FORMAT_VERSION,
+  PROJECTION_ROOT_FILE,
+  ProjectionError,
+  captureProjectionSources,
+  publishProjectionCapture,
+  refreshProjections,
+} from "./projection.js";
+// Issue-store read boundary (plan 20260918-state-projection P6): the ONE read
+// entry for dashboard and rollup consumers -- one handle per request, every
+// view query in one read transaction, and an honest projection disclosure in
+// the envelope. ADDITIVE export added by P6 because the engine package's
+// exports map is the only reachable surface for the CLI transport
+// (`packages/cli/src/store-read.ts`) and for the dashboard plan that consumes
+// it; no producer surface is changed.
+export type {
+  CatalogIdentityDTO,
+  CompassDTO,
+  DashboardBadge,
+  DashboardFilters,
+  DashboardView,
+  DashboardViewData,
+  GoalDTO,
+  IssueFlow,
+  IssueFlowBucket,
+  IterationDTO,
+  IterationListDTO,
+  IterationPlanDTO,
+  LeaseDTO,
+  MilestoneDTO,
+  ReadEnvelope,
+  ReadProjection,
+  RoadmapDTO,
+  StoreReadErrorCode,
+  StoreReadQuery,
+  WorkflowDTO,
+  WorkflowListDTO,
+  WorkflowPlanDTO,
+} from "./store-read.js";
+export { StoreReadError, queryDashboard, queryIssueFlow, withStoreRead } from "./store-read.js";

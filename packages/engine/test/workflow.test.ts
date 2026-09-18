@@ -50,7 +50,16 @@ import {
 } from "../src/workflow.js";
 import { evaluatePostMergeClose } from "../src/iteration.js";
 import { artifactVersion, CoordinationError } from "../src/coordination-write.js";
+import { getCatalog, listCatalog } from "../src/catalog.js";
+import {
+  listPendingCatalogRegistrations,
+  reconcileCatalogExecution,
+  registerCatalogExecution,
+  resolveCatalogRegistrationState,
+  type CatalogExecutionRequest,
+} from "../src/catalog-registration.js";
 import { createFsStore, setArtifactStore, type ArtifactDoc, type ArtifactStore } from "../src/store.js";
+import { initializeStore, type StoreContext } from "../src/store-db.js";
 import { validateStatus } from "../src/status.js";
 
 function tmpRoot(prefix: string): string {
@@ -2114,3 +2123,135 @@ describe("standalone-completion-shape", () => {
   });
 });
 
+
+// ---------------------------------------------------------------------------
+// catalog registration — the P3 journal drives this producer (plan
+// 20260918-state-projection Task 3; state-projection-contract §3). The
+// producer keeps its own create-only/orphan/rollback semantics; these cases
+// prove the journal joins them to the catalog half with no split success.
+// ---------------------------------------------------------------------------
+describe("catalog registration — the journal joins this producer to the catalog", () => {
+  const roots: string[] = [];
+  afterEach(() => {
+    setArtifactStore(undefined);
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  /**
+   * A temp workspace with the real harness marker (`{root}/.mstar`) and an
+   * initialized active store, plus the artifact store pinned to `root` — the
+   * producers write `{root}/status.json` + `{root}/workflows/`, the store and
+   * catalog roots resolve under the marker.
+   */
+  async function workspace(prefix: string): Promise<{ root: string; context: StoreContext }> {
+    const root = tmpRoot(prefix);
+    roots.push(root);
+    mkdirSync(join(root, ".mstar"), { recursive: true });
+    const context: StoreContext = { harnessDir: root };
+    const handle = await initializeStore(context);
+    handle.close();
+    setArtifactStore(createFsStore(root));
+    return { root, context };
+  }
+
+  function planOptions(root: string, planId: string, title: string): RegisterPlanWorkflowOptions {
+    return {
+      harnessDir: root,
+      plan: { id: planId, title, file: `plans/${planId}.md` },
+      deliveryKind: "development",
+      project: "engine",
+      branchSource: `feature/${planId}`,
+      branchTarget: "main",
+      startedAt: "2026-09-16T00:00:00.000Z",
+    };
+  }
+
+  function planRequest(root: string, operationId: string, workflowId: string, planId: string, title: string, expected: number): CatalogExecutionRequest {
+    return {
+      operationId,
+      actor: "project-manager",
+      expectedCatalogRevision: expected,
+      workflow: { kind: "plan", workflowId, options: planOptions(root, planId, title) },
+      delta: {
+        entities: [{ kind: "plan", id: planId, title, rootKind: "plans", relativePath: `plans/${planId}.md` }],
+        binding: { catalogKind: "plan", catalogId: planId },
+      },
+    };
+  }
+
+  test("catalog registration — the plan is registered and its catalog delta publishes only after the execution half holds", async () => {
+    const { root, context } = await workspace("catalog-registration-plan-");
+    const workflowId = "20260916-plan-register-catalog";
+    const first = planRequest(root, "op-workflow-suite", workflowId, "20260916-plan-example", "Example plan", 0);
+
+    const receipt = await registerCatalogExecution(context, first);
+    expect(receipt).toEqual({ operationId: "op-workflow-suite", workflowId, catalogRevision: 1, recovered: false });
+    expect(existsSync(join(root, "workflows", workflowId, WORKFLOW_SNAPSHOT_FILE))).toBe(true);
+    expect(validateStatus(join(root, "status.json")).ok).toBe(true);
+    expect((await getCatalog(context, { kind: "plan", id: "20260916-plan-example" })).entity.title).toBe("Example plan");
+    expect(await listPendingCatalogRegistrations(context)).toEqual([]);
+
+    // The failure boundary: a lost root write leaves a pending operation and
+    // NO catalog row for it — the half-registration is never reported as
+    // success, and reconcile is the way forward.
+    const second = planRequest(root, "op-workflow-suite-2", `${workflowId}-2`, "20260916-plan-example-2", "Second plan", 1);
+    const base = createFsStore(root);
+    let armed = true;
+    setArtifactStore({
+      ...base,
+      put: async (doc: ArtifactDoc) => {
+        if (armed && doc.kind === "status") {
+          armed = false;
+          throw new Error("injected status write failure");
+        }
+        return base.put(doc);
+      },
+    });
+    await expect(registerCatalogExecution(context, second)).rejects.toThrow(/injected status write failure/);
+    setArtifactStore(createFsStore(root));
+    expect((await listCatalog(context, { kind: "plan" })).total).toBe(1);
+    expect((await listPendingCatalogRegistrations(context)).map((entry) => entry.operationId)).toEqual(["op-workflow-suite-2"]);
+
+    const recovered = await reconcileCatalogExecution(context, "op-workflow-suite-2");
+    expect(recovered.recovered).toBe(true);
+    expect((await listCatalog(context, { kind: "plan" })).total).toBe(2);
+    expect(validateStatus(join(root, "status.json")).ok).toBe(true);
+  });
+
+  test("catalog registration — the iteration registers with its committed catalog binding", async () => {
+    const { root, context } = await workspace("catalog-registration-iteration-");
+    const id = "20260918-iteration-register-catalog";
+    const request: CatalogExecutionRequest = {
+      operationId: "op-iteration-workflow-suite",
+      actor: "project-manager",
+      expectedCatalogRevision: 0,
+      workflow: {
+        kind: "iteration",
+        workflowId: id,
+        options: {
+          harnessDir: root,
+          compassRef: "iterations/20260918-fixture/delivery-compass.md",
+          branch: { base: "main", integration: "feature/20260918-iteration-fixture", target: "main" },
+          rows: [{ id: "20260918-iteration-register-cli", title: "Engine producer", file: "plans/one.md" }],
+          project: "engine",
+          startedAt: "2026-09-18T00:00:00.000Z",
+        },
+      },
+      delta: {
+        entities: [{ kind: "iteration", id, title: "Fixture iteration", rootKind: "iterations", relativePath: id }],
+        binding: { catalogKind: "iteration", catalogId: id },
+      },
+    };
+
+    const receipt = await registerCatalogExecution(context, request);
+    expect(receipt).toEqual({ operationId: "op-iteration-workflow-suite", workflowId: id, catalogRevision: 1, recovered: false });
+    const snapshot = readWorkflowSnapshot(join(root, "workflows", id));
+    expect(snapshot.snapshot.type).toBe("iteration");
+    expect(validateWorkflowSnapshot(snapshot.snapshot).ok).toBe(true);
+    expect((await resolveCatalogRegistrationState(context, id)).binding).toEqual({
+      catalogKind: "iteration",
+      catalogId: id,
+      catalogRevision: 1,
+    });
+  });
+});

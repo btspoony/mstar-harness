@@ -64,6 +64,8 @@ Plans generated from `simplify` / removal findings must carry **behavior-preserv
 
 ### Audit index (`README.md`)
 
+**This index is a report artifact, not a registration.** It stays the run's human-readable findings / direction / coverage record, and a candidate source for `mstar catalog discover` (read-only proposal with explicit `unknowns`; register the reviewed mapping with `mstar catalog import`). A promoted plan's **identity, title and path** are `{HARNESS_DIR}/store.db` catalog metadata read from the plan document itself (`mstar catalog show plan <plan-id>`) — never a maintained README index row (state-projection contract §1/§2/§4). The `## Execution order & status` table below is a review/selection surface only: `mstar audit promote` reads plan ids from it, and a hand edit there can no longer rename or re-path a registered plan. `README.md` and the plan bodies remain files.
+
 ```markdown
 # Audit Report — <repo> @ <short-sha> (<date>)
 

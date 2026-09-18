@@ -16,8 +16,15 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { StoreError as StoreErrorClass } from "./store-db.js";
 
-const { initializeStore, openStore, upgradeStore, assertStoreRuntimeSupported, detectStoreRuntime, StoreError } =
-  await import("./store-db.js");
+const {
+  initializeStore,
+  openStore,
+  upgradeStore,
+  assertStoreRuntimeSupported,
+  detectStoreRuntime,
+  StoreError,
+  MIGRATIONS,
+} = await import("./store-db.js");
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -114,11 +121,13 @@ const scenarios: Record<string, (rootDir: string) => Promise<string>> = {
     return "missing store read created nothing";
   },
 
-  /** Migration 1 + shared metadata initialize; reads are query-only; upgrade is idempotent. */
+  /** The full migration list + shared metadata initialize; reads are query-only; upgrade is idempotent. */
   async "initialize-schema"(rootDir) {
     const created = await initializeStore({ harnessDir: rootDir });
     if (created.epoch !== 1) throw new Error(`expected epoch 1, got ${created.epoch}`);
-    if (created.schemaVersion !== 1) throw new Error(`expected schemaVersion 1, got ${created.schemaVersion}`);
+    if (created.schemaVersion !== MIGRATIONS.length) {
+      throw new Error(`expected schemaVersion ${MIGRATIONS.length}, got ${created.schemaVersion}`);
+    }
     if (!UUID_RE.test(created.storeId)) throw new Error(`store_id is not a UUID: ${created.storeId}`);
     created.close();
 
@@ -129,7 +138,7 @@ const scenarios: Record<string, (rootDir: string) => Promise<string>> = {
     } catch (error) {
       if (!/readonly|read-only/i.test(String((error as Error).message))) throw error;
     }
-    if (reader.epoch !== 1 || reader.schemaVersion !== 1) throw new Error("reader metadata mismatch");
+    if (reader.epoch !== 1 || reader.schemaVersion !== MIGRATIONS.length) throw new Error("reader metadata mismatch");
     reader.close();
 
     const writer = await openStore({ harnessDir: rootDir }, "write");
@@ -140,8 +149,10 @@ const scenarios: Record<string, (rootDir: string) => Promise<string>> = {
     writer.close();
 
     const upgraded = await upgradeStore({ harnessDir: rootDir });
-    if (upgraded.schemaVersion !== 1) throw new Error(`idempotent upgrade changed the version: ${upgraded.schemaVersion}`);
-    return "init created active empty store (epoch 1, schema 1); reads are query-only";
+    if (upgraded.schemaVersion !== MIGRATIONS.length) {
+      throw new Error(`idempotent upgrade changed the version: ${upgraded.schemaVersion}`);
+    }
+    return `init created active empty store (epoch 1, schema ${MIGRATIONS.length}); reads are query-only`;
   },
 
   /** `initializeStore` is create-only: an existing store refuses and keeps its bytes. */
@@ -170,7 +181,7 @@ const scenarios: Record<string, (rootDir: string) => Promise<string>> = {
       checksum: string;
     }>;
     raw.close();
-    if (rows.length !== 1 || rows[0].version !== 1 || rows[0].checksum !== "0".repeat(64)) {
+    if (rows.length !== MIGRATIONS.length || rows[0].version !== 1 || rows[0].checksum !== "0".repeat(64)) {
       throw new Error("the drift refusal rewrote schema rows");
     }
     return "checksum drift refused with the applied row preserved";
@@ -181,7 +192,7 @@ const scenarios: Record<string, (rootDir: string) => Promise<string>> = {
     const created = await initializeStore({ harnessDir: rootDir });
     created.db
       .prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)")
-      .run(2, "future", "f".repeat(64), "2026-09-18T00:00:00.000Z");
+      .run(MIGRATIONS.length + 1, "future", "f".repeat(64), "2026-09-18T00:00:00.000Z");
     created.close();
     await expectStoreErrorAsync("store.schema-unsupported", () => openStore({ harnessDir: rootDir }, "write"));
     await expectStoreErrorAsync("store.schema-unsupported", () => upgradeStore({ harnessDir: rootDir }));
@@ -189,7 +200,9 @@ const scenarios: Record<string, (rootDir: string) => Promise<string>> = {
     const raw = new DatabaseSync(join(rootDir, "store.db"), { readOnly: true });
     const rows = raw.prepare("select version from schema_version order by version").all() as Array<{ version: number }>;
     raw.close();
-    if (rows.length !== 2 || rows[1].version !== 2) throw new Error("the newer-schema refusal rewrote schema rows");
+    if (rows.length !== MIGRATIONS.length + 1 || rows[MIGRATIONS.length].version !== MIGRATIONS.length + 1) {
+      throw new Error("the newer-schema refusal rewrote schema rows");
+    }
     return "newer schema refused without mutation";
   },
 

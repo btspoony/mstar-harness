@@ -75,12 +75,18 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 /**
  * The engine's documented consumer contract is the `code` (+ `details`)
  * pair; the error class itself is not part of the CLI's import surface, so
- * classification keys off the stable prefix instead of `instanceof`.
+ * classification keys off the stable prefix instead of `instanceof`. The
+ * scoped verbs reach three engine refusal families: the coordination surface
+ * (`coordination.*`), the frozen-input pin (`catalog.execution-pin-conflict`,
+ * contract §1) and the store boundary (`store.*`) the pin and catalog reads
+ * use. All three are runtime refusals (exit 1), never internal errors.
  */
+const ENGINE_REFUSAL_PREFIXES = ["coordination.", "catalog.", "store."] as const;
+
 function coordinationFailureOf(error: unknown): { code: string; details: Record<string, unknown> } | null {
   const record = asRecord(error);
   const code = record?.code;
-  if (typeof code !== "string" || !code.startsWith("coordination.")) return null;
+  if (typeof code !== "string" || !ENGINE_REFUSAL_PREFIXES.some((prefix) => code.startsWith(prefix))) return null;
   return { code, details: asRecord(record?.details) ?? {} };
 }
 
@@ -391,6 +397,11 @@ function printView(verb: string, view: PlanCoordinationView, json: boolean): voi
     if (view.session.plan_id !== undefined) payload.plan_id = view.session.plan_id;
     if (liveHandoff !== undefined) payload.handoff_id = liveHandoff;
     if (state !== undefined) payload.state = state;
+    // The frozen-input pin state (contract §1) is disclosed verbatim: a caller
+    // observes that the catalog moved, that a plan is unpinned, or that the
+    // pinned input and the frozen row disagree — the engine never repairs a
+    // discrepancy here, and neither may the reader.
+    if (view.catalog_pin !== undefined) payload.catalog_pin = view.catalog_pin;
     console.log(JSON.stringify(payload));
     return;
   }
@@ -412,6 +423,16 @@ function printView(verb: string, view: PlanCoordinationView, json: boolean): voi
   } else {
     console.error(`plan ${verb}: worktree ${scope.worktreePath} (branch ${scope.workingBranch})`);
     console.error(`plan ${verb}: sdd ${scope.sddDir}`);
+  }
+  const pin = view.catalog_pin;
+  if (pin !== undefined && pin.conflict !== null) {
+    console.error(pc.red(`plan ${verb}: catalog pin conflict \u2014 ${pin.conflict}`));
+  } else if (pin?.pin != null) {
+    console.error(
+      `plan ${verb}: catalog pin ${pin.source} (revision ${pin.pin.entity_revision}${pin.catalog_moved ? ", catalog moved" : ""})`,
+    );
+  } else if (pin !== undefined) {
+    console.error(`plan ${verb}: catalog pin ${pin.absence ?? "unbound"}`);
   }
   console.error(`plan ${verb}: allowed operations: ${view.allowed_operations.join(", ") || "(none)"}`);
 }

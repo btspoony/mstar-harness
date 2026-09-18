@@ -37,7 +37,7 @@
  * sections.
  */
 import { execFileSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import type { GateResult } from "./core.js";
@@ -89,14 +89,18 @@ import {
   type ProjectRegisterDoc,
   type ProjectRegisterEntry,
 } from "./project.js";
+import { assertCatalogExecutionCommitted } from "./catalog-registration.js";
+import { CatalogError } from "./catalog.js";
 import { parseCompassFrontmatterText } from "./iteration.js";
 import { rowPlanIds, validatePlanRow, validateResidual, validateStatusV2, type PlanRow, type StatusV2Doc } from "./status.js";
 import { getArtifactStore, resolveArtifactPath, type ArtifactRef, type ArtifactStore } from "./store.js";
+import { StoreError, openStore, type StoreContext, type StoreHandle } from "./store-db.js";
 import { isDistinctCheckout, readMainWorktree, type MainWorktreeInfo } from "./worktree.js";
 import {
   isStandaloneDevelopmentWorkflow,
   rowValidationRoute,
   readWorkflowSnapshot,
+  stableJson,
   validateWorkflowSnapshot,
   WORKFLOW_TERMINAL_STATUSES,
   writeWorkflowSnapshot,
@@ -190,6 +194,12 @@ export type PlanCoordinationView = {
   session_file: string;
   /** Operations this session may run now — implemented operations only. */
   allowed_operations: string[];
+  /**
+   * The plan's frozen-input pin state (contract §1). Present on every read
+   * view so a caller can observe frozen-vs-current catalog divergence; a
+   * mutation result omits it (the caller already holds the row it just wrote).
+   */
+  catalog_pin?: ExecutionCatalogPinState;
 };
 
 /** Success shape of a coordination call. */
@@ -1363,16 +1373,24 @@ export async function readPlanCoordination(
     });
     assertPreparedFresh(scope, prepared);
   }
-  return buildView(
-    harnessRoot,
-    session.workflow_id,
-    projectIdOf(row),
-    scope,
-    snapshot,
-    row,
-    session,
-    sessionPath,
-  );
+  return {
+    ...buildView(
+      harnessRoot,
+      session.workflow_id,
+      projectIdOf(row),
+      scope,
+      snapshot,
+      row,
+      session,
+      sessionPath,
+    ),
+    catalog_pin: await readExecutionCatalogPin({
+      harnessRoot,
+      workflowId: session.workflow_id,
+      planId: targetPlanId,
+      row,
+    }),
+  };
 }
 
 /**
@@ -1513,6 +1531,9 @@ async function bindCoordinatorSession(cwd: string, workflowId: string, harnessDi
         );
       }
       assertRootRegisterEntry(harnessRoot, workflowId);
+      // A root-visible workflow with a pending catalog registration is never a
+      // valid workspace to bind (contract §3 step 3).
+      await assertWorkflowRegistrationCommitted(harnessRoot, workflowId);
       const existing = snapshot.coordination?.coordinator;
       if (existing !== undefined) {
         throw new CoordinationError(
@@ -1600,10 +1621,17 @@ async function bindPlanSessionForPlan(scope: ResolvedPlanScope): Promise<Coordin
   let created = "";
   const result = await withRowCommit(scope, {
     expectedRevision: null,
-    precheck: (context) => {
+    precheck: async (context) => {
       if (context.coordination?.prepared === undefined) {
         throw new CoordinationError("coordination.not-prepared", `plan ${planId} is not prepared`, { plan_id: planId });
       }
+      // Execution starts consuming the plan's frozen input here (contract §1):
+      // a frozen-input/pin discrepancy refuses before a lease or session is
+      // created, and never overwrites either side.
+      await assertExecutionCatalogPin({ harnessRoot, workflowId, planId, row: context.row });
+      // A root-visible workflow with a pending catalog registration is never a
+      // valid workspace (contract §3 step 3).
+      await assertWorkflowRegistrationCommitted(harnessRoot, workflowId);
       if (context.coordination.session !== undefined) {
         throw new CoordinationError(
           "coordination.duplicate-holder",
@@ -1758,6 +1786,380 @@ function resumeBoundSession(resumePath: string): CoordinationResult {
 }
 
 /* ------------------------------------------------------------------------ *
+ * § Catalog execution pin (state-projection contract §1)
+ * ------------------------------------------------------------------------ */
+
+/** The stable refusal code of a frozen-input/pin discrepancy (contract §1). */
+export const EXECUTION_PIN_CONFLICT_CODE = "catalog.execution-pin-conflict";
+
+/**
+ * `catalog_pin` — the frozen identity of the catalog input a prepared
+ * execution selected (state-projection contract §1). It is written on a newly
+ * prepared row by the authorized `prepare` (its only writer) and read by
+ * every execution consumer; a generic snapshot/metadata update is never a
+ * catalog writer. Changing the *current* catalog (descriptive metadata, a
+ * relocated path, new relations) therefore does NOT change a prepared
+ * execution, and a discrepancy between the frozen execution input and its pin
+ * is `catalog.execution-pin-conflict` — never a reason to overwrite either
+ * side. Progress/status/lease changes are execution authority and cannot
+ * invalidate the pin.
+ */
+export type CatalogExecutionPin = {
+  /** The store that owns the selection (`store_meta.store_id`). */
+  store_id: string;
+  /** The catalog entity revision the selection was copied from. */
+  entity_revision: number;
+  /**
+   * The document half of the pin: sha256 over the frozen execution-input
+   * selection (see `executionInputHash`) — never the live catalog row's hash.
+   */
+  document_hash: string;
+  /** sha256 over the catalog relations the entity carried at selection time. */
+  relation_hash: string;
+};
+
+/**
+ * Why a plan carries no pin. `store-absent` (no catalog database) and
+ * `store-inactive` (staged, pre-activation) are deliberately distinct from
+ * `unbound` (an active catalog that does not select this plan): a missing
+ * catalog is never reported as an empty one.
+ */
+export type CatalogPinAbsence = "store-absent" | "store-inactive" | "unbound";
+
+/** The frozen-vs-current pin state of one plan (the prepare/execution reader). */
+export type ExecutionCatalogPinState = {
+  workflow_id: string;
+  plan_id: string;
+  /** Where the recorded pin came from; `null` when this plan carries none. */
+  source: "row" | "binding" | null;
+  pin: CatalogExecutionPin | null;
+  /** The catalog store's availability for this read — never inferred from a pin. */
+  store: "active" | "absent" | "inactive";
+  /**
+   * Why NO pin is recorded (`null` whenever `pin` is set): the catalog is
+   * missing, staged, or simply does not select this plan.
+   */
+  absence: CatalogPinAbsence | null;
+  /** The catalog's current revision for this plan, when it is reachable. */
+  current_revision: number | null;
+  /** The catalog moved past the recorded pin — tolerated, disclosed, never silent. */
+  catalog_moved: boolean;
+  /** Set when the frozen execution input and its recorded pin disagree. */
+  conflict: string | null;
+};
+
+/** Raised by `assertExecutionCatalogPin` (contract §1). */
+export class ExecutionPinConflictError extends Error {
+  readonly code = EXECUTION_PIN_CONFLICT_CODE;
+  readonly details: Record<string, unknown>;
+
+  constructor(message: string, details: Record<string, unknown> = {}) {
+    super(`[${EXECUTION_PIN_CONFLICT_CODE}] ${message}`);
+    this.name = "ExecutionPinConflictError";
+    this.details = details;
+  }
+}
+
+/** The row fields contract §1 freezes as the execution input pin. */
+const FROZEN_ROW_FIELDS: readonly string[] = ["id", "plan_id", "title", "file"];
+/** The `metadata` keys contract §1 freezes (catalog-copied references). */
+const FROZEN_METADATA_FIELDS: readonly string[] = ["primary_spec", "spec_refs", "iteration_compass", "iteration_refs"];
+
+/**
+ * The document half of `catalog_pin`: sha256 over the frozen execution-input
+ * selection only. `status`, `progress`, task/QC/QA fields, leases and track
+ * branches are execution authority (contract §1) and are deliberately not
+ * hashed, so reporting progress never invalidates a pin.
+ */
+export function executionInputHash(row: unknown, planId: string): string {
+  const selection: Record<string, unknown> = { plan_id: planId };
+  if (isPlainObject(row)) {
+    const metadata = isPlainObject(row.metadata) ? row.metadata : {};
+    for (const key of FROZEN_ROW_FIELDS) {
+      if (row[key] !== undefined) selection[key] = row[key];
+    }
+    for (const key of FROZEN_METADATA_FIELDS) {
+      if (metadata[key] !== undefined) selection[key] = metadata[key];
+    }
+  }
+  return createHash("sha256").update(stableJson(selection), "utf8").digest("hex");
+}
+
+/** Parse (and shape-check) the pin recorded on a plan row, or `null`. */
+function recordedPinOf(row: unknown): CatalogExecutionPin | null {
+  if (!isPlainObject(row) || !isPlainObject(row.metadata)) return null;
+  const raw = row.metadata.catalog_pin;
+  if (!isPlainObject(raw)) return null;
+  if (
+    !isNonEmptyString(raw.store_id) ||
+    typeof raw.entity_revision !== "number" ||
+    !Number.isInteger(raw.entity_revision) ||
+    !isNonEmptyString(raw.document_hash) ||
+    !isNonEmptyString(raw.relation_hash)
+  ) {
+    return null;
+  }
+  return {
+    store_id: raw.store_id,
+    entity_revision: raw.entity_revision,
+    document_hash: raw.document_hash,
+    relation_hash: raw.relation_hash,
+  };
+}
+
+/** What the catalog currently holds for one workflow/plan (read-only facts). */
+type CatalogPinFacts = {
+  store: "absent" | "active" | "inactive";
+  storeId: string | null;
+  revision: number | null;
+  relation_hash: string | null;
+  /** The workflow's registration binding (contract §3), when one is committed. */
+  binding: { catalogId: string; relativePath: string | null } | null;
+};
+
+/**
+ * The registration gate (contract §3 step 3) for the prepare/bind/selection
+ * readers: a root-visible workflow whose catalog registration is not committed
+ * refuses `catalog.registration-pending` — a pending operation is never a
+ * valid workspace. Pre-activation exclusion (§7 of the issue contract): a
+ * missing or staged store is not a catalog verdict, so workspaces without an
+ * ACTIVE store keep their pass-through and are never retro-refused here.
+ */
+async function assertWorkflowRegistrationCommitted(harnessRoot: string, workflowId: string): Promise<void> {
+  const context: StoreContext = { harnessDir: harnessRoot };
+  let handle: StoreHandle;
+  try {
+    handle = await openStore(context, "read");
+  } catch (error) {
+    if (error instanceof StoreError && error.code === "store.not-initialized") return;
+    throw error;
+  }
+  try {
+    await assertCatalogExecutionCommitted(context, workflowId);
+  } catch (error) {
+    // A staged store is the pre-activation exclusion (§7), not a catalog verdict.
+    if (error instanceof CatalogError && error.code === "store.not-active") return;
+    throw error;
+  } finally {
+    handle.close();
+  }
+}
+
+/**
+ * The catalog side of a pin read. These are read-only lookups over the
+ * catalog tables (`store_meta`, `catalog_entities`, `catalog_links`,
+ * `catalog_execution_bindings`) — the same tables the registration journal
+ * reads to resolve its own state; no mutation ever goes through here, and
+ * every catalog WRITE stays on the domain verbs.
+ *
+ * A missing database is `store: "absent"` and a staged one `"inactive"`: a
+ * reader discloses that instead of pretending the catalog is empty, and does
+ * not refuse — a pre-activation workspace legitimately has unpinned,
+ * byte-unchanged snapshots (contract §1/§3).
+ */
+async function readCatalogPinFacts(harnessRoot: string, workflowId: string, planId: string): Promise<CatalogPinFacts> {
+  const context: StoreContext = { harnessDir: harnessRoot };
+  let handle: StoreHandle;
+  try {
+    handle = await openStore(context, "read");
+  } catch (error) {
+    if (error instanceof StoreError && error.code === "store.not-initialized") {
+      return { store: "absent", storeId: null, revision: null, relation_hash: null, binding: null };
+    }
+    throw error;
+  }
+  try {
+    const db = handle.db;
+    const meta = db.prepare("select authority_state from store_meta where id = 1").get() as
+      | { authority_state?: unknown }
+      | undefined;
+    if (meta?.authority_state !== "active") {
+      return { store: "inactive", storeId: handle.storeId, revision: null, relation_hash: null, binding: null };
+    }
+    const entity = db
+      .prepare("select revision, root_kind, relative_path from catalog_entities where kind = 'plan' and id = ?")
+      .get(planId) as { revision?: unknown; root_kind?: unknown; relative_path?: unknown } | undefined;
+    const links = db
+      .prepare(
+        "select from_kind, from_id, relation, to_kind, to_id, ordinal from catalog_links " +
+          "where (from_kind = 'plan' and from_id = ?) or (to_kind = 'plan' and to_id = ?)",
+      )
+      .all(planId, planId) as Array<Record<string, unknown>>;
+    const relationHash = createHash("sha256")
+      .update(
+        stableJson(
+          links
+            .map((link) =>
+              [link.from_kind, link.from_id, link.relation, link.to_kind, link.to_id, link.ordinal ?? ""].join(" "),
+            )
+            .sort(),
+        ),
+        "utf8",
+      )
+      .digest("hex");
+    const binding = db
+      .prepare(
+        "select catalog_id, pin_json from catalog_execution_bindings where workflow_id = ? and catalog_kind = 'plan' and catalog_id = ?",
+      )
+      .get(workflowId, planId) as { catalog_id?: unknown; pin_json?: unknown } | undefined;
+    let bindingRelativePath: string | null = null;
+    if (typeof binding?.pin_json === "string") {
+      try {
+        const pin = JSON.parse(binding.pin_json) as { relativePath?: unknown };
+        if (typeof pin.relativePath === "string") bindingRelativePath = pin.relativePath;
+      } catch {
+        // An unreadable binding payload is reported as an unknown location,
+        // never guessed: the identity comparison below simply cannot confirm it.
+      }
+    }
+    return {
+      store: "active",
+      storeId: handle.storeId,
+      revision: typeof entity?.revision === "number" ? entity.revision : null,
+      relation_hash: relationHash,
+      binding:
+        binding !== undefined && typeof binding.catalog_id === "string"
+          ? { catalogId: binding.catalog_id, relativePath: bindingRelativePath }
+          : null,
+    };
+  } finally {
+    handle.close();
+  }
+}
+
+/**
+ * The prepare/execution pin reader for one plan (contract §1). Reads only:
+ * the recorded pin comes from the row itself (what the authorized `prepare`
+ * wrote) or, when the row carries none, from the workflow's committed
+ * registration binding — the imported pin an activated legacy snapshot keeps
+ * outside its JSON (contract §1: activation leaves those bytes unchanged).
+ */
+export async function readExecutionCatalogPin(input: {
+  harnessRoot: string;
+  workflowId: string;
+  planId: string;
+  row: unknown;
+}): Promise<ExecutionCatalogPinState> {
+  const { harnessRoot, workflowId, planId } = input;
+  // Selection readers refuse a root-visible workflow with a pending catalog
+  // registration before they resolve any pin (contract §3 step 3).
+  await assertWorkflowRegistrationCommitted(harnessRoot, workflowId);
+  const facts = await readCatalogPinFacts(harnessRoot, workflowId, planId);
+  const state: ExecutionCatalogPinState = {
+    workflow_id: workflowId,
+    plan_id: planId,
+    source: null,
+    pin: null,
+    store: facts.store,
+    absence: null,
+    current_revision: facts.revision,
+    catalog_moved: false,
+    conflict: null,
+  };
+  // The recorded pin lives on the frozen row, so it is readable (and
+  // disposable) even when no catalog store exists to verify it against.
+  const recorded = recordedPinOf(input.row);
+  if (recorded !== null) {
+    state.source = "row";
+    state.pin = recorded;
+    // The frozen row and its own pin disagree — a store-independent check, so
+    // an edited frozen input is caught even pre-activation.
+    if (executionInputHash(input.row, planId) !== recorded.document_hash) {
+      state.conflict =
+        `plan ${planId}'s frozen execution input changed after preparation (its pin records ${recorded.document_hash.slice(0, 12)}…, ` +
+        "the row now hashes differently) — an explicit authorized prepare must rebind the input; neither side is overwritten";
+      return state;
+    }
+    if (facts.store !== "active" || facts.storeId === null) return state;
+    if (facts.revision === null) {
+      state.conflict =
+        `plan ${planId} is pinned to catalog revision ${recorded.entity_revision}, but the catalog no longer holds that plan ` +
+        "entity — resolve the catalog registration explicitly; the pin and the frozen input are both left untouched";
+      return state;
+    }
+    state.catalog_moved = facts.revision !== recorded.entity_revision;
+    return state;
+  }
+
+  if (facts.store !== "active" || facts.storeId === null) {
+    state.absence = facts.store === "absent" ? "store-absent" : "store-inactive";
+    return state;
+  }
+  if (facts.binding === null) {
+    state.absence = "unbound";
+    return state;
+  }
+  // The binding is the imported pin: it freezes the workflow's catalog
+  // identity, not a revision pointer, so there is nothing to compare beyond
+  // that identity (and nothing a later catalog move could invalidate).
+  state.source = "binding";
+  state.pin = {
+    store_id: facts.storeId,
+    entity_revision: facts.revision ?? 0,
+    document_hash: executionInputHash(input.row, planId),
+    relation_hash: facts.relation_hash ?? "",
+  };
+  if (facts.binding.catalogId !== planId) {
+    state.conflict =
+      `workflow ${workflowId} is registered against plan ${facts.binding.catalogId}, but this row is plan ${planId} — ` +
+      "the binding and the frozen execution input disagree; neither side is overwritten";
+  } else if (facts.binding.relativePath !== null && !planFileNamesLocation(input.row, facts.binding.relativePath)) {
+    state.conflict =
+      `plan ${planId} is registered at ${facts.binding.relativePath}, but its frozen row names a different document — ` +
+      "re-run the authorized prepare to rebind the input";
+  }
+  return state;
+}
+
+/** Whether a plan row's frozen `file` names the catalog location `relativePath`. */
+function planFileNamesLocation(row: unknown, relativePath: string): boolean {
+  if (!isPlainObject(row) || !isNonEmptyString(row.file)) return false;
+  const file = row.file.replace(/\\/g, "/");
+  return file === relativePath || file.endsWith(`/${relativePath}`);
+}
+
+/**
+ * Refuse `catalog.execution-pin-conflict` when this plan's frozen execution
+ * input and its recorded pin disagree (contract §1). The execution consumer
+ * calls this before it starts consuming the input; a plan with no pin (no
+ * catalog, or an unbound plan) is left to the JSON execution protocol.
+ */
+export async function assertExecutionCatalogPin(input: {
+  harnessRoot: string;
+  workflowId: string;
+  planId: string;
+  row: unknown;
+}): Promise<void> {
+  const state = await readExecutionCatalogPin(input);
+  if (state.conflict === null) return;
+  throw new ExecutionPinConflictError(state.conflict, {
+    workflow_id: state.workflow_id,
+    plan_id: state.plan_id,
+    source: state.source,
+    pin: state.pin,
+    current_revision: state.current_revision,
+    catalog_moved: state.catalog_moved,
+  });
+}
+
+/**
+ * The pin the authorized `prepare` records for one row: `null` when the
+ * catalog cannot select this plan's input (no store, staged store, or the plan
+ * is not registered), in which case `prepare` writes no pin rather than
+ * inventing one.
+ */
+async function selectCatalogPin(harnessRoot: string, workflowId: string, planId: string, row: unknown): Promise<CatalogExecutionPin | null> {
+  const facts = await readCatalogPinFacts(harnessRoot, workflowId, planId);
+  if (facts.store !== "active" || facts.storeId === null || facts.revision === null) return null;
+  return {
+    store_id: facts.storeId,
+    entity_revision: facts.revision,
+    document_hash: executionInputHash(row, planId),
+    relation_hash: facts.relation_hash ?? "",
+  };
+}
+
+/* ------------------------------------------------------------------------ *
  * § mutatePlanCoordination
  * ------------------------------------------------------------------------ */
 
@@ -1829,7 +2231,7 @@ async function mutatePrepare(
     expectedRevision: request.expectedRevision,
     // `prepare` is the writer of the pin; it must not re-check the pin it replaces.
     freshness: false,
-    precheck: (context) => {
+    precheck: async (context) => {
       if (session.role !== "coordinator") {
         throw new CoordinationError("coordination.session-role", "only a coordinator session may prepare a plan", {
           role: session.role,
@@ -1874,8 +2276,11 @@ async function mutatePrepare(
           { plan_id: scope.planId, status: context.row.status },
         );
       }
+      // A root-visible workflow with a pending catalog registration is never a
+      // valid workspace to prepare against (contract §3 step 3).
+      await assertWorkflowRegistrationCommitted(scope.harnessRoot, scope.workflowId);
     },
-    mutate: (context) => {
+    mutate: async (context) => {
       // Hashes are read inside the lock so the pinned bytes are the ones the
       // revision they are stored with was committed against.
       const prepared: PreparedCoordination = {
@@ -1894,7 +2299,17 @@ async function mutatePrepare(
         prepared,
       };
       assertViolationFree(validateRowCoordination(nextCoordination), `plan ${scope.planId} coordination`);
-      return { row: { ...context.row, coordination: nextCoordination }, coordination: nextCoordination };
+      // `prepare` is the ONLY writer of the frozen-input pin (contract §1) —
+      // no generic snapshot or metadata writer may touch it, and the guarded
+      // phase replacement cannot change `plans` at all. The pin is re-selected
+      // inside the lock, so a freshly authorized prepare records the catalog
+      // revision it actually selected, and a catalog that does not select this
+      // plan clears any stale pin instead of leaving it behind.
+      const pin = await selectCatalogPin(scope.harnessRoot, scope.workflowId, scope.planId, context.row);
+      const metadata = { ...(isPlainObject(context.row.metadata) ? context.row.metadata : {}) };
+      if (pin === null) delete metadata.catalog_pin;
+      else metadata.catalog_pin = pin;
+      return { row: { ...context.row, metadata, coordination: nextCoordination }, coordination: nextCoordination };
     },
   });
   return {
@@ -4465,6 +4880,9 @@ export async function replaceCoordinatedArtifact(input: CoordinatedReplacement):
   }
   // Boundary cast: the payload passed the snapshot gate immediately above and
   // `writeWorkflowSnapshot` re-validates the merged document before writing.
+  // This writer is the phase projection only: `plans` may not differ from disk
+  // (`coordination.direct-write-refused`), so it can never move a frozen
+  // execution input — and therefore never touches a `catalog_pin` either.
   const payload = input.payload as WorkflowSnapshot;
   await writeWorkflowSnapshot(payload, dirname(snapshotPath), {
     expectedVersion: input.expectedVersion,
