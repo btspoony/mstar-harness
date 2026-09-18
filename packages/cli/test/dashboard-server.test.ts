@@ -33,6 +33,11 @@ async function workspace(name: string): Promise<{ dir: string; context: StoreCon
   const context: StoreContext = { harnessDir: dir };
   const handle = await initializeStore(context);
   handle.close();
+  // Normalize the WAL side files (same reason as `withWrite`): a read-only open
+  // right after the initializing writer closed can refuse while the -wal/-shm
+  // pair is still on disk, and every server read opens the store read-only.
+  const probe = await openStore(context, "read");
+  probe.close();
   return { dir, context };
 }
 
@@ -55,6 +60,35 @@ function seedIssue(db: StoreDb, id: string, title: string, severity: string, reg
     "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, registered_at, created_at, updated_at, revision, identity_key) " +
       "values (?, 'proj-a', ?, 'bug', ?, ?, 'impact', 'acceptance', ?, ?, ?, 1, ?)",
   ).run(id, title, severity, disposition, registeredAt, RECORDED_AT, RECORDED_AT, `identity-${id}`);
+}
+
+/**
+ * A minimal valid harness: one declared workflow whose snapshot is the only
+ * projected row this store can publish. A workspace without these sources
+ * cannot publish a projection generation at all.
+ */
+function declareWorkflow(dir: string, id: string): void {
+  mkdirSync(join(dir, ".mstar", "workflows", id), { recursive: true });
+  writeFileSync(
+    join(dir, ".mstar", "status.json"),
+    JSON.stringify({
+      version: 2,
+      updated_at: "2026-09-18",
+      workflows: [{ id, type: "plan", started_at: RECORDED_AT, dir: `workflows/${id}` }],
+    }),
+  );
+  writeFileSync(
+    join(dir, ".mstar", "workflows", id, "snapshot.json"),
+    JSON.stringify({
+      schema_version: 1,
+      id,
+      type: "plan",
+      status: "running",
+      started_at: RECORDED_AT,
+      updated_at: RECORDED_AT,
+      plans: [],
+    }),
+  );
 }
 
 /**
@@ -263,7 +297,54 @@ describe("API over a real store", () => {
   });
 });
 
+describe("workflow detail and the projection generation", () => {
+  test("a bookmarked workflow detail answers the unavailable envelope, not a missing record", async () => {
+    // No harness sources: no generation can be published, so a workflow row
+    // cannot be read at all. The detail must disclose that (the envelope's own
+    // projection block) instead of claiming the record does not exist.
+    const { dir } = await workspace("workflow-unavailable-");
+    const server = await start(dir);
+    try {
+      const res = await raw(new URL("/api/workflows/wf-bookmarked", server.url).href);
+      expect(res.status).toBe(200);
+      const envelope = JSON.parse(res.body) as {
+        data: null;
+        projection: { generation: number | null; freshness: string };
+      };
+      expect(envelope.data).toBeNull();
+      expect(envelope.projection.generation).toBeNull();
+      expect(envelope.projection.freshness).toBe("unavailable");
+      // The matching list route answers the same fact as an unlisted page: no
+      // rows are claimed in either place.
+      const list = await raw(new URL("/api/workflows", server.url).href);
+      expect(list.status).toBe(200);
+      expect((JSON.parse(list.body) as { data: { items: unknown[] } }).data.items).toEqual([]);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("with a published generation an unknown id is still a structured 404", async () => {
+    const { dir } = await workspace("workflow-published-");
+    declareWorkflow(dir, "wf-demo");
+    const server = await start(dir);
+    try {
+      const found = await raw(new URL("/api/workflows/wf-demo", server.url).href);
+      expect(found.status).toBe(200);
+      expect((JSON.parse(found.body) as { data: { id: string } }).data.id).toBe("wf-demo");
+      const missing = await raw(new URL("/api/workflows/wf-absent", server.url).href);
+      expect(missing.status).toBe(404);
+      const body = JSON.parse(missing.body) as { data?: unknown; error?: { code: string } };
+      expect(body.data).toBeUndefined();
+      expect(body.error?.code).toBe("not-found");
+    } finally {
+      await server.close();
+    }
+  });
+});
+
 describe("boundary and lifecycle", () => {
+
   test("a staged store refuses reads with store.not-active (never an empty page)", async () => {
     const { dir, context } = await workspace("staged-");
     await withWrite(context, (db) => {
@@ -300,7 +381,17 @@ describe("boundary and lifecycle", () => {
     await expect(startDashboard({ harnessDir: dir, projectId: "no-such-project" })).rejects.toThrow(/Unknown project/);
   });
 
-  test("a known project starts and scopes the issue list", async () => {
+  test("without --project the served URL carries no selector", async () => {
+    const { dir } = await workspace("unscoped-");
+    const server = await start(dir);
+    try {
+      expect(new URL(server.url).search).toBe("");
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("a known project starts, seeds the served URL and scopes the issue list", async () => {
     const { dir, context } = await workspace("scoped-");
     await withWrite(context, (db) => {
       db.prepare(
@@ -311,6 +402,13 @@ describe("boundary and lifecycle", () => {
     });
     const server = await startDashboard({ harnessDir: dir, projectId: "proj-a" });
     try {
+      // The selector travels in the served URL: the shell parses
+      // `location.search` as its initial Issues filter, and `--open` opens
+      // exactly this URL, so the seeded filter is the one the browser applies.
+      expect(new URL(server.url).searchParams.get("project")).toBe("proj-a");
+      const shell = await raw(server.url);
+      expect(shell.status).toBe(200);
+      expect(shell.body).toBe(dashboardHtml);
       const res = await raw(new URL("/api/issues?project=proj-a", server.url).href);
       expect(res.status).toBe(200);
       expect((JSON.parse(res.body) as { data: { total: number } }).data.total).toBe(1);
@@ -326,7 +424,8 @@ describe("boundary and lifecycle", () => {
       const usedPort = new URL(first.url).port;
       await expect(startDashboard({ harnessDir: dir, port: Number(usedPort) })).rejects.toThrow(/already in use/);
       const stillUp = await raw(new URL("/api/issues", first.url).href);
-      expect(stillUp.status).toBe(503); // empty store, but the socket is alive
+      expect(stillUp.status).toBe(200); // the empty store answers: the socket is alive
+      expect((JSON.parse(stillUp.body) as { data: { total: number } }).data.total).toBe(0);
     } finally {
       await first.close();
     }

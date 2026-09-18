@@ -202,6 +202,15 @@ export async function startDashboard(options: StartDashboardOptions): Promise<Ru
       }
       const envelope = await readDashboardView({ context, view: route.view as DashboardView, params, id: route.id });
       if (envelope.data === null) {
+        // A workflow row lives in the execution projection alone: with no valid
+        // generation it cannot be read at all, so the honest answer is the
+        // envelope itself (its projection block carries the disclosure the view
+        // renders) rather than a 404 claiming the record does not exist. A null
+        // payload alongside a published generation is a genuinely absent record.
+        if (route.view === "workflow-detail" && envelope.projection.generation === null) {
+          sendJson(res, 200, envelope, requestHead);
+          return;
+        }
         sendJson(res, 404, fail("not-found", "no such record"), requestHead);
         return;
       }
@@ -225,7 +234,12 @@ export async function startDashboard(options: StartDashboardOptions): Promise<Ru
     });
     server.listen(port, "127.0.0.1", () => {
       const actualPort = (server.address() as AddressInfo).port;
-      const url = `http://127.0.0.1:${actualPort}/`;
+      // The selector belongs in the served URL: the shell reads
+      // `location.search` as its initial Issues filter, and `--open` opens
+      // exactly this URL, so both the list and the flow panel are scoped.
+      const query =
+        options.projectId === undefined ? "" : `?${new URLSearchParams({ project: options.projectId }).toString()}`;
+      const url = `http://127.0.0.1:${actualPort}/${query}`;
       let closePromise: Promise<void> | null = null;
       resolve({
         url,
@@ -238,6 +252,10 @@ export async function startDashboard(options: StartDashboardOptions): Promise<Ru
               clearTimeout(timer);
               resolveClose();
             });
+            // An idle keep-alive socket (an open browser tab) must not hold the
+            // drain: close those now and keep the timer as the backstop for
+            // requests that are genuinely in flight.
+            server.closeIdleConnections();
           });
           return closePromise;
         },

@@ -154,7 +154,7 @@ function IterationRow(props: { iteration: IterationDTO; projection: ReadProjecti
         : `${execution.workflow.status}${execution.workflow.phase === null ? "" : ` · ${execution.workflow.phase}`}`;
   return html`<tr>
     <td class="col-id mono">
-      <a href=${`#iterations/${encodeURIComponent(iteration.iterationId)}`}>${iteration.iterationId}</a>
+      <a href=${`#iteration/${encodeURIComponent(iteration.iterationId)}`}>${iteration.iterationId}</a>
     </td>
     <td class="col-title">
       ${catalog === null ? html`<span class="mono">${iteration.iterationId}</span>` : catalog.title}
@@ -233,17 +233,38 @@ export function IterationsView() {
           <${Pager} offset=${offset} count=${items.length} total=${total} onChange=${setOffset} />`}`;
 }
 
+/**
+ * The compass is a projection document: with no valid generation it is
+ * `unknown` even when a compass value was handed in, never silently rendered as
+ * projected content. `absent` is the honest state of a valid generation that
+ * simply carries no compass for this iteration.
+ */
+export type CompassState =
+  | { kind: "unknown" }
+  | { kind: "absent" }
+  | { kind: "document"; compass: NonNullable<IterationDTO["compass"]> };
+
+export function compassState(compass: IterationDTO["compass"], projectionAvailable: boolean): CompassState {
+  if (!projectionAvailable) return { kind: "unknown" };
+  return compass === null ? { kind: "absent" } : { kind: "document", compass };
+}
+
 function CompassSection(props: { compass: IterationDTO["compass"]; projectionAvailable: boolean }) {
-  const compass = props.compass;
-  if (compass === null) {
+  const state = compassState(props.compass, props.projectionAvailable);
+  if (state.kind === "unknown") {
     return html`<${DetailSection} title="Compass (projected)">
       <p class="prose">
-        ${props.projectionAvailable
-          ? "No compass document is projected for this iteration."
-          : "Not available: no valid projection generation is published, so nothing is claimed about this iteration's compass."}
+        Not available: no valid projection generation is published, so nothing is claimed about this iteration's
+        compass.
       </p>
     </${DetailSection}>`;
   }
+  if (state.kind === "absent") {
+    return html`<${DetailSection} title="Compass (projected)">
+      <p class="prose">No compass document is projected for this iteration.</p>
+    </${DetailSection}>`;
+  }
+  const compass = state.compass;
   return html`<${DetailSection} title="Compass (projected)">
     <dl class="facts">
       ${compass.summary === null

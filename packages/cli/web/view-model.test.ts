@@ -38,9 +38,9 @@ import {
   transitionRows,
 } from "./views/issues";
 import { chartModel, chartSummary, flowNotes, flowPanelState, originLabel, yAxisTicks } from "./views/issue-flow";
-import { iterationExecutionState, iterationListState, iterationPlanRow } from "./views/iterations";
+import { compassState, iterationExecutionState, iterationListState, iterationPlanRow } from "./views/iterations";
 import { roadmapProject, roadmapState } from "./views/roadmap";
-import { workflowListState } from "./views/workflows";
+import { workflowDetailState, workflowListState } from "./views/workflows";
 
 type IssueOccurrence = IssueDetail["occurrences"][number];
 type IssueTransition = IssueDetail["transitions"][number];
@@ -665,6 +665,44 @@ describe("catalog and projection authority", () => {
     expect(row.execution).toEqual({ kind: "not-started" });
     // The same row under an unavailable projection: unknown, not a claim.
     expect(iterationPlanRow(iterationPlan(), false).execution).toEqual({ kind: "unknown" });
+  });
+
+  test("a workflow detail paints no projected facts without a valid generation", () => {
+    // The row itself is a projection fact: with no valid generation the detail
+    // is `unavailable` (with its disclosure), never a loaded page of projected
+    // status/phase/plan/lease values. A null payload is the server's own shape
+    // for that same state, so both spellings land in one place.
+    const missingPayload = workflowDetailState(envelope(null, UNAVAILABLE_PROJECTION));
+    expect(missingPayload.kind).toBe("unavailable");
+    expect(missingPayload.disclosure).not.toBeNull();
+    // Defensive: projected rows handed in alongside no valid generation must not
+    // become painted work either.
+    const contradictory = workflowDetailState(envelope(workflow(), UNAVAILABLE_PROJECTION));
+    expect(contradictory.kind).toBe("unavailable");
+    expect(contradictory.disclosure).not.toBeNull();
+    // A published generation is the one loaded case, and a current one discloses
+    // nothing.
+    const loaded = workflowDetailState(envelope(workflow()));
+    expect(loaded.kind === "loaded" ? loaded.workflow.id : null).toBe("20260918-dashboard");
+    expect(loaded.disclosure).toBeNull();
+  });
+
+  test("the compass is projected content: no valid generation means unknown, never absent", () => {
+    const compass = {
+      iterationId: "iter-20260918-issue-store-dashboard",
+      summary: "projected summary",
+      milestones: [],
+      startedAt: RECORDED_AT,
+      endedAt: null,
+      status: "running",
+    };
+    // A valid generation without a compass document is `absent`…
+    expect(compassState(null, true)).toEqual({ kind: "absent" });
+    // …and no valid generation is `unknown`, with or without a compass value.
+    expect(compassState(null, false)).toEqual({ kind: "unknown" });
+    expect(compassState(compass, false)).toEqual({ kind: "unknown" });
+    const document = compassState(compass, true);
+    expect(document.kind === "document" ? document.compass.summary : null).toBe("projected summary");
   });
 
   test("a missing prepared catalog pin is disclosed, never filled from the catalog revision", () => {

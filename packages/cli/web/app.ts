@@ -48,6 +48,11 @@ const DESTINATION_OF: Record<Route["name"], DestinationId> = {
 /**
  * `#<destination>` selects a list, `#<resource>/<id>` its detail; anything else
  * is the default landing (Issues).
+ *
+ * The destination segment stays plural (`#workflows`, `#iterations`) while the
+ * detail resource is singular (`#workflow/<id>`, `#iteration/<id>`, matching
+ * `#issue/<id>`), exactly as the list rows link: one vocabulary, so a row href
+ * always parses back to its own detail.
  */
 function parseRoute(hash: string): Route {
   const segments = hash.replace(/^#/, "").split("/");

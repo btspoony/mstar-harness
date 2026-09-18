@@ -33,6 +33,18 @@ export type LoadState<T> =
 
 const LOADING = { status: "loading", envelope: null, message: null } as const;
 
+/**
+ * Longest a view waits for its own read before it says so. Loopback reads are
+ * fast, so the deadline only fires for a wedged request — and with the server's
+ * deliberate request serialization a single stuck read would otherwise leave
+ * every view in "Loading…" with no error ever surfaced.
+ */
+export const ENVELOPE_DEADLINE_MS = 10_000;
+
+const ENVELOPE_TIMEOUT_MESSAGE =
+  `The dashboard did not answer within ${ENVELOPE_DEADLINE_MS / 1000} seconds. ` +
+  "The local server may be stuck on an earlier read; reload to try again.";
+
 /** The refusal a response body carries: `{error:{code,message}}` (plan D2). */
 function failureOf(body: unknown, status: number): string {
   const error = (body as { error?: { code?: unknown; message?: unknown } } | null)?.error;
@@ -42,9 +54,20 @@ function failureOf(body: unknown, status: number): string {
 }
 
 /**
+ * A read envelope carries `data` — which may be `null` for a detail whose row
+ * cannot be read (no valid projection generation): the envelope's own
+ * projection block is then the disclosure, and the view decides what that
+ * means. Only a body with no envelope at all is a refusal.
+ */
+function isEnvelope(body: unknown): body is Envelope<unknown> {
+  return typeof body === "object" && body !== null && Object.hasOwn(body, "data");
+}
+
+/**
  * Load one API path into envelope state. `null` holds the loading state without
  * a request, which is how the optional empty-store probe avoids a request it
- * does not need. A superseded or aborted response never lands in state.
+ * does not need. A superseded, aborted or timed-out response never lands in
+ * state.
  */
 export function useEnvelope<T>(path: string | null): LoadState<T> {
   const [state, setState] = useState<LoadState<T>>(LOADING);
@@ -53,6 +76,12 @@ export function useEnvelope<T>(path: string | null): LoadState<T> {
     const controller = new AbortController();
     let current = true;
     setState(LOADING);
+    const deadline = setTimeout(() => {
+      if (!current) return;
+      current = false;
+      controller.abort();
+      setState({ status: "error", envelope: null, message: ENVELOPE_TIMEOUT_MESSAGE });
+    }, ENVELOPE_DEADLINE_MS);
     void (async () => {
       try {
         const response = await fetch(path, {
@@ -61,14 +90,15 @@ export function useEnvelope<T>(path: string | null): LoadState<T> {
         });
         const body: unknown = await response.json().catch(() => null);
         if (!current) return;
-        const envelope = (body as { data?: unknown } | null)?.data;
+        clearTimeout(deadline);
         setState(
-          response.ok && envelope !== undefined && envelope !== null
+          response.ok && isEnvelope(body)
             ? { status: "ready", envelope: body as Envelope<T>, message: null }
             : { status: "error", envelope: null, message: failureOf(body, response.status) },
         );
       } catch {
         if (!current) return;
+        clearTimeout(deadline);
         setState({
           status: "error",
           envelope: null,
@@ -78,6 +108,7 @@ export function useEnvelope<T>(path: string | null): LoadState<T> {
     })();
     return () => {
       current = false;
+      clearTimeout(deadline);
       controller.abort();
     };
   }, [path]);

@@ -62,6 +62,26 @@ export function workflowListState(envelope: Envelope<WorkflowListDTO>): Workflow
 }
 
 /**
+ * The workflow detail's own state. A workflow row is a projection fact: with no
+ * valid generation there is nothing to render as work, so the page reports
+ * `unavailable` — the envelope's own disclosure — instead of a missing record or
+ * projected plan facts. `data === null` is the server's shape for exactly that
+ * case (a row that cannot be read at all), never a claim that no such workflow
+ * exists.
+ */
+export type WorkflowDetailState =
+  | { kind: "unavailable"; disclosure: Disclosure | null }
+  | { kind: "loaded"; workflow: WorkflowDTO; disclosure: Disclosure | null };
+
+export function workflowDetailState(envelope: Envelope<WorkflowDTO | null>): WorkflowDetailState {
+  const disclosure = projectionDisclosure(envelope.projection);
+  if (envelope.data === null || projectionUnavailable(envelope.projection)) {
+    return { kind: "unavailable", disclosure };
+  }
+  return { kind: "loaded", workflow: envelope.data, disclosure };
+}
+
+/**
  * One plan execution row: the projected status/phase/progress/lease values
  * under projected labels, the catalog identity under catalog labels, and the
  * prepared pin the execution row froze. A missing pin is disclosed as missing.
@@ -111,7 +131,7 @@ function WorkflowRow(props: { workflow: WorkflowDTO }) {
   const catalog = workflow.catalog;
   return html`<tr>
     <td class="col-id mono">
-      <a href=${`#workflows/${encodeURIComponent(workflow.id)}`}>${workflow.id}</a>
+      <a href=${`#workflow/${encodeURIComponent(workflow.id)}`}>${workflow.id}</a>
     </td>
     <td class="col-title">
       ${catalog === null ? html`<span class="mono">${workflow.id}</span>` : catalog.title}
@@ -200,7 +220,7 @@ export function WorkflowsView() {
 }
 
 export function WorkflowDetailView(props: { id: string }) {
-  const load = useEnvelope<WorkflowDTO>(`/api/workflows/${encodeURIComponent(props.id)}`);
+  const load = useEnvelope<WorkflowDTO | null>(`/api/workflows/${encodeURIComponent(props.id)}`);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
@@ -224,10 +244,23 @@ export function WorkflowDetailView(props: { id: string }) {
       <p class="hint">Loading workflow…</p>`;
   }
 
-  const workflow = load.envelope.data;
-  const projection = load.envelope.projection;
-  const disclosure = projectionDisclosure(projection);
-  const available = !projectionUnavailable(projection);
+  const state = workflowDetailState(load.envelope);
+  if (state.kind === "unavailable") {
+    return html`<p class="back-link"><a href="#workflows">Back to Workflows</a></p>
+      <h1 class="heading-28">Workflow ${props.id}</h1>
+      <${LiveRegion} message="Workflow data is unavailable." />
+      ${state.disclosure === null ? null : html`<${ProjectionNotice} disclosure=${state.disclosure} />`}
+      <${EmptyState}
+        ><p class="prose">
+          Not available: no valid projection generation is published, so this workflow's execution row, branch and
+          plan rows cannot be read here and nothing is claimed about them. That is not a claim that no such workflow
+          exists.
+        </p></${EmptyState}
+      >`;
+  }
+
+  const workflow = state.workflow;
+  const disclosure = state.disclosure;
   const catalog = workflow.catalog;
   const branches: Array<[string, string | null]> = [
     ["Projected branch base", workflow.branch.base],
@@ -243,39 +276,34 @@ export function WorkflowDetailView(props: { id: string }) {
     ${disclosure === null ? null : html`<${ProjectionNotice} disclosure=${disclosure} />`}
     <${DataBadges} badges=${workflow.badges} />
     <${DetailSection} title="Execution (projected)">
-      ${available
-        ? html`<p class="hint">
-              Read from the execution projection, which mirrors the JSON execution authority. It is never refreshed
-              from the catalog.
-            </p>
-            <dl class="facts">
-              <${Field} label="Projected type">${workflow.type}</${Field}>
-              <${Field} label="Projected status"><${Badge} tone="neutral">${workflow.status}</${Badge}></${Field}>
-              <${Field} label="Projected phase">${textOrAbsent(workflow.phase)}</${Field}>
-              <${Field} label="Root register"
-                >${workflow.activeRegistration ? "Listed as an active workflow" : "Not listed as active"}</${Field}
-              >
-              ${workflow.startedAt === null
-                ? null
-                : html`<${Field} label="Projected started"
-                    ><span class="mono">${formatDate(workflow.startedAt)}</span></${Field}
-                  >`}
-              ${workflow.endedAt === null
-                ? null
-                : html`<${Field} label="Projected ended"
-                    ><span class="mono">${formatDate(workflow.endedAt)}</span></${Field}
-                  >`}
-              ${workflow.updatedAt === null
-                ? null
-                : html`<${Field} label="Projected updated"
-                    ><span class="mono">${formatDate(workflow.updatedAt)}</span></${Field}
-                  >`}
-              ${branches.map(([label, value]) => html`<${Field} label=${label}>${textOrAbsent(value)}</${Field}>`)}
-            </dl>`
-        : html`<p class="prose">
-            Execution unknown: no valid projection generation is published, so nothing is claimed about this
-            workflow's execution row. Its catalog identity below is unaffected.
-          </p>`}
+      <p class="hint">
+        Read from the execution projection, which mirrors the JSON execution authority. It is never refreshed from the
+        catalog.
+      </p>
+      <dl class="facts">
+        <${Field} label="Projected type">${workflow.type}</${Field}>
+        <${Field} label="Projected status"><${Badge} tone="neutral">${workflow.status}</${Badge}></${Field}>
+        <${Field} label="Projected phase">${textOrAbsent(workflow.phase)}</${Field}>
+        <${Field} label="Root register"
+          >${workflow.activeRegistration ? "Listed as an active workflow" : "Not listed as active"}</${Field}
+        >
+        ${workflow.startedAt === null
+          ? null
+          : html`<${Field} label="Projected started"
+              ><span class="mono">${formatDate(workflow.startedAt)}</span></${Field}
+            >`}
+        ${workflow.endedAt === null
+          ? null
+          : html`<${Field} label="Projected ended"
+              ><span class="mono">${formatDate(workflow.endedAt)}</span></${Field}
+            >`}
+        ${workflow.updatedAt === null
+          ? null
+          : html`<${Field} label="Projected updated"
+              ><span class="mono">${formatDate(workflow.updatedAt)}</span></${Field}
+            >`}
+        ${branches.map(([label, value]) => html`<${Field} label=${label}>${textOrAbsent(value)}</${Field}>`)}
+      </dl>
     </${DetailSection}>
     <${DetailSection} title="Catalog">
       ${catalog === null

@@ -32,7 +32,23 @@ export async function runDashboard(options: {
   open?: boolean;
   project?: string;
 }): Promise<void> {
-  let server: RunningDashboard;
+  let server: RunningDashboard | null = null;
+  let closing = false;
+  const shutdown = (signal: string): void => {
+    if (closing) return;
+    closing = true;
+    console.error(`dashboard: received ${signal}; closing server`);
+    void (server === null ? Promise.resolve() : server.close()).then(() => {
+      process.exit(process.exitCode ?? 0);
+    });
+  };
+  // The handlers are installed before the server starts and stay installed for
+  // the whole process life: a repeated signal during the drain must be absorbed
+  // by the same idempotent close, never left to the default disposition, which
+  // would kill a cleanly-closing server with an unexplained nonzero status.
+  process.on("SIGINT", () => shutdown("SIGINT"));
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+
   try {
     server = await startDashboard({
       harnessDir: options.harnessDir,
@@ -48,16 +64,4 @@ export async function runDashboard(options: {
   console.log(`dashboard: read-only Morning Star dashboard at ${server.url}`);
   console.log("dashboard: press Ctrl+C to stop");
   if (options.open === true) openBrowser(server.url);
-
-  let closing = false;
-  const shutdown = (signal: string): void => {
-    if (closing) return;
-    closing = true;
-    console.error(`dashboard: received ${signal}; closing server`);
-    void server.close().then(() => {
-      process.exit(process.exitCode ?? 0);
-    });
-  };
-  process.once("SIGINT", () => shutdown("SIGINT"));
-  process.once("SIGTERM", () => shutdown("SIGTERM"));
 }
