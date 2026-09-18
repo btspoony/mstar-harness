@@ -793,6 +793,60 @@ describe("E2 phase 1 readiness", () => {
     expect(codesOf(await inspectPhase1Readiness(featureRoot, f.input))).toContain("binding-invalid");
   });
 
+  test("the host session id must equal the engine coordinator and envelope identities", async () => {
+    const f = await buildFixture();
+
+    // The association this plan makes reachable: `plan bind` adopts the id the
+    // extension injects, so the binding's *host* id, the snapshot's
+    // `coordination.coordinator.session_id` and the coordinator envelope's
+    // `session_id` are one identifier — and readiness is ready on exactly that.
+    const coordinatorOf = (): Record<string, unknown> => {
+      const doc = JSON.parse(text(snapshotPathOf(f))) as {
+        coordination: { coordinator: Record<string, unknown> };
+      };
+      return doc.coordination.coordinator;
+    };
+    const envelopeOf = (): Record<string, unknown> =>
+      JSON.parse(text(f.input.coordinatorSessionPath)) as Record<string, unknown>;
+    const setCoordinator = (patch: Record<string, unknown>): void => {
+      const path = snapshotPathOf(f);
+      const doc = JSON.parse(text(path)) as { coordination: { coordinator: Record<string, unknown> } };
+      writeJson(path, {
+        ...doc,
+        coordination: { ...doc.coordination, coordinator: { ...doc.coordination.coordinator, ...patch } },
+      });
+    };
+    const setEnvelope = (patch: Record<string, unknown>): void => {
+      writeJson(f.input.coordinatorSessionPath, { ...envelopeOf(), ...patch });
+    };
+
+    expect(coordinatorOf().session_id).toBe(f.binding.sessionId);
+    expect(realpathSync(String(coordinatorOf().session_file))).toBe(realpathSync(f.input.coordinatorSessionPath));
+    expect(envelopeOf().session_id).toBe(f.binding.sessionId);
+    expect((await inspectPhase1Readiness(f.binding, f.input)).ready).toBe(true);
+
+    // A host id that is not the engine's coordinator id refuses: a foreign
+    // coordinator is never adopted by a matching envelope alone.
+    const foreignHost = { ...f.binding, sessionId: "someone-else-session" } as HandoffBinding;
+    expect(codesOf(await inspectPhase1Readiness(foreignHost, f.input))).toContain("binding-invalid");
+
+    // The snapshot naming another coordinator refuses.
+    setCoordinator({ session_id: "someone-else-session" });
+    expect(codesOf(await inspectPhase1Readiness(f.binding, f.input))).toContain("binding-invalid");
+    setCoordinator({ session_id: f.sessionId });
+
+    // The envelope naming another session refuses — the same comparison on the
+    // envelope's own `session_id`, not only on the snapshot's copy.
+    setEnvelope({ session_id: "someone-else-session" });
+    expect(codesOf(await inspectPhase1Readiness(f.binding, f.input))).toContain("binding-invalid");
+    setEnvelope({ session_id: f.sessionId });
+
+    // Restoring both identities returns the checkpoint to ready, so the two
+    // refusals above are attributable to the identity equality and not to a
+    // fixture that could never pass.
+    expect((await inspectPhase1Readiness(f.binding, f.input)).ready).toBe(true);
+  }, 30_000);
+
   test("a binding whose paths leave the derived workflow is refused before any artifact read", async () => {
     const f = await buildFixture();
     expect((await inspectPhase1Readiness(f.binding, f.input)).ready).toBe(true);

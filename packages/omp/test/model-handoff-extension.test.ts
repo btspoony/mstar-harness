@@ -301,6 +301,8 @@ function createWorkflowArtifacts(repo: ControlRepo, sessionId: string, workflowI
 /* --------------------------------------------------------------- harness ---- */
 
 const TOOL_NAME = "mstar_model_handoff";
+/** The host→CLI session-identity channel the coordinator's bash calls must carry. */
+const SESSION_ID_ENV = "MSTAR_HOST_SESSION_ID";
 
 type HostMode = ExtensionMode;
 
@@ -347,6 +349,8 @@ type Harness = Readonly<{
   /** The raw (unawaited) return value of a registered navigation handler. */
   rawHandlerResult: (event: string, payload: Record<string, unknown>) => unknown;
   emit: (event: Record<string, unknown>) => Promise<unknown>;
+  /** The host's pre-tool dispatch: the returned revision is what the tool runs with. */
+  emitToolCall: (event: Record<string, unknown>) => Promise<unknown>;
   emitInput: (text: string, source?: "interactive" | "rpc" | "extension") => Promise<void>;
   emitBeforeAgentStart: (prompt: string) => Promise<unknown>;
   emitToolResult: (toolCallId: string, toolName: string, isError: boolean) => Promise<unknown>;
@@ -568,6 +572,7 @@ async function createHarness(options: {
       return handler({ type: event, ...payload } as never, runner.createContext());
     },
     emit: (event: Record<string, unknown>) => runner.emit(event as never),
+    emitToolCall: (event: Record<string, unknown>) => runner.emitToolCall(event as never),
     emitInput: async (text: string, source: "interactive" | "rpc" | "extension" = "interactive") => {
       await runner.emitInput(text, undefined, source);
     },
@@ -733,6 +738,7 @@ describe("new coordinator start only", () => {
         "session_start",
         "session_switch",
         "session_tree",
+        "tool_call",
         "tool_result",
       ],
       tools: [TOOL_NAME],
@@ -890,6 +896,11 @@ describe("new coordinator start only", () => {
     expect(broken.attempts).toHaveLength(0);
     expect(statesOf(broken)).toEqual(["attempting", "failed"]);
     expect(broken.records().at(-1)!.reason).toContain("cannot resolve @slow");
+    // This terminalize site has no readable workflow snapshot (no artifacts
+    // exist yet), so its title is the fallback shape: it names the observed
+    // condition and asserts no workflow status.
+    expect(broken.notices().some((line) => line.startsWith("Model handoff failed needs attention: "))).toBe(true);
+    expect(broken.notices().some((line) => line.startsWith("Workflow "))).toBe(false);
 
     // Missing auth at arm time: the public host action reports `false`.
     const noAuthRepo = buildControlRepo();
@@ -1109,6 +1120,9 @@ describe("fire reads current preference", () => {
     expect(stateOf(suppressed)).toBe("pending");
     expect(second.switched).toEqual(["probe/slow-model"]);
     expect(second.notices().some((line) => line.includes("modelHandoff is off"))).toBe(true);
+    // A bound site: the skipped fire's title carries the observed workflow id
+    // and status, with the skipped condition in the detail.
+    expect(second.notices().some((line) => line.startsWith("Workflow pref-off-iteration is running: "))).toBe(true);
     writePluginOverrides(secondRepo.main, { modelHandoff: true, handoffTarget: "@smol" });
     expect(codeOf(await second.runTool(completionParams(secondArtifacts)))).toBe("handed_off");
     expect(second.switched).toEqual(["probe/slow-model", "probe/smol-model"]);
@@ -1205,6 +1219,9 @@ describe("fire reads current preference", () => {
     expect(stateOf(offResult)).toBe("pending");
     expect(offDuring.switched).toEqual(["probe/slow-model"]);
     expect(offDuring.liveSpec()).toBe("probe/slow-model");
+    // The second skip site (the re-read after the readiness checkpoint) is a
+    // bound site too: same status-bearing title shape, no bare condition.
+    expect(offDuring.notices().some((line) => line.startsWith("Workflow off-during-iteration is running: "))).toBe(true);
   }, 60_000);
 });
 
@@ -1241,6 +1258,12 @@ describe("pending picker and cycle changes cancel", () => {
     expect(cancelled.state).toBe("cancelled");
     expect(cancelled.reason).toContain("unowned model change to probe/picker-model");
     expect(harness.notices().some((line) => line.includes("model handoff cancelled"))).toBe(true);
+    // The terminalize notice is a bound site: the title names the observed
+    // workflow and its actual status, and the cancellation reason stays in the
+    // detail.
+    const cancelledNotice = harness.notices().find((line) => line.includes("model handoff cancelled"));
+    expect(cancelledNotice?.startsWith("Workflow picker-iteration is running: ")).toBe(true);
+    expect(cancelledNotice).toContain("unowned model change to probe/picker-model");
     expect(harness.attempts).toEqual(["probe/slow-model"]);
 
     expect(codeOf(await harness.runTool(completionParams(artifacts)))).toBe("not-pending");
@@ -1839,6 +1862,44 @@ describe("registered attach and shared notice shape", () => {
     expect(stale.attempts).toHaveLength(0);
     expect(stale.records()).toHaveLength(0);
   }, 60_000);
+
+  test("attach never adopts a workflow the root register lists twice", async () => {
+    const repo = buildControlRepo();
+    writePluginOverrides(repo.main, { modelHandoff: true, handoffTarget: "@default" });
+    const harness = await createHarness({
+      cwd: repo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(repo.main),
+    });
+    createWorkflowArtifacts(repo, harness.sessionManager.getSessionId(), "duplicate-row-iteration");
+
+    // A hand-edited register that lists the same workflow id twice. The
+    // duplicated row is itself a register violation (`status.workflow.duplicate-id`),
+    // so the register gate refuses before the attach path's own "exactly one
+    // active register row" check can run — the observable end of that guard: no
+    // classification, no re-read and no TOCTOU window can turn a doubled
+    // register row into an adoption. (The guard's own branch therefore stays
+    // defense-in-depth, like the missing-snapshot branch the register gate also
+    // fronts; only the refusal it guarantees is observable.)
+    writeJson(join(repo.harness, "status.json"), {
+      version: 2,
+      updated_at: "2026-09-16",
+      workflows: [
+        { id: repo.siblingId, type: "iteration", started_at: "2026-09-16", dir: `workflows/${repo.siblingId}` },
+        { id: "duplicate-row-iteration", type: "iteration", started_at: "2026-09-16", dir: "workflows/duplicate-row-iteration" },
+        { id: "duplicate-row-iteration", type: "iteration", started_at: "2026-09-16", dir: "workflows/duplicate-row-iteration" },
+      ],
+    });
+
+    const refused = await harness.runTool(startParams("duplicate-row-iteration"));
+    expect(codeOf(refused)).toBe("invalid-root");
+    expect(refused.isError).toBe(true);
+    expect(String(refused.content[0]?.text)).toContain(
+      "the root register is not a valid v2 status document: status.workflow.duplicate-id",
+    );
+    expect(harness.attempts).toHaveLength(0);
+    expect(harness.records()).toHaveLength(0);
+  }, 60_000);
 });
 
 describe("switch failure reports actual model", () => {
@@ -1908,4 +1969,84 @@ describe("switch failure reports actual model", () => {
     expect(noTarget.switched).toEqual(["probe/slow-model"]);
     expect(statesOf(noTarget)).toEqual(["attempting", "pending", "failed"]);
   }, 60_000);
+});
+
+describe("host session identity injection", () => {
+  test("bash calls carry the host session identity: injected, never caller-defined, and confined to bash", async () => {
+    const repo = buildControlRepo();
+    const harness = await createHarness({
+      cwd: repo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(repo.main),
+    });
+    const sessionId = harness.sessionManager.getSessionId();
+    expect(sessionId).not.toBe("");
+
+    // Every bash call this session issues is revised to carry the host identity,
+    // so the CLI's `plan bind` hands it to the engine and the engine session id
+    // equals the host session id. The revision is the *whole* execution input —
+    // every other field the caller sent survives untouched.
+    const revised = await harness.emitToolCall({
+      type: "tool_call",
+      toolCallId: "call-bash",
+      toolName: "bash",
+      input: { command: "mstar plan bind --coordinator --workflow fixture-iteration", timeout: 5 },
+    });
+    expect(revised).toEqual({
+      input: {
+        command: "mstar plan bind --coordinator --workflow fixture-iteration",
+        timeout: 5,
+        env: { [SESSION_ID_ENV]: sessionId },
+      },
+    });
+
+    // Unrelated env entries survive, and a caller-supplied value under the
+    // identity key is overwritten: the model can never define the id this
+    // extension asserts.
+    const forged = await harness.emitToolCall({
+      type: "tool_call",
+      toolCallId: "call-forged",
+      toolName: "bash",
+      input: { command: "true", env: { KEEP: "yes", [SESSION_ID_ENV]: "model-supplied" } },
+    });
+    expect(forged).toEqual({
+      input: { command: "true", env: { KEEP: "yes", [SESSION_ID_ENV]: sessionId } },
+    });
+
+    // No other tool is revised — the identity channel is the bash tool only.
+    for (const toolName of ["read", "write", "edit", "glob", "grep", "task", TOOL_NAME]) {
+      expect(
+        await harness.emitToolCall({
+          type: "tool_call",
+          toolCallId: `call-${toolName}`,
+          toolName,
+          input: { command: "true" },
+        }),
+      ).toBeUndefined();
+    }
+
+    // A host session with no id has no identity to associate: nothing is injected.
+    const manager = harness.sessionManager as unknown as { getSessionId: () => string };
+    const sessionIdOfManager = manager.getSessionId;
+    manager.getSessionId = () => "";
+    try {
+      expect(
+        await harness.emitToolCall({
+          type: "tool_call",
+          toolCallId: "call-idless",
+          toolName: "bash",
+          input: { command: "true" },
+        }),
+      ).toBeUndefined();
+    } finally {
+      manager.getSessionId = sessionIdOfManager;
+    }
+    expect(harness.sessionManager.getSessionId()).toBe(sessionId);
+
+    // The revision is the extension's only effect on this path: no handoff
+    // record, no notice and no new ledger entry — a pure input revision.
+    expect(harness.records()).toHaveLength(0);
+    expect(harness.notices()).toHaveLength(0);
+    expect(harness.ledger().filter((entry) => entry.type === "custom")).toHaveLength(0);
+  }, 30_000);
 });
