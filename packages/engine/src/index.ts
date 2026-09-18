@@ -668,6 +668,7 @@ export {
   readCatalogRevisions,
   reconcileCatalogExecution,
   registerCatalogExecution,
+  registerShippedCatalogExecution,
   resolveCatalogRegistrationState,
 } from "./catalog-registration.js";
 // Disposable execution/roadmap projections (plan 20260918-state-projection P5):

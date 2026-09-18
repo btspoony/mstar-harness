@@ -22,6 +22,7 @@
  * fixture harness — no live harness is ever touched.
  */
 import { describe, expect, test } from "bun:test";
+import { initializeStore, listPendingCatalogRegistrations, resolveCatalogRegistrationState, type StoreContext } from "@mstar-harness/engine";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -90,10 +91,13 @@ function registerArgs(harness: string, extra: string[] = []): string[] {
 }
 
 /** Temp fixture harness; returns paths plus a byte-snapshot helper. */
-function setupHarness(fn: (harness: string, paths: { root: string; snapshot: string }) => void): void {
+async function setupHarness(fn: (harness: string, paths: { root: string; snapshot: string }) => void | Promise<void>): Promise<void> {
   const harness = mkdtempSync(join(tmpdir(), "mstar-workflow-register-"));
+  // Contract §3: registration goes through the catalog journal, which requires
+  // an initialized ACTIVE store — the fixture provisions one.
+  await initializeStore({ harnessDir: harness }).then((handle) => handle.close());
   try {
-    fn(harness, {
+    await fn(harness, {
       root: join(harness, "status.json"),
       snapshot: join(harness, "workflows", WORKFLOW_ID, "snapshot.json"),
     });
@@ -103,8 +107,8 @@ function setupHarness(fn: (harness: string, paths: { root: string; snapshot: str
 }
 
 describe("mstar workflow register", () => {
-  test("registers a standalone development plan: root entry + snapshot on disk, both validate (exit 0)", () => {
-    setupHarness((harness, { root, snapshot }) => {
+  test("registers a standalone development plan: root entry + snapshot on disk, both validate (exit 0)", async () => {
+    await setupHarness((harness, { root, snapshot }) => {
       const result = runCli(registerArgs(harness));
       expect(result.exitCode).toBe(0);
       expect(result.stderr).toBe("");
@@ -140,8 +144,19 @@ describe("mstar workflow register", () => {
     });
   });
 
-  test("duplicate registration refuses fail-loud without mutating bytes (exit 1)", () => {
-    setupHarness((harness, { root, snapshot }) => {
+  test("success is advertised only after the committed catalog registration (contract §3)", async () => {
+    await setupHarness(async (harness) => {
+      expect(runCli(registerArgs(harness)).exitCode).toBe(0);
+      const context: StoreContext = { harnessDir: harness };
+      const state = await resolveCatalogRegistrationState(context, WORKFLOW_ID);
+      expect(state.pending).toBeNull();
+      expect(state.binding).toMatchObject({ catalogKind: "plan", catalogId: "20260916-plan-cli-example" });
+      expect(await listPendingCatalogRegistrations(context)).toEqual([]);
+    });
+  });
+
+  test("duplicate registration refuses fail-loud without mutating bytes (exit 1)", async () => {
+    await setupHarness((harness, { root, snapshot }) => {
       expect(runCli(registerArgs(harness)).exitCode).toBe(0);
       const beforeSnapshot = readFileSync(snapshot, "utf8");
       const beforeRoot = readFileSync(root, "utf8");
@@ -154,8 +169,8 @@ describe("mstar workflow register", () => {
     });
   });
 
-  test("development registration without branches refuses before any write (exit 1)", () => {
-    setupHarness((harness, { root, snapshot }) => {
+  test("development registration without branches refuses before any write (exit 1)", async () => {
+    await setupHarness((harness, { root, snapshot }) => {
       const args = registerArgs(harness);
       const noBranches: string[] = [];
       for (let i = 0; i < args.length; i++) {
@@ -171,8 +186,8 @@ describe("mstar workflow register", () => {
     });
   });
 
-  test("verification/report-only registers without branches but requires the completion policy", () => {
-    setupHarness((harness, { root, snapshot }) => {
+  test("verification/report-only registers without branches but requires the completion policy", async () => {
+    await setupHarness((harness, { root, snapshot }) => {
       // Without the policy: refusal (exit 1), nothing written — the engine
       // refuses a verification/report-only registration whose policy is empty.
       const withoutPolicy = runCli([
@@ -228,8 +243,8 @@ describe("mstar workflow register", () => {
     });
   });
 
-  test("missing required flags are a usage error (exit 2)", () => {
-    setupHarness((harness) => {
+  test("missing required flags are a usage error (exit 2)", async () => {
+    await setupHarness((harness) => {
       const result = runCli(["workflow", "register", "--workflow", WORKFLOW_ID, "--harness", harness]);
       expect(result.exitCode).toBe(2);
       expect(result.stderr).toContain("missing required option(s)");
@@ -237,16 +252,16 @@ describe("mstar workflow register", () => {
     });
   });
 
-  test("unknown delivery kind is a usage error (exit 2)", () => {
-    setupHarness((harness) => {
+  test("unknown delivery kind is a usage error (exit 2)", async () => {
+    await setupHarness((harness) => {
       const result = runCli(registerArgs(harness, ["--delivery-kind", "stealth"]));
       expect(result.exitCode).toBe(2);
       expect(result.stderr).toContain("--delivery-kind must be one of");
     });
   });
 
-  test("hostile workflow id is rejected by the shared id guard (exit 1)", () => {
-    setupHarness((harness) => {
+  test("hostile workflow id is rejected by the shared id guard (exit 1)", async () => {
+    await setupHarness((harness) => {
       const result = runCli(registerArgs(harness, ["--workflow", "../escape"]));
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("invalid workflow id");
@@ -254,24 +269,29 @@ describe("mstar workflow register", () => {
     });
   });
 
-  test("crash recovery: an orphan snapshot from a lost root write is adopted without byte changes (exit 0)", () => {
-    setupHarness((harness, { root, snapshot }) => {
+  test("a retry after a lost root write refuses through the journal and preserves bytes (exit 1)", async () => {
+    await setupHarness((harness, { root, snapshot }) => {
       // Round 1: a successful registration whose root write is then lost
       // (simulating the crash between snapshot creation and registration).
       expect(runCli(registerArgs(harness)).exitCode).toBe(0);
-      const orphanBytes = readFileSync(snapshot, "utf8");
-      const orphan = JSON.parse(orphanBytes) as Record<string, unknown>;
-      const { started_at: orphanStartedAt } = orphan;
+      const snapshotBytes = readFileSync(snapshot, "utf8");
       writeFileSync(root, JSON.stringify({ version: 2, updated_at: "2026-09-01", workflows: [] }, null, 2));
 
-      // Round 2: re-running the verb completes the registration and reports
-      // the recovery; the snapshot bytes are preserved verbatim.
+      // Round 2: under the registration journal (contract §3) the workflow is
+      // already registered/bound, so re-running the verb REFUSES instead of
+      // advertising recovery — the bytes are preserved verbatim and the
+      // refusal points at `catalog reconcile` as the recovery path.
       const retry = runCli(registerArgs(harness));
-      expect(retry.exitCode).toBe(0);
-      expect(retry.stdout).toContain("recovered");
-      expect(readFileSync(snapshot, "utf8")).toBe(orphanBytes);
+      expect(retry.exitCode).toBe(1);
+      expect(retry.stderr).toContain("reconcile");
+      expect(readFileSync(snapshot, "utf8")).toBe(snapshotBytes);
+      // The adoption re-registered the lost root entry from the preserved
+      // snapshot bytes, but the binding belongs to the committed operation —
+      // success is never advertised and reconcile is the way forward.
       const rootDoc = JSON.parse(readFileSync(root, "utf8")) as Record<string, unknown>;
-      expect(rootDoc.workflows).toEqual([{ id: WORKFLOW_ID, type: "plan", started_at: orphanStartedAt, dir: `workflows/${WORKFLOW_ID}` }]);
+      expect(rootDoc.workflows).toEqual([
+        { id: WORKFLOW_ID, type: "plan", started_at: "2026-09-16T00:00:00.000Z", dir: `workflows/${WORKFLOW_ID}` },
+      ]);
     });
   });
 });

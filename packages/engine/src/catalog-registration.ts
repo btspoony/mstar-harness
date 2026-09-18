@@ -70,7 +70,7 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
-import { promotedAuditSnapshot, promoteAuditPlans, type PromoteAuditPlansOptions } from "./audit.js";
+import { promotedAuditSnapshot, promoteAuditPlans, promotedAuditPlanRows, type PromoteAuditPlansOptions } from "./audit.js";
 import {
   CatalogError,
   catalogRootDir,
@@ -1176,6 +1176,78 @@ export async function registerCatalogExecution(
 
   // Step 3 — verify + publish + commit.
   return await publishUnderRootLock(context, plan, "register", write);
+}
+
+/**
+ * The catalog delta implied by a producer's own reviewed inputs (contract §3):
+ * the plan/iteration registration derives its single entity from the producer
+ * options, and an audit promotion derives one entity per promoted plan row
+ * from the plan documents themselves (the body is the title authority). The
+ * binding follows the workflow's primary association.
+ */
+function catalogDeltaFor(workflow: CatalogExecutionWorkflow): CatalogExecutionCatalogDelta {
+  if (workflow.kind === "plan") {
+    return {
+      entities: [
+        { kind: "plan", id: workflow.options.plan.id, title: workflow.options.plan.title, rootKind: "plans", relativePath: workflow.options.plan.file },
+      ],
+      binding: { catalogKind: "plan", catalogId: workflow.options.plan.id },
+    };
+  }
+  if (workflow.kind === "iteration") {
+    return {
+      entities: [{ kind: "iteration", id: workflow.workflowId, title: workflow.workflowId, rootKind: "iterations", relativePath: workflow.workflowId }],
+      binding: { catalogKind: "iteration", catalogId: workflow.workflowId },
+    };
+  }
+  const rows = promotedAuditPlanRows(workflow.outDir, workflow.selected);
+  if (rows.length === 0) {
+    invalid("an audit promotion selects no plan rows; there is no catalog delta to register");
+  }
+  return {
+    entities: rows.map((row) => ({
+      kind: "plan" as const,
+      id: requireText(row.id, "promoted plan row id"),
+      title: requireText(row.title, `promoted plan row ${String(row.id)} title`),
+      rootKind: "plans" as const,
+      relativePath: requireText(row.file, `promoted plan row ${String(row.id)} file`),
+    })),
+    binding: { catalogKind: "plan", catalogId: requireText(rows[0].id, "promoted plan row id") },
+  };
+}
+
+/**
+ * The shipped registration transport (contract §3): every CLI registration
+ * entry point goes through `registerCatalogExecution` with the catalog delta
+ * implied by its producer inputs, the CURRENT catalog revision as the reviewed
+ * expectation, and a deterministic operation id derived from the request — so
+ * a CLI retry replays idempotently instead of double-registering. Success is
+ * reported only from the committed receipt; a failure leaves the journal row
+ * as the recovery record for `catalog reconcile`.
+ */
+export async function registerShippedCatalogExecution(
+  context: StoreContext,
+  input: {
+    /** Actor recorded on the journal row and on every catalog domain write. */
+    actor: string;
+    workflow: CatalogExecutionWorkflow;
+    /** Defaults to a request-derived id; pass one to pin a retry identity. */
+    operationId?: string;
+  },
+): Promise<CatalogExecutionReceipt> {
+  const workflow = input.workflow;
+  const delta = catalogDeltaFor(workflow);
+  const operationId =
+    input.operationId ??
+    `op-${createHash("sha256").update(stableJson({ actor: input.actor, workflow, delta })).digest("hex").slice(0, 24)}`;
+  const { catalogRevision } = await readCatalogRevisions(context);
+  return await registerCatalogExecution(context, {
+    operationId,
+    actor: input.actor,
+    expectedCatalogRevision: catalogRevision,
+    workflow,
+    delta,
+  });
 }
 
 /**

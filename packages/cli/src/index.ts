@@ -67,15 +67,13 @@ import {
   parseCompassFrontmatter,
   planQualityBar,
   PROJECT_REGISTER_FILE,
-  promoteAuditPlans,
   pushCadenceProbe,
   readCoordinatedArtifact,
   readMainWorktree,
   readWorkflowSnapshot,
   reconcileCatalogExecution,
+  registerShippedCatalogExecution,
   recordWorkflowDelivery,
-  registerIterationWorkflow,
-  registerPlanWorkflow,
   replaceCoordinatedArtifact,
   resolveHarnessDir,
   resolveProcessHarnessDir as resolveEngineProcessHarnessDir,
@@ -1415,15 +1413,29 @@ workflowCommand
         // path agreement — the control harness root resolved above must
         // ALWAYS be pinned as the store root.
         setArtifactStore(createFsStore(harnessDir));
-        const result = await registerPlanWorkflow(options.workflow!, {
-          harnessDir,
-          plan: { id: options.planId!, title: options.planTitle!, file: options.planFile! },
-          deliveryKind: options.deliveryKind as (typeof WORKFLOW_DELIVERY_KINDS)[number],
-          ...(options.project !== undefined ? { project: options.project } : {}),
-          ...(options.branchSource !== undefined ? { branchSource: options.branchSource } : {}),
-          ...(options.branchTarget !== undefined ? { branchTarget: options.branchTarget } : {}),
-          ...(options.completionPolicy !== undefined ? { completionPolicy: options.completionPolicy } : {}),
-          ...(options.startedAt !== undefined ? { startedAt: options.startedAt } : {}),
+        // Contract §3: the shipped entry point registers through the catalog
+        // registration journal and reports success only from the committed
+        // receipt — a half-registered workflow is never advertised.
+        const result = await registerShippedCatalogExecution({ harnessDir }, {
+          // A fresh operation id per invocation: a retry after a crash hits the
+          // journal's pending/reconcile path instead of silently replaying, and
+          // a duplicate registration keeps its create-only refusal.
+          operationId: randomUUID(),
+          actor: "cli:workflow-register",
+          workflow: {
+            kind: "plan",
+            workflowId: options.workflow!,
+            options: {
+              harnessDir,
+              plan: { id: options.planId!, title: options.planTitle!, file: options.planFile! },
+              deliveryKind: options.deliveryKind as (typeof WORKFLOW_DELIVERY_KINDS)[number],
+              ...(options.project !== undefined ? { project: options.project } : {}),
+              ...(options.branchSource !== undefined ? { branchSource: options.branchSource } : {}),
+              ...(options.branchTarget !== undefined ? { branchTarget: options.branchTarget } : {}),
+              ...(options.completionPolicy !== undefined ? { completionPolicy: options.completionPolicy } : {}),
+              ...(options.startedAt !== undefined ? { startedAt: options.startedAt } : {}),
+            },
+          },
         });
         console.log(
           pc.green(
@@ -1432,7 +1444,7 @@ workflowCommand
               : `workflow register: OK \u2014 ${result.workflowId} registered`,
           ),
         );
-        console.log(`  snapshot: ${result.snapshotPath}`);
+        console.log(`  snapshot: ${path.join(harnessDir, "workflows", result.workflowId, WORKFLOW_SNAPSHOT_FILE)}`);
       } catch (error) {
         failScript(error, "workflow register");
       }
@@ -2397,8 +2409,9 @@ iterationCommand
 
 /**
  * `mstar iteration register` — seam S1 sibling of `mstar workflow register`:
- * a thin wrapper over engine `registerIterationWorkflow` (create-only
- * `type: iteration` snapshot + root entry under one root lock, with
+ * a shipped registration entry point (contract §3 journal transport over
+ * engine `registerIterationWorkflow`: `type: iteration` snapshot + root
+ * entry under one root lock, with
  * byte-preserving orphan recovery). Transport shape errors (missing/blank
  * flags, malformed/non-object `--row` JSON) are usage exit 2; engine
  * domain refusals (duplicate ids, invalid fields, hostile workflow id,
@@ -2492,13 +2505,24 @@ iterationCommand
         // path agreement — the control harness root resolved above must
         // ALWAYS be pinned as the store root.
         setArtifactStore(createFsStore(harnessDir));
-        const result = await registerIterationWorkflow(options.workflow!, {
-          harnessDir,
-          compassRef: options.compassRef!,
-          branch: { base: options.branchBase!, integration: options.branchIntegration!, target: options.branchTarget! },
-          rows,
-          ...(options.project !== undefined ? { project: options.project } : {}),
-          ...(options.startedAt !== undefined ? { startedAt: options.startedAt } : {}),
+        // Contract §3: the shipped entry point registers through the catalog
+        // registration journal and reports success only from the committed
+        // receipt — a half-registered workflow is never advertised.
+        const result = await registerShippedCatalogExecution({ harnessDir }, {
+          operationId: randomUUID(),
+          actor: "cli:iteration-register",
+          workflow: {
+            kind: "iteration",
+            workflowId: options.workflow!,
+            options: {
+              harnessDir,
+              compassRef: options.compassRef!,
+              branch: { base: options.branchBase!, integration: options.branchIntegration!, target: options.branchTarget! },
+              rows,
+              ...(options.project !== undefined ? { project: options.project } : {}),
+              ...(options.startedAt !== undefined ? { startedAt: options.startedAt } : {}),
+            },
+          },
         });
         console.log(
           pc.green(
@@ -2507,7 +2531,7 @@ iterationCommand
               : `iteration register: OK \u2014 ${result.workflowId} registered`,
           ),
         );
-        console.log(`  snapshot: ${result.snapshotPath}`);
+        console.log(`  snapshot: ${path.join(harnessDir, "workflows", result.workflowId, WORKFLOW_SNAPSHOT_FILE)}`);
       } catch (error) {
         failScript(error, "iteration register");
       }
@@ -4547,20 +4571,32 @@ auditCommand
         throw new Error(`audit dir not found: ${outDir}`);
       }
       const harnessDir = resolveLeaseHarnessDir(options.harness);
- // Store-root pinning ( Part B): the root upsert inside
- // promoteAuditPlans puts through getArtifactStore() \u2014 pin it to the
+ // Store-root pinning ( Part B): the catalog writes inside
+ // the registration journal put through getArtifactStore() \u2014 pin it to the
  // resolved harness root (identical to the default when --harness is absent).
       setArtifactStore(createFsStore(harnessDir));
-      const result = await promoteAuditPlans(outDir, selected, {
-        harnessDir,
-        deliveryKind: options.deliveryKind as (typeof WORKFLOW_DELIVERY_KINDS)[number],
-        ...(options.workflow !== undefined ? { workflowId: options.workflow } : {}),
-        ...(options.branchSource !== undefined ? { branchSource: options.branchSource } : {}),
-        ...(options.branchTarget !== undefined ? { branchTarget: options.branchTarget } : {}),
-        ...(options.completionPolicy !== undefined ? { completionPolicy: options.completionPolicy } : {}),
+      // Contract §3: the promotion registers through the catalog registration
+      // journal and reports success only from the committed receipt — a
+      // half-registered workflow is never advertised.
+      const result = await registerShippedCatalogExecution({ harnessDir }, {
+        operationId: randomUUID(),
+        actor: "cli:audit-promote",
+        workflow: {
+          kind: "audit",
+          outDir,
+          selected,
+          options: {
+            harnessDir,
+            deliveryKind: options.deliveryKind as (typeof WORKFLOW_DELIVERY_KINDS)[number],
+            ...(options.workflow !== undefined ? { workflowId: options.workflow } : {}),
+            ...(options.branchSource !== undefined ? { branchSource: options.branchSource } : {}),
+            ...(options.branchTarget !== undefined ? { branchTarget: options.branchTarget } : {}),
+            ...(options.completionPolicy !== undefined ? { completionPolicy: options.completionPolicy } : {}),
+          },
+        },
       });
       console.log(pc.green(`audit promote: OK \u2014 workflow ${result.workflowId} registered`));
-      console.log(`  snapshot: ${result.snapshotPath}`);
+      console.log(`  snapshot: ${path.join(harnessDir, "workflows", result.workflowId, WORKFLOW_SNAPSHOT_FILE)}`);
     } catch (error) {
       failScript(error, "audit promote");
     }
