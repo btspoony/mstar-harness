@@ -656,13 +656,17 @@ export async function openStore(context: StoreContext, mode: "read" | "write"): 
 export async function initializeStore(context: StoreContext): Promise<StoreHandle> {
   assertStoreRuntimeSupported();
   const dbPath = storeDbPath(context);
-  const createdFile = !existsSync(dbPath);
   const alreadyExists = (): StoreError =>
     new StoreError(
       "store.already-exists",
       `An issue store already exists at ${dbPath}. "store init" is create-only and must not reuse ` +
         `store.not-initialized for an existing store; use the upgrade path for schema changes. Nothing was modified.`,
     );
+  // Refuse before any open so WAL/pragma setup cannot rewrite pre-existing bytes.
+  if (existsSync(dbPath)) {
+    throw alreadyExists();
+  }
+  const createdFile = true;
   let db: StoreDb | undefined;
   try {
     db = await connect(dbPath, "write");
@@ -671,8 +675,12 @@ export async function initializeStore(context: StoreContext): Promise<StoreHandl
     }
     db.exec("begin immediate");
     try {
-      const prior = readAppliedMigrations(db, true);
-      if (prior.length > 0) {
+      const schemaPresent = db
+        .prepare("select count(*) as n from sqlite_master where type='table' and name='schema_version'")
+        .get() as { n?: number } | undefined;
+      // Concurrent initializers that both created the file still refuse once
+      // the winner records schema_version inside this exclusive transaction.
+      if (schemaPresent?.n) {
         db.exec("rollback");
         throw alreadyExists();
       }

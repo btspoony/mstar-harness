@@ -12,9 +12,10 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { resolveProcessHarnessDir } from "./coordination.js";
 import {
   MIN_BUN_VERSION,
@@ -183,6 +184,51 @@ describe("store-db L2 fix round", () => {
     const reader = await openStore({ harnessDir: dir }, "read");
     expect(reader.epoch).toBe(1);
     reader.close();
+  });
+
+  test("pre-existing sqlite without schema_version is refused and bytes are unchanged", async () => {
+    const dir = mkdtempSync(join(ROOT, "preexist-noschema-"));
+    const path = join(dir, "store.db");
+    const foreign = new DatabaseSync(path);
+    foreign.exec("create table leftover(id integer primary key, note text)");
+    foreign.exec("insert into leftover(note) values ('keep-me')");
+    foreign.close();
+    const before = readFileSync(path);
+    await expect(initializeStore({ harnessDir: dir })).rejects.toMatchObject({ code: "store.already-exists" });
+    expect(readFileSync(path).equals(before)).toBe(true);
+    const check = new DatabaseSync(path, { readOnly: true });
+    const row = check.prepare("select note from leftover").get() as { note?: string };
+    expect(row.note).toBe("keep-me");
+    const tables = check
+      .prepare("select name from sqlite_master where type='table' and name='schema_version'")
+      .all() as Array<{ name: string }>;
+    expect(tables).toEqual([]);
+    check.close();
+  });
+
+  test("empty pre-existing file is refused and bytes are unchanged", async () => {
+    const dir = mkdtempSync(join(ROOT, "preexist-empty-"));
+    const path = join(dir, "store.db");
+    writeFileSync(path, "");
+    const before = readFileSync(path);
+    await expect(initializeStore({ harnessDir: dir })).rejects.toMatchObject({ code: "store.already-exists" });
+    expect(readFileSync(path).equals(before)).toBe(true);
+    expect(existsSync(path)).toBe(true);
+  });
+
+  test("absent path initializes an active epoch-1 store", async () => {
+    const dir = mkdtempSync(join(ROOT, "fresh-absent-"));
+    expect(existsSync(join(dir, "store.db"))).toBe(false);
+    const handle = await initializeStore({ harnessDir: dir });
+    expect(handle.epoch).toBe(1);
+    expect(handle.schemaVersion).toBe(1);
+    const meta = handle.db.prepare("select authority_state, authority_epoch from store_meta where id = 1").get() as {
+      authority_state?: string;
+      authority_epoch?: number;
+    };
+    expect(meta.authority_state).toBe("active");
+    expect(meta.authority_epoch).toBe(1);
+    handle.close();
   });
 
   test("busy-timeout override is inert without the test-runner marker", async () => {
