@@ -92,7 +92,7 @@ Register 文档形状（`entries[<plan-id>]` 数组 JSON）、**9 个必填字�
 - **open**：缺省状态；`lifecycle` 缺省/`false`/`null` = `open`。
 - **close（唯一关闭路径）**：在 register **in place** 置 `lifecycle`（≠ `open`）+ `closed_at`（`YYYY-MM-DD`）+ `closure_note`；推荐 `closure_evidence`。v1 的 `archived/residuals/` 归档路径与 `status archive-residuals` 已移除（该命令现为报错桩，指向 register 状态变更）。
 - **closed 完整性**：`lifecycle` ≠ `open` 时缺 `closed_at` / `closure_note` = violation。
-- **谁更新**：PM 在 consolidated 决策后分配 R# 并登记；`QA gate: mandatory` 时 `qa-engineer` 验证后关闭；`pm-acceptance` 时 PM 验收清单完成后关闭。
+- **谁更新**：捕获在确认后按 § Issue capture 走 issue 动词（计划内 `mstar plan issue-add`，计划外 `mstar issue add`），以 issue id 标识；关闭由契约 §4 的关闭权威执行（`mstar issue close | waive | duplicate | supersede`，计划内 `mstar plan issue-close`）——`QA gate: mandatory` 时 `qa-engineer` 验证后关闭；`pm-acceptance` 时 PM 验收清单完成后关闭。本条的 R# / `lifecycle` 描述只适用于**迁移后的 register 记录**（契约 §7 映射/激活边界），register **不再**是写入目标。
 - close 协议全文 → **`mstar-artifacts`** `references/status-and-residuals.md`（「Residual findings lifecycle」）。
 
 ### Provenance（register 专属字段）
@@ -106,7 +106,7 @@ Register 文档形状（`entries[<plan-id>]` 数组 JSON）、**9 个必填字�
 ### Findings cleanup（与 Assignment 联动）
 
 - Assignment **`Findings cleanup: zero-residual | allow-residual`** 是唯一 mode 来源（`metadata.findings_cleanup` mirror 已删）；迭代 Phase 2 默认 `allow-residual`。
-- `allow-residual`（默认）：仅 unresolved **critical** 阻止 Approve；open R# 须在离 InReview 前登记 project register，且各决策面披露（id + severity + 跟踪位置；close 面另含 blocker-defer 标记）—— 登记与披露职责 → **`mstar-artifacts`**「Findings cleanup modes」。
+- `allow-residual`（默认）：仅 unresolved **critical** 阻止 Approve；离 InReview 前须把每条剩余 open finding 捕获为**本 plan 的 linked open issue**（machine-enum `severity`），并在各决策面披露（issue id + severity + 跟踪位置；close 面另含 blocker-defer 标记）—— 捕获与披露职责全文 → **`mstar-artifacts`**「Findings cleanup modes」。
 - `zero-residual`（显式 opt-in）：可修 findings 当轮 fix → re-review 清干净；仅真 blocker 可 defer 且须 Durable Roadmap + `target`（`critical` 不属 defer —— 定义 → **`mstar-artifacts`**「Findings cleanup modes」）；`nit` 必须当场修或删；waived/risk-accepted 必须关闭，不得留 open。
 - mode 全文与 enforcement → **`mstar-artifacts`** `references/status-and-residuals.md`（「Findings cleanup modes」+ 其 engine check）。
 
@@ -133,4 +133,4 @@ Register 文档形状（`entries[<plan-id>]` 数组 JSON）、**9 个必填字�
 
 - **`mstar-artifacts`**（`references/status-and-residuals.md`）— 字段语义 SSOT：severity 含义与门禁关系、findings cleanup modes 全文、close 协议、engine-check 查询示例
 - **`mstar-conventions`** — `{PROJECT_DIR}` / `{WORKFLOW_DIR}` 路径符号、`.mstarc` 声明、gitignore 策略
-- **`mstar-review-qc`** — PM QC 编排与 residual 留档（PM 同轮必读）
+- **`mstar-review-qc`** — PM QC 编排与 findings 捕获 / QC gate（PM 同轮必读）
