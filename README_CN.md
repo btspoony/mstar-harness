@@ -145,6 +145,15 @@ coordinator 一侧——`prepare`，随后 `accept`，再按路线走：迭代�
 | `/amazing-pr-review [pr\|branch\|scope] [quick\|default\|deep]` | 合并前对 PR / 分支 / diff 做深度审查，三档强度：`quick`（单趟 1 席）/ `default`（无 flag 默认档，席位精简）/ `deep`（完整三阶段流水线）→ 给出唯一结论（`ship it` / `needs fixes` / `blocked`）与全部发现；有 PR 编号时由命令主代理在 Stage 3 合成阶段发布 GitHub Review。`deep` 档走完整三阶段流水线（collect → domain review → main-agent synthesis；one verdict / one GitHub Review）；`default` / `quick` 为更轻量的单/双席通道。多 PR 输入 → 仅审查第一个 PR；其余 PR 登记为审计待办（下一次会话）；建议一个会话只审一个 PR。 |
 | `/amazing-e2e-check [环境/设备] [场景]` | 通过 `mstar-e2e` 在独立 workflow 中执行用户明确请求的浏览器、真机或安装部署场景；不作为常规迭代 QA 门禁。 |
 
+### 本地看板（dashboard）
+
+`mstar dashboard` 在 `127.0.0.1` 上提供 issue store 与执行/roadmap 投影的**只读** Web 界面——仅回环绑定，不提供任何 bind 地址选项。覆盖：issue 列表与详情（含真实记录历史）、workflow / iteration / roadmap 视图，以及一张累计捕获 vs 退役的 issue-flow 图表。看板不做任何变更；改动一律走 CLI（`mstar issue …`、`mstar catalog …`），Ctrl-C 停止服务。
+
+```
+mstar dashboard            # 服务开始监听后打印解析得到的 URL
+mstar dashboard --help     # --port / --open / --project
+```
+
 ## Harness Workflow（统一流程）
 
 ```mermaid

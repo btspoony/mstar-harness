@@ -156,6 +156,7 @@ import { planUsageFailurePayload, registerPlanCommands, registerWorkflowCommands
 import { issueUsageFailurePayload, registerIssueCommands } from "./issue";
 import { catalogUsageFailurePayload, registerCatalogCommands } from "./catalog";
 import { runMigrateCommand, type MigrateCliOptions } from "./commands/migrate";
+import { runDashboard } from "./dashboard";
 import { validateAgentPlugin } from "./agent-plugins";
 import { buildModelAssignments } from "./assignment";
 import { getAdapter } from "./adapters";
@@ -6404,6 +6405,30 @@ function attachWorkflowGroup(target: Command): void {
 }
 
 attachWorkflowGroup(program);
+
+// Read-only local dashboard (plan 20260918-dashboard D2). Loopback binding is
+// fixed: there is deliberately no host/bind-address option.
+program
+  .command("dashboard")
+  .description("Start the read-only Morning Star dashboard on 127.0.0.1")
+  .option("--port <port>", "TCP port (0 = OS-selected)", "0")
+  .option("--open", "Open the dashboard in the default browser")
+  .option("--project <projectId>", "Initial project selector")
+  .action(async (options: { port: string; open?: boolean; project?: string }) => {
+    const port = Number(options.port);
+    if (!Number.isInteger(port) || port < 0 || port > 65535) {
+      console.error(pc.red(`dashboard: --port must be an integer between 0 and 65535 — got ${JSON.stringify(options.port)}`));
+      process.exitCode = 2;
+      return;
+    }
+    const harnessDir = resolveProcessHarnessDir();
+    if (harnessDir === null) {
+      console.error(pc.red("dashboard: no {HARNESS_DIR} found from the working directory; run inside an initialized harness workspace."));
+      process.exitCode = 1;
+      return;
+    }
+    await runDashboard({ harnessDir, port, open: options.open, project: options.project });
+  });
 
 program.parseAsync(process.argv).catch((error: unknown) => {
   // Usage-class commander errors are exit 2, not exit 1, for the verb
