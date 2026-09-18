@@ -759,3 +759,37 @@ export {
   planStoreMigration,
   StoreMigrationError,
 } from "./store-migrate.js";
+// Activation barrier, legacy-source retirement and the consistent backup: the
+// second half of the §7 protocol (apply≠activate≠retire, D19). `activateStore`
+// flips the authority generation atomically against a strict installed-consumer
+// attestation, `retireStoreSources` moves exact reviewed bytes under a
+// resumable ledger, and `backupStore` records a quiesced `VACUUM INTO` recovery
+// point with its identity. ADDITIVE export: the engine package's exports map is
+// the only reachable surface for the CLI transport (`packages/cli/`), and the
+// migrated verbs are exercised live only in G6's authorized ops window.
+export type {
+  ActivationAttestation,
+  ActivationReceipt,
+  AttestationConsumerKind,
+  AttestationDisposition,
+  BackupReceipt,
+  InstalledConsumerAttestation,
+  RetiredRegister,
+  RetiredSection,
+  RetirementReceipt,
+  StoppedSessionAttestation,
+  StoreActivationErrorCode,
+  StoreAuthorityHandle,
+} from "./store-activation.js";
+export {
+  ACTIVATION_PROTOCOL_VERSION,
+  activateStore,
+  activationReceiptFor,
+  appliedReceiptFor,
+  assertAuthorityCurrent,
+  backupStore,
+  currentAuthorityHandle,
+  retireStoreSources,
+  StoreActivationError,
+  validateActivationAttestation,
+} from "./store-activation.js";

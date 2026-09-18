@@ -202,3 +202,201 @@ describe("mstar store init / upgrade", () => {
     expect(jsonOf(refused.stdout).code).toBe("store.not-initialized");
   });
 });
+
+// ---------------------------------------------------------------------------
+// G5a — activation barrier, legacy-source retirement and backup (issue contract §7)
+// ---------------------------------------------------------------------------
+
+const INDEX_NARRATIVE = ["# Iterations", "", "This narrative line stays after retirement.", ""];
+const INDEX_TABLE = [
+  "| Iteration | Path | Description | Status |",
+  "|-----------|------|-------------|--------|",
+  "| `iter-one` | `iter-one/` | First iteration | `active` |",
+];
+
+function writeIndex(harness: string): void {
+  write(harness, join("iterations", "README.md"), [...INDEX_NARRATIVE, ...INDEX_TABLE, ""].join("\n"));
+  write(harness, join("iterations", "iter-one", "delivery-compass.md"), "# iter-one compass\n");
+}
+
+/** A conforming operator attestation file next to the workspace. */
+function writeAttestation(harness: string, overrides: Record<string, unknown> = {}): string {
+  const path = join(harness, "..", "attestation.json");
+  const document = {
+    version: 1,
+    attestedAt: "2026-09-19T00:00:00.000Z",
+    operator: { actor: "ops-engineer", authorizationRef: "compass D29 / guides/runtime-activation-decision.md" },
+    consumers: [
+      {
+        entryId: "cli-global",
+        kind: "cli",
+        entrypoint: "/usr/local/lib/node_modules/@mstar-harness/cli/dist/index.js",
+        runtime: "bun",
+        runtimeVersion: "1.4.0",
+        version: "3.11.0",
+        current: false,
+        disposition: "upgraded",
+      },
+      {
+        entryId: "coordinator",
+        kind: "coordinator",
+        entrypoint: "/Users/op/.local/share/mstar/cli/dist/index.js",
+        runtime: "node",
+        runtimeVersion: "24.18.0",
+        version: "3.11.0",
+        current: true,
+        disposition: "reloaded",
+      },
+    ],
+    stoppedSessions: [{ sessionId: "sess-old-1", host: "omp", state: "stopped" }],
+    ...overrides,
+  };
+  writeFileSync(path, `${JSON.stringify(document, null, 2)}\n`);
+  return path;
+}
+
+/** A workspace whose reviewed manifest is already applied (staged, not active). */
+async function stagedWorkspace(name: string): Promise<{ harness: string; manifestFile: string }> {
+  const { harness } = freshWorkspace(name);
+  writeRegister(harness, "_default", { entries: { "plan-alpha": [entry({ id: "R1", severity: "critical" })] } });
+  writeRegister(harness, "engine", { entries: { "plan-alpha": [entry({ id: "R1", severity: "medium" })] } });
+  writeIndex(harness);
+  const { file } = await previewManifest(harness);
+  const applied = await runStore(["migrate", "--apply", "--manifest", file, "--harness", harness, "--json"]);
+  expect(applied.exitCode).toBe(0);
+  expect(jsonOf(applied.stdout).ok).toBe(true);
+  return { harness, manifestFile: file };
+}
+
+describe("mstar store activate / retire / backup", () => {
+  test("store backup writes a verified recovery point that records the store identity", async () => {
+    const { harness } = await stagedWorkspace("backup-");
+    const target = join(harness, "..", "recovery.db");
+    const result = await runStore(["backup", "--out", target, "--harness", harness, "--json"]);
+    expect(result.exitCode).toBe(0);
+    const data = jsonOf(result.stdout).data as {
+      backupPath: string;
+      storeId: string;
+      epoch: number;
+      revision: number;
+      authorityState: string;
+      counts: { issues: number };
+    };
+    expect(data.backupPath).toBe(target);
+    expect(data.authorityState).toBe("staged");
+    expect(data.epoch).toBe(1);
+    expect(data.counts.issues).toBe(2);
+    expect(existsSync(target)).toBe(true);
+
+    const again = await runStore(["backup", "--out", target, "--harness", harness, "--json"]);
+    expect(again.exitCode).toBe(1);
+    expect(jsonOf(again.stdout).code).toBe("store.activation-stale");
+    expect(jsonOf(again.stdout).message).toContain("recorded recovery point");
+
+    // The default target lands in the resolved control root, never a cwd-local path.
+    const defaulted = await runStore(["backup", "--harness", harness, "--json"]);
+    expect(defaulted.exitCode).toBe(0);
+    const defaultPath = (jsonOf(defaulted.stdout).data as { backupPath: string }).backupPath;
+    expect(defaultPath.startsWith(join(harness, "archived", "store-migration", "backups"))).toBe(true);
+  });
+
+  test("store activate flips the authority epoch and store retire removes the reviewed sources", async () => {
+    const { harness, manifestFile } = await stagedWorkspace("activate-");
+    const attestationFile = writeAttestation(harness);
+    const activationFile = join(harness, "..", "activation.json");
+
+    const activated = await runStore([
+      "activate",
+      "--manifest",
+      manifestFile,
+      "--attestation",
+      attestationFile,
+      "--out",
+      activationFile,
+      "--harness",
+      harness,
+      "--json",
+    ]);
+    expect(activated.exitCode).toBe(0);
+    const activation = jsonOf(activated.stdout).data as { epoch: number; previousEpoch: number; replayed: boolean; receiptId: number };
+    expect(activation.previousEpoch).toBe(1);
+    expect(activation.epoch).toBe(2);
+    expect(activation.replayed).toBe(false);
+    expect(existsSync(activationFile)).toBe(true);
+    expect(existsSync(join(harness, "archived", "store-migration", "backups", "pre-activation-"))).toBe(false);
+
+    // The stub of the default pre-activation backup is present and named by identity.
+    const defaultBackup = JSON.parse(readFileSync(activationFile, "utf8")) as { backup: { backupPath: string; revision: number } };
+    expect(existsSync(defaultBackup.backup.backupPath)).toBe(true);
+
+    const retired = await runStore(["retire", "--manifest", manifestFile, "--harness", harness, "--json"]);
+    expect(retired.exitCode).toBe(0);
+    const retirement = jsonOf(retired.stdout).data as { registers: { relativePath: string }[]; sections: { relativePath: string }[]; markerPath: string };
+    expect(retirement.registers.length).toBe(2);
+    expect(retirement.sections.length).toBe(1);
+    expect(existsSync(join(harness, "projects", "_default", "residuals.json"))).toBe(false);
+    expect(existsSync(join(harness, "projects", "engine", "residuals.json"))).toBe(false);
+    const readme = readFileSync(join(harness, "iterations", "README.md"), "utf8");
+    expect(readme).toContain("This narrative line stays after retirement.");
+    expect(readme).not.toContain("| `iter-one` |");
+    const marker = readFileSync(retirement.markerPath, "utf8");
+    expect(marker).toContain("not a post-activation rollback path");
+
+    // Idempotent replay at the CLI boundary.
+    const replay = await runStore(["retire", "--manifest", manifestFile, "--harness", harness, "--json"]);
+    expect(replay.exitCode).toBe(0);
+    expect((jsonOf(replay.stdout).data as { replayed: boolean }).replayed).toBe(true);
+  });
+
+  test("store activate refuses an unusable attestation before any write", async () => {
+    const { harness, manifestFile } = await stagedWorkspace("activate-refused-");
+
+    const missingFile = await runStore(["activate", "--manifest", manifestFile, "--harness", harness, "--json"]);
+    expect(missingFile.exitCode).toBe(2);
+    expect(jsonOf(missingFile.stdout).code).toBe("usage");
+    expect(jsonOf(missingFile.stdout).message).toContain("--attestation");
+
+    const noCoordinator = writeAttestation(harness, {
+      consumers: [
+        {
+          entryId: "cli-global",
+          kind: "cli",
+          entrypoint: "/usr/local/lib/node_modules/@mstar-harness/cli/dist/index.js",
+          runtime: "bun",
+          runtimeVersion: "1.4.0",
+          version: "3.11.0",
+          current: false,
+          disposition: "upgraded",
+        },
+      ],
+    });
+    const refused = await runStore(["activate", "--manifest", manifestFile, "--attestation", noCoordinator, "--harness", harness, "--json"]);
+    expect(refused.exitCode).toBe(1);
+    expect(jsonOf(refused.stdout).code).toBe("store.attestation-invalid");
+    expect(jsonOf(refused.stdout).message).toContain("current coordinator");
+
+    // A usage-level manifest problem still exits 2 rather than pretending refusal.
+    const noManifest = await runStore(["activate", "--attestation", noCoordinator, "--harness", harness, "--json"]);
+    expect(noManifest.exitCode).toBe(2);
+  });
+
+  test("store retire refuses when the reviewed sources drifted after activation", async () => {
+    const { harness, manifestFile } = await stagedWorkspace("retire-drift-");
+    const attestationFile = writeAttestation(harness);
+    const activated = await runStore(["activate", "--manifest", manifestFile, "--attestation", attestationFile, "--harness", harness, "--json"]);
+    expect(activated.exitCode).toBe(0);
+
+    writeRegister(harness, "engine", {
+      entries: { "plan-alpha": [entry({ id: "R1", severity: "medium" }), entry({ id: "R8", severity: "low" })] },
+    });
+    const registerPath = join(harness, "projects", "engine", "residuals.json");
+    const written = readFileSync(registerPath);
+
+    const refused = await runStore(["retire", "--manifest", manifestFile, "--harness", harness, "--json"]);
+    expect(refused.exitCode).toBe(1);
+    expect(jsonOf(refused.stdout).code).toBe("store.legacy-write-detected");
+    expect(jsonOf(refused.stdout).message).toContain("NOT deleted");
+    expect(readFileSync(registerPath).equals(written)).toBe(true);
+    expect(existsSync(join(harness, "projects", "_default", "residuals.json"))).toBe(true);
+  });
+});

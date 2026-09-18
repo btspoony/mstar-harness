@@ -23,15 +23,25 @@ import { isAbsolute, join, resolve } from "node:path";
 import pc from "picocolors";
 import {
   SddScriptError,
+  StoreActivationError,
   StoreError,
   StoreMigrationError,
+  activateStore,
+  activationReceiptFor,
+  appliedReceiptFor,
   applyStoreMigration,
+  backupStore,
   initializeStore,
   planStoreMigration,
   resolveProcessHarnessDir,
+  retireStoreSources,
   upgradeStore,
+  type ActivationAttestation,
+  type ActivationReceipt,
+  type BackupReceipt,
   type MigrationManifest,
   type MigrationReceipt,
+  type RetirementReceipt,
   type StoreContext,
 } from "@mstar-harness/engine";
 
@@ -110,6 +120,12 @@ function failStore(operation: string, error: unknown, json: boolean): void {
     if (json) console.log(JSON.stringify({ ok: false, code: "usage", message: error.message, details: { operation } }));
     else console.error(pc.red(`store ${operation}: ${error.message}`));
     process.exitCode = error.exitCode;
+    return;
+  }
+  if (error instanceof StoreActivationError) {
+    if (json) console.log(JSON.stringify({ ok: false, code: error.code, message: error.message, details: { operation } }));
+    else console.error(pc.red(`store ${operation}: ${error.message}`));
+    process.exitCode = 1;
     return;
   }
   if (error instanceof StoreMigrationError || error instanceof StoreError) {
@@ -214,6 +230,81 @@ async function runMigrate(options: StoreCliOptions, json: boolean): Promise<void
   }
 }
 
+function writeJsonOut(out: string | undefined, value: unknown): string | undefined {
+  if (out === undefined) return undefined;
+  const target = isAbsolute(out) ? out : resolve(process.cwd(), out);
+  writeFileSync(target, `${JSON.stringify(value, null, 2)}\n`);
+  return target;
+}
+
+/** The reviewed manifest JSON for the barrier verbs (the confirmation artifact, as with --apply). */
+function reviewedManifest(options: StoreCliOptions): MigrationManifest {
+  const path = typeof options.manifest === "string" ? options.manifest : undefined;
+  if (path === undefined) usage("this verb operates on the reviewed manifest: --manifest <path>");
+  const parsed = readJsonFile(path, "MigrationManifest") as MigrationManifest;
+  if (parsed === null || typeof parsed !== "object" || parsed.version === undefined) {
+    usage("--manifest does not carry a MigrationManifest (run the preview and review it first)");
+  }
+  return parsed;
+}
+
+async function runBackup(options: StoreCliOptions, json: boolean): Promise<void> {
+  const context = storeContextOf(options);
+  const out = typeof options.out === "string" ? options.out : undefined;
+  const receipt: BackupReceipt = await backupStore(context, out === undefined ? {} : { out });
+  const data = { ...receipt, out };
+  if (json) console.log(JSON.stringify({ ok: true, data }));
+  else {
+    console.log(
+      `store backup: ${receipt.backupPath} (store_id ${receipt.storeId}, epoch ${receipt.epoch}, revision ${receipt.revision}, ` +
+        `${receipt.counts.issues} issue(s), ${receipt.counts.catalogEntities} catalog entit(ies)` +
+        `${receipt.walPending ? ", committed WAL frames included" : ""})`,
+    );
+  }
+}
+
+async function runActivate(options: StoreCliOptions, json: boolean): Promise<void> {
+  const context = storeContextOf(options);
+  const manifest = reviewedManifest(options);
+  const attestationPath = typeof options.attestation === "string" ? options.attestation : undefined;
+  if (attestationPath === undefined) {
+    usage("the activation barrier requires the operator attestation: --attestation <path> (attestedAt, operator, consumers, stoppedSessions)");
+  }
+  const attestation = readJsonFile(attestationPath, "ActivationAttestation") as ActivationAttestation;
+  const applyReceipt: MigrationReceipt = await appliedReceiptFor(context, manifest);
+  const receipt: ActivationReceipt = await activateStore(context, applyReceipt, attestation);
+  const out = writeJsonOut(typeof options.out === "string" ? options.out : undefined, receipt);
+  const data = { ...receipt, out };
+  if (json) console.log(JSON.stringify({ ok: true, data }));
+  else {
+    console.log(
+      `store activate: ${receipt.replayed ? "ALREADY ACTIVE (no epoch bump)" : "activated"} receipt #${receipt.receiptId} ` +
+        `(authority epoch ${receipt.previousEpoch} -> ${receipt.epoch}, ${receipt.attestation.consumers.length} consumer(s), ` +
+        `${receipt.attestation.stoppedSessions.length} stopped session(s), backup ${receipt.backup.backupPath})`,
+    );
+    console.log("The store is now the sole issue/catalog authority; the legacy registers are superseded history.");
+  }
+}
+
+async function runRetire(options: StoreCliOptions, json: boolean): Promise<void> {
+  const context = storeContextOf(options);
+  const manifest = reviewedManifest(options);
+  const activation: ActivationReceipt = await activationReceiptFor(context, manifest);
+  const receipt: RetirementReceipt = await retireStoreSources(context, activation);
+  const out = writeJsonOut(typeof options.out === "string" ? options.out : undefined, receipt);
+  const data = { ...receipt, out };
+  if (json) console.log(JSON.stringify({ ok: true, data }));
+  else {
+    console.log(
+      `store retire: ${receipt.replayed ? "ALREADY RETIRED (no file changes)" : "retired"} receipt #${receipt.receiptId} ` +
+        `(${receipt.registers.length} register(s), ${receipt.sections.length} index section(s)` +
+        `${receipt.resumed ? ", resumed from the recorded ledger" : ""})`,
+    );
+    console.log(`  archive: ${receipt.archiveDir}`);
+    console.log(`  marker:  ${receipt.markerPath} (historical migration input, not a rollback path)`);
+  }
+}
+
 export function registerStoreCommands(program: Command): void {
   const store = program
     .command("store")
@@ -277,6 +368,70 @@ export function registerStoreCommands(program: Command): void {
         await runMigrate(options, json);
       } catch (error) {
         failStore("migrate", error, json);
+      }
+    });
+
+  store
+    .command("backup")
+    .description(
+      "Write a quiesced, SQLite-consistent VACUUM INTO recovery point and verify the copy by reopening it read-only. The " +
+        "receipt records the store identity (store_id, epoch, revision, catalog revision, authority state, schema version) " +
+        "and the row counts verified in the copy; committed WAL frames are included. Refuses to overwrite an existing target",
+    )
+    .option("--out <path>", "Backup target (default: <harness>/archived/store-migration/backups/<store>-e<epoch>-r<revision>.db)")
+    .option("--harness <path>", "Harness dir override")
+    .option("--json", "Machine-readable envelope on stdout")
+    .action(async (options: StoreCliOptions) => {
+      const json = options.json === true;
+      try {
+        await runBackup(options, json);
+      } catch (error) {
+        failStore("backup", error, json);
+      }
+    });
+
+  store
+    .command("activate")
+    .description(
+      "The activation barrier (contract §7, D19): make the migrated store the sole issue/catalog authority. Requires the " +
+        "reviewed --manifest applied receipt to be the FINAL one (unchanged register bytes and catalog digests, no " +
+        "post-apply store change), the current-coordinator + installed-consumer --attestation (entrypoints, versions, " +
+        "quiesced sessions, approving operator; never session credentials), and takes a verified VACUUM INTO backup. The " +
+        "state flip, the epoch increment and the receipt commit in one transaction. Ordinary mutations work only afterwards",
+    )
+    .option("--manifest <path>", "Absolute path of the reviewed MigrationManifest JSON that was applied (required)")
+    .option("--attestation <path>", "Absolute path of the operator attestation JSON (required)")
+    .option("--out <path>", "Write the activation receipt JSON to this path")
+    .option("--harness <path>", "Harness dir override")
+    .option("--json", "Machine-readable envelope on stdout")
+    .action(async (options: StoreCliOptions) => {
+      const json = options.json === true;
+      try {
+        await runActivate(options, json);
+      } catch (error) {
+        failStore("activate", error, json);
+      }
+    });
+
+  store
+    .command("retire")
+    .description(
+      "Retire the exact reviewed legacy registers and index sections of an activated store (contract §7). Moves the bytes " +
+        "into <harness>/archived/store-migration/<activation-receipt-id>/ under a resumable per-item ledger plus a marker " +
+        "naming the successor DB and receipt; mixed-content index files lose only their reviewed section lines. Revalidates " +
+        "the active identity, epoch, exact source hashes and catalog digests first; a late old-format write refuses " +
+        "store.legacy-write-detected and is never deleted. A crash resumes from the ledger to the recorded bytes/sections",
+    )
+    .option("--manifest <path>", "Absolute path of the reviewed MigrationManifest JSON that was activated (required)")
+    .option("--out <path>", "Write the retirement receipt JSON to this path")
+    .option("--harness <path>", "Harness dir override")
+    .option("--json", "Machine-readable envelope on stdout")
+    .action(async (options: StoreCliOptions) => {
+      const json = options.json === true;
+      try {
+        await runRetire(options, json);
+      } catch (error) {
+        failStore("retire", error, json);
       }
     });
 }
