@@ -18,7 +18,7 @@ description: Morning Star 项目治理层约定 —— `projects/<id>/roadmap.md
 | 文件 | 内容 |
 |------|------|
 | `roadmap.md` | 项目方向与目标（frontmatter machine-checkable + body 约定） |
-| `residuals.json` | 项目 register：open residual 的 **SSOT**（`entries[<plan-id>]` 数组） |
+| `residuals.json` | 项目 register（`entries[<plan-id>]` 数组）：**迁移历史** —— open item 的 SSOT 是 `{HARNESS_DIR}/store.db` 的 issue（→ § Issue capture）；保留为契约 §7 迁移映射的来源 |
 | `references/` | 主题化研究语料（surveys / epic 备注 / 第三方 notes）。与 `{SPECS_DIR}`（冻结规格/ADR）、`{KNOWLEDGE_DIR}`（compound 结晶实现 SSOT）、`{ITERATION_DIR}`（迭代 package）**不同**；engine 只列文件名（`listProjectReferenceFiles`），**不做** markdown schema 校验 |
 
 - **`_default` 回退**：无项目流程（未指定 project id 的 plan / 单 plan / hotfix）落到 **`projects/_default/`**（engine `_DEFAULT_PROJECT`）。项目归属由 plan 的 project id 决定；未归属即 `_default`。
@@ -61,7 +61,24 @@ residuals_ref: residuals.json  # optional
 
 > **Engine check (when available):** import `validateRoadmap` from `@mstar-harness/engine` in a host hook（无 CLI 命令）校验 `projects/<id>/roadmap.md`。On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
+## Issue capture（`{HARNESS_DIR}/store.db`）
+
+**本节是 capture duty 的唯一权威**：下方两段是 issue-store contract §6 的规范文本（逐字）；其余 skill（`mstar-artifacts` / `mstar-audit` / `mstar-review-qc` / `mstar-audit/references/pr-review.md` / `mstar-harness-core`）只做指针引用，**不复述**本契约。引文中的 §4 / §7 指该契约的「Lifecycle and closure authority」与「Migration, activation and retirement」两节。
+
+> A confirmed finding becomes an issue in `{HARNESS_DIR}/store.db` at the moment it is confirmed — before, and independently of, any decision to plan it. Capture records **evidence** (source identity, location, observed behaviour, discovery time) and never a disposition; **disposition is a separate authorized act** per §4. A recurrence of a confirmed finding **appends an occurrence** to the existing issue — deduplication is by source identity + root cause, never by title — and never opens a second issue. Issues are plan-independent: they exist before, during and after any plan; only the closure authorities in §4 retire one.
+
+**授权（谁捕获）**
+
+> The seat that owns the confirmed outcome captures it: the PM seat (dispatch/consolidation, QC tri, iteration close) and the main agent of a PR-review round at Stage 3 synthesis. Leaf audit/QC/QA seats **return evidence and never write the store** (survey §7 step 4). Capture goes through the `mstar issue` verbs; flags live in `--help` and are never restated in skill texts.
+
+- 计划内捕获走 `mstar plan issue-add`（活跃 plan session），计划外确认发现走 `mstar issue add`；同一 finding 再次出现用 `mstar issue occurrence` 追加 occurrence —— **不**新开第二个 issue。动词与标志以各命令组 `--help` 为准，本 skill 不复述标志。
+- **捕获 ≠ 处置**：关闭是独立授权动作，只由契约 §4 的关闭权威执行（`mstar issue close | waive | duplicate | supersede`，计划内 `mstar plan issue-close`）；捕获席位**不**自授关闭权。
+- **激活边界**：store 接受普通捕获/查询、并作为唯一权威，以契约 §7 的 activation 完成为准 —— staged store 会被拒（`store.not-active`）。live 切换（apply → activate → retire）归 cutover plan 的授权 ops 任务，skill 文本不代替该门禁。
+- issue 与 plan 解耦（plan 外的确认发现同样可捕获）；store 的路径与权威分界 → **`mstar-conventions`**。
+
 ## Register 生命周期（`projects/<id>/residuals.json`）
+
+> **本节的定位**：register 是**迁移历史**，open item 的 SSOT 是 **issue store**（→ 上文 § Issue capture）——`mstar status backlog-register` / `backlog-close` 已退役并指向 issue 动词。下面的字段与生命周期规则保留为契约 §7 的**迁移映射来源**（preview / apply / retire 按此把 register 行映射为 issue）。
 
 ### 文档形状、必填字段与枚举（单址 → `mstar-artifacts`）
 
@@ -97,20 +114,20 @@ Register 文档形状（`entries[<plan-id>]` 数组 JSON）、**9 个必填字�
 
 1. 确定项目归属：plan 的 project id（无 → `_default`）。
 2. 写/审 roadmap：frontmatter 过 `validateRoadmap`（schema violations 决定 `ok`；body 约定缺失只出 warnings）。
-3. 登记 residual：新 finding 只写 `{PROJECT_DIR}/<id>/residuals.json` → `entries[<plan-id>]`，登记前过 `validateResidual` / `validateProjectRegister`（fail-loud）。
-4. 关闭：验证后 in place 置 `lifecycle` / `closed_at` / `closure_note`。
-5. 汇总：`mstar status tech-debt [<project-dir>]` 打印跨 register 的 rollup（total_open / by_severity / by_target / by_plan）。
+3. 捕获 finding：走 § Issue capture 的 issue 动词（计划内 `mstar plan issue-add`，计划外 `mstar issue add`）；register 是迁移历史，**不再**是写入目标。
+4. 关闭：由契约 §4 的关闭权威执行（`mstar issue close | waive | duplicate | supersede`，计划内 `mstar plan issue-close`）。
+5. 汇总：`mstar status tech-debt` 打印 store 的 open-issue rollup（`total_open` / `by_severity` / `by_project`）。
 
 ## Decision Rules
 
-- **只写 v2 地址**：open residual 只登记 project register；v1 根级 `residual_findings` 仅 legacy 只读（`mstar migrate` 一次性迁移），**禁止双写**。
-- **fail-loud handoff**：登记前必须过 engine 校验；malformed → reject + rewrite，绝不静默降级写入。
+- **只写 v2 地址**：register 是迁移历史（v1 根级 `residual_findings` 仅 legacy 只读，`mstar migrate` 一次性迁移）；新捕获只写 issue store（→ § Issue capture），**禁止双写**。
+- **fail-loud handoff**：捕获前必须过 engine 校验；malformed → reject + rewrite，绝不静默降级写入。
 - **severity 是机器字段**：QC 报告的 Critical / Warning / Suggestion 是**章节标题**，不得逐字抄入 JSON `severity`。
-- **`_default` 不豁免校验**：无项目流程同样走 register（`projects/_default/residuals.json`），schema 与生命周期规则不变。
+- **`_default` 不豁免校验**：无项目流程同样走 issue store（`project_id = _default`），字段与关闭权威不变。
 
 ## Evidence
 
-正确结果 = 可复核产物：`projects/<id>/roadmap.md` 过 `validateRoadmap`（0 violations；warnings 可接受）、`projects/<id>/residuals.json` 过 `validateProjectRegister`、`mstar status findings-cleanup <plan-id>` 按 Assignment mode 绿、`mstar status tech-debt` 输出与 register 一致。拒绝「仅对话声称」。
+正确结果 = 可复核产物：`projects/<id>/roadmap.md` 过 `validateRoadmap`（0 violations；warnings 可接受）、register 迁移文档过 `validateProjectRegister`、`mstar status findings-cleanup <plan-id>` 按 Assignment mode 绿、`mstar status tech-debt` 输出与 store 的 open issues 一致。拒绝「仅对话声称」。
 
 ## References
 

@@ -35,24 +35,25 @@ description: "Morning Star QC orchestration — **SDD mandatory plan QC tri-revi
 - **Targeted re-review**：仅校验 Assignment 列出的席位；映射错误 → `dispatch invalid`，重派。
 - 并行 QC 退化为同模型且无法修复 → Status Update 标记 `degraded tri-review`；默认不放行。
 
-## Residual Findings 留档门禁（PM）
+## Findings 留档门禁（PM）
 
 - 先读 Assignment **`Findings cleanup`**（`plans[].metadata.findings_cleanup` mirror 已删——Assignment 是唯一 mode 来源）→ **`mstar-artifacts/references/status-and-residuals.md`**「Findings cleanup modes」。
-- **`Findings cleanup: zero-residual`**（显式 opt-in）：可修 **Warning / Suggestion / Critical** → **fix-now + targeted re-review**，**禁止**把可修项登记为 open R# 或用 `Approve with residuals` 收口；**`nit`** 当场修或丢弃（无 R#）。仅 **真 blocker-defer**（外部依赖 / 须下轮产品决策 / 用户本轮显式 defer + Durable Roadmap）可登记 open R#（`decision: defer`）。此时 `Approve with residuals` **仅**允许剩余项全是该类 defer，且**不含 `critical`**（不安全后果本次 merge 可达，见上文「Findings cleanup modes」）；`critical` 当场修复，或走显式 risk acceptance 并在 register 内关闭，**不得**作为批准遗留项。
-- **`Findings cleanup: allow-residual`**（iteration Phase 2 / standalone / hotfix / inline 默认）：阻断项修复后仍有 **Warning / Suggestion** 或技术债 → 必须留档，open R# 在离 InReview 前登记 register；**`Approve with residuals`** 仅当无 open **Critical**；PM 汇总结论与各报告面须披露 residual 清单 —— 每条含 id + severity + 跟踪位置（close 面另含 blocker-defer 标记；无 open 时 `N/A — none open`）。
+- **捕获契约（唯一权威）→ `mstar-project-governance`「Issue capture」**：QC 的 must-fix / 保留 findings 由**确认其结论的席位**落为 `{HARNESS_DIR}/store.db` 的 issue —— 计划内 `mstar plan issue-add`，计划外 `mstar issue add`；同一 finding 再次出现用 `mstar issue occurrence` 追加 occurrence，**不**新开第二个 issue。PM 席位在 consolidated 决策后捕获；leaf QC 席位**只回证据，不写 store**（本 skill 不复述捕获契约）。
+- **`Findings cleanup: zero-residual`**（显式 opt-in）：可修的 **Warning / Suggestion / Critical** → **fix-now + targeted re-review**，**禁止**把可修项留为 open issue 后用 `Approve with residuals` 收口；**`nit`** 当场修或丢弃（不捕获）。仅**真 blocker-defer**（外部依赖 / 须下轮产品决策 / 用户本轮显式 defer + Durable Roadmap）可留 open，且**不含 `critical`**（不安全后果本次 merge 可达，见「Findings cleanup modes」）；`critical` 当场修复，或走显式 risk acceptance 并按 §4 关闭，**不得**作为批准遗留项。
+- **`Findings cleanup: allow-residual`**（iteration Phase 2 / standalone / hotfix / inline 默认）：阻断项修复后仍有 **Warning / Suggestion** 或技术债 → 必须在离 InReview 前捕获为该 plan 的 **linked open issues**；**`Approve with residuals`** 仅当无 open **Critical**；PM 汇总结论与各报告面须披露 open 清单 —— 每条含 issue id + severity + 跟踪位置（close 面另含 blocker-defer 标记；无 open 时 `N/A — none open`）。
 - **`severity`** 仅允许 `mstar-artifacts/references/status-and-residuals.md` 枚举。
-- **Open SSOT**：`{PROJECT_DIR}/<id>/residuals.json`（默认 `{HARNESS_DIR}/projects/<id>/`；无项目流程 `_default`）→ `entries[<plan-id>]`；PM 在 consolidated 决策分配 **R1…** 并写入。关闭 → 在 register 内 **in place** 置 `lifecycle` / `closed_at` / `closure_note`（v1 `archived/residuals/` 与 `archive-residuals` 已移除）。
+- **关闭是独立授权动作**：只由 issue-store contract §4 的关闭权威执行（`resolved` / `waived` / `duplicate` / `superseded`；计划内 `mstar plan issue-close`）——捕获席位**不**自授关闭权，PM 不得把「已捕获」当作「已关闭」。
 - 主 plan 仅作人类索引；不得作为唯一 SSOT。
-- 未完成 residual 留档（`allow-residual`）或未清干净可修 findings（`zero-residual`）→ 不得进入 plan **Done**。
+- 未捕获确认 findings（`allow-residual`）或未清干净可修 findings（`zero-residual`）→ 不得进入 plan **Done**。
 
-### Residual 关闭与验证
+### Finding 关闭与验证
 
-- R# 修复后：审查/QA 结论指向可复核证据；**`project-manager`** 或 **`qa-engineer`**（`QA gate: mandatory`）补全关闭字段后归档并从 open 列表移除。
-- **`waived` / `superseded` / `duplicate`** 须在 `closure_note` 写清依据。
+- 修复后：审查/QA 结论指向可复核证据；**`project-manager`** 或 **`qa-engineer`**（`QA gate: mandatory`）按 §4 关闭权威带上关闭证据关闭该 issue。
+- **`waived` / `duplicate` / `superseded`** 须在关闭证据里写清依据（`waived` 另需 PM + user/architect alignment）。
 
 ## PM consolidated 门禁（摘要）
 
-Leaf reviewers apply verdict per **`mstar-roles/references/qc-specialist/report-template.md`**. PM **`{SDD_DIR}/review/qc-consolidated.md`** synthesizes tri (or single-seat `qc.md`) into one gate decision for implement fix waves and QA gate, then records the durable summary in the main plan / workflow snapshot artifacts. The consolidated decision also discloses the residual situation — open list + each severity + tracking location (`N/A — none open` when none) — per the **`Findings cleanup`** duties (`mstar-artifacts`「Findings cleanup modes」).
+Leaf reviewers apply verdict per **`mstar-roles/references/qc-specialist/report-template.md`**. PM **`{SDD_DIR}/review/qc-consolidated.md`** synthesizes tri (or single-seat `qc.md`) into one gate decision for implement fix waves and QA gate, then records the durable summary in the main plan / workflow snapshot artifacts. The consolidated decision also discloses the open-findings situation — the issue list + each severity + tracking location (`N/A — none open` when none) — per the **`Findings cleanup`** duties (`mstar-artifacts`「Findings cleanup modes」); capture itself follows **`mstar-project-governance`「Issue capture」**.
 
 ### 覆盖语义（未提及 = 未审查）
 
@@ -76,10 +77,11 @@ Leaf reviewers apply verdict per **`mstar-roles/references/qc-specialist/report-
 
 ## Workflow
 
-QC 编排主链：plan 全部 task + L2 完成后 → PM 按 `Execution mode` 定座次（sdd 强制 tri **N=3** / inline 单席 **N=1**）→ 同一条消息发满 N 个 QC Assignment（含 branch review-package + `{SDD_DIR}/review/qcN.md` report paths）→ 席位按 `references/qc-specialist/report-template.md` 落盘 verdict → PM 汇总 `{SDD_DIR}/review/qc-consolidated.md`（覆盖语义：**未提及 = 未审查**；汇总层零注入）→ `Request Changes` 走 targeted re-review（同 `qcN.md` `## Revalidation` 原位更新 verdict）→ residual 按 `Findings cleanup` 留档 / 关闭 → durable summary 回写主 plan。
+QC 编排主链：plan 全部 task + L2 完成后 → PM 按 `Execution mode` 定座次（sdd 强制 tri **N=3** / inline 单席 **N=1**）→ 同一条消息发满 N 个 QC Assignment（含 branch review-package + `{SDD_DIR}/review/qcN.md` report paths）→ 席位按 `references/qc-specialist/report-template.md` 落盘 verdict → PM 汇总 `{SDD_DIR}/review/qc-consolidated.md`（覆盖语义：**未提及 = 未审查**；汇总层零注入）→ `Request Changes` 走 targeted re-review（同 `qcN.md` `## Revalidation` 原位更新 verdict）→ findings 按 `Findings cleanup` 捕获为 issue / 按 §4 关闭 → durable summary 回写主 plan。
 
 ## References
 
 - Leaf QC 执行（checklist / 报告模板 / 透镜）→ **`mstar-roles/references/qc-specialist/`**
+- 捕获契约（唯一权威）→ **`mstar-project-governance`「Issue capture」**
 - Per-task review（L2，implement 波次内）→ **`mstar-sdd`**
 - Review bundle 命名与 QC 触发时机 → **`mstar-artifacts/references/plan-files-and-reports.md`**
