@@ -22,7 +22,7 @@
  *    cases pin the actionable Bun AND Node floors of the same code path.
  */
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initializeStore, openStore } from "@mstar-harness/engine";
@@ -262,6 +262,47 @@ describe("omp write gate — authority paths refuse, documents keep their valida
     expect(process.versions.node).not.toBe(detected.version);
   });
 
+  test("a symlink alias that resolves into the harness IS the authority it points at (S-G4b-03)", async () => {
+    const fixture = makeHarness("alias", "hard");
+    await seedActiveStore(fixture.harness);
+    writeFileSync(fixture.register, VALID_REGISTER);
+    const handler = loadHandler();
+    const aliases = join(fixture.root, "aliases");
+    mkdirSync(aliases, { recursive: true });
+
+    // The authority database and a retired register, under aliases OUTSIDE the
+    // harness tree: both resolve into it, so both are refused like the files
+    // themselves (document-valid register bytes prove the route, not a shape
+    // violation).
+    const storeAlias = join(aliases, "cache.db");
+    symlinkSync(fixture.storeDb, storeAlias);
+    const store = await runWrite(handler, storeAlias, "not a database");
+    expect(store?.block).toBe(true);
+    expect(store?.reason).toContain("store.direct-write-refused");
+
+    const registerAlias = join(aliases, "carry-over.json");
+    symlinkSync(fixture.register, registerAlias);
+    const register = await runWrite(handler, registerAlias, VALID_REGISTER);
+    expect(register?.block).toBe(true);
+    expect(register?.reason).toContain("project.register.retired");
+
+    // A DANGLING alias still names the authority file a write would create.
+    const fresh = makeHarness("alias-dangling", "soft");
+    const pending = join(fresh.root, "pending.db");
+    symlinkSync(fresh.storeDb, pending);
+    const created = await runWrite(loadHandler(), pending, "not a database");
+    expect(created?.block).toBe(true);
+    expect(created?.reason).toContain("store.direct-write-refused");
+
+    // Nothing non-authority changed: an unrelated alias passes silently, and
+    // the canonical documents keep their own validator + (absent) authority.
+    writeFileSync(join(fixture.root, "notes.md"), "# notes\n");
+    const notesAlias = join(aliases, "notes.md");
+    symlinkSync(join(fixture.root, "notes.md"), notesAlias);
+    expect(await runWrite(handler, notesAlias, BAD_JSON)).toBeUndefined();
+    expect((await runWrite(handler, fixture.status, BAD_JSON))?.reason).toContain("status.invalid-json");
+  });
+
   test("non-store targets never enter the store route (no eager SQLite acquisition)", async () => {
     const fixture = makeHarness("lazy", "hard");
     const handler = loadHandler();
@@ -322,6 +363,32 @@ describe("omp mstar_status_validate — DB-aware register route (G4b)", () => {
     // acquired into an answering read of retired data.
     expect(reads()).toBeGreaterThan(0);
     expect(existsSync(fixture.storeDb)).toBe(false);
+  });
+
+  test("a symlink alias that resolves into the harness answers as the authority (S-G4b-03)", async () => {
+    const fixture = makeHarness("tool-alias", "soft");
+    await seedActiveStore(fixture.harness);
+    writeFileSync(fixture.register, VALID_REGISTER);
+    const aliases = join(fixture.root, "aliases");
+    mkdirSync(aliases, { recursive: true });
+    const storeAlias = join(aliases, "cache.db");
+    symlinkSync(fixture.storeDb, storeAlias);
+    const registerAlias = join(aliases, "carry-over.json");
+    symlinkSync(fixture.register, registerAlias);
+
+    const store = await runTool(fixture.root, { path: storeAlias });
+    expect(store.isError).toBe(true);
+    expect(textOf(store)).toContain("store.direct-write-refused");
+
+    const register = await runTool(fixture.root, { path: registerAlias });
+    expect(register.isError).toBe(true);
+    expect(textOf(register)).toContain("project.register.retired");
+    expect(textOf(register)).not.toContain("project.register.invalid");
+
+    // Non-authority verdicts are unchanged (canonical status.json included).
+    const status = await runTool(fixture.root, { path: fixture.status });
+    expect(status.isError).not.toBe(true);
+    expect(textOf(status)).toContain("status.json valid");
   });
 
   test("store.db target is refused; status + snapshot validation is unchanged", async () => {

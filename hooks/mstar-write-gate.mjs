@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
 // hooks/src/mstar-write-gate.ts
-import { readFileSync as readFileSync3, statSync as statSync2, writeSync } from "node:fs";
+import { readFileSync as readFileSync3, readlinkSync, realpathSync, statSync as statSync2, writeSync } from "node:fs";
 import { basename, dirname, isAbsolute as isAbsolute4, join, relative as relative3, resolve } from "node:path";
 
 // packages/engine/dist/engine.js
@@ -3828,11 +3828,27 @@ function isHarnessRootDir(dir) {
   const parentResolved = resolveHarnessDir(dirname(dir));
   return parentResolved !== null && resolve(parentResolved) === dir;
 }
-function isStoreAuthorityTarget(rawPath) {
-  const resolved = resolve(rawPath);
-  if (!STORE_AUTHORITY_FILES.includes(basename(resolved)))
+function landedPathOf(resolved) {
+  try {
+    return realpathSync(resolved);
+  } catch {
+    try {
+      return resolve(dirname(resolved), readlinkSync(resolved));
+    } catch {
+      return resolved;
+    }
+  }
+}
+function isStoreAuthorityTarget(target) {
+  if (!STORE_AUTHORITY_FILES.includes(basename(target)))
     return false;
-  return isHarnessRootDir(dirname(resolved));
+  return isHarnessRootDir(dirname(target));
+}
+function aliasedRegisterDir(resolved, landed) {
+  if (landed === resolved)
+    return null;
+  const aliased = harnessDocKindOfTarget(landed);
+  return aliased?.kind === "register" ? aliased.harnessDir : null;
 }
 function authorityViolation(code, message) {
   return { ok: false, severity: "high", code, message };
@@ -3930,36 +3946,40 @@ try {
   const tool = toolInput;
   const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
   for (const rawPath of writeTargetPaths(tool)) {
-    const targetPath = isAbsolute4(rawPath) ? rawPath : join(cwd, rawPath);
-    if (isStoreAuthorityTarget(targetPath)) {
-      blockAuthorityWrite(toolName, displayTarget(targetPath, dirname(targetPath)), [
-        storeDirectWriteRefusal(targetPath)
+    const targetPath = resolve(isAbsolute4(rawPath) ? rawPath : join(cwd, rawPath));
+    const landed = landedPathOf(targetPath);
+    const storeTarget = isStoreAuthorityTarget(targetPath) ? targetPath : isStoreAuthorityTarget(landed) ? landed : null;
+    if (storeTarget !== null) {
+      blockAuthorityWrite(toolName, displayTarget(targetPath, dirname(storeTarget)), [
+        storeDirectWriteRefusal(storeTarget)
       ]);
     }
     const target = harnessDocKindOfTarget(targetPath);
-    if (target === null)
+    const registerDir = target?.kind === "register" ? target.harnessDir : aliasedRegisterDir(targetPath, landed);
+    if (target === null && registerDir === null)
       continue;
-    if (target.kind === "register") {
-      const route = await readAuthorityRoute(target.harnessDir);
+    if (registerDir !== null) {
+      const route = await readAuthorityRoute(registerDir);
       if (route.kind === "retired") {
-        blockAuthorityWrite(toolName, displayTarget(targetPath, target.harnessDir), [
+        blockAuthorityWrite(toolName, displayTarget(targetPath, registerDir), [
           registerRetiredRefusal(route.storeRevision)
         ]);
       }
       if (route.kind === "unavailable") {
-        blockAuthorityWrite(toolName, displayTarget(targetPath, target.harnessDir), [
+        blockAuthorityWrite(toolName, displayTarget(targetPath, registerDir), [
           authorityUnavailableRefusal(route)
         ]);
       }
     }
+    const gated = target ?? { harnessDir: registerDir, kind: "register" };
     const content = typeof tool.content === "string" ? tool.content : reconstructEditContent(tool, targetPath) ?? tool.content;
-    const violations = validateStatusWriteDoc(content, targetPath, target.kind, { oversized: "violate" });
+    const violations = validateStatusWriteDoc(content, targetPath, gated.kind, { oversized: "violate" });
     if (violations.length === 0)
       continue;
-    const enforcement = resolveRepoEnforcement(target.harnessDir);
+    const enforcement = resolveRepoEnforcement(gated.harnessDir);
     if (!enforcement.hard)
       continue;
-    const display = displayTarget(targetPath, target.harnessDir);
+    const display = displayTarget(targetPath, gated.harnessDir);
     writeSync(2, `[Morning Star write gate] blocked ${toolName} to ${display}
 `);
     writeSync(2, `${formatStatusWriteBlockReason(violations, SKILL_POINTER)}

@@ -19,7 +19,7 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initializeStore, openStore } from "@mstar-harness/engine";
@@ -172,6 +172,38 @@ describe("ZCode write gate — authority paths (source entry)", () => {
     expect(silent.stderr).toBe("");
   });
 
+  test("a symlink alias that resolves into the harness is refused like the authority (S-G4b-03)", async () => {
+    const fixture = makeHarness("alias", "soft");
+    await seedActiveStore(fixture.harness);
+    writeFileSync(fixture.register, VALID_REGISTER);
+    const aliases = join(fixture.root, "aliases");
+    mkdirSync(aliases, { recursive: true });
+    const storeAlias = join(aliases, "cache.db");
+    symlinkSync(fixture.storeDb, storeAlias);
+    const registerAlias = join(aliases, "carry-over.json");
+    symlinkSync(fixture.register, registerAlias);
+
+    const store = runGate(process.execPath, HOOK_SRC, writeEvent(storeAlias, "not a database"));
+    expect(store.exitCode).toBe(2);
+    expect(store.stdout).toBe("");
+    expect(store.stderr).toContain("store.direct-write-refused");
+    expect(lines(store)[2]).toBe(AUTHORITY_LINE);
+
+    // Document-valid register bytes prove the DB-aware route, not a shape hit.
+    const register = runGate(process.execPath, HOOK_SRC, writeEvent(registerAlias, VALID_REGISTER));
+    expect(register.exitCode).toBe(2);
+    expect(register.stderr).toContain("project.register.retired");
+
+    // An unrelated alias keeps the silent pass (non-authority unchanged).
+    writeFileSync(join(fixture.root, "notes.md"), "# notes\n");
+    const notesAlias = join(aliases, "notes.md");
+    symlinkSync(join(fixture.root, "notes.md"), notesAlias);
+    const unrelated = runGate(process.execPath, HOOK_SRC, writeEvent(notesAlias, BAD_JSON));
+    expect(unrelated.exitCode).toBe(0);
+    expect(unrelated.stdout).toBe("");
+    expect(unrelated.stderr).toBe("");
+  });
+
   test("unrelated targets and MSTAR_WRITE_GATE=off still pass silently", async () => {
     const fixture = makeHarness("unrelated", "hard");
     await seedActiveStore(fixture.harness);
@@ -209,6 +241,16 @@ describe("ZCode write gate — committed bundle under native node", () => {
     expect(unrelated.exitCode).toBe(0);
     expect(unrelated.stdout).toBe("");
     expect(unrelated.stderr).toBe("");
+
+    // The committed artifact carries the same canonicalization (S-G4b-03).
+    const aliases = join(fixture.root, "aliases");
+    mkdirSync(aliases, { recursive: true });
+    const storeAlias = join(aliases, "cache.db");
+    symlinkSync(fixture.storeDb, storeAlias);
+    const aliased = runGate("node", HOOK_BUNDLE, writeEvent(storeAlias, "not a database"));
+    expect(aliased.exitCode).toBe(2);
+    expect(aliased.stdout).toBe("");
+    expect(aliased.stderr).toContain("store.direct-write-refused");
   });
 
   test("bundle preserves the document validator for a pre-activation register", () => {

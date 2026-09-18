@@ -634,14 +634,45 @@ function isHarnessRootDir(dir: string): boolean {
   return parentResolved !== null && path.resolve(parentResolved) === dir;
 }
 
-/** True when the target IS the authority database (or a WAL sidecar) sitting
- * directly at a harness root: the runtime's own store location for a harness
- * root is `<harness root>/store.db`, and hand-writing those bytes is never a
- * supported operation — hard vs soft, staged vs active, all the same. */
-function isStoreAuthorityTarget(rawPath: string): boolean {
-  const resolved = path.resolve(rawPath);
-  if (!STORE_AUTHORITY_FILES.includes(path.basename(resolved))) return false;
-  return isHarnessRootDir(path.dirname(resolved));
+/** The path a write to `resolved` really lands on (S-G4b-03): authority
+ * classification runs on the caller's own path first and on this one when the
+ * target is an alias — a symlink outside the harness tree resolving to a
+ * harness-root `store.db` / retired `residuals.json` IS that authority file.
+ * A dangling symlink resolves to its would-be target: the file a write
+ * through the link creates. One canonicalization per checked target (the
+ * document lint keeps the caller's path), mirrored in the omp entries and the
+ * ZCode write gate. */
+function landedPathOf(resolved: string): string {
+  try {
+    return fs.realpathSync(resolved);
+  } catch {
+    try {
+      return path.resolve(path.dirname(resolved), fs.readlinkSync(resolved));
+    } catch {
+      return resolved; // no such target yet (a fresh file) — the path itself decides
+    }
+  }
+}
+
+/** True when `target` (absolute) IS the authority database (or a WAL sidecar)
+ * sitting directly at a harness root: the runtime's own store location for a
+ * harness root is `<harness root>/store.db`, and hand-writing those bytes is
+ * never a supported operation — hard vs soft, staged vs active, alias or not,
+ * all the same. */
+function isStoreAuthorityTarget(target: string): boolean {
+  if (!STORE_AUTHORITY_FILES.includes(path.basename(target))) return false;
+  return isHarnessRootDir(path.dirname(target));
+}
+
+/** The harness root of a project register this write reaches ONLY through a
+ * symlink alias (`landed` differs from the caller's own `resolved` path): the
+ * register is an authority document, so its route is decided on the path the
+ * write really lands on. `null` when the target is not an alias, or does not
+ * land on a register (S-G4b-03). */
+function aliasedRegisterDir(resolved: string, landed: string): string | null {
+  if (landed === resolved) return null;
+  const aliased = harnessDocKindOfTarget(path.resolve(landed));
+  return aliased?.kind === "register" ? aliased.harnessDir : null;
 }
 
 /** One authority refusal as a refusal-capable GateResult: `hardBlocked` is
@@ -708,7 +739,11 @@ function authorityUnavailableRefusal(route: { code: string; message: string }, l
  * store is the active findings authority, refused as
  * `store.authority-unavailable` when that authority cannot be read at all,
  * and shape-validated only while no store / a staged store leaves the
- * register the live authority (issue contract §7). The runtime floor is read
+ * register the live authority (issue contract §7). Both refusal classes are
+ * decided on the path a target really LANDS on (S-G4b-03): a symlink alias
+ * that resolves to a harness-root `store.db` or to a project register is
+ * refused and routed exactly like the file itself, while everything else
+ * keeps the caller's path and behaviour. The runtime floor is read
  * from the ACTUAL runtime (engine `detectStoreRuntime` — the Bun global
  * first, never Bun's emulated `process.versions.node`) and asserted
  * in-process before the store is touched.
@@ -749,6 +784,11 @@ export async function validateStatusWrite(
     if (typeof targetPath !== "string" || targetPath.trim() === "") return null;
 
     const resolved = path.resolve(targetPath);
+ // S-G4b-03: the AUTHORITY decision runs on the path the target really lands
+ // on — a symlink alias of the store database or of a project register IS
+ // that authority file. Nothing else is canonicalized.
+    const landed = landedPathOf(resolved);
+    const storeTarget = isStoreAuthorityTarget(resolved) ? resolved : isStoreAuthorityTarget(landed) ? landed : null;
  // Phase-5 F1: ensure the custom-layout dir resolvers are loaded before
  // classifying — the sync slot feeds `harnessDocKindOfTarget` AND the
  // authority-target marker probe (stale engine -> null -> default-layout
@@ -757,13 +797,15 @@ export async function validateStatusWrite(
  // G4b authority paths first: the store database is never writable by hand,
  // and a register target is decided by the DB-aware authority route rather
  // than by its document shape (both refuse unconditionally).
-    if (isStoreAuthorityTarget(resolved)) return storeDirectWriteRefusal(resolved, log);
-    const target = harnessDocKindOfTarget(resolved);
+    if (storeTarget !== null) return storeDirectWriteRefusal(storeTarget, log);
+    const classified = harnessDocKindOfTarget(resolved);
+    const registerDir = classified?.kind === "register" ? classified.harnessDir : aliasedRegisterDir(resolved, landed);
+    const target = classified ?? (registerDir === null ? null : { harnessDir: registerDir, kind: "register" as const });
     if (!target) return null;
 
     let result: GateResult | null;
-    if (target.kind === "register") {
-      const route = await readAuthorityRoute(target.harnessDir);
+    if (registerDir !== null) {
+      const route = await readAuthorityRoute(registerDir);
       if (route.kind === "retired") return registerRetiredRefusal(route.storeRevision, log);
       if (route.kind === "unavailable") return authorityUnavailableRefusal(route, log);
  // `legacy` (no store / staged store): pre-activation, the register is

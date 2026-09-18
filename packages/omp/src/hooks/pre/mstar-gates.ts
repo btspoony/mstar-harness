@@ -38,6 +38,13 @@
  * `process.versions.node`) and asserted in-process through the engine
  * before the store is touched.
  *
+ * Authority classification is decided on the path a write really LANDS on
+ * (S-G4b-03): the caller's path first, then its canonical
+ * (symlink-resolved) form — an alias outside the harness tree resolving to a
+ * harness-root `store.db` or a retired `residuals.json` is refused like the
+ * file itself. Only those two authority decisions are canonicalized; the
+ * document lint and every non-authority target keep the caller's path.
+ *
  * Gate-1 core lives in the engine (`@mstar-harness/engine` `gates` module
  * — target classification, content/edit validation, reason formatting;
  * cross-host hooks contract D1): omp imports the shared
@@ -78,7 +85,7 @@
  * `validateStatusWrite` / `validateDispatchAssignment` uses, with omp's
  * `{ block, reason }` refusal channel instead of the log channel.
  */
-import { statSync } from "node:fs";
+import { readlinkSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import {
   assertStoreRuntimeSupported,
@@ -263,14 +270,45 @@ function isHarnessRootDir(dir: string): boolean {
   return parentResolved !== null && resolve(parentResolved) === dir;
 }
 
-/** True when the target IS the authority database (or a WAL sidecar) sitting
- * directly at a harness root: the runtime's own store location for a harness
- * root is `<harness root>/store.db`, and hand-writing those bytes is never a
- * supported operation — hard vs soft, staged vs active, all the same. */
-function isStoreAuthorityTarget(rawPath: string): boolean {
-  const resolved = resolve(rawPath);
-  if (!STORE_AUTHORITY_FILES.includes(basename(resolved))) return false;
-  return isHarnessRootDir(dirname(resolved));
+/** The path a write to `resolved` really lands on (S-G4b-03): authority
+ * classification runs on the caller's own path first and on this one when the
+ * target is an alias — a symlink outside the harness tree resolving to a
+ * harness-root `store.db` / retired `residuals.json` IS that authority file.
+ * A dangling symlink resolves to its would-be target: the file a write
+ * through the link creates. One canonicalization per write target (the
+ * document lint below keeps the caller's path), mirrored in the OpenCode and
+ * ZCode entries. */
+function landedPathOf(resolved: string): string {
+  try {
+    return realpathSync(resolved);
+  } catch {
+    try {
+      return resolve(dirname(resolved), readlinkSync(resolved));
+    } catch {
+      return resolved; // no such target yet (a fresh file) — the path itself decides
+    }
+  }
+}
+
+/** True when `target` (absolute) IS the authority database (or a WAL sidecar)
+ * sitting directly at a harness root: the runtime's own store location for a
+ * harness root is `<harness root>/store.db`, and hand-writing those bytes is
+ * never a supported operation — hard vs soft, staged vs active, alias or not,
+ * all the same. */
+function isStoreAuthorityTarget(target: string): boolean {
+  if (!STORE_AUTHORITY_FILES.includes(basename(target))) return false;
+  return isHarnessRootDir(dirname(target));
+}
+
+/** The harness root of a project register this write reaches ONLY through a
+ * symlink alias (`landed` differs from the caller's own `resolved` path): the
+ * register is an authority document, so its route is decided on the path the
+ * write really lands on. `null` when the target is not an alias, or does not
+ * land on a register (S-G4b-03). */
+function aliasedRegisterDir(resolved: string, landed: string): string | null {
+  if (landed === resolved) return null;
+  const aliased = harnessDocKindOfTarget(landed);
+  return aliased?.kind === "register" ? aliased.harnessDir : null;
 }
 
 /** One refusal as the hook's block-reason line (same `[severity] code:
@@ -330,17 +368,26 @@ function authorityUnavailableRefusal(route: { code: string; message: string }): 
 async function gateStatusWrite(eventInput: unknown): Promise<{ block: true; reason: string } | undefined> {
   const input = eventInput as Record<string, unknown>;
   for (const rawPath of eventTargetPaths(input)) {
-    if (isStoreAuthorityTarget(rawPath)) return storeDirectWriteRefusal(rawPath); // authority bytes — never writable
-    const target = harnessDocKindOfTarget(rawPath);
-    if (target === null) continue; // not a gated coordination write — silent pass
-    if (target.kind === "register") {
-      const route = await readAuthorityRoute(target.harnessDir);
+    const resolved = resolve(rawPath);
+    // S-G4b-03: the AUTHORITY decision is made on the path the write really
+    // lands on, so a symlink alias is refused like the authority file itself.
+    const landed = landedPathOf(resolved);
+    const storeTarget = isStoreAuthorityTarget(resolved) ? resolved : isStoreAuthorityTarget(landed) ? landed : null;
+    if (storeTarget !== null) return storeDirectWriteRefusal(storeTarget); // authority bytes — never writable
+    const direct = harnessDocKindOfTarget(resolved);
+    // A project register is an authority document too — reached through an
+    // alias it takes the same route (status/snapshot aliases are untouched).
+    const registerDir = direct?.kind === "register" ? direct.harnessDir : aliasedRegisterDir(resolved, landed);
+    if (registerDir !== null) {
+      const route = await readAuthorityRoute(registerDir);
       if (route.kind === "retired") return registerRetiredRefusal(route.storeRevision);
       if (route.kind === "unavailable") return authorityUnavailableRefusal(route);
       // `legacy`: pre-activation — the register is still the authority, so the
       // write keeps its document validator (no store probe touched it).
     }
-    const violations = validateStatusWriteDoc(input.content, resolve(rawPath), target.kind);
+    const target = direct ?? (registerDir === null ? null : { harnessDir: registerDir, kind: "register" as const });
+    if (target === null) continue; // not a gated coordination write — silent pass
+    const violations = validateStatusWriteDoc(input.content, resolved, target.kind);
     if (violations.length === 0) continue;
     const enforcement = resolveRepoEnforcement(target.harnessDir);
     if (!enforcement.hard) continue; // soft mode — silent pass

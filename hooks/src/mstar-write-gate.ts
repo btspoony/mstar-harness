@@ -24,6 +24,13 @@
 // never both. Nothing is acquired for a write that is not store-backed: the
 // store is only touched from the register route.
 //
+// Both authority decisions are made on the path a write really LANDS on
+// (S-G4b-03): the caller's path first, then its canonical (symlink-resolved)
+// form, so an alias outside the harness tree that resolves to a harness-root
+// `store.db` or a retired `residuals.json` is refused like the file itself.
+// Only those two decisions are canonicalized — the document classification
+// stays textual and every non-authority target behaves exactly as before.
+//
 // Block dialect (contract D4): exit code 2 with the reason on STDERR — ZCode
 // parses hook stdout under a strict schema where any extra key silently
 // discards the deny (invisible fail-open); the exit-code channel has no
@@ -43,7 +50,7 @@
 // \uXXXX string escapes to raw UTF-8 in the bundle, and the hook executes
 // under node, which decodes them correctly (bundle smoke renders the case).
 
-import { readFileSync, statSync, writeSync } from "node:fs";
+import { readFileSync, readlinkSync, realpathSync, statSync, writeSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
   MAX_STATUS_CONTENT_LENGTH,
@@ -177,14 +184,45 @@ function isHarnessRootDir(dir: string): boolean {
   return parentResolved !== null && resolve(parentResolved) === dir;
 }
 
-/** True when the target IS the authority database (or a WAL sidecar) sitting
- * directly at a harness root: the runtime's own store location for a harness
- * root is `<harness root>/store.db`, and hand-writing those bytes is never a
- * supported operation — hard vs soft, staged vs active, all the same. */
-function isStoreAuthorityTarget(rawPath: string): boolean {
-  const resolved = resolve(rawPath);
-  if (!STORE_AUTHORITY_FILES.includes(basename(resolved))) return false;
-  return isHarnessRootDir(dirname(resolved));
+/** The path a write to `resolved` really lands on (S-G4b-03): authority
+ * classification runs on the caller's own path first and on this one when the
+ * target is an alias — a symlink outside the harness tree resolving to a
+ * harness-root `store.db` / retired `residuals.json` IS that authority file.
+ * A dangling symlink resolves to its would-be target: the file a write
+ * through the link creates. One canonicalization per write target (the
+ * document lint keeps the caller's path), mirrored in the omp entries and the
+ * OpenCode plugin. */
+function landedPathOf(resolved: string): string {
+  try {
+    return realpathSync(resolved);
+  } catch {
+    try {
+      return resolve(dirname(resolved), readlinkSync(resolved));
+    } catch {
+      return resolved; // no such target yet (a fresh file) — the path itself decides
+    }
+  }
+}
+
+/** True when `target` (absolute) IS the authority database (or a WAL sidecar)
+ * sitting directly at a harness root: the runtime's own store location for a
+ * harness root is `<harness root>/store.db`, and hand-writing those bytes is
+ * never a supported operation — hard vs soft, staged vs active, alias or not,
+ * all the same. */
+function isStoreAuthorityTarget(target: string): boolean {
+  if (!STORE_AUTHORITY_FILES.includes(basename(target))) return false;
+  return isHarnessRootDir(dirname(target));
+}
+
+/** The harness root of a project register this write reaches ONLY through a
+ * symlink alias (`landed` differs from the caller's own `resolved` path): the
+ * register is an authority document, so its route is decided on the path the
+ * write really lands on. `null` when the target is not an alias, or does not
+ * land on a register (S-G4b-03). */
+function aliasedRegisterDir(resolved: string, landed: string): string | null {
+  if (landed === resolved) return null;
+  const aliased = harnessDocKindOfTarget(landed);
+  return aliased?.kind === "register" ? aliased.harnessDir : null;
 }
 
 /** One authority refusal as the contract's violation line (same
@@ -337,47 +375,58 @@ try {
   // not necessarily the workspace).
   const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
 
-  // Known limitations (beyond the failure-matrix rows): classification is
-  // textual — a symlink alias whose textual path sits outside the harness
-  // tree bypasses the gate (no target realpath; omp parity). Edits validate
-  // the reconstructed post-edit content when the payload is deterministic
-  // (unique old_string match, or replace_all), otherwise the PRE-edit
-  // on-disk state — a non-deterministic corrupting edit surfaces on the
-  // next write, and repairing an already-invalid gated doc requires a
-  // deterministic edit or a full-content Write. Oversized gated docs (past
-  // the 2 MiB budget) violate on this host — repair out of band or for
-  // this session with MSTAR_WRITE_GATE=off.
+  // Known limitations (beyond the failure-matrix rows): the AUTHORITY
+  // classification is canonicalized (S-G4b-03 — a symlink alias resolving to
+  // a harness-root `store.db` or a project register is refused like the file
+  // itself), while the DOCUMENT classification stays textual: a status.json /
+  // snapshot reached through an alias keeps its previous (non-canonical,
+  // ungated) treatment. Edits validate the reconstructed post-edit content
+  // when the payload is deterministic (unique old_string match, or
+  // replace_all), otherwise the PRE-edit on-disk state — a non-deterministic
+  // corrupting edit surfaces on the next write, and repairing an
+  // already-invalid gated doc requires a deterministic edit or a full-content
+  // Write. Oversized gated docs (past the 2 MiB budget) violate on this host
+  // — repair out of band or for this session with MSTAR_WRITE_GATE=off.
   for (const rawPath of writeTargetPaths(tool)) {
-    const targetPath = isAbsolute(rawPath) ? rawPath : join(cwd, rawPath);
+    // Absolute from here on: the authority predicate below resolves nothing
+    // itself (it tests the path it is given), so a relative `cwd` in the
+    // envelope cannot leave a textual check judging a relative path.
+    const targetPath = resolve(isAbsolute(rawPath) ? rawPath : join(cwd, rawPath));
 
     // G4b — authority paths first: the store database is never hand-writable,
     // and a register target is decided by the DB-aware authority route rather
     // than by its document shape. Both refuse unconditionally (the enforcement
     // flag governs document validity, not the authority invariant).
-    if (isStoreAuthorityTarget(targetPath)) {
-      blockAuthorityWrite(toolName, displayTarget(targetPath, dirname(targetPath)), [
-        storeDirectWriteRefusal(targetPath),
+    // S-G4b-03: both decisions are made on the path the write really lands on,
+    // so a symlink alias is refused like the authority file itself.
+    const landed = landedPathOf(targetPath);
+    const storeTarget = isStoreAuthorityTarget(targetPath) ? targetPath : isStoreAuthorityTarget(landed) ? landed : null;
+    if (storeTarget !== null) {
+      blockAuthorityWrite(toolName, displayTarget(targetPath, dirname(storeTarget)), [
+        storeDirectWriteRefusal(storeTarget),
       ]);
     }
 
     const target = harnessDocKindOfTarget(targetPath);
-    if (target === null) continue; // not a gated coordination write — silent pass
+    const registerDir = target?.kind === "register" ? target.harnessDir : aliasedRegisterDir(targetPath, landed);
+    if (target === null && registerDir === null) continue; // not a gated coordination write — silent pass
 
-    if (target.kind === "register") {
-      const route = await readAuthorityRoute(target.harnessDir);
+    if (registerDir !== null) {
+      const route = await readAuthorityRoute(registerDir);
       if (route.kind === "retired") {
-        blockAuthorityWrite(toolName, displayTarget(targetPath, target.harnessDir), [
+        blockAuthorityWrite(toolName, displayTarget(targetPath, registerDir), [
           registerRetiredRefusal(route.storeRevision),
         ]);
       }
       if (route.kind === "unavailable") {
-        blockAuthorityWrite(toolName, displayTarget(targetPath, target.harnessDir), [
+        blockAuthorityWrite(toolName, displayTarget(targetPath, registerDir), [
           authorityUnavailableRefusal(route),
         ]);
       }
       // `legacy`: pre-activation (no store / staged store) — the register is
       // still the live authority, so its document validator decides below.
     }
+    const gated = target ?? { harnessDir: registerDir!, kind: "register" as const };
 
     // `content` as a string is the new document; anything else (including
     // new_string/old_string edits and ApplyPatch shapes) validates the
@@ -389,13 +438,13 @@ try {
     // Oversized writes are a violation on this host (exit-2 under hard,
     // silent under soft) instead of a permission — omp keeps the default
     // silent pass.
-    const violations = validateStatusWriteDoc(content, targetPath, target.kind, { oversized: "violate" });
+    const violations = validateStatusWriteDoc(content, targetPath, gated.kind, { oversized: "violate" });
     if (violations.length === 0) continue;
 
-    const enforcement = resolveRepoEnforcement(target.harnessDir);
+    const enforcement = resolveRepoEnforcement(gated.harnessDir);
     if (!enforcement.hard) continue; // soft mode — silent pass (omp Gate-1 parity)
 
-    const display = displayTarget(targetPath, target.harnessDir);
+    const display = displayTarget(targetPath, gated.harnessDir);
     // writeSync on fd 2: the block reason MUST survive process.exit —
     // process.stderr.write buffers asynchronously on some platforms.
     writeSync(2, `[Morning Star write gate] blocked ${toolName} to ${display}\n`);

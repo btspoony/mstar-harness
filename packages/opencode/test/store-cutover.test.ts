@@ -21,7 +21,7 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initializeStore, openStore } from "@mstar-harness/engine";
@@ -240,6 +240,40 @@ describe("opencode authority boundary — store/retired-register direct writes (
     // Only the register target consults the authority.
     await validateStatusWrite(fixture.registerPath, { doc: validRegister, log });
     expect(reads()).toBeGreaterThan(0);
+  });
+
+  test("a symlink alias that resolves into the harness is the authority itself (S-G4b-03)", async () => {
+    const fixture = makeHarnessProject(); // no compass — soft by default
+    await seedActiveStore(fixture.harness);
+    writeFileSync(fixture.registerPath, JSON.stringify(validRegister));
+    const aliases = join(fixture.project, "aliases");
+    mkdirSync(aliases, { recursive: true });
+    const storeAlias = join(aliases, "cache.db");
+    symlinkSync(fixture.storeDb, storeAlias);
+    const registerAlias = join(aliases, "carry-over.json");
+    symlinkSync(fixture.registerPath, registerAlias);
+
+    // Both aliases land on authority files: refused unconditionally, as the
+    // files themselves are (document-valid register bytes prove the route).
+    const store = await validateStatusWrite(storeAlias, { doc: "not a database" });
+    expect(store?.hardBlocked).toBe(true);
+    expect(store?.violations[0]!.code).toBe("store.direct-write-refused");
+
+    const register = await validateStatusWrite(registerAlias, { doc: validRegister });
+    expect(register?.hardBlocked).toBe(true);
+    expect(register?.violations[0]!.code).toBe("project.register.retired");
+
+    // Non-authority behaviour is unchanged: an unrelated alias stays ungated,
+    // and the canonical status.json keeps its document validator.
+    writeFileSync(join(fixture.project, "notes.md"), "# notes\n");
+    const notesAlias = join(aliases, "notes.md");
+    symlinkSync(join(fixture.project, "notes.md"), notesAlias);
+    expect(await validateStatusWrite(notesAlias, { doc: "x" })).toBeNull();
+    const invalidStatus = await validateStatusWrite(fixture.statusPath, {
+      doc: { version: 2, updated_at: "2026-09-08", workflows: [{ id: "wf-1", type: "sprint" }] },
+    });
+    expect(invalidStatus?.ok).toBe(false);
+    expect(invalidStatus?.violations[0]!.code).toBe("status.workflow.invalid-type");
   });
 
   test("plugin wiring: a store.db write through tool.execute.before is refused, never silent", async () => {

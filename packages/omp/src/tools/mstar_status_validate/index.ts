@@ -31,13 +31,19 @@
  * `{HARNESS_DIR}/store.db` (or its `-wal`/`-shm`) is refused outright — the
  * runtime owns those bytes.
  *
+ * Authority classification is decided on the path a target really LANDS on
+ * (S-G4b-03): a symlink alias that resolves to a harness-root `store.db` or
+ * to a project register is refused and routed exactly like the file itself.
+ * Only that decision is canonicalized — status.json / snapshot targets keep
+ * the caller's path and the unchanged validator (aliases included).
+ *
  * The snapshot/register validators are P1-only engine exports absent from
  * the published floor `^2.0.2` — they come from a DYNAMIC engine import so
  * a stale engine yields an explicit upgrade error instead of a
  * module-link failure that silently drops the tool. No local rule logic — the engine is the single validator;
  * this module only locates the file and formats output.
  */
-import { statSync } from "node:fs";
+import { readlinkSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import {
   assertStoreRuntimeSupported,
@@ -319,14 +325,45 @@ function isHarnessRootDir(dir: string): boolean {
   return parentResolved !== null && resolve(parentResolved) === dir;
 }
 
-/** True when the target IS the authority database (or a WAL sidecar) sitting
- * directly at a harness root: the runtime's own store location for a harness
- * root is `<harness root>/store.db`, and hand-writing those bytes is never a
- * supported operation — hard vs soft, staged vs active, all the same. */
-function isStoreAuthorityTarget(rawPath: string): boolean {
-  const resolved = resolve(rawPath);
-  if (!STORE_AUTHORITY_FILES.includes(basename(resolved))) return false;
-  return isHarnessRootDir(dirname(resolved));
+/** The path a write to `resolved` really lands on (S-G4b-03): authority
+ * classification runs on the caller's own path first and on this one when the
+ * target is an alias — a symlink outside the harness tree resolving to a
+ * harness-root `store.db` / retired `residuals.json` IS that authority file.
+ * A dangling symlink resolves to its would-be target: the file a write
+ * through the link creates. One canonicalization per checked target (the
+ * document lint keeps the caller's path), mirrored in the omp hook, the
+ * OpenCode plugin and the ZCode write gate. */
+function landedPathOf(resolved: string): string {
+  try {
+    return realpathSync(resolved);
+  } catch {
+    try {
+      return resolve(dirname(resolved), readlinkSync(resolved));
+    } catch {
+      return resolved; // no such target yet (a fresh file) — the path itself decides
+    }
+  }
+}
+
+/** True when `target` (absolute) IS the authority database (or a WAL sidecar)
+ * sitting directly at a harness root: the runtime's own store location for a
+ * harness root is `<harness root>/store.db`, and hand-writing those bytes is
+ * never a supported operation — hard vs soft, staged vs active, alias or not,
+ * all the same. */
+function isStoreAuthorityTarget(target: string): boolean {
+  if (!STORE_AUTHORITY_FILES.includes(basename(target))) return false;
+  return isHarnessRootDir(dirname(target));
+}
+
+/** The harness root of a project register this write reaches ONLY through a
+ * symlink alias (`landed` differs from the caller's own `resolved` path): the
+ * register is an authority document, so its route is decided on the path the
+ * write really lands on. `null` when the target is not an alias, or does not
+ * land on a register (S-G4b-03). */
+function aliasedRegisterDir(resolved: string, landed: string): string | null {
+  if (landed === resolved) return null;
+  const aliased = harnessDocKindOfTarget(landed);
+  return aliased?.kind === "register" ? aliased.harnessDir : null;
 }
 
 /** One authority refusal as the tool's violation line + machine details. */
@@ -353,12 +390,22 @@ export default function mstarStatusValidate(pi: CustomToolAPI): CustomTool {
         let harnessDir: string;
         if (params?.path) {
           statusPath = resolve(pi.cwd, params.path);
-          if (isStoreAuthorityTarget(statusPath)) {
+          // S-G4b-03: the AUTHORITY decision runs on the path the target
+          // really lands on — a symlink alias of the store database or of a
+          // project register IS that authority file. Nothing else is
+          // canonicalized (a status.json/snapshot alias behaves as before).
+          const landed = landedPathOf(statusPath);
+          const storeTarget = isStoreAuthorityTarget(statusPath)
+            ? statusPath
+            : isStoreAuthorityTarget(landed)
+              ? landed
+              : null;
+          if (storeTarget !== null) {
             return result(
               violationLines([
                 authorityViolation(
                   STORE_DIRECT_WRITE_CODE,
-                  `${statusPath} is the issue/catalog authority database and is owned by the runtime — a direct ` +
+                  `${storeTarget} is the issue/catalog authority database and is owned by the runtime — a direct ` +
                     "hand write is refused (the schema and its WAL are managed in-process). Schema changes go " +
                     "through `mstar store init|upgrade|migrate`, findings through `mstar issue add|close`, catalog " +
                     "rows through `mstar catalog register|update`",
@@ -372,15 +419,20 @@ export default function mstarStatusValidate(pi: CustomToolAPI): CustomTool {
  // before classifying (stale engine -> null -> default names).
           classifyDirResolvers = await dirResolversLoader.load();
           const target = harnessDocKindOfTarget(statusPath);
-          if (target === null) {
+          const registerDir = target?.kind === "register" ? target.harnessDir : aliasedRegisterDir(statusPath, landed);
+          if (target !== null) {
+            kind = target.kind;
+            harnessDir = target.harnessDir;
+          } else if (registerDir !== null) {
+            kind = "register";
+            harnessDir = registerDir;
+          } else {
             return result(
               `mstar_status_validate: ${statusPath} is not a canonical harness coordination document — expected {HARNESS_DIR}/status.json, {HARNESS_DIR}/workflows/<id>/snapshot.json, or {HARNESS_DIR}/projects/<id>/residuals.json`,
               { path: statusPath, ok: false },
               true,
             );
           }
-          kind = target.kind;
-          harnessDir = target.harnessDir;
         } else {
           const resolvedHarnessDir = resolveHarnessDir(pi.cwd);
           if (resolvedHarnessDir === null) {
