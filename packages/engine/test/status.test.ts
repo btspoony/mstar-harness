@@ -1,7 +1,6 @@
 /**
  * Engine status module — status.json schema validation, residual severity
- * normalization, project-register findings-cleanup gate, and the
- * project-register tech-debt rollup.
+ * normalization, and the project-register tech-debt rollup.
  *
  * Spec sources (each test cites the skill/reference section it enforces):
  * - status.json schema + required fields + root-only `residual_findings`
@@ -14,11 +13,11 @@
  * `critical|high|medium|low|nit`; `warning`/`Major`/non-English forbidden in
  * JSON; legacy `"severity": "warning"` is read and rolled up as `low`.
  * `null`/`""` → `medium` (rollup `norm_sev` semantics).
- * - Findings cleanup modes (zero-residual vs allow-residual; blocker-defer
- * definition; nit/waived rules): § Findings cleanup modes. v3 relocation:
- * the gate reads the project register (`projects/<id>/residuals.json`,
- * one entry per plan-id key) instead of the v1 root `residual_findings`;
- * the plan-metadata `findings_cleanup` mirror is deleted (no dual-track).
+ * - Findings cleanup modes (zero-residual vs allow-residual): § Findings
+ * cleanup modes. Issue-governance cutover G2a moved `findingsCleanupGate` off
+ * the register onto the issue store (open issues linked to the plan), so its
+ * cases live in `src/issue-cutover.test.ts`; this file keeps the register
+ * VALIDATOR and the legacy rollup aggregation that the CLI cutover converts.
  * - Rollup aggregates (total_open / by_severity / by_target / by_plan):
  * § `metadata.tech_debt_summary` (optional rollup) — canonical compute is
  * `techDebtRollup` (engine; no CLI form). v3 relocation: the rollup
@@ -48,7 +47,7 @@ import {
   validateStatus,
   validateStatusV2,
 } from "../src/status.js";
-import { findingsCleanupGate, techDebtRollup } from "../src/project.js";
+import { techDebtRollup } from "../src/project.js";
 import { withStatusWriteLock } from "../src/lease.js";
 import { readJson, writeJson } from "../src/core.js";
 import type { GateResult, ValidationResult } from "../src/core.js";
@@ -747,141 +746,6 @@ describe("registerWorkflow / unregisterWorkflow (root writers under the root-fil
       rmSync(root, { recursive: true, force: true });
       rmSync(other, { recursive: true, force: true });
     }
-  });
-});
-
-describe("findingsCleanupGate — project register input (array schema)", () => {
-  function register(entries: Record<string, unknown[]>): Record<string, unknown> {
-    return { entries };
-  }
-
-  function gated(
-    residual: Record<string, unknown> | undefined,
-    opts?: { mode?: FindingsCleanupMode },
-  ): GateResult {
-    const reg = register(residual === undefined ? {} : { "plan-a": [residual] });
-    return findingsCleanupGate(reg as Parameters<typeof findingsCleanupGate>[0], "plan-a", opts);
-  }
-
-  test("allow-residual (default): open low/medium residuals are fine", () => {
-    const result = gated(entry({ decision: "accept" }));
-    expect(result.ok).toBe(true);
-  });
-
-  test("allow-residual: unresolved critical blocks Approve with residuals", () => {
-    violationCodes("findings.allow-residual-critical")(gated(entry({ severity: "critical" })));
-  });
-
-  test("zero-residual: true blocker-defer (decision defer + target) passes", () => {
-    const result = gated(entry({ decision: "defer", target: "next iteration" }), { mode: "zero-residual" });
-    expect(result.ok).toBe(true);
-  });
-
-  test("zero-residual: fixable open findings (accept) are blocked", () => {
-    violationCodes("findings.zero-residual-open-fixable")(gated(entry({ decision: "accept" }), { mode: "zero-residual" }));
-  });
-
-  test("zero-residual: an open critical defer (valid target) is still blocked", () => {
-// severity outranks the decision branch: a defer with a well-formed target
-// is a true blocker-defer, but never for a critical — fix it or close it
-// by explicit risk acceptance.
-    const result = gated(entry({ severity: "critical", decision: "defer", target: "next iteration" }), {
-      mode: "zero-residual",
-    });
-    expect(result.ok).toBe(false);
-    expect(violationsOf(result)).toEqual(["findings.zero-residual-critical"]);
-    expect(result.violations[0]!.severity).toBe("high");
-  });
-
-  test("zero-residual: an open critical is blocked for every decision (accept)", () => {
-    const result = gated(entry({ severity: "critical", decision: "accept" }), { mode: "zero-residual" });
-    expect(result.ok).toBe(false);
-    expect(violationsOf(result)).toEqual(["findings.zero-residual-critical"]);
-  });
-
-  test("zero-residual: a resolved critical passes (closed entries stay first)", () => {
-    const result = gated(
-      entry({ severity: "critical", lifecycle: "resolved", closed_at: "2026-09-14", closure_note: "fixed in 8f2c1a" }),
-      { mode: "zero-residual" },
-    );
-    expect(result.ok).toBe(true);
-    expect(result.violations).toEqual([]);
-  });
-
-  test("zero-residual: risk-accepted must be closed/archived, not left open", () => {
-    violationCodes("findings.zero-residual-risk-accepted")(
-      gated(entry({ decision: "risk-accepted" }), { mode: "zero-residual" }),
-    );
-  });
-
-  test("zero-residual: defer without a target is not a true blocker-defer", () => {
-    violationCodes("findings.zero-residual-defer-no-target")(
-      gated(entry({ decision: "defer", target: null }), { mode: "zero-residual" }),
-    );
-  });
-
-  test("zero-residual: style-only nits never stay open", () => {
-    violationCodes("findings.zero-residual-nit")(gated(entry({ severity: "nit" }), { mode: "zero-residual" }));
-  });
-
-  test("zero-residual: closed entries are ignored", () => {
-    const result = gated(
-      entry({ lifecycle: "resolved", closed_at: "2026-08-07", closure_note: "fixed" }),
-      { mode: "zero-residual" },
-    );
-    expect(result.ok).toBe(true);
-  });
-
-  test("no register entry for the plan → no residuals, gate passes (snapshot plan linkage via plan-id key)", () => {
-    const result = gated(undefined, { mode: "zero-residual" });
-    expect(result.ok).toBe(true);
-    expect(result.violations).toEqual([]);
-  });
-
-  test("a non-array entry value fails closed with a violation — never a TypeError ", () => {
- // Malformed register (pre-wave schema holdover / hand-edited doc): the
- // plan-id key maps to an object instead of an array. The gate must
- // return the same invalid-entry-list violation as the register
- // validator — not throw `entries is not iterable` (`.length` on an
- // object is undefined, so the old length-0 guard did not intercept).
-    const reg = { entries: { "plan-a": { id: "RAN-1", decision: "accept" } } };
-    const result = findingsCleanupGate(reg as Parameters<typeof findingsCleanupGate>[0], "plan-a");
-    expect(result.ok).toBe(false);
-    expect(violationsOf(result)).toContain("project.register.invalid-entry-list");
-  });
-
-  test("every open entry of a plan is checked (array schema — one bad entry fails the plan)", () => {
- // W-E array semantics: a plan can hold 2+ residuals; each open entry is
- // evaluated, so a single fixable finding blocks zero-residual even when
- // a sibling is a true blocker-defer.
-    const reg = register({
-      "plan-a": [
-        entry({ id: "R1", decision: "defer", target: "next iteration" }),
-        entry({ id: "R2", decision: "accept" }),
-        entry({ id: "R3", lifecycle: "resolved", closed_at: "2026-08-07", closure_note: "fixed" }),
-      ],
-    });
-    const result = findingsCleanupGate(reg as Parameters<typeof findingsCleanupGate>[0], "plan-a", {
-      mode: "zero-residual",
-    });
-    expect(result.ok).toBe(false);
- // The fixable R2 is flagged; the true blocker-defer R1 and the closed
- // R3 contribute no violation.
-    expect(violationsOf(result)).toContain("findings.zero-residual-open-fixable");
-    expect(result.violations.map((v) => v.message).join(" ")).toContain("R#R2");
-    expect(result.violations.map((v) => v.message).join(" ")).not.toContain("R#R1");
-
-    const allow = findingsCleanupGate(reg as Parameters<typeof findingsCleanupGate>[0], "plan-a", {
-      mode: "allow-residual",
-    });
-    expect(allow.ok).toBe(true);
-  });
-
-  test("explicit mode is the only mode source (plan-metadata findings_cleanup mirror deleted)", () => {
-    const result = gated(entry({ decision: "accept" }), { mode: "zero-residual" });
-    expect(violationsOf(result)).toContain("findings.zero-residual-open-fixable");
-    const allow = gated(entry({ decision: "accept" }), { mode: "allow-residual" });
-    expect(allow.ok).toBe(true);
   });
 });
 

@@ -29,30 +29,28 @@
  * metadata only (`readdirSync` with `withFileTypes`), never file bodies,
  * never a markdown schema; placement semantics are skills prose, not
  * engine validation.
- * - Project-register consumers: `findingsCleanupGate`
- * (findings-cleanup modes; status-and-residuals.md § Findings cleanup
- * modes) and `techDebtRollup` (the `metadata.tech_debt_summary` rollup
- * computed over project registers) live HERE — they operate on project
- * artifacts, and relocating them breaks the former status.ts ↔ project.ts
- * module cycle (status.ts no longer imports this module; public names stay
- * exported from the package index for compile compatibility).
+ * - Project-register consumers: `findingsCleanupGate` (findings-cleanup
+ * modes; issue-governance cutover G2a — it consumes the authoritative open
+ * issues linked to the plan in `store.db`, never the legacy register) lives
+ * HERE, and `techDebtRollup` (the legacy register rollup, conversion owned by
+ * the CLI cutover task) also lives here; relocating them breaks the former
+ * status.ts ↔ project.ts module cycle (status.ts no longer imports this
+ * module; public names stay exported from the package index for compile
+ * compatibility).
  */
-import { existsSync, mkdirSync, readFileSync, readdirSync, type Dirent } from "node:fs";
-import { basename, join, resolve } from "node:path";
+import { existsSync, readFileSync, readdirSync, type Dirent } from "node:fs";
+import { join } from "node:path";
 import { readJson, SEVERITY_ORDER, type GateResult, type Severity, type ValidationResult } from "./core.js";
 import { parseCompassFrontmatterText } from "./iteration.js";
-import { withStatusWriteLock } from "./lease.js";
-import { CoordinationError, isPlainObject, readArtifactBytes, withProtectedWrite } from "./coordination-write.js";
-import { assertFsStorePath, getArtifactStore, resolveArtifactPath, type ArtifactStore } from "./store.js";
+import { isPlainObject } from "./coordination-write.js";
+import { openStore, type StoreContext } from "./store-db.js";
+import { IssueError } from "./issue.js";
 import {
   isOpenResidual,
   normalizeSeverity,
-  rowPlanIds,
   validateResidual,
   type ResidualEntry,
-  type WorkflowEntry,
 } from "./status.js";
-import { WORKFLOW_SNAPSHOT_FILE } from "./workflow.js";
 
 /** Roadmap file name inside `projects/<id>/` ( — writer contract). */
 export const PROJECT_ROADMAP_FILE = "roadmap.md";
@@ -146,13 +144,6 @@ export type TechDebtRollup = {
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const ROLLUP_FIELDS = ["total_open", "by_severity", "by_target", "by_plan"] as const;
-/** Local calendar date `YYYY-MM-DD` (register `closed_at`/`registered_at` dates are local). */
-function todayString(): string {
-  const now = new Date();
-  const month = String(now.getMonth() + 1).padStart(2, "0");
-  const day = String(now.getDate()).padStart(2, "0");
-  return `${now.getFullYear()}-${month}-${day}`;
-}
 
 function violation(severity: Severity, code: string, message: string, fix?: string): ValidationResult {
   return { ok: false, severity, code, message, fix };
@@ -367,353 +358,78 @@ export function validateProjectRegister(doc: unknown): GateResult {
   return { ok: violations.length === 0, violations };
 }
 
-/** Options for `appendProjectRegisterEntries`. */
-export type AppendProjectRegisterEntriesOpts = {
- /** Absolute path to the per-project directory (`<harness>/projects/<id>`; `_default` for project-less flows). */
-  projectDir: string;
-  /**
- * Base entries key (`<plan-id>`), e.g. `pr-deep-review-2026-08-26`. The
- * first free same-day key (`basePlanKey`, `basePlanKey-2`, `-3`, …) is
- * selected INSIDE the status write lock — a caller-computed key would be a
- * cross-lock TOCTOU (B-9 correction ①).
- */
-  basePlanKey: string;
- /** Residual entries to append — nine required fields + provenance. `source_plan` is overwritten with the used key; `registered_at` is required and must be set by the caller. */
-  entries: ResidualEntry[];
-};
-
-/** Options for `closeProjectRegisterEntry`. */
-export type CloseProjectRegisterEntryOpts = {
- /** Absolute path to the per-project directory (`<harness>/projects/<id>`; `_default` for project-less flows). */
-  projectDir: string;
- /** Entries key (`<plan-id>`) holding the entry to close. */
-  planKey: string;
- /** `id` of the entry to close (absent → throw). */
-  entryId: string;
- /** Closure note written verbatim; `closed_at` is today's local date. */
-  closureNote: string;
-};
-
-/**
- * The legacy backlog helpers are NOT part of the scoped coordination route
- * (spec §C4): a plan key that a registered coordinated workflow owns is
- * refused with `coordination.scoped-writer-required` before the next-free-key
- * loop / the in-place close, directing the caller to `residual-add` /
- * `residual-close`. Uncoordinated keys keep the legacy backlog behaviour.
- *
- * Protection discovery follows the mandated acquisition order (spec §C3): the
- * root register is locked first (the registered workflow set cannot move), the
- * snapshots carrying the plan key are locked next, and the protected-plan set
- * is re-derived under those locks before the destination register lock is
- * taken. A bare scan before locking the register would race a new
- * prepare/bind and is forbidden.
- */
-async function withScopedPlanKeyGuard<T>(
-  store: ArtifactStore,
-  registerPath: string,
-  planKey: string,
-  run: () => Promise<T>,
-): Promise<T> {
-  const harnessRoot = (store as ArtifactStore & { root?: string }).root;
-// Custom (non-Fs) stores own their mapping and are rejected by the scoped
-// coordination APIs elsewhere; the legacy backlog path keeps its contract.
-  if (harnessRoot === undefined) return withStatusWriteLock(registerPath, run);
-  const statusPath = resolveArtifactPath(harnessRoot, { kind: "status", key: "root" });
-  return withStatusWriteLock(statusPath, async () => {
-    const rootDoc = readJson(statusPath);
-    const entries = Array.isArray(rootDoc.workflows) ? (rootDoc.workflows as WorkflowEntry[]) : [];
-    const owningSnapshots: Record<string, true> = {};
-    for (const entry of entries) {
-      if (typeof entry?.id !== "string" || typeof entry?.dir !== "string") continue;
-      const snapshotPath = join(harnessRoot, entry.dir, WORKFLOW_SNAPSHOT_FILE);
-      const snapshot = readArtifactBytes(snapshotPath)?.payload;
-      if (!isPlainObject(snapshot) || !Array.isArray(snapshot.plans)) continue;
-      // A row answers to `id` and/or the legacy `plan_id` — a protected key
-      // must never go unrecognized because it sits in the non-preferred slot.
-      if (snapshot.plans.some((row) => rowPlanIds(row).includes(planKey))) owningSnapshots[snapshotPath] = true;
-    }
-    const snapshotPaths = Object.keys(owningSnapshots).sort();
-    const locked = snapshotPaths.reduceRight<() => Promise<T>>(
-      (next, snapshotPath) => () => withStatusWriteLock(snapshotPath, next),
-      async () => {
-        for (const snapshotPath of snapshotPaths) {
-          const snapshot = readArtifactBytes(snapshotPath)?.payload;
-          if (!isPlainObject(snapshot) || !Array.isArray(snapshot.plans)) continue;
-          const coordinated = snapshot.plans.some(
-            (row) => rowPlanIds(row).includes(planKey) && row.coordination !== undefined,
-          );
-          if (coordinated) {
-            throw new CoordinationError(
-              "coordination.scoped-writer-required",
-              `${planKey} is a coordinated plan key \u2014 the legacy backlog helpers cannot write it; use residual-add/residual-close`,
-              { plan_id: planKey, path: snapshotPath },
-            );
-          }
-        }
-        return withStatusWriteLock(registerPath, run);
-      },
-    );
-    return locked();
-  });
-}
-
-/**
- * Append residual entries to a project register: resolve `<projectDir>/residuals.json` and run the WHOLE
- * critical section inside `withStatusWriteLock(registerPath, ...)` (lease.ts —
- * the `<register dir>/.status-write.lockdir/` lock is reused, never
- * reimplemented). Read the register (absent → empty doc), select the first
- * free same-day key (`basePlanKey`, `basePlanKey-2`, `-3`, … — port of the
- * python next-free-key loop, pr-review.md) INSIDE the lock, validate every
- * entry with `validateResidual`, enforce entry-id uniqueness within the
- * selected key (B-9 correction ② — `validateProjectRegister` has no
- * duplicate-id detection), set each entry's `source_plan` to the used key
- * (provenance must match the entries key; the caller cannot know the bumped
- * key beforehand), append preserving every other key, validate the whole
- * register with `validateProjectRegister`, then `ArtifactStore.put`
- * (FsStore uses `writeJson` — atomic temp+rename; never `open(w)`).
- * Fails loud when the active FsStore would resolve a register
- * path other than `<projectDir>/residuals.json` — callers whose target root
- * differs from the active store's root MUST
- * `setArtifactStore(createFsStore(root))` first. Fail-loud: any validation
- * failure throws and the register is left untouched. Returns the key used.
- */
-export async function appendProjectRegisterEntries(
-  opts: AppendProjectRegisterEntriesOpts,
-): Promise<{ ok: true; key: string }> {
- // An empty batch is a caller error — fail loud instead of writing an empty
- // key that would pass validateProjectRegister (Task-1 review minor 3).
-  if (opts.entries.length === 0) {
-    throw new Error("refusing to append residual entries: entries must not be empty");
-  }
-  const registerPath = resolve(join(opts.projectDir, PROJECT_REGISTER_FILE));
-  const projectKey = basename(resolve(opts.projectDir));
-  const store = getArtifactStore();
- // Fail-loud path agreement : the lockdir serializes
- // `registerPath`; the store put must land on that same file. A divergence
- // throws before the project dir or lockdir is created.
-  assertFsStorePath(store, { kind: "residuals", key: projectKey }, registerPath);
- // The lockdir lands inside the project dir (dirname of the register); create
- // it up front (mirrors writeWorkflowSnapshot) so a first-time project dir
- // does not fail the lock acquisition with ENOENT.
-  mkdirSync(opts.projectDir, { recursive: true });
-  return withScopedPlanKeyGuard(store, registerPath, opts.basePlanKey, async () => {
-    const doc = readJson(registerPath) as ProjectRegisterDoc;
-    const entriesMap = doc.entries ?? {};
- // Port of the python next-free-key loop (pr-review.md): first free
- // same-day key — basePlanKey, then basePlanKey-2, basePlanKey-3, …
-    let key = opts.basePlanKey;
-    for (let i = 2; Object.hasOwn(entriesMap, key); i += 1) {
-      key = `${opts.basePlanKey}-${i}`;
-    }
-    for (const entry of opts.entries) {
-      const gate = validateResidual(entry);
-      if (!gate.ok) {
-        throw new Error(
-          `refusing to append invalid residual entry: ${gate.violations.map((v) => v.message).join("; ")}`,
-        );
-      }
-    }
- // Entry ids must be unique within the selected key (B-9 correction ②):
- // validateResidual is per-entry and validateProjectRegister has no
- // duplicate-id detection.
-    const seen = new Set<string>();
- // Seed from the selected key's existing entries (Task-1 review minor 3) —
- // the occupancy loop guarantees a free key today, but the seed keeps the
- // check correct if occupancy is ever relaxed to append into an existing key.
-    for (const existing of Object.hasOwn(entriesMap, key) ? (entriesMap[key] ?? []) : []) {
-      if (typeof existing.id === "string") seen.add(existing.id);
-    }
-    for (const entry of opts.entries) {
-      if (typeof entry.id === "string") {
-        if (seen.has(entry.id)) {
-          throw new Error(
-            `refusing to append residual entries: duplicate entry id ${JSON.stringify(entry.id)} in key ${JSON.stringify(key)}`,
-          );
-        }
-        seen.add(entry.id);
-      }
-    }
- // source_plan must match the entries key (validateProjectRegister); the
- // caller cannot know the bumped key, so it is set here (pr-review.md).
-    const appended = opts.entries.map((entry) => ({ ...entry, source_plan: key })) as ProjectRegisterEntry[];
-    const register: ProjectRegisterDoc = {
-      ...doc,
-      entries: { ...entriesMap, [key]: [...(entriesMap[key] ?? []), ...appended] },
-    };
-    const gate = validateProjectRegister(register);
-    if (!gate.ok) {
-      throw new Error(
-        `refusing to write invalid project register: ${gate.violations.map((v) => v.message).join("; ")}`,
-      );
-    }
-    await withProtectedWrite(registerPath, "put", () => store.put({ kind: "residuals", key: projectKey, payload: register }));
-    return { ok: true as const, key };
-  });
-}
-
-/**
- * Close one project-register entry in place under `withStatusWriteLock(registerPath, ...)`, find `entryId` in
- * `entries[planKey]` (absent → throw), set `lifecycle: resolved` +
- * `closed_at: <today YYYY-MM-DD>` + `closure_note`, validate the whole
- * register with `validateProjectRegister`, then `ArtifactStore.put`
- * (FsStore uses `writeJson` — atomic temp+rename).
- * Fails loud when the active FsStore would resolve a register
- * path other than `<projectDir>/residuals.json`. Fail-loud: an invalid
- * register throws and nothing is written.
- */
-export async function closeProjectRegisterEntry(opts: CloseProjectRegisterEntryOpts): Promise<{ ok: true }> {
-  const registerPath = resolve(join(opts.projectDir, PROJECT_REGISTER_FILE));
-  const projectKey = basename(resolve(opts.projectDir));
-  const store = getArtifactStore();
- // Fail-loud path agreement : see appendProjectRegisterEntries.
-  assertFsStorePath(store, { kind: "residuals", key: projectKey }, registerPath);
- // See appendProjectRegisterEntries — the lockdir needs its parent to exist.
-  mkdirSync(opts.projectDir, { recursive: true });
-  return withScopedPlanKeyGuard(store, registerPath, opts.planKey, async () => {
-    const doc = readJson(registerPath) as ProjectRegisterDoc;
-    const planEntries = doc.entries?.[opts.planKey];
-    if (!Array.isArray(planEntries)) {
-      throw new Error(
-        `refusing to close residual entry: no entries for key ${JSON.stringify(opts.planKey)} in ${registerPath}`,
-      );
-    }
-    if (!planEntries.some((entry) => entry.id === opts.entryId)) {
-      throw new Error(
-        `refusing to close residual entry: entry id ${JSON.stringify(opts.entryId)} not found in key ${JSON.stringify(opts.planKey)}`,
-      );
-    }
-    const register: ProjectRegisterDoc = {
-      ...doc,
-      entries: {
-        ...doc.entries,
-        [opts.planKey]: planEntries.map((entry) =>
-          entry.id === opts.entryId
-            ? { ...entry, lifecycle: "resolved", closed_at: todayString(), closure_note: opts.closureNote }
-            : entry,
-        ),
-      },
-    };
-    const gate = validateProjectRegister(register);
-    if (!gate.ok) {
-      throw new Error(
-        `refusing to write invalid project register: ${gate.violations.map((v) => v.message).join("; ")}`,
-      );
-    }
-    await withProtectedWrite(registerPath, "put", () => store.put({ kind: "residuals", key: projectKey, payload: register }));
-    return { ok: true as const };
-  });
-}
-
 /**
  * Findings cleanup gate (status-and-residuals.md § Findings cleanup modes;
- * The input is the project register
- * `projects/<id>/residuals.json`, entries keyed by plan id with an ARRAY of
- * residuals per plan, and the plan id links the register entries to the
- * snapshot's plan row). Every OPEN entry of the plan is checked.
- * `zero-residual`: only true blocker-defers (`decision: defer` + non-empty
- * `target`) may stay open — fixable findings, `nit`s, and waived/
- * risk-accepted entries are violations, and an unresolved Critical is a
- * violation for EVERY decision (it must be fixed or closed by explicit
- * risk acceptance, not carried as a defer). `allow-residual` (default): open
- * residuals are fine unless an unresolved Critical remains. Mode resolution:
- * explicit `opts.mode` → `allow-residual` (the v1
- * `plans[].metadata.findings_cleanup` mirror is deleted — no dual-track).
+ * issue-governance cutover G2a): the authoritative input is the issue store
+ * (`store.db`) — every OPEN issue linked to the plan through `provenance`
+ * (`kind='plan'`, `target=<plan-id>`, written by the core `linkIssue` verb).
+ * The legacy register is never consulted at runtime; `validateProjectRegister`
+ * remains a migration-only validator.
+ *
+ * `zero-residual`: every open linked issue is a violation — a disposition is a
+ * separate authorized act (contract §4), so an open issue cannot ride along.
+ * `allow-residual` (default): open issues are fine unless an unresolved
+ * Critical remains.
+ *
+ * Fail-closed: the authority must be readable AND active, or the gate throws
+ * — a missing (`store.not-initialized`), corrupt (`store.corrupt`) or staged
+ * (`store.not-active`) store is never read as "no findings".
  */
-export function findingsCleanupGate(
-  register: ProjectRegisterDoc,
+export async function findingsCleanupGate(
+  context: StoreContext,
   planId: string,
   opts?: { mode?: FindingsCleanupMode },
-): GateResult {
+): Promise<GateResult> {
+  if (typeof planId !== "string" || planId.trim() === "") {
+    throw new Error("findingsCleanupGate requires a non-empty plan id");
+  }
   const mode = opts?.mode ?? "allow-residual";
-  const violations: ValidationResult[] = [];
-  const entries = isPlainObject(register.entries) ? register.entries[planId] : undefined;
-  if (entries === undefined) {
- // No register entries for this plan → no open residuals; the gate passes.
-    return { ok: true, violations };
-  }
-  if (!Array.isArray(entries)) {
- // A non-array entry value fails closed — same violation
- // code as validateProjectRegister. `.length` on an object is undefined,
- // so the old length-0 guard did not intercept and `for…of` threw a
- // TypeError; a malformed register must never crash nor pass silently.
-    violations.push(
-      violation(
-        "high",
-        "project.register.invalid-entry-list",
-        `entries[${JSON.stringify(planId)}] must be an array of residual entries (one entry per residual; v1 multi-finding semantics)`,
-      ),
-    );
-    return { ok: false, violations };
-  }
-  if (entries.length === 0) {
-    return { ok: true, violations };
-  }
-
-  for (const entry of entries) {
- // Closed entries are not open residuals — they pass every mode.
-    if (!isOpenResidual(entry)) continue;
-
-    const id = typeof entry.id === "string" ? entry.id : "<unnamed>";
-    const label = `R#${id}`;
-    if (mode === "zero-residual") {
-      if (normalizeSeverity(entry.severity) === "critical") {
-// Severity outranks the decision branch: an unresolved Critical may not
-// ride along under zero-residual as a defer/waiver/open fixable — the
-// entry gets exactly this one violation (first branch wins).
+  const handle = await openStore(context, "read");
+  try {
+    const db = handle.db;
+    const meta = db.prepare("select authority_state as authorityState from store_meta where id = 1").get() as
+      | { authorityState?: unknown }
+      | undefined;
+    if (!meta || meta.authorityState !== "active") {
+      throw new IssueError(
+        "store.not-active",
+        `The issue store is ${meta && typeof meta.authorityState === "string" ? meta.authorityState : "unreadable"}; findings authority requires an active store.`,
+      );
+    }
+    const rows = db
+      .prepare(
+        "select issues.id as id, issues.severity as severity from issues " +
+          "join provenance on provenance.issue_id = issues.id and provenance.kind = 'plan' and provenance.target = ? " +
+          "where issues.disposition = 'open' order by issues.id asc",
+      )
+      .all(planId) as Array<{ id: string; severity: string }>;
+    const violations: ValidationResult[] = [];
+    for (const row of rows) {
+      const label = row.id;
+      if (normalizeSeverity(row.severity) === "critical") {
         violations.push(
-          violation(
-            "high",
-            "findings.zero-residual-critical",
-            `${label}: unresolved critical blocks approval under zero-residual \u2014 fix now or close via explicit risk acceptance`,
-          ),
+          mode === "zero-residual"
+            ? violation(
+                "high",
+                "findings.zero-residual-critical",
+                `${label}: unresolved critical blocks approval under zero-residual \u2014 fix now or close via explicit risk acceptance`,
+              )
+            : violation("high", "findings.allow-residual-critical", `${label}: unresolved critical blocks Approve with residuals`),
         );
-      } else if (entry.severity === "nit") {
+      } else if (mode === "zero-residual") {
         violations.push(
           violation(
             "medium",
-            "findings.zero-residual-nit",
-            `${label}: style-only nits must be fixed in-session or dropped \u2014 never left open under zero-residual`,
-          ),
-        );
-      } else if (entry.decision === "risk-accepted" || entry.lifecycle === "waived") {
-        violations.push(
-          violation(
-            "medium",
-            "findings.zero-residual-risk-accepted",
-            `${label}: waived/risk-accepted findings must be closed/archived, not left open under zero-residual`,
-          ),
-        );
-      } else if (entry.decision === "defer") {
-        if (typeof entry.target !== "string" || entry.target.trim() === "") {
-          violations.push(
-            violation(
-              "medium",
-              "findings.zero-residual-defer-no-target",
-              `${label}: blocker-defer requires a target (next iteration/milestone) under zero-residual`,
-            ),
-          );
-        }
-      } else {
-        violations.push(
-          violation(
-            "medium",
-            "findings.zero-residual-open-fixable",
-            `${label}: fixable finding must not remain open under zero-residual \u2014 fix now or convert to a blocker-defer`,
+            "findings.zero-residual-open-issue",
+            `${label}: an open issue cannot remain under zero-residual \u2014 close it through the authorized disposition path before handoff`,
           ),
         );
       }
-    } else if (normalizeSeverity(entry.severity) === "critical") {
-      violations.push(
-        violation(
-          "high",
-          "findings.allow-residual-critical",
-          `${label}: unresolved critical blocks Approve with residuals`,
-        ),
-      );
     }
+    return { ok: violations.length === 0, violations };
+  } finally {
+    handle.close();
   }
-
-  return { ok: violations.length === 0, violations };
 }
 
 /** Count values into a string-keyed map, keys sorted ascending (jq group_by order for strings). */

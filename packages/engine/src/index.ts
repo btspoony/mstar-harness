@@ -270,8 +270,6 @@ export {
   validateCompassFrontmatter,
 } from "./iteration.js";
 export type {
-  AppendProjectRegisterEntriesOpts,
-  CloseProjectRegisterEntryOpts,
   FindingsCleanupMode,
   ProjectRegisterDoc,
   ProjectRegisterEntry,
@@ -288,8 +286,6 @@ export {
   PROJECT_ROADMAP_FILE,
   ROADMAP_STATUSES,
   _DEFAULT_PROJECT,
-  appendProjectRegisterEntries,
-  closeProjectRegisterEntry,
   findingsCleanupGate,
   listProjectReferenceFiles,
   techDebtRollup,
