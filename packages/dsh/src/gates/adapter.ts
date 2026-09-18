@@ -382,6 +382,12 @@ export class DshHostAdapter extends Service implements HostAdapter {
     // selection — the exec-bound listener additionally gates the
     // session-bound one. A half-registered workflow refuses here regardless
     // of the enforcement flag (never a soft-gate judgment call).
+    //
+    // Contract note for hook-only hosts (no exec-bound listener composed): the
+    // registration gate then covers the unique-active selection ONLY — in a
+    // multi-active workspace whose session is bound to another lifecycle, that
+    // lifecycle's registration is gated by the `tools/pre-execute` listener
+    // alone (dsh always composes it; S-G4a-02).
     if (harnessDir !== null) {
       const selection = resolveActiveWorkflow(harnessDir)
       if (selection.kind === 'active') {

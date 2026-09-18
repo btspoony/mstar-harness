@@ -1067,6 +1067,28 @@ function gateDispatch(
 }
 
 /**
+ * True for one `tools/pre-execute` call that launches work UNDER the selected
+ * lifecycle — the calls the catalog-registration veto must cover:
+ *
+ * - a configured dispatch tool carrying an Assignment-shaped prompt
+ *   (`subagent` / `subagent_fork` by default), and
+ * - the `workflow` / `ralph` fan-out tools, which carry no Assignment prompt at
+ *   all (`meta.name` / `objective`) yet start child agents IN the same
+ *   workspace that write through the same fs/skill/dispatch gates.
+ *
+ * A malformed workflow/ralph call keeps the workflow branch's documented
+ * fail-open: it names no workflow/objective, so it launches nothing to gate and
+ * the veto has no call to refuse.
+ */
+function launchesWorkUnderSelection(config: Config, exec: ToolExecution): boolean {
+  if ((DEFAULT_WORKFLOW_TOOLS as readonly string[]).includes(exec.name)) return workflowGateInputOf(exec) !== undefined
+  if (!(config.dispatchTools ?? [...DEFAULT_DISPATCH_TOOLS]).includes(exec.name)) return false
+  const args = asRecord(exec.arguments)
+  const prompt = typeof args?.prompt === 'string' ? args.prompt : undefined
+  return prompt !== undefined && isAssignmentShaped(assignmentHeaderRegion(prompt))
+}
+
+/**
  * The catalog-registration veto (state-projection contract §3 step 3): the
  * SELECTED active workflow a writable dispatch addresses must have a committed
  * catalog registration. The selection itself stays JSON-owned
@@ -1077,11 +1099,13 @@ function gateDispatch(
  * call, and dispatching into it would write under a workspace the catalog does
  * not yet describe.
  *
- * Fires only on a real dispatch call (a configured dispatch tool carrying an
- * Assignment-shaped prompt), so the `tools/pre-execute` hot path pays nothing
- * for unrelated tool calls; a session with no active selection, and a
- * pre-activation workspace (no store, or a staged one), never reach the journal
- * read at all.
+ * Fires only on a real work-launching call ({@link launchesWorkUnderSelection}:
+ * a configured dispatch tool carrying an Assignment-shaped prompt, or a
+ * shape-valid `workflow`/`ralph` fan-out — those carry no Assignment prompt but
+ * launch writing children all the same), so the `tools/pre-execute` hot path
+ * pays nothing for unrelated tool calls; a session with no active selection, and
+ * a pre-activation workspace (no store, or a staged one), never reach the
+ * journal read at all.
  */
 async function catalogRegistrationVeto(
   ctx: Context,
@@ -1091,21 +1115,18 @@ async function catalogRegistrationVeto(
   readHint: () => SessionHintRead,
 ): Promise<PreToolDecision | undefined> {
   if (harnessDir === null) return undefined
-  if (!(config.dispatchTools ?? [...DEFAULT_DISPATCH_TOOLS]).includes(exec.name)) return undefined
-  const args = asRecord(exec.arguments)
-  const prompt = typeof args?.prompt === 'string' ? args.prompt : undefined
-  if (prompt === undefined || !isAssignmentShaped(assignmentHeaderRegion(prompt))) return undefined
+  if (!launchesWorkUnderSelection(config, exec)) return undefined
   const selection = resolveActiveWorkflow(harnessDir, readHint().hint)
   if (selection.kind !== 'active') return undefined
   const refusal = await catalogRegistrationRefusal(harnessDir, selection.workflowId)
   if (refusal === null) return undefined
   ctx.logger(DISPATCH_LOGGER).error(
-    `subagent dispatch (${exec.name}) refused — workflow ${selection.workflowId} is not fully registered:\n${refusal.code}: ${refusal.message}`,
+    `${exec.name} call refused — workflow ${selection.workflowId} is not fully registered:\n${refusal.code}: ${refusal.message}`,
   )
   return {
     kind: 'deny',
     reason: [
-      `subagent dispatch (${exec.name}) blocked — workflow ${selection.workflowId} has no committed catalog registration`,
+      `${exec.name} call blocked — workflow ${selection.workflowId} has no committed catalog registration`,
       `${refusal.code}: ${refusal.message}`,
       'this refusal is unconditional (it is not the soft/hard enforcement axis): reconcile the registration, then dispatch',
     ].join('\n'),

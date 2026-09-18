@@ -38,11 +38,13 @@ import {
 } from '@mstar-harness/engine'
 import type { ArtifactStore } from '@mstar-harness/engine'
 import type { ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
+import type { FsTarget } from '@deepseek-ai/dsh-fs'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { buildCatalogPayload, buildCatalogPayloadWithStore } from '../src/gates/catalog.ts'
 import { catalogRegistrationRefusal, resolveActiveWorkflow } from '../src/gates/workflow-selection.ts'
-import { validateStatusValue } from '../src/gates/status.ts'
+import { StatusVetoError, validateStatusValue } from '../src/gates/status.ts'
 import { bootApp, seedHarness, seedKnowledgeDoc, seedOpenIssue, seedStore, v2Root, v2Snapshot, v2SnapshotWithPlans, v2WorkflowEntry, type BootResult } from './harness.ts'
+import type { StatusGateAdvisory } from '../src/index.ts'
 
 let booted: BootResult | undefined
 const roots: string[] = []
@@ -55,18 +57,43 @@ afterEach(async () => {
 })
 
 /** One booted app on a fresh workspace root (no store written yet). */
-async function appWithRoot(name: string): Promise<{ app: BootResult; harnessDir: string }> {
+async function appWithRoot(name: string, enforcement?: 'hard' | 'soft'): Promise<{ app: BootResult; harnessDir: string }> {
   const root = await mkdtemp(join(tmpdir(), `dsh-${name}-`))
   roots.push(root)
-  const app = booted = await bootApp({ root })
+  const app = booted = await bootApp({ root, ...(enforcement !== undefined ? { enforcement } : {}) })
   return { app, harnessDir: app.harnessDir }
 }
 
-/** A booted app plus an ACTIVE empty store at its harness dir. */
-async function storeApp(): Promise<{ app: BootResult; harnessDir: string }> {
-  const { app, harnessDir } = await appWithRoot('store-cutover')
+/** A booted app plus an ACTIVE empty store at its harness dir (`enforcement` opts into hard mode). */
+async function storeApp(enforcement?: 'hard' | 'soft'): Promise<{ app: BootResult; harnessDir: string }> {
+  const { app, harnessDir } = await appWithRoot('store-cutover', enforcement)
   await seedStore(harnessDir)
   return { app, harnessDir }
+}
+
+/**
+ * Make `{HARNESS_DIR}/store.db` unopenable through the REAL engine channel: a
+ * DIRECTORY where the database file belongs (`openStore` refuses with
+ * `store.corrupt`). The below-floor/capability refusal cannot be staged
+ * in-process (`globalThis.Bun` is non-writable under Bun), so a refusal the
+ * engine really raises proves the same channel.
+ */
+async function corruptStore(harnessDir: string): Promise<void> {
+  for (const suffix of ['', '-wal', '-shm']) await unlink(join(harnessDir, `store.db${suffix}`)).catch(() => {})
+  await mkdir(join(harnessDir, 'store.db'), { recursive: true })
+}
+
+/** FsTarget for one workflow snapshot under the boot harness dir (local-backend shape). */
+function snapshotTarget(harnessDir: string, workflowId = 'wf-store'): FsTarget {
+  const path = join(harnessDir, 'workflows', workflowId, 'snapshot.json')
+  return { targetKey: path as FsTarget['targetKey'], displayPath: path }
+}
+
+/** Collect the `mstar/status-gate` advisories emitted on one app context. */
+function captureStatusAdvisories(ctx: BootResult['ctx']): StatusGateAdvisory[] {
+  const advisories: StatusGateAdvisory[] = []
+  ctx.on('mstar/status-gate', (payload) => { advisories.push(payload) })
+  return advisories
 }
 
 /**
@@ -87,19 +114,34 @@ function cleanupSnapshotJson(planId: string, mode: 'zero-residual' | 'allow-resi
   return JSON.stringify(cleanupSnapshot(planId, mode))
 }
 
-/** The Assignment-shaped dispatch call the `tools/pre-execute` gate sees. */
+/** One pending tool call in the registry pipeline shape (dsh-tools ToolExecution). */
 let execSeq = 0
-function dispatchExec(): ToolExecution {
+function toolExec(name: string, args: unknown): ToolExecution {
   return {
     callId: `c${++execSeq}`,
-    name: 'subagent',
-    arguments: {
-      description: 'writable implement round',
-      prompt: ['## Assignment', '**Execute as**: fullstack-dev', '**Task category**: logic', '**Execution mode**: sdd', '', 'Implement the thing.'].join('\n'),
-    },
+    name,
+    arguments: args,
     signal: new AbortController().signal,
     token: Symbol('dsh.tool.execution') as unknown as ToolExecutionToken,
   } as unknown as ToolExecution
+}
+
+/** The Assignment-shaped dispatch call the `tools/pre-execute` gate sees. */
+function dispatchExec(): ToolExecution {
+  return toolExec('subagent', {
+    description: 'writable implement round',
+    prompt: ['## Assignment', '**Execute as**: fullstack-dev', '**Task category**: logic', '**Execution mode**: sdd', '', 'Implement the thing.'].join('\n'),
+  })
+}
+
+/** A shape-valid `workflow` fan-out call (no Assignment prompt — `meta.name` only). */
+function workflowExec(metaName = 'probe'): ToolExecution {
+  return toolExec('workflow', { script: 'probe', meta: { name: metaName, description: 'probe' } })
+}
+
+/** A shape-valid `ralph` fan-out call (no Assignment prompt — `objective` only). */
+function ralphExec(objective = 'probe the codebase'): ToolExecution {
+  return toolExec('ralph', { objective })
 }
 
 /** The pre-step payload the agent loop dispatches (a session id keys the catalog cache). */
@@ -147,6 +189,27 @@ function planRegistration(harnessDir: string, operationId: string) {
       },
     },
   }
+}
+
+/**
+ * Drive a REAL root-visible pending registration for `operationId`: another
+ * writer takes the plan's catalog location after the reviewed delta was
+ * prepared, so the execution half lands (snapshot + root entry) while the
+ * publish refuses — exactly the crash window the journal exists for. The
+ * refusal is asserted here: it is what leaves the operation pending.
+ */
+async function seedPendingRegistration(harnessDir: string, operationId: string): Promise<void> {
+  await registerCatalogEntity({ harnessDir }, {
+    kind: 'plan',
+    id: 'plan-a',
+    title: 'Conflicting registration',
+    rootKind: 'plans',
+    relativePath: 'elsewhere.md',
+  }, { operationId: 'seed-conflict', actor: 'project-manager' })
+  setArtifactStore(createFsStore(harnessDir))
+  await expect(registerShippedCatalogExecution({ harnessDir }, planRegistration(harnessDir, operationId))).rejects.toThrow(
+    /catalog\.duplicate/,
+  )
 }
 
 /* ===========================================================================
@@ -268,8 +331,7 @@ describe('store cutover — refusals are disclosed and fail closed', () => {
     // the floor refusal itself is pinned below through the engine's own check
     // — the same single authority the readers surface (`openStore` calls it
     // before touching a file, so the runtime case travels this same catch).
-    for (const suffix of ['', '-wal', '-shm']) await unlink(join(harnessDir, `store.db${suffix}`)).catch(() => {})
-    await mkdir(join(harnessDir, 'store.db'), { recursive: true })
+    await corruptStore(harnessDir)
 
     let refusal: StoreError | undefined
     try {
@@ -367,6 +429,73 @@ describe('store cutover — refusals are disclosed and fail closed', () => {
     expect(blocked.ok).toBe(false)
     expect(blocked.violations.map((violation) => violation.code)).toEqual(['findings.allow-residual-critical'])
   })
+
+  it('the fs-intent listener VETOES the snapshot write while the authority is unreadable (no repair escape)', async () => {
+    const { app, harnessDir } = await storeApp('hard')
+    await seedHarness(harnessDir, {
+      'status.json': v2Root([v2WorkflowEntry('wf-store')]),
+      'workflows/wf-store/snapshot.json': cleanupSnapshotJson('plan-a'),
+    })
+    await corruptStore(harnessDir)
+    const advisories = captureStatusAdvisories(app.ctx)
+    let reached = 0
+
+    const outcome = await app.ctx.waterfall('fs/write-intent', snapshotTarget(harnessDir), {}, async () => {
+      reached += 1
+      return { kind: 'createIfAbsent' as const }
+    }).then(() => undefined, (error: unknown) => error)
+
+    // The store-authority refusal is the ONE violation class the content-blind
+    // repair escape may not admit: no write to the document can repair an
+    // unreadable authority (the remedy is a store command), so admitting the
+    // write would only let the plan row the closure gate asks about be removed
+    // while no authority can re-derive the violation. The veto is the dsh
+    // fs-policy channel — a throw — and it is NOT delegated to `next()`.
+    expect(outcome).toBeInstanceOf(StatusVetoError)
+    expect((outcome as StatusVetoError).code).toBe('status.veto')
+    expect((outcome as StatusVetoError).violations.map((violation) => violation.code)).toEqual([
+      'findings.cleanup-authority-unavailable',
+    ])
+    expect(reached).toBe(0) // the intent decision is never delegated: the write cannot land
+    expect(advisories).toHaveLength(1)
+    expect(advisories[0]!.hard).toBe(true)
+    expect(advisories[0]!.repair).toBeUndefined() // NOT a repair-escape allow
+    expect(advisories[0]!.degraded).toBeUndefined()
+    expect(advisories[0]!.result.violations.map((violation) => violation.code)).toEqual([
+      'findings.cleanup-authority-unavailable',
+    ])
+
+    // The host hook reads the SAME validation path, so a writing host that
+    // asks before the write gets the same refusal.
+    const hook = await app.ctx.dshHostAdapter.beforeStatusWrite(join(harnessDir, 'workflows', 'wf-store', 'snapshot.json'), undefined)
+    expect(hook.ok).toBe(false)
+    expect(hook.code).toBe('findings.cleanup-authority-unavailable')
+  })
+
+  it('a schema violation still takes the repair escape under the same hard enforcement', async () => {
+    const { app, harnessDir } = await storeApp('hard')
+    await seedHarness(harnessDir, {
+      'status.json': v2Root([v2WorkflowEntry('wf-store')]),
+      // A document the gate cannot even parse: the closure question is never
+      // reached, so this write may BE the repair (the narrowed escape leaves
+      // the document-validity class exactly as it was).
+      'workflows/wf-store/snapshot.json': 'not json {{{',
+    })
+    const advisories = captureStatusAdvisories(app.ctx)
+    let reached = 0
+
+    const intent = await app.ctx.waterfall('fs/write-intent', snapshotTarget(harnessDir), {}, async () => {
+      reached += 1
+      return { kind: 'createIfAbsent' as const }
+    })
+
+    expect(intent).toEqual({ kind: 'createIfAbsent' }) // delegated: the write proceeds
+    expect(reached).toBe(1)
+    expect(advisories).toHaveLength(1)
+    expect(advisories[0]!.hard).toBe(true)
+    expect(advisories[0]!.repair).toBe(true)
+    expect(advisories[0]!.result.violations.map((violation) => violation.code)).toEqual(['status.invalid-json'])
+  })
 })
 
 /* ===========================================================================
@@ -380,17 +509,7 @@ describe('store cutover — root selection is JSON-owned, registration is not', 
     // catalog location after the reviewed delta was prepared, so the execution
     // half lands (snapshot + root entry) while the publish refuses — exactly
     // the crash window the journal exists for.
-    await registerCatalogEntity({ harnessDir }, {
-      kind: 'plan',
-      id: 'plan-a',
-      title: 'Conflicting registration',
-      rootKind: 'plans',
-      relativePath: 'elsewhere.md',
-    }, { operationId: 'seed-conflict', actor: 'project-manager' })
-    setArtifactStore(createFsStore(harnessDir))
-    await expect(registerShippedCatalogExecution({ harnessDir }, planRegistration(harnessDir, 'op-reg'))).rejects.toThrow(
-      /catalog\.duplicate/,
-    )
+    await seedPendingRegistration(harnessDir, 'op-reg')
 
     // Root routing stays JSON-owned: the selection reads the JSON registry the
     // registration writer just populated.
@@ -437,6 +556,47 @@ describe('store cutover — root selection is JSON-owned, registration is not', 
     // …and the display recovers with it (no lingering refusal).
     const healthy = (await buildCatalogPayloadWithStore(app.ctx, harnessDir)).state
     expect(healthy?.selection).toEqual({ kind: 'active', workflowId: 'wf-store', dir: 'workflows/wf-store' })
+  })
+
+  it('the workflow/ralph fan-out branch is refused too — the registration veto is not dispatch-only', async () => {
+    const { app, harnessDir } = await storeApp()
+    await seedPendingRegistration(harnessDir, 'op-fanout')
+    let reached = 0
+    const allow = async () => {
+      reached += 1
+      return { kind: 'allow' as const }
+    }
+
+    // `workflow` and `ralph` carry no Assignment prompt, so the dispatch-tool
+    // branch never sees them — but they fan out child agents that write in the
+    // same workspace, so a half-registered lifecycle must not launch through
+    // them either.
+    const workflowCall = await app.ctx.waterfall('tools/pre-execute', workflowExec(), allow)
+    expect(workflowCall.kind).toBe('deny')
+    expect(workflowCall.kind === 'deny' ? workflowCall.reason : '').toContain('no committed catalog registration')
+    expect(reached).toBe(0) // a denied call short-circuits: no child is started
+
+    const ralphCall = await app.ctx.waterfall('tools/pre-execute', ralphExec(), allow)
+    expect(ralphCall.kind).toBe('deny')
+    expect(reached).toBe(0)
+
+    // A malformed fan-out call keeps the workflow branch's documented
+    // fail-open: it names no workflow/objective, so there is nothing to refuse.
+    const before = reached
+    const malformed = await app.ctx.waterfall('tools/pre-execute', toolExec('workflow', { script: 'probe' }), allow)
+    expect(malformed).toEqual({ kind: 'allow' })
+    expect(reached).toBe(before + 1)
+
+    // Reconciling the registration restores the fan-out surface exactly as it
+    // restores a subagent dispatch.
+    const handle = await openStore({ harnessDir }, 'write')
+    handle.db.prepare("delete from catalog_entities where kind = 'plan' and id = 'plan-a'").run()
+    handle.close()
+    expect((await reconcileCatalogExecution({ harnessDir }, 'op-fanout')).recovered).toBe(true)
+
+    const allowed = await app.ctx.waterfall('tools/pre-execute', workflowExec(), allow)
+    expect(allowed).toEqual({ kind: 'allow' })
+    expect(reached).toBe(before + 2)
   })
 
   it('a pre-activation workspace (no store at all) is never retro-refused', async () => {
