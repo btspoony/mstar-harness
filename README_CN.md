@@ -58,6 +58,8 @@ Harness Workflow Engine · Agent Plugin
 | Codex | `npx @mstar-harness/cli init --target codex`<br>然后 `codex plugin add morning-star-harness@mstar-repo`（仓库自带 marketplace） |
 | Generic（Agent Plugins v1） | 任意 Agent Plugins v1.0.0 兼容客户端直接指向本仓库根<br>（`plugin.json` + `skills/` 即便携包） |
 
+> 本节的 CLI 命令都通过 Bun shebang 执行已发布的 bin：`npx` / `bunx` / `npm i -g` 都需要 PATH 上有 **Bun >=1.4.0**。纯 Node 机器：`npm install @mstar-harness/cli`，然后 `node node_modules/@mstar-harness/cli/dist/mstar-harness.js <verb>`（见下文**运行时下限**）。
+
 ### 引擎门禁校验（推荐）
 
 ```bash
@@ -85,7 +87,7 @@ Codex 角色链接修复与具名子代理验证：[Codex 安装](INSTALL.md#cod
 
 ### 运行时下限（按入口，不是“两套都装”）
 
-已发布 CLI 保留 Bun shebang（`#!/usr/bin/env bun`）。正常启动 `mstar-harness` / dist 文件使用 **Bun >=1.4.0**。显式 `node <CLI bundle>` 使用 **Node >=24.18.0**。Bun 宿主插件需要 Bun；原生 Node 入口需要 Node。不要把这两条下限理解成每台机器都必须同时安装两个运行时。`npx` / `bunx` 安装仍用你已有的包运行器。本文不证明打包兼容或 store 激活就绪。
+已发布 CLI 保留 Bun shebang（`#!/usr/bin/env bun`）。正常启动 `mstar-harness` / dist 文件使用 **Bun >=1.4.0**。显式 `node <CLI bundle>` 使用 **Node >=24.18.0**。`npx` / `bunx` 会下载该包，但仍执行同一个 Bun shebang bin，因此同样需要 PATH 上有 **Bun >=1.4.0**——包运行器不是运行时；纯 Node 机器请安装该包并用 Node 显式运行 bundle（`node node_modules/@mstar-harness/cli/dist/mstar-harness.js <verb>`）。Bun 宿主插件需要 Bun；原生 Node 入口需要 Node。不要把这两条下限理解成每台机器都必须同时安装两个运行时。本文不证明打包兼容或 store 激活就绪。
 
 ## 使用
 
