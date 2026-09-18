@@ -4108,3 +4108,69 @@ describe("catalog pin — frozen prepare inputs (state-projection contract §1)"
     expect(pinOf(storedRow(fixture, PLAN_ID))).toEqual(pinned);
   });
 });
+
+describe("catalog registration gate — prepare/bind/selection refuse a pending workflow (state-projection contract §3)", () => {
+  /**
+   * Reconstructs the crash state a dispatch reader must refuse: a journal row
+   * for the fixture's root-visible workflow that is NOT committed. The gate
+   * only reads the pending row's workflow id, so a minimal delta suffices.
+   */
+  async function seedPendingRegistration(fixture: Fixture, context: StoreContext, phase: "prepared" | "execution-written"): Promise<void> {
+    const handle = await openStore(context, "write");
+    const at = new Date().toISOString();
+    handle.db
+      .prepare(
+        "insert into catalog_operations(operation_id, request_hash, phase, catalog_delta_json, before_versions_json, after_versions_json, result_json, created_at, updated_at) " +
+          "values ('op-pending-gate', 'gate-fixture', ?, ?, '{}', '{}', null, ?, ?)",
+      )
+      .run(phase, JSON.stringify({ workflow: { workflowId: WORKFLOW_ID } }), at, at);
+    handle.close();
+  }
+
+  test("bind refuses a root-visible workflow whose registration is pending (prepared phase)", async () => {
+    const fixture = makeFixture();
+    const context = await storeBacked(fixture);
+    await seedPendingRegistration(fixture, context, "prepared");
+    const refusal = await pinConflictOf(() =>
+      bindPlanSession({ coordinator: true, workflowId: WORKFLOW_ID, harnessDir: fixture.harness, cwd: fixture.root }),
+    );
+    expect(refusal.code).toBe("catalog.registration-pending");
+    // The refusal is not a repair: nothing moved.
+    expect(existsSync(join(fixture.harness, "workflows", WORKFLOW_ID, "session-"))).toBe(false);
+  });
+
+  test("prepare refuses a root-visible workflow whose registration is pending (execution-written phase)", async () => {
+    const fixture = makeFixture();
+    const context = await storeBacked(fixture);
+    // The coordinator binds BEFORE the pending operation exists — the gate is
+    // evaluated per reader call, not amortized into a one-time check.
+    await ensureCoordinator(fixture);
+    await seedPendingRegistration(fixture, context, "execution-written");
+    const refusal = await pinConflictOf(() => preparePlan(fixture, PLAN_ID));
+    expect(refusal.code).toBe("catalog.registration-pending");
+    // No prepared block was written.
+    const view = readJson(fixture.snapshotPath);
+    const row = (view.plans as Array<Record<string, unknown>>).find((r) => r.id === PLAN_ID)!;
+    expect(row.coordination).toBeUndefined();
+  });
+
+  test("the selection view refuses the same pending workflow", async () => {
+    const fixture = makeFixture();
+    const context = await storeBacked(fixture);
+    await ensureCoordinator(fixture);
+    await seedPendingRegistration(fixture, context, "execution-written");
+    const refusal = await pinConflictOf(() => readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root));
+    expect(refusal.code).toBe("catalog.registration-pending");
+  });
+
+  test("a root-visible workflow with NO journal row keeps the pass-through", async () => {
+    const fixture = makeFixture();
+    await storeBacked(fixture);
+    // Active store, root-visible workflow, no catalog_operations row at all:
+    // prepare and bind succeed unchanged (pre-activation/registered-excluded
+    // workspaces are never retro-refused).
+    await preparePlan(fixture, PLAN_ID);
+    const bound = await bindPlan(fixture, PLAN_ID);
+    expect(bound.outcome).toBe("claimed");
+  });
+});

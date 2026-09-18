@@ -89,6 +89,8 @@ import {
   type ProjectRegisterDoc,
   type ProjectRegisterEntry,
 } from "./project.js";
+import { assertCatalogExecutionCommitted } from "./catalog-registration.js";
+import { CatalogError } from "./catalog.js";
 import { parseCompassFrontmatterText } from "./iteration.js";
 import { rowPlanIds, validatePlanRow, validateResidual, validateStatusV2, type PlanRow, type StatusV2Doc } from "./status.js";
 import { getArtifactStore, resolveArtifactPath, type ArtifactRef, type ArtifactStore } from "./store.js";
@@ -1529,6 +1531,9 @@ async function bindCoordinatorSession(cwd: string, workflowId: string, harnessDi
         );
       }
       assertRootRegisterEntry(harnessRoot, workflowId);
+      // A root-visible workflow with a pending catalog registration is never a
+      // valid workspace to bind (contract §3 step 3).
+      await assertWorkflowRegistrationCommitted(harnessRoot, workflowId);
       const existing = snapshot.coordination?.coordinator;
       if (existing !== undefined) {
         throw new CoordinationError(
@@ -1624,6 +1629,9 @@ async function bindPlanSessionForPlan(scope: ResolvedPlanScope): Promise<Coordin
       // a frozen-input/pin discrepancy refuses before a lease or session is
       // created, and never overwrites either side.
       await assertExecutionCatalogPin({ harnessRoot, workflowId, planId, row: context.row });
+      // A root-visible workflow with a pending catalog registration is never a
+      // valid workspace (contract §3 step 3).
+      await assertWorkflowRegistrationCommitted(harnessRoot, workflowId);
       if (context.coordination.session !== undefined) {
         throw new CoordinationError(
           "coordination.duplicate-holder",
@@ -1910,6 +1918,34 @@ type CatalogPinFacts = {
 };
 
 /**
+ * The registration gate (contract §3 step 3) for the prepare/bind/selection
+ * readers: a root-visible workflow whose catalog registration is not committed
+ * refuses `catalog.registration-pending` — a pending operation is never a
+ * valid workspace. Pre-activation exclusion (§7 of the issue contract): a
+ * missing or staged store is not a catalog verdict, so workspaces without an
+ * ACTIVE store keep their pass-through and are never retro-refused here.
+ */
+async function assertWorkflowRegistrationCommitted(harnessRoot: string, workflowId: string): Promise<void> {
+  const context: StoreContext = { harnessDir: harnessRoot };
+  let handle: StoreHandle;
+  try {
+    handle = await openStore(context, "read");
+  } catch (error) {
+    if (error instanceof StoreError && error.code === "store.not-initialized") return;
+    throw error;
+  }
+  try {
+    await assertCatalogExecutionCommitted(context, workflowId);
+  } catch (error) {
+    // A staged store is the pre-activation exclusion (§7), not a catalog verdict.
+    if (error instanceof CatalogError && error.code === "store.not-active") return;
+    throw error;
+  } finally {
+    handle.close();
+  }
+}
+
+/**
  * The catalog side of a pin read. These are read-only lookups over the
  * catalog tables (`store_meta`, `catalog_entities`, `catalog_links`,
  * `catalog_execution_bindings`) — the same tables the registration journal
@@ -2005,6 +2041,9 @@ export async function readExecutionCatalogPin(input: {
   row: unknown;
 }): Promise<ExecutionCatalogPinState> {
   const { harnessRoot, workflowId, planId } = input;
+  // Selection readers refuse a root-visible workflow with a pending catalog
+  // registration before they resolve any pin (contract §3 step 3).
+  await assertWorkflowRegistrationCommitted(harnessRoot, workflowId);
   const facts = await readCatalogPinFacts(harnessRoot, workflowId, planId);
   const state: ExecutionCatalogPinState = {
     workflow_id: workflowId,
@@ -2192,7 +2231,7 @@ async function mutatePrepare(
     expectedRevision: request.expectedRevision,
     // `prepare` is the writer of the pin; it must not re-check the pin it replaces.
     freshness: false,
-    precheck: (context) => {
+    precheck: async (context) => {
       if (session.role !== "coordinator") {
         throw new CoordinationError("coordination.session-role", "only a coordinator session may prepare a plan", {
           role: session.role,
@@ -2237,6 +2276,9 @@ async function mutatePrepare(
           { plan_id: scope.planId, status: context.row.status },
         );
       }
+      // A root-visible workflow with a pending catalog registration is never a
+      // valid workspace to prepare against (contract §3 step 3).
+      await assertWorkflowRegistrationCommitted(scope.harnessRoot, scope.workflowId);
     },
     mutate: async (context) => {
       // Hashes are read inside the lock so the pinned bytes are the ones the
