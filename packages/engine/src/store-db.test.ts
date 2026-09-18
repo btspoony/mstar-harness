@@ -12,15 +12,20 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { resolveProcessHarnessDir } from "./coordination.js";
 import {
   MIN_BUN_VERSION,
   MIN_NODE_VERSION,
   StoreError,
   assertStoreRuntimeSupported,
   compareVersions,
+  initializeStore,
+  openStore,
+  storeDbPath,
+  upgradeStore,
 } from "./store-db.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-store-db-test-"));
@@ -117,5 +122,126 @@ describe.each([
 
   test(`recorded ${runtime} version is a supported floor`, () => {
     expect(version()).toMatch(/^(v?1\.[4-9]\.|v24\.1[89]\.|v2[5-9]\.)/);
+  });
+});
+
+describe("store-db L2 fix round", () => {
+  test("storeDbPath uses resolveProcessHarnessDir (control root, not worktree-local)", () => {
+    const worktree = process.cwd();
+    const resolved = resolveProcessHarnessDir(worktree);
+    const path = storeDbPath({ harnessDir: worktree });
+    expect(resolved).not.toBeNull();
+    expect(path).toBe(join(resolved!, "store.db"));
+    expect(path).not.toBe(join(worktree, "store.db"));
+  });
+
+  test("corrupt bytes refuse open and upgrade as store.corrupt", async () => {
+    const dir = mkdtempSync(join(ROOT, "corrupt-"));
+    writeFileSync(join(dir, "store.db"), "this is not a sqlite database");
+    await expect(openStore({ harnessDir: dir }, "read")).rejects.toMatchObject({ code: "store.corrupt" });
+    await expect(upgradeStore({ harnessDir: dir })).rejects.toMatchObject({ code: "store.corrupt" });
+  });
+
+  test("upgrade refuses malformed store_meta on a current-schema DB", async () => {
+    const dir = mkdtempSync(join(ROOT, "meta-"));
+    const handle = await initializeStore({ harnessDir: dir });
+    handle.db.exec("delete from store_meta where id = 1");
+    handle.close();
+    await expect(upgradeStore({ harnessDir: dir })).rejects.toMatchObject({ code: "store.corrupt" });
+  });
+
+  test("failed init leaves no partial store", async () => {
+    const dir = mkdtempSync(join(ROOT, "fail-init-"));
+    const previous = process.env.MSTAR_STORE_FAIL_INIT;
+    const runner = process.env.MSTAR_STORE_TEST_RUNNER;
+    process.env.MSTAR_STORE_TEST_RUNNER = "1";
+    process.env.MSTAR_STORE_FAIL_INIT = "1";
+    try {
+      await expect(initializeStore({ harnessDir: dir })).rejects.toThrow(/induced init failure/);
+      expect(existsSync(join(dir, "store.db"))).toBe(false);
+    } finally {
+      if (previous === undefined) delete process.env.MSTAR_STORE_FAIL_INIT;
+      else process.env.MSTAR_STORE_FAIL_INIT = previous;
+      if (runner === undefined) delete process.env.MSTAR_STORE_TEST_RUNNER;
+      else process.env.MSTAR_STORE_TEST_RUNNER = runner;
+    }
+  });
+
+  test("concurrent initializers do not depend on a racy pre-check", async () => {
+    const dir = mkdtempSync(join(ROOT, "concurrent-"));
+    const results = await Promise.allSettled([
+      initializeStore({ harnessDir: dir }),
+      initializeStore({ harnessDir: dir }),
+    ]);
+    const ok = results.filter((r) => r.status === "fulfilled");
+    const refused = results.filter(
+      (r) => r.status === "rejected" && r.reason instanceof StoreError && r.reason.code === "store.already-exists",
+    );
+    expect(ok.length).toBe(1);
+    expect(refused.length).toBe(1);
+    if (ok[0]?.status === "fulfilled") ok[0].value.close();
+    const reader = await openStore({ harnessDir: dir }, "read");
+    expect(reader.epoch).toBe(1);
+    reader.close();
+  });
+
+  test("busy-timeout override is inert without the test-runner marker", async () => {
+    const dir = mkdtempSync(join(ROOT, "busy-"));
+    const previousBusy = process.env.MSTAR_STORE_BUSY_TIMEOUT_MS;
+    const previousRunner = process.env.MSTAR_STORE_TEST_RUNNER;
+    delete process.env.MSTAR_STORE_TEST_RUNNER;
+    process.env.MSTAR_STORE_BUSY_TIMEOUT_MS = "1";
+    try {
+      const handle = await initializeStore({ harnessDir: dir });
+      const row = handle.db.prepare("pragma busy_timeout").get() as { timeout?: number; busy_timeout?: number };
+      const timeout = row.timeout ?? row.busy_timeout;
+      expect(timeout).toBe(5000);
+      handle.close();
+    } finally {
+      if (previousBusy === undefined) delete process.env.MSTAR_STORE_BUSY_TIMEOUT_MS;
+      else process.env.MSTAR_STORE_BUSY_TIMEOUT_MS = previousBusy;
+      if (previousRunner === undefined) delete process.env.MSTAR_STORE_TEST_RUNNER;
+      else process.env.MSTAR_STORE_TEST_RUNNER = previousRunner;
+    }
+  });
+
+  test("migration-1 forbids self-edges, sorts related endpoints, and constrains imported 0/1", async () => {
+    const dir = mkdtempSync(join(ROOT, "invariants-"));
+    const handle = await initializeStore({ harnessDir: dir });
+    handle.db
+      .prepare(
+        "insert into issues(id, project_id, title, kind, severity, impact, acceptance, created_at, updated_at, identity_key)" +
+          " values ('I-000001', 'p', 't', 'bug', 'high', 'i', 'a', '2026-09-18T00:00:00.000Z', '2026-09-18T00:00:00.000Z', 'k1')",
+      )
+      .run();
+    handle.db
+      .prepare(
+        "insert into issues(id, project_id, title, kind, severity, impact, acceptance, created_at, updated_at, identity_key)" +
+          " values ('I-000002', 'p', 't', 'bug', 'high', 'i', 'a', '2026-09-18T00:00:00.000Z', '2026-09-18T00:00:00.000Z', 'k2')",
+      )
+      .run();
+    expect(() =>
+      handle.db
+        .prepare("insert into relations(from_issue, relation, to_issue) values ('I-000001', 'blocks', 'I-000001')")
+        .run(),
+    ).toThrow();
+    expect(() =>
+      handle.db
+        .prepare("insert into relations(from_issue, relation, to_issue) values ('I-000002', 'related', 'I-000001')")
+        .run(),
+    ).toThrow();
+    handle.db
+      .prepare("insert into relations(from_issue, relation, to_issue) values ('I-000001', 'related', 'I-000002')")
+      .run();
+    expect(() =>
+      handle.db
+        .prepare(
+          "insert into occurrences(issue_id, occurrence_key, source_kind, source_identity, root_cause_key," +
+            " acceptance_key, location, observed_behavior, evidence_json, recorded_at, imported) values" +
+            " ('I-000001', 'ok1', 'test', 's', 'rc', 'ac', 'loc', 'ob', '[]', '2026-09-18T00:00:00.000Z', 2)",
+        )
+        .run(),
+    ).toThrow();
+    handle.close();
   });
 });

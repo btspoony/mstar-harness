@@ -18,6 +18,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, unlinkSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { resolveProcessHarnessDir } from "./coordination.js";
 
 /** Minimum Bun runtime floor (contract §8). */
 export const MIN_BUN_VERSION = "1.4.0";
@@ -26,8 +27,9 @@ export const MIN_NODE_VERSION = "24.18.0";
 /** Default bounded wait for a competing writer before a visible refusal. */
 const DEFAULT_BUSY_TIMEOUT_MS = 5000;
 
-/** Stable refusal codes (contract §5, plus `store.already-exists` for the
- * create-only `initializeStore` guard). No refusal turns into empty findings. */
+/** Stable refusal codes (contract §5). `store.already-exists` is the
+ * create-only initializer's refusal for an existing store — never reuse
+ * `store.not-initialized` for a store that is already on disk. */
 export type StoreErrorCode =
   | "store.runtime-unsupported"
   | "store.not-initialized"
@@ -139,19 +141,43 @@ async function loadSqliteDriver(): Promise<SqliteModule> {
   }
 }
 
-/** `{HARNESS_DIR}/store.db` — the caller-supplied harness dir is the control
- * root; this module never resolves a cwd-local path, so feature worktrees do
- * not create a database of their own (contract §2). */
+/** `{resolved process/control harness root}/store.db` via
+ * `resolveProcessHarnessDir` (contract §2): linked feature worktrees and
+ * `.mstarc` resolvers cannot select a cwd-local database. An isolated
+ * non-git directory (test harness root) falls back to the supplied path. */
 export function storeDbPath(context: { harnessDir: string }): string {
   if (!context?.harnessDir) throw new StoreError("store.corrupt", "StoreContext.harnessDir is required");
-  return join(resolve(context.harnessDir), "store.db");
+  const start = resolve(context.harnessDir);
+  const resolved = resolveProcessHarnessDir(start);
+  return join(resolved ?? start, "store.db");
 }
 
-/** Test-only bounded-wait override; production always waits the default. */
+/** Bounded wait is fixed at 5000ms in production (contract §2). The
+ * `MSTAR_STORE_BUSY_TIMEOUT_MS` override is test-runner-gated: it is
+ * honored only when `MSTAR_STORE_TEST_RUNNER` is set, so a shipped
+ * CLI/plugin process cannot change the timeout or the refusal text. */
 function busyTimeoutMs(): number {
-  const raw = process.env.MSTAR_STORE_BUSY_TIMEOUT_MS;
-  const parsed = raw === undefined ? NaN : Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_BUSY_TIMEOUT_MS;
+  if (process.env.MSTAR_STORE_TEST_RUNNER === "1") {
+    const raw = process.env.MSTAR_STORE_BUSY_TIMEOUT_MS;
+    const parsed = raw === undefined ? NaN : Number.parseInt(raw, 10);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  return DEFAULT_BUSY_TIMEOUT_MS;
+}
+
+function refuseOpenFailure(error: unknown, dbPath: string): never {
+  if (error instanceof StoreError) throw error;
+  if (isBusyError(error)) {
+    throw new StoreError(
+      "store.busy",
+      `Another writer held the store past the bounded wait (${busyTimeoutMs()}ms). ` +
+        `Retry when the competing writer is done; no write was accepted.`,
+    );
+  }
+  throw new StoreError(
+    "store.corrupt",
+    `The store at ${dbPath} is unreadable or not a SQLite database: ${(error as Error).message}`,
+  );
 }
 
 /** Map a bounded-wait BUSY failure to the stable visible refusal. */
@@ -218,28 +244,42 @@ async function connect(dbPath: string, mode: "read" | "write"): Promise<StoreDb>
   const { DatabaseSync } = await loadSqliteDriver();
   // node:sqlite rejects an explicit `undefined` options argument — open
   // writers without a second argument, readers with the read-only option.
-  const db = mode === "read" ? new DatabaseSync(dbPath, { readOnly: true }) : new DatabaseSync(dbPath);
+  let db: StoreDb;
+  try {
+    db = mode === "read" ? new DatabaseSync(dbPath, { readOnly: true }) : new DatabaseSync(dbPath);
+  } catch (error) {
+    refuseOpenFailure(error, dbPath);
+  }
   const fail = (message: string): never => {
     db.close();
     throw new StoreError("store.corrupt", `${message} (opening ${dbPath})`);
   };
-  db.exec(`pragma busy_timeout=${busyTimeoutMs()}`);
-  if (mode === "read") {
-    db.exec("pragma query_only=ON");
-    if ((db.prepare("pragma query_only").get() as { query_only?: number } | undefined)?.query_only !== 1) {
-      fail("query_only pragma did not hold");
+  try {
+    db.exec(`pragma busy_timeout=${busyTimeoutMs()}`);
+    if (mode === "read") {
+      db.exec("pragma query_only=ON");
+      if ((db.prepare("pragma query_only").get() as { query_only?: number } | undefined)?.query_only !== 1) {
+        fail("query_only pragma did not hold");
+      }
+    } else {
+      const wal = db.prepare("pragma journal_mode=wal").get() as { journal_mode?: string } | undefined;
+      if (wal?.journal_mode !== "wal") fail("WAL journal mode was not applied");
+      db.exec("pragma synchronous=FULL");
+      if ((db.prepare("pragma synchronous").get() as { synchronous?: number } | undefined)?.synchronous !== 2) {
+        fail("synchronous=FULL was not applied");
+      }
     }
-  } else {
-    const wal = db.prepare("pragma journal_mode=wal").get() as { journal_mode?: string } | undefined;
-    if (wal?.journal_mode !== "wal") fail("WAL journal mode was not applied");
-    db.exec("pragma synchronous=FULL");
-    if ((db.prepare("pragma synchronous").get() as { synchronous?: number } | undefined)?.synchronous !== 2) {
-      fail("synchronous=FULL was not applied");
+    db.exec("pragma foreign_keys=ON");
+    if ((db.prepare("pragma foreign_keys").get() as { foreign_keys?: number } | undefined)?.foreign_keys !== 1) {
+      fail("foreign_keys enforcement was not applied");
     }
-  }
-  db.exec("pragma foreign_keys=ON");
-  if ((db.prepare("pragma foreign_keys").get() as { foreign_keys?: number } | undefined)?.foreign_keys !== 1) {
-    fail("foreign_keys enforcement was not applied");
+  } catch (error) {
+    try {
+      db.close();
+    } catch {
+      // already closed by fail()
+    }
+    refuseOpenFailure(error, dbPath);
   }
   return busyAware(db, dbPath);
 }
@@ -312,14 +352,16 @@ create table occurrences(
   evidence_json text not null,
   discovered_at text,
   recorded_at text not null,
-  imported integer not null default 0
+  imported integer not null default 0 check (imported in (0, 1))
 );
 create index occurrences_issue_activity on occurrences(issue_id, discovered_at, id);
 create table relations(
   from_issue text not null references issues(id),
   relation text not null check (relation in ('related','blocks','duplicate-of','superseded-by')),
   to_issue text not null references issues(id),
-  primary key (from_issue, relation, to_issue)
+  primary key (from_issue, relation, to_issue),
+  check (from_issue != to_issue),
+  check (relation != 'related' or from_issue < to_issue)
 );
 create table provenance(
   id integer primary key,
@@ -344,7 +386,7 @@ create table issue_transitions(
   recorded_at text not null,
   reason text not null,
   evidence_json text not null,
-  imported integer not null default 0,
+  imported integer not null default 0 check (imported in (0, 1)),
   issue_revision integer not null
 );
 create table store_operations(
@@ -469,11 +511,12 @@ function validateAppliedMigrations(applied: AppliedMigration[]): number {
  * each version row only as it applies, verify the final set, and roll the
  * whole batch back on any failure — no dirty partial schema (contract §2).
  */
-function applyPendingMigrations(db: StoreDb): number {
+function applyPendingMigrations(db: StoreDb, options: { alreadyInTransaction?: boolean } = {}): number {
+  const own = !options.alreadyInTransaction;
   const prior = readAppliedMigrations(db, true);
   const priorMax = prior.length === 0 ? 0 : validateAppliedMigrations(prior);
   const pending = MIGRATIONS.filter((m) => m.version > priorMax);
-  db.exec("begin immediate");
+  if (own) db.exec("begin immediate");
   try {
     if (prior.length === 0) db.exec(SCHEMA_VERSION_TABLE_SQL);
     for (const migration of pending) {
@@ -486,13 +529,15 @@ function applyPendingMigrations(db: StoreDb): number {
       );
     }
     const finalMax = validateAppliedMigrations(readAppliedMigrations(db, false));
-    db.exec("commit");
+    if (own) db.exec("commit");
     return finalMax;
   } catch (error) {
-    try {
-      db.exec("rollback");
-    } catch {
-      // connection-level failure during rollback — nothing was committed
+    if (own) {
+      try {
+        db.exec("rollback");
+      } catch {
+        // connection-level failure during rollback — nothing was committed
+      }
     }
     if (error instanceof StoreError) throw error;
     if (isBusyError(error)) {
@@ -582,14 +627,7 @@ export async function openStore(context: StoreContext, mode: "read" | "write"): 
   try {
     db = await connect(dbPath, mode);
   } catch (error) {
-    if (isBusyError(error)) {
-      throw new StoreError(
-        "store.busy",
-        `Another writer held the store past the bounded wait (${busyTimeoutMs()}ms). ` +
-          `Retry when the competing writer is done; no write was accepted.`,
-      );
-    }
-    throw error;
+    refuseOpenFailure(error, dbPath);
   }
   try {
     const schemaVersion = validateAppliedMigrations(readAppliedMigrations(db, false));
@@ -605,7 +643,7 @@ export async function openStore(context: StoreContext, mode: "read" | "write"): 
     };
   } catch (error) {
     db.close();
-    throw error;
+    refuseOpenFailure(error, dbPath);
   }
 }
 
@@ -618,18 +656,27 @@ export async function openStore(context: StoreContext, mode: "read" | "write"): 
 export async function initializeStore(context: StoreContext): Promise<StoreHandle> {
   assertStoreRuntimeSupported();
   const dbPath = storeDbPath(context);
-  if (existsSync(dbPath)) {
-    throw new StoreError(
+  const createdFile = !existsSync(dbPath);
+  const alreadyExists = (): StoreError =>
+    new StoreError(
       "store.already-exists",
-      `An issue store already exists at ${dbPath}. "store init" is create-only; ` +
-        `use the upgrade path for schema changes. Nothing was modified.`,
+      `An issue store already exists at ${dbPath}. "store init" is create-only and must not reuse ` +
+        `store.not-initialized for an existing store; use the upgrade path for schema changes. Nothing was modified.`,
     );
-  }
-  const db = await connect(dbPath, "write");
+  let db: StoreDb | undefined;
   try {
-    applyPendingMigrations(db);
+    db = await connect(dbPath, "write");
+    if (process.env.MSTAR_STORE_TEST_RUNNER === "1" && process.env.MSTAR_STORE_FAIL_INIT === "1") {
+      throw new Error("induced init failure");
+    }
     db.exec("begin immediate");
     try {
+      const prior = readAppliedMigrations(db, true);
+      if (prior.length > 0) {
+        db.exec("rollback");
+        throw alreadyExists();
+      }
+      applyPendingMigrations(db, { alreadyInTransaction: true });
       db.prepare("update store_meta set authority_state = 'active', activated_at = ? where id = 1").run(nowRfc3339());
       db.exec("commit");
     } catch (error) {
@@ -651,13 +698,21 @@ export async function initializeStore(context: StoreContext): Promise<StoreHandl
       },
     };
   } catch (error) {
-    db.close();
-    // Create-only: a failed init leaves no database behind.
-    for (const suffix of ["", "-wal", "-shm"]) {
+    if (db) {
       try {
-        unlinkSync(dbPath + suffix);
+        db.close();
       } catch {
-        // best-effort cleanup of our own failed create
+        // closed after a connection-level failure
+      }
+    }
+    const skipUnlink = error instanceof StoreError && error.code === "store.already-exists";
+    if (createdFile && !skipUnlink) {
+      for (const suffix of ["", "-wal", "-shm"]) {
+        try {
+          unlinkSync(dbPath + suffix);
+        } catch {
+          // best-effort cleanup of our own failed create
+        }
       }
     }
     throw error;
@@ -680,10 +735,18 @@ export async function upgradeStore(context: StoreContext): Promise<{ schemaVersi
         `genuinely empty workspace. Nothing was created.`,
     );
   }
-  const db = await connect(dbPath, "write");
+  let db: StoreDb;
+  try {
+    db = await connect(dbPath, "write");
+  } catch (error) {
+    refuseOpenFailure(error, dbPath);
+  }
   try {
     const schemaVersion = applyPendingMigrations(db);
+    readStoreMeta(db);
     return { schemaVersion };
+  } catch (error) {
+    refuseOpenFailure(error, dbPath);
   } finally {
     db.close();
   }

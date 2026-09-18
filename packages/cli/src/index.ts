@@ -6262,7 +6262,7 @@ program.parseAsync(process.argv).catch((error: unknown) => {
   // (contract §5): stable code + actionable message on stderr, exit 1 —
   // never a silent empty result and never a transport fallback.
   if (error instanceof StoreError) {
-    console.error(pc.red(`Store refused [${error.code}]: ${(error as Error).message}`));
+    console.error(pc.red(`Store refused: ${(error as Error).message}`));
     process.exitCode = 1;
     return;
   }
