@@ -372,7 +372,7 @@ describe("mstar store activate / retire / backup", () => {
     });
     const refused = await runStore(["activate", "--manifest", manifestFile, "--attestation", noCoordinator, "--harness", harness, "--json"]);
     expect(refused.exitCode).toBe(1);
-    expect(jsonOf(refused.stdout).code).toBe("store.attestation-invalid");
+    expect(jsonOf(refused.stdout).code).toBe("store.activation-blocked");
     expect(jsonOf(refused.stdout).message).toContain("current coordinator");
 
     // A usage-level manifest problem still exits 2 rather than pretending refusal.

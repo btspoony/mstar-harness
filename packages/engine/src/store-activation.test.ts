@@ -234,7 +234,7 @@ function ledgerPathOf(fixture: Fixture, activation: ActivationReceipt): string {
 describe("store activation barrier", () => {
   test("activation refuses an attestation with no installed consumer", async () => {
     const { context, apply } = await stagedFixture("activation-consumers-");
-    const error = await refusalOf("store.attestation-invalid", () =>
+    const error = await refusalOf("store.activation-blocked", () =>
       activateStore(context, apply, attestation({ consumers: [] })),
     );
     expect(error.message).toContain("at least one installed consumer");
@@ -247,7 +247,7 @@ describe("store activation barrier", () => {
   test("activation refuses an attestation without the current coordinator", async () => {
     const { context, apply } = await stagedFixture("activation-coordinator-");
     const consumers = attestation().consumers.map((consumer) => ({ ...consumer, current: false }));
-    const error = await refusalOf("store.attestation-invalid", () =>
+    const error = await refusalOf("store.activation-blocked", () =>
       activateStore(context, apply, attestation({ consumers })),
     );
     expect(error.message).toContain("current coordinator");
@@ -259,13 +259,13 @@ describe("store activation barrier", () => {
     const belowFloor = attestation().consumers.map((consumer, index) =>
       index === 0 ? { ...consumer, runtimeVersion: "1.3.14" as const } : consumer,
     );
-    const floorError = await refusalOf("store.attestation-invalid", () =>
+    const floorError = await refusalOf("store.activation-blocked", () =>
       activateStore(context, apply, attestation({ consumers: belowFloor })),
     );
     expect(floorError.message).toContain("below the 1.4.0 floor");
 
     const runningSession = { ...attestation(), stoppedSessions: [{ sessionId: "sess-1", host: "omp", state: "running" }] } as unknown as ActivationAttestation;
-    const sessionError = await refusalOf("store.attestation-invalid", () => activateStore(context, apply, runningSession));
+    const sessionError = await refusalOf("store.activation-blocked", () => activateStore(context, apply, runningSession));
     expect(sessionError.message).toContain("not quiesced");
   });
 
@@ -296,6 +296,82 @@ describe("store activation barrier", () => {
     // The refusal precedes the backup: no pre-activation recovery point was written.
     const backupsDir = join(harness, "archived", "store-migration", "backups");
     expect(existsSync(backupsDir) ? readdirSync(backupsDir).filter((name) => name.startsWith("pre-activation-")) : []).toEqual([]);
+  });
+
+  test("activation refuses a legacy register write that lands after the inspection pass, without bumping the epoch", async () => {
+    const fixture = await stagedFixture("activation-barrier-register-");
+    const { context, harness, apply } = fixture;
+    const stagedMeta = await metaOf(context);
+    const registerPath = join(harness, "projects", "engine", "residuals.json");
+    const reviewedBytes = readFileSync(registerPath);
+
+    // The write an old binary leaves: the reviewed register plus one more
+    // captured finding, landing after the inspection pass and before the flip.
+    const lateRegister = join(fixture.root, "late-legacy-register.json");
+    writeFileSync(
+      lateRegister,
+      `${JSON.stringify({ entries: { "plan-alpha": [entry({ id: "R1", severity: "medium" }), entry({ id: "R9", severity: "low" })] } }, null, 2)}\n`,
+    );
+
+    const error = await withEnv(
+      {
+        MSTAR_STORE_INJECT_LEGACY_WRITE_AFTER: "inspection",
+        MSTAR_STORE_INJECT_LEGACY_WRITE_TARGET: registerPath,
+        MSTAR_STORE_INJECT_LEGACY_WRITE_FROM: lateRegister,
+      },
+      () => refusalOf("store.migration-source-changed", () => activateStore(context, apply, attestation())),
+    );
+    expect(error.message).toContain("no longer holds the reviewed bytes");
+    expect(error.message).toContain("Nothing was activated");
+
+    // The refusal came from the barrier, not the inspection pass: that pass
+    // refuses before the recovery point, and the recovery point is already
+    // written here.
+    const backupsDir = join(harness, "archived", "store-migration", "backups");
+    expect(readdirSync(backupsDir).filter((name) => name.startsWith("pre-activation-")).length).toBe(1);
+
+    // The epoch did not move, no activation was receipted, and the old writer's
+    // bytes were NOT deleted.
+    const after = await metaOf(context);
+    expect(after.store_id).toBe(stagedMeta.store_id);
+    expect(after.authority_state).toBe("staged");
+    expect(after.authority_epoch).toBe(stagedMeta.authority_epoch);
+    expect(after.revision).toBe(stagedMeta.revision);
+    expect((await receiptRows(context, "activated")).length).toBe(0);
+    expect(readFileSync(registerPath).equals(reviewedBytes)).toBe(false);
+    expect(readFileSync(registerPath).equals(readFileSync(lateRegister))).toBe(true);
+  });
+
+  test("activation refuses a legacy index write that lands after the inspection pass, without bumping the epoch", async () => {
+    const fixture = await stagedFixture("activation-barrier-index-");
+    const { context, harness, apply } = fixture;
+    const stagedMeta = await metaOf(context);
+    const readmePath = join(harness, "iterations", "README.md");
+
+    // An old binary maintaining the index adds one more iteration row.
+    const lateIndex = join(fixture.root, "late-legacy-index.md");
+    writeFileSync(
+      lateIndex,
+      `${[...INDEX_HEAD, ...INDEX_TABLE, "| `iter-late` | `iter-late/` | added by an old binary | `active` |", ...INDEX_TAIL].join("\n")}\n`,
+    );
+
+    const error = await withEnv(
+      {
+        MSTAR_STORE_INJECT_LEGACY_WRITE_AFTER: "inspection",
+        MSTAR_STORE_INJECT_LEGACY_WRITE_TARGET: readmePath,
+        MSTAR_STORE_INJECT_LEGACY_WRITE_FROM: lateIndex,
+      },
+      () => refusalOf("store.migration-source-changed", () => activateStore(context, apply, attestation())),
+    );
+    expect(error.message).toContain("is changed since review");
+    expect(error.message).toContain("Nothing was activated");
+
+    const after = await metaOf(context);
+    expect(after.authority_state).toBe("staged");
+    expect(after.authority_epoch).toBe(stagedMeta.authority_epoch);
+    expect(after.revision).toBe(stagedMeta.revision);
+    expect((await receiptRows(context, "activated")).length).toBe(0);
+    expect(readFileSync(readmePath, "utf8")).toBe(readFileSync(lateIndex, "utf8"));
   });
 
   test("activation epoch flip is atomic, single and idempotent on replay", async () => {

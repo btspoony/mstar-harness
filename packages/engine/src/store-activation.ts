@@ -9,8 +9,12 @@
  *   (concrete entrypoints/versions, quiesced sessions, the approving operator;
  *   never session credentials), revalidated exact source hashes/catalog
  *   digests, and a verified `VACUUM INTO` backup of the staged store. The
- *   authority-state flip, the epoch increment and the receipt row commit in
- *   ONE transaction — the epoch is atomic, not a follow-up write.
+ *   revalidation runs twice: on the inspection connection, and again INSIDE the
+ *   flip transaction, so a legacy write landing in the window after the
+ *   inspection pass refuses instead of letting the epoch bump against sources
+ *   that no longer hold the reviewed bytes. The authority-state flip, the epoch
+ *   increment and the receipt row commit in ONE transaction — the epoch is
+ *   atomic, not a follow-up write.
  * - Every receipt carries the authority generation (`storeId` + `epoch`), and
  *   `assertAuthorityCurrent` / the retirement re-check refuse a resumed handle
  *   or receipt from an earlier generation with `store.stale-epoch` instead of
@@ -66,6 +70,7 @@ export const ACTIVATION_PROTOCOL_VERSION = 1;
 /** Stable refusal codes of the activation/retirement transport (§5 + §7). */
 export type StoreActivationErrorCode =
   | "store.attestation-invalid"
+  | "store.activation-blocked"
   | "store.activation-stale"
   | "store.not-active"
   | "store.stale-epoch"
@@ -554,8 +559,28 @@ const DISPOSITIONS: Record<AttestationDisposition, true> = {
 };
 const SESSION_STATES: Record<"stopped" | "reloaded", true> = { stopped: true, reloaded: true };
 
+/**
+ * Two refusal families, as contract §7 distinguishes them.
+ *
+ * `store.attestation-invalid` is an attestation DOCUMENT that cannot be used at
+ * all: a wrong version, a missing/ill-typed field, a contradictory claim (two
+ * current coordinators), or an undeclared field such as a session credential.
+ * `store.activation-blocked` is §7's documented stop — "if exclusion or
+ * required restart/re-entry proof is incomplete, stop with
+ * `store.activation-blocked`; legacy remains sole authority" — for readiness
+ * that is documented but incomplete: no attested consumer, a consumer below the
+ * runtime floor or left running/unattested, no current coordinator, or a
+ * session that was never quiesced. Both refuse before a byte is written, so
+ * legacy remains sole authority either way; they stay distinct because the
+ * operator remedy differs (fix the barrier vs. fix the document).
+ */
 function attestationRefusal(message: string): never {
   throw new StoreActivationError("store.attestation-invalid", message);
+}
+
+/** §7's stop for exclusion / restart-re-entry proof that is incomplete. */
+function activationBlocked(message: string): never {
+  throw new StoreActivationError("store.activation-blocked", message);
 }
 
 function attestationObject(value: unknown, what: string): Record<string, unknown> {
@@ -605,8 +630,9 @@ export function validateActivationAttestation(value: unknown): ActivationAttesta
   const actor = attestationString(operator, "actor", "the attestation.operator");
   const authorizationRef = attestationString(operator, "authorizationRef", "the attestation.operator");
 
-  if (!Array.isArray(raw.consumers) || raw.consumers.length === 0) {
-    attestationRefusal(
+  if (!Array.isArray(raw.consumers)) attestationRefusal("the attestation.consumers must be an array");
+  if (raw.consumers.length === 0) {
+    activationBlocked(
       "the attestation must attest at least one installed consumer (entrypoint, version and disposition); a merely merged " +
         "source tree is not installed-consumer readiness",
     );
@@ -629,14 +655,14 @@ export function validateActivationAttestation(value: unknown): ActivationAttesta
     const runtimeVersion = attestationString(consumer, "runtimeVersion", what);
     const floor = runtime === "bun" ? MIN_BUN_VERSION : MIN_NODE_VERSION;
     if (compareVersions(runtimeVersion, floor) < 0) {
-      attestationRefusal(
+      activationBlocked(
         `${what} (${entryId}) reports ${runtime} ${runtimeVersion}, below the ${floor} floor; an old binary is not a ` +
           `compatible consumer. Upgrade/reload it or exclude it explicitly.`,
       );
     }
     const disposition = consumer.disposition;
     if (typeof disposition !== "string" || !Object.hasOwn(DISPOSITIONS, disposition)) {
-      attestationRefusal(
+      activationBlocked(
         `${what}.disposition must be one of ${Object.keys(DISPOSITIONS).join(", ")}; a consumer left running/unattested ` +
           `stops the barrier — if a host cannot reload safely, stop at the exact user-restart step instead`,
       );
@@ -655,7 +681,7 @@ export function validateActivationAttestation(value: unknown): ActivationAttesta
   });
   const current = consumers.filter((consumer) => consumer.current);
   if (current.length === 0) {
-    attestationRefusal(
+    activationBlocked(
       "the attestation does not mark a current coordinator; the coordinator driving this activation must attest its own " +
         "reloaded/upgraded entry, including its queued/reused sessions",
     );
@@ -674,7 +700,7 @@ export function validateActivationAttestation(value: unknown): ActivationAttesta
     attestationKeys(session, ["sessionId", "host", "state"], what);
     const state = session.state;
     if (typeof state !== "string" || !Object.hasOwn(SESSION_STATES, state)) {
-      attestationRefusal(`${what}.state must be "stopped" or "reloaded"; a running or queued session is not quiesced and stops the barrier`);
+      activationBlocked(`${what}.state must be "stopped" or "reloaded"; a running or queued session is not quiesced and stops the barrier`);
     }
     return {
       sessionId: attestationString(session, "sessionId", what),
@@ -943,6 +969,23 @@ function failureHook(stage: "flip" | "retirement" | "section-write", completed: 
   if (Number.isInteger(parsed) && parsed === completed) throw new Error(`induced retirement failure after ${completed} item(s)`);
 }
 
+/**
+ * Second test seam, gated the same way: an OLD BINARY that lands a register
+ * write in the window between the inspection pass and the barrier transaction
+ * — the window the barrier-time revalidation closes. The seam only copies
+ * bytes; which register and which bytes are the test's, so no fixture shape
+ * lives here. Inert without `MSTAR_STORE_TEST_RUNNER=1`, so no shipped CLI,
+ * plugin or hook process can reach it.
+ */
+function legacyWriteHook(stage: "inspection"): void {
+  if (process.env.MSTAR_STORE_TEST_RUNNER !== "1") return;
+  if (process.env.MSTAR_STORE_INJECT_LEGACY_WRITE_AFTER !== stage) return;
+  const target = process.env.MSTAR_STORE_INJECT_LEGACY_WRITE_TARGET;
+  const source = process.env.MSTAR_STORE_INJECT_LEGACY_WRITE_FROM;
+  if (target === undefined || source === undefined) return;
+  copyFileSync(source, target);
+}
+
 // ---------------------------------------------------------------------------
 // Activation barrier (§7)
 // ---------------------------------------------------------------------------
@@ -1034,6 +1077,8 @@ export async function activateStore(
           `${receipt.storeRevision}; the staged store changed after the reviewed apply. Re-apply the final manifest first.`,
       );
     }
+    // First of two: this pass refuses a drifted source before the recovery
+    // point is written. The decisive one runs inside the flip transaction.
     revalidateSources(context, manifest, "activation");
     await revalidateCatalogSources(context, manifest, "activation");
   } finally {
@@ -1048,6 +1093,10 @@ export async function activateStore(
     reuseMatchingIdentity: true,
   });
 
+  // Test seam: an old binary writes a register here — after the inspection pass
+  // above and before the barrier transaction below.
+  legacyWriteHook("inspection");
+
   const flip = await openStore(context, "write");
   try {
     const at = new Date().toISOString();
@@ -1060,6 +1109,14 @@ export async function activateStore(
           "the staged store changed while the barrier was running; the activation was rolled back. Re-check and retry.",
         );
       }
+      // Barrier-time byte fence. The inspection pass ran on its own connection
+      // and the recovery point was taken after it, so a legacy writer could have
+      // landed register bytes or an index section in between. Revalidate the
+      // reviewed register bytes and catalog digests HERE, inside the flip
+      // transaction: the epoch never bumps against sources that no longer hold
+      // the reviewed bytes, whatever landed after the inspection.
+      revalidateSources(context, manifest, "activation");
+      await revalidateCatalogSources(context, manifest, "activation");
       const epoch = current.epoch + 1;
       const revision = current.revision + 1;
       const activationHash = activationHashOf({
