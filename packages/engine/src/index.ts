@@ -702,3 +702,35 @@ export {
   publishProjectionCapture,
   refreshProjections,
 } from "./projection.js";
+// Issue-store read boundary (plan 20260918-state-projection P6): the ONE read
+// entry for dashboard and rollup consumers -- one handle per request, every
+// view query in one read transaction, and an honest projection disclosure in
+// the envelope. ADDITIVE export added by P6 because the engine package's
+// exports map is the only reachable surface for the CLI transport
+// (`packages/cli/src/store-read.ts`) and for the dashboard plan that consumes
+// it; no producer surface is changed.
+export type {
+  CatalogIdentityDTO,
+  CompassDTO,
+  DashboardBadge,
+  DashboardFilters,
+  DashboardView,
+  DashboardViewData,
+  GoalDTO,
+  IssueFlow,
+  IssueFlowBucket,
+  IterationDTO,
+  IterationListDTO,
+  IterationPlanDTO,
+  LeaseDTO,
+  MilestoneDTO,
+  ReadEnvelope,
+  ReadProjection,
+  RoadmapDTO,
+  StoreReadErrorCode,
+  StoreReadQuery,
+  WorkflowDTO,
+  WorkflowListDTO,
+  WorkflowPlanDTO,
+} from "./store-read.js";
+export { StoreReadError, queryDashboard, queryIssueFlow, withStoreRead } from "./store-read.js";
