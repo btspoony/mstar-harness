@@ -308,6 +308,12 @@ Carrier moments — where the PM meets the marker:
 | `phase-2-entry` | `mstar-iteration/references/phase-2-worktree-lease.md` immediately before the `## 2.4 Per-plan loop` heading (the Phase 2 execute/resume entry after the §2.0 gates) |
 | `rescheduling-checkpoint` | `mstar-iteration/references/phase-2-worktree-lease.md` §2.4 (`### Rescheduling checkpoint`) |
 
+### Session identity association (host → `plan bind`)
+
+Two comparisons this surface makes — the `phase-1-lock` readiness checkpoint and the `iteration-entry` start-authority scan — compare the **engine** session id with the **host** session id, so they are one identifier only when the engine was told which one to adopt. The model-handoff extension closes that gap on the host side: each `bash` tool call of its session is revised to carry the host session id in **`MSTAR_HOST_SESSION_ID`** — an overwrite of any caller-supplied value under that name, `bash` only, nothing injected for a host session with no id, and no engine or harness write, notice or state. A fresh `mstar plan bind` resolves its identity **`--session-id` → `MSTAR_HOST_SESSION_ID` → the engine-generated id**: the flag wins and is taken verbatim, the injected variable is the fallback (trimmed; empty or whitespace-only counts as absent), and the generated default is unchanged. One host session may hold both sessions a workflow needs — a coordinator session and a plan-pm session — both carrying the same host-derived `session_id`; the engine distinguishes the two envelopes by the role-scoped file name (`<role>-<session-id>.json`). `--resume` never re-identifies and refuses `--session-id` as a usage error.
+
+No comparison is relaxed. An **absent** association (nothing injected, or a host session with no id) and a **foreign** one (the id belongs to another session) still refuse: readiness keeps failing its `binding-invalid` code, the start-authority refusals (`task-session`, `plan-pm-session`, `coordinator-elsewhere`) keep their codes, and an id the engine cannot use as the envelope's file name is refused with `coordination.invalid-session-id` before any write. Other hosts are unaffected — this extension is the only producer of the variable, so a bind elsewhere keeps the engine-generated id unless the variable is set in that session's environment.
+
 ### Auto-trigger boundary — the diagnosed failure mode
 
 Neither extension ever arms, binds or checkpoints by itself:

@@ -63,6 +63,7 @@ const EXTENSION_EVENTS = [
   "session_tree",
   "session_start",
   "session_shutdown",
+  "tool_call",
 ];
 
 /** `package.json` as this package publishes it. */
