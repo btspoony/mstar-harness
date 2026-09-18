@@ -421,16 +421,133 @@ describe("store-migrate apply", () => {
     }
     expect(dbFilesUnder(blocked.harness)).toEqual([]);
 
-    // A live ACTIVE store refuses the reimport of an old manifest.
+    // A live ACTIVE store (one that already holds data) refuses the reimport
+    // of an old manifest. The active-EMPTY shape instead is the crashed
+    // create+demote artifact and is RECOVERED by the next apply (see the
+    // dedicated crash-window test below).
     const { context, manifest } = await createStagedApplyFixture("active-guard-");
     const { initializeStore } = await import("./store-db.js");
     const active = await initializeStore(context);
     active.close();
+    await captureIssue(context, {
+      projectId: "engine",
+      title: "Live finding before activation",
+      kind: "bug",
+      severity: "high",
+      impact: "live authority",
+      acceptance: "no longer reproduces",
+      sourceIdentity: "qc/live.md",
+      rootCauseKey: "live-root-cause",
+      acceptanceKey: "fixed",
+      occurrenceKey: "run-live-1",
+      sourceKind: "qc",
+      location: "packages/engine/src/store-migrate.ts:1",
+      observedBehavior: "a live store must not be reimported",
+      evidence: ["proof"],
+      discoveredAt: "2026-09-18T00:00:00.000Z",
+    }, { operationId: "op-live-1", actor: "project-manager" });
     try {
       await applyStoreMigration(context, manifest);
       throw new Error("expected an active store to refuse the reimport");
     } catch (error) {
       expect((error as MigrationError).code).toBe("store.migration-active-store");
+    }
+  });
+
+  test("apply recovers the crashed create+demote artifact (active empty store) and applies", async () => {
+    // Simulate the crash window: the workspace got its store through the
+    // migration create primitive, but the demotion to staged never committed.
+    const fixture = freshWorkspace("crash-recovery-");
+    writeRegister(fixture.harness, "_default", { entries: { "plan-alpha": [entry({ id: "R1" })] } });
+    const { initializeStore } = await import("./store-db.js");
+    const crashed = await initializeStore(fixture.context);
+    expect(crashed.epoch).toBe(1);
+    crashed.close();
+    const manifest = await planStoreMigration(fixture.context);
+
+    // The next apply detects the active-EMPTY artifact in a legacy workspace,
+    // recovers it to staged and proceeds instead of refusing misleadingly.
+    const receipt = await applyStoreMigration(fixture.context, manifest);
+    expect(receipt.replayed).toBe(false);
+    expect(receipt.counts.issues).toBe(1);
+
+    const handle = await openStoreForTest(fixture.context);
+    try {
+      const meta = handle.db.prepare("select authority_state from store_meta where id = 1").get() as Record<string, unknown>;
+      expect(meta.authority_state).toBe("staged");
+    } finally {
+      handle.close();
+    }
+
+    // An active store holding ANY data is still a live store: after this
+    // apply the store is staged with rows, and a forced active flip refuses.
+    const promote = await (await import("./store-db.js")).openStore(fixture.context, "write");
+    promote.db.exec("update store_meta set authority_state = 'active', activated_at = '2026-09-18T00:00:00.000Z' where id = 1");
+    promote.close();
+    try {
+      await applyStoreMigration(fixture.context, manifest);
+      throw new Error("expected a live active store with data to refuse the reimport");
+    } catch (error) {
+      expect((error as MigrationError).code).toBe("store.migration-active-store");
+    }
+  });
+
+  test("reconciliation to closed inserts the imported terminal transition", async () => {
+    const fixture = freshWorkspace("reconcile-closed-");
+    writeRegister(fixture.harness, "_default", { entries: { "plan-alpha": [entry({ id: "R1" })] } });
+    const manifest = await planStoreMigration(fixture.context);
+    const first = await applyStoreMigration(fixture.context, manifest);
+    const issueId = first.issueIds[0]!.issueId;
+
+    // The row resolves after re-review: same tuple, now closed with a time.
+    writeRegister(fixture.harness, "_default", {
+      entries: { "plan-alpha": [entry({ id: "R1", lifecycle: "resolved", decision: "accept", closed_at: "2026-09-05", closure_note: "done" })] },
+    });
+    const revised = await planStoreMigration(fixture.context);
+    const second = await applyStoreMigration(fixture.context, revised);
+    expect(second.counts.updated).toBe(1);
+    expect(second.issueIds[0]!.issueId).toBe(issueId);
+
+    const handle = await openStoreForTest(fixture.context);
+    try {
+      const rows = handle.db
+        .prepare("select to_disposition, occurred_at from issue_transitions where issue_id = ? and imported = 1")
+        .all(issueId) as Array<{ to_disposition: string; occurred_at: string | null }>;
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.to_disposition).toBe("resolved");
+      expect(rows[0]!.occurred_at).toBe("2026-09-05");
+    } finally {
+      handle.close();
+    }
+  });
+
+  test("reconciliation back to open removes the stale imported terminal transition", async () => {
+    const fixture = freshWorkspace("reconcile-open-");
+    writeRegister(fixture.harness, "_default", {
+      entries: { "plan-alpha": [entry({ id: "R1", lifecycle: "resolved", decision: "accept", closed_at: "2026-09-02" })] },
+    });
+    const manifest = await planStoreMigration(fixture.context);
+    const first = await applyStoreMigration(fixture.context, manifest);
+    const issueId = first.issueIds[0]!.issueId;
+    expect(first.counts.closed).toBe(1);
+
+    // The row reopens after re-review (the legacy lifecycle was corrected).
+    writeRegister(fixture.harness, "_default", { entries: { "plan-alpha": [entry({ id: "R1", decision: "reopen" })] } });
+    const revised = await planStoreMigration(fixture.context);
+    const second = await applyStoreMigration(fixture.context, revised);
+    expect(second.counts.updated).toBe(1);
+
+    const handle = await openStoreForTest(fixture.context);
+    try {
+      const issue = handle.db.prepare("select disposition, closed_at from issues where id = ?").get(issueId) as Record<string, unknown>;
+      expect(issue.disposition).toBe("open");
+      expect(issue.closed_at).toBeNull();
+      const rows = handle.db
+        .prepare("select id from issue_transitions where issue_id = ? and imported = 1")
+        .all(issueId) as unknown[];
+      expect(rows).toEqual([]);
+    } finally {
+      handle.close();
     }
   });
 

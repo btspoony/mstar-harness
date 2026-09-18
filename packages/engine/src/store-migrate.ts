@@ -578,19 +578,86 @@ function readCounter(db: StoreDb): number {
  * store — created through C1's schema primitive and immediately held in
  * `staged` state (§1: import is not activation; a staged store is read-only
  * to ordinary domain verbs).
+ *
+ * Crash safety: the create and the demotion cannot share one transaction
+ * across C1's primitive, so a crash between them would leave an ACTIVE EMPTY
+ * store. The next apply detects exactly that artifact — an active store with
+ * no issues, occurrences, transitions, provenance, catalog rows, operations
+ * or receipts in a workspace that provably holds legacy registers (this
+ * function only runs under apply's source precondition) — recovers it to
+ * staged, and proceeds. An active store holding ANY data is a live store and
+ * still refuses `store.migration-active-store`.
  */
 async function ensureStagedStore(context: StoreContext): Promise<StoreHandle> {
   if (!existsSync(storeDbPath(context))) {
     const created = await initializeStore(context);
     created.close();
-    const demote = await openStore(context, "write");
-    try {
-      demote.db.exec("update store_meta set authority_state = 'staged', activated_at = NULL where id = 1");
-    } finally {
-      demote.close();
-    }
   }
-  return openStore(context, "write");
+  const handle = await openStore(context, "write");
+  try {
+    const meta = handle.db.prepare("select authority_state from store_meta where id = 1").get() as
+      | { authority_state?: string }
+      | undefined;
+    if (meta?.authority_state !== "staged") {
+      const empty = isSemanticallyEmptyStore(handle.db);
+      if (meta?.authority_state === "active" && empty) {
+        // The crashed create+demote artifact: an active store that has never
+        // held a single domain row, in a workspace that only a migration
+        // apply would be writing against. Recover it truthfully to staged.
+        handle.db.exec("begin immediate");
+        try {
+          handle.db.exec("update store_meta set authority_state = 'staged', activated_at = NULL where id = 1");
+          handle.db.exec("commit");
+        } catch (error) {
+          try {
+            handle.db.exec("rollback");
+          } catch {
+            // nothing committed either way
+          }
+          throw error;
+        }
+      } else {
+        throw new StoreMigrationError(
+          "store.migration-active-store",
+          meta?.authority_state === "active"
+            ? "the store is active and already holds data; a live active store cannot be overwritten by reimporting a manifest. Nothing was written."
+            : "the store is not staged; nothing was written.",
+        );
+      }
+    }
+    return handle;
+  } catch (error) {
+    try {
+      handle.close();
+    } catch {
+      // already closed on a connection-level failure
+    }
+    throw error;
+  }
+}
+
+/**
+ * True when the store carries no domain row at all — the shape of the store
+ * the migration create path leaves behind if it crashes before the demotion.
+ */
+function isSemanticallyEmptyStore(db: StoreDb): boolean {
+  const tables = [
+    "issues",
+    "occurrences",
+    "issue_transitions",
+    "provenance",
+    "relations",
+    "catalog_entities",
+    "catalog_links",
+    "catalog_operations",
+    "migration_receipts",
+    "store_operations",
+  ];
+  for (const table of tables) {
+    const row = db.prepare(`select count(*) as n from ${table}`).get() as { n?: number } | undefined;
+    if (row?.n !== 0) return false;
+  }
+  return true;
 }
 
 function allocateIssueId(db: StoreDb): string {
@@ -683,18 +750,33 @@ function insertMigratedIssue(db: StoreDb, row: ImportRow, issueId: string, at: s
   ).run(issueId, source.registerPath, createHash("sha256").update(mapping.legacyJson, "utf8").digest("hex"), source.project, source.bucket, source.entryId, mapping.legacyJson, at);
   // A closed row also carries its single imported terminal transition (§3).
   if (closed) {
-    db.prepare(
-      "insert into issue_transitions(issue_id, from_disposition, to_disposition, actor, occurred_at, recorded_at, reason, evidence_json, imported, issue_revision) " +
-        "values (?, 'open', ?, NULL, ?, ?, 'legacy import (reviewed manifest)', ?, 1, 1)",
-    ).run(issueId, mapping.disposition, closedAt, at, mapping.legacyJson);
+    insertImportedTerminalTransition(db, issueId, mapping.disposition, closedAt, mapping.legacyJson, at);
   }
   return "created";
+}
+
+/** The single imported terminal transition of a closed migrated row (§3). */
+function insertImportedTerminalTransition(
+  db: StoreDb,
+  issueId: string,
+  disposition: Disposition,
+  closedAt: string | null,
+  legacyJson: string,
+  at: string,
+): void {
+  db.prepare(
+    "insert into issue_transitions(issue_id, from_disposition, to_disposition, actor, occurred_at, recorded_at, reason, evidence_json, imported, issue_revision) " +
+      "values (?, 'open', ?, NULL, ?, ?, 'legacy import (reviewed manifest)', ?, 1, 1)",
+  ).run(issueId, disposition, closedAt, at, legacyJson);
 }
 
 /** Migration-owned columns reconciled when a re-reviewed manifest changes a row. */
 function reconcileMigratedIssue(db: StoreDb, row: ImportRow, issueId: string, at: string): void {
   const { mapping, entry } = row;
   const closed = mapping.disposition !== "open";
+  const prior = db.prepare("select disposition from issues where id = ?").get(issueId) as
+    | { disposition?: string }
+    | undefined;
   db.prepare(
     "update issues set title = ?, severity = ?, disposition = ?, closed_at = ?, closure_note = ?, updated_at = ? where id = ?",
   ).run(
@@ -713,6 +795,15 @@ function reconcileMigratedIssue(db: StoreDb, row: ImportRow, issueId: string, at
     `migration:${migrationSourceIdentity("legacy", mapping.source.project, mapping.source.bucket, mapping.source.entryId)}`,
   );
   db.prepare("update provenance set legacy_json = ? where issue_id = ? and kind = 'migration'").run(mapping.legacyJson, issueId);
+  // The §3 row invariant holds in BOTH directions: a row that reconciles to
+  // closed gains its single imported terminal transition; a row that
+  // reconciles back to open loses the stale one.
+  const priorClosed = prior?.disposition !== undefined && prior.disposition !== "open";
+  if (closed && !priorClosed) {
+    insertImportedTerminalTransition(db, issueId, mapping.disposition, mapping.legacy.closedAt, mapping.legacyJson, at);
+  } else if (!closed && priorClosed) {
+    db.prepare("delete from issue_transitions where issue_id = ? and imported = 1").run(issueId);
+  }
 }
 
 type EntityResolution = { kind: string; id: string; created: boolean };
