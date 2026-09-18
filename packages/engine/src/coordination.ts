@@ -146,7 +146,7 @@ export type ResolvedPlanScope = {
 
 /**
  * Session envelope persisted at
- * `{WORKFLOW_DIR}/<workflow-id>/sessions/<session-id>.json` (mode `0600`).
+ * `{WORKFLOW_DIR}/<workflow-id>/sessions/<role>-<session-id>.json` (mode `0600`).
  * The envelope is the durable proof of who holds the session: the snapshot
  * stores its canonical path and every later call must present the same file.
  */
@@ -161,12 +161,12 @@ export type CoordinationSession = {
 
 /**
  * Bind addressing (spec §B). A fresh bind generates the session UUID and
- * creates `<workflow-dir>/<workflow-id>/sessions/<session-id>.json` itself,
- * unless the caller supplies `sessionId` — then the engine adopts that value as
- * the identity after validating it as a single safe path component (it is the
- * envelope's file name). An existing session is reached only through its
- * explicit `resumePath`, which resumes read-only, never writes and never
- * re-identifies.
+ * creates `<workflow-dir>/<workflow-id>/sessions/<role>-<session-id>.json`
+ * itself, unless the caller supplies `sessionId` — then the engine adopts that
+ * value as the identity after validating it as a single safe path component (it
+ * names the envelope's file, prefixed by the role). An existing session is
+ * reached only through its explicit `resumePath`, which resumes read-only,
+ * never writes and never re-identifies.
  */
 export type BindPlanSessionInput =
   | { scope: PlanScopeInput; cwd: string; sessionId?: string }
@@ -417,8 +417,24 @@ function snapshotPathOf(harnessRoot: string, workflowId: string): string {
   return join(resolveWorkflowDir(harnessRoot, { harnessDir: harnessRoot }), workflowId, SNAPSHOT_FILE);
 }
 
-function sessionFilePath(harnessRoot: string, workflowId: string, sessionId: string): string {
-  return join(resolveWorkflowDir(harnessRoot, { harnessDir: harnessRoot }), workflowId, SESSION_DIR, `${sessionId}.json`);
+/**
+ * The envelope path for one role. The role prefixes the file name so the two
+ * sessions a workflow needs — coordinator and plan-pm — never collide on it,
+ * even when a host supplies the same identity to both binds; the identity in
+ * the payload is what stays shared.
+ */
+function sessionFilePath(
+  harnessRoot: string,
+  workflowId: string,
+  role: CoordinationRole,
+  sessionId: string,
+): string {
+  return join(
+    resolveWorkflowDir(harnessRoot, { harnessDir: harnessRoot }),
+    workflowId,
+    SESSION_DIR,
+    `${role}-${sessionId}.json`,
+  );
 }
 
 /**
@@ -675,7 +691,7 @@ const SESSION_ID_MAX_LENGTH = 128;
 
 /**
  * The caller-supplied session identity, validated **before any write**. The id
- * is the envelope's file name (`sessionFilePath`), so a value that could name
+ * names the envelope's file (`sessionFilePath`), so a value that could name
  * another directory or another file is refused here rather than left to a
  * filesystem error. `undefined` keeps the engine-generated UUID.
  */
@@ -977,7 +993,7 @@ export function readSessionEnvelope(sessionPath: string): CoordinationSession {
 }
 
 function createSessionEnvelope(session: CoordinationSession): string {
-  const path = sessionFilePath(session.harness_root, session.workflow_id, session.session_id);
+  const path = sessionFilePath(session.harness_root, session.workflow_id, session.role, session.session_id);
   mkdirSync(dirname(path), { recursive: true });
   try {
     writeFileSync(path, `${JSON.stringify(session, null, 2)}\n`, { flag: "wx", mode: 0o600 });

@@ -487,7 +487,7 @@ describe("binding", () => {
 
     expect(bound.operation).toBe("bind");
     expect(bound.outcome).toBe("bound");
-    expect(bound.session_file).toBe(join(fixture.workflowDir, "sessions", `${bound.session.session_id}.json`));
+    expect(bound.session_file).toBe(join(fixture.workflowDir, "sessions", `coordinator-${bound.session.session_id}.json`));
     expect(bound.session.role).toBe("coordinator");
     expect(bound.session.plan_id).toBeUndefined();
     expect(existsSync(fixture.coordinatorSession)).toBe(true);
@@ -567,7 +567,7 @@ describe("binding", () => {
     });
     fixture.coordinatorSession = coordinated.session_file;
     expect(coordinated.session.session_id).toBe(coordinatorId);
-    expect(coordinated.session_file).toBe(join(fixture.workflowDir, "sessions", `${coordinatorId}.json`));
+    expect(coordinated.session_file).toBe(join(fixture.workflowDir, "sessions", `coordinator-${coordinatorId}.json`));
     expect(readJson(coordinated.session_file).session_id).toBe(coordinatorId);
     const snapshot = readJson(fixture.snapshotPath);
     const coordination = snapshot.coordination as { coordinator?: { session_id?: string } };
@@ -582,7 +582,7 @@ describe("binding", () => {
     });
     expect(claimed.outcome).toBe("claimed");
     expect(claimed.session.session_id).toBe(planSessionId);
-    expect(claimed.session_file).toBe(join(fixture.workflowDir, "sessions", `${planSessionId}.json`));
+    expect(claimed.session_file).toBe(join(fixture.workflowDir, "sessions", `plan-pm-${planSessionId}.json`));
     expect(readJson(claimed.session_file).session_id).toBe(planSessionId);
     // The identity is the one every later call is matched against: the row
     // records it as the binding and as the execution-lease holder.
@@ -590,6 +590,75 @@ describe("binding", () => {
     const rowCoordination = row.coordination as { session?: { session_id?: string } };
     expect(rowCoordination.session?.session_id).toBe(planSessionId);
     expect(leaseHolder(row)).toBe(planSessionId);
+  });
+
+  test("one host identity backs both roles of one workflow: role-scoped envelopes, shared session_id, refusals intact", async () => {
+    // A host injects one identity per host session, while a workflow still
+    // needs two engine sessions (coordinator + plan-pm). The role prefixes the
+    // envelope file name and nothing else: a sequential coordinator bind then
+    // plan bind under one id both succeed, and each bind still refuses a
+    // second holder.
+    const fixture = makeFixture();
+    const shared = "host-session-shared";
+    const coordinated = await bindPlanSession({
+      coordinator: true,
+      workflowId: WORKFLOW_ID,
+      harnessDir: fixture.harness,
+      cwd: fixture.root,
+      sessionId: shared,
+    });
+    fixture.coordinatorSession = coordinated.session_file;
+    await preparePlan(fixture, PLAN_ID);
+    const claimed = await bindPlanSession({
+      scope: { workflowId: WORKFLOW_ID, planId: PLAN_ID, harnessDir: fixture.harness },
+      cwd: fixture.root,
+      sessionId: shared,
+    });
+
+    const coordinatorFile = join(fixture.workflowDir, "sessions", `coordinator-${shared}.json`);
+    const planFile = join(fixture.workflowDir, "sessions", `plan-pm-${shared}.json`);
+    expect(coordinated.outcome).toBe("bound");
+    expect(claimed.outcome).toBe("claimed");
+    expect(coordinated.session_file).toBe(coordinatorFile);
+    expect(claimed.session_file).toBe(planFile);
+    expect(coordinated.session_file).not.toBe(claimed.session_file);
+    // Only the path is role-scoped; the identity stays the shared one.
+    expect(coordinated.session.session_id).toBe(shared);
+    expect(claimed.session.session_id).toBe(shared);
+    expect(readJson(coordinatorFile)).toMatchObject({ role: "coordinator", session_id: shared });
+    expect(readJson(planFile)).toMatchObject({ role: "plan-pm", session_id: shared });
+
+    // The snapshot records each role's own envelope path.
+    const snapshot = readJson(fixture.snapshotPath) as {
+      coordination?: { coordinator?: { session_file?: string } };
+    };
+    expect(snapshot.coordination?.coordinator?.session_file).toBe(coordinatorFile);
+    const row = planRowOf(fixture, PLAN_ID);
+    const rowCoordination = row.coordination as { session?: { session_file?: string } };
+    expect(rowCoordination.session?.session_file).toBe(planFile);
+    expect(leaseHolder(row)).toBe(shared);
+
+    // Two sessions under one id: neither role binds twice.
+    expect(
+      await errorCodeOf(() =>
+        bindPlanSession({
+          coordinator: true,
+          workflowId: WORKFLOW_ID,
+          harnessDir: fixture.harness,
+          cwd: fixture.root,
+          sessionId: shared,
+        }),
+      ),
+    ).toBe("coordination.duplicate-holder");
+    expect(
+      await errorCodeOf(() =>
+        bindPlanSession({
+          scope: { workflowId: WORKFLOW_ID, planId: PLAN_ID, harnessDir: fixture.harness },
+          cwd: fixture.root,
+          sessionId: shared,
+        }),
+      ),
+    ).toBe("coordination.duplicate-holder");
   });
 
   test("an invalid supplied session id refuses before any write", async () => {
@@ -643,10 +712,11 @@ describe("binding", () => {
     });
     expect(bound.session.session_id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
 
-    // An envelope that already occupies the id is never replaced: the existing
-    // exclusive-create refusal reports it instead of hijacking the identity.
+    // An envelope that already occupies the id's role-scoped path is never
+    // replaced: the existing exclusive-create refusal reports it instead of
+    // hijacking the identity.
     const fresh = makeFixture();
-    const orphan = join(fresh.workflowDir, "sessions", "host-session-orphan.json");
+    const orphan = join(fresh.workflowDir, "sessions", "coordinator-host-session-orphan.json");
     writeText(orphan, '{"stray":true}\n');
     const before = readFileSync(fresh.snapshotPath, "utf8");
     expect(

@@ -384,7 +384,7 @@ describe("mstar plan — session identity", () => {
     expect(coordinated.exitCode).toBe(0);
     const coordinatorPayload = jsonOf(coordinated);
     expect(coordinatorPayload.session_id).toBe(supplied);
-    expect(String(coordinatorPayload.session_file)).toBe(join(fixture.harness, "workflows", WORKFLOW_ID, "sessions", `${supplied}.json`));
+    expect(String(coordinatorPayload.session_file)).toBe(join(fixture.harness, "workflows", WORKFLOW_ID, "sessions", `coordinator-${supplied}.json`));
     const coordinator = String(coordinatorPayload.session_file);
     expect(readJson(coordinator).session_id).toBe(supplied);
     // The identity reached the engine's own binding, not just the file name.
