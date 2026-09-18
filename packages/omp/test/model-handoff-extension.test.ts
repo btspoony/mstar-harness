@@ -1972,7 +1972,7 @@ describe("switch failure reports actual model", () => {
 });
 
 describe("host session identity injection", () => {
-  test("bash calls carry the host session identity: injected, never caller-defined, and confined to bash", async () => {
+  test("bash calls carry the host session identity: injected, never caller-defined, confined to bash, and fail-safe on a malformed input shape", async () => {
     const repo = buildControlRepo();
     const harness = await createHarness({
       cwd: repo.main,
@@ -2011,6 +2011,36 @@ describe("host session identity injection", () => {
     });
     expect(forged).toEqual({
       input: { command: "true", env: { KEEP: "yes", [SESSION_ID_ENV]: sessionId } },
+    });
+
+    // The event fires before the host validates the arguments, so neither shape
+    // is assumed: a non-object `input` or `env` still yields the identity
+    // revision instead of throwing into the host's fail-closed handler path
+    // (which would block the bash call).
+    const stringInput = await harness.emitToolCall({
+      type: "tool_call",
+      toolCallId: "call-input-string",
+      toolName: "bash",
+      input: "rm -rf",
+    });
+    expect(stringInput).toEqual({ input: { env: { [SESSION_ID_ENV]: sessionId } } });
+
+    const nullInput = await harness.emitToolCall({
+      type: "tool_call",
+      toolCallId: "call-input-null",
+      toolName: "bash",
+      input: null,
+    });
+    expect(nullInput).toEqual({ input: { env: { [SESSION_ID_ENV]: sessionId } } });
+
+    const stringEnv = await harness.emitToolCall({
+      type: "tool_call",
+      toolCallId: "call-env-string",
+      toolName: "bash",
+      input: { command: "true", env: "FOO=bar" },
+    });
+    expect(stringEnv).toEqual({
+      input: { command: "true", env: { [SESSION_ID_ENV]: sessionId } },
     });
 
     // No other tool is revised — the identity channel is the bash tool only.
