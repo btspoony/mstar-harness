@@ -171,7 +171,7 @@ export async function startDashboard(options: StartDashboardOptions): Promise<Ru
     // Fixed static routes only: no filesystem serving, no traversal, no
     // arbitrary Markdown/HTML rendering.
     if (pathname === "/" || pathname === "/assets/app.js" || pathname === "/assets/app.css") {
-      if (method !== "GET") {
+      if (method !== "GET" && method !== "HEAD") {
         sendJson(res, 405, fail("method-not-allowed", "only GET and HEAD are accepted for static resources"), requestHead);
         return;
       }
@@ -189,7 +189,9 @@ export async function startDashboard(options: StartDashboardOptions): Promise<Ru
         sendJson(res, 404, fail("not-found", `no dashboard route matches ${JSON.stringify(pathname)}`), requestHead);
         return;
       }
-      if (method !== "GET") {
+      // HEAD is accepted for static resources only; the API is GET-only and a
+      // HEAD request must not reach the store read.
+      if (req.method !== "GET") {
         sendJson(res, 405, fail("method-not-allowed", "the dashboard API is read-only: only GET is accepted"), requestHead);
         return;
       }

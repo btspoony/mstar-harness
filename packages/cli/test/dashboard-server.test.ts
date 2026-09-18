@@ -171,6 +171,28 @@ describe("API over a real store", () => {
     expect((JSON.parse(missing.body) as { error: { code: string } }).error.code).toBe("issue.not-found");
   });
 
+  test("HEAD to the API is refused without executing a store read", async () => {
+    const head = await raw(new URL("/api/issues", server.url).href, { method: "HEAD" });
+    expect(head.status).toBe(405);
+    // A HEAD response carries no body by spec; the structured method refusal
+    // is observable via the same 405 code on a non-HEAD method (tested below).
+    expect(head.body).toBe("");
+    // Prove the refusal precedes store access: on a server whose store is
+    // missing, a GET reaches the store (503) while HEAD never does (405).
+    const dir = mkdtempSync(join(ROOT, "no-store-"));
+    mkdirSync(join(dir, ".mstar"), { recursive: true });
+    const noStore = await startDashboard({ harnessDir: dir });
+    try {
+      const get = await raw(new URL("/api/issues", noStore.url).href);
+      expect(get.status).toBe(503);
+      const headNoStore = await raw(new URL("/api/issues", noStore.url).href, { method: "HEAD" });
+      expect(headNoStore.status).toBe(405);
+      expect(headNoStore.body).toBe("");
+    } finally {
+      await noStore.close();
+    }
+  });
+
   test("POST to the API is refused: the dashboard is read-only", async () => {
     for (const pathname of ["/api/issues", "/api/workflows"]) {
       const res = await raw(new URL(pathname, server.url).href, { method: "POST", headers: { "content-type": "application/json" } });
