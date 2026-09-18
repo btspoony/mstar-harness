@@ -16,6 +16,7 @@ import { useEffect, useState } from "preact/hooks";
 import type { LoadState } from "../components";
 import { Badge, DetailSection, EmptyState, Field, LiveRegion, Notice, useEnvelope } from "../components";
 import { dispositionTone, evidenceText, externalLinkHref, formatDate, migrationNote, severityTone } from "../format";
+import { IssueFlowPanel } from "./issue-flow";
 
 /**
  * The issue row types as the read boundary publishes them: the contract exports
@@ -59,6 +60,15 @@ const PAGE_SIZE = 50;
 
 /** Dated history lives behind the issue-flow view (state-projection contract §6). */
 const ISSUE_FLOW_PATH = "/api/issue-flow";
+
+/**
+ * The panel and the empty-store probe share one request; a project filter
+ * scopes the rollup to that project, and under the default filters the path
+ * is the bare cross-project rollup the probe expects.
+ */
+export function issueFlowPath(project: string): string {
+  return project === "" ? ISSUE_FLOW_PATH : `${ISSUE_FLOW_PATH}?project=${encodeURIComponent(project)}`;
+}
 
 const FILTER_FIELDS = ["project", "disposition", "kind", "severity", "q"] as const;
 
@@ -340,10 +350,12 @@ export function IssuesView(props: {
   const [query, setQuery] = useState<IssueQuery>(() => parseIssueQuery(window.location.search));
   const list = useEnvelope<IssuePage>(`/api/issues?${issueQuery(query)}`);
 
-  // An empty result under the default filters cannot say whether the store is
-  // empty or every issue is retired; the dated history answers that honestly.
+  // The dated-history rollup feeds both the empty-store probe and the one
+  // chart panel (D5); it is scoped to the project filter when one is set. An
+  // empty result under the default filters cannot say whether the store is
+  // empty or every issue is retired; the flow totals answer that honestly.
   const probeStore = list.status === "ready" && list.envelope.data.total === 0 && isDefaultFilters(query.filters);
-  const flow = useEnvelope<IssueFlow>(probeStore ? ISSUE_FLOW_PATH : null);
+  const flow = useEnvelope<IssueFlow>(issueFlowPath(query.filters.project));
   const emptyState = emptyListState(probeStore, flow);
 
   const apply = (next: IssueQuery): void => {
@@ -375,11 +387,13 @@ export function IssuesView(props: {
   const announcement =
     list.status === "error"
       ? list.message
-      : list.status === "loading"
-        ? "Loading issues."
-        : total === 0
-          ? "No issues listed."
-          : `${total} issue${total === 1 ? "" : "s"} listed.`;
+      : flow.status === "error"
+        ? flow.message
+        : list.status === "loading"
+          ? "Loading issues."
+          : total === 0
+            ? "No issues listed."
+            : `${total} issue${total === 1 ? "" : "s"} listed.`;
 
   return html`<h1 class="heading-28" id="issues-heading" tabindex="-1">Issues</h1>
     <${FilterControls} filters=${query.filters} onChange=${applyField} onClear=${() => apply(CLOSED_QUERY)} />
@@ -433,7 +447,8 @@ export function IssuesView(props: {
             >
               Next
             </button>
-          </div>`}`;
+          </div>`}
+    <${IssueFlowPanel} flow=${flow} />`;
 }
 
 function OccurrenceItem(props: { row: OccurrenceRow }) {

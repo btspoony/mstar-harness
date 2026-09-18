@@ -525,6 +525,87 @@ body {
   overflow-wrap: anywhere;
 }
 
+/* Issues: issue-flow chart panel (D5) */
+.flow-open {
+  margin: 0 0 var(--space-2);
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+.flow-scroll {
+  margin-top: var(--space-2);
+}
+
+/* Fixed-pixel chart inside a labelled scroll region: below sm the region
+   scrolls horizontally instead of scaling the axis text down (DESIGN.md
+   "Spacing and responsive layout"). */
+.flow-figure {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  min-width: 720px;
+}
+
+.flow-chart {
+  display: block;
+}
+
+.flow-line {
+  stroke-width: 2.5;
+  stroke-linecap: round;
+}
+
+.flow-line-captured {
+  stroke: var(--color-blue-700);
+}
+
+.flow-line-retired {
+  stroke: var(--color-purple-700);
+}
+
+.flow-axis {
+  stroke: var(--color-gray-600);
+  stroke-width: 1;
+}
+
+.flow-grid {
+  stroke: var(--color-gray-400);
+  stroke-width: 1;
+  stroke-dasharray: 2 4;
+}
+
+.flow-axis-label {
+  fill: var(--color-gray-900);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.flow-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-6);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--color-gray-400);
+  color: var(--color-gray-900);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.flow-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.flow-legend-item svg {
+  display: block;
+}
+
+.flow-note {
+  margin-top: var(--space-2);
+  max-width: 72ch;
+}
+
 /* Footer */
 .app-footer {
   background: var(--color-background-100);

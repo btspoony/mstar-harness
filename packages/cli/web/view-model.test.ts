@@ -30,12 +30,14 @@ import {
   captureOccurrence,
   capturedTotal,
   emptyListState,
+  issueFlowPath,
   issueQuery,
   isDefaultFilters,
   occurrenceRows,
   parseIssueQuery,
   transitionRows,
 } from "./views/issues";
+import { chartModel, chartSummary, flowNotes, flowPanelState, originLabel, yAxisTicks } from "./views/issue-flow";
 import { iterationExecutionState, iterationListState, iterationPlanRow } from "./views/iterations";
 import { roadmapProject, roadmapState } from "./views/roadmap";
 import { workflowListState } from "./views/workflows";
@@ -250,6 +252,130 @@ describe("empty list state", () => {
     // The probe failed, so the empty list cannot be attributed to the filters;
     // the panel keeps the probe's own "what failed / what next" copy.
     expect(emptyListState(true, PROBE_FAILED)).toEqual({ kind: "unknown", message: PROBE_FAILURE });
+  });
+});
+
+describe("issue flow panel model", () => {
+  test("issue flow: a never-recorded store is empty; unknown-date captures and open issues are data", () => {
+    expect(flowPanelState(EMPTY_FLOW)).toEqual({ kind: "empty" });
+    // An open issue whose capture date is unknown still earns the data panel:
+    // its count is disclosed there, never silently dropped.
+    expect(flowPanelState({ ...EMPTY_FLOW, currentOpen: 2 })).toEqual({ kind: "data" });
+    expect(flowPanelState({ ...EMPTY_FLOW, unknownCaptureDates: 1 })).toEqual({ kind: "data" });
+    expect(flowPanelState(RECORDED_FLOW)).toEqual({ kind: "data" });
+  });
+
+  test("issue flow: missing dates are counted separately from the dated lines and the current open total", () => {
+    const gap: IssueFlow = {
+      buckets: [
+        { date: "2026-09-01", capturedCumulative: 3, retiredCumulative: 1, openDifference: 2, origin: "store" },
+        { date: "2026-09-02", capturedCumulative: 3, retiredCumulative: 2, openDifference: 1, origin: "store" },
+      ],
+      unknownCaptureDates: 2,
+      unknownClosureDates: 1,
+      currentOpen: 3,
+      incompleteHistory: true,
+    };
+    const notes = flowNotes(gap);
+    // Both unknown-date counts are named, with the honest exclusion rule.
+    expect(notes).toHaveLength(2);
+    expect(notes[0]).toContain("dated history closes at 1 open");
+    expect(notes[0]).toContain("the store currently records 3 open");
+    expect(notes[1]).toContain("2 captured issues have no recorded date");
+    expect(notes[1]).toContain("1 retired issue has no recorded closure date");
+    expect(notes[1]).toContain("never imputed");
+
+    // No gap to disclose when the dated history closes at the current open count.
+    const clean: IssueFlow = {
+      buckets: [{ date: "2026-09-01", capturedCumulative: 2, retiredCumulative: 0, openDifference: 2, origin: "store" }],
+      unknownCaptureDates: 0,
+      unknownClosureDates: 0,
+      currentOpen: 2,
+      incompleteHistory: false,
+    };
+    expect(flowNotes(clean)).toEqual([]);
+  });
+
+  test("issue flow: every terminal disposition contributes to the retired series", () => {
+    // waived and duplicate both count as retired (issue contract §4 vocabulary);
+    // retired never means "all fixed".
+    const terminal: IssueFlow = {
+      buckets: [
+        { date: "2026-09-01", capturedCumulative: 4, retiredCumulative: 0, openDifference: 4, origin: "store" },
+        { date: "2026-09-02", capturedCumulative: 4, retiredCumulative: 1, openDifference: 3, origin: "store" },
+        { date: "2026-09-03", capturedCumulative: 4, retiredCumulative: 3, openDifference: 1, origin: "store" },
+      ],
+      unknownCaptureDates: 0,
+      unknownClosureDates: 0,
+      currentOpen: 1,
+      incompleteHistory: false,
+    };
+    const model = chartModel(terminal);
+    expect(model.capturedPath).toContain("M");
+    expect(model.retiredPath).not.toBeNull();
+    // The retired step ends at the same x as the captured step, one jump lower.
+    expect(model.retiredPath!.split(" ").length).toBe(model.capturedPath.split(" ").length);
+    expect(chartSummary(terminal)).toContain("retired issues (any terminal disposition) reach 3");
+  });
+
+  test("issue flow: pre-store buckets are labelled register history", () => {
+    const migrated: IssueFlow = {
+      buckets: [
+        { date: "2026-01-02", capturedCumulative: 2, retiredCumulative: 1, openDifference: 1, origin: "register-history" },
+        { date: "2026-09-01", capturedCumulative: 3, retiredCumulative: 1, openDifference: 2, origin: "store" },
+      ],
+      unknownCaptureDates: 0,
+      unknownClosureDates: 0,
+      currentOpen: 2,
+      incompleteHistory: false,
+    };
+    expect(originLabel("register-history")).toBe("Register history");
+    expect(originLabel("store")).toBe("Store");
+    expect(flowNotes(migrated).join(" ")).toContain("register history");
+  });
+
+  test("issue flow: geometry scales to the captured maximum and spaces the dated buckets in order", () => {
+    const flow: IssueFlow = {
+      buckets: [
+        { date: "2026-09-01", capturedCumulative: 1, retiredCumulative: 0, openDifference: 1, origin: "store" },
+        { date: "2026-09-02", capturedCumulative: 2, retiredCumulative: 1, openDifference: 1, origin: "store" },
+        { date: "2026-09-04", capturedCumulative: 6, retiredCumulative: 2, openDifference: 4, origin: "store" },
+      ],
+      unknownCaptureDates: 0,
+      unknownClosureDates: 0,
+      currentOpen: 4,
+      incompleteHistory: false,
+    };
+    const model = chartModel(flow);
+    expect(model.yMax).toBe(6);
+    expect(model.yTicks[0]).toBe(0);
+    expect(model.yTicks[model.yTicks.length - 1]).toBe(6);
+    expect(model.xLabels.map((label) => label.date)).toEqual(["2026-09-01", "2026-09-02", "2026-09-04"]);
+    expect(model.xLabels[0]!.x).toBeLessThan(model.xLabels[1]!.x);
+    expect(model.xLabels[1]!.x).toBeLessThan(model.xLabels[2]!.x);
+    // A zero retired first bucket still draws a retired line that never divides by zero.
+    expect(model.retiredPath).not.toBeNull();
+    expect(yAxisTicks(1)).toEqual([0, 1]);
+  });
+
+  test("issue flow: a single dated bucket draws a flat step, not a degenerate point", () => {
+    const single: IssueFlow = {
+      buckets: [{ date: "2026-09-01", capturedCumulative: 2, retiredCumulative: 1, openDifference: 1, origin: "store" }],
+      unknownCaptureDates: 0,
+      unknownClosureDates: 0,
+      currentOpen: 1,
+      incompleteHistory: false,
+    };
+    const model = chartModel(single);
+    // One horizontal segment per series: an "H" with no vertical jump.
+    expect(model.capturedPath).toMatch(/^M [\d.]+ [\d.]+ H [\d.]+$/);
+    expect(model.retiredPath).toMatch(/^M [\d.]+ [\d.]+ H [\d.]+$/);
+    expect(model.xLabels).toEqual([{ date: "2026-09-01", x: model.xLabels[0]!.x }]);
+  });
+
+  test("issue flow: the panel path is the bare rollup by default and project-scoped on filter", () => {
+    expect(issueFlowPath("")).toBe("/api/issue-flow");
+    expect(issueFlowPath("proj-a")).toBe("/api/issue-flow?project=proj-a");
   });
 });
 

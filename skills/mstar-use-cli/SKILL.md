@@ -69,6 +69,7 @@ Find the task, run the family, then read its owning skill for the rules around i
 | Evaluate a phase-transition gate; probe push cadence | `mstar iteration gate`, `mstar iteration push-cadence` | `mstar-iteration`, `mstar-phase-gates` |
 | Resolve the harness / plan / SDD / workflow / project dirs | `mstar path resolve` | `mstar-conventions` |
 | Capture, list, show, occurrence, triage, terminal disposition, link, or export issues in `{HARNESS_DIR}/store.db` | `mstar issue …` | `mstar-conventions` (store path vs execution JSON); group help owns verbs and flags |
+| Serve the read-only local dashboard (issues, execution/roadmap views, issue-flow chart) on `127.0.0.1` | `mstar dashboard` | None — read-only surface; loopback binding is fixed and command help owns the flags |
 | Discover, import, register, query, export or reconcile the harness catalog (project/iteration/plan/document identity, paths, membership, spec/knowledge relations, lifecycle) in `{HARNESS_DIR}/store.db` | `mstar catalog …` | `mstar-conventions` (catalog vs execution JSON; Markdown index rows retired); group help owns verbs and flags |
 | Detect the active host; resolve a loaded skill root | `mstar host detect`, `mstar host skill-root` | `mstar-host` |
 | Lint harness artifacts by content type | `mstar lint` | `mstar-skill-authoring`, `mstar-coding-behavior`, `mstar-strategy` |
