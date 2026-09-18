@@ -162,6 +162,7 @@ export type IssueDetail = {
 export type IssueErrorCode =
   | "issue.not-found"
   | "issue.ambiguous-identity"
+  | "issue.occurrence-conflict"
   | "issue.scope-refused"
   | "store.not-active"
   | "store.operation-conflict";
@@ -346,10 +347,38 @@ function findByIdentity(db: StoreDb, identityKey: string): IssueRow | undefined 
     .get(identityKey) as IssueRow | undefined;
 }
 
-function findOccurrence(db: StoreDb, occurrenceKey: string): { id: number; issue_id: string } | undefined {
-  return db.prepare("select id, issue_id from occurrences where occurrence_key = ?").get(occurrenceKey) as
-    | { id: number; issue_id: string }
-    | undefined;
+type StoredOccurrence = {
+  id: number;
+  issue_id: string;
+  source_identity: string;
+  root_cause_key: string;
+  acceptance_key: string;
+  source_kind: string;
+  location: string;
+  observed_behavior: string;
+  evidence_json: string;
+  discovered_at: string | null;
+};
+
+function findOccurrence(db: StoreDb, occurrenceKey: string): StoredOccurrence | undefined {
+  return db
+    .prepare(
+      "select id, issue_id, source_identity, root_cause_key, acceptance_key, source_kind, location, observed_behavior, evidence_json, discovered_at from occurrences where occurrence_key = ?",
+    )
+    .get(occurrenceKey) as StoredOccurrence | undefined;
+}
+
+function occurrenceMatches(stored: StoredOccurrence, cols: OccurrenceColumns): boolean {
+  return (
+    stored.source_identity === cols.sourceIdentity &&
+    stored.root_cause_key === cols.rootCauseKey &&
+    stored.acceptance_key === cols.acceptanceKey &&
+    stored.source_kind === cols.sourceKind &&
+    stored.location === cols.location &&
+    stored.observed_behavior === cols.observedBehavior &&
+    stored.evidence_json === cols.evidenceJson &&
+    stored.discovered_at === cols.discoveredAt
+  );
 }
 
 function insertOccurrence(
@@ -429,10 +458,23 @@ export async function captureIssue(
 
     const existingOcc = findOccurrence(db, cols.occurrenceKey);
     if (existingOcc) {
-      const issue = db.prepare("select id, revision from issues where id = ?").get(existingOcc.issue_id) as {
+      const issue = db.prepare("select id, revision, identity_key from issues where id = ?").get(existingOcc.issue_id) as {
         id: string;
         revision: number;
+        identity_key: string;
       };
+      if (issue.identity_key !== identityKey) {
+        throw new IssueError(
+          "issue.ambiguous-identity",
+          "occurrence_key already belongs to a different identity; refusing a guessed merge",
+        );
+      }
+      if (!occurrenceMatches(existingOcc, cols)) {
+        throw new IssueError(
+          "issue.occurrence-conflict",
+          "occurrence_key was reused with a different observation; the original occurrence is retained.",
+        );
+      }
       const receipt: IssueReceipt = {
         issueId: issue.id,
         occurrenceId: existingOcc.id,
@@ -530,6 +572,12 @@ export async function appendOccurrence(
         throw new IssueError(
           "issue.ambiguous-identity",
           "occurrence_key already belongs to a different issue; refusing a guessed merge",
+        );
+      }
+      if (!occurrenceMatches(existingOcc, cols)) {
+        throw new IssueError(
+          "issue.occurrence-conflict",
+          "occurrence_key was reused with a different observation; the original occurrence is retained.",
         );
       }
       const receipt: IssueReceipt = {

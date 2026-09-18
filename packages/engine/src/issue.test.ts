@@ -244,6 +244,80 @@ describe("occurrence replay and recurrence", () => {
     const detail = await getIssue(context, first.issueId);
     expect(detail.occurrences).toHaveLength(1);
   });
+
+  test("reusing an occurrence_key under a different identity refuses without a second issue", async () => {
+    const context = ctx("occurrence-key-collision-");
+    await initializeStore(context).then((h) => h.close());
+    const first = await captureIssue(context, baseInput(), mut("col-1"));
+    await expect(
+      captureIssue(context, baseInput({ rootCauseKey: "other-cause", occurrenceKey: "run-1" }), mut("col-2")),
+    ).rejects.toMatchObject({ code: "issue.ambiguous-identity" });
+    const page = await listIssues(context, {});
+    expect(page.total).toBe(1);
+    expect(page.items[0]?.id).toBe(first.issueId);
+    const detail = await getIssue(context, first.issueId);
+    expect(detail.occurrences).toHaveLength(1);
+    expect(detail.occurrences[0]?.occurrenceKey).toBe("run-1");
+  });
+
+  test("appendOccurrence with the same key and a different payload refuses and keeps original bytes", async () => {
+    const context = ctx("occurrence-payload-conflict-");
+    await initializeStore(context).then((h) => h.close());
+    const first = await captureIssue(context, baseInput(), mut("pay-1"));
+    const before = await getIssue(context, first.issueId);
+    const original = before.occurrences[0];
+    await expect(
+      appendOccurrence(
+        context,
+        first.issueId,
+        {
+          sourceIdentity: "qc/review.md",
+          rootCauseKey: "missing-null-check",
+          acceptanceKey: "null-guard-present",
+          occurrenceKey: "run-1",
+          sourceKind: "qc",
+          location: "packages/engine/src/store-db.ts:10",
+          observedBehavior: "different observed failure",
+          evidence: ["stack: TypeError"],
+          discoveredAt: "2026-09-18T10:00:00.000Z",
+        },
+        mut("pay-2"),
+      ),
+    ).rejects.toMatchObject({ code: "issue.occurrence-conflict" });
+    const after = await getIssue(context, first.issueId);
+    expect(after.occurrences).toHaveLength(1);
+    expect(after.occurrences[0]).toEqual(original);
+  });
+
+  test("identical replay of capture and append still returns the original receipt", async () => {
+    const context = ctx("occurrence-exact-replay-");
+    await initializeStore(context).then((h) => h.close());
+    const first = await captureIssue(context, baseInput(), mut("exact-1"));
+    const captureReplay = await captureIssue(context, baseInput(), mut("exact-2"));
+    expect(captureReplay.issueId).toBe(first.issueId);
+    expect(captureReplay.occurrenceId).toBe(first.occurrenceId);
+    expect(captureReplay.created).toBe(false);
+    const appendReplay = await appendOccurrence(
+      context,
+      first.issueId,
+      {
+        sourceIdentity: "qc/review.md",
+        rootCauseKey: "missing-null-check",
+        acceptanceKey: "null-guard-present",
+        occurrenceKey: "run-1",
+        sourceKind: "qc",
+        location: "packages/engine/src/store-db.ts:10",
+        observedBehavior: "throws on empty path",
+        evidence: ["stack: TypeError"],
+        discoveredAt: "2026-09-18T10:00:00.000Z",
+      },
+      mut("exact-3"),
+    );
+    expect(appendReplay.occurrenceId).toBe(first.occurrenceId);
+    expect(appendReplay.created).toBe(false);
+    const detail = await getIssue(context, first.issueId);
+    expect(detail.occurrences).toHaveLength(1);
+  });
 });
 
 describe("query order and literal search", () => {
