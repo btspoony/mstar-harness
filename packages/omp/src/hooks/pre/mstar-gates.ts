@@ -5,10 +5,12 @@
  * Loaded by omp as a plugin extension module at session startup (one module,
  * one handler — registration order within a module is stable). The factory
  * registers exactly ONE `tool_call` handler; the handler returns
- * `{ block: true, reason }` ONLY when `Enforcement: hard` governs the event
+ * `{ block: true, reason }` when `Enforcement: hard` governs the event
  * (repo-level `.mstarc`/compass `enforcement: hard`, or the Assignment-header
  * `Enforcement: hard` per dispatch entry) AND engine validation produced
- * violations. Soft-mode dispatch violations are warn-logged through the
+ * violations — or when the event targets an issue/catalog authority path,
+ * which refuses unconditionally (see Gate 1 below). Soft-mode dispatch
+ * violations are warn-logged through the
  * extension logger (opencode parity — the pre-#156 silent drop is why the
  * self-type/empty-binding pincer stayed latent for five iterations); soft
  * coordination-write violations stay a silent pass. Everything else returns
@@ -18,6 +20,23 @@
  * ruling 7 — hard cutover): the v2 root `{HARNESS_DIR}/status.json`,
  * workflow snapshots `{HARNESS_DIR}/workflows/<id>/snapshot.json` and
  * project registers `{HARNESS_DIR}/projects/<id>/residuals.json`.
+ *
+ * Gate 1 additionally protects the issue/catalog AUTHORITY paths (G4b):
+ * a raw write to `{HARNESS_DIR}/store.db` (or its `-wal`/`-shm`) is
+ * refused outright — the runtime owns those bytes — and a write to a
+ * project register is routed through the DB-aware authority check
+ * (`readAuthorityRoute`): a store-backed workspace has retired the
+ * register (`project.register.retired`), an unreadable authority refuses
+ * fail-closed (`store.authority-unavailable`), and only a workspace whose
+ * store is missing or still staged — pre-activation, legacy authority in
+ * force — falls through to the register's document validator
+ * (`project.validateProjectRegister`). Both authority refusals are
+ * unconditional: they are an authority invariant, not the document-validity
+ * axis the hard/soft enforcement flag governs (dsh `catalogRegistrationVeto`
+ * precedent). The runtime floor is read from the ACTUAL runtime
+ * (engine `detectStoreRuntime` — the Bun global first, never Bun's emulated
+ * `process.versions.node`) and asserted in-process through the engine
+ * before the store is touched.
  *
  * Gate-1 core lives in the engine (`@mstar-harness/engine` `gates` module
  * — target classification, content/edit validation, reason formatting;
@@ -59,19 +78,26 @@
  * `validateStatusWrite` / `validateDispatchAssignment` uses, with omp's
  * `{ block, reason }` refusal channel instead of the log channel.
  */
-import { resolve } from "node:path";
+import { statSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import {
+  assertStoreRuntimeSupported,
+  detectStoreRuntime,
   eventTargetPaths,
   formatStatusWriteBlockReason,
   harnessDocKindOfTarget,
   isReadOnlyAssignmentRole,
   parseAssignmentFields,
+  queryDashboard,
   resolveHarnessDir,
+  resolveProjectDir,
   resolveRepoEnforcement,
+  resolveWorkflowDir,
   validateStatusWriteDoc,
   violationLine,
+  withStoreRead,
 } from "@mstar-harness/engine";
-import type { ValidationResult } from "@mstar-harness/engine";
+import type { StoreRuntimeInfo, ValidationResult } from "@mstar-harness/engine";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
 const STATUS_SKILL_POINTER = "skill: mstar-artifacts/references/status-and-residuals.md";
@@ -111,6 +137,177 @@ function taskDispatchEntries(input: unknown): DispatchEntry[] {
 }
 
 // ---------------------------------------------------------------------------
+// Gate 1b — issue/catalog authority paths (store.db + retired registers)
+// ---------------------------------------------------------------------------
+
+/** The authority database and its WAL sidecars, directly at a harness root. */
+const STORE_DB_FILE = "store.db";
+const STORE_AUTHORITY_FILES: readonly string[] = [STORE_DB_FILE, `${STORE_DB_FILE}-wal`, `${STORE_DB_FILE}-shm`];
+
+/** Default v2 layout names of a marker-complete harness root. */
+const STATUS_FILE = "status.json";
+const WORKFLOW_DIR_NAME = "workflows";
+const PROJECT_DIR_NAME = "projects";
+
+/** Refusal codes for the authority paths (G4b). Their vocabulary mirrors the
+ * frozen store/register families: `store.*` for the authority database,
+ * `project.register.*` for the retired register document. */
+const STORE_DIRECT_WRITE_CODE = "store.direct-write-refused";
+const STORE_AUTHORITY_UNAVAILABLE_CODE = "store.authority-unavailable";
+const REGISTER_RETIRED_CODE = "project.register.retired";
+
+/** A store whose absence positively identifies the PRE-activation state
+ * (legacy register authority still in force, issue contract §7): a missing
+ * store (`store.not-initialized`) or a staged one (`store.not-active`). Every
+ * other refusal — below-floor runtime, missing capability, corrupt, drifted,
+ * busy — means the authority state is UNKNOWN and the write is refused
+ * (dsh G4a `catalogRegistrationRefusal` exclusion list, mirrored). */
+const PRE_ACTIVATION_CODES: readonly string[] = ["store.not-initialized", "store.not-active"];
+
+/**
+ * Actual-runtime probe seam (test-injectable, same holder pattern as
+ * `dispatchGateLoader`): the default reads the ACTUAL runtime through the
+ * engine — the Bun global first, so a Bun process is never judged by Bun's
+ * EMULATED `process.versions.node` (Bun 1.4.0 reports "26.3.0" there, which
+ * would pass a naive Node-floor check while the store's floor is Bun
+ * >=1.4.0). Bun-run omp therefore gets the Bun floor; a native Node runner of
+ * this bundle gets the Node floor — the invoked entrypoint's own runtime,
+ * never both.
+ */
+export const storeRuntimeProbe: { info: () => StoreRuntimeInfo } = { info: detectStoreRuntime };
+
+/** Stable code + message of a thrown refusal (engine `StoreError` /
+ * `StoreReadError` carry `code`; anything else is reported as itself). */
+function refusalOf(error: unknown): { code: string; message: string } {
+  const message = error instanceof Error ? error.message : String(error);
+  const code =
+    typeof error === "object" && error !== null && "code" in error && typeof error.code === "string"
+      ? error.code
+      : "";
+  return { code: code === "" ? "store.authority-unreadable" : code, message };
+}
+
+/**
+ * The DB-aware authority route for a register write (G4b): what the issue
+ * store says about the retired register path.
+ *
+ * - `retired` — an active store answered: the register is migration history,
+ *   the write is refused.
+ * - `legacy` — NO store, or a staged one: pre-activation, the register is
+ *   still the live findings authority, so the write keeps its document
+ *   validator (issue contract §7: "before activation, new captures stay in
+ *   the current register").
+ * - `unavailable` — the authority could not be read (below-floor runtime /
+ *   missing capability / corrupt / drifted / busy / unexpected): refused
+ *   fail-closed. A write against an unreadable authority cannot be validated,
+ *   so it is never silently applied.
+ *
+ * One read envelope (`withStoreRead` + the `issues` view: no projection
+ * refresh, no source I/O) is the whole probe; nothing here re-implements a
+ * floor or a refusal the engine already owns.
+ */
+type AuthorityRoute =
+  | { kind: "legacy" }
+  | { kind: "retired"; storeRevision: number }
+  | { kind: "unavailable"; code: string; message: string };
+
+async function readAuthorityRoute(harnessDir: string): Promise<AuthorityRoute> {
+  try {
+    assertStoreRuntimeSupported(storeRuntimeProbe.info());
+  } catch (error) {
+    return { kind: "unavailable", ...refusalOf(error) };
+  }
+  try {
+    const envelope = await withStoreRead({ harnessDir }, queryDashboard("issues", { limit: 1 }));
+    return { kind: "retired", storeRevision: envelope.storeRevision };
+  } catch (error) {
+    const refusal = refusalOf(error);
+    return PRE_ACTIVATION_CODES.includes(refusal.code)
+      ? { kind: "legacy" }
+      : { kind: "unavailable", ...refusal };
+  }
+}
+
+/** Directory/entry check (never throws — a missing or unreadable path is
+ * simply not a marker). */
+function hasEntry(dir: string, name: string): boolean {
+  try {
+    statSync(join(dir, name));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** True when `dir` itself is a harness root: the v2 coordination-document
+ * markers the gates classify documents with (`status.json` + the layout dirs,
+ * custom `.mstarc` dirs honored), or the root the engine resolves from the
+ * directory's PARENT (default `.mstar`-style and `.mstarc harness_dir`
+ * roots — `resolveHarnessDir(dir)` probes *inside* a directory, so it never
+ * answers for the root itself). */
+function isHarnessRootDir(dir: string): boolean {
+  if (hasEntry(dir, STATUS_FILE)) {
+    if (hasEntry(dir, WORKFLOW_DIR_NAME) && hasEntry(dir, PROJECT_DIR_NAME)) return true;
+    try {
+      if (
+        hasEntry(resolveWorkflowDir(dir, { harnessDir: dir }), "") &&
+        hasEntry(resolveProjectDir(dir, { harnessDir: dir }), "")
+      ) {
+        return true;
+      }
+    } catch {
+      // unreadable layout config — fall through to the parent resolution
+    }
+  }
+  const parentResolved = resolveHarnessDir(dirname(dir));
+  return parentResolved !== null && resolve(parentResolved) === dir;
+}
+
+/** True when the target IS the authority database (or a WAL sidecar) sitting
+ * directly at a harness root: the runtime's own store location for a harness
+ * root is `<harness root>/store.db`, and hand-writing those bytes is never a
+ * supported operation — hard vs soft, staged vs active, all the same. */
+function isStoreAuthorityTarget(rawPath: string): boolean {
+  const resolved = resolve(rawPath);
+  if (!STORE_AUTHORITY_FILES.includes(basename(resolved))) return false;
+  return isHarnessRootDir(dirname(resolved));
+}
+
+/** One refusal as the hook's block-reason line (same `[severity] code:
+ * message (fix: …)` + skill-pointer dialect the document violations use). */
+function authorityRefusal(code: string, message: string): { block: true; reason: string } {
+  const violation: ValidationResult = { ok: false, severity: "high", code, message };
+  return { block: true, reason: `${violationLine(violation)} (${STATUS_SKILL_POINTER})` };
+}
+
+function storeDirectWriteRefusal(rawPath: string): { block: true; reason: string } {
+  return authorityRefusal(
+    STORE_DIRECT_WRITE_CODE,
+    `${resolve(rawPath)} is the issue/catalog authority database and is owned by the runtime — a direct ` +
+      "hand write is refused (the schema and its WAL are managed in-process). Schema changes go through " +
+      "`mstar store init|upgrade|migrate`, findings through `mstar issue add|close`, catalog rows through " +
+      "`mstar catalog register|update`",
+  );
+}
+
+function registerRetiredRefusal(storeRevision: number): { block: true; reason: string } {
+  return authorityRefusal(
+    REGISTER_RETIRED_CODE,
+    "project registers are retired migration history — the issue store ({HARNESS_DIR}/store.db, revision " +
+      `${storeRevision}) is the only findings authority; capture and close through \`mstar plan ` +
+      "issue-add|issue-close` (plan-scoped) or `mstar issue add|close` (unscoped). This write is refused",
+  );
+}
+
+function authorityUnavailableRefusal(route: { code: string; message: string }): { block: true; reason: string } {
+  return authorityRefusal(
+    STORE_AUTHORITY_UNAVAILABLE_CODE,
+    `the issue authority could not be read ([${route.code}] ${route.message}) — the register write is refused ` +
+      "rather than applied against an unreadable authority; no older-runtime or JSON fallback exists",
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Gate 1 — coordination-document writes (engine gates module)
 // ---------------------------------------------------------------------------
 
@@ -120,14 +317,29 @@ function taskDispatchEntries(input: unknown): DispatchEntry[] {
  * snapshot / project register) with violations and the harness compass
  * declares `enforcement: hard`. Soft (or no compass) → silent pass.
  *
+ * Authority paths (G4b) are decided BEFORE the document path: a store
+ * database write is refused unconditionally, and a register write is decided
+ * by the DB-aware authority route — refused when the store is active or
+ * unreadable, and only shape-validated while the register is still the live
+ * authority (no store / staged store). Those two refusals are not gated by
+ * the compass flag (an authority invariant, not document validity).
+ *
  * Classification + validation run through the shared engine `gates`
  * module (contract D1) — the same path the ZCode write gate consumes.
  */
-function gateStatusWrite(eventInput: unknown): { block: true; reason: string } | undefined {
+async function gateStatusWrite(eventInput: unknown): Promise<{ block: true; reason: string } | undefined> {
   const input = eventInput as Record<string, unknown>;
   for (const rawPath of eventTargetPaths(input)) {
+    if (isStoreAuthorityTarget(rawPath)) return storeDirectWriteRefusal(rawPath); // authority bytes — never writable
     const target = harnessDocKindOfTarget(rawPath);
     if (target === null) continue; // not a gated coordination write — silent pass
+    if (target.kind === "register") {
+      const route = await readAuthorityRoute(target.harnessDir);
+      if (route.kind === "retired") return registerRetiredRefusal(route.storeRevision);
+      if (route.kind === "unavailable") return authorityUnavailableRefusal(route);
+      // `legacy`: pre-activation — the register is still the authority, so the
+      // write keeps its document validator (no store probe touched it).
+    }
     const violations = validateStatusWriteDoc(input.content, resolve(rawPath), target.kind);
     if (violations.length === 0) continue;
     const enforcement = resolveRepoEnforcement(target.harnessDir);
@@ -307,7 +519,7 @@ export default function mstarGates(pi: ExtensionAPI): void {
       const toolName = event?.toolName ?? "";
       let block: { block: true; reason: string } | undefined;
       if (toolName === "write" || toolName === "edit") {
-        block = gateStatusWrite(event?.input);
+        block = await gateStatusWrite(event?.input);
       } else if (toolName === "task") {
         block = await gateTaskDispatch(event?.input, warnDegraded, (line) => {
           try {

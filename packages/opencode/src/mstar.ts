@@ -18,6 +18,12 @@
  * `status.resolveCompassEnforcement`): error-level lines with a skill-text
  * pointer + a GateResult carrying `hardBlocked: true` (a refusal-capable
  * caller MUST refuse the write — this hook itself cannot abort the tool).
+ * G4b authority protection: a write to `{HARNESS_DIR}/store.db` (`-wal`/`-shm`)
+ * and a write to a project register of a store-backed workspace are refused
+ * UNCONDITIONALLY (authority invariant, not the enforcement axis) —
+ * `store.direct-write-refused`, `project.register.retired`,
+ * `store.authority-unavailable`; a register keeps its document validator only
+ * while no store / a staged store leaves it the live authority.
  * Never throws raw exceptions in either mode — OpenCode's plugin API
  * (`@opencode-ai/plugin` 1.4.8) `tool.execute.before` returns
  * `Promise<void>` with no refusal channel, so hard mode is surfaced as the
@@ -61,7 +67,7 @@ import {
   resolveRepoEnforcement,
   validateStatus,
 } from "@mstar-harness/engine";
-import type { EnforcementFlag, GateResult, StatusV2Doc } from "@mstar-harness/engine";
+import type { EnforcementFlag, GateResult, StatusV2Doc, StoreRuntimeInfo } from "@mstar-harness/engine";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -492,6 +498,194 @@ function harnessDocKindOfTarget(targetPath: string): { harnessDir: string; kind:
 }
 
 /**
+ * Issue/catalog authority paths (G4b) — the store database plus the retired
+ * register route. Mirrors the omp write gate
+ * (`packages/omp/src/hooks/pre/mstar-gates.ts` `readAuthorityRoute`) and the
+ * ZCode gate (`hooks/src/mstar-write-gate.ts`) in this host's GateResult
+ * dialect: the CLASSIFICATION is the engine's single path; the refusal
+ * channel differs per host.
+ */
+
+/** The authority database and its WAL sidecars, directly at a harness root. */
+const STORE_DB_FILE = "store.db";
+const STORE_AUTHORITY_FILES: readonly string[] = [STORE_DB_FILE, `${STORE_DB_FILE}-wal`, `${STORE_DB_FILE}-shm`];
+
+/** Refusal codes, in the frozen store / `project.register.*` vocabulary. */
+const STORE_DIRECT_WRITE_CODE = "store.direct-write-refused";
+const STORE_AUTHORITY_UNAVAILABLE_CODE = "store.authority-unavailable";
+const REGISTER_RETIRED_CODE = "project.register.retired";
+
+/** A store whose absence positively identifies the PRE-activation state
+ * (legacy register authority in force, issue contract §7): missing
+ * (`store.not-initialized`) or staged (`store.not-active`). Every other
+ * refusal leaves the authority state UNKNOWN and is refused (dsh G4a
+ * `catalogRegistrationRefusal` exclusion list, mirrored). */
+const PRE_ACTIVATION_CODES: readonly string[] = ["store.not-initialized", "store.not-active"];
+
+/**
+ * Issue-store engine API (G4b). Like the P1 validators above, these exports
+ * postdate the published engine floor — a static named import would fail at
+ * module link against an older (or stubbed) installed engine and drop the
+ * WHOLE plugin, so they load through the same lazy holder pattern. `null`
+ * (missing exports / import failure) means the authority cannot be consulted:
+ * the register path then refuses fail-closed with the upgrade guidance while
+ * every unrelated document lint keeps working.
+ */
+type StoreApi = {
+  detectStoreRuntime: () => StoreRuntimeInfo;
+  assertStoreRuntimeSupported: (info: StoreRuntimeInfo) => void;
+  /** One read envelope over the authority: resolves the active store revision. */
+  readAuthority: (harnessDir: string) => Promise<number>;
+};
+
+let cachedStoreApi: Promise<StoreApi | null> | null = null;
+
+export function loadStoreApi(): Promise<StoreApi | null> {
+  cachedStoreApi ??= import("@mstar-harness/engine")
+    .then((mod) =>
+      typeof mod.detectStoreRuntime === "function" &&
+      typeof mod.assertStoreRuntimeSupported === "function" &&
+      typeof mod.withStoreRead === "function" &&
+      typeof mod.queryDashboard === "function"
+        ? ({
+            detectStoreRuntime: mod.detectStoreRuntime,
+            assertStoreRuntimeSupported: mod.assertStoreRuntimeSupported,
+            readAuthority: async (harnessDir: string) => {
+              const envelope = await mod.withStoreRead(
+                { harnessDir },
+                mod.queryDashboard("issues", { limit: 1 }),
+              );
+              return envelope.storeRevision;
+            },
+          } as const)
+        : null,
+    )
+    .catch(() => null);
+  return cachedStoreApi;
+}
+
+/** Test seam (same holder pattern as `newValidatorsLoader`): replace `load` to
+ * simulate an engine build without the issue-store API, or to observe when the
+ * store-backed route is entered. */
+export const storeApiLoader: { load: () => Promise<StoreApi | null> } = { load: loadStoreApi };
+
+/**
+ * Actual-runtime probe override (test-injectable): when unset — the shipped
+ * default — the route reads the ACTUAL runtime through the engine's
+ * `detectStoreRuntime` (the Bun global first, so a Bun process is never judged
+ * by Bun's EMULATED `process.versions.node`, which reports "26.3.0" on Bun
+ * 1.4.0). Bun-run OpenCode gets the Bun floor; a native Node runner of this
+ * plugin gets the Node floor — the invoked entrypoint's own runtime, never
+ * both.
+ */
+export const storeRuntimeOverride: { info: (() => StoreRuntimeInfo) | null } = { info: null };
+
+/** Stable code + message of a thrown refusal. */
+function refusalOf(error: unknown): { code: string; message: string } {
+  const message = error instanceof Error ? error.message : String(error);
+  const code =
+    typeof error === "object" && error !== null && "code" in error && typeof error.code === "string"
+      ? error.code
+      : "";
+  return { code: code === "" ? "store.authority-unreadable" : code, message };
+}
+
+/** What the issue store says about a register target. */
+type AuthorityRoute =
+  | { kind: "legacy" }
+  | { kind: "retired"; storeRevision: number }
+  | { kind: "unavailable"; code: string; message: string };
+
+async function readAuthorityRoute(harnessDir: string): Promise<AuthorityRoute> {
+  const api = await storeApiLoader.load();
+  if (api === null) {
+    return {
+      kind: "unavailable",
+      code: "engine-store-api-missing",
+      message:
+        "the installed @mstar-harness/engine exposes no issue-store API (detectStoreRuntime / " +
+        "assertStoreRuntimeSupported / withStoreRead / queryDashboard), so the register path cannot be " +
+        "answered; upgrade the engine (next release)",
+    };
+  }
+  try {
+    api.assertStoreRuntimeSupported(storeRuntimeOverride.info?.() ?? api.detectStoreRuntime());
+  } catch (error) {
+    return { kind: "unavailable", ...refusalOf(error) };
+  }
+  try {
+    return { kind: "retired", storeRevision: await api.readAuthority(harnessDir) };
+  } catch (error) {
+    const refusal = refusalOf(error);
+    return PRE_ACTIVATION_CODES.includes(refusal.code)
+      ? { kind: "legacy" }
+      : { kind: "unavailable", ...refusal };
+  }
+}
+
+/** True when `dir` itself is a harness root: the v2 markers this plugin
+ * classifies documents with (`status.json` + layout dirs), or the root the
+ * engine resolves from the directory's PARENT (default `.mstar`-style and
+ * `.mstarc harness_dir` roots — `resolveHarnessDir(dir)` probes *inside* a
+ * directory, so it never answers for the root itself). */
+function isHarnessRootDir(dir: string): boolean {
+  if (hasHarnessRootMarkers(dir)) return true;
+  const parentResolved = resolveHarnessDir(path.dirname(dir));
+  return parentResolved !== null && path.resolve(parentResolved) === dir;
+}
+
+/** True when the target IS the authority database (or a WAL sidecar) sitting
+ * directly at a harness root: the runtime's own store location for a harness
+ * root is `<harness root>/store.db`, and hand-writing those bytes is never a
+ * supported operation — hard vs soft, staged vs active, all the same. */
+function isStoreAuthorityTarget(rawPath: string): boolean {
+  const resolved = path.resolve(rawPath);
+  if (!STORE_AUTHORITY_FILES.includes(path.basename(resolved))) return false;
+  return isHarnessRootDir(path.dirname(resolved));
+}
+
+/** One authority refusal as a refusal-capable GateResult: `hardBlocked` is
+ * set unconditionally (no enforcement flag involved) so a caller with a
+ * refusal channel must refuse the write. */
+function authorityRefusal(code: string, message: string, log: StatusLogger): GateResult {
+  log(
+    "error",
+    `${code}: ${message} — refused unconditionally (authority invariant, not the document-validity enforcement axis); refusal requires a host refusal channel (skill: mstar-artifacts/references/status-and-residuals.md)`,
+  );
+  return { ok: false, violations: [{ ok: false, severity: "high", code, message }], hardBlocked: true };
+}
+
+function storeDirectWriteRefusal(targetPath: string, log: StatusLogger): GateResult {
+  return authorityRefusal(
+    STORE_DIRECT_WRITE_CODE,
+    `${targetPath} is the issue/catalog authority database and is owned by the runtime — a direct hand write ` +
+      "is refused (the schema and its WAL are managed in-process). Schema changes go through `mstar store " +
+      "init|upgrade|migrate`, findings through `mstar issue add|close`, catalog rows through `mstar catalog " +
+      "register|update`",
+    log,
+  );
+}
+
+function registerRetiredRefusal(storeRevision: number, log: StatusLogger): GateResult {
+  return authorityRefusal(
+    REGISTER_RETIRED_CODE,
+    "project registers are retired migration history — the issue store ({HARNESS_DIR}/store.db, revision " +
+      `${storeRevision}) is the only findings authority; capture and close through \`mstar plan ` +
+      "issue-add|issue-close` (plan-scoped) or `mstar issue add|close` (unscoped). This write is refused",
+    log,
+  );
+}
+
+function authorityUnavailableRefusal(route: { code: string; message: string }, log: StatusLogger): GateResult {
+  return authorityRefusal(
+    STORE_AUTHORITY_UNAVAILABLE_CODE,
+    `the issue authority could not be read ([${route.code}] ${route.message}) — the register write is refused ` +
+      "rather than applied against an unreadable authority; no older-runtime or JSON fallback exists",
+    log,
+  );
+}
+
+/**
  * `status.json` / workflow snapshot / project register write lint (roadmap
  * §8.5 `beforeStatusWrite`, v3 hard cutover).
  *
@@ -504,6 +698,20 @@ function harnessDocKindOfTarget(targetPath: string): { harnessDir: string; kind:
  * `workflows/<id>/snapshot.json`, `project.validateProjectRegister` for
  * `projects/<id>/residuals.json` (the v1 root `residual_findings` surface
  * is gone — the residual write gate moved to the register path).
+ *
+ * Authority paths (G4b) are decided before the document path and are NOT
+ * governed by the enforcement flag (an authority invariant, not document
+ * validity — the ZCode/omp write gates refuse the same two classes
+ * unconditionally): a `{HARNESS_DIR}/store.db` (`-wal`/`-shm`) write is
+ * refused outright, and a project register is routed through the DB-aware
+ * authority check — refused as `project.register.retired` while the issue
+ * store is the active findings authority, refused as
+ * `store.authority-unavailable` when that authority cannot be read at all,
+ * and shape-validated only while no store / a staged store leaves the
+ * register the live authority (issue contract §7). The runtime floor is read
+ * from the ACTUAL runtime (engine `detectStoreRuntime` — the Bun global
+ * first, never Bun's emulated `process.versions.node`) and asserted
+ * in-process before the store is touched.
  *
  * Enforcement (roadmap §8.5 C4/D2, Slice 5):
  * - **Warn mode (default)** — flag absent: violations are surfaced as `warn`
@@ -542,13 +750,26 @@ export async function validateStatusWrite(
 
     const resolved = path.resolve(targetPath);
  // Phase-5 F1: ensure the custom-layout dir resolvers are loaded before
- // classifying — the sync slot feeds `harnessDocKindOfTarget` (stale
- // engine -> null -> default-layout names, the pre-F1 behavior).
+ // classifying — the sync slot feeds `harnessDocKindOfTarget` AND the
+ // authority-target marker probe (stale engine -> null -> default-layout
+ // names, the pre-F1 behavior).
     classifyDirResolvers = await dirResolversLoader.load();
+ // G4b authority paths first: the store database is never writable by hand,
+ // and a register target is decided by the DB-aware authority route rather
+ // than by its document shape (both refuse unconditionally).
+    if (isStoreAuthorityTarget(resolved)) return storeDirectWriteRefusal(resolved, log);
     const target = harnessDocKindOfTarget(resolved);
     if (!target) return null;
 
     let result: GateResult | null;
+    if (target.kind === "register") {
+      const route = await readAuthorityRoute(target.harnessDir);
+      if (route.kind === "retired") return registerRetiredRefusal(route.storeRevision, log);
+      if (route.kind === "unavailable") return authorityUnavailableRefusal(route, log);
+ // `legacy` (no store / staged store): pre-activation, the register is
+ // still the findings authority, so its own validator decides below.
+    }
+
     if (opts.doc !== undefined) {
       if (target.kind === "status") {
         result = validateDocByKind(opts.doc, target.kind, null);
@@ -840,7 +1061,7 @@ export const MorningStarHarnessPlugin: Plugin = async () => {
  // docs. Non-coordination targets (source files, configs, prose —
  // the overwhelming majority of edits) skip the read/parse entirely.
         classifyDirResolvers = await dirResolversLoader.load();
-        if (harnessDocKindOfTarget(filePath) === null) return;
+        if (harnessDocKindOfTarget(filePath) === null && !isStoreAuthorityTarget(filePath)) return;
  // Patched-doc linting: when the OpenCode `edit` args carry a
  // literal `oldString` -> `newString` pair (one pair per tool call —
  // no replacements array, no regex), synthesize the PATCHED text and

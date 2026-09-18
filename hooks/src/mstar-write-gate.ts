@@ -5,6 +5,25 @@
 // path the omp gate uses — the `gates` module of `@mstar-harness/engine`,
 // inlined into this file at build (see scripts/build-zcode-hooks.ts).
 //
+// Issue/catalog authority paths (issue-governance cutover G4b) are decided
+// BEFORE the document path and are NOT governed by `enforcement: hard`
+// (authority invariant, not document validity — omp/OpenCode refuse the same
+// two classes unconditionally): a `{HARNESS_DIR}/store.db` (`-wal`/`-shm`)
+// write is refused (`store.direct-write-refused`), and a project register is
+// routed through the DB-aware authority check — refused as
+// `project.register.retired` while the issue store is the active findings
+// authority, refused as `store.authority-unavailable` when that authority
+// cannot be read at all (below-floor runtime / missing `node:sqlite`
+// capability / corrupt / drifted / busy), and shape-validated only while no
+// store or a staged store leaves the register the live authority (issue
+// contract §7: before activation new findings still go to the register). The
+// runtime floor is read from the ACTUAL runtime (engine `detectStoreRuntime`
+// — the Bun global first, never Bun's emulated `process.versions.node`) and
+// asserted in-process: this hook is spawned as native `node`, so it needs the
+// NODE floor (>=24.18.0) while a Bun-run entrypoint needs the Bun floor —
+// never both. Nothing is acquired for a write that is not store-backed: the
+// store is only touched from the register route.
+//
 // Block dialect (contract D4): exit code 2 with the reason on STDERR — ZCode
 // parses hook stdout under a strict schema where any extra key silently
 // discards the deny (invisible fail-open); the exit-code channel has no
@@ -25,18 +44,193 @@
 // under node, which decodes them correctly (bundle smoke renders the case).
 
 import { readFileSync, statSync, writeSync } from "node:fs";
-import { isAbsolute, join, relative } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
   MAX_STATUS_CONTENT_LENGTH,
+  assertStoreRuntimeSupported,
+  detectStoreRuntime,
   formatStatusWriteBlockReason,
   harnessDocKindOfTarget,
+  queryDashboard,
+  resolveHarnessDir,
+  resolveProjectDir,
   resolveRepoEnforcement,
+  resolveWorkflowDir,
   validateStatusWriteDoc,
+  violationLine,
+  withStoreRead,
 } from "@mstar-harness/engine";
+import type { StoreRuntimeInfo, ValidationResult } from "@mstar-harness/engine";
 
 const SKILL_POINTER = "skill: mstar-artifacts/references/status-and-residuals.md";
 const ENFORCEMENT_LINE =
   "Enforcement: hard \u2014 this repo opts in via .mstarc/compass; disable for this session with MSTAR_WRITE_GATE=off.";
+const AUTHORITY_LINE =
+  "Authority invariant (not the enforcement flag) \u2014 the issue/catalog authority is not hand-writable; disable for this session with MSTAR_WRITE_GATE=off.";
+
+// ---------------------------------------------------------------------------
+// G4b — issue/catalog authority paths (store.db + retired registers)
+// ---------------------------------------------------------------------------
+
+/** The authority database and its WAL sidecars, directly at a harness root. */
+const STORE_DB_FILE = "store.db";
+const STORE_AUTHORITY_FILES: readonly string[] = [STORE_DB_FILE, `${STORE_DB_FILE}-wal`, `${STORE_DB_FILE}-shm`];
+
+/** Default v2 layout dirs of a marker-complete harness root. */
+const STATUS_FILE = "status.json";
+const WORKFLOW_DIR_NAME = "workflows";
+const PROJECT_DIR_NAME = "projects";
+
+/** Refusal codes, in the frozen store / `project.register.*` vocabulary. */
+const STORE_DIRECT_WRITE_CODE = "store.direct-write-refused";
+const STORE_AUTHORITY_UNAVAILABLE_CODE = "store.authority-unavailable";
+const REGISTER_RETIRED_CODE = "project.register.retired";
+
+/** A store whose absence positively identifies the PRE-activation state
+ * (legacy register authority in force, issue contract §7): missing
+ * (`store.not-initialized`) or staged (`store.not-active`). Every other
+ * refusal leaves the authority state UNKNOWN and is refused (dsh G4a
+ * `catalogRegistrationRefusal` exclusion list, mirrored). */
+const PRE_ACTIVATION_CODES: readonly string[] = ["store.not-initialized", "store.not-active"];
+
+/**
+ * Actual-runtime probe seam (test-injectable): the default reads the ACTUAL
+ * runtime through the engine — the Bun global first, so a Bun process is
+ * never judged by Bun's EMULATED `process.versions.node` (Bun 1.4.0 reports
+ * "26.3.0" there, which would pass a naive Node-floor check while the store's
+ * floor is Bun >=1.4.0). Native `node` therefore gets the Node floor and a
+ * Bun-run hook bundle the Bun floor — the invoked entrypoint's own runtime.
+ */
+export const storeRuntimeProbe: { info: () => StoreRuntimeInfo } = { info: detectStoreRuntime };
+
+/** Stable code + message of a thrown refusal (engine `StoreError` /
+ * `StoreReadError` carry `code`; anything else is reported as itself). */
+function refusalOf(error: unknown): { code: string; message: string } {
+  const message = error instanceof Error ? error.message : String(error);
+  const code =
+    typeof error === "object" && error !== null && "code" in error && typeof error.code === "string"
+      ? error.code
+      : "";
+  return { code: code === "" ? "store.authority-unreadable" : code, message };
+}
+
+/** What the issue store says about a register target (G4b): `retired` =
+ * active store (the register is migration history), `legacy` = no store /
+ * staged store (pre-activation, the register is still the live authority),
+ * `unavailable` = the authority could not be read and the write fails closed.
+ * One read envelope (`withStoreRead` + the `issues` view: no projection
+ * refresh, no source I/O) is the whole probe. */
+type AuthorityRoute =
+  | { kind: "legacy" }
+  | { kind: "retired"; storeRevision: number }
+  | { kind: "unavailable"; code: string; message: string };
+
+async function readAuthorityRoute(harnessDir: string): Promise<AuthorityRoute> {
+  try {
+    assertStoreRuntimeSupported(storeRuntimeProbe.info());
+  } catch (error) {
+    return { kind: "unavailable", ...refusalOf(error) };
+  }
+  try {
+    const envelope = await withStoreRead({ harnessDir }, queryDashboard("issues", { limit: 1 }));
+    return { kind: "retired", storeRevision: envelope.storeRevision };
+  } catch (error) {
+    const refusal = refusalOf(error);
+    return PRE_ACTIVATION_CODES.includes(refusal.code)
+      ? { kind: "legacy" }
+      : { kind: "unavailable", ...refusal };
+  }
+}
+
+/** Directory/entry check (never throws — a missing or unreadable path is
+ * simply not a marker). */
+function hasEntry(dir: string, name: string): boolean {
+  try {
+    statSync(join(dir, name));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** True when `dir` itself is a harness root: the v2 coordination-document
+ * markers the gates classify with (`status.json` + the layout dirs, custom
+ * `.mstarc` dirs honored), or the root the engine resolves from the
+ * directory's PARENT (default `.mstar`-style and `.mstarc harness_dir`
+ * roots — `resolveHarnessDir(dir)` probes *inside* a directory, so it never
+ * answers for the root itself). */
+function isHarnessRootDir(dir: string): boolean {
+  if (hasEntry(dir, STATUS_FILE)) {
+    if (hasEntry(dir, WORKFLOW_DIR_NAME) && hasEntry(dir, PROJECT_DIR_NAME)) return true;
+    try {
+      if (
+        hasEntry(resolveWorkflowDir(dir, { harnessDir: dir }), "") &&
+        hasEntry(resolveProjectDir(dir, { harnessDir: dir }), "")
+      ) {
+        return true;
+      }
+    } catch {
+      // unreadable layout config — fall through to the parent resolution
+    }
+  }
+  const parentResolved = resolveHarnessDir(dirname(dir));
+  return parentResolved !== null && resolve(parentResolved) === dir;
+}
+
+/** True when the target IS the authority database (or a WAL sidecar) sitting
+ * directly at a harness root: the runtime's own store location for a harness
+ * root is `<harness root>/store.db`, and hand-writing those bytes is never a
+ * supported operation — hard vs soft, staged vs active, all the same. */
+function isStoreAuthorityTarget(rawPath: string): boolean {
+  const resolved = resolve(rawPath);
+  if (!STORE_AUTHORITY_FILES.includes(basename(resolved))) return false;
+  return isHarnessRootDir(dirname(resolved));
+}
+
+/** One authority refusal as the contract's violation line (same
+ * `[severity] code: message (fix: …)` + skill-pointer dialect as the engine
+ * violations — only the third stderr line differs, naming the authority
+ * invariant instead of `enforcement: hard`). */
+function authorityViolation(code: string, message: string): ValidationResult {
+  return { ok: false, severity: "high", code, message };
+}
+
+function storeDirectWriteRefusal(targetPath: string): ValidationResult {
+  return authorityViolation(
+    STORE_DIRECT_WRITE_CODE,
+    `${targetPath} is the issue/catalog authority database and is owned by the runtime \u2014 a direct hand write ` +
+      "is refused (the schema and its WAL are managed in-process). Schema changes go through `mstar store " +
+      "init|upgrade|migrate`, findings through `mstar issue add|close`, catalog rows through `mstar catalog " +
+      "register|update`",
+  );
+}
+
+function registerRetiredRefusal(storeRevision: number): ValidationResult {
+  return authorityViolation(
+    REGISTER_RETIRED_CODE,
+    "project registers are retired migration history \u2014 the issue store ({HARNESS_DIR}/store.db, revision " +
+      `${storeRevision}) is the only findings authority; capture and close through \`mstar plan ` +
+      "issue-add|issue-close` (plan-scoped) or `mstar issue add|close` (unscoped). This write is refused",
+  );
+}
+
+function authorityUnavailableRefusal(route: { code: string; message: string }): ValidationResult {
+  return authorityViolation(
+    STORE_AUTHORITY_UNAVAILABLE_CODE,
+    `the issue authority could not be read ([${route.code}] ${route.message}) \u2014 the register write is refused ` +
+      "rather than applied against an unreadable authority; no older-runtime or JSON fallback exists",
+  );
+}
+
+/** Exit 2 with the contract's stderr shape: block header, violation lines,
+ * and the authority line. `writeSync` on fd 2 keeps the reason intact across
+ * `process.exit` (async buffering loses it on some platforms). */
+function blockAuthorityWrite(toolName: string, display: string, violations: ValidationResult[]): never {
+  writeSync(2, `[Morning Star write gate] blocked ${toolName} to ${display}\n`);
+  for (const violation of violations) writeSync(2, `${violationLine(violation)} (${SKILL_POINTER})\n`);
+  writeSync(2, `${AUTHORITY_LINE}\n`);
+  process.exit(2);
+}
 
 // Bounds (failure matrix row 7): per-target cost is bounded by local reads +
 // the 2 MB guards; the target COUNT is bounded here — a hostile envelope
@@ -49,6 +243,13 @@ const MAX_GATED_TARGETS = 32;
  * stays one line and cannot forge violation-looking lines. */
 function displaySafe(text: string): string {
   return text.replace(/[\x00-\x1f\x7f]/g, (ch) => `\\x${ch.charCodeAt(0).toString(16).padStart(2, "0")}`);
+}
+
+/** The block header's target text: harness-relative when the target sits
+ * inside its harness root, otherwise the absolute path (display-safe). */
+function displayTarget(targetPath: string, harnessDir: string): string {
+  const rel = relative(harnessDir, targetPath);
+  return displaySafe(rel && !rel.startsWith("..") && !isAbsolute(rel) ? rel : targetPath);
 }
 
 function readStdinJson(): Record<string, unknown> {
@@ -148,8 +349,35 @@ try {
   // this session with MSTAR_WRITE_GATE=off.
   for (const rawPath of writeTargetPaths(tool)) {
     const targetPath = isAbsolute(rawPath) ? rawPath : join(cwd, rawPath);
+
+    // G4b — authority paths first: the store database is never hand-writable,
+    // and a register target is decided by the DB-aware authority route rather
+    // than by its document shape. Both refuse unconditionally (the enforcement
+    // flag governs document validity, not the authority invariant).
+    if (isStoreAuthorityTarget(targetPath)) {
+      blockAuthorityWrite(toolName, displayTarget(targetPath, dirname(targetPath)), [
+        storeDirectWriteRefusal(targetPath),
+      ]);
+    }
+
     const target = harnessDocKindOfTarget(targetPath);
     if (target === null) continue; // not a gated coordination write — silent pass
+
+    if (target.kind === "register") {
+      const route = await readAuthorityRoute(target.harnessDir);
+      if (route.kind === "retired") {
+        blockAuthorityWrite(toolName, displayTarget(targetPath, target.harnessDir), [
+          registerRetiredRefusal(route.storeRevision),
+        ]);
+      }
+      if (route.kind === "unavailable") {
+        blockAuthorityWrite(toolName, displayTarget(targetPath, target.harnessDir), [
+          authorityUnavailableRefusal(route),
+        ]);
+      }
+      // `legacy`: pre-activation (no store / staged store) — the register is
+      // still the live authority, so its document validator decides below.
+    }
 
     // `content` as a string is the new document; anything else (including
     // new_string/old_string edits and ApplyPatch shapes) validates the
@@ -167,8 +395,7 @@ try {
     const enforcement = resolveRepoEnforcement(target.harnessDir);
     if (!enforcement.hard) continue; // soft mode — silent pass (omp Gate-1 parity)
 
-    const rel = relative(target.harnessDir, targetPath);
-    const display = displaySafe(rel && !rel.startsWith("..") && !isAbsolute(rel) ? rel : targetPath);
+    const display = displayTarget(targetPath, target.harnessDir);
     // writeSync on fd 2: the block reason MUST survive process.exit —
     // process.stderr.write buffers asynchronously on some platforms.
     writeSync(2, `[Morning Star write gate] blocked ${toolName} to ${display}\n`);
