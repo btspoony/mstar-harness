@@ -13,6 +13,7 @@ import type { IssueDetail, IssueFlow, IssuePage } from "@mstar-harness/engine";
 import { html } from "htm/preact";
 import { useEffect, useState } from "preact/hooks";
 
+import type { LoadState } from "../components";
 import { Badge, DetailSection, EmptyState, Field, LiveRegion, Notice, useEnvelope } from "../components";
 import { dispositionTone, evidenceText, externalLinkHref, formatDate, migrationNote, severityTone } from "../format";
 
@@ -130,6 +131,28 @@ export function capturedTotal(flow: IssueFlow): number {
   return (last?.capturedCumulative ?? 0) + flow.unknownCaptureDates;
 }
 
+/** The panel an empty list earns; `unknown` carries the probe's own failure copy. */
+export type EmptyListState =
+  | { kind: "filtered" }
+  | { kind: "store" }
+  | { kind: "probing" }
+  | { kind: "unknown"; message: string };
+
+/**
+ * An empty store and an empty filter result are different facts (DESIGN.md
+ * "Empty, stale and error states"). Only a default-filter empty list is probed
+ * against the dated history, so while that probe is unresolved — or after it
+ * failed — neither copy is honest, and the panel stays neutral instead of
+ * claiming a filter miss.
+ */
+export function emptyListState(probing: boolean, flow: LoadState<IssueFlow>): EmptyListState {
+  if (!probing) return { kind: "filtered" };
+  if (flow.status === "ready") {
+    return capturedTotal(flow.envelope.data) === 0 ? { kind: "store" } : { kind: "filtered" };
+  }
+  return flow.status === "error" ? { kind: "unknown", message: flow.message } : { kind: "probing" };
+}
+
 function timeOf(lexeme: string | null): number | null {
   if (lexeme === null || lexeme === "") return null;
   const parsed = Date.parse(lexeme);
@@ -159,7 +182,13 @@ export type TransitionRow = {
   migration: string | null;
 };
 
-/** The earliest recorded occurrence is the capture; later ones are recurrences. */
+/**
+ * The capture is the issue's **initial occurrence** — the one committed with
+ * the issue and its counter (issue contract §3), and the one a migrated row
+ * keeps. Occurrence ids are allocation-ordered, so the lowest id is that initial
+ * occurrence; every later sighting is a recurrence even when its evidence date
+ * is the earlier one.
+ */
 export function captureOccurrence(detail: IssueDetail): IssueOccurrence | null {
   let capture: IssueOccurrence | null = null;
   for (const occurrence of detail.occurrences) {
@@ -282,6 +311,27 @@ function FilterControls(props: { filters: IssueFilters; onChange: (event: Event)
   </form>`;
 }
 
+/** The four honest empty-list panels; which one applies comes from `emptyListState`. */
+function EmptyIssues(props: { state: EmptyListState; onClear: () => void }) {
+  switch (props.state.kind) {
+    case "store":
+      return html`<${EmptyState}><p class="prose">No issues captured. Use the CLI to record a confirmed finding.</p></${EmptyState}>`;
+    case "probing":
+      // The store probe is still running: the filter-empty copy would guess.
+      return html`<${EmptyState}><p class="prose">Checking the issue store…</p></${EmptyState}>`;
+    case "unknown":
+      // The probe never settled, so an empty list is not evidence of a filter
+      // miss; the probe's own copy names what failed and the safe next action.
+      return html`<${Notice} tone="warning"
+        >${`Could not read the issue store, so this empty list cannot be told apart from an empty filter result. ${props.state.message}`}</${Notice}>`;
+    case "filtered":
+      return html`<${EmptyState}>
+        <p class="prose">No issues match these filters.</p>
+        <button type="button" class="button-secondary" onClick=${props.onClear}>Clear Filters</button>
+      </${EmptyState}>`;
+  }
+}
+
 export function IssuesView(props: {
   focusIssueId: string | null;
   onFocusRestored: () => void;
@@ -294,7 +344,7 @@ export function IssuesView(props: {
   // empty or every issue is retired; the dated history answers that honestly.
   const probeStore = list.status === "ready" && list.envelope.data.total === 0 && isDefaultFilters(query.filters);
   const flow = useEnvelope<IssueFlow>(probeStore ? ISSUE_FLOW_PATH : null);
-  const storeIsEmpty = flow.status === "ready" && capturedTotal(flow.envelope.data) === 0;
+  const emptyState = emptyListState(probeStore, flow);
 
   const apply = (next: IssueQuery): void => {
     setQuery(next);
@@ -310,9 +360,13 @@ export function IssuesView(props: {
 
   useEffect(() => {
     if (props.focusIssueId === null || list.status !== "ready") return;
-    const link = document.getElementById(`issue-link-${props.focusIssueId}`);
-    if (link === null) return;
-    link.focus();
+    // The originating row can be gone when the filters changed while the detail
+    // was open. The restore still completes — that is what clears the caller's
+    // pending id — and focus lands on the list heading rather than being
+    // stranded off-list or blocking a later restore.
+    const target =
+      document.getElementById(`issue-link-${props.focusIssueId}`) ?? document.getElementById("issues-heading");
+    target?.focus();
     props.onFocusRestored();
   }, [props.focusIssueId, list.status]);
 
@@ -327,19 +381,14 @@ export function IssuesView(props: {
           ? "No issues listed."
           : `${total} issue${total === 1 ? "" : "s"} listed.`;
 
-  return html`<h1 class="heading-28">Issues</h1>
+  return html`<h1 class="heading-28" id="issues-heading" tabindex="-1">Issues</h1>
     <${FilterControls} filters=${query.filters} onChange=${applyField} onClear=${() => apply(CLOSED_QUERY)} />
     <p class="hint">Listed by severity, then latest real activity, then ID.</p>
     <${LiveRegion} message=${announcement} />
     ${list.status === "loading" ? html`<p class="hint">Loading issues…</p>` : null}
     ${list.status === "error" ? html`<${Notice} tone="error">${list.message}</${Notice}>` : null}
     ${list.status === "ready" && items.length === 0
-      ? html`<${EmptyState}>
-          ${storeIsEmpty
-            ? html`<p class="prose">No issues captured. Use the CLI to record a confirmed finding.</p>`
-            : html`<p class="prose">No issues match these filters.</p>
-              <button type="button" class="button-secondary" onClick=${() => apply(CLOSED_QUERY)}>Clear Filters</button>`}
-        </${EmptyState}>`
+      ? html`<${EmptyIssues} state=${emptyState} onClear=${() => apply(CLOSED_QUERY)} />`
       : null}
     ${items.length === 0
       ? null

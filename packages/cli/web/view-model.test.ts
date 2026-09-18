@@ -9,10 +9,13 @@
 import { describe, expect, test } from "bun:test";
 import type { IssueDetail, IssueFlow } from "@mstar-harness/engine";
 
+import type { LoadState } from "./components";
 import { UNKNOWN_DATE, evidenceText, externalLinkHref, formatDate, migrationNote } from "./format";
 import {
   DEFAULT_ISSUE_FILTERS,
+  captureOccurrence,
   capturedTotal,
+  emptyListState,
   issueQuery,
   isDefaultFilters,
   occurrenceRows,
@@ -104,6 +107,28 @@ const MIGRATION_PROVENANCE: IssueProvenance[] = [
   },
 ];
 
+/** The dated-history probe the empty list depends on (D3 empty-state edge). */
+const EMPTY_FLOW: IssueFlow = {
+  buckets: [],
+  unknownCaptureDates: 0,
+  unknownClosureDates: 0,
+  currentOpen: 0,
+  incompleteHistory: false,
+};
+const RECORDED_FLOW: IssueFlow = {
+  buckets: [{ date: "2026-01-02", capturedCumulative: 3, retiredCumulative: 1, openDifference: 2, origin: "store" }],
+  unknownCaptureDates: 0,
+  unknownClosureDates: 0,
+  currentOpen: 2,
+  incompleteHistory: false,
+};
+const PROBE_FAILURE = "store.not-initialized: no store — initialize the issue store with the CLI, then reload.";
+const PROBE_LOADING: LoadState<IssueFlow> = { status: "loading", envelope: null, message: null };
+const PROBE_FAILED: LoadState<IssueFlow> = { status: "error", envelope: null, message: PROBE_FAILURE };
+function probeReady(data: IssueFlow): LoadState<IssueFlow> {
+  return { status: "ready", envelope: { data, storeRevision: 1, catalogRevision: 0 }, message: null };
+}
+
 describe("issue list filters", () => {
   test("filter defaults are open-only across all projects and round-trip through the URL", () => {
     // No search string: the D17 default (open-only, all projects), first page.
@@ -155,6 +180,24 @@ describe("issue list filters", () => {
       incompleteHistory: true,
     };
     expect(capturedTotal(withHistory)).toBe(5);
+  });
+});
+
+describe("empty list state", () => {
+  test("an empty list under default filters never claims a filter miss while the probe is unresolved", () => {
+    // The store probe is in flight: neither the empty-store copy nor the
+    // filter-empty copy is honest yet.
+    expect(emptyListState(true, PROBE_LOADING)).toEqual({ kind: "probing" });
+    // A non-default filter never probes at all: the empty result is a filter miss.
+    expect(emptyListState(false, PROBE_LOADING)).toEqual({ kind: "filtered" });
+  });
+
+  test("a settled probe picks one copy, and a failed probe stays neutral", () => {
+    expect(emptyListState(true, probeReady(EMPTY_FLOW))).toEqual({ kind: "store" });
+    expect(emptyListState(true, probeReady(RECORDED_FLOW))).toEqual({ kind: "filtered" });
+    // The probe failed, so the empty list cannot be attributed to the filters;
+    // the panel keeps the probe's own "what failed / what next" copy.
+    expect(emptyListState(true, PROBE_FAILED)).toEqual({ kind: "unknown", message: PROBE_FAILURE });
   });
 });
 
@@ -210,6 +253,21 @@ describe("issue history", () => {
     expect(occurrenceRows(ordered).map((row) => row.at)).toEqual(["2026-03-04", "2026-01-02", null]);
     expect(transitionRows(ordered).map((row) => row.transition.id)).toEqual([1, 2, 4]);
     expect(transitionRows(ordered).map((row) => row.at)).toEqual(["2026-02-02", "2026-05-01", null]);
+  });
+
+  test("the capture is the issue's initial occurrence, not its earliest evidence date", () => {
+    // The migrated row is the capture the store committed with the issue (issue
+    // contract §3); the later recurrence carries the earlier evidence date and a
+    // higher id. Allocation order decides, so the recurrence is never relabelled.
+    const migrated = detail({
+      occurrences: [occurrence(4, null, { imported: true }), occurrence(9, "2026-02-02")],
+    });
+
+    expect(captureOccurrence(migrated)?.id).toBe(4);
+    expect(occurrenceRows(migrated).map((row) => [row.occurrence.id, row.kind])).toEqual([
+      [9, "Recurrence"],
+      [4, "Capture"],
+    ]);
   });
 });
 
