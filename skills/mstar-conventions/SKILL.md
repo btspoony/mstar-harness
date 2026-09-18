@@ -31,6 +31,7 @@ description: Morning Star (启明星) harness 计划目录约定 —— `{HARNES
 | `{SPECS_DIR}` | `{HARNESS_DIR}/specs/`（默认）；解析见下文「`{SPECS_DIR}` 解析」 |
 | `{WORKFLOW_DIR}` | `{HARNESS_DIR}/workflows/`（默认；`.mstarc` `workflow_dir` 声明时用声明值）——v3 每 lifecycle 一个 `workflows/<id>/`（`snapshot.json` + `notes.jsonl`） |
 | `{PROJECT_DIR}` | `{HARNESS_DIR}/projects/`（默认；`.mstarc` `project_dir` 声明时用声明值）——v3 项目层 `projects/<id>/roadmap.md` + `residuals.json` |
+| `{HARNESS_DIR}/store.db` | 进程/control harness 根下的 issue/catalog SQLite（`resolveProcessHarnessDir` 后 `<resolved root>/store.db`；尊重 `.mstarc`）。功能/集成 worktree **不**在 cwd 建库。 |
 
 > **Engine check (when available):** import `resolveHarnessDir` / `resolvePlanDir` / `resolveSddDir` / `resolveIterationDir` / `resolveKnowledgeDir` / `resolveSpecsDir` / `resolveWorkflowDir` / `resolveProjectDir` from `@mstar-harness/engine` in a host hook — or run `mstar path resolve [path]` (`--json` for machine output) to print the resolved dirs — to confirm the resolution below. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
@@ -103,6 +104,12 @@ enforcement=hard
 
 单 plan 的 QC/QA **原始过程报告**默认进入 **`{SDD_DIR}/review/`**（gitignored review bundle），非 `docs/`，也不默认进入 `{PLAN_DIR}`。主 plan 仅保留 durable gate summary；R# open 状态以 `{PROJECT_DIR}/<id>/residuals.json` 为 SSOT（根 `status.json` v2 仅 workflows 注册表）。细则 → **`mstar-artifacts`**。
 
+## Issue store 路径与权威分界
+
+Issue 身份、证据、影响、处置、occurrences、关系与 provenance，以及 project/iteration/plan/document **catalog** 身份与关系，权威在 **`{HARNESS_DIR}/store.db`**（激活后）。执行路由、lease、session 凭证与冻结执行输入仍是根 `status.json` / workflow snapshot 等 **JSON**（`ArtifactStore` / 默认 `FsStore`）——不是 SQLite，也不把 `ArtifactStore` 改成通用 SQLite 后端。
+
+Store 落在 **control / process harness 根**，不随 feature worktree cwd。Help / 普通 validator / engine import **不**打开 SQLite。本 skill 只声明路径与权威分界；动词与标志以 `mstar issue --help` 为准（`mstar-use-cli` 索引族名）。文档本身不证明打包兼容或激活就绪。
+
 ## 初始化 Plan 目录
 
 PM 在需要持久化追踪时：
@@ -135,6 +142,7 @@ PM 在需要持久化追踪时：
 - `status.json`
 - `workflows/`（v3 每 lifecycle 运行态：`<id>/snapshot.json` + `<id>/notes.jsonl`）
 - `projects/`（v3 项目层：`<id>/roadmap.md` + `<id>/residuals.json`）
+- `store.db`（issue/catalog SQLite；与 `status.json` 同属进程产物，默认随 `{HARNESS_DIR}` 忽略）
 
 Legacy `.agents/` 项目：将上表路径前缀 `.mstar/` 换为 `.agents/`。
 

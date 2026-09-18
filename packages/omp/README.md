@@ -48,7 +48,7 @@ Coordinator sessions can start every new Morning Star iteration on `@slow` (Prep
 
 **Scope limitation (host behaviour, not configurable here):** the native `/settings` → Plugins panel lists **user-scope** plugin installs. A `--scope project` install is used by omp but has no row in that panel; use the user-scope install above. The extension reads the saved preference through the host's exported settings helper, so a project-scoped runtime still honours the preference you saved there.
 
-Requires omp's `@oh-my-pi/pi-coding-agent` (optional peer, `peerDependencies`) and Bun `>=1.3.14`. The peer is optional so the package installs on any host: the hooks, tools, skills and commands carry no runtime host import and are unaffected by this entry's host resolution.
+Requires omp's `@oh-my-pi/pi-coding-agent` (optional peer, `peerDependencies`) and **Bun `>=1.4.0`** for this plugin. The peer is optional so the package installs on any host: the hooks, tools, skills and commands carry no runtime host import and are unaffected by this entry's host resolution. This is a Bun-hosted plugin; do not add a Node floor here just because the CLI also has an explicit `node` invocation.
 The engine is **bundled inline** into every hook/tool/extension bundle at build time — the installed package has no runtime `@mstar-harness/engine` resolution, so module link can never fail on a missing package. The Phase-2 extension follows the same host pattern as the model entry: its one runtime host dependency, `getPluginSettings` from `@oh-my-pi/pi-coding-agent/extensibility/plugins`, stays external and is resolved by the running host, declared as an **optional peer** and developed against the pinned host version.
 
 ## Phase-2 plan instances (opt-in)

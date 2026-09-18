@@ -3,6 +3,7 @@
 ## Prerequisites
 
 - [OpenCode.ai](https://opencode.ai) installed
+- **Runtime:** published plugin runs in OpenCode’s Node process. Monorepo `bundle-assets` / `bun build` need **Bun >=1.4.0**. Users who only install from npm do not need Bun in addition to OpenCode. The CLI’s Bun shebang is a different entrypoint (`INSTALL.md` at repo root).
 
 ## Installation
 

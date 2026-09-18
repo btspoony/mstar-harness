@@ -4,7 +4,7 @@
 
 ## Prerequisites
 
-- **Node.js** 18+ (for `npx` / `bunx` CLI)
+- **CLI launch vs Node invocation** — the published `mstar-harness` binary is a Bun shebang script: normal launch needs **Bun >=1.4.0**. Explicit `node dist/mstar-harness.js` needs **Node >=24.18.0**. `npx` / `bunx` only need a package runner already on PATH; do not install both runtimes solely because this document lists both entrypoints. Bun-hosted host plugins (dsh, omp, OpenCode build) need Bun `>=1.4.0`; a native Node host process is a Node entry, not an extra Bun demand.
 - Target host installed:
   - [OpenCode](https://opencode.ai)
   - [Cursor](https://cursor.com)

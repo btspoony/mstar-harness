@@ -31,6 +31,7 @@ Harness Workflow Engine · Agent Plugin
 - **一个引擎跨宿主** —— 同一引擎 + skills 驱动 dsh（DeepSeek Harness）、omp、OpenCode、Cursor、Kimi Code、ZCode、Codex
 - **Agent Plugin 打包** —— 一条命令安装；可移植到任意 Agent Plugins v1.0.0 客户端
 - **可插拔 JSON 持久化** —— 协调文档（`status.json`、workflow snapshots、project residuals、review envelopes）经 `ArtifactStore` 持久化；默认 `FsStore` 保持既有 `.mstar/` 路径，集成方可经 `MSTAR_STORE_MODULE` / `--store` / 进程内 `setArtifactStore` 挂载自有存储
+- **Issue/catalog 库 vs 执行 JSON** —— 激活后 `{HARNESS_DIR}/store.db`（SQLite）是 issue 与 catalog 权威；`ArtifactStore` 仍是执行/审查 JSON（`status.json`、snapshots、residuals）。两者不是同一存储。
 - **推荐宿主**（最佳 → 可用）：**dsh = omp ≥ ZCode = OpenCode = Cursor > Kimi > Codex**
 
 **交付内容**
@@ -81,6 +82,10 @@ Codex 角色链接修复与具名子代理验证：[Codex 安装](INSTALL.md#cod
 
 手动安装 / 路径布局：[`INSTALL.md`](INSTALL.md)。CLI 参数：**`mstar-use-cli`** skill。
 
+
+### 运行时下限（按入口，不是“两套都装”）
+
+已发布 CLI 保留 Bun shebang（`#!/usr/bin/env bun`）。正常启动 `mstar-harness` / dist 文件使用 **Bun >=1.4.0**。显式 `node <CLI bundle>` 使用 **Node >=24.18.0**。Bun 宿主插件需要 Bun；原生 Node 入口需要 Node。不要把这两条下限理解成每台机器都必须同时安装两个运行时。`npx` / `bunx` 安装仍用你已有的包运行器。本文不证明打包兼容或 store 激活就绪。
 
 ## 使用
 
