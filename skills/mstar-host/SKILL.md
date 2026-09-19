@@ -72,7 +72,7 @@ Shared lifecycle skills name **host-agnostic anchors** — named moments at whic
 
 | Anchor | Moment |
 |--------|--------|
-| `iteration-entry` | first preparation action of a new iteration — reached only once the workflow is registered and its id known |
+| `direction-lock` | direction lock completed and the iteration identified — before the compass/plans draft is written; the workflow is not registered yet |
 | `phase-1-lock` | Phase 1 completion — once the integration worktree exists, the reviewed changes are committed there and that branch is pushed (the PM lock alone is not the moment) |
 | `phase-2-entry` | the Phase 2 execute/resume entry — after the §2.0 gates, before the per-plan loop; **not** the Phase-1-reused integration-worktree step |
 | `rescheduling-checkpoint` | each `Rescheduling checkpoint` re-evaluation |
@@ -90,7 +90,7 @@ Carrier locations — the four markers in the shared corpus (all four live under
 
 | File | Location | Anchor |
 |------|----------|--------|
-| `mstar-iteration/references/phase-1-prepare.md` | §1.5 tail, after the v2 status registration (the workflow id exists there) | `iteration-entry` |
+| `mstar-iteration/references/phase-1-prepare.md` | §1.2 tail, after the direction is locked and before `## 1.3` writes the compass/plans draft | `direction-lock` |
 | `mstar-iteration/references/phase-2-worktree-lease.md` | §2.3 「Integration worktree (Phase 2 entry) + control root」 checklist tail, after step 7 (transfer + commit + push) — the Phase 1 route reaches it through `iteration-start` §6, which carries a pointer only | `phase-1-lock` |
 | `mstar-iteration/references/phase-2-worktree-lease.md` | immediately before the `## 2.4 Per-plan loop` heading (the Phase 2 execute/resume entry; §2.3 is the Phase-1-reused step and triggers nothing) | `phase-2-entry` |
 | `mstar-iteration/references/phase-2-worktree-lease.md` | `### Rescheduling checkpoint` | `rescheduling-checkpoint` (the five frozen reason names are handed off verbatim) |

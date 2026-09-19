@@ -66,7 +66,7 @@ Execute **`mstar-iteration/references/phase-1-prepare.md`**（§1.1–§1.6；**
 
 ### 1–4. Research → Explore → Lock → Write
 
-Survey structured harness dirs（`{HARNESS_DIR}/status.json`、`{ITERATION_DIR}/`、`{KNOWLEDGE_DIR}/`、`{SPECS_DIR}/`）+ planning artifacts（`**/roadmap*.md`、`**/deferred*.md`、`**/features*.md`、`**/backlog*.md`、`**/TODO*.md`、`**/*.plan.md`）+ `STRATEGY.md`（if present）→ scope **2–4** candidates → **autonomous** lock（`direction` arg 约束；落盘 rationale + success criteria + non-goals + scale budget；branch resolve — never silent `main`/`master`；**STOP** if no credible candidate and no `direction` arg）→ write compass + plans per §1.3–§1.5（business plan count within scale budget）。
+Survey structured harness dirs（`{HARNESS_DIR}/status.json`、`{ITERATION_DIR}/`、`{KNOWLEDGE_DIR}/`、`{SPECS_DIR}/`）+ planning artifacts（`**/roadmap*.md`、`**/deferred*.md`、`**/features*.md`、`**/backlog*.md`、`**/TODO*.md`、`**/*.plan.md`）+ `STRATEGY.md`（if present）→ scope **2–4** candidates → **autonomous** lock（`direction` arg 约束；落盘 rationale + success criteria + non-goals + scale budget；branch resolve — never silent `main`/`master`；**STOP** if no credible candidate and no `direction` arg）→ execute the `direction-lock` anchor（`mstar-iteration/references/phase-1-prepare.md` §1.2 tail；rationale recorded on disk, compass not yet written）→ write compass + plans per §1.3–§1.5（business plan count within scale budget）。
 
 ### 5. Review & Edit Chain（HARD GATE）
 
@@ -75,6 +75,7 @@ Execute **`mstar-iteration/references/phase-1-prepare.md` §1.6**：`product-man
 **Pre-commit checklist**（print before §6；all `[x]`）：
 
 - [ ] Autonomous direction lock rationale recorded in compass（**not** grill-me）
+- [ ] `direction-lock` anchor executed once the autonomous lock rationale is recorded and **before** the compass/plans draft（same anchor and carrier as `iteration-start` §3.5；no `grill-me` on this route）
 - [ ] Scale budget applied（business plan 按 S/M/L/XL 名额）
 - [ ] compass + plans + `status.json` registered
 - [ ] product-manager / architect / writing-specialist invokes completed（**未**向 `{KNOWLEDGE_DIR}/` 新增）

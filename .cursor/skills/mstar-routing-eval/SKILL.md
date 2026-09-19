@@ -241,4 +241,4 @@ description: "[Cursor maint] Morning Star 路由与 prompt 迭代评估 —— �
 
 ## Assets
 
-- `assets/routing-evals.json` — PM 路由回归场景集（结构：`cases[].prompt / expected_route / must_have_artifacts / hard_fail_if`）。评估时用 `cat` 或 `jq` 读取；**更新场景集须与本 skill 同 PR 维护**以避免版本漂移。本 skill 侧的维护事实：场景集当前为 **`version` 31 · 62 例**（含 `plan-scope-*` 7 例与 `phase2-*` 6 例，其防守信号均登记在 § 2）；数字以场景集文件为准，此处只随更新改写。
+- `assets/routing-evals.json` — PM 路由回归场景集（结构：`cases[].prompt / expected_route / must_have_artifacts / hard_fail_if`）。评估时用 `cat` 或 `jq` 读取；**更新场景集须与本 skill 同 PR 维护**以避免版本漂移。本 skill 侧的维护事实：场景集当前为 **`version` 32 · 63 例**（含 `plan-scope-*` 7 例与 `phase2-*` 6 例，其防守信号均登记在 § 2）；数字以场景集文件为准，此处只随更新改写。

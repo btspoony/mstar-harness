@@ -53,6 +53,11 @@ compass/plans 初稿落盘前，必须锁定**单一**迭代方向、成功标�
 
 **Autonomous branch resolve**：仅 `autonomous` 模式；解析顺序与 STOP 规则见 **`references/autonomous-direction-lock.md`**（勿把该顺序套用到 interactive 以跳过向用户确认）。
 
+<!-- host-hook: direction-lock -->
+> Execute the active host reference's `## Host hooks` declaration for `direction-lock`; this file defines no host action.
+>
+> 本 anchor 在**方向已锁定**（interactive：与用户收敛 / autonomous：方向 rationale 落盘）之后、**compass 与 plans 初稿落盘之前**执行。此时 workflow 尚未登记、compass 尚不存在，属预期状态 —— anchor 动作由 active host reference 的声明决定；登记（§1.5）发生在本步之后。
+
 ## 1.3 创建迭代 package + compass
 
 创建 `{ITERATION_DIR}/<iteration-id>/`，写入 **`delivery-compass.md`**（canonical；**禁止**新写根目录 `<id>-delivery-compass.md`）。**必须**使用 `references/iteration-compass-template.md` 完整结构（YAML frontmatter + `## Roadmap Position` + close 占位节）。`end_date` 仅在 iteration-close 填入；禁止用正文 completion prose 替代 frontmatter `status`。按需创建 `guides/`、`specs/` 与 package `README.md`。
@@ -157,11 +162,6 @@ iteration 正式全流程**必须**登记 `{HARNESS_DIR}/status.json`（v2 根�
 compass frontmatter 的 `iteration_base_branch` / `target_branch` **必须与** snapshot `branch` 一致；若仅写在 compass 而 snapshot 缺失，Phase 2 §2.3 同轮 backfill。
 
 **中途增减范围（已存在且仍在 Prepare 的 workflow）**：用户/产品批准的范围扩张**不得**手改受保护状态。先以 `mstar plan bind --coordinator --workflow <id>` 建立该 workflow 的 coordinator 会话，再经受守卫入口 `mstar workflow show-prepare` 读取快照与 compass 两个字节版本，并以 `mstar workflow amend-prepare` 追加已批准的 Todo 行、登记已 review 的 integration checkout 与 `plan_parallelism`（仅 Prepare 且无执行所有权时可用；无 force/replace/init 通道）。守卫与字段权威 → **`mstar-artifacts`** `references/status-and-residuals.md`「Prepare workflow amendment」；forms / exit codes → **`mstar-use-cli`** `references/plan-and-workflow.md`。
-
-<!-- host-hook: iteration-entry -->
-> Execute the active host reference's `## Host hooks` declaration for `iteration-entry`; this file defines no host action.
->
-> 本 anchor 只在 workflow 已登记到 v2 状态面（本条完成）**且其 id 已知**之后执行 —— 登记之前没有可用的 workflow id。
 
 ## 1.5.5 产物边界（specs · iterations · knowledge）
 
