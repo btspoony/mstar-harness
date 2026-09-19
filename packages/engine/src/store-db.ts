@@ -203,7 +203,7 @@ function busyAware(db: StoreDb, path: string): StoreDb {
       throw new StoreError(
         "store.busy",
         `Another writer held ${path} past the bounded wait (${busyTimeoutMs()}ms). ` +
-          `The statement was refused — roll back the current transaction and retry when the ` +
+          `The statement was refused \u2014 roll back the current transaction and retry when the ` +
           `competing writer is done; no write was accepted.`,
       );
     }

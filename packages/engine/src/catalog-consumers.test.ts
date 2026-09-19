@@ -131,7 +131,7 @@ async function registerPlan(context: StoreContext): Promise<void> {
   );
 }
 
-describe("catalog pin — a prepared execution keeps its frozen input", () => {
+describe("catalog pin \u2014 a prepared execution keeps its frozen input", () => {
   test("catalog pin: a pinned row stays stable while the current catalog moves", async () => {
     const { context } = await withStore("pin-stable-");
     await registerPlan(context);
@@ -256,7 +256,7 @@ describe("catalog pin — a prepared execution keeps its frozen input", () => {
   });
 });
 
-describe("catalog discovery — the completeness query over store.db", () => {
+describe("catalog discovery \u2014 the completeness query over store.db", () => {
   /**
    * Stores that exist as files only: an iteration with a compass, a plan and a
    * knowledge document — and no README index anywhere.
@@ -320,7 +320,7 @@ describe("catalog discovery — the completeness query over store.db", () => {
   });
 });
 
-describe("catalog consumers — scaffold and execution routing boundaries", () => {
+describe("catalog consumers \u2014 scaffold and execution routing boundaries", () => {
   test("catalog discovery: scaffold registers the project through the domain boundary, idempotently", async () => {
     const root = mkdtempSync(join(ROOT, "scaffold-catalog-"));
     const harness = join(root, ".mstar");

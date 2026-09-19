@@ -113,7 +113,7 @@ async function assertProjectExists(harnessDir: string, projectId: string): Promi
 export async function startDashboard(options: StartDashboardOptions): Promise<RunningDashboard> {
   const port = options.port ?? 0;
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
-    throw new Error(`--port must be an integer between 0 and 65535 — got ${JSON.stringify(String(port))}`);
+    throw new Error(`--port must be an integer between 0 and 65535 \u2014 got ${JSON.stringify(String(port))}`);
   }
   const context = { harnessDir: options.harnessDir };
   if (options.projectId !== undefined) await assertProjectExists(options.harnessDir, options.projectId);

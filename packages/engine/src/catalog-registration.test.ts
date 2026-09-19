@@ -120,7 +120,7 @@ async function catalogPlan(context: StoreContext, id: string) {
   return detail.entity;
 }
 
-describe("catalog execution registration — the ordered join", () => {
+describe("catalog execution registration \u2014 the ordered join", () => {
   test("registers the execution and its catalog delta, publishing the catalog only after the execution registration holds", async () => {
     const { harnessDir, context } = await fixture("ordered-");
     const before = await readCatalogRevisions(context);
@@ -189,7 +189,7 @@ describe("catalog execution registration — the ordered join", () => {
     expect(await listPendingCatalogRegistrations(context)).toEqual([]);
   });
 
-  test("refuses when no store exists — a missing database is never an empty catalog", async () => {
+  test("refuses when no store exists \u2014 a missing database is never an empty catalog", async () => {
     const workspace = mkdtempSync(join(ROOT, "no-store-"));
     mkdirSync(join(workspace, ".mstar"), { recursive: true });
     const context: StoreContext = { harnessDir: workspace };
@@ -202,7 +202,7 @@ describe("catalog execution registration — the ordered join", () => {
   });
 });
 
-describe("catalog execution registration — failure boundaries", () => {
+describe("catalog execution registration \u2014 failure boundaries", () => {
   test("a snapshot-write failure leaves a resumable pending state; reconcile finishes exactly its own writes", async () => {
     const { harnessDir, context } = await fixture("snapshot-failure-");
     setArtifactStore(failingStore(harnessDir, "snapshot"));
@@ -420,7 +420,7 @@ describe("catalog execution registration — failure boundaries", () => {
   });
 });
 
-describe("catalog execution registration — the other two producers", () => {
+describe("catalog execution registration \u2014 the other two producers", () => {
   test("registers an iteration (with its relation) through the same journal", async () => {
     const { harnessDir, context } = await fixture("iteration-");
     const iterationId = "20260918-registration-iteration";
@@ -570,7 +570,7 @@ describe("catalog execution registration — the other two producers", () => {
   });
 });
 
-describe("catalog execution registration — refusals are typed and recoverable", () => {
+describe("catalog execution registration \u2014 refusals are typed and recoverable", () => {
   test("a re-drive failure keeps the pending row: only a fixed environment loses nothing", async () => {
     const { harnessDir, context } = await fixture("retry-");
     // The store refuses the snapshot write for the whole first phase.

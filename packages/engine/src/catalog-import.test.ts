@@ -164,7 +164,7 @@ async function crossRootFixture(name: string): Promise<Fixture> {
     md(
       "# iter-alpha",
       "",
-      "Iteration package — `delivery-compass.md` + guides.",
+      "Iteration package \u2014 `delivery-compass.md` + guides.",
       "",
       "## Documents",
       "",

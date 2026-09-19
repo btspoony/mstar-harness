@@ -80,21 +80,21 @@ function readJsonFile(path: string, what: string): unknown {
  */
 export function findLegacyWorkspaceFact(harnessDir: string): string | null {
   if (existsSync(join(harnessDir, "store.db"))) {
-    return `a store already exists at ${join(harnessDir, "store.db")} — migrate or activate instead of initializing`;
+    return `a store already exists at ${join(harnessDir, "store.db")} \u2014 migrate or activate instead of initializing`;
   }
   const projectsDir = join(harnessDir, "projects");
   if (existsSync(projectsDir)) {
     for (const entry of readdirSync(projectsDir, { withFileTypes: true })) {
       if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
       if (existsSync(join(projectsDir, entry.name, "residuals.json"))) {
-        return `legacy residual register found at projects/${entry.name}/residuals.json — use the staged migration, not "store init"`;
+        return `legacy residual register found at projects/${entry.name}/residuals.json \u2014 use the staged migration, not "store init"`;
       }
     }
   }
   // A maintained iterations index is a catalog source of the legacy workspace.
   const iterationsReadme = join(harnessDir, "iterations", "README.md");
   if (existsSync(iterationsReadme)) {
-    return `maintained catalog index found at iterations/README.md — use the staged migration, not "store init"`;
+    return `maintained catalog index found at iterations/README.md \u2014 use the staged migration, not "store init"`;
   }
   // Registered active workflows are execution authority of an existing workspace.
   const statusPath = join(harnessDir, "status.json");
@@ -102,10 +102,10 @@ export function findLegacyWorkspaceFact(harnessDir: string): string | null {
     try {
       const status = JSON.parse(readFileSync(statusPath, "utf8")) as { workflows?: unknown };
       if (Array.isArray(status.workflows) && status.workflows.length > 0) {
-        return `${status.workflows.length} registered workflow(s) in status.json — this is not a genuinely empty workspace`;
+        return `${status.workflows.length} registered workflow(s) in status.json \u2014 this is not a genuinely empty workspace`;
       }
     } catch {
-      return `status.json at ${statusPath} is unreadable — this is not a genuinely empty workspace`;
+      return `status.json at ${statusPath} is unreadable \u2014 this is not a genuinely empty workspace`;
     }
   }
   return null;
@@ -325,8 +325,8 @@ export function registerStoreCommands(program: Command): void {
     .command("init")
     .description(
       "Create-only initializer for a GENUINELY EMPTY workspace (active empty store, epoch 1). Refuses every existing " +
-        "legacy workspace — legacy residual registers, a maintained iterations index, registered workflows, or a prior " +
-        "DB — with store.already-exists; an existing workspace migrates instead (store migrate)",
+        "legacy workspace \u2014 legacy residual registers, a maintained iterations index, registered workflows, or a prior " +
+        "DB \u2014 with store.already-exists; an existing workspace migrates instead (store migrate)",
     )
     .option("--harness <path>", "Harness dir override")
     .option("--json", "Machine-readable envelope on stdout")
@@ -359,9 +359,9 @@ export function registerStoreCommands(program: Command): void {
   store
     .command("migrate")
     .description(
-      "Staged issue/catalog migration (contract §7). Default: read-only preview producing the reviewable manifest " +
-        "(byte digests, source-set digest, mappings, unresolved rows, catalog conflicts, retirement sections) — no DB, " +
-        "no receipt. --apply --manifest <path>: the explicit reviewed apply — one issue/catalog/receipt transaction, " +
+      "Staged issue/catalog migration (contract \u00a77). Default: read-only preview producing the reviewable manifest " +
+        "(byte digests, source-set digest, mappings, unresolved rows, catalog conflicts, retirement sections) \u2014 no DB, " +
+        "no receipt. --apply --manifest <path>: the explicit reviewed apply \u2014 one issue/catalog/receipt transaction, " +
         "persistent ID mapping, source-drift refusal, staged store (ordinary mutations stay refused until activation)",
     )
     .option("--apply", "Explicit reviewed apply using the reviewed --manifest file")
@@ -400,7 +400,7 @@ export function registerStoreCommands(program: Command): void {
   store
     .command("activate")
     .description(
-      "The activation barrier (contract §7, D19): make the migrated store the sole issue/catalog authority. Requires the " +
+      "The activation barrier (contract \u00a77, D19): make the migrated store the sole issue/catalog authority. Requires the " +
         "reviewed --manifest applied receipt to be the FINAL one (unchanged register bytes and catalog digests, no " +
         "post-apply store change), the current-coordinator + installed-consumer --attestation (entrypoints, versions, " +
         "quiesced sessions, approving operator; never session credentials), and takes a verified VACUUM INTO backup. The " +
@@ -423,7 +423,7 @@ export function registerStoreCommands(program: Command): void {
   store
     .command("retire")
     .description(
-      "Retire the exact reviewed legacy registers and index sections of an activated store (contract §7). Moves the bytes " +
+      "Retire the exact reviewed legacy registers and index sections of an activated store (contract \u00a77). Moves the bytes " +
         "into <harness>/archived/store-migration/<activation-receipt-id>/ under a resumable per-item ledger plus a marker " +
         "naming the successor DB and receipt; mixed-content index files lose only their reviewed section lines. Revalidates " +
         "the active identity, epoch, exact source hashes and catalog digests first; a late old-format write refuses " +

@@ -2127,15 +2127,15 @@ export async function readExecutionCatalogPin(input: {
     // an edited frozen input is caught even pre-activation.
     if (executionInputHash(input.row, planId) !== recorded.document_hash) {
       state.conflict =
-        `plan ${planId}'s frozen execution input changed after preparation (its pin records ${recorded.document_hash.slice(0, 12)}…, ` +
-        "the row now hashes differently) — an explicit authorized prepare must rebind the input; neither side is overwritten";
+        `plan ${planId}'s frozen execution input changed after preparation (its pin records ${recorded.document_hash.slice(0, 12)}\u2026, ` +
+        "the row now hashes differently) \u2014 an explicit authorized prepare must rebind the input; neither side is overwritten";
       return state;
     }
     if (facts.store !== "active" || facts.storeId === null) return state;
     if (facts.revision === null) {
       state.conflict =
         `plan ${planId} is pinned to catalog revision ${recorded.entity_revision}, but the catalog no longer holds that plan ` +
-        "entity — resolve the catalog registration explicitly; the pin and the frozen input are both left untouched";
+        "entity \u2014 resolve the catalog registration explicitly; the pin and the frozen input are both left untouched";
       return state;
     }
     state.catalog_moved = facts.revision !== recorded.entity_revision;
@@ -2162,11 +2162,11 @@ export async function readExecutionCatalogPin(input: {
   };
   if (facts.binding.catalogId !== planId) {
     state.conflict =
-      `workflow ${workflowId} is registered against plan ${facts.binding.catalogId}, but this row is plan ${planId} — ` +
+      `workflow ${workflowId} is registered against plan ${facts.binding.catalogId}, but this row is plan ${planId} \u2014 ` +
       "the binding and the frozen execution input disagree; neither side is overwritten";
   } else if (facts.binding.relativePath !== null && !planFileNamesLocation(input.row, facts.binding.relativePath)) {
     state.conflict =
-      `plan ${planId} is registered at ${facts.binding.relativePath}, but its frozen row names a different document — ` +
+      `plan ${planId} is registered at ${facts.binding.relativePath}, but its frozen row names a different document \u2014 ` +
       "re-run the authorized prepare to rebind the input";
   }
   return state;

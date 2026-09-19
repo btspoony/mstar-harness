@@ -393,9 +393,9 @@ function classifyEntry(
       disposition,
       severity,
       rationale:
-        `entry is missing required finding evidence: ${missing.map((field) => JSON.stringify(field)).join(", ")} — ` +
+        `entry is missing required finding evidence: ${missing.map((field) => JSON.stringify(field)).join(", ")} \u2014 ` +
         "the reviewed disposition imports this row as history only: verbatim fields and lifecycle mapping retained, " +
-        "no issue allocated, nothing synthesized (issue contract §3)",
+        "no issue allocated, nothing synthesized (issue contract \u00a73)",
     };
   }
   return { classification: "issue", disposition, severity };
@@ -1019,7 +1019,7 @@ export async function applyStoreMigration(context: StoreContext, manifest: Migra
       throw new StoreMigrationError(
         "store.migration-manifest-invalid",
         `history/excluded mapping ${mapping.source.registerPath} bucket ${JSON.stringify(mapping.source.bucket)} entry ${JSON.stringify(mapping.source.entryId)} ` +
-          "requires an explicit reviewed rationale (issue contract §3); nothing was written.",
+          "requires an explicit reviewed rationale (issue contract \u00a73); nothing was written.",
       );
     }
   }
@@ -1094,7 +1094,7 @@ export async function applyStoreMigration(context: StoreContext, manifest: Migra
               "store.migration-manifest-invalid",
               `entry ${JSON.stringify(row.mapping.source.entryId)} (${row.mapping.source.registerPath} bucket ${JSON.stringify(row.mapping.source.bucket)}) ` +
                 `was imported as issue ${priorEntry.issueId} but the re-reviewed manifest classifies it ${row.mapping.classification}; ` +
-                "an imported issue is never demoted by a re-review — restore its issue classification or remove the row from the sources with an explicit reviewed disposition. Nothing was written.",
+                "an imported issue is never demoted by a re-review \u2014 restore its issue classification or remove the row from the sources with an explicit reviewed disposition. Nothing was written.",
             );
           }
           assignments.push({ ...row.mapping, issueId: "" });

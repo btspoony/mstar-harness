@@ -1042,7 +1042,7 @@ function refuseAuthority(message: string): IssueError {
   return new IssueError(
     "issue.scope-refused",
     `${message}. A privileged mutation is authorized only by the engine-issued session envelope of a live ` +
-      `workflow (contract §4); a file that merely parses as an envelope is not a credential.`,
+      `workflow (contract \u00a74); a file that merely parses as an envelope is not a credential.`,
   );
 }
 
@@ -1067,7 +1067,7 @@ function liveSnapshotOf(
     );
   }
   if (isTerminalSnapshot(snapshot)) {
-    throw refuseAuthority(`Workflow ${snapshot.id} is ${snapshot.status} — a finished lifecycle holds no live authority`);
+    throw refuseAuthority(`Workflow ${snapshot.id} is ${snapshot.status} \u2014 a finished lifecycle holds no live authority`);
   }
   return snapshot;
 }
@@ -1200,8 +1200,8 @@ function assertClosureAuthority(disposition: TerminalDisposition, evidence: Clos
     if (!evidence.alignmentRef?.trim()) {
       throw new IssueError(
         "issue.invalid-disposition",
-        "resolved requires the acceptance authority in alignmentRef — the QA gate's acceptance (contract §4 " +
-          "`qa-engineer`, supplied as evidence per §6) or the PM acceptance record the references were verified under",
+        "resolved requires the acceptance authority in alignmentRef \u2014 the QA gate's acceptance (contract \u00A74 " +
+          "`qa-engineer`, supplied as evidence per \u00a76) or the PM acceptance record the references were verified under",
       );
     }
     return;
@@ -1338,7 +1338,7 @@ export async function closeIssue(
     if (issue.disposition !== "open") {
       throw new IssueError(
         "issue.invalid-disposition",
-        `Only open→terminal is accepted; ${issue.disposition} cannot transition to ${disposition}`,
+        `Only open\u2192terminal is accepted; ${issue.disposition} cannot transition to ${disposition}`,
       );
     }
 
