@@ -898,13 +898,16 @@ export async function initializeStore(context: StoreContext): Promise<StoreHandl
       throw error;
     }
     const meta = readStoreMeta(db);
+    // Snapshot the opened connection: `close` runs after this function
+    // returns, and TS cannot narrow the outer `let` inside a closure.
+    const openDb = db;
     return {
-      db,
+      db: openDb,
       storeId: meta.storeId,
       epoch: meta.epoch,
       schemaVersion: MIGRATIONS.length,
       close(): void {
-        db.close();
+        openDb.close();
       },
     };
   } catch (error) {

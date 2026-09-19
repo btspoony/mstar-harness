@@ -91,7 +91,7 @@ describe("retired register persist — the raw store cannot recreate a project r
     await expect(store.put({ kind: "residuals", key: "proj-a", payload: { entries: {} } } as never)).rejects.toThrow(
       /no longer persists project registers/,
     );
-    await expect(store.delete({ kind: "residuals", key: "proj-a" } as never)).rejects.toThrow(
+    await expect(store.delete!({ kind: "residuals", key: "proj-a" } as never)).rejects.toThrow(
       /no longer persists project registers/,
     );
     expect(() => store.list!("residuals" as never)).toThrow(/no longer persists project registers/);
@@ -125,7 +125,7 @@ describe("retired register persist — the raw store cannot recreate a project r
         store.put({ kind: "json", key: registerPath, payload: { entries: { "plan-a": [] } } }),
       ),
     ).rejects.toThrow(/json alias/);
-    await expect(store.delete({ kind: "json", key: registerPath })).rejects.toThrow(/json alias/);
+    await expect(store.delete!({ kind: "json", key: registerPath })).rejects.toThrow(/json alias/);
     expect(readFileSync(registerPath).equals(before)).toBe(true);
   });
 
@@ -153,7 +153,11 @@ describe("retired register persist — the raw store cannot recreate a project r
     // refusal is a boundary, not a blanket basename ban.
     await store.put({ kind: "json", key: loosePath, payload: { note: "ordinary" } });
     expect(existsSync(loosePath)).toBe(true);
-    expect(await store.get({ kind: "json", key: loosePath })).toEqual({ note: "ordinary" });
+    // Assign first, then assert: a nested `expect(await store.get(...))` lets
+    // TS infer the get<T> parameter from the expect overload (never) and
+    // narrows the actual to undefined (same discipline as `store.test.ts`).
+    const got = await store.get({ kind: "json", key: loosePath });
+    expect(got).toEqual({ note: "ordinary" });
   });
 });
 

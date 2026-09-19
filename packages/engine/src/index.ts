@@ -549,7 +549,6 @@ export type {
   IssueTriage,
   MutationContext,
   OccurrenceInput,
-  Severity,
   TerminalDisposition,
 } from "./issue.js";
 export {
