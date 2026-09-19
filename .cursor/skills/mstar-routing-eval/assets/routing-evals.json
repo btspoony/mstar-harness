@@ -1,7 +1,7 @@
 {
   "harness_name": "pm-routing-evals",
-  "version": 31,
-  "updated_at": "2026-09-17",
+  "version": 32,
+  "updated_at": "2026-09-19",
   "cases": [
     {
       "id": "small-ui-tweak",
@@ -1442,6 +1442,21 @@
         "enters `## Phase 3: iteration-close` or compound because other plans are unfinished",
         "writes `status: Done` or deletes `execution_lease` from the scoped session",
         "assignment uses non-English field keys"
+      ]
+    },
+    {
+      "id": "iteration-start-arm-after-direction-lock",
+      "prompt": "iteration-start：grill-me 已经收敛方向，开始写 compass 和 plans 初稿",
+      "expected_route": [
+        "@project-manager"
+      ],
+      "must_have_artifacts": [
+        "context/route decision that the model-handoff arm happens after the direction lock and before the draft"
+      ],
+      "hard_fail_if": [
+        "arms the model handoff before the direction lock (for example at iteration start or after the workflow registration)",
+        "writes the compass/plans draft before the arm moment",
+        "treats the unregistered state (no workflow registration, no compass) as a reason to skip the anchor"
       ]
     }
   ]

@@ -5,10 +5,11 @@
  * The saved preference lives in native omp plugin settings
  * (`packages/omp/src/model-handoff-settings.ts`, read through the exported
  * `getPluginSettings` helper — never a second settings file or UI). This module
- * owns the *session* half: it arms `@slow` at an explicit new-iteration start,
- * observes unowned model changes while that arm is pending, guards session
- * navigation around an invoked model action, and recovers a durable attempt as
- * `uncertain`.
+ * owns the *session* half: it arms `@slow` once the direction is locked and
+ * before the Phase 1 draft is written — the named workflow is not registered
+ * yet, so the arm takes the unregistered reservation path — observes unowned
+ * model changes while that arm is pending, guards session navigation around an
+ * invoked model action, and recovers a durable attempt as `uncertain`.
  *
  * ## Authority is derived from host facts, never claimed by the caller
  *
@@ -64,14 +65,18 @@
  * filtering, so a fork with a new session ID inherits no authority and a
  * terminal binding cannot be resurrected by tree navigation.
  *
- * - **Arm** (`mstar_model_handoff` `{operation:"start"}`): the PM's first
- *   preparation action. A false/absent preference is inert and writes nothing.
- *   The arm is single-entry in memory (`armInFlight`) *and* re-checks the
- *   durable state after every `await`, so two concurrent starts cannot both
- *   reserve and arm. The arm attempt is recorded, `@slow` is selected once
- *   through `pi.setModel`, and `pending` is entered only when the live model
- *   agrees **and** every `model_change` entry recorded after the pre-arm cursor
- *   describes `@slow` (an away-and-back inside the arm window is a conflict).
+ * - **Arm** (`mstar_model_handoff` `{operation:"start"}`): the PM's explicit
+ *   call once the direction is locked and before the Phase 1 draft is written.
+ *   The workflow is not registered yet at that moment, so the arm takes the
+ *   unregistered reservation path — the expected route for a new iteration,
+ *   never a reason to skip the call. A false/absent preference is inert and
+ *   writes nothing. The arm is single-entry in memory (`armInFlight`) *and*
+ *   re-checks the durable state after every `await`, so two concurrent starts
+ *   cannot both reserve and arm. The arm attempt is recorded, `@slow` is
+ *   selected once through `pi.setModel`, and `pending` is entered only when the
+ *   live model agrees **and** every `model_change` entry recorded after the
+ *   pre-arm cursor describes `@slow` (an away-and-back inside the arm window is
+ *   a conflict).
  * - **Fire** (`{operation:"phase1-complete"}`): re-reads the preference, runs
  *   the frozen E2 readiness checkpoint, **re-reads the preference again** after
  *   that asynchronous work (a settings edit during readiness is honored), then
@@ -139,7 +144,7 @@ export const HANDOFF_CUSTOM_TYPE = "mstar:model-handoff";
  * declared once in the shared notice module; this is its unchanged re-export.
  */
 export { HANDOFF_NOTICE_CUSTOM_TYPE } from "../notices";
-/** Tool the PM calls as its first preparation action and at the completion checkpoint. */
+/** Tool the PM calls once the direction is locked and at the completion checkpoint. */
 const TOOL_NAME = "mstar_model_handoff";
 /** Model role armed at iteration entry (spec §Iteration entry). */
 const SLOW_SPEC = "@slow";
@@ -1367,7 +1372,7 @@ export default function modelHandoff(pi: ExtensionAPI): void {
     name: TOOL_NAME,
     label: "Model handoff",
     description:
-      'Morning Star coordinator model handoff. `{operation:"start"}` is the PM\'s first preparation action of a new iteration: it arms @slow for this coordinator session when the native modelHandoff preference is enabled, and the coordinator authority for it is derived from host/engine facts (task-session ledger, the workflow\'s session envelopes and the root register) rather than from the call. `{operation:"phase1-complete"}` is the completion checkpoint: it validates the frozen Phase 1 evidence and then switches only this coordinator session to the saved handoffTarget. Not a user activation command; no role mapping, goal or workflow state is written.',
+      'Morning Star coordinator model handoff. `{operation:"start"}` is the PM\'s explicit call once the direction is locked and before the Phase 1 draft is written: at that moment the named workflow is not registered yet, so the arm takes the unregistered reservation path, and it arms @slow for this coordinator session when the native modelHandoff preference is enabled. The coordinator authority for it is derived from host/engine facts (task-session ledger, the workflow\'s session envelopes and the root register) rather than from the call. `{operation:"phase1-complete"}` is the completion checkpoint: it validates the frozen Phase 1 evidence and then switches only this coordinator session to the saved handoffTarget. Not a user activation command; no role mapping, goal or workflow state is written.',
     parameters: z
       .object({
         operation: z.enum(["start", "phase1-complete"]),

@@ -60,7 +60,7 @@ Execute **`mstar-host`** → active host 的 **plan-mode bridge**（其 "mstar-i
 Command-unique 补充（bridge 未枚举）：
 
 - **空白脚手架字段**：Direction / Scope / Decisions / Open Questions / Acceptance Criteria / Non-Goals / Delivery Branch Policy（`iteration_base_branch` / `spec_integration_branch` / `target_branch`）/ Plans / Feedback log / Deferred grill log
-- **Build 才勾的 todos**（顺序）：`harness-init` → `finalize-compass-plans`（同一 session plan 落成 compass + plans + `status.json` 登记 + 索引）→ review-edit-product-manager → review-edit-architect → review-edit-writing-specialist → `pm-lock` → `integration-branch`
+- **Build 才勾的 todos**（顺序）：`harness-init` → `direction-lock-arm` → `finalize-compass-plans`（同一 session plan 落成 compass + plans + `status.json` 登记 + 索引）→ review-edit-product-manager → review-edit-architect → review-edit-writing-specialist → `pm-lock` → `integration-branch`
 
 ## 非 Plan 路径从这里继续 ↓
 
@@ -79,6 +79,10 @@ Scope **2–4** candidates targeting **product completeness**（default to defer
 **Direction lock mode: `interactive`**（`mstar-iteration/references/phase-1-prepare.md` §1.2 默认；本命令不使用 `autonomous`）。This command bundles a **non-`mstar-*`** skill at `skills/grill-me/SKILL.md` — **only this command step** references it.
 
 **Before this step:** Read `skills/grill-me/SKILL.md`. Run **grill-me** to stress-test candidate directions with the user: walk through trade-offs, converge on a **single iteration direction** with shared understanding, document locked direction + success criteria + non-goals。**If `direction` arg given** — seed grill-me with it (still interactive; the hint does **not** skip grill-me)。Confirm delivery branch policy（`iteration_base_branch` / `target_branch`）per **`mstar-iteration/references/phase-1-prepare.md` §1.2** — **Do not default to `main`/`master` just because those names exist.**
+
+## 3.5 Arm the coordinator model handoff — `direction-lock`
+
+The `direction-lock` anchor (`mstar-iteration/references/phase-1-prepare.md` §1.2 tail) fires **here**: the direction is locked and the compass/plans draft has **not** been written yet. Execute the active host reference's `## Host hooks` declaration for that anchor; this command declares no host action. Do **not** defer it into §4 — the draft is the context carrier the dispatched review roles read, so the anchor must precede it.
 
 ## 4. Write Compass & Plans
 
@@ -101,6 +105,7 @@ Execute **`mstar-iteration/references/phase-1-prepare.md` §1.6**（SSOT）：�
 PM must print this block before §6; all `[ ]` must be `[x]`:
 
 - [ ] direction lock decisions recorded in compass（Plan 路径：Feedback log + deferred grill log；非 Plan：grill-me）
+- [ ] `direction-lock` anchor executed **before** the draft was written（§3.5；未登记/无 compass 属预期）
 - [ ] Draft compass + plans + `status.json` registered
 - [ ] product-manager / architect / writing-specialist invokes completed — 编辑 compass / plans / specs / **`<iteration-id>/` package**；**未**向 `{KNOWLEDGE_DIR}/` 新增
 - [ ] PM final lock: compass `status: locked`; Prepare gates pass (blocked plans documented)

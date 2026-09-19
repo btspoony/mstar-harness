@@ -75,6 +75,7 @@ Execute **`mstar-iteration/references/phase-1-prepare.md` §1.6**：`product-man
 **Pre-commit checklist**（print before §6；all `[x]`）：
 
 - [ ] Autonomous direction lock rationale recorded in compass（**not** grill-me）
+- [ ] `direction-lock` anchor executed once the autonomous lock rationale is recorded and **before** the compass/plans draft（same anchor and carrier as `iteration-start` §3.5；no `grill-me` on this route）
 - [ ] Scale budget applied（business plan 按 S/M/L/XL 名额）
 - [ ] compass + plans + `status.json` registered
 - [ ] product-manager / architect / writing-specialist invokes completed（**未**向 `{KNOWLEDGE_DIR}/` 新增）

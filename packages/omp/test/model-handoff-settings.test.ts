@@ -40,7 +40,7 @@ type HandoffResult =
 const DEFAULTS: HandoffResult = { ok: true, value: { modelHandoff: false, handoffTarget: "@default" } };
 
 const MODEL_HANDOFF_DESCRIPTION =
-  "When enabled, each new Morning Star iteration uses @slow for Prepare, then switches this coordinator session to handoffTarget after Phase 1 fully completes. Off by default.";
+  "When enabled, each new Morning Star iteration arms @slow once the direction is locked and before the Phase 1 draft is written, then switches this coordinator session to handoffTarget after Phase 1 fully completes. Off by default.";
 const HANDOFF_TARGET_DESCRIPTION =
   "Coordinator model after a completed Phase 1. Used only when modelHandoff is enabled.";
 

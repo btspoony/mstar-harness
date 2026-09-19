@@ -150,7 +150,7 @@ When starting a **new iteration** under Cursor Plan mode (host command may orche
 
 **Single CreatePlan URI (HARD)**: one CreatePlan per Phase 1 Plan session. Updates use file edit tools on that path. If a duplicate plan file was created by mistake: merge into the original, delete the duplicate, keep View Plan on the original.
 
-**Bootstrap relationship**: ordinary per-plan work still uses `harness-init` / `spec-register` / `mirror-plan`. Phase 1 CreatePlan uses Phase 1 todos (`harness-init` → `finalize-compass-plans` → review-edit seats → `pm-lock` → `integration-branch`). Snapshot `plans[]` rows should exist as drafts before Build when direction has converged.
+**Bootstrap relationship**: ordinary per-plan work still uses `harness-init` / `spec-register` / `mirror-plan`. Phase 1 CreatePlan uses Phase 1 todos (`harness-init` → `direction-lock-arm` → `finalize-compass-plans` → review-edit seats → `pm-lock` → `integration-branch`). Snapshot `plans[]` rows should exist as drafts before Build when direction has converged.
 
 **Helpers**: third-party interview helpers are **not** named here; host **command** layer may use them only after feedback-close when gaps remain.
 
