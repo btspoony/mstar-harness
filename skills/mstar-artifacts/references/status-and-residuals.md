@@ -401,7 +401,7 @@ The scoped route（`/iteration-drive --assignment | --workflow <id> --plan <id> 
 
 ### Session envelopes and credentials
 
-- Session JSON lives at `<resolved-workflow-dir>/<workflow-id>/sessions/<session-id>.json`, created exclusively, mode `0600`.
+- Session JSON lives at `<resolved-workflow-dir>/<workflow-id>/sessions/<role>-<session-id>.json` (`<role>` ∈ `coordinator` / `plan-pm`), created exclusively, mode `0600`. The role prefixes only the file name, so one host session may hold the coordinator envelope and a plan-pm envelope under one shared `session_id`; the payload identity is untouched.
 - It is a **credential / pointer**, not a second process-SSOT copy: session identity, resolved harness root and pointers — never copied snapshot state, never a portable handoff address. Cross-primary handoff references are readable absolute **control-root filesystem paths**; `local://` is not portable.
 - Session paths and `--expect` revisions stay with the dispatching PM/coordinator and are **never** handed to a leaf implementer/reviewer (`mstar-dispatch-gates` § Plan 作用域与 credential 不下发).
 - Supported writers are cooperative same-machine interfaces, not a filesystem sandbox: copying a session file or editing protected files by hand is not prevented, and is not an authorized path.

@@ -94,6 +94,19 @@
  * The extension never writes role mappings, thinking level, service tiers, goal
  * state, workflow lifecycle or another session's model, and it never shadows a
  * native command, registers a command/shortcut/flag or intercepts a key.
+ *
+ * ## Host session identity
+ *
+ * Every identity comparison on this surface — the `model-handoff-readiness`
+ * readiness checkpoint and `deriveStartAuthority` below — compares the *engine*
+ * session id with the *host* session id (`ctx.sessionManager.getSessionId()`);
+ * they are one identifier only when the engine was told which one to adopt. The
+ * module closes that gap from the host side: the `bash` tool calls of this
+ * session are revised to carry the host id in `MSTAR_HOST_SESSION_ID`, which
+ * the CLI's `plan bind` consumes as the engine session id. The revision is
+ * pure — no engine/harness write, no notice, no state — is confined to `bash`,
+ * and the injected key overwrites any caller-supplied value of the same name,
+ * so the asserted identity is never model-definable.
  */
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
@@ -134,6 +147,12 @@ const SLOW_SPEC = "@slow";
 const RECORD_VERSION = 1;
 /** Root register file inside the harness dir (v2 `status.json`). */
 const STATUS_FILE = "status.json";
+/**
+ * The host-injected session-identity channel (plan D1/D2). This extension is
+ * its only producer; `plan bind` is its only consumer, and both names come from
+ * the plan's frozen interface.
+ */
+const SESSION_ID_ENV = "MSTAR_HOST_SESSION_ID";
 /** Session envelopes of one workflow live in `<workflow-dir>/sessions/`. */
 const SESSION_DIR = "sessions";
 
@@ -459,28 +478,12 @@ export function deriveStartAuthority(args: {
     }
   }
 
-  const registerPath = join(binding.harnessRoot, STATUS_FILE);
-  if (!existsSync(registerPath)) return { ok: true };
-  const register = validateStatusV2(registerPath, { harnessDir: binding.harnessRoot });
-  if (!register.ok) {
-    return {
-      ok: false,
-      code: "register-invalid",
-      message: `the root register ${registerPath} is not a valid v2 coordination document`,
-    };
+  const register = readRootRegister(binding.harnessRoot);
+  if (register.kind === "absent") return { ok: true };
+  if (register.kind === "invalid") {
+    return { ok: false, code: "register-invalid", message: register.message };
   }
-  let rows: readonly unknown[] = [];
-  try {
-    const parsed: unknown = JSON.parse(readFileSync(registerPath, "utf8"));
-    rows = isPlainObject(parsed) && Array.isArray(parsed.workflows) ? parsed.workflows : [];
-  } catch (error) {
-    return {
-      ok: false,
-      code: "register-invalid",
-      message: `the root register ${registerPath} could not be read: ${String(error)}`,
-    };
-  }
-  for (const row of rows) {
+  for (const row of register.rows) {
     if (!isPlainObject(row) || typeof row.id !== "string" || row.id === binding.workflowId) continue;
     const rowDir =
       typeof row.dir === "string" && row.dir !== ""
@@ -511,13 +514,47 @@ export function deriveStartAuthority(args: {
 }
 
 /**
+ * The root register of one canonical harness root, derived once: absent,
+ * malformed/unreadable, or its validated rows.
+ *
+ * Both consumers on the start path — the structural classifier and the
+ * authority scan — derive the register through this one function instead of
+ * each carrying its own exists/validate/parse/filter chain, so the two can
+ * never drift in how they read it. They deliberately keep their own read
+ * *timing* and their own refusal policy: the classifier reads before the
+ * reservation, `deriveStartAuthority` after it, so a register that changes in
+ * between can still refuse rather than being silently adopted. The E1 module's
+ * own structural revalidation of the named row and its snapshot is a third,
+ * independent check by frozen spec (§3) — adoption authority must never rest on
+ * the adapter's classification.
+ */
+type RootRegister =
+  | Readonly<{ kind: "absent"; path: string }>
+  | Readonly<{ kind: "invalid"; path: string; message: string }>
+  | Readonly<{ kind: "rows"; path: string; rows: readonly unknown[] }>;
+
+function readRootRegister(harnessRoot: string): RootRegister {
+  const path = join(harnessRoot, STATUS_FILE);
+  if (!existsSync(path)) return { kind: "absent", path };
+  if (!validateStatusV2(path).ok) {
+    return { kind: "invalid", path, message: `the root register ${path} is not a valid v2 coordination document` };
+  }
+  try {
+    const doc: unknown = JSON.parse(readFileSync(path, "utf8"));
+    return { kind: "rows", path, rows: isPlainObject(doc) && Array.isArray(doc.workflows) ? doc.workflows : [] };
+  } catch (error) {
+    return { kind: "invalid", path, message: `the root register ${path} could not be read: ${String(error)}` };
+  }
+}
+
+/**
  * Structural branch selector, derived by this adapter from the validated root
  * register for the explicitly named workflow id. It is never public tool input
  * and never an authority grant: `reserveHandoffBinding` revalidates the
  * register row and the own snapshot in `attach` mode, and a stale `reserve`
- * selection is still fenced by the register-row refusal there. An absent
- * register reserves; an unreadable or malformed register also classifies as
- * `reserve`, so its own frozen `invalid-root` refusal applies unchanged.
+ * selection is still fenced by the register-row refusal there. An absent,
+ * unreadable or malformed register classifies as `reserve`, so its own frozen
+ * `invalid-root`/`already-bound` refusals apply unchanged.
  */
 function bindingModeFor(workflowId: string, cwd: string): "reserve" | "attach" {
   try {
@@ -525,13 +562,10 @@ function bindingModeFor(workflowId: string, cwd: string): "reserve" | "attach" {
     if (main === null || !isNonEmpty(main.root)) return "reserve";
     const resolved = resolveHarnessDir(main.root);
     if (resolved === null) return "reserve";
-    const harnessRoot = canonicalizeNearestExisting(resolved);
-    const statusPath = join(harnessRoot, STATUS_FILE);
-    if (!existsSync(statusPath)) return "reserve";
-    if (!validateStatusV2(statusPath).ok) return "reserve";
-    const doc: unknown = JSON.parse(readFileSync(statusPath, "utf8"));
-    const rows = isPlainObject(doc) && Array.isArray(doc.workflows) ? doc.workflows : [];
-    return rows.some((row) => isPlainObject(row) && row.id === workflowId) ? "attach" : "reserve";
+    const register = readRootRegister(canonicalizeNearestExisting(resolved));
+    return register.kind === "rows" && register.rows.some((row) => isPlainObject(row) && row.id === workflowId)
+      ? "attach"
+      : "reserve";
   } catch {
     return "reserve";
   }
@@ -1443,5 +1477,35 @@ export default function modelHandoff(pi: ExtensionAPI): void {
     gate.navigationPending = false;
     gate.suspensionNotified = false;
     gate.generation += 1;
+  });
+
+  /* --------------------------------------------------- session identity --- */
+
+  /**
+   * Host identity into the tool env. The engine mints its own coordinator /
+   * plan-pm session id (`randomUUID()`) unless a caller supplies one, while
+   * every identity comparison on this surface compares it with the *host*
+   * session id — so readiness and the start-authority guards are satisfied only
+   * when the two are one identifier. The CLI closes that gap by adopting
+   * `--session-id`, else this env var; this revision is what puts the host id
+   * there, on the `bash` calls a coordinator runs `plan bind` through.
+   *
+   * A pure input revision: no engine or harness write, no notice, no in-memory
+   * state. It is confined to `bash`, and the injected key **overwrites** any
+   * value the caller supplied under the same name — the identity this extension
+   * asserts is never model-definable. A session with no id has no identity to
+   * associate and nothing is injected.
+   */
+  pi.on("tool_call", (event, ctx) => {
+    if (event.toolName !== "bash") return undefined;
+    const sessionId = sessionIdOf(ctx);
+    if (sessionId === "") return undefined;
+    // The event fires before the host has validated the arguments, so the input
+    // shape is not assumed: a non-object input or `env` simply leaves those
+    // fields out of the revision instead of throwing into the host's
+    // fail-closed handler path (a throwing `tool_call` handler blocks the tool).
+    const input: Record<string, unknown> = isPlainObject(event.input) ? event.input : {};
+    const env: Record<string, unknown> = isPlainObject(input.env) ? input.env : {};
+    return { input: { ...input, env: { ...env, [SESSION_ID_ENV]: sessionId } } };
   });
 }

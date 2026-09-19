@@ -153,7 +153,7 @@ export type ResolvedPlanScope = {
 
 /**
  * Session envelope persisted at
- * `{WORKFLOW_DIR}/<workflow-id>/sessions/<session-id>.json` (mode `0600`).
+ * `{WORKFLOW_DIR}/<workflow-id>/sessions/<role>-<session-id>.json` (mode `0600`).
  * The envelope is the durable proof of who holds the session: the snapshot
  * stores its canonical path and every later call must present the same file.
  */
@@ -167,15 +167,17 @@ export type CoordinationSession = {
 };
 
 /**
- * Bind addressing (spec §B). A fresh bind never supplies a session path: the
- * engine generates the session UUID and creates
- * `<workflow-dir>/<workflow-id>/sessions/<session-id>.json` itself. An existing
- * session is reached only through its explicit `resumePath`, which resumes
- * read-only and never writes.
+ * Bind addressing (spec §B). A fresh bind generates the session UUID and
+ * creates `<workflow-dir>/<workflow-id>/sessions/<role>-<session-id>.json`
+ * itself, unless the caller supplies `sessionId` — then the engine adopts that
+ * value as the identity after validating it as a single safe path component (it
+ * names the envelope's file, prefixed by the role). An existing session is
+ * reached only through its explicit `resumePath`, which resumes read-only,
+ * never writes and never re-identifies.
  */
 export type BindPlanSessionInput =
-  | { scope: PlanScopeInput; cwd: string }
-  | { coordinator: true; workflowId: string; harnessDir?: string; cwd: string }
+  | { scope: PlanScopeInput; cwd: string; sessionId?: string }
+  | { coordinator: true; workflowId: string; harnessDir?: string; cwd: string; sessionId?: string }
   | { resumePath: string; cwd: string };
 
 /** One artifact read: payload plus the byte version it was read at. */
@@ -433,8 +435,24 @@ function snapshotPathOf(harnessRoot: string, workflowId: string): string {
   return join(resolveWorkflowDir(harnessRoot, { harnessDir: harnessRoot }), workflowId, SNAPSHOT_FILE);
 }
 
-function sessionFilePath(harnessRoot: string, workflowId: string, sessionId: string): string {
-  return join(resolveWorkflowDir(harnessRoot, { harnessDir: harnessRoot }), workflowId, SESSION_DIR, `${sessionId}.json`);
+/**
+ * The envelope path for one role. The role prefixes the file name so the two
+ * sessions a workflow needs — coordinator and plan-pm — never collide on it,
+ * even when a host supplies the same identity to both binds; the identity in
+ * the payload is what stays shared.
+ */
+function sessionFilePath(
+  harnessRoot: string,
+  workflowId: string,
+  role: CoordinationRole,
+  sessionId: string,
+): string {
+  return join(
+    resolveWorkflowDir(harnessRoot, { harnessDir: harnessRoot }),
+    workflowId,
+    SESSION_DIR,
+    `${role}-${sessionId}.json`,
+  );
 }
 
 /**
@@ -684,6 +702,37 @@ function safePlanId(planId: string, where: string): string {
     });
   }
   return planId;
+}
+
+/** Longest session id the envelope contract accepts. */
+const SESSION_ID_MAX_LENGTH = 128;
+
+/**
+ * The caller-supplied session identity, validated **before any write**. The id
+ * names the envelope's file (`sessionFilePath`), so a value that could name
+ * another directory or another file is refused here rather than left to a
+ * filesystem error. `undefined` keeps the engine-generated UUID.
+ */
+function safeSessionId(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") throw invalidInput("sessionId must be a string");
+  if (value.length > SESSION_ID_MAX_LENGTH) {
+    throw new CoordinationError(
+      "coordination.invalid-session-id",
+      `session id is longer than ${SESSION_ID_MAX_LENGTH} characters: ${JSON.stringify(value)}`,
+      { session_id: value, max_length: SESSION_ID_MAX_LENGTH },
+    );
+  }
+  try {
+    assertSafePathComponent(value, "session id");
+  } catch (error) {
+    throw new CoordinationError(
+      "coordination.invalid-session-id",
+      `session id ${JSON.stringify(value)} is not a safe path component: ${errorMessage(error)}`,
+      { session_id: value },
+    );
+  }
+  return value;
 }
 
 /* ------------------------------------------------------------------------ *
@@ -958,7 +1007,7 @@ export function readSessionEnvelope(sessionPath: string): CoordinationSession {
 }
 
 function createSessionEnvelope(session: CoordinationSession): string {
-  const path = sessionFilePath(session.harness_root, session.workflow_id, session.session_id);
+  const path = sessionFilePath(session.harness_root, session.workflow_id, session.role, session.session_id);
   mkdirSync(dirname(path), { recursive: true });
   try {
     writeFileSync(path, `${JSON.stringify(session, null, 2)}\n`, { flag: "wx", mode: 0o600 });
@@ -1501,12 +1550,18 @@ function assertCoordinatorResidency(cwd: string, snapshot: WorkflowSnapshot): Ma
 }
 
 /**
- * Fresh coordinator bind (spec §C1). The engine generates the session UUID and
- * creates the envelope **inside** the validated critical section, then records
- * the binding in the same snapshot commit. A crash between the two leaves an
- * orphan envelope that grants nothing: every later call matches the snapshot.
+ * Fresh coordinator bind (spec §C1). The engine generates the session UUID —
+ * or adopts the caller-supplied one — and creates the envelope **inside** the
+ * validated critical section, then records the binding in the same snapshot
+ * commit. A crash between the two leaves an orphan envelope that grants
+ * nothing: every later call matches the snapshot.
  */
-async function bindCoordinatorSession(cwd: string, workflowId: string, harnessDir?: string): Promise<CoordinationResult> {
+async function bindCoordinatorSession(
+  cwd: string,
+  workflowId: string,
+  harnessDir?: string,
+  sessionId?: string,
+): Promise<CoordinationResult> {
   const harnessRoot = requireProcessRoot(cwd, harnessDir);
   safePlanId(workflowId, "workflowId");
   const snapshotPath = snapshotPathOf(harnessRoot, workflowId);
@@ -1516,7 +1571,7 @@ async function bindCoordinatorSession(cwd: string, workflowId: string, harnessDi
   const session: CoordinationSession = {
     schema_version: 1,
     role: "coordinator",
-    session_id: randomUUID(),
+    session_id: sessionId ?? randomUUID(),
     workflow_id: workflowId,
     harness_root: harnessRoot,
   };
@@ -1577,11 +1632,12 @@ function requireProcessRoot(cwd: string, harnessDir?: string): string {
 
 /**
  * Fresh plan bind (spec §C2): the scope is already pinned and validated. The
- * engine generates the session UUID, creates the envelope inside the validated
- * critical section, claims the L1 lease and writes the row session, status and
- * revision in one snapshot commit.
+ * engine generates the session UUID — or adopts the caller-supplied one —
+ * creates the envelope inside the validated critical section, claims the L1
+ * lease and writes the row session, status and revision in one snapshot
+ * commit.
  */
-async function bindPlanSessionForPlan(scope: ResolvedPlanScope): Promise<CoordinationResult> {
+async function bindPlanSessionForPlan(scope: ResolvedPlanScope, sessionId?: string): Promise<CoordinationResult> {
   const { harnessRoot, workflowId, planId } = scope;
   const snapshotPath = snapshotPathOf(harnessRoot, workflowId);
   assertSnapshotPath(harnessRoot, workflowId, snapshotPath);
@@ -1614,7 +1670,7 @@ async function bindPlanSessionForPlan(scope: ResolvedPlanScope): Promise<Coordin
   const session: CoordinationSession = {
     schema_version: 1,
     role: "plan-pm",
-    session_id: randomUUID(),
+    session_id: sessionId ?? randomUUID(),
     workflow_id: workflowId,
     plan_id: planId,
     harness_root: harnessRoot,
@@ -1696,8 +1752,10 @@ function leaseFailure(violations: readonly { code: string; message: string }[]):
  */
 /**
  * Bind a session (spec §B, §C2). Fresh addressing never supplies a session
- * path: the engine generates the UUID and creates the envelope. `resumePath`
- * names an existing envelope and resumes read-only.
+ * path: the engine generates the UUID — or adopts the caller-supplied
+ * `sessionId`, refused unless it is a single safe path component — and creates
+ * the envelope. `resumePath` names an existing envelope and resumes read-only,
+ * so it takes no identity input at all.
  */
 export async function bindPlanSession(input: BindPlanSessionInput): Promise<CoordinationResult> {
   if (!isPlainObject(input)) throw invalidInput("bind input must be an object");
@@ -1707,16 +1765,18 @@ export async function bindPlanSession(input: BindPlanSessionInput): Promise<Coor
     return resumeBoundSession(input.resumePath);
   }
   if ("coordinator" in input) {
-    assertExactKeys(input, ["coordinator", "workflowId", "harnessDir", "cwd"], "bind coordinator input");
+    assertExactKeys(input, ["coordinator", "workflowId", "harnessDir", "cwd", "sessionId"], "bind coordinator input");
     if (input.coordinator !== true) throw invalidInput("`coordinator` is only meaningful as true");
     if (!isNonEmptyString(input.workflowId)) throw invalidInput("workflowId is required");
     requireCwd(input.cwd);
-    return bindCoordinatorSession(input.cwd, input.workflowId, input.harnessDir);
+    const sessionId = safeSessionId(input.sessionId);
+    return bindCoordinatorSession(input.cwd, input.workflowId, input.harnessDir, sessionId);
   }
-  assertExactKeys(input, ["scope", "cwd"], "bind plan input");
+  assertExactKeys(input, ["scope", "cwd", "sessionId"], "bind plan input");
   if (!isPlainObject(input.scope)) throw invalidInput("a plan bind requires a scope");
   requireCwd(input.cwd);
-  return bindPlanSessionForPlan(await resolvePlanScope(input.scope, input.cwd));
+  const sessionId = safeSessionId(input.sessionId);
+  return bindPlanSessionForPlan(await resolvePlanScope(input.scope, input.cwd), sessionId);
 }
 
 /** Every bind form is a cooperative local call: it needs a real cwd. */

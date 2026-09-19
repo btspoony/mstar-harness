@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+## [3.11.1] - 2026-09-18
+
+### Harness
+
+- **OMP 上宿主会话身份现在能到达引擎**：`@mstar-harness/omp` 的 model-handoff 扩展把本会话的每次 `bash` 工具调用改写为携带 `MSTAR_HOST_SESSION_ID` —— 同名调用方取值被覆盖、仅限 `bash`、宿主会话无 id 时不注入，且无引擎／harness 写入、无通知、无状态 —— 而新绑定的 `mstar plan bind` 按 **`--session-id` → `MSTAR_HOST_SESSION_ID`（trim 后；空白视为缺失）→ 引擎生成 id** 解析身份，使引擎 session id 与宿主 session id 成为同一标识，供 readiness 与 start-authority 比较使用。生成默认值与所有比较均不变：关联缺失或属于他人时照旧拒绝（readiness 的 `binding-invalid` 码、既有 start-authority 码），`--resume` 从不重新标识 —— 会把 `--session-id` 作为用法错误拒绝。
+- **`bindPlanSession` 在两种新绑定形态上采纳调用方提供的 `sessionId`**（coordinator 与 plan scope），未提供时保持 `randomUUID()`。该 id 即会话信封文件名，按角色限定为 `{WORKFLOW_DIR}/<workflow-id>/sessions/<role>-<session-id>.json`（`<role>` ∈ `coordinator` / `plan-pm`）—— 因此同一宿主会话可以在同一 id 下同时持有同一 workflow 的 coordinator 信封与 plan-pm 信封 —— 并因此按单一安全路径分量校验（非空、无分隔符、非 `.`/`..`、至多 128 字符），不合格者在任何写入之前以新增的 `coordination.invalid-session-id` 拒绝；重复使用的 id 仍由信封独占创建以既有 `coordination.session-mismatch` 拒绝。
+- 更新 `skills/mstar-host/references/omp.md`，补上 anchor 侧的会话身份关联契约。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 3.11.1**。
+
 ## [3.11.0] - 2026-09-18
 
 ### Harness

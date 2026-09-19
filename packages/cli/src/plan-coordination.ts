@@ -12,9 +12,11 @@
  * (`--json`); human diagnostics go to stderr. Exit 0 = successful or no-op
  * operation, 1 = runtime refusal, 2 = usage/invalid input shape.
  *
- * Identity is never a CLI input: no flag here names a holder, role or
- * coordinator — the engine reads the session envelope named by `--session`
- * and re-checks it against the snapshot inside the lock.
+ * Identity is never a *looked-up* CLI input: no flag here names a holder, role
+ * or coordinator — the engine reads the session envelope named by `--session`
+ * and re-checks it against the snapshot inside the lock. The one exception is
+ * the fresh-bind identity (`--session-id`, else `MSTAR_HOST_SESSION_ID`): the
+ * caller states what the new session is called, never what an existing one owns.
  */
 import { Command } from "commander";
 import { existsSync, readFileSync } from "node:fs";
@@ -586,6 +588,25 @@ function handoffMismatch(verb: string, planId: string, live: string, named: stri
   });
 }
 
+/** The host-injected session identity channel (plan D1/D2); `plan bind` only. */
+const SESSION_ID_ENV = "MSTAR_HOST_SESSION_ID";
+
+/**
+ * The fresh-bind identity (plan D2): the `--session-id` flag wins, otherwise the
+ * host-injected `MSTAR_HOST_SESSION_ID` (trimmed; empty and whitespace-only count
+ * as absent), otherwise `undefined` and the engine generates the id. The value
+ * itself is the engine's contract — it validates the id and refuses an unusable
+ * one with `coordination.invalid-session-id`, so the flag is never silently
+ * rewritten here.
+ */
+function sessionIdOf(options: PlanCliOptions): string | undefined {
+  const flag = options.sessionId as string | undefined;
+  if (flag !== undefined) return flag;
+  const injected = process.env[SESSION_ID_ENV];
+  if (injected === undefined || injected.trim() === "") return undefined;
+  return injected.trim();
+}
+
 /**
  * The four `bind` addressing forms (spec §A2); exactly one family may be
  * given, and each form rejects the flags that belong to another.
@@ -608,9 +629,9 @@ function bindInputOf(options: PlanCliOptions): BindPlanSessionInput {
   ].filter(Boolean).length;
   if (families !== 1) {
     throw new SddScriptError(
-      "usage: plan bind --coordinator --workflow <id> [--harness <absolute-path>] [--json]\n" +
-        "       plan bind --assignment <absolute-md-path> [--json]\n" +
-        "       plan bind --workflow <id> --plan <id> [--harness <absolute-path>] [--json]\n" +
+      "usage: plan bind --coordinator --workflow <id> [--harness <absolute-path>] [--session-id <id>] [--json]\n" +
+        "       plan bind --assignment <absolute-md-path> [--session-id <id>] [--json]\n" +
+        "       plan bind --workflow <id> --plan <id> [--harness <absolute-path>] [--session-id <id>] [--json]\n" +
         "       plan bind --resume <absolute-session-json-path> [--json]",
       2,
     );
@@ -618,12 +639,17 @@ function bindInputOf(options: PlanCliOptions): BindPlanSessionInput {
   const cwd = process.cwd();
   if (coordinator) {
     if (plan !== undefined || assignment !== undefined || resume !== undefined) {
-      throw new SddScriptError("plan bind --coordinator accepts only --workflow (plus optional --harness)", 2);
+      throw new SddScriptError(
+        "plan bind --coordinator accepts only --workflow (plus optional --harness and --session-id)",
+        2,
+      );
     }
+    const sessionId = sessionIdOf(options);
     return {
       coordinator: true,
       workflowId: requireFlag(workflow, "--workflow", "bind", "workflow-id"),
       ...(harness !== undefined ? { harnessDir: harness } : {}),
+      ...(sessionId !== undefined ? { sessionId } : {}),
       cwd,
     };
   }
@@ -634,7 +660,12 @@ function bindInputOf(options: PlanCliOptions): BindPlanSessionInput {
         2,
       );
     }
-    return { scope: { assignmentPath: requireAbsolutePath(assignment, "--assignment", "bind", "md-path") }, cwd };
+    const sessionId = sessionIdOf(options);
+    return {
+      scope: { assignmentPath: requireAbsolutePath(assignment, "--assignment", "bind", "md-path") },
+      ...(sessionId !== undefined ? { sessionId } : {}),
+      cwd,
+    };
   }
   if (resume !== undefined) {
     if (harness !== undefined) {
@@ -643,17 +674,22 @@ function bindInputOf(options: PlanCliOptions): BindPlanSessionInput {
         2,
       );
     }
+    if (options.sessionId !== undefined) {
+      throw new SddScriptError("plan bind --resume accepts no --session-id (a resumed session never re-identifies)", 2);
+    }
     return { resumePath: requireAbsolutePath(resume, "--resume", "bind", "session-json-path"), cwd };
   }
   if (workflow === undefined || plan === undefined) {
     throw new SddScriptError("plan bind --workflow requires --plan <id> (the workflow+plan address form)", 2);
   }
+  const sessionId = sessionIdOf(options);
   return {
     scope: {
       workflowId: requireFlag(workflow, "--workflow", "bind", "workflow-id"),
       planId: requireFlag(plan, "--plan", "bind", "plan-id"),
       ...(harness !== undefined ? { harnessDir: harness } : {}),
     },
+    ...(sessionId !== undefined ? { sessionId } : {}),
     cwd,
   };
 }
@@ -688,7 +724,8 @@ export function registerPlanCommands(program: Command): void {
     .description(
       "Bind the scoped session for one plan \u2014 fresh `--workflow/--plan` or `--assignment` claim (both addresses resolve " +
         "the same prepared row), fresh `--coordinator` bootstrap, or explicit `--resume` of an existing session file " +
-        "(read-only: no ownership change, no takeover)",
+        "(read-only: no ownership change, no takeover). A fresh bind adopts `--session-id`, else the injected " +
+        "MSTAR_HOST_SESSION_ID, else a generated id; `--resume` takes none",
     )
     .option("--coordinator", "Trusted local coordinator bootstrap (requires --workflow; one per workflow)")
     .option("--workflow <id>", "Workflow id")
@@ -696,6 +733,7 @@ export function registerPlanCommands(program: Command): void {
     .option("--assignment <path>", "Absolute path of the pinned prepared Assignment")
     .option("--resume <path>", "Absolute path of an existing session JSON envelope")
     .option("--harness <path>", "Absolute harness dir override (default: resolved control root)")
+    .option("--session-id <id>", `Session id the fresh bind adopts (default: $${SESSION_ID_ENV}, else generated)`)
     .option("--json", "Machine-readable JSON on stdout")
     .action(async (options: PlanCliOptions) =>
       runVerb(
