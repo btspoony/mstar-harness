@@ -441,7 +441,7 @@ function snapshotPathOf(harnessRoot: string, workflowId: string): string {
  * even when a host supplies the same identity to both binds; the identity in
  * the payload is what stays shared.
  */
-function sessionFilePath(
+export function sessionFilePath(
   harnessRoot: string,
   workflowId: string,
   role: CoordinationRole,

@@ -8,7 +8,7 @@
  */
 import { createHash } from "node:crypto";
 import { join } from "node:path";
-import { readSessionEnvelope, type CoordinationSession } from "./coordination.js";
+import { readSessionEnvelope, sessionFilePath, type CoordinationSession } from "./coordination.js";
 import type { CoordinatorBinding, RowCoordination } from "./coordination-write.js";
 import { canonicalizeNearestExisting, resolveWorkflowDir } from "./path.js";
 import { rowPlanIds } from "./status.js";
@@ -257,9 +257,6 @@ const PROVENANCE_KINDS: Record<"plan" | "iteration" | "pr" | "report", true> = {
   pr: true,
   report: true,
 };
-
-/** Directory a workflow keeps its engine-issued session envelopes in. */
-const SESSION_DIR = "sessions";
 
 function sha256(text: string): string {
   return createHash("sha256").update(text, "utf8").digest("hex");
@@ -993,7 +990,7 @@ function requireCaptureSeat(actor: string): void {
  * the engine itself issues (`bindPlanSession`):
  *
  *  1. at its canonical path — `<store harness root>/workflows/<workflow_id>/
- *     sessions/<session_id>.json`, the only path a bind ever writes, so a copy
+ *     sessions/<role>-<session_id>.json`, the only path a bind ever writes, so a copy
  *     anywhere else refuses;
  *  2. under the harness root that owns this store — an envelope issued for
  *     another control root refuses;
@@ -1032,11 +1029,12 @@ function authorizeMutation(context: StoreContext, mutation: MutationContext): Co
 /**
  * The workflow directory of this session, and the one envelope path a bind
  * ever issues for it (`bindPlanSession` → `{WORKFLOW_DIR}/<id>/sessions/
- * <session_id>.json`).
+ * <role>-<session-id>.json`) — the same `sessionFilePath` rule that issues
+ * the envelope, so the name cannot drift between issuer and checker.
  */
 function issuedSessionLocation(session: CoordinationSession): { dir: string; path: string } {
   const dir = join(resolveWorkflowDir(session.harness_root, { harnessDir: session.harness_root }), session.workflow_id);
-  return { dir, path: join(dir, SESSION_DIR, `${session.session_id}.json`) };
+  return { dir, path: sessionFilePath(session.harness_root, session.workflow_id, session.role, session.session_id) };
 }
 
 /** A §4 authority refusal — the store's existing code, never a new one. */
