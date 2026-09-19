@@ -42,6 +42,14 @@ The purpose declaration a registered workflow carries at registration (`developm
 ### Task budget (implement / ops rounds)
 The implementer-side capacity contract field on a canonical Assignment: **one implementer round** within which the declared Files list and verification gates close (bare `Task budget` accepted), citing the existing Effort band — never a wall-clock target or numeric-minutes table. Presence is enforced fail-level by the dispatch validator for the implement/ops complement (`assignment.field.task-budget-missing`, severity `high`); review/audit rounds keep their separate `Budget` / `Return shape` fields, and orientation roles are not exempt. A multi-session estimate is not an exemption — the plan declares a split point — and budget pressure never shortens assigned scoped verification. Related: Review seat layers.
 
+## Governance store
+
+### Staged store
+A `{HARNESS_DIR}/store.db` that has received a reviewed migration apply but has not been activated. It refuses ordinary issue/catalog mutations **and** authority-shaped reads (`store.not-active`), is inspectable only through the migration surface (manifest/receipt), and is never the issue authority until the activation epoch flips. The three acts are distinct — **apply ≠ activate ≠ retire**: a staged apply never supersedes live authority, and no capture window exists between cutover and activation (post-activation findings record their occurrence at capture time, never back-dated). Related: Authority route.
+
+### Authority route
+The classification every host write gate runs **before** document judgment: a write target resolves to the store (`store.db` incl. `-wal`/`-shm`), a retired project register, or the pre-activation legacy fall-through — case-folded, ancestor-walked, and realpath-canonicalized so sidecars, case variants, and symlinks cannot bypass it. Enforcing hosts (dsh, omp, ZCode hook) veto `store.direct-write-refused` / `project.register.retired` / `store.authority-unavailable` in both enforcement modes; a host without a refusal channel (OpenCode `tool.execute.before`) is **warn-only** by documented contract. The route is deliberately mirrored per host until the one-home engine export lands (residual R4). Related: Staged store, Three-domain write model.
+
 ## Agent list (dsh panel)
 
 ### Emphasis
