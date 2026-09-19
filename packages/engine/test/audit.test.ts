@@ -1943,10 +1943,10 @@ describe("coordinated-writer — promoteAuditPlans create-only snapshot", () => 
 });
 
 // ---------------------------------------------------------------------------
-// catalog registration — the P3 journal drives the audit promotion (plan
-// 20260918-state-projection Task 3; state-projection-contract §3). The
-// promotion keeps its run-once/rollback semantics; the doc's own body is the
-// title authority (the report README index is a report artifact, §2/§4).
+// catalog registration — the registration journal drives the audit promotion
+// (state-projection-contract §3). The promotion keeps its run-once/rollback
+// semantics; the doc's own body is the title authority (the report README
+// index is a report artifact, §2/§4).
 // ---------------------------------------------------------------------------
 describe("catalog registration — the journal drives the audit promotion", () => {
   const root = mkdtempSync(join(tmpdir(), "engine-audit-catalog-registration-"));

@@ -1,7 +1,6 @@
 /**
- * catalog-import.test.ts -- P2 proof for the discovery / reviewed-mapping
- * import and versioned export transport over the P1 catalog authority (plan
- * 20260918-state-projection Task 2).
+ * catalog-import.test.ts -- proof for the discovery / reviewed-mapping
+ * import and versioned export transport over the catalog authority.
  *
  * The suite runs against the real module, the real catalog domain verbs, the
  * real migration runner and the real `node:sqlite` driver in per-test temporary
@@ -139,8 +138,7 @@ async function mixedFixture(name: string): Promise<Fixture> {
 }
 
 /**
- * The real legacy shape: the control harness's own
- * `iter-20260912-worktree-lifecycle-closure/README.md` carries a Documents
+ * The real legacy shape: an iteration package README carries a Documents
  * table whose first row points outside the package (`../../sdd/...`), and its
  * root iteration table can declare a path outside `{ITERATION_DIR}`. Neither
  * may abort the proposal (§4).

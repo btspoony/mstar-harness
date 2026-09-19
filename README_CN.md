@@ -30,8 +30,8 @@ Harness Workflow Engine · Agent Plugin
 - **判断留在 `mstar-*` skills** —— skills 仍是角色、门禁与工作流判断的唯一事实来源（SSOT）
 - **一个引擎跨宿主** —— 同一引擎 + skills 驱动 dsh（DeepSeek Harness）、omp、OpenCode、Cursor、Kimi Code、ZCode、Codex
 - **Agent Plugin 打包** —— 一条命令安装；可移植到任意 Agent Plugins v1.0.0 客户端
-- **可插拔 JSON 持久化** —— 协调文档（`status.json`、workflow snapshots、project residuals、review envelopes）经 `ArtifactStore` 持久化；默认 `FsStore` 保持既有 `.mstar/` 路径，集成方可经 `MSTAR_STORE_MODULE` / `--store` / 进程内 `setArtifactStore` 挂载自有存储
-- **Issue/catalog 库 vs 执行 JSON** —— 激活后 `{HARNESS_DIR}/store.db`（SQLite）是 issue 与 catalog 权威；`ArtifactStore` 仍是执行/审查 JSON（`status.json`、snapshots、residuals）。两者不是同一存储。
+- **可插拔 JSON 持久化** —— 协调文档（`status.json`、workflow snapshots、review envelopes）经 `ArtifactStore` 持久化；默认 `FsStore` 保持既有 `.mstar/` 路径，集成方可经 `MSTAR_STORE_MODULE` / `--store` / 进程内 `setArtifactStore` 挂载自有存储
+- **Issue/catalog 库 vs 执行 JSON** —— 激活后 `{HARNESS_DIR}/store.db`（SQLite）是 issue 与 catalog 权威；`ArtifactStore` 仍是执行/审查 JSON（`status.json`、snapshots）。已退役的 project register 是迁移历史，没有写入路径，open item 以 store 中的 issue 为准。两者不是同一存储。
 - **推荐宿主**（最佳 → 可用）：**dsh = omp ≥ ZCode = OpenCode = Cursor > Kimi > Codex**
 
 **交付内容**
@@ -182,7 +182,7 @@ flowchart TD
     P -->|pm-acceptance| P2["PM: acceptance 清单"]
     P1 --> Q{"是否仍有 residual findings"}
     P2 --> Q
-    Q -->|是| R["PM/QA: 在 project register 登记或接受 residuals"]
+    Q -->|是| R["PM: 把已确认的发现捕获为 {HARNESS_DIR}/store.db 中的 issue"]
     R --> S["PM: 标记 plan Done 并合并到 integration branch"]
     Q -->|否| S
     S --> T["PM: 同步 compass plan 状态"]
@@ -224,8 +224,8 @@ flowchart TD
 | `mstar-sdd` | 子代理驱动开发 |
 | `mstar-branch-worktree` | 分支、worktree、QC/QA 检出 |
 | `mstar-conventions` | `{HARNESS_DIR}` 发现 / 初始化 |
-| `mstar-artifacts` | plan、`status.json`、residual、Findings cleanup |
-| `mstar-project-governance` | roadmap 编写约定 + residual register 生命周期、`_default` 回退 |
+| `mstar-artifacts` | plan、`status.json`、issue 捕获指针、Findings cleanup |
+| `mstar-project-governance` | roadmap 编写约定 + issue 捕获契约、register 迁移历史、`_default` 回退 |
 | `mstar-design-md` | UI plan 的 DESIGN.md 门禁 |
 | `mstar-review-qc` | PM QC tri 编排 |
 | `mstar-coding-behavior` | RCA、测试优先、审查反馈、证据 |

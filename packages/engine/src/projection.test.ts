@@ -1,6 +1,6 @@
 /**
- * projection.test.ts -- P5 proof for atomic publication and last-good
- * handling (plan 20260918-state-projection Task 5; contract §5/§6).
+ * projection.test.ts -- proof for atomic publication and last-good
+ * handling (contract §5/§6).
  *
  * Every case runs against the real projection module, the real catalog/store
  * modules, the real migration runner and the real `node:sqlite` driver in a

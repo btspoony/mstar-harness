@@ -32,8 +32,6 @@ import {
   AUDIT_EFFORTS,
   AUDIT_PRIORITIES,
   AUDIT_RISKS,
-  appendProjectRegisterEntries,
-  closeProjectRegisterEntry,
   closeWorkflow,
   completenessLevel,
   declareWorkflowDeliveryKind,
@@ -53,20 +51,22 @@ import {
   getArtifactStore,
   isReadOnlyAssignmentRole,
   isTerminalSnapshot,
+  IssueError,
   l1PreDispatchCheck,
   l2PreDispatchCheck,
   lintFiveQuestion,
   lintFrontmatter,
   lintLoadOrder,
   lintStrategySections,
+  listIssues,
   listPendingCatalogRegistrations,
   loadStoreModule,
+  openStore,
   parseAssignmentBranchForms,
   parseAssignmentFields,
   parseBranchPolicyDirectOnBranch,
   parseCompassFrontmatter,
   planQualityBar,
-  PROJECT_REGISTER_FILE,
   pushCadenceProbe,
   readCoordinatedArtifact,
   readMainWorktree,
@@ -95,7 +95,6 @@ import {
   sddWorkspace,
   stripFrontmatter,
   taskBrief,
-  techDebtRollup,
   unregisterWorkflow,
   computePrTally,
   prReviewReportPath,
@@ -113,7 +112,6 @@ import {
   validateDesignTokenFrontmatter,
   validateIntegrationMergeLease,
   validateMstarReviewV1,
-  validateProjectRegister,
   validateRoleMapping,
   validateSchemaYaml,
   validateStatus,
@@ -121,7 +119,6 @@ import {
   validateWorkflowSnapshot,
   WORKFLOW_DELIVERY_KINDS,
   WORKFLOW_SNAPSHOT_FILE,
-  _DEFAULT_PROJECT,
   type ArtifactKind,
   type ArtifactStore,
   type AuditCategory,
@@ -138,7 +135,6 @@ import {
   type GateResult,
   type HostId,
   type PrReportTarget,
-  type ProjectRegisterDoc,
   type QcAlignmentAssignment,
   type MergeClass,
   type PrSizeBand,
@@ -146,6 +142,8 @@ import {
   type ReviewPostPlan,
   type SddExecutionContext,
   type StatusV2Doc,
+  type StoreContext,
+  type StoreHandle,
   type ToolSignal,
   type ValidationResult,
   type WorktreeTrack,
@@ -155,6 +153,7 @@ import { registerSddEvidenceCommands } from "./sdd-evidence";
 import { planUsageFailurePayload, registerPlanCommands, registerWorkflowCommands } from "./plan-coordination";
 import { issueUsageFailurePayload, registerIssueCommands } from "./issue";
 import { catalogUsageFailurePayload, registerCatalogCommands } from "./catalog";
+import { registerStoreCommands } from "./store-migrate";
 import { runMigrateCommand, type MigrateCliOptions } from "./commands/migrate";
 import { runDashboard } from "./dashboard";
 import { validateAgentPlugin } from "./agent-plugins";
@@ -452,7 +451,7 @@ function gitWorkspaceRoot(startDir: string): string {
 async function runScaffold(pathArg: string | undefined) {
   const root = pathArg ? path.resolve(pathArg) : process.cwd();
   // Store-root pinning (spec §C4): `scaffoldHarness` writes the initial
-  // protected documents (status.json, projects/_default/residuals.json)
+  // protected documents (status.json, snapshot.json)
   // create-only through the ACTIVE ArtifactStore under fail-loud path
   // agreement (`assertFsStorePath`). The default store resolves from the cwd,
   // so it diverges from the scaffold target whenever `pathArg` is not the
@@ -921,7 +920,7 @@ pathCommand
 
 const statusCommand = program
   .command("status")
-  .description("v2 status.json root / workflow snapshot / project-register checks (engine-backed)");
+  .description("v2 status.json root / workflow snapshot / issue-store findings checks (engine-backed)");
 
 /**
  * Process-harness resolution starts at the verified MAIN worktree: the
@@ -1026,27 +1025,101 @@ statusCommand
     }
   });
 
+/**
+ * Issue severity enum order (issue contract §2) — the rollup's key order. The
+ * engine's legacy `Severity` export is the register-era enum (`nit`), so this
+ * names the issue vocabulary directly; the rollup test pins the exact key set.
+ */
+const ISSUE_SEVERITY_ORDER = ["critical", "high", "medium", "low", "info"] as const;
+
+/**
+ * The store context of a command that reads the issue authority: --harness
+ * wins, else the cwd-resolved control root (mirrors `mstar issue` and
+ * `mstar store`).
+ */
+function issueStoreContextOf(options: { harness?: string }): StoreContext {
+  const override = typeof options.harness === "string" ? options.harness : undefined;
+  const resolved = resolveEngineProcessHarnessDir(process.cwd(), override);
+  const harnessDir = resolved ?? (override !== undefined ? path.resolve(override) : process.cwd());
+  return { harnessDir };
+}
+
+/**
+ * Refuse a store that is not the active issue authority before a user-facing
+ * read presents its rows as findings. The engine's list/read verbs legitimately
+ * read a staged store (contract §2 allows read-only staging), but the CLI's
+ * rollup is a findings report: a missing, corrupt or staged authority must fail
+ * loudly (the same fail-closed verdict `findingsCleanupGate` uses), never print
+ * an empty or provisional rollup.
+ */
+async function assertActiveIssueStore(context: StoreContext): Promise<void> {
+  const handle: StoreHandle = await openStore(context, "read");
+  try {
+    const meta = handle.db.prepare("select authority_state as authorityState from store_meta where id = 1").get() as
+      | { authorityState?: unknown }
+      | undefined;
+    if (!meta || meta.authorityState !== "active") {
+      throw new IssueError(
+        "store.not-active",
+        `The issue store is ${typeof meta?.authorityState === "string" ? meta.authorityState : "unreadable"}; ` +
+          "the findings rollup requires an active store.",
+      );
+    }
+  } finally {
+    handle.close();
+  }
+}
+
+/**
+ * The open-issue rollup of the issue authority: every OPEN issue in
+ * `{HARNESS_DIR}/store.db`, counted once by severity and once by project. The
+ * register-era `by_target` / `by_plan` aggregates are gone with the register —
+ * the issue domain exposes no such scheduling attribute, and inventing one
+ * would be a second authority. Reads in pages so the count is exact beyond one
+ * page; never writes.
+ */
+async function readIssueRollup(context: StoreContext): Promise<{
+  total_open: number;
+  by_severity: Record<string, number>;
+  by_project: Record<string, number>;
+}> {
+  await assertActiveIssueStore(context);
+  const bySeverity: Record<string, number> = Object.fromEntries(ISSUE_SEVERITY_ORDER.map((severity) => [severity, 0]));
+  const byProject: Record<string, number> = {};
+  const pageSize = 200;
+  let total = 0;
+  for (let offset = 0; ; offset += pageSize) {
+    const page = await listIssues(context, { disposition: "open", limit: pageSize, offset });
+    total = page.total;
+    for (const issue of page.items) {
+      bySeverity[issue.severity] = (bySeverity[issue.severity] ?? 0) + 1;
+      byProject[issue.projectId] = (byProject[issue.projectId] ?? 0) + 1;
+    }
+    if (page.items.length === 0 || offset + page.items.length >= page.total) break;
+  }
+  return {
+    total_open: total,
+    by_severity: bySeverity,
+    by_project: Object.fromEntries(Object.entries(byProject).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))),
+  };
+}
+
 statusCommand
   .command("tech-debt")
   .description(
-    "Print the residual tech-debt rollup aggregated over every {PROJECT_DIR}/<id>/residuals.json register " +
-      "(total_open / by_severity / by_target / by_plan; the project register is the source of truth \u2014 " +
-      "no stored-summary drift check, informational exit 0)",
+    "Print the open-issue rollup of the issue store ({HARNESS_DIR}/store.db): total_open / by_severity / by_project " +
+      "(informational exit 0; a missing, corrupt or staged store refuses \u2014 never an empty rollup)",
   )
-  .argument("[path]", "Project dir (default: resolved {PROJECT_DIR})")
-  .action((pathArg?: string) => {
+  .option("--harness <path>", "Harness dir override (default: resolved {HARNESS_DIR})")
+  .action(async (options: { harness?: string }) => {
     try {
-      const projectDir = pathArg ? path.resolve(pathArg) : resolveProjectDir();
-      if (!fs.existsSync(projectDir)) {
-        throw new Error(`project dir not found: ${projectDir}`);
-      }
-      const rollup = techDebtRollup(projectDir);
-      console.log(`status tech-debt: ${projectDir}`);
-      console.log(`total_open: ${rollup.computed.total_open}`);
-      console.log(`by_severity: ${JSON.stringify(rollup.computed.by_severity)}`);
-      console.log(`by_target: ${JSON.stringify(rollup.computed.by_target)}`);
-      console.log(`by_plan: ${JSON.stringify(rollup.computed.by_plan)}`);
-      console.log(pc.green("project register is the source of truth \u2014 no stored summary to drift (informational)"));
+      const context = issueStoreContextOf(options);
+      const rollup = await readIssueRollup(context);
+      console.log(`status tech-debt: ${context.harnessDir}`);
+      console.log(`total_open: ${rollup.total_open}`);
+      console.log(`by_severity: ${JSON.stringify(rollup.by_severity)}`);
+      console.log(`by_project: ${JSON.stringify(rollup.by_project)}`);
+      console.log(pc.green("store.db is the only findings authority \u2014 no stored summary to drift (informational)"));
     } catch (error) {
       console.error(pc.red(`status tech-debt failed: ${(error as Error).message}`));
       process.exitCode = 1;
@@ -1056,27 +1129,20 @@ statusCommand
 statusCommand
   .command("findings-cleanup")
   .description(
-    "Enforce a plan's findings-cleanup mode on its project-register residuals (projects/<id>/residuals.json " +
-      "entries keyed by plan id \u2014 the snapshot plan linkage; zero-residual via Assignment, else allow-residual; exit 1 on violations)",
+    "Enforce a plan's findings-cleanup mode on the OPEN issues linked to it in the issue store " +
+      "({HARNESS_DIR}/store.db provenance; zero-residual via Assignment, else allow-residual). A missing, corrupt or " +
+      "staged store refuses (exit 1) instead of passing as no findings",
   )
-  .argument("<plan-id>", "Plan id whose register entries are checked against the cleanup mode")
+  .argument("<plan-id>", "Plan id whose linked open issues are checked against the cleanup mode")
   .option("--harness <path>", "Harness dir override (default: resolved {HARNESS_DIR})")
-  .option("--project <id>", "Project id whose register is read (default: _default)")
   .option("--mode <mode>", "Cleanup mode override: zero-residual | allow-residual (default: allow-residual)")
-  .action((planId: string, options: { harness?: string; project?: string; mode?: string }) => {
+  .action(async (planId: string, options: { harness?: string; mode?: string }) => {
     try {
-      const projectDir = resolveProjectDir(process.cwd(), options.harness ? { harnessDir: options.harness } : {});
-      const registerPath = path.join(projectDir, options.project ?? _DEFAULT_PROJECT, PROJECT_REGISTER_FILE);
-      if (!fs.existsSync(registerPath)) {
-        throw new Error(`project register not found: ${registerPath}`);
-      }
-      const mode =
-        options.mode === "zero-residual" || options.mode === "allow-residual" ? options.mode : undefined;
+      const mode = options.mode === "zero-residual" || options.mode === "allow-residual" ? options.mode : undefined;
       if (options.mode !== undefined && mode === undefined) {
         throw new Error(`invalid --mode ${options.mode} (zero-residual | allow-residual)`);
       }
-      const register = readJson(registerPath) as ProjectRegisterDoc;
-      const gate = findingsCleanupGate(register, planId, mode ? { mode } : undefined);
+      const gate = await findingsCleanupGate(issueStoreContextOf(options), planId, mode ? { mode } : undefined);
       if (gate.ok) {
         console.log(pc.green(`findings-cleanup ${planId}: OK`));
         return;
@@ -1104,114 +1170,35 @@ function collectEntries(value: string, previous: string[]): string[] {
 }
 
 /**
- * Single-component project-id guard for the `--project` write commands
- * (backlog-register / backlog-close). The id is joined onto `{PROJECT_DIR}`
- * and both commands WRITE `residuals.json` + `.status-write.lockdir/` there \u2014
- * an absolute or `..`-containing id would escape the projects dir ;
- * same class as the workflow-id guard in resolveSnapshotPath). Accept only one
- * safe path component: an alnum first char, then `[A-Za-z0-9._-]`. The built-in
- * `_default` project id (project-less flows) is a constant single-component
- * name that cannot escape, so it is allowed explicitly.
+ * The retired `status backlog-register` / `status backlog-close` verbs
+ * (issue-governance cutover G2b). They used to write project `residuals.json`
+ * registers, which are now migration history: the verbs refuse with the
+ * replacement instead of keeping a write-through alias. Registered (not
+ * deleted) so an old invocation reaches the guidance rather than a bare
+ * unknown-command error, and they accept any flag shape for the same reason.
  */
-const PROJECT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-function sanitizeProjectId(projectId: string): string {
-  if (projectId === _DEFAULT_PROJECT) {
-    return projectId;
-  }
-  if (
-    projectId === "" ||
-    projectId === "." ||
-    projectId === ".." ||
-    path.isAbsolute(projectId) ||
-    !PROJECT_ID_RE.test(projectId)
-  ) {
-    throw new Error(
-      `invalid project id ${JSON.stringify(projectId)} \u2014 expected one path component ` +
-        `([A-Za-z0-9][A-Za-z0-9._-]*); "." / ".." / absolute / separator-containing ids would escape {PROJECT_DIR}`,
-    );
-  }
-  return projectId;
-}
+const RETIRED_BACKLOG_COMMANDS: Record<string, string> = {
+  "backlog-register": "plan issue-add",
+  "backlog-close": "plan issue-close",
+};
 
-statusCommand
-  .command("backlog-register")
-  .description(
-    "Register deferred-PR backlog entries in a project register under the status write lock " +
-      "(engine-backed: same-day key bump + entry-id uniqueness inside withStatusWriteLock; " +
-      "each --entry is one residual JSON \u2014 source_plan/registered_at are filled by the CLI)",
-  )
-  .option("--project <id>", "Project id whose register is written (default: _default)")
-  .option("--harness <path>", "Harness dir override (default: resolved {HARNESS_DIR})")
-  .requiredOption("--key <plan-key>", "Base entries key (<plan-id>); the first free same-day key (base, base-2, \u2026) is used")
-  .option("--entry <json>", "Residual entry JSON (nine fields; source_plan/registered_at filled by the CLI) \u2014 repeatable", collectEntries, [])
-  .action(async (options: { project?: string; harness?: string; key: string; entry?: string[] }) => {
-    try {
-      const entriesRaw = options.entry ?? [];
-      if (entriesRaw.length === 0) {
-        throw new Error("at least one --entry is required \u2014 refusing to register an empty backlog");
-      }
-      const projectId = sanitizeProjectId(options.project ?? _DEFAULT_PROJECT);
-      const projectRoot = resolveProjectDir(process.cwd(), options.harness ? { harnessDir: options.harness } : {});
- // Store-root pinning ( Part B): the engine writers put
- // through getArtifactStore(), whose default root is the cwd-resolved
- // harness \u2014 an explicit --harness must pin the store to that root.
-      if (options.harness) setArtifactStore(createFsStore(options.harness));
-      const projectDir = path.join(projectRoot, projectId);
-      const registeredAt = todayString();
-      const entries = entriesRaw.map((raw, index) => {
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(raw);
-        } catch (error) {
-          throw new Error(`--entry ${index + 1} is not valid JSON: ${(error as Error).message}`);
-        }
-        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-          throw new Error(`--entry ${index + 1} must be a JSON object`);
-        }
- // Provenance is CLI-owned: source_plan = the used key (the engine sets
- // the bumped key per B-9 ①), registered_at = today ( contract).
-        return { ...(parsed as Record<string, unknown>), source_plan: options.key, registered_at: registeredAt };
-      });
-      const result = await appendProjectRegisterEntries({ projectDir, basePlanKey: options.key, entries });
-      console.log(
-        pc.green(`backlog-register: registered ${entries.length} entr${entries.length === 1 ? "y" : "ies"} under key ${result.key}`),
+for (const [verb, replacement] of Object.entries(RETIRED_BACKLOG_COMMANDS)) {
+  statusCommand
+    .command(verb)
+    .description(`Removed \u2014 ${replacement} replaces it; this verb refuses and writes nothing`)
+    .allowUnknownOption()
+    .allowExcessArguments()
+    .action(() => {
+      console.error(
+        pc.red(
+          `status ${verb}: removed \u2014 project registers are migration history; findings are issues in ` +
+            `{HARNESS_DIR}/store.db (capture/close via \`mstar ${replacement}\`, or the unscoped \`mstar issue add|close\`); ` +
+            "this verb writes nothing",
+        ),
       );
-    } catch (error) {
-      console.error(pc.red(`status backlog-register failed: ${(error as Error).message}`));
       process.exitCode = 1;
-    }
-  });
-
-statusCommand
-  .command("backlog-close")
-  .description(
-    "Close one project-register backlog entry in place under the status write lock " +
-      "(lifecycle: resolved + closed_at: <today> + closure_note; absent id/key fails loud, exit 1)",
-  )
-  .option("--project <id>", "Project id whose register is updated (default: _default)")
-  .option("--harness <path>", "Harness dir override (default: resolved {HARNESS_DIR})")
-  .requiredOption("--key <plan-key>", "Entries key (<plan-id>) holding the entry to close")
-  .requiredOption("--id <entry-id>", "id of the entry to close")
-  .option("--note <text>", "Closure note (default: \"closed by backlog close\")")
-  .action(async (options: { project?: string; harness?: string; key: string; id: string; note?: string }) => {
-    try {
-      const projectId = sanitizeProjectId(options.project ?? _DEFAULT_PROJECT);
-      const projectRoot = resolveProjectDir(process.cwd(), options.harness ? { harnessDir: options.harness } : {});
- // Store-root pinning ( Part B): see backlog-register.
-      if (options.harness) setArtifactStore(createFsStore(options.harness));
-      const projectDir = path.join(projectRoot, projectId);
-      await closeProjectRegisterEntry({
-        projectDir,
-        planKey: options.key,
-        entryId: options.id,
-        closureNote: options.note ?? "closed by backlog close",
-      });
-      console.log(pc.green(`backlog-close: resolved entry ${options.id} under key ${options.key}`));
-    } catch (error) {
-      console.error(pc.red(`status backlog-close failed: ${(error as Error).message}`));
-      process.exitCode = 1;
-    }
-  });
+    });
+}
 
 statusCommand
   .command("workflow-close")
@@ -1255,7 +1242,7 @@ statusCommand
       if (!harnessDir) {
         throw new Error(`harness dir not found from ${process.cwd()} \u2014 pass --harness <path>`);
       }
-      // Store-root pinning (see backlog-register): closeWorkflow and
+      // Store-root pinning (see `status workflow-register`): closeWorkflow and
       // unregisterWorkflow write through the active ArtifactStore with
       // fail-loud path agreement — the control harness root resolved above
       // must ALWAYS be pinned as the store root (the default store resolves
@@ -1308,13 +1295,13 @@ statusCommand
 statusCommand
   .command("archive-residuals")
   .description(
-    "Removed in v3 \u2014 residual close is a project-register state change; this command exits 1 and names the replacement",
+    "Removed \u2014 residual close is an issue disposition now; this command exits 1 and names the replacement",
   )
   .action(() => {
     console.error(
       pc.red(
-        "status archive-residuals: removed in v3 \u2014 residuals live in project registers; close entries in " +
-          "projects/<id>/residuals.json (set lifecycle to resolved/waived/superseded with closure fields) instead",
+        "status archive-residuals: removed \u2014 findings are issues in {HARNESS_DIR}/store.db; close one with " +
+          "`mstar plan issue-close` (plan-scoped) or `mstar issue close|waive|duplicate|supersede` (unscoped) instead",
       ),
     );
     process.exitCode = 1;
@@ -1620,14 +1607,14 @@ const migrateCommand = program
 const persistCommand = program
   .command("persist")
   .description(
-    "Persist one JSON coordination doc through the ArtifactStore (status / snapshot / residuals / review / json). " +
+    "Persist one JSON coordination doc through the ArtifactStore (status / snapshot / review / json). " +
       "Faces: put (default), get [--validate], list (keys only, no header), delete (idempotent). " +
       "The default FsStore resolves the harness dir from the cwd / MSTAR_HARNESS_DIR; --store <module> or " +
       "MSTAR_STORE_MODULE injects a module-backed store (filesystem paths only) for the process.",
   );
 
 /** Persist kinds (unknown kind is a usage error, exit 2). */
-const PERSIST_KINDS: readonly string[] = ["status", "snapshot", "residuals", "review", "json"];
+const PERSIST_KINDS: readonly string[] = ["status", "snapshot", "review", "json"];
 
 /**
  * Kinds the coordination boundary protects: their local bytes belong to the
@@ -1637,23 +1624,40 @@ const PERSIST_KINDS: readonly string[] = ["status", "snapshot", "residuals", "re
  * files keeps the plain put and its store refusal — the alias is a
  * path-shaped key, not a coordinated ref.
  */
-const COORDINATED_PERSIST_KINDS: readonly ArtifactKind[] = ["status", "snapshot", "residuals"];
+const COORDINATED_PERSIST_KINDS: readonly ArtifactKind[] = ["status", "snapshot"];
+
+/**
+ * The retired `residuals` kind (issue-governance cutover G2b): a project
+ * register is migration history, and the issue store is the only findings
+ * authority. The kind refuses with the replacement rather than mapping onto
+ * anything that could write a register — including through the `json` alias,
+ * which the engine's store boundary refuses for a project register target.
+ */
+function refuseRetiredPersistKind(kind: string): void {
+  if (kind !== "residuals") return;
+  throw new SddScriptError(
+    "`persist residuals` is retired \u2014 the issue store ({HARNESS_DIR}/store.db) is the only findings authority; " +
+      "capture and close through `mstar plan issue-add|issue-close` (plan-scoped) or `mstar issue add|close` (unscoped)",
+    1,
+  );
+}
 
 function parsePersistKind(kind: string): ArtifactKind {
+  refuseRetiredPersistKind(kind);
   if (PERSIST_KINDS.includes(kind)) return kind as ArtifactKind;
   throw new SddScriptError(
     "usage: persist <kind> --key <key> [--file <path>|--stdin] [--store <module>] [--schema <id>]\n" +
       "       persist get <kind> --key <key> [--validate] [--store <module>]\n" +
       "       persist list <kind> [--store <module>]\n" +
       "       persist delete <kind> --key <key> [--store <module>]\n" +
-      `  unknown kind ${JSON.stringify(kind)} \u2014 expected status | snapshot | residuals | review | json`,
+      `  unknown kind ${JSON.stringify(kind)} \u2014 expected status | snapshot | review | json`,
     2,
   );
 }
 
 /**
  * Classify a put against the coordinated-artifact boundary and narrow its
- * contract. Coordinated kinds (`status` / `snapshot` / `residuals`) require
+ * contract. Coordinated kinds (`status` / `snapshot`) require
  * the caller's exact byte version — `absent` for a first create, else the
  * `sha256:<hex>` the versioned read reported — and a snapshot replacement
  * additionally requires the coordinator envelope that binds the writer
@@ -1668,7 +1672,7 @@ function resolvePersistWrite(
   if (!COORDINATED_PERSIST_KINDS.includes(kind)) {
     if (options.expectVersion !== undefined || sessionPath !== undefined) {
       throw new SddScriptError(
-        `usage: --expect-version / --session replace coordinated artifacts (status | snapshot | residuals) \u2014 ${kind} keeps its existing writer`,
+        `usage: --expect-version / --session replace coordinated artifacts (status | snapshot) \u2014 ${kind} keeps its existing writer`,
         2,
       );
     }
@@ -1743,7 +1747,6 @@ function validatePersistPayload(kind: ArtifactKind, payload: unknown): void {
   let gate: GateResult;
   if (kind === "status") gate = validateStatusV2(payload as StatusV2Doc);
   else if (kind === "snapshot") gate = validateWorkflowSnapshot(payload);
-  else if (kind === "residuals") gate = validateProjectRegister(payload);
   else if (kind === "review") gate = validateMstarReviewV1(payload);
   else return; // json \u2014 arbitrary payload, parse-only
   if (gate.ok) return;
@@ -1752,7 +1755,7 @@ function validatePersistPayload(kind: ArtifactKind, payload: unknown): void {
 }
 
 persistCommand
-  .argument("<kind>", "status | snapshot | residuals | review | json")
+  .argument("<kind>", "status | snapshot | review | json")
  // Not a commander requiredOption: the `get` subcommand declares the same
  // flag, and a parent requiredOption would be validated before subcommand
  // dispatch — `persist get ... --key k` would fail the parent's check.
@@ -1762,7 +1765,7 @@ persistCommand
   .option("--stdin", "Read the payload JSON from stdin")
   .option("--store <module>", "Store module path (filesystem only; overrides MSTAR_STORE_MODULE)")
   .option("--schema <id>", "Optional schema id stored on the artifact doc (e.g. mstar.review/v1); stored only by store modules that persist it \u2014 the default FsStore rejects it (exit 1)")
-  .option("--expect-version <version>", 'Exact byte version of the document being replaced (status | snapshot | residuals): "absent" or sha256:<hex> from `persist get --versioned`')
+  .option("--expect-version <version>", 'Exact byte version of the document being replaced (status | snapshot): "absent" or sha256:<hex> from `persist get --versioned`')
   .option("--session <path>", "Absolute coordinator session envelope path (required to replace a coordinated snapshot)")
   .action(
     async (
@@ -1798,7 +1801,7 @@ persistCommand
         validatePersistPayload(parsedKind, payload);
         await resolvePersistStore(options.store);
         const store = getArtifactStore();
-        // Protected kinds (`status` / `snapshot` / `residuals`, and any
+        // Protected kinds (`status` / `snapshot`, and any
         // `json` alias of those files) go through the FsStore boundary: only
         // the engine's locked writers may write them. The replacement face
         // runs inside the engine's own lock + same-host CAS check, so the
@@ -1836,7 +1839,7 @@ persistCommand
 persistCommand
   .command("get")
   .description("Print the stored payload JSON for <kind>/<key>, or exit 1 when absent")
-  .argument("<kind>", "status | snapshot | residuals | review | json")
+  .argument("<kind>", "status | snapshot | review | json")
  // --key / --store are declared on the parent `persist` command only:
  // commander parses a parent's options from the whole arg list, so a
  // subcommand's same-named declaration would never see the value. The get
@@ -1896,7 +1899,7 @@ persistCommand
 persistCommand
   .command("list")
   .description("Print the stored keys for <kind>, one per line, ascending, no header (json is not listable)")
-  .argument("<kind>", "status | snapshot | residuals | review | json")
+  .argument("<kind>", "status | snapshot | review | json")
  // --store is parsed by the parent `persist` command (same commander
  // dispatch constraint as `get` — see the note there).
   .action(async (kind: string, _options: object, command: Command) => {
@@ -1930,7 +1933,7 @@ persistCommand
 persistCommand
   .command("delete")
   .description("Delete the stored document for <kind>/<key> (idempotent: absent is a no-op; no prompt)")
-  .argument("<kind>", "status | snapshot | residuals | review | json")
+  .argument("<kind>", "status | snapshot | review | json")
  // --key / --store are parsed by the parent `persist` command (same
  // commander dispatch constraint as `get` — see the note there).
   .action(async (kind: string, _options: object, command: Command) => {
@@ -6270,6 +6273,10 @@ registerIssueCommands(program);
 
 registerCatalogCommands(program);
 
+// `mstar store` — the store lifecycle family (init/upgrade/migrate) over the
+// engine store boundary and the migration transport (contract §2/§7).
+registerStoreCommands(program);
+
 /**
  * `mstar catalog reconcile` — the recovery verb contract §2 lists and P2
  * deferred (the journal it recovers is P3's). Attached to the EXISTING
@@ -6444,7 +6451,7 @@ program.parseAsync(process.argv).catch((error: unknown) => {
     process.exitCode = error.exitCode === 0 ? 0 : 2;
     return;
   }
-  // Issue-store launch/capability boundary (plan 20260918-issue-store-core):
+  // Issue-store launch/capability boundary:
   // store refusals reach the CLI as `StoreError` from the engine's lazily
   // imported `node:sqlite` boundary. They are domain/runtime refusals
   // (contract §5): stable code + actionable message on stderr, exit 1 —

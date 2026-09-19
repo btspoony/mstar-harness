@@ -270,17 +270,12 @@ export {
   validateCompassFrontmatter,
 } from "./iteration.js";
 export type {
-  AppendProjectRegisterEntriesOpts,
-  CloseProjectRegisterEntryOpts,
   FindingsCleanupMode,
   ProjectRegisterDoc,
   ProjectRegisterEntry,
   RoadmapFrontmatter,
   RoadmapStatus,
   RoadmapValidation,
-  TechDebtCheck,
-  TechDebtRollup,
-  TechDebtSummary,
 } from "./project.js";
 export {
   PROJECT_REFERENCES_DIR,
@@ -288,11 +283,8 @@ export {
   PROJECT_ROADMAP_FILE,
   ROADMAP_STATUSES,
   _DEFAULT_PROJECT,
-  appendProjectRegisterEntries,
-  closeProjectRegisterEntry,
   findingsCleanupGate,
   listProjectReferenceFiles,
-  techDebtRollup,
   validateProjectRegister,
   validateRoadmap,
 } from "./project.js";
@@ -525,7 +517,7 @@ export type {
   VersionedArtifact,
 } from "./coordination.js";
 export type { StoreContext, StoreErrorCode, StoreHandle, StoreRuntimeInfo, StoreDb } from "./store-db.js";
-// Issue-store boundary (plan 20260918-issue-store-core C1): lazily acquires
+// Issue-store boundary: lazily acquires
 // `node:sqlite` — importing this index never loads the driver or opens a DB.
 export {
   MIGRATION_2_SQL,
@@ -570,7 +562,7 @@ export {
   listIssues,
   triageIssue,
 } from "./issue.js";
-// Catalog authority (plan 20260918-state-projection P1): catalog metadata is
+// Catalog authority: catalog metadata is
 // the DB authority for project/iteration/plan/document identity, locations,
 // relations and archived/superseded lifecycle. No execution status, no
 // projection, no Markdown index.
@@ -602,9 +594,9 @@ export {
   registerCatalogEntity,
   updateCatalogEntity,
 } from "./catalog.js";
-// Catalog import/discovery/portability (plan 20260918-state-projection P2):
-// discovery is a read-only proposal, import applies a reviewed plan through
-// the catalog domain verbs, export is versioned transport. The CLI family
+// Catalog import/discovery/portability: discovery is a read-only proposal,
+// import applies a reviewed plan through the catalog domain verbs, export is
+// versioned transport. The CLI family
 // (contract §2 `mstar catalog ...`) consumes exactly this surface.
 export type {
   CatalogExport,
@@ -637,13 +629,13 @@ export {
   planCatalogImport,
   verifyCatalogImport,
 } from "./catalog-import.js";
-// Catalog execution registration journal (plan 20260918-state-projection P3):
-// the ONE service that registers an execution (snapshot + root entry) together
-// with its catalog rows, publishes the catalog delta only after the execution
-// registration matches, and recovers or visibly refuses a half-written
-// registration (`mstar catalog reconcile`). ADDITIVE export added by P3
-// because the engine package's exports map is the only reachable surface for
-// the CLI transport and for the readers that must refuse a pending operation.
+// Catalog execution registration journal: the ONE service that registers an
+// execution (snapshot + root entry) together with its catalog rows, publishes
+// the catalog delta only after the execution registration matches, and
+// recovers or visibly refuses a half-written registration (`mstar catalog
+// reconcile`). ADDITIVE export: the engine package's exports map is the only
+// reachable surface for the CLI transport and for the readers that must
+// refuse a pending operation.
 export type {
   CatalogExecutionAbort,
   CatalogExecutionBinding,
@@ -671,12 +663,12 @@ export {
   registerShippedCatalogExecution,
   resolveCatalogRegistrationState,
 } from "./catalog-registration.js";
-// Disposable execution/roadmap projections (plan 20260918-state-projection P5):
-// the ONE source-I/O boundary (`refreshProjections`) over the JSON execution
-// authority, plus its two halves -- the pure validated capture and the atomic
-// publication/last-good path. ADDITIVE export added by P5 because the engine
-// package's exports map is the only reachable surface for the read boundary
-// (P6) and for the CLI/dashboard transport.
+// Disposable execution/roadmap projections: the ONE source-I/O boundary
+// (`refreshProjections`) over the JSON execution authority, plus its two
+// halves -- the pure validated capture and the atomic publication/last-good
+// path. ADDITIVE export: the engine package's exports map is the only
+// reachable surface for the store read boundary and for the CLI/dashboard
+// transport.
 export type {
   ProjectedCompass,
   ProjectedLease,
@@ -703,13 +695,12 @@ export {
   publishProjectionCapture,
   refreshProjections,
 } from "./projection.js";
-// Issue-store read boundary (plan 20260918-state-projection P6): the ONE read
-// entry for dashboard and rollup consumers -- one handle per request, every
-// view query in one read transaction, and an honest projection disclosure in
-// the envelope. ADDITIVE export added by P6 because the engine package's
-// exports map is the only reachable surface for the CLI transport
-// (`packages/cli/src/store-read.ts`) and for the dashboard plan that consumes
-// it; no producer surface is changed.
+// Issue-store read boundary: the ONE read entry for dashboard and rollup
+// consumers -- one handle per request, every view query in one read
+// transaction, and an honest projection disclosure in the envelope. ADDITIVE
+// export: the engine package's exports map is the only reachable surface for
+// the CLI transport (`packages/cli/src/store-read.ts`) and for the dashboard
+// consumers; no producer surface is changed.
 export type {
   CatalogIdentityDTO,
   CompassDTO,
@@ -735,3 +726,67 @@ export type {
   WorkflowPlanDTO,
 } from "./store-read.js";
 export { StoreReadError, queryDashboard, queryIssueFlow, withStoreRead } from "./store-read.js";
+// Read-only migration planner plus the staged apply/receipt/replay half: the
+// migration transport of the store migration protocol (issue contract §7). It
+// enumerates the legacy residual registers through the configured project
+// resolver, classifies every row against the declared legacy vocabulary,
+// embeds the catalog dry-run inventory, and applies a reviewed manifest in one
+// transaction with a persistent ID mapping. Preview creates no DB and no
+// receipt; retiring the legacy sources is a separate, authorized step.
+// ADDITIVE export: the engine package's exports map is the only reachable
+// surface for the CLI transport.
+export type {
+  MigrationEntryMapping,
+  MigrationHistoryRow,
+  MigrationIdMapping,
+  MigrationManifest,
+  MigrationReceipt,
+  MigrationRetirement,
+  MigrationSourceFile,
+  MigrationSourceIdentity,
+  MigrationUnknown,
+  MigrationVocabulary,
+  StoreMigrationErrorCode,
+} from "./store-migrate.js";
+export {
+  MIGRATION_MANIFEST_VERSION,
+  MIGRATION_VOCABULARY,
+  applyStoreMigration,
+  migrationManifestHash,
+  planStoreMigration,
+  StoreMigrationError,
+} from "./store-migrate.js";
+// Activation barrier, legacy-source retirement and the consistent backup: the
+// second half of the §7 protocol (apply≠activate≠retire, D19). `activateStore`
+// flips the authority generation atomically against a strict installed-consumer
+// attestation, `retireStoreSources` moves exact reviewed bytes under a
+// resumable ledger, and `backupStore` records a quiesced `VACUUM INTO` recovery
+// point with its identity. ADDITIVE export: the engine package's exports map is
+// the only reachable surface for the CLI transport (`packages/cli/`), and the
+// migrated verbs are exercised live only in G6's authorized ops window.
+export type {
+  ActivationAttestation,
+  ActivationReceipt,
+  AttestationConsumerKind,
+  AttestationDisposition,
+  BackupReceipt,
+  InstalledConsumerAttestation,
+  RetiredRegister,
+  RetiredSection,
+  RetirementReceipt,
+  StoppedSessionAttestation,
+  StoreActivationErrorCode,
+  StoreAuthorityHandle,
+} from "./store-activation.js";
+export {
+  ACTIVATION_PROTOCOL_VERSION,
+  activateStore,
+  activationReceiptFor,
+  appliedReceiptFor,
+  assertAuthorityCurrent,
+  backupStore,
+  currentAuthorityHandle,
+  retireStoreSources,
+  StoreActivationError,
+  validateActivationAttestation,
+} from "./store-activation.js";

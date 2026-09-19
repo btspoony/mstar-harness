@@ -24,19 +24,19 @@ Set **`QA gate`** on the **first implement Assignment** (or plan frontmatter) an
 | Scenario | Default `QA gate` | Default `QA mode` (if QA dispatched) |
 | --- | --- | --- |
 | Hotfix / `Execution mode: inline` | `pm-acceptance` | N/A |
-| Small feature: non-UI, no open R#, QC clean `Approve` (not `Approve with residuals`) | `pm-acceptance` | N/A |
+| Small feature: non-UI, no open issue, QC clean `Approve` (not `Approve with residuals`) | `pm-acceptance` | N/A |
 | Bug fix (RCA + regression scope; default route) | `mandatory` | `acceptance-only` |
 | Medium / Large feature | `mandatory` | `acceptance-only` |
-| `Approve with residuals` or any open R# in the project register (`{PROJECT_DIR}/<id>/residuals.json`) | `mandatory` | `acceptance-only` (includes R# verify) |
+| `Approve with residuals` or any open issue linked to the plan in `{HARNESS_DIR}/store.db` | `mandatory` | `acceptance-only` (includes open-issue verify) |
 | UI-visible change (`Task category: visual` or observable evidence gate) | `mandatory` | `acceptance-only` (unit evidence; record unverified UI behavior for independent E2E) |
 | High-risk ops | `mandatory` | `acceptance-only` (reuse ops evidence; named unit-test gaps only) |
 | QA report-only primary route | `report-only` | `report-only` |
 | Product-docs-only / tech-spec-only (no runtime diff) | N/A | — |
 | User explicitly permits a local full suite | Preserve existing gate | QA consumes separately assigned implementer/ops evidence; permission does not authorize E2E |
 
-**Upgrade rule:** If conditions change mid-round (e.g. QC becomes `Approve with residuals`, UI scope added, open R# registered), change `QA gate` from `pm-acceptance` to `mandatory` before `Done`.
+**Upgrade rule:** If conditions change mid-round (e.g. QC becomes `Approve with residuals`, UI scope added, an issue captured and left open), change `QA gate` from `pm-acceptance` to `mandatory` before `Done`.
 
-**Findings cleanup note:** Only Assignment **`Findings cleanup: zero-residual`** (explicit opt-in) ties the plan to a clean QC `Approve` with **no open R#** — under it, a clean approval restores the small-feature `pm-acceptance` path when other tier rules allow. The default `allow-residual` carries registered residuals, and any open R# (either mode, even blocker-defer) still forces **`QA gate: mandatory`** like the residual row above. See `mstar-artifacts` Findings cleanup modes.
+**Findings cleanup note:** Only Assignment **`Findings cleanup: zero-residual`** (explicit opt-in) ties the plan to a clean QC `Approve` with **no open issue** — under it, a clean approval restores the small-feature `pm-acceptance` path when other tier rules allow. The default `allow-residual` carries captured issues, and any open issue linked to the plan (either mode, even blocker-defer) still forces **`QA gate: mandatory`** like the open-issue row above. See `mstar-artifacts` Findings cleanup modes.
 
 ## PM acceptance checklist (required before `Done` when `QA gate: pm-acceptance`)
 
@@ -44,7 +44,7 @@ PM completes this in **Status Update** (or plan closure note). PM **does not** r
 
 1. **QC verdict:** `{SDD_DIR}/review/qc-consolidated.md` or `{SDD_DIR}/review/qc.md` shows `Approve` with **Critical = 0** and **Warning = 0** (not `Approve with residuals`), and the main plan has a durable gate summary.
 2. **DoD mapping:** Each plan Acceptance Criterion maps to **existing** evidence (dev Completion Report, SDD test triple or applicable scoped-check, CI links; QC report for review verdict/findings only) — cite paths/commands, do not re-execute.
-3. **Residuals:** the project register `{PROJECT_DIR}/<id>/residuals.json` → `entries[<plan-id>]` has **no open R#** for this `plan_id` (or documented waiver per `mstar-artifacts`).
+3. **Findings:** the issue store `{HARNESS_DIR}/store.db` has **no open issue linked to this `plan_id`** (or documented waiver per `mstar-artifacts`); closed ones carry their disposition and evidence.
 4. **Checkout alignment:** `Working branch` and `Review range / Diff basis` match QC report verified lines.
 5. **`QA gate reason`:** One line naming the tier (e.g. `hotfix-inline`, `small-feature-clean-qc`).
 
@@ -53,6 +53,6 @@ PM completes this in **Status Update** (or plan closure note). PM **does not** r
 - QA gate reason: <tier>
 - QC report: <bundle path> — Approve, Critical/Warning 0; durable summary: <main plan section>
 - DoD mapping: <AC-id> → <evidence ref> …
-- Residuals: none open | waived R# …
+- Findings: none open | waived issue <id> …
 - Checkout: Working branch <name>; Review range <basis> (per QC Scope)
 ```

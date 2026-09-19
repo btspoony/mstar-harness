@@ -50,8 +50,7 @@ import {
 } from "../src/path.js";
 import { validateStatusV2 } from "../src/status.js";
 import { createFsStore, setArtifactStore } from "../src/store.js";
-import { validateProjectRegister, validateRoadmap } from "../src/project.js";
-import { readJson } from "../src/core.js";
+import { validateRoadmap } from "../src/project.js";
 
 const ENV_KEY = "MSTAR_HARNESS_DIR";
 
@@ -849,13 +848,16 @@ describe("scaffoldHarness (plan-conventions § 初始化 Plan 目录 + templates
     }
   });
 
-  test("prebuilds projects/_default/ with a valid roadmap.md + empty residuals.json", async () => {
+  test("prebuilds projects/_default/ with a valid roadmap.md and no legacy register", async () => {
     const root = tmpRoot("path-scaffold-project-");
     try {
       setArtifactStore(createFsStore(resolve(root, ".mstar")));
       const harnessDir = await scaffoldHarness(root);
       const projectDir = join(harnessDir, "projects", "_default");
-      expect(readdirSync(projectDir).sort()).toEqual(["residuals.json", "roadmap.md"]);
+      // The register is retired (issue-governance cutover G2a): the issue store
+      // is the findings authority, so a scaffold must not recreate the legacy
+      // file next to the roadmap it does own.
+      expect(readdirSync(projectDir).sort()).toEqual(["roadmap.md"]);
  // Roadmap frontmatter: project_id _default, non-empty title, status
  // active, created_at today, plus a `## Direction` body placeholder —
  // 0 violations (the missing goal-item task list is a warning only).
@@ -869,10 +871,7 @@ describe("scaffoldHarness (plan-conventions § 初始化 Plan 目录 + templates
       expect(roadmapText).toContain("status: active");
       expect(roadmapText).toContain(`created_at: ${new Date().toISOString().slice(0, 10)}`);
       expect(roadmapText).toContain("## Direction");
- // Empty register passes the project-register validator.
-      const registerPath = join(projectDir, "residuals.json");
-      expect(readFileSync(registerPath, "utf8")).toBe('{\n  "entries": {}\n}\n');
-      expect(validateProjectRegister(readJson(registerPath)).ok).toBe(true);
+      expect(existsSync(join(projectDir, "residuals.json"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -945,7 +944,8 @@ describe("scaffoldHarness (plan-conventions § 初始化 Plan 目录 + templates
       expect(harnessDir).toBe(resolve(root, ".mstar"));
       expect(existsSync(join(root, ".mstar", "status.json"))).toBe(true);
       expect(existsSync(join(root, "process", "projects", "_default", "roadmap.md"))).toBe(true);
-      expect(existsSync(join(root, "process", "projects", "_default", "residuals.json"))).toBe(true);
+      // No register is scaffolded under the resolved project dir either.
+      expect(existsSync(join(root, "process", "projects", "_default", "residuals.json"))).toBe(false);
       expect(existsSync(join(root, ".mstar", "projects"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -967,7 +967,7 @@ describe("scaffoldHarness (plan-conventions § 初始化 Plan 目录 + templates
     }
   });
 
-  test("is idempotent: preserves user-edited roadmap.md and residuals.json", async () => {
+  test("is idempotent: preserves user-edited roadmap.md and an existing legacy register", async () => {
     const root = tmpRoot("path-scaffold-idem-project-");
     try {
       setArtifactStore(createFsStore(resolve(root, ".mstar")));
@@ -987,6 +987,8 @@ Custom direction.
 `;
       const customRegister = '{\n  "entries": {}\n}\n';
       writeFileSync(roadmapPath, customRoadmap);
+      // A register the workspace already holds is migration history the
+      // scaffold neither creates nor rewrites (issue authority).
       writeFileSync(registerPath, customRegister);
       await scaffoldHarness(root);
       expect(readFileSync(roadmapPath, "utf8")).toBe(customRoadmap);
@@ -1361,7 +1363,7 @@ describe("coordinated-writer — scaffoldHarness create-only bootstrap", () => {
     }
   });
 
-  test("refuses an existing malformed residuals.json and leaves its bytes unchanged", async () => {
+  test("leaves an existing legacy register alone instead of validating or rewriting it", async () => {
     const root = tmpRoot("coordinated-writer-scaffold-register-");
     try {
       setArtifactStore(createFsStore(resolve(root, ".mstar")));
@@ -1369,7 +1371,10 @@ describe("coordinated-writer — scaffoldHarness create-only bootstrap", () => {
       mkdirSync(dirname(registerPath), { recursive: true });
       writeFileSync(registerPath, "{}\n", "utf8");
 
-      await expect(scaffoldHarness(root)).rejects.toThrow(/already exists but is invalid/);
+      // The scaffold owns no register any more (issue authority): even a
+      // malformed legacy file is neither a precondition nor a write target, so
+      // the run completes and the bytes survive for the migration to read.
+      await scaffoldHarness(root);
       expect(readFileSync(registerPath, "utf8")).toBe("{}\n");
     } finally {
       rmSync(root, { recursive: true, force: true });

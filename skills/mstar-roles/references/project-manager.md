@@ -9,7 +9,7 @@ Before any non-trivial PM action, read in order:
 5. Plan lifecycle authority — `references/project-manager/plan-management.md` + **`mstar-artifacts`** `references/plan-workflow-lifecycle-contract.md`: who advances the plan row's engine state, the scoped verb sequence, and the evidence each transition records — read **before the first implement dispatch**, not first at close
 6. `mstar-review-qc` (same coordination round, **before** any QC dispatch)
 7. **`mstar-sdd`** when implement uses **`Execution mode: sdd`**
-8. **On demand:** `mstar-branch-worktree` (parallel implement, QC/QA checkout); `mstar-artifacts` (`status.json` v2 root, workflow snapshots, R#); `mstar-artifacts` (InReview waves, review bundle naming)
+8. **On demand:** `mstar-branch-worktree` (parallel implement, QC/QA checkout); `mstar-artifacts` (`status.json` v2 root, workflow snapshots, issue capture pointers); `mstar-artifacts` (InReview waves, review bundle naming)
 
 **Not required:** `mstar-coding-behavior` (orchestration-only PM work).
 
@@ -68,7 +68,7 @@ Pick one `Primary` route per Assignment; attach additional gates as needed.
 | --- | --- |
 | Large feature | `explore -> product-manager -> architect -> dev (SDD) -> QC tri-review -> qa-engineer (mandatory) -> ops-engineer` |
 | Medium feature | `explore -> (architect optional) -> dev (SDD) -> QC tri-review -> qa-engineer (mandatory)` |
-| Small feature | `dev (SDD) -> QC tri-review -> pm-acceptance` (non-UI, no open R#, clean QC Approve) **or** `qa-engineer (mandatory)` when UI/residual/risk applies |
+| Small feature | `dev (SDD) -> QC tri-review -> pm-acceptance` (non-UI, no open issue, clean QC Approve) **or** `qa-engineer (mandatory)` when UI / open-finding / risk applies |
 | Bug fix | `explore -> RCA brief -> dev (SDD) -> QC tri-review -> qa-engineer (mandatory)` |
 | High-ambiguity bug | `explore -> RCA -> (architect optional) -> dev (SDD) -> QC tri-review -> qa-engineer (mandatory)` |
 | Hotfix | `single dev -> QC single-review -> pm-acceptance` |
@@ -123,14 +123,14 @@ If any item below matches, fix the dispatch/plan state or mark `Blocked`—do **
 
 - **NEVER** finish a dispatch turn with Assignment Markdown visible but **without** the matching host invokes when assignments were meant to start work (`dispatch incomplete` / paste-only failure).
 - **NEVER** split a required **parallel batch** of `N >= 2` invokes across multiple assistant messages when the host requires a single dispatch turn with all `N` calls.
-- **NEVER** register residuals only inside the plan narrative while skipping the project register `{PROJECT_DIR}/<id>/residuals.json` → `entries[<plan_id>]` when plan conventions require the SSOT field.
-- **NEVER** write non-canonical residual `severity` strings—use only the machine enum from `mstar-artifacts`.
-- **NEVER** under `Findings cleanup: zero-residual`, park fixable Critical/Warning/Suggestion as open R# or use `Approve with residuals` for them — fix-now + re-review; open residual only for true blocker-defer + Durable Roadmap (`mstar-artifacts` Findings cleanup modes).
+- **NEVER** leave a confirmed finding inside the plan narrative while skipping its capture as an **issue** (`mstar plan issue-add` plan-scoped, `mstar issue add` unscoped) when the plan's `Findings cleanup` mode requires it — chat-only findings are not a tracking location (`mstar-project-governance`「Issue capture」).
+- **NEVER** write a non-canonical `severity` on a captured issue — use only the machine enum from `mstar-artifacts`.
+- **NEVER** under `Findings cleanup: zero-residual`, park fixable Critical/Warning/Suggestion as open issues or use `Approve with residuals` for them — fix-now + re-review; an open issue only for true blocker-defer + Durable Roadmap (`mstar-artifacts` Findings cleanup modes).
 - **NEVER** use `Task category: quick` to skip mandatory Prepare (`specify → clarify → plan`) for substantive work (`mstar-harness-core` hard rule).
 - **NEVER** dispatch same-repo **≥2 concurrent writable implement** tracks without **`references/parallel-writable-pre-dispatch.md`**（per-track worktree + absolute **`Worktree path`**；**N invokes ≠ isolation** — also `mstar-dispatch-gates` dual-gate table).
 - **NEVER** point QC at a single dev worktree/`Review cwd` that cannot contain **all** claimed changes from parallel tracks until Git integration lands on one `Working branch` `HEAD` (`mstar-branch-worktree` QC/QA alignment).
 - **NEVER** skip `qa-engineer` on `QA gate: report-only` primary routes—still dispatch with `QA mode: report-only`; QC skip rules are separate and explicit.
-- **NEVER** use `QA gate: pm-acceptance` outside the tiers in `qa-trigger-matrix.md` (open R# or unclean QC require QA). Missing real UI evidence is a separately requested `mstar-e2e` concern, not permission for iteration QA to run browser/device tests.
+- **NEVER** use `QA gate: pm-acceptance` outside the tiers in `qa-trigger-matrix.md` (an open issue or unclean QC requires QA). Missing real UI evidence is a separately requested `mstar-e2e` concern, not permission for iteration QA to run browser/device tests.
 - **NEVER** mark plan `Done` on runtime/behavior change without `QA gate: mandatory` fulfilled or completed PM acceptance checklist (`qa-trigger-matrix.md`).
 - **NEVER** run tests/repro in the PM orchestration thread to substitute for `QA gate: mandatory` dispatch.
 - **NEVER** let non-PM/non-QA roles mark plan `Done`.
@@ -230,7 +230,7 @@ Pre-implement Gate Check:
 - PM_Task_Board_published: yes|no
 - batch_strategy_defined: yes|no
 - roadmap_written: yes|no|n/a
-- roadmap_location: <Plan section / PM Task Board / workflow snapshot / project register / residual id / n/a>
+- roadmap_location: <Plan section / PM Task Board / workflow snapshot / issue id / n/a>
 - assignment_batch_index: <e.g. 1/3>
 - coverage_ids: <e.g. T1,T2>
 - reason_if_single_assignment: <required when only one batch>
@@ -263,15 +263,15 @@ Before first implement dispatch:
 
 ---
 
-## QC / Residual / Plan Lifecycle
+## QC / Findings / Plan Lifecycle
 
 PM must:
 
 - Dispatch QC with aligned scope fields
 - Consolidate to one gate verdict
 - Assign fixes; default **targeted QC re-review** by the owning seat (same `{SDD_DIR}/review/qcN.md`), limited to its findings, fix delta and direct contracts. `QC re-review: full tri-review` changes seat count only, not review scope (`mstar-harness-core` § 定向执行与验证边界).
-- Record non-blocking leftovers as residual findings
-- Keep open vs archived residual state coherent at closure
+- Capture confirmed non-blocking leftovers as issues linked to the plan
+- Keep the plan's open-issue state coherent at closure (capture before leaving InReview; close with a disposition)
 - Sync plan/status in the same coordination round
 - Enforce report-to-status hard gate before next dispatch
 
@@ -314,13 +314,13 @@ Minimum invariants:
   - `references/project-manager/routing-and-dev-allocation.md`
 - Dispatch mechanics + anti-recursion + templates:
   - `references/project-manager/dispatch-and-assignment.md`
-- QC (SDD → mandatory tri; inline → single) + residual lifecycle:
+- QC (SDD → mandatory tri; inline → single) + findings lifecycle:
   - `references/project-manager/qc-and-residuals.md`
 - Plan/status initialization + lifecycle:
   - `references/project-manager/plan-management.md`
 - QA gate tier matrix + PM acceptance checklist:
   - `references/project-manager/qa-trigger-matrix.md`
 
-Sub-references above include additional **NEVER** rules for PM plan/status sync, routing fairness, and QC/residual consolidation.
+Sub-references above include additional **NEVER** rules for PM plan/status sync, routing fairness, and QC/findings consolidation.
 
 If any detailed reference conflicts with `mstar-harness-core`, `mstar-harness-core` is authoritative.

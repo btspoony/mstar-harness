@@ -17,7 +17,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
@@ -144,12 +144,21 @@ interface Fixture {
   assignmentPath: string;
   peerAssignmentPath: string;
   snapshotPath: string;
-  registerPath: string;
+  /** The retired register path — a command must never create it (G2b). */
+  projectRegisterPath: string;
   evidencePath: string;
 }
 
-/** Temporary Git fixture: main worktree + canonical harness + two prepared rows. */
-function makeFixture(): Fixture {
+/**
+ * Temporary Git fixture: main worktree + canonical harness + two prepared rows.
+ *
+ * The harness carries an initialized ACTIVE issue store (G2a made the store the
+ * findings authority: the handoff gate reads it, and the scoped issue verbs
+ * write it). `store: false` leaves the workspace store-less for the cases that
+ * assert the pre-store disclosure (the catalog-pin absence path); a store-less
+ * workspace is a legitimate pre-migration shape, not a broken one.
+ */
+function makeFixture(options: { store?: boolean } = {}): Fixture {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "mstar-plan-cli-")));
   roots.push(root);
   git(["init", "-q", "-b", "main"], root);
@@ -158,7 +167,7 @@ function makeFixture(): Fixture {
   const harness = join(root, ".mstar");
   const workflowDir = join(harness, "workflows", WORKFLOW_ID);
   const snapshotPath = join(workflowDir, "snapshot.json");
-  const registerPath = join(harness, "projects", PROJECT_ID, "residuals.json");
+  const projectRegisterPath = join(harness, "projects", PROJECT_ID, "residuals.json");
   const planPath = join(harness, "plans", `${PLAN_ID}.md`);
   const peerPlanPath = join(harness, "plans", `${PEER_PLAN_ID}.md`);
   const sddDir = join(harness, "sdd", PLAN_ID);
@@ -170,6 +179,13 @@ function makeFixture(): Fixture {
   writeText(peerPlanPath, "# plan b\n");
   writeText(evidencePath, "# evidence\n");
   for (const dir of [peerWorktreePath, worktreePath]) mkdirSync(dir, { recursive: true });
+
+  // The store first: `store init` is create-only for a genuinely empty
+  // workspace, so it must run before status.json registers a workflow.
+  if (options.store !== false) {
+    const init = runCli(["store", "init", "--harness", harness, "--json"], root);
+    expect(init.exitCode).toBe(0);
+  }
 
   writeJson(join(harness, "status.json"), {
     version: 2,
@@ -222,7 +238,7 @@ function makeFixture(): Fixture {
     assignmentPath,
     peerAssignmentPath,
     snapshotPath,
-    registerPath,
+    projectRegisterPath,
     evidencePath,
   };
 }
@@ -284,6 +300,58 @@ function rowRevision(fixture: Fixture, session: string, planId?: string): number
 /** Bytes of the fixture's authoritative documents, for no-write assertions. */
 function snapshotBytes(fixture: Fixture): string {
   return readText(fixture.snapshotPath);
+}
+
+/** One capture entry as `plan issue-add` takes it (the core input minus projectId). */
+function issueEntryOf(occurrenceKey: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    title: `Finding ${occurrenceKey}`,
+    kind: "bug",
+    severity: "medium",
+    impact: "the plan's acceptance is not met",
+    acceptance: "the finding is fixed and verified",
+    sourceIdentity: `cli-tests/${occurrenceKey}`,
+    rootCauseKey: "cli-tests-root-cause",
+    acceptanceKey: "cli-tests-acceptance",
+    occurrenceKey,
+    sourceKind: "qc",
+    location: "packages/cli/src/index.ts",
+    observedBehavior: "observed in the CLI cutover fixture",
+    evidence: ["fixture evidence"],
+    discoveredAt: "2026-09-18T00:00:00Z",
+    ...overrides,
+  };
+}
+
+/** Narrow an unknown value to a plain record (the test-side boundary for CLI JSON envelopes). */
+function plainRecord(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  // Checked immediately above: a non-null, non-array object.
+  return value as Record<string, unknown>;
+}
+
+/** The plan's issues as the CLI's own `mstar issue list` reports them (DB truth, no CLI claim). */
+function listedIssues(fixture: Fixture, extraArgs: string[] = []): Array<Record<string, unknown>> {
+  const result = runCli(["issue", "list", "--harness", fixture.harness, "--json", ...extraArgs], fixture.root);
+  expect(result.exitCode).toBe(0);
+  const items = plainRecord(jsonOf(result).data)?.items;
+  if (!Array.isArray(items)) throw new Error(`issue list returned no items: ${result.stdout}`);
+  return items.filter((item): item is Record<string, unknown> => plainRecord(item) !== null);
+}
+
+/** The `issues[]` receipts of a `plan issue-add|issue-close --json` success envelope. */
+function issueReceiptsOf(result: RunResult): Array<Record<string, unknown>> {
+  const issues = jsonOf(result).issues;
+  if (!Array.isArray(issues)) throw new Error(`expected issue receipts, got ${result.stdout}`);
+  return issues.filter((item): item is Record<string, unknown> => plainRecord(item) !== null);
+}
+
+/** Run `plan issue-add` for one entry payload and return its parsed success envelope. */
+function issueAdd(fixture: Fixture, session: string, payloadPath: string): RunResult {
+  return runCli(
+    ["plan", "issue-add", "--session", session, "--file", payloadPath, "--expect", String(rowRevision(fixture, session)), "--json"],
+    fixture.root,
+  );
 }
 
 describe("mstar plan — entry-forms", () => {
@@ -482,81 +550,100 @@ describe("mstar plan — strict-input", () => {
     expect(unparseable.stderr).toContain("not valid JSON");
   });
 
-  test("--expect-register accepts only absent or the exact version token (exit 2)", () => {
+  test("issue authority: --expect-issue accepts only a nonnegative revision, before any payload is read (exit 2)", () => {
     const fixture = makeFixture();
     // A real, parseable payload file. The flag is validated before any payload
     // is read, so a malformed token never degrades into a payload-read failure
     // and the payload bytes are never consumed.
-    const entriesPath = join(fixture.root, "entries.json");
-    const payload = `${JSON.stringify(
-      [
-        {
-          id: "R1",
-          title: "residual one",
-          severity: "low",
-          source: "cli-tests",
-          scope: "cli",
-          decision: "defer",
-          owner: "pm",
-          target: "later",
-          tracking: "plan",
-        },
-      ],
-      null,
-      2,
-    )}\n`;
-    writeText(entriesPath, payload);
+    const evidencePath = join(fixture.root, "evidence.json");
+    const payload = `${JSON.stringify({ reason: "fixed", references: ["packages/cli/src/index.ts"] }, null, 2)}\n`;
+    writeText(evidencePath, payload);
     // Two payload states: the existing file above, and a missing one. The
     // missing leg is the one that pins the ordering — with the payload read
     // first it reports "payload file not found" (still exit 2) and this case
     // fails, so the refusal must come from the flag in both states.
     for (const [state, file] of [
-      ["existing", entriesPath],
+      ["existing", evidencePath],
       ["missing", join(fixture.root, "absent.json")],
     ] as const) {
-      for (const value of ["latest", "sha256:ABC", "sha256:0"]) {
+      for (const value of ["latest", "-1", "1.5"]) {
         const result = runCli(
           [
             "plan",
-            "residual-add",
+            "issue-close",
             "--session",
             "/tmp/nope.json",
+            "--issue",
+            "I-000001",
+            "--disposition",
+            "resolved",
             "--file",
             file,
             "--expect",
             "0",
-            "--expect-register",
+            "--expect-issue",
             value,
           ],
           fixture.root,
         );
         expect(`${state} ${value} -> ${result.exitCode}`).toBe(`${state} ${value} -> 2`);
-        expect(result.stderr).toContain('--expect-register must be "absent" or sha256:<64 lowercase hex>');
+        expect(result.stderr).toContain("--expect-issue must be a nonnegative integer revision");
         expect(result.stderr).not.toContain("payload file not found");
       }
     }
-    expect(readText(entriesPath)).toBe(payload);
-    // Positive control: with a valid token the same invocation gets past the
+    expect(readText(evidencePath)).toBe(payload);
+    // Positive control: with a valid revision the same invocation gets past the
     // flag AND the payload read (the file above is genuinely parseable) and
     // fails later on the missing session — so the refusals above came from the
     // flag, never from the payload file.
     const accepted = runCli(
       [
         "plan",
-        "residual-add",
+        "issue-close",
         "--session",
         "/tmp/nope.json",
+        "--issue",
+        "I-000001",
+        "--disposition",
+        "resolved",
         "--file",
-        entriesPath,
+        evidencePath,
         "--expect",
         "0",
-        "--expect-register",
-        "absent",
+        "--expect-issue",
+        "1",
       ],
       fixture.root,
     );
     expect(accepted.exitCode).toBe(1);
     expect(accepted.stderr).toContain("session envelope not found");
+  });
+
+  test("issue authority: --disposition names only the four terminal dispositions (exit 2)", () => {
+    const fixture = makeFixture();
+    const evidencePath = join(fixture.root, "evidence.json");
+    writeText(evidencePath, `${JSON.stringify({ reason: "fixed", references: ["a"] })}\n`);
+    const result = runCli(
+      [
+        "plan",
+        "issue-close",
+        "--session",
+        "/tmp/nope.json",
+        "--issue",
+        "I-000001",
+        "--disposition",
+        "open",
+        "--file",
+        evidencePath,
+        "--expect",
+        "0",
+        "--expect-issue",
+        "1",
+      ],
+      fixture.root,
+    );
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("--disposition must be resolved | waived | duplicate | superseded");
   });
 
   test("--json failures are parseable on stdout and exit 1 differs from usage exit 2", () => {
@@ -764,140 +851,229 @@ describe("mstar plan — scoped-operations", () => {
     expect(snapshotBytes(fixture)).toBe(before);
   });
 
-  test("residual writes target the plan's own bucket with a register byte-version CAS", () => {
+  test("issue authority: plan issue-add captures into the store, links the plan, and never writes a register", () => {
     const fixture = makeFixture();
     const coordinator = bindCoordinator(fixture);
     preparePlan(fixture, coordinator, PLAN_ID);
     const planSession = bindPlan(fixture, PLAN_ID);
+    const before = snapshotBytes(fixture);
 
-    const view = runCli(["plan", "show", "--session", planSession, "--json"], fixture.root);
-    const registerVersion = String(jsonOf(view).register_version);
-    expect(registerVersion).toBe("absent");
+    // No store-less register version is readable any more: the view carries
+    // the snapshot version only, and the issues themselves are the CAS inputs.
+    const view = jsonOf(runCli(["plan", "show", "--session", planSession, "--json"], fixture.root));
+    expect(view.register_version).toBeUndefined();
+    expect(view.allowed_operations).toEqual(["progress", "issue-add", "issue-close", "handoff"]);
 
     const entriesPath = join(fixture.root, "entries.json");
-    writeJson(entriesPath, [
-      {
-        id: "R1",
-        title: "residual one",
-        severity: "low",
-        source: "cli-tests",
-        scope: "cli",
-        decision: "defer",
-        owner: "pm",
-        target: "later",
-        tracking: "plan",
-      },
-    ]);
-    const added = runCli(
-      [
-        "plan",
-        "residual-add",
-        "--session",
-        planSession,
-        "--file",
-        entriesPath,
-        "--expect",
-        String(rowRevision(fixture, planSession)),
-        "--expect-register",
-        registerVersion,
-        "--json",
-      ],
-      fixture.root,
-    );
+    writeJson(entriesPath, [issueEntryOf("occ-1", { severity: "critical" })]);
+    const added = issueAdd(fixture, planSession, entriesPath);
     expect(added.exitCode).toBe(0);
-    expect(jsonOf(added).outcome).toBe("residual-added");
+    const addPayload = jsonOf(added);
+    expect(addPayload.outcome).toBe("issue-added");
+    expect(addPayload.issues).toHaveLength(1);
 
-    const register = readJson(fixture.registerPath);
-    const entries = register.entries as Record<string, unknown[]>;
-    expect(entries[PLAN_ID]).toHaveLength(1);
-    expect(Object.keys(entries)).toEqual([PLAN_ID]);
-
-    // Stale register version: refused, sibling buckets and own bytes preserved.
-    const afterAdd = readText(fixture.registerPath);
-    const staleAdd = runCli(
-      [
-        "plan",
-        "residual-add",
-        "--session",
-        planSession,
-        "--file",
-        entriesPath,
-        "--expect",
-        String(rowRevision(fixture, planSession)),
-        "--expect-register",
-        registerVersion,
-        "--json",
-      ],
-      fixture.root,
-    );
-    expect(staleAdd.exitCode).toBe(1);
-    expect(jsonOf(staleAdd).ok).toBe(false);
-    expect(readText(fixture.registerPath)).toBe(afterAdd);
+    // The DB is the only target: the CLI's own `issue list` reads it back, and
+    // no project register appeared anywhere under the harness.
+    const listed = listedIssues(fixture);
+    expect(listed).toHaveLength(1);
+    expect(listed[0]!.title).toBe("Finding occ-1");
+    expect(listed[0]!.severity).toBe("critical");
+    expect(existsSync(fixture.projectRegisterPath)).toBe(false);
+    expect(existsSync(join(fixture.harness, "projects"))).toBe(false);
+    // An issue-only mutation never touches the execution input.
+    expect(snapshotBytes(fixture)).toBe(before);
   });
 
-  test("residual-close resolves only the named entry with an evidence-bearing note", () => {
+  test("issue authority: an exact issue-add replay converges instead of duplicating the finding", () => {
     const fixture = makeFixture();
     const coordinator = bindCoordinator(fixture);
     preparePlan(fixture, coordinator, PLAN_ID);
     const planSession = bindPlan(fixture, PLAN_ID);
 
     const entriesPath = join(fixture.root, "entries.json");
-    writeJson(entriesPath, [
-      {
-        id: "R1",
-        title: "residual one",
-        severity: "low",
-        source: "cli-tests",
-        scope: "cli",
-        decision: "defer",
-        owner: "pm",
-        target: "later",
-        tracking: "plan",
-      },
-    ]);
-    const added = runCli(
+    writeJson(entriesPath, [issueEntryOf("occ-1")]);
+    const first = issueAdd(fixture, planSession, entriesPath);
+    expect(first.exitCode).toBe(0);
+    const firstReceipt = issueReceiptsOf(first)[0]!;
+
+    // Same session, same occurrence key: the core operation replays its own
+    // receipt (the original outcome, `created: true`), so the second call
+    // converges on the SAME issue instead of opening a second one.
+    const replay = issueAdd(fixture, planSession, entriesPath);
+    expect(replay.exitCode).toBe(0);
+    expect(issueReceiptsOf(replay)[0]!.issue_id).toBe(firstReceipt.issue_id);
+    expect(listedIssues(fixture)).toHaveLength(1);
+
+    // A different observation of the same root cause is a second finding, not
+    // a silent merge: identity is source identity + root cause, never a title.
+    writeJson(entriesPath, [issueEntryOf("occ-2")]);
+    const second = issueAdd(fixture, planSession, entriesPath);
+    expect(second.exitCode).toBe(0);
+    expect(issueReceiptsOf(second)[0]!.issue_id).not.toBe(firstReceipt.issue_id);
+    expect(listedIssues(fixture)).toHaveLength(2);
+  });
+
+  test("issue authority: plan issue-close closes the named issue under the issue revision CAS", () => {
+    const fixture = makeFixture();
+    const coordinator = bindCoordinator(fixture);
+    preparePlan(fixture, coordinator, PLAN_ID);
+    const planSession = bindPlan(fixture, PLAN_ID);
+
+    const entriesPath = join(fixture.root, "entries.json");
+    writeJson(entriesPath, [issueEntryOf("occ-1")]);
+    const added = issueAdd(fixture, planSession, entriesPath);
+    expect(added.exitCode).toBe(0);
+    const receipt = issueReceiptsOf(added)[0]!;
+    const issueId = String(receipt.issue_id);
+    const issueRevision = Number(receipt.revision);
+
+    // The engine's findings gate sees the open issue; closing it releases the
+    // gate — the exact authority path the handoff uses.
+    const blocked = runCli(["status", "findings-cleanup", PLAN_ID, "--harness", fixture.harness, "--mode", "zero-residual"], fixture.root);
+    expect(blocked.exitCode).toBe(1);
+    expect(blocked.stderr).toContain(issueId);
+
+    const evidencePath = join(fixture.root, "evidence.json");
+    writeJson(evidencePath, {
+      reason: "fixed by the reviewer round",
+      references: ["packages/cli/src/index.ts"],
+      alignmentRef: "QA gate acceptance 2026-09-19",
+    });
+
+    // A stale issue revision is refused and nothing is written.
+    const stale = runCli(
       [
         "plan",
-        "residual-add",
+        "issue-close",
         "--session",
         planSession,
+        "--issue",
+        issueId,
+        "--disposition",
+        "resolved",
         "--file",
-        entriesPath,
+        evidencePath,
+        "--expect-issue",
+        String(issueRevision + 5),
         "--expect",
         String(rowRevision(fixture, planSession)),
-        "--expect-register",
-        "absent",
         "--json",
       ],
       fixture.root,
     );
-    expect(added.exitCode).toBe(0);
+    expect(stale.exitCode).toBe(1);
+    expect(jsonOf(stale).code).toBe("issue.revision-conflict");
+    expect(listedIssues(fixture)[0]!.disposition).toBe("open");
 
-    const version = String(jsonOf(runCli(["plan", "show", "--session", planSession, "--json"], fixture.root)).register_version);
     const closed = runCli(
       [
         "plan",
-        "residual-close",
+        "issue-close",
         "--session",
         planSession,
-        "--entry",
-        "R1",
-        "--note",
-        "fixed by the reviewer round",
+        "--issue",
+        issueId,
+        "--disposition",
+        "resolved",
+        "--file",
+        evidencePath,
+        "--expect-issue",
+        String(issueRevision),
         "--expect",
         String(rowRevision(fixture, planSession)),
-        "--expect-register",
-        version,
         "--json",
       ],
       fixture.root,
     );
     expect(closed.exitCode).toBe(0);
-    expect(jsonOf(closed).outcome).toBe("residual-closed");
+    expect(jsonOf(closed).outcome).toBe("issue-closed");
+    // `issue list` defaults to the open disposition, so the closed issue is read
+    // back through its own filter — the disposition moved, the row did not vanish.
+    expect(listedIssues(fixture)).toHaveLength(0);
+    const resolved = listedIssues(fixture, ["--disposition", "resolved"]);
+    expect(resolved).toHaveLength(1);
+    expect(resolved[0]!.id).toBe(issueId);
 
-    const bucket = (readJson(fixture.registerPath).entries as Record<string, Array<Record<string, unknown>>>)[PLAN_ID]!;
-    expect(bucket[0]!.lifecycle).toBe("resolved");
-    expect(bucket[0]!.closure_note).toBe("fixed by the reviewer round");
+    const released = runCli(["status", "findings-cleanup", PLAN_ID, "--harness", fixture.harness, "--mode", "zero-residual"], fixture.root);
+    expect(released.exitCode).toBe(0);
+    expect(released.stdout).toContain("findings-cleanup plan-a: OK");
+    expect(existsSync(fixture.projectRegisterPath)).toBe(false);
+  });
+
+  test("issue authority: a plan session cannot close an issue linked to another plan", () => {
+    const fixture = makeFixture();
+    const coordinator = bindCoordinator(fixture);
+    preparePlan(fixture, coordinator, PLAN_ID);
+    preparePlan(fixture, coordinator, PEER_PLAN_ID);
+    const planSession = bindPlan(fixture, PLAN_ID);
+    const peerSession = bindPlan(fixture, PEER_PLAN_ID);
+
+    const entriesPath = join(fixture.root, "entries.json");
+    writeJson(entriesPath, [issueEntryOf("occ-1")]);
+    const added = issueAdd(fixture, peerSession, entriesPath);
+    expect(added.exitCode).toBe(0);
+    const issueId = String(issueReceiptsOf(added)[0]!.issue_id);
+
+    const evidencePath = join(fixture.root, "evidence.json");
+    writeJson(evidencePath, {
+      reason: "not this plan's finding",
+      references: ["packages/cli/src/index.ts"],
+      alignmentRef: "QA gate acceptance 2026-09-19",
+    });
+    const foreign = runCli(
+      [
+        "plan",
+        "issue-close",
+        "--session",
+        planSession,
+        "--issue",
+        issueId,
+        "--disposition",
+        "resolved",
+        "--file",
+        evidencePath,
+        "--expect-issue",
+        "1",
+        "--expect",
+        String(rowRevision(fixture, planSession)),
+        "--json",
+      ],
+      fixture.root,
+    );
+    expect(foreign.exitCode).toBe(1);
+    expect(jsonOf(foreign).code).toBe("issue.scope-refused");
+    expect(listedIssues(fixture)[0]!.disposition).toBe("open");
+  });
+
+  test("issue authority: the retired residual verbs refuse with the migration path and write nothing", () => {
+    const fixture = makeFixture();
+    const coordinator = bindCoordinator(fixture);
+    preparePlan(fixture, coordinator, PLAN_ID);
+    const planSession = bindPlan(fixture, PLAN_ID);
+    const before = snapshotBytes(fixture);
+
+    const entriesPath = join(fixture.root, "entries.json");
+    writeJson(entriesPath, [issueEntryOf("occ-1")]);
+
+    for (const [verb, replacement] of [
+      ["residual-add", "issue-add"],
+      ["residual-close", "issue-close"],
+    ] as const) {
+      const refused = runCli(
+        ["plan", verb, "--session", planSession, "--file", entriesPath, "--expect", "0", "--json"],
+        fixture.root,
+      );
+      expect(`${verb} -> ${refused.exitCode}`).toBe(`${verb} -> 1`);
+      const payload = jsonOf(refused);
+      expect(payload.ok).toBe(false);
+      expect(payload.code).toBe("plan.verb-retired");
+      expect(String(payload.message)).toContain(`\`mstar plan ${replacement}\``);
+    }
+
+    // A retired verb is not a write-through alias: no issue and no register.
+    expect(listedIssues(fixture)).toHaveLength(0);
+    expect(existsSync(fixture.projectRegisterPath)).toBe(false);
+    expect(snapshotBytes(fixture)).toBe(before);
   });
 
   test("a coordinator session cannot execute plan operations and no bytes change", () => {
@@ -1918,7 +2094,7 @@ describe("Prepare workflow amendment", () => {
 
 describe("mstar plan — catalog pin", () => {
   test("catalog pin: a store-less prepare is disclosed as store-absent, and a planted pin refuses bind with the stable code", () => {
-    const fixture = makeFixture();
+    const fixture = makeFixture({ store: false });
     const coordinator = bindCoordinator(fixture);
     preparePlan(fixture, coordinator, PLAN_ID);
 

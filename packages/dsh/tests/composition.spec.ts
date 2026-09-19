@@ -14,7 +14,7 @@ import { describe, expect, it, afterEach } from 'bun:test'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { readHarnessVersion } from '@mstar-harness/engine'
-import { bootApp, INVALID_STATUS_V2, VALID_STATUS_V2, type BootResult } from './harness.ts'
+import { bootApp, INVALID_STATUS_V2, VALID_STATUS_V2, seedOpenIssue, seedStore, type BootResult } from './harness.ts'
 import { ENGINE_VERSION } from './engine-version.ts'
 
 let booted: BootResult | undefined
@@ -67,17 +67,19 @@ describe('@mstar-harness/dsh REAL-composition boot (direct ctx.plugin rows)', ()
     expect(badResidual.ok).toBe(false)
     expect(badResidual.violations.map((v) => v.code)).toContain('status.residual.invalid-id')
 
-    // findingsCleanupGate with zero-residual flags an open nit (v3 input:
-    // the project register `projects/<id>/residuals.json`, entries keyed by
-    // plan id — the v1 residual_findings root home is gone).
-    const register = {
-      entries: {
-        p1: [{ id: 'R1', title: 't', severity: 'nit', source: 'qc', scope: 'plan', decision: 'defer', target: 'n', tracking: null, source_plan: 'p1', registered_at: '2026-08-19' }],
-      },
-    }
-    const cleanup = ctx.dshMstar.findingsCleanupGate(register as Parameters<typeof ctx.dshMstar.findingsCleanupGate>[0], 'p1', { mode: 'zero-residual' })
+    // findingsCleanupGate with zero-residual flags the plan's own OPEN linked
+    // issue (the input is the issue store `{HARNESS_DIR}/store.db`, issue
+    // contract §4 — the retired project register is not a findings authority).
+    await seedStore(harnessDir)
+    await seedOpenIssue(harnessDir, { title: 'cleanup fixture', severity: 'low', planId: 'p1', operationId: 'op-composition' })
+    const cleanup = await ctx.dshMstar.findingsCleanupGate({ harnessDir }, 'p1', { mode: 'zero-residual' })
     expect(cleanup.ok).toBe(false)
-    expect(cleanup.violations.map((v) => v.code)).toContain('findings.zero-residual-nit')
+    expect(cleanup.violations.map((v) => v.code)).toContain('findings.zero-residual-open-issue')
+
+    // A refused authority is never an empty (passing) gate.
+    await expect(ctx.dshMstar.findingsCleanupGate({ harnessDir: join(harnessDir, 'absent') }, 'p1')).rejects.toMatchObject({
+      code: 'store.not-initialized',
+    })
 
     // No compass in a bare harness dir → never hard by default.
     expect(ctx.dshMstar.resolveCompassEnforcement(harnessDir)).toEqual({ hard: false, source: 'none' })

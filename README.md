@@ -30,8 +30,8 @@ English / [中文](README_CN.md)
 - **Judgment stays in `mstar-*` skills** — skills remain the single source of truth (SSOT) for roles, gates, and workflow judgment
 - **One engine across hosts** — the same engine + skills power dsh (DeepSeek Harness), omp, OpenCode, Cursor, Kimi Code, ZCode, and Codex
 - **Agent Plugin packaging** — one-command install; portable across any Agent Plugins v1.0.0 client
-- **Pluggable JSON persistence** — coordination docs (`status.json`, workflow snapshots, project residuals, review envelopes) persist through an `ArtifactStore`; the default `FsStore` keeps the existing `.mstar/` paths, and integrations mount their own store via `MSTAR_STORE_MODULE` / `--store` / in-process `setArtifactStore`
-- **Issue/catalog store vs execution JSON** — `{HARNESS_DIR}/store.db` (SQLite) is the issue and catalog authority after activation; `ArtifactStore` remains execution/review JSON (`status.json`, snapshots, residuals). They are not the same store.
+- **Pluggable JSON persistence** — coordination docs (`status.json`, workflow snapshots, review envelopes) persist through an `ArtifactStore`; the default `FsStore` keeps the existing `.mstar/` paths, and integrations mount their own store via `MSTAR_STORE_MODULE` / `--store` / in-process `setArtifactStore`
+- **Issue/catalog store vs execution JSON** — `{HARNESS_DIR}/store.db` (SQLite) is the issue and catalog authority after activation; `ArtifactStore` remains execution/review JSON (`status.json`, snapshots). The retired project registers are migration history with no write path. They are not the same store.
 - **Recommended host** (best → usable): **dsh = omp ≥ ZCode = OpenCode = Cursor > Kimi > Codex**
 
 **What ships**
@@ -181,7 +181,7 @@ flowchart TD
     P -->|pm-acceptance| P2["PM: acceptance checklist"]
     P1 --> Q{"Residual findings remain"}
     P2 --> Q
-    Q -->|Yes| R["PM/QA: register or accept residuals in project register"]
+    Q -->|Yes| R["PM: capture confirmed findings as issues in {HARNESS_DIR}/store.db"]
     R --> S["PM: mark plan Done and merge to integration branch"]
     Q -->|No| S
     S --> T["PM: sync compass plan status"]
@@ -223,8 +223,8 @@ Load **`mstar-harness-core` first**, then topic skills on demand (`mstar-roles`)
 | `mstar-sdd` | Subagent-driven development |
 | `mstar-branch-worktree` | Branches, worktrees, QC/QA checkout |
 | `mstar-conventions` | `{HARNESS_DIR}` discovery / init |
-| `mstar-artifacts` | Plans, `status.json`, residuals, Findings cleanup |
-| `mstar-project-governance` | Roadmap authoring + residual register lifecycle, `_default` fallback |
+| `mstar-artifacts` | Plans, `status.json`, issue capture pointers, Findings cleanup |
+| `mstar-project-governance` | Roadmap authoring + issue capture contract, register migration history, `_default` fallback |
 | `mstar-design-md` | DESIGN.md gate for UI plans |
 | `mstar-review-qc` | PM QC tri orchestration |
 | `mstar-coding-behavior` | RCA, test-first, review feedback, evidence |

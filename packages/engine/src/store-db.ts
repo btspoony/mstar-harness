@@ -1,6 +1,6 @@
 /**
  * store-db.ts — issue-store runtime boundary, connection lifecycle and the
- * checksum-verified migration framework (plan 20260918-issue-store-core C1).
+ * checksum-verified migration framework.
  *
  * Authority: issue-store-contract.md §2 (connection/path/upgrades) and §8
  * (accepted runtime decision). User-selected runtime: direct in-process

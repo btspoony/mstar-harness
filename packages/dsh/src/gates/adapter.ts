@@ -37,7 +37,8 @@ import { sessionHintOf } from './_shared.ts'
 import type { HarnessResolver, Config, SessionHintRead } from './_shared.ts'
 import { readWorkflowSessionBinding } from '../engine-status-store.ts'
 import { harnessDocKindOfTarget, validateStatusDoc, validateStatusValue, type HarnessDocKind } from './status.ts'
-import { resolveActiveWorkflow } from './workflow-selection.ts'
+import { storeAuthorityRefusals } from './store-authority.ts'
+import { catalogRegistrationRefusal, resolveActiveWorkflow } from './workflow-selection.ts'
 import type { SessionHint } from './workflow-selection.ts'
 import {
   dispatchGateCore,
@@ -184,16 +185,17 @@ export class DshHostAdapter extends Service implements HostAdapter {
    * / project register — the matching engine validator per
    * {@link validateStatusValue}). Missing file = first create = pass (the
    * intent waterfall carries no incoming content, so the vetoable signal is
-   * the pre-write on-disk state).
+   * the pre-write on-disk state). ASYNC: the snapshot kind's findings-cleanup
+   * extension reads the issue store (the engine's async domain boundary).
    * @param path - the canonical coordination-document path (the caller
    * classifies it against the resolved harness dir).
    * @param kind - the target's {@link HarnessDocKind}.
-   * @param harnessDir - the resolved `{HARNESS_DIR}` (the snapshot kind's
-   * cleanup extension needs it to locate the project registers).
+   * @param harnessDir - the resolved `{HARNESS_DIR}` (the store context of
+   * the snapshot kind's cleanup extension).
    */
-  statusGate(path: string, kind: HarnessDocKind, harnessDir: string | null): GateResult {
+  async statusGate(path: string, kind: HarnessDocKind, harnessDir: string | null): Promise<GateResult> {
     if (!existsSync(path)) return { ok: true, violations: [] }
-    return validateStatusDoc(path, kind, harnessDir)
+    return await validateStatusDoc(path, kind, harnessDir)
   }
 
   /**
@@ -330,9 +332,14 @@ export class DshHostAdapter extends Service implements HostAdapter {
    * against the resolved harness dir (`harnessDocKindOfTarget` — root
    * status.json / workflow snapshot / project register, the P2-fixed shape)
    * and validated with the matching engine validator
-   * (`validateStatusValue`). Non-coordination paths (unclassifiable) pass —
-   * the hook's business is harness coordination documents only. Never
-   * throws; a failing gate maps to its FIRST violation
+   * (`validateStatusValue`). FW-1/G4b: the store-authority paths are decided
+   * BEFORE that classification and refuse in BOTH enforcement modes — a hand
+   * write of the store database (`store.direct-write-refused`) or of a
+   * retired/unreadable-authority register (`project.register.retired` /
+   * `store.authority-unavailable`) is an authority invariant, not a document
+   * judgment; the pre-activation legacy register route keeps the document
+   * validator. Other non-coordination paths (unclassifiable) still pass.
+   * Never throws; a failing gate maps to its FIRST violation
    * (severity/code/message/fix/aliases preserved — failing gates always
    * carry ≥1 violation), a passing gate to
    * `host.beforeStatusWrite.ok` (the engine test convention for this hook).
@@ -343,11 +350,21 @@ export class DshHostAdapter extends Service implements HostAdapter {
   async beforeStatusWrite(path: string, doc: unknown): Promise<ValidationResult> {
     const harnessDir = this.resolver.forWorkspace(undefined)
     const kind = harnessDir === null ? null : harnessDocKindOfTarget(harnessDir, path)
+    // FW-1/G4b: the authority invariant is decided before the document path.
+    const authorityRefusals = await storeAuthorityRefusals({
+      resolvedHarnessDir: harnessDir,
+      directKind: kind,
+      rawPath: path,
+    })
+    if (authorityRefusals.length > 0) {
+      const first = authorityRefusals[0]!
+      return { ok: false, severity: first.severity, code: first.code, message: first.message, fix: first.fix, aliases: first.aliases }
+    }
     if (kind === null) {
       // Not a canonical harness coordination document — nothing to gate.
       return { ok: true, severity: 'low', code: 'host.beforeStatusWrite.ok', message: `status write to ${path} validated` }
     }
-    const gate = doc !== undefined ? validateStatusValue(doc, kind, harnessDir) : this.statusGate(path, kind, harnessDir)
+    const gate = doc !== undefined ? await validateStatusValue(doc, kind, harnessDir) : await this.statusGate(path, kind, harnessDir)
     if (!gate.ok) {
       const first = gate.violations[0]!
       return { ok: false, severity: first.severity, code: first.code, message: first.message, fix: first.fix, aliases: first.aliases }
@@ -376,6 +393,38 @@ export class DshHostAdapter extends Service implements HostAdapter {
     const harnessDir = this.resolver.forWorkspace(undefined)
     const hard = resolveDispatchHard(harnessDir, this.config, prompt)
     const gate = this.dispatchGate(prompt, undefined, hard)
+    // Catalog-registration gate (state-projection contract §3 step 3): the
+    // hook has no session context, so it can only speak for the unique-active
+    // selection — the exec-bound listener additionally gates the
+    // session-bound one. A half-registered workflow refuses here regardless
+    // of the enforcement flag (never a soft-gate judgment call).
+    //
+    // Contract note for hook-only hosts (no exec-bound listener composed): the
+    // registration gate then covers the unique-active selection ONLY — in a
+    // multi-active workspace whose session is bound to another lifecycle, that
+    // lifecycle's registration is gated by the `tools/pre-execute` listener
+    // alone (dsh always composes it; S-G4a-02).
+    if (harnessDir !== null) {
+      const selection = resolveActiveWorkflow(harnessDir)
+      if (selection.kind === 'active') {
+        const refusal = await catalogRegistrationRefusal(harnessDir, selection.workflowId)
+        if (refusal !== null) {
+          return {
+            ok: false,
+            hardBlocked: true,
+            violations: [{
+              ok: false,
+              severity: 'high',
+              code: refusal.code,
+              message:
+                `workflow ${selection.workflowId} has no committed catalog registration — ${refusal.message} ` +
+                '(this refusal is unconditional: it is not the soft/hard enforcement axis)',
+              fix: 'reconcile the pending catalog registration, then dispatch',
+            }],
+          }
+        }
+      }
+    }
     return applyEnforcement(gate, { hard })
   }
 

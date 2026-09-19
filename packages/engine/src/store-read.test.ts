@@ -1,6 +1,6 @@
 /**
- * store-read.test.ts -- P6 proof for the issue-store read boundary
- * (plan 20260918-state-projection Task 6; contract §6).
+ * store-read.test.ts -- proof for the issue-store read boundary
+ * (contract §6).
  *
  * Every case runs against the real read boundary, the real issue/catalog
  * modules, the real projection refresh, the real migration runner and the real

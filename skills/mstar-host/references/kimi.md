@@ -17,6 +17,12 @@ Parallel PM dispatch: read **`parallel-dispatch.md`** when dispatching **N ≥ 2
 - Plugins are **user-scoped** (all projects); managed copy lives under `$KIMI_CODE_HOME/plugins/managed/` after `/plugins install`.
 - Project `.agents/skills/` symlinks are **not** required when using the plugin — commands and skills come from the plugin mount.
 
+## Runtime and upgrade
+
+- **Runtime**: this host ships no bundled store-backed entrypoint — skills, commands and agents are mounted text, so the runtime floor is the one belonging to whatever executes: a harness CLI invoked from a Kimi session runs through the installed binary's entrypoint (Bun shebang → **Bun >=1.4.0**; an explicit `node <bundle>` → **Node >=24.18.0**), and a Kimi-side check that needs the engine reports the missing capability instead of substituting a transport or JSON path.
+- **Upgrade / reload**: `/plugins install` the new package version, then `/plugins reload` (or `/new`); the managed copy under `$KIMI_CODE_HOME/plugins/managed/` is refreshed by that install, not by editing this checkout.
+- **Readiness, not an action**: refreshing an *installed* copy is a bounded, authorized ops act — an authority flip first quiesces, then reloads/upgrades (or explicitly excludes) every installed reader/writer and attests the versions it saw. Editing harness docs or source performs none of it. If this host cannot reload safely, stop at the exact manual-restart step, have the user restart, then re-verify entrypoint/runtime/version/session identity read-only before the flip.
+
 ## Skill loading
 
 1. On session start: `pm` (via `sessionStart.skill`) → **Read next** loads `mstar-harness-core`, then `mstar-roles` → `project-manager.md` when PM is active.

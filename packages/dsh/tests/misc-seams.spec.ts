@@ -29,7 +29,7 @@ import {
   lintRolesWrite,
   type SeamLintAdvisory,
 } from '../src/index.ts'
-import { bootApp, FakeLoaderRegistry, seedHarness, valueOf, type BootResult } from './harness.ts'
+import { bootApp, FakeLoaderRegistry, seedHarness, seedKnowledgeDoc, seedStore, valueOf, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
 
@@ -965,7 +965,7 @@ describe('mstar_compound_validate', () => {
     expect(valueOf(result).violations.map((v: { code: string }) => v.code)).toContain('compound.schema.missing-field')
   })
 
-  it('with knowledge_dir → index + scope checks (CLI --knowledge-dir mirror)', async () => {
+  it('with knowledge_dir → catalog completeness + scope checks (CLI --knowledge-dir mirror)', async () => {
     const app = booted = await bootApp()
     const knowledgeDir = join(app.root, 'knowledge')
     await mkdir(knowledgeDir, { recursive: true })
@@ -974,15 +974,33 @@ describe('mstar_compound_validate', () => {
     const outside = join(app.root, 'stray.md')
     await writeFile(outside, KNOWLEDGE_GOOD)
 
-    const result = await run(app.ctx, 'mstar_compound_validate', { doc_path: outside, knowledge_dir: knowledgeDir })
+    // No store yet → the catalog completeness query cannot be answered, and
+    // the tool reports it (the retired README index is NOT read as a fallback).
+    const refused = await run(app.ctx, 'mstar_compound_validate', { doc_path: outside, knowledge_dir: knowledgeDir })
+    expect(refused.isError).toBe(false)
+    if (refused.isError) return
+    expect(valueOf(refused).ok).toBe(false)
+    const refusedCodes = valueOf(refused).violations.map((v: { code: string }) => v.code)
+    expect(refusedCodes).toContain('compound.scope.outside')
+    expect(refusedCodes).toContain('store.not-initialized')
+    expect(refusedCodes).not.toContain('compound.index.retired')
 
-    expect(result.isError).toBe(false)
-    if (result.isError) return
-    expect(valueOf(result).ok).toBe(false)
-    const codes = valueOf(result).violations.map((v: { code: string }) => v.code)
-    expect(codes).toContain('compound.scope.outside')
-    // The index has no README.md → compound.index.missing-readme.
-    expect(codes).toContain('compound.index.missing-readme')
+    // With the authority ACTIVE and the knowledge doc registered, the same
+    // call passes the catalog half (bodies stay files; the row comes from the
+    // catalog table).
+    await seedStore(app.harnessDir)
+    await seedKnowledgeDoc(app.harnessDir, {
+      id: 'doc-good',
+      relativePath: 'good.md',
+      title: 'Good doc',
+      operationId: 'op-misc-seams',
+    })
+    const registered = await run(app.ctx, 'mstar_compound_validate', { doc_path: outside, knowledge_dir: knowledgeDir })
+    expect(registered.isError).toBe(false)
+    if (registered.isError) return
+    const registeredCodes = valueOf(registered).violations.map((v: { code: string }) => v.code)
+    expect(registeredCodes).toContain('compound.scope.outside')
+    expect(registeredCodes).not.toContain('catalog.discovery.missing-document')
   })
 
   it('with repo_root → reference existence checks (compound-refresh Phase 2)', async () => {

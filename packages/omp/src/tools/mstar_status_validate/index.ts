@@ -1,9 +1,9 @@
 /**
  * mstar_status_validate — validate a Morning Star harness v2 status.json
- * root, a workflow snapshot (`workflows/<id>/snapshot.json`) or a project
- * register (`projects/<id>/residuals.json`) via the engine's
- * `validateStatus` / `validateWorkflowSnapshot` / `validateProjectRegister`
- * gates.
+ * root or a workflow snapshot (`workflows/<id>/snapshot.json`) via the
+ * engine's `validateStatus` / `validateWorkflowSnapshot` gates, and answer a
+ * project register (`projects/<id>/residuals.json`) through the DB-aware
+ * authority route (issue-governance cutover G4b).
  *
  * Defaults to `{harness}/status.json` resolved from the session cwd
  * (`resolveHarnessDir(pi.cwd)`); pass `path` to target another file.
@@ -16,16 +16,45 @@
  * only validator dispatch (a stray `/tmp/evil/snapshot.json` must not run
  * the snapshot validator).
  *
+ * Register targets: the register's DOCUMENT SHAPE is no longer the answer
+ * once the store is the authority. The DB-aware route reads the issue store
+ * (`withStoreRead` over the `issues` view — one read envelope, no projection
+ * refresh) and reports `project.register.retired` while an active store is
+ * the findings authority, `store.authority-unavailable` when the authority
+ * cannot be read at all (below-floor runtime, missing capability, corrupt,
+ * drifted, busy), and only falls back to the register's own validator
+ * (`validateProjectRegister`) for a workspace with no store or a staged one
+ * — pre-activation, where the register IS still the live authority (issue
+ * contract §7). The runtime floor is read from the ACTUAL runtime (engine
+ * `detectStoreRuntime`: the Bun global first, never Bun's emulated
+ * `process.versions.node`) and asserted in-process. A raw write target at
+ * `{HARNESS_DIR}/store.db` (or its `-wal`/`-shm`) is refused outright — the
+ * runtime owns those bytes.
+ *
+ * Authority classification is decided on the path a target really LANDS on
+ * (S-G4b-03): a symlink alias that resolves to a harness-root `store.db` or
+ * to a project register is refused and routed exactly like the file itself.
+ * Only that decision is canonicalized — status.json / snapshot targets keep
+ * the caller's path and the unchanged validator (aliases included).
+ *
  * The snapshot/register validators are P1-only engine exports absent from
  * the published floor `^2.0.2` — they come from a DYNAMIC engine import so
  * a stale engine yields an explicit upgrade error instead of a
  * module-link failure that silently drops the tool. No local rule logic — the engine is the single validator;
  * this module only locates the file and formats output.
  */
-import { statSync } from "node:fs";
+import { readlinkSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
-import { readJson, resolveHarnessDir, validateStatus } from "@mstar-harness/engine";
-import type { ValidationResult } from "@mstar-harness/engine";
+import {
+  assertStoreRuntimeSupported,
+  detectStoreRuntime,
+  queryDashboard,
+  readJson,
+  resolveHarnessDir,
+  validateStatus,
+  withStoreRead,
+} from "@mstar-harness/engine";
+import type { StoreRuntimeInfo, ValidationResult } from "@mstar-harness/engine";
 import type { AgentToolResult, CustomTool, CustomToolAPI } from "@oh-my-pi/pi-coding-agent";
 
 const STATUS_FILE = "status.json";
@@ -218,44 +247,202 @@ export const dirResolversLoader: { load: () => Promise<DirResolvers | null> } = 
  * classifying, so the slot is populated on that path. */
 let classifyDirResolvers: DirResolvers | null = null;
 
+// ---------------------------------------------------------------------------
+// Gate 1b — issue/catalog authority paths (store.db + retired registers)
+// ---------------------------------------------------------------------------
+
+/** The authority database and its WAL sidecars, directly at a harness root. */
+const STORE_DB_FILE = "store.db";
+const STORE_AUTHORITY_FILES: readonly string[] = [STORE_DB_FILE, `${STORE_DB_FILE}-wal`, `${STORE_DB_FILE}-shm`];
+
+/** Refusal codes for the authority paths (G4b), in the frozen store /
+ * `project.register.*` vocabulary. */
+const STORE_DIRECT_WRITE_CODE = "store.direct-write-refused";
+const STORE_AUTHORITY_UNAVAILABLE_CODE = "store.authority-unavailable";
+const REGISTER_RETIRED_CODE = "project.register.retired";
+
+/** A store whose absence positively identifies the PRE-activation state
+ * (legacy register authority in force, issue contract §7): missing
+ * (`store.not-initialized`) or staged (`store.not-active`). Every other
+ * refusal — below-floor runtime, missing capability, corrupt, drifted, busy —
+ * leaves the authority state UNKNOWN and is refused (dsh G4a
+ * `catalogRegistrationRefusal` exclusion list, mirrored). */
+const PRE_ACTIVATION_CODES: readonly string[] = ["store.not-initialized", "store.not-active"];
+
+/**
+ * Actual-runtime probe seam (test-injectable): the default reads the ACTUAL
+ * runtime through the engine — the Bun global first, so a Bun process is
+ * never judged by Bun's EMULATED `process.versions.node` (Bun 1.4.0 reports
+ * "26.3.0" there). Bun-run omp gets the Bun floor; a native Node runner of
+ * this bundle gets the Node floor — the invoked entrypoint's own runtime.
+ */
+export const storeRuntimeProbe: { info: () => StoreRuntimeInfo } = { info: detectStoreRuntime };
+
+/** Stable code + message of a thrown refusal (engine `StoreError` /
+ * `StoreReadError` carry `code`; anything else is reported as itself). */
+function refusalOf(error: unknown): { code: string; message: string } {
+  const message = error instanceof Error ? error.message : String(error);
+  const code =
+    typeof error === "object" && error !== null && "code" in error && typeof error.code === "string"
+      ? error.code
+      : "";
+  return { code: code === "" ? "store.authority-unreadable" : code, message };
+}
+
+/** What the issue store says about a register target (G4b `retired` /
+ * `unavailable` / pre-activation `legacy` — see ../hooks/pre/mstar-gates.ts
+ * `readAuthorityRoute`, the same route in the omp write gate's dialect). */
+type AuthorityRoute =
+  | { kind: "legacy" }
+  | { kind: "retired"; storeRevision: number }
+  | { kind: "unavailable"; code: string; message: string };
+
+async function readAuthorityRoute(harnessDir: string): Promise<AuthorityRoute> {
+  try {
+    assertStoreRuntimeSupported(storeRuntimeProbe.info());
+  } catch (error) {
+    return { kind: "unavailable", ...refusalOf(error) };
+  }
+  try {
+    const envelope = await withStoreRead({ harnessDir }, queryDashboard("issues", { limit: 1 }));
+    return { kind: "retired", storeRevision: envelope.storeRevision };
+  } catch (error) {
+    const refusal = refusalOf(error);
+    return PRE_ACTIVATION_CODES.includes(refusal.code)
+      ? { kind: "legacy" }
+      : { kind: "unavailable", ...refusal };
+  }
+}
+
+/** True when `dir` itself is a harness root: the v2 markers this tool
+ * classifies documents with (`status.json` + layout dirs), or the root the
+ * engine resolves from the directory's PARENT (default `.mstar`-style and
+ * `.mstarc harness_dir` roots — `resolveHarnessDir(dir)` probes *inside* a
+ * directory, so it never answers for the root itself). */
+function isHarnessRootDir(dir: string): boolean {
+  if (hasHarnessRootMarkers(dir)) return true;
+  const parentResolved = resolveHarnessDir(dirname(dir));
+  return parentResolved !== null && resolve(parentResolved) === dir;
+}
+
+/** The path a write to `resolved` really lands on (S-G4b-03): authority
+ * classification runs on the caller's own path first and on this one when the
+ * target is an alias — a symlink outside the harness tree resolving to a
+ * harness-root `store.db` / retired `residuals.json` IS that authority file.
+ * A dangling symlink resolves to its would-be target: the file a write
+ * through the link creates. One canonicalization per checked target (the
+ * document lint keeps the caller's path), mirrored in the omp hook, the
+ * OpenCode plugin and the ZCode write gate. */
+function landedPathOf(resolved: string): string {
+  try {
+    return realpathSync(resolved);
+  } catch {
+    try {
+      return resolve(dirname(resolved), readlinkSync(resolved));
+    } catch {
+      return resolved; // no such target yet (a fresh file) — the path itself decides
+    }
+  }
+}
+
+/** True when `target` (absolute) IS the authority database (or a WAL sidecar)
+ * sitting directly at a harness root: the runtime's own store location for a
+ * harness root is `<harness root>/store.db`, and hand-writing those bytes is
+ * never a supported operation — hard vs soft, staged vs active, alias or not,
+ * all the same. */
+function isStoreAuthorityTarget(target: string): boolean {
+  if (!STORE_AUTHORITY_FILES.includes(basename(target))) return false;
+  return isHarnessRootDir(dirname(target));
+}
+
+/** The harness root of a project register this write reaches ONLY through a
+ * symlink alias (`landed` differs from the caller's own `resolved` path): the
+ * register is an authority document, so its route is decided on the path the
+ * write really lands on. `null` when the target is not an alias, or does not
+ * land on a register (S-G4b-03). */
+function aliasedRegisterDir(resolved: string, landed: string): string | null {
+  if (landed === resolved) return null;
+  const aliased = harnessDocKindOfTarget(landed);
+  return aliased?.kind === "register" ? aliased.harnessDir : null;
+}
+
+/** One authority refusal as the tool's violation line + machine details. */
+function authorityViolation(code: string, message: string): ValidationResult {
+  return { ok: false, severity: "high", code, message };
+}
+
 export default function mstarStatusValidate(pi: CustomToolAPI): CustomTool {
   return {
     name: "mstar_status_validate",
     label: "Validate harness status.json / workflow snapshot / project register",
     description:
-      "Validate a Morning Star harness v2 coordination document: the root status.json (version 2 + workflows[] with per-entry snapshot invariants) via the engine validateStatus gate, a workflow snapshot (schema_version 1 + plan rows + lease shapes) via validateWorkflowSnapshot, or a project register (entries keyed by plan id) via validateProjectRegister. " +
+      "Validate a Morning Star harness v2 coordination document: the root status.json (version 2 + workflows[] with per-entry snapshot invariants) via the engine validateStatus gate, or a workflow snapshot (schema_version 1 + plan rows + lease shapes) via validateWorkflowSnapshot. " +
+      "A project register target (projects/<id>/residuals.json) is answered through the DB-aware authority route: it reports project.register.retired while {HARNESS_DIR}/store.db is the active findings authority, store.authority-unavailable when that authority cannot be read (below-floor runtime, missing node:sqlite capability, corrupt, drifted, busy), and validates the register document itself (validateProjectRegister) only while no store exists or the store is still staged — the pre-activation window where the register is still the live authority. A direct target at {HARNESS_DIR}/store.db (or its -wal/-shm) is refused: the runtime owns that database. " +
       "The target must be a canonical harness location: {HARNESS_DIR}/status.json, {HARNESS_DIR}/workflows/<id>/snapshot.json, or {HARNESS_DIR}/projects/<id>/residuals.json (Gate 1 layout parity — non-canonical paths are rejected). " +
       "Defaults to {HARNESS_DIR}/status.json discovered from the session cwd; pass `path` to check another file. " +
-      "Use after editing status.json / workflows/<id>/snapshot.json / projects/<id>/residuals.json, before writable dispatch, or when workflow/plan state edits are reviewed. " +
+      "Use after editing status.json / workflows/<id>/snapshot.json, before writable dispatch, or when workflow/plan state edits are reviewed. " +
       "Returns one line per violation as [severity] code: message (fix: …).",
     parameters: pi.zod.object({ path: pi.zod.string().optional() }).optional(),
     async execute(_toolCallId: string, params: Params, _onUpdate, _ctx, _signal): Promise<AgentToolResult> {
       try {
         let statusPath: string;
         let kind: DocKind;
+        let harnessDir: string;
         if (params?.path) {
           statusPath = resolve(pi.cwd, params.path);
+          // S-G4b-03: the AUTHORITY decision runs on the path the target
+          // really lands on — a symlink alias of the store database or of a
+          // project register IS that authority file. Nothing else is
+          // canonicalized (a status.json/snapshot alias behaves as before).
+          const landed = landedPathOf(statusPath);
+          const storeTarget = isStoreAuthorityTarget(statusPath)
+            ? statusPath
+            : isStoreAuthorityTarget(landed)
+              ? landed
+              : null;
+          if (storeTarget !== null) {
+            return result(
+              violationLines([
+                authorityViolation(
+                  STORE_DIRECT_WRITE_CODE,
+                  `${storeTarget} is the issue/catalog authority database and is owned by the runtime — a direct ` +
+                    "hand write is refused (the schema and its WAL are managed in-process). Schema changes go " +
+                    "through `mstar store init|upgrade|migrate`, findings through `mstar issue add|close`, catalog " +
+                    "rows through `mstar catalog register|update`",
+                ),
+              ]),
+              { path: statusPath, kind: "store", ok: false },
+              true,
+            );
+          }
  // Phase-5 F1: ensure the custom-layout dir resolvers are loaded
  // before classifying (stale engine -> null -> default names).
           classifyDirResolvers = await dirResolversLoader.load();
           const target = harnessDocKindOfTarget(statusPath);
-          if (target === null) {
+          const registerDir = target?.kind === "register" ? target.harnessDir : aliasedRegisterDir(statusPath, landed);
+          if (target !== null) {
+            kind = target.kind;
+            harnessDir = target.harnessDir;
+          } else if (registerDir !== null) {
+            kind = "register";
+            harnessDir = registerDir;
+          } else {
             return result(
               `mstar_status_validate: ${statusPath} is not a canonical harness coordination document — expected {HARNESS_DIR}/status.json, {HARNESS_DIR}/workflows/<id>/snapshot.json, or {HARNESS_DIR}/projects/<id>/residuals.json`,
               { path: statusPath, ok: false },
               true,
             );
           }
-          kind = target.kind;
         } else {
-          const harnessDir = resolveHarnessDir(pi.cwd);
-          if (harnessDir === null) {
+          const resolvedHarnessDir = resolveHarnessDir(pi.cwd);
+          if (resolvedHarnessDir === null) {
             return result(
               `no harness directory found from "${pi.cwd}" (looked for .mstar/ / .agents/ / .plans/ / plans/ walking up) — pass an explicit path`,
               { cwd: pi.cwd },
               true,
             );
           }
+          harnessDir = resolvedHarnessDir;
           statusPath = join(harnessDir, STATUS_FILE);
           kind = "status";
         }
@@ -263,6 +450,52 @@ export default function mstarStatusValidate(pi: CustomToolAPI): CustomTool {
         let gate: { ok: boolean; violations: ValidationResult[] };
         if (kind === "status") {
           gate = validateStatus(statusPath);
+        } else if (kind === "register") {
+          // G4b: the register's document shape is only meaningful while the
+          // register IS the live authority. A store-backed workspace answers
+          // through the DB-aware route instead — and when the authority
+          // cannot be read at all, the tool refuses rather than shape-checking
+          // a document nobody consults any more.
+          const route = await readAuthorityRoute(harnessDir);
+          if (route.kind === "retired") {
+            return result(
+              violationLines([
+                authorityViolation(
+                  REGISTER_RETIRED_CODE,
+                  "project registers are retired migration history — the issue store " +
+                    `({HARNESS_DIR}/store.db, revision ${route.storeRevision}) is the only findings authority; capture ` +
+                    "and close through `mstar plan issue-add|issue-close` (plan-scoped) or `mstar issue add|close` " +
+                    "(unscoped)",
+                ),
+              ]),
+              { path: statusPath, kind, ok: false, retired: true, store_revision: route.storeRevision },
+              true,
+            );
+          }
+          if (route.kind === "unavailable") {
+            return result(
+              violationLines([
+                authorityViolation(
+                  STORE_AUTHORITY_UNAVAILABLE_CODE,
+                  `the issue authority could not be read ([${route.code}] ${route.message}) — the register is only ` +
+                    "validated while it is still the live authority; no older-runtime or JSON fallback exists",
+                ),
+              ]),
+              { path: statusPath, kind, ok: false, store: { code: route.code, message: route.message } },
+              true,
+            );
+          }
+          // `legacy`: no store / staged store — pre-activation, the register is
+          // still the findings authority, so its own validator applies.
+          const registerValidators = await loadNewValidators();
+          if (!registerValidators.ok) return registerValidators.error;
+          let registerDoc: unknown;
+          try {
+            registerDoc = readJson(statusPath);
+          } catch (error) {
+            return result(`mstar_status_validate failed: ${(error as Error).message}`, { path: statusPath }, true);
+          }
+          gate = registerValidators.validateProjectRegister(registerDoc);
         } else {
           const validators = await loadNewValidators();
           if (!validators.ok) return validators.error;
@@ -272,8 +505,7 @@ export default function mstarStatusValidate(pi: CustomToolAPI): CustomTool {
           } catch (error) {
             return result(`mstar_status_validate failed: ${(error as Error).message}`, { path: statusPath }, true);
           }
-          gate =
-            kind === "snapshot" ? validators.validateWorkflowSnapshot(doc) : validators.validateProjectRegister(doc);
+          gate = validators.validateWorkflowSnapshot(doc);
         }
  // Row/workflow counts only when the gate passed: the validators
  // already proved the file parses, so the re-read cannot throw.

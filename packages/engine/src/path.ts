@@ -44,7 +44,7 @@ import { loadMstarc, type MstarcConfig } from "./mstarc.js";
 // evaluation — the constants and the validators are used only inside
 // scaffoldHarness — so the ESM live-binding cycle is safe (same pattern as
 // the status.ts ↔ workflow.ts cycle documented in status.ts).
-import { _DEFAULT_PROJECT, PROJECT_REGISTER_FILE, PROJECT_ROADMAP_FILE, validateProjectRegister } from "./project.js";
+import { _DEFAULT_PROJECT, PROJECT_ROADMAP_FILE } from "./project.js";
 import { validateStatusV2, type StatusV2Doc } from "./status.js";
 import { withStatusWriteLock } from "./lease.js";
 import { assertFsStorePath, getArtifactStore, type ArtifactRef, type ArtifactStore } from "./store.js";
@@ -455,32 +455,24 @@ State the project direction here.
 `;
 
 /**
- * Scaffolded `projects/_default/residuals.json` template — the empty
- * project register `{ "entries": {} }` (mstar-project-governance §
- * residuals.json register 生命周期), which passes `validateProjectRegister`.
- * Kept as a constant so the engine has no runtime dependency on skill
- * files.
- */
-const EMPTY_REGISTER_TEMPLATE: Record<string, unknown> = {
-  entries: {},
-};
-
-/**
  * Initialize the harness directory under `root`: create the resolved
  * harness dir (default `.mstar/`, or the `.mstarc`-declared `harness_dir`
  * / `MSTAR_HARNESS_DIR` override — see `resolveScaffoldDirs`) with `plans/`,
  * `iterations/`, `knowledge/`, `specs/`, `sdd/`, write `status.json` from
  * the empty template, and prebuild the v3 project layer `_default/` under
  * the resolved project dir (default `{HARNESS_DIR}/projects/`, or the
- * `.mstarc`-declared `project_dir`) with a valid `roadmap.md` + empty
- * `residuals.json` (plan-conventions § 初始化 Plan 目录;
+ * `.mstarc`-declared `project_dir`) with a valid `roadmap.md`
+ * (plan-conventions § 初始化 Plan 目录;
  * mstar-project-governance § `_default` 回退). Idempotent: an existing
  * `roadmap.md` is never clobbered, and re-running on an initialized tree only
  * creates missing pieces. Returns the absolute resolved harness dir.
  *
- * The two coordination documents (`status.json`, `_default/residuals.json`)
- * are written create-only through the active `ArtifactStore` inside the
- * private protected-write context, serialized on the target's
+ * The scaffold does NOT create a legacy `residuals.json` register
+ * (issue-governance cutover G2a): the issue store (`store.db`) is the
+ * findings authority and the register is migration history — a scaffold must
+ * never recreate the retired authority. The one coordination document
+ * (`status.json`) is written create-only through the active `ArtifactStore`
+ * inside the private protected-write context, serialized on the target's
  * `withStatusWriteLock` (spec §C4): a concurrent writer's bytes are never
  * replaced, and an existing empty/malformed document fails validation instead
  * of being silently reinitialized. Callers whose target root differs from the
@@ -509,7 +501,8 @@ export async function scaffoldHarness(root: string): Promise<string> {
   );
 // v3 project layer: `projects/_default/` is scaffolded (the fallback
 // project for project-less flows); other project ids and `workflows/`
-// stay on-demand (engine writers create them).
+// stay on-demand (engine writers create them). No legacy register is
+// scaffolded — issue authority lives in the issue store.
   const defaultProjectDir = join(projectDir, _DEFAULT_PROJECT);
   mkdirSync(defaultProjectDir, { recursive: true });
   const roadmapPath = join(defaultProjectDir, PROJECT_ROADMAP_FILE);
@@ -517,13 +510,6 @@ export async function scaffoldHarness(root: string): Promise<string> {
     const created = new Date().toISOString().slice(0, 10);
     writeFileSync(roadmapPath, ROADMAP_TEMPLATE.replace("{created_at}", created), "utf8");
   }
-  await scaffoldProtectedDoc(
-    store,
-    { kind: "residuals", key: _DEFAULT_PROJECT },
-    join(defaultProjectDir, PROJECT_REGISTER_FILE),
-    EMPTY_REGISTER_TEMPLATE,
-    (payload) => validateProjectRegister(payload),
-  );
   await registerScaffoldCatalog(root, roadmapPath);
   return harnessDir;
 }

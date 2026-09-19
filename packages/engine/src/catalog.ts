@@ -1,7 +1,6 @@
 /**
  * catalog.ts — catalog authority: the typed entity registry, its relations
- * and the catalog receipt/query surface (plan 20260918-state-projection,
- * task P1).
+ * and the catalog receipt/query surface.
  *
  * Authority: `state-projection-contract.md` §2 (migration-2 schema and APIs)
  * and §1 (field-level authority separation). Catalog metadata is DB

@@ -118,7 +118,9 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
       }
       expect(existsSync(join(harnessDir, "status.json"))).toBe(true);
       expect(existsSync(join(harnessDir, "projects", "_default", "roadmap.md"))).toBe(true);
-      expect(existsSync(join(harnessDir, "projects", "_default", "residuals.json"))).toBe(true);
+      // The issue store is the findings authority (G2a/G2b): scaffold creates no
+      // project register — a `residuals.json` would be migration history.
+      expect(existsSync(join(harnessDir, "projects", "_default", "residuals.json"))).toBe(false);
       expect(existsSync(join(harnessDir, "AGENTS.md"))).toBe(true);
 
       // Canonical snippet appended once, complete fence present.
@@ -491,7 +493,7 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
       expect(existsSync(join(root, ".mstar", "status.json"))).toBe(true);
       // _default lands under the resolved project dir, NOT {HARNESS_DIR}/projects.
       expect(existsSync(join(root, "process", "projects", "_default", "roadmap.md"))).toBe(true);
-      expect(existsSync(join(root, "process", "projects", "_default", "residuals.json"))).toBe(true);
+      expect(existsSync(join(root, "process", "projects", "_default", "residuals.json"))).toBe(false);
       expect(existsSync(join(root, ".mstar", "projects"))).toBe(false);
     });
   });

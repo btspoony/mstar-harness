@@ -36,6 +36,8 @@ description: Morning Star (启明星) harness **生命周期 / 授权语义权�
 
 **迭代级**：`iteration-start → [per-plan cycle × N] → iteration-close → PR delivery → PR merge-ready loop`。细则 → **`mstar-iteration`**。
 
+**Capture duty**：确认的 finding 即落为 `{HARNESS_DIR}/store.db` 的 issue（计划内 `mstar plan issue-add`，计划外 `mstar issue add`；同一 finding 再次出现追加 occurrence，**不**新开第二个）——**捕获只记证据，处置是独立的授权动作**。cutover 落地后 **open issue 即 residual SSOT**（project register 只作迁移历史）。契约唯一权威 → **`mstar-project-governance`「Issue capture」**（本 skill 不复述）。
+
 ## 加载约定（强制）
 
 加载选择 SSOT：**`mstar-roles`** hub § Load Order（Assignment `Skill presets:` 决策；PM required reading 不受 preset 门控）。下表是各角色的**典型追加指引**，不是第二套选择机制；冲突时以 hub 为准。

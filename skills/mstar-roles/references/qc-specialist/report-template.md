@@ -67,7 +67,7 @@ Write under the Assignment-provided **`{SDD_DIR}/review/qc#.md`** (`qc1`…`qc3`
 **Verdict**: Approve | Request Changes | Needs Discussion | Unconfirmed
 ```
 
-Report **Critical / Warning / Suggestion** sections are human-readable; PM maps to machine **`severity`** in the project register (`projects/<id>/residuals.json`) per `mstar-artifacts/references/status-and-residuals.md`.
+Report **Critical / Warning / Suggestion** sections are human-readable; PM maps them to the machine **`severity`** of the issue it captures for the finding in `{HARNESS_DIR}/store.db`, per `mstar-artifacts/references/status-and-residuals.md`.
 
 ## Verdict rules (reviewer applies)
 
