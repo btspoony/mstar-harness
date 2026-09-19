@@ -375,7 +375,7 @@ function mutationFlags(command: Command): Command {
 function authorizedFlags(command: Command): Command {
   return mutationFlags(command).option(
     "--session <path>",
-    "Absolute engine-issued session envelope of a live workflow (workflows/<id>/sessions/<session_id>.json); required",
+    "Absolute engine-issued session envelope of a live workflow (workflows/<id>/sessions/<role>-<session-id>.json); required",
   );
 }
 

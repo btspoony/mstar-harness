@@ -96,13 +96,13 @@ async function makeHarness(): Promise<{ root: string; harness: string }> {
 /**
  * The canonical live-workflow authority the engine's own bind produces
  * (contract §4): the session envelope at
- * `workflows/<id>/sessions/<session_id>.json` plus that workflow's
+ * `workflows/<id>/sessions/plan-pm-<session-id>.json` plus that workflow's
  * coordination record pointing at it.
  */
 function writeBoundEnvelope(harness: string, planId = "20260918-a"): string {
   const workflowId = "wf-issue";
   const sessionId = "11111111-1111-1111-1111-111111111111";
-  const sessionPath = join(harness, "workflows", workflowId, "sessions", `${sessionId}.json`);
+  const sessionPath = join(harness, "workflows", workflowId, "sessions", `plan-pm-${sessionId}.json`);
   writeJson(sessionPath, {
     schema_version: 1,
     role: "plan-pm",

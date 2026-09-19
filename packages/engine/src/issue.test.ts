@@ -1056,7 +1056,7 @@ describe("disposition revision relation authorization", () => {
     const planSession = authority.planSessions[authority.planId]!;
     const sessionId = sessionIdOf(planSession);
     expect(planSession).toBe(
-      join(authority.harness, "workflows", authority.workflowId, "sessions", `${sessionId}.json`),
+      join(authority.harness, "workflows", authority.workflowId, "sessions", `plan-pm-${sessionId}.json`),
     );
 
     // (1) A byte-identical copy of the engine's own envelope at another path.
@@ -1087,7 +1087,7 @@ describe("disposition revision relation authorization", () => {
 
     // (3) At the engine's own path, but for a session id the workflow never
     // recorded: the workflow's own record does not point at it.
-    const unrecorded = forgedEnvelope(join(authority.harness, "workflows", authority.workflowId, "sessions"), "22222222-2222-2222-2222-222222222222.json", {
+    const unrecorded = forgedEnvelope(join(authority.harness, "workflows", authority.workflowId, "sessions"), "plan-pm-22222222-2222-2222-2222-222222222222.json", {
       harness_root: authority.harness,
       session_id: "22222222-2222-2222-2222-222222222222",
     });
@@ -1103,7 +1103,7 @@ describe("disposition revision relation authorization", () => {
     // (4) A hand-written envelope whose harness_root is a foreign root refuses,
     // even at its own canonical path inside that root.
     const foreignRoot = join(authority.harness, "other-root");
-    const foreign = forgedEnvelope(join(foreignRoot, "workflows", authority.workflowId, "sessions"), `${sessionId}.json`, {
+    const foreign = forgedEnvelope(join(foreignRoot, "workflows", authority.workflowId, "sessions"), `plan-pm-${sessionId}.json`, {
       harness_root: foreignRoot,
       session_id: sessionId,
     });
