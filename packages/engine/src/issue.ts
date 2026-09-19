@@ -730,6 +730,11 @@ export async function listIssues(context: StoreContext, filter: IssueFilter): Pr
   const handle = await openStore(context, "read");
   try {
     const db = handle.db;
+    // FW-6: a staged import is not read authority (apply≠activate) — the read
+    // verbs refuse `store.not-active` exactly like the mutations; staged data
+    // is inspectable through the migration surface (manifest/receipt), never
+    // as queryable issues.
+    assertActive(db);
     const storeRevision = readMeta(db).revision;
     const totalRow = db.prepare(`select count(*) as n from issues ${where}`).get(...params) as { n: number };
     const order = `order by case issues.severity
@@ -779,6 +784,9 @@ export async function getIssue(context: StoreContext, id: string): Promise<Issue
   const handle = await openStore(context, "read");
   try {
     const db = handle.db;
+    // FW-6: same stage gate as listIssues — a staged store is refused, never
+    // served as read authority.
+    assertActive(db);
     const issue = db
       .prepare(
         "select id, project_id, title, kind, severity, disposition, impact, acceptance, owner, registered_at, closed_at, closure_note, created_at, updated_at, revision, provider, external_id, url, identity_key from issues where id = ?",

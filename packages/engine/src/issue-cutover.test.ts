@@ -27,7 +27,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { withProtectedWrite } from "./coordination-write.js";
-import { captureIssue, type CaptureInput } from "./issue.js";
+import { captureIssue, getIssue, listIssues, type CaptureInput } from "./issue.js";
 import { findingsCleanupGate } from "./project.js";
 import { createFsStore, resolveArtifactPath, type ArtifactStore } from "./store.js";
 import { initializeStore, openStore, type StoreContext } from "./store-db.js";
@@ -258,5 +258,35 @@ describe("findingsCleanupGate — authoritative linked open issues (G2a)", () =>
       handle.close();
     }
     await expect(findingsCleanupGate(staged, "plan-a")).rejects.toThrow(/store\.not-active/);
+  });
+});
+
+/* ------------------------------------------------------------------------ *
+ * § Domain read verbs vs a staged store (plan QC fix wave FW-6)
+ * ------------------------------------------------------------------------ */
+
+describe("listIssues / getIssue — a staged store is not queryable as read authority (FW-6)", () => {
+  test("both read verbs refuse store.not-active even when staged rows exist", async () => {
+    const context = ctx("read-staged");
+    await initializeStore(context).then((handle) => handle.close());
+    // Seed a real row through the domain verb while the store is active, THEN
+    // demote: the refusal must hold with data present, not only on an empty
+    // staged store (the staged-import inspection case from QC seat 1 F-003).
+    const captured = await captureIssue(context, finding("occ-staged-read"), {
+      operationId: "cap-staged-read",
+      actor: "project-manager",
+    });
+    const handle = await openStore(context, "write");
+    try {
+      handle.db.prepare("update store_meta set authority_state = 'staged' where id = 1").run();
+    } finally {
+      handle.close();
+    }
+
+    // Pre-activation window (contract §7): a staged DB refuses ordinary
+    // domain verbs — reads included. Staged data stays inspectable through
+    // the migration surface (manifest/receipt), never as queryable issues.
+    await expect(listIssues(context, {})).rejects.toThrow(/store\.not-active/);
+    await expect(getIssue(context, captured.issueId)).rejects.toThrow(/store\.not-active/);
   });
 });
