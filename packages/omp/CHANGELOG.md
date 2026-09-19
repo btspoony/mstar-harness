@@ -6,6 +6,17 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [3.11.2] - 2026-09-19
+
+### Harness
+
+- Moved the **coordinator model-handoff arm to the direction lock**: a new iteration now arms `@slow` once the direction is locked and **before** the Phase 1 draft is written, instead of after workflow registration — so the arm always takes the unregistered reservation path, which is the expected state for a new iteration (no register row, no snapshot, no compass) and never a reason to defer the call. No arm/fire logic, refusal code, authority derivation or tool schema changed.
+- Renamed the shared new-iteration anchor `iteration-entry` → **`direction-lock`** and moved its carrier to the §1.2 tail: the anchor now fires once the direction is locked and before the compass/plans draft is written, and the three Phase 1 entry routes bind it at that boundary — the interactive route in its own step between the lock and the draft, the autonomous and host-Plan routes through their pre-commit checklists.
+
+- Version alignment with harness **3.11.2**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **3.11.2**.
+
 ## [3.11.1] - 2026-09-18
 
 ### Harness

@@ -6,6 +6,17 @@
 
 ## [Unreleased]
 
+## [3.11.2] - 2026-09-19
+
+### Harness
+
+- 协调者模型交接的 arm 时点前移至**方向锁定**：新迭代现于方向锁定之后、Phase 1 初稿撰写之前武装 `@slow`，不再在 workflow 登记之后 —— 因此 arm 恒走未登记保留路径，这既是新迭代的预期状态（无 register 行、无快照、无 compass），也不再是推迟该调用的理由。arm/fire 逻辑、拒绝码、权威推导与工具 schema 均未改动。
+- 共享新迭代 anchor 由 `iteration-entry` 更名为 **`direction-lock`**，carrier 移至 §1.2 尾部：anchor 现于方向锁定之后、compass/plans 初稿撰写之前触发，三条 Phase 1 入口路线在该边界绑定 —— 交互路线在锁定与初稿之间以独立步骤执行，autonomous 与宿主 Plan 路线经各自 pre-commit 清单携带同一要求。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 3.11.2**。
+
 ## [3.11.1] - 2026-09-18
 
 ### Harness
