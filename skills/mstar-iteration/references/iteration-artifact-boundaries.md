@@ -24,12 +24,13 @@ iteration-close (§3.2)
 
 ## `{ITERATION_DIR}/<iteration-id>/` 迭代 package（目录优先）
 
-**Canonical layout**（新 iteration-start **只写**此形态）：
+**Canonical layout**（新 iteration-start **只写**此形态）：除 `direction-lock.md` 外，列出的产物均在 **§1.3** 写入；**autonomous 路线**下 `<iteration-id>/` 目录**本身**在 `direction-lock` anchor 时刻创建（早于 compass 初稿），其**首个产物**即根级 `direction-lock.md`：
 
 ```text
 {ITERATION_DIR}/
   README.md                         # 根索引：每迭代一行 → 指向 <iteration-id>/
   <iteration-id>/
+    direction-lock.md               # autonomous 路线：锁定时刻落盘的方向记录（package 首产物；§1.3 后保留）
     delivery-compass.md             # 迭代状态 SSOT（frontmatter status）
     README.md                       # 本迭代文档索引（有 guides/specs 时推荐）
     guides/                         # 探索笔记、过程指南、未锁定权衡
