@@ -14,7 +14,11 @@
  *   (P1 `registerCatalogEntity` / `linkCatalogEntities`), so every write keeps
  *   the store's epoch/role/idempotency/transaction rules. The reviewed source
  *   hashes are re-verified before the first write; a conflict or a source drift
- *   refuses the whole import instead of silently preferring one source.
+ *   refuses the whole import instead of silently preferring one source. A
+ *   failure AFTER writes started is never a silent prefix: the applied prefix
+ *   is journalled progress and the failure is rethrown as an explicit
+ *   `catalog.import-partial` error that reports what applied and how to resume
+ *   (RV-3).
  * - Import never creates a workflow session, retires an index or repairs issue
  *   authority; live index retirement belongs to the cutover plan's G6.
  *
@@ -113,15 +117,37 @@ export type CatalogImportErrorCode =
   | "catalog.import-invalid-plan"
   | "catalog.import-conflict"
   | "catalog.import-source-drift"
-  | "catalog.import-unknown-input";
+  | "catalog.import-unknown-input"
+  | "catalog.import-partial";
+
+/**
+ * The explicit, resumable partial state of a failed import (RV-3): every
+ * applied proposal is journalled in `catalog_operations` under its
+ * deterministic per-proposal operation id (`<operationId>:entity:<i>` /
+ * `<operationId>:link:<i>`) in the same transaction as its rows, so the
+ * progress below IS the persisted journal state. Re-running the SAME reviewed
+ * plan with the SAME `operationId` replays the applied proposals idempotently
+ * and applies only the rest — a retried import converges to the full plan
+ * exactly once. A partial import is never silent: the error names what
+ * applied, what failed, and how to resume.
+ */
+export type CatalogImportPartialState = {
+  operationId: string;
+  appliedEntities: CatalogReceipt[];
+  appliedLinks: CatalogLink[];
+  failed: { stage: "entity" | "link"; index: number; message: string };
+};
 
 export class CatalogImportError extends Error {
   readonly code: CatalogImportErrorCode;
+  /** The explicit resumable partial state (`catalog.import-partial` only). */
+  readonly partial: CatalogImportPartialState | null;
 
-  constructor(code: CatalogImportErrorCode, message: string) {
+  constructor(code: CatalogImportErrorCode, message: string, partial: CatalogImportPartialState | null = null) {
     super(`[${code}] ${message}`);
     this.name = "CatalogImportError";
     this.code = code;
+    this.partial = partial;
   }
 }
 
@@ -1549,6 +1575,17 @@ export async function verifyCatalogImport(context: StoreContext, plan: CatalogIm
  * so a retry (or a second call after a crash) replays the applied rows and
  * converges instead of double-writing. No workflow session is created and no
  * index is retired.
+ *
+ * A mid-plan failure is NEVER a silent prefix (RV-3): the domain verbs commit
+ * each applied proposal together with its journal row, so the applied prefix
+ * is persisted progress, and the failure is rethrown as an explicit
+ * `catalog.import-partial` error naming exactly what applied, which proposal
+ * failed, and how to resume (re-run the SAME plan with the SAME operationId —
+ * applied proposals replay idempotently from the journal). The verbs are not
+ * re-entered inside one caller-managed transaction: each owns its own
+ * transaction and journal rules (the P1 boundary the registration journal
+ * also keeps), so the resumable journal — not a hand-rolled second writer —
+ * is the atomicity story here.
  */
 export async function importCatalog(
   context: StoreContext,
@@ -1581,34 +1618,56 @@ export async function importCatalog(
 
   const receipts: CatalogReceipt[] = [];
   const effective = new Map<string, string>();
-  for (const [index, proposal] of plan.entities.entries()) {
-    const input: CatalogEntityInput = {
-      kind: proposal.kind,
-      id: proposal.id,
-      title: proposal.title === "" ? fallbackTitle(proposal.relativePath) : proposal.title,
-      description: proposal.description,
-      rootKind: proposal.rootKind,
-      relativePath: proposal.relativePath,
-      documentKind: proposal.documentKind,
-      lifecycle: proposal.lifecycle,
-      sourceHash: proposal.sourceHash,
-    };
-    const receipt = await registerCatalogEntity(context, input, { operationId: `${operationId}:entity:${index}`, actor });
-    receipts.push(receipt);
-    // A proposal may attach to the row that already owns the location (§2);
-    // later relations must target the effective id, never the proposed one.
-    effective.set(entityKey(proposal.kind, proposal.id), receipt.id);
-  }
-
   const appliedLinks: CatalogLink[] = [];
-  for (const [index, link] of plan.links.entries()) {
-    const from = { kind: link.from.kind, id: effective.get(entityKey(link.from.kind, link.from.id)) ?? link.from.id };
-    const to = { kind: link.to.kind, id: effective.get(entityKey(link.to.kind, link.to.id)) ?? link.to.id };
-    await linkCatalogEntities(context, { from, relation: link.relation, to, ordinal: link.ordinal }, {
-      operationId: `${operationId}:link:${index}`,
-      actor,
-    });
-    appliedLinks.push({ fromKind: from.kind, fromId: from.id, relation: link.relation, toKind: to.kind, toId: to.id, ordinal: link.ordinal });
+  try {
+    for (const [index, proposal] of plan.entities.entries()) {
+      const input: CatalogEntityInput = {
+        kind: proposal.kind,
+        id: proposal.id,
+        title: proposal.title === "" ? fallbackTitle(proposal.relativePath) : proposal.title,
+        description: proposal.description,
+        rootKind: proposal.rootKind,
+        relativePath: proposal.relativePath,
+        documentKind: proposal.documentKind,
+        lifecycle: proposal.lifecycle,
+        sourceHash: proposal.sourceHash,
+      };
+      const receipt = await registerCatalogEntity(context, input, { operationId: `${operationId}:entity:${index}`, actor });
+      receipts.push(receipt);
+      // A proposal may attach to the row that already owns the location (§2);
+      // later relations must target the effective id, never the proposed one.
+      effective.set(entityKey(proposal.kind, proposal.id), receipt.id);
+    }
+
+    for (const [index, link] of plan.links.entries()) {
+      const from = { kind: link.from.kind, id: effective.get(entityKey(link.from.kind, link.from.id)) ?? link.from.id };
+      const to = { kind: link.to.kind, id: effective.get(entityKey(link.to.kind, link.to.id)) ?? link.to.id };
+      await linkCatalogEntities(context, { from, relation: link.relation, to, ordinal: link.ordinal }, {
+        operationId: `${operationId}:link:${index}`,
+        actor,
+      });
+      appliedLinks.push({ fromKind: from.kind, fromId: from.id, relation: link.relation, toKind: to.kind, toId: to.id, ordinal: link.ordinal });
+    }
+  } catch (error) {
+    const stage = appliedLinks.length === 0 && receipts.length < plan.entities.length ? "entity" : "link";
+    const failedIndex = stage === "entity" ? receipts.length : appliedLinks.length;
+    const failedMessage = error instanceof Error ? error.message : String(error);
+    const partial: CatalogImportPartialState = {
+      operationId,
+      appliedEntities: receipts,
+      appliedLinks,
+      failed: { stage, index: failedIndex, message: failedMessage },
+    };
+    throw new CatalogImportError(
+      "catalog.import-partial",
+      `the import applied a partial state before failing: ${receipts.length} of ${plan.entities.length} entity proposal(s) ` +
+        `${receipts.length > 0 ? `(${receipts.map((receipt) => `${receipt.kind}:${receipt.id}`).join(", ")}) ` : ""}` +
+        `and ${appliedLinks.length} of ${plan.links.length} link proposal(s) are committed; the ${stage} proposal at index ` +
+        `${failedIndex} failed with: ${failedMessage}. The applied rows are journalled progress, not a silent prefix — ` +
+        `re-run the SAME reviewed plan with the SAME operationId ("${operationId}") to resume: applied proposals replay ` +
+        "idempotently from the catalog operation journal and only the remaining proposals apply.",
+      partial,
+    );
   }
 
   let storeRevision = receipts.at(-1)?.storeRevision ?? 0;

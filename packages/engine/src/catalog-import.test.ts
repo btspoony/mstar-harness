@@ -20,6 +20,7 @@ import {
   importCatalog,
   planCatalogImport,
   verifyCatalogImport,
+  type CatalogImportError,
   type CatalogImportInput,
   type CatalogImportPlan,
 } from "./catalog-import.js";
@@ -562,5 +563,102 @@ describe("catalog export and portability", () => {
     expect(receipt.links).toEqual([]);
     expect(receipt.unknowns.some((unknown) => unknown.code === "reference-missing")).toBe(true);
     expect((await listCatalog(fixture.context, {})).total).toBe(1);
+  });
+});
+
+describe("partial import explicitness (RV-3)", () => {
+  /**
+   * A clean three-proposal plan (two entities, one link) over real bodies.
+   * The obstruction is registered AFTER planning — the review-vs-apply window
+   * a concurrent registration occupies — so the failure happens mid-apply at
+   * the domain verb, exactly the prefix-commit window this suite proves.
+   */
+  async function midPlanFailureFixture(name: string): Promise<{ fixture: Fixture; plan: CatalogImportPlan }> {
+    const fixture = await freshWorkspace(name);
+    write(fixture.harness, "specs/contract.md", md("# Contract", "", "Spec body."));
+    write(fixture.harness, "plans/20260918-alpha.md", md("# Alpha plan"));
+    write(fixture.harness, "knowledge/patterns/guard.md", md("---", "category: patterns", "---", "", "# Guard pattern notes"));
+    const plan = await planCatalogImport(fixture.context, [
+      { rootKind: "specs", relativePath: "contract.md", mapping: { kind: "document", id: "doc-contract", documentKind: "spec", title: "Contract" } },
+      {
+        rootKind: "plans",
+        relativePath: "20260918-alpha.md",
+        mapping: { kind: "plan", id: "20260918-alpha", title: "Alpha plan" },
+        links: [{ relation: "spec-ref", to: { kind: "document", id: "doc-contract" } }],
+      },
+      { rootKind: "knowledge", relativePath: "patterns/guard.md", mapping: { kind: "document", id: "doc-guard", documentKind: "knowledge", title: "Guard" } },
+    ]);
+    expect(plan.conflicts).toEqual([]);
+    await registerCatalogEntity(
+      fixture.context,
+      { kind: "document", id: "doc-guard", title: "Guard elsewhere", rootKind: "knowledge", relativePath: "elsewhere.md", documentKind: "knowledge" },
+      { operationId: "seed-duplicate", actor: "project-manager" },
+    );
+    return { fixture, plan };
+  }
+
+  test("a mid-plan failure is an explicit resumable partial state, never a silent prefix", async () => {
+    const { fixture, plan } = await midPlanFailureFixture("partial-");
+    const failure = (await importCatalog(fixture.context, plan, { operationId: "imp-partial", actor: "project-manager" }).then(
+      () => null,
+      (error: unknown) => error,
+    )) as CatalogImportError;
+
+    // The obstruction is genuinely mid-plan: the planning order puts the
+    // duplicate-bearing proposal after at least one that applies cleanly.
+    const failedIndex = plan.entities.findIndex((proposal) => proposal.id === "doc-guard");
+    expect(failedIndex).toBeGreaterThan(0);
+
+    // The refusal carries the applied prefix and the failing proposal.
+    expect(failure.code).toBe("catalog.import-partial");
+    expect(failure.partial?.operationId).toBe("imp-partial");
+    expect(failure.partial?.appliedEntities.map((receipt) => receipt.id)).toEqual(
+      plan.entities.slice(0, failedIndex).map((proposal) => proposal.id),
+    );
+    expect(failure.partial?.appliedLinks).toEqual([]);
+    expect(failure.partial?.failed).toMatchObject({ stage: "entity", index: failedIndex });
+    expect(failure.partial?.failed.message).toContain("catalog.duplicate");
+    // The message reports exactly what applied and how to resume.
+    expect(failure.message).toContain(`${failedIndex} of ${plan.entities.length} entity proposal(s)`);
+    expect(failure.message).toContain("0 of 1 link proposal(s)");
+    expect(failure.message).toContain("document:doc-contract");
+    expect(failure.message).toContain('SAME operationId ("imp-partial")');
+
+    // The applied prefix IS the persisted state, read from the real database:
+    // the journalled proposals plus the pre-registered obstruction, and no
+    // links (they only apply after every entity exists).
+    const rows = await catalogRows(fixture.context);
+    expect(rows).toEqual({ entities: failedIndex + 1, links: 0 });
+  });
+
+  test("a retried import converges to the full plan exactly once", async () => {
+    const { fixture, plan } = await midPlanFailureFixture("partial-retry-");
+    const first = await importCatalog(fixture.context, plan, { operationId: "imp-partial", actor: "project-manager" }).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect((first as CatalogImportError).code).toBe("catalog.import-partial");
+
+    // The obstruction moves out of the way (fixture-level removal), then the
+    // SAME reviewed plan is re-run with the SAME operationId.
+    const handle = await openStore(fixture.context, "write");
+    try {
+      handle.db.prepare("delete from catalog_entities where kind = 'document' and id = 'doc-guard'").run();
+    } finally {
+      handle.close();
+    }
+    const retried = await importCatalog(fixture.context, plan, { operationId: "imp-partial", actor: "project-manager" });
+    expect(retried.entities.map((receipt) => receipt.id).sort()).toEqual(["20260918-alpha", "doc-contract", "doc-guard"]);
+    expect(retried.entities.every((receipt) => receipt.revision === 1)).toBe(true); // replayed, not re-written
+    expect(retried.links).toEqual([
+      { fromKind: "plan", fromId: "20260918-alpha", relation: "spec-ref", toKind: "document", toId: "doc-contract", ordinal: null },
+    ]);
+    expect(await catalogRows(fixture.context)).toEqual({ entities: 3, links: 1 });
+
+    // A third run is a full replay: identical receipt, identical rows — the
+    // plan landed exactly once.
+    const replay = await importCatalog(fixture.context, plan, { operationId: "imp-partial", actor: "project-manager" });
+    expect(replay).toEqual(retried);
+    expect(await catalogRows(fixture.context)).toEqual({ entities: 3, links: 1 });
   });
 });
