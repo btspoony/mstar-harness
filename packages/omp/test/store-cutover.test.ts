@@ -347,6 +347,48 @@ describe("omp write gate — authority paths refuse, documents keep their valida
     expect((await runWrite(handler, fixture.status, BAD_JSON))?.reason).toContain("status.invalid-json");
   });
 
+  test("a fresh authority write through a SYMLINKED PARENT is refused by the landed classification (S-G4b-03)", async () => {
+    // The final component is simply ABSENT: realpath fails and the target is
+    // not itself a link, but an ANCESTOR directory is a symlink INTO the
+    // harness tree — the filesystem lands the write at the protected
+    // destination, so the landed classification must canonicalize the nearest
+    // existing ancestor instead of trusting the textual path.
+    const fixture = makeHarness("alias-fresh-parent", "soft");
+    const outside = join(fixture.root, "outside");
+    mkdirSync(outside, { recursive: true });
+    symlinkSync(fixture.harness, join(outside, "link")); // directory symlink into the harness root
+    const handler = loadHandler();
+
+    // store.db is still absent at this point (seeded below): the walk hits.
+    const store = await runWrite(handler, join(outside, "link", "store.db"), "not a database");
+    expect(store?.block).toBe(true);
+    expect(store?.reason).toContain("store.direct-write-refused");
+
+    // A case-variant register name under the symlinked parent takes the same
+    // landed route (the folded shape walk runs on the canonicalized path); an
+    // ACTIVE store makes the landed route retire the register.
+    await seedActiveStore(fixture.harness);
+    const register = await runWrite(
+      handler,
+      join(outside, "link", "projects", "_default", "RESIDUALS.json"),
+      VALID_REGISTER,
+    );
+    expect(register?.block).toBe(true);
+    expect(register?.reason).toContain("project.register.retired");
+
+    // The shape the textual probes CANNOT see: the link points INTO the
+    // harness at a non-root directory, so no harness marker is stat-reachable
+    // on the textual path — only the canonicalized landed path classifies.
+    symlinkSync(join(fixture.harness, "projects", "_default"), join(outside, "into-link"));
+    const into = await runWrite(handler, join(outside, "into-link", "residuals.json"), VALID_REGISTER);
+    expect(into?.block).toBe(true);
+    expect(into?.reason).toContain("project.register.retired");
+
+    // A plain fresh file with NO symlinked ancestor keeps the silent pass —
+    // the walk only canonicalizes when an ancestor actually exists.
+    expect(await runWrite(handler, join(outside, "fresh.db"), "not a database")).toBeUndefined();
+  });
+
   test("a pre-activation register whose alias lands on an ACTIVE harness's register is vetoed (stricter-wins)", async () => {
     // RV-2: the source harness is pre-activation (legacy route), but its
     // register is a symlink to ANOTHER harness's register whose store is

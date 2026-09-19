@@ -967,4 +967,67 @@ describe('store authority — fs-intent and adapter refuse authority bytes (FW-1
     expect(hook.ok).toBe(true)
     expect(hook.code).toBe('host.beforeStatusWrite.ok')
   })
+
+  it('a fresh authority write through a SYMLINKED PARENT is refused by the landed classification (S-G4b-03)', async () => {
+    const { app, harnessDir } = await appWithRoot('store-authority-fresh-parent')
+    await seedHarness(harnessDir, {
+      'status.json': v2Root([v2WorkflowEntry('wf-store')]),
+      'workflows/wf-store/snapshot.json': cleanupSnapshotJson('plan-a'),
+      'projects/_default/residuals.json': v2Register({ 'plan-a': [v2ResidualEntry('R1', { severity: 'low', source_plan: 'plan-a' })] }),
+    })
+    // The final component is simply ABSENT: realpath fails and the target is
+    // not itself a link, but an ANCESTOR directory is a symlink INTO the
+    // harness tree — the filesystem lands the write at the protected
+    // destination, so the landed classification must canonicalize the nearest
+    // existing ancestor instead of trusting the textual path. The store is
+    // seeded AFTER the fresh store.db case below, so that target is genuinely
+    // absent when it runs.
+    const outside = join(dirname(harnessDir), 'outside')
+    await mkdir(outside, { recursive: true })
+    await symlink(harnessDir, join(outside, 'link'))
+
+    const freshStore = join(outside, 'link', 'store.db')
+    const outcome = await app.ctx
+      .waterfall('fs/write-intent', { targetKey: freshStore as FsTarget['targetKey'], displayPath: freshStore }, {}, async () => ({ kind: 'createIfAbsent' as const }))
+      .then(() => undefined, (error: unknown) => error)
+    expect(outcome).toBeInstanceOf(StatusVetoError)
+    expect((outcome as StatusVetoError).violations.map((violation) => violation.code)).toEqual(['store.direct-write-refused'])
+    const storeHook = await app.ctx.dshHostAdapter.beforeStatusWrite(freshStore, undefined)
+    expect(storeHook.ok).toBe(false)
+    expect(storeHook.code).toBe('store.direct-write-refused')
+
+    // A case-variant register name under the symlinked parent takes the same
+    // landed route (the folded shape walk runs on the canonicalized path); an
+    // ACTIVE store makes the landed route retire the register.
+    await seedStore(harnessDir)
+    await sealStoreForReaders(harnessDir)
+    const caseVariant = join(outside, 'link', 'projects', '_default', 'RESIDUALS.json')
+    const register = await app.ctx
+      .waterfall('fs/write-intent', { targetKey: caseVariant as FsTarget['targetKey'], displayPath: caseVariant }, {}, async () => ({ kind: 'createIfAbsent' as const }))
+      .then(() => undefined, (error: unknown) => error)
+    expect(register).toBeInstanceOf(StatusVetoError)
+    expect((register as StatusVetoError).violations.map((violation) => violation.code)).toEqual(['project.register.retired'])
+
+    // The shape the textual probes CANNOT see: the link points INTO the
+    // harness at a non-root directory, so no harness marker is stat-reachable
+    // on the textual path — only the canonicalized landed path classifies.
+    // The linked project dir holds no register file, so the target is absent.
+    await mkdir(join(harnessDir, 'projects', 'other'), { recursive: true })
+    await symlink(join(harnessDir, 'projects', 'other'), join(outside, 'into-link'))
+    const into = join(outside, 'into-link', 'residuals.json')
+    const intoOutcome = await app.ctx
+      .waterfall('fs/write-intent', { targetKey: into as FsTarget['targetKey'], displayPath: into }, {}, async () => ({ kind: 'createIfAbsent' as const }))
+      .then(() => undefined, (error: unknown) => error)
+    expect(intoOutcome).toBeInstanceOf(StatusVetoError)
+    expect((intoOutcome as StatusVetoError).violations.map((violation) => violation.code)).toEqual(['project.register.retired'])
+
+    // A plain fresh file with NO symlinked ancestor keeps the legacy pass —
+    // the walk only canonicalizes when an ancestor actually exists.
+    const advisories = captureStatusAdvisories(app.ctx)
+    const plain = join(outside, 'fresh.db')
+    const intent = await app.ctx
+      .waterfall('fs/write-intent', { targetKey: plain as FsTarget['targetKey'], displayPath: plain }, {}, async () => ({ kind: 'createIfAbsent' as const }))
+    expect(intent).toEqual({ kind: 'createIfAbsent' })
+    expect(advisories).toHaveLength(0)
+  })
 })

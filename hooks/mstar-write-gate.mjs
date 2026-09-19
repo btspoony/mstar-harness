@@ -3838,7 +3838,17 @@ function landedPathOf(resolved) {
     try {
       return resolve(dirname(resolved), readlinkSync(resolved));
     } catch {
-      return resolved;
+      let dir = dirname(resolved);
+      for (;; ) {
+        try {
+          return join(realpathSync(dir), relative3(dir, resolved));
+        } catch {
+          const parent = dirname(dir);
+          if (parent === dir)
+            return resolved;
+          dir = parent;
+        }
+      }
     }
   }
 }
