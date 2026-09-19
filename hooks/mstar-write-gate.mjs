@@ -3572,7 +3572,7 @@ function toWorkflowDTO(row, plans, leases, identities) {
         doneAt: plan.done_at,
         catalogPinRevision: plan.catalog_pin_revision,
         catalog: planCatalog,
-        leases: leases.filter((lease) => lease.plan_id === plan.plan_id).map((lease) => ({
+        leases: leases.filter((lease) => lease.workflow_id === row.id && lease.plan_id === plan.plan_id).map((lease) => ({
           workflowId: lease.workflow_id,
           planId: lease.plan_id,
           kind: lease.kind === "integration-merge" ? "integration-merge" : "execution",
@@ -3663,7 +3663,7 @@ function composeIteration(iterationId, catalog, generated, planIds, documentIds,
   const workflowRow = generated.workflows.find((row) => row.id === iterationId && row.type === "iteration");
   const plans = planIds.map((planId) => {
     const planCatalog = identities.get(identityToken("plan", planId)) ?? null;
-    const executionRow = generated.plans.find((plan) => plan.plan_id === planId);
+    const executionRow = generated.plans.find((plan) => plan.plan_id === planId && plan.workflow_id === iterationId) ?? generated.plans.find((plan) => plan.plan_id === planId && plan.workflow_id === planId);
     const planBadges2 = [];
     if (planCatalog === null)
       planBadges2.push("catalog-missing");
