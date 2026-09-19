@@ -80,7 +80,13 @@ async function runStore(args: string[]): Promise<{ exitCode: number; stdout: str
     console.log = originalLog;
     console.error = originalError;
   }
-  return { exitCode: process.exitCode ?? 0, stdout: logs.join("\n"), stderr: errors.join("\n") };
+  const exitCode = process.exitCode ?? 0;
+  // The handlers under test signal through process.exitCode (the real CLI
+  // process's exit contract), but THIS file runs them in the bun test
+  // process itself: restore a neutral exit code after capture or the
+  // runner exits 1 with every test passing (silent CI red).
+  process.exitCode = 0;
+  return { exitCode, stdout: logs.join("\n"), stderr: errors.join("\n") };
 }
 
 async function previewManifest(harness: string): Promise<{ manifest: MigrationManifest; file: string }> {
