@@ -163,6 +163,27 @@ describe("ZCode write gate — authority paths (source entry)", () => {
     expect(run.stderr).toContain(AUTHORITY_LINE);
   });
 
+  test("a CASE-VARIANT register on the pre-activation fall-through keeps its document validator (qc2-F-005)", () => {
+    const caseVariant = (harness: string): string => join(harness, "projects", "_default", "RESIDUALS.json");
+
+    // The FW-3 folded shape walk classifies the case-variant basename as a
+    // register document (dsh/omp parity): the register shape validator
+    // decides — not the authority route, not silence.
+    const hard = makeHarness("register-case-legacy-hard", "hard");
+    const blocked = runGate(process.execPath, HOOK_SRC, writeEvent(caseVariant(hard.harness), BAD_JSON));
+    expect(blocked.exitCode).toBe(2);
+    const out = lines(blocked);
+    expect(out[1]!.startsWith("[high] status.invalid-json: ")).toBe(true);
+    expect(out[2]).toBe(ENFORCEMENT_LINE); // the enforcement axis, not the authority invariant
+    expect(runGate(process.execPath, HOOK_SRC, writeEvent(caseVariant(hard.harness), VALID_REGISTER)).exitCode).toBe(0);
+
+    const soft = makeHarness("register-case-legacy-soft", "soft");
+    const silent = runGate(process.execPath, HOOK_SRC, writeEvent(caseVariant(soft.harness), BAD_JSON));
+    expect(silent.exitCode).toBe(0);
+    expect(silent.stdout).toBe("");
+    expect(silent.stderr).toBe("");
+  });
+
   test("a retired register write on an ACTIVE store is refused (soft mode included)", async () => {
     const fixture = makeHarness("register-active", "soft");
     await seedActiveStore(fixture.harness);

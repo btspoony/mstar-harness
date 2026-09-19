@@ -262,6 +262,22 @@ describe("omp write gate — authority paths refuse, documents keep their valida
     expect(blocked?.reason).toContain("project.register.retired");
   });
 
+  test("a CASE-VARIANT register on the pre-activation fall-through keeps its document validator (qc2-F-005)", async () => {
+    for (const state of ["missing", "staged"] as const) {
+      const fixture = makeHarness(state, "hard");
+      if (state === "staged") await seedStagedStore(fixture.harness);
+      const handler = loadHandler();
+      const caseVariant = join(fixture.harness, "projects", "_default", "RESIDUALS.json");
+
+      // The FW-3 folded shape walk classifies the case-variant basename as a
+      // register document (dsh parity): the register shape validator decides —
+      // not the authority route, not silence.
+      expect(await runWrite(handler, caseVariant, VALID_REGISTER)).toBeUndefined();
+      const invalid = await runWrite(handler, caseVariant, BAD_JSON);
+      expect(invalid?.reason).toContain("status.invalid-json");
+    }
+  });
+
   test("a below-floor ACTUAL runtime refuses with that runtime's own actionable floor", async () => {
     const fixture = makeHarness("below-floor", "hard");
     const handler = loadHandler();
