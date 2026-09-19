@@ -557,8 +557,10 @@ describe("migration 2", () => {
     expect(applied.some((row) => row.name === "catalog-authority")).toBe(true);
     const catalogMigration = MIGRATIONS.find((migration) => migration.version === 2);
     expect(catalogMigration).toMatchObject({ version: 2, name: "catalog-authority" });
-    expect(migrationChecksum({ version: 2, name: "catalog-authority", sql: MIGRATION_2_SQL })).toBe(
-      applied.find((row) => row.version === 2)?.checksum,
+    // Nullable actual, computed expected (same shape as the `applied[0]?.name`
+    // assertion above): fails when the v2 row is missing or the checksum drifts.
+    expect(applied.find((row) => row.version === 2)?.checksum).toBe(
+      migrationChecksum({ version: 2, name: "catalog-authority", sql: MIGRATION_2_SQL }),
     );
   });
 

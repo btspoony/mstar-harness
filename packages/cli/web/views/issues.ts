@@ -1,5 +1,5 @@
 /**
- * Issues view (plan 20260918-dashboard D3): the default landing — list,
+ * Issues view: the default landing — list,
  * filters and the detail with the recorded history.
  *
  * The engine owns the list order and every DTO field (D17: open-only, all

@@ -6,7 +6,7 @@
  * `src/dashboard/assets.generated.ts` exporting `dashboardHtml`, `dashboardJs`
  * and `dashboardCss` as escaped strings. The CLI build runs this before
  * bundling, so the published single artifact inlines the dashboard with no
- * disk asset directory, CDN, fonts or telemetry (plan 20260918-dashboard D1).
+ * disk asset directory, CDN, fonts or telemetry.
  *
  * Determinism: inputs are read from the repo only; no timestamp, random id or
  * absolute build path is embedded. Running the generator twice on unchanged

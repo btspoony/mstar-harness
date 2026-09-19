@@ -1,11 +1,11 @@
 /**
- * Shared dashboard primitives (plan 20260918-dashboard D3; extended by D4).
+ * Shared dashboard primitives.
  *
  * The read-envelope loader every view uses, the small presentational pieces the
  * views compose, and the authority/freshness vocabulary the projected
  * Workflows, Iterations and Roadmap views disclose. Nothing here reaches source
  * JSON, the filesystem or Markdown: every string is rendered as text by Preact,
- * and the API is the only data source (plan Global Constraints).
+ * and the API is the only data source.
  */
 import type { ComponentChildren } from "preact";
 import { useEffect, useState } from "preact/hooks";

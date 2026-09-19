@@ -1,5 +1,5 @@
 /**
- * Iterations view (plan 20260918-dashboard D4): the catalog-driven list plus the
+ * Iterations view: the catalog-driven list plus the
  * per-iteration detail over the P6 read envelope.
  *
  * Catalog membership is authoritative and independent of execution

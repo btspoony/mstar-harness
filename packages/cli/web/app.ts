@@ -1,11 +1,10 @@
 /**
  * Dashboard browser entry — bundled by scripts/build-web.ts into an offline
  * string served from /assets/app.js. Preact + htm template-tag components,
- * no JSX plugin, no CDN or remote assets (DESIGN.md, plan 20260918-dashboard).
+ * no JSX plugin, no CDN or remote assets (DESIGN.md).
  *
- * D3 wired the Issues destination; D4 registers the remaining three
- * (Workflows, Iterations, Roadmap) so the four settled destinations are all
- * reachable and no navigation entry is a dead link.
+ * Registers the Issues, Workflows, Iterations and Roadmap destinations so all
+ * four are reachable and no navigation entry is a dead link.
  */
 import { render } from "preact";
 import { html } from "htm/preact";

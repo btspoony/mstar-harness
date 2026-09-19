@@ -1,5 +1,5 @@
 /**
- * Dashboard formatting (plan 20260918-dashboard D3).
+ * Dashboard formatting helpers.
  *
  * Pure string work: no Preact, no DOM, no clock. The honesty rules the design
  * fixes (DESIGN.md "Colors and typography" and "History and chart honesty")

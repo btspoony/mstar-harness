@@ -1,5 +1,5 @@
 /**
- * Issue-flow chart panel (plan 20260918-dashboard D5) — the one trend surface
+ * Issue-flow chart panel — the one trend surface
  * the IA allows (DESIGN.md "History and chart honesty"; compass D17). It lives
  * inside the Issues destination; it is not a fifth destination.
  *
