@@ -3875,6 +3875,14 @@ function aliasedRegisterDir(resolved, landed) {
   const aliased = harnessDocKindOfTarget(landed);
   return aliased?.kind === "register" ? aliased.harnessDir : null;
 }
+function landedRegisterDirOf(resolved, landed) {
+  if (landed === resolved)
+    return null;
+  const aliased = harnessDocKindOfTarget(landed);
+  if (aliased?.kind === "register")
+    return aliased.harnessDir;
+  return caseFoldedRegisterRoot(landed);
+}
 function authorityViolation(code, message) {
   return { ok: false, severity: "high", code, message };
 }
@@ -3994,6 +4002,22 @@ try {
         blockAuthorityWrite(toolName, displayTarget(targetPath, registerDir), [
           authorityUnavailableRefusal(route)
         ]);
+      }
+      if (route.kind === "legacy") {
+        const landedDir = landedRegisterDirOf(targetPath, landed);
+        if (landedDir !== null && landedDir !== registerDir) {
+          const landedRoute = await readAuthorityRoute(landedDir);
+          if (landedRoute.kind === "retired") {
+            blockAuthorityWrite(toolName, displayTarget(targetPath, landedDir), [
+              registerRetiredRefusal(landedRoute.storeRevision)
+            ]);
+          }
+          if (landedRoute.kind === "unavailable") {
+            blockAuthorityWrite(toolName, displayTarget(targetPath, landedDir), [
+              authorityUnavailableRefusal(landedRoute)
+            ]);
+          }
+        }
       }
     }
     const gated = target ?? { harnessDir: registerDir, kind: "register" };

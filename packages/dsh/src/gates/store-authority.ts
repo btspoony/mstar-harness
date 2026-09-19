@@ -235,6 +235,19 @@ function caseFoldedRegisterRoot(candidate: string): string | null {
   }
 }
 
+/** The harness root of the register a write LANDS on through a symlink alias
+ * (stricter-wins veto): the landed destination of an alias is itself an
+ * authority candidate even when the caller's own path already classified as a
+ * register elsewhere — classified by the exact-case marker probe first, then
+ * the FW-3 folded shape walk. `null` when the write is not an alias or does
+ * not land on a register. */
+function landedRegisterDirOf(resolved: string, landed: string): string | null {
+  if (landed === resolved) return null
+  const aliased = harnessDocKindOfTarget(landed)
+  if (aliased?.kind === 'register') return aliased.harnessDir
+  return caseFoldedRegisterRoot(landed)
+}
+
 /** One refusal as the engine violation shape (the same
  * `[severity] code: message (fix: …)` dialect the engine validators emit). */
 function authorityViolation(code: string, message: string): ValidationResult {
@@ -316,5 +329,19 @@ export async function storeAuthorityRefusals(input: StoreAuthorityInput): Promis
   const route = await readAuthorityRoute(registerDir)
   if (route.kind === 'retired') return [registerRetiredRefusal(route.storeRevision)]
   if (route.kind === 'unavailable') return [authorityUnavailableRefusal(route)]
+  // Stricter-wins veto (RV-2): a legacy fall-through may still LAND on another
+  // harness's register through a symlink alias while only the source authority
+  // was checked — classify the landed destination too, and its authority
+  // refusals veto the legacy fall-through. Both contexts pre-activation keep
+  // the legacy route (issue contract §7); the landed store database is already
+  // refused by the S-G4b-03 store check above.
+  if (route.kind === 'legacy') {
+    const landedDir = landedRegisterDirOf(resolved, landed)
+    if (landedDir !== null && landedDir !== registerDir) {
+      const landedRoute = await readAuthorityRoute(landedDir)
+      if (landedRoute.kind === 'retired') return [registerRetiredRefusal(landedRoute.storeRevision)]
+      if (landedRoute.kind === 'unavailable') return [authorityUnavailableRefusal(landedRoute)]
+    }
+  }
   return [] // legacy: pre-activation — the register keeps its document validator
 }
