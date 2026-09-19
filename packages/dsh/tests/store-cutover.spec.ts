@@ -20,9 +20,9 @@
  *    uninitialized/staged store (pre-activation) does not.
  * 5. The current phase/leases still come from the JSON execution authority.
  */
-import { mkdir, mkdtemp, rm, unlink } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, symlink, unlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'bun:test'
 import {
   MIN_BUN_VERSION,
@@ -905,5 +905,66 @@ describe('store authority — fs-intent and adapter refuse authority bytes (FW-1
     const hook = await app.ctx.dshHostAdapter.beforeStatusWrite(path, undefined)
     expect(hook.ok).toBe(false)
     expect(hook.code).toBe('project.register.retired')
+  })
+
+  it('a pre-activation register whose alias lands on an ACTIVE harness register is vetoed (stricter-wins, RV-2)', async () => {
+    const { app, harnessDir } = await appWithRoot('store-authority-cross-legacy')
+    // The DESTINATION harness: marker-complete, ACTIVE store, real register.
+    const destHarness = join(dirname(harnessDir), 'dest-workspace', '.mstar')
+    await seedHarness(destHarness, {
+      'status.json': v2Root([]),
+      'workflows/.keep': '',
+      'projects/_default/residuals.json': v2Register({}),
+    })
+    await seedStore(destHarness)
+    await sealStoreForReaders(destHarness)
+    // The SOURCE harness (the app's own, pre-activation): its register is a
+    // symlink to the destination's register — a write lands there with only
+    // the source authority checked, so the landed context must veto.
+    await seedHarness(harnessDir, {
+      'status.json': v2Root([v2WorkflowEntry('wf-store')]),
+      'workflows/wf-store/snapshot.json': cleanupSnapshotJson('plan-a'),
+    })
+    await mkdir(join(harnessDir, 'projects', '_default'), { recursive: true })
+    const sourceRegister = join(harnessDir, 'projects', '_default', 'residuals.json')
+    await symlink(join(destHarness, 'projects', '_default', 'residuals.json'), sourceRegister)
+
+    const outcome = await app.ctx
+      .waterfall('fs/write-intent', registerTarget(harnessDir), {}, async () => ({ kind: 'createIfAbsent' as const }))
+      .then(() => undefined, (error: unknown) => error)
+    expect(outcome).toBeInstanceOf(StatusVetoError)
+    expect((outcome as StatusVetoError).violations.map((violation) => violation.code)).toEqual(['project.register.retired'])
+
+    const hook = await app.ctx.dshHostAdapter.beforeStatusWrite(sourceRegister, undefined)
+    expect(hook.ok).toBe(false)
+    expect(hook.code).toBe('project.register.retired')
+  })
+
+  it('a pre-activation register whose alias lands on ANOTHER pre-activation register keeps the legacy route (RV-2)', async () => {
+    const { app, harnessDir } = await appWithRoot('store-authority-cross-legacy-both')
+    // Both contexts pre-activation (issue contract §7): the landed register
+    // keeps its document validator — no authority veto on either side.
+    const destHarness = join(dirname(harnessDir), 'dest-workspace', '.mstar')
+    await seedHarness(destHarness, {
+      'status.json': v2Root([]),
+      'workflows/.keep': '',
+      'projects/_default/residuals.json': v2Register({ 'plan-a': [v2ResidualEntry('R1', { severity: 'low', source_plan: 'plan-a' })] }),
+    })
+    await seedHarness(harnessDir, {
+      'status.json': v2Root([v2WorkflowEntry('wf-store')]),
+      'workflows/wf-store/snapshot.json': cleanupSnapshotJson('plan-a'),
+    })
+    await mkdir(join(harnessDir, 'projects', '_default'), { recursive: true })
+    const sourceRegister = join(harnessDir, 'projects', '_default', 'residuals.json')
+    await symlink(join(destHarness, 'projects', '_default', 'residuals.json'), sourceRegister)
+    const advisories = captureStatusAdvisories(app.ctx)
+
+    const intent = await app.ctx.waterfall('fs/write-intent', registerTarget(harnessDir), {}, async () => ({ kind: 'createIfAbsent' as const }))
+    expect(intent).toEqual({ kind: 'createIfAbsent' })
+    expect(advisories).toHaveLength(0)
+
+    const hook = await app.ctx.dshHostAdapter.beforeStatusWrite(sourceRegister, JSON.parse(v2Register({})) as Record<string, unknown>)
+    expect(hook.ok).toBe(true)
+    expect(hook.code).toBe('host.beforeStatusWrite.ok')
   })
 })

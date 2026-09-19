@@ -1107,7 +1107,10 @@ function toWorkflowDTO(
         catalogPinRevision: plan.catalog_pin_revision,
         catalog: planCatalog,
         leases: leases
-          .filter((lease) => lease.plan_id === plan.plan_id)
+          // Scope by the projection's own (workflow_id, plan_id) key: the same
+          // plan id can execute under two workflows, and a plan row must only
+          // ever attach its own workflow's leases.
+          .filter((lease) => lease.workflow_id === row.id && lease.plan_id === plan.plan_id)
           .map((lease) => ({
             workflowId: lease.workflow_id,
             planId: lease.plan_id,
@@ -1232,7 +1235,14 @@ function composeIteration(
 
   const plans: IterationPlanDTO[] = planIds.map((planId) => {
     const planCatalog = identities.get(identityToken("plan", planId)) ?? null;
-    const executionRow = generated.plans.find((plan) => plan.plan_id === planId);
+    // Scope by the projection's own (workflow_id, plan_id) key: the
+    // iteration's own row wins, and a plan not yet executing under the
+    // iteration may still surface its dedicated plan-workflow row
+    // (workflow_id == plan_id). A third workflow's row sharing the plan id is
+    // never this plan's execution state.
+    const executionRow =
+      generated.plans.find((plan) => plan.plan_id === planId && plan.workflow_id === iterationId) ??
+      generated.plans.find((plan) => plan.plan_id === planId && plan.workflow_id === planId);
     const planBadges: DashboardBadge[] = [];
     if (planCatalog === null) planBadges.push("catalog-missing");
     if (executionRow === undefined) {

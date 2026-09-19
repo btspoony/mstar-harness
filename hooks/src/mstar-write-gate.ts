@@ -265,6 +265,19 @@ function aliasedRegisterDir(resolved: string, landed: string): string | null {
   return aliased?.kind === "register" ? aliased.harnessDir : null;
 }
 
+/** The harness root of the register a write LANDS on through a symlink alias
+ * (stricter-wins veto): the landed destination of an alias is itself an
+ * authority candidate even when the caller's own path already classified as a
+ * register elsewhere — classified by the exact-case marker probe first, then
+ * the FW-3 folded shape walk. `null` when the write is not an alias or does
+ * not land on a register. */
+function landedRegisterDirOf(resolved: string, landed: string): string | null {
+  if (landed === resolved) return null;
+  const aliased = harnessDocKindOfTarget(landed);
+  if (aliased?.kind === "register") return aliased.harnessDir;
+  return caseFoldedRegisterRoot(landed);
+}
+
 /** One authority refusal as the contract's violation line (same
  * `[severity] code: message (fix: …)` + skill-pointer dialect as the engine
  * violations — only the third stderr line differs, naming the authority
@@ -472,6 +485,28 @@ try {
       }
       // `legacy`: pre-activation (no store / staged store) — the register is
       // still the live authority, so its document validator decides below.
+      // Stricter-wins veto: the write may LAND on another harness's register
+      // through a symlink alias while only the source authority was checked
+      // — classify the landed destination too, and its authority refusals
+      // veto the legacy fall-through. Both contexts pre-activation keep the
+      // legacy path (issue contract §7); the landed store database is already
+      // refused by the S-G4b-03 store check above.
+      if (route.kind === "legacy") {
+        const landedDir = landedRegisterDirOf(targetPath, landed);
+        if (landedDir !== null && landedDir !== registerDir) {
+          const landedRoute = await readAuthorityRoute(landedDir);
+          if (landedRoute.kind === "retired") {
+            blockAuthorityWrite(toolName, displayTarget(targetPath, landedDir), [
+              registerRetiredRefusal(landedRoute.storeRevision),
+            ]);
+          }
+          if (landedRoute.kind === "unavailable") {
+            blockAuthorityWrite(toolName, displayTarget(targetPath, landedDir), [
+              authorityUnavailableRefusal(landedRoute),
+            ]);
+          }
+        }
+      }
     }
     const gated = target ?? { harnessDir: registerDir!, kind: "register" as const };
 

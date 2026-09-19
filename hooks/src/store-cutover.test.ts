@@ -251,6 +251,38 @@ describe("ZCode write gate — authority paths (source entry)", () => {
     expect(unrelated.stderr).toBe("");
   });
 
+  test("a pre-activation register whose alias lands on an ACTIVE harness's register is vetoed (stricter-wins)", async () => {
+    // RV-2: the source harness is pre-activation (legacy route), but its
+    // register is a symlink to ANOTHER harness's register whose store is
+    // active — the write lands there with only the source authority checked.
+    // The landed context's authority refusals veto the legacy fall-through.
+    const source = makeHarness("cross-src-legacy", "hard");
+    const dest = makeHarness("cross-dest-active", "soft");
+    await seedActiveStore(dest.harness);
+    writeFileSync(dest.register, VALID_REGISTER);
+    symlinkSync(dest.register, source.register);
+
+    const vetoed = runGate(process.execPath, HOOK_SRC, writeEvent(source.register, VALID_REGISTER));
+    expect(vetoed.exitCode).toBe(2);
+    expect(vetoed.stdout).toBe("");
+    // Document-valid register bytes prove the veto is the landed authority
+    // route, not a shape violation.
+    expect(vetoed.stderr).toContain("project.register.retired");
+    expect(vetoed.stderr).toContain(AUTHORITY_LINE);
+
+    // Both contexts pre-activation keep the legacy path (issue contract §7):
+    // the landed register's own document validator decides, on the source's
+    // enforcement axis.
+    const legacyDest = makeHarness("cross-dest-legacy", "soft");
+    writeFileSync(legacyDest.register, VALID_REGISTER);
+    const legacySource = makeHarness("cross-src-legacy-2", "hard");
+    symlinkSync(legacyDest.register, legacySource.register);
+    expect(runGate(process.execPath, HOOK_SRC, writeEvent(legacySource.register, VALID_REGISTER)).exitCode).toBe(0);
+    const invalid = runGate(process.execPath, HOOK_SRC, writeEvent(legacySource.register, BAD_JSON));
+    expect(invalid.exitCode).toBe(2);
+    expect(lines(invalid)[2]).toBe(ENFORCEMENT_LINE); // the enforcement axis, not the authority invariant
+  });
+
   test("unrelated targets and MSTAR_WRITE_GATE=off still pass silently", async () => {
     const fixture = makeHarness("unrelated", "hard");
     await seedActiveStore(fixture.harness);

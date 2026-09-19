@@ -607,6 +607,7 @@ export type {
   CatalogImportEvidence,
   CatalogImportInput,
   CatalogImportLinkProposal,
+  CatalogImportPartialState,
   CatalogImportPlan,
   CatalogImportProvenance,
   CatalogImportReceipt,

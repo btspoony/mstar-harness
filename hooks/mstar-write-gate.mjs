@@ -3572,7 +3572,7 @@ function toWorkflowDTO(row, plans, leases, identities) {
         doneAt: plan.done_at,
         catalogPinRevision: plan.catalog_pin_revision,
         catalog: planCatalog,
-        leases: leases.filter((lease) => lease.plan_id === plan.plan_id).map((lease) => ({
+        leases: leases.filter((lease) => lease.workflow_id === row.id && lease.plan_id === plan.plan_id).map((lease) => ({
           workflowId: lease.workflow_id,
           planId: lease.plan_id,
           kind: lease.kind === "integration-merge" ? "integration-merge" : "execution",
@@ -3663,7 +3663,7 @@ function composeIteration(iterationId, catalog, generated, planIds, documentIds,
   const workflowRow = generated.workflows.find((row) => row.id === iterationId && row.type === "iteration");
   const plans = planIds.map((planId) => {
     const planCatalog = identities.get(identityToken("plan", planId)) ?? null;
-    const executionRow = generated.plans.find((plan) => plan.plan_id === planId);
+    const executionRow = generated.plans.find((plan) => plan.plan_id === planId && plan.workflow_id === iterationId) ?? generated.plans.find((plan) => plan.plan_id === planId && plan.workflow_id === planId);
     const planBadges2 = [];
     if (planCatalog === null)
       planBadges2.push("catalog-missing");
@@ -3875,6 +3875,14 @@ function aliasedRegisterDir(resolved, landed) {
   const aliased = harnessDocKindOfTarget(landed);
   return aliased?.kind === "register" ? aliased.harnessDir : null;
 }
+function landedRegisterDirOf(resolved, landed) {
+  if (landed === resolved)
+    return null;
+  const aliased = harnessDocKindOfTarget(landed);
+  if (aliased?.kind === "register")
+    return aliased.harnessDir;
+  return caseFoldedRegisterRoot(landed);
+}
 function authorityViolation(code, message) {
   return { ok: false, severity: "high", code, message };
 }
@@ -3994,6 +4002,22 @@ try {
         blockAuthorityWrite(toolName, displayTarget(targetPath, registerDir), [
           authorityUnavailableRefusal(route)
         ]);
+      }
+      if (route.kind === "legacy") {
+        const landedDir = landedRegisterDirOf(targetPath, landed);
+        if (landedDir !== null && landedDir !== registerDir) {
+          const landedRoute = await readAuthorityRoute(landedDir);
+          if (landedRoute.kind === "retired") {
+            blockAuthorityWrite(toolName, displayTarget(targetPath, landedDir), [
+              registerRetiredRefusal(landedRoute.storeRevision)
+            ]);
+          }
+          if (landedRoute.kind === "unavailable") {
+            blockAuthorityWrite(toolName, displayTarget(targetPath, landedDir), [
+              authorityUnavailableRefusal(landedRoute)
+            ]);
+          }
+        }
       }
     }
     const gated = target ?? { harnessDir: registerDir, kind: "register" };
