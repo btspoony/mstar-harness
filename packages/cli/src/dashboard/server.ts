@@ -1,10 +1,10 @@
 /**
- * Dashboard loopback server (plan 20260918-dashboard D2).
+ * Dashboard loopback server.
  *
  * The ONE HTTP boundary in front of the P6 read transport
- * (`packages/cli/src/store-read.ts`): fixed static routes serving the D1
- * inlined assets, the fixed `/api/...` route table mapped exactly to the
- * engine's `ReadEnvelope` DTOs, and the boundary protections the plan fixes --
+ * (`packages/cli/src/store-read.ts`): fixed static routes serving the inlined
+ * assets, the fixed `/api/...` route table mapped exactly to the
+ * engine's `ReadEnvelope` DTOs, and the fixed boundary protections --
  * loopback binding only, Host/Origin checks, no CORS, the exact CSP, JSON
  * `no-store` + `nosniff`, and structured errors that never leak a stack or a
  * credential.

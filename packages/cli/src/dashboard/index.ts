@@ -1,5 +1,5 @@
 /**
- * Dashboard CLI startup (plan 20260918-dashboard D2): `mstar dashboard`.
+ * Dashboard CLI startup: the `mstar dashboard` command.
  *
  * Owns the command's lifecycle around `startDashboard`: print the resolved URL
  * only after the socket listens, open the browser through a fixed

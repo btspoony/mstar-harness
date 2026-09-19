@@ -1,5 +1,5 @@
 /**
- * Workflows view (plan 20260918-dashboard D4): the list plus the per-workflow
+ * Workflows view: the list plus the per-workflow
  * detail over the P6 read envelope.
  *
  * Two authorities meet here and stay separately labelled (state-projection

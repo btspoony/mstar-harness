@@ -1,5 +1,5 @@
 /**
- * Dashboard loopback server (plan 20260918-dashboard D2).
+ * Dashboard loopback server.
  *
  * Every case drives an actual temporary loopback server (`startDashboard`)
  * over a real temporary `node:sqlite` store: the DTO envelopes, the refusal

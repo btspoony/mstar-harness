@@ -6413,8 +6413,8 @@ function attachWorkflowGroup(target: Command): void {
 
 attachWorkflowGroup(program);
 
-// Read-only local dashboard (plan 20260918-dashboard D2). Loopback binding is
-// fixed: there is deliberately no host/bind-address option.
+// Read-only local dashboard. Loopback binding is fixed: there is deliberately
+// no host/bind-address option.
 program
   .command("dashboard")
   .description("Start the read-only Morning Star dashboard on 127.0.0.1")

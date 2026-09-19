@@ -1,12 +1,12 @@
 /**
- * View-model edges (plan 20260918-dashboard D3 + D4).
+ * View-model edges.
  *
- * The edges the task briefs name — filter defaults/round-trip, history derived
- * strictly from recorded events, unknown dates (D3), and the authority split
- * between the catalog and the execution projection with its honest
- * stale/unavailable disclosure (D4) — are checked here against real DTO shapes.
- * Rendering is D5's actual local browser smoke; no test asserts a mocked HTML
- * string.
+ * The edges this suite checks — filter defaults/round-trip, history
+ * derived strictly from recorded events, unknown dates, and the authority
+ * split between the catalog and the execution projection with its honest
+ * stale/unavailable disclosure — are asserted against real DTO shapes.
+ * Rendering is exercised by the actual local browser smoke; no test asserts a
+ * mocked HTML string.
  */
 import { describe, expect, test } from "bun:test";
 import type {

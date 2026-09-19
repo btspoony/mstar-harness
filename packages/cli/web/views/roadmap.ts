@@ -1,5 +1,5 @@
 /**
- * Roadmap view (plan 20260918-dashboard D4): one project's direction document,
+ * Roadmap view: one project's direction document,
  * read-only.
  *
  * The roadmap DTO carries the catalog's project identity — authoritative — plus
@@ -8,7 +8,7 @@
  * `unavailable`, and a valid generation with no projected roadmap row for the
  * project is `absent`; neither is rendered as an empty document. Goals are
  * direction-document checkboxes shown as text: this view has no editor and no
- * mutation affordance (plan D4, DESIGN.md "Roadmap shows project direction/goals
+ * mutation affordance (DESIGN.md "Roadmap shows project direction/goals
  * as text, not editable checkboxes").
  *
  * The route is per project (`/api/roadmap?project=`), so the project comes from
