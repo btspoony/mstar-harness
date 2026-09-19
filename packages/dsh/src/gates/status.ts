@@ -39,6 +39,7 @@ import type {
 import type { FsTarget, FsVersion, FsWriteIntent } from '@deepseek-ai/dsh-fs'
 import { STATUS_FILE, asRecord, formatViolation, HarnessResolver, actorAgentOf } from './_shared.ts'
 import type { Config } from './_shared.ts'
+import { storeAuthorityRefusals } from './store-authority.ts'
 // Type-only (erased at runtime — no cycle): the adapter owns the shared
 // status-gate core and is constructed by the entry `apply`; the listener
 // signatures type their adapter parameter through the adapter module.
@@ -168,14 +169,21 @@ const CLEANUP_AUTHORITY_UNAVAILABLE_CODE = 'findings.cleanup-authority-unavailab
 /**
  * Typed hard-mode veto for the status gate's store-authority refusal class
  * (the dsh fs-policy veto channel: "veto = throw"; the fs tool turns the throw
- * into an isError tool result carrying `{ name, code }`). Thrown ONLY by
- * {@link gateStatusIntent}, and only when the pre-write document's violations
- * include a store-authority refusal under hard enforcement — the repair escape
- * every other violation class still gets is unavailable there.
+ * into an isError tool result carrying `{ name, code }`). Two decision
+ * classes throw it:
+ *
+ * - the UNCONDITIONAL store-authority refusals (G4b, plan QC fix wave FW-1):
+ *   a hand write of `{HARNESS_DIR}/store.db` (`store.direct-write-refused`) or
+ *   of a retired/unreadable-authority register (`project.register.retired` /
+ *   `store.authority-unavailable`) — an authority invariant, vetoed in BOTH
+ *   enforcement modes;
+ * - the hard-mode cleanup-authority class (see
+ *   {@link CLEANUP_AUTHORITY_UNAVAILABLE_CODE}) — the repair escape every
+ *   other violation class still gets is unavailable there.
  *
  * The content-blind listener has no incoming content to lint, but it does not
- * need any for THIS decision: the refusal is about the authority's
- * readability, which no content can change.
+ * need any for THESE decisions: they are about the authority itself, which no
+ * content can change.
  */
 export class StatusVetoError extends Error {
   /** Stable code for tool-result serialization (the `{ name, code }` convention). */
@@ -183,9 +191,9 @@ export class StatusVetoError extends Error {
   /** The violations that caused the veto (the store-authority refusal included). */
   readonly violations: readonly ValidationResult[]
 
-  constructor(target: string, violations: readonly ValidationResult[]) {
+  constructor(target: string, violations: readonly ValidationResult[], header: string) {
     super(
-      `${target} write vetoed by Enforcement: hard — the issue authority cannot be consulted, so the findings cleanup gate has no verdict and no filesystem write can repair it:\n${violations.map(formatViolation).join('\n')}`,
+      `${target} write vetoed — ${header}:\n${violations.map(formatViolation).join('\n')}`,
     )
     this.name = 'StatusVetoError'
     this.violations = violations
@@ -349,6 +357,36 @@ async function gateStatusIntent(
   try {
     if (harnessDir === null) return
     const kind = harnessDocKindOfTarget(harnessDir, target.displayPath)
+    // FW-1/G4b: the store-authority refusal class is decided BEFORE any
+    // document validation and vetoes in BOTH enforcement modes — a hand write
+    // of the store database, or of a retired/unreadable-authority register,
+    // is an authority invariant no enforcement flag governs (the dsh
+    // `catalogRegistrationVeto` precedent). The pre-activation legacy register
+    // route returns no refusals and keeps the document path below.
+    const authorityRefusals = await storeAuthorityRefusals({
+      resolvedHarnessDir: harnessDir,
+      directKind: kind,
+      rawPath: target.displayPath,
+    })
+    if (authorityRefusals.length > 0) {
+      const hard = resolveHard(harnessDir, config)
+      ctx.logger(LOGGER_NAME).error(
+        `${target.displayPath} ${operation} VETOED (store-authority refusal class; unconditional — an authority invariant, not the enforcement flag):\n${authorityRefusals.map(formatViolation).join('\n')}`,
+      )
+      // The advisory is contained: a throwing consumer must not hand the
+      // catch below an error it would contain as a degrade-to-allow (the
+      // throw at the end of this branch IS the decision).
+      try {
+        ctx.emit('mstar/status-gate', { operation, target: target.displayPath, result: { ok: false, violations: authorityRefusals }, hard })
+      } catch (emitError) {
+        ctx.logger(LOGGER_NAME).error(`status gate veto advisory emit failed: ${(emitError as Error).message}`)
+      }
+      throw new StatusVetoError(
+        target.displayPath,
+        authorityRefusals,
+        'the issue/catalog authority is not hand-writable (store-authority refusal class; unconditional — an authority invariant, not the enforcement flag)',
+      )
+    }
     if (kind === null) return
     // The adapter owns the shared status-gate core (missing file = first
     // create = pass); this listener adds enforcement + observability.
@@ -373,7 +411,11 @@ async function gateStatusIntent(
           } catch (emitError) {
             ctx.logger(LOGGER_NAME).error(`status gate veto advisory emit failed: ${(emitError as Error).message}`)
           }
-          throw new StatusVetoError(target.displayPath, verdict.violations)
+          throw new StatusVetoError(
+            target.displayPath,
+            verdict.violations,
+            'Enforcement: hard — the issue authority cannot be consulted, so the findings cleanup gate has no verdict and no filesystem write can repair it',
+          )
         }
         // Repair escape: the current document is already invalid; this write
         // may BE the repair, so allow it — but make the degraded control

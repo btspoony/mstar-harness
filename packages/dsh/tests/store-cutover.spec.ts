@@ -43,7 +43,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { buildCatalogPayload, buildCatalogPayloadWithStore } from '../src/gates/catalog.ts'
 import { catalogRegistrationRefusal, resolveActiveWorkflow } from '../src/gates/workflow-selection.ts'
 import { StatusVetoError, validateStatusValue } from '../src/gates/status.ts'
-import { bootApp, seedHarness, seedKnowledgeDoc, seedOpenIssue, seedStore, v2Root, v2Snapshot, v2SnapshotWithPlans, v2WorkflowEntry, type BootResult } from './harness.ts'
+import { bootApp, seedHarness, seedKnowledgeDoc, seedOpenIssue, seedStore, v2Register, v2ResidualEntry, v2Root, v2Snapshot, v2SnapshotWithPlans, v2WorkflowEntry, type BootResult } from './harness.ts'
 import type { StatusGateAdvisory } from '../src/index.ts'
 
 let booted: BootResult | undefined
@@ -619,7 +619,6 @@ describe('store cutover — root selection is JSON-owned, registration is not', 
 /* ===========================================================================
  * 5. Execution facts stay JSON: phase/leases/status come from the snapshot
  * ========================================================================== */
-
 describe('store cutover — the JSON execution authority still owns phase and leases', () => {
   it('phase, status and leases render from the snapshot even while the store is unavailable', async () => {
     const { app, harnessDir } = await appWithRoot('store-json-authority')
@@ -680,5 +679,180 @@ describe('store cutover — the JSON execution authority still owns phase and le
     // A legacy register can never gate a plan again: the plan has no open issue.
     const gate = await validateStatusValue(cleanupSnapshot('plan-a'), 'snapshot', harnessDir)
     expect(gate.ok).toBe(true)
+  })
+})
+
+/* ===========================================================================
+ * 6. The store-authority refusal class (G4b, plan QC fix wave FW-1): the
+ *    fs-intent listener and the status-write adapter refuse the authority
+ *    bytes in BOTH enforcement modes — an authority invariant, never a
+ *    document judgment, and never the repair escape.
+ * ========================================================================== */
+
+describe('store authority — fs-intent and adapter refuse authority bytes (FW-1)', () => {
+  /**
+   * Seal a freshly seeded store for readers (the G2a pattern): one read
+   * open+close so later reads do not hit the documented bun-test open flake
+   * (a read right after the writer closes can surface `store.corrupt` /
+   * `store.busy` — which the authority route correctly treats as
+   * fail-closed `store.authority-unavailable`).
+   */
+  async function sealStoreForReaders(harnessDir: string): Promise<void> {
+    const handle = await openStore({ harnessDir }, 'read')
+    handle.close()
+  }
+
+  /** FsTarget for the authority database / a WAL sidecar at the harness root. */
+  const storeTarget = (harnessDir: string, suffix = ''): FsTarget => {
+    const path = join(harnessDir, `store.db${suffix}`)
+    return { targetKey: path as FsTarget['targetKey'], displayPath: path }
+  }
+  /** FsTarget for a project register under the harness root. */
+  const registerTarget = (harnessDir: string): FsTarget => {
+    const path = join(harnessDir, 'projects', '_default', 'residuals.json')
+    return { targetKey: path as FsTarget['targetKey'], displayPath: path }
+  }
+
+  it('a hand write of store.db is VETOED with store.direct-write-refused in WARN mode too (unconditional)', async () => {
+    const { app, harnessDir } = await storeApp()
+    await sealStoreForReaders(harnessDir)
+    // The register seed completes the harness-root markers (status.json +
+    // workflows/ + projects/) the authority classification requires.
+    await seedHarness(harnessDir, {
+      'status.json': v2Root([v2WorkflowEntry('wf-store')]),
+      'workflows/wf-store/snapshot.json': cleanupSnapshotJson('plan-a'),
+      'projects/_default/residuals.json': v2Register({ 'plan-a': [v2ResidualEntry('R1', { severity: 'low', source_plan: 'plan-a' })] }),
+    })
+    const advisories = captureStatusAdvisories(app.ctx)
+    let reached = 0
+
+    const outcome = await app.ctx
+      .waterfall('fs/write-intent', storeTarget(harnessDir), {}, async () => {
+        reached += 1
+        return { kind: 'createIfAbsent' as const }
+      })
+      .then(() => undefined, (error: unknown) => error)
+
+    expect(outcome).toBeInstanceOf(StatusVetoError)
+    expect((outcome as StatusVetoError).violations.map((violation) => violation.code)).toEqual(['store.direct-write-refused'])
+    expect(reached).toBe(0) // the veto is never delegated: the write cannot land
+    expect(advisories).toHaveLength(1)
+    expect(advisories[0]!.hard).toBe(false) // warn mode — the veto is NOT the enforcement axis
+    expect(advisories[0]!.repair).toBeUndefined()
+    expect(advisories[0]!.degraded).toBeUndefined()
+    expect(advisories[0]!.result.violations.map((violation) => violation.code)).toEqual(['store.direct-write-refused'])
+  })
+
+  it('a hand write of store.db is vetoed under hard enforcement as well, and the WAL sidecars too', async () => {
+    const { app, harnessDir } = await storeApp('hard')
+    await sealStoreForReaders(harnessDir)
+    await seedHarness(harnessDir, {
+      'status.json': v2Root([v2WorkflowEntry('wf-store')]),
+      'workflows/wf-store/snapshot.json': cleanupSnapshotJson('plan-a'),
+      'projects/_default/residuals.json': v2Register({ 'plan-a': [v2ResidualEntry('R1', { severity: 'low', source_plan: 'plan-a' })] }),
+    })
+    for (const suffix of ['', '-wal', '-shm']) {
+      const outcome = await app.ctx
+        .waterfall('fs/write-intent', storeTarget(harnessDir, suffix), {}, async () => ({ kind: 'createIfAbsent' as const }))
+        .then(() => undefined, (error: unknown) => error)
+      expect(outcome, suffix).toBeInstanceOf(StatusVetoError)
+      expect((outcome as StatusVetoError).violations.map((violation) => violation.code)).toEqual(['store.direct-write-refused'])
+    }
+  })
+
+  it('a register write while the store is ACTIVE is vetoed with project.register.retired in WARN mode too', async () => {
+    const { app, harnessDir } = await storeApp()
+    await sealStoreForReaders(harnessDir)
+    await seedHarness(harnessDir, {
+      'status.json': v2Root([v2WorkflowEntry('wf-store')]),
+      'workflows/wf-store/snapshot.json': cleanupSnapshotJson('plan-a'),
+      'projects/_default/residuals.json': v2Register({ 'plan-a': [v2ResidualEntry('R1', { severity: 'low', source_plan: 'plan-a' })] }),
+    })
+    const advisories = captureStatusAdvisories(app.ctx)
+
+    const outcome = await app.ctx
+      .waterfall('fs/write-intent', registerTarget(harnessDir), {}, async () => ({ kind: 'createIfAbsent' as const }))
+      .then(() => undefined, (error: unknown) => error)
+
+    expect(outcome).toBeInstanceOf(StatusVetoError)
+    expect((outcome as StatusVetoError).violations.map((violation) => violation.code)).toEqual(['project.register.retired'])
+    expect(advisories).toHaveLength(1)
+    expect(advisories[0]!.hard).toBe(false)
+    expect(advisories[0]!.result.violations.map((violation) => violation.code)).toEqual(['project.register.retired'])
+  })
+
+  it('a register write while the authority is UNREADABLE is vetoed with store.authority-unavailable (fail-closed)', async () => {
+    const { app, harnessDir } = await storeApp()
+    await seedHarness(harnessDir, {
+      'status.json': v2Root([v2WorkflowEntry('wf-store')]),
+      'workflows/wf-store/snapshot.json': cleanupSnapshotJson('plan-a'),
+      'projects/_default/residuals.json': v2Register({ 'plan-a': [v2ResidualEntry('R1', { severity: 'low', source_plan: 'plan-a' })] }),
+    })
+    await corruptStore(harnessDir)
+
+    const outcome = await app.ctx
+      .waterfall('fs/write-intent', registerTarget(harnessDir), {}, async () => ({ kind: 'createIfAbsent' as const }))
+      .then(() => undefined, (error: unknown) => error)
+
+    expect(outcome).toBeInstanceOf(StatusVetoError)
+    const refusal = (outcome as StatusVetoError).violations[0]!
+    expect(refusal.code).toBe('store.authority-unavailable')
+    expect(refusal.message).toContain('store.corrupt')
+  })
+
+  it('a register write in a PRE-ACTIVATION workspace keeps the legacy document route (no refusal)', async () => {
+    const { app, harnessDir } = await appWithRoot('store-authority-legacy')
+    // Contract §7: no store / a staged store leaves the register the live
+    // findings authority — the write falls through to its document validator
+    // (the shape-valid register below passes silently).
+    await seedHarness(harnessDir, {
+      'status.json': v2Root([v2WorkflowEntry('wf-store')]),
+      'workflows/wf-store/snapshot.json': cleanupSnapshotJson('plan-a'),
+      'projects/_default/residuals.json': v2Register({ 'plan-a': [v2ResidualEntry('R1', { severity: 'low', source_plan: 'plan-a' })] }),
+    })
+    const advisories = captureStatusAdvisories(app.ctx)
+
+    const intent = await app.ctx.waterfall('fs/write-intent', registerTarget(harnessDir), {}, async () => ({ kind: 'createIfAbsent' as const }))
+
+    expect(intent).toEqual({ kind: 'createIfAbsent' }) // delegated: the legacy authority still owns the register
+    expect(advisories).toHaveLength(0)
+  })
+
+  it('the host hook refuses the same class: beforeStatusWrite maps the authority refusals to a structured code', async () => {
+    const { app, harnessDir } = await storeApp()
+    await sealStoreForReaders(harnessDir)
+    await seedHarness(harnessDir, {
+      'status.json': v2Root([v2WorkflowEntry('wf-store')]),
+      'workflows/wf-store/snapshot.json': cleanupSnapshotJson('plan-a'),
+      'projects/_default/residuals.json': v2Register({ 'plan-a': [v2ResidualEntry('R1', { severity: 'low', source_plan: 'plan-a' })] }),
+    })
+
+    const storeWrite = await app.ctx.dshHostAdapter.beforeStatusWrite(join(harnessDir, 'store.db'), undefined)
+    expect(storeWrite.ok).toBe(false)
+    expect(storeWrite.code).toBe('store.direct-write-refused')
+
+    const registerWrite = await app.ctx.dshHostAdapter.beforeStatusWrite(join(harnessDir, 'projects', '_default', 'residuals.json'), undefined)
+    expect(registerWrite.ok).toBe(false)
+    expect(registerWrite.code).toBe('project.register.retired')
+
+    // A non-authority, non-coordination target keeps passing the hook.
+    const other = await app.ctx.dshHostAdapter.beforeStatusWrite(join(harnessDir, 'other.json'), undefined)
+    expect(other.ok).toBe(true)
+  })
+
+  it('a pre-activation workspace keeps the hook register validation (legacy authority)', async () => {
+    const { app, harnessDir } = await appWithRoot('store-authority-hook-legacy')
+    await seedHarness(harnessDir, {
+      'status.json': v2Root([v2WorkflowEntry('wf-store')]),
+      'workflows/wf-store/snapshot.json': cleanupSnapshotJson('plan-a'),
+      'projects/_default/residuals.json': v2Register({ 'plan-a': [v2ResidualEntry('R1', { severity: 'low', source_plan: 'plan-a' })] }),
+    })
+
+    const hook = await app.ctx.dshHostAdapter.beforeStatusWrite(
+      join(harnessDir, 'projects', '_default', 'residuals.json'),
+      JSON.parse(v2Register({})) as Record<string, unknown>,
+    )
+    expect(hook.ok).toBe(true)
+    expect(hook.code).toBe('host.beforeStatusWrite.ok')
   })
 })

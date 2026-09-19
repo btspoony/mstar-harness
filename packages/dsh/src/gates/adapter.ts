@@ -37,6 +37,7 @@ import { sessionHintOf } from './_shared.ts'
 import type { HarnessResolver, Config, SessionHintRead } from './_shared.ts'
 import { readWorkflowSessionBinding } from '../engine-status-store.ts'
 import { harnessDocKindOfTarget, validateStatusDoc, validateStatusValue, type HarnessDocKind } from './status.ts'
+import { storeAuthorityRefusals } from './store-authority.ts'
 import { catalogRegistrationRefusal, resolveActiveWorkflow } from './workflow-selection.ts'
 import type { SessionHint } from './workflow-selection.ts'
 import {
@@ -331,9 +332,14 @@ export class DshHostAdapter extends Service implements HostAdapter {
    * against the resolved harness dir (`harnessDocKindOfTarget` — root
    * status.json / workflow snapshot / project register, the P2-fixed shape)
    * and validated with the matching engine validator
-   * (`validateStatusValue`). Non-coordination paths (unclassifiable) pass —
-   * the hook's business is harness coordination documents only. Never
-   * throws; a failing gate maps to its FIRST violation
+   * (`validateStatusValue`). FW-1/G4b: the store-authority paths are decided
+   * BEFORE that classification and refuse in BOTH enforcement modes — a hand
+   * write of the store database (`store.direct-write-refused`) or of a
+   * retired/unreadable-authority register (`project.register.retired` /
+   * `store.authority-unavailable`) is an authority invariant, not a document
+   * judgment; the pre-activation legacy register route keeps the document
+   * validator. Other non-coordination paths (unclassifiable) still pass.
+   * Never throws; a failing gate maps to its FIRST violation
    * (severity/code/message/fix/aliases preserved — failing gates always
    * carry ≥1 violation), a passing gate to
    * `host.beforeStatusWrite.ok` (the engine test convention for this hook).
@@ -344,6 +350,16 @@ export class DshHostAdapter extends Service implements HostAdapter {
   async beforeStatusWrite(path: string, doc: unknown): Promise<ValidationResult> {
     const harnessDir = this.resolver.forWorkspace(undefined)
     const kind = harnessDir === null ? null : harnessDocKindOfTarget(harnessDir, path)
+    // FW-1/G4b: the authority invariant is decided before the document path.
+    const authorityRefusals = await storeAuthorityRefusals({
+      resolvedHarnessDir: harnessDir,
+      directKind: kind,
+      rawPath: path,
+    })
+    if (authorityRefusals.length > 0) {
+      const first = authorityRefusals[0]!
+      return { ok: false, severity: first.severity, code: first.code, message: first.message, fix: first.fix, aliases: first.aliases }
+    }
     if (kind === null) {
       // Not a canonical harness coordination document — nothing to gate.
       return { ok: true, severity: 'low', code: 'host.beforeStatusWrite.ok', message: `status write to ${path} validated` }
