@@ -21,7 +21,11 @@ Document trade-offs for **each** shortlisted candidate (2–4), then lock **one*
 
 ## Lock outputs（must land on disk）
 
-Write into compass (and plan Scope as needed):
+Persistence is **two-staged**: the lock record lands on disk before the `direction-lock` anchor; the compass draft is written from it afterwards（§1.3, after that anchor）.
+
+**1 — Lock time（before the anchor, before the draft）**: the five fields below land on disk as a **direction-lock record** — a dedicated lock record file the loop writes ahead of the compass, or any persistent carrier the route already keeps at that point. This record — not the compass — is what satisfies the `direction-lock` anchor precondition **rationale recorded on disk**; the compass deliberately does not exist yet at that moment, so its absence is expected, not a missing input.
+
+**2 — Compass draft（§1.3）**: the draft incorporates the record's five fields into the compass sections they populate today（`## Scope`, `## Decisions` rationale, `## Acceptance Criteria`, `## Non-Goals`; scale budget as the resulting plan-count cap）and into plan Scope as needed. Carry the recorded text across — do not re-derive or re-word the lock at draft time.
 
 | Field | Content |
 |-------|---------|
