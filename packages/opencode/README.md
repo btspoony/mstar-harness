@@ -4,7 +4,7 @@ Morning Star (启明星) harness plugin for [OpenCode](https://opencode.ai).
 
 Install this package via OpenCode’s `plugin` array — it bundles `mstar-*` skills, role agents, and iteration commands so multi-role workflows (PM routing, SDD implement, QC tri-review, iteration lifecycle) work the same way as in the Cursor and Codex plugins.
 
-Development and asset bundling use **Bun >=1.4.0**. The published plugin is a `--target node` bundle for the OpenCode host process — that is a Node entry, not a second demand to install Bun on every OpenCode user machine. Do not treat CLI shebang launch and this plugin entry as “must have both runtimes”: they are two entrypoints with two floors — this plugin is the Node one, the installer CLI below is the Bun-shebang one.
+Development and asset bundling use **Bun >=1.4.0**. The published plugin is a `--target node` bundle for the OpenCode host process — that is a Node entry with a **Node >=24.18.0** floor (`node:sqlite`), not a second demand to install Bun on every OpenCode user machine. Do not treat CLI shebang launch and this plugin entry as “must have both runtimes”: they are two entrypoints with two floors — this plugin is the Node one, the installer CLI below is the Bun-shebang one.
 
 ## Install
 
