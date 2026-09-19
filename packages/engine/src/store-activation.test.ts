@@ -273,12 +273,12 @@ describe("store activation barrier", () => {
     const { context, harness, apply } = await stagedFixture("activation-credentials-");
     const tainted = {
       ...attestation(),
-      operator: { actor: "ops-engineer", authorizationRef: "D29", sessionToken: "tok-live-1" },
+      operator: { actor: "ops-engineer", authorizationRef: "D29", sessionToken: "fixture-credential-never-persisted" },
     } as unknown as ActivationAttestation;
     const error = await refusalOf("store.attestation-invalid", () => activateStore(context, apply, tainted));
     expect(error.message).toContain("sessionToken");
     expect(error.message).toContain("never session credentials");
-    expect(readFileSync(join(harness, "store.db")).includes("tok-live-1")).toBe(false);
+    expect(readFileSync(join(harness, "store.db")).includes("fixture-credential-never-persisted")).toBe(false);
     expect((await metaOf(context)).authority_state).toBe("staged");
   });
 
