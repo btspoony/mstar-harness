@@ -1234,7 +1234,11 @@ describe("mstar audit supply-chain — lockfile + workflow checks", () => {
 describe("mstar audit promote — v2 workflow registration for selected plans", () => {
   /** Scaffold an audit dir with two plan files under a temp root and return
    * `{ harnessDir, outDir }` (outDir under harnessDir/plans/, the documented
-   * `{PLAN_DIR}/audit-<date>/` layout). */
+   * `{PLAN_DIR}/audit-<date>/` layout).
+   *
+   * Seeds an active issue store first: promotion registers through the catalog
+   * registration journal, which publishes rows into store.db and refuses
+   * fail-closed (`store.not-initialized`) on a harness dir without one. */
   function scaffoldFixture(dir: string): { harnessDir: string; outDir: string } {
     const harnessDir = join(dir, "harness");
     const outDir = join(harnessDir, "plans", "audit-2026-08-08");
@@ -1264,6 +1268,8 @@ describe("mstar audit promote — v2 workflow registration for selected plans", 
       ],
       { date: "2026-08-08" },
     );
+    const init = runCli(["store", "init", "--harness", harnessDir]);
+    expect(init.exitCode).toBe(0);
     return { harnessDir, outDir };
   }
 
@@ -1394,7 +1400,10 @@ describe("mstar audit promote — v2 workflow registration for selected plans", 
       const before = readJson(snapshotPath);
 
       // Second promote (different subset) must refuse with exit 1 and name
-      // the existing snapshot path — no silent whole-rewrite.
+      // the existing snapshot path — no silent whole-rewrite. Post-cutover,
+      // the refusal is the catalog registration journal's stable
+      // `catalog.registration-conflict` code: the snapshot's identity is NOT
+      // this reviewed request, and nothing was replaced or deleted.
       const second = runCli(["audit", "promote", outDir, "--plans", "002", "--harness", harnessDir,
         "--delivery-kind",
         "development",
@@ -1404,7 +1413,7 @@ describe("mstar audit promote — v2 workflow registration for selected plans", 
         "main",
       ]);
       expect(second.exitCode).toBe(1);
-      expect(second.stderr).toContain("already exists");
+      expect(second.stderr).toContain("catalog.registration-conflict");
       expect(second.stderr).toContain(snapshotPath);
 
       // First rows intact.
@@ -1442,7 +1451,7 @@ describe("mstar compound validate — knowledge-doc schema / index / scope", () 
     });
   });
 
-  test("--knowledge-dir without README index → compound.index.missing-readme, exit 1", () => {
+  test("--knowledge-dir without README index → compound.index.retired, exit 1", () => {
     withTempDir((dir) => {
       const doc = join(dir, "doc.md");
       writeFileSync(doc, KNOWLEDGE_GOOD);
@@ -1450,7 +1459,10 @@ describe("mstar compound validate — knowledge-doc schema / index / scope", () 
       mkdirSync(knowledgeDir);
       const result = runCli(["compound", "validate", doc, "--knowledge-dir", knowledgeDir]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("compound.index.missing-readme");
+      // The README index is retired in authority (state-projection contract
+      // §4, P4 adjudication): compound.index.missing-readme is superseded by
+      // the actionable retired-reader refusal.
+      expect(result.stderr).toContain("compound.index.retired");
     });
   });
 
@@ -1467,7 +1479,7 @@ describe("mstar compound validate — knowledge-doc schema / index / scope", () 
     });
   });
 
-  test("doc inside --knowledge-dir with index row → all OK, exit 0", () => {
+  test("doc inside --knowledge-dir with index row → README register retired (exit 1, scope still guarded)", () => {
     withTempDir((dir) => {
       const knowledgeDir = join(dir, "knowledge");
       mkdirSync(knowledgeDir);
@@ -1475,9 +1487,12 @@ describe("mstar compound validate — knowledge-doc schema / index / scope", () 
       writeFileSync(doc, KNOWLEDGE_GOOD);
       writeFileSync(join(knowledgeDir, "README.md"), "# Knowledge\n\n| Document | Source Plan | Description | Status |\n|---|---|---|---|\n| [doc](doc.md) | 20260808-x | x | done |\n");
       const result = runCli(["compound", "validate", doc, "--knowledge-dir", knowledgeDir]);
-      expect(result.exitCode).toBe(0);
+      // A README index row no longer satisfies the index gate (state-projection
+      // contract §4): the retired reader refuses with exit 1 even when the row
+      // exists. The schema + scope gates still evaluate on the doc.
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("compound.index.retired");
       expect(result.stdout).toContain("compound validate (schema): OK");
-      expect(result.stdout).toContain("compound validate (index rows): OK");
       expect(result.stdout).toContain("compound validate (scope guard): OK");
     });
   });
@@ -1740,6 +1755,8 @@ describe("project-root path resolution — all six dev commands with relative ar
   const cases: {
     name: string;
     args: string[];
+    /** Expected exit for the case (default 0); shown in the test title. */
+    exit?: number;
     setup: (dir: string) => void;
     assert: (dir: string, result: RunResult) => void;
   }[] = [
@@ -1787,6 +1804,14 @@ describe("project-root path resolution — all six dev commands with relative ar
     },
     {
       name: "compound validate <relative doc> + <relative --knowledge-dir>",
+      // compound.index.retired (state-projection contract §4) makes the
+      // --knowledge-dir form refuse with exit 1 regardless of path resolution,
+      // so this case pins exit 1. The resolution property this matrix guards
+      // is still proven: schema OK requires the doc to resolve under the
+      // project root, and scope guard OK requires BOTH the doc and the
+      // --knowledge-dir to resolve there (a cwd-relative resolution would
+      // report compound.scope.outside instead).
+      exit: 1,
       args: ["compound", "validate", "knowledge/doc.md", "--knowledge-dir", "knowledge"],
       setup: (dir) => {
         mkdirSync(join(dir, "knowledge"), { recursive: true });
@@ -1794,9 +1819,9 @@ describe("project-root path resolution — all six dev commands with relative ar
         writeFileSync(join(dir, "knowledge", "README.md"), "# Knowledge\n\n| Document | Source Plan | Description | Status |\n|---|---|---|---|\n| [doc](doc.md) | 20260808-x | x | done |\n");
       },
       assert: (_dir, result) => {
-        expect(result.exitCode).toBe(0);
+        expect(result.exitCode).toBe(1);
+        expect(result.stderr).toContain("compound.index.retired");
         expect(result.stdout).toContain("compound validate (schema): OK");
-        expect(result.stdout).toContain("compound validate (index rows): OK");
         expect(result.stdout).toContain("compound validate (scope guard): OK");
       },
     },
@@ -1832,7 +1857,7 @@ describe("project-root path resolution — all six dev commands with relative ar
   ];
 
   for (const c of cases) {
-    test(`relative path args resolve against the project root — ${c.name} (exit 0)`, () => {
+    test(`relative path args resolve against the project root — ${c.name} (exit ${c.exit ?? 0})`, () => {
       withTempDir((dir) => {
         c.setup(dir);
         const nested = join(dir, "nested", "deep");

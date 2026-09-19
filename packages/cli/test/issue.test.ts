@@ -9,7 +9,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { initializeStore } from "@mstar-harness/engine";
+import { compareVersions, initializeStore, MIN_BUN_VERSION, MIN_NODE_VERSION } from "@mstar-harness/engine";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
 const BUNDLE = join(CLI_ROOT, "dist/mstar-harness.js");
@@ -150,11 +150,21 @@ function writeHandWrittenEnvelope(root: string, harness: string, planId = "20260
 }
 
 describe("mstar issue CLI bundle", () => {
-  test("records Node 24.18.0 and Bun 1.4.0 for this suite", () => {
+  test("records runtimes >= the issue-store floors (Node 24.18.0, Bun 1.4.0)", () => {
     // Evidence: subprocess launchers used below. Print so the report names them.
     console.log(`issue.test runtimes NODE_BIN=${NODE_BIN} node=${NODE_VERSION} bun=${BUN_VERSION}`);
-    expect(NODE_VERSION).toBe("v24.18.0");
-    expect(BUN_VERSION).toBe("1.4.0");
+    // The recorded floor metadata itself is pinned (store-db.ts §8).
+    expect(MIN_NODE_VERSION).toBe("24.18.0");
+    expect(MIN_BUN_VERSION).toBe("1.4.0");
+    // The actual runtimes only promise >= the floor (package.json engines:
+    // node >=24.18.0 / bun >=1.4.0) — an exact-equality pin fails on every
+    // newer runtime, which is not a contract violation. A version-shaped
+    // string is required first so a failed `--version` read cannot silently
+    // compare as 0.
+    expect(NODE_VERSION).toMatch(/^v?\d+\.\d+/);
+    expect(BUN_VERSION).toMatch(/^\d+\.\d+/);
+    expect(compareVersions(NODE_VERSION.replace(/^v/, ""), MIN_NODE_VERSION)).toBeGreaterThanOrEqual(0);
+    expect(compareVersions(BUN_VERSION, MIN_BUN_VERSION)).toBeGreaterThanOrEqual(0);
   });
 
   test("built bundle exists with bun shebang", () => {
