@@ -40,7 +40,7 @@
       "modelHandoff": {
         "type": "boolean",
         "default": false,
-        "description": "When enabled, each new Morning Star iteration uses @slow for Prepare, then switches this coordinator session to handoffTarget after Phase 1 fully completes. Off by default."
+        "description": "When enabled, each new Morning Star iteration arms @slow once the direction is locked and before the Phase 1 draft is written, then switches this coordinator session to handoffTarget after Phase 1 fully completes. Off by default."
       },
       "handoffTarget": {
         "type": "enum",
