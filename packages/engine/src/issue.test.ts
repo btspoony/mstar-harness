@@ -2,7 +2,7 @@
  * issue.test.ts — C2/C3 proof: capture, occurrences, reads, disposition.
  */
 import { spawn, spawnSync, execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -639,6 +639,37 @@ function rebindCoordinatorRecord(authority: LiveAuthority, sessionFile: string):
     ...snapshot,
     coordination: { ...coordination, coordinator: Object.assign({}, coordinator, { session_file: sessionFile }) },
   });
+}
+
+/**
+ * Point one plan row's recorded session binding at another file. Used to
+ * reproduce a released-3.11.0 workflow: its plan row records the pre-#264
+ * bare envelope name `sessions/<session-id>.json`.
+ */
+function rebindPlanSessionRecord(authority: LiveAuthority, planId: string, sessionFile: string): void {
+  const path = snapshotPathOf(authority);
+  const snapshot = readJsonFile(path);
+  const plans = snapshot.plans;
+  if (!Array.isArray(plans)) throw new Error(`fixture: ${path} carries no plan rows`);
+  const row = plans.find(
+    (candidate) => (candidate as Record<string, unknown>).id === planId || (candidate as Record<string, unknown>).plan_id === planId,
+  );
+  if (row === undefined) throw new Error(`fixture: ${path} has no row for plan ${planId}`);
+  const source = row as Record<string, unknown>;
+  const coordination = source.coordination;
+  if (typeof coordination !== "object" || coordination === null || !("session" in coordination)) {
+    throw new Error(`fixture: plan ${planId} of ${path} carries no session binding`);
+  }
+  const session = (coordination as Record<string, unknown>).session;
+  if (typeof session !== "object" || session === null) {
+    throw new Error(`fixture: plan ${planId} of ${path} carries no session binding`);
+  }
+  const rebound = plans.map((candidate) =>
+    candidate === source
+      ? { ...source, coordination: { ...(coordination as Record<string, unknown>), session: Object.assign({}, session, { session_file: sessionFile }) } }
+      : candidate,
+  );
+  writeJsonFile(path, { ...snapshot, plans: rebound });
 }
 
 /**
@@ -1339,5 +1370,107 @@ describe("disposition revision relation authorization", () => {
     expect(typeof triageIssueFromIndex).toBe("function");
     expect(typeof closeIssueFromIndex).toBe("function");
     expect(typeof linkIssueFromIndex).toBe("function");
+  });
+});
+
+describe("legacy plan-pm envelope path (pre-#264 upgrade tolerance)", () => {
+  /**
+   * A released-3.11.0-shaped workflow: the plan-pm envelope file and the plan
+   * row's recorded `session_file` both use the pre-#264 bare name
+   * `sessions/<session-id>.json` (no role prefix) — exactly what
+   * `sessionFilePath` wrote before #264 renamed it. Every bound content
+   * field (workflow, plan, session id, harness root) is unchanged.
+   */
+  async function legacyBoundAuthority(name: string): Promise<{ authority: LiveAuthority; legacyPath: string }> {
+    const authority = await liveAuthority(name, { bindPlans: true });
+    const canonicalPath = authority.planSessions[authority.planId]!;
+    const legacyPath = join(dirname(canonicalPath), `${sessionIdOf(canonicalPath)}.json`);
+    renameSync(canonicalPath, legacyPath);
+    rebindPlanSessionRecord(authority, authority.planId, legacyPath);
+    return { authority, legacyPath };
+  }
+
+  test("a legacy-named envelope with fully bound content authorizes the mutation", async () => {
+    const { authority, legacyPath } = await legacyBoundAuthority("legacy-ok-");
+    const context: StoreContext = { harnessDir: authority.harness };
+    const created = await captureIssue(context, baseInput(), mut("cap-legacy-ok"));
+    const linked = await linkIssue(
+      context,
+      created.issueId,
+      { kind: "plan", target: authority.planId },
+      pmMut(authority, "link-legacy-ok", { expectedRevision: created.revision, sessionFile: legacyPath }),
+    );
+    expect(linked.revision).toBe(created.revision + 1);
+    expect(
+      (await getIssue(context, created.issueId)).provenance.some(
+        (row) => row.kind === "plan" && row.target === authority.planId,
+      ),
+    ).toBe(true);
+  });
+
+  test("a legacy-named envelope whose content does not bind is still refused", async () => {
+    const { authority, legacyPath } = await legacyBoundAuthority("legacy-forged-");
+    const context: StoreContext = { harnessDir: authority.harness };
+    const created = await captureIssue(context, baseInput(), mut("cap-legacy-forged"));
+    // The exact legacy name and path, but a session id the workflow never
+    // recorded: the legacy tolerance is path-shape only, the content
+    // binding (session_id against the workflow's record) is unchanged.
+    const sessionId = sessionIdOf(legacyPath);
+    const forged = forgedEnvelope(dirname(legacyPath), `${sessionId}.json`, {
+      harness_root: authority.harness,
+      session_id: "22222222-2222-2222-2222-222222222222",
+    });
+    expect(forged).toBe(legacyPath);
+    await expect(
+      linkIssue(
+        context,
+        created.issueId,
+        { kind: "plan", target: authority.planId },
+        pmMut(authority, "link-legacy-forged", { expectedRevision: created.revision, sessionFile: forged }),
+      ),
+    ).rejects.toMatchObject({ code: "issue.scope-refused" });
+    expect((await getIssue(context, created.issueId)).revision).toBe(created.revision);
+  });
+
+  test("the canonical plan-pm path still authorizes a current bind", async () => {
+    const authority = await liveAuthority("legacy-canonical-", { bindPlans: true });
+    const context: StoreContext = { harnessDir: authority.harness };
+    const created = await captureIssue(context, baseInput(), mut("cap-legacy-canonical"));
+    const linked = await linkIssue(
+      context,
+      created.issueId,
+      { kind: "plan", target: authority.planId },
+      pmMut(authority, "link-legacy-canonical", {
+        expectedRevision: created.revision,
+        sessionFile: authority.planSessions[authority.planId]!,
+      }),
+    );
+    expect(linked.revision).toBe(created.revision + 1);
+  });
+
+  test("a bare-named file claiming the coordinator role is refused", async () => {
+    const authority = await liveAuthority("legacy-coordinator-", { bindPlans: true });
+    const context: StoreContext = { harnessDir: authority.harness };
+    const created = await captureIssue(context, baseInput(), mut("cap-legacy-coord"));
+    // The coordinator envelope's own session id presented at the bare
+    // pre-#264 shape: the coordinator role has no legacy tolerance (its
+    // pre-#264 name already matches canonical), so the path check refuses
+    // before any binding is consulted.
+    const coordinatorId = sessionIdOf(authority.coordinatorSession);
+    const bare = forgedEnvelope(join(authority.harness, "workflows", authority.workflowId, "sessions"), `${coordinatorId}.json`, {
+      role: "coordinator",
+      harness_root: authority.harness,
+      session_id: coordinatorId,
+      plan_id: undefined,
+    });
+    await expect(
+      linkIssue(
+        context,
+        created.issueId,
+        { kind: "plan", target: authority.planId },
+        pmMut(authority, "link-legacy-coord", { expectedRevision: created.revision, sessionFile: bare }),
+      ),
+    ).rejects.toMatchObject({ code: "issue.scope-refused" });
+    expect((await getIssue(context, created.issueId)).revision).toBe(created.revision);
   });
 });
