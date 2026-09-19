@@ -3,7 +3,7 @@ category: Harness
 packages: root
 ---
 
-- **Legacy plan-pm session envelopes authorize issue mutations again after an upgrade**: the issue store's engine-issued path check now also accepts the pre-#264 bound form `workflows/<id>/sessions/<session-id>.json` for the `plan-pm` role, so sessions created by the released 3.11.0 engine keep their authority (`issue.scope-refused` no longer blocks them). Path shape only — every content binding (workflow, plan row, session id, recorded `session_file`) is enforced unchanged, and the coordinator role keeps canonical-only naming.
+- **Legacy session envelopes authorize issue mutations again after an upgrade**: the issue store now authorizes a privileged mutation through the workflow's **recorded** session file, accepting that bound path in either engine-issued shape — the canonical `workflows/<id>/sessions/<role>-<session-id>.json` or the pre-#264 bare `workflows/<id>/sessions/<session-id>.json` that released 3.11.0 workflows record (both roles; 3.11.0 had no role prefix). The presented file must be exactly the bound path — a copy at any other path refuses even when byte-identical — and every content binding (workflow, plan row/coordinator record, session id, live lifecycle) is enforced unchanged.
 
 <!-- CN -->
-- **升级后旧版 plan-pm 会话信封恢复 issue 变更授权**：issue store 的引擎签发路径校验现在对 `plan-pm` 角色同时接受 #264 之前的绑定形式 `workflows/<id>/sessions/<session-id>.json`，已发布 3.11.0 引擎创建的会话不再被 `issue.scope-refused` 拒绝。仅放宽路径形状——全部内容绑定（workflow、plan 行、session id、记录的 `session_file`）保持不变，coordinator 角色仍只接受规范命名。
+- **升级后旧版会话信封恢复 issue 变更授权**：issue store 现在经由 workflow **记录的**会话文件授权特权变更，该绑定路径接受两种引擎签发形状——规范形式 `workflows/<id>/sessions/<role>-<session-id>.json` 或已发布 3.11.0 workflow 记录的 #264 之前裸形式 `workflows/<id>/sessions/<session-id>.json`（两种角色；3.11.0 无角色前缀）。呈递文件必须与绑定路径完全一致——任何其他路径上的副本即使字节相同也一律拒绝——且全部内容绑定（workflow、plan 行/coordinator 记录、session id、存活生命周期）保持不变。

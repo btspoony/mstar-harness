@@ -989,11 +989,15 @@ function requireCaptureSeat(actor: string): void {
  * so the caller cannot choose the authority file. The envelope must be the one
  * the engine itself issues (`bindPlanSession`):
  *
- *  1. at an engine-issued path — the canonical `<store harness root>/workflows/
- *     <workflow_id>/sessions/<role>-<session_id>.json` a bind writes, plus for a
- *     `plan-pm` envelope the pre-#264 bound form `sessions/<session-id>.json`
- *     that released 3.11.0 workflows carry (path-shape tolerance only; see
- *     `issuedSessionLocation`), so a copy anywhere else refuses;
+ *  1. at the path the workflow's own record binds — `assertEngineIssuedSession`
+ *     compares the presented file with the snapshot's recorded
+ *     `coordination.session.session_file` / `coordination.coordinator.session_file`
+ *     exactly (the same recorded-path rule the coordination writers enforce), and
+ *     accepts that bound path in either engine-issued shape: the canonical
+ *     `sessions/<role>-<session_id>.json` a current bind writes, or the pre-#264
+ *     bare `sessions/<session_id>.json` that released 3.11.0 workflows record
+ *     (both roles — 3.11.0 had no role prefix). A copy at any other path refuses
+ *     even when byte-identical and fully bound;
  *  2. under the harness root that owns this store — an envelope issued for
  *     another control root refuses;
  *  3. for a **live** workflow — the workflow's snapshot must exist, validate,
@@ -1029,38 +1033,34 @@ function authorizeMutation(context: StoreContext, mutation: MutationContext): Co
 }
 
 /**
- * The workflow directory of this session, and the envelope path shape(s) a
- * bind ever issues for it (`bindPlanSession` → `{WORKFLOW_DIR}/<id>/sessions/
- * <role>-<session-id>.json`) — the same `sessionFilePath` rule that issues
- * the envelope, so the name cannot drift between issuer and checker.
+ * The workflow directory of this session, and the envelope path shape(s) an
+ * engine bind ever issued for it — the canonical `{WORKFLOW_DIR}/<id>/
+ * sessions/<role>-<session-id>.json` a current bind writes, and the pre-#264
+ * bare name `sessions/<session-id>.json`.
  *
- * Upgrade tolerance (path SHAPE only): the released 3.11.0 engine bound the
- * plan-pm envelope at the pre-#264 bare name `sessions/<session-id>.json`,
- * and the workflows it created recorded exactly that binding, so an upgraded
- * binary must still accept the shape for the plan-pm role or refuse a valid
- * legacy session. Every content binding (workflow, plan row, session id,
- * recorded `session_file`) is checked unchanged; the coordinator role needs
- * no tolerance because its pre-#264 name already matches canonical.
+ * Upgrade tolerance (path SHAPE of the recorded binding only): the released
+ * 3.11.0 engine issued EVERY role's envelope at the bare name (v3.11.0
+ * `sessionFilePath` had no role parameter), and the workflows it created
+ * recorded exactly that binding, so an upgraded binary must still accept the
+ * shape for both roles or refuse a valid legacy session. Acceptance itself is
+ * tied to the workflow's recorded `session_file` (see
+ * `assertEngineIssuedSession`) — every content binding (workflow, plan row or
+ * coordinator record, session id, live lifecycle) is checked unchanged.
  */
-function issuedSessionLocation(session: CoordinationSession): { dir: string; path: string; legacyPath?: string } {
+function issuedSessionLocation(session: CoordinationSession): { dir: string; path: string; legacyPath: string } {
   const dir = join(resolveWorkflowDir(session.harness_root, { harnessDir: session.harness_root }), session.workflow_id);
   return {
     dir,
     path: sessionFilePath(session.harness_root, session.workflow_id, session.role, session.session_id),
-    ...(session.role === "plan-pm"
-      ? { legacyPath: join(dir, "sessions", `${session.session_id}.json`) }
-      : {}),
+    legacyPath: join(dir, "sessions", `${session.session_id}.json`),
   };
 }
 
-/** True when `sessionPath` is one of the session's engine-issued path shapes. */
-function isIssuedSessionPath(
-  sessionPath: string,
-  issued: { path: string; legacyPath?: string },
-): boolean {
-  if (canonicalizeNearestExisting(sessionPath) === canonicalizeNearestExisting(issued.path)) return true;
+/** True when `sessionPath` is a path shape an engine bind ever issued for
+ * this session: the current canonical name, or the pre-#264 bare name. */
+function isIssuedSessionPath(sessionPath: string, issued: { path: string; legacyPath: string }): boolean {
   return (
-    issued.legacyPath !== undefined &&
+    canonicalizeNearestExisting(sessionPath) === canonicalizeNearestExisting(issued.path) ||
     canonicalizeNearestExisting(sessionPath) === canonicalizeNearestExisting(issued.legacyPath)
   );
 }
@@ -1123,13 +1123,6 @@ function assertEngineIssuedSession(harnessDir: string, sessionPath: string, sess
     );
   }
   const issued = issuedSessionLocation(session);
-  if (!isIssuedSessionPath(sessionPath, issued)) {
-    throw refuseAuthority(
-      `Session envelope ${sessionPath} is not an engine-issued path for this session (${issued.path}` +
-        (issued.legacyPath !== undefined ? ` or the pre-#264 bound form ${issued.legacyPath}` : "") +
-        `)`,
-    );
-  }
   const snapshot = liveSnapshotOf(session, sessionPath, issued.dir);
   const binding = session.role === "coordinator" ? snapshot.coordination?.coordinator : planSessionBinding(snapshot, session);
   if (binding === undefined) {
@@ -1139,13 +1132,27 @@ function assertEngineIssuedSession(harnessDir: string, sessionPath: string, sess
         : `Plan ${JSON.stringify(session.plan_id)} of workflow ${snapshot.id} records no session binding for ${issued.path}`,
     );
   }
-  if (
-    binding.session_id !== session.session_id ||
-    !isIssuedSessionPath(binding.session_file, issued)
-  ) {
+  if (binding.session_id !== session.session_id) {
     throw refuseAuthority(
-      `Workflow ${snapshot.id} records session ${binding.session_id} at ${binding.session_file}, not session ${session.session_id} at an engine-issued path` +
-        (issued.legacyPath !== undefined ? ` (${issued.path} or the pre-#264 bound form ${issued.legacyPath})` : ` (${issued.path})`),
+      `Workflow ${snapshot.id} records session ${binding.session_id}, not the envelope's session ${session.session_id}`,
+    );
+  }
+  // The recorded bound path itself must be a shape an engine bind ever
+  // issued (canonical, or the pre-#264 bare name that released 3.11.0
+  // workflows record). A record at any other path is not an engine record.
+  if (!isIssuedSessionPath(binding.session_file, issued)) {
+    throw refuseAuthority(
+      `Workflow ${snapshot.id} records session ${binding.session_id} at ${binding.session_file}, which is not an engine-issued ` +
+        `path for this session (${issued.path} or the pre-#264 bound form ${issued.legacyPath})`,
+    );
+  }
+  // Tie: the presented file must be exactly the workflow's bound session
+  // file (the recorded-path rule the coordination writers already enforce).
+  // A byte-identical copy at any other path — canonical-named or
+  // legacy-named — is not a credential.
+  if (canonicalizeNearestExisting(sessionPath) !== canonicalizeNearestExisting(binding.session_file)) {
+    throw refuseAuthority(
+      `Session envelope ${sessionPath} is not the workflow's bound session file ${binding.session_file} \u2014 issue authorization follows the recorded path exactly`,
     );
   }
 }

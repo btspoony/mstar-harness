@@ -1448,19 +1448,43 @@ describe("legacy plan-pm envelope path (pre-#264 upgrade tolerance)", () => {
     expect(linked.revision).toBe(created.revision + 1);
   });
 
-  test("a bare-named file claiming the coordinator role is refused", async () => {
+  test("a legacy-named coordinator envelope with fully bound content authorizes the mutation", async () => {
     const authority = await liveAuthority("legacy-coordinator-", { bindPlans: true });
+    // Released 3.11.0 issued the coordinator envelope at the SAME bare
+    // pre-#264 name (`sessions/<session-id>.json` — v3.11.0's
+    // `sessionFilePath` had no role parameter), so a legacy workflow's
+    // coordinator record names the bare path. Reproduce that shape.
+    const canonicalCoordinator = authority.coordinatorSession;
+    const legacyCoordinator = join(dirname(canonicalCoordinator), `${sessionIdOf(canonicalCoordinator)}.json`);
+    renameSync(canonicalCoordinator, legacyCoordinator);
+    rebindCoordinatorRecord(authority, legacyCoordinator);
     const context: StoreContext = { harnessDir: authority.harness };
     const created = await captureIssue(context, baseInput(), mut("cap-legacy-coord"));
-    // The coordinator envelope's own session id presented at the bare
-    // pre-#264 shape: the coordinator role has no legacy tolerance (its
-    // pre-#264 name already matches canonical), so the path check refuses
-    // before any binding is consulted.
+    // A coordinator session is a valid issue-authorization surface:
+    // triageIssue/closeIssue/linkIssue take both roles and the seat map
+    // grants the coordinator the PM seat (plan-provenance links additionally
+    // demand plan-pm identity, so this pins the surface with a triage).
+    const triaged = await triageIssue(
+      context,
+      created.issueId,
+      { severity: "medium", reason: "coordinator legacy session re-triage" },
+      pmMut(authority, "triage-legacy-coord", { expectedRevision: created.revision, sessionFile: legacyCoordinator }),
+    );
+    expect(triaged.revision).toBe(created.revision + 1);
+    expect((await getIssue(context, created.issueId)).severity).toBe("medium");
+  });
+
+  test("a bare-named coordinator envelope with unbound content is still refused", async () => {
+    const authority = await liveAuthority("legacy-coordinator-forged-", { bindPlans: true });
+    const context: StoreContext = { harnessDir: authority.harness };
+    const created = await captureIssue(context, baseInput(), mut("cap-legacy-coord-forged"));
+    // The bare pre-#264 SHAPE, but a session id the workflow never recorded:
+    // the tolerance covers the recorded path's shape, never its content.
     const coordinatorId = sessionIdOf(authority.coordinatorSession);
     const bare = forgedEnvelope(join(authority.harness, "workflows", authority.workflowId, "sessions"), `${coordinatorId}.json`, {
       role: "coordinator",
       harness_root: authority.harness,
-      session_id: coordinatorId,
+      session_id: "22222222-2222-2222-2222-222222222222",
       plan_id: undefined,
     });
     await expect(
@@ -1468,7 +1492,48 @@ describe("legacy plan-pm envelope path (pre-#264 upgrade tolerance)", () => {
         context,
         created.issueId,
         { kind: "plan", target: authority.planId },
-        pmMut(authority, "link-legacy-coord", { expectedRevision: created.revision, sessionFile: bare }),
+        pmMut(authority, "link-legacy-coord-forged", { expectedRevision: created.revision, sessionFile: bare }),
+      ),
+    ).rejects.toMatchObject({ code: "issue.scope-refused" });
+    expect((await getIssue(context, created.issueId)).revision).toBe(created.revision);
+  });
+
+  test("a bound bare-named copy does not authorize a current (canonical-record) workflow", async () => {
+    const authority = await liveAuthority("legacy-cross-current-", { bindPlans: true });
+    const context: StoreContext = { harnessDir: authority.harness };
+    const created = await captureIssue(context, baseInput(), mut("cap-legacy-cross-current"));
+    // F1 tie: a byte-identical copy of the engine's own canonical envelope
+    // at the legacy bare path must NOT authorize a workflow whose record
+    // names the canonical path — the presented file must be exactly the
+    // bound session file, in whichever single shape the record carries.
+    const canonicalPath = authority.planSessions[authority.planId]!;
+    const bareCopy = join(dirname(canonicalPath), `${sessionIdOf(canonicalPath)}.json`);
+    writeFileSync(bareCopy, readFileSync(canonicalPath, "utf8"));
+    await expect(
+      linkIssue(
+        context,
+        created.issueId,
+        { kind: "plan", target: authority.planId },
+        pmMut(authority, "link-legacy-cross-current", { expectedRevision: created.revision, sessionFile: bareCopy }),
+      ),
+    ).rejects.toMatchObject({ code: "issue.scope-refused" });
+    expect((await getIssue(context, created.issueId)).revision).toBe(created.revision);
+  });
+
+  test("a canonical-named copy does not authorize a legacy (bare-record) workflow", async () => {
+    const { authority, legacyPath } = await legacyBoundAuthority("legacy-cross-legacy-");
+    const context: StoreContext = { harnessDir: authority.harness };
+    const created = await captureIssue(context, baseInput(), mut("cap-legacy-cross-legacy"));
+    // Cross-shape pin in the other direction: the legacy workflow's record
+    // names the bare path, so a canonical-named copy refuses too.
+    const canonicalCopy = join(dirname(legacyPath), `plan-pm-${sessionIdOf(legacyPath)}.json`);
+    writeFileSync(canonicalCopy, readFileSync(legacyPath, "utf8"));
+    await expect(
+      linkIssue(
+        context,
+        created.issueId,
+        { kind: "plan", target: authority.planId },
+        pmMut(authority, "link-legacy-cross-legacy", { expectedRevision: created.revision, sessionFile: canonicalCopy }),
       ),
     ).rejects.toMatchObject({ code: "issue.scope-refused" });
     expect((await getIssue(context, created.issueId)).revision).toBe(created.revision);
