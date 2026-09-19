@@ -276,9 +276,6 @@ export type {
   RoadmapFrontmatter,
   RoadmapStatus,
   RoadmapValidation,
-  TechDebtCheck,
-  TechDebtRollup,
-  TechDebtSummary,
 } from "./project.js";
 export {
   PROJECT_REFERENCES_DIR,
@@ -288,7 +285,6 @@ export {
   _DEFAULT_PROJECT,
   findingsCleanupGate,
   listProjectReferenceFiles,
-  techDebtRollup,
   validateProjectRegister,
   validateRoadmap,
 } from "./project.js";

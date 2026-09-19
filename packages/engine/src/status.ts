@@ -3,8 +3,8 @@
  * normalization, residual lifecycle (open → archived), and the root-file
  * v2 writers.
  *
- * `findingsCleanupGate` and `techDebtRollup`
- * moved to `project.ts` (they operate on project-register artifacts) —
+ * `findingsCleanupGate`
+ * moved to `project.ts` (it operates on the issue-store findings authority) —
  * this module no longer imports `./project.js`, breaking the former
  * `status.ts ↔ project.ts` module cycle. Public names remain exported via
  * the package index (`index.ts`).
@@ -29,8 +29,9 @@
  * - v2 root + migration detection: v1-shaped documents — root `plans[]` OR
  * root `residual_findings` (v1-disguise hole) — fail
  * closed with `status.migration-required` even when `version: 2`.
- * - Rollup aggregates: canonical compute is `techDebtRollup` in `project.ts`
- * (CLI form: `mstar status tech-debt [path]`).
+ * - Findings rollups: the register-walking `techDebtRollup` is deleted
+ * (plan QC fix wave FW-5 — the register authority is retired); the CLI
+ * `mstar status tech-debt` computes from the issue store (`readIssueRollup`).
  */
 import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";

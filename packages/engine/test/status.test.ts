@@ -1,6 +1,6 @@
 /**
- * Engine status module — status.json schema validation, residual severity
- * normalization, and the project-register tech-debt rollup.
+ * Engine status module — status.json schema validation and residual severity
+ * normalization.
  *
  * Spec sources (each test cites the skill/reference section it enforces):
  * - status.json schema + required fields + root-only `residual_findings`
@@ -8,7 +8,7 @@
  * `skills/mstar-artifacts/references/status-and-residuals.md`
  * § Basic structure + § General constraints ("Init with `residual_findings`:
  * {}; no dual-write with legacy side") + § Common queries (legacy read path).
- * - Severity enum + legacy `"warning"` → `low` normalization (read + rollup):
+ * - Severity enum + legacy `"warning"` → `low` normalization:
  * § "Residual findings: `severity` (SSOT, machine field)" — allowed values
  * `critical|high|medium|low|nit`; `warning`/`Major`/non-English forbidden in
  * JSON; legacy `"severity": "warning"` is read and rolled up as `low`.
@@ -17,15 +17,9 @@
  * cleanup modes. Issue-governance cutover G2a moved `findingsCleanupGate` off
  * the register onto the issue store (open issues linked to the plan), so its
  * cases live in `src/issue-cutover.test.ts`; this file keeps the register
- * VALIDATOR and the legacy rollup aggregation that the CLI cutover converts.
- * - Rollup aggregates (total_open / by_severity / by_target / by_plan):
- * § `metadata.tech_debt_summary` (optional rollup) — canonical compute is
- * `techDebtRollup` (engine; no CLI form). v3 relocation: the rollup
- * aggregates project registers under `{PROJECT_DIR}`; the v1 stored-summary
- * drift check (`metadata.tech_debt_summary`) is deleted — the register is
- * the source of truth, so `stored` is always null and the retained
- * `checks`/`overall` fields report DRIFT (export-surface compatibility
- * until the P2 CLI cutover).
+ * VALIDATOR. The legacy register-walking rollup (`techDebtRollup`) is deleted
+ * (plan QC fix wave FW-5) — the register authority is retired and the findings
+ * rollup computes from the issue store (`readIssueRollup`, CLI-side).
  * - `ValidationResult`/`GateResult` shapes + severity machine SSOT:
  * `packages/engine/src/core.ts` (roadmap §8.5 C2/C4).
  */
@@ -47,12 +41,11 @@ import {
   validateStatus,
   validateStatusV2,
 } from "../src/status.js";
-import { techDebtRollup } from "../src/project.js";
 import { withStatusWriteLock } from "../src/lease.js";
 import { readJson, writeJson } from "../src/core.js";
 import type { GateResult, ValidationResult } from "../src/core.js";
 import type { WorkflowEntry } from "../src/status.js";
-import type { FindingsCleanupMode, TechDebtRollup } from "../src/project.js";
+import type { FindingsCleanupMode } from "../src/project.js";
 import { WORKFLOW_SNAPSHOT_FILE, writeWorkflowSnapshot } from "../src/workflow.js";
 
 const FIXTURES = join(import.meta.dir, "fixtures");
@@ -749,115 +742,6 @@ describe("registerWorkflow / unregisterWorkflow (root writers under the root-fil
   });
 });
 
-describe("techDebtRollup — project register aggregation (array schema)", () => {
- /** Write `projects/<id>/residuals.json` with an ARRAY of entries per plan-id key. */
-  function writeRegister(projectDir: string, projectId: string, entries: Record<string, unknown[]>): void {
-    const dir = join(projectDir, projectId);
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, "residuals.json"), JSON.stringify({ entries }, null, 2), "utf8");
-  }
-
-  test("computed aggregates match jq semantics (warning→low, null/''→medium, closed excluded, unspecified target)", () => {
-    const dir = harnessRoot("status-rollup-register-");
-    try {
-      writeRegister(dir, "_default", {
-        "plan-a": [entry({ id: "R1", severity: "warning", target: "V1.0" })],
-        "plan-b": [entry({ id: "R2", severity: null, target: "V1.1" })],
-        "plan-c": [entry({ id: "R3", severity: "", target: "V1.0" })],
-        "plan-d": [entry({ id: "R4", severity: "low", target: null })],
-        "plan-e": [entry({ id: "R5", severity: "medium", lifecycle: "resolved", closed_at: "2026-08-07", closure_note: "x" })],
-      });
-      const rollup = techDebtRollup(dir);
-      expect(rollup.computed).toEqual({
-        total_open: 4,
-        by_severity: { critical: 0, high: 0, medium: 2, low: 2, nit: 0 },
-        by_target: { "V1.0": 2, "V1.1": 1, unspecified: 1 },
-        by_plan: { "plan-a": 1, "plan-b": 1, "plan-c": 1, "plan-d": 1 },
-      });
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("every open entry of a plan counts (array schema — multi-residual plans aggregate per plan)", () => {
-    const dir = harnessRoot("status-rollup-multi-");
-    try {
-      writeRegister(dir, "_default", {
-        "plan-a": [
-          entry({ id: "R1", severity: "low", target: "V1.0" }),
-          entry({ id: "R2", severity: "high", target: "V1.0" }),
-          entry({ id: "R3", severity: "low", lifecycle: "resolved", closed_at: "2026-08-07", closure_note: "x" }),
-        ],
-      });
-      const rollup = techDebtRollup(dir);
-      expect(rollup.computed).toEqual({
-        total_open: 2,
-        by_severity: { critical: 0, high: 1, medium: 0, low: 1, nit: 0 },
-        by_target: { "V1.0": 2 },
-        by_plan: { "plan-a": 2 },
-      });
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("aggregates across multiple project registers (by_plan keyed by plan id)", () => {
-    const dir = harnessRoot("status-rollup-multiproj-");
-    try {
-      writeRegister(dir, "_default", { "plan-a": [entry({ id: "R1", severity: "low" })] });
-      writeRegister(dir, "acme", { "plan-b": [entry({ id: "R2", severity: "high" })] });
-      const rollup = techDebtRollup(dir);
-      expect(rollup.computed.total_open).toBe(2);
-      expect(rollup.computed.by_plan).toEqual({ "plan-a": 1, "plan-b": 1 });
-      expect(rollup.computed.by_severity).toEqual({ critical: 0, high: 1, medium: 0, low: 1, nit: 0 });
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("no registers / missing project dir → empty rollup", () => {
-    const dir = harnessRoot("status-rollup-empty-");
-    try {
-      const rollup = techDebtRollup(join(dir, "does-not-exist"));
-      expect(rollup.computed).toEqual({
-        total_open: 0,
-        by_severity: { critical: 0, high: 0, medium: 0, low: 0, nit: 0 },
-        by_target: {},
-        by_plan: {},
-      });
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("v1 stored-summary drift check deleted: stored is always null, checks all DRIFT, overall DRIFT", () => {
- // The v1 `metadata.tech_debt_summary` cache is a v1 dead path — the
- // project register is the source of truth. The retained
- // stored/checks/overall fields keep the exported TechDebtRollup shape
- // (compile-compat for the P2 CLI cutover) and always report DRIFT.
-    const dir = harnessRoot("status-rollup-drift-");
-    try {
-      writeRegister(dir, "_default", { "plan-a": [entry()] });
-      const rollup = techDebtRollup(dir);
-      expect(rollup.stored).toBeNull();
-      expect(rollup.checks.map((c) => c.status)).toEqual(["DRIFT", "DRIFT", "DRIFT", "DRIFT"]);
-      expect(rollup.overall).toBe("DRIFT");
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("entry lifecycle: false counts as OPEN (jq `//` defaults false)", () => {
-    const dir = harnessRoot("status-rollup-false-");
-    try {
-      writeRegister(dir, "_default", { "plan-a": [entry({ id: "R1", severity: "low", target: "V1", lifecycle: false })] });
-      const rollup = techDebtRollup(dir);
-      expect(rollup.computed.total_open).toBe(1);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-});
 
 describe("resolveCompassEnforcement — repo compass enforcement: hard (Slice 5, roadmap §8.5 D2)", () => {
  // Spec: roadmap §8.5 C4/D2 — hard gates are enabled per Assignment/compass;

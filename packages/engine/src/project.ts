@@ -32,21 +32,20 @@
  * - Project-register consumers: `findingsCleanupGate` (findings-cleanup
  * modes; issue-governance cutover G2a — it consumes the authoritative open
  * issues linked to the plan in `store.db`, never the legacy register) lives
- * HERE, and `techDebtRollup` (the legacy register rollup, conversion owned by
- * the CLI cutover task) also lives here; relocating them breaks the former
- * status.ts ↔ project.ts module cycle (status.ts no longer imports this
- * module; public names stay exported from the package index for compile
- * compatibility).
+ * HERE. The legacy register rollup (`techDebtRollup`) is deleted (plan QC fix
+ * wave FW-5): the register authority is retired and the findings rollup
+ * computes from the issue store (`readIssueRollup`), so the register-walking
+ * reader had no supported caller left. status.ts no longer imports this
+ * module (the former module cycle stays broken).
  */
-import { existsSync, readFileSync, readdirSync, type Dirent } from "node:fs";
+import { readFileSync, readdirSync, type Dirent } from "node:fs";
 import { join } from "node:path";
-import { readJson, SEVERITY_ORDER, type GateResult, type Severity, type ValidationResult } from "./core.js";
+import { type GateResult, type Severity, type ValidationResult } from "./core.js";
 import { parseCompassFrontmatterText } from "./iteration.js";
 import { isPlainObject } from "./coordination-write.js";
 import { openStore, type StoreContext } from "./store-db.js";
 import { IssueError } from "./issue.js";
 import {
-  isOpenResidual,
   normalizeSeverity,
   validateResidual,
   type ResidualEntry,
@@ -115,35 +114,7 @@ export type RoadmapValidation = GateResult & { warnings: ValidationResult[] };
 /** Findings cleanup policy mirror of Assignment `Findings cleanup`. */
 export type FindingsCleanupMode = "zero-residual" | "allow-residual";
 
-/** Computed rollup aggregates (jq semantics). */
-export type TechDebtSummary = {
-  total_open: number;
-  by_severity: Record<string, number>;
-  by_target: Record<string, number>;
-  by_plan: Record<string, number>;
-};
-
-export type TechDebtCheck = {
-  field: "total_open" | "by_severity" | "by_target" | "by_plan";
-  status: "PASS" | "DRIFT";
-};
-
-/**
- * Result of the project-register rollup. `stored`/`checks`/`overall` are
- * retained for export-surface compatibility (the P2 CLI cutover): the v1
- * stored-summary drift check (`metadata.tech_debt_summary`) is deleted in
- * the v3 cutover — the project register is the source of truth, so `stored`
- * is always null and every check reports DRIFT.
- */
-export type TechDebtRollup = {
-  computed: TechDebtSummary;
-  stored: Record<string, unknown> | null;
-  checks: TechDebtCheck[];
-  overall: "PASS" | "DRIFT";
-};
-
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const ROLLUP_FIELDS = ["total_open", "by_severity", "by_target", "by_plan"] as const;
 
 function violation(severity: Severity, code: string, message: string, fix?: string): ValidationResult {
   return { ok: false, severity, code, message, fix };
@@ -430,82 +401,6 @@ export async function findingsCleanupGate(
   } finally {
     handle.close();
   }
-}
-
-/** Count values into a string-keyed map, keys sorted ascending (jq group_by order for strings). */
-function groupCount(values: unknown[]): Record<string, number> {
-  const counts = new Map<string, number>();
-  for (const value of values) {
- // jq group_by sorts by element value; TS map keys are strings — equivalent
- // for string targets (the fixture contract); mixed numbers would differ.
-    const key = typeof value === "string" ? value : String(value);
-    counts.set(key, (counts.get(key) ?? 0) + 1);
-  }
-  return Object.fromEntries([...counts.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
-}
-
-/**
- * Compute the tech-debt rollup over the project registers
- * relocation — status-and-residuals.md § `metadata.tech_debt_summary`
- * semantics preserved at the project layer): `total_open` / `by_severity` /
- * `by_target` / `by_plan` over open entries of every
- * `projects/<id>/residuals.json` register under `projectDir` (legacy
- * `"warning"` → `low`, `null`/`""` → `medium`; closed entries skipped;
- * missing `target` groups under `"unspecified"`; `by_plan` keyed by plan id —
- * the snapshot plan linkage; register values are ARRAYS per plan id, so
- * every open entry of a plan counts).
- *
- * The v1 stored-summary drift check (`metadata.tech_debt_summary`) is a v1
- * dead path — the register is the source of truth, so `stored` is always
- * null and the retained `checks`/`overall` fields report DRIFT
- * (export-surface compatibility until the P2 CLI cutover). Does not write
- * anything.
- */
-export function techDebtRollup(projectDir: string): TechDebtRollup {
-  const items: Array<{ plan: string; entry: Record<string, unknown> }> = [];
-  let entries: Dirent[];
-  try {
-    entries = readdirSync(projectDir, { withFileTypes: true });
-  } catch {
-    entries = [];
-  }
-  for (const project of entries) {
-    if (!project.isDirectory()) continue;
-    const registerPath = join(projectDir, project.name, PROJECT_REGISTER_FILE);
-    if (!existsSync(registerPath)) continue;
-    let register: unknown;
-    try {
-      register = readJson(registerPath);
-    } catch {
-      continue; // malformed register files are skipped — the register validator is the schema gate
-    }
-    if (!isPlainObject(register) || !isPlainObject(register.entries)) continue;
-    for (const [plan, planEntries] of Object.entries(register.entries)) {
-      if (!Array.isArray(planEntries)) continue;
-      for (const entry of planEntries) {
-        if (!isPlainObject(entry) || !isOpenResidual(entry)) continue;
-        items.push({ plan, entry });
-      }
-    }
-  }
-
-  const bySeverity: Record<string, number> = {};
-  for (const severity of SEVERITY_ORDER) {
-    bySeverity[severity] = items.filter(({ entry }) => normalizeSeverity(entry.severity) === severity).length;
-  }
-
-  const computed: TechDebtSummary = {
-    total_open: items.length,
-    by_severity: bySeverity,
-    by_target: groupCount(items.map(({ entry }) => entry.target ?? "unspecified")),
-    by_plan: groupCount(items.map(({ plan }) => plan)),
-  };
-
-  const stored = null;
-  const checks: TechDebtCheck[] = ROLLUP_FIELDS.map((field) => ({ field, status: "DRIFT" as const }));
-  const overall = "DRIFT" as const;
-
-  return { computed, stored, checks, overall };
 }
 
 /**
