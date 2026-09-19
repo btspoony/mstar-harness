@@ -120,7 +120,13 @@ export type HarnessDocKind = 'status' | 'snapshot' | 'register'
 export function harnessDocKindOfTarget(harnessDir: string, targetPath: string): HarnessDocKind | null {
   const resolved = resolve(targetPath)
   const name = basename(resolved)
-  if (name !== STATUS_FILE && name !== WORKFLOW_SNAPSHOT_FILE && name !== PROJECT_REGISTER_FILE) return null
+  // The register name matches CASE-INSENSITIVELY (plan QC fix wave FW-3): on
+  // a case-insensitive volume (Darwin/APFS) a case-variant basename
+  // (`RESIDUALS.json`) IS the register file, and the document gate must see
+  // what the store-authority route sees (omp/ZCode parity). The status and
+  // snapshot names keep their exact match.
+  const isRegisterName = name.toLowerCase() === PROJECT_REGISTER_FILE
+  if (name !== STATUS_FILE && name !== WORKFLOW_SNAPSHOT_FILE && !isRegisterName) return null
   const rel = relative(harnessDir, resolved)
   if (name === STATUS_FILE && rel === STATUS_FILE) return 'status'
   let workflowDir: string
@@ -133,7 +139,7 @@ export function harnessDocKindOfTarget(harnessDir: string, targetPath: string): 
     projectDir = join(harnessDir, 'projects')
   }
   if (name === WORKFLOW_SNAPSHOT_FILE && /^[^/]+\/snapshot\.json$/.test(relative(workflowDir, resolved))) return 'snapshot'
-  if (name === PROJECT_REGISTER_FILE && /^[^/]+\/residuals\.json$/.test(relative(projectDir, resolved))) return 'register'
+  if (isRegisterName && /^[^/]+\/residuals\.json$/i.test(relative(projectDir, resolved))) return 'register'
   return null
 }
 

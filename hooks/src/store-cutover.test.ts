@@ -137,6 +137,32 @@ describe("ZCode write gate — authority paths (source entry)", () => {
     }
   });
 
+  test("a CASE-VARIANT authority basename (Store.db) is refused like the file itself (FW-3)", () => {
+    const fixture = makeHarness("store-case", "soft");
+    // On a case-insensitive volume (Darwin/APFS) this write lands on the
+    // authority database itself; the folded basename match refuses it on a
+    // case-sensitive volume too (the authority name is volume-invariant).
+    const run = runGate(process.execPath, HOOK_SRC, writeEvent(join(fixture.harness, "Store.db"), "not a database"));
+    expect(run.exitCode).toBe(2);
+    expect(run.stdout).toBe("");
+    expect(run.stderr).toContain("store.direct-write-refused");
+    expect(run.stderr).toContain(AUTHORITY_LINE);
+  });
+
+  test("a CASE-VARIANT register (RESIDUALS.json) takes the authority route (FW-3)", async () => {
+    const fixture = makeHarness("register-case", "soft");
+    await seedActiveStore(fixture.harness);
+    const run = runGate(
+      process.execPath,
+      HOOK_SRC,
+      writeEvent(join(fixture.harness, "projects", "_default", "RESIDUALS.json"), VALID_REGISTER),
+    );
+    expect(run.exitCode).toBe(2);
+    expect(run.stdout).toBe("");
+    expect(run.stderr).toContain("project.register.retired");
+    expect(run.stderr).toContain(AUTHORITY_LINE);
+  });
+
   test("a retired register write on an ACTIVE store is refused (soft mode included)", async () => {
     const fixture = makeHarness("register-active", "soft");
     await seedActiveStore(fixture.harness);

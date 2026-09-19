@@ -83,6 +83,18 @@ const AUTHORITY_LINE =
 const STORE_DB_FILE = "store.db";
 const STORE_AUTHORITY_FILES: readonly string[] = [STORE_DB_FILE, `${STORE_DB_FILE}-wal`, `${STORE_DB_FILE}-shm`];
 
+/** Case-folded authority-name matching (plan QC fix wave FW-3, dsh/omp
+ * parity): on a case-insensitive volume (Darwin/APFS) a case-variant basename
+ * (`Store.db`) lands on the same authority bytes, so the match never hinges
+ * on byte case. */
+const STORE_AUTHORITY_NAMES: readonly string[] = STORE_AUTHORITY_FILES.map((file) => file.toLowerCase());
+
+/** The register file's basename, matched case-insensitively (FW-3). */
+const REGISTER_BASENAME = /residuals\.json/i;
+/** The canonical register shape under the resolved project dir — one project
+ * component + the register file — with the file name folded (FW-3). */
+const REGISTER_SHAPE = /^[^/]+\/residuals\.json$/i;
+
 /** Default v2 layout dirs of a marker-complete harness root. */
 const STATUS_FILE = "status.json";
 const WORKFLOW_DIR_NAME = "workflows";
@@ -208,10 +220,38 @@ function landedPathOf(resolved: string): string {
  * sitting directly at a harness root: the runtime's own store location for a
  * harness root is `<harness root>/store.db`, and hand-writing those bytes is
  * never a supported operation — hard vs soft, staged vs active, alias or not,
- * all the same. */
+ * all the same. The name match is case-insensitive (FW-3). */
 function isStoreAuthorityTarget(target: string): boolean {
-  if (!STORE_AUTHORITY_FILES.includes(basename(target))) return false;
+  if (!STORE_AUTHORITY_NAMES.includes(basename(target).toLowerCase())) return false;
   return isHarnessRootDir(dirname(target));
+}
+
+/** The harness root of a register target the exact-case classifiers MISS
+ * because its basename is a case variant (`RESIDUALS.json`, FW-3): the
+ * canonical register shape (one project component + the register file under
+ * the resolved project dir) is matched case-insensitively from the nearest
+ * harness root up the tree — the same walk the engine's marker probe runs for
+ * exact-case names, so a case-variant register is authority-classified like
+ * the file itself. `null` when the basename is not a register name or no
+ * ancestor root holds the shape (dsh/omp parity). */
+function caseFoldedRegisterRoot(candidate: string): string | null {
+  const target = resolve(candidate);
+  if (!REGISTER_BASENAME.test(basename(target))) return null;
+  let dir = dirname(target);
+  for (;;) {
+    if (isHarnessRootDir(dir)) {
+      let projectDir: string;
+      try {
+        projectDir = resolveProjectDir(dir, { harnessDir: dir });
+      } catch {
+        projectDir = join(dir, PROJECT_DIR_NAME);
+      }
+      if (REGISTER_SHAPE.test(relative(projectDir, target))) return dir;
+    }
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
 }
 
 /** The harness root of a project register this write reaches ONLY through a
@@ -408,7 +448,14 @@ try {
     }
 
     const target = harnessDocKindOfTarget(targetPath);
-    const registerDir = target?.kind === "register" ? target.harnessDir : aliasedRegisterDir(targetPath, landed);
+    // A case-variant register basename (FW-3) bypasses both exact-case
+    // classifications and is classified by the folded shape walk instead.
+    const registerDir =
+      target?.kind === "register"
+        ? target.harnessDir
+        : (aliasedRegisterDir(targetPath, landed) ??
+          caseFoldedRegisterRoot(targetPath) ??
+          (landed !== targetPath ? caseFoldedRegisterRoot(landed) : null));
     if (target === null && registerDir === null) continue; // not a gated coordination write — silent pass
 
     if (registerDir !== null) {

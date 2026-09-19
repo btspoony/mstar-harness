@@ -11,17 +11,17 @@ import { basename, dirname, isAbsolute as isAbsolute4, join, relative as relativ
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { readFileSync as readFileSync2, statSync } from "node:fs";
 import { dirname as dirname2, isAbsolute, join as join2, relative, resolve as resolve2 } from "node:path";
-import { existsSync as existsSync14, mkdirSync as mkdirSync6, readdirSync as readdirSync7, readFileSync as readFileSync10, realpathSync as realpathSync5, statSync as statSync4, writeFileSync as writeFileSync5 } from "node:fs";
+import { existsSync as existsSync13, mkdirSync as mkdirSync6, readdirSync as readdirSync7, readFileSync as readFileSync10, realpathSync as realpathSync5, statSync as statSync4, writeFileSync as writeFileSync5 } from "node:fs";
 import { execFileSync as execFileSync4 } from "node:child_process";
 import { basename as basename7, dirname as dirname8, isAbsolute as isAbsolute8, join as join17, relative as relative2, resolve as resolve13 } from "node:path";
 import { dirname as dirname7, join as join16, resolve as resolvePath, sep as sep6 } from "node:path";
-import { existsSync as existsSync12, mkdirSync as mkdirSync5, readFileSync as readFileSync9, statSync as statSync3, unlinkSync as unlinkSync5, writeFileSync as writeFileSync4 } from "node:fs";
+import { existsSync as existsSync11, mkdirSync as mkdirSync5, readFileSync as readFileSync9, statSync as statSync3, unlinkSync as unlinkSync5, writeFileSync as writeFileSync4 } from "node:fs";
 import { basename as basename6, dirname as dirname6, isAbsolute as isAbsolute7, join as join15, resolve as resolve12, sep as sep5 } from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { basename as basename2, dirname as dirname3, isAbsolute as isAbsolute2, join as join3, resolve as resolve3 } from "node:path";
 import { dirname as dirname4, isAbsolute as isAbsolute3, join as join4, resolve as resolve4 } from "node:path";
 import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
-import { existsSync as existsSync8, readFileSync as readFileSync7, readdirSync as readdirSync5 } from "node:fs";
+import { readFileSync as readFileSync7, readdirSync as readdirSync5 } from "node:fs";
 import { createHash as createHash2 } from "node:crypto";
 import { closeSync, existsSync as existsSync3, openSync, unlinkSync as unlinkSync3 } from "node:fs";
 import { join as join5, resolve as resolve5 } from "node:path";
@@ -29,8 +29,8 @@ import { existsSync as existsSync6, readFileSync as readFileSync5, readdirSync a
 import { dirname as dirname5, join as join8, resolve as resolve8, sep as sep2 } from "node:path";
 import { isAbsolute as isAbsolute5, join as join7, resolve as resolve7 } from "node:path";
 import { execFileSync as execFileSync2 } from "node:child_process";
-import { existsSync as existsSync11, realpathSync as realpathSync3 } from "node:fs";
-import { existsSync as existsSync16, statSync as statSync6 } from "node:fs";
+import { existsSync as existsSync10, realpathSync as realpathSync3 } from "node:fs";
+import { existsSync as existsSync15, statSync as statSync6 } from "node:fs";
 import { basename as basename10, dirname as dirname12, join as join20, relative as relative4, resolve as resolve15 } from "node:path";
 import { createHash as createHash9 } from "node:crypto";
 import { appendFileSync, readFileSync as readFileSync15 } from "node:fs";
@@ -2317,7 +2317,7 @@ function validateStatusWriteDoc(content, filePath, kind, options = {}) {
     }
     return validateDocByKind(doc2, kind);
   }
-  if (!existsSync16(filePath))
+  if (!existsSync15(filePath))
     return [];
   try {
     if (statSync6(filePath).size > MAX_STATUS_CONTENT_LENGTH) {
@@ -3780,6 +3780,9 @@ var ENFORCEMENT_LINE = "Enforcement: hard — this repo opts in via .mstarc/comp
 var AUTHORITY_LINE = "Authority invariant (not the enforcement flag) — the issue/catalog authority is not hand-writable; disable for this session with MSTAR_WRITE_GATE=off.";
 var STORE_DB_FILE = "store.db";
 var STORE_AUTHORITY_FILES = [STORE_DB_FILE, `${STORE_DB_FILE}-wal`, `${STORE_DB_FILE}-shm`];
+var STORE_AUTHORITY_NAMES = STORE_AUTHORITY_FILES.map((file) => file.toLowerCase());
+var REGISTER_BASENAME = /residuals\.json/i;
+var REGISTER_SHAPE = /^[^/]+\/residuals\.json$/i;
 var STATUS_FILE2 = "status.json";
 var WORKFLOW_DIR_NAME = "workflows";
 var PROJECT_DIR_NAME = "projects";
@@ -3840,9 +3843,31 @@ function landedPathOf(resolved) {
   }
 }
 function isStoreAuthorityTarget(target) {
-  if (!STORE_AUTHORITY_FILES.includes(basename(target)))
+  if (!STORE_AUTHORITY_NAMES.includes(basename(target).toLowerCase()))
     return false;
   return isHarnessRootDir(dirname(target));
+}
+function caseFoldedRegisterRoot(candidate) {
+  const target = resolve(candidate);
+  if (!REGISTER_BASENAME.test(basename(target)))
+    return null;
+  let dir = dirname(target);
+  for (;; ) {
+    if (isHarnessRootDir(dir)) {
+      let projectDir;
+      try {
+        projectDir = resolveProjectDir(dir, { harnessDir: dir });
+      } catch {
+        projectDir = join(dir, PROJECT_DIR_NAME);
+      }
+      if (REGISTER_SHAPE.test(relative3(projectDir, target)))
+        return dir;
+    }
+    const parent = dirname(dir);
+    if (parent === dir)
+      return null;
+    dir = parent;
+  }
 }
 function aliasedRegisterDir(resolved, landed) {
   if (landed === resolved)
@@ -3955,7 +3980,7 @@ try {
       ]);
     }
     const target = harnessDocKindOfTarget(targetPath);
-    const registerDir = target?.kind === "register" ? target.harnessDir : aliasedRegisterDir(targetPath, landed);
+    const registerDir = target?.kind === "register" ? target.harnessDir : aliasedRegisterDir(targetPath, landed) ?? caseFoldedRegisterRoot(targetPath) ?? (landed !== targetPath ? caseFoldedRegisterRoot(landed) : null);
     if (target === null && registerDir === null)
       continue;
     if (registerDir !== null) {

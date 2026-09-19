@@ -235,6 +235,33 @@ describe("omp write gate — authority paths refuse, documents keep their valida
     expect(await runWrite(handler, join(fixture.root, "nested", "store.db"), "x")).toBeUndefined();
   });
 
+  test("a CASE-VARIANT authority basename (Store.db) is refused like the file itself (FW-3)", async () => {
+    const fixture = makeHarness("store-case", "soft");
+    await seedActiveStore(fixture.harness);
+    const handler = loadHandler();
+
+    // On a case-insensitive volume (Darwin/APFS) this write lands on the
+    // authority database itself; the folded basename match refuses it on a
+    // case-sensitive volume too (the authority name is volume-invariant).
+    const blocked = await runWrite(handler, join(fixture.harness, "Store.db"), "not a database");
+    expect(blocked?.block).toBe(true);
+    expect(blocked?.reason).toContain("store.direct-write-refused");
+  });
+
+  test("a CASE-VARIANT register (RESIDUALS.json) takes the authority route (FW-3)", async () => {
+    const fixture = makeHarness("register-case", "soft");
+    await seedActiveStore(fixture.harness);
+    const handler = loadHandler();
+
+    const blocked = await runWrite(
+      handler,
+      join(fixture.harness, "projects", "_default", "RESIDUALS.json"),
+      VALID_REGISTER,
+    );
+    expect(blocked?.block).toBe(true);
+    expect(blocked?.reason).toContain("project.register.retired");
+  });
+
   test("a below-floor ACTUAL runtime refuses with that runtime's own actionable floor", async () => {
     const fixture = makeHarness("below-floor", "hard");
     const handler = loadHandler();

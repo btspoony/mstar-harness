@@ -855,4 +855,55 @@ describe('store authority — fs-intent and adapter refuse authority bytes (FW-1
     expect(hook.ok).toBe(true)
     expect(hook.code).toBe('host.beforeStatusWrite.ok')
   })
+
+  it('a CASE-VARIANT store.db basename (Store.db) is vetoed like the file itself (FW-3)', async () => {
+    const { app, harnessDir } = await storeApp()
+    await sealStoreForReaders(harnessDir)
+    await seedHarness(harnessDir, {
+      'status.json': v2Root([v2WorkflowEntry('wf-store')]),
+      'workflows/wf-store/snapshot.json': cleanupSnapshotJson('plan-a'),
+      'projects/_default/residuals.json': v2Register({ 'plan-a': [v2ResidualEntry('R1', { severity: 'low', source_plan: 'plan-a' })] }),
+    })
+    const advisories = captureStatusAdvisories(app.ctx)
+
+    // On a case-insensitive volume (Darwin/APFS) this write lands on the
+    // authority database itself; the folded basename match refuses it on a
+    // case-sensitive volume too (the authority name is volume-invariant).
+    const path = join(harnessDir, 'Store.db')
+    const outcome = await app.ctx
+      .waterfall('fs/write-intent', { targetKey: path as FsTarget['targetKey'], displayPath: path }, {}, async () => ({ kind: 'createIfAbsent' as const }))
+      .then(() => undefined, (error: unknown) => error)
+
+    expect(outcome).toBeInstanceOf(StatusVetoError)
+    expect((outcome as StatusVetoError).violations.map((violation) => violation.code)).toEqual(['store.direct-write-refused'])
+    expect(advisories).toHaveLength(1)
+    expect(advisories[0]!.result.violations.map((violation) => violation.code)).toEqual(['store.direct-write-refused'])
+
+    // The status-write adapter refuses the same case-variant target.
+    const hook = await app.ctx.dshHostAdapter.beforeStatusWrite(path, undefined)
+    expect(hook.ok).toBe(false)
+    expect(hook.code).toBe('store.direct-write-refused')
+  })
+
+  it('a CASE-VARIANT register (RESIDUALS.json) takes the authority route (FW-3)', async () => {
+    const { app, harnessDir } = await storeApp()
+    await sealStoreForReaders(harnessDir)
+    await seedHarness(harnessDir, {
+      'status.json': v2Root([v2WorkflowEntry('wf-store')]),
+      'workflows/wf-store/snapshot.json': cleanupSnapshotJson('plan-a'),
+      'projects/_default/residuals.json': v2Register({ 'plan-a': [v2ResidualEntry('R1', { severity: 'low', source_plan: 'plan-a' })] }),
+    })
+
+    const path = join(harnessDir, 'projects', '_default', 'RESIDUALS.json')
+    const outcome = await app.ctx
+      .waterfall('fs/write-intent', { targetKey: path as FsTarget['targetKey'], displayPath: path }, {}, async () => ({ kind: 'createIfAbsent' as const }))
+      .then(() => undefined, (error: unknown) => error)
+
+    expect(outcome).toBeInstanceOf(StatusVetoError)
+    expect((outcome as StatusVetoError).violations.map((violation) => violation.code)).toEqual(['project.register.retired'])
+
+    const hook = await app.ctx.dshHostAdapter.beforeStatusWrite(path, undefined)
+    expect(hook.ok).toBe(false)
+    expect(hook.code).toBe('project.register.retired')
+  })
 })

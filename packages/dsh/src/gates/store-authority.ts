@@ -35,6 +35,12 @@
  * refused like the file itself. Only those two authority decisions are
  * canonicalized; the document lint keeps the caller's path.
  *
+ * Authority-NAME matching is CASE-INSENSITIVE (plan QC fix wave FW-3, omp/
+ * ZCode parity): on a case-insensitive volume (Darwin/APFS) a case-variant
+ * basename (`Store.db`, `RESIDUALS.json`) lands on the same authority bytes
+ * and must not bypass the store/register predicates `realpath` does not
+ * fold. The document lint keeps its exact-case classification.
+ *
  * Module boundary: no barrel and no gates-module cycle — the caller passes
  * its own direct classification (the status gate's `harnessDocKindOfTarget`
  * answer for the session's resolved harness root); this module only reaches
@@ -46,7 +52,7 @@
  * Bun's emulated `process.versions.node`).
  */
 import { readlinkSync, realpathSync, statSync } from 'node:fs'
-import { basename, dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, relative, resolve } from 'node:path'
 import {
   assertStoreRuntimeSupported,
   detectStoreRuntime,
@@ -62,6 +68,17 @@ import { STATUS_FILE, STORE_DB_FILE } from './_shared.ts'
 
 /** The authority database's WAL sidecars, directly at a harness root. */
 const STORE_AUTHORITY_FILES: readonly string[] = [STORE_DB_FILE, `${STORE_DB_FILE}-wal`, `${STORE_DB_FILE}-shm`]
+
+/** Case-folded authority-name matching (FW-3): a case-variant basename of an
+ * authority file IS the authority on a case-insensitive volume, so the match
+ * never hinges on byte case (mirrored in the omp and ZCode copies). */
+const STORE_AUTHORITY_NAMES: readonly string[] = STORE_AUTHORITY_FILES.map((file) => file.toLowerCase())
+
+/** The register file's basename, matched case-insensitively (FW-3). */
+const REGISTER_BASENAME = /residuals\.json/i
+/** The canonical register shape under the resolved project dir — one project
+ * component + the register file — with the file name folded (FW-3). */
+const REGISTER_SHAPE = /^[^/]+\/residuals\.json$/i
 
 /** Default v2 layout names of a marker-complete harness root. */
 const WORKFLOW_DIR_NAME = 'workflows'
@@ -182,10 +199,40 @@ function landedPathOf(resolved: string): string {
  * sitting directly at a harness root: the runtime's own store location for a
  * harness root is `<harness root>/store.db`, and hand-writing those bytes is
  * never a supported operation — hard vs soft, staged vs active, alias or not,
- * all the same. */
+ * all the same. The name match is case-insensitive (FW-3). */
 function isStoreAuthorityTarget(target: string): boolean {
-  if (!STORE_AUTHORITY_FILES.includes(basename(target))) return false
+  if (!STORE_AUTHORITY_NAMES.includes(basename(target).toLowerCase())) return false
   return isHarnessRootDir(dirname(target))
+}
+
+/**
+ * The harness root of a register target the exact-case classifiers MISS
+ * because its basename is a case variant (`RESIDUALS.json`, FW-3): the
+ * canonical register shape (one project component + the register file under
+ * the resolved project dir) is matched case-insensitively from the nearest
+ * harness root up the tree — the same walk the engine's marker probe runs for
+ * exact-case names, so a case-variant register is authority-classified like
+ * the file itself. `null` when the basename is not a register name or no
+ * ancestor root holds the shape (omp/ZCode parity).
+ */
+function caseFoldedRegisterRoot(candidate: string): string | null {
+  const target = resolve(candidate)
+  if (!REGISTER_BASENAME.test(basename(target))) return null
+  let dir = dirname(target)
+  for (;;) {
+    if (isHarnessRootDir(dir)) {
+      let projectDir: string
+      try {
+        projectDir = resolveProjectDir(dir, { harnessDir: dir })
+      } catch {
+        projectDir = join(dir, PROJECT_DIR_NAME)
+      }
+      if (REGISTER_SHAPE.test(relative(projectDir, target))) return dir
+    }
+    const parent = dirname(dir)
+    if (parent === dir) return null
+    dir = parent
+  }
 }
 
 /** One refusal as the engine violation shape (the same
@@ -258,6 +305,11 @@ export async function storeAuthorityRefusals(input: StoreAuthorityInput): Promis
   } else if (landed !== resolved) {
     const aliased = harnessDocKindOfTarget(landed)
     if (aliased?.kind === 'register') registerDir = aliased.harnessDir
+  }
+  if (registerDir === null) {
+    // FW-3: a case-variant register basename bypasses the exact-case
+    // classifiers above — the authority route must not.
+    registerDir = caseFoldedRegisterRoot(resolved) ?? (landed !== resolved ? caseFoldedRegisterRoot(landed) : null)
   }
   if (registerDir === null) return []
 

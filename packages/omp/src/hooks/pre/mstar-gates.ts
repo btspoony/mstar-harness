@@ -86,7 +86,7 @@
  * `{ block, reason }` refusal channel instead of the log channel.
  */
 import { readlinkSync, realpathSync, statSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import {
   assertStoreRuntimeSupported,
   detectStoreRuntime,
@@ -150,6 +150,18 @@ function taskDispatchEntries(input: unknown): DispatchEntry[] {
 /** The authority database and its WAL sidecars, directly at a harness root. */
 const STORE_DB_FILE = "store.db";
 const STORE_AUTHORITY_FILES: readonly string[] = [STORE_DB_FILE, `${STORE_DB_FILE}-wal`, `${STORE_DB_FILE}-shm`];
+
+/** Case-folded authority-name matching (plan QC fix wave FW-3, dsh/ZCode
+ * parity): on a case-insensitive volume (Darwin/APFS) a case-variant basename
+ * (`Store.db`) lands on the same authority bytes, so the match never hinges
+ * on byte case. */
+const STORE_AUTHORITY_NAMES: readonly string[] = STORE_AUTHORITY_FILES.map((file) => file.toLowerCase());
+
+/** The register file's basename, matched case-insensitively (FW-3). */
+const REGISTER_BASENAME = /residuals\.json/i;
+/** The canonical register shape under the resolved project dir — one project
+ * component + the register file — with the file name folded (FW-3). */
+const REGISTER_SHAPE = /^[^/]+\/residuals\.json$/i;
 
 /** Default v2 layout names of a marker-complete harness root. */
 const STATUS_FILE = "status.json";
@@ -294,10 +306,38 @@ function landedPathOf(resolved: string): string {
  * sitting directly at a harness root: the runtime's own store location for a
  * harness root is `<harness root>/store.db`, and hand-writing those bytes is
  * never a supported operation — hard vs soft, staged vs active, alias or not,
- * all the same. */
+ * all the same. The name match is case-insensitive (FW-3). */
 function isStoreAuthorityTarget(target: string): boolean {
-  if (!STORE_AUTHORITY_FILES.includes(basename(target))) return false;
+  if (!STORE_AUTHORITY_NAMES.includes(basename(target).toLowerCase())) return false;
   return isHarnessRootDir(dirname(target));
+}
+
+/** The harness root of a register target the exact-case classifiers MISS
+ * because its basename is a case variant (`RESIDUALS.json`, FW-3): the
+ * canonical register shape (one project component + the register file under
+ * the resolved project dir) is matched case-insensitively from the nearest
+ * harness root up the tree — the same walk the engine's marker probe runs for
+ * exact-case names, so a case-variant register is authority-classified like
+ * the file itself. `null` when the basename is not a register name or no
+ * ancestor root holds the shape (dsh/ZCode parity). */
+function caseFoldedRegisterRoot(candidate: string): string | null {
+  const target = resolve(candidate);
+  if (!REGISTER_BASENAME.test(basename(target))) return null;
+  let dir = dirname(target);
+  for (;;) {
+    if (isHarnessRootDir(dir)) {
+      let projectDir: string;
+      try {
+        projectDir = resolveProjectDir(dir, { harnessDir: dir });
+      } catch {
+        projectDir = join(dir, PROJECT_DIR_NAME);
+      }
+      if (REGISTER_SHAPE.test(relative(projectDir, target))) return dir;
+    }
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
 }
 
 /** The harness root of a project register this write reaches ONLY through a
@@ -377,7 +417,14 @@ async function gateStatusWrite(eventInput: unknown): Promise<{ block: true; reas
     const direct = harnessDocKindOfTarget(resolved);
     // A project register is an authority document too — reached through an
     // alias it takes the same route (status/snapshot aliases are untouched).
-    const registerDir = direct?.kind === "register" ? direct.harnessDir : aliasedRegisterDir(resolved, landed);
+    // A case-variant register basename (FW-3) bypasses both exact-case
+    // classifications and is classified by the folded shape walk instead.
+    const registerDir =
+      direct?.kind === "register"
+        ? direct.harnessDir
+        : (aliasedRegisterDir(resolved, landed) ??
+          caseFoldedRegisterRoot(resolved) ??
+          (landed !== resolved ? caseFoldedRegisterRoot(landed) : null));
     if (registerDir !== null) {
       const route = await readAuthorityRoute(registerDir);
       if (route.kind === "retired") return registerRetiredRefusal(route.storeRevision);
