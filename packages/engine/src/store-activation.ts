@@ -1115,6 +1115,19 @@ export async function activateStore(
       // reviewed register bytes and catalog digests HERE, inside the flip
       // transaction: the epoch never bumps against sources that no longer hold
       // the reviewed bytes, whatever landed after the inspection.
+      //
+      // Documented trade (QC seat 3 S-001): this fence performs register byte
+      // hashing and async catalog digest reads while the `begin immediate`
+      // write lock is held, so the lock window scales with the catalog source
+      // count. That is acceptable BY PRECONDITION: activation runs only on a
+      // QUIESCED STAGED store — the attestation validation above has stopped
+      // every registered reader/writer session before this transaction opens,
+      // so no concurrent writer can be starved and the in-window I/O is bounded
+      // by the reviewed source set, not by contention. The fence stays
+      // in-transaction deliberately: hoisting it before the lock would reopen
+      // the inspection→flip race this fence exists to close. A non-quiesced
+      // caller is already refused by the attestation gate; this note records
+      // the precondition so a future caller does not widen the window.
       revalidateSources(context, manifest, "activation");
       await revalidateCatalogSources(context, manifest, "activation");
       const epoch = current.epoch + 1;
