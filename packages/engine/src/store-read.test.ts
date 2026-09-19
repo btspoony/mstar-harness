@@ -745,6 +745,136 @@ describe("projection views", () => {
     expect((await withStoreRead(context, queryDashboard("iteration-detail", { id: "iter-absent" }))).data).toBeNull();
   });
 
+  test("a plan id shared by two workflows keeps each dashboard row's own execution state", async () => {
+    const { context, harness } = await workspace("dup-plan-id-");
+    await registerCatalogEntity(
+      context,
+      { kind: "plan", id: "wf-dup", title: "Plan wf-dup", rootKind: "plans", relativePath: "wf-dup.md" },
+      op("dup-plan"),
+    );
+    await registerCatalogEntity(
+      context,
+      { kind: "iteration", id: "iter-dup", title: "Iteration dup", rootKind: "iterations", relativePath: "iter-dup" },
+      op("dup-iter"),
+    );
+    await linkCatalogEntities(
+      context,
+      { from: { kind: "plan", id: "wf-dup" }, relation: "belongs-to", to: { kind: "iteration", id: "iter-dup" } },
+      op("dup-link"),
+    );
+
+    // Same plan id under two different workflows: the plan workflow's own
+    // execution row and the iteration workflow's row for the same plan.
+    writeFile(
+      join(harness, "status.json"),
+      JSON.stringify(
+        {
+          version: 2,
+          updated_at: "2026-09-18",
+          workflows: [
+            { id: "wf-dup", type: "plan", started_at: STARTED_AT, dir: "workflows/wf-dup" },
+            { id: "iter-dup", type: "iteration", started_at: STARTED_AT, dir: "workflows/iter-dup" },
+          ],
+        },
+        null,
+        2,
+      ),
+    );
+    writeFile(
+      join(harness, "workflows/wf-dup/snapshot.json"),
+      JSON.stringify(
+        {
+          schema_version: 1,
+          id: "wf-dup",
+          type: "plan",
+          status: "running",
+          started_at: STARTED_AT,
+          updated_at: STARTED_AT,
+          phase: "phase-2-execute",
+          branch: { base: "main", source: "feature/wf-dup", target: "main" },
+          plans: [
+            {
+              id: "wf-dup",
+              title: "Plan wf-dup",
+              file: "/plans/wf-dup.md",
+              status: "InProgress",
+              coordination: { revision: 1, progress: { status: "InProgress", summary: "plan-workflow progress", evidence_paths: [] } },
+              metadata: { catalog_pin: { entity_revision: 7 } },
+              execution_lease: {
+                holder: "session-plan",
+                claimed_at: STARTED_AT,
+                worktree_path: "/wt/wf-dup",
+                working_branch: "feature/wf-dup",
+                session_label: "must-never-be-projected",
+              },
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+    );
+    writeFile(
+      join(harness, "workflows/iter-dup/snapshot.json"),
+      JSON.stringify(
+        {
+          schema_version: 1,
+          id: "iter-dup",
+          type: "iteration",
+          status: "running",
+          started_at: STARTED_AT,
+          updated_at: STARTED_AT,
+          phase: "phase-3-close",
+          branch: { base: "main", source: "feature/wf-dup", integration: "integrate/iter-dup", target: "main" },
+          plans: [
+            {
+              id: "wf-dup",
+              title: "Plan wf-dup",
+              file: "/plans/wf-dup.md",
+              status: "Blocked",
+              metadata: { catalog_pin: { entity_revision: 9 } },
+              execution_lease: {
+                holder: "session-iter",
+                claimed_at: STARTED_AT,
+                worktree_path: "/wt/iter-dup",
+                working_branch: "integrate/iter-dup",
+              },
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+    );
+    await refreshProjections(context);
+
+    const envelope = await withStoreRead(context, queryDashboard("workflows"));
+    const planWorkflow = envelope.data.items.find((item) => item.id === "wf-dup") as WorkflowDTO;
+    const iterationWorkflow = envelope.data.items.find((item) => item.id === "iter-dup") as WorkflowDTO;
+
+    // Each workflow's plan row shows only its own workflow's lease, status and
+    // pin revision -- never the other's.
+    expect(planWorkflow.plans[0]?.status).toBe("InProgress");
+    expect(planWorkflow.plans[0]?.progress).toBe("plan-workflow progress");
+    expect(planWorkflow.plans[0]?.catalogPinRevision).toBe(7);
+    expect(planWorkflow.plans[0]?.leases.map((lease) => lease.holder)).toEqual(["session-plan"]);
+    expect(planWorkflow.plans[0]?.leases.map((lease) => lease.workflowId)).toEqual(["wf-dup"]);
+
+    expect(iterationWorkflow.plans[0]?.status).toBe("Blocked");
+    expect(iterationWorkflow.plans[0]?.catalogPinRevision).toBe(9);
+    expect(iterationWorkflow.plans[0]?.leases.map((lease) => lease.holder)).toEqual(["session-iter"]);
+    expect(iterationWorkflow.plans[0]?.leases.map((lease) => lease.workflowId)).toEqual(["iter-dup"]);
+    expect(JSON.stringify(envelope)).not.toContain("must-never-be-projected");
+
+    // The iteration view resolves the plan's execution from the iteration's
+    // own row, never from the same-id plan workflow's row.
+    const detail = await withStoreRead(context, queryDashboard("iteration-detail", { id: "iter-dup" }));
+    expect(detail.data?.plans[0]?.execution?.workflowId).toBe("iter-dup");
+    expect(detail.data?.plans[0]?.execution?.status).toBe("Blocked");
+    expect(detail.data?.plans[0]?.execution?.phase).toBe("phase-3-close");
+    expect(detail.data?.plans[0]?.catalogPinRevision).toBe(9);
+  });
+
   test("roadmap carries the project identity and the projected goals", async () => {
     const { context } = await projectedWorkspace("roadmap-");
     const envelope = await withStoreRead(context, queryDashboard("roadmap", { projectId: "proj-a" }));
