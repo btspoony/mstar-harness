@@ -13,13 +13,16 @@
  * `{ entries: { [key]: ResidualEntry & { source_plan, registered_at,
  * lifecycle_id? } } }` (). Entry validation delegates verbatim
  * to `validateResidual` (status.ts) — severity enum + lifecycle semantics
- * preserved at the new address, no copy.
+ * preserved at the new address, no copy. The validator is MIGRATION-ONLY
+ * (issue-governance cutover G2a): the register is historical input to the
+ * staged import, never a runtime findings authority, so this file no longer
+ * covers register writes — the issue store owns them (issue-cutover.test.ts).
  * - `_DEFAULT_PROJECT` fallback constant + PROJECT_FILE names (;
  * compass ruling 2 — `projects/_default/` fallback for project-less
  * flows).
  */
-import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { GateResult } from "../src/core.js";
@@ -29,17 +32,10 @@ import {
   PROJECT_ROADMAP_FILE,
   ROADMAP_STATUSES,
   _DEFAULT_PROJECT,
-  appendProjectRegisterEntries,
-  closeProjectRegisterEntry,
   listProjectReferenceFiles,
   validateProjectRegister,
   validateRoadmap,
 } from "../src/project.js";
-import { createFsStore, setArtifactStore } from "../src/store.js";
-
-afterEach(() => {
-  setArtifactStore(undefined);
-});
 
 function tmpRoot(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix));
@@ -604,93 +600,3 @@ describe("listProjectReferenceFiles — theme-scoped research listing ", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// coordinated-writer — the scoped-key guard leaves the legacy backlog path
-// (uncoordinated keys, sibling-bucket preservation) intact (spec C4)
-// ---------------------------------------------------------------------------
-
-describe("coordinated-writer — legacy backlog path preserved on uncoordinated keys", () => {
-  function residualEntry(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-    return {
-      id: "R-1",
-      title: "deferred PR backlog entry",
-      severity: "high",
-      source: "pr-deep-review",
-      scope: "skills/mstar-audit/references/pr-review.md",
-      decision: "defer",
-      owner: "@fullstack-dev",
-      target: null,
-      tracking: "20260826-pr-deep-review",
-      lifecycle: "open",
-      registered_at: "2026-08-26",
-      ...overrides,
-    };
-  }
-
-  test("append + close still work on an uncoordinated key and preserve sibling buckets", async () => {
-    const root = tmpRoot("coordinated-writer-project-legacy-");
-    const projectDir = join(root, "projects", "test-project");
-    mkdirSync(projectDir, { recursive: true });
-    setArtifactStore(createFsStore(root));
-    const registerPath = join(projectDir, PROJECT_REGISTER_FILE);
-    try {
-      writeFileSync(
-        registerPath,
-        '{\n  "entries": {\n    "sibling": []\n  }\n}\n',
-        "utf8",
-      );
-
-      const appended = await appendProjectRegisterEntries({
-        projectDir,
-        basePlanKey: "plan-a",
-        entries: [residualEntry()] as never,
-      });
-      expect(appended.key).toBe("plan-a");
-
-      const register = JSON.parse(readFileSync(registerPath, "utf8")) as {
-        entries: Record<string, Array<Record<string, unknown>>>;
-      };
-      expect(Object.keys(register.entries).sort()).toEqual(["plan-a", "sibling"]);
-      expect(register.entries["plan-a"]).toHaveLength(1);
-
-      await closeProjectRegisterEntry({
-        projectDir,
-        planKey: "plan-a",
-        entryId: "R-1",
-        closureNote: "closed by the coordinated-writer regression",
-      });
-      const closed = JSON.parse(readFileSync(registerPath, "utf8")) as {
-        entries: Record<string, Array<Record<string, unknown>>>;
-      };
-      expect(closed.entries["plan-a"]![0]!.lifecycle).toBe("resolved");
-      // The guard must not have disturbed any sibling bucket.
-      expect(closed.entries.sibling).toEqual([]);
-      expect(validateProjectRegister(closed).ok).toBe(true);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("the register file is unchanged when the append is refused by validation", async () => {
-    const root = tmpRoot("coordinated-writer-project-refuse-");
-    const projectDir = join(root, "projects", "test-project");
-    mkdirSync(projectDir, { recursive: true });
-    setArtifactStore(createFsStore(root));
-    const registerPath = join(projectDir, PROJECT_REGISTER_FILE);
-    try {
-      const content = '{\n  "entries": {\n    "sibling": []\n  }\n}\n';
-      writeFileSync(registerPath, content, "utf8");
-      await expect(
-        appendProjectRegisterEntries({
-          projectDir,
-          basePlanKey: "plan-b",
-          entries: [residualEntry({ severity: "not-a-severity" })] as never,
-        }),
-      ).rejects.toThrow(/invalid residual entry/);
-      expect(readFileSync(registerPath, "utf8")).toBe(content);
-      expect(existsSync(registerPath)).toBe(true);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-});

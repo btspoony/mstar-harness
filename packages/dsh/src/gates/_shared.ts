@@ -28,6 +28,14 @@ import type { IterationGateListView, IterationGateViolationView } from '../types
 import type { SessionHint } from './workflow-selection.ts'
 /** Canonical harness status file name (mstar-artifacts status.json). */
 export const STATUS_FILE = 'status.json'
+/**
+ * The issue/catalog authority's file name under the resolved `{HARNESS_DIR}`
+ * (issue-store contract §2 — `<resolved harness root>/store.db`). `store.db`
+ * is the ONE authority the host readers consult; the retired
+ * `projects/<id>/residuals.json` registers and the Markdown index tables are
+ * migration history.
+ */
+export const STORE_DB_FILE = 'store.db'
 /** Plugin configuration. */
 export interface Config {
   /**

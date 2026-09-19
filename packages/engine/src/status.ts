@@ -3,8 +3,8 @@
  * normalization, residual lifecycle (open → archived), and the root-file
  * v2 writers.
  *
- * `findingsCleanupGate` and `techDebtRollup`
- * moved to `project.ts` (they operate on project-register artifacts) —
+ * `findingsCleanupGate`
+ * moved to `project.ts` (it operates on the issue-store findings authority) —
  * this module no longer imports `./project.js`, breaking the former
  * `status.ts ↔ project.ts` module cycle. Public names remain exported via
  * the package index (`index.ts`).
@@ -29,8 +29,9 @@
  * - v2 root + migration detection: v1-shaped documents — root `plans[]` OR
  * root `residual_findings` (v1-disguise hole) — fail
  * closed with `status.migration-required` even when `version: 2`.
- * - Rollup aggregates: canonical compute is `techDebtRollup` in `project.ts`
- * (CLI form: `mstar status tech-debt [path]`).
+ * - Findings rollups: the register-walking `techDebtRollup` is deleted
+ * (plan QC fix wave FW-5 — the register authority is retired); the CLI
+ * `mstar status tech-debt` computes from the issue store (`readIssueRollup`).
  */
 import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
@@ -832,6 +833,29 @@ function readRegisteredSnapshot(snapshotPath: string): Record<string, unknown> |
   } catch {
     return undefined;
   }
+}
+
+/**
+ * The root-visible active entry for `id`, or `undefined` when the root file is
+ * missing/empty or holds no entry for that id.
+ *
+ * A tolerant READ of the v2 root — the "is this workflow root-visible?"
+ * question the catalog registration journal and its pending-registration gate
+ * ask (`catalog-registration.ts`, contract §3 step 3/step 4). It deliberately
+ * does not validate: a malformed or v1 root stays the writers' and
+ * `validateStatusV2`'s refusal, because this reader must never turn a broken
+ * document into a silent "not registered". An unparseable root still THROWS
+ * (the same fail-loud `readJson` contract the root writers use) rather than
+ * reporting the workflow absent.
+ */
+export function findRegisteredWorkflow(harnessDir: string, id: string): WorkflowEntry | undefined {
+  if (typeof id !== "string" || id.trim() === "") return undefined;
+  const statusPath = join(resolve(harnessDir), "status.json");
+  if (!existsSync(statusPath)) return undefined;
+  const doc = readJson(statusPath);
+  const workflows = Array.isArray(doc.workflows) ? doc.workflows : [];
+  const entry = workflows.find((candidate) => isPlainObject(candidate) && candidate.id === id);
+  return isPlainObject(entry) ? (entry as WorkflowEntry) : undefined;
 }
 
 /**

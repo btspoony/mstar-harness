@@ -1,6 +1,6 @@
 /**
  * Engine iteration module — compass frontmatter schema, phase-transition
- * gate evaluation, push-cadence probe, iteration index obligations.
+ * gate evaluation, push-cadence probe, catalog completeness.
  *
  * Spec sources (each export cites the skill/reference section it enforces):
  * - Compass template + frontmatter fields (iteration_id / start_date /
@@ -30,10 +30,11 @@
  *   review wave is running): `mstar-iteration` SKILL.md §5.1a +
  *   `mstar-iteration/references/phase-4-5-pr-delivery.md` §5.1a push gate 1
  *   + 2.
- * - Index obligations (one row per iteration in `{ITERATION_DIR}/README.md`,
- *   table header on first creation): `mstar-iteration` SKILL.md §1.4.
- *   Legacy flat `<id>-delivery-compass.md` files are read-compatible only
- *   (§1.3) and are not indexed by this check.
+ * - Catalog completeness (every discovered iteration/plan/project/document
+ *   store has a `store.db` catalog row; the Markdown index tables are not
+ *   registers): state-projection contract §4. Legacy flat
+ *   `<id>-delivery-compass.md` files are read-compatible only (§1.3) and are
+ *   not indexed by this check.
  * - Phase 6 post-merge close local-state gate (valid terminal snapshot
  *   shape + no leftover lease + root status.json entry unregistered;
  *   invalid/unreadable root is NOT proof of root absence):
@@ -44,6 +45,12 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { GateResult, Severity, ValidationResult } from "./core.js";
+// Call-time-only cycle with catalog.ts (which reaches this module through
+// coordination.ts): `catalogRootDir` only resolves roots when a catalog
+// consumer runs, and this module only calls it from its own completeness
+// query, so neither side dereferences the other during module evaluation.
+import { catalogRootDir } from "./catalog.js";
+import { StoreError, openStore, type StoreContext } from "./store-db.js";
 import { validateStatusV2, type StatusV2Doc } from "./status.js";
 import { LEGACY_WORKTREE_PATH_CODE, consultDeliveryEvidence, isTerminalSnapshot, validateWorkflowSnapshot, type WorkflowSnapshot } from "./workflow.js";
 
@@ -51,8 +58,7 @@ const COMPASS_STATUSES = ["active", "locked", "completed"] as const;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const PLAN_STATUS_DONE = "Done";
 const COMPASS_FILE = "delivery-compass.md";
-const INDEX_README = "README.md";
-const INDEX_HEADER = "| Iteration | Path | Description | Status |";
+const ROADMAP_FILE = "roadmap.md";
 
 /**
  * Loose shape of a parsed workflow snapshot (`workflows/<id>/snapshot.json`).
@@ -710,75 +716,281 @@ export function pushCadenceProbe(ciRunning: boolean, reviewWaveActive: boolean):
   return { ok: violations.length === 0, violations };
 }
 
+/* ------------------------------------------------------------------------ *
+ * § Catalog completeness — the DB query that replaced the README index
+ *   obligations (state-projection contract §4)
+ * ------------------------------------------------------------------------ */
+
 /**
- * §1.4 index obligations: one row per iteration in `{ITERATION_DIR}/README.md`
- * (table header on first creation). Iterations are discovered as subdirectories
- * of `iterationsDir` containing `delivery-compass.md`. Returns violations for
- * a missing README, a missing header, and missing per-iteration rows.
+ * Catalog roots the completeness query covers. These are the families whose
+ * bodies are files but whose identity/membership is catalog authority
+ * (contract §1): every discovered store must be registered in `store.db`.
  */
-export function assertIndexRowObligations(iterationsDir: string): GateResult {
-  if (!existsSync(iterationsDir)) {
-    return {
-      ok: false,
-      violations: [
-        violation(
-          "high",
-          "INDEX_ITERATIONS_DIR_MISSING",
-          `{ITERATION_DIR} '${iterationsDir}' does not exist (mstar-iteration \u00a71.4)`,
-          "Create the iterations directory (path.resolveIterationDir)",
-        ),
-      ],
-    };
+export type CatalogCompletenessRoot = "iterations" | "plans" | "knowledge" | "specs" | "projects";
+
+/** One location present on disk that the catalog does not hold. */
+export type CatalogCompletenessGap = {
+  rootKind: CatalogCompletenessRoot;
+  /** Layout identity the convention proposes for this location. */
+  kind: "iteration" | "plan" | "document" | "project";
+  relativePath: string;
+  id: string;
+  code:
+    | "catalog.discovery.missing-iteration"
+    | "catalog.discovery.missing-plan"
+    | "catalog.discovery.missing-project"
+    | "catalog.discovery.missing-document";
+  message: string;
+};
+
+/** Read-only result of the catalog completeness query. */
+export type CatalogCompletenessReport = {
+  ok: boolean;
+  /** Locations found on disk (the proposal side, §4 explicit proposal). */
+  discovered: number;
+  /** Catalog rows the store holds for the covered roots. */
+  registered: number;
+  gaps: CatalogCompletenessGap[];
+  violations: ValidationResult[];
+  storeRevision: number;
+  catalogRevision: number;
+};
+
+/** Every root the query covers when the caller names none. */
+const COMPLETENESS_ROOTS: readonly CatalogCompletenessRoot[] = ["iterations", "plans", "knowledge", "specs", "projects"];
+
+/** One discovered location, before it is matched against the catalog. */
+type DiscoveredLocation = {
+  rootKind: CatalogCompletenessRoot;
+  kind: CatalogCompletenessGap["kind"];
+  id: string;
+  relativePath: string;
+};
+
+/** Directory names directly under `dir` (empty when it is missing/not a dir). */
+function listChildDirectories(dir: string): string[] {
+  try {
+    return readdirSync(dir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .sort();
+  } catch {
+    return [];
   }
-  const iterationIds = readdirSync(iterationsDir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .filter((entry) => existsSync(join(iterationsDir, entry.name, COMPASS_FILE)))
-    .map((entry) => entry.name)
-    .sort();
-  const readmePath = join(iterationsDir, INDEX_README);
-  if (!existsSync(readmePath)) {
-    return {
-      ok: false,
-      violations: [
-        violation(
-          "high",
-          "INDEX_README_MISSING",
-          `{ITERATION_DIR}/README.md does not exist \u2014 one row per iteration is required (mstar-iteration \u00a71.4)`,
-          `Create {ITERATION_DIR}/README.md with the header '${INDEX_HEADER}' and one row per iteration`,
-        ),
-      ],
-    };
+}
+
+/**
+ * Markdown bodies under `dir` (posix-relative), excluding the `README.md` /
+ * `index.md` index files and never following a symlink — the same walk rule
+ * `mstar catalog discover` uses, so this proposal cannot hang on a cycle and
+ * cannot treat an index file as a document body.
+ */
+function listDocumentBodies(dir: string, base = ""): string[] {
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return [];
   }
-  const violations: ValidationResult[] = [];
-  const lines = readFileSync(readmePath, "utf8").split(/\r?\n/);
-  if (!lines.some((line) => line.includes(INDEX_HEADER))) {
-    violations.push(
-      violation(
-        "medium",
-        "INDEX_HEADER_MISSING",
-        `{ITERATION_DIR}/README.md lacks the table header '${INDEX_HEADER}' (mstar-iteration \u00a71.4)`,
-        "Add the header row on first creation",
-      ),
-    );
-  }
-  const indexed = new Set<string>();
-  for (const line of lines) {
-    const match = line.match(/^\s*\|\s*`([^`]+)`\s*\|/);
-    if (match) indexed.add(match[1]!.trim());
-  }
-  for (const id of iterationIds) {
-    if (!indexed.has(id)) {
-      violations.push(
-        violation(
-          "medium",
-          "INDEX_ROW_MISSING",
-          `Iteration '${id}' has a delivery-compass.md but no index row in {ITERATION_DIR}/README.md \u2014 one row per iteration (mstar-iteration \u00a71.4)`,
-          `Add | \`${id}\` | [\`${id}/\`](${id}/) | <description> | <status> |`,
-        ),
-      );
+  const bodies: string[] = [];
+  for (const entry of entries) {
+    if (entry.isSymbolicLink()) continue;
+    const relativePath = base === "" ? entry.name : `${base}/${entry.name}`;
+    if (entry.isDirectory()) {
+      bodies.push(...listDocumentBodies(join(dir, entry.name), relativePath));
+    } else if (entry.name.endsWith(".md") && entry.name !== "README.md" && entry.name !== "index.md") {
+      bodies.push(relativePath);
     }
   }
-  return { ok: violations.length === 0, violations };
+  return bodies.sort();
+}
+
+/**
+ * Every store location the harness layout convention proposes (§4: discovery
+ * is a proposal, never a live parallel authority). Identity comes from the
+ * layout rule — an iteration is a directory carrying a compass, a project a
+ * directory carrying a roadmap, a plan a file under `plans/` — and never from
+ * a maintained index table.
+ */
+function discoverCatalogLocations(context: StoreContext, roots: readonly CatalogCompletenessRoot[]): DiscoveredLocation[] {
+  const locations: DiscoveredLocation[] = [];
+  for (const rootKind of roots) {
+    // The catalog domain's own root resolver: registered `relative_path`s and
+    // this proposal must be resolved by the same rule, or a complete catalog
+    // would look incomplete.
+    const dir = catalogRootDir(context, rootKind);
+    switch (rootKind) {
+      case "iterations": {
+        for (const id of listChildDirectories(dir)) {
+          if (existsSync(join(dir, id, COMPASS_FILE))) {
+            locations.push({ rootKind, kind: "iteration", id, relativePath: `${id}/${COMPASS_FILE}` });
+          }
+        }
+        break;
+      }
+      case "projects": {
+        for (const id of listChildDirectories(dir)) {
+          if (existsSync(join(dir, id, ROADMAP_FILE))) {
+            locations.push({ rootKind, kind: "project", id, relativePath: `${id}/${ROADMAP_FILE}` });
+          }
+        }
+        break;
+      }
+      case "plans": {
+        for (const relativePath of listDocumentBodies(dir)) {
+          locations.push({
+            rootKind,
+            kind: "plan",
+            id: relativePath.replace(/\.md$/, ""),
+            relativePath,
+          });
+        }
+        break;
+      }
+      case "knowledge":
+      case "specs": {
+        for (const relativePath of listDocumentBodies(dir)) {
+          locations.push({ rootKind, kind: "document", id: relativePath, relativePath });
+        }
+        break;
+      }
+    }
+  }
+  return locations;
+}
+
+const GAP_CODE: Record<CatalogCompletenessGap["kind"], CatalogCompletenessGap["code"]> = {
+  iteration: "catalog.discovery.missing-iteration",
+  plan: "catalog.discovery.missing-plan",
+  project: "catalog.discovery.missing-project",
+  document: "catalog.discovery.missing-document",
+};
+
+/**
+ * The catalog completeness query (state-projection contract §4): every store
+ * location the layout convention proposes must have a catalog row, and a
+ * Markdown index table is never the authority for that. `README.md` absence is
+ * therefore not a failure — the README is prose, not a register.
+ *
+ * Refusal discipline (§2/§4): a MISSING database is `store.not-initialized`
+ * and a staged one is `store.not-active`; both are reported as violations, so
+ * a workspace with no catalog can never be read as an empty-but-complete
+ * catalog. Any other store failure (corrupt bytes, unsupported runtime)
+ * propagates instead of being flattened into a gap report.
+ *
+ * Reads only: the rows come from the catalog read path (`listCatalog`) and the
+ * proposal side from the filesystem. Registered rows of any lifecycle count as
+ * covering their location — an archived/superseded row is a deliberate
+ * catalog decision about that location, not an unregistered store.
+ */
+export async function readCatalogCompleteness(
+  context: StoreContext,
+  roots: readonly CatalogCompletenessRoot[] = COMPLETENESS_ROOTS,
+): Promise<CatalogCompletenessReport> {
+  const covered = new Set<CatalogCompletenessRoot>(roots);
+  for (const rootKind of covered) {
+    if (!COMPLETENESS_ROOTS.includes(rootKind)) {
+      throw new Error(`"${String(rootKind)}" is not a covered catalog root (expected ${COMPLETENESS_ROOTS.join(", ")})`);
+    }
+  }
+  const discovered = discoverCatalogLocations(context, [...covered]);
+  const registered = new Set<string>();
+  let storeRevision = 0;
+  let catalogRevision = 0;
+  try {
+    const handle = await openStore(context, "read");
+    try {
+      const meta = handle.db
+        .prepare("select authority_state, revision, catalog_revision from store_meta where id = 1")
+        .get() as { authority_state?: unknown; revision?: unknown; catalog_revision?: unknown } | undefined;
+      if (!meta || typeof meta.authority_state !== "string" || typeof meta.revision !== "number" || typeof meta.catalog_revision !== "number") {
+        throw new StoreError("store.corrupt", "store_meta is missing or malformed; the catalog authority cannot be verified");
+      }
+      storeRevision = meta.revision;
+      catalogRevision = meta.catalog_revision;
+      if (meta.authority_state !== "active") {
+        return completenessRefusal(
+          "store.not-active",
+          `The catalog store is ${meta.authority_state}; catalog completeness is asserted only against an ACTIVE authority \u2014 ` +
+            "the legacy index/register sources remain authoritative until activation completes.",
+          discovered.length,
+          storeRevision,
+          catalogRevision,
+        );
+      }
+      const rows = handle.db
+        .prepare("select root_kind, relative_path from catalog_entities")
+        .all() as Array<{ root_kind?: unknown; relative_path?: unknown }>;
+      for (const row of rows) {
+        if (typeof row.root_kind !== "string" || typeof row.relative_path !== "string") continue;
+        if (!covered.has(row.root_kind as CatalogCompletenessRoot)) continue;
+        registered.add(`${row.root_kind}\u0000${row.relative_path}`);
+      }
+    } finally {
+      handle.close();
+    }
+  } catch (error) {
+    if (error instanceof StoreError && error.code === "store.not-initialized") {
+      return completenessRefusal(error.code, error.message, discovered.length, storeRevision, catalogRevision);
+    }
+    throw error;
+  }
+
+  const gaps: CatalogCompletenessGap[] = [];
+  for (const location of discovered) {
+    if (registered.has(`${location.rootKind}\u0000${location.relativePath}`)) continue;
+    const code = GAP_CODE[location.kind];
+    gaps.push({
+      rootKind: location.rootKind,
+      kind: location.kind,
+      relativePath: location.relativePath,
+      id: location.id,
+      code,
+      message:
+        `${location.rootKind}/${location.relativePath} exists but has no catalog row \u2014 ` +
+        `register it through the catalog domain boundary (e.g. \`mstar catalog import\` after a reviewed \`mstar catalog discover\`)`,
+    });
+  }
+  const violations = gaps.map((gap) =>
+    violation("high", gap.code, gap.message, "run `mstar catalog discover` and import the reviewed mapping"),
+  );
+  return {
+    ok: gaps.length === 0,
+    discovered: discovered.length,
+    registered: registered.size,
+    gaps,
+    violations,
+    storeRevision,
+    catalogRevision,
+  };
+}
+
+/** A refusal-shaped report (never `ok`, never an empty catalog). */
+function completenessRefusal(
+  code: string,
+  message: string,
+  discovered: number,
+  storeRevision: number,
+  catalogRevision: number,
+): CatalogCompletenessReport {
+  return {
+    ok: false,
+    discovered,
+    registered: 0,
+    gaps: [],
+    violations: [violation("high", code, message, "run `mstar store init` (or the staged migration) and retry")],
+    storeRevision,
+    catalogRevision,
+  };
+}
+
+/** The gate shape of `readCatalogCompleteness` for host hooks and CLI checks. */
+export async function assertCatalogCompleteness(
+  context: StoreContext,
+  roots: readonly CatalogCompletenessRoot[] = COMPLETENESS_ROOTS,
+): Promise<GateResult> {
+  const report = await readCatalogCompleteness(context, roots);
+  return { ok: report.ok, violations: report.violations };
 }
 
 /**

@@ -35,6 +35,8 @@ import {
   VALID_STATUS,
   VALID_STATUS_V2,
   seedHarness,
+  seedOpenIssue,
+  seedStore,
   v2RootWithWorkflow,
   v2SnapshotWithPlans,
   v2Register,
@@ -297,19 +299,21 @@ describe('status gate — error-containment envelope ', () => {
 
 describe('status gate — findingsCleanupGate when configured', () => {
   /**
-   * Seed the v3 cleanup fixture: a v2 tree whose snapshot plan row declares
-   * zero-residual AND a project register holding an open nit for that plan
-   * (the v1 `residual_findings` home is gone — residuals live in
-   * `projects/<id>/residuals.json`, entries keyed by plan id; the snapshot
-   * write gate runs the cleanup extension against them).
+   * Seed the cleanup fixture: an ACTIVE issue store holding one OPEN issue
+   * linked to `p1`, plus a v2 tree whose snapshot plan row declares the given
+   * cleanup mode. The findings authority is the store (issue contract §4); a
+   * retired project register is seeded too, to keep proving the gate never
+   * reads it.
    */
   async function seedCleanupSnapshot(harnessDir: string, mode = 'zero-residual'): Promise<void> {
     const configured = { id: 'p1', title: 't', file: 'plans/p1.md', status: 'InProgress', metadata: { findings_cleanup: mode } }
     await seedHarness(harnessDir, {
       'status.json': v2RootWithWorkflow(),
       'workflows/wf-1/snapshot.json': v2SnapshotWithPlans('wf-1', [configured]),
-      'projects/_default/residuals.json': v2Register({ p1: [v2ResidualEntry('R1', { severity: 'nit' })] }),
+      'projects/_default/residuals.json': v2Register({ p1: [v2ResidualEntry('R1', { severity: 'low' })] }),
     })
+    await seedStore(harnessDir)
+    await seedOpenIssue(harnessDir, { title: 'cleanup fixture blocker', severity: 'low', planId: 'p1', operationId: 'op-cleanup' })
   }
 
   it('zero-residual mode configured → open nit surfaces as a repair-escape advisory under hard', async () => {
@@ -325,7 +329,7 @@ describe('status gate — findingsCleanupGate when configured', () => {
     expect(advisories).toHaveLength(1)
     expect(advisories[0]!.hard).toBe(true)
     expect(advisories[0]!.repair).toBe(true)
-    expect(advisories[0]!.result.violations.map((v) => v.code)).toContain('findings.zero-residual-nit')
+    expect(advisories[0]!.result.violations.map((v) => v.code)).toContain('findings.zero-residual-open-issue')
   })
 
   it('zero-residual mode configured → advisory under warn', async () => {
@@ -337,19 +341,20 @@ describe('status gate — findingsCleanupGate when configured', () => {
 
     expect(intent).toBeUndefined()
     expect(advisories).toHaveLength(1)
-    expect(advisories[0]!.result.violations.map((v) => v.code)).toContain('findings.zero-residual-nit')
+    expect(advisories[0]!.result.violations.map((v) => v.code)).toContain('findings.zero-residual-open-issue')
   })
 
   it('no findings_cleanup mode declared → cleanup gate not configured, doc passes', async () => {
     const app = booted = await bootApp({ enforcement: 'hard' })
     // A snapshot plan row WITHOUT `metadata.findings_cleanup`: the cleanup
-    // extension is not configured — the open register nit is not a gate
+    // extension is not configured — the plan's open linked issue is not a gate
     // violation (the mode is the opt-in).
     await seedHarness(app.harnessDir, {
       'status.json': v2RootWithWorkflow(),
       'workflows/wf-1/snapshot.json': v2SnapshotWithPlans('wf-1', [{ id: 'p1', title: 't', file: 'plans/p1.md', status: 'InProgress' }]),
-      'projects/_default/residuals.json': v2Register({ p1: [v2ResidualEntry('R1', { severity: 'nit' })] }),
     })
+    await seedStore(app.harnessDir)
+    await seedOpenIssue(app.harnessDir, { title: 'not gated without a mode', severity: 'critical', planId: 'p1', operationId: 'op-no-mode' })
     const advisories = captureAdvisories(app.ctx)
 
     const intent = await app.ctx.waterfall('fs/write-intent', snapshotTarget(app.harnessDir), {}, () => undefined)

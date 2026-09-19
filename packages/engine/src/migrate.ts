@@ -82,14 +82,15 @@
  * twice (silent overwrite at apply); the plan is refused fail-loud with
  * the conflict list.
  */
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { readJson } from "./core.js";
+import { readJson, writeJson } from "./core.js";
 import { parseCompassFrontmatterText } from "./iteration.js";
 import { withStatusWriteLock } from "./lease.js";
 import { assertSafePathComponent, resolveProjectDir, resolveWorkflowDir } from "./path.js";
 import { _DEFAULT_PROJECT, PROJECT_REGISTER_FILE, PROJECT_ROADMAP_FILE, validateProjectRegister, type ProjectRegisterDoc, type ProjectRegisterEntry } from "./project.js";
 import { assertFsStorePath, getArtifactStore, type ArtifactStore } from "./store.js";
+import { StoreError, openStore, storeDbPath } from "./store-db.js";
 import { CoordinationError, readArtifactBytes, withProtectedWrite } from "./coordination-write.js";
 import {
   isOpenResidual,
@@ -1057,6 +1058,16 @@ export async function applyMigratePlan(plan: MigratePlan): Promise<MigrateResult
 
   const store = getArtifactStore();
 
+  // Active-store barrier (issue-governance cutover G2a): the v1→v2 layout
+  // migration recreates the legacy register/index layout. Old data may be
+  // parsed and migrated only BEFORE store activation — an ACTIVE issue store
+  // is the sole findings authority, and legacy recreation is refused. A
+  // missing store is the pre-store workspace (legacy layout is the only
+  // authority; migrate proceeds); a staged store is the pre-activation
+  // exclusion window (§7) and also proceeds. A corrupt/unverifiable store
+  // fails closed.
+  await assertNoActiveStoreForLegacyLayout(plan.root);
+
  // The apply is a MULTI-document write (archive → snapshots → notes →
  // register → roadmap → root v2 replacement), so it runs under the ROOT
  // lock in the mandated acquisition order root → snapshot → register
@@ -1122,6 +1133,35 @@ function writeRawMigrateTarget(filePath: string, expected: Buffer): void {
       `refusing to apply migration: ${filePath} already exists with different content \u2014 migration is additive-only`,
       { path: filePath },
     );
+  }
+}
+
+/**
+ * Active-store barrier for the legacy layout migration (G2a): an ACTIVE
+ * issue store refuses legacy recreation; a missing store (pre-store
+ * workspace) and a staged store (pre-activation exclusion window) proceed.
+ * Any other store failure (corrupt, schema drift, below-floor runtime)
+ * propagates — the layout migration never runs against an authority it
+ * cannot verify.
+ */
+async function assertNoActiveStoreForLegacyLayout(harnessDir: string): Promise<void> {
+  const dbPath = storeDbPath({ harnessDir });
+  if (!existsSync(dbPath)) return;
+  const handle = await openStore({ harnessDir }, "read");
+  try {
+    const meta = handle.db.prepare("select authority_state as authorityState from store_meta where id = 1").get() as
+      | { authorityState?: unknown }
+      | undefined;
+    if (meta?.authorityState === "active") {
+      throw new CoordinationError(
+        "coordination.store",
+        `refusing legacy layout migration: the issue store at ${dbPath} is ACTIVE and is the only findings authority ` +
+          `\u2014 legacy registers/indexes are migration history and must never be recreated (use the issue store verbs)`,
+        { path: dbPath },
+      );
+    }
+  } finally {
+    handle.close();
   }
 }
 
@@ -1201,7 +1241,12 @@ async function applyMigratePlanLocked(
     writeRawMigrateTarget(workflowTargetOf(notes.file), Buffer.from(content, "utf8"));
   }
 
- // 4. Project register (additive; validated before the write).
+ // 4. Project register (additive; validated before the write). Legacy-only:
+ // this write happens exclusively in the pre-activation window guarded by
+ // `assertNoActiveStoreForLegacyLayout` — the retired `residuals` kind never
+ // goes through the runtime ArtifactStore, so the bytes land through the same
+ // atomic `writeJson` the FsStore would use, inside the protected-write
+ // context and the register lock.
   if (plan.register !== null) {
     const registerData = plan.register.data;
     const gate = validateProjectRegister(registerData);
@@ -1217,15 +1262,13 @@ async function applyMigratePlanLocked(
  // FIRST so an invalid doc (e.g. missing `entries`) still throws.
     if (Object.keys(registerData.entries ?? {}).length > 0) {
       const filePath = projectTargetOf(plan.register.file);
-      const projectKey = basename(dirname(filePath));
-      assertFsStorePath(store, { kind: "residuals", key: projectKey }, filePath);
       mkdirSync(dirname(filePath), { recursive: true });
       await withStatusWriteLock(filePath, async () => {
         const existing = readArtifactBytes(filePath);
         if (existing === undefined) {
-          await withProtectedWrite(filePath, "put", () =>
-            store.put({ kind: "residuals", key: projectKey, payload: registerData }),
-          );
+          await withProtectedWrite(filePath, "put", () => {
+            writeJson(filePath, registerData);
+          });
           return;
         }
  // Additive-only: an existing register is accepted ONLY when it is

@@ -20,6 +20,12 @@ Parallel PM dispatch: read **`parallel-dispatch.md`** when dispatching **N ≥ 2
 - Local maintainers: `omp plugin link /path/to/mstar-harness/packages/omp` (or the CLI-managed `~/.mstar/harness/packages/omp` checkout) — the linked package tree resolves the engine via the workspace member, so run `bun install && bun run engine:build && bun run --cwd packages/omp build` in the checkout first. Linking the repo root no longer provides the runtime gates (hooks/tools moved into the package); the npm install stays the primary path.
 - After install/link: `omp plugin list` should show package **`@mstar-harness/omp`** (npm) or **`morning-star`** (root `package.json` name, link path). Reload / new session to pick up skills, commands, and agents.
 
+## Runtime and upgrade
+
+- **Runtime**: Bun-hosted plugin — the pre-hook, the tools and the extensions run under the host's Bun, floor **Bun >=1.4.0** with in-process native `node:sqlite`. The floor is read from the actual runtime (Bun's emulated `process.versions.node` never certifies a Bun entrypoint); a below-floor or missing-capability runtime refuses actionably instead of degrading to a transport or JSON.
+- **Upgrade / reload**: reinstall or relink the package, then a new session — or `/reload-plugins` on omp ≥17.2.11 (see § Gotchas).
+- **Readiness, not an action**: refreshing an *installed* copy is a bounded, authorized ops act — an authority flip first quiesces, then reloads/upgrades (or explicitly excludes) every installed reader/writer and attests the versions it saw. Editing harness docs or source performs none of it. If this host cannot reload safely, stop at the exact manual-restart step, have the user restart, then re-verify entrypoint/runtime/version/session identity read-only before the flip.
+
 ## Skill loading
 
 1. On entry: invoke **`pm`** via `/skill:pm` → **Read next** loads `mstar-harness-core`, then `mstar-roles` → `project-manager.md` when PM is active.

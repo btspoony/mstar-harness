@@ -30,7 +30,8 @@ Harness Workflow Engine · Agent Plugin
 - **判断留在 `mstar-*` skills** —— skills 仍是角色、门禁与工作流判断的唯一事实来源（SSOT）
 - **一个引擎跨宿主** —— 同一引擎 + skills 驱动 dsh（DeepSeek Harness）、omp、OpenCode、Cursor、Kimi Code、ZCode、Codex
 - **Agent Plugin 打包** —— 一条命令安装；可移植到任意 Agent Plugins v1.0.0 客户端
-- **可插拔 JSON 持久化** —— 协调文档（`status.json`、workflow snapshots、project residuals、review envelopes）经 `ArtifactStore` 持久化；默认 `FsStore` 保持既有 `.mstar/` 路径，集成方可经 `MSTAR_STORE_MODULE` / `--store` / 进程内 `setArtifactStore` 挂载自有存储
+- **可插拔 JSON 持久化** —— 协调文档（`status.json`、workflow snapshots、review envelopes）经 `ArtifactStore` 持久化；默认 `FsStore` 保持既有 `.mstar/` 路径，集成方可经 `MSTAR_STORE_MODULE` / `--store` / 进程内 `setArtifactStore` 挂载自有存储
+- **Issue/catalog 库 vs 执行 JSON** —— 激活后 `{HARNESS_DIR}/store.db`（SQLite）是 issue 与 catalog 权威；`ArtifactStore` 仍是执行/审查 JSON（`status.json`、snapshots）。已退役的 project register 是迁移历史，没有写入路径，open item 以 store 中的 issue 为准。两者不是同一存储。
 - **推荐宿主**（最佳 → 可用）：**dsh = omp ≥ ZCode = OpenCode = Cursor > Kimi > Codex**
 
 **交付内容**
@@ -57,6 +58,8 @@ Harness Workflow Engine · Agent Plugin
 | Codex | `npx @mstar-harness/cli init --target codex`<br>然后 `codex plugin add morning-star-harness@mstar-repo`（仓库自带 marketplace） |
 | Generic（Agent Plugins v1） | 任意 Agent Plugins v1.0.0 兼容客户端直接指向本仓库根<br>（`plugin.json` + `skills/` 即便携包） |
 
+> 本节的 CLI 命令都通过 Bun shebang 执行已发布的 bin：`npx` / `bunx` / `npm i -g` 都需要 PATH 上有 **Bun >=1.4.0**。纯 Node 机器：`npm install @mstar-harness/cli`，然后 `node node_modules/@mstar-harness/cli/dist/mstar-harness.js <verb>`（见下文**运行时下限**）。
+
 ### 引擎门禁校验（推荐）
 
 ```bash
@@ -81,6 +84,10 @@ Codex 角色链接修复与具名子代理验证：[Codex 安装](INSTALL.md#cod
 
 手动安装 / 路径布局：[`INSTALL.md`](INSTALL.md)。CLI 参数：**`mstar-use-cli`** skill。
 
+
+### 运行时下限（按入口，不是“两套都装”）
+
+已发布 CLI 保留 Bun shebang（`#!/usr/bin/env bun`）。正常启动 `mstar-harness` / dist 文件使用 **Bun >=1.4.0**。显式 `node <CLI bundle>` 使用 **Node >=24.18.0**。`npx` / `bunx` 会下载该包，但仍执行同一个 Bun shebang bin，因此同样需要 PATH 上有 **Bun >=1.4.0**——包运行器不是运行时；纯 Node 机器请安装该包并用 Node 显式运行 bundle（`node node_modules/@mstar-harness/cli/dist/mstar-harness.js <verb>`）。Bun 宿主插件需要 Bun；原生 Node 入口需要 Node。不要把这两条下限理解成每台机器都必须同时安装两个运行时。本文不证明打包兼容或 store 激活就绪。
 
 ## 使用
 
@@ -138,6 +145,15 @@ coordinator 一侧——`prepare`，随后 `accept`，再按路线走：迭代�
 | `/amazing-pr-review [pr\|branch\|scope] [quick\|default\|deep]` | 合并前对 PR / 分支 / diff 做深度审查，三档强度：`quick`（单趟 1 席）/ `default`（无 flag 默认档，席位精简）/ `deep`（完整三阶段流水线）→ 给出唯一结论（`ship it` / `needs fixes` / `blocked`）与全部发现；有 PR 编号时由命令主代理在 Stage 3 合成阶段发布 GitHub Review。`deep` 档走完整三阶段流水线（collect → domain review → main-agent synthesis；one verdict / one GitHub Review）；`default` / `quick` 为更轻量的单/双席通道。多 PR 输入 → 仅审查第一个 PR；其余 PR 登记为审计待办（下一次会话）；建议一个会话只审一个 PR。 |
 | `/amazing-e2e-check [环境/设备] [场景]` | 通过 `mstar-e2e` 在独立 workflow 中执行用户明确请求的浏览器、真机或安装部署场景；不作为常规迭代 QA 门禁。 |
 
+### 本地看板（dashboard）
+
+`mstar dashboard` 在 `127.0.0.1` 上提供 issue store 与执行/roadmap 投影的**只读** Web 界面——仅回环绑定，不提供任何 bind 地址选项。覆盖：issue 列表与详情（含真实记录历史）、workflow / iteration / roadmap 视图，以及一张累计捕获 vs 退役的 issue-flow 图表。看板不做任何变更；改动一律走 CLI（`mstar issue …`、`mstar catalog …`），Ctrl-C 停止服务。
+
+```
+mstar dashboard            # 服务开始监听后打印解析得到的 URL
+mstar dashboard --help     # --port / --open / --project
+```
+
 ## Harness Workflow（统一流程）
 
 ```mermaid
@@ -166,7 +182,7 @@ flowchart TD
     P -->|pm-acceptance| P2["PM: acceptance 清单"]
     P1 --> Q{"是否仍有 residual findings"}
     P2 --> Q
-    Q -->|是| R["PM/QA: 在 project register 登记或接受 residuals"]
+    Q -->|是| R["PM: 把已确认的发现捕获为 {HARNESS_DIR}/store.db 中的 issue"]
     R --> S["PM: 标记 plan Done 并合并到 integration branch"]
     Q -->|否| S
     S --> T["PM: 同步 compass plan 状态"]
@@ -208,8 +224,8 @@ flowchart TD
 | `mstar-sdd` | 子代理驱动开发 |
 | `mstar-branch-worktree` | 分支、worktree、QC/QA 检出 |
 | `mstar-conventions` | `{HARNESS_DIR}` 发现 / 初始化 |
-| `mstar-artifacts` | plan、`status.json`、residual、Findings cleanup |
-| `mstar-project-governance` | roadmap 编写约定 + residual register 生命周期、`_default` 回退 |
+| `mstar-artifacts` | plan、`status.json`、issue 捕获指针、Findings cleanup |
+| `mstar-project-governance` | roadmap 编写约定 + issue 捕获契约、register 迁移历史、`_default` 回退 |
 | `mstar-design-md` | UI plan 的 DESIGN.md 门禁 |
 | `mstar-review-qc` | PM QC tri 编排 |
 | `mstar-coding-behavior` | RCA、测试优先、审查反馈、证据 |

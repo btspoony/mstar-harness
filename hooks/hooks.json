@@ -1,5 +1,5 @@
 {
-  "description": "Morning Star harness gates for ZCode: SessionStart harness-workspace context injection, PreToolUse git guards backing mstar-branch-worktree (no direct commits on the default protected branch, no bare force pushes; opt out with MSTAR_BRANCH_GUARD=off), and a PreToolUse coordination-write gate for harness documents (blocks only under opt-in hard enforcement; opt out with MSTAR_WRITE_GATE=off). Silent no-op outside git repos / harness workspaces.",
+  "description": "Morning Star harness gates for ZCode: SessionStart harness-workspace context injection, PreToolUse git guards backing mstar-branch-worktree (no direct commits on the default protected branch, no bare force pushes; opt out with MSTAR_BRANCH_GUARD=off), and a PreToolUse coordination-write gate. That gate blocks coordination-document writes (status.json, workflow snapshots) only under opt-in hard enforcement, but it refuses the issue-authority invariants unconditionally in every mode — a direct write to the issue/catalog store (store.db, -wal, -shm), a write to a retired project register while the store is the active authority, and an unreadable authority (below-floor runtime, missing node:sqlite, corrupt or busy store), which fails closed. Opt out with MSTAR_WRITE_GATE=off. Silent no-op outside git repos / harness workspaces.",
   "hooks": {
     "SessionStart": [
       {

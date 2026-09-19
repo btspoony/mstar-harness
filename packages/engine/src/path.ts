@@ -32,17 +32,24 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSyn
 import { execFileSync } from "node:child_process";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { GateResult, ValidationResult } from "./core.js";
+// Call-time-only cycle with catalog.ts (which imports this module's resolvers
+// and coordination.ts): `catalogRootDir` calls them only when a catalog verb
+// runs, and this module calls the catalog verbs only inside
+// `scaffoldHarness`, so neither side dereferences the other during module
+// evaluation (same pattern as the project.ts / status.ts cycles below).
+import { CatalogError, registerCatalogEntity, type CatalogOperation } from "./catalog.js";
 import { loadMstarc, type MstarcConfig } from "./mstarc.js";
 // Call-time-only cycles with project.ts / status.ts (both → path.ts): none of
 // the cycle members dereferences the other's bindings during module
 // evaluation — the constants and the validators are used only inside
 // scaffoldHarness — so the ESM live-binding cycle is safe (same pattern as
 // the status.ts ↔ workflow.ts cycle documented in status.ts).
-import { _DEFAULT_PROJECT, PROJECT_REGISTER_FILE, PROJECT_ROADMAP_FILE, validateProjectRegister } from "./project.js";
+import { _DEFAULT_PROJECT, PROJECT_ROADMAP_FILE } from "./project.js";
 import { validateStatusV2, type StatusV2Doc } from "./status.js";
 import { withStatusWriteLock } from "./lease.js";
 import { assertFsStorePath, getArtifactStore, type ArtifactRef, type ArtifactStore } from "./store.js";
-import { CoordinationError, isPlainObject, readArtifactBytes, withProtectedWrite } from "./coordination-write.js";
+import { StoreError, type StoreContext } from "./store-db.js";
+import { CoordinationError, isPlainObject, readArtifactBytes, sha256Bytes, withProtectedWrite } from "./coordination-write.js";
 
 /**
  * Options for `resolveHarnessDir`.
@@ -448,32 +455,24 @@ State the project direction here.
 `;
 
 /**
- * Scaffolded `projects/_default/residuals.json` template — the empty
- * project register `{ "entries": {} }` (mstar-project-governance §
- * residuals.json register 生命周期), which passes `validateProjectRegister`.
- * Kept as a constant so the engine has no runtime dependency on skill
- * files.
- */
-const EMPTY_REGISTER_TEMPLATE: Record<string, unknown> = {
-  entries: {},
-};
-
-/**
  * Initialize the harness directory under `root`: create the resolved
  * harness dir (default `.mstar/`, or the `.mstarc`-declared `harness_dir`
  * / `MSTAR_HARNESS_DIR` override — see `resolveScaffoldDirs`) with `plans/`,
  * `iterations/`, `knowledge/`, `specs/`, `sdd/`, write `status.json` from
  * the empty template, and prebuild the v3 project layer `_default/` under
  * the resolved project dir (default `{HARNESS_DIR}/projects/`, or the
- * `.mstarc`-declared `project_dir`) with a valid `roadmap.md` + empty
- * `residuals.json` (plan-conventions § 初始化 Plan 目录;
+ * `.mstarc`-declared `project_dir`) with a valid `roadmap.md`
+ * (plan-conventions § 初始化 Plan 目录;
  * mstar-project-governance § `_default` 回退). Idempotent: an existing
  * `roadmap.md` is never clobbered, and re-running on an initialized tree only
  * creates missing pieces. Returns the absolute resolved harness dir.
  *
- * The two coordination documents (`status.json`, `_default/residuals.json`)
- * are written create-only through the active `ArtifactStore` inside the
- * private protected-write context, serialized on the target's
+ * The scaffold does NOT create a legacy `residuals.json` register
+ * (issue-governance cutover G2a): the issue store (`store.db`) is the
+ * findings authority and the register is migration history — a scaffold must
+ * never recreate the retired authority. The one coordination document
+ * (`status.json`) is written create-only through the active `ArtifactStore`
+ * inside the private protected-write context, serialized on the target's
  * `withStatusWriteLock` (spec §C4): a concurrent writer's bytes are never
  * replaced, and an existing empty/malformed document fails validation instead
  * of being silently reinitialized. Callers whose target root differs from the
@@ -502,7 +501,8 @@ export async function scaffoldHarness(root: string): Promise<string> {
   );
 // v3 project layer: `projects/_default/` is scaffolded (the fallback
 // project for project-less flows); other project ids and `workflows/`
-// stay on-demand (engine writers create them).
+// stay on-demand (engine writers create them). No legacy register is
+// scaffolded — issue authority lives in the issue store.
   const defaultProjectDir = join(projectDir, _DEFAULT_PROJECT);
   mkdirSync(defaultProjectDir, { recursive: true });
   const roadmapPath = join(defaultProjectDir, PROJECT_ROADMAP_FILE);
@@ -510,14 +510,50 @@ export async function scaffoldHarness(root: string): Promise<string> {
     const created = new Date().toISOString().slice(0, 10);
     writeFileSync(roadmapPath, ROADMAP_TEMPLATE.replace("{created_at}", created), "utf8");
   }
-  await scaffoldProtectedDoc(
-    store,
-    { kind: "residuals", key: _DEFAULT_PROJECT },
-    join(defaultProjectDir, PROJECT_REGISTER_FILE),
-    EMPTY_REGISTER_TEMPLATE,
-    (payload) => validateProjectRegister(payload),
-  );
+  await registerScaffoldCatalog(root, roadmapPath);
   return harnessDir;
+}
+
+/**
+ * Register the scaffolded `_default` project through the catalog domain
+ * boundary (state-projection contract §2/§4). The project identity and its
+ * canonical location (`projects/_default/roadmap.md`) are catalog rows — the
+ * roadmap body stays a file, and no Markdown index nor an extra residual
+ * register is created for the active store.
+ *
+ * The store context is the scaffold ROOT (what the caller passed), not the
+ * resolved harness dir: `storeDbPath` re-resolves its context, and a harness
+ * dir that already owns a `plans/` child would resolve to `plans/store.db` —
+ * the scaffold root resolves to the harness marker itself, stably, which is
+ * the same store the documented `{HARNESS_DIR}` resolution names.
+ *
+ * The catalog is not this scaffold's precondition: a workspace whose store
+ * does not exist yet (or is still staged) scaffolds its files and leaves
+ * catalog registration to the store/activation lifecycle, which owns
+ * `store init`. Every other store failure propagates.
+ */
+async function registerScaffoldCatalog(root: string, roadmapPath: string): Promise<void> {
+  const context: StoreContext = { harnessDir: root };
+  const operation: CatalogOperation = { operationId: `scaffold:project:${_DEFAULT_PROJECT}`, actor: "scaffold" };
+  try {
+    await registerCatalogEntity(
+      context,
+      {
+        kind: "project",
+        id: _DEFAULT_PROJECT,
+        title: "Default Project",
+        description: "Fallback project for project-less harness flows.",
+        rootKind: "projects",
+        relativePath: `${_DEFAULT_PROJECT}/${PROJECT_ROADMAP_FILE}`,
+        sourceHash: sha256Bytes(readFileSync(roadmapPath)),
+      },
+      operation,
+    );
+  } catch (error) {
+    if (error instanceof StoreError && error.code === "store.not-initialized") return;
+    if (error instanceof CatalogError && error.code === "store.not-active") return;
+    throw error;
+  }
 }
 
 /**

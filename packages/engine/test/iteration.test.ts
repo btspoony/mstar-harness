@@ -26,29 +26,32 @@
  * review wave is running): `skills/mstar-iteration/SKILL.md` §5.1a +
  * `skills/mstar-iteration/references/phase-4-5-pr-delivery.md` §5.1a
  * (push gate 1 + 2).
- * - Index obligations (one row per iteration in `{ITERATION_DIR}/README.md`,
- * table header on first creation): `skills/mstar-iteration/SKILL.md`
- * §1.4.
+ * - Catalog completeness (every discovered iteration/plan store has a
+ * catalog row; the README tables are not registers): state-projection
+ * contract §4.
  * - Phase 6 post-merge close local-state gate (valid terminal snapshot +
  * no leftover lease + root status.json entry unregistered; invalid/unreadable
  * root is NOT proof of root absence): `skills/mstar-iteration/references/
  * phase-6-post-merge-close.md` §6.4 + Evidence.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
-  assertIndexRowObligations,
+  assertCatalogCompleteness,
   evaluatePhaseGate,
   evaluatePostMergeClose,
   parseCompassFrontmatter,
   pushCadenceProbe,
+  readCatalogCompleteness,
   validateCompassFrontmatter,
   type CompassDoc,
 } from "../src/iteration.js";
 import type { SnapshotDoc } from "../src/iteration.js";
 import { readJson } from "../src/core.js";
+import { registerCatalogEntity } from "../src/catalog.js";
+import { initializeStore, type StoreContext } from "../src/store-db.js";
 import { registerPlanWorkflow } from "../src/workflow.js";
 import { createFsStore, setArtifactStore } from "../src/store.js";
 
@@ -56,11 +59,6 @@ const REAL_STATUS_PATH = join(import.meta.dir, "fixtures", "status.real-shape.js
 
 function tmpRoot(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix));
-}
-
-function writeReadme(dir: string, rows: string[]): void {
-  const lines = ["# Iterations Index", "", "| Iteration | Path | Description | Status |", "|-----------|------|-------------|--------|", ...rows, ""];
-  writeFileSync(join(dir, "README.md"), lines.join("\n"), "utf8");
 }
 
 function compass(overrides: Record<string, unknown> = {}): CompassDoc {
@@ -841,88 +839,80 @@ describe("pushCadenceProbe — §5.1a push gate (never push while CI or AI revie
   });
 });
 
-describe("assertIndexRowObligations — one row per iteration (mstar-iteration §1.4)", () => {
-  test("README with header and rows for every iteration dir → pass", () => {
-    const dir = tmpRoot("mstar-index-");
+describe("catalog discovery — the completeness query that replaced the iteration index obligation", () => {
+  /**
+   * A workspace whose stores exist as files (iterations with compasses, plan
+   * files) and whose catalog is a real `store.db`. The store context is the
+   * workspace root, so `resolveHarnessDir` stops at the `.mstar` marker rung
+   * (the same fixture shape the catalog authority tests use).
+   */
+  async function catalogRoot(name: string, files: string[]): Promise<{ root: string; harness: string; context: StoreContext }> {
+    const root = tmpRoot(name);
+    const harness = join(root, ".mstar");
+    mkdirSync(join(harness, "plans"), { recursive: true });
+    for (const relative of files) {
+      mkdirSync(dirname(join(harness, relative)), { recursive: true });
+      writeFileSync(join(harness, relative), "---\n", "utf8");
+    }
+    const context: StoreContext = { harnessDir: root };
+    const handle = await initializeStore(context);
+    handle.close();
+    return { root, harness, context };
+  }
+
+  test("catalog discovery: registered stores are complete, and README absence is not a failure", async () => {
+    const { root, harness, context } = await catalogRoot("mstar-discovery-", [
+      "iterations/v1.0.0/delivery-compass.md",
+      "iterations/v2.0.0/delivery-compass.md",
+      "plans/plan-a.md",
+    ]);
     try {
-      mkdirSync(join(dir, "v1.0.0"), { recursive: true });
-      writeFileSync(join(dir, "v1.0.0", "delivery-compass.md"), "---\niteration_id: v1.0.0\n---\n", "utf8");
-      mkdirSync(join(dir, "v2.0.0"), { recursive: true });
-      writeFileSync(join(dir, "v2.0.0", "delivery-compass.md"), "---\niteration_id: v2.0.0\n---\n", "utf8");
-      writeReadme(dir, [
-        "| `v1.0.0` | [`v1.0.0/`](v1.0.0/) | First | `completed` |",
-        "| `v2.0.0` | [`v2.0.0/`](v2.0.0/) | Second | `active` |",
-      ]);
-      const result = assertIndexRowObligations(dir);
-      expect(result.ok).toBe(true);
-      expect(result.violations).toEqual([]);
+      expect(existsSync(join(harness, "iterations", "README.md"))).toBe(false);
+      await registerCatalogEntity(context, { kind: "iteration", id: "v1.0.0", title: "First", rootKind: "iterations", relativePath: "v1.0.0/delivery-compass.md" }, { operationId: "reg-v1", actor: "iteration" });
+      await registerCatalogEntity(context, { kind: "iteration", id: "v2.0.0", title: "Second", rootKind: "iterations", relativePath: "v2.0.0/delivery-compass.md" }, { operationId: "reg-v2", actor: "iteration" });
+      await registerCatalogEntity(context, { kind: "plan", id: "plan-a", title: "Plan A", rootKind: "plans", relativePath: "plan-a.md" }, { operationId: "reg-plan-a", actor: "iteration" });
+
+      const report = await readCatalogCompleteness(context, ["iterations", "plans"]);
+      expect(report.ok).toBe(true);
+      expect(report.gaps).toEqual([]);
+      expect(report.registered).toBe(3);
+      expect(await assertCatalogCompleteness(context, ["iterations", "plans"])).toEqual({ ok: true, violations: [] });
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("README.md missing entirely → INDEX_README_MISSING", () => {
-    const dir = tmpRoot("mstar-index-");
+  test("catalog discovery: an iteration with a compass but no catalog row is a gap", async () => {
+    const { root, context } = await catalogRoot("mstar-discovery-gap-", [
+      "iterations/v1.0.0/delivery-compass.md",
+      "iterations/guides/notes.md",
+    ]);
     try {
-      mkdirSync(join(dir, "v1.0.0"), { recursive: true });
-      writeFileSync(join(dir, "v1.0.0", "delivery-compass.md"), "---\n", "utf8");
-      const result = assertIndexRowObligations(dir);
-      expect(result.ok).toBe(false);
-      expect(result.violations.some((v) => v.code === "INDEX_README_MISSING")).toBe(true);
+      const report = await readCatalogCompleteness(context, ["iterations"]);
+      expect(report.ok).toBe(false);
+      // A bare subdirectory (no compass) is not an iteration store.
+      expect(report.discovered).toBe(1);
+      expect(report.gaps.map((gap) => gap.code)).toEqual(["catalog.discovery.missing-iteration"]);
+      expect(report.gaps[0]!.relativePath).toBe("v1.0.0/delivery-compass.md");
+      const gate = await assertCatalogCompleteness(context, ["iterations"]);
+      expect(gate.ok).toBe(false);
+      expect(gate.violations.map((violation) => violation.code)).toEqual(["catalog.discovery.missing-iteration"]);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("iteration dir without an index row → INDEX_ROW_MISSING", () => {
-    const dir = tmpRoot("mstar-index-");
+  test("catalog discovery: a missing database is not an empty catalog", async () => {
+    const root = tmpRoot("mstar-discovery-nostore-");
     try {
-      mkdirSync(join(dir, "v1.0.0"), { recursive: true });
-      writeFileSync(join(dir, "v1.0.0", "delivery-compass.md"), "---\n", "utf8");
-      writeReadme(dir, []);
-      const result = assertIndexRowObligations(dir);
-      expect(result.ok).toBe(false);
-      const violation = result.violations.find((v) => v.code === "INDEX_ROW_MISSING");
-      expect(violation).toBeDefined();
-      expect(violation!.message).toContain("v1.0.0");
-      expect(result.violations.some((v) => v.code === "INDEX_HEADER_MISSING")).toBe(false);
+      mkdirSync(join(root, ".mstar", "plans"), { recursive: true });
+      const report = await readCatalogCompleteness({ harnessDir: root }, ["plans"]);
+      expect(report.ok).toBe(false);
+      expect(report.registered).toBe(0);
+      expect(report.violations.map((violation) => violation.code)).toEqual(["store.not-initialized"]);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true });
     }
-  });
-
-  test("README without the table header → INDEX_HEADER_MISSING", () => {
-    const dir = tmpRoot("mstar-index-");
-    try {
-      mkdirSync(join(dir, "v1.0.0"), { recursive: true });
-      writeFileSync(join(dir, "v1.0.0", "delivery-compass.md"), "---\n", "utf8");
-      writeFileSync(join(dir, "README.md"), "# Iterations Index\n", "utf8");
-      const result = assertIndexRowObligations(dir);
-      expect(result.violations.some((v) => v.code === "INDEX_HEADER_MISSING")).toBe(true);
-      expect(result.violations.some((v) => v.code === "INDEX_ROW_MISSING")).toBe(true);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("subdirs without delivery-compass.md are not counted as iterations", () => {
-    const dir = tmpRoot("mstar-index-");
-    try {
-      mkdirSync(join(dir, "guides"), { recursive: true });
-      mkdirSync(join(dir, "v1.0.0"), { recursive: true });
-      writeFileSync(join(dir, "v1.0.0", "delivery-compass.md"), "---\n", "utf8");
-      writeReadme(dir, ["| `v1.0.0` | [`v1.0.0/`](v1.0.0/) | First | `active` |"]);
-      const result = assertIndexRowObligations(dir);
-      expect(result.ok).toBe(true);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("iterations dir itself missing → INDEX_ITERATIONS_DIR_MISSING", () => {
-    const result = assertIndexRowObligations(join(tmpRoot("mstar-index-"), "does-not-exist"));
-    expect(result.ok).toBe(false);
-    expect(result.violations.some((v) => v.code === "INDEX_ITERATIONS_DIR_MISSING")).toBe(true);
   });
 });
 

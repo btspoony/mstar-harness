@@ -17,28 +17,28 @@ What lives elsewhere: field schemas, snapshot shape and lifecycle semantics belo
 
 | Session | Verbs |
 |---|---|
-| plan session | `mstar plan show`, `mstar plan progress`, `mstar plan residual-add`, `mstar plan residual-close`, `mstar plan handoff` |
+| plan session | `mstar plan show`, `mstar plan progress`, `mstar plan issue-add`, `mstar plan issue-close`, `mstar plan handoff` |
 | coordinator session | `mstar plan prepare`, `mstar plan accept`, `mstar plan return`, `mstar plan integration-start`, `mstar plan integration-accept`, `mstar plan complete`, `mstar plan reconcile`, `mstar plan repair-delivery-source`, `mstar workflow show-prepare`, `mstar workflow amend-prepare`, `mstar workflow evidence` |
 | either (bootstrap / read / claim) | `mstar plan bind` |
 
-A plan session mutates only its own row and its own register bucket. It never prepares itself: registration of the reviewed Assignment is the coordinator's act, and it is what releases the row's dependencies.
+A plan session mutates only its own row and the issues that row's plan captures or closes; the retired register bucket is never a write target. It never prepares itself: registration of the reviewed Assignment is the coordinator's act, and it is what releases the row's dependencies.
 
 ## Tokens
 
 | Token | Where it comes from | Meaning |
 |---|---|---|
 | row revision | the show verb's machine output | `coordination.revision`; `0` while the row is not yet coordinated. Never the document schema version and never a date |
-| register version | the same read | `absent` when that project register does not exist yet, otherwise the exact digest token of its bytes |
+| issue revision | the scoped capture's report, or the read verb | the DB mutation's CAS value for one issue; `plan issue-close` takes it as `--expect-issue` |
 | handoff id | the same read | the row's *live* handoff; only the handoff verb mints one, and the read reports it once it exists |
 | byte version | the versioned read face, or the amendment's read verb | `sha256:<64 lowercase hex>` over the exact bytes read — a document version, not a row revision |
 
-Both the revision and the register version are **consumed** by the call that uses them. Read again after every successful mutation; a token carried across a write refuses rather than applying a stale edit.
+Every token is **consumed** by the call that uses it. Read again after every successful mutation; a token carried across a write refuses rather than applying a stale edit.
 
 ## JSON envelopes
 
 Machine output is a single object on stdout, with no color and no banner. In human mode stdout stays empty and the summary goes to stderr, so stdout can be piped without filtering.
 
-Success carries the operation, the workflow and plan it applied to, the fresh revision, the document version, the session file and id, the role, and — where they apply — the handoff id, state and outcome. The read verb additionally returns the register version, the scope and the row.
+Success carries the operation, the workflow and plan it applied to, the fresh revision, the document version, the session file and id, the role, and — where they apply — the handoff id, state and outcome. The read verb additionally returns the snapshot byte version, the scope and the row.
 
 Failure carries `ok: false`, the operation, a stable `code`, a message, and whichever of workflow id, plan id, holder, path, expected and actual the refusal can name. The refusal object is the contract; the message is for humans.
 
@@ -100,9 +100,9 @@ mstar plan prepare --session <coordinator-session.json> --plan plan-a \
 mstar plan bind --workflow wf-demo --plan plan-a --json
 mstar plan show --session <plan-session.json> --json
 
-# plan session: mutate only this row, then hand off
+# plan session: mutate only this row and its linked issues, then hand off
 mstar plan progress --session <plan-session.json> --file progress.json --expect <revision> --json
-mstar plan residual-add --session <plan-session.json> --file entries.json --expect <revision> --expect-register absent --json
+mstar plan issue-add --session <plan-session.json> --file entries.json --expect <revision> --json
 mstar plan handoff --session <plan-session.json> --file handoff.json --expect <revision> --json
 
 # coordinator: ownership

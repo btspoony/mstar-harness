@@ -22,11 +22,9 @@
  * body is try/catch-contained: a throwing seam degrades to ONE log line and
  * never breaks a session.
  */
-import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
-import { resolveProjectDir, _DEFAULT_PROJECT, PROJECT_REGISTER_FILE } from '@mstar-harness/engine'
-import { asRecord } from './_shared.ts'
+import { asRecord, STORE_DB_FILE } from './_shared.ts'
 import type { HarnessResolver } from './_shared.ts'
 // The shared display-field bounds (`truncateLedgerField`) and control-char
 // strip (`normalizeWorkflowName`) — the same sanitization the workflow-ledger
@@ -84,27 +82,15 @@ function errorMessage(error: unknown): string {
 }
 
 /**
- * The concrete project-register pointer for the blocked-goal advisory (v3
- * relocation —): residuals live in
- * `projects/<id>/residuals.json` (entries keyed by plan id), NOT the root
- * `status.json` `residual_findings` home (gone after migrate). Resolves the
- * FIRST project register present (the operator's named project when one
- * exists), else the default project register (`projects/_default/
- * residuals.json` — compass AC-3's documented fallback). Never throws: an
- * unreadable/missing projects dir falls back to the default path.
+ * The concrete open-item authority pointer for the blocked-goal advisory: the
+ * harness issue store (`{HARNESS_DIR}/store.db` — the sole issue authority
+ * once the cutover lands; the retired `projects/<id>/residuals.json`
+ * registers are migration history and are never located or read here). A
+ * path join only — this helper never probes the filesystem, so it cannot
+ * throw and cannot conjure a second authority.
  */
-function projectRegisterPointer(harnessDir: string): string {
-  const projectsDir = resolveProjectDir(harnessDir, { harnessDir })
-  try {
-    for (const entry of readdirSync(projectsDir, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue
-      const registerPath = join(projectsDir, entry.name, PROJECT_REGISTER_FILE)
-      if (existsSync(registerPath)) return registerPath
-    }
-  } catch {
-    // missing/unreadable projects dir — fall through to the default path
-  }
-  return join(projectsDir, _DEFAULT_PROJECT, PROJECT_REGISTER_FILE)
+function issueStorePointer(harnessDir: string): string {
+  return join(harnessDir, STORE_DB_FILE)
 }
 
 /* ---------------------------------- structural views ---------------------------------- */
@@ -161,9 +147,9 @@ function blockedAdvisoryOf(envelope: unknown): BlockedGoalAdvisory | undefined {
 /**
  * Log ONE blocked-advisory warn: the stable `blockedReason.code`, the
  * sanitized (ASCII control chars stripped) + bounded reason message, a
- * bounded objective summary, and the project register pointer
- * (`projects/<id>/residuals.json` — mstar-artifacts SSOT; entries keyed by
- * plan id) — the operator acts without reverse-engineering the host.
+ * bounded objective summary, and the open-item authority pointer
+ * (`{HARNESS_DIR}/store.db` — the sole issue authority; `mstar issue list`
+ * reads it) — the operator acts without reverse-engineering the host.
  * Advisory-only: ZERO harness writes (status.json stays SSOT) and ZERO goal
  * writes. Never throws (the sink is a no-op before bind; `log` itself is a
  * plain call).
@@ -172,7 +158,7 @@ function warnBlockedGoal(harnessDir: string, advisory: BlockedGoalAdvisory): voi
   const code = truncateLedgerField(advisory.code, GOAL_ADVISORY_CODE_CAP)
   const reason = truncateLedgerField(normalizeWorkflowName(advisory.message), GOAL_ADVISORY_MESSAGE_CAP)
   const objective = truncateLedgerField(normalizeWorkflowName(advisory.objective), GOAL_ADVISORY_OBJECTIVE_CAP)
-  log('warn', `goal blocked [${code}] — ${reason}; objective: ${objective}; residuals: see ${projectRegisterPointer(harnessDir)} — advisory only, zero harness writes`)
+  log('warn', `goal blocked [${code}] — ${reason}; objective: ${objective}; open issues: see ${issueStorePointer(harnessDir)} (\`mstar issue list\`) — advisory only, zero harness writes`)
 }
 
 /* ---------------------------------- apply wiring ---------------------------------- */

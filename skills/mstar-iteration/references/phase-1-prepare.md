@@ -6,9 +6,9 @@ PM 在新迭代启动时执行。
 
 ## 1.1 收集上下文
 
-1. 读 `{ITERATION_DIR}/README.md`（若存在），了解历史迭代
+1. 查 catalog 了解历史迭代：`mstar catalog list`（按 kind 过滤，见 help；`{ITERATION_DIR}/README.md` 若存在只是散文导览，**不**是登记表；store 未初始化/未激活时查询拒绝 —— `store.not-initialized` / `store.not-active`，**不**读作「没有迭代」）
 2. 读 `STRATEGY.md`（若存在），对齐战略方向（见 `mstar-strategy`）
-3. 读 `{KNOWLEDGE_DIR}/README.md`（若存在），将索引中的 **Active** 行视为 Research 候选（**不**要求阅读全部 knowledge 正文）
+3. 查 catalog 取 Research 候选：`mstar catalog list`（按 kind / document kind / lifecycle 过滤出 `active` knowledge；见 help；**不**要求阅读全部 knowledge 正文；README 表格不再是权威）
 4. 如果有未完成的 roadmap 残余（上一迭代标记为 `next` 的 plan），纳入本次迭代范围候选
 
 **非 command 触发**（如直接 skill 加载）时，Phase 1 方向锁定仍须 interactive（grill-me 在 command 层）。
@@ -141,15 +141,15 @@ owner 取值仅限 Phase 1 链：`product-manager` / `architect` / `writing-spec
 
 **(v) `## Open Questions` 行的处置**：§1.2 落盘的每一行在终线前必须落到三者之一：收敛为已决事项（撤出该行并计入 `## Decisions`）；或转入 (iii) 的 marker 形态（行的 owner 即 marker 的 owner，随 (iv) 一同清除或重新归属给 `PM`）；或**显式重新归属给 `PM`** 并上报用户。**禁止**静默删除行 —— 与 (iv) 共用同一终线。`Blocking?` 决定该行**能否**越过终线：标记 `Yes` 的行**必须**在 lock 前收敛为已决事项，**不论**它本会重新归属给谁；不能收敛即 Prepare 未通过（`Gate decision: blocked`），compass **不得**置 `status: locked`。lock 之后 `## Open Questions` 中唯一允许存在的行，即**非阻塞**且 owner 为 `PM` 的行。行转入 marker 形态后，其清除义务与报数按 §1.6 计。
 
-## 1.4 更新索引
+## 1.4 登记迭代 catalog 身份（DB 权威）
 
-在 `{ITERATION_DIR}/README.md` 中添加**一行**（首次创建时建立表头；**一行 = 一次迭代**，不拆 compass/workspace 双行）：
+迭代 identity、compass 位置、description 与 project/iteration 归属是 **`{HARNESS_DIR}/store.db`** 的 catalog 行（contract §1）—— **不**在 `{ITERATION_DIR}/README.md` 维护「一行 = 一次迭代」的登记行（README 只作散文导览）。
 
-| Iteration | Path | Description | Status |
-|-----------|------|-------------|--------|
-| `<iteration-id>` | [`<iteration-id>/`](<iteration-id>/) | `<简短描述>` | `active` |
+- **登记/查询**：单行 `mstar catalog register`（或多个）与关系 `mstar catalog link`；批量走 reviewed 流程 `mstar catalog discover`（只读提案：配置根 tracked 正文 + legacy 索引行，带显式 `unknowns`）→ 人工 review mapping → `mstar catalog import`（冲突或 source 漂移整单拒绝，不创建 workflow session）。
+- **执行注册**：§1.5 的 snapshot + 根 entry 与 catalog delta 必须由**同一个 registration journal** 发布（contract §3）；中途崩溃留下 pending 状态 `catalog.registration-pending`，用 `mstar catalog reconcile` 收口（只读列出与 abort 形态见 help）。
+- **限制**：`store.db` 本地且默认 gitignored —— tracked 正文（compass/README 散文）**无法**重建本地 catalog 历史；`discover` 从不假设文件名编码迭代归属或生命周期，未声明项以显式 `unknowns` 披露。
 
-> **Engine check (when available):** import `assertIndexRowObligations` from `@mstar-harness/engine` in a host hook to assert the index-row obligations above (no CLI form yet). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check (when available):** import `readCatalogCompleteness` / `assertCatalogCompleteness` from `@mstar-harness/engine` (or read the rows with `mstar catalog list` / `mstar catalog show`) in a host hook to read the catalog rows above (no CLI form for the completeness report yet). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 ## 1.5 登记到 v2 状态面（formal iteration 必填）
 
@@ -191,7 +191,7 @@ Phase 1 与 §1.6 须遵守 **`references/iteration-artifact-boundaries.md`**（
 
 **顺序理由**：产品范围与优先级 → 架构与长期契约（specs）→ 行文、规格库卫生与错放纠正（在 PM/architect 定稿后核对受影响文档）。本共享产物链存在真实依赖；独立文档可按 ownership 隔离并行。早期全局探索的既有结果复用，不因每次编辑重新扫全库。角色名写法（role id 提及 hygiene）→ active host reference（**`mstar-host`** → `references/<host>.md`）。
 
-**完成证据** = 磁盘上的 compass / plans / specs / iteration 文档修订 + specs（与既有 knowledge）卫生/归档（如有）+ 索引与 metadata 更新 + compass `status: locked`。**不**要求单独的迭代审查报告——迭代审查的 SSOT 是被编辑的文档本身，无 per-plan QC 式审计链。
+**完成证据** = 磁盘上的 compass / plans / specs / iteration 文档修订 + specs（与既有 knowledge）卫生/归档（如有）+ catalog 登记（store.db）与 metadata 更新 + compass `status: locked`。**不**要求单独的迭代审查报告——迭代审查的 SSOT 是被编辑的文档本身，无 per-plan QC 式审计链。
 
 **Uncommitted-docs exception（bounded — Phase 1 only）**：Review & Edit 链的文档编辑（compass / plans / specs / `<iteration-id>/` package）可以**未提交**状态落在主 checkout（control root = 主 worktree）——这是 worktree 默认在 Phase 1 的唯一例外，主 checkout 分支**不**切换、不产生 feature commit。该例外在 **§6 的 integration-worktree 步骤**结束，其 transfer / commit / restore 序列的**唯一 home** 是 **`phase-2-worktree-lease.md` §2.3 checklist step 7**：只搬运**已 review 的本轮文档改动**，commit 落在 integration checkout，主 checkout 上对应的未提交改动随后恢复（不切分支）；**禁止**搬运主 checkout 上无关的既有用户改动。
 

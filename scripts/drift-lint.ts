@@ -458,12 +458,31 @@ export function buildCliCommandInventory(cliSrc: string): {
     varPaths.set(detached[1]!, detached[2]!);
     cliCommands.add(detached[2]!);
   }
+  // Group-lookup bindings (pre-pass): `const X = <target>.commands.find(
+  // (command) => command.name() === "p")` resolves the group `p` at call time
+  // and throws when it is absent, so the var aliases a group that exists —
+  // verbs chained on `X` register under `p` (index.ts joins `catalog
+  // reconcile` to the group another module owns this way).
+  for (const lookup of cliSrc.matchAll(
+    /const\s+(\w+)\s*=\s*\w+\.commands\.find\(\s*\(\s*\w+\s*\)\s*=>\s*\w+\.name\(\)\s*===\s*"([a-z-]+)"\s*\)/g,
+  )) {
+    varPaths.set(lookup[1]!, lookup[2]!);
+    cliCommands.add(lookup[2]!);
+  }
+  // Dynamic verb factories (pre-pass): a local function whose first parameter
+  // is a string-literal union (`(verb: "close" | "waive", …) => …`) registers
+  // one subcommand per literal through `.command(param)`. Bind the parameter
+  // to its literal set so the chain pass can expand that call shape.
+  const literalUnionVars = new Map<string, string[]>();
+  for (const union of cliSrc.matchAll(/\(\s*(\w+)\s*:\s*((?:"[a-z-]+"\s*\|\s*)+"[a-z-]+")\s*[,)]/g)) {
+    literalUnionVars.set(union[1]!, [...union[2]!.matchAll(/"([a-z-]+)"/g)].map((v) => v[1]!));
+  }
  // One pass keeps document order: `.command` advances the current chain
  // path (`const X = program.command("p")` or `X.command("sub")`), a
  // receiver-less `.command`/`.argument` hangs off that chain, and `.action`
  // closes it (a fresh statement re-resolves parents from varPaths).
   const chainRe =
-    /(?:const\s+(\w+)\s*=\s*program\s*|(\w+)\s*)?\.(?:command\(\s*"([a-z-]+)"\s*\)|argument\(\s*"([^"]+)"\s*,\s*"((?:[^"\\]|\\.)*)"\s*\)|action\(\s*(?:async\s*)?)/g;
+    /(?:const\s+(\w+)\s*=\s*program\s*|(\w+)\s*)?\.(?:command\(\s*"([a-z-]+)"\s*\)|command\(\s*(\w+)\s*\)|argument\(\s*"([^"]+)"\s*,\s*"((?:[^"\\]|\\.)*)"\s*\)|action\(\s*(?:async\s*)?)/g;
  // Enumerated argument descriptions: an all-lowercase `a-z-`-token list.
   const enumRe = /^[a-z-]+(?:\s*\|\s*[a-z-]+)+$/;
  // Current chain: the command path a receiver-less call hangs off.
@@ -474,8 +493,22 @@ export function buildCliCommandInventory(cliSrc: string): {
     const declared = m[1];
     const receiver = m[2];
     const commandName = m[3];
-    const argName = m[4];
-    const argDesc = m[5];
+    const commandVar = m[4];
+    const argName = m[5];
+    const argDesc = m[6];
+    const parent = parentPathOf(receiver, chainVar, chainPath, varPaths);
+    if (commandVar !== undefined) {
+      // Dynamic verb registration: expand `<group>.command(param)` to one
+      // subcommand per literal. An unknown parent chain or an unresolvable
+      // parameter (a loop-bound verb, e.g. `Object.entries(...)`) contributes
+      // nothing and is not a failure — this call shape was invisible to the
+      // parser before the dynamic pass, so it must stay silent, never loud.
+      const verbs = literalUnionVars.get(commandVar);
+      if (parent != null && verbs !== undefined) {
+        for (const verb of verbs) cliCommands.add(`${parent} ${verb}`);
+      }
+      continue;
+    }
     if (commandName !== undefined) {
       if (declared) {
         varPaths.set(declared, commandName);
@@ -490,12 +523,6 @@ export function buildCliCommandInventory(cliSrc: string): {
         chainPath = commandName;
         continue;
       }
-      const parent =
-        receiver === undefined
-          ? chainPath
-          : chainVar === receiver && chainPath !== null
-            ? chainPath
-            : varPaths.get(receiver);
       if (parent === undefined) {
         failures.push(
           receiver === undefined
@@ -509,10 +536,6 @@ export function buildCliCommandInventory(cliSrc: string): {
       if (receiver !== undefined) chainVar = receiver;
       chainPath = path;
     } else if (argName !== undefined) {
-      const parent =
-        receiver !== undefined && (chainVar !== receiver || chainPath === null)
-          ? varPaths.get(receiver)
-          : chainPath;
       if (parent === undefined) {
         failures.push(
           receiver !== undefined
@@ -533,6 +556,21 @@ export function buildCliCommandInventory(cliSrc: string): {
     }
   }
   return { cliCommands, failures };
+}
+
+/** Parent command path for a `.command(...)` / `.argument(...)` receiver: the
+ * current chain path when the receiver continues the chain, else the
+ * receiver's declared path. `null` = a top-level command, `undefined` = an
+ * unknown receiver (the caller decides whether that is a failure). */
+function parentPathOf(
+  receiver: string | undefined,
+  chainVar: string | null,
+  chainPath: string | null,
+  varPaths: Map<string, string>,
+): string | null | undefined {
+  if (receiver === undefined) return chainPath;
+  if (chainVar === receiver && chainPath !== null) return chainPath;
+  return varPaths.get(receiver);
 }
 
 /** Audit `<category>` keyword-table row — owned by the `mstar-use-cli` skill. */
@@ -604,8 +642,12 @@ function validateCliCommandTokens(cliCommands: Set<string>, tokens: string[]): s
 /**
  * Supplement the index.ts inventory with commands registered outside that
  * file: PLAN_VERBS / WORKFLOW_VERBS tables in plan-coordination.ts (SSOT
- * for scoped verbs) and the `sdd evidence` subtree in sdd-evidence.ts
- * (parsed from registerSddEvidenceCommands `.command(...)` calls).
+ * for scoped verbs), the `sdd evidence` subtree in sdd-evidence.ts
+ * (parsed from registerSddEvidenceCommands `.command(...)` calls), and the
+ * top-level group registrars that live in their own modules — issue.ts
+ * (`mstar issue`) and catalog.ts (`mstar catalog`), each exposed by a
+ * `register<Group>Commands(program)` entry point that index.ts calls and
+ * parsed with the same command-chain builder used for index.ts.
  */
 export function supplementCliCommandInventory(
   cliCommands: Set<string>,
@@ -636,6 +678,19 @@ export function supplementCliCommandInventory(
     for (const vm of tableBody.matchAll(/(?:"([^"]+)"|([a-z][a-z0-9-]*))\s*:\s*true/g)) {
       cliCommands.add(`${family} ${vm[1] ?? vm[2]}`);
     }
+  }
+
+  for (const module of ["packages/cli/src/issue.ts", "packages/cli/src/catalog.ts"]) {
+    let moduleSrc: string;
+    try {
+      moduleSrc = readFileSync(join(repoRoot, module), "utf8");
+    } catch {
+      failures.push(`drift: could not read ${module} for CLI command inventory`);
+      continue;
+    }
+    const moduleInventory = buildCliCommandInventory(moduleSrc);
+    for (const name of moduleInventory.cliCommands) cliCommands.add(name);
+    for (const row of moduleInventory.failures) failures.push(`${module}: ${row}`);
   }
 
   const sddPath = join(repoRoot, "packages/cli/src/sdd-evidence.ts");
