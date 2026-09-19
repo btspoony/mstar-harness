@@ -911,7 +911,7 @@ export async function readCatalogCompleteness(
       if (meta.authority_state !== "active") {
         return completenessRefusal(
           "store.not-active",
-          `The catalog store is ${meta.authority_state}; catalog completeness is asserted only against an ACTIVE authority — ` +
+          `The catalog store is ${meta.authority_state}; catalog completeness is asserted only against an ACTIVE authority \u2014 ` +
             "the legacy index/register sources remain authoritative until activation completes.",
           discovered.length,
           storeRevision,

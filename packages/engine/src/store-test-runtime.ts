@@ -69,7 +69,7 @@ const scenarios: Record<string, (rootDir: string) => Promise<string>> = {
     }
     const nodeLoads = (process as { moduleLoadList?: string[] }).moduleLoadList;
     if (nodeLoads && nodeLoads.includes("node:sqlite")) {
-      throw new Error("node:sqlite was loaded at module import — lazy acquisition is broken");
+      throw new Error("node:sqlite was loaded at module import \u2014 lazy acquisition is broken");
     }
     if (dbFilesUnder(rootDir).length > 0) throw new Error("import created a database file");
     return "module imported without acquiring SQLite";
@@ -223,7 +223,7 @@ const scenarios: Record<string, (rootDir: string) => Promise<string>> = {
             " ('I-999999', 'ok1', 'test', 's', 'rc', 'ac', 'loc', 'ob', '[]', '2026-09-18T00:00:00.000Z')",
         )
         .run();
-      throw new Error("an orphan occurrence insert was accepted — FK enforcement is broken");
+      throw new Error("an orphan occurrence insert was accepted \u2014 FK enforcement is broken");
     } catch (error) {
       if (error instanceof StoreError) throw error;
       if (!/FOREIGN KEY/i.test(String((error as Error).message))) throw error;

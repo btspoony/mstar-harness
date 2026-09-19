@@ -714,7 +714,7 @@ function resolveProposals(acc: Accumulator): void {
         detail:
           explicit.size === 1
             ? `${assigned} source(s) list ${key} without an id; the explicit id from another source is retained`
-            : `${assigned} source(s) list ${key} without an explicit id; one discovery-assigned id is retained (§2 doc-<UUID>) ` +
+            : `${assigned} source(s) list ${key} without an explicit id; one discovery-assigned id is retained (\u00a72 doc-<UUID>) ` +
               "and a reimport attaches to the row already registered at this location",
         sourceKey: mergedProposal.evidence[0]?.sourceKey ?? key,
       });
@@ -1663,7 +1663,7 @@ export async function importCatalog(
       `the import applied a partial state before failing: ${receipts.length} of ${plan.entities.length} entity proposal(s) ` +
         `${receipts.length > 0 ? `(${receipts.map((receipt) => `${receipt.kind}:${receipt.id}`).join(", ")}) ` : ""}` +
         `and ${appliedLinks.length} of ${plan.links.length} link proposal(s) are committed; the ${stage} proposal at index ` +
-        `${failedIndex} failed with: ${failedMessage}. The applied rows are journalled progress, not a silent prefix — ` +
+        `${failedIndex} failed with: ${failedMessage}. The applied rows are journalled progress, not a silent prefix \u2014 ` +
         `re-run the SAME reviewed plan with the SAME operationId ("${operationId}") to resume: applied proposals replay ` +
         "idempotently from the catalog operation journal and only the remaining proposals apply.",
       partial,

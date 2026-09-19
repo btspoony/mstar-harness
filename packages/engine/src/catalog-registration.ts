@@ -303,7 +303,7 @@ function requireRelativePath(value: unknown, field: string): string {
 
 function requireKind(value: unknown, allowed: Record<string, true>, field: string): string {
   const text = requireText(value, field);
-  if (!Object.hasOwn(allowed, text)) invalid(`${field} must be one of ${Object.keys(allowed).join(" | ")} — got ${JSON.stringify(text)}`);
+  if (!Object.hasOwn(allowed, text)) invalid(`${field} must be one of ${Object.keys(allowed).join(" | ")} \u2014 got ${JSON.stringify(text)}`);
   return text;
 }
 
@@ -319,7 +319,7 @@ function validateDelta(delta: unknown, kind: CatalogExecutionKind): CatalogExecu
   if (!isPlainObject(delta)) invalid("request.delta is required (the reviewed catalog delta: entities, links, binding)");
   const rawEntities = delta.entities;
   if (!Array.isArray(rawEntities) || rawEntities.length === 0) {
-    invalid("request.delta.entities must be a non-empty array — a registration with no catalog delta would publish nothing");
+    invalid("request.delta.entities must be a non-empty array \u2014 a registration with no catalog delta would publish nothing");
   }
   const seenKeys = new Set<string>();
   const seenLocations = new Set<string>();
@@ -347,7 +347,7 @@ function validateDelta(delta: unknown, kind: CatalogExecutionKind): CatalogExecu
     seenKeys.add(key);
     const location = `${entityKind}\u0000${rootKind}\u0000${relativePath}`;
     if (seenLocations.has(location)) {
-      invalid(`${at} repeats the location ${rootKind}/${relativePath} inside one delta — one id per location within a registration`);
+      invalid(`${at} repeats the location ${rootKind}/${relativePath} inside one delta \u2014 one id per location within a registration`);
     }
     seenLocations.add(location);
     return raw as unknown as CatalogEntityInput;
@@ -374,7 +374,7 @@ function validateDelta(delta: unknown, kind: CatalogExecutionKind): CatalogExecu
   const catalogKind = requireKind(rawBinding.catalogKind, { plan: true, iteration: true }, "request.delta.binding.catalogKind");
   if (catalogKind !== expectedBindingKind) {
     invalid(
-      `request.delta.binding.catalogKind must be ${JSON.stringify(expectedBindingKind)} for a ${kind} workflow — ` +
+      `request.delta.binding.catalogKind must be ${JSON.stringify(expectedBindingKind)} for a ${kind} workflow \u2014 ` +
         `a ${kind} registration binds its own catalog family, never another one`,
     );
   }
@@ -382,7 +382,7 @@ function validateDelta(delta: unknown, kind: CatalogExecutionKind): CatalogExecu
   const bound = entities.some((entity) => entity.kind === catalogKind && entity.id === catalogId);
   if (!bound) {
     invalid(
-      `request.delta.binding names ${catalogKind} ${JSON.stringify(catalogId)}, which this delta does not register — ` +
+      `request.delta.binding names ${catalogKind} ${JSON.stringify(catalogId)}, which this delta does not register \u2014 ` +
         "the binding must be one of the entities the operation publishes",
     );
   }
@@ -452,7 +452,7 @@ function validateRequest(request: unknown): ValidatedRequest {
         seenRows.add(rowId);
         if ("status" in row) {
           invalid(
-            `request.workflow.options.rows[${index}] supplies a status — rows are always registered Todo; ` +
+            `request.workflow.options.rows[${index}] supplies a status \u2014 rows are always registered Todo; ` +
               "a state transition is requested through the lifecycle seams, never at registration",
           );
         }
@@ -488,7 +488,7 @@ function validateRequest(request: unknown): ValidatedRequest {
       break;
     }
     default:
-      invalid(`request.workflow.kind must be one of plan | iteration | audit — got ${JSON.stringify(workflow.kind)}`);
+      invalid(`request.workflow.kind must be one of plan | iteration | audit \u2014 got ${JSON.stringify(workflow.kind)}`);
   }
 
   return {
@@ -509,7 +509,7 @@ function validateRequest(request: unknown): ValidatedRequest {
 function assertDeliveryRegistrationFor(options: Record<string, unknown>, kind: "plan" | "audit", at: string): void {
   const deliveryKind = options.deliveryKind;
   if (typeof deliveryKind !== "string" || (deliveryKind !== "development" && deliveryKind !== "verification/report-only")) {
-    invalid(`${at}.options.deliveryKind must be development | verification/report-only — got ${JSON.stringify(deliveryKind)}`);
+    invalid(`${at}.options.deliveryKind must be development | verification/report-only \u2014 got ${JSON.stringify(deliveryKind)}`);
   }
   try {
     assertDeliveryRegistrationCoherence(deliveryKind as WorkflowDeliveryKind, options, "registerCatalogExecution");
@@ -839,7 +839,7 @@ type ExecutionWrite = FileVersions & { recovered: boolean };
  */
 async function ensureExecutionRegistration(plan: ExecutionPlan, mode: "register" | "reconcile"): Promise<ExecutionWrite> {
   const conflictError = (detail: string): CatalogRegistrationError => {
-    const suffix = " — nothing was replaced or deleted";
+    const suffix = " \u2014 nothing was replaced or deleted";
     return mode === "reconcile"
       ? new CatalogRegistrationError("catalog.reconcile-conflict", `${detail}${suffix}`)
       : new CatalogRegistrationError("catalog.registration-conflict", `${detail}${suffix}`);
@@ -860,7 +860,7 @@ async function ensureExecutionRegistration(plan: ExecutionPlan, mode: "register"
     }
     if (mode === "register") {
       throw conflictError(
-        `workflow ${JSON.stringify(plan.workflowId)} is already registered (snapshot + root entry); registration is create-only — ` +
+        `workflow ${JSON.stringify(plan.workflowId)} is already registered (snapshot + root entry); registration is create-only \u2014 ` +
           "remove that workflow before registering again, or reconcile an operation you already started",
       );
     }
@@ -978,7 +978,7 @@ async function publishUnderRootLock(
     if (!state.published && state.versions.catalogRevision !== plan.request.expectedCatalogRevision) {
       const detail =
         `the reviewed delta expected catalog revision ${plan.request.expectedCatalogRevision}, but the store is at ` +
-        `${state.versions.catalogRevision} — the catalog moved since this delta was reviewed`;
+        `${state.versions.catalogRevision} \u2014 the catalog moved since this delta was reviewed`;
       if (mode === "reconcile") failReconcile(`${detail}; publish it against a current review instead`);
       throw new CatalogError("catalog.revision-conflict", `${detail}; nothing was published.`);
     }
@@ -1142,7 +1142,7 @@ export async function registerCatalogExecution(
       }
       throw new CatalogRegistrationError(
         "catalog.registration-pending",
-        `operation ${JSON.stringify(validated.operationId)} is still ${existing.phase} — it must be reconciled, not restarted: ` +
+        `operation ${JSON.stringify(validated.operationId)} is still ${existing.phase} \u2014 it must be reconciled, not restarted: ` +
           `run "mstar catalog reconcile --operation-id ${validated.operationId}".`,
       );
     }
@@ -1159,7 +1159,7 @@ export async function registerCatalogExecution(
       throw new CatalogRegistrationError(
         "catalog.registration-pending",
         `workflow ${JSON.stringify(plan.workflowId)} has a pending registration operation ${JSON.stringify(inFlight.operation_id)} ` +
-          `(${inFlight.phase}); a half-registered workflow is never re-registered — ` +
+          `(${inFlight.phase}); a half-registered workflow is never re-registered \u2014 ` +
           `run "mstar catalog reconcile --operation-id ${inFlight.operation_id}".`,
       );
     }
@@ -1271,7 +1271,7 @@ export async function reconcileCatalogExecution(
   if (loaded.phase === "aborted") {
     throw new CatalogRegistrationError(
       "catalog.registration-aborted",
-      `operation ${JSON.stringify(id)} was aborted and left no writes; nothing was recovered — re-register with a fresh operation id.`,
+      `operation ${JSON.stringify(id)} was aborted and left no writes; nothing was recovered \u2014 re-register with a fresh operation id.`,
     );
   }
 
@@ -1287,14 +1287,14 @@ export async function reconcileCatalogExecution(
   const plan = executionPlanFor(context, validated);
   if (requestHash(validated) !== loaded.request_hash) {
     failReconcile(
-      `operation ${JSON.stringify(id)} records a request hash that does not match its stored delta — the journal row was altered; ` +
+      `operation ${JSON.stringify(id)} records a request hash that does not match its stored delta \u2014 the journal row was altered; ` +
         "reconcile refuses to re-drive it",
     );
   }
   if (plan.workflowId !== journal.workflow.workflowId || plan.identity !== journal.workflow.identity) {
     failReconcile(
       `operation ${JSON.stringify(id)} was prepared for workflow ${JSON.stringify(journal.workflow.workflowId)}, but the stored ` +
-        `request now resolves to ${JSON.stringify(plan.workflowId)} — the reviewed inputs changed since it was prepared`,
+        `request now resolves to ${JSON.stringify(plan.workflowId)} \u2014 the reviewed inputs changed since it was prepared`,
     );
   }
 
@@ -1308,14 +1308,14 @@ export async function reconcileCatalogExecution(
       `at ${state.versions.catalogRevision}`;
     if (hasExecutionBytes(plan)) {
       failReconcile(
-        `${detail}; its execution registration is already on disk, so the pending delta is NOT dropped — resolve or remove that ` +
+        `${detail}; its execution registration is already on disk, so the pending delta is NOT dropped \u2014 resolve or remove that ` +
           "workflow explicitly, then re-register against a current review",
       );
     }
     await withJournalWrite(context, (db) => recordAborted(db, id, "catalog expectation is stale and nothing was written"));
     throw new CatalogRegistrationError(
       "catalog.reconcile-conflict",
-      `${detail} and nothing of this operation was written; the pending delta was aborted (no files, no catalog rows) — ` +
+      `${detail} and nothing of this operation was written; the pending delta was aborted (no files, no catalog rows) \u2014 ` +
         "re-register with a fresh operation id against a current catalog revision.",
     );
   }
@@ -1334,7 +1334,7 @@ export async function reconcileCatalogExecution(
     failReconcile(
       `operation ${JSON.stringify(id)} could not be re-driven (${(error as Error).message}); ` +
         `${hasExecutionBytes(plan) ? `its execution registration is at ${plan.dir}` : "nothing of it was written"}, so the pending row ` +
-        'is kept — fix the reported condition and reconcile again, or abandon the operation explicitly ("catalog reconcile --abort")',
+        'is kept \u2014 fix the reported condition and reconcile again, or abandon the operation explicitly ("catalog reconcile --abort")',
     );
   }
 
@@ -1380,13 +1380,13 @@ export async function abortCatalogExecution(
   if (loaded.phase === "committed") {
     failReconcile(
       `operation ${JSON.stringify(id)} is committed (workflow ${JSON.stringify(journal.workflow.workflowId)} is registered); ` +
-        "a completed registration is never aborted — remove that workflow through its own lifecycle instead",
+        "a completed registration is never aborted \u2014 remove that workflow through its own lifecycle instead",
     );
   }
   if (existsSync(journal.workflow.snapshotPath) || findRegisteredWorkflow(journal.workflow.harnessDir, journal.workflow.workflowId) !== undefined) {
     failReconcile(
       `operation ${JSON.stringify(id)} already wrote its execution registration (${journal.workflow.snapshotPath}); abandoning it would ` +
-        "leave a half-registered workflow — resolve or remove that workflow explicitly, then re-register",
+        "leave a half-registered workflow \u2014 resolve or remove that workflow explicitly, then re-register",
     );
   }
   await withJournalWrite(context, (db) => recordAborted(db, id, reason ?? "abandoned by the operator"));

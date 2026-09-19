@@ -436,7 +436,7 @@ export function registerCatalogCommands(program: Command): void {
   catalog
     .command("discover")
     .description(
-      "Read-only dry-run inventory (contract §4): legacy index rows plus the tracked bodies of the configured " +
+      "Read-only dry-run inventory (contract \u00a74): legacy index rows plus the tracked bodies of the configured " +
         "roots, as proposals with their reviewed source hashes, undisclosed metadata and index sections proposed " +
         "for retirement. Writes nothing",
     )

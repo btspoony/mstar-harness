@@ -688,7 +688,7 @@ describe("store-migrate apply", () => {
     }
   });
 
-  test("history rows persist on the receipt without allocating issues; replay and history→issue re-review stay stable (FW-2)", async () => {
+  test("history rows persist on the receipt without allocating issues; replay and history\u2192issue re-review stay stable (FW-2)", async () => {
     const fixture = freshWorkspace("history-apply-");
     writeRegister(fixture.harness, "_default", {
       entries: {
@@ -764,7 +764,7 @@ describe("store-migrate apply", () => {
     expect(revised.mappings[0]!.classification).toBe("history");
     try {
       await applyStoreMigration(fixture.context, revised);
-      throw new Error("expected the issue→history reclassification to refuse");
+      throw new Error("expected the issue\u2192history reclassification to refuse");
     } catch (error) {
       expect(error).toBeInstanceOf(MigrationError);
       expect((error as MigrationError).code).toBe("store.migration-manifest-invalid");

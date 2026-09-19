@@ -500,7 +500,7 @@ function assignmentText(input: {
   sddDir: string;
 }): string {
   return [
-    `# Assignment — ${input.planId}`,
+    `# Assignment \u2014 ${input.planId}`,
     "",
     `**Control harness root**: ${input.harness}`,
     `**Workflow id**: ${input.workflowId}`,
@@ -827,7 +827,7 @@ describe("disposition revision relation authorization", () => {
       reason: "acceptance met in qa-run-9",
       references: ["qa/run-9.md"],
       scope: "proj-a",
-      alignmentRef: "QA gate: Approve — qa/run-9.md",
+      alignmentRef: "QA gate: Approve \u2014 qa/run-9.md",
     };
     const closed = await closeIssue(
       context,
@@ -930,7 +930,7 @@ describe("disposition revision relation authorization", () => {
       context,
       created.issueId,
       "resolved",
-      { reason: "fixed", references: ["qa.md"], alignmentRef: "PM acceptance — handoff evidence" },
+      { reason: "fixed", references: ["qa.md"], alignmentRef: "PM acceptance \u2014 handoff evidence" },
       pmMut(authority, "close-term", { expectedRevision: created.revision }),
     );
     await appendOccurrence(
@@ -1291,7 +1291,7 @@ describe("disposition revision relation authorization", () => {
     // The QA gate's acceptance (§4's `qa-engineer` authority, supplied as
     // evidence per §6) is expressible: the envelope-proven seat writes the
     // closure and the QA acceptance is recorded verbatim in the history.
-    const qaAcceptance = "QA gate: Approve — .mstar/sdd/20260918-a/review/qa.md";
+    const qaAcceptance = "QA gate: Approve \u2014 .mstar/sdd/20260918-a/review/qa.md";
     await closeIssue(
       context,
       created.issueId,
@@ -1321,7 +1321,7 @@ describe("disposition revision relation authorization", () => {
       context,
       second.issueId,
       "resolved",
-      { reason: "PM verified the fix", references: ["sdd/20260918-a/handoff.md"], alignmentRef: "PM acceptance — handoff.md" },
+      { reason: "PM verified the fix", references: ["sdd/20260918-a/handoff.md"], alignmentRef: "PM acceptance \u2014 handoff.md" },
       pmMut(authority, "close-pm-accept", { expectedRevision: second.revision }),
     );
     const pmTransition = await getIssue(context, second.issueId);
@@ -1330,7 +1330,7 @@ describe("disposition revision relation authorization", () => {
       scope: null,
       references: ["sdd/20260918-a/handoff.md"],
       canonicalIssueId: null,
-      alignmentRef: "PM acceptance — handoff.md",
+      alignmentRef: "PM acceptance \u2014 handoff.md",
     });
     expect(pmTransition.transitions[0]?.evidence).not.toEqual(qaTransition.transitions[0]?.evidence);
   });

@@ -598,7 +598,7 @@ function attestationKeys(object: Record<string, unknown>, allowed: readonly stri
     if (!allowed.includes(key)) {
       attestationRefusal(
         `${what} declares an undeclared field "${key}"; the attestation records only installed entrypoints/versions, ` +
-          `quiesced sessions and the approving operator — never session credentials or other data.`,
+          `quiesced sessions and the approving operator \u2014 never session credentials or other data.`,
       );
     }
   }
@@ -664,7 +664,7 @@ export function validateActivationAttestation(value: unknown): ActivationAttesta
     if (typeof disposition !== "string" || !Object.hasOwn(DISPOSITIONS, disposition)) {
       activationBlocked(
         `${what}.disposition must be one of ${Object.keys(DISPOSITIONS).join(", ")}; a consumer left running/unattested ` +
-          `stops the barrier — if a host cannot reload safely, stop at the exact user-restart step instead`,
+          `stops the barrier \u2014 if a host cannot reload safely, stop at the exact user-restart step instead`,
       );
     }
     if (typeof consumer.current !== "boolean") attestationRefusal(`${what}.current must be a boolean`);
@@ -1056,7 +1056,7 @@ export async function activateStore(
         throw new StoreActivationError(
           "store.activation-stale",
           `this manifest was already activated under a different attestation (recorded ${recorded.attestationHash.slice(0, 12)}, ` +
-            `supplied ${attestationHash.slice(0, 12)}); activation history is immutable — reuse the recorded attestation.`,
+            `supplied ${attestationHash.slice(0, 12)}); activation history is immutable \u2014 reuse the recorded attestation.`,
         );
       }
       return recorded;
@@ -1315,7 +1315,7 @@ function writeLedger(path: string, ledger: RetirementLedger): void {
 
 function markerText(ledger: RetirementLedger, receipt: RetirementReceipt | null): string {
   return [
-    `# Legacy source archive — activation receipt #${ledger.activationReceiptId}`,
+    `# Legacy source archive \u2014 activation receipt #${ledger.activationReceiptId}`,
     "",
     "Retired from the live control root by `mstar store retire`, after the activation barrier passed.",
     "",

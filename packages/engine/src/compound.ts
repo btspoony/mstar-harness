@@ -541,7 +541,7 @@ export function assertIndexRows(knowledgeDir: string): GateResult {
       violation(
         "medium",
         "compound.index.retired",
-        `${join(knowledgeDir, "README.md")} is no longer a register — knowledge catalog completeness is a store.db query (state-projection contract §4)`,
+        `${join(knowledgeDir, "README.md")} is no longer a register \u2014 knowledge catalog completeness is a store.db query (state-projection contract \u00A74)`,
         "call assertKnowledgeCatalogCompleteness(context), or run `mstar catalog discover` + `mstar catalog import`",
       ),
     ],

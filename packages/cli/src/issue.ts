@@ -295,14 +295,14 @@ function linkOf(record: Record<string, unknown>): IssueLink {
 }
 
 function parsePagingInt(raw: string, flag: string, min: number, max?: number): number {
-  if (!/^\d+$/.test(raw)) usage(`${flag} must be a nonnegative integer — got ${JSON.stringify(raw)}`);
+  if (!/^\d+$/.test(raw)) usage(`${flag} must be a nonnegative integer \u2014 got ${JSON.stringify(raw)}`);
   const value = Number(raw);
-  if (!Number.isSafeInteger(value)) usage(`${flag} is out of range — got ${JSON.stringify(raw)}`);
+  if (!Number.isSafeInteger(value)) usage(`${flag} is out of range \u2014 got ${JSON.stringify(raw)}`);
   if (value < min || (max !== undefined && value > max)) {
     usage(
       max === undefined
-        ? `${flag} must be >= ${min} — got ${JSON.stringify(raw)}`
-        : `${flag} must be ${min}..${max} — got ${JSON.stringify(raw)}`,
+        ? `${flag} must be >= ${min} \u2014 got ${JSON.stringify(raw)}`
+        : `${flag} must be ${min}..${max} \u2014 got ${JSON.stringify(raw)}`,
     );
   }
   return value;

@@ -277,7 +277,7 @@ function catalogRoots(context: StoreContext): Record<CatalogRootKind, string> {
 }
 
 function pathRefused(message: string): CatalogError {
-  return new CatalogError("catalog.path-refused", `${message} — no catalog write was made`);
+  return new CatalogError("catalog.path-refused", `${message} \u2014 no catalog write was made`);
 }
 
 /**
@@ -697,7 +697,7 @@ function assertCatalogActive(db: StoreDb): void {
   if (versions.authorityState !== "active") {
     throw new CatalogError(
       "store.not-active",
-      `The catalog store is ${versions.authorityState}; catalog mutations require an active store (§2 issues contract: a staged store is read-only to ordinary domain verbs).`,
+      `The catalog store is ${versions.authorityState}; catalog mutations require an active store (\u00a72 issues contract: a staged store is read-only to ordinary domain verbs).`,
     );
   }
 }
@@ -813,7 +813,7 @@ export async function registerCatalogEntity(
         throw new CatalogError(
           "catalog.duplicate",
           `${record.kind} ${record.id} is already registered at ${existing.root_kind}/${existing.relative_path}; ` +
-            `existing IDs are preserved — updateCatalogEntity is the only verb that relocates one.`,
+            `existing IDs are preserved \u2014 updateCatalogEntity is the only verb that relocates one.`,
         );
       }
       return commitOperation(
@@ -992,7 +992,7 @@ export async function linkCatalogEntities(
     if (!readEntity(db, to.kind, to.id)) {
       throw new CatalogError(
         "catalog.link-refused",
-        `${to.kind} ${to.id} is not registered; a catalog relation may not dangle (§2).`,
+        `${to.kind} ${to.id} is not registered; a catalog relation may not dangle (\u00a72).`,
       );
     }
     if (operation.expectedRevision !== undefined) {

@@ -113,7 +113,7 @@ function lines(run: RunResult): string[] {
   return run.stderr.trimEnd().split("\n");
 }
 
-describe("ZCode write gate — authority paths (source entry)", () => {
+describe("ZCode write gate \u2014 authority paths (source entry)", () => {
   test("store.db write is refused unconditionally: exit 2, empty stdout, authority line", () => {
     const fixture = makeHarness("store-db-hard", "hard");
     const run = runGate(process.execPath, HOOK_SRC, writeEvent(fixture.storeDb, "not a database"));
@@ -296,7 +296,7 @@ describe("ZCode write gate — authority paths (source entry)", () => {
   });
 });
 
-describe("ZCode write gate — committed bundle under native node", () => {
+describe("ZCode write gate \u2014 committed bundle under native node", () => {
   test("the node on PATH meets the store floor this gate advertises", () => {
     const version = spawnSync("node", ["--version"], { encoding: "utf8" }).stdout.trim().replace(/^v/, "");
     const [major = 0, minor = 0] = version.split(".").map((part) => Number.parseInt(part, 10));

@@ -82,7 +82,7 @@ function workspaceWithRegister(name: string): { store: ArtifactStore & { root: s
   return { store: createFsStore(harness), registerPath };
 }
 
-describe("retired register persist — the raw store cannot recreate a project register", () => {
+describe("retired register persist \u2014 the raw store cannot recreate a project register", () => {
   test("issue authority: the retired residuals kind refuses every raw port and leaves existing bytes alone", async () => {
     const { store, registerPath } = workspaceWithRegister("retired-kind");
     const before = readFileSync(registerPath);
@@ -183,7 +183,7 @@ async function linkPlanRow(context: StoreContext, issueId: string, planId: strin
   }
 }
 
-describe("findingsCleanupGate — authoritative linked open issues (G2a)", () => {
+describe("findingsCleanupGate \u2014 authoritative linked open issues (G2a)", () => {
   test("issue authority: only the plan's own open issues count, and an open critical blocks both modes", async () => {
     const context = ctx("gate-modes");
     await initializeStore(context).then((handle) => handle.close());
@@ -269,7 +269,7 @@ describe("findingsCleanupGate — authoritative linked open issues (G2a)", () =>
  * § Domain read verbs vs a staged store (plan QC fix wave FW-6)
  * ------------------------------------------------------------------------ */
 
-describe("listIssues / getIssue — a staged store is not queryable as read authority (FW-6)", () => {
+describe("listIssues / getIssue \u2014 a staged store is not queryable as read authority (FW-6)", () => {
   test("both read verbs refuse store.not-active even when staged rows exist", async () => {
     const context = ctx("read-staged");
     await initializeStore(context).then((handle) => handle.close());

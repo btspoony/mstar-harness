@@ -6328,7 +6328,7 @@ function registerCatalogReconcileCommand(target: Command): void {
     .command("reconcile")
     .exitOverride()
     .description(
-      "Recover a pending execution registration (contract §3 step 4, engine-backed): re-checks the exact request identity and " +
+      "Recover a pending execution registration (contract \u00a73 step 4, engine-backed): re-checks the exact request identity and " +
         "the recorded byte versions, finishes the writes the operation owns, publishes the catalog delta and commits. A " +
         "committed operation returns its recorded receipt and writes nothing (idempotent); a state that cannot be finished " +
         "without replacing or adopting bytes refuses `catalog.reconcile-conflict` and leaves everything in place. --list " +
@@ -6350,7 +6350,7 @@ function registerCatalogReconcileCommand(target: Command): void {
         }
         const harnessDir = resolveEngineProcessHarnessDir(process.cwd(), options.harness);
         if (harnessDir === null) {
-          throw new Error(`harness dir not found from ${process.cwd()} — pass --harness <path>`);
+          throw new Error(`harness dir not found from ${process.cwd()} \u2014 pass --harness <path>`);
         }
         const context = { harnessDir };
         if (options.list === true) {
@@ -6376,13 +6376,13 @@ function registerCatalogReconcileCommand(target: Command): void {
         if (options.abort === true) {
           const aborted = await abortCatalogExecution(context, operationId, "abandoned from the command line");
           if (json) console.log(JSON.stringify({ ok: true, data: aborted }));
-          else console.log(pc.yellow(`catalog reconcile: ${aborted.workflowId} abandoned (operation ${aborted.operationId}) — nothing was written`));
+          else console.log(pc.yellow(`catalog reconcile: ${aborted.workflowId} abandoned (operation ${aborted.operationId}) \u2014 nothing was written`));
           return;
         }
         const receipt = await reconcileCatalogExecution(context, operationId);
         if (json) console.log(JSON.stringify({ ok: true, data: receipt }));
         else {
-          console.log(pc.green(`catalog reconcile: OK — ${receipt.workflowId} recovered (operation ${receipt.operationId})`));
+          console.log(pc.green(`catalog reconcile: OK \u2014 ${receipt.workflowId} recovered (operation ${receipt.operationId})`));
           console.log(`  catalog revision: ${receipt.catalogRevision}`);
         }
       } catch (error) {
@@ -6424,7 +6424,7 @@ program
   .action(async (options: { port: string; open?: boolean; project?: string }) => {
     const port = Number(options.port);
     if (!Number.isInteger(port) || port < 0 || port > 65535) {
-      console.error(pc.red(`dashboard: --port must be an integer between 0 and 65535 — got ${JSON.stringify(options.port)}`));
+      console.error(pc.red(`dashboard: --port must be an integer between 0 and 65535 \u2014 got ${JSON.stringify(options.port)}`));
       process.exitCode = 2;
       return;
     }
