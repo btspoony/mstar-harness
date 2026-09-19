@@ -549,7 +549,7 @@ Append-only JSON-lines log for merge closure, batch close, register refreshes, e
 mstar status tech-debt
 ```
 
-- The **legacy register rollup** — engine `techDebtRollup("{HARNESS_DIR}/projects")` (`{ computed, stored: null, checks, overall }`) over `{PROJECT_DIR}/<id>/residuals.json` with `total_open` / `by_severity` / `by_target` / `by_plan` — remains exported for the migrated register documents only; the CLI's `tech-debt` no longer reads it (issue-governance cutover). The v1 stored-summary drift check (`metadata.tech_debt_summary`) is a **v1 dead path**.
+- The legacy register-walking rollup (`techDebtRollup` over `{PROJECT_DIR}/<id>/residuals.json`, with the register-era `by_target` / `by_plan` aggregates) is **removed** (issue-governance cutover) — the engine no longer exports it. The rollup is computed from the **issue store** via the CLI (`readIssueRollup`): `total_open` / `by_severity` / `by_project`. The migrated register documents are mapping history only. The v1 stored-summary drift check (`metadata.tech_debt_summary`) is a **v1 dead path**.
 - The rollup **does not write** anything.
 
 ---
