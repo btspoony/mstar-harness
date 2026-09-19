@@ -111,18 +111,47 @@ export type MigrationSourceFile = {
   closedCount: number;
 };
 
-/** One classified source row (§7 "proposed issue IDs or reviewed decisions"). */
+/**
+ * One classified source row (§7 "proposed issue IDs or reviewed decisions";
+ * plan Task 1: each row is issue / imported history / explicitly excluded
+ * with rationale).
+ */
 export type MigrationEntryMapping = {
   source: MigrationSourceIdentity;
-  classification: "issue";
+  /**
+   * The reviewed row classification. `issue` allocates an issue at apply;
+   * `history` / `excluded` are persisted on the receipt verbatim WITHOUT
+   * allocating one (§3: history-only rows remain in the receipt/archive only
+   * with an explicit reviewed reason; no open obligation may be discarded as
+   * history). Dropping a mapping from a reviewed manifest is NOT the
+   * representation of history-only — `applyStoreMigration` refuses removed
+   * rows (`store.migration-row-removed`).
+   */
+  classification: "issue" | "history" | "excluded";
+  /** The reviewed reason for a history/excluded row; null for an issue row. */
+  rationale: string | null;
   disposition: Disposition;
   severity: Severity;
   kind: IssueKind;
-  /** Deterministic proposed issue id (`I-` + 6-digit counter, §3 sort order). */
+  /** Deterministic proposed issue id (`I-` + 6-digit counter, §3 sort order); empty for a history/excluded row. */
   proposedIssueId: string;
   /** The exact legacy labels this row was mapped FROM (verbatim, never relabelled). */
   legacy: { lifecycle: string | null; decision: string | null; severity: string | null; closedAt: string | null };
   /** The full original entry, every field preserved losslessly (§3). */
+  legacyJson: string;
+};
+
+/**
+ * One history/excluded row as disclosed on the migration receipt (§3, plan
+ * QC fix wave FW-2): the verbatim legacy record plus its reviewed rationale,
+ * carried WITHOUT an allocated issue. The vocabulary mapping
+ * (`legacy.lifecycle` → `disposition`, e.g. `wont-fix` → `waived`) is
+ * retained in the manifest's mapping — never relabelled `resolved`.
+ */
+export type MigrationHistoryRow = {
+  source: MigrationSourceIdentity;
+  classification: "history" | "excluded";
+  rationale: string;
   legacyJson: string;
 };
 
@@ -276,9 +305,11 @@ function parseRegister(
 
 /**
  * Classify one source row against the declared vocabulary (§3). A row whose
- * required finding evidence is missing or whose lifecycle/severity the
- * vocabulary does not define becomes an UNRESOLVED mapping that blocks apply;
- * nothing is synthesized.
+ * lifecycle/severity the vocabulary does not define — or whose required
+ * finding evidence is missing beyond the history-only fields — becomes an
+ * UNRESOLVED mapping that blocks apply; nothing is synthesized. A row whose
+ * ONLY absent required evidence is `tracking`/`target` classifies as
+ * reviewed HISTORY (plan QC fix wave FW-2).
  */
 /** The legacy required finding fields (status.ts `RESIDUAL_REQUIRED_FIELDS` vocabulary). */
 const LEGACY_REQUIRED_FIELDS = [
@@ -293,12 +324,26 @@ const LEGACY_REQUIRED_FIELDS = [
   "tracking",
 ] as const;
 
+/**
+ * The required fields whose ABSENCE the reviewed 2026-09-19 disposition maps
+ * to history-only instead of an unresolved blocking row: a row carrying
+ * everything but `tracking`/`target` cannot become an actionable issue, and
+ * the missing evidence is never synthesized (§3), so the row migrates as
+ * reviewed history — verbatim fields, retained vocabulary mapping, no issue.
+ * Absence of ANY other required field stays unresolved and blocks apply.
+ */
+const HISTORY_ONLY_ABSENT_FIELDS: readonly string[] = ["tracking", "target"];
+
+type EntryClassification =
+  | { classification: "issue"; disposition: Disposition; severity: Severity }
+  | { classification: "history"; disposition: Disposition; severity: Severity; rationale: string };
+
 function classifyEntry(
   source: MigrationSourceIdentity,
   entry: Record<string, unknown>,
   vocabulary: MigrationVocabulary,
   unresolved: MigrationUnknown[],
-): { disposition: Disposition; severity: Severity } | null {
+): EntryClassification | null {
   // Required finding evidence is checked for PRESENCE, not with the new-entry
   // validator: legal legacy labels such as `wont-fix` and `warning` never
   // satisfy the new-entry enum and must map through the reviewed vocabulary,
@@ -307,7 +352,8 @@ function classifyEntry(
     const value = entry[field];
     return typeof value !== "string" || value.trim() === "";
   });
-  if (missing.length > 0) {
+  const historyOnly = missing.length > 0 && missing.every((field) => HISTORY_ONLY_ABSENT_FIELDS.includes(field));
+  if (missing.length > 0 && !historyOnly) {
     unresolved.push({
       code: "missing-field",
       source,
@@ -336,7 +382,23 @@ function classifyEntry(
     });
     return null;
   }
-  return { disposition, severity };
+  if (historyOnly) {
+    // Reviewed disposition (2026-09-19, plan QC fix wave FW-2): the row is
+    // imported as history only — every original field stays verbatim in
+    // `legacyJson`, the lifecycle mapping is retained (a legacy `wont-fix`
+    // stays mapped to `waived`, never relabelled `resolved`), no issue is
+    // allocated and no missing evidence is synthesized (§3).
+    return {
+      classification: "history",
+      disposition,
+      severity,
+      rationale:
+        `entry is missing required finding evidence: ${missing.map((field) => JSON.stringify(field)).join(", ")} — ` +
+        "the reviewed disposition imports this row as history only: verbatim fields and lifecycle mapping retained, " +
+        "no issue allocated, nothing synthesized (issue contract §3)",
+    };
+  }
+  return { classification: "issue", disposition, severity };
 }
 
 /**
@@ -391,11 +453,14 @@ export async function planStoreMigration(context: StoreContext): Promise<Migrati
     if (classified === null) continue;
     mappings.push({
       source: row.source,
-      classification: "issue",
+      classification: classified.classification,
+      rationale: classified.classification === "issue" ? null : classified.rationale,
       disposition: classified.disposition,
       severity: classified.severity,
       kind: MIGRATION_VOCABULARY.kind,
-      proposedIssueId: `I-${String(index + 1).padStart(6, "0")}`,
+      // Only an issue-classified row proposes an issue id; the deterministic
+      // §3 sort order keeps existing proposals stable across re-previews.
+      proposedIssueId: classified.classification === "issue" ? `I-${String(index + 1).padStart(6, "0")}` : "",
       legacy: {
         lifecycle: typeof row.entry.lifecycle === "string" ? row.entry.lifecycle : null,
         decision: typeof row.entry.decision === "string" ? row.entry.decision : null,
@@ -469,17 +534,24 @@ export type MigrationReceipt = {
   phase: "applied";
   /** True when an identical manifest replayed the recorded receipt without writes. */
   replayed: boolean;
-  /** The persistent legacy-source-tuple → issue ID mapping. */
+  /** The persistent legacy-source-tuple → issue ID mapping (issue-classified rows only). */
   issueIds: MigrationIdMapping[];
+  /** History/excluded rows carried verbatim on the receipt WITHOUT an allocated issue (§3, FW-2). */
+  historyRows: MigrationHistoryRow[];
   counts: {
     issues: number;
     open: number;
     closed: number;
+    /** Rows persisted as reviewed history (no issue allocated, FW-2). */
+    history: number;
+    /** Rows explicitly excluded with rationale (no issue allocated, FW-2). */
+    excluded: number;
     catalogEntities: number;
     catalogLinks: number;
     /** Rows created/updated by THIS apply (0 on a replay). */
     created: number;
     updated: number;
+    storeRevision: number;
   };
   storeRevision: number;
   appliedAt: string;
@@ -500,8 +572,8 @@ function readReceipts(db: StoreDb): StoredReceipt[] {
 }
 
 function receiptOfStored(stored: StoredReceipt, replayed: boolean): MigrationReceipt {
-  // mapping_json carries the full assigned mapping; the receipt discloses the
-  // persistent (source → issueId) pairs.
+  // mapping_json carries the full assigned mapping: issue-classified rows
+  // with their allocated ids, history/excluded rows with an empty issueId.
   const storedMapping = JSON.parse(stored.mapping_json) as MigrationMappingWithId[];
   const counts = JSON.parse(stored.source_counts_json) as MigrationReceipt["counts"];
   return {
@@ -509,8 +581,33 @@ function receiptOfStored(stored: StoredReceipt, replayed: boolean): MigrationRec
     manifestHash: stored.manifest_hash,
     phase: "applied",
     replayed,
-    issueIds: storedMapping.map((entry) => ({ source: entry.source, issueId: entry.issueId })),
-    counts: { ...counts, created: 0, updated: 0 },
+    issueIds: storedMapping
+      .filter((entry) => entry.issueId !== "")
+      .map((entry) => ({ source: entry.source, issueId: entry.issueId })),
+    historyRows: storedMapping
+      .filter(
+        (entry): entry is MigrationMappingWithId & { classification: "history" | "excluded" } =>
+          entry.issueId === "" && (entry.classification === "history" || entry.classification === "excluded"),
+      )
+      .map((entry) => ({
+        source: entry.source,
+        classification: entry.classification,
+        rationale: entry.rationale ?? "",
+        legacyJson: entry.legacyJson,
+      })),
+    // Pre-FW-2 receipts carry neither field in the stored counts JSON.
+    counts: {
+      issues: counts.issues,
+      open: counts.open,
+      closed: counts.closed,
+      history: counts.history ?? 0,
+      excluded: counts.excluded ?? 0,
+      catalogEntities: counts.catalogEntities,
+      catalogLinks: counts.catalogLinks,
+      created: 0,
+      updated: 0,
+      storeRevision: counts.storeRevision,
+    },
     storeRevision: counts.storeRevision,
     appliedAt: stored.applied_at,
   };
@@ -672,7 +769,7 @@ type ImportRow = {
   entry: Record<string, unknown>;
 };
 
-function parseImportRow(mapping: MigrationMappingWithId): ImportRow {
+function parseImportRow(mapping: MigrationEntryMapping): ImportRow {
   return { mapping, tuple: tupleKeyOf(mapping.source), entry: JSON.parse(mapping.legacyJson) as Record<string, unknown> };
 }
 
@@ -907,6 +1004,25 @@ export async function applyStoreMigration(context: StoreContext, manifest: Migra
         `${manifest.catalog.conflicts.length} catalog conflict(s). Resolve them in review first; nothing was written.`,
     );
   }
+  // §3: a history/excluded row persists on the receipt only WITH its explicit
+  // reviewed reason, and the classification itself must be the reviewed
+  // vocabulary — never an arbitrary label.
+  for (const mapping of manifest.mappings) {
+    if (mapping.classification !== "issue" && mapping.classification !== "history" && mapping.classification !== "excluded") {
+      throw new StoreMigrationError(
+        "store.migration-manifest-invalid",
+        `mapping ${mapping.source.registerPath} bucket ${JSON.stringify(mapping.source.bucket)} entry ${JSON.stringify(mapping.source.entryId)} ` +
+          `carries unknown classification ${JSON.stringify(String(mapping.classification))}; nothing was written.`,
+      );
+    }
+    if (mapping.classification !== "issue" && !(typeof mapping.rationale === "string" && mapping.rationale.trim() !== "")) {
+      throw new StoreMigrationError(
+        "store.migration-manifest-invalid",
+        `history/excluded mapping ${mapping.source.registerPath} bucket ${JSON.stringify(mapping.source.bucket)} entry ${JSON.stringify(mapping.source.entryId)} ` +
+          "requires an explicit reviewed rationale (issue contract §3); nothing was written.",
+      );
+    }
+  }
   await assertSourcesUnchanged(context, manifest);
 
   const manifestHash = migrationManifestHash(manifest);
@@ -967,10 +1083,33 @@ export async function applyStoreMigration(context: StoreContext, manifest: Migra
         if (Number.isInteger(failAfter) && index === failAfter) {
           throw new Error(`induced migration failure after ${failAfter} imported row(s)`);
         }
+        // History/excluded rows are recorded on the receipt verbatim WITHOUT
+        // allocating an issue (§3, FW-2). An imported issue is never demoted
+        // by a re-review: a prior ISSUE tuple that the re-reviewed manifest
+        // reclassifies refuses instead of deleting migration-owned rows.
+        if (row.mapping.classification !== "issue") {
+          const priorEntry = priorByTuple.get(row.tuple);
+          if (priorEntry !== undefined && priorEntry.issueId !== "") {
+            throw new StoreMigrationError(
+              "store.migration-manifest-invalid",
+              `entry ${JSON.stringify(row.mapping.source.entryId)} (${row.mapping.source.registerPath} bucket ${JSON.stringify(row.mapping.source.bucket)}) ` +
+                `was imported as issue ${priorEntry.issueId} but the re-reviewed manifest classifies it ${row.mapping.classification}; ` +
+                "an imported issue is never demoted by a re-review — restore its issue classification or remove the row from the sources with an explicit reviewed disposition. Nothing was written.",
+            );
+          }
+          assignments.push({ ...row.mapping, issueId: "" });
+          continue;
+        }
         const priorEntry = priorByTuple.get(row.tuple);
         if (priorEntry) {
           if (priorEntry.issueId === "") {
-            throw new StoreMigrationError("store.migration-manifest-invalid", "the prior receipt holds an empty issue id mapping; nothing was written.");
+            // Prior history/excluded tuple, now reviewed as an issue: no id
+            // was ever allocated for it, so it takes a fresh allocation.
+            const issueId = allocateIssueId(handle.db);
+            const result = insertMigratedIssue(handle.db, row, issueId, at);
+            if (result === "created") created += 1;
+            assignments.push({ ...row.mapping, issueId });
+            continue;
           }
           // The tuple already owns an issue ID: reconcile the migration-owned
           // columns only when the re-reviewed record differs; the ID and any
@@ -993,9 +1132,11 @@ export async function applyStoreMigration(context: StoreContext, manifest: Migra
 
       const catalog = applyCatalogEntities(handle.db, manifest.catalog, at);
 
-      // Keep the counter ahead of any deterministic first allocation.
+      // Keep the counter ahead of any deterministic first allocation (issue
+      // rows only — history/excluded rows never allocate an id).
+      const issueAssignments = assignments.filter((entry) => entry.classification === "issue");
       if (priorReceipts.length === 0) {
-        const maxAllocated = assignments.reduce((max, entry) => Math.max(max, Number.parseInt(entry.issueId.slice(2), 10)), 0);
+        const maxAllocated = issueAssignments.reduce((max, entry) => Math.max(max, Number.parseInt(entry.issueId.slice(2), 10)), 0);
         if (maxAllocated + 1 > readCounter(handle.db)) {
           handle.db.prepare("update issue_counter set next_value = ? where id = 1").run(maxAllocated + 1);
         }
@@ -1010,11 +1151,15 @@ export async function applyStoreMigration(context: StoreContext, manifest: Migra
       }
       const storeRevision = (handle.db.prepare("select revision from store_meta where id = 1").get() as { revision: number }).revision;
 
-      const openCount = assignments.filter((entry) => entry.disposition === "open").length;
+      const openCount = issueAssignments.filter((entry) => entry.disposition === "open").length;
+      const historyCount = assignments.filter((entry) => entry.classification === "history").length;
+      const excludedCount = assignments.filter((entry) => entry.classification === "excluded").length;
       const counts: MigrationReceipt["counts"] = {
-        issues: assignments.length,
+        issues: issueAssignments.length,
         open: openCount,
-        closed: assignments.length - openCount,
+        closed: issueAssignments.length - openCount,
+        history: historyCount,
+        excluded: excludedCount,
         catalogEntities: catalog.entities.length,
         catalogLinks: catalog.createdLinks,
         created,
@@ -1056,7 +1201,20 @@ export async function applyStoreMigration(context: StoreContext, manifest: Migra
         manifestHash,
         phase: "applied",
         replayed: false,
-        issueIds: assignments.map((entry) => ({ source: entry.source, issueId: entry.issueId })),
+        issueIds: assignments
+          .filter((entry) => entry.classification === "issue")
+          .map((entry) => ({ source: entry.source, issueId: entry.issueId })),
+        historyRows: assignments
+          .filter(
+            (entry): entry is MigrationMappingWithId & { classification: "history" | "excluded" } =>
+              entry.classification === "history" || entry.classification === "excluded",
+          )
+          .map((entry) => ({
+            source: entry.source,
+            classification: entry.classification,
+            rationale: entry.rationale ?? "",
+            legacyJson: entry.legacyJson,
+          })),
         counts,
         storeRevision,
         appliedAt: at,

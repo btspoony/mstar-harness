@@ -847,8 +847,8 @@ type ReceiptRow = {
   retired_at: string | null;
 };
 
-/** `source_counts_json` as the apply half writes it: the counts plus the committed store revision. */
-type StoredCounts = MigrationReceipt["counts"] & { storeRevision?: number };
+/** `source_counts_json` as the apply half writes it: the counts (incl. storeRevision). */
+type StoredCounts = MigrationReceipt["counts"];
 
 const RECEIPT_COLUMNS =
   "id, manifest_hash, manifest_json, mapping_json, source_counts_json, applied_at, activated_at, retired_at";
@@ -869,7 +869,13 @@ export async function appliedReceiptFor(context: StoreContext, manifest: Migrati
         "the reviewed manifest has no recorded apply receipt; apply it first (store migrate --apply --manifest <path>).",
       );
     }
-    const storedMapping = JSON.parse(row.mapping_json) as { source: MigrationReceipt["issueIds"][number]["source"]; issueId: string }[];
+    const storedMapping = JSON.parse(row.mapping_json) as {
+      source: MigrationReceipt["issueIds"][number]["source"];
+      issueId: string;
+      classification?: string;
+      rationale?: string | null;
+      legacyJson?: string;
+    }[];
     const counts = JSON.parse(row.source_counts_json) as StoredCounts;
     if (typeof counts.storeRevision !== "number") {
       throw new StoreActivationError(
@@ -882,8 +888,23 @@ export async function appliedReceiptFor(context: StoreContext, manifest: Migrati
       manifestHash: row.manifest_hash,
       phase: "applied",
       replayed: true,
-      issueIds: storedMapping.map((entry) => ({ source: entry.source, issueId: entry.issueId })),
-      counts: { ...counts, created: 0, updated: 0 },
+      issueIds: storedMapping
+        .filter((entry) => entry.issueId !== "")
+        .map((entry) => ({ source: entry.source, issueId: entry.issueId })),
+      // Pre-FW-2 receipts carried issue mappings only; a receipt recorded by
+      // the current apply stores history/excluded mappings beside them.
+      historyRows: storedMapping
+        .filter(
+          (entry): entry is typeof entry & { classification: "history" | "excluded"; rationale: string; legacyJson: string } =>
+            entry.issueId === "" && (entry.classification === "history" || entry.classification === "excluded"),
+        )
+        .map((entry) => ({
+          source: entry.source,
+          classification: entry.classification,
+          rationale: entry.rationale ?? "",
+          legacyJson: entry.legacyJson ?? "",
+        })),
+      counts: { ...counts, history: counts.history ?? 0, excluded: counts.excluded ?? 0, created: 0, updated: 0 },
       storeRevision: counts.storeRevision,
       appliedAt: row.applied_at,
     };

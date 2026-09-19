@@ -133,6 +133,44 @@ describe("store-migrate preview", () => {
     expect(manifest.retirement.registers).toHaveLength(4);
   });
 
+  test("a row missing only tracking/target classifies as reviewed history with rationale; other missing evidence still blocks (FW-2)", async () => {
+    const { context, harness } = freshWorkspace("history-only-");
+    writeRegister(harness, "_default", {
+      entries: {
+        "plan-alpha": [
+          entry({ id: "H1", tracking: undefined }),
+          entry({ id: "H2", target: undefined, lifecycle: "wont-fix", decision: "risk-accepted" }),
+        ],
+        // Absence of any OTHER required field remains an unresolved row.
+        "plan-beta": [entry({ id: "H3", owner: undefined })],
+      },
+    });
+
+    const manifest = await planStoreMigration(context);
+
+    // The history-only rows are MAPPINGS with a reviewed rationale — not
+    // unresolved, not dropped (plan QC fix wave FW-2 makes the reviewed
+    // 2026-09-19 history-only disposition representable, §3).
+    const history = manifest.mappings.filter((mapping) => mapping.classification === "history");
+    expect(history.map((mapping) => mapping.source.entryId).sort()).toEqual(["H1", "H2"]);
+    expect(history.every((mapping) => mapping.proposedIssueId === "")).toBe(true);
+    expect(history.every((mapping) => mapping.rationale !== null && mapping.rationale.includes("history only"))).toBe(true);
+    expect(history.every((mapping) => typeof JSON.parse(mapping.legacyJson).title === "string")).toBe(true);
+
+    // The vocabulary mapping is retained verbatim on the history row:
+    // `wont-fix` stays mapped to `waived`, never relabelled `resolved`.
+    const wontFix = history.find((mapping) => mapping.source.entryId === "H2")!;
+    expect(wontFix.disposition).toBe("waived");
+    expect(wontFix.legacy.lifecycle).toBe("wont-fix");
+    expect(wontFix.legacy.decision).toBe("risk-accepted");
+
+    // Missing evidence outside the history-only fields still blocks apply.
+    expect(manifest.unresolved).toHaveLength(1);
+    expect(manifest.unresolved[0]!.code).toBe("missing-field");
+    expect(manifest.unresolved[0]!.detail).toContain("owner");
+    expect(manifest.blocksApply).toBe(true);
+  });
+
   test("preview refuses a duplicate entry id within one bucket", async () => {
     const { context, harness } = freshWorkspace("duplicate-");
     writeRegister(harness, "engine", {
@@ -634,8 +672,11 @@ describe("store-migrate apply", () => {
     const first = await applyStoreMigration(context, manifest);
     expect(first.counts.issues).toBe(3);
 
-    // A re-reviewed manifest that drops a previously imported row (a reviewed
-    // history-only decision) refuses rather than deleting the row silently.
+    // A re-reviewed manifest that drops a previously imported row refuses
+    // rather than deleting the row silently. Dropping a mapping is NOT the
+    // representation of a history-only decision (plan QC fix wave FW-2): a
+    // history-only row is a MAPPING with classification `history` and a
+    // reviewed rationale, persisted on the receipt without an issue.
     const reduced = { ...manifest, mappings: manifest.mappings.slice(1) };
     try {
       await applyStoreMigration(context, reduced);
@@ -644,6 +685,110 @@ describe("store-migrate apply", () => {
       expect(error).toBeInstanceOf(MigrationError);
       expect((error as MigrationError).code).toBe("store.migration-row-removed");
       expect((error as MigrationError).message).toContain("explicit reviewed disposition");
+    }
+  });
+
+  test("history rows persist on the receipt without allocating issues; replay and history→issue re-review stay stable (FW-2)", async () => {
+    const fixture = freshWorkspace("history-apply-");
+    writeRegister(fixture.harness, "_default", {
+      entries: {
+        "plan-alpha": [
+          entry({ id: "R1", severity: "critical", decision: "defer" }),
+          entry({ id: "H1", tracking: undefined, lifecycle: "wont-fix", decision: "risk-accepted" }),
+        ],
+      },
+    });
+
+    const manifest = await planStoreMigration(fixture.context);
+    expect(manifest.blocksApply).toBe(false);
+    const first = await applyStoreMigration(fixture.context, manifest);
+    expect(first.counts.issues).toBe(1);
+    expect(first.counts.history).toBe(1);
+    expect(first.counts.excluded).toBe(0);
+    expect(first.issueIds).toHaveLength(1);
+    expect(first.historyRows).toHaveLength(1);
+    expect(first.historyRows[0]!.classification).toBe("history");
+    expect(first.historyRows[0]!.rationale).toContain("history only");
+    // The verbatim record travels on the receipt; no issue, occurrence or
+    // provenance row exists for the history entry.
+    expect(JSON.parse(first.historyRows[0]!.legacyJson).id).toBe("H1");
+    const handle = await openStore(fixture.context, "write");
+    try {
+      expect(sqlAll(handle, "select id from issues where project_id = '_default'").map((row) => row.id)).toHaveLength(1);
+    } finally {
+      handle.close();
+    }
+
+    // Identical manifest replay returns the recorded receipt verbatim.
+    const replay = await applyStoreMigration(fixture.context, manifest);
+    expect(replay.replayed).toBe(true);
+    expect(replay.issueIds).toEqual(first.issueIds);
+    expect(replay.historyRows).toEqual(first.historyRows);
+
+    // A re-review that classifies the history row as an issue allocates a
+    // fresh id; the original tuple's id is preserved through reconciliation.
+    writeRegister(fixture.harness, "_default", {
+      entries: {
+        "plan-alpha": [entry({ id: "R1", severity: "critical", decision: "defer" }), entry({ id: "H1" })],
+      },
+    });
+    const revised = await planStoreMigration(fixture.context);
+    const second = await applyStoreMigration(fixture.context, revised);
+    expect(second.counts.issues).toBe(2);
+    expect(second.counts.history).toBe(0);
+    expect(second.historyRows).toHaveLength(0);
+    expect(second.issueIds.find((row) => row.source.entryId === "R1")!.issueId).toBe(first.issueIds[0]!.issueId);
+    expect(second.issueIds.find((row) => row.source.entryId === "H1")).toBeDefined();
+  });
+
+  test("re-classifying an imported issue as history refuses instead of demoting it (FW-2)", async () => {
+    const fixture = freshWorkspace("history-demote-");
+    writeRegister(fixture.harness, "_default", {
+      entries: {
+        "plan-alpha": [entry({ id: "R1", severity: "critical", decision: "defer" })],
+      },
+    });
+    const manifest = await planStoreMigration(fixture.context);
+    const first = await applyStoreMigration(fixture.context, manifest);
+    expect(first.counts.issues).toBe(1);
+
+    // The re-reviewed manifest classifies the IMPORTED issue's row as
+    // history-only (its `tracking` evidence is dropped). An imported issue is
+    // migration-owned data — a re-review never deletes it by relabelling.
+    writeRegister(fixture.harness, "_default", {
+      entries: {
+        "plan-alpha": [entry({ id: "R1", severity: "critical", decision: "defer", tracking: undefined })],
+      },
+    });
+    const revised = await planStoreMigration(fixture.context);
+    expect(revised.mappings[0]!.classification).toBe("history");
+    try {
+      await applyStoreMigration(fixture.context, revised);
+      throw new Error("expected the issue→history reclassification to refuse");
+    } catch (error) {
+      expect(error).toBeInstanceOf(MigrationError);
+      expect((error as MigrationError).code).toBe("store.migration-manifest-invalid");
+      expect((error as MigrationError).message).toContain("never demoted");
+    }
+  });
+
+  test("a history mapping without a reviewed rationale refuses apply (FW-2)", async () => {
+    const fixture = freshWorkspace("history-rationale-");
+    writeRegister(fixture.harness, "_default", {
+      entries: { "plan-alpha": [entry({ id: "H1", tracking: undefined })] },
+    });
+    const manifest = await planStoreMigration(fixture.context);
+    const unrationalized = {
+      ...manifest,
+      mappings: manifest.mappings.map((mapping) => ({ ...mapping, rationale: null })),
+    };
+    try {
+      await applyStoreMigration(fixture.context, unrationalized);
+      throw new Error("expected the rationale-less history mapping to refuse");
+    } catch (error) {
+      expect(error).toBeInstanceOf(MigrationError);
+      expect((error as MigrationError).code).toBe("store.migration-manifest-invalid");
+      expect((error as MigrationError).message).toContain("reviewed rationale");
     }
   });
 

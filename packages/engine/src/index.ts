@@ -737,6 +737,7 @@ export { StoreReadError, queryDashboard, queryIssueFlow, withStoreRead } from ".
 // surface for the CLI transport.
 export type {
   MigrationEntryMapping,
+  MigrationHistoryRow,
   MigrationIdMapping,
   MigrationManifest,
   MigrationReceipt,

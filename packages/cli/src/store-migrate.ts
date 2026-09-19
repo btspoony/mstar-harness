@@ -218,6 +218,7 @@ async function runMigrate(options: StoreCliOptions, json: boolean): Promise<void
     replayed: receipt.replayed,
     counts: receipt.counts,
     issueIds: receipt.issueIds,
+    historyRows: receipt.historyRows,
     storeRevision: receipt.storeRevision,
     appliedAt: receipt.appliedAt,
   };
@@ -226,6 +227,12 @@ async function runMigrate(options: StoreCliOptions, json: boolean): Promise<void
     console.log(`store migrate apply: ${receipt.replayed ? "REPLAY (no writes)" : "applied"} receipt #${receipt.receiptId} ` + `(${receipt.counts.issues} issue(s): ${receipt.counts.open} open / ${receipt.counts.closed} closed, catalog ${receipt.counts.catalogEntities})`);
     for (const entry of receipt.issueIds) {
       console.log(`  ${entry.issueId} <- ${entry.source.project}/${entry.source.bucket}/${entry.source.entryId}`);
+    }
+    if (receipt.historyRows.length > 0) {
+      console.log(`  + ${receipt.historyRows.length} history/excluded row(s) carried on the receipt without an issue (reviewed rationale on each)`);
+      for (const row of receipt.historyRows) {
+        console.log(`  ~ ${row.classification} ${row.source.project}/${row.source.bucket}/${row.source.entryId}: ${row.rationale}`);
+      }
     }
   }
 }
