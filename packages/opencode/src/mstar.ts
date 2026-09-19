@@ -681,7 +681,9 @@ function aliasedRegisterDir(resolved: string, landed: string): string | null {
 function authorityRefusal(code: string, message: string, log: StatusLogger): GateResult {
   log(
     "error",
-    `${code}: ${message} — refused unconditionally (authority invariant, not the document-validity enforcement axis); refusal requires a host refusal channel (skill: mstar-artifacts/references/status-and-residuals.md)`,
+    `${code}: ${message} — blocked by decision only: this host's \`tool.execute.before\` has no refusal ` +
+      "channel, so the write is NOT stopped — authority protection is warn-only here (skill: " +
+      "mstar-artifacts/references/status-and-residuals.md)",
   );
   return { ok: false, violations: [{ ok: false, severity: "high", code, message }], hardBlocked: true };
 }
