@@ -510,6 +510,12 @@ function harnessDocKindOfTarget(targetPath: string): { harnessDir: string; kind:
 const STORE_DB_FILE = "store.db";
 const STORE_AUTHORITY_FILES: readonly string[] = [STORE_DB_FILE, `${STORE_DB_FILE}-wal`, `${STORE_DB_FILE}-shm`];
 
+/** Case-folded authority-name matching (qc2-F-004, dsh/omp/ZCode parity): the
+ * match never hinges on byte case. This host cannot enforce (the decision is
+ * the error-log / `hardBlocked` audit trail only), so a case-variant alias
+ * (`Store.db`) must not skip even that. */
+const STORE_AUTHORITY_NAMES: readonly string[] = STORE_AUTHORITY_FILES.map((file) => file.toLowerCase());
+
 /** Refusal codes, in the frozen store / `project.register.*` vocabulary. */
 const STORE_DIRECT_WRITE_CODE = "store.direct-write-refused";
 const STORE_AUTHORITY_UNAVAILABLE_CODE = "store.authority-unavailable";
@@ -658,10 +664,53 @@ function landedPathOf(resolved: string): string {
  * sitting directly at a harness root: the runtime's own store location for a
  * harness root is `<harness root>/store.db`, and hand-writing those bytes is
  * never a supported operation — hard vs soft, staged vs active, alias or not,
- * all the same. */
+ * all the same. The name match is case-insensitive (qc2-F-004, dsh/omp/ZCode
+ * parity): on a case-insensitive volume (Darwin/APFS) a case-variant basename
+ * (`Store.db`) lands on the same authority bytes, so the warn-only audit
+ * trail must not hinge on byte case either. */
 function isStoreAuthorityTarget(target: string): boolean {
-  if (!STORE_AUTHORITY_FILES.includes(path.basename(target))) return false;
+  if (!STORE_AUTHORITY_NAMES.includes(path.basename(target).toLowerCase())) return false;
   return isHarnessRootDir(path.dirname(target));
+}
+
+/** The register file's basename, matched case-insensitively (qc2-F-004). */
+const REGISTER_BASENAME = /residuals\.json/i;
+/** The canonical register shape under the resolved project dir — one project
+ * component + the register file — with the file name folded (qc2-F-004). */
+const REGISTER_SHAPE = /^[^/]+\/residuals\.json$/i;
+
+/** The harness root of a register target the exact-case classifiers MISS
+ * because its basename is a case variant (`RESIDUALS.json`, qc2-F-004): the
+ * canonical register shape (one project component + the register file under
+ * the resolved project dir) is matched case-insensitively from the nearest
+ * harness root up the tree — the same walk the engine's marker probe runs for
+ * exact-case names, so a case-variant register is authority-classified like
+ * the file itself and keeps its document validator on the pre-activation
+ * fall-through (dsh/omp/ZCode parity). `null` when the basename is not a
+ * register name or no ancestor root holds the shape. */
+function caseFoldedRegisterRoot(candidate: string): string | null {
+  const target = path.resolve(candidate);
+  if (!REGISTER_BASENAME.test(path.basename(target))) return null;
+  let dir = path.dirname(target);
+  for (;;) {
+    if (isHarnessRootDir(dir)) {
+      let projectDir: string;
+      const resolvers = classifyDirResolvers;
+      if (resolvers !== null) {
+        try {
+          projectDir = resolvers.resolveProjectDir(dir, { harnessDir: dir });
+        } catch {
+          projectDir = path.join(dir, "projects");
+        }
+      } else {
+        projectDir = path.join(dir, "projects");
+      }
+      if (REGISTER_SHAPE.test(path.relative(projectDir, target))) return dir;
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
 }
 
 /** The harness root of a project register this write reaches ONLY through a
@@ -801,7 +850,17 @@ export async function validateStatusWrite(
  // than by its document shape (both refuse unconditionally).
     if (storeTarget !== null) return storeDirectWriteRefusal(storeTarget, log);
     const classified = harnessDocKindOfTarget(resolved);
-    const registerDir = classified?.kind === "register" ? classified.harnessDir : aliasedRegisterDir(resolved, landed);
+    // A project register is an authority document too — reached through an
+    // alias it takes the same route (status/snapshot aliases are untouched).
+    // A case-variant register basename (qc2-F-004) bypasses both exact-case
+    // classifications and is classified by the folded shape walk instead, so
+    // the warn-only audit trail fires for it too (dsh/omp/ZCode parity).
+    const registerDir =
+      classified?.kind === "register"
+        ? classified.harnessDir
+        : (aliasedRegisterDir(resolved, landed) ??
+          caseFoldedRegisterRoot(resolved) ??
+          (landed !== resolved ? caseFoldedRegisterRoot(landed) : null));
     const target = classified ?? (registerDir === null ? null : { harnessDir: registerDir, kind: "register" as const });
     if (!target) return null;
 

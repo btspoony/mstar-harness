@@ -179,6 +179,61 @@ describe("opencode authority boundary — store/retired-register direct writes (
     expect(await validateStatusWrite(join(fixture.project, "store.db"), { doc: "x" })).toBeNull();
   });
 
+  test("a CASE-VARIANT authority basename (Store.db) is decided like the file itself (qc2-F-004)", async () => {
+    const fixture = makeHarnessProject();
+    await seedActiveStore(fixture.harness);
+    const { entries, log } = capture();
+
+    // On a case-insensitive volume (Darwin/APFS) this write lands on the
+    // authority database itself; the folded basename match decides it on a
+    // case-sensitive volume too (the authority name is volume-invariant).
+    // This host is warn-only — the decision IS the error-log/hardBlocked
+    // audit trail, and a case-variant alias must not skip even that.
+    const result = await validateStatusWrite(join(fixture.harness, "Store.db"), { doc: "not a database", log });
+    expect(result?.ok).toBe(false);
+    expect(result?.hardBlocked).toBe(true);
+    expect(result?.violations[0]!.code).toBe("store.direct-write-refused");
+    expect(
+      entries.some(([level, message]) => level === "error" && message.includes("store.direct-write-refused")),
+    ).toBe(true);
+  });
+
+  test("a CASE-VARIANT register (RESIDUALS.json) takes the authority route (qc2-F-004)", async () => {
+    const fixture = makeHarnessProject();
+    await seedActiveStore(fixture.harness);
+    const { entries, log } = capture();
+
+    const result = await validateStatusWrite(join(fixture.harness, "projects", "_default", "RESIDUALS.json"), {
+      doc: validRegister,
+      log,
+    });
+    expect(result?.hardBlocked).toBe(true);
+    expect(result?.violations[0]!.code).toBe("project.register.retired");
+    expect(entries.some(([level]) => level === "error")).toBe(true);
+  });
+
+  test("a CASE-VARIANT register on the pre-activation fall-through keeps its document validator (qc2-F-004)", async () => {
+    for (const state of ["missing", "staged"] as const) {
+      const fixture = makeHarnessProject();
+      if (state === "staged") await seedStagedStore(fixture.harness);
+      const { entries, log } = capture();
+      const caseVariant = join(fixture.harness, "projects", "_default", "RESIDUALS.json");
+
+      // The folded shape walk classifies the case-variant basename as a
+      // register document (dsh/omp/ZCode parity): the register shape
+      // validator decides — not the authority route, not silence.
+      const invalid = await validateStatusWrite(caseVariant, { doc: invalidRegister, log });
+      expect(invalid?.ok).toBe(false);
+      expect(invalid?.hardBlocked).toBe(false); // soft-mode register lint — warn only
+      expect(invalid?.violations.some((violation) => violation.code.startsWith("project.register."))).toBe(true);
+      expect(entries.every(([level]) => level === "warn")).toBe(true);
+
+      const valid = await validateStatusWrite(caseVariant, { doc: validRegister, log });
+      expect(valid?.ok).toBe(true);
+      expect(valid?.hardBlocked).toBe(false);
+    }
+  });
+
   test("a below-floor ACTUAL runtime refuses with that runtime's own floor", async () => {
     const fixture = makeHarnessProject();
     const { log } = capture();
