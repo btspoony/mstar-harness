@@ -519,6 +519,14 @@ export type {
 export type { StoreContext, StoreErrorCode, StoreHandle, StoreRuntimeInfo, StoreDb } from "./store-db.js";
 // Issue-store boundary: lazily acquires
 // `node:sqlite` — importing this index never loads the driver or opens a DB.
+//
+// `assertExecutionFileReadAllowed` is the §4.3 paired READ guard, exported
+// ADDITIVELY (its write sibling stays module-scoped): a consumer whose source
+// read is synchronous (a gate that cannot become async) must be able to refuse
+// in place — the primary spec §4.3 contract "legacy root/snapshot authority
+// readers must call it; no overlooked source reader may return stale leftover
+// JSON as authoritative success". Re-exporting the ONE implementation is what
+// keeps a caller from writing a second, drifting authority probe.
 export {
   MIGRATION_2_SQL,
   MIGRATIONS,
@@ -526,6 +534,7 @@ export {
   MIN_NODE_VERSION,
   SCHEMA_VERSION_TABLE_SQL,
   StoreError,
+  assertExecutionFileReadAllowed,
   assertStoreRuntimeSupported,
   compareVersions,
   detectStoreRuntime,

@@ -21,6 +21,7 @@ import { type Context } from '@deepseek-ai/cordis'
 import {
   applyEnforcement,
   assignmentHeaderRegion,
+  assertExecutionFileReadAllowed,
   composeDispatchGate,
   executionModeToN,
   isReadOnlyAssignmentRole,
@@ -58,11 +59,16 @@ import type { SessionHint } from './workflow-selection.ts'
 // §5 (plan S4): while the harness's execution authority is ACTIVE the root
 // register is retired, so the selection consumers ask the ONE route first
 // (`readExecutionWorkflowSource`) and read the DB registry instead of the
-// retired `status.json`.
+// retired `status.json`. The gate reads that are SYNCHRONOUS (the lease
+// re-verify and the worktree L1 read below) cannot await that route: they call
+// the engine's synchronous `assertExecutionFileReadAllowed` at the read seam
+// instead (R-1), so an ACTIVE — or unreadable — authority REFUSES rather than
+// letting a verdict derive from retired bytes.
 import {
   activeRowsOf,
   catalogRegistrationRefusal,
   readExecutionWorkflowSource,
+  refusalOf,
   resolveActiveWorkflow,
 } from './workflow-selection.ts'
 import type { ExecutionWorkflowSourceRead } from './workflow-selection.ts'
@@ -183,6 +189,39 @@ function denyReason(tool: string, verdict: GateResult): string {
  */
 function leaseViolation(code: string, message: string, fix?: string): ValidationResult {
   return { ok: false, severity: 'high', code, message, fix }
+}
+
+/**
+ * The authority readiness of the gate's SYNCHRONOUS file reads (finding R-1).
+ *
+ * The dispatch gate re-verifies a plan's `execution_lease` and the L1 topology
+ * from the root register + the ACTIVE workflow snapshot through the LEGACY file
+ * route. While the control harness's execution authority is ACTIVE those
+ * documents are retired as a source, so a raw read here would verify a lease
+ * against bytes the authority no longer owns — and an authority that cannot be
+ * read must never fall back to them (§5). The engine's own synchronous guard
+ * (primary spec §4.3: "legacy root/snapshot authority readers must call it") is
+ * the ONE implementation of that rule; it is called BEFORE the read, never
+ * re-implemented here, and its stable refusal code travels into the violation.
+ *
+ * A harness with no store file at all is not a refusal: absence is not an
+ * authority verdict (§2.1), so the pre-activation file route is unchanged.
+ * @param harnessDir - the resolved `{HARNESS_DIR}` (never null here: the
+ *   callers return before this on a null dir).
+ * @returns the refusal violation, or `null` when the file route may be read.
+ */
+function executionReadRefusal(harnessDir: string): ValidationResult | null {
+  try {
+    assertExecutionFileReadAllowed({ harnessDir })
+    return null
+  } catch (error) {
+    const refusal = refusalOf(error)
+    return leaseViolation(
+      refusal.code,
+      `${refusal.message} — the dispatch gate refuses instead of deriving a lease verdict from the retired files`,
+      'run this dispatch against the execution DB route (or restore the authority): a retired root register / workflow snapshot cannot confirm an execution_lease',
+    )
+  }
 }
 
 /**
@@ -361,6 +400,12 @@ export function leaseGateViolations(
   const sdd = executionModeToN(mode ?? '').n === 3
   const planId = planIdOf(header)
   if (planId === undefined || planId === '') return []
+  // R-1: everything below reads the LEGACY file route (the root register, then
+  // this plan's snapshot row). While the execution authority is ACTIVE — or
+  // exists and cannot be read — the gate has no file verdict to give: it
+  // refuses instead of verifying the lease against retired bytes.
+  const refusal = executionReadRefusal(harnessDir)
+  if (refusal !== null) return [refusal]
   // v3 lease home: the plan row + its execution_lease live on the ACTIVE
   // workflow snapshot (`workflows/<id>/snapshot.json`). The root v2
   // `status.json` still gates the read: it holds the active `workflows[]`
@@ -572,6 +617,16 @@ interface ActiveSnapshotRead {
 }
 
 function activeSnapshotRows(harnessDir: string, hint?: SessionHint): ActiveSnapshotRead {
+  // R-1: the root register read below is the LEGACY file route. While the
+  // execution authority is ACTIVE (or exists and cannot be read) the engine
+  // guard refuses it, so the lifecycle is UNATTRIBUTABLE here and the retired
+  // bytes are never read. This reader degrades by FLAG (the lease gate owns the
+  // loud refusal on the same verdict; P-b keeps its one-warn fail-open) — the
+  // point of the guard is that no row of a retired snapshot is ever presented
+  // as the gate's evidence.
+  if (executionReadRefusal(harnessDir) !== null) {
+    return { rows: null, snapshot: null, workflowId: null, unreadable: true }
+  }
   if (!existsSync(join(harnessDir, STATUS_FILE))) return { rows: null, snapshot: null, workflowId: null, unreadable: false }
   const selection = resolveActiveWorkflow(harnessDir, hint)
   if (selection.kind !== 'active') {

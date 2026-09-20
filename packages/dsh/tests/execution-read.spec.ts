@@ -153,6 +153,39 @@ async function corruptStore(harnessDir: string): Promise<void> {
   await mkdir(join(harnessDir, 'store.db'), { recursive: true })
 }
 
+/**
+ * The retired register a lease gate is FORBIDDEN to verify against: the same
+ * root `status.json` + snapshot layout as {@link seedRetiredRegister}, but the
+ * plan row carries a VALID engine-shaped `execution_lease` naming a worktree
+ * and branch the Assignment does not — so any verdict derived from these bytes
+ * is unmistakable (a worktree/branch mismatch, never the authority's refusal).
+ */
+async function seedRetiredLease(
+  harnessDir: string,
+  workflowId: string,
+  planId: string,
+  leaseWorktree: string,
+): Promise<void> {
+  await mkdir(join(harnessDir, 'projects'), { recursive: true })
+  await seedHarness(harnessDir, {
+    'status.json': v2Root([v2WorkflowEntry(workflowId)]),
+    [`workflows/${workflowId}/snapshot.json`]: v2SnapshotWithPlans(workflowId, [
+      {
+        id: planId,
+        title: `${planId} title`,
+        file: `plans/${planId}.md`,
+        status: 'InProgress',
+        execution_lease: {
+          holder: 'dsh-retired-holder',
+          claimed_at: '2026-09-21T00:00:00Z',
+          worktree_path: leaseWorktree,
+          working_branch: 'feature/retired-lease',
+        },
+      },
+    ]),
+  })
+}
+
 let execSeq = 0
 function toolExec(name: string, args: unknown): ToolExecution {
   return {
@@ -170,6 +203,24 @@ function dispatchExec(): ToolExecution {
     description: 'writable implement round',
     prompt: ['## Assignment', '**Execute as**: fullstack-dev', '**Task category**: logic', '**Execution mode**: sdd', '', 'Implement the thing.'].join('\n'),
   })
+}
+
+/** The writable SDD Assignment text that makes the gate target the lifecycle the
+ * RETIRED register names: `Plan Path` resolves the plan id (what turns the lease
+ * gate on) and `Execution mode: sdd` makes it the write-path re-verify. */
+function retiredPlanAssignment(planId: string, worktreePath: string): string {
+  return [
+    '## Assignment',
+    '**Execute as**: fullstack-dev',
+    '**Task category**: logic',
+    '**Execution mode**: sdd',
+    `**Plan Path**: plans/${planId}.md`,
+    `**Worktree path**: ${worktreePath}`,
+    '**Working branch**: feature/assignment-branch',
+    '**Enforcement**: hard',
+    '',
+    'Implement the thing.',
+  ].join('\n')
 }
 
 describe('execution-dsh-read — the DSh source reads the authority, never the retired files (plan S4)', () => {
@@ -254,6 +305,14 @@ describe('execution-dsh-read — the DSh source reads the authority, never the r
     await seedRetiredRegister(harnessDir, 'wf-file', 'plan-file')
 
     expect(await readExecutionWorkflowSource({ harnessDir })).toEqual({ kind: 'files' })
+
+    // …and the SYNC dispatch gate still reads those documents: with no store at
+    // all there is no authority verdict to make (§2.1), so the lease gate keeps
+    // its legacy file verdict — the `InProgress` row without a lease is an
+    // orphan. The authority guard is keyed on the authority, not on the gate.
+    const prompt = retiredPlanAssignment('plan-file', await tempDir('execution-files-worktree'))
+    const verdict = booted!.ctx.dshHostAdapter.dispatchGate(prompt, toolExec('subagent', { prompt }), true, { kind: 'ok' })
+    expect(verdict.violations.map((violation) => violation.code)).toContain('lease.verify.orphan')
   })
 
   it('refuses a retired coordination-document write by its canonical and symlinked paths', async () => {
@@ -349,6 +408,43 @@ describe('execution-dsh-read — the DSh source reads the authority, never the r
     expect(refused.kind).toBe('deny')
     expect(refused.kind === 'deny' ? refused.reason : '').toContain('store.corrupt')
     expect(reached).toBe(1)
+  })
+
+  it('refuses the SYNC dispatch gate on an ACTIVE authority instead of verifying a lease against the retired snapshot', async () => {
+    const { app, harnessDir } = await appWithRoot('execution-sync-gate')
+    const retiredWorktree = await tempDir('execution-retired-worktree')
+    await seedExecutionAuthority(harnessDir, [{ id: 'wf-db', planId: 'plan-db' }])
+    await seedRetiredLease(harnessDir, 'wf-file-stale', 'plan-file', retiredWorktree)
+
+    const prompt = retiredPlanAssignment('plan-file', await tempDir('execution-assignment-worktree'))
+    const exec = toolExec('subagent', { description: 'writable implement round', prompt })
+
+    // The SYNC gate path (`adapter.dispatchGate` → `dispatchGateCore` /
+    // `leaseGateViolations`): the authority is consulted BEFORE the retired root
+    // register / snapshot, so a lease is never verified against bytes the
+    // authority does not own — the gate REFUSES with the engine's own
+    // readiness code.
+    const verdict = app.ctx.dshHostAdapter.dispatchGate(prompt, exec, true, { kind: 'ok' })
+    const codes = verdict.violations.map((violation) => violation.code)
+    expect(verdict.ok).toBe(false)
+    expect(codes).toContain('execution.consumer-not-ready')
+    // No verdict derived from the retired bytes: the retired plan's VALID lease
+    // (a different worktree and branch) produced no lease verdict at all.
+    expect(codes.filter((code) => code.startsWith('lease.'))).toEqual([])
+
+    // …and the refusal is the listener's real decision under hard enforcement —
+    // a dispatch that would have been judged by the retired snapshot's lease.
+    const decision = await app.ctx.waterfall('tools/pre-execute', exec, async () => ({ kind: 'allow' as const }))
+    expect(decision.kind).toBe('deny')
+    const reason = decision.kind === 'deny' ? decision.reason : ''
+    expect(reason).toContain('execution.consumer-not-ready')
+    expect(reason).not.toContain('lease.dispatch.')
+
+    // §5 fail-closed: an authority that exists and cannot be read refuses too —
+    // never a fallback to the retired bytes.
+    await corruptStore(harnessDir)
+    const unreadable = app.ctx.dshHostAdapter.dispatchGate(prompt, exec, true, { kind: 'ok' })
+    expect(unreadable.violations.map((violation) => violation.code)).toContain('store.corrupt')
   })
 
   it('supports the pre-activation file route unchanged (no store, register write keeps its validator)', async () => {

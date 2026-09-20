@@ -525,9 +525,16 @@ export type ExecutionWorkflowSourceRead =
   | { readonly kind: 'error'; readonly selection: ActiveWorkflowSelection }
   | { readonly kind: 'unavailable'; readonly code: string; readonly message: string }
 
-/** Stable code + message of a thrown store refusal (engine `StoreError` /
- * `StoreReadError` carry `code`; anything else is reported as itself). */
-function refusalOf(error: unknown): { code: string; message: string } {
+/**
+ * Stable code + message of a thrown store refusal (engine `StoreError` /
+ * `StoreReadError` carry `code`; anything else is reported as itself).
+ *
+ * Exported for the sibling gate module: a caller that must convert a store
+ * refusal into a GATE VIOLATION (the sync dispatch gate's authority check,
+ * which cannot await the route read) reports the same stable code — one
+ * extraction rule for the whole plugin, never a second sniffing copy.
+ */
+export function refusalOf(error: unknown): { code: string; message: string } {
   const message = error instanceof Error ? error.message : String(error)
   const code =
     typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string'
