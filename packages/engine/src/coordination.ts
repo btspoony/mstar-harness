@@ -1927,12 +1927,14 @@ const FROZEN_ROW_FIELDS: readonly string[] = ["id", "plan_id", "title", "file"];
 const FROZEN_METADATA_FIELDS: readonly string[] = ["primary_spec", "spec_refs", "iteration_compass", "iteration_refs"];
 
 /**
- * The document half of `catalog_pin`: sha256 over the frozen execution-input
- * selection only. `status`, `progress`, task/QC/QA fields, leases and track
- * branches are execution authority (contract §1) and are deliberately not
- * hashed, so reporting progress never invalidates a pin.
+ * The frozen execution-input selection one plan row carries (contract §1):
+ * `plan_id` plus the row's id/title/file and its metadata catalog references,
+ * and nothing else. This is the single definition of the selection: the DB
+ * authority of the execution store seals exactly this object as a plan's
+ * `execution_inputs.input_json`, so the stored selection and the hash below can
+ * never describe different bytes.
  */
-export function executionInputHash(row: unknown, planId: string): string {
+export function executionInputSelection(row: unknown, planId: string): Record<string, unknown> {
   const selection: Record<string, unknown> = { plan_id: planId };
   if (isPlainObject(row)) {
     const metadata = isPlainObject(row.metadata) ? row.metadata : {};
@@ -1943,7 +1945,17 @@ export function executionInputHash(row: unknown, planId: string): string {
       if (metadata[key] !== undefined) selection[key] = metadata[key];
     }
   }
-  return createHash("sha256").update(stableJson(selection), "utf8").digest("hex");
+  return selection;
+}
+
+/**
+ * The document half of `catalog_pin`: sha256 over the frozen execution-input
+ * selection only. `status`, `progress`, task/QC/QA fields, leases and track
+ * branches are execution authority (contract §1) and are deliberately not
+ * hashed, so reporting progress never invalidates a pin.
+ */
+export function executionInputHash(row: unknown, planId: string): string {
+  return createHash("sha256").update(stableJson(executionInputSelection(row, planId)), "utf8").digest("hex");
 }
 
 /** Parse (and shape-check) the pin recorded on a plan row, or `null`. */

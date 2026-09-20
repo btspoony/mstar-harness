@@ -1,14 +1,19 @@
 /**
  * execution-store.ts — the execution authority's canonical value form, version
- * token grammar, one-transaction ownership boundary and its read/initialize
- * verbs (primary spec §3, §3.1, §4.1; authority states §2.1).
+ * token grammar, one-transaction ownership boundary, its read/initialize verbs
+ * and the workflow-creation verb (primary spec §3, §3.1, §4.1; authority
+ * states §2.1).
  *
- * Task ownership: C1 owns the migration-4 schema in `store-db.ts`; THIS module
- * (C2) owns the canonicalizer, the `exec-v1` token grammar, the internal
- * transaction primitive and the real create-only empty-execution initializer.
- * C3/C4 own the workflow/session domain operations and compose with the token
- * and transaction primitives exposed here — no coordination, registration or
- * session-binding verb is defined or stubbed in this module.
+ * Task ownership: C1 owns the migration-4 schema in `store-db.ts`; C2 owns the
+ * canonicalizer, the `exec-v1` token grammar, the internal transaction
+ * primitive and the real create-only empty-execution initializer. THIS module's
+ * C3 surface is `createExecutionWorkflow`: it writes the registry/workflow/
+ * plan/sealed-input records of ONE new, unbound, unleased lifecycle against an
+ * exact root CAS token, and it seals each plan's frozen execution input with the
+ * unchanged `executionInputHash` selection (`coordination.ts`). C4 owns
+ * session binding and plan reads and composes with these identities; no
+ * session-bind, plan-read or coordination-mutation verb is defined or stubbed
+ * in this module.
  *
  * Token/key machinery (`executionToken`, `parseExecutionToken`,
  * `assertExecutionToken`) and the transaction primitive are module-level
@@ -27,10 +32,22 @@
  * `revision` (projected back from the row column, §2.2).
  */
 import { AsyncLocalStorage } from "node:async_hooks";
+import { createHash } from "node:crypto";
 import { existsSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { CatalogExecutionPin } from "./coordination.js";
-import { isNonEmptyString, isPlainObject, validateRowCoordination, type RowCoordination } from "./coordination-write.js";
+import {
+  ExecutionPinConflictError,
+  executionInputHash,
+  executionInputSelection,
+  type CatalogExecutionPin,
+} from "./coordination.js";
+import {
+  CoordinationError,
+  isNonEmptyString,
+  isPlainObject,
+  validateRowCoordination,
+  type RowCoordination,
+} from "./coordination-write.js";
 import {
   validateExecutionLease,
   validateIntegrationMergeLease,
@@ -39,7 +56,14 @@ import {
   type IntegrationMergeLease,
 } from "./lease.js";
 import { resolveWorkflowDir } from "./path.js";
-import { validatePlanRow, validateWorkflowEntry, type PlanRow, type StatusV2Doc, type WorkflowEntry } from "./status.js";
+import {
+  rowPlanId,
+  validatePlanRow,
+  validateWorkflowEntry,
+  type PlanRow,
+  type StatusV2Doc,
+  type WorkflowEntry,
+} from "./status.js";
 import {
   openStore,
   StoreError,
@@ -48,7 +72,7 @@ import {
   type StoreContext,
   type StoreDb,
 } from "./store-db.js";
-import { validateWorkflowSnapshot, type WorkflowSnapshot } from "./workflow.js";
+import { isTerminalSnapshot, validateWorkflowSnapshot, type WorkflowSnapshot } from "./workflow.js";
 
 // ---------------------------------------------------------------------------
 // Refusals (§5)
@@ -69,6 +93,7 @@ export type ExecutionErrorCode =
   | "execution.scope-mismatch"
   | "execution.stale-token"
   | "execution.canonical-value"
+  | "execution.operation-conflict"
   | "store.not-active"
   | "store.stale-epoch";
 
@@ -125,6 +150,29 @@ export type ExecutionState = {
     integrationLease: IntegrationMergeLease | null;
   }>;
 };
+
+/**
+ * §3: the trusted caller a domain verb authorizes against. It comes only from
+ * the adapter's trusted host identity (or the engine-owned local CLI identity
+ * acquisition), NEVER from model request JSON — a caller-written role string
+ * authorizes nothing.
+ */
+export type ExecutionCaller = {
+  sessionId: string;
+  role: "coordinator" | "plan-pm";
+  workflowId: string;
+  planId: string | null;
+};
+
+/** §3: a domain call's context — the addressed store plus the trusted caller. */
+export type ExecutionContext = StoreContext & { caller: ExecutionCaller };
+
+/**
+ * §3: the committed result of a domain operation. `data`/`token` describe the
+ * state the operation produced (a replay returns the RECORDED receipt, not a
+ * re-read), and `replayed` distinguishes the idempotent retry from the commit.
+ */
+export type ExecutionReceipt<T> = ExecutionRead<T> & { operationId: string; replayed: boolean };
 
 // ---------------------------------------------------------------------------
 // Canonical value form (§3.1)
@@ -978,5 +1026,464 @@ export async function initializeExecutionAuthority(context: StoreContext): Promi
       assertNoLegacyExecutionSources(context);
     });
     return readExecutionState(context);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Domain creation: workflow identity, registry membership, sealed inputs (§3)
+// ---------------------------------------------------------------------------
+
+/** §3.1 operation ids: nonempty ASCII `[A-Za-z0-9._:-]+`, at most 128 characters. */
+const OPERATION_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
+
+/** §3.1: the operation kind the create request hash is namespaced by. */
+const CREATE_WORKFLOW_OPERATION = "createExecutionWorkflow";
+
+/** One plan row of a supplied snapshot, with the catalog selection it records. */
+type ResolvedCreationPlan = {
+  planId: string;
+  /** The frozen row as supplied — the input of `executionInputHash`. */
+  row: Record<string, unknown>;
+  /** The catalog selection the row records, or `null` when it selects none. */
+  pin: CatalogExecutionPin | null;
+};
+
+type ResolvedCreation = {
+  workflowId: string;
+  entry: WorkflowEntry;
+  snapshot: WorkflowSnapshot;
+  plans: ResolvedCreationPlan[];
+};
+
+/** The single carrier of all caller-input refusals (§5 retains `coordination.*`). */
+function invalidInput(detail: string): CoordinationError {
+  return new CoordinationError("coordination.invalid-input", detail);
+}
+
+/** The single carrier of the create-only refusals: a lifecycle that is not new. */
+function notNewLifecycle(detail: string): ExecutionError {
+  return new ExecutionError("execution.not-empty", detail);
+}
+
+/**
+ * The catalog selection one supplied plan row records (`metadata.catalog_pin`,
+ * the state-projection contract §1 pin), or `null` when the row selects none.
+ * An unbound plan is legitimate — no catalog store, or a plan the catalog does
+ * not select — and creation never invents a selection for it. A pin that is not
+ * the complete four-field identity is a frozen-input conflict, never a partial
+ * pin that would be sealed as if it were whole.
+ */
+function suppliedCatalogPin(row: Record<string, unknown>, workflowId: string, planId: string): CatalogExecutionPin | null {
+  const metadata = isPlainObject(row.metadata) ? row.metadata : null;
+  const raw = metadata === null ? undefined : metadata.catalog_pin;
+  if (raw === undefined || raw === null) return null;
+  const what = `plan ${planId}'s metadata.catalog_pin`;
+  const details = { workflow_id: workflowId, plan_id: planId };
+  if (!isPlainObject(raw) || Object.keys(raw).length !== 4) {
+    throw new ExecutionPinConflictError(
+      `${what} is not a complete catalog execution pin (store_id, entity_revision, document_hash, relation_hash); ` +
+        "a malformed selection is never sealed as authority",
+      details,
+    );
+  }
+  if (
+    !isNonEmptyString(raw.store_id) ||
+    !STORE_UUID_RE.test(raw.store_id) ||
+    typeof raw.entity_revision !== "number" ||
+    !Number.isSafeInteger(raw.entity_revision) ||
+    raw.entity_revision <= 0 ||
+    !isNonEmptyString(raw.document_hash) ||
+    !isNonEmptyString(raw.relation_hash)
+  ) {
+    throw new ExecutionPinConflictError(
+      `${what} is not a complete catalog execution pin (store_id, entity_revision, document_hash, relation_hash) ` +
+        `— got ${JSON.stringify(raw)}`,
+      details,
+    );
+  }
+  return {
+    store_id: raw.store_id,
+    entity_revision: raw.entity_revision,
+    document_hash: raw.document_hash,
+    relation_hash: raw.relation_hash,
+  };
+}
+
+/**
+ * §3 argument resolution for `createExecutionWorkflow`: caller scope, the
+ * operation id, the entry/snapshot pair and its identity anchors, and the
+ * snapshot's new/unbound/unleased/no-accepted-evidence requirement. Pure
+ * argument checks — no store is opened, and nothing here can read or write
+ * authority. A snapshot that carries coordinator binding, leases, delivery
+ * evidence or a terminal status is a historical lifecycle: it belongs on the
+ * migration route, never on the create-only path.
+ */
+function resolveCreateWorkflow(
+  caller: ExecutionCaller,
+  entry: unknown,
+  snapshot: unknown,
+  operationId: unknown,
+): ResolvedCreation {
+  if (!isNonEmptyString(caller?.sessionId)) {
+    throw invalidInput("the execution caller needs a non-empty session identity");
+  }
+  if (typeof operationId !== "string" || !OPERATION_ID_RE.test(operationId)) {
+    throw invalidInput(
+      `an operation id must be a nonempty ASCII [A-Za-z0-9._:-]+ string of at most 128 characters — got ${JSON.stringify(operationId)}`,
+    );
+  }
+  const entryGate = validateWorkflowEntry(entry);
+  const snapshotGate = validateWorkflowSnapshot(snapshot);
+  const violations = [...entryGate.violations, ...snapshotGate.violations];
+  if (violations.length > 0) {
+    throw invalidInput(
+      `the workflow entry/snapshot does not validate (${violations.map((entry) => `${entry.code}: ${entry.message}`).join("; ")})`,
+    );
+  }
+  const workflow = entry as WorkflowEntry;
+  const doc = snapshot as WorkflowSnapshot & Record<string, unknown>;
+  const workflowId = workflow.id;
+
+  if (caller.role !== "coordinator" || caller.planId !== null) {
+    throw new ExecutionError(
+      "execution.scope-mismatch",
+      `creating a workflow is a coordinator operation; the supplied caller is a ${caller.role} session` +
+        `${caller.planId === null ? "" : ` for plan ${caller.planId}`}. The caller identity is never taken from request JSON.`,
+    );
+  }
+  if (caller.workflowId !== workflowId) {
+    throw new ExecutionError(
+      "execution.scope-mismatch",
+      `the caller belongs to workflow ${caller.workflowId}, not to the workflow ${workflowId} this request creates`,
+    );
+  }
+  for (const field of ["id", "type", "started_at"] as const) {
+    if (workflow[field] !== doc[field]) {
+      throw invalidInput(
+        `the workflow entry and its snapshot disagree on ${field}: entry ${JSON.stringify(workflow[field])}, ` +
+          `snapshot ${JSON.stringify(doc[field])}. Registration fixes the identity anchors; creation never reconciles them.`,
+      );
+    }
+  }
+  if (doc.coordination !== undefined || doc.integration_merge_lease !== undefined || doc.delivery !== undefined) {
+    throw notNewLifecycle(
+      `snapshot ${workflowId} already carries a coordinator binding, an integration merge lease or delivery evidence. ` +
+        `Creation writes a NEW, unbound, unleased lifecycle that owns no accepted evidence; an existing lifecycle ` +
+        `belongs on the staged migration route. Nothing was created.`,
+    );
+  }
+  if (isTerminalSnapshot(doc)) {
+    throw notNewLifecycle(
+      `snapshot ${workflowId} is ${doc.status}. Registry membership selects an ACTIVE lifecycle, so a terminal snapshot ` +
+        `is never created into the root register; nothing was created.`,
+    );
+  }
+
+  const plans: ResolvedCreationPlan[] = [];
+  const seen = new Set<string>();
+  for (const row of doc.plans) {
+    const planId = rowPlanId(row) as string;
+    if (seen.has(planId)) {
+      throw invalidInput(`snapshot ${workflowId} lists plan ${planId} twice — a plan row is one identity`);
+    }
+    seen.add(planId);
+    // The row's own lease and coordination blocks are accepted execution
+    // evidence (handoffs, prepared inputs, holders) that a new lifecycle cannot
+    // inherit; `execution_leases`/`execution_plans.coordination_json` own them.
+    if (row.execution_lease !== undefined || row.coordination !== undefined) {
+      throw notNewLifecycle(
+        `plan ${planId} of snapshot ${workflowId} already carries a coordination block or an execution lease. ` +
+          `Creation writes unbound, unleased rows that own no accepted evidence; nothing was created.`,
+      );
+    }
+    plans.push({ planId, row, pin: suppliedCatalogPin(row, workflowId, planId) });
+  }
+  return { workflowId, entry: workflow, snapshot: doc, plans };
+}
+
+/**
+ * §3.1 request hash: operation kind, exact scope, expected token, caller
+ * identity and payload, in the canonical value form. Reusing an operation id
+ * with any other payload, scope, token or caller refuses
+ * `execution.operation-conflict` instead of replaying a foreign receipt.
+ */
+function createWorkflowRequestHash(
+  caller: ExecutionCaller,
+  creation: ResolvedCreation,
+  expected: ExecutionToken,
+): string {
+  return createHash("sha256")
+    .update(
+      serializeExecutionValue({
+        operation: CREATE_WORKFLOW_OPERATION,
+        workflow_id: creation.workflowId,
+        expected,
+        caller: {
+          session_id: caller.sessionId,
+          role: caller.role,
+          workflow_id: caller.workflowId,
+          plan_id: caller.planId,
+        },
+        entry: creation.entry,
+        snapshot: creation.snapshot,
+      }),
+      "utf8",
+    )
+    .digest("hex");
+}
+
+/** The committed receipt of one operation id on the current epoch, or `null`. */
+function readCommittedOperation(
+  db: StoreDb,
+  epoch: number,
+  operationId: string,
+): { requestHash: string; storeId: string; workflowId: string; resultJson: string } | null {
+  const row = db
+    .prepare("select request_hash, store_id, workflow_id, result_json from execution_operations where epoch = ? and operation_id = ?")
+    .get(epoch, operationId) as
+    | { request_hash?: unknown; store_id?: unknown; workflow_id?: unknown; result_json?: unknown }
+    | undefined;
+  if (!row) return null;
+  const what = `execution_operations(${epoch},${operationId})`;
+  return {
+    requestHash: storedText(row.request_hash, `${what}.request_hash`),
+    storeId: storedText(row.store_id, `${what}.store_id`),
+    workflowId: storedText(row.workflow_id, `${what}.workflow_id`),
+    resultJson: storedText(row.result_json, `${what}.result_json`),
+  };
+}
+
+/**
+ * The recorded receipt of an idempotent retry. The caller's CAS is deliberately
+ * NOT re-evaluated (the first attempt already advanced the revisions, so a
+ * re-evaluated token would always look stale), but the receipt must still
+ * belong to this store, epoch and workflow — a contradictory committed row is
+ * `store.corrupt` rather than a served success.
+ */
+function readCommittedReceipt(
+  recorded: { storeId: string; workflowId: string; resultJson: string },
+  tx: ExecutionTransaction,
+  operationId: string,
+  workflowId: string,
+): ExecutionRead<ExecutionState> {
+  const what = `execution_operations(${tx.epoch},${operationId})`;
+  if (recorded.storeId !== tx.storeId || recorded.workflowId !== workflowId) {
+    throw corrupt(
+      `${what} records store ${JSON.stringify(recorded.storeId)} and workflow ${JSON.stringify(recorded.workflowId)}, ` +
+        `which is not the workflow ${workflowId} this request addresses`,
+    );
+  }
+  const receipt = storedJsonObject(recorded.resultJson, `${what}.result_json`);
+  const token = receipt.token;
+  const parsed = parseExecutionToken(token);
+  if (parsed.kind !== "root" || parsed.storeId !== tx.storeId || parsed.epoch !== tx.epoch) {
+    throw corrupt(`${what}.result_json carries a token that does not address this store's root in this epoch`);
+  }
+  if (!isNonEmptyString(receipt.storeId) || receipt.storeId !== tx.storeId || typeof receipt.epoch !== "number") {
+    throw corrupt(`${what}.result_json does not record the store identity it was committed under`);
+  }
+  if (!isPlainObject(receipt.data)) throw corrupt(`${what}.result_json carries no execution state`);
+  return {
+    data: receipt.data as unknown as ExecutionState,
+    token: token as ExecutionToken,
+    storeId: receipt.storeId,
+    epoch: receipt.epoch,
+  };
+}
+
+/** §3: create-only identity — an existing workflow row is never re-registered. */
+function assertWorkflowIdentityIsNew(db: StoreDb, workflowId: string): void {
+  const row = db.prepare("select revision from execution_workflows where workflow_id = ?").get(workflowId) as
+    | { revision?: unknown }
+    | undefined;
+  if (!row) return;
+  throw notNewLifecycle(
+    `execution_workflows already holds workflow ${workflowId} (revision ${String(row.revision)}). A workflow identity is ` +
+      `create-only: re-creating it never restores registry membership, resets revisions or rewrites its rows. ` +
+      `Nothing was created.`,
+  );
+}
+
+/**
+ * §3/§7: creation binds EXISTING catalog entity identities and never fabricates
+ * a selection. A row that records a catalog pin must have that pin's selected
+ * plan entity present in this store's catalog, and the pin must describe the
+ * very row it is sealed with (the store-independent check `prepare` enforces).
+ * A current catalog revision that moved past the recorded `entity_revision` is
+ * explicitly tolerated — the pin freezes an identity, not a pointer.
+ */
+function assertSelectedCatalogEntities(
+  db: StoreDb,
+  storeId: string,
+  workflowId: string,
+  plans: readonly ResolvedCreationPlan[],
+): void {
+  const entity = db.prepare("select revision from catalog_entities where kind = 'plan' and id = ?");
+  for (const plan of plans) {
+    const { pin } = plan;
+    if (pin === null) continue;
+    const details = { workflow_id: workflowId, plan_id: plan.planId, pin };
+    if (pin.store_id !== storeId) {
+      throw new ExecutionPinConflictError(
+        `plan ${plan.planId} selects catalog store ${pin.store_id}, which is not this store (${storeId}) — a foreign ` +
+          `selection is never sealed as this store's frozen input`,
+        details,
+      );
+    }
+    if (executionInputHash(plan.row, plan.planId) !== pin.document_hash) {
+      throw new ExecutionPinConflictError(
+        `plan ${plan.planId}'s supplied pin records document hash ${pin.document_hash.slice(0, 12)}…, but the frozen ` +
+          `execution input it is sealed with hashes differently — the pin and its row disagree; neither side is rewritten`,
+        details,
+      );
+    }
+    if (entity.get(plan.planId) === undefined) {
+      throw new ExecutionPinConflictError(
+        `plan ${plan.planId} is pinned to catalog plan entity ${plan.planId} at revision ${pin.entity_revision}, but the ` +
+          `catalog does not hold that entity. Creation binds existing catalog identities and never fabricates one; ` +
+          `register the plan or drop the pin`,
+        details,
+      );
+    }
+  }
+}
+
+/** §2.2: the registry row order is creation order, so rows are inserted in list order. */
+function writeCreatedWorkflow(
+  db: StoreDb,
+  input: { workflowId: string; entry: WorkflowEntry; snapshot: WorkflowSnapshot; plans: readonly ResolvedCreationPlan[]; creatorSessionId: string; now: string },
+): void {
+  const { workflowId, entry, snapshot, plans, creatorSessionId, now } = input;
+  // §2.2: the workflow header is the snapshot minus the plan collection it does
+  // not own (`plans`); the binding/lease blocks were refused above, so the
+  // stored header can never carry a second coordinator or merge authority.
+  const header: Record<string, unknown> = { ...(snapshot as unknown as Record<string, unknown>) };
+  delete header.plans;
+  db.prepare(
+    "insert into execution_workflows(workflow_id, revision, creator_session_id, state_json, created_at, updated_at) " +
+      "values (?, 1, ?, ?, ?, ?)",
+  ).run(workflowId, creatorSessionId, JSON.stringify(header), now, now);
+  db.prepare("insert into execution_registry(workflow_id, entry_json) values (?, ?)").run(workflowId, JSON.stringify(entry));
+
+  const insertPlan = db.prepare(
+    "insert into execution_plans(workflow_id, plan_id, revision, ordinal, state_json, coordination_json) " +
+      "values (?, ?, 1, ?, ?, '{}')",
+  );
+  const insertInput = db.prepare(
+    "insert into execution_inputs(workflow_id, plan_id, revision, input_json, input_hash, catalog_pin_json) " +
+      "values (?, ?, 1, ?, ?, ?)",
+  );
+  plans.forEach((plan, ordinal) => {
+    // §2.2: the stored plan state is the row minus the blocks that live in their
+    // own columns, and `state_json.id` IS the row key — the DB authority
+    // addresses a plan by its canonical id.
+    const state: Record<string, unknown> = { ...plan.row, id: plan.planId };
+    delete state.coordination;
+    delete state.execution_lease;
+    insertPlan.run(workflowId, plan.planId, ordinal, JSON.stringify(state));
+    // §2.2: ONE sealed selection per plan — the exact `executionInputHash`
+    // selection, hashed by the unchanged catalog algorithm, plus that row's
+    // recorded pin. Later catalog edits never rewrite either column.
+    insertInput.run(
+      workflowId,
+      plan.planId,
+      JSON.stringify(executionInputSelection(plan.row, plan.planId)),
+      executionInputHash(plan.row, plan.planId),
+      plan.pin === null ? null : JSON.stringify(plan.pin),
+    );
+  });
+}
+
+/**
+ * §3 create-only workflow creation: registry membership, the workflow header,
+ * its plan rows and their SEALED frozen inputs are written in ONE transaction
+ * against an exact root CAS token, together with the operation receipt that
+ * makes an identical retry idempotent.
+ *
+ * Parent/child revisions (§3.1): registry membership changes advance the root
+ * revision exactly once (and `store_meta.revision` once for the multi-domain
+ * transaction), while every record created here starts at revision 1 — the
+ * workflow header, each plan row and each sealed input. A retry of a committed
+ * operation advances NONE of them.
+ *
+ * Refusals leave every accepted record untouched: a wrong token kind/scope,
+ * a foreign store, a stale epoch or a superseded root revision refuses before
+ * any write, and every later refusal rolls the transaction back.
+ */
+export async function createExecutionWorkflow(
+  context: ExecutionContext,
+  input: { entry: WorkflowEntry; snapshot: WorkflowSnapshot; expected: ExecutionToken; operationId: string },
+): Promise<ExecutionReceipt<ExecutionState>> {
+  const creation = resolveCreateWorkflow(context.caller, input?.entry, input?.snapshot, input?.operationId);
+  const operationId = input.operationId;
+  const requestHash = createWorkflowRequestHash(context.caller, creation, input.expected);
+  return withExecutionTransaction(context, (tx) => {
+    if (tx.execution.authorityState !== "active") {
+      throw new ExecutionError(
+        "execution.not-active",
+        `the execution authority is ${tx.execution.authorityState}; domain creation requires an active authority. ` +
+          `A staged store is inspectable only through migration diagnostics.`,
+      );
+    }
+    // Idempotent replay: only the CURRENT epoch's committed receipt replays, and
+    // only for the identical request. A different payload on the same id is a
+    // conflict, never a silent overwrite of the recorded receipt.
+    const recorded = readCommittedOperation(tx.db, tx.epoch, operationId);
+    if (recorded !== null) {
+      if (recorded.requestHash !== requestHash) {
+        throw new ExecutionError(
+          "execution.operation-conflict",
+          `operation id ${JSON.stringify(operationId)} is already committed on this store epoch for a different request ` +
+            `(kind, scope, expected token, caller or payload). An operation id is an idempotency key, not a reusable ` +
+            `slot — retry the committed request unchanged or use a new id. Nothing was created.`,
+        );
+      }
+      return { ...readCommittedReceipt(recorded, tx, operationId, creation.workflowId), operationId, replayed: true };
+    }
+    // §3.1 CAS: the parent (root) token of THIS store, epoch, address and
+    // revision. Creation uses the parent token, never a zero/sentinel revision.
+    assertExecutionToken(input.expected, {
+      kind: "root",
+      storeId: tx.storeId,
+      epoch: tx.epoch,
+      key: [],
+      revision: tx.execution.revision,
+    });
+
+    assertWorkflowIdentityIsNew(tx.db, creation.workflowId);
+    assertSelectedCatalogEntities(tx.db, tx.storeId, creation.workflowId, creation.plans);
+
+    const now = new Date().toISOString();
+    writeCreatedWorkflow(tx.db, {
+      workflowId: creation.workflowId,
+      entry: creation.entry,
+      snapshot: creation.snapshot,
+      plans: creation.plans,
+      creatorSessionId: context.caller.sessionId,
+      now,
+    });
+    // Registry membership is a root change: the root revision and its timestamp
+    // advance together, and the multi-domain transaction bumps the store
+    // revision once (no catalog data changed, so catalog_revision is untouched).
+    tx.db
+      .prepare("update execution_meta set revision = revision + 1, root_updated_at = ? where id = 1")
+      .run(now);
+    tx.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+
+    const meta = readExecutionMetaRow(tx.db);
+    const store: StoreIdentity = { storeId: tx.storeId, epoch: tx.epoch };
+    const receipt: ExecutionRead<ExecutionState> = {
+      data: readExecutionGraph(tx.db, store, meta),
+      token: executionToken("root", store.storeId, store.epoch, [], meta.revision),
+      storeId: store.storeId,
+      epoch: store.epoch,
+    };
+    tx.db
+      .prepare(
+        "insert into execution_operations(epoch, operation_id, request_hash, store_id, workflow_id, plan_id, result_json, committed_at) " +
+          "values (?, ?, ?, ?, ?, null, ?, ?)",
+      )
+      .run(tx.epoch, operationId, requestHash, tx.storeId, creation.workflowId, JSON.stringify(receipt), now);
+    return { ...receipt, operationId, replayed: false };
   });
 }
