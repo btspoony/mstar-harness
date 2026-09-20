@@ -878,3 +878,30 @@ export {
   previewExecutionMigration,
   retireExecutionSources,
 } from "./execution-migrate.js";
+// Execution recovery: the consistent whole-store backup, the explicit-loss
+// atomic restore and the diagnostic export (primary spec §8, R3 of plan
+// `20260920-activation-migration-recovery`). `previewExecutionRestore` is the
+// read-only loss inventory whose canonical `lossDigest` an operator approves;
+// `restoreExecutionBackup` is the whole-store replacement that requires that
+// exact digest, a quiesced store, a current pre-restore recovery point and a
+// verified sibling image before it renames anything; `exportExecutionState` is
+// canonical diagnostic data with every session identity, CAS token and
+// credential path removed and no import verb. `inspectBackupCopy` and
+// `BackupInspection` are the ONE §8 copy verdict the backup, migration and
+// restore paths share. ADDITIVE export — the engine package's exports map is
+// the only reachable surface for consumers.
+export type { BackupInspection } from "./store-activation.js";
+export type {
+  ExecutionDiagnosticExport,
+  ExecutionRecoveryAuthorityDifference,
+  ExecutionRecoveryErrorCode,
+  ExecutionRecoveryPreview,
+  ExecutionRestoreReceipt,
+} from "./execution-recovery.js";
+export {
+  ExecutionRecoveryError,
+  EXECUTION_RECOVERY_PROTOCOL_VERSION,
+  exportExecutionState,
+  previewExecutionRestore,
+  restoreExecutionBackup,
+} from "./execution-recovery.js";

@@ -59,6 +59,7 @@ import {
   MIGRATIONS,
   assertStoreRuntimeSupported,
   compareVersions,
+  migrationChecksum,
   openStore,
   storeDbPath,
   StoreError,
@@ -514,8 +515,8 @@ export async function assertAuthorityCurrent(context: StoreContext, handle: Stor
 // Backup — quiesced SQLite-consistent `VACUUM INTO` (§7 rollback/recovery)
 // ---------------------------------------------------------------------------
 
-/** The verification view of a backup: what the copy says about itself. */
-type BackupInspection = {
+/** The verification view of a backup: what the copy says about itself (§8). */
+export type BackupInspection = {
   storeId: string;
   authorityState: "staged" | "active";
   epoch: number;
@@ -527,6 +528,78 @@ type BackupInspection = {
 };
 
 /**
+ * §8 "re-open it for `integrity_check` + `foreign_key_check`": the copy has to
+ * be self-consistent SQLite before it is evidence for anything. A copy whose
+ * page structure SQLite itself rejects, or one that holds rows violating the
+ * schema's own foreign keys, is refused whatever its metadata rows claim —
+ * otherwise a truncated or hand-assembled file could present a plausible
+ * `store_meta` and be treated as a recovery point.
+ */
+function assertCopyIsConsistent(db: StoreDb, backupPath: string): void {
+  const integrity = (db.prepare("pragma integrity_check").all() as Array<Record<string, unknown>>).map((row) =>
+    String(Object.values(row)[0] ?? ""),
+  );
+  if (integrity.length !== 1 || integrity[0] !== "ok") {
+    throw new StoreActivationError(
+      "store.activation-stale",
+      `the copy at ${backupPath} fails SQLite integrity_check ` +
+        `(${integrity.slice(0, 3).join("; ") || "no result"}); it is not a verified recovery point.`,
+    );
+  }
+  const violations = db.prepare("pragma foreign_key_check").all() as Array<Record<string, unknown>>;
+  if (violations.length > 0) {
+    throw new StoreActivationError(
+      "store.activation-stale",
+      `the copy at ${backupPath} holds ${violations.length} row(s) violating the schema's foreign keys ` +
+        `(first: ${JSON.stringify(violations[0])}); it is not a verified recovery point.`,
+    );
+  }
+}
+
+/**
+ * §8 "schema/migration checksums": the copy must record exactly THIS build's
+ * immutable migration prefix — the same versions, names and checksums, in the
+ * same order. A copy recording a migration this engine does not have was
+ * written by a newer build (it is "too new" to be read or installed here), and
+ * a copy whose recorded checksum differs is not this build's store. Neither is
+ * accepted, so `store_id` equality alone can never make a foreign or future
+ * file look like this store's recovery point.
+ */
+function assertCopySchemaIsThisBuild(db: StoreDb, backupPath: string): void {
+  const rows = db
+    .prepare("select version, name, checksum from schema_version order by version")
+    .all() as Array<Record<string, unknown>>;
+  if (rows.length === 0) {
+    throw new StoreActivationError(
+      "store.activation-stale",
+      `the copy at ${backupPath} records no applied migration; it is not a store this build can verify.`,
+    );
+  }
+  if (rows.length > MIGRATIONS.length) {
+    throw new StoreActivationError(
+      "store.activation-stale",
+      `the copy at ${backupPath} records migration ${String(rows[rows.length - 1]?.version)}, which this build does not ` +
+        `have (it knows ${MIGRATIONS.length}); the copy was written by a newer build and is not a recovery point for this one.`,
+    );
+  }
+  for (const [index, row] of rows.entries()) {
+    const migration = MIGRATIONS[index]!;
+    if (
+      row.version !== migration.version ||
+      row.name !== migration.name ||
+      row.checksum !== migrationChecksum(migration)
+    ) {
+      throw new StoreActivationError(
+        "store.activation-stale",
+        `the copy at ${backupPath} records migration ${String(row.version)} as ${JSON.stringify(row.name)} with checksum ` +
+          `${JSON.stringify(row.checksum)}, not this build's ${JSON.stringify(migration.name)} (${migrationChecksum(migration)}); ` +
+          `the copy is not this build's store.`,
+      );
+    }
+  }
+}
+
+/**
  * A `VACUUM INTO` copy is not at `<root>/store.db`, so the store-open boundary
  * (which resolves exactly that path) cannot read it. Open the copy directly,
  * read-only and capability-checked, exactly like every other store access.
@@ -534,8 +607,13 @@ type BackupInspection = {
  * The specifier cannot be a static import: contract §2 requires lazy,
  * capability-checked SQLite acquisition at store access — a top-level import
  * would acquire the driver whenever the engine package is imported.
+ *
+ * Exported as `inspectBackupCopy` because the restore protocol reads the same
+ * verdict: §8's recovery point acceptance is ONE rule (identity, schema and
+ * migration checksums, execution identity, row counts, `integrity_check` and
+ * `foreign_key_check`), not a second copy of it in the recovery module.
  */
-async function inspectBackup(backupPath: string): Promise<BackupInspection> {
+export async function inspectBackupCopy(backupPath: string): Promise<BackupInspection> {
   assertStoreRuntimeSupported();
   const { DatabaseSync } = (await import("node:sqlite")) as {
     DatabaseSync: new (path: string, options?: { readOnly?: boolean }) => StoreDb;
@@ -543,6 +621,8 @@ async function inspectBackup(backupPath: string): Promise<BackupInspection> {
   const db = new DatabaseSync(backupPath, { readOnly: true });
   try {
     db.exec("pragma query_only=ON");
+    assertCopyIsConsistent(db, backupPath);
+    assertCopySchemaIsThisBuild(db, backupPath);
     const schemaVersion = schemaVersionOf(db);
     return {
       ...readMetaRow(db),
@@ -613,7 +693,7 @@ async function takeVerifiedBackup(
       }
       let existing: BackupInspection;
       try {
-        existing = await inspectBackup(targetPath);
+        existing = await inspectBackupCopy(targetPath);
       } catch (error) {
         throw new StoreActivationError(
           "store.activation-stale",
@@ -649,7 +729,7 @@ async function takeVerifiedBackup(
     handle.db.prepare("vacuum into ?").run(targetPath);
     let verified: BackupInspection;
     try {
-      verified = await inspectBackup(targetPath);
+      verified = await inspectBackupCopy(targetPath);
     } catch (error) {
       rmSync(targetPath, { force: true });
       throw new StoreActivationError(
@@ -786,7 +866,7 @@ export async function assertBackupDescribesStore(
   }
   let copy: BackupInspection;
   try {
-    copy = await inspectBackup(receipt.backupPath);
+    copy = await inspectBackupCopy(receipt.backupPath);
   } catch (error) {
     throw new StoreActivationError(
       "store.activation-stale",
