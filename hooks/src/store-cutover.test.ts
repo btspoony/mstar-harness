@@ -394,7 +394,7 @@ describe("ZCode write gate \u2014 committed bundle under native node", () => {
     expect(run.stderr).toContain("status.invalid-json");
   });
 
-  test("the store is acquired ONLY on the store-backed route (moduleLoadList, in-process)", async () => {
+  test("the store is acquired only on an AUTHORITY route (moduleLoadList, in-process)", async () => {
     const fixture = makeHarness("bundle-lazy", "hard");
     await seedActiveStore(fixture.harness);
     const probeDir = mkdtempSync(join(tmpdir(), "wgate-g4b-probe-"));
@@ -416,6 +416,23 @@ describe("ZCode write gate \u2014 committed bundle under native node", () => {
       ].join("\n"),
     );
 
+    // An ungated target never enters an authority route — the store is not
+    // acquired for it.
+    writeFileSync(join(fixture.root, "notes.md"), "# notes\n");
+    const unrelatedWrite = runGate(
+      "node",
+      HOOK_BUNDLE,
+      writeEvent(join(fixture.root, "notes.md"), BAD_JSON),
+      { MSTAR_G4B_PROBE_OUT: outPath },
+      ["--import", preload],
+    );
+    expect(unrelatedWrite.exitCode).toBe(0);
+    expect(JSON.parse(readFileSync(outPath, "utf8"))).toEqual({ sqlite: false });
+
+    // A coordination document DOES enter the route first (§4.3/§5: the
+    // authority decision precedes any document read), so the store is
+    // acquired — and on this active-issue/legacy-execution harness the route
+    // answers `files`, so the document validator still decides.
     const statusWrite = runGate(
       "node",
       HOOK_BUNDLE,
@@ -424,7 +441,7 @@ describe("ZCode write gate \u2014 committed bundle under native node", () => {
       ["--import", preload],
     );
     expect(statusWrite.exitCode).toBe(2); // document validator still fires
-    expect(JSON.parse(readFileSync(outPath, "utf8"))).toEqual({ sqlite: false });
+    expect(JSON.parse(readFileSync(outPath, "utf8"))).toEqual({ sqlite: true });
 
     const registerWrite = runGate(
       "node",

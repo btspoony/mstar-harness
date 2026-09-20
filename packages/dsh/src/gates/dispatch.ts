@@ -55,7 +55,17 @@ import type { SessionHint } from './workflow-selection.ts'
 // The dispatch gates are WRITE-path-adjacent (lease re-verify, worktree
 // L1, P-b attribution), so they use the ACTIVE-SET resolver only — the
 // terminal-mtime fallback stays catalog-read-only.
-import { catalogRegistrationRefusal, resolveActiveWorkflow } from './workflow-selection.ts'
+// §5 (plan S4): while the harness's execution authority is ACTIVE the root
+// register is retired, so the selection consumers ask the ONE route first
+// (`readExecutionWorkflowSource`) and read the DB registry instead of the
+// retired `status.json`.
+import {
+  activeRowsOf,
+  catalogRegistrationRefusal,
+  readExecutionWorkflowSource,
+  resolveActiveWorkflow,
+} from './workflow-selection.ts'
+import type { ExecutionWorkflowSourceRead } from './workflow-selection.ts'
 // The P-a/P-c policy + cache + the SHARED name normalization (plan
 //   Task 2 — the SINGLE four-tier decision point;
 // this module maps the verdict to the PreToolDecision refusal vocabulary).
@@ -691,13 +701,42 @@ function worktreeL1Violations(harnessDir: string | null, header: string, hint?: 
  * degrades for the call, never bricks fan-out.
  *
  * @returns the first uncovered plan id (undefined = covered / nothing to
- * attribute) + the unreadable flag.
+ *   attribute) + the unreadable flag.
  */
-function writableFanOutUncovered(harnessDir: string | null, hint?: SessionHint): { uncoveredPlanId?: string; unreadable: boolean } {
+async function writableFanOutUncovered(
+  harnessDir: string | null,
+  hint?: SessionHint,
+): Promise<{ uncoveredPlanId?: string; unreadable: boolean }> {
   if (harnessDir === null) return { unreadable: false }
-  const read = activeSnapshotRows(harnessDir, hint)
-  if (read.rows === null) return { unreadable: read.unreadable } // missing/no-active → silent; selection failure/unreadable → one-warn degrade
-  for (const row of read.rows) {
+  // §5 the ONE route decision precedes every read (plan S4): while the
+  // execution authority is ACTIVE the root register and the workflow
+  // snapshots are retired, so the plan rows come from the DB state and the
+  // retired bytes are never consulted; a route that cannot be read degrades
+  // exactly like an unreadable document (one warn, fail-open), never a
+  // silent pass and never a file fallback.
+  let source: ExecutionWorkflowSourceRead
+  try {
+    source = await readExecutionWorkflowSource({ harnessDir }, hint)
+  } catch {
+    return { unreadable: true }
+  }
+  if (source.kind === 'unavailable') return { unreadable: true }
+  if (source.kind === 'error') {
+    return {
+      unreadable: source.selection.kind === 'error' && source.selection.code !== 'workflow.selection.no-active',
+    }
+  }
+  let rows: Record<string, unknown>[] | null
+  if (source.kind === 'active') {
+    rows = activeRowsOf(source.snapshot)
+  } else {
+    const fileRead = activeSnapshotRows(harnessDir, hint)
+    // missing status.json / no active lifecycle → silent; a selection failure
+    // or an unreadable document → the one-warn degrade below.
+    if (fileRead.rows === null) return { unreadable: fileRead.unreadable }
+    rows = fileRead.rows
+  }
+  for (const row of rows) {
     if (row === undefined || row.status !== 'InProgress') continue
     const planId = typeof row.id === 'string' && row.id !== '' ? row.id
       : typeof row.plan_id === 'string' && row.plan_id !== '' ? row.plan_id
@@ -881,14 +920,14 @@ export function workflowGateInputOf(exec: ToolExecution): WorkflowGateInput | un
  *   only after the tool-name/mode guards — the branch returns for every other
  *   tool without paying for a hint it would not read.
  */
-function gateWorkflow(
+async function gateWorkflow(
   ctx: Context,
   harnessDir: string | null,
   config: Config,
   adapter: DshHostAdapter,
   exec: ToolExecution,
   hintReadOf: () => SessionHintRead,
-): PreToolDecision | undefined {
+): Promise<PreToolDecision | undefined> {
   const toolName = exec.name
   if (!(DEFAULT_WORKFLOW_TOOLS as readonly string[]).includes(toolName)) return undefined
   const mode = config.workflowGate ?? 'warn'
@@ -907,7 +946,7 @@ function gateWorkflow(
   // agent's session workspace by `preExecuteListener`, and the hint scopes
   // the read to the lifecycle THIS session is bound to (an unbound session
   // has no rows to attribute: the one-warn degrade below).
-  const pb = writableFanOutUncovered(harnessDir, hintReadOf().hint)
+  const pb = await writableFanOutUncovered(harnessDir, hintReadOf().hint)
   if (pb.unreadable) {
     // Fail-open + ONE warn ( Step 3 / Clarify — a broken status
     // read must not brick fan-out): P-b is degraded for this call only;
@@ -999,14 +1038,14 @@ function gateWorkflow(
  * Non-subagent tools, non-Assignment prompts and malformed payloads are pure
  * pass-through (undefined).
  */
-function gateDispatch(
+async function gateDispatch(
   ctx: Context,
   harnessDir: string | null,
   config: Config,
   adapter: DshHostAdapter,
   exec: ToolExecution,
   readHint?: () => SessionHintRead,
-): PreToolDecision | undefined {
+): Promise<PreToolDecision | undefined> {
   const toolName = exec.name
   // The carrying session's hint — derived ONCE per tool call through the
   // adapter (the plugin's only owner of the durable binding store) and shared
@@ -1029,7 +1068,7 @@ function gateDispatch(
   // if the names were added to the dispatch-tool match list (W4 double
   // no-op). Keyed on the FIXED tool names — the workflow tools are gated
   // by their own branch, never by `DEFAULT_DISPATCH_TOOLS` addition.
-  const workflowDecision = gateWorkflow(ctx, harnessDir, config, adapter, exec, hintReadOf)
+  const workflowDecision = await gateWorkflow(ctx, harnessDir, config, adapter, exec, hintReadOf)
   if (workflowDecision !== undefined) return workflowDecision
   if (!(config.dispatchTools ?? [...DEFAULT_DISPATCH_TOOLS]).includes(toolName)) return undefined
   const args = asRecord(exec.arguments)
@@ -1091,13 +1130,15 @@ function launchesWorkUnderSelection(config: Config, exec: ToolExecution): boolea
 /**
  * The catalog-registration veto (state-projection contract §3 step 3): the
  * SELECTED active workflow a writable dispatch addresses must have a committed
- * catalog registration. The selection itself stays JSON-owned
- * (`resolveActiveWorkflow`); this async addition only asks the store's
- * registration journal whether that workflow is half-registered — a question
- * JSON cannot answer. A refusal is UNCONDITIONAL (both enforcement modes): a
- * workflow whose catalog delta was never published is not a soft-gate judgment
- * call, and dispatching into it would write under a workspace the catalog does
- * not yet describe.
+ * catalog registration. §5 (plan S4): the selection is asked of ONE route —
+ * while the control harness's execution authority is ACTIVE the active set is
+ * the DB registry (`readExecutionWorkflowSource`, explicit ids only, never the
+ * newest/only guess), otherwise the unchanged JSON resolver. This async
+ * addition then asks the store's registration journal whether that workflow is
+ * half-registered — a question JSON cannot answer. A refusal is UNCONDITIONAL
+ * (both enforcement modes): a workflow whose catalog delta was never published
+ * is not a soft-gate judgment call, and dispatching into it would write under a
+ * workspace the catalog does not yet describe.
  *
  * Fires only on a real work-launching call ({@link launchesWorkUnderSelection}:
  * a configured dispatch tool carrying an Assignment-shaped prompt, or a
@@ -1116,7 +1157,30 @@ async function catalogRegistrationVeto(
 ): Promise<PreToolDecision | undefined> {
   if (harnessDir === null) return undefined
   if (!launchesWorkUnderSelection(config, exec)) return undefined
-  const selection = resolveActiveWorkflow(harnessDir, readHint().hint)
+  const hint = readHint().hint
+  const source = await readExecutionWorkflowSource({ harnessDir }, hint)
+  if (source.kind === 'unavailable') {
+    // §5: the authority exists and cannot be read — the registration verdict
+    // cannot be established, so the launch is refused rather than allowed
+    // against a half-known workspace (never a file fallback).
+    ctx.logger(DISPATCH_LOGGER).error(
+      `${exec.name} call refused — the execution authority of ${harnessDir} could not be read:\n` +
+        `${source.code}: ${source.message}`,
+    )
+    return {
+      kind: 'deny',
+      reason: [
+        `${exec.name} call blocked — the execution authority could not be read, so the selected workflow's catalog registration is unverifiable`,
+        `${source.code}: ${source.message}`,
+        'this refusal is unconditional (it is not the soft/hard enforcement axis): restore the authority, then dispatch',
+      ].join('\n'),
+    }
+  }
+  const selection = source.kind === 'active'
+    ? ({ kind: 'active', workflowId: source.workflowId, dir: source.dir } as const)
+    : source.kind === 'error'
+      ? source.selection
+      : resolveActiveWorkflow(harnessDir, hint)
   if (selection.kind !== 'active') return undefined
   const refusal = await catalogRegistrationRefusal(harnessDir, selection.workflowId)
   if (refusal === null) return undefined
@@ -1162,7 +1226,7 @@ export async function preExecuteListener(
     // only where the gate actually reads it).
     let hintRead: SessionHintRead | undefined
     const readHint = (): SessionHintRead => (hintRead ??= adapter.sessionHintFor(exec.agent))
-    veto = gateDispatch(ctx, harnessDir, config, adapter, exec, readHint)
+    veto = await gateDispatch(ctx, harnessDir, config, adapter, exec, readHint)
     veto ??= await catalogRegistrationVeto(ctx, harnessDir, config, exec, readHint)
   } catch (error) {
     ctx.logger(DISPATCH_LOGGER).error(`dispatch gate aborted (degraded, dispatch allowed): ${(error as Error).message}`)

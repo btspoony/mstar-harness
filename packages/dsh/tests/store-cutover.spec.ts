@@ -451,10 +451,18 @@ describe('store cutover — refusals are disclosed and fail closed', () => {
     // write would only let the plan row the closure gate asks about be removed
     // while no authority can re-derive the violation. The veto is the dsh
     // fs-policy channel — a throw — and it is NOT delegated to `next()`.
+    //
+    // §4.3/§5 (plan S4): the AUTHORITY route is decided BEFORE any document
+    // read, so on this harness the execution route's own refusal answers with
+    // `store.authority-unavailable` — the closure gate's document-level
+    // `findings.cleanup-authority-unavailable` would require reading the
+    // retired snapshot first, which is exactly the ordering this route
+    // replaces. Same class (an unreadable authority), earlier, and still
+    // inadmissible by the repair escape.
     expect(outcome).toBeInstanceOf(StatusVetoError)
     expect((outcome as StatusVetoError).code).toBe('status.veto')
     expect((outcome as StatusVetoError).violations.map((violation) => violation.code)).toEqual([
-      'findings.cleanup-authority-unavailable',
+      'store.authority-unavailable',
     ])
     expect(reached).toBe(0) // the intent decision is never delegated: the write cannot land
     expect(advisories).toHaveLength(1)
@@ -462,14 +470,14 @@ describe('store cutover — refusals are disclosed and fail closed', () => {
     expect(advisories[0]!.repair).toBeUndefined() // NOT a repair-escape allow
     expect(advisories[0]!.degraded).toBeUndefined()
     expect(advisories[0]!.result.violations.map((violation) => violation.code)).toEqual([
-      'findings.cleanup-authority-unavailable',
+      'store.authority-unavailable',
     ])
 
     // The host hook reads the SAME validation path, so a writing host that
     // asks before the write gets the same refusal.
     const hook = await app.ctx.dshHostAdapter.beforeStatusWrite(join(harnessDir, 'workflows', 'wf-store', 'snapshot.json'), undefined)
     expect(hook.ok).toBe(false)
-    expect(hook.code).toBe('findings.cleanup-authority-unavailable')
+    expect(hook.code).toBe('store.authority-unavailable')
   })
 
   it('a schema violation still takes the repair escape under the same hard enforcement', async () => {
