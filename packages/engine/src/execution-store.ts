@@ -585,10 +585,12 @@ function sessionRef(store: StoreIdentity, workflowId: string, row: Record<string
   if (typeof row.epoch !== "number" || !Number.isSafeInteger(row.epoch) || row.epoch < 0) {
     throw corrupt(`execution_sessions(${workflowId},${row.session_id}) carries a non-integer epoch`);
   }
+  let planId: string | null = null;
   if (role === "plan-pm") {
     if (!isNonEmptyString(row.plan_id)) {
       throw corrupt(`execution_sessions(${workflowId},${row.session_id}) is a plan-pm row without a plan id`);
     }
+    planId = row.plan_id;
   } else if (row.plan_id !== null && row.plan_id !== undefined) {
     throw corrupt(`execution_sessions(${workflowId},${row.session_id}) is a coordinator row with a plan id`);
   }
@@ -598,7 +600,7 @@ function sessionRef(store: StoreIdentity, workflowId: string, row: Record<string
     workflowId,
     role,
     sessionId: row.session_id,
-    planId: role === "plan-pm" ? row.plan_id : null,
+    planId,
   };
 }
 

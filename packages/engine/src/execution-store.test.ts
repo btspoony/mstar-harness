@@ -716,7 +716,8 @@ describe("execution-tokens: §3.1 canonical value form and version tokens", () =
 
   test("composes and parses the exact exec-v1 wire format", () => {
     const root = executionToken("root", TOKEN_STORE, 3, [], 2);
-    expect(root).toBe(`exec-v1:root:${TOKEN_STORE}:3:W10K:2`);
+    // `ExecutionToken` is a compile-time brand; compare the wire string it carries.
+    expect(String(root)).toBe(`exec-v1:root:${TOKEN_STORE}:3:W10K:2`);
     expect(parseExecutionToken(root)).toEqual({ kind: "root", storeId: TOKEN_STORE, epoch: 3, key: [], revision: 2 });
     // key64 is the canonical form of the key array: unpadded base64url over
     // `serializeExecutionValue`, terminal LF included.
@@ -897,7 +898,7 @@ describe("execution-initialize: §3 create-only empty execution authority", () =
     const initialized = await initializeExecutionAuthority(context);
     expect(initialized.storeId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
     expect(initialized.epoch).toBe(epoch + 1);
-    expect(initialized.token).toBe(`exec-v1:root:${initialized.storeId}:${epoch + 1}:W10K:2`);
+    expect(String(initialized.token)).toBe(`exec-v1:root:${initialized.storeId}:${epoch + 1}:W10K:2`);
     expect(initialized.data).toEqual({
       root: { version: 2, updated_at: initialized.data.root.updated_at, workflows: [] },
       workflows: [],
