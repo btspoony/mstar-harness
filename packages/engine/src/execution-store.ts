@@ -105,6 +105,12 @@ export type ExecutionErrorCode =
   | "execution.session-unavailable"
   | "execution.canonical-value"
   | "execution.operation-conflict"
+  // §5's two migration verdicts: the source inventory is not closed
+  // (`coverage-incomplete`) versus discovered legacy content that contradicts
+  // the execution model or a reviewed manifest that no longer matches the
+  // sources (`migration-conflict`).
+  | "execution.coverage-incomplete"
+  | "execution.migration-conflict"
   | "store.not-active"
   | "store.stale-epoch";
 
@@ -1288,7 +1294,7 @@ function notNewLifecycle(detail: string): ExecutionError {
  * the complete four-field identity is a frozen-input conflict, never a partial
  * pin that would be sealed as if it were whole.
  */
-function suppliedCatalogPin(row: Record<string, unknown>, workflowId: string, planId: string): CatalogExecutionPin | null {
+export function suppliedCatalogPin(row: Record<string, unknown>, workflowId: string, planId: string): CatalogExecutionPin | null {
   const metadata = isPlainObject(row.metadata) ? row.metadata : null;
   const raw = metadata === null ? undefined : metadata.catalog_pin;
   if (raw === undefined || raw === null) return null;
