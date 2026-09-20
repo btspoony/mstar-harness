@@ -535,6 +535,36 @@ export {
   storeDbPath,
   upgradeStore,
 } from "./store-db.js";
+// Execution authority: the canonical value form and `exec-v1` version tokens
+// (§3.1), the one-transaction ownership boundary, the create-only empty
+// execution initializer (§3/§4.1) and the create-only workflow/registry/sealed
+// input verb (§3), plus C4's session surface — the trusted-caller
+// coordinator/plan-pm bind and the session-authorized plan read (§2.3/§3).
+// ADDITIVE export and the ONLY reachable surface for consumers: the token
+// grammar and the transaction primitive stay module-scoped for the domain
+// modules that compose with them, and no coordination-mutation, registration
+// or coordinator-recovery verb is defined here.
+export type {
+  ExecutionCaller,
+  ExecutionContext,
+  ExecutionErrorCode,
+  ExecutionKind,
+  ExecutionPlanView,
+  ExecutionRead,
+  ExecutionReceipt,
+  ExecutionSessionRef,
+  ExecutionState,
+  ExecutionToken,
+} from "./execution-store.js";
+export {
+  ExecutionError,
+  bindExecutionSession,
+  createExecutionWorkflow,
+  initializeExecutionAuthority,
+  readExecutionPlan,
+  readExecutionState,
+  serializeExecutionValue,
+} from "./execution-store.js";
 export type {
   CaptureInput,
   ClosureEvidence,
