@@ -38,7 +38,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -112,22 +112,55 @@ function workspace(name: string): Fixture {
   return { root, harness, context, dbPath: storeDbPath(context) };
 }
 
-function rawGet<T>(dbPath: string, sql: string): T | undefined {
-  const db = new DatabaseSync(dbPath, { readOnly: true });
+/**
+ * Read one result out of a store file without changing it.
+ *
+ * SQLite reads a WAL database THROUGH its `-wal` file, so a store that SQLite's
+ * own last clean close left without a sidecar — WAL still in the header, which
+ * is exactly the shape the quiesced-WAL case below asserts must stay unchanged
+ * — cannot be read through a plain read-only open at all. The `immutable` form
+ * reads those same bytes without the WAL machinery, so the suite can observe a
+ * store the module leaves untouched instead of creating the sidecar that case
+ * asserts against. It is tried only for that shape: every other store keeps the
+ * ordinary read-only open, so a broken file still reports its own error.
+ */
+function withRawRead<T>(dbPath: string, run: (db: DatabaseSync) => T): T {
+  const read = (spec: string): T => {
+    const db = new DatabaseSync(spec, { readOnly: true });
+    try {
+      return run(db);
+    } finally {
+      db.close();
+    }
+  };
   try {
-    return db.prepare(sql).get() as T | undefined;
-  } finally {
-    db.close();
+    return read(dbPath);
+  } catch (error) {
+    if (!isQuiescedWalStoreFile(dbPath)) throw error;
+    return read(`file:${dbPath}?immutable=1`);
   }
 }
 
-function rawAll<T>(dbPath: string, sql: string): T[] {
-  const db = new DatabaseSync(dbPath, { readOnly: true });
+/** The store file's own bytes: WAL in the header, and no `-wal`/`-shm` beside it. */
+function isQuiescedWalStoreFile(dbPath: string): boolean {
+  const header = Buffer.alloc(100);
+  const fd = openSync(dbPath, "r");
   try {
-    return db.prepare(sql).all() as T[];
+    readSync(fd, header, 0, header.length, 0);
   } finally {
-    db.close();
+    closeSync(fd);
   }
+  return (
+    header[18] === 2 && header[19] === 2 && !existsSync(`${dbPath}-wal`) && !existsSync(`${dbPath}-shm`)
+  );
+}
+
+function rawGet<T>(dbPath: string, sql: string): T | undefined {
+  return withRawRead(dbPath, (db) => db.prepare(sql).get() as T | undefined);
+}
+
+function rawAll<T>(dbPath: string, sql: string): T[] {
+  return withRawRead(dbPath, (db) => db.prepare(sql).all() as T[]);
 }
 
 function rawRun(dbPath: string, sql: string, ...params: Array<string | number | null>): void {
@@ -782,6 +815,62 @@ describe("execution-restore", () => {
     expect(existsSync(`${world.dbPath}-wal`)).toBe(false);
     expect(existsSync(`${world.dbPath}-shm`)).toBe(false);
     expect(sha256OfFile(world.dbPath)).toBe(installedSha);
+  });
+
+  test("execution-restore-preview-reads-a-quiesced-wal-store-and-leaves-its-file-state-untouched", async () => {
+    const world = await recoveryWorld("restore-quiesced-wal");
+    const point = await recoveryPoint(world, "quiesced-wal-point");
+    await mutateEveryDomain(world, "quiesced-wal");
+
+    // The shape of a WAL store nobody is using: SQLite folds every committed
+    // frame into the database file on the last clean close and removes both
+    // sidecars, while the header keeps recording WAL. Nothing here fabricates
+    // that state — SQLite itself checkpoints the store (a 0-byte `-wal` proves
+    // every frame landed) and only then are the empty sidecars removed, which is
+    // exactly what its own cleanup leaves behind.
+    const quiesce = new DatabaseSync(world.dbPath);
+    try {
+      quiesce.exec("pragma busy_timeout=1000");
+      const checkpoint = quiesce.prepare("pragma wal_checkpoint(TRUNCATE)").get() as { busy?: number } | undefined;
+      expect(checkpoint?.busy).toBe(0);
+    } finally {
+      quiesce.close();
+    }
+    expect(statSync(`${world.dbPath}-wal`).size).toBe(0);
+    rmSync(`${world.dbPath}-wal`, { force: true });
+    rmSync(`${world.dbPath}-shm`, { force: true });
+
+    // The live file state, read from bytes alone: no connection may be opened to
+    // inspect it, because opening one is what this case is about.
+    const liveState = (): { journalMode: string; sidecars: string; sha256: string } => {
+      const header = Buffer.alloc(100);
+      const fd = openSync(world.dbPath, "r");
+      try {
+        readSync(fd, header, 0, header.length, 0);
+      } finally {
+        closeSync(fd);
+      }
+      return {
+        // SQLite's file-format write version: 2 is WAL, 1 a rollback journal.
+        journalMode: header[18] === 2 && header[19] === 2 ? "wal" : `not-wal(${header[18]},${header[19]})`,
+        sidecars: ["-wal", "-shm"].filter((suffix) => existsSync(`${world.dbPath}${suffix}`)).join(",") || "none",
+        sha256: sha256OfFile(world.dbPath),
+      };
+    };
+    const before = liveState();
+    expect(before).toMatchObject({ journalMode: "wal", sidecars: "none" });
+
+    // §8's preview mutates nothing, and that has to hold for THIS shape too: a
+    // read-only open cannot create the `-wal` SQLite insists on before it reads
+    // a WAL store, so the capability path may not leave one (or anything else)
+    // beside the live store to make the read possible.
+    const preview = await previewExecutionRestore(world.context, point.backupPath);
+    expect(preview.liveStoreId).toBe(world.storeId);
+    // The post-point work is really in the inventory: this was a live read, not
+    // a refusal dressed up as a preview.
+    expect(preview.authorityDifferences.length).toBeGreaterThan(0);
+
+    expect(liveState()).toEqual(before);
   });
 
   test("execution-restore-normalizes-a-malformed-live-inventory-row-to-the-loss-refusal", async () => {

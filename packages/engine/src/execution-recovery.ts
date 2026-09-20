@@ -73,16 +73,22 @@
  */
 import { createHash, randomUUID } from "node:crypto";
 import {
+  closeSync,
   copyFileSync,
   createReadStream,
   existsSync,
   lstatSync,
   mkdirSync,
+  mkdtempSync,
+  openSync,
   readFileSync,
+  readSync,
   renameSync,
   rmSync,
   unlinkSync,
+  writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { isNonEmptyString, isPlainObject } from "./coordination-write.js";
 import { writeJson } from "./core.js";
@@ -651,64 +657,161 @@ function probeForeignKeys(db: StoreDb): Array<Record<string, unknown>> {
 }
 
 /**
- * §8's live read snapshot for the loss inventory: the store layer's READ intent,
- * so nothing in the inventory writes a row, a receipt, a checkpoint, an artifact
- * or a journal mode.
- *
- * The read intent alone is not always AVAILABLE. SQLite reads a WAL database
- * through its shared-memory index, and a runtime whose read-only open cannot
- * create that index (Bun's `node:sqlite`, which this plan supports alongside
- * Node) refuses a quiesced WAL store whose sidecars SQLite itself removed on
- * the last clean close. Refusing a completely intact store for that reason
- * would be a defect of its own, so the preview first lets SQLite establish the
- * index through a connection that applies NO pragma of its own — never the
- * writer's `journal_mode=wal`/`synchronous=FULL`, which is what reconfigures a
- * store that is not in WAL — and then takes the read snapshot. That index is
- * the sidecar every reader of a WAL database needs (Node's own read-only open
- * creates it too): it is SQLite's index, not authority.
- *
- * Every other shape — a rollback-journal store, a hot journal, a
- * missing/corrupt/drifted database, a store another writer holds — keeps the
- * read intent's own refusal; none of them is reconfigured, recovered or
- * otherwise written to make a preview succeed.
+ * A SQLite database header is 100 bytes long; offset 18/19 carry the file
+ * format's write/read version, `2` for WAL. Together with the `-wal` sidecar's
+ * presence that is the whole shape this module has to agree with SQLite about,
+ * and it is readable from the file itself — before any connection is opened.
  */
-async function openLiveReadSnapshot(context: StoreContext): Promise<StoreHandle> {
+const DATABASE_HEADER_BYTES = 100;
+const WAL_FILE_FORMAT_VERSION = 2;
+
+/** The store file's header bytes and whether its `-wal` journal is present; null when it cannot be read as a store file. */
+type WalStoreShape = { header: string; wal: boolean };
+
+function walStoreShapeOf(context: StoreContext): WalStoreShape | null {
+  const dbPath = storeDbPath(context);
+  const header = Buffer.alloc(DATABASE_HEADER_BYTES);
+  let fd: number;
   try {
-    return await openStore(context, "read");
+    fd = openSync(dbPath, "r");
+  } catch {
+    return null;
+  }
+  try {
+    readSync(fd, header, 0, header.length, 0);
+  } catch {
+    return null;
+  } finally {
+    closeSync(fd);
+  }
+  if (header[18] !== WAL_FILE_FORMAT_VERSION || header[19] !== WAL_FILE_FORMAT_VERSION) return null;
+  return { header: header.toString("hex"), wal: existsSync(`${dbPath}-wal`) };
+}
+
+/**
+ * The capability path for the ONE shape the store layer's read intent cannot
+ * read: a WAL store with no `-wal` file beside it — the shape SQLite's own last
+ * clean close leaves when it folds the journal into the database and removes
+ * it, and the shape a store's own file has when it was copied without its
+ * sidecars. The database file is the whole committed state there (there is no
+ * WAL content to miss), so the store is completely intact and refusing to
+ * inventory it would be a defect of its own.
+ *
+ * SQLite reads a WAL database THROUGH its `-wal` file, opened read-only, so a
+ * read-only open of that shape fails outright (SQLITE_CANTOPEN, "unable to open
+ * database file"): the sidecar a preview may not create beside the store is
+ * exactly the sidecar SQLite refuses to work without. A stale `-shm` beside the
+ * store does not change that — SQLite needs the `-wal` itself — and a
+ * write-capable connection is not a way out either: it creates `-wal` AND
+ * `-shm` as a side effect of reading the store (pragma or not, and on this
+ * runtime it fails on the very `-wal` it just created), so the store would come
+ * out of a preview mutated, which is what §8's "mutates nothing" forbids.
+ *
+ * So this path never opens the LIVE store. It copies the quiesced store's bytes
+ * into a private image, where the `-wal` sidecar is this process's own file,
+ * and takes the store layer's read intent of THAT: the same identity, schema,
+ * migration-checksum, `query_only`, integrity and foreign-key rules every other
+ * store read gets, over the same committed state byte for byte (see
+ * `assertWalStoreUnchanged`). The live store keeps its database bytes, its
+ * header, its journal mode and its sidecar set exactly as they were.
+ *
+ * Reachability is decided HERE, from the store's own bytes, before anything
+ * opens the store: a store that is not a WAL store, or that has its `-wal`, is
+ * not served (`null`) and keeps the read intent's own refusal. Every other
+ * shape therefore arrives at its own refusal unchanged: a rollback-journal
+ * store, a hot journal, a missing/corrupt/drifted database, a store another
+ * writer holds (a writer's connection creates the `-wal`) and a plain busy
+ * store.
+ */
+async function openWalWithoutJournalReadSnapshot(
+  context: StoreContext,
+): Promise<{ handle: StoreHandle; walWithoutJournal: WalStoreShape } | null> {
+  const walWithoutJournal = walStoreShapeOf(context);
+  if (walWithoutJournal === null || walWithoutJournal.wal) return null;
+  const scratch = mkdtempSync(join(tmpdir(), "mstar-store-read-"));
+  try {
+    const image = join(scratch, "store.db");
+    copyFileSync(storeDbPath(context), image);
+    // The read intent's open needs the `-wal` file to exist and cannot create
+    // it; in this private image that file is ours to create, and SQLite creates
+    // the image's `-shm` beside it under its own read-only rules.
+    writeFileSync(`${image}-wal`, "");
+    const handle = await openStore({ harnessDir: scratch }, "read");
+    return {
+      handle: {
+        ...handle,
+        close(): void {
+          try {
+            handle.close();
+          } finally {
+            rmSync(scratch, { recursive: true, force: true });
+          }
+        },
+      },
+      walWithoutJournal,
+    };
   } catch (error) {
-    if (!(error instanceof StoreError)) throw error;
-    if (!(await establishWalIndex(context))) throw error;
-    return openStore(context, "read");
+    rmSync(scratch, { recursive: true, force: true });
+    throw error;
   }
 }
 
 /**
- * Let SQLite establish the live store's WAL index while applying no pragma that
- * could change the store. Reading `journal_mode` needs exactly the index the
- * read-only open could not create; it writes nothing and reports whether the
- * store is already in WAL. False — a store that is not in WAL, or one that
- * cannot be opened at all — leaves the caller its own refusal rather than
- * forcing this store into a different journal mode.
+ * The image above describes the live store only while the store keeps the shape
+ * it was read in: a WAL store with no `-wal`, whose database file is therefore
+ * the whole committed state. A writer that appeared while the image was taken
+ * would put a `-wal` (with frames the image does not hold) beside the store and
+ * make it a mixture of two states, so the read is verified rather than assumed —
+ * a preview may not describe the live store with an inventory it cannot stand
+ * behind.
  */
-async function establishWalIndex(context: StoreContext): Promise<boolean> {
-  assertStoreRuntimeSupported();
-  // A static `import "node:sqlite"` would load the native driver with this
-  // module; contract §2 keeps SQLite acquisition lazy and at store access, the
-  // same reason `readCopyRows` loads it here.
-  const { DatabaseSync } = (await import("node:sqlite")) as { DatabaseSync: new (path: string) => StoreDb };
-  let db: StoreDb;
+function assertWalStoreUnchanged(context: StoreContext, before: WalStoreShape, what: string): void {
+  const after = walStoreShapeOf(context);
+  if (after !== null && !after.wal && after.header === before.header) return;
+  const observed =
+    after === null
+      ? "its database file no longer reads as a WAL store"
+      : `its WAL journal is ${after.wal ? "present" : "absent"} and its header is ${after.header}`;
+  throw lossUnaccepted(
+    `${what} read the live store at ${storeDbPath(context)} through the WAL-without-journal path and the store did not ` +
+      `keep the shape that read needs (${observed}, against ${before.header} with no WAL journal): an inventory taken across ` +
+      `that change is not a complete description of the live store. Nothing was replaced and both files are retained.`,
+  );
+}
+
+/**
+ * The live read snapshot for the loss inventory: which handle the inventory is
+ * taken from, and the shape the capability path read it in (`null` when the
+ * store layer's own read intent was used).
+ */
+type LiveReadSnapshot = { handle: StoreHandle; walWithoutJournal: WalStoreShape | null };
+
+/**
+ * Open the live store for the loss inventory.
+ *
+ * The shape decides the path, and it is read from the file's BYTES rather than
+ * from a refusal: for a WAL store with no `-wal`, the capability path must be
+ * taken BEFORE the read intent is tried. A read-only open of that shape on
+ * Bun's `node:sqlite` refuses it (SQLITE_CANTOPEN) and on Node's opens it by
+ * creating the `-wal` the preview may not leave behind, so trying the read
+ * intent first would either refuse an intact store or mutate it.
+ *
+ * The shape can also MOVE under the read — a read-only connection's own last
+ * clean close deletes the `-wal` when it is the last one holding the store — so
+ * a read intent that refuses is not taken at face value either: the capability
+ * path is consulted again, decides from the bytes whether this is the one shape
+ * it serves, and only then does the original refusal stand.
+ */
+async function openLiveReadSnapshot(context: StoreContext): Promise<LiveReadSnapshot> {
+  const capability = await openWalWithoutJournalReadSnapshot(context);
+  if (capability !== null) return capability;
   try {
-    db = new DatabaseSync(storeDbPath(context));
-  } catch {
-    return false;
-  }
-  try {
-    const mode = db.prepare("pragma journal_mode").get() as { journal_mode?: unknown } | undefined;
-    return mode?.journal_mode === "wal";
-  } catch {
-    return false;
-  } finally {
-    db.close();
+    return { handle: await openStore(context, "read"), walWithoutJournal: null };
+  } catch (error) {
+    if (!(error instanceof StoreError)) throw error;
+    const retry = await openWalWithoutJournalReadSnapshot(context);
+    if (retry === null) throw error;
+    return retry;
   }
 }
 
@@ -717,13 +820,18 @@ async function establishWalIndex(context: StoreContext): Promise<boolean> {
  * three domains, plus the §8 self-consistency probe (§8 "read the live
  * authority").
  *
- * The handle is the READ snapshot (`openLiveReadSnapshot`): the write intent
- * applies `journal_mode=wal` and `synchronous=FULL` as part of opening, so it
- * reconfigures a live store that is not currently in WAL — an image just
- * installed by a restore, whose bytes are deliberately left in VACUUM INTO's
- * rollback-journal mode until the next writer access — and creates its sidecars
- * before a single authority row is read. "No write statement" is not "mutates
- * nothing".
+ * The handle is the store layer's READ snapshot (`openLiveReadSnapshot`): the
+ * write intent applies `journal_mode=wal` and `synchronous=FULL` as part of
+ * opening, so it reconfigures a live store that is not currently in WAL — an
+ * image just installed by a restore, whose bytes are deliberately left in
+ * VACUUM INTO's rollback-journal mode until the next writer access — and
+ * creates its sidecars before a single authority row is read. "No write
+ * statement" is not "mutates nothing". The one shape that read intent cannot be
+ * taken of — a WAL store with no `-wal` — is read through
+ * `openWalWithoutJournalReadSnapshot`, which leaves the live store untouched,
+ * and is verified to have stayed that shape (`assertWalStoreUnchanged`) because
+ * that is what makes the read a description of the live store rather than of a
+ * mixture.
  *
  * A live store that cannot be read — missing, corrupt, drifted, held by another
  * writer past the bounded wait, or an artifact the read snapshot cannot be
@@ -739,15 +847,16 @@ async function establishWalIndex(context: StoreContext): Promise<boolean> {
  * refuse earlier, through their own codes, and never reach this boundary.
  */
 async function readLiveStore(context: StoreContext, what: string): Promise<LiveRead> {
-  let handle: StoreHandle;
+  let snapshot: LiveReadSnapshot;
   try {
-    handle = await openLiveReadSnapshot(context);
+    snapshot = await openLiveReadSnapshot(context);
   } catch (error) {
     throw lossUnaccepted(
       `${what} cannot inventory the live store at ${storeDbPath(context)} (${(error as Error).message}); an incomplete ` +
         `inventory is never called a safe rollback. The live store and the recovery point are BOTH left exactly as they are.`,
     );
   }
+  const { handle, walWithoutJournal } = snapshot;
   try {
     const integrity = probeIntegrity(handle.db);
     if (integrity.length !== 1 || integrity[0] !== "ok") {
@@ -783,6 +892,10 @@ async function readLiveStore(context: StoreContext, what: string): Promise<LiveR
         catalog: handle.schemaVersion >= CATALOG_MIGRATION_VERSION,
         execution: handle.schemaVersion >= EXECUTION_MIGRATION_VERSION,
       };
+      // Verified before the inventory is handed back: the capability path read an
+      // image of a store with no `-wal`, and that image only IS the live store
+      // while the live store kept the shape it was read in.
+      if (walWithoutJournal !== null) assertWalStoreUnchanged(context, walWithoutJournal, what);
       return {
         storeId: meta.store_id,
         epoch: meta.authority_epoch,
@@ -1024,7 +1137,7 @@ async function buildLossInventory(context: StoreContext, backupPath: string): Pr
 /**
  * `previewExecutionRestore` — §8's read-only loss preview.
  *
- * It mutates nothing: it opens the live store with the read intent, verifies
+ * It mutates nothing: it reads the live store through the read snapshot, verifies
  * the point, inventories the whole store and returns the canonical digest of
  * what restoring it would cost. A live store that cannot be inventoried
  * refuses with `execution.recovery-loss-unaccepted` and leaves both files
@@ -1355,7 +1468,15 @@ async function runRestore(context: StoreContext, root: string, input: ResolvedRe
       throw lossUnaccepted(`the live store file at ${livePath} was replaced by another writer; nothing was replaced.`);
     }
     for (const sidecar of sidecars) {
-      if (!sameIdentity(sidecar.identity, identityOf(sidecar.path))) {
+      const now = identityOf(sidecar.path);
+      // A sidecar that is still the file the checkpoint saw, or that is GONE, is
+      // quiescence: SQLite's own last clean close folds the journal into the
+      // database and removes it (and this runtime can land that removal just
+      // after the close), which is the store going quiet. A fold cannot hide
+      // here — the live BYTES are re-verified against the checkpoint hash in the
+      // next statement, with no await in between. A sidecar that is present and
+      // is not that file is a writer, and refuses.
+      if (now !== undefined && !sameIdentity(sidecar.identity, now)) {
         throw lossUnaccepted(`a WAL/SHM sidecar of ${livePath} appeared after the checkpoint; the store is not quiesced. Nothing was replaced.`);
       }
     }
