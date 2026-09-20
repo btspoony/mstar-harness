@@ -5,7 +5,8 @@
  * The JSON/file route (`coordination.ts`) and the DB route
  * (`execution-coordination.ts`) both run these rules here: which seat may issue
  * an operation, which plan a session may address, which operations a row
- * advertises, and whether a row's handoff or lease permits a transition. A rule
+ * advertises, whether a row may be prepared, which status a progress report may
+ * move it to, and whether a row's handoff or lease permits a transition. A rule
  * reads no file, no path and no store — a seat, the workflow state and the plan
  * row are the whole input — so neither transport can drift into a second
  * role/state machine.
@@ -27,7 +28,7 @@ import {
   type RowCoordination,
 } from "./coordination-write.js";
 import { validateExecutionLease, type ExecutionLease } from "./lease.js";
-import type { PlanRow } from "./status.js";
+import { rowPlanIds, type PlanRow } from "./status.js";
 import { isStandaloneDevelopmentWorkflow, type WorkflowSnapshot } from "./workflow.js";
 
 /* ------------------------------------------------------------------------ *
@@ -292,5 +293,142 @@ export function assertExecutionHolder(row: PlanRow, holder: string, planId: stri
       `${what} requires ${planId}'s execution lease held by ${holder} \u2014 it is held by ${lease.holder}`,
       { plan_id: planId, expected: holder, actual: lease.holder },
     );
+  }
+}
+
+/* ------------------------------------------------------------------------ *
+ * § Row admission: `prepare` eligibility and the `progress` transition table
+ * ------------------------------------------------------------------------ */
+
+/**
+ * §D `prepare` admission — the shared half of both transports. The seat gate,
+ * the coordinator binding (a file envelope, or a DB session row) and the
+ * catalog registration gate stay with the transport that owns them; what a row
+ * must look like to be prepared is the same rule on either route, so a prepared
+ * row can never be sealed a second time or given a second owner.
+ */
+export function assertPrepareAdmission(input: {
+  planId: string;
+  /** The addressed row; a transport whose lease lives outside the row passes it here. */
+  row: PlanRow;
+  coordination: RowCoordination | undefined;
+  /** Whether the transport records a bound plan session for this row. */
+  sessionBound: boolean;
+  /** Whether the transport records an execution lease for this row. */
+  leaseHeld: boolean;
+}): void {
+  const { planId, row, coordination } = input;
+  if (coordination?.prepared !== undefined) {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `plan ${planId} is already prepared from ${coordination.prepared.assignment_path}`,
+      { plan_id: planId },
+    );
+  }
+  if (input.sessionBound) {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `plan ${planId} already has a bound plan session \u2014 preparation precedes the bind`,
+      { plan_id: planId },
+    );
+  }
+  if (coordination?.handoff !== undefined) {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `plan ${planId} is handed off \u2014 preparation precedes the handoff`,
+      { plan_id: planId },
+    );
+  }
+  // §D prepare: Todo/Blocked with no execution lease — a sealed row with a
+  // second owner would make the plan session ambiguous. `null` and tombstone
+  // objects are existing keys, not absent ones.
+  if (input.leaseHeld) {
+    throw new CoordinationError(
+      "coordination.duplicate-holder",
+      `plan ${planId} already carries an execution lease \u2014 prepare must not seal a second owner`,
+      { plan_id: planId, holder: isPlainObject(row.execution_lease) ? row.execution_lease.holder : null },
+    );
+  }
+  if (!isClaimableStatus(rowStatusOf(row))) {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `plan ${planId} is ${rowStatusOf(row)} \u2014 prepare requires Todo or Blocked`,
+      { plan_id: planId, status: row.status },
+    );
+  }
+}
+
+/** Allowed row-status transitions for a plan session's progress report (§D). */
+export const PROGRESS_TRANSITIONS: Record<string, readonly string[]> = {
+  InProgress: ["InProgress", "InReview", "Blocked"],
+  InReview: ["InReview", "InProgress", "Blocked"],
+  Blocked: ["Blocked", "InProgress"],
+};
+
+/**
+ * §D the status one progress report may move a row to. The row's status before
+ * the report is the input and the return value, so a caller reports it without
+ * a second read.
+ */
+export function requireProgressStatus(row: PlanRow, target: string, planId: string): string {
+  const status = rowStatusOf(row);
+  const allowed = PROGRESS_TRANSITIONS[status];
+  if (allowed === undefined) {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `plan ${planId} is ${status || "unstatused"} \u2014 progress is reported only while executing (${Object.keys(PROGRESS_TRANSITIONS).join(", ")})`,
+      { plan_id: planId, status: row.status },
+    );
+  }
+  if (!allowed.includes(target)) {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `plan ${planId} cannot move ${status} \u2192 ${target} (allowed: ${allowed.join(", ")})`,
+      { plan_id: planId, from: status, to: target },
+    );
+  }
+  return status;
+}
+
+/** Working branches a plan row reports (`metadata.working_branch` / `metadata.track_branches`). */
+export function reportedBranchesOf(row: PlanRow): string[] {
+  const metadata = isPlainObject(row.metadata) ? row.metadata : {};
+  const out: string[] = [];
+  if (isNonEmptyString(metadata.working_branch)) out.push(metadata.working_branch);
+  if (Array.isArray(metadata.track_branches)) {
+    for (const branch of metadata.track_branches) if (isNonEmptyString(branch)) out.push(branch);
+  }
+  return out;
+}
+
+/**
+ * Track branches belong to this plan only — never main/integration/another
+ * plan. The forbidden set is the workflow's own branch anchors plus every OTHER
+ * plan's reported branches, so the caller passes the addressed workflow's
+ * branch block and its plan rows whichever transport it reads them from.
+ */
+export function assertTrackBranches(
+  input: { planId: string; branch: unknown; plans: readonly PlanRow[] },
+  branches: readonly string[],
+): void {
+  const forbidden = new Set<string>();
+  if (isPlainObject(input.branch)) {
+    for (const value of Object.values(input.branch)) if (isNonEmptyString(value)) forbidden.add(value);
+  }
+  for (const row of input.plans) {
+    if (rowPlanIds(row).includes(input.planId)) continue;
+    for (const branch of reportedBranchesOf(row)) forbidden.add(branch);
+  }
+  const seen = new Set<string>();
+  for (const branch of branches) {
+    if (seen.has(branch)) throw new CoordinationError("coordination.invalid-input", `track branch ${branch} is reported twice`, { branch });
+    seen.add(branch);
+    if (forbidden.has(branch)) {
+      throw new CoordinationError(
+        "coordination.invalid-input",
+        `track branch ${branch} belongs to main/integration or another plan \u2014 a plan reports only its own L2 track branches`,
+        { branch },
+      );
+    }
   }
 }

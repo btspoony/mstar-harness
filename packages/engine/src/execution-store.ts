@@ -174,6 +174,18 @@ export type ExecutionCaller = {
 export type ExecutionContext = StoreContext & { caller: ExecutionCaller };
 
 /**
+ * §3 the per-call envelope of ONE domain mutation: the operation id that makes
+ * an identical retry a replay, the session reference the caller claims (an
+ * identity the store revalidates, never a bearer credential) and the CAS token
+ * the caller read. The addressed record is added by the verb that takes it.
+ */
+export type ExecutionMutation = {
+  operationId: string;
+  session: ExecutionSessionRef;
+  expected: ExecutionToken;
+};
+
+/**
  * §3: the committed result of a domain operation. `data`/`token` describe the
  * state the operation produced (a replay returns the RECORDED receipt, not a
  * re-read), and `replayed` distinguishes the idempotent retry from the commit.
@@ -1120,6 +1132,20 @@ export async function initializeExecutionAuthority(context: StoreContext): Promi
 /** §3.1 operation ids: nonempty ASCII `[A-Za-z0-9._:-]+`, at most 128 characters. */
 const OPERATION_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
 
+/**
+ * §3.1 the operation-id gate every domain verb runs before it touches a store:
+ * the id is the store-epoch-scoped idempotency key of one request, so an
+ * unusable one is refused as caller input rather than becoming a ledger row.
+ */
+export function assertOperationId(value: unknown): string {
+  if (typeof value !== "string" || !OPERATION_ID_RE.test(value)) {
+    throw invalidInput(
+      `an operation id must be a nonempty ASCII [A-Za-z0-9._:-]+ string of at most 128 characters — got ${JSON.stringify(value)}`,
+    );
+  }
+  return value;
+}
+
 /** §3.1: the operation kind the create request hash is namespaced by. */
 const CREATE_WORKFLOW_OPERATION = "createExecutionWorkflow";
 
@@ -1211,11 +1237,7 @@ function resolveCreateWorkflow(
   if (!isNonEmptyString(caller?.sessionId)) {
     throw invalidInput("the execution caller needs a non-empty session identity");
   }
-  if (typeof operationId !== "string" || !OPERATION_ID_RE.test(operationId)) {
-    throw invalidInput(
-      `an operation id must be a nonempty ASCII [A-Za-z0-9._:-]+ string of at most 128 characters — got ${JSON.stringify(operationId)}`,
-    );
-  }
+  assertOperationId(operationId);
   const entryGate = validateWorkflowEntry(entry);
   const snapshotGate = validateWorkflowSnapshot(snapshot);
   const violations = [...entryGate.violations, ...snapshotGate.violations];
@@ -1629,12 +1651,8 @@ function sessionRoleRefusal(detail: string, details: Record<string, unknown> = {
 function resolveBindRequest(caller: ExecutionCaller, input: unknown): ResolvedBind {
   if (!isPlainObject(input)) throw invalidInput("a session bind needs a request object");
   if (!isNonEmptyString(caller?.sessionId)) throw invalidInput("the execution caller needs a non-empty session identity");
-  const { workflowId, planId, role, operationId } = input;
-  if (typeof operationId !== "string" || !OPERATION_ID_RE.test(operationId)) {
-    throw invalidInput(
-      `an operation id must be a nonempty ASCII [A-Za-z0-9._:-]+ string of at most 128 characters — got ${JSON.stringify(operationId)}`,
-    );
-  }
+  const { workflowId, planId, role } = input;
+  const operationId = assertOperationId(input.operationId);
   if (role !== "coordinator" && role !== "plan-pm") {
     throw invalidInput(`a session role is "coordinator" or "plan-pm" — got ${JSON.stringify(role)}`);
   }
@@ -1916,6 +1934,157 @@ function writePlanState(
     input.workflowId,
     input.planId,
   );
+}
+
+/**
+ * §2.2 write one plan's state and coordination blocks in ONE statement: the row
+ * revision is the column, `state_json` is the row minus the blocks that live in
+ * their own columns, and `coordination_json` is the coordination block minus
+ * `revision`/`session` — the DB authority stores neither, and the reader
+ * refuses a row that carries them.
+ */
+export function writePlanCoordinationRow(
+  tx: ExecutionTransaction,
+  input: {
+    workflowId: string;
+    planId: string;
+    state: Record<string, unknown>;
+    coordination: Record<string, unknown>;
+    revision: number;
+  },
+): void {
+  tx.db
+    .prepare(
+      "update execution_plans set state_json = ?, coordination_json = ?, revision = ? where workflow_id = ? and plan_id = ?",
+    )
+    .run(JSON.stringify(input.state), JSON.stringify(input.coordination), input.revision, input.workflowId, input.planId);
+}
+
+/** §2.2 one plan's sealed frozen input, as the DB holds it. */
+export type ExecutionSealedInput = {
+  /** The input row's own revision (§3.1: it advances only when it changes). */
+  revision: number;
+  /** The frozen execution-input selection's hash — the sealed document half. */
+  inputHash: string;
+  /** The catalog identity the frozen input selects, or `null`. */
+  pin: CatalogExecutionPin | null;
+};
+
+/** §2.2 the sealed frozen input of one plan, read inside the caller's transaction. */
+export function readExecutionSealedInput(
+  tx: ExecutionTransaction,
+  workflowId: string,
+  planId: string,
+): ExecutionSealedInput {
+  const row = tx.db
+    .prepare("select revision, input_hash, catalog_pin_json from execution_inputs where workflow_id = ? and plan_id = ?")
+    .get(workflowId, planId) as { revision?: unknown; input_hash?: unknown; catalog_pin_json?: unknown } | undefined;
+  if (row === undefined) {
+    throw corrupt(`plan ${planId} has no sealed execution input in workflow ${workflowId}`);
+  }
+  return {
+    revision: storedRevision(row.revision, `execution_inputs(${workflowId},${planId}).revision`),
+    inputHash: storedText(row.input_hash, `execution_inputs(${workflowId},${planId}).input_hash`),
+    pin: readFrozenInput(row.catalog_pin_json, `execution_inputs(${workflowId},${planId}).catalog_pin_json`),
+  };
+}
+
+/**
+ * §2.2/§7 the ONE writer of a plan's frozen catalog selection after creation:
+ * the eligible authorized `prepare` re-selects the pin (or clears it) and
+ * records it in the same transaction that seals the Assignment. `input_json`
+ * and `input_hash` are never rewritten — they are the sealed selection — and
+ * the input row's own revision advances only when its record actually changes,
+ * so an idempotent re-selection leaves the row untouched.
+ */
+export function writeExecutionInputPin(
+  tx: ExecutionTransaction,
+  input: { workflowId: string; planId: string; pin: CatalogExecutionPin | null },
+): void {
+  const sealed = readExecutionSealedInput(tx, input.workflowId, input.planId);
+  const storedPinJson = sealed.pin === null ? null : serializeExecutionValue(sealed.pin);
+  const nextPinJson = input.pin === null ? null : serializeExecutionValue(input.pin);
+  if (storedPinJson === nextPinJson) return;
+  tx.db
+    .prepare("update execution_inputs set catalog_pin_json = ?, revision = ? where workflow_id = ? and plan_id = ?")
+    .run(nextPinJson, sealed.revision + 1, input.workflowId, input.planId);
+}
+
+/**
+ * §3.1 the revision advance of one accepted plan operation: the addressed
+ * workflow's revision and timestamp advance once (a child of it changed) and
+ * the multi-domain transaction bumps the store revision once. Registry
+ * membership did not change, so the root revision is untouched.
+ */
+export function advancePlanOperationRevisions(
+  tx: ExecutionTransaction,
+  input: { workflowId: string; now: string },
+): void {
+  tx.db
+    .prepare("update execution_workflows set revision = revision + 1, updated_at = ? where workflow_id = ?")
+    .run(input.now, input.workflowId);
+  tx.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+}
+
+/**
+ * §3.1 the committed receipt of one operation id, or `null` for a first
+ * attempt. A recorded id whose request hash differs is
+ * `execution.operation-conflict` — an operation id is an idempotency key, not a
+ * reusable slot — while the identical retry gets its recorded receipt back
+ * without re-evaluating the CAS the first attempt already advanced.
+ *
+ * The caller revalidates current authority BEFORE calling this (it supplies the
+ * transaction it already authorized the caller in), so a revoked or foreign
+ * session never replays another actor's receipt.
+ */
+export function readPlanOperationReplay<T>(
+  tx: ExecutionTransaction,
+  input: { operationId: string; requestHash: string; workflowId: string; planId: string },
+): ExecutionReceipt<T> | null {
+  const recorded = readCommittedOperation(tx.db, tx.epoch, input.operationId);
+  if (recorded === null) return null;
+  if (recorded.requestHash !== input.requestHash) {
+    throw new ExecutionError(
+      "execution.operation-conflict",
+      `operation id ${JSON.stringify(input.operationId)} is already committed on this store epoch for a different request ` +
+        `(kind, scope, expected token, caller or payload). An operation id is an idempotency key, not a reusable slot — ` +
+        `retry the committed request unchanged or use a new id. Nothing was written.`,
+    );
+  }
+  const receipt = readCommittedReceipt<T>(recorded, tx, input.operationId, input.workflowId, {
+    kind: "plan",
+    key: [input.workflowId, input.planId],
+  });
+  return { ...receipt, operationId: input.operationId, replayed: true };
+}
+
+/** §3.1 record one committed operation receipt inside the transaction that produced it. */
+export function writePlanOperationReceipt(
+  tx: ExecutionTransaction,
+  input: {
+    operationId: string;
+    requestHash: string;
+    workflowId: string;
+    planId: string;
+    receipt: ExecutionRead<unknown>;
+    now: string;
+  },
+): void {
+  tx.db
+    .prepare(
+      "insert into execution_operations(epoch, operation_id, request_hash, store_id, workflow_id, plan_id, result_json, committed_at) " +
+        "values (?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .run(
+      tx.epoch,
+      input.operationId,
+      input.requestHash,
+      tx.storeId,
+      input.workflowId,
+      input.planId,
+      JSON.stringify(input.receipt),
+      input.now,
+    );
 }
 
 /** §2.3 the authorization one session-authorized plan address resolves to. */
@@ -2232,6 +2401,13 @@ export type ExecutionPlanWitness = {
   planId: string;
   /** The addressed plan's §3 view. */
   view: ExecutionPlanView;
+  /**
+   * The OTHER plans of the same workflow, as read in this transaction. A
+   * workflow-scoped rule that has to know its siblings — a plan reports only
+   * its own L2 track branches — reads them here instead of issuing a second
+   * query, so the read stays bounded by the addressed workflow.
+   */
+  siblings: readonly ExecutionPlanView[];
   /** The plan's CAS token; a mutation's `expected` must be exactly this. */
   token: ExecutionToken;
   /** The plan row's revision — the value `token` carries (§3.1). */
@@ -2277,6 +2453,7 @@ export function readExecutionPlanWitness(tx: ExecutionTransaction, read: Resolve
     workflowId: read.workflowId,
     planId: read.planId,
     view,
+    siblings: workflow.plans.filter((candidate) => candidate.plan.id !== read.planId),
     token,
     revision: parseExecutionToken(token).revision,
     workflowToken: workflow.workflowToken,

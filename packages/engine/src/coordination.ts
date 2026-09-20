@@ -73,10 +73,12 @@ import {
   assertNoHandoffTransition,
   assertOperationRole,
   assertPlanAddress,
-  isClaimableStatus,
+  assertPrepareAdmission,
+  assertTrackBranches,
   requireExecutionLease,
   requirePlanHandoff,
   requirePlanSessionBinding,
+  requireProgressStatus,
   rowCoordinationOf,
   rowStatusOf,
   summarize,
@@ -103,7 +105,7 @@ import { CatalogError } from "./catalog.js";
 import { parseCompassFrontmatterText } from "./iteration.js";
 import { rowPlanIds, validatePlanRow, validateStatusV2, type PlanRow, type StatusV2Doc } from "./status.js";
 import { getArtifactStore, resolveArtifactPath, type ArtifactRef, type ArtifactStore } from "./store.js";
-import { StoreError, openStore, type StoreContext, type StoreHandle } from "./store-db.js";
+import { StoreError, openStore, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
 import {
   IssueError,
   captureIssue,
@@ -393,23 +395,13 @@ function invalidInput(message: string, details: Record<string, unknown> = {}): C
   return new CoordinationError("coordination.invalid-input", message, details);
 }
 
-function assertViolationFree(violations: readonly { code: string; message: string }[], what: string): void {
+/** The single mapping from a violated stored shape to the refusal vocabulary. */
+export function assertViolationFree(violations: readonly { code: string; message: string }[], what: string): void {
   if (violations.length > 0) {
     throw new CoordinationError("coordination.invalid-input", `${what} is invalid \u2014 ${summarize(violations)}`, {
       violations: violations.map((entry) => entry.code),
     });
   }
-}
-
-/** Working branches a plan row reports (`metadata.track_branches` / `working_branch`). */
-function reportedBranchesOf(row: PlanRow): string[] {
-  const metadata = isPlainObject(row.metadata) ? row.metadata : {};
-  const out: string[] = [];
-  if (isNonEmptyString(metadata.working_branch)) out.push(metadata.working_branch);
-  if (Array.isArray(metadata.track_branches)) {
-    for (const branch of metadata.track_branches) if (isNonEmptyString(branch)) out.push(branch);
-  }
-  return out;
 }
 
 function snapshotPathOf(harnessRoot: string, workflowId: string): string {
@@ -527,7 +519,8 @@ export function resolveProcessHarnessDir(cwd: string = process.cwd(), harnessDir
  * § Assignment headers
  * ------------------------------------------------------------------------ */
 
-type AssignmentHeaders = {
+/** The pinned Assignment's C1 header block, as the seal and the scope read it. */
+export type AssignmentHeaders = {
   assignmentPath: string;
   executionScope: string;
   executeAs: string;
@@ -568,8 +561,12 @@ const ABSOLUTE_PATH_HEADERS = ["control harness root", "plan path", "worktree pa
  * the scope cannot be pinned and the call fails loudly. Lines inside fenced
  * code blocks are never headers; unknown headers (the assignment's own prose,
  * `IDENTITY:`, …) are ignored.
+ *
+ * Exported for the DB transport (`execution-coordination.ts`): a DB `prepare`
+ * seals the same reviewed Assignment, so it runs this one parser instead of a
+ * second, drifting header reader.
  */
-function parseAssignmentFile(assignmentPath: string): AssignmentHeaders {
+export function parseAssignmentFile(assignmentPath: string): AssignmentHeaders {
   const abs = resolve(assignmentPath);
   if (!existsSync(abs)) {
     throw new CoordinationError("coordination.assignment-invalid", `Assignment not found: ${abs}`, { path: abs });
@@ -1107,7 +1104,7 @@ async function withRowCommit(
     // Every row mutation re-authenticates the row's pin: an Assignment edited
     // after `prepare` invalidates the row until the coordinator re-prepares.
     if (opts.freshness !== false && coordination?.prepared !== undefined) {
-      assertPreparedFresh(scope, coordination.prepared);
+      assertPreparedFresh(scope.assignmentPath, coordination.prepared);
     }
     await opts.precheck(context);
     if (opts.expectedRevision !== null && context.revision !== opts.expectedRevision) {
@@ -1135,21 +1132,56 @@ async function withRowCommit(
   return result;
 }
 
-/** Re-verify the prepared Assignment hash; a changed Assignment is stale. */
-function assertPreparedFresh(scope: ResolvedPlanScope, prepared: PreparedCoordination): void {
-  if (!existsSync(scope.assignmentPath)) {
-    throw new CoordinationError("coordination.assignment-stale", `prepared Assignment is gone: ${scope.assignmentPath}`, {
-      path: scope.assignmentPath,
+/**
+ * Re-verify the prepared Assignment hash; a changed Assignment is stale. The
+ * rule is shared with the DB transport, which re-reads the Assignment its own
+ * seal records — one staleness rule for both routes, not a second tolerance.
+ */
+export function assertPreparedFresh(assignmentPath: string, prepared: PreparedCoordination): void {
+  if (!existsSync(assignmentPath)) {
+    throw new CoordinationError("coordination.assignment-stale", `prepared Assignment is gone: ${assignmentPath}`, {
+      path: assignmentPath,
     });
   }
-  const actual = sha256Bytes(readFileSync(scope.assignmentPath));
+  const actual = sha256Bytes(readFileSync(assignmentPath));
   if (actual !== prepared.assignment_sha256) {
     throw new CoordinationError(
       "coordination.assignment-stale",
-      `Assignment ${scope.assignmentPath} changed after preparation (${prepared.assignment_sha256} \u2192 ${actual}) \u2014 the coordinator must re-run \`prepare\``,
-      { path: scope.assignmentPath, expected: prepared.assignment_sha256, actual },
+      `Assignment ${assignmentPath} changed after preparation (${prepared.assignment_sha256} \u2192 ${actual}) \u2014 the coordinator must re-run \`prepare\``,
+      { path: assignmentPath, expected: prepared.assignment_sha256, actual },
     );
   }
+}
+
+/**
+ * §4.1 the commit-time recheck of the documents a `prepare` seals: the exact
+ * bytes the pre-transaction read hashed, re-read immediately before the
+ * mutation commits. An edit between the two reads refuses with no DB mutation
+ * rather than sealing bytes the seal does not describe — SQLite cannot lock the
+ * filesystem, so the witness is what closes that window.
+ */
+export function assertSealedInputsUnchanged(seal: {
+  assignmentPath: string;
+  assignmentSha256: string;
+  planPath: string;
+  planSha256: string;
+  planId: string;
+}): void {
+  const recheck = (filePath: string, expected: string, what: string): void => {
+    if (!existsSync(filePath)) {
+      throw new CoordinationError("coordination.assignment-stale", `${what} is gone: ${filePath}`, { path: filePath });
+    }
+    const actual = sha256Bytes(readFileSync(filePath));
+    if (actual !== expected) {
+      throw new CoordinationError(
+        "coordination.assignment-stale",
+        `${what} ${filePath} changed while plan ${seal.planId} was being prepared (${expected} \u2192 ${actual}) \u2014 nothing was sealed; re-run \`prepare\` against the reviewed input`,
+        { path: filePath, expected, actual, plan_id: seal.planId },
+      );
+    }
+  };
+  recheck(seal.assignmentPath, seal.assignmentSha256, "Assignment");
+  recheck(seal.planPath, seal.planSha256, "plan document");
 }
 
 /** A coordinator session must match the snapshot's coordinator binding. */
@@ -1299,7 +1331,7 @@ export async function readPlanCoordination(
       chosenRoot: harnessRoot,
       preloaded: { snapshot },
     });
-    assertPreparedFresh(scope, prepared);
+    assertPreparedFresh(scope.assignmentPath, prepared);
   }
   return {
     ...buildView(
@@ -1534,7 +1566,7 @@ async function bindPlanSessionForPlan(scope: ResolvedPlanScope, sessionId?: stri
     chosenRoot: harnessRoot,
     preloaded: { snapshot },
   });
-  assertPreparedFresh(pinned, prepared);
+  assertPreparedFresh(pinned.assignmentPath, prepared);
   if (!existsSync(scope.worktreePath) || !statSync(scope.worktreePath).isDirectory()) {
     throw new CoordinationError(
       "coordination.scope-mismatch",
@@ -1717,7 +1749,7 @@ function resumeBoundSession(resumePath: string): CoordinationResult {
     chosenRoot: harnessRoot,
     preloaded: { snapshot },
   });
-  assertPreparedFresh(scope, prepared);
+  assertPreparedFresh(scope.assignmentPath, prepared);
   return {
     ok: true,
     operation: "bind",
@@ -1863,7 +1895,7 @@ function recordedPinOf(row: unknown): CatalogExecutionPin | null {
 }
 
 /** What the catalog currently holds for one workflow/plan (read-only facts). */
-type CatalogPinFacts = {
+export type CatalogPinFacts = {
   store: "absent" | "active" | "inactive";
   storeId: string | null;
   revision: number | null;
@@ -1924,62 +1956,75 @@ async function readCatalogPinFacts(harnessRoot: string, workflowId: string, plan
     throw error;
   }
   try {
-    const db = handle.db;
-    const meta = db.prepare("select authority_state from store_meta where id = 1").get() as
-      | { authority_state?: unknown }
-      | undefined;
-    if (meta?.authority_state !== "active") {
-      return { store: "inactive", storeId: handle.storeId, revision: null, relation_hash: null, binding: null };
-    }
-    const entity = db
-      .prepare("select revision, root_kind, relative_path from catalog_entities where kind = 'plan' and id = ?")
-      .get(planId) as { revision?: unknown; root_kind?: unknown; relative_path?: unknown } | undefined;
-    const links = db
-      .prepare(
-        "select from_kind, from_id, relation, to_kind, to_id, ordinal from catalog_links " +
-          "where (from_kind = 'plan' and from_id = ?) or (to_kind = 'plan' and to_id = ?)",
-      )
-      .all(planId, planId) as Array<Record<string, unknown>>;
-    const relationHash = createHash("sha256")
-      .update(
-        stableJson(
-          links
-            .map((link) =>
-              [link.from_kind, link.from_id, link.relation, link.to_kind, link.to_id, link.ordinal ?? ""].join(" "),
-            )
-            .sort(),
-        ),
-        "utf8",
-      )
-      .digest("hex");
-    const binding = db
-      .prepare(
-        "select catalog_id, pin_json from catalog_execution_bindings where workflow_id = ? and catalog_kind = 'plan' and catalog_id = ?",
-      )
-      .get(workflowId, planId) as { catalog_id?: unknown; pin_json?: unknown } | undefined;
-    let bindingRelativePath: string | null = null;
-    if (typeof binding?.pin_json === "string") {
-      try {
-        const pin = JSON.parse(binding.pin_json) as { relativePath?: unknown };
-        if (typeof pin.relativePath === "string") bindingRelativePath = pin.relativePath;
-      } catch {
-        // An unreadable binding payload is reported as an unknown location,
-        // never guessed: the identity comparison below simply cannot confirm it.
-      }
-    }
-    return {
-      store: "active",
-      storeId: handle.storeId,
-      revision: typeof entity?.revision === "number" ? entity.revision : null,
-      relation_hash: relationHash,
-      binding:
-        binding !== undefined && typeof binding.catalog_id === "string"
-          ? { catalogId: binding.catalog_id, relativePath: bindingRelativePath }
-          : null,
-    };
+    return catalogPinFactsOn(handle.db, handle.storeId, workflowId, planId);
   } finally {
     handle.close();
   }
+}
+
+/**
+ * The same catalog facts read through a handle the caller ALREADY owns. The
+ * execution transaction opens one handle on the same `store.db`, so a DB
+ * `prepare` re-selects its pin under its own write lock through this function
+ * instead of opening a second connection — one relation-hash algorithm and one
+ * set of catalog lookups for both transports.
+ */
+export function catalogPinFactsOn(
+  db: StoreDb,
+  storeId: string,
+  workflowId: string,
+  planId: string,
+): CatalogPinFacts {
+  const meta = db.prepare("select authority_state from store_meta where id = 1").get() as
+    | { authority_state?: unknown }
+    | undefined;
+  if (meta?.authority_state !== "active") {
+    return { store: "inactive", storeId, revision: null, relation_hash: null, binding: null };
+  }
+  const entity = db
+    .prepare("select revision, root_kind, relative_path from catalog_entities where kind = 'plan' and id = ?")
+    .get(planId) as { revision?: unknown; root_kind?: unknown; relative_path?: unknown } | undefined;
+  const links = db
+    .prepare(
+      "select from_kind, from_id, relation, to_kind, to_id, ordinal from catalog_links " +
+        "where (from_kind = 'plan' and from_id = ?) or (to_kind = 'plan' and to_id = ?)",
+    )
+    .all(planId, planId) as Array<Record<string, unknown>>;
+  const relationHash = createHash("sha256")
+    .update(
+      stableJson(
+        links
+          .map((link) => [link.from_kind, link.from_id, link.relation, link.to_kind, link.to_id, link.ordinal ?? ""].join(" "))
+          .sort(),
+      ),
+      "utf8",
+    )
+    .digest("hex");
+  const binding = db
+    .prepare(
+      "select catalog_id, pin_json from catalog_execution_bindings where workflow_id = ? and catalog_kind = 'plan' and catalog_id = ?",
+    )
+    .get(workflowId, planId) as { catalog_id?: unknown; pin_json?: unknown } | undefined;
+  let bindingRelativePath: string | null = null;
+  if (typeof binding?.pin_json === "string") {
+    try {
+      const pin = JSON.parse(binding.pin_json) as { relativePath?: unknown };
+      if (typeof pin.relativePath === "string") bindingRelativePath = pin.relativePath;
+    } catch {
+      // An unreadable binding payload is reported as an unknown location,
+      // never guessed: the identity comparison below simply cannot confirm it.
+    }
+  }
+  return {
+    store: "active",
+    storeId,
+    revision: typeof entity?.revision === "number" ? entity.revision : null,
+    relation_hash: relationHash,
+    binding:
+      binding !== undefined && typeof binding.catalog_id === "string"
+        ? { catalogId: binding.catalog_id, relativePath: bindingRelativePath }
+        : null,
+  };
 }
 
 /**
@@ -2104,12 +2149,27 @@ export async function assertExecutionCatalogPin(input: {
  * inventing one.
  */
 async function selectCatalogPin(harnessRoot: string, workflowId: string, planId: string, row: unknown): Promise<CatalogExecutionPin | null> {
-  const facts = await readCatalogPinFacts(harnessRoot, workflowId, planId);
+  return selectCatalogPinOn(await readCatalogPinFacts(harnessRoot, workflowId, planId), executionInputHash(row, planId));
+}
+
+/**
+ * The same §1 selection decided from facts the caller already read: the
+ * catalog identity a `prepare` freezes is that row's current revision and
+ * relation hash, and the document half is the frozen input's own hash — never a
+ * hash recomputed from a row that may have moved. `null` when the catalog
+ * cannot select this plan, and then the caller clears any stale pin instead of
+ * leaving it behind.
+ *
+ * The DB transport reads the facts through its OWN handle inside the
+ * transaction that writes them (`catalogPinFactsOn`), so the revision recorded
+ * is the one no concurrent catalog write can change before commit.
+ */
+export function selectCatalogPinOn(facts: CatalogPinFacts, documentHash: string): CatalogExecutionPin | null {
   if (facts.store !== "active" || facts.storeId === null || facts.revision === null) return null;
   return {
     store_id: facts.storeId,
     entity_revision: facts.revision,
-    document_hash: executionInputHash(row, planId),
+    document_hash: documentHash,
     relation_hash: facts.relation_hash ?? "",
   };
 }
@@ -2120,7 +2180,28 @@ async function selectCatalogPin(harnessRoot: string, workflowId: string, planId:
 
 /** Absolute, existing evidence inside the plan's own plan/SDD area. */
 function assertEvidenceInsidePlan(scope: ResolvedPlanScope, paths: readonly string[]): void {
-  const roots = [canonicalizeNearestExisting(dirname(scope.planPath)), scope.sddDir];
+  assertEvidenceInsidePlanArea([canonicalizeNearestExisting(dirname(scope.planPath)), scope.sddDir], paths);
+}
+
+/**
+ * §D the two areas a plan's own evidence may live in: `{PLAN_DIR}` and
+ * `{SDD_DIR}/<plan-id>`. A prepared plan's Assignment is required to name
+ * exactly these (see `scopeFromAssignment`), so a transport that reads its plan
+ * identity from the store derives them here instead of trusting a caller file.
+ */
+export function planAreaRoots(harnessRoot: string, planId: string): string[] {
+  return [
+    canonicalizeNearestExisting(resolvePlanDir(harnessRoot)),
+    canonicalizeNearestExisting(resolveSddDir(harnessRoot, planId)),
+  ];
+}
+
+/**
+ * Absolute, existing evidence inside one plan's own plan/SDD area. Shared by
+ * both transports: the file route passes the areas its prepared scope pins, the
+ * DB route the areas its own plan identity derives.
+ */
+export function assertEvidenceInsidePlanArea(roots: readonly string[], paths: readonly string[]): void {
   for (const path of paths) {
     if (!isAbsolute(path)) {
       throw invalidInput(`evidence path must be absolute: ${path}`, { path });
@@ -2138,37 +2219,6 @@ function assertEvidenceInsidePlan(scope: ResolvedPlanScope, paths: readonly stri
     }
   }
 }
-
-/** Track branches belong to this plan only — never main/integration/another plan. */
-function assertTrackBranches(context: RowContext, branches: readonly string[]): void {
-  const forbidden = new Set<string>();
-  if (isPlainObject(context.snapshot.branch)) {
-    for (const value of Object.values(context.snapshot.branch)) if (isNonEmptyString(value)) forbidden.add(value);
-  }
-  for (const row of context.snapshot.plans) {
-    if (rowPlanIds(row).includes(context.scope.planId)) continue;
-    for (const branch of reportedBranchesOf(row)) forbidden.add(branch);
-  }
-  const seen = new Set<string>();
-  for (const branch of branches) {
-    if (seen.has(branch)) throw invalidInput(`track branch ${branch} is reported twice`, { branch });
-    seen.add(branch);
-    if (forbidden.has(branch)) {
-      throw new CoordinationError(
-        "coordination.invalid-input",
-        `track branch ${branch} belongs to main/integration or another plan \u2014 a plan reports only its own L2 track branches`,
-        { branch },
-      );
-    }
-  }
-}
-
-/** Allowed row-status transitions for a plan session's progress report. */
-const PROGRESS_TRANSITIONS: Record<string, readonly string[]> = {
-  InProgress: ["InProgress", "InReview", "Blocked"],
-  InReview: ["InReview", "InProgress", "Blocked"],
-  Blocked: ["Blocked", "InProgress"],
-};
 
 async function mutatePrepare(
   scope: ResolvedPlanScope,
@@ -2193,44 +2243,13 @@ async function mutatePrepare(
         });
       }
       assertCoordinatorBinding(session, sessionPath, context.snapshot);
-      if (context.coordination?.prepared !== undefined) {
-        throw new CoordinationError(
-          "coordination.invalid-transition",
-          `plan ${scope.planId} is already prepared from ${context.coordination.prepared.assignment_path}`,
-          { plan_id: scope.planId },
-        );
-      }
-      if (context.coordination?.session !== undefined) {
-        throw new CoordinationError(
-          "coordination.invalid-transition",
-          `plan ${scope.planId} already has a bound plan session \u2014 preparation precedes the bind`,
-          { plan_id: scope.planId },
-        );
-      }
-      if (context.coordination?.handoff !== undefined) {
-        throw new CoordinationError(
-          "coordination.invalid-transition",
-          `plan ${scope.planId} is handed off \u2014 preparation precedes the handoff`,
-          { plan_id: scope.planId },
-        );
-      }
-      // §D prepare: Todo/Blocked with no execution lease — a sealed row with a
-      // second owner would make the plan session ambiguous. `null` and
-      // tombstone objects are existing keys, not absent ones.
-      if (context.row.execution_lease !== undefined) {
-        throw new CoordinationError(
-          "coordination.duplicate-holder",
-          `plan ${scope.planId} already carries an execution lease \u2014 prepare must not seal a second owner`,
-          { plan_id: scope.planId, holder: isPlainObject(context.row.execution_lease) ? context.row.execution_lease.holder : null },
-        );
-      }
-      if (!isClaimableStatus(rowStatusOf(context.row))) {
-        throw new CoordinationError(
-          "coordination.invalid-transition",
-          `plan ${scope.planId} is ${rowStatusOf(context.row)} \u2014 prepare requires Todo or Blocked`,
-          { plan_id: scope.planId, status: context.row.status },
-        );
-      }
+      assertPrepareAdmission({
+        planId: scope.planId,
+        row: context.row,
+        coordination: context.coordination,
+        sessionBound: context.coordination?.session !== undefined,
+        leaseHeld: context.row.execution_lease !== undefined,
+      });
       // A root-visible workflow with a pending catalog registration is never a
       // valid workspace to prepare against (contract §3 step 3).
       await assertWorkflowRegistrationCommitted(scope.harnessRoot, scope.workflowId);
@@ -2300,23 +2319,13 @@ async function mutateProgress(
     precheck: (context) => {
       assertRowBinding(session, sessionPath, context.row, scope.planId);
       assertNoHandoffTransition(context.coordination, scope.planId);
-      const status = rowStatusOf(context.row);
-      const allowed = PROGRESS_TRANSITIONS[status];
-      if (allowed === undefined) {
-        throw new CoordinationError(
-          "coordination.invalid-transition",
-          `plan ${scope.planId} is ${status || "unstatused"} \u2014 progress is reported only while executing (${Object.keys(PROGRESS_TRANSITIONS).join(", ")})`,
-          { plan_id: scope.planId, status: context.row.status },
+      requireProgressStatus(context.row, progress.status, scope.planId);
+      if (progress.track_branches !== undefined) {
+        assertTrackBranches(
+          { planId: scope.planId, branch: context.snapshot.branch, plans: context.snapshot.plans },
+          progress.track_branches,
         );
       }
-      if (!allowed.includes(progress.status)) {
-        throw new CoordinationError(
-          "coordination.invalid-transition",
-          `plan ${scope.planId} cannot move ${status} \u2192 ${progress.status} (allowed: ${allowed.join(", ")})`,
-          { plan_id: scope.planId, from: status, to: progress.status },
-        );
-      }
-      if (progress.track_branches !== undefined) assertTrackBranches(context, progress.track_branches);
     },
     mutate: (context) => {
       const metadata = isPlainObject(context.row.metadata) ? context.row.metadata : {};
