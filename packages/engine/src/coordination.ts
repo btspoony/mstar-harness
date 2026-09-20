@@ -1735,8 +1735,13 @@ async function bindPlanSessionForPlan(scope: ResolvedPlanScope, sessionId?: stri
   };
 }
 
-/** Map a pure lease-transition failure onto the coordination error contract. */
-function leaseFailure(violations: readonly { code: string; message: string }[]): CoordinationError {
+/**
+ * Map a pure lease-transition failure onto the coordination error contract.
+ * Exported for the DB transport (`execution-store.ts`), which claims its
+ * initial lease through the SAME `claimLease` state machine: one mapping from
+ * lease violations to the refusal vocabulary, never a second drifting copy.
+ */
+export function leaseFailure(violations: readonly { code: string; message: string }[]): CoordinationError {
   const codes = violations.map((entry) => entry.code);
   const message = summarize(violations);
   if (codes.includes("lease.claim.other-holder")) {

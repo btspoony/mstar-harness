@@ -17,7 +17,7 @@
  * makes the upgrade refuse exactly as it would in a real workspace.
  */
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -26,20 +26,26 @@ import { ExecutionPinConflictError, executionInputHash, type CatalogExecutionPin
 import {
   ExecutionError,
   assertExecutionToken,
+  bindExecutionSession,
   createExecutionWorkflow,
   executionToken,
   initializeExecutionAuthority,
   parseExecutionToken,
+  readExecutionPlan,
   readExecutionState,
   serializeExecutionValue,
   withExecutionTransaction,
   type ExecutionCaller,
   type ExecutionContext,
+  type ExecutionPlanView,
+  type ExecutionRead,
   type ExecutionReceipt,
+  type ExecutionSessionRef,
   type ExecutionState,
   type ExecutionToken,
 } from "./execution-store.js";
 import * as engineIndex from "./index.js";
+import type { ExecutionLease } from "./lease.js";
 import type { WorkflowEntry } from "./status.js";
 import {
   MIGRATIONS,
@@ -1760,7 +1766,7 @@ describe("execution-domain: §3 workflow creation, sealed input and authoritativ
     expect(state.data.workflows[0].plans[0].plan.title).toBe("p-1 title");
   });
 
-  test("exports createExecutionWorkflow verbatim and no plan-read or bind stub", () => {
+  test("exports createExecutionWorkflow verbatim and no later-plan stub", () => {
     // A compile-time pin of the verbatim §3 signature: this binding fails to
     // typecheck if the declaration drifts.
     const surface: (
@@ -1770,15 +1776,653 @@ describe("execution-domain: §3 workflow creation, sealed input and authoritativ
     expect(surface).toBe(createExecutionWorkflow);
     expect(typeof engineIndex.createExecutionWorkflow).toBe("function");
     expect(engineIndex.createExecutionWorkflow.length).toBe(2);
-    // The C4 read/bind verbs and the later coordination verbs are not stubbed
-    // into the package surface by this task.
+    // The later coordination/recovery verbs are not stubbed into the package
+    // surface. C4 supplies `bindExecutionSession`/`readExecutionPlan`, pinned
+    // verbatim by the `execution-session` group below.
     for (const name of [
-      "readExecutionPlan",
-      "bindExecutionSession",
       "recoverExecutionCoordinator",
       "mutateExecutionWorkflow",
       "mutateExecutionPlan",
       "commitExecutionRegistration",
+    ]) {
+      expect(name in engineIndex).toBe(false);
+    }
+  });
+});
+
+/* ------------------------------------------------------------------------ *
+ * C4 — session identity, ownership and the session-authorized plan read (§2.3/§3)
+ * ------------------------------------------------------------------------ */
+
+/** One `bindExecutionSession` request (§3): `planId` is null exactly for a coordinator. */
+type SessionBind = {
+  workflowId: string;
+  planId: string | null;
+  role: "coordinator" | "plan-pm";
+  expected: ExecutionToken;
+  operationId: string;
+};
+
+function sessionBind(workflowId: string, planId: string | null, expected: ExecutionToken, operationId: string): SessionBind {
+  return { workflowId, planId, role: planId === null ? "coordinator" : "plan-pm", expected, operationId };
+}
+
+/** The trusted caller a session verb authorizes against (§3 `ExecutionCaller`). */
+function sessionCaller(workflowId: string, sessionId: string, overrides: Partial<ExecutionCaller> = {}): ExecutionCaller {
+  return { sessionId, role: "coordinator", workflowId, planId: null, ...overrides };
+}
+
+/** A plan-pm caller of one plan. */
+function planPmCaller(workflowId: string, sessionId: string, planId: string): ExecutionCaller {
+  return { sessionId, role: "plan-pm", workflowId, planId };
+}
+
+type CreatedWorkflowFixture = {
+  context: StoreContext;
+  storeId: string;
+  epoch: number;
+  workflowToken: ExecutionToken;
+  planTokens: Record<string, ExecutionToken>;
+};
+
+/** An active store holding ONE created workflow (`wf-1`, plans `p-1`/`p-2`). */
+async function createdWorkflow(label: string, creatorSessionId = "host-coord"): Promise<CreatedWorkflowFixture> {
+  const { context } = await freshStore(label);
+  const initialized = await initializeExecutionAuthority(context);
+  await registerPlan(context, "p-1");
+  await registerPlan(context, "p-2");
+  const { entry, snapshot } = creationInput("wf-1", [planRow("p-1"), planRow("p-2")]);
+  const created = await createExecutionWorkflow(
+    domainContext(context, sessionCaller("wf-1", creatorSessionId)),
+    { entry, snapshot, expected: initialized.token, operationId: `create-${label}` },
+  );
+  const [workflow] = created.data.workflows;
+  return {
+    context,
+    storeId: created.storeId,
+    epoch: created.epoch,
+    workflowToken: workflow.workflowToken,
+    planTokens: workflow.planTokens,
+  };
+}
+
+/**
+ * The prepared state W2's `prepare` will write: the DB has no prepare verb yet,
+ * so the fixture records the prepared block and (when a scope is given) the
+ * plan's own worktree/branch metadata directly — the same rows the legacy
+ * writer records on a plan. Neither write moves the row revision, so the plan
+ * token a bind presents is the one creation minted.
+ */
+function preparePlanRow(context: StoreContext, planId: string, scope: { worktreePath: string; workingBranch: string } | null): void {
+  const db = rawDb(storePath(context));
+  try {
+    db.prepare("update execution_plans set coordination_json = ? where workflow_id = 'wf-1' and plan_id = ?").run(
+      JSON.stringify({
+        prepared: {
+          assignment_path: join(context.harnessDir, "assignments", `${planId}.md`),
+          assignment_sha256: "a".repeat(64),
+          plan_sha256: "b".repeat(64),
+          qa_gate: "mandatory",
+          findings_cleanup: "allow-residual",
+          prepared_by: "host-coord",
+          prepared_at: TS,
+        },
+      }),
+      planId,
+    );
+    if (scope === null) return;
+    const stored = one(db, `select state_json from execution_plans where workflow_id = 'wf-1' and plan_id = '${planId}'`);
+    const state = JSON.parse(String(stored.state_json)) as Record<string, unknown>;
+    state.metadata = { worktree_path: scope.worktreePath, working_branch: scope.workingBranch };
+    db.prepare("update execution_plans set state_json = ? where workflow_id = 'wf-1' and plan_id = ?").run(
+      JSON.stringify(state),
+      planId,
+    );
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * A valid legacy session envelope at the exact path the JSON route writes.
+ * Nothing in the DB authority reads it: it is planted to prove that a file
+ * envelope is neither an output nor an authority of a DB bind.
+ */
+function writeLegacyEnvelope(context: StoreContext, workflowId: string, role: string, sessionId: string): string {
+  const dir = join(context.harnessDir, "workflows", workflowId, "sessions");
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, `${role}-${sessionId}.json`);
+  writeFileSync(
+    path,
+    JSON.stringify(
+      { schema_version: 1, role, session_id: sessionId, workflow_id: workflowId, harness_root: context.harnessDir },
+      null,
+      2,
+    ),
+  );
+  return path;
+}
+
+/** The DB rows a session bind writes, as one comparable value. */
+function sessionRows(context: StoreContext): Row[] {
+  const db = rawDb(storePath(context));
+  try {
+    return all(
+      db,
+      "select workflow_id, role, session_id, plan_id, epoch, revision, state from execution_sessions order by role, session_id",
+    );
+  } finally {
+    db.close();
+  }
+}
+
+/** One plan row as the DB holds it: the row revision, and the state it stores. */
+function storedPlan(context: StoreContext, planId: string): { revision: number; state: Record<string, unknown> } {
+  const db = rawDb(storePath(context));
+  try {
+    const row = one(db, `select revision, state_json from execution_plans where workflow_id = 'wf-1' and plan_id = '${planId}'`);
+    return { revision: Number(row.revision), state: JSON.parse(String(row.state_json)) as Record<string, unknown> };
+  } finally {
+    db.close();
+  }
+}
+
+describe("execution-session: §2.3 binding, role-scoped identity and the plan read", () => {
+  test("binds the creating identity as coordinator, serves it a plan and creates no session file", async () => {
+    const fixture = await createdWorkflow("session-coordinator");
+    const { context, storeId, epoch, workflowToken, planTokens } = fixture;
+    const before = executionFootprint(context);
+    const caller = sessionCaller("wf-1", "host-coord");
+    const request = sessionBind("wf-1", null, workflowToken, "bind-coordinator");
+
+    const bound = await bindExecutionSession(domainContext(context, caller), request);
+    expect(bound.replayed).toBe(false);
+    expect(bound.operationId).toBe("bind-coordinator");
+    expect(bound.storeId).toBe(storeId);
+    expect(bound.epoch).toBe(epoch);
+    expect(bound.data).toEqual({
+      storeId,
+      epoch,
+      workflowId: "wf-1",
+      role: "coordinator",
+      sessionId: "host-coord",
+      planId: null,
+    });
+    expect(bound.token).toBe(executionToken("session", storeId, epoch, ["wf-1", "coordinator", "host-coord"], 1));
+
+    const db = rawDb(storePath(context));
+    try {
+      expect(one(db, "select workflow_id, role, session_id, plan_id, epoch, revision, state from execution_sessions")).toEqual({
+        workflow_id: "wf-1",
+        role: "coordinator",
+        session_id: "host-coord",
+        plan_id: null,
+        epoch,
+        revision: 1,
+        state: "active",
+      });
+      const session = one(db, "select bound_at from execution_sessions");
+      expect(String(session.bound_at)).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+      // A session is a child of the workflow: the workflow revision advances
+      // once, root membership does not, and the store revision advances once.
+      expect(one(db, "select revision, updated_at from execution_workflows")).toEqual({
+        revision: 2,
+        updated_at: session.bound_at,
+      });
+      expect(one(db, "select revision from execution_meta where id = 1")).toEqual({ revision: 3 });
+      expect(scalar(db, "select count(*) as n from execution_leases")).toBe(0);
+      expect(
+        one(db, "select epoch, workflow_id, plan_id from execution_operations where operation_id = 'bind-coordinator'"),
+      ).toEqual({ epoch, workflow_id: "wf-1", plan_id: null });
+    } finally {
+      db.close();
+    }
+    expect(executionFootprint(context)).toEqual({
+      ...before,
+      storeRevision: (before.storeRevision as number) + 1,
+      sessions: 1,
+      operations: (before.operations as number) + 1,
+    });
+    // §2.3: binding writes no session file, and the control root holds nothing
+    // beside the store.
+    expect(existsSync(join(context.harnessDir, "workflows"))).toBe(false);
+    expect(readdirSync(context.harnessDir).filter((name) => !name.startsWith("store.db"))).toEqual([]);
+
+    // The coordinator reads any plan of its workflow, with the plan token it
+    // passes back as CAS.
+    const read = await readExecutionPlan(domainContext(context, caller), bound.data, "p-1");
+    expect(read.storeId).toBe(storeId);
+    expect(read.epoch).toBe(epoch);
+    expect(read.token).toBe(planTokens["p-1"]);
+    expect(read.data.plan).toMatchObject({ id: "p-1", title: "p-1 title", file: "plans/p-1.md", status: "Todo" });
+    expect(read.data.workflow).toEqual({
+      schema_version: 1,
+      id: "wf-1",
+      type: "plan",
+      status: "running",
+      started_at: TS,
+      updated_at: TS,
+      delivery_kind: "development",
+      branch: { source: "feature/wf-1", target: "main" },
+    });
+    expect(read.data.coordination).toBeNull();
+    expect(read.data.session).toBeNull();
+    expect(read.data.executionLease).toBeNull();
+    expect(read.data.integrationLease).toBeNull();
+    expect(read.data.frozenInput).toBeNull();
+
+    // An exact retry returns the recorded receipt and advances no revision,
+    // even though the token it presents is now superseded.
+    const footprint = executionFootprint(context);
+    const replayed = await bindExecutionSession(domainContext(context, caller), request);
+    expect(replayed.replayed).toBe(true);
+    expect(replayed.operationId).toBe("bind-coordinator");
+    expect(replayed.token).toBe(bound.token);
+    expect(replayed.data).toEqual(bound.data);
+    expect(executionFootprint(context)).toEqual(footprint);
+  });
+
+  test("two concurrent binds on one coordinator token commit exactly one owner", async () => {
+    const fixture = await createdWorkflow("session-contention");
+    const { context, workflowToken } = fixture;
+    // Two genuinely distinct callers of the SAME identity, both presenting the
+    // current token: each opens its own handle through `withExecutionTransaction`
+    // and takes `BEGIN IMMEDIATE`, so the loser re-reads the advance the winner
+    // committed. No transaction is mocked and no lock is simulated.
+    const settled = await Promise.allSettled(
+      ["contend-a", "contend-b"].map((operationId) =>
+        bindExecutionSession(
+          domainContext(context, sessionCaller("wf-1", "host-coord")),
+          sessionBind("wf-1", null, workflowToken, operationId),
+        ),
+      ),
+    );
+    expect(settled.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    const loser = settled.find((result) => result.status === "rejected") as PromiseRejectedResult | undefined;
+    expect(loser?.reason).toMatchObject({ code: "execution.stale-token" });
+    expect(sessionRows(context)).toEqual([
+      { workflow_id: "wf-1", role: "coordinator", session_id: "host-coord", plan_id: null, epoch: fixture.epoch, revision: 1, state: "active" },
+    ]);
+    const db = rawDb(storePath(context));
+    try {
+      expect(scalar(db, "select count(*) as n from execution_operations where operation_id like 'contend-%'")).toBe(1);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("refuses a request that names a role or scope the trusted caller does not hold", async () => {
+    const fixture = await createdWorkflow("session-caller-gate");
+    const { context, workflowToken, planTokens } = fixture;
+    const footprint = executionFootprint(context);
+    const attempt = (caller: ExecutionCaller, request: SessionBind) =>
+      bindExecutionSession(domainContext(context, caller), request);
+
+    // A plan-pm caller cannot promote itself by naming the coordinator role in
+    // the request: the trusted caller identity decides, not the JSON.
+    await expect(
+      attempt(planPmCaller("wf-1", "host-pm", "p-1"), sessionBind("wf-1", null, workflowToken, "promote-role")),
+    ).rejects.toMatchObject({ code: "coordination.session-role" });
+    // A coordinator caller cannot bind a plan session.
+    await expect(
+      attempt(sessionCaller("wf-1", "host-coord"), sessionBind("wf-1", "p-1", planTokens["p-1"], "coordinator-as-plan")),
+    ).rejects.toMatchObject({ code: "coordination.session-role" });
+    // A trusted caller of another workflow addresses nothing in this one.
+    await expect(
+      attempt(sessionCaller("wf-other", "host-coord"), sessionBind("wf-1", null, workflowToken, "foreign-workflow")),
+    ).rejects.toMatchObject({ code: "coordination.session-mismatch" });
+    // A plan-pm caller bound to p-2 cannot bind p-1.
+    await expect(
+      attempt(planPmCaller("wf-1", "host-pm", "p-2"), sessionBind("wf-1", "p-1", planTokens["p-1"], "foreign-plan")),
+    ).rejects.toMatchObject({ code: "coordination.session-mismatch" });
+
+    expect(sessionRows(context)).toEqual([]);
+    expect(executionFootprint(context)).toEqual(footprint);
+  });
+
+  test("refuses a foreign identity, a live second holder and a legacy envelope that authorizes nothing", async () => {
+    const fixture = await createdWorkflow("session-owner");
+    const { context, workflowToken } = fixture;
+    const creator = sessionCaller("wf-1", "host-coord");
+    const footprint = executionFootprint(context);
+
+    // (1) The workflow is unbound, but only its CREATING identity may take the
+    // coordinator role — a foreign trusted identity is refused.
+    await expect(
+      bindExecutionSession(domainContext(context, sessionCaller("wf-1", "host-other")), sessionBind("wf-1", null, workflowToken, "foreign-creator")),
+    ).rejects.toMatchObject({ code: "execution.session-unavailable" });
+    expect(sessionRows(context)).toEqual([]);
+
+    const bound = await bindExecutionSession(domainContext(context, creator), sessionBind("wf-1", null, workflowToken, "bind-owner"));
+    const accepted = await readExecutionState(context);
+    const acceptedFootprint = executionFootprint(context);
+
+    // (2) A valid legacy session envelope names a host identity and nothing
+    // else: it is neither read nor honored, and the bytes stay untouched.
+    const envelope = writeLegacyEnvelope(context, "wf-1", "coordinator", "legacy-host");
+    const bytes = readFileSync(envelope, "utf8");
+    await expect(
+      bindExecutionSession(
+        domainContext(context, sessionCaller("wf-1", "legacy-host")),
+        sessionBind("wf-1", null, accepted.data.workflows[0].workflowToken, "legacy-envelope"),
+      ),
+    ).rejects.toMatchObject({ code: "coordination.duplicate-holder" });
+    expect(readFileSync(envelope, "utf8")).toBe(bytes);
+    expect(existsSync(join(context.harnessDir, "workflows", "wf-1", "sessions", "coordinator-host-coord.json"))).toBe(false);
+    expect(sessionRows(context)).toEqual([
+      { workflow_id: "wf-1", role: "coordinator", session_id: "host-coord", plan_id: null, epoch: bound.epoch, revision: 1, state: "active" },
+    ]);
+
+    // (3) A live owner is never replaced: neither the creating identity nor a
+    // third one may bind the coordinator role a second time.
+    for (const [sessionId, operationId] of [
+      ["host-coord", "bind-again"],
+      ["host-third", "bind-third"],
+    ] as const) {
+      await expect(
+        bindExecutionSession(
+          domainContext(context, sessionCaller("wf-1", sessionId)),
+          sessionBind("wf-1", null, accepted.data.workflows[0].workflowToken, operationId),
+        ),
+      ).rejects.toMatchObject({ code: "coordination.duplicate-holder" });
+    }
+
+    expect(await readExecutionState(context)).toEqual(accepted);
+    expect(executionFootprint(context)).toEqual(acceptedFootprint);
+    expect(executionFootprint(context).sessions).toBe((footprint.sessions as number) + 1);
+  });
+
+  test("refuses a wrong kind, a foreign store, another address and a stale epoch without binding", async () => {
+    const fixture = await createdWorkflow("session-cas");
+    const { context, storeId, epoch, planTokens } = fixture;
+    const footprint = executionFootprint(context);
+    const caller = sessionCaller("wf-1", "host-coord");
+    const attempt = (who: ExecutionCaller, request: SessionBind) => bindExecutionSession(domainContext(context, who), request);
+
+    // A root token is never a session parent, and the address kind is never
+    // inferred from a supplied token.
+    await expect(
+      attempt(caller, sessionBind("wf-1", null, executionToken("root", storeId, epoch, [], 3), "wrong-kind")),
+    ).rejects.toMatchObject({ code: "execution.token-kind" });
+    await expect(
+      attempt(caller, sessionBind("wf-1", null, planTokens["p-1"], "plan-token-for-coordinator")),
+    ).rejects.toMatchObject({ code: "execution.token-kind" });
+    // A token minted for another store, and a workflow token of another workflow.
+    await expect(
+      attempt(caller, sessionBind("wf-1", null, executionToken("workflow", OTHER_STORE, epoch, ["wf-1"], 1), "foreign-store")),
+    ).rejects.toMatchObject({ code: "execution.scope-mismatch" });
+    await expect(
+      attempt(caller, sessionBind("wf-1", null, executionToken("workflow", storeId, epoch, ["wf-9"], 1), "other-workflow")),
+    ).rejects.toMatchObject({ code: "execution.scope-mismatch" });
+    // A superseded epoch, and a superseded revision of the same address.
+    await expect(
+      attempt(caller, sessionBind("wf-1", null, executionToken("workflow", storeId, epoch - 1, ["wf-1"], 1), "stale-epoch")),
+    ).rejects.toMatchObject({ code: "store.stale-epoch" });
+    await expect(
+      attempt(caller, sessionBind("wf-1", null, executionToken("workflow", storeId, epoch, ["wf-1"], 9), "stale-revision")),
+    ).rejects.toMatchObject({ code: "execution.stale-token" });
+    // A plan bind presenting the token of a DIFFERENT plan.
+    await expect(
+      attempt(planPmCaller("wf-1", "host-pm", "p-1"), sessionBind("wf-1", "p-1", planTokens["p-2"], "wrong-plan")),
+    ).rejects.toMatchObject({ code: "execution.scope-mismatch" });
+
+    expect(sessionRows(context)).toEqual([]);
+    expect(executionFootprint(context)).toEqual(footprint);
+  });
+
+  test("refuses a plan with no prepared Assignment and a prepared plan that records no scope", async () => {
+    const fixture = await createdWorkflow("session-plan-eligibility");
+    const { context } = fixture;
+    const coordinator = sessionCaller("wf-1", "host-coord");
+    const coordinatorRef = await bindExecutionSession(
+      domainContext(context, coordinator),
+      sessionBind("wf-1", null, fixture.workflowToken, "bind-eligibility"),
+    );
+    const footprint = executionFootprint(context);
+    const attempt = (operationId: string) =>
+      bindExecutionSession(
+        domainContext(context, planPmCaller("wf-1", "host-pm", "p-1")),
+        sessionBind("wf-1", "p-1", fixture.planTokens["p-1"], operationId),
+      );
+
+    // §2.3: an unprepared row is refused, never admitted — the public prepare
+    // transition is a later plan, so this refusal is the whole story here.
+    await expect(attempt("unprepared")).rejects.toMatchObject({ code: "coordination.not-prepared" });
+    // A prepared row that records no plan worktree/branch scope cannot have a
+    // lease claimed from it: ownership is never guessed.
+    preparePlanRow(context, "p-1", null);
+    await expect(attempt("no-scope")).rejects.toMatchObject({ code: "coordination.scope-mismatch" });
+
+    const db = rawDb(storePath(context));
+    try {
+      expect(scalar(db, "select count(*) as n from execution_sessions")).toBe(1);
+      expect(scalar(db, "select count(*) as n from execution_leases")).toBe(0);
+    } finally {
+      db.close();
+    }
+    expect(storedPlan(context, "p-1")).toMatchObject({ revision: 1, state: { status: "Todo" } });
+    expect(executionFootprint(context)).toEqual(footprint);
+    const unclaimed = await readExecutionPlan(domainContext(context, coordinator), coordinatorRef.data, "p-1");
+    expect(unclaimed.data.session).toBeNull();
+    expect(unclaimed.data.coordination).toMatchObject({ prepared: { prepared_by: "host-coord" } });
+  });
+
+  test("binds a prepared plan, claims its lease once and serves it to its own session", async () => {
+    // One host identity backs both roles (§2.2): the same session id creates
+    // the workflow, binds it as coordinator and binds the prepared plan as its
+    // plan-pm.
+    const shared = "host-shared";
+    const fixture = await createdWorkflow("session-plan", shared);
+    const { context, storeId, epoch, workflowToken, planTokens } = fixture;
+    const worktreePath = join(context.harnessDir, "worktrees", "p-1");
+    await bindExecutionSession(
+      domainContext(context, sessionCaller("wf-1", shared)),
+      sessionBind("wf-1", null, workflowToken, "bind-shared-coordinator"),
+    );
+    preparePlanRow(context, "p-1", { worktreePath, workingBranch: "feature/session-p-1" });
+    const planPm = planPmCaller("wf-1", shared, "p-1");
+    const bound = await bindExecutionSession(
+      domainContext(context, planPm),
+      sessionBind("wf-1", "p-1", planTokens["p-1"], "bind-shared-plan"),
+    );
+    expect(bound.replayed).toBe(false);
+    expect(bound.data).toEqual({
+      storeId,
+      epoch,
+      workflowId: "wf-1",
+      role: "plan-pm",
+      sessionId: shared,
+      planId: "p-1",
+    });
+    expect(bound.token).toBe(executionToken("session", storeId, epoch, ["wf-1", "plan-pm", shared], 1));
+
+    expect(sessionRows(context)).toEqual([
+      { workflow_id: "wf-1", role: "coordinator", session_id: shared, plan_id: null, epoch, revision: 1, state: "active" },
+      { workflow_id: "wf-1", role: "plan-pm", session_id: shared, plan_id: "p-1", epoch, revision: 1, state: "active" },
+    ]);
+    const db = rawDb(storePath(context));
+    let leaseJson!: ExecutionLease;
+    try {
+      // The lease is the §2.2 ownership shape: the pure `claimLease` identity
+      // fields plus the session/scope/observation fields, at the current epoch.
+      const lease = one(db, "select revision, owner_epoch, lease_json from execution_leases");
+      expect(lease.revision).toBe(1);
+      expect(lease.owner_epoch).toBe(epoch);
+      leaseJson = JSON.parse(String(lease.lease_json)) as ExecutionLease;
+      expect(leaseJson).toEqual({
+        holder: shared,
+        claimed_at: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/),
+        worktree_path: worktreePath,
+        working_branch: "feature/session-p-1",
+        session_label: "plan-pm",
+        lease_id: expect.any(String),
+        holder_session_id: shared,
+        holder_role: "plan-pm",
+        plan_worktree_path: worktreePath,
+        plan_branch: "feature/session-p-1",
+        heartbeat_at: expect.any(String),
+        status: "held",
+      });
+      expect((leaseJson.lease_id as string).length).toBeGreaterThan(0);
+      // The lease lives in `execution_leases`, never duplicated into the row state.
+      expect(JSON.stringify(storedPlan(context, "p-1").state)).not.toContain("execution_lease");
+    } finally {
+      db.close();
+    }
+    // Claiming the lease is the claim-before-InProgress contract: the plan row
+    // moved once, the untouched sibling did not.
+    expect(storedPlan(context, "p-1")).toMatchObject({ revision: 2, state: { status: "InProgress" } });
+    expect(storedPlan(context, "p-2")).toMatchObject({ revision: 1, state: { status: "Todo" } });
+
+    const view = await readExecutionPlan(domainContext(context, planPm), bound.data, "p-1");
+    expect(view.token).toBe(executionToken("plan", storeId, epoch, ["wf-1", "p-1"], 2));
+    expect(view.data.plan).toMatchObject({ id: "p-1", status: "InProgress" });
+    expect(view.data.session).toEqual(bound.data);
+    expect(view.data.executionLease).toEqual(leaseJson);
+    expect(view.data.coordination).toMatchObject({ revision: 2, prepared: { prepared_by: "host-coord" } });
+
+    // A holder, a foreign plan-pm and the same identity on another plan all
+    // refuse, and the accepted state is untouched.
+    const accepted = await readExecutionState(context);
+    const acceptedFootprint = executionFootprint(context);
+    for (const [caller, request] of [
+      [planPm, sessionBind("wf-1", "p-1", view.token, "bind-plan-again")],
+      [planPmCaller("wf-1", "host-other", "p-1"), sessionBind("wf-1", "p-1", view.token, "bind-foreign-plan-pm")],
+      [planPmCaller("wf-1", shared, "p-2"), sessionBind("wf-1", "p-2", planTokens["p-2"], "bind-plan-move")],
+    ] as Array<[ExecutionCaller, SessionBind]>) {
+      await expect(bindExecutionSession(domainContext(context, caller), request)).rejects.toMatchObject({
+        code: "coordination.duplicate-holder",
+      });
+    }
+    expect(await readExecutionState(context)).toEqual(accepted);
+    expect(executionFootprint(context)).toEqual(acceptedFootprint);
+  });
+
+  test("serves a plan only to the session that holds it: store, epoch, session and plan scope are all checked", async () => {
+    const shared = "host-shared";
+    const fixture = await createdWorkflow("session-read-scope", shared);
+    const { context, epoch, workflowToken, planTokens } = fixture;
+    const coordinator = sessionCaller("wf-1", shared);
+    const coordinatorRef = await bindExecutionSession(
+      domainContext(context, coordinator),
+      sessionBind("wf-1", null, workflowToken, "bind-read-coordinator"),
+    );
+    preparePlanRow(context, "p-1", { worktreePath: join(context.harnessDir, "worktrees", "p-1"), workingBranch: "feature/read-p-1" });
+    const planPm = planPmCaller("wf-1", shared, "p-1");
+    const bound = await bindExecutionSession(
+      domainContext(context, planPm),
+      sessionBind("wf-1", "p-1", planTokens["p-1"], "bind-read-plan"),
+    );
+    const read = (caller: ExecutionCaller, session: ExecutionSessionRef, planId: string) =>
+      readExecutionPlan(domainContext(context, caller), session, planId);
+
+    // A reference minted for another store, and one from a superseded epoch.
+    await expect(read(planPm, { ...bound.data, storeId: OTHER_STORE }, "p-1")).rejects.toMatchObject({
+      code: "execution.scope-mismatch",
+    });
+    await expect(read(planPm, { ...bound.data, epoch: epoch - 1 }, "p-1")).rejects.toMatchObject({
+      code: "store.stale-epoch",
+    });
+    // A reference no session row backs — a legacy envelope names an identity,
+    // and an identity alone authorizes nothing.
+    await expect(
+      read(planPmCaller("wf-1", "host-ghost", "p-1"), { ...bound.data, sessionId: "host-ghost" }, "p-1"),
+    ).rejects.toMatchObject({ code: "execution.session-unavailable" });
+    // A reference whose session is not the trusted caller's.
+    await expect(read(planPmCaller("wf-1", "host-else", "p-1"), bound.data, "p-1")).rejects.toMatchObject({
+      code: "coordination.session-mismatch",
+    });
+    // A plan-pm session addresses only its own plan; a coordinator reads any
+    // plan of its workflow, and a missing plan is refused rather than served
+    // as an empty view.
+    await expect(read(planPm, bound.data, "p-2")).rejects.toMatchObject({ code: "coordination.session-mismatch" });
+    const untouched = await read(coordinator, coordinatorRef.data, "p-2");
+    expect(untouched.data.plan).toMatchObject({ id: "p-2", status: "Todo" });
+    expect(untouched.token).toBe(planTokens["p-2"]);
+    await expect(read(coordinator, coordinatorRef.data, "p-9")).rejects.toMatchObject({ code: "coordination.plan-not-found" });
+
+    // A suspended binding (the state a stopped session is recorded as)
+    // authorizes nothing until the named recovery transition rebinds it.
+    const db = rawDb(storePath(context));
+    try {
+      db.prepare("update execution_sessions set state = 'suspended' where role = 'plan-pm'").run();
+    } finally {
+      db.close();
+    }
+    await expect(read(planPm, bound.data, "p-1")).rejects.toMatchObject({ code: "execution.session-unavailable" });
+  });
+
+  test("refuses a held lease whose recorded ownership disagrees with its session", async () => {
+    const shared = "host-shared";
+    const fixture = await createdWorkflow("session-lease-invariant", shared);
+    const { context, workflowToken, planTokens } = fixture;
+    await bindExecutionSession(
+      domainContext(context, sessionCaller("wf-1", shared)),
+      sessionBind("wf-1", null, workflowToken, "bind-invariant"),
+    );
+    preparePlanRow(context, "p-1", { worktreePath: join(context.harnessDir, "worktrees", "p-1"), workingBranch: "feature/invariant" });
+    const planPm = planPmCaller("wf-1", shared, "p-1");
+    const bound = await bindExecutionSession(
+      domainContext(context, planPm),
+      sessionBind("wf-1", "p-1", planTokens["p-1"], "bind-invariant-plan"),
+    );
+    const accepted = await readExecutionPlan(domainContext(context, planPm), bound.data, "p-1");
+    expect(accepted.data.executionLease?.holder_session_id).toBe(shared);
+
+    // A held lease that names another session, and one whose DB scope fields
+    // disagree with its own identity fields, are `store.corrupt` — never a
+    // served authority, and never silently merged from either side.
+    const db = rawDb(storePath(context));
+    try {
+      db.prepare("update execution_leases set lease_json = ? where plan_id = 'p-1'").run(
+        JSON.stringify({ ...(accepted.data.executionLease as Record<string, unknown>), holder_session_id: "host-somewhere" }),
+      );
+    } finally {
+      db.close();
+    }
+    await expect(readExecutionPlan(domainContext(context, planPm), bound.data, "p-1")).rejects.toMatchObject({
+      code: "store.corrupt",
+    });
+    const corruptDb = rawDb(storePath(context));
+    try {
+      corruptDb.prepare("update execution_leases set lease_json = ? where plan_id = 'p-1'").run(
+        JSON.stringify({
+          ...(accepted.data.executionLease as Record<string, unknown>),
+          plan_worktree_path: "/tmp/elsewhere",
+        }),
+      );
+    } finally {
+      corruptDb.close();
+    }
+    await expect(readExecutionPlan(domainContext(context, planPm), bound.data, "p-1")).rejects.toMatchObject({
+      code: "store.corrupt",
+    });
+  });
+
+  test("exports bindExecutionSession and readExecutionPlan verbatim and no later-plan surface", () => {
+    // Compile-time pins of the verbatim §3 signatures: these bindings fail to
+    // typecheck if either declaration drifts.
+    const bindSurface: (
+      context: ExecutionContext,
+      input: { workflowId: string; planId: string | null; role: "coordinator" | "plan-pm"; expected: ExecutionToken; operationId: string },
+    ) => Promise<ExecutionReceipt<ExecutionSessionRef>> = engineIndex.bindExecutionSession;
+    expect(bindSurface).toBe(bindExecutionSession);
+    expect(engineIndex.bindExecutionSession.length).toBe(2);
+    const readSurface: (
+      context: ExecutionContext,
+      session: ExecutionSessionRef,
+      planId: string,
+    ) => Promise<ExecutionRead<ExecutionPlanView>> = engineIndex.readExecutionPlan;
+    expect(readSurface).toBe(readExecutionPlan);
+    expect(engineIndex.readExecutionPlan.length).toBe(3);
+    // The public prepare transition (W2), the coordination mutators (W1–W6),
+    // registration and coordinator recovery are still absent.
+    for (const name of [
+      "recoverExecutionCoordinator",
+      "mutateExecutionWorkflow",
+      "mutateExecutionPlan",
+      "commitExecutionRegistration",
+      "prepareExecutionPlan",
     ]) {
       expect(name in engineIndex).toBe(false);
     }
