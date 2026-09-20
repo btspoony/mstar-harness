@@ -122,6 +122,7 @@ import {
   readMainWorktree,
   readSessionEnvelope,
   readWorkflowSnapshot,
+  resolveExecutionReadRoute,
   resolveHarnessDir,
   validateStatusV2,
 } from "@mstar-harness/engine";
@@ -560,14 +561,24 @@ function readRootRegister(harnessRoot: string): RootRegister {
  * selection is still fenced by the register-row refusal there. An absent,
  * unreadable or malformed register classifies as `reserve`, so its own frozen
  * `invalid-root`/`already-bound` refusals apply unchanged.
+ *
+ * §5 before that register is read: the root register is retired as a route while
+ * the control harness's execution authority is ACTIVE, so the route decision
+ * precedes the consultation — the classifier never derives a branch from retired
+ * bytes, and a route that cannot be read at all leaves the register unread too
+ * (`reserve`; E1 re-probes and refuses with the store's own code). E1 refuses an
+ * ACTIVE authority before this verdict is ever consumed, so the ordering changes
+ * which document is opened, never the answer a caller sees.
  */
-function bindingModeFor(workflowId: string, cwd: string): "reserve" | "attach" {
+async function bindingModeFor(workflowId: string, cwd: string): Promise<"reserve" | "attach"> {
   try {
     const main = readMainWorktree(cwd);
     if (main === null || !isNonEmpty(main.root)) return "reserve";
     const resolved = resolveHarnessDir(main.root);
     if (resolved === null) return "reserve";
-    const register = readRootRegister(canonicalizeNearestExisting(resolved));
+    const harnessRoot = canonicalizeNearestExisting(resolved);
+    if ((await resolveExecutionReadRoute({ harnessDir: harnessRoot })) === "execution") return "reserve";
+    const register = readRootRegister(harnessRoot);
     return register.kind === "rows" && register.rows.some((row) => isPlainObject(row) && row.id === workflowId)
       ? "attach"
       : "reserve";
@@ -623,14 +634,18 @@ function newOperationId(action: HandoffAction): string {
 type ToolOutcome = Readonly<{ ok: boolean; isError: boolean; text: string; details: Record<string, unknown> }>;
 
 /**
- * Test seam for the awaited readiness step, following this package's own
+ * Test seams for this adapter's awaited steps, following this package's own
  * convention (`mstar-gates`' `dispatchGateLoader`,
  * `mstar_lease_verify`'s `workflowDirResolverLoader`). The runtime behavior is
- * the real E2 checkpoint; a probe replaces `inspectReadiness` only to hold that
- * step open and prove that the preference is re-read *after* it.
+ * always the real one: a probe replaces `inspectReadiness` only to hold that step
+ * open and prove that the preference is re-read *after* it, and
+ * `bindingModeFor` is exposed because its verdict is the whole observable of the
+ * §5 ordering that keeps the retired root register out of the pre-authority
+ * path (E1 refuses first, so no caller-visible difference can exist).
  */
 export const handoffSeams = {
   inspectReadiness: inspectPhase1Readiness,
+  bindingModeFor,
 };
 
 function outcome(ok: boolean, isError: boolean, text: string, details: Record<string, unknown> = {}): ToolOutcome {
@@ -895,8 +910,11 @@ export default function modelHandoff(pi: ExtensionAPI): void {
     // E1 resolves the derived paths for the explicitly named workflow. The
     // structural branch is derived here from the validated root register —
     // never from the caller: unregistered ids reserve, registered ids attach
-    // to their existing own snapshot. The reservation is session-local and
-    // writes nothing; adoption authority is decided solely below.
+    // to their existing own snapshot. That classifier asks the §5 route first,
+    // so on an ACTIVE execution authority the register is never read and the
+    // branch stays `reserve`; E1 refuses below before the mode is consumed, so
+    // this ordering changes no answer. The reservation is session-local and
+    // writes nothing; adoption authority is decided solely after it.
     const taskSession = ctx.sessionManager.getEntries().some((entry) => entry.type === "session_init");
     const bindingInput: HandoffBindingInput = {
       workflowId: params.workflowId,
@@ -907,7 +925,7 @@ export default function modelHandoff(pi: ExtensionAPI): void {
       intent: "new-iteration",
       authority: "coordinator",
     };
-    const mode = bindingModeFor(params.workflowId, ctx.cwd);
+    const mode = await handoffSeams.bindingModeFor(params.workflowId, ctx.cwd);
     const reservation = await reserveHandoffBinding(bindingInput, { sessionId, cwd: ctx.cwd, taskSession }, mode);
     if (!reservation.ok) {
       return outcome(

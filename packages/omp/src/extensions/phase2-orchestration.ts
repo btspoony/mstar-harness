@@ -95,8 +95,10 @@
  * credential) plus the workflow snapshot, so while the control harness's
  * execution authority is ACTIVE both are retired as an observation route
  * (primary spec §4.3) and every entry point refuses
- * `execution.consumer-not-ready` before opening either one: `bind`, the
- * ownership probe behind `checkpoint`/`reserve-launch`/`record-launch`, and the
+ * `execution.consumer-not-ready` before opening either one: `bind` — whose route
+ * is decided from the caller's own checkout, so the envelope is never opened on
+ * the way to that refusal — the ownership probe behind
+ * `checkpoint`/`reserve-launch`/`record-launch`, and the
  * advisory sampler that consumes it. Nothing is read out of the retired
  * documents, no binding is synthesized, and a store that exists and cannot be
  * read keeps its own refusal. Migrating this consumer onto the DB session
@@ -121,6 +123,7 @@ import {
   readSessionEnvelope,
   readWorkflowSnapshot,
   resolveExecutionReadRoute,
+  resolveHarnessDir,
   resolveWorkflowDir,
 } from "@mstar-harness/engine";
 import type { CoordinationSession, PlanRow, WorkflowSnapshot } from "@mstar-harness/engine";
@@ -787,6 +790,25 @@ export default function phase2Orchestration(pi: ExtensionAPI): void {
       );
     }
 
+    // §5 before ANY retired document is opened: the observation's ownership pair
+    // is a coordinator ENVELOPE (a file session credential) plus the workflow
+    // snapshot, and both are retired while the control harness's execution
+    // authority is ACTIVE. The route therefore answers first, from this
+    // checkout's own harness root — so a caller that is about to be refused
+    // never opens the envelope at all. A checkout that resolves no harness
+    // decides nothing here; the envelope's own root is probed unchanged below.
+    let ownHarness: string | null = null;
+    try {
+      const resolved = resolveHarnessDir(ctx.cwd);
+      ownHarness = resolved === null ? null : canonicalizeNearestExisting(resolved);
+    } catch {
+      ownHarness = null;
+    }
+    if (ownHarness !== null) {
+      const own = await executionRefusal(ownHarness);
+      if (own !== null) return refuse(own.code, own.message);
+    }
+
     const sessionPath = canonicalizeNearestExisting(params.coordinatorSessionPath);
     let envelope: CoordinationSession;
     try {
@@ -811,6 +833,9 @@ export default function phase2Orchestration(pi: ExtensionAPI): void {
     // §5 before the snapshot is opened: while the execution authority of the
     // envelope's control harness is ACTIVE, this observation's file binding
     // (envelope + snapshot) is retired — the identity is a DB session there.
+    // The caller's own root was already probed above; this probe is the one the
+    // envelope's root keeps, so a caller that resolved no harness (or a
+    // different one) still cannot read a retired document.
     const execution = await executionRefusal(harnessRoot);
     if (execution !== null) return refuse(execution.code, execution.message);
 

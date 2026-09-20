@@ -44,7 +44,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { zod } from "@oh-my-pi/pi-coding-agent";
-import type { CustomTool, CustomToolAPI } from "@oh-my-pi/pi-coding-agent";
+import type { CustomTool, CustomToolAPI, ExtensionAPI, ExtensionContext, SessionEntry } from "@oh-my-pi/pi-coding-agent";
 import {
   createExecutionWorkflow,
   initializeExecutionAuthority,
@@ -54,6 +54,13 @@ import {
 import type { ExecutionCaller, ExecutionContext } from "@mstar-harness/engine";
 import { inspectPhase1Readiness, reserveHandoffBinding } from "../src/model-handoff-readiness";
 import type { HandoffBinding, Phase1CompletionInput } from "../src/model-handoff-readiness";
+import { handoffSeams, default as modelHandoff } from "../src/extensions/model-handoff";
+import {
+  PHASE2_ADVISORY_CUSTOM_TYPE,
+  PHASE2_CUSTOM_TYPE,
+  PHASE2_NOTICE_CUSTOM_TYPE,
+  default as phase2Orchestration,
+} from "../src/extensions/phase2-orchestration";
 import mstarIterationGate from "../src/tools/mstar_iteration_gate/index";
 import mstarLeaseVerify from "../src/tools/mstar_lease_verify/index";
 import mstarStatusValidate from "../src/tools/mstar_status_validate/index";
@@ -540,6 +547,286 @@ function completionInput(fixture: Fixture): Phase1CompletionInput {
     plans: [{ planId: PLAN_ID, planPath: join(fixture.main, "plans", `${PLAN_ID}.md`), prepareEvidencePath: join(fixture.main, "plans", `${PLAN_ID}.prepare.md`) }],
   };
 }
+
+/* ------------------------------------------------------------------------ *
+ * execution-omp-read-phase2 — the phase2 observation extension (plan S3)
+ * ------------------------------------------------------------------------ */
+
+const COORDINATOR_SESSION_ID = "engine-coordinator-0001";
+
+/** The retired root register as the file route left it: it NAMES this workflow,
+ * which is exactly what the start path's structural classifier reads before E1.
+ * The row mirrors the planted snapshot field for field, so the document is
+ * VALID — an invalid register would classify as `reserve` for the wrong reason. */
+const PHASE2_LEFTOVER_STATUS = JSON.stringify({
+  version: 2,
+  updated_at: "2026-01-01",
+  workflows: [{ id: WORKFLOW_ID, status: "running", type: "iteration", started_at: TS, dir: `workflows/${WORKFLOW_ID}` }],
+});
+
+/** A disposable directory with no Git work tree and no harness (a caller checkout
+ * that resolves no control harness at all). */
+function scratchDir(label: string): string {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), `omp-s3-${label}-`)));
+  roots.push(dir);
+  return dir;
+}
+
+/**
+ * The retired file evidence the phase2 observation consumes: the coordinator
+ * ENVELOPE (a file session credential), the snapshot that binds it, and the root
+ * register. Returns the envelope path.
+ */
+function plantPhase2Evidence(fixture: Fixture): string {
+  const workflowDir = join(fixture.harness, "workflows", WORKFLOW_ID);
+  const envelopePath = join(workflowDir, "sessions", `coordinator-${COORDINATOR_SESSION_ID}.json`);
+  writeFileSync(join(fixture.harness, "status.json"), PHASE2_LEFTOVER_STATUS);
+  mkdirSync(join(workflowDir, "sessions"), { recursive: true });
+  writeFileSync(
+    envelopePath,
+    JSON.stringify({
+      schema_version: 1,
+      role: "coordinator",
+      session_id: COORDINATOR_SESSION_ID,
+      workflow_id: WORKFLOW_ID,
+      harness_root: fixture.harness,
+    }),
+  );
+  writeFileSync(
+    fixture.snapshotPath,
+    JSON.stringify({
+      schema_version: 1,
+      id: WORKFLOW_ID,
+      type: "iteration",
+      status: "running",
+      started_at: TS,
+      updated_at: TS,
+      phase: "phase-2-execute",
+      plans: [],
+      coordination: { coordinator: { session_id: COORDINATOR_SESSION_ID, session_file: envelopePath, bound_at: TS } },
+    }),
+  );
+  return envelopePath;
+}
+
+/** The durable identity pointer `bind` writes, as the ledger replays it. */
+function phase2BindingEntry(fixture: Fixture, coordinatorSessionPath: string): SessionEntry {
+  return {
+    type: "custom",
+    customType: PHASE2_CUSTOM_TYPE,
+    data: {
+      version: 1,
+      kind: "bind",
+      workflowId: WORKFLOW_ID,
+      hostSessionId: SESSION_ID,
+      coordinatorSessionPath,
+      coordinatorSessionId: COORDINATOR_SESSION_ID,
+      harnessRoot: fixture.harness,
+    },
+  } as unknown as SessionEntry;
+}
+
+/* ------------------------------------------------------------------------ *
+ * A minimal host surface for the two OMP extensions: the real factories, the
+ * real tool definitions and the real event callbacks, with the host's ledger and
+ * message channels reduced to what these cases assert. No host launch.
+ * ------------------------------------------------------------------------ */
+
+type ExtensionToolResult = Readonly<{
+  content: ReadonlyArray<{ type: string; text: string }>;
+  details: Record<string, unknown>;
+  isError?: boolean;
+}>;
+
+type HostToolDefinition = Readonly<{
+  name: string;
+  parameters: { parse: (value: unknown) => unknown };
+  execute: (
+    toolCallId: string,
+    params: unknown,
+    signal: unknown,
+    onUpdate: unknown,
+    ctx: ExtensionContext,
+  ) => Promise<ExtensionToolResult>;
+}>;
+
+interface ExtensionHost {
+  callTool: (params: Record<string, unknown>) => Promise<ExtensionToolResult>;
+  emit: (event: string) => Promise<void>;
+  messages: ReadonlyArray<{ customType: string; content: string }>;
+}
+
+function extensionHost(options: {
+  factory: (pi: ExtensionAPI) => void;
+  cwd: string;
+  sessionId: string;
+  entries?: readonly SessionEntry[];
+}): ExtensionHost {
+  const entries: SessionEntry[] = [...(options.entries ?? [])];
+  const messages: Array<{ customType: string; content: string }> = [];
+  const handlers: Record<string, (payload: unknown, ctx: ExtensionContext) => unknown> = {};
+  const tools: Record<string, HostToolDefinition> = {};
+  const pi = {
+    zod,
+    registerTool: (definition: HostToolDefinition) => {
+      tools[definition.name] = definition;
+    },
+    on: (event: string, handler: (payload: unknown, ctx: ExtensionContext) => unknown) => {
+      handlers[event] = handler;
+    },
+    sendMessage: (message: { customType: string; content: unknown }) => {
+      messages.push({ customType: message.customType, content: String(message.content) });
+    },
+    appendEntry: (customType: string, data: unknown) => {
+      entries.push({ type: "custom", customType, data } as unknown as SessionEntry);
+    },
+    setModel: () => undefined,
+  } as unknown as ExtensionAPI;
+  options.factory(pi);
+  const ctx = {
+    cwd: options.cwd,
+    sessionManager: { getSessionId: () => options.sessionId, getEntries: () => entries },
+    getAsyncJobSnapshot: () => ({ running: [], recent: [], delivery: { queued: 0, delivering: false, pendingJobIds: [] } }),
+    hasPendingMessages: () => false,
+  } as unknown as ExtensionContext;
+  return {
+    messages,
+    callTool: async (params) => {
+      const tool = Object.values(tools)[0];
+      if (tool === undefined) throw new Error("the extension registered no tool");
+      return tool.execute("fixture-tool-call", tool.parameters.parse(params), undefined, undefined, ctx);
+    },
+    emit: async (event) => {
+      const handler = handlers[event];
+      if (handler === undefined) throw new Error(`the extension registered no ${event} handler`);
+      await handler({}, ctx);
+    },
+  };
+}
+
+/** The scoped `code` of an extension tool result, whichever extension produced it. */
+function extensionCodeOf(result: ExtensionToolResult): string {
+  const scoped = (result.details.mstarPhase2 ?? result.details.mstarModelHandoff) as { code?: unknown } | undefined;
+  return typeof scoped?.code === "string" ? scoped.code : "";
+}
+
+function textOfExtension(result: ExtensionToolResult): string {
+  return result.content.map((part) => part.text).join("\n");
+}
+
+describe("execution-omp-read-phase2 — the phase2 observation extension refuses not-ready under an ACTIVE authority (S3)", () => {
+  test("bind refuses not-ready without opening the coordinator envelope", async () => {
+    const fixture = makeFixture("phase2-bind-active");
+    await seedActiveAuthority(fixture);
+    const host = extensionHost({ factory: phase2Orchestration, cwd: fixture.main, sessionId: SESSION_ID });
+
+    // The named envelope does not exist: a route decision that ran *after* the
+    // envelope read answered `phase2.envelope-unreadable` here. The ordering this
+    // case pins is therefore visible in the refusal itself.
+    const result = await host.callTool({
+      operation: "bind",
+      workflowId: WORKFLOW_ID,
+      coordinatorSessionPath: join(fixture.harness, "workflows", WORKFLOW_ID, "sessions", "coordinator-absent.json"),
+    });
+
+    expect(extensionCodeOf(result)).toBe("execution.consumer-not-ready");
+    expect(textOfExtension(result)).toContain("ACTIVE");
+  });
+
+  test("bind still refuses on the ENVELOPE's own active harness when the caller's checkout resolves none", async () => {
+    const fixture = makeFixture("phase2-bind-envelope");
+    await seedActiveAuthority(fixture);
+    const envelopePath = plantPhase2Evidence(fixture);
+    // A caller that sits outside any harness: its own checkout decides nothing,
+    // so the envelope's own control harness keeps the decision it always had.
+    const host = extensionHost({ factory: phase2Orchestration, cwd: scratchDir("phase2-bind-elsewhere"), sessionId: SESSION_ID });
+
+    const result = await host.callTool({ operation: "bind", workflowId: WORKFLOW_ID, coordinatorSessionPath: envelopePath });
+
+    expect(extensionCodeOf(result)).toBe("execution.consumer-not-ready");
+  });
+
+  test("checkpoint refuses not-ready through the ownership probe", async () => {
+    const fixture = makeFixture("phase2-checkpoint-active");
+    await seedActiveAuthority(fixture);
+    const envelopePath = plantPhase2Evidence(fixture);
+    const host = extensionHost({
+      factory: phase2Orchestration,
+      cwd: fixture.main,
+      sessionId: SESSION_ID,
+      entries: [phase2BindingEntry(fixture, envelopePath)],
+    });
+
+    const result = await host.callTool({ operation: "checkpoint", reason: "before-wait", decision: "wait", note: "probe" });
+
+    expect(extensionCodeOf(result)).toBe("execution.consumer-not-ready");
+    expect(textOfExtension(result)).toContain("checkpoint was not recorded");
+  });
+
+  test("the advisory sampler reports the retired route instead of sampling it", async () => {
+    const fixture = makeFixture("phase2-sampler-active");
+    await seedActiveAuthority(fixture);
+    const host = extensionHost({
+      factory: phase2Orchestration,
+      cwd: fixture.main,
+      sessionId: SESSION_ID,
+      // The bound envelope is not even on disk: the observation route is retired
+      // before it could be opened.
+      entries: [phase2BindingEntry(fixture, join(fixture.harness, "workflows", WORKFLOW_ID, "sessions", "coordinator-absent.json"))],
+    });
+
+    await host.emit("agent_end");
+
+    const scoped = host.messages.filter((message) => message.customType === PHASE2_NOTICE_CUSTOM_TYPE);
+    expect(scoped.map((message) => message.content).join("\n")).toContain("execution.consumer-not-ready");
+    expect(host.messages.filter((message) => message.customType === PHASE2_ADVISORY_CUSTOM_TYPE)).toEqual([]);
+  });
+
+  test("a harness with NO store keeps the unchanged phase2 file binding", async () => {
+    const fixture = makeFixture("phase2-bind-legacy");
+    const envelopePath = plantPhase2Evidence(fixture);
+    const host = extensionHost({ factory: phase2Orchestration, cwd: fixture.main, sessionId: SESSION_ID });
+
+    const result = await host.callTool({ operation: "bind", workflowId: WORKFLOW_ID, coordinatorSessionPath: envelopePath });
+
+    expect(extensionCodeOf(result)).toBe("bound");
+  });
+});
+
+describe("execution-omp-read-handoff — the start path classifies only after the route answers (S3)", () => {
+  test("the structural classifier never derives its branch from the retired register", async () => {
+    const fixture = makeFixture("handoff-classifier-active");
+    await seedActiveAuthority(fixture);
+    // The leftover register NAMES this workflow: an authority-blind classifier
+    // answered `attach` (adopt the named row) from retired bytes.
+    plantPhase2Evidence(fixture);
+
+    expect(await handoffSeams.bindingModeFor(WORKFLOW_ID, fixture.main)).toBe("reserve");
+  });
+
+  test("the same register still classifies as attach while the file route serves it", async () => {
+    const fixture = makeFixture("handoff-classifier-legacy");
+    plantPhase2Evidence(fixture);
+
+    expect(await handoffSeams.bindingModeFor(WORKFLOW_ID, fixture.main)).toBe("attach");
+  });
+
+  test("the start path refuses the ACTIVE authority for a workflow the retired register names", async () => {
+    const fixture = makeFixture("handoff-start-active");
+    await seedActiveAuthority(fixture);
+    plantPhase2Evidence(fixture);
+    mkdirSync(join(fixture.main, ".omp"), { recursive: true });
+    writeFileSync(
+      join(fixture.main, ".omp", "plugin-overrides.json"),
+      JSON.stringify({ settings: { "@mstar-harness/omp": { modelHandoff: true, handoffTarget: "@default" } } }),
+    );
+    const host = extensionHost({ factory: modelHandoff, cwd: fixture.main, sessionId: SESSION_ID });
+
+    const result = await host.callTool({ operation: "start", workflowId: WORKFLOW_ID });
+
+    expect(extensionCodeOf(result)).toBe("execution.consumer-not-ready");
+  });
+});
 
 /* ------------------------------------------------------------------------ *
  * The pre-hook's own channel is exercised where its fixture helpers live
