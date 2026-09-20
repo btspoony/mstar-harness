@@ -1918,8 +1918,8 @@ function writePlanState(
   );
 }
 
-/** §2.3 the authorization one `readExecutionPlan` call resolves to. */
-type ResolvedPlanRead = {
+/** §2.3 the authorization one session-authorized plan address resolves to. */
+export type ResolvedPlanRead = {
   workflowId: string;
   role: ExecutionCaller["role"];
   sessionId: string;
@@ -1930,13 +1930,19 @@ type ResolvedPlanRead = {
 };
 
 /**
- * §2.3 authorization gate of `readExecutionPlan`: the supplied reference names
- * the binding the trusted caller claims to hold, and the caller identity is
- * what authorizes the read. Possession of a reference — or of a legacy session
- * file — authorizes nothing on its own, and a plan-pm session addresses only
- * its own plan while a coordinator session addresses any plan of its workflow.
+ * §2.3 the reference gate of a plan read: the supplied reference names the
+ * binding the trusted caller claims to hold, and the caller identity is what
+ * authorizes the read. Possession of a reference — or of a legacy session file
+ * — authorizes nothing on its own, and a plan-pm session addresses only its own
+ * plan while a coordinator session addresses any plan of its workflow.
+ *
+ * Pure argument checks: no store is opened, so each transport decides where the
+ * gate sits relative to its own store access. `readExecutionPlan` runs it
+ * BEFORE opening the store, so a malformed, foreign-role or caller-mismatched
+ * request is refused on its own; the DB dispatch runs it inside the transaction
+ * it already owns.
  */
-function resolvePlanRead(caller: ExecutionCaller, session: unknown, planId: unknown): ResolvedPlanRead {
+export function resolvePlanRead(caller: ExecutionCaller, session: unknown, planId: unknown): ResolvedPlanRead {
   const bound = session;
   if (!isPlainObject(bound)) throw invalidInput("a plan read needs an execution session reference");
   const { storeId, epoch, workflowId, role, sessionId, planId: boundPlanId } = bound;
@@ -2238,19 +2244,18 @@ export type ExecutionPlanWitness = {
 
 /**
  * §2.3 the sealed witness of one plan operation, read inside the caller's
- * transaction: the trusted caller and the reference it claims are revalidated
+ * transaction: the address `resolvePlanRead` already authorized is revalidated
  * against the session rows of the current epoch, and the addressed plan is
  * selected under that authority. A reference that is not the caller's own, that
  * belongs to another store or epoch, or that names another plan authorizes
  * nothing here — and it is never resolved from a session file.
+ *
+ * The address arrives already authorized because WHERE that gate runs belongs
+ * to the caller, not to this reader: `readExecutionPlan` resolves it before it
+ * opens the store, and the DB dispatch resolves it inside the transaction it
+ * already owns.
  */
-export function readExecutionPlanWitness(
-  tx: ExecutionTransaction,
-  caller: ExecutionCaller,
-  session: ExecutionSessionRef,
-  planId: string,
-): ExecutionPlanWitness {
-  const read = resolvePlanRead(caller, session, planId);
+export function readExecutionPlanWitness(tx: ExecutionTransaction, read: ResolvedPlanRead): ExecutionPlanWitness {
   assertReferenceAuthority(tx, read.referenceStoreId, read.referenceEpoch);
   const live = liveSession(tx, {
     workflowId: read.workflowId,
@@ -2285,14 +2290,19 @@ export function readExecutionPlanWitness(
  * the trusted caller actually holds at the current epoch (a coordinator reads
  * any plan of its workflow, a plan-pm only its own). The returned plan token is
  * the CAS a later coordination mutation passes back.
+ *
+ * The reference gate runs BEFORE the store is opened: a malformed, foreign-role
+ * or caller-mismatched request is refused by itself, never by — or after — an
+ * authority-state or store-open failure.
  */
 export async function readExecutionPlan(
   context: ExecutionContext,
   session: ExecutionSessionRef,
   planId: string,
 ): Promise<ExecutionRead<ExecutionPlanView>> {
+  const read = resolvePlanRead(context.caller, session, planId);
   return withExecutionReadTransaction(context, (tx) => {
-    const witness = readExecutionPlanWitness(tx, context.caller, session, planId);
+    const witness = readExecutionPlanWitness(tx, read);
     return { data: witness.view, token: witness.token, storeId: tx.storeId, epoch: tx.epoch };
   });
 }

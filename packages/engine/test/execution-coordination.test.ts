@@ -304,6 +304,20 @@ describe("execution-authority-boundary: §2.3/§3 DB plan-operation authorizatio
         operation: { kind: "publish" } as ExecutionPlanCall["operation"],
       }),
     ).rejects.toMatchObject({ code: "coordination.unknown-operation", details: { operation: "publish" } });
+    // The legacy delivery-source repair is NOT part of the DB route's §3 union:
+    // even the coordinator seat that verb requires cannot reach it here, and the
+    // shared file-route set is what still carries it.
+    await expect(
+      attempt(coordinatorCaller, {
+        session: coordinator,
+        expected: planTokens[OWN_PLAN],
+        planId: OWN_PLAN,
+        operation: { kind: "repair-delivery-source", handoffId: "handoff-1" } as ExecutionPlanCall["operation"],
+      }),
+    ).rejects.toMatchObject({
+      code: "coordination.unknown-operation",
+      details: { operation: "repair-delivery-source" },
+    });
 
     expect(ran).toBe(0);
     expect(footprint(context)).toEqual(before);

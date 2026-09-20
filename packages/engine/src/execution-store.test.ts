@@ -2352,6 +2352,64 @@ describe("execution-session: §2.3 binding, role-scoped identity and the plan re
     await expect(read(planPm, bound.data, "p-1")).rejects.toMatchObject({ code: "execution.session-unavailable" });
   });
 
+  test("refuses a malformed, foreign-role or caller-mismatched reference before an unavailable store answers", async () => {
+    const shared = "host-shared";
+    const fixture = await createdWorkflow("session-read-precedence", shared);
+    const { context, workflowToken, planTokens } = fixture;
+    const coordinator = sessionCaller("wf-1", shared);
+    const coordinatorRef = await bindExecutionSession(
+      domainContext(context, coordinator),
+      sessionBind("wf-1", null, workflowToken, "bind-precedence-coordinator"),
+    );
+    preparePlanRow(context, "p-1", {
+      worktreePath: join(context.harnessDir, "worktrees", "p-1"),
+      workingBranch: "feature/precedence-p-1",
+    });
+    const planPm = planPmCaller("wf-1", shared, "p-1");
+    const bound = await bindExecutionSession(
+      domainContext(context, planPm),
+      sessionBind("wf-1", "p-1", planTokens["p-1"], "bind-precedence-plan"),
+    );
+    // The reference the caller holds reads its own plan while the store is active.
+    expect((await readExecutionPlan(domainContext(context, planPm), bound.data, "p-1")).data.plan.id).toBe("p-1");
+
+    // The authority stops being active: a request that IS the caller's own
+    // reference now meets the store's refusal...
+    const stager = rawDb(storePath(context));
+    try {
+      stager.prepare("update execution_meta set authority_state = 'staged' where id = 1").run();
+    } finally {
+      stager.close();
+    }
+    await expect(readExecutionPlan(domainContext(context, planPm), bound.data, "p-1")).rejects.toMatchObject({
+      code: "execution.not-active",
+    });
+    // ...and a malformed, foreign-role or caller-mismatched one is still refused
+    // by the reference gate, which runs BEFORE the store is opened.
+    await expect(
+      readExecutionPlan(domainContext(context, planPm), { epoch: 0 } as unknown as ExecutionSessionRef, "p-1"),
+    ).rejects.toMatchObject({ code: "coordination.invalid-input" });
+    await expect(readExecutionPlan(domainContext(context, coordinator), bound.data, "p-1")).rejects.toMatchObject({
+      code: "coordination.session-role",
+    });
+    await expect(
+      readExecutionPlan(domainContext(context, planPmCaller("wf-1", "host-else", "p-1")), bound.data, "p-1"),
+    ).rejects.toMatchObject({ code: "coordination.session-mismatch" });
+
+    // With no store at all the same references refuse identically: the gate
+    // never opens one, so no store-open failure can answer a bad request first.
+    rmSync(storePath(context), { force: true });
+    await expect(readExecutionPlan(domainContext(context, planPm), bound.data, "p-1")).rejects.toMatchObject({
+      code: "store.not-initialized",
+    });
+    await expect(readExecutionPlan(domainContext(context, coordinator), bound.data, "p-1")).rejects.toMatchObject({
+      code: "coordination.session-role",
+    });
+    await expect(
+      readExecutionPlan(domainContext(context, coordinator), coordinatorRef.data, "p-2"),
+    ).rejects.toMatchObject({ code: "store.not-initialized" });
+  });
+
   test("refuses a held lease whose recorded ownership disagrees with its session", async () => {
     const shared = "host-shared";
     const fixture = await createdWorkflow("session-lease-invariant", shared);

@@ -22,6 +22,7 @@ import {
   ExecutionError,
   assertExecutionToken,
   readExecutionPlanWitness,
+  resolvePlanRead,
   withExecutionTransaction,
   type ExecutionContext,
   type ExecutionPlanWitness,
@@ -32,11 +33,21 @@ import {
 import type { PlanCoordinationOperation } from "./coordination.js";
 
 /**
- * §3 the DB route's verb vocabulary: exactly the existing closed coordination
- * union. One union and one role/state machine for both transports — a second
- * verb set is what the extraction exists to prevent.
+ * §3 the DB route's verb vocabulary: the closed coordination union minus the
+ * legacy delivery-source repair. That instrument exists only to correct pre-fix
+ * file snapshots registered with `branch.source === branch.target`
+ * (`plan-lifecycle-standalone-completion.md`) — `phase2a-execution-contract.md`
+ * §3 lists eleven operations and does not include it, so the DB authority never
+ * admits it.
+ *
+ * One union and one role/state machine for both transports — a second verb set
+ * is what the extraction exists to prevent — and the exclusion is named once,
+ * as this type plus the runtime set below.
  */
-export type CoordinationOperation = PlanCoordinationOperation;
+export type CoordinationOperation = Exclude<PlanCoordinationOperation, { kind: "repair-delivery-source" }>;
+
+/** The one §3 exclusion above, as the runtime half of the same single rule. */
+const LEGACY_ONLY_OPERATIONS: Record<string, true> = { "repair-delivery-source": true };
 
 /**
  * §3 one DB plan operation call: the session reference the caller claims, the
@@ -63,7 +74,10 @@ export type ExecutionPlanCall = {
  * at the current epoch, the addressed plan is selected under that authority and
  * the supplied token is compared against the plan's exact CAS token. The
  * addressed plan's sealed witness is then handed to the operation's transition,
- * which commits or rolls back with everything above.
+ * which commits or rolls back with everything above. The reference gate itself
+ * runs inside that transaction, after the authority-state refusal: this route's
+ * order is unchanged, and only `readExecutionPlan` — which owns no transaction
+ * until its request is valid — gates before the store is opened.
  *
  * A forged caller/role, a sibling plan, a revoked or stale-epoch reference, a
  * stale token and a nested call all refuse with no row, revision or receipt
@@ -82,7 +96,9 @@ export async function withExecutionPlanAuthority<T>(
     throw new CoordinationError("coordination.invalid-input", "a plan operation needs an operation with a kind");
   }
   const kind = operation.kind;
-  if (IMPLEMENTED_OPERATIONS[kind] !== true) {
+  // §3 the accepted set is the closed union minus the legacy-only repair: a
+  // verb the shared table carries for the FILE route is still not a DB verb.
+  if (IMPLEMENTED_OPERATIONS[kind] !== true || LEGACY_ONLY_OPERATIONS[kind] === true) {
     throw new CoordinationError("coordination.unknown-operation", `${kind} is not a coordination operation`, {
       operation: kind,
     });
@@ -102,7 +118,7 @@ export async function withExecutionPlanAuthority<T>(
           `A staged store is inspectable only through migration diagnostics.`,
       );
     }
-    const witness = readExecutionPlanWitness(tx, context.caller, call.session, call.planId);
+    const witness = readExecutionPlanWitness(tx, resolvePlanRead(context.caller, call.session, call.planId));
     assertExecutionToken(call.expected, {
       kind: "plan",
       storeId: tx.storeId,
