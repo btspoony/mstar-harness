@@ -92,7 +92,9 @@ import {
   closeIssueOn,
   issueWriteSeat,
   linkIssueOn,
+  storeRevisionOn,
   type CaptureInput,
+  type ComposedTransactionRevision,
 } from "./issue.js";
 import { canonicalizeNearestExisting, resolvePlanDir, resolveSddDir } from "./path.js";
 import { storeDbPath } from "./store-db.js";
@@ -367,8 +369,11 @@ function storedCoordinationOf(view: ExecutionPlanView): Record<string, unknown> 
  * addressed plan and re-reads the store-held session), a committed receipt is
  * returned for an identical retry BEFORE the CAS is re-evaluated, the workflow
  * must still be running, and the supplied token must be the plan's exact CAS.
- * Only then does `run` produce the operation's read; the revision advance and
- * the receipt are the frame's, so an operation cannot forget either.
+ * Only then does `run` produce the operation's read, and the transaction's one
+ * revision advance has already run: the advance and the receipt are the frame's,
+ * so an operation cannot forget either, and an operation that composes another
+ * domain's writes into this transaction reads the revision it commits at from
+ * the shared counter instead of advancing it a second time.
  *
  * The caller has already passed `assertPlanOperationAdmissible` and the
  * operation-shape checks; `run` is synchronous for the same reason
@@ -407,8 +412,14 @@ function withExecutionPlanOperation<T>(
       revision: witness.revision,
     });
     const at = new Date().toISOString();
-    const receipt = run(witness, tx, at);
+    // §3.1 the ONE revision advance of this accepted multi-domain transaction
+    // runs BEFORE the body: a composed mutation (the residual verbs' issue work)
+    // joins the shared advance instead of bumping the counter again, so the body
+    // must be able to read the revision this transaction commits at. Nothing in a
+    // body reads the counters it advances, and a refusal rolls the advance back
+    // with everything else, so the order is not observable either way.
     advancePlanOperationRevisions(tx, { workflowId: witness.workflowId, now: at });
+    const receipt = run(witness, tx, at);
     writePlanOperationReceipt(tx, {
       operationId: request.operationId,
       requestHash,
@@ -741,6 +752,29 @@ export type ResidualCloseOperation = Extract<CoordinationOperation, { kind: "res
 type ResidualEntry = ResidualAddOperation["entries"][number];
 
 /**
+ * §3.1 the plan-revision advance of one accepted residual operation: the plan
+ * row's revision IS the plan CAS, so a mutation whose domain work lives in the
+ * issue authority still advances it exactly once, in this transaction, before
+ * the receipt's read. Without it a caller holding the pre-mutation token could
+ * submit the next mutation with it and pass the exact-token CAS.
+ *
+ * Neither stored block changed — the residual is issue work and the plan row's
+ * state and coordination are exactly what this transaction read — so they are
+ * written back unchanged beside the advanced revision: the row writer is the one
+ * place a plan revision advances, and a residual does not open a second path to
+ * the revision column.
+ */
+function advanceResidualPlanRevision(tx: ExecutionTransaction, witness: ExecutionPlanWitness): void {
+  writePlanCoordinationRow(tx, {
+    workflowId: witness.workflowId,
+    planId: witness.planId,
+    state: witness.view.plan as unknown as Record<string, unknown>,
+    coordination: storedCoordinationOf(witness.view),
+    revision: witness.revision + 1,
+  });
+}
+
+/**
  * §3.1 the canonical payload half of a residual-add request hash: every field
  * the capture below consumes, in the entry's own order. A payload that differs
  * in any of them is a different request, so reusing the operation id refuses
@@ -820,8 +854,9 @@ function residualCloseOperationId(sessionId: string, planId: string, issueId: st
  * id, never a caller-supplied target, and the seat/address gates require this
  * session to be the addressed plan's own plan-pm — the same condition the file
  * route's `assertPlanIterationIdentity` enforces against its envelope. The plan
- * row itself is untouched (a residual lives in the issue authority), so the
- * plan token the receipt returns is the addressed plan's current CAS token.
+ * row's state is untouched (a residual lives in the issue authority) while its
+ * REVISION still advances once: the plan token is the plan's CAS, so the receipt
+ * returns the token this operation spent its own on.
  */
 export async function residualAddExecutionPlan(
   context: ExecutionContext,
@@ -855,23 +890,39 @@ export async function residualAddExecutionPlan(
     const projectId = projectBucketOf(witness.view.plan as unknown as PlanRow);
     const { planId } = witness;
     const sessionId = witness.session.sessionId;
+    // §3.1 the shared store revision this transaction commits at: the frame's
+    // single advance has already run, so every composed issue helper joins it
+    // instead of advancing the same counter once more.
+    const composed: ComposedTransactionRevision = { committedStoreRevision: storeRevisionOn(tx.db) };
     for (const entry of entries) {
       const input: CaptureInput = { ...entry, projectId };
       assertCaptureRequest(input);
-      const capture = captureIssueOn(tx.db, input, {
-        operationId: residualCaptureOperationId(sessionId, planId, entry.occurrenceKey),
-        actor,
-      });
+      const capture = captureIssueOn(
+        tx.db,
+        input,
+        {
+          operationId: residualCaptureOperationId(sessionId, planId, entry.occurrenceKey),
+          actor,
+        },
+        composed,
+      );
       // Always link, never only on `created`: the plan link is the gate a later
       // residual-close is checked against, and both verbs are idempotent, so a
       // retry converges instead of leaving an unlinked issue the plan can never
       // close.
-      linkIssueOn(tx.db, capture.issueId, { kind: "plan", target: planId }, {
-        operationId: residualLinkOperationId(sessionId, planId, entry.occurrenceKey),
-        actor,
-        expectedRevision: capture.revision,
-      });
+      linkIssueOn(
+        tx.db,
+        capture.issueId,
+        { kind: "plan", target: planId },
+        {
+          operationId: residualLinkOperationId(sessionId, planId, entry.occurrenceKey),
+          actor,
+          expectedRevision: capture.revision,
+        },
+        composed,
+      );
     }
+    advanceResidualPlanRevision(tx, witness);
     const committed = readExecutionPlanWitness(tx, resolved.read);
     return { data: committed.view, token: committed.token, storeId: tx.storeId, epoch: tx.epoch };
   });
@@ -880,8 +931,9 @@ export async function residualAddExecutionPlan(
 /**
  * §3 `residual-close` on the DB authority: the plan session that HOLDS the
  * plan's execution lease closes ONE finding linked to this plan, under the
- * issue revision the caller read, in the same transaction as the receipt and
- * the revision advance.
+ * issue revision the caller read, in the same transaction as the receipt and the
+ * revision advance — the plan row's own CAS revision included, exactly as a
+ * residual-add advances it.
  *
  * Two refusals protect the scope and the CAS: an issue that is not linked to
  * THIS plan refuses `issue.scope-refused` (a plan closes only its own findings —
@@ -918,11 +970,21 @@ export async function residualCloseExecutionPlan(
   return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, (witness, tx) => {
     assertResidualAdmission(witness, tx);
     assertIssueLinkedToPlanOn(tx.db, operation.issueId, witness.planId);
-    closeIssueOn(tx.db, operation.issueId, operation.disposition, operation.evidence, {
-      operationId: residualCloseOperationId(witness.session.sessionId, witness.planId, operation.issueId),
-      actor,
-      expectedRevision: operation.expectedIssueRevision,
-    });
+    closeIssueOn(
+      tx.db,
+      operation.issueId,
+      operation.disposition,
+      operation.evidence,
+      {
+        operationId: residualCloseOperationId(witness.session.sessionId, witness.planId, operation.issueId),
+        actor,
+        expectedRevision: operation.expectedIssueRevision,
+      },
+      // §3.1 the frame's single advance of the shared store revision has already
+      // run: this closure joins it rather than advancing the counter again.
+      { committedStoreRevision: storeRevisionOn(tx.db) },
+    );
+    advanceResidualPlanRevision(tx, witness);
     const committed = readExecutionPlanWitness(tx, resolved.read);
     return { data: committed.view, token: committed.token, storeId: tx.storeId, epoch: tx.epoch };
   });

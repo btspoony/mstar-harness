@@ -342,10 +342,38 @@ export function assertIssueStoreActive(db: StoreDb): void {
   }
 }
 
+/**
+ * §3.1 the shared store revision of the transaction a caller already owns. A
+ * composed caller (the DB coordination route) reads it after its own single
+ * advance has run, and hands it to every composed helper so each receipt reports
+ * the revision the transaction commits at instead of the helper advancing the
+ * counter for itself.
+ */
+export function storeRevisionOn(db: StoreDb): number {
+  return readMeta(db).revision;
+}
+
 function bumpStoreRevision(db: StoreDb): number {
   db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
   const row = db.prepare("select revision from store_meta where id = 1").get() as { revision: number };
   return row.revision;
+}
+
+/**
+ * §3.1 the store revision one COMPOSABLE body's receipt reports, and the one
+ * place such a body may advance the shared counter. A caller that owns the
+ * transaction also owns its single advance of `store_meta.revision` (§3.1 admits
+ * one `store_revision` increment per accepted multi-domain transaction), so it
+ * hands the body the revision the transaction commits at and the body joins that
+ * advance instead of bumping the shared counter again. The public verbs never
+ * supply one — passing it is the composed route's decision, not a caller's — so
+ * on the public route, where this mutation IS the transaction, the body advances
+ * the counter itself exactly as before. The two verbs no caller composes
+ * (`appendOccurrence`, `triageIssue`) advance it directly, as their own
+ * transaction's single advance.
+ */
+function receiptStoreRevision(db: StoreDb, composed?: ComposedTransactionRevision): number {
+  return composed?.committedStoreRevision ?? bumpStoreRevision(db);
 }
 
 function lookupOperation(db: StoreDb, operationId: string): { request_hash: string; result_json: string } | undefined {
@@ -479,6 +507,22 @@ function insertCaptureProvenance(db: StoreDb, issueId: string, cols: OccurrenceC
 }
 
 /**
+ * §3.1 the revision a COMPOSED caller owns. A caller that owns the transaction
+ * also owns its single advance of `store_meta.revision` (§3.1: one increment per
+ * accepted multi-domain transaction), so it tells the composed body the revision
+ * the transaction commits at and the body joins that advance — never bumping the
+ * shared counter a second time for the same commit.
+ *
+ * Only the DB coordination frame supplies one: it is the CALLER's statement
+ * about its own transaction, never something a mutation request can carry, so the
+ * public verbs keep advancing the counter themselves.
+ */
+export type ComposedTransactionRevision = {
+  /** The `store_meta.revision` value this transaction commits at. */
+  committedStoreRevision: number;
+};
+
+/**
  * The mutation identity a handle-taking body runs as (see `MutationContext`):
  * the idempotency key and the audited actor, without any session file. The
  * public entry points carry a `MutationContext` (which is assignable here) and
@@ -540,11 +584,17 @@ export function assertCaptureRequest(input: CaptureInput): void {
  * the transport. It re-derives the trimmed fields and the identity triple with
  * the same pure rules `assertCaptureRequest` applied — the body owns its inputs
  * on either route — and it reads no session file, opens no store and begins no
- * transaction, so it composes into a caller's transaction unchanged. On the
- * public route it produces exactly the receipt `captureIssue` produced before
- * the extraction.
+ * transaction, so it composes into a caller's transaction unchanged (the caller
+ * passes its own `ComposedTransactionRevision` when it owns that transaction's
+ * single store-revision advance). On the public route it produces exactly the
+ * receipt `captureIssue` produced before the extraction.
  */
-export function captureIssueOn(db: StoreDb, input: CaptureInput, mutation: AuthorizedIssueMutation): IssueReceipt {
+export function captureIssueOn(
+  db: StoreDb,
+  input: CaptureInput,
+  mutation: AuthorizedIssueMutation,
+  composed?: ComposedTransactionRevision,
+): IssueReceipt {
   const title = requireNonblank("title", input.title);
   const impact = requireNonblank("impact", input.impact);
   const acceptance = requireNonblank("acceptance", input.acceptance);
@@ -592,7 +642,7 @@ export function captureIssueOn(db: StoreDb, input: CaptureInput, mutation: Autho
     const occurrenceId = insertOccurrence(db, existing.id, cols, at);
     const revision = existing.revision + 1;
     db.prepare("update issues set revision = ?, updated_at = ? where id = ?").run(revision, at, existing.id);
-    const storeRevision = bumpStoreRevision(db);
+    const storeRevision = receiptStoreRevision(db, composed);
     const receipt: IssueReceipt = {
       issueId: existing.id,
       occurrenceId,
@@ -628,7 +678,7 @@ export function captureIssueOn(db: StoreDb, input: CaptureInput, mutation: Autho
   );
   const occurrenceId = insertOccurrence(db, issueId, cols, at);
   insertCaptureProvenance(db, issueId, cols);
-  const storeRevision = bumpStoreRevision(db);
+  const storeRevision = receiptStoreRevision(db, composed);
   const receipt: IssueReceipt = {
     issueId,
     occurrenceId,
@@ -1448,7 +1498,9 @@ export function assertIssueLinkedToPlanOn(db: StoreDb, issueId: string, planId: 
  * authorized. It reads no session file, opens no store and begins no
  * transaction: the disposition vocabulary and the closure-evidence rule belong
  * to the transport's pre-transaction half (`assertTerminalDisposition` /
- * `assertClosureAuthority`).
+ * `assertClosureAuthority`), and a caller that owns the transaction passes its
+ * own `ComposedTransactionRevision` so the closure joins the single
+ * store-revision advance instead of adding one of its own.
  */
 export function closeIssueOn(
   db: StoreDb,
@@ -1456,6 +1508,7 @@ export function closeIssueOn(
   disposition: TerminalDisposition,
   evidence: ClosureEvidence,
   mutation: AuthorizedIssueMutation,
+  composed?: ComposedTransactionRevision,
 ): IssueReceipt {
   const hash = requestHash("closeIssue", {
     issueId,
@@ -1522,7 +1575,7 @@ export function closeIssueOn(
       evidence.canonicalIssueId,
     );
   }
-  const storeRevision = bumpStoreRevision(db);
+  const storeRevision = receiptStoreRevision(db, composed);
   const receipt: IssueReceipt = { issueId, revision, storeRevision, created: false };
   recordOperation(db, mutation.operationId, hash, receipt, at);
   return receipt;
@@ -1547,13 +1600,16 @@ export async function closeIssue(
  * per `(issue, link)` as well as per operation id, so a retry converges instead
  * of duplicating a link. It reads no session file, opens no store and begins no
  * transaction — the link vocabulary and the plan/iteration identity of the
- * target belong to the transport's pre-transaction half.
+ * target belong to the transport's pre-transaction half — and a caller that owns
+ * the transaction passes its own `ComposedTransactionRevision` so the link joins
+ * the single store-revision advance instead of adding one of its own.
  */
 export function linkIssueOn(
   db: StoreDb,
   issueId: string,
   link: IssueLink,
   mutation: AuthorizedIssueMutation,
+  composed?: ComposedTransactionRevision,
 ): IssueReceipt {
   const hash = requestHash("linkIssue", {
     issueId,
@@ -1625,7 +1681,7 @@ export function linkIssueOn(
 
   const revision = issue.revision + 1;
   db.prepare("update issues set revision = ?, updated_at = ? where id = ?").run(revision, at, issueId);
-  const storeRevision = bumpStoreRevision(db);
+  const storeRevision = receiptStoreRevision(db, composed);
   const receipt: IssueReceipt = { issueId, revision, storeRevision, created: false };
   recordOperation(db, mutation.operationId, hash, receipt, at);
   return receipt;

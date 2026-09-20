@@ -1299,6 +1299,12 @@ function issueFootprint(context: StoreContext): Record<string, unknown> {
   return row!;
 }
 
+/** §3.1 the shared store revision on its own: the counter a multi-domain transaction increments once. */
+function storeRevisionOf(context: StoreContext): number {
+  const [row] = rows(context, "select revision from store_meta where id = 1");
+  return Number(row!.revision);
+}
+
 /** Bind one plan's plan-pm session — which claims the plan's execution lease. */
 async function planSeat(
   fixture: LiveFixture,
@@ -1359,8 +1365,8 @@ describe("execution-residual: §3/§4.1 DB residual-add and residual-close", () 
     expect(added.replayed).toBe(false);
     expect(added.data.plan.id).toBe(OWN_PLAN);
     // The receipt's token is the addressed plan's CAS token, read back through
-    // the session-authorized read: a residual lives in the issue authority, so
-    // the plan row keeps the token the caller held.
+    // the session-authorized read AFTER the operation advanced the plan revision
+    // (§3.1: a residual operation is a plan mutation).
     expect(added.token).toBe(await planTokenOf(fixture, OWN_PLAN));
 
     // Consumer-visible: both findings exist in the plan row's project bucket and
@@ -1421,6 +1427,112 @@ describe("execution-residual: §3/§4.1 DB residual-add and residual-close", () 
       residualAddCall(fixture, seat, "residual-add-replay", [residualEntry({ occurrenceKey: "r-other" })], token),
     );
     expect(conflict.code).toBe("execution.operation-conflict");
+    expect(planFootprint(context, OWN_PLAN)).toEqual(settled.plan);
+    expect(issueFootprint(context)).toEqual(settled.issues);
+  });
+
+  test("an accepted residual operation spends the plan token it was given, and the spent token is refused", async () => {
+    const fixture = await liveWorkflow("residual-plan-token");
+    const { context, planTokens } = fixture;
+    await prepareCall(fixture, OWN_PLAN, "prepare-1", planTokens[OWN_PLAN]!);
+    const seat = await planSeat(fixture, OWN_PLAN, PLAN_PM_ID, "plan-token");
+    const before = planFootprint(context, OWN_PLAN);
+    // The CAS the caller holds BEFORE the operation. A residual operation is a
+    // plan mutation (§3.1), so this token must not survive it.
+    const held = await planTokenOf(fixture, OWN_PLAN);
+
+    const added = await residualAddCall(
+      fixture,
+      seat,
+      "residual-add-plan-token",
+      [residualEntry({ occurrenceKey: "r-1" })],
+      held,
+    );
+    expect(added.replayed).toBe(false);
+    // The receipt witnesses the plan's NEW revision, and the plan revision
+    // advanced exactly once for the accepted operation.
+    expect(added.token).not.toBe(held);
+    expect(added.token).toBe(await planTokenOf(fixture, OWN_PLAN));
+    expect(Number(planFootprint(context, OWN_PLAN).plan_revision)).toBe(Number(before.plan_revision) + 1);
+
+    const [item] = (await listIssues(context, {})).items;
+    const detail = await getIssue(context, item!.id);
+    expect(detail.disposition).toBe("open");
+    const settled = { plan: planFootprint(context, OWN_PLAN), issues: issueFootprint(context) };
+
+    // The spent token is refused by the NEXT operation, which changes neither
+    // the plan side nor the issue state the accepted operation left.
+    const refused = await refusalOf(() =>
+      residualCloseExecutionPlan(domainContext(context, seat.caller), {
+        operationId: "residual-close-spent-token",
+        session: seat.session,
+        expected: held,
+        planId: OWN_PLAN,
+        operation: {
+          kind: "residual-close",
+          issueId: detail.id,
+          disposition: "resolved",
+          evidence: { reason: "the finding is fixed", references: [OWN_PLAN], alignmentRef: "qa-gate:accepted" },
+          expectedIssueRevision: detail.revision,
+        },
+      }),
+    );
+    expect(refused.code).toBe("execution.stale-token");
+    expect(planFootprint(context, OWN_PLAN)).toEqual(settled.plan);
+    expect(issueFootprint(context)).toEqual(settled.issues);
+    const kept = await getIssue(context, detail.id);
+    expect(kept.disposition).toBe("open");
+    expect(kept.transitions).toEqual([]);
+  });
+
+  test("a multi-entry residual-add and a residual-close each advance the shared store revision once", async () => {
+    const fixture = await liveWorkflow("residual-store-revision");
+    const { context, planTokens } = fixture;
+    await prepareCall(fixture, OWN_PLAN, "prepare-1", planTokens[OWN_PLAN]!);
+    const seat = await planSeat(fixture, OWN_PLAN, PLAN_PM_ID, "store-revision");
+    const entries = [
+      residualEntry({ occurrenceKey: "rev-1" }),
+      residualEntry({
+        occurrenceKey: "rev-2",
+        title: "second residual",
+        rootCauseKey: "second-cause",
+        acceptanceKey: "second-acceptance",
+      }),
+    ];
+
+    // Two captures and two links compose into ONE transaction: §3.1 admits one
+    // shared-revision increment for it, not one per composed helper.
+    const before = storeRevisionOf(context);
+    const token = await planTokenOf(fixture, OWN_PLAN);
+    const added = await residualAddCall(fixture, seat, "residual-add-store-revision", entries, token);
+    expect(added.replayed).toBe(false);
+    expect(storeRevisionOf(context)).toBe(before + 1);
+
+    const [item] = (await listIssues(context, {})).items;
+    const detail = await getIssue(context, item!.id);
+    const beforeClose = storeRevisionOf(context);
+    const closed = await residualCloseExecutionPlan(domainContext(context, seat.caller), {
+      operationId: "residual-close-store-revision",
+      session: seat.session,
+      expected: await planTokenOf(fixture, OWN_PLAN),
+      planId: OWN_PLAN,
+      operation: {
+        kind: "residual-close",
+        issueId: detail.id,
+        disposition: "resolved",
+        evidence: { reason: "the finding is fixed", references: [OWN_PLAN], alignmentRef: "qa-gate:accepted" },
+        expectedIssueRevision: detail.revision,
+      },
+    });
+    expect(closed.replayed).toBe(false);
+    expect(storeRevisionOf(context)).toBe(beforeClose + 1);
+
+    // An exact replay is not a second transaction: it advances neither the plan
+    // revision nor the shared store revision.
+    const settled = { plan: planFootprint(context, OWN_PLAN), issues: issueFootprint(context) };
+    const again = await residualAddCall(fixture, seat, "residual-add-store-revision", entries, token);
+    expect(again.replayed).toBe(true);
+    expect(storeRevisionOf(context)).toBe(beforeClose + 1);
     expect(planFootprint(context, OWN_PLAN)).toEqual(settled.plan);
     expect(issueFootprint(context)).toEqual(settled.issues);
   });
