@@ -140,8 +140,8 @@ import type { NoticeTitle } from "../notices";
 /** Ledger `customType` of the durable handoff record (the only writer). */
 export const HANDOFF_CUSTOM_TYPE = "mstar:model-handoff";
 /**
- * Ledger `customType` of the durable coordinator-visible notice. The literal is
- * declared once in the shared notice module; this is its unchanged re-export.
+ * `customType` of the coordinator-visible notice. The literal is declared once
+ * in the shared notice module; this is its re-export.
  */
 export { HANDOFF_NOTICE_CUSTOM_TYPE } from "../notices";
 /** Tool the PM calls once the direction is locked and at the completion checkpoint. */

@@ -123,7 +123,7 @@ import { PHASE2_NOTICE_CUSTOM_TYPE, fallbackNotice, formatNotice, statusNotice }
 /** Ledger `customType` of this feature's decision records (the only writer). */
 export const PHASE2_CUSTOM_TYPE = "mstar:phase2";
 /** `customType` of the bounded Phase-2 advisory (`agent_end`, triggerTurn+followUp). */
-export const PHASE2_ADVISORY_CUSTOM_TYPE = "mstar:phase2-advisory";
+export const PHASE2_ADVISORY_CUSTOM_TYPE = "mstar:advisory";
 /** `customType` of a bounded diagnostic notice — informational, never a continuation. */
 export { PHASE2_NOTICE_CUSTOM_TYPE };
 /** The exact accepted engine phase label for "this coordinator is executing Phase 2". */
