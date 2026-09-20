@@ -27,7 +27,9 @@
  * - `-gates-read-their-input-*`: the lease gates take their row/lease from the
  *   authority (the leftover snapshot's claims are NOT the verdict), and the
  *   phase gate — whose input is a whole snapshot document — fails closed with
- *   `execution.consumer-not-ready` instead of reading retired JSON.
+ *   `execution.consumer-not-ready` instead of reading retired JSON. The gate's
+ *   OWN usage shape is decided ahead of that refusal, so a malformed phase-gate
+ *   invocation is exit 2 (usage) even on an active authority.
  * - `-status-validates-*`: the root register is validated FROM the authority (a
  *   status.json the file route would reject), while an explicitly named
  *   `status.json` is refused; a legacy harness still validates its own file.
@@ -212,6 +214,31 @@ function corruptStore(fixture: Fixture): void {
   writeFileSync(join(fixture.harnessDir, "store.db"), "this is not a sqlite database\n");
 }
 
+/**
+ * A well-formed Phase-2 delivery compass. It exists so the transition form's
+ * active-route arm fails for the ONE reason under test (the authority refusal),
+ * never because the compass file was missing.
+ */
+function writeCompass(fixture: Fixture): string {
+  const compassPath = join(fixture.harnessDir, "delivery-compass.md");
+  writeFileSync(
+    compassPath,
+    `---
+iteration_id: v9.9.9
+start_date: 2026-09-01
+status: active
+iteration_base_branch: main
+target_branch: main
+plans:
+  - ${PLAN_ID}
+---
+
+# v9.9.9 Delivery Compass
+`,
+  );
+  return compassPath;
+}
+
 /* ------------------------------------------------------------------------ *
  * execution-cli-read — the CLI read route (primary spec §5)
  * ------------------------------------------------------------------------ */
@@ -309,6 +336,37 @@ describe("execution-cli-read — the CLI answers execution-source reads by route
     expect(gate.exitCode).toBe(1);
     expect(gate.stderr).toContain("execution.consumer-not-ready");
     expect(gate.stdout).not.toContain("phase 6");
+
+    // The CLI's OWN usage shape is decided before that refusal, so on the same
+    // active authority a malformed invocation stays a usage error (exit 2):
+    // reporting the route refusal (exit 1) here would tell a caller the gate
+    // refused and send it after a token instead of fixing its command.
+    const badPhase = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--phase", "7"], fixture);
+    expect(badPhase.exitCode).toBe(2);
+    expect(badPhase.stderr).toContain("usage: iteration gate --phase only supports 6");
+    expect(badPhase.stderr).not.toContain("execution.consumer-not-ready");
+
+    const noCompass = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID], fixture);
+    expect(noCompass.exitCode).toBe(2);
+    expect(noCompass.stderr).toContain("usage: iteration gate requires --compass");
+    expect(noCompass.stderr).not.toContain("execution.consumer-not-ready");
+
+    // The transition form is WELL FORMED here (a real compass): it is still the
+    // authority that refuses it (exit 1), so the ordering fix narrowed nothing.
+    const transition = runCli(
+      ["iteration", "gate", "--workflow", WORKFLOW_ID, "--compass", writeCompass(fixture)],
+      fixture,
+    );
+    expect(transition.exitCode).toBe(1);
+    expect(transition.stderr).toContain("execution.consumer-not-ready");
+
+    // The usage verdict does not depend on the route: a harness whose authority
+    // is not active answers the same malformed shape the same way.
+    const legacyHarness = await legacyFixture("cli-read-gate-legacy");
+    const legacyBadPhase = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--phase", "7"], legacyHarness);
+    expect(legacyBadPhase.exitCode).toBe(2);
+    expect(legacyBadPhase.stderr).toContain("usage: iteration gate --phase only supports 6");
+    expect(legacyBadPhase.stderr).not.toContain("execution.consumer-not-ready");
   });
 
   test("status validates the authority register, and refuses the retired file", async () => {

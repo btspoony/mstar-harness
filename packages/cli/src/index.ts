@@ -2463,6 +2463,34 @@ function printChecklist(label: string, gate: GateResult): void {
   }
 }
 
+/**
+ * The resolved usage form of `iteration gate`: the `--phase 6` post-merge close
+ * branch, or the Phase 2–5 transition branch carrying its resolved `--compass`
+ * path. The two optional properties are mutually exclusive so the action's
+ * branch on `phase` also narrows `compass`.
+ */
+type IterationGateForm = { phase: 6; compass?: undefined } | { phase?: undefined; compass: string };
+
+/**
+ * Decide the gate's usage shape before any authority probe, so a malformed
+ * invocation is a usage error (exit 2) instead of surfacing as the active
+ * authority's refusal (exit 1): `--phase 6` is the only supported phase form and
+ * needs no `--compass`, and every other form requires a non-blank one.
+ */
+function resolveIterationGateForm(options: { phase?: string; compass?: string }): IterationGateForm {
+  if (options.phase !== undefined) {
+    if (Number(options.phase) !== 6) {
+      throw new SddScriptError(`usage: iteration gate --phase only supports 6 (got ${JSON.stringify(options.phase)})`, 2);
+    }
+    return { phase: 6 };
+  }
+  const compass = options.compass;
+  if (compass === undefined || compass.trim() === "") {
+    throw new SddScriptError("usage: iteration gate requires --compass <path> (or --phase 6 for the post-merge close form)", 2);
+  }
+  return { compass: path.resolve(compass) };
+}
+
 iterationCommand
   .command("gate")
   .description(
@@ -2483,17 +2511,17 @@ iterationCommand
   .action(
     async (options: { workflow: string; compass?: string; phase?: string; harness?: string; branch?: string; integration?: string; target?: string }) => {
     try {
+      // The CLI's own usage shape is decided first (exit 2): a malformed
+      // invocation stays a usage error whether or not the authority is active,
+      // so it can never be answered by the route refusal below.
+      const form = resolveIterationGateForm(options);
       // §5: this gate's input is a workflow SNAPSHOT document. While the
       // execution authority is active that document is retired, and the DB
       // adapter deliberately carries no session binding for its plan rows — so
       // the gate reports not-ready instead of reading the leftover bytes (or
       // inventing the session file its shape validation would demand).
       await assertLegacyGateInputAvailable({ harnessDir: resolveLeaseHarnessDir(options.harness) }, "iteration gate");
-      if (options.phase !== undefined) {
-        const phase = Number(options.phase);
-        if (phase !== 6) {
-          throw new SddScriptError(`usage: iteration gate --phase only supports 6 (got ${JSON.stringify(options.phase)})`, 2);
-        }
+      if (form.phase !== undefined) {
         const snapshotPath = resolveSnapshotPath(options.workflow, options.harness);
         if (!fs.existsSync(snapshotPath)) throw new Error(`workflow snapshot not found: ${snapshotPath}`);
         const rootFile = path.join(resolveLeaseHarnessDir(options.harness), "status.json");
@@ -2510,11 +2538,8 @@ iterationCommand
         if (!gate.ok) process.exitCode = 1;
         return;
       }
-      if (options.compass === undefined || options.compass.trim() === "") {
-        throw new SddScriptError("usage: iteration gate requires --compass <path> (or --phase 6 for the post-merge close form)", 2);
-      }
       const snapshotPath = resolveSnapshotPath(options.workflow, options.harness);
-      const compassPath = path.resolve(options.compass);
+      const compassPath = form.compass;
       if (!fs.existsSync(snapshotPath)) throw new Error(`workflow snapshot not found: ${snapshotPath}`);
       if (!fs.existsSync(compassPath)) throw new Error(`compass file not found: ${compassPath}`);
       const result = evaluatePhaseGate(readJson(snapshotPath), parseCompassFrontmatter(compassPath), {
