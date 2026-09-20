@@ -144,8 +144,12 @@
  * refuse without overwriting either. Per-item progress is durable in the
  * archive's own `retirement.json`, so a crash after a rename and before the
  * receipt resumes from the destination hash, and the DB receipt is written
- * last. Partial retirement never returns authority to JSON: the store stays
- * `active` throughout.
+ * last. A resume may contribute per-item PROGRESS only: every addressed field
+ * of the durable ledger is reconciled against the reviewed manifest before any
+ * rename, and every destination is the manifest's own, so an edited ledger can
+ * neither redirect a move outside the archive nor claim progress for a file the
+ * manifest does not address. Partial retirement never returns authority to
+ * JSON: the store stays `active` throughout.
  *
  * `abortExecutionMigration` is staged-only and DB-only. Active and retired
  * manifests cannot abort, so it can never return a live authority to JSON or
@@ -2190,6 +2194,110 @@ function readRetirementLedger(path: string): ExecutionRetirementLedger | undefin
   return ledger;
 }
 
+/**
+ * §6 item 4 resume (fix round 1): reconcile a durable ledger against the
+ * reviewed core set. A resume may contribute per-item PROGRESS and nothing
+ * else: every addressed field (kind, source path, manifest-relative path,
+ * archive destination, hash) is re-derived from the reviewed manifest and
+ * compared with what the ledger claims, and the item state must be one this
+ * protocol writes. The returned items are the MANIFEST's, so an edited or
+ * corrupted ledger can neither redirect a rename outside the
+ * manifest-addressed archive nor smuggle in progress for a file the manifest
+ * does not address.
+ */
+function reconcileRetirementItems(input: {
+  ledger: ExecutionRetirementLedger;
+  expected: readonly RetirementItem[];
+  manifestId: string;
+  manifestHash: string;
+  storeId: string;
+  epoch: number;
+  archiveDir: string;
+  ledgerPath: string;
+}): RetirementItem[] {
+  const { ledger, expected, manifestId, manifestHash, storeId, epoch, archiveDir, ledgerPath } = input;
+  function refuse(detail: string): never {
+    throw conflict(`the retirement ledger at ${ledgerPath} ${detail}; refusing to resume against it, and nothing was retired.`);
+  }
+  if (ledger.version !== 1 || ledger.manifestId !== manifestId || ledger.manifestHash !== manifestHash) {
+    refuse(`does not describe this manifest's reviewed core sources`);
+  }
+  if (ledger.storeId !== storeId || ledger.epoch !== epoch) {
+    refuse(
+      `records store ${JSON.stringify(ledger.storeId)} at epoch ${JSON.stringify(ledger.epoch)} while manifest ${manifestId} ` +
+        `was reviewed against store ${storeId} at epoch ${epoch}`,
+    );
+  }
+  if (canonicalPath(ledger.archiveDir) !== canonicalPath(archiveDir)) {
+    refuse(`names the archive directory ${JSON.stringify(ledger.archiveDir)} rather than ${archiveDir}`);
+  }
+  if (ledger.items.length !== expected.length) {
+    refuse(`addresses ${ledger.items.length} item(s) rather than the ${expected.length} reviewed core source(s)`);
+  }
+  return expected.map((item, index) => {
+    const recorded: unknown = ledger.items[index];
+    const what = `item ${index + 1} (${item.relativePath})`;
+    if (!isPlainObject(recorded)) refuse(`does not record ${what}`);
+    if (recorded.kind !== item.kind) {
+      refuse(`records ${what} with kind ${JSON.stringify(recorded.kind)} rather than ${JSON.stringify(item.kind)}`);
+    }
+    if (recorded.relativePath !== item.relativePath) {
+      refuse(`records ${what} under relativePath ${JSON.stringify(recorded.relativePath)} rather than ${JSON.stringify(item.relativePath)}`);
+    }
+    if (typeof recorded.path !== "string" || canonicalPath(recorded.path) !== canonicalPath(item.path)) {
+      refuse(`records ${what} at source path ${JSON.stringify(recorded.path)} rather than ${item.path}`);
+    }
+    if (typeof recorded.archivePath !== "string" || canonicalPath(recorded.archivePath) !== canonicalPath(item.archivePath)) {
+      refuse(
+        `records ${what} at archive destination ${JSON.stringify(recorded.archivePath)} rather than the ` +
+          `manifest-addressed ${item.archivePath}`,
+      );
+    }
+    if (recorded.sha256 !== item.sha256) {
+      refuse(`records ${what} with sha256 ${JSON.stringify(recorded.sha256)} rather than the reviewed bytes ${item.sha256}`);
+    }
+    if (recorded.state !== "pending" && recorded.state !== "moved") {
+      refuse(`records ${what} in state ${JSON.stringify(recorded.state)} rather than pending or moved`);
+    }
+    return { ...item, state: recorded.state };
+  });
+}
+
+/**
+ * §6 item 4: the one destination a retirement may write, refused when it is not
+ * the manifest-addressed archive itself. `isPathWithin` compares canonical
+ * prefixes, so a destination spelled outside the archive — absolute, traversal,
+ * or resolving through a symlinked ancestor — is not inside it; the `lstat` walk
+ * then refuses a symlinked component even when it resolves back inside, because
+ * a rename through a link this protocol did not create files the reviewed bytes
+ * somewhere the manifest does not address.
+ */
+function assertArchiveDestination(root: string, archiveDir: string, item: RetirementItem): void {
+  if (!isPathWithin(archiveDir, item.archivePath)) {
+    throw conflict(
+      `the archive destination ${item.archivePath} of ${item.relativePath} is outside the manifest-addressed archive ` +
+        `${archiveDir}; nothing was retired.`,
+    );
+  }
+  let current = root;
+  for (const segment of relative(root, item.archivePath).split(/[\\/]+/)) {
+    current = join(current, segment);
+    let info: Stats;
+    try {
+      info = lstatSync(current);
+    } catch {
+      // Not created yet: retirement makes it itself, under this same walk.
+      continue;
+    }
+    if (info.isSymbolicLink()) {
+      throw conflict(
+        `the archive destination ${current} of ${item.relativePath} is a symlink. Retirement writes only into directories ` +
+          `it created under ${archiveDir}, so nothing was retired.`,
+      );
+    }
+  }
+}
+
 /** §6 item 4 one item's exact source bytes, checked before anything moves. */
 function assertRetirementItemHolds(item: RetirementItem): void {
   const live = readIfExists(item.path);
@@ -2280,15 +2388,19 @@ async function assertRetirableAuthority(context: StoreContext, record: Migration
  * under `<harness>/archived/execution/<manifestId>/`.
  *
  * It runs only behind the recorded active receipt and re-verifies the store
- * identity, the advanced epoch and every source's exact bytes BEFORE anything
- * moves, so a changed source refuses with the live tree untouched. Then, per
+ * identity, the advanced epoch, every item's manifest-addressed destination and
+ * every source's exact bytes BEFORE anything moves, so a changed source or a
+ * redirected destination refuses with the live tree untouched. Then, per
  * item, a same-filesystem `rename` plus a checksum check of the destination,
  * each item's result written durably into the archive's own
  * `retirement.json`; the DB receipt is the LAST write. A crash after a rename
  * and before the receipt therefore resumes from the destination hash, a source
  * that is absent while its archive copy holds the reviewed bytes is already
  * done, and a source/destination disagreement refuses without overwriting
- * either. Partial retirement is recoverable and NEVER returns authority to
+ * either. A durable ledger is a claim about this manifest and never a source of
+ * addressing: its envelope and every item field are reconciled against the
+ * reviewed manifest first, and the resume moves the manifest's items. Partial
+ * retirement is recoverable and NEVER returns authority to
  * JSON: the store stays `active` throughout, and this verb writes no authority
  * row of its own.
  */
@@ -2332,21 +2444,21 @@ export async function retireExecutionSources(input: ExecutionMigrationRetireInpu
 
     const existing = readRetirementLedger(ledgerPath);
     if (existing !== undefined) {
-      // Resume ONLY against the same reviewed set: a ledger from another manifest,
-      // or one whose items moved, is not a partial run of this retirement.
-      const found = existing.items.map((item) => `${item.path}\u0000${item.sha256}`).join("\n");
-      const expected = expectedItems.map((item) => `${item.path}\u0000${item.sha256}`).join("\n");
-      if (
-        existing.version !== 1 ||
-        existing.manifestId !== manifestId ||
-        existing.manifestHash !== manifestHash ||
-        found !== expected
-      ) {
-        throw conflict(
-          `the retirement ledger at ${ledgerPath} does not describe this manifest's reviewed core sources; refusing to ` +
-            `resume against it, and nothing was retired.`,
-        );
-      }
+      // Resume ONLY against the same reviewed set: a ledger from another
+      // manifest, or one that does not reconcile field-for-field with the
+      // reviewed core sources, is not a partial run of this retirement. The
+      // reconciled items ARE the manifest's, so the ledger supplies progress
+      // and never a destination.
+      existing.items = reconcileRetirementItems({
+        ledger: existing,
+        expected: expectedItems,
+        manifestId,
+        manifestHash,
+        storeId: live.manifest.storeId,
+        epoch: live.manifest.epoch,
+        archiveDir,
+        ledgerPath,
+      });
     }
     const now = new Date().toISOString();
     const ledger: ExecutionRetirementLedger = existing ?? {
@@ -2362,9 +2474,13 @@ export async function retireExecutionSources(input: ExecutionMigrationRetireInpu
     };
 
     // §6 item 4 "recheck the exact current source hashes" FIRST: every item's
-    // bytes are verified before the first rename, so drift refuses with the live
-    // tree completely untouched rather than halfway through a partial move.
-    for (const item of ledger.items) assertRetirementItemHolds(item);
+    // destination and every item's bytes are verified before the first rename,
+    // so a redirected destination or a changed source refuses with the live tree
+    // completely untouched rather than halfway through a partial move.
+    for (const item of ledger.items) {
+      assertArchiveDestination(root, archiveDir, item);
+      assertRetirementItemHolds(item);
+    }
     for (const item of ledger.items) {
       if (item.state === "moved") continue;
       if (readIfExists(item.path) !== undefined) {

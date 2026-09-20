@@ -29,14 +29,19 @@
  *   references revoked, the migrated graph readable and the file route fenced;
  *   a deferred surface, source drift, a tampered staged graph and an
  *   attestation the frozen owner inventory cannot justify each refuse with the
- *   staged footprint unchanged; a crash before the commit leaves exactly the
- *   staged (JSON-live) authority and the retry commits once; a replay returns
- *   the recorded receipt without a second epoch bump.
+ *   staged footprint unchanged (including the unknown-session predicate — the
+ *   only owner-gate arm a 2a-legal fixture can reach, since a discovered owner
+ *   implies a populated session surface); a crash before the commit leaves
+ *   exactly the staged (JSON-live) authority and the retry commits once; a
+ *   replay returns the recorded receipt without a second epoch bump.
  * - `execution-retirement-*` (R2): retirement moves exactly the root register
  *   and the registered snapshots into manifest-addressed history, leaves every
  *   deferred/host file byte-identical, refuses a source written since the
  *   receipt and refuses before the activation receipt; a crash after a rename
- *   (and one before the receipt) resumes from the exact destination hash.
+ *   (and one before the receipt) resumes from the exact destination hash; a
+ *   durable ledger that redirects an archive destination or rewrites any
+ *   addressed field of an item is refused without a rename, and a symlinked
+ *   archive destination is refused before the first one.
  * - `execution-abort-*` (R2): a staged manifest returns to legacy with its rows
  *   gone, its epoch unmoved, issue/catalog and every source byte preserved; an
  *   active or retired manifest refuses to abort; a failed attempt rolls back
@@ -1829,6 +1834,39 @@ describe("execution-activation", () => {
     expect(storeFootprint(fixture.dbPath)).toEqual(footprint);
   });
 
+  test("execution-activation-cannot-reach-the-known-owner-gate-from-a-2a-fixture", async () => {
+    // The missing-known-owner refusal is UNREACHABLE by construction, so this
+    // case pins the construction instead of a state no 2a fixture can reach:
+    // an owner the barrier would have to revoke IS an envelope inside the
+    // workflow's own sessions/ dir (readSessionSource), the same discovery pass
+    // records every entry of that dir as the populated `workflow-session-envelopes`
+    // surface, and the deferred-coverage gate runs BEFORE the owner gate. So the
+    // attestation shape that would trip the missing-owner arm — one naming no
+    // owner at all — is refused for the deferred surface, with the frozen owner
+    // inventory provably non-empty. The reachable owner-gate predicate is the
+    // unknown-session one, covered above.
+    const fixture = await legacyWorkspace("activate-owner-closure");
+    const manifest = await stageCore(fixture, "owner-closure");
+    const footprint = storeFootprint(fixture.dbPath);
+
+    // The frozen manifest does carry owner-bearing sources: every referenced
+    // envelope is a witness, so this fixture's owner set is not empty…
+    expect(manifest.sources.filter((witness) => witness.kind === "session-envelope").length).toBeGreaterThan(0);
+    // …and the very same pass records that surface as populated, which is what
+    // makes the owner gate unreachable from here.
+    expect(manifest.deferred.find((surface) => surface.surface === "workflow-session-envelopes")?.paths.length).toBeGreaterThan(0);
+
+    const omission = await refusalOf(() => activateExecutionMigration(activationInput(fixture, manifest, "owner-closure")));
+    expect(omission.code).toBe("execution.coverage-incomplete");
+    expect(omission.message).toContain("workflow-session-envelopes");
+    expect(omission.message).toContain("no allow-incomplete flag");
+    // The owner-coverage refusal did NOT fire: the deferred barrier answered first.
+    expect(omission.message).not.toContain("does not name");
+    expect(storeFootprint(fixture.dbPath)).toEqual(footprint);
+    expect(migrationPhaseOf(fixture.dbPath)).toBe("staged");
+    expect(authorityOf(fixture.dbPath).authority_epoch).toBe(manifest.epoch);
+  });
+
   test("execution-activation-crash-before-the-commit-leaves-legacy-authority", async () => {
     const fixture = await coreWorkspace("activate-crash");
     const manifest = await stageCore(fixture, "crash");
@@ -2023,6 +2061,187 @@ describe("execution-retirement", () => {
     expect(existsSync(fixture.snapshotPaths[0]!)).toBe(false);
     expect(existsSync(join(archiveDir, "workflows", fixture.workflowIds[0]!, WORKFLOW_SNAPSHOT_FILE))).toBe(true);
     expect(authorityOf(fixture.dbPath).authority_epoch).toBe(epoch);
+    expect(executionMetaOf(fixture.dbPath).authority_state).toBe("active");
+  });
+
+  test("execution-retirement-refuses-a-ledger-that-redirects-an-archive-destination", async () => {
+    const fixture = await coreWorkspace("retire-ledger-redirect");
+    const manifest = await stageCore(fixture, "retire-ledger-redirect");
+    await activateExecutionMigration(activationInput(fixture, manifest, "retire-ledger-redirect"));
+    const archiveDir = join(fixture.harness, "archived", "execution", manifest.id);
+    const ledgerPath = join(archiveDir, "retirement.json");
+
+    // Crash right after the root register's rename: the archive holds the root
+    // register, the ledger does not exist yet, and the snapshot is still live.
+    const crash = withEnv({ MSTAR_STORE_FAIL_EXECUTION_RETIREMENT: "after-rename" }, () =>
+      retireExecutionSources(retirementInput(fixture, manifest, "redirect-crash")),
+    );
+    await expect(crash).rejects.toThrow(/induced execution-migration failure/);
+    expect(existsSync(fixture.statusPath)).toBe(false);
+    expect(existsSync(fixture.snapshotPaths[0]!)).toBe(true);
+    expect(existsSync(ledgerPath)).toBe(false);
+
+    const rootWitness = manifest.sources.find((witness) => witness.kind === "root")!;
+    const workflowWitness = manifest.sources.find((witness) => witness.kind === "workflow")!;
+    /**
+     * The ledger an operator (or a corrupted write) can leave behind: the source
+     * paths and the reviewed hashes are INTACT — the resume used to trust exactly
+     * that pair — and only the destination of the not-yet-moved snapshot is
+     * redirected out of the manifest-addressed archive.
+     */
+    const ledgerWith = (tamper: Record<string, unknown>): Record<string, unknown> => ({
+      version: 1,
+      manifestId: manifest.id,
+      manifestHash: executionManifestHash(manifest),
+      storeId: manifest.storeId,
+      epoch: manifest.epoch,
+      archiveDir,
+      startedAt: TS,
+      updatedAt: TS,
+      items: [
+        {
+          kind: "root",
+          path: rootWitness.path,
+          relativePath: "status.json",
+          archivePath: join(archiveDir, "status.json"),
+          sha256: rootWitness.sha256,
+          state: "moved",
+        },
+        {
+          kind: "workflow",
+          path: workflowWitness.path,
+          relativePath: `workflows/${fixture.workflowIds[0]}/${WORKFLOW_SNAPSHOT_FILE}`,
+          archivePath: join(archiveDir, "workflows", fixture.workflowIds[0]!, WORKFLOW_SNAPSHOT_FILE),
+          sha256: workflowWitness.sha256,
+          state: "pending",
+          ...tamper,
+        },
+      ],
+    });
+
+    const destinations = [
+      // An absolute destination outside the control root…
+      join(fixture.root, "escaped-snapshot.json"),
+      // …and the same escape spelled as traversal inside the harness.
+      `${archiveDir}/../../../escaped-snapshot.json`,
+    ];
+    for (const [index, destination] of destinations.entries()) {
+      writeJson(ledgerPath, ledgerWith({ archivePath: destination }));
+      const refusal = await refusalOf(() => retireExecutionSources(retirementInput(fixture, manifest, `redirect-${index}`)));
+      expect(refusal.code).toBe("execution.migration-conflict");
+      expect(refusal.message).toContain("archive destination");
+      // Nothing moved: the redirected destination was never created, the
+      // snapshot is still the live source and the root register was not restored.
+      expect(existsSync(destination)).toBe(false);
+      expect(existsSync(fixture.snapshotPaths[0]!)).toBe(true);
+      expect(existsSync(fixture.statusPath)).toBe(false);
+      expect(migrationPhaseOf(fixture.dbPath)).toBe("active");
+      expect(executionMetaOf(fixture.dbPath).authority_state).toBe("active");
+    }
+  });
+
+  test("execution-retirement-refuses-a-ledger-that-rewrites-an-addressed-field", async () => {
+    const fixture = await coreWorkspace("retire-ledger-fields");
+    const manifest = await stageCore(fixture, "retire-ledger-fields");
+    await activateExecutionMigration(activationInput(fixture, manifest, "retire-ledger-fields"));
+    const archiveDir = join(fixture.harness, "archived", "execution", manifest.id);
+    const ledgerPath = join(archiveDir, "retirement.json");
+
+    const crash = withEnv({ MSTAR_STORE_FAIL_EXECUTION_RETIREMENT: "after-rename" }, () =>
+      retireExecutionSources(retirementInput(fixture, manifest, "fields-crash")),
+    );
+    await expect(crash).rejects.toThrow(/induced execution-migration failure/);
+
+    const rootWitness = manifest.sources.find((witness) => witness.kind === "root")!;
+    const workflowWitness = manifest.sources.find((witness) => witness.kind === "workflow")!;
+    const ledgerWith = (tamper: Record<string, unknown>): Record<string, unknown> => ({
+      version: 1,
+      manifestId: manifest.id,
+      manifestHash: executionManifestHash(manifest),
+      storeId: manifest.storeId,
+      epoch: manifest.epoch,
+      archiveDir,
+      startedAt: TS,
+      updatedAt: TS,
+      items: [
+        {
+          kind: "root",
+          path: rootWitness.path,
+          relativePath: "status.json",
+          archivePath: join(archiveDir, "status.json"),
+          sha256: rootWitness.sha256,
+          state: "moved",
+        },
+        {
+          kind: "workflow",
+          path: workflowWitness.path,
+          relativePath: `workflows/${fixture.workflowIds[0]}/${WORKFLOW_SNAPSHOT_FILE}`,
+          archivePath: join(archiveDir, "workflows", fixture.workflowIds[0]!, WORKFLOW_SNAPSHOT_FILE),
+          sha256: workflowWitness.sha256,
+          state: "pending",
+          ...tamper,
+        },
+      ],
+    });
+
+    // Every addressed field of one item, rewritten one at a time: the resume may
+    // only contribute per-item progress, so a changed kind, path, relativePath,
+    // hash or an open state is a claim this manifest cannot reconcile.
+    const variants: Array<{ what: string; tamper: Record<string, unknown>; names: string }> = [
+      { what: "an unknown item state", tamper: { state: "running" }, names: "in state" },
+      { what: "a rewritten item kind", tamper: { kind: "deferred" }, names: "with kind" },
+      { what: "a rewritten relativePath", tamper: { relativePath: "workflows/elsewhere/snapshot.json" }, names: "relativePath" },
+      { what: "a rewritten source path", tamper: { path: join(fixture.harness, "elsewhere.json") }, names: "at source path" },
+      { what: "a rewritten sha256", tamper: { sha256: "0".repeat(64) }, names: "with sha256" },
+    ];
+    for (const [index, variant] of variants.entries()) {
+      writeJson(ledgerPath, ledgerWith(variant.tamper));
+      const refusal = await refusalOf(() =>
+        retireExecutionSources(retirementInput(fixture, manifest, `fields-${index}`)),
+      );
+      expect(refusal.code).toBe("execution.migration-conflict");
+      // The refusal names the LEDGER, not a source that is in fact untouched.
+      expect(refusal.message).toContain("refusing to resume against it");
+      expect(refusal.message).toContain(variant.names);
+      expect(existsSync(fixture.snapshotPaths[0]!)).toBe(true);
+      expect(migrationPhaseOf(fixture.dbPath)).toBe("active");
+    }
+  });
+
+  test("execution-retirement-refuses-a-symlinked-archive-destination-before-any-rename", async () => {
+    const fixture = await coreWorkspace("retire-archive-symlink");
+    const manifest = await stageCore(fixture, "retire-archive-symlink");
+    await activateExecutionMigration(activationInput(fixture, manifest, "retire-archive-symlink"));
+    const archiveDir = join(fixture.harness, "archived", "execution", manifest.id);
+    const escaped = join(fixture.root, "escaped-archive");
+    mkdirSync(escaped, { recursive: true });
+    mkdirSync(archiveDir, { recursive: true });
+
+    // A destination directory that is a LINK out of the archive: the canonical
+    // destination of the snapshot is then outside the manifest-addressed history.
+    symlinkSync(escaped, join(archiveDir, "workflows"));
+    const outward = await refusalOf(() => retireExecutionSources(retirementInput(fixture, manifest, "symlink-out")));
+    expect(outward.code).toBe("execution.migration-conflict");
+    expect(outward.message).toContain("outside the manifest-addressed archive");
+
+    // …and a link that resolves BACK INSIDE the archive: the addressed path stays
+    // inside, so only the link itself can be refused — a rename through it files
+    // the snapshot under a path the manifest does not address while the receipt
+    // would claim the addressed one.
+    rmSync(join(archiveDir, "workflows"));
+    mkdirSync(join(archiveDir, "elsewhere"), { recursive: true });
+    symlinkSync(join(archiveDir, "elsewhere"), join(archiveDir, "workflows"));
+    const inward = await refusalOf(() => retireExecutionSources(retirementInput(fixture, manifest, "symlink-in")));
+    expect(inward.code).toBe("execution.migration-conflict");
+    expect(inward.message).toContain("is a symlink");
+
+    // Every destination is checked before the FIRST rename, so the root register
+    // is still live, the snapshot is still live and neither link holds a byte.
+    expect(existsSync(fixture.statusPath)).toBe(true);
+    expect(existsSync(fixture.snapshotPaths[0]!)).toBe(true);
+    expect(readdirSync(escaped)).toEqual([]);
+    expect(readdirSync(join(archiveDir, "elsewhere"))).toEqual([]);
+    expect(migrationPhaseOf(fixture.dbPath)).toBe("active");
     expect(executionMetaOf(fixture.dbPath).authority_state).toBe("active");
   });
 
