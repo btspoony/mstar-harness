@@ -52,12 +52,15 @@
  *   operator authorization reference and the current-coordinator consumer);
  * - revocation and rebinding commit together with an immutable operation
  *   receipt recording the prior holder, the reason and the attestation digest;
- * - leases whose holder row the revocation orphaned are adopted by the recovery
- *   session with their `owner_epoch` UNCHANGED, which is what makes a workflow
- *   whose coordinator stopped readable again (the whole-view reader refuses a
- *   held lease whose holder row is not active — the state recovery exists to
- *   repair). Leases held by a live session are never touched, and a lease from
- *   an earlier epoch stays exactly where it is: recovery never revives
+ * - only the ownership that revoking the NAMED holder orphaned is adopted by
+ *   the recovery session, with its `owner_epoch` UNCHANGED, which is what makes
+ *   a workflow whose coordinator stopped readable again (the whole-view reader
+ *   refuses a held lease whose holder row is not active — the state recovery
+ *   exists to repair). A lease held by any other session keeps its ownership:
+ *   a live holder is never touched, and §2.3's rule that outstanding leases
+ *   retain their owner epoch and still need an explicit `reconcile` (or a
+ *   recovery that names THEIR holder) before reuse covers the rest. A lease
+ *   from an earlier epoch stays exactly where it is: recovery never revives
  *   old-epoch ownership, and `reconcile` remains the transition that must move
  *   an interrupted attempt.
  *
@@ -1059,13 +1062,14 @@ function recoverCoordinatorRequestHash(
  *
  * The atomic effect: the prior session row is revoked, the caller's own row is
  * rebound active at the current epoch (fresh, or reactivated from its own
- * non-active row), the leases whose holder row this revocation orphaned are
- * adopted by the recovery session with their `owner_epoch` unchanged, the
- * workflow header revision advances once and an immutable operation receipt
- * records the prior holder, the reason and the attestation. Leases from an
- * earlier epoch are left exactly as they are — recovery never revives old-epoch
- * ownership, and `reconcile` remains the transition that must move an
- * interrupted attempt.
+ * non-active row), the leases whose holder row this revocation orphaned — only
+ * the NAMED holder's own ownership — are adopted by the recovery session with
+ * their `owner_epoch` unchanged, the workflow header revision advances once and
+ * an immutable operation receipt records the prior holder, the reason and the
+ * attestation. A lease held by any other session keeps its ownership and stays
+ * outstanding, and leases from an earlier epoch are left exactly as they are —
+ * recovery never revives old-epoch ownership or takes foreign ownership, and
+ * `reconcile` remains the transition that must move an interrupted attempt.
  */
 export async function recoverExecutionCoordinator(
   context: ExecutionContext,
@@ -1198,7 +1202,12 @@ export async function recoverExecutionCoordinator(
       epoch: tx.epoch,
       now,
     });
-    adoptOrphanedLeases(tx, workflowId, caller.sessionId, now);
+    adoptLeasesOrphanedByRevocation(tx, {
+      workflowId,
+      revokedSessionId: priorSessionId,
+      recoveredSessionId: caller.sessionId,
+      now,
+    });
     advanceWorkflowHeaderRevision(tx, { workflowId, now });
     const receipt: ExecutionRead<ExecutionSessionRef> = {
       data: {
@@ -1257,21 +1266,36 @@ function requireLiveCoordinator(tx: ExecutionTransaction, workflowId: string, se
 }
 
 /**
- * §2.3/§4.2 the lease half of the recovery: after the prior owner's revocation,
- * every HELD lease of this workflow whose holder session is not active at this
- * epoch is ownership nobody can present any more — the whole-view reader refuses
- * exactly that pair — so the recovery session adopts it, keeping `owner_epoch`
- * and recording `transferred_from`. A lease held by a LIVE session is never
- * touched, and a lease from an earlier epoch is left exactly where it is:
- * recovery repairs the ownership the revocation orphaned, it does not revive
- * stale ownership.
+ * §2.3/§4.2 the lease half of the recovery: recovery replaces exactly ONE
+ * NAMED holder, so the ownership it may adopt is the ownership THAT holder's
+ * revocation orphaned — a HELD lease of this workflow, in the CURRENT epoch,
+ * whose holder session is the revoked holder and is not active any more. The
+ * whole-view reader refuses exactly that pair, so the recovery session takes it
+ * over, keeping `owner_epoch` and recording `transferred_from`; that is what
+ * makes a workflow whose coordinator stopped readable again.
+ *
+ * The boundary is the named holder rather than "any lease nobody is active on".
+ * A lease held by another session — an unrelated plan-pm row that stopped, or
+ * any holder this recovery neither names nor attests — keeps its ownership and
+ * stays outstanding: §2.3 is explicit that outstanding leases retain their
+ * `owner_epoch` and must still pass explicit `reconcile` (or a recovery that
+ * names THEIR holder) before reuse, so silently moving that ownership to the
+ * new coordinator would be exactly the takeover this transition must not
+ * perform. A recovery that names no holder revokes nothing and adopts nothing.
+ *
+ * A lease already held by the recovery session is left alone, a lease held by a
+ * LIVE session is never touched (a live holder resumes through its own
+ * reference), and a lease from an earlier epoch stays exactly where it is:
+ * recovery repairs what its revocation orphaned, it neither revives nor steals
+ * ownership. A held lease whose own holder identity is missing is a corrupt
+ * record the view reader also refuses, so it is refused here rather than
+ * adopted.
  */
-function adoptOrphanedLeases(
+function adoptLeasesOrphanedByRevocation(
   tx: ExecutionTransaction,
-  workflowId: string,
-  recoveredSessionId: string,
-  now: string,
+  input: { workflowId: string; revokedSessionId: string | null; recoveredSessionId: string; now: string },
 ): void {
+  const { workflowId, revokedSessionId, recoveredSessionId, now } = input;
   const rowsByRole: Record<"coordinator" | "plan-pm", SessionRow[]> = {
     coordinator: readCoordinatorRows(tx, workflowId),
     "plan-pm": readWorkflowSessionRows(tx, workflowId, "plan-pm"),
@@ -1300,6 +1324,9 @@ function adoptOrphanedLeases(
     }
     if (holder === recoveredSessionId) continue;
     if (activeHolder(role, holder, held.planId)) continue;
+    // The boundary: only the revoked holder's own ownership was orphaned by
+    // this recovery, and only that ownership is adopter-able here.
+    if (revokedSessionId === null || holder !== revokedSessionId) continue;
     transferExecutionLease(tx, {
       workflowId,
       planId: held.planId,

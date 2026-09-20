@@ -1084,13 +1084,22 @@ export async function readExecutionState(context: StoreContext): Promise<Executi
  * owns — the receipt payload of a transition that returns the whole graph (its
  * accepted effect as committed, which is why a terminal transition's receipt no
  * longer lists the workflow it just unregistered). A second read handle here
- * would be the nested transaction §4.1 refuses, and the caller's `tx.execution`
- * is the metadata of this same snapshot.
+ * would be the nested transaction §4.1 refuses.
+ *
+ * `execution_meta` is read from THIS transaction rather than reused from the
+ * snapshot `withExecutionTransaction` read at `BEGIN`, because the accepted
+ * transition's own writes may have advanced the root revision and its timestamp
+ * after that snapshot (`recordRootMembershipLoss` on a terminal close). The
+ * receipt must witness the COMMITTED root revision — it is the token the caller
+ * stores back as CAS, and a fresh `readExecutionState` would observe exactly
+ * this row — which is the same arithmetic the creation writer performs when it
+ * builds its receipt from the metadata it just advanced.
  */
 export function readExecutionStateGraph(tx: ExecutionTransaction): ExecutionRead<ExecutionState> {
+  const meta = readExecutionMetaRow(tx.db);
   return {
-    data: readExecutionGraph(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, tx.execution),
-    token: executionToken("root", tx.storeId, tx.epoch, [], tx.execution.revision),
+    data: readExecutionGraph(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, meta),
+    token: executionToken("root", tx.storeId, tx.epoch, [], meta.revision),
     storeId: tx.storeId,
     epoch: tx.epoch,
   };

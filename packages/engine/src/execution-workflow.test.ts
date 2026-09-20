@@ -799,6 +799,45 @@ describe("execution-workflow: §3 workflow-level phase, lifecycle, policy, check
     expect(reopened.code).toBe("coordination.invalid-transition");
   });
 
+  test("the terminal close's receipt witnesses the root revision it committed", async () => {
+    const fixture = await workflowFixture("close-root-token");
+    setRowStatus(fixture.context, PLAN_ID, "Done");
+    await workflowMutation(fixture, "op-close-token-evidence", { kind: "delivery", delivery: DELIVERY_TAIL });
+    const before = revisions(fixture.context);
+    // The CAS the close is admitted against, captured so the retry below is an
+    // EXACT retry of the same request: a different expected token is a different
+    // request hash, not a replay.
+    const expected = await liveWorkflowToken(fixture);
+
+    const receipt = await workflowMutation(
+      fixture,
+      "op-close-token",
+      { kind: "lifecycle", status: "completed", reason: "delivery tail verified" },
+      { expected },
+    );
+    expect(receipt.replayed).toBe(false);
+
+    // §3.1 the receipt witnesses the COMMITTED root this close produced: the
+    // registry loss advanced the root revision and its timestamp in the SAME
+    // transaction, so the token the caller stores back as CAS is the POST-close
+    // root token — never the pre-close one the frame read at BEGIN.
+    const after = await readExecutionState(fixture.context);
+    expect(revisions(fixture.context).root).toBe(before.root + 1);
+    expect(receipt.token).toBe(after.token);
+    expect(receipt.data.root.updated_at).toBe(after.data.root.updated_at);
+
+    // §3.1 the identical retry replays that same post-close receipt, so a caller
+    // holding it addresses the authority the close actually left behind.
+    const replay = await workflowMutation(
+      fixture,
+      "op-close-token",
+      { kind: "lifecycle", status: "completed", reason: "delivery tail verified" },
+      { expected },
+    );
+    expect(replay.replayed).toBe(true);
+    expect(replay.token).toBe(after.token);
+  });
+
   test("pause and resume keep the lifecycle and never touch a lease", async () => {
     const fixture = await workflowFixture("pause-resume");
     plantLease(fixture.context, { ownerEpoch: fixture.epoch, holderId: COORDINATOR_ID, holderRole: "coordinator" });
@@ -1070,6 +1109,53 @@ describe("execution-coordinator-recovery: §2.3/§4.2 the named recovery bootstr
       transferred_from: COORDINATOR_ID,
     });
     expect(Number(lease!.owner_epoch)).toBe(fixture.epoch);
+  });
+
+  test("recovery adopts only the ownership the revocation it names orphaned", async () => {
+    const fixture = await workflowFixture("recovery-foreign-orphan");
+    // An UNRELATED plan-pm holder that stopped while holding a plan lease in the
+    // CURRENT epoch: the same unreadable pair the case above repairs, owned by a
+    // session this recovery neither names nor attests. A crash state is planted
+    // (no W-phase verb produces a lease held by a session that is not its own).
+    const elsewhere = "host-plan-pm-elsewhere";
+    plantLease(fixture.context, { ownerEpoch: fixture.epoch, holderId: elsewhere, holderRole: "plan-pm" });
+    withRaw(fixture.context, (db) => {
+      db.prepare(
+        "insert into execution_sessions(workflow_id, role, session_id, plan_id, epoch, revision, state, bound_at) " +
+          "values (?, 'plan-pm', ?, ?, ?, 2, 'revoked', ?)",
+      ).run(WORKFLOW_ID, elsewhere, PLAN_ID, fixture.epoch, TS);
+    });
+    const leasesBefore = leaseRows(fixture.context);
+    expect((await refusalOf(() => readExecutionState(fixture.context))).code).toBe("store.corrupt");
+
+    // The recovery names and attests ONLY the coordinator.
+    const receipt = await recoverExecutionCoordinator(
+      domainContext(fixture.context, trustedCaller(RECOVERY_ID, "coordinator", null)),
+      {
+        expected: workflowTokenOfRow(fixture.context),
+        operationId: "op-recover-foreign-orphan",
+        priorSessionId: COORDINATOR_ID,
+        reason: "coordinator stopped",
+        attestation: attestation([COORDINATOR_ID]),
+      },
+    );
+    expect(receipt.replayed).toBe(false);
+    expect(receipt.data.sessionId).toBe(RECOVERY_ID);
+    expect(sessionState(fixture.context, RECOVERY_ID)).toBe("active");
+
+    // The unrelated holder's ownership is NOT adopted: byte-identical row and no
+    // transfer provenance. It stays outstanding — §2.3 keeps outstanding leases
+    // at their own owner_epoch pending an explicit reconcile (or a recovery that
+    // names THEIR holder), so the workflow stays fail-closed instead of handing
+    // the new coordinator an ownership nothing attested.
+    expect(leaseRows(fixture.context)).toEqual(leasesBefore);
+    const [lease] = leaseRows(fixture.context);
+    expect(parsedJson(lease!.lease_json)).toMatchObject({
+      holder_session_id: elsewhere,
+      holder_role: "plan-pm",
+    });
+    expect(parsedJson(lease!.lease_json).transferred_from).toBeUndefined();
+    expect((await refusalOf(() => readExecutionState(fixture.context))).code).toBe("store.corrupt");
   });
 
   test("an old-epoch lease is never revived by recovery", async () => {
