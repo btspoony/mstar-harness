@@ -30,9 +30,10 @@
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { registerCatalogEntity } from "./catalog.js";
 import { executionInputHash } from "./coordination.js";
@@ -60,6 +61,8 @@ const PLAN_A_SESSION = "host-plan-a-0001";
 const PLAN_B_SESSION = "host-plan-b-0001";
 const ROOT_UPDATED_AT = "2026-09-03";
 const TS = "2026-09-02T00:00:00.000Z";
+const INTEGRATION_BRANCH = "iteration/iter-example";
+const INTEGRATION_WORKTREE = "integration";
 
 afterAll(() => {
   rmSync(ROOT, { recursive: true, force: true });
@@ -153,14 +156,18 @@ async function legacyWorkspace(
     updated_at: "2026-09-02",
     delivery_kind: "development",
     project: "_default",
-    branch: { source: `feature/${workflowId}`, target: "main" },
+    branch: { source: `feature/${workflowId}`, target: "main", integration: INTEGRATION_BRANCH },
+    integration_worktree_path: join(fixture.harness, "worktrees", INTEGRATION_WORKTREE),
     coordination: { coordinator: bindingOf(COORDINATOR_SESSION, coordinatorEnvelope) },
+    // §2.2/§3 the released shape of held integration ownership: the workflow's
+    // coordinator holds the claim for PLAN_A's accepted attempt, which it moved
+    // to `integrating` against the snapshot's integration branch.
     integration_merge_lease: {
-      holder: PLAN_A_SESSION,
+      holder: COORDINATOR_SESSION,
       claimed_at: TS,
       plan_id: PLAN_A,
       source_branch: `feature/${PLAN_A}`,
-      target_branch: "iteration/iter-example",
+      target_branch: INTEGRATION_BRANCH,
     },
     plans: [
       {
@@ -169,7 +176,45 @@ async function legacyWorkspace(
         file: "plans/plan-a.md",
         status: "InProgress",
         metadata: scopeOf(PLAN_A),
-        coordination: { revision: 3, session: bindingOf(PLAN_A_SESSION, planEnvelopes[PLAN_A]) },
+        coordination: {
+          revision: 3,
+          session: bindingOf(PLAN_A_SESSION, planEnvelopes[PLAN_A]),
+          progress: {
+            status: "InReview",
+            summary: "integrating onto the iteration branch",
+            evidence_paths: [join(fixture.harness, "sdd", PLAN_A, "qc.md")],
+          },
+          handoff: {
+            id: "hoff-a",
+            attempt: 1,
+            state: "integrating",
+            submitted_by: PLAN_A_SESSION,
+            submitted_at: TS,
+            source_branch: `feature/${PLAN_A}`,
+            source_sha: "a".repeat(40),
+            worktree_path: join(fixture.harness, "worktrees", PLAN_A),
+            review_base: "c".repeat(40),
+            review_head: "d".repeat(40),
+            accepted_by: COORDINATOR_SESSION,
+            accepted_at: TS,
+            qc: {
+              decision: "Approve",
+              reports: [{ path: join(fixture.harness, "sdd", PLAN_A, "qc1.md"), sha256: "e".repeat(64) }],
+              consolidated: { path: join(fixture.harness, "sdd", PLAN_A, "qc.md"), sha256: "f".repeat(64) },
+            },
+            qa: {
+              gate: "mandatory",
+              decision: "pass",
+              report: { path: join(fixture.harness, "sdd", PLAN_A, "qa.md"), sha256: "1".repeat(64) },
+            },
+            integration: {
+              target_branch: INTEGRATION_BRANCH,
+              worktree_path: join(fixture.harness, "worktrees", INTEGRATION_WORKTREE),
+              base_sha: "2".repeat(40),
+              started_at: TS,
+            },
+          },
+        },
         execution_lease: { holder: PLAN_A_SESSION, claimed_at: TS, ...scopeOf(PLAN_A), base_sha: "a".repeat(40) },
       },
       {
@@ -531,11 +576,19 @@ describe("execution-preview", () => {
   test("execution-preview-refuses-a-catalog-binding-that-disagrees", async () => {
     const fixture = await legacyWorkspace("preview-binding-conflict");
     const storeId = rawGet<{ store_id: string }>(fixture.dbPath, "select store_id from store_meta where id = 1")!.store_id;
-    const pin = { store_id: storeId, entity_revision: 3, document_hash: "2".repeat(64), relation_hash: "3".repeat(64) };
     const snapshot = JSON.parse(readFileSync(fixture.snapshotPath, "utf8")) as {
       plans: Array<{ id: string; metadata: Record<string, unknown> }>;
     };
-    snapshot.plans[0]!.metadata.catalog_pin = pin;
+    const row = snapshot.plans[0]!;
+    // The row's OWN pin is coherent (the released prepare shape), so the only
+    // disagreement this case carries is the committed binding's recorded hash.
+    const pin = {
+      store_id: storeId,
+      entity_revision: 3,
+      document_hash: executionInputHash(row, PLAN_A),
+      relation_hash: "3".repeat(64),
+    };
+    row.metadata.catalog_pin = pin;
     writeJson(fixture.snapshotPath, snapshot);
     // The binding's foreign key needs the catalog entity it points at.
     rawRun(
@@ -560,6 +613,105 @@ describe("execution-preview", () => {
     const refusal = await refusalOf(() => previewExecutionMigration(migrationInput(fixture, "op-binding")));
     expect(refusal.code).toBe("execution.migration-conflict");
     expect(refusal.message).toContain("neither side wins silently");
+  });
+
+  test("execution-preview-refuses-a-pin-that-disagrees-with-its-row", async () => {
+    // §7/§1 a pin freezes the row it is sealed with, so a same-store pin whose
+    // `document_hash` is not that row's frozen-input hash is refused even
+    // though NO binding row exists to disagree with it — the missing binding
+    // side never licenses sealing an incoherent pin. Both live routes refuse
+    // the same disagreement (create: `assertSelectedCatalogEntities`; read:
+    // `readExecutionCatalogPin`).
+    const fixture = await legacyWorkspace("preview-pin-row-disagreement");
+    const storeId = rawGet<{ store_id: string }>(fixture.dbPath, "select store_id from store_meta where id = 1")!.store_id;
+    const snapshot = JSON.parse(readFileSync(fixture.snapshotPath, "utf8")) as {
+      plans: Array<{ id: string; metadata: Record<string, unknown> }>;
+    };
+    snapshot.plans[0]!.metadata.catalog_pin = {
+      store_id: storeId,
+      entity_revision: 3,
+      document_hash: "2".repeat(64),
+      relation_hash: "3".repeat(64),
+    };
+    writeJson(fixture.snapshotPath, snapshot);
+    const footprint = storeFootprint(fixture.dbPath);
+    const refusal = await refusalOf(() => previewExecutionMigration(migrationInput(fixture, "op-pin-row")));
+    expect(refusal.code).toBe("execution.migration-conflict");
+    expect(refusal.message).toContain("the pin and its row disagree");
+    expect(storeFootprint(fixture.dbPath)).toEqual(footprint);
+
+    // The same pin with the row's OWN hash — the released prepare shape — is
+    // the coherent pair and previews.
+    snapshot.plans[0]!.metadata.catalog_pin = {
+      ...(snapshot.plans[0]!.metadata.catalog_pin as Record<string, unknown>),
+      document_hash: executionInputHash(snapshot.plans[0]!, PLAN_A),
+    };
+    writeJson(fixture.snapshotPath, snapshot);
+    const manifest = await previewExecutionMigration(migrationInput(fixture, "op-pin-row-ok"));
+    expect(manifest.sources.length).toBeGreaterThan(0);
+  });
+
+  test("execution-preview-imports-a-bound-plan-that-records-no-pin", async () => {
+    // §1 coexistence — deliberately NOT a refusal. A plan row that records no
+    // pin does not disagree with its workflow's committed binding: the
+    // binding IS that plan's pin, read exactly as `readExecutionCatalogPin`
+    // reads it (the association's identity, with the document half supplied by
+    // the frozen row). A binding stores its own identity in `input_hash` /
+    // `pin_json` (`writeBinding`), not an execution pin, so comparing the two
+    // as if they were one quantity would refuse a state the contract keeps
+    // importable — the reviewer-visible `document_hash` invariant lives on the
+    // pin itself and is enforced above, independently of any binding.
+    const fixture = await legacyWorkspace("preview-bound-unpinned");
+    rawRun(
+      fixture.dbPath,
+      "insert into catalog_entities(kind, id, title, root_kind, relative_path, revision, lifecycle, registered_at, updated_at) " +
+        "values ('plan', ?, 'Plan A', 'plans', 'plans/plan-a.md', 1, 'active', ?, ?)",
+      PLAN_A,
+      TS,
+      TS,
+    );
+    const bindingIdentity = JSON.stringify({
+      kind: "plan",
+      id: PLAN_A,
+      rootKind: "plans",
+      relativePath: "plans/plan-a.md",
+      documentKind: null,
+      sourceHash: null,
+    });
+    rawRun(
+      fixture.dbPath,
+      "insert into catalog_execution_bindings(workflow_id, catalog_kind, catalog_id, workflow_root_kind, " +
+        "workflow_relative_path, catalog_revision, input_hash, pin_json, operation_id) " +
+        "values (?, 'plan', ?, 'harness', ?, 1, ?, ?, 'op-bind')",
+      fixture.workflowId,
+      PLAN_A,
+      "plans/plan-a.md",
+      createHash("sha256").update(bindingIdentity, "utf8").digest("hex"),
+      bindingIdentity,
+    );
+    const backup = await recoveryPoint(fixture);
+    const manifest = await previewExecutionMigration(migrationInput(fixture, "op-bound-unpinned-preview"));
+    const receipt = await applyExecutionMigration({
+      ...migrationInput(fixture, "op-bound-unpinned-apply"),
+      manifest,
+      manifestHash: executionManifestHash(manifest),
+      backup,
+    });
+    expect(receipt.phase).toBe("staged");
+    // The sealed input records no pin, and the association is left exactly as
+    // it was: the migration preserves catalog rows, it never rewrites them.
+    expect(
+      rawGet<{ catalog_pin_json: string | null }>(
+        fixture.dbPath,
+        `select catalog_pin_json from execution_inputs where workflow_id = '${fixture.workflowId}' and plan_id = '${PLAN_A}'`,
+      ),
+    ).toEqual({ catalog_pin_json: null });
+    expect(
+      rawGet<{ n: number; input_hash: string }>(
+        fixture.dbPath,
+        `select count(*) as n, min(input_hash) as input_hash from catalog_execution_bindings where workflow_id = '${fixture.workflowId}'`,
+      ),
+    ).toEqual({ n: 1, input_hash: createHash("sha256").update(bindingIdentity, "utf8").digest("hex") });
   });
 
   test("execution-preview-refuses-an-unclassified-workflow-entry", async () => {
@@ -720,7 +872,15 @@ describe("execution-stage", () => {
     expect(stateA.coordination).toBeUndefined();
     expect(stateA.execution_lease).toBeUndefined();
     expect(stateA.status).toBe("InProgress");
-    expect(JSON.parse(plans[0]!.coordination_json)).toEqual({});
+    const blockA = JSON.parse(plans[0]!.coordination_json) as Record<string, unknown>;
+    expect(blockA.revision).toBeUndefined();
+    expect(blockA.session).toBeUndefined();
+    expect(blockA.handoff).toMatchObject({ state: "integrating", source_branch: `feature/${PLAN_A}` });
+    expect(blockA.progress).toEqual({
+      status: "InReview",
+      summary: "integrating onto the iteration branch",
+      evidence_paths: [join(fixture.harness, "sdd", PLAN_A, "qc.md")],
+    });
     const blockB = JSON.parse(plans[1]!.coordination_json) as Record<string, unknown>;
     expect(blockB.revision).toBeUndefined();
     expect(blockB.session).toBeUndefined();
@@ -780,7 +940,30 @@ describe("execution-stage", () => {
       `select owner_epoch, lease_json from execution_integration_leases where workflow_id = '${PRIMARY}'`,
     );
     expect(mergeLeases).toHaveLength(1);
-    expect(JSON.parse(mergeLeases[0]!.lease_json)).toMatchObject({ status: "held", plan_id: PLAN_A, holder: PLAN_A_SESSION });
+    expect(mergeLeases[0]!.owner_epoch).toBe(epoch);
+    expect(JSON.parse(mergeLeases[0]!.lease_json)).toMatchObject({
+      status: "held",
+      plan_id: PLAN_A,
+      holder: COORDINATOR_SESSION,
+      source_branch: `feature/${PLAN_A}`,
+      target_branch: INTEGRATION_BRANCH,
+    });
+
+    // ── the imported lifecycle keeps its OWN timestamps: the migration receipt
+    // is the only thing stamped `now`, and the header carries the source
+    // snapshot's validated `started_at` / `updated_at` verbatim.
+    expect(
+      rawGet<{ created_at: string; updated_at: string }>(
+        fixture.dbPath,
+        `select created_at, updated_at from execution_workflows where workflow_id = '${PRIMARY}'`,
+      ),
+    ).toEqual({ created_at: "2026-09-01", updated_at: "2026-09-02" });
+    expect(
+      rawGet<{ created_at: string; updated_at: string }>(
+        fixture.dbPath,
+        `select created_at, updated_at from execution_workflows where workflow_id = '${SECONDARY}'`,
+      ),
+    ).toEqual({ created_at: "2026-09-01", updated_at: "2026-09-02" });
 
     // ── sources, issue/catalog evidence and revisions survive untouched
     expect(protectedBytes(fixture.protectedPaths)).toEqual(before);
@@ -1051,6 +1234,222 @@ describe("execution-stage", () => {
     });
     expect(receipt.phase).toBe("staged");
     expect(readFileSync(ledger, "utf8")).toBe('{"v":1,"ts":1,"kind":"dispatch"}\n');
+  });
+
+  test("execution-stage-refuses-a-handoff-without-its-plan-session", async () => {
+    // §2.2/§D a handoff requires a bound plan session, on both transports: the
+    // source snapshot refuses the block itself, and the import validates the
+    // stored block with `sessionBound: plan.session !== null` — the DB reader's
+    // own rule (`sessionRow !== undefined`) — so a plan whose handoff has no
+    // session row to own it never stages.
+    const fixture = await legacyWorkspace("stage-handoff-no-session");
+    const snapshot = JSON.parse(readFileSync(fixture.snapshotPath, "utf8")) as {
+      plans: Array<{ id: string; coordination: Record<string, unknown> }>;
+    };
+    delete snapshot.plans[1]!.coordination.session;
+    writeJson(fixture.snapshotPath, snapshot);
+    const footprint = storeFootprint(fixture.dbPath);
+
+    const refusal = await refusalOf(() => previewExecutionMigration(migrationInput(fixture, "op-handoff-preview")));
+    expect(refusal.code).toBe("execution.migration-conflict");
+    expect(refusal.message).toContain("handoff requires a bound plan session");
+    expect(storeFootprint(fixture.dbPath)).toEqual(footprint);
+    expect(
+      rawGet<{ authority_state: string }>(fixture.dbPath, "select authority_state from execution_meta where id = 1")!.authority_state,
+    ).toBe("legacy");
+  });
+
+  test("execution-stage-refuses-an-incoherent-integration-merge-lease", async () => {
+    // §2.2/§3 only the workflow's coordinator claims its merge lease, and only
+    // for the accepted attempt it is integrating, on that attempt's source
+    // branch and the snapshot's own integration target. Each incoherent claim
+    // below previews (its bytes are valid) and is refused by the import gate.
+    const claimRefusalOf = async (label: string, mutate: (lease: Record<string, unknown>) => void) => {
+      const fixture = await legacyWorkspace(`stage-merge-${label}`);
+      const snapshot = JSON.parse(readFileSync(fixture.snapshotPath, "utf8")) as {
+        integration_merge_lease: Record<string, unknown>;
+      };
+      mutate(snapshot.integration_merge_lease);
+      writeJson(fixture.snapshotPath, snapshot);
+      const backup = await recoveryPoint(fixture);
+      const manifest = await previewExecutionMigration(migrationInput(fixture, `op-merge-${label}-preview`));
+      const footprint = storeFootprint(fixture.dbPath);
+      const refusal = await refusalOf(() =>
+        applyExecutionMigration({
+          ...migrationInput(fixture, `op-merge-${label}-apply`),
+          manifest,
+          manifestHash: executionManifestHash(manifest),
+          backup,
+        }),
+      );
+      expect(storeFootprint(fixture.dbPath)).toEqual(footprint);
+      return refusal;
+    };
+
+    // A plan-pm holder: the file route's caller constructs the claim from the
+    // COORDINATOR session, so a plan session never holds a workflow-wide claim.
+    const holder = await claimRefusalOf("holder", (lease) => {
+      lease.holder = PLAN_A_SESSION;
+    });
+    expect(holder.code).toBe("execution.migration-conflict");
+    expect(holder.message).toContain("not the workflow's recorded coordinator");
+
+    // A claim on a plan this workflow does not own.
+    const foreign = await claimRefusalOf("foreign-plan", (lease) => {
+      lease.plan_id = "20260920-migration-somewhere-else";
+    });
+    expect(foreign.code).toBe("execution.migration-conflict");
+    expect(foreign.message).toContain("not a plan of this workflow");
+
+    // A claim on a plan whose attempt is not being integrated.
+    const unaccepted = await claimRefusalOf("unaccepted", (lease) => {
+      lease.plan_id = PLAN_B;
+    });
+    expect(unaccepted.code).toBe("execution.migration-conflict");
+    expect(unaccepted.message).toContain("recorded handoff is");
+
+    // A claim for another attempt's source branch.
+    const source = await claimRefusalOf("source", (lease) => {
+      lease.source_branch = "feature/someone-elses-attempt";
+    });
+    expect(source.code).toBe("execution.migration-conflict");
+    expect(source.message).toContain("a claim on another attempt");
+
+    // A claim against a branch that is not this workflow's integration target.
+    const target = await claimRefusalOf("target", (lease) => {
+      lease.target_branch = "iteration/iter-other";
+    });
+    expect(target.code).toBe("execution.migration-conflict");
+    expect(target.message).toContain("snapshot records integration target");
+  });
+
+  test("execution-stage-refuses-a-manifest-whose-coverage-was-edited", async () => {
+    // §6/§2b the deferred coverage claim is revalidated under the locks against
+    // the SAME manifest hash the caller hands back, so editing a blocked
+    // surface to `absent` after review (and rehashing) cannot stage rows that
+    // report false coverage to the activation barrier.
+    const fixture = await legacyWorkspace("stage-coverage-edit");
+    const backup = await recoveryPoint(fixture);
+    const manifest = await previewExecutionMigration(migrationInput(fixture, "op-coverage-preview"));
+    const footprint = storeFootprint(fixture.dbPath);
+    const edited: ExecutionManifest = {
+      ...manifest,
+      deferred: manifest.deferred.map((surface) =>
+        surface.surface === "workflow-session-envelopes" ? { ...surface, paths: [], disposition: "absent" } : surface,
+      ),
+    };
+
+    const refusal = await refusalOf(() =>
+      applyExecutionMigration({
+        ...migrationInput(fixture, "op-coverage-apply"),
+        manifest: edited,
+        manifestHash: executionManifestHash(edited),
+        backup,
+      }),
+    );
+    expect(refusal.code).toBe("execution.migration-conflict");
+    expect(refusal.message).toContain("deferred-surface coverage changed");
+    expect(storeFootprint(fixture.dbPath)).toEqual(footprint);
+
+    // The pending-catalog witness half of the same revalidation.
+    const second = await legacyWorkspace("stage-pending-claim-edit");
+    const secondBackup = await recoveryPoint(second);
+    const secondManifest = await previewExecutionMigration(migrationInput(second, "op-pending-claim-preview"));
+    const secondFootprint = storeFootprint(second.dbPath);
+    const claimed: ExecutionManifest = { ...secondManifest, pendingCatalogOperations: ["op-ghost"] };
+
+    const secondRefusal = await refusalOf(() =>
+      applyExecutionMigration({
+        ...migrationInput(second, "op-pending-claim-apply"),
+        manifest: claimed,
+        manifestHash: executionManifestHash(claimed),
+        backup: secondBackup,
+      }),
+    );
+    expect(secondRefusal.code).toBe("execution.migration-conflict");
+    expect(secondRefusal.message).toContain("pending catalog operation(s)");
+    expect(storeFootprint(second.dbPath)).toEqual(secondFootprint);
+  });
+
+  test("execution-stage-refuses-the-live-store-as-its-recovery-point", async () => {
+    // §8 "copying `store.db` bytes is not a backup": the gate's whole point is
+    // an INDEPENDENT recovery copy, so the live database and its WAL/SHM
+    // sidecars are refused as their own recovery point — even when the fields
+    // they carry match the receipt, which for an unchanged store they do.
+    const fixture = await legacyWorkspace("stage-live-recovery-point");
+    const backup = await recoveryPoint(fixture);
+    const manifest = await previewExecutionMigration(migrationInput(fixture, "op-live-preview"));
+    const reviewed = {
+      storeId: manifest.storeId,
+      epoch: manifest.epoch,
+      schemaVersion: manifest.schemaVersion,
+      catalogRevision: manifest.catalogRevision,
+    };
+
+    for (const suffix of ["", "-wal", "-shm"]) {
+      const refusal = await refusalOf(() =>
+        assertBackupDescribesStore(fixture.context, { ...backup, backupPath: `${fixture.dbPath}${suffix}` }, reviewed),
+      );
+      expect(refusal.code, suffix).toBe("store.activation-stale");
+      expect(refusal.message, suffix).toContain("names the live store database");
+    }
+    // The independent copy itself still verifies: the gate gained a refusal,
+    // not a different rule.
+    await expect(assertBackupDescribesStore(fixture.context, backup, reviewed)).resolves.toBeUndefined();
+  });
+
+  test("execution-stage-stamps-only-its-own-receipt-with-the-apply-clock", async () => {
+    // §6 timestamps: the imported lifecycle's own history is preserved, and
+    // `now` is the MIGRATION's bookkeeping only.
+    const fixture = await legacyWorkspace("stage-import-clock");
+    await stageReviewed(fixture, "import-clock");
+
+    const migration = rawGet<{ created_at: string; updated_at: string }>(
+      fixture.dbPath,
+      "select created_at, updated_at from execution_migrations",
+    )!;
+    expect(migration.created_at).not.toBe("2026-09-01");
+    expect(migration.updated_at).not.toBe("2026-09-02");
+    expect(Number.isNaN(Date.parse(migration.created_at))).toBe(false);
+    expect(
+      rawGet<{ created_at: string; updated_at: string }>(
+        fixture.dbPath,
+        `select created_at, updated_at from execution_workflows where workflow_id = '${PRIMARY}'`,
+      ),
+    ).toEqual({ created_at: "2026-09-01", updated_at: "2026-09-02" });
+  });
+
+  test("execution-stage-source-witnesses-are-canonically-ordered", async () => {
+    // §6 the manifest is content-addressed and compared by index, so the source
+    // inventory must not depend on the order a directory was written in: the
+    // same workspace content read back in any creation order is the same
+    // manifest, and the unreferenced session surface reads back sorted.
+    const build = async (label: string, reverse: boolean) => {
+      const fixture = await legacyWorkspace(`stage-witness-order-${label}`);
+      const unreferenced = ["plan-pm-legacy-a.json", "plan-pm-legacy-z.json"];
+      for (const file of reverse ? [...unreferenced].reverse() : unreferenced) {
+        writeJson(join(fixture.sessionsDir, file), envelopeOf("plan-pm", `host-${file}`, fixture.workflowId, fixture.harness, PLAN_A));
+      }
+      writeText(join(fixture.workflowDir, "notes.jsonl"), '{"kind":"note","ts":1,"text":"legacy note"}');
+      const manifest = await previewExecutionMigration(migrationInput(fixture, `op-order-${label}`));
+      const root = canonicalPath(fixture.root);
+      const rel = (path: string) => relative(root, path);
+      return {
+        witnesses: manifest.sources.map((witness) => `${witness.kind} ${rel(witness.path)}`),
+        coverage: manifest.deferred.map(
+          (surface) => `${surface.surface} ${surface.disposition} ${surface.paths.map(rel).join(",")}`,
+        ),
+      };
+    };
+
+    const forward = await build("forward", false);
+    const backward = await build("backward", true);
+    expect(backward.witnesses).toEqual(forward.witnesses);
+    expect(backward.coverage).toEqual(forward.coverage);
+    const deferredWitnesses = forward.witnesses.filter((entry) => entry.startsWith("deferred "));
+    expect(deferredWitnesses.length).toBeGreaterThan(0);
+    expect(deferredWitnesses).toEqual([...deferredWitnesses].sort());
+    expect(deferredWitnesses.join("\n")).toContain("sessions/plan-pm-legacy-a.json");
   });
 
   test("execution-stage-writes-rows-the-db-reader-accepts", async () => {

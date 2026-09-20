@@ -108,7 +108,7 @@ import {
 } from "./coordination.js";
 import { isNonEmptyString, isPlainObject } from "./coordination-write.js";
 import { storedCoordinationViolations } from "./coordination-transitions.js";
-import { validateExecutionLease, withStatusWriteLock, type ExecutionLease } from "./lease.js";
+import { validateExecutionLease, withStatusWriteLock, type ExecutionLease, type IntegrationMergeLease } from "./lease.js";
 import {
   rowPlanId,
   validatePlanRow,
@@ -294,12 +294,22 @@ function readSourceBytes(path: string, what: string, missingDetail: string): Buf
   return readFileSync(path);
 }
 
+/**
+ * The listing primitive of the inventory, in CANONICAL order. The manifest is
+ * content-addressed and `apply` compares witnesses by array index, so a
+ * directory's inventory must be a function of its content — never of the order
+ * a filesystem happens to enumerate it in. Entries are ordered by name in
+ * code-unit order, the same order `deferredSurface` sorts a surface's paths
+ * with, so the same unchanged workspace always reads back the same manifest.
+ */
 function directoryEntries(dir: string, what: string): Dirent[] {
+  let entries: Dirent[];
   try {
-    return readdirSync(dir, { withFileTypes: true });
+    entries = readdirSync(dir, { withFileTypes: true });
   } catch (error) {
     throw incomplete(`${what} at ${dir} cannot be listed (${(error as Error).message}), so its coverage cannot be claimed.`);
   }
+  return entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 }
 
 /** The binding shape both file-route levels record (snapshot coordinator and plan session). */
@@ -923,10 +933,29 @@ function insertExecutionLease(tx: ExecutionTransaction, workflow: DiscoveredWork
 }
 
 /**
- * §7 the catalog half of the import check: a plan's recorded pin and the
- * committed `catalog_execution_bindings` row must agree, and neither side wins
- * silently. A plan without a binding row has nothing to disagree with, and a pin
- * that names another store is never imported as this store's frozen selection.
+ * §7 the catalog half of the import check: a plan's recorded pin, the frozen
+ * input it is sealed with and the committed `catalog_execution_bindings` row
+ * must agree, and neither side wins silently.
+ *
+ * - a pin freezes the very row it is sealed with, so `document_hash` must be
+ *   that row's frozen-input hash. Both live routes enforce it (create:
+ *   `assertSelectedCatalogEntities`; read: `readExecutionCatalogPin`), and a
+ *   pin whose row moved after preparation is exactly the incoherence this
+ *   refuses. The check runs BEFORE the binding lookup and whether or not a
+ *   binding row exists: a missing binding is not licence to seal a pin the row
+ *   does not hash to — that one-sided pair is the failure this closes;
+ * - a plan that records NO pin is the §1 coexistence case, not a disagreement:
+ *   its pin is the workflow's committed binding, read exactly as
+ *   `readExecutionCatalogPin` reads it (the binding's identity, with the
+ *   document half supplied by the frozen row). Nothing is silently accepted
+ *   there — there is no snapshot pin for the binding to disagree with — and
+ *   requiring the two to be equal would refuse a state the contract keeps
+ *   importable (a binding row records its own binding identity in `input_hash`
+ *   / `pin_json`, not an execution pin: `writeBinding`), so the binding's
+ *   recorded pin is compared against the row's own pin only when the row has
+ *   one;
+ * - a pin that names another store is never imported as this store's frozen
+ *   selection.
  */
 function assertCatalogCoherence(db: StoreDb, workflow: DiscoveredWorkflow, storeId: string): void {
   const rows = db
@@ -945,37 +974,97 @@ function assertCatalogCoherence(db: StoreDb, workflow: DiscoveredWorkflow, store
           `(${storeId}); a foreign selection is never imported as this store's frozen input.`,
       );
     }
+    const inputHash = executionInputHash(plan.row, plan.planId);
+    if (plan.pin.document_hash !== inputHash) {
+      throw conflict(
+        `plan ${plan.planId} of workflow ${workflow.workflowId} records catalog pin document hash ` +
+          `${plan.pin.document_hash.slice(0, 12)}\u2026, but the frozen execution input it is sealed with hashes to ` +
+          `${inputHash.slice(0, 12)}\u2026; the pin and its row disagree, and neither side is rewritten.`,
+      );
+    }
     const binding = rows.find((row) => row.catalog_kind === "plan" && row.catalog_id === plan.planId);
     if (binding === undefined) continue;
-    const inputHash = executionInputHash(plan.row, plan.planId);
     if (typeof binding.input_hash === "string" && binding.input_hash !== inputHash) {
       throw conflict(
         `plan ${plan.planId} of workflow ${workflow.workflowId} records catalog binding input hash ${binding.input_hash} ` +
           `while its sealed selection hashes to ${inputHash}; neither side wins silently.`,
       );
     }
-    if (typeof binding.pin_json === "string") {
-      let recorded: unknown;
-      try {
-        recorded = JSON.parse(binding.pin_json);
-      } catch {
-        throw conflict(
-          `plan ${plan.planId} of workflow ${workflow.workflowId} records a catalog binding whose pin payload is not JSON, ` +
-            `so the frozen selection cannot be reconciled with it.`,
-        );
-      }
-      if (!isPlainObject(recorded) || serializeExecutionValue(recorded) !== serializeExecutionValue(plan.pin)) {
-        throw conflict(
-          `plan ${plan.planId} of workflow ${workflow.workflowId} records a catalog pin that disagrees with its catalog ` +
-            `binding; neither side wins silently.`,
-        );
-      }
+    if (typeof binding.pin_json !== "string") continue;
+    let recorded: unknown;
+    try {
+      recorded = JSON.parse(binding.pin_json);
+    } catch {
+      throw conflict(
+        `plan ${plan.planId} of workflow ${workflow.workflowId} records a catalog binding whose pin payload is not JSON, ` +
+          `so the frozen selection cannot be reconciled with it.`,
+      );
+    }
+    if (!isPlainObject(recorded) || serializeExecutionValue(recorded) !== serializeExecutionValue(plan.pin)) {
+      throw conflict(
+        `plan ${plan.planId} of workflow ${workflow.workflowId} records a catalog pin that disagrees with its catalog ` +
+          `binding; neither side wins silently.`,
+      );
     }
   }
 }
 
+/**
+ * §2.2/§3 the integration merge lease is the workflow-wide exclusive claim and
+ * only the workflow's coordinator merges, so an imported claim must agree with
+ * the lifecycle that recorded it. The file route leaves exactly one shape: the
+ * coordinator takes the claim for an ACCEPTED attempt whose handoff it moved to
+ * `integrating`, naming that attempt's source branch and the snapshot's
+ * integration target (`mutateIntegrationStart`). Anything else — a plan-pm or
+ * foreign holder, a plan this workflow does not own, a plan with no accepted
+ * attempt, a source branch that is not the attempt's, a target that is not this
+ * workflow's integration branch — is ownership no recorded session graph can
+ * justify, so it is refused rather than staged as a `held` claim.
+ */
+function assertMergeLeaseCoherence(workflow: DiscoveredWorkflow, lease: IntegrationMergeLease, coordinator: LegacyBinding): void {
+  const what = `workflow ${workflow.workflowId}'s integration merge lease`;
+  if (lease.holder !== coordinator.session_id) {
+    throw conflict(
+      `${what} is held by ${JSON.stringify(lease.holder)}, not the workflow's recorded coordinator ` +
+        `${coordinator.session_id}. Only the coordinator merges, so a claim held by any other session has no recorded ` +
+        `authority to import; nothing was staged.`,
+    );
+  }
+  const plan = workflow.plans.find((candidate) => candidate.planId === lease.plan_id);
+  if (plan === undefined) {
+    throw conflict(
+      `${what} claims plan ${JSON.stringify(lease.plan_id)}, which is not a plan of this workflow ` +
+        `(${workflow.plans.map((candidate) => candidate.planId).join(", ") || "\u2014 none"}); a claim outside this ` +
+        `lifecycle is never imported as its held ownership. Nothing was staged.`,
+    );
+  }
+  const block = isPlainObject(plan.row.coordination) ? plan.row.coordination : {};
+  const handoff = isPlainObject(block.handoff) ? block.handoff : null;
+  if (handoff === null || handoff.state !== "integrating") {
+    throw conflict(
+      `${what} claims plan ${plan.planId}, whose recorded handoff is ` +
+        `${handoff === null ? "absent" : JSON.stringify(handoff.state)}. A merge claim exists only while its accepted ` +
+        `attempt is being integrated; nothing was staged.`,
+    );
+  }
+  if (handoff.source_branch !== lease.source_branch) {
+    throw conflict(
+      `${what} claims source branch ${JSON.stringify(lease.source_branch)}, but plan ${plan.planId}'s integrating ` +
+        `handoff names ${JSON.stringify(handoff.source_branch)}; a claim on another attempt is never imported. ` +
+        `Nothing was staged.`,
+    );
+  }
+  const target = workflow.snapshot.branch?.integration;
+  if (!isNonEmptyString(target) || target !== lease.target_branch) {
+    throw conflict(
+      `${what} claims target branch ${JSON.stringify(lease.target_branch)}, but the snapshot records integration target ` +
+        `${JSON.stringify(target ?? null)}; a claim against another branch is never imported. Nothing was staged.`,
+    );
+  }
+}
+
 /** Import one discovered workflow and its ownership records (§2.2). */
-function importWorkflow(tx: ExecutionTransaction, workflow: DiscoveredWorkflow, now: string): void {
+function importWorkflow(tx: ExecutionTransaction, workflow: DiscoveredWorkflow): void {
   const { workflowId, entry, snapshot } = workflow;
   const header: Record<string, unknown> = { ...(snapshot as unknown as Record<string, unknown>) };
   delete header.plans;
@@ -993,7 +1082,12 @@ function importWorkflow(tx: ExecutionTransaction, workflow: DiscoveredWorkflow, 
       "insert into execution_workflows(workflow_id, revision, creator_session_id, state_json, created_at, updated_at) " +
         "values (?, 1, null, ?, ?, ?)",
     )
-    .run(workflowId, JSON.stringify(header), now, now);
+    // §6 the imported lifecycle keeps its OWN validated timestamps: a migration
+    // is not an edit of the history it imports, so the header's `created_at` /
+    // `updated_at` are the source snapshot's `started_at` / `updated_at` read
+    // back verbatim. `now` is used only for the migration's own receipt and
+    // apply bookkeeping.
+    .run(workflowId, JSON.stringify(header), snapshot.started_at, snapshot.updated_at);
   tx.db.prepare("insert into execution_registry(workflow_id, entry_json) values (?, ?)").run(workflowId, JSON.stringify(entry));
 
   if (workflow.coordinator !== null) {
@@ -1033,11 +1127,15 @@ function importWorkflow(tx: ExecutionTransaction, workflow: DiscoveredWorkflow, 
     delete block.session;
     // §2.2/§D the stored block is validated by the SHARED rules; the bound plan
     // session lives in `execution_sessions`, so the handoff's "requires a bound
-    // plan session" half is checked here as the state a rebind re-attaches to.
+    // plan session" half is checked against the row this import actually
+    // inserts — exactly the DB reader's own rule (`sessionBound: sessionRow !==
+    // undefined`). A handoff whose plan records no session binding therefore
+    // refuses here instead of being staged as a graph the reader would reject
+    // as corrupt after activation.
     const violations = storedCoordinationViolations(block, {
       revision: 1,
       route: rowValidationRoute(routeSnapshot, state as never),
-      sessionBound: true,
+      sessionBound: plan.session !== null,
       what: `execution_plans(${workflowId},${planId}).coordination_json`,
     });
     if (violations.length > 0) {
@@ -1064,9 +1162,10 @@ function importWorkflow(tx: ExecutionTransaction, workflow: DiscoveredWorkflow, 
   const mergeLease = snapshot.integration_merge_lease;
   if (mergeLease !== undefined) {
     // §2.2/§3 the merge lease is the workflow-wide exclusive claim, and only a
-    // coordinator merges: without a recorded coordinator binding the claim has
-    // no owner to import. The row mirrors the DB writer's own shape (the claim
-    // plus its status) rather than inventing a second one.
+    // coordinator merges: the holder, the plan it claims, that plan's accepted
+    // attempt and both branches must agree with the recorded lifecycle before
+    // the claim is imported as held ownership. The row mirrors the DB writer's
+    // own shape (the claim plus its status) rather than inventing a second one.
     if (workflow.coordinator === null) {
       throw conflict(
         `workflow ${workflowId} holds an integration merge lease (holder ` +
@@ -1074,6 +1173,7 @@ function importWorkflow(tx: ExecutionTransaction, workflow: DiscoveredWorkflow, 
           `claim has no owner to import. Nothing was staged.`,
       );
     }
+    assertMergeLeaseCoherence(workflow, mergeLease, workflow.coordinator);
     tx.db
       .prepare("insert into execution_integration_leases(workflow_id, revision, owner_epoch, lease_json) values (?, 1, ?, ?)")
       .run(workflowId, tx.epoch, JSON.stringify({ ...(mergeLease as Record<string, unknown>), status: "held" }));
@@ -1140,6 +1240,32 @@ export async function applyExecutionMigration(
             if (!sameBytesDigest(discovered.coreHash, manifest.coreHash)) {
               throw conflict("the core authority content changed since the preview; nothing was staged.");
             }
+            // §6/§2b coverage is part of what the reviewer read. The locked
+            // discovery reclassifies every deferred surface, so the reviewed
+            // manifest's own classification is compared against it: a manifest
+            // whose blocked surface was edited to `absent` after review (or
+            // whose surface inventory was otherwise changed) is not the pair
+            // that was reviewed, and the activation barrier must never read a
+            // coverage claim the locked discovery does not make.
+            //
+            // The one legitimate difference is this apply's OWN workflow locks:
+            // they occupy each workflow dir's legacy write-lock surface for the
+            // duration of the transaction. Those paths are therefore removed
+            // from the found inventory (and from nothing else) before the
+            // comparison, so a leaked lock that appeared since the preview is
+            // still a coverage change while the lock that apply holds is not.
+            const selfHeldLocks = new Set(prelock.workflows.map((workflow) => join(workflow.dir, LEGACY_WRITE_LOCK_DIR)));
+            const foundDeferred = discovered.deferred.map((surface) =>
+              surface.surface === LEGACY_LOCK_SURFACE
+                ? deferredSurface(surface.surface, surface.paths.filter((path) => !selfHeldLocks.has(path)))
+                : surface,
+            );
+            if (serializeExecutionValue(foundDeferred) !== serializeExecutionValue(manifest.deferred)) {
+              throw conflict(
+                "the deferred-surface coverage changed since the preview; the reviewed manifest no longer describes the " +
+                  "surfaces this store holds. Re-preview the migration; nothing was staged.",
+              );
+            }
             if (manifest.storeId !== tx.storeId || manifest.epoch !== tx.epoch) {
               throw conflict(
                 `the manifest was reviewed against store ${manifest.storeId} epoch ${manifest.epoch}, but the live store is ` +
@@ -1160,6 +1286,16 @@ export async function applyExecutionMigration(
             if (pending.length > 0) {
               throw conflict(
                 `${pending.length} catalog operation(s) became pending since the preview (${pending.join(", ")}); nothing was staged.`,
+              );
+            }
+            // §7 the reviewed "no pending catalog operation was outstanding"
+            // witness is compared against the locked journal too, so a manifest
+            // that claims a pending set the live store does not hold is refused
+            // rather than persisted as the reviewed pair.
+            if (serializeExecutionValue(pending) !== serializeExecutionValue(manifest.pendingCatalogOperations)) {
+              throw conflict(
+                `the reviewed manifest records ${manifest.pendingCatalogOperations.length} pending catalog operation(s), ` +
+                  `but the live journal holds ${pending.length}; the manifest is not the reviewed pair, and nothing was staged.`,
               );
             }
             if (tx.execution.authorityState === "active") {
@@ -1215,7 +1351,7 @@ export async function applyExecutionMigration(
             const now = new Date().toISOString();
             for (const [index, workflow] of discovered.workflows.entries()) {
               assertCatalogCoherence(tx.db, workflow, tx.storeId);
-              importWorkflow(tx, workflow, now);
+              importWorkflow(tx, workflow);
               importFailureHook(index + 1);
             }
             tx.db

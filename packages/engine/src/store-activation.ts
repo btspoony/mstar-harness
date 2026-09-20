@@ -758,6 +758,19 @@ export async function assertBackupDescribesStore(
         `recovery point must live inside the root it protects.`,
     );
   }
+  // §8: "copying `store.db` bytes is not a backup". The point of this gate is an
+  // INDEPENDENT SQLite copy (`VACUUM INTO`) that can roll the store back, so the
+  // live database and its WAL/SHM sidecars are refused as their own recovery
+  // point even when the fields they carry happen to match the receipt.
+  const liveStore = canonicalPath(storeDbPath(context));
+  const candidate = canonicalPath(receipt.backupPath);
+  if (candidate === liveStore || candidate === `${liveStore}-wal` || candidate === `${liveStore}-shm`) {
+    stale(
+      `the recovery point ${receipt.backupPath} names the live store database (${liveStore}), not an independent copy. ` +
+        `A migration recovery point must be taken with \`backupStore\` (SQLite \`VACUUM INTO\`); the live database and its ` +
+        `WAL/SHM sidecars cannot be their own recovery point.`,
+    );
+  }
   if (
     receipt.storeId !== reviewed.storeId ||
     receipt.epoch !== reviewed.epoch ||
