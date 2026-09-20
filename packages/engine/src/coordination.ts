@@ -47,7 +47,6 @@ import {
   CoordinationError,
   assertExactKeys,
   canonicalTarget,
-  evidenceRefOf,
   isArtifactVersion,
   isNonEmptyString,
   isPlainObject,
@@ -58,9 +57,7 @@ import {
   validatePreparedCoordination,
   validateRowCoordination,
   withProtectedWrite,
-  type EvidenceRef,
   type HandoffIntegration,
-  type HandoffState,
   type PlanHandoff,
   type PlanProgress,
   type PreparedCoordination,
@@ -69,21 +66,34 @@ import {
 import {
   IMPLEMENTED_OPERATIONS,
   allowedOperations,
+  assertAcceptedReviewDecision,
+  assertEvidenceDigests,
   assertExecutionHolder,
   assertNoHandoffTransition,
+  assertNoIntegrationContamination,
   assertOperationRole,
   assertPlanAddress,
   assertPrepareAdmission,
   assertTrackBranches,
+  gitProof,
+  integrationAnchors,
+  integrationDiverged,
+  integrationUnresolved,
+  mergeLeaseOfAttempt,
+  readHandoffEvidence,
   requireExecutionLease,
+  requireIntegration,
   requirePlanHandoff,
   requirePlanSessionBinding,
   requireProgressStatus,
   rowCoordinationOf,
   rowStatusOf,
+  standaloneDeliveryAnchors,
   summarize,
   type CoordinationRole,
   type CoordinationSeat,
+  type HandoffEvidenceInput,
+  type IntegrationAnchors,
 } from "./coordination-transitions.js";
 import {
   claimLease,
@@ -2761,13 +2771,7 @@ const UNFINISHED_GIT_OPERATIONS: ReadonlyArray<readonly [string, string]> = [
   ["rebase-apply", "rebase"],
 ];
 
-/** QC verdicts a handoff may carry (spec §D). */
-const HANDOFF_QC_DECISIONS: readonly string[] = ["Approve", "Approve with residuals"];
-
-/** Assignment QA gates a handoff may carry (spec §D). */
-const HANDOFF_QA_GATES: readonly string[] = ["mandatory", "pm-acceptance"];
-
-type GitCheckout = { head: string; clean: boolean; operation: string | undefined };
+export type GitCheckout = { head: string; clean: boolean; operation: string | undefined };
 
 /**
  * How long one read-only Git read may take. The snapshot write lock waits 30s,
@@ -2818,8 +2822,12 @@ function gitUnavailable(cwd: string, args: readonly string[], error: unknown): C
  * ancestor, not a worktree — and resolves to `undefined`. An error without an
  * exit status means `git` itself never answered, which is refused rather than
  * folded into `undefined` (see `gitUnavailable`).
+ *
+ * The DB transport reads its Git evidence through the same helpers, but only
+ * BEFORE it takes SQLite ownership (§4.1): these reads spawn a process, and a
+ * write transaction never does.
  */
-function gitRead(cwd: string, args: readonly string[]): string | undefined {
+export function gitRead(cwd: string, args: readonly string[]): string | undefined {
   try {
     return execFileSync("git", ["-C", cwd, ...args], {
       stdio: ["ignore", "pipe", "pipe"],
@@ -2832,7 +2840,7 @@ function gitRead(cwd: string, args: readonly string[]): string | undefined {
   }
 }
 
-function gitObjectExists(cwd: string, sha: string): boolean {
+export function gitObjectExists(cwd: string, sha: string): boolean {
   return gitRead(cwd, ["cat-file", "-e", `${sha}^{commit}`]) !== undefined;
 }
 
@@ -2857,49 +2865,69 @@ function gitCheckout(path: string): GitCheckout | undefined {
   return { head, clean: dirty.length === 0, operation };
 }
 
-function assertGitObjectId(value: unknown, what: string): string {
-  if (typeof value !== "string" || !GIT_OBJECT_ID.test(value)) {
-    throw invalidInput(`${what} must be a full Git object id (40 or 64 lowercase hex), not an abbreviation`, {
-      field: what,
-    });
-  }
-  return value;
-}
-
-function gitProof(message: string, details: Record<string, unknown>): CoordinationError {
-  return new CoordinationError("coordination.git-proof", message, details);
-}
-
 /**
  * Feature-side proof (spec §D): the pinned commit is what the recorded plan
  * worktree has checked out, the worktree is clean, and no Git operation is
- * half-finished. Required at handoff, accept and integration-start.
+ * half-finished. Required at handoff, accept and integration-start. The
+ * worktree is the persisted plan scope — never an evidence field — so both
+ * transports hand this rule the scope their own authority records.
  */
-function assertFeatureCheckout(scope: ResolvedPlanScope, sourceSha: string, what: string): void {
-  const checkout = gitCheckout(scope.worktreePath);
+export function assertFeatureCheckout(worktreePath: string, sourceSha: string, what: string, planId: string): void {
+  const checkout = gitCheckout(worktreePath);
   if (checkout === undefined) {
     throw new CoordinationError(
       "coordination.not-in-git",
-      `${what} requires the plan worktree ${scope.worktreePath} to be a readable Git worktree`,
-      { plan_id: scope.planId, worktree_path: scope.worktreePath },
+      `${what} requires the plan worktree ${worktreePath} to be a readable Git worktree`,
+      { plan_id: planId, worktree_path: worktreePath },
     );
   }
   if (checkout.operation !== undefined) {
     throw gitProof(
-      `${what} requires a clean plan worktree \u2014 ${scope.worktreePath} has an unfinished ${checkout.operation}`,
-      { plan_id: scope.planId, operation: checkout.operation },
+      `${what} requires a clean plan worktree \u2014 ${worktreePath} has an unfinished ${checkout.operation}`,
+      { plan_id: planId, operation: checkout.operation },
     );
   }
   if (!checkout.clean) {
-    throw gitProof(`${what} requires a clean plan worktree \u2014 ${scope.worktreePath} has uncommitted changes`, {
-      plan_id: scope.planId,
+    throw gitProof(`${what} requires a clean plan worktree \u2014 ${worktreePath} has uncommitted changes`, {
+      plan_id: planId,
       head: checkout.head,
     });
   }
   if (checkout.head !== sourceSha) {
     throw gitProof(
-      `${what} requires the plan worktree HEAD to be the pinned source ${sourceSha} \u2014 ${scope.worktreePath} is at ${checkout.head}`,
-      { plan_id: scope.planId, expected: sourceSha, actual: checkout.head },
+      `${what} requires the plan worktree HEAD to be the pinned source ${sourceSha} \u2014 ${worktreePath} is at ${checkout.head}`,
+      { plan_id: planId, expected: sourceSha, actual: checkout.head },
+    );
+  }
+}
+
+/**
+ * Feature HEAD, cleanliness and the review range of one handoff (spec §D). The
+ * worktree is the persisted scope's — never an evidence field.
+ */
+export function assertHandoffGitProof(
+  worktreePath: string,
+  input: { source_sha: string; review_base: string; review_head: string },
+  what: string,
+  planId: string,
+): void {
+  assertFeatureCheckout(worktreePath, input.source_sha, what, planId);
+  if (input.review_head !== input.source_sha) {
+    throw gitProof(
+      `${what} requires review_head to be the pinned source ${input.source_sha} \u2014 got ${input.review_head}`,
+      { plan_id: planId, source_sha: input.source_sha, review_head: input.review_head },
+    );
+  }
+  if (!gitObjectExists(worktreePath, input.review_base)) {
+    throw gitProof(`${what} review base ${input.review_base} is not a commit of ${worktreePath}`, {
+      plan_id: planId,
+      review_base: input.review_base,
+    });
+  }
+  if (!gitIsAncestor(worktreePath, input.review_base, input.review_head)) {
+    throw gitProof(
+      `${what} review range ${input.review_base}..${input.review_head} is not an ancestry`,
+      { plan_id: planId, review_base: input.review_base, review_head: input.review_head },
     );
   }
 }
@@ -2907,86 +2935,6 @@ function assertFeatureCheckout(scope: ResolvedPlanScope, sourceSha: string, what
 /* ------------------------------------------------------------------------ *
  * § Handoff, accept and return (spec §D)
  * ------------------------------------------------------------------------ */
-
-/** One evidence path as supplied by the plan session (a path, never a ref). */
-function evidencePath(value: unknown, what: string): string {
-  if (!isNonEmptyString(value) || !isAbsolute(value)) {
-    throw invalidInput(`${what} must be an absolute path`, { field: what });
-  }
-  return canonicalTarget(value);
-}
-
-function evidenceRef(value: unknown, what: string): EvidenceRef {
-  const path = evidencePath(value, what);
-  if (!existsSync(path)) throw invalidInput(`${what} does not exist: ${path}`, { field: what, path });
-  return evidenceRefOf(path);
-}
-
-/**
- * Handoff evidence validated and hashed for the durable record (spec §D). The
- * plan worktree is not a caller input: it is read from the persisted scope, so
- * a conforming caller cannot be rejected for omitting or spoofing it.
- */
-type HandoffEvidenceInput = {
-  source_sha: string;
-  review_base: string;
-  review_head: string;
-  qc_decision: string;
-  qc_reports: EvidenceRef[];
-  qc_consolidated: EvidenceRef;
-  qa_gate: string;
-  qa_report: EvidenceRef;
-  evidence_paths: string[];
-};
-
-/** The plan session supplies paths and revisions only — never state or holder. */
-function readHandoffEvidence(value: unknown): HandoffEvidenceInput {
-  if (!isPlainObject(value)) {
-    throw invalidInput("handoff requires an evidence object with source_sha, review_base, review_head, qc and qa");
-  }
-  assertExactKeys(value, ["source_sha", "review_base", "review_head", "qc", "qa"], "handoff evidence");
-  const source_sha = assertGitObjectId(value.source_sha, "evidence.source_sha");
-  const review_base = assertGitObjectId(value.review_base, "evidence.review_base");
-  const review_head = assertGitObjectId(value.review_head, "evidence.review_head");
-  const qc = value.qc;
-  if (!isPlainObject(qc)) throw invalidInput("handoff evidence requires a qc object");
-  assertExactKeys(qc, ["decision", "reports", "consolidated"], "handoff evidence qc");
-  if (typeof qc.decision !== "string" || !HANDOFF_QC_DECISIONS.includes(qc.decision)) {
-    throw invalidInput(`handoff evidence qc.decision must be one of ${HANDOFF_QC_DECISIONS.join(", ")}`, {
-      field: "evidence.qc.decision",
-    });
-  }
-  if (!Array.isArray(qc.reports) || qc.reports.length === 0) {
-    throw invalidInput("handoff evidence qc.reports must list at least one QC report path", {
-      field: "evidence.qc.reports",
-    });
-  }
-  const qc_reports = qc.reports.map((entry, index) => evidenceRef(entry, `evidence.qc.reports[${index}]`));
-  const qc_consolidated = evidenceRef(qc.consolidated, "evidence.qc.consolidated");
-  const qa = value.qa;
-  if (!isPlainObject(qa)) throw invalidInput("handoff evidence requires a qa object");
-  assertExactKeys(qa, ["gate", "decision", "report"], "handoff evidence qa");
-  if (typeof qa.gate !== "string" || !HANDOFF_QA_GATES.includes(qa.gate)) {
-    throw invalidInput(`handoff evidence qa.gate must be one of ${HANDOFF_QA_GATES.join(", ")}`, {
-      field: "evidence.qa.gate",
-    });
-  }
-  if (qa.decision !== "pass") {
-    throw invalidInput("handoff evidence qa.decision must be pass", { field: "evidence.qa.decision" });
-  }
-  const qa_report = evidenceRef(qa.report, "evidence.qa.report");
-  return {
-    source_sha,
-    review_base,
-    review_head,
-    qc_decision: qc.decision,
-    qc_reports,
-    qc_consolidated,
-    qa_gate: qa.gate,
-    qa_report,
-    evidence_paths: [...qc_reports.map((ref) => ref.path), qc_consolidated.path, qa_report.path],
-  };
-}
 
 /** The handoff id a coordinator transition names; the mutation re-checks it under the lock. */
 function namedHandoffId(operation: { handoffId?: unknown }): string {
@@ -3054,59 +3002,6 @@ async function assertFindingsClosed(
   }
 }
 
-/**
- * Revalidate the hash pins of a sealed handoff (spec §D/§E): accept,
- * integration-start, integration-accept and complete all re-check that the QC
- * and QA reports still are the bytes their verdicts were recorded against.
- */
-function assertEvidenceDigests(handoff: PlanHandoff): void {
-  for (const ref of [...handoff.qc.reports, handoff.qc.consolidated, handoff.qa.report]) {
-    let actual: string | undefined;
-    try {
-      actual = evidenceRefOf(ref.path).sha256;
-    } catch {
-      actual = undefined;
-    }
-    if (actual !== ref.sha256) {
-      throw new CoordinationError(
-        "coordination.evidence-stale",
-        `handoff evidence ${ref.path} no longer matches its recorded digest`,
-        { path: ref.path, expected: ref.sha256, actual },
-      );
-    }
-  }
-}
-
-/**
- * Feature HEAD, cleanliness and the review range of one handoff (spec §D). The
- * worktree is the persisted scope's — never an evidence field.
- */
-function assertHandoffGitProof(
-  scope: ResolvedPlanScope,
-  input: HandoffEvidenceInput,
-  what: string,
-): void {
-  assertFeatureCheckout(scope, input.source_sha, what);
-  if (input.review_head !== input.source_sha) {
-    throw gitProof(
-      `${what} requires review_head to be the pinned source ${input.source_sha} \u2014 got ${input.review_head}`,
-      { plan_id: scope.planId, source_sha: input.source_sha, review_head: input.review_head },
-    );
-  }
-  if (!gitObjectExists(scope.worktreePath, input.review_base)) {
-    throw gitProof(`${what} review base ${input.review_base} is not a commit of ${scope.worktreePath}`, {
-      plan_id: scope.planId,
-      review_base: input.review_base,
-    });
-  }
-  if (!gitIsAncestor(scope.worktreePath, input.review_base, input.review_head)) {
-    throw gitProof(
-      `${what} review range ${input.review_base}..${input.review_head} is not an ancestry`,
-      { plan_id: scope.planId, review_base: input.review_base, review_head: input.review_head },
-    );
-  }
-}
-
 type HandoffRequest = { evidence: unknown; expectedRevision: number };
 
 async function mutateHandoff(
@@ -3145,7 +3040,7 @@ async function mutateHandoff(
           { plan_id: scope.planId, status: context.row.status },
         );
       }
-      assertHandoffGitProof(scope, input, "handoff");
+      assertHandoffGitProof(scope.worktreePath, input, "handoff", scope.planId);
       await assertHandoffGates(scope, prepared, input);
     },
     mutate: (context) => {
@@ -3235,7 +3130,7 @@ async function mutateAccept(
           { plan_id: scope.planId, status: context.row.status },
         );
       }
-      assertFeatureCheckout(scope, handoff.source_sha, "accept");
+      assertFeatureCheckout(scope.worktreePath, handoff.source_sha, "accept", scope.planId);
       assertEvidenceDigests(handoff);
     },
     mutate: (context) => {
@@ -3320,38 +3215,11 @@ async function mutateReturn(
  * § Integration, complete and reconcile (spec §E)
  * ------------------------------------------------------------------------ */
 
-/** The integration anchors the snapshot names for a workflow (spec §E). */
-type IntegrationAnchors = { targetBranch: string; worktreePath: string };
-
-function integrationUnresolved(message: string, details: Record<string, unknown>): CoordinationError {
-  return new CoordinationError("coordination.integration-unresolved", message, details);
-}
-
-function integrationDiverged(message: string, details: Record<string, unknown>): CoordinationError {
-  return new CoordinationError("coordination.integration-diverged", message, details);
-}
-
-/**
- * The recorded integration target of a workflow (spec §E). A missing anchor is
- * an unresolved integration — never guessed from the current branch.
- */
-function integrationAnchors(snapshot: WorkflowSnapshot, planId: string): IntegrationAnchors {
-  const targetBranch = snapshot.branch?.integration;
-  const worktreePath = snapshot.integration_worktree_path;
-  if (!isNonEmptyString(targetBranch) || !isNonEmptyString(worktreePath)) {
-    throw integrationUnresolved(
-      `plan ${planId} has no integration target \u2014 the snapshot must name branch.integration and integration_worktree_path`,
-      { plan_id: planId },
-    );
-  }
-  return { targetBranch, worktreePath: canonicalTarget(worktreePath) };
-}
-
 /**
  * The recorded integration checkout: readable, on its recorded target branch,
  * and free of uncommitted changes or half-finished Git operations (spec §E).
  */
-function assertIntegrationCheckout(anchors: IntegrationAnchors, planId: string): GitCheckout {
+export function assertIntegrationCheckout(anchors: IntegrationAnchors, planId: string): GitCheckout {
   const checkout = gitCheckout(anchors.worktreePath);
   if (checkout === undefined) {
     throw integrationDiverged(
@@ -3394,7 +3262,7 @@ function commitParents(path: string, sha: string): string[] | undefined {
 }
 
 /** What proving one integration attempt from the pinned objects yields (spec §E). */
-type IntegrationProof =
+export type IntegrationProof =
   | { kind: "proven"; resultSha: string }
   | { kind: "pending" }
   | { kind: "diverged"; reason: string };
@@ -3409,7 +3277,7 @@ type IntegrationProof =
  * candidates is `pending` (nothing merged yet); several are `diverged` — a
  * result is never picked out of a set.
  */
-function integrationProof(path: string, head: string, baseSha: string, sourceSha: string): IntegrationProof {
+export function integrationProof(path: string, head: string, baseSha: string, sourceSha: string): IntegrationProof {
   if (!gitObjectExists(path, baseSha)) {
     return { kind: "diverged", reason: `the pinned base ${baseSha} is unavailable` };
   }
@@ -3456,7 +3324,7 @@ function integrationProof(path: string, head: string, baseSha: string, sourceSha
  * source was already an ancestor) or exactly the two-parent merge of base then
  * source, and stays reachable from the current target HEAD when one is known.
  */
-function assertRecordedResult(
+export function assertRecordedResult(
   path: string,
   planId: string,
   integration: HandoffIntegration,
@@ -3499,37 +3367,6 @@ function assertRecordedResult(
   return resultSha;
 }
 
-/** The integration attempt recorded on a handoff, or a refusal (spec §E). */
-function requireIntegration(handoff: PlanHandoff, planId: string): HandoffIntegration {
-  const integration = handoff.integration;
-  if (integration === undefined) {
-    throw integrationUnresolved(`plan ${planId} handoff ${handoff.id} has no integration attempt`, {
-      plan_id: planId,
-      handoff_id: handoff.id,
-    });
-  }
-  return integration;
-}
-
-/**
- * The workflow's merge lease, but only when it names THIS attempt (spec §E).
- * The lease is a single workflow-wide top-level claim, so a holder match alone
- * is not ownership: a lease that names another plan, or another source branch,
- * belongs to a different attempt and must never be released or re-pinned by
- * this one — the same plan can integrate more than once.
- */
-function mergeLeaseOfAttempt(
-  snapshot: WorkflowSnapshot,
-  planId: string,
-  handoff: PlanHandoff,
-): IntegrationMergeLease | undefined {
-  const lease = snapshot.integration_merge_lease;
-  if (lease === undefined) return undefined;
-  if (lease.plan_id !== planId) return undefined;
-  if (lease.source_branch !== handoff.source_branch) return undefined;
-  return lease;
-}
-
 /** The workflow's merge lease is absent, or this coordinator's own for this attempt (spec §E). */
 function assertMergeLease(
   snapshot: WorkflowSnapshot,
@@ -3561,7 +3398,7 @@ function assertMergeLease(
 }
 
 /** A readable repository for pinned-object proof, most specific first (spec §E). */
-function proofRepository(candidates: readonly (string | undefined)[]): string | undefined {
+export function proofRepository(candidates: readonly (string | undefined)[]): string | undefined {
   for (const candidate of candidates) {
     if (!isNonEmptyString(candidate)) continue;
     if (gitCheckout(candidate) !== undefined) return candidate;
@@ -3596,7 +3433,7 @@ async function mutateIntegrationStart(
         );
       }
       assertEvidenceDigests(handoff);
-      assertFeatureCheckout(scope, handoff.source_sha, "integration-start");
+      assertFeatureCheckout(scope.worktreePath, handoff.source_sha, "integration-start", scope.planId);
       // The coordinator owns the row between accept and complete: integration
       // must never proceed on a row nobody holds (spec §D/§E — both leases stay
       // until complete, so an absent one means ownership was lost).
@@ -3749,79 +3586,12 @@ function validateRowCoordinationInContext(context: RowContext, coordination: Row
   assertViolationFree(validateRowCoordination(coordination, what, rowValidationRoute(context.snapshot, context.row)), what);
 }
 
-function standaloneDeliveryAnchors(snapshot: WorkflowSnapshot, planId: string): { source: string; target: string } {
-  const source = snapshot.branch?.source;
-  const target = snapshot.branch?.target;
-  if (!isNonEmptyString(source) || !isNonEmptyString(target)) {
-    throw new CoordinationError(
-      "coordination.invalid-transition",
-      `plan ${planId} has no delivery anchors \u2014 the snapshot must name branch.source and branch.target`,
-      { plan_id: planId },
-    );
-  }
-  return { source, target };
-}
-
 function assertStandaloneRoute(snapshot: WorkflowSnapshot, planId: string, what: string): void {
   if (!isStandaloneDevelopmentWorkflow(snapshot)) {
     throw new CoordinationError(
       "coordination.invalid-transition",
       `${what} requires a standalone development workflow for plan ${planId}`,
       { plan_id: planId },
-    );
-  }
-}
-
-function assertNoIntegrationContamination(
-  context: RowContext,
-  planId: string,
-  handoff: PlanHandoff,
-  what: string,
-  code: CoordinationError["code"] = "coordination.invalid-transition",
-): void {
-  if (handoff.integration !== undefined) {
-    throw new CoordinationError(
-      code,
-      `${what} refuses plan ${planId} because the handoff already carries an integration record`,
-      { plan_id: planId },
-    );
-  }
-  if (context.snapshot.integration_worktree_path !== undefined) {
-    throw new CoordinationError(
-      code,
-      `${what} refuses plan ${planId} because the snapshot names integration_worktree_path`,
-      { plan_id: planId },
-    );
-  }
-  if (isNonEmptyString(context.snapshot.branch?.integration)) {
-    throw new CoordinationError(
-      code,
-      `${what} refuses plan ${planId} because the snapshot names branch.integration`,
-      { plan_id: planId, integration: context.snapshot.branch?.integration },
-    );
-  }
-  if (context.snapshot.integration_merge_lease !== undefined) {
-    throw new CoordinationError(
-      code,
-      `${what} refuses plan ${planId} because the snapshot carries an integration merge lease`,
-      { plan_id: planId },
-    );
-  }
-}
-
-function assertAcceptedReviewDecision(handoff: PlanHandoff, planId: string, what: string): void {
-  if (handoff.qc.decision !== "Approve" && handoff.qc.decision !== "Approve with residuals") {
-    throw new CoordinationError(
-      "coordination.invalid-transition",
-      `${what} requires an accepted QC decision for plan ${planId} \u2014 got ${handoff.qc.decision}`,
-      { plan_id: planId, decision: handoff.qc.decision },
-    );
-  }
-  if (handoff.qa.decision !== "pass") {
-    throw new CoordinationError(
-      "coordination.invalid-transition",
-      `${what} requires QA decision pass for plan ${planId} \u2014 got ${handoff.qa.decision}`,
-      { plan_id: planId, decision: handoff.qa.decision },
     );
   }
 }
@@ -3890,38 +3660,51 @@ function assertStandaloneBranchIdentity(
   }
 }
 
-function assertStandaloneSourceGitProof(scope: ResolvedPlanScope, handoff: PlanHandoff, sourceBranch: string, what: string): void {
-  assertFeatureCheckout(scope, handoff.source_sha, what);
-  const branch = gitRead(scope.worktreePath, ["rev-parse", "--abbrev-ref", "HEAD"]);
+/**
+ * The standalone source proof (spec §E): the feature checkout is on the
+ * delivery source branch, that branch's tip is the pinned source, and the
+ * review range is an ancestry of it. The worktree is the persisted plan scope —
+ * the file route passes its resolved scope's, the DB route the row's recorded
+ * one — so the rule never reads a caller-supplied path.
+ */
+export function assertStandaloneSourceGitProof(
+  worktreePath: string,
+  handoff: PlanHandoff,
+  sourceBranch: string,
+  what: string,
+  planId: string,
+): void {
+  assertFeatureCheckout(worktreePath, handoff.source_sha, what, planId);
+  const branch = gitRead(worktreePath, ["rev-parse", "--abbrev-ref", "HEAD"]);
   if (branch !== sourceBranch) {
     throw gitProof(
-      `${what} requires the plan worktree ${scope.worktreePath} to be on ${sourceBranch} \u2014 got ${branch || "a detached HEAD"}`,
-      { plan_id: scope.planId, expected: sourceBranch, actual: branch },
+      `${what} requires the plan worktree ${worktreePath} to be on ${sourceBranch} \u2014 got ${branch || "a detached HEAD"}`,
+      { plan_id: planId, expected: sourceBranch, actual: branch },
     );
   }
-  const refTip = gitRead(scope.worktreePath, ["rev-parse", `refs/heads/${sourceBranch}`]);
+  const refTip = gitRead(worktreePath, ["rev-parse", `refs/heads/${sourceBranch}`]);
   if (refTip !== handoff.source_sha) {
     throw gitProof(
       `${what} requires refs/heads/${sourceBranch} to resolve to the pinned source ${handoff.source_sha} \u2014 got ${refTip || "missing"}`,
-      { plan_id: scope.planId, expected: handoff.source_sha, actual: refTip },
+      { plan_id: planId, expected: handoff.source_sha, actual: refTip },
     );
   }
   if (handoff.review_head !== handoff.source_sha) {
     throw gitProof(
       `${what} requires review_head to be the pinned source ${handoff.source_sha} \u2014 got ${handoff.review_head}`,
-      { plan_id: scope.planId, source_sha: handoff.source_sha, review_head: handoff.review_head },
+      { plan_id: planId, source_sha: handoff.source_sha, review_head: handoff.review_head },
     );
   }
-  if (!gitObjectExists(scope.worktreePath, handoff.review_base)) {
-    throw gitProof(`${what} review base ${handoff.review_base} is not a commit of ${scope.worktreePath}`, {
-      plan_id: scope.planId,
+  if (!gitObjectExists(worktreePath, handoff.review_base)) {
+    throw gitProof(`${what} review base ${handoff.review_base} is not a commit of ${worktreePath}`, {
+      plan_id: planId,
       review_base: handoff.review_base,
     });
   }
-  if (!gitIsAncestor(scope.worktreePath, handoff.review_base, handoff.review_head)) {
+  if (!gitIsAncestor(worktreePath, handoff.review_base, handoff.review_head)) {
     throw gitProof(
       `${what} review range ${handoff.review_base}..${handoff.review_head} is not an ancestry`,
-      { plan_id: scope.planId, review_base: handoff.review_base, review_head: handoff.review_head },
+      { plan_id: planId, review_base: handoff.review_base, review_head: handoff.review_head },
     );
   }
 }
@@ -3962,7 +3745,7 @@ async function assertStandaloneCompletionPrecheck(
       { plan_id: scope.planId },
     );
   }
-  assertNoIntegrationContamination(context, scope.planId, handoff, "complete");
+  assertNoIntegrationContamination({ snapshot: context.snapshot, planId: scope.planId, handoff, what: "complete" });
   assertEvidenceDigests(handoff);
   assertAcceptedReviewDecision(handoff, scope.planId, "complete");
   if (handoff.qa.gate !== prepared.qa_gate) {
@@ -3976,7 +3759,7 @@ async function assertStandaloneCompletionPrecheck(
   assertExecutionHolder(context.row, session.session_id, scope.planId, "complete");
   const anchors = standaloneDeliveryAnchors(context.snapshot, scope.planId);
   assertStandaloneBranchIdentity(context, scope, handoff, anchors, "complete");
-  assertStandaloneSourceGitProof(scope, handoff, anchors.source, "complete");
+  assertStandaloneSourceGitProof(scope.worktreePath, handoff, anchors.source, "complete", scope.planId);
 }
 
 
@@ -4159,13 +3942,13 @@ async function assertRepairDeliverySourcePrecheck(
   session: CoordinationSession,
   handoff: PlanHandoff,
 ): Promise<void> {
-  assertNoIntegrationContamination(
-    context,
-    scope.planId,
+  assertNoIntegrationContamination({
+    snapshot: context.snapshot,
+    planId: scope.planId,
     handoff,
-    "repair-delivery-source",
-    "coordination.delivery-source-repair.not-legacy-shape",
-  );
+    what: "repair-delivery-source",
+    code: "coordination.delivery-source-repair.not-legacy-shape",
+  });
   const prepared = context.coordination?.prepared;
   if (prepared === undefined) {
     throw new CoordinationError(
@@ -4188,7 +3971,7 @@ async function assertRepairDeliverySourcePrecheck(
   const { target, candidateSource } = assertLegacyRepairShape(context.snapshot, scope.planId, handoff);
   assertRepairBranchIdentity(context, scope, handoff, candidateSource, "repair-delivery-source");
   assertDeliveryPrCompatible(context.snapshot, candidateSource, target, scope.planId);
-  assertStandaloneSourceGitProof(scope, handoff, candidateSource, "repair-delivery-source");
+  assertStandaloneSourceGitProof(scope.worktreePath, handoff, candidateSource, "repair-delivery-source", scope.planId);
 }
 
 function repairDeliverySourceRow(
@@ -4294,7 +4077,7 @@ function assertStandaloneCompletedReplay(
       { plan_id: scope.planId },
     );
   }
-  assertNoIntegrationContamination(context, scope.planId, handoff, "reconcile");
+  assertNoIntegrationContamination({ snapshot: context.snapshot, planId: scope.planId, handoff, what: "reconcile" });
   const storedHandoffViolations = validatePlanHandoff(
     handoff,
     `plan ${scope.planId} coordination.handoff`,
@@ -4381,7 +4164,7 @@ function completeRow(
   delete nextRow.execution_lease;
   // Only this attempt's own claim is released: a lease naming another plan or
   // another source branch is not this completion's to drop (spec §E).
-  const release = mergeLeaseOfAttempt(context.snapshot, scope.planId, handoff);
+  const release = mergeLeaseOfAttempt(context.snapshot.integration_merge_lease, scope.planId, handoff.source_branch);
   return {
     row: nextRow,
     coordination: nextCoordination,
@@ -4426,7 +4209,7 @@ async function mutateComplete(
       if (isStandaloneDevelopmentWorkflow(context.snapshot)) {
         completeStandaloneMutateGapForTest?.();
         const anchors = standaloneDeliveryAnchors(context.snapshot, scope.planId);
-        assertStandaloneSourceGitProof(scope, handoff, anchors.source, "complete");
+        assertStandaloneSourceGitProof(scope.worktreePath, handoff, anchors.source, "complete", scope.planId);
         return completeStandaloneRow(context, scope, handoff);
       }
       const integration = requireIntegration(handoff, scope.planId);
@@ -4559,7 +4342,7 @@ async function classifyReconcile(
         // InReview and the coordinator's execution lease stay: only the
         // abandoned attempt's own artifacts are released (a lease naming
         // another plan or branch is not this attempt's claim).
-        const release = mergeLeaseOfAttempt(current.snapshot, planId, currentHandoff);
+        const release = mergeLeaseOfAttempt(current.snapshot.integration_merge_lease, planId, currentHandoff.source_branch);
         return {
           row: { ...current.row, coordination: nextCoordination },
           coordination: nextCoordination,

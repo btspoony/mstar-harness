@@ -16,13 +16,16 @@
  * accepted only if the issue rows and the plan side commit together.
  */
 import { afterAll, describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { registerCatalogEntity, updateCatalogEntity } from "../src/catalog.js";
+import { mutateExecutionPlan as publishedMutateExecutionPlan } from "../src/index.js";
 import {
+  mutateExecutionPlan,
   prepareExecutionPlan,
   progressExecutionPlan,
   residualAddExecutionPlan,
@@ -41,11 +44,14 @@ import {
   serializeExecutionValue,
   type ExecutionCaller,
   type ExecutionContext,
+  type ExecutionMutation,
   type ExecutionPlanView,
   type ExecutionPlanWitness,
+  type ExecutionReceipt,
   type ExecutionSessionRef,
   type ExecutionToken,
 } from "../src/execution-store.js";
+import type { CoordinationOperation } from "../src/index.js";
 import { initializeStore, storeDbPath, type StoreContext, type StoreDb } from "../src/store-db.js";
 import type { WorkflowEntry } from "../src/status.js";
 import type { WorkflowSnapshot } from "../src/workflow.js";
@@ -1685,5 +1691,922 @@ describe("execution-residual: §3/§4.1 DB residual-add and residual-close", () 
     );
     expect(refused.code).toBe("store.not-active");
     expect(planFootprint(context, OWN_PLAN)).toEqual(before);
+  });
+});
+
+/* ------------------------------------------------------------------------ *
+ * W4 — handoff, integration, completion and reconcile on real Git evidence
+ * ------------------------------------------------------------------------ */
+
+/** One Git command in a fixture repository (never the caller's checkout). */
+function runGit(args: string[], cwd: string): void {
+  execFileSync("git", args, { cwd, stdio: ["ignore", "ignore", "ignore"] });
+}
+
+function headOf(cwd: string): string {
+  return execFileSync("git", ["-C", cwd, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+}
+
+function writeText(path: string, text: string): void {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, text);
+}
+
+function sha256Of(path: string): string {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+/** §D one plan's review evidence: absolute paths inside its own SDD area. */
+type PlanEvidence = { qc: string[]; consolidated: string; qa: string };
+
+function planEvidenceOf(harnessRoot: string, planId: string): PlanEvidence {
+  const sdd = join(harnessRoot, "sdd", planId);
+  const qc = [join(sdd, "review", "qc1.md"), join(sdd, "review", "qc2.md")];
+  for (const path of qc) writeText(path, "# qc report\n");
+  const consolidated = join(sdd, "review", "qc.md");
+  writeText(consolidated, "# consolidated qc\n");
+  const qa = join(sdd, "qa.md");
+  writeText(qa, "# qa pass\n");
+  return { qc, consolidated, qa };
+}
+
+/** §D the evidence object a plan session submits: paths and revisions only. */
+function handoffEvidenceOf(fixture: LifecycleFixture): Record<string, unknown> {
+  const evidence = fixture.evidence[OWN_PLAN]!;
+  return {
+    source_sha: fixture.featureSha,
+    review_base: fixture.baseSha,
+    review_head: fixture.featureSha,
+    qc: { decision: "Approve", reports: evidence.qc, consolidated: evidence.consolidated },
+    qa: { gate: "mandatory", decision: "pass", report: evidence.qa },
+  };
+}
+
+/** One seat: the trusted caller identity plus the reference it holds. */
+type Seat = { caller: ExecutionCaller; session: ExecutionSessionRef };
+
+/**
+ * §A1 the lifecycle route one fixture builds. `development` is a single-plan
+ * standalone workflow with delivery anchors only; `integration` carries the
+ * integration branch and checkout every iteration attempt is proven against.
+ */
+type LifecycleRoute = "development" | "integration";
+
+type LifecycleFixture = LiveFixture & {
+  route: LifecycleRoute;
+  repoRoot: string;
+  featurePath: string;
+  featureSha: string;
+  integrationPath: string;
+  baseSha: string;
+  evidence: Record<string, PlanEvidence>;
+  /** The plan's own seat, holding its execution lease. */
+  seat: Seat;
+  coordinatorSeat: Seat;
+};
+
+/**
+ * An active store in a real Git control harness whose plan worktree is a real
+ * checkout, prepared through the DB `prepare` verb, bound to its plan session
+ * and reported InReview: the state a handoff starts from.
+ */
+async function lifecycleFixture(label: string, route: LifecycleRoute): Promise<LifecycleFixture> {
+  const repoRoot = realpathSync(mkdtempSync(join(ROOT, `${label}-`)));
+  runGit(["init", "-q", "-b", "main"], repoRoot);
+  runGit(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], repoRoot);
+  const harnessRoot = join(repoRoot, ".mstar");
+  mkdirSync(harnessRoot, { recursive: true });
+  const context: StoreContext = { harnessDir: repoRoot };
+  const store = await initializeStore(context);
+  store.close();
+  const initialized = await initializeExecutionAuthority(context);
+  const planIds = route === "development" ? [OWN_PLAN] : [OWN_PLAN, PEER_PLAN];
+  for (const planId of planIds) await registerPlan(context, planId);
+
+  // The plan's own branch and checkout: the source_sha a handoff pins is this
+  // checkout's HEAD, and the integration checkout is where the merge is proven.
+  const featurePath = join(repoRoot, "wt-plan");
+  runGit(["worktree", "add", "-q", "-b", `feature/${OWN_PLAN}`, featurePath], repoRoot);
+  writeText(join(featurePath, "slice.txt"), "slice\n");
+  runGit(["add", "-A"], featurePath);
+  runGit(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "feat: slice"], featurePath);
+  const featureSha = headOf(featurePath);
+  const baseSha = headOf(repoRoot);
+  const integrationPath = join(repoRoot, "wt-integration");
+  const branch: Record<string, string> = { base: "main", source: `feature/${OWN_PLAN}`, target: "main" };
+  if (route === "integration") {
+    runGit(["worktree", "add", "-q", "-b", `integration/${OWN_PLAN}`, integrationPath], repoRoot);
+    branch.integration = `integration/${OWN_PLAN}`;
+  }
+
+  const coordinatorCaller = trustedCaller(COORDINATOR_ID, "coordinator", null);
+  const created = await createExecutionWorkflow(domainContext(context, coordinatorCaller), {
+    entry: { id: WORKFLOW_ID, type: "plan", started_at: TS, dir: `workflows/${WORKFLOW_ID}` } as WorkflowEntry,
+    snapshot: {
+      schema_version: 1,
+      id: WORKFLOW_ID,
+      type: "plan",
+      status: "running",
+      started_at: TS,
+      updated_at: TS,
+      delivery_kind: "development",
+      branch,
+      ...(route === "integration" ? { integration_worktree_path: integrationPath } : {}),
+      plans: planIds.map((planId) => ({
+        id: planId,
+        title: `${planId} title`,
+        file: `plans/${planId}.md`,
+        status: "Todo",
+      })),
+    } as unknown as WorkflowSnapshot,
+    expected: initialized.token,
+    operationId: `create-${label}`,
+  });
+  const [workflow] = created.data.workflows;
+  const coordinator = await bindExecutionSession(domainContext(context, coordinatorCaller), {
+    workflowId: WORKFLOW_ID,
+    planId: null,
+    role: "coordinator",
+    expected: workflow.workflowToken,
+    operationId: `bind-coordinator-${label}`,
+  });
+  const documents: Record<string, PlanDocuments> = {
+    [OWN_PLAN]: writePlanDocuments(harnessRoot, OWN_PLAN, `feature/${OWN_PLAN}`, { "Worktree path": featurePath }),
+  };
+  if (route === "integration") {
+    documents[PEER_PLAN] = writePlanDocuments(harnessRoot, PEER_PLAN, `feature/${PEER_PLAN}`, {
+      "Worktree path": join(repoRoot, "wt-peer"),
+    });
+  }
+  const fixture = {
+    context,
+    harnessRoot,
+    storeId: created.storeId,
+    epoch: created.epoch,
+    planTokens: (await readExecutionState(context)).data.workflows[0]!.planTokens,
+    coordinator: coordinator.data,
+    coordinatorCaller,
+    coordinatorSeat: { caller: coordinatorCaller, session: coordinator.data },
+    documents,
+    route,
+    repoRoot,
+    featurePath,
+    featureSha,
+    integrationPath,
+    baseSha,
+    evidence: { [OWN_PLAN]: planEvidenceOf(harnessRoot, OWN_PLAN) },
+    seat: undefined as unknown as Seat,
+  } as LifecycleFixture;
+  await prepareExecutionPlan(domainContext(context, coordinatorCaller), {
+    operationId: `prepare-${label}`,
+    session: fixture.coordinator,
+    expected: fixture.planTokens[OWN_PLAN]!,
+    planId: OWN_PLAN,
+    operation: { kind: "prepare", assignmentPath: documents[OWN_PLAN]!.assignmentPath },
+  });
+  fixture.seat = (await planSeat(fixture, OWN_PLAN, PLAN_PM_ID, `life-${label}`)) as Seat;
+  await lifecycleProgress(fixture, fixture.seat, OWN_PLAN, `progress-${label}`, "InReview", await planTokenOf(fixture, OWN_PLAN));
+  return fixture;
+}
+
+/** §3 one PUBLISHED `mutateExecutionPlan` call, at the token read right now. */
+async function planMutation(
+  fixture: LifecycleFixture,
+  who: Seat,
+  planId: string,
+  operationId: string,
+  operation: Record<string, unknown>,
+  expected?: ExecutionToken,
+) {
+  return publishedMutateExecutionPlan(domainContext(fixture.context, who.caller), {
+    operationId,
+    session: who.session,
+    expected: expected ?? (await planTokenOf(fixture, planId)),
+    planId,
+    operation,
+  } as never);
+}
+
+/** §3 one progress report of an addressed plan. */
+function lifecycleProgress(
+  fixture: LifecycleFixture,
+  who: Seat,
+  planId: string,
+  operationId: string,
+  status: string,
+  expected: ExecutionToken,
+  summary = "working",
+) {
+  return progressExecutionPlan(domainContext(fixture.context, who.caller), {
+    operationId,
+    session: who.session,
+    expected,
+    planId,
+    operation: { kind: "progress", progress: { status, summary, evidence_paths: [] } },
+  });
+}
+
+/** Handoff then accept: the state complete and integration start from. */
+async function acceptedAttempt(fixture: LifecycleFixture, label: string): Promise<string> {
+  const handed = await planMutation(fixture, fixture.seat, OWN_PLAN, `handoff-${label}`, {
+    kind: "handoff",
+    evidence: handoffEvidenceOf(fixture),
+  });
+  const handoffId = handed.data.coordination!.handoff!.id;
+  await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, `accept-${label}`, { kind: "accept", handoffId });
+  return handoffId;
+}
+
+/** Handoff, accept then integration-start: an attempt whose merge never ran. */
+async function startedAttempt(fixture: LifecycleFixture, label: string): Promise<string> {
+  const handoffId = await acceptedAttempt(fixture, label);
+  await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, `integration-start-${label}`, {
+    kind: "integration-start",
+    handoffId,
+  });
+  return handoffId;
+}
+
+/** The coordinator merge: a real two-parent merge of the pinned source. */
+function mergeIntoIntegration(fixture: LifecycleFixture): string {
+  runGit(
+    ["-c", "user.email=t@t", "-c", "user.name=t", "merge", "-q", "--no-ff", fixture.featureSha, "-m", "Merge plan"],
+    fixture.integrationPath,
+  );
+  return headOf(fixture.integrationPath);
+}
+
+/**
+ * Plant one merge-lease row. No W4 verb produces a claim held by ANOTHER
+ * session, so the states a crash/recovery leaves behind (a claim naming a
+ * stopped holder, or a live holder that is not the caller) are planted here —
+ * exactly the way the legacy fixtures plant a foreign `integration_merge_lease`.
+ */
+function plantMergeLease(context: StoreContext, epoch: number, lease: Record<string, unknown>): void {
+  withRaw(context, (db) => {
+    db.prepare(
+      "insert or replace into execution_integration_leases(workflow_id, revision, owner_epoch, lease_json) " +
+        "values (?, 1, ?, ?)",
+    ).run(WORKFLOW_ID, epoch, JSON.stringify(lease));
+  });
+}
+
+function mergeLeaseRowOf(context: StoreContext): Record<string, unknown> {
+  const [row] = rows(
+    context,
+    `select lease_json, revision from execution_integration_leases where workflow_id = '${WORKFLOW_ID}'`,
+  );
+  if (row === undefined) throw new Error("the workflow holds no integration merge lease row");
+  return { lease: parsedJson(row.lease_json), revision: row.revision };
+}
+
+/** Every catalog row the completion must leave untouched. */
+function catalogFootprint(context: StoreContext): Record<string, unknown> {
+  const [row] = rows(
+    context,
+    "select (select count(*) as n from catalog_entities) as entities, " +
+      "(select count(*) as n from catalog_links) as links, " +
+      "(select count(*) as n from catalog_operations) as operations, " +
+      "(select count(*) as n from catalog_execution_bindings) as bindings, " +
+      "(select group_concat(id || '@' || revision) as entities_digest from catalog_entities) as digest",
+  );
+  return row!;
+}
+
+/** The accepted state a plan's row and its leases hold, without the frame's own receipts. */
+function planStateFootprint(context: StoreContext, planId: string): Record<string, unknown> {
+  const footprint = planFootprint(context, planId);
+  return {
+    plan_state: footprint.plan_state,
+    plan_coordination: footprint.plan_coordination,
+    plan_revision: footprint.plan_revision,
+    own_lease: footprint.own_lease,
+    merge_lease: rows(
+      context,
+      `select lease_json from execution_integration_leases where workflow_id = '${WORKFLOW_ID}'`,
+    )[0]?.lease_json ?? null,
+  };
+}
+
+describe("execution-handoff-integration: §3/§D/§E handoff, accept, return and completion", () => {
+  test("handoff seals the reviewed evidence and accept moves the plan's ownership to the coordinator", async () => {
+    const fixture = await lifecycleFixture("handoff-accept", "integration");
+    const { context } = fixture;
+    const evidence = fixture.evidence[OWN_PLAN]!;
+    // §3 the published entry point pinned VERBATIM: this binding is the
+    // signature the primary spec declares, and the value is the module's own
+    // implementation rather than a wrapper.
+    const planSurface: (
+      context: ExecutionContext,
+      request: ExecutionMutation & { planId: string; operation: CoordinationOperation },
+    ) => Promise<ExecutionReceipt<ExecutionPlanView>> = publishedMutateExecutionPlan;
+    expect(planSurface).toBe(mutateExecutionPlan);
+    expect(publishedMutateExecutionPlan.length).toBe(2);
+
+    const sealed = await planMutation(fixture, fixture.seat, OWN_PLAN, "handoff-1", {
+      kind: "handoff",
+      evidence: handoffEvidenceOf(fixture),
+    });
+    expect(sealed.replayed).toBe(false);
+    const handoff = sealed.data.coordination!.handoff!;
+    expect(handoff).toMatchObject({
+      state: "submitted",
+      attempt: 1,
+      submitted_by: PLAN_PM_ID,
+      source_branch: `feature/${OWN_PLAN}`,
+      source_sha: fixture.featureSha,
+      worktree_path: fixture.featurePath,
+      review_base: fixture.baseSha,
+      review_head: fixture.featureSha,
+    });
+    expect(handoff.qc.decision).toBe("Approve");
+    expect(handoff.qa).toMatchObject({ gate: "mandatory", decision: "pass" });
+    // §D the sealed refs are the exact bytes of the reviewed files.
+    for (const ref of [...handoff.qc.reports, handoff.qc.consolidated, handoff.qa.report]) {
+      expect(ref.sha256).toBe(sha256Of(ref.path));
+    }
+    expect(handoff.qa.report.sha256).toBe(sha256Of(evidence.qa));
+    // Handoff is not release: the plan session keeps its lease and the row stays
+    // InReview for the coordinator.
+    expect(sealed.data.executionLease).toMatchObject({ holder: PLAN_PM_ID, status: "held" });
+    expect(sealed.data.plan.status).toBe("InReview");
+    expect(sealed.data.session!.sessionId).toBe(PLAN_PM_ID);
+
+    // A report rewritten after the seal refuses: the digests are re-checked
+    // inside the accepting transaction.
+    writeText(evidence.qc[0]!, "# rewritten after handoff\n");
+    const stale = await refusalOf(() =>
+      planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "accept-stale", { kind: "accept", handoffId: handoff.id }),
+    );
+    expect(stale.code).toBe("coordination.evidence-stale");
+    writeText(evidence.qc[0]!, "# qc report\n");
+
+    const accepted = await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "accept-1", {
+      kind: "accept",
+      handoffId: handoff.id,
+    });
+    expect(accepted.data.coordination!.handoff).toMatchObject({
+      id: handoff.id,
+      state: "accepted",
+      accepted_by: COORDINATOR_ID,
+    });
+    // Ownership transferred in the same transaction: the plan's execution lease
+    // is the coordinator's now, and the row is still InReview.
+    expect(accepted.data.executionLease).toMatchObject({
+      holder: COORDINATOR_ID,
+      holder_role: "coordinator",
+      status: "held",
+      working_branch: `feature/${OWN_PLAN}`,
+    });
+    expect(accepted.data.plan.status).toBe("InReview");
+
+    // The plan session no longer owns the row, and the handoff owns its next
+    // transition: neither a progress report nor a second handoff is admitted.
+    const displaced = await refusalOf(async () =>
+      lifecycleProgress(fixture, fixture.seat, OWN_PLAN, "progress-after-accept", "InReview", await planTokenOf(fixture, OWN_PLAN)),
+    );
+    expect(displaced.code).toBe("coordination.session-mismatch");
+    // The lease gate precedes the handoff gate on a plan-owned write, exactly as
+    // the file route's row binding does: the plan session no longer holds it.
+    const second = await refusalOf(() =>
+      planMutation(fixture, fixture.seat, OWN_PLAN, "handoff-again", { kind: "handoff", evidence: handoffEvidenceOf(fixture) }),
+    );
+    expect(second.code).toBe("coordination.session-mismatch");
+  });
+
+  test("return restores the plan session's ownership of its own plan", async () => {
+    const fixture = await lifecycleFixture("return-ownership", "integration");
+    const first = await acceptedAttempt(fixture, "return-first");
+
+    const returned = await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "return-accepted", {
+      kind: "return",
+      handoffId: first,
+      reason: "rework the slice",
+    });
+    expect(returned.data.coordination!.handoff).toMatchObject({
+      id: first,
+      state: "returned",
+      return_reason: "rework the slice",
+    });
+    expect(returned.data.plan.status).toBe("InProgress");
+    // The lease followed the record back to the session that submitted it.
+    expect(returned.data.executionLease).toMatchObject({ holder: PLAN_PM_ID, holder_role: "plan-pm", status: "held" });
+
+    // The plan session owns the row again: it reports status, hands off again
+    // and the second attempt is a new one.
+    await lifecycleProgress(fixture, fixture.seat, OWN_PLAN, "progress-again", "InReview", await planTokenOf(fixture, OWN_PLAN));
+    const second = await planMutation(fixture, fixture.seat, OWN_PLAN, "handoff-second", {
+      kind: "handoff",
+      evidence: handoffEvidenceOf(fixture),
+    });
+    expect(second.data.coordination!.handoff!.attempt).toBe(2);
+    expect(second.data.coordination!.handoff!.id).not.toBe(first);
+
+    // A return of a SUBMITTED attempt only proves the submitter still holds its
+    // own lease: nothing moves, and the row is InProgress again.
+    const secondId = second.data.coordination!.handoff!.id;
+    const returnedAgain = await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "return-submitted", {
+      kind: "return",
+      handoffId: secondId,
+      reason: "still not ready",
+    });
+    expect(returnedAgain.data.executionLease).toMatchObject({ holder: PLAN_PM_ID, status: "held" });
+    expect(returnedAgain.data.coordination!.handoff).toMatchObject({ id: secondId, state: "returned" });
+
+    // A plan session can never return: the coordinator verbs are coordinator-only.
+    const wrongSeat = await refusalOf(() =>
+      planMutation(fixture, fixture.seat, OWN_PLAN, "return-wrong-seat", {
+        kind: "return",
+        handoffId: secondId,
+        reason: "not mine to return",
+      }),
+    );
+    expect(wrongSeat.code).toBe("coordination.session-role");
+  });
+
+  test("the merge lease is exclusive and stale Git evidence blocks completion", async () => {
+    const fixture = await lifecycleFixture("merge-lease", "integration");
+    const { context } = fixture;
+    const handoffId = await acceptedAttempt(fixture, "merge-lease");
+
+    const started = await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "integration-start-1", {
+      kind: "integration-start",
+      handoffId,
+    });
+    expect(started.data.coordination!.handoff!.state).toBe("integrating");
+    expect(started.data.coordination!.handoff!.integration).toMatchObject({
+      target_branch: `integration/${OWN_PLAN}`,
+      worktree_path: fixture.integrationPath,
+      base_sha: fixture.baseSha,
+    });
+    expect(started.data.coordination!.handoff!.integration!.result_sha).toBeUndefined();
+    expect(started.data.integrationLease).toMatchObject({
+      holder: COORDINATOR_ID,
+      plan_id: OWN_PLAN,
+      source_branch: `feature/${OWN_PLAN}`,
+      target_branch: `integration/${OWN_PLAN}`,
+    });
+    expect(mergeLeaseRowOf(context).lease).toMatchObject({ status: "held", holder: COORDINATOR_ID });
+
+    // A started attempt is re-verified, never re-pinned.
+    const retry = await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "integration-start-retry", {
+      kind: "integration-start",
+      handoffId,
+    });
+    expect(retry.data.coordination).toEqual(started.data.coordination);
+    expect(retry.data.integrationLease).toEqual(started.data.integrationLease);
+
+    // Nothing is proven by intent.
+    const premature = await refusalOf(() =>
+      planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "integration-accept-early", {
+        kind: "integration-accept",
+        handoffId,
+      }),
+    );
+    expect(premature.code).toBe("coordination.integration-unresolved");
+
+    // The coordinator merges what it claims.
+    const mergeSha = mergeIntoIntegration(fixture);
+
+    // Exclusivity 1: a LIVE foreign holder refuses a PROVEN merge, however old
+    // its claim is — the age of a claim authorizes nothing.
+    plantMergeLease(context, fixture.epoch, {
+      holder: PLAN_PM_ID,
+      claimed_at: "2020-01-01T00:00:00Z",
+      plan_id: OWN_PLAN,
+      source_branch: `feature/${OWN_PLAN}`,
+      target_branch: `integration/${OWN_PLAN}`,
+      status: "held",
+    });
+    const liveHolder = await refusalOf(() =>
+      planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "integration-accept-live-holder", {
+        kind: "integration-accept",
+        handoffId,
+      }),
+    );
+    expect(liveHolder.code).toBe("coordination.session-mismatch");
+
+    // Exclusivity 2: a claim naming ANOTHER attempt is never reused or released.
+    plantMergeLease(context, fixture.epoch, {
+      holder: PLAN_PM_ID,
+      claimed_at: TS,
+      plan_id: PEER_PLAN,
+      source_branch: `feature/${PEER_PLAN}`,
+      target_branch: `integration/${PEER_PLAN}`,
+      status: "held",
+    });
+    const foreign = await refusalOf(() =>
+      planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "integration-accept-foreign", {
+        kind: "integration-accept",
+        handoffId,
+      }),
+    );
+    expect(foreign).toMatchObject({
+      code: "coordination.invalid-transition",
+      details: { holder_plan_id: PEER_PLAN, source_branch: `feature/${OWN_PLAN}` },
+    });
+
+    // This attempt's own claim restored, and the merge it really ran.
+    plantMergeLease(context, fixture.epoch, {
+      holder: COORDINATOR_ID,
+      claimed_at: TS,
+      plan_id: OWN_PLAN,
+      source_branch: `feature/${OWN_PLAN}`,
+      target_branch: `integration/${OWN_PLAN}`,
+      status: "held",
+    });
+    const merged = await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "integration-accept-1", {
+      kind: "integration-accept",
+      handoffId,
+    });
+    expect(merged.data.coordination!.handoff!.state).toBe("merged");
+    expect(merged.data.coordination!.handoff!.integration!.result_sha).toBe(mergeSha);
+    // Both leases and InReview survive the merge: complete is the release.
+    expect(merged.data.plan.status).toBe("InReview");
+    expect(merged.data.executionLease).toMatchObject({ holder: COORDINATOR_ID, status: "held" });
+    expect(merged.data.integrationLease).toMatchObject({ holder: COORDINATOR_ID, status: "held" });
+
+    // Stale Git evidence blocks completion: the branch no longer reaches the
+    // recorded merge, so nothing is proven and nothing is written.
+    runGit(["reset", "-q", "--hard", fixture.baseSha], fixture.integrationPath);
+    const before = planStateFootprint(context, OWN_PLAN);
+    const staleGit = await refusalOf(() =>
+      planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "complete-stale-git", { kind: "complete", handoffId }),
+    );
+    expect(staleGit.code).toBe("coordination.integration-diverged");
+    expect(planStateFootprint(context, OWN_PLAN)).toEqual(before);
+
+    // ... and so does a report rewritten after the merge was accepted.
+    runGit(["reset", "-q", "--hard", mergeSha], fixture.integrationPath);
+    writeText(fixture.evidence[OWN_PLAN]!.qc[1]!, "# rewritten before completion\n");
+    const staleEvidence = await refusalOf(() =>
+      planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "complete-stale-evidence", { kind: "complete", handoffId }),
+    );
+    expect(staleEvidence.code).toBe("coordination.evidence-stale");
+    expect(planStateFootprint(context, OWN_PLAN)).toEqual(before);
+    writeText(fixture.evidence[OWN_PLAN]!.qc[1]!, "# qc report\n");
+
+    // A completed replay of the same attempt is read-only.
+    const done = await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "complete-1", { kind: "complete", handoffId });
+    expect(done.data.plan.status).toBe("Done");
+    const acceptedState = planStateFootprint(context, OWN_PLAN);
+    const replay = await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "reconcile-replay", {
+      kind: "reconcile",
+      handoffId,
+    });
+    expect(replay.data.plan.status).toBe("Done");
+    expect(planStateFootprint(context, OWN_PLAN)).toEqual(acceptedState);
+  });
+
+  test("complete commits Done, the completed handoff and both releases in one transaction and deletes no catalog row", async () => {
+    const fixture = await lifecycleFixture("complete-delta", "integration");
+    const { context } = fixture;
+    const handoffId = await startedAttempt(fixture, "complete-delta");
+    const mergeSha = mergeIntoIntegration(fixture);
+    await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "integration-accept-delta", {
+      kind: "integration-accept",
+      handoffId,
+    });
+
+    const catalogBefore = catalogFootprint(context);
+    const rootBefore = planFootprint(context, OWN_PLAN).root_revision;
+    const registryBefore = rows(context, "select count(*) as n from execution_registry")[0]!.n;
+    const workflowBefore = parsedJson(rows(context, "select state_json from execution_workflows")[0]!.state_json);
+
+    const done = await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "complete-delta", {
+      kind: "complete",
+      handoffId,
+    });
+    expect(done.data.plan.status).toBe("Done");
+    expect(done.data.coordination!.handoff).toMatchObject({ id: handoffId, state: "completed" });
+    expect(typeof done.data.coordination!.handoff!.completed_at).toBe("string");
+    expect(done.data.coordination!.handoff!.integration!.result_sha).toBe(mergeSha);
+    // The two releases are part of the SAME commit: the execution lease is a
+    // §3.1 tombstone and the merge lease is unclaimed with its release recorded.
+    expect(done.data.executionLease).toMatchObject({ status: "released", released_by: COORDINATOR_ID });
+    expect(done.data.integrationLease).toBeNull();
+    expect(mergeLeaseRowOf(context).lease).toMatchObject({
+      status: "released",
+      prior_holder: COORDINATOR_ID,
+      released_by: COORDINATOR_ID,
+      plan_id: OWN_PLAN,
+    });
+    // The retained scope metadata is what authorizes cleanup afterwards.
+    expect(done.data.plan.metadata).toMatchObject({
+      working_branch: `feature/${OWN_PLAN}`,
+      worktree_path: fixture.featurePath,
+    });
+
+    // Terminal membership changed in that one transaction: a fresh read agrees.
+    const fresh = await readExecutionPlan(domainContext(context, fixture.coordinatorCaller), fixture.coordinator, OWN_PLAN);
+    expect(fresh.data.plan.status).toBe("Done");
+    expect(fresh.data.coordination!.handoff!.state).toBe("completed");
+    expect(fresh.data.executionLease).toMatchObject({ status: "released" });
+
+    // No catalog row was deleted or rewritten, the workflow's registration is
+    // intact, and the plan's terminal state is NOT the lifecycle's: the
+    // workflow-level close is a separate transition (W6).
+    expect(catalogFootprint(context)).toEqual(catalogBefore);
+    expect(rows(context, "select count(*) as n from execution_registry")[0]!.n).toBe(registryBefore);
+    expect(planFootprint(context, OWN_PLAN).root_revision).toBe(rootBefore);
+    expect(parsedJson(rows(context, "select state_json from execution_workflows")[0]!.state_json)).toEqual(workflowBefore);
+
+    // The plan session no longer owns anything on the completed row.
+    const after = await refusalOf(async () =>
+      lifecycleProgress(fixture, fixture.seat, OWN_PLAN, "progress-after-done", "InProgress", await planTokenOf(fixture, OWN_PLAN)),
+    );
+    expect(after.code).toBe("coordination.invalid-transition");
+  });
+
+  test("standalone completion needs no integration record, and an iteration attempt is never completed by it", async () => {
+    // An iteration attempt that has not merged is not completable: the standalone
+    // route is a different lifecycle, not a fallback for a missing integration.
+    const iteration = await lifecycleFixture("complete-route", "integration");
+    const unmerged = await acceptedAttempt(iteration, "route");
+    const premature = await refusalOf(() =>
+      planMutation(iteration, iteration.coordinatorSeat, OWN_PLAN, "complete-unmerged", {
+        kind: "complete",
+        handoffId: unmerged,
+      }),
+    );
+    expect(premature.code).toBe("coordination.invalid-transition");
+    expect(String(premature.message)).toContain("merged");
+
+    // A single-row standalone development workflow completes with no integration
+    // record anywhere, and its lifecycle stays running for the workflow close.
+    const standalone = await lifecycleFixture("complete-standalone", "development");
+    expect(standalone.route).toBe("development");
+    const handoffId = await acceptedAttempt(standalone, "standalone");
+    const done = await planMutation(standalone, standalone.coordinatorSeat, OWN_PLAN, "complete-standalone", {
+      kind: "complete",
+      handoffId,
+    });
+    expect(done.data.plan.status).toBe("Done");
+    expect(done.data.coordination!.handoff!.state).toBe("completed");
+    expect(done.data.coordination!.handoff!.integration).toBeUndefined();
+    expect(done.data.integrationLease).toBeNull();
+    expect(rows(standalone.context, "select count(*) as n from execution_integration_leases")[0]!.n).toBe(0);
+    expect(done.data.executionLease).toMatchObject({ status: "released" });
+    expect(
+      parsedJson(rows(standalone.context, "select state_json from execution_workflows")[0]!.state_json).status,
+    ).toBe("running");
+  });
+});
+
+describe("execution-reconcile: §3/§4.2 crash recovery and explicit stopped-owner evidence", () => {
+  test("reconcile classifies an abandoned attempt, completes a proven one, and replays read-only", async () => {
+    const fixture = await lifecycleFixture("reconcile-classify", "integration");
+    const { context } = fixture;
+    const handoffId = await startedAttempt(fixture, "classify");
+
+    // Started, nothing merged, base unmoved: the attempt is abandoned, not repaired.
+    const retry = await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "reconcile-retry", {
+      kind: "reconcile",
+      handoffId,
+    });
+    expect(retry.data.coordination!.handoff).toMatchObject({ id: handoffId, state: "accepted" });
+    expect(retry.data.coordination!.handoff!.integration).toBeUndefined();
+    expect(retry.data.plan.status).toBe("InReview");
+    // InReview and the coordinator's execution lease stay: only the abandoned
+    // attempt's own claim is released, with its release recorded.
+    expect(retry.data.executionLease).toMatchObject({ holder: COORDINATOR_ID, status: "held" });
+    expect(retry.data.integrationLease).toBeNull();
+    expect(mergeLeaseRowOf(context).lease).toMatchObject({
+      status: "released",
+      prior_holder: COORDINATOR_ID,
+      released_by: COORDINATOR_ID,
+      release_reason: "retry-ready",
+    });
+
+    // A restarted attempt that does merge reconciles to the completion delta.
+    runGit(["reset", "-q", "--hard", fixture.baseSha], fixture.integrationPath);
+    const restarted = await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "integration-start-again", {
+      kind: "integration-start",
+      handoffId,
+    });
+    expect(restarted.data.coordination!.handoff!.state).toBe("integrating");
+    const mergeSha = mergeIntoIntegration(fixture);
+    const proven = await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "reconcile-proven", {
+      kind: "reconcile",
+      handoffId,
+    });
+    expect(proven.data.plan.status).toBe("Done");
+    expect(proven.data.coordination!.handoff!.integration!.result_sha).toBe(mergeSha);
+    expect(proven.data.executionLease).toMatchObject({ status: "released" });
+    expect(proven.data.integrationLease).toBeNull();
+
+    // A completed attempt reconciles read-only: the accepted state is untouched.
+    const completedState = planStateFootprint(context, OWN_PLAN);
+    const replay = await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "reconcile-replay", {
+      kind: "reconcile",
+      handoffId,
+    });
+    expect(replay.data.plan.status).toBe("Done");
+    expect(planStateFootprint(context, OWN_PLAN)).toEqual(completedState);
+
+    // A base that moved without a merge of the pinned source is divergence.
+    const diverged = await lifecycleFixture("reconcile-diverged", "integration");
+    const divergedId = await startedAttempt(diverged, "diverged");
+    runGit(
+      ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "unrelated"],
+      diverged.integrationPath,
+    );
+    const divergedRefusal = await refusalOf(() =>
+      planMutation(diverged, diverged.coordinatorSeat, OWN_PLAN, "reconcile-diverged", {
+        kind: "reconcile",
+        handoffId: divergedId,
+      }),
+    );
+    expect(divergedRefusal.code).toBe("coordination.integration-diverged");
+  });
+
+  test("an explicit stopped-owner reconcile records the takeover, and an old claim held by a live session refuses", async () => {
+    const fixture = await lifecycleFixture("reconcile-stopped", "integration");
+    const { context } = fixture;
+    const handoffId = await startedAttempt(fixture, "stopped");
+    const ownClaim = mergeLeaseRowOf(context).lease;
+    // The coordinator really merged this attempt, so the refusal that follows is
+    // the merge lease's judgement and not an unproven attempt.
+    const mergeSha = mergeIntoIntegration(fixture);
+
+    // §2.3 the state a coordinator recovery leaves behind: the outstanding claim
+    // still names the PRIOR holder, whose session this workflow no longer holds
+    // active at this epoch. Clock age is not the evidence — the session row is.
+    plantMergeLease(context, fixture.epoch, { ...ownClaim, holder: "host-coordinator-previous", claimed_at: "2020-01-01T00:00:00Z" });
+    const stoppedClaim = mergeLeaseRowOf(context).lease;
+
+    // No other verb takes over a stopped owner, and the refusal says which one does.
+    const refused = await refusalOf(() =>
+      planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "integration-accept-stopped", {
+        kind: "integration-accept",
+        handoffId,
+      }),
+    );
+    expect(refused.code).toBe("coordination.invalid-transition");
+    expect(String(refused.message)).toContain("stopped");
+    expect(mergeLeaseRowOf(context).lease).toEqual(stoppedClaim);
+
+    // The explicit reconcile succeeds, and the takeover is recorded: prior
+    // holder, new holder and the decision. The proven merge completes normally.
+    const reconciled = await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "reconcile-stopped", {
+      kind: "reconcile",
+      handoffId,
+    });
+    expect(reconciled.data.plan.status).toBe("Done");
+    expect(reconciled.data.coordination!.handoff!.integration!.result_sha).toBe(mergeSha);
+    expect(reconciled.data.integrationLease).toBeNull();
+    const tombstone = mergeLeaseRowOf(context).lease;
+    expect(tombstone).toMatchObject({
+      status: "released",
+      holder: "host-coordinator-previous",
+      prior_holder: "host-coordinator-previous",
+      released_by: COORDINATOR_ID,
+    });
+    expect(String(tombstone.release_reason)).toContain("stopped-owner");
+
+    // The same ancient claim held by a LIVE session never moves on age alone.
+    const live = await lifecycleFixture("reconcile-live", "integration");
+    const liveId = await startedAttempt(live, "live");
+    mergeIntoIntegration(live);
+    plantMergeLease(live.context, live.epoch, {
+      holder: PLAN_PM_ID,
+      claimed_at: "2020-01-01T00:00:00Z",
+      plan_id: OWN_PLAN,
+      source_branch: `feature/${OWN_PLAN}`,
+      target_branch: `integration/${OWN_PLAN}`,
+      status: "held",
+    });
+    const liveClaim = mergeLeaseRowOf(live.context).lease;
+    const liveRefusal = await refusalOf(() =>
+      planMutation(live, live.coordinatorSeat, OWN_PLAN, "reconcile-live", { kind: "reconcile", handoffId: liveId }),
+    );
+    expect(liveRefusal.code).toBe("coordination.session-mismatch");
+    expect(mergeLeaseRowOf(live.context).lease).toEqual(liveClaim);
+  });
+
+  test("a crash rolls back an uncommitted mutation while the persisted lease still blocks", async () => {
+    const fixture = await lifecycleFixture("crash-rollback", "integration");
+    const { context } = fixture;
+    const before = planFootprint(context, OWN_PLAN);
+    const leaseBefore = parsedJson(before.own_lease as string);
+
+    // A process that DIES with its transaction open: the row edit and the lease
+    // deletion are uncommitted when the writer is killed, exactly as a crashed
+    // coordinator leaves them. SQLite rolls the whole transaction back, and the
+    // lease it had persisted in an earlier committed transaction stays.
+    const crashedWriter = join(ROOT, "crash-writer.cjs");
+    writeFileSync(
+      crashedWriter,
+      [
+        'const { DatabaseSync } = require("node:sqlite");',
+        `const db = new DatabaseSync(${JSON.stringify(storePath(context))});`,
+        'db.exec("begin immediate");',
+        "db.prepare(" +
+          JSON.stringify("update execution_plans set revision = revision + 5, coordination_json = ? where workflow_id = ? and plan_id = ?") +
+          `).run(${JSON.stringify(JSON.stringify({ hijacked: true }))}, ${JSON.stringify(WORKFLOW_ID)}, ${JSON.stringify(OWN_PLAN)});`,
+        `db.prepare("delete from execution_leases where plan_id = ?").run(${JSON.stringify(OWN_PLAN)});`,
+        'process.kill(process.pid, "SIGKILL");',
+      ].join("\n"),
+    );
+    try {
+      execFileSync(process.execPath, [crashedWriter], { stdio: ["ignore", "ignore", "ignore"] });
+    } catch {
+      // SIGKILL: the process is gone, and that is the point.
+    }
+
+    // Nothing of the crash survives, and the persisted lease is still there.
+    expect(planFootprint(context, OWN_PLAN)).toEqual(before);
+    expect(parsedJson(planFootprint(context, OWN_PLAN).own_lease as string)).toEqual(leaseBefore);
+
+    // The persisted lease still blocks: no second identity takes the plan over.
+    const otherCaller = trustedCaller("host-pm-other", "plan-pm", OWN_PLAN);
+    const blocked = await refusalOf(async () =>
+      bindExecutionSession(domainContext(context, otherCaller), {
+        workflowId: WORKFLOW_ID,
+        planId: OWN_PLAN,
+        role: "plan-pm",
+        expected: await planTokenOf(fixture, OWN_PLAN),
+        operationId: "bind-after-crash",
+      }),
+    );
+    expect(blocked.code).toBe("coordination.duplicate-holder");
+
+    // ... and the holder it names can still work, because the crash changed none
+    // of the accepted state it owns.
+    const resumed = await lifecycleProgress(
+      fixture,
+      fixture.seat,
+      OWN_PLAN,
+      "progress-after-crash",
+      "InReview",
+      await planTokenOf(fixture, OWN_PLAN),
+    );
+    expect(resumed.data.coordination!.progress!.status).toBe("InReview");
+  });
+});
+
+describe("execution-concurrency: §3.1/§4.1 concurrent accepted plan operations", () => {
+  test("two plans mutated at once are both retained, and a conflicting write needs an explicit reread", async () => {
+    const fixture = await lifecycleFixture("concurrency", "integration");
+    const { context, documents, coordinatorCaller } = fixture;
+    await prepareExecutionPlan(domainContext(context, coordinatorCaller), {
+      operationId: "prepare-peer",
+      session: fixture.coordinator,
+      expected: fixture.planTokens[PEER_PLAN]!,
+      planId: PEER_PLAN,
+      operation: { kind: "prepare", assignmentPath: documents[PEER_PLAN]!.assignmentPath },
+    });
+    const peer = (await planSeat(fixture, PEER_PLAN, PEER_PM_ID, "concurrency-peer")) as Seat;
+
+    // Two independent plans of ONE workflow, submitted at the same time: both
+    // accepted operations are committed and retained, and the shared store
+    // revision advances exactly once per accepted operation.
+    const storeBefore = storeRevisionOf(context);
+    const [own, peerReceipt] = await Promise.all([
+      lifecycleProgress(fixture, fixture.seat, OWN_PLAN, "concurrent-own", "InReview", await planTokenOf(fixture, OWN_PLAN), "own summary"),
+      lifecycleProgress(fixture, peer, PEER_PLAN, "concurrent-peer", "InReview", await planTokenOf(fixture, PEER_PLAN), "peer summary"),
+    ]);
+    expect(own.replayed).toBe(false);
+    expect(peerReceipt.replayed).toBe(false);
+    expect(storeRevisionOf(context)).toBe(storeBefore + 2);
+    expect(parsedJson(rows(context, `select coordination_json from execution_plans where plan_id = '${OWN_PLAN}'`)[0]!.coordination_json).progress).toMatchObject({
+      summary: "own summary",
+    });
+    expect(parsedJson(rows(context, `select coordination_json from execution_plans where plan_id = '${PEER_PLAN}'`)[0]!.coordination_json).progress).toMatchObject({
+      summary: "peer summary",
+    });
+
+    // The same plan and the same token, two different payloads: exactly one is
+    // accepted, and the loser gets a visible CAS conflict — never a silent lost
+    // update.
+    const revisionBefore = planFootprint(context, OWN_PLAN).plan_revision;
+    const token = await planTokenOf(fixture, OWN_PLAN);
+    const settled = await Promise.allSettled([
+      lifecycleProgress(fixture, fixture.seat, OWN_PLAN, "race-first", "InReview", token, "first"),
+      lifecycleProgress(fixture, fixture.seat, OWN_PLAN, "race-second", "InReview", token, "second"),
+    ]);
+    const fulfilled = settled.filter((entry) => entry.status === "fulfilled");
+    const rejected = settled.filter((entry): entry is PromiseRejectedResult => entry.status === "rejected");
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect((rejected[0]!.reason as { code?: string }).code).toBe("execution.stale-token");
+    expect(Number(planFootprint(context, OWN_PLAN).plan_revision)).toBe(Number(revisionBefore) + 1);
+
+    // The conflict is resolved by an explicit reread and retry, and the retried
+    // operation is retained on top of the accepted one.
+    const retried = await lifecycleProgress(
+      fixture,
+      fixture.seat,
+      OWN_PLAN,
+      "race-second-retry",
+      "InReview",
+      await planTokenOf(fixture, OWN_PLAN),
+      "second",
+    );
+    expect(retried.replayed).toBe(false);
+    expect(Number(planFootprint(context, OWN_PLAN).plan_revision)).toBe(Number(revisionBefore) + 2);
+    expect(parsedJson(rows(context, `select coordination_json from execution_plans where plan_id = '${OWN_PLAN}'`)[0]!.coordination_json).progress).toMatchObject({
+      summary: "second",
+    });
   });
 });

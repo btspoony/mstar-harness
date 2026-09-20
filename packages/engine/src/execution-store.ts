@@ -48,9 +48,9 @@ import {
   CoordinationError,
   isNonEmptyString,
   isPlainObject,
-  validateRowCoordination,
   type RowCoordination,
 } from "./coordination-write.js";
+import { storedCoordinationViolations } from "./coordination-transitions.js";
 import {
   claimLease,
   validateExecutionLease,
@@ -77,7 +77,12 @@ import {
   type StoreContext,
   type StoreDb,
 } from "./store-db.js";
-import { isTerminalSnapshot, validateWorkflowSnapshot, type WorkflowSnapshot } from "./workflow.js";
+import {
+  isTerminalSnapshot,
+  rowValidationRoute,
+  validateWorkflowSnapshot,
+  type WorkflowSnapshot,
+} from "./workflow.js";
 
 // ---------------------------------------------------------------------------
 // Refusals (§5)
@@ -597,12 +602,18 @@ function readIntegrationLease(json: unknown, what: string): IntegrationMergeLeas
  * session identity and role it owns the plan through, and the DB-named scope
  * fields (`plan_worktree_path` / `plan_branch`) must agree with the
  * `ExecutionLease` identity fields they mirror. A lease that claims the CURRENT
- * epoch must name that epoch's ACTIVE plan-pm session — the session row's own
- * `epoch` included, because a row superseded by a later epoch is not that
- * session; `bindExecutionSession` writes exactly this pair. A lease whose
- * `owner_epoch` is behind the store (a suspended or migration-recovered one) is
- * REPRESENTED rather than repaired: it agrees with no current session and
- * authorizes nothing, because every mutation revalidates the epoch.
+ * epoch must name that epoch's ACTIVE session of exactly that role — the
+ * session row's own `epoch` included, because a row superseded by a later epoch
+ * is not that session. `bindExecutionSession` writes a plan-pm holder; the
+ * coordination `accept` transition transfers the same lease to the workflow's
+ * coordinator, and a transfer is still ONE ownership fact of one epoch, so the
+ * lookup is by the identity the lease names — never by a hardcoded plan-pm row,
+ * which would read a transferred lease as corrupt.
+ *
+ * A lease whose `owner_epoch` is behind the store (a suspended or
+ * migration-recovered one) is REPRESENTED rather than repaired: it agrees with
+ * no current session and authorizes nothing, because every mutation revalidates
+ * the epoch.
  */
 function assertLeaseOwnership(
   lease: ExecutionLease,
@@ -622,18 +633,21 @@ function assertLeaseOwnership(
   }
   if (ownerEpoch !== store.epoch) return;
   if (sessionRow === undefined) {
-    throw corrupt(`${what} is held in epoch ${ownerEpoch} by session ${String(lease.holder_session_id)} while ${planId} has no active plan session`);
+    throw corrupt(
+      `${what} is held in epoch ${ownerEpoch} by ${String(lease.holder_role)} session ${String(lease.holder_session_id)} while ` +
+        `${planId} has no active session of that identity`,
+    );
   }
   if (sessionRow.epoch !== ownerEpoch) {
     throw corrupt(
-      `${what} is held in epoch ${ownerEpoch} by ${String(lease.holder_role)} session ${String(lease.holder_session_id)}, but the ` +
-        `active ${String(sessionRow.role)} session of ${planId} is ${String(sessionRow.session_id)} in epoch ${String(sessionRow.epoch)}; ` +
-        `a lease and the session row it names as its owner are ONE ownership fact of one epoch`,
+      `${what} is held in epoch ${ownerEpoch} by ${String(lease.holder_role)} session ${String(lease.holder_session_id)}, but that ` +
+        `active session is in epoch ${String(sessionRow.epoch)}; a lease and the session row it names as its owner are ONE ownership ` +
+        `fact of one epoch`,
     );
   }
   if (sessionRow.session_id !== lease.holder_session_id || sessionRow.role !== lease.holder_role) {
     throw corrupt(
-      `${what} is held by ${String(lease.holder_role)} session ${String(lease.holder_session_id)}, but the active session of ` +
+      `${what} is held by ${String(lease.holder_role)} session ${String(lease.holder_session_id)}, but the active session row of ` +
         `${planId} in epoch ${ownerEpoch} is ${String(sessionRow.role)} session ${String(sessionRow.session_id)}`,
     );
   }
@@ -666,6 +680,41 @@ function sessionRef(store: StoreIdentity, workflowId: string, row: Record<string
     role,
     sessionId: row.session_id,
     planId,
+  };
+}
+
+/**
+ * §2.2/§3.1 the workflow's integration merge lease as the DB holds it: ONE row
+ * per workflow (the merge is workflow-wide and exclusive) carrying the claim
+ * plus the tombstone a release leaves behind. A released row keeps its
+ * revision, owner epoch and identity — the §3.1 ABA guard, because deleting it
+ * would let a later claim reuse the same revision — and is not a claim: the
+ * view reports `null` for it, exactly as the file route deletes the key on
+ * release. A row that carries no `status` is a claim.
+ */
+type StoredIntegrationLease = {
+  lease: IntegrationMergeLease;
+  status: "held" | "released";
+  revision: number;
+  ownerEpoch: number;
+};
+
+function readIntegrationLeaseRow(db: StoreDb, workflowId: string): StoredIntegrationLease | null {
+  const row = db
+    .prepare("select revision, owner_epoch, lease_json from execution_integration_leases where workflow_id = ?")
+    .get(workflowId) as { revision?: unknown; owner_epoch?: unknown; lease_json?: unknown } | undefined;
+  if (row === undefined) return null;
+  const what = `execution_integration_leases(${workflowId}).lease_json`;
+  const lease = readIntegrationLease(row.lease_json, what);
+  const status = lease.status;
+  if (status !== undefined && status !== "held" && status !== "released") {
+    throw corrupt(`${what} carries status ${JSON.stringify(status)}, which is neither held nor released`);
+  }
+  return {
+    lease,
+    status: status === "released" ? "released" : "held",
+    revision: storedRevision(row.revision, `execution_integration_leases(${workflowId}).revision`),
+    ownerEpoch: storedRevision(row.owner_epoch, `execution_integration_leases(${workflowId}).owner_epoch`),
   };
 }
 
@@ -711,14 +760,9 @@ function readWorkflowView(
   const inputs = db
     .prepare("select plan_id, catalog_pin_json from execution_inputs where workflow_id = ?")
     .all(workflowId) as Array<Record<string, unknown>>;
-  const integrationRow = db
-    .prepare("select lease_json from execution_integration_leases where workflow_id = ?")
-    .get(workflowId) as { lease_json?: unknown } | undefined;
-
+  const integrationRow = readIntegrationLeaseRow(db, workflowId);
   const coordinatorRow = sessions.find((row) => row.role === "coordinator");
-  const integrationLease = integrationRow
-    ? readIntegrationLease(integrationRow.lease_json, `execution_integration_leases(${workflowId}).lease_json`)
-    : null;
+  const integrationLease = integrationRow === null || integrationRow.status === "released" ? null : integrationRow.lease;
 
   const planRows = db
     .prepare(
@@ -735,6 +779,15 @@ function readWorkflowView(
 
   const planTokens: Record<string, ExecutionToken> = {};
   const plans: ExecutionPlanView[] = [];
+  const planIds = planRows.map((entry) => storedText(entry.plan_id, `execution_plans(${workflowId}).plan_id`));
+  // §D/§A1 the snapshot shape the SHARED route rules read: the workflow header
+  // owns no plans (they are `execution_plans` rows), so the row identities are
+  // projected in here once and whether a plan is the single row of a standalone
+  // development workflow stays exactly the shared rule's decision.
+  const routeSnapshot = {
+    ...(state as unknown as WorkflowSnapshot),
+    plans: planIds.map((planId) => ({ id: planId }) as PlanRow),
+  } as WorkflowSnapshot;
   for (const row of planRows) {
     const planId = storedText(row.plan_id, `execution_plans(${workflowId}).plan_id`);
     const planRevision = storedRevision(row.revision, `execution_plans(${workflowId},${planId}).revision`);
@@ -770,23 +823,49 @@ function readWorkflowView(
     }
     // The row column is the revision; the stored block carries the rest (§2.2).
     const projectedCoordination = { revision: planRevision, ...storedCoordination };
-    const coordinationViolations = validateRowCoordination(projectedCoordination);
+    // §2.2/§D the block is validated by the SHARED rules, with the one transport
+    // difference this authority has: the bound plan session lives in
+    // `execution_sessions`, never in the block, so `handoff`'s "requires a bound
+    // plan session" half is checked against the plan's own session row here.
+    const sessionRow = sessions.find((entry) => entry.role === "plan-pm" && entry.plan_id === planId);
+    const coordinationViolations = storedCoordinationViolations(storedCoordination, {
+      revision: planRevision,
+      route: rowValidationRoute(routeSnapshot, planState as PlanRow),
+      sessionBound: sessionRow !== undefined,
+      what: `execution_plans(${workflowId},${planId}).coordination_json`,
+    });
     if (coordinationViolations.length > 0) {
       throw validationRefusal(`execution_plans(${workflowId},${planId}).coordination_json`, coordinationViolations);
     }
     const hasCoordination = Object.keys(storedCoordination).length > 0;
-    const sessionRow = sessions.find((entry) => entry.role === "plan-pm" && entry.plan_id === planId);
     const leaseRow = leases.find((entry) => entry.plan_id === planId);
     const inputRow = inputs.find((entry) => entry.plan_id === planId);
+    // §2.2/§3.1 the row's lease RECORD, held or released: a released row is a
+    // retained tombstone (revision and owner epoch intact, ABA guard) and is an
+    // existing key rather than an absent one, so the view serves it and the rules
+    // that need a HOLDER (`assertPlanOwnedWrite`, the shared `assertExecutionHolder`)
+    // are the ones that insist on `status: held`. The merge lease below is the
+    // opposite case, because there the row's presence IS the claim.
     const executionLease = leaseRow
       ? readExecutionLease(leaseRow.lease_json, `execution_leases(${workflowId},${planId}).lease_json`)
       : null;
-    // §2.2: a held lease and the plan's active session are ONE ownership fact
-    // recorded in two rows; the reader refuses a pair that disagrees.
+    // §2.2: a held lease and the session row it names are ONE ownership fact
+    // recorded in two rows; the reader refuses a pair that disagrees. The row is
+    // looked up by the identity and role the lease itself names — the plan-pm
+    // session that claimed it, or the coordinator session a transfer moved it to.
     if (leaseRow !== undefined && executionLease !== null) {
+      const holderRow =
+        executionLease.status === "held"
+          ? sessions.find(
+              (entry) =>
+                entry.role === executionLease.holder_role &&
+                entry.session_id === executionLease.holder_session_id &&
+                (entry.role === "coordinator" || entry.plan_id === planId),
+            )
+          : undefined;
       assertLeaseOwnership(
         executionLease,
-        sessionRow,
+        holderRow,
         storedRevision(leaseRow.owner_epoch, `execution_leases(${workflowId},${planId}).owner_epoch`),
         store,
         workflowId,
@@ -2024,6 +2103,136 @@ export function advancePlanOperationRevisions(
     .prepare("update execution_workflows set revision = revision + 1, updated_at = ? where workflow_id = ?")
     .run(input.now, input.workflowId);
   tx.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+}
+
+/* ------------------------------------------------------------------------ *
+ * §3/§4.2 the lease and liveness primitives the plan transitions write through
+ * ------------------------------------------------------------------------ */
+
+/**
+ * §3.1 the session identities this workflow CURRENTLY holds active at the
+ * current epoch. This is the only evidence a stopped owner is decided by: a
+ * session is live because its own row says so at this epoch — never because a
+ * lease is old, a heartbeat is stale or a caller says the process is gone
+ * (§4.2: heartbeats are observations, not expiry authorization).
+ */
+export function readLiveSessionIdentities(tx: ExecutionTransaction, workflowId: string): ReadonlySet<string> {
+  const rows = tx.db
+    .prepare("select session_id from execution_sessions where workflow_id = ? and state = 'active' and epoch = ?")
+    .all(workflowId, tx.epoch) as Array<{ session_id?: unknown }>;
+  return new Set(rows.map((row) => storedText(row.session_id, `execution_sessions(${workflowId}).session_id`)));
+}
+
+/**
+ * §3/§E claim the workflow's integration merge lease for ONE attempt: the merge
+ * is workflow-wide and exclusive, so this is the single row that says who is
+ * merging what, and it names the plan and source branch it belongs to (a holder
+ * match alone is never ownership). The row's own revision advances because its
+ * record changed (§3.1); a re-claim by the same attempt is not this caller's
+ * path — `integration-start` re-verifies a started attempt without writing.
+ */
+export function claimIntegrationMergeLease(
+  tx: ExecutionTransaction,
+  input: { workflowId: string; lease: IntegrationMergeLease },
+): void {
+  const existing = readIntegrationLeaseRow(tx.db, input.workflowId);
+  tx.db
+    .prepare(
+      "insert or replace into execution_integration_leases(workflow_id, revision, owner_epoch, lease_json) values (?, ?, ?, ?)",
+    )
+    .run(
+      input.workflowId,
+      existing === null ? 1 : existing.revision + 1,
+      tx.epoch,
+      JSON.stringify({ ...input.lease, status: "held" }),
+    );
+}
+
+/**
+ * §3/§E release the workflow's integration merge lease, recording who held it,
+ * who released it and why. The row is NOT deleted: it keeps its revision and
+ * owner epoch as the §3.1 ABA guard, and reads as unclaimed (`null`) exactly as
+ * the file route's deleted key does. Releasing an unclaimed or already released
+ * lease is a no-op, so a replay never rewrites the provenance of a release.
+ */
+export function releaseIntegrationMergeLease(
+  tx: ExecutionTransaction,
+  input: { workflowId: string; claim: IntegrationMergeLease; releasedBy: string; reason: string; now: string },
+): void {
+  const existing = readIntegrationLeaseRow(tx.db, input.workflowId);
+  if (existing === null || existing.status === "released") return;
+  const tombstone = {
+    ...input.claim,
+    status: "released",
+    prior_holder: input.claim.holder,
+    released_by: input.releasedBy,
+    released_at: input.now,
+    release_reason: input.reason,
+  };
+  tx.db
+    .prepare("update execution_integration_leases set revision = ?, lease_json = ? where workflow_id = ?")
+    .run(existing.revision + 1, JSON.stringify(tombstone), input.workflowId);
+}
+
+/**
+ * §D the `accept` transfer: the plan's HELD execution lease moves to the
+ * coordinator session verbatim — same `claimed_at`, worktree and branch, extra
+ * fields preserved — and only the holder identity and role change. The lease
+ * row's revision advances because its record changed (§3.1), and no claim,
+ * steal or re-claim path exists here: the caller has already authenticated the
+ * receiving session as the addressed plan's coordinator.
+ */
+export function transferExecutionLease(
+  tx: ExecutionTransaction,
+  input: {
+    workflowId: string;
+    planId: string;
+    lease: ExecutionLease;
+    to: { sessionId: string; role: "coordinator" | "plan-pm" };
+    now: string;
+  },
+): void {
+  const moved = {
+    ...input.lease,
+    holder: input.to.sessionId,
+    holder_session_id: input.to.sessionId,
+    holder_role: input.to.role,
+    transferred_from: input.lease.holder,
+    transferred_at: input.now,
+  };
+  tx.db
+    .prepare("update execution_leases set revision = revision + 1, lease_json = ? where workflow_id = ? and plan_id = ?")
+    .run(JSON.stringify(moved), input.workflowId, input.planId);
+}
+
+/**
+ * §E the completion release: the plan's execution lease becomes a tombstone
+ * that keeps its identity, revision and owner epoch (§3.1's ABA guard) and
+ * reads as NOT held — the DB equivalent of the file route deleting the row's
+ * `execution_lease`. The released record carries the release provenance, so
+ * "who owned this plan, who released it and why" survives completion.
+ */
+export function releaseExecutionLease(
+  tx: ExecutionTransaction,
+  input: {
+    workflowId: string;
+    planId: string;
+    lease: ExecutionLease;
+    releasedBy: string;
+    reason: string;
+    now: string;
+  },
+): void {
+  const released = {
+    ...input.lease,
+    status: "released",
+    released_by: input.releasedBy,
+    released_at: input.now,
+    release_reason: input.reason,
+  };
+  tx.db
+    .prepare("update execution_leases set revision = revision + 1, lease_json = ? where workflow_id = ? and plan_id = ?")
+    .run(JSON.stringify(released), input.workflowId, input.planId);
 }
 
 /**

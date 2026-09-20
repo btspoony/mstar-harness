@@ -565,6 +565,18 @@ export {
   readExecutionState,
   serializeExecutionValue,
 } from "./execution-store.js";
+// §3 the DB plan-operation surface: ONE entry point for the whole closed
+// `CoordinationOperation` union — prepare, progress, residual-add,
+// residual-close, handoff, accept, return, integration-start,
+// integration-accept, complete and reconcile — each with exactly one DB
+// transition behind it. Published only once the union was complete, so nothing
+// here is a stub: the legacy-only `repair-delivery-source` is refused, and no
+// workflow-level verb, registration or coordinator-recovery API is part of this
+// surface (those are W5/W6).
+// ADDITIVE export and the ONLY reachable surface for consumers: the internal
+// dispatch frame and the individual transition bodies stay module-scoped.
+export type { CoordinationOperation } from "./execution-coordination.js";
+export { mutateExecutionPlan } from "./execution-coordination.js";
 export type {
   CaptureInput,
   ClosureEvidence,

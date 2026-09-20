@@ -1778,15 +1778,13 @@ describe("execution-domain: §3 workflow creation, sealed input and authoritativ
     expect(engineIndex.createExecutionWorkflow.length).toBe(2);
     // The later coordination/recovery verbs are not stubbed into the package
     // surface. C4 supplies `bindExecutionSession`/`readExecutionPlan`, pinned
-    // verbatim by the `execution-session` group below.
-    for (const name of [
-      "recoverExecutionCoordinator",
-      "mutateExecutionWorkflow",
-      "mutateExecutionPlan",
-      "commitExecutionRegistration",
-    ]) {
+    // verbatim by the `execution-session` group below, and W4 publishes
+    // `mutateExecutionPlan` — with the WHOLE closed operation union implemented
+    // behind it, which is the condition its own brief sets for publication.
+    for (const name of ["recoverExecutionCoordinator", "mutateExecutionWorkflow", "commitExecutionRegistration"]) {
       expect(name in engineIndex).toBe(false);
     }
+    expect(typeof engineIndex.mutateExecutionPlan).toBe("function");
   });
 });
 
@@ -2534,14 +2532,18 @@ describe("execution-session: §2.3 binding, role-scoped identity and the plan re
     ) => Promise<ExecutionRead<ExecutionPlanView>> = engineIndex.readExecutionPlan;
     expect(readSurface).toBe(readExecutionPlan);
     expect(engineIndex.readExecutionPlan.length).toBe(3);
-    // The public prepare transition (W2), the coordination mutators (W1–W6),
-    // registration and coordinator recovery are still absent.
+    // W4 publishes exactly ONE new verb — the plan-operation entry point whose
+    // union is complete. The workflow-level mutator and the coordinator recovery
+    // bootstrap are W6's, registration is plan 4's, and the per-operation
+    // transition bodies stay module-scoped: none of them is reachable here.
+    expect(typeof engineIndex.mutateExecutionPlan).toBe("function");
     for (const name of [
       "recoverExecutionCoordinator",
       "mutateExecutionWorkflow",
-      "mutateExecutionPlan",
       "commitExecutionRegistration",
       "prepareExecutionPlan",
+      "handoffExecutionPlan",
+      "completeExecutionPlan",
     ]) {
       expect(name in engineIndex).toBe(false);
     }
