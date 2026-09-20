@@ -725,6 +725,16 @@ export {
 // ADDITIVE export: the composed admission frame stays module-scoped, and the
 // legacy journal remains the only file-route entry point.
 export { commitExecutionRegistration } from "./execution-registration.js";
+// §5 the single source READ adapter: one read transaction, an exact
+// workflow/plan address and the token of the scope that was actually read
+// (root / workflow / plan). `legacy` and `staged` keep the unchanged file
+// route — which the route helper below reports — while a store that exists and
+// cannot answer (corrupt, drifted, busy, unsupported) is always a refusal.
+// ADDITIVE export: the DB adapter, the consumer route decision and the
+// selection type are the whole published surface; the stored-row assembly and
+// the token grammar stay module-scoped in `execution-store.ts`.
+export type { ExecutionReadSelection } from "./execution-read.js";
+export { readExecutionAuthority } from "./execution-read.js";
 // Disposable execution/roadmap projections: the ONE source-I/O boundary
 // (`refreshProjections`) over the JSON execution authority, plus its two
 // halves -- the pure validated capture and the atomic publication/last-good
@@ -759,10 +769,14 @@ export {
 } from "./projection.js";
 // Issue-store read boundary: the ONE read entry for dashboard and rollup
 // consumers -- one handle per request, every view query in one read
-// transaction, and an honest projection disclosure in the envelope. ADDITIVE
-// export: the engine package's exports map is the only reachable surface for
-// the CLI transport (`packages/cli/src/store-read.ts`) and for the dashboard
-// consumers; no producer surface is changed.
+// transaction, and an honest projection disclosure in the envelope. It also
+// carries the §5 execution-SOURCE route decision (`resolveExecutionReadRoute` /
+// `readExecutionSource`): the DB adapter answers an ACTIVE authority, the
+// pre-activation file route stays file-authoritative, and a store that exists
+// and cannot answer refuses instead of falling back. ADDITIVE export: the engine
+// package's exports map is the only reachable surface for the CLI transport
+// (`packages/cli/src/store-read.ts`) and for the dashboard consumers; no
+// producer surface is changed.
 export type {
   CatalogIdentityDTO,
   CompassDTO,
@@ -770,6 +784,8 @@ export type {
   DashboardFilters,
   DashboardView,
   DashboardViewData,
+  ExecutionReadRoute,
+  ExecutionSourceRead,
   GoalDTO,
   IssueFlow,
   IssueFlowBucket,
@@ -787,7 +803,14 @@ export type {
   WorkflowListDTO,
   WorkflowPlanDTO,
 } from "./store-read.js";
-export { StoreReadError, queryDashboard, queryIssueFlow, withStoreRead } from "./store-read.js";
+export {
+  StoreReadError,
+  queryDashboard,
+  queryIssueFlow,
+  readExecutionSource,
+  resolveExecutionReadRoute,
+  withStoreRead,
+} from "./store-read.js";
 // Read-only migration planner plus the staged apply/receipt/replay half: the
 // migration transport of the store migration protocol (issue contract §7). It
 // enumerates the legacy residual registers through the configured project

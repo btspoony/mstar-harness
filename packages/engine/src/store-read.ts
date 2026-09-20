@@ -24,10 +24,16 @@
  * required filter or an out-of-range page.
  */
 import type { CatalogDocumentKind, CatalogEntityKind, CatalogLifecycle, CatalogRootKind, CatalogKey } from "./catalog.js";
+import {
+  assertExecutionSelection,
+  readExecutionAuthority,
+  type ExecutionReadSelection,
+} from "./execution-read.js";
+import type { ExecutionPlanView, ExecutionRead, ExecutionState } from "./execution-store.js";
 import { IssueError, type Disposition, type IssueDetail, type IssueFilter, type IssueKind, type IssuePage, type Severity } from "./issue.js";
 import { ProjectionError, refreshProjections, type ProjectionFreshness, type SourceDiagnostic } from "./projection.js";
 import { SddScriptError } from "./sdd.js";
-import { openStore, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
+import { openStore, StoreError, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
 
 /** Refusal codes the read boundary itself raises (both already frozen). */
 export type StoreReadErrorCode = "store.not-active";
@@ -448,6 +454,78 @@ export async function withStoreRead<T>(context: StoreContext, query: StoreReadQu
   } finally {
     handle.close();
   }
+}
+
+// ---------------------------------------------------------------------------
+// Execution-source read route (primary spec §5)
+// ---------------------------------------------------------------------------
+
+/**
+ * Which route answers an execution-SOURCE read for this control harness: the
+ * execution DB authority (`readExecutionAuthority`) or the pre-activation
+ * file route. This is the reader-facing sibling of `assertExecutionFileReadAllowed`
+ * (§4.3) — the same discrimination, expressed as a route instead of a refusal —
+ * and it is the ONE place a consumer decides between them.
+ *
+ * The two arms are the whole verdict set of §2.1/§5:
+ *
+ * - `execution` — the store records an ACTIVE execution authority. Only the DB
+ *   adapter may serve the read.
+ * - `files` — a store that predates migration 4 (`execution_meta` absent), a
+ *   `legacy`/`staged` authority, or no store file at all. Those keep the
+ *   unchanged file-authoritative route; §2.1 makes absence an explicit
+ *   non-verdict, never a fresh-workspace guess.
+ *
+ * Everything else is a REFUSAL and never degrades into `files`: a corrupt,
+ * drifted, busy or unreadable store, an unsupported runtime, or a store file
+ * that cannot be opened. Serving leftover JSON because the authority could not
+ * be established is exactly the fallback §5 forbids.
+ */
+export type ExecutionReadRoute = "execution" | "files";
+
+/**
+ * §5 resolve the route of one execution-source read. Opening the store is the
+ * whole probe: the execution metadata is read with the schema and identity the
+ * same reader `readExecutionAuthority` uses, so no consumer re-implements a
+ * floor, a schema check or an authority-state rule.
+ */
+export async function resolveExecutionReadRoute(context: StoreContext): Promise<ExecutionReadRoute> {
+  let handle: StoreHandle;
+  try {
+    handle = await openStore(context, "read");
+  } catch (error) {
+    if (error instanceof StoreError && error.code === "store.not-initialized") return "files";
+    throw error;
+  }
+  try {
+    return handle.execution !== null && handle.execution.authorityState === "active" ? "execution" : "files";
+  } finally {
+    handle.close();
+  }
+}
+
+/**
+ * §5 one source read, routed: an ACTIVE authority answers with the typed DB
+ * DTO, the pre-activation route answers with `files` and leaves the caller's
+ * unchanged file reader in place. The address is validated before the route is
+ * probed, so a malformed selection can never be answered by a route verdict.
+ *
+ * `execution` is not a hint: the adapter re-asserts the active authority inside
+ * its own read transaction, so a route that changed between the probe and the
+ * read refuses instead of serving a staged store.
+ */
+export type ExecutionSourceRead =
+  | { route: "execution"; read: ExecutionRead<ExecutionState | ExecutionPlanView> }
+  | { route: "files" };
+
+export async function readExecutionSource(
+  context: StoreContext,
+  selection: ExecutionReadSelection = {},
+): Promise<ExecutionSourceRead> {
+  const addressed = assertExecutionSelection(selection);
+  const route = await resolveExecutionReadRoute(context);
+  if (route === "files") return { route: "files" };
+  return { route: "execution", read: await readExecutionAuthority(context, addressed) };
 }
 
 /** One dashboard view (contract §6) as a request the read boundary can serve. */
