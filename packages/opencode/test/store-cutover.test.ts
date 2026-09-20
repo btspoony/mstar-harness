@@ -332,6 +332,48 @@ describe("opencode authority boundary — store/retired-register direct writes (
     expect(invalidStatus?.violations[0]!.code).toBe("status.workflow.invalid-type");
   });
 
+  test("a fresh authority write through a SYMLINKED PARENT is decided by the landed classification (S-G4b-03)", async () => {
+    // The final component is simply ABSENT: realpath fails and the target is
+    // not itself a link, but an ANCESTOR directory is a symlink INTO the
+    // harness tree — the filesystem lands the write at the protected
+    // destination, so the landed classification must canonicalize the nearest
+    // existing ancestor instead of trusting the textual path. The store is
+    // seeded AFTER the fresh store.db case below, so that target is genuinely
+    // absent when it runs.
+    const fixture = makeHarnessProject(); // no compass — soft by default
+    const outside = join(fixture.project, "outside");
+    mkdirSync(outside, { recursive: true });
+    symlinkSync(fixture.harness, join(outside, "link")); // directory symlink into the harness root
+
+    const store = await validateStatusWrite(join(outside, "link", "store.db"), { doc: "not a database" });
+    expect(store?.hardBlocked).toBe(true);
+    expect(store?.violations[0]!.code).toBe("store.direct-write-refused");
+
+    // A case-variant register name under the symlinked parent takes the same
+    // landed route (the folded shape walk runs on the canonicalized path); an
+    // ACTIVE store makes the landed route retire the register.
+    await seedActiveStore(fixture.harness);
+    const register = await validateStatusWrite(join(outside, "link", "projects", "_default", "RESIDUALS.json"), {
+      doc: validRegister,
+    });
+    expect(register?.hardBlocked).toBe(true);
+    expect(register?.violations[0]!.code).toBe("project.register.retired");
+
+    // The shape the textual probes CANNOT see: the link points INTO the
+    // harness at a non-root directory, so no harness marker is stat-reachable
+    // on the textual path — only the canonicalized landed path classifies.
+    // The linked project dir holds no register file, so the target is absent.
+    mkdirSync(join(fixture.harness, "projects", "other"), { recursive: true });
+    symlinkSync(join(fixture.harness, "projects", "other"), join(outside, "into-link"));
+    const into = await validateStatusWrite(join(outside, "into-link", "residuals.json"), { doc: validRegister });
+    expect(into?.hardBlocked).toBe(true);
+    expect(into?.violations[0]!.code).toBe("project.register.retired");
+
+    // A plain fresh file with NO symlinked ancestor stays ungated — the walk
+    // only canonicalizes when an ancestor actually exists.
+    expect(await validateStatusWrite(join(outside, "fresh.db"), { doc: "x" })).toBeNull();
+  });
+
   test("plugin wiring: a store.db write through tool.execute.before is refused, never silent", async () => {
     const fixture = makeHarnessProject();
     await seedActiveStore(fixture.harness);

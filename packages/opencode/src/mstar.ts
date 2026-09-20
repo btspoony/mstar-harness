@@ -645,9 +645,13 @@ function isHarnessRootDir(dir: string): boolean {
  * target is an alias — a symlink outside the harness tree resolving to a
  * harness-root `store.db` / retired `residuals.json` IS that authority file.
  * A dangling symlink resolves to its would-be target: the file a write
- * through the link creates. One canonicalization per checked target (the
- * document lint keeps the caller's path), mirrored in the omp entries and the
- * ZCode write gate. */
+ * through the link creates. A fresh (absent) target canonicalizes through its
+ * nearest EXISTING ancestor: an ancestor directory symlinked into a harness
+ * tree lands the write at the protected destination even though no marker is
+ * visible on the textual path, so the classification follows the filesystem
+ * there too. One canonicalization per checked target (the document lint keeps
+ * the caller's path), mirrored in the omp entries, the dsh authority gate and
+ * the ZCode write gate. */
 function landedPathOf(resolved: string): string {
   try {
     return fs.realpathSync(resolved);
@@ -655,7 +659,23 @@ function landedPathOf(resolved: string): string {
     try {
       return path.resolve(path.dirname(resolved), fs.readlinkSync(resolved));
     } catch {
-      return resolved; // no such target yet (a fresh file) — the path itself decides
+      // The target does not exist yet and is not itself a dangling link — but
+      // a missing FINAL component can still sit under a symlinked ANCESTOR,
+      // and the filesystem lands the write at the canonical destination
+      // through that alias. Canonicalize the nearest EXISTING ancestor and
+      // rejoin the missing suffix; only a path with no existing ancestor at
+      // all keeps the caller's path (a plain fresh file — the path itself
+      // decides).
+      let dir = path.dirname(resolved);
+      for (;;) {
+        try {
+          return path.join(fs.realpathSync(dir), path.relative(dir, resolved));
+        } catch {
+          const parent = path.dirname(dir);
+          if (parent === dir) return resolved;
+          dir = parent;
+        }
+      }
     }
   }
 }
