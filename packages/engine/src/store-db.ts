@@ -1065,17 +1065,32 @@ function readExecutionMeta(db: StoreDb, schemaVersion: number): ExecutionMeta | 
 // ---------------------------------------------------------------------------
 
 /**
- * How an authority probe ended. `unavailable` is the ENVIRONMENTAL case — the
- * store file could not be observed as a database right now (it cannot be
- * opened, an I/O error, or another writer holds it past the bounded wait). It
- * is deliberately distinct from a content verdict (`store.corrupt`,
- * `store.schema-*`, `store.runtime-unsupported`), which is thrown.
+ * How an authority probe ended. The two arms ARE the discrimination primary
+ * spec §2.1/§5 requires, so neither guard has to guess:
+ *
+ * - `state` — the path carries no store file to read (`state: null`, the
+ *   never-initialized case: no `store.db`, a `store.db` whose applied schema
+ *   predates the execution tables, or one that vanished between the existence
+ *   check and the open) or it carries one that was read successfully
+ *   (`state: "legacy" | "staged" | "active"`). The file route is a live route
+ *   for everything except a KNOWN `active` authority.
+ * - `unreadable` — a store file EXISTS at `dbPath` and could not be read as a
+ *   database: it cannot be opened, an I/O error, or another writer held it
+ *   past the bounded wait. This is never the legacy route: a store that exists
+ *   and cannot be read is refused, never answered from leftover JSON (§2.1/§5:
+ *   missing/busy/corrupt/schema-incompatible stores are refusals).
+ *
+ * Both arms are deliberately distinct from a CONTENT verdict (`store.corrupt`,
+ * `store.schema-*`, `store.runtime-unsupported`), which is thrown out of the
+ * probe: a store that is observable and broken can never be mistaken for a
+ * legacy one.
  */
 type ExecutionAuthorityProbe =
   | { kind: "state"; dbPath: string; state: ExecutionAuthorityState | null }
-  | { kind: "unavailable"; dbPath: string; error: unknown };
+  | { kind: "unreadable"; dbPath: string; error: unknown };
 
-/** Driver codes an unobservable store reports: SQLITE_CANTOPEN / SQLITE_IOERR. */
+/** Driver codes a store file that exists but cannot be read reports:
+ * SQLITE_CANTOPEN / SQLITE_IOERR. */
 function isOpenLevelFailure(error: unknown): boolean {
   const err = error as { errcode?: unknown; message?: string };
   if (err?.errcode === 14 || err?.errcode === 10) return true;
@@ -1134,19 +1149,27 @@ function probeConnectionFor(dbPath: string): StoreDb | null {
 /**
  * The execution authority state of the control harness that owns `context`'s
  * path, `{kind: "state", state: null}` when no store exists there, and
- * `{kind: "unavailable"}` when the store cannot be observed at all. It shares
- * the path (`storeDbPath`), runtime (`assertStoreRuntimeSupported`), schema
- * (`readAppliedMigrations` / `validateAppliedMigrations`) and metadata
+ * `{kind: "unreadable"}` when a store file exists there but cannot be read. It
+ * shares the path (`storeDbPath`), runtime (`assertStoreRuntimeSupported`),
+ * schema (`readAppliedMigrations` / `validateAppliedMigrations`) and metadata
  * (`readStoreMeta` / `readExecutionMeta`) checks with `openStore`, and opens
  * the SAME `node:sqlite` driver read-only through the synchronous loader.
  *
+ * The existence check below is the discrimination the guards act on, taken
+ * BEFORE anything else in this function: only a path with no store file can
+ * answer `state: null` without having read a store. A store file that EXISTS
+ * and fails to open (SQLITE_CANTOPEN / an I/O error) or that another writer
+ * holds past the bounded wait answers `unreadable` — never "no authority", so
+ * neither guard can fall back to the retired file route for a store that is
+ * there but unreadable. A path whose file vanishes between the existence check
+ * and the open is the never-initialized case again (there is nothing to read).
+ *
  * A store that exists and is OBSERVABLE but broken throws out of here
  * (`store.corrupt` / `store.schema-*` / `store.runtime-unsupported`), so no
- * caller can mistake a broken store for `legacy`. Only a MISSING `store.db`
- * answers `state: null`: per primary spec §2.1 an unbound legacy entry cannot
- * prove historical activation after the whole database is removed, so absence
- * is not an authority verdict (the durable installed binding that closes this
- * is an explicit 2b obligation).
+ * caller can mistake a broken store for `legacy`. Per primary spec §2.1 an
+ * unbound legacy entry cannot prove historical activation after the whole
+ * database is removed, so absence is not an authority verdict either (the
+ * durable installed binding that closes this is an explicit 2b obligation).
  */
 function probeExecutionAuthority(context: StoreContext): ExecutionAuthorityProbe {
   const dbPath = storeDbPath(context);
@@ -1160,7 +1183,7 @@ function probeExecutionAuthority(context: StoreContext): ExecutionAuthorityProbe
     db = probeConnectionFor(dbPath);
   } catch (error) {
     dropProbeConnection();
-    if (isOpenLevelFailure(error) || isBusyError(error)) return { kind: "unavailable", dbPath, error };
+    if (isOpenLevelFailure(error) || isBusyError(error)) return { kind: "unreadable", dbPath, error };
     return refuseOpenFailure(error, dbPath);
   }
   if (db === null) return { kind: "state", dbPath, state: null };
@@ -1171,7 +1194,7 @@ function probeExecutionAuthority(context: StoreContext): ExecutionAuthorityProbe
   } catch (error) {
     // A failed read leaves the connection's state unknown: never reuse it.
     dropProbeConnection();
-    if (isOpenLevelFailure(error) || isBusyError(error)) return { kind: "unavailable", dbPath, error };
+    if (isOpenLevelFailure(error) || isBusyError(error)) return { kind: "unreadable", dbPath, error };
     return refuseOpenFailure(error, dbPath);
   }
 }
@@ -1187,13 +1210,14 @@ function probeExecutionAuthority(context: StoreContext): ExecutionAuthorityProbe
  * writers, so the probe above must never become an unawaited async guard, and
  * the authority verdict precedes payload validation at every call site.
  *
- * An UNOBSERVABLE store is a refusal here (primary spec §5: no protected
- * mutation while the authority cannot be established) — never a fall back to
- * the retired file route.
+ * A store file that EXISTS and cannot be read is a refusal here too (primary
+ * spec §5: no protected mutation while the authority cannot be established) —
+ * never a fall back to the retired file route. Only a path with no store file
+ * at all keeps the legacy route (there is no authority to establish).
  */
 export function assertExecutionFileWriteAllowed(context: StoreContext): void {
   const probe = probeExecutionAuthority(context);
-  if (probe.kind === "unavailable") refuseOpenFailure(probe.error, probe.dbPath);
+  if (probe.kind === "unreadable") refuseOpenFailure(probe.error, probe.dbPath);
   if (probe.state !== "active") return;
   throw new StoreError(
     "execution.direct-write-refused",
@@ -1213,23 +1237,28 @@ export function assertExecutionFileWriteAllowed(context: StoreContext): void {
  * Synchronous by contract (primary spec §4.3): legacy authority readers are
  * synchronous, and they share the write guard's lazy probe.
  *
- * Disposition when the authority cannot be established for an ENVIRONMENTAL
- * reason (the store file cannot be opened right now, an I/O error, or another
- * writer holds it past the bounded wait): the read proceeds, i.e. the legacy
- * read route behaves exactly as it did before this guard existed. The veto is
- * defined for a KNOWN active authority, and a store that momentarily cannot be
- * observed is not an authority verdict — refusing there would break the legacy
- * file route on a driver-level condition (the landed
- * `packages/engine/test/coordination.test.ts` fixture documents exactly that:
- * a child process's first read-only open of a store the runner last wrote
- * intermittently fails `SQLITE_CANTOPEN`, and it works around the artifact by
- * pre-reading in the parent). A store that IS observable but broken still
- * throws out of the probe and refuses here; mutations keep the strict
- * disposition above.
+ * Disposition, in the two cases the probe distinguishes (§2.1/§5):
+ *
+ * - a store file EXISTS at the probed path and cannot be read (`unreadable`:
+ *   SQLITE_CANTOPEN / an I/O error / another writer past the bounded wait) →
+ *   REFUSED with the store's own reader refusal (`store.corrupt` / `store.busy`,
+ *   the same mapping `openStore(…, "read")` produces). Serving leftover JSON
+ *   there would be exactly the forbidden fallback: bytes that cannot be
+ *   checked against the authority are not an authority answer.
+ * - no store file exists at the probed path (`state: null`, the
+ *   never-initialized legacy/staged case) → the read proceeds, i.e. the legacy
+ *   read route keeps its pre-guard behaviour. There is no store to read, so
+ *   there is no authority verdict to make (§2.1: absence is not an authority
+ *   verdict; closing that with the durable installed binding is the explicit 2b
+ *   obligation).
+ *
+ * A store that is observable but broken (corrupt content, drifted/unknown
+ * schema, unsupported runtime) throws out of the probe and refuses through
+ * this guard as well.
  */
 export function assertExecutionFileReadAllowed(context: StoreContext): void {
   const probe = probeExecutionAuthority(context);
-  if (probe.kind === "unavailable") return;
+  if (probe.kind === "unreadable") refuseOpenFailure(probe.error, probe.dbPath);
   if (probe.state !== "active") return;
   throw new StoreError(
     "execution.consumer-not-ready",

@@ -117,6 +117,7 @@ import { rowPlanIds, validatePlanRow, validateStatusV2, type PlanRow, type Statu
 import { getArtifactStore, resolveArtifactPath, type ArtifactRef, type ArtifactStore } from "./store.js";
 import {
   StoreError,
+  assertExecutionFileReadAllowed,
   assertExecutionFileWriteAllowed,
   openStore,
   type StoreContext,
@@ -1001,6 +1002,29 @@ export function readSessionEnvelope(sessionPath: string): CoordinationSession {
   return session;
 }
 
+/** An entry boundary's own authority anchor: the session envelope the call is
+ * about to use, plus the control harness root it names. */
+type EntryAnchor = { session: CoordinationSession; harnessRoot: string };
+
+/**
+ * Resolve the ONE thing an entry-boundary authority veto needs before it can
+ * decide anything: the session envelope that names the control harness this
+ * call belongs to (`store-db`'s `storeDbPath` resolves the process/control
+ * root from the harness root recorded here).
+ *
+ * This is the ENTIRE entry boundary (spec §4.3/§5) for the coordinated
+ * entries that take a `sessionPath`: the envelope carries no authority of its
+ * own and no request payload, version token, operation shape or scope is
+ * inspected here, so nothing in the call body can pre-empt the refusal with a
+ * payload error. A `sessionPath` that cannot address an envelope refuses with
+ * the envelope reader's own `coordination.invalid-input` — there is then no
+ * control harness to discriminate against.
+ */
+function entryAnchor(sessionPath: unknown): EntryAnchor {
+  const session = readSessionEnvelope(sessionPath as string);
+  return { session, harnessRoot: canonicalizeNearestExisting(session.harness_root) };
+}
+
 function createSessionEnvelope(session: CoordinationSession): string {
   // Canonical authority discrimination precedes the file creation below
   // (spec §4.3): with an ACTIVE execution authority the session-envelope file
@@ -1293,13 +1317,21 @@ function buildView(
  * Read this session's plan coordination view (spec §B). A coordinator session
  * must select a plan; a plan session reads only its own row. A row that is not
  * yet prepared yields `scope: null` and the raw row.
+ *
+ * Read veto at the entry boundary (spec §4.3/§5): the envelope is read only to
+ * learn which control harness this call addresses, and the authority verdict
+ * precedes the `planId`/scope checks and the snapshot read below, so this
+ * authoritative surface refuses on its own rather than inheriting a refusal
+ * from a later reader.
  */
 export async function readPlanCoordination(
   sessionPath: string,
   planId?: string,
   cwd: string = process.cwd(),
 ): Promise<PlanCoordinationView> {
-  const session = readSessionEnvelope(sessionPath);
+  const anchor = entryAnchor(sessionPath);
+  assertExecutionFileReadAllowed({ harnessDir: anchor.harnessRoot });
+  const session = anchor.session;
   if (planId !== undefined && !isNonEmptyString(planId)) throw invalidInput("planId must be a non-empty string");
   let targetPlanId: string;
   if (session.role === "coordinator") {
@@ -1324,7 +1356,7 @@ export async function readPlanCoordination(
     targetPlanId = own;
   }
 
-  const harnessRoot = canonicalizeNearestExisting(session.harness_root);
+  const harnessRoot = anchor.harnessRoot;
   const processRoot = resolveProcessHarnessDir(cwd);
   if (processRoot !== null && canonicalTarget(processRoot) !== harnessRoot) {
     throw new CoordinationError(
@@ -1379,11 +1411,20 @@ export async function readPlanCoordination(
  * Read one coordinated artifact plus its byte version, from a **single** byte
  * read. `payload` is `undefined` and `version` is `"absent"` when the document
  * does not exist. Snapshot payloads are validated before they are handed out.
+ *
+ * Read veto at the entry boundary (spec §4.3/§5): `harnessRoot` is this entry's
+ * own anchor, so the verdict precedes the `ref` shape check and the byte read —
+ * a direct consumer of this authoritative surface cannot observe retired
+ * root/snapshot bytes while the execution authority is ACTIVE, and an
+ * unreadable store refuses here instead of serving them.
  */
 export async function readCoordinatedArtifact(
   harnessRoot: string,
   ref: ArtifactRef,
 ): Promise<VersionedArtifact> {
+  if (typeof harnessRoot === "string" && isAbsolute(harnessRoot)) {
+    assertExecutionFileReadAllowed({ harnessDir: harnessRoot });
+  }
   if (!isPlainObject(ref) || !isNonEmptyString(ref.kind) || !isNonEmptyString(ref.key)) {
     throw invalidInput("ref must be an ArtifactRef with kind and key");
   }
@@ -2588,12 +2629,22 @@ async function mutateResidualClose(
  * revision/register precondition under the lock, and writes through
  * `withProtectedWrite`. The operation surface is a closed discriminated union:
  * an unknown key anywhere is rejected before any state is touched.
+ *
+ * Canonical authority discrimination IS the entry boundary (spec §4.3/§5):
+ * `entryAnchor` reads the request's own session envelope — the anchor that
+ * names the control harness, and the only thing resolved before the verdict —
+ * and the veto is decided before the request shape, the revision, the
+ * operation kind, the payload and the scope, so a malformed or unknown
+ * operation can never mask the authority refusal on a retired route.
+ * Consequence, accepted: a request that is BOTH malformed and
+ * active-forbidden now reports the authority refusal instead of the payload
+ * error.
  */
 export async function mutatePlanCoordination(request: CoordinationRequest): Promise<CoordinationResult> {
+  const anchor = entryAnchor(request?.sessionPath);
+  assertExecutionFileWriteAllowed({ harnessDir: anchor.harnessRoot });
+  const session = anchor.session;
   assertExactKeys(request, ["sessionPath", "planId", "expectedRevision", "operation"], "coordination request");
-  if (!isNonEmptyString(request.sessionPath) || !isAbsolute(request.sessionPath)) {
-    throw invalidInput("a coordination request requires an absolute sessionPath");
-  }
   if (request.planId !== undefined && !isNonEmptyString(request.planId)) {
     throw invalidInput("planId must be a non-empty string");
   }
@@ -2612,14 +2663,6 @@ export async function mutatePlanCoordination(request: CoordinationRequest): Prom
       operation: kind,
     });
   }
-  const session = readSessionEnvelope(request.sessionPath);
-  // Canonical authority discrimination precedes the operation payload checks
-  // below (spec §4.3): the legacy coordination route is retired as a writer
-  // while the execution authority is ACTIVE, so an unknown/malformed operation
-  // can never mask the authority refusal. The envelope itself is read first
-  // only to learn which control harness the request belongs to — the reference
-  // carries no authority.
-  assertExecutionFileWriteAllowed({ harnessDir: session.harness_root });
   const seat: CoordinationSeat = { role: session.role, sessionId: session.session_id, planId: session.plan_id ?? null };
   assertOperationRole(seat, kind);
   assertPlanAddress(seat, request.planId);
@@ -4495,8 +4538,18 @@ async function mutateReconcile(
  * root → snapshot → destination locks, refusing any document that carries
  * coordinated ownership. `review`/`json` are not coordinated artifacts, so
  * they refuse explicitly instead of silently no-opping.
+ *
+ * Canonical authority discrimination IS the entry boundary (spec §4.3):
+ * `input.harnessRoot` is this entry's own anchor — the harness the replacement
+ * targets — so the veto precedes the request shape, the ref, the CAS token,
+ * the ownership checks and any lock. An anchor that is not an absolute path
+ * names no control harness at all, so the request-shape validation below stays
+ * that caller's refusal.
  */
 export async function replaceCoordinatedArtifact(input: CoordinatedReplacement): Promise<VersionedArtifact> {
+  if (typeof input?.harnessRoot === "string" && isAbsolute(input.harnessRoot)) {
+    assertExecutionFileWriteAllowed({ harnessDir: input.harnessRoot });
+  }
   assertExactKeys(
     input,
     ["harnessRoot", "ref", "payload", "expectedVersion", "sessionPath"],
@@ -4505,11 +4558,6 @@ export async function replaceCoordinatedArtifact(input: CoordinatedReplacement):
   if (!isNonEmptyString(input.harnessRoot) || !isAbsolute(input.harnessRoot)) {
     throw invalidInput("harnessRoot must be an absolute path");
   }
-  // Canonical authority discrimination precedes the payload checks below
-  // (spec §4.3): while the execution authority is ACTIVE the root register and
-  // the snapshot are retired as persistence routes, so the replacement refuses
-  // before the ref/CAS/ownership checks and before any lock is taken.
-  assertExecutionFileWriteAllowed({ harnessDir: input.harnessRoot });
   if (!isPlainObject(input.ref) || !isNonEmptyString(input.ref.kind) || !isNonEmptyString(input.ref.key)) {
     throw invalidInput("ref must be an ArtifactRef with kind and key");
   }
@@ -4901,8 +4949,10 @@ type PrepareWorkflowScope = {
  * checkout's own artifacts can never be read as the control root. Every
  * refusal here is an existing auth/scope error, never a new one.
  */
-function prepareWorkflowScope(sessionPath: string, cwd: string): PrepareWorkflowScope {
-  const session = readSessionEnvelope(sessionPath);
+function prepareWorkflowScope(sessionPath: string, cwd: string, anchorSession?: CoordinationSession): PrepareWorkflowScope {
+  // The Prepare entries pass the session the entry boundary already read for
+  // the authority veto, so the anchor document is read once per call.
+  const session = anchorSession ?? readSessionEnvelope(sessionPath);
   if (session.role !== "coordinator") {
     throw new CoordinationError(
       "coordination.session-role",
@@ -5806,13 +5856,20 @@ function prepareVersionDigest(token: string): string {
  * missing/foreign/mismatched envelope, an unregistered or unreadable snapshot,
  * an unreadable or borrowed compass — still refuse with their own code, because
  * no trustworthy answer can be produced from them.
+ *
+ * Read veto at the entry boundary (spec §4.3/§5): the envelope anchor is the
+ * only thing resolved before the verdict, so the refusal precedes the request
+ * shape, the scope resolution and the snapshot read, and this authoritative
+ * scope read does not merely inherit it from a later reader.
  */
 export async function showPrepareWorkflow(
   input: Readonly<{ sessionPath: string; cwd?: string }>,
 ): Promise<PrepareWorkflowResult> {
+  const anchor = entryAnchor(input?.sessionPath);
+  assertExecutionFileReadAllowed({ harnessDir: anchor.harnessRoot });
   assertExactKeys(input as unknown as Record<string, unknown>, ["sessionPath", "cwd"], "prepare workflow read");
   const cwd = input.cwd ?? process.cwd();
-  const scope = prepareWorkflowScope(input.sessionPath, cwd);
+  const scope = prepareWorkflowScope(input.sessionPath, cwd, anchor.session);
   const { snapshot, version } = readPrepareSnapshot(scope.snapshotPath);
   assertCoordinatorBinding(scope.session, scope.sessionPath, snapshot);
   const compass = readPrepareCompass(scope.harnessRoot, snapshot);
@@ -5845,6 +5902,12 @@ export async function showPrepareWorkflow(
  * A lock that cannot be acquired refuses explicitly (the shared
  * `withStatusWriteLock` Blocked error); Git-unavailable probes refuse through
  * the existing `coordination.git-unavailable`.
+ *
+ * Canonical authority discrimination IS the entry boundary (spec §4.3/§5): the
+ * envelope anchor is the only thing resolved before the verdict, so the
+ * amendment refuses before the request shape, the version tokens, the scope
+ * resolution and the lock. Consequence, accepted: a call that is BOTH
+ * malformed and active-forbidden now reports the authority refusal.
  */
 export async function amendPrepareWorkflow(
   input: Readonly<{
@@ -5855,6 +5918,8 @@ export async function amendPrepareWorkflow(
     patch: PrepareWorkflowPatch;
   }>,
 ): Promise<PrepareWorkflowResult> {
+  const anchor = entryAnchor(input?.sessionPath);
+  assertExecutionFileWriteAllowed({ harnessDir: anchor.harnessRoot });
   assertExactKeys(
     input as unknown as Record<string, unknown>,
     ["sessionPath", "cwd", "expectedSnapshotVersion", "expectedCompassVersion", "patch"],
@@ -5863,11 +5928,7 @@ export async function amendPrepareWorkflow(
   const cwd = input.cwd ?? process.cwd();
   const expectedSnapshotVersion = prepareVersionToken(input.expectedSnapshotVersion, "expectedSnapshotVersion");
   const expectedCompassVersion = prepareVersionToken(input.expectedCompassVersion, "expectedCompassVersion");
-  const scope = prepareWorkflowScope(input.sessionPath, cwd);
-  // Canonical authority discrimination precedes the lock and the version
-  // checks inside it (spec §4.3): the amendment writes the snapshot, which is
-  // retired as a persistence route while the execution authority is ACTIVE.
-  assertExecutionFileWriteAllowed({ harnessDir: scope.harnessRoot });
+  const scope = prepareWorkflowScope(input.sessionPath, cwd, anchor.session);
   const committed = await withStatusWriteLock(scope.snapshotPath, async () => {
     const { snapshot, version } = readPrepareSnapshot(scope.snapshotPath);
     assertCoordinatorBinding(scope.session, scope.sessionPath, snapshot);

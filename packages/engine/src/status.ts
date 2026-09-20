@@ -909,12 +909,17 @@ export async function registerWorkflow(root: string, entry: WorkflowEntry): Prom
  * below never mask a store/path mismatch.
  */
 export async function unregisterWorkflow(root: string, id: string): Promise<StatusV2Doc> {
+  const statusPath = resolve(root);
+  // Canonical authority discrimination IS the entry boundary (spec §4.3): the
+  // caller's root resolves the control harness, so the veto is decided before
+  // the `id` payload check below — an invalid id can no longer mask a retired
+  // route. Consequence, accepted: a call that is both malformed and
+  // active-forbidden now reports the authority refusal.
+  assertExecutionFileWriteAllowed({ harnessDir: dirname(statusPath) });
   if (typeof id !== "string" || id.trim() === "") {
     throw new Error("refusing to unregister workflow: id must be a non-empty string");
   }
-  const statusPath = resolve(root);
   const harnessDir = dirname(statusPath);
-  assertExecutionFileWriteAllowed({ harnessDir });
   const store = getArtifactStore();
  // Fail-loud path agreement : the lockdir serializes
  // `statusPath`; the store put must land on that same file. A divergence

@@ -33,6 +33,15 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { readArtifactBytes, withProtectedWrite } from "./coordination-write.js";
+import {
+  amendPrepareWorkflow,
+  mutatePlanCoordination,
+  readCoordinatedArtifact,
+  readPlanCoordination,
+  replaceCoordinatedArtifact,
+  sessionFilePath,
+  showPrepareWorkflow,
+} from "./coordination.js";
 import { initializeExecutionAuthority, readExecutionState } from "./execution-store.js";
 import { scanActiveLifecycleBranches } from "./lifecycle-branches.js";
 import { createFsStore, setArtifactStore, type ArtifactDoc, type ArtifactRef, type ArtifactStore } from "./store.js";
@@ -131,6 +140,33 @@ function plantLeftovers(fx: Fixture, workflowId: string): { statusPath: string; 
   return { statusPath, snapshotPath, json };
 }
 
+/**
+ * The session envelope a retired (pre-activation) file route left behind. It is
+ * planted with raw fs writes for the same reason the leftover root/snapshot
+ * are: the coordinated entries read it ONLY as the anchor that names the
+ * control harness, and the file route that would have created it is what these
+ * cases prove unusable.
+ */
+function plantSessionEnvelope(fx: Fixture): string {
+  const sessionPath = sessionFilePath(fx.harnessDir, PLANTED_ID, "coordinator", "leftover-session");
+  mkdirSync(dirname(sessionPath), { recursive: true });
+  writeFileSync(
+    sessionPath,
+    `${JSON.stringify(
+      {
+        schema_version: 1,
+        role: "coordinator",
+        session_id: "leftover-session",
+        workflow_id: PLANTED_ID,
+        harness_root: fx.harnessDir,
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  return sessionPath;
+}
+
 /** Injected store that records every durable write (nothing reaches a file). */
 function recordingStore(): ArtifactStore & { puts: ArtifactDoc[] } {
   const puts: ArtifactDoc[] = [];
@@ -158,6 +194,18 @@ async function refusalOf(work: () => Promise<unknown>): Promise<{ code?: string;
   } catch (error) {
     return error as { code?: string; message?: string };
   }
+}
+
+/** The stable refusal code of a SYNCHRONOUS legacy reader (which the callers
+ * under test do not wrap in a promise), `""` when the error carries none. */
+function refusalCodeOf(work: () => unknown): string {
+  try {
+    work();
+  } catch (error) {
+    if (error instanceof Error && "code" in error && typeof error.code === "string") return error.code;
+    return "";
+  }
+  throw new Error("expected a refusal");
 }
 
 afterEach(() => {
@@ -334,6 +382,152 @@ describe("execution-protected-route — an ACTIVE execution authority retires th
       expect(state.data.root.version).toBe(2);
       expect(state.data.workflows).toEqual([]);
       expect(String(state.token)).toMatch(/^exec-v1:root:/);
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  test("refuses a direct store read of the retired root and snapshot, including a json alias", async () => {
+    const fx = workspace("exec-routing-get-");
+    try {
+      await activeExecution(fx);
+      const leftovers = plantLeftovers(fx, PLANTED_ID);
+      const store = createFsStore(fx.harnessDir);
+      const statusBefore = readFileSync(leftovers.statusPath);
+      const snapshotBefore = readFileSync(leftovers.snapshotPath);
+
+      const refs: ArtifactRef[] = [
+        { kind: "status", key: "root" },
+        { kind: "snapshot", key: PLANTED_ID },
+        // A `json` alias resolves to the same canonical target: the same channel.
+        { kind: "json", key: leftovers.statusPath },
+        { kind: "json", key: leftovers.snapshotPath },
+      ];
+      for (const ref of refs) {
+        expect(await refusalOf(() => store.get(ref))).toMatchObject({ code: "execution.consumer-not-ready" });
+      }
+      // The seam refuses to SERVE the bytes; it never removes or rewrites them.
+      expect(readFileSync(leftovers.statusPath)).toEqual(statusBefore);
+      expect(readFileSync(leftovers.snapshotPath)).toEqual(snapshotBefore);
+
+      // The same refusals do not reach a legacy/staged harness: there the seam
+      // keeps reading exactly what it read before.
+      const legacy = workspace("exec-routing-get-legacy-");
+      try {
+        await withStore(legacy);
+        plantLeftovers(legacy, PLANTED_ID);
+        const legacyStore = createFsStore(legacy.harnessDir);
+        expect(await legacyStore.get({ kind: "status", key: "root" })).toMatchObject({ version: 2 });
+        expect(await legacyStore.get({ kind: "snapshot", key: PLANTED_ID })).toMatchObject({ id: PLANTED_ID });
+        expect(await legacyStore.get({ kind: "review", key: "not-written" })).toBeUndefined();
+      } finally {
+        rmSync(legacy.root, { recursive: true, force: true });
+      }
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("execution-entry-boundary — the veto is decided before any payload validation", () => {
+  test("every coordinated entry refuses on authority before its request, revision, id, ref, CAS-token or version-token checks", async () => {
+    const fx = workspace("exec-routing-entry-");
+    try {
+      await activeExecution(fx);
+      const leftovers = plantLeftovers(fx, PLANTED_ID);
+      const sessionPath = plantSessionEnvelope(fx);
+      const statusPath = join(fx.harnessDir, "status.json");
+      const statusBefore = readFileSync(statusPath);
+      const snapshotBefore = readFileSync(leftovers.snapshotPath);
+
+      // mutatePlanCoordination: an unknown operation, an invalid revision and
+      // an unexpected request key all sit BEHIND the veto.
+      const requests = [
+        { sessionPath, planId: PLANTED_ID, expectedRevision: 1, operation: { kind: "no-such-operation" } },
+        { sessionPath, planId: PLANTED_ID, expectedRevision: -1, operation: { kind: "progress", progress: {} } },
+        {
+          sessionPath,
+          planId: PLANTED_ID,
+          expectedRevision: 1,
+          operation: { kind: "progress", progress: {} },
+          unexpected: true,
+        },
+      ];
+      for (const request of requests) {
+        expect(await refusalOf(() => mutatePlanCoordination(request as never))).toMatchObject({
+          code: "execution.direct-write-refused",
+        });
+      }
+
+      // unregisterWorkflow: the `id` payload check is behind the veto.
+      expect(await refusalOf(() => unregisterWorkflow(statusPath, ""))).toMatchObject({
+        code: "execution.direct-write-refused",
+      });
+
+      // replaceCoordinatedArtifact: the ref shape and the CAS token are behind it.
+      expect(
+        await refusalOf(() =>
+          replaceCoordinatedArtifact({
+            harnessRoot: fx.harnessDir,
+            ref: { kind: "json", key: "" },
+            payload: null,
+            expectedVersion: "not-a-version",
+            sessionPath,
+          }),
+        ),
+      ).toMatchObject({ code: "execution.direct-write-refused" });
+
+      // amendPrepareWorkflow: both byte-version tokens are behind it.
+      expect(
+        await refusalOf(() =>
+          amendPrepareWorkflow({
+            sessionPath,
+            expectedSnapshotVersion: "bogus",
+            expectedCompassVersion: "bogus",
+            patch: {} as never,
+          }),
+        ),
+      ).toMatchObject({ code: "execution.direct-write-refused" });
+
+      // The PM-adjudicated authoritative read wrappers carry the SAME verdict at
+      // their OWN entry boundary, ahead of their scope work.
+      const reads = [
+        () => showPrepareWorkflow({ sessionPath, unexpected: 1 } as never),
+        () => readPlanCoordination(sessionPath, 42 as never),
+        () => readCoordinatedArtifact(fx.harnessDir, { kind: "json", key: "" }),
+      ];
+      for (const read of reads) {
+        expect(await refusalOf(read)).toMatchObject({ code: "execution.consumer-not-ready" });
+      }
+
+      expect(readFileSync(statusPath)).toEqual(statusBefore);
+      expect(readFileSync(leftovers.snapshotPath)).toEqual(snapshotBefore);
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  test("the lifecycle scan refuses an active harness at entry, before the register it enumerates is read", async () => {
+    const fx = workspace("exec-routing-scan-entry-");
+    try {
+      await activeExecution(fx);
+      // A register the pre-fix scan answers `ok` for: its ONLY entry is the
+      // governing workflow, so no sibling snapshot read happens. The veto is
+      // therefore decided at the scan's own boundary, not inherited later.
+      mkdirSync(join(fx.harnessDir, "workflows", WORKFLOW_ID), { recursive: true });
+      writeFileSync(
+        join(fx.harnessDir, "status.json"),
+        `${JSON.stringify({
+          version: 2,
+          updated_at: "2026-09-01",
+          workflows: [{ id: WORKFLOW_ID, type: "plan", status: "running" }],
+        })}\n`,
+      );
+
+      const scan = scanActiveLifecycleBranches(fx.harnessDir, WORKFLOW_ID);
+      expect(scan.kind).toBe("refusal");
+      expect(scan.kind === "refusal" ? scan.code : "").toBe("worktree.l1.lifecycle-snapshot-unreadable");
+      expect(scan.kind === "refusal" ? scan.detail : "").toContain("execution.consumer-not-ready");
     } finally {
       rmSync(fx.root, { recursive: true, force: true });
     }
@@ -582,34 +776,91 @@ describe("execution-unavailable — an unusable store refuses instead of falling
     }
   });
 
-  test("an unobservable store keeps the legacy read route while the write route stays fail-closed", async () => {
-    const fx = workspace("exec-routing-unobservable-");
+  test("a never-initialized harness keeps the legacy route: no store file means no authority verdict", async () => {
+    const fx = workspace("exec-routing-never-initialized-");
+    try {
+      const leftovers = plantLeftovers(fx, PLANTED_ID);
+      const store = createFsStore(fx.harnessDir);
+      expect(existsSync(join(fx.harnessDir, "store.db"))).toBe(false);
+
+      // Nothing to read means nothing to refuse: the file route is the only
+      // route, exactly as it was before the guards existed (§2.1: absence is
+      // not an authority verdict).
+      expect(readWorkflowSnapshot(dirname(leftovers.snapshotPath)).snapshot.id).toBe(PLANTED_ID);
+      await withProtectedWrite(leftovers.statusPath, "put", () =>
+        store.put({ kind: "status", key: "root", payload: { version: 2, updated_at: "2000-01-01", workflows: [] } }),
+      );
+      const written = JSON.parse(readFileSync(leftovers.statusPath, "utf8")) as { updated_at: string };
+      expect(written.updated_at).toBe("2000-01-01");
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  test("a store that exists but cannot be read refuses the READ route too, never serving leftover JSON", async () => {
+    const fx = workspace("exec-routing-unreadable-read-");
     try {
       await activeExecution(fx);
       const leftovers = plantLeftovers(fx, PLANTED_ID);
-      const before = readFileSync(leftovers.statusPath);
-      // The store path cannot be observed as a database at all — the driver
-      // class (SQLITE_CANTOPEN) the landed `test/coordination.test.ts` fixture
-      // documents for a child process's first read-only open, where the legacy
-      // file route is the pre-W5 behaviour and must keep working.
+      const statusBefore = readFileSync(leftovers.statusPath);
+      // A path that exists but is not a readable database — the driver class
+      // (SQLITE_CANTOPEN) an unopenable store reports. It is an EXISTING store,
+      // so it is refused; only a missing one keeps the legacy path.
       for (const suffix of ["", "-wal", "-shm"]) {
         rmSync(join(fx.harnessDir, `store.db${suffix}`), { recursive: true, force: true });
       }
       mkdirSync(join(fx.harnessDir, "store.db"));
       const store = createFsStore(fx.harnessDir);
 
-      const refusal = await refusalOf(() =>
-        withProtectedWrite(leftovers.statusPath, "put", () =>
-          store.put({ kind: "status", key: "root", payload: { version: 2, updated_at: "2000-01-01", workflows: [] } }),
-        ),
-      );
-      expect(refusal.code).toBe("store.corrupt");
-      expect(readFileSync(leftovers.statusPath)).toEqual(before);
+      expect(refusalCodeOf(() => readWorkflowSnapshot(dirname(leftovers.snapshotPath)))).toBe("store.corrupt");
 
-      // The legacy read route is byte-for-byte the pre-guard behaviour.
-      expect(readWorkflowSnapshot(dirname(leftovers.snapshotPath)).snapshot.id).toBe(PLANTED_ID);
+      // The same verdict on the public store seam and on the write route.
+      expect(await refusalOf(() => store.get({ kind: "status", key: "root" }))).toMatchObject({ code: "store.corrupt" });
+      expect(
+        await refusalOf(() =>
+          withProtectedWrite(leftovers.statusPath, "put", () =>
+            store.put({ kind: "status", key: "root", payload: { version: 2, updated_at: "2000-01-01", workflows: [] } }),
+          ),
+        ),
+      ).toMatchObject({ code: "store.corrupt" });
+      expect(readFileSync(leftovers.statusPath)).toEqual(statusBefore);
     } finally {
       rmSync(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  test("a store held past the bounded wait refuses the read route instead of serving leftover JSON", async () => {
+    const fx = workspace("exec-routing-busy-read-");
+    const held = workspace("exec-routing-busy-read-holder-");
+    let holder: DatabaseSync | undefined;
+    try {
+      await activeExecution(fx);
+      // The same construction the busy WRITE case uses: the copy is how this
+      // suite obtains store bytes this process has not already mapped, so a
+      // competing writer can genuinely hold the file.
+      await backupStore(fx.context, { out: join(held.harnessDir, "store.db") });
+      const leftovers = plantLeftovers(held, PLANTED_ID);
+      const snapshotBefore = readFileSync(leftovers.snapshotPath);
+
+      holder = new DatabaseSync(join(held.harnessDir, "store.db"));
+      holder.exec("pragma busy_timeout=0");
+      holder.exec("pragma journal_mode=delete");
+      holder.exec("begin exclusive");
+      holder.prepare("select count(*) as n from store_meta").get();
+      process.env.MSTAR_STORE_TEST_RUNNER = "1";
+      process.env.MSTAR_STORE_BUSY_TIMEOUT_MS = "50";
+
+      expect(refusalCodeOf(() => readWorkflowSnapshot(dirname(leftovers.snapshotPath)))).toBe("store.busy");
+      expect(readFileSync(leftovers.snapshotPath)).toEqual(snapshotBefore);
+    } finally {
+      try {
+        holder?.exec("rollback");
+      } catch {
+        // the exclusive section may already be gone
+      }
+      holder?.close();
+      rmSync(fx.root, { recursive: true, force: true });
+      rmSync(held.root, { recursive: true, force: true });
     }
   });
 });

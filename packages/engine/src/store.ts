@@ -17,7 +17,7 @@ import {
   resolveProjectDir,
   resolveWorkflowDir,
 } from "./path.js";
-import { assertExecutionFileWriteAllowed } from "./store-db.js";
+import { assertExecutionFileReadAllowed, assertExecutionFileWriteAllowed } from "./store-db.js";
 
 /** JSON coordination-doc kinds the store persists. The former `residuals`
  * kind is retired (issue-governance cutover G2a): the issue store (`store.db`)
@@ -236,6 +236,15 @@ export function createFsStore(harnessRoot: string): ArtifactStore & { root: stri
       // holds no register authority, so legacy register bytes never reach a
       // consumer that bypasses the findings gate.
       assertNotRetiredRegisterTarget(root, ref, filePath);
+      // Canonical authority discrimination precedes the read itself (spec
+      // §4.3/§5) and is the SAME canonical protected-kind classification the
+      // writer path uses: while the execution authority is ACTIVE this seam is
+      // not a way to observe root/snapshot JSON (a `json` alias included) that
+      // the canonical readers refuse, and a store that exists but cannot be
+      // read refuses here too instead of falling through to the bytes.
+      if (protectedKindOf(root, ref, filePath) !== null) {
+        assertExecutionFileReadAllowed({ harnessDir: root });
+      }
       if (!existsSync(filePath)) return undefined;
       return readJson(filePath) as unknown as T;
     },
