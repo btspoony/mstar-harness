@@ -24,7 +24,12 @@
  *   pre-restore recovery point, checkpoints the live WAL, then installs a
  *   verified SIBLING image whose epoch is already above both the live store and
  *   the point — so the atomic rename is the single cutover and no window exists
- *   in which the restored bytes carry a still-valid generation.
+ *   in which the restored bytes carry a still-valid generation. It decides that
+ *   the store is still quiesced in ONE non-yielding sequence immediately before
+ *   that rename: the awaited live-byte verification runs first, and the store's
+ *   own identity and sidecars are the last synchronous state the replacement is
+ *   decided on, so a writer cannot commit its WAL into a window that nothing
+ *   rechecks.
  * - `exportExecutionState` is a diagnostic, not an authority: canonical data
  *   with the store/execution identity, the recorded migrations and their source
  *   status, and workflow/plan/lease/frozen-input state — with every session
@@ -1461,9 +1466,19 @@ async function runRestore(context: StoreContext, root: string, input: ResolvedRe
     writeJson(receiptPath, record);
     recoveryFailureHook("before-replacement");
 
-    // The last synchronous gate: no `await` separates these checks from the
-    // rename, so nothing in this process can interleave with them, and only
-    // files whose recorded (dev, ino) still match are ever removed.
+    // The live BYTES are re-verified FIRST, because this read is the one step
+    // of the verdict that awaits. Any writer that commits during that yield
+    // writes into the store's WAL sidecar — frames the checkpoint hash does not
+    // cover — so the awaited read has to finish BEFORE the verdict that refuses
+    // such a sidecar, never between it and the rename.
+    if ((await sha256OfFile(livePath)) !== liveSha256) {
+      throw lossUnaccepted(`the live store bytes changed after the pre-restore recovery point was taken; nothing was replaced.`);
+    }
+
+    // The last gate, and synchronous from here to the rename: no `await`
+    // separates the live store's own state from the replacement, so no writer
+    // this process schedules can slip a WAL in between. Only files whose
+    // recorded (dev, ino) still match are ever removed.
     if (!sameIdentity(liveIdentity, identityOf(livePath))) {
       throw lossUnaccepted(`the live store file at ${livePath} was replaced by another writer; nothing was replaced.`);
     }
@@ -1473,15 +1488,12 @@ async function runRestore(context: StoreContext, root: string, input: ResolvedRe
       // quiescence: SQLite's own last clean close folds the journal into the
       // database and removes it (and this runtime can land that removal just
       // after the close), which is the store going quiet. A fold cannot hide
-      // here — the live BYTES are re-verified against the checkpoint hash in the
-      // next statement, with no await in between. A sidecar that is present and
-      // is not that file is a writer, and refuses.
+      // here — the live BYTES were re-verified against the checkpoint hash on
+      // the statement above. A sidecar that is present and is not that file is
+      // a writer, and refuses.
       if (now !== undefined && !sameIdentity(sidecar.identity, now)) {
         throw lossUnaccepted(`a WAL/SHM sidecar of ${livePath} appeared after the checkpoint; the store is not quiesced. Nothing was replaced.`);
       }
-    }
-    if ((await sha256OfFile(livePath)) !== liveSha256) {
-      throw lossUnaccepted(`the live store bytes changed after the pre-restore recovery point was taken; nothing was replaced.`);
     }
     renameSync(imagePath, livePath);
     for (const sidecar of sidecars) {

@@ -25,8 +25,10 @@
  *   selected whole-store state at an epoch above live and backup, invalidates
  *   the pre-restore handles and keeps a pre-restore recovery point; a crash
  *   before or after the replacement is decidable from the durable receipt; a
- *   live store whose loss cannot be inventoried refuses with both files kept;
- *   and the restore serializes with the migration maintenance lock.
+ *   sidecar that appears in the replacement window refuses rather than being
+ *   replaced over; a live store whose loss cannot be inventoried refuses with
+ *   both files kept; and the restore serializes with the migration maintenance
+ *   lock.
  * - `execution-export-*`: the diagnostic carries workflow/plan/lease state and
  *   the public frozen input while dropping every session identity, token,
  *   credential and session path it could otherwise be driven with, is
@@ -38,7 +40,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -202,6 +204,13 @@ async function errorOf(run: () => Promise<unknown>): Promise<Error> {
     return error as Error;
   }
   throw new Error("expected a failure, but the call resolved");
+}
+
+/** One event-loop turn, so a probe can run while a call under test is awaiting. */
+function nextTurn(): Promise<void> {
+  const { promise, resolve } = Promise.withResolvers<void>();
+  setImmediate(resolve);
+  return promise;
 }
 
 function callerOf(workflowId: string, sessionId: string): ExecutionCaller {
@@ -731,6 +740,80 @@ describe("execution-restore", () => {
     expect(resumed.issues).toBe(0);
     expect(resumed.workflows).toBe(1);
     await expect(readExecutionState(world.context)).resolves.toMatchObject({ epoch: installed.newEpoch });
+  });
+
+  test("execution-restore-refuses-a-sidecar-that-appears-in-the-replacement-window", async () => {
+    const world = await recoveryWorld("restore-sidecar-window");
+    const point = await recoveryPoint(world, "sidecar-window-point");
+    await mutateEveryDomain(world, "sidecar-window");
+    const preview = await previewExecutionRestore(world.context, point.backupPath);
+    const liveFootprint = footprint(world.dbPath);
+    const walPath = `${world.dbPath}-wal`;
+
+    // A writer that commits while the replacement is being decided writes the
+    // store's WAL, and those frames are NOT in the database bytes the
+    // checkpoint hash covers — so the replacement may not proceed past them.
+    // The window to reach is the one INSIDE the replacement sequence, which
+    // opens once the durable pre-replacement receipt is on disk: the sidecar is
+    // therefore created from the first event-loop turn after that receipt
+    // appears, i.e. while the sequence is still awaiting rather than after it
+    // has stopped checking.
+    const receiptDir = join(world.harness, "archived", "store-migration", "recovery");
+    const sidecarBytes = Buffer.alloc(4096, 0x7a);
+    const scratchPath = `${walPath}.appearing-writer`;
+    let injected = false;
+    let stop = false;
+    const injector = (async () => {
+      while (!stop) {
+        await nextTurn();
+        if (injected || !existsSync(receiptDir) || readdirSync(receiptDir).length === 0) continue;
+        // A new file, moved into the WAL's own name: the sidecar a writer
+        // creates is a file the checkpoint never saw, not a rewrite of one it
+        // did.
+        writeFileSync(scratchPath, sidecarBytes);
+        renameSync(scratchPath, walPath);
+        injected = true;
+      }
+    })();
+
+    let refusal: { code: string; message: string } | null = null;
+    try {
+      refusal = await refusalOf(() =>
+        restoreExecutionBackup(world.context, {
+          preview,
+          acceptLossDigest: preview.lossDigest,
+          operator: OPERATOR,
+          authorization: AUTHORIZATION,
+        }),
+      );
+    } finally {
+      stop = true;
+      await injector;
+    }
+
+    expect(injected).toBe(true);
+    expect(refusal!.code).toBe("execution.recovery-loss-unaccepted");
+    expect(refusal!.message).toContain("appeared after the checkpoint");
+
+    // The refusal came from the replacement sequence itself — its durable
+    // receipt was already written — and it replaced nothing: the receipt still
+    // names the ORIGINAL bytes as the live store, and the writer's sidecar is
+    // still beside it, untouched.
+    const records = recoveryRecords(world);
+    expect(records).toHaveLength(1);
+    const pending = records[0]!;
+    expect(pending.phase).toBe("replacing");
+    expect(sha256OfFile(world.dbPath)).toBe(pending.liveStoreSha256);
+    expect(pending.restoredCopySha256).not.toBe(pending.liveStoreSha256);
+    expect(sha256OfFile(walPath)).toBe(sha256OfBytes(sidecarBytes));
+
+    // …and the store's own authority is exactly the state the pre-restore
+    // checkpoint left, at the same epoch. Only the writer's WAL was in the way,
+    // so the sidecars are cleared before the store is read here — the checkpoint
+    // proved every committed frame already landed in the file.
+    rmSync(walPath, { force: true });
+    rmSync(`${world.dbPath}-shm`, { force: true });
+    expect(footprint(world.dbPath)).toEqual(liveFootprint);
   });
 
   test("execution-restore-refuses-an-incomplete-inventory-and-keeps-both-files", async () => {
