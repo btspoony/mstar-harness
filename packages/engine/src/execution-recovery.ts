@@ -6,13 +6,15 @@
  * back to and an honest account of what coming back costs. This module owns
  * exactly that, and nothing else:
  *
- * - `previewExecutionRestore` mutates nothing. It verifies the recovery point
- *   through the same verdict `backupStore` applies (§8 "re-open it for
- *   `integrity_check` + `foreign_key_check`", migration checksums, identity,
- *   execution identity), then inventories the WHOLE store — issue, catalog and
- *   execution — against the live authority, and returns the canonical
- *   `lossDigest` of that inventory. It writes no authority row, no receipt and
- *   no artifact of its own, so it is safe to run at any time.
+ * - `previewExecutionRestore` mutates nothing — it reads the live store through
+ *   the READ snapshot, so it writes no authority row and never reconfigures the
+ *   store's journal mode. It verifies the recovery point through the
+ *   same verdict `backupStore` applies (§8 "re-open it for `integrity_check` +
+ *   `foreign_key_check`", migration checksums, identity, execution identity),
+ *   then inventories the WHOLE store — issue, catalog and execution — against
+ *   the live authority, and returns the canonical `lossDigest` of that
+ *   inventory. It writes no authority row, no receipt and no artifact of its
+ *   own, so it is safe to run at any time.
  * - `restoreExecutionBackup` is the destructive step. It never trusts the
  *   preview it is handed: it re-derives the inventory under the maintenance
  *   lock and refuses unless the supplied preview is byte-identical to the
@@ -649,25 +651,97 @@ function probeForeignKeys(db: StoreDb): Array<Record<string, unknown>> {
 }
 
 /**
+ * §8's live read snapshot for the loss inventory: the store layer's READ intent,
+ * so nothing in the inventory writes a row, a receipt, a checkpoint, an artifact
+ * or a journal mode.
+ *
+ * The read intent alone is not always AVAILABLE. SQLite reads a WAL database
+ * through its shared-memory index, and a runtime whose read-only open cannot
+ * create that index (Bun's `node:sqlite`, which this plan supports alongside
+ * Node) refuses a quiesced WAL store whose sidecars SQLite itself removed on
+ * the last clean close. Refusing a completely intact store for that reason
+ * would be a defect of its own, so the preview first lets SQLite establish the
+ * index through a connection that applies NO pragma of its own — never the
+ * writer's `journal_mode=wal`/`synchronous=FULL`, which is what reconfigures a
+ * store that is not in WAL — and then takes the read snapshot. That index is
+ * the sidecar every reader of a WAL database needs (Node's own read-only open
+ * creates it too): it is SQLite's index, not authority.
+ *
+ * Every other shape — a rollback-journal store, a hot journal, a
+ * missing/corrupt/drifted database, a store another writer holds — keeps the
+ * read intent's own refusal; none of them is reconfigured, recovered or
+ * otherwise written to make a preview succeed.
+ */
+async function openLiveReadSnapshot(context: StoreContext): Promise<StoreHandle> {
+  try {
+    return await openStore(context, "read");
+  } catch (error) {
+    if (!(error instanceof StoreError)) throw error;
+    if (!(await establishWalIndex(context))) throw error;
+    return openStore(context, "read");
+  }
+}
+
+/**
+ * Let SQLite establish the live store's WAL index while applying no pragma that
+ * could change the store. Reading `journal_mode` needs exactly the index the
+ * read-only open could not create; it writes nothing and reports whether the
+ * store is already in WAL. False — a store that is not in WAL, or one that
+ * cannot be opened at all — leaves the caller its own refusal rather than
+ * forcing this store into a different journal mode.
+ */
+async function establishWalIndex(context: StoreContext): Promise<boolean> {
+  assertStoreRuntimeSupported();
+  // A static `import "node:sqlite"` would load the native driver with this
+  // module; contract §2 keeps SQLite acquisition lazy and at store access, the
+  // same reason `readCopyRows` loads it here.
+  const { DatabaseSync } = (await import("node:sqlite")) as { DatabaseSync: new (path: string) => StoreDb };
+  let db: StoreDb;
+  try {
+    db = new DatabaseSync(storeDbPath(context));
+  } catch {
+    return false;
+  }
+  try {
+    const mode = db.prepare("pragma journal_mode").get() as { journal_mode?: unknown } | undefined;
+    return mode?.journal_mode === "wal";
+  } catch {
+    return false;
+  } finally {
+    db.close();
+  }
+}
+
+/**
  * Read the live store for the loss inventory: ONE snapshot transaction over the
- * three domains, plus the §8 self-consistency probe.
+ * three domains, plus the §8 self-consistency probe (§8 "read the live
+ * authority").
  *
- * The handle is the WRITE-capable one `takeVerifiedBackup` also uses, and no
- * write statement is executed through it: SQLite refuses to open a WAL store
- * read-only while its shared-memory sidecar is absent or stale, and a loss
- * inventory that failed on that artifact would refuse a perfectly intact store
- * for the wrong reason. Nothing here writes a row, a receipt, a checkpoint or
- * an artifact — the preview's verdict is a pure read of the store's content.
+ * The handle is the READ snapshot (`openLiveReadSnapshot`): the write intent
+ * applies `journal_mode=wal` and `synchronous=FULL` as part of opening, so it
+ * reconfigures a live store that is not currently in WAL — an image just
+ * installed by a restore, whose bytes are deliberately left in VACUUM INTO's
+ * rollback-journal mode until the next writer access — and creates its sidecars
+ * before a single authority row is read. "No write statement" is not "mutates
+ * nothing".
  *
- * A live store that cannot be read — missing, corrupt, drifted or held by
- * another writer past the bounded wait — cannot produce a loss inventory, and
- * §8's answer to that is `execution.recovery-loss-unaccepted` with the files
- * left alone, never a blind overwrite.
+ * A live store that cannot be read — missing, corrupt, drifted, held by another
+ * writer past the bounded wait, or an artifact the read snapshot cannot be
+ * taken of — cannot produce a loss inventory, and §8's answer to that is
+ * `execution.recovery-loss-unaccepted` with the files left alone, never a blind
+ * overwrite. This function is the ONE boundary that turns every such failure
+ * into that refusal: a store that opens but whose authority rows or committed
+ * receipts cannot be inventoried — a malformed/wrong-shaped row, an unreadable
+ * table, a failed query — is the same incomplete inventory as an unreadable
+ * file, so it is normalized here with the underlying cause kept in the detail
+ * rather than escaping as a raw driver or `store.corrupt` failure that a caller
+ * cannot tell apart from an unrelated fault. Backup and request validation
+ * refuse earlier, through their own codes, and never reach this boundary.
  */
 async function readLiveStore(context: StoreContext, what: string): Promise<LiveRead> {
   let handle: StoreHandle;
   try {
-    handle = await openStore(context, "write");
+    handle = await openLiveReadSnapshot(context);
   } catch (error) {
     throw lossUnaccepted(
       `${what} cannot inventory the live store at ${storeDbPath(context)} (${(error as Error).message}); an incomplete ` +
@@ -723,6 +797,12 @@ async function readLiveStore(context: StoreContext, what: string): Promise<LiveR
     } finally {
       handle.db.exec("commit");
     }
+  } catch (error) {
+    if (error instanceof ExecutionRecoveryError && error.code === "execution.recovery-loss-unaccepted") throw error;
+    throw lossUnaccepted(
+      `${what} cannot inventory the live store at ${storeDbPath(context)}: ${(error as Error).message} An incomplete ` +
+        `inventory is never called a safe rollback, so nothing was replaced and both files are retained.`,
+    );
   } finally {
     handle.close();
   }
@@ -944,10 +1024,11 @@ async function buildLossInventory(context: StoreContext, backupPath: string): Pr
 /**
  * `previewExecutionRestore` — §8's read-only loss preview.
  *
- * It writes nothing: it verifies the point, inventories the whole store and
- * returns the canonical digest of what restoring it would cost. A live store
- * that cannot be inventoried refuses with `execution.recovery-loss-unaccepted`
- * and leaves both files exactly where they are.
+ * It mutates nothing: it opens the live store with the read intent, verifies
+ * the point, inventories the whole store and returns the canonical digest of
+ * what restoring it would cost. A live store that cannot be inventoried
+ * refuses with `execution.recovery-loss-unaccepted` and leaves both files
+ * exactly where they are.
  */
 export async function previewExecutionRestore(context: StoreContext, backupPath: string): Promise<ExecutionRecoveryPreview> {
   return (await buildLossInventory(context, backupPath)).preview;

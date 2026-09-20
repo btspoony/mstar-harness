@@ -38,7 +38,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -752,6 +752,73 @@ describe("execution-restore", () => {
     );
     expect(blocked.message).toContain(".execution-maintenance");
     expect(footprint(world.dbPath).epoch).toBe(world.epoch);
+  });
+
+  test("execution-restore-preview-leaves-the-live-store-file-state-untouched", async () => {
+    const world = await recoveryWorld("restore-preview-state");
+    const point = await recoveryPoint(world, "state-point");
+    await mutateEveryDomain(world, "state");
+    const preview = await previewExecutionRestore(world.context, point.backupPath);
+    const receipt = await restoreExecutionBackup(world.context, {
+      preview,
+      acceptLossDigest: preview.lossDigest,
+      operator: OPERATOR,
+      authorization: AUTHORIZATION,
+    });
+
+    // The replacement leaves the verified image exactly as the copy verdict read
+    // it — VACUUM INTO's rollback journal and no sidecars — until something asks
+    // the store for a writer connection.
+    const journalMode = (): string => rawGet<{ journal_mode: string }>(world.dbPath, "pragma journal_mode")!.journal_mode;
+    expect(journalMode()).toBe("delete");
+    const installedSha = sha256OfFile(world.dbPath);
+
+    // A second loss preview reads that store. §8 says the preview mutates
+    // nothing, so reading the loss may not reconfigure the live store's journal,
+    // create a WAL sidecar beside it, or rewrite a byte of it.
+    const again = await previewExecutionRestore(world.context, point.backupPath);
+    expect(again.liveEpoch).toBe(receipt.epoch);
+    expect(journalMode()).toBe("delete");
+    expect(existsSync(`${world.dbPath}-wal`)).toBe(false);
+    expect(existsSync(`${world.dbPath}-shm`)).toBe(false);
+    expect(sha256OfFile(world.dbPath)).toBe(installedSha);
+  });
+
+  test("execution-restore-normalizes-a-malformed-live-inventory-row-to-the-loss-refusal", async () => {
+    const world = await recoveryWorld("restore-malformed-row");
+    const point = await recoveryPoint(world, "malformed-row-point");
+    await captureIssue(world.context, issueInput("Malformed-row finding"), {
+      operationId: "op-malformed-row",
+      actor: "project-manager",
+    });
+    const preview = await previewExecutionRestore(world.context, point.backupPath);
+
+    // The live store still holds the row, but its own authority revision is no
+    // longer a revision this build can read, so the loss cannot be inventoried.
+    const issueId = rawGet<{ id: string }>(world.dbPath, "select id from issues")!.id;
+    rawRun(world.dbPath, "update issues set revision = 1.5 where id = ?", issueId);
+    const liveBefore = sha256OfFile(world.dbPath);
+
+    // "The loss inventory is incomplete" is ONE machine-readable verdict, with
+    // the underlying cause kept: a caller must not have to tell it apart from an
+    // unrelated corrupt-store failure.
+    const refusal = await refusalOf(() => previewExecutionRestore(world.context, point.backupPath));
+    expect(refusal.code).toBe("execution.recovery-loss-unaccepted");
+    expect(refusal.message).toMatch(/revision is 1\.5, not a safe integer/);
+
+    // The destructive verb reaches the same verdict on the same store, so an
+    // inventory that cannot be built can never be a safe rollback: nothing is
+    // replaced, and no approval is consulted.
+    const destructive = await refusalOf(() =>
+      restoreExecutionBackup(world.context, {
+        preview,
+        acceptLossDigest: preview.lossDigest,
+        operator: OPERATOR,
+        authorization: AUTHORIZATION,
+      }),
+    );
+    expect(destructive.code).toBe("execution.recovery-loss-unaccepted");
+    expect(sha256OfFile(world.dbPath)).toBe(liveBefore);
   });
 });
 
