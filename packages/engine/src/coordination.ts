@@ -2865,6 +2865,71 @@ function gitCheckout(path: string): GitCheckout | undefined {
   return { head, clean: dirty.length === 0, operation };
 }
 
+/** The one path of a repository that Git itself names, resolved against it. */
+function gitPathOf(repository: string, name: string): string {
+  const path = gitRead(repository, ["rev-parse", "--git-path", name]);
+  if (path === undefined || path.length === 0) {
+    throw gitProof(`cannot resolve ${name} of ${repository} to re-read it before the commit`, { repository, name });
+  }
+  return resolve(repository, path);
+}
+
+/**
+ * §4.1 the ref state one Git proof was read from, pinned before SQLite
+ * ownership so the commit window can re-read the same bytes.
+ */
+export type GitRefWitness = {
+  repository: string;
+  entries: ReadonlyArray<{ path: string; sha256: string | null }>;
+};
+
+/**
+ * §4.1 pin the ref state a Git proof was read from (spec §4.1: "record
+ * identity/hash/version witnesses, revalidate relevant witnesses immediately
+ * before commit"). `git rev-parse --git-path` — a read that spawns a process,
+ * which is why this runs BEFORE SQLite ownership — names the exact files Git
+ * resolves those refs through: the worktree's own `HEAD`, and the ref's loose
+ * file. A ref Git keeps PACKED has no loose file, so the packed table is part
+ * of the same witness. A `null` hash means "the path did not exist", which is
+ * itself a pinned fact: a ref that appears, or one that disappears, is a change.
+ */
+export function pinGitRefWitness(repository: string, refs: readonly string[]): GitRefWitness {
+  const paths = refs.map((ref) => ({ ref, path: gitPathOf(repository, ref) }));
+  const packed = paths.some((entry) => entry.ref.startsWith("refs/") && !existsSync(entry.path));
+  const all = [...paths.map((entry) => entry.path), ...(packed ? [gitPathOf(repository, "packed-refs")] : [])];
+  return {
+    repository,
+    entries: all.map((path) => ({ path, sha256: existsSync(path) ? sha256Bytes(readFileSync(path)) : null })),
+  };
+}
+
+/**
+ * §4.1 revalidate a pinned Git ref witness immediately before the commit. This
+ * is the commit-window half of the proof: a read that spawns a process cannot
+ * run inside the write transaction, so the proof keeps the ref BYTES it was read
+ * from and this re-reads exactly those. Every fact the proof derived from a ref
+ * is then either content-addressed (commit ids, parents, ancestry — immutable
+ * while the ref they hang off is unchanged) or re-read here, so a witness that
+ * moved refuses with no DB mutation instead of committing a stale proof.
+ * `refuse` is the proof's own refusal, so the race reports the code the same
+ * observation reports when it is seen before the transaction.
+ */
+export function revalidateGitRefWitness(
+  witness: GitRefWitness,
+  refuse: (message: string, details: Record<string, unknown>) => CoordinationError,
+): void {
+  for (const entry of witness.entries) {
+    const actual = existsSync(entry.path) ? sha256Bytes(readFileSync(entry.path)) : null;
+    if (actual !== entry.sha256) {
+      throw refuse(
+        `${witness.repository} ${entry.path} changed after the Git proof was read ` +
+          `(${entry.sha256 ?? "absent"} -> ${actual ?? "absent"}) — nothing commits on a stale witness`,
+        { path: entry.path, expected: entry.sha256, actual },
+      );
+    }
+  }
+}
+
 /**
  * Feature-side proof (spec §D): the pinned commit is what the recorded plan
  * worktree has checked out, the worktree is clean, and no Git operation is

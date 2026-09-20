@@ -47,10 +47,13 @@ import {
   gitRead,
   integrationProof,
   parseAssignmentFile,
+  pinGitRefWitness,
   planAreaRoots,
   proofRepository,
+  revalidateGitRefWitness,
   selectCatalogPinOn,
   type AssignmentHeaders,
+  type GitRefWitness,
 } from "./coordination.js";
 import {
   IMPLEMENTED_OPERATIONS,
@@ -788,19 +791,23 @@ export type ResidualCloseOperation = Extract<CoordinationOperation, { kind: "res
 type ResidualEntry = ResidualAddOperation["entries"][number];
 
 /**
- * §3.1 the plan-revision advance of one accepted residual operation: the plan
- * row's revision IS the plan CAS, so a mutation whose domain work lives in the
- * issue authority still advances it exactly once, in this transaction, before
- * the receipt's read. Without it a caller holding the pre-mutation token could
+ * §3.1 the plan-revision advance of one accepted plan operation whose body does
+ * not otherwise write the addressed row. The plan row's revision IS the plan
+ * CAS, so an operation with domain work in another authority (the residual
+ * verbs' issue work) and an operation whose requested state is already the
+ * accepted state (a re-verified `integration-start`, a `reconcile` of a
+ * completed attempt) both advance it exactly once, in this transaction, before
+ * the receipt's read. Without it the plan CAS and the frame's store/workflow
+ * advance disagree, and a caller holding the pre-operation plan token could
  * submit the next mutation with it and pass the exact-token CAS.
  *
- * Neither stored block changed — the residual is issue work and the plan row's
- * state and coordination are exactly what this transaction read — so they are
- * written back unchanged beside the advanced revision: the row writer is the one
- * place a plan revision advances, and a residual does not open a second path to
- * the revision column.
+ * Neither stored block changed — the operation's domain state and the row's
+ * coordination are exactly what this transaction read — so they are written
+ * back unchanged beside the advanced revision: the row writer is the one place
+ * a plan revision advances, and no operation opens a second path to the
+ * revision column.
  */
-function advanceResidualPlanRevision(tx: ExecutionTransaction, witness: ExecutionPlanWitness): void {
+function advancePlanRowRevision(tx: ExecutionTransaction, witness: ExecutionPlanWitness): void {
   writePlanCoordinationRow(tx, {
     workflowId: witness.workflowId,
     planId: witness.planId,
@@ -958,7 +965,7 @@ export async function residualAddExecutionPlan(
         composed,
       );
     }
-    advanceResidualPlanRevision(tx, witness);
+    advancePlanRowRevision(tx, witness);
     const committed = readExecutionPlanWitness(tx, resolved.read);
     return { data: committed.view, token: committed.token, storeId: tx.storeId, epoch: tx.epoch };
   });
@@ -1020,7 +1027,7 @@ export async function residualCloseExecutionPlan(
       // run: this closure joins it rather than advancing the counter again.
       { committedStoreRevision: storeRevisionOn(tx.db) },
     );
-    advanceResidualPlanRevision(tx, witness);
+    advancePlanRowRevision(tx, witness);
     const committed = readExecutionPlanWitness(tx, resolved.read);
     return { data: committed.view, token: committed.token, storeId: tx.storeId, epoch: tx.epoch };
   });
@@ -1180,19 +1187,21 @@ function transferPlanLease(
 }
 
 /**
- * §E/§4.2 the workflow's merge lease admission for ONE attempt. The claim is
- * workflow-wide and exclusive, so a lease that names this attempt may still
- * belong to another holder, and the three cases are never collapsed:
+ * §E/§4.2 the workflow's merge-lease admission for ONE attempt, in the FILE
+ * route's own order (`coordination.ts` `assertMergeLease`): the HOLDER decides
+ * first — a claim held by another session is that session's claim, whoever it
+ * names — and only a claim THIS session holds is judged against this attempt's
+ * plan and source branch. The three cases are never collapsed:
  *
- * - a lease naming ANOTHER plan or another source branch is a foreign claim —
- *   never reused, re-pinned or released by this attempt;
  * - a LIVE foreign holder refuses `coordination.session-mismatch`: a held claim
  *   is not stealable, and neither an old `claimed_at` nor a stale heartbeat
  *   makes it expirable (§4.2 — clocks authorize nothing);
  * - a holder whose session is not active at this epoch is a STOPPED owner
  *   (§2.3's post-recovery leftover: the lease retains its prior holder and must
  *   pass explicit reconcile). Only `reconcile` acts on it, and it does so by
- *   recording the prior holder and the decision; every other verb refuses.
+ *   recording the prior holder and the decision; every other verb refuses;
+ * - a claim this session holds for ANOTHER plan or source branch is a foreign
+ *   claim — never reused, re-pinned or released by this attempt.
  */
 type MergeLeaseDecision =
   | { kind: "unclaimed" }
@@ -1205,15 +1214,33 @@ function decideMergeLease(
   handoff: PlanHandoff,
   what: string,
 ): MergeLeaseDecision {
-  const lease = mergeLeaseOfAttempt(witness.view.integrationLease, witness.planId, handoff.source_branch);
-  if (lease === undefined) return { kind: "unclaimed" };
-  if (lease.holder === witness.session.sessionId) return { kind: "own", lease };
-  if (!readLiveSessionIdentities(tx, witness.workflowId).has(lease.holder)) return { kind: "stopped", lease };
-  throw new CoordinationError(
-    "coordination.session-mismatch",
-    `plan ${witness.planId} integration is held by ${lease.holder}, not ${witness.session.sessionId}`,
-    { plan_id: witness.planId, holder: lease.holder, session_id: witness.session.sessionId, operation: what },
-  );
+  const lease = witness.view.integrationLease;
+  if (lease === null) return { kind: "unclaimed" };
+  if (lease.holder !== witness.session.sessionId) {
+    if (readLiveSessionIdentities(tx, witness.workflowId).has(lease.holder)) {
+      throw new CoordinationError(
+        "coordination.session-mismatch",
+        `plan ${witness.planId} integration is held by ${lease.holder}, not ${witness.session.sessionId}`,
+        { plan_id: witness.planId, holder: lease.holder, session_id: witness.session.sessionId, operation: what },
+      );
+    }
+    return { kind: "stopped", lease };
+  }
+  if (mergeLeaseOfAttempt(lease, witness.planId, handoff.source_branch) === undefined) {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `plan ${witness.planId} merge lease claims plan ${lease.plan_id} source ${lease.source_branch}, not this attempt ` +
+        `(${witness.planId} source ${handoff.source_branch}) \u2014 a foreign claim is never reused or released`,
+      {
+        plan_id: witness.planId,
+        holder_plan_id: lease.plan_id,
+        holder_source_branch: lease.source_branch,
+        source_branch: handoff.source_branch,
+        operation: what,
+      },
+    );
+  }
+  return { kind: "own", lease };
 }
 
 /**
@@ -1232,34 +1259,11 @@ function assertMergeLeaseOwn(
   if (decision.kind === "stopped") {
     throw new CoordinationError(
       "coordination.invalid-transition",
-      `plan ${witness.planId} merge lease is held by ${decision.lease.holder}, whose session is no longer active — ${what} does ` +
+      `plan ${witness.planId} merge lease is held by ${decision.lease.holder}, whose session is no longer active \u2014 ${what} does ` +
         `not take over a stopped owner; reconcile records the prior holder and the decision`,
       { plan_id: witness.planId, holder: decision.lease.holder, operation: what },
     );
   }
-}
-
-/**
- * §E the merge lease a foreign attempt holds is never this attempt's to touch.
- * Foreignness is decided from the lease's own record (plan and source branch),
- * so this rule reads the same view before and inside the transaction.
- */
-function assertMergeLeaseForeign(view: ExecutionPlanView, planId: string, handoff: PlanHandoff, what: string): void {
-  const lease = view.integrationLease;
-  if (lease === null) return;
-  if (mergeLeaseOfAttempt(lease, planId, handoff.source_branch) !== undefined) return;
-  throw new CoordinationError(
-    "coordination.invalid-transition",
-    `plan ${planId} merge lease claims plan ${lease.plan_id} source ${lease.source_branch}, not this attempt ` +
-      `(${planId} source ${handoff.source_branch}) \u2014 a foreign claim is never reused or released`,
-    {
-      plan_id: planId,
-      holder_plan_id: lease.plan_id,
-      holder_source_branch: lease.source_branch,
-      source_branch: handoff.source_branch,
-      operation: what,
-    },
-  );
 }
 
 /**
@@ -1535,11 +1539,13 @@ export async function integrationStartExecutionPlan(
     requireHandoffState(handoff, ["accepted", "integrating"], planId, "integration-start");
     assertEvidenceDigests(handoff);
     assertExecutionHolder(planRowOf(witness.view), witness.session.sessionId, planId, "integration-start");
-    assertMergeLeaseForeign(witness.view, planId, handoff, "integration-start");
     assertMergeLeaseOwn(witness, tx, handoff, "integration-start");
     if (handoff.state === "integrating") {
       // A started attempt is never re-pinned: the recorded base stays the one
-      // the coordinator merged onto, and nothing about the row changes.
+      // the coordinator merged onto, so the row's domain state is unchanged —
+      // and the accepted operation still spends its own plan revision, so the
+      // token it returns is the post-advance CAS (§3.1).
+      advancePlanRowRevision(tx, witness);
       const settled = readExecutionPlanWitness(tx, resolved.read);
       return { data: settled.view, token: settled.token, storeId: tx.storeId, epoch: tx.epoch };
     }
@@ -1623,7 +1629,6 @@ export async function integrationAcceptExecutionPlan(
     requireRowStatus(witness.view.plan as unknown as PlanRow, "InReview", planId, "integration-accept", { still: true });
     assertEvidenceDigests(handoff);
     assertExecutionHolder(planRowOf(witness.view), witness.session.sessionId, planId, "integration-accept");
-    assertMergeLeaseForeign(witness.view, planId, handoff, "integration-accept");
     assertMergeLeaseOwn(witness, tx, handoff, "integration-accept");
     const recorded = requireIntegration(handoff, planId);
     writeCoordinationBlock(tx, witness, {
@@ -1852,7 +1857,19 @@ function applyCompletion(input: {
  * integration HEAD — a standalone completion is never accepted for it, and no
  * completion of either kind is iteration integration: nothing here merges, and
  * the workflow's own terminal close is a separate transition (W6).
+ *
+ * §4.1 the external Git read happens before SQLite ownership and the ref state
+ * it was read from is PINNED there; the transaction re-reads those exact bytes
+ * immediately before the commit, so a branch that moved in the window refuses
+ * instead of committing a stale proof.
  */
+
+/** Test-only hook to observe the preflight→commit gap of a DB completion. */
+let completeWitnessGapForTest: (() => void) | undefined;
+export function setCompleteWitnessGapForTest(callback: (() => void) | undefined): void {
+  completeWitnessGapForTest = callback;
+}
+
 export async function completeExecutionPlan(
   context: ExecutionContext,
   request: ExecutionPlanRequest<CompleteOperation>,
@@ -1866,25 +1883,32 @@ export async function completeExecutionPlan(
   const named = requirePlanHandoff(before.data.coordination ?? undefined, planId, operation.handoffId);
   const prepared = requirePrepared(before.data.coordination ?? undefined, planId, "complete");
   const snapshot = await readWorkflowSnapshot(context, resolved.read.workflowId);
+  const standalone = isStandaloneDevelopmentWorkflow(snapshot);
   let resultSha: string | null = null;
-  if (isStandaloneDevelopmentWorkflow(snapshot)) {
+  let gitWitness: GitRefWitness;
+  if (standalone) {
     assertNoIntegrationContamination({ snapshot, planId, handoff: named, what: "complete" });
     assertAcceptedReviewDecision(named, planId, "complete");
     assertHandoffQaGate(named, prepared, planId, "complete");
     const anchors = standaloneDeliveryAnchors(snapshot, planId);
     assertStandaloneBranchIdentity(before.data, planId, named, anchors, "complete");
-    assertStandaloneSourceGitProof(planScopeOf(before.data, planId).worktreePath, named, anchors.source, "complete", planId);
+    const worktree = planScopeOf(before.data, planId).worktreePath;
+    assertStandaloneSourceGitProof(worktree, named, anchors.source, "complete", planId);
+    // The branch the proof just read: its tip and the checkout's HEAD are the
+    // only ref state the proof depends on that a concurrent writer can move.
+    gitWitness = pinGitRefWitness(worktree, ["HEAD", `refs/heads/${anchors.source}`]);
   } else {
     requireHandoffState(named, ["merged"], planId, "complete");
-    assertMergeLeaseForeign(before.data, planId, named, "complete");
     const attempt = requireIntegration(named, planId);
     const anchors = integrationAnchors(snapshot, planId);
     const checkout = assertIntegrationCheckout(anchors, planId);
     resultSha = assertRecordedResult(anchors.worktreePath, planId, attempt, named.source_sha, checkout.head);
+    gitWitness = pinGitRefWitness(anchors.worktreePath, ["HEAD", `refs/heads/${anchors.targetBranch}`]);
   }
   assertEvidenceDigests(named);
   await assertFindingsClosed(context, planId, prepared, "complete");
   assertExecutionHolder(planRowOf(before.data), context.caller.sessionId, planId, "complete");
+  completeWitnessGapForTest?.();
   const requestHash = planOperationRequestHash(context.caller, "complete", resolved.read, resolved.call.expected, {
     handoff_id: operation.handoffId,
   });
@@ -1900,11 +1924,13 @@ export async function completeExecutionPlan(
       assertStandaloneBranchIdentity(witness.view, planId, handoff, standaloneDeliveryAnchors(committed, planId), "complete");
     } else {
       requireHandoffState(handoff, ["merged"], planId, "complete");
-      assertMergeLeaseForeign(witness.view, planId, handoff, "complete");
       assertMergeLeaseOwn(witness, tx, handoff, "complete");
     }
     assertEvidenceDigests(handoff);
     assertExecutionHolder(planRowOf(witness.view), witness.session.sessionId, planId, "complete");
+    // §4.1 the commit-window revalidation: the ref state the proof was read from
+    // must still be those bytes, so the proof commits with the row or not at all.
+    revalidateGitRefWitness(gitWitness, standalone ? gitProof : integrationDiverged);
     applyCompletion({ tx, witness, planId, handoff, at, resultSha, what: "complete" });
     const settled = readExecutionPlanWitness(tx, resolved.read);
     return { data: settled.view, token: settled.token, storeId: tx.storeId, epoch: tx.epoch };
@@ -1927,8 +1953,9 @@ type ReconcileDecision =
  *   InReview with its execution lease;
  * - `integrating` with a proven result, and `merged` with a still-valid recorded
  *   proof, complete normally (the same one-transaction delta);
- * - `completed` with a valid recorded proof is a read-only no-op: replay never
- *   resurrects ownership or rewrites timestamps;
+ * - `completed` with a valid recorded proof is a domain no-op: replay never
+ *   resurrects ownership or rewrites timestamps; the accepted operation still
+ *   advances the addressed plan's CAS and records its own receipt;
  * - an unfinished/dirty integration checkout is `integration-unresolved`, and a
  *   moved branch, an unexpected parent graph, several matching merges or
  *   unavailable objects are `integration-diverged`.
@@ -1977,8 +2004,9 @@ export async function reconcileExecutionPlan(
     const checkout = assertIntegrationCheckout(anchors, planId);
     // Every remaining path completes the row, so the coordinator must still hold
     // the execution lease it received at accept (spec §E — nothing is replayed
-    // into ownership), and a foreign attempt's claim is not this one's to touch.
-    assertMergeLeaseForeign(before.data, planId, named, "reconcile");
+    // into ownership). The merge lease is admitted INSIDE the transaction, in
+    // the file route's holder-first order, because only there is the holder's
+    // liveness at this epoch readable.
     assertExecutionHolder(planRowOf(before.data), context.caller.sessionId, planId, "reconcile");
     if (named.state === "merged") {
       decision = {
@@ -2022,16 +2050,17 @@ export async function reconcileExecutionPlan(
   return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, (witness, tx, at) => {
     const handoff = requirePlanHandoff(coordinationOf(witness), planId, operation.handoffId);
     if (decision.outcome === "already-completed") {
-      // The replay is read-only: no row, lease, block or timestamp is rewritten.
-      // The receipt and the frame's revision bookkeeping are this authority's
-      // record of the accepted operation, not a second state transition.
+      // The DOMAIN replay is read-only: no lease, block or timestamp is
+      // rewritten. The accepted operation itself is not a replay — this
+      // authority records it and advances the addressed plan's CAS exactly once
+      // (§3.1), so its receipt and the token it returns are one operation's.
+      advancePlanRowRevision(tx, witness);
       const settled = readExecutionPlanWitness(tx, resolved.read);
       return { data: settled.view, token: settled.token, storeId: tx.storeId, epoch: tx.epoch };
     }
     requireRowStatus(witness.view.plan as unknown as PlanRow, "InReview", planId, "reconcile", { still: true });
     assertEvidenceDigests(handoff);
     assertExecutionHolder(planRowOf(witness.view), witness.session.sessionId, planId, "reconcile");
-    assertMergeLeaseForeign(witness.view, planId, handoff, "reconcile");
     const lease = decideMergeLease(witness, tx, handoff, "reconcile");
     if (decision.outcome === "retry-ready") {
       const returned: PlanHandoff = { ...handoff, state: "accepted" };

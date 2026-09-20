@@ -30,6 +30,7 @@ import {
   progressExecutionPlan,
   residualAddExecutionPlan,
   residualCloseExecutionPlan,
+  setCompleteWitnessGapForTest,
   withExecutionPlanAuthority,
   type ExecutionPlanCall,
 } from "../src/execution-coordination.js";
@@ -2148,13 +2149,46 @@ describe("execution-handoff-integration: §3/§D/§E handoff, accept, return and
     });
     expect(mergeLeaseRowOf(context).lease).toMatchObject({ status: "held", holder: COORDINATOR_ID });
 
-    // A started attempt is re-verified, never re-pinned.
-    const retry = await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "integration-start-retry", {
-      kind: "integration-start",
-      handoffId,
+    // A started attempt is re-verified, never re-pinned — and the accepted
+    // operation still spends exactly ONE plan revision, so the token it returns
+    // is the post-advance CAS rather than the one it was called with (§3.1).
+    const beforeRetry = planFootprint(context, OWN_PLAN);
+    const retryToken = await planTokenOf(fixture, OWN_PLAN);
+    const retry = await planMutation(
+      fixture,
+      fixture.coordinatorSeat,
+      OWN_PLAN,
+      "integration-start-retry",
+      { kind: "integration-start", handoffId },
+      retryToken,
+    );
+    expect(retry.replayed).toBe(false);
+    expect(retry.data.coordination).toEqual({
+      ...started.data.coordination,
+      revision: Number(beforeRetry.plan_revision) + 1,
     });
-    expect(retry.data.coordination).toEqual(started.data.coordination);
     expect(retry.data.integrationLease).toEqual(started.data.integrationLease);
+    expect(retry.token).not.toBe(retryToken);
+    expect(retry.token).toBe(await planTokenOf(fixture, OWN_PLAN));
+    const afterRetry = planFootprint(context, OWN_PLAN);
+    expect(Number(afterRetry.plan_revision)).toBe(Number(beforeRetry.plan_revision) + 1);
+    expect(Number(afterRetry.store_revision)).toBe(Number(beforeRetry.store_revision) + 1);
+
+    // The SAME operation id is the exact replay: its recorded receipt comes
+    // back and neither the plan nor the shared store advances again.
+    const settledFootprint = planStateFootprint(context, OWN_PLAN);
+    const exact = await planMutation(
+      fixture,
+      fixture.coordinatorSeat,
+      OWN_PLAN,
+      "integration-start-retry",
+      { kind: "integration-start", handoffId },
+      retryToken,
+    );
+    expect(exact.replayed).toBe(true);
+    expect(exact.token).toBe(retry.token);
+    expect(planFootprint(context, OWN_PLAN)).toEqual(afterRetry);
+    expect(planStateFootprint(context, OWN_PLAN)).toEqual(settledFootprint);
 
     // Nothing is proven by intent.
     const premature = await refusalOf(() =>
@@ -2186,15 +2220,19 @@ describe("execution-handoff-integration: §3/§D/§E handoff, accept, return and
     );
     expect(liveHolder.code).toBe("coordination.session-mismatch");
 
-    // Exclusivity 2: a claim naming ANOTHER attempt is never reused or released.
-    plantMergeLease(context, fixture.epoch, {
+    // Exclusivity 2: a claim naming ANOTHER attempt is never reused or released
+    // — and the refusal is the HOLDER's, in the file route's own admission order
+    // (`coordination.ts` `assertMergeLease` checks the holder before the plan and
+    // source it names). The claim is untouched by the refused verb.
+    const foreignClaim = {
       holder: PLAN_PM_ID,
       claimed_at: TS,
       plan_id: PEER_PLAN,
       source_branch: `feature/${PEER_PLAN}`,
       target_branch: `integration/${PEER_PLAN}`,
       status: "held",
-    });
+    };
+    plantMergeLease(context, fixture.epoch, foreignClaim);
     const foreign = await refusalOf(() =>
       planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "integration-accept-foreign", {
         kind: "integration-accept",
@@ -2202,9 +2240,10 @@ describe("execution-handoff-integration: §3/§D/§E handoff, accept, return and
       }),
     );
     expect(foreign).toMatchObject({
-      code: "coordination.invalid-transition",
-      details: { holder_plan_id: PEER_PLAN, source_branch: `feature/${OWN_PLAN}` },
+      code: "coordination.session-mismatch",
+      details: { holder: PLAN_PM_ID, session_id: COORDINATOR_ID, operation: "integration-accept" },
     });
+    expect(mergeLeaseRowOf(context).lease).toEqual(foreignClaim);
 
     // This attempt's own claim restored, and the merge it really ran.
     plantMergeLease(context, fixture.epoch, {
@@ -2246,17 +2285,144 @@ describe("execution-handoff-integration: §3/§D/§E handoff, accept, return and
     expect(planStateFootprint(context, OWN_PLAN)).toEqual(before);
     writeText(fixture.evidence[OWN_PLAN]!.qc[1]!, "# qc report\n");
 
-    // A completed replay of the same attempt is read-only.
+    // A completed attempt's reconcile is a DOMAIN replay: it never resurrects
+    // ownership or rewrites the completed state — and the accepted operation
+    // still advances the addressed plan exactly once and returns that CAS.
     const done = await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "complete-1", { kind: "complete", handoffId });
     expect(done.data.plan.status).toBe("Done");
     const acceptedState = planStateFootprint(context, OWN_PLAN);
-    const replay = await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "reconcile-replay", {
-      kind: "reconcile",
+    const acceptedFootprint = planFootprint(context, OWN_PLAN);
+    const replayToken = await planTokenOf(fixture, OWN_PLAN);
+    const replay = await planMutation(
+      fixture,
+      fixture.coordinatorSeat,
+      OWN_PLAN,
+      "reconcile-replay",
+      { kind: "reconcile", handoffId },
+      replayToken,
+    );
+    expect(replay.replayed).toBe(false);
+    expect(replay.data.plan.status).toBe("Done");
+    expect(planStateFootprint(context, OWN_PLAN)).toEqual({
+      ...acceptedState,
+      plan_revision: Number(acceptedFootprint.plan_revision) + 1,
+    });
+    const replayFootprint = planFootprint(context, OWN_PLAN);
+    expect(Number(replayFootprint.plan_revision)).toBe(Number(acceptedFootprint.plan_revision) + 1);
+    expect(Number(replayFootprint.store_revision)).toBe(Number(acceptedFootprint.store_revision) + 1);
+    expect(replay.token).toBe(await planTokenOf(fixture, OWN_PLAN));
+
+    // ... and the SAME id replays exactly: nothing advances a second time.
+    const exactReplay = await planMutation(
+      fixture,
+      fixture.coordinatorSeat,
+      OWN_PLAN,
+      "reconcile-replay",
+      { kind: "reconcile", handoffId },
+      replayToken,
+    );
+    expect(exactReplay.replayed).toBe(true);
+    expect(exactReplay.token).toBe(replay.token);
+    expect(planFootprint(context, OWN_PLAN)).toEqual(replayFootprint);
+  });
+
+  test("every lifecycle verb admits the merge lease holder-first, as the file route does", async () => {
+    const fixture = await lifecycleFixture("merge-lease-holder-first", "integration");
+    const { context } = fixture;
+    const handoffId = await acceptedAttempt(fixture, "holder-first");
+    // ONE claim, held by a session this workflow holds ACTIVE, naming a
+    // DIFFERENT attempt. The file route answers with the holder's own refusal
+    // (`coordination.ts` `assertMergeLease` → `coordination.session-mismatch`)
+    // before it ever judges the plan and source the claim names, so every DB
+    // verb must answer with that same code for this same state.
+    const foreignClaim = {
+      holder: PLAN_PM_ID,
+      claimed_at: TS,
+      plan_id: PEER_PLAN,
+      source_branch: `feature/${PEER_PLAN}`,
+      target_branch: `integration/${PEER_PLAN}`,
+      status: "held",
+    };
+    // Every verb's answer, collected so the ONE code this state has is compared
+    // across all four routes rather than asserted route by route.
+    const answers: Record<string, unknown> = {};
+    const refuseForeign = async (operationId: string, operation: Record<string, unknown>, verb: string) => {
+      const refusal = await refusalOf(() => planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, operationId, operation));
+      answers[verb] = { code: refusal.code, details: refusal.details };
+      // No verb moved, re-pinned or released the claim it was refused.
+      expect(mergeLeaseRowOf(context).lease).toEqual(foreignClaim);
+    };
+
+    plantMergeLease(context, fixture.epoch, foreignClaim);
+    await refuseForeign("holder-first-start", { kind: "integration-start", handoffId }, "integration-start");
+
+    // The attempt really starts under its OWN claim, then merges.
+    withRaw(context, (db) =>
+      db.prepare("delete from execution_integration_leases where workflow_id = ?").run(WORKFLOW_ID),
+    );
+    await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "holder-first-start-own", {
+      kind: "integration-start",
       handoffId,
     });
-    expect(replay.data.plan.status).toBe("Done");
-    expect(planStateFootprint(context, OWN_PLAN)).toEqual(acceptedState);
-  });
+    mergeIntoIntegration(fixture);
+
+    // A PROVEN merge, so both remaining verbs reach their lease admission.
+    plantMergeLease(context, fixture.epoch, foreignClaim);
+    await refuseForeign("holder-first-accept", { kind: "integration-accept", handoffId }, "integration-accept");
+    await refuseForeign("holder-first-reconcile", { kind: "reconcile", handoffId }, "reconcile");
+
+    // This attempt's own claim restored: the merge is accepted and recorded.
+    plantMergeLease(context, fixture.epoch, {
+      holder: COORDINATOR_ID,
+      claimed_at: TS,
+      plan_id: OWN_PLAN,
+      source_branch: `feature/${OWN_PLAN}`,
+      target_branch: `integration/${OWN_PLAN}`,
+      status: "held",
+    });
+    await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "holder-first-accept-own", {
+      kind: "integration-accept",
+      handoffId,
+    });
+
+    // The completion the foreign claim would have authorized never happens.
+    plantMergeLease(context, fixture.epoch, foreignClaim);
+    const beforeComplete = planStateFootprint(context, OWN_PLAN);
+    await refuseForeign("holder-first-complete", { kind: "complete", handoffId }, "complete");
+    expect(planStateFootprint(context, OWN_PLAN)).toEqual(beforeComplete);
+
+    // ONE state, ONE answer: whichever the claim's plan/source says, the holder
+    // decides first on every verb — the file route's observable code.
+    const refusal = (verb: string) => ({
+      code: "coordination.session-mismatch",
+      details: { plan_id: OWN_PLAN, holder: PLAN_PM_ID, session_id: COORDINATOR_ID, operation: verb },
+    });
+    expect(answers).toEqual({
+      "integration-start": refusal("integration-start"),
+      "integration-accept": refusal("integration-accept"),
+      reconcile: refusal("reconcile"),
+      complete: refusal("complete"),
+    });
+
+    // The holder matched — a claim THIS session holds for ANOTHER attempt — so
+    // the claim's own plan and source decide, and the refusal carries them. One
+    // state, one answer per branch; neither branch reuses or releases the claim.
+    plantMergeLease(context, fixture.epoch, { ...foreignClaim, holder: COORDINATOR_ID });
+    const ownForeign = await refusalOf(() =>
+      planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "holder-first-own-foreign", { kind: "complete", handoffId }),
+    );
+    expect(ownForeign).toMatchObject({
+      code: "coordination.invalid-transition",
+      details: {
+        plan_id: OWN_PLAN,
+        holder_plan_id: PEER_PLAN,
+        holder_source_branch: `feature/${PEER_PLAN}`,
+        source_branch: `feature/${OWN_PLAN}`,
+        operation: "complete",
+      },
+    });
+    expect(mergeLeaseRowOf(context).lease).toMatchObject({ holder: COORDINATOR_ID, plan_id: PEER_PLAN });
+  }, 30000);
 
   test("complete commits Done, the completed handoff and both releases in one transaction and deletes no catalog row", async () => {
     const fixture = await lifecycleFixture("complete-delta", "integration");
@@ -2351,6 +2517,76 @@ describe("execution-handoff-integration: §3/§D/§E handoff, accept, return and
       parsedJson(rows(standalone.context, "select state_json from execution_workflows")[0]!.state_json).status,
     ).toBe("running");
   });
+
+  test("an integration branch moved between the completion proof and its commit refuses with no DB mutation", async () => {
+    // §4.1 the proof attests the ref state it was read from; the commit window
+    // re-reads those exact bytes, so a Git move after the proof cannot ride into
+    // a committed `Done`. This is the DB twin of the file route's
+    // `setCompleteStandaloneMutateGapForTest` regression.
+    const iteration = await lifecycleFixture("complete-race-iteration", "integration");
+    const handoffId = await startedAttempt(iteration, "race-iteration");
+    mergeIntoIntegration(iteration);
+    await planMutation(iteration, iteration.coordinatorSeat, OWN_PLAN, "race-iteration-accept", {
+      kind: "integration-accept",
+      handoffId,
+    });
+    const before = planStateFootprint(iteration.context, OWN_PLAN);
+    const footprint = planFootprint(iteration.context, OWN_PLAN);
+    setCompleteWitnessGapForTest(() => {
+      runGit(["reset", "-q", "--hard", iteration.baseSha], iteration.integrationPath);
+    });
+    try {
+      const raced = await refusalOf(() =>
+        planMutation(iteration, iteration.coordinatorSeat, OWN_PLAN, "complete-race-iteration", {
+          kind: "complete",
+          handoffId,
+        }),
+      );
+      // The same code the same observation raises when it is seen before the
+      // transaction: the recorded result no longer hangs off the moved target.
+      expect(raced.code).toBe("coordination.integration-diverged");
+      // Nothing of the frame survives: no plan/store/workflow revision, no
+      // operation receipt, no domain change, and the row is still InReview.
+      expect(planFootprint(iteration.context, OWN_PLAN)).toEqual(footprint);
+      expect(planStateFootprint(iteration.context, OWN_PLAN)).toEqual(before);
+      expect(
+        parsedJson(rows(iteration.context, `select state_json from execution_plans where plan_id = '${OWN_PLAN}'`)[0]!.state_json)
+          .status,
+      ).toBe("InReview");
+    } finally {
+      setCompleteWitnessGapForTest(undefined);
+    }
+  }, 30000);
+
+  test("a delivery branch moved between the standalone completion proof and its commit refuses with no DB mutation", async () => {
+    const standalone = await lifecycleFixture("complete-race-standalone", "development");
+    const handoffId = await acceptedAttempt(standalone, "race-standalone");
+    const before = planStateFootprint(standalone.context, OWN_PLAN);
+    const footprint = planFootprint(standalone.context, OWN_PLAN);
+    setCompleteWitnessGapForTest(() => {
+      runGit(
+        ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "advance"],
+        standalone.featurePath,
+      );
+    });
+    try {
+      const raced = await refusalOf(() =>
+        planMutation(standalone, standalone.coordinatorSeat, OWN_PLAN, "complete-race-standalone", {
+          kind: "complete",
+          handoffId,
+        }),
+      );
+      expect(raced.code).toBe("coordination.git-proof");
+      expect(planFootprint(standalone.context, OWN_PLAN)).toEqual(footprint);
+      expect(planStateFootprint(standalone.context, OWN_PLAN)).toEqual(before);
+      expect(
+        parsedJson(rows(standalone.context, `select state_json from execution_plans where plan_id = '${OWN_PLAN}'`)[0]!.state_json)
+          .status,
+      ).toBe("InReview");
+    } finally {
+      setCompleteWitnessGapForTest(undefined);
+    }
+  }, 30000);
 });
 
 describe("execution-reconcile: §3/§4.2 crash recovery and explicit stopped-owner evidence", () => {
@@ -2395,14 +2631,41 @@ describe("execution-reconcile: §3/§4.2 crash recovery and explicit stopped-own
     expect(proven.data.executionLease).toMatchObject({ status: "released" });
     expect(proven.data.integrationLease).toBeNull();
 
-    // A completed attempt reconciles read-only: the accepted state is untouched.
+    // A completed attempt reconciles as a DOMAIN replay: no lease, block or
+    // timestamp is rewritten — and the accepted operation still advances the
+    // addressed plan exactly once, returning that post-advance CAS.
     const completedState = planStateFootprint(context, OWN_PLAN);
-    const replay = await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "reconcile-replay", {
-      kind: "reconcile",
-      handoffId,
-    });
+    const completedFootprint = planFootprint(context, OWN_PLAN);
+    const replayToken = await planTokenOf(fixture, OWN_PLAN);
+    const replay = await planMutation(
+      fixture,
+      fixture.coordinatorSeat,
+      OWN_PLAN,
+      "reconcile-replay",
+      { kind: "reconcile", handoffId },
+      replayToken,
+    );
+    expect(replay.replayed).toBe(false);
     expect(replay.data.plan.status).toBe("Done");
-    expect(planStateFootprint(context, OWN_PLAN)).toEqual(completedState);
+    const replayedFootprint = planFootprint(context, OWN_PLAN);
+    expect(Number(replayedFootprint.plan_revision)).toBe(Number(completedFootprint.plan_revision) + 1);
+    expect(Number(replayedFootprint.store_revision)).toBe(Number(completedFootprint.store_revision) + 1);
+    expect(replay.token).toBe(await planTokenOf(fixture, OWN_PLAN));
+    // The domain state is what the completion left: only the CAS moved.
+    const replayExact = await planMutation(
+      fixture,
+      fixture.coordinatorSeat,
+      OWN_PLAN,
+      "reconcile-replay",
+      { kind: "reconcile", handoffId },
+      replayToken,
+    );
+    expect(replayExact.replayed).toBe(true);
+    expect(planFootprint(context, OWN_PLAN)).toEqual(replayedFootprint);
+    expect(planStateFootprint(context, OWN_PLAN)).toEqual({
+      ...completedState,
+      plan_revision: Number(completedFootprint.plan_revision) + 1,
+    });
 
     // A base that moved without a merge of the pinned source is divergence.
     const diverged = await lifecycleFixture("reconcile-diverged", "integration");
