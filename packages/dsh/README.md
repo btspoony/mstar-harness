@@ -6,6 +6,8 @@ English | [中文](README.zh.md)
 
 [Morning Star](https://github.com/btspoony/mstar-harness) as a first-class dsh (DeepSeek Harness) host — a cordis function plugin that mounts the mstar engine in-process, implements the engine `HostAdapter` (`host: 'dsh'`), guards `{HARNESS_DIR}/status.json` writes (validate + advisory; repair-escape under hard), blocks disallowed subagent dispatches when `Enforcement: hard` is on, lints `SKILL.md` writes under the mounted skill roots, mounts the mstar `skills/` mirror through the dsh skill-filesystem provider (single canonical mount), and appends a durable `mstar-engine` catalog row (persisted-log readers also accept the legacy `mstar-engine-status` identity) to every composed agent step. Boot with a dsh Loader app; everything acts through the seam's refusal/advisory channels, never by patching the tools.
 
+This plugin’s advertised floor is **Bun >=1.4.0** (dsh is Bun-hosted). That is not a Node requirement and does not ask you to install Node alongside Bun for this package.
+
 ## Usage
 
 How a dsh app consumes the plugin — install paths, configuration, what mounts at boot, and the enforcement semantics.

@@ -12,6 +12,16 @@
  * foreign journal writes that file directly: it is not engine state, and reading
  * a foreign one must refuse rather than take over.
  *
+ * The harness is provisioned with a REAL issue store (`initializeStore`): since
+ * the issue-governance cutover (G2a) the handoff gate reads the plan's open
+ * findings from `{HARNESS_DIR}/store.db`, and it fails closed when that
+ * authority is missing or staged — it has no pre-activation branch (engine
+ * `issue-cutover.test.ts` pins the refusal, issue contract §7 governs register
+ * CAPTURES, not a plan handoff). These cases assert on launch admission and
+ * occupancy against a genuinely handing-off plan, so the fixture supplies the
+ * same active store the store-cutover suites build — no open issue is linked to
+ * these plans, so the `allow-residual` gate is clean.
+ *
  * Launch transport is never executed here and no case claims it was: these cases
  * prove admission, occupancy and transition bookkeeping against real files. The
  * bounded before/after action traces of the optional Herdr/tmux skill are the
@@ -32,6 +42,7 @@ import { dirname, join } from "node:path";
 import {
   bindPlanSession,
   createFsStore,
+  initializeStore,
   mutatePlanCoordination,
   readPlanCoordination,
   setArtifactStore,
@@ -230,9 +241,18 @@ function makeFixture(options: FixtureOptions = {}): Fixture {
   };
 }
 
+/** Provision the harness's issue authority — the store the handoff gate reads
+ * its findings from (real `node:sqlite` migrations, the same initializer the
+ * store-cutover suites use; never a mocked reader). */
+async function seedIssueStore(fixture: Fixture): Promise<void> {
+  const handle = await initializeStore({ harnessDir: fixture.harness });
+  handle.close();
+}
+
 /** Bind the lifecycle coordinator (real engine verb) and prepare every plan. */
 async function bindFixture(options: FixtureOptions = {}): Promise<Fixture> {
   const fixture = makeFixture(options);
+  await seedIssueStore(fixture);
   const bound = await bindPlanSession({ coordinator: true, workflowId: WORKFLOW_ID, harnessDir: fixture.harness, cwd: fixture.root });
   expect(bound.outcome).toBe("bound");
   fixture.coordinatorSession = bound.session_file;

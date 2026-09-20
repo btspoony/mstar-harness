@@ -35,10 +35,10 @@
  * missing / corrupt / bin-less manifests each return one explicit
  * failure row (never a silent skip that would flood every citation).
  * - checkEngineCallouts real-corpus pin (F-S3) — the shipped skills corpus
- * yields exactly 50 Engine-check callouts / 48 CLI citations against the
- * live CLI inventory + declared bins (4 lease/seats callouts consolidated
- * to canonical pointers);
- * corpus drift goes red.
+ *   yields exactly 50 Engine-check callouts / 51 CLI citations against the
+ *   live CLI inventory + declared bins (4 lease/seats callouts consolidated
+ *   to canonical pointers);
+ *   corpus drift goes red.
  */
 import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -280,7 +280,7 @@ describe("checkEngineCallouts — Guard 1 CLI citation binary-prefix check", () 
     expect(failures).toEqual([]);
   });
 
-  test("real corpus pins 50 Engine-check callouts / 48 CLI citations (F-S3, drift goes red)", () => {
+  test("real corpus pins 50 Engine-check callouts / 51 CLI citations (F-S3, drift goes red)", () => {
     const REPO_ROOT = join(import.meta.dir, "..");
     const SKILLS_ROOT = join(REPO_ROOT, "skills");
 
@@ -306,6 +306,11 @@ describe("checkEngineCallouts — Guard 1 CLI citation binary-prefix check", () 
     const cliSrc = readFileSync(join(REPO_ROOT, "packages", "cli", "src", "index.ts"), "utf8");
     const { cliCommands, failures: cliFailures } = buildCliCommandInventory(cliSrc);
     expect(cliFailures).toEqual([]);
+    // Same inventory the executable guard runs: index.ts plus the registrars
+    // that live outside it (`plan`/`workflow` verb tables, `sdd evidence`,
+    // `issue`, `catalog`), so a citation of a real group verb is not a false
+    // red here.
+    expect(supplementCliCommandInventory(cliCommands, REPO_ROOT).failures).toEqual([]);
     const engineExports = buildEngineExportNames(
       readFileSync(join(REPO_ROOT, "packages", "engine", "src", "index.ts"), "utf8"),
     );
@@ -322,7 +327,7 @@ describe("checkEngineCallouts — Guard 1 CLI citation binary-prefix check", () 
       binNames,
     });
     expect(calloutsChecked).toBe(50);
-    expect(cliCitationsChecked).toBe(48);
+    expect(cliCitationsChecked).toBe(51);
     expect(failures).toEqual([]);
   });
 });
@@ -353,6 +358,12 @@ function deriveScopedRegistrarPaths(repoRoot: string): Set<string> {
       if (subcmds.includes("verify")) paths.add("sdd evidence verify");
     }
   }
+  // Group registrars in their own modules (issue.ts / catalog.ts) — the same
+  // source list and parser the supplement uses.
+  for (const module of ["packages/cli/src/issue.ts", "packages/cli/src/catalog.ts"]) {
+    const moduleSrc = readFileSync(join(repoRoot, module), "utf8");
+    for (const path of buildCliCommandInventory(moduleSrc).cliCommands) paths.add(path);
+  }
   return paths;
 }
 
@@ -380,6 +391,16 @@ describe("supplementCliCommandInventory — scoped registrar paths (Task 3)", ()
     expect(merged.has("sdd evidence")).toBe(true);
     expect(merged.has("sdd evidence capture")).toBe(true);
     expect(merged.has("sdd evidence verify")).toBe(true);
+    // Group registrars owned by their own modules: index.ts joins
+    // `catalog reconcile` to the catalog group (group-lookup binding), and the
+    // family verbs come from the module registrars.
+    expect(base.has("catalog reconcile")).toBe(true);
+    expect(merged.has("issue")).toBe(true);
+    expect(merged.has("issue add")).toBe(true);
+    expect(merged.has("issue show")).toBe(true);
+    expect(merged.has("catalog")).toBe(true);
+    expect(merged.has("catalog list")).toBe(true);
+    expect(merged.has("catalog show")).toBe(true);
 
     const expectedScoped = deriveScopedRegistrarPaths(REPO_ROOT);
     expect(expectedScoped.size).toBeGreaterThanOrEqual(15);
@@ -445,9 +466,13 @@ export function registerPlanCommands() {}
         join(import.meta.dir, "..", "packages/cli/src/sdd-evidence.ts"),
         "utf8",
       );
+      const issueSrc = readFileSync(join(import.meta.dir, "..", "packages/cli/src/issue.ts"), "utf8");
+      const catalogSrc = readFileSync(join(import.meta.dir, "..", "packages/cli/src/catalog.ts"), "utf8");
       mkdirSync(join(dir, "packages/cli/src"), { recursive: true });
       writeFileSync(join(dir, "packages/cli/src/plan-coordination.ts"), planCoord);
       writeFileSync(join(dir, "packages/cli/src/sdd-evidence.ts"), sddEvidence);
+      writeFileSync(join(dir, "packages/cli/src/issue.ts"), issueSrc);
+      writeFileSync(join(dir, "packages/cli/src/catalog.ts"), catalogSrc);
 
       const cliCommands = new Set<string>(["plan bind"]);
       const { failures } = supplementCliCommandInventory(cliCommands, dir);
@@ -744,6 +769,71 @@ describe("buildCliCommandInventory — detached group declarations (`new Command
     expect(failures).toEqual([
       expect.stringContaining('CLI parent of "ghostCommand.command("haunt")" is not a known command var'),
     ]);
+  });
+});
+
+describe("buildCliCommandInventory — group-lookup binding (`commands.find`)", () => {
+  /** The shape index.ts uses to join a verb to a group another module owns:
+   * the group is resolved from the live program at registration time, and a
+   * missing group aborts instead of silently creating a second one. */
+  const GROUP_LOOKUP_SRC = [
+    'const workflowCommand = new Command("workflow").description("Workflow lifecycle verbs");',
+    "function attachWorkflowGroup(target: Command): void {",
+    "  target.addCommand(workflowCommand);",
+    "}",
+    "function registerCatalogReconcileCommand(target: Command): void {",
+    '  const catalogGroup = target.commands.find((command) => command.name() === "catalog");',
+    '  if (catalogGroup === undefined) throw new Error("catalog must be registered first");',
+    "  catalogGroup",
+    '    .command("reconcile")',
+    '    .description("Recover a pending execution registration")',
+    "    .action(async () => {});",
+    "}",
+  ].join("\n");
+
+  test("the var resolves to that group's path, so its verbs register under it", () => {
+    const { cliCommands, failures } = buildCliCommandInventory(GROUP_LOOKUP_SRC);
+    expect(failures).toEqual([]);
+    expect(cliCommands.has("catalog")).toBe(true);
+    expect(cliCommands.has("catalog reconcile")).toBe(true);
+  });
+});
+
+describe("buildCliCommandInventory — dynamic verb factories (string-literal union parameter)", () => {
+  test("`.command(param)` expands to one subcommand per literal", () => {
+    const { cliCommands, failures } = buildCliCommandInventory(
+      [
+        'const issue = program.command("issue");',
+        'const closeVerb = (verb: "close" | "waive" | "supersede", description: string) => {',
+        "  issue",
+        "    .command(verb)",
+        "    .description(description)",
+        '    .option("--json", "Machine-readable envelope on stdout")',
+        "    .action(async () => {});",
+        "};",
+        'closeVerb("close", "Close as resolved");',
+      ].join("\n"),
+    );
+    expect(failures).toEqual([]);
+    for (const cmd of ["issue close", "issue waive", "issue supersede"]) {
+      expect(cliCommands.has(cmd)).toBe(true);
+    }
+  });
+
+  test("an unresolvable parameter (loop-bound verb) contributes nothing and never fails", () => {
+    const { cliCommands, failures } = buildCliCommandInventory(
+      [
+        'const statusCommand = program.command("status");',
+        "for (const [verb, replacement] of Object.entries(RETIRED_STATUS_VERBS)) {",
+        "  statusCommand",
+        "    .command(verb)",
+        "    .action(() => {});",
+        "}",
+      ].join("\n"),
+    );
+    expect(failures).toEqual([]);
+    expect(cliCommands.has("status")).toBe(true);
+    expect([...cliCommands].some((c) => c.startsWith("status "))).toBe(false);
   });
 });
 

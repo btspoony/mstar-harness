@@ -1,27 +1,31 @@
 /**
  * Engine compound module — knowledge-doc frontmatter schema validation,
- * reference existence checks, index-row obligations, and compound-refresh
- * scope guarding.
+ * reference existence checks, knowledge catalog completeness, and
+ * compound-refresh scope guarding.
  *
  * Spec sources (cited per test): mstar-compound/references/schema.yaml
  * (required/optional fields, track rules), mstar-compound/references/
  * category-mapping.md (problem_type → category directory),
- * mstar-compound SKILL.md Phase 6 (README.md index rows), and
+ * mstar-compound SKILL.md Phase 6 (the knowledge index duty is now the
+ * catalog-completeness query, state-projection contract §4), and
  * mstar-compound-refresh SKILL.md (scope SSOT: knowledge/**, README.md,
  * CONCEPTS.md, status.json).
  */
 import * as fs from "node:fs";
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import {
   assertIndexRows,
+  assertKnowledgeCatalogCompleteness,
   compoundRefreshScope,
   referenceExists,
   scopeGuard,
   validateSchemaYaml,
 } from "../src/compound.js";
+import { registerCatalogEntity } from "../src/catalog.js";
+import { initializeStore, type StoreContext } from "../src/store-db.js";
 
 const hasCode = (g: { violations: { code: string }[] }, code: string) =>
   g.violations.some((v) => v.code === code);
@@ -322,77 +326,72 @@ describe("referenceExists", () => {
 });
 
 // ---------------------------------------------------------------------------
-// assertIndexRows — mstar-compound SKILL.md Phase 6 (index obligations)
+// knowledge catalog completeness — the DB query that replaced the README index
+// (state-projection contract §4)
 // ---------------------------------------------------------------------------
 
-describe("assertIndexRows", () => {
+describe("knowledge catalog completeness — the DB query that replaced the README index", () => {
   const tmp = mkdtempSync(join(tmpdir(), "engine-compound-idx-"));
   afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
-  test("passes when every doc has a README.md index row", () => {
-    const kd = join(tmp, "knowledge-ok");
-    mkdirSync(join(kd, "runtime-errors"), { recursive: true });
-    mkdirSync(join(kd, "best-practices"), { recursive: true });
-    writeFileSync(join(kd, "runtime-errors", "parser-null.md"), "# x\n");
-    writeFileSync(join(kd, "best-practices", "engine-modules.md"), "# y\n");
-    writeFileSync(
-      join(kd, "README.md"),
-      `# Knowledge Index\n\n| Document | Source Plan | Description | Status |\n|----------|-------------|-------------|--------|\n| [Parser null](runtime-errors/parser-null.md) | 2026-a | Parser null fix | active |\n| [Engine modules](best-practices/engine-modules.md) | 2026-b | Module guide | active |\n`,
-    );
-    const result = assertIndexRows(kd);
+  /** A workspace with a real `.mstar` harness, knowledge bodies and a store. */
+  async function knowledgeWorkspace(name: string, bodies: string[]): Promise<{ root: string; context: StoreContext }> {
+    const root = mkdtempSync(join(tmp, name));
+    const harness = join(root, ".mstar");
+    mkdirSync(join(harness, "plans"), { recursive: true });
+    for (const relative of bodies) {
+      mkdirSync(dirname(join(harness, "knowledge", relative)), { recursive: true });
+      writeFileSync(join(harness, "knowledge", relative), "# doc\n");
+    }
+    const context: StoreContext = { harnessDir: root };
+    const handle = await initializeStore(context);
+    handle.close();
+    return { root, context };
+  }
+
+  test("catalog discovery: every knowledge body registered → complete without any README", async () => {
+    const { context } = await knowledgeWorkspace("knowledge-ok-", [
+      "runtime-errors/parser-null.md",
+      "best-practices/engine-modules.md",
+      "README.md",
+      "index.md",
+    ]);
+    await registerCatalogEntity(context, { kind: "document", id: "doc-parser-null", title: "Parser null", rootKind: "knowledge", relativePath: "runtime-errors/parser-null.md", documentKind: "knowledge" }, { operationId: "reg-doc-1", actor: "compound" });
+    await registerCatalogEntity(context, { kind: "document", id: "doc-engine-modules", title: "Engine modules", rootKind: "knowledge", relativePath: "best-practices/engine-modules.md", documentKind: "knowledge" }, { operationId: "reg-doc-2", actor: "compound" });
+    // The index files themselves are not knowledge documents.
+    const result = await assertKnowledgeCatalogCompleteness(context);
     expect(result.ok).toBe(true);
     expect(result.violations).toEqual([]);
   });
 
-  test("flags docs missing from the index", () => {
-    const kd = join(tmp, "knowledge-missing");
-    mkdirSync(join(kd, "logic-errors"), { recursive: true });
-    writeFileSync(join(kd, "logic-errors", "grammar-regex.md"), "# x\n");
-    writeFileSync(
-      join(kd, "README.md"),
-      `# Knowledge Index\n\n| Document | Source Plan | Description | Status |\n|----------|-------------|-------------|--------|\n| [Something else](logic-errors/other.md) | 2026-a | Other | active |\n`,
-    );
-    const result = assertIndexRows(kd);
+  test("catalog discovery: a knowledge body with no catalog row is a gap", async () => {
+    const { context } = await knowledgeWorkspace("knowledge-missing-", ["logic-errors/grammar-regex.md"]);
+    const result = await assertKnowledgeCatalogCompleteness(context);
     expect(result.ok).toBe(false);
-    expect(hasCode(result, "compound.index.missing-row")).toBe(true);
-    const v = result.violations.find((x) => x.code === "compound.index.missing-row")!;
-    expect(v.message).toContain("logic-errors/grammar-regex.md");
+    const codes = result.violations.map((violation) => violation.code);
+    expect(codes).toEqual(["catalog.discovery.missing-document"]);
+    expect(result.violations[0]!.message).toContain("knowledge/logic-errors/grammar-regex.md");
   });
 
-  test("ignores README.md and index.md files themselves", () => {
-    const kd = join(tmp, "knowledge-readme");
-    mkdirSync(join(kd, "conventions"), { recursive: true });
-    writeFileSync(join(kd, "conventions", "index.md"), "# x\n");
-    writeFileSync(join(kd, "README.md"), "# Knowledge Index\n");
-    const result = assertIndexRows(kd);
+  test("catalog discovery: a symlink cycle inside the knowledge dir cannot hang the walk", async () => {
+    const { context } = await knowledgeWorkspace("knowledge-cycle-", ["logic-errors/cycle-a.md"]);
+    const harness = join(context.harnessDir, ".mstar");
+    // Two cycle shapes: a dir → root loop and a self-loop. Both must be skipped
+    // as symlinks (bounded walk — the test itself would hang on a
+    // follow-everything walker).
+    symlinkSync(join(harness, "knowledge"), join(harness, "knowledge", "logic-errors", "back-to-root"));
+    symlinkSync(join(harness, "knowledge"), join(harness, "knowledge", "self-loop"));
+    await registerCatalogEntity(context, { kind: "document", id: "doc-cycle-a", title: "Cycle A", rootKind: "knowledge", relativePath: "logic-errors/cycle-a.md", documentKind: "knowledge" }, { operationId: "reg-cycle", actor: "compound" });
+    const result = await assertKnowledgeCatalogCompleteness(context);
     expect(result.ok).toBe(true);
   });
 
-  test("reports a missing README.md index", () => {
-    const kd = join(tmp, "knowledge-no-readme");
-    mkdirSync(join(kd, "conventions"), { recursive: true });
-    writeFileSync(join(kd, "conventions", "naming.md"), "# x\n");
-    const result = assertIndexRows(kd);
+  test("catalog discovery: the retired README export refuses instead of quietly passing", () => {
+    // The export survives only for the two consumers outside this task's
+    // scope; it asserts nothing about Markdown rows any more.
+    const result = assertIndexRows(join(tmp, "knowledge-ok-"));
     expect(result.ok).toBe(false);
-    expect(hasCode(result, "compound.index.missing-readme")).toBe(true);
-  });
-
-  test("symlink cycle inside the knowledge dir cannot hang the walk", () => {
-    const kd = join(tmp, "knowledge-cycle");
-    mkdirSync(join(kd, "logic-errors"), { recursive: true });
-    writeFileSync(join(kd, "logic-errors", "cycle-a.md"), "# a\n");
-    writeFileSync(
-      join(kd, "README.md"),
-      `# Knowledge Index\n\n| Document | Source Plan | Description | Status |\n|----------|-------------|-------------|--------|\n| [A](logic-errors/cycle-a.md) | 2026-a | Cycle doc | active |\n`,
-    );
-    // Two cycle shapes: a dir → root loop and a self-loop. Both must be
-    // skipped as symlinks (bounded walk — the test itself would hang on the
-    // old follow-everything walker).
-    symlinkSync(kd, join(kd, "logic-errors", "back-to-root"));
-    symlinkSync(kd, join(kd, "self-loop"));
-    const result = assertIndexRows(kd);
-    expect(result.ok).toBe(true);
-    expect(result.violations).toEqual([]);
+    expect(hasCode(result, "compound.index.retired")).toBe(true);
   });
 });
 

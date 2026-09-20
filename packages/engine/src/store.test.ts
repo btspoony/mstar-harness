@@ -24,7 +24,7 @@
  * writers open, so the read/write/delete and path-guard coverage stays
  * truthful against the authorization the boundary now requires.
  * - `list?` interface + FsStore enumeration (exists-conditional status,
- * snapshot/residuals dir scans through the single path table, review
+ * snapshot dir scans through the single path table, review
  * union with the one PLAN_SHAPED_KEY_RE detector, json non-enumerable,
  * `[]` on missing backing, sorted ascending, listed keys round-trip
  * through `get`).
@@ -88,10 +88,12 @@ function recordingStore(): ArtifactStore & { puts: ArtifactDoc[] } {
 /**
  * A writer view of the FsStore: every call runs inside the same private
  * authorization context the locked coordination writers open (spec §C4). A
- * protected document — `status.json`, a workflow `snapshot.json`, a project
- * `residuals.json`, directly or through a `json` alias — may only be written
- * from that context, so a bare `store.put`/`store.delete` is refused; the
- * unprotected kinds (`review`, unrelated `json`) are unaffected by it. This
+ * protected document — `status.json` or a workflow `snapshot.json`, directly
+ * or through a `json` alias — may only be written from that context, so a
+ * bare `store.put`/`store.delete` is refused; the unprotected kinds
+ * (`review`, unrelated `json`) are unaffected by it. The retired register
+ * kind refuses everywhere (issue authority), inside or outside the context.
+ * This
  * keeps the file's read/write/delete, alias-classification and path-guard
  * coverage intact against the authorization the boundary requires.
  */
@@ -158,12 +160,14 @@ describe("createFsStore path mapping", () => {
     }
   });
 
-  test("residuals maps to {PROJECT_DIR}/<key>/residuals.json", async () => {
+  test("issue authority: the retired residuals kind is refused, never mapped", async () => {
     const root = tmpRoot("store-residuals-");
     try {
       const store = authorizedStore(createFsStore(root));
-      await store.put({ kind: "residuals", key: "proj-1", payload: { entries: [] } });
-      expect(existsSync(join(root, "projects", "proj-1", "residuals.json"))).toBe(true);
+      expect(
+        store.put({ kind: "residuals", key: "proj-1", payload: { entries: [] } } as never),
+      ).rejects.toThrow(/no longer persists project registers/);
+      expect(existsSync(join(root, "projects", "proj-1", "residuals.json"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -202,15 +206,13 @@ describe("createFsStore path mapping", () => {
     }
   });
 
-  test("snapshot/residuals honor .mstarc workflow_dir / project_dir overrides", async () => {
+  test("snapshot honors .mstarc workflow_dir overrides", async () => {
     const root = tmpRoot("store-mstarc-");
     try {
       writeFileSync(join(root, ".mstarc"), "[config]\nworkflow_dir=wf-custom\nproject_dir=proj-custom\n");
       const store = authorizedStore(createFsStore(root));
       await store.put({ kind: "snapshot", key: "wf-1", payload: { id: "wf-1" } });
-      await store.put({ kind: "residuals", key: "proj-1", payload: { entries: [] } });
       expect(existsSync(join(root, "wf-custom", "wf-1", "snapshot.json"))).toBe(true);
-      expect(existsSync(join(root, "proj-custom", "proj-1", "residuals.json"))).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -222,28 +224,24 @@ describe("createFsStore path mapping", () => {
 // ---------------------------------------------------------------------------
 
 describe("FsStore round-trip", () => {
-  test("status / snapshot / residuals / review put then get returns the payload", async () => {
+  test("status / snapshot / review put then get returns the payload", async () => {
     const root = tmpRoot("store-roundtrip-");
     try {
       const store = authorizedStore(createFsStore(root));
       const status = { version: 2, updated_at: "2026-08-27", workflows: [] };
       const snapshot = { id: "wf-1", status: "in_progress" };
-      const residuals = { entries: [{ id: "R1" }] };
       const review = { verdict: "approve" };
       await store.put({ kind: "status", key: "root", payload: status });
       await store.put({ kind: "snapshot", key: "wf-1", payload: snapshot });
-      await store.put({ kind: "residuals", key: "proj-1", payload: residuals });
       await store.put({ kind: "review", key: "20260827-artifact-store", payload: review });
  // Intermediate variables: a nested `expect(await store.get(...))` lets
  // TS infer the get<T> type parameter from the expect overload (never)
  // and narrows the actual to undefined — assign first, then assert.
       const gotStatus = await store.get({ kind: "status", key: "root" });
       const gotSnapshot = await store.get({ kind: "snapshot", key: "wf-1" });
-      const gotResiduals = await store.get({ kind: "residuals", key: "proj-1" });
       const gotReview = await store.get({ kind: "review", key: "20260827-artifact-store" });
       expect(gotStatus).toEqual(status);
       expect(gotSnapshot).toEqual(snapshot);
-      expect(gotResiduals).toEqual(residuals);
       expect(gotReview).toEqual(review);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -256,7 +254,6 @@ describe("FsStore round-trip", () => {
       const store = authorizedStore(createFsStore(root));
       expect(await store.get({ kind: "status", key: "root" })).toBeUndefined();
       expect(await store.get({ kind: "snapshot", key: "wf-1" })).toBeUndefined();
-      expect(await store.get({ kind: "residuals", key: "proj-1" })).toBeUndefined();
       expect(await store.get({ kind: "review", key: "20260827-artifact-store" })).toBeUndefined();
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -392,18 +389,11 @@ describe("FsStore list (D4)", () => {
     }
   });
 
-  test("residuals lists project dirs with residuals.json, ascending; stray dirs excluded; missing backing \u2192 []", async () => {
+  test("issue authority: list refuses the retired residuals kind", async () => {
     const root = tmpRoot("store-list-residuals-");
     try {
       const store = authorizedStore(createFsStore(root));
-      expect(await store.list!("residuals")).toEqual([]);
-      await store.put({ kind: "residuals", key: "proj-1", payload: { entries: [] } });
-      await store.put({ kind: "residuals", key: "_default", payload: { entries: [] } });
-      mkdirSync(join(root, "projects", "no-register"));
-      expect(await store.list!("residuals")).toEqual([
-        { kind: "residuals", key: "_default" },
-        { kind: "residuals", key: "proj-1" },
-      ]);
+      expect(() => store.list!("residuals" as never)).toThrow();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -480,15 +470,13 @@ describe("FsStore list (D4)", () => {
       const payloads: Record<string, unknown> = {
         status: { version: 2, updated_at: "2026-08-28", workflows: [] },
         snapshot: { id: "wf-1" },
-        residuals: { entries: [] },
         review: { verdict: "approve" },
       };
       await store.put({ kind: "status", key: "root", payload: payloads.status });
       await store.put({ kind: "snapshot", key: "wf-1", payload: payloads.snapshot });
-      await store.put({ kind: "residuals", key: "proj-1", payload: payloads.residuals });
       await store.put({ kind: "review", key: "20260828-store-engine", payload: payloads.review });
       await store.put({ kind: "review", key: "review-inline", payload: payloads.review });
-      for (const kind of ["status", "snapshot", "residuals", "review"] as const) {
+      for (const kind of ["status", "snapshot", "review"] as const) {
         for (const ref of await store.list!(kind)) {
  // Intermediate variable: a nested `expect(await store.get(...))` lets
  // TS infer the get<T> type parameter from the expect overload (never)
@@ -522,8 +510,6 @@ describe("FsStore list (D4)", () => {
  // vanishes between check and read. Pre-fix list threw; post-fix [].
       writeFileSync(join(root, "workflows"), "not a dir", "utf8");
       expect(await store.list!("snapshot")).toEqual([]);
-      writeFileSync(join(root, "projects"), "not a dir", "utf8");
-      expect(await store.list!("residuals")).toEqual([]);
  // Same for the review union: sdd/_reviews as a file.
       mkdirSync(join(root, "sdd"), { recursive: true });
       writeFileSync(join(root, "sdd", "_reviews"), "not a dir", "utf8");
@@ -796,9 +782,9 @@ describe("loadStoreModule", () => {
       );
       const store = await loadStoreModule(filePath);
       const payload = { note: "default object" };
-      await store.put({ kind: "residuals", key: "proj-1", payload });
-      const gotResiduals = await store.get({ kind: "residuals", key: "proj-1" });
-      expect(gotResiduals).toEqual(payload);
+      await store.put({ kind: "review", key: "review-1", payload });
+      const got = await store.get({ kind: "review", key: "review-1" });
+      expect(got).toEqual(payload);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -898,13 +884,15 @@ describe("coordinated-writer \u2014 protected FsStore boundary", () => {
       });
       expect(readFileSync(statusPath)).toEqual(before);
 
-      // A snapshot/register direct write is refused too — and creates nothing.
-      for (const ref of [{ kind: "snapshot", key: "wf-1" }, { kind: "residuals", key: "p1" }] as const) {
-        await expect(store.put({ ...ref, payload: { probe: true } })).rejects.toMatchObject({
-          code: "coordination.direct-write-refused",
-        });
-        await expect(remove(ref)).rejects.toMatchObject({ code: "coordination.direct-write-refused" });
-      }
+      // A snapshot direct write is refused too, and a retired register write
+      // is refused outright (issue authority) — neither creates anything.
+      await expect(store.put({ kind: "snapshot", key: "wf-1", payload: { probe: true } })).rejects.toMatchObject({
+        code: "coordination.direct-write-refused",
+      });
+      await expect(remove({ kind: "snapshot", key: "wf-1" })).rejects.toMatchObject({
+        code: "coordination.direct-write-refused",
+      });
+      await expect(store.put({ kind: "residuals", key: "p1", payload: { probe: true } } as never)).rejects.toThrow();
       expect(existsSync(join(root, "workflows", "wf-1", "snapshot.json"))).toBe(false);
       expect(existsSync(join(root, "projects", "p1", "residuals.json"))).toBe(false);
     } finally {

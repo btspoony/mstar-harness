@@ -1,24 +1,26 @@
 /**
  * Engine compound module — knowledge-doc frontmatter schema validation,
- * reference existence checks, index-row obligations, and compound-refresh
- * scope guarding.
+ * reference existence checks, catalog completeness for the knowledge family,
+ * and compound-refresh scope guarding.
  *
  * Spec sources (all embedded as constants — no runtime skill-file reads):
  * - mstar-compound/references/schema.yaml: required/optional frontmatter
- * fields, problem_type enum, severity enum, track rules (bug vs
- * knowledge), resolution_type enum, tags max 8.
+ *   fields, problem_type enum, severity enum, track rules (bug vs
+ *   knowledge), resolution_type enum, tags max 8.
  * - mstar-compound/references/category-mapping.md: problem_type → category
- * directory mapping (rule 1: category must match the directory name).
- * - mstar-compound SKILL.md Phase 6: every doc gets a row in
- * `{KNOWLEDGE_DIR}/README.md` (Document / Source Plan / Description /
- * Status).
+ *   directory mapping (rule 1: category must match the directory name).
+ * - mstar-compound SKILL.md Phase 6: the knowledge index duty is now a
+ *   catalog-completeness query over `store.db`
+ *   (state-projection contract §4); the README table is not a register.
  * - mstar-compound-refresh SKILL.md § 产物与操作路径 (scope SSOT): only
- * `{HARNESS_DIR}/knowledge/**` + `*.md` files, `knowledge/README.md`,
- * `<repo-root>/CONCEPTS.md` + `{HARNESS_DIR}/status.json`.
+ *   `{HARNESS_DIR}/knowledge/**` + `*.md` files, `knowledge/README.md`,
+ *   `<repo-root>/CONCEPTS.md` + `{HARNESS_DIR}/status.json`.
  */
 import { existsSync, readdirSync, readFileSync, type Dirent } from "node:fs";
-import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, isAbsolute, join, resolve, sep } from "node:path";
 import type { GateResult, ValidationResult } from "./core.js";
+import { assertCatalogCompleteness } from "./iteration.js";
+import type { StoreContext } from "./store-db.js";
 
 function violation(severity: ValidationResult["severity"], code: string, message: string, fix?: string): ValidationResult {
   return { ok: false, severity, code, message, fix };
@@ -519,97 +521,41 @@ export function referenceExists(repoRoot: string, docText: string): ReferenceChe
 }
 
 // ---------------------------------------------------------------------------
-// assertIndexRows — mstar-compound Phase 6 index obligations
+// Knowledge catalog completeness — the DB query that replaced the README index
 // ---------------------------------------------------------------------------
 
-/** Recursively collect knowledge doc paths (posix separators) under `dir`,
- * excluding `README.md` / `index.md` index files. Symlinks are skipped
- * (`withFileTypes` + `isSymbolicLink`) so a symlink cycle inside the
- * knowledge dir cannot hang the walk — same policy as the CLI lint walk.
+/**
+ * RETIRED (state-projection contract §4): the `{KNOWLEDGE_DIR}/README.md` row
+ * listed here was a Markdown register, and catalog authority now lives in
+ * `store.db`. The export survives only because two consumers outside this
+ * module's own scope still import it — `mstar compound validate --knowledge-dir`
+ * (`packages/cli/src/index.ts`) and the dsh `mstar_compound_validate` tool
+ * (`packages/dsh/src/gates/tools.ts`). It therefore refuses actionably instead
+ * of quietly passing; those callers move to `assertKnowledgeCatalogCompleteness`
+ * (which needs the harness/store context the README form never had).
  */
-function collectKnowledgeDocs(dir: string): string[] {
-  const docs: string[] = [];
-  const stack = [dir];
-  while (stack.length > 0) {
-    const current = stack.pop()!;
-    let entries: Dirent[];
-    try {
-      entries = readdirSync(current, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-    for (const entry of entries) {
-      if (entry.isSymbolicLink()) continue;
-      const full = join(current, entry.name);
-      if (entry.isDirectory()) {
-        stack.push(full);
-      } else if (entry.name.endsWith(".md") && entry.name !== "README.md" && entry.name !== "index.md") {
-        docs.push(relative(dir, full).split(sep).join("/"));
-      }
-    }
-  }
-  return docs.sort();
-}
-
-/** Normalize one index-row first-cell reference: link targets, backticks,
- * `./` prefix, and repo-root `knowledge/` prefix. */
-function normalizeIndexRef(cell: string): string {
-  const link = /\[[^\]]*\]\(([^)]+)\)/.exec(cell);
-  let value = link !== null ? link[1] : cell;
-  value = value.replace(/`/g, "").replace(/^\.\//, "");
-  if (value.startsWith("knowledge/")) value = value.slice("knowledge/".length);
-  return value.trim();
+export function assertIndexRows(knowledgeDir: string): GateResult {
+  return {
+    ok: false,
+    violations: [
+      violation(
+        "medium",
+        "compound.index.retired",
+        `${join(knowledgeDir, "README.md")} is no longer a register \u2014 knowledge catalog completeness is a store.db query (state-projection contract \u00A74)`,
+        "call assertKnowledgeCatalogCompleteness(context), or run `mstar catalog discover` + `mstar catalog import`",
+      ),
+    ],
+  };
 }
 
 /**
- * Assert every knowledge doc under `knowledgeDir` has a row in
- * `knowledgeDir/README.md` (mstar-compound SKILL.md Phase 6 index
- * obligations). Row first cells may be plain paths or `[title](path)`
- * links, with optional `./` / `knowledge/` prefixes. `README.md` and
- * `index.md` files are not docs.
- *
- * Violation codes:
- * - `compound.index.missing-readme` — no README.md index
- * - `compound.index.missing-row` — doc with no index row
+ * The knowledge half of the catalog completeness query: every knowledge body
+ * under `{KNOWLEDGE_DIR}` must be registered in the catalog. No README table is
+ * involved, and a missing/staged store refuses instead of reading as an empty
+ * (complete) catalog — see `readCatalogCompleteness` for the exact discipline.
  */
-export function assertIndexRows(knowledgeDir: string): GateResult {
-  const violations: ValidationResult[] = [];
-  const readmePath = join(knowledgeDir, "README.md");
-  if (!existsSync(readmePath)) {
-    violations.push(
-      violation(
-        "medium",
-        "compound.index.missing-readme",
-        `missing ${readmePath} \u2014 the knowledge index is required (mstar-compound Phase 6: every doc gets a README.md row)`,
-        "create knowledge/README.md with a Document / Source Plan / Description / Status table",
-      ),
-    );
-    return { ok: false, violations };
-  }
-
-  const docs = collectKnowledgeDocs(knowledgeDir);
-  const rows = new Set<string>();
-  for (const line of readFileSync(readmePath, "utf8").split(/\r?\n/)) {
-    if (!line.trim().startsWith("|")) continue;
-    const cells = line.split("|").map((c) => c.trim());
-    if (cells.length < 2) continue;
-    const normalized = normalizeIndexRef(cells[1]);
-    if (normalized !== "") rows.add(normalized);
-  }
-
-  for (const doc of docs) {
-    if (!rows.has(doc)) {
-      violations.push(
-        violation(
-          "medium",
-          "compound.index.missing-row",
-          `knowledge doc "${doc}" has no row in knowledge/README.md index (mstar-compound Phase 6 index obligations)`,
-          `add a row \`| [<title>](${doc}) | <source plan> | <description> | <status> |\` to knowledge/README.md`,
-        ),
-      );
-    }
-  }
-  return { ok: violations.length === 0, violations };
+export async function assertKnowledgeCatalogCompleteness(context: StoreContext): Promise<GateResult> {
+  return await assertCatalogCompleteness(context, ["knowledge"]);
 }
 
 // ---------------------------------------------------------------------------

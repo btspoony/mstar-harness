@@ -29,6 +29,7 @@
 import { existsSync, readdirSync, realpathSync, statSync } from 'node:fs'
 import { dirname, isAbsolute, join, normalize, relative, sep } from 'node:path'
 import {
+  assertCatalogExecutionCommitted,
   readJson,
   resolveWorkflowDir,
   validateExecutionLease,
@@ -36,6 +37,7 @@ import {
   WORKFLOW_SNAPSHOT_FILE,
   WORKFLOW_TERMINAL_STATUSES,
 } from '@mstar-harness/engine'
+import type { StoreContext } from '@mstar-harness/engine'
 import type { WorkflowSelectionView } from '../types.ts'
 import { STATUS_FILE, asRecord } from './_shared.ts'
 
@@ -487,4 +489,57 @@ export function resolveReadWorkflow(harnessDir: string, hint?: SessionHint): Wor
     }
   }
   return { kind: 'terminal', workflowId: best.workflowId, dir: best.dir }
+}
+
+/* ---------------------------------- catalog registration ---------------------------------- */
+
+/** One catalog-registration refusal: the stable code + its actionable message. */
+export interface CatalogRegistrationRefusal {
+  readonly code: string
+  readonly message: string
+}
+
+/**
+ * The catalog-registration gate for a root-visible workflow (state-projection
+ * contract §3 step 3; issue contract §7): a workflow whose registration
+ * operation is still `prepared`/`execution-written` is HALF-registered — the
+ * snapshot and the root `workflows[]` entry are visible while the catalog
+ * journal has not published its delta — so it must not be dispatched against
+ * until it is reconciled.
+ *
+ * Root workflow ROUTING stays JSON-owned: this guard never selects a
+ * lifecycle, never reads a selection from the store, and never invents one;
+ * the caller passes the workflow id its OWN JSON selection produced. What the
+ * guard adds is the registration verdict, which lives only in the store's
+ * journal, through the engine's own `assertCatalogExecutionCommitted` (the
+ * single registration authority — no second journal reader here).
+ *
+ * Pre-activation exclusion (issue contract §7, engine `coordination.ts`
+ * parity): a MISSING store (`store.not-initialized`) or a STAGED one
+ * (`store.not-active`) is not a catalog verdict — the legacy authority is
+ * still in force and the workflow is never retro-refused. Every other failure
+ * (corrupt store, below-floor/missing-capability runtime, schema drift, a
+ * conflict) is returned as a refusal rather than swallowed: a dispatch that
+ * cannot prove the registration is never allowed to proceed on a guess.
+ * @param harnessDir - the resolved `{HARNESS_DIR}`.
+ * @param workflowId - the workflow the caller's JSON selection resolved.
+ * @returns the refusal, or `null` when the registration is committed (or the
+ *   store makes no catalog claim yet).
+ */
+export async function catalogRegistrationRefusal(
+  harnessDir: string,
+  workflowId: string,
+): Promise<CatalogRegistrationRefusal | null> {
+  const context: StoreContext = { harnessDir }
+  try {
+    await assertCatalogExecutionCommitted(context, workflowId)
+    return null
+  } catch (error) {
+    const code = (error as { code?: unknown } | null | undefined)?.code
+    if (code === 'store.not-initialized' || code === 'store.not-active') return null
+    return {
+      code: typeof code === 'string' && code !== '' ? code : 'catalog.registration-unavailable',
+      message: error instanceof Error ? error.message : String(error),
+    }
+  }
 }

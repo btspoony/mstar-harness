@@ -1,7 +1,6 @@
 /**
- * Engine status module — status.json schema validation, residual severity
- * normalization, project-register findings-cleanup gate, and the
- * project-register tech-debt rollup.
+ * Engine status module — status.json schema validation and residual severity
+ * normalization.
  *
  * Spec sources (each test cites the skill/reference section it enforces):
  * - status.json schema + required fields + root-only `residual_findings`
@@ -9,24 +8,18 @@
  * `skills/mstar-artifacts/references/status-and-residuals.md`
  * § Basic structure + § General constraints ("Init with `residual_findings`:
  * {}; no dual-write with legacy side") + § Common queries (legacy read path).
- * - Severity enum + legacy `"warning"` → `low` normalization (read + rollup):
+ * - Severity enum + legacy `"warning"` → `low` normalization:
  * § "Residual findings: `severity` (SSOT, machine field)" — allowed values
  * `critical|high|medium|low|nit`; `warning`/`Major`/non-English forbidden in
  * JSON; legacy `"severity": "warning"` is read and rolled up as `low`.
  * `null`/`""` → `medium` (rollup `norm_sev` semantics).
- * - Findings cleanup modes (zero-residual vs allow-residual; blocker-defer
- * definition; nit/waived rules): § Findings cleanup modes. v3 relocation:
- * the gate reads the project register (`projects/<id>/residuals.json`,
- * one entry per plan-id key) instead of the v1 root `residual_findings`;
- * the plan-metadata `findings_cleanup` mirror is deleted (no dual-track).
- * - Rollup aggregates (total_open / by_severity / by_target / by_plan):
- * § `metadata.tech_debt_summary` (optional rollup) — canonical compute is
- * `techDebtRollup` (engine; no CLI form). v3 relocation: the rollup
- * aggregates project registers under `{PROJECT_DIR}`; the v1 stored-summary
- * drift check (`metadata.tech_debt_summary`) is deleted — the register is
- * the source of truth, so `stored` is always null and the retained
- * `checks`/`overall` fields report DRIFT (export-surface compatibility
- * until the P2 CLI cutover).
+ * - Findings cleanup modes (zero-residual vs allow-residual): § Findings
+ * cleanup modes. Issue-governance cutover G2a moved `findingsCleanupGate` off
+ * the register onto the issue store (open issues linked to the plan), so its
+ * cases live in `src/issue-cutover.test.ts`; this file keeps the register
+ * VALIDATOR. The legacy register-walking rollup (`techDebtRollup`) is deleted
+ * (plan QC fix wave FW-5) — the register authority is retired and the findings
+ * rollup computes from the issue store (`readIssueRollup`, CLI-side).
  * - `ValidationResult`/`GateResult` shapes + severity machine SSOT:
  * `packages/engine/src/core.ts` (roadmap §8.5 C2/C4).
  */
@@ -48,12 +41,11 @@ import {
   validateStatus,
   validateStatusV2,
 } from "../src/status.js";
-import { findingsCleanupGate, techDebtRollup } from "../src/project.js";
 import { withStatusWriteLock } from "../src/lease.js";
 import { readJson, writeJson } from "../src/core.js";
 import type { GateResult, ValidationResult } from "../src/core.js";
 import type { WorkflowEntry } from "../src/status.js";
-import type { FindingsCleanupMode, TechDebtRollup } from "../src/project.js";
+import type { FindingsCleanupMode } from "../src/project.js";
 import { WORKFLOW_SNAPSHOT_FILE, writeWorkflowSnapshot } from "../src/workflow.js";
 
 const FIXTURES = join(import.meta.dir, "fixtures");
@@ -750,250 +742,6 @@ describe("registerWorkflow / unregisterWorkflow (root writers under the root-fil
   });
 });
 
-describe("findingsCleanupGate — project register input (array schema)", () => {
-  function register(entries: Record<string, unknown[]>): Record<string, unknown> {
-    return { entries };
-  }
-
-  function gated(
-    residual: Record<string, unknown> | undefined,
-    opts?: { mode?: FindingsCleanupMode },
-  ): GateResult {
-    const reg = register(residual === undefined ? {} : { "plan-a": [residual] });
-    return findingsCleanupGate(reg as Parameters<typeof findingsCleanupGate>[0], "plan-a", opts);
-  }
-
-  test("allow-residual (default): open low/medium residuals are fine", () => {
-    const result = gated(entry({ decision: "accept" }));
-    expect(result.ok).toBe(true);
-  });
-
-  test("allow-residual: unresolved critical blocks Approve with residuals", () => {
-    violationCodes("findings.allow-residual-critical")(gated(entry({ severity: "critical" })));
-  });
-
-  test("zero-residual: true blocker-defer (decision defer + target) passes", () => {
-    const result = gated(entry({ decision: "defer", target: "next iteration" }), { mode: "zero-residual" });
-    expect(result.ok).toBe(true);
-  });
-
-  test("zero-residual: fixable open findings (accept) are blocked", () => {
-    violationCodes("findings.zero-residual-open-fixable")(gated(entry({ decision: "accept" }), { mode: "zero-residual" }));
-  });
-
-  test("zero-residual: an open critical defer (valid target) is still blocked", () => {
-// severity outranks the decision branch: a defer with a well-formed target
-// is a true blocker-defer, but never for a critical — fix it or close it
-// by explicit risk acceptance.
-    const result = gated(entry({ severity: "critical", decision: "defer", target: "next iteration" }), {
-      mode: "zero-residual",
-    });
-    expect(result.ok).toBe(false);
-    expect(violationsOf(result)).toEqual(["findings.zero-residual-critical"]);
-    expect(result.violations[0]!.severity).toBe("high");
-  });
-
-  test("zero-residual: an open critical is blocked for every decision (accept)", () => {
-    const result = gated(entry({ severity: "critical", decision: "accept" }), { mode: "zero-residual" });
-    expect(result.ok).toBe(false);
-    expect(violationsOf(result)).toEqual(["findings.zero-residual-critical"]);
-  });
-
-  test("zero-residual: a resolved critical passes (closed entries stay first)", () => {
-    const result = gated(
-      entry({ severity: "critical", lifecycle: "resolved", closed_at: "2026-09-14", closure_note: "fixed in 8f2c1a" }),
-      { mode: "zero-residual" },
-    );
-    expect(result.ok).toBe(true);
-    expect(result.violations).toEqual([]);
-  });
-
-  test("zero-residual: risk-accepted must be closed/archived, not left open", () => {
-    violationCodes("findings.zero-residual-risk-accepted")(
-      gated(entry({ decision: "risk-accepted" }), { mode: "zero-residual" }),
-    );
-  });
-
-  test("zero-residual: defer without a target is not a true blocker-defer", () => {
-    violationCodes("findings.zero-residual-defer-no-target")(
-      gated(entry({ decision: "defer", target: null }), { mode: "zero-residual" }),
-    );
-  });
-
-  test("zero-residual: style-only nits never stay open", () => {
-    violationCodes("findings.zero-residual-nit")(gated(entry({ severity: "nit" }), { mode: "zero-residual" }));
-  });
-
-  test("zero-residual: closed entries are ignored", () => {
-    const result = gated(
-      entry({ lifecycle: "resolved", closed_at: "2026-08-07", closure_note: "fixed" }),
-      { mode: "zero-residual" },
-    );
-    expect(result.ok).toBe(true);
-  });
-
-  test("no register entry for the plan → no residuals, gate passes (snapshot plan linkage via plan-id key)", () => {
-    const result = gated(undefined, { mode: "zero-residual" });
-    expect(result.ok).toBe(true);
-    expect(result.violations).toEqual([]);
-  });
-
-  test("a non-array entry value fails closed with a violation — never a TypeError ", () => {
- // Malformed register (pre-wave schema holdover / hand-edited doc): the
- // plan-id key maps to an object instead of an array. The gate must
- // return the same invalid-entry-list violation as the register
- // validator — not throw `entries is not iterable` (`.length` on an
- // object is undefined, so the old length-0 guard did not intercept).
-    const reg = { entries: { "plan-a": { id: "RAN-1", decision: "accept" } } };
-    const result = findingsCleanupGate(reg as Parameters<typeof findingsCleanupGate>[0], "plan-a");
-    expect(result.ok).toBe(false);
-    expect(violationsOf(result)).toContain("project.register.invalid-entry-list");
-  });
-
-  test("every open entry of a plan is checked (array schema — one bad entry fails the plan)", () => {
- // W-E array semantics: a plan can hold 2+ residuals; each open entry is
- // evaluated, so a single fixable finding blocks zero-residual even when
- // a sibling is a true blocker-defer.
-    const reg = register({
-      "plan-a": [
-        entry({ id: "R1", decision: "defer", target: "next iteration" }),
-        entry({ id: "R2", decision: "accept" }),
-        entry({ id: "R3", lifecycle: "resolved", closed_at: "2026-08-07", closure_note: "fixed" }),
-      ],
-    });
-    const result = findingsCleanupGate(reg as Parameters<typeof findingsCleanupGate>[0], "plan-a", {
-      mode: "zero-residual",
-    });
-    expect(result.ok).toBe(false);
- // The fixable R2 is flagged; the true blocker-defer R1 and the closed
- // R3 contribute no violation.
-    expect(violationsOf(result)).toContain("findings.zero-residual-open-fixable");
-    expect(result.violations.map((v) => v.message).join(" ")).toContain("R#R2");
-    expect(result.violations.map((v) => v.message).join(" ")).not.toContain("R#R1");
-
-    const allow = findingsCleanupGate(reg as Parameters<typeof findingsCleanupGate>[0], "plan-a", {
-      mode: "allow-residual",
-    });
-    expect(allow.ok).toBe(true);
-  });
-
-  test("explicit mode is the only mode source (plan-metadata findings_cleanup mirror deleted)", () => {
-    const result = gated(entry({ decision: "accept" }), { mode: "zero-residual" });
-    expect(violationsOf(result)).toContain("findings.zero-residual-open-fixable");
-    const allow = gated(entry({ decision: "accept" }), { mode: "allow-residual" });
-    expect(allow.ok).toBe(true);
-  });
-});
-
-describe("techDebtRollup — project register aggregation (array schema)", () => {
- /** Write `projects/<id>/residuals.json` with an ARRAY of entries per plan-id key. */
-  function writeRegister(projectDir: string, projectId: string, entries: Record<string, unknown[]>): void {
-    const dir = join(projectDir, projectId);
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, "residuals.json"), JSON.stringify({ entries }, null, 2), "utf8");
-  }
-
-  test("computed aggregates match jq semantics (warning→low, null/''→medium, closed excluded, unspecified target)", () => {
-    const dir = harnessRoot("status-rollup-register-");
-    try {
-      writeRegister(dir, "_default", {
-        "plan-a": [entry({ id: "R1", severity: "warning", target: "V1.0" })],
-        "plan-b": [entry({ id: "R2", severity: null, target: "V1.1" })],
-        "plan-c": [entry({ id: "R3", severity: "", target: "V1.0" })],
-        "plan-d": [entry({ id: "R4", severity: "low", target: null })],
-        "plan-e": [entry({ id: "R5", severity: "medium", lifecycle: "resolved", closed_at: "2026-08-07", closure_note: "x" })],
-      });
-      const rollup = techDebtRollup(dir);
-      expect(rollup.computed).toEqual({
-        total_open: 4,
-        by_severity: { critical: 0, high: 0, medium: 2, low: 2, nit: 0 },
-        by_target: { "V1.0": 2, "V1.1": 1, unspecified: 1 },
-        by_plan: { "plan-a": 1, "plan-b": 1, "plan-c": 1, "plan-d": 1 },
-      });
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("every open entry of a plan counts (array schema — multi-residual plans aggregate per plan)", () => {
-    const dir = harnessRoot("status-rollup-multi-");
-    try {
-      writeRegister(dir, "_default", {
-        "plan-a": [
-          entry({ id: "R1", severity: "low", target: "V1.0" }),
-          entry({ id: "R2", severity: "high", target: "V1.0" }),
-          entry({ id: "R3", severity: "low", lifecycle: "resolved", closed_at: "2026-08-07", closure_note: "x" }),
-        ],
-      });
-      const rollup = techDebtRollup(dir);
-      expect(rollup.computed).toEqual({
-        total_open: 2,
-        by_severity: { critical: 0, high: 1, medium: 0, low: 1, nit: 0 },
-        by_target: { "V1.0": 2 },
-        by_plan: { "plan-a": 2 },
-      });
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("aggregates across multiple project registers (by_plan keyed by plan id)", () => {
-    const dir = harnessRoot("status-rollup-multiproj-");
-    try {
-      writeRegister(dir, "_default", { "plan-a": [entry({ id: "R1", severity: "low" })] });
-      writeRegister(dir, "acme", { "plan-b": [entry({ id: "R2", severity: "high" })] });
-      const rollup = techDebtRollup(dir);
-      expect(rollup.computed.total_open).toBe(2);
-      expect(rollup.computed.by_plan).toEqual({ "plan-a": 1, "plan-b": 1 });
-      expect(rollup.computed.by_severity).toEqual({ critical: 0, high: 1, medium: 0, low: 1, nit: 0 });
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("no registers / missing project dir → empty rollup", () => {
-    const dir = harnessRoot("status-rollup-empty-");
-    try {
-      const rollup = techDebtRollup(join(dir, "does-not-exist"));
-      expect(rollup.computed).toEqual({
-        total_open: 0,
-        by_severity: { critical: 0, high: 0, medium: 0, low: 0, nit: 0 },
-        by_target: {},
-        by_plan: {},
-      });
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("v1 stored-summary drift check deleted: stored is always null, checks all DRIFT, overall DRIFT", () => {
- // The v1 `metadata.tech_debt_summary` cache is a v1 dead path — the
- // project register is the source of truth. The retained
- // stored/checks/overall fields keep the exported TechDebtRollup shape
- // (compile-compat for the P2 CLI cutover) and always report DRIFT.
-    const dir = harnessRoot("status-rollup-drift-");
-    try {
-      writeRegister(dir, "_default", { "plan-a": [entry()] });
-      const rollup = techDebtRollup(dir);
-      expect(rollup.stored).toBeNull();
-      expect(rollup.checks.map((c) => c.status)).toEqual(["DRIFT", "DRIFT", "DRIFT", "DRIFT"]);
-      expect(rollup.overall).toBe("DRIFT");
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("entry lifecycle: false counts as OPEN (jq `//` defaults false)", () => {
-    const dir = harnessRoot("status-rollup-false-");
-    try {
-      writeRegister(dir, "_default", { "plan-a": [entry({ id: "R1", severity: "low", target: "V1", lifecycle: false })] });
-      const rollup = techDebtRollup(dir);
-      expect(rollup.computed.total_open).toBe(1);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-});
 
 describe("resolveCompassEnforcement — repo compass enforcement: hard (Slice 5, roadmap §8.5 D2)", () => {
  // Spec: roadmap §8.5 C4/D2 — hard gates are enabled per Assignment/compass;

@@ -1,0 +1,663 @@
+/*
+ * Dashboard styles — token values come verbatim from DESIGN.md frontmatter
+ * (CSS custom properties are the implementation mapping; DESIGN.md is the SSOT).
+ */
+
+:root {
+  /* colors */
+  --color-background-100: #ffffff;
+  --color-background-200: #f5f7fa;
+  --color-background-300: #edf1f6;
+  --color-gray-400: #d5dce5;
+  --color-gray-600: #8995a6;
+  --color-gray-900: #506070;
+  --color-gray-1000: #1c2430;
+  --color-blue-700: #1756b8;
+  --color-blue-800: #12458f;
+  --color-blue-100: #eaf1ff;
+  --color-red-700: #b42318;
+  --color-red-100: #fff0ed;
+  --color-amber-700: #a35300;
+  --color-amber-100: #fff5e5;
+  --color-green-700: #147d48;
+  --color-green-100: #eaf8ef;
+  --color-purple-700: #7042a0;
+
+  /* spacing (8px rhythm; 8 inside groups, 16 between groups, 32 between sections) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* rounded */
+  --rounded-sm: 6px;
+
+  /* typography families */
+  --font-sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--color-background-200);
+  color: var(--color-gray-1000);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.6;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.heading-28 {
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+  margin: 0 0 var(--space-4);
+}
+
+/* Skip link — visible on focus only */
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  background: var(--color-background-100);
+  color: var(--color-blue-700);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--rounded-sm);
+  z-index: 10;
+}
+
+.skip-link:focus {
+  left: var(--space-4);
+  top: var(--space-4);
+}
+
+/* Header / navigation */
+.app-header {
+  background: var(--color-background-100);
+  border-bottom: 1px solid var(--color-gray-400);
+}
+
+.app-nav {
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: var(--space-2) var(--space-8);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.app-title {
+  font-weight: 600;
+  margin-right: var(--space-4);
+}
+
+.nav-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 var(--space-4);
+  border-radius: var(--rounded-sm);
+  color: var(--color-gray-1000);
+  text-decoration: none;
+}
+
+.nav-link:hover {
+  background: var(--color-background-200);
+}
+
+.nav-link.is-active {
+  color: var(--color-blue-700);
+  background: var(--color-blue-100);
+  font-weight: 600;
+}
+
+/* Main content */
+.app-main {
+  flex: 1;
+  width: 100%;
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: var(--space-8) var(--space-8);
+}
+
+/* Issues: filters */
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-4);
+  padding: var(--space-4);
+  background: var(--color-background-100);
+  border: 1px solid var(--color-gray-400);
+  border-radius: var(--rounded-sm);
+}
+
+.filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 180px;
+}
+
+.filter-field-wide {
+  flex: 1 1 280px;
+}
+
+.filter-field label {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.filter-field input,
+.filter-field select {
+  height: 44px;
+  padding: 0 12px;
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.6;
+  color: var(--color-gray-1000);
+  background: var(--color-background-100);
+  border: 1px solid var(--color-gray-600);
+  border-radius: var(--rounded-sm);
+}
+
+.button-secondary {
+  height: 44px;
+  padding: 0 16px;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--color-gray-1000);
+  background: var(--color-background-100);
+  border: 1px solid var(--color-gray-600);
+  border-radius: var(--rounded-sm);
+  cursor: pointer;
+}
+
+.button-secondary:hover:enabled {
+  background: var(--color-background-200);
+}
+
+.button-secondary:active:enabled {
+  background: var(--color-background-300);
+}
+
+.button-secondary:disabled {
+  color: var(--color-gray-900);
+  background: var(--color-background-300);
+  border-color: var(--color-gray-400);
+  cursor: default;
+}
+
+.hint {
+  margin: var(--space-2) 0 0;
+  color: var(--color-gray-900);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* Issues: list */
+.table-scroll {
+  overflow-x: auto;
+  background: var(--color-background-100);
+  border: 1px solid var(--color-gray-400);
+  border-radius: var(--rounded-sm);
+}
+
+/* Issue list, workflow list, iteration list: one flat data-table pattern. */
+.issue-table,
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.issue-table caption,
+.data-table caption {
+  padding: var(--space-3) var(--space-4);
+  color: var(--color-gray-900);
+  text-align: left;
+}
+
+.issue-table th,
+.issue-table td,
+.data-table th,
+.data-table td {
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--color-gray-400);
+  text-align: left;
+  vertical-align: top;
+}
+
+.issue-table thead th,
+.data-table thead th {
+  border-top: none;
+  color: var(--color-gray-900);
+  font-weight: 600;
+}
+
+.issue-table tbody tr:hover,
+.data-table tbody tr:hover {
+  background: var(--color-background-200);
+}
+
+.col-id,
+.col-secondary {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.col-title {
+  min-width: 240px;
+}
+
+.col-title a {
+  color: var(--color-blue-700);
+}
+
+/* Secondary metadata for narrow screens (shown below the title, never instead of it) */
+.row-meta {
+  display: none;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.badge {
+  display: inline-block;
+  padding: 2px var(--space-2);
+  border: 1px solid var(--color-gray-600);
+  border-radius: var(--rounded-sm);
+  background: var(--color-background-200);
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--color-gray-1000);
+}
+
+.badge[data-tone="danger"] {
+  color: var(--color-red-700);
+  background: var(--color-red-100);
+  border-color: var(--color-red-700);
+}
+
+.badge[data-tone="success"] {
+  color: var(--color-green-700);
+  background: var(--color-green-100);
+  border-color: var(--color-green-700);
+}
+
+.badge[data-tone="terminal"] {
+  color: var(--color-purple-700);
+  background: var(--color-background-100);
+  border-color: var(--color-purple-700);
+}
+
+/* Amber for a disclosed data gap: a missing catalog join, pin or execution row. */
+.badge[data-tone="warning"] {
+  color: var(--color-amber-700);
+  background: var(--color-amber-100);
+  border-color: var(--color-amber-700);
+}
+
+/* One row of join-disclosure badges, flush with the content it qualifies. */
+.badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: var(--space-2) 0 0;
+}
+
+.pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+
+.pager-summary {
+  margin: 0 var(--space-2);
+  color: var(--color-gray-900);
+  font-size: 14px;
+}
+
+/* States */
+.empty-state {
+  padding: var(--space-8) var(--space-4);
+  background: var(--color-background-100);
+  border: 1px solid var(--color-gray-400);
+  border-radius: var(--rounded-sm);
+}
+
+.notice {
+  margin-top: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-gray-400);
+  border-radius: var(--rounded-sm);
+  background: var(--color-background-100);
+}
+
+.notice[data-tone="error"] {
+  color: var(--color-red-700);
+  background: var(--color-red-100);
+  border-color: var(--color-red-700);
+}
+
+.notice[data-tone="warning"] {
+  color: var(--color-amber-700);
+  background: var(--color-amber-100);
+  border-color: var(--color-amber-700);
+}
+
+/* One fact per line inside a stale/unavailable disclosure notice. */
+.notice-line {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.notice-line + .notice-line {
+  margin-top: var(--space-2);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Issues: detail */
+.back-link {
+  margin: 0 0 var(--space-4);
+}
+
+.back-link a {
+  color: var(--color-blue-700);
+}
+
+.detail-id {
+  margin: 0 0 var(--space-6);
+  color: var(--color-gray-900);
+}
+
+.detail-section {
+  margin-top: var(--space-8);
+}
+
+.heading-20 {
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
+  margin: 0 0 var(--space-3);
+}
+
+.facts {
+  margin: 0;
+}
+
+.fact {
+  display: grid;
+  grid-template-columns: minmax(120px, 200px) 1fr;
+  gap: var(--space-2) var(--space-4);
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--color-gray-400);
+}
+
+.fact:first-child {
+  border-top: none;
+}
+
+.fact-label {
+  color: var(--color-gray-900);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.fact-value {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.prose {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.history,
+.relations {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.history-item,
+.relations > li {
+  padding: var(--space-3) 0;
+  border-top: 1px solid var(--color-gray-400);
+}
+
+.history-item:first-child,
+.relations > li:first-child {
+  border-top: none;
+}
+
+.history-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-2);
+}
+
+.history-kind {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.history-migration {
+  margin: 0 0 var(--space-2);
+  color: var(--color-gray-900);
+  font-size: 14px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.evidence {
+  margin: var(--space-2) 0 0;
+  padding-left: var(--space-4);
+}
+
+.legacy-json {
+  margin: var(--space-2) 0 0;
+  padding: var(--space-3);
+  background: var(--color-background-200);
+  border-radius: var(--rounded-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.external {
+  margin: var(--space-2) 0 0;
+}
+
+.external a {
+  color: var(--color-blue-700);
+  overflow-wrap: anywhere;
+}
+
+/* Issues: issue-flow chart panel (D5) */
+.flow-open {
+  margin: 0 0 var(--space-2);
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+.flow-scroll {
+  margin-top: var(--space-2);
+}
+
+/* Fixed-pixel chart inside a labelled scroll region: below sm the region
+   scrolls horizontally instead of scaling the axis text down (DESIGN.md
+   "Spacing and responsive layout"). */
+.flow-figure {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  min-width: 720px;
+}
+
+.flow-chart {
+  display: block;
+}
+
+.flow-line {
+  stroke-width: 2.5;
+  stroke-linecap: round;
+}
+
+.flow-line-captured {
+  stroke: var(--color-blue-700);
+}
+
+.flow-line-retired {
+  stroke: var(--color-purple-700);
+}
+
+.flow-axis {
+  stroke: var(--color-gray-600);
+  stroke-width: 1;
+}
+
+.flow-grid {
+  stroke: var(--color-gray-400);
+  stroke-width: 1;
+  stroke-dasharray: 2 4;
+}
+
+.flow-axis-label {
+  fill: var(--color-gray-900);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.flow-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-6);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--color-gray-400);
+  color: var(--color-gray-900);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.flow-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.flow-legend-item svg {
+  display: block;
+}
+
+.flow-note {
+  margin-top: var(--space-2);
+  max-width: 72ch;
+}
+
+/* Footer */
+.app-footer {
+  background: var(--color-background-100);
+  border-top: 1px solid var(--color-gray-400);
+  color: var(--color-gray-900);
+  font-size: 14px;
+  padding: var(--space-2) var(--space-8);
+}
+
+/* Focus visibility — never remove */
+:focus-visible {
+  outline: 2px solid var(--color-blue-700);
+  outline-offset: 2px;
+}
+
+/* Responsive: below 768px, side padding drops to 16px */
+@media (max-width: 767px) {
+  .app-nav,
+  .app-main,
+  .app-footer {
+    padding-left: var(--space-4);
+    padding-right: var(--space-4);
+  }
+}
+
+/* Below sm: secondary row metadata moves below the title instead of forcing a
+   page-wide horizontal scroll (DESIGN.md "Spacing and responsive layout"). */
+@media (max-width: 479px) {
+  .col-secondary {
+    display: none;
+  }
+
+  .row-meta {
+    display: block;
+    margin-top: var(--space-1);
+    color: var(--color-gray-900);
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  .filters {
+    padding: var(--space-3);
+  }
+
+  .fact {
+    grid-template-columns: 1fr;
+    gap: var(--space-1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+  }
+}

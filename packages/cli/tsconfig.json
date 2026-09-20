@@ -9,6 +9,11 @@
   // spec (`global-cli.test.ts`) needs bun test types, which no tsc project in
   // this package provides yet — it is excluded rather than silently mis-typed;
   // package tests live in `test/` and run under `bun test`.
+  //
+  // `src/dashboard/server.ts` imports the gitignored generated module
+  // `assets.generated.ts`, so `typecheck:src` runs `scripts/build-web.ts`
+  // first (deterministic, round-trip-verified) — a fresh checkout typechecks
+  // without a full build, matching CI's validate job order.
   "compilerOptions": {
     "target": "ES2022",
     "module": "ESNext",

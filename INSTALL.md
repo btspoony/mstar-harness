@@ -4,7 +4,7 @@
 
 ## Prerequisites
 
-- **Node.js** 18+ (for `npx` / `bunx` CLI)
+- **CLI launch vs Node invocation** — the published `mstar-harness` binary is a Bun shebang script (`#!/usr/bin/env bun`): normal launch needs **Bun >=1.4.0** on PATH. Explicit `node dist/mstar-harness.js` needs **Node >=24.18.0**. A package runner is **not** a runtime: `npx` / `bunx` fetch the package and then execute that same Bun-shebang bin, so they need **Bun >=1.4.0** on PATH as well; a Node-only machine uses the explicit `node` invocation instead ([Recommended: CLI install](#recommended-cli-install)). Do not install both runtimes solely because this document lists both entrypoints. Bun-hosted host plugins (dsh, omp, OpenCode build) need Bun `>=1.4.0`; a native Node host process is a Node entry, not an extra Bun demand.
 - Target host installed:
   - [OpenCode](https://opencode.ai)
   - [Cursor](https://cursor.com)
@@ -22,6 +22,13 @@ Package: `@mstar-harness/cli` (command: `mstar-harness`).
 npx @mstar-harness/cli init
 # or
 bunx @mstar-harness/cli init
+```
+
+Both commands execute the published bin through its `#!/usr/bin/env bun` shebang, so **Bun >=1.4.0 must already be on PATH** — the package runner fetches the package, it does not supply the runtime. On a Node-only machine, install the package and run the same entrypoint with Node instead (floor **Node >=24.18.0**); this form replaces every `npx @mstar-harness/cli …` command in this document, with identical verbs and flags:
+
+```bash
+npm install @mstar-harness/cli
+node node_modules/@mstar-harness/cli/dist/mstar-harness.js init
 ```
 
 `init` is target-aware and writes baseline config in one flow. `--scope` defaults to `project` when omitted.
@@ -136,7 +143,7 @@ The marketplace entry carries `icon` + `displayName`, so the plugin card shows t
 
 - **SessionStart** — in a harness-managed workspace (`.mstar/` discovered per `mstar-conventions`), injects a one-line context: harness dir, `status.json` summary, and the `mstar-harness-core` load pointer. Silent no-op outside harness workspaces.
 - **PreToolUse (Bash)** — deterministic backstop for `mstar-branch-worktree`: blocks `git commit` on the default protected branch (override per command with `MSTAR_ALLOW_DEFAULT_BRANCH_COMMIT=1`, or per SessionStart note) and bare `git push --force` (use `--force-with-lease=<branch>:<oid>`). Disable with `MSTAR_BRANCH_GUARD=off`.
-- **PreToolUse (Write|Edit)** — engine-backed coordination-write gate: in repos with opt-in hard enforcement (`.mstarc`/compass), blocks writes to harness coordination documents (`status.json`, workflow snapshots, project registers) with an actionable reason; soft-enforced and non-harness writes pass silently. Disable with `MSTAR_WRITE_GATE=off`.
+- **PreToolUse (Write|Edit)** — engine-backed coordination-write gate: in repos with opt-in hard enforcement (`.mstarc`/compass), blocks writes to harness coordination documents (`status.json`, workflow snapshots) with an actionable reason; soft-enforced and non-harness writes pass silently. Independently of that enforcement axis it **always** refuses the issue-authority invariants — a direct write to the issue/catalog store (`{HARNESS_DIR}/store.db`, `-wal`, `-shm`), a write to a retired project register while the store is the active authority, and an unreadable authority (below-floor runtime, missing `node:sqlite`, corrupt or busy store), which fails closed. Disable with `MSTAR_WRITE_GATE=off`.
 
 ### Kimi
 

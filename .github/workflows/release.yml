@@ -46,12 +46,13 @@ jobs:
         with:
           bun-version: 1.4.0
 
-      # Node 24 ships npm with working Trusted Publishing / provenance (sigstore).
-      # Do not `npm install -g npm@latest` on Node 22 — that breaks provenance with MODULE_NOT_FOUND: sigstore.
+      # Node 24.18 is the issue-store runtime floor and ships npm with working
+      # Trusted Publishing / provenance (sigstore). Do not `npm install -g npm@latest`
+      # over the setup-node-managed npm — that breaks provenance with MODULE_NOT_FOUND: sigstore.
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "24"
+          node-version: "24.18"
           registry-url: https://registry.npmjs.org
 
       - name: Install dependencies

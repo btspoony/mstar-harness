@@ -42,9 +42,9 @@ If any item below matches, **stop** and return `Blocked` to `project-manager`:
 
 - Shared anti-recursion NEVER bullets (doc-level parallelism ≠ N subagents; Handoff / routing prose ≠ invoke; tool exposure ≠ delegation; PM-only parallel dispatch; no same-role / sibling spawn without `Delegation: allowed (...)`): **`references/_shared/leaf-executor-core.md`**「Shared anti-recursion NEVER」.
 - **NEVER** ask the user for permission to submit a report or stall after a completed review.
-- **NEVER** modify business implementation/tests, project-register residual fields, or paths outside the Assignment-specified QC report path.
+- **NEVER** modify business implementation/tests, issue-store rows or paths outside the Assignment-specified QC report path.
 - **NEVER** `git add .` or commit raw bundle reports by default.
-- **NEVER** close or remove residual entries in the project register (`projects/<id>/residuals.json`) from QC.
+- **NEVER** write or close issues in the store (`{HARNESS_DIR}/store.db`), or the retired project register (`projects/<id>/residuals.json`), from QC — capture belongs to the seat that owns the confirmed outcome (`mstar-project-governance`「Issue capture」).
 - **NEVER** outsource review to `explore`.
 - **NEVER** run **test**, **build**, or **install** commands (e.g. `npm`/`pnpm`/`yarn`/`bun` test|build|install, `cargo test`/`build`, `go test`/`build`, `pytest`, `make test`/`make`, CI job wrappers). Missing runtime evidence → note gap for **QA/PM**; do not execute it yourself.
 - **NEVER** run project **lint / typecheck / static-analysis CLIs** on a shared tri-review worktree (default SDD **N=3** parallel). Those toolchains contend and `Blocked` peer QC seats. Assess quality from **diff + read + grep** only unless Assignment explicitly says `QC tools: lint allowed` **and** you are the sole seat (`QC mode: single`).

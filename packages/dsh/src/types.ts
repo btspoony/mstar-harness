@@ -148,21 +148,56 @@ export interface HarnessPlanView {
   readonly iterationRefs: string[]
 }
 
-/** One open residual finding of the harness-state digest (`planId` = the owning `residual_findings` root key). */
+/**
+ * One open issue of the harness-state digest. `id` is the issue authority's own
+ * id (`I-000001` — the actionable handle for `mstar issue show`). `planId` stays
+ * the display's plan-linkage slot but is EMPTY for store-backed findings: an
+ * issue is plan-independent (issue contract §6) and its plan/iteration/PR links
+ * are provenance, not a register bucket — the digest never guesses one.
+ */
 export interface ResidualFindingView {
   readonly planId: string
-  /** The finding's `id` (e.g. `R1`); '' when the source entry carries none. */
+  /** The issue id (`I-000001`); '' when the source row carries none. */
   readonly id: string
-  /** The finding's `severity` (one of the residual severity enum when known). */
+  /** The issue's `severity` (the issue contract vocabulary, verbatim). */
   readonly severity: string
-  /** The finding's `title`; '' when the source entry carries none. */
+  /** The issue's `title`; '' when the source row carries none. */
   readonly title: string
 }
 
-/** Open residual finding counts by severity (non-zero severities only). */
+/**
+ * Open-issue counts by severity (non-zero severities only). The severity is the
+ * issue contract's own vocabulary, verbatim — the retired register's `nit` rank
+ * stays a member of this display union only so existing consumers keep a
+ * superset; a store-backed rollup never emits it.
+ */
+export type HarnessResidualSeverity = 'critical' | 'high' | 'medium' | 'low' | 'nit' | 'info'
+
+/** Open-issue counts by severity (non-zero severities only). */
 export interface HarnessResidualView {
-  readonly severity: 'critical' | 'high' | 'medium' | 'low' | 'nit'
+  readonly severity: HarnessResidualSeverity
   readonly count: number
+}
+
+/**
+ * Where the workspace-state digest's open-item facts came from, and whether
+ * that read was whole. `kind: 'store'` means the issue rollup AND the knowledge
+ * catalog digest were read from `{HARNESS_DIR}/store.db`; `'unavailable'` means
+ * the store could not serve them (missing / staged / corrupt / below-floor
+ * runtime) and `diagnostic` carries the refusal verbatim — never an empty
+ * "no findings" rollup. `projection` is the read envelope's own projection
+ * freshness (current | stale | unavailable), so a stale projection is disclosed
+ * instead of being sold as current; `null` when no envelope was read.
+ *
+ * ABSENT when a build ran without a store read (the synchronous
+ * `buildCatalogPayload` callers — the `mstar:engine-status` context provider,
+ * whose slim summary renders no open-item facts at all).
+ */
+export interface StoreFactsView {
+  readonly kind: 'store' | 'unavailable'
+  readonly projection: 'current' | 'stale' | 'unavailable' | null
+  readonly storeRevision: number | null
+  readonly diagnostic: string | null
 }
 
 /** One active plan execution lease of the harness-state digest. */
@@ -176,17 +211,16 @@ export interface HarnessLeaseView {
  * The additive project rollup section of the workspace-state digest (compass
  * v3.0.0 AC-4 / AC-P3 — the panel's fifth zone surface; additive, the four
  * existing ZoneView shapes stay byte-compatible): roadmap milestones +
- * open-residual severity counts from the PROJECT layer
- * (`projects/<id>/roadmap.md` frontmatter `milestones[]` and
- * `projects/<id>/residuals.json` registers — the v1 root
- * `residual_findings` home is gone). Always-present (lossless JSON): no
- * roadmaps → `milestones: []`; no registers / no open entries →
+ * open-issue severity counts from the PROJECT layer
+ * (`projects/<id>/roadmap.md` frontmatter `milestones[]` — roadmap bodies stay
+ * files — and the issue authority for the open counts). Always-present
+ * (lossless JSON): no roadmaps → `milestones: []`; no open issues →
  * `openResiduals: []` — same advisory pattern as `residuals`.
  */
 export interface MstarHarnessProject {
   /** Roadmap milestones across ALL project registers (frontmatter `milestones[]`, roadmap order, projects dir order). */
   readonly milestones: readonly string[]
-  /** Open residual counts by severity across ALL project registers (non-zero severities only — same vocabulary as `state.residuals`). */
+  /** Open-issue counts by severity across the harness (non-zero severities only — same rollup as `state.residuals`). */
   readonly openResiduals: readonly HarnessResidualView[]
 }
 
@@ -263,23 +297,23 @@ export interface MstarHarnessState {
   readonly workflowStatus: string | null
   /** Registered plan rows (`plan_id`/`id` + `status`), snapshot plans[] order. */
   readonly plans: readonly HarnessPlanView[]
-  /** Open `residual_findings` counts by severity (non-zero only). */
+  /** Open issue counts by severity (non-zero only) — the issue authority's own rollup. */
   readonly residuals: readonly HarnessResidualView[]
   /**
    * The additive project rollup (compass v3.0.0 AC-4 — the panel's fifth
-   * zone): roadmap milestones + open-residual severity counts from the
-   * project layer (`projects/<id>/roadmap.md` / `projects/<id>/residuals.json`).
+   * zone): roadmap milestones + open-issue severity counts from the project
+   * layer (`projects/<id>/roadmap.md` frontmatter bodies + the issue store).
    * Always-present (lossless) — empty arrays when the project layer is
    * absent.
    */
   readonly project: MstarHarnessProject
   /**
-   * Open residual findings detail (planId + R# + severity + title), severity
-   * ordered (critical→nit) and capped at 10. Null when the
-   * `residual_findings` root key is missing/unreadable (advisory — same null
-   * pattern as `knowledge`); `[]` when the key exists but has no open
-   * entries. Independent of the `residuals` rollup (which stays
-   * backward-compatible).
+   * Open issue detail (issue id + severity + title), in the issue authority's
+   * own order (severity rank desc → last real activity desc → id asc) and
+   * capped at 10. Null when the store could not be read (advisory — same null
+   * pattern as `knowledge`, and `storeFacts` carries the refusal); `[]` when
+   * the authority was read and holds no open issue. Independent of the
+   * `residuals` rollup.
    */
   readonly residualFindings: readonly ResidualFindingView[] | null
   /** `metadata.iteration_base_branch` (compass frontmatter fallback), null when absent. */
@@ -296,8 +330,14 @@ export interface MstarHarnessState {
   readonly integrationWorktreePath: string | null
   /** Active plan execution leases (holder + worktree). */
   readonly leases: readonly HarnessLeaseView[]
-  /** Knowledge index digest (docs count + categories), null when no index. */
+  /** Knowledge catalog digest (docs count + categories) from the DB catalog, null when the store could not be read. */
   readonly knowledge: { readonly docCount: number; readonly categories: readonly string[] } | null
+  /**
+   * The open-item authority disclosure: where `residuals` / `residualFindings`
+   * / `knowledge` came from and whether that read was whole. ABSENT when the
+   * build ran without a store read (see {@link StoreFactsView}).
+   */
+  readonly storeFacts?: StoreFactsView
   /** Steering compass direction one-liner (problem statement digest), null when unavailable. */
   readonly direction: string | null
   /**

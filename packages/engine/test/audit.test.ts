@@ -23,7 +23,15 @@ import {
   validateAuditStatusBlocks,
 } from "../src/audit.js";
 import type { AuditFinding } from "../src/audit.js";
-import { createFsStore, setArtifactStore } from "../src/store.js";
+import { createFsStore, setArtifactStore, type ArtifactDoc } from "../src/store.js";
+import { getCatalog, listCatalog } from "../src/catalog.js";
+import {
+  listPendingCatalogRegistrations,
+  reconcileCatalogExecution,
+  registerCatalogExecution,
+  type CatalogExecutionRequest,
+} from "../src/catalog-registration.js";
+import { initializeStore, type StoreContext } from "../src/store-db.js";
 import { readJson } from "../src/core.js";
 import { validateStatus } from "../src/status.js";
 import { WORKFLOW_SNAPSHOT_FILE, validateWorkflowSnapshot } from "../src/workflow.js";
@@ -1931,5 +1939,115 @@ describe("coordinated-writer — promoteAuditPlans create-only snapshot", () => 
       setArtifactStore(undefined);
       rmSync(tmp, { recursive: true, force: true });
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// catalog registration — the registration journal drives the audit promotion
+// (state-projection-contract §3). The promotion keeps its run-once/rollback
+// semantics; the doc's own body is the title authority (the report README
+// index is a report artifact, §2/§4).
+// ---------------------------------------------------------------------------
+describe("catalog registration — the journal drives the audit promotion", () => {
+  const root = mkdtempSync(join(tmpdir(), "engine-audit-catalog-registration-"));
+  afterAll(() => {
+    setArtifactStore(undefined);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  /** Temp workspace with the real harness marker + an initialized active store. */
+  async function workspace(name: string): Promise<{ harnessDir: string; context: StoreContext }> {
+    const harnessDir = join(root, name);
+    mkdirSync(join(harnessDir, ".mstar"), { recursive: true });
+    const context: StoreContext = { harnessDir };
+    const handle = await initializeStore(context);
+    handle.close();
+    setArtifactStore(createFsStore(harnessDir));
+    return { harnessDir, context };
+  }
+
+  const PLAN_FILE = "001-fix-the-duplicate-index.md";
+
+  /** An audit dir whose README index disagrees with the plan body on purpose. */
+  function auditDir(harnessDir: string, date: string): string {
+    const outDir = join(harnessDir, "audit", date);
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(join(outDir, PLAN_FILE), "# Fix the duplicate index\n\n## Impact\nEvery lookup scans twice.\n");
+    writeFileSync(
+      join(outDir, "README.md"),
+      "# Audit Report\n\n## Execution order & status\n\n| Plan | Title | Priority | Effort | Depends on | Status |\n" +
+        "|------|-------|----------|--------|------------|--------|\n| 001 | Hand-edited index title | P1 | S | none | TODO |\n",
+    );
+    return outDir;
+  }
+
+  function auditRequest(harnessDir: string, outDir: string, operationId: string, expected: number): CatalogExecutionRequest {
+    return {
+      operationId,
+      actor: "project-manager",
+      expectedCatalogRevision: expected,
+      workflow: {
+        kind: "audit",
+        outDir,
+        selected: ["001"],
+        options: { harnessDir, deliveryKind: "verification/report-only", completionPolicy: "acceptance artifacts under the audit dir" },
+      },
+      delta: {
+        entities: [{ kind: "plan", id: "001-fix-the-duplicate-index", title: "Fix the duplicate index", rootKind: "plans", relativePath: PLAN_FILE }],
+        binding: { catalogKind: "plan", catalogId: "001-fix-the-duplicate-index" },
+      },
+    };
+  }
+
+  test("catalog registration — the promotion registers through the journal and the plan body is the title authority", async () => {
+    const { harnessDir, context } = await workspace("promote-");
+    const outDir = auditDir(harnessDir, "2026-09-18");
+
+    const receipt = await registerCatalogExecution(context, auditRequest(harnessDir, outDir, "op-audit-registration", 0));
+    expect(receipt).toEqual({ operationId: "op-audit-registration", workflowId: "2026-09-18", catalogRevision: 1, recovered: false });
+
+    const snapshot = readJson(join(harnessDir, "workflows", "2026-09-18", WORKFLOW_SNAPSHOT_FILE));
+    expect(snapshot.completion_policy).toBe("acceptance artifacts under the audit dir");
+    // The README index says "Hand-edited index title"; the promoted row carries
+    // the reviewed body's own title.
+    expect(snapshot.plans).toEqual([
+      { id: "001-fix-the-duplicate-index", title: "Fix the duplicate index", file: PLAN_FILE, status: "Todo" },
+    ]);
+    expect(validateWorkflowSnapshot(snapshot).ok).toBe(true);
+    expect(validateStatus(join(harnessDir, "status.json")).ok).toBe(true);
+    expect((await getCatalog(context, { kind: "plan", id: "001-fix-the-duplicate-index" })).entity.relativePath).toBe(PLAN_FILE);
+    expect(await listPendingCatalogRegistrations(context)).toEqual([]);
+  });
+
+  test("catalog registration — a failed promotion leaves no catalog row and reconciles to completion", async () => {
+    const { harnessDir, context } = await workspace("promote-failure-");
+    const outDir = auditDir(harnessDir, "2026-09-17");
+    const base = createFsStore(harnessDir);
+    let armed = true;
+    setArtifactStore({
+      ...base,
+      put: async (doc: ArtifactDoc) => {
+        if (armed && doc.kind === "status") {
+          armed = false;
+          throw new Error("injected status write failure");
+        }
+        return base.put(doc);
+      },
+    });
+
+    await expect(
+      registerCatalogExecution(context, auditRequest(harnessDir, outDir, "op-audit-failure", 0)),
+    ).rejects.toThrow(/injected status write failure/);
+    setArtifactStore(createFsStore(harnessDir));
+
+    // The promotion rolled its snapshot back; nothing published a catalog row.
+    expect(existsSync(join(harnessDir, "workflows", "2026-09-17", WORKFLOW_SNAPSHOT_FILE))).toBe(false);
+    expect((await listCatalog(context, {})).total).toBe(0);
+    expect((await listPendingCatalogRegistrations(context)).map((entry) => entry.operationId)).toEqual(["op-audit-failure"]);
+
+    const recovered = await reconcileCatalogExecution(context, "op-audit-failure");
+    expect(recovered).toEqual({ operationId: "op-audit-failure", workflowId: "2026-09-17", catalogRevision: 1, recovered: true });
+    expect(validateStatus(join(harnessDir, "status.json")).ok).toBe(true);
+    expect((await listCatalog(context, { kind: "plan" })).total).toBe(1);
   });
 });

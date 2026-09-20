@@ -19,6 +19,13 @@ Parallel PM dispatch: **`parallel-dispatch.md`** (read in dispatch rounds).
 - **Named role subagents**: Morning Star roles configured under `opencode.json` `agent.<id>` — PM must **call the task tool** with **`subagent`** set to that agent id. Assignment Markdown alone does not open subagent sessions.
 - **Per-role models**: configurable per subagent in `opencode.json`.
 
+## Runtime and upgrade
+
+- **Runtime**: the published plugin is a `--target node` bundle that runs inside OpenCode's own Node process — floor **Node >=24.18.0** with in-process native `node:sqlite`. The store API is loaded lazily, so a plugin on an engine without the store surface still mounts (load), while a store-backed check refuses with upgrade guidance rather than dropping the gate. Below-floor or missing-capability refuses actionably; there is no transport or JSON fallback.
+- **Upgrade / reload**: change the plugin specifier in `opencode.json` (or re-run the installer CLI), then restart OpenCode. A harness **source** edit is not an install: the running plugin keeps serving its installed build until that restart.
+- **Readiness, not an action**: refreshing an *installed* copy is a bounded, authorized ops act — an authority flip first quiesces, then reloads/upgrades (or explicitly excludes) every installed reader/writer and attests the versions it saw. Editing harness docs or source performs none of it. If this host cannot reload safely, stop at the exact manual-restart step, have the user restart, then re-verify entrypoint/runtime/version/session identity read-only before the flip.
+- **Authority protection is warn-only for authority bytes (known limitation)**: the OpenCode plugin API (`@opencode-ai/plugin` 1.4.8) types `tool.execute.before` as `Promise<void>` — there is no abort or refusal return channel — so this plugin cannot stop a write. An authority decision (a direct `store.db` write, a retired register, an unreadable authority) is still made unconditionally and surfaced as an error log with `hardBlocked: true` set in-process, **but the write still executes**: on this host the authority bytes are warn-only, not enforced. Hosts with a real block channel (dsh, omp, the ZCode hook) refuse the same decisions; do not rely on OpenCode to stop a hand write of the authority. When OpenCode exposes a refusal channel, the existing `hardBlocked` result is what gets wired to abort.
+
 ## PM dispatch (task tool + subagent)
 
 Harness **dispatch** on OpenCode = **one or more `task` tool calls**, each with **`subagent: <agent-id>`** (read the tool schema every session). N-parallel / 1-Assignment-1-invoke / paste-only mechanics → **`parallel-dispatch.md`**.

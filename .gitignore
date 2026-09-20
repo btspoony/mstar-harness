@@ -14,3 +14,6 @@ secrets.env
 
 # npm pack output (release sanity check)
 *.tgz
+
+# Generated dashboard assets (regenerated before every CLI build)
+packages/cli/src/dashboard/assets.generated.ts

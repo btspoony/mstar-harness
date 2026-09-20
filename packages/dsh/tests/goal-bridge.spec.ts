@@ -307,7 +307,7 @@ function goalChangeEnvelope(overrides: {
 const goalSession = (cwd: string): unknown => ({ id: 'sess-goal-1', header: { cwd }, events: [] })
 
 describe('goal bridge — blocked sync advisory (session/event firehose)', () => {
-  it('operation "block" → ONE warn with blockedReason.code + objective summary + status.json residual pointer; ZERO status.json writes', async () => {
+  it('operation "block" → ONE warn with blockedReason.code, objective summary and the issue-store pointer; ZERO status.json writes', async () => {
     const { root, harnessDir } = await tempHarness('dsh-goal-bridge-block-')
     try {
       // Seed a status.json fixture — the advisory must NEVER touch it (observe-only).
@@ -332,12 +332,13 @@ describe('goal bridge — blocked sync advisory (session/event firehose)', () =>
         expect(warn).toContain('goal blocked [rounds-exhausted]')
         expect(warn).toContain('max autonomous rounds reached')
         expect(warn).toContain('objective: Run iteration iter-00000816-advisory')
-        // v3 residual pointer: the project register, never the root status.json
-        // (entries keyed by plan id; no register exists in this bare harness →
-        // the default project path).
-        expect(warn).toContain(`${harnessDir}/projects/_default/residuals.json`)
+        // The open-item pointer is the issue store — never the root status.json
+        // and never a retired project register (the register no longer carries
+        // findings authority, so the advisory must not name one).
+        expect(warn).toContain(`${harnessDir}/store.db`)
         expect(warn).not.toContain(`${harnessDir}/status.json`)
-        expect(warn).toMatch(/residual/i)
+        expect(warn).not.toContain('projects/_default/residuals.json')
+        expect(warn).toMatch(/open issues/i)
 
         // Zero status.json writes: byte-identical fixture + no file created/removed.
         expect(await readFile(statusPath, 'utf8')).toBe(beforeStatus)
@@ -367,7 +368,7 @@ describe('goal bridge — blocked sync advisory (session/event firehose)', () =>
         const warns = captured.filter((m) => m.startsWith('warn:'))
         expect(warns).toHaveLength(1)
         expect(warns[0]).toContain('goal blocked [iteration-closed]')
-        expect(warns[0]).toContain(`${harnessDir}/projects/_default/residuals.json`)
+        expect(warns[0]).toContain(`${harnessDir}/store.db`)
       } finally {
         setGoalBridgeLogger(prior)
       }
@@ -376,9 +377,11 @@ describe('goal bridge — blocked sync advisory (session/event firehose)', () =>
     }
   })
 
-  it('a named project register exists → the advisory points at that register, not the default project', async () => {
+  it('a legacy project register on disk is never consulted: the advisory points at the issue store', async () => {
     const { root, harnessDir } = await tempHarness('dsh-goal-bridge-register-')
     try {
+      // A retired register (and a named project dir) exists on disk
+      // deliberately: the advisory must name the store authority anyway.
       const projectDir = join(harnessDir, 'projects', 'named-project')
       await mkdir(projectDir, { recursive: true })
       await writeFile(join(projectDir, 'residuals.json'), '{}')
@@ -396,7 +399,7 @@ describe('goal bridge — blocked sync advisory (session/event firehose)', () =>
 
         const warns = captured.filter((m) => m.startsWith('warn:'))
         expect(warns).toHaveLength(1)
-        expect(warns[0]).toContain(`${projectDir}/residuals.json`)
+        expect(warns[0]).toContain(`${harnessDir}/store.db`)
         expect(warns[0]).not.toContain('_default')
       } finally {
         setGoalBridgeLogger(prior)
@@ -499,7 +502,7 @@ describe('goal bridge — blocked sync advisory (session/event firehose)', () =>
         }))
         const warns = captured.filter((m) => m.startsWith('warn:'))
         expect(warns).toHaveLength(1)
-        expect(warns[0]).toContain(`${wsHarness}/projects/_default/residuals.json`)
+        expect(warns[0]).toContain(`${wsHarness}/store.db`)
       } finally {
         setGoalBridgeLogger(prior)
       }

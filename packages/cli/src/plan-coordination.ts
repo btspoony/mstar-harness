@@ -35,6 +35,7 @@ import {
   setArtifactStore,
   showPrepareWorkflow,
   type BindPlanSessionInput,
+  type ClosureEvidence,
   type CoordinationResult,
   type HandoffEvidence,
   type PlanCoordinationOperation,
@@ -42,7 +43,8 @@ import {
   type PrepareWorkflowPatch,
   type PrepareWorkflowResult,
   type ProgressCoordinationRequest,
-  type ResidualAddCoordinationRequest,
+  type ResidualInput,
+  type TerminalDisposition,
 } from "@mstar-harness/engine";
 
 /** Detail keys the A2 failure shape may carry, in spec order. */
@@ -58,7 +60,8 @@ const WORKFLOW_FAILURE_DETAIL_KEYS = [...FAILURE_DETAIL_KEYS, "workflow_id"] as 
 
 /** JSON payload types owned by the exported engine request shapes. */
 type ProgressPayload = ProgressCoordinationRequest["progress"];
-type ResidualEntriesPayload = ResidualAddCoordinationRequest["entries"];
+/** One finding as `plan issue-add` takes it: the core capture input minus the plan's project. */
+type IssueEntryPayload = ResidualInput;
 
 interface PlanFailureContext {
   workflow_id?: string;
@@ -77,12 +80,20 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 /**
  * The engine's documented consumer contract is the `code` (+ `details`)
  * pair; the error class itself is not part of the CLI's import surface, so
- * classification keys off the stable prefix instead of `instanceof`.
+ * classification keys off the stable prefix instead of `instanceof`. The
+ * scoped verbs reach four engine refusal families: the coordination surface
+ * (`coordination.*`), the frozen-input pin (`catalog.execution-pin-conflict`,
+ * contract §1), the store boundary (`store.*`) the pin and catalog reads
+ * use, and — since the issue cutover (G2b) — the core issue domain
+ * (`issue.*`: the DB mutation's revision/scope refusals). All four are
+ * runtime refusals (exit 1), never internal errors.
  */
+const ENGINE_REFUSAL_PREFIXES = ["coordination.", "catalog.", "store.", "issue."] as const;
+
 function coordinationFailureOf(error: unknown): { code: string; details: Record<string, unknown> } | null {
   const record = asRecord(error);
   const code = record?.code;
-  if (typeof code !== "string" || !code.startsWith("coordination.")) return null;
+  if (typeof code !== "string" || !ENGINE_REFUSAL_PREFIXES.some((prefix) => code.startsWith(prefix))) return null;
   return { code, details: asRecord(record?.details) ?? {} };
 }
 
@@ -112,8 +123,8 @@ const PLAN_VERBS: Record<string, true> = {
   show: true,
   prepare: true,
   progress: true,
-  "residual-add": true,
-  "residual-close": true,
+  "issue-add": true,
+  "issue-close": true,
   handoff: true,
   accept: true,
   return: true,
@@ -122,6 +133,33 @@ const PLAN_VERBS: Record<string, true> = {
   complete: true,
   "repair-delivery-source": true,
   reconcile: true,
+};
+
+/**
+ * The issue-cutover rename (G2b), as one table used on both sides of the
+ * boundary:
+ *
+ * - the engine's scoped operation kinds are still `residual-*` (G2a's
+ *   `coordination.ts` is outside this cutover's files) — the mutation request
+ *   and the view's `allowed_operations` go through this map so a reader is
+ *   never advertised a verb this family does not register;
+ * - the retired CLI verbs are the same tokens, and each one refuses by naming
+ *   the `issue-*` verb in this table — no write-through alias exists.
+ */
+const ISSUE_VERB_NAMES: Record<string, string> = {
+  "residual-add": "issue-add",
+  "residual-close": "issue-close",
+};
+
+/**
+ * The CLI outcome tokens for the engine's scoped issue outcomes. The CLI's
+ * success envelope is its own contract (spec §A2) and this family no longer
+ * registers a `residual-*` verb, so the envelope reports the issue vocabulary
+ * while the engine keeps its operation kinds.
+ */
+const OPERATION_OUTCOME_NAMES: Record<string, string> = {
+  "residual-added": "issue-added",
+  "residual-closed": "issue-closed",
 };
 
 /** Every verb of the workflow Prepare family (spec § New API and CLI — no aliases). */
@@ -221,29 +259,46 @@ function requireAbsolutePath(raw: string | undefined, flag: string, verb: string
   return value;
 }
 
-/** `--expect` is the nonnegative row `coordination.revision` from `show`. */
-function parseExpect(raw: string | undefined, verb: string): number {
+/**
+ * A revision precondition flag (`--expect` for the row, `--expect-issue` for
+ * the issue the DB mutation guards) is a nonnegative integer, never a token
+ * that would silently degrade into a different precondition.
+ */
+function parseExpect(raw: string | undefined, flag: string, verb: string): number {
   if (raw === undefined) {
     throw new SddScriptError(
-      `usage: plan ${verb} requires --expect <revision> (the row coordination.revision from \`mstar plan show\`; 0 when the row is not yet coordinated)`,
+      `usage: plan ${verb} requires ${flag} <revision> (the row coordination.revision from \`mstar plan show\`; 0 when the row is not yet coordinated)`,
       2,
     );
   }
   if (!/^\d+$/.test(raw)) {
-    throw new SddScriptError(`--expect must be a nonnegative integer revision \u2014 got ${JSON.stringify(raw)}`, 2);
+    throw new SddScriptError(`${flag} must be a nonnegative integer revision \u2014 got ${JSON.stringify(raw)}`, 2);
   }
   const revision = Number(raw);
   if (!Number.isSafeInteger(revision)) {
-    throw new SddScriptError(`--expect is out of range \u2014 got ${JSON.stringify(raw)}`, 2);
+    throw new SddScriptError(`${flag} is out of range \u2014 got ${JSON.stringify(raw)}`, 2);
   }
   return revision;
 }
 
-/** `absent` or the exact artifact version token, never an alias of either. */
-function parseExpectedVersion(raw: string | undefined, flag: string, verb: string): string {
-  const value = requireFlag(raw, flag, verb, "version");
-  if (value === "absent" || /^sha256:[0-9a-f]{64}$/.test(value)) return value;
-  throw new SddScriptError(`${flag} must be "absent" or sha256:<64 lowercase hex> \u2014 got ${JSON.stringify(value)}`, 2);
+/** The terminal dispositions `issue-close` may name (issue contract §4). */
+const TERMINAL_DISPOSITIONS: Record<string, TerminalDisposition> = {
+  resolved: "resolved",
+  waived: "waived",
+  duplicate: "duplicate",
+  superseded: "superseded",
+};
+
+function parseDisposition(raw: string | undefined, verb: string): TerminalDisposition {
+  const value = requireFlag(raw, "--disposition", verb, "disposition");
+  const disposition = TERMINAL_DISPOSITIONS[value];
+  if (disposition === undefined) {
+    throw new SddScriptError(
+      `--disposition must be resolved | waived | duplicate | superseded \u2014 got ${JSON.stringify(value)}`,
+      2,
+    );
+  }
+  return disposition;
 }
 
 /** JSON payload input is strict: absolute, present, parseable. */
@@ -346,7 +401,11 @@ async function successPayload(verb: string, result: CoordinationResult): Promise
   if (handoffId !== undefined) payload.handoff_id = handoffId;
   const state = handoffStateOf(view);
   if (state !== undefined) payload.state = state;
-  if (result.outcome !== undefined) payload.outcome = result.outcome;
+  if (result.outcome !== undefined) payload.outcome = OPERATION_OUTCOME_NAMES[result.outcome] ?? result.outcome;
+  // The scoped issue operations learn their DB-allocated ids here: `issue-add`
+  // reports what it captured (`revision` is the value `issue-close` must echo
+  // back as `--expect-issue`), and `issue-close` reports the closed issue.
+  if (result.issues !== undefined) payload.issues = result.issues;
   return payload;
 }
 
@@ -360,17 +419,24 @@ async function printSuccess(verb: string, result: CoordinationResult, json: bool
   const work =
     typeof payload.plan_id === "string" ? `${payload.workflow_id}/${payload.plan_id}` : String(payload.workflow_id);
   const revision = payload.revision === undefined ? "" : `; revision ${payload.revision}`;
-  const outcome = result.outcome === undefined ? "" : `; ${result.outcome}`;
+  const outcome = payload.outcome === undefined ? "" : `; ${String(payload.outcome)}`;
   console.error(
     pc.green(`plan ${verb}: ${result.session.role} session ${result.session.session_id} on ${work}${revision}${outcome}`),
   );
   console.error(`plan ${verb}: session file ${result.session_file}`);
   if (payload.state !== undefined) console.error(`plan ${verb}: handoff state ${payload.state}`);
+  for (const issue of result.issues ?? []) {
+    console.error(
+      `plan ${verb}: issue ${issue.issue_id} (revision ${issue.revision}${issue.created ? ", captured" : ", existing"})`,
+    );
+  }
 }
 
 /**
- * `show` prints the view itself (spec §A2: selected row, scoped paths,
- * allowed operations and both byte versions — never an editable snapshot).
+ * `show` prints the view itself (spec §A2: selected row, scoped paths, allowed
+ * operations and the snapshot byte version — never an editable snapshot). The
+ * engine's operation kinds keep their `residual-*` names; the advertised verbs
+ * are the CLI's own, so a reader is never told to run a verb that would refuse.
  */
 function printView(verb: string, view: PlanCoordinationView, json: boolean): void {
   const state = handoffStateOf(view);
@@ -382,17 +448,21 @@ function printView(verb: string, view: PlanCoordinationView, json: boolean): voi
       workflow_id: view.session.workflow_id,
       revision: view.revision,
       snapshot_version: view.snapshot_version,
-      register_version: view.register_version,
       session_file: view.session_file,
       session_id: view.session.session_id,
       role: view.session.role,
       scope: view.scope,
       row: { id: view.row.id, status: view.row.status },
-      allowed_operations: view.allowed_operations,
+      allowed_operations: view.allowed_operations.map((operation) => ISSUE_VERB_NAMES[operation] ?? operation),
     };
     if (view.session.plan_id !== undefined) payload.plan_id = view.session.plan_id;
     if (liveHandoff !== undefined) payload.handoff_id = liveHandoff;
     if (state !== undefined) payload.state = state;
+    // The frozen-input pin state (contract §1) is disclosed verbatim: a caller
+    // observes that the catalog moved, that a plan is unpinned, or that the
+    // pinned input and the frozen row disagree — the engine never repairs a
+    // discrepancy here, and neither may the reader.
+    if (view.catalog_pin !== undefined) payload.catalog_pin = view.catalog_pin;
     console.log(JSON.stringify(payload));
     return;
   }
@@ -404,7 +474,7 @@ function printView(verb: string, view: PlanCoordinationView, json: boolean): voi
   );
   console.error(`plan ${verb}: session file ${view.session_file}`);
   console.error(`plan ${verb}: row ${String(view.row.id)} status ${String(view.row.status)}, revision ${view.revision}`);
-  console.error(`plan ${verb}: snapshot ${view.snapshot_version}, register ${view.register_version}`);
+  console.error(`plan ${verb}: snapshot ${view.snapshot_version}`);
   if (state !== undefined) console.error(`plan ${verb}: handoff state ${state}`);
   if (liveHandoff !== undefined) console.error(`plan ${verb}: handoff id ${liveHandoff}`);
   if (scope === null) {
@@ -414,6 +484,16 @@ function printView(verb: string, view: PlanCoordinationView, json: boolean): voi
   } else {
     console.error(`plan ${verb}: worktree ${scope.worktreePath} (branch ${scope.workingBranch})`);
     console.error(`plan ${verb}: sdd ${scope.sddDir}`);
+  }
+  const pin = view.catalog_pin;
+  if (pin !== undefined && pin.conflict !== null) {
+    console.error(pc.red(`plan ${verb}: catalog pin conflict \u2014 ${pin.conflict}`));
+  } else if (pin?.pin != null) {
+    console.error(
+      `plan ${verb}: catalog pin ${pin.source} (revision ${pin.pin.entity_revision}${pin.catalog_moved ? ", catalog moved" : ""})`,
+    );
+  } else if (pin !== undefined) {
+    console.error(`plan ${verb}: catalog pin ${pin.absence ?? "unbound"}`);
   }
   console.error(`plan ${verb}: allowed operations: ${view.allowed_operations.join(", ") || "(none)"}`);
 }
@@ -453,7 +533,7 @@ async function mutate(
   // never surfaces as a store/session refusal (exit 1).
   const sessionPath = requireAbsolutePath(options.session as string | undefined, "--session", verb, "session-json-path");
   const planId = coordinator ? requireFlag(options.plan as string | undefined, "--plan", verb, "plan-id") : undefined;
-  const expectedRevision = parseExpect(options.expect as string | undefined, verb);
+  const expectedRevision = parseExpect(options.expect as string | undefined, "--expect", verb);
   const handoffId = options.handoff as string | undefined;
   const concrete = operation(options);
   // The store pin comes first: the pre-check below reads the row through the
@@ -719,50 +799,53 @@ export function registerPlanCommands(program: Command): void {
     );
 
   plan
-    .command("residual-add")
-    .description("Append residuals to this plan's own register bucket (active plan session)")
+    .command("issue-add")
+    .description(
+      "Capture findings on this plan as issues in {HARNESS_DIR}/store.db and link them to the plan (active plan session). " +
+        "Each entry is a capture input without projectId; the report names the DB-assigned issue ids and revisions",
+    )
     .option("--session <path>", "Absolute plan session JSON envelope path")
-    .option("--file <path>", "Absolute path of the residual entries JSON payload (array)")
+    .option("--file <path>", "Absolute path of the issue entries JSON payload (array)")
     .option("--expect <revision>", "Row coordination.revision from `mstar plan show`")
-    .option("--expect-register <version>", 'Register byte version from `show` ("absent" or sha256:<64 hex>)')
     .option("--json", "Machine-readable JSON on stdout")
     .action(async (options: PlanCliOptions) =>
-      runVerb("residual-add", options, {}, (json) =>
-        mutate("residual-add", options, json, false, (opts) => {
-          // Every flag is validated before any file I/O: a malformed
-          // `--expect-register` must reject as usage without reading --file.
-          const expectedRegisterVersion = parseExpectedVersion(
-            opts.expectRegister as string | undefined,
-            "--expect-register",
-            "residual-add",
-          );
-          const entries = readJsonPayload(opts.file as string | undefined, "--file", "residual-add") as ResidualEntriesPayload;
-          return { kind: "residual-add", entries, expectedRegisterVersion };
-        }),
+      runVerb("issue-add", options, {}, (json) =>
+        mutate("issue-add", options, json, false, (opts) => ({
+          kind: "residual-add",
+          entries: readJsonPayload(opts.file as string | undefined, "--file", "issue-add") as IssueEntryPayload[],
+        })),
       ),
     );
 
   plan
-    .command("residual-close")
-    .description("Close one residual in this plan's own bucket with an evidence-bearing note (active plan session)")
+    .command("issue-close")
+    .description(
+      "Close one issue linked to this plan with the named disposition and its closure evidence (active plan session). " +
+        "`--expect-issue` is the issue revision from `plan issue-add` or `mstar issue show`",
+    )
     .option("--session <path>", "Absolute plan session JSON envelope path")
-    .option("--entry <id>", "Residual entry id")
-    .option("--note <text>", "Closure note carrying the evidence")
+    .option("--issue <id>", "Issue id linked to this plan")
+    .option("--disposition <disposition>", "Terminal disposition: resolved | waived | duplicate | superseded")
+    .option("--file <path>", "Absolute path of the ClosureEvidence JSON payload")
+    .option("--expect-issue <revision>", "Current issue revision (the DB mutation's CAS value)")
     .option("--expect <revision>", "Row coordination.revision from `mstar plan show`")
-    .option("--expect-register <version>", 'Register byte version from `show` ("absent" or sha256:<64 hex>)')
     .option("--json", "Machine-readable JSON on stdout")
     .action(async (options: PlanCliOptions) =>
-      runVerb("residual-close", options, {}, (json) =>
-        mutate("residual-close", options, json, false, (opts) => ({
-          kind: "residual-close",
-          entryId: requireFlag(opts.entry as string | undefined, "--entry", "residual-close", "entry-id"),
-          note: requireFlag(opts.note as string | undefined, "--note", "residual-close", "text"),
-          expectedRegisterVersion: parseExpectedVersion(
-            opts.expectRegister as string | undefined,
-            "--expect-register",
-            "residual-close",
-          ),
-        })),
+      runVerb("issue-close", options, {}, (json) =>
+        mutate("issue-close", options, json, false, (opts) => {
+          // Every flag is validated before any file I/O: a malformed
+          // `--expect-issue`/`--disposition` must reject as usage without
+          // reading --file.
+          const issueId = requireFlag(opts.issue as string | undefined, "--issue", "issue-close", "issue-id");
+          const disposition = parseDisposition(opts.disposition as string | undefined, "issue-close");
+          const expectedIssueRevision = parseExpect(
+            opts.expectIssue as string | undefined,
+            "--expect-issue",
+            "issue-close",
+          );
+          const evidence = readJsonPayload(opts.file as string | undefined, "--file", "issue-close") as ClosureEvidence;
+          return { kind: "residual-close", issueId, disposition, evidence, expectedIssueRevision };
+        }),
       ),
     );
 
@@ -823,6 +906,30 @@ export function registerPlanCommands(program: Command): void {
           mutate(kind, options, json, true, (opts) => handoffOperation(opts, kind)),
         ),
       );
+  }
+
+  // The retired issue verbs are registered so the old names refuse with the
+  // migration path. They accept any flag shape (a caller's old invocation must
+  // reach the guidance, not a commander unknown-option error) and write
+  // nothing — there is no alias that performs the old register write.
+  for (const [verb, replacement] of Object.entries(ISSUE_VERB_NAMES)) {
+    plan
+      .command(verb)
+      .description(`Retired \u2014 ${replacement} replaces it; this verb refuses and writes nothing`)
+      .allowUnknownOption()
+      .allowExcessArguments()
+      .option("--json", "Machine-readable JSON on stdout")
+      .action((options: PlanCliOptions) => {
+        const message =
+          `plan ${verb}: retired \u2014 the scoped findings operations are \`mstar plan ${replacement}\` ` +
+          "(issues in {HARNESS_DIR}/store.db); this verb writes nothing";
+        if (options.json === true) {
+          console.log(JSON.stringify({ ok: false, operation: verb, code: "plan.verb-retired", message }));
+        } else {
+          console.error(pc.red(message));
+        }
+        process.exitCode = 1;
+      });
   }
 
   // Usage-class commander errors (unknown option, excess argument) exit 2 for

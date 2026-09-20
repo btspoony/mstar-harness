@@ -11,7 +11,7 @@
 | 产物 | 解析后路径（默认 `.mstar/`） | 读写的技能 |
 |------|---------------------------|-----------|
 | **知识文档** | `.mstar/knowledge/<category>/<slug>.md` | `mstar-compound`（写）、`mstar-compound-refresh`（读写） |
-| **知识索引** | `.mstar/knowledge/README.md` | `mstar-compound`（写）、`mstar-compound-refresh`（读写） |
+| **知识 README（散文）** | `.mstar/knowledge/README.md`（可选导览散文；**不是**登记索引 — 见下） | `mstar-compound`（散文指向；**不再**维护索引行） |
 | **主 plan** | `.mstar/plans/<plan-id>-<name>.md`（gitignored；本地会话 SSOT） | PM / `mstar-artifacts` |
 | **Review bundle（QC/QA 原始过程报告）** | `{HARNESS_DIR}/sdd/<plan-id>/review/`（gitignored；默认 `.mstar/sdd/<plan-id>/review/`） | `mstar-sdd`、`mstar-review-qc`、`qa-engineer` |
 | **SDD scratch** | `{HARNESS_DIR}/sdd/<plan-id>/`（gitignored；含 per-task handoff 与 `review/` bundle） | `mstar-sdd` |
@@ -22,11 +22,14 @@
 | **project register** | `.mstar/projects/<id>/residuals.json`（gitignored；open residual SSOT：`entries[<plan-id>]` 数组；项目缺失用 `_default`） | `mstar-artifacts`、`mstar-review-qc` |
 | **project references（研究语料）** | `.mstar/projects/<id>/references/`（gitignored；主题化 surveys / epic 备注 / 第三方 notes，与项目绑定；与 `{SPECS_DIR}` / `{KNOWLEDGE_DIR}` / `{ITERATION_DIR}` 不同） | `mstar-project-governance`、`mstar-artifacts` |
 | **迭代 package** | `.mstar/iterations/<iteration-id>/`（gitignored；`delivery-compass.md`、`guides/`、`specs/`、可选 `README.md`） | `mstar-iteration`（读写）；close 时 `mstar-compound`（提升读；默认排除 compass） |
-| **迭代索引** | `.mstar/iterations/README.md`（gitignored；一行 = 一次迭代） | `mstar-iteration`（读写） |
+| **迭代 README（散文）** | `.mstar/iterations/README.md`（gitignored；可选导览散文，**不是**登记索引 — 见下） | `mstar-iteration`（散文指向；**不再**维护「一行 = 一次迭代」） |
+| **issue/catalog store** | `.mstar/store.db`（进程/control harness 根；gitignored；issue + catalog 行的权威，权威分界见 `mstar-conventions` SKILL.md § Issue/catalog store 路径与权威分界） | `mstar issue …` / `mstar catalog …`（域 API） |
 | **规格** | `{HARNESS_DIR}/specs/`（默认 tracked；解析见 `mstar-conventions`） | `mstar-artifacts` |
 | **harness AGENTS** | `.mstar/AGENTS.md`（tracked） | PM / init |
 | **archived knowledge** | `.mstar/archived/knowledge/`（保留原 `{KNOWLEDGE_DIR}` 相对路径） | `mstar-iteration` §1.6 corpus hygiene、`mstar-artifacts` |
 | **archived specs** | `.mstar/archived/specs/`（保留原 `{SPECS_DIR}` 相对路径） | `mstar-iteration` §1.6 corpus hygiene、`mstar-artifacts` |
+
+**索引 / 登记职责已移交 catalog（contract §1/§4）**：`{ITERATION_DIR}/README.md` 的迭代行、`<iteration-id>/README.md` 的 Documents 表、`{SPECS_DIR}` / `{KNOWLEDGE_DIR}` README 的登记表与 `{PLAN_DIR}` 目录索引**不再**是有待维护的登记面。「某文档是否已登记、属于谁、什么类型、什么生命周期」一律查 `{HARNESS_DIR}/store.db` 的 catalog 行——`mstar catalog list` / `mstar catalog show`；tracked 正文与 legacy 索引行由 `mstar catalog discover` 只读提议、review 后 `mstar catalog import`。上表顺带命名的 README 保留为**散文**（导览、`Promoted to:` 标注），没有「必须新增/维护一行」的义务。权威表述 → `mstar-conventions` SKILL.md § Catalog 字段权威 / § Markdown 索引退役；本表只声明落盘位置，不另立登记机制。
 
 ## 仓库根目录（`<repo-root>/`，与 `.git/` 同级）
 

@@ -18,7 +18,11 @@ import {
   resolveWorkflowDir,
 } from "./path.js";
 
-/** JSON coordination-doc kinds the store persists */export type ArtifactKind = "status" | "snapshot" | "residuals" | "review" | "json";
+/** JSON coordination-doc kinds the store persists. The former `residuals`
+ * kind is retired (issue-governance cutover G2a): the issue store (`store.db`)
+ * is the only findings authority, and a project `residuals.json` is migration
+ * history that must never be (re)created through the runtime store. */
+export type ArtifactKind = "status" | "snapshot" | "review" | "json";
 
 /** Stable key inside the kind. Workflow id, project id, or review id;
  * `kind: "status"` always uses key `"root"`. */
@@ -60,6 +64,14 @@ const PLAN_SHAPED_KEY_RE = /^[0-9]{8}-[a-z0-9-]+$/;
  * re-deriving it textually. */
 export function resolveArtifactPath(harnessRoot: string, ref: ArtifactRef): string {
   const { kind, key } = ref;
+  // Retired kind guard (G2a): the type no longer admits `residuals`, but a
+  // runtime caller (JS consumer, stale adapter) must also be refused rather
+  // than silently resolving a legacy register path.
+  if ((kind as string) === "residuals") {
+    throw new Error(
+      "ArtifactStore no longer persists project registers \u2014 the issue store (store.db) is the only findings authority; a residuals.json is migration history",
+    );
+  }
   if (kind === "json") {
  // Escape hatch: caller-supplied absolute path. Not a user-facing AC.
     if (!isAbsolute(key)) {
@@ -79,9 +91,6 @@ export function resolveArtifactPath(harnessRoot: string, ref: ArtifactRef): stri
   }
   if (kind === "snapshot") {
     return join(resolveWorkflowDir(harnessRoot, { harnessDir: harnessRoot }), key, "snapshot.json");
-  }
-  if (kind === "residuals") {
-    return join(resolveProjectDir(harnessRoot, { harnessDir: harnessRoot }), key, "residuals.json");
   }
  // kind === "review" — product-locked table: plan-shaped
  // key → {HARNESS_DIR}/sdd/<key>/review/report.json; other keys →
@@ -124,6 +133,29 @@ function readDirEntries(dir: string): Dirent[] {
   }
 }
 
+/** Refuse every retired register write target (G2a): the `residuals` kind is
+ * gone, and a `json` alias (`--json <abs path>`, symlink) whose CANONICAL
+ * target is a `residuals.json` under the resolved project dir must not
+ * recreate the legacy authority either — it refuses, it never falls through
+ * to an ordinary write. */
+function assertNotRetiredRegisterTarget(root: string, ref: ArtifactRef, filePath: string): void {
+  if ((ref.kind as string) === "residuals") {
+    throw new Error(
+      "ArtifactStore no longer persists project registers \u2014 the issue store (store.db) is the only findings authority; a residuals.json is migration history",
+    );
+  }
+  if (ref.kind === "json") {
+    const canonical = canonicalTarget(filePath);
+    if (basename(canonical) !== "residuals.json") return;
+    const projectDir = canonicalTarget(resolveProjectDir(root, { harnessDir: root }));
+    if (canonical.startsWith(`${projectDir}${sep}`)) {
+      throw new Error(
+        `refusing to persist ${canonical} through a json alias \u2014 project registers are retired migration history; the issue store (store.db) is the only findings authority`,
+      );
+    }
+  }
+}
+
 /** Protected document class of a resolved target (spec §C4): the coordination
  * documents the scoped writers own. Kinds map directly; a `json` alias
  * (`--json <abs path>`, symlink) is classified by its CANONICAL target
@@ -132,14 +164,11 @@ function readDirEntries(dir: string): Dirent[] {
 function protectedKindOf(root: string, ref: ArtifactRef, filePath: string): ProtectedWriteKind | null {
   if (ref.kind === "status") return "root";
   if (ref.kind === "snapshot") return "snapshot";
-  if (ref.kind === "residuals") return "register";
   if (ref.kind !== "json") return null;
   const canonical = canonicalTarget(filePath);
   if (canonical === canonicalTarget(resolveArtifactPath(root, { kind: "status", key: "root" }))) return "root";
   const workflowDir = canonicalTarget(resolveWorkflowDir(root, { harnessDir: root }));
   if (basename(canonical) === "snapshot.json" && canonical.startsWith(`${workflowDir}${sep}`)) return "snapshot";
-  const projectDir = canonicalTarget(resolveProjectDir(root, { harnessDir: root }));
-  if (basename(canonical) === "residuals.json" && canonical.startsWith(`${projectDir}${sep}`)) return "register";
   return null;
 }
 
@@ -182,22 +211,29 @@ export function createFsStore(harnessRoot: string): ArtifactStore & { root: stri
         );
       }
       const filePath = resolveArtifactPath(root, doc);
+      assertNotRetiredRegisterTarget(root, doc, filePath);
  // Protected-write boundary (spec §C4): the coordination documents
- // (`status.json`, a workflow `snapshot.json`, a project
- // `residuals.json`) accept writes only from inside the private
- // authorization context the locked writers open. Everything else —
- // including a `json`/symlink alias of a protected file — refuses.
+ // (`status.json`, a workflow `snapshot.json`) accept writes only from
+ // inside the private authorization context the locked writers open.
+ // Everything else — including a `json`/symlink alias of a protected file —
+ // refuses.
       const protectedKind = protectedKindOf(root, doc, filePath);
       if (protectedKind !== null) assertProtectedWriteAuthorized(filePath, "put", protectedKind);
       writeJson(filePath, doc.payload);
     },
     async get<T = unknown>(ref: ArtifactRef): Promise<T | undefined> {
       const filePath = resolveArtifactPath(root, ref);
+      // Read-surface symmetry (G2a): the same refusal as put/delete. A read
+      // through a `json` alias is the same authority channel — the runtime
+      // holds no register authority, so legacy register bytes never reach a
+      // consumer that bypasses the findings gate.
+      assertNotRetiredRegisterTarget(root, ref, filePath);
       if (!existsSync(filePath)) return undefined;
       return readJson(filePath) as unknown as T;
     },
     async delete(ref: ArtifactRef): Promise<void> {
       const filePath = resolveArtifactPath(root, ref);
+      assertNotRetiredRegisterTarget(root, ref, filePath);
       const protectedKind = protectedKindOf(root, ref, filePath);
       if (protectedKind !== null) assertProtectedWriteAuthorized(filePath, "delete", protectedKind);
       if (existsSync(filePath)) unlinkSync(filePath);
@@ -208,17 +244,19 @@ export function createFsStore(harnessRoot: string): ArtifactStore & { root: stri
       if (kind === "json") {
         throw new Error("ArtifactStore json keys are absolute paths and cannot be listed");
       }
+      if ((kind as string) === "residuals") {
+        throw new Error(
+          "ArtifactStore no longer persists project registers \u2014 the issue store (store.db) is the only findings authority; a residuals.json is migration history",
+        );
+      }
       const keys: string[] = [];
       if (kind === "status") {
  // Exists-conditional (architect-amended D4): [root] iff the file
  // exists — never a key whose get would miss.
         if (existsSync(resolveArtifactPath(root, { kind, key: "root" }))) keys.push("root");
-      } else if (kind === "snapshot" || kind === "residuals") {
+      } else if (kind === "snapshot") {
  // Same root resolution as the path table (.mstarc overrides apply).
-        const baseDir =
-          kind === "snapshot"
-            ? resolveWorkflowDir(root, { harnessDir: root })
-            : resolveProjectDir(root, { harnessDir: root });
+        const baseDir = resolveWorkflowDir(root, { harnessDir: root });
         for (const name of listDirNames(baseDir)) {
  // Round-trip guard through the single path table: list the dir
  // only when its exact get-path (<dir>/<name>/<file>) exists.

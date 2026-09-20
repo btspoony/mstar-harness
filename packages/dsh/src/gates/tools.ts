@@ -18,7 +18,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { type Context } from '@deepseek-ai/cordis'
 import {
-  assertIndexRows,
+  assertKnowledgeCatalogCompleteness,
   completenessLevel,
   evaluatePhaseGate,
   parseCompassFrontmatter,
@@ -392,10 +392,11 @@ export function registerSeamTools(ctx: Context, resolver: HarnessResolver): void
       name: 'mstar_compound_validate',
       description:
         'Validate a knowledge doc (mirror of `mstar compound validate`): schema.yaml frontmatter ' +
-        'contract; with knowledge_dir also assert the knowledge README index rows and guard the doc ' +
-        'inside the knowledge scope; reference existence checks run against repo_root when given, ' +
-        'else against the harness-derived root the seam gate uses (compound-refresh Phase 2 — the ' +
-        'knowledge_dir extras beyond the CLI).',
+        'contract; with knowledge_dir also assert the knowledge CATALOG completeness (the store.db ' +
+        'query that replaced the retired README index rows) and guard the doc inside the knowledge ' +
+        'scope; reference existence checks run against repo_root when given, else against the ' +
+        'harness-derived root the seam gate uses (compound-refresh Phase 2 — the knowledge_dir ' +
+        'extras beyond the CLI).',
       parameters: {
         doc_path: {
           type: 'string',
@@ -404,7 +405,9 @@ export function registerSeamTools(ctx: Context, resolver: HarnessResolver): void
         },
         knowledge_dir: {
           type: 'string',
-          description: 'Knowledge directory (enables index-row asserts + scope guard — CLI --knowledge-dir).',
+          description:
+            'Knowledge directory (enables the catalog-completeness assert + scope guard — CLI --knowledge-dir). ' +
+            'The completeness query needs an ACTIVE issue/catalog store; a missing, staged or unreadable one is reported, never passed.',
         },
         repo_root: {
           type: 'string',
@@ -443,7 +446,39 @@ export function registerSeamTools(ctx: Context, resolver: HarnessResolver): void
         }
         if (args.knowledge_dir !== undefined) {
           const knowledgeDir = resolve(args.knowledge_dir)
-          violations.push(...assertIndexRows(knowledgeDir).violations)
+          // Knowledge catalog completeness is a store.db query now
+          // (state-projection contract §4): the `{KNOWLEDGE_DIR}/README.md`
+          // index is retired, and the retired reader refuses actionably
+          // instead of quietly passing. FAIL-CLOSED: without a harness dir to
+          // resolve the authority against — or with a store the engine refuses
+          // (missing / staged / corrupt / below-floor runtime) — the tool
+          // reports the refusal instead of a completeness verdict it cannot
+          // make.
+          const harnessDir = resolver.forAgent(exec.agent)
+          if (harnessDir === null) {
+            violations.push({
+              ok: false,
+              severity: 'high',
+              code: 'compound.catalog.unresolved-harness',
+              message: `no {HARNESS_DIR} resolves for this session, so the knowledge catalog completeness of ${knowledgeDir} cannot be asserted`,
+              fix: 'run the tool from a configured workspace (or pass repo_root) — catalog completeness is a {HARNESS_DIR}/store.db query',
+            })
+          } else {
+            try {
+              violations.push(...(await assertKnowledgeCatalogCompleteness({ harnessDir })).violations)
+            } catch (error) {
+              const code = (error as { code?: unknown } | null | undefined)?.code
+              violations.push({
+                ok: false,
+                severity: 'high',
+                code: 'compound.catalog.unavailable',
+                message:
+                  `the knowledge catalog completeness cannot be evaluated: ` +
+                  `${typeof code === 'string' && code !== '' ? `[${code}] ` : ''}${error instanceof Error ? error.message : String(error)}`,
+                fix: 'restore the issue/catalog authority (`mstar store init|upgrade|migrate`) — unavailable catalog data is never read as complete',
+              })
+            }
+          }
           violations.push(...scopeGuard(abs, [knowledgeDir]).violations)
         }
         return { ok: violations.length === 0, violations: violations.map(iterationViolationView) }

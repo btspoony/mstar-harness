@@ -23,6 +23,13 @@ import { load as parseYaml } from 'js-yaml'
 import { createScope } from '@deepseek-ai/dsh-scope'
 import { Session, SessionId, SessionSeq } from '@deepseek-ai/dsh-session'
 import { MessageId } from '@deepseek-ai/dsh-llm'
+import {
+  captureIssue,
+  initializeStore,
+  openStore,
+  registerCatalogEntity,
+} from '@mstar-harness/engine'
+import type { CaptureInput } from '@mstar-harness/engine'
 import type { JobDoneListener, JobSnapshot } from '@deepseek-ai/dsh-jobs'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { LoaderEntryView } from '../src/gates/fallbacks-probe.ts'
@@ -807,6 +814,83 @@ export const INVALID_STATUS = {
   plans: 'not-an-array',
   residual_findings: {},
   metadata: {},
+}
+
+/* ===========================================================================
+ * Issue / catalog store fixtures (the authority the host readers consult)
+ *
+ * These build the REAL store through the engine's own domain verbs — the
+ * actual `node:sqlite` database, real migrations, real catalog/issue rows —
+ * so a spec proves host behaviour against the authority instead of a mock.
+ * ========================================================================== */
+
+/** Initialize an ACTIVE empty issue/catalog store at `harnessDir` (the real engine initializer). */
+export async function seedStore(harnessDir: string): Promise<void> {
+  const handle = await initializeStore({ harnessDir })
+  handle.close()
+}
+
+/**
+ * Capture ONE open issue through the engine's authorized capture verb and,
+ * when `planId` is given, link it to that plan (the provenance the findings
+ * cleanup gate reads). `actor` is the capture seat the contract reserves.
+ * @returns the DB-allocated issue id (`I-000001`).
+ */
+export async function seedOpenIssue(
+  harnessDir: string,
+  options: { title: string; severity: CaptureInput['severity']; planId?: string; projectId?: string; operationId: string },
+): Promise<string> {
+  const input: CaptureInput = {
+    projectId: options.projectId ?? '_default',
+    title: options.title,
+    kind: 'bug',
+    severity: options.severity,
+    impact: `${options.title} (fixture)`,
+    acceptance: `${options.title} is verified fixed (fixture)`,
+    sourceIdentity: `fixture/${options.operationId}`,
+    rootCauseKey: `fixture/${options.operationId}`,
+    acceptanceKey: `fixture/${options.operationId}`,
+    occurrenceKey: `fixture/${options.operationId}`,
+    sourceKind: 'spec',
+    location: 'tests/harness.ts',
+    observedBehavior: options.title,
+    evidence: [`fixture:${options.operationId}`],
+    discoveredAt: '2026-09-18T00:00:00Z',
+  }
+  const receipt = await captureIssue({ harnessDir }, input, {
+    operationId: options.operationId,
+    actor: 'project-manager',
+  })
+  if (options.planId !== undefined) {
+    // The provenance row is seeded directly, exactly as the scoped writer
+    // would leave it: the `linkIssue` verb re-verifies a live engine-issued
+    // session envelope (issue contract §4), which a fixture cannot mint. The
+    // read gate this helper feeds is what the plan-link fixture is for.
+    const handle = await openStore({ harnessDir }, 'write')
+    try {
+      handle.db
+        .prepare("insert into provenance(issue_id, kind, target, source_hash) values (?, 'plan', ?, ?)")
+        .run(receipt.issueId, options.planId, `fixture:${options.planId}`)
+    } finally {
+      handle.close()
+    }
+  }
+  return receipt.issueId
+}
+
+/** Register one knowledge DOCUMENT row in the DB catalog (the retired README-index replacement). */
+export async function seedKnowledgeDoc(
+  harnessDir: string,
+  options: { id: string; relativePath: string; title: string; operationId: string },
+): Promise<void> {
+  await registerCatalogEntity({ harnessDir }, {
+    kind: 'document',
+    id: options.id,
+    title: options.title,
+    rootKind: 'knowledge',
+    relativePath: options.relativePath,
+    documentKind: 'knowledge',
+  }, { operationId: options.operationId, actor: 'project-manager' })
 }
 
 /**
