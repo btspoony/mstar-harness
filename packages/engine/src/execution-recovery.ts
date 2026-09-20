@@ -87,6 +87,7 @@ import {
   mkdtempSync,
   openSync,
   readFileSync,
+  readdirSync,
   readSync,
   renameSync,
   rmSync,
@@ -1291,6 +1292,101 @@ function recoveryReceiptPathOf(root: string, attemptId: string): string {
 }
 
 /**
+ * The scratch name shape a crashed attempt leaves at the control root, spelled
+ * exactly as the replacement sequence stages it (`join(root,
+ * \`.store-restore-${attemptId}.db\`)`) plus SQLite's own sidecars: the `-wal`
+ * and `-shm` beside it, and the `-journal` a crash inside
+ * `patchImageEpoch`'s transaction leaves.
+ */
+const RESTORE_SCRATCH_NAME = /^\.store-restore-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.db(?:-(?:wal|shm|journal))?$/;
+const RESTORE_SCRATCH_SIDECARS = ["-wal", "-shm", "-journal"] as const;
+
+/**
+ * Does this attempt's durable record PROVE that it never installed its image?
+ *
+ * The record is the only evidence that survives a crash, and it is written
+ * strictly BEFORE the rename — so an attempt with none never reached the
+ * rename, and one still in `phase: "replacing"` whose `restoredCopySha256` is
+ * not the live store file's hash never got its bytes into place: a copy that
+ * HAD been renamed would BE the live file, byte for byte. Everything else —
+ * `phase: "replaced"`, a phase this protocol does not write, a receipt that
+ * cannot be read, a hash the record does not carry — is not proof of anything,
+ * and answers false.
+ */
+function attemptNeverInstalled(root: string, attemptId: string, liveStoreSha256: string): boolean {
+  const receiptDir = join(root, "archived", "store-migration", "recovery");
+  let names: string[];
+  try {
+    names = readdirSync(receiptDir);
+  } catch (error) {
+    // No receipt store at all: this control root has never recorded an attempt,
+    // so the scratch can only belong to one that never wrote its receipt. Any
+    // other failure is not evidence, and nothing is reclaimed on it.
+    return (error as NodeJS.ErrnoException).code === "ENOENT";
+  }
+  const name = names.find((candidate) => candidate.startsWith("restore-") && candidate.endsWith(`-${attemptId}.json`));
+  if (name === undefined) return true;
+  let record: Partial<ExecutionRecoveryRecord>;
+  try {
+    record = JSON.parse(readFileSync(join(receiptDir, name), "utf8")) as Partial<ExecutionRecoveryRecord>;
+  } catch {
+    return false;
+  }
+  if (record.phase !== "replacing") return false;
+  return typeof record.restoredCopySha256 === "string" && record.restoredCopySha256 !== liveStoreSha256;
+}
+
+/**
+ * §8: reclaim the scratch artifacts a CRASHED restore attempt left behind.
+ *
+ * `runRestore` stages the prepared store beside the live one and removes it on
+ * the exception path only, so a process that dies inside an attempt (SIGKILL, a
+ * machine that goes down) leaves a store-sized image — plus whatever sidecar a
+ * crash mid-transaction stranded — at the control root. Every attempt draws a
+ * fresh `attemptId`, so nothing ever addressed the orphan again, and
+ * crash-and-retry is the designed flow: the leak would grow with every crash.
+ *
+ * An artifact is reclaimed only when `attemptNeverInstalled` proves the attempt
+ * never installed it. An artifact whose recorded `restoredCopySha256` IS the
+ * live store file's hash is never reclaimed — those bytes ARE the installed
+ * store, identified rather than assumed — and neither is one whose receipt is
+ * `phase: "replaced"` (a completed replacement, whose records and residues are
+ * the operator's, not this sweep's). The durable receipts themselves stay in
+ * place throughout: this collects scratch bytes, never evidence.
+ *
+ * Its one other premise is the §4.2 maintenance lock, which every restore takes
+ * first: this sweep runs INSIDE it (`restoreExecutionBackup`), so the only
+ * attempt that can be running while it sweeps is the one sweeping, and that
+ * attempt creates its own image afterwards. Best-effort throughout — a control
+ * root this run cannot read, or a scratch file it cannot remove, never fails
+ * the restore that is about to run.
+ */
+async function reclaimAbandonedRestoreScratch(root: string, livePath: string): Promise<void> {
+  let names: string[];
+  try {
+    names = readdirSync(root);
+  } catch {
+    return; // a control root this run cannot read holds nothing it can reclaim
+  }
+  // One entry per attempt that left something behind — its image, or a sidecar
+  // of one. Attempt ids come off the directory, so this is a dynamic set.
+  const attempts = new Set(names.map((name) => RESTORE_SCRATCH_NAME.exec(name)?.[1]).filter((attemptId) => attemptId !== undefined));
+  if (attempts.size === 0) return;
+  let liveStoreSha256: string | null = null;
+  for (const attemptId of attempts) {
+    try {
+      liveStoreSha256 ??= await sha256OfFile(livePath);
+      if (!attemptNeverInstalled(root, attemptId, liveStoreSha256)) continue;
+      const imagePath = join(root, `.store-restore-${attemptId}.db`);
+      for (const suffix of RESTORE_SCRATCH_SIDECARS) rmSync(`${imagePath}${suffix}`, { force: true });
+      rmSync(imagePath, { force: true });
+    } catch {
+      // best-effort: an artifact this run cannot reclaim is left for the next one
+    }
+  }
+}
+
+/**
  * Patch the epoch into the recovery IMAGE — the sibling copy on its way to
  * becoming the live store.
  *
@@ -1383,6 +1479,13 @@ async function runRestore(context: StoreContext, root: string, input: ResolvedRe
         `names the exact loss it accepts. Nothing was replaced.`,
     );
   }
+
+  // §8: an attempt that crashed before this one left its scratch beside the
+  // live store, and the retry that would have reclaimed it drew a fresh
+  // `attemptId` — so the sweep runs here, while the live store still holds the
+  // bytes a receipt would name and before the checkpoint rewrites them. It is
+  // placed after the loss gate so a restore that refuses still changes nothing.
+  await reclaimAbandonedRestoreScratch(root, storeDbPath(context));
 
   // §8 quiescence, then the fresh pre-restore recovery point.
   await checkpointLiveStore(context);

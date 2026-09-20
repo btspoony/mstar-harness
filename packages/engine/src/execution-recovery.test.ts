@@ -27,8 +27,9 @@
  *   before or after the replacement is decidable from the durable receipt; a
  *   sidecar that appears in the replacement window refuses rather than being
  *   replaced over; a live store whose loss cannot be inventoried refuses with
- *   both files kept; and the restore serializes with the migration maintenance
- *   lock.
+ *   both files kept; the restore serializes with the migration maintenance
+ *   lock; and an abandoned attempt's scratch image and sidecars are reclaimed
+ *   while an installed copy is left exactly where it is.
  * - `execution-export-*`: the diagnostic carries workflow/plan/lease state and
  *   the public frozen input while dropping every session identity, token,
  *   credential and session path it could otherwise be driven with, is
@@ -39,7 +40,7 @@
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -814,6 +815,91 @@ describe("execution-restore", () => {
     rmSync(walPath, { force: true });
     rmSync(`${world.dbPath}-shm`, { force: true });
     expect(footprint(world.dbPath)).toEqual(liveFootprint);
+  });
+
+  test("execution-restore-reclaims-an-abandoned-attempts-scratch-and-keeps-an-installed-copy", async () => {
+    const world = await recoveryWorld("restore-sweep");
+    const point = await recoveryPoint(world, "sweep-point");
+    await mutateEveryDomain(world, "sweep");
+
+    // The live store's own bytes as the replacement sequence will read them:
+    // the loss preview and the re-inventory run before the sweep are reads (the
+    // untouched-preview cases above pin that), and the one step that rewrites
+    // these bytes — the quiescing checkpoint — runs after it.
+    const preview = await previewExecutionRestore(world.context, point.backupPath);
+
+    // The three shapes a crashed attempt leaves at the control root, planted the
+    // way a dead process leaves them: the scratch image, the sidecars a crash
+    // mid-transaction strands beside it, and the durable receipt that decides.
+    const receiptDir = join(world.harness, "archived", "store-migration", "recovery");
+    mkdirSync(receiptDir, { recursive: true });
+    const plant = (
+      attemptId: string,
+      bytes: Buffer,
+      restoredCopySha256: string,
+      phase: string,
+    ): { image: string; receiptPath: string } => {
+      const image = join(world.harness, `.store-restore-${attemptId}.db`);
+      const receiptPath = join(receiptDir, `restore-${Date.now().toString().padStart(16, "0")}-${attemptId}.json`);
+      writeFileSync(image, bytes);
+      writeFileSync(`${image}-journal`, Buffer.from("stranded by a crash mid-transaction"));
+      writeFileSync(`${image}-wal`, Buffer.from("stranded wal"));
+      writeFileSync(`${image}-shm`, Buffer.from("stranded shm"));
+      writeFileSync(receiptPath, JSON.stringify({ phase, restoredCopySha256 }));
+      return { image, receiptPath };
+    };
+
+    // (1) The crash landed BEFORE the replacement: the receipt still says
+    // `replacing`, and its prepared bytes are not the live store's — so the
+    // rename provably never installed them.
+    const abandonedBytes = Buffer.from("a prepared store image that never landed");
+    const abandoned = plant(randomUUID(), abandonedBytes, sha256OfBytes(abandonedBytes), "replacing");
+
+    // (2) The crash landed AFTER it: the scratch bytes ARE the installed store,
+    // and the receipt names that exact hash.
+    const installedBytes = readFileSync(world.dbPath);
+    const installed = plant(randomUUID(), installedBytes, sha256OfBytes(installedBytes), "replacing");
+
+    // (3) A finished attempt: its receipt says the copy WAS installed.
+    const finishedBytes = Buffer.from("a copy of a completed replacement");
+    const finished = plant(randomUUID(), finishedBytes, sha256OfBytes(finishedBytes), "replaced");
+
+    // (4) The crash landed before the attempt even wrote its receipt — the
+    // widest window an attempt has, since the image is copied and re-hashed
+    // before the receipt is written. No receipt also means no rename: the
+    // replacement sequence writes the receipt first, and nothing else stages
+    // this name. The attempt that could still own it would have to be running
+    // INSIDE the maintenance lock this restore holds, which is this one — whose
+    // image does not exist yet.
+    const unreceiptedBytes = Buffer.from("an image copied before the attempt recorded anything");
+    const unreceiptedImage = join(world.harness, `.store-restore-${randomUUID()}.db`);
+    writeFileSync(unreceiptedImage, unreceiptedBytes);
+    writeFileSync(`${unreceiptedImage}-journal`, Buffer.from("stranded by a crash mid-transaction"));
+
+    const receipt = await restoreExecutionBackup(world.context, {
+      preview,
+      acceptLossDigest: preview.lossDigest,
+      operator: OPERATOR,
+      authorization: AUTHORIZATION,
+    });
+    expect(receipt.storeId).toBe(world.storeId);
+
+    // The abandoned attempt's image AND the `-journal`/`-wal`/`-shm` its crash
+    // stranded are reclaimed — receipt or no receipt...
+    expect(existsSync(abandoned.image)).toBe(false);
+    expect(existsSync(`${abandoned.image}-journal`)).toBe(false);
+    expect(existsSync(`${abandoned.image}-wal`)).toBe(false);
+    expect(existsSync(`${abandoned.image}-shm`)).toBe(false);
+    expect(existsSync(unreceiptedImage)).toBe(false);
+    expect(existsSync(`${unreceiptedImage}-journal`)).toBe(false);
+    // …while the installed store's bytes, a completed attempt's artifact, and
+    // every durable receipt are left exactly where they were.
+    expect(sha256OfFile(installed.image)).toBe(sha256OfBytes(installedBytes));
+    expect(existsSync(`${installed.image}-journal`)).toBe(true);
+    expect(sha256OfFile(finished.image)).toBe(sha256OfBytes(finishedBytes));
+    expect(existsSync(abandoned.receiptPath)).toBe(true);
+    expect(existsSync(installed.receiptPath)).toBe(true);
+    expect(existsSync(finished.receiptPath)).toBe(true);
   });
 
   test("execution-restore-refuses-an-incomplete-inventory-and-keeps-both-files", async () => {
