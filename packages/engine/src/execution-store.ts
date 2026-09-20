@@ -34,11 +34,12 @@ import { isNonEmptyString, isPlainObject, validateRowCoordination, type RowCoord
 import {
   validateExecutionLease,
   validateIntegrationMergeLease,
+  withStatusWriteLock,
   type ExecutionLease,
   type IntegrationMergeLease,
 } from "./lease.js";
 import { resolveWorkflowDir } from "./path.js";
-import { validateWorkflowEntry, type PlanRow, type StatusV2Doc, type WorkflowEntry } from "./status.js";
+import { validatePlanRow, validateWorkflowEntry, type PlanRow, type StatusV2Doc, type WorkflowEntry } from "./status.js";
 import {
   openStore,
   StoreError,
@@ -47,7 +48,7 @@ import {
   type StoreContext,
   type StoreDb,
 } from "./store-db.js";
-import type { WorkflowSnapshot } from "./workflow.js";
+import { validateWorkflowSnapshot, type WorkflowSnapshot } from "./workflow.js";
 
 // ---------------------------------------------------------------------------
 // Refusals (§5)
@@ -489,14 +490,26 @@ function readFrozenInput(json: unknown, what: string): CatalogExecutionPin | nul
   if (json === null || json === undefined) return null;
   const pin = storedJsonObject(json, what);
   if (
-    typeof pin.store_id !== "string" ||
+    !isNonEmptyString(pin.store_id) ||
+    !STORE_UUID_RE.test(pin.store_id) ||
     typeof pin.entity_revision !== "number" ||
-    typeof pin.document_hash !== "string" ||
-    typeof pin.relation_hash !== "string"
+    !Number.isSafeInteger(pin.entity_revision) ||
+    pin.entity_revision <= 0 ||
+    !isNonEmptyString(pin.document_hash) ||
+    !isNonEmptyString(pin.relation_hash)
   ) {
     throw corrupt(`${what} is not a complete catalog execution pin`);
   }
-  return pin as unknown as CatalogExecutionPin;
+  const keys = Object.keys(pin);
+  if (keys.length !== 4) {
+    throw corrupt(`${what} carries fields beyond the catalog execution pin contract`);
+  }
+  return {
+    store_id: pin.store_id,
+    entity_revision: pin.entity_revision,
+    document_hash: pin.document_hash,
+    relation_hash: pin.relation_hash,
+  };
 }
 
 function readExecutionLease(json: unknown, what: string): ExecutionLease {
@@ -514,14 +527,30 @@ function readIntegrationLease(json: unknown, what: string): IntegrationMergeLeas
 }
 
 function sessionRef(store: StoreIdentity, workflowId: string, row: Record<string, unknown>): ExecutionSessionRef {
-  const role = row.role === "plan-pm" ? "plan-pm" : "coordinator";
+  const role = row.role;
+  if (role !== "plan-pm" && role !== "coordinator") {
+    throw corrupt(`execution_sessions(${workflowId}) carries role ${JSON.stringify(role)}`);
+  }
+  if (!isNonEmptyString(row.session_id)) {
+    throw corrupt(`execution_sessions(${workflowId}) carries an empty session identity`);
+  }
+  if (typeof row.epoch !== "number" || !Number.isSafeInteger(row.epoch) || row.epoch < 0) {
+    throw corrupt(`execution_sessions(${workflowId},${row.session_id}) carries a non-integer epoch`);
+  }
+  if (role === "plan-pm") {
+    if (!isNonEmptyString(row.plan_id)) {
+      throw corrupt(`execution_sessions(${workflowId},${row.session_id}) is a plan-pm row without a plan id`);
+    }
+  } else if (row.plan_id !== null && row.plan_id !== undefined) {
+    throw corrupt(`execution_sessions(${workflowId},${row.session_id}) is a coordinator row with a plan id`);
+  }
   return {
     storeId: store.storeId,
-    epoch: typeof row.epoch === "number" ? row.epoch : store.epoch,
+    epoch: row.epoch,
     workflowId,
     role,
-    sessionId: String(row.session_id),
-    planId: typeof row.plan_id === "string" ? row.plan_id : null,
+    sessionId: row.session_id,
+    planId: role === "plan-pm" ? row.plan_id : null,
   };
 }
 
@@ -547,11 +576,15 @@ function readWorkflowView(
   // §2.2: `plans` and `integration_merge_lease` are OWNED by execution_plans and
   // execution_integration_leases. A second copy inside the header would be a
   // second authority, so it is refused rather than merged or dropped.
-  if (state.plans !== undefined || state.integration_merge_lease !== undefined) {
+  if (state.plans !== undefined || state.integration_merge_lease !== undefined || state.coordinator_session !== undefined) {
     throw corrupt(
-      `execution_workflows(${workflowId}).state_json carries plans/integration_merge_lease, which are owned by ` +
-        `execution_plans/execution_integration_leases`,
+      `execution_workflows(${workflowId}).state_json carries plans/integration_merge_lease/coordinator_session, which are owned by ` +
+        `execution_plans/execution_integration_leases/execution_sessions`,
     );
+  }
+  const workflowValidation = validateWorkflowSnapshot({ ...state, plans: [] });
+  if (!workflowValidation.ok) {
+    throw validationRefusal(`execution_workflows(${workflowId}).state_json`, workflowValidation.violations);
   }
 
   const sessions = db
@@ -604,6 +637,15 @@ function readWorkflowView(
         `execution_plans(${workflowId},${planId}).state_json carries coordination/execution_lease, which are owned ` +
           `by coordination_json/execution_leases`,
       );
+    }
+    if (planState.id !== planId) {
+      throw corrupt(
+        `execution_plans(${workflowId},${planId}).state_json carries id ${JSON.stringify(planState.id)} and does not describe its own key`,
+      );
+    }
+    const planValidation = validatePlanRow(planState);
+    if (!planValidation.ok) {
+      throw validationRefusal(`execution_plans(${workflowId},${planId}).state_json`, planValidation.violations);
     }
     if (storedCoordination.revision !== undefined || storedCoordination.session !== undefined) {
       throw corrupt(
@@ -727,9 +769,9 @@ export function withExecutionTransaction<T>(
             `There is no execution authority to transact against; nothing was written.`,
         );
       }
+      handle.db.exec("begin immediate");
       const execution = readExecutionMetaRow(handle.db);
       const identity = readStoreIdentity(handle.db);
-      handle.db.exec("begin immediate");
       try {
         const result = transition({
           db: handle.db,
@@ -913,22 +955,28 @@ function assertExecutionDomainEmpty(db: StoreDb, meta: ExecutionMeta): void {
  * is wired to no CLI.
  */
 export async function initializeExecutionAuthority(context: StoreContext): Promise<ExecutionRead<ExecutionState>> {
-  // Filesystem preconditions run before SQLite ownership (§4.1): no async or
-  // external work happens inside the write transaction.
-  assertNoLegacyExecutionSources(context);
-  await withExecutionTransaction(context, (tx) => {
-    assertActiveStoreAuthority(tx.db);
-    assertExecutionDomainEmpty(tx.db, tx.execution);
-    const now = new Date().toISOString();
-    tx.db
-      .prepare(
-        "update execution_meta set authority_state = 'active', revision = revision + 1, root_updated_at = ?, " +
-          "activated_at = ? where id = 1",
-      )
-      .run(now, now);
-    // Activation advances the store-wide epoch and the store revision exactly
-    // once, the same unit the issue/catalog activation barrier commits.
-    tx.db.prepare("update store_meta set authority_epoch = authority_epoch + 1, revision = revision + 1 where id = 1").run();
+  const harnessDir = dirname(storeDbPath(context));
+  const statusPath = join(harnessDir, "status.json");
+  // Same-host exclusive write lock used by status.json / snapshot writers
+  // (`withStatusWriteLock` in lease.ts). File lock first, then the SQLite
+  // transaction — never the other way around. Recheck the filesystem witness
+  // immediately before commit so a rogue writer that skipped the lock still
+  // cannot land an active authority beside a live legacy source.
+  return withStatusWriteLock(statusPath, async () => {
+    assertNoLegacyExecutionSources(context);
+    await withExecutionTransaction(context, (tx) => {
+      assertActiveStoreAuthority(tx.db);
+      assertExecutionDomainEmpty(tx.db, tx.execution);
+      const now = new Date().toISOString();
+      tx.db
+        .prepare(
+          "update execution_meta set authority_state = 'active', revision = revision + 1, root_updated_at = ?, " +
+            "activated_at = ? where id = 1",
+        )
+        .run(now, now);
+      tx.db.prepare("update store_meta set authority_epoch = authority_epoch + 1, revision = revision + 1 where id = 1").run();
+      assertNoLegacyExecutionSources(context);
+    });
+    return readExecutionState(context);
   });
-  return readExecutionState(context);
 }

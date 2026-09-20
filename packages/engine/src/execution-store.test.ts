@@ -801,7 +801,18 @@ function seedAuthorityGraph(db: StoreDb, epoch: number, options: { stateId?: str
   db.prepare(
     "insert into execution_workflows(workflow_id, revision, creator_session_id, state_json, created_at, updated_at) " +
       "values ('wf-1', 4, 'host-1', ?, ?, ?)",
-  ).run(JSON.stringify({ id: options.stateId ?? "wf-1", type: "plan", status: "running" }), TS, TS);
+  ).run(
+    JSON.stringify({
+      id: options.stateId ?? "wf-1",
+      schema_version: 1,
+      type: "plan",
+      status: "running",
+      started_at: TS,
+      updated_at: TS,
+    }),
+    TS,
+    TS,
+  );
   db.prepare("insert into execution_registry(workflow_id, entry_json) values ('wf-1', ?)").run(
     JSON.stringify({ id: "wf-1", type: "plan", started_at: TS, dir: "workflows/wf-1" }),
   );
@@ -809,7 +820,7 @@ function seedAuthorityGraph(db: StoreDb, epoch: number, options: { stateId?: str
     "insert into execution_plans(workflow_id, plan_id, revision, ordinal, state_json, coordination_json) " +
       "values ('wf-1', 'p-1', 6, 0, ?, ?)",
   ).run(
-    JSON.stringify({ id: "p-1", status: "InProgress" }),
+    JSON.stringify({ id: "p-1", title: "C2 plan", file: "plans/p-1.md", status: "InProgress" }),
     JSON.stringify({ progress: { status: "InProgress", summary: "c2", evidence_paths: [] } }),
   );
   db.prepare(
@@ -1097,7 +1108,7 @@ describe("execution-initialize: §3 create-only empty execution authority", () =
     expect(workflow.integrationLease).toBeNull();
     expect(workflow.plans).toHaveLength(1);
     const [plan] = workflow.plans;
-    expect(plan.plan).toEqual({ id: "p-1", status: "InProgress" });
+    expect(plan.plan).toEqual({ id: "p-1", title: "C2 plan", file: "plans/p-1.md", status: "InProgress" });
     expect(plan.coordination).toEqual({
       revision: 6,
       progress: { status: "InProgress", summary: "c2", evidence_paths: [] },
@@ -1137,5 +1148,50 @@ describe("execution-initialize: §3 create-only empty execution authority", () =
       writer.close();
     }
     await expect(readExecutionState(context)).rejects.toThrow(/store\.corrupt/);
+  });
+
+  test("refuses a plan whose stored state does not describe its own key", async () => {
+    const { context, epoch } = await freshStore("read-foreign-plan");
+    await initializeExecutionAuthority(context);
+    const writer = await openStore(context, "write");
+    try {
+      seedAuthorityGraph(writer.db, epoch + 1);
+      writer.db
+        .prepare("update execution_plans set state_json = ? where workflow_id = 'wf-1' and plan_id = 'p-1'")
+        .run(JSON.stringify({ id: "p-other", status: "InProgress" }));
+    } finally {
+      writer.close();
+    }
+    await expect(readExecutionState(context)).rejects.toMatchObject({ code: "store.corrupt" });
+  });
+
+  test("refuses a frozen pin that is not a complete catalog execution identity", async () => {
+    const { context, epoch } = await freshStore("read-malformed-pin");
+    await initializeExecutionAuthority(context);
+    const writer = await openStore(context, "write");
+    try {
+      seedAuthorityGraph(writer.db, epoch + 1);
+      writer.db
+        .prepare("update execution_inputs set catalog_pin_json = ? where workflow_id = 'wf-1' and plan_id = 'p-1'")
+        .run(JSON.stringify({ ...FROZEN_PIN, document_hash: "" }));
+    } finally {
+      writer.close();
+    }
+    await expect(readExecutionState(context)).rejects.toMatchObject({ code: "store.corrupt" });
+  });
+
+  test("refuses a session row that contradicts the session identity contract", async () => {
+    const { context, epoch } = await freshStore("read-malformed-session");
+    await initializeExecutionAuthority(context);
+    const writer = await openStore(context, "write");
+    try {
+      seedAuthorityGraph(writer.db, epoch + 1);
+      writer.db
+        .prepare("update execution_sessions set session_id = '' where workflow_id = 'wf-1' and session_id = 's-1'")
+        .run();
+    } finally {
+      writer.close();
+    }
+    await expect(readExecutionState(context)).rejects.toMatchObject({ code: "store.corrupt" });
   });
 });
