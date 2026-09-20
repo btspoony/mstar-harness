@@ -571,12 +571,21 @@ export {
 // integration-accept, complete and reconcile — each with exactly one DB
 // transition behind it. Published only once the union was complete, so nothing
 // here is a stub: the legacy-only `repair-delivery-source` is refused, and no
-// workflow-level verb, registration or coordinator-recovery API is part of this
-// surface (those are W5/W6).
+// registration API is part of this surface.
 // ADDITIVE export and the ONLY reachable surface for consumers: the internal
 // dispatch frame and the individual transition bodies stay module-scoped.
 export type { CoordinationOperation } from "./execution-coordination.js";
 export { mutateExecutionPlan } from "./execution-coordination.js";
+// §3 the WORKFLOW-level surface: the closed `WorkflowExecutionOperation` union
+// (phase, lifecycle, execution-policy, integration-worktree, delivery) plus the
+// explicit coordinator recovery bootstrap — the one transition that replaces a
+// crashed/imported/revoked coordinator identity by named stop evidence instead
+// of an old credential. Both consume the §3.1 envelope (operation id, session
+// reference, exact token) and are exported only once complete.
+// ADDITIVE export: the per-kind transition bodies and the pinned-witness
+// helpers stay module-scoped.
+export type { WorkflowExecutionOperation } from "./execution-workflow.js";
+export { mutateExecutionWorkflow, recoverExecutionCoordinator } from "./execution-workflow.js";
 export type {
   CaptureInput,
   ClosureEvidence,

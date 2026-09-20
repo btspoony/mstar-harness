@@ -341,8 +341,13 @@ function validateWorktreePathValue(violations: ValidationResult[], value: unknow
  * delivery kind requires is the consultation's rule
  * (`consultDeliveryEvidence`), so a partially filled block stays writable
  * while it is being collected.
+ *
+ * Exported (pure, read-only) for the DB transport's workflow-level `delivery`
+ * transition: recording evidence on the execution authority runs the SAME
+ * structural rule as the file route's `recordWorkflowDelivery`, so the two
+ * writers cannot drift into accepting different evidence shapes.
  */
-function deliveryEvidenceViolations(value: unknown, what: string): ValidationResult[] {
+export function deliveryEvidenceViolations(value: unknown, what: string): ValidationResult[] {
   const violations: ValidationResult[] = [];
   const invalid = (message: string): void => {
     violations.push(violation("medium", "workflow.snapshot.invalid-delivery-evidence", `${what}: ${message}`));
@@ -393,6 +398,11 @@ function deliveryEvidenceViolations(value: unknown, what: string): ValidationRes
     }
   }
   return violations;
+}
+
+/** The delivery-evidence members one declared kind records (contract §1/§4c/§4d/§4f). */
+export function deliveryEvidenceMembers(kind: WorkflowDeliveryKind): readonly string[] {
+  return kind === "development" ? ["compound", "pr", "merge"] : ["completion"];
 }
 
 /**
@@ -1298,7 +1308,7 @@ export async function recordWorkflowDelivery(
         `refusing to record delivery evidence for workflow ${JSON.stringify(workflowId)}: only a type: plan lifecycle with a registered delivery_kind carries delivery evidence (got type ${JSON.stringify(snapshot.type)} / delivery_kind ${JSON.stringify(kind)}) \u2014 the kind is declared at registration and never inferred (\u00a71)`,
       );
     }
-    const allowed = kind === "development" ? ["compound", "pr", "merge"] : ["completion"];
+    const allowed = deliveryEvidenceMembers(kind);
     const unused = members.filter((member) => !allowed.includes(member));
     if (unused.length > 0) {
       throw new Error(

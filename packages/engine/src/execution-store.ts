@@ -1080,6 +1080,23 @@ export async function readExecutionState(context: StoreContext): Promise<Executi
 }
 
 /**
+ * §3 the same consistent state read INSIDE a transaction the caller already
+ * owns — the receipt payload of a transition that returns the whole graph (its
+ * accepted effect as committed, which is why a terminal transition's receipt no
+ * longer lists the workflow it just unregistered). A second read handle here
+ * would be the nested transaction §4.1 refuses, and the caller's `tx.execution`
+ * is the metadata of this same snapshot.
+ */
+export function readExecutionStateGraph(tx: ExecutionTransaction): ExecutionRead<ExecutionState> {
+  return {
+    data: readExecutionGraph(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, tx.execution),
+    token: executionToken("root", tx.storeId, tx.epoch, [], tx.execution.revision),
+    storeId: tx.storeId,
+    epoch: tx.epoch,
+  };
+}
+
+/**
  * Live legacy execution sources of a control harness. The v2/v1 root register is
  * the file at the harness root; snapshots, `sessions/*.json` envelopes and
  * `notes.jsonl` ledgers all live under the workflow tree. Archived history under
@@ -1694,12 +1711,12 @@ export async function createExecutionWorkflow(
 const BIND_SESSION_OPERATION = "bindExecutionSession";
 
 /** §2.2 `execution_sessions.state`: a closed set, never a free-form label. */
-type ExecutionSessionState = "active" | "suspended" | "revoked";
+export type ExecutionSessionState = "active" | "suspended" | "revoked";
 
 const EXECUTION_SESSION_STATES: readonly ExecutionSessionState[] = ["active", "suspended", "revoked"];
 
 /** §2.2 one stored session row: its typed identity plus the ownership record beside it. */
-type SessionRow = { ref: ExecutionSessionRef; revision: number; state: ExecutionSessionState };
+export type SessionRow = { ref: ExecutionSessionRef; revision: number; state: ExecutionSessionState };
 
 /** §2.3 the workflow/plan/role a call is authorized against; `planId` is null exactly for a coordinator. */
 type SessionAddress = {
@@ -2105,6 +2122,69 @@ export function advancePlanOperationRevisions(
   tx.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
 }
 
+/**
+ * §3.1 the revision advance of one accepted WORKFLOW-level operation: the
+ * addressed workflow's revision and timestamp advance once (its header or a
+ * child of it changed) and the multi-domain transaction bumps the store
+ * revision once. Registry membership did not change, so the root revision is
+ * untouched — the terminal transition records its membership loss separately
+ * (`recordRootMembershipLoss`), so the store revision still advances exactly
+ * once per accepted operation.
+ */
+export function advanceWorkflowHeaderRevision(tx: ExecutionTransaction, input: { workflowId: string; now: string }): void {
+  tx.db
+    .prepare("update execution_workflows set revision = revision + 1, updated_at = ? where workflow_id = ?")
+    .run(input.now, input.workflowId);
+  tx.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+}
+
+/**
+ * §2.2/§7 the terminal transition's membership half: the workflow leaves the
+ * ACTIVE registry while its `execution_workflows` row, its plan rows and its
+ * history stay exactly where they are (no catalog row is touched — current
+ * catalog history is never deleted by lifecycle completion). Registry
+ * membership is a root change, so the root revision and its timestamp advance
+ * together; the store revision was already advanced once by the frame, so this
+ * does not bump it a second time.
+ */
+export function recordRootMembershipLoss(tx: ExecutionTransaction, input: { workflowId: string; now: string }): void {
+  tx.db.prepare("delete from execution_registry where workflow_id = ?").run(input.workflowId);
+  tx.db.prepare("update execution_meta set revision = revision + 1, root_updated_at = ? where id = 1").run(input.now);
+}
+
+/** §2.2 one workflow header's own stored state, or `coordination.workflow-not-found`. */
+export function requireWorkflowState(
+  tx: ExecutionTransaction,
+  workflowId: string,
+): { revision: number; state: Record<string, unknown> } {
+  const row = tx.db
+    .prepare("select revision, state_json from execution_workflows where workflow_id = ?")
+    .get(workflowId) as { revision?: unknown; state_json?: unknown } | undefined;
+  if (row === undefined) {
+    throw new CoordinationError(
+      "coordination.workflow-not-found",
+      `workflow ${workflowId} is not in the execution authority`,
+      { workflow_id: workflowId },
+    );
+  }
+  return {
+    revision: storedRevision(row.revision, `execution_workflows(${workflowId}).revision`),
+    state: storedJsonObject(row.state_json, `execution_workflows(${workflowId}).state_json`),
+  };
+}
+
+/**
+ * §2.2 the one header writer of a workflow-level transition: the stored state
+ * is replaced as a whole (the caller validated it) and the revision column is
+ * the frame's separate advance, so no writer can smuggle a revision into the
+ * document.
+ */
+export function writeWorkflowState(tx: ExecutionTransaction, input: { workflowId: string; state: Record<string, unknown> }): void {
+  tx.db
+    .prepare("update execution_workflows set state_json = ? where workflow_id = ?")
+    .run(JSON.stringify(input.state), input.workflowId);
+}
+
 /* ------------------------------------------------------------------------ *
  * §3/§4.2 the lease and liveness primitives the plan transitions write through
  * ------------------------------------------------------------------------ */
@@ -2121,6 +2201,120 @@ export function readLiveSessionIdentities(tx: ExecutionTransaction, workflowId: 
     .prepare("select session_id from execution_sessions where workflow_id = ? and state = 'active' and epoch = ?")
     .all(workflowId, tx.epoch) as Array<{ session_id?: unknown }>;
   return new Set(rows.map((row) => storedText(row.session_id, `execution_sessions(${workflowId}).session_id`)));
+}
+
+/**
+ * §2.2/§4.2 one workflow's HELD execution leases, read WITHOUT the reader's
+ * lease/session ownership invariant. Two transitions need exactly this narrow
+ * view: the terminal transition (does any plan still own a lease?) and the
+ * coordinator recovery bootstrap, whose job is to make a workflow READABLE
+ * again — the whole-view reader refuses the very state it recovers from
+ * (`assertLeaseOwnership` cannot represent a held lease whose holder row is not
+ * active at this epoch), so recovery never runs it.
+ */
+export function readHeldExecutionLeases(
+  tx: ExecutionTransaction,
+  workflowId: string,
+): ReadonlyArray<{ planId: string; ownerEpoch: number; lease: ExecutionLease }> {
+  const rows = tx.db
+    .prepare("select plan_id, owner_epoch, lease_json from execution_leases where workflow_id = ? order by plan_id")
+    .all(workflowId) as Array<{ plan_id?: unknown; owner_epoch?: unknown; lease_json?: unknown }>;
+  const held: Array<{ planId: string; ownerEpoch: number; lease: ExecutionLease }> = [];
+  for (const row of rows) {
+    const planId = storedText(row.plan_id, `execution_leases(${workflowId}).plan_id`);
+    const lease = readExecutionLease(row.lease_json, `execution_leases(${workflowId},${planId}).lease_json`);
+    if (lease.status !== "held") continue;
+    held.push({
+      planId,
+      ownerEpoch: storedRevision(row.owner_epoch, `execution_leases(${workflowId},${planId}).owner_epoch`),
+      lease,
+    });
+  }
+  return held;
+}
+
+/**
+ * §2.2 the stored session rows of one workflow and role, INCLUDING the
+ * non-active ones — the recovery bootstrap has to see the suspended, revoked
+ * and previous-epoch rows the ordinary bind treats as unusable. Availability
+ * is still decided by `state` and the current epoch together, by the caller.
+ */
+export function readWorkflowSessionRows(
+  tx: ExecutionTransaction,
+  workflowId: string,
+  role: ExecutionCaller["role"],
+): SessionRow[] {
+  return readSessionRows(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, workflowId, role);
+}
+
+/**
+ * §2.3 the revocation half of the recovery transition: the prior holder stops
+ * being an ACTIVE binding. The row is kept — it is the history a later
+ * reference must not silently re-own — and an already revoked row gains no
+ * revision, so a retried recovery never rewrites the end of an ownership.
+ */
+export function revokeSessionRow(
+  tx: ExecutionTransaction,
+  input: { workflowId: string; role: ExecutionCaller["role"]; sessionId: string },
+): void {
+  tx.db
+    .prepare(
+      "update execution_sessions set state = 'revoked', revision = revision + 1 " +
+        "where workflow_id = ? and role = ? and session_id = ? and state <> 'revoked'",
+    )
+    .run(input.workflowId, input.role, input.sessionId);
+}
+
+/**
+ * §2.3 the binding half of the recovery transition: the trusted recovery caller
+ * becomes the workflow's ACTIVE session at the current epoch. A row this store
+ * already holds for that identity is REACTIVATED (its revision advances and
+ * `bound_at` moves) — the named recovery transition is the only way back for a
+ * suspended/revoked/epoch-invalidated binding — while a new identity starts at
+ * revision 1. Reactivation never moves the identity to another plan.
+ *
+ * Returns the row revision the receipt's session token carries.
+ */
+export function bindRecoveredSession(
+  tx: ExecutionTransaction,
+  input: {
+    workflowId: string;
+    role: ExecutionCaller["role"];
+    sessionId: string;
+    planId: string | null;
+    epoch: number;
+    now: string;
+  },
+): number {
+  const existing = tx.db
+    .prepare("select plan_id, revision from execution_sessions where workflow_id = ? and role = ? and session_id = ?")
+    .get(input.workflowId, input.role, input.sessionId) as { plan_id?: unknown; revision?: unknown } | undefined;
+  if (existing === undefined) {
+    writeExecutionSession(tx.db, {
+      workflowId: input.workflowId,
+      address: { workflowId: input.workflowId, role: input.role, sessionId: input.sessionId, planId: input.planId },
+      epoch: input.epoch,
+      now: input.now,
+    });
+    return 1;
+  }
+  const boundPlan = existing.plan_id === null || existing.plan_id === undefined ? null : storedText(existing.plan_id, "execution_sessions.plan_id");
+  if (boundPlan !== input.planId) {
+    throw new CoordinationError(
+      "coordination.session-mismatch",
+      `session ${input.sessionId} is recorded as the ${input.role} session of plan ${JSON.stringify(boundPlan)}; recovery ` +
+        `reactivates an identity, it never moves one to plan ${JSON.stringify(input.planId)}`,
+      { session_id: input.sessionId, bound_plan: boundPlan, addressed_plan: input.planId },
+    );
+  }
+  const revision = storedRevision(existing.revision, `execution_sessions(${input.workflowId},${input.sessionId}).revision`) + 1;
+  tx.db
+    .prepare(
+      "update execution_sessions set state = 'active', epoch = ?, revision = ?, bound_at = ? " +
+        "where workflow_id = ? and role = ? and session_id = ?",
+    )
+    .run(input.epoch, revision, input.now, input.workflowId, input.role, input.sessionId);
+  return revision;
 }
 
 /**
@@ -2250,6 +2444,29 @@ export function readPlanOperationReplay<T>(
   tx: ExecutionTransaction,
   input: { operationId: string; requestHash: string; workflowId: string; planId: string },
 ): ExecutionReceipt<T> | null {
+  return readOperationReplay<T>(tx, {
+    ...input,
+    token: { kind: "plan", key: [input.workflowId, input.planId] },
+  });
+}
+
+/**
+ * §3.1 the same replay for ANY addressed record: the committed receipt of one
+ * operation id, or `null` for a first attempt. `token` names the address the
+ * receipt must carry — a plan, a session, the workflow header — so a receipt
+ * recorded for another address of this store is `store.corrupt` rather than a
+ * served success. One implementation, because the idempotency rule is one rule.
+ */
+export function readOperationReplay<T>(
+  tx: ExecutionTransaction,
+  input: {
+    operationId: string;
+    requestHash: string;
+    workflowId: string;
+    planId: string | null;
+    token: { kind: ExecutionKind; key: readonly string[] };
+  },
+): ExecutionReceipt<T> | null {
   const recorded = readCommittedOperation(tx.db, tx.epoch, input.operationId);
   if (recorded === null) return null;
   if (recorded.requestHash !== input.requestHash) {
@@ -2260,10 +2477,7 @@ export function readPlanOperationReplay<T>(
         `retry the committed request unchanged or use a new id. Nothing was written.`,
     );
   }
-  const receipt = readCommittedReceipt<T>(recorded, tx, input.operationId, input.workflowId, {
-    kind: "plan",
-    key: [input.workflowId, input.planId],
-  });
+  const receipt = readCommittedReceipt<T>(recorded, tx, input.operationId, input.workflowId, input.token);
   return { ...receipt, operationId: input.operationId, replayed: true };
 }
 
@@ -2275,6 +2489,26 @@ export function writePlanOperationReceipt(
     requestHash: string;
     workflowId: string;
     planId: string;
+    receipt: ExecutionRead<unknown>;
+    now: string;
+  },
+): void {
+  writeOperationReceipt(tx, input);
+}
+
+/**
+ * §3.1 the one receipt writer: the committed receipt of an accepted operation
+ * (`planId: null` for a workflow-level operation), recorded inside the same
+ * transaction that produced the effect, so a rolled-back operation leaves no
+ * success behind.
+ */
+export function writeOperationReceipt(
+  tx: ExecutionTransaction,
+  input: {
+    operationId: string;
+    requestHash: string;
+    workflowId: string;
+    planId: string | null;
     receipt: ExecutionRead<unknown>;
     now: string;
   },
@@ -2667,6 +2901,142 @@ export function readExecutionPlanWitness(tx: ExecutionTransaction, read: Resolve
     revision: parseExecutionToken(token).revision,
     workflowToken: workflow.workflowToken,
     session: live.ref,
+  };
+}
+
+/**
+ * §2.3 the authorization one workflow-level write addresses: the trusted
+ * caller's own coordinator scope, plus the reference it claims to hold.
+ */
+export type ResolvedWorkflowWrite = {
+  workflowId: string;
+  sessionId: string;
+  referenceStoreId: string;
+  referenceEpoch: number;
+};
+
+/**
+ * §2.3/§3 the seat and reference gate of one WORKFLOW-level operation — the
+ * coordinator-only sibling of `resolvePlanRead`. The seat is checked first: a
+ * workflow-level transition belongs to the workflow's coordinator, and a
+ * plan-pm identity (which addresses one plan of a lifecycle) never performs
+ * one. The reference is then the caller's OWN coordinator address: possession
+ * of a reference, a legacy session file, or another workflow's address
+ * authorizes nothing.
+ *
+ * Pure argument checks — no store is opened — so each transport decides where
+ * this gate sits relative to its own store access.
+ */
+export function resolveWorkflowWrite(caller: ExecutionCaller, session: unknown, workflowId: unknown): ResolvedWorkflowWrite {
+  if (caller?.role !== "coordinator" || caller.planId !== null) {
+    throw new ExecutionError(
+      "execution.scope-mismatch",
+      `a workflow-level transition is a coordinator operation; the supplied caller is a ${String(caller?.role)} session` +
+        `${caller?.planId === null || caller?.planId === undefined ? "" : ` for plan ${String(caller.planId)}`}. ` +
+        `The caller identity is never taken from request JSON.`,
+    );
+  }
+  if (!isNonEmptyString(caller?.sessionId)) {
+    throw invalidInput("the execution caller needs a non-empty session identity");
+  }
+  if (!isNonEmptyString(workflowId)) throw invalidInput("a workflow operation needs the non-empty workflow id it addresses");
+  const bound = session;
+  if (!isPlainObject(bound)) throw invalidInput("a workflow operation needs an execution session reference");
+  const { storeId, epoch, workflowId: boundWorkflowId, role, sessionId, planId } = bound;
+  if (
+    !isNonEmptyString(storeId) ||
+    typeof epoch !== "number" ||
+    !Number.isSafeInteger(epoch) ||
+    epoch <= 0 ||
+    !isNonEmptyString(boundWorkflowId) ||
+    !isNonEmptyString(sessionId)
+  ) {
+    throw invalidInput(
+      `a session reference carries {storeId, epoch, workflowId, role, sessionId, planId} — got ${JSON.stringify(bound)}`,
+    );
+  }
+  if (role !== "coordinator" || planId !== null) {
+    throw sessionRoleRefusal(
+      `a workflow-level operation requires a COORDINATOR session reference; the supplied reference is role ` +
+        `${JSON.stringify(role)} plan ${JSON.stringify(planId ?? null)}`,
+      { role, plan_id: planId ?? null },
+    );
+  }
+  if (caller.sessionId !== sessionId || caller.workflowId !== boundWorkflowId || caller.planId !== null) {
+    throw new CoordinationError(
+      "coordination.session-mismatch",
+      `the trusted caller is session ${JSON.stringify(caller.sessionId)} of workflow ${JSON.stringify(caller.workflowId)} ` +
+        `plan ${JSON.stringify(caller.planId)}; the supplied reference names session ${JSON.stringify(sessionId)} of ` +
+        `workflow ${JSON.stringify(boundWorkflowId)} plan null`,
+      { caller_session: caller.sessionId, reference_session: sessionId },
+    );
+  }
+  if (caller.workflowId !== workflowId) {
+    throw new ExecutionError(
+      "execution.scope-mismatch",
+      `the caller belongs to workflow ${JSON.stringify(caller.workflowId)}, not to the workflow ${JSON.stringify(workflowId)} ` +
+        `this request addresses`,
+    );
+  }
+  return { workflowId, sessionId, referenceStoreId: storeId, referenceEpoch: epoch };
+}
+
+/**
+ * §2.3 the live coordinator binding of one workflow-level address: the
+ * reference's store/epoch fence first, then the ACTIVE coordinator row the store
+ * actually holds — a suspended, revoked, epoch-invalidated or foreign session
+ * authorizes nothing, and no session file is ever consulted.
+ */
+export function resolveWorkflowSession(tx: ExecutionTransaction, read: ResolvedWorkflowWrite): ExecutionSessionRef {
+  assertReferenceAuthority(tx, read.referenceStoreId, read.referenceEpoch);
+  return liveSession(tx, { workflowId: read.workflowId, role: "coordinator", sessionId: read.sessionId, planId: null }).ref;
+}
+
+/**
+ * §2.3/§3 the sealed authorization context of one accepted WORKFLOW-level
+ * operation: the workflow's authoritative view, its CAS token and the
+ * coordinator session the store holds for the call. Every field is read inside
+ * the caller's transaction, so no part of it is a stale snapshot.
+ */
+export type ExecutionWorkflowWitness = {
+  workflowId: string;
+  view: ExecutionState["workflows"][number];
+  /** The workflow's CAS token; a mutation's `expected` must be exactly this. */
+  token: ExecutionToken;
+  /** The header row's revision — the value `token` carries (§3.1). */
+  revision: number;
+  /** The ACTIVE coordinator session row this call was authorized through. */
+  session: ExecutionSessionRef;
+};
+
+/**
+ * §2.3/§3.1 the witness of one workflow-level operation: the caller's own live
+ * coordinator binding, the workflow's ACTIVE registry membership and its
+ * authoritative view. Membership is required because membership alone selects
+ * an active lifecycle: a terminal workflow stays as history in
+ * `execution_workflows` and is never amended through this route.
+ */
+export function readExecutionWorkflowWitness(
+  tx: ExecutionTransaction,
+  read: ResolvedWorkflowWrite,
+): ExecutionWorkflowWitness {
+  const session = resolveWorkflowSession(tx, read);
+  const registered = tx.db.prepare("select 1 as present from execution_registry where workflow_id = ?").get(read.workflowId);
+  if (registered === undefined) {
+    throw new CoordinationError(
+      "coordination.workflow-not-found",
+      `workflow ${read.workflowId} is not registered as an ACTIVE lifecycle — a terminal or unregistered workflow stays ` +
+        `as history and is never amended`,
+      { workflow_id: read.workflowId },
+    );
+  }
+  const view = readWorkflowView(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, read.workflowId);
+  return {
+    workflowId: read.workflowId,
+    view,
+    token: view.workflowToken,
+    revision: parseExecutionToken(view.workflowToken).revision,
+    session,
   };
 }
 
