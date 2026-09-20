@@ -820,11 +820,13 @@ export type {
   ActivationReceipt,
   AttestationConsumerKind,
   AttestationDisposition,
+  BackupExecutionMeta,
   BackupReceipt,
   InstalledConsumerAttestation,
   RetiredRegister,
   RetiredSection,
   RetirementReceipt,
+  ReviewedBackupAuthority,
   StoppedSessionAttestation,
   StoreActivationErrorCode,
   StoreAuthorityHandle,
@@ -835,9 +837,71 @@ export {
   activationReceiptFor,
   appliedReceiptFor,
   assertAuthorityCurrent,
+  assertBackupDescribesStore,
   backupStore,
   currentAuthorityHandle,
   retireStoreSources,
   StoreActivationError,
   validateActivationAttestation,
 } from "./store-activation.js";
+// Execution migration: the executable §6 protocol (plan
+// `20260920-activation-migration-recovery`). R1 landed the read-only preview
+// and the staged apply: `previewExecutionMigration` reads the legacy workspace
+// as evidence and returns the canonical, content-addressed manifest;
+// `applyExecutionMigration` stages every core row plus the manifest record in
+// one transaction against a verified recovery point, and never activates.
+// R2 adds the three separate crash-safe steps: `activateExecutionMigration`
+// performs the single all-or-nothing cutover behind the deferred-surface
+// barrier, `retireExecutionSources` moves the exact core sources into
+// manifest-addressed history under a resumable per-item ledger, and
+// `abortExecutionMigration` returns a STAGED manifest to legacy without
+// touching active data. `executionManifestHash` is exported so a caller can
+// hand the reviewed hash back verbatim. ADDITIVE export — the engine package's
+// exports map is the only reachable surface for consumers.
+export type {
+  ExecutionDeferredSurface,
+  ExecutionManifest,
+  ExecutionMigrationAbortInput,
+  ExecutionMigrationActivationInput,
+  ExecutionMigrationApplyInput,
+  ExecutionMigrationInput,
+  ExecutionMigrationReceipt,
+  ExecutionMigrationRetireInput,
+  ExecutionSourceWitness,
+} from "./execution-migrate.js";
+export {
+  abortExecutionMigration,
+  activateExecutionMigration,
+  applyExecutionMigration,
+  EXECUTION_MIGRATION_MANIFEST_VERSION,
+  executionManifestHash,
+  previewExecutionMigration,
+  retireExecutionSources,
+} from "./execution-migrate.js";
+// Execution recovery: the consistent whole-store backup, the explicit-loss
+// atomic restore and the diagnostic export (primary spec §8, R3 of plan
+// `20260920-activation-migration-recovery`). `previewExecutionRestore` is the
+// read-only loss inventory whose canonical `lossDigest` an operator approves;
+// `restoreExecutionBackup` is the whole-store replacement that requires that
+// exact digest, a quiesced store, a current pre-restore recovery point and a
+// verified sibling image before it renames anything; `exportExecutionState` is
+// canonical diagnostic data with every session identity, CAS token and
+// credential path removed and no import verb. `inspectBackupCopy` and
+// `BackupInspection` are the ONE §8 copy verdict the backup, migration and
+// restore paths share. ADDITIVE export — the engine package's exports map is
+// the only reachable surface for consumers.
+export type { BackupInspection } from "./store-activation.js";
+export type {
+  ExecutionDiagnosticExport,
+  ExecutionRecoveryAuthorityDifference,
+  ExecutionRecoveryErrorCode,
+  ExecutionRecoveryPreview,
+  ExecutionRestoreReceipt,
+} from "./execution-recovery.js";
+export {
+  ExecutionRecoveryError,
+  EXECUTION_RECOVERY_PROTOCOL_VERSION,
+  exportExecutionState,
+  previewExecutionRestore,
+  restoreExecutionBackup,
+} from "./execution-recovery.js";

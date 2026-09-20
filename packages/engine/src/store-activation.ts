@@ -40,6 +40,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -47,7 +48,7 @@ import {
   writeFileSync,
   type Dirent,
 } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { catalogRootDir, type CatalogRootKind } from "./catalog.js";
 import { verifyCatalogImport } from "./catalog-import.js";
 import { writeJson } from "./core.js";
@@ -55,11 +56,15 @@ import { migrationManifestHash, type MigrationManifest, type MigrationReceipt } 
 import {
   MIN_BUN_VERSION,
   MIN_NODE_VERSION,
+  MIGRATIONS,
   assertStoreRuntimeSupported,
   compareVersions,
+  migrationChecksum,
   openStore,
   storeDbPath,
   StoreError,
+  type ExecutionAuthorityState,
+  type ExecutionMeta,
   type StoreContext,
   type StoreDb,
 } from "./store-db.js";
@@ -146,6 +151,22 @@ export type ActivationAttestation = {
 // Receipts
 // ---------------------------------------------------------------------------
 
+/**
+ * The execution half of a backup's recorded identity (primary spec §8): the
+ * execution authority protocol/state/root revision/manifest identity read from
+ * the COPY itself. `null` means the copied store predates migration 4, so the
+ * copy carries no execution authority at all — an execution migration that
+ * requires a recovery point refuses it rather than treating absence as legacy.
+ */
+export type BackupExecutionMeta = {
+  protocolVersion: number;
+  authorityState: ExecutionAuthorityState;
+  revision: number;
+  rootUpdatedAt: string;
+  manifestId: string | null;
+  activatedAt: string | null;
+};
+
 /** A consistent `VACUUM INTO` copy of the store, with its recorded identity. */
 export type BackupReceipt = {
   receiptVersion: number;
@@ -156,6 +177,8 @@ export type BackupReceipt = {
   catalogRevision: number;
   authorityState: "staged" | "active";
   schemaVersion: number;
+  /** The execution identity of the copy; `null` when it predates migration 4. */
+  execution: BackupExecutionMeta | null;
   counts: {
     issues: number;
     occurrences: number;
@@ -328,6 +351,120 @@ function countsOf(db: StoreDb): BackupReceipt["counts"] {
   };
 }
 
+/** The migration that introduced the execution authority (never a magic number). */
+const EXECUTION_MIGRATION_VERSION =
+  MIGRATIONS.find((migration) => migration.name === "execution-authority")?.version ?? Number.POSITIVE_INFINITY;
+
+/**
+ * The execution identity of a COPY (§8 "read metadata from the backup
+ * itself"), read directly like every other fact `inspectBackup` establishes:
+ * the store-open boundary resolves exactly `<root>/store.db`, so a
+ * `VACUUM INTO` copy can only be read by opening it here.
+ *
+ * The recorded migration set decides whether the copy has an execution
+ * authority at all: below migration 4 it has none (`null` — absence is
+ * disclosed, never treated as `legacy`), and at or above it the singleton must
+ * exist and be well formed, because a copy that records the migration without
+ * its schema is not a verified recovery point.
+ */
+function readExecutionMetaOfCopy(db: StoreDb, schemaVersion: number): BackupExecutionMeta | null {
+  if (schemaVersion < EXECUTION_MIGRATION_VERSION) return null;
+  const row = db
+    .prepare(
+      "select protocol_version, authority_state, revision, root_updated_at, manifest_id, activated_at " +
+        "from execution_meta where id = 1",
+    )
+    .get() as Record<string, unknown> | undefined;
+  if (
+    !row ||
+    typeof row.protocol_version !== "number" ||
+    (row.authority_state !== "legacy" && row.authority_state !== "staged" && row.authority_state !== "active") ||
+    typeof row.revision !== "number" ||
+    typeof row.root_updated_at !== "string" ||
+    (row.manifest_id !== null && row.manifest_id !== undefined && typeof row.manifest_id !== "string") ||
+    (row.activated_at !== null && row.activated_at !== undefined && typeof row.activated_at !== "string")
+  ) {
+    throw new StoreActivationError(
+      "store.activation-stale",
+      `the copy records migration ${EXECUTION_MIGRATION_VERSION} (execution-authority) but its execution metadata is ` +
+        `missing or malformed; the copy cannot be verified as an execution-bearing recovery point.`,
+    );
+  }
+  return {
+    protocolVersion: row.protocol_version,
+    authorityState: row.authority_state,
+    revision: row.revision,
+    rootUpdatedAt: row.root_updated_at,
+    manifestId: (row.manifest_id as string | null | undefined) ?? null,
+    activatedAt: (row.activated_at as string | null | undefined) ?? null,
+  };
+}
+
+/** The execution identity a live store holds (the same six fields as the copy). */
+function liveExecutionMeta(meta: ExecutionMeta | null): BackupExecutionMeta | null {
+  if (meta === null) return null;
+  return {
+    protocolVersion: meta.protocolVersion,
+    authorityState: meta.authorityState,
+    revision: meta.revision,
+    rootUpdatedAt: meta.rootUpdatedAt,
+    manifestId: meta.manifestId,
+    activatedAt: meta.activatedAt,
+  };
+}
+
+/** Two execution identities describe the same authority state. */
+function sameExecution(a: BackupExecutionMeta | null, b: BackupExecutionMeta | null): boolean {
+  if (a === null || b === null) return a === b;
+  return (
+    a.protocolVersion === b.protocolVersion &&
+    a.authorityState === b.authorityState &&
+    a.revision === b.revision &&
+    a.rootUpdatedAt === b.rootUpdatedAt &&
+    a.manifestId === b.manifestId &&
+    a.activatedAt === b.activatedAt
+  );
+}
+
+/**
+ * Canonicalize a path: the nearest EXISTING ancestor is resolved through
+ * `realpathSync` and the remaining segments are re-joined. A symlinked
+ * ancestor (macOS `/var` → `/private/var`, a linked workspace) must never turn
+ * one authorized root into two spellings, and a candidate that itself resolves
+ * outside through a link still refuses containment. Source/witness paths and
+ * containment verdicts are recorded in this form, so a component that resolves
+ * the same root by a different lexical route can never produce a false
+ * mismatch.
+ */
+export function canonicalPath(value: string): string {
+  let current = resolve(value);
+  const trailing: string[] = [];
+  for (;;) {
+    try {
+      return join(realpathSync(current), ...[...trailing].reverse());
+    } catch {
+      const parent = dirname(current);
+      if (parent === current) return resolve(value);
+      trailing.push(basename(current));
+      current = parent;
+    }
+  }
+}
+
+/**
+ * §4.3 root containment: is `candidate` inside the authorized `root`?
+ * Canonical prefixes only, so `/root-evil` is never inside `/root` and a
+ * symlinked ancestor is not a second root. Used by the migration/backup
+ * destinations and by source discovery, which must both stay under the control
+ * root.
+ */
+export function isPathWithin(root: string, candidate: string): boolean {
+  const parent = canonicalPath(root);
+  const child = canonicalPath(candidate);
+  if (child === parent) return true;
+  return child.startsWith(parent.endsWith(sep) ? parent : `${parent}${sep}`);
+}
+
 // ---------------------------------------------------------------------------
 // Authority generation guard — a resumed stale handle refuses (§5)
 // ---------------------------------------------------------------------------
@@ -378,16 +515,89 @@ export async function assertAuthorityCurrent(context: StoreContext, handle: Stor
 // Backup — quiesced SQLite-consistent `VACUUM INTO` (§7 rollback/recovery)
 // ---------------------------------------------------------------------------
 
-/** The verification view of a backup: what the copy says about itself. */
-type BackupInspection = {
+/** The verification view of a backup: what the copy says about itself (§8). */
+export type BackupInspection = {
   storeId: string;
   authorityState: "staged" | "active";
   epoch: number;
   revision: number;
   catalogRevision: number;
   schemaVersion: number;
+  execution: BackupExecutionMeta | null;
   counts: BackupReceipt["counts"];
 };
+
+/**
+ * §8 "re-open it for `integrity_check` + `foreign_key_check`": the copy has to
+ * be self-consistent SQLite before it is evidence for anything. A copy whose
+ * page structure SQLite itself rejects, or one that holds rows violating the
+ * schema's own foreign keys, is refused whatever its metadata rows claim —
+ * otherwise a truncated or hand-assembled file could present a plausible
+ * `store_meta` and be treated as a recovery point.
+ */
+function assertCopyIsConsistent(db: StoreDb, backupPath: string): void {
+  const integrity = (db.prepare("pragma integrity_check").all() as Array<Record<string, unknown>>).map((row) =>
+    String(Object.values(row)[0] ?? ""),
+  );
+  if (integrity.length !== 1 || integrity[0] !== "ok") {
+    throw new StoreActivationError(
+      "store.activation-stale",
+      `the copy at ${backupPath} fails SQLite integrity_check ` +
+        `(${integrity.slice(0, 3).join("; ") || "no result"}); it is not a verified recovery point.`,
+    );
+  }
+  const violations = db.prepare("pragma foreign_key_check").all() as Array<Record<string, unknown>>;
+  if (violations.length > 0) {
+    throw new StoreActivationError(
+      "store.activation-stale",
+      `the copy at ${backupPath} holds ${violations.length} row(s) violating the schema's foreign keys ` +
+        `(first: ${JSON.stringify(violations[0])}); it is not a verified recovery point.`,
+    );
+  }
+}
+
+/**
+ * §8 "schema/migration checksums": the copy must record exactly THIS build's
+ * immutable migration prefix — the same versions, names and checksums, in the
+ * same order. A copy recording a migration this engine does not have was
+ * written by a newer build (it is "too new" to be read or installed here), and
+ * a copy whose recorded checksum differs is not this build's store. Neither is
+ * accepted, so `store_id` equality alone can never make a foreign or future
+ * file look like this store's recovery point.
+ */
+function assertCopySchemaIsThisBuild(db: StoreDb, backupPath: string): void {
+  const rows = db
+    .prepare("select version, name, checksum from schema_version order by version")
+    .all() as Array<Record<string, unknown>>;
+  if (rows.length === 0) {
+    throw new StoreActivationError(
+      "store.activation-stale",
+      `the copy at ${backupPath} records no applied migration; it is not a store this build can verify.`,
+    );
+  }
+  if (rows.length > MIGRATIONS.length) {
+    throw new StoreActivationError(
+      "store.activation-stale",
+      `the copy at ${backupPath} records migration ${String(rows[rows.length - 1]?.version)}, which this build does not ` +
+        `have (it knows ${MIGRATIONS.length}); the copy was written by a newer build and is not a recovery point for this one.`,
+    );
+  }
+  for (const [index, row] of rows.entries()) {
+    const migration = MIGRATIONS[index]!;
+    if (
+      row.version !== migration.version ||
+      row.name !== migration.name ||
+      row.checksum !== migrationChecksum(migration)
+    ) {
+      throw new StoreActivationError(
+        "store.activation-stale",
+        `the copy at ${backupPath} records migration ${String(row.version)} as ${JSON.stringify(row.name)} with checksum ` +
+          `${JSON.stringify(row.checksum)}, not this build's ${JSON.stringify(migration.name)} (${migrationChecksum(migration)}); ` +
+          `the copy is not this build's store.`,
+      );
+    }
+  }
+}
 
 /**
  * A `VACUUM INTO` copy is not at `<root>/store.db`, so the store-open boundary
@@ -397,8 +607,13 @@ type BackupInspection = {
  * The specifier cannot be a static import: contract §2 requires lazy,
  * capability-checked SQLite acquisition at store access — a top-level import
  * would acquire the driver whenever the engine package is imported.
+ *
+ * Exported as `inspectBackupCopy` because the restore protocol reads the same
+ * verdict: §8's recovery point acceptance is ONE rule (identity, schema and
+ * migration checksums, execution identity, row counts, `integrity_check` and
+ * `foreign_key_check`), not a second copy of it in the recovery module.
  */
-async function inspectBackup(backupPath: string): Promise<BackupInspection> {
+export async function inspectBackupCopy(backupPath: string): Promise<BackupInspection> {
   assertStoreRuntimeSupported();
   const { DatabaseSync } = (await import("node:sqlite")) as {
     DatabaseSync: new (path: string, options?: { readOnly?: boolean }) => StoreDb;
@@ -406,7 +621,18 @@ async function inspectBackup(backupPath: string): Promise<BackupInspection> {
   const db = new DatabaseSync(backupPath, { readOnly: true });
   try {
     db.exec("pragma query_only=ON");
-    return { ...readMetaRow(db), schemaVersion: schemaVersionOf(db), counts: countsOf(db) };
+    assertCopyIsConsistent(db, backupPath);
+    assertCopySchemaIsThisBuild(db, backupPath);
+    const schemaVersion = schemaVersionOf(db);
+    return {
+      ...readMetaRow(db),
+      schemaVersion,
+      // §8: the execution protocol/state/root revision/manifest identity is
+      // read from the COPY itself, so the receipt never claims execution
+      // readiness the copy does not carry.
+      execution: readExecutionMetaOfCopy(db, schemaVersion),
+      counts: countsOf(db),
+    };
   } finally {
     db.close();
   }
@@ -445,6 +671,11 @@ async function takeVerifiedBackup(
     const meta = readMetaRow(handle.db);
     const schemaVersion = schemaVersionOf(handle.db);
     const counts = countsOf(handle.db);
+    // §8: the copy must describe the SAME execution authority as the live
+    // store — protocol version, state, root revision, root timestamp and
+    // manifest identity included. A copy that predates the execution schema
+    // (`null`) never matches an execution-bearing live store.
+    const execution = liveExecutionMeta(handle.execution);
     let walPending = false;
     try {
       walPending = statSync(`${dbPath}-wal`).size > 0;
@@ -462,7 +693,7 @@ async function takeVerifiedBackup(
       }
       let existing: BackupInspection;
       try {
-        existing = await inspectBackup(targetPath);
+        existing = await inspectBackupCopy(targetPath);
       } catch (error) {
         throw new StoreActivationError(
           "store.activation-stale",
@@ -476,11 +707,12 @@ async function takeVerifiedBackup(
         existing.revision !== meta.revision ||
         existing.catalogRevision !== meta.catalogRevision ||
         existing.authorityState !== meta.authorityState ||
-        existing.schemaVersion !== schemaVersion
+        existing.schemaVersion !== schemaVersion ||
+        !sameExecution(existing.execution, execution)
       ) {
         throw new StoreActivationError(
           "store.activation-stale",
-          `the existing backup at ${targetPath} does not describe this store (identity/epoch/revision/schema mismatch). ` +
+          `the existing backup at ${targetPath} does not describe this store (identity/epoch/revision/schema/execution mismatch). ` +
             `Refusing to overwrite a recorded recovery point.`,
         );
       }
@@ -497,7 +729,7 @@ async function takeVerifiedBackup(
     handle.db.prepare("vacuum into ?").run(targetPath);
     let verified: BackupInspection;
     try {
-      verified = await inspectBackup(targetPath);
+      verified = await inspectBackupCopy(targetPath);
     } catch (error) {
       rmSync(targetPath, { force: true });
       throw new StoreActivationError(
@@ -513,6 +745,7 @@ async function takeVerifiedBackup(
       verified.catalogRevision !== meta.catalogRevision ||
       verified.authorityState !== meta.authorityState ||
       verified.schemaVersion !== schemaVersion ||
+      !sameExecution(verified.execution, execution) ||
       !sameCounts(verified.counts, counts)
     ) {
       rmSync(targetPath, { force: true });
@@ -543,6 +776,132 @@ async function takeVerifiedBackup(
  */
 export async function backupStore(context: StoreContext, options: { out?: string } = {}): Promise<BackupReceipt> {
   return takeVerifiedBackup(context, { out: options.out, reuseMatchingIdentity: false });
+}
+
+/** The reviewed authority a recovery point has to belong to (primary spec §6 item 2). */
+export type ReviewedBackupAuthority = {
+  storeId: string;
+  epoch: number;
+  schemaVersion: number;
+  catalogRevision: number;
+};
+
+/**
+ * Re-verify a recovery-point receipt for a first-write step that must be
+ * gated on a consistent backup — the execution migration's staged apply is
+ * that caller (§6 item 2, §8).
+ *
+ * Three things are checked and none of them is taken on trust:
+ *
+ * 1. the receipt's shape, and that its destination is inside the authorized
+ *    control root (§4.3 — a migration recovery point never lives outside the
+ *    root it protects);
+ * 2. the COPY behind it, reopened read-only: identity, epoch, revision,
+ *    catalog revision, issue/catalog authority state, schema version, row
+ *    counts and the execution protocol/state/root-revision/manifest identity
+ *    must all equal what the receipt claims, so the receipt is never a
+ *    credential for bytes that changed under it;
+ * 3. the RECEIPT must belong to the reviewed authority the caller names
+ *    (store identity, epoch, schema version and catalog revision) and the live
+ *    store must still hold the same ISSUE/CATALOG row counts and authority
+ *    state, so issue/catalog work committed after the point refuses.
+ *
+ * What it deliberately does NOT compare is the live root `revision` or the
+ * live execution state: the step being gated *is* the one that advances them.
+ * A re-apply of an already-staged manifest therefore passes this gate without a
+ * fresh backup — the rollback point a no-write replay needs is the one it was
+ * staged under.
+ */
+export async function assertBackupDescribesStore(
+  context: StoreContext,
+  receipt: BackupReceipt,
+  reviewed: ReviewedBackupAuthority,
+): Promise<void> {
+  const stale = (detail: string): never => {
+    throw new StoreActivationError("store.activation-stale", detail);
+  };
+  if (
+    !receipt ||
+    receipt.receiptVersion !== ACTIVATION_PROTOCOL_VERSION ||
+    typeof receipt.backupPath !== "string" ||
+    receipt.backupPath.trim() === ""
+  ) {
+    stale(
+      "the supplied recovery point is not a backup receipt of this protocol version; take one with `backupStore` and " +
+        "apply the manifest that names it.",
+    );
+  }
+  const controlRoot = dirname(storeDbPath(context));
+  if (!isPathWithin(controlRoot, receipt.backupPath)) {
+    stale(
+      `the recovery point ${receipt.backupPath} is outside the authorized control root ${controlRoot}; a migration ` +
+        `recovery point must live inside the root it protects.`,
+    );
+  }
+  // §8: "copying `store.db` bytes is not a backup". The point of this gate is an
+  // INDEPENDENT SQLite copy (`VACUUM INTO`) that can roll the store back, so the
+  // live database and its WAL/SHM sidecars are refused as their own recovery
+  // point even when the fields they carry happen to match the receipt.
+  const liveStore = canonicalPath(storeDbPath(context));
+  const candidate = canonicalPath(receipt.backupPath);
+  if (candidate === liveStore || candidate === `${liveStore}-wal` || candidate === `${liveStore}-shm`) {
+    stale(
+      `the recovery point ${receipt.backupPath} names the live store database (${liveStore}), not an independent copy. ` +
+        `A migration recovery point must be taken with \`backupStore\` (SQLite \`VACUUM INTO\`); the live database and its ` +
+        `WAL/SHM sidecars cannot be their own recovery point.`,
+    );
+  }
+  if (
+    receipt.storeId !== reviewed.storeId ||
+    receipt.epoch !== reviewed.epoch ||
+    receipt.schemaVersion !== reviewed.schemaVersion ||
+    receipt.catalogRevision !== reviewed.catalogRevision
+  ) {
+    stale(
+      `the recovery point ${receipt.backupPath} belongs to store ${receipt.storeId} epoch ${receipt.epoch} schema ` +
+        `${receipt.schemaVersion} catalog revision ${receipt.catalogRevision}, not to the reviewed authority ` +
+        `${reviewed.storeId} epoch ${reviewed.epoch} schema ${reviewed.schemaVersion} catalog revision ` +
+        `${reviewed.catalogRevision}; take a recovery point of the reviewed authority.`,
+    );
+  }
+  let copy: BackupInspection;
+  try {
+    copy = await inspectBackupCopy(receipt.backupPath);
+  } catch (error) {
+    throw new StoreActivationError(
+      "store.activation-stale",
+      `the recovery point ${receipt.backupPath} cannot be reopened for verification (${(error as Error).message}).`,
+    );
+  }
+  if (
+    copy.storeId !== receipt.storeId ||
+    copy.epoch !== receipt.epoch ||
+    copy.revision !== receipt.revision ||
+    copy.catalogRevision !== receipt.catalogRevision ||
+    copy.authorityState !== receipt.authorityState ||
+    copy.schemaVersion !== receipt.schemaVersion ||
+    !sameExecution(copy.execution, receipt.execution ?? null) ||
+    !sameCounts(copy.counts, receipt.counts)
+  ) {
+    stale(
+      `the copy at ${receipt.backupPath} does not match the receipt recorded for it; the receipt is not evidence for ` +
+        `these bytes, so it is not a verified recovery point.`,
+    );
+  }
+  const handle = await openStore(context, "read");
+  try {
+    const meta = readMetaRow(handle.db);
+    const counts = countsOf(handle.db);
+    if (meta.authorityState !== receipt.authorityState || !sameCounts(counts, receipt.counts)) {
+      stale(
+        `the recovery point ${receipt.backupPath} no longer describes the live issue/catalog authority ` +
+          `(${meta.authorityState}, ${counts.issues} issue(s) / ${counts.catalogEntities} catalog entit(ies) live). ` +
+          `Issue/catalog work committed after the point would be silently outside its coverage; take a fresh backup.`,
+      );
+    }
+  } finally {
+    handle.close();
+  }
 }
 
 // ---------------------------------------------------------------------------
