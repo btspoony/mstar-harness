@@ -4,7 +4,9 @@
  * separation.
  *
  * Run with
- * `bun test packages/engine/src/execution-store.test.ts --test-name-pattern 'execution-schema'`.
+ * `bun test packages/engine/src/execution-store.test.ts --test-name-pattern 'execution-schema'`
+ * (C1 schema) or `--test-name-pattern 'execution-tokens|execution-initialize'`
+ * (C2 canonical tokens, transaction ownership, empty initialization).
  *
  * Every fixture lives in its own temporary control root created by
  * `mkdtempSync`; no test reads or writes this checkout's `store.db`. The
@@ -13,10 +15,20 @@
  * makes the upgrade refuse exactly as it would in a real workspace.
  */
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import {
+  ExecutionError,
+  assertExecutionToken,
+  executionToken,
+  initializeExecutionAuthority,
+  parseExecutionToken,
+  readExecutionState,
+  serializeExecutionValue,
+  withExecutionTransaction,
+} from "./execution-store.js";
 import {
   MIGRATIONS,
   SCHEMA_VERSION_TABLE_SQL,
@@ -624,5 +636,506 @@ describe("execution-schema: migration 4 (execution-authority)", () => {
         after.close();
       }
     });
+  });
+});
+
+/* ------------------------------------------------------------------------ *
+ * C2 — canonical value form and tokens (§3.1)
+ * ------------------------------------------------------------------------ */
+
+/** Syntactically valid store identities for the token-grammar cases. */
+const TOKEN_STORE = "0f8fad5b-d9cb-469f-a165-70867728950e";
+const OTHER_STORE = "1a2b3c4d-5e6f-4a1b-8c2d-3e4f5a6b7c8d";
+
+/** `key64` of an arbitrary JSON text — the adversarial encoder for key cases. */
+function key64(text: string): string {
+  return Buffer.from(text, "utf8").toString("base64url");
+}
+
+describe("execution-tokens: §3.1 canonical value form and version tokens", () => {
+  test("sorts object keys by code unit regardless of insertion and keeps array order", () => {
+    const inserted = serializeExecutionValue({ b: 1, a: { d: [3, 1, 2], c: null }, "": true });
+    expect(inserted).toBe(serializeExecutionValue({ "": true, a: { c: null, d: [3, 1, 2] }, b: 1 }));
+    expect(inserted).toBe('{"":true,"a":{"c":null,"d":[3,1,2]},"b":1}\n');
+    // Code-unit order, never a locale collation.
+    expect(serializeExecutionValue({ ä: 1, Z: 2, a: 3 })).toBe('{"Z":2,"a":3,"ä":1}\n');
+    // Array order is content, not a set.
+    expect(serializeExecutionValue([2, 1])).toBe("[2,1]\n");
+    expect(serializeExecutionValue([2, 1])).not.toBe(serializeExecutionValue([1, 2]));
+    // No whitespace beyond the single terminal LF.
+    expect(serializeExecutionValue({ a: [1, { b: 2 }] })).toBe('{"a":[1,{"b":2}]}\n');
+    // Sharing a reference is not a cycle; a null-prototype object is still plain JSON.
+    const shared = { a: 1 };
+    expect(serializeExecutionValue([shared, shared])).toBe('[{"a":1},{"a":1}]\n');
+    expect(serializeExecutionValue(Object.assign(Object.create(null), { a: 1 }))).toBe('{"a":1}\n');
+  });
+
+  test("refuses values that are not plain, finite, acyclic JSON", () => {
+    const cyclic: Record<string, unknown> = { a: 1 };
+    cyclic.self = cyclic;
+    const refused: Array<[unknown, string]> = [
+      [undefined, "undefined"],
+      [NaN, "NaN"],
+      [Infinity, "Infinity"],
+      [-Infinity, "-Infinity"],
+      [Number.MAX_SAFE_INTEGER + 1, "unsafe integer"],
+      [1n, "bigint"],
+      [Symbol("s"), "symbol"],
+      [() => 1, "function"],
+      [new Date(0), "foreign prototype"],
+      [new Map(), "Map"],
+      [Object.create({ inherited: 1 }), "inherited prototype"],
+      [{ nested: undefined }, "undefined property"],
+      [[1, undefined], "undefined element"],
+      [[1, , 3], "array hole"],
+      [cyclic, "cycle"],
+      ["\uD800", "unpaired high surrogate"],
+      ["\uDC00", "unpaired low surrogate"],
+    ];
+    for (const [value, label] of refused) {
+      expect(() => serializeExecutionValue(value), label).toThrow(/execution\.canonical-value/);
+    }
+    // A well-formed surrogate pair and the largest safe integer are canonical.
+    expect(serializeExecutionValue({ emoji: "\uD83D\uDE00", n: Number.MAX_SAFE_INTEGER })).toBe(
+      '{"emoji":"😀","n":9007199254740991}\n',
+    );
+  });
+
+  test("composes and parses the exact exec-v1 wire format", () => {
+    const root = executionToken("root", TOKEN_STORE, 3, [], 2);
+    expect(root).toBe(`exec-v1:root:${TOKEN_STORE}:3:W10K:2`);
+    expect(parseExecutionToken(root)).toEqual({ kind: "root", storeId: TOKEN_STORE, epoch: 3, key: [], revision: 2 });
+    // key64 is the canonical form of the key array: unpadded base64url over
+    // `serializeExecutionValue`, terminal LF included.
+    const plan = executionToken("plan", TOKEN_STORE, 7, ["wf-1", "p-1"], 4);
+    expect(plan.split(":")[4]).toBe(key64('["wf-1","p-1"]\n'));
+    expect(parseExecutionToken(plan).key).toEqual(["wf-1", "p-1"]);
+    expect(parseExecutionToken(executionToken("session", TOKEN_STORE, 7, ["wf-1", "plan-pm", "s-1"], 1)).key).toEqual([
+      "wf-1",
+      "plan-pm",
+      "s-1",
+    ]);
+    expect(
+      assertExecutionToken(plan, { kind: "plan", storeId: TOKEN_STORE, epoch: 7, key: ["wf-1", "p-1"], revision: 4 }),
+    ).toEqual(parseExecutionToken(plan));
+  });
+
+  test("refuses malformed and noncanonical tokens", () => {
+    const malformed: Array<[string, string]> = [
+      ["", "empty"],
+      [`exec-v1:root:${TOKEN_STORE}:1:W10K`, "five parts"],
+      [`exec-v1:root:${TOKEN_STORE}:1:W10K:1:extra`, "seven parts"],
+      [`exec-v2:root:${TOKEN_STORE}:1:W10K:1`, "prefix"],
+      [`exec-v1:keeper:${TOKEN_STORE}:1:W10K:1`, "unknown kind"],
+      [`exec-v1:root:not-a-uuid:1:W10K:1`, "store identity"],
+      [`exec-v1:root:${TOKEN_STORE.toUpperCase()}:1:W10K:1`, "uppercase store identity"],
+      [`exec-v1:root:${TOKEN_STORE}:01:W10K:1`, "leading-zero epoch"],
+      [`exec-v1:root:${TOKEN_STORE}:0:W10K:1`, "zero epoch"],
+      [`exec-v1:root:${TOKEN_STORE}:-1:W10K:1`, "signed epoch"],
+      [`exec-v1:root:${TOKEN_STORE}:1.0:W10K:1`, "fractional epoch"],
+      [`exec-v1:root:${TOKEN_STORE}: 1:W10K:1`, "whitespace epoch"],
+      [`exec-v1:root:${TOKEN_STORE}:1:W10K:9007199254740992`, "unsafe revision"],
+      [`exec-v1:root:${TOKEN_STORE}:1:W10K=:1`, "padded base64"],
+      [`exec-v1:root:${TOKEN_STORE}:1:W10:1`, "noncanonical key encoding"],
+      [`exec-v1:root:${TOKEN_STORE}:1:${key64("[]")}:1`, "key without the canonical LF"],
+      [`exec-v1:workflow:${TOKEN_STORE}:1:${key64("[]\n")}:1`, "key arity below the kind"],
+      [`exec-v1:workflow:${TOKEN_STORE}:1:${key64('["wf-1","p-1"]\n')}:1`, "key arity above the kind"],
+      [`exec-v1:workflow:${TOKEN_STORE}:1:${key64('[ "wf-1" ]\n')}:1`, "whitespace inside the key JSON"],
+      [`exec-v1:workflow:${TOKEN_STORE}:1:${key64("[1]\n")}:1`, "non-string key part"],
+      [`exec-v1:workflow:${TOKEN_STORE}:1:${key64('"wf-1"\n')}:1`, "key is not an array"],
+      [`exec-v1:workflow:${TOKEN_STORE}:1:${key64('[""]\n')}:1`, "empty key part"],
+      [`exec-v1:session:${TOKEN_STORE}:1:${key64('["wf-1","keeper","s-1"]\n')}:1`, "unknown session role"],
+    ];
+    for (const [token, label] of malformed) {
+      expect(() => parseExecutionToken(token), label).toThrow(/execution\.token-invalid/);
+      expect(() => assertExecutionToken(token, { kind: "root", storeId: TOKEN_STORE, epoch: 1, key: [] }), label).toThrow(
+        /execution\.token-invalid/,
+      );
+    }
+    // Creation refuses the same grammar: a malformed token is never minted either.
+    expect(() => executionToken("root", "not-a-uuid", 1, [], 1)).toThrow(/execution\.token-invalid/);
+    expect(() => executionToken("plan", TOKEN_STORE, 1, ["wf-1"], 1)).toThrow(/execution\.token-invalid/);
+    expect(() => executionToken("root", TOKEN_STORE, 0, [], 1)).toThrow(/execution\.token-invalid/);
+  });
+
+  test("refuses a token that addresses another kind, scope, epoch or revision", () => {
+    const plan = executionToken("plan", TOKEN_STORE, 5, ["wf-1", "p-1"], 2);
+    expect(assertExecutionToken(plan, { kind: "plan", storeId: TOKEN_STORE, epoch: 5, key: ["wf-1", "p-1"] }).revision).toBe(2);
+    expect(() => assertExecutionToken(plan, { kind: "workflow", storeId: TOKEN_STORE, epoch: 5, key: ["wf-1"] })).toThrow(
+      /execution\.token-kind/,
+    );
+    expect(() => assertExecutionToken(plan, { kind: "plan", storeId: TOKEN_STORE, epoch: 5, key: ["wf-1", "p-2"] })).toThrow(
+      /execution\.scope-mismatch/,
+    );
+    expect(() => assertExecutionToken(plan, { kind: "plan", storeId: OTHER_STORE, epoch: 5, key: ["wf-1", "p-1"] })).toThrow(
+      /execution\.scope-mismatch/,
+    );
+    expect(() => assertExecutionToken(plan, { kind: "plan", storeId: TOKEN_STORE, epoch: 6, key: ["wf-1", "p-1"] })).toThrow(
+      /store\.stale-epoch/,
+    );
+    expect(() =>
+      assertExecutionToken(plan, { kind: "plan", storeId: TOKEN_STORE, epoch: 5, key: ["wf-1", "p-1"], revision: 3 }),
+    ).toThrow(/execution\.stale-token/);
+  });
+});
+
+/* ------------------------------------------------------------------------ *
+ * C2 — one-transaction ownership and the empty execution initializer (§3/§4.1)
+ * ------------------------------------------------------------------------ */
+
+/** A complete frozen catalog input identity (§1) for the read cases. */
+const FROZEN_PIN = {
+  store_id: "0f8fad5b-d9cb-469f-a165-70867728950e",
+  entity_revision: 4,
+  document_hash: "a".repeat(64),
+  relation_hash: "b".repeat(64),
+};
+
+/**
+ * One workflow with one plan, its active plan-pm session, execution lease and
+ * sealed input written as raw domain rows: C3 owns the creation API, so this
+ * fixture exercises the READER's assembly of §3 `ExecutionState` rather than a
+ * second create path.
+ */
+function seedAuthorityGraph(db: StoreDb, epoch: number, options: { stateId?: string } = {}): void {
+  db.prepare(
+    "insert into execution_workflows(workflow_id, revision, creator_session_id, state_json, created_at, updated_at) " +
+      "values ('wf-1', 4, 'host-1', ?, ?, ?)",
+  ).run(JSON.stringify({ id: options.stateId ?? "wf-1", type: "plan", status: "running" }), TS, TS);
+  db.prepare("insert into execution_registry(workflow_id, entry_json) values ('wf-1', ?)").run(
+    JSON.stringify({ id: "wf-1", type: "plan", started_at: TS, dir: "workflows/wf-1" }),
+  );
+  db.prepare(
+    "insert into execution_plans(workflow_id, plan_id, revision, ordinal, state_json, coordination_json) " +
+      "values ('wf-1', 'p-1', 6, 0, ?, ?)",
+  ).run(
+    JSON.stringify({ id: "p-1", status: "InProgress" }),
+    JSON.stringify({ progress: { status: "InProgress", summary: "c2", evidence_paths: [] } }),
+  );
+  db.prepare(
+    "insert into execution_sessions(workflow_id, role, session_id, plan_id, epoch, revision, state, bound_at) " +
+      "values ('wf-1', 'plan-pm', 's-1', 'p-1', ?, 1, 'active', ?)",
+  ).run(epoch, TS);
+  db.prepare(
+    "insert into execution_leases(workflow_id, plan_id, revision, owner_epoch, lease_json) values ('wf-1', 'p-1', 2, ?, ?)",
+  ).run(
+    epoch,
+    JSON.stringify({
+      // The existing `ExecutionLease` identity fields (§3 DTO) plus the §2.2
+      // ownership/observation fields the DB lease carries.
+      holder: "host-1",
+      claimed_at: TS,
+      worktree_path: "/tmp/wt",
+      working_branch: "feature/x",
+      lease_id: "l-1",
+      holder_session_id: "s-1",
+      holder_role: "plan-pm",
+      plan_worktree_path: "/tmp/wt",
+      plan_branch: "feature/x",
+      heartbeat_at: TS,
+      status: "held",
+    }),
+  );
+  db.prepare(
+    "insert into execution_inputs(workflow_id, plan_id, revision, input_json, input_hash, catalog_pin_json) " +
+      "values ('wf-1', 'p-1', 1, '{}', 'input-hash', ?)",
+  ).run(JSON.stringify(FROZEN_PIN));
+}
+
+describe("execution-initialize: §3 create-only empty execution authority", () => {
+  test("does not activate execution merely because the schema was upgraded", async () => {
+    const upgraded = controlRoot("upgrade-is-not-activation");
+    createV3Store(upgraded);
+    await upgradeStore(upgraded);
+    const handle = await openStore(upgraded, "read");
+    try {
+      expect(handle.execution?.authorityState).toBe("legacy");
+    } finally {
+      handle.close();
+    }
+    await expect(readExecutionState(upgraded)).rejects.toThrow(/execution\.not-active/);
+
+    // A store that predates migration 4 has no execution authority at all — and
+    // reading it never migrates it.
+    const preMigration = controlRoot("pre-migration-read");
+    createV3Store(preMigration);
+    await expect(readExecutionState(preMigration)).rejects.toThrow(/execution\.not-active/);
+    const after = rawDb(storePath(preMigration));
+    try {
+      expect(scalar(after, "select max(version) as v from schema_version")).toBe(3);
+    } finally {
+      after.close();
+    }
+  });
+
+  test("initializes an empty active execution authority and bumps the epoch once", async () => {
+    const { context, epoch } = await freshStore("initialize-empty");
+    const initialized = await initializeExecutionAuthority(context);
+    expect(initialized.storeId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    expect(initialized.epoch).toBe(epoch + 1);
+    expect(initialized.token).toBe(`exec-v1:root:${initialized.storeId}:${epoch + 1}:W10K:2`);
+    expect(initialized.data).toEqual({
+      root: { version: 2, updated_at: initialized.data.root.updated_at, workflows: [] },
+      workflows: [],
+    });
+    expect(initialized.data.root.updated_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+
+    const raw = rawDb(storePath(context));
+    try {
+      expect(one(raw, "select authority_state, revision, manifest_id from execution_meta where id = 1")).toEqual({
+        authority_state: "active",
+        revision: 2,
+        manifest_id: null,
+      });
+      expect(String(scalar(raw, "select activated_at from execution_meta where id = 1"))).toMatch(/Z$/);
+      expect(one(raw, "select authority_state, authority_epoch, revision from store_meta where id = 1")).toEqual({
+        authority_state: "active",
+        authority_epoch: epoch + 1,
+        revision: 1,
+      });
+    } finally {
+      raw.close();
+    }
+
+    // Create-only: a second initialization never resets the live authority.
+    await expect(initializeExecutionAuthority(context)).rejects.toThrow(/execution\.not-empty/);
+    const unchanged = rawDb(storePath(context));
+    try {
+      expect(scalar(unchanged, "select revision from execution_meta where id = 1")).toBe(2);
+      expect(scalar(unchanged, "select authority_epoch from store_meta where id = 1")).toBe(epoch + 1);
+    } finally {
+      unchanged.close();
+    }
+    // The state a reader sees agrees with what the initializer returned.
+    expect(await readExecutionState(context)).toEqual(initialized);
+  });
+
+  test("activates an upgraded store without touching issue/catalog records", async () => {
+    const context = controlRoot("initialize-upgraded-store");
+    createV3Store(context);
+    const prep = rawDb(storePath(context));
+    try {
+      // The fixture carries a historical catalog execution binding; an empty
+      // execution workspace cannot have one.
+      prep.exec("delete from catalog_execution_bindings");
+    } finally {
+      prep.close();
+    }
+    await upgradeStore(context);
+    const initialized = await initializeExecutionAuthority(context);
+    expect(initialized.epoch).toBe(2);
+    expect(initialized.data.workflows).toEqual([]);
+
+    const raw = rawDb(storePath(context));
+    try {
+      expect(scalar(raw, "select count(*) as n from issues")).toBe(1);
+      expect(scalar(raw, "select count(*) as n from occurrences")).toBe(1);
+      expect(scalar(raw, "select count(*) as n from catalog_entities")).toBe(3);
+      expect(scalar(raw, "select count(*) as n from execution_workflows")).toBe(0);
+      expect(
+        one(raw, "select authority_state, authority_epoch, revision, catalog_revision from store_meta where id = 1"),
+      ).toEqual({ authority_state: "active", authority_epoch: 2, revision: 8, catalog_revision: 3 });
+    } finally {
+      raw.close();
+    }
+  });
+
+  test("refuses a live legacy execution source without touching the store", async () => {
+    const { context, epoch } = await freshStore("initialize-legacy-source");
+    writeFileSync(
+      join(context.harnessDir, "status.json"),
+      JSON.stringify({ version: 2, updated_at: "2026-01-02", workflows: [] }),
+    );
+    await expect(initializeExecutionAuthority(context)).rejects.toThrow(/execution\.not-empty/);
+
+    // Snapshots, session envelopes and notes ledgers live under the workflow tree.
+    rmSync(join(context.harnessDir, "status.json"));
+    mkdirSync(join(context.harnessDir, "workflows", "wf-1"), { recursive: true });
+    writeFileSync(join(context.harnessDir, "workflows", "wf-1", "snapshot.json"), "{}");
+    await expect(initializeExecutionAuthority(context)).rejects.toThrow(/execution\.not-empty/);
+
+    // Neither refusal committed anything.
+    const raw = rawDb(storePath(context));
+    try {
+      expect(one(raw, "select authority_state, revision from execution_meta where id = 1")).toEqual({
+        authority_state: "legacy",
+        revision: 1,
+      });
+      expect(scalar(raw, "select authority_epoch from store_meta where id = 1")).toBe(epoch);
+    } finally {
+      raw.close();
+    }
+
+    // An EMPTY workflow tree is not a source: the empty workspace still initializes.
+    rmSync(join(context.harnessDir, "workflows"), { recursive: true, force: true });
+    expect((await initializeExecutionAuthority(context)).epoch).toBe(epoch + 1);
+  });
+
+  test("refuses a nonempty execution domain without clearing it", async () => {
+    const { context, epoch } = await freshStore("initialize-nonempty-domain");
+    const writer = await openStore(context, "write");
+    try {
+      seedExecutionGraph(writer.db);
+    } finally {
+      writer.close();
+    }
+    await expect(initializeExecutionAuthority(context)).rejects.toThrow(/execution\.not-empty/);
+
+    const raw = rawDb(storePath(context));
+    try {
+      expect(scalar(raw, "select count(*) as n from execution_workflows")).toBe(1);
+      expect(scalar(raw, "select count(*) as n from execution_plans")).toBe(2);
+      expect(one(raw, "select authority_state, revision from execution_meta where id = 1")).toEqual({
+        authority_state: "legacy",
+        revision: 1,
+      });
+      expect(scalar(raw, "select authority_epoch from store_meta where id = 1")).toBe(epoch);
+    } finally {
+      raw.close();
+    }
+  });
+
+  test("refuses a catalog execution binding as a nonempty execution workspace", async () => {
+    const { context } = await freshStore("initialize-catalog-binding");
+    const writer = await openStore(context, "write");
+    try {
+      writer.db
+        .prepare(
+          "insert into catalog_entities(kind,id,title,root_kind,relative_path,revision,registered_at,updated_at) " +
+            "values ('plan','plan-1','Plan','plans','plans/plan-1.md',5,?,?)",
+        )
+        .run(TS, TS);
+      writer.db
+        .prepare(
+          "insert into catalog_execution_bindings(workflow_id,catalog_kind,catalog_id,workflow_root_kind," +
+            "workflow_relative_path,catalog_revision,input_hash,pin_json,operation_id) " +
+            "values ('wf-legacy','plan','plan-1','plans','plans/plan-1.md',5,'input-hash-1','{}','op-bind-1')",
+        )
+        .run();
+    } finally {
+      writer.close();
+    }
+    await expect(initializeExecutionAuthority(context)).rejects.toThrow(/execution\.not-empty/);
+  });
+
+  test("refuses initialization on a staged issue/catalog store", async () => {
+    const { context, epoch } = await freshStore("initialize-staged-store");
+    const writer = await openStore(context, "write");
+    try {
+      writer.db.prepare("update store_meta set authority_state = 'staged' where id = 1").run();
+    } finally {
+      writer.close();
+    }
+    await expect(initializeExecutionAuthority(context)).rejects.toThrow(/store\.not-active/);
+
+    const raw = rawDb(storePath(context));
+    try {
+      expect(scalar(raw, "select authority_state from execution_meta where id = 1")).toBe("legacy");
+      expect(scalar(raw, "select authority_epoch from store_meta where id = 1")).toBe(epoch);
+    } finally {
+      raw.close();
+    }
+  });
+
+  test("a nested transaction on the same store refuses and commits nothing", async () => {
+    const { context, epoch } = await freshStore("reentrant-transaction");
+    const refusal = await withExecutionTransaction(context, (tx) => {
+      // A write the outer transaction WOULD commit if the boundary leaked.
+      tx.db.prepare("update execution_meta set revision = 99 where id = 1").run();
+      return withExecutionTransaction(context, () => "nested");
+    }).then(
+      () => {
+        throw new Error("expected the nested transaction to be refused");
+      },
+      (error: unknown) => error,
+    );
+    expect(refusal).toBeInstanceOf(ExecutionError);
+    expect((refusal as ExecutionError).code).toBe("execution.reentrant");
+
+    const raw = rawDb(storePath(context));
+    try {
+      expect(scalar(raw, "select revision from execution_meta where id = 1")).toBe(1);
+      expect(scalar(raw, "select authority_epoch from store_meta where id = 1")).toBe(epoch);
+    } finally {
+      raw.close();
+    }
+
+    // The boundary is released afterwards: sequential transactions are not nested.
+    const storeId = await withExecutionTransaction(context, (tx) => {
+      expect(tx.execution.authorityState).toBe("legacy");
+      return tx.storeId;
+    });
+    expect(storeId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  });
+
+  test("reads the active authority as one assembled state graph", async () => {
+    const { context, epoch } = await freshStore("read-populated");
+    const initialized = await initializeExecutionAuthority(context);
+    const writer = await openStore(context, "write");
+    try {
+      seedAuthorityGraph(writer.db, epoch + 1);
+    } finally {
+      writer.close();
+    }
+
+    const state = await readExecutionState(context);
+    expect(state.storeId).toBe(initialized.storeId);
+    expect(state.epoch).toBe(epoch + 1);
+    expect(state.token).toBe(executionToken("root", initialized.storeId, epoch + 1, [], 2));
+    expect(state.data.root).toEqual({
+      version: 2,
+      updated_at: initialized.data.root.updated_at,
+      workflows: [{ id: "wf-1", type: "plan", started_at: TS, dir: "workflows/wf-1" }],
+    });
+    expect(state.data.workflows).toHaveLength(1);
+    const [workflow] = state.data.workflows;
+    expect(workflow.workflowToken).toBe(executionToken("workflow", initialized.storeId, epoch + 1, ["wf-1"], 4));
+    expect(workflow.planTokens).toEqual({
+      "p-1": executionToken("plan", initialized.storeId, epoch + 1, ["wf-1", "p-1"], 6),
+    });
+    expect(workflow.coordinator).toBeNull();
+    expect(workflow.integrationLease).toBeNull();
+    expect(workflow.plans).toHaveLength(1);
+    const [plan] = workflow.plans;
+    expect(plan.plan).toEqual({ id: "p-1", status: "InProgress" });
+    expect(plan.coordination).toEqual({
+      revision: 6,
+      progress: { status: "InProgress", summary: "c2", evidence_paths: [] },
+    });
+    expect(plan.session).toEqual({
+      storeId: initialized.storeId,
+      epoch: epoch + 1,
+      workflowId: "wf-1",
+      role: "plan-pm",
+      sessionId: "s-1",
+      planId: "p-1",
+    });
+    expect(plan.executionLease).toEqual({
+      holder: "host-1",
+      claimed_at: TS,
+      worktree_path: "/tmp/wt",
+      working_branch: "feature/x",
+      lease_id: "l-1",
+      holder_session_id: "s-1",
+      holder_role: "plan-pm",
+      plan_worktree_path: "/tmp/wt",
+      plan_branch: "feature/x",
+      heartbeat_at: TS,
+      status: "held",
+    });
+    expect(plan.integrationLease).toBeNull();
+    expect(plan.frozenInput).toEqual(FROZEN_PIN);
+  });
+
+  test("refuses to serve a workflow whose stored state does not describe its own key", async () => {
+    const { context, epoch } = await freshStore("read-foreign-state");
+    await initializeExecutionAuthority(context);
+    const writer = await openStore(context, "write");
+    try {
+      seedAuthorityGraph(writer.db, epoch + 1, { stateId: "wf-other" });
+    } finally {
+      writer.close();
+    }
+    await expect(readExecutionState(context)).rejects.toThrow(/store\.corrupt/);
   });
 });

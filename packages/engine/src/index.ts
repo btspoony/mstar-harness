@@ -535,6 +535,27 @@ export {
   storeDbPath,
   upgradeStore,
 } from "./store-db.js";
+// Execution authority: the canonical value form and `exec-v1` version tokens
+// (§3.1), the one-transaction ownership boundary and the create-only empty
+// execution initializer (§3/§4.1). ADDITIVE export and the ONLY reachable
+// surface for consumers: the token grammar and the transaction primitive stay
+// module-scoped for the domain modules that compose with them, and no
+// coordination/registration/session verb is defined here.
+export type {
+  ExecutionErrorCode,
+  ExecutionKind,
+  ExecutionPlanView,
+  ExecutionRead,
+  ExecutionSessionRef,
+  ExecutionState,
+  ExecutionToken,
+} from "./execution-store.js";
+export {
+  ExecutionError,
+  initializeExecutionAuthority,
+  readExecutionState,
+  serializeExecutionValue,
+} from "./execution-store.js";
 export type {
   CaptureInput,
   ClosureEvidence,
