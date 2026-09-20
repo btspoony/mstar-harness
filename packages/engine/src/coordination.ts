@@ -115,7 +115,14 @@ import { CatalogError } from "./catalog.js";
 import { parseCompassFrontmatterText } from "./iteration.js";
 import { rowPlanIds, validatePlanRow, validateStatusV2, type PlanRow, type StatusV2Doc } from "./status.js";
 import { getArtifactStore, resolveArtifactPath, type ArtifactRef, type ArtifactStore } from "./store.js";
-import { StoreError, openStore, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
+import {
+  StoreError,
+  assertExecutionFileWriteAllowed,
+  openStore,
+  type StoreContext,
+  type StoreDb,
+  type StoreHandle,
+} from "./store-db.js";
 import {
   IssueError,
   captureIssue,
@@ -995,6 +1002,11 @@ export function readSessionEnvelope(sessionPath: string): CoordinationSession {
 }
 
 function createSessionEnvelope(session: CoordinationSession): string {
+  // Canonical authority discrimination precedes the file creation below
+  // (spec §4.3): with an ACTIVE execution authority the session-envelope file
+  // is retired as a persistence route, so a bind refuses before any byte or
+  // the snapshot it would accompany is written.
+  assertExecutionFileWriteAllowed({ harnessDir: session.harness_root });
   const path = sessionFilePath(session.harness_root, session.workflow_id, session.role, session.session_id);
   mkdirSync(dirname(path), { recursive: true });
   try {
@@ -2601,6 +2613,13 @@ export async function mutatePlanCoordination(request: CoordinationRequest): Prom
     });
   }
   const session = readSessionEnvelope(request.sessionPath);
+  // Canonical authority discrimination precedes the operation payload checks
+  // below (spec §4.3): the legacy coordination route is retired as a writer
+  // while the execution authority is ACTIVE, so an unknown/malformed operation
+  // can never mask the authority refusal. The envelope itself is read first
+  // only to learn which control harness the request belongs to — the reference
+  // carries no authority.
+  assertExecutionFileWriteAllowed({ harnessDir: session.harness_root });
   const seat: CoordinationSeat = { role: session.role, sessionId: session.session_id, planId: session.plan_id ?? null };
   assertOperationRole(seat, kind);
   assertPlanAddress(seat, request.planId);
@@ -4486,6 +4505,11 @@ export async function replaceCoordinatedArtifact(input: CoordinatedReplacement):
   if (!isNonEmptyString(input.harnessRoot) || !isAbsolute(input.harnessRoot)) {
     throw invalidInput("harnessRoot must be an absolute path");
   }
+  // Canonical authority discrimination precedes the payload checks below
+  // (spec §4.3): while the execution authority is ACTIVE the root register and
+  // the snapshot are retired as persistence routes, so the replacement refuses
+  // before the ref/CAS/ownership checks and before any lock is taken.
+  assertExecutionFileWriteAllowed({ harnessDir: input.harnessRoot });
   if (!isPlainObject(input.ref) || !isNonEmptyString(input.ref.kind) || !isNonEmptyString(input.ref.key)) {
     throw invalidInput("ref must be an ArtifactRef with kind and key");
   }
@@ -5840,6 +5864,10 @@ export async function amendPrepareWorkflow(
   const expectedSnapshotVersion = prepareVersionToken(input.expectedSnapshotVersion, "expectedSnapshotVersion");
   const expectedCompassVersion = prepareVersionToken(input.expectedCompassVersion, "expectedCompassVersion");
   const scope = prepareWorkflowScope(input.sessionPath, cwd);
+  // Canonical authority discrimination precedes the lock and the version
+  // checks inside it (spec §4.3): the amendment writes the snapshot, which is
+  // retired as a persistence route while the execution authority is ACTIVE.
+  assertExecutionFileWriteAllowed({ harnessDir: scope.harnessRoot });
   const committed = await withStatusWriteLock(scope.snapshotPath, async () => {
     const { snapshot, version } = readPrepareSnapshot(scope.snapshotPath);
     assertCoordinatorBinding(scope.session, scope.sessionPath, snapshot);
