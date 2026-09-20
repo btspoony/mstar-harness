@@ -28,6 +28,8 @@ import {
   type RowCoordination,
 } from "./coordination-write.js";
 import { validateExecutionLease, type ExecutionLease } from "./lease.js";
+import { assertSafePathComponent } from "./path.js";
+import { _DEFAULT_PROJECT } from "./project.js";
 import { rowPlanIds, type PlanRow } from "./status.js";
 import { isStandaloneDevelopmentWorkflow, type WorkflowSnapshot } from "./workflow.js";
 
@@ -431,4 +433,36 @@ export function assertTrackBranches(
       );
     }
   }
+}
+
+/* ------------------------------------------------------------------------ *
+ * § Row facts: which project a plan's findings belong to
+ * ------------------------------------------------------------------------ */
+
+/**
+ * The project bucket of a plan row — `metadata.project_id` when the row
+ * declares one, `_default` otherwise (compass ruling 2). A row-scoped rule, so
+ * both transports read it here instead of deriving a second answer: the file
+ * route records the row and the DB route reads the same row, and the residual
+ * capture below must land in the SAME project on either route.
+ *
+ * One rule, two callers: `coordination.ts` still carries its private
+ * `projectIdOf` copy of this derivation until that module's next touched batch
+ * converges on this one.
+ */
+export function projectBucketOf(row: PlanRow): string {
+  const metadata = isPlainObject(row.metadata) ? row.metadata : {};
+  const declared = metadata.project_id;
+  if (!isNonEmptyString(declared)) return _DEFAULT_PROJECT;
+  try {
+    assertSafePathComponent(declared, "metadata.project_id");
+  } catch (error) {
+    throw new CoordinationError(
+      "coordination.invalid-input",
+      `metadata.project_id ${JSON.stringify(declared)} is not a safe path component: ` +
+        `${error instanceof Error ? error.message : String(error)}`,
+      { plan_id: declared },
+    );
+  }
+  return declared;
 }

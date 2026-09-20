@@ -325,7 +325,14 @@ function readMeta(db: StoreDb): { authorityState: string; revision: number } {
   return { authorityState: row.authorityState, revision: row.revision };
 }
 
-function assertActive(db: StoreDb): void {
+/**
+ * The store precondition of every privileged issue mutation. It is asserted by
+ * whichever transport owns the transaction — `withWrite` here, and the DB
+ * coordination route through the same function — so a handle-taking body is
+ * never reached against a staged store, and an inactive store refuses with
+ * this module's existing `store.not-active` reason on both routes.
+ */
+export function assertIssueStoreActive(db: StoreDb): void {
   const meta = readMeta(db);
   if (meta.authorityState !== "active") {
     throw new IssueError(
@@ -471,10 +478,27 @@ function insertCaptureProvenance(db: StoreDb, issueId: string, cols: OccurrenceC
   ).run(issueId, "capture", cols.sourceIdentity, sha256(cols.occurrenceKey));
 }
 
+/**
+ * The mutation identity a handle-taking body runs as (see `MutationContext`):
+ * the idempotency key and the audited actor, without any session file. The
+ * public entry points carry a `MutationContext` (which is assignable here) and
+ * authorize it themselves before the transaction they own; the DB coordination
+ * route supplies the same shape from its own store-held session.
+ */
+export type AuthorizedIssueMutation = Omit<MutationContext, "sessionFile">;
+
+/**
+ * The transaction of ONE public issue mutation: this transport opens the store,
+ * asserts the store precondition, opens the transaction, and calls the SAME
+ * handle-taking body the DB coordination route calls inside the transaction it
+ * already owns. A body never opens a store or a transaction of its own, so
+ * composing issue work into a caller's transaction is possible without a
+ * nested `BEGIN`; called publicly, each verb is still exactly one transaction.
+ */
 async function withWrite<T>(context: StoreContext, fn: (handle: StoreHandle) => T): Promise<T> {
   const handle = await openStore(context, "write");
   try {
-    assertActive(handle.db);
+    assertIssueStoreActive(handle.db);
     handle.db.exec("begin immediate");
     try {
       const result = fn(handle);
@@ -493,15 +517,34 @@ async function withWrite<T>(context: StoreContext, fn: (handle: StoreHandle) => 
   }
 }
 
-export async function captureIssue(
-  context: StoreContext,
-  input: CaptureInput,
-  mutation: MutationContext,
-): Promise<IssueReceipt> {
-  requireCaptureSeat(mutation.actor);
+/**
+ * §2 the request half of one capture, validated WITHOUT a store: the contract
+ * vocabulary, the four nonblank fields and the occurrence identity columns.
+ * Both transports run it before they own a transaction, so a malformed capture
+ * is refused by itself — never by, or after, a store-open failure.
+ */
+export function assertCaptureRequest(input: CaptureInput): void {
   if (!Object.hasOwn(KINDS, input.kind) || !Object.hasOwn(SEVERITIES, input.severity)) {
     throw new IssueError("issue.scope-refused", "kind or severity is not a contract vocabulary value");
   }
+  requireNonblank("title", input.title);
+  requireNonblank("impact", input.impact);
+  requireNonblank("acceptance", input.acceptance);
+  requireNonblank("projectId", input.projectId);
+  occurrenceColumns(input);
+}
+
+/**
+ * The capture body on a handle the caller already owns and has already
+ * authorized: the seat, the request validation and the transaction belong to
+ * the transport. It re-derives the trimmed fields and the identity triple with
+ * the same pure rules `assertCaptureRequest` applied — the body owns its inputs
+ * on either route — and it reads no session file, opens no store and begins no
+ * transaction, so it composes into a caller's transaction unchanged. On the
+ * public route it produces exactly the receipt `captureIssue` produced before
+ * the extraction.
+ */
+export function captureIssueOn(db: StoreDb, input: CaptureInput, mutation: AuthorizedIssueMutation): IssueReceipt {
   const title = requireNonblank("title", input.title);
   const impact = requireNonblank("impact", input.impact);
   const acceptance = requireNonblank("acceptance", input.acceptance);
@@ -510,94 +553,108 @@ export async function captureIssue(
   const identityKey = computeIdentityKey(projectId, cols.sourceIdentity, cols.rootCauseKey, cols.acceptanceKey);
   const hash = requestHash("captureIssue", { input, mutation: { operationId: mutation.operationId, actor: mutation.actor } });
 
-  return withWrite(context, (handle) => {
-    const db = handle.db;
-    const existingOp = lookupOperation(db, mutation.operationId);
-    if (existingOp) return replayOrConflict(existingOp, hash);
+  const existingOp = lookupOperation(db, mutation.operationId);
+  if (existingOp) return replayOrConflict(existingOp, hash);
 
-    const existingOcc = findOccurrence(db, cols.occurrenceKey);
-    if (existingOcc) {
-      const issue = db.prepare("select id, revision, identity_key from issues where id = ?").get(existingOcc.issue_id) as {
-        id: string;
-        revision: number;
-        identity_key: string;
-      };
-      if (issue.identity_key !== identityKey) {
-        throw new IssueError(
-          "issue.ambiguous-identity",
-          "occurrence_key already belongs to a different identity; refusing a guessed merge",
-        );
-      }
-      if (!occurrenceMatches(existingOcc, cols)) {
-        throw new IssueError(
-          "issue.occurrence-conflict",
-          "occurrence_key was reused with a different observation; the original occurrence is retained.",
-        );
-      }
-      const receipt: IssueReceipt = {
-        issueId: issue.id,
-        occurrenceId: existingOcc.id,
-        revision: issue.revision,
-        storeRevision: readMeta(db).revision,
-        created: false,
-      };
-      recordOperation(db, mutation.operationId, hash, receipt, nowRfc3339());
-      return receipt;
-    }
-
-    const existing = findByIdentity(db, identityKey);
-    const at = nowRfc3339();
-    if (existing) {
-      const occurrenceId = insertOccurrence(db, existing.id, cols, at);
-      const revision = existing.revision + 1;
-      db.prepare("update issues set revision = ?, updated_at = ? where id = ?").run(revision, at, existing.id);
-      const storeRevision = bumpStoreRevision(db);
-      const receipt: IssueReceipt = {
-        issueId: existing.id,
-        occurrenceId,
-        revision,
-        storeRevision,
-        created: false,
-      };
-      recordOperation(db, mutation.operationId, hash, receipt, at);
-      return receipt;
-    }
-
-    const counter = db.prepare("select next_value as nextValue from issue_counter where id = 1").get() as {
-      nextValue: number;
+  const existingOcc = findOccurrence(db, cols.occurrenceKey);
+  if (existingOcc) {
+    const issue = db.prepare("select id, revision, identity_key from issues where id = ?").get(existingOcc.issue_id) as {
+      id: string;
+      revision: number;
+      identity_key: string;
     };
-    const issueId = `I-${String(counter.nextValue).padStart(6, "0")}`;
-    db.prepare("update issue_counter set next_value = next_value + 1 where id = 1").run();
-    db.prepare(
-      "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, owner, registered_at, created_at, updated_at, revision, provider, identity_key) " +
-        "values (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, 1, 'local', ?)",
-    ).run(
-      issueId,
-      projectId,
-      title,
-      input.kind,
-      input.severity,
-      impact,
-      acceptance,
-      input.owner ?? null,
-      at,
-      at,
-      at,
-      identityKey,
-    );
-    const occurrenceId = insertOccurrence(db, issueId, cols, at);
-    insertCaptureProvenance(db, issueId, cols);
+    if (issue.identity_key !== identityKey) {
+      throw new IssueError(
+        "issue.ambiguous-identity",
+        "occurrence_key already belongs to a different identity; refusing a guessed merge",
+      );
+    }
+    if (!occurrenceMatches(existingOcc, cols)) {
+      throw new IssueError(
+        "issue.occurrence-conflict",
+        "occurrence_key was reused with a different observation; the original occurrence is retained.",
+      );
+    }
+    const receipt: IssueReceipt = {
+      issueId: issue.id,
+      occurrenceId: existingOcc.id,
+      revision: issue.revision,
+      storeRevision: readMeta(db).revision,
+      created: false,
+    };
+    recordOperation(db, mutation.operationId, hash, receipt, nowRfc3339());
+    return receipt;
+  }
+
+  const existing = findByIdentity(db, identityKey);
+  const at = nowRfc3339();
+  if (existing) {
+    const occurrenceId = insertOccurrence(db, existing.id, cols, at);
+    const revision = existing.revision + 1;
+    db.prepare("update issues set revision = ?, updated_at = ? where id = ?").run(revision, at, existing.id);
     const storeRevision = bumpStoreRevision(db);
     const receipt: IssueReceipt = {
-      issueId,
+      issueId: existing.id,
       occurrenceId,
-      revision: 1,
+      revision,
       storeRevision,
-      created: true,
+      created: false,
     };
     recordOperation(db, mutation.operationId, hash, receipt, at);
     return receipt;
-  });
+  }
+
+  const counter = db.prepare("select next_value as nextValue from issue_counter where id = 1").get() as {
+    nextValue: number;
+  };
+  const issueId = `I-${String(counter.nextValue).padStart(6, "0")}`;
+  db.prepare("update issue_counter set next_value = next_value + 1 where id = 1").run();
+  db.prepare(
+    "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, owner, registered_at, created_at, updated_at, revision, provider, identity_key) " +
+      "values (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, 1, 'local', ?)",
+  ).run(
+    issueId,
+    projectId,
+    title,
+    input.kind,
+    input.severity,
+    impact,
+    acceptance,
+    input.owner ?? null,
+    at,
+    at,
+    at,
+    identityKey,
+  );
+  const occurrenceId = insertOccurrence(db, issueId, cols, at);
+  insertCaptureProvenance(db, issueId, cols);
+  const storeRevision = bumpStoreRevision(db);
+  const receipt: IssueReceipt = {
+    issueId,
+    occurrenceId,
+    revision: 1,
+    storeRevision,
+    created: true,
+  };
+  recordOperation(db, mutation.operationId, hash, receipt, at);
+  return receipt;
+}
+
+/**
+ * §2/§4 capture on the issue authority: the PM seat owns an unscoped finding,
+ * and the store dedups it by source/root-cause/acceptance identity. The seat
+ * check and the request validation run BEFORE the store is opened — the public
+ * contract's refusal precedence — and the transaction is this route's, so the
+ * body below is exactly what the DB coordination route composes.
+ */
+export async function captureIssue(
+  context: StoreContext,
+  input: CaptureInput,
+  mutation: MutationContext,
+): Promise<IssueReceipt> {
+  requireCaptureSeat(mutation.actor);
+  assertCaptureRequest(input);
+  return withWrite(context, (handle) => captureIssueOn(handle.db, input, mutation));
 }
 
 export async function appendOccurrence(
@@ -731,7 +788,7 @@ export async function listIssues(context: StoreContext, filter: IssueFilter): Pr
     // verbs refuse `store.not-active` exactly like the mutations; staged data
     // is inspectable through the migration surface (manifest/receipt), never
     // as queryable issues.
-    assertActive(db);
+    assertIssueStoreActive(db);
     const storeRevision = readMeta(db).revision;
     const totalRow = db.prepare(`select count(*) as n from issues ${where}`).get(...params) as { n: number };
     const order = `order by case issues.severity
@@ -783,7 +840,7 @@ export async function getIssue(context: StoreContext, id: string): Promise<Issue
     const db = handle.db;
     // FW-6: same stage gate as listIssues — a staged store is refused, never
     // served as read authority.
-    assertActive(db);
+    assertIssueStoreActive(db);
     const issue = db
       .prepare(
         "select id, project_id, title, kind, severity, disposition, impact, acceptance, owner, registered_at, closed_at, closure_note, created_at, updated_at, revision, provider, external_id, url, identity_key from issues where id = ?",
@@ -948,6 +1005,13 @@ const TERMINAL: Record<TerminalDisposition, true> = {
   superseded: true,
 };
 
+/** The terminal disposition vocabulary, validated once for both transports. */
+export function assertTerminalDisposition(disposition: TerminalDisposition): void {
+  if (!Object.hasOwn(TERMINAL, disposition)) {
+    throw new IssueError("issue.invalid-disposition", "Terminal dispositions are exactly resolved|waived|duplicate|superseded");
+  }
+}
+
 /**
  * Seats an existing session envelope authorizes (contract §4: existing harness
  * authorization semantics, not a new local auth service). Both roles
@@ -968,6 +1032,20 @@ const ENVELOPE_SEATS: Record<CoordinationSession["role"], string> = {
  * return evidence and never write the store, and unscoped capture needs no plan.
  */
 const CAPTURE_SEAT = "project-manager";
+
+/**
+ * The seat one bound session writes issues as. `ENVELOPE_SEATS` is the ONE
+ * role → seat mapping: the file route derives the seat from the envelope it
+ * validated, and the DB coordination route from its store-held session role, so
+ * a DB `plan-pm` holds exactly the seat a file envelope proves and the audited
+ * actor of an issue transition is the same value on both routes.
+ */
+export function issueWriteSeat(role: string): string {
+  if (!Object.hasOwn(ENVELOPE_SEATS, role)) {
+    throw new IssueError("issue.scope-refused", `Session role ${JSON.stringify(role)} holds no issue-write seat`);
+  }
+  return ENVELOPE_SEATS[role as CoordinationSession["role"]];
+}
 
 function requireCaptureSeat(actor: string): void {
   const seat = requireNonblank("actor", actor);
@@ -1231,7 +1309,7 @@ function requireExpectedRevision(mutation: MutationContext, current: number): vo
  * acceptance evidence at all; without it, a `resolved` closure would record
  * nothing about which §4 authority it was made under.
  */
-function assertClosureAuthority(disposition: TerminalDisposition, evidence: ClosureEvidence): void {
+export function assertClosureAuthority(disposition: TerminalDisposition, evidence: ClosureEvidence): void {
   requireNonblank("reason", evidence.reason);
   if (disposition === "resolved") {
     if (!evidence.references || evidence.references.length === 0) {
@@ -1345,18 +1423,40 @@ export async function triageIssue(
   });
 }
 
-export async function closeIssue(
-  context: StoreContext,
+/**
+ * §4/§5 the plan-link gate of one closure: a plan may close only a finding
+ * linked to ITS plan. Identity is the append-only `provenance` record
+ * (`kind='plan'`, `target=<plan id>`, written by `linkIssue`), so a read-side
+ * scope check cannot race an unlink — there is no unlink verb. Shared by both
+ * transports: the file route opens its own read handle for it, the DB route
+ * reads through the transaction it already owns.
+ */
+export function assertIssueLinkedToPlanOn(db: StoreDb, issueId: string, planId: string): void {
+  const linked = db
+    .prepare("select 1 as ok from provenance where issue_id = ? and kind = 'plan' and target = ?")
+    .get(issueId, planId) as { ok: number } | undefined;
+  if (!linked) {
+    throw new IssueError(
+      "issue.scope-refused",
+      `issue ${issueId} is not linked to plan ${planId} \u2014 a plan session closes only its own findings`,
+    );
+  }
+}
+
+/**
+ * The closure body on a handle the caller already owns and has already
+ * authorized. It reads no session file, opens no store and begins no
+ * transaction: the disposition vocabulary and the closure-evidence rule belong
+ * to the transport's pre-transaction half (`assertTerminalDisposition` /
+ * `assertClosureAuthority`).
+ */
+export function closeIssueOn(
+  db: StoreDb,
   issueId: string,
   disposition: TerminalDisposition,
   evidence: ClosureEvidence,
-  mutation: MutationContext,
-): Promise<IssueReceipt> {
-  if (!Object.hasOwn(TERMINAL, disposition)) {
-    throw new IssueError("issue.invalid-disposition", "Terminal dispositions are exactly resolved|waived|duplicate|superseded");
-  }
-  authorizeMutation(context, mutation);
-  assertClosureAuthority(disposition, evidence);
+  mutation: AuthorizedIssueMutation,
+): IssueReceipt {
   const hash = requestHash("closeIssue", {
     issueId,
     disposition,
@@ -1364,71 +1464,171 @@ export async function closeIssue(
     mutation: { operationId: mutation.operationId, actor: mutation.actor, expectedRevision: mutation.expectedRevision },
   });
 
-  return withWrite(context, (handle) => {
-    const db = handle.db;
-    const existingOp = lookupOperation(db, mutation.operationId);
-    if (existingOp) return replayOrConflict(existingOp, hash);
+  const existingOp = lookupOperation(db, mutation.operationId);
+  if (existingOp) return replayOrConflict(existingOp, hash);
 
-    const issue = db.prepare("select id, revision, disposition from issues where id = ?").get(issueId) as
-      | { id: string; revision: number; disposition: string }
-      | undefined;
-    if (!issue) throw new IssueError("issue.not-found", `Issue ${issueId} does not exist`);
-    requireExpectedRevision(mutation, issue.revision);
+  const issue = db.prepare("select id, revision, disposition from issues where id = ?").get(issueId) as
+    | { id: string; revision: number; disposition: string }
+    | undefined;
+  if (!issue) throw new IssueError("issue.not-found", `Issue ${issueId} does not exist`);
+  requireExpectedRevision(mutation, issue.revision);
 
-    if (issue.disposition !== "open") {
-      throw new IssueError(
-        "issue.invalid-disposition",
-        `Only open\u2192terminal is accepted; ${issue.disposition} cannot transition to ${disposition}`,
-      );
-    }
+  if (issue.disposition !== "open") {
+    throw new IssueError(
+      "issue.invalid-disposition",
+      `Only open\u2192terminal is accepted; ${issue.disposition} cannot transition to ${disposition}`,
+    );
+  }
 
-    if (disposition === "duplicate" || disposition === "superseded") {
-      const canonical = evidence.canonicalIssueId!;
-      const other = db.prepare("select id from issues where id = ?").get(canonical) as { id: string } | undefined;
-      if (!other) {
-        throw new IssueError("issue.not-found", `Canonical issue ${canonical} does not exist`);
-      }
-      if (canonical === issueId) {
-        throw new IssueError("issue.invalid-disposition", "canonical issue cannot be the closing issue itself");
-      }
+  if (disposition === "duplicate" || disposition === "superseded") {
+    const canonical = evidence.canonicalIssueId!;
+    const other = db.prepare("select id from issues where id = ?").get(canonical) as { id: string } | undefined;
+    if (!other) {
+      throw new IssueError("issue.not-found", `Canonical issue ${canonical} does not exist`);
     }
+    if (canonical === issueId) {
+      throw new IssueError("issue.invalid-disposition", "canonical issue cannot be the closing issue itself");
+    }
+  }
 
-    if (disposition === "resolved") {
-      assertMultiPlanAcceptance(db, issueId, evidence);
-    }
+  if (disposition === "resolved") {
+    assertMultiPlanAcceptance(db, issueId, evidence);
+  }
 
-    const at = nowRfc3339();
-    const revision = issue.revision + 1;
-    const evidenceJson = JSON.stringify({
-      reason: evidence.reason,
-      scope: evidence.scope ?? null,
-      references: evidence.references,
-      canonicalIssueId: evidence.canonicalIssueId ?? null,
-      alignmentRef: evidence.alignmentRef ?? null,
-    });
-    db.prepare(
-      "update issues set disposition = ?, closed_at = ?, closure_note = ?, revision = ?, updated_at = ? where id = ?",
-    ).run(disposition, at, evidence.reason, revision, at, issueId);
-    db.prepare(
-      "insert into issue_transitions(issue_id, from_disposition, to_disposition, actor, occurred_at, recorded_at, reason, evidence_json, imported, issue_revision) values (?, 'open', ?, ?, ?, ?, ?, ?, 0, ?)",
-    ).run(issueId, disposition, mutation.actor, at, at, evidence.reason, evidenceJson, revision);
-    if (disposition === "duplicate") {
-      db.prepare("insert or ignore into relations(from_issue, relation, to_issue) values (?, 'duplicate-of', ?)").run(
-        issueId,
-        evidence.canonicalIssueId,
-      );
-    }
-    if (disposition === "superseded") {
-      db.prepare("insert or ignore into relations(from_issue, relation, to_issue) values (?, 'superseded-by', ?)").run(
-        issueId,
-        evidence.canonicalIssueId,
-      );
-    }
-    const storeRevision = bumpStoreRevision(db);
-    const receipt: IssueReceipt = { issueId, revision, storeRevision, created: false };
-    recordOperation(db, mutation.operationId, hash, receipt, at);
-    return receipt;
+  const at = nowRfc3339();
+  const revision = issue.revision + 1;
+  const evidenceJson = JSON.stringify({
+    reason: evidence.reason,
+    scope: evidence.scope ?? null,
+    references: evidence.references,
+    canonicalIssueId: evidence.canonicalIssueId ?? null,
+    alignmentRef: evidence.alignmentRef ?? null,
   });
+  db.prepare(
+    "update issues set disposition = ?, closed_at = ?, closure_note = ?, revision = ?, updated_at = ? where id = ?",
+  ).run(disposition, at, evidence.reason, revision, at, issueId);
+  db.prepare(
+    "insert into issue_transitions(issue_id, from_disposition, to_disposition, actor, occurred_at, recorded_at, reason, evidence_json, imported, issue_revision) values (?, 'open', ?, ?, ?, ?, ?, ?, 0, ?)",
+  ).run(issueId, disposition, mutation.actor, at, at, evidence.reason, evidenceJson, revision);
+  if (disposition === "duplicate") {
+    db.prepare("insert or ignore into relations(from_issue, relation, to_issue) values (?, 'duplicate-of', ?)").run(
+      issueId,
+      evidence.canonicalIssueId,
+    );
+  }
+  if (disposition === "superseded") {
+    db.prepare("insert or ignore into relations(from_issue, relation, to_issue) values (?, 'superseded-by', ?)").run(
+      issueId,
+      evidence.canonicalIssueId,
+    );
+  }
+  const storeRevision = bumpStoreRevision(db);
+  const receipt: IssueReceipt = { issueId, revision, storeRevision, created: false };
+  recordOperation(db, mutation.operationId, hash, receipt, at);
+  return receipt;
+}
+
+export async function closeIssue(
+  context: StoreContext,
+  issueId: string,
+  disposition: TerminalDisposition,
+  evidence: ClosureEvidence,
+  mutation: MutationContext,
+): Promise<IssueReceipt> {
+  assertTerminalDisposition(disposition);
+  authorizeMutation(context, mutation);
+  assertClosureAuthority(disposition, evidence);
+  return withWrite(context, (handle) => closeIssueOn(handle.db, issueId, disposition, evidence, mutation));
+}
+
+/**
+ * The link body on a handle the caller already owns and has already
+ * authorized: it appends one relation or one provenance row and is idempotent
+ * per `(issue, link)` as well as per operation id, so a retry converges instead
+ * of duplicating a link. It reads no session file, opens no store and begins no
+ * transaction — the link vocabulary and the plan/iteration identity of the
+ * target belong to the transport's pre-transaction half.
+ */
+export function linkIssueOn(
+  db: StoreDb,
+  issueId: string,
+  link: IssueLink,
+  mutation: AuthorizedIssueMutation,
+): IssueReceipt {
+  const hash = requestHash("linkIssue", {
+    issueId,
+    link,
+    mutation: { operationId: mutation.operationId, actor: mutation.actor, expectedRevision: mutation.expectedRevision },
+  });
+
+  const existingOp = lookupOperation(db, mutation.operationId);
+  if (existingOp) return replayOrConflict(existingOp, hash);
+
+  const issue = db.prepare("select id, revision from issues where id = ?").get(issueId) as
+    | { id: string; revision: number }
+    | undefined;
+  if (!issue) throw new IssueError("issue.not-found", `Issue ${issueId} does not exist`);
+  requireExpectedRevision(mutation, issue.revision);
+
+  const at = nowRfc3339();
+  if ("relation" in link) {
+    const other = requireNonblank("issueId", link.issueId);
+    if (other === issueId) {
+      throw new IssueError("issue.scope-refused", "Self-edges are not allowed");
+    }
+    const otherRow = db.prepare("select id from issues where id = ?").get(other) as { id: string } | undefined;
+    if (!otherRow) throw new IssueError("issue.not-found", `Related issue ${other} does not exist`);
+    let from = issueId;
+    let to = other;
+    if (link.relation === "related" && from > to) {
+      const swap = from;
+      from = to;
+      to = swap;
+    }
+    const already = db
+      .prepare("select 1 as ok from relations where from_issue = ? and relation = ? and to_issue = ?")
+      .get(from, link.relation, to) as { ok: number } | undefined;
+    if (already) {
+      const receipt: IssueReceipt = {
+        issueId,
+        revision: issue.revision,
+        storeRevision: readMeta(db).revision,
+        created: false,
+      };
+      recordOperation(db, mutation.operationId, hash, receipt, at);
+      return receipt;
+    }
+    db.prepare("insert into relations(from_issue, relation, to_issue) values (?, ?, ?)").run(from, link.relation, to);
+  } else {
+    const target = requireNonblank("target", link.target);
+    const sourceHash = sha256(lengthDelimited([link.kind, target]));
+    const already = db
+      .prepare("select 1 as ok from provenance where issue_id = ? and kind = ? and target = ?")
+      .get(issueId, link.kind, target) as { ok: number } | undefined;
+    if (already) {
+      const receipt: IssueReceipt = {
+        issueId,
+        revision: issue.revision,
+        storeRevision: readMeta(db).revision,
+        created: false,
+      };
+      recordOperation(db, mutation.operationId, hash, receipt, at);
+      return receipt;
+    }
+    db.prepare("insert into provenance(issue_id, kind, target, source_hash) values (?, ?, ?, ?)").run(
+      issueId,
+      link.kind,
+      target,
+      sourceHash,
+    );
+  }
+
+  const revision = issue.revision + 1;
+  db.prepare("update issues set revision = ?, updated_at = ? where id = ?").run(revision, at, issueId);
+  const storeRevision = bumpStoreRevision(db);
+  const receipt: IssueReceipt = { issueId, revision, storeRevision, created: false };
+  recordOperation(db, mutation.operationId, hash, receipt, at);
+  return receipt;
 }
 
 export async function linkIssue(
@@ -1448,81 +1648,5 @@ export async function linkIssue(
   if ("kind" in link && (link.kind === "plan" || link.kind === "iteration")) {
     assertPlanIterationIdentity(link.kind, requireNonblank("target", link.target), session);
   }
-  const hash = requestHash("linkIssue", {
-    issueId,
-    link,
-    mutation: { operationId: mutation.operationId, actor: mutation.actor, expectedRevision: mutation.expectedRevision },
-  });
-
-  return withWrite(context, (handle) => {
-    const db = handle.db;
-    const existingOp = lookupOperation(db, mutation.operationId);
-    if (existingOp) return replayOrConflict(existingOp, hash);
-
-    const issue = db.prepare("select id, revision from issues where id = ?").get(issueId) as
-      | { id: string; revision: number }
-      | undefined;
-    if (!issue) throw new IssueError("issue.not-found", `Issue ${issueId} does not exist`);
-    requireExpectedRevision(mutation, issue.revision);
-
-    const at = nowRfc3339();
-    if ("relation" in link) {
-      const other = requireNonblank("issueId", link.issueId);
-      if (other === issueId) {
-        throw new IssueError("issue.scope-refused", "Self-edges are not allowed");
-      }
-      const otherRow = db.prepare("select id from issues where id = ?").get(other) as { id: string } | undefined;
-      if (!otherRow) throw new IssueError("issue.not-found", `Related issue ${other} does not exist`);
-      let from = issueId;
-      let to = other;
-      if (link.relation === "related" && from > to) {
-        const swap = from;
-        from = to;
-        to = swap;
-      }
-      const already = db
-        .prepare("select 1 as ok from relations where from_issue = ? and relation = ? and to_issue = ?")
-        .get(from, link.relation, to) as { ok: number } | undefined;
-      if (already) {
-        const receipt: IssueReceipt = {
-          issueId,
-          revision: issue.revision,
-          storeRevision: readMeta(db).revision,
-          created: false,
-        };
-        recordOperation(db, mutation.operationId, hash, receipt, at);
-        return receipt;
-      }
-      db.prepare("insert into relations(from_issue, relation, to_issue) values (?, ?, ?)").run(from, link.relation, to);
-    } else {
-      const target = requireNonblank("target", link.target);
-      const sourceHash = sha256(lengthDelimited([link.kind, target]));
-      const already = db
-        .prepare("select 1 as ok from provenance where issue_id = ? and kind = ? and target = ?")
-        .get(issueId, link.kind, target) as { ok: number } | undefined;
-      if (already) {
-        const receipt: IssueReceipt = {
-          issueId,
-          revision: issue.revision,
-          storeRevision: readMeta(db).revision,
-          created: false,
-        };
-        recordOperation(db, mutation.operationId, hash, receipt, at);
-        return receipt;
-      }
-      db.prepare("insert into provenance(issue_id, kind, target, source_hash) values (?, ?, ?, ?)").run(
-        issueId,
-        link.kind,
-        target,
-        sourceHash,
-      );
-    }
-
-    const revision = issue.revision + 1;
-    db.prepare("update issues set revision = ?, updated_at = ? where id = ?").run(revision, at, issueId);
-    const storeRevision = bumpStoreRevision(db);
-    const receipt: IssueReceipt = { issueId, revision, storeRevision, created: false };
-    recordOperation(db, mutation.operationId, hash, receipt, at);
-    return receipt;
-  });
+  return withWrite(context, (handle) => linkIssueOn(handle.db, issueId, link, mutation));
 }

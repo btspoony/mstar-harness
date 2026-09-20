@@ -6,8 +6,10 @@
  * owns that transaction, the shared role/scope gates and the sealed witness
  * every DB plan verb starts from; W2 adds the first two operations on top of it
  * — `prepare` (which seals the reviewed Assignment and selects the frozen
- * catalog input) and `progress` (which moves a bound row's status/summary) —
- * and W3–W4 add the rest here.
+ * catalog input) and `progress` (which moves a bound row's status/summary) — and
+ * W3 adds the two residual operations, whose issue-authority work is composed
+ * into this same transaction through the handle-taking helpers of `issue.ts`.
+ * W4 adds the rest here.
  *
  * Nothing here is a public surface: the package index exports no coordination
  * mutator, and `mutateExecutionPlan` is published only once its whole closed
@@ -50,6 +52,7 @@ import {
   assertPlanAddress,
   assertPrepareAdmission,
   assertTrackBranches,
+  projectBucketOf,
   requireProgressStatus,
   type CoordinationSeat,
 } from "./coordination-transitions.js";
@@ -79,6 +82,18 @@ import {
   type ExecutionTransaction,
   type ResolvedPlanRead,
 } from "./execution-store.js";
+import {
+  assertCaptureRequest,
+  assertClosureAuthority,
+  assertIssueLinkedToPlanOn,
+  assertIssueStoreActive,
+  assertTerminalDisposition,
+  captureIssueOn,
+  closeIssueOn,
+  issueWriteSeat,
+  linkIssueOn,
+  type CaptureInput,
+} from "./issue.js";
 import { canonicalizeNearestExisting, resolvePlanDir, resolveSddDir } from "./path.js";
 import { storeDbPath } from "./store-db.js";
 import type { PlanCoordinationOperation } from "./coordination.js";
@@ -258,6 +273,47 @@ function assertRunningWorkflow(witness: ExecutionPlanWitness): void {
       { workflow_id: witness.workflowId, plan_id: witness.planId, status },
     );
   }
+}
+
+/**
+ * §D/§4.1 the row admission every plan-owned write shares, read from the
+ * store-held witness — the DB route's equivalent of the file route's
+ * `assertRowBinding` plus the freshness check its locked read performs:
+ *
+ * 1. the prepared Assignment is re-authenticated (an Assignment edited after
+ *    `prepare` invalidates the row until the coordinator re-prepares);
+ * 2. the addressed row's own lease must be HELD by this session — identity is
+ *    not ownership, and the store keeps released lease rows as tombstones
+ *    (§3.1), so the equivalent of the file route's lease object is a held one;
+ * 3. a handoff owns the plan's transition until the coordinator returns or
+ *    completes it.
+ */
+function assertPlanOwnedWrite(witness: ExecutionPlanWitness, what: string): void {
+  const planId = witness.planId;
+  const state = witness.view.plan as Record<string, unknown>;
+  const coordination = witness.view.coordination ?? undefined;
+  if (coordination?.prepared !== undefined) {
+    assertPreparedFresh(coordination.prepared.assignment_path, coordination.prepared);
+  }
+  const lease = witness.view.executionLease;
+  assertExecutionHolder(
+    { ...state, execution_lease: lease !== null && lease.status === "held" ? lease : undefined },
+    witness.session.sessionId,
+    planId,
+    what,
+  );
+  assertNoHandoffTransition(coordination, planId);
+}
+
+/**
+ * §2/§4 the issue-authority admission of the two residual verbs: the same row
+ * admission as every plan-owned write, then the issue/catalog store
+ * precondition the public issue verbs enforce through `withWrite`. Both are
+ * read on the transaction this call already owns.
+ */
+function assertResidualAdmission(witness: ExecutionPlanWitness, tx: ExecutionTransaction): void {
+  assertPlanOwnedWrite(witness, "a plan-owned write");
+  assertIssueStoreActive(tx.db);
 }
 
 /**
@@ -626,24 +682,7 @@ export async function progressExecutionPlan(
   return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, (witness, tx) => {
     const state = witness.view.plan as Record<string, unknown>;
     const plan = state as PlanRow;
-    const coordination = witness.view.coordination ?? undefined;
-    // §4.1 the prepared Assignment is re-authenticated first, exactly where the
-    // file route's locked read re-authenticates it: an Assignment edited after
-    // preparation invalidates the row until the coordinator re-prepares.
-    if (coordination?.prepared !== undefined) {
-      assertPreparedFresh(coordination.prepared.assignment_path, coordination.prepared);
-    }
-    // §D/§E a plan-owned write needs the row's execution lease, and identity is
-    // not ownership: the store keeps released lease rows as tombstones (§3.1),
-    // so the equivalent of the file route's lease object is a HELD one.
-    const lease = witness.view.executionLease;
-    assertExecutionHolder(
-      { ...state, execution_lease: lease !== null && lease.status === "held" ? lease : undefined },
-      witness.session.sessionId,
-      planId,
-      "a plan-owned write",
-    );
-    assertNoHandoffTransition(coordination, planId);
+    assertPlanOwnedWrite(witness, "a plan-owned write");
     requireProgressStatus(plan, progress.status, planId);
     if (progress.track_branches !== undefined) {
       assertTrackBranches(
@@ -681,6 +720,208 @@ export async function progressExecutionPlan(
       state: nextState,
       coordination: nextCoordination,
       revision: witness.revision + 1,
+    });
+    const committed = readExecutionPlanWitness(tx, resolved.read);
+    return { data: committed.view, token: committed.token, storeId: tx.storeId, epoch: tx.epoch };
+  });
+}
+
+/* ------------------------------------------------------------------------ *
+ * §3 `residual-add` / `residual-close` — the issue authority inside this
+ * transaction
+ * ------------------------------------------------------------------------ */
+
+/** §3 the `residual-add` member of the closed union, unchanged. */
+export type ResidualAddOperation = Extract<CoordinationOperation, { kind: "residual-add" }>;
+
+/** §3 the `residual-close` member of the closed union, unchanged. */
+export type ResidualCloseOperation = Extract<CoordinationOperation, { kind: "residual-close" }>;
+
+/** One residual entry: the issue contract's capture input minus the project. */
+type ResidualEntry = ResidualAddOperation["entries"][number];
+
+/**
+ * §3.1 the canonical payload half of a residual-add request hash: every field
+ * the capture below consumes, in the entry's own order. A payload that differs
+ * in any of them is a different request, so reusing the operation id refuses
+ * `execution.operation-conflict` rather than replaying a foreign receipt.
+ */
+function residualAddPayload(entries: readonly ResidualEntry[]): unknown[] {
+  return entries.map((entry) => ({
+    title: entry.title ?? null,
+    kind: entry.kind ?? null,
+    severity: entry.severity ?? null,
+    impact: entry.impact ?? null,
+    acceptance: entry.acceptance ?? null,
+    owner: entry.owner ?? null,
+    source_identity: entry.sourceIdentity ?? null,
+    root_cause_key: entry.rootCauseKey ?? null,
+    acceptance_key: entry.acceptanceKey ?? null,
+    occurrence_key: entry.occurrenceKey ?? null,
+    source_kind: entry.sourceKind ?? null,
+    location: entry.location ?? null,
+    observed_behavior: entry.observedBehavior ?? null,
+    evidence: Array.isArray(entry.evidence) ? [...entry.evidence] : null,
+    discovered_at: entry.discoveredAt ?? null,
+  }));
+}
+
+/** §3.1 the canonical payload half of a residual-close request hash. */
+function residualClosePayload(operation: ResidualCloseOperation): Record<string, unknown> {
+  const evidence: Record<string, unknown> = isPlainObject(operation.evidence) ? operation.evidence : {};
+  return {
+    issue_id: operation.issueId ?? null,
+    disposition: operation.disposition ?? null,
+    expected_issue_revision: operation.expectedIssueRevision ?? null,
+    evidence: {
+      reason: evidence.reason ?? null,
+      scope: evidence.scope ?? null,
+      references: Array.isArray(evidence.references) ? [...evidence.references] : null,
+      canonical_issue_id: evidence.canonicalIssueId ?? null,
+      alignment_ref: evidence.alignmentRef ?? null,
+    },
+  };
+}
+
+/**
+ * The deterministic issue operation ids of one residual mutation: one logical
+ * mutation per session / plan / key, so an explicit retry converges on the same
+ * issue rows instead of duplicating them. The shape is the file route's
+ * (`coordination.ts`), because both routes journal into the SAME
+ * `store_operations` ledger of the same store.
+ */
+function residualCaptureOperationId(sessionId: string, planId: string, occurrenceKey: string): string {
+  return `residual-add:${sessionId}:${planId}:${occurrenceKey}`;
+}
+
+function residualLinkOperationId(sessionId: string, planId: string, occurrenceKey: string): string {
+  return `residual-add-link:${sessionId}:${planId}:${occurrenceKey}`;
+}
+
+function residualCloseOperationId(sessionId: string, planId: string, issueId: string): string {
+  return `residual-close:${sessionId}:${planId}:${issueId}`;
+}
+
+/**
+ * §3 `residual-add` on the DB authority: the plan session that HOLDS the plan's
+ * execution lease captures each residual and links it to this plan, in the SAME
+ * transaction that commits the workflow/store revisions and the operation
+ * receipt.
+ *
+ * The issue work is composed, never re-entered: `captureIssueOn` / `linkIssueOn`
+ * take this transaction's own handle, so there is no nested `BEGIN`, no second
+ * connection and no session-file lookup on this route (§4.1 — the session and
+ * lease rows the witness proves ARE this route's authorization). Any refusal
+ * anywhere in the loop rolls back every entry, the receipt and the revision
+ * advance together: an accepted operation is all-or-nothing, which the file
+ * route's per-entry transactions cannot claim.
+ *
+ * A plan session captures into ITS plan: the link target is the addressed plan
+ * id, never a caller-supplied target, and the seat/address gates require this
+ * session to be the addressed plan's own plan-pm — the same condition the file
+ * route's `assertPlanIterationIdentity` enforces against its envelope. The plan
+ * row itself is untouched (a residual lives in the issue authority), so the
+ * plan token the receipt returns is the addressed plan's current CAS token.
+ */
+export async function residualAddExecutionPlan(
+  context: ExecutionContext,
+  request: ExecutionPlanRequest<ResidualAddOperation>,
+): Promise<ExecutionReceipt<ExecutionPlanView>> {
+  const resolved = resolvePlanOperationRequest(context.caller, request, "residual-add");
+  const operation = resolved.call.operation;
+  assertExactKeys(operation as unknown as Record<string, unknown>, ["kind", "entries"], "residual-add operation");
+  const entries = operation.entries;
+  if (!Array.isArray(entries) || entries.length === 0) {
+    throw invalidPlanInput("residual-add requires at least one entry");
+  }
+  // The request hash below reads every entry field, so a malformed entry is
+  // refused as this route's caller-input refusal rather than as a read of a
+  // non-object (`assertExactKeys` checks the operation's keys, not its items).
+  for (const entry of entries) {
+    if (!isPlainObject(entry)) {
+      throw invalidPlanInput("residual-add requires every entry to be an issue observation object");
+    }
+  }
+  const requestHash = planOperationRequestHash(context.caller, "residual-add", resolved.read, resolved.call.expected, {
+    entries: residualAddPayload(entries),
+  });
+  const actor = issueWriteSeat(context.caller.role);
+  return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, (witness, tx) => {
+    assertResidualAdmission(witness, tx);
+    // §D the project the finding belongs to is a fact of the addressed plan
+    // ROW, not of the caller's request — which is why each entry's own
+    // validation (the same `assertCaptureRequest` the public verb runs) happens
+    // here, where that row is known, and before that entry's first write.
+    const projectId = projectBucketOf(witness.view.plan as unknown as PlanRow);
+    const { planId } = witness;
+    const sessionId = witness.session.sessionId;
+    for (const entry of entries) {
+      const input: CaptureInput = { ...entry, projectId };
+      assertCaptureRequest(input);
+      const capture = captureIssueOn(tx.db, input, {
+        operationId: residualCaptureOperationId(sessionId, planId, entry.occurrenceKey),
+        actor,
+      });
+      // Always link, never only on `created`: the plan link is the gate a later
+      // residual-close is checked against, and both verbs are idempotent, so a
+      // retry converges instead of leaving an unlinked issue the plan can never
+      // close.
+      linkIssueOn(tx.db, capture.issueId, { kind: "plan", target: planId }, {
+        operationId: residualLinkOperationId(sessionId, planId, entry.occurrenceKey),
+        actor,
+        expectedRevision: capture.revision,
+      });
+    }
+    const committed = readExecutionPlanWitness(tx, resolved.read);
+    return { data: committed.view, token: committed.token, storeId: tx.storeId, epoch: tx.epoch };
+  });
+}
+
+/**
+ * §3 `residual-close` on the DB authority: the plan session that HOLDS the
+ * plan's execution lease closes ONE finding linked to this plan, under the
+ * issue revision the caller read, in the same transaction as the receipt and
+ * the revision advance.
+ *
+ * Two refusals protect the scope and the CAS: an issue that is not linked to
+ * THIS plan refuses `issue.scope-refused` (a plan closes only its own findings —
+ * the link is append-only, so the read cannot race an unlink), and an
+ * `expectedIssueRevision` that is not the issue's current revision refuses
+ * `issue.revision-conflict`. Both leave the issue, its history, the plan token
+ * and the operation ledger untouched.
+ */
+export async function residualCloseExecutionPlan(
+  context: ExecutionContext,
+  request: ExecutionPlanRequest<ResidualCloseOperation>,
+): Promise<ExecutionReceipt<ExecutionPlanView>> {
+  const resolved = resolvePlanOperationRequest(context.caller, request, "residual-close");
+  const operation = resolved.call.operation;
+  assertExactKeys(
+    operation as unknown as Record<string, unknown>,
+    ["kind", "issueId", "disposition", "evidence", "expectedIssueRevision"],
+    "residual-close operation",
+  );
+  if (!isNonEmptyString(operation.issueId)) {
+    throw invalidPlanInput("residual-close requires a non-empty issueId");
+  }
+  if (!Number.isInteger(operation.expectedIssueRevision) || operation.expectedIssueRevision < 0) {
+    throw invalidPlanInput(
+      `expectedIssueRevision must be a nonnegative integer \u2014 the issue revision guards the DB mutation; got ${JSON.stringify(operation.expectedIssueRevision)}`,
+    );
+  }
+  assertTerminalDisposition(operation.disposition);
+  assertClosureAuthority(operation.disposition, operation.evidence);
+  const requestHash = planOperationRequestHash(context.caller, "residual-close", resolved.read, resolved.call.expected, {
+    residual: residualClosePayload(operation),
+  });
+  const actor = issueWriteSeat(context.caller.role);
+  return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, (witness, tx) => {
+    assertResidualAdmission(witness, tx);
+    assertIssueLinkedToPlanOn(tx.db, operation.issueId, witness.planId);
+    closeIssueOn(tx.db, operation.issueId, operation.disposition, operation.evidence, {
+      operationId: residualCloseOperationId(witness.session.sessionId, witness.planId, operation.issueId),
+      actor,
+      expectedRevision: operation.expectedIssueRevision,
     });
     const committed = readExecutionPlanWitness(tx, resolved.read);
     return { data: committed.view, token: committed.token, storeId: tx.storeId, epoch: tx.epoch };

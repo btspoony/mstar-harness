@@ -3,13 +3,17 @@
  * (primary spec §2.3/§3/§4.1).
  *
  * Run with
- * `bun test packages/engine/test/execution-coordination.test.ts --test-name-pattern 'execution-authority-boundary'`.
+ * `bun test packages/engine/test/execution-coordination.test.ts --test-name-pattern 'execution-authority-boundary'`,
+ * `… --test-name-pattern 'execution-prepare-progress'` or
+ * `… --test-name-pattern 'execution-residual'`.
  *
  * Every fixture lives in its own temporary control root created by
  * `mkdtempSync`; no test reads or writes this checkout's `store.db`. The planted
  * legacy session envelope is there to prove the DB authorization context is
  * identities and revisions only: a session file is neither an authority nor an
- * output of a DB plan operation.
+ * output of a DB plan operation. The residual group additionally asserts the
+ * ISSUE authority: an operation that captures, links or closes a finding is
+ * accepted only if the issue rows and the plan side commit together.
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
@@ -21,9 +25,12 @@ import { registerCatalogEntity, updateCatalogEntity } from "../src/catalog.js";
 import {
   prepareExecutionPlan,
   progressExecutionPlan,
+  residualAddExecutionPlan,
+  residualCloseExecutionPlan,
   withExecutionPlanAuthority,
   type ExecutionPlanCall,
 } from "../src/execution-coordination.js";
+import { captureIssue, getIssue, listIssues, type CaptureInput } from "../src/issue.js";
 import {
   bindExecutionSession,
   createExecutionWorkflow,
@@ -1240,5 +1247,331 @@ describe("execution-prepare-progress: §3/§4.1 DB prepare and progress", () => 
     expect(planFootprint(context, SPARE_PLAN)).toEqual(conflicting);
     expect(conflicting.input_json).toBe(spare.input_json);
     expect(parsedJson(conflicting.plan_coordination)).toEqual({});
+  });
+});
+
+/* ------------------------------------------------------------------------ *
+ * §3 `residual-add` / `residual-close` — the issue authority in this commit
+ * ------------------------------------------------------------------------ */
+
+/** One trusted identity holds at most one plan-pm session per workflow, so the
+ * peer plan's seat is a second identity. */
+const PEER_PM_ID = "host-pm-peer";
+
+/** One residual entry: the observation half of a capture, without the project
+ * (the addressed plan row supplies it, exactly as the file route does). */
+function residualEntry(overrides: Partial<Omit<CaptureInput, "projectId">> = {}): Omit<CaptureInput, "projectId"> {
+  return {
+    title: "residual finding",
+    kind: "bug",
+    severity: "high",
+    impact: "the residual is unfixed",
+    acceptance: "the residual is fixed",
+    sourceIdentity: "qc/review.md",
+    rootCauseKey: "missing-guard",
+    acceptanceKey: "guard-present",
+    occurrenceKey: "residual-1",
+    sourceKind: "qc",
+    location: "packages/engine/src/execution-coordination.ts:1",
+    observedBehavior: "the finding is visible",
+    evidence: ["stack: TypeError"],
+    discoveredAt: TS,
+    ...overrides,
+  };
+}
+
+/**
+ * Every row the issue authority holds, as one comparable value: a residual
+ * operation and the plan rows it must move commit in ONE transaction, so a
+ * refusal has to leave this whole footprint — not only the plan half — where it
+ * was.
+ */
+function issueFootprint(context: StoreContext): Record<string, unknown> {
+  const [row] = rows(
+    context,
+    "select (select revision from store_meta where id = 1) as store_revision, " +
+      "(select count(*) as n from issues) as issues, " +
+      "(select count(*) as n from occurrences) as occurrences, " +
+      "(select count(*) as n from provenance) as provenance, " +
+      "(select count(*) as n from issue_transitions) as transitions, " +
+      "(select count(*) as n from store_operations) as operations",
+  );
+  return row!;
+}
+
+/** Bind one plan's plan-pm session — which claims the plan's execution lease. */
+async function planSeat(
+  fixture: LiveFixture,
+  planId: string,
+  sessionId: string,
+  label: string,
+): Promise<{ caller: ExecutionCaller; session: ExecutionSessionRef }> {
+  const caller = trustedCaller(sessionId, "plan-pm", planId);
+  const bound = await bindExecutionSession(domainContext(fixture.context, caller), {
+    workflowId: WORKFLOW_ID,
+    planId,
+    role: "plan-pm",
+    expected: await planTokenOf(fixture, planId),
+    operationId: `bind-seat-${label}`,
+  });
+  return { caller, session: bound.data };
+}
+
+/** One residual-add against the addressed plan's token, read right now. */
+function residualAddCall(
+  fixture: LiveFixture,
+  seat: { caller: ExecutionCaller; session: ExecutionSessionRef },
+  operationId: string,
+  entries: Array<Omit<CaptureInput, "projectId">>,
+  expected: ExecutionToken,
+) {
+  return residualAddExecutionPlan(domainContext(fixture.context, seat.caller), {
+    operationId,
+    session: seat.session,
+    expected,
+    planId: OWN_PLAN,
+    operation: { kind: "residual-add", entries },
+  });
+}
+
+describe("execution-residual: §3/§4.1 DB residual-add and residual-close", () => {
+  test("residual-add captures and links every entry on the addressed plan, and residual-close disposes one", async () => {
+    const fixture = await liveWorkflow("residual-accepted");
+    const { context, planTokens } = fixture;
+    await prepareCall(fixture, OWN_PLAN, "prepare-1", planTokens[OWN_PLAN]!);
+    const seat = await planSeat(fixture, OWN_PLAN, PLAN_PM_ID, "accepted");
+
+    const added = await residualAddCall(
+      fixture,
+      seat,
+      "residual-add-accepted",
+      [
+        residualEntry({ occurrenceKey: "r-1" }),
+        residualEntry({
+          occurrenceKey: "r-2",
+          title: "second residual",
+          rootCauseKey: "second-cause",
+          acceptanceKey: "second-acceptance",
+        }),
+      ],
+      await planTokenOf(fixture, OWN_PLAN),
+    );
+    expect(added.replayed).toBe(false);
+    expect(added.data.plan.id).toBe(OWN_PLAN);
+    // The receipt's token is the addressed plan's CAS token, read back through
+    // the session-authorized read: a residual lives in the issue authority, so
+    // the plan row keeps the token the caller held.
+    expect(added.token).toBe(await planTokenOf(fixture, OWN_PLAN));
+
+    // Consumer-visible: both findings exist in the plan row's project bucket and
+    // are linked to THIS plan by append-only provenance.
+    const page = await listIssues(context, { projectId: "_default" });
+    expect(page.items.map((item) => item.title).sort()).toEqual(["residual finding", "second residual"]);
+    expect(page.items.every((item) => item.disposition === "open")).toBe(true);
+    const [first] = page.items;
+    const detail = await getIssue(context, first!.id);
+    expect(detail.projectId).toBe("_default");
+    expect(detail.occurrences).toHaveLength(1);
+    expect(detail.provenance.filter((row) => row.kind === "plan").map((row) => row.target)).toEqual([OWN_PLAN]);
+
+    const closed = await residualCloseExecutionPlan(domainContext(context, seat.caller), {
+      operationId: "residual-close-accepted",
+      session: seat.session,
+      expected: await planTokenOf(fixture, OWN_PLAN),
+      planId: OWN_PLAN,
+      operation: {
+        kind: "residual-close",
+        issueId: detail.id,
+        disposition: "resolved",
+        evidence: { reason: "the finding is fixed", references: [OWN_PLAN], alignmentRef: "qa-gate:accepted" },
+        expectedIssueRevision: detail.revision,
+      },
+    });
+    expect(closed.replayed).toBe(false);
+    const disposed = await getIssue(context, detail.id);
+    expect(disposed.disposition).toBe("resolved");
+    expect(disposed.transitions).toHaveLength(1);
+    expect(disposed.transitions[0]).toMatchObject({
+      fromDisposition: "open",
+      toDisposition: "resolved",
+      actor: "project-manager",
+    });
+  });
+
+  test("a residual-add replays exactly, and an operation id reused with another payload refuses", async () => {
+    const fixture = await liveWorkflow("residual-replay");
+    const { context, planTokens } = fixture;
+    await prepareCall(fixture, OWN_PLAN, "prepare-1", planTokens[OWN_PLAN]!);
+    const seat = await planSeat(fixture, OWN_PLAN, PLAN_PM_ID, "replay");
+    const entries = [residualEntry({ occurrenceKey: "r-1" })];
+    const token = await planTokenOf(fixture, OWN_PLAN);
+
+    const first = await residualAddCall(fixture, seat, "residual-add-replay", entries, token);
+    expect(first.replayed).toBe(false);
+    const settled = { plan: planFootprint(context, OWN_PLAN), issues: issueFootprint(context) };
+
+    const again = await residualAddCall(fixture, seat, "residual-add-replay", entries, token);
+    expect(again.replayed).toBe(true);
+    expect(again.data).toEqual(first.data);
+    expect(again.token).toBe(first.token);
+    expect(planFootprint(context, OWN_PLAN)).toEqual(settled.plan);
+    expect(issueFootprint(context)).toEqual(settled.issues);
+
+    const conflict = await refusalOf(() =>
+      residualAddCall(fixture, seat, "residual-add-replay", [residualEntry({ occurrenceKey: "r-other" })], token),
+    );
+    expect(conflict.code).toBe("execution.operation-conflict");
+    expect(planFootprint(context, OWN_PLAN)).toEqual(settled.plan);
+    expect(issueFootprint(context)).toEqual(settled.issues);
+  });
+
+  test("a stale issue revision refuses and leaves the finding, its history and the plan token untouched", async () => {
+    const fixture = await liveWorkflow("residual-stale-revision");
+    const { context, planTokens } = fixture;
+    await prepareCall(fixture, OWN_PLAN, "prepare-1", planTokens[OWN_PLAN]!);
+    const seat = await planSeat(fixture, OWN_PLAN, PLAN_PM_ID, "stale");
+    await residualAddCall(fixture, seat, "residual-add-stale", [residualEntry({ occurrenceKey: "r-1" })], await planTokenOf(fixture, OWN_PLAN));
+    const [item] = (await listIssues(context, {})).items;
+    const detail = await getIssue(context, item!.id);
+    // The revision a caller would hold from before the plan link advanced it.
+    const stale = detail.revision - 1;
+    const before = { plan: planFootprint(context, OWN_PLAN), issues: issueFootprint(context) };
+    const token = await planTokenOf(fixture, OWN_PLAN);
+
+    const refused = await refusalOf(() =>
+      residualCloseExecutionPlan(domainContext(context, seat.caller), {
+        operationId: "residual-close-stale",
+        session: seat.session,
+        expected: token,
+        planId: OWN_PLAN,
+        operation: {
+          kind: "residual-close",
+          issueId: detail.id,
+          disposition: "resolved",
+          evidence: { reason: "the finding is fixed", references: [OWN_PLAN], alignmentRef: "qa-gate:accepted" },
+          expectedIssueRevision: stale,
+        },
+      }),
+    );
+    expect(refused.code).toBe("issue.revision-conflict");
+    expect(planFootprint(context, OWN_PLAN)).toEqual(before.plan);
+    expect(issueFootprint(context)).toEqual(before.issues);
+    const kept = await getIssue(context, detail.id);
+    expect(kept.disposition).toBe("open");
+    expect(kept.revision).toBe(detail.revision);
+    expect(kept.transitions).toEqual([]);
+  });
+
+  test("a plan session closes only its own findings, so a foreign plan refuses", async () => {
+    const fixture = await liveWorkflow("residual-foreign");
+    const { context, planTokens } = fixture;
+    await prepareCall(fixture, OWN_PLAN, "prepare-1", planTokens[OWN_PLAN]!);
+    await prepareCall(fixture, PEER_PLAN, "prepare-peer", planTokens[PEER_PLAN]!);
+    const own = await planSeat(fixture, OWN_PLAN, PLAN_PM_ID, "foreign-own");
+    await residualAddCall(fixture, own, "residual-add-foreign", [residualEntry({ occurrenceKey: "r-1" })], await planTokenOf(fixture, OWN_PLAN));
+    const [item] = (await listIssues(context, {})).items;
+    const detail = await getIssue(context, item!.id);
+    const peer = await planSeat(fixture, PEER_PLAN, PEER_PM_ID, "foreign-peer");
+    const before = { plan: planFootprint(context, PEER_PLAN), issues: issueFootprint(context) };
+    const peerToken = await planTokenOf(fixture, PEER_PLAN);
+
+    const refused = await refusalOf(() =>
+      residualCloseExecutionPlan(domainContext(context, peer.caller), {
+        operationId: "residual-close-foreign",
+        session: peer.session,
+        expected: peerToken,
+        planId: PEER_PLAN,
+        operation: {
+          kind: "residual-close",
+          issueId: detail.id,
+          disposition: "resolved",
+          evidence: { reason: "not this plan's finding", references: [PEER_PLAN], alignmentRef: "qa-gate:accepted" },
+          expectedIssueRevision: detail.revision,
+        },
+      }),
+    );
+    expect(refused.code).toBe("issue.scope-refused");
+    expect(planFootprint(context, PEER_PLAN)).toEqual(before.plan);
+    expect(issueFootprint(context)).toEqual(before.issues);
+    const kept = await getIssue(context, detail.id);
+    expect(kept.disposition).toBe("open");
+    expect(kept.provenance.filter((row) => row.kind === "plan").map((row) => row.target)).toEqual([OWN_PLAN]);
+  });
+
+  test("a refusal on a later entry rolls back every earlier entry, its link and its allocation", async () => {
+    const fixture = await liveWorkflow("residual-rollback");
+    const { context, planTokens } = fixture;
+    await prepareCall(fixture, OWN_PLAN, "prepare-1", planTokens[OWN_PLAN]!);
+    const seat = await planSeat(fixture, OWN_PLAN, PLAN_PM_ID, "rollback");
+    // A finding that already owns the occurrence key the SECOND entry presents
+    // under another identity: the collision is only discoverable once the first
+    // entry has been captured and linked inside the transaction.
+    const seeded = await captureIssue(
+      context,
+      {
+        projectId: "_default",
+        ...residualEntry({ occurrenceKey: "taken", rootCauseKey: "seeded-cause", acceptanceKey: "seeded-acceptance" }),
+      },
+      { operationId: "seed-collision", actor: "project-manager" },
+    );
+    expect(seeded.issueId).toBe("I-000001");
+    const before = { plan: planFootprint(context, OWN_PLAN), issues: issueFootprint(context) };
+    const token = await planTokenOf(fixture, OWN_PLAN);
+
+    const refused = await refusalOf(() =>
+      residualAddCall(
+        fixture,
+        seat,
+        "residual-add-partial",
+        [
+          residualEntry({ occurrenceKey: "fresh", rootCauseKey: "fresh-cause", acceptanceKey: "fresh-acceptance" }),
+          residualEntry({ occurrenceKey: "taken", rootCauseKey: "other-cause", acceptanceKey: "other-acceptance" }),
+        ],
+        token,
+      ),
+    );
+    expect(refused.code).toBe("issue.ambiguous-identity");
+    // The first entry was captured AND linked before the second refused: none of
+    // it survives, and the plan side moved not at all.
+    expect(planFootprint(context, OWN_PLAN)).toEqual(before.plan);
+    expect(issueFootprint(context)).toEqual(before.issues);
+
+    // The rolled-back entry allocated an identifier that the next accepted
+    // capture takes: the issue row, its occurrence, its link, the counter and
+    // the store revision all went back with the refusal.
+    const after = await captureIssue(
+      context,
+      {
+        projectId: "_default",
+        ...residualEntry({ occurrenceKey: "after-rollback", rootCauseKey: "after-cause", acceptanceKey: "after-acceptance" }),
+      },
+      { operationId: "after-rollback", actor: "project-manager" },
+    );
+    expect(after.issueId).toBe("I-000002");
+    expect(after.created).toBe(true);
+  });
+
+  test("a staged issue store refuses a residual operation before it writes", async () => {
+    const fixture = await liveWorkflow("residual-staged-store");
+    const { context, planTokens } = fixture;
+    await prepareCall(fixture, OWN_PLAN, "prepare-1", planTokens[OWN_PLAN]!);
+    const seat = await planSeat(fixture, OWN_PLAN, PLAN_PM_ID, "staged");
+    withRaw(context, (db) => {
+      db.prepare("update store_meta set authority_state = 'staged' where id = 1").run();
+    });
+    const before = planFootprint(context, OWN_PLAN);
+    const token = await planTokenOf(fixture, OWN_PLAN);
+
+    const refused = await refusalOf(() =>
+      residualAddCall(
+        fixture,
+        seat,
+        "residual-add-staged",
+        [residualEntry({ occurrenceKey: "s-1", rootCauseKey: "staged-cause", acceptanceKey: "staged-acceptance" })],
+        token,
+      ),
+    );
+    expect(refused.code).toBe("store.not-active");
+    expect(planFootprint(context, OWN_PLAN)).toEqual(before);
   });
 });
