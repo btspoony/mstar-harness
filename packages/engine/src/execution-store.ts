@@ -585,11 +585,12 @@ function readIntegrationLease(json: unknown, what: string): IntegrationMergeLeas
  * session identity and role it owns the plan through, and the DB-named scope
  * fields (`plan_worktree_path` / `plan_branch`) must agree with the
  * `ExecutionLease` identity fields they mirror. A lease that claims the CURRENT
- * epoch must name that epoch's ACTIVE plan-pm session — `bindExecutionSession`
- * writes exactly this pair. A lease whose `owner_epoch` is behind the store (a
- * suspended or migration-recovered one) is REPRESENTED rather than repaired:
- * it agrees with no current session and authorizes nothing, because every
- * mutation revalidates the epoch.
+ * epoch must name that epoch's ACTIVE plan-pm session — the session row's own
+ * `epoch` included, because a row superseded by a later epoch is not that
+ * session; `bindExecutionSession` writes exactly this pair. A lease whose
+ * `owner_epoch` is behind the store (a suspended or migration-recovered one) is
+ * REPRESENTED rather than repaired: it agrees with no current session and
+ * authorizes nothing, because every mutation revalidates the epoch.
  */
 function assertLeaseOwnership(
   lease: ExecutionLease,
@@ -610,6 +611,13 @@ function assertLeaseOwnership(
   if (ownerEpoch !== store.epoch) return;
   if (sessionRow === undefined) {
     throw corrupt(`${what} is held in epoch ${ownerEpoch} by session ${String(lease.holder_session_id)} while ${planId} has no active plan session`);
+  }
+  if (sessionRow.epoch !== ownerEpoch) {
+    throw corrupt(
+      `${what} is held in epoch ${ownerEpoch} by ${String(lease.holder_role)} session ${String(lease.holder_session_id)}, but the ` +
+        `active ${String(sessionRow.role)} session of ${planId} is ${String(sessionRow.session_id)} in epoch ${String(sessionRow.epoch)}; ` +
+        `a lease and the session row it names as its owner are ONE ownership fact of one epoch`,
+    );
   }
   if (sessionRow.session_id !== lease.holder_session_id || sessionRow.role !== lease.holder_role) {
     throw corrupt(

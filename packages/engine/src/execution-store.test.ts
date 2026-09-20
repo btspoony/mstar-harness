@@ -2399,6 +2399,67 @@ describe("execution-session: §2.3 binding, role-scoped identity and the plan re
     });
   });
 
+  test("refuses a current-epoch lease whose plan session row belongs to a superseded epoch", async () => {
+    const shared = "host-shared";
+    const fixture = await createdWorkflow("session-lease-epoch", shared);
+    const { context, epoch, workflowToken, planTokens } = fixture;
+    const coordinator = sessionCaller("wf-1", shared);
+    const coordinatorRef = await bindExecutionSession(
+      domainContext(context, coordinator),
+      sessionBind("wf-1", null, workflowToken, "bind-epoch-coordinator"),
+    );
+    preparePlanRow(context, "p-1", { worktreePath: join(context.harnessDir, "worktrees", "p-1"), workingBranch: "feature/epoch-p-1" });
+    const planPm = planPmCaller("wf-1", shared, "p-1");
+    const bound = await bindExecutionSession(
+      domainContext(context, planPm),
+      sessionBind("wf-1", "p-1", planTokens["p-1"], "bind-epoch-plan"),
+    );
+
+    // The accepted state: the plan's ACTIVE session row and its held lease are
+    // one ownership fact, both at the store's current epoch.
+    expect(bound.data).toMatchObject({ epoch, role: "plan-pm", sessionId: shared });
+    const [acceptedPlan] = (await readExecutionState(context)).data.workflows[0].plans;
+    expect(acceptedPlan.session).toMatchObject({ epoch, sessionId: shared, role: "plan-pm", planId: "p-1" });
+    expect(acceptedPlan.executionLease).toMatchObject({ status: "held", holder_session_id: shared, holder_role: "plan-pm" });
+
+    // An ACTIVE row left behind by a superseded epoch: identity and role still
+    // agree with the lease, and the lease still claims the CURRENT epoch. A
+    // reader that reads the row's identity without its epoch would serve this
+    // pair as one ownership fact.
+    const db = rawDb(storePath(context));
+    try {
+      db.prepare("update execution_sessions set epoch = ? where workflow_id = 'wf-1' and role = 'plan-pm'").run(epoch - 1);
+    } finally {
+      db.close();
+    }
+    await expect(readExecutionState(context)).rejects.toMatchObject({ code: "store.corrupt" });
+    // The same contradiction surfaces on the session-authorized read: the
+    // coordinator's own row is live, the plan's lease is not.
+    await expect(readExecutionPlan(domainContext(context, coordinator), coordinatorRef.data, "p-1")).rejects.toMatchObject({
+      code: "store.corrupt",
+    });
+
+    // A lease whose `owner_epoch` is BEHIND the store (migration-recovered or
+    // suspended) is REPRESENTED rather than repaired: it is served as recorded
+    // and neither row is rewritten to the current epoch.
+    const behindDb = rawDb(storePath(context));
+    try {
+      behindDb.prepare("update execution_leases set owner_epoch = ? where workflow_id = 'wf-1' and plan_id = 'p-1'").run(epoch - 1);
+    } finally {
+      behindDb.close();
+    }
+    const [representedPlan] = (await readExecutionState(context)).data.workflows[0].plans;
+    expect(representedPlan.session).toMatchObject({ epoch: epoch - 1, sessionId: shared });
+    expect(representedPlan.executionLease).toMatchObject({ status: "held", holder_session_id: shared });
+    const rows = rawDb(storePath(context));
+    try {
+      expect(one(rows, "select epoch from execution_sessions where role = 'plan-pm'").epoch).toBe(epoch - 1);
+      expect(one(rows, "select owner_epoch from execution_leases where plan_id = 'p-1'").owner_epoch).toBe(epoch - 1);
+    } finally {
+      rows.close();
+    }
+  });
+
   test("exports bindExecutionSession and readExecutionPlan verbatim and no later-plan surface", () => {
     // Compile-time pins of the verbatim §3 signatures: these bindings fail to
     // typecheck if either declaration drifts.
