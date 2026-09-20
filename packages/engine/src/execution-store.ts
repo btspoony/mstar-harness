@@ -1791,13 +1791,13 @@ function readOwnership(
 }
 
 /**
- * §2.3/§2.2 the reference must be the binding this store ACTUALLY holds for
- * the addressed scope at the CURRENT epoch. A reference is a typed lookup
- * identity, not a bearer credential: an unknown, suspended, revoked, foreign
- * or epoch-invalidated session authorizes nothing, and no session file is ever
+ * §2.3/§2.2 the binding this store ACTUALLY holds for the addressed scope at
+ * the CURRENT epoch, or the refusal. A reference is a typed lookup identity,
+ * not a bearer credential: an unknown, suspended, revoked, foreign or
+ * epoch-invalidated session authorizes nothing, and no session file is ever
  * consulted as a substitute.
  */
-function assertLiveSession(tx: ExecutionTransaction, address: SessionAddress): void {
+function liveSession(tx: ExecutionTransaction, address: SessionAddress): SessionRow {
   const store: StoreIdentity = { storeId: tx.storeId, epoch: tx.epoch };
   const rows = readSessionRows(tx.db, store, address.workflowId, address.role);
   const mine = rows.find((row) => row.ref.sessionId === address.sessionId);
@@ -1818,6 +1818,7 @@ function assertLiveSession(tx: ExecutionTransaction, address: SessionAddress): v
       { session_id: address.sessionId, bound_plan: mine.ref.planId, addressed_plan: address.planId },
     );
   }
+  return mine;
 }
 
 /** §2.1: a reference from another store or another epoch fences before anything is read. */
@@ -2049,7 +2050,7 @@ export async function bindExecutionSession(
       // receipt's own CAS, so a revoked or epoch-invalidated binding never
       // hands back a success it no longer owns.
       assertReferenceAuthority(tx, receipt.data.storeId, receipt.data.epoch);
-      assertLiveSession(tx, receipt.data);
+      liveSession(tx, receipt.data);
       return { ...receipt, operationId: bind.operationId, replayed: true };
     }
     const header = readWorkflowHeaderRow(tx.db, bind.workflowId);
@@ -2210,6 +2211,75 @@ export async function bindExecutionSession(
 }
 
 /**
+ * §2.3/§3 the sealed authorization context of one accepted plan operation: the
+ * addressed plan's authoritative view, the tokens a mutation presents back as
+ * CAS, and the session the store holds for the call's seat.
+ *
+ * Every field is read inside the caller's transaction from the binding the store
+ * ACTUALLY holds at the current epoch, so no part of a witness can be a stale
+ * snapshot. It carries no file path and no bearer value: a session envelope is
+ * not part of DB authority, and this is the whole context a DB operation is
+ * authorized by (§2.3).
+ */
+export type ExecutionPlanWitness = {
+  workflowId: string;
+  planId: string;
+  /** The addressed plan's §3 view. */
+  view: ExecutionPlanView;
+  /** The plan's CAS token; a mutation's `expected` must be exactly this. */
+  token: ExecutionToken;
+  /** The plan row's revision — the value `token` carries (§3.1). */
+  revision: number;
+  /** The workflow's CAS token, advanced when its header or a child changes. */
+  workflowToken: ExecutionToken;
+  /** The session row the store holds for this call's addressed scope. */
+  session: ExecutionSessionRef;
+};
+
+/**
+ * §2.3 the sealed witness of one plan operation, read inside the caller's
+ * transaction: the trusted caller and the reference it claims are revalidated
+ * against the session rows of the current epoch, and the addressed plan is
+ * selected under that authority. A reference that is not the caller's own, that
+ * belongs to another store or epoch, or that names another plan authorizes
+ * nothing here — and it is never resolved from a session file.
+ */
+export function readExecutionPlanWitness(
+  tx: ExecutionTransaction,
+  caller: ExecutionCaller,
+  session: ExecutionSessionRef,
+  planId: string,
+): ExecutionPlanWitness {
+  const read = resolvePlanRead(caller, session, planId);
+  assertReferenceAuthority(tx, read.referenceStoreId, read.referenceEpoch);
+  const live = liveSession(tx, {
+    workflowId: read.workflowId,
+    role: read.role,
+    sessionId: read.sessionId,
+    planId: read.boundPlanId,
+  });
+  const workflow = readWorkflowView(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, read.workflowId);
+  const view = workflow.plans.find((candidate) => candidate.plan.id === read.planId);
+  const token = workflow.planTokens[read.planId];
+  if (view === undefined || token === undefined) {
+    throw new CoordinationError(
+      "coordination.plan-not-found",
+      `workflow ${read.workflowId} holds no plan ${read.planId}`,
+      { workflow_id: read.workflowId, plan_id: read.planId },
+    );
+  }
+  return {
+    workflowId: read.workflowId,
+    planId: read.planId,
+    view,
+    token,
+    revision: parseExecutionToken(token).revision,
+    workflowToken: workflow.workflowToken,
+    session: live.ref,
+  };
+}
+
+/**
  * §3 the session-authorized plan read: one consistent read of the plan's
  * authoritative view, served only when the supplied reference is the binding
  * the trusted caller actually holds at the current epoch (a coordinator reads
@@ -2221,26 +2291,8 @@ export async function readExecutionPlan(
   session: ExecutionSessionRef,
   planId: string,
 ): Promise<ExecutionRead<ExecutionPlanView>> {
-  const read = resolvePlanRead(context.caller, session, planId);
   return withExecutionReadTransaction(context, (tx) => {
-    assertReferenceAuthority(tx, read.referenceStoreId, read.referenceEpoch);
-    assertLiveSession(tx, {
-      workflowId: read.workflowId,
-      role: read.role,
-      sessionId: read.sessionId,
-      planId: read.boundPlanId,
-    });
-    const store: StoreIdentity = { storeId: tx.storeId, epoch: tx.epoch };
-    const view = readWorkflowView(tx.db, store, read.workflowId);
-    const plan = view.plans.find((candidate) => candidate.plan.id === read.planId);
-    const token = view.planTokens[read.planId];
-    if (plan === undefined || token === undefined) {
-      throw new CoordinationError(
-        "coordination.plan-not-found",
-        `workflow ${read.workflowId} holds no plan ${read.planId}`,
-        { workflow_id: read.workflowId, plan_id: read.planId },
-      );
-    }
-    return { data: plan, token, storeId: tx.storeId, epoch: tx.epoch };
+    const witness = readExecutionPlanWitness(tx, context.caller, session, planId);
+    return { data: witness.view, token: witness.token, storeId: tx.storeId, epoch: tx.epoch };
   });
 }
