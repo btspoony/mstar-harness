@@ -844,26 +844,37 @@ export {
   StoreActivationError,
   validateActivationAttestation,
 } from "./store-activation.js";
-// Execution migration: the §6 preview and staged apply (plan
-// `20260920-activation-migration-recovery`, R1). `previewExecutionMigration`
-// reads the legacy workspace as evidence and returns the canonical,
-// content-addressed manifest; `applyExecutionMigration` stages every core row
-// plus the manifest record in one transaction against a verified recovery
-// point. `apply` never activates: staged reads refuse and the JSON route stays
-// the sole live execution authority. `executionManifestHash` is exported so a
-// caller can hand the reviewed hash back verbatim. ADDITIVE export — the
-// engine package's exports map is the only reachable surface for consumers.
+// Execution migration: the executable §6 protocol (plan
+// `20260920-activation-migration-recovery`). R1 landed the read-only preview
+// and the staged apply: `previewExecutionMigration` reads the legacy workspace
+// as evidence and returns the canonical, content-addressed manifest;
+// `applyExecutionMigration` stages every core row plus the manifest record in
+// one transaction against a verified recovery point, and never activates.
+// R2 adds the three separate crash-safe steps: `activateExecutionMigration`
+// performs the single all-or-nothing cutover behind the deferred-surface
+// barrier, `retireExecutionSources` moves the exact core sources into
+// manifest-addressed history under a resumable per-item ledger, and
+// `abortExecutionMigration` returns a STAGED manifest to legacy without
+// touching active data. `executionManifestHash` is exported so a caller can
+// hand the reviewed hash back verbatim. ADDITIVE export — the engine package's
+// exports map is the only reachable surface for consumers.
 export type {
   ExecutionDeferredSurface,
   ExecutionManifest,
+  ExecutionMigrationAbortInput,
+  ExecutionMigrationActivationInput,
   ExecutionMigrationApplyInput,
   ExecutionMigrationInput,
   ExecutionMigrationReceipt,
+  ExecutionMigrationRetireInput,
   ExecutionSourceWitness,
 } from "./execution-migrate.js";
 export {
+  abortExecutionMigration,
+  activateExecutionMigration,
   applyExecutionMigration,
   EXECUTION_MIGRATION_MANIFEST_VERSION,
   executionManifestHash,
   previewExecutionMigration,
+  retireExecutionSources,
 } from "./execution-migrate.js";

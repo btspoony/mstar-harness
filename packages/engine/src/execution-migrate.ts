@@ -1,16 +1,18 @@
 /**
- * execution-migrate.ts — the read-only execution migration preview and the
- * staged import (primary spec §6 items 1–2, on §2.2's owned fields, §2.3's
- * session semantics and §7's catalog coexistence).
+ * execution-migrate.ts — the executable §6 migration protocol: the read-only
+ * preview and staged import (items 1–2, R1) followed by activation,
+ * filesystem retirement and staged abort (items 3–5, R2), on §2.2's owned
+ * fields, §2.3's session semantics and §7's catalog coexistence.
  *
- * Task ownership (plan `20260920-activation-migration-recovery`, R1): this
- * module implements EXACTLY two verbs — `previewExecutionMigration` and
- * `applyExecutionMigration`. Activation, retirement and abort are R2; backup,
- * restore and diagnostic export are R3. Nothing here activates: `apply`
- * writes staged rows and leaves execution authority `staged`, where `legacy`
- * and `staged` both keep the unchanged JSON execution route (§2.1) — so JSON
- * remains the sole live execution authority after `apply` returns, and an
- * ordinary execution read refuses `execution.not-active`.
+ * Task ownership (plan `20260920-activation-migration-recovery`): R1 landed
+ * `previewExecutionMigration` and `applyExecutionMigration`; R2 adds
+ * `activateExecutionMigration`, `retireExecutionSources` and
+ * `abortExecutionMigration`; backup, restore and diagnostic export are R3.
+ * `apply` never activates: it writes staged rows and leaves execution
+ * authority `staged`, where `legacy` and `staged` both keep the unchanged
+ * JSON execution route (§2.1) — so JSON remains the sole live execution
+ * authority after `apply` returns, and an ordinary execution read refuses
+ * `execution.not-active`.
  *
  * ## One discovery pass, closed by construction
  *
@@ -87,6 +89,73 @@
  * the maintenance key must be a FILE inside that directory — naming the
  * directory itself would alias the root status lockdir and make the documented
  * order impossible to acquire.
+ *
+ * ## The barrier (R2, §6 item 3)
+ *
+ * `activateExecutionMigration` is the single cutover. It takes the manifest id
+ * and hash the reviewer handed back — never a manifest document — re-reads the
+ * recorded staged manifest, and refuses unless it still describes the world:
+ * the exact witness bytes, the core digest, the deferred coverage
+ * classification, an empty pending catalog journal, the store identity, the
+ * `expectedEpoch` CAS, the reviewed schema and the operator's own identity.
+ * Only then does ONE transaction advance the store-wide epoch, flip
+ * `execution_meta` to `active`, revoke the imported sessions and record the
+ * activation receipt. A crash before that commit leaves exactly the staged
+ * (JSON-live) authority; a crash after it leaves exactly the active one, and a
+ * retry of the same pair returns the recorded receipt instead of a second
+ * epoch bump.
+ *
+ * Three preconditions are the barrier rather than decoration:
+ *
+ * - **every deferred surface must be ABSENT.** Guides/deferred-2b.md
+ *   "Complete coverage rule": 2a accepts a deferred surface only when the
+ *   discovery proves it absent, so a real envelope-bearing workspace stays
+ *   staged. There is no allow-incomplete flag, and none is accepted;
+ * - **the attestation must cover the frozen owner inventory.** The owners the
+ *   import recorded (the session envelopes it witnessed) are exactly the
+ *   sessions the attestation must name as stopped/reloaded — a missing one is
+ *   an owner nobody observed stopped, an extra one is a claim the inventory
+ *   cannot justify — and at least one attested consumer must actually have
+ *   adopted this build;
+ * - **imported ownership is revoked, never adopted.** Sessions become
+ *   `revoked` at their own (pre-bump) epoch and every imported lease keeps its
+ *   `owner_epoch`, so it is REPRESENTED and authorizes nothing (§2.2). The
+ *   receipt names the required reconciliation — `recoverExecutionCoordinator`
+ *   for each workflow, `bindExecutionSession` for each plan, explicit
+ *   `reconcile` for a suspended lease — so no caller discovers it by
+ *   arithmetic (residual R13).
+ *
+ * The barrier reads its staged rows through this module's own diagnostic SQL,
+ * never through `readExecutionState`: that reader requires an ACTIVE plan-pm
+ * session for a handoff-bearing plan, which a suspended import cannot have
+ * (§2.2 + §2.3, residual R13). It re-reads the graph and refuses a store whose
+ * workflows, plans, sealed inputs or session rows are not exactly the reviewed
+ * import, then activates precisely that graph.
+ *
+ * ## Retirement and abort (R2, §6 items 4–5)
+ *
+ * `retireExecutionSources` runs only behind an active receipt and moves the
+ * EXACT unchanged core sources — the root register and the registered workflow
+ * snapshots, never a session envelope, note ledger, launch journal or
+ * host-owned status file — into manifest-addressed read-only history under
+ * `<harness>/archived/execution/<manifestId>/`. Same-filesystem rename plus a
+ * checksum check; a source that is absent while its archive copy holds the
+ * reviewed bytes is already done; a source and destination that disagree
+ * refuse without overwriting either. Per-item progress is durable in the
+ * archive's own `retirement.json`, so a crash after a rename and before the
+ * receipt resumes from the destination hash, and the DB receipt is written
+ * last. Partial retirement never returns authority to JSON: the store stays
+ * `active` throughout.
+ *
+ * `abortExecutionMigration` is staged-only and DB-only. Active and retired
+ * manifests cannot abort, so it can never return a live authority to JSON or
+ * remove active data. It deletes exactly the addressed manifest's staged rows
+ * in one transaction, preserves issue/catalog and every source byte, records
+ * the aborted receipt (the schema has no dedicated abort column, so the
+ * activation-receipt column carries the self-describing, phase-guarded record)
+ * and leaves `execution_meta` `legacy` — which is what lets changed legacy
+ * input be previewed and applied anew under a fresh manifest instead of a
+ * hidden merge.
  */
 
 import { createHash, randomUUID } from "node:crypto";
@@ -96,10 +165,12 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  renameSync,
+  writeFileSync,
   type Dirent,
   type Stats,
 } from "node:fs";
-import { dirname, isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import {
   executionInputHash,
   executionInputSelection,
@@ -125,7 +196,15 @@ import {
   type WorkflowSnapshot,
 } from "./workflow.js";
 import { openStore, storeDbPath, type StoreContext, type StoreDb } from "./store-db.js";
-import { assertBackupDescribesStore, canonicalPath, isPathWithin, type BackupReceipt } from "./store-activation.js";
+import {
+  assertBackupDescribesStore,
+  canonicalPath,
+  isPathWithin,
+  validateActivationAttestation,
+  StoreActivationError,
+  type ActivationAttestation,
+  type BackupReceipt,
+} from "./store-activation.js";
 import {
   ExecutionError,
   assertOperationId,
@@ -203,6 +282,24 @@ export type ExecutionMigrationApplyInput = ExecutionMigrationInput & {
   manifestHash: string;
   backup: BackupReceipt;
 };
+
+/**
+ * §6 item 3: the activation request — the recorded manifest's identity (never
+ * its document: the barrier re-reads the staged record and hashes it itself),
+ * the epoch the reviewer observed, and the operator attestation.
+ */
+export type ExecutionMigrationActivationInput = ExecutionMigrationInput & {
+  manifestId: string;
+  manifestHash: string;
+  expectedEpoch: number;
+  attestation: ActivationAttestation;
+};
+
+/** §6 item 4: the retirement request — which recorded manifest's core sources move. */
+export type ExecutionMigrationRetireInput = ExecutionMigrationInput & { manifestId: string; manifestHash: string };
+
+/** §6 item 5: the staged abort request, with the reason the abort is recorded under. */
+export type ExecutionMigrationAbortInput = ExecutionMigrationInput & { manifestId: string; manifestHash: string; reason: string };
 
 // ---------------------------------------------------------------------------
 // Refusals (§5) and small shared helpers
@@ -370,7 +467,22 @@ type DiscoveredSources = {
   workflows: DiscoveredWorkflow[];
   witnesses: ExecutionSourceWitness[];
   deferred: ExecutionDeferredSurface[];
+  /**
+   * §2.3 the frozen OWNER inventory: every session identity the discovered
+   * bindings and their envelopes resolve to. This is what the activation
+   * attestation has to cover with stop evidence, because these are exactly the
+   * references the barrier revokes.
+   */
+  owners: DiscoveredOwner[];
   coreHash: string;
+};
+
+/** One discovered session identity, in canonical (workflow, coordinator-then-plans) order. */
+type DiscoveredOwner = {
+  workflowId: string;
+  role: "coordinator" | "plan-pm";
+  sessionId: string;
+  planId: string | null;
 };
 
 function deferredSurface(name: string, paths: readonly string[]): ExecutionDeferredSurface {
@@ -573,6 +685,7 @@ function discoverExecutionSources(context: StoreContext): DiscoveredSources {
   const witnesses: ExecutionSourceWitness[] = [{ path: rootPath, sha256: sha256Of(rootBytes), kind: "root" }];
   const deferred: ExecutionDeferredSurface[] = [];
   const workflows: DiscoveredWorkflow[] = [];
+  const owners: DiscoveredOwner[] = [];
   const seenDirs = new Map<string, string>();
 
   for (const entry of doc.workflows) {
@@ -624,6 +737,7 @@ function discoverExecutionSources(context: StoreContext): DiscoveredSources {
           `workflow ${workflowId}'s coordinator binding`,
         ),
       );
+      owners.push({ workflowId, role: "coordinator", sessionId: coordinator.session_id, planId: null });
     }
 
     const plans: DiscoveredPlan[] = [];
@@ -642,6 +756,7 @@ function discoverExecutionSources(context: StoreContext): DiscoveredSources {
       }
       if (session !== null) {
         envelopes.push(readSessionSource(session, { ...scope, role: "plan-pm", planId }, `plan ${planId}`));
+        owners.push({ workflowId, role: "plan-pm", sessionId: session.session_id, planId });
       }
       const leaseValue = planRow.execution_lease;
       if (leaseValue !== undefined) {
@@ -694,6 +809,7 @@ function discoverExecutionSources(context: StoreContext): DiscoveredSources {
     workflows,
     witnesses,
     deferred,
+    owners,
     coreHash: digestOf({
       root: { path: rootPath, sha256: sha256Of(rootBytes) },
       workflows: workflows.map((workflow) => ({
@@ -847,6 +963,68 @@ async function withAllLocks<T>(paths: readonly string[], fn: () => Promise<T>): 
   const [head, ...rest] = paths;
   if (head === undefined) return fn();
   return withStatusWriteLock(head, () => withAllLocks(rest, fn), { timeoutMs: migrationLockWaitMs() });
+}
+
+/**
+ * §6 the reviewed manifest against ONE locked discovery: the witness set
+ * (count, path, kind, bytes), the core digest, the deferred coverage
+ * classification and the pending catalog journal. `apply` and `activate` must
+ * both refuse the same drift, so both run this one rule rather than two
+ * drifting copies of it.
+ *
+ * `selfHeldLockDirs` are the legacy write-lock paths THIS caller holds for the
+ * duration of its own transaction: they occupy a discovered surface without the
+ * workspace having changed, so they are removed from the FOUND inventory (and
+ * from nothing else) before the comparison — a leaked lock that appeared since
+ * the preview is still a coverage change while the lock this caller holds is
+ * not.
+ */
+function assertReviewedManifestHolds(input: {
+  manifest: ExecutionManifest;
+  discovered: DiscoveredSources;
+  selfHeldLockDirs: ReadonlySet<string>;
+  pendingCatalogOperations: string[];
+}): void {
+  const { manifest, discovered, selfHeldLockDirs, pendingCatalogOperations } = input;
+  if (discovered.witnesses.length !== manifest.sources.length) {
+    throw conflict(
+      `the source set changed since the preview (${manifest.sources.length} reviewed witness(es), ` +
+        `${discovered.witnesses.length} found). Re-preview the migration; nothing was written.`,
+    );
+  }
+  for (const [index, reviewed] of manifest.sources.entries()) {
+    const found = discovered.witnesses[index]!;
+    if (reviewed.path !== found.path || reviewed.kind !== found.kind || !sameBytesDigest(reviewed.sha256, found.sha256)) {
+      throw conflict(
+        `source ${reviewed.path} no longer holds the reviewed bytes (${reviewed.kind}). Re-preview the migration; ` +
+          `nothing was written.`,
+      );
+    }
+  }
+  if (!sameBytesDigest(discovered.coreHash, manifest.coreHash)) {
+    throw conflict("the core authority content changed since the preview; nothing was written.");
+  }
+  const foundDeferred = discovered.deferred.map((surface) =>
+    surface.surface === LEGACY_LOCK_SURFACE
+      ? deferredSurface(surface.surface, surface.paths.filter((path) => !selfHeldLockDirs.has(path)))
+      : surface,
+  );
+  if (serializeExecutionValue(foundDeferred) !== serializeExecutionValue(manifest.deferred)) {
+    throw conflict(
+      "the deferred-surface coverage changed since the preview; the reviewed manifest no longer describes the surfaces " +
+        "this store holds. Re-preview the migration; nothing was written.",
+    );
+  }
+  // §7 the reviewed "no pending catalog operation was outstanding" witness is
+  // compared against the locked journal too, so a manifest that claims a pending
+  // set the live store does not hold is refused rather than persisted as the
+  // reviewed pair.
+  if (serializeExecutionValue(pendingCatalogOperations) !== serializeExecutionValue(manifest.pendingCatalogOperations)) {
+    throw conflict(
+      `the reviewed manifest records ${manifest.pendingCatalogOperations.length} pending catalog operation(s), but the ` +
+        `live journal holds ${pendingCatalogOperations.length}; the manifest is not the reviewed pair, and nothing was written.`,
+    );
+  }
 }
 
 /** The reviewed manifest, checked against the hash the caller hands back and the control root it was reviewed for. */
@@ -1222,50 +1400,25 @@ export async function applyExecutionMigration(
         withAllLocks(workflowLocks, () =>
           withExecutionTransaction(context, (tx) => {
             const discovered = discoverExecutionSources(context);
-            if (discovered.witnesses.length !== manifest.sources.length) {
+            // §7: a non-committed catalog operation blocks staging outright —
+            // the shared rule below compares the reviewed claim, but a journal
+            // that is genuinely pending refuses whatever the manifest claims.
+            const pending = pendingCatalogOperations(tx.db);
+            if (pending.length > 0) {
               throw conflict(
-                `the source set changed since the preview (${manifest.sources.length} reviewed witness(es), ` +
-                  `${discovered.witnesses.length} found). Re-preview the migration; nothing was staged.`,
+                `${pending.length} catalog operation(s) became pending since the preview (${pending.join(", ")}); nothing was staged.`,
               );
             }
-            for (const [index, reviewed] of manifest.sources.entries()) {
-              const found = discovered.witnesses[index]!;
-              if (reviewed.path !== found.path || reviewed.kind !== found.kind || !sameBytesDigest(reviewed.sha256, found.sha256)) {
-                throw conflict(
-                  `source ${reviewed.path} no longer holds the reviewed bytes (${reviewed.kind}). Re-preview the migration; ` +
-                    `nothing was staged.`,
-                );
-              }
-            }
-            if (!sameBytesDigest(discovered.coreHash, manifest.coreHash)) {
-              throw conflict("the core authority content changed since the preview; nothing was staged.");
-            }
-            // §6/§2b coverage is part of what the reviewer read. The locked
-            // discovery reclassifies every deferred surface, so the reviewed
-            // manifest's own classification is compared against it: a manifest
-            // whose blocked surface was edited to `absent` after review (or
-            // whose surface inventory was otherwise changed) is not the pair
-            // that was reviewed, and the activation barrier must never read a
-            // coverage claim the locked discovery does not make.
-            //
-            // The one legitimate difference is this apply's OWN workflow locks:
-            // they occupy each workflow dir's legacy write-lock surface for the
-            // duration of the transaction. Those paths are therefore removed
-            // from the found inventory (and from nothing else) before the
-            // comparison, so a leaked lock that appeared since the preview is
-            // still a coverage change while the lock that apply holds is not.
-            const selfHeldLocks = new Set(prelock.workflows.map((workflow) => join(workflow.dir, LEGACY_WRITE_LOCK_DIR)));
-            const foundDeferred = discovered.deferred.map((surface) =>
-              surface.surface === LEGACY_LOCK_SURFACE
-                ? deferredSurface(surface.surface, surface.paths.filter((path) => !selfHeldLocks.has(path)))
-                : surface,
-            );
-            if (serializeExecutionValue(foundDeferred) !== serializeExecutionValue(manifest.deferred)) {
-              throw conflict(
-                "the deferred-surface coverage changed since the preview; the reviewed manifest no longer describes the " +
-                  "surfaces this store holds. Re-preview the migration; nothing was staged.",
-              );
-            }
+            assertReviewedManifestHolds({
+              manifest,
+              discovered,
+              // The one legitimate difference is this apply's OWN workflow locks:
+              // they occupy each workflow dir's legacy write-lock surface for the
+              // duration of the transaction, so the shared rule removes exactly
+              // those paths from the found inventory before comparing coverage.
+              selfHeldLockDirs: new Set(prelock.workflows.map((workflow) => join(workflow.dir, LEGACY_WRITE_LOCK_DIR))),
+              pendingCatalogOperations: pending,
+            });
             if (manifest.storeId !== tx.storeId || manifest.epoch !== tx.epoch) {
               throw conflict(
                 `the manifest was reviewed against store ${manifest.storeId} epoch ${manifest.epoch}, but the live store is ` +
@@ -1281,22 +1434,6 @@ export async function applyExecutionMigration(
             }
             if (catalogRevisionOf(tx.db) !== manifest.catalogRevision) {
               throw conflict("the issue/catalog revision changed since the preview; nothing was staged.");
-            }
-            const pending = pendingCatalogOperations(tx.db);
-            if (pending.length > 0) {
-              throw conflict(
-                `${pending.length} catalog operation(s) became pending since the preview (${pending.join(", ")}); nothing was staged.`,
-              );
-            }
-            // §7 the reviewed "no pending catalog operation was outstanding"
-            // witness is compared against the locked journal too, so a manifest
-            // that claims a pending set the live store does not hold is refused
-            // rather than persisted as the reviewed pair.
-            if (serializeExecutionValue(pending) !== serializeExecutionValue(manifest.pendingCatalogOperations)) {
-              throw conflict(
-                `the reviewed manifest records ${manifest.pendingCatalogOperations.length} pending catalog operation(s), ` +
-                  `but the live journal holds ${pending.length}; the manifest is not the reviewed pair, and nothing was staged.`,
-              );
             }
             if (tx.execution.authorityState === "active") {
               throw conflict("the execution authority is ACTIVE; a manifest stages into a legacy or staged authority only.");
@@ -1377,4 +1514,1050 @@ export async function applyExecutionMigration(
       { timeoutMs: migrationLockWaitMs() },
     ),
   );
+}
+
+// ---------------------------------------------------------------------------
+// The recorded manifest (§6 items 3–5 read the RECORD, never a document)
+// ---------------------------------------------------------------------------
+
+/**
+ * §6 items 3–5 address a manifest by identity and hash. The document itself is
+ * re-read from the store and re-hashed here, so a caller cannot hand the
+ * barrier a manifest the store never reviewed, and cannot substitute a
+ * different document under a reviewed id.
+ */
+type MigrationRecord = {
+  manifestId: string;
+  manifestHash: string;
+  phase: ExecutionMigrationReceipt["phase"];
+  manifest: ExecutionManifest;
+  /** The recorded activation record; `null` until the barrier committed (or aborted). */
+  activation: Record<string, unknown> | null;
+  retirement: Record<string, unknown> | null;
+};
+
+function storedJsonOrNull(text: unknown, what: string): Record<string, unknown> | null {
+  if (text === null || text === undefined) return null;
+  if (typeof text !== "string") throw conflict(`${what} is not a JSON string`);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (error) {
+    throw conflict(`${what} is not valid JSON (${(error as Error).message}); the migration record cannot be verified.`);
+  }
+  if (!isPlainObject(parsed)) throw conflict(`${what} is not a JSON object`);
+  return parsed;
+}
+
+function readMigrationRecord(db: StoreDb, manifestId: string): MigrationRecord | null {
+  const row = db
+    .prepare(
+      "select manifest_hash, phase, manifest_json, activation_receipt_json, retirement_json from execution_migrations " +
+        "where manifest_id = ?",
+    )
+    .get(manifestId) as
+    | {
+        manifest_hash?: unknown;
+        phase?: unknown;
+        manifest_json?: unknown;
+        activation_receipt_json?: unknown;
+        retirement_json?: unknown;
+      }
+    | undefined;
+  if (row === undefined) return null;
+  const phase = row.phase;
+  if (
+    typeof row.manifest_hash !== "string" ||
+    typeof row.manifest_json !== "string" ||
+    (phase !== "staged" && phase !== "active" && phase !== "retired" && phase !== "aborted")
+  ) {
+    throw conflict(`execution_migrations(${manifestId}) is malformed; the manifest's reviewed identity cannot be verified.`);
+  }
+  let document: unknown;
+  try {
+    document = JSON.parse(row.manifest_json);
+  } catch (error) {
+    throw conflict(`execution_migrations(${manifestId}).manifest_json is not valid JSON (${(error as Error).message}).`);
+  }
+  if (!isPlainObject(document) || document.version !== EXECUTION_MIGRATION_MANIFEST_VERSION) {
+    throw conflict(`execution_migrations(${manifestId}).manifest_json is not a version ${EXECUTION_MIGRATION_MANIFEST_VERSION} manifest.`);
+  }
+  return {
+    manifestId,
+    manifestHash: row.manifest_hash,
+    phase,
+    manifest: document as unknown as ExecutionManifest,
+    activation: storedJsonOrNull(row.activation_receipt_json, `execution_migrations(${manifestId}).activation_receipt_json`),
+    retirement: storedJsonOrNull(row.retirement_json, `execution_migrations(${manifestId}).retirement_json`),
+  };
+}
+
+/** The recorded manifest, checked against the pair the caller hands back and the control root it belongs to. */
+function requireMigrationRecord(input: {
+  record: MigrationRecord | null;
+  manifestId: string;
+  manifestHash: string;
+  root: string;
+  verb: string;
+}): MigrationRecord {
+  const { record, manifestId, manifestHash, root, verb } = input;
+  if (record === null) {
+    throw conflict(
+      `${verb} addresses manifest ${manifestId}, which this store has not recorded. Stage the reviewed manifest first; ` +
+        `nothing was changed.`,
+    );
+  }
+  if (!sameBytesDigest(executionManifestHash(record.manifest), record.manifestHash)) {
+    throw conflict(
+      `manifest ${manifestId}'s recorded document does not hash to its recorded hash; the record is not self-consistent, ` +
+        `and ${verb} refuses to act on it.`,
+    );
+  }
+  if (!sameBytesDigest(record.manifestHash, manifestHash)) {
+    throw conflict(
+      `${verb} supplied the manifest hash ${manifestHash}, but manifest ${manifestId} is recorded with ` +
+        `${record.manifestHash}; the document and its hash must be the pair the reviewer saw.`,
+    );
+  }
+  if (canonicalPath(record.manifest.root) !== root) {
+    throw conflict(`manifest ${manifestId} was reviewed for control root ${record.manifest.root}, not ${root}; nothing was changed.`);
+  }
+  return record;
+}
+
+/** Read one recorded manifest on its own read handle — the pre-lock pass every verb runs. */
+async function readMigrationRecordFor(
+  context: StoreContext,
+  manifestId: string,
+  manifestHash: string,
+  root: string,
+  verb: string,
+): Promise<MigrationRecord> {
+  const handle = await openStore(context, "read");
+  try {
+    return requireMigrationRecord({
+      record: readMigrationRecord(handle.db, manifestId),
+      manifestId,
+      manifestHash,
+      root,
+      verb,
+    });
+  } finally {
+    handle.close();
+  }
+}
+
+/** §6 `manifestId` / `manifestHash` are identities, never documents: a blank one is not addressable. */
+function requireManifestRef(value: unknown, verb: string, field: string): string {
+  if (!isNonEmptyString(value) || value.trim() === "") {
+    throw conflict(
+      `${verb} requires a nonblank ${field}: the recorded manifest is addressed by identity, never by a caller-supplied ` +
+        `document, and nothing was changed.`,
+    );
+  }
+  return value;
+}
+
+/**
+ * The test-runner-gated crash seam, the same gate every other failure injection
+ * in the store uses. Each verb names the stage it is about to reach, so a crash
+ * BEFORE the commit is reproduced rather than described.
+ */
+const MIGRATION_FAILURE_ENV = {
+  activation: "MSTAR_STORE_FAIL_EXECUTION_ACTIVATION",
+  retirement: "MSTAR_STORE_FAIL_EXECUTION_RETIREMENT",
+  abort: "MSTAR_STORE_FAIL_EXECUTION_ABORT",
+} as const;
+
+function migrationFailureHook(variable: string, stage: string): void {
+  if (process.env.MSTAR_STORE_TEST_RUNNER !== "1") return;
+  if (process.env[variable] === stage) throw new Error(`induced execution-migration failure at ${stage}`);
+}
+
+// ---------------------------------------------------------------------------
+// Activation (R2, §6 item 3)
+// ---------------------------------------------------------------------------
+
+/** §6 item 3: the cutover the activation receipt records, so a retry and an operator both read the same facts. */
+type ExecutionActivationRecord = {
+  activationVersion: number;
+  manifestId: string;
+  manifestHash: string;
+  storeId: string;
+  previousEpoch: number;
+  epoch: number;
+  /** `execution_meta.revision` after the barrier. */
+  rootRevision: number;
+  /** `store_meta.revision` after the barrier. */
+  storeRevision: number;
+  attestationDigest: string;
+  attestation: ActivationAttestation;
+  /** The imported references this barrier revoked (they stay rows; they stop authorizing). */
+  revokedSessions: DiscoveredOwner[];
+  /** Imported held ownership that stays REPRESENTED and requires the named reconciliation. */
+  suspendedLeases: Array<{ workflowId: string; planId: string }>;
+  suspendedIntegrationLeases: string[];
+  /** Residual R13: the step the operator must take before a migrated workflow is consumable again. */
+  requiredReconciliation: string;
+  activatedAt: string;
+};
+
+/** §2.3/§6 item 3 the ONE step a migrated workspace still owes before ordinary consumers may read it. */
+function reconciliationRequired(record: {
+  revoked: readonly DiscoveredOwner[];
+  leases: readonly { workflowId: string; planId: string }[];
+  integrationLeases: readonly string[];
+}): string {
+  const workflows = [...new Set(record.revoked.map((owner) => owner.workflowId))];
+  const first = workflows[0];
+  const named =
+    first === undefined
+      ? "the imported sessions are revoked"
+      : `the imported sessions of ${workflows.join(", ")} are revoked (starting with ${first})`;
+  const leases =
+    record.leases.length === 0 && record.integrationLeases.length === 0
+      ? "no imported lease is outstanding"
+      : `imported held ownership stays represented at its pre-activation epoch (${[
+          ...record.leases.map((lease) => `plan ${lease.planId} of ${lease.workflowId}`),
+          ...record.integrationLeases.map((workflowId) => `the integration merge lease of ${workflowId}`),
+        ].join(", ")}) and authorizes nothing`;
+  return (
+    `${named} and ${leases}. Before any consumer reads a migrated workflow, recover each workflow's coordinator with ` +
+    `recoverExecutionCoordinator (naming the recorded prior holder and attesting it stopped), then rebind its plans with ` +
+    `bindExecutionSession; a suspended execution or integration lease needs an explicit reconcile before reuse.`
+  );
+}
+
+/** §6/2b "Complete coverage rule": a 2a activation accepts a deferred surface only when it is proven ABSENT. */
+function assertNoDeferredSurfaces(manifest: ExecutionManifest): void {
+  const populated = manifest.deferred.filter((surface) => surface.disposition !== "absent" || surface.paths.length > 0);
+  if (populated.length === 0) return;
+  throw incomplete(
+    `${populated.length} deferred (2b) surface(s) are populated: ` +
+      `${populated.map((surface) => `${surface.surface} (${surface.paths.length} path(s))`).join(", ")}. A 2a activation ` +
+      `accepts a deferred surface only when the discovery proves it absent; there is no allow-incomplete flag, and this ` +
+      `workspace belongs on the staged route until 2b resolves those files. Nothing was activated.`,
+  );
+}
+
+/**
+ * §6 item 3 the attestation against the FROZEN OWNER INVENTORY. The owners the
+ * import recorded are exactly the references the barrier revokes, so each one
+ * needs stop evidence: a missing entry is an owner nobody observed stopped, and
+ * an entry the inventory cannot justify is a claim that proves nothing. At
+ * least one attested consumer must also have adopted this build — an inventory
+ * of pure exclusions attests that nobody is running the new authority.
+ */
+function assertAttestationCoversOwners(owners: readonly DiscoveredOwner[], attestation: ActivationAttestation): void {
+  const known = new Set(owners.map((owner) => owner.sessionId));
+  const attested = new Set(attestation.stoppedSessions.map((session) => session.sessionId));
+  const missing = [...known].filter((sessionId) => !attested.has(sessionId));
+  if (missing.length > 0) {
+    throw incomplete(
+      `the attestation does not name ${missing.length} imported session owner(s) as stopped/reloaded ` +
+        `(${missing.join(", ")}). Activation revokes those references, so it requires stop evidence for each of them; a ` +
+        `string saying the workspace is covered is not that evidence. Nothing was activated.`,
+    );
+  }
+  const unknown = [...attested].filter((sessionId) => !known.has(sessionId));
+  if (unknown.length > 0) {
+    throw incomplete(
+      `the attestation names session(s) ${unknown.join(", ")} that this workspace's frozen source inventory does not ` +
+        `contain; an unknown stopped session is a claim the inventory cannot justify, so the consumer inventory is not ` +
+        `closed. Nothing was activated.`,
+    );
+  }
+  if (!attestation.consumers.some((consumer) => consumer.disposition === "reloaded" || consumer.disposition === "upgraded")) {
+    throw incomplete(
+      `every attested consumer is excluded and none adopted this build, so nothing attests that the new execution ` +
+        `authority runs anywhere. Nothing was activated.`,
+    );
+  }
+}
+
+/**
+ * §6 item 3 "recheck ... every identity": the staged graph read through this
+ * module's own diagnostic SQL. `readExecutionState` is deliberately NOT used —
+ * it requires an ACTIVE plan-pm session for a handoff-bearing plan, which a
+ * suspended import cannot have (§2.2 + §2.3, residual R13) — so the barrier
+ * reads the rows it is about to activate and refuses a graph that is not
+ * exactly the reviewed import.
+ */
+type StagedGraph = {
+  workflowIds: string[];
+  plans: Array<{ workflowId: string; planId: string; inputHash: string }>;
+  sessions: Array<DiscoveredOwner & { state: string; epoch: number }>;
+};
+
+function readStagedGraph(db: StoreDb): StagedGraph {
+  const workflowIds = (db.prepare("select workflow_id from execution_registry order by rowid").all() as Array<{
+    workflow_id?: unknown;
+  }>).map((row) => String(row.workflow_id));
+  const plans = (db
+    .prepare("select workflow_id, plan_id, input_hash from execution_inputs order by workflow_id, plan_id")
+    .all() as Array<{ workflow_id?: unknown; plan_id?: unknown; input_hash?: unknown }>).map((row) => ({
+    workflowId: String(row.workflow_id),
+    planId: String(row.plan_id),
+    inputHash: String(row.input_hash),
+  }));
+  const sessions = (db
+    .prepare("select workflow_id, role, session_id, plan_id, state, epoch from execution_sessions order by workflow_id, role, session_id")
+    .all() as Array<Record<string, unknown>>).map((row) => ({
+    workflowId: String(row.workflow_id),
+    role: row.role === "coordinator" ? ("coordinator" as const) : ("plan-pm" as const),
+    sessionId: String(row.session_id),
+    planId: row.plan_id === null || row.plan_id === undefined ? null : String(row.plan_id),
+    state: String(row.state),
+    epoch: Number(row.epoch),
+  }));
+  return { workflowIds, plans, sessions };
+}
+
+/** §6 item 3: the staged graph must be exactly the reviewed import, or the barrier refuses to activate it. */
+function assertStagedGraphIsTheImport(graph: StagedGraph, discovered: DiscoveredSources, epoch: number): void {
+  const expectedWorkflows = discovered.workflows.map((workflow) => workflow.workflowId);
+  if (serializeExecutionValue(graph.workflowIds) !== serializeExecutionValue(expectedWorkflows)) {
+    throw conflict(
+      `the staged graph holds workflow(s) ${graph.workflowIds.join(", ") || "\u2014 none"} while the reviewed import holds ` +
+        `${expectedWorkflows.join(", ") || "\u2014 none"}. A barrier activates exactly one reviewed import; nothing was activated.`,
+    );
+  }
+  const key = (entry: { workflowId: string; planId: string | null }): string => `${entry.workflowId}\u0000${entry.planId}`;
+  const expectedPlans = discovered.workflows
+    .flatMap((workflow) =>
+      workflow.plans.map((plan) => ({
+        workflowId: workflow.workflowId,
+        planId: plan.planId,
+        inputHash: executionInputHash(plan.row, plan.planId),
+      })),
+    )
+    .sort((a, b) => (key(a) < key(b) ? -1 : 1));
+  // Both sides are projected into the SAME canonical order: the manifest order is
+  // registry order and the SQL order is (workflow_id, plan_id, …), so comparing
+  // them unsorted would refuse an import that is in fact identical.
+  const stagedPlans = [...graph.plans].sort((a, b) => (key(a) < key(b) ? -1 : 1));
+  if (serializeExecutionValue(stagedPlans) !== serializeExecutionValue(expectedPlans)) {
+    throw conflict(
+      `the staged plan rows and sealed inputs are not the reviewed import (${graph.plans.length} staged, ` +
+        `${expectedPlans.length} reviewed). Nothing was activated.`,
+    );
+  }
+  const expectedSessions = discovered.owners
+    .map((owner) => ({ ...owner, state: "suspended", epoch }))
+    .sort((a, b) => (key(a) < key(b) ? -1 : 1));
+  const stagedSessions = [...graph.sessions].sort((a, b) => (key(a) < key(b) ? -1 : 1));
+  if (serializeExecutionValue(stagedSessions) !== serializeExecutionValue(expectedSessions)) {
+    throw conflict(
+      `the staged session rows are not the suspended import the recorded bindings resolve to (${graph.sessions.length} ` +
+        `staged, ${expectedSessions.length} reviewed). Activation revokes exactly the imported references; nothing was activated.`,
+    );
+  }
+}
+
+/** §6 item 3 the recorded activation of an already-active manifest: its receipt is the only answer. */
+function replayActivation(record: MigrationRecord, attestationDigest: string): ExecutionMigrationReceipt {
+  const recorded = record.activation?.attestationDigest;
+  if (typeof recorded !== "string" || recorded !== attestationDigest) {
+    throw conflict(
+      `manifest ${record.manifestId} is already ACTIVE under a different attestation (recorded ` +
+        `${typeof recorded === "string" ? recorded.slice(0, 12) : "\u2014 none"}), supplied ${attestationDigest.slice(0, 12)}); ` +
+        `activation history is immutable, so reuse the recorded attestation. The live authority was not changed.`,
+    );
+  }
+  return { manifestId: record.manifestId, phase: "active", replayed: true };
+}
+
+/**
+ * `activateExecutionMigration` — the §6 item 3 barrier: one all-or-nothing
+ * cutover from the staged import to the DB execution authority.
+ *
+ * It re-reads the recorded staged manifest (never a caller-supplied document),
+ * takes the §4.2 maintenance → root → sorted-workflow lock ladder, and inside
+ * ONE transaction rechecks the exact witness bytes, the core digest, the
+ * deferred coverage classification, an empty pending catalog journal, the store
+ * identity, the reviewed schema, the `expectedEpoch` CAS, the operator's own
+ * identity, the attestation's coverage of the frozen owner inventory, the
+ * staged graph against the reviewed import, and the ABSENCE of every deferred
+ * surface. Then it advances the store-wide epoch ONCE, flips the execution
+ * authority to `active`, revokes the imported sessions at their own epoch,
+ * leaves every imported lease REPRESENTED (never adopted) and records the
+ * activation receipt naming the reconciliation that remains.
+ *
+ * A crash before the commit leaves the staged (JSON-live) authority untouched;
+ * a retry of the same pair returns the recorded receipt instead of a second
+ * epoch bump. Nothing here deletes, renames or rewrites a source byte: that is
+ * `retireExecutionSources`, which runs as its own step.
+ */
+export async function activateExecutionMigration(
+  input: ExecutionMigrationActivationInput,
+): Promise<ExecutionMigrationReceipt> {
+  const { context, operator } = resolveMigrationInput(input, "activate");
+  const manifestId = requireManifestRef(input.manifestId, "activate", "manifestId");
+  const manifestHash = requireManifestRef(input.manifestHash, "activate", "manifestHash");
+  if (!Number.isSafeInteger(input.expectedEpoch) || input.expectedEpoch <= 0) {
+    throw conflict(
+      `activation requires expectedEpoch: the positive store epoch the reviewed manifest was staged at. The barrier is a ` +
+        `CAS on it, so an absent or unusable witness is refused rather than guessed. Nothing was activated.`,
+    );
+  }
+  const attestation = validateActivationAttestation(input.attestation);
+  if (attestation.operator.actor !== operator) {
+    throw new StoreActivationError(
+      "store.attestation-invalid",
+      `the attestation is signed by ${JSON.stringify(attestation.operator.actor)} while the migration is recorded under ` +
+        `${JSON.stringify(operator)}; the accountable operator and the attesting operator are one identity at the barrier. ` +
+        `Nothing was activated.`,
+    );
+  }
+  const attestationDigest = digestOf(attestation);
+  const root = controlRootOf(context);
+
+  // The recorded phase is read BEFORE any lock. An already-active manifest is
+  // resolved from its receipt, and that answer must not be able to change
+  // because discovery no longer recognises the workspace: after activation the
+  // file route is fenced, and after retirement the root register is gone.
+  const known = await readMigrationRecordFor(context, manifestId, manifestHash, root, "activation");
+  if (known.phase === "active") return replayActivation(known, attestationDigest);
+  if (known.phase !== "staged") {
+    throw conflict(
+      `manifest ${manifestId} is recorded ${known.phase}; only a staged manifest activates. An aborted or retired manifest ` +
+        `needs a re-preview under a fresh manifest, and nothing was activated.`,
+    );
+  }
+
+  const prelock = discoverExecutionSources(context);
+  const workflowLocks = [...prelock.workflows]
+    .sort((a, b) => a.workflowId.localeCompare(b.workflowId))
+    .map((workflow) => join(workflow.dir, WORKFLOW_SNAPSHOT_FILE));
+
+  return withExecutionMaintenanceLock(context, () =>
+    withStatusWriteLock(
+      prelock.rootPath,
+      () =>
+        withAllLocks(workflowLocks, () =>
+          withExecutionTransaction(context, (tx) => {
+            const record = requireMigrationRecord({
+              record: readMigrationRecord(tx.db, manifestId),
+              manifestId,
+              manifestHash,
+              root,
+              verb: "activation",
+            });
+            if (record.phase === "active") return replayActivation(record, attestationDigest);
+            if (record.phase !== "staged") {
+              throw conflict(
+                `manifest ${manifestId} is recorded ${record.phase}; only a staged manifest activates, and nothing was activated.`,
+              );
+            }
+            const manifest = record.manifest;
+            if (tx.execution.authorityState === "active") {
+              throw conflict(
+                `the execution authority is already ACTIVE under manifest ${String(tx.execution.manifestId)}; an active ` +
+                  `authority is never re-activated by another manifest. Nothing was activated.`,
+              );
+            }
+            if (tx.execution.authorityState !== "staged" || tx.execution.manifestId !== manifestId) {
+              throw conflict(
+                `the execution authority is ${tx.execution.authorityState}` +
+                  `${tx.execution.manifestId === null ? "" : ` under manifest ${tx.execution.manifestId}`}, not the staged ` +
+                  `manifest ${manifestId}. Nothing was activated.`,
+              );
+            }
+            if (input.expectedEpoch !== tx.epoch || manifest.epoch !== tx.epoch) {
+              throw conflict(
+                `the barrier is a CAS on the store epoch: the manifest was reviewed at epoch ${manifest.epoch}, the caller ` +
+                  `expects ${input.expectedEpoch}, and the live store is at epoch ${tx.epoch}. Re-preview against the current ` +
+                  `authority; nothing was activated.`,
+              );
+            }
+            if (manifest.storeId !== tx.storeId) {
+              throw conflict(
+                `the manifest was reviewed against store ${manifest.storeId}, but the live store is ${tx.storeId}; nothing was activated.`,
+              );
+            }
+            const schema = tx.db.prepare("select max(version) as v from schema_version").get() as { v?: unknown } | undefined;
+            if (typeof schema?.v !== "number" || schema.v !== manifest.schemaVersion) {
+              throw conflict(
+                `the store schema changed since the preview (reviewed ${manifest.schemaVersion}, found ${String(schema?.v)}); ` +
+                  `nothing was activated.`,
+              );
+            }
+            // §7: a pending registration must be reconciled while JSON still owns
+            // execution, so a journal that became pending since the staged apply
+            // blocks the barrier outright.
+            const pending = pendingCatalogOperations(tx.db);
+            if (pending.length > 0) {
+              throw conflict(
+                `${pending.length} catalog operation(s) are pending (${pending.join(", ")}). A pending registration must be ` +
+                  `resolved with the legacy reconcile while JSON still owns execution (\u00a77); nothing was activated.`,
+              );
+            }
+            const discovered = discoverExecutionSources(context);
+            assertReviewedManifestHolds({
+              manifest,
+              discovered,
+              selfHeldLockDirs: new Set(prelock.workflows.map((workflow) => join(workflow.dir, LEGACY_WRITE_LOCK_DIR))),
+              pendingCatalogOperations: pending,
+            });
+            assertNoDeferredSurfaces(manifest);
+            assertAttestationCoversOwners(discovered.owners, attestation);
+            assertStagedGraphIsTheImport(readStagedGraph(tx.db), discovered, tx.epoch);
+
+            // ── the cutover: ONE transaction, ONE epoch bump ──────────────
+            const epoch = tx.epoch + 1;
+            const now = new Date().toISOString();
+            // §2.3 the imported references are REVOKED at the epoch they were
+            // issued in, never rewritten: a stale reference is fenced by the
+            // epoch AND by the state, and the superseded rows stay as the
+            // provenance the recovery verbs name.
+            tx.db
+              .prepare("update execution_sessions set state = 'revoked', revision = revision + 1 where state = 'suspended' and epoch = ?")
+              .run(tx.epoch);
+            // §2.2 the root revision advances once (the activation state changed
+            // in this one transaction); `root_updated_at` is left alone because
+            // no root membership changed.
+            tx.db
+              .prepare(
+                "update execution_meta set authority_state = 'active', revision = revision + 1, activated_at = ?, " +
+                  "manifest_id = ? where id = 1",
+              )
+              .run(now, manifestId);
+            const rootRevision = Number(
+              (tx.db.prepare("select revision from execution_meta where id = 1").get() as { revision?: unknown } | undefined)?.revision,
+            );
+            // §6 item 3 the ONE store-wide epoch advance. Every reference issued
+            // before this instant — execution or issue/catalog — is now stale.
+            tx.db.prepare("update store_meta set authority_epoch = ?, revision = revision + 1 where id = 1").run(epoch);
+            const storeRevision = Number(
+              (tx.db.prepare("select revision from store_meta where id = 1").get() as { revision?: unknown } | undefined)?.revision,
+            );
+            const suspendedLeases = discovered.workflows.flatMap((workflow) =>
+              workflow.plans.filter((plan) => plan.lease !== null).map((plan) => ({ workflowId: workflow.workflowId, planId: plan.planId })),
+            );
+            const suspendedIntegrationLeases = discovered.workflows
+              .filter((workflow) => workflow.snapshot.integration_merge_lease !== undefined)
+              .map((workflow) => workflow.workflowId);
+            const stored: ExecutionActivationRecord = {
+              activationVersion: 1,
+              manifestId,
+              manifestHash,
+              storeId: tx.storeId,
+              previousEpoch: tx.epoch,
+              epoch,
+              rootRevision,
+              storeRevision,
+              attestationDigest,
+              attestation,
+              revokedSessions: discovered.owners,
+              suspendedLeases,
+              suspendedIntegrationLeases,
+              requiredReconciliation: reconciliationRequired({
+                revoked: discovered.owners,
+                leases: suspendedLeases,
+                integrationLeases: suspendedIntegrationLeases,
+              }),
+              activatedAt: now,
+            };
+            const wrote = tx.db
+              .prepare(
+                "update execution_migrations set phase = 'active', activation_receipt_json = ?, updated_at = ? " +
+                  "where manifest_id = ? and phase = 'staged'",
+              )
+              .run(JSON.stringify(stored), now, manifestId) as { changes?: unknown };
+            if (Number(wrote.changes) !== 1) {
+              throw conflict(
+                `manifest ${manifestId} left the staged phase while the barrier ran; the activation was rolled back and the ` +
+                  `authority is unchanged.`,
+              );
+            }
+            migrationFailureHook(MIGRATION_FAILURE_ENV.activation, "before-commit");
+            return { manifestId, phase: "active" as const, replayed: false };
+          }),
+        ),
+      { timeoutMs: migrationLockWaitMs() },
+    ),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Retirement of the core sources (R2, §6 item 4)
+// ---------------------------------------------------------------------------
+
+/** §6 item 4: where the manifest-addressed read-only history lives. */
+const ARCHIVED_EXECUTION_DIR = ["archived", "execution"] as const;
+
+/** §6 item 4: one core source file, with the durable per-item progress the resume reads. */
+type RetirementItem = {
+  kind: "root" | "workflow";
+  path: string;
+  relativePath: string;
+  archivePath: string;
+  sha256: string;
+  state: "pending" | "moved";
+};
+
+/** §6 item 4: the resumable per-item record, written into the archive it describes. */
+type ExecutionRetirementLedger = {
+  version: number;
+  manifestId: string;
+  manifestHash: string;
+  storeId: string;
+  epoch: number;
+  archiveDir: string;
+  startedAt: string;
+  updatedAt: string;
+  items: RetirementItem[];
+};
+
+/** §6 item 4: what the store records once every core source has moved. */
+type ExecutionRetirementRecord = {
+  retirementVersion: number;
+  manifestId: string;
+  manifestHash: string;
+  storeId: string;
+  epoch: number;
+  archiveDir: string;
+  ledgerPath: string;
+  items: Array<{ relativePath: string; sha256: string; archivePath: string }>;
+  retiredAt: string;
+};
+
+function readIfExists(path: string): Buffer | undefined {
+  try {
+    return readFileSync(path);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Atomic write: same-directory temp + rename, so a reader never sees a partial ledger. */
+function writeJsonAtomic(path: string, value: unknown): void {
+  mkdirSync(dirname(path), { recursive: true });
+  const temp = join(dirname(path), `.${randomUUID()}.tmp`);
+  writeFileSync(temp, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  renameSync(temp, path);
+}
+
+/** The harness-relative path of one retired source, traversal-refused. */
+function harnessRelativePath(root: string, path: string, what: string): string {
+  const rel = relative(root, path);
+  const segments = rel.split(/[\\/]+/);
+  if (rel === "" || isAbsolute(rel) || segments.some((segment) => segment === "" || segment === "." || segment === "..")) {
+    throw conflict(`${what} at ${path} does not resolve inside the control root ${root}; it is never retired.`);
+  }
+  return segments.join("/");
+}
+
+/**
+ * §6 item 4 the retire set: EXACTLY the core sources the reviewed manifest
+ * witnessed — the root register and the registered workflow snapshots. Session
+ * envelopes, note/flow ledgers, launch journals and the host-owned execution
+ * status file are deferred 2b surfaces and are never touched here.
+ */
+function retirementItems(manifest: ExecutionManifest, root: string, archiveDir: string): RetirementItem[] {
+  const core = manifest.sources.filter((witness) => witness.kind === "root" || witness.kind === "workflow");
+  if (core.length === 0) {
+    throw conflict(
+      `manifest ${manifest.id} records no core root/snapshot source, so there is nothing a 2a retirement could move; ` +
+        `nothing was retired.`,
+    );
+  }
+  return core.map((witness) => {
+    const relativePath = harnessRelativePath(root, witness.path, `the ${witness.kind} source`);
+    return {
+      kind: witness.kind === "root" ? ("root" as const) : ("workflow" as const),
+      path: witness.path,
+      relativePath,
+      archivePath: join(archiveDir, ...relativePath.split("/")),
+      sha256: witness.sha256,
+      state: "pending" as const,
+    };
+  });
+}
+
+function readRetirementLedger(path: string): ExecutionRetirementLedger | undefined {
+  const bytes = readIfExists(path);
+  if (bytes === undefined) return undefined;
+  let ledger: ExecutionRetirementLedger;
+  try {
+    ledger = JSON.parse(bytes.toString("utf8")) as ExecutionRetirementLedger;
+  } catch (error) {
+    throw conflict(`the retirement ledger at ${path} is unreadable (${(error as Error).message}); refusing to guess at partial retirement state.`);
+  }
+  if (!isPlainObject(ledger) || !Array.isArray(ledger.items)) {
+    throw conflict(`the retirement ledger at ${path} is not a per-item retirement record; refusing to resume against it.`);
+  }
+  return ledger;
+}
+
+/** §6 item 4 one item's exact source bytes, checked before anything moves. */
+function assertRetirementItemHolds(item: RetirementItem): void {
+  const live = readIfExists(item.path);
+  const archived = readIfExists(item.archivePath);
+  if (item.state === "moved") {
+    if (archived === undefined || sha256Of(archived) !== item.sha256) {
+      throw conflict(
+        `the archived copy of ${item.relativePath} no longer holds the reviewed bytes; refusing to claim retirement.`,
+      );
+    }
+    if (live !== undefined) {
+      throw conflict(
+        `the retired source ${item.relativePath} exists again at ${item.path}; an old consumer is still writing old-format ` +
+          `data, so the archive is not the only copy. Nothing was retired.`,
+      );
+    }
+    return;
+  }
+  if (live === undefined) {
+    if (archived === undefined) {
+      throw conflict(
+        `both ${item.relativePath} and its archive copy at ${item.archivePath} are gone, so the reviewed source cannot be ` +
+          `retired truthfully. Nothing was retired.`,
+      );
+    }
+    if (sha256Of(archived) !== item.sha256) {
+      throw conflict(
+        `the archive copy of ${item.relativePath} does not hold the reviewed bytes; neither copy is overwritten, and ` +
+          `nothing was retired.`,
+      );
+    }
+    return;
+  }
+  const liveHash = sha256Of(live);
+  if (liveHash !== item.sha256) {
+    throw conflict(
+      `the retired source ${item.relativePath} no longer holds the reviewed bytes (live ${liveHash.slice(0, 12)}, reviewed ` +
+        `${item.sha256.slice(0, 12)}). An old consumer is still writing old-format data, so the live file was NOT moved: ` +
+        `stop it, re-preview and re-apply, then resume retirement.`,
+    );
+  }
+  if (archived !== undefined) {
+    throw conflict(
+      `both the source ${item.relativePath} and a copy at ${item.archivePath} exist; retirement refuses without overwriting ` +
+        `either. Nothing was retired.`,
+    );
+  }
+}
+
+/** §2.2/§6 item 4: retirement runs only behind the ACTIVE receipt of this manifest. */
+async function assertRetirableAuthority(context: StoreContext, record: MigrationRecord, verb: string): Promise<void> {
+  const handle = await openStore(context, "read");
+  try {
+    const execution = handle.execution;
+    if (execution === null || execution.authorityState !== "active" || execution.manifestId !== record.manifestId) {
+      throw conflict(
+        `${verb} requires the ACTIVE receipt of manifest ${record.manifestId}, but the live execution authority is ` +
+          `${execution === null ? "absent" : `${execution.authorityState} under ${String(execution.manifestId)}`}. Core ` +
+          `sources are retired only after the activation barrier committed; nothing was retired.`,
+      );
+    }
+    if (handle.storeId !== record.manifest.storeId) {
+      throw conflict(
+        `the live store is ${handle.storeId} while manifest ${record.manifestId} was reviewed against ${record.manifest.storeId}; ` +
+          `nothing was retired.`,
+      );
+    }
+    if (handle.epoch <= record.manifest.epoch) {
+      throw conflict(
+        `the live authority is still at epoch ${handle.epoch}, the epoch manifest ${record.manifestId} was reviewed at, so ` +
+          `the activation that must precede retirement has not committed. Nothing was retired.`,
+      );
+    }
+    if (record.activation === null || record.activation.manifestId !== record.manifestId) {
+      throw conflict(
+        `manifest ${record.manifestId} is recorded active without its activation receipt; retirement refuses to move sources ` +
+          `it cannot tie to a barrier. Nothing was retired.`,
+      );
+    }
+  } finally {
+    handle.close();
+  }
+}
+
+/**
+ * `retireExecutionSources` — the §6 item 4 step: move the EXACT unchanged core
+ * sources of one activated manifest into manifest-addressed read-only history
+ * under `<harness>/archived/execution/<manifestId>/`.
+ *
+ * It runs only behind the recorded active receipt and re-verifies the store
+ * identity, the advanced epoch and every source's exact bytes BEFORE anything
+ * moves, so a changed source refuses with the live tree untouched. Then, per
+ * item, a same-filesystem `rename` plus a checksum check of the destination,
+ * each item's result written durably into the archive's own
+ * `retirement.json`; the DB receipt is the LAST write. A crash after a rename
+ * and before the receipt therefore resumes from the destination hash, a source
+ * that is absent while its archive copy holds the reviewed bytes is already
+ * done, and a source/destination disagreement refuses without overwriting
+ * either. Partial retirement is recoverable and NEVER returns authority to
+ * JSON: the store stays `active` throughout, and this verb writes no authority
+ * row of its own.
+ */
+export async function retireExecutionSources(input: ExecutionMigrationRetireInput): Promise<ExecutionMigrationReceipt> {
+  const { context } = resolveMigrationInput(input, "retire");
+  const manifestId = requireManifestRef(input.manifestId, "retire", "manifestId");
+  const manifestHash = requireManifestRef(input.manifestHash, "retire", "manifestHash");
+  const root = controlRootOf(context);
+
+  const known = await readMigrationRecordFor(context, manifestId, manifestHash, root, "retirement");
+  if (known.phase === "retired") return { manifestId, phase: "retired", replayed: true };
+  if (known.phase !== "active") {
+    throw conflict(
+      `manifest ${manifestId} is recorded ${known.phase}; core sources are retired only behind an ACTIVE receipt, so a staged ` +
+        `or aborted migration has nothing to retire. Nothing was retired.`,
+    );
+  }
+  await assertRetirableAuthority(context, known, "retirement");
+
+  const archiveDir = join(root, ...ARCHIVED_EXECUTION_DIR, manifestId);
+  const ledgerPath = join(archiveDir, "retirement.json");
+  const expectedItems = retirementItems(known.manifest, root, archiveDir);
+  const lockPaths = [...expectedItems]
+    .filter((item) => item.kind === "workflow")
+    .map((item) => item.path)
+    .sort();
+
+  const run = async (): Promise<ExecutionMigrationReceipt> => {
+    const live = requireMigrationRecord({
+      record: await readMigrationRecordFor(context, manifestId, manifestHash, root, "retirement"),
+      manifestId,
+      manifestHash,
+      root,
+      verb: "retirement",
+    });
+    if (live.phase === "retired") return { manifestId, phase: "retired" as const, replayed: true };
+    if (live.phase !== "active") {
+      throw conflict(`manifest ${manifestId} left the active phase while retirement ran; nothing was retired.`);
+    }
+    await assertRetirableAuthority(context, live, "retirement");
+
+    const existing = readRetirementLedger(ledgerPath);
+    if (existing !== undefined) {
+      // Resume ONLY against the same reviewed set: a ledger from another manifest,
+      // or one whose items moved, is not a partial run of this retirement.
+      const found = existing.items.map((item) => `${item.path}\u0000${item.sha256}`).join("\n");
+      const expected = expectedItems.map((item) => `${item.path}\u0000${item.sha256}`).join("\n");
+      if (
+        existing.version !== 1 ||
+        existing.manifestId !== manifestId ||
+        existing.manifestHash !== manifestHash ||
+        found !== expected
+      ) {
+        throw conflict(
+          `the retirement ledger at ${ledgerPath} does not describe this manifest's reviewed core sources; refusing to ` +
+            `resume against it, and nothing was retired.`,
+        );
+      }
+    }
+    const now = new Date().toISOString();
+    const ledger: ExecutionRetirementLedger = existing ?? {
+      version: 1,
+      manifestId,
+      manifestHash,
+      storeId: live.manifest.storeId,
+      epoch: live.manifest.epoch,
+      archiveDir,
+      startedAt: now,
+      updatedAt: now,
+      items: expectedItems,
+    };
+
+    // §6 item 4 "recheck the exact current source hashes" FIRST: every item's
+    // bytes are verified before the first rename, so drift refuses with the live
+    // tree completely untouched rather than halfway through a partial move.
+    for (const item of ledger.items) assertRetirementItemHolds(item);
+    for (const item of ledger.items) {
+      if (item.state === "moved") continue;
+      if (readIfExists(item.path) !== undefined) {
+        mkdirSync(dirname(item.archivePath), { recursive: true });
+        renameSync(item.path, item.archivePath);
+        migrationFailureHook(MIGRATION_FAILURE_ENV.retirement, "after-rename");
+      }
+      const archived = readIfExists(item.archivePath);
+      if (archived === undefined || sha256Of(archived) !== item.sha256) {
+        throw conflict(
+          `the moved copy of ${item.relativePath} does not hold the reviewed bytes; it was NOT overwritten, and the ` +
+            `retirement did not complete.`,
+        );
+      }
+      item.state = "moved";
+      ledger.updatedAt = new Date().toISOString();
+      writeJsonAtomic(ledgerPath, ledger);
+    }
+
+    migrationFailureHook(MIGRATION_FAILURE_ENV.retirement, "before-receipt");
+    const retiredAt = new Date().toISOString();
+    const stored: ExecutionRetirementRecord = {
+      retirementVersion: 1,
+      manifestId,
+      manifestHash,
+      storeId: live.manifest.storeId,
+      epoch: live.manifest.epoch,
+      archiveDir,
+      ledgerPath,
+      items: ledger.items.map((item) => ({
+        relativePath: item.relativePath,
+        sha256: item.sha256,
+        archivePath: item.archivePath,
+      })),
+      retiredAt,
+    };
+    return withExecutionTransaction(context, (tx) => {
+      if (tx.execution.authorityState !== "active" || tx.execution.manifestId !== manifestId) {
+        throw conflict(
+          `manifest ${manifestId} is no longer the active execution authority, so the retirement receipt was not recorded. ` +
+            `The moved sources stay archived; nothing was returned to JSON.`,
+        );
+      }
+      const wrote = tx.db
+        .prepare(
+          "update execution_migrations set phase = 'retired', retirement_json = ?, updated_at = ? " +
+            "where manifest_id = ? and phase = 'active'",
+        )
+        .run(JSON.stringify(stored), retiredAt, manifestId) as { changes?: unknown };
+      if (Number(wrote.changes) !== 1) {
+        throw conflict(`manifest ${manifestId} left the active phase while retirement ran; the retirement receipt was not recorded.`);
+      }
+      return { manifestId, phase: "retired" as const, replayed: false };
+    });
+  };
+
+  return withExecutionMaintenanceLock(context, () =>
+    withStatusWriteLock(join(root, "status.json"), () => withAllLocks(lockPaths, run)),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Staged abort (R2, §6 item 5)
+// ---------------------------------------------------------------------------
+
+/**
+ * §6 item 5: what the store records about an aborted staging. The schema has no
+ * dedicated abort column, so the activation-receipt column carries it — the
+ * record is self-describing (`abortVersion`) and the row's `phase` is
+ * `aborted`, which is the field every reader checks first.
+ */
+type ExecutionAbortRecord = {
+  abortVersion: number;
+  manifestId: string;
+  manifestHash: string;
+  reason: string;
+  operator: string;
+  storeId: string;
+  epoch: number;
+  previousAuthority: string;
+  deletedRows: Record<string, number>;
+  abortedAt: string;
+};
+
+/** §2.2 the child-before-parent order the staged rows have to leave in. */
+const STAGED_TABLES = [
+  "execution_operations",
+  "execution_leases",
+  "execution_integration_leases",
+  "execution_inputs",
+  "execution_sessions",
+  "execution_plans",
+  "execution_registry",
+  "execution_workflows",
+] as const;
+
+/**
+ * `abortExecutionMigration` — the §6 item 5 explicit staged abort: delete
+ * exactly the addressed manifest's staged execution rows in ONE transaction,
+ * preserve issue/catalog and every source byte, record the aborted receipt and
+ * return the execution mode to `legacy`, so changed legacy input can be
+ * previewed and applied anew under a fresh manifest instead of a hidden merge.
+ *
+ * It can never remove active data: a manifest recorded `active` or `retired`
+ * cannot abort, and the transaction refuses unless the live authority is still
+ * the staged manifest it addresses. It writes no file and no issue/catalog row.
+ */
+export async function abortExecutionMigration(input: ExecutionMigrationAbortInput): Promise<ExecutionMigrationReceipt> {
+  const { context, operator } = resolveMigrationInput(input, "abort");
+  const manifestId = requireManifestRef(input.manifestId, "abort", "manifestId");
+  const manifestHash = requireManifestRef(input.manifestHash, "abort", "manifestHash");
+  if (!isNonEmptyString(input.reason) || input.reason.trim() === "") {
+    throw conflict(`abort requires the reason it is recorded under (a nonblank string); an unattributed abort is never recorded.`);
+  }
+  const root = controlRootOf(context);
+
+  const known = await readMigrationRecordFor(context, manifestId, manifestHash, root, "abort");
+  if (known.phase === "active" || known.phase === "retired") {
+    throw conflict(
+      `manifest ${manifestId} is recorded ${known.phase}: a live execution authority is never returned to JSON, and a retired ` +
+        `one has already left the staged phase behind. Nothing was aborted.`,
+    );
+  }
+  if (known.phase === "aborted") return { manifestId, phase: "aborted", replayed: true };
+
+  return withExecutionTransaction(context, (tx) => {
+    const record = requireMigrationRecord({
+      record: readMigrationRecord(tx.db, manifestId),
+      manifestId,
+      manifestHash,
+      root,
+      verb: "abort",
+    });
+    if (record.phase === "active" || record.phase === "retired") {
+      throw conflict(
+        `manifest ${manifestId} is recorded ${record.phase}; only a staged manifest aborts, and nothing was aborted.`,
+      );
+    }
+    if (record.phase === "aborted") return { manifestId, phase: "aborted" as const, replayed: true };
+    if (tx.execution.authorityState !== "staged" || tx.execution.manifestId !== manifestId) {
+      throw conflict(
+        `the execution authority is ${tx.execution.authorityState}` +
+          `${tx.execution.manifestId === null ? "" : ` under manifest ${tx.execution.manifestId}`}, not the staged manifest ` +
+          `${manifestId}. An abort removes only the staged rows it addresses; nothing was aborted.`,
+      );
+    }
+
+    // The delete set is scoped to the workflows this manifest's own staged graph
+    // holds, so an abort can never reach a record another manifest owns.
+    const workflowIds = (tx.db.prepare("select workflow_id from execution_workflows order by workflow_id").all() as Array<{
+      workflow_id?: unknown;
+    }>).map((row) => String(row.workflow_id));
+    const deletedRows: Record<string, number> = {};
+    const now = new Date().toISOString();
+    if (workflowIds.length > 0) {
+      const placeholders = workflowIds.map(() => "?").join(", ");
+      for (const table of STAGED_TABLES) {
+        const before = tx.db.prepare(`select count(*) as n from ${table} where workflow_id in (${placeholders})`).get(...workflowIds) as
+          | { n?: unknown }
+          | undefined;
+        deletedRows[table] = Number(before?.n ?? 0);
+        tx.db.prepare(`delete from ${table} where workflow_id in (${placeholders})`).run(...workflowIds);
+      }
+    }
+    // §2.1 legacy and staged share the unchanged JSON execution route, so an
+    // aborted staging returns the store to `legacy` with the JSON route live
+    // again — the root timestamp it imported is preserved (no root changed).
+    tx.db
+      .prepare("update execution_meta set authority_state = 'legacy', revision = revision + 1, manifest_id = null where id = 1")
+      .run();
+    tx.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+    const stored: ExecutionAbortRecord = {
+      abortVersion: 1,
+      manifestId,
+      manifestHash,
+      reason: input.reason,
+      operator,
+      storeId: tx.storeId,
+      epoch: tx.epoch,
+      previousAuthority: tx.execution.authorityState,
+      deletedRows,
+      abortedAt: now,
+    };
+    const wrote = tx.db
+      .prepare(
+        "update execution_migrations set phase = 'aborted', activation_receipt_json = ?, updated_at = ? " +
+          "where manifest_id = ? and phase = 'staged'",
+      )
+      .run(JSON.stringify(stored), now, manifestId) as { changes?: unknown };
+    if (Number(wrote.changes) !== 1) {
+      throw conflict(`manifest ${manifestId} left the staged phase while the abort ran; the abort was rolled back and nothing changed.`);
+    }
+    migrationFailureHook(MIGRATION_FAILURE_ENV.abort, "before-commit");
+    return { manifestId, phase: "aborted" as const, replayed: false };
+  });
 }
