@@ -16,6 +16,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join } from "node:path";
+import { assertCatalogExecutionCommittedOn } from "./catalog-registration.js";
 import {
   CoordinationError,
   assertExactKeys,
@@ -488,6 +489,15 @@ export async function prepareExecutionPlan(
       sessionBound: witness.view.session !== null,
       leaseHeld: witness.view.executionLease !== null,
     });
+
+    // §3 step 3 the registration admission the file route runs after its own
+    // row admission: a root-visible workflow whose catalog registration is
+    // still pending is never a valid workspace, because the row this operation
+    // is about to seal would be prepared from an uncommitted registration. Read
+    // on THIS transaction's handle — one connection, one transaction, the same
+    // "pending" verdict as `assertCatalogExecutionCommitted` — and BEFORE the
+    // frozen input and any pin or row write.
+    assertCatalogExecutionCommittedOn(tx.db, controlHarnessRoot(context), witness.workflowId);
 
     // §2.2/§1 the frozen input is sealed, and a pin that disagrees with the
     // selection it is pinned to is a conflict: neither side is overwritten.

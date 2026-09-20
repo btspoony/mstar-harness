@@ -680,13 +680,55 @@ async function bindPlanPm(fixture: LiveFixture, planId: string, label: string): 
   return bound.data;
 }
 
-async function refusalOf(work: () => Promise<unknown>): Promise<{ code?: string; details?: Record<string, unknown> }> {
+async function refusalOf(
+  work: () => Promise<unknown>,
+): Promise<{ code?: string; message?: string; details?: Record<string, unknown> }> {
   try {
     await work();
     throw new Error("expected a refusal");
   } catch (error) {
-    return error as { code?: string; details?: Record<string, unknown> };
+    return error as { code?: string; message?: string; details?: Record<string, unknown> };
   }
+}
+
+/**
+ * The v2 root document that makes the fixture's workflow ROOT-VISIBLE, which is
+ * the precondition of the registration gate. `findRegisteredWorkflow` is a
+ * tolerant reader, so the entry an active workflow carries is all it needs.
+ */
+function registerWorkflowInRoot(harnessRoot: string): void {
+  writeFileSync(
+    join(harnessRoot, "status.json"),
+    `${JSON.stringify({ version: 2, workflows: [{ id: WORKFLOW_ID, type: "plan", status: "running" }] }, null, 2)}\n`,
+  );
+}
+
+/** Record one catalog-registration operation for the workflow on the journal. */
+function plantRegistration(context: StoreContext, operationId: string, phase: string): void {
+  withRaw(context, (db) => {
+    db.prepare(
+      "insert into catalog_operations(operation_id, request_hash, phase, catalog_delta_json, before_versions_json, after_versions_json, result_json, created_at, updated_at) " +
+        "values (?, ?, ?, ?, '{}', '{}', null, ?, ?)",
+    ).run(
+      operationId,
+      "c".repeat(64),
+      phase,
+      JSON.stringify({ workflow: { workflowId: WORKFLOW_ID } }),
+      TS,
+      TS,
+    );
+  });
+}
+
+function setRegistrationPhase(context: StoreContext, operationId: string, phase: string): void {
+  withRaw(context, (db) => {
+    db.prepare("update catalog_operations set phase = ? where operation_id = ?").run(phase, operationId);
+  });
+}
+
+function registrationPhase(context: StoreContext, operationId: string): unknown {
+  const [row] = rows(context, `select phase from catalog_operations where operation_id = '${operationId}'`);
+  return row?.phase;
 }
 
 describe("execution-prepare-progress: §3/§4.1 DB prepare and progress", () => {
@@ -893,6 +935,47 @@ describe("execution-prepare-progress: §3/§4.1 DB prepare and progress", () => 
     expect(paused).toMatchObject({ code: "coordination.invalid-transition" });
     expect(planFootprint(context, PEER_PLAN)).toEqual(peerBefore);
     expect(planFootprint(context, OWN_PLAN)).toEqual(prepared);
+  });
+
+  test("refuses a prepare whose catalog registration is still pending, and seals nothing", async () => {
+    const fixture = await liveWorkflow("prepare-registration-pending");
+    const { context, harnessRoot, planTokens } = fixture;
+    registerWorkflowInRoot(harnessRoot);
+
+    // §3 step 3 a journal row that is NOT in flight is not a pending
+    // registration: a committed operation refuses nothing, so the plan it
+    // covers still seals normally.
+    plantRegistration(context, "op-registration-committed", "committed");
+    const committed = await prepareCall(fixture, SPARE_PLAN, "prepare-committed", planTokens[SPARE_PLAN]!);
+    expect(committed.replayed).toBe(false);
+    expect(typeof committed.data.coordination?.prepared?.assignment_sha256).toBe("string");
+
+    // A RECORDED-but-uncommitted registration is: the workflow is root-visible
+    // while its catalog registration is only `prepared`, which is exactly the
+    // workspace the file route refuses after its own row admission.
+    plantRegistration(context, "op-registration-pending", "prepared");
+    const before = planFootprint(context, OWN_PLAN);
+    const refused = await refusalOf(async () =>
+      prepareCall(fixture, OWN_PLAN, "prepare-pending", planTokens[OWN_PLAN]!),
+    );
+    expect(refused.code).toBe("catalog.registration-pending");
+    expect(refused.message).toContain("op-registration-pending");
+    // The refusal is the pending operation and nothing else: no plan, input,
+    // revision, lease or operation row moved, and the journal row is untouched
+    // (the operation is still reconcilable, never consumed by the refusal).
+    expect(planFootprint(context, OWN_PLAN)).toEqual(before);
+    expect(registrationPhase(context, "op-registration-pending")).toBe("prepared");
+
+    // Committing the registration — and nothing else about the fixture —
+    // restores the same prepare, which now runs its real seal.
+    setRegistrationPhase(context, "op-registration-pending", "committed");
+    const sealed = await prepareCall(fixture, OWN_PLAN, "prepare-after-commit", planTokens[OWN_PLAN]!);
+    expect(sealed.replayed).toBe(false);
+    expect(sealed.data.coordination?.prepared).toMatchObject({
+      assignment_path: join(harnessRoot, "assignments", `${OWN_PLAN}.md`),
+      qa_gate: "mandatory",
+      prepared_by: COORDINATOR_ID,
+    });
   });
 
   test("progress moves only the plan's own status, summary and branches, and replays without advancing", async () => {
