@@ -1269,7 +1269,8 @@ type ResolvedCreationPlan = {
   pin: CatalogExecutionPin | null;
 };
 
-type ResolvedCreation = {
+/** §3 the resolved create request: identity, the entry/snapshot pair and the plan rows it seals. */
+export type ResolvedCreation = {
   workflowId: string;
   entry: WorkflowEntry;
   snapshot: WorkflowSnapshot;
@@ -1339,7 +1340,7 @@ export function suppliedCatalogPin(row: Record<string, unknown>, workflowId: str
  * evidence or a terminal status is a historical lifecycle: it belongs on the
  * migration route, never on the create-only path.
  */
-function resolveCreateWorkflow(
+export function resolveCreateWorkflow(
   caller: ExecutionCaller,
   entry: unknown,
   snapshot: unknown,
@@ -1620,6 +1621,56 @@ function writeCreatedWorkflow(
 }
 
 /**
+ * §2.2/§3 the WRITE half of create-only workflow creation, on a handle the
+ * caller ALREADY owns: the identity/newness checks, registry membership, the
+ * workflow header, its plan rows and their sealed frozen inputs, plus the
+ * exactly-once revision pair an accepted creation performs.
+ *
+ * Extracted because TWO composed domains write a created lifecycle through it:
+ * `createExecutionWorkflow`, where creation is the whole operation, and the
+ * active catalog registration, where creation and the reviewed catalog delta
+ * commit together. The read half, the CAS frame and the receipt stay with the
+ * verb that owns the operation id, so neither caller re-derives what a created
+ * workflow is and no second creator drifts from this one.
+ */
+export function writeExecutionCreation(
+  tx: ExecutionTransaction,
+  input: { caller: ExecutionCaller; creation: ResolvedCreation; now: string },
+): void {
+  assertWorkflowIdentityIsNew(tx.db, input.creation.workflowId);
+  assertSelectedCatalogEntities(tx.db, tx.storeId, input.creation.workflowId, input.creation.plans);
+  writeCreatedWorkflow(tx.db, {
+    workflowId: input.creation.workflowId,
+    entry: input.creation.entry,
+    snapshot: input.creation.snapshot,
+    plans: input.creation.plans,
+    creatorSessionId: input.caller.sessionId,
+    now: input.now,
+  });
+  // Registry membership is a root change: the root revision and its timestamp
+  // advance together here, and this writer advances the STORE revision exactly
+  // once — the store-revision half of the multi-domain transaction. Catalog data
+  // is deliberately not this writer's business: each published catalog mutation
+  // advances `catalog_revision` through the catalog domain's own rule, so a
+  // composed registration bumps it once per published row and never twice for
+  // one row.
+  tx.db.prepare("update execution_meta set revision = revision + 1, root_updated_at = ? where id = 1").run(input.now);
+  tx.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+}
+
+/**
+ * §3.1 the root token as THIS transaction currently holds it: the CAS a caller
+ * stores back after an accepted operation that changed registry membership.
+ * `execution_meta` is read from the caller's own handle rather than reused from
+ * the snapshot `withExecutionTransaction` took at BEGIN, because an accepted
+ * creation has already superseded that revision — so the token is exactly the
+ * one a fresh `readExecutionState` would mint.
+ */
+export function executionRootTokenOf(tx: ExecutionTransaction): ExecutionToken {
+  return executionToken("root", tx.storeId, tx.epoch, [], readExecutionMetaRow(tx.db).revision);
+}
+
+/**
  * §3 create-only workflow creation: registry membership, the workflow header,
  * its plan rows and their SEALED frozen inputs are written in ONE transaction
  * against an exact root CAS token, together with the operation receipt that
@@ -1679,25 +1730,8 @@ export async function createExecutionWorkflow(
       revision: tx.execution.revision,
     });
 
-    assertWorkflowIdentityIsNew(tx.db, creation.workflowId);
-    assertSelectedCatalogEntities(tx.db, tx.storeId, creation.workflowId, creation.plans);
-
     const now = new Date().toISOString();
-    writeCreatedWorkflow(tx.db, {
-      workflowId: creation.workflowId,
-      entry: creation.entry,
-      snapshot: creation.snapshot,
-      plans: creation.plans,
-      creatorSessionId: context.caller.sessionId,
-      now,
-    });
-    // Registry membership is a root change: the root revision and its timestamp
-    // advance together, and the multi-domain transaction bumps the store
-    // revision once (no catalog data changed, so catalog_revision is untouched).
-    tx.db
-      .prepare("update execution_meta set revision = revision + 1, root_updated_at = ? where id = 1")
-      .run(now);
-    tx.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+    writeExecutionCreation(tx, { caller: context.caller, creation, now });
 
     const meta = readExecutionMetaRow(tx.db);
     const store: StoreIdentity = { storeId: tx.storeId, epoch: tx.epoch };

@@ -714,6 +714,17 @@ export {
   registerShippedCatalogExecution,
   resolveCatalogRegistrationState,
 } from "./catalog-registration.js";
+// §7 the ACTIVE registration route: the ONE verb that publishes a reviewed
+// catalog delta together with the execution lifecycle it registers. It is the
+// DB-transport sibling of `registerCatalogExecution` and shares every reviewed
+// derivation with it (`resolveCatalogExecutionPlan`, the workflow entry, the
+// catalog domain's handle-taking verbs); what differs is the boundary — one
+// `BEGIN IMMEDIATE` transaction over the workflow header, registry membership,
+// plan rows, sealed inputs, catalog delta, binding and committed receipt, with
+// no JSON registration file and no intermediate `prepared` phase ever written.
+// ADDITIVE export: the composed admission frame stays module-scoped, and the
+// legacy journal remains the only file-route entry point.
+export { commitExecutionRegistration } from "./execution-registration.js";
 // Disposable execution/roadmap projections: the ONE source-I/O boundary
 // (`refreshProjections`) over the JSON execution authority, plus its two
 // halves -- the pure validated capture and the atomic publication/last-good

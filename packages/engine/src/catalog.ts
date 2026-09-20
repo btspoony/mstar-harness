@@ -680,9 +680,17 @@ function incidentLinks(db: StoreDb, keys: readonly CatalogKey[]): CatalogLink[] 
   }));
 }
 
-type StoreVersions = { storeRevision: number; catalogRevision: number; authorityState: string };
+/** §2 the store's three revisions, as one read: the pair a mutation records plus the authority state it requires. */
+export type CatalogStoreVersions = { storeRevision: number; catalogRevision: number; authorityState: string };
 
-function readStoreVersions(db: StoreDb): StoreVersions {
+/**
+ * The same versions, read through a handle the caller ALREADY owns. The
+ * registration's active route composes catalog writes into the one execution
+ * transaction, so it reads the expectation (`catalogRevision`) and the
+ * published revision on its own handle instead of opening a second connection
+ * — one reader for both transports.
+ */
+export function readCatalogStoreVersionsOn(db: StoreDb): CatalogStoreVersions {
   const row = db
     .prepare("select authority_state, revision, catalog_revision from store_meta where id = 1")
     .get() as { authority_state?: unknown; revision?: unknown; catalog_revision?: unknown } | undefined;
@@ -693,7 +701,7 @@ function readStoreVersions(db: StoreDb): StoreVersions {
 }
 
 function assertCatalogActive(db: StoreDb): void {
-  const versions = readStoreVersions(db);
+  const versions = readCatalogStoreVersionsOn(db);
   if (versions.authorityState !== "active") {
     throw new CatalogError(
       "store.not-active",
@@ -703,9 +711,9 @@ function assertCatalogActive(db: StoreDb): void {
 }
 
 /** Only a published catalog mutation advances the catalog revision (§2). */
-function bumpCatalogRevisions(db: StoreDb): StoreVersions {
+function bumpCatalogRevisions(db: StoreDb): CatalogStoreVersions {
   db.prepare("update store_meta set revision = revision + 1, catalog_revision = catalog_revision + 1 where id = 1").run();
-  return readStoreVersions(db);
+  return readCatalogStoreVersionsOn(db);
 }
 
 type CatalogDelta = { mutation: string; action: string; key: CatalogKey | { from: CatalogKey; relation: string; to: CatalogKey } };
@@ -715,8 +723,8 @@ function commitOperation(
   operation: { operationId: string },
   hash: string,
   receipt: CatalogReceipt,
-  before: StoreVersions,
-  after: StoreVersions,
+  before: CatalogStoreVersions,
+  after: CatalogStoreVersions,
   delta: CatalogDelta,
 ): CatalogReceipt {
   const at = nowRfc3339();
@@ -760,7 +768,6 @@ function receiptOf(row: EntityRow, storeRevision: number): CatalogReceipt {
 async function withCatalogWrite<T>(context: StoreContext, fn: (db: StoreDb) => T): Promise<T> {
   const handle = await openStore(context, "write");
   try {
-    assertCatalogActive(handle.db);
     handle.db.exec("begin immediate");
     try {
       const result = fn(handle.db);
@@ -798,76 +805,93 @@ export async function registerCatalogEntity(
   input: CatalogEntityInput,
   operation: CatalogOperation,
 ): Promise<CatalogReceipt> {
+  return withCatalogWrite(context, (db) => registerCatalogEntityOn(db, context, input, operation));
+}
+
+/**
+ * §2 the same create/attach rule on a handle the caller ALREADY owns. The
+ * registration's active route publishes its reviewed delta inside the ONE
+ * execution transaction, so it composes this instead of opening a second
+ * connection: one implementation of the identity/location/uniqueness rules for
+ * both transports, and no nested `begin` for a caller that already owns one.
+ * The authority gate the frame used to run before `begin` runs here instead —
+ * inside the caller's transaction, under its write lock.
+ */
+export function registerCatalogEntityOn(
+  db: StoreDb,
+  context: StoreContext,
+  input: CatalogEntityInput,
+  operation: CatalogOperation,
+): CatalogReceipt {
+  assertCatalogActive(db);
   const op = requireOperation(operation);
   const record = normalizeEntityInput(context, input);
   const hash = requestHash("registerCatalogEntity", { record, ...op });
 
-  return withCatalogWrite(context, (db) => {
-    const before = readStoreVersions(db);
-    const existingOp = lookupOperation(db, op.operationId);
-    if (existingOp) return replayOperation(existingOp, hash);
+  const before = readCatalogStoreVersionsOn(db);
+  const existingOp = lookupOperation(db, op.operationId);
+  if (existingOp) return replayOperation(existingOp, hash);
 
-    const existing = readEntity(db, record.kind, record.id);
-    if (existing) {
-      if (existing.root_kind !== record.rootKind || existing.relative_path !== record.relativePath) {
-        throw new CatalogError(
-          "catalog.duplicate",
-          `${record.kind} ${record.id} is already registered at ${existing.root_kind}/${existing.relative_path}; ` +
-            `existing IDs are preserved \u2014 updateCatalogEntity is the only verb that relocates one.`,
-        );
-      }
-      return commitOperation(
-        db,
-        op,
-        hash,
-        receiptOf(existing, before.storeRevision),
-        before,
-        before,
-        { mutation: "registerCatalogEntity", action: "noop-identical", key: { kind: record.kind, id: record.id } },
+  const existing = readEntity(db, record.kind, record.id);
+  if (existing) {
+    if (existing.root_kind !== record.rootKind || existing.relative_path !== record.relativePath) {
+      throw new CatalogError(
+        "catalog.duplicate",
+        `${record.kind} ${record.id} is already registered at ${existing.root_kind}/${existing.relative_path}; ` +
+          `existing IDs are preserved \u2014 updateCatalogEntity is the only verb that relocates one.`,
       );
     }
-
-    const located = findEntityByLocation(db, record.kind, record.rootKind, record.relativePath);
-    if (located) {
-      return commitOperation(
-        db,
-        op,
-        hash,
-        receiptOf(located, before.storeRevision),
-        before,
-        before,
-        { mutation: "registerCatalogEntity", action: "attach-existing-location", key: { kind: located.kind, id: located.id } },
-      );
-    }
-
-    const at = nowRfc3339();
-    db.prepare(
-      "insert into catalog_entities(kind, id, title, description, root_kind, relative_path, document_kind, lifecycle, revision, registered_at, updated_at, source_hash) " +
-        "values (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)",
-    ).run(
-      record.kind,
-      record.id,
-      record.title,
-      record.description,
-      record.rootKind,
-      record.relativePath,
-      record.documentKind,
-      record.lifecycle,
-      at,
-      at,
-      record.sourceHash,
-    );
-    const after = bumpCatalogRevisions(db);
     return commitOperation(
       db,
       op,
       hash,
-      { kind: record.kind, id: record.id, revision: 1, storeRevision: after.storeRevision },
+      receiptOf(existing, before.storeRevision),
       before,
-      after,
-      { mutation: "registerCatalogEntity", action: "created", key: { kind: record.kind, id: record.id } },
+      before,
+      { mutation: "registerCatalogEntity", action: "noop-identical", key: { kind: record.kind, id: record.id } },
     );
-  });
+  }
+
+  const located = findEntityByLocation(db, record.kind, record.rootKind, record.relativePath);
+  if (located) {
+    return commitOperation(
+      db,
+      op,
+      hash,
+      receiptOf(located, before.storeRevision),
+      before,
+      before,
+      { mutation: "registerCatalogEntity", action: "attach-existing-location", key: { kind: located.kind, id: located.id } },
+    );
+  }
+
+  const at = nowRfc3339();
+  db.prepare(
+    "insert into catalog_entities(kind, id, title, description, root_kind, relative_path, document_kind, lifecycle, revision, registered_at, updated_at, source_hash) " +
+      "values (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)",
+  ).run(
+    record.kind,
+    record.id,
+    record.title,
+    record.description,
+    record.rootKind,
+    record.relativePath,
+    record.documentKind,
+    record.lifecycle,
+    at,
+    at,
+    record.sourceHash,
+  );
+  const after = bumpCatalogRevisions(db);
+  return commitOperation(
+    db,
+    op,
+    hash,
+    { kind: record.kind, id: record.id, revision: 1, storeRevision: after.storeRevision },
+    before,
+    after,
+    { mutation: "registerCatalogEntity", action: "created", key: { kind: record.kind, id: record.id } },
+  );
 }
 
 /**
@@ -891,7 +915,8 @@ export async function updateCatalogEntity(
   const hash = requestHash("updateCatalogEntity", { target, record, expected, ...op });
 
   return withCatalogWrite(context, (db) => {
-    const before = readStoreVersions(db);
+    assertCatalogActive(db);
+    const before = readCatalogStoreVersionsOn(db);
     const existingOp = lookupOperation(db, op.operationId);
     if (existingOp) return replayOperation(existingOp, hash);
 
@@ -966,6 +991,23 @@ export async function linkCatalogEntities(
   link: CatalogLinkInput,
   operation: CatalogOperation,
 ): Promise<CatalogReceipt> {
+  return withCatalogWrite(context, (db) => linkCatalogEntitiesOn(db, context, link, operation));
+}
+
+/**
+ * §2 the same relation rule on a handle the caller ALREADY owns — the link half
+ * of the registration's composed publish (see `registerCatalogEntityOn`): the
+ * pair table, the endpoint existence checks, the optional `from`-revision
+ * expectation and the deterministic replay all run against the caller's own
+ * transaction instead of a second connection.
+ */
+export function linkCatalogEntitiesOn(
+  db: StoreDb,
+  context: StoreContext,
+  link: CatalogLinkInput,
+  operation: CatalogOperation,
+): CatalogReceipt {
+  assertCatalogActive(db);
   const op = requireOperation(operation);
   if (!link || typeof link !== "object") throw invalid("a catalog link is required");
   const from = requireKey("link.from", link.from);
@@ -982,73 +1024,71 @@ export async function linkCatalogEntities(
     expectedRevision: operation.expectedRevision,
   });
 
-  return withCatalogWrite(context, (db) => {
-    const before = readStoreVersions(db);
-    const existingOp = lookupOperation(db, op.operationId);
-    if (existingOp) return replayOperation(existingOp, hash);
+  const before = readCatalogStoreVersionsOn(db);
+  const existingOp = lookupOperation(db, op.operationId);
+  if (existingOp) return replayOperation(existingOp, hash);
 
-    const fromRow = readEntity(db, from.kind, from.id);
-    if (!fromRow) throw new CatalogError("catalog.link-refused", `${from.kind} ${from.id} is not registered`);
-    if (!readEntity(db, to.kind, to.id)) {
+  const fromRow = readEntity(db, from.kind, from.id);
+  if (!fromRow) throw new CatalogError("catalog.link-refused", `${from.kind} ${from.id} is not registered`);
+  if (!readEntity(db, to.kind, to.id)) {
+    throw new CatalogError(
+      "catalog.link-refused",
+      `${to.kind} ${to.id} is not registered; a catalog relation may not dangle (\u00a72).`,
+    );
+  }
+  if (operation.expectedRevision !== undefined) {
+    const expected = requireExpectedRevision(operation.expectedRevision);
+    if (fromRow.revision !== expected) {
       throw new CatalogError(
-        "catalog.link-refused",
-        `${to.kind} ${to.id} is not registered; a catalog relation may not dangle (\u00a72).`,
+        "catalog.revision-conflict",
+        `${from.kind} ${from.id} is at revision ${fromRow.revision}, not the expected ${expected}; nothing was changed.`,
       );
     }
-    if (operation.expectedRevision !== undefined) {
-      const expected = requireExpectedRevision(operation.expectedRevision);
-      if (fromRow.revision !== expected) {
-        throw new CatalogError(
-          "catalog.revision-conflict",
-          `${from.kind} ${from.id} is at revision ${fromRow.revision}, not the expected ${expected}; nothing was changed.`,
-        );
-      }
-    }
+  }
 
-    const existingLink = db
-      .prepare(`select ${LINK_COLUMNS} from catalog_links where from_kind = ? and from_id = ? and relation = ? and to_kind = ? and to_id = ?`)
-      .get(from.kind, from.id, link.relation, to.kind, to.id) as LinkRow | undefined;
-    const delta: CatalogDelta = {
-      mutation: "linkCatalogEntities",
-      action: "linked",
-      key: { from, relation: link.relation, to },
-    };
+  const existingLink = db
+    .prepare(`select ${LINK_COLUMNS} from catalog_links where from_kind = ? and from_id = ? and relation = ? and to_kind = ? and to_id = ?`)
+    .get(from.kind, from.id, link.relation, to.kind, to.id) as LinkRow | undefined;
+  const delta: CatalogDelta = {
+    mutation: "linkCatalogEntities",
+    action: "linked",
+    key: { from, relation: link.relation, to },
+  };
 
-    if (existingLink && existingLink.ordinal === ordinal) {
-      return commitOperation(db, op, hash, receiptOf(fromRow, before.storeRevision), before, before, {
-        ...delta,
-        action: "noop-identical",
-      });
-    }
+  if (existingLink && existingLink.ordinal === ordinal) {
+    return commitOperation(db, op, hash, receiptOf(fromRow, before.storeRevision), before, before, {
+      ...delta,
+      action: "noop-identical",
+    });
+  }
 
-    const at = nowRfc3339();
-    if (existingLink) {
-      db.prepare(
-        "update catalog_links set ordinal = ? where from_kind = ? and from_id = ? and relation = ? and to_kind = ? and to_id = ?",
-      ).run(ordinal, from.kind, from.id, link.relation, to.kind, to.id);
-    } else {
-      db.prepare(
-        "insert into catalog_links(from_kind, from_id, relation, to_kind, to_id, ordinal) values (?, ?, ?, ?, ?, ?)",
-      ).run(from.kind, from.id, link.relation, to.kind, to.id, ordinal);
-    }
-    const revision = fromRow.revision + 1;
-    db.prepare("update catalog_entities set revision = ?, updated_at = ? where kind = ? and id = ?").run(
-      revision,
-      at,
-      from.kind,
-      from.id,
-    );
-    const after = bumpCatalogRevisions(db);
-    return commitOperation(
-      db,
-      op,
-      hash,
-      { kind: from.kind, id: from.id, revision, storeRevision: after.storeRevision },
-      before,
-      after,
-      existingLink ? { ...delta, action: "ordinal-updated" } : delta,
-    );
-  });
+  const at = nowRfc3339();
+  if (existingLink) {
+    db.prepare(
+      "update catalog_links set ordinal = ? where from_kind = ? and from_id = ? and relation = ? and to_kind = ? and to_id = ?",
+    ).run(ordinal, from.kind, from.id, link.relation, to.kind, to.id);
+  } else {
+    db.prepare(
+      "insert into catalog_links(from_kind, from_id, relation, to_kind, to_id, ordinal) values (?, ?, ?, ?, ?, ?)",
+    ).run(from.kind, from.id, link.relation, to.kind, to.id, ordinal);
+  }
+  const revision = fromRow.revision + 1;
+  db.prepare("update catalog_entities set revision = ?, updated_at = ? where kind = ? and id = ?").run(
+    revision,
+    at,
+    from.kind,
+    from.id,
+  );
+  const after = bumpCatalogRevisions(db);
+  return commitOperation(
+    db,
+    op,
+    hash,
+    { kind: from.kind, id: from.id, revision, storeRevision: after.storeRevision },
+    before,
+    after,
+    existingLink ? { ...delta, action: "ordinal-updated" } : delta,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -1105,7 +1145,7 @@ export async function listCatalog(context: StoreContext, filter: CatalogFilter =
   const handle = await openStore(context, "read");
   try {
     const db = handle.db;
-    const storeRevision = readStoreVersions(db).storeRevision;
+    const storeRevision = readCatalogStoreVersionsOn(db).storeRevision;
     const total = db.prepare(`select count(*) as n from catalog_entities ${where}`).get(...params) as { n: number };
     const rows = db
       .prepare(
@@ -1138,7 +1178,7 @@ export async function getCatalog(context: StoreContext, key: CatalogKey): Promis
     return {
       entity: toCatalogEntity(row, roots),
       links: incidentLinks(handle.db, [target]),
-      storeRevision: readStoreVersions(handle.db).storeRevision,
+      storeRevision: readCatalogStoreVersionsOn(handle.db).storeRevision,
     };
   } finally {
     handle.close();
