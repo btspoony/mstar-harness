@@ -43,6 +43,7 @@ import {
   linkCatalogEntitiesOn,
   readCatalogStoreVersionsOn,
   registerCatalogEntityOn,
+  type ComposedStoreRevision,
 } from "./catalog.js";
 import {
   bindingInputOf,
@@ -117,6 +118,12 @@ function registrationRequestHash(
  * thing, so neither the catalog nor the execution lifecycle is ever visible
  * without the other, and nothing reports success for a half-written
  * registration.
+ *
+ * §3.1 the accepted multi-domain transaction advances the SHARED
+ * `store_meta.revision` exactly once, however many catalog rows the delta
+ * publishes: the catalog rows join the transaction's single advance and the
+ * catalog revision advances once per published row, as it does on the file
+ * route. An exact retry advances none of them.
  *
  * Refusals, in the order they are evaluated:
  *
@@ -201,18 +208,36 @@ export async function commitExecutionRegistration(
 
     const now = new Date().toISOString();
     writeExecutionCreation(tx, { caller: context.caller, creation, now });
+    // §3.1 the ONE shared store revision this accepted multi-domain transaction
+    // advances has already run inside the creation write above, so each reviewed
+    // catalog row JOINS it: the delta's row count never moves
+    // `store_meta.revision`, while the catalog revision keeps advancing once per
+    // published row (that counter is the catalog domain's own).
+    const composed: ComposedStoreRevision = { committedStoreRevision: readCatalogStoreVersionsOn(tx.db).storeRevision };
 
     for (const [index, entity] of plan.request.delta.entities.entries()) {
-      registerCatalogEntityOn(tx.db, context, entity, {
-        operationId: `${operationId}:entity:${index}`,
-        actor: plan.request.actor,
-      });
+      registerCatalogEntityOn(
+        tx.db,
+        context,
+        entity,
+        {
+          operationId: `${operationId}:entity:${index}`,
+          actor: plan.request.actor,
+        },
+        composed,
+      );
     }
     for (const [index, link] of (plan.request.delta.links ?? []).entries()) {
-      linkCatalogEntitiesOn(tx.db, context, link, {
-        operationId: `${operationId}:link:${index}`,
-        actor: plan.request.actor,
-      });
+      linkCatalogEntitiesOn(
+        tx.db,
+        context,
+        link,
+        {
+          operationId: `${operationId}:link:${index}`,
+          actor: plan.request.actor,
+        },
+        composed,
+      );
     }
 
     // The binding is written against the revision the delta just published: it

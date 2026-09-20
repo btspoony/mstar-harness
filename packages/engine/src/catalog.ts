@@ -684,6 +684,25 @@ function incidentLinks(db: StoreDb, keys: readonly CatalogKey[]): CatalogLink[] 
 export type CatalogStoreVersions = { storeRevision: number; catalogRevision: number; authorityState: string };
 
 /**
+ * §3.1 the SHARED store revision of the transaction a COMPOSED caller already
+ * owns. A caller that owns the transaction also owns its single advance of
+ * `store_meta.revision` (§3.1: one increment per accepted multi-domain
+ * transaction), so it tells the composed publish the revision the transaction
+ * commits at and every published row JOINS that advance — a second row in the
+ * same transaction must not move the shared counter again. The catalog revision
+ * is this domain's own counter and keeps advancing once per published row.
+ *
+ * Only the composed route supplies one: on the public route the catalog mutation
+ * IS the transaction, so it advances the shared counter itself, exactly as
+ * before. The handle is the caller's statement about its own transaction, never
+ * something a catalog request can carry.
+ */
+export type ComposedStoreRevision = {
+  /** The `store_meta.revision` value this transaction commits at. */
+  committedStoreRevision: number;
+};
+
+/**
  * The same versions, read through a handle the caller ALREADY owns. The
  * registration's active route composes catalog writes into the one execution
  * transaction, so it reads the expectation (`catalogRevision`) and the
@@ -710,8 +729,18 @@ function assertCatalogActive(db: StoreDb): void {
   }
 }
 
-/** Only a published catalog mutation advances the catalog revision (§2). */
-function bumpCatalogRevisions(db: StoreDb): CatalogStoreVersions {
+/**
+ * Only a published catalog mutation advances the catalog revision (§2) — and
+ * the SHARED store revision belongs to the transaction rather than to this
+ * domain: when a composed caller has already advanced it once, the row joins
+ * that advance (§3.1) instead of moving the same counter a second time, while
+ * still reporting the revision the transaction commits at.
+ */
+function bumpCatalogRevisions(db: StoreDb, composed?: ComposedStoreRevision): CatalogStoreVersions {
+  if (composed !== undefined) {
+    db.prepare("update store_meta set catalog_revision = catalog_revision + 1 where id = 1").run();
+    return { ...readCatalogStoreVersionsOn(db), storeRevision: composed.committedStoreRevision };
+  }
   db.prepare("update store_meta set revision = revision + 1, catalog_revision = catalog_revision + 1 where id = 1").run();
   return readCatalogStoreVersionsOn(db);
 }
@@ -815,13 +844,17 @@ export async function registerCatalogEntity(
  * connection: one implementation of the identity/location/uniqueness rules for
  * both transports, and no nested `begin` for a caller that already owns one.
  * The authority gate the frame used to run before `begin` runs here instead —
- * inside the caller's transaction, under its write lock.
+ * inside the caller's transaction, under its write lock. A composing caller also
+ * passes its `ComposedStoreRevision`, so the published row joins the
+ * transaction's single shared store-revision advance instead of moving that
+ * counter again.
  */
 export function registerCatalogEntityOn(
   db: StoreDb,
   context: StoreContext,
   input: CatalogEntityInput,
   operation: CatalogOperation,
+  composed?: ComposedStoreRevision,
 ): CatalogReceipt {
   assertCatalogActive(db);
   const op = requireOperation(operation);
@@ -882,7 +915,7 @@ export function registerCatalogEntityOn(
     at,
     record.sourceHash,
   );
-  const after = bumpCatalogRevisions(db);
+  const after = bumpCatalogRevisions(db, composed);
   return commitOperation(
     db,
     op,
@@ -999,13 +1032,16 @@ export async function linkCatalogEntities(
  * of the registration's composed publish (see `registerCatalogEntityOn`): the
  * pair table, the endpoint existence checks, the optional `from`-revision
  * expectation and the deterministic replay all run against the caller's own
- * transaction instead of a second connection.
+ * transaction instead of a second connection, and the relation joins the
+ * transaction's single shared store-revision advance when the caller passes its
+ * `ComposedStoreRevision`.
  */
 export function linkCatalogEntitiesOn(
   db: StoreDb,
   context: StoreContext,
   link: CatalogLinkInput,
   operation: CatalogOperation,
+  composed?: ComposedStoreRevision,
 ): CatalogReceipt {
   assertCatalogActive(db);
   const op = requireOperation(operation);
@@ -1079,7 +1115,7 @@ export function linkCatalogEntitiesOn(
     from.kind,
     from.id,
   );
-  const after = bumpCatalogRevisions(db);
+  const after = bumpCatalogRevisions(db, composed);
   return commitOperation(
     db,
     op,
