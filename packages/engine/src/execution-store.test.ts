@@ -1776,17 +1776,18 @@ describe("execution-domain: §3 workflow creation, sealed input and authoritativ
     expect(surface).toBe(createExecutionWorkflow);
     expect(typeof engineIndex.createExecutionWorkflow).toBe("function");
     expect(engineIndex.createExecutionWorkflow.length).toBe(2);
-    // The later coordination/recovery verbs are not stubbed into the package
-    // surface. C4 supplies `bindExecutionSession`/`readExecutionPlan`, pinned
-    // verbatim by the `execution-session` group below.
-    for (const name of [
-      "recoverExecutionCoordinator",
-      "mutateExecutionWorkflow",
-      "mutateExecutionPlan",
-      "commitExecutionRegistration",
-    ]) {
-      expect(name in engineIndex).toBe(false);
-    }
+    // The plan-operation and workflow-level verbs are published only once their
+    // closed unions are complete: C4 supplies
+    // `bindExecutionSession`/`readExecutionPlan` (pinned verbatim by the
+    // `execution-session` group below), W4 publishes `mutateExecutionPlan`, and
+    // W6 publishes the workflow-level mutator plus the coordinator recovery
+    // bootstrap (pinned verbatim by the `execution-workflow` group). Catalog
+    // registration (plan 4) and the per-operation transition bodies are still
+    // module-scoped.
+    expect(typeof engineIndex.mutateExecutionPlan).toBe("function");
+    expect(typeof engineIndex.mutateExecutionWorkflow).toBe("function");
+    expect(typeof engineIndex.recoverExecutionCoordinator).toBe("function");
+    expect("commitExecutionRegistration" in engineIndex).toBe(false);
   });
 });
 
@@ -2352,6 +2353,64 @@ describe("execution-session: §2.3 binding, role-scoped identity and the plan re
     await expect(read(planPm, bound.data, "p-1")).rejects.toMatchObject({ code: "execution.session-unavailable" });
   });
 
+  test("refuses a malformed, foreign-role or caller-mismatched reference before an unavailable store answers", async () => {
+    const shared = "host-shared";
+    const fixture = await createdWorkflow("session-read-precedence", shared);
+    const { context, workflowToken, planTokens } = fixture;
+    const coordinator = sessionCaller("wf-1", shared);
+    const coordinatorRef = await bindExecutionSession(
+      domainContext(context, coordinator),
+      sessionBind("wf-1", null, workflowToken, "bind-precedence-coordinator"),
+    );
+    preparePlanRow(context, "p-1", {
+      worktreePath: join(context.harnessDir, "worktrees", "p-1"),
+      workingBranch: "feature/precedence-p-1",
+    });
+    const planPm = planPmCaller("wf-1", shared, "p-1");
+    const bound = await bindExecutionSession(
+      domainContext(context, planPm),
+      sessionBind("wf-1", "p-1", planTokens["p-1"], "bind-precedence-plan"),
+    );
+    // The reference the caller holds reads its own plan while the store is active.
+    expect((await readExecutionPlan(domainContext(context, planPm), bound.data, "p-1")).data.plan.id).toBe("p-1");
+
+    // The authority stops being active: a request that IS the caller's own
+    // reference now meets the store's refusal...
+    const stager = rawDb(storePath(context));
+    try {
+      stager.prepare("update execution_meta set authority_state = 'staged' where id = 1").run();
+    } finally {
+      stager.close();
+    }
+    await expect(readExecutionPlan(domainContext(context, planPm), bound.data, "p-1")).rejects.toMatchObject({
+      code: "execution.not-active",
+    });
+    // ...and a malformed, foreign-role or caller-mismatched one is still refused
+    // by the reference gate, which runs BEFORE the store is opened.
+    await expect(
+      readExecutionPlan(domainContext(context, planPm), { epoch: 0 } as unknown as ExecutionSessionRef, "p-1"),
+    ).rejects.toMatchObject({ code: "coordination.invalid-input" });
+    await expect(readExecutionPlan(domainContext(context, coordinator), bound.data, "p-1")).rejects.toMatchObject({
+      code: "coordination.session-role",
+    });
+    await expect(
+      readExecutionPlan(domainContext(context, planPmCaller("wf-1", "host-else", "p-1")), bound.data, "p-1"),
+    ).rejects.toMatchObject({ code: "coordination.session-mismatch" });
+
+    // With no store at all the same references refuse identically: the gate
+    // never opens one, so no store-open failure can answer a bad request first.
+    rmSync(storePath(context), { force: true });
+    await expect(readExecutionPlan(domainContext(context, planPm), bound.data, "p-1")).rejects.toMatchObject({
+      code: "store.not-initialized",
+    });
+    await expect(readExecutionPlan(domainContext(context, coordinator), bound.data, "p-1")).rejects.toMatchObject({
+      code: "coordination.session-role",
+    });
+    await expect(
+      readExecutionPlan(domainContext(context, coordinator), coordinatorRef.data, "p-2"),
+    ).rejects.toMatchObject({ code: "store.not-initialized" });
+  });
+
   test("refuses a held lease whose recorded ownership disagrees with its session", async () => {
     const shared = "host-shared";
     const fixture = await createdWorkflow("session-lease-invariant", shared);
@@ -2476,14 +2535,18 @@ describe("execution-session: §2.3 binding, role-scoped identity and the plan re
     ) => Promise<ExecutionRead<ExecutionPlanView>> = engineIndex.readExecutionPlan;
     expect(readSurface).toBe(readExecutionPlan);
     expect(engineIndex.readExecutionPlan.length).toBe(3);
-    // The public prepare transition (W2), the coordination mutators (W1–W6),
-    // registration and coordinator recovery are still absent.
+    // W4 publishes the plan-operation entry point and W6 the workflow-level
+    // mutator plus the coordinator recovery bootstrap (both complete: the
+    // `execution-workflow` group pins their verbatim signatures). Registration
+    // is plan 4's and the per-operation transition bodies stay module-scoped.
+    expect(typeof engineIndex.mutateExecutionPlan).toBe("function");
+    expect(typeof engineIndex.mutateExecutionWorkflow).toBe("function");
+    expect(typeof engineIndex.recoverExecutionCoordinator).toBe("function");
     for (const name of [
-      "recoverExecutionCoordinator",
-      "mutateExecutionWorkflow",
-      "mutateExecutionPlan",
       "commitExecutionRegistration",
       "prepareExecutionPlan",
+      "handoffExecutionPlan",
+      "completeExecutionPlan",
     ]) {
       expect(name in engineIndex).toBe(false);
     }

@@ -40,6 +40,7 @@ import { resolveIterationDir } from "./path.js";
 import { withStatusWriteLock } from "./lease.js";
 import { CoordinationError, isNonEmptyString, isPlainObject, withProtectedWrite } from "./coordination-write.js";
 import { assertFsStorePath, getArtifactStore } from "./store.js";
+import { assertExecutionFileWriteAllowed } from "./store-db.js";
 import { parseEnforcementFlag, type EnforcementFlag } from "./dispatch.js";
 import { loadMstarc } from "./mstarc.js";
 // Call-time-only cycle with workflow.ts (workflow.ts imports validatePlanRow
@@ -727,6 +728,10 @@ export async function registerWorkflowEntryLocked(statusPath: string, entry: Wor
  // Realistic active-set size is 1–3 (microseconds); correctness-preserving.
    // Upgrade path: scope the on-disk invariant to the touched entry.
   const harnessDir = dirname(statusPath);
+  // Canonical authority discrimination precedes every read and validation
+  // below (spec §4.3): with an ACTIVE execution authority the root register is
+  // retired as a persistence route, whatever store the caller injected.
+  assertExecutionFileWriteAllowed({ harnessDir });
   const store = getArtifactStore();
  // Fail-loud path agreement : the caller's lock serializes
  // `statusPath`; the store put must land on that same file. A divergence
@@ -871,13 +876,19 @@ export function findRegisteredWorkflow(harnessDir: string, id: string): Workflow
  * nothing is written.
  */
 export async function registerWorkflow(root: string, entry: WorkflowEntry): Promise<StatusV2Doc> {
+  const statusPath = resolve(root);
+  // Canonical authority discrimination precedes the entry validation below
+  // (spec §4.3): with an ACTIVE execution authority the root register is
+  // retired as a persistence route, so no entry — valid or not — reaches it.
+  // `registerWorkflowEntryLocked` keeps its own guard for its other callers
+  // (audit promotion, migration), so no route can bypass the veto.
+  assertExecutionFileWriteAllowed({ harnessDir: dirname(statusPath) });
   const entryGate = validateWorkflowEntry(entry);
   if (!entryGate.ok) {
     throw new Error(
       `refusing to register invalid workflow entry: ${entryGate.violations.map((v) => v.message).join("; ")}`,
     );
   }
-  const statusPath = resolve(root);
   return withStatusWriteLock(statusPath, () => registerWorkflowEntryLocked(statusPath, entry));
 }
 
@@ -898,16 +909,22 @@ export async function registerWorkflow(root: string, entry: WorkflowEntry): Prom
  * below never mask a store/path mismatch.
  */
 export async function unregisterWorkflow(root: string, id: string): Promise<StatusV2Doc> {
+  const statusPath = resolve(root);
+  // Canonical authority discrimination IS the entry boundary (spec §4.3): the
+  // caller's root resolves the control harness, so the veto is decided before
+  // the `id` payload check below — an invalid id can no longer mask a retired
+  // route. Consequence, accepted: a call that is both malformed and
+  // active-forbidden now reports the authority refusal.
+  assertExecutionFileWriteAllowed({ harnessDir: dirname(statusPath) });
   if (typeof id !== "string" || id.trim() === "") {
     throw new Error("refusing to unregister workflow: id must be a non-empty string");
   }
-  const statusPath = resolve(root);
+  const harnessDir = dirname(statusPath);
   const store = getArtifactStore();
  // Fail-loud path agreement : the lockdir serializes
  // `statusPath`; the store put must land on that same file. A divergence
  // throws before the lockdir is created — nothing is written anywhere.
   assertFsStorePath(store, { kind: "status", key: "root" }, statusPath);
-  const harnessDir = dirname(statusPath);
   return withStatusWriteLock(statusPath, async () => {
      // simplify: same O(active) full-doc validation as registerWorkflow.
     const current = readJson(statusPath) as Record<string, unknown>;

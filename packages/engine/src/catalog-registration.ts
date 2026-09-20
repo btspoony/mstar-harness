@@ -728,6 +728,22 @@ function pendingRows(db: StoreDb): JournalRow[] {
     .all() as JournalRow[];
 }
 
+/**
+ * The NON-committed operation recorded for one workflow (contract §3 step 4),
+ * as BOTH the registration view and the dispatch gate read it: the journal's
+ * own phases, with `execution-written` reported as itself and every other
+ * non-committed row as `prepared`. `null` means no operation for this workflow
+ * is in flight — a committed or aborted row is not a pending registration.
+ */
+function pendingRegistrationOf(
+  db: StoreDb,
+  workflowId: string,
+): { operationId: string; phase: "prepared" | "execution-written" } | null {
+  const row = pendingRows(db).find((candidate) => parseJournalWorkflowId(candidate) === workflowId);
+  if (row === undefined) return null;
+  return { operationId: row.operation_id, phase: row.phase === "execution-written" ? "execution-written" : "prepared" };
+}
+
 /** True once this operation has published at least one of its catalog rows. */
 function hasPublishedDelta(db: StoreDb, operationId: string): boolean {
   for (const suffix of ["entity:0", "link:0"]) {
@@ -1411,17 +1427,13 @@ export async function resolveCatalogRegistrationState(
   const id = requireText(workflowId, "workflowId");
   const rootVisible = findRegisteredWorkflow(resolve(context.harnessDir), id) !== undefined;
   return await withJournalWrite(context, (db) => {
-    const pendingRow = pendingRows(db).find((row) => parseJournalWorkflowId(row) === id);
     const bindingRow = db
       .prepare("select catalog_kind, catalog_id, catalog_revision, operation_id from catalog_execution_bindings where workflow_id = ?")
       .get(id) as { catalog_kind?: unknown; catalog_id?: unknown; catalog_revision?: unknown } | undefined;
     return {
       workflowId: id,
       rootVisible,
-      pending:
-        pendingRow === undefined
-          ? null
-          : { operationId: pendingRow.operation_id, phase: pendingRow.phase === "execution-written" ? "execution-written" : "prepared" },
+      pending: pendingRegistrationOf(db, id),
       binding:
         bindingRow !== undefined && (bindingRow.catalog_kind === "plan" || bindingRow.catalog_kind === "iteration")
           ? {
@@ -1448,12 +1460,46 @@ export async function resolveCatalogRegistrationState(
 export async function assertCatalogExecutionCommitted(context: StoreContext, workflowId: string): Promise<void> {
   const state = await resolveCatalogRegistrationState(context, workflowId);
   if (!state.rootVisible || state.pending === null) return;
+  refusePendingRegistration(state.workflowId, state.pending);
+}
+
+/** The ONE refusal a pending registration produces, verbatim for both handles. */
+function refusePendingRegistration(
+  workflowId: string,
+  pending: { operationId: string; phase: "prepared" | "execution-written" },
+): never {
   throw new CatalogRegistrationError(
     "catalog.registration-pending",
-    `workflow ${JSON.stringify(state.workflowId)} is root-visible but its catalog registration is ${state.pending.phase}, not committed ` +
-      `(operation ${JSON.stringify(state.pending.operationId)}); dispatch must refuse until it is reconciled: ` +
-      `run "mstar catalog reconcile --operation-id ${state.pending.operationId}".`,
+    `workflow ${JSON.stringify(workflowId)} is root-visible but its catalog registration is ${pending.phase}, not committed ` +
+      `(operation ${JSON.stringify(pending.operationId)}); dispatch must refuse until it is reconciled: ` +
+      `run "mstar catalog reconcile --operation-id ${pending.operationId}".`,
   );
+}
+
+/**
+ * The SAME registration gate through a handle the caller ALREADY owns: a
+ * root-visible workflow whose catalog operation is recorded but not committed
+ * refuses `catalog.registration-pending`. The execution transaction opens one
+ * handle on the same `store.db`, so a DB `prepare` enforces its registration
+ * admission under its own write lock through this function instead of opening
+ * a second connection — exactly as `catalogPinFactsOn` reads a pin — and the
+ * "pending" verdict stays defined once, by `pendingRegistrationOf`.
+ *
+ * Store-state tolerances stay with the handle owner: a missing store never gets
+ * here (the opener refuses `store.not-initialized`), and a `store_meta` that is
+ * not ACTIVE keeps the pre-activation exclusion (§7) — a staged store is not a
+ * catalog verdict, so it passes through and is never retro-refused here.
+ */
+export function assertCatalogExecutionCommittedOn(db: StoreDb, harnessDir: string, workflowId: string): void {
+  const id = requireText(workflowId, "workflowId");
+  const meta = db.prepare("select authority_state from store_meta where id = 1").get() as
+    | { authority_state?: unknown }
+    | undefined;
+  if (meta?.authority_state !== "active") return;
+  if (findRegisteredWorkflow(resolve(harnessDir), id) === undefined) return;
+  const pending = pendingRegistrationOf(db, id);
+  if (pending === null) return;
+  refusePendingRegistration(id, pending);
 }
 
 /** Every pending registration operation, oldest first (recovery discovery). */
