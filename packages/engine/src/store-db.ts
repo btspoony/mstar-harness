@@ -609,6 +609,125 @@ insert into projection_meta(id, generation, format_version, source_set_hash, bui
 values (1, null, 1, null, null, strftime('%Y-%m-%dT%H:%M:%fZ','now'), 'unavailable', null);
 `;
 
+/**
+ * Migration 4 — execution authority tables (primary spec §2.2). Appended
+ * through the runner above; migrations 1–3 stay byte-identical so every
+ * applied store keeps its recorded checksum.
+ *
+ * These tables ARE the execution domain, never a projection: there is no
+ * status/progress/done/holder/expiry copy of a `projection_*` column here, and
+ * the issue/catalog authority in `store_meta` is left untouched. The
+ * `execution_meta` singleton is created `legacy` and never `active` — a schema
+ * upgrade is not an execution activation, and the JSON route stays live until
+ * a separate activation commits. `root_updated_at` records the row-creation
+ * instant because a schema upgrade imports no root; a migration that imports
+ * the root replaces it with the preserved source timestamp.
+ *
+ * The foreign keys and the partial unique indexes are the structural
+ * ownership guarantees: no session/lease/input can reference a workflow or
+ * plan that does not exist (no dangling lease), one plan-pm identity cannot
+ * silently move between plans (session primary key), and at most one ACTIVE
+ * coordinator per workflow / one ACTIVE plan-pm per plan can exist at a time.
+ */
+export const MIGRATION_4_SQL = `
+create table execution_meta(
+  id integer primary key check (id = 1),
+  protocol_version integer not null check (protocol_version = 1),
+  authority_state text not null check (authority_state in ('legacy','staged','active')),
+  revision integer not null check (revision > 0),
+  root_updated_at text not null,
+  manifest_id text,
+  activated_at text
+);
+insert into execution_meta(id, protocol_version, authority_state, revision, root_updated_at)
+values (1, 1, 'legacy', 1, strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+create table execution_workflows(
+  workflow_id text primary key,
+  revision integer not null check (revision > 0),
+  creator_session_id text,
+  state_json text not null,
+  created_at text not null,
+  updated_at text not null
+);
+create table execution_registry(
+  workflow_id text primary key references execution_workflows(workflow_id),
+  entry_json text not null
+);
+create table execution_plans(
+  workflow_id text not null references execution_workflows(workflow_id),
+  plan_id text not null,
+  revision integer not null check (revision > 0),
+  ordinal integer not null check (ordinal >= 0),
+  state_json text not null,
+  coordination_json text not null,
+  primary key (workflow_id, plan_id),
+  unique (workflow_id, ordinal)
+);
+create table execution_sessions(
+  workflow_id text not null references execution_workflows(workflow_id),
+  role text not null check (role in ('coordinator','plan-pm')),
+  session_id text not null,
+  plan_id text,
+  epoch integer not null check (epoch > 0),
+  revision integer not null check (revision > 0),
+  state text not null check (state in ('active','suspended','revoked')),
+  bound_at text not null,
+  primary key (workflow_id, role, session_id),
+  foreign key (workflow_id, plan_id) references execution_plans(workflow_id, plan_id),
+  check ((role = 'coordinator' and plan_id is null) or (role = 'plan-pm' and plan_id is not null))
+);
+create unique index execution_sessions_active_coordinator
+  on execution_sessions(workflow_id) where role = 'coordinator' and state = 'active';
+create unique index execution_sessions_active_plan_pm
+  on execution_sessions(workflow_id, plan_id) where role = 'plan-pm' and state = 'active';
+create table execution_leases(
+  workflow_id text not null,
+  plan_id text not null,
+  revision integer not null check (revision > 0),
+  owner_epoch integer not null check (owner_epoch > 0),
+  lease_json text not null,
+  primary key (workflow_id, plan_id),
+  foreign key (workflow_id, plan_id) references execution_plans(workflow_id, plan_id)
+);
+create table execution_integration_leases(
+  workflow_id text primary key references execution_workflows(workflow_id),
+  revision integer not null check (revision > 0),
+  owner_epoch integer not null check (owner_epoch > 0),
+  lease_json text not null
+);
+create table execution_inputs(
+  workflow_id text not null,
+  plan_id text not null,
+  revision integer not null check (revision > 0),
+  input_json text not null,
+  input_hash text not null,
+  catalog_pin_json text,
+  primary key (workflow_id, plan_id),
+  foreign key (workflow_id, plan_id) references execution_plans(workflow_id, plan_id)
+);
+create table execution_operations(
+  epoch integer not null check (epoch > 0),
+  operation_id text not null,
+  request_hash text not null,
+  store_id text not null,
+  workflow_id text not null,
+  plan_id text,
+  result_json text not null,
+  committed_at text not null,
+  primary key (epoch, operation_id)
+);
+create table execution_migrations(
+  manifest_id text primary key,
+  manifest_hash text not null,
+  phase text not null check (phase in ('staged','active','retired','aborted')),
+  manifest_json text not null,
+  activation_receipt_json text,
+  retirement_json text,
+  created_at text not null,
+  updated_at text not null
+);
+`;
+
 export type Migration = { version: number; name: string; sql: string };
 
 /** Ordered immutable migrations. Never mutate an applied entry — append only. */
@@ -616,7 +735,25 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "issue-core", sql: MIGRATION_1_SQL },
   { version: 2, name: "catalog-authority", sql: MIGRATION_2_SQL },
   { version: 3, name: "execution-projections", sql: MIGRATION_3_SQL },
+  { version: 4, name: "execution-authority", sql: MIGRATION_4_SQL },
 ];
+
+/** Execution tables created by migration 4 — the executable form of §2.2. */
+const EXECUTION_TABLE_NAMES = [
+  "execution_meta",
+  "execution_workflows",
+  "execution_registry",
+  "execution_plans",
+  "execution_sessions",
+  "execution_leases",
+  "execution_integration_leases",
+  "execution_inputs",
+  "execution_operations",
+  "execution_migrations",
+] as const;
+
+/** The migration above, looked up so the schema check cannot desync from it. */
+const EXECUTION_MIGRATION = MIGRATIONS.find((migration) => migration.name === "execution-authority");
 
 /** SHA-256 of the compiled migration SQL — what every applied row must match. */
 export function migrationChecksum(migration: Migration): string {
@@ -792,11 +929,99 @@ function readStoreMeta(db: StoreDb): StoreMeta {
 
 export type StoreContext = { harnessDir: string };
 
+/**
+ * Execution-domain authority state (primary spec §2.1). This is its own
+ * namespace: `store_meta.authority_state` covers issue/catalog only, so an
+ * active issue/catalog store is NOT an active execution authority.
+ */
+export type ExecutionAuthorityState = "legacy" | "staged" | "active";
+
+/** The `execution_meta` singleton (id = 1) as read from a migrated store. */
+export type ExecutionMeta = {
+  protocolVersion: number;
+  authorityState: ExecutionAuthorityState;
+  revision: number;
+  /** Imported root timestamp; the row-creation instant until a root is imported. */
+  rootUpdatedAt: string;
+  manifestId: string | null;
+  activatedAt: string | null;
+};
+
+/** Names of the execution tables present in the store (one query, no DDL). */
+function presentExecutionTables(db: StoreDb): string[] {
+  const placeholders = EXECUTION_TABLE_NAMES.map(() => "?").join(", ");
+  const rows = db
+    .prepare(`select name from sqlite_master where type = 'table' and name in (${placeholders})`)
+    .all(...EXECUTION_TABLE_NAMES) as Array<{ name?: unknown }>;
+  return rows.map((row) => row.name).filter((name): name is string => typeof name === "string");
+}
+
+/**
+ * Read the execution metadata singleton. The recorded migration history
+ * decides whether this store HAS an execution schema at all: a store that
+ * predates migration 4 has none (null) and opening a store never applies the
+ * migration (contract §2). Once the migration is recorded, its whole table set
+ * must exist and the singleton must be well formed — a recorded-but-incomplete
+ * execution schema is drift to refuse, not a state to reinterpret.
+ */
+function readExecutionMeta(db: StoreDb, schemaVersion: number): ExecutionMeta | null {
+  const expected = EXECUTION_MIGRATION?.version;
+  if (expected === undefined || schemaVersion < expected) return null;
+  const present = presentExecutionTables(db);
+  const missing = EXECUTION_TABLE_NAMES.filter((name) => !present.includes(name));
+  if (missing.length > 0) {
+    throw new StoreError(
+      "store.schema-drift",
+      `Migration ${expected} (execution-authority) is recorded but its schema is incomplete: ` +
+        `missing ${missing.join(", ")}. The store is refused rather than repaired; nothing was modified.`,
+    );
+  }
+  const row = db
+    .prepare(
+      "select protocol_version, authority_state, revision, root_updated_at, manifest_id, activated_at " +
+        "from execution_meta where id = 1",
+    )
+    .get() as
+    | {
+        protocol_version?: unknown;
+        authority_state?: unknown;
+        revision?: unknown;
+        root_updated_at?: unknown;
+        manifest_id?: unknown;
+        activated_at?: unknown;
+      }
+    | undefined;
+  if (
+    !row ||
+    typeof row.protocol_version !== "number" ||
+    (row.authority_state !== "legacy" && row.authority_state !== "staged" && row.authority_state !== "active") ||
+    typeof row.revision !== "number" ||
+    typeof row.root_updated_at !== "string" ||
+    (row.manifest_id !== null && row.manifest_id !== undefined && typeof row.manifest_id !== "string") ||
+    (row.activated_at !== null && row.activated_at !== undefined && typeof row.activated_at !== "string")
+  ) {
+    throw new StoreError(
+      "store.corrupt",
+      "execution_meta is missing or malformed; the execution authority state cannot be verified",
+    );
+  }
+  return {
+    protocolVersion: row.protocol_version,
+    authorityState: row.authority_state,
+    revision: row.revision,
+    rootUpdatedAt: row.root_updated_at,
+    manifestId: (row.manifest_id as string | null | undefined) ?? null,
+    activatedAt: (row.activated_at as string | null | undefined) ?? null,
+  };
+}
+
 export type StoreHandle = {
   db: StoreDb;
   storeId: string;
   epoch: number;
   schemaVersion: number;
+  /** Execution authority metadata; null while the store predates migration 4. */
+  execution: ExecutionMeta | null;
   close(): void;
 };
 
@@ -830,6 +1055,7 @@ export async function openStore(context: StoreContext, mode: "read" | "write"): 
       storeId: meta.storeId,
       epoch: meta.epoch,
       schemaVersion,
+      execution: readExecutionMeta(db, schemaVersion),
       close(): void {
         db.close();
       },
@@ -906,6 +1132,9 @@ export async function initializeStore(context: StoreContext): Promise<StoreHandl
       storeId: meta.storeId,
       epoch: meta.epoch,
       schemaVersion: MIGRATIONS.length,
+      // A freshly initialized store is active for issue/catalog and `legacy`
+      // for execution: initialization is not an execution activation.
+      execution: readExecutionMeta(openDb, MIGRATIONS.length),
       close(): void {
         openDb.close();
       },
@@ -958,6 +1187,9 @@ export async function upgradeStore(context: StoreContext): Promise<{ schemaVersi
   try {
     const schemaVersion = applyPendingMigrations(db);
     readStoreMeta(db);
+    // The migration is atomic, so an upgraded store must carry the complete
+    // execution schema; a recorded-but-incomplete one is drift, not progress.
+    readExecutionMeta(db, schemaVersion);
     return { schemaVersion };
   } catch (error) {
     refuseOpenFailure(error, dbPath);
