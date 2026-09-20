@@ -43,6 +43,23 @@
  *
  * Read-only by construction: files are read, Git is probed with read-only
  * commands, and nothing is written anywhere.
+ *
+ * ## Execution authority (source readiness, plan S3)
+ *
+ * Every artifact this module consumes — the root register, the workflow
+ * snapshot, the coordinator envelope — is retired as a persistence route while
+ * the control harness's execution authority is ACTIVE (primary spec §4.3), and
+ * the coordinator envelope is precisely the old session credential §5 keeps on
+ * the file route until its consumer is migrated. Both E1 and E2 therefore ask
+ * the engine's route (`resolveExecutionReadRoute`, plan S2) once the harness
+ * root is established and, for an ACTIVE authority, refuse
+ * `execution.consumer-not-ready` before any artifact is opened: no binding is
+ * reserved, no receipt is fabricated and no readiness verdict is derived from
+ * retired bytes. A store that exists and cannot be read throws that store's own
+ * refusal (there is no verdict to give about either route then), and a harness
+ * with no store at all keeps the unchanged file route — §2.1's absence is not
+ * an authority verdict. The DB session-reference binding this consumer needs is
+ * the explicit 2b obligation, not something this checkpoint invents.
  */
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -56,6 +73,7 @@ import {
   readMainWorktree,
   readSessionEnvelope,
   readWorkflowSnapshot,
+  resolveExecutionReadRoute,
   resolveHarnessDir,
   resolveIterationDir,
   resolvePlanDir,
@@ -131,7 +149,12 @@ export type HandoffBinding = Readonly<{
   compassPath: string;
 }>;
 
-type HandoffRefusalCode = "not-coordinator" | "already-bound" | "invalid-workflow" | "invalid-root";
+type HandoffRefusalCode =
+  | "not-coordinator"
+  | "already-bound"
+  | "invalid-workflow"
+  | "invalid-root"
+  | "execution.consumer-not-ready";
 
 export type HandoffBindingResult =
   | { ok: true; binding: HandoffBinding }
@@ -238,6 +261,24 @@ export async function reserveHandoffBinding(
   const harnessRoot = canonicalizeNearestExisting(resolvedHarness);
   if (!isDirectory(harnessRoot)) {
     return bindingRefusal("invalid-root", `the resolved harness dir does not exist: ${harnessRoot}`);
+  }
+  // §5: this binding is a FILE address (snapshot + compass + the coordinator
+  // envelope E2 re-validates), and the root register it classifies against is
+  // retired as a persistence route while the control harness's execution
+  // authority is ACTIVE (primary spec §4.3). Reading those bytes would be the
+  // forbidden fallback, and materializing a DB session binding is the session
+  // -file invention §5's STOP line forbids — so the binding reports not-ready
+  // and its DB session-reference migration stays an explicit 2b obligation. A
+  // store that exists and cannot be read throws that store's own refusal: this
+  // checkpoint then has no verdict to give about either route.
+  if ((await resolveExecutionReadRoute({ harnessDir: harnessRoot })) === "execution") {
+    return bindingRefusal(
+      "execution.consumer-not-ready",
+      `the execution authority of ${harnessRoot} is ACTIVE, so the root register, the workflow snapshots and the ` +
+        "coordinator envelopes of this binding are retired as a route. No binding was reserved: this file binding has " +
+        "no DB session reference yet (deferred, 2b), and reading the retired documents would be exactly the fallback " +
+        "the execution contract forbids",
+    );
   }
 
   // Engine path resolvers with the explicit harness override (never a
@@ -382,7 +423,8 @@ type Phase1RefusalCode =
   | "worktree-invalid"
   | "branch-mismatch"
   | "push-unverified"
-  | "evidence-changed";
+  | "evidence-changed"
+  | "execution.consumer-not-ready";
 
 /** Reporting order — the frozen code union order. */
 const CODE_ORDER: readonly Phase1RefusalCode[] = [
@@ -393,6 +435,7 @@ const CODE_ORDER: readonly Phase1RefusalCode[] = [
   "branch-mismatch",
   "push-unverified",
   "evidence-changed",
+  "execution.consumer-not-ready",
 ];
 
 export type Phase1Readiness =
@@ -601,6 +644,17 @@ export async function inspectPhase1Readiness(
   ) {
     fail("binding-invalid");
     return { ready: false, codes: orderedCodes(codes) };
+  }
+  // §5: the checkpoint below reads the root register, the snapshot, the
+  // coordinator ENVELOPE and the compass — every one of them retired as a
+  // persistence route while the control harness's execution authority is ACTIVE
+  // (primary spec §4.3). The gate reports not-ready rather than reading them:
+  // its coordinator session consumer is not migrated (2b), and fabricating a
+  // receipt or a binding from retired bytes is what §5 forbids. A store that
+  // exists and cannot be read throws that store's own refusal, since this
+  // checkpoint then has no verdict to give about either route.
+  if ((await resolveExecutionReadRoute({ harnessDir: harnessRoot })) === "execution") {
+    return { ready: false, codes: ["execution.consumer-not-ready"] };
   }
   let workflowDir: string;
   let iterationDir: string;
