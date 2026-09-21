@@ -26,7 +26,7 @@ import {
   initializeStore,
   registerCatalogEntity,
 } from '@mstar-harness/engine'
-import type { ExecutionCaller, ExecutionContext } from '@mstar-harness/engine'
+import type { ExecutionCaller, ExecutionContext, IntegrationMergeLease } from '@mstar-harness/engine'
 import type { ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 import { buildCatalogPayloadWithStore } from '../src/gates/catalog.ts'
 import { EXECUTION_DIRECT_WRITE_CODE, storeAuthorityRefusals } from '../src/gates/store-authority.ts'
@@ -154,36 +154,56 @@ async function corruptStore(harnessDir: string): Promise<void> {
 }
 
 /**
- * The retired register a lease gate is FORBIDDEN to verify against: the same
- * root `status.json` + snapshot layout as {@link seedRetiredRegister}, but the
- * plan row carries a VALID engine-shaped `execution_lease` naming a worktree
- * and branch the Assignment does not — so any verdict derived from these bytes
- * is unmistakable (a worktree/branch mismatch, never the authority's refusal).
+ * The retired register the ACTIVE-authority admission seams are FORBIDDEN to
+ * answer from: the same root `status.json` + snapshot layout as
+ * {@link seedRetiredRegister}, whose plan row carries a VALID engine-shaped
+ * `execution_lease` naming a worktree and branch the Assignment does not, plus
+ * — when given — a top-level `integration_merge_lease`. Any verdict derived
+ * from these bytes is therefore unmistakable: a worktree/branch mismatch or a
+ * no-steal `lease.merge.snapshot-mismatch`, never the authority's own refusal.
  */
 async function seedRetiredLease(
   harnessDir: string,
   workflowId: string,
   planId: string,
   leaseWorktree: string,
+  mergeLease?: IntegrationMergeLease,
 ): Promise<void> {
   await mkdir(join(harnessDir, 'projects'), { recursive: true })
   await seedHarness(harnessDir, {
     'status.json': v2Root([v2WorkflowEntry(workflowId)]),
-    [`workflows/${workflowId}/snapshot.json`]: v2SnapshotWithPlans(workflowId, [
-      {
-        id: planId,
-        title: `${planId} title`,
-        file: `plans/${planId}.md`,
-        status: 'InProgress',
-        execution_lease: {
-          holder: 'dsh-retired-holder',
-          claimed_at: '2026-09-21T00:00:00Z',
-          worktree_path: leaseWorktree,
-          working_branch: 'feature/retired-lease',
+    [`workflows/${workflowId}/snapshot.json`]: v2SnapshotWithPlans(
+      workflowId,
+      [
+        {
+          id: planId,
+          title: `${planId} title`,
+          file: `plans/${planId}.md`,
+          status: 'InProgress',
+          execution_lease: {
+            holder: 'dsh-retired-holder',
+            claimed_at: '2026-09-21T00:00:00Z',
+            worktree_path: leaseWorktree,
+            working_branch: 'feature/retired-lease',
+          },
         },
-      },
-    ]),
+      ],
+      mergeLease === undefined ? {} : { integration_merge_lease: mergeLease },
+    ),
   })
+}
+
+/** A shape-valid engine integration merge lease (the `beforeMerge` reservation
+ * under test): `validateIntegrationMergeLease` accepts it as-is. */
+function mergeLease(overrides: Record<string, unknown> = {}): IntegrationMergeLease {
+  return {
+    holder: 'host-coordinator',
+    claimed_at: TS,
+    plan_id: 'plan-db',
+    source_branch: 'feature/wf-db',
+    target_branch: 'main',
+    ...overrides,
+  } as IntegrationMergeLease
 }
 
 let execSeq = 0
@@ -410,11 +430,20 @@ describe('execution-dsh-read — the DSh source reads the authority, never the r
     expect(reached).toBe(1)
   })
 
-  it('refuses the SYNC dispatch gate on an ACTIVE authority instead of verifying a lease against the retired snapshot', async () => {
+  it('refuses the DSh admission seams on an ACTIVE authority instead of answering from the retired execution files', async () => {
     const { app, harnessDir } = await appWithRoot('execution-sync-gate')
     const retiredWorktree = await tempDir('execution-retired-worktree')
     await seedExecutionAuthority(harnessDir, [{ id: 'wf-db', planId: 'plan-db' }])
-    await seedRetiredLease(harnessDir, 'wf-file-stale', 'plan-file', retiredWorktree)
+    // The retired bytes carry BOTH leases (the plan row's `execution_lease` and
+    // the snapshot's top-level `integration_merge_lease`): each seam's file
+    // route would produce its OWN unmistakable verdict from them.
+    await seedRetiredLease(
+      harnessDir,
+      'wf-file-stale',
+      'plan-file',
+      retiredWorktree,
+      mergeLease({ holder: 'host-retired', plan_id: 'plan-file', source_branch: 'feature/retired' }),
+    )
 
     const prompt = retiredPlanAssignment('plan-file', await tempDir('execution-assignment-worktree'))
     const exec = toolExec('subagent', { description: 'writable implement round', prompt })
@@ -440,11 +469,51 @@ describe('execution-dsh-read — the DSh source reads the authority, never the r
     expect(reason).toContain('execution.consumer-not-ready')
     expect(reason).not.toContain('lease.dispatch.')
 
+    // The other two SYNCHRONOUS legacy-file readers of this surface are the
+    // exec-less host hooks (`HostAdapter.beforeDispatch`'s catalog-registration
+    // selection, `beforeMerge`'s snapshot lease read): the SAME authority
+    // decision precedes their reads, so neither can answer from retired bytes.
+    const reserved = mergeLease()
+    const dispatch = await app.ctx.dshHostAdapter.beforeDispatch(prompt)
+    expect(dispatch.ok).toBe(false)
+    expect(dispatch.hardBlocked).toBe(true)
+    expect(dispatch.violations.map((violation) => violation.code)).toEqual(['execution.consumer-not-ready'])
+    expect(dispatch.violations[0]?.message).toContain('ACTIVE')
+    // No registration verdict about the retired lifecycle: the file-routed
+    // selection is never asked about `wf-file-stale`.
+    expect(JSON.stringify(dispatch)).not.toContain('wf-file-stale')
+
+    // The retired snapshot's top-level merge lease is not the active
+    // reservation either: the file route would report
+    // `lease.merge.snapshot-mismatch` — a no-steal veto from retired bytes.
+    const mismatch = await app.ctx.dshHostAdapter.beforeMerge(reserved)
+    expect(mismatch.ok).toBe(false)
+    expect(mismatch.violations.map((violation) => violation.code)).toEqual(['execution.consumer-not-ready'])
+    expect(JSON.stringify(mismatch)).not.toContain('lease.merge.snapshot-mismatch')
+
+    // …and retired bytes cannot ADMIT a seam either: a retired register naming
+    // the authority's OWN lifecycle does not make the dispatch pass, and a
+    // retired snapshot lease MATCHING the reservation does not admit the merge
+    // (both previously produced a file-route verdict — the false pass R-1
+    // removes).
+    await seedHarness(harnessDir, { 'status.json': v2Root([v2WorkflowEntry('wf-db')]) })
+    const sameId = await app.ctx.dshHostAdapter.beforeDispatch(prompt)
+    expect(sameId.violations.map((violation) => violation.code)).toEqual(['execution.consumer-not-ready'])
+    await seedRetiredLease(harnessDir, 'wf-file-stale', 'plan-file', retiredWorktree, reserved)
+    const matching = await app.ctx.dshHostAdapter.beforeMerge(reserved)
+    expect(matching.violations.map((violation) => violation.code)).toEqual(['execution.consumer-not-ready'])
+
     // §5 fail-closed: an authority that exists and cannot be read refuses too —
-    // never a fallback to the retired bytes.
+    // never a fallback to the retired bytes, on any of the three seams.
     await corruptStore(harnessDir)
     const unreadable = app.ctx.dshHostAdapter.dispatchGate(prompt, exec, true, { kind: 'ok' })
     expect(unreadable.violations.map((violation) => violation.code)).toContain('store.corrupt')
+    const unreadableDispatch = await app.ctx.dshHostAdapter.beforeDispatch(prompt)
+    expect(unreadableDispatch.ok).toBe(false)
+    expect(unreadableDispatch.violations.map((violation) => violation.code)).toEqual(['store.corrupt'])
+    const unreadableMerge = await app.ctx.dshHostAdapter.beforeMerge(reserved)
+    expect(unreadableMerge.ok).toBe(false)
+    expect(unreadableMerge.violations.map((violation) => violation.code)).toEqual(['store.corrupt'])
   })
 
   it('supports the pre-activation file route unchanged (no store, register write keeps its validator)', async () => {

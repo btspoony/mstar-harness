@@ -28,8 +28,9 @@
 // (S-G4b-03): the caller's path first, then its canonical (symlink-resolved)
 // form, so an alias outside the harness tree that resolves to a harness-root
 // `store.db` or a retired `residuals.json` is refused like the file itself.
-// Only those two decisions are canonicalized — the document classification
-// stays textual and every non-authority target behaves exactly as before.
+// Every authority decision is canonicalized that way (the S4 execution route
+// below included) — only the DOCUMENT classification stays textual, and every
+// non-authority target behaves exactly as before.
 //
 // Plan S4 adds the EXECUTION authority's retired persistence route (primary
 // spec §4.3/§5) to the same unconditional class: a root `status.json` or
@@ -503,18 +504,22 @@ try {
   // not necessarily the workspace).
   const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
 
-  // Known limitations (beyond the failure-matrix rows): the AUTHORITY
-  // classification is canonicalized (S-G4b-03 — a symlink alias resolving to
-  // a harness-root `store.db` or a project register is refused like the file
-  // itself), while the DOCUMENT classification stays textual: a status.json /
-  // snapshot reached through an alias keeps its previous (non-canonical,
-  // ungated) treatment. Edits validate the reconstructed post-edit content
-  // when the payload is deterministic (unique old_string match, or
-  // replace_all), otherwise the PRE-edit on-disk state — a non-deterministic
-  // corrupting edit surfaces on the next write, and repairing an
-  // already-invalid gated doc requires a deterministic edit or a full-content
-  // Write. Oversized gated docs (past the 2 MiB budget) violate on this host
-  // — repair out of band or for this session with MSTAR_WRITE_GATE=off.
+  // Known limitations (beyond the failure-matrix rows): every AUTHORITY
+  // decision is made on the canonicalized path — a symlink alias resolving to a
+  // harness-root `store.db`, a project register, or a RETIRED root
+  // status.json / workflow snapshot is refused like the file itself (S-G4b-03
+  // for the issue authority, §4.3/§5 for the execution authority, which
+  // classifies the caller's path AND the path the write really lands on). What
+  // stays textual is the DOCUMENT classification: the shape/validity validator
+  // runs on the caller's own path, so a status.json / snapshot reached through
+  // an alias keeps its previous non-canonical document treatment (though a
+  // retired one is still refused by the authority route above). Edits validate
+  // the reconstructed post-edit content when the payload is deterministic
+  // (unique old_string match, or replace_all), otherwise the PRE-edit on-disk
+  // state — a non-deterministic corrupting edit surfaces on the next write, and
+  // repairing an already-invalid gated doc requires a deterministic edit or a
+  // full-content Write. Oversized gated docs (past the 2 MiB budget) violate on
+  // this host — repair out of band or for this session with MSTAR_WRITE_GATE=off.
   for (const rawPath of writeTargetPaths(tool)) {
     // Absolute from here on: the authority predicate below resolves nothing
     // itself (it tests the path it is given), so a relative `cwd` in the

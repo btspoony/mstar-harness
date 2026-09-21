@@ -192,36 +192,59 @@ function leaseViolation(code: string, message: string, fix?: string): Validation
 }
 
 /**
- * The authority readiness of the gate's SYNCHRONOUS file reads (finding R-1).
+ * The authority readiness of the plugin's SYNCHRONOUS reads of the LEGACY
+ * execution files (finding R-1).
  *
  * The dispatch gate re-verifies a plan's `execution_lease` and the L1 topology
  * from the root register + the ACTIVE workflow snapshot through the LEGACY file
- * route. While the control harness's execution authority is ACTIVE those
- * documents are retired as a source, so a raw read here would verify a lease
- * against bytes the authority no longer owns — and an authority that cannot be
- * read must never fall back to them (§5). The engine's own synchronous guard
- * (primary spec §4.3: "legacy root/snapshot authority readers must call it") is
- * the ONE implementation of that rule; it is called BEFORE the read, never
- * re-implemented here, and its stable refusal code travels into the violation.
+ * route, and the adapter's own admission hooks (`beforeDispatch`'s
+ * catalog-registration selection, `beforeMerge`'s snapshot lease read) derive
+ * their verdicts the same way. While the control harness's execution authority
+ * is ACTIVE those documents are retired as a source, so a raw read here would
+ * derive a verdict from bytes the authority no longer owns — and an authority
+ * that cannot be read must never fall back to them (§5). The engine's own
+ * synchronous guard (primary spec §4.3: "legacy root/snapshot authority readers
+ * must call it") is the ONE implementation of that rule: it is called BEFORE
+ * the read, never re-implemented here, and its stable refusal code travels into
+ * each caller's own violation shape.
  *
  * A harness with no store file at all is not a refusal: absence is not an
  * authority verdict (§2.1), so the pre-activation file route is unchanged.
- * @param harnessDir - the resolved `{HARNESS_DIR}` (never null here: the
- *   callers return before this on a null dir).
- * @returns the refusal violation, or `null` when the file route may be read.
+ * @param harnessDir - the resolved `{HARNESS_DIR}` (never null: the callers
+ *   return before this on a null dir).
+ * @returns the engine's refusal (stable `code` + message), or `null` when the
+ *   file route may be read.
  */
-function executionReadRefusal(harnessDir: string): ValidationResult | null {
+export function executionAuthorityRefusal(harnessDir: string): ExecutionAuthorityRefusal | null {
   try {
     assertExecutionFileReadAllowed({ harnessDir })
     return null
   } catch (error) {
-    const refusal = refusalOf(error)
-    return leaseViolation(
-      refusal.code,
-      `${refusal.message} — the dispatch gate refuses instead of deriving a lease verdict from the retired files`,
-      'run this dispatch against the execution DB route (or restore the authority): a retired root register / workflow snapshot cannot confirm an execution_lease',
-    )
+    return refusalOf(error)
   }
+}
+
+/** One execution-authority refusal: the engine's own stable code + message. */
+export interface ExecutionAuthorityRefusal {
+  readonly code: string
+  readonly message: string
+}
+
+/**
+ * {@link executionAuthorityRefusal} as the lease gate's violation: the SAME
+ * synchronous authority decision, worded for the lease re-verify / L1 seams
+ * (`leaseGateViolations`, `activeSnapshotRows`).
+ * @param harnessDir - the resolved `{HARNESS_DIR}`.
+ * @returns the refusal violation, or `null` when the file route may be read.
+ */
+function executionReadRefusal(harnessDir: string): ValidationResult | null {
+  const refusal = executionAuthorityRefusal(harnessDir)
+  if (refusal === null) return null
+  return leaseViolation(
+    refusal.code,
+    `${refusal.message} — the dispatch gate refuses instead of deriving a lease verdict from the retired files`,
+    'run this dispatch against the execution DB route (or restore the authority): a retired root register / workflow snapshot cannot confirm an execution_lease',
+  )
 }
 
 /**
