@@ -1,7 +1,7 @@
 /**
  * execution-recovery.test.ts — proof for R3: the consistent whole-store backup,
  * the explicit-loss atomic restore and the credential-free diagnostic export
- * (primary spec §8, plan `20260920-activation-migration-recovery`).
+ * (primary spec §8).
  *
  * Every case runs the REAL modules, the REAL `node:sqlite` driver and REAL
  * filesystem fixtures in per-test temporary workspaces: a real Git main
