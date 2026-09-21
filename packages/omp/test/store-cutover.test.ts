@@ -698,6 +698,40 @@ describe("omp write gate — an ACTIVE execution-authority target refuses (S3)",
     expect(blocked?.reason).toContain("store.corrupt");
   });
 
+  test("a PRE-ACTIVATION harness's document symlinked into another harness's ACTIVE authority is refused (both roots probed)", async () => {
+    // Harness B: the ACTIVE execution authority the write really lands on.
+    const authority = makeHarness("execution-cross-alias", "soft");
+    await seedActiveExecutionStore(authority.harness, authority.status);
+    const handler = loadHandler();
+
+    // Harness A: pre-activation (no store at all) whose OWN `status.json` is a
+    // symlink into B's retired register. The textual classification resolves a
+    // pre-activation harness, so a single-root probe would let the write
+    // through although the bytes land on B's retired document.
+    const source = makeHarness("execution-cross-source", "soft");
+    rmSync(source.status);
+    symlinkSync(authority.status, source.status);
+
+    const blocked = await runWrite(handler, source.status, VALID_STATUS);
+    expect(blocked?.block).toBe(true);
+    expect(blocked?.reason).toContain("execution.direct-write-refused");
+    expect(blocked?.reason).not.toContain("status.invalid-json");
+
+    // The same alias on an UNREADABLE authority fails closed on the landed
+    // root — never a silent pass because the source harness has no store.
+    const corrupt = makeHarness("execution-cross-corrupt", "soft");
+    await seedActiveExecutionStore(corrupt.harness, corrupt.status);
+    const corruptSource = makeHarness("execution-cross-corrupt-source", "soft");
+    rmSync(corruptSource.status);
+    symlinkSync(corrupt.status, corruptSource.status);
+    await corruptStore(corrupt.harness);
+
+    const failed = await runWrite(handler, corruptSource.status, VALID_STATUS);
+    expect(failed?.block).toBe(true);
+    expect(failed?.reason).toContain("store.authority-unavailable");
+    expect(failed?.reason).toContain("store.corrupt");
+  });
+
   test("pre-activation keeps the document validator: missing, staged and execution-legacy stores", async () => {
     const states = ["missing", "staged"] as const;
     for (const state of states) {

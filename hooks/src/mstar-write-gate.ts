@@ -38,11 +38,12 @@
 // `execution.direct-write-refused` while the control harness's execution
 // authority is ACTIVE — valid JSON or not, hard or soft — and refused
 // fail-closed (`store.authority-unavailable`) when that authority exists and
-// cannot be read. This decision also runs on the path the write LANDS on, so a
-// symlink alias of a retired document is refused like the document itself (the
-// old protected artifact paths keep their canonical target checks even though
-// the new authority refuses writing them). A harness with no store keeps the
-// unchanged document lint.
+// cannot be read. This decision runs on the path the write LANDS on AND on both
+// distinct harness roots, so a symlink alias of a retired document is refused
+// like the document itself and an alias pointing INTO another harness's retired
+// document is refused with that harness's verdict (the old protected artifact
+// paths keep their canonical target checks even though the new authority refuses
+// writing them). A harness with no store keeps the unchanged document lint.
 //
 // Block dialect (contract D4): exit code 2 with the reason on STDERR — ZCode
 // parses hook stdout under a strict schema where any extra key silently
@@ -545,19 +546,25 @@ try {
     // root status and workflow snapshots are refused while that authority is
     // ACTIVE, and refused fail-closed when it exists and cannot be read. The
     // classification covers the caller's own path AND the path the write
-    // really lands on, so a symlink alias of a retired document is refused
-    // like the document itself (the old protected artifact paths keep their
-    // canonical target checks even though the new authority refuses writing
-    // them). Unconditional: the enforcement flag governs document validity,
-    // never this authority invariant.
+    // really lands on (S-G4b-03) — and it covers BOTH harness roots: a
+    // status/snapshot symlinked into ANOTHER harness's tree lands on THAT
+    // harness's document, so EITHER root's verdict (ACTIVE or UNAVAILABLE)
+    // vetoes the write. A single-root probe would let a pre-activation
+    // harness's alias bypass the authority the bytes really belong to. An
+    // identical landed root costs no second probe (the common case);
+    // unconditional either way: the enforcement flag governs document
+    // validity, never this authority invariant.
     const landedTarget = landed === targetPath ? null : harnessDocKindOfTarget(landed);
-    const executionDir =
-      target !== null && target.kind !== "register"
-        ? target.harnessDir
-        : landedTarget !== null && landedTarget.kind !== "register"
-          ? landedTarget.harnessDir
-          : null;
-    if (executionDir !== null) {
+    const executionDirs: string[] = [];
+    if (target !== null && target.kind !== "register") executionDirs.push(target.harnessDir);
+    if (
+      landedTarget !== null &&
+      landedTarget.kind !== "register" &&
+      !executionDirs.includes(landedTarget.harnessDir)
+    ) {
+      executionDirs.push(landedTarget.harnessDir);
+    }
+    for (const executionDir of executionDirs) {
       const executionRoute = await readExecutionWriteRoute(executionDir);
       if (executionRoute.kind === "active") {
         blockAuthorityWrite(toolName, displayTarget(targetPath, executionDir), [

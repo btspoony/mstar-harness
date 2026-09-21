@@ -592,8 +592,10 @@ function hhmm(ts: number): string {
  * Built from the SAME cached cycle as the sibling rows (one status.json +
  * compass read per cache refresh; the issue/catalog facts arrive as the
  * async pre-read's {@link StoreFacts}). Returns undefined when the workspace
- * has no harness dir or no status.json (the row is absent — advisory
- * degrade, same as the iteration-gate row).
+ * has no harness dir, or resolves neither a status.json nor a structured
+ * selection verdict (the row is absent — advisory degrade, same as the
+ * iteration-gate row): a verdict is operator-visible reason, so it keeps the
+ * section PRESENT even after the execution authority retired the file registry.
  *
  * v3 per-lifecycle aggregation (compass v3.0.0 § Catalog selection rule):
  * the state section aggregates the SELECTED workflow lifecycle — resolved
@@ -622,6 +624,17 @@ function harnessStateSource(
   authoritySnapshot?: Record<string, unknown>,
 ): MstarHarnessState | null {
   const statusPath = join(harnessDir, STATUS_FILE)
+  // A structured selection verdict is the operator-visible reason this
+  // workspace cannot be aggregated, and it must survive the retirement of the
+  // file registry: an ACTIVE (or unreadable) execution authority, an empty DB
+  // registry and an unbound multi-active set all arrive with NO status.json on
+  // disk, so the file-existence gate below may not swallow them into a silent
+  // null state section. The ONE verdict that keeps the advisory-degrade null is
+  // `status.missing` — "no coordination document anywhere", which is what an
+  // absent harness resolves to on the file route.
+  if (selection.kind === 'error') {
+    return selection.code === 'status.missing' ? null : selectionErrorState(selection, facts, harnessDir)
+  }
   if (authoritySnapshot === undefined && !existsSync(statusPath)) return null
   try {
     const str = (value: unknown): string | null =>
@@ -629,13 +642,6 @@ function harnessStateSource(
     /** `plans[].metadata.iteration_refs` → non-empty string[]; missing/non-array → [] (lossless). */
     const iterationRefsOf = (value: unknown): string[] =>
       Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string' && v.trim() !== '') : []
-    if (selection.kind === 'error') {
-      // Clear selection error (v1/unmigrated root, no snapshots, unbound
-      // multi-active): the state section stays PRESENT with the
-      // operator-visible reason (and, for the picker, the active ids) and
-      // empty aggregates — never a root v1 read, never a silent empty row.
-      return selectionErrorState(selection, facts, harnessDir)
-    }
     const snapshotPath = join(harnessDir, selection.dir, WORKFLOW_SNAPSHOT_FILE)
     let snapshot: Record<string, unknown>
     if (authoritySnapshot !== undefined) {

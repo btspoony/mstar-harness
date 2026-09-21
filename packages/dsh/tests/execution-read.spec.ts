@@ -24,6 +24,7 @@ import {
   createExecutionWorkflow,
   initializeExecutionAuthority,
   initializeStore,
+  openStore,
   registerCatalogEntity,
 } from '@mstar-harness/engine'
 import type { ExecutionCaller, ExecutionContext, IntegrationMergeLease } from '@mstar-harness/engine'
@@ -207,6 +208,19 @@ function mergeLease(overrides: Record<string, unknown> = {}): IntegrationMergeLe
   } as IntegrationMergeLease
 }
 
+/**
+ * Seal a freshly seeded store for readers (the G2a / store-cutover pattern):
+ * one read open+close so later reads do not hit the documented bun-test open
+ * flake (a read right after the writer closes can surface `store.corrupt` /
+ * `store.busy`, which the authority route correctly treats as fail-closed
+ * `store.authority-unavailable`). Without it the store's SHAPE, not the
+ * authority ROUTE these cases are about, would decide the verdict.
+ */
+async function sealStoreForReaders(harnessDir: string): Promise<void> {
+  const handle = await openStore({ harnessDir }, 'read')
+  handle.close()
+}
+
 let execSeq = 0
 function toolExec(name: string, args: unknown): ToolExecution {
   return {
@@ -373,6 +387,46 @@ describe('execution-dsh-read — the DSh source reads the authority, never the r
     expect(
       await storeAuthorityRefusals({ resolvedHarnessDir: null, directKind: null, rawPath: join(dirname(harnessDir), 'notes.md') }),
     ).toEqual([])
+  })
+
+  it('refuses a PRE-ACTIVATION harness document symlinked into another harness ACTIVE authority (both roots probed)', async () => {
+    // Harness B: the ACTIVE execution authority the write really lands on.
+    const { harnessDir: authorityDir } = await appWithRoot('execution-cross-alias')
+    await seedExecutionAuthority(authorityDir, [{ id: 'wf-db', planId: 'plan-db' }])
+    // The retired register a real cutover leaves behind (its layout dirs are
+    // also what makes the harness root marker-complete for the engine's own
+    // document classifier on the landed path).
+    await seedRetiredRegister(authorityDir, 'wf-file-stale', 'plan-file')
+
+    // Harness A: pre-activation (no store at all) whose OWN `status.json` is a
+    // symlink into the ACTIVE harness's retired register. The textual
+    // classification resolves a pre-activation harness, so a single-root probe
+    // would return NO refusal while the bytes land on the authority's document.
+    const sourceHarness = join(await tempDir('execution-cross-source'), '.mstar')
+    await mkdir(join(sourceHarness, 'workflows'), { recursive: true })
+    await mkdir(join(sourceHarness, 'projects', '_default'), { recursive: true })
+    await symlink(join(authorityDir, 'status.json'), join(sourceHarness, 'status.json'))
+    await sealStoreForReaders(authorityDir)
+
+    const refused = await storeAuthorityRefusals({
+      resolvedHarnessDir: sourceHarness,
+      directKind: 'status',
+      rawPath: join(sourceHarness, 'status.json'),
+    })
+    expect(refused.map((violation) => violation.code)).toEqual([EXECUTION_DIRECT_WRITE_CODE])
+    expect(refused[0]?.message).toContain('ACTIVE')
+
+    // The same alias on an UNREADABLE authority fails closed on the landed
+    // root — never a silent pass because the source harness has no store.
+    await corruptStore(authorityDir)
+    const unreadable = await storeAuthorityRefusals({
+      resolvedHarnessDir: sourceHarness,
+      directKind: 'status',
+      rawPath: join(sourceHarness, 'status.json'),
+    })
+    expect(unreadable.map((violation) => violation.code)).toEqual(['store.authority-unavailable'])
+    expect(unreadable[0]?.message).toContain('execution authority')
+    expect(unreadable[0]?.message).toContain('store.corrupt')
   })
 
   it('keeps the issue-domain register route, and refuses fail-closed when the authority cannot be read', async () => {
@@ -560,5 +614,40 @@ describe('execution-dsh-read — the DSh source reads the authority, never the r
         rawPath: join(harnessDir, 'status.json'),
       }),
     ).toEqual([])
+  })
+
+  it('materializes a HELD integration merge lease into the snapshot exactly as the file route stores it', async () => {
+    const { harnessDir } = await appWithRoot('execution-merge-lease')
+    await seedExecutionAuthority(harnessDir, [{ id: 'wf-db', planId: 'plan-db' }])
+    await sealStoreForReaders(harnessDir)
+
+    // Unclaimed: the file route DELETES the key on release, so the
+    // materialized snapshot must carry no key at all (never `null`).
+    const unclaimed = await readExecutionWorkflowSource({ harnessDir })
+    expect(unclaimed.kind).toBe('active')
+    if (unclaimed.kind !== 'active') return
+    expect('integration_merge_lease' in unclaimed.snapshot).toBe(false)
+
+    // The held reservation as the merge verb records it: the DB row is the
+    // lease home (§2.2), and the materialized snapshot has to re-join it.
+    const held = { ...mergeLease({ plan_id: 'plan-db' }), status: 'held' }
+    const write = await openStore({ harnessDir }, 'write')
+    try {
+      write.db
+        .prepare(
+          'insert into execution_integration_leases(workflow_id, revision, owner_epoch, lease_json) values (?, 1, ?, ?)',
+        )
+        .run('wf-db', write.epoch, JSON.stringify(held))
+    } finally {
+      write.close()
+    }
+    await sealStoreForReaders(harnessDir)
+
+    const source = await readExecutionWorkflowSource({ harnessDir })
+    expect(source.kind).toBe('active')
+    if (source.kind !== 'active') return
+    expect(source.snapshot.integration_merge_lease).toEqual(held)
+    // The DB selection is otherwise unchanged: the plan rows still re-join.
+    expect(activeRowsOf(source.snapshot).map((row) => row.id)).toEqual(['plan-db'])
   })
 })

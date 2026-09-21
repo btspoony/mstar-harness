@@ -552,12 +552,20 @@ function planRowOf(view: ExecutionPlanView): Record<string, unknown> {
 }
 
 /** One DB lifecycle's materialized state as the snapshot shape the file route
- * produces: the workflow header fields plus its plan rows. */
+ * produces: the workflow header fields plus its plan rows. §2.2/§E keeps
+ * `plans` and the merge lease OUT of the header (they are
+ * `execution_plans` / `execution_integration_leases` rows), so BOTH are
+ * re-joined here — the lease under the file route's own key and semantics
+ * (PRESENT only while a merge is claimed; a released or never-claimed lease is
+ * the file route's absent key), exactly as `workflowSnapshotOf` does for the
+ * engine's own rules. A consumer that read the materialized snapshot without
+ * it would treat a held merge reservation as unclaimed. */
 function executionSnapshotOf(state: ExecutionState, workflowId: string): Record<string, unknown> | undefined {
   const workflow = state.workflows.find((candidate) => candidate.state.id === workflowId)
   if (workflow === undefined) return undefined
   return {
     ...(workflow.state as Record<string, unknown>),
+    ...(workflow.integrationLease === null ? {} : { integration_merge_lease: workflow.integrationLease }),
     plans: workflow.plans.map(planRowOf),
   }
 }
