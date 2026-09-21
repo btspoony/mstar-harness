@@ -519,6 +519,14 @@ export type {
 export type { StoreContext, StoreErrorCode, StoreHandle, StoreRuntimeInfo, StoreDb } from "./store-db.js";
 // Issue-store boundary: lazily acquires
 // `node:sqlite` — importing this index never loads the driver or opens a DB.
+//
+// `assertExecutionFileReadAllowed` is the §4.3 paired READ guard, exported
+// ADDITIVELY (its write sibling stays module-scoped): a consumer whose source
+// read is synchronous (a gate that cannot become async) must be able to refuse
+// in place — the primary spec §4.3 contract "legacy root/snapshot authority
+// readers must call it; no overlooked source reader may return stale leftover
+// JSON as authoritative success". Re-exporting the ONE implementation is what
+// keeps a caller from writing a second, drifting authority probe.
 export {
   MIGRATION_2_SQL,
   MIGRATIONS,
@@ -526,6 +534,7 @@ export {
   MIN_NODE_VERSION,
   SCHEMA_VERSION_TABLE_SQL,
   StoreError,
+  assertExecutionFileReadAllowed,
   assertStoreRuntimeSupported,
   compareVersions,
   detectStoreRuntime,
@@ -535,6 +544,57 @@ export {
   storeDbPath,
   upgradeStore,
 } from "./store-db.js";
+// Execution authority: the canonical value form and `exec-v1` version tokens
+// (§3.1), the one-transaction ownership boundary, the create-only empty
+// execution initializer (§3/§4.1) and the create-only workflow/registry/sealed
+// input verb (§3), plus C4's session surface — the trusted-caller
+// coordinator/plan-pm bind and the session-authorized plan read (§2.3/§3).
+// ADDITIVE export and the ONLY reachable surface for consumers: the token
+// grammar and the transaction primitive stay module-scoped for the domain
+// modules that compose with them, and no coordination-mutation, registration
+// or coordinator-recovery verb is defined here.
+export type {
+  ExecutionCaller,
+  ExecutionContext,
+  ExecutionErrorCode,
+  ExecutionKind,
+  ExecutionPlanView,
+  ExecutionRead,
+  ExecutionReceipt,
+  ExecutionSessionRef,
+  ExecutionState,
+  ExecutionToken,
+} from "./execution-store.js";
+export {
+  ExecutionError,
+  bindExecutionSession,
+  createExecutionWorkflow,
+  initializeExecutionAuthority,
+  readExecutionPlan,
+  readExecutionState,
+  serializeExecutionValue,
+} from "./execution-store.js";
+// §3 the DB plan-operation surface: ONE entry point for the whole closed
+// `CoordinationOperation` union — prepare, progress, residual-add,
+// residual-close, handoff, accept, return, integration-start,
+// integration-accept, complete and reconcile — each with exactly one DB
+// transition behind it. Published only once the union was complete, so nothing
+// here is a stub: the legacy-only `repair-delivery-source` is refused, and no
+// registration API is part of this surface.
+// ADDITIVE export and the ONLY reachable surface for consumers: the internal
+// dispatch frame and the individual transition bodies stay module-scoped.
+export type { CoordinationOperation } from "./execution-coordination.js";
+export { mutateExecutionPlan } from "./execution-coordination.js";
+// §3 the WORKFLOW-level surface: the closed `WorkflowExecutionOperation` union
+// (phase, lifecycle, execution-policy, integration-worktree, delivery) plus the
+// explicit coordinator recovery bootstrap — the one transition that replaces a
+// crashed/imported/revoked coordinator identity by named stop evidence instead
+// of an old credential. Both consume the §3.1 envelope (operation id, session
+// reference, exact token) and are exported only once complete.
+// ADDITIVE export: the per-kind transition bodies and the pinned-witness
+// helpers stay module-scoped.
+export type { WorkflowExecutionOperation } from "./execution-workflow.js";
+export { mutateExecutionWorkflow, recoverExecutionCoordinator } from "./execution-workflow.js";
 export type {
   CaptureInput,
   ClosureEvidence,
@@ -663,6 +723,27 @@ export {
   registerShippedCatalogExecution,
   resolveCatalogRegistrationState,
 } from "./catalog-registration.js";
+// §7 the ACTIVE registration route: the ONE verb that publishes a reviewed
+// catalog delta together with the execution lifecycle it registers. It is the
+// DB-transport sibling of `registerCatalogExecution` and shares every reviewed
+// derivation with it (`resolveCatalogExecutionPlan`, the workflow entry, the
+// catalog domain's handle-taking verbs); what differs is the boundary — one
+// `BEGIN IMMEDIATE` transaction over the workflow header, registry membership,
+// plan rows, sealed inputs, catalog delta, binding and committed receipt, with
+// no JSON registration file and no intermediate `prepared` phase ever written.
+// ADDITIVE export: the composed admission frame stays module-scoped, and the
+// legacy journal remains the only file-route entry point.
+export { commitExecutionRegistration } from "./execution-registration.js";
+// §5 the single source READ adapter: one read transaction, an exact
+// workflow/plan address and the token of the scope that was actually read
+// (root / workflow / plan). `legacy` and `staged` keep the unchanged file
+// route — which the route helper below reports — while a store that exists and
+// cannot answer (corrupt, drifted, busy, unsupported) is always a refusal.
+// ADDITIVE export: the DB adapter, the consumer route decision and the
+// selection type are the whole published surface; the stored-row assembly and
+// the token grammar stay module-scoped in `execution-store.ts`.
+export type { ExecutionReadSelection } from "./execution-read.js";
+export { readExecutionAuthority } from "./execution-read.js";
 // Disposable execution/roadmap projections: the ONE source-I/O boundary
 // (`refreshProjections`) over the JSON execution authority, plus its two
 // halves -- the pure validated capture and the atomic publication/last-good
@@ -697,10 +778,14 @@ export {
 } from "./projection.js";
 // Issue-store read boundary: the ONE read entry for dashboard and rollup
 // consumers -- one handle per request, every view query in one read
-// transaction, and an honest projection disclosure in the envelope. ADDITIVE
-// export: the engine package's exports map is the only reachable surface for
-// the CLI transport (`packages/cli/src/store-read.ts`) and for the dashboard
-// consumers; no producer surface is changed.
+// transaction, and an honest projection disclosure in the envelope. It also
+// carries the §5 execution-SOURCE route decision (`resolveExecutionReadRoute` /
+// `readExecutionSource`): the DB adapter answers an ACTIVE authority, the
+// pre-activation file route stays file-authoritative, and a store that exists
+// and cannot answer refuses instead of falling back. ADDITIVE export: the engine
+// package's exports map is the only reachable surface for the CLI transport
+// (`packages/cli/src/store-read.ts`) and for the dashboard consumers; no
+// producer surface is changed.
 export type {
   CatalogIdentityDTO,
   CompassDTO,
@@ -708,6 +793,8 @@ export type {
   DashboardFilters,
   DashboardView,
   DashboardViewData,
+  ExecutionReadRoute,
+  ExecutionSourceRead,
   GoalDTO,
   IssueFlow,
   IssueFlowBucket,
@@ -725,7 +812,14 @@ export type {
   WorkflowListDTO,
   WorkflowPlanDTO,
 } from "./store-read.js";
-export { StoreReadError, queryDashboard, queryIssueFlow, withStoreRead } from "./store-read.js";
+export {
+  StoreReadError,
+  queryDashboard,
+  queryIssueFlow,
+  readExecutionSource,
+  resolveExecutionReadRoute,
+  withStoreRead,
+} from "./store-read.js";
 // Read-only migration planner plus the staged apply/receipt/replay half: the
 // migration transport of the store migration protocol (issue contract §7). It
 // enumerates the legacy residual registers through the configured project
@@ -769,11 +863,13 @@ export type {
   ActivationReceipt,
   AttestationConsumerKind,
   AttestationDisposition,
+  BackupExecutionMeta,
   BackupReceipt,
   InstalledConsumerAttestation,
   RetiredRegister,
   RetiredSection,
   RetirementReceipt,
+  ReviewedBackupAuthority,
   StoppedSessionAttestation,
   StoreActivationErrorCode,
   StoreAuthorityHandle,
@@ -784,9 +880,71 @@ export {
   activationReceiptFor,
   appliedReceiptFor,
   assertAuthorityCurrent,
+  assertBackupDescribesStore,
   backupStore,
   currentAuthorityHandle,
   retireStoreSources,
   StoreActivationError,
   validateActivationAttestation,
 } from "./store-activation.js";
+// Execution migration: the executable §6 protocol (stages R1–R3). R1 landed
+// the read-only preview and the staged apply: `previewExecutionMigration` reads
+// the legacy workspace as evidence and returns the canonical, content-addressed
+// manifest;
+// `applyExecutionMigration` stages every core row plus the manifest record in
+// one transaction against a verified recovery point, and never activates.
+// R2 adds the three separate crash-safe steps: `activateExecutionMigration`
+// performs the single all-or-nothing cutover behind the deferred-surface
+// barrier, `retireExecutionSources` moves the exact core sources into
+// manifest-addressed history under a resumable per-item ledger, and
+// `abortExecutionMigration` returns a STAGED manifest to legacy without
+// touching active data. `executionManifestHash` is exported so a caller can
+// hand the reviewed hash back verbatim. ADDITIVE export — the engine package's
+// exports map is the only reachable surface for consumers.
+export type {
+  ExecutionDeferredSurface,
+  ExecutionManifest,
+  ExecutionMigrationAbortInput,
+  ExecutionMigrationActivationInput,
+  ExecutionMigrationApplyInput,
+  ExecutionMigrationInput,
+  ExecutionMigrationReceipt,
+  ExecutionMigrationRetireInput,
+  ExecutionSourceWitness,
+} from "./execution-migrate.js";
+export {
+  abortExecutionMigration,
+  activateExecutionMigration,
+  applyExecutionMigration,
+  EXECUTION_MIGRATION_MANIFEST_VERSION,
+  executionManifestHash,
+  previewExecutionMigration,
+  retireExecutionSources,
+} from "./execution-migrate.js";
+// Execution recovery: the consistent whole-store backup, the explicit-loss
+// atomic restore and the diagnostic export (primary spec §8, R3 of the
+// migration protocol). `previewExecutionRestore` is the
+// read-only loss inventory whose canonical `lossDigest` an operator approves;
+// `restoreExecutionBackup` is the whole-store replacement that requires that
+// exact digest, a quiesced store, a current pre-restore recovery point and a
+// verified sibling image before it renames anything; `exportExecutionState` is
+// canonical diagnostic data with every session identity, CAS token and
+// credential path removed and no import verb. `inspectBackupCopy` and
+// `BackupInspection` are the ONE §8 copy verdict the backup, migration and
+// restore paths share. ADDITIVE export — the engine package's exports map is
+// the only reachable surface for consumers.
+export type { BackupInspection } from "./store-activation.js";
+export type {
+  ExecutionDiagnosticExport,
+  ExecutionRecoveryAuthorityDifference,
+  ExecutionRecoveryErrorCode,
+  ExecutionRecoveryPreview,
+  ExecutionRestoreReceipt,
+} from "./execution-recovery.js";
+export {
+  ExecutionRecoveryError,
+  EXECUTION_RECOVERY_PROTOCOL_VERSION,
+  exportExecutionState,
+  previewExecutionRestore,
+  restoreExecutionBackup,
+} from "./execution-recovery.js";

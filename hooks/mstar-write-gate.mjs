@@ -11,30 +11,32 @@ import { basename, dirname, isAbsolute as isAbsolute4, join, relative as relativ
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { readFileSync as readFileSync2, statSync } from "node:fs";
 import { dirname as dirname2, isAbsolute, join as join2, relative, resolve as resolve2 } from "node:path";
-import { existsSync as existsSync13, mkdirSync as mkdirSync6, readdirSync as readdirSync7, readFileSync as readFileSync10, realpathSync as realpathSync5, statSync as statSync4, writeFileSync as writeFileSync5 } from "node:fs";
+import { existsSync as existsSync14, mkdirSync as mkdirSync6, readdirSync as readdirSync7, readFileSync as readFileSync10, realpathSync as realpathSync5, statSync as statSync5, writeFileSync as writeFileSync5 } from "node:fs";
 import { execFileSync as execFileSync4 } from "node:child_process";
-import { basename as basename7, dirname as dirname8, isAbsolute as isAbsolute8, join as join17, relative as relative2, resolve as resolve13 } from "node:path";
+import { basename as basename7, dirname as dirname8, isAbsolute as isAbsolute9, join as join17, relative as relative2, resolve as resolve13 } from "node:path";
 import { dirname as dirname7, join as join16, resolve as resolvePath, sep as sep6 } from "node:path";
-import { existsSync as existsSync11, mkdirSync as mkdirSync5, readFileSync as readFileSync9, statSync as statSync3, unlinkSync as unlinkSync5, writeFileSync as writeFileSync4 } from "node:fs";
-import { basename as basename6, dirname as dirname6, isAbsolute as isAbsolute7, join as join15, resolve as resolve12, sep as sep5 } from "node:path";
+import { existsSync as existsSync12, mkdirSync as mkdirSync5, readFileSync as readFileSync9, statSync as statSync4, unlinkSync as unlinkSync5, writeFileSync as writeFileSync4 } from "node:fs";
+import { basename as basename6, dirname as dirname6, isAbsolute as isAbsolute8, join as join15, resolve as resolve12, sep as sep5 } from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { basename as basename2, dirname as dirname3, isAbsolute as isAbsolute2, join as join3, resolve as resolve3 } from "node:path";
 import { dirname as dirname4, isAbsolute as isAbsolute3, join as join4, resolve as resolve4 } from "node:path";
 import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
 import { readFileSync as readFileSync7, readdirSync as readdirSync5 } from "node:fs";
 import { createHash as createHash2 } from "node:crypto";
-import { closeSync, existsSync as existsSync3, openSync, unlinkSync as unlinkSync3 } from "node:fs";
+import { closeSync, existsSync as existsSync3, openSync, statSync as statSync3, unlinkSync as unlinkSync3 } from "node:fs";
+import { createRequire as createRequire2 } from "node:module";
 import { join as join5, resolve as resolve5 } from "node:path";
 import { existsSync as existsSync6, readFileSync as readFileSync5, readdirSync as readdirSync3, realpathSync as realpathSync2 } from "node:fs";
 import { dirname as dirname5, join as join8, resolve as resolve8, sep as sep2 } from "node:path";
 import { isAbsolute as isAbsolute5, join as join7, resolve as resolve7 } from "node:path";
 import { execFileSync as execFileSync2 } from "node:child_process";
-import { existsSync as existsSync10, realpathSync as realpathSync3 } from "node:fs";
-import { existsSync as existsSync15, statSync as statSync6 } from "node:fs";
+import { existsSync as existsSync11, realpathSync as realpathSync3 } from "node:fs";
+import { existsSync as existsSync16, statSync as statSync7 } from "node:fs";
 import { basename as basename10, dirname as dirname12, join as join20, relative as relative4, resolve as resolve15 } from "node:path";
-import { createHash as createHash9 } from "node:crypto";
-import { appendFileSync, readFileSync as readFileSync15 } from "node:fs";
-import { join as join26 } from "node:path";
+import { AsyncLocalStorage as AsyncLocalStorage3 } from "node:async_hooks";
+import { createHash as createHash15 } from "node:crypto";
+import { appendFileSync, readFileSync as readFileSync19 } from "node:fs";
+import { join as join31 } from "node:path";
 var SEVERITY_ORDER = ["critical", "high", "medium", "low", "nit"];
 function readJson(filePath) {
   if (!existsSync(filePath))
@@ -580,6 +582,7 @@ async function loadSqliteDriver() {
     throw new StoreError("store.runtime-unsupported", `Failed to load the native "node:sqlite" module: ${error.message}`);
   }
 }
+var requireDriver = createRequire2(import.meta.url);
 function storeDbPath(context) {
   if (!context?.harnessDir)
     throw new StoreError("store.corrupt", "StoreContext.harnessDir is required");
@@ -642,6 +645,9 @@ function busyAware(db, path) {
 }
 async function connect(dbPath, mode) {
   const { DatabaseSync } = await loadSqliteDriver();
+  return openConnection(dbPath, mode, DatabaseSync);
+}
+function openConnection(dbPath, mode, DatabaseSync) {
   let db;
   try {
     db = mode === "read" ? new DatabaseSync(dbPath, { readOnly: true }) : new DatabaseSync(dbPath);
@@ -943,11 +949,123 @@ create table projection_roadmaps(
 insert into projection_meta(id, generation, format_version, source_set_hash, built_at, checked_at, freshness, last_error_json)
 values (1, null, 1, null, null, strftime('%Y-%m-%dT%H:%M:%fZ','now'), 'unavailable', null);
 `;
+var MIGRATION_4_SQL = `
+create table execution_meta(
+  id integer primary key check (id = 1),
+  protocol_version integer not null check (protocol_version = 1),
+  authority_state text not null check (authority_state in ('legacy','staged','active')),
+  revision integer not null check (revision > 0),
+  root_updated_at text not null,
+  manifest_id text,
+  activated_at text
+);
+insert into execution_meta(id, protocol_version, authority_state, revision, root_updated_at)
+values (1, 1, 'legacy', 1, strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+create table execution_workflows(
+  workflow_id text primary key,
+  revision integer not null check (revision > 0),
+  creator_session_id text,
+  state_json text not null,
+  created_at text not null,
+  updated_at text not null
+);
+create table execution_registry(
+  workflow_id text primary key references execution_workflows(workflow_id),
+  entry_json text not null
+);
+create table execution_plans(
+  workflow_id text not null references execution_workflows(workflow_id),
+  plan_id text not null,
+  revision integer not null check (revision > 0),
+  ordinal integer not null check (ordinal >= 0),
+  state_json text not null,
+  coordination_json text not null,
+  primary key (workflow_id, plan_id),
+  unique (workflow_id, ordinal)
+);
+create table execution_sessions(
+  workflow_id text not null references execution_workflows(workflow_id),
+  role text not null check (role in ('coordinator','plan-pm')),
+  session_id text not null,
+  plan_id text,
+  epoch integer not null check (epoch > 0),
+  revision integer not null check (revision > 0),
+  state text not null check (state in ('active','suspended','revoked')),
+  bound_at text not null,
+  primary key (workflow_id, role, session_id),
+  foreign key (workflow_id, plan_id) references execution_plans(workflow_id, plan_id),
+  check ((role = 'coordinator' and plan_id is null) or (role = 'plan-pm' and plan_id is not null))
+);
+create unique index execution_sessions_active_coordinator
+  on execution_sessions(workflow_id) where role = 'coordinator' and state = 'active';
+create unique index execution_sessions_active_plan_pm
+  on execution_sessions(workflow_id, plan_id) where role = 'plan-pm' and state = 'active';
+create table execution_leases(
+  workflow_id text not null,
+  plan_id text not null,
+  revision integer not null check (revision > 0),
+  owner_epoch integer not null check (owner_epoch > 0),
+  lease_json text not null,
+  primary key (workflow_id, plan_id),
+  foreign key (workflow_id, plan_id) references execution_plans(workflow_id, plan_id)
+);
+create table execution_integration_leases(
+  workflow_id text primary key references execution_workflows(workflow_id),
+  revision integer not null check (revision > 0),
+  owner_epoch integer not null check (owner_epoch > 0),
+  lease_json text not null
+);
+create table execution_inputs(
+  workflow_id text not null,
+  plan_id text not null,
+  revision integer not null check (revision > 0),
+  input_json text not null,
+  input_hash text not null,
+  catalog_pin_json text,
+  primary key (workflow_id, plan_id),
+  foreign key (workflow_id, plan_id) references execution_plans(workflow_id, plan_id)
+);
+create table execution_operations(
+  epoch integer not null check (epoch > 0),
+  operation_id text not null,
+  request_hash text not null,
+  store_id text not null,
+  workflow_id text not null,
+  plan_id text,
+  result_json text not null,
+  committed_at text not null,
+  primary key (epoch, operation_id)
+);
+create table execution_migrations(
+  manifest_id text primary key,
+  manifest_hash text not null,
+  phase text not null check (phase in ('staged','active','retired','aborted')),
+  manifest_json text not null,
+  activation_receipt_json text,
+  retirement_json text,
+  created_at text not null,
+  updated_at text not null
+);
+`;
 var MIGRATIONS = [
   { version: 1, name: "issue-core", sql: MIGRATION_1_SQL },
   { version: 2, name: "catalog-authority", sql: MIGRATION_2_SQL },
-  { version: 3, name: "execution-projections", sql: MIGRATION_3_SQL }
+  { version: 3, name: "execution-projections", sql: MIGRATION_3_SQL },
+  { version: 4, name: "execution-authority", sql: MIGRATION_4_SQL }
 ];
+var EXECUTION_TABLE_NAMES = [
+  "execution_meta",
+  "execution_workflows",
+  "execution_registry",
+  "execution_plans",
+  "execution_sessions",
+  "execution_leases",
+  "execution_integration_leases",
+  "execution_inputs",
+  "execution_operations",
+  "execution_migrations"
+];
+var EXECUTION_MIGRATION = MIGRATIONS.find((migration) => migration.name === "execution-authority");
 function migrationChecksum(migration) {
   return createHash2("sha256").update(migration.sql, "utf8").digest("hex");
 }
@@ -1005,6 +1123,33 @@ function readStoreMeta(db) {
     catalogRevision: row.catalog_revision
   };
 }
+function presentExecutionTables(db) {
+  const placeholders = EXECUTION_TABLE_NAMES.map(() => "?").join(", ");
+  const rows = db.prepare(`select name from sqlite_master where type = 'table' and name in (${placeholders})`).all(...EXECUTION_TABLE_NAMES);
+  return rows.map((row) => row.name).filter((name) => typeof name === "string");
+}
+function readExecutionMeta(db, schemaVersion) {
+  const expected = EXECUTION_MIGRATION?.version;
+  if (expected === undefined || schemaVersion < expected)
+    return null;
+  const present = presentExecutionTables(db);
+  const missing = EXECUTION_TABLE_NAMES.filter((name) => !present.includes(name));
+  if (missing.length > 0) {
+    throw new StoreError("store.schema-drift", `Migration ${expected} (execution-authority) is recorded but its schema is incomplete: missing ${missing.join(", ")}. The store is refused rather than repaired; nothing was modified.`);
+  }
+  const row = db.prepare("select protocol_version, authority_state, revision, root_updated_at, manifest_id, activated_at from execution_meta where id = 1").get();
+  if (!row || typeof row.protocol_version !== "number" || row.authority_state !== "legacy" && row.authority_state !== "staged" && row.authority_state !== "active" || typeof row.revision !== "number" || typeof row.root_updated_at !== "string" || row.manifest_id !== null && row.manifest_id !== undefined && typeof row.manifest_id !== "string" || row.activated_at !== null && row.activated_at !== undefined && typeof row.activated_at !== "string") {
+    throw new StoreError("store.corrupt", "execution_meta is missing or malformed; the execution authority state cannot be verified");
+  }
+  return {
+    protocolVersion: row.protocol_version,
+    authorityState: row.authority_state,
+    revision: row.revision,
+    rootUpdatedAt: row.root_updated_at,
+    manifestId: row.manifest_id ?? null,
+    activatedAt: row.activated_at ?? null
+  };
+}
 async function openStore(context, mode) {
   assertStoreRuntimeSupported();
   const dbPath = storeDbPath(context);
@@ -1025,6 +1170,7 @@ async function openStore(context, mode) {
       storeId: meta.storeId,
       epoch: meta.epoch,
       schemaVersion,
+      execution: readExecutionMeta(db, schemaVersion),
       close() {
         db.close();
       }
@@ -1972,7 +2118,7 @@ function resolveProcessHarnessDir(cwd = process.cwd(), harnessDir) {
   for (let dir = start;; dir = dirname6(dir)) {
     let linked = false;
     try {
-      linked = statSync3(join15(dir, ".git")).isFile();
+      linked = statSync4(join15(dir, ".git")).isFile();
     } catch (error) {
       const code = errorCode(error);
       if (code !== "ENOENT" && code !== "ENOTDIR")
@@ -2073,7 +2219,7 @@ function defaultWorkspaceRoot(startDir) {
 }
 function isAtOrBelow2(dir, root) {
   const rel = relative2(root, dir);
-  return rel === "" || !rel.startsWith("..") && !isAbsolute8(rel);
+  return rel === "" || !rel.startsWith("..") && !isAbsolute9(rel);
 }
 function mstarcDirOverride(harnessDir, key) {
   const dir = resolve13(harnessDir);
@@ -2169,7 +2315,7 @@ var GITIGNORE_PROCESS_ENTRIES_AGENTS = GITIGNORE_SNIPPET_AGENTS.split(`
 `).filter((line) => line.startsWith(".agents/") || line.startsWith("!.agents/")).map((line) => line.trim());
 function isDirectory(dir) {
   try {
-    return statSync4(dir).isDirectory();
+    return statSync5(dir).isDirectory();
   } catch {
     return false;
   }
@@ -2204,7 +2350,7 @@ var SNAPSHOT_FILE2 = "snapshot.json";
 var REGISTER_FILE = "residuals.json";
 function hasEntry(dir, name) {
   try {
-    statSync6(join20(dir, name));
+    statSync7(join20(dir, name));
     return true;
   } catch {
     return false;
@@ -2317,10 +2463,10 @@ function validateStatusWriteDoc(content, filePath, kind, options = {}) {
     }
     return validateDocByKind(doc2, kind);
   }
-  if (!existsSync15(filePath))
+  if (!existsSync16(filePath))
     return [];
   try {
-    if (statSync6(filePath).size > MAX_STATUS_CONTENT_LENGTH) {
+    if (statSync7(filePath).size > MAX_STATUS_CONTENT_LENGTH) {
       return oversized === "violate" ? [oversizedViolation(filePath)] : [];
     }
   } catch {
@@ -2365,6 +2511,8 @@ var PR_REVIEW_TIER_BUDGETS = Object.freeze({
 var EFFORT_ENUM_RE = new RegExp(`^(?:${AUDIT_EFFORTS.join("|")})(?:\\s*\\(|$)`);
 var RISK_ENUM_RE = new RegExp(`^(?:${AUDIT_RISKS.join("|")})(?:\\b|$)`);
 var CONFIDENCE_ENUM_RE = new RegExp(`^(${[...AUDIT_CONFIDENCES, "MEDIUM"].join("|")})\\b`, "i");
+var ownedTransactions = new AsyncLocalStorage3;
+var EXECUTION_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "execution-authority")?.version ?? Number.POSITIVE_INFINITY;
 var PROJECTION_FORMAT_VERSION = 1;
 var PROJECTION_ROOT_FILE = "status.json";
 
@@ -2396,7 +2544,7 @@ function churnAfterRead(spec) {
 function readSource(spec) {
   let content;
   try {
-    content = readFileSync15(spec.absolutePath, "utf8");
+    content = readFileSync19(spec.absolutePath, "utf8");
   } catch (error) {
     const code = error.code ?? "";
     if (code === "ENOENT" || code === "ENOTDIR") {
@@ -2410,7 +2558,7 @@ function readSource(spec) {
     };
   }
   churnAfterRead(spec);
-  return { state: "ok", sha256: createHash9("sha256").update(content, "utf8").digest("hex"), content, diagnostic: null };
+  return { state: "ok", sha256: createHash15("sha256").update(content, "utf8").digest("hex"), content, diagnostic: null };
 }
 var CATALOG_ROOT_KINDS = {
   repository: true,
@@ -2750,7 +2898,7 @@ async function captureProjectionSources(context) {
     kind: "root",
     rootKind: "harness",
     relativePath: PROJECTION_ROOT_FILE,
-    absolutePath: join26(harness, PROJECTION_ROOT_FILE),
+    absolutePath: join31(harness, PROJECTION_ROOT_FILE),
     declared: true
   };
   const rootRead = readSource(rootSpec);
@@ -2774,7 +2922,7 @@ async function captureProjectionSources(context) {
       kind: "workflow",
       rootKind: "harness",
       relativePath,
-      absolutePath: join26(harness, entry.dir, WORKFLOW_SNAPSHOT_FILE),
+      absolutePath: join31(harness, entry.dir, WORKFLOW_SNAPSHOT_FILE),
       declared: true
     };
   });
@@ -2788,7 +2936,7 @@ async function captureProjectionSources(context) {
       kind: "workflow",
       rootKind: binding.rootKind,
       relativePath,
-      absolutePath: join26(root, binding.relativePath, WORKFLOW_SNAPSHOT_FILE),
+      absolutePath: join31(root, binding.relativePath, WORKFLOW_SNAPSHOT_FILE),
       declared: false
     });
   }
@@ -2814,7 +2962,7 @@ async function captureProjectionSources(context) {
       kind: "compass",
       rootKind: doc.rootKind,
       relativePath: doc.relativePath,
-      absolutePath: join26(catalogRootDir(context, doc.rootKind), doc.relativePath),
+      absolutePath: join31(catalogRootDir(context, doc.rootKind), doc.relativePath),
       declared: true
     };
     const read = readSource(spec);
@@ -2836,7 +2984,7 @@ async function captureProjectionSources(context) {
       kind: "roadmap",
       rootKind: doc.rootKind,
       relativePath: doc.relativePath,
-      absolutePath: join26(catalogRootDir(context, doc.rootKind), doc.relativePath),
+      absolutePath: join31(catalogRootDir(context, doc.rootKind), doc.relativePath),
       declared: true
     };
     const read = readSource(spec);
@@ -2875,7 +3023,7 @@ function computeSourceSetHash(catalogRevision, sources) {
   const tuples = sources.map((source) => [source.sourceKey, source.state, source.sha256 ?? "-"].join("\x00")).sort();
   const payload = [`projection-format:${PROJECTION_FORMAT_VERSION}`, `catalog-revision:${catalogRevision}`, ...tuples].join(`
 `);
-  return createHash9("sha256").update(payload, "utf8").digest("hex");
+  return createHash15("sha256").update(payload, "utf8").digest("hex");
 }
 var PROJECTION_TABLES = [
   "projection_sources",
@@ -3198,6 +3346,21 @@ async function withStoreRead(context, query) {
       } catch {}
       throw error;
     }
+  } finally {
+    handle.close();
+  }
+}
+async function resolveExecutionReadRoute(context) {
+  let handle;
+  try {
+    handle = await openStore(context, "read");
+  } catch (error) {
+    if (error instanceof StoreError && error.code === "store.not-initialized")
+      return "files";
+    throw error;
+  }
+  try {
+    return handle.execution !== null && handle.execution.authorityState === "active" ? "execution" : "files";
   } finally {
     handle.close();
   }
@@ -3773,6 +3936,8 @@ function readRoadmap(db, filters) {
     badges
   };
 }
+var EXECUTION_MIGRATION_VERSION2 = MIGRATIONS.find((migration) => migration.name === "execution-authority")?.version ?? Number.POSITIVE_INFINITY;
+var CATALOG_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "catalog-authority")?.version ?? 2;
 
 // hooks/src/mstar-write-gate.ts
 var SKILL_POINTER = "skill: mstar-artifacts/references/status-and-residuals.md";
@@ -3789,6 +3954,7 @@ var PROJECT_DIR_NAME = "projects";
 var STORE_DIRECT_WRITE_CODE = "store.direct-write-refused";
 var STORE_AUTHORITY_UNAVAILABLE_CODE = "store.authority-unavailable";
 var REGISTER_RETIRED_CODE = "project.register.retired";
+var EXECUTION_DIRECT_WRITE_CODE = "execution.direct-write-refused";
 var PRE_ACTIVATION_CODES = ["store.not-initialized", "store.not-active"];
 var storeRuntimeProbe = { info: detectStoreRuntime };
 function refusalOf(error) {
@@ -3902,8 +4068,18 @@ function storeDirectWriteRefusal(targetPath) {
 function registerRetiredRefusal(storeRevision) {
   return authorityViolation(REGISTER_RETIRED_CODE, "project registers are retired migration history — the issue store ({HARNESS_DIR}/store.db, revision " + `${storeRevision}) is the only findings authority; capture and close through \`mstar plan ` + "issue-add|issue-close` (plan-scoped) or `mstar issue add|close` (unscoped). This write is refused");
 }
-function authorityUnavailableRefusal(route) {
-  return authorityViolation(STORE_AUTHORITY_UNAVAILABLE_CODE, `the issue authority could not be read ([${route.code}] ${route.message}) — the register write is refused ` + "rather than applied against an unreadable authority; no older-runtime or JSON fallback exists");
+function authorityUnavailableRefusal(route, authority = "the issue authority", write = "register write") {
+  return authorityViolation(STORE_AUTHORITY_UNAVAILABLE_CODE, `${authority} could not be read ([${route.code}] ${route.message}) — the ${write} is refused ` + "rather than applied against an unreadable authority; no older-runtime or JSON fallback exists");
+}
+function executionDirectWriteRefusal(targetPath) {
+  return authorityViolation(EXECUTION_DIRECT_WRITE_CODE, `${targetPath} is retired as a persistence route while the control harness's execution authority is ACTIVE — ` + "the root status and the workflow snapshots live in the execution store ({HARNESS_DIR}/store.db, owned by " + "the runtime). Nothing was written: use the execution DB route (the coordination verbs), not a file writer. " + "This write is refused");
+}
+async function readExecutionWriteRoute(harnessDir) {
+  try {
+    return await resolveExecutionReadRoute({ harnessDir }) === "execution" ? { kind: "active" } : { kind: "files" };
+  } catch (error) {
+    return { kind: "unavailable", ...refusalOf(error) };
+  }
 }
 function blockAuthorityWrite(toolName, display, violations) {
   writeSync(2, `[Morning Star write gate] blocked ${toolName} to ${display}
@@ -3998,7 +4174,27 @@ try {
       ]);
     }
     const target = harnessDocKindOfTarget(targetPath);
-    const registerDir = target?.kind === "register" ? target.harnessDir : aliasedRegisterDir(targetPath, landed) ?? caseFoldedRegisterRoot(targetPath) ?? (landed !== targetPath ? caseFoldedRegisterRoot(landed) : null);
+    const landedTarget = landed === targetPath ? null : harnessDocKindOfTarget(landed);
+    const executionDirs = [];
+    if (target !== null && target.kind !== "register")
+      executionDirs.push(target.harnessDir);
+    if (landedTarget !== null && landedTarget.kind !== "register" && !executionDirs.includes(landedTarget.harnessDir)) {
+      executionDirs.push(landedTarget.harnessDir);
+    }
+    for (const executionDir of executionDirs) {
+      const executionRoute = await readExecutionWriteRoute(executionDir);
+      if (executionRoute.kind === "active") {
+        blockAuthorityWrite(toolName, displayTarget(targetPath, executionDir), [
+          executionDirectWriteRefusal(targetPath)
+        ]);
+      }
+      if (executionRoute.kind === "unavailable") {
+        blockAuthorityWrite(toolName, displayTarget(targetPath, executionDir), [
+          authorityUnavailableRefusal(executionRoute, "the harness's execution authority", "coordination-document write")
+        ]);
+      }
+    }
+    const registerDir = target?.kind === "register" ? target.harnessDir : landedTarget?.kind === "register" ? landedTarget.harnessDir : aliasedRegisterDir(targetPath, landed) ?? caseFoldedRegisterRoot(targetPath) ?? (landed !== targetPath ? caseFoldedRegisterRoot(landed) : null);
     if (target === null && registerDir === null)
       continue;
     if (registerDir !== null) {

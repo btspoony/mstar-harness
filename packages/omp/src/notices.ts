@@ -1,7 +1,7 @@
-/** Durable Phase-2 diagnostic notice (unchanged literal). */
-export const PHASE2_NOTICE_CUSTOM_TYPE = "mstar:phase2-notice";
-/** Durable model-handoff notice (unchanged literal). */
-export const HANDOFF_NOTICE_CUSTOM_TYPE = "mstar:model-handoff-notice";
+/** Coordinator-visible Phase-2 diagnostic notice (the shared visible bar title). */
+export const PHASE2_NOTICE_CUSTOM_TYPE = "mstar:notice";
+/** Coordinator-visible model-handoff notice (the same shared visible bar title). */
+export const HANDOFF_NOTICE_CUSTOM_TYPE = "mstar:notice";
 
 export type NoticeTitle = Readonly<{ title: string; detail: string }>;
 
@@ -25,7 +25,16 @@ export function fallbackNotice(input: { subject: string; detail: string }): Noti
   };
 }
 
-/** `${title}: ${detail}` — the single rendering point. */
+/**
+ * `${title}: ${detail}` — the single rendering point. A detail that opens with
+ * the title's own sentence (the status-bearing case whose observed condition is
+ * that same sentence) states it once: the title is kept and the detail's
+ * remainder follows it.
+ */
 export function formatNotice(notice: NoticeTitle): string {
+  const rest = notice.detail.slice(notice.title.length);
+  if (rest !== "" && notice.detail.slice(0, notice.title.length).toLowerCase() === notice.title.toLowerCase()) {
+    return `${notice.title}${rest}`;
+  }
   return `${notice.title}: ${notice.detail}`;
 }

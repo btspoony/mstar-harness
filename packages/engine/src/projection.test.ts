@@ -701,7 +701,9 @@ describe("projection publication and last-good handling", () => {
     const handle = await openStore(f.context, "write");
     try {
       dropProjectionTables(handle.db);
-      handle.db.exec("delete from schema_version where version = 3");
+      // The recorded history must stay contiguous: a store that predates the
+      // projection schema predates every later migration too.
+      handle.db.exec("delete from schema_version where version >= 3");
     } finally {
       handle.close();
     }

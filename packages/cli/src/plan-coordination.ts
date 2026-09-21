@@ -29,6 +29,7 @@ import {
   createFsStore,
   mutatePlanCoordination,
   readCoordinatedArtifact,
+  readExecutionSource,
   readPlanCoordination,
   readSessionEnvelope,
   resolveProcessHarnessDir,
@@ -37,6 +38,7 @@ import {
   type BindPlanSessionInput,
   type ClosureEvidence,
   type CoordinationResult,
+  type ExecutionPlanView,
   type HandoffEvidence,
   type PlanCoordinationOperation,
   type PlanCoordinationView,
@@ -81,14 +83,18 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
  * The engine's documented consumer contract is the `code` (+ `details`)
  * pair; the error class itself is not part of the CLI's import surface, so
  * classification keys off the stable prefix instead of `instanceof`. The
- * scoped verbs reach four engine refusal families: the coordination surface
+ * scoped verbs reach five engine refusal families: the coordination surface
  * (`coordination.*`), the frozen-input pin (`catalog.execution-pin-conflict`,
  * contract §1), the store boundary (`store.*`) the pin and catalog reads
- * use, and — since the issue cutover (G2b) — the core issue domain
- * (`issue.*`: the DB mutation's revision/scope refusals). All four are
- * runtime refusals (exit 1), never internal errors.
+ * use, the core issue domain (`issue.*`: the DB mutation's revision/scope
+ * refusals), and — since the authoritative read adapter (plan S2, primary spec
+ * §5) — the execution domain (`execution.*`: `execution.consumer-not-ready` for
+ * a read that would need retired file authority, `execution.not-active` for a
+ * DB read below activation, `execution.direct-write-refused` for a write the
+ * file route may no longer perform). All five are runtime refusals (exit 1),
+ * never internal errors: a caller must be able to branch on the code.
  */
-const ENGINE_REFUSAL_PREFIXES = ["coordination.", "catalog.", "store.", "issue."] as const;
+const ENGINE_REFUSAL_PREFIXES = ["coordination.", "catalog.", "store.", "issue.", "execution."] as const;
 
 function coordinationFailureOf(error: unknown): { code: string; details: Record<string, unknown> } | null {
   const record = asRecord(error);
@@ -343,6 +349,89 @@ function pinProcessRoot(harnessDir: string | undefined): void {
 
 function pinSessionRoot(sessionPath: string): void {
   pinArtifactStoreRoot(readSessionEnvelope(sessionPath).harness_root);
+}
+
+/* ------------------------------------------------------------------------ *
+ * § The DB-route read (primary spec §5)
+ * ------------------------------------------------------------------------ */
+
+/**
+ * The `show` verb's DB-route form: an explicit `--workflow`/`--plan` address
+ * answered by the authoritative read adapter.
+ *
+ * The address is the caller's own — never a lookup. In particular the legacy
+ * `--session` envelope is NOT an address here: it is a file credential, and
+ * deriving a DB selection from it would be exactly the session-file conversion
+ * §5 forbids (and would report `execution.consumer-not-ready` from the file
+ * reader it actually reached).
+ *
+ * The route is asked first, so this form never becomes a silent file fallback:
+ * on a harness whose execution authority is `legacy`/`staged`/absent, the file
+ * route is still authoritative and the caller must use `--session` — a usage
+ * refusal (exit 2), not an empty view and not a silent switch of routes. A
+ * store that EXISTS and cannot answer (corrupt, drifted, busy) is the engine's
+ * own refusal and passes through as a domain failure (exit 1).
+ *
+ * The payload is the typed execution DTO: no `session_file`, no
+ * `snapshot_version` and no `allowed_operations` — a DB read has no file
+ * envelope and no scope authorization to advertise, and inventing either would
+ * be the fake-snapshot shape §5 rejects.
+ */
+async function printAuthorityView(
+  workflowId: string,
+  planId: string,
+  harnessArg: string | undefined,
+  json: boolean,
+): Promise<void> {
+  if (harnessArg !== undefined && !isAbsolute(harnessArg)) {
+    throw new SddScriptError(`--harness must be an absolute path \u2014 got ${JSON.stringify(harnessArg)}`, 2);
+  }
+  const harnessDir = resolveProcessHarnessDir(process.cwd(), harnessArg);
+  if (harnessDir === null) {
+    throw new SddScriptError(
+      `no control harness was resolved from ${process.cwd()} \u2014 pass --harness <absolute-path> for the DB-route form`,
+      2,
+    );
+  }
+  const served = await readExecutionSource({ harnessDir }, { workflowId, planId });
+  if (served.route === "files") {
+    throw new SddScriptError(
+      `plan show: the execution authority of ${harnessDir} is not active, so it holds no DB row for ` +
+        `${workflowId}/${planId}; the file route is authoritative there and reads a row through its session ` +
+        `envelope \u2014 run \`mstar plan show --session <absolute-session-json>\``,
+      2,
+    );
+  }
+  const read = served.read;
+  const view = read.data as ExecutionPlanView;
+  if (json) {
+    console.log(
+      JSON.stringify({
+        ok: true,
+        operation: "show",
+        route: "execution",
+        workflow_id: workflowId,
+        plan_id: planId,
+        store_id: read.storeId,
+        epoch: read.epoch,
+        token: read.token,
+        plan: view.plan,
+        coordination: view.coordination,
+        execution_lease: view.executionLease,
+        integration_lease: view.integrationLease,
+        frozen_input: view.frozenInput,
+      }),
+    );
+    return;
+  }
+  // Human mode keeps stdout machine-only: the readable summary is diagnostic.
+  console.error(
+    pc.green(`plan show: execution authority ${read.storeId} (epoch ${read.epoch}) \u2014 row ${workflowId}/${planId}`),
+  );
+  console.error(`plan show: token ${read.token}`);
+  console.error(`plan show: status ${String(view.plan.status)}`);
+  const holder = asRecord(view.executionLease)?.holder;
+  console.error(`plan show: execution_lease ${holder === undefined ? "(none)" : String(holder)}`);
 }
 
 /* ------------------------------------------------------------------------ *
@@ -752,17 +841,54 @@ export function registerPlanCommands(program: Command): void {
     .command("show")
     .description(
       "Read the selected row's coordination view: revision, both byte versions, scoped paths and the operations this " +
-        "session may run now (plan sessions accept no --plan; a coordinator session requires one)",
+        "session may run now (plan sessions accept no --plan; a coordinator session requires one). `--workflow`+`--plan` " +
+        "instead of `--session` reads the row from an ACTIVE execution authority (primary spec \u00A75)",
     )
-    .option("--session <path>", "Absolute session JSON envelope path")
-    .option("--plan <id>", "Plan id (required for a coordinator session)")
+    .option("--session <path>", "Absolute session JSON envelope path (file route)")
+    .option("--workflow <id>", "Workflow id (DB-route form: with --plan, instead of --session)")
+    .option("--plan <id>", "Plan id (required for a coordinator session; required with --workflow)")
+    .option("--harness <path>", "Absolute control-harness override for the DB-route form (default: resolved root)")
     .option("--json", "Machine-readable JSON on stdout")
     .action(async (options: PlanCliOptions) =>
-      runVerb("show", options, { plan_id: options.plan as string | undefined }, async (json) => {
-        const sessionPath = requireAbsolutePath(options.session as string | undefined, "--session", "show", "session-json-path");
-        pinSessionRoot(sessionPath);
-        printView("show", await readPlanCoordination(sessionPath, options.plan as string | undefined), json);
-      }),
+      runVerb(
+        "show",
+        options,
+        { workflow_id: options.workflow as string | undefined, plan_id: options.plan as string | undefined },
+        async (json) => {
+          const session = options.session as string | undefined;
+          const workflowId = options.workflow as string | undefined;
+          const planId = options.plan as string | undefined;
+          if (session === undefined) {
+            // The DB-route form. Both ids are mandatory: §3.1's plan key is
+            // (workflow, plan), so a lone --plan could only be resolved by
+            // guessing a parent.
+            if (workflowId === undefined || planId === undefined) {
+              throw new SddScriptError(
+                "usage: plan show --session <absolute-json-path> [--plan <plan-id>]\n" +
+                  "       plan show --workflow <id> --plan <id> [--harness <absolute-path>] [--json]",
+                2,
+              );
+            }
+            await printAuthorityView(
+              requireFlag(workflowId, "--workflow", "show", "workflow-id"),
+              requireFlag(planId, "--plan", "show", "plan-id"),
+              options.harness as string | undefined,
+              json,
+            );
+            return;
+          }
+          if (workflowId !== undefined || options.harness !== undefined) {
+            throw new SddScriptError(
+              "plan show --session accepts no --workflow/--harness (the session envelope pins the workflow and the " +
+                "harness root)",
+              2,
+            );
+          }
+          const sessionPath = requireAbsolutePath(session, "--session", "show", "session-json-path");
+          pinSessionRoot(sessionPath);
+          printView("show", await readPlanCoordination(sessionPath, planId), json);
+        },
+      ),
     );
 
   plan

@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { readJson, type ValidationResult } from "./core.js";
 import { assertSafePathComponent, resolveWorkflowDir } from "./path.js";
+import { assertExecutionFileReadAllowed } from "./store-db.js";
 import { readWorkflowSnapshot, WORKFLOW_SNAPSHOT_FILE, type WorkflowSnapshot } from "./workflow.js";
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -43,9 +44,26 @@ export type ActiveLifecycleScan =
 /** Read all other registered active snapshots through the canonical reader.
  * Missing register means no siblings; malformed register or unreadable sibling
  * refuses. Governing snapshot is supplied by the caller, never read twice.
+ *
+ * The read veto is the entry boundary (spec §4.3/§5): the register this scan
+ * enumerates — and every sibling snapshot it reaches — is retired as an
+ * authority source while the execution authority is ACTIVE, so the scan
+ * refuses before reading the register rather than only inheriting the refusal
+ * from a sibling snapshot read. The refusal keeps this scan's own stable code
+ * (consumers branch on `kind`/`code` and this code already names exactly what
+ * cannot be enumerated); the underlying store refusal is carried in `detail`.
  */
 export function scanActiveLifecycleBranches(harnessDir: string, governingWorkflowId: string | null): ActiveLifecycleScan {
   const registerPath = join(harnessDir, "status.json");
+  try {
+    assertExecutionFileReadAllowed({ harnessDir });
+  } catch (error) {
+    return {
+      kind: "refusal",
+      code: "worktree.l1.lifecycle-snapshot-unreadable",
+      detail: `${registerPath}: ${(error as Error).message}`,
+    };
+  }
   if (!existsSync(registerPath)) return { kind: "ok", branches: [], notes: [] };
   let register: Record<string, unknown>;
   try {

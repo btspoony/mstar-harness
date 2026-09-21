@@ -48,6 +48,10 @@ import { assertSafePathComponent } from "./path.js";
 // module evaluation, so the ESM live-binding cycle is safe (see status.ts).
 import { registerWorkflowEntryLocked, validatePlanRow, validateWorkflowEntry, type PlanRow, type WorkflowEntry } from "./status.js";
 import { assertFsStorePath, getArtifactStore, type ArtifactStore } from "./store.js";
+import {
+  assertExecutionFileReadAllowed,
+  assertExecutionFileWriteAllowed,
+} from "./store-db.js";
 
 /** Snapshot file name inside `workflows/<id>/` ( — writer contract). */
 export const WORKFLOW_SNAPSHOT_FILE = "snapshot.json";
@@ -337,8 +341,13 @@ function validateWorktreePathValue(violations: ValidationResult[], value: unknow
  * delivery kind requires is the consultation's rule
  * (`consultDeliveryEvidence`), so a partially filled block stays writable
  * while it is being collected.
+ *
+ * Exported (pure, read-only) for the DB transport's workflow-level `delivery`
+ * transition: recording evidence on the execution authority runs the SAME
+ * structural rule as the file route's `recordWorkflowDelivery`, so the two
+ * writers cannot drift into accepting different evidence shapes.
  */
-function deliveryEvidenceViolations(value: unknown, what: string): ValidationResult[] {
+export function deliveryEvidenceViolations(value: unknown, what: string): ValidationResult[] {
   const violations: ValidationResult[] = [];
   const invalid = (message: string): void => {
     violations.push(violation("medium", "workflow.snapshot.invalid-delivery-evidence", `${what}: ${message}`));
@@ -389,6 +398,11 @@ function deliveryEvidenceViolations(value: unknown, what: string): ValidationRes
     }
   }
   return violations;
+}
+
+/** The delivery-evidence members one declared kind records (contract §1/§4c/§4d/§4f). */
+export function deliveryEvidenceMembers(kind: WorkflowDeliveryKind): readonly string[] {
+  return kind === "development" ? ["compound", "pr", "merge"] : ["completion"];
 }
 
 /**
@@ -687,6 +701,13 @@ export class WorkflowSnapshotValidationError extends Error {
 }
 
 export function readWorkflowSnapshot(dir: string): WorkflowSnapshotRead {
+  // Canonical authority discrimination precedes the existence/parse/validation
+  // work below (spec §4.3): with an ACTIVE execution authority the snapshot is
+  // retired as an authority source, so this reader refuses instead of handing
+  // leftover JSON to a consumer as validated state. `storeDbPath` normalizes
+  // the target to the CONTROL harness root, so a worktree-local file reader
+  // cannot dodge the veto.
+  assertExecutionFileReadAllowed({ harnessDir: dir });
   const snapshotPath = join(dir, WORKFLOW_SNAPSHOT_FILE);
   if (!existsSync(snapshotPath)) {
     throw new Error(`workflow snapshot not found: ${snapshotPath}`);
@@ -772,6 +793,12 @@ export async function writeWorkflowSnapshot(
   dir: string,
   opts: WriteWorkflowSnapshotOptions = {},
 ): Promise<void> {
+  // Canonical authority discrimination precedes payload validation and the
+  // lock (spec §4.3): with an ACTIVE execution authority the snapshot is
+  // retired as a persistence route, so this refuses whatever store the caller
+  // injected and before any CAS token is inspected. The context is the target
+  // dir; `storeDbPath` normalizes it to the CONTROL harness root.
+  assertExecutionFileWriteAllowed({ harnessDir: dir });
   const gate = validateWorkflowSnapshot(snapshot);
   if (!gate.ok) {
     const detail = gate.violations.map((v) => v.message).join("; ");
@@ -1119,6 +1146,9 @@ function isCloseTimestamp(value: string): boolean {
  * never releases leases.
  */
 export async function closeWorkflow(workflowId: string, dir: string, opts: CloseWorkflowOptions): Promise<WorkflowSnapshot> {
+  // Canonical authority discrimination precedes every payload check below and
+  // the unchanged-snapshot shortcut (spec §4.3).
+  assertExecutionFileWriteAllowed({ harnessDir: dir });
   if (!isCloseTimestamp(opts.endedAt)) {
     throw new Error("endedAt must be a valid YYYY-MM-DD date or RFC3339 timestamp");
   }
@@ -1225,6 +1255,8 @@ export async function recordWorkflowDelivery(
   dir: string,
   opts: RecordWorkflowDeliveryOptions,
 ): Promise<RecordWorkflowDeliveryResult> {
+  // Canonical authority discrimination precedes payload validation (spec §4.3).
+  assertExecutionFileWriteAllowed({ harnessDir: dir });
   const evidence: unknown = opts.evidence;
   if (!isPlainObject(evidence)) {
     throw new Error("recordWorkflowDelivery: options.evidence must be an object naming at least one delivery-evidence member");
@@ -1276,7 +1308,7 @@ export async function recordWorkflowDelivery(
         `refusing to record delivery evidence for workflow ${JSON.stringify(workflowId)}: only a type: plan lifecycle with a registered delivery_kind carries delivery evidence (got type ${JSON.stringify(snapshot.type)} / delivery_kind ${JSON.stringify(kind)}) \u2014 the kind is declared at registration and never inferred (\u00a71)`,
       );
     }
-    const allowed = kind === "development" ? ["compound", "pr", "merge"] : ["completion"];
+    const allowed = deliveryEvidenceMembers(kind);
     const unused = members.filter((member) => !allowed.includes(member));
     if (unused.length > 0) {
       throw new Error(
@@ -1384,6 +1416,8 @@ export async function declareWorkflowDeliveryKind(
   dir: string,
   opts: DeclareWorkflowDeliveryKindOptions,
 ): Promise<WorkflowSnapshot> {
+  // Canonical authority discrimination precedes payload validation (spec §4.3).
+  assertExecutionFileWriteAllowed({ harnessDir: dir });
   const kind = opts.deliveryKind;
   if (typeof kind !== "string" || !(WORKFLOW_DELIVERY_KINDS as readonly string[]).includes(kind)) {
     throw new Error(
@@ -1623,6 +1657,11 @@ export async function registerPlanWorkflow(
   if (typeof options.harnessDir !== "string" || options.harnessDir.trim() === "") {
     throw new Error("registerPlanWorkflow: options.harnessDir is required (must contain status.json + workflows/)");
   }
+  // Canonical authority discrimination precedes every other check (spec §4.3):
+  // the registration writes a snapshot AND a root entry, so with an ACTIVE
+  // execution authority it refuses whatever store is active.
+  const harnessDir = resolve(options.harnessDir);
+  assertExecutionFileWriteAllowed({ harnessDir });
   assertSafePathComponent(workflowId, "workflow id");
   const { plan, deliveryKind } = options;
   if (!isPlainObject(plan)) {
@@ -1662,7 +1701,6 @@ export async function registerPlanWorkflow(
     throw new Error("registerPlanWorkflow: options.startedAt must be a valid YYYY-MM-DD date or RFC3339 timestamp");
   }
 
-  const harnessDir = resolve(options.harnessDir);
   const statusPath = join(harnessDir, "status.json");
   const workflowDir = join(harnessDir, "workflows", workflowId);
   const snapshotPath = join(workflowDir, WORKFLOW_SNAPSHOT_FILE);
@@ -1902,6 +1940,9 @@ export async function registerIterationWorkflow(
   if (typeof options.harnessDir !== "string" || options.harnessDir.trim() === "") {
     throw refuse("options.harnessDir is required (must contain status.json + workflows/)");
   }
+  // Canonical authority discrimination precedes every other check (spec §4.3).
+  const harnessDir = resolve(options.harnessDir);
+  assertExecutionFileWriteAllowed({ harnessDir });
   assertSafePathComponent(workflowId, "workflow id");
   if (typeof options.compassRef !== "string" || options.compassRef.trim() === "") {
     throw refuse("options.compassRef must be a non-empty string");
@@ -1948,7 +1989,6 @@ export async function registerIterationWorkflow(
     throw refuse("options.startedAt must be a valid YYYY-MM-DD date or RFC3339 timestamp");
   }
 
-  const harnessDir = resolve(options.harnessDir);
   const statusPath = join(harnessDir, "status.json");
   const workflowDir = join(harnessDir, "workflows", workflowId);
   const snapshotPath = join(workflowDir, WORKFLOW_SNAPSHOT_FILE);

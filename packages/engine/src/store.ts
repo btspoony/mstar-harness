@@ -17,6 +17,7 @@ import {
   resolveProjectDir,
   resolveWorkflowDir,
 } from "./path.js";
+import { assertExecutionFileReadAllowed, assertExecutionFileWriteAllowed } from "./store-db.js";
 
 /** JSON coordination-doc kinds the store persists. The former `residuals`
  * kind is retired (issue-governance cutover G2a): the issue store (`store.db`)
@@ -218,7 +219,14 @@ export function createFsStore(harnessRoot: string): ArtifactStore & { root: stri
  // Everything else — including a `json`/symlink alias of a protected file —
  // refuses.
       const protectedKind = protectedKindOf(root, doc, filePath);
-      if (protectedKind !== null) assertProtectedWriteAuthorized(filePath, "put", protectedKind);
+      if (protectedKind !== null) {
+        // Canonical authority discrimination precedes the authorization check
+        // and the write itself (spec §4.3): with an ACTIVE execution authority
+        // in the control harness this file is not a persistence route, even
+        // from inside the authorized protected-write context.
+        assertExecutionFileWriteAllowed({ harnessDir: root });
+        assertProtectedWriteAuthorized(filePath, "put", protectedKind);
+      }
       writeJson(filePath, doc.payload);
     },
     async get<T = unknown>(ref: ArtifactRef): Promise<T | undefined> {
@@ -228,6 +236,15 @@ export function createFsStore(harnessRoot: string): ArtifactStore & { root: stri
       // holds no register authority, so legacy register bytes never reach a
       // consumer that bypasses the findings gate.
       assertNotRetiredRegisterTarget(root, ref, filePath);
+      // Canonical authority discrimination precedes the read itself (spec
+      // §4.3/§5) and is the SAME canonical protected-kind classification the
+      // writer path uses: while the execution authority is ACTIVE this seam is
+      // not a way to observe root/snapshot JSON (a `json` alias included) that
+      // the canonical readers refuse, and a store that exists but cannot be
+      // read refuses here too instead of falling through to the bytes.
+      if (protectedKindOf(root, ref, filePath) !== null) {
+        assertExecutionFileReadAllowed({ harnessDir: root });
+      }
       if (!existsSync(filePath)) return undefined;
       return readJson(filePath) as unknown as T;
     },
@@ -235,7 +252,10 @@ export function createFsStore(harnessRoot: string): ArtifactStore & { root: stri
       const filePath = resolveArtifactPath(root, ref);
       assertNotRetiredRegisterTarget(root, ref, filePath);
       const protectedKind = protectedKindOf(root, ref, filePath);
-      if (protectedKind !== null) assertProtectedWriteAuthorized(filePath, "delete", protectedKind);
+      if (protectedKind !== null) {
+        assertExecutionFileWriteAllowed({ harnessDir: root });
+        assertProtectedWriteAuthorized(filePath, "delete", protectedKind);
+      }
       if (existsSync(filePath)) unlinkSync(filePath);
     },
     async list(kind: ArtifactKind): Promise<ArtifactRef[]> {

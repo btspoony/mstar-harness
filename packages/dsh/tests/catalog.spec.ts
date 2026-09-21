@@ -37,6 +37,14 @@ import { mkdir, mkdtemp, rm, symlink, utimes, writeFile } from 'node:fs/promises
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
+import {
+  createExecutionWorkflow,
+  initializeExecutionAuthority,
+  initializeStore,
+  openStore,
+  registerCatalogEntity,
+} from '@mstar-harness/engine'
+import type { ExecutionCaller, ExecutionContext } from '@mstar-harness/engine'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import * as plugin from '../src/index.ts'
@@ -60,6 +68,97 @@ const inboxMessage = (): UserMessage => createUserMessage({
   source: { kind: 'user' },
   content: [{ type: 'text', text: 'hello from the inbox' }],
 })
+
+/* ===========================================================================
+ * Execution-authority fixtures (plan S4 / Phase-5 F3): the REAL store through
+ * the engine's own producers, and NO root `status.json` — the state a real
+ * cutover leaves once the retired registry is gone.
+ * ========================================================================== */
+
+const AUTHORITY_TS = '2026-09-21T00:00:00.000Z'
+
+/**
+ * Initialize the REAL execution authority (create-only empty-execution
+ * initializer) with zero or more registered lifecycles. Each
+ * `createExecutionWorkflow` consumes the PREVIOUS receipt's root token, so a
+ * second lifecycle walks the registry revisions instead of guessing one.
+ */
+async function seedExecutionAuthority(
+  harnessDir: string,
+  workflows: readonly { id: string; planId: string }[],
+): Promise<void> {
+  const handle = await initializeStore({ harnessDir })
+  handle.close()
+  let token = (await initializeExecutionAuthority({ harnessDir })).token
+  for (const workflow of workflows) {
+    await registerCatalogEntity(
+      { harnessDir },
+      {
+        kind: 'plan',
+        id: workflow.planId,
+        title: `${workflow.planId} title`,
+        rootKind: 'plans',
+        relativePath: `plans/${workflow.planId}.md`,
+      },
+      { operationId: `register-${workflow.planId}`, actor: 'catalog.spec' },
+    )
+    const receipt = await createExecutionWorkflow(
+      {
+        harnessDir,
+        caller: {
+          sessionId: `host-${workflow.id}`,
+          role: 'coordinator',
+          workflowId: workflow.id,
+          planId: null,
+        } satisfies ExecutionCaller,
+      } satisfies ExecutionContext,
+      {
+        entry: { id: workflow.id, type: 'plan', started_at: AUTHORITY_TS, dir: `workflows/${workflow.id}` },
+        snapshot: {
+          schema_version: 1,
+          id: workflow.id,
+          type: 'plan',
+          status: 'running',
+          started_at: AUTHORITY_TS,
+          updated_at: AUTHORITY_TS,
+          plans: [
+            {
+              id: workflow.planId,
+              title: `${workflow.planId} title`,
+              file: `plans/${workflow.planId}.md`,
+              status: 'Todo',
+            },
+          ],
+          delivery_kind: 'development',
+          branch: { source: `feature/${workflow.id}`, target: 'main' },
+        } as never,
+        expected: token,
+        operationId: `create-${workflow.id}`,
+      },
+    )
+    token = receipt.token
+  }
+}
+
+/**
+ * Seal a freshly seeded store for readers (the G2a / store-cutover pattern):
+ * one read open+close so later reads do not hit the documented bun-test open
+ * flake (a read right after the writer closes can surface `store.corrupt` /
+ * `store.busy`, which the authority route correctly treats as fail-closed
+ * `store.authority-unavailable`). Without it the store's SHAPE, not the
+ * authority ROUTE these cases are about, would decide the verdict.
+ */
+async function sealStoreForReaders(harnessDir: string): Promise<void> {
+  const handle = await openStore({ harnessDir }, 'read')
+  handle.close()
+}
+
+/** Unreadable authority through the REAL engine channel: a directory where the
+ * database file belongs (`openStore` refuses `store.corrupt`). */
+async function corruptStore(harnessDir: string): Promise<void> {
+  for (const suffix of ['', '-wal', '-shm']) await rm(join(harnessDir, `store.db${suffix}`), { force: true })
+  await mkdir(join(harnessDir, 'store.db'), { recursive: true })
+}
 
 /** The loop's default pre-step decision: enter the step with the inbox messages. */
 const defaultEnter = (messages: UserMessage[]): (() => Promise<PreStepDecision>) =>
@@ -871,6 +970,55 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
     expect(payload.iteration).toBeUndefined()
     expect(textOf(row)).toContain('workflow selection: ERROR (workflow.selection.unbound-multi-active)')
     expect(textOf(row)).not.toContain('workflow warning: workflow.selection.multi-active')
+  })
+
+  it('surfaces the authority selection verdicts after retirement, never a silent null state section (F3)', async () => {
+    // The root status.json is GONE in both fixtures below — the execution
+    // authority retired it, which is exactly the state the file-existence gate
+    // used to swallow into a null state section.
+    const emptyRoot = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-verdict-empty-'))
+    const emptyHarness = join(emptyRoot, 'harness')
+    await mkdir(emptyHarness, { recursive: true })
+    await seedExecutionAuthority(emptyHarness, [])
+    await sealStoreForReaders(emptyHarness)
+    const emptyApp = await bootApp({ root: emptyRoot })
+    const emptyState = (await buildCatalogPayloadWithStore(emptyApp.ctx, emptyHarness)).state
+    expect(emptyState?.selection).toEqual({
+      kind: 'error',
+      code: 'workflow.selection.no-active',
+      message: expect.stringContaining('no active lifecycle'),
+    })
+    expect(emptyState?.plans).toEqual([])
+    await emptyApp.dispose()
+
+    // Unbound multi-active set: the picker verdict, with its active ids.
+    const unboundRoot = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-verdict-unbound-'))
+    const unboundHarness = join(unboundRoot, 'harness')
+    await mkdir(unboundHarness, { recursive: true })
+    await seedExecutionAuthority(unboundHarness, [
+      { id: 'wf-alpha', planId: 'plan-alpha' },
+      { id: 'wf-beta', planId: 'plan-beta' },
+    ])
+    await sealStoreForReaders(unboundHarness)
+    const unboundApp = booted = await bootApp({ root: unboundRoot })
+    const unboundState = (await buildCatalogPayloadWithStore(unboundApp.ctx, unboundHarness)).state
+    expect(unboundState?.selection).toEqual({
+      kind: 'error',
+      code: 'workflow.selection.unbound-multi-active',
+      message: expect.stringContaining('2 active lifecycles'),
+      activeWorkflowIds: ['wf-alpha', 'wf-beta'],
+    })
+
+    // Unreadable authority: the fail-closed verdict, with the store's own code
+    // — the store bytes themselves are unreadable here, so no writer can hold
+    // it open.
+    await corruptStore(unboundHarness)
+    const unavailableState = (await buildCatalogPayloadWithStore(unboundApp.ctx, unboundHarness)).state
+    expect(unavailableState?.selection).toEqual({
+      kind: 'error',
+      code: 'store.corrupt',
+      message: expect.any(String),
+    })
   })
 
   it('no active workflows → the latest terminal snapshot by mtime (history view); non-terminal snapshots are skipped', async () => {

@@ -47,7 +47,6 @@ import {
   CoordinationError,
   assertExactKeys,
   canonicalTarget,
-  evidenceRefOf,
   isArtifactVersion,
   isNonEmptyString,
   isPlainObject,
@@ -58,20 +57,48 @@ import {
   validatePreparedCoordination,
   validateRowCoordination,
   withProtectedWrite,
-  type EvidenceRef,
   type HandoffIntegration,
-  type HandoffState,
   type PlanHandoff,
   type PlanProgress,
   type PreparedCoordination,
   type RowCoordination,
 } from "./coordination-write.js";
 import {
+  IMPLEMENTED_OPERATIONS,
+  allowedOperations,
+  assertAcceptedReviewDecision,
+  assertEvidenceDigests,
+  assertExecutionHolder,
+  assertNoHandoffTransition,
+  assertNoIntegrationContamination,
+  assertOperationRole,
+  assertPlanAddress,
+  assertPrepareAdmission,
+  assertTrackBranches,
+  gitProof,
+  integrationAnchors,
+  integrationDiverged,
+  integrationUnresolved,
+  mergeLeaseOfAttempt,
+  readHandoffEvidence,
+  requireExecutionLease,
+  requireIntegration,
+  requirePlanHandoff,
+  requirePlanSessionBinding,
+  requireProgressStatus,
+  rowCoordinationOf,
+  rowStatusOf,
+  standaloneDeliveryAnchors,
+  summarize,
+  type CoordinationRole,
+  type CoordinationSeat,
+  type HandoffEvidenceInput,
+  type IntegrationAnchors,
+} from "./coordination-transitions.js";
+import {
   claimLease,
   transferLease,
-  validateExecutionLease,
   withStatusWriteLock,
-  type ExecutionLease,
   type IntegrationMergeLease,
 } from "./lease.js";
 import {
@@ -88,7 +115,15 @@ import { CatalogError } from "./catalog.js";
 import { parseCompassFrontmatterText } from "./iteration.js";
 import { rowPlanIds, validatePlanRow, validateStatusV2, type PlanRow, type StatusV2Doc } from "./status.js";
 import { getArtifactStore, resolveArtifactPath, type ArtifactRef, type ArtifactStore } from "./store.js";
-import { StoreError, openStore, type StoreContext, type StoreHandle } from "./store-db.js";
+import {
+  StoreError,
+  assertExecutionFileReadAllowed,
+  assertExecutionFileWriteAllowed,
+  openStore,
+  type StoreContext,
+  type StoreDb,
+  type StoreHandle,
+} from "./store-db.js";
 import {
   IssueError,
   captureIssue,
@@ -123,8 +158,12 @@ import {
  */
 export { CoordinationError };
 
-/** Bind roles: one coordinator per lifecycle, one plan session per plan. */
-export type CoordinationRole = "plan-pm" | "coordinator";
+/**
+ * Bind roles: one coordinator per lifecycle, one plan session per plan. The
+ * rule lives in `coordination-transitions.ts`, which the DB transport runs too;
+ * this module re-exports it as the file route's public vocabulary.
+ */
+export type { CoordinationRole };
 
 /**
  * Scope address, both forms required by spec §B: from a pinned Assignment
@@ -340,22 +379,6 @@ const ENVELOPE_KEYS = ["schema_version", "role", "session_id", "workflow_id", "p
 const ASSIGNMENT_QA_GATES: Record<string, true> = { mandatory: true, "pm-acceptance": true };
 const ASSIGNMENT_FINDINGS_MODES: Record<string, true> = { "zero-residual": true, "allow-residual": true };
 
-/** The operations this slice implements — the only ones ever advertised. */
-const IMPLEMENTED_OPERATIONS: Record<string, true> = {
-  prepare: true,
-  progress: true,
-  "residual-add": true,
-  "residual-close": true,
-  handoff: true,
-  accept: true,
-  return: true,
-  "integration-start": true,
-  "integration-accept": true,
-  complete: true,
-  "repair-delivery-source": true,
-  reconcile: true,
-};
-
 /* ------------------------------------------------------------------------ *
  * § Small helpers
  * ------------------------------------------------------------------------ */
@@ -386,49 +409,17 @@ function errorCode(error: unknown): string | undefined {
   return undefined;
 }
 
-/** Row statuses a claim may start from (mirrors the pure lease transition). */
-function isClaimableStatus(status: string): boolean {
-  return status === "Todo" || status === "Blocked";
-}
-
 function invalidInput(message: string, details: Record<string, unknown> = {}): CoordinationError {
   return new CoordinationError("coordination.invalid-input", message, details);
 }
 
-function summarize(violations: readonly { code: string; message: string }[]): string {
-  return violations.map((entry) => `${entry.code}: ${entry.message}`).join("; ");
-}
-
-function assertViolationFree(violations: readonly { code: string; message: string }[], what: string): void {
+/** The single mapping from a violated stored shape to the refusal vocabulary. */
+export function assertViolationFree(violations: readonly { code: string; message: string }[], what: string): void {
   if (violations.length > 0) {
     throw new CoordinationError("coordination.invalid-input", `${what} is invalid \u2014 ${summarize(violations)}`, {
       violations: violations.map((entry) => entry.code),
     });
   }
-}
-
-function rowCoordinationOf(row: PlanRow): RowCoordination | undefined {
-  const value = row.coordination;
-  if (!isPlainObject(value)) return undefined;
-  // Boundary cast: every row `coordination` block reaching here was written
-  // through this module and validated by `validateRowCoordination`.
-  const coordination = value as RowCoordination;
-  return coordination;
-}
-
-function rowStatusOf(row: PlanRow): string {
-  return isNonEmptyString(row.status) ? row.status : "";
-}
-
-/** Working branches a plan row reports (`metadata.track_branches` / `working_branch`). */
-function reportedBranchesOf(row: PlanRow): string[] {
-  const metadata = isPlainObject(row.metadata) ? row.metadata : {};
-  const out: string[] = [];
-  if (isNonEmptyString(metadata.working_branch)) out.push(metadata.working_branch);
-  if (Array.isArray(metadata.track_branches)) {
-    for (const branch of metadata.track_branches) if (isNonEmptyString(branch)) out.push(branch);
-  }
-  return out;
 }
 
 function snapshotPathOf(harnessRoot: string, workflowId: string): string {
@@ -546,7 +537,8 @@ export function resolveProcessHarnessDir(cwd: string = process.cwd(), harnessDir
  * § Assignment headers
  * ------------------------------------------------------------------------ */
 
-type AssignmentHeaders = {
+/** The pinned Assignment's C1 header block, as the seal and the scope read it. */
+export type AssignmentHeaders = {
   assignmentPath: string;
   executionScope: string;
   executeAs: string;
@@ -587,8 +579,12 @@ const ABSOLUTE_PATH_HEADERS = ["control harness root", "plan path", "worktree pa
  * the scope cannot be pinned and the call fails loudly. Lines inside fenced
  * code blocks are never headers; unknown headers (the assignment's own prose,
  * `IDENTITY:`, …) are ignored.
+ *
+ * Exported for the DB transport (`execution-coordination.ts`): a DB `prepare`
+ * seals the same reviewed Assignment, so it runs this one parser instead of a
+ * second, drifting header reader.
  */
-function parseAssignmentFile(assignmentPath: string): AssignmentHeaders {
+export function parseAssignmentFile(assignmentPath: string): AssignmentHeaders {
   const abs = resolve(assignmentPath);
   if (!existsSync(abs)) {
     throw new CoordinationError("coordination.assignment-invalid", `Assignment not found: ${abs}`, { path: abs });
@@ -1006,7 +1002,35 @@ export function readSessionEnvelope(sessionPath: string): CoordinationSession {
   return session;
 }
 
+/** An entry boundary's own authority anchor: the session envelope the call is
+ * about to use, plus the control harness root it names. */
+type EntryAnchor = { session: CoordinationSession; harnessRoot: string };
+
+/**
+ * Resolve the ONE thing an entry-boundary authority veto needs before it can
+ * decide anything: the session envelope that names the control harness this
+ * call belongs to (`store-db`'s `storeDbPath` resolves the process/control
+ * root from the harness root recorded here).
+ *
+ * This is the ENTIRE entry boundary (spec §4.3/§5) for the coordinated
+ * entries that take a `sessionPath`: the envelope carries no authority of its
+ * own and no request payload, version token, operation shape or scope is
+ * inspected here, so nothing in the call body can pre-empt the refusal with a
+ * payload error. A `sessionPath` that cannot address an envelope refuses with
+ * the envelope reader's own `coordination.invalid-input` — there is then no
+ * control harness to discriminate against.
+ */
+function entryAnchor(sessionPath: unknown): EntryAnchor {
+  const session = readSessionEnvelope(sessionPath as string);
+  return { session, harnessRoot: canonicalizeNearestExisting(session.harness_root) };
+}
+
 function createSessionEnvelope(session: CoordinationSession): string {
+  // Canonical authority discrimination precedes the file creation below
+  // (spec §4.3): with an ACTIVE execution authority the session-envelope file
+  // is retired as a persistence route, so a bind refuses before any byte or
+  // the snapshot it would accompany is written.
+  assertExecutionFileWriteAllowed({ harnessDir: session.harness_root });
   const path = sessionFilePath(session.harness_root, session.workflow_id, session.role, session.session_id);
   mkdirSync(dirname(path), { recursive: true });
   try {
@@ -1126,7 +1150,7 @@ async function withRowCommit(
     // Every row mutation re-authenticates the row's pin: an Assignment edited
     // after `prepare` invalidates the row until the coordinator re-prepares.
     if (opts.freshness !== false && coordination?.prepared !== undefined) {
-      assertPreparedFresh(scope, coordination.prepared);
+      assertPreparedFresh(scope.assignmentPath, coordination.prepared);
     }
     await opts.precheck(context);
     if (opts.expectedRevision !== null && context.revision !== opts.expectedRevision) {
@@ -1154,21 +1178,56 @@ async function withRowCommit(
   return result;
 }
 
-/** Re-verify the prepared Assignment hash; a changed Assignment is stale. */
-function assertPreparedFresh(scope: ResolvedPlanScope, prepared: PreparedCoordination): void {
-  if (!existsSync(scope.assignmentPath)) {
-    throw new CoordinationError("coordination.assignment-stale", `prepared Assignment is gone: ${scope.assignmentPath}`, {
-      path: scope.assignmentPath,
+/**
+ * Re-verify the prepared Assignment hash; a changed Assignment is stale. The
+ * rule is shared with the DB transport, which re-reads the Assignment its own
+ * seal records — one staleness rule for both routes, not a second tolerance.
+ */
+export function assertPreparedFresh(assignmentPath: string, prepared: PreparedCoordination): void {
+  if (!existsSync(assignmentPath)) {
+    throw new CoordinationError("coordination.assignment-stale", `prepared Assignment is gone: ${assignmentPath}`, {
+      path: assignmentPath,
     });
   }
-  const actual = sha256Bytes(readFileSync(scope.assignmentPath));
+  const actual = sha256Bytes(readFileSync(assignmentPath));
   if (actual !== prepared.assignment_sha256) {
     throw new CoordinationError(
       "coordination.assignment-stale",
-      `Assignment ${scope.assignmentPath} changed after preparation (${prepared.assignment_sha256} \u2192 ${actual}) \u2014 the coordinator must re-run \`prepare\``,
-      { path: scope.assignmentPath, expected: prepared.assignment_sha256, actual },
+      `Assignment ${assignmentPath} changed after preparation (${prepared.assignment_sha256} \u2192 ${actual}) \u2014 the coordinator must re-run \`prepare\``,
+      { path: assignmentPath, expected: prepared.assignment_sha256, actual },
     );
   }
+}
+
+/**
+ * §4.1 the commit-time recheck of the documents a `prepare` seals: the exact
+ * bytes the pre-transaction read hashed, re-read immediately before the
+ * mutation commits. An edit between the two reads refuses with no DB mutation
+ * rather than sealing bytes the seal does not describe — SQLite cannot lock the
+ * filesystem, so the witness is what closes that window.
+ */
+export function assertSealedInputsUnchanged(seal: {
+  assignmentPath: string;
+  assignmentSha256: string;
+  planPath: string;
+  planSha256: string;
+  planId: string;
+}): void {
+  const recheck = (filePath: string, expected: string, what: string): void => {
+    if (!existsSync(filePath)) {
+      throw new CoordinationError("coordination.assignment-stale", `${what} is gone: ${filePath}`, { path: filePath });
+    }
+    const actual = sha256Bytes(readFileSync(filePath));
+    if (actual !== expected) {
+      throw new CoordinationError(
+        "coordination.assignment-stale",
+        `${what} ${filePath} changed while plan ${seal.planId} was being prepared (${expected} \u2192 ${actual}) \u2014 nothing was sealed; re-run \`prepare\` against the reviewed input`,
+        { path: filePath, expected, actual, plan_id: seal.planId },
+      );
+    }
+  };
+  recheck(seal.assignmentPath, seal.assignmentSha256, "Assignment");
+  recheck(seal.planPath, seal.planSha256, "plan document");
 }
 
 /** A coordinator session must match the snapshot's coordinator binding. */
@@ -1198,42 +1257,15 @@ function assertCoordinatorBinding(session: CoordinationSession, sessionPath: str
 }
 
 /**
- * The row's own execution lease, validated (spec §C2/§C3: a released lease is
- * deleted, `null`/tombstone objects are invalid). Fails closed — callers that
- * need a holder never proceed on an absent or malformed lease.
- */
-function requireExecutionLease(row: PlanRow, planId: string, what: string): ExecutionLease {
-  const gate = validateExecutionLease(row.execution_lease);
-  if (!gate.ok) {
-    throw new CoordinationError(
-      "coordination.invalid-transition",
-      `${what} requires ${planId} to hold an active execution lease \u2014 ${summarize(gate.violations)}`,
-      { plan_id: planId, violations: gate.violations.map((entry) => entry.code) },
-    );
-  }
-  // Boundary cast: `validateExecutionLease` just proved the shape.
-  return row.execution_lease as ExecutionLease;
-}
-
-/** The row's execution lease, proven to be held by `holder` (spec §D). */
-function assertExecutionHolder(row: PlanRow, holder: string, planId: string, what: string): void {
-  const lease = requireExecutionLease(row, planId, what);
-  if (lease.holder !== holder) {
-    throw new CoordinationError(
-      "coordination.session-mismatch",
-      `${what} requires ${planId}'s execution lease held by ${holder} \u2014 it is held by ${lease.holder}`,
-      { plan_id: planId, expected: holder, actual: lease.holder },
-    );
-  }
-}
-
-/**
  * A plan session must match the row's session binding, and — for a write — must
  * still hold the row's execution lease: identity is not ownership, and a
  * transferred or released lease ends the plan's authority (§D "claim before
  * InProgress"; §E keeps both leases until complete). Only the read paths
  * (`show`/`resume`) pass `readOnly`, because a completed row carries no lease
  * yet stays reportable.
+ *
+ * The session-identity and lease-ownership halves are the shared pure rules;
+ * only the envelope-byte comparison below is the file route's own.
  */
 function assertRowBinding(
   session: CoordinationSession,
@@ -1242,19 +1274,7 @@ function assertRowBinding(
   planId: string,
   options: { readOnly?: boolean } = {},
 ): void {
-  const binding = rowCoordinationOf(row)?.session;
-  if (binding === undefined) {
-    throw new CoordinationError("coordination.not-prepared", `plan ${planId} has no bound plan session`, {
-      plan_id: planId,
-    });
-  }
-  if (binding.session_id !== session.session_id) {
-    throw new CoordinationError(
-      "coordination.session-mismatch",
-      `plan ${planId} is bound to session ${binding.session_id}, not ${session.session_id}`,
-      { expected: binding.session_id, actual: session.session_id },
-    );
-  }
+  const binding = requirePlanSessionBinding(row, session.session_id, planId);
   if (canonicalTarget(binding.session_file) !== canonicalTarget(sessionPath)) {
     throw new CoordinationError(
       "coordination.session-mismatch",
@@ -1263,71 +1283,6 @@ function assertRowBinding(
     );
   }
   if (options.readOnly !== true) assertExecutionHolder(row, session.session_id, planId, "a plan-owned write");
-}
-
-/** Reject row mutations while a handoff owns the plan's transition. */
-function assertNoHandoff(context: RowContext): void {
-  const handoff = context.coordination?.handoff;
-  if (handoff === undefined || handoff.state === "returned") return;
-  throw new CoordinationError(
-    "coordination.invalid-transition",
-    `plan ${context.scope.planId} is handed off (state ${String(handoff.state)}) \u2014 the plan session owns no transition until the coordinator returns or completes it`,
-    { plan_id: context.scope.planId, state: handoff.state },
-  );
-}
-
-function allowedOperations(
-  role: CoordinationRole,
-  sessionId: string,
-  snapshot: WorkflowSnapshot,
-  row: PlanRow,
-): string[] {
-  const coordination = rowCoordinationOf(row);
-  const status = rowStatusOf(row);
-  const handoff = coordination?.handoff;
-  const out: string[] = [];
-  if (role === "coordinator") {
-    // The coordinator seat is per workflow: an unbound session advertises nothing.
-    if (snapshot.coordination?.coordinator.session_id !== sessionId) return [];
-    if (
-      coordination?.prepared === undefined &&
-      coordination?.session === undefined &&
-      handoff === undefined &&
-      isClaimableStatus(status)
-    ) {
-      out.push("prepare");
-    }
-    switch (handoff?.state) {
-      case "submitted":
-        out.push("accept", "return");
-        break;
-      case "accepted":
-        if (isStandaloneDevelopmentWorkflow(snapshot)) {
-          out.push("return", "complete", "repair-delivery-source");
-        } else {
-          out.push("return", "integration-start");
-        }
-        break;
-      case "integrating":
-        out.push("integration-accept", "complete", "reconcile");
-        break;
-      case "merged":
-        out.push("complete", "reconcile");
-        break;
-      case "completed":
-        out.push("reconcile");
-        break;
-      default:
-        break;
-    }
-  } else if (coordination?.session?.session_id === sessionId && coordination.prepared !== undefined) {
-    // A plan session keeps only `handoff`: returning a handoff restores the
-    // same session, so both directions stay available to it without rebinding.
-    if (handoff === undefined || handoff.state === "returned") {
-      out.push("progress", "residual-add", "residual-close", "handoff");
-    }
-  }
-  return out.filter((kind) => IMPLEMENTED_OPERATIONS[kind] === true);
 }
 
 /* ------------------------------------------------------------------------ *
@@ -1362,13 +1317,21 @@ function buildView(
  * Read this session's plan coordination view (spec §B). A coordinator session
  * must select a plan; a plan session reads only its own row. A row that is not
  * yet prepared yields `scope: null` and the raw row.
+ *
+ * Read veto at the entry boundary (spec §4.3/§5): the envelope is read only to
+ * learn which control harness this call addresses, and the authority verdict
+ * precedes the `planId`/scope checks and the snapshot read below, so this
+ * authoritative surface refuses on its own rather than inheriting a refusal
+ * from a later reader.
  */
 export async function readPlanCoordination(
   sessionPath: string,
   planId?: string,
   cwd: string = process.cwd(),
 ): Promise<PlanCoordinationView> {
-  const session = readSessionEnvelope(sessionPath);
+  const anchor = entryAnchor(sessionPath);
+  assertExecutionFileReadAllowed({ harnessDir: anchor.harnessRoot });
+  const session = anchor.session;
   if (planId !== undefined && !isNonEmptyString(planId)) throw invalidInput("planId must be a non-empty string");
   let targetPlanId: string;
   if (session.role === "coordinator") {
@@ -1393,7 +1356,7 @@ export async function readPlanCoordination(
     targetPlanId = own;
   }
 
-  const harnessRoot = canonicalizeNearestExisting(session.harness_root);
+  const harnessRoot = anchor.harnessRoot;
   const processRoot = resolveProcessHarnessDir(cwd);
   if (processRoot !== null && canonicalTarget(processRoot) !== harnessRoot) {
     throw new CoordinationError(
@@ -1422,7 +1385,7 @@ export async function readPlanCoordination(
       chosenRoot: harnessRoot,
       preloaded: { snapshot },
     });
-    assertPreparedFresh(scope, prepared);
+    assertPreparedFresh(scope.assignmentPath, prepared);
   }
   return {
     ...buildView(
@@ -1448,11 +1411,20 @@ export async function readPlanCoordination(
  * Read one coordinated artifact plus its byte version, from a **single** byte
  * read. `payload` is `undefined` and `version` is `"absent"` when the document
  * does not exist. Snapshot payloads are validated before they are handed out.
+ *
+ * Read veto at the entry boundary (spec §4.3/§5): `harnessRoot` is this entry's
+ * own anchor, so the verdict precedes the `ref` shape check and the byte read —
+ * a direct consumer of this authoritative surface cannot observe retired
+ * root/snapshot bytes while the execution authority is ACTIVE, and an
+ * unreadable store refuses here instead of serving them.
  */
 export async function readCoordinatedArtifact(
   harnessRoot: string,
   ref: ArtifactRef,
 ): Promise<VersionedArtifact> {
+  if (typeof harnessRoot === "string" && isAbsolute(harnessRoot)) {
+    assertExecutionFileReadAllowed({ harnessDir: harnessRoot });
+  }
   if (!isPlainObject(ref) || !isNonEmptyString(ref.kind) || !isNonEmptyString(ref.key)) {
     throw invalidInput("ref must be an ArtifactRef with kind and key");
   }
@@ -1657,7 +1629,7 @@ async function bindPlanSessionForPlan(scope: ResolvedPlanScope, sessionId?: stri
     chosenRoot: harnessRoot,
     preloaded: { snapshot },
   });
-  assertPreparedFresh(pinned, prepared);
+  assertPreparedFresh(pinned.assignmentPath, prepared);
   if (!existsSync(scope.worktreePath) || !statSync(scope.worktreePath).isDirectory()) {
     throw new CoordinationError(
       "coordination.scope-mismatch",
@@ -1735,8 +1707,13 @@ async function bindPlanSessionForPlan(scope: ResolvedPlanScope, sessionId?: stri
   };
 }
 
-/** Map a pure lease-transition failure onto the coordination error contract. */
-function leaseFailure(violations: readonly { code: string; message: string }[]): CoordinationError {
+/**
+ * Map a pure lease-transition failure onto the coordination error contract.
+ * Exported for the DB transport (`execution-store.ts`), which claims its
+ * initial lease through the SAME `claimLease` state machine: one mapping from
+ * lease violations to the refusal vocabulary, never a second drifting copy.
+ */
+export function leaseFailure(violations: readonly { code: string; message: string }[]): CoordinationError {
   const codes = violations.map((entry) => entry.code);
   const message = summarize(violations);
   if (codes.includes("lease.claim.other-holder")) {
@@ -1835,7 +1812,7 @@ function resumeBoundSession(resumePath: string): CoordinationResult {
     chosenRoot: harnessRoot,
     preloaded: { snapshot },
   });
-  assertPreparedFresh(scope, prepared);
+  assertPreparedFresh(scope.assignmentPath, prepared);
   return {
     ok: true,
     operation: "bind",
@@ -1927,12 +1904,14 @@ const FROZEN_ROW_FIELDS: readonly string[] = ["id", "plan_id", "title", "file"];
 const FROZEN_METADATA_FIELDS: readonly string[] = ["primary_spec", "spec_refs", "iteration_compass", "iteration_refs"];
 
 /**
- * The document half of `catalog_pin`: sha256 over the frozen execution-input
- * selection only. `status`, `progress`, task/QC/QA fields, leases and track
- * branches are execution authority (contract §1) and are deliberately not
- * hashed, so reporting progress never invalidates a pin.
+ * The frozen execution-input selection one plan row carries (contract §1):
+ * `plan_id` plus the row's id/title/file and its metadata catalog references,
+ * and nothing else. This is the single definition of the selection: the DB
+ * authority of the execution store seals exactly this object as a plan's
+ * `execution_inputs.input_json`, so the stored selection and the hash below can
+ * never describe different bytes.
  */
-export function executionInputHash(row: unknown, planId: string): string {
+export function executionInputSelection(row: unknown, planId: string): Record<string, unknown> {
   const selection: Record<string, unknown> = { plan_id: planId };
   if (isPlainObject(row)) {
     const metadata = isPlainObject(row.metadata) ? row.metadata : {};
@@ -1943,7 +1922,17 @@ export function executionInputHash(row: unknown, planId: string): string {
       if (metadata[key] !== undefined) selection[key] = metadata[key];
     }
   }
-  return createHash("sha256").update(stableJson(selection), "utf8").digest("hex");
+  return selection;
+}
+
+/**
+ * The document half of `catalog_pin`: sha256 over the frozen execution-input
+ * selection only. `status`, `progress`, task/QC/QA fields, leases and track
+ * branches are execution authority (contract §1) and are deliberately not
+ * hashed, so reporting progress never invalidates a pin.
+ */
+export function executionInputHash(row: unknown, planId: string): string {
+  return createHash("sha256").update(stableJson(executionInputSelection(row, planId)), "utf8").digest("hex");
 }
 
 /** Parse (and shape-check) the pin recorded on a plan row, or `null`. */
@@ -1969,7 +1958,7 @@ function recordedPinOf(row: unknown): CatalogExecutionPin | null {
 }
 
 /** What the catalog currently holds for one workflow/plan (read-only facts). */
-type CatalogPinFacts = {
+export type CatalogPinFacts = {
   store: "absent" | "active" | "inactive";
   storeId: string | null;
   revision: number | null;
@@ -2030,62 +2019,75 @@ async function readCatalogPinFacts(harnessRoot: string, workflowId: string, plan
     throw error;
   }
   try {
-    const db = handle.db;
-    const meta = db.prepare("select authority_state from store_meta where id = 1").get() as
-      | { authority_state?: unknown }
-      | undefined;
-    if (meta?.authority_state !== "active") {
-      return { store: "inactive", storeId: handle.storeId, revision: null, relation_hash: null, binding: null };
-    }
-    const entity = db
-      .prepare("select revision, root_kind, relative_path from catalog_entities where kind = 'plan' and id = ?")
-      .get(planId) as { revision?: unknown; root_kind?: unknown; relative_path?: unknown } | undefined;
-    const links = db
-      .prepare(
-        "select from_kind, from_id, relation, to_kind, to_id, ordinal from catalog_links " +
-          "where (from_kind = 'plan' and from_id = ?) or (to_kind = 'plan' and to_id = ?)",
-      )
-      .all(planId, planId) as Array<Record<string, unknown>>;
-    const relationHash = createHash("sha256")
-      .update(
-        stableJson(
-          links
-            .map((link) =>
-              [link.from_kind, link.from_id, link.relation, link.to_kind, link.to_id, link.ordinal ?? ""].join(" "),
-            )
-            .sort(),
-        ),
-        "utf8",
-      )
-      .digest("hex");
-    const binding = db
-      .prepare(
-        "select catalog_id, pin_json from catalog_execution_bindings where workflow_id = ? and catalog_kind = 'plan' and catalog_id = ?",
-      )
-      .get(workflowId, planId) as { catalog_id?: unknown; pin_json?: unknown } | undefined;
-    let bindingRelativePath: string | null = null;
-    if (typeof binding?.pin_json === "string") {
-      try {
-        const pin = JSON.parse(binding.pin_json) as { relativePath?: unknown };
-        if (typeof pin.relativePath === "string") bindingRelativePath = pin.relativePath;
-      } catch {
-        // An unreadable binding payload is reported as an unknown location,
-        // never guessed: the identity comparison below simply cannot confirm it.
-      }
-    }
-    return {
-      store: "active",
-      storeId: handle.storeId,
-      revision: typeof entity?.revision === "number" ? entity.revision : null,
-      relation_hash: relationHash,
-      binding:
-        binding !== undefined && typeof binding.catalog_id === "string"
-          ? { catalogId: binding.catalog_id, relativePath: bindingRelativePath }
-          : null,
-    };
+    return catalogPinFactsOn(handle.db, handle.storeId, workflowId, planId);
   } finally {
     handle.close();
   }
+}
+
+/**
+ * The same catalog facts read through a handle the caller ALREADY owns. The
+ * execution transaction opens one handle on the same `store.db`, so a DB
+ * `prepare` re-selects its pin under its own write lock through this function
+ * instead of opening a second connection — one relation-hash algorithm and one
+ * set of catalog lookups for both transports.
+ */
+export function catalogPinFactsOn(
+  db: StoreDb,
+  storeId: string,
+  workflowId: string,
+  planId: string,
+): CatalogPinFacts {
+  const meta = db.prepare("select authority_state from store_meta where id = 1").get() as
+    | { authority_state?: unknown }
+    | undefined;
+  if (meta?.authority_state !== "active") {
+    return { store: "inactive", storeId, revision: null, relation_hash: null, binding: null };
+  }
+  const entity = db
+    .prepare("select revision, root_kind, relative_path from catalog_entities where kind = 'plan' and id = ?")
+    .get(planId) as { revision?: unknown; root_kind?: unknown; relative_path?: unknown } | undefined;
+  const links = db
+    .prepare(
+      "select from_kind, from_id, relation, to_kind, to_id, ordinal from catalog_links " +
+        "where (from_kind = 'plan' and from_id = ?) or (to_kind = 'plan' and to_id = ?)",
+    )
+    .all(planId, planId) as Array<Record<string, unknown>>;
+  const relationHash = createHash("sha256")
+    .update(
+      stableJson(
+        links
+          .map((link) => [link.from_kind, link.from_id, link.relation, link.to_kind, link.to_id, link.ordinal ?? ""].join(" "))
+          .sort(),
+      ),
+      "utf8",
+    )
+    .digest("hex");
+  const binding = db
+    .prepare(
+      "select catalog_id, pin_json from catalog_execution_bindings where workflow_id = ? and catalog_kind = 'plan' and catalog_id = ?",
+    )
+    .get(workflowId, planId) as { catalog_id?: unknown; pin_json?: unknown } | undefined;
+  let bindingRelativePath: string | null = null;
+  if (typeof binding?.pin_json === "string") {
+    try {
+      const pin = JSON.parse(binding.pin_json) as { relativePath?: unknown };
+      if (typeof pin.relativePath === "string") bindingRelativePath = pin.relativePath;
+    } catch {
+      // An unreadable binding payload is reported as an unknown location,
+      // never guessed: the identity comparison below simply cannot confirm it.
+    }
+  }
+  return {
+    store: "active",
+    storeId,
+    revision: typeof entity?.revision === "number" ? entity.revision : null,
+    relation_hash: relationHash,
+    binding:
+      binding !== undefined && typeof binding.catalog_id === "string"
+        ? { catalogId: binding.catalog_id, relativePath: bindingRelativePath }
+        : null,
+  };
 }
 
 /**
@@ -2210,12 +2212,27 @@ export async function assertExecutionCatalogPin(input: {
  * inventing one.
  */
 async function selectCatalogPin(harnessRoot: string, workflowId: string, planId: string, row: unknown): Promise<CatalogExecutionPin | null> {
-  const facts = await readCatalogPinFacts(harnessRoot, workflowId, planId);
+  return selectCatalogPinOn(await readCatalogPinFacts(harnessRoot, workflowId, planId), executionInputHash(row, planId));
+}
+
+/**
+ * The same §1 selection decided from facts the caller already read: the
+ * catalog identity a `prepare` freezes is that row's current revision and
+ * relation hash, and the document half is the frozen input's own hash — never a
+ * hash recomputed from a row that may have moved. `null` when the catalog
+ * cannot select this plan, and then the caller clears any stale pin instead of
+ * leaving it behind.
+ *
+ * The DB transport reads the facts through its OWN handle inside the
+ * transaction that writes them (`catalogPinFactsOn`), so the revision recorded
+ * is the one no concurrent catalog write can change before commit.
+ */
+export function selectCatalogPinOn(facts: CatalogPinFacts, documentHash: string): CatalogExecutionPin | null {
   if (facts.store !== "active" || facts.storeId === null || facts.revision === null) return null;
   return {
     store_id: facts.storeId,
     entity_revision: facts.revision,
-    document_hash: executionInputHash(row, planId),
+    document_hash: documentHash,
     relation_hash: facts.relation_hash ?? "",
   };
 }
@@ -2226,7 +2243,28 @@ async function selectCatalogPin(harnessRoot: string, workflowId: string, planId:
 
 /** Absolute, existing evidence inside the plan's own plan/SDD area. */
 function assertEvidenceInsidePlan(scope: ResolvedPlanScope, paths: readonly string[]): void {
-  const roots = [canonicalizeNearestExisting(dirname(scope.planPath)), scope.sddDir];
+  assertEvidenceInsidePlanArea([canonicalizeNearestExisting(dirname(scope.planPath)), scope.sddDir], paths);
+}
+
+/**
+ * §D the two areas a plan's own evidence may live in: `{PLAN_DIR}` and
+ * `{SDD_DIR}/<plan-id>`. A prepared plan's Assignment is required to name
+ * exactly these (see `scopeFromAssignment`), so a transport that reads its plan
+ * identity from the store derives them here instead of trusting a caller file.
+ */
+export function planAreaRoots(harnessRoot: string, planId: string): string[] {
+  return [
+    canonicalizeNearestExisting(resolvePlanDir(harnessRoot)),
+    canonicalizeNearestExisting(resolveSddDir(harnessRoot, planId)),
+  ];
+}
+
+/**
+ * Absolute, existing evidence inside one plan's own plan/SDD area. Shared by
+ * both transports: the file route passes the areas its prepared scope pins, the
+ * DB route the areas its own plan identity derives.
+ */
+export function assertEvidenceInsidePlanArea(roots: readonly string[], paths: readonly string[]): void {
   for (const path of paths) {
     if (!isAbsolute(path)) {
       throw invalidInput(`evidence path must be absolute: ${path}`, { path });
@@ -2244,37 +2282,6 @@ function assertEvidenceInsidePlan(scope: ResolvedPlanScope, paths: readonly stri
     }
   }
 }
-
-/** Track branches belong to this plan only — never main/integration/another plan. */
-function assertTrackBranches(context: RowContext, branches: readonly string[]): void {
-  const forbidden = new Set<string>();
-  if (isPlainObject(context.snapshot.branch)) {
-    for (const value of Object.values(context.snapshot.branch)) if (isNonEmptyString(value)) forbidden.add(value);
-  }
-  for (const row of context.snapshot.plans) {
-    if (rowPlanIds(row).includes(context.scope.planId)) continue;
-    for (const branch of reportedBranchesOf(row)) forbidden.add(branch);
-  }
-  const seen = new Set<string>();
-  for (const branch of branches) {
-    if (seen.has(branch)) throw invalidInput(`track branch ${branch} is reported twice`, { branch });
-    seen.add(branch);
-    if (forbidden.has(branch)) {
-      throw new CoordinationError(
-        "coordination.invalid-input",
-        `track branch ${branch} belongs to main/integration or another plan \u2014 a plan reports only its own L2 track branches`,
-        { branch },
-      );
-    }
-  }
-}
-
-/** Allowed row-status transitions for a plan session's progress report. */
-const PROGRESS_TRANSITIONS: Record<string, readonly string[]> = {
-  InProgress: ["InProgress", "InReview", "Blocked"],
-  InReview: ["InReview", "InProgress", "Blocked"],
-  Blocked: ["Blocked", "InProgress"],
-};
 
 async function mutatePrepare(
   scope: ResolvedPlanScope,
@@ -2299,44 +2306,13 @@ async function mutatePrepare(
         });
       }
       assertCoordinatorBinding(session, sessionPath, context.snapshot);
-      if (context.coordination?.prepared !== undefined) {
-        throw new CoordinationError(
-          "coordination.invalid-transition",
-          `plan ${scope.planId} is already prepared from ${context.coordination.prepared.assignment_path}`,
-          { plan_id: scope.planId },
-        );
-      }
-      if (context.coordination?.session !== undefined) {
-        throw new CoordinationError(
-          "coordination.invalid-transition",
-          `plan ${scope.planId} already has a bound plan session \u2014 preparation precedes the bind`,
-          { plan_id: scope.planId },
-        );
-      }
-      if (context.coordination?.handoff !== undefined) {
-        throw new CoordinationError(
-          "coordination.invalid-transition",
-          `plan ${scope.planId} is handed off \u2014 preparation precedes the handoff`,
-          { plan_id: scope.planId },
-        );
-      }
-      // §D prepare: Todo/Blocked with no execution lease — a sealed row with a
-      // second owner would make the plan session ambiguous. `null` and
-      // tombstone objects are existing keys, not absent ones.
-      if (context.row.execution_lease !== undefined) {
-        throw new CoordinationError(
-          "coordination.duplicate-holder",
-          `plan ${scope.planId} already carries an execution lease \u2014 prepare must not seal a second owner`,
-          { plan_id: scope.planId, holder: isPlainObject(context.row.execution_lease) ? context.row.execution_lease.holder : null },
-        );
-      }
-      if (!isClaimableStatus(rowStatusOf(context.row))) {
-        throw new CoordinationError(
-          "coordination.invalid-transition",
-          `plan ${scope.planId} is ${rowStatusOf(context.row)} \u2014 prepare requires Todo or Blocked`,
-          { plan_id: scope.planId, status: context.row.status },
-        );
-      }
+      assertPrepareAdmission({
+        planId: scope.planId,
+        row: context.row,
+        coordination: context.coordination,
+        sessionBound: context.coordination?.session !== undefined,
+        leaseHeld: context.row.execution_lease !== undefined,
+      });
       // A root-visible workflow with a pending catalog registration is never a
       // valid workspace to prepare against (contract §3 step 3).
       await assertWorkflowRegistrationCommitted(scope.harnessRoot, scope.workflowId);
@@ -2405,24 +2381,14 @@ async function mutateProgress(
     expectedRevision: request.expectedRevision,
     precheck: (context) => {
       assertRowBinding(session, sessionPath, context.row, scope.planId);
-      assertNoHandoff(context);
-      const status = rowStatusOf(context.row);
-      const allowed = PROGRESS_TRANSITIONS[status];
-      if (allowed === undefined) {
-        throw new CoordinationError(
-          "coordination.invalid-transition",
-          `plan ${scope.planId} is ${status || "unstatused"} \u2014 progress is reported only while executing (${Object.keys(PROGRESS_TRANSITIONS).join(", ")})`,
-          { plan_id: scope.planId, status: context.row.status },
+      assertNoHandoffTransition(context.coordination, scope.planId);
+      requireProgressStatus(context.row, progress.status, scope.planId);
+      if (progress.track_branches !== undefined) {
+        assertTrackBranches(
+          { planId: scope.planId, branch: context.snapshot.branch, plans: context.snapshot.plans },
+          progress.track_branches,
         );
       }
-      if (!allowed.includes(progress.status)) {
-        throw new CoordinationError(
-          "coordination.invalid-transition",
-          `plan ${scope.planId} cannot move ${status} \u2192 ${progress.status} (allowed: ${allowed.join(", ")})`,
-          { plan_id: scope.planId, from: status, to: progress.status },
-        );
-      }
-      if (progress.track_branches !== undefined) assertTrackBranches(context, progress.track_branches);
     },
     mutate: (context) => {
       const metadata = isPlainObject(context.row.metadata) ? context.row.metadata : {};
@@ -2503,10 +2469,10 @@ async function mutateResidualAdd(
     expectedRevision: request.expectedRevision ?? null,
     precheck: (rowContext) => {
       assertRowBinding(session, sessionPath, rowContext.row, scope.planId);
-      assertNoHandoff(rowContext);
+      assertNoHandoffTransition(rowContext.coordination, scope.planId);
     },
     mutate: async (rowContext) => {
-      assertNoHandoff(rowContext);
+      assertNoHandoffTransition(rowContext.coordination, scope.planId);
       // Issue mutations run under the snapshot lock (lock order: workflow
       // ownership locks → SQLite transaction). The envelope authorizes the
       // project-manager seat (ENVELOPE_SEATS); the core verbs re-verify the
@@ -2612,10 +2578,10 @@ async function mutateResidualClose(
     expectedRevision: request.expectedRevision ?? null,
     precheck: (rowContext) => {
       assertRowBinding(session, sessionPath, rowContext.row, scope.planId);
-      assertNoHandoff(rowContext);
+      assertNoHandoffTransition(rowContext.coordination, scope.planId);
     },
     mutate: async (rowContext) => {
-      assertNoHandoff(rowContext);
+      assertNoHandoffTransition(rowContext.coordination, scope.planId);
       await assertIssueLinkedToPlan(context, request.issueId, scope.planId);
       const receipt = await closeIssue(
         context,
@@ -2663,12 +2629,22 @@ async function mutateResidualClose(
  * revision/register precondition under the lock, and writes through
  * `withProtectedWrite`. The operation surface is a closed discriminated union:
  * an unknown key anywhere is rejected before any state is touched.
+ *
+ * Canonical authority discrimination IS the entry boundary (spec §4.3/§5):
+ * `entryAnchor` reads the request's own session envelope — the anchor that
+ * names the control harness, and the only thing resolved before the verdict —
+ * and the veto is decided before the request shape, the revision, the
+ * operation kind, the payload and the scope, so a malformed or unknown
+ * operation can never mask the authority refusal on a retired route.
+ * Consequence, accepted: a request that is BOTH malformed and
+ * active-forbidden now reports the authority refusal instead of the payload
+ * error.
  */
 export async function mutatePlanCoordination(request: CoordinationRequest): Promise<CoordinationResult> {
+  const anchor = entryAnchor(request?.sessionPath);
+  assertExecutionFileWriteAllowed({ harnessDir: anchor.harnessRoot });
+  const session = anchor.session;
   assertExactKeys(request, ["sessionPath", "planId", "expectedRevision", "operation"], "coordination request");
-  if (!isNonEmptyString(request.sessionPath) || !isAbsolute(request.sessionPath)) {
-    throw invalidInput("a coordination request requires an absolute sessionPath");
-  }
   if (request.planId !== undefined && !isNonEmptyString(request.planId)) {
     throw invalidInput("planId must be a non-empty string");
   }
@@ -2687,9 +2663,9 @@ export async function mutatePlanCoordination(request: CoordinationRequest): Prom
       operation: kind,
     });
   }
-  const session = readSessionEnvelope(request.sessionPath);
-  assertSessionRole(session, kind);
-  assertRequestedPlan(session, request.planId);
+  const seat: CoordinationSeat = { role: session.role, sessionId: session.session_id, planId: session.plan_id ?? null };
+  assertOperationRole(seat, kind);
+  assertPlanAddress(seat, request.planId);
   const sessionAbs = canonicalTarget(request.sessionPath);
 
   switch (operation.kind) {
@@ -2800,52 +2776,9 @@ export async function mutatePlanCoordination(request: CoordinationRequest): Prom
   }
 }
 
-/** A plan session addresses only its own plan; a coordinator selects one. */
-function assertRequestedPlan(session: CoordinationSession, requestedPlanId: string | undefined): void {
-  if (requestedPlanId === undefined || session.role === "coordinator") return;
-  if (session.plan_id !== requestedPlanId) {
-    throw new CoordinationError(
-      "coordination.session-mismatch",
-      `plan session ${session.session_id} addresses only its own plan ${String(session.plan_id)}, not ${requestedPlanId}`,
-      { expected: session.plan_id, actual: requestedPlanId },
-    );
-  }
-}
-
-
 function assertExpectedRevision(revision: number): void {
   if (!Number.isInteger(revision) || revision < 0) {
     throw invalidInput(`expectedRevision must be a nonnegative integer \u2014 got ${JSON.stringify(revision)}`, { revision });
-  }
-}
-
-/** Operations only a coordinator session may issue (spec §D/§E). */
-const COORDINATOR_OPERATIONS: readonly string[] = [
-  "prepare",
-  "accept",
-  "return",
-  "integration-start",
-  "integration-accept",
-  "complete",
-  "repair-delivery-source",
-  "reconcile",
-];
-
-function assertSessionRole(session: CoordinationSession, kind: string): void {
-  const coordinatorOperation = COORDINATOR_OPERATIONS.includes(kind);
-  if (coordinatorOperation && session.role !== "coordinator") {
-    throw new CoordinationError(
-      "coordination.session-role",
-      `${kind} requires a coordinator session, not ${session.role}`,
-      { role: session.role, operation: kind },
-    );
-  }
-  if (!coordinatorOperation && session.role !== "plan-pm") {
-    throw new CoordinationError(
-      "coordination.session-role",
-      `${kind} is a plan-session operation (a coordinator session coordinates, it does not execute)`,
-      { role: session.role, operation: kind },
-    );
   }
 }
 
@@ -2900,13 +2833,7 @@ const UNFINISHED_GIT_OPERATIONS: ReadonlyArray<readonly [string, string]> = [
   ["rebase-apply", "rebase"],
 ];
 
-/** QC verdicts a handoff may carry (spec §D). */
-const HANDOFF_QC_DECISIONS: readonly string[] = ["Approve", "Approve with residuals"];
-
-/** Assignment QA gates a handoff may carry (spec §D). */
-const HANDOFF_QA_GATES: readonly string[] = ["mandatory", "pm-acceptance"];
-
-type GitCheckout = { head: string; clean: boolean; operation: string | undefined };
+export type GitCheckout = { head: string; clean: boolean; operation: string | undefined };
 
 /**
  * How long one read-only Git read may take. The snapshot write lock waits 30s,
@@ -2957,8 +2884,12 @@ function gitUnavailable(cwd: string, args: readonly string[], error: unknown): C
  * ancestor, not a worktree — and resolves to `undefined`. An error without an
  * exit status means `git` itself never answered, which is refused rather than
  * folded into `undefined` (see `gitUnavailable`).
+ *
+ * The DB transport reads its Git evidence through the same helpers, but only
+ * BEFORE it takes SQLite ownership (§4.1): these reads spawn a process, and a
+ * write transaction never does.
  */
-function gitRead(cwd: string, args: readonly string[]): string | undefined {
+export function gitRead(cwd: string, args: readonly string[]): string | undefined {
   try {
     return execFileSync("git", ["-C", cwd, ...args], {
       stdio: ["ignore", "pipe", "pipe"],
@@ -2971,7 +2902,7 @@ function gitRead(cwd: string, args: readonly string[]): string | undefined {
   }
 }
 
-function gitObjectExists(cwd: string, sha: string): boolean {
+export function gitObjectExists(cwd: string, sha: string): boolean {
   return gitRead(cwd, ["cat-file", "-e", `${sha}^{commit}`]) !== undefined;
 }
 
@@ -2996,49 +2927,134 @@ function gitCheckout(path: string): GitCheckout | undefined {
   return { head, clean: dirty.length === 0, operation };
 }
 
-function assertGitObjectId(value: unknown, what: string): string {
-  if (typeof value !== "string" || !GIT_OBJECT_ID.test(value)) {
-    throw invalidInput(`${what} must be a full Git object id (40 or 64 lowercase hex), not an abbreviation`, {
-      field: what,
-    });
+/** The one path of a repository that Git itself names, resolved against it. */
+function gitPathOf(repository: string, name: string): string {
+  const path = gitRead(repository, ["rev-parse", "--git-path", name]);
+  if (path === undefined || path.length === 0) {
+    throw gitProof(`cannot resolve ${name} of ${repository} to re-read it before the commit`, { repository, name });
   }
-  return value;
+  return resolve(repository, path);
 }
 
-function gitProof(message: string, details: Record<string, unknown>): CoordinationError {
-  return new CoordinationError("coordination.git-proof", message, details);
+/**
+ * §4.1 the ref state one Git proof was read from, pinned before SQLite
+ * ownership so the commit window can re-read the same bytes.
+ */
+export type GitRefWitness = {
+  repository: string;
+  entries: ReadonlyArray<{ path: string; sha256: string | null }>;
+};
+
+/**
+ * §4.1 pin the ref state a Git proof was read from (spec §4.1: "record
+ * identity/hash/version witnesses, revalidate relevant witnesses immediately
+ * before commit"). `git rev-parse --git-path` — a read that spawns a process,
+ * which is why this runs BEFORE SQLite ownership — names the exact files Git
+ * resolves those refs through: the worktree's own `HEAD`, and the ref's loose
+ * file. A ref Git keeps PACKED has no loose file, so the packed table is part
+ * of the same witness. A `null` hash means "the path did not exist", which is
+ * itself a pinned fact: a ref that appears, or one that disappears, is a change.
+ */
+export function pinGitRefWitness(repository: string, refs: readonly string[]): GitRefWitness {
+  const paths = refs.map((ref) => ({ ref, path: gitPathOf(repository, ref) }));
+  const packed = paths.some((entry) => entry.ref.startsWith("refs/") && !existsSync(entry.path));
+  const all = [...paths.map((entry) => entry.path), ...(packed ? [gitPathOf(repository, "packed-refs")] : [])];
+  return {
+    repository,
+    entries: all.map((path) => ({ path, sha256: existsSync(path) ? sha256Bytes(readFileSync(path)) : null })),
+  };
+}
+
+/**
+ * §4.1 revalidate a pinned Git ref witness immediately before the commit. This
+ * is the commit-window half of the proof: a read that spawns a process cannot
+ * run inside the write transaction, so the proof keeps the ref BYTES it was read
+ * from and this re-reads exactly those. Every fact the proof derived from a ref
+ * is then either content-addressed (commit ids, parents, ancestry — immutable
+ * while the ref they hang off is unchanged) or re-read here, so a witness that
+ * moved refuses with no DB mutation instead of committing a stale proof.
+ * `refuse` is the proof's own refusal, so the race reports the code the same
+ * observation reports when it is seen before the transaction.
+ */
+export function revalidateGitRefWitness(
+  witness: GitRefWitness,
+  refuse: (message: string, details: Record<string, unknown>) => CoordinationError,
+): void {
+  for (const entry of witness.entries) {
+    const actual = existsSync(entry.path) ? sha256Bytes(readFileSync(entry.path)) : null;
+    if (actual !== entry.sha256) {
+      throw refuse(
+        `${witness.repository} ${entry.path} changed after the Git proof was read ` +
+          `(${entry.sha256 ?? "absent"} -> ${actual ?? "absent"}) \u2014 nothing commits on a stale witness`,
+        { path: entry.path, expected: entry.sha256, actual },
+      );
+    }
+  }
 }
 
 /**
  * Feature-side proof (spec §D): the pinned commit is what the recorded plan
  * worktree has checked out, the worktree is clean, and no Git operation is
- * half-finished. Required at handoff, accept and integration-start.
+ * half-finished. Required at handoff, accept and integration-start. The
+ * worktree is the persisted plan scope — never an evidence field — so both
+ * transports hand this rule the scope their own authority records.
  */
-function assertFeatureCheckout(scope: ResolvedPlanScope, sourceSha: string, what: string): void {
-  const checkout = gitCheckout(scope.worktreePath);
+export function assertFeatureCheckout(worktreePath: string, sourceSha: string, what: string, planId: string): void {
+  const checkout = gitCheckout(worktreePath);
   if (checkout === undefined) {
     throw new CoordinationError(
       "coordination.not-in-git",
-      `${what} requires the plan worktree ${scope.worktreePath} to be a readable Git worktree`,
-      { plan_id: scope.planId, worktree_path: scope.worktreePath },
+      `${what} requires the plan worktree ${worktreePath} to be a readable Git worktree`,
+      { plan_id: planId, worktree_path: worktreePath },
     );
   }
   if (checkout.operation !== undefined) {
     throw gitProof(
-      `${what} requires a clean plan worktree \u2014 ${scope.worktreePath} has an unfinished ${checkout.operation}`,
-      { plan_id: scope.planId, operation: checkout.operation },
+      `${what} requires a clean plan worktree \u2014 ${worktreePath} has an unfinished ${checkout.operation}`,
+      { plan_id: planId, operation: checkout.operation },
     );
   }
   if (!checkout.clean) {
-    throw gitProof(`${what} requires a clean plan worktree \u2014 ${scope.worktreePath} has uncommitted changes`, {
-      plan_id: scope.planId,
+    throw gitProof(`${what} requires a clean plan worktree \u2014 ${worktreePath} has uncommitted changes`, {
+      plan_id: planId,
       head: checkout.head,
     });
   }
   if (checkout.head !== sourceSha) {
     throw gitProof(
-      `${what} requires the plan worktree HEAD to be the pinned source ${sourceSha} \u2014 ${scope.worktreePath} is at ${checkout.head}`,
-      { plan_id: scope.planId, expected: sourceSha, actual: checkout.head },
+      `${what} requires the plan worktree HEAD to be the pinned source ${sourceSha} \u2014 ${worktreePath} is at ${checkout.head}`,
+      { plan_id: planId, expected: sourceSha, actual: checkout.head },
+    );
+  }
+}
+
+/**
+ * Feature HEAD, cleanliness and the review range of one handoff (spec §D). The
+ * worktree is the persisted scope's — never an evidence field.
+ */
+export function assertHandoffGitProof(
+  worktreePath: string,
+  input: { source_sha: string; review_base: string; review_head: string },
+  what: string,
+  planId: string,
+): void {
+  assertFeatureCheckout(worktreePath, input.source_sha, what, planId);
+  if (input.review_head !== input.source_sha) {
+    throw gitProof(
+      `${what} requires review_head to be the pinned source ${input.source_sha} \u2014 got ${input.review_head}`,
+      { plan_id: planId, source_sha: input.source_sha, review_head: input.review_head },
+    );
+  }
+  if (!gitObjectExists(worktreePath, input.review_base)) {
+    throw gitProof(`${what} review base ${input.review_base} is not a commit of ${worktreePath}`, {
+      plan_id: planId,
+      review_base: input.review_base,
+    });
+  }
+  if (!gitIsAncestor(worktreePath, input.review_base, input.review_head)) {
+    throw gitProof(
+      `${what} review range ${input.review_base}..${input.review_head} is not an ancestry`,
+      { plan_id: planId, review_base: input.review_base, review_head: input.review_head },
     );
   }
 }
@@ -3047,116 +3063,12 @@ function assertFeatureCheckout(scope: ResolvedPlanScope, sourceSha: string, what
  * § Handoff, accept and return (spec §D)
  * ------------------------------------------------------------------------ */
 
-/** One evidence path as supplied by the plan session (a path, never a ref). */
-function evidencePath(value: unknown, what: string): string {
-  if (!isNonEmptyString(value) || !isAbsolute(value)) {
-    throw invalidInput(`${what} must be an absolute path`, { field: what });
-  }
-  return canonicalTarget(value);
-}
-
-function evidenceRef(value: unknown, what: string): EvidenceRef {
-  const path = evidencePath(value, what);
-  if (!existsSync(path)) throw invalidInput(`${what} does not exist: ${path}`, { field: what, path });
-  return evidenceRefOf(path);
-}
-
-/**
- * Handoff evidence validated and hashed for the durable record (spec §D). The
- * plan worktree is not a caller input: it is read from the persisted scope, so
- * a conforming caller cannot be rejected for omitting or spoofing it.
- */
-type HandoffEvidenceInput = {
-  source_sha: string;
-  review_base: string;
-  review_head: string;
-  qc_decision: string;
-  qc_reports: EvidenceRef[];
-  qc_consolidated: EvidenceRef;
-  qa_gate: string;
-  qa_report: EvidenceRef;
-  evidence_paths: string[];
-};
-
-/** The plan session supplies paths and revisions only — never state or holder. */
-function readHandoffEvidence(value: unknown): HandoffEvidenceInput {
-  if (!isPlainObject(value)) {
-    throw invalidInput("handoff requires an evidence object with source_sha, review_base, review_head, qc and qa");
-  }
-  assertExactKeys(value, ["source_sha", "review_base", "review_head", "qc", "qa"], "handoff evidence");
-  const source_sha = assertGitObjectId(value.source_sha, "evidence.source_sha");
-  const review_base = assertGitObjectId(value.review_base, "evidence.review_base");
-  const review_head = assertGitObjectId(value.review_head, "evidence.review_head");
-  const qc = value.qc;
-  if (!isPlainObject(qc)) throw invalidInput("handoff evidence requires a qc object");
-  assertExactKeys(qc, ["decision", "reports", "consolidated"], "handoff evidence qc");
-  if (typeof qc.decision !== "string" || !HANDOFF_QC_DECISIONS.includes(qc.decision)) {
-    throw invalidInput(`handoff evidence qc.decision must be one of ${HANDOFF_QC_DECISIONS.join(", ")}`, {
-      field: "evidence.qc.decision",
-    });
-  }
-  if (!Array.isArray(qc.reports) || qc.reports.length === 0) {
-    throw invalidInput("handoff evidence qc.reports must list at least one QC report path", {
-      field: "evidence.qc.reports",
-    });
-  }
-  const qc_reports = qc.reports.map((entry, index) => evidenceRef(entry, `evidence.qc.reports[${index}]`));
-  const qc_consolidated = evidenceRef(qc.consolidated, "evidence.qc.consolidated");
-  const qa = value.qa;
-  if (!isPlainObject(qa)) throw invalidInput("handoff evidence requires a qa object");
-  assertExactKeys(qa, ["gate", "decision", "report"], "handoff evidence qa");
-  if (typeof qa.gate !== "string" || !HANDOFF_QA_GATES.includes(qa.gate)) {
-    throw invalidInput(`handoff evidence qa.gate must be one of ${HANDOFF_QA_GATES.join(", ")}`, {
-      field: "evidence.qa.gate",
-    });
-  }
-  if (qa.decision !== "pass") {
-    throw invalidInput("handoff evidence qa.decision must be pass", { field: "evidence.qa.decision" });
-  }
-  const qa_report = evidenceRef(qa.report, "evidence.qa.report");
-  return {
-    source_sha,
-    review_base,
-    review_head,
-    qc_decision: qc.decision,
-    qc_reports,
-    qc_consolidated,
-    qa_gate: qa.gate,
-    qa_report,
-    evidence_paths: [...qc_reports.map((ref) => ref.path), qc_consolidated.path, qa_report.path],
-  };
-}
-
 /** The handoff id a coordinator transition names; the mutation re-checks it under the lock. */
 function namedHandoffId(operation: { handoffId?: unknown }): string {
   if (!isNonEmptyString(operation.handoffId)) {
     throw invalidInput("a coordinator transition requires the non-empty handoffId it names");
   }
   return operation.handoffId;
-}
-
-/**
- * The handoff of a plan the operation named, or a refusal when the row has none
- * or holds a different one. This runs inside the row lock: the id the caller
- * read before the call is a precondition of the mutation, never a hint — a
- * concurrent `return` plus a fresh handoff leaves the new attempt untouched
- * (spec §B).
- */
-function requireHandoff(context: RowContext, planId: string, namedHandoffId: string): PlanHandoff {
-  const handoff = context.coordination?.handoff;
-  if (handoff === undefined) {
-    throw new CoordinationError("coordination.invalid-transition", `plan ${planId} has no handoff to transition`, {
-      plan_id: planId,
-    });
-  }
-  if (handoff.id !== namedHandoffId) {
-    throw new CoordinationError(
-      "coordination.invalid-transition",
-      `plan ${planId} handoff ${handoff.id} is not the handoff this command named (${namedHandoffId}) \u2014 a replaced handoff is a different attempt`,
-      { plan_id: planId, expected: namedHandoffId, actual: handoff.id },
-    );
-  }
-  return handoff;
 }
 
 /**
@@ -3217,59 +3129,6 @@ async function assertFindingsClosed(
   }
 }
 
-/**
- * Revalidate the hash pins of a sealed handoff (spec §D/§E): accept,
- * integration-start, integration-accept and complete all re-check that the QC
- * and QA reports still are the bytes their verdicts were recorded against.
- */
-function assertEvidenceDigests(handoff: PlanHandoff): void {
-  for (const ref of [...handoff.qc.reports, handoff.qc.consolidated, handoff.qa.report]) {
-    let actual: string | undefined;
-    try {
-      actual = evidenceRefOf(ref.path).sha256;
-    } catch {
-      actual = undefined;
-    }
-    if (actual !== ref.sha256) {
-      throw new CoordinationError(
-        "coordination.evidence-stale",
-        `handoff evidence ${ref.path} no longer matches its recorded digest`,
-        { path: ref.path, expected: ref.sha256, actual },
-      );
-    }
-  }
-}
-
-/**
- * Feature HEAD, cleanliness and the review range of one handoff (spec §D). The
- * worktree is the persisted scope's — never an evidence field.
- */
-function assertHandoffGitProof(
-  scope: ResolvedPlanScope,
-  input: HandoffEvidenceInput,
-  what: string,
-): void {
-  assertFeatureCheckout(scope, input.source_sha, what);
-  if (input.review_head !== input.source_sha) {
-    throw gitProof(
-      `${what} requires review_head to be the pinned source ${input.source_sha} \u2014 got ${input.review_head}`,
-      { plan_id: scope.planId, source_sha: input.source_sha, review_head: input.review_head },
-    );
-  }
-  if (!gitObjectExists(scope.worktreePath, input.review_base)) {
-    throw gitProof(`${what} review base ${input.review_base} is not a commit of ${scope.worktreePath}`, {
-      plan_id: scope.planId,
-      review_base: input.review_base,
-    });
-  }
-  if (!gitIsAncestor(scope.worktreePath, input.review_base, input.review_head)) {
-    throw gitProof(
-      `${what} review range ${input.review_base}..${input.review_head} is not an ancestry`,
-      { plan_id: scope.planId, review_base: input.review_base, review_head: input.review_head },
-    );
-  }
-}
-
 type HandoffRequest = { evidence: unknown; expectedRevision: number };
 
 async function mutateHandoff(
@@ -3308,7 +3167,7 @@ async function mutateHandoff(
           { plan_id: scope.planId, status: context.row.status },
         );
       }
-      assertHandoffGitProof(scope, input, "handoff");
+      assertHandoffGitProof(scope.worktreePath, input, "handoff", scope.planId);
       await assertHandoffGates(scope, prepared, input);
     },
     mutate: (context) => {
@@ -3383,7 +3242,7 @@ async function mutateAccept(
     expectedRevision: request.expectedRevision,
     precheck: (context) => {
       assertCoordinatorBinding(session, sessionPath, context.snapshot);
-      const handoff = requireHandoff(context, scope.planId, request.handoffId);
+      const handoff = requirePlanHandoff(context.coordination, scope.planId, request.handoffId);
       if (handoff.state !== "submitted") {
         throw new CoordinationError(
           "coordination.invalid-transition",
@@ -3398,11 +3257,11 @@ async function mutateAccept(
           { plan_id: scope.planId, status: context.row.status },
         );
       }
-      assertFeatureCheckout(scope, handoff.source_sha, "accept");
+      assertFeatureCheckout(scope.worktreePath, handoff.source_sha, "accept", scope.planId);
       assertEvidenceDigests(handoff);
     },
     mutate: (context) => {
-      const handoff = requireHandoff(context, scope.planId, request.handoffId);
+      const handoff = requirePlanHandoff(context.coordination, scope.planId, request.handoffId);
       const row = transferRowLease(context.row, handoff.submitted_by, session.session_id, "accept", scope.planId);
       const nextCoordination: RowCoordination = {
         ...(context.coordination ?? { revision: 0 }),
@@ -3436,7 +3295,7 @@ async function mutateReturn(
     expectedRevision: request.expectedRevision,
     precheck: (context) => {
       assertCoordinatorBinding(session, sessionPath, context.snapshot);
-      const handoff = requireHandoff(context, scope.planId, request.handoffId);
+      const handoff = requirePlanHandoff(context.coordination, scope.planId, request.handoffId);
       if (handoff.state !== "submitted" && handoff.state !== "accepted") {
         throw new CoordinationError(
           "coordination.invalid-transition",
@@ -3446,7 +3305,7 @@ async function mutateReturn(
       }
     },
     mutate: (context) => {
-      const handoff = requireHandoff(context, scope.planId, request.handoffId);
+      const handoff = requirePlanHandoff(context.coordination, scope.planId, request.handoffId);
       // The lease follows the record (spec §D): handoff keeps the plan's lease,
       // accept moves it to the coordinator, so a return from `submitted` only
       // proves the plan session still holds it, while a return from `accepted`
@@ -3483,38 +3342,11 @@ async function mutateReturn(
  * § Integration, complete and reconcile (spec §E)
  * ------------------------------------------------------------------------ */
 
-/** The integration anchors the snapshot names for a workflow (spec §E). */
-type IntegrationAnchors = { targetBranch: string; worktreePath: string };
-
-function integrationUnresolved(message: string, details: Record<string, unknown>): CoordinationError {
-  return new CoordinationError("coordination.integration-unresolved", message, details);
-}
-
-function integrationDiverged(message: string, details: Record<string, unknown>): CoordinationError {
-  return new CoordinationError("coordination.integration-diverged", message, details);
-}
-
-/**
- * The recorded integration target of a workflow (spec §E). A missing anchor is
- * an unresolved integration — never guessed from the current branch.
- */
-function integrationAnchors(snapshot: WorkflowSnapshot, planId: string): IntegrationAnchors {
-  const targetBranch = snapshot.branch?.integration;
-  const worktreePath = snapshot.integration_worktree_path;
-  if (!isNonEmptyString(targetBranch) || !isNonEmptyString(worktreePath)) {
-    throw integrationUnresolved(
-      `plan ${planId} has no integration target \u2014 the snapshot must name branch.integration and integration_worktree_path`,
-      { plan_id: planId },
-    );
-  }
-  return { targetBranch, worktreePath: canonicalTarget(worktreePath) };
-}
-
 /**
  * The recorded integration checkout: readable, on its recorded target branch,
  * and free of uncommitted changes or half-finished Git operations (spec §E).
  */
-function assertIntegrationCheckout(anchors: IntegrationAnchors, planId: string): GitCheckout {
+export function assertIntegrationCheckout(anchors: IntegrationAnchors, planId: string): GitCheckout {
   const checkout = gitCheckout(anchors.worktreePath);
   if (checkout === undefined) {
     throw integrationDiverged(
@@ -3557,7 +3389,7 @@ function commitParents(path: string, sha: string): string[] | undefined {
 }
 
 /** What proving one integration attempt from the pinned objects yields (spec §E). */
-type IntegrationProof =
+export type IntegrationProof =
   | { kind: "proven"; resultSha: string }
   | { kind: "pending" }
   | { kind: "diverged"; reason: string };
@@ -3572,7 +3404,7 @@ type IntegrationProof =
  * candidates is `pending` (nothing merged yet); several are `diverged` — a
  * result is never picked out of a set.
  */
-function integrationProof(path: string, head: string, baseSha: string, sourceSha: string): IntegrationProof {
+export function integrationProof(path: string, head: string, baseSha: string, sourceSha: string): IntegrationProof {
   if (!gitObjectExists(path, baseSha)) {
     return { kind: "diverged", reason: `the pinned base ${baseSha} is unavailable` };
   }
@@ -3619,7 +3451,7 @@ function integrationProof(path: string, head: string, baseSha: string, sourceSha
  * source was already an ancestor) or exactly the two-parent merge of base then
  * source, and stays reachable from the current target HEAD when one is known.
  */
-function assertRecordedResult(
+export function assertRecordedResult(
   path: string,
   planId: string,
   integration: HandoffIntegration,
@@ -3662,37 +3494,6 @@ function assertRecordedResult(
   return resultSha;
 }
 
-/** The integration attempt recorded on a handoff, or a refusal (spec §E). */
-function requireIntegration(handoff: PlanHandoff, planId: string): HandoffIntegration {
-  const integration = handoff.integration;
-  if (integration === undefined) {
-    throw integrationUnresolved(`plan ${planId} handoff ${handoff.id} has no integration attempt`, {
-      plan_id: planId,
-      handoff_id: handoff.id,
-    });
-  }
-  return integration;
-}
-
-/**
- * The workflow's merge lease, but only when it names THIS attempt (spec §E).
- * The lease is a single workflow-wide top-level claim, so a holder match alone
- * is not ownership: a lease that names another plan, or another source branch,
- * belongs to a different attempt and must never be released or re-pinned by
- * this one — the same plan can integrate more than once.
- */
-function mergeLeaseOfAttempt(
-  snapshot: WorkflowSnapshot,
-  planId: string,
-  handoff: PlanHandoff,
-): IntegrationMergeLease | undefined {
-  const lease = snapshot.integration_merge_lease;
-  if (lease === undefined) return undefined;
-  if (lease.plan_id !== planId) return undefined;
-  if (lease.source_branch !== handoff.source_branch) return undefined;
-  return lease;
-}
-
 /** The workflow's merge lease is absent, or this coordinator's own for this attempt (spec §E). */
 function assertMergeLease(
   snapshot: WorkflowSnapshot,
@@ -3724,7 +3525,7 @@ function assertMergeLease(
 }
 
 /** A readable repository for pinned-object proof, most specific first (spec §E). */
-function proofRepository(candidates: readonly (string | undefined)[]): string | undefined {
+export function proofRepository(candidates: readonly (string | undefined)[]): string | undefined {
   for (const candidate of candidates) {
     if (!isNonEmptyString(candidate)) continue;
     if (gitCheckout(candidate) !== undefined) return candidate;
@@ -3750,7 +3551,7 @@ async function mutateIntegrationStart(
     expectedRevision: request.expectedRevision,
     precheck: (context) => {
       assertCoordinatorBinding(session, sessionPath, context.snapshot);
-      const handoff = requireHandoff(context, scope.planId, request.handoffId);
+      const handoff = requirePlanHandoff(context.coordination, scope.planId, request.handoffId);
       if (handoff.state !== "accepted" && handoff.state !== "integrating") {
         throw new CoordinationError(
           "coordination.invalid-transition",
@@ -3759,7 +3560,7 @@ async function mutateIntegrationStart(
         );
       }
       assertEvidenceDigests(handoff);
-      assertFeatureCheckout(scope, handoff.source_sha, "integration-start");
+      assertFeatureCheckout(scope.worktreePath, handoff.source_sha, "integration-start", scope.planId);
       // The coordinator owns the row between accept and complete: integration
       // must never proceed on a row nobody holds (spec §D/§E — both leases stay
       // until complete, so an absent one means ownership was lost).
@@ -3768,7 +3569,7 @@ async function mutateIntegrationStart(
       assertIntegrationCheckout(integrationAnchors(context.snapshot, scope.planId), scope.planId);
     },
     mutate: (context) => {
-      const handoff = requireHandoff(context, scope.planId, request.handoffId);
+      const handoff = requirePlanHandoff(context.coordination, scope.planId, request.handoffId);
       // A started attempt is never re-pinned: the recorded base stays the one
       // the coordinator merged onto.
       if (handoff.state === "integrating") return null;
@@ -3837,7 +3638,7 @@ async function mutateIntegrationAccept(
     expectedRevision: request.expectedRevision,
     precheck: (context) => {
       assertCoordinatorBinding(session, sessionPath, context.snapshot);
-      const handoff = requireHandoff(context, scope.planId, request.handoffId);
+      const handoff = requirePlanHandoff(context.coordination, scope.planId, request.handoffId);
       if (handoff.state !== "integrating") {
         throw new CoordinationError(
           "coordination.invalid-transition",
@@ -3874,7 +3675,7 @@ async function mutateIntegrationAccept(
       }
     },
     mutate: (context) => {
-      const handoff = requireHandoff(context, scope.planId, request.handoffId);
+      const handoff = requirePlanHandoff(context.coordination, scope.planId, request.handoffId);
       const integration = requireIntegration(handoff, scope.planId);
       if (proof.kind !== "proven") return null;
       const merged: HandoffIntegration = { ...integration, result_sha: proof.resultSha, verified_at: nowIso() };
@@ -3912,79 +3713,12 @@ function validateRowCoordinationInContext(context: RowContext, coordination: Row
   assertViolationFree(validateRowCoordination(coordination, what, rowValidationRoute(context.snapshot, context.row)), what);
 }
 
-function standaloneDeliveryAnchors(snapshot: WorkflowSnapshot, planId: string): { source: string; target: string } {
-  const source = snapshot.branch?.source;
-  const target = snapshot.branch?.target;
-  if (!isNonEmptyString(source) || !isNonEmptyString(target)) {
-    throw new CoordinationError(
-      "coordination.invalid-transition",
-      `plan ${planId} has no delivery anchors \u2014 the snapshot must name branch.source and branch.target`,
-      { plan_id: planId },
-    );
-  }
-  return { source, target };
-}
-
 function assertStandaloneRoute(snapshot: WorkflowSnapshot, planId: string, what: string): void {
   if (!isStandaloneDevelopmentWorkflow(snapshot)) {
     throw new CoordinationError(
       "coordination.invalid-transition",
       `${what} requires a standalone development workflow for plan ${planId}`,
       { plan_id: planId },
-    );
-  }
-}
-
-function assertNoIntegrationContamination(
-  context: RowContext,
-  planId: string,
-  handoff: PlanHandoff,
-  what: string,
-  code: CoordinationError["code"] = "coordination.invalid-transition",
-): void {
-  if (handoff.integration !== undefined) {
-    throw new CoordinationError(
-      code,
-      `${what} refuses plan ${planId} because the handoff already carries an integration record`,
-      { plan_id: planId },
-    );
-  }
-  if (context.snapshot.integration_worktree_path !== undefined) {
-    throw new CoordinationError(
-      code,
-      `${what} refuses plan ${planId} because the snapshot names integration_worktree_path`,
-      { plan_id: planId },
-    );
-  }
-  if (isNonEmptyString(context.snapshot.branch?.integration)) {
-    throw new CoordinationError(
-      code,
-      `${what} refuses plan ${planId} because the snapshot names branch.integration`,
-      { plan_id: planId, integration: context.snapshot.branch?.integration },
-    );
-  }
-  if (context.snapshot.integration_merge_lease !== undefined) {
-    throw new CoordinationError(
-      code,
-      `${what} refuses plan ${planId} because the snapshot carries an integration merge lease`,
-      { plan_id: planId },
-    );
-  }
-}
-
-function assertAcceptedReviewDecision(handoff: PlanHandoff, planId: string, what: string): void {
-  if (handoff.qc.decision !== "Approve" && handoff.qc.decision !== "Approve with residuals") {
-    throw new CoordinationError(
-      "coordination.invalid-transition",
-      `${what} requires an accepted QC decision for plan ${planId} \u2014 got ${handoff.qc.decision}`,
-      { plan_id: planId, decision: handoff.qc.decision },
-    );
-  }
-  if (handoff.qa.decision !== "pass") {
-    throw new CoordinationError(
-      "coordination.invalid-transition",
-      `${what} requires QA decision pass for plan ${planId} \u2014 got ${handoff.qa.decision}`,
-      { plan_id: planId, decision: handoff.qa.decision },
     );
   }
 }
@@ -4053,38 +3787,51 @@ function assertStandaloneBranchIdentity(
   }
 }
 
-function assertStandaloneSourceGitProof(scope: ResolvedPlanScope, handoff: PlanHandoff, sourceBranch: string, what: string): void {
-  assertFeatureCheckout(scope, handoff.source_sha, what);
-  const branch = gitRead(scope.worktreePath, ["rev-parse", "--abbrev-ref", "HEAD"]);
+/**
+ * The standalone source proof (spec §E): the feature checkout is on the
+ * delivery source branch, that branch's tip is the pinned source, and the
+ * review range is an ancestry of it. The worktree is the persisted plan scope —
+ * the file route passes its resolved scope's, the DB route the row's recorded
+ * one — so the rule never reads a caller-supplied path.
+ */
+export function assertStandaloneSourceGitProof(
+  worktreePath: string,
+  handoff: PlanHandoff,
+  sourceBranch: string,
+  what: string,
+  planId: string,
+): void {
+  assertFeatureCheckout(worktreePath, handoff.source_sha, what, planId);
+  const branch = gitRead(worktreePath, ["rev-parse", "--abbrev-ref", "HEAD"]);
   if (branch !== sourceBranch) {
     throw gitProof(
-      `${what} requires the plan worktree ${scope.worktreePath} to be on ${sourceBranch} \u2014 got ${branch || "a detached HEAD"}`,
-      { plan_id: scope.planId, expected: sourceBranch, actual: branch },
+      `${what} requires the plan worktree ${worktreePath} to be on ${sourceBranch} \u2014 got ${branch || "a detached HEAD"}`,
+      { plan_id: planId, expected: sourceBranch, actual: branch },
     );
   }
-  const refTip = gitRead(scope.worktreePath, ["rev-parse", `refs/heads/${sourceBranch}`]);
+  const refTip = gitRead(worktreePath, ["rev-parse", `refs/heads/${sourceBranch}`]);
   if (refTip !== handoff.source_sha) {
     throw gitProof(
       `${what} requires refs/heads/${sourceBranch} to resolve to the pinned source ${handoff.source_sha} \u2014 got ${refTip || "missing"}`,
-      { plan_id: scope.planId, expected: handoff.source_sha, actual: refTip },
+      { plan_id: planId, expected: handoff.source_sha, actual: refTip },
     );
   }
   if (handoff.review_head !== handoff.source_sha) {
     throw gitProof(
       `${what} requires review_head to be the pinned source ${handoff.source_sha} \u2014 got ${handoff.review_head}`,
-      { plan_id: scope.planId, source_sha: handoff.source_sha, review_head: handoff.review_head },
+      { plan_id: planId, source_sha: handoff.source_sha, review_head: handoff.review_head },
     );
   }
-  if (!gitObjectExists(scope.worktreePath, handoff.review_base)) {
-    throw gitProof(`${what} review base ${handoff.review_base} is not a commit of ${scope.worktreePath}`, {
-      plan_id: scope.planId,
+  if (!gitObjectExists(worktreePath, handoff.review_base)) {
+    throw gitProof(`${what} review base ${handoff.review_base} is not a commit of ${worktreePath}`, {
+      plan_id: planId,
       review_base: handoff.review_base,
     });
   }
-  if (!gitIsAncestor(scope.worktreePath, handoff.review_base, handoff.review_head)) {
+  if (!gitIsAncestor(worktreePath, handoff.review_base, handoff.review_head)) {
     throw gitProof(
       `${what} review range ${handoff.review_base}..${handoff.review_head} is not an ancestry`,
-      { plan_id: scope.planId, review_base: handoff.review_base, review_head: handoff.review_head },
+      { plan_id: planId, review_base: handoff.review_base, review_head: handoff.review_head },
     );
   }
 }
@@ -4125,7 +3872,7 @@ async function assertStandaloneCompletionPrecheck(
       { plan_id: scope.planId },
     );
   }
-  assertNoIntegrationContamination(context, scope.planId, handoff, "complete");
+  assertNoIntegrationContamination({ snapshot: context.snapshot, planId: scope.planId, handoff, what: "complete" });
   assertEvidenceDigests(handoff);
   assertAcceptedReviewDecision(handoff, scope.planId, "complete");
   if (handoff.qa.gate !== prepared.qa_gate) {
@@ -4139,7 +3886,7 @@ async function assertStandaloneCompletionPrecheck(
   assertExecutionHolder(context.row, session.session_id, scope.planId, "complete");
   const anchors = standaloneDeliveryAnchors(context.snapshot, scope.planId);
   assertStandaloneBranchIdentity(context, scope, handoff, anchors, "complete");
-  assertStandaloneSourceGitProof(scope, handoff, anchors.source, "complete");
+  assertStandaloneSourceGitProof(scope.worktreePath, handoff, anchors.source, "complete", scope.planId);
 }
 
 
@@ -4322,13 +4069,13 @@ async function assertRepairDeliverySourcePrecheck(
   session: CoordinationSession,
   handoff: PlanHandoff,
 ): Promise<void> {
-  assertNoIntegrationContamination(
-    context,
-    scope.planId,
+  assertNoIntegrationContamination({
+    snapshot: context.snapshot,
+    planId: scope.planId,
     handoff,
-    "repair-delivery-source",
-    "coordination.delivery-source-repair.not-legacy-shape",
-  );
+    what: "repair-delivery-source",
+    code: "coordination.delivery-source-repair.not-legacy-shape",
+  });
   const prepared = context.coordination?.prepared;
   if (prepared === undefined) {
     throw new CoordinationError(
@@ -4351,7 +4098,7 @@ async function assertRepairDeliverySourcePrecheck(
   const { target, candidateSource } = assertLegacyRepairShape(context.snapshot, scope.planId, handoff);
   assertRepairBranchIdentity(context, scope, handoff, candidateSource, "repair-delivery-source");
   assertDeliveryPrCompatible(context.snapshot, candidateSource, target, scope.planId);
-  assertStandaloneSourceGitProof(scope, handoff, candidateSource, "repair-delivery-source");
+  assertStandaloneSourceGitProof(scope.worktreePath, handoff, candidateSource, "repair-delivery-source", scope.planId);
 }
 
 function repairDeliverySourceRow(
@@ -4457,7 +4204,7 @@ function assertStandaloneCompletedReplay(
       { plan_id: scope.planId },
     );
   }
-  assertNoIntegrationContamination(context, scope.planId, handoff, "reconcile");
+  assertNoIntegrationContamination({ snapshot: context.snapshot, planId: scope.planId, handoff, what: "reconcile" });
   const storedHandoffViolations = validatePlanHandoff(
     handoff,
     `plan ${scope.planId} coordination.handoff`,
@@ -4544,7 +4291,7 @@ function completeRow(
   delete nextRow.execution_lease;
   // Only this attempt's own claim is released: a lease naming another plan or
   // another source branch is not this completion's to drop (spec §E).
-  const release = mergeLeaseOfAttempt(context.snapshot, scope.planId, handoff);
+  const release = mergeLeaseOfAttempt(context.snapshot.integration_merge_lease, scope.planId, handoff.source_branch);
   return {
     row: nextRow,
     coordination: nextCoordination,
@@ -4577,7 +4324,7 @@ async function mutateComplete(
     expectedRevision: request.expectedRevision,
     precheck: async (context) => {
       assertCoordinatorBinding(session, sessionPath, context.snapshot);
-      const handoff = requireHandoff(context, scope.planId, request.handoffId);
+      const handoff = requirePlanHandoff(context.coordination, scope.planId, request.handoffId);
       if (isStandaloneDevelopmentWorkflow(context.snapshot)) {
         await assertStandaloneCompletionPrecheck(context, scope, session, handoff);
         return;
@@ -4585,11 +4332,11 @@ async function mutateComplete(
       await assertIterationCompletionPrecheck(context, scope, session, handoff);
     },
     mutate: (context) => {
-      const handoff = requireHandoff(context, scope.planId, request.handoffId);
+      const handoff = requirePlanHandoff(context.coordination, scope.planId, request.handoffId);
       if (isStandaloneDevelopmentWorkflow(context.snapshot)) {
         completeStandaloneMutateGapForTest?.();
         const anchors = standaloneDeliveryAnchors(context.snapshot, scope.planId);
-        assertStandaloneSourceGitProof(scope, handoff, anchors.source, "complete");
+        assertStandaloneSourceGitProof(scope.worktreePath, handoff, anchors.source, "complete", scope.planId);
         return completeStandaloneRow(context, scope, handoff);
       }
       const integration = requireIntegration(handoff, scope.planId);
@@ -4685,7 +4432,7 @@ async function classifyReconcile(
       await assertFindingsClosed(scope, prepared, "complete");
       return {
         outcome: "completed",
-        apply: (current) => completeRow(current, scope, requireHandoff(current, planId, expectedHandoffId), resultSha),
+        apply: (current) => completeRow(current, scope, requirePlanHandoff(current.coordination, planId, expectedHandoffId), resultSha),
       };
     };
     if (handoff.state === "merged") {
@@ -4710,7 +4457,7 @@ async function classifyReconcile(
     return {
       outcome: "retry-ready",
       apply: (current) => {
-        const currentHandoff = requireHandoff(current, planId, expectedHandoffId);
+        const currentHandoff = requirePlanHandoff(current.coordination, planId, expectedHandoffId);
         const returned: PlanHandoff = { ...currentHandoff, state: "accepted" };
         delete returned.integration;
         const nextCoordination: RowCoordination = {
@@ -4722,7 +4469,7 @@ async function classifyReconcile(
         // InReview and the coordinator's execution lease stay: only the
         // abandoned attempt's own artifacts are released (a lease naming
         // another plan or branch is not this attempt's claim).
-        const release = mergeLeaseOfAttempt(current.snapshot, planId, currentHandoff);
+        const release = mergeLeaseOfAttempt(current.snapshot.integration_merge_lease, planId, currentHandoff.source_branch);
         return {
           row: { ...current.row, coordination: nextCoordination },
           coordination: nextCoordination,
@@ -4755,7 +4502,7 @@ async function mutateReconcile(
     expectedRevision: request.expectedRevision,
     precheck: async (context) => {
       assertCoordinatorBinding(session, sessionPath, context.snapshot);
-      const handoff = requireHandoff(context, scope.planId, request.handoffId);
+      const handoff = requirePlanHandoff(context.coordination, scope.planId, request.handoffId);
       plan = await classifyReconcile(context, scope, session, handoff, request.handoffId);
     },
     mutate: (context) => plan.apply(context),
@@ -4791,8 +4538,18 @@ async function mutateReconcile(
  * root → snapshot → destination locks, refusing any document that carries
  * coordinated ownership. `review`/`json` are not coordinated artifacts, so
  * they refuse explicitly instead of silently no-opping.
+ *
+ * Canonical authority discrimination IS the entry boundary (spec §4.3):
+ * `input.harnessRoot` is this entry's own anchor — the harness the replacement
+ * targets — so the veto precedes the request shape, the ref, the CAS token,
+ * the ownership checks and any lock. An anchor that is not an absolute path
+ * names no control harness at all, so the request-shape validation below stays
+ * that caller's refusal.
  */
 export async function replaceCoordinatedArtifact(input: CoordinatedReplacement): Promise<VersionedArtifact> {
+  if (typeof input?.harnessRoot === "string" && isAbsolute(input.harnessRoot)) {
+    assertExecutionFileWriteAllowed({ harnessDir: input.harnessRoot });
+  }
   assertExactKeys(
     input,
     ["harnessRoot", "ref", "payload", "expectedVersion", "sessionPath"],
@@ -5192,8 +4949,10 @@ type PrepareWorkflowScope = {
  * checkout's own artifacts can never be read as the control root. Every
  * refusal here is an existing auth/scope error, never a new one.
  */
-function prepareWorkflowScope(sessionPath: string, cwd: string): PrepareWorkflowScope {
-  const session = readSessionEnvelope(sessionPath);
+function prepareWorkflowScope(sessionPath: string, cwd: string, anchorSession?: CoordinationSession): PrepareWorkflowScope {
+  // The Prepare entries pass the session the entry boundary already read for
+  // the authority veto, so the anchor document is read once per call.
+  const session = anchorSession ?? readSessionEnvelope(sessionPath);
   if (session.role !== "coordinator") {
     throw new CoordinationError(
       "coordination.session-role",
@@ -6097,13 +5856,20 @@ function prepareVersionDigest(token: string): string {
  * missing/foreign/mismatched envelope, an unregistered or unreadable snapshot,
  * an unreadable or borrowed compass — still refuse with their own code, because
  * no trustworthy answer can be produced from them.
+ *
+ * Read veto at the entry boundary (spec §4.3/§5): the envelope anchor is the
+ * only thing resolved before the verdict, so the refusal precedes the request
+ * shape, the scope resolution and the snapshot read, and this authoritative
+ * scope read does not merely inherit it from a later reader.
  */
 export async function showPrepareWorkflow(
   input: Readonly<{ sessionPath: string; cwd?: string }>,
 ): Promise<PrepareWorkflowResult> {
+  const anchor = entryAnchor(input?.sessionPath);
+  assertExecutionFileReadAllowed({ harnessDir: anchor.harnessRoot });
   assertExactKeys(input as unknown as Record<string, unknown>, ["sessionPath", "cwd"], "prepare workflow read");
   const cwd = input.cwd ?? process.cwd();
-  const scope = prepareWorkflowScope(input.sessionPath, cwd);
+  const scope = prepareWorkflowScope(input.sessionPath, cwd, anchor.session);
   const { snapshot, version } = readPrepareSnapshot(scope.snapshotPath);
   assertCoordinatorBinding(scope.session, scope.sessionPath, snapshot);
   const compass = readPrepareCompass(scope.harnessRoot, snapshot);
@@ -6136,6 +5902,12 @@ export async function showPrepareWorkflow(
  * A lock that cannot be acquired refuses explicitly (the shared
  * `withStatusWriteLock` Blocked error); Git-unavailable probes refuse through
  * the existing `coordination.git-unavailable`.
+ *
+ * Canonical authority discrimination IS the entry boundary (spec §4.3/§5): the
+ * envelope anchor is the only thing resolved before the verdict, so the
+ * amendment refuses before the request shape, the version tokens, the scope
+ * resolution and the lock. Consequence, accepted: a call that is BOTH
+ * malformed and active-forbidden now reports the authority refusal.
  */
 export async function amendPrepareWorkflow(
   input: Readonly<{
@@ -6146,6 +5918,8 @@ export async function amendPrepareWorkflow(
     patch: PrepareWorkflowPatch;
   }>,
 ): Promise<PrepareWorkflowResult> {
+  const anchor = entryAnchor(input?.sessionPath);
+  assertExecutionFileWriteAllowed({ harnessDir: anchor.harnessRoot });
   assertExactKeys(
     input as unknown as Record<string, unknown>,
     ["sessionPath", "cwd", "expectedSnapshotVersion", "expectedCompassVersion", "patch"],
@@ -6154,7 +5928,7 @@ export async function amendPrepareWorkflow(
   const cwd = input.cwd ?? process.cwd();
   const expectedSnapshotVersion = prepareVersionToken(input.expectedSnapshotVersion, "expectedSnapshotVersion");
   const expectedCompassVersion = prepareVersionToken(input.expectedCompassVersion, "expectedCompassVersion");
-  const scope = prepareWorkflowScope(input.sessionPath, cwd);
+  const scope = prepareWorkflowScope(input.sessionPath, cwd, anchor.session);
   const committed = await withStatusWriteLock(scope.snapshotPath, async () => {
     const { snapshot, version } = readPrepareSnapshot(scope.snapshotPath);
     assertCoordinatorBinding(scope.session, scope.sessionPath, snapshot);

@@ -8,8 +8,9 @@
  * `{ block: true, reason }` when `Enforcement: hard` governs the event
  * (repo-level `.mstarc`/compass `enforcement: hard`, or the Assignment-header
  * `Enforcement: hard` per dispatch entry) AND engine validation produced
- * violations — or when the event targets an issue/catalog authority path,
- * which refuses unconditionally (see Gate 1 below). Soft-mode dispatch
+ * violations — or when the event targets an issue/catalog authority path or a
+ * coordination document the execution authority has retired, which refuse
+ * unconditionally (see Gate 1 below). Soft-mode dispatch
  * violations are warn-logged through the
  * extension logger (opencode parity — the pre-#156 silent drop is why the
  * self-type/empty-binding pincer stayed latent for five iterations); soft
@@ -38,12 +39,28 @@
  * `process.versions.node`) and asserted in-process through the engine
  * before the store is touched.
  *
+ * Gate 1 ALSO refuses a write to a coordination document the EXECUTION
+ * authority has retired (source readiness, plan S3): while
+ * `{HARNESS_DIR}/store.db` records an ACTIVE execution authority, the root
+ * `status.json` and the workflow snapshots are no longer a persistence route
+ * (primary spec §4.3), so persisting them — valid bytes or not — is refused
+ * `execution.direct-write-refused`, and a store that exists and cannot be read
+ * refuses fail-closed. The decision is the engine's own route
+ * (`resolveExecutionReadRoute`, plan S2), never a second authority probe; the
+ * project register keeps its issue-domain route above, and a harness with no
+ * store at all keeps the unchanged file path (§2.1: absence is not an
+ * authority verdict).
+ *
  * Authority classification is decided on the path a write really LANDS on
  * (S-G4b-03): the caller's path first, then its canonical
  * (symlink-resolved) form — an alias outside the harness tree resolving to a
  * harness-root `store.db` or a retired `residuals.json` is refused like the
  * file itself. Only those two authority decisions are canonicalized; the
- * document lint and every non-authority target keep the caller's path.
+ * document lint and every non-authority target keep the caller's path — the
+ * execution-retirement refusal belongs to the document lint's own target set,
+ * so it follows the caller's path as well, while the engine's own file writers
+ * are guarded independently of the path they were handed
+ * (`assertExecutionFileWriteAllowed`, primary spec §4.3).
  *
  * Gate-1 core lives in the engine (`@mstar-harness/engine` `gates` module
  * — target classification, content/edit validation, reason formatting;
@@ -96,6 +113,7 @@ import {
   isReadOnlyAssignmentRole,
   parseAssignmentFields,
   queryDashboard,
+  resolveExecutionReadRoute,
   resolveHarnessDir,
   resolveProjectDir,
   resolveRepoEnforcement,
@@ -409,11 +427,61 @@ function registerRetiredRefusal(storeRevision: number): { block: true; reason: s
   );
 }
 
-function authorityUnavailableRefusal(route: { code: string; message: string }): { block: true; reason: string } {
+function authorityUnavailableRefusal(
+  route: { code: string; message: string },
+  authority: string,
+  write: string,
+): { block: true; reason: string } {
   return authorityRefusal(
     STORE_AUTHORITY_UNAVAILABLE_CODE,
-    `the issue authority could not be read ([${route.code}] ${route.message}) — the register write is refused ` +
+    `${authority} could not be read ([${route.code}] ${route.message}) — the ${write} is refused ` +
       "rather than applied against an unreadable authority; no older-runtime or JSON fallback exists",
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Gate 1c — execution authority: retired coordination documents (source
+// readiness, plan S3)
+// ---------------------------------------------------------------------------
+
+/** §4.3/§5: a write to a coordination document that the EXECUTION authority
+ * retired as a persistence route (`root status.json`, `workflows/<id>/snapshot.json`)
+ * while that authority is ACTIVE. */
+const EXECUTION_DIRECT_WRITE_CODE = "execution.direct-write-refused";
+
+/**
+ * What the control harness's EXECUTION authority says about a coordination-
+ * document write. `resolveExecutionReadRoute` (plan S2) is the ONE place a
+ * consumer decides between the DB authority and the file route; a store that
+ * EXISTS and cannot be read is a refusal here too (§5: "no protected mutation"
+ * while the authority cannot be established) and never a fall-through to the
+ * file route. A harness with no store at all keeps the file route — absence is
+ * not an authority verdict (§2.1), so the pre-activation write path is
+ * unchanged.
+ */
+type ExecutionWriteRoute =
+  | { kind: "files" }
+  | { kind: "active" }
+  | { kind: "unavailable"; code: string; message: string };
+
+async function readExecutionWriteRoute(harnessDir: string): Promise<ExecutionWriteRoute> {
+  try {
+    return (await resolveExecutionReadRoute({ harnessDir })) === "execution" ? { kind: "active" } : { kind: "files" };
+  } catch (error) {
+    return { kind: "unavailable", ...refusalOf(error) };
+  }
+}
+
+/** §4.3: root status and workflow snapshots are no longer a persistence route
+ * once the execution authority is ACTIVE — persisting them would create a
+ * second authority, so the write is refused even when its bytes are valid. */
+function executionDirectWriteRefusal(target: string): { block: true; reason: string } {
+  return authorityRefusal(
+    EXECUTION_DIRECT_WRITE_CODE,
+    `${resolve(target)} is retired as a persistence route while the control harness's execution authority is ACTIVE — ` +
+      "the root status and the workflow snapshots live in the execution store ({HARNESS_DIR}/store.db, owned by the " +
+      "runtime). Nothing was written: use the execution DB route (the coordination verbs), not a file writer. This " +
+      "write is refused",
   );
 }
 
@@ -431,8 +499,12 @@ function authorityUnavailableRefusal(route: { code: string; message: string }): 
  * database write is refused unconditionally, and a register write is decided
  * by the DB-aware authority route — refused when the store is active or
  * unreadable, and only shape-validated while the register is still the live
- * authority (no store / staged store). Those two refusals are not gated by
- * the compass flag (an authority invariant, not document validity).
+ * authority (no store / staged store). The EXECUTION authority's retired
+ * documents (root status / workflow snapshot, plan S3) take the same shape: an
+ * ACTIVE execution authority refuses `execution.direct-write-refused`
+ * unconditionally, and an unreadable authority refuses fail-closed. None of
+ * those refusals is gated by the compass flag (an authority invariant, not
+ * document validity).
  *
  * Classification + validation run through the shared engine `gates`
  * module (contract D1) — the same path the ZCode write gate consumes.
@@ -447,6 +519,42 @@ async function gateStatusWrite(eventInput: unknown): Promise<{ block: true; reas
     const storeTarget = isStoreAuthorityTarget(resolved) ? resolved : isStoreAuthorityTarget(landed) ? landed : null;
     if (storeTarget !== null) return storeDirectWriteRefusal(storeTarget); // authority bytes — never writable
     const direct = harnessDocKindOfTarget(resolved);
+    // §4.3/§5: a write to a coordination document the EXECUTION authority has
+    // retired — the root register or a workflow snapshot — is refused
+    // unconditionally while that authority is ACTIVE, and refused fail-closed
+    // when the authority exists and cannot be read. It is an authority
+    // invariant, not the document-validity axis the hard/soft compass flag
+    // governs (same shape as the store-bytes and retired-register refusals).
+    // The classification covers the caller's own path AND the path the write
+    // really lands on (S-G4b-03) — and it covers BOTH harness roots: a
+    // status/snapshot symlinked into ANOTHER harness's tree lands on THAT
+    // harness's document, so EITHER root's verdict (ACTIVE or UNAVAILABLE)
+    // vetoes the write. A single-root probe would let a pre-activation
+    // harness's alias bypass the authority the bytes really belong to (an
+    // identical landed root costs no second probe). §4.3's canonical target
+    // check for the old protected artifact paths; the register keeps its own
+    // issue-domain route below.
+    const landedTarget = landed === resolved ? null : harnessDocKindOfTarget(landed);
+    const executionDirs: string[] = [];
+    if (direct !== null && direct.kind !== "register") executionDirs.push(direct.harnessDir);
+    if (
+      landedTarget !== null &&
+      landedTarget.kind !== "register" &&
+      !executionDirs.includes(landedTarget.harnessDir)
+    ) {
+      executionDirs.push(landedTarget.harnessDir);
+    }
+    for (const executionDir of executionDirs) {
+      const executionRoute = await readExecutionWriteRoute(executionDir);
+      if (executionRoute.kind === "active") return executionDirectWriteRefusal(resolved);
+      if (executionRoute.kind === "unavailable") {
+        return authorityUnavailableRefusal(
+          executionRoute,
+          "the harness's execution authority",
+          "coordination-document write",
+        );
+      }
+    }
     // A project register is an authority document too — reached through an
     // alias it takes the same route (status/snapshot aliases are untouched).
     // A case-variant register basename (FW-3) bypasses both exact-case
@@ -460,7 +568,7 @@ async function gateStatusWrite(eventInput: unknown): Promise<{ block: true; reas
     if (registerDir !== null) {
       const route = await readAuthorityRoute(registerDir);
       if (route.kind === "retired") return registerRetiredRefusal(route.storeRevision);
-      if (route.kind === "unavailable") return authorityUnavailableRefusal(route);
+      if (route.kind === "unavailable") return authorityUnavailableRefusal(route, "the issue authority", "register write");
       // `legacy`: pre-activation — the register is still the authority, so the
       // write keeps its document validator (no store probe touched it).
       // Stricter-wins veto: the write may LAND on another harness's register
@@ -474,7 +582,7 @@ async function gateStatusWrite(eventInput: unknown): Promise<{ block: true; reas
         if (landedDir !== null && landedDir !== registerDir) {
           const landedRoute = await readAuthorityRoute(landedDir);
           if (landedRoute.kind === "retired") return registerRetiredRefusal(landedRoute.storeRevision);
-          if (landedRoute.kind === "unavailable") return authorityUnavailableRefusal(landedRoute);
+          if (landedRoute.kind === "unavailable") return authorityUnavailableRefusal(landedRoute, "the issue authority", "register write");
         }
       }
     }

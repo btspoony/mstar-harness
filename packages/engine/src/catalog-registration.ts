@@ -394,16 +394,8 @@ function validateDelta(delta: unknown, kind: CatalogExecutionKind): CatalogExecu
   };
 }
 
-type ValidatedRequest = {
-  operationId: string;
-  actor: string;
-  expectedCatalogRevision: number;
-  workflow: CatalogExecutionWorkflow;
-  delta: CatalogExecutionCatalogDelta;
-};
-
 /** Shape gate over the reviewed request. The producers still validate authoritatively. */
-function validateRequest(request: unknown): ValidatedRequest {
+function validateRequest(request: unknown): CatalogExecutionRequest {
   if (!isPlainObject(request)) invalid("a catalog execution request object is required");
   const operationId = requireText(request.operationId, "request.operationId");
   const actor = requireText(request.actor, "request.actor");
@@ -529,7 +521,7 @@ function assertDeliveryRegistrationFor(options: Record<string, unknown>, kind: "
 // producers so the journal never re-derives "which registration is this"
 // ---------------------------------------------------------------------------
 
-type ExecutionPlan = {
+export type CatalogExecutionPlan = {
   kind: CatalogExecutionKind;
   workflowId: string;
   harnessDir: string;
@@ -540,10 +532,10 @@ type ExecutionPlan = {
   /** What this request registers — the identity source, never written here. */
   snapshot: WorkflowSnapshot;
   identity: string;
-  request: ValidatedRequest;
+  request: CatalogExecutionRequest;
 };
 
-function executionPlanFor(context: StoreContext, request: ValidatedRequest): ExecutionPlan {
+function executionPlanFor(context: StoreContext, request: CatalogExecutionRequest): CatalogExecutionPlan {
   const workflow = request.workflow;
   const harnessDir = resolve(workflow.options.harnessDir);
   if (resolve(context.harnessDir) !== harnessDir) {
@@ -598,6 +590,61 @@ function onDiskIdentity(kind: CatalogExecutionKind, snapshot: WorkflowSnapshot):
   return kind === "iteration" ? iterationWorkflowRegistrationIdentity(snapshot) : planWorkflowRegistrationIdentity(snapshot);
 }
 
+/**
+ * §3 the derivation both registration routes run before anything is written:
+ * validate the reviewed request (everything that can refuse refuses here) and
+ * resolve the execution identity it registers — the workflow id, the producer's
+ * own snapshot definition, that snapshot's timestamp-free registration identity,
+ * the target paths and the catalog-root containment of every reviewed location.
+ *
+ * Pure and store-free: no handle is opened, no byte is written, and the caller
+ * may hold the result across a transaction boundary. The legacy journal uses it
+ * to drive its ordered file+catalog sequence; the active route uses the same
+ * value to create the DB lifecycle and publish the same delta.
+ */
+export function resolveCatalogExecutionPlan(context: StoreContext, request: unknown): CatalogExecutionPlan {
+  return executionPlanFor(context, validateRequest(request));
+}
+
+/**
+ * The root `WorkflowEntry` this registration owns, derived from the snapshot the
+ * producer defines — one definition for both routes (the file route's root write
+ * and the DB route's `execution_registry` row). `snapshot` is passed explicitly
+ * because the orphan-recovery path completes the entry from the BYTES already on
+ * disk rather than from the reviewed definition. Refuses an entry the shared
+ * validator rejects rather than registering an unaddressable lifecycle.
+ */
+export function workflowEntryOf(plan: CatalogExecutionPlan, snapshot: WorkflowSnapshot): WorkflowEntry {
+  const entry: WorkflowEntry = {
+    id: plan.workflowId,
+    type: snapshot.type,
+    started_at: snapshot.started_at,
+    dir: `workflows/${plan.workflowId}`,
+  };
+  const gate = validateWorkflowEntry(entry);
+  if (!gate.ok) {
+    throw new CatalogRegistrationError(
+      "catalog.registration-invalid",
+      `refusing to register invalid workflow entry: ${gate.violations.map((v) => v.message).join("; ")}`,
+    );
+  }
+  return entry;
+}
+
+/**
+ * The binding write's input: the workflow's own catalog identity, as the delta
+ * published it. Shared by both registration routes so the committed binding row
+ * describes the same value the legacy journal recorded.
+ */
+export type CatalogExecutionBindingInput = {
+  kind: CatalogEntityKind;
+  id: string;
+  rootKind: CatalogRootKind;
+  relativePath: string;
+  documentKind: string | null;
+  sourceHash: string | null;
+};
+
 // ---------------------------------------------------------------------------
 // Journal rows — one short write transaction each, never held across a file
 // lock or a catalog domain call (contract §2/§3)
@@ -642,7 +689,7 @@ function nowRfc3339(): string {
   return new Date().toISOString();
 }
 
-function requestHash(request: ValidatedRequest): string {
+function requestHash(request: CatalogExecutionRequest): string {
   return createHash("sha256")
     .update(
       stableJson({
@@ -728,6 +775,24 @@ function pendingRows(db: StoreDb): JournalRow[] {
     .all() as JournalRow[];
 }
 
+/**
+ * The NON-committed operation recorded for one workflow (contract §3 step 4),
+ * as the registration view, the dispatch gate and the active DB route all read
+ * it — so "this workflow has a registration in flight" is decided in exactly
+ * one place. It reports the journal's own phases, with `execution-written`
+ * reported as itself and every other non-committed row as `prepared`. `null`
+ * means no operation for this workflow is in flight — a committed or aborted
+ * row is not a pending registration.
+ */
+export function pendingRegistrationOf(
+  db: StoreDb,
+  workflowId: string,
+): { operationId: string; phase: "prepared" | "execution-written" } | null {
+  const row = pendingRows(db).find((candidate) => parseJournalWorkflowId(candidate) === workflowId);
+  if (row === undefined) return null;
+  return { operationId: row.operation_id, phase: row.phase === "execution-written" ? "execution-written" : "prepared" };
+}
+
 /** True once this operation has published at least one of its catalog rows. */
 function hasPublishedDelta(db: StoreDb, operationId: string): boolean {
   for (const suffix of ["entity:0", "link:0"]) {
@@ -739,7 +804,7 @@ function hasPublishedDelta(db: StoreDb, operationId: string): boolean {
   return false;
 }
 
-function insertPrepared(db: StoreDb, request: ValidatedRequest, hash: string, delta: JournalDelta, before: JournalVersions): void {
+function insertPrepared(db: StoreDb, request: CatalogExecutionRequest, hash: string, delta: JournalDelta, before: JournalVersions): void {
   const at = nowRfc3339();
   db.prepare(
     "insert into catalog_operations(operation_id, request_hash, phase, catalog_delta_json, before_versions_json, after_versions_json, result_json, created_at, updated_at) " +
@@ -768,7 +833,7 @@ function recordAborted(db: StoreDb, operationId: string, reason: string): void {
   );
 }
 
-function journalDeltaOf(plan: ExecutionPlan, request: ValidatedRequest): JournalDelta {
+function journalDeltaOf(plan: CatalogExecutionPlan, request: CatalogExecutionRequest): JournalDelta {
   return {
     version: CATALOG_REGISTRATION_JOURNAL_VERSION,
     workflow: {
@@ -817,7 +882,7 @@ function readSnapshotIfPresent(dir: string): { snapshot: WorkflowSnapshot } | un
   }
 }
 
-function readFileVersions(plan: ExecutionPlan): FileVersions {
+function readFileVersions(plan: CatalogExecutionPlan): FileVersions {
   return {
     snapshotVersion: readArtifactBytes(plan.snapshotPath)?.version ?? "absent",
     statusVersion: readArtifactBytes(plan.statusPath)?.version ?? "absent",
@@ -825,7 +890,7 @@ function readFileVersions(plan: ExecutionPlan): FileVersions {
 }
 
 /** The execution bytes this operation owns exist (in any completeness). */
-function hasExecutionBytes(plan: ExecutionPlan): boolean {
+function hasExecutionBytes(plan: CatalogExecutionPlan): boolean {
   return existsSync(plan.snapshotPath) || findRegisteredWorkflow(plan.harnessDir, plan.workflowId) !== undefined;
 }
 
@@ -837,7 +902,7 @@ type ExecutionWrite = FileVersions & { recovered: boolean };
  * refuse anything that is not this reviewed request. Nothing foreign is ever
  * replaced, re-pointed or deleted (contract §3 step 2/step 4).
  */
-async function ensureExecutionRegistration(plan: ExecutionPlan, mode: "register" | "reconcile"): Promise<ExecutionWrite> {
+async function ensureExecutionRegistration(plan: CatalogExecutionPlan, mode: "register" | "reconcile"): Promise<ExecutionWrite> {
   const conflictError = (detail: string): CatalogRegistrationError => {
     const suffix = " \u2014 nothing was replaced or deleted";
     return mode === "reconcile"
@@ -894,25 +959,13 @@ async function ensureExecutionRegistration(plan: ExecutionPlan, mode: "register"
 }
 
 /** The one authorized root write: the entry for a snapshot this operation owns. */
-async function writeRootEntry(plan: ExecutionPlan, snapshot: WorkflowSnapshot): Promise<void> {
-  const entry: WorkflowEntry = {
-    id: plan.workflowId,
-    type: snapshot.type,
-    started_at: snapshot.started_at,
-    dir: `workflows/${plan.workflowId}`,
-  };
-  const gate = validateWorkflowEntry(entry);
-  if (!gate.ok) {
-    throw new CatalogRegistrationError(
-      "catalog.registration-invalid",
-      `refusing to register invalid workflow entry: ${gate.violations.map((v) => v.message).join("; ")}`,
-    );
-  }
+async function writeRootEntry(plan: CatalogExecutionPlan, snapshot: WorkflowSnapshot): Promise<void> {
+  const entry = workflowEntryOf(plan, snapshot);
   await withStatusWriteLock(plan.statusPath, () => registerWorkflowEntryLocked(plan.statusPath, entry));
 }
 
 /** The existing create-only producer for this kind (unchanged semantics). */
-async function createExecution(plan: ExecutionPlan): Promise<{ recovered: boolean }> {
+async function createExecution(plan: CatalogExecutionPlan): Promise<{ recovered: boolean }> {
   const workflow = plan.request.workflow;
   switch (workflow.kind) {
     case "plan": {
@@ -944,7 +997,7 @@ async function createExecution(plan: ExecutionPlan): Promise<{ recovered: boolea
  */
 async function publishUnderRootLock(
   context: StoreContext,
-  plan: ExecutionPlan,
+  plan: CatalogExecutionPlan,
   mode: "register" | "reconcile",
   write: ExecutionWrite,
 ): Promise<CatalogExecutionReceipt> {
@@ -1028,7 +1081,7 @@ async function publishUnderRootLock(
  * history + the pin P4's prepare readers consume (`catalog_pin`), never an
  * execution status copy.
  */
-function bindingInputOf(plan: ExecutionPlan): { kind: CatalogEntityKind; id: string; rootKind: CatalogRootKind; relativePath: string; documentKind: string | null; sourceHash: string | null } {
+export function bindingInputOf(plan: CatalogExecutionPlan): CatalogExecutionBindingInput {
   const binding = plan.request.delta.binding;
   const entity = plan.request.delta.entities.find((candidate) => candidate.kind === binding.catalogKind && candidate.id === binding.catalogId);
   if (entity === undefined) {
@@ -1048,10 +1101,17 @@ function bindingInputOf(plan: ExecutionPlan): { kind: CatalogEntityKind; id: str
   };
 }
 
-function writeBinding(
+/**
+ * §1/§7 the committed `catalog_execution_bindings` row: the workflow's catalog
+ * association, written against the revision the delta published. It runs on a
+ * handle the caller OWNS — the legacy journal's own short transaction, or the
+ * active route's single registration transaction — and an association already
+ * recorded by ANOTHER operation is refused rather than overwritten.
+ */
+export function writeBinding(
   db: StoreDb,
-  plan: ExecutionPlan,
-  bindingInput: { kind: CatalogEntityKind; id: string; rootKind: CatalogRootKind; relativePath: string; documentKind: string | null; sourceHash: string | null },
+  plan: CatalogExecutionPlan,
+  bindingInput: CatalogExecutionBindingInput,
   catalogRevision: number,
 ): void {
   const binding = plan.request.delta.binding;
@@ -1117,8 +1177,8 @@ export async function registerCatalogExecution(
   context: StoreContext,
   request: CatalogExecutionRequest,
 ): Promise<CatalogExecutionReceipt> {
-  const validated = validateRequest(request);
-  const plan = executionPlanFor(context, validated);
+  const plan = resolveCatalogExecutionPlan(context, request);
+  const validated = plan.request;
   const hash = requestHash(validated);
 
   const prepared = await withJournalWrite(context, (db) => {
@@ -1411,17 +1471,13 @@ export async function resolveCatalogRegistrationState(
   const id = requireText(workflowId, "workflowId");
   const rootVisible = findRegisteredWorkflow(resolve(context.harnessDir), id) !== undefined;
   return await withJournalWrite(context, (db) => {
-    const pendingRow = pendingRows(db).find((row) => parseJournalWorkflowId(row) === id);
     const bindingRow = db
       .prepare("select catalog_kind, catalog_id, catalog_revision, operation_id from catalog_execution_bindings where workflow_id = ?")
       .get(id) as { catalog_kind?: unknown; catalog_id?: unknown; catalog_revision?: unknown } | undefined;
     return {
       workflowId: id,
       rootVisible,
-      pending:
-        pendingRow === undefined
-          ? null
-          : { operationId: pendingRow.operation_id, phase: pendingRow.phase === "execution-written" ? "execution-written" : "prepared" },
+      pending: pendingRegistrationOf(db, id),
       binding:
         bindingRow !== undefined && (bindingRow.catalog_kind === "plan" || bindingRow.catalog_kind === "iteration")
           ? {
@@ -1448,12 +1504,49 @@ export async function resolveCatalogRegistrationState(
 export async function assertCatalogExecutionCommitted(context: StoreContext, workflowId: string): Promise<void> {
   const state = await resolveCatalogRegistrationState(context, workflowId);
   if (!state.rootVisible || state.pending === null) return;
+  refusePendingRegistration(state.workflowId, state.pending);
+}
+
+/**
+ * The ONE refusal a pending registration produces, verbatim for the dispatch
+ * gate, the handle-taking gate and the active DB registration route.
+ */
+export function refusePendingRegistration(
+  workflowId: string,
+  pending: { operationId: string; phase: "prepared" | "execution-written" },
+): never {
   throw new CatalogRegistrationError(
     "catalog.registration-pending",
-    `workflow ${JSON.stringify(state.workflowId)} is root-visible but its catalog registration is ${state.pending.phase}, not committed ` +
-      `(operation ${JSON.stringify(state.pending.operationId)}); dispatch must refuse until it is reconciled: ` +
-      `run "mstar catalog reconcile --operation-id ${state.pending.operationId}".`,
+    `workflow ${JSON.stringify(workflowId)} is root-visible but its catalog registration is ${pending.phase}, not committed ` +
+      `(operation ${JSON.stringify(pending.operationId)}); dispatch must refuse until it is reconciled: ` +
+      `run "mstar catalog reconcile --operation-id ${pending.operationId}".`,
   );
+}
+
+/**
+ * The SAME registration gate through a handle the caller ALREADY owns: a
+ * root-visible workflow whose catalog operation is recorded but not committed
+ * refuses `catalog.registration-pending`. The execution transaction opens one
+ * handle on the same `store.db`, so a DB `prepare` enforces its registration
+ * admission under its own write lock through this function instead of opening
+ * a second connection — exactly as `catalogPinFactsOn` reads a pin — and the
+ * "pending" verdict stays defined once, by `pendingRegistrationOf`.
+ *
+ * Store-state tolerances stay with the handle owner: a missing store never gets
+ * here (the opener refuses `store.not-initialized`), and a `store_meta` that is
+ * not ACTIVE keeps the pre-activation exclusion (§7) — a staged store is not a
+ * catalog verdict, so it passes through and is never retro-refused here.
+ */
+export function assertCatalogExecutionCommittedOn(db: StoreDb, harnessDir: string, workflowId: string): void {
+  const id = requireText(workflowId, "workflowId");
+  const meta = db.prepare("select authority_state from store_meta where id = 1").get() as
+    | { authority_state?: unknown }
+    | undefined;
+  if (meta?.authority_state !== "active") return;
+  if (findRegisteredWorkflow(resolve(harnessDir), id) === undefined) return;
+  const pending = pendingRegistrationOf(db, id);
+  if (pending === null) return;
+  refusePendingRegistration(id, pending);
 }
 
 /** Every pending registration operation, oldest first (recovery discovery). */

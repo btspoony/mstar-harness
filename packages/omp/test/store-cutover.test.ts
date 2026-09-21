@@ -23,11 +23,17 @@
  *    cases pin the actionable Bun AND Node floors of the same code path.
  */
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { initializeStore, openStore } from "@mstar-harness/engine";
-import type { StoreRuntimeInfo } from "@mstar-harness/engine";
+import {
+  createExecutionWorkflow,
+  initializeExecutionAuthority,
+  initializeStore,
+  openStore,
+  registerCatalogEntity,
+} from "@mstar-harness/engine";
+import type { ExecutionCaller, ExecutionContext, StoreRuntimeInfo } from "@mstar-harness/engine";
 import { zod } from "@oh-my-pi/pi-coding-agent";
 import type { CustomTool, CustomToolAPI } from "@oh-my-pi/pi-coding-agent";
 import mstarGates, { storeRuntimeProbe as hookRuntimeProbe } from "../src/hooks/pre/mstar-gates";
@@ -95,6 +101,75 @@ async function seedStagedStore(harnessDir: string): Promise<void> {
   const write = await openStore({ harnessDir }, "write");
   write.db.prepare("update store_meta set authority_state = 'staged' where id = 1").run();
   write.close();
+}
+
+const EXECUTION_WORKFLOW = "wf-execution-authority";
+const EXECUTION_PLAN = "20260000-execution-plan-a";
+const EXECUTION_TS = "2026-09-21T00:00:00.000Z";
+
+/**
+ * REAL ACTIVE EXECUTION authority (primary spec §3/§4.3): the create-only
+ * empty-execution initializer plus one registered plan and the workflow that
+ * holds it, all through the engine's own producers.
+ *
+ * The fixture's retired `status.json` is set aside while the initializer runs —
+ * it refuses a harness that still holds live execution sources — and restored
+ * afterwards, which is exactly the state a real cutover leaves behind: an
+ * ACTIVE execution authority whose retired root register still sits on disk.
+ */
+async function seedActiveExecutionStore(harnessDir: string, statusPath: string): Promise<void> {
+  const parked = `${statusPath}.parked`;
+  renameSync(statusPath, parked);
+  try {
+    const handle = await initializeStore({ harnessDir });
+    handle.close();
+    const initialized = await initializeExecutionAuthority({ harnessDir });
+    await registerCatalogEntity(
+      { harnessDir },
+      {
+        kind: "plan",
+        id: EXECUTION_PLAN,
+        title: `${EXECUTION_PLAN} title`,
+        rootKind: "plans",
+        relativePath: `plans/${EXECUTION_PLAN}.md`,
+      },
+      { operationId: `register-${EXECUTION_PLAN}`, actor: "store-cutover.test" },
+    );
+    const context: ExecutionContext = {
+      harnessDir,
+      caller: {
+        sessionId: `host-${EXECUTION_WORKFLOW}`,
+        role: "coordinator",
+        workflowId: EXECUTION_WORKFLOW,
+        planId: null,
+      } satisfies ExecutionCaller,
+    };
+    await createExecutionWorkflow(context, {
+      entry: { id: EXECUTION_WORKFLOW, type: "plan", started_at: EXECUTION_TS, dir: `workflows/${EXECUTION_WORKFLOW}` },
+      snapshot: {
+        schema_version: 1,
+        id: EXECUTION_WORKFLOW,
+        type: "plan",
+        status: "running",
+        started_at: EXECUTION_TS,
+        updated_at: EXECUTION_TS,
+        plans: [
+          {
+            id: EXECUTION_PLAN,
+            title: `${EXECUTION_PLAN} title`,
+            file: `plans/${EXECUTION_PLAN}.md`,
+            status: "Todo",
+          },
+        ],
+        delivery_kind: "development",
+        branch: { source: `feature/${EXECUTION_WORKFLOW}`, target: "main" },
+      } as never,
+      expected: initialized.token,
+      operationId: `create-${EXECUTION_WORKFLOW}`,
+    });
+  } finally {
+    renameSync(parked, statusPath);
+  }
 }
 
 /** Unreadable authority through the REAL engine channel: a directory where the
@@ -538,5 +613,138 @@ describe("omp mstar_status_validate — DB-aware register route (G4b)", () => {
     expect(snapshot.isError).not.toBe(true);
     expect(textOf(snapshot)).toContain("snapshot valid");
     expect(reads()).toBe(0);
+  });
+});
+
+describe("omp write gate — an ACTIVE execution-authority target refuses (S3)", () => {
+  const SNAPSHOT_TARGET = (harness: string) => join(harness, "workflows", EXECUTION_WORKFLOW, "snapshot.json");
+
+  test("the retired root register and workflow snapshots refuse in hard AND soft mode", async () => {
+    for (const enforcement of ["hard", "soft"] as const) {
+      const fixture = makeHarness(`execution-${enforcement}`, enforcement);
+      await seedActiveExecutionStore(fixture.harness, fixture.status);
+      const handler = loadHandler();
+
+      // Document-VALID bytes prove the refusal is the execution authority's
+      // route, not a shape violation — and soft mode proves it is not the
+      // compass-governed document axis.
+      const register = await runWrite(handler, fixture.status, VALID_STATUS);
+      expect(register?.block).toBe(true);
+      expect(register?.reason).toContain("execution.direct-write-refused");
+      expect(register?.reason).toContain("store.db");
+      expect(register?.reason).not.toContain("status.invalid-json");
+
+      const snapshot = await runWrite(handler, SNAPSHOT_TARGET(fixture.harness), JSON.stringify({ schema_version: 1 }));
+      expect(snapshot?.block).toBe(true);
+      expect(snapshot?.reason).toContain("execution.direct-write-refused");
+    }
+  });
+
+  test("a symlink alias of a retired coordination document is refused like the document itself", async () => {
+    const fixture = makeHarness("execution-alias", "soft");
+    await seedActiveExecutionStore(fixture.harness, fixture.status);
+    const handler = loadHandler();
+    const aliases = join(fixture.root, "aliases");
+    mkdirSync(aliases, { recursive: true });
+
+    // A different basename OUTSIDE the harness tree whose realpath lands on the
+    // retired root register: the textual path is not a harness document, so
+    // only the landed classification can see it (§4.3 canonical target check).
+    const statusAlias = join(aliases, "carry-over.json");
+    symlinkSync(fixture.status, statusAlias);
+    const status = await runWrite(handler, statusAlias, VALID_STATUS);
+    expect(status?.block).toBe(true);
+    expect(status?.reason).toContain("execution.direct-write-refused");
+    expect(status?.reason).not.toContain("status.invalid-json");
+
+    // The same for a workflow snapshot reached through an alias.
+    const snapshotPath = SNAPSHOT_TARGET(fixture.harness);
+    mkdirSync(join(snapshotPath, ".."), { recursive: true });
+    writeFileSync(snapshotPath, JSON.stringify({ schema_version: 1 }));
+    const snapshotAlias = join(aliases, "phase.json");
+    symlinkSync(snapshotPath, snapshotAlias);
+    const snapshot = await runWrite(handler, snapshotAlias, JSON.stringify({ schema_version: 1 }));
+    expect(snapshot?.block).toBe(true);
+    expect(snapshot?.reason).toContain("execution.direct-write-refused");
+  });
+
+  test("the protected authority paths stay blocked in the same active workspace", async () => {
+    const fixture = makeHarness("execution-protected", "soft");
+    await seedActiveExecutionStore(fixture.harness, fixture.status);
+    const handler = loadHandler();
+
+    const store = await runWrite(handler, fixture.storeDb, "not a database");
+    expect(store?.block).toBe(true);
+    expect(store?.reason).toContain("store.direct-write-refused");
+
+    const register = await runWrite(handler, fixture.register, VALID_REGISTER);
+    expect(register?.block).toBe(true);
+    expect(register?.reason).toContain("project.register.retired");
+
+    // A non-authority document keeps its own validator: the execution refusal
+    // covers the retired coordination documents, not every write.
+    writeFileSync(join(fixture.root, "notes.md"), "# notes\n");
+    expect(await runWrite(handler, join(fixture.root, "notes.md"), BAD_JSON)).toBeUndefined();
+  });
+
+  test("an unreadable execution authority refuses fail-closed, never a silent pass", async () => {
+    const fixture = makeHarness("execution-corrupt", "soft");
+    await corruptStore(fixture.harness);
+    const handler = loadHandler();
+
+    const blocked = await runWrite(handler, fixture.status, VALID_STATUS);
+    expect(blocked?.block).toBe(true);
+    expect(blocked?.reason).toContain("store.authority-unavailable");
+    expect(blocked?.reason).toContain("store.corrupt");
+  });
+
+  test("a PRE-ACTIVATION harness's document symlinked into another harness's ACTIVE authority is refused (both roots probed)", async () => {
+    // Harness B: the ACTIVE execution authority the write really lands on.
+    const authority = makeHarness("execution-cross-alias", "soft");
+    await seedActiveExecutionStore(authority.harness, authority.status);
+    const handler = loadHandler();
+
+    // Harness A: pre-activation (no store at all) whose OWN `status.json` is a
+    // symlink into B's retired register. The textual classification resolves a
+    // pre-activation harness, so a single-root probe would let the write
+    // through although the bytes land on B's retired document.
+    const source = makeHarness("execution-cross-source", "soft");
+    rmSync(source.status);
+    symlinkSync(authority.status, source.status);
+
+    const blocked = await runWrite(handler, source.status, VALID_STATUS);
+    expect(blocked?.block).toBe(true);
+    expect(blocked?.reason).toContain("execution.direct-write-refused");
+    expect(blocked?.reason).not.toContain("status.invalid-json");
+
+    // The same alias on an UNREADABLE authority fails closed on the landed
+    // root — never a silent pass because the source harness has no store.
+    const corrupt = makeHarness("execution-cross-corrupt", "soft");
+    await seedActiveExecutionStore(corrupt.harness, corrupt.status);
+    const corruptSource = makeHarness("execution-cross-corrupt-source", "soft");
+    rmSync(corruptSource.status);
+    symlinkSync(corrupt.status, corruptSource.status);
+    await corruptStore(corrupt.harness);
+
+    const failed = await runWrite(handler, corruptSource.status, VALID_STATUS);
+    expect(failed?.block).toBe(true);
+    expect(failed?.reason).toContain("store.authority-unavailable");
+    expect(failed?.reason).toContain("store.corrupt");
+  });
+
+  test("pre-activation keeps the document validator: missing, staged and execution-legacy stores", async () => {
+    const states = ["missing", "staged"] as const;
+    for (const state of states) {
+      const fixture = makeHarness(`execution-${state}`, "hard");
+      if (state === "staged") await seedStagedStore(fixture.harness);
+      const handler = loadHandler();
+
+      // The compass-governed document lint still decides, and its refusal is
+      // the document's own code — never the execution route's.
+      const invalid = await runWrite(handler, fixture.status, BAD_JSON);
+      expect(invalid?.reason).toContain("status.invalid-json");
+      expect(invalid?.reason).not.toContain("execution.direct-write-refused");
+      expect(await runWrite(handler, fixture.status, VALID_STATUS)).toBeUndefined();
+    }
   });
 });

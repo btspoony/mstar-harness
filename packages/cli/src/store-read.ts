@@ -12,10 +12,22 @@
  * and an excessive literal search (>200 chars) are refused before any store
  * access, and an id/project that could not be a catalog id (a path separator or
  * a traversal segment) is refused as a route/usage error rather than passed on.
+ *
+ * Execution route (primary spec §5, plan S2): a view whose envelope comes from
+ * a projection refresh is refused with `execution.consumer-not-ready` while the
+ * control harness's execution authority is ACTIVE. The refresh's sources are
+ * the root register and the workflow snapshots — exactly the files activation
+ * retires — so serving that view would present retired bytes as current
+ * execution state, and rebuilding these DTOs from the DB authority is the
+ * separate release obligation. The issue/catalog views never read the
+ * projection and keep answering, since the issue authority is unchanged by
+ * execution activation.
  */
 import {
   SddScriptError,
+  StoreError,
   queryDashboard,
+  resolveExecutionReadRoute,
   withStoreRead,
   type DashboardFilters,
   type DashboardView,
@@ -186,7 +198,18 @@ export async function readDashboardView(input: {
   id?: string;
 }): Promise<ReadEnvelope<DashboardViewData[DashboardView]>> {
   const filters = dashboardFilters(input.view, input.params ?? {}, input.id);
-  return withStoreRead(input.context, queryDashboard(input.view, filters));
+  const query = queryDashboard(input.view, filters);
+  // The engine's own classification of the view (its `needsProjection` flag),
+  // not a second table here, decides whether a projection refresh is involved.
+  if (query.needsProjection && (await resolveExecutionReadRoute(input.context)) === "execution") {
+    throw new StoreError(
+      "execution.consumer-not-ready",
+      `The execution authority of ${input.context.harnessDir} is ACTIVE, so the "${input.view}" view's projection ` +
+        `sources (the root register and the workflow snapshots) are retired. Nothing was read: this view is answered ` +
+        `by the DB authority once its DTO projection lands, and the engine adapter serves workflow/plan state today.`,
+    );
+  }
+  return withStoreRead(input.context, query);
 }
 
 /**

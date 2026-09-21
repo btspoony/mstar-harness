@@ -71,6 +71,8 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async/job-manager";
 import type { AsyncJobSnapshot } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { CustomMessageComponent } from "@oh-my-pi/pi-coding-agent/modes/components/custom-message";
+import { ensureThemeSync } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import {
   bindPlanSession,
@@ -1260,5 +1262,116 @@ describe("phase2 host adapter", () => {
       "workflowId",
       "worktreePath",
     ]);
+  });
+});
+
+/* ------------------------------------------------- coordinator bar titles --- */
+
+/** SGR styling, stripped so a rendered row can be asserted as plain text. */
+const SGR = /\u001b\[[0-9;]*m/g;
+/** Box outline glyphs, removed so a wrapped body can be read as one string. */
+const BOX_GLYPHS = /[│╭╮╰╯─]/g;
+
+/**
+ * Render this session's captured `custom_message` entries through the host's own
+ * `CustomMessageComponent` — the component the transcript dispatcher mounts for
+ * an extension message — so the bar header and the body are observed on the real
+ * renderer instead of on our own string maths. No host process is started.
+ */
+function renderCustomMessages(entries: readonly SessionEntry[]): readonly (readonly string[])[] {
+  ensureThemeSync();
+  return entries
+    .filter((entry): entry is Extract<SessionEntry, { type: "custom_message" }> => entry.type === "custom_message")
+    .map((entry) => {
+      const message: ConstructorParameters<typeof CustomMessageComponent>[0] = {
+        role: "custom",
+        customType: entry.customType,
+        content: entry.content,
+        display: true,
+        timestamp: 0,
+      };
+      return new CustomMessageComponent(message, undefined).render(78).map((row) => row.replace(SGR, ""));
+    });
+}
+
+/** Every rendered row except the bar header, as one whitespace-normalized string. */
+function bodyText(rows: readonly string[], header: string | undefined): string {
+  return rows
+    .filter((row) => row !== header)
+    .join(" ")
+    .replace(BOX_GLYPHS, "")
+    .replace(/\s+/g, " ");
+}
+
+describe("coordinator notice bar titles", () => {
+  test("notice-bar-title: the bar carries the shared visible types, the header states no workflow status, the body states its status sentence once, and dedup, continuation and hidden ledger identities stay unchanged", async () => {
+    const fixture = await buildFixture();
+    const jobs = new AsyncJobManager({});
+    const harness = await createHarness({ sessionManager: newSession(fixture.root), jobs, cwd: fixture.root });
+    expect(codeOf(await harness.runTool(bindParams(fixture)))).toBe("bound");
+
+    // (a) Advisory: one real running job is a changed observation.
+    startJob(jobs, "job-1", "bar-title slice");
+    await harness.emitAgentEnd();
+    expect(harness.advisories()).toHaveLength(1);
+    expect(harness.advisories()[0]!.options).toMatchObject({ triggerTurn: true, deliverAs: "followUp" });
+    // …and the durable latch keeps the continuation bounded.
+    await harness.emitAgentEnd();
+    expect(harness.advisories()).toHaveLength(1);
+
+    // (b) Refusal diagnostic: the bound workflow goes terminal on disk, so the
+    // probe read its snapshot and the notice is status-bearing.
+    writeJson(fixture.snapshotPath, {
+      ...readJson(fixture.snapshotPath),
+      status: "completed",
+      ended_at: new Date().toISOString(),
+    });
+    await harness.emitAgentEnd();
+    expect(harness.noticeTexts()).toHaveLength(1);
+
+    // Only the two shared visible types are emitted, and nothing else is.
+    expect(harness.ledger().filter((entry) => entry.type === "custom_message").map((entry) => entry.customType)).toEqual([
+      "mstar:advisory",
+      "mstar:notice",
+    ]);
+
+    // Per-code dedup is unchanged: a repeated identical refusal stays silent.
+    await harness.emitAgentEnd();
+    expect(harness.noticeTexts()).toHaveLength(1);
+    expect(harness.advisories()).toHaveLength(1);
+
+    // The hidden durable identity is untouched, and the ledger still replays.
+    const durableTypes = harness
+      .ledger()
+      .filter((entry) => entry.type === "custom")
+      .map((entry) => entry.customType);
+    expect(durableTypes.length).toBeGreaterThan(0);
+    expect(durableTypes.every((type) => type === "mstar:phase2")).toBe(true);
+    expect(derivePhase2State(harness.ledger(), harness.sessionManager.getSessionId()).binding).toMatchObject({
+      workflowId: WORKFLOW_ID,
+    });
+
+    // (c) The real component: the visible type is the bar header and asserts no
+    // workflow status; the observed id/status/code stay in the body.
+    const [advisoryRows, noticeRows] = renderCustomMessages(harness.ledger());
+    const advisoryHeader = advisoryRows!.filter((row) => row.includes("mstar:advisory"));
+    const noticeHeader = noticeRows!.filter((row) => row.includes("mstar:notice"));
+    expect(advisoryHeader).toHaveLength(1);
+    expect(noticeHeader).toHaveLength(1);
+    expect(noticeHeader[0]).not.toContain(WORKFLOW_ID);
+    expect(noticeHeader[0]).not.toContain("Workflow");
+    expect(noticeHeader[0]).not.toContain("completed");
+    expect(noticeHeader[0]).not.toContain("phase2.workflow-terminal");
+
+    const noticeBody = bodyText(noticeRows!, noticeHeader[0]);
+    expect(noticeBody).toContain(WORKFLOW_ID);
+    expect(noticeBody).toContain("completed");
+    expect(noticeBody).toContain("phase2.workflow-terminal");
+    // Title and detail never state the same status sentence twice.
+    expect(noticeBody.match(/is completed/g) ?? []).toHaveLength(1);
+
+    const advisoryBody = bodyText(advisoryRows!, advisoryHeader[0]);
+    expect(advisoryBody).toContain("phase-2-worktree-lease.md");
+    expect(advisoryBody).toContain("observation, not a dispatch");
   });
 });
