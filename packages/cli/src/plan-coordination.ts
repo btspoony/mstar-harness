@@ -29,6 +29,7 @@ import pc from "picocolors";
 import {
   SddScriptError,
   amendPrepareWorkflow,
+  assertSafeSessionId,
   bindPlanSession,
   createFsStore,
   mutatePlanCoordination,
@@ -1141,13 +1142,31 @@ function printWorkflowView(verb: string, result: PrepareWorkflowResult, json: bo
 
 /**
  * The `recover-coordinator` stop assertion (prerequisite contract §3.3): at
- * least one prior session id, each a non-empty token. An absent or empty
- * `--stopped` is a usage refusal (exit 2), never a request the engine answers
- * with `unauthorized` — the operator states the attestation up front.
+ * least one prior session id, each a PUBLIC session id under the one shared
+ * rule (single safe path component, bounded length) — the same rule the
+ * acquired identity obeys. An absent, empty or malformed `--stopped` is a
+ * usage refusal (exit 2), never a request the engine answers with
+ * `unauthorized` or persists into the immutable audit — the operator states
+ * the attestation up front.
  */
 function requireStopAssertion(raw: string | string[] | undefined): string[] {
   const values = raw === undefined ? [] : Array.isArray(raw) ? raw : [raw];
-  const stopped = values.filter((entry) => typeof entry === "string" && entry.trim() !== "");
+  const stopped: string[] = [];
+  for (const entry of values) {
+    if (typeof entry !== "string" || entry.trim() === "") {
+      throw new SddScriptError(
+        "usage: workflow recover-coordinator --stopped takes session ids naming the recorded coordinator " +
+          "(and any other prior holder) attested stopped or reloaded",
+        2,
+      );
+    }
+    try {
+      assertSafeSessionId(entry, "--stopped entry");
+    } catch (error) {
+      throw new SddScriptError(`${error instanceof Error ? error.message : String(error)}`, 2);
+    }
+    stopped.push(entry);
+  }
   if (stopped.length === 0) {
     throw new SddScriptError(
       "usage: workflow recover-coordinator requires --stopped <session-id...> naming the recorded coordinator " +
@@ -1161,9 +1180,10 @@ function requireStopAssertion(raw: string | string[] | undefined): string[] {
 /**
  * The recovery success payload (prerequisite contract §3.3): the two public
  * session ids, the replay identity, the versions and the time. The coordinator
- * envelope path is coordinator-owned transport — printed here because the
- * operator that asked for the replacement is the session that will continue
- * with it — while no envelope body, credential or `reason` text is echoed.
+ * envelope path is NOT part of this projection — §3.3 keeps it in
+ * coordinator-owned transport, and this operator CLI's stdout/stderr is a
+ * public diagnostic surface, not that transport. No envelope body, credential,
+ * reason text or path is echoed.
  */
 function printRecovery(result: RecoverPrepareCoordinatorResult, json: boolean): void {
   const receipt = result.recovery;
@@ -1179,7 +1199,6 @@ function printRecovery(result: RecoverPrepareCoordinatorResult, json: boolean): 
         replay: receipt.replay,
         snapshot_version: receipt.snapshotVersion,
         compass_version: receipt.compassVersion,
-        session_file: result.session_file,
       }),
     );
     return;
@@ -1190,7 +1209,6 @@ function printRecovery(result: RecoverPrepareCoordinatorResult, json: boolean): 
         ` (was ${receipt.priorSessionId}, operation ${receipt.operationId}${receipt.replay ? ", replayed" : ""})`,
     ),
   );
-  console.error(`workflow recover-coordinator: session file ${result.session_file}`);
   console.error(`workflow recover-coordinator: snapshot ${receipt.snapshotVersion}, compass ${receipt.compassVersion}`);
 }
 

@@ -15,6 +15,8 @@
  * silently authorized by an injected environment variable.
  */
 import {
+  assertExecutionFileReadAllowed,
+  assertSafeSessionId,
   bindPlanSession,
   readWorkflowSnapshot,
   recoverPrepareCoordinator,
@@ -247,6 +249,13 @@ export type CoordinatorRecoveryTargetReader = (input: {
 
 /** The default target reader: the snapshot's own top-level coordinator binding. */
 export const readStoredCoordinatorTarget: CoordinatorRecoveryTargetReader = ({ harnessRoot, workflowId }) => {
+  // §4.3 authority discrimination BEFORE any stored-target read: while an
+  // execution authority is ACTIVE the snapshot is retired as a persistence
+  // route, and the host must surface THAT refusal — with the redirect to the
+  // existing DB recovery verb — instead of letting the read failure fall into
+  // the generic Prepare refusal below and silently masking the DB route.
+  const veto = authorityRefusal(harnessRoot);
+  if (veto !== undefined) return veto;
   let snapshot;
   try {
     // The same resolved workflow dir the engine writes to (a configured
@@ -269,6 +278,33 @@ export const readStoredCoordinatorTarget: CoordinatorRecoveryTargetReader = ({ h
   }
   return { ok: true, target: { priorSessionPath: coordinator.session_file, priorSessionId: coordinator.session_id } };
 };
+
+/**
+ * The §4.3 authority veto of a JSON recovery, or `undefined` when the file
+ * route still answers. An ACTIVE authority keeps the store's own code
+ * (`execution.consumer-not-ready`) and adds the redirect this adapter owes the
+ * caller: recovery then belongs to the existing DB recovery verb with its
+ * execution token and stop attestation, never to this JSON path. A store that
+ * exists and cannot be read keeps ITS own refusal code and message — masking it
+ * as a Prepare refusal would hide a real store fault.
+ */
+function authorityRefusal(
+  harnessRoot: string,
+): { ok: false; code: string; message: string } | undefined {
+  try {
+    assertExecutionFileReadAllowed({ harnessDir: harnessRoot });
+  } catch (error) {
+    const code = codeOf(error);
+    const message =
+      code === "execution.consumer-not-ready"
+        ? `${messageOf(error)} Coordinator recovery of a workflow under an ACTIVE execution authority belongs to the ` +
+          `existing DB recovery verb (\`mstar session recover\`) with its execution token and stop attestation; ` +
+          `this JSON Prepare path never runs against an active store.`
+        : messageOf(error);
+    return { ok: false, code, message };
+  }
+  return undefined;
+}
 
 /** The engine verbs the recovery operations call; injectable so fixtures prove the derived input. */
 export type CoordinatorRecoveryDeps = Readonly<{
@@ -419,12 +455,23 @@ export async function recoverCoordinatorIdentity(
     if (!isNonEmpty(value)) return refuse("invalid-input", `${field} is required`);
   }
   const stopped = request.stoppedSessionIds;
-  if (!Array.isArray(stopped) || stopped.length === 0 || stopped.some((entry) => !isNonEmpty(entry))) {
+  if (!Array.isArray(stopped) || stopped.length === 0) {
     return refuse(
       "unauthorized",
       "stoppedSessionIds must name the recorded prior holder this recovery replaces \u2014 the host never treats an empty stop assertion as an authorization",
       { workflowId: context.workflowId },
     );
+  }
+  // Every entry is forwarded to the engine AND echoed by it, so each must be a
+  // safe PUBLIC session id (single path component, bounded length) under the
+  // one shared rule — an arbitrary string is refused here, before the engine
+  // call, instead of being hashed into the audit or returned in a diagnostic.
+  for (const entry of stopped) {
+    try {
+      assertSafeSessionId(entry, "stoppedSessionIds entry");
+    } catch (error) {
+      return refuse("invalid-input", messageOf(error), { workflowId: context.workflowId });
+    }
   }
   const stoppedSessionIds = stopped as readonly string[];
 

@@ -2429,9 +2429,28 @@ describe("prepare coordinator recovery — CLI transport", () => {
     expect(payload.session_id).toBe(CLI_RECOVERY_SESSION_ID);
     expect(payload.operation_id).toBe("op-cli-recover-1");
     expect(payload.replay).toBe(false);
-    expect(payload.session_file).toBe(
-      join(fixture.harness, "workflows", PREPARE_WORKFLOW, "sessions", `coordinator-${CLI_RECOVERY_SESSION_ID}.json`),
-    );
+    // §3.3's public projection: the envelope/credential path is coordinator-owned
+    // transport and never a CLI (or diagnostic) output field.
+    const newEnvelope = join(fixture.harness, "workflows", PREPARE_WORKFLOW, "sessions", `coordinator-${CLI_RECOVERY_SESSION_ID}.json`);
+    expect(payload.session_file).toBeUndefined();
+    expect(Object.keys(payload).sort()).toEqual([
+      "compass_version",
+      "ok",
+      "operation",
+      "operation_id",
+      "prior_session_id",
+      "replay",
+      "session_id",
+      "snapshot_version",
+      "workflow_id",
+    ]);
+    expect(recovered.stdout).not.toContain("sessions");
+    // Human mode keeps stdout machine-only and prints no envelope path either.
+    const human = runCli(recoverCoordinatorArgs(fixture, tokens, { json: false }), fixture.root);
+    expect(human.exitCode).toBe(0);
+    expect(human.stdout).toBe("");
+    expect(human.stderr).not.toContain(newEnvelope);
+    expect(human.stderr).toContain(CLI_RECOVERY_SESSION_ID);
 
     // Authoritative state, read from disk — never from the CLI's claim.
     expect(cliRecordedCoordinator(fixture)).toMatchObject({ session_id: CLI_RECOVERY_SESSION_ID });
@@ -2457,7 +2476,7 @@ describe("prepare coordinator recovery — CLI transport", () => {
     expect(oldPayload.operation).toBe("show-prepare");
     expect(oldPayload.code).toBe("coordination.session-mismatch");
     const live = runCli(
-      ["workflow", "show-prepare", "--session", String(payload.session_file), "--json"],
+      ["workflow", "show-prepare", "--session", newEnvelope, "--json"],
       fixture.root,
     );
     expect(live.exitCode).toBe(0);
@@ -2474,7 +2493,7 @@ describe("prepare coordinator recovery — CLI transport", () => {
     // A changed request and an incomplete stop assertion both refuse with their
     // own engine codes, exit 1, and no mutation — each against the CURRENT
     // reviewed tokens, so the refusal is the guard's own and not a stale token.
-    const liveView = jsonOf(runCli(["workflow", "show-prepare", "--session", String(payload.session_file), "--json"], fixture.root));
+    const liveView = jsonOf(runCli(["workflow", "show-prepare", "--session", newEnvelope, "--json"], fixture.root));
     const liveTokens = { snapshot: String(liveView.snapshot_version), compass: String(liveView.compass_version) };
     const changedReason = runCli(
       recoverCoordinatorArgs(fixture, liveTokens, { operationId: "op-cli-recover-1", reason: "another reason" }),
@@ -2488,7 +2507,7 @@ describe("prepare coordinator recovery — CLI transport", () => {
     const unauthorized = runCli(
       recoverCoordinatorArgs(fixture, liveTokens, {
         operationId: "op-cli-recover-3",
-        priorSession: String(payload.session_file),
+        priorSession: newEnvelope,
         sessionId: "another-coordinator",
         stopped: ["somebody-else"],
       }),
@@ -2543,6 +2562,15 @@ describe("prepare coordinator recovery — CLI transport", () => {
     );
     expect(relative.exitCode).toBe(2);
     expect(jsonOf(relative).code).toBe("usage");
+
+    // A stop entry that is not a public session id (`a/b` would name another
+    // path component) is decided as usage before any engine I/O, so the value is
+    // never hashed into a request digest or persisted in the audit.
+    for (const badStopped of ["a/b", "a".repeat(129), "with space"]) {
+      const malformed = runCli(recoverCoordinatorArgs(fixture, tokens, { stopped: [badStopped] }), fixture.root);
+      expect(`${badStopped}: ${malformed.exitCode}`).toBe(`${badStopped}: 2`);
+      expect(jsonOf(malformed)).toMatchObject({ ok: false, operation: "recover-coordinator", code: "usage" });
+    }
 
     // A nonexistent absolute envelope is a runtime refusal (exit 1), never a
     // usage error, and it still writes nothing.

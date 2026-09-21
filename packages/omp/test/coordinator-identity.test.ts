@@ -6,7 +6,11 @@
  * engine verb. Every case asserts what the injected `bind` observed, so a
  * refusal that forgot to stop before the write is visible.
  */
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   COORDINATOR_BIND_INPUT_KEYS,
   COORDINATOR_RECOVER_INPUT_KEYS,
@@ -19,7 +23,7 @@ import {
   type CoordinatorIdentityFacts,
   type CoordinatorRecoveryDeps,
 } from "../src/coordinator-identity";
-import type { CoordinationResult, RecoverPrepareCoordinatorResult } from "@mstar-harness/engine";
+import { initializeExecutionAuthority, initializeStore, type CoordinationResult, type RecoverPrepareCoordinatorResult } from "@mstar-harness/engine";
 
 const FACTS: CoordinatorIdentityFacts = {
   sessionId: "native-session-a",
@@ -358,6 +362,22 @@ describe("prerequisite identity — coordinator recovery adapter input", () => {
     expect(engine.recovered).toHaveLength(0);
   });
 
+  test("prepare coordinator recovery refuses a stop entry that is not a public session id before the engine", async () => {
+    const engine = fakeRecovery();
+    // Each entry is forwarded to the engine AND echoed by it, so the host
+    // applies the one shared public-session-id rule (single safe path component,
+    // bounded length) itself: an arbitrary string never reaches the request
+    // digest, the audit record or a diagnostic.
+    for (const entry of ["a/b", "../escape", "a".repeat(129), "with space"]) {
+      const result = await recoverCoordinatorIdentity(recoverRequest({ stoppedSessionIds: [entry] }), FACTS, engine.deps);
+      expect(`${JSON.stringify(entry)}: ${result.ok} ${result.code}`).toBe(
+        `${JSON.stringify(entry)}: false invalid-input`,
+      );
+      expect(result.text).toContain("stoppedSessionIds entry");
+    }
+    expect(engine.recovered).toHaveLength(0);
+  });
+
   test("prepare coordinator recovery reports an engine refusal with its own code and never fabricates success", async () => {
     const refusal = new Error("workflow wf-a is not in Prepare") as Error & { code: string };
     refusal.code = "coordination.identity-recovery.not-prepare";
@@ -383,4 +403,38 @@ describe("prerequisite identity — coordinator recovery adapter input", () => {
     expect({ ok: result.ok, code: result.code }).toEqual({ ok: false, code: "recovery-not-prepare" });
     expect(engine.recovered).toHaveLength(0);
   });
+});
+
+/* ------------------------------- active execution authority --- */
+
+const activeRoots: string[] = [];
+afterAll(() => {
+  for (const root of activeRoots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+describe("prerequisite identity — coordinator recovery under an ACTIVE execution authority", () => {
+  test("prepare coordinator recovery surfaces the active-DB redirect instead of masking it as a Prepare refusal", async () => {
+    // A REAL active execution authority in its own temporary Git root: the JSON
+    // snapshot is retired there as a persistence route. The stored-target reader
+    // must surface THAT refusal — with the redirect to the existing DB recovery
+    // verb — instead of rewriting every read failure into `recovery-not-prepare`.
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "mstar-omp-coordinator-active-")));
+    activeRoots.push(root);
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root, stdio: "ignore" });
+    const harnessRoot = join(root, ".mstar");
+    mkdirSync(harnessRoot, { recursive: true });
+    const handle = await initializeStore({ harnessDir: harnessRoot });
+    handle.close();
+    await initializeExecutionAuthority({ harnessDir: harnessRoot });
+
+    // The DEFAULT deps: the real stored-target reader and the real engine verbs.
+    const result = await recoverCoordinatorIdentity(recoverRequest({ workflowId: "wf-active" }), {
+      ...FACTS,
+      cwd: root,
+      harnessRoot,
+    });
+    expect({ ok: result.ok, code: result.code }).toEqual({ ok: false, code: "execution.consumer-not-ready" });
+    expect(result.text).toContain("mstar session recover");
+    expect(result.text).not.toContain("recovery-not-prepare");
+  }, 60000);
 });

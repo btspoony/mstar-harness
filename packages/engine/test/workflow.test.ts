@@ -2569,4 +2569,30 @@ describe("prepare coordinator recovery audit schema", () => {
     })));
     expect(() => readWorkflowSnapshot(dir)).toThrow(/coordination\.recovery\.field/);
   }, 30000);
+
+  test("prepare coordinator recovery history cannot be CREATED by an ordinary writer", async () => {
+    const root = tmpRoot("workflow-recovery-create-");
+    const dir = join(root, "workflows", "00000819-workflow-engine-core");
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, WORKFLOW_SNAPSHOT_FILE);
+    setArtifactStore(createFsStore(root));
+
+    // The forged document passes the SHAPE validator — that is exactly why the
+    // create-only route needs a provenance boundary: with no snapshot on disk
+    // there is no audit to pin against, so nothing else would stop a caller from
+    // minting recovery history that never passed through the recovery
+    // transition.
+    expect(validateWorkflowSnapshot(recoveredSnapshot()).ok).toBe(true);
+    const code = await refusalCode(() => writeWorkflowSnapshot(recoveredSnapshot() as never, dir, { createOnly: true }));
+    expect(code).toBe("coordination.direct-write-refused");
+    expect(existsSync(path)).toBe(false);
+
+    // The same create-only route without recovery history is untouched: this is
+    // a provenance boundary, not a new gate on creating snapshots.
+    await writeWorkflowSnapshot(validSnapshot({ status: "running", ended_at: undefined, phase: "phase-1-prepare" }) as never, dir, {
+      createOnly: true,
+    });
+    expect(existsSync(path)).toBe(true);
+    expect(readWorkflowSnapshot(dir).snapshot.coordination).toBeUndefined();
+  }, 30000);
 });

@@ -36,7 +36,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, sep } from "node:path";
+import { dirname, basename, join, sep } from "node:path";
 import {
   EXECUTION_PIN_CONFLICT_CODE,
   amendPrepareWorkflow,
@@ -49,6 +49,7 @@ import {
   replaceCoordinatedArtifact,
   resolvePlanScope,
   setCompleteStandaloneMutateGapForTest,
+  setPrepareRecoveryEnvelopeGapForTest,
   showPrepareCoordinatorRecovery,
   showPrepareWorkflow,
   type CatalogExecutionPin,
@@ -4726,6 +4727,38 @@ class FailOnceSnapshotStore implements ArtifactStore {
   }
 }
 
+/**
+ * A store that fails the next snapshot put once AND replaces the recovery's
+ * newly created envelope with an unrelated session file first — the exact
+ * "path replaced between exclusive creation and cleanup" window. Cleanup must
+ * prove ownership by bytes before it unlinks anything.
+ */
+class ReplaceEnvelopeOnFailureStore implements ArtifactStore {
+  readonly root: string;
+  private failing = true;
+
+  constructor(
+    private readonly inner: ArtifactStore & { root: string },
+    private readonly envelopePath: string,
+    private readonly replacement: string,
+  ) {
+    this.root = inner.root;
+  }
+
+  async put(doc: ArtifactDoc): Promise<void> {
+    if (doc.kind === "snapshot" && this.failing) {
+      this.failing = false;
+      writeText(this.envelopePath, this.replacement);
+      throw new Error("injected store failure between the envelope and the snapshot commit");
+    }
+    await this.inner.put(doc);
+  }
+
+  async get<T = unknown>(ref: ArtifactRef): Promise<T | undefined> {
+    return this.inner.get<T>(ref);
+  }
+}
+
 describe("prepare coordinator recovery", () => {
   test("prepare coordinator recovery view reports the recorded owner and both versions without envelope bytes", async () => {
     const fixture = makePrepareFixture();
@@ -5113,6 +5146,100 @@ describe("prepare coordinator recovery", () => {
     expect(refusal.code).toBe("coordination.identity-recovery.invalid-request");
     expect(readFileSync(alienEnvelope, "utf8")).toBe(alienBytes);
     expect(recoveryAuditOf(alien)).toEqual([]);
+  }, 60000);
+
+  test("prepare coordinator recovery re-checks the reviewed compass before committing and reclaims only its own envelope", async () => {
+    const fixture = makePrepareFixture();
+    await ensurePrepareCoordinator(fixture);
+    const tokens = await recoveryViewOf(fixture);
+    const before = protectedBytes(fixture);
+    const newEnvelope = coordinatorEnvelopeOf(fixture, RECOVERED_COORDINATOR_ID);
+
+    // A concurrent compass edit lands in the window between this recovery's
+    // exclusive envelope creation and its commit CAS. The snapshot write lock
+    // does not lock the compass file, so without the final recheck the recovery
+    // would commit and record a `compass_version` that was no longer current.
+    setPrepareRecoveryEnvelopeGapForTest(() => {
+      writeText(fixture.compassPath, `${readFileSync(fixture.compassPath, "utf8")}\n`);
+    });
+    let refusal: { code: string; details: Record<string, unknown> };
+    try {
+      refusal = await prepareRefusalOf(() =>
+        recoverPrepareCoordinator(
+          recoveryInputOf(fixture, { snapshot: tokens.snapshotVersion, compass: tokens.compassVersion }),
+        ),
+      );
+    } finally {
+      setPrepareRecoveryEnvelopeGapForTest(undefined);
+    }
+
+    expect(refusal.code).toBe("coordination.identity-recovery.stale");
+    // No snapshot mutation, no audit entry, and only THIS operation's envelope
+    // reclaimed; the prior envelope stays as history.
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(before.snapshot);
+    expect(readFileSync(fixture.coordinatorSession, "utf8")).toBe(before.session);
+    expect(recoveryAuditOf(fixture)).toEqual([]);
+    expect(existsSync(newEnvelope)).toBe(false);
+    expect(readdirSync(join(fixture.workflowDir, "sessions"))).toEqual([basename(fixture.coordinatorSession)]);
+
+    // The refusal wrote nothing, so a re-reviewed recovery is lawful.
+    const fresh = await recoveryViewOf(fixture);
+    const retry = await recoverPrepareCoordinator(
+      recoveryInputOf(fixture, { snapshot: fresh.snapshotVersion, compass: fresh.compassVersion }),
+    );
+    expect(retry.recovery.replay).toBe(false);
+    expect(recoveryAuditOf(fixture)).toHaveLength(1);
+  }, 60000);
+
+  test("prepare coordinator recovery never unlinks an envelope that was replaced after its exclusive creation", async () => {
+    const fixture = makePrepareFixture();
+    await ensurePrepareCoordinator(fixture);
+    const tokens = await recoveryViewOf(fixture);
+    const before = protectedBytes(fixture);
+    const newEnvelope = coordinatorEnvelopeOf(fixture, RECOVERED_COORDINATOR_ID);
+    const alien = `${JSON.stringify({ schema_version: 1, role: "plan-pm", session_id: "somebody-else" })}\n`;
+
+    // The snapshot commit fails AND the path this call created exclusively has
+    // since been replaced by an unrelated session file: `created` is only a
+    // historical boolean, so cleanup must compare the CURRENT bytes before it
+    // unlinks anything, and leave the replacement untouched.
+    setArtifactStore(new ReplaceEnvelopeOnFailureStore(createFsStore(fixture.harness), newEnvelope, alien));
+    await expect(
+      recoverPrepareCoordinator(recoveryInputOf(fixture, { snapshot: tokens.snapshotVersion, compass: tokens.compassVersion })),
+    ).rejects.toThrow(/injected store failure/);
+    setArtifactStore(createFsStore(fixture.harness));
+
+    expect(readFileSync(newEnvelope, "utf8")).toBe(alien);
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(before.snapshot);
+    expect(readFileSync(fixture.coordinatorSession, "utf8")).toBe(before.session);
+    expect(recoveryAuditOf(fixture)).toEqual([]);
+  }, 60000);
+
+  test("prepare coordinator recovery refuses a malformed stop-list entry before hashing or storing it", async () => {
+    const fixture = makePrepareFixture();
+    await ensurePrepareCoordinator(fixture);
+    const tokens = await recoveryViewOf(fixture);
+    const before = protectedBytes(fixture);
+
+    // A stop entry is hashed into the request digest, persisted in the
+    // immutable audit and echoed in refusals: only safe public session ids are
+    // acceptable, never an arbitrary string (credential-like or path text).
+    for (const entry of ["a/b", "../escape", "a".repeat(129), "with space", ""]) {
+      const refusal = await prepareRefusalOf(() =>
+        recoverPrepareCoordinator(
+          recoveryInputOf(
+            fixture,
+            { snapshot: tokens.snapshotVersion, compass: tokens.compassVersion },
+            { stoppedSessionIds: [FIXTURE_COORDINATOR_ID, entry] },
+          ),
+        ),
+      );
+      expect(`${JSON.stringify(entry)}: ${refusal.code}`).toBe(
+        `${JSON.stringify(entry)}: coordination.identity-recovery.invalid-request`,
+      );
+      expect(protectedBytes(fixture)).toEqual(before);
+      expect(existsSync(coordinatorEnvelopeOf(fixture, RECOVERED_COORDINATOR_ID))).toBe(false);
+    }
   }, 60000);
 
   test("prepare coordinator recovery never runs the JSON writer under an active execution authority", async () => {

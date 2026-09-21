@@ -854,11 +854,39 @@ export async function writeWorkflowSnapshot(
       );
     }
     const payload = current === undefined ? snapshot : mergePhaseProjection(current.payload, snapshot);
+    if (current === undefined) assertNoRecoveryHistoryOnCreate(payload, snapshotPath);
     assertCoordinatedSnapshotWriter(current?.payload, snapshotPath, opts.sessionPath);
     await withProtectedWrite(snapshotPath, "put", () =>
       store.put({ kind: "snapshot", key: snapshot.id, payload }),
     );
   });
+}
+
+/**
+ * Provenance boundary for the recovery audit (prerequisite contract §3.3).
+ *
+ * `coordination.identity_recoveries` is written ONLY by
+ * `recoverPrepareCoordinator`, which appends one entry under the snapshot write
+ * lock after authenticating the prior binding. The ordinary writer pins an
+ * EXISTING audit to disk (a replacement cannot drop or rewrite it), but a
+ * create-only write has no disk document to pin against: without this boundary
+ * a caller could CREATE a snapshot carrying an arbitrary, schema-valid —
+ * entirely forged — recovery history that never passed through the recovery
+ * transition. Shape validation is not provenance, so the history is refused
+ * outright, whatever its shape, and the only door that establishes it is the
+ * authorized recovery.
+ */
+function assertNoRecoveryHistoryOnCreate(payload: unknown, snapshotPath: string): void {
+  const coordination = isPlainObject(payload) ? payload.coordination : undefined;
+  const recoveries = isPlainObject(coordination) ? coordination.identity_recoveries : undefined;
+  if (!Array.isArray(recoveries) || recoveries.length === 0) return;
+  throw new CoordinationError(
+    "coordination.direct-write-refused",
+    `refusing to create snapshot ${snapshotPath} carrying ${recoveries.length} coordination.identity_recoveries ` +
+      `entr${recoveries.length === 1 ? "y" : "ies"} \u2014 recovery history is established only by the coordinator ` +
+      `recovery transition, and this create-only write proves no such provenance`,
+    { path: snapshotPath, recoveries: recoveries.length },
+  );
 }
 
 /**

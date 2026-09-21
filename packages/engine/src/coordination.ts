@@ -40,7 +40,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { GateResult } from "./core.js";
 import {
@@ -65,7 +65,7 @@ import {
   type CoordinatorBinding,
   type CoordinationIdentityRecovery,
 } from "./coordination-write.js";
-import { validateExecutionIdentity, type ExecutionIdentity } from "./session-identity.js";
+import { assertSafeSessionId, validateExecutionIdentity, type ExecutionIdentity } from "./session-identity.js";
 import {
   IMPLEMENTED_OPERATIONS,
   allowedOperations,
@@ -716,35 +716,18 @@ function safePlanId(planId: string, where: string): string {
   return planId;
 }
 
-/** Longest session id the envelope contract accepts. */
-const SESSION_ID_MAX_LENGTH = 128;
-
 /**
  * The caller-supplied session identity, validated **before any write**. The id
  * names the envelope's file (`sessionFilePath`), so a value that could name
  * another directory or another file is refused here rather than left to a
- * filesystem error. `undefined` keeps the engine-generated UUID.
+ * filesystem error. `undefined` keeps the engine-generated UUID. The rule
+ * itself is the shared public-session-id contract the recovery stop assertion
+ * uses too — one validator, not two.
  */
 function safeSessionId(value: unknown): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== "string") throw invalidInput("sessionId must be a string");
-  if (value.length > SESSION_ID_MAX_LENGTH) {
-    throw new CoordinationError(
-      "coordination.invalid-session-id",
-      `session id is longer than ${SESSION_ID_MAX_LENGTH} characters: ${JSON.stringify(value)}`,
-      { session_id: value, max_length: SESSION_ID_MAX_LENGTH },
-    );
-  }
-  try {
-    assertSafePathComponent(value, "session id");
-  } catch (error) {
-    throw new CoordinationError(
-      "coordination.invalid-session-id",
-      `session id ${JSON.stringify(value)} is not a safe path component: ${errorMessage(error)}`,
-      { session_id: value },
-    );
-  }
-  return value;
+  return assertSafeSessionId(value, "session id");
 }
 
 /* ------------------------------------------------------------------------ *
@@ -6383,12 +6366,12 @@ function assertPrepareRecoveryFileAuthority(harnessRoot: string): void {
  * never overwritten (`invalid-request`), and the envelope is the only file the
  * recovery ever creates.
  */
-function createRecoveryEnvelope(session: CoordinationSession): { path: string; created: boolean } {
+function createRecoveryEnvelope(session: CoordinationSession): { path: string; created: boolean; bytes: string } {
   const path = sessionFilePath(session.harness_root, session.workflow_id, session.role, session.session_id);
   const expected = `${JSON.stringify(session, null, 2)}\n`;
   try {
     const created = createSessionEnvelope(session);
-    return { path: canonicalTarget(created), created: true };
+    return { path: canonicalTarget(created), created: true, bytes: expected };
   } catch (error) {
     if (!(error instanceof CoordinationError) || error.code !== "coordination.session-mismatch") throw error;
     // Exclusive creation refused because the file exists. The only lawful
@@ -6408,7 +6391,45 @@ function createRecoveryEnvelope(session: CoordinationSession): { path: string; c
         { path },
       );
     }
-    return { path: canonicalTarget(path), created: false };
+    return { path: canonicalTarget(path), created: false, bytes: expected };
+  }
+}
+
+let prepareRecoveryEnvelopeGapForTest: (() => void) | undefined;
+
+/**
+ * Test-only hook observing the window between the recovery's exclusive envelope
+ * creation and its final compass recheck (the commit CAS). Mirrors
+ * `setCompleteStandaloneMutateGapForTest`: a concurrent compass edit inside that
+ * window can only be injected deterministically from the inside.
+ */
+export function setPrepareRecoveryEnvelopeGapForTest(callback: (() => void) | undefined): void {
+  prepareRecoveryEnvelopeGapForTest = callback;
+}
+
+/**
+ * Reclaim the ONE envelope this operation created, and only while it still
+ * holds the exact bytes this call wrote (`§3.3`). `created` is a historical
+ * boolean: between the exclusive creation and this cleanup the path may have
+ * been replaced by a completely unrelated role/session file, and unlinking it
+ * would destroy somebody else's credential. The check is no-follow (`lstat`),
+ * so a symlink planted at the path is left alone too, and a file whose bytes
+ * changed since creation is never deleted — the caller's own failure is what
+ * surfaces, with the replacement untouched.
+ */
+function reclaimRecoveryEnvelope(path: string, bytes: string): void {
+  let current: string;
+  try {
+    if (!lstatSync(path).isFile()) return;
+    current = readFileSync(path, "utf8");
+  } catch {
+    return; // gone or unreadable: nothing of this operation's left to reclaim
+  }
+  if (current !== bytes) return;
+  try {
+    unlinkSync(path);
+  } catch {
+    /* the recovery failed; a leftover envelope is harmless but never trusted */
   }
 }
 
@@ -6685,6 +6706,7 @@ export async function recoverPrepareCoordinator(
       recovered_at: recoveredAt,
     };
     let envelope = "";
+    let envelopeBytes = "";
     let created = false;
     // The envelope is created INSIDE this locked section and the snapshot
     // commit is the atomic binding step. A failure between them is not a
@@ -6693,7 +6715,25 @@ export async function recoverPrepareCoordinator(
     try {
       const made = createRecoveryEnvelope(session);
       envelope = made.path;
+      envelopeBytes = made.bytes;
       created = made.created;
+      prepareRecoveryEnvelopeGapForTest?.();
+      // The reviewed compass must STILL be the bytes this call inspected when
+      // the recovery lands: the snapshot write lock does not lock the compass
+      // file, so a concurrent compass edit during the envelope creation above
+      // would otherwise be accepted under a stale review while the audit
+      // recorded a version that was no longer current. Same dual-CAS recheck
+      // the Prepare amendment performs immediately before its commit; a change
+      // reclaims only this operation's envelope and refuses without snapshot
+      // mutation.
+      const rechecked = readRecoveryCompass(harnessRoot, snapshot);
+      if (prepareVersionDigest(rechecked.version) !== prepareVersionDigest(compass.version)) {
+        throw recoveryRefusal(
+          "stale",
+          `compass ${compass.path} changed while this recovery was being applied (${compass.version} \u2192 ${rechecked.version}) \u2014 re-read the recovery view and review again`,
+          { path: compass.path, expected: compass.version, actual: rechecked.version },
+        );
+      }
       const next: WorkflowSnapshot = {
         ...snapshot,
         updated_at: nowIso(),
@@ -6707,7 +6747,7 @@ export async function recoverPrepareCoordinator(
       };
       await commitSnapshot(harnessRoot, workflowId, snapshotPath, next);
     } catch (error) {
-      if (created && envelope !== "") dropSessionEnvelope(envelope);
+      if (created && envelope !== "" && envelopeBytes !== "") reclaimRecoveryEnvelope(envelope, envelopeBytes);
       throw error;
     }
     const written = readArtifactBytes(snapshotPath);
@@ -6800,7 +6840,7 @@ function recoveryText(value: unknown, field: string): string {
   return value;
 }
 
-/** The stop assertion: a non-empty list of non-empty session ids. */
+/** The stop assertion: a non-empty list of public session ids. */
 function recoveryStopList(value: unknown): string[] {
   if (!Array.isArray(value) || value.length === 0) {
     throw recoveryRefusal(
@@ -6815,6 +6855,19 @@ function recoveryStopList(value: unknown): string[] {
       throw recoveryRefusal("invalid-request", "every stoppedSessionIds entry must be a non-empty session id", {
         actual: entry ?? null,
       });
+    }
+    // Every entry is hashed into the request digest, persisted in the immutable
+    // audit and echoed in refusals, so it must be a PUBLIC session id under the
+    // same single-safe-component/length rule an acquired identity obeys — an
+    // arbitrary string (credential-like or path/payload text) is never stored.
+    try {
+      assertSafeSessionId(entry, "stoppedSessionIds entry");
+    } catch (error) {
+      throw recoveryRefusal(
+        "invalid-request",
+        `every stoppedSessionIds entry must be a safe public session id \u2014 ${errorMessage(error)}`,
+        { actual: entry },
+      );
     }
     ids.push(entry);
   }

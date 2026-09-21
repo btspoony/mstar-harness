@@ -482,7 +482,7 @@ export { WorkflowSnapshotValidationError } from "./workflow.js";
 // tuple + scope validator every adapter and later DB consumer imports instead
 // of declaring a second shape.
 export type { ExecutionIdentity, ExecutionIdentityRole, ExecutionIdentityScope } from "./session-identity.js";
-export { validateExecutionIdentity } from "./session-identity.js";
+export { SESSION_ID_MAX_LENGTH, assertSafeSessionId, validateExecutionIdentity } from "./session-identity.js";
 
 export {
   CoordinationError,

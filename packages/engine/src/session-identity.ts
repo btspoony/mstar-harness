@@ -19,9 +19,46 @@
  * inherited environment value as authorization.
  */
 import { CoordinationError, isNonEmptyString, isPlainObject } from "./coordination-write.js";
+import { assertSafePathComponent } from "./path.js";
 
 /** The two coordination seats a workflow's identity can name. */
 export type ExecutionIdentityRole = "coordinator" | "plan-pm";
+
+/** Longest session id the identity/envelope contract accepts. */
+export const SESSION_ID_MAX_LENGTH = 128;
+
+/**
+ * Validate one PUBLIC session id — the single rule every route shares. A session
+ * id names the coordination envelope's file, so it must be one safe path
+ * component of at most `SESSION_ID_MAX_LENGTH` characters; the same rule
+ * protects the recovery stop assertion, whose entries are hashed into the
+ * request digest, persisted in the immutable audit and echoed in refusals.
+ *
+ * Throws `coordination.invalid-session-id`; `what` names the field in the
+ * message so each caller reports its own input.
+ */
+export function assertSafeSessionId(value: unknown, what = "session id"): string {
+  if (!isNonEmptyString(value)) {
+    throw new CoordinationError("coordination.invalid-session-id", `${what} is required`, { session_id: value ?? null });
+  }
+  if (value.length > SESSION_ID_MAX_LENGTH) {
+    throw new CoordinationError(
+      "coordination.invalid-session-id",
+      `${what} is longer than ${SESSION_ID_MAX_LENGTH} characters: ${JSON.stringify(value)}`,
+      { session_id: value, max_length: SESSION_ID_MAX_LENGTH },
+    );
+  }
+  try {
+    assertSafePathComponent(value, what);
+  } catch (error) {
+    throw new CoordinationError(
+      "coordination.invalid-session-id",
+      `${what} ${JSON.stringify(value)} is not a safe path component: ${error instanceof Error ? error.message : String(error)}`,
+      { session_id: value },
+    );
+  }
+  return value;
+}
 
 /**
  * One acquired identity: provenance + workflow/role/plan scope + session id.
