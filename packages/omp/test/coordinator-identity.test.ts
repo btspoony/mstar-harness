@@ -101,6 +101,7 @@ describe("prerequisite identity — coordinator identity adapter input", () => {
         coordinator: true,
         workflowId: "wf-a",
         harnessDir: "/repo/main/.mstar",
+        source: "host",
         cwd: "/repo/main",
         sessionId: "native-session-a",
       },

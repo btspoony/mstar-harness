@@ -63,7 +63,7 @@ import {
   type PreparedCoordination,
   type RowCoordination,
 } from "./coordination-write.js";
-import { validateExecutionIdentity } from "./session-identity.js";
+import { validateExecutionIdentity, type ExecutionIdentity } from "./session-identity.js";
 import {
   IMPLEMENTED_OPERATIONS,
   allowedOperations,
@@ -217,7 +217,19 @@ export type CoordinationSession = {
  */
 export type BindPlanSessionInput =
   | { scope: PlanScopeInput; cwd: string; sessionId?: string }
-  | { coordinator: true; workflowId: string; harnessDir?: string; cwd: string; sessionId?: string }
+  | {
+      coordinator: true;
+      workflowId: string;
+      harnessDir?: string;
+      /**
+       * Provenance the adapter states for the acquired identity (§3.1). A
+       * managed host bootstrap states `host`; a plain local operator or an
+       * engine-local call is `local`. Unknown values are refused, never coerced.
+       */
+      source?: "host" | "local";
+      cwd: string;
+      sessionId?: string;
+    }
   | { resumePath: string; cwd: string };
 
 /** One artifact read: payload plus the byte version it was read at. */
@@ -1535,15 +1547,23 @@ async function bindCoordinatorSession(
   workflowId: string,
   harnessDir?: string,
   sessionId?: string,
+  source?: "host" | "local",
 ): Promise<CoordinationResult> {
   const harnessRoot = requireProcessRoot(cwd, harnessDir);
   safePlanId(workflowId, "workflowId");
   // The shared adapter-only validator is the one refusal vocabulary: a missing
-  // id is `identity-missing` here, not a silently generated UUID fallback.
-  validateExecutionIdentity(
-    { harnessRoot, workflowId, role: "coordinator", planId: null, sessionId: isNonEmptyString(sessionId) ? sessionId : "" },
-    { workflowId, role: "coordinator", planId: null },
-  );
+  // id is `identity-missing` here, not a silently generated UUID fallback. The
+  // canonical root is supplied separately (never an identity member); the
+  // provenance defaults to `local` because a direct engine call is a plain
+  // local cooperative call — a managed host adapter states `host` explicitly.
+  const identity: ExecutionIdentity = {
+    source: source ?? "local",
+    sessionId: isNonEmptyString(sessionId) ? sessionId : "",
+    workflowId,
+    role: "coordinator",
+    planId: null,
+  };
+  validateExecutionIdentity(identity, { workflowId, role: "coordinator", planId: null });
   const snapshotPath = snapshotPathOf(harnessRoot, workflowId);
   assertSnapshotPath(harnessRoot, workflowId, snapshotPath);
 
@@ -1752,12 +1772,12 @@ export async function bindPlanSession(input: BindPlanSessionInput): Promise<Coor
     return resumeBoundSession(input.resumePath);
   }
   if ("coordinator" in input) {
-    assertExactKeys(input, ["coordinator", "workflowId", "harnessDir", "cwd", "sessionId"], "bind coordinator input");
+    assertExactKeys(input, ["coordinator", "workflowId", "harnessDir", "source", "cwd", "sessionId"], "bind coordinator input");
     if (input.coordinator !== true) throw invalidInput("`coordinator` is only meaningful as true");
     if (!isNonEmptyString(input.workflowId)) throw invalidInput("workflowId is required");
     requireCwd(input.cwd);
     const sessionId = safeSessionId(input.sessionId);
-    return bindCoordinatorSession(input.cwd, input.workflowId, input.harnessDir, sessionId);
+    return bindCoordinatorSession(input.cwd, input.workflowId, input.harnessDir, sessionId, input.source);
   }
   assertExactKeys(input, ["scope", "cwd", "sessionId"], "bind plan input");
   if (!isPlainObject(input.scope)) throw invalidInput("a plan bind requires a scope");

@@ -58,6 +58,8 @@ export type CoordinatorBindFn = (input: {
   coordinator: true;
   workflowId: string;
   harnessDir: string;
+  /** The provenance this host adapter states for the acquired identity (§3.1). */
+  source: "host" | "local";
   cwd: string;
   sessionId: string;
 }) => Promise<CoordinationResult>;
@@ -142,12 +144,15 @@ export async function bindCoordinatorIdentity(
   }
   const harnessRoot = facts.harnessRoot;
 
+  // The identity is the §3.1 tuple: provenance, scope and the host-derived
+  // native id. The canonical root stays a separately supplied value (it is the
+  // `harnessDir` the engine resolves and compares) — never an identity member.
   const identity: ExecutionIdentity = {
-    harnessRoot,
+    source: "host",
+    sessionId: facts.sessionId,
     workflowId,
     role: "coordinator",
     planId: null,
-    sessionId: facts.sessionId,
   };
   try {
     validateExecutionIdentity(identity, { workflowId, role: "coordinator", planId: null });
@@ -160,6 +165,7 @@ export async function bindCoordinatorIdentity(
       coordinator: true,
       workflowId,
       harnessDir: harnessRoot,
+      source: "host",
       cwd: facts.cwd,
       sessionId: facts.sessionId,
     });

@@ -743,6 +743,9 @@ function bindInputOf(options: PlanCliOptions): BindPlanSessionInput {
     return {
       coordinator: true,
       workflowId: requireFlag(workflow, "--workflow", "bind", "workflow-id"),
+      // This form is a plain local operator bootstrap, so the adapter states
+      // `local` provenance rather than leaving it to be inferred.
+      source: "local",
       ...(harness !== undefined ? { harnessDir: harness } : {}),
       ...(sessionId !== undefined ? { sessionId } : {}),
       cwd,

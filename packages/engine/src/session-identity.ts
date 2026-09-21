@@ -1,14 +1,18 @@
 /**
- * Adapter-only execution identity (prerequisite contract §3.1).
+ * Adapter-only execution identity (prerequisite contract §3.1 / phase2b
+ * execution contract §3.1).
  *
- * The tuple `(canonical harness root, workflowId, role, planId, native/local
- * sessionId)` is how one adapter hands an **already acquired** identity to the
- * engine. It is never a model-request field: nothing here reads the global
- * environment, the latest workflow or a path name to choose it. A canonical
- * control-harness root is carried in the tuple and compared by the caller at
- * the adapter boundary — a different root is an *addressing* error (a different
- * control harness), not a malformed tuple, so `validateExecutionIdentity`
- * deliberately does not compare it.
+ * The tuple `(source, sessionId, workflowId, role, planId)` is how one adapter
+ * hands an **already acquired** identity to the engine. It is never a
+ * model-request field: nothing here reads the global environment, the latest
+ * workflow or a path name to choose it. `source` is the adapter's provenance —
+ * `host` for a native host session, `local` for an engine-created local
+ * launcher or a plain local operator.
+ *
+ * A canonical control-harness root is **not** a member of this tuple: it is
+ * supplied separately and compared at the adapter boundary — a different root
+ * is an *addressing* error (a different control harness), not a malformed
+ * identity.
  *
  * The whole point of this module is the negative: an identity is acquired, and
  * a missing one refuses. It never synthesizes an id and never accepts an
@@ -19,13 +23,16 @@ import { CoordinationError, isNonEmptyString, isPlainObject } from "./coordinati
 /** The two coordination seats a workflow's identity can name. */
 export type ExecutionIdentityRole = "coordinator" | "plan-pm";
 
-/** One acquired identity: canonical root + workflow/role/plan scope + session id. */
+/**
+ * One acquired identity: provenance + workflow/role/plan scope + session id.
+ * This is the §3.1 type SSOT the DB session task imports — not a second shape.
+ */
 export type ExecutionIdentity = Readonly<{
-  harnessRoot: string;
+  source: "host" | "local";
+  sessionId: string;
   workflowId: string;
   role: ExecutionIdentityRole;
   planId: string | null;
-  sessionId: string;
 }>;
 
 /** The scope an identity is validated against (the workflow/role/plan it addresses). */
@@ -39,13 +46,18 @@ function isRole(value: unknown): value is ExecutionIdentityRole {
   return value === "coordinator" || value === "plan-pm";
 }
 
+function isSource(value: unknown): value is "host" | "local" {
+  return value === "host" || value === "local";
+}
+
 /**
  * Validate one adapter-supplied identity against the scope it addresses.
  *
  * Refuses (never repairs) a missing/blank session id or workflow id, a missing
- * canonical root, a non-coordination role, a coordinator carrying a plan scope,
- * a plan-pm without one, and any workflow/role/plan disagreement with `scope`.
- * Canonical root equality is the caller's explicit check, not this function's.
+ * or unknown provenance source, a non-coordination role, a coordinator carrying
+ * a plan scope, a plan-pm without one, and any workflow/role/plan disagreement
+ * with `scope`. Canonical-root equality is the caller's explicit check, not
+ * this function's: the root is not a member of the identity.
  */
 export function validateExecutionIdentity(identity: ExecutionIdentity, scope: ExecutionIdentityScope): void {
   if (!isPlainObject(identity)) {
@@ -53,11 +65,23 @@ export function validateExecutionIdentity(identity: ExecutionIdentity, scope: Ex
   }
   const value = identity as unknown as Record<string, unknown>;
 
-  if (!isNonEmptyString(value.harnessRoot) || !isNonEmptyString(value.workflowId)) {
+  if (!isSource(value.source)) {
+    // An absent provenance is identity-missing; a present but unknown value is
+    // identity-mismatch. Neither is ever coerced to a default.
+    const missing = value.source === undefined || value.source === null;
+    throw new CoordinationError(
+      missing ? "coordination.identity-missing" : "coordination.identity-mismatch",
+      missing
+        ? "the execution identity carries no provenance source \u2014 an adapter states `host` or `local`, and it is never inferred"
+        : `the execution identity source ${JSON.stringify(value.source)} is not \`host\` or \`local\``,
+      { source: value.source },
+    );
+  }
+  if (!isNonEmptyString(value.workflowId)) {
     throw new CoordinationError(
       "coordination.identity-missing",
-      "the execution identity carries no canonical harness root or workflow id",
-      { harness_root: value.harnessRoot, workflow_id: value.workflowId },
+      "the execution identity carries no workflow id",
+      { workflow_id: value.workflowId },
     );
   }
   if (!isNonEmptyString(value.sessionId)) {
