@@ -9,12 +9,20 @@
  * another plan's basename, a foreign root and a same-basename file in an
  * unrelated directory all refuse.
  *
- * Two input forms are accepted — a canonical absolute path, or a path relative
- * to the harness root. There is no fallback search and no second base: the
- * repository-relative spelling `.mstar/plans/<id>.md` resolves against the
- * harness root and therefore refuses naturally, which is the point (a stored
- * relative pointer would otherwise be reinterpreted later against another
- * base).
+ * Two input forms are accepted — a canonical absolute path, or a normalized
+ * path relative to the harness root. There is no fallback search and no second
+ * base: the repository-relative spelling `.mstar/plans/<id>.md` resolves
+ * against the harness root and therefore refuses naturally, which is the point
+ * (a stored relative pointer would otherwise be reinterpreted later against
+ * another base).
+ *
+ * Acceptance is therefore two boundaries, not one: the spelling itself must be
+ * normalized (no `.`/`..` segments) and a relative one may not traverse out of
+ * the harness root, *and* the resolved real file must equal the canonical
+ * configured target. The target equality alone is not sufficient — a `..`
+ * spelling can normalize back onto `PLAN_DIR/<id>.md`, and a relative escape
+ * can reach an external configured plan root that the contract only admits as
+ * absolute input.
  *
  * `{PLAN_DIR}` comes from the existing configured-root resolver
  * (`path.ts#resolvePlanDir`), so a `.mstarc` `[config] plan_dir` declaration
@@ -27,7 +35,7 @@
  * `coordination.prepare-amendment.invalid-plan` vocabulary.
  */
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, normalize, sep } from "node:path";
 import { canonicalTarget } from "./coordination-write.js";
 import { assertSafePathComponent, canonicalizeNearestExisting, resolvePlanDir } from "./path.js";
 
@@ -132,10 +140,12 @@ type PointerForm = "canonical-absolute" | "harness-relative";
 /**
  * Resolve a caller-supplied plan pointer to the one registered plan file.
  *
- * Accepts a canonical absolute path or a harness-root-relative path. The
- * resolved real file must be exactly `{PLAN_DIR}/<planId>.md` and must declare
- * that same `plan_id`; anything else refuses with the received form, the base it
- * was resolved against, the expected canonical target and the permitted forms.
+ * Accepts a canonical (normalized) absolute path or a normalized
+ * harness-root-relative path. The spelling must be normalized and a relative
+ * one must stay inside the harness root; the resolved real file must then be
+ * exactly `{PLAN_DIR}/<planId>.md` and must declare that same `plan_id`.
+ * Anything else refuses with the received form, the base it was resolved
+ * against, the expected canonical target and the permitted forms.
  */
 export function resolveRegisteredPlanFile(input: RegisteredPlanFileInput): RegisteredPlanFile {
   const { harnessRoot, planId, file } = input;
@@ -146,7 +156,10 @@ export function resolveRegisteredPlanFile(input: RegisteredPlanFileInput): Regis
   const planDir = canonicalizeNearestExisting(resolvePlanDir(harnessRoot));
   const expected = join(planDir, `${planId}.md`);
   const form: PointerForm = isAbsolute(file) ? "canonical-absolute" : "harness-relative";
-  const permitted = [`canonical absolute path ${expected}`, `harness-relative path resolved against ${base}`];
+  const permitted = [
+    `canonical absolute path ${expected}`,
+    `normalized harness-relative path resolved against ${base}`,
+  ];
   const refusal = (code: PlanPathRefusalCode, message: string, extra: Record<string, unknown> = {}): PlanPathError =>
     new PlanPathError(code, message, { received: file, form, base, expected, permitted, ...extra });
 
@@ -169,9 +182,32 @@ export function resolveRegisteredPlanFile(input: RegisteredPlanFileInput): Regis
 
   // One resolution, no fallback: an absolute spelling is canonicalized as
   // given, a relative one against the harness root only. `canonicalTarget`
-  // collapses `..` and resolves symlinked ancestors, so traversal and an alias
-  // escape both land outside `expected` and refuse on the equality check.
+  // collapses `..` and resolves symlinked ancestors, so the equality check
+  // below is what refuses an alias escape or a traversal that lands anywhere
+  // other than `expected`.
   const candidate = canonicalTarget(form === "canonical-absolute" ? file : join(base, file));
+
+  // Target equality alone is not acceptance, though: a `..` spelling can come
+  // back onto `expected` (`plans/../plans/<id>.md`), and a relative escape can
+  // reach an external configured plan root that §4 only admits as absolute
+  // input. So the accepted spelling must itself be normalized, and a relative
+  // one must stay inside the harness root — checked before the equality so no
+  // traversal can pass merely by landing on the right file.
+  const normalized = normalize(file);
+  if (normalized !== file) {
+    throw refusal(
+      "plan-path.invalid-pointer",
+      `plan ${planId} file ${JSON.stringify(file)} is not a normalized ${form === "canonical-absolute" ? "absolute" : "harness-relative"} spelling (${JSON.stringify(normalized)}); permitted forms are ${permitted.join(" or ")}`,
+      { plan_id: planId, actual: candidate, normalized },
+    );
+  }
+  if (form === "harness-relative" && (normalized === ".." || normalized.startsWith(`..${sep}`))) {
+    throw refusal(
+      "plan-path.invalid-pointer",
+      `plan ${planId} file ${JSON.stringify(file)} traverses out of the harness root ${base}; permitted forms are ${permitted.join(" or ")}`,
+      { plan_id: planId, actual: candidate, normalized },
+    );
+  }
   if (candidate !== expected) {
     throw refusal(
       "plan-path.invalid-pointer",

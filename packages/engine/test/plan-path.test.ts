@@ -5,11 +5,13 @@
  *
  * Every fixture is a temporary harness root: no live `.mstar` state is read or
  * written. Cases cover both accepted input forms (canonical absolute /
- * harness-relative), the default and configured plan roots (including an
- * external plan root), and each refusal class the contract names — the
- * repository-relative spelling, foreign root, traversal, symlink escape,
- * missing file, directory, another plan's basename, a conflicting/unmatching
- * declaration, and a fenced example that only looks like a declaration.
+ * normalized harness-relative), the default and configured plan roots
+ * (including an external plan root), and each refusal class the contract names —
+ * the repository-relative spelling, a non-normalized or escaping traversal
+ * (including one that normalizes back onto the registered file and one toward
+ * an external plan root), foreign root, symlink escape, missing file,
+ * directory, another plan's basename, a conflicting/unmatching declaration, and
+ * a fenced example that only looks like a declaration.
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -215,6 +217,54 @@ describe("resolveRegisteredPlanFile — refusals", () => {
     expect(refusal.code).toBe("plan-path.invalid-pointer");
     expect(refusal.details.base).toBe(realpathSync(harness));
     expect(refusal.details.actual).toBe(join(realpathSync(root), "plans", `${PLAN_ID}.md`));
+  });
+
+  test("refuses a traversal spelling that normalizes back onto the registered plan file", () => {
+    const root = tmpRoot();
+    const harness = join(root, "harness");
+    const planDir = join(harness, "plans");
+    const planPath = writePlan(planDir, `${PLAN_ID}.md`, planMarkdown(PLAN_ID));
+
+    // The exact file the accepted relative form resolves to, reached by a `..`
+    // spelling: the canonical target equality passes, so only the
+    // normalized-form/traversal boundary can refuse this.
+    const refusal = refusalOf(() =>
+      resolveRegisteredPlanFile({ harnessRoot: harness, planId: PLAN_ID, file: `plans/../plans/${PLAN_ID}.md` }),
+    );
+
+    expect(refusal.code).toBe("plan-path.invalid-pointer");
+    expect(refusal.details.form).toBe("harness-relative");
+    expect(refusal.details.received).toBe(`plans/../plans/${PLAN_ID}.md`);
+    expect(refusal.details.expected).toBe(realpathSync(planPath));
+    expect(refusal.details.actual).toBe(realpathSync(planPath));
+    expect(
+      resolveRegisteredPlanFile({ harnessRoot: harness, planId: PLAN_ID, file: `plans/${PLAN_ID}.md` }).planPath,
+    ).toBe(realpathSync(planPath));
+  });
+
+  test("refuses a relative traversal toward an external configured plan root", () => {
+    const root = tmpRoot();
+    const harness = join(root, "harness");
+    const external = join(root, "external-plans");
+    mkdirSync(harness, { recursive: true });
+    writeFileSync(join(harness, ".mstarc"), `[config]\nplan_dir=${external}\n`, "utf8");
+    const planPath = writePlan(external, `${PLAN_ID}.md`, planMarkdown(PLAN_ID));
+
+    const escape = `../external-plans/${PLAN_ID}.md`;
+    const refusal = refusalOf(() =>
+      resolveRegisteredPlanFile({ harnessRoot: harness, planId: PLAN_ID, file: escape }),
+    );
+
+    expect(refusal.code).toBe("plan-path.invalid-pointer");
+    expect(refusal.details.received).toBe(escape);
+    // The escape really does reach the external plan file — its canonical target
+    // is the expected one — so the traversal boundary, not a target mismatch, is
+    // what refuses. The absolute form of that same file is accepted.
+    expect(refusal.details.actual).toBe(realpathSync(planPath));
+    expect(refusal.details.expected).toBe(realpathSync(planPath));
+    expect(resolveRegisteredPlanFile({ harnessRoot: harness, planId: PLAN_ID, file: planPath }).planPath).toBe(
+      realpathSync(planPath),
+    );
   });
 
   test("refuses a symlink at the registered path that escapes the plan root", () => {
