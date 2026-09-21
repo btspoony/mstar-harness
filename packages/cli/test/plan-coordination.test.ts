@@ -2565,11 +2565,15 @@ describe("prepare coordinator recovery — CLI transport", () => {
 
     // A stop entry that is not a public session id (`a/b` would name another
     // path component) is decided as usage before any engine I/O, so the value is
-    // never hashed into a request digest or persisted in the audit.
-    for (const badStopped of ["a/b", "a".repeat(129), "with space"]) {
+    // never hashed into a request digest or persisted in the audit — and no
+    // output (JSON payload or stderr) repeats the rejected value itself.
+    for (const badStopped of ["a/b", "../creds/secret.json", `ghp_${"a".repeat(140)}`, "with space"]) {
       const malformed = runCli(recoverCoordinatorArgs(fixture, tokens, { stopped: [badStopped] }), fixture.root);
-      expect(`${badStopped}: ${malformed.exitCode}`).toBe(`${badStopped}: 2`);
+      const label = `${badStopped.slice(0, 12)}:`;
+      expect(`${label} ${malformed.exitCode}`).toBe(`${label} 2`);
       expect(jsonOf(malformed)).toMatchObject({ ok: false, operation: "recover-coordinator", code: "usage" });
+      expect(malformed.stdout).not.toContain(badStopped);
+      expect(malformed.stderr).not.toContain(badStopped);
     }
 
     // A nonexistent absolute envelope is a runtime refusal (exit 1), never a

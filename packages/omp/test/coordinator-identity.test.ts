@@ -367,13 +367,14 @@ describe("prerequisite identity — coordinator recovery adapter input", () => {
     // Each entry is forwarded to the engine AND echoed by it, so the host
     // applies the one shared public-session-id rule (single safe path component,
     // bounded length) itself: an arbitrary string never reaches the request
-    // digest, the audit record or a diagnostic.
-    for (const entry of ["a/b", "../escape", "a".repeat(129), "with space"]) {
+    // digest, the audit record or a diagnostic — and the refusal, which IS a
+    // diagnostic, never repeats the rejected value.
+    for (const entry of ["a/b", "../creds/secret.json", `ghp_${"a".repeat(140)}`, "with space"]) {
       const result = await recoverCoordinatorIdentity(recoverRequest({ stoppedSessionIds: [entry] }), FACTS, engine.deps);
-      expect(`${JSON.stringify(entry)}: ${result.ok} ${result.code}`).toBe(
-        `${JSON.stringify(entry)}: false invalid-input`,
-      );
-      expect(result.text).toContain("stoppedSessionIds entry");
+      const label = `${JSON.stringify(entry).slice(0, 12)}:`;
+      expect(`${label} ${result.ok} ${result.code}`).toBe(`${label} false invalid-input`);
+      expect(result.text).toContain("stoppedSessionIds");
+      expect(JSON.stringify(result)).not.toContain(entry);
     }
     expect(engine.recovered).toHaveLength(0);
   });

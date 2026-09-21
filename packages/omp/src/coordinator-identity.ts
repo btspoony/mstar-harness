@@ -466,11 +466,18 @@ export async function recoverCoordinatorIdentity(
   // safe PUBLIC session id (single path component, bounded length) under the
   // one shared rule — an arbitrary string is refused here, before the engine
   // call, instead of being hashed into the audit or returned in a diagnostic.
-  for (const entry of stopped) {
+  // The refusal is a public diagnostic itself, so it reports the rule and the
+  // entry's POSITION and never repeats the rejected value.
+  for (const [index, entry] of stopped.entries()) {
     try {
       assertSafeSessionId(entry, "stoppedSessionIds entry");
-    } catch (error) {
-      return refuse("invalid-input", messageOf(error), { workflowId: context.workflowId });
+    } catch {
+      return refuse(
+        "invalid-input",
+        "every stoppedSessionIds entry must be a public session id \u2014 a single safe path component " +
+          "([A-Za-z0-9._-]+) of at most 128 characters; this adapter does not echo the rejected value",
+        { workflowId: context.workflowId, index },
+      );
     }
   }
   const stoppedSessionIds = stopped as readonly string[];

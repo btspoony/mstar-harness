@@ -6840,33 +6840,44 @@ function recoveryText(value: unknown, field: string): string {
   return value;
 }
 
-/** The stop assertion: a non-empty list of public session ids. */
+/**
+ * The stop assertion: a non-empty list of PUBLIC session ids, validated before
+ * anything is hashed, stored or echoed.
+ *
+ * A rejected entry is NEVER repeated in the refusal. These refusals are a public
+ * projection (§5: public ids, canonical paths and codes), so a credential-like
+ * or path-like value must not travel into a JSON payload, a log line or a
+ * caller's transcript: the refusal keeps the stable code and the rule and
+ * reports only the entry's POSITION (and, for a string, its length).
+ */
 function recoveryStopList(value: unknown): string[] {
   if (!Array.isArray(value) || value.length === 0) {
     throw recoveryRefusal(
       "unauthorized",
       "stoppedSessionIds must name at least the prior holder this recovery replaces \u2014 an empty stop assertion is never an authorization",
-      { actual: value ?? null },
+      { actual: Array.isArray(value) ? "array" : value === undefined ? null : typeof value },
     );
   }
   const ids: string[] = [];
-  for (const entry of value) {
+  for (const [index, entry] of value.entries()) {
     if (!isNonEmptyString(entry)) {
       throw recoveryRefusal("invalid-request", "every stoppedSessionIds entry must be a non-empty session id", {
-        actual: entry ?? null,
+        index,
+        actual: typeof entry,
       });
     }
-    // Every entry is hashed into the request digest, persisted in the immutable
-    // audit and echoed in refusals, so it must be a PUBLIC session id under the
-    // same single-safe-component/length rule an acquired identity obeys — an
+    // Every entry is hashed into the request digest and persisted in the
+    // immutable audit, so it must be a PUBLIC session id under the same
+    // single-safe-component/length rule an acquired identity obeys — an
     // arbitrary string (credential-like or path/payload text) is never stored.
     try {
       assertSafeSessionId(entry, "stoppedSessionIds entry");
-    } catch (error) {
+    } catch {
       throw recoveryRefusal(
         "invalid-request",
-        `every stoppedSessionIds entry must be a safe public session id \u2014 ${errorMessage(error)}`,
-        { actual: entry },
+        "every stoppedSessionIds entry must be a public session id \u2014 a single safe path component " +
+          "([A-Za-z0-9._-]+) of at most 128 characters; the rejected value is not echoed in this diagnostic",
+        { index, length: entry.length },
       );
     }
     ids.push(entry);

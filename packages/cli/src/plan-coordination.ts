@@ -1162,8 +1162,14 @@ function requireStopAssertion(raw: string | string[] | undefined): string[] {
     }
     try {
       assertSafeSessionId(entry, "--stopped entry");
-    } catch (error) {
-      throw new SddScriptError(`${error instanceof Error ? error.message : String(error)}`, 2);
+    } catch {
+      // The usage failure is printed (JSON on stdout, otherwise stderr), so the
+      // rejected value is never repeated in it: the message states the rule.
+      throw new SddScriptError(
+        "usage: workflow recover-coordinator --stopped takes public session ids \u2014 a single safe path " +
+          "component ([A-Za-z0-9._-]+) of at most 128 characters; the rejected value is not echoed",
+        2,
+      );
     }
     stopped.push(entry);
   }

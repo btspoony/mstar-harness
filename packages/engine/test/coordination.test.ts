@@ -5215,17 +5215,20 @@ describe("prepare coordinator recovery", () => {
     expect(recoveryAuditOf(fixture)).toEqual([]);
   }, 60000);
 
-  test("prepare coordinator recovery refuses a malformed stop-list entry before hashing or storing it", async () => {
+  test("prepare coordinator recovery refuses a malformed stop-list entry before hashing, storing or echoing it", async () => {
     const fixture = makePrepareFixture();
     await ensurePrepareCoordinator(fixture);
     const tokens = await recoveryViewOf(fixture);
     const before = protectedBytes(fixture);
 
-    // A stop entry is hashed into the request digest, persisted in the
-    // immutable audit and echoed in refusals: only safe public session ids are
-    // acceptable, never an arbitrary string (credential-like or path text).
-    for (const entry of ["a/b", "../escape", "a".repeat(129), "with space", ""]) {
-      const refusal = await prepareRefusalOf(() =>
+    // A stop entry is hashed into the request digest and persisted in the
+    // immutable audit: only public session ids are acceptable, never an
+    // arbitrary string (path-like or credential-like). The refusal is itself a
+    // PUBLIC diagnostic (§5), so it must not repeat the rejected value — the
+    // caller learns the rule and the entry's position/length instead.
+    const rejected = ["a/b", "../creds/secret.json", `ghp_${"a".repeat(140)}`, "with space"];
+    for (const entry of rejected) {
+      const failure = await failureOf(() =>
         recoverPrepareCoordinator(
           recoveryInputOf(
             fixture,
@@ -5234,12 +5237,41 @@ describe("prepare coordinator recovery", () => {
           ),
         ),
       );
-      expect(`${JSON.stringify(entry)}: ${refusal.code}`).toBe(
-        `${JSON.stringify(entry)}: coordination.identity-recovery.invalid-request`,
-      );
+      if (!(failure instanceof CoordinationError)) throw failure;
+      const label = `${JSON.stringify(entry).slice(0, 12)}:`;
+      expect(`${label} ${failure.code}`).toBe(`${label} coordination.identity-recovery.invalid-request`);
+      expect(failure.message).toContain("public session id");
+      expect(JSON.stringify({ message: failure.message, details: failure.details })).not.toContain(entry);
+      expect(failure.details).toMatchObject({ index: 1, length: entry.length });
       expect(protectedBytes(fixture)).toEqual(before);
       expect(existsSync(coordinatorEnvelopeOf(fixture, RECOVERED_COORDINATOR_ID))).toBe(false);
     }
+
+    // An empty entry is refused by the same field rule (it is not a session id
+    // at all), and a non-array stop assertion reports its SHAPE rather than the
+    // value it was given.
+    const blank = await prepareRefusalOf(() =>
+      recoverPrepareCoordinator(
+        recoveryInputOf(
+          fixture,
+          { snapshot: tokens.snapshotVersion, compass: tokens.compassVersion },
+          { stoppedSessionIds: [FIXTURE_COORDINATOR_ID, ""] },
+        ),
+      ),
+    );
+    expect(blank.code).toBe("coordination.identity-recovery.invalid-request");
+    const notAList = await prepareRefusalOf(() =>
+      recoverPrepareCoordinator(
+        recoveryInputOf(
+          fixture,
+          { snapshot: tokens.snapshotVersion, compass: tokens.compassVersion },
+          { stoppedSessionIds: "credential-like-secret" },
+        ),
+      ),
+    );
+    expect(notAList.code).toBe("coordination.identity-recovery.unauthorized");
+    expect(JSON.stringify(notAList.details)).not.toContain("credential-like-secret");
+    expect(protectedBytes(fixture)).toEqual(before);
   }, 60000);
 
   test("prepare coordinator recovery never runs the JSON writer under an active execution authority", async () => {
