@@ -132,6 +132,8 @@ import {
   COORDINATOR_TOOL_NAME,
   bindCoordinatorIdentity,
   classifyCoordinatorShellCall,
+  recoverCoordinatorIdentity,
+  showCoordinatorRecovery,
   type CoordinatorIdentityFacts,
 } from "../coordinator-identity";
 import type {
@@ -1465,10 +1467,33 @@ export default function modelHandoff(pi: ExtensionAPI): void {
     name: COORDINATOR_TOOL_NAME,
     label: "Coordinator identity",
     description:
-      'Morning Star coordinator identity bootstrap. `{operation:"bind"}` binds this host session as the coordinator of the explicitly named workflow, using the native session id and the canonical control harness root derived from the host \u2014 never from the call. The input accepts only operation and workflowId: no session id, root, caller role, authority flag or credential path is accepted. This is the only supported managed bootstrap route; a `plan bind --coordinator` attempted through the shell is refused with a redirect to this tool. Existing residency, registration-commit and duplicate-holder gates are unchanged.',
-    parameters: z.object({ operation: z.enum(["bind"]), workflowId: z.string() }).strict(),
+      'Morning Star coordinator identity entry. `{operation:"bind"}` binds this host session as the coordinator of the explicitly named workflow. `{operation:"show-recovery"}` reads the recorded coordinator, both byte versions and the Prepare verdict of one workflow without writing. `{operation:"recover"}` replaces a recorded coordinator binding the prior owner can no longer authenticate, under the audited Prepare-only guards and with an explicit stop assertion. Every operation uses the native session id and the canonical control harness root derived from the host \u2014 never from the call. No operation accepts a session id, root, caller role, authority flag, credential path or force flag; the prior holder and its envelope come from the engine\'s stored binding. This is the only supported managed bootstrap and recovery route; a `plan bind --coordinator` attempted through the shell is refused with a redirect to this tool.',
+    parameters: z
+      .union([
+        z.object({ operation: z.literal("bind"), workflowId: z.string() }).strict(),
+        z.object({ operation: z.literal("show-recovery"), workflowId: z.string() }).strict(),
+        z
+          .object({
+            operation: z.literal("recover"),
+            workflowId: z.string(),
+            expectedSnapshotVersion: z.string(),
+            expectedCompassVersion: z.string(),
+            operationId: z.string(),
+            reason: z.string(),
+            authorizationRef: z.string(),
+            stoppedSessionIds: z.array(z.string()),
+          })
+          .strict(),
+      ])
+      .describe("Coordinator operation: bind | show-recovery | recover"),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const result = await bindCoordinatorIdentity(params, coordinatorFacts(ctx));
+      const facts = coordinatorFacts(ctx);
+      const result =
+        params.operation === "bind"
+          ? await bindCoordinatorIdentity(params, facts)
+          : params.operation === "show-recovery"
+            ? await showCoordinatorRecovery(params, facts)
+            : await recoverCoordinatorIdentity(params, facts);
       return {
         content: [{ type: "text", text: result.text }],
         details: { mstarCoordinator: result.details, ok: result.ok },

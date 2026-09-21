@@ -36,6 +36,7 @@ import {
   readExecutionSource,
   readPlanCoordination,
   readSessionEnvelope,
+  recoverPrepareCoordinator,
   resolveProcessHarnessDir,
   setArtifactStore,
   showPrepareWorkflow,
@@ -49,6 +50,7 @@ import {
   type PrepareWorkflowPatch,
   type PrepareWorkflowResult,
   type ProgressCoordinationRequest,
+  type RecoverPrepareCoordinatorResult,
   type ResidualInput,
   type TerminalDisposition,
 } from "@mstar-harness/engine";
@@ -176,6 +178,7 @@ const OPERATION_OUTCOME_NAMES: Record<string, string> = {
 const WORKFLOW_VERBS: Record<string, true> = {
   "show-prepare": true,
   "amend-prepare": true,
+  "recover-coordinator": true,
 };
 
 /** The scoped coordination families this module registers, with their verbs. */
@@ -1137,6 +1140,61 @@ function printWorkflowView(verb: string, result: PrepareWorkflowResult, json: bo
 }
 
 /**
+ * The `recover-coordinator` stop assertion (prerequisite contract §3.3): at
+ * least one prior session id, each a non-empty token. An absent or empty
+ * `--stopped` is a usage refusal (exit 2), never a request the engine answers
+ * with `unauthorized` — the operator states the attestation up front.
+ */
+function requireStopAssertion(raw: string | string[] | undefined): string[] {
+  const values = raw === undefined ? [] : Array.isArray(raw) ? raw : [raw];
+  const stopped = values.filter((entry) => typeof entry === "string" && entry.trim() !== "");
+  if (stopped.length === 0) {
+    throw new SddScriptError(
+      "usage: workflow recover-coordinator requires --stopped <session-id...> naming the recorded coordinator " +
+        "(and any other prior holder) attested stopped or reloaded",
+      2,
+    );
+  }
+  return stopped;
+}
+
+/**
+ * The recovery success payload (prerequisite contract §3.3): the two public
+ * session ids, the replay identity, the versions and the time. The coordinator
+ * envelope path is coordinator-owned transport — printed here because the
+ * operator that asked for the replacement is the session that will continue
+ * with it — while no envelope body, credential or `reason` text is echoed.
+ */
+function printRecovery(result: RecoverPrepareCoordinatorResult, json: boolean): void {
+  const receipt = result.recovery;
+  if (json) {
+    console.log(
+      JSON.stringify({
+        ok: true,
+        operation: "recover-coordinator",
+        workflow_id: receipt.workflowId,
+        prior_session_id: receipt.priorSessionId,
+        session_id: receipt.sessionId,
+        operation_id: receipt.operationId,
+        replay: receipt.replay,
+        snapshot_version: receipt.snapshotVersion,
+        compass_version: receipt.compassVersion,
+        session_file: result.session_file,
+      }),
+    );
+    return;
+  }
+  console.error(
+    pc.green(
+      `workflow recover-coordinator: coordinator of ${receipt.workflowId} is now session ${receipt.sessionId}` +
+        ` (was ${receipt.priorSessionId}, operation ${receipt.operationId}${receipt.replay ? ", replayed" : ""})`,
+    ),
+  );
+  console.error(`workflow recover-coordinator: session file ${result.session_file}`);
+  console.error(`workflow recover-coordinator: snapshot ${receipt.snapshotVersion}, compass ${receipt.compassVersion}`);
+}
+
+/**
  * `mstar workflow` — the workflow-level Prepare amendment verbs (spec § New API
  * and CLI). They live in this module because they are the same scoped
  * coordination transport: one coordinator envelope, one engine call, the same
@@ -1147,9 +1205,11 @@ export function registerWorkflowCommands(program: Command): void {
   const workflow = program
     .command("workflow")
     .description(
-      "Workflow-level Prepare amendment: read the current snapshot/compass byte versions and the admission view " +
-        "(`show-prepare`), then apply one approved structural delta (`amend-prepare`) (engine-backed; JSON on stdout " +
-        "with --json, diagnostics on stderr; exit 0 ok, 1 refusal, 2 usage)",
+      "Workflow-level Prepare amendment and coordinator recovery: read the current snapshot/compass byte versions " +
+        "and the admission view (`show-prepare`), apply one approved structural delta (`amend-prepare`), or replace " +
+        "a recorded coordinator binding with an explicitly acquired session under the audited recovery guards " +
+        "(`recover-coordinator`) (engine-backed; JSON on stdout with --json, diagnostics on stderr; exit 0 ok, " +
+        "1 refusal, 2 usage)",
     )
     .exitOverride();
 
@@ -1219,6 +1279,85 @@ export function registerWorkflowCommands(program: Command): void {
           }),
           json,
         );
+      }),
+    );
+
+  // `mstar workflow recover-coordinator` — the JSON Prepare coordinator
+  // recovery (prerequisite contract §3.3). A NEW verb, never an alias for the
+  // existing active-store recovery (`execution-workflow.ts`, which needs a full
+  // execution token and a stop attestation): this one is file/JSON only,
+  // Prepare-only, and narrows the effect to the top-level coordinator binding
+  // plus one audit record. The prior envelope is named EXPLICITLY here (the
+  // operator route), while the host resolves it from the engine's own view; the
+  // replacement identity is stated just as explicitly (`--session-id`) because
+  // the engine never generates one.
+  workflow
+    .command("recover-coordinator")
+    .description(
+      "Replace the recorded coordinator binding of one Prepare workflow with an explicitly acquired session " +
+        "(audited, JSON/Prepare-only): the prior envelope must still authenticate the recorded binding, the prior " +
+        "holder must be named as stopped, and both byte versions from `workflow show-prepare` are required. No " +
+        "lease transfer, no prepared-plan takeover, no force flag",
+    )
+    .option("--prior-session <path>", "Absolute path of the coordinator envelope the workflow records now")
+    .option("--session-id <id>", "Explicitly acquired id of the replacement coordinator session (never generated)")
+    .option("--expect-snapshot <sha256>", "Current snapshot byte version from `workflow show-prepare`")
+    .option("--expect-compass <sha256>", "Current compass byte version from `workflow show-prepare`")
+    .option("--operation-id <id>", "Caller-supplied id of this one recovery operation (the replay key)")
+    .option("--reason <text>", "Why the prior coordinator can no longer authenticate")
+    .option("--authorization-ref <ref>", "The operator's authorization reference for this replacement")
+    .option("--stopped <session-id...>", "Stopped/reloaded prior holder(s); must name the recorded coordinator")
+    .option("--json", "Machine-readable JSON on stdout")
+    .action(async (options: PlanCliOptions) =>
+      runVerb("recover-coordinator", options, {}, async (json) => {
+        // Every flag is validated before any engine I/O (exit 2): a malformed
+        // token, payload or missing stop assertion must never surface as a
+        // store refusal (exit 1).
+        const priorSessionPath = requireAbsolutePath(
+          options.priorSession as string | undefined,
+          "--prior-session",
+          "recover-coordinator",
+          "session-json-path",
+        );
+        const sessionId = requireFlag(options.sessionId as string | undefined, "--session-id", "recover-coordinator", "session-id");
+        const expectedSnapshotVersion = parsePrepareVersion(
+          options.expectSnapshot as string | undefined,
+          "--expect-snapshot",
+          "recover-coordinator",
+        );
+        const expectedCompassVersion = parsePrepareVersion(
+          options.expectCompass as string | undefined,
+          "--expect-compass",
+          "recover-coordinator",
+        );
+        const operationId = requireFlag(options.operationId as string | undefined, "--operation-id", "recover-coordinator", "operation-id");
+        const reason = requireFlag(options.reason as string | undefined, "--reason", "recover-coordinator", "reason");
+        const authorizationRef = requireFlag(
+          options.authorizationRef as string | undefined,
+          "--authorization-ref",
+          "recover-coordinator",
+          "authorization-reference",
+        );
+        const stoppedSessionIds = requireStopAssertion(options.stopped as unknown as string[] | undefined);
+        // The prior envelope is the address (its own root and workflow id), not
+        // a looked-up credential: every guard on it is the engine's, inside the
+        // lock, and it must still be the recorded binding.
+        const prior = readSessionEnvelope(priorSessionPath);
+        pinArtifactStoreRoot(prior.harness_root);
+        const result = await recoverPrepareCoordinator({
+          cwd: process.cwd(),
+          harnessDir: prior.harness_root,
+          identity: { source: "local", sessionId, workflowId: prior.workflow_id, role: "coordinator", planId: null },
+          priorSessionPath,
+          priorSessionId: prior.session_id,
+          expectedSnapshotVersion,
+          expectedCompassVersion,
+          operationId,
+          reason,
+          authorizationRef,
+          stoppedSessionIds,
+        });
+        printRecovery(result, json);
       }),
     );
 

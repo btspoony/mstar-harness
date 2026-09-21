@@ -2341,3 +2341,219 @@ describe("mstar plan — catalog pin", () => {
     expect(human.stderr).toContain("catalog.execution-pin-conflict");
   });
 });
+
+/* ------------------------------------------------------------------------ *
+ * `mstar workflow recover-coordinator` — JSON Prepare coordinator recovery
+ * (prerequisite contract §3.3)
+ * ------------------------------------------------------------------------ */
+
+/** The replacement coordinator identity the CLI cases state explicitly. */
+const CLI_RECOVERY_SESSION_ID = "recovered-cli-coordinator";
+
+/** The `workflow recover-coordinator` argv one case drives. */
+function recoverCoordinatorArgs(
+  fixture: PrepareFixture,
+  tokens: { snapshot: string; compass: string },
+  overrides: Record<string, unknown> = {},
+): string[] {
+  const flags: Array<[string, string | undefined]> = [
+    ["--prior-session", overrides.priorSession as string | undefined ?? fixture.coordinator],
+    ["--session-id", overrides.sessionId as string | undefined ?? CLI_RECOVERY_SESSION_ID],
+    ["--expect-snapshot", overrides.expectSnapshot as string | undefined ?? tokens.snapshot],
+    ["--expect-compass", overrides.expectCompass as string | undefined ?? tokens.compass],
+    ["--operation-id", overrides.operationId as string | undefined ?? "op-cli-recover-1"],
+  ];
+  if (overrides.omitReason !== true) {
+    flags.push(["--reason", (overrides.reason as string | undefined) ?? "the prior host session was cancelled"]);
+  }
+  flags.push(["--authorization-ref", (overrides.authorizationRef as string | undefined) ?? "PM-authorization-20260921"]);
+  const argv = ["workflow", "recover-coordinator"];
+  for (const [flag, value] of flags) {
+    if (value === undefined) continue;
+    argv.push(flag, value);
+  }
+  const stopped = overrides.stopped as string[] | undefined ?? ["fixture-coordinator"];
+  for (const id of stopped) argv.push("--stopped", id);
+  if (overrides.json !== false) argv.push("--json");
+  return argv;
+}
+
+/**
+ * The stored top-level `coordination` block of the CLI fixture's workflow,
+ * narrowed by `typeof` before any member is read (the snapshot JSON is
+ * `unknown` at this boundary).
+ */
+function cliCoordinationOf(fixture: PrepareFixture): Record<string, unknown> {
+  const coordination = readJson(fixture.snapshotPath).coordination;
+  // Narrowed above; the block is a plain object when present.
+  return typeof coordination === "object" && coordination !== null && !Array.isArray(coordination)
+    ? (coordination as Record<string, unknown>)
+    : {};
+}
+
+/** The stored coordinator binding of the CLI fixture's workflow. */
+function cliRecordedCoordinator(fixture: PrepareFixture): Record<string, unknown> {
+  const coordinator = cliCoordinationOf(fixture).coordinator;
+  return typeof coordinator === "object" && coordinator !== null && !Array.isArray(coordinator)
+    ? (coordinator as Record<string, unknown>)
+    : {};
+}
+
+/** The stored recovery audit of the CLI fixture's workflow. */
+function cliRecoveryAudit(fixture: PrepareFixture): Array<Record<string, unknown>> {
+  const recoveries = cliCoordinationOf(fixture).identity_recoveries;
+  return Array.isArray(recoveries) ? (recoveries as Array<Record<string, unknown>>) : [];
+}
+
+/** The workflow's plan rows as stored on disk (the preservation witness). */
+function cliPlanRowsOf(fixture: PrepareFixture): unknown {
+  return readJson(fixture.snapshotPath).plans;
+}
+
+describe("prepare coordinator recovery — CLI transport", () => {
+  test("prepare coordinator recovery travels through `workflow recover-coordinator` and the old reference refuses", () => {
+    const fixture = makePrepareFixture();
+    const view = jsonOf(runCli(showPrepareArgs(fixture), fixture.root));
+    const tokens = { snapshot: String(view.snapshot_version), compass: String(view.compass_version) };
+    const peerBefore = readText(fixture.peerSnapshotPath);
+    const rowsBefore = JSON.stringify(cliPlanRowsOf(fixture));
+
+    const recovered = runCli(recoverCoordinatorArgs(fixture, tokens), fixture.root);
+
+    expect(recovered.exitCode).toBe(0);
+    const payload = jsonOf(recovered);
+    expect(payload.ok).toBe(true);
+    expect(payload.operation).toBe("recover-coordinator");
+    expect(payload.workflow_id).toBe(PREPARE_WORKFLOW);
+    expect(payload.prior_session_id).toBe(FIXTURE_COORDINATOR_ID);
+    expect(payload.session_id).toBe(CLI_RECOVERY_SESSION_ID);
+    expect(payload.operation_id).toBe("op-cli-recover-1");
+    expect(payload.replay).toBe(false);
+    expect(payload.session_file).toBe(
+      join(fixture.harness, "workflows", PREPARE_WORKFLOW, "sessions", `coordinator-${CLI_RECOVERY_SESSION_ID}.json`),
+    );
+
+    // Authoritative state, read from disk — never from the CLI's claim.
+    expect(cliRecordedCoordinator(fixture)).toMatchObject({ session_id: CLI_RECOVERY_SESSION_ID });
+    const audit = cliRecoveryAudit(fixture);
+    expect(audit).toHaveLength(1);
+    expect(audit[0]).toMatchObject({
+      operation_id: "op-cli-recover-1",
+      prior_session_id: FIXTURE_COORDINATOR_ID,
+      session_id: CLI_RECOVERY_SESSION_ID,
+      snapshot_version_before: tokens.snapshot,
+      compass_version: tokens.compass,
+    });
+    // Rows and the sibling workflow are untouched; the old envelope survives.
+    expect(JSON.stringify(cliPlanRowsOf(fixture))).toBe(rowsBefore);
+    expect(readText(fixture.peerSnapshotPath)).toBe(peerBefore);
+    expect(existsSync(fixture.coordinator)).toBe(true);
+
+    // The old reference is historical: the binding moved, so it refuses, while
+    // the replacement session is the live coordinator.
+    const oldRefused = runCli(showPrepareArgs(fixture), fixture.root);
+    expect(oldRefused.exitCode).toBe(1);
+    const oldPayload = jsonOf(oldRefused);
+    expect(oldPayload.operation).toBe("show-prepare");
+    expect(oldPayload.code).toBe("coordination.session-mismatch");
+    const live = runCli(
+      ["workflow", "show-prepare", "--session", String(payload.session_file), "--json"],
+      fixture.root,
+    );
+    expect(live.exitCode).toBe(0);
+    expect(jsonOf(live).allowed).toBe(true);
+
+    // An exact retry with the same reviewed tokens is a stable receipt.
+    const committedBytes = readText(fixture.snapshotPath);
+    const retry = runCli(recoverCoordinatorArgs(fixture, tokens), fixture.root);
+    expect(retry.exitCode).toBe(0);
+    expect(jsonOf(retry).replay).toBe(true);
+    expect(readText(fixture.snapshotPath)).toBe(committedBytes);
+    expect(cliRecoveryAudit(fixture)).toHaveLength(1);
+
+    // A changed request and an incomplete stop assertion both refuse with their
+    // own engine codes, exit 1, and no mutation — each against the CURRENT
+    // reviewed tokens, so the refusal is the guard's own and not a stale token.
+    const liveView = jsonOf(runCli(["workflow", "show-prepare", "--session", String(payload.session_file), "--json"], fixture.root));
+    const liveTokens = { snapshot: String(liveView.snapshot_version), compass: String(liveView.compass_version) };
+    const changedReason = runCli(
+      recoverCoordinatorArgs(fixture, liveTokens, { operationId: "op-cli-recover-1", reason: "another reason" }),
+      fixture.root,
+    );
+    expect(changedReason.exitCode).toBe(1);
+    expect(jsonOf(changedReason)).toMatchObject({ ok: false, code: "coordination.identity-recovery.operation-conflict", workflow_id: PREPARE_WORKFLOW });
+    // The operator addresses the binding the workflow records NOW and names
+    // somebody else as stopped: the engine authenticates the owner and then
+    // refuses the incomplete attestation.
+    const unauthorized = runCli(
+      recoverCoordinatorArgs(fixture, liveTokens, {
+        operationId: "op-cli-recover-3",
+        priorSession: String(payload.session_file),
+        sessionId: "another-coordinator",
+        stopped: ["somebody-else"],
+      }),
+      fixture.root,
+    );
+    expect(unauthorized.exitCode).toBe(1);
+    expect(jsonOf(unauthorized).code).toBe("coordination.identity-recovery.unauthorized");
+    expect(readText(fixture.snapshotPath)).toBe(committedBytes);
+    expect(cliRecoveryAudit(fixture)).toHaveLength(1);
+  }, 60000);
+
+  test("prepare coordinator recovery usage failures exit 2 without touching the workflow", () => {
+    const fixture = makePrepareFixture();
+    const view = jsonOf(runCli(showPrepareArgs(fixture), fixture.root));
+    const tokens = { snapshot: String(view.snapshot_version), compass: String(view.compass_version) };
+    const before = readText(fixture.snapshotPath);
+
+    // No stop assertion, no reason, and a relative prior-session path are usage
+    // errors (exit 2) decided before any engine I/O.
+    const noStop = runCli(
+      [
+        "workflow",
+        "recover-coordinator",
+        "--prior-session",
+        fixture.coordinator,
+        "--session-id",
+        CLI_RECOVERY_SESSION_ID,
+        "--expect-snapshot",
+        tokens.snapshot,
+        "--expect-compass",
+        tokens.compass,
+        "--operation-id",
+        "op-cli-usage-1",
+        "--reason",
+        "cancelled",
+        "--authorization-ref",
+        "PM-1",
+        "--json",
+      ],
+      fixture.root,
+    );
+    expect(noStop.exitCode).toBe(2);
+    expect(jsonOf(noStop)).toMatchObject({ ok: false, operation: "recover-coordinator", code: "usage" });
+
+    const noReason = runCli(recoverCoordinatorArgs(fixture, tokens, { omitReason: true }), fixture.root);
+    expect(noReason.exitCode).toBe(2);
+    expect(jsonOf(noReason)).toMatchObject({ ok: false, operation: "recover-coordinator", code: "usage" });
+
+    const relative = runCli(
+      recoverCoordinatorArgs(fixture, tokens, { priorSession: ".mstar/workflows/x/sessions/coordinator-a.json" }),
+      fixture.root,
+    );
+    expect(relative.exitCode).toBe(2);
+    expect(jsonOf(relative).code).toBe("usage");
+
+    // A nonexistent absolute envelope is a runtime refusal (exit 1), never a
+    // usage error, and it still writes nothing.
+    const missing = runCli(
+      recoverCoordinatorArgs(fixture, tokens, { priorSession: join(fixture.root, "no-such-session.json") }),
+      fixture.root,
+    );
+    expect(missing.exitCode).toBe(1);
+    expect(jsonOf(missing).code).toBe("coordination.session-not-found");
+
+    expect(readText(fixture.snapshotPath)).toBe(before);
+    expect(existsSync(join(fixture.harness, "workflows", PREPARE_WORKFLOW, "sessions", `coordinator-${CLI_RECOVERY_SESSION_ID}.json`))).toBe(false);
+  }, 60000);
+});

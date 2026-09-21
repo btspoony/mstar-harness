@@ -2383,3 +2383,190 @@ describe("catalog registration — the journal joins this producer to the catalo
     });
   });
 });
+
+/* ------------------------------------------------------------------------ *
+ * JSON Prepare coordinator recovery — the schema owner and the ordinary writers
+ * (prerequisite contract §3.3)
+ * ------------------------------------------------------------------------ */
+
+/** One well-formed audit record (the eleven required fields, frozen). */
+function recoveryEntry(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    operation_id: "op-recover-1",
+    request_hash: "a".repeat(64),
+    workflow_id: "00000819-workflow-engine-core",
+    prior_session_id: "prior-session",
+    session_id: "recovered-session",
+    authorization_ref: "PM-authorization-20260921",
+    reason: "the prior host session was cancelled and cannot authenticate",
+    stopped_session_ids: ["prior-session"],
+    snapshot_version_before: `sha256:${"b".repeat(64)}`,
+    compass_version: `sha256:${"c".repeat(64)}`,
+    recovered_at: "2026-09-21T10:00:00.000Z",
+    ...overrides,
+  };
+}
+
+/** A running iteration snapshot carrying a recovered coordinator and its audit. */
+function recoveredSnapshot(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return validSnapshot({
+    status: "running",
+    ended_at: undefined,
+    phase: "phase-1-prepare",
+    coordination: {
+      coordinator: { session_id: "recovered-session", session_file: "/fixture/recovered-session.json", bound_at: "2026-09-21T10:00:00.000Z" },
+      identity_recoveries: [recoveryEntry()],
+    },
+    ...overrides,
+  });
+}
+
+describe("prepare coordinator recovery audit schema", () => {
+  test("prepare coordinator recovery audit entries are validated strictly by the snapshot schema owner", () => {
+    expect(validateWorkflowSnapshot(recoveredSnapshot()).ok).toBe(true);
+
+    const cases: ReadonlyArray<{ name: string; document: Record<string, unknown>; code: string }> = [
+      {
+        name: "a missing operation id",
+        document: recoveredSnapshot({
+          coordination: { coordinator: { session_id: "s", session_file: "/fixture/s.json", bound_at: "2026-09-21" }, identity_recoveries: [recoveryEntry({ operation_id: "" })] },
+        }),
+        code: "coordination.recovery.field",
+      },
+      {
+        name: "a request hash that is not a bare sha256 digest",
+        document: recoveredSnapshot({
+          coordination: { coordinator: { session_id: "s", session_file: "/fixture/s.json", bound_at: "2026-09-21" }, identity_recoveries: [recoveryEntry({ request_hash: "sha256:short" })] },
+        }),
+        code: "coordination.recovery.hash",
+      },
+      {
+        name: "a malformed version token",
+        document: recoveredSnapshot({
+          coordination: { coordinator: { session_id: "s", session_file: "/fixture/s.json", bound_at: "2026-09-21" }, identity_recoveries: [recoveryEntry({ compass_version: "not-a-version" })] },
+        }),
+        code: "coordination.recovery.version",
+      },
+      {
+        name: "an empty stop assertion",
+        document: recoveredSnapshot({
+          coordination: { coordinator: { session_id: "s", session_file: "/fixture/s.json", bound_at: "2026-09-21" }, identity_recoveries: [recoveryEntry({ stopped_session_ids: [] })] },
+        }),
+        code: "coordination.recovery.stopped",
+      },
+      {
+        name: "an unexpected audit field",
+        document: recoveredSnapshot({
+          coordination: { coordinator: { session_id: "s", session_file: "/fixture/s.json", bound_at: "2026-09-21" }, identity_recoveries: [recoveryEntry({ envelope: "leaked" })] },
+        }),
+        code: "coordination.recovery.field",
+      },
+      {
+        name: "an audit that is not an array",
+        document: recoveredSnapshot({
+          coordination: { coordinator: { session_id: "s", session_file: "/fixture/s.json", bound_at: "2026-09-21" }, identity_recoveries: recoveryEntry() },
+        }),
+        code: "coordination.snapshot.field",
+      },
+      {
+        name: "an unexpected coordination-block key",
+        document: recoveredSnapshot({
+          coordination: { coordinator: { session_id: "s", session_file: "/fixture/s.json", bound_at: "2026-09-21" }, recoveries: [] },
+        }),
+        code: "coordination.snapshot.field",
+      },
+    ];
+    for (const recoveryCase of cases) {
+      const result = validateWorkflowSnapshot(recoveryCase.document);
+      expect(`${recoveryCase.name}: ${result.ok ? "accepted" : violationsOf(result).includes(recoveryCase.code)}`).toBe(
+        `${recoveryCase.name}: true`,
+      );
+    }
+  });
+
+  test("prepare coordinator recovery audit survives the ordinary writers and cannot be dropped through them", async () => {
+    const root = tmpRoot("workflow-recovery-audit-");
+    const dir = join(root, "workflows", "00000819-workflow-engine-core");
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, WORKFLOW_SNAPSHOT_FILE);
+    const document = recoveredSnapshot();
+    writeFileSync(path, `${JSON.stringify(document, null, 2)}\n`);
+    setArtifactStore(createFsStore(root));
+
+    // The reader accepts the audited document and hands it back unchanged.
+    const read = readWorkflowSnapshot(dir);
+    expect(read.snapshot.coordination?.identity_recoveries).toEqual([recoveryEntry()]);
+
+    const committedBytes = readFileSync(path, "utf8");
+    const version = artifactVersion(committedBytes);
+
+    // A generic snapshot replacement may neither drop nor rewrite the audit —
+    // and it may not add one either.
+    const rewrites: ReadonlyArray<{ name: string; document: Record<string, unknown> }> = [
+      {
+        name: "drops the whole audit",
+        document: recoveredSnapshot({
+          coordination: { coordinator: { session_id: "recovered-session", session_file: "/fixture/recovered-session.json", bound_at: "2026-09-21T10:00:00.000Z" } },
+        }),
+      },
+      {
+        name: "rewrites the recorded reason",
+        document: recoveredSnapshot({
+          coordination: {
+            coordinator: { session_id: "recovered-session", session_file: "/fixture/recovered-session.json", bound_at: "2026-09-21T10:00:00.000Z" },
+            identity_recoveries: [recoveryEntry({ reason: "a different reason" })],
+          },
+        }),
+      },
+      {
+        name: "appends an entry of its own",
+        document: recoveredSnapshot({
+          coordination: {
+            coordinator: { session_id: "recovered-session", session_file: "/fixture/recovered-session.json", bound_at: "2026-09-21T10:00:00.000Z" },
+            identity_recoveries: [recoveryEntry(), recoveryEntry({ operation_id: "op-forged" })],
+          },
+        }),
+      },
+    ];
+    for (const rewrite of rewrites) {
+      const code = await refusalCode(() =>
+        writeWorkflowSnapshot(rewrite.document as never, dir, {
+          expectedVersion: version,
+          sessionPath: "/fixture/recovered-session.json",
+        }),
+      );
+      expect(`${rewrite.name}: ${code}`).toBe(`${rewrite.name}: coordination.direct-write-refused`);
+      expect(readFileSync(path, "utf8")).toBe(committedBytes);
+    }
+
+    // The one delta the ordinary writer owns (phase + updated_at) keeps the
+    // whole coordination block, audit included, from disk.
+    await writeWorkflowSnapshot(
+      recoveredSnapshot({ phase: "phase-2-execute", updated_at: "2026-09-21T11:00:00.000Z" }) as never,
+      dir,
+      { expectedVersion: version, sessionPath: "/fixture/recovered-session.json" },
+    );
+    const afterProjection = readWorkflowSnapshot(dir).snapshot;
+    expect(afterProjection.phase).toBe("phase-2-execute");
+    expect(afterProjection.coordination?.identity_recoveries).toEqual([recoveryEntry()]);
+
+    // A lifecycle close preserves the audit as well: recovering a coordinator
+    // never becomes an eraser of its own provenance.
+    const closed = await closeWorkflow("00000819-workflow-engine-core", dir, {
+      endedAt: "2026-09-22T09:00:00.000Z",
+      sessionPath: "/fixture/recovered-session.json",
+    });
+    expect(closed.status).toBe("completed");
+    expect(closed.coordination?.identity_recoveries).toEqual([recoveryEntry()]);
+    expect(readWorkflowSnapshot(dir).snapshot.coordination?.identity_recoveries).toEqual([recoveryEntry()]);
+
+    // A malformed audit never reaches a writer through the reader at all.
+    writeFileSync(path, JSON.stringify(recoveredSnapshot({
+      coordination: {
+        coordinator: { session_id: "recovered-session", session_file: "/fixture/recovered-session.json", bound_at: "2026-09-21T10:00:00.000Z" },
+        identity_recoveries: [recoveryEntry({ recovered_at: "" })],
+      },
+    })));
+    expect(() => readWorkflowSnapshot(dir)).toThrow(/coordination\.recovery\.field/);
+  }, 30000);
+});

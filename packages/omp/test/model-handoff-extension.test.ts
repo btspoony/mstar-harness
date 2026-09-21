@@ -2319,3 +2319,266 @@ describe("coordinator notice bar titles", () => {
     expect(codeOf(await harness.runTool(completionParams(artifacts)))).toBe("not-pending");
   }, 60_000);
 });
+
+/* ---------------------------------------------- prepare coordinator recovery --- */
+
+const RECOVERY_PRIOR_SESSION = "cancelled-host-session";
+
+/**
+ * A running Prepare iteration that RECORDS a coordinator the host can no longer
+ * authenticate — `phase-1-prepare`, an empty plan set, a reviewed locked compass
+ * and the prior coordinator's envelope on disk. This is the state the blocked
+ * iteration is in after its host handoff was cancelled: a binding exists, and the
+ * session that holds it can no longer pass authorization.
+ */
+function createRecoverableWorkflow(repo: ControlRepo, workflowId: string, priorSessionId: string): void {
+  const workflowDir = join(repo.harness, "workflows", workflowId);
+  const sessionsDir = join(workflowDir, "sessions");
+  mkdirSync(sessionsDir, { recursive: true });
+  const priorEnvelope = join(sessionsDir, `coordinator-${priorSessionId}.json`);
+  writeJson(join(workflowDir, "snapshot.json"), {
+    schema_version: 1,
+    id: workflowId,
+    type: "iteration",
+    status: "running",
+    phase: "phase-1-prepare",
+    started_at: "2026-09-16",
+    updated_at: "2026-09-16T00:00:00.000Z",
+    compass_ref: `iterations/${workflowId}/delivery-compass.md`,
+    branch: { base: "main", integration: repo.integrationBranch, target: "main" },
+    plans: [],
+    coordination: {
+      coordinator: { session_id: priorSessionId, session_file: priorEnvelope, bound_at: "2026-09-16T00:00:00.000Z" },
+    },
+  });
+  writeJson(priorEnvelope, {
+    schema_version: 1,
+    role: "coordinator",
+    session_id: priorSessionId,
+    workflow_id: workflowId,
+    harness_root: repo.harness,
+  });
+  mkdirSync(join(repo.harness, "iterations", workflowId), { recursive: true });
+  writeFileSync(
+    join(repo.harness, "iterations", workflowId, "delivery-compass.md"),
+    ["---", `iteration_id: ${workflowId}`, "status: locked", "plans:", "  - 20260921-recovery-fixture", "---", "", "# Compass", ""].join("\n"),
+  );
+  writeRegister(repo.harness, [repo.siblingId, workflowId]);
+}
+
+/** The recovery request body a reviewed caller sends (tokens filled per case). */
+function recoveryToolParams(
+  workflowId: string,
+  view: Record<string, unknown>,
+  priorSessionId: string,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    operation: "recover",
+    workflowId,
+    expectedSnapshotVersion: view.snapshotVersion,
+    expectedCompassVersion: view.compassVersion,
+    operationId: "op-host-recover-1",
+    reason: "the host handoff of the prior session was cancelled",
+    authorizationRef: "PM-authorization-20260921",
+    stoppedSessionIds: [priorSessionId],
+    ...overrides,
+  };
+}
+
+/** The recorded coordinator binding of one fixture workflow. */
+function recordedCoordinatorOfWorkflow(repo: ControlRepo, workflowId: string): Record<string, unknown> {
+  const snapshot = coordinatorSnapshotOf(repo, workflowId);
+  const coordination = snapshot.coordination;
+  const coordinator = isPlainFixtureRecord(coordination) ? coordination.coordinator : undefined;
+  return isPlainFixtureRecord(coordinator) ? coordinator : {};
+}
+
+/** The stored recovery audit of one fixture workflow. */
+function recoveryAuditOfWorkflow(repo: ControlRepo, workflowId: string): Array<Record<string, unknown>> {
+  const snapshot = coordinatorSnapshotOf(repo, workflowId);
+  const coordination = snapshot.coordination;
+  const recoveries = isPlainFixtureRecord(coordination) ? coordination.identity_recoveries : undefined;
+  return Array.isArray(recoveries) ? (recoveries as Array<Record<string, unknown>>) : [];
+}
+
+/** Plain-object narrowing for the fixture JSON (no inline cast at member access). */
+function isPlainFixtureRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+describe("prerequisite identity — registered coordinator recovery tool handler", () => {
+  test("prepare coordinator recovery replaces a cancelled binding through the real tool handler", async () => {
+    const repo = buildControlRepo();
+    const workflowId = "fixture-recovery-iteration";
+    createRecoverableWorkflow(repo, workflowId, RECOVERY_PRIOR_SESSION);
+    setArtifactStore(createFsStore(repo.harness));
+    const harness = await createHarness({
+      cwd: repo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(repo.main),
+    });
+    const hostId = harness.sessionManager.getSessionId();
+    const snapshotPath = join(repo.harness, "workflows", workflowId, "snapshot.json");
+    const priorEnvelope = join(repo.harness, "workflows", workflowId, "sessions", `coordinator-${RECOVERY_PRIOR_SESSION}.json`);
+    const priorBytes = readFileSync(priorEnvelope, "utf8");
+
+    // The host reads the view first: the recorded owner and both reviewed tokens.
+    const view = await harness.runCoordinatorTool({ operation: "show-recovery", workflowId });
+    expect(view.isError).toBe(false);
+    expect(view.details.ok).toBe(true);
+    const details = view.details.mstarCoordinator as Record<string, unknown>;
+    expect(details.priorSessionId).toBe(RECOVERY_PRIOR_SESSION);
+    expect(details.allowed).toBe(true);
+    expect(JSON.stringify(details)).not.toContain("sessions/");
+
+    const recovered = await harness.runCoordinatorTool(recoveryToolParams(workflowId, details, RECOVERY_PRIOR_SESSION));
+    expect(recovered.isError).toBe(false);
+    const receipt = recovered.details.mstarCoordinator as Record<string, unknown>;
+    expect(receipt).toMatchObject({
+      workflowId,
+      priorSessionId: RECOVERY_PRIOR_SESSION,
+      sessionId: hostId,
+      operationId: "op-host-recover-1",
+      replay: false,
+    });
+
+    // The engine's own state: the binding moved to THIS host session, the new
+    // envelope is the role-scoped one, and the prior envelope is retained.
+    expect(recordedCoordinatorOfWorkflow(repo, workflowId).session_id).toBe(hostId);
+    const newEnvelope = join(repo.harness, "workflows", workflowId, "sessions", `coordinator-${hostId}.json`);
+    // The engine stores the CANONICAL path (macOS tmpdirs resolve through
+    // /private), so the assertion is on the path contract, not on the spelling.
+    const recordedFile = String(recordedCoordinatorOfWorkflow(repo, workflowId).session_file);
+    expect(recordedFile.endsWith(`/sessions/coordinator-${hostId}.json`)).toBe(true);
+    expect(existsSync(newEnvelope)).toBe(true);
+    expect(JSON.parse(readFileSync(newEnvelope, "utf8"))).toMatchObject({ role: "coordinator", session_id: hostId });
+    expect(readFileSync(priorEnvelope, "utf8")).toBe(priorBytes);
+
+    const audit = recoveryAuditOfWorkflow(repo, workflowId);
+    expect(audit).toHaveLength(1);
+    expect(Object.keys(audit[0]!).sort()).toEqual([
+      "authorization_ref",
+      "compass_version",
+      "operation_id",
+      "prior_session_id",
+      "reason",
+      "recovered_at",
+      "request_hash",
+      "session_id",
+      "snapshot_version_before",
+      "stopped_session_ids",
+      "workflow_id",
+    ]);
+    expect(audit[0]).toMatchObject({
+      operation_id: "op-host-recover-1",
+      prior_session_id: RECOVERY_PRIOR_SESSION,
+      session_id: hostId,
+      stopped_session_ids: [RECOVERY_PRIOR_SESSION],
+      snapshot_version_before: details.snapshotVersion,
+      compass_version: details.compassVersion,
+    });
+
+    // An exact retry is a stable receipt: the host learns it already holds the
+    // binding instead of re-running the write.
+    const committedBytes = readFileSync(snapshotPath, "utf8");
+    const retry = await harness.runCoordinatorTool(recoveryToolParams(workflowId, details, RECOVERY_PRIOR_SESSION));
+    expect(retry.isError).toBe(false);
+    expect((retry.details.mstarCoordinator as Record<string, unknown>).replay).toBe(true);
+    expect(readFileSync(snapshotPath, "utf8")).toBe(committedBytes);
+    expect(recoveryAuditOfWorkflow(repo, workflowId)).toHaveLength(1);
+  }, 90000);
+
+  test("prepare coordinator recovery refuses forged, unstoppable and identity-less calls without writing", async () => {
+    const repo = buildControlRepo();
+    const workflowId = "fixture-recovery-guard-iteration";
+    createRecoverableWorkflow(repo, workflowId, RECOVERY_PRIOR_SESSION);
+    setArtifactStore(createFsStore(repo.harness));
+    const harness = await createHarness({
+      cwd: repo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(repo.main),
+    });
+    const hostId = harness.sessionManager.getSessionId();
+    const snapshotPath = join(repo.harness, "workflows", workflowId, "snapshot.json");
+    const before = readFileSync(snapshotPath, "utf8");
+    const view = await harness.runCoordinatorTool({ operation: "show-recovery", workflowId });
+    const details = view.details.mstarCoordinator as Record<string, unknown>;
+
+    // The registered schema owns the union: an identity-shaped field is refused
+    // by the schema AND by the raw handler's own boundary.
+    for (const forged of [
+      { ...recoveryToolParams(workflowId, details, RECOVERY_PRIOR_SESSION), sessionId: hostId },
+      { ...recoveryToolParams(workflowId, details, RECOVERY_PRIOR_SESSION), priorSessionPath: "/tmp/creds.json" },
+      { ...recoveryToolParams(workflowId, details, RECOVERY_PRIOR_SESSION), harnessRoot: "/elsewhere/.mstar" },
+      { ...recoveryToolParams(workflowId, details, RECOVERY_PRIOR_SESSION), force: true },
+    ]) {
+      expect({ forged, valid: harness.validateCoordinator(forged).success }).toEqual({ forged, valid: false });
+      const raw = await harness.runRawCoordinatorTool(forged);
+      expect({ forged, code: coordinatorCodeOf(raw) }).toEqual({ forged, code: "forbidden-field" });
+    }
+
+    // A request that omits a reviewed token is not recoverable at all: the
+    // registered schema refuses it and so does the raw handler.
+    const incomplete = {
+      operation: "recover",
+      workflowId,
+      operationId: "op-host-recover-x",
+      reason: "r",
+      authorizationRef: "a",
+      stoppedSessionIds: [RECOVERY_PRIOR_SESSION],
+    };
+    expect(harness.validateCoordinator(incomplete).success).toBe(false);
+    expect(coordinatorCodeOf(await harness.runRawCoordinatorTool(incomplete))).toBe("invalid-input");
+
+    // A stop assertion that does not name the recorded holder is not proof: the
+    // ENGINE refuses it (the host forwards the assertion verbatim, so the guard
+    // is the one evaluated against the binding under the snapshot lock).
+    const unstoppable = await harness.runCoordinatorTool(
+      recoveryToolParams(workflowId, details, RECOVERY_PRIOR_SESSION, {
+        operationId: "op-host-recover-2",
+        stoppedSessionIds: ["some-other-session"],
+      }),
+    );
+    expect(coordinatorCodeOf(unstoppable)).toBe("coordination.identity-recovery.unauthorized");
+
+    // A refusal through the engine keeps the engine's own code (a stale token is
+    // not a re-derivable identity and never becomes a success).
+    const stale = await harness.runCoordinatorTool(
+      recoveryToolParams(workflowId, details, RECOVERY_PRIOR_SESSION, {
+        operationId: "op-host-recover-3",
+        expectedSnapshotVersion: `sha256:${"0".repeat(64)}`,
+      }),
+    );
+    expect(coordinatorCodeOf(stale)).toBe("coordination.identity-recovery.stale");
+
+    // Leaf and identity-less host sessions cannot recover anything.
+    const taskSession = newSession(repo.main);
+    taskSession.appendSessionInit({ systemPrompt: "task", task: "scout", tools: ["read"], agent: "scout" });
+    const taskHarness = await createHarness({
+      cwd: repo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: taskSession,
+      mode: "json",
+    });
+    expect(coordinatorCodeOf(await taskHarness.runCoordinatorTool(recoveryToolParams(workflowId, details, RECOVERY_PRIOR_SESSION)))).toBe("leaf-session");
+
+    const idless = await createHarness({ cwd: repo.main, sessionDir: scratchDir("unused-"), sessionManager: newSession(repo.main) });
+    const manager = idless.sessionManager as unknown as { getSessionId: () => string };
+    const realGetSessionId = manager.getSessionId;
+    manager.getSessionId = () => "";
+    try {
+      expect(coordinatorCodeOf(await idless.runCoordinatorTool(recoveryToolParams(workflowId, details, RECOVERY_PRIOR_SESSION)))).toBe("identity-missing");
+    } finally {
+      manager.getSessionId = realGetSessionId;
+    }
+
+    // Nothing above moved the workflow or created an envelope.
+    expect(readFileSync(snapshotPath, "utf8")).toBe(before);
+    expect(existsSync(join(repo.harness, "workflows", workflowId, "sessions", `coordinator-${hostId}.json`))).toBe(false);
+    expect((await harness.runCoordinatorTool({ operation: "show-recovery", workflowId })).details.mstarCoordinator).toMatchObject({
+      priorSessionId: RECOVERY_PRIOR_SESSION,
+      allowed: true,
+    });
+  }, 120000);
+});

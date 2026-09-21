@@ -9,12 +9,17 @@
 import { describe, expect, test } from "bun:test";
 import {
   COORDINATOR_BIND_INPUT_KEYS,
+  COORDINATOR_RECOVER_INPUT_KEYS,
+  COORDINATOR_SHOW_RECOVERY_INPUT_KEYS,
   COORDINATOR_TOOL_NAME,
   bindCoordinatorIdentity,
   classifyCoordinatorShellCall,
+  recoverCoordinatorIdentity,
+  showCoordinatorRecovery,
   type CoordinatorIdentityFacts,
+  type CoordinatorRecoveryDeps,
 } from "../src/coordinator-identity";
-import type { CoordinationResult } from "@mstar-harness/engine";
+import type { CoordinationResult, RecoverPrepareCoordinatorResult } from "@mstar-harness/engine";
 
 const FACTS: CoordinatorIdentityFacts = {
   sessionId: "native-session-a",
@@ -150,5 +155,232 @@ describe("prerequisite identity — managed coordinator bind transport classifie
     expect(Object.keys(refused ?? {}).sort()).toEqual(["block", "reason"]);
     const untouched = classifyCoordinatorShellCall({ toolName: "bash", input: { command: "true" } });
     expect(untouched).toBeUndefined();
+  });
+});
+
+/* ---------------------------------------------- coordinator recovery adapter --- */
+
+/** The prior holder every recovery fixture records. */
+const PRIOR_SESSION = "cancelled-host-session";
+const SNAPSHOT_VERSION = `sha256:${"a".repeat(64)}`;
+const COMPASS_VERSION = `sha256:${"b".repeat(64)}`;
+
+/** Fake `show`/`recover`/`target` engine seams that record what the adapter derived. */
+function fakeRecovery(): {
+  shown: Array<Record<string, unknown>>;
+  recovered: Array<Record<string, unknown>>;
+  deps: CoordinatorRecoveryDeps;
+} {
+  const shown: Array<Record<string, unknown>> = [];
+  const recovered: Array<Record<string, unknown>> = [];
+  const deps: CoordinatorRecoveryDeps = {
+    show: async (input) => {
+      shown.push(input);
+      return {
+        workflowId: input.workflowId,
+        priorSessionId: PRIOR_SESSION,
+        snapshotVersion: SNAPSHOT_VERSION,
+        compassVersion: COMPASS_VERSION,
+        allowed: true,
+        blockers: [],
+      };
+    },
+    recover: async (input) => {
+      recovered.push(input);
+      return {
+        ok: true,
+        operation: "recover-coordinator",
+        outcome: "recovered",
+        session: {
+          schema_version: 1,
+          role: "coordinator",
+          session_id: input.identity.sessionId,
+          workflow_id: input.identity.workflowId,
+          harness_root: input.harnessDir,
+        },
+        session_file: "/repo/main/.mstar/workflows/wf-a/sessions/coordinator-native-session-a.json",
+        recovery: {
+          workflowId: input.identity.workflowId,
+          priorSessionId: input.priorSessionId,
+          sessionId: input.identity.sessionId,
+          operationId: input.operationId,
+          requestHash: "c".repeat(64),
+          replay: false,
+          snapshotVersion: SNAPSHOT_VERSION,
+          compassVersion: input.expectedCompassVersion,
+          recoveredAt: "2026-09-21T10:00:00.000Z",
+        },
+      } as unknown as RecoverPrepareCoordinatorResult;
+    },
+    target: ({ harnessRoot, workflowId }) => ({
+      ok: true,
+      target: {
+        priorSessionPath: `${harnessRoot}/workflows/${workflowId}/sessions/coordinator-${PRIOR_SESSION}.json`,
+        priorSessionId: PRIOR_SESSION,
+      },
+    }),
+  };
+  return { shown, recovered, deps };
+}
+
+/** One reviewed `recover` request (tokens and proof only). */
+function recoverRequest(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    operation: "recover",
+    workflowId: "wf-a",
+    expectedSnapshotVersion: SNAPSHOT_VERSION,
+    expectedCompassVersion: COMPASS_VERSION,
+    operationId: "op-1",
+    reason: "the prior host session was cancelled",
+    authorizationRef: "PM-authorization-1",
+    stoppedSessionIds: [PRIOR_SESSION],
+    ...overrides,
+  };
+}
+
+describe("prerequisite identity — coordinator recovery adapter input", () => {
+  test("prepare coordinator recovery operations accept only their documented keys", async () => {
+    expect([...COORDINATOR_SHOW_RECOVERY_INPUT_KEYS]).toEqual(["operation", "workflowId"]);
+    expect([...COORDINATOR_RECOVER_INPUT_KEYS]).toEqual([
+      "operation",
+      "workflowId",
+      "expectedSnapshotVersion",
+      "expectedCompassVersion",
+      "operationId",
+      "reason",
+      "authorizationRef",
+      "stoppedSessionIds",
+    ]);
+
+    for (const forged of [
+      { operation: "show-recovery", workflowId: "wf-a", sessionId: "attacker" },
+      { operation: "show-recovery", workflowId: "wf-a", root: "/elsewhere/.mstar" },
+      recoverRequest({ sessionId: "attacker" }),
+      recoverRequest({ priorSessionPath: "/tmp/creds.json" }),
+      recoverRequest({ priorSessionId: PRIOR_SESSION }),
+      recoverRequest({ harnessRoot: "/elsewhere/.mstar" }),
+      recoverRequest({ force: true }),
+    ]) {
+      const engine = fakeRecovery();
+      const show = forged.operation === "show-recovery";
+      const result = show
+        ? await showCoordinatorRecovery(forged, FACTS, engine.deps)
+        : await recoverCoordinatorIdentity(forged, FACTS, engine.deps);
+      expect({ forged, ok: result.ok, code: result.code }).toEqual({ forged, ok: false, code: "forbidden-field" });
+      expect(engine.shown).toHaveLength(0);
+      expect(engine.recovered).toHaveLength(0);
+    }
+  });
+
+  test("prepare coordinator recovery is gated by the same host facts as the bind", async () => {
+    for (const entry of [
+      { facts: { ...FACTS, sessionId: "" }, code: "identity-missing" },
+      { facts: { ...FACTS, leaf: true }, code: "leaf-session" },
+      { facts: { ...FACTS, scopedPlanEntry: true }, code: "scoped-plan-route" },
+      { facts: { ...FACTS, harnessRoot: null }, code: "harness-not-found" },
+    ] as const) {
+      const engine = fakeRecovery();
+      for (const raw of [{ operation: "show-recovery", workflowId: "wf-a" }, recoverRequest()]) {
+        const result =
+          raw.operation === "show-recovery"
+            ? await showCoordinatorRecovery(raw, entry.facts, engine.deps)
+            : await recoverCoordinatorIdentity(raw, entry.facts, engine.deps);
+        expect({ raw, code: result.code }).toEqual({ raw, code: entry.code });
+      }
+      expect(engine.shown).toHaveLength(0);
+      expect(engine.recovered).toHaveLength(0);
+    }
+  });
+
+  test("prepare coordinator recovery derives the identity and the stored prior target, never a caller value", async () => {
+    const engine = fakeRecovery();
+    const viewed = await showCoordinatorRecovery({ operation: "show-recovery", workflowId: "wf-a" }, FACTS, engine.deps);
+    expect(viewed.ok).toBe(true);
+    expect(viewed.details).toMatchObject({
+      workflowId: "wf-a",
+      priorSessionId: PRIOR_SESSION,
+      snapshotVersion: SNAPSHOT_VERSION,
+      compassVersion: COMPASS_VERSION,
+      allowed: true,
+    });
+    // The view carries no envelope path: it is coordinator-owned transport.
+    expect(JSON.stringify(viewed.details)).not.toContain("sessions/");
+    expect(engine.shown).toEqual([{ cwd: FACTS.cwd, harnessDir: FACTS.harnessRoot, workflowId: "wf-a" }]);
+
+    const recovered = await recoverCoordinatorIdentity(recoverRequest(), FACTS, engine.deps);
+    expect(recovered.ok).toBe(true);
+    expect(recovered.code).toBe("recovered");
+    expect(recovered.details).toMatchObject({
+      workflowId: "wf-a",
+      priorSessionId: PRIOR_SESSION,
+      sessionId: "native-session-a",
+      operationId: "op-1",
+      replay: false,
+    });
+    // The engine saw the host-derived identity, the stored prior path and the
+    // caller's stop assertion verbatim — nothing else.
+    expect(engine.recovered).toEqual([
+      {
+        cwd: FACTS.cwd,
+        harnessDir: FACTS.harnessRoot,
+        identity: { source: "host", sessionId: "native-session-a", workflowId: "wf-a", role: "coordinator", planId: null },
+        priorSessionPath: `${FACTS.harnessRoot}/workflows/wf-a/sessions/coordinator-${PRIOR_SESSION}.json`,
+        priorSessionId: PRIOR_SESSION,
+        expectedSnapshotVersion: SNAPSHOT_VERSION,
+        expectedCompassVersion: COMPASS_VERSION,
+        operationId: "op-1",
+        reason: "the prior host session was cancelled",
+        authorizationRef: "PM-authorization-1",
+        stoppedSessionIds: [PRIOR_SESSION],
+      },
+    ]);
+  });
+
+  test("prepare coordinator recovery refuses an empty stop assertion and a missing workflow before the engine", async () => {
+    const engine = fakeRecovery();
+    for (const raw of [
+      recoverRequest({ stoppedSessionIds: [] }),
+      recoverRequest({ stoppedSessionIds: ["ok", 7] }),
+      recoverRequest({ reason: "" }),
+      recoverRequest({ operationId: "" }),
+      recoverRequest({ authorizationRef: "" }),
+      recoverRequest({ expectedCompassVersion: "" }),
+      recoverRequest({ workflowId: "  " }),
+      { operation: "show-recovery", workflowId: "  " },
+    ]) {
+      const result =
+        raw.operation === "show-recovery"
+          ? await showCoordinatorRecovery(raw, FACTS, engine.deps)
+          : await recoverCoordinatorIdentity(raw, FACTS, engine.deps);
+      expect({ raw, ok: result.ok }).toEqual({ raw, ok: false });
+    }
+    expect(engine.shown).toHaveLength(0);
+    expect(engine.recovered).toHaveLength(0);
+  });
+
+  test("prepare coordinator recovery reports an engine refusal with its own code and never fabricates success", async () => {
+    const refusal = new Error("workflow wf-a is not in Prepare") as Error & { code: string };
+    refusal.code = "coordination.identity-recovery.not-prepare";
+    const deps: CoordinatorRecoveryDeps = {
+      show: async () => {
+        throw refusal;
+      },
+      recover: async () => {
+        throw refusal;
+      },
+      target: () => ({ ok: false, code: "recovery-not-prepare", message: "workflow wf-a has no recorded coordinator binding" }),
+    };
+    const shown = await showCoordinatorRecovery({ operation: "show-recovery", workflowId: "wf-a" }, FACTS, deps);
+    expect({ ok: shown.ok, code: shown.code }).toEqual({ ok: false, code: "coordination.identity-recovery.not-prepare" });
+    const recovered = await recoverCoordinatorIdentity(recoverRequest(), FACTS, deps);
+    expect({ ok: recovered.ok, code: recovered.code }).toEqual({ ok: false, code: "recovery-not-prepare" });
+
+    // A host session whose workflow records no owner refuses before the engine
+    // write path is reached at all.
+    const engine = fakeRecovery();
+    const noTarget: CoordinatorRecoveryDeps = { ...engine.deps, target: () => ({ ok: false, code: "recovery-not-prepare", message: "no binding" }) };
+    const result = await recoverCoordinatorIdentity(recoverRequest(), FACTS, noTarget);
+    expect({ ok: result.ok, code: result.code }).toEqual({ ok: false, code: "recovery-not-prepare" });
+    expect(engine.recovered).toHaveLength(0);
   });
 });

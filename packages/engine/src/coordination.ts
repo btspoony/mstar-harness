@@ -62,6 +62,8 @@ import {
   type PlanProgress,
   type PreparedCoordination,
   type RowCoordination,
+  type CoordinatorBinding,
+  type CoordinationIdentityRecovery,
 } from "./coordination-write.js";
 import { validateExecutionIdentity, type ExecutionIdentity } from "./session-identity.js";
 import {
@@ -6224,4 +6226,644 @@ export async function amendPrepareWorkflow(
       blockers: [],
     },
   };
+}
+
+/* ------------------------------------------------------------------------ *
+ * § JSON Prepare coordinator recovery (prerequisite contract §3.3)
+ * ------------------------------------------------------------------------ */
+
+/** One reason `recoverPrepareCoordinator` must not run, as a readable blocker. */
+export type PrepareCoordinatorRecoveryBlocker = Readonly<{ code: string; message: string }>;
+
+/**
+ * What a caller observes about one recorded coordinator binding before
+ * replacing it (§3.3). Deliberately owner-neutral: the recorded public session
+ * id, both byte versions and the Prepare verdict — never envelope bytes, a
+ * credential path or any bearer material.
+ */
+export type PrepareCoordinatorRecoveryView = Readonly<{
+  workflowId: string;
+  /** The session id the snapshot currently records as the workflow's coordinator. */
+  priorSessionId: string;
+  /** `sha256:<64 hex>` of the snapshot bytes (the recovery CAS token). */
+  snapshotVersion: string;
+  /** `sha256:<64 hex>` of the reviewed compass bytes (the recovery CAS token). */
+  compassVersion: string;
+  /** `true` when a recovery is admitted for this workflow with fresh tokens. */
+  allowed: boolean;
+  /** One typed blocker per admission refusal; empty when allowed. */
+  blockers: readonly PrepareCoordinatorRecoveryBlocker[];
+}>;
+
+/**
+ * The public projection of one accepted recovery (§3.3): the two public
+ * session ids, the replay identity, versions and time. No envelope body, no
+ * credential, and the new envelope PATH stays in coordinator-owned transport
+ * (`CoordinationResult.session_file`) rather than in this receipt.
+ */
+export type PrepareCoordinatorRecoveryReceipt = Readonly<{
+  workflowId: string;
+  priorSessionId: string;
+  sessionId: string;
+  operationId: string;
+  requestHash: string;
+  /** `true` when this call replayed an already-recorded operation and wrote nothing. */
+  replay: boolean;
+  /** `sha256:<64 hex>` of the snapshot bytes AFTER this call (the receipt's own commit). */
+  snapshotVersion: string;
+  /** `sha256:<64 hex>` of the reviewed compass the recovery was authorized against. */
+  compassVersion: string;
+  recoveredAt: string;
+}>;
+
+/** The existing `CoordinationResult` envelope plus the recovery receipt (§3.3). */
+export type RecoverPrepareCoordinatorResult = CoordinationResult & {
+  recovery: PrepareCoordinatorRecoveryReceipt;
+};
+
+/** Refusal reasons of the JSON Prepare recovery (§3.3 / §5). */
+type RecoveryReason =
+  | "invalid-request"
+  | "stale"
+  | "not-prepare"
+  | "execution-started"
+  | "foreign-owner"
+  | "unauthorized"
+  | "operation-conflict";
+
+/** One `coordination.identity-recovery.<reason>` code (`coordination-write.ts`). */
+type RecoveryCode = `coordination.identity-recovery.${RecoveryReason}`;
+
+function recoveryRefusal(reason: RecoveryReason, message: string, details: Record<string, unknown> = {}): CoordinationError {
+  const code: RecoveryCode = `coordination.identity-recovery.${reason}`;
+  return new CoordinationError(code, message, details);
+}
+
+/** The exact input keys of one recovery call (§3.3 — no force, no extra fields). */
+const RECOVERY_INPUT_KEYS: readonly string[] = [
+  "cwd",
+  "harnessDir",
+  "identity",
+  "priorSessionPath",
+  "priorSessionId",
+  "expectedSnapshotVersion",
+  "expectedCompassVersion",
+  "operationId",
+  "reason",
+  "authorizationRef",
+  "stoppedSessionIds",
+];
+
+/**
+ * The canonical request digest of one recovery (§3.3): the stable serializer
+ * over the caller-STATED request, with both version tokens normalized to their
+ * bare digest so the same reviewed request presented with or without the
+ * `sha256:` prefix is the SAME operation.
+ *
+ * Deliberately excluded: the prior holder's session id and envelope path. Both
+ * are DERIVED — the host re-resolves them from the live binding, which its own
+ * accepted recovery has since moved — so a digest over them would make an exact
+ * retry unrecognizable while adding nothing: a genuine recovery authenticates
+ * the prior owner inside the lock, and the replay branch additionally requires
+ * the current binding to still be that operation's own result.
+ */
+function recoveryRequestHash(request: {
+  workflowId: string;
+  sessionId: string;
+  expectedSnapshotVersion: string;
+  expectedCompassVersion: string;
+  operationId: string;
+  reason: string;
+  authorizationRef: string;
+  stoppedSessionIds: readonly string[];
+}): string {
+  return sha256Bytes(
+    stableJson({
+      workflow_id: request.workflowId,
+      session_id: request.sessionId,
+      expected_snapshot_version: prepareVersionDigest(request.expectedSnapshotVersion),
+      expected_compass_version: prepareVersionDigest(request.expectedCompassVersion),
+      operation_id: request.operationId,
+      reason: request.reason,
+      authorization_ref: request.authorizationRef,
+      stopped_session_ids: [...request.stoppedSessionIds],
+    }),
+  );
+}
+
+/**
+ * The file-authority verdict of the recovery, FIRST and before any payload,
+ * version, identity or path is inspected (§4.3). With an ACTIVE execution
+ * authority the snapshot and session envelopes are retired as a persistence
+ * route: the refusal names the existing DB recovery verb instead of silently
+ * running this JSON writer, and the DB route (full execution token + stop
+ * attestation) stays the only recovery there.
+ */
+function assertPrepareRecoveryFileAuthority(harnessRoot: string): void {
+  try {
+    assertExecutionFileWriteAllowed({ harnessDir: harnessRoot });
+  } catch (error) {
+    if (error instanceof StoreError && error.code === "execution.direct-write-refused") {
+      throw new StoreError(
+        error.code,
+        `${error.message} Coordinator recovery of a workflow under an ACTIVE execution authority belongs to the ` +
+          `existing DB recovery verb (\`mstar session recover\`) with its execution token and stop attestation; ` +
+          `this JSON Prepare writer never runs against an active store.`,
+      );
+    }
+    throw error;
+  }
+}
+
+/**
+ * Create the recovery's role-scoped coordinator envelope through the existing
+ * exclusive creation, reclaiming an already-present file ONLY when its bytes
+ * are exactly the envelope this call would write — the signature of a crashed
+ * earlier attempt of the SAME operation. An unrelated role/session file is
+ * never overwritten (`invalid-request`), and the envelope is the only file the
+ * recovery ever creates.
+ */
+function createRecoveryEnvelope(session: CoordinationSession): { path: string; created: boolean } {
+  const path = sessionFilePath(session.harness_root, session.workflow_id, session.role, session.session_id);
+  const expected = `${JSON.stringify(session, null, 2)}\n`;
+  try {
+    const created = createSessionEnvelope(session);
+    return { path: canonicalTarget(created), created: true };
+  } catch (error) {
+    if (!(error instanceof CoordinationError) || error.code !== "coordination.session-mismatch") throw error;
+    // Exclusive creation refused because the file exists. The only lawful
+    // reuse is byte-identical content for this exact session; anything else is
+    // somebody else's file and refuses without a write.
+    let existing: string;
+    try {
+      existing = readFileSync(path, "utf8");
+    } catch {
+      throw error;
+    }
+    if (existing !== expected) {
+      throw recoveryRefusal(
+        "invalid-request",
+        `session envelope ${path} already exists with different content \u2014 a recovery reclaims only the exact ` +
+          `envelope a crashed attempt of this operation created, and never overwrites an unrelated role or session file`,
+        { path },
+      );
+    }
+    return { path: canonicalTarget(path), created: false };
+  }
+}
+
+/**
+ * Read the workflow-level recovery view (§3.3). Read-only: no lock, no write.
+ * The two byte versions are the tokens `recoverPrepareCoordinator` requires,
+ * and `allowed`/`blockers` report the Prepare/no-execution admission exactly as
+ * the mutation evaluates it — an inadmissible lifecycle is READABLE here, not
+ * an error, so an operator can inspect the workflow before recovering it.
+ *
+ * A workflow with no recorded coordinator binding refuses (there is no owner to
+ * expose and nothing this narrow repair may replace), and so do an
+ * unregistered/unreadable snapshot and an unreadable or borrowed compass.
+ */
+export async function showPrepareCoordinatorRecovery(
+  input: Readonly<{ cwd: string; harnessDir: string; workflowId: string }>,
+): Promise<PrepareCoordinatorRecoveryView> {
+  if (!isPlainObject(input)) throw invalidInput("coordinator recovery view input must be an object");
+  requireCwd(input.cwd);
+  const harnessRoot = requireProcessRoot(input.cwd, input.harnessDir);
+  assertExecutionFileReadAllowed({ harnessDir: harnessRoot });
+  assertExactKeys(input as unknown as Record<string, unknown>, ["cwd", "harnessDir", "workflowId"], "coordinator recovery view input");
+  const workflowId = safePlanId(input.workflowId, "workflowId");
+  const snapshotPath = assertSnapshotPath(harnessRoot, workflowId, snapshotPathOf(harnessRoot, workflowId));
+  assertRootRegisterEntry(harnessRoot, workflowId);
+  const { snapshot, version } = readPrepareSnapshot(snapshotPath);
+  const coordinator = snapshot.coordination?.coordinator;
+  if (coordinator === undefined) {
+    throw new CoordinationError(
+      "coordination.not-prepared",
+      `workflow ${workflowId} has no recorded coordinator binding \u2014 recovery replaces a recorded binding and never creates one`,
+      { workflow_id: workflowId },
+    );
+  }
+  const compass = readRecoveryCompass(harnessRoot, snapshot);
+  const admission = prepareAdmission(harnessRoot, workflowId, snapshot);
+  return {
+    workflowId,
+    priorSessionId: coordinator.session_id,
+    snapshotVersion: version,
+    compassVersion: compass.version,
+    allowed: admission.ok,
+    blockers: admission.ok ? [] : [{ code: admission.reason, message: admission.message }],
+  };
+}
+
+/**
+ * Replace the recorded coordinator binding of one Prepare workflow with a
+ * freshly acquired identity, after the prior owner can no longer authenticate
+ * (§3.3). Intentionally NARROWER than the existing DB recovery: no
+ * prepared-plan takeover, no lease transfer, no raw session rewrite, no force
+ * flag, and it is JSON/Prepare-only.
+ *
+ * Required under the snapshot write lock: the named registered RUNNING
+ * iteration in this canonical root, a committed registration, a prior envelope
+ * that still authenticates the EXACT recorded coordinator, an explicitly
+ * acquired identity addressing this workflow's coordinator seat with no plan
+ * scope, an explicit reason + authorization reference + a stop assertion naming
+ * the prior holder, both fresh byte versions, and the ORIGINAL `prepareAdmission`
+ * over every row (no lease, no row coordination, no progress — this verb never
+ * touches a workflow that has begun executing). Every semantic refusal happens
+ * before a file is created.
+ *
+ * Accepted effect: one role-scoped envelope through exclusive creation, the
+ * top-level coordinator binding replaced, one immutable
+ * `coordination.identity_recoveries` entry appended, `updated_at` refreshed —
+ * every row, branch anchor, evidence field and other workflow stays
+ * byte-identical. The old envelope's bytes remain as history and stop
+ * authorizing because the binding moved, never because a credential was edited.
+ */
+export async function recoverPrepareCoordinator(
+  input: Readonly<{
+    cwd: string;
+    harnessDir: string;
+    identity: ExecutionIdentity;
+    priorSessionPath: string;
+    priorSessionId: string;
+    expectedSnapshotVersion: string;
+    expectedCompassVersion: string;
+    operationId: string;
+    reason: string;
+    authorizationRef: string;
+    stoppedSessionIds: readonly string[];
+  }>,
+): Promise<RecoverPrepareCoordinatorResult> {
+  if (!isPlainObject(input)) throw invalidInput("coordinator recovery input must be an object");
+  requireCwd(input.cwd);
+  // Canonical authority discrimination precedes every other check (§4.3): the
+  // active-store refusal must not be pre-empted by a payload, version or path
+  // error, and this writer must never run against an active authority.
+  const harnessRoot = requireProcessRoot(input.cwd, input.harnessDir);
+  assertPrepareRecoveryFileAuthority(harnessRoot);
+  assertExactKeys(input as unknown as Record<string, unknown>, RECOVERY_INPUT_KEYS, "coordinator recovery input");
+  // The workflow this recovery addresses is the one the acquired identity
+  // names (§3.3): the request carries no separate workflow id, so the scope the
+  // identity is validated against is its own — the adapter boundary is what
+  // holds the caller's `workflowId` and the host-derived identity together.
+  const identity: ExecutionIdentity = input.identity;
+  validateExecutionIdentity(identity, {
+    workflowId: (identity as unknown as Record<string, unknown>).workflowId as string,
+    role: "coordinator",
+    planId: null,
+  });
+  const workflowId = safePlanId(identity.workflowId, "workflowId");
+  const operationId = recoveryText(input.operationId, "operationId");
+  const reason = recoveryText(input.reason, "reason");
+  const authorizationRef = recoveryText(input.authorizationRef, "authorizationRef");
+  const priorSessionId = recoveryText(input.priorSessionId, "priorSessionId");
+  const expectedSnapshotVersion = prepareVersionToken(input.expectedSnapshotVersion, "expectedSnapshotVersion");
+  const expectedCompassVersion = prepareVersionToken(input.expectedCompassVersion, "expectedCompassVersion");
+  const stoppedSessionIds = recoveryStopList(input.stoppedSessionIds);
+
+  // The new identity's session id names the envelope this recovery creates, so
+  // it obeys the same single-safe-component rule every session id does.
+  const sessionId = safeSessionId(identity.sessionId) as string;
+  if (!isNonEmptyString(input.priorSessionPath) || !isAbsolute(input.priorSessionPath)) {
+    throw recoveryRefusal(
+      "invalid-request",
+      `priorSessionPath must be the absolute path of the recorded coordinator envelope \u2014 got ${JSON.stringify(input.priorSessionPath ?? null)}`,
+      { actual: input.priorSessionPath ?? null },
+    );
+  }
+  const priorSessionPath = canonicalTarget(input.priorSessionPath);
+  const requestHash = recoveryRequestHash({
+    workflowId,
+    sessionId,
+    expectedSnapshotVersion,
+    expectedCompassVersion,
+    operationId,
+    reason,
+    authorizationRef,
+    stoppedSessionIds,
+  });
+  const snapshotPath = assertSnapshotPath(harnessRoot, workflowId, snapshotPathOf(harnessRoot, workflowId));
+
+  const committed = await withStatusWriteLock(snapshotPath, async () => {
+    const { snapshot, version } = readPrepareSnapshot(snapshotPath);
+    const recorded = snapshot.coordination?.coordinator;
+    if (recorded === undefined) {
+      throw recoveryRefusal(
+        "not-prepare",
+        `workflow ${workflowId} has no recorded coordinator binding \u2014 recovery replaces a recorded binding and never creates one`,
+        { workflow_id: workflowId },
+      );
+    }
+    const audit: readonly CoordinationIdentityRecovery[] = snapshot.coordination?.identity_recoveries ?? [];
+    // Replay BEFORE the CAS comparison: an exact retry of an accepted recovery
+    // presents the tokens it was authorized against, which that recovery has
+    // already superseded. Same operation + same canonical request + a binding
+    // that is still this operation's own result → the recorded receipt, with no
+    // revision churn and nothing written. Anything else with this operation id
+    // (a changed request, or a binding that has since moved) refuses.
+    const replayedOperation = audit.find((entry) => entry.operation_id === operationId);
+    if (replayedOperation !== undefined) {
+      if (replayedOperation.request_hash !== requestHash) {
+        throw recoveryRefusal(
+          "operation-conflict",
+          `operation ${operationId} was already recorded for workflow ${workflowId} with a different request \u2014 ` +
+            `an operation id names exactly one reviewed recovery`,
+          { workflow_id: workflowId, operation_id: operationId, recorded: replayedOperation.request_hash, actual: requestHash },
+        );
+      }
+      if (replayedOperation.session_id !== recorded.session_id) {
+        throw recoveryRefusal(
+          "operation-conflict",
+          `operation ${operationId} was recorded for coordinator session ${replayedOperation.session_id}, but workflow ` +
+            `${workflowId} now records ${recorded.session_id} \u2014 the binding was superseded; the recorded receipt is no longer this workflow's state`,
+          {
+            workflow_id: workflowId,
+            operation_id: operationId,
+            recorded_session_id: replayedOperation.session_id,
+            current_session_id: recorded.session_id,
+          },
+        );
+      }
+      const recoveredPath = sessionFilePath(harnessRoot, workflowId, "coordinator", replayedOperation.session_id);
+      // The receipt describes a LIVE binding: if its envelope is gone the
+      // workflow is broken rather than recovered, and no success may be
+      // reported from the record alone.
+      if (!existsSync(recoveredPath)) {
+        throw new CoordinationError(
+          "coordination.session-not-found",
+          `workflow ${workflowId} records recovered coordinator session ${recorded.session_id}, but its envelope ` +
+            `${recoveredPath} is gone \u2014 the binding is broken; do not replay it`,
+          { path: recoveredPath, workflow_id: workflowId },
+        );
+      }
+      return {
+        replay: true,
+        entry: replayedOperation,
+        snapshotVersion: version,
+        compassVersion: replayedOperation.compass_version,
+      } satisfies RecoveryCommit;
+    }
+    // A recovery replaces a coordinator that can no longer authenticate: naming
+    // the CURRENT recorded holder as the replacement is not a recovery. Checked
+    // after the replay branch above, because an exact retry legitimately names
+    // the holder this operation already replaced.
+    if (sessionId === recorded.session_id) {
+      throw recoveryRefusal(
+        "invalid-request",
+        `the replacement identity is the recorded coordinator session ${recorded.session_id} \u2014 a recovery replaces ` +
+          `a coordinator that can no longer authenticate and never re-binds the same one`,
+        { prior_session_id: recorded.session_id },
+      );
+    }
+    if (prepareVersionDigest(version) !== prepareVersionDigest(expectedSnapshotVersion)) {
+      throw recoveryRefusal(
+        "stale",
+        `snapshot ${snapshotPath} is at ${version}, this call expected ${expectedSnapshotVersion} \u2014 re-read ` +
+          `\`workflow show-prepare\` (or the host \`show-recovery\`) and review again`,
+        { path: snapshotPath, expected: expectedSnapshotVersion, actual: version },
+      );
+    }
+    const compass = readRecoveryCompass(harnessRoot, snapshot);
+    if (prepareVersionDigest(compass.version) !== prepareVersionDigest(expectedCompassVersion)) {
+      throw recoveryRefusal(
+        "stale",
+        `compass ${compass.path} is at ${compass.version}, this call expected ${expectedCompassVersion} \u2014 re-read the ` +
+          `recovery view and review again`,
+        { path: compass.path, expected: expectedCompassVersion, actual: compass.version },
+      );
+    }
+    // The recorded binding must still be authenticated by the envelope the
+    // caller pointed at: same canonical file, same session, same workflow, same
+    // canonical root, coordinator seat. A caller-chosen credential path can
+    // therefore never become the prior owner.
+    assertPriorRecoveryOwner(harnessRoot, workflowId, priorSessionPath, priorSessionId, recorded);
+    // Explicit operator authorization and stop proof (§3.3): the request names a
+    // reason, an authorization reference and the RECORDED prior holder among the
+    // stopped sessions. Checked after the owner is authenticated, so an operator
+    // who does not hold the prior owner's proof is told that — not that its stop
+    // assertion was incomplete.
+    if (!stoppedSessionIds.includes(recorded.session_id)) {
+      throw recoveryRefusal(
+        "unauthorized",
+        `the stop assertion does not name the recorded coordinator ${recorded.session_id} \u2014 recovery requires an ` +
+          `explicit attestation that the prior holder stopped or reloaded`,
+        { prior_session_id: recorded.session_id, stopped_session_ids: [...stoppedSessionIds] },
+      );
+    }
+    // The ORIGINAL admission, over EVERY row (§3.3): no lease, no row
+    // coordination block, no progress, no merge lease. A recovery never touches
+    // a workflow that has started executing.
+    const admission = prepareAdmission(harnessRoot, workflowId, snapshot);
+    if (!admission.ok) {
+      throw recoveryRefusal(
+        admission.reason === "execution-started" ? "execution-started" : "not-prepare",
+        admission.message,
+        admission.details,
+      );
+    }
+    await assertWorkflowRegistrationCommitted(harnessRoot, workflowId);
+
+    const session: CoordinationSession = {
+      schema_version: 1,
+      role: "coordinator",
+      session_id: sessionId,
+      workflow_id: workflowId,
+      harness_root: harnessRoot,
+    };
+    const recoveredAt = nowIso();
+    const entry: CoordinationIdentityRecovery = {
+      operation_id: operationId,
+      request_hash: requestHash,
+      workflow_id: workflowId,
+      prior_session_id: priorSessionId,
+      session_id: sessionId,
+      authorization_ref: authorizationRef,
+      reason,
+      stopped_session_ids: [...stoppedSessionIds],
+      snapshot_version_before: version,
+      compass_version: compass.version,
+      recovered_at: recoveredAt,
+    };
+    let envelope = "";
+    let created = false;
+    // The envelope is created INSIDE this locked section and the snapshot
+    // commit is the atomic binding step. A failure between them is not a
+    // semantic refusal: it reports failure (never a receipt) and reclaims only
+    // the exact envelope this call created, so a retry is lawful.
+    try {
+      const made = createRecoveryEnvelope(session);
+      envelope = made.path;
+      created = made.created;
+      const next: WorkflowSnapshot = {
+        ...snapshot,
+        updated_at: nowIso(),
+        coordination: {
+          // The audit history is taken from disk by value and only APPENDED to:
+          // an earlier recovery entry can never be rewritten or dropped here.
+          ...(snapshot.coordination ?? { coordinator: recorded }),
+          coordinator: { session_id: sessionId, session_file: envelope, bound_at: nowIso() },
+          identity_recoveries: [...audit, entry],
+        },
+      };
+      await commitSnapshot(harnessRoot, workflowId, snapshotPath, next);
+    } catch (error) {
+      if (created && envelope !== "") dropSessionEnvelope(envelope);
+      throw error;
+    }
+    const written = readArtifactBytes(snapshotPath);
+    if (written === undefined) {
+      throw new CoordinationError(
+        "coordination.store",
+        `snapshot ${snapshotPath} is unreadable after this call committed it`,
+        { path: snapshotPath },
+      );
+    }
+    return {
+      replay: false,
+      entry,
+      snapshotVersion: written.version,
+      compassVersion: compass.version,
+      session,
+      envelope,
+    } satisfies RecoveryCommit;
+  });
+
+  const session: CoordinationSession = committed.session ?? {
+    schema_version: 1,
+    role: "coordinator",
+    session_id: committed.entry.session_id,
+    workflow_id: workflowId,
+    harness_root: harnessRoot,
+  };
+  const envelopePath = committed.envelope ?? canonicalTarget(sessionFilePath(harnessRoot, workflowId, "coordinator", committed.entry.session_id));
+  return {
+    ok: true,
+    operation: "recover-coordinator",
+    session,
+    session_file: envelopePath,
+    outcome: "recovered",
+    recovery: {
+      workflowId,
+      priorSessionId: committed.entry.prior_session_id,
+      sessionId: committed.entry.session_id,
+      operationId: committed.entry.operation_id,
+      requestHash: committed.entry.request_hash,
+      replay: committed.replay,
+      snapshotVersion: committed.snapshotVersion,
+      compassVersion: committed.compassVersion,
+      recoveredAt: committed.entry.recovered_at,
+    },
+  };
+}
+
+/**
+ * What one locked recovery section hands back: the audit entry that now
+ * describes the binding, the bytes the caller must record as its tokens, and —
+ * only on a fresh recovery — the envelope and session this call created.
+ */
+type RecoveryCommit = {
+  /** `true` when this call replayed a recorded operation and wrote nothing. */
+  replay: boolean;
+  entry: CoordinationIdentityRecovery;
+  /** `sha256:<64 hex>` of the snapshot bytes after this call (or the current ones on replay). */
+  snapshotVersion: string;
+  /** `sha256:<64 hex>` of the reviewed compass the recovery was authorized against. */
+  compassVersion: string;
+  session?: CoordinationSession;
+  envelope?: string;
+};
+
+/**
+ * The reviewed compass of one recovery call, read through the one compass
+ * reader and re-expressed in this verb's own refusal vocabulary: a missing,
+ * unreadable, borrowed or malformed compass makes the workflow non-recoverable
+ * in Prepare, so the caller sees `not-prepare` (with the underlying code and
+ * message attached) instead of the amendment's own reasons. There is no second
+ * compass parser here.
+ */
+function readRecoveryCompass(harnessRoot: string, snapshot: WorkflowSnapshot): PrepareCompass {
+  try {
+    return readPrepareCompass(harnessRoot, snapshot);
+  } catch (error) {
+    if (error instanceof CoordinationError && error.code.startsWith("coordination.prepare-amendment.")) {
+      throw recoveryRefusal("not-prepare", error.message, { ...error.details, reason_code: error.code });
+    }
+    throw error;
+  }
+}
+
+/** One required non-empty recovery request field (a request-shape refusal). */
+function recoveryText(value: unknown, field: string): string {
+  if (!isNonEmptyString(value)) {
+    throw recoveryRefusal("invalid-request", `coordinator recovery ${field} is required`, { field });
+  }
+  return value;
+}
+
+/** The stop assertion: a non-empty list of non-empty session ids. */
+function recoveryStopList(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw recoveryRefusal(
+      "unauthorized",
+      "stoppedSessionIds must name at least the prior holder this recovery replaces \u2014 an empty stop assertion is never an authorization",
+      { actual: value ?? null },
+    );
+  }
+  const ids: string[] = [];
+  for (const entry of value) {
+    if (!isNonEmptyString(entry)) {
+      throw recoveryRefusal("invalid-request", "every stoppedSessionIds entry must be a non-empty session id", {
+        actual: entry ?? null,
+      });
+    }
+    ids.push(entry);
+  }
+  return [...new Set(ids)];
+}
+
+/**
+ * Authenticate the recorded coordinator with the envelope the caller addressed
+ * (§3.3): the pointed file must BE the recorded binding — same canonical path,
+ * same session id, coordinator seat, this workflow, this canonical root — and
+ * the caller's `priorSessionId` must be that same recorded owner. A mismatch in
+ * any of those is `foreign-owner`: the caller does not hold the prior owner's
+ * proof.
+ */
+function assertPriorRecoveryOwner(
+  harnessRoot: string,
+  workflowId: string,
+  priorSessionPath: string,
+  priorSessionId: string,
+  recorded: CoordinatorBinding,
+): void {
+  const recordedPath = canonicalTarget(recorded.session_file);
+  if (recorded.session_id !== priorSessionId || recordedPath !== priorSessionPath) {
+    throw recoveryRefusal(
+      "foreign-owner",
+      `workflow ${workflowId} records coordinator session ${recorded.session_id} at ${recordedPath}, but this call ` +
+        `names ${priorSessionId} at ${priorSessionPath} \u2014 a recovery replaces only the binding it can authenticate`,
+      {
+        workflow_id: workflowId,
+        expected_session_id: recorded.session_id,
+        actual_session_id: priorSessionId,
+        expected_session_file: recordedPath,
+        actual_session_file: priorSessionPath,
+      },
+    );
+  }
+  const prior = readSessionEnvelope(priorSessionPath);
+  if (
+    prior.role !== "coordinator" ||
+    prior.session_id !== priorSessionId ||
+    prior.workflow_id !== workflowId ||
+    canonicalizeNearestExisting(prior.harness_root) !== harnessRoot
+  ) {
+    throw recoveryRefusal(
+      "foreign-owner",
+      `session envelope ${priorSessionPath} is not the coordinator of workflow ${workflowId} in ${harnessRoot} ` +
+        `(role ${prior.role}, session ${prior.session_id}, workflow ${prior.workflow_id}) \u2014 the recorded binding ` +
+        `cannot be authenticated through it`,
+      { path: priorSessionPath, workflow_id: workflowId, role: prior.role, session_id: prior.session_id },
+    );
+  }
 }
