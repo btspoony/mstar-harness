@@ -699,12 +699,16 @@ describe("dshAdapter.runInstallDoctor", () => {
   });
 });
 
+// Each case spawns `bun run src/index.ts`, which is a cold TypeScript start
+// plus the adapter's own subprocess work; the default 5s budget is close
+// enough to the CI runner's cost that a single slow start fails the suite.
+// The budget is set per test: bun's `describe` takes no options object.
 describe("CLI init --target dsh (fake dsh on PATH)", () => {
   const fakePathEnv = (fake: FakeDsh): { PATH: string } => ({
     PATH: `${fake.binDir}${process.platform === "win32" ? ";" : ":"}${process.env.PATH ?? ""}`,
   });
 
-  test("wires --target dsh through the adapter (two adds, exit 0)", () => {
+  test("wires --target dsh through the adapter (two adds, exit 0)", { timeout: 30_000 }, () => {
     const fake = makeFakeDsh(DUMP_EMPTY);
     try {
       const result = runCli(["init", "--target", "dsh"], { env: fakePathEnv(fake) });
@@ -720,7 +724,7 @@ describe("CLI init --target dsh (fake dsh on PATH)", () => {
     }
   });
 
-  test("--no-fallbacks maps to a single mstar add", () => {
+  test("--no-fallbacks maps to a single mstar add", { timeout: 30_000 }, () => {
     const fake = makeFakeDsh(DUMP_EMPTY);
     try {
       const result = runCli(["init", "--target", "dsh", "--no-fallbacks"], { env: fakePathEnv(fake) });
@@ -732,7 +736,7 @@ describe("CLI init --target dsh (fake dsh on PATH)", () => {
     }
   });
 
-  test("missing dsh bin: Setup failed + exit 1 (fail-loud, no silent skip)", () => {
+  test("missing dsh bin: Setup failed + exit 1 (fail-loud, no silent skip)", { timeout: 30_000 }, () => {
     const emptyDir = mkdtempSync(join(tmpdir(), "dsh-nobin-"));
     try {
       const result = runCli(["init", "--target", "dsh"], { env: { PATH: emptyDir } });
@@ -749,7 +753,7 @@ describe("CLI doctor --target dsh (fake dsh on PATH)", () => {
     PATH: `${fake.binDir}${process.platform === "win32" ? ";" : ":"}${process.env.PATH ?? ""}`,
   });
 
-  test("both mounted: exit 0 and capability words are printed on the healthy run (AC-2)", () => {
+  test("both mounted: exit 0 and capability words are printed on the healthy run (AC-2)", { timeout: 30_000 }, () => {
     const fake = makeFakeDsh(DUMP_BOTH);
     const dshHome = mkdtempSync(join(tmpdir(), "dsh-home-"));
     seedProfileFallbacksPkg(dshHome, DSH_LLM_FALLBACKS_VERSION);
@@ -765,7 +769,7 @@ describe("CLI doctor --target dsh (fake dsh on PATH)", () => {
     }
   });
 
-  test("fallbacks disabled: exit 1 and the disabled issue is printed", () => {
+  test("fallbacks disabled: exit 1 and the disabled issue is printed", { timeout: 30_000 }, () => {
     const fake = makeFakeDsh(DUMP_FALLBACKS_DISABLED);
     try {
       const result = runCli(["doctor", "--target", "dsh"], { env: fakePathEnv(fake) });
@@ -777,7 +781,7 @@ describe("CLI doctor --target dsh (fake dsh on PATH)", () => {
     }
   });
 
-  test("disabled: true standalone row: exit 1 and the disabled issue is printed", () => {
+  test("disabled: true standalone row: exit 1 and the disabled issue is printed", { timeout: 30_000 }, () => {
     const fake = makeFakeDsh(DUMP_FALLBACKS_DISABLED_TRUE);
     try {
       const result = runCli(["doctor", "--target", "dsh"], { env: fakePathEnv(fake) });
@@ -789,7 +793,7 @@ describe("CLI doctor --target dsh (fake dsh on PATH)", () => {
     }
   });
 
-  test("fallbacks uninstalled: exit 1 and the uninstalled issue is printed", () => {
+  test("fallbacks uninstalled: exit 1 and the uninstalled issue is printed", { timeout: 30_000 }, () => {
     const fake = makeFakeDsh(DUMP_FALLBACKS_MISSING);
     try {
       const result = runCli(["doctor", "--target", "dsh"], { env: fakePathEnv(fake) });
@@ -802,7 +806,7 @@ describe("CLI doctor --target dsh (fake dsh on PATH)", () => {
     }
   });
 
-  test("probe failure: exit 1 with the explicit degradation line (no silent pass)", () => {
+  test("probe failure: exit 1 with the explicit degradation line (no silent pass)", { timeout: 30_000 }, () => {
     const fake = makeFakeDsh(DUMP_BOTH, { dumpExit: 1 });
     try {
       const result = runCli(["doctor", "--target", "dsh"], { env: fakePathEnv(fake) });
