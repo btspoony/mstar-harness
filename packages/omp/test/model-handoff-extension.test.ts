@@ -238,7 +238,12 @@ function createWorkflowArtifacts(repo: ControlRepo, sessionId: string, workflowI
   });
   const planPaths = planIds.map((id) => join(repo.harness, "plans", `${id}.md`));
   const evidencePaths = planIds.map((id) => join(guidesDir, `${id}-prepare.md`));
-  planPaths.forEach((path, index) => writeFileSync(path, `# ${planIds[index]}\n\nPlan body.\n`));
+  // The registered-plan path contract (§4): a registered plan markdown declares
+  // its own `plan_id`, and readiness resolves every row pointer through the
+  // shared resolver — so the fixture declares it like the real producer does.
+  planPaths.forEach((path, index) =>
+    writeFileSync(path, `# ${planIds[index]}\n\n**plan_id:** ${planIds[index]}\n\nPlan body.\n`),
+  );
   evidencePaths.forEach((path, index) => writeFileSync(path, `# Prepare evidence — ${planIds[index]}\n`));
   const reportPaths = SPECIALISTS.map((role) => join(guidesDir, `${role}-return.md`));
   reportPaths.forEach((path, index) => writeFileSync(path, `returned payload — ${SPECIALISTS[index]}\n`));
@@ -2046,6 +2051,52 @@ describe("prerequisite identity — managed coordinator bind transport", () => {
     expect(harness.notices()).toHaveLength(0);
     expect(harness.ledger().filter((entry) => entry.type === "custom")).toHaveLength(0);
   }, 30_000);
+
+  test("the registered handoff tool forwards the checkpoint's typed diagnostic verbatim into a refusal", async () => {
+    const repo = buildControlRepo();
+    writePluginOverrides(repo.main, { modelHandoff: true, handoffTarget: "@default" });
+    const harness = await createHarness({
+      cwd: repo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(repo.main),
+    });
+    expect(codeOf(await harness.runTool(startParams("diagnostic-iteration")))).toBe("armed");
+    const artifacts = createWorkflowArtifacts(repo, harness.sessionManager.getSessionId(), "diagnostic-iteration");
+
+    // The checkpoint's own refusal, with the §5 typed refinement a real
+    // identity/path refusal carries. Replaced through the module's documented
+    // test seam: the tool must project it, not re-derive or drop it.
+    handoffSeams.inspectReadiness = async () => ({
+      ready: false,
+      codes: ["binding-invalid", "prepare-not-locked"],
+      diagnostics: [
+        {
+          code: "binding-invalid",
+          detail: "foreign-owner",
+          workflowId: "diagnostic-iteration",
+          source: "snapshot-coordinator",
+          expected: "prior-host-session",
+          current: harness.sessionManager.getSessionId(),
+          next: "call `mstar_coordinator` with {operation:\"recover\", …}",
+        },
+      ],
+    });
+    const refused = await harness.runTool(completionParams(artifacts));
+    handoffSeams.inspectReadiness = REAL_INSPECT_READINESS;
+
+    expect(codeOf(refused)).toBe("not-ready");
+    expect(stateOf(refused)).toBe("pending");
+    const details = refused.details.mstarModelHandoff as Record<string, unknown>;
+    expect(details.codes).toEqual(["binding-invalid", "prepare-not-locked"]);
+    expect(details.diagnostics).toEqual([
+      expect.objectContaining({ detail: "foreign-owner", expected: "prior-host-session", source: "snapshot-coordinator" }),
+    ]);
+    // The refusal text names the typed reason and the next supported operation.
+    expect(String(refused.content[0]?.text)).toContain("foreign-owner");
+    expect(String(refused.content[0]?.text)).toContain("mstar_coordinator");
+    // Nothing was switched and the pending binding survives the refusal.
+    expect(harness.switched).toEqual(["probe/slow-model"]);
+  }, 60_000);
 });
 
 /* ------------------------------------------------ registered coordinator --- */

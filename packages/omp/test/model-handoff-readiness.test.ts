@@ -85,6 +85,10 @@ function codesOf(readiness: Phase1Readiness): readonly string[] {
   return readiness.ready ? [] : readiness.codes;
 }
 
+function detailsOf(readiness: Phase1Readiness): readonly string[] {
+  return readiness.ready ? [] : readiness.diagnostics.map((entry) => entry.detail);
+}
+
 type Fixture = Readonly<{
   root: string;
   main: string;
@@ -167,7 +171,12 @@ async function buildFixture(options: { workflowId?: string; planIds?: readonly s
     harness_root: harness,
   });
   const planPaths = planIds.map((id) => join(plansDir, `${id}.md`));
-  planPaths.forEach((path, index) => writeFileSync(path, `# ${planIds[index]}\n\nPlan body.\n`));
+  // §4: a real registered plan markdown declares its own `plan_id` — the
+  // shared resolver (registration, the Prepare append and readiness) requires
+  // that declaration, so the fixture states it like any registered plan does.
+  planPaths.forEach((path, index) =>
+    writeFileSync(path, `# ${planIds[index]}\n\n**plan_id:** ${planIds[index]}\n\nPlan body.\n`),
+  );
   const evidencePaths = planIds.map((id) => join(guidesDir, `${id}-prepare.md`));
   evidencePaths.forEach((path, index) => writeFileSync(path, `# Prepare evidence — ${planIds[index]}\n`));
   const reportPaths = SPECIALISTS.map((role) => join(guidesDir, `${role}-return.md`));
@@ -690,6 +699,56 @@ describe("E2 phase 1 readiness", () => {
     const empty = codesOf(await inspect(f.input));
     expect(empty).toContain("review-evidence-missing");
     expect(empty).toContain("prepare-not-locked");
+  });
+
+  test("only a valid active Prepare is reported as prepare-unlocked", async () => {
+    const f = await buildFixture();
+    expect((await inspectPhase1Readiness(f.binding, f.input)).ready).toBe(true);
+
+    // `completed` is a legal compass status — the iteration is over, not an
+    // unlocked Prepare. `end_date` is required alongside it.
+    setCompassField(f, "status", "completed");
+    const compassPath = compassPathOf(f);
+    writeFileSync(compassPath, text(compassPath).replace(/^status: completed$/mu, "status: completed\nend_date: 2026-09-20"));
+    const completed = await inspectPhase1Readiness(f.binding, f.input);
+    expect(codesOf(completed)).toContain("prepare-not-locked");
+    expect(detailsOf(completed)).not.toContain("prepare-unlocked");
+
+    // An invalid status value is invalid frontmatter: refused as
+    // `binding-invalid`, never as an unlocked Prepare.
+    setCompassField(f, "status", "Done");
+    const malformed = await inspectPhase1Readiness(f.binding, f.input);
+    expect(codesOf(malformed)).toContain("binding-invalid");
+    expect(codesOf(malformed)).not.toContain("prepare-not-locked");
+    expect(detailsOf(malformed)).not.toContain("prepare-unlocked");
+
+    // A missing status line is the same class.
+    writeFileSync(compassPath, text(compassPath).replace(/^status: .*$\n/mu, ""));
+    const missing = await inspectPhase1Readiness(f.binding, f.input);
+    expect(codesOf(missing)).toContain("binding-invalid");
+    expect(detailsOf(missing)).not.toContain("prepare-unlocked");
+  });
+
+  test("a refused stored row pointer is classified by form, never projected by value", async () => {
+    const f = await buildFixture();
+    // A pointer no shipped writer can produce: a credential-shaped absolute
+    // path standing in for the malformed stored row §4 has to refuse.
+    const pointer = "/var/credentials/coordinator-envelope.json";
+    const snapshot = JSON.parse(text(snapshotPathOf(f))) as { plans: Array<Record<string, unknown>> };
+    snapshot.plans = snapshot.plans.map((row) => ({ ...row, file: pointer }));
+    writeJson(snapshotPathOf(f), snapshot);
+
+    const readiness = await inspectPhase1Readiness(f.binding, f.input);
+    expect(codesOf(readiness)).toContain("prepare-not-locked");
+    const entry = readiness.ready ? undefined : readiness.diagnostics.find((item) => item.detail === "plan-pointer-invalid");
+    // §5 safe rendering: the received form and the canonical base/target only.
+    const base = canonicalize(join(f.harness, "plans"));
+    expect(entry).toMatchObject({ planId: f.planIds[0]!, received: "canonical-absolute", base });
+    expect(entry).not.toHaveProperty("current");
+    expect(entry?.target).toBe(join(base, `${f.planIds[0]!}.md`));
+    expect(detailsOf(readiness)).not.toContain("prepare-unlocked");
+    expect(JSON.stringify(readiness)).not.toContain(pointer);
+    expect(JSON.stringify(readiness)).not.toContain("credentials");
   });
 
   test("integration checkout and remote tip gate", async () => {
