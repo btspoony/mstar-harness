@@ -15,8 +15,12 @@
  * Identity is never a *looked-up* CLI input: no flag here names a holder, role
  * or coordinator — the engine reads the session envelope named by `--session`
  * and re-checks it against the snapshot inside the lock. The one exception is
- * the fresh-bind identity (`--session-id`, else `MSTAR_HOST_SESSION_ID`): the
- * caller states what the new session is called, never what an existing one owns.
+ * the fresh-bind identity (`--session-id`, and for a plan/assignment bind the
+ * injected `MSTAR_HOST_SESSION_ID`): the caller states what the new session is
+ * called, never what an existing one owns. A fresh `--coordinator` bind requires
+ * the explicit `--session-id` — the injected environment does not authorize a
+ * coordinator bootstrap, and the host-owned `mstar_coordinator` tool is the
+ * managed route.
  */
 import { Command } from "commander";
 import { existsSync, readFileSync } from "node:fs";
@@ -677,20 +681,22 @@ function handoffMismatch(verb: string, planId: string, live: string, named: stri
   });
 }
 
-/** The host-injected session identity channel (plan D1/D2); `plan bind` only. */
+/** The host-injected session identity channel; a plan/assignment bind only. */
 const SESSION_ID_ENV = "MSTAR_HOST_SESSION_ID";
 
 /**
- * The fresh-bind identity (plan D2): the `--session-id` flag wins, otherwise the
- * host-injected `MSTAR_HOST_SESSION_ID` (trimmed; empty and whitespace-only count
- * as absent), otherwise `undefined` and the engine generates the id. The value
- * itself is the engine's contract — it validates the id and refuses an unusable
- * one with `coordination.invalid-session-id`, so the flag is never silently
- * rewritten here.
+ * The fresh-bind identity. The `--session-id` flag is the explicit input and
+ * always wins. The injected `MSTAR_HOST_SESSION_ID` remains a declared local
+ * input form for a **plan/assignment** bind, but it no longer authorizes a
+ * **coordinator** bootstrap (prerequisite contract §3.2): a managed coordinator
+ * identity comes from the host-owned `mstar_coordinator` tool, and a plain local
+ * operator states `--session-id`. A missing value returns `undefined` and the
+ * engine owns the refusal — it is never silently replaced here.
  */
-function sessionIdOf(options: PlanCliOptions): string | undefined {
+function sessionIdOf(options: PlanCliOptions, family: "coordinator" | "plan"): string | undefined {
   const flag = options.sessionId as string | undefined;
   if (flag !== undefined) return flag;
+  if (family === "coordinator") return undefined;
   const injected = process.env[SESSION_ID_ENV];
   if (injected === undefined || injected.trim() === "") return undefined;
   return injected.trim();
@@ -733,7 +739,7 @@ function bindInputOf(options: PlanCliOptions): BindPlanSessionInput {
         2,
       );
     }
-    const sessionId = sessionIdOf(options);
+    const sessionId = sessionIdOf(options, "coordinator");
     return {
       coordinator: true,
       workflowId: requireFlag(workflow, "--workflow", "bind", "workflow-id"),
@@ -749,7 +755,7 @@ function bindInputOf(options: PlanCliOptions): BindPlanSessionInput {
         2,
       );
     }
-    const sessionId = sessionIdOf(options);
+    const sessionId = sessionIdOf(options, "plan");
     return {
       scope: { assignmentPath: requireAbsolutePath(assignment, "--assignment", "bind", "md-path") },
       ...(sessionId !== undefined ? { sessionId } : {}),
@@ -771,7 +777,7 @@ function bindInputOf(options: PlanCliOptions): BindPlanSessionInput {
   if (workflow === undefined || plan === undefined) {
     throw new SddScriptError("plan bind --workflow requires --plan <id> (the workflow+plan address form)", 2);
   }
-  const sessionId = sessionIdOf(options);
+  const sessionId = sessionIdOf(options, "plan");
   return {
     scope: {
       workflowId: requireFlag(workflow, "--workflow", "bind", "workflow-id"),
@@ -813,16 +819,21 @@ export function registerPlanCommands(program: Command): void {
     .description(
       "Bind the scoped session for one plan \u2014 fresh `--workflow/--plan` or `--assignment` claim (both addresses resolve " +
         "the same prepared row), fresh `--coordinator` bootstrap, or explicit `--resume` of an existing session file " +
-        "(read-only: no ownership change, no takeover). A fresh bind adopts `--session-id`, else the injected " +
-        "MSTAR_HOST_SESSION_ID, else a generated id; `--resume` takes none",
+        "(read-only: no ownership change, no takeover). A fresh `--coordinator` bootstrap requires the explicit " +
+        "`--session-id` (no generated id, and the injected MSTAR_HOST_SESSION_ID does not authorize it); a managed host " +
+        "session binds through the host-owned `mstar_coordinator` tool instead. A plan/assignment bind adopts " +
+        "`--session-id`, else MSTAR_HOST_SESSION_ID, else a generated id; `--resume` takes none",
     )
-    .option("--coordinator", "Trusted local coordinator bootstrap (requires --workflow; one per workflow)")
+    .option("--coordinator", "Trusted local coordinator bootstrap (requires --workflow and --session-id; one per workflow)")
     .option("--workflow <id>", "Workflow id")
     .option("--plan <id>", "Plan id (workflow+plan address form)")
     .option("--assignment <path>", "Absolute path of the pinned prepared Assignment")
     .option("--resume <path>", "Absolute path of an existing session JSON envelope")
     .option("--harness <path>", "Absolute harness dir override (default: resolved control root)")
-    .option("--session-id <id>", `Session id the fresh bind adopts (default: $${SESSION_ID_ENV}, else generated)`)
+    .option(
+      "--session-id <id>",
+      `Session id the fresh bind adopts (required for --coordinator; else $${SESSION_ID_ENV}, else generated)`,
+    )
     .option("--json", "Machine-readable JSON on stdout")
     .action(async (options: PlanCliOptions) =>
       runVerb(

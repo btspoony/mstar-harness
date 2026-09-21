@@ -472,6 +472,12 @@ export { collectActiveLifecycleBranches, scanActiveLifecycleBranches, type Activ
 
 export { WorkflowSnapshotValidationError } from "./workflow.js";
 
+// Adapter-only execution identity (prerequisite contract §3.1): one shared
+// tuple + scope validator every adapter and later DB consumer imports instead
+// of declaring a second shape.
+export type { ExecutionIdentity, ExecutionIdentityRole, ExecutionIdentityScope } from "./session-identity.js";
+export { validateExecutionIdentity } from "./session-identity.js";
+
 export {
   CoordinationError,
   EXECUTION_PIN_CONFLICT_CODE,

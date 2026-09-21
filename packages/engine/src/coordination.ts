@@ -63,6 +63,7 @@ import {
   type PreparedCoordination,
   type RowCoordination,
 } from "./coordination-write.js";
+import { validateExecutionIdentity } from "./session-identity.js";
 import {
   IMPLEMENTED_OPERATIONS,
   allowedOperations,
@@ -1522,11 +1523,12 @@ function assertCoordinatorResidency(cwd: string, snapshot: WorkflowSnapshot): Ma
 }
 
 /**
- * Fresh coordinator bind (spec §C1). The engine generates the session UUID —
- * or adopts the caller-supplied one — and creates the envelope **inside** the
- * validated critical section, then records the binding in the same snapshot
- * commit. A crash between the two leaves an orphan envelope that grants
- * nothing: every later call matches the snapshot.
+ * Fresh coordinator bind (spec §C1, prerequisite contract §3.1/§3.2). The
+ * identity is **acquired, never generated**: the caller supplies an explicit
+ * native or local session id, validated as an `ExecutionIdentity` before any
+ * write, and the envelope is created **inside** the validated critical section,
+ * then recorded in the same snapshot commit. A crash between the two leaves an
+ * orphan envelope that grants nothing: every later call matches the snapshot.
  */
 async function bindCoordinatorSession(
   cwd: string,
@@ -1536,6 +1538,12 @@ async function bindCoordinatorSession(
 ): Promise<CoordinationResult> {
   const harnessRoot = requireProcessRoot(cwd, harnessDir);
   safePlanId(workflowId, "workflowId");
+  // The shared adapter-only validator is the one refusal vocabulary: a missing
+  // id is `identity-missing` here, not a silently generated UUID fallback.
+  validateExecutionIdentity(
+    { harnessRoot, workflowId, role: "coordinator", planId: null, sessionId: isNonEmptyString(sessionId) ? sessionId : "" },
+    { workflowId, role: "coordinator", planId: null },
+  );
   const snapshotPath = snapshotPathOf(harnessRoot, workflowId);
   assertSnapshotPath(harnessRoot, workflowId, snapshotPath);
 
@@ -1543,7 +1551,7 @@ async function bindCoordinatorSession(
   const session: CoordinationSession = {
     schema_version: 1,
     role: "coordinator",
-    session_id: sessionId ?? randomUUID(),
+    session_id: sessionId as string,
     workflow_id: workflowId,
     harness_root: harnessRoot,
   };
@@ -1729,9 +1737,11 @@ export function leaseFailure(violations: readonly { code: string; message: strin
  */
 /**
  * Bind a session (spec §B, §C2). Fresh addressing never supplies a session
- * path: the engine generates the UUID — or adopts the caller-supplied
- * `sessionId`, refused unless it is a single safe path component — and creates
- * the envelope. `resumePath` names an existing envelope and resumes read-only,
+ * path: a **plan** bind generates the UUID — or adopts the caller-supplied
+ * `sessionId`, refused unless it is a single safe path component — while a
+ * **coordinator** bind adopts the caller-supplied id only (a missing one is
+ * `coordination.identity-missing`: a coordinator identity is acquired, never
+ * generated). `resumePath` names an existing envelope and resumes read-only,
  * so it takes no identity input at all.
  */
 export async function bindPlanSession(input: BindPlanSessionInput): Promise<CoordinationResult> {

@@ -47,6 +47,13 @@ export const COORDINATION_ERROR_CODES = [
   "coordination.session-not-found",
   "coordination.session-role",
   "coordination.invalid-session-id",
+  // Identity acquisition refusals (prerequisite contract §3.1/§3.2): a fresh
+  // coordinator envelope requires an explicitly acquired identity, so the two
+  // ways an adapter-supplied tuple can fail get their own codes instead of
+  // overloading `invalid-session-id` (a malformed value) or `scope-mismatch`
+  // (an addressing error).
+  "coordination.identity-missing",
+  "coordination.identity-mismatch",
   "coordination.version-conflict",
   "coordination.expected-version-required",
   "coordination.invalid-transition",

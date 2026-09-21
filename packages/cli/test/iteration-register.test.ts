@@ -171,7 +171,7 @@ describe("mstar iteration register", () => {
   test("the registered workflow accepts a coordinator binding (exit 0)", async () => {
     await setupHarness((harness) => {
       expect(runCli(registerArgs(harness)).exitCode).toBe(0);
-      const bind = runCli(["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--harness", harness, "--json"]);
+      const bind = runCli(["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--harness", harness, "--session-id", "fixture-coordinator", "--json"]);
       expect(bind.exitCode).toBe(0);
       const payload = JSON.parse(bind.stdout) as Record<string, unknown>;
       expect(payload.ok).toBe(true);

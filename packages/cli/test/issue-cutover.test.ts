@@ -181,7 +181,7 @@ function makeFixture(): Fixture {
   });
   writeText(join(sddDir, "assignment.md"), assignmentText({ harness, planPath, worktreePath, sddDir }));
 
-  const bound = runCli(["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--json"], root);
+  const bound = runCli(["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--session-id", "fixture-coordinator", "--json"], root);
   expect(bound.exitCode).toBe(0);
   const coordinator = String(jsonOf(bound).session_file);
   const view = runCli(["plan", "show", "--session", coordinator, "--plan", PLAN_ID, "--json"], root);

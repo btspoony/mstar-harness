@@ -73,6 +73,11 @@ const WORKFLOW_ID = "wf-plana";
 const PLAN_ID = "plan-a";
 const PEER_PLAN_ID = "plan-b";
 const PROJECT_ID = "proj-a";
+/**
+ * The deterministic local identity every fixture-bind acquires. A coordinator
+ * envelope is never created from a generated id, so the fixtures state theirs.
+ */
+const FIXTURE_COORDINATOR_ID = "fixture-coordinator";
 
 type Fixture = {
   root: string;
@@ -272,10 +277,16 @@ async function errorCodeOf(run: () => Promise<unknown>): Promise<string> {
   throw new Error("expected the coordination call to fail");
 }
 
-/** Bind the lifecycle coordinator once per fixture (the engine picks the path). */
+/** Bind the lifecycle coordinator once per fixture with an explicitly acquired id. */
 async function ensureCoordinator(fixture: Fixture): Promise<string> {
   if (fixture.coordinatorSession === "") {
-    const bound = await bindPlanSession({ coordinator: true, workflowId: WORKFLOW_ID, harnessDir: fixture.harness, cwd: fixture.root });
+    const bound = await bindPlanSession({
+      coordinator: true,
+      workflowId: WORKFLOW_ID,
+      harnessDir: fixture.harness,
+      cwd: fixture.root,
+      sessionId: FIXTURE_COORDINATOR_ID,
+    });
     expect(bound.ok).toBe(true);
     expect(bound.operation).toBe("bind");
     fixture.coordinatorSession = bound.session_file;
@@ -535,12 +546,20 @@ describe("binding", () => {
   test("coordinator bind claims the lifecycle with a 0600 envelope and refuses a second holder", async () => {
     const fixture = makeFixture();
 
-    const bound = await bindPlanSession({ coordinator: true, workflowId: WORKFLOW_ID, harnessDir: fixture.harness, cwd: fixture.root });
+    const bound = await bindPlanSession({
+      coordinator: true,
+      workflowId: WORKFLOW_ID,
+      harnessDir: fixture.harness,
+      cwd: fixture.root,
+      sessionId: FIXTURE_COORDINATOR_ID,
+    });
     fixture.coordinatorSession = bound.session_file;
 
     expect(bound.operation).toBe("bind");
     expect(bound.outcome).toBe("bound");
-    expect(bound.session_file).toBe(join(fixture.workflowDir, "sessions", `coordinator-${bound.session.session_id}.json`));
+    expect(bound.session_file).toBe(
+      join(fixture.workflowDir, "sessions", `coordinator-${FIXTURE_COORDINATOR_ID}.json`),
+    );
     expect(bound.session.role).toBe("coordinator");
     expect(bound.session.plan_id).toBeUndefined();
     expect(existsSync(fixture.coordinatorSession)).toBe(true);
@@ -565,7 +584,13 @@ describe("binding", () => {
     // A second coordinator identity is refused and the binding is untouched.
     expect(
       await errorCodeOf(() =>
-        bindPlanSession({ coordinator: true, workflowId: WORKFLOW_ID, harnessDir: fixture.harness, cwd: fixture.root }),
+        bindPlanSession({
+          coordinator: true,
+          workflowId: WORKFLOW_ID,
+          harnessDir: fixture.harness,
+          cwd: fixture.root,
+          sessionId: "second-coordinator",
+        }),
       ),
     ).toBe("coordination.duplicate-holder");
     const after = readJson(fixture.snapshotPath) as { coordination?: { coordinator?: { session_file?: string } } };
@@ -755,15 +780,18 @@ describe("binding", () => {
     expect(readdirSync(sessionsDir).sort()).toEqual(envelopes);
   });
 
-  test("an absent session id keeps the generated UUID identity, and a re-used one never overwrites an envelope", async () => {
+  test("prerequisite identity — an omitted coordinator id writes nothing, and a re-used one never overwrites an envelope", async () => {
+    // A fresh coordinator bind never generates an identity: the engine refuses
+    // before any write, so the workflow keeps no envelope and no sessions dir.
     const fixture = makeFixture();
-    const bound = await bindPlanSession({
-      coordinator: true,
-      workflowId: WORKFLOW_ID,
-      harnessDir: fixture.harness,
-      cwd: fixture.root,
-    });
-    expect(bound.session.session_id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    const before = readFileSync(fixture.snapshotPath, "utf8");
+    expect(
+      await errorCodeOf(() =>
+        bindPlanSession({ coordinator: true, workflowId: WORKFLOW_ID, harnessDir: fixture.harness, cwd: fixture.root }),
+      ),
+    ).toBe("coordination.identity-missing");
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(before);
+    expect(existsSync(join(fixture.workflowDir, "sessions"))).toBe(false);
 
     // An envelope that already occupies the id's role-scoped path is never
     // replaced: the existing exclusive-create refusal reports it instead of
@@ -771,7 +799,7 @@ describe("binding", () => {
     const fresh = makeFixture();
     const orphan = join(fresh.workflowDir, "sessions", "coordinator-host-session-orphan.json");
     writeText(orphan, '{"stray":true}\n');
-    const before = readFileSync(fresh.snapshotPath, "utf8");
+    const freshBefore = readFileSync(fresh.snapshotPath, "utf8");
     expect(
       await errorCodeOf(() =>
         bindPlanSession({
@@ -784,7 +812,55 @@ describe("binding", () => {
       ),
     ).toBe("coordination.session-mismatch");
     expect(readFileSync(orphan, "utf8")).toBe('{"stray":true}\n');
-    expect(readFileSync(fresh.snapshotPath, "utf8")).toBe(before);
+    expect(readFileSync(fresh.snapshotPath, "utf8")).toBe(freshBefore);
+  });
+
+  test("prerequisite identity — an explicit id is adopted, two same-workflow binds retain one owner, and a foreign root never inherits it", async () => {
+    const fixture = makeFixture();
+    const bound = await bindPlanSession({
+      coordinator: true,
+      workflowId: WORKFLOW_ID,
+      harnessDir: fixture.harness,
+      cwd: fixture.root,
+      sessionId: "host-session-explicit",
+    });
+    expect(bound.outcome).toBe("bound");
+    expect(bound.session.session_id).toBe("host-session-explicit");
+    expect(readJson(fixture.snapshotPath).coordination).toMatchObject({
+      coordinator: { session_id: "host-session-explicit" },
+    });
+    const bytesBefore = readFileSync(fixture.snapshotPath, "utf8");
+
+    // One owner per workflow: a second fresh bind, even naming another id, is
+    // refused and mutates nothing.
+    expect(
+      await errorCodeOf(() =>
+        bindPlanSession({
+          coordinator: true,
+          workflowId: WORKFLOW_ID,
+          harnessDir: fixture.harness,
+          cwd: fixture.root,
+          sessionId: "host-session-other",
+        }),
+      ),
+    ).toBe("coordination.duplicate-holder");
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(bytesBefore);
+
+    // A second control harness is isolated: the same session id binds a
+    // *different* workflow there and writes nothing into the first root.
+    const other = makeFixture();
+    const foreign = await bindPlanSession({
+      coordinator: true,
+      workflowId: WORKFLOW_ID,
+      harnessDir: other.harness,
+      cwd: other.root,
+      sessionId: "host-session-explicit",
+    });
+    expect(foreign.outcome).toBe("bound");
+    expect(readJson(other.snapshotPath).coordination).toMatchObject({
+      coordinator: { session_id: "host-session-explicit" },
+    });
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(bytesBefore);
   });
 
   test("the operation surface is closed, role-scoped and never advertised to the wrong seat", async () => {
@@ -2896,7 +2972,7 @@ function prepareSnapshotOf(fixture: PrepareFixture): { plans: Array<Record<strin
   return doc as { plans: Array<Record<string, unknown>> } & Record<string, unknown>;
 }
 
-/** Bind the lifecycle coordinator once per fixture (the engine picks the path). */
+/** Bind the lifecycle coordinator once per fixture with an explicitly acquired id. */
 async function ensurePrepareCoordinator(fixture: PrepareFixture): Promise<string> {
   if (fixture.coordinatorSession === "") {
     const bound = await bindPlanSession({
@@ -2904,6 +2980,7 @@ async function ensurePrepareCoordinator(fixture: PrepareFixture): Promise<string
       workflowId: PREPARE_WORKFLOW,
       harnessDir: fixture.harness,
       cwd: fixture.root,
+      sessionId: FIXTURE_COORDINATOR_ID,
     });
     expect(bound.ok).toBe(true);
     fixture.coordinatorSession = bound.session_file;
@@ -4156,7 +4233,13 @@ describe("Prepare workflow amendment", () => {
     // execution path admits a workflow the root never registered.
     expect(readFileSync(fixture.statusPath, "utf8")).toBe(statusBytes);
     const bindRefusal = await prepareRefusalOf(() =>
-      bindPlanSession({ coordinator: true, workflowId: orphanId, harnessDir: fixture.harness, cwd: fixture.root }),
+      bindPlanSession({
+        coordinator: true,
+        workflowId: orphanId,
+        harnessDir: fixture.harness,
+        cwd: fixture.root,
+        sessionId: FIXTURE_COORDINATOR_ID,
+      }),
     );
     expect(bindRefusal.code).toBe("coordination.workflow-not-found");
 
@@ -4383,7 +4466,13 @@ describe("catalog registration gate — prepare/bind/selection refuse a pending 
     const context = await storeBacked(fixture);
     await seedPendingRegistration(fixture, context, "prepared");
     const refusal = await pinConflictOf(() =>
-      bindPlanSession({ coordinator: true, workflowId: WORKFLOW_ID, harnessDir: fixture.harness, cwd: fixture.root }),
+      bindPlanSession({
+        coordinator: true,
+        workflowId: WORKFLOW_ID,
+        harnessDir: fixture.harness,
+        cwd: fixture.root,
+        sessionId: FIXTURE_COORDINATOR_ID,
+      }),
     );
     expect(refusal.code).toBe("catalog.registration-pending");
     // The refusal is not a repair: nothing moved.

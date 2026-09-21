@@ -295,7 +295,7 @@ function makeFixture(): Fixture {
 /** Bind the lifecycle coordinator (real engine verb) and prepare both plans. */
 async function buildFixture(): Promise<Fixture> {
   const fixture = makeFixture();
-  const bound = await bindPlanSession({ coordinator: true, workflowId: WORKFLOW_ID, harnessDir: fixture.harness, cwd: fixture.root });
+  const bound = await bindPlanSession({ coordinator: true, workflowId: WORKFLOW_ID, harnessDir: fixture.harness, cwd: fixture.root, sessionId: "fixture-coordinator" });
   expect(bound.outcome).toBe("bound");
   fixture.coordinatorSession = bound.session_file;
   for (const planId of PLAN_IDS) {

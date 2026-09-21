@@ -569,7 +569,7 @@ async function liveAuthority(name: string, options: { bindPlans?: boolean } = {}
   setArtifactStore(createFsStore(harness));
   try {
     coordinatorSession = (
-      await bindPlanSession({ coordinator: true, workflowId, harnessDir: harness, cwd: root })
+      await bindPlanSession({ coordinator: true, workflowId, harnessDir: harness, cwd: root, sessionId: "fixture-coordinator" })
     ).session_file;
     if (options.bindPlans === true) {
       for (const planId of planIds) {
