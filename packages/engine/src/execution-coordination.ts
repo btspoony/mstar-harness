@@ -1476,7 +1476,7 @@ export async function returnExecutionPlan(
       if (witness.view.session === null || witness.view.session.sessionId !== handoff.submitted_by) {
         throw new CoordinationError(
           "coordination.session-mismatch",
-          `return requires plan ${planId}'s handoff submitter ${handoff.submitted_by} to be the plan's active plan-pm session — ` +
+          `return requires plan ${planId}'s handoff submitter ${handoff.submitted_by} to be the plan's active plan-pm session \u2014 ` +
             `it is ${witness.view.session === null ? "unbound" : witness.view.session.sessionId}`,
           { plan_id: planId, expected: handoff.submitted_by, actual: witness.view.session?.sessionId ?? null },
         );

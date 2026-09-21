@@ -292,7 +292,7 @@ function foreignKeys(db: StoreDb, table: string): string[] {
 
 describe("execution-schema: migration 4 (execution-authority)", () => {
   describe("migration identity", () => {
-    test("keeps the applied v1–v3 checksums and appends execution-authority as version 4", () => {
+    test("keeps the applied v1\u2013v3 checksums and appends execution-authority as version 4", () => {
       for (const version of [1, 2, 3]) {
         expect(migrationChecksum(MIGRATIONS[version - 1])).toBe(FROZEN_V3_CHECKSUMS[version]);
       }
@@ -391,7 +391,7 @@ describe("execution-schema: migration 4 (execution-authority)", () => {
       }
     });
 
-    test("creates the exact §2.2 tables, keys and foreign keys with no projection columns", async () => {
+    test("creates the exact \u00A72.2 tables, keys and foreign keys with no projection columns", async () => {
       const context = controlRoot("upgrade-shape");
       createV3Store(context);
       await upgradeStore(context);
@@ -671,13 +671,13 @@ function key64(text: string): string {
   return Buffer.from(text, "utf8").toString("base64url");
 }
 
-describe("execution-tokens: §3.1 canonical value form and version tokens", () => {
+describe("execution-tokens: \u00A73.1 canonical value form and version tokens", () => {
   test("sorts object keys by code unit regardless of insertion and keeps array order", () => {
     const inserted = serializeExecutionValue({ b: 1, a: { d: [3, 1, 2], c: null }, "": true });
     expect(inserted).toBe(serializeExecutionValue({ "": true, a: { c: null, d: [3, 1, 2] }, b: 1 }));
     expect(inserted).toBe('{"":true,"a":{"c":null,"d":[3,1,2]},"b":1}\n');
     // Code-unit order, never a locale collation.
-    expect(serializeExecutionValue({ ä: 1, Z: 2, a: 3 })).toBe('{"Z":2,"a":3,"ä":1}\n');
+    expect(serializeExecutionValue({ \u00E4: 1, Z: 2, a: 3 })).toBe('{"Z":2,"a":3,"\u00E4":1}\n');
     // Array order is content, not a set.
     expect(serializeExecutionValue([2, 1])).toBe("[2,1]\n");
     expect(serializeExecutionValue([2, 1])).not.toBe(serializeExecutionValue([1, 2]));
@@ -716,7 +716,7 @@ describe("execution-tokens: §3.1 canonical value form and version tokens", () =
     }
     // A well-formed surrogate pair and the largest safe integer are canonical.
     expect(serializeExecutionValue({ emoji: "\uD83D\uDE00", n: Number.MAX_SAFE_INTEGER })).toBe(
-      '{"emoji":"😀","n":9007199254740991}\n',
+      '{"emoji":"\uD83D\uDE00","n":9007199254740991}\n',
     );
   });
 
@@ -873,7 +873,7 @@ function seedAuthorityGraph(db: StoreDb, epoch: number, options: { stateId?: str
   ).run(JSON.stringify(FROZEN_PIN));
 }
 
-describe("execution-initialize: §3 create-only empty execution authority", () => {
+describe("execution-initialize: \u00A73 create-only empty execution authority", () => {
   test("does not activate execution merely because the schema was upgraded", async () => {
     const upgraded = controlRoot("upgrade-is-not-activation");
     createV3Store(upgraded);
@@ -1302,7 +1302,7 @@ function sealedInput(context: StoreContext, planId: string): Record<string, unkn
   }
 }
 
-describe("execution-domain: §3 workflow creation, sealed input and authoritative read", () => {
+describe("execution-domain: \u00A73 workflow creation, sealed input and authoritative read", () => {
   test("creates registry, workflow, plan rows and sealed inputs in one transaction", async () => {
     const { context, epoch } = await freshStore("domain-create");
     const initialized = await initializeExecutionAuthority(context);
@@ -1928,7 +1928,7 @@ function storedPlan(context: StoreContext, planId: string): { revision: number; 
   }
 }
 
-describe("execution-session: §2.3 binding, role-scoped identity and the plan read", () => {
+describe("execution-session: \u00A72.3 binding, role-scoped identity and the plan read", () => {
   test("binds the creating identity as coordinator, serves it a plan and creates no session file", async () => {
     const fixture = await createdWorkflow("session-coordinator");
     const { context, storeId, epoch, workflowToken, planTokens } = fixture;

@@ -173,7 +173,7 @@ function expectAuthorityBlock(run: RunResult, code: string): void {
   expect(out[2]).toBe(AUTHORITY_LINE);
 }
 
-describe("execution-hook-authority — the ZCode write gate refuses retired coordination documents (plan S4)", () => {
+describe("execution-hook-authority \u2014 the ZCode write gate refuses retired coordination documents (plan S4)", () => {
   test("the retired root register and workflow snapshots are refused in hard AND soft mode", async () => {
     for (const enforcement of ["hard", "soft"] as const) {
       const fixture = makeHarness(`execution-${enforcement}`, enforcement);

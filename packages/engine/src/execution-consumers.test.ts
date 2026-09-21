@@ -182,7 +182,7 @@ async function refusalOf(action: () => Promise<unknown>): Promise<{ code: string
  * execution-authority-read — the adapter (primary spec §5)
  * ------------------------------------------------------------------------ */
 
-describe("execution-authority-read — one exact read of the committed authority", () => {
+describe("execution-authority-read \u2014 one exact read of the committed authority", () => {
   test("no selection returns the registry/root token and the whole state", async () => {
     const context = await activeGraph("authority-read-root");
     const committed = await readExecutionState(context);
@@ -469,7 +469,7 @@ function plantRetiredFileRoute(context: StoreContext): string {
   return snapshotPath;
 }
 
-describe("execution-cross-domain — an unavailable authority refuses every read", () => {
+describe("execution-cross-domain \u2014 an unavailable authority refuses every read", () => {
   test("execution-cross-domain-reads-never-answer-from-old-json-or-projections", async () => {
     const context = await registeredStore("cross-domain-unavailable");
     const snapshotPath = plantRetiredFileRoute(context);

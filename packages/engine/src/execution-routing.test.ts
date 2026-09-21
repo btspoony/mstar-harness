@@ -214,7 +214,7 @@ afterEach(() => {
   delete process.env.MSTAR_STORE_BUSY_TIMEOUT_MS;
 });
 
-describe("execution-protected-route — an ACTIVE execution authority retires the file route", () => {
+describe("execution-protected-route \u2014 an ACTIVE execution authority retires the file route", () => {
   test("refuses direct and authorized persistence of the retired root and snapshot, leaving the bytes untouched", async () => {
     const fx = workspace("exec-routing-direct-");
     try {
@@ -429,7 +429,7 @@ describe("execution-protected-route — an ACTIVE execution authority retires th
   });
 });
 
-describe("execution-entry-boundary — the veto is decided before any payload validation", () => {
+describe("execution-entry-boundary \u2014 the veto is decided before any payload validation", () => {
   test("every coordinated entry refuses on authority before its request, revision, id, ref, CAS-token or version-token checks", async () => {
     const fx = workspace("exec-routing-entry-");
     try {
@@ -534,7 +534,7 @@ describe("execution-entry-boundary — the veto is decided before any payload va
   });
 });
 
-describe("execution-path-safety — canonical-target classification, not basenames", () => {
+describe("execution-path-safety \u2014 canonical-target classification, not basenames", () => {
   test("refuses a symlinked alias of the retired root document without touching the alias target", async () => {
     const fx = workspace("exec-routing-alias-");
     try {
@@ -654,7 +654,7 @@ describe("execution-path-safety — canonical-target classification, not basenam
   });
 });
 
-describe("execution-unavailable — an unusable store refuses instead of falling back to JSON", () => {
+describe("execution-unavailable \u2014 an unusable store refuses instead of falling back to JSON", () => {
   test("a corrupt active store refuses the file route and writes nothing", async () => {
     const fx = workspace("exec-routing-corrupt-");
     try {
