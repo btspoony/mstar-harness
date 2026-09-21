@@ -473,6 +473,14 @@ describe("execution-cross-domain — an unavailable authority refuses every read
   test("execution-cross-domain-reads-never-answer-from-old-json-or-projections", async () => {
     const context = await registeredStore("cross-domain-unavailable");
     const snapshotPath = plantRetiredFileRoute(context);
+    // The planted bytes, captured AFTER planting and BEFORE the reads under
+    // test, so the comparison below measures the reads, not the fixture. These
+    // are the exact file bytes: a marker substring would survive a partial
+    // rewrite of the same JSON, which is the failure this scenario exists to
+    // catch.
+    const rootRegisterPath = join(context.harnessDir, "status.json");
+    const plantedSnapshot = readFileSync(snapshotPath);
+    const plantedRootRegister = readFileSync(rootRegisterPath);
 
     // The ACCEPTED registration is what the authority answers with: its own
     // Todo plan, not the file's Done one, and the DB route is the route.
@@ -504,8 +512,9 @@ describe("execution-cross-domain — an unavailable authority refuses every read
     expect(await refusalOf(() => withStoreRead(context, queryDashboard("workflows")))).toEqual({ code: "store.corrupt" });
 
     // …and the leftover bytes are exactly where they were: no read promoted
-    // them and no refusal rewrote them.
-    expect(readFileSync(snapshotPath, "utf8")).toContain("plan-from-the-file");
-    expect(readFileSync(join(context.harnessDir, "status.json"), "utf8")).toContain('"workflows":[]');
+    // them and no refusal rewrote them. Byte-for-byte against the captured
+    // pre-state — a rewrite that keeps the old marker fragment must fail here.
+    expect(readFileSync(snapshotPath)).toEqual(plantedSnapshot);
+    expect(readFileSync(rootRegisterPath)).toEqual(plantedRootRegister);
   });
 });

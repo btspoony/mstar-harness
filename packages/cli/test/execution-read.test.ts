@@ -247,6 +247,12 @@ describe("execution-cli-read — the CLI answers execution-source reads by route
   test("show answers with the authority, never the leftover snapshot or its session file", async () => {
     const fixture = await activeFixture("cli-read-show");
     const snapshotPath = plantLeftoverSnapshot(fixture);
+    // The planted bytes, captured AFTER planting and BEFORE the CLI run: the
+    // comparison below is byte-for-byte, so a rewrite that keeps the file's
+    // marker text still fails it.
+    const rootRegisterPath = join(fixture.harnessDir, "status.json");
+    const plantedSnapshot = readFileSync(snapshotPath);
+    const plantedRootRegister = readFileSync(rootRegisterPath);
 
     const result = runCli(["plan", "show", "--workflow", WORKFLOW_ID, "--plan", PLAN_ID, "--json"], fixture);
 
@@ -268,8 +274,10 @@ describe("execution-cli-read — the CLI answers execution-source reads by route
     expect(result.stdout).not.toContain("plan-from-the-file");
     expect(result.stdout).not.toContain("holder-from-the-file");
 
-    // The file the CLI was reading before this route landed is untouched.
-    expect(readFileSync(snapshotPath, "utf8")).toContain("plan-from-the-file");
+    // The files the CLI was reading before this route landed are untouched,
+    // byte for byte — root register and snapshot both.
+    expect(readFileSync(snapshotPath)).toEqual(plantedSnapshot);
+    expect(readFileSync(rootRegisterPath)).toEqual(plantedRootRegister);
   });
 
   test("show refuses a leftover session envelope as authority and never silently falls back to files", async () => {
@@ -468,8 +476,16 @@ describe("execution-cli-read — the CLI answers execution-source reads by route
 describe("execution-cross-domain", () => {
   test("execution-cross-domain-cli-reads-refuse-an-unavailable-authority", async () => {
     const fixture = await activeFixture("cross-domain-cli");
-    plantLeftoverSnapshot(fixture);
+    const snapshotPath = plantLeftoverSnapshot(fixture);
     const sessionPath = plantLeftoverSession(fixture);
+    // Every planted artifact's exact bytes, captured AFTER planting and BEFORE
+    // the reads under test: the comparisons at the end measure the reads, and
+    // they are byte-for-byte, so a rewrite that keeps the identifying markers
+    // still fails them.
+    const rootRegisterPath = join(fixture.harnessDir, "status.json");
+    const plantedSnapshot = readFileSync(snapshotPath);
+    const plantedRootRegister = readFileSync(rootRegisterPath);
+    const plantedSession = readFileSync(sessionPath);
 
     // The accepted authority answers while it is readable: the DB row, not the
     // file's Done plan and not its lease.
@@ -521,7 +537,12 @@ describe("execution-cross-domain", () => {
       "store.corrupt",
     );
 
-    // The retired bytes are untouched: never promoted, never rewritten.
-    expect(readFileSync(sessionPath, "utf8")).toContain("leftover-session");
+    // The retired bytes are untouched — byte for byte: never promoted, never
+    // rewritten. The snapshot, the root register and the session envelope are
+    // each compared against their captured pre-state, so a partial rewrite of
+    // planted JSON fails here even when its markers survive.
+    expect(readFileSync(snapshotPath)).toEqual(plantedSnapshot);
+    expect(readFileSync(rootRegisterPath)).toEqual(plantedRootRegister);
+    expect(readFileSync(sessionPath)).toEqual(plantedSession);
   });
 });
