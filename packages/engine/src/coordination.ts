@@ -41,7 +41,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { GateResult } from "./core.js";
 import {
   CoordinationError,
@@ -4879,13 +4879,39 @@ export type PreparePlanAppend = Readonly<{
 }>;
 
 /**
+ * One existing row's plan-file pointer correction (prerequisite contract §4.1):
+ * `expectedFile` is the exact pointer the row holds **now** and `file` is that
+ * row's own canonical registered plan file. The exact old value is supplied
+ * rather than inferred, so the correction can only move a pointer it observed —
+ * a row that changed underneath the caller (or was addressed by a guess) never
+ * gets repointed.
+ */
+export type PreparePlanFileCorrection = Readonly<{
+  id: string;
+  expectedFile: string;
+  file: string;
+}>;
+
+/**
  * The whole structural delta one amendment may apply (§ Admission and mutation
  * step 5): the caller's main-worktree branch, the approved plan appends, the
- * reviewed integration checkout, and the single approved execution-policy key.
+ * exact pointer corrections of existing rows, the reviewed integration
+ * checkout, and the single approved execution-policy key.
  */
 export type PrepareWorkflowPatch = Readonly<{
   mainWorktreeBranch: string;
   appendPlans: readonly PreparePlanAppend[];
+  /**
+   * Optional exact corrections of existing rows' plan-file pointers
+   * (prerequisite contract §4.1): each entry names one registered Todo row by
+   * the pointer it holds now and that row's own canonical plan file, repairing
+   * a malformed repository-relative pointer without a raw snapshot edit. Only
+   * `file` is addressable — a correction never rebinds a row to a different
+   * document, and no other row field can travel through the patch. Omitted or
+   * empty means no correction; a correction-only call passes an empty
+   * `appendPlans`.
+   */
+  correctPlanFiles?: readonly PreparePlanFileCorrection[];
   integrationWorktreePath?: string;
   planParallelism?: "serial" | "parallel";
 }>;
@@ -4932,12 +4958,19 @@ const PREPARE_PHASE = "phase-1-prepare";
 const PREPARE_PATCH_KEYS: readonly string[] = [
   "mainWorktreeBranch",
   "appendPlans",
+  "correctPlanFiles",
   "integrationWorktreePath",
   "planParallelism",
 ];
 
 /** One plan append carries exactly these fields — no runtime row state. */
 const PREPARE_APPEND_KEYS: readonly string[] = ["id", "title", "file", "metadata"];
+
+/**
+ * One pointer correction carries exactly these fields — no row state at all,
+ * and the old pointer by value so the addressed row can be re-verified.
+ */
+const PREPARE_CORRECTION_KEYS: readonly string[] = ["id", "expectedFile", "file"];
 
 /** Row metadata the amendment may record (spec § New API and CLI, frozen). */
 const PREPARE_APPEND_METADATA_KEYS: readonly string[] = [
@@ -5604,9 +5637,182 @@ function readIntegrationWorktreePath(
   return path;
 }
 
+/** One pointer correction as the commit path applies it: the row and its canonical file. */
+type PreparePlanFileCorrectionDelta = Readonly<{ id: string; file: string }>;
+
+/**
+ * The exact repository-relative spelling of a plan file, derived from this
+ * control root's **configured** plan directory and the repository root that
+ * owns the harness — the malformed form rows registered before P2 still hold
+ * (`.mstar/plans/<id>.md`), and the one recovery spelling prerequisite contract
+ * §4.1 admits for the *old* pointer only.
+ *
+ * It is derived, never searched: the spelling is the relative path from the
+ * repository root to the canonical plan file, must not be absolute or escape
+ * that root, and must resolve back to the same canonical target (so an alias or
+ * a symlinked ancestor cannot make a different file pass). `undefined` means
+ * this control root has no repository root to derive the form from, and then
+ * only the declared forms count.
+ */
+function repositoryRelativePlanPointer(harnessRoot: string, planPath: string): string | undefined {
+  const repository = readMainWorktree(canonicalizeNearestExisting(harnessRoot));
+  if (repository === null) return undefined;
+  const repositoryRoot = canonicalTarget(repository.root);
+  const spelling = relative(repositoryRoot, planPath);
+  if (spelling === "" || isAbsolute(spelling) || spelling === ".." || spelling.startsWith(`..${sep}`)) return undefined;
+  if (canonicalTarget(join(repositoryRoot, spelling)) !== planPath) return undefined;
+  return spelling;
+}
+
+/**
+ * One existing row's plan-file pointer correction (prerequisite contract §4.1).
+ * The addressed row must be exactly one registered row of this workflow, the
+ * pointer it holds now must be **exactly** the caller's `expectedFile`, that old
+ * pointer must identify the same plan, and the corrected pointer must pass the
+ * shared registered-plan resolver — the canonical configured
+ * `{PLAN_DIR}/<id>.md`, with a matching declared `plan_id`.
+ *
+ * The old pointer is accepted in only two forms: a pointer the shared resolver
+ * itself accepts (the canonical absolute or the normalized harness-relative
+ * spelling), or the exact derived repository-relative spelling of that same
+ * canonical target. Everything else refuses — a foreign absolute path, a
+ * same-basename guess, an unrelated directory prefix, a copied plan markdown
+ * with a matching header, a pointer naming another plan. The returned delta is
+ * the pointer alone: a correction carries no other row field, so it can neither
+ * rebind a row to a different document nor change a row's contents, status or
+ * metadata. A row that already carries preparation or execution evidence
+ * refuses earlier, at the admission that gates every amendment.
+ */
+function readPlanFileCorrection(
+  value: unknown,
+  context: { harnessRoot: string; snapshot: WorkflowSnapshot },
+): PreparePlanFileCorrectionDelta {
+  if (!isPlainObject(value)) {
+    throw prepareAmendmentRefusal("invalid-plan", "every correctPlanFiles entry must be an object", { actual: value ?? null });
+  }
+  const unexpected = Object.keys(value).filter((key) => !PREPARE_CORRECTION_KEYS.includes(key));
+  if (unexpected.length > 0) {
+    throw prepareAmendmentRefusal(
+      "invalid-plan",
+      `a plan-file correction accepts only ${PREPARE_CORRECTION_KEYS.join(", ")} \u2014 unexpected key(s): ${unexpected.join(", ")}`,
+      { allowed: [...PREPARE_CORRECTION_KEYS], unexpected },
+    );
+  }
+  const id = value.id;
+  if (!isNonEmptyString(id)) {
+    throw prepareAmendmentRefusal("invalid-plan", `a plan-file correction requires a non-empty id \u2014 got ${JSON.stringify(id ?? null)}`, {
+      actual: id ?? null,
+    });
+  }
+  try {
+    assertSafePathComponent(id, "plan id");
+  } catch (error) {
+    throw prepareAmendmentRefusal("invalid-plan", `plan id ${JSON.stringify(id)} is not a safe path component: ${errorMessage(error)}`, {
+      plan_id: id,
+    });
+  }
+  // Exactly one row may address the id: a correction addresses the row the
+  // caller observed, never "whichever row matched first".
+  const addressed = context.snapshot.plans.filter((row) => rowPlanIds(row).includes(id));
+  if (addressed.length === 0) {
+    throw prepareAmendmentRefusal(
+      "invalid-plan",
+      `plan ${id} is not a row of workflow ${context.snapshot.id} \u2014 a correction repairs an existing row's pointer and never creates one`,
+      { plan_id: id, workflow_id: context.snapshot.id },
+    );
+  }
+  if (addressed.length > 1) {
+    throw prepareAmendmentRefusal(
+      "invalid-plan",
+      `plan ${id} is addressed by ${addressed.length} rows of workflow ${context.snapshot.id} \u2014 the corrected row would be ambiguous`,
+      { plan_id: id, workflow_id: context.snapshot.id, rows: addressed.length },
+    );
+  }
+  const row = addressed[0]!;
+  const previous = row.file;
+  if (!isNonEmptyString(previous)) {
+    throw prepareAmendmentRefusal(
+      "invalid-plan",
+      `plan ${id} records no readable file pointer \u2014 a correction cannot prove which pointer it replaces`,
+      { plan_id: id, actual: previous ?? null },
+    );
+  }
+  const expectedFile = value.expectedFile;
+  if (typeof expectedFile !== "string") {
+    throw prepareAmendmentRefusal(
+      "invalid-plan",
+      `plan ${id} correction requires expectedFile as a string \u2014 got ${JSON.stringify(expectedFile ?? null)}`,
+      { plan_id: id, actual: expectedFile ?? null },
+    );
+  }
+  // The exact observed value, not a normalised one: a correction applies to the
+  // pointer this patch was reviewed against, so a row that moved underneath the
+  // caller refuses instead of being repointed from a stale observation.
+  if (previous !== expectedFile) {
+    throw prepareAmendmentRefusal(
+      "invalid-plan",
+      `plan ${id} row holds file ${JSON.stringify(previous)}, not the expectedFile ${JSON.stringify(expectedFile)} this correction was reviewed against \u2014 re-read the snapshot and review the pointer again`,
+      { plan_id: id, expected: expectedFile, actual: previous },
+    );
+  }
+  const declared = value.file;
+  // Shape first, like the append path: the shared resolver names the pointer
+  // form with `path.isAbsolute(file)` before its own type check.
+  if (typeof declared !== "string") {
+    throw prepareAmendmentRefusal("invalid-plan", `plan ${id} requires a corrected file path as a string`, {
+      plan_id: id,
+      actual: declared ?? null,
+    });
+  }
+  let resolved: RegisteredPlanFile;
+  try {
+    resolved = resolveRegisteredPlanFile({ harnessRoot: context.harnessRoot, planId: id, file: declared });
+  } catch (error) {
+    if (error instanceof PlanPathError) {
+      throw prepareAmendmentRefusal("invalid-plan", error.message, {
+        plan_id: id,
+        path_code: error.code,
+        ...error.details,
+      });
+    }
+    throw error;
+  }
+  const planPath = resolved.planPath;
+  // The pointer being replaced must identify THIS plan: either a form the shared
+  // resolver accepts, or the exact derived repository-relative spelling of the
+  // same canonical target. A same-basename file, a copied document whose header
+  // happens to match, and a foreign or unrelated directory all fail both tests.
+  let previousIdentifiesPlan = false;
+  try {
+    previousIdentifiesPlan = resolveRegisteredPlanFile({ harnessRoot: context.harnessRoot, planId: id, file: expectedFile }).planPath === planPath;
+  } catch (error) {
+    if (!(error instanceof PlanPathError)) throw error;
+  }
+  if (!previousIdentifiesPlan) {
+    previousIdentifiesPlan = expectedFile === repositoryRelativePlanPointer(context.harnessRoot, planPath);
+  }
+  if (!previousIdentifiesPlan) {
+    throw prepareAmendmentRefusal(
+      "invalid-plan",
+      `plan ${id} held pointer ${JSON.stringify(expectedFile)} does not identify this plan's own file ${planPath} \u2014 a correction repairs a malformed pointer of the same plan, it never rebinds a row`,
+      { plan_id: id, actual: expectedFile, expected: planPath },
+    );
+  }
+  // A correction that would not move the pointer is not a correction.
+  if (previous === planPath) {
+    throw prepareAmendmentRefusal(
+      "invalid-plan",
+      `plan ${id} already records ${planPath} \u2014 the correction would not change this row's pointer`,
+      { plan_id: id, path: planPath },
+    );
+  }
+  return { id, file: planPath };
+}
+
 /** The validated delta of one amendment. */
 type PrepareProposal = {
   rows: PlanRow[];
+  corrections: readonly PreparePlanFileCorrectionDelta[];
   integrationWorktreePath?: string;
   planParallelism?: string;
 };
@@ -5626,7 +5832,11 @@ function samePlanIdSet(left: readonly string[], right: readonly string[]): boole
  * colliding ids, malformed metadata, escaping or missing references,
  * mismatched plan headers, a patch that changes nothing, a plan set the
  * compass does not declare, and an integration branch or checkout the
- * workflow does not own all refuse here — before anything is written.
+ * workflow does not own all refuse here — before anything is written. So does
+ * a plan-file correction that addresses no existing row (or an ambiguous one),
+ * whose `expectedFile` is not the exact pointer the row holds, whose old
+ * pointer names another document, or whose corrected pointer is not that plan's
+ * own registered file (prerequisite contract §4.1).
  */
 function readPreparePatch(
   patch: unknown,
@@ -5709,6 +5919,32 @@ function readPreparePatch(
       mainWorktreeBranch,
     }),
   );
+  // Plan-file corrections address existing rows and obey the append's own
+  // plan-file rules. An id is either new (appended) or existing (corrected),
+  // never both, and never twice in one patch.
+  const rawCorrections = patch.correctPlanFiles;
+  if (rawCorrections !== undefined && !Array.isArray(rawCorrections)) {
+    throw prepareAmendmentRefusal("invalid-patch", "the amendment patch requires correctPlanFiles as an array", {
+      actual: rawCorrections ?? null,
+    });
+  }
+  const correctionIds = new Set<string>();
+  for (const entry of rawCorrections ?? []) {
+    const id = isPlainObject(entry) ? entry.id : undefined;
+    if (!isNonEmptyString(id)) continue; // the entry's own shape refuses below
+    if (declaredIds.has(id)) {
+      throw prepareAmendmentRefusal(
+        "duplicate-plan",
+        `plan ${id} is both appended and corrected in one patch \u2014 a plan id is either a new row or an existing one`,
+        { plan_id: id },
+      );
+    }
+    if (correctionIds.has(id)) {
+      throw prepareAmendmentRefusal("duplicate-plan", `plan ${id} appears twice in correctPlanFiles`, { plan_id: id });
+    }
+    correctionIds.add(id);
+  }
+  const corrections = (rawCorrections ?? []).map((entry) => readPlanFileCorrection(entry, context));
   const integrationWorktreePath =
     patch.integrationWorktreePath === undefined
       ? undefined
@@ -5722,10 +5958,10 @@ function readPreparePatch(
     : undefined;
   const changesPath = integrationWorktreePath !== undefined && integrationWorktreePath !== recordedPath;
   const changesPolicy = planParallelism !== undefined && planParallelism !== recordedParallelism;
-  if (rows.length === 0 && !changesPath && !changesPolicy) {
+  if (rows.length === 0 && corrections.length === 0 && !changesPath && !changesPolicy) {
     throw prepareAmendmentRefusal(
       "invalid-patch",
-      `the patch changes nothing on workflow ${context.snapshot.id} \u2014 it appends no plan, records no new integration checkout and no different plan parallelism`,
+      `the patch changes nothing on workflow ${context.snapshot.id} \u2014 it appends no plan, corrects no plan file, records no new integration checkout and no different plan parallelism`,
       { workflow_id: context.snapshot.id },
     );
   }
@@ -5782,6 +6018,7 @@ function readPreparePatch(
   }
   return {
     rows,
+    corrections,
     ...(integrationWorktreePath !== undefined ? { integrationWorktreePath } : {}),
     ...(planParallelism !== undefined ? { planParallelism } : {}),
   };
@@ -5916,15 +6153,25 @@ export async function amendPrepareWorkflow(
     if (!admission.ok) throw prepareAmendmentRefusal(admission.reason, admission.message, admission.details);
     const proposal = readPreparePatch(input.patch, { harnessRoot: scope.harnessRoot, snapshot, compass, main });
     // Old rows and unknown fields are taken from disk by value — only the new
-    // rows, the requested whitelist projections and `updated_at` are new. The
-    // policy copy carries the stored object's own keys, so keys this verb may
-    // not edit survive it.
+    // rows, the corrected row pointers, the requested whitelist projections and
+    // `updated_at` are new. The policy copy carries the stored object's own
+    // keys, so keys this verb may not edit survive it.
     const executionPolicy: WorkflowExecutionPolicy = { ...(snapshot.execution_policy ?? {}) };
     if (proposal.planParallelism !== undefined) executionPolicy.plan_parallelism = proposal.planParallelism;
+    // A corrected row is rebuilt by spread, so every field but `file` survives
+    // by value and by position (prerequisite contract §4.1).
+    const correctedFiles = new Map(proposal.corrections.map((entry) => [entry.id, entry.file]));
+    const plans = [
+      ...snapshot.plans.map((row) => {
+        const address = rowPlanIds(row).find((planId) => correctedFiles.has(planId));
+        return address === undefined ? row : { ...row, file: correctedFiles.get(address)! };
+      }),
+      ...proposal.rows,
+    ];
     const next: WorkflowSnapshot = {
       ...snapshot,
       updated_at: nowIso(),
-      plans: [...snapshot.plans, ...proposal.rows],
+      plans,
       ...(proposal.integrationWorktreePath !== undefined
         ? { integration_worktree_path: proposal.integrationWorktreePath }
         : {}),
@@ -5965,8 +6212,9 @@ export async function amendPrepareWorkflow(
     session: scope.session,
     session_file: scope.sessionPath,
     outcome: "amended",
-    // The delta only appends admissible Todo rows and records the requested
-    // path/policy, so the workflow stays admissible after the commit.
+    // The delta only appends admissible Todo rows, corrects the addressed rows'
+    // plan-file pointers and records the requested path/policy, so the workflow
+    // stays admissible after the commit.
     view: {
       workflowId: scope.workflowId,
       snapshotVersion: committed.snapshotVersion,

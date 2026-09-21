@@ -2235,6 +2235,59 @@ describe("Prepare workflow amendment", () => {
       chmodSync(appendPlan, 0o644);
     }
   }, 30000);
+
+  test("a plan-file correction travels through the CLI JSON payload and repairs a malformed pointer", () => {
+    const fixture = makePrepareFixture();
+    // The row holds the repository-relative pointer rows registered before the
+    // resolver landed; the correction names that same plan's canonical file and
+    // the exact pointer it replaces.
+    const doc = readJson(fixture.snapshotPath) as { plans: Array<Record<string, unknown>> };
+    doc.plans[0]!.file = `.mstar/plans/${PREPARE_ROW}.md`;
+    writeJson(fixture.snapshotPath, doc);
+    const correctedPath = join(fixture.planDir, `${PREPARE_ROW}.md`);
+    writeJson(fixture.patchPath, {
+      ...preparePatchOf(fixture),
+      correctPlanFiles: [{ id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: correctedPath }],
+    });
+    const statusBefore = readText(fixture.statusPath);
+
+    const view = jsonOf(runCli(showPrepareArgs(fixture), fixture.root));
+    const amended = runCli(
+      amendPrepareArgs(fixture, { snapshot: String(view.snapshot_version), compass: String(view.compass_version) }),
+      fixture.root,
+    );
+
+    expect(amended.exitCode).toBe(0);
+    const payload = jsonOf(amended);
+    expect(payload.ok).toBe(true);
+    expect(payload.operation).toBe("amend-prepare");
+    expect(payload.outcome).toBe("amended");
+    expect(payload.plan_ids).toEqual([PREPARE_ROW, PREPARE_APPEND]);
+
+    const after = readJson(fixture.snapshotPath) as { plans: Array<Record<string, unknown>> };
+    expect(after.plans[0]!.file).toBe(correctedPath);
+    // The correction is a delta: the root register never moves.
+    expect(readText(fixture.statusPath)).toBe(statusBefore);
+
+    // A correction whose old pointer names a foreign document refuses with exit
+    // 1 and leaves the snapshot byte-identical.
+    const before = readText(fixture.snapshotPath);
+    const freshView = jsonOf(runCli(showPrepareArgs(fixture), fixture.root));
+    writeJson(fixture.patchPath, {
+      ...preparePatchOf(fixture),
+      appendPlans: [],
+      correctPlanFiles: [
+        { id: PREPARE_ROW, expectedFile: join(fixture.root, `${PREPARE_ROW}.md`), file: correctedPath },
+      ],
+    });
+    const refused = runCli(
+      amendPrepareArgs(fixture, { snapshot: String(freshView.snapshot_version), compass: String(freshView.compass_version) }),
+      fixture.root,
+    );
+    expect(refused.exitCode).toBe(1);
+    expect(jsonOf(refused).code).toBe("coordination.prepare-amendment.invalid-plan");
+    expect(readText(fixture.snapshotPath)).toBe(before);
+  }, 30000);
 });
 
 describe("mstar plan — catalog pin", () => {

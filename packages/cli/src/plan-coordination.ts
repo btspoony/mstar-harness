@@ -1177,8 +1177,9 @@ export function registerWorkflowCommands(program: Command): void {
   workflow
     .command("amend-prepare")
     .description(
-      "Append approved Todo plan rows, record the reviewed integration checkout and the approved plan parallelism " +
-        "(coordinator session; both byte versions from `workflow show-prepare` are required)",
+      "Append approved Todo plan rows, correct existing rows' malformed plan-file pointers, record the reviewed " +
+        "integration checkout and the approved plan parallelism (coordinator session; both byte versions from " +
+        "`workflow show-prepare` are required)",
     )
     .option("--session <path>", "Absolute coordinator session JSON envelope path")
     .option("--expect-snapshot <sha256>", "Current snapshot byte version from `workflow show-prepare`")

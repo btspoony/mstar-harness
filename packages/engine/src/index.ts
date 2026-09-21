@@ -518,6 +518,7 @@ export type {
   PlanScopeInput,
   PrepareCoordinationRequest,
   PreparePlanAppend,
+  PreparePlanFileCorrection,
   PrepareWorkflowPatch,
   PrepareWorkflowResult,
   PrepareWorkflowView,

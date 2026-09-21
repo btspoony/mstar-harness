@@ -4265,6 +4265,350 @@ describe("Prepare workflow amendment", () => {
     expect(recreate.code).toBe("coordination.version-conflict");
     expect(readFileSync(orphanSnapshotPath, "utf8")).toBe(createdBytes);
   });
+
+  test("a plan-file correction repairs a malformed repository-relative pointer and preserves every other row field", async () => {
+    const fixture = makePrepareFixture();
+    await ensurePrepareCoordinator(fixture);
+    const before = prepareSnapshotOf(fixture);
+    const oldRow = before.plans[0]!;
+    const correctedPath = join(fixture.planDir, `${PREPARE_ROW}.md`);
+    // The fixture row holds the repository-relative pointer rows registered
+    // before the resolver landed; the correction names that same plan's
+    // canonical file and the exact pointer it replaces.
+    expect(oldRow.file).toBe(`.mstar/plans/${PREPARE_ROW}.md`);
+
+    const amended = await amendPrepare(
+      fixture,
+      preparePatchOf(fixture, {
+        correctPlanFiles: [
+          { id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: correctedPath },
+        ],
+      }),
+    );
+
+    expect(amended.ok).toBe(true);
+    expect(amended.view.allowed).toBe(true);
+    expect(amended.view.planIds).toEqual([PREPARE_ROW, PREPARE_APPEND]);
+    const after = prepareSnapshotOf(fixture);
+    // Only the pointer moved: the row keeps its identity, title, status,
+    // metadata and position, and the appended row still lands after it.
+    expect(after.plans[0]).toEqual({ ...oldRow, file: correctedPath });
+    expect(after.plans[0]!.metadata).toEqual(oldRow.metadata);
+    expect(after.plans[1]!.file).toBe(join(fixture.planDir, `${PREPARE_APPEND}.md`));
+    expect(after.plans).toHaveLength(2);
+
+    // A correction is a delta on its own: with the compass declaring only the
+    // registered row it is admitted with an empty append array.
+    const only = makePrepareFixture();
+    await ensurePrepareCoordinator(only);
+    writeText(only.compassPath, readFileSync(only.compassPath, "utf8").replace(`  - ${PREPARE_APPEND}\n`, ""));
+    const onlyRow = prepareSnapshotOf(only).plans[0]!;
+    const onlyPath = join(only.planDir, `${PREPARE_ROW}.md`);
+
+    const correctedOnly = await amendPrepare(
+      only,
+      preparePatchOf(only, {
+        appendPlans: [],
+        correctPlanFiles: [
+          { id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: onlyPath },
+        ],
+      }),
+    );
+
+    expect(correctedOnly.view.planIds).toEqual([PREPARE_ROW]);
+    expect(prepareSnapshotOf(only).plans).toEqual([{ ...onlyRow, file: onlyPath }]);
+
+    // The declared harness-relative spelling is an accepted OLD form too — the
+    // resolver reads it, and the correction canonicalizes it.
+    const declared = makePrepareFixture();
+    await ensurePrepareCoordinator(declared);
+    writeText(declared.compassPath, readFileSync(declared.compassPath, "utf8").replace(`  - ${PREPARE_APPEND}\n`, ""));
+    const declaredRow = prepareSnapshotOf(declared).plans[0]!;
+    const declaredDoc = prepareSnapshotOf(declared);
+    declaredDoc.plans[0]!.file = `plans/${PREPARE_ROW}.md`;
+    writeJson(declared.snapshotPath, declaredDoc);
+
+    const declaredAmended = await amendPrepare(
+      declared,
+      preparePatchOf(declared, {
+        appendPlans: [],
+        correctPlanFiles: [
+          { id: PREPARE_ROW, expectedFile: `plans/${PREPARE_ROW}.md`, file: join(declared.planDir, `${PREPARE_ROW}.md`) },
+        ],
+      }),
+    );
+
+    expect(declaredAmended.view.planIds).toEqual([PREPARE_ROW]);
+    expect(prepareSnapshotOf(declared).plans).toEqual([
+      { ...declaredRow, file: join(declared.planDir, `${PREPARE_ROW}.md`) },
+    ]);
+  }, 30000);
+
+  test("a plan-file correction refuses an unbindable old or new pointer without writing anything", async () => {
+    const cases: ReadonlyArray<{
+      name: string;
+      prepare?: (fixture: PrepareFixture) => void;
+      correction: (fixture: PrepareFixture) => unknown;
+    }> = [
+      { name: "entry-not-an-object", correction: () => "plan-prepare" },
+      {
+        name: "unexpected-key",
+        correction: (fixture) => ({
+          id: PREPARE_ROW,
+          expectedFile: `.mstar/plans/${PREPARE_ROW}.md`,
+          file: join(fixture.planDir, `${PREPARE_ROW}.md`),
+          status: "Todo",
+        }),
+      },
+      { name: "missing-id", correction: (fixture) => ({ expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(fixture.planDir, `${PREPARE_ROW}.md`) }) },
+      {
+        name: "unsafe-id",
+        correction: (fixture) => ({ id: "../plan-prepare", expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(fixture.planDir, `${PREPARE_ROW}.md`) }),
+      },
+      {
+        name: "unknown-row",
+        correction: (fixture) => ({
+          id: PREPARE_UNREVIEWED,
+          expectedFile: `.mstar/plans/${PREPARE_UNREVIEWED}.md`,
+          file: join(fixture.planDir, `${PREPARE_UNREVIEWED}.md`),
+        }),
+      },
+      { name: "expected-file-missing", correction: (fixture) => ({ id: PREPARE_ROW, file: join(fixture.planDir, `${PREPARE_ROW}.md`) }) },
+      {
+        // The exact value is required: a canonical absolute spelling of the
+        // same pointer is not what the row holds, so the observation is stale.
+        name: "expected-file-form-mismatch",
+        correction: (fixture) => ({ id: PREPARE_ROW, expectedFile: join(fixture.planDir, `${PREPARE_ROW}.md`), file: join(fixture.planDir, `${PREPARE_ROW}.md`) }),
+      },
+      {
+        name: "expected-file-other-value",
+        correction: (fixture) => ({ id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_APPEND}.md`, file: join(fixture.planDir, `${PREPARE_ROW}.md`) }),
+      },
+      {
+        name: "new-file-foreign",
+        correction: (fixture) => ({ id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(fixture.root, `${PREPARE_ROW}.md`) }),
+      },
+      {
+        name: "new-file-another-plan",
+        correction: (fixture) => ({ id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(fixture.planDir, `${PREPARE_APPEND}.md`) }),
+      },
+      {
+        name: "new-file-traversal",
+        correction: (fixture) => ({ id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: `../plans/${PREPARE_ROW}.md` }),
+      },
+      {
+        name: "new-file-missing",
+        prepare: (fixture) => rmSync(join(fixture.planDir, `${PREPARE_ROW}.md`)),
+        correction: (fixture) => ({ id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(fixture.planDir, `${PREPARE_ROW}.md`) }),
+      },
+      {
+        name: "new-file-header-mismatch",
+        prepare: (fixture) =>
+          writeText(join(fixture.planDir, `${PREPARE_ROW}.md`), preparePlanMarkdown({ id: "plan-other", workingBranch: "feature/plan-other" })),
+        correction: (fixture) => ({ id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(fixture.planDir, `${PREPARE_ROW}.md`) }),
+      },
+      {
+        // The row's pointer names another plan: a correction repairs a
+        // malformed pointer of the SAME plan, it never rebinds a row.
+        name: "old-pointer-names-another-plan",
+        prepare: (fixture) => {
+          const doc = prepareSnapshotOf(fixture);
+          doc.plans[0]!.file = `.mstar/plans/${PREPARE_APPEND}.md`;
+          writeJson(fixture.snapshotPath, doc);
+        },
+        correction: (fixture) => ({ id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_APPEND}.md`, file: join(fixture.planDir, `${PREPARE_ROW}.md`) }),
+      },
+      {
+        name: "old-pointer-same-basename-elsewhere",
+        prepare: (fixture) => {
+          const doc = prepareSnapshotOf(fixture);
+          doc.plans[0]!.file = `.mstar/plans/archive/${PREPARE_ROW}.md`;
+          writeJson(fixture.snapshotPath, doc);
+        },
+        correction: (fixture) => ({ id: PREPARE_ROW, expectedFile: `.mstar/plans/archive/${PREPARE_ROW}.md`, file: join(fixture.planDir, `${PREPARE_ROW}.md`) }),
+      },
+      {
+        name: "old-pointer-foreign-absolute",
+        prepare: (fixture) => {
+          const doc = prepareSnapshotOf(fixture);
+          doc.plans[0]!.file = join(fixture.root, `${PREPARE_ROW}.md`);
+          writeJson(fixture.snapshotPath, doc);
+        },
+        correction: (fixture) => ({ id: PREPARE_ROW, expectedFile: join(fixture.root, `${PREPARE_ROW}.md`), file: join(fixture.planDir, `${PREPARE_ROW}.md`) }),
+      },
+      {
+        // A copied plan document with a matching header, under an unrelated
+        // directory: neither its spelling nor its target is this plan's file.
+        name: "old-pointer-copied-document-with-matching-header",
+        prepare: (fixture) => {
+          const copyDir = join(fixture.planDir, "copy");
+          mkdirSync(copyDir, { recursive: true });
+          writeText(join(copyDir, `${PREPARE_ROW}.md`), preparePlanMarkdown({ id: PREPARE_ROW, workingBranch: `feature/${PREPARE_ROW}` }));
+          const doc = prepareSnapshotOf(fixture);
+          doc.plans[0]!.file = `.mstar/plans/copy/${PREPARE_ROW}.md`;
+          writeJson(fixture.snapshotPath, doc);
+        },
+        correction: (fixture) => ({ id: PREPARE_ROW, expectedFile: `.mstar/plans/copy/${PREPARE_ROW}.md`, file: join(fixture.planDir, `${PREPARE_ROW}.md`) }),
+      },
+    ];
+
+    for (const correctionCase of cases) {
+      const fixture = makePrepareFixture();
+      await ensurePrepareCoordinator(fixture);
+      correctionCase.prepare?.(fixture);
+      const before = protectedBytes(fixture);
+
+      const refusal = await prepareRefusalOf(() =>
+        amendPrepare(fixture, preparePatchOf(fixture, { correctPlanFiles: [correctionCase.correction(fixture)] })),
+      );
+
+      expect(`${correctionCase.name}: ${refusal.code}`).toBe(
+        `${correctionCase.name}: coordination.prepare-amendment.invalid-plan`,
+      );
+      expect(protectedBytes(fixture)).toEqual(before);
+    }
+
+    // A correction that would not move the pointer is not a correction: the
+    // already-canonical row refuses as a no-op.
+    const noop = makePrepareFixture();
+    await ensurePrepareCoordinator(noop);
+    const canonical = join(noop.planDir, `${PREPARE_ROW}.md`);
+    const noopDoc = prepareSnapshotOf(noop);
+    noopDoc.plans[0]!.file = canonical;
+    writeJson(noop.snapshotPath, noopDoc);
+    const noopBefore = protectedBytes(noop);
+
+    const noopRefusal = await prepareRefusalOf(() =>
+      amendPrepare(
+        noop,
+        preparePatchOf(noop, {
+          correctPlanFiles: [{ id: PREPARE_ROW, expectedFile: canonical, file: canonical }],
+        }),
+      ),
+    );
+
+    expect(noopRefusal.code).toBe("coordination.prepare-amendment.invalid-plan");
+    expect(protectedBytes(noop)).toEqual(noopBefore);
+  }, 30000);
+
+  test("a plan-file correction is gated by the collision, CAS and whole-workflow admission rules", async () => {
+    // `correctPlanFiles` is validated as an array like every other patch key.
+    const malformed = makePrepareFixture();
+    await ensurePrepareCoordinator(malformed);
+    const malformedBefore = protectedBytes(malformed);
+    const malformedRefusal = await prepareRefusalOf(() =>
+      amendPrepare(malformed, preparePatchOf(malformed, { correctPlanFiles: "plan-prepare" })),
+    );
+    expect(malformedRefusal.code).toBe("coordination.prepare-amendment.invalid-patch");
+    expect(protectedBytes(malformed)).toEqual(malformedBefore);
+
+    // The same id cannot be appended and corrected in one patch.
+    const overlap = makePrepareFixture();
+    await ensurePrepareCoordinator(overlap);
+    const overlapBefore = protectedBytes(overlap);
+    const overlapRefusal = await prepareRefusalOf(() =>
+      amendPrepare(
+        overlap,
+        preparePatchOf(overlap, {
+          correctPlanFiles: [
+            {
+              id: PREPARE_APPEND,
+              expectedFile: `.mstar/plans/${PREPARE_APPEND}.md`,
+              file: join(overlap.planDir, `${PREPARE_APPEND}.md`),
+            },
+          ],
+        }),
+      ),
+    );
+    expect(overlapRefusal.code).toBe("coordination.prepare-amendment.duplicate-plan");
+    expect(protectedBytes(overlap)).toEqual(overlapBefore);
+
+    // …and never twice in one correction list.
+    const duplicate = makePrepareFixture();
+    await ensurePrepareCoordinator(duplicate);
+    const duplicateBefore = protectedBytes(duplicate);
+    const duplicateRefusal = await prepareRefusalOf(() =>
+      amendPrepare(
+        duplicate,
+        preparePatchOf(duplicate, {
+          correctPlanFiles: [
+            { id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(duplicate.planDir, `${PREPARE_ROW}.md`) },
+            { id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(duplicate.planDir, `${PREPARE_ROW}.md`) },
+          ],
+        }),
+      ),
+    );
+    expect(duplicateRefusal.code).toBe("coordination.prepare-amendment.duplicate-plan");
+    expect(protectedBytes(duplicate)).toEqual(duplicateBefore);
+
+    // A stale byte token refuses before any pointer moves.
+    const stale = makePrepareFixture();
+    await ensurePrepareCoordinator(stale);
+    const staleView = await prepareViewOf(stale);
+    const staleBefore = protectedBytes(stale);
+    const staleRefusal = await prepareRefusalOf(() =>
+      amendWith(
+        stale,
+        preparePatchOf(stale, {
+          correctPlanFiles: [
+            { id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(stale.planDir, `${PREPARE_ROW}.md`) },
+          ],
+        }),
+        { snapshotVersion: `sha256:${"0".repeat(64)}`, compassVersion: staleView.view.compassVersion },
+      ),
+    );
+    expect(staleRefusal.code).toBe("coordination.prepare-amendment.stale");
+    expect(protectedBytes(stale)).toEqual(staleBefore);
+
+    // A prepared/sealed row is never repointed: the whole-workflow admission
+    // refuses before the patch is even read, with the state named.
+    const admissionCases: ReadonlyArray<{
+      name: string;
+      patch: (
+        doc: { plans: Array<Record<string, unknown>> } & Record<string, unknown>,
+        fixture: PrepareFixture,
+      ) => void;
+    }> = [
+      { name: "prepared-row", patch: (doc) => { doc.plans[0]!.coordination = { revision: 1 }; } },
+      {
+        name: "sealed-row-lease",
+        patch: (doc, fixture) => {
+          doc.plans[0]!.execution_lease = {
+            holder: "11111111-1111-1111-1111-111111111111",
+            claimed_at: "2026-09-16T00:00:00Z",
+            worktree_path: join(fixture.root, "wt-row"),
+            working_branch: `feature/${PREPARE_ROW}`,
+          };
+        },
+      },
+    ];
+
+    for (const admissionCase of admissionCases) {
+      const fixture = makePrepareFixture();
+      await ensurePrepareCoordinator(fixture);
+      const doc = prepareSnapshotOf(fixture);
+      admissionCase.patch(doc, fixture);
+      writeJson(fixture.snapshotPath, doc);
+      const before = protectedBytes(fixture);
+
+      const refusal = await prepareRefusalOf(() =>
+        amendPrepare(
+          fixture,
+          preparePatchOf(fixture, {
+            appendPlans: [],
+            correctPlanFiles: [
+              { id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(fixture.planDir, `${PREPARE_ROW}.md`) },
+            ],
+          }),
+        ),
+      );
+
+      expect(`${admissionCase.name}: ${refusal.code}`).toBe(
+        `${admissionCase.name}: coordination.prepare-amendment.execution-started`,
+      );
+      expect(protectedBytes(fixture)).toEqual(before);
+    }
+  }, 30000);
 });
 
 /* ------------------------------------------------------------------------ *
