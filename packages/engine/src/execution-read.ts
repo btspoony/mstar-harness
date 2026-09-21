@@ -71,15 +71,15 @@ export function assertExecutionSelection(selection: ExecutionReadSelection | und
   const { workflowId, planId } = candidate;
   if (workflowId !== undefined && !isNonEmptyString(workflowId)) {
     throw invalidSelection(
-      `a read selection names the workflow it addresses with a non-empty id — got ${JSON.stringify(workflowId)}`,
+      `a read selection names the workflow it addresses with a non-empty id \u2014 got ${JSON.stringify(workflowId)}`,
     );
   }
   if (planId !== undefined && !isNonEmptyString(planId)) {
-    throw invalidSelection(`a read selection names the plan it addresses with a non-empty id — got ${JSON.stringify(planId)}`);
+    throw invalidSelection(`a read selection names the plan it addresses with a non-empty id \u2014 got ${JSON.stringify(planId)}`);
   }
   if (planId !== undefined && workflowId === undefined) {
     throw invalidSelection(
-      "a plan read addresses (workflowId, planId): pass the workflow that owns the plan — a lone plan id would have " +
+      "a plan read addresses (workflowId, planId): pass the workflow that owns the plan \u2014 a lone plan id would have " +
         "to be resolved by guessing its parent, which this authority never does.",
     );
   }

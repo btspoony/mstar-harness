@@ -340,7 +340,7 @@ function tokenRefusal(detail: string): ExecutionError {
 
 function canonicalIntegerText(value: number, what: string): string {
   if (!Number.isInteger(value) || !Number.isSafeInteger(value) || value <= 0) {
-    throw tokenRefusal(`${what} must be a positive safe integer — got ${String(value)}`);
+    throw tokenRefusal(`${what} must be a positive safe integer \u2014 got ${String(value)}`);
   }
   return String(value);
 }
@@ -348,13 +348,13 @@ function canonicalIntegerText(value: number, what: string): string {
 function positiveDecimal(text: string, what: string): number {
   if (!DECIMAL_RE.test(text)) {
     throw tokenRefusal(
-      `${what} must be a plain decimal without sign, whitespace or leading zeros — got ${JSON.stringify(text)}`,
+      `${what} must be a plain decimal without sign, whitespace or leading zeros \u2014 got ${JSON.stringify(text)}`,
     );
   }
   const value = Number(text);
-  if (value === 0) throw tokenRefusal(`${what} must be greater than 0 — got ${JSON.stringify(text)}`);
+  if (value === 0) throw tokenRefusal(`${what} must be greater than 0 \u2014 got ${JSON.stringify(text)}`);
   if (value > Number.MAX_SAFE_INTEGER) {
-    throw tokenRefusal(`${what} exceeds Number.MAX_SAFE_INTEGER — got ${JSON.stringify(text)}`);
+    throw tokenRefusal(`${what} exceeds Number.MAX_SAFE_INTEGER \u2014 got ${JSON.stringify(text)}`);
   }
   return value;
 }
@@ -362,13 +362,13 @@ function positiveDecimal(text: string, what: string): number {
 function assertKeyShape(kind: ExecutionKind, key: readonly string[]): void {
   const expected = KIND_KEY_LENGTHS[kind];
   if (key.length !== expected) {
-    throw tokenRefusal(`a ${kind} token key carries ${expected} part(s) — got ${key.length}`);
+    throw tokenRefusal(`a ${kind} token key carries ${expected} part(s) \u2014 got ${key.length}`);
   }
   for (const part of key) {
     if (!isNonEmptyString(part)) throw tokenRefusal(`every ${kind} token key part must be a non-empty string`);
   }
   if (kind === "session" && key[1] !== "coordinator" && key[1] !== "plan-pm") {
-    throw tokenRefusal(`a session token key carries the role as its second part — got ${JSON.stringify(key[1])}`);
+    throw tokenRefusal(`a session token key carries the role as its second part \u2014 got ${JSON.stringify(key[1])}`);
   }
 }
 
@@ -405,7 +405,7 @@ export function executionToken(
   revision: number,
 ): ExecutionToken {
   if (!isExecutionKind(kind)) throw tokenRefusal(`unknown execution kind ${JSON.stringify(kind)}`);
-  if (!STORE_UUID_RE.test(storeId)) throw tokenRefusal(`a store identity must be a lowercase UUID — got ${JSON.stringify(storeId)}`);
+  if (!STORE_UUID_RE.test(storeId)) throw tokenRefusal(`a store identity must be a lowercase UUID \u2014 got ${JSON.stringify(storeId)}`);
   assertKeyShape(kind, key);
   const epochText = canonicalIntegerText(epoch, "the epoch");
   const revisionText = canonicalIntegerText(revision, "the revision");
@@ -418,14 +418,14 @@ export function executionToken(
  * malformed token is never coerced, trimmed or reinterpreted.
  */
 export function parseExecutionToken(value: unknown): ParsedExecutionToken {
-  if (typeof value !== "string") throw tokenRefusal(`an execution token must be a string — got ${typeof value}`);
+  if (typeof value !== "string") throw tokenRefusal(`an execution token must be a string \u2014 got ${typeof value}`);
   const parts = value.split(":");
-  if (parts.length !== 6) throw tokenRefusal(`an execution token has 6 colon-separated parts — got ${parts.length}`);
+  if (parts.length !== 6) throw tokenRefusal(`an execution token has 6 colon-separated parts \u2014 got ${parts.length}`);
   const [prefix, kindText, storeId, epochText, key64, revisionText] = parts;
-  if (prefix !== TOKEN_PREFIX) throw tokenRefusal(`an execution token starts with ${TOKEN_PREFIX} — got ${JSON.stringify(prefix)}`);
+  if (prefix !== TOKEN_PREFIX) throw tokenRefusal(`an execution token starts with ${TOKEN_PREFIX} \u2014 got ${JSON.stringify(prefix)}`);
   if (!isExecutionKind(kindText)) throw tokenRefusal(`unknown execution kind ${JSON.stringify(kindText)}`);
   const kind = kindText;
-  if (!STORE_UUID_RE.test(storeId)) throw tokenRefusal(`a store identity must be a lowercase UUID — got ${JSON.stringify(storeId)}`);
+  if (!STORE_UUID_RE.test(storeId)) throw tokenRefusal(`a store identity must be a lowercase UUID \u2014 got ${JSON.stringify(storeId)}`);
   const epoch = positiveDecimal(epochText, "the epoch");
   const revision = positiveDecimal(revisionText, "the revision");
   return { kind, storeId, epoch, key: decodeTokenKey(key64, kind), revision };
@@ -443,7 +443,7 @@ export function assertExecutionToken(value: unknown, expected: ExecutionTokenExp
   if (parsed.kind !== expected.kind) {
     throw new ExecutionError(
       "execution.token-kind",
-      `expected a ${expected.kind} token — got a ${parsed.kind} token. The address kind is never inferred from a supplied token.`,
+      `expected a ${expected.kind} token \u2014 got a ${parsed.kind} token. The address kind is never inferred from a supplied token.`,
     );
   }
   const sameKey =
@@ -1138,7 +1138,7 @@ function assertNoLegacyExecutionSources(context: StoreContext): void {
     throw new ExecutionError(
       "execution.not-empty",
       `the control harness at ${harnessDir} still holds live execution sources: ${sources.join(", ")}. ` +
-        `Execution authority is initialized only for an empty execution workspace — this workspace belongs on the ` +
+        `Execution authority is initialized only for an empty execution workspace \u2014 this workspace belongs on the ` +
         `staged migration route. Nothing was created or modified.`,
     );
   }
@@ -1154,7 +1154,7 @@ function assertActiveStoreAuthority(db: StoreDb): void {
     throw new ExecutionError(
       "store.not-active",
       `the issue/catalog store is ${row.authority_state}; execution authority is initialized only on an active ` +
-        `store. Complete the store activation barrier first — nothing was modified.`,
+        `store. Complete the store activation barrier first \u2014 nothing was modified.`,
     );
   }
 }
@@ -1251,7 +1251,7 @@ const OPERATION_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
 export function assertOperationId(value: unknown): string {
   if (typeof value !== "string" || !OPERATION_ID_RE.test(value)) {
     throw invalidInput(
-      `an operation id must be a nonempty ASCII [A-Za-z0-9._:-]+ string of at most 128 characters — got ${JSON.stringify(value)}`,
+      `an operation id must be a nonempty ASCII [A-Za-z0-9._:-]+ string of at most 128 characters \u2014 got ${JSON.stringify(value)}`,
     );
   }
   return value;
@@ -1319,7 +1319,7 @@ export function suppliedCatalogPin(row: Record<string, unknown>, workflowId: str
   ) {
     throw new ExecutionPinConflictError(
       `${what} is not a complete catalog execution pin (store_id, entity_revision, document_hash, relation_hash) ` +
-        `— got ${JSON.stringify(raw)}`,
+        `\u2014 got ${JSON.stringify(raw)}`,
       details,
     );
   }
@@ -1402,7 +1402,7 @@ export function resolveCreateWorkflow(
   for (const row of doc.plans) {
     const planId = rowPlanId(row) as string;
     if (seen.has(planId)) {
-      throw invalidInput(`snapshot ${workflowId} lists plan ${planId} twice — a plan row is one identity`);
+      throw invalidInput(`snapshot ${workflowId} lists plan ${planId} twice \u2014 a plan row is one identity`);
     }
     seen.add(planId);
     // The row's own lease and coordination blocks are accepted execution
@@ -1551,15 +1551,15 @@ function assertSelectedCatalogEntities(
     const details = { workflow_id: workflowId, plan_id: plan.planId, pin };
     if (pin.store_id !== storeId) {
       throw new ExecutionPinConflictError(
-        `plan ${plan.planId} selects catalog store ${pin.store_id}, which is not this store (${storeId}) — a foreign ` +
+        `plan ${plan.planId} selects catalog store ${pin.store_id}, which is not this store (${storeId}) \u2014 a foreign ` +
           `selection is never sealed as this store's frozen input`,
         details,
       );
     }
     if (executionInputHash(plan.row, plan.planId) !== pin.document_hash) {
       throw new ExecutionPinConflictError(
-        `plan ${plan.planId}'s supplied pin records document hash ${pin.document_hash.slice(0, 12)}…, but the frozen ` +
-          `execution input it is sealed with hashes differently — the pin and its row disagree; neither side is rewritten`,
+        `plan ${plan.planId}'s supplied pin records document hash ${pin.document_hash.slice(0, 12)}\u2026, but the frozen ` +
+          `execution input it is sealed with hashes differently \u2014 the pin and its row disagree; neither side is rewritten`,
         details,
       );
     }
@@ -1711,7 +1711,7 @@ export async function createExecutionWorkflow(
           "execution.operation-conflict",
           `operation id ${JSON.stringify(operationId)} is already committed on this store epoch for a different request ` +
             `(kind, scope, expected token, caller or payload). An operation id is an idempotency key, not a reusable ` +
-            `slot — retry the committed request unchanged or use a new id. Nothing was created.`,
+            `slot \u2014 retry the committed request unchanged or use a new id. Nothing was created.`,
         );
       }
       return {
@@ -1799,7 +1799,7 @@ function resolveBindRequest(caller: ExecutionCaller, input: unknown): ResolvedBi
   const { workflowId, planId, role } = input;
   const operationId = assertOperationId(input.operationId);
   if (role !== "coordinator" && role !== "plan-pm") {
-    throw invalidInput(`a session role is "coordinator" or "plan-pm" — got ${JSON.stringify(role)}`);
+    throw invalidInput(`a session role is "coordinator" or "plan-pm" \u2014 got ${JSON.stringify(role)}`);
   }
   if (!isNonEmptyString(workflowId)) throw invalidInput("a session bind needs a non-empty workflowId");
   if (caller.role !== role) {
@@ -1818,7 +1818,7 @@ function resolveBindRequest(caller: ExecutionCaller, input: unknown): ResolvedBi
   }
   if (role === "coordinator") {
     if (planId !== null) {
-      throw invalidInput(`a coordinator bind takes no plan id — got ${JSON.stringify(planId)}`);
+      throw invalidInput(`a coordinator bind takes no plan id \u2014 got ${JSON.stringify(planId)}`);
     }
     if (caller.planId !== null) {
       throw new CoordinationError(
@@ -1830,7 +1830,7 @@ function resolveBindRequest(caller: ExecutionCaller, input: unknown): ResolvedBi
     return { role, planId: null, workflowId, sessionId: caller.sessionId, operationId };
   }
   if (!isNonEmptyString(planId)) {
-    throw invalidInput(`a plan-pm bind needs the plan id it binds — got ${JSON.stringify(planId)}`);
+    throw invalidInput(`a plan-pm bind needs the plan id it binds \u2014 got ${JSON.stringify(planId)}`);
   }
   if (caller.planId !== planId) {
     throw new CoordinationError(
@@ -2522,7 +2522,7 @@ export function readOperationReplay<T>(
     throw new ExecutionError(
       "execution.operation-conflict",
       `operation id ${JSON.stringify(input.operationId)} is already committed on this store epoch for a different request ` +
-        `(kind, scope, expected token, caller or payload). An operation id is an idempotency key, not a reusable slot — ` +
+        `(kind, scope, expected token, caller or payload). An operation id is an idempotency key, not a reusable slot \u2014 ` +
         `retry the committed request unchanged or use a new id. Nothing was written.`,
     );
   }
@@ -2616,7 +2616,7 @@ export function resolvePlanRead(caller: ExecutionCaller, session: unknown, planI
     !isNonEmptyString(sessionId)
   ) {
     throw invalidInput(
-      `a session reference carries {storeId, epoch, workflowId, role, sessionId, planId} — got ${JSON.stringify(bound)}`,
+      `a session reference carries {storeId, epoch, workflowId, role, sessionId, planId} \u2014 got ${JSON.stringify(bound)}`,
     );
   }
   if (role !== "coordinator" && role !== "plan-pm") {
@@ -2626,14 +2626,14 @@ export function resolvePlanRead(caller: ExecutionCaller, session: unknown, planI
   if (role === "plan-pm") {
     if (!isNonEmptyString(boundPlanId)) {
       throw sessionRoleRefusal(
-        `a plan-pm session reference carries ${JSON.stringify(boundPlanId)} as its plan id — a plan-pm session names the plan it is bound to`,
+        `a plan-pm session reference carries ${JSON.stringify(boundPlanId)} as its plan id \u2014 a plan-pm session names the plan it is bound to`,
         { role, plan_id: boundPlanId },
       );
     }
     planScope = boundPlanId;
   } else if (boundPlanId !== null) {
     throw sessionRoleRefusal(
-      `a coordinator session reference carries ${JSON.stringify(boundPlanId)} as its plan id — a coordinator address takes no plan id`,
+      `a coordinator session reference carries ${JSON.stringify(boundPlanId)} as its plan id \u2014 a coordinator address takes no plan id`,
       { role, plan_id: boundPlanId },
     );
   }
@@ -2748,7 +2748,7 @@ export async function bindExecutionSession(
         "execution.session-unavailable",
         `workflow ${bind.workflowId} records session ${bind.sessionId} as a ${bind.role} session in state ` +
           `${mine.state} at epoch ${mine.ref.epoch}; the current epoch is ${tx.epoch}. A suspended, revoked or ` +
-          `epoch-invalidated binding is never revived by a normal bind — the named recovery transition, with stop ` +
+          `epoch-invalidated binding is never revived by a normal bind \u2014 the named recovery transition, with stop ` +
           `evidence and the prior holder, is the only way back. Nothing was bound.`,
       );
     }
@@ -2779,7 +2779,7 @@ export async function bindExecutionSession(
       if (view.state.status !== "running") {
         throw new CoordinationError(
           "coordination.invalid-transition",
-          `workflow ${bind.workflowId} is ${String(view.state.status)} — a coordinator session binds only to a running lifecycle`,
+          `workflow ${bind.workflowId} is ${String(view.state.status)} \u2014 a coordinator session binds only to a running lifecycle`,
           { workflow_id: bind.workflowId, status: view.state.status },
         );
       }
@@ -2798,7 +2798,7 @@ export async function bindExecutionSession(
       if (plan.coordination === null || plan.coordination.prepared === undefined) {
         throw new CoordinationError(
           "coordination.not-prepared",
-          `plan ${bind.planId} has no prepared Assignment in workflow ${bind.workflowId} — the coordinator must ` +
+          `plan ${bind.planId} has no prepared Assignment in workflow ${bind.workflowId} \u2014 the coordinator must ` +
             `prepare it first. A plan session never claims ownership of an unprepared row.`,
           { workflow_id: bind.workflowId, plan_id: bind.planId },
         );
@@ -2808,7 +2808,7 @@ export async function bindExecutionSession(
           "coordination.duplicate-holder",
           `plan ${bind.planId} already holds an execution lease (holder session ` +
             `${JSON.stringify(plan.executionLease.holder_session_id)}, status ${JSON.stringify(plan.executionLease.status)}). ` +
-            `A bind never replaces, steals or revives a recorded lease — reconcile is the transition that may move it. ` +
+            `A bind never replaces, steals or revives a recorded lease \u2014 reconcile is the transition that may move it. ` +
             `Nothing was bound.`,
           { workflow_id: bind.workflowId, plan_id: bind.planId, holder: plan.executionLease.holder_session_id },
         );
@@ -3001,7 +3001,7 @@ export function resolveWorkflowWrite(caller: ExecutionCaller, session: unknown, 
     !isNonEmptyString(sessionId)
   ) {
     throw invalidInput(
-      `a session reference carries {storeId, epoch, workflowId, role, sessionId, planId} — got ${JSON.stringify(bound)}`,
+      `a session reference carries {storeId, epoch, workflowId, role, sessionId, planId} \u2014 got ${JSON.stringify(bound)}`,
     );
   }
   if (role !== "coordinator" || planId !== null) {
@@ -3074,7 +3074,7 @@ export function readExecutionWorkflowWitness(
   if (registered === undefined) {
     throw new CoordinationError(
       "coordination.workflow-not-found",
-      `workflow ${read.workflowId} is not registered as an ACTIVE lifecycle — a terminal or unregistered workflow stays ` +
+      `workflow ${read.workflowId} is not registered as an ACTIVE lifecycle \u2014 a terminal or unregistered workflow stays ` +
         `as history and is never amended`,
       { workflow_id: read.workflowId },
     );

@@ -406,8 +406,8 @@ const DELIVERY_TAIL = {
  * §3 the published surface
  * ------------------------------------------------------------------------ */
 
-describe("execution-workflow: §3 the published APIs and their verbatim signatures", () => {
-  test("exports both APIs verbatim with their §3 signatures", () => {
+describe("execution-workflow: \u00A73 the published APIs and their verbatim signatures", () => {
+  test("exports both APIs verbatim with their \u00A73 signatures", () => {
     // The compile-time pins: each binding fails to typecheck if the declared
     // signature drifts from primary spec §3.
     const workflowSurface: (
@@ -435,7 +435,7 @@ describe("execution-workflow: §3 the published APIs and their verbatim signatur
  * §3 mutateExecutionWorkflow
  * ------------------------------------------------------------------------ */
 
-describe("execution-workflow: §3 workflow-level phase, lifecycle, policy, checkout and delivery", () => {
+describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, checkout and delivery", () => {
   test("a phase transition is decided by the registered compass and preserves the lifecycle identity", async () => {
     const fixture = await workflowFixture("phase-valid");
     const before = await readExecutionState(fixture.context);
@@ -935,7 +935,7 @@ describe("execution-workflow: §3 workflow-level phase, lifecycle, policy, check
  * §2.3/§4.2 recoverExecutionCoordinator
  * ------------------------------------------------------------------------ */
 
-describe("execution-coordinator-recovery: §2.3/§4.2 the named recovery bootstrap", () => {
+describe("execution-coordinator-recovery: \u00A72.3/\u00A74.2 the named recovery bootstrap", () => {
   test("recovery without a named, attested-stopped holder refuses", async () => {
     const fixture = await workflowFixture("recovery-refusals");
     const before = await workflowFootprint(fixture.context);

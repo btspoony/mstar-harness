@@ -2985,7 +2985,7 @@ export function revalidateGitRefWitness(
     if (actual !== entry.sha256) {
       throw refuse(
         `${witness.repository} ${entry.path} changed after the Git proof was read ` +
-          `(${entry.sha256 ?? "absent"} -> ${actual ?? "absent"}) — nothing commits on a stale witness`,
+          `(${entry.sha256 ?? "absent"} -> ${actual ?? "absent"}) \u2014 nothing commits on a stale witness`,
         { path: entry.path, expected: entry.sha256, actual },
       );
     }

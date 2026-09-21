@@ -822,7 +822,7 @@ describe("execution-registration", () => {
  * The migration boundary
  * ------------------------------------------------------------------------ */
 
-describe("execution-registration — migration boundary", () => {
+describe("execution-registration \u2014 migration boundary", () => {
   test("execution-registration-blocks-migration-while-a-legacy-operation-is-pending", async () => {
     const { context } = await legacyFixture("migration-pending");
     await plantPendingLegacyOperation(context, "op-legacy-in-flight", WORKFLOW_ID);

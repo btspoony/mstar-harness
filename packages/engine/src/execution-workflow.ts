@@ -202,7 +202,7 @@ function assertWorkflowOperationShape(operation: unknown): asserts operation is 
       if (!isNonEmptyString(op.phase)) throw invalidWorkflowInput("a phase operation needs the non-empty phase it requests");
       if (!isNonEmptyString(op.compassPath) || !isAbsolute(op.compassPath)) {
         throw invalidWorkflowInput(
-          "a phase operation needs the absolute compassPath of the lifecycle's registered compass — the gate is evaluated " +
+          "a phase operation needs the absolute compassPath of the lifecycle's registered compass \u2014 the gate is evaluated " +
             "against the canonical compass, never against a caller-supplied verdict",
         );
       }
@@ -212,7 +212,7 @@ function assertWorkflowOperationShape(operation: unknown): asserts operation is 
       assertExactKeys(op, ["kind", "status", "reason"], "a lifecycle operation");
       if (typeof op.status !== "string" || !(WORKFLOW_LIFECYCLE_STATUSES as readonly string[]).includes(op.status)) {
         throw invalidWorkflowInput(
-          `a lifecycle operation needs status one of ${WORKFLOW_LIFECYCLE_STATUSES.join(" | ")} — got ${JSON.stringify(op.status)}`,
+          `a lifecycle operation needs status one of ${WORKFLOW_LIFECYCLE_STATUSES.join(" | ")} \u2014 got ${JSON.stringify(op.status)}`,
         );
       }
       if (!isNonEmptyString(op.reason)) throw invalidWorkflowInput("a lifecycle operation needs the non-empty reason it is recorded with");
@@ -235,7 +235,7 @@ function assertWorkflowOperationShape(operation: unknown): asserts operation is 
       if (!isPlainObject(op.delivery)) throw invalidWorkflowInput("a delivery operation needs a delivery evidence object");
       if (Object.keys(op.delivery).length === 0) {
         throw invalidWorkflowInput(
-          "a delivery operation needs at least one evidence member (compound | pr | merge | completion) — an empty patch changes nothing",
+          "a delivery operation needs at least one evidence member (compound | pr | merge | completion) \u2014 an empty patch changes nothing",
         );
       }
       return;
@@ -399,7 +399,7 @@ async function readPhaseEvidence(
   const registered = header.compass_ref;
   if (!isNonEmptyString(registered)) {
     throw invalidWorkflowTransition(
-      `workflow ${workflowId} registers no compass_ref — a phase transition is decided by the iteration compass gate, and a ` +
+      `workflow ${workflowId} registers no compass_ref \u2014 a phase transition is decided by the iteration compass gate, and a ` +
         `lifecycle without a registered compass has no gate to evaluate`,
       { workflow_id: workflowId },
     );
@@ -464,7 +464,7 @@ async function readIntegrationWorktreeEvidence(
   const integrationBranch = header.branch?.integration;
   if (!isNonEmptyString(integrationBranch)) {
     throw invalidWorkflowTransition(
-      `workflow ${workflowId} records no branch.integration — an integration checkout cannot be verified against a branch ` +
+      `workflow ${workflowId} records no branch.integration \u2014 an integration checkout cannot be verified against a branch ` +
         `the lifecycle does not register`,
       { workflow_id: workflowId },
     );
@@ -483,7 +483,7 @@ async function readIntegrationWorktreeEvidence(
   const mainRoot = canonicalTarget(main.root);
   if (path === mainRoot || path === canonicalTarget(control)) {
     throw invalidWorkflowTransition(
-      `the integration checkout ${path} is the main/control checkout — a dedicated integration worktree is required`,
+      `the integration checkout ${path} is the main/control checkout \u2014 a dedicated integration worktree is required`,
       { workflow_id: workflowId, path, expected: `a checkout distinct from ${mainRoot}` },
     );
   }
@@ -558,7 +558,7 @@ function revalidateWorkflowEvidence(evidence: WorkflowEvidence): void {
       throw new CoordinationError(
         "coordination.evidence-stale",
         `the compass ${evidence.compass.path} changed after the phase gate was read (${evidence.compass.sha256} -> ` +
-          `${current ?? "absent"}) — no phase commits on a stale gate input`,
+          `${current ?? "absent"}) \u2014 no phase commits on a stale gate input`,
         { path: evidence.compass.path, expected: evidence.compass.sha256, actual: current },
       );
     }
@@ -571,7 +571,7 @@ function revalidateWorkflowEvidence(evidence: WorkflowEvidence): void {
   if (evidence.worktree !== undefined && (!existsSync(evidence.worktree.path) || !statSync(evidence.worktree.path).isDirectory())) {
     throw new CoordinationError(
       "coordination.evidence-stale",
-      `the integration checkout ${evidence.worktree.path} disappeared after it was validated — nothing records a checkout ` +
+      `the integration checkout ${evidence.worktree.path} disappeared after it was validated \u2014 nothing records a checkout ` +
         `that is no longer there`,
       { path: evidence.worktree.path },
     );
@@ -688,7 +688,7 @@ function applyWorkflowOperation(input: {
   const current = witness.view.state as unknown as WorkflowSnapshot;
   if (isTerminalSnapshot(current)) {
     throw invalidWorkflowTransition(
-      `workflow ${workflowId} is ${current.status} — a closed lifecycle is never amended, and its history stays exactly as ` +
+      `workflow ${workflowId} is ${current.status} \u2014 a closed lifecycle is never amended, and its history stays exactly as ` +
         `it was recorded`,
       { workflow_id: workflowId, status: current.status },
     );
@@ -772,7 +772,7 @@ function applyPhaseTransition(input: {
       throw new CoordinationError(
         "coordination.evidence-stale",
         `the integration checkout of workflow ${workflowId} changed after its branch was probed (${String(checkout.path)} -> ` +
-          `${String(registeredPath)}) — the §3.5 branch probe belongs to the registered checkout`,
+          `${String(registeredPath)}) \u2014 the \u00A73.5 branch probe belongs to the registered checkout`,
         { workflow_id: workflowId, expected: registeredPath, actual: checkout.path },
       );
     }
@@ -835,7 +835,7 @@ function applyLifecycleTransition(input: {
     const notDone = rows.filter((row) => rowStatusOf(row) !== "Done");
     if (notDone.length > 0) {
       throw invalidWorkflowTransition(
-        `workflow ${workflowId} cannot complete: every owned plan row must be Done — ${notDone
+        `workflow ${workflowId} cannot complete: every owned plan row must be Done \u2014 ${notDone
           .map((row) => `${String(row.id)} (${rowStatusOf(row) || "no status"})`)
           .join(", ")}`,
         { workflow_id: workflowId },
@@ -852,7 +852,7 @@ function applyLifecycleTransition(input: {
   const dangling = danglingOwnership(witness);
   if (dangling.length > 0) {
     throw invalidWorkflowTransition(
-      `workflow ${workflowId} cannot become ${status} while it still owns ${dangling.join(", ")} — a terminal lifecycle ` +
+      `workflow ${workflowId} cannot become ${status} while it still owns ${dangling.join(", ")} \u2014 a terminal lifecycle ` +
         `carries no dangling lease, and this route never deletes one: release it through the existing completion or ` +
         `reconcile transition first`,
       { workflow_id: workflowId, status },
@@ -896,7 +896,7 @@ function applyExecutionPolicy(workflowId: string, policy: WorkflowExecutionPolic
   const parallelism = declared.plan_parallelism;
   if (parallelism !== undefined && (typeof parallelism !== "string" || !PLAN_PARALLELISM_VALUES.includes(parallelism))) {
     throw invalidWorkflowInput(
-      `workflow ${workflowId} execution_policy.plan_parallelism must be one of ${PLAN_PARALLELISM_VALUES.join(" | ")} — ` +
+      `workflow ${workflowId} execution_policy.plan_parallelism must be one of ${PLAN_PARALLELISM_VALUES.join(" | ")} \u2014 ` +
         `got ${JSON.stringify(parallelism ?? null)}`,
     );
   }
@@ -933,8 +933,8 @@ function applyDeliveryEvidence(input: {
   if (header.type !== "plan" || (kind !== "development" && kind !== "verification/report-only")) {
     throw invalidWorkflowTransition(
       `workflow ${workflowId} cannot record delivery evidence: only a type: plan lifecycle with a registered delivery_kind ` +
-        `carries one (got type ${JSON.stringify(header.type)} / delivery_kind ${JSON.stringify(kind ?? null)}) — the kind is ` +
-        `declared at registration and never inferred (contract §1)`,
+        `carries one (got type ${JSON.stringify(header.type)} / delivery_kind ${JSON.stringify(kind ?? null)}) \u2014 the kind is ` +
+        `declared at registration and never inferred (contract \u00A71)`,
       { workflow_id: workflowId },
     );
   }
@@ -957,7 +957,7 @@ function applyDeliveryEvidence(input: {
   const incomingPr = isPlainObject(delivery.pr) ? delivery.pr : undefined;
   if (recordedPr !== undefined && incomingPr !== undefined && stableJson(recordedPr) !== stableJson(incomingPr)) {
     throw invalidWorkflowTransition(
-      `workflow ${workflowId} records PR identity ${JSON.stringify(recordedPr)} once at submission (§4d) — ` +
+      `workflow ${workflowId} records PR identity ${JSON.stringify(recordedPr)} once at submission (\u00A74d) \u2014 ` +
         `${JSON.stringify(incomingPr)} is a different delivery, not an evidence update`,
       { workflow_id: workflowId },
     );
@@ -967,14 +967,14 @@ function applyDeliveryEvidence(input: {
     if (isNonEmptyString(branch.source) && incomingPr.head !== branch.source) {
       throw invalidWorkflowTransition(
         `workflow ${workflowId} records delivery.pr.head ${JSON.stringify(incomingPr.head)}, but the registered delivery ` +
-          `source is ${JSON.stringify(branch.source)} (§4d: the recorded PR identity must be the registered delivery)`,
+          `source is ${JSON.stringify(branch.source)} (\u00A74d: the recorded PR identity must be the registered delivery)`,
         { workflow_id: workflowId },
       );
     }
     if (isNonEmptyString(branch.target) && incomingPr.target !== branch.target) {
       throw invalidWorkflowTransition(
         `workflow ${workflowId} records delivery.pr.target ${JSON.stringify(incomingPr.target)}, but the registered delivery ` +
-          `target is ${JSON.stringify(branch.target)} (§4d)`,
+          `target is ${JSON.stringify(branch.target)} (\u00A74d)`,
         { workflow_id: workflowId },
       );
     }
@@ -986,7 +986,7 @@ function applyDeliveryEvidence(input: {
       throw invalidWorkflowTransition(
         `workflow ${workflowId} cannot record the delivery tail (${tail.join(", ")}) while ` +
           `${notDone.map((row) => `${String(row.id)} (${rowStatusOf(row) || "no status"})`).join(", ")} ` +
-          `${notDone.length === 1 ? "is" : "are"} not Done (contract §3: row Done → compound disposition → PR identity → verified-merge record)`,
+          `${notDone.length === 1 ? "is" : "are"} not Done (contract \u00A73: row Done \u2192 compound disposition \u2192 PR identity \u2192 verified-merge record)`,
         { workflow_id: workflowId },
       );
     }
@@ -1142,7 +1142,7 @@ export async function recoverExecutionCoordinator(
     const status = String(header.state.status ?? "");
     if ((WORKFLOW_TERMINAL_STATUSES as readonly string[]).includes(status)) {
       throw invalidWorkflowTransition(
-        `workflow ${workflowId} is ${String(status)} — recovery binds an ACTIVE lifecycle's coordinator, and a closed ` +
+        `workflow ${workflowId} is ${String(status)} \u2014 recovery binds an ACTIVE lifecycle's coordinator, and a closed ` +
           `lifecycle is never reopened`,
         { workflow_id: workflowId, status },
       );
@@ -1152,7 +1152,7 @@ export async function recoverExecutionCoordinator(
     if (priorSessionId === null) {
       if (rows.length > 0) {
         throw invalidWorkflowTransition(
-          `workflow ${workflowId} records coordinator session(s) ${rows.map((row) => `${row.ref.sessionId} (${row.state})`).join(", ")} — ` +
+          `workflow ${workflowId} records coordinator session(s) ${rows.map((row) => `${row.ref.sessionId} (${row.state})`).join(", ")} \u2014 ` +
             `recovery must NAME the holder it replaces instead of claiming there is none`,
           { workflow_id: workflowId },
         );
@@ -1183,7 +1183,7 @@ export async function recoverExecutionCoordinator(
       // perform.
       if (!attestation.stoppedSessions.some((session) => session.sessionId === priorSessionId)) {
         throw invalidWorkflowTransition(
-          `the attestation does not name the prior coordinator ${priorSessionId} as stopped/reloaded — recovery requires ` +
+          `the attestation does not name the prior coordinator ${priorSessionId} as stopped/reloaded \u2014 recovery requires ` +
             `stop evidence for the holder it replaces, so it can never take over a session nobody observed to be gone`,
           { workflow_id: workflowId, session_id: priorSessionId },
         );

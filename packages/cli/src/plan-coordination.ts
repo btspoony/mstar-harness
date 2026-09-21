@@ -842,7 +842,7 @@ export function registerPlanCommands(program: Command): void {
     .description(
       "Read the selected row's coordination view: revision, both byte versions, scoped paths and the operations this " +
         "session may run now (plan sessions accept no --plan; a coordinator session requires one). `--workflow`+`--plan` " +
-        "instead of `--session` reads the row from an ACTIVE execution authority (primary spec §5)",
+        "instead of `--session` reads the row from an ACTIVE execution authority (primary spec \u00A75)",
     )
     .option("--session <path>", "Absolute session JSON envelope path (file route)")
     .option("--workflow <id>", "Workflow id (DB-route form: with --plan, instead of --session)")

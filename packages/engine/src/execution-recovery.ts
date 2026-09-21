@@ -1027,7 +1027,7 @@ async function buildLossInventory(context: StoreContext, backupPath: string): Pr
   if (point === liveStore || point === `${liveStore}-wal` || point === `${liveStore}-shm`) {
     throw new StoreActivationError(
       "store.activation-stale",
-      `the recovery point ${backupPath} names the live store database itself. §8: copying \`store.db\` bytes is not a backup, ` +
+      `the recovery point ${backupPath} names the live store database itself. \u00A78: copying \`store.db\` bytes is not a backup, ` +
         `so the live database and its WAL/SHM sidecars are never their own recovery point.`,
     );
   }
@@ -1444,7 +1444,7 @@ async function checkpointLiveStore(context: StoreContext): Promise<void> {
       throw new StoreError(
         "store.busy",
         `the live store at ${storeDbPath(context)} is not quiesced: a checkpoint could not complete because another connection ` +
-          `still holds it. A restore is a quiesced, whole-store replacement (contract §8); nothing was replaced.`,
+          `still holds it. A restore is a quiesced, whole-store replacement (contract \u00A78); nothing was replaced.`,
       );
     }
   } finally {
@@ -1461,7 +1461,7 @@ async function runRestore(context: StoreContext, root: string, input: ResolvedRe
     throw lossUnaccepted(
       `the loss inventory moved since the preview was taken (approved digest ${input.preview.lossDigest.slice(0, 12)}, current ` +
         `digest ${inventory.preview.lossDigest.slice(0, 12)}); the approved loss is not the loss this restore would cause. ` +
-        `Nothing was replaced — re-preview, read the new loss and decide again.`,
+        `Nothing was replaced \u2014 re-preview, read the new loss and decide again.`,
     );
   }
   const hasLoss = inventory.preview.lostOperationIds.length > 0 || inventory.preview.authorityDifferences.length > 0;
@@ -1469,7 +1469,7 @@ async function runRestore(context: StoreContext, root: string, input: ResolvedRe
     if (hasLoss) {
       throw lossUnaccepted(
         `restoring ${inventory.preview.backupPath} would discard ${inventory.preview.authorityDifferences.length} authority ` +
-          `row(s) and ${inventory.preview.lostOperationIds.length} committed operation(s) the live store holds. §8 requires the ` +
+          `row(s) and ${inventory.preview.lostOperationIds.length} committed operation(s) the live store holds. \u00A78 requires the ` +
           `exact \`acceptLossDigest\` of the inventory the operator read (${inventory.preview.lossDigest}); there is no default yes.`,
       );
     }
