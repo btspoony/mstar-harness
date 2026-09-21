@@ -480,6 +480,15 @@ export type Phase1IdentityDetail =
  */
 export type Phase1PathDetail = "plan-pointer-invalid" | "plan-identity-mismatch" | "prepare-unlocked";
 
+/**
+ * Safe §4 classification of the *form* a refused plan pointer was received in
+ * — the axis the shared resolver accepts (a canonical absolute path or a
+ * normalized harness-relative one). It is a classification only: the pointer's
+ * own value is never projected, because a stored row may hold any string at all
+ * (an envelope, credential or session path included).
+ */
+export type Phase1PointerForm = "canonical-absolute" | "harness-relative";
+
 /** Safe label of where an observed identity or pointer value came from. */
 export type Phase1DiagnosticSource =
   | "host-session"
@@ -504,8 +513,10 @@ export type Phase1Diagnostic = Readonly<{
   source?: Phase1DiagnosticSource;
   /** A public id/pointer that is already in play (never a credential). */
   expected?: string;
-  /** The observed public id/pointer that disagreed with `expected`. */
+  /** The observed public id that disagreed with `expected` (never a path value). */
   current?: string;
+  /** Safe received-form classification of a refused plan pointer — never its value. */
+  received?: Phase1PointerForm;
   /** Canonical plan root a pointer was resolved against. */
   base?: string;
   /** Canonical registered plan file the pointer was expected to name. */
@@ -1036,17 +1047,21 @@ export async function inspectPhase1Readiness(
 
   // --- item 2: Prepare evidence, then the ordered review returns ------------
   if (compass.status !== "locked") {
-    // Only an actually unlocked compass produces `prepare-unlocked`: a pointer
-    // refusal keeps its own §5 path detail below and must never be rendered as
-    // this one.
+    // The broad refusal code is frozen, but its §5 detail is not: only a valid
+    // `active` Prepare is genuinely "unlocked" and gets the lock-compass next
+    // operation. A `completed` (or otherwise non-Prepare) compass is classified
+    // as itself through the code alone — never labelled an unlocked Prepare —
+    // and an invalid frontmatter already refused as `binding-invalid` above.
     fail("prepare-not-locked");
-    diagnose({
-      code: "prepare-not-locked",
-      detail: "prepare-unlocked",
-      workflowId: binding.workflowId,
-      current: typeof compass.status === "string" ? compass.status : undefined,
-      next: NEXT_LOCK_COMPASS,
-    });
+    if (compass.status === "active") {
+      diagnose({
+        code: "prepare-not-locked",
+        detail: "prepare-unlocked",
+        workflowId: binding.workflowId,
+        current: "active",
+        next: NEXT_LOCK_COMPASS,
+      });
+    }
   }
 
   const receiptPlans = Array.isArray(input.plans) ? input.plans : [];
@@ -1103,7 +1118,12 @@ export async function inspectPhase1Readiness(
             workflowId: binding.workflowId,
             planId: plan.planId,
             source: "plan-row",
-            current: registeredFile,
+            // §5 safe rendering: the stored row pointer is arbitrary text — it
+            // may be an envelope, credential or session path — so only its
+            // received *form* (§4's accepted axis) is projected, never the value
+            // it held. The canonical base/target name the file it should have
+            // registered.
+            received: isAbsolute(registeredFile) ? "canonical-absolute" : "harness-relative",
             base: planBase,
             target: join(planBase, `${plan.planId}.md`),
             next: NEXT_REGISTERED_PLAN,
@@ -1117,7 +1137,9 @@ export async function inspectPhase1Readiness(
         fail("prepare-not-locked");
       } else if (canonicalizeNearestExisting(resolvedPlanPath) !== planFile.real) {
         // The row registers one document and the receipt names another: the two
-        // disagree about the plan's own file.
+        // disagree about the plan's own file. Only canonical expectations are
+        // projected — the receipt's own path is caller-supplied and is never
+        // echoed back in a public diagnostic (§5 safe rendering).
         fail("prepare-not-locked");
         diagnose({
           code: "prepare-not-locked",
@@ -1126,7 +1148,6 @@ export async function inspectPhase1Readiness(
           planId: plan.planId,
           source: "plan-row",
           expected: resolvedPlanPath,
-          current: plan.planPath,
           base: planBase,
           target: join(planBase, `${plan.planId}.md`),
           next: NEXT_REGISTERED_PLAN,

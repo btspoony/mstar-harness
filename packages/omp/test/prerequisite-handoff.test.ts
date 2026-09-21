@@ -65,7 +65,7 @@ import {
 } from "@mstar-harness/engine";
 import type { WorkflowSnapshot } from "@mstar-harness/engine";
 import { COORDINATOR_TOOL_NAME } from "../src/coordinator-identity";
-import modelHandoffFactory from "../src/extensions/model-handoff";
+import modelHandoffFactory, { HANDOFF_CUSTOM_TYPE } from "../src/extensions/model-handoff";
 import { inspectPhase1Readiness, reserveHandoffBinding } from "../src/model-handoff-readiness";
 import type { HandoffBinding, Phase1CompletionInput, Phase1Readiness } from "../src/model-handoff-readiness";
 
@@ -331,9 +331,16 @@ async function buildFixture(options: FixtureOptions = {}): Promise<Fixture> {
 
 type ToolResult = Readonly<{
   content: readonly Readonly<{ type: string; text: string }>[];
-  details: Readonly<{ mstarCoordinator?: Record<string, unknown>; ok?: boolean }>;
+  details: Readonly<{
+    mstarCoordinator?: Record<string, unknown>;
+    mstarModelHandoff?: Record<string, unknown>;
+    ok?: boolean;
+  }>;
   isError?: boolean;
 }>;
+
+/** The registered model-handoff tool's own name (`packages/omp/src/extensions/model-handoff.ts`). */
+const HANDOFF_TOOL_NAME = "mstar_model_handoff";
 
 /**
  * The host's own machinery for one session: `loadExtensionFromFactory` binds
@@ -341,17 +348,26 @@ type ToolResult = Readonly<{
  * every `ExtensionContext`, and `RegisteredToolAdapter` is the host's tool
  * adapter, so a call traverses the registered input schema and the real
  * handler. No model credential is read and no model action is reachable.
+ *
+ * A caller-supplied `sessionManager` lets the fixture own the native session id
+ * *before* it builds the workflow state that must name it (the pending handoff
+ * ledger record and the recorded coordinator binding).
  */
-async function coordinatorHarness(cwd: string): Promise<{
+async function coordinatorHarness(
+  cwd: string,
+  options: { sessionManager?: SessionManager } = {},
+): Promise<{
   sessionId: string;
   runTool: (params: Record<string, unknown>) => Promise<ToolResult>;
   validate: (params: Record<string, unknown>) => { success: boolean };
   runRawTool: (params: Record<string, unknown>) => Promise<ToolResult>;
+  runHandoffTool: (params: Record<string, unknown>) => Promise<ToolResult>;
+  validateHandoff: (params: Record<string, unknown>) => { success: boolean };
 }> {
   const settings = Settings.isolated({
     modelRoles: { slow: "probe/slow-model", default: "probe/default-model", smol: "probe/smol-model" },
   });
-  const sessionManager = SessionManager.create(cwd, scratchDir("omp-prerequisite-session-"));
+  const sessionManager = options.sessionManager ?? SessionManager.create(cwd, scratchDir("omp-prerequisite-session-"));
   const registry = {
     getAvailable: () => [],
     hasConfiguredAuth: () => false,
@@ -382,7 +398,10 @@ async function coordinatorHarness(cwd: string): Promise<{
   };
   const actions: ExtensionActions = {
     sendMessage: () => {},
-    appendEntry: () => {},
+    // The host's own durable append, so a handler that records state writes it.
+    appendEntry: (customType, data) => {
+      sessionManager.appendCustomEntry(customType, data);
+    },
     sendUserMessage: unsupported("sendUserMessage"),
     setLabel: unsupported("setLabel"),
     getActiveTools: unsupported("getActiveTools"),
@@ -412,11 +431,24 @@ async function coordinatorHarness(cwd: string): Promise<{
   const adapter = new RegisteredToolAdapter(registered, runner);
   const runRawTool = async (params: Record<string, unknown>): Promise<ToolResult> =>
     (await adapter.execute("fixture-call", params, undefined, undefined)) as ToolResult;
+
+  const handoffTool = extension.tools.get(HANDOFF_TOOL_NAME);
+  if (handoffTool === undefined) throw new Error("the host registered no model-handoff tool");
+  const handoffAdapter = new RegisteredToolAdapter(handoffTool, runner);
+
   return {
     sessionId: sessionManager.getSessionId(),
     runTool: async (params) => runRawTool(registered.definition.parameters.parse(params) as Record<string, unknown>),
     validate: (params) => ({ success: registered.definition.parameters.safeParse(params).success }),
     runRawTool,
+    runHandoffTool: async (params) =>
+      (await handoffAdapter.execute(
+        "fixture-handoff-call",
+        handoffTool.definition.parameters.parse(params) as Record<string, unknown>,
+        undefined,
+        undefined,
+      )) as ToolResult,
+    validateHandoff: (params) => ({ success: handoffTool.definition.parameters.safeParse(params).success }),
   };
 }
 
@@ -549,7 +581,10 @@ describe("prerequisite handoff — readiness integration", () => {
     expect(detailsOf(staleReadiness)).toContain("plan-pointer-invalid");
     expect(detailsOf(staleReadiness)).not.toContain("prepare-unlocked");
     const pointer = staleReadiness.diagnostics.find((entry) => entry.detail === "plan-pointer-invalid");
-    expect(pointer).toMatchObject({ planId: PLAN_ID, current: `.mstar/plans/${PLAN_ID}.md` });
+    // §5 safe rendering: only the pointer's received *form* is classified — the
+    // raw stored value (which may be any path at all) is never projected.
+    expect(pointer).not.toHaveProperty("current");
+    expect(pointer).toMatchObject({ planId: PLAN_ID, received: "harness-relative" });
     expect(pointer?.base).toBe(join(realpathSync(stale.harness), "plans"));
     expect(pointer?.target).toBe(join(realpathSync(stale.harness), "plans", `${PLAN_ID}.md`));
     expect(String(pointer?.next)).toContain("iteration register");
@@ -647,4 +682,86 @@ describe("prerequisite handoff — readiness integration", () => {
     if (reReserved.ok) throw new Error("an ACTIVE authority must not yield a file binding");
     expect(reReserved.code).toBe("execution.consumer-not-ready");
   }, 120_000);
+
+  test("prerequisite handoff: the registered model-handoff handler drives the shipped register → Prepare lock → readiness and forwards only safe path diagnostics", async () => {
+    // Two stored pointers no shipped writer can produce — one path-shaped, one
+    // credential-shaped. Neither its value NOR a credential/envelope path may
+    // reach the readiness diagnostics or the registered tool's forwarded result
+    // (contract §4 last bullet / §5 safe rendering).
+    const cases = [
+      { pointer: `/elsewhere/plans/${PLAN_ID}.md` },
+      { pointer: "/var/credentials/coordinator-envelope.json" },
+    ] as const;
+    for (const { pointer } of cases) {
+      // The native host session is created FIRST: the workflow binding, its
+      // recorded coordinator and the pending ledger record all have to name it.
+      const sessionManager = SessionManager.create(
+        scratchDir("omp-prerequisite-session-home-"),
+        scratchDir("omp-prerequisite-session-"),
+      );
+      const hostId = sessionManager.getSessionId();
+      const fixture = await buildFixture({ boundSession: hostId, staleRowPointer: pointer });
+      setArtifactStore(createFsStore(fixture.harness));
+      // The saved preference a real `start` arm required: without it the
+      // completion checkpoint refuses before readiness ever runs.
+      mkdirSync(join(fixture.main, ".omp"), { recursive: true });
+      writeJson(join(fixture.main, ".omp", "plugin-overrides.json"), {
+        settings: { "@mstar-harness/omp": { modelHandoff: true, handoffTarget: "@smol" } },
+      });
+
+      // The pending binding a real arm records. Arming also performs a live
+      // model selection (explicitly out of this task's scope), so the record is
+      // seeded here while every read below is the registered handler's own.
+      const recordBinding: HandoffBinding = { ...fixture.binding, sessionId: hostId };
+      const baselineModelChangeId = sessionManager.appendModelChange("probe/slow-model");
+      sessionManager.appendCustomEntry(HANDOFF_CUSTOM_TYPE, {
+        version: 1,
+        binding: recordBinding,
+        state: "pending",
+        operationId: "fixture-pending-handoff",
+        action: "arm",
+        baselineModelChangeId,
+        observedModel: "probe/slow-model",
+        reason: null,
+      });
+
+      const host = await coordinatorHarness(fixture.main, { sessionManager });
+      expect(host.sessionId).toBe(hostId);
+
+      // The REAL registered tool: schema parse → handler → `fire` → the E2
+      // readiness checkpoint. The state under it was built by the shipped
+      // registration producer and the document Prepare lock.
+      const params = {
+        operation: "phase1-complete",
+        workflowId: WORKFLOW_ID,
+        coordinatorSessionPath: fixture.input.coordinatorSessionPath,
+        mainWorktreeBranch: "main",
+        reviews: fixture.input.reviews,
+        plans: fixture.input.plans,
+      };
+      expect(host.validateHandoff(params).success).toBe(true);
+      const result = await host.runHandoffTool(params);
+      expect(result.isError).toBe(false);
+      const details = result.details.mstarModelHandoff as Record<string, unknown>;
+      expect(details).toMatchObject({ code: "not-ready", state: "pending" });
+      expect(details.codes).toContain("prepare-not-locked");
+
+      const forwarded = details.diagnostics as readonly Record<string, unknown>[];
+      const pointerEntry = forwarded.find((entry) => entry.detail === "plan-pointer-invalid");
+      expect(pointerEntry).toMatchObject({ planId: PLAN_ID, source: "plan-row" });
+      expect(pointerEntry).not.toHaveProperty("current");
+      expect(forwarded.map((entry) => entry.detail)).not.toContain("prepare-unlocked");
+
+      // The same verdict read from the checkpoint directly, and the tool's own
+      // rendered result: neither carries the stored pointer or any credential
+      // or envelope path.
+      const readiness = await inspectPhase1Readiness(recordBinding, fixture.input);
+      expect(codesOf(readiness)).toContain("prepare-not-locked");
+      expect(JSON.stringify(readiness)).not.toContain(pointer);
+      const rendered = JSON.stringify({ text: result.content.map((entry) => entry.text), details });
+      expect(rendered).not.toContain(pointer);
+      expect(rendered).not.toContain("credentials");
+      expect(rendered).not.toContain("/sessions/");
+    }
+  }, 180_000);
 });
