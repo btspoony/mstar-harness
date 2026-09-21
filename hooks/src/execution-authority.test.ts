@@ -239,4 +239,32 @@ describe("execution-hook-authority — the ZCode write gate refuses retired coor
     expect(run.stdout).toBe("");
     expect(run.stderr).toBe("");
   });
+
+  test("a PRE-ACTIVATION harness's document symlinked into another harness's ACTIVE authority is refused (both roots probed)", async () => {
+    // Harness B: the ACTIVE execution authority the write really lands on.
+    const authority = makeHarness("execution-cross-alias", "soft");
+    await seedActiveExecutionAuthority(authority.harness, authority.statusPath);
+    // Harness A: pre-activation (no store at all) whose OWN `status.json` is a
+    // symlink into B's retired register. The textual classification resolves a
+    // pre-activation harness, so a single-root probe would let the write
+    // through although the bytes land on B's retired document.
+    const source = makeHarness("execution-cross-source", "soft");
+    rmSync(source.statusPath);
+    symlinkSync(authority.statusPath, source.statusPath);
+
+    expectAuthorityBlock(runGate(writeEvent(source.statusPath, VALID_STATUS)), "execution.direct-write-refused");
+
+    // An unreadable B fails closed on the same alias — never a silent pass.
+    const corrupt = makeHarness("execution-cross-corrupt", "soft");
+    await seedActiveExecutionAuthority(corrupt.harness, corrupt.statusPath);
+    const corruptSource = makeHarness("execution-cross-corrupt-source", "soft");
+    rmSync(corruptSource.statusPath);
+    symlinkSync(corrupt.statusPath, corruptSource.statusPath);
+    corruptStore(corrupt.harness);
+
+    const failed = runGate(writeEvent(corruptSource.statusPath, VALID_STATUS));
+    expectAuthorityBlock(failed, "store.authority-unavailable");
+    expect(failed.stderr).toContain("execution authority");
+    expect(failed.stderr).toContain("store.corrupt");
+  });
 });

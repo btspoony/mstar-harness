@@ -887,10 +887,10 @@ export {
   StoreActivationError,
   validateActivationAttestation,
 } from "./store-activation.js";
-// Execution migration: the executable §6 protocol (plan
-// `20260920-activation-migration-recovery`). R1 landed the read-only preview
-// and the staged apply: `previewExecutionMigration` reads the legacy workspace
-// as evidence and returns the canonical, content-addressed manifest;
+// Execution migration: the executable §6 protocol (stages R1–R3). R1 landed
+// the read-only preview and the staged apply: `previewExecutionMigration` reads
+// the legacy workspace as evidence and returns the canonical, content-addressed
+// manifest;
 // `applyExecutionMigration` stages every core row plus the manifest record in
 // one transaction against a verified recovery point, and never activates.
 // R2 adds the three separate crash-safe steps: `activateExecutionMigration`
@@ -922,8 +922,8 @@ export {
   retireExecutionSources,
 } from "./execution-migrate.js";
 // Execution recovery: the consistent whole-store backup, the explicit-loss
-// atomic restore and the diagnostic export (primary spec §8, R3 of plan
-// `20260920-activation-migration-recovery`). `previewExecutionRestore` is the
+// atomic restore and the diagnostic export (primary spec §8, R3 of the
+// migration protocol). `previewExecutionRestore` is the
 // read-only loss inventory whose canonical `lossDigest` an operator approves;
 // `restoreExecutionBackup` is the whole-store replacement that requires that
 // exact digest, a quiesced store, a current pre-restore recovery point and a

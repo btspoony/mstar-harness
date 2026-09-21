@@ -395,21 +395,30 @@ export async function storeAuthorityRefusals(input: StoreAuthorityInput): Promis
 
   // §4.3/§5 the retired coordination documents. The classification covers the
   // caller's own path (the session root's `harnessDocKindOfTarget` answer) and
-  // the landed path, so a status/snapshot alias cannot dodge the refusal. The
-  // refusal is UNCONDITIONAL (an authority invariant, not the hard/soft
-  // document axis) and an authority that exists and cannot be read refuses
-  // fail-closed rather than falling through to the file route. The register
-  // keeps its own issue-domain route below.
+  // the landed path — and it covers BOTH harness roots: a status/snapshot
+  // symlinked into ANOTHER harness's tree lands on THAT harness's document, so
+  // EITHER root's verdict (ACTIVE or UNAVAILABLE) vetoes the write. A
+  // single-root probe would let a pre-activation harness's alias bypass the
+  // authority the bytes really belong to (an identical landed root costs no
+  // second probe). The refusal is UNCONDITIONAL (an authority invariant, not
+  // the hard/soft document axis) and an authority that exists and cannot be
+  // read refuses fail-closed rather than falling through to the file route.
+  // The register keeps its own issue-domain route below.
   const landedAlias = landed === resolved ? null : harnessDocKindOfTarget(landed)
   const directKind = input.directKind
-  const executionTargetDir =
-    directKind === 'status' || directKind === 'snapshot'
-      ? input.resolvedHarnessDir
-      : landedAlias !== null && landedAlias.kind !== 'register'
-        ? landedAlias.harnessDir
-        : null
-  if (executionTargetDir !== null) {
-    const executionRoute = await readExecutionWriteRoute(executionTargetDir)
+  const executionDirs: string[] = []
+  if ((directKind === 'status' || directKind === 'snapshot') && input.resolvedHarnessDir !== null) {
+    executionDirs.push(input.resolvedHarnessDir)
+  }
+  if (
+    landedAlias !== null &&
+    landedAlias.kind !== 'register' &&
+    !executionDirs.includes(landedAlias.harnessDir)
+  ) {
+    executionDirs.push(landedAlias.harnessDir)
+  }
+  for (const executionDir of executionDirs) {
+    const executionRoute = await readExecutionWriteRoute(executionDir)
     if (executionRoute.kind === 'active') return [executionDirectWriteRefusal(resolved)]
     if (executionRoute.kind === 'unavailable') {
       return [authorityUnavailableRefusal(executionRoute, "the harness's execution authority", 'coordination-document write')]

@@ -1,6 +1,6 @@
 /**
- * execution-recovery.ts — §8 backup, export and restore (R3 of plan
- * `20260920-activation-migration-recovery`).
+ * execution-recovery.ts — §8 backup, export and restore (R3 of the
+ * migration protocol).
  *
  * The activation barrier (§6) is only survivable if there is a point to come
  * back to and an honest account of what coming back costs. This module owns

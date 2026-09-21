@@ -1,7 +1,6 @@
 /**
  * execution-migrate.test.ts — proof for the R1 migration protocol: the
- * read-only preview and the staged apply (primary spec §6 items 1–2, plan
- * `20260920-activation-migration-recovery`).
+ * read-only preview and the staged apply (primary spec §6 items 1–2).
  *
  * Every case runs the REAL modules, the REAL `node:sqlite` driver and REAL
  * filesystem fixtures in per-test temporary workspaces — a real Git main

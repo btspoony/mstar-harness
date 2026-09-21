@@ -4,7 +4,7 @@
  * filesystem retirement and staged abort (items 3–5, R2), on §2.2's owned
  * fields, §2.3's session semantics and §7's catalog coexistence.
  *
- * Task ownership (plan `20260920-activation-migration-recovery`): R1 landed
+ * Task ownership (migration stages R1–R3): R1 landed
  * `previewExecutionMigration` and `applyExecutionMigration`; R2 adds
  * `activateExecutionMigration`, `retireExecutionSources` and
  * `abortExecutionMigration`; backup, restore and diagnostic export are R3.

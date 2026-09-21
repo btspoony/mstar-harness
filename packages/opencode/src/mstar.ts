@@ -955,18 +955,26 @@ export async function validateStatusWrite(
     // next: root status and workflow snapshots are refused while that
     // authority is ACTIVE, and refused fail-closed when it exists and cannot
     // be read. The classification covers the caller's own path AND the path
-    // the write really lands on, so a symlink alias of a retired document is
-    // refused like the document itself (the old protected artifact paths keep
-    // their canonical target checks even though the new authority refuses
-    // writing them). This is an authority invariant, not the compass axis.
+    // the write really lands on (S-G4b-03) — and it covers BOTH harness roots:
+    // a status/snapshot symlinked into ANOTHER harness's tree lands on THAT
+    // harness's document, so EITHER root's verdict (ACTIVE or UNAVAILABLE)
+    // refuses the write. A single-root probe would let a pre-activation
+    // harness's alias bypass the authority the bytes really belong to (an
+    // identical landed root costs no second probe). The old protected artifact
+    // paths keep their canonical target checks even though the new authority
+    // refuses writing them. This is an authority invariant, not the compass
+    // axis.
     const landedAlias = landed === resolved ? null : harnessDocKindOfTarget(landed);
-    const executionDir =
-      classified !== null && classified.kind !== "register"
-        ? classified.harnessDir
-        : landedAlias !== null && landedAlias.kind !== "register"
-          ? landedAlias.harnessDir
-          : null;
-    if (executionDir !== null) {
+    const executionDirs: string[] = [];
+    if (classified !== null && classified.kind !== "register") executionDirs.push(classified.harnessDir);
+    if (
+      landedAlias !== null &&
+      landedAlias.kind !== "register" &&
+      !executionDirs.includes(landedAlias.harnessDir)
+    ) {
+      executionDirs.push(landedAlias.harnessDir);
+    }
+    for (const executionDir of executionDirs) {
       const executionRoute = await readExecutionWriteRoute(executionDir);
       if (executionRoute.kind === "active") return executionDirectWriteRefusal(resolved, log);
       if (executionRoute.kind === "unavailable") {

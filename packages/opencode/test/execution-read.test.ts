@@ -205,6 +205,32 @@ describe("execution-opencode-read — the OpenCode plugin's execution-authority 
     expect(result?.violations[0]?.message).toContain("store.corrupt");
   });
 
+  test("a PRE-ACTIVATION harness's document symlinked into another harness's ACTIVE authority is refused (both roots probed)", async () => {
+    // Harness B: the ACTIVE execution authority the write really lands on.
+    const authority = makeHarnessProject();
+    await seedActiveExecutionAuthority(authority.harness, authority.statusPath);
+
+    // Harness A: pre-activation (no store at all) whose OWN `status.json` is a
+    // symlink into B's retired register. The textual classification resolves a
+    // pre-activation harness, so a single-root probe would let the write
+    // through although the bytes land on B's retired document.
+    const source = makeHarnessProject();
+    symlinkSync(authority.statusPath, source.statusPath);
+
+    const { log } = capture();
+    const refused = await validateStatusWrite(source.statusPath, { doc: validStatus, log });
+    expect(refused?.violations.map((violation) => violation.code)).toEqual(["execution.direct-write-refused"]);
+
+    // The same alias on an UNREADABLE authority fails closed on the landed
+    // root — never a silent pass because the source harness has no store.
+    corruptStore(authority.harness);
+    const corruptSource = makeHarnessProject();
+    symlinkSync(authority.statusPath, corruptSource.statusPath);
+    const unreadable = await validateStatusWrite(corruptSource.statusPath, { doc: validStatus, log });
+    expect(unreadable?.violations.map((violation) => violation.code)).toEqual(["store.authority-unavailable"]);
+    expect(unreadable?.violations[0]?.message).toContain("store.corrupt");
+  });
+
   test("pre-activation keeps the unchanged document lint: a harness with no store", async () => {
     const fixture = makeHarnessProject();
     writeFileSync(fixture.statusPath, JSON.stringify(validStatus, null, 2));
