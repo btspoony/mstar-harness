@@ -36,25 +36,36 @@ export const SESSION_ID_MAX_LENGTH = 128;
  *
  * Throws `coordination.invalid-session-id`; `what` names the field in the
  * message so each caller reports its own input.
+ *
+ * The rejected value itself is NEVER repeated: this refusal reaches public
+ * diagnostics (CLI JSON, host tool results), so each branch states the rule and
+ * reports a non-identifying fact instead — the received form/type, or the
+ * received length — exactly as `recoveryStopList` does. `details.session_id`
+ * carried the raw value once; it no longer exists in any branch.
  */
 export function assertSafeSessionId(value: unknown, what = "session id"): string {
   if (!isNonEmptyString(value)) {
-    throw new CoordinationError("coordination.invalid-session-id", `${what} is required`, { session_id: value ?? null });
+    throw new CoordinationError(
+      "coordination.invalid-session-id",
+      `${what} is required \u2014 a public session id: a single safe path component ([A-Za-z0-9._-]+), at most ${SESSION_ID_MAX_LENGTH} characters`,
+      { form: typeof value },
+    );
   }
   if (value.length > SESSION_ID_MAX_LENGTH) {
     throw new CoordinationError(
       "coordination.invalid-session-id",
-      `${what} is longer than ${SESSION_ID_MAX_LENGTH} characters: ${JSON.stringify(value)}`,
-      { session_id: value, max_length: SESSION_ID_MAX_LENGTH },
+      `${what} is longer than ${SESSION_ID_MAX_LENGTH} characters \u2014 the rejected value is not echoed in this diagnostic`,
+      { length: value.length, max_length: SESSION_ID_MAX_LENGTH },
     );
   }
   try {
     assertSafePathComponent(value, what);
-  } catch (error) {
+  } catch {
     throw new CoordinationError(
       "coordination.invalid-session-id",
-      `${what} ${JSON.stringify(value)} is not a safe path component: ${error instanceof Error ? error.message : String(error)}`,
-      { session_id: value },
+      `${what} is not a safe path component \u2014 a single safe path component ([A-Za-z0-9._-]+) of at most ` +
+        `${SESSION_ID_MAX_LENGTH} characters, not "", ".", ".." or a value containing "/" or "\\"; the rejected value is not echoed in this diagnostic`,
+      { length: value.length },
     );
   }
   return value;

@@ -214,15 +214,18 @@ export async function bindCoordinatorIdentity(
       cwd: facts.cwd,
       sessionId: facts.sessionId,
     });
+    // §3.3 keeps the coordinator envelope path in coordinator-owned transport:
+    // this result IS the model-visible tool result, so neither the text nor the
+    // details carry it. The already-public workflow and session ids identify the
+    // binding; the engine recorded the envelope itself.
     return {
       ok: true,
       isError: false,
       code: "bound",
-      text: `workflow ${workflowId} is bound to coordinator session ${bound.session.session_id} (${bound.session_file}). This binding is one-shot and this tool is the only supported managed bootstrap route.`,
+      text: `workflow ${workflowId} is bound to coordinator session ${bound.session.session_id}. This binding is one-shot and this tool is the only supported managed bootstrap route.`,
       details: {
         workflowId,
         sessionId: bound.session.session_id,
-        sessionFile: bound.session_file,
         role: "coordinator",
         harnessRoot,
       },
@@ -518,6 +521,10 @@ export async function recoverCoordinatorIdentity(
       stoppedSessionIds,
     });
     const receipt = result.recovery;
+    // §3.3 keeps the coordinator envelope path in coordinator-owned transport:
+    // `result.session_file` is NOT projected here — neither as tool text nor as
+    // a detail — because this result is the model-visible tool result. The
+    // already-public workflow/session ids and the versions describe the binding.
     return {
       ok: true,
       isError: false,
@@ -533,8 +540,6 @@ export async function recoverCoordinatorIdentity(
         replay: receipt.replay,
         snapshotVersion: receipt.snapshotVersion,
         compassVersion: receipt.compassVersion,
-        // Coordinator-owned transport: the replacing session continues with it.
-        sessionFile: result.session_file,
         harnessRoot: context.harnessRoot,
       },
     };

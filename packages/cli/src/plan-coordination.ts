@@ -268,7 +268,14 @@ function requireFlag(raw: string | undefined, flag: string, verb: string, what: 
 function requireAbsolutePath(raw: string | undefined, flag: string, verb: string, what: string): string {
   const value = requireFlag(raw, flag, verb, what);
   if (!isAbsolute(value)) {
-    throw new SddScriptError(`${flag} must be an absolute path \u2014 got ${JSON.stringify(value)}`, 2);
+    // The usage failure is printed (JSON on stdout, otherwise stderr), so the
+    // rejected value is never repeated in it: the message states the rule, as
+    // `--stopped` already does. A caller-supplied address — a credential path
+    // as readily as a plan file — never becomes a public diagnostic.
+    throw new SddScriptError(
+      `${flag} must be an absolute path for ${what} \u2014 the received value is not absolute and is not echoed in this diagnostic`,
+      2,
+    );
   }
   return value;
 }
@@ -392,7 +399,12 @@ async function printAuthorityView(
   json: boolean,
 ): Promise<void> {
   if (harnessArg !== undefined && !isAbsolute(harnessArg)) {
-    throw new SddScriptError(`--harness must be an absolute path \u2014 got ${JSON.stringify(harnessArg)}`, 2);
+    // Same non-echoing shape as every absolute-path usage refusal here: a
+    // caller-supplied address never becomes a public diagnostic.
+    throw new SddScriptError(
+      "--harness must be an absolute path \u2014 the received value is not absolute and is not echoed in this diagnostic",
+      2,
+    );
   }
   const harnessDir = resolveProcessHarnessDir(process.cwd(), harnessArg);
   if (harnessDir === null) {
@@ -718,7 +730,10 @@ function bindInputOf(options: PlanCliOptions): BindPlanSessionInput {
   const resume = options.resume as string | undefined;
   const harness = options.harness as string | undefined;
   if (harness !== undefined && !isAbsolute(harness)) {
-    throw new SddScriptError(`--harness must be an absolute path \u2014 got ${JSON.stringify(harness)}`, 2);
+    throw new SddScriptError(
+      "--harness must be an absolute path \u2014 the received value is not absolute and is not echoed in this diagnostic",
+      2,
+    );
   }
   const families = [
     coordinator,

@@ -118,6 +118,12 @@ describe("prerequisite identity — coordinator identity adapter input", () => {
       },
     ]);
     expect(result.details).toMatchObject({ workflowId: "wf-a", sessionId: "native-session-a", role: "coordinator" });
+    // §3.3: the coordinator envelope path stays in coordinator-owned transport.
+    // This result IS the model-visible tool result, so the engine's path is in
+    // neither the text nor the details.
+    expect(result.details.sessionFile).toBeUndefined();
+    expect(result.text).not.toContain("sessions/");
+    expect(JSON.stringify(result.details)).not.toContain("sessions/");
   });
 
   test("an engine refusal is reported with its own code, and the adapter never fabricates a success", async () => {
@@ -351,6 +357,11 @@ describe("prerequisite identity — coordinator recovery adapter input", () => {
       operationId: "op-1",
       replay: false,
     });
+    // The engine's `session_file` is coordinator-owned transport: this result is
+    // a model-visible tool result, so neither text nor details carry it.
+    expect(recovered.details.sessionFile).toBeUndefined();
+    expect(recovered.text).not.toContain("sessions/");
+    expect(JSON.stringify(recovered.details)).not.toContain("sessions/");
     // The engine saw the host-derived identity, the stored prior path and the
     // caller's stop assertion verbatim — nothing else.
     expect(engine.recovered).toEqual([

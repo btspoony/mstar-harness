@@ -4949,12 +4949,23 @@ describe("prepare coordinator recovery", () => {
       },
     ];
     for (const recoveryCase of cases) {
-      const refusal = await prepareRefusalOf(() =>
+      const failure = await failureOf(() =>
         recoverPrepareCoordinator(
           recoveryInputOf(fixture, { snapshot: tokens.snapshotVersion, compass: tokens.compassVersion }, recoveryCase.overrides),
         ),
       );
-      expect(`${recoveryCase.name}: ${refusal.code}`).toBe(`${recoveryCase.name}: ${recoveryCase.code}`);
+      const refusal = failure instanceof CoordinationError ? failure : undefined;
+      expect(`${recoveryCase.name}: ${refusal?.code}`).toBe(`${recoveryCase.name}: ${recoveryCase.code}`);
+      // §3.3/§5: a recovery refusal repeats neither a rejected value nor an
+      // envelope path — it carries the code, the already-public ids and the
+      // canonical base. The two foreign-owner cases below are the ones that once
+      // interpolated both envelope paths; the invariant is pinned over every case.
+      const projected = `${failure.message} ${JSON.stringify(refusal?.details ?? {})}`;
+      expect(`${recoveryCase.name}: ${projected.includes(impostorEnvelope)}`).toBe(`${recoveryCase.name}: false`);
+      expect(`${recoveryCase.name}: ${projected.includes(fixture.coordinatorSession)}`).toBe(`${recoveryCase.name}: false`);
+      // The rejected prior session id of the first foreign-owner case is a value
+      // the caller named, not a public record: it is never echoed back either.
+      expect(`${recoveryCase.name}: ${projected.includes("someone-else")}`).toBe(`${recoveryCase.name}: false`);
       expect(protectedBytes(fixture)).toEqual(before);
       expect(existsSync(coordinatorEnvelopeOf(fixture, RECOVERED_COORDINATOR_ID))).toBe(false);
     }
@@ -5107,7 +5118,8 @@ describe("prepare coordinator recovery", () => {
     expect(recoveryAuditOf(fixture)).toHaveLength(1);
 
     // A leftover envelope is reclaimed ONLY when its bytes are exactly the ones
-    // this operation would write (a crashed attempt of the SAME operation).
+    // this call would write. Those bytes are the session JSON, so they prove the
+    // same TARGET SESSION — not the same operation.
     const crashed = makePrepareFixture();
     await ensurePrepareCoordinator(crashed);
     const crashedTokens = await recoveryViewOf(crashed);

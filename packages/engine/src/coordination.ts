@@ -6361,10 +6361,14 @@ function assertPrepareRecoveryFileAuthority(harnessRoot: string): void {
 /**
  * Create the recovery's role-scoped coordinator envelope through the existing
  * exclusive creation, reclaiming an already-present file ONLY when its bytes
- * are exactly the envelope this call would write — the signature of a crashed
- * earlier attempt of the SAME operation. An unrelated role/session file is
- * never overwritten (`invalid-request`), and the envelope is the only file the
- * recovery ever creates.
+ * are exactly the envelope this call would write. The envelope bytes are the
+ * session JSON alone, so a byte-identical leftover proves the same TARGET
+ * SESSION (same role, workflow, session id and canonical root) — not the same
+ * operation: no operation id is in those bytes. It is therefore the signature
+ * of a leftover from a retry (or a crashed earlier attempt) of a recovery
+ * targeting this session, and it is reclaimed on that basis. An unrelated
+ * role/session file is never overwritten (`invalid-request`), and the envelope
+ * is the only file the recovery ever creates.
  */
 function createRecoveryEnvelope(session: CoordinationSession): { path: string; created: boolean; bytes: string } {
   const path = sessionFilePath(session.harness_root, session.workflow_id, session.role, session.session_id);
@@ -6384,11 +6388,15 @@ function createRecoveryEnvelope(session: CoordinationSession): { path: string; c
       throw error;
     }
     if (existing !== expected) {
+      // This refusal is a public diagnostic (CLI JSON, host tool result), so it
+      // names the already-public session the path would hold and never repeats
+      // the envelope path itself (§3.3 keeps it in coordinator-owned transport).
       throw recoveryRefusal(
         "invalid-request",
-        `session envelope ${path} already exists with different content \u2014 a recovery reclaims only the exact ` +
-          `envelope a crashed attempt of this operation created, and never overwrites an unrelated role or session file`,
-        { path },
+        `a coordinator envelope for session ${session.session_id} already exists with different content \u2014 a ` +
+          `recovery reclaims only the exact same-session envelope a crashed or retried attempt left behind, and never ` +
+          `overwrites an unrelated role or session file`,
+        { workflow_id: session.workflow_id, session_id: session.session_id },
       );
     }
     return { path: canonicalTarget(path), created: false, bytes: expected };
@@ -6546,10 +6554,17 @@ export async function recoverPrepareCoordinator(
   // it obeys the same single-safe-component rule every session id does.
   const sessionId = safeSessionId(identity.sessionId) as string;
   if (!isNonEmptyString(input.priorSessionPath) || !isAbsolute(input.priorSessionPath)) {
+    // The addressed path is caller-supplied and this refusal is a public
+    // diagnostic (CLI JSON, host tool result), so the value is never repeated:
+    // the rule is stated with the received form and length instead.
     throw recoveryRefusal(
       "invalid-request",
-      `priorSessionPath must be the absolute path of the recorded coordinator envelope \u2014 got ${JSON.stringify(input.priorSessionPath ?? null)}`,
-      { actual: input.priorSessionPath ?? null },
+      "priorSessionPath must be the absolute path of the recorded coordinator envelope \u2014 the received value is " +
+        "not an absolute path and is not echoed in this diagnostic",
+      {
+        form: isNonEmptyString(input.priorSessionPath) ? "relative" : typeof input.priorSessionPath,
+        length: isNonEmptyString(input.priorSessionPath) ? input.priorSessionPath.length : 0,
+      },
     );
   }
   const priorSessionPath = canonicalTarget(input.priorSessionPath);
@@ -6608,13 +6623,15 @@ export async function recoverPrepareCoordinator(
       const recoveredPath = sessionFilePath(harnessRoot, workflowId, "coordinator", replayedOperation.session_id);
       // The receipt describes a LIVE binding: if its envelope is gone the
       // workflow is broken rather than recovered, and no success may be
-      // reported from the record alone.
+      // reported from the record alone. The envelope path stays out of this
+      // public diagnostic (§3.3 keeps it in coordinator-owned transport): the
+      // already-public workflow and session ids identify it.
       if (!existsSync(recoveredPath)) {
         throw new CoordinationError(
           "coordination.session-not-found",
-          `workflow ${workflowId} records recovered coordinator session ${recorded.session_id}, but its envelope ` +
-            `${recoveredPath} is gone \u2014 the binding is broken; do not replay it`,
-          { path: recoveredPath, workflow_id: workflowId },
+          `workflow ${workflowId} records recovered coordinator session ${recorded.session_id}, but that binding's ` +
+            `envelope is gone \u2014 the binding is broken; do not replay it`,
+          { workflow_id: workflowId, session_id: recorded.session_id },
         );
       }
       return {
@@ -6892,6 +6909,12 @@ function recoveryStopList(value: unknown): string[] {
  * the caller's `priorSessionId` must be that same recorded owner. A mismatch in
  * any of those is `foreign-owner`: the caller does not hold the prior owner's
  * proof.
+ *
+ * Both branches of this refusal are PUBLIC diagnostics (CLI JSON and the host
+ * tool result), so neither repeats a rejected value nor an envelope path: the
+ * rule, the addressed workflow, the already-public recorded session id and the
+ * mismatching dimensions are reported instead. The recorded id is the one
+ * `showPrepareCoordinatorRecovery` already publishes as `priorSessionId`.
  */
 function assertPriorRecoveryOwner(
   harnessRoot: string,
@@ -6902,32 +6925,32 @@ function assertPriorRecoveryOwner(
 ): void {
   const recordedPath = canonicalTarget(recorded.session_file);
   if (recorded.session_id !== priorSessionId || recordedPath !== priorSessionPath) {
+    const mismatched = [
+      ...(recorded.session_id !== priorSessionId ? ["recorded session id"] : []),
+      ...(recordedPath !== priorSessionPath ? ["recorded envelope"] : []),
+    ];
     throw recoveryRefusal(
       "foreign-owner",
-      `workflow ${workflowId} records coordinator session ${recorded.session_id} at ${recordedPath}, but this call ` +
-        `names ${priorSessionId} at ${priorSessionPath} \u2014 a recovery replaces only the binding it can authenticate`,
-      {
-        workflow_id: workflowId,
-        expected_session_id: recorded.session_id,
-        actual_session_id: priorSessionId,
-        expected_session_file: recordedPath,
-        actual_session_file: priorSessionPath,
-      },
+      `the envelope this call addresses is not the coordinator workflow ${workflowId} records ` +
+        `(session ${recorded.session_id}) \u2014 a recovery replaces only the binding it can authenticate; the ` +
+        `addressed envelope path and the caller's session id are not echoed in this diagnostic`,
+      { workflow_id: workflowId, expected_session_id: recorded.session_id, mismatched },
     );
   }
   const prior = readSessionEnvelope(priorSessionPath);
-  if (
-    prior.role !== "coordinator" ||
-    prior.session_id !== priorSessionId ||
-    prior.workflow_id !== workflowId ||
-    canonicalizeNearestExisting(prior.harness_root) !== harnessRoot
-  ) {
+  const dimensions = [
+    ...(prior.role !== "coordinator" ? ["role"] : []),
+    ...(prior.session_id !== priorSessionId ? ["session id"] : []),
+    ...(prior.workflow_id !== workflowId ? ["workflow"] : []),
+    ...(canonicalizeNearestExisting(prior.harness_root) !== harnessRoot ? ["harness root"] : []),
+  ];
+  if (dimensions.length > 0) {
     throw recoveryRefusal(
       "foreign-owner",
-      `session envelope ${priorSessionPath} is not the coordinator of workflow ${workflowId} in ${harnessRoot} ` +
-        `(role ${prior.role}, session ${prior.session_id}, workflow ${prior.workflow_id}) \u2014 the recorded binding ` +
-        `cannot be authenticated through it`,
-      { path: priorSessionPath, workflow_id: workflowId, role: prior.role, session_id: prior.session_id },
+      `the addressed session envelope does not authenticate the coordinator of workflow ${workflowId} in ` +
+        `${harnessRoot} \u2014 the recorded binding cannot be authenticated through it; the envelope path and its ` +
+        `values are not echoed in this diagnostic`,
+      { workflow_id: workflowId, mismatched: dimensions },
     );
   }
 }

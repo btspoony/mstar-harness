@@ -538,6 +538,42 @@ describe("mstar plan — session identity", () => {
     expect(coordination.coordinator?.session_id).toBe("host-session-flag");
   });
 
+  test("prerequisite identity — a rejected address and a rejected session id are never echoed into the bind diagnostic", () => {
+    const fixture = makeFixture();
+    const before = readFileSync(fixture.snapshotPath, "utf8");
+    // A path-like address the caller typed (credential-adjacent by shape, and
+    // relative so the CLI's own absolute-path rule refuses it) plus a
+    // credential-like session id: the usage refusal (exit 2) and the engine's
+    // own session-id refusal (exit 1) each report the rule and a
+    // non-identifying fact, never the rejected value (§5 diagnostics).
+    const pathLike = "../creds/coordinator-secret.json";
+    const credentialLike = `ghp_${"a".repeat(140)}`;
+    for (const args of [
+      ["plan", "bind", "--resume", pathLike, "--json"],
+      ["plan", "bind", "--assignment", pathLike, "--json"],
+      ["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--harness", pathLike, "--json"],
+    ]) {
+      const refused = runCli(args, fixture.root);
+      expect({ args, exitCode: refused.exitCode }).toEqual({ args, exitCode: 2 });
+      expect(jsonOf(refused).code).toBe("usage");
+      expect(refused.stdout).not.toContain(pathLike);
+      expect(refused.stderr).not.toContain(pathLike);
+    }
+    for (const rejected of [credentialLike, pathLike]) {
+      const refused = runCli(
+        ["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--session-id", rejected, "--json"],
+        fixture.root,
+      );
+      expect({ rejected, exitCode: refused.exitCode }).toEqual({ rejected, exitCode: 1 });
+      expect(jsonOf(refused).code).toBe("coordination.invalid-session-id");
+      expect(refused.stdout).not.toContain(rejected);
+      expect(refused.stderr).not.toContain(rejected);
+    }
+    // Every refusal above is pre-write.
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(before);
+    expect(existsSync(join(fixture.harness, "workflows", WORKFLOW_ID, "sessions"))).toBe(false);
+  });
+
   test("--resume accepts no identity input (exit 2) and stays resumable", () => {
     const fixture = makeFixture();
     const coordinator = bindCoordinator(fixture);
@@ -2562,6 +2598,20 @@ describe("prepare coordinator recovery — CLI transport", () => {
     );
     expect(relative.exitCode).toBe(2);
     expect(jsonOf(relative).code).toBe("usage");
+    // The rejected address is stated as a rule, never repeated (§5).
+    expect(relative.stdout).not.toContain(".mstar/workflows/x/sessions/coordinator-a.json");
+    expect(relative.stderr).not.toContain(".mstar/workflows/x/sessions/coordinator-a.json");
+
+    // A credential-like replacement id is refused by the ENGINE (not by a CLI
+    // guard), and that refusal reaches the same public diagnostic: it must name
+    // the rule and the received length, never the value.
+    for (const rejected of [`ghp_${"a".repeat(140)}`, "../creds/secret.json"]) {
+      const badId = runCli(recoverCoordinatorArgs(fixture, tokens, { sessionId: rejected }), fixture.root);
+      expect({ rejected, exitCode: badId.exitCode }).toEqual({ rejected, exitCode: 1 });
+      expect(jsonOf(badId).code).toBe("coordination.invalid-session-id");
+      expect(badId.stdout).not.toContain(rejected);
+      expect(badId.stderr).not.toContain(rejected);
+    }
 
     // A stop entry that is not a public session id (`a/b` would name another
     // path component) is decided as usage before any engine I/O, so the value is

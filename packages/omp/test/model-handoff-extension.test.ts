@@ -2149,6 +2149,10 @@ describe("prerequisite identity — registered coordinator tool handler", () => 
     const bound = await harness.runCoordinatorTool({ operation: "bind", workflowId });
     expect(bound.isError).toBe(false);
     expect(bound.details.mstarCoordinator).toMatchObject({ workflowId, sessionId: hostId, role: "coordinator" });
+    // §3.3: a model-visible tool result is NOT coordinator-owned transport, so
+    // the coordinator envelope path is in neither the text nor the details.
+    expect(JSON.stringify(bound.details.mstarCoordinator)).not.toContain("sessions/");
+    expect(String(bound.content[0]?.text)).not.toContain("sessions/");
 
     // The native id reached the engine's own binding, and the envelope is the
     // role-scoped one for that identity.
@@ -2493,6 +2497,12 @@ describe("prerequisite identity — registered coordinator recovery tool handler
       operationId: "op-host-recover-1",
       replay: false,
     });
+    // §3.3: the coordinator envelope path is coordinator-owned transport, and a
+    // model-visible tool result is not that transport — neither the details nor
+    // the text names the new or the prior envelope.
+    expect(receipt.sessionFile).toBeUndefined();
+    expect(JSON.stringify(receipt)).not.toContain("sessions/");
+    expect(String(recovered.content[0]?.text)).not.toContain("sessions/");
 
     // The engine's own state: the binding moved to THIS host session, the new
     // envelope is the role-scoped one, and the prior envelope is retained.
@@ -2631,5 +2641,43 @@ describe("prerequisite identity — registered coordinator recovery tool handler
       priorSessionId: RECOVERY_PRIOR_SESSION,
       allowed: true,
     });
+  }, 120000);
+
+  test("a foreign-owner refusal never names the envelope path in the model-visible tool result", async () => {
+    const repo = buildControlRepo();
+    const workflowId = "fixture-recovery-foreign-iteration";
+    createRecoverableWorkflow(repo, workflowId, RECOVERY_PRIOR_SESSION);
+    setArtifactStore(createFsStore(repo.harness));
+    // The recorded holder's envelope is replaced by one that is not the
+    // coordinator seat. It still exists and still names the recorded session id,
+    // so the engine refuses it as `foreign-owner` rather than as a missing file —
+    // the refusal path whose message once interpolated both envelope paths.
+    const priorEnvelope = join(repo.harness, "workflows", workflowId, "sessions", `coordinator-${RECOVERY_PRIOR_SESSION}.json`);
+    writeJson(priorEnvelope, {
+      schema_version: 1,
+      role: "plan-pm",
+      plan_id: "some-plan",
+      session_id: RECOVERY_PRIOR_SESSION,
+      workflow_id: workflowId,
+      harness_root: repo.harness,
+    });
+    const harness = await createHarness({
+      cwd: repo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(repo.main),
+    });
+    const snapshotPath = join(repo.harness, "workflows", workflowId, "snapshot.json");
+    const before = readFileSync(snapshotPath, "utf8");
+    const view = await harness.runCoordinatorTool({ operation: "show-recovery", workflowId });
+    const details = view.details.mstarCoordinator as Record<string, unknown>;
+
+    const refused = await harness.runCoordinatorTool(recoveryToolParams(workflowId, details, RECOVERY_PRIOR_SESSION));
+    expect(coordinatorCodeOf(refused)).toBe("coordination.identity-recovery.foreign-owner");
+    // §3.3: no envelope path — and no rejected caller value — in the tool text
+    // or the details. The already-public workflow and recorded session ids name
+    // the binding the caller failed to authenticate.
+    expect(String(refused.content[0]?.text)).not.toContain("sessions/");
+    expect(JSON.stringify(refused.details)).not.toContain("sessions/");
+    expect(readFileSync(snapshotPath, "utf8")).toBe(before);
   }, 120000);
 });
