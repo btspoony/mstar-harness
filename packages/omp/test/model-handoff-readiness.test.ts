@@ -167,7 +167,12 @@ async function buildFixture(options: { workflowId?: string; planIds?: readonly s
     harness_root: harness,
   });
   const planPaths = planIds.map((id) => join(plansDir, `${id}.md`));
-  planPaths.forEach((path, index) => writeFileSync(path, `# ${planIds[index]}\n\nPlan body.\n`));
+  // §4: a real registered plan markdown declares its own `plan_id` — the
+  // shared resolver (registration, the Prepare append and readiness) requires
+  // that declaration, so the fixture states it like any registered plan does.
+  planPaths.forEach((path, index) =>
+    writeFileSync(path, `# ${planIds[index]}\n\n**plan_id:** ${planIds[index]}\n\nPlan body.\n`),
+  );
   const evidencePaths = planIds.map((id) => join(guidesDir, `${id}-prepare.md`));
   evidencePaths.forEach((path, index) => writeFileSync(path, `# Prepare evidence — ${planIds[index]}\n`));
   const reportPaths = SPECIALISTS.map((role) => join(guidesDir, `${role}-return.md`));

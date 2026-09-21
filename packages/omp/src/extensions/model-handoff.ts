@@ -1297,11 +1297,21 @@ export default function modelHandoff(pi: ExtensionAPI): void {
     const handoffTarget = refreshed.value.handoffTarget;
 
     if (!readiness.ready) {
+      // The checkpoint's typed §5 refinements are forwarded verbatim: they carry
+      // public ids, codes, canonical plan pointers and the next supported
+      // operation — never an envelope path, credential or session payload.
+      const primary = readiness.diagnostics[0];
+      const refined = primary === undefined ? "" : ` (${primary.detail})`;
       return outcome(
         false,
         false,
-        `Phase 1 is not complete for ${record.binding.workflowId}: ${readiness.codes.join(", ")}. The handoff stays pending and nothing was switched.`,
-        { code: "not-ready", state: "pending", codes: readiness.codes },
+        `Phase 1 is not complete for ${record.binding.workflowId}: ${readiness.codes.join(", ")}${refined}. The handoff stays pending and nothing was switched.${primary === undefined ? "" : ` Next: ${primary.next}.`}`,
+        {
+          code: "not-ready",
+          state: "pending",
+          codes: readiness.codes,
+          diagnostics: readiness.diagnostics,
+        },
       );
     }
 

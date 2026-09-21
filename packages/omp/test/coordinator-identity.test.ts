@@ -14,11 +14,13 @@ import {
   COORDINATOR_TOOL_NAME,
   bindCoordinatorIdentity,
   classifyCoordinatorShellCall,
+  readStoredCoordinatorTarget,
   recoverCoordinatorIdentity,
   showCoordinatorRecovery,
   type CoordinatorIdentityFacts,
   type CoordinatorRecoveryDeps,
 } from "../src/coordinator-identity";
+import { identityDetailOfRecoveryBlocker } from "../src/model-handoff-readiness";
 import type { CoordinationResult, RecoverPrepareCoordinatorResult } from "@mstar-harness/engine";
 
 const FACTS: CoordinatorIdentityFacts = {
@@ -239,6 +241,34 @@ function recoverRequest(overrides: Record<string, unknown> = {}): Record<string,
 }
 
 describe("prerequisite identity — coordinator recovery adapter input", () => {
+  test("the engine's recovery admission vocabulary maps onto the one §5 identity-detail set", () => {
+    // The readiness checkpoint classifies the engine's recovery verdict through
+    // this ONE mapping, so the adapter's own refusal codes and the readiness
+    // diagnostics can never drift apart. `stale` is the token-CAS reason the
+    // recovery mutation reports; `foreign-owner` is shared with the
+    // authentication refusal; everything else is a Prepare/admission verdict.
+    for (const [engineCode, detail] of [
+      ["unauthorized", "recovery-unauthorized"],
+      ["stale", "recovery-stale"],
+      ["foreign-owner", "foreign-owner"],
+      ["not-prepare", "recovery-not-prepare"],
+      ["execution-started", "recovery-not-prepare"],
+      ["invalid-patch", "recovery-not-prepare"],
+    ] as ReadonlyArray<readonly [string, string]>) {
+      expect({ engineCode, detail: identityDetailOfRecoveryBlocker(engineCode) }).toEqual({ engineCode, detail });
+    }
+
+    // The adapter's own stored-target reader refuses with a code from that same
+    // vocabulary, so a readiness diagnostic built from it is already typed.
+    const missing = readStoredCoordinatorTarget({
+      harnessRoot: "/nonexistent/.mstar",
+      workflowId: "wf-a",
+    });
+    expect(missing.ok).toBe(false);
+    if (missing.ok) throw new Error("an unreadable snapshot must not resolve a prior target");
+    expect(identityDetailOfRecoveryBlocker(missing.code)).toBe("recovery-not-prepare");
+  });
+
   test("prepare coordinator recovery operations accept only their documented keys", async () => {
     expect([...COORDINATOR_SHOW_RECOVERY_INPUT_KEYS]).toEqual(["operation", "workflowId"]);
     expect([...COORDINATOR_RECOVER_INPUT_KEYS]).toEqual([

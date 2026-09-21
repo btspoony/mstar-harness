@@ -23,6 +23,21 @@
  * pushed remote tip. It never claims to verify historical review correctness,
  * never creates workflow state and never obtains a lease.
  *
+ * A refusal is reported as the frozen broad gate code the callers already
+ * depend on (`Phase1RefusalCode`) **plus** a typed `Phase1Diagnostic` that
+ * names the prerequisite-contract §5 subreason, the subject (workflow, and the
+ * plan for a path refusal), the safe label of the identity source, the public
+ * ids already in play, the canonical base/target of a plan pointer and the next
+ * supported operation. A bad plan pointer is therefore never rendered as an
+ * unlocked compass: the pointer keeps its own `plan-pointer-invalid` /
+ * `plan-identity-mismatch` detail and only a genuinely unlocked compass
+ * produces `prepare-unlocked`. Identity and path resolution reuse the shared
+ * seams — `resolveRegisteredPlanFile` for every row pointer and the engine's
+ * own read-only `showPrepareCoordinatorRecovery` view for the recovery verdict
+ * — so readiness, registration and the guarded Prepare correction agree. The
+ * diagnostics render public ids, codes and canonical paths only: never an
+ * envelope path, credential, session JSON or environment payload.
+ *
  * `execution_policy.push_policy` is deliberately not consulted: it is
  * accepted-but-opaque engine data and supplies no push waiver — the remote tip
  * comes from read-only `git ls-remote` output, never from a cached tracking
@@ -66,6 +81,7 @@ import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, readlinkSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, sep } from "node:path";
 import {
+  PlanPathError,
   canonicalizeNearestExisting,
   isDistinctCheckout,
   parseCompassFrontmatter,
@@ -77,12 +93,14 @@ import {
   resolveHarnessDir,
   resolveIterationDir,
   resolvePlanDir,
+  resolveRegisteredPlanFile,
   resolveWorkflowDir,
+  showPrepareCoordinatorRecovery,
   validateCompassFrontmatter,
   validateStatusV2,
   WORKFLOW_SNAPSHOT_FILE,
 } from "@mstar-harness/engine";
-import type { WorkflowSnapshot } from "@mstar-harness/engine";
+import type { PrepareCoordinatorRecoveryView, WorkflowSnapshot } from "@mstar-harness/engine";
 
 /** Root register file inside the harness dir (v2 `status.json`). */
 const STATUS_FILE = "status.json";
@@ -416,7 +434,7 @@ export type Phase1Receipt = Readonly<{
   artifactVersions: readonly Readonly<{ path: string; version: string }>[];
 }>;
 
-type Phase1RefusalCode =
+export type Phase1RefusalCode =
   | "binding-invalid"
   | "review-evidence-missing"
   | "prepare-not-locked"
@@ -438,9 +456,117 @@ const CODE_ORDER: readonly Phase1RefusalCode[] = [
   "execution.consumer-not-ready",
 ];
 
+/**
+ * The identity subreasons of prerequisite contract §5. They refine the broad
+ * `binding-invalid` gate rather than replacing it: an acquisition that carries
+ * no id is `identity-missing`, a value that does not address the scope it was
+ * checked against is `identity-mismatch`, a recorded owner whose proof this
+ * session does not hold is `foreign-owner`, and the three `recovery-*` values
+ * say why the narrow JSON Prepare repair is **not** currently admitted.
+ */
+export type Phase1IdentityDetail =
+  | "identity-missing"
+  | "identity-mismatch"
+  | "foreign-owner"
+  | "recovery-not-prepare"
+  | "recovery-stale"
+  | "recovery-unauthorized";
+
+/**
+ * The path subreasons of §5: a pointer that is not the canonical registered
+ * plan file (`plan-pointer-invalid`), a pointer that resolves to a file whose
+ * own declared `plan_id` disagrees (`plan-identity-mismatch`), and a compass
+ * that is genuinely not locked (`prepare-unlocked`).
+ */
+export type Phase1PathDetail = "plan-pointer-invalid" | "plan-identity-mismatch" | "prepare-unlocked";
+
+/** Safe label of where an observed identity or pointer value came from. */
+export type Phase1DiagnosticSource =
+  | "host-session"
+  | "snapshot-coordinator"
+  | "session-envelope"
+  | "recovery-view"
+  | "plan-row";
+
+/**
+ * One typed refinement of a broad refusal code (§5). It carries the subject,
+ * the safe source label, the public ids already in play, the canonical
+ * base/target of a plan pointer and the next supported operation — never an
+ * envelope path, credential, session JSON or environment payload.
+ */
+export type Phase1Diagnostic = Readonly<{
+  /** The broad gate code this detail refines; always also present in `codes`. */
+  code: Phase1RefusalCode;
+  detail: Phase1IdentityDetail | Phase1PathDetail;
+  workflowId: string;
+  /** The plan this detail addresses, for a row-level path refusal. */
+  planId?: string;
+  source?: Phase1DiagnosticSource;
+  /** A public id/pointer that is already in play (never a credential). */
+  expected?: string;
+  /** The observed public id/pointer that disagreed with `expected`. */
+  current?: string;
+  /** Canonical plan root a pointer was resolved against. */
+  base?: string;
+  /** Canonical registered plan file the pointer was expected to name. */
+  target?: string;
+  /** The next supported operation. */
+  next: string;
+}>;
+
+/** The named next steps a diagnostic offers instead of a bare refusal. */
+const NEXT_BIND =
+  'call `mstar_coordinator` with {operation:"bind", workflowId} from this workflow\'s coordinator session';
+const NEXT_RECOVER =
+  'call `mstar_coordinator` with {operation:"recover", …} from this session, naming the recorded holder in stoppedSessionIds';
+const NEXT_RECOVERY_VIEW =
+  'call `mstar_coordinator` with {operation:"show-recovery", workflowId} to read the current recovery verdict';
+const NEXT_COORDINATOR_EVIDENCE =
+  "re-run this checkpoint with the workflow's recorded coordinator envelope and the ordered specialist returns";
+const NEXT_REGISTERED_PLAN =
+  "register the row through `mstar iteration register`, or repair it with the guarded Prepare plan-file correction";
+const NEXT_LOCK_COMPASS = "lock the reviewed delivery compass, then re-run this checkpoint";
+
+/**
+ * §5 classification of one engine recovery-admission blocker into the shared
+ * identity-detail vocabulary. The engine's own reason union is the input
+ * (`packages/engine/src/coordination.ts`), so the readiness diagnostic and the
+ * `mstar_coordinator` view never disagree about the same blocker.
+ */
+export function identityDetailOfRecoveryBlocker(code: string): Phase1IdentityDetail {
+  if (code === "unauthorized") return "recovery-unauthorized";
+  if (code === "stale") return "recovery-stale";
+  if (code === "foreign-owner") return "foreign-owner";
+  return "recovery-not-prepare";
+}
+
+/** Whether the narrow JSON Prepare repair is admitted, and what to do next. */
+type RecoveryVerdict = Readonly<{ detail: Phase1IdentityDetail | null; next: string }>;
+
+/**
+ * The recovery verdict of one workflow, read through the engine's own read-only
+ * §3.3 view — the same view `mstar_coordinator {operation:"show-recovery"}`
+ * projects. A readable, admitted verdict names the recovery operation as the
+ * next step; an inadmissible lifecycle contributes its typed `recovery-*`
+ * detail instead. The view is read-only and never throws past this boundary: an
+ * unreadable verdict says so rather than turning into an identity verdict.
+ */
+async function recoveryVerdict(controlRoot: string, harnessRoot: string, workflowId: string): Promise<RecoveryVerdict> {
+  let view: PrepareCoordinatorRecoveryView;
+  try {
+    view = await showPrepareCoordinatorRecovery({ cwd: controlRoot, harnessDir: harnessRoot, workflowId });
+  } catch {
+    return { detail: null, next: NEXT_RECOVERY_VIEW };
+  }
+  if (view.allowed) return { detail: null, next: NEXT_RECOVER };
+  const blocker = view.blockers[0];
+  if (blocker === undefined) return { detail: "recovery-not-prepare", next: NEXT_RECOVERY_VIEW };
+  return { detail: identityDetailOfRecoveryBlocker(blocker.code), next: NEXT_RECOVERY_VIEW };
+}
+
 export type Phase1Readiness =
   | { ready: true; binding: HandoffBinding; integrationHead: string; receipt: Phase1Receipt }
-  | { ready: false; codes: readonly Phase1RefusalCode[] };
+  | { ready: false; codes: readonly Phase1RefusalCode[]; diagnostics: readonly Phase1Diagnostic[] };
 
 /**
  * One sampled artifact, pinned on three independent identities so a change
@@ -561,6 +687,14 @@ export async function inspectPhase1Readiness(
   const fail = (code: Phase1RefusalCode): void => {
     codes.add(code);
   };
+  // §5 typed refinements of those broad codes. Every refusal keeps its frozen
+  // code; the diagnostics say which prerequisite actually failed and what the
+  // next supported operation is.
+  const diagnostics: Phase1Diagnostic[] = [];
+  const diagnose = (entry: Phase1Diagnostic): void => {
+    diagnostics.push(entry);
+  };
+  const verdict = (): Phase1Readiness => ({ ready: false, codes: orderedCodes(codes), diagnostics });
 
   // Pinned artifact identity (spec items 2 and 5). Each artifact keeps its
   // logical path, its raw link target, its canonical target and a content hash,
@@ -596,10 +730,24 @@ export async function inspectPhase1Readiness(
 
   // --- item 1: binding identity, root entry, snapshot, compass --------------
   if (!isPlainObject(binding) || !isSafePathComponent(binding.workflowId)) {
-    return { ready: false, codes: ["binding-invalid"] };
+    fail("binding-invalid");
+    return verdict();
   }
   if (!isNonEmptyString(input?.workflowId) || input.workflowId !== binding.workflowId) fail("binding-invalid");
-  if (!isNonEmptyString(binding.sessionId)) fail("binding-invalid");
+  if (!isNonEmptyString(binding.sessionId)) {
+    fail("binding-invalid");
+    // The host adapter acquired no session id: nothing can be authenticated,
+    // and the engine never generates a coordinator identity. The remaining
+    // shape checks still run, so the set of broad codes is unchanged.
+    diagnose({
+      code: "binding-invalid",
+      detail: "identity-missing",
+      workflowId: binding.workflowId,
+      source: "host-session",
+      expected: binding.workflowId,
+      next: NEXT_BIND,
+    });
+  }
   if (!isNonEmptyString(binding.controlRoot) || !isAbsolute(binding.controlRoot)) fail("binding-invalid");
   if (
     !isNonEmptyString(binding.harnessRoot) ||
@@ -625,7 +773,7 @@ export async function inspectPhase1Readiness(
   if (controlRoot === null || !isDirectory(controlRoot) || main === null || main.root !== controlRoot) {
     fail("binding-invalid");
   }
-  if (controlRoot === null || codes.size > 0) return { ready: false, codes: orderedCodes(codes) };
+  if (controlRoot === null || codes.size > 0) return verdict();
 
   // Every binding path is re-derived from that control root; a binding whose
   // paths no longer follow from these roots (tampered, stale or foreign) is
@@ -643,7 +791,7 @@ export async function inspectPhase1Readiness(
     canonicalizeNearestExisting(binding.harnessRoot) !== harnessRoot
   ) {
     fail("binding-invalid");
-    return { ready: false, codes: orderedCodes(codes) };
+    return verdict();
   }
   // §5: the checkpoint below reads the root register, the snapshot, the
   // coordinator ENVELOPE and the compass — every one of them retired as a
@@ -654,7 +802,10 @@ export async function inspectPhase1Readiness(
   // exists and cannot be read throws that store's own refusal, since this
   // checkpoint then has no verdict to give about either route.
   if ((await resolveExecutionReadRoute({ harnessDir: harnessRoot })) === "execution") {
-    return { ready: false, codes: ["execution.consumer-not-ready"] };
+    // The engine's own authority verdict, captured separately from any identity
+    // refusal: no file-route identity check ran at all here.
+    fail("execution.consumer-not-ready");
+    return verdict();
   }
   let workflowDir: string;
   let iterationDir: string;
@@ -665,7 +816,7 @@ export async function inspectPhase1Readiness(
     planArea = resolvePlanDir(harnessRoot);
   } catch {
     fail("binding-invalid");
-    return { ready: false, codes: orderedCodes(codes) };
+    return verdict();
   }
   const iterationArea = join(iterationDir, binding.workflowId);
   const expectedSnapshot = canonicalizeNearestExisting(join(workflowDir, binding.workflowId, WORKFLOW_SNAPSHOT_FILE));
@@ -678,7 +829,8 @@ export async function inspectPhase1Readiness(
     canonicalizeNearestExisting(binding.snapshotPath) !== expectedSnapshot ||
     canonicalizeNearestExisting(binding.compassPath) !== expectedCompass
   ) {
-    return { ready: false, codes: ["binding-invalid"] };
+    fail("binding-invalid");
+    return verdict();
   }
 
   // From here every read is bounded to artifacts derived from that binding.
@@ -703,7 +855,7 @@ export async function inspectPhase1Readiness(
         : null;
     if (listed !== snapshotFile.real) fail("binding-invalid");
   }
-  if (codes.size > 0 || snapshotFile === null) return { ready: false, codes: orderedCodes(codes) };
+  if (codes.size > 0 || snapshotFile === null) return verdict();
 
   let snapshot: WorkflowSnapshot;
   try {
@@ -711,22 +863,75 @@ export async function inspectPhase1Readiness(
     // the pinned artifact.
     snapshot = readWorkflowSnapshot(dirname(snapshotFile.logical)).snapshot;
   } catch {
-    return { ready: false, codes: ["binding-invalid"] };
+    fail("binding-invalid");
+    return verdict();
   }
   if (snapshot.id !== binding.workflowId || snapshot.type !== "iteration" || snapshot.status !== "running") {
     fail("binding-invalid");
   }
 
   const coordinator = snapshot.coordination?.coordinator;
-  if (!isPlainObject(coordinator) || !isNonEmptyString(coordinator.session_id) || coordinator.session_id !== binding.sessionId) {
+  const recordedCoordinatorId =
+    isPlainObject(coordinator) && isNonEmptyString(coordinator.session_id) ? coordinator.session_id : null;
+  if (recordedCoordinatorId === null) {
+    // A workflow that records no coordinator has no owner to authenticate, and
+    // the §3.3 recovery replaces a recorded binding — it never creates one — so
+    // the explicit bind is the only supported next operation here.
     fail("binding-invalid");
+    diagnose({
+      code: "binding-invalid",
+      detail: "identity-missing",
+      workflowId: binding.workflowId,
+      source: "snapshot-coordinator",
+      current: binding.sessionId,
+      next: NEXT_BIND,
+    });
+  } else if (recordedCoordinatorId !== binding.sessionId) {
+    // The workflow records an owner this host session is not. Whether that is
+    // repairable is the engine's own Prepare admission, read through the shared
+    // §3.3 view rather than guessed here.
+    fail("binding-invalid");
+    const recovery = await recoveryVerdict(controlRoot, harnessRoot, binding.workflowId);
+    diagnose({
+      code: "binding-invalid",
+      detail: "foreign-owner",
+      workflowId: binding.workflowId,
+      source: "snapshot-coordinator",
+      expected: recordedCoordinatorId,
+      current: binding.sessionId,
+      next: recovery.next,
+    });
+    if (recovery.detail !== null) {
+      // Why no recovery is currently admitted, in the shared §5 vocabulary.
+      diagnose({
+        code: "binding-invalid",
+        detail: recovery.detail,
+        workflowId: binding.workflowId,
+        source: "recovery-view",
+        expected: recordedCoordinatorId,
+        current: binding.sessionId,
+        next: NEXT_RECOVERY_VIEW,
+      });
+    }
   }
   const listedEnvelope = isPlainObject(coordinator) && isNonEmptyString(coordinator.session_file) ? coordinator.session_file : null;
   if (
     listedEnvelope === null ||
     canonicalizeNearestExisting(listedEnvelope) !== canonicalizeNearestExisting(input.coordinatorSessionPath)
   ) {
+    // The stored binding and the checkpoint's envelope pointer disagree. The
+    // envelope path itself is coordinator-owned transport: it is never rendered
+    // into a diagnostic.
     fail("binding-invalid");
+    diagnose({
+      code: "binding-invalid",
+      detail: "identity-mismatch",
+      workflowId: binding.workflowId,
+      source: "snapshot-coordinator",
+      expected: recordedCoordinatorId ?? binding.workflowId,
+      current: binding.sessionId,
+      next: NEXT_COORDINATOR_EVIDENCE,
+    });
   }
   const envelopeFile = sample(input.coordinatorSessionPath, "binding-invalid", [harnessRoot]);
   if (envelopeFile === null) {
@@ -743,16 +948,33 @@ export async function inspectPhase1Readiness(
         canonicalizeNearestExisting(envelope.harness_root) !== harnessRoot
       ) {
         fail("binding-invalid");
+        diagnose({
+          code: "binding-invalid",
+          detail: "identity-mismatch",
+          workflowId: binding.workflowId,
+          source: "session-envelope",
+          expected: binding.sessionId,
+          current: envelope.session_id,
+          next: NEXT_COORDINATOR_EVIDENCE,
+        });
       }
     } catch {
       fail("binding-invalid");
+      diagnose({
+        code: "binding-invalid",
+        detail: "identity-mismatch",
+        workflowId: binding.workflowId,
+        source: "session-envelope",
+        expected: binding.sessionId,
+        next: NEXT_COORDINATOR_EVIDENCE,
+      });
     }
   }
 
   const compassFile = sample(binding.compassPath, "binding-invalid", [iterationDir]);
   if (compassFile === null) {
     fail("binding-invalid");
-    return { ready: false, codes: orderedCodes(codes) };
+    return verdict();
   }
   let compass: Record<string, unknown> = {};
   try {
@@ -810,10 +1032,22 @@ export async function inspectPhase1Readiness(
   ) {
     fail("binding-invalid");
   }
-  if (codes.size > 0) return { ready: false, codes: orderedCodes(codes) };
+  if (codes.size > 0) return verdict();
 
   // --- item 2: Prepare evidence, then the ordered review returns ------------
-  if (compass.status !== "locked") fail("prepare-not-locked");
+  if (compass.status !== "locked") {
+    // Only an actually unlocked compass produces `prepare-unlocked`: a pointer
+    // refusal keeps its own §5 path detail below and must never be rendered as
+    // this one.
+    fail("prepare-not-locked");
+    diagnose({
+      code: "prepare-not-locked",
+      detail: "prepare-unlocked",
+      workflowId: binding.workflowId,
+      current: typeof compass.status === "string" ? compass.status : undefined,
+      next: NEXT_LOCK_COMPASS,
+    });
+  }
 
   const receiptPlans = Array.isArray(input.plans) ? input.plans : [];
   const receiptPlanIds = receiptPlans.map((plan) => (isPlainObject(plan) && isNonEmptyString(plan.planId) ? plan.planId : null));
@@ -825,29 +1059,78 @@ export async function inspectPhase1Readiness(
   if (!plansComplete) fail("prepare-not-locked");
 
   if (plansComplete) {
+    // The canonical plan root the resolver owns — the same one registration and
+    // the guarded Prepare correction resolve against, including a `.mstarc`
+    // declared or external `{PLAN_DIR}`.
+    const planBase = canonicalizeNearestExisting(planArea);
     for (const plan of receiptPlans) {
       const row = rows.find((candidate) => rowId(candidate) === plan.planId);
       const registeredFile = isPlainObject(row) && isNonEmptyString(row.file) ? row.file : null;
-      // Relative snapshot pointer values are resolved against the **harness root**,
-      // which is the snapshot's own documented convention — the engine's amendment
-      // reader requires `compass_ref` to be relative and resolves it as
-      // `join(harnessRoot, ref)` under a harness-root containment check
-      // (`packages/engine/src/coordination.ts` `readPrepareCompass`), and its
-      // migration writes snapshot pointers harness-relative (`migrate.ts`). Never
-      // against `process.cwd()`, which is unrelated to the bound control root.
-      // Absolute values are taken as written; containment below still decides.
-      const registeredFileAbs =
-        registeredFile === null || isAbsolute(registeredFile) ? registeredFile : join(harnessRoot, registeredFile);
+      // §4: the ONE registered-plan path contract resolves every row pointer.
+      // Readiness never normalizes or repairs a stored row — a stale spelling is
+      // a readable refusal carrying its own §5 path detail, and the guarded
+      // Prepare correction is the operation that repairs it. The accepted file
+      // must be exactly the canonical configured `{PLAN_DIR}/<plan-id>.md` with
+      // an unambiguous matching declared `plan_id`.
+      let resolvedPlanPath: string | null = null;
+      if (registeredFile === null) {
+        fail("prepare-not-locked");
+        diagnose({
+          code: "prepare-not-locked",
+          detail: "plan-pointer-invalid",
+          workflowId: binding.workflowId,
+          planId: plan.planId,
+          source: "plan-row",
+          base: planBase,
+          target: join(planBase, `${plan.planId}.md`),
+          next: NEXT_REGISTERED_PLAN,
+        });
+      } else {
+        try {
+          resolvedPlanPath = resolveRegisteredPlanFile({
+            harnessRoot,
+            planId: plan.planId,
+            file: registeredFile,
+          }).planPath;
+        } catch (error) {
+          fail("prepare-not-locked");
+          const mismatched =
+            error instanceof PlanPathError &&
+            (error.code === "plan-path.identity-mismatch" || error.code === "plan-path.conflicting-declaration");
+          diagnose({
+            code: "prepare-not-locked",
+            detail: mismatched ? "plan-identity-mismatch" : "plan-pointer-invalid",
+            workflowId: binding.workflowId,
+            planId: plan.planId,
+            source: "plan-row",
+            current: registeredFile,
+            base: planBase,
+            target: join(planBase, `${plan.planId}.md`),
+            next: NEXT_REGISTERED_PLAN,
+          });
+        }
+      }
       const planFile = sample(plan.planPath, "prepare-not-locked", [planArea]);
       const evidenceFile = sample(plan.prepareEvidencePath, "prepare-not-locked", [iterationArea, planArea]);
       // Each plan occurs exactly once (checked above), with its registered file.
-      if (
-        registeredFileAbs === null ||
-        planFile === null ||
-        canonicalizeNearestExisting(registeredFileAbs) !== planFile.real ||
-        !isUnder(planFile.real, planArea)
-      ) {
+      if (resolvedPlanPath === null || planFile === null || !isUnder(planFile.real, planArea)) {
         fail("prepare-not-locked");
+      } else if (canonicalizeNearestExisting(resolvedPlanPath) !== planFile.real) {
+        // The row registers one document and the receipt names another: the two
+        // disagree about the plan's own file.
+        fail("prepare-not-locked");
+        diagnose({
+          code: "prepare-not-locked",
+          detail: "plan-identity-mismatch",
+          workflowId: binding.workflowId,
+          planId: plan.planId,
+          source: "plan-row",
+          expected: resolvedPlanPath,
+          current: plan.planPath,
+          base: planBase,
+          target: join(planBase, `${plan.planId}.md`),
+          next: NEXT_REGISTERED_PLAN,
+        });
       }
       // Prepare evidence is the plan/package section evidence (never the engine
       // `plan prepare` seal) inside this iteration's area or the plan area.
@@ -894,7 +1177,7 @@ export async function inspectPhase1Readiness(
       reports.add(report.real);
     });
   }
-  if (codes.size > 0) return { ready: false, codes: orderedCodes(codes) };
+  if (codes.size > 0) return verdict();
 
   // --- item 3: integration checkout, branch and main residency --------------
   const integrationBranch = anchors!.integration as string;
@@ -998,7 +1281,7 @@ export async function inspectPhase1Readiness(
     if (tip === null || liveHead === null || tip !== liveHead) fail("push-unverified");
   }
 
-  if (codes.size > 0 || head === null) return { ready: false, codes: orderedCodes(codes) };
+  if (codes.size > 0 || head === null) return verdict();
   const artifactVersions: { path: string; version: string }[] = [];
   for (const pin of samples.values()) {
     if (!artifactVersions.some((row) => row.path === pin.real)) {
