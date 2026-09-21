@@ -5363,9 +5363,22 @@ function readPlanAppend(
   // `invalid-plan`; the resolver's typed path detail is attached rather than
   // weakening a predicate. No second absolute-path key is introduced (spec §
   // Admission step 4).
+  //
+  // The shape guard is enforced HERE, before the resolver is reached: the
+  // resolver names the pointer form with `path.isAbsolute(file)` ahead of its
+  // own type check, so an absent/numeric/null `file` would surface as a native
+  // `TypeError` instead of this boundary's refusal code. String pointers
+  // (including empty or whitespace-only) still reach the resolver, whose typed
+  // path detail is attached below.
+  if (typeof declaredFile !== "string") {
+    throw prepareAmendmentRefusal("invalid-plan", `plan ${id} requires a file path as a string`, {
+      plan_id: id,
+      actual: declaredFile ?? null,
+    });
+  }
   let resolved: RegisteredPlanFile;
   try {
-    resolved = resolveRegisteredPlanFile({ harnessRoot: context.harnessRoot, planId: id, file: declaredFile as string });
+    resolved = resolveRegisteredPlanFile({ harnessRoot: context.harnessRoot, planId: id, file: declaredFile });
   } catch (error) {
     if (error instanceof PlanPathError) {
       throw prepareAmendmentRefusal("invalid-plan", error.message, {

@@ -27,6 +27,7 @@ import {
   readCatalogRevisions,
   reconcileCatalogExecution,
   registerCatalogExecution,
+  registerShippedCatalogExecution,
   resolveCatalogRegistrationState,
   type CatalogExecutionRequest,
 } from "./catalog-registration.js";
@@ -774,6 +775,35 @@ describe("catalog execution registration \u2014 registered-plan path preflight (
       iterationRequest(harnessDir, canonical, "op-path-accepted"),
     );
     expect(replay).toEqual(receipt);
+  });
+
+  test("prerequisite path: the equivalent accepted spellings share ONE shipped operation identity", async () => {
+    const { harnessDir, context } = await fixture("path-shipped-identity-");
+    const canonical = planFixture(harnessDir);
+    // The shipped transport derives its own operation id (no explicit id): both
+    // accepted spellings of the same plan target must land on the same
+    // operation, so the second call is the EXISTING operation rather than a
+    // second, competing registration of the same workflow.
+    const shipped = (file: string) =>
+      registerShippedCatalogExecution(context, {
+        actor: "cli:iteration-register",
+        workflow: iterationRequest(harnessDir, file, "op-derived").workflow,
+      });
+
+    const first = await shipped(`plans/${PLAN_ID}.md`);
+    expect(first.recovered).toBe(false);
+
+    // A same-spelling retry reuses the committed operation id with a moved
+    // request expectation; the canonical spelling must be indistinguishable
+    // from it — a different id would have started a second operation for the
+    // same workflow and never collided with the committed one.
+    await expect(shipped(`plans/${PLAN_ID}.md`)).rejects.toMatchObject({ code: "store.operation-conflict" });
+    await expect(shipped(canonical)).rejects.toMatchObject({ code: "store.operation-conflict" });
+
+    // One operation was ever recorded: the equivalent spelling left no
+    // half-registered workflow behind.
+    expect(await listPendingCatalogRegistrations(context)).toEqual([]);
+    expect((await listCatalog(context, {})).total).toBe(1);
   });
 
   test("prerequisite path: a mismatched declared plan_id refuses before any journal row", async () => {

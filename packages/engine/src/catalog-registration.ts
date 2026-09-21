@@ -500,21 +500,24 @@ function validateRequest(request: unknown): CatalogExecutionRequest {
  * operation identity and the eventual producer agree on one representation —
  * a retry can never hash one spelling and write another.
  *
- * Iteration rows only: standalone/audit catalog location schemas and the plan
- * producer's own `file` are not execution pointers and stay unchanged. A row
- * whose shape is malformed is left alone — the shape gate below owns that
+ * Iteration workflows only: standalone/audit catalog location schemas and the
+ * plan producer's own `file` are not execution pointers and stay unchanged. A
+ * row whose shape is malformed is left alone — the shape gate below owns that
  * refusal — and a pointer the resolver refuses throws before any journal row
  * exists.
+ *
+ * This is the ONE normalization seam: the shipped transport normalizes the
+ * workflow through the same helper before it derives its default operation id,
+ * so identity, request hash, journal payload and producer cannot disagree on
+ * the caller's spelling.
  */
-function normalizeIterationPlanPaths(request: CatalogExecutionRequest): CatalogExecutionRequest {
-  if (!isPlainObject(request)) return request;
-  const workflow = (request as unknown as Record<string, unknown>).workflow;
-  if (!isPlainObject(workflow) || workflow.kind !== "iteration") return request;
-  const options = workflow.options;
-  if (!isPlainObject(options)) return request;
+function normalizeIterationWorkflow(workflow: CatalogExecutionWorkflow): CatalogExecutionWorkflow {
+  if (!isPlainObject(workflow) || workflow.kind !== "iteration") return workflow;
+  const options: unknown = workflow.options;
+  if (!isPlainObject(options)) return workflow;
   const rows = options.rows;
   const harnessDir = options.harnessDir;
-  if (!Array.isArray(rows) || typeof harnessDir !== "string" || !isAbsolute(harnessDir)) return request;
+  if (!Array.isArray(rows) || typeof harnessDir !== "string" || !isAbsolute(harnessDir)) return workflow;
   let changed = false;
   const resolvedRows = rows.map((row) => {
     if (!isPlainObject(row)) return row;
@@ -526,11 +529,17 @@ function normalizeIterationPlanPaths(request: CatalogExecutionRequest): CatalogE
     changed = true;
     return { ...row, file: planPath };
   });
-  if (!changed) return request;
-  return {
-    ...request,
-    workflow: { ...workflow, options: { ...options, rows: resolvedRows } } as unknown as CatalogExecutionWorkflow,
-  };
+  if (!changed) return workflow;
+  return { ...workflow, options: { ...options, rows: resolvedRows } } as unknown as CatalogExecutionWorkflow;
+}
+
+function normalizeIterationPlanPaths(request: CatalogExecutionRequest): CatalogExecutionRequest {
+  if (!isPlainObject(request)) return request;
+  const workflow = request.workflow;
+  if (!isPlainObject(workflow) || workflow.kind !== "iteration") return request;
+  const normalized = normalizeIterationWorkflow(workflow);
+  if (normalized === workflow) return request;
+  return { ...request, workflow: normalized };
 }
 
 /**
@@ -1342,7 +1351,13 @@ export async function registerShippedCatalogExecution(
     operationId?: string;
   },
 ): Promise<CatalogExecutionReceipt> {
-  const workflow = input.workflow;
+  // The ONE registered-plan path preflight, applied here as well: the default
+  // operation id is derived from the request this call will journal, so the
+  // iteration workflow is normalized before the id is computed — otherwise two
+  // accepted spellings of the same plan target would receive different
+  // operation ids while the journal hash and producer used the normalized
+  // request, and a retry could not replay the original operation.
+  const workflow = normalizeIterationWorkflow(input.workflow);
   const delta = catalogDeltaFor(workflow);
   const operationId =
     input.operationId ??

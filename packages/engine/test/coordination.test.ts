@@ -3673,6 +3673,23 @@ describe("Prepare workflow amendment", () => {
           }),
       },
       {
+        // Missing / non-string pointers are shape violations this boundary owns:
+        // the shared resolver names the pointer form with `path.isAbsolute(file)`
+        // before its own type check, so reaching it with these would surface a
+        // native `TypeError` instead of the refusal vocabulary.
+        name: "file-missing",
+        patch: (fixture) =>
+          preparePatchOf(fixture, { appendPlans: [prepareAppendOf(fixture, PREPARE_APPEND, { file: undefined })] }),
+      },
+      {
+        name: "file-null",
+        patch: (fixture) => preparePatchOf(fixture, { appendPlans: [prepareAppendOf(fixture, PREPARE_APPEND, { file: null })] }),
+      },
+      {
+        name: "file-not-a-string",
+        patch: (fixture) => preparePatchOf(fixture, { appendPlans: [prepareAppendOf(fixture, PREPARE_APPEND, { file: 42 })] }),
+      },
+      {
         name: "header-id-mismatch",
         prepare: (fixture) => {
           writeText(join(fixture.planDir, `${PREPARE_APPEND}.md`), preparePlanMarkdown({ id: "plan-other", workingBranch: `feature/${PREPARE_APPEND}` }));
