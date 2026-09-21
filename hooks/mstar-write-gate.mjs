@@ -4175,8 +4175,13 @@ try {
     }
     const target = harnessDocKindOfTarget(targetPath);
     const landedTarget = landed === targetPath ? null : harnessDocKindOfTarget(landed);
-    const executionDir = target !== null && target.kind !== "register" ? target.harnessDir : landedTarget !== null && landedTarget.kind !== "register" ? landedTarget.harnessDir : null;
-    if (executionDir !== null) {
+    const executionDirs = [];
+    if (target !== null && target.kind !== "register")
+      executionDirs.push(target.harnessDir);
+    if (landedTarget !== null && landedTarget.kind !== "register" && !executionDirs.includes(landedTarget.harnessDir)) {
+      executionDirs.push(landedTarget.harnessDir);
+    }
+    for (const executionDir of executionDirs) {
       const executionRoute = await readExecutionWriteRoute(executionDir);
       if (executionRoute.kind === "active") {
         blockAuthorityWrite(toolName, displayTarget(targetPath, executionDir), [
