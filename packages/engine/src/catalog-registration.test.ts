@@ -421,7 +421,7 @@ describe("catalog execution registration \u2014 failure boundaries", () => {
   });
 });
 
-describe("catalog execution registration — the other two producers", () => {
+describe("catalog execution registration \u2014 the other two producers", () => {
   test("registers an iteration (with its relation) through the same journal", async () => {
     const { harnessDir, context } = await fixture("iteration-");
     const iterationId = "20260918-registration-iteration";

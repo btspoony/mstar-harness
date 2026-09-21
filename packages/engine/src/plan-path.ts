@@ -249,7 +249,7 @@ export function resolveRegisteredPlanFile(input: RegisteredPlanFileInput): Regis
   if (declaredPlanId === undefined) {
     throw refusal(
       "plan-path.identity-mismatch",
-      `plan ${planId} markdown ${expected} declares no plan_id header — the pointer cannot be traced to its reviewed plan`,
+      `plan ${planId} markdown ${expected} declares no plan_id header \u2014 the pointer cannot be traced to its reviewed plan`,
       { plan_id: planId },
     );
   }
