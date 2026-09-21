@@ -1781,13 +1781,13 @@ describe("execution-domain: §3 workflow creation, sealed input and authoritativ
     // `bindExecutionSession`/`readExecutionPlan` (pinned verbatim by the
     // `execution-session` group below), W4 publishes `mutateExecutionPlan`, and
     // W6 publishes the workflow-level mutator plus the coordinator recovery
-    // bootstrap (pinned verbatim by the `execution-workflow` group). Catalog
-    // registration (plan 4) and the per-operation transition bodies are still
-    // module-scoped.
+    // bootstrap (pinned verbatim by the `execution-workflow` group). The
+    // per-operation transition bodies stay module-scoped; the catalog
+    // registration verb is published by its own task, which pins it verbatim in
+    // `execution-registration.test.ts` instead of leaving an absence guard here.
     expect(typeof engineIndex.mutateExecutionPlan).toBe("function");
     expect(typeof engineIndex.mutateExecutionWorkflow).toBe("function");
     expect(typeof engineIndex.recoverExecutionCoordinator).toBe("function");
-    expect("commitExecutionRegistration" in engineIndex).toBe(false);
   });
 });
 
@@ -2537,17 +2537,14 @@ describe("execution-session: §2.3 binding, role-scoped identity and the plan re
     expect(engineIndex.readExecutionPlan.length).toBe(3);
     // W4 publishes the plan-operation entry point and W6 the workflow-level
     // mutator plus the coordinator recovery bootstrap (both complete: the
-    // `execution-workflow` group pins their verbatim signatures). Registration
-    // is plan 4's and the per-operation transition bodies stay module-scoped.
+    // `execution-workflow` group pins their verbatim signatures). The
+    // per-operation transition bodies stay module-scoped, and the published
+    // catalog registration verb is pinned by its own task's verbatim surface
+    // (`execution-registration.test.ts`).
     expect(typeof engineIndex.mutateExecutionPlan).toBe("function");
     expect(typeof engineIndex.mutateExecutionWorkflow).toBe("function");
     expect(typeof engineIndex.recoverExecutionCoordinator).toBe("function");
-    for (const name of [
-      "commitExecutionRegistration",
-      "prepareExecutionPlan",
-      "handoffExecutionPlan",
-      "completeExecutionPlan",
-    ]) {
+    for (const name of ["prepareExecutionPlan", "handoffExecutionPlan", "completeExecutionPlan"]) {
       expect(name in engineIndex).toBe(false);
     }
   });

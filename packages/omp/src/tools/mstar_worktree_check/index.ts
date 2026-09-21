@@ -34,6 +34,15 @@
  * P1-only: it is loaded dynamically and a stale engine (or a resolver
  * failure) falls back to the DEFAULT `workflows` name (same degrade as
  * `mstar_status_validate`).
+ *
+ * EXECUTION authority (source readiness, plan S3): kind=l1 reads the workflow
+ * SNAPSHOT (and every other registered ACTIVE workflow's snapshot), which is
+ * retired as a persistence route while the control harness's execution
+ * authority is ACTIVE (primary spec §4.3). The engine's route
+ * (`resolveExecutionReadRoute`, plan S2) is asked BEFORE any snapshot read and
+ * the gate refuses `execution.consumer-not-ready` — never the retired files and
+ * never a synthesized snapshot; a store that exists and cannot be read keeps
+ * its own refusal. kind=l2 is a pure parameter check: no state, no route.
  */
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -155,6 +164,62 @@ async function loadP1Exports(): Promise<P1EngineExports | { error: AgentToolResu
   return { snapshotFile, readWorkflowSnapshot, readMainWorktree, collectActiveLifecycleBranches, scanActiveLifecycleBranches };
 }
 
+/** §5 the engine's execution-source route (plan S2). P1-only export: dynamic
+ * import with an explicit upgrade error — a stale engine must never answer
+ * "files" for a harness whose authority it cannot see. */
+type ExecutionRouteResolver = (context: { harnessDir: string }) => Promise<"execution" | "files">;
+
+async function loadExecutionRoute(): Promise<{ resolve: ExecutionRouteResolver } | { error: AgentToolResult }> {
+  const engine = await import("@mstar-harness/engine");
+  const resolve = engine.resolveExecutionReadRoute as ExecutionRouteResolver | undefined;
+  if (typeof resolve !== "function") {
+    return {
+      error: result(
+        "installed @mstar-harness/engine lacks resolveExecutionReadRoute — upgrade the engine (next release); CLI fallback: mstar worktree check",
+        { ok: false },
+        true,
+      ),
+    };
+  }
+  return { resolve };
+}
+
+/** §5: the refusal of the L1 gate's retired input while the control harness's
+ * execution authority is ACTIVE (or `null` when the file route still answers).
+ * kind=l1 assembles its input from the workflow SNAPSHOT and from every other
+ * registered ACTIVE workflow's snapshot, so — like the phase gates — it is a
+ * whole-document reader with no snapshot-free normalization; it therefore
+ * refuses not-ready instead of reading retired bytes. A store that exists and
+ * cannot be read keeps its own refusal. */
+async function executionNotReady(
+  harnessDir: string,
+): Promise<{ code: string; message: string } | { error: AgentToolResult } | null> {
+  const load = await loadExecutionRoute();
+  if ("error" in load) return { error: load.error };
+  let route: "execution" | "files";
+  try {
+    route = await load.resolve({ harnessDir });
+  } catch (error) {
+    const refusal = error as { code?: unknown; message?: unknown };
+    const code = typeof refusal?.code === "string" ? refusal.code : "store.authority-unreadable";
+    return {
+      code,
+      message:
+        `the execution authority of ${harnessDir} could not be read (${code}): ` +
+        `${typeof refusal?.message === "string" ? refusal.message : String(error)} — the workflow snapshots are ` +
+        "retired while that authority governs them, so no file-route L1 verdict is available",
+    };
+  }
+  if (route !== "execution") return null;
+  return {
+    code: "execution.consumer-not-ready",
+    message:
+      `the execution authority of ${harnessDir} is ACTIVE, so this gate's workflow-snapshot input is retired. Nothing ` +
+      "was read: kind=l1 assembles its input from the snapshot and from every other registered ACTIVE workflow's " +
+      "snapshot, so it reports not-ready rather than reading the retired files. Read the workflow/plan state through " +
+      "the execution DB adapter instead.",
+  };
+}
 
 export default function mstarWorktreeCheck(pi: CustomToolAPI): CustomTool {
   return {
@@ -162,7 +227,8 @@ export default function mstarWorktreeCheck(pi: CustomToolAPI): CustomTool {
     label: "Check worktree dispatch readiness",
     description:
       "Run the engine pre-dispatch worktree checklists: kind=l1 verifies the cross-plan L1 gate — main-worktree residency against the recorded expectation (mainBranch param or the snapshot's branch.base) and non-ownership of any active lifecycle branch, the dedicated integration checkout (snapshot integration_worktree_path on branch.integration), and the plan row execution_lease feature worktree (Git-checkout identity, existence, branch alignment). kind=l2 verifies the within-plan L2 gate (each parallel writable track has a distinct absolute worktree path and matching checked-out branch). " +
-      "Use before any writable dispatch, especially parallel multi-track dispatch. Returns one line per violation as [severity] code: message (fix: …).",
+      "Use before any writable dispatch, especially parallel multi-track dispatch. Returns one line per violation as [severity] code: message (fix: …). " +
+      "kind=l2 is a pure parameter check (no workflow state); kind=l1 refuses execution.consumer-not-ready while the control harness's execution authority is ACTIVE, because its snapshot input is retired.",
     parameters: pi.zod
       .object({
         kind: pi.zod.enum(["l1", "l2"]),
@@ -207,6 +273,18 @@ export default function mstarWorktreeCheck(pi: CustomToolAPI): CustomTool {
         // Main-root discovery BEFORE snapshot resolution: the main worktree
         // (process-SSOT control root) is Git-derived, never snapshot state.
         const observedMain = `main worktree: ${main.root} on branch "${main.branch}" (observed)`;
+        // §5: before any snapshot read — the L1 input document (and every
+        // sibling registered workflow's snapshot) is retired while the execution
+        // authority of this harness is ACTIVE.
+        const notReady = await executionNotReady(harnessDir);
+        if (notReady !== null && "error" in notReady) return notReady.error;
+        if (notReady !== null) {
+          return result(
+            `${observedMain}\n[high] ${notReady.code}: ${notReady.message}`,
+            { kind: "l1", workflow_id: params.workflowId, ok: false, execution: { code: notReady.code } },
+            true,
+          );
+        }
         const workflowDir = await resolveWorkflowDirOf(harnessDir);
         const snapshotDir = join(workflowDir, params.workflowId);
         if (!existsSync(join(snapshotDir, p1.snapshotFile))) {

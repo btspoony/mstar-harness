@@ -69,12 +69,15 @@ import {
   planQualityBar,
   pushCadenceProbe,
   readCoordinatedArtifact,
+  readExecutionAuthority,
+  readExecutionSource,
   readMainWorktree,
   readWorkflowSnapshot,
   reconcileCatalogExecution,
   registerShippedCatalogExecution,
   recordWorkflowDelivery,
   replaceCoordinatedArtifact,
+  resolveExecutionReadRoute,
   resolveHarnessDir,
   resolveProcessHarnessDir as resolveEngineProcessHarnessDir,
   resolveProjectDir,
@@ -132,6 +135,8 @@ import {
   type AuditSeverityRank,
   type AuditTraceKind,
   type AuditTraceStep,
+  type ExecutionPlanView,
+  type ExecutionState,
   type GateResult,
   type HostId,
   type PrReportTarget,
@@ -918,6 +923,55 @@ pathCommand
     }
   });
 
+/* ------------------------------------------------------------------------ *
+ * § The execution-authority read route (primary spec §5, plan S2)
+ * ------------------------------------------------------------------------ */
+
+/**
+ * §5: a CLI read whose INPUT is a workflow-snapshot document refuses
+ * `execution.consumer-not-ready` while the control harness's execution
+ * authority is ACTIVE.
+ *
+ * `execution gate`'s pure gates consume the snapshot DOCUMENT — the phase-6
+ * close gate validates its whole shape, and the plan rows it validates carry
+ * their session binding. The DB adapter deliberately carries no session
+ * binding, so materializing a snapshot for those readers would be the
+ * session-file invention §5's STOP line forbids; the honest answer until that
+ * consumer is migrated is this explicit refusal, never the retired file's
+ * bytes and never an empty success. A store that exists and cannot be read
+ * (corrupt, drifted, busy) is the route resolver's own refusal and passes
+ * through unchanged.
+ */
+async function assertLegacyGateInputAvailable(context: StoreContext, what: string): Promise<void> {
+  if ((await resolveExecutionReadRoute(context)) !== "execution") return;
+  throw new StoreError(
+    "execution.consumer-not-ready",
+    `${what}: the execution authority of ${context.harnessDir} is ACTIVE, so this gate's snapshot/document input is ` +
+      `retired. Nothing was read: this gate consumes a snapshot document whose plan rows carry their session binding ` +
+      `(which the DB adapter deliberately does not), so it reports not-ready rather than inventing one. Read the ` +
+      `workflow/plan state through the execution DB adapter instead.`,
+  );
+}
+
+/** The label an authoritative (DB-route) verdict names as its source. */
+function authorityLabel(read: { storeId: string; epoch: number }): string {
+  return `execution authority (store ${read.storeId}, epoch ${read.epoch})`;
+}
+
+/**
+ * One plan row of an authoritative plan view, in the SSOT row shape the lease
+ * gate reads (`plans[].execution_lease`). The DB view keeps the lease OUTSIDE
+ * the row (`ExecutionPlanView.executionLease`), so the projection is explicit
+ * — and an absent lease stays `undefined`, which is how the gate distinguishes
+ * `lease.verify.missing` / `lease.verify.orphan`.
+ */
+function leaseRowOf(view: ExecutionPlanView): Record<string, unknown> {
+  return {
+    ...(view.plan as unknown as Record<string, unknown>),
+    execution_lease: view.executionLease ?? undefined,
+  };
+}
+
 const statusCommand = program
   .command("status")
   .description("v2 status.json root / workflow snapshot / issue-store findings checks (engine-backed)");
@@ -990,13 +1044,41 @@ function readSnapshotForCheck(snapshotPath: string) {
 statusCommand
   .command("validate")
   .description(
-    "Validate a v2 status.json root or workflow snapshot (root: version 2 + updated_at + active workflows[] with per-entry snapshot invariants; snapshot: schema_version 1 + plan rows + lease shapes; v1 input fails closed with the mstar migrate hint)",
+    "Validate a v2 status.json root or workflow snapshot (root: version 2 + updated_at + active workflows[] with per-entry snapshot invariants; snapshot: schema_version 1 + plan rows + lease shapes; v1 input fails closed with the mstar migrate hint). " +
+      "With no path, an ACTIVE execution authority answers by validating its OWN register with its own readers (membership and every stored row) instead of the retired status.json",
   )
   .argument("[path]", "status.json or workflows/<id>/snapshot.json path (default: {HARNESS_DIR}/status.json)")
-  .action((pathArg?: string) => {
+  .action(async (pathArg?: string) => {
     let statusPath: string;
     try {
+      if (pathArg === undefined) {
+        // §5: the default target is the harness's ROOT REGISTER. While the DB
+        // is the execution authority that register lives in `execution_meta`/
+        // `execution_registry`, and the file at the same address is retired —
+        // validating the retired bytes would report a stale "OK".
+        //
+        // The authority validates its own register: this read runs the same
+        // readers the domain verbs do (registry membership against the workflow
+        // header, each plan row against its own key, the shipped coordination /
+        // lease / session rules), so an internally inconsistent register is
+        // `store.corrupt` rather than OK. The FILE document rules are not reused
+        // here: they describe the file route's schema (its `updated_at` is a
+        // YYYY-MM-DD date, while `execution_meta.root_updated_at` — the
+        // register's own timestamp — is a UTC instant by §2.2).
+        const harnessDir = resolveProcessHarnessDir();
+        if (harnessDir !== null && (await resolveExecutionReadRoute({ harnessDir })) === "execution") {
+          const read = await readExecutionAuthority({ harnessDir });
+          console.log(pc.green(`${authorityLabel(read)} register: OK`));
+          return;
+        }
+      }
       statusPath = resolveStatusFilePath(pathArg);
+      // An explicitly named `status.json` is retired exactly like the default
+      // one: refuse rather than validate bytes no longer in authority. The
+      // snapshot branch below already goes through the guarded engine reader.
+      if (pathArg !== undefined && path.basename(statusPath) === "status.json") {
+        await assertLegacyGateInputAvailable({ harnessDir: path.dirname(statusPath) }, "status validate");
+      }
       if (!fs.existsSync(statusPath)) {
         throw new Error(`status file not found: ${statusPath}`);
       }
@@ -2015,20 +2097,22 @@ function solePlanRow(
 }
 
 /**
- * Run the engine execution-lease gate on one snapshot plan row and print the
- * verdict (SSOT rules live in lease-verify.ts / the engine \u2014 row-level
+ * Run the engine execution-lease gate on one plan row and print the verdict
+ * (SSOT rules live in lease-verify.ts / the engine — row-level
  * `plans[].execution_lease` is the only location in v3; metadata-only and
- * dual-write were deleted with the v1 read path).
+ * dual-write were deleted with the v1 read path). `readLabel` names the source
+ * the row came from: a snapshot path on the file route, the execution
+ * authority on the DB route.
  */
-function verifyLeaseRow(row: Record<string, unknown>, planId: string, snapshotPath: string): void {
+function verifyLeaseRow(row: Record<string, unknown>, planId: string, readLabel: string): void {
   const result = verifyPlanExecutionLease(row, planId);
   if (result.ok) {
     const holder = String((result.lease as Record<string, unknown>).holder ?? "");
-    console.log(pc.green(`${snapshotPath}: OK plan ${planId} \u2014 execution_lease valid (holder ${holder})`));
+    console.log(pc.green(`${readLabel}: OK plan ${planId} \u2014 execution_lease valid (holder ${holder})`));
     return;
   }
   const count = result.violations.length;
-  console.error(pc.red(`${snapshotPath}: FAIL plan ${planId} (${count} violation${count === 1 ? "" : "s"})`));
+  console.error(pc.red(`${readLabel}: FAIL plan ${planId} (${count} violation${count === 1 ? "" : "s"})`));
   for (const violation of result.violations) {
     console.error(`  - [${violation.severity}] ${violation.code}: ${violation.message}`);
     if (violation.fix) console.error(`    fix: ${violation.fix}`);
@@ -2038,14 +2122,38 @@ function verifyLeaseRow(row: Record<string, unknown>, planId: string, snapshotPa
 
 leaseCommand
   .command("verify")
-  .description("Verify a plan's execution_lease on the workflow snapshot's plan row (missing/invalid \u2192 exit 1 with violations)")
+  .description(
+    "Verify a plan's execution_lease on the workflow snapshot's plan row (missing/invalid \u2192 exit 1 with violations). " +
+      "An ACTIVE execution authority answers the same gate from its own plan rows",
+  )
   .option("--workflow <id>", "Workflow id whose snapshot plan row is verified")
   .option("--plan <plan-id>", "Plan id whose execution_lease is verified (default: the snapshot's sole plan row)")
   .option("--harness <path>", "Harness dir override (default: resolved {HARNESS_DIR})")
-  .action((options: { workflow?: string; plan?: string; harness?: string }) => {
+  .action(async (options: { workflow?: string; plan?: string; harness?: string }) => {
     try {
       if (!options.workflow) {
         throw new SddScriptError("usage: lease verify --workflow <id> [--plan <plan-id>] [--harness <path>]", 2);
+      }
+      // §5: the lease gate's input is one plan's OWN row plus its lease — no
+      // session binding and no whole-document shape — so an ACTIVE authority
+      // answers it from the DB adapter rather than from the retired snapshot.
+      const served = await readExecutionSource(
+        { harnessDir: resolveLeaseHarnessDir(options.harness) },
+        options.plan === undefined
+          ? { workflowId: options.workflow }
+          : { workflowId: options.workflow, planId: options.plan },
+      );
+      if (served.route === "execution") {
+        const label = authorityLabel(served.read);
+        if (options.plan !== undefined) {
+          verifyLeaseRow(leaseRowOf(served.read.data as ExecutionPlanView), options.plan, label);
+          return;
+        }
+        const rows = ((served.read.data as ExecutionState).workflows[0]?.plans ?? []).map(leaseRowOf);
+        const sole = solePlanRow(rows, `lease verify ${options.workflow}`);
+        if ("error" in sole) throw sole.error;
+        verifyLeaseRow(sole.row, String(sole.row.plan_id ?? sole.row.id ?? ""), label);
+        return;
       }
       const snapshotPath = resolveSnapshotPath(options.workflow, options.harness);
       if (!fs.existsSync(snapshotPath)) {
@@ -2083,14 +2191,40 @@ leaseCommand
 leaseCommand
   .command("verify-integration")
   .description(
-    "Verify the workflow snapshot's top-level integration_merge_lease when present (absent/unclaimed \u2192 OK; invalid lease \u2192 exit 1)",
+    "Verify the workflow snapshot's top-level integration_merge_lease when present (absent/unclaimed \u2192 OK; invalid lease \u2192 exit 1). " +
+      "An ACTIVE execution authority answers the same gate from its own workflow record",
   )
   .option("--workflow <id>", "Workflow id whose snapshot top-level lease is verified")
   .option("--harness <path>", "Harness dir override (default: resolved {HARNESS_DIR})")
-  .action((options: { workflow?: string; harness?: string }) => {
+  .action(async (options: { workflow?: string; harness?: string }) => {
     try {
       if (!options.workflow) {
         throw new SddScriptError("usage: lease verify-integration --workflow <id> [--harness <path>]", 2);
+      }
+      // §5: the workflow-wide merge lease is a DB-route field too
+      // (`ExecutionState.workflows[].integrationLease`), so the gate input comes
+      // from the adapter while the authority is active.
+      const served = await readExecutionSource(
+        { harnessDir: resolveLeaseHarnessDir(options.harness) },
+        { workflowId: options.workflow },
+      );
+      if (served.route === "execution") {
+        const label = authorityLabel(served.read);
+        const lease = (served.read.data as ExecutionState).workflows[0]?.integrationLease ?? undefined;
+        if (lease === undefined || lease === null) {
+          console.log(pc.green(`${label}: OK \u2014 no integration_merge_lease (unclaimed)`));
+          return;
+        }
+        const gate = validateIntegrationMergeLease(lease);
+        if (gate.ok) {
+          console.log(
+            pc.green(`${label}: OK \u2014 integration_merge_lease valid (holder ${String((lease as Record<string, unknown>).holder ?? "")})`),
+          );
+          return;
+        }
+        printChecklist("lease verify-integration", gate);
+        process.exitCode = 1;
+        return;
       }
       const snapshotPath = resolveSnapshotPath(options.workflow, options.harness);
       if (!fs.existsSync(snapshotPath)) {
@@ -2329,6 +2463,34 @@ function printChecklist(label: string, gate: GateResult): void {
   }
 }
 
+/**
+ * The resolved usage form of `iteration gate`: the `--phase 6` post-merge close
+ * branch, or the Phase 2–5 transition branch carrying its resolved `--compass`
+ * path. The two optional properties are mutually exclusive so the action's
+ * branch on `phase` also narrows `compass`.
+ */
+type IterationGateForm = { phase: 6; compass?: undefined } | { phase?: undefined; compass: string };
+
+/**
+ * Decide the gate's usage shape before any authority probe, so a malformed
+ * invocation is a usage error (exit 2) instead of surfacing as the active
+ * authority's refusal (exit 1): `--phase 6` is the only supported phase form and
+ * needs no `--compass`, and every other form requires a non-blank one.
+ */
+function resolveIterationGateForm(options: { phase?: string; compass?: string }): IterationGateForm {
+  if (options.phase !== undefined) {
+    if (Number(options.phase) !== 6) {
+      throw new SddScriptError(`usage: iteration gate --phase only supports 6 (got ${JSON.stringify(options.phase)})`, 2);
+    }
+    return { phase: 6 };
+  }
+  const compass = options.compass;
+  if (compass === undefined || compass.trim() === "") {
+    throw new SddScriptError("usage: iteration gate requires --compass <path> (or --phase 6 for the post-merge close form)", 2);
+  }
+  return { compass: path.resolve(compass) };
+}
+
 iterationCommand
   .command("gate")
   .description(
@@ -2347,13 +2509,19 @@ iterationCommand
   .option("--integration <branch>", "Spec integration branch probe (exit \u00a73.5 item 5)")
   .option("--target <branch>", "PR base branch probe (exit \u00a73.5 item 6)")
   .action(
-    (options: { workflow: string; compass?: string; phase?: string; harness?: string; branch?: string; integration?: string; target?: string }) => {
+    async (options: { workflow: string; compass?: string; phase?: string; harness?: string; branch?: string; integration?: string; target?: string }) => {
     try {
-      if (options.phase !== undefined) {
-        const phase = Number(options.phase);
-        if (phase !== 6) {
-          throw new SddScriptError(`usage: iteration gate --phase only supports 6 (got ${JSON.stringify(options.phase)})`, 2);
-        }
+      // The CLI's own usage shape is decided first (exit 2): a malformed
+      // invocation stays a usage error whether or not the authority is active,
+      // so it can never be answered by the route refusal below.
+      const form = resolveIterationGateForm(options);
+      // §5: this gate's input is a workflow SNAPSHOT document. While the
+      // execution authority is active that document is retired, and the DB
+      // adapter deliberately carries no session binding for its plan rows — so
+      // the gate reports not-ready instead of reading the leftover bytes (or
+      // inventing the session file its shape validation would demand).
+      await assertLegacyGateInputAvailable({ harnessDir: resolveLeaseHarnessDir(options.harness) }, "iteration gate");
+      if (form.phase !== undefined) {
         const snapshotPath = resolveSnapshotPath(options.workflow, options.harness);
         if (!fs.existsSync(snapshotPath)) throw new Error(`workflow snapshot not found: ${snapshotPath}`);
         const rootFile = path.join(resolveLeaseHarnessDir(options.harness), "status.json");
@@ -2370,11 +2538,8 @@ iterationCommand
         if (!gate.ok) process.exitCode = 1;
         return;
       }
-      if (options.compass === undefined || options.compass.trim() === "") {
-        throw new SddScriptError("usage: iteration gate requires --compass <path> (or --phase 6 for the post-merge close form)", 2);
-      }
       const snapshotPath = resolveSnapshotPath(options.workflow, options.harness);
-      const compassPath = path.resolve(options.compass);
+      const compassPath = form.compass;
       if (!fs.existsSync(snapshotPath)) throw new Error(`workflow snapshot not found: ${snapshotPath}`);
       if (!fs.existsSync(compassPath)) throw new Error(`compass file not found: ${compassPath}`);
       const result = evaluatePhaseGate(readJson(snapshotPath), parseCompassFrontmatter(compassPath), {

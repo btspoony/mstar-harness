@@ -37,10 +37,22 @@
  * Only that decision is canonicalized — status.json / snapshot targets keep
  * the caller's path and the unchanged validator (aliases included).
  *
+ * EXECUTION authority (source readiness, plan S3): the root register and the
+ * workflow snapshots are retired as a persistence route while the control
+ * harness's execution authority is ACTIVE (primary spec §4.3). The route is
+ * asked first (`resolveExecutionReadRoute` — the ONE place a consumer decides
+ * between the DB authority and the file route): the DEFAULT target then
+ * validates the authority's OWN register through its own readers
+ * (`readExecutionAuthority`) instead of the retired file, an explicitly named
+ * status.json / snapshot.json refuses `execution.consumer-not-ready`, and a
+ * store that exists and cannot be read keeps its own refusal — never a
+ * fall-through to the retired bytes.
+ *
  * The snapshot/register validators are P1-only engine exports absent from
  * the published floor `^2.0.2` — they come from a DYNAMIC engine import so
  * a stale engine yields an explicit upgrade error instead of a
- * module-link failure that silently drops the tool. No local rule logic — the engine is the single validator;
+ * module-link failure that silently drops the tool, and the S2 execution-read
+ * exports are loaded the same way. No local rule logic — the engine is the single validator;
  * this module only locates the file and formats output.
  */
 import { readlinkSync, realpathSync, statSync } from "node:fs";
@@ -54,7 +66,7 @@ import {
   validateStatus,
   withStoreRead,
 } from "@mstar-harness/engine";
-import type { StoreRuntimeInfo, ValidationResult } from "@mstar-harness/engine";
+import type { ExecutionRead, ExecutionState, StoreRuntimeInfo, ValidationResult } from "@mstar-harness/engine";
 import type { AgentToolResult, CustomTool, CustomToolAPI } from "@oh-my-pi/pi-coding-agent";
 
 const STATUS_FILE = "status.json";
@@ -260,6 +272,9 @@ const STORE_AUTHORITY_FILES: readonly string[] = [STORE_DB_FILE, `${STORE_DB_FIL
 const STORE_DIRECT_WRITE_CODE = "store.direct-write-refused";
 const STORE_AUTHORITY_UNAVAILABLE_CODE = "store.authority-unavailable";
 const REGISTER_RETIRED_CODE = "project.register.retired";
+/** §5: a read whose input is a RETIRED execution document (root register /
+ * workflow snapshot) while the execution authority is ACTIVE. */
+const EXECUTION_CONSUMER_NOT_READY_CODE = "execution.consumer-not-ready";
 
 /** A store whose absence positively identifies the PRE-activation state
  * (legacy register authority in force, issue contract §7): missing
@@ -311,6 +326,54 @@ async function readAuthorityRoute(harnessDir: string): Promise<AuthorityRoute> {
     return PRE_ACTIVATION_CODES.includes(refusal.code)
       ? { kind: "legacy" }
       : { kind: "unavailable", ...refusal };
+  }
+}
+
+/** §5 the engine's own execution-source route resolver and read adapter (plan
+ * S2). P1-only exports: loaded dynamically so a stale engine yields an explicit
+ * upgrade error instead of a module-link failure that drops the tool. */
+type ExecutionRouteResolver = (context: { harnessDir: string }) => Promise<"execution" | "files">;
+type ExecutionAuthorityReader = (context: { harnessDir: string }) => Promise<ExecutionRead<ExecutionState>>;
+
+async function loadExecutionReadExports(): Promise<
+  { ok: true; resolve: ExecutionRouteResolver; read: ExecutionAuthorityReader } | { ok: false; error: AgentToolResult }
+> {
+  const engine = await import("@mstar-harness/engine");
+  const resolve = engine.resolveExecutionReadRoute as ExecutionRouteResolver | undefined;
+  const read = engine.readExecutionAuthority as ExecutionAuthorityReader | undefined;
+  if (typeof resolve !== "function" || typeof read !== "function") {
+    return {
+      ok: false,
+      error: result(
+        "installed @mstar-harness/engine lacks the execution read adapter (resolveExecutionReadRoute / readExecutionAuthority) — upgrade the engine (next release); CLI fallback: mstar status validate",
+        { ok: false },
+        true,
+      ),
+    };
+  }
+  return { ok: true, resolve, read };
+}
+
+/** What the control harness's execution authority says about a retired
+ * root-register / snapshot read (primary spec §5): the file route answers
+ * (`files`), the DB authority does (`active`), the authority exists and cannot
+ * be read (`unavailable` — its own code, never a fall-through to files), or the
+ * engine predates the route (`unsupported`). */
+type ExecutionRouteVerdict =
+  | { kind: "files" }
+  | { kind: "active"; read: ExecutionAuthorityReader }
+  | { kind: "unavailable"; code: string; message: string }
+  | { kind: "unsupported"; error: AgentToolResult };
+
+async function executionRouteOf(harnessDir: string): Promise<ExecutionRouteVerdict> {
+  const loaded = await loadExecutionReadExports();
+  if (!loaded.ok) return { kind: "unsupported", error: loaded.error };
+  try {
+    return (await loaded.resolve({ harnessDir })) === "execution"
+      ? { kind: "active", read: loaded.read }
+      : { kind: "files" };
+  } catch (error) {
+    return { kind: "unavailable", ...refusalOf(error) };
   }
 }
 
@@ -379,6 +442,7 @@ export default function mstarStatusValidate(pi: CustomToolAPI): CustomTool {
       "Validate a Morning Star harness v2 coordination document: the root status.json (version 2 + workflows[] with per-entry snapshot invariants) via the engine validateStatus gate, or a workflow snapshot (schema_version 1 + plan rows + lease shapes) via validateWorkflowSnapshot. " +
       "A project register target (projects/<id>/residuals.json) is answered through the DB-aware authority route: it reports project.register.retired while {HARNESS_DIR}/store.db is the active findings authority, store.authority-unavailable when that authority cannot be read (below-floor runtime, missing node:sqlite capability, corrupt, drifted, busy), and validates the register document itself (validateProjectRegister) only while no store exists or the store is still staged — the pre-activation window where the register is still the live authority. A direct target at {HARNESS_DIR}/store.db (or its -wal/-shm) is refused: the runtime owns that database. " +
       "The target must be a canonical harness location: {HARNESS_DIR}/status.json, {HARNESS_DIR}/workflows/<id>/snapshot.json, or {HARNESS_DIR}/projects/<id>/residuals.json (Gate 1 layout parity — non-canonical paths are rejected). " +
+      "While the control harness's execution authority is ACTIVE the root register and the workflow snapshots are retired as a persistence route: the default target then validates the AUTHORITY's own register instead of the file, and an explicitly named status.json / snapshot.json refuses execution.consumer-not-ready (nothing is read, no file verdict is reported). " +
       "Defaults to {HARNESS_DIR}/status.json discovered from the session cwd; pass `path` to check another file. " +
       "Use after editing status.json / workflows/<id>/snapshot.json, before writable dispatch, or when workflow/plan state edits are reviewed. " +
       "Returns one line per violation as [severity] code: message (fix: …).",
@@ -445,6 +509,75 @@ export default function mstarStatusValidate(pi: CustomToolAPI): CustomTool {
           harnessDir = resolvedHarnessDir;
           statusPath = join(harnessDir, STATUS_FILE);
           kind = "status";
+        }
+
+        // §5/§4.3: while the control harness's execution authority is ACTIVE the
+        // root register and the workflow snapshots are RETIRED as a persistence
+        // route, so neither is a gate input any more.
+        //
+        // - The DEFAULT target IS the root register: the authority answers by
+        //   validating its OWN register through its own readers (membership and
+        //   every stored row), exactly as `mstar status validate` does — the file
+        //   document rules are NOT reused, because the file contract's
+        //   `updated_at` is a date while the register's own timestamp is a UTC
+        //   instant, and reusing them would report a false FAIL on a healthy
+        //   authority.
+        // - An explicitly named status.json / snapshot.json is a read of retired
+        //   bytes: it refuses `execution.consumer-not-ready` rather than
+        //   reporting a verdict nobody consults.
+        // A store that EXISTS and cannot be read keeps its own refusal (never a
+        // fall-through to the retired file route).
+        if (kind !== "register") {
+          const execution = await executionRouteOf(harnessDir);
+          if (execution.kind === "unsupported") return execution.error;
+          if (execution.kind === "unavailable") {
+            return result(
+              violationLines([
+                authorityViolation(
+                  STORE_AUTHORITY_UNAVAILABLE_CODE,
+                  `the execution authority of ${harnessDir} could not be read ([${execution.code}] ${execution.message}) — ` +
+                    "the root register and workflow snapshots are retired while that authority governs them, so no " +
+                    "file-route verdict is available; no JSON fallback exists",
+                ),
+              ]),
+              { path: statusPath, kind, ok: false, store: { code: execution.code, message: execution.message } },
+              true,
+            );
+          }
+          if (execution.kind === "active") {
+            if (params?.path === undefined) {
+              const authorityRead = await execution.read({ harnessDir });
+              const workflows = authorityRead.data.workflows.length;
+              return result(
+                `status.json valid — answered by the execution authority (store ${authorityRead.storeId}, epoch ` +
+                  `${authorityRead.epoch}, ${workflows} active workflow${workflows === 1 ? "" : "s"})`,
+                {
+                  path: statusPath,
+                  kind,
+                  route: "execution",
+                  store_id: authorityRead.storeId,
+                  epoch: authorityRead.epoch,
+                  workflow_count: workflows,
+                  ok: true,
+                  violations: [],
+                },
+                false,
+              );
+            }
+            return result(
+              violationLines([
+                authorityViolation(
+                  EXECUTION_CONSUMER_NOT_READY_CODE,
+                  `${statusPath} is retired as a persistence route while the execution authority of ${harnessDir} is ` +
+                    "ACTIVE: the root register and the workflow snapshots live in the execution store, and these bytes " +
+                    "are no longer consulted. Nothing was read — validate the authority instead (`mstar status validate` " +
+                    "with no path, or the execution DB adapter); this consumer's document-read migration is deferred (2b)",
+                ),
+              ]),
+              { path: statusPath, kind, ok: false, route: "execution" },
+              true,
+            );
+          }
         }
 
         let gate: { ok: boolean; violations: ValidationResult[] };

@@ -50,6 +50,8 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createExtensionModelQuery } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/model-api";
 import type { ModelControlsHost } from "@oh-my-pi/pi-coding-agent/session/model-controls";
 import { ModelControls } from "@oh-my-pi/pi-coding-agent/session/model-controls";
+import { CustomMessageComponent } from "@oh-my-pi/pi-coding-agent/modes/components/custom-message";
+import { ensureThemeSync } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import modelHandoffFactory, {
@@ -2079,4 +2081,92 @@ describe("host session identity injection", () => {
     expect(harness.notices()).toHaveLength(0);
     expect(harness.ledger().filter((entry) => entry.type === "custom")).toHaveLength(0);
   }, 30_000);
+});
+
+/* ------------------------------------------------- coordinator bar titles --- */
+
+/** SGR styling, stripped so a rendered row can be asserted as plain text. */
+const SGR = /\u001b\[[0-9;]*m/g;
+/** Box outline glyphs, removed so a wrapped body can be read as one string. */
+const BOX_GLYPHS = /[│╭╮╰╯─]/g;
+
+/**
+ * Render this session's captured `custom_message` entries through the host's own
+ * `CustomMessageComponent` — the component the transcript dispatcher mounts for
+ * an extension message — so the bar header and the body are observed on the real
+ * renderer instead of on our own string maths. No host process is started.
+ */
+function renderCustomMessages(entries: readonly SessionEntry[]): readonly (readonly string[])[] {
+  ensureThemeSync();
+  return entries
+    .filter((entry): entry is Extract<SessionEntry, { type: "custom_message" }> => entry.type === "custom_message")
+    .map((entry) => {
+      const message: ConstructorParameters<typeof CustomMessageComponent>[0] = {
+        role: "custom",
+        customType: entry.customType,
+        content: entry.content,
+        display: true,
+        timestamp: 0,
+      };
+      return new CustomMessageComponent(message, undefined).render(78).map((row) => row.replace(SGR, ""));
+    });
+}
+
+/** Every rendered row except the bar header, as one whitespace-normalized string. */
+function bodyText(rows: readonly string[], header: string | undefined): string {
+  return rows
+    .filter((row) => row !== header)
+    .join(" ")
+    .replace(BOX_GLYPHS, "")
+    .replace(/\s+/g, " ");
+}
+
+describe("coordinator notice bar titles", () => {
+  test("notice-bar-title: a handoff notice renders the shared visible bar title, which states no workflow status, while the hidden durable type, its restore and the refusal codes stay unchanged", async () => {
+    const repo = buildControlRepo();
+    writePluginOverrides(repo.main, { modelHandoff: true, handoffTarget: "@default" });
+    const harness = await createHarness({
+      cwd: repo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(repo.main),
+    });
+
+    expect(codeOf(await harness.runTool(startParams("bar-title-iteration")))).toBe("armed");
+    const artifacts = createWorkflowArtifacts(repo, harness.sessionManager.getSessionId(), "bar-title-iteration");
+    await harness.emitInput("next", "interactive");
+
+    // An unowned model change while pending cancels the handoff. The terminal
+    // notice is a bound site, so its title names the observed workflow and its
+    // actual status.
+    await harness.controls.setModel(asHostModel(PICKER_MODEL), "default");
+    await harness.emit({ type: "agent_end", messages: [] });
+
+    // The only visible type this extension emits is the shared bar title.
+    const visible = harness.ledger().filter((entry) => entry.type === "custom_message");
+    expect(visible.map((entry) => entry.customType)).toEqual(["mstar:notice"]);
+
+    // The hidden durable identity is untouched, and its restore still replays.
+    const durableTypes = harness
+      .ledger()
+      .filter((entry) => entry.type === "custom")
+      .map((entry) => entry.customType);
+    expect(durableTypes.length).toBeGreaterThan(0);
+    expect(durableTypes.every((type) => type === "mstar:model-handoff")).toBe(true);
+    expect(decideSessionState(harness.ledger(), harness.sessionManager.getSessionId()).kind).toBe("terminal");
+
+    // The real component: the visible type is the bar header and asserts no
+    // workflow status; the observed id/status and the reason stay in the body.
+    const [rows] = renderCustomMessages(harness.ledger());
+    const header = rows!.filter((row) => row.includes("mstar:notice"));
+    expect(header).toHaveLength(1);
+    expect(header[0]).not.toContain("bar-title-iteration");
+    expect(header[0]).not.toContain("Workflow");
+
+    const body = bodyText(rows!, header[0]);
+    expect(body).toContain("Workflow bar-title-iteration is running");
+    expect(body).toContain("model handoff cancelled for this coordinator session");
+
+    // The machine refusal code is unchanged.
+    expect(codeOf(await harness.runTool(completionParams(artifacts)))).toBe("not-pending");
+  }, 60_000);
 });

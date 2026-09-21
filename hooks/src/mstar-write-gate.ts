@@ -28,8 +28,21 @@
 // (S-G4b-03): the caller's path first, then its canonical (symlink-resolved)
 // form, so an alias outside the harness tree that resolves to a harness-root
 // `store.db` or a retired `residuals.json` is refused like the file itself.
-// Only those two decisions are canonicalized — the document classification
-// stays textual and every non-authority target behaves exactly as before.
+// Every authority decision is canonicalized that way (the S4 execution route
+// below included) — only the DOCUMENT classification stays textual, and every
+// non-authority target behaves exactly as before.
+//
+// Plan S4 adds the EXECUTION authority's retired persistence route (primary
+// spec §4.3/§5) to the same unconditional class: a root `status.json` or
+// `workflows/<id>/snapshot.json` write is refused
+// `execution.direct-write-refused` while the control harness's execution
+// authority is ACTIVE — valid JSON or not, hard or soft — and refused
+// fail-closed (`store.authority-unavailable`) when that authority exists and
+// cannot be read. This decision also runs on the path the write LANDS on, so a
+// symlink alias of a retired document is refused like the document itself (the
+// old protected artifact paths keep their canonical target checks even though
+// the new authority refuses writing them). A harness with no store keeps the
+// unchanged document lint.
 //
 // Block dialect (contract D4): exit code 2 with the reason on STDERR — ZCode
 // parses hook stdout under a strict schema where any extra key silently
@@ -59,6 +72,7 @@ import {
   formatStatusWriteBlockReason,
   harnessDocKindOfTarget,
   queryDashboard,
+  resolveExecutionReadRoute,
   resolveHarnessDir,
   resolveProjectDir,
   resolveRepoEnforcement,
@@ -104,6 +118,10 @@ const PROJECT_DIR_NAME = "projects";
 const STORE_DIRECT_WRITE_CODE = "store.direct-write-refused";
 const STORE_AUTHORITY_UNAVAILABLE_CODE = "store.authority-unavailable";
 const REGISTER_RETIRED_CODE = "project.register.retired";
+/** §4.3/§5: a write to a coordination document the EXECUTION authority retired
+ * as a persistence route (root `status.json`, `workflows/<id>/snapshot.json`)
+ * while that authority is ACTIVE (plan S4). */
+const EXECUTION_DIRECT_WRITE_CODE = "execution.direct-write-refused";
 
 /** A store whose absence positively identifies the PRE-activation state
  * (legacy register authority in force, issue contract §7): missing
@@ -324,12 +342,51 @@ function registerRetiredRefusal(storeRevision: number): ValidationResult {
   );
 }
 
-function authorityUnavailableRefusal(route: { code: string; message: string }): ValidationResult {
+function authorityUnavailableRefusal(
+  route: { code: string; message: string },
+  authority = "the issue authority",
+  write = "register write",
+): ValidationResult {
   return authorityViolation(
     STORE_AUTHORITY_UNAVAILABLE_CODE,
-    `the issue authority could not be read ([${route.code}] ${route.message}) \u2014 the register write is refused ` +
+    `${authority} could not be read ([${route.code}] ${route.message}) \u2014 the ${write} is refused ` +
       "rather than applied against an unreadable authority; no older-runtime or JSON fallback exists",
   );
+}
+
+/** §4.3: root status and workflow snapshots are no longer a persistence route
+ * once the execution authority is ACTIVE \u2014 persisting them would create a
+ * second authority, so the write is refused even when its bytes are valid. */
+function executionDirectWriteRefusal(targetPath: string): ValidationResult {
+  return authorityViolation(
+    EXECUTION_DIRECT_WRITE_CODE,
+    `${targetPath} is retired as a persistence route while the control harness's execution authority is ACTIVE \u2014 ` +
+      "the root status and the workflow snapshots live in the execution store ({HARNESS_DIR}/store.db, owned by " +
+      "the runtime). Nothing was written: use the execution DB route (the coordination verbs), not a file writer. " +
+      "This write is refused",
+  );
+}
+
+/**
+ * §5 (plan S4) what the control harness's EXECUTION authority says about a
+ * coordination-document write. `resolveExecutionReadRoute` — the engine's ONE
+ * route decision — is inlined here like the rest of the engine glue; a store
+ * that EXISTS and cannot be read is `unavailable` (fail-closed: no protected
+ * mutation while the authority cannot be established) and never a fall-through
+ * to the file route. A harness with no store keeps the file route (absence is
+ * not an authority verdict, §2.1), so the pre-activation write path is
+ * unchanged.
+ */
+async function readExecutionWriteRoute(harnessDir: string): Promise<
+  | { kind: "files" }
+  | { kind: "active" }
+  | { kind: "unavailable"; code: string; message: string }
+> {
+  try {
+    return (await resolveExecutionReadRoute({ harnessDir })) === "execution" ? { kind: "active" } : { kind: "files" };
+  } catch (error) {
+    return { kind: "unavailable", ...refusalOf(error) };
+  }
 }
 
 /** Exit 2 with the contract's stderr shape: block header, violation lines,
@@ -447,18 +504,22 @@ try {
   // not necessarily the workspace).
   const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
 
-  // Known limitations (beyond the failure-matrix rows): the AUTHORITY
-  // classification is canonicalized (S-G4b-03 — a symlink alias resolving to
-  // a harness-root `store.db` or a project register is refused like the file
-  // itself), while the DOCUMENT classification stays textual: a status.json /
-  // snapshot reached through an alias keeps its previous (non-canonical,
-  // ungated) treatment. Edits validate the reconstructed post-edit content
-  // when the payload is deterministic (unique old_string match, or
-  // replace_all), otherwise the PRE-edit on-disk state — a non-deterministic
-  // corrupting edit surfaces on the next write, and repairing an
-  // already-invalid gated doc requires a deterministic edit or a full-content
-  // Write. Oversized gated docs (past the 2 MiB budget) violate on this host
-  // — repair out of band or for this session with MSTAR_WRITE_GATE=off.
+  // Known limitations (beyond the failure-matrix rows): every AUTHORITY
+  // decision is made on the canonicalized path — a symlink alias resolving to a
+  // harness-root `store.db`, a project register, or a RETIRED root
+  // status.json / workflow snapshot is refused like the file itself (S-G4b-03
+  // for the issue authority, §4.3/§5 for the execution authority, which
+  // classifies the caller's path AND the path the write really lands on). What
+  // stays textual is the DOCUMENT classification: the shape/validity validator
+  // runs on the caller's own path, so a status.json / snapshot reached through
+  // an alias keeps its previous non-canonical document treatment (though a
+  // retired one is still refused by the authority route above). Edits validate
+  // the reconstructed post-edit content when the payload is deterministic
+  // (unique old_string match, or replace_all), otherwise the PRE-edit on-disk
+  // state — a non-deterministic corrupting edit surfaces on the next write, and
+  // repairing an already-invalid gated doc requires a deterministic edit or a
+  // full-content Write. Oversized gated docs (past the 2 MiB budget) violate on
+  // this host — repair out of band or for this session with MSTAR_WRITE_GATE=off.
   for (const rawPath of writeTargetPaths(tool)) {
     // Absolute from here on: the authority predicate below resolves nothing
     // itself (it tests the path it is given), so a relative `cwd` in the
@@ -480,14 +541,45 @@ try {
     }
 
     const target = harnessDocKindOfTarget(targetPath);
+    // §4.3/§5 (plan S4) the EXECUTION authority's retired persistence route:
+    // root status and workflow snapshots are refused while that authority is
+    // ACTIVE, and refused fail-closed when it exists and cannot be read. The
+    // classification covers the caller's own path AND the path the write
+    // really lands on, so a symlink alias of a retired document is refused
+    // like the document itself (the old protected artifact paths keep their
+    // canonical target checks even though the new authority refuses writing
+    // them). Unconditional: the enforcement flag governs document validity,
+    // never this authority invariant.
+    const landedTarget = landed === targetPath ? null : harnessDocKindOfTarget(landed);
+    const executionDir =
+      target !== null && target.kind !== "register"
+        ? target.harnessDir
+        : landedTarget !== null && landedTarget.kind !== "register"
+          ? landedTarget.harnessDir
+          : null;
+    if (executionDir !== null) {
+      const executionRoute = await readExecutionWriteRoute(executionDir);
+      if (executionRoute.kind === "active") {
+        blockAuthorityWrite(toolName, displayTarget(targetPath, executionDir), [
+          executionDirectWriteRefusal(targetPath),
+        ]);
+      }
+      if (executionRoute.kind === "unavailable") {
+        blockAuthorityWrite(toolName, displayTarget(targetPath, executionDir), [
+          authorityUnavailableRefusal(executionRoute, "the harness's execution authority", "coordination-document write"),
+        ]);
+      }
+    }
     // A case-variant register basename (FW-3) bypasses both exact-case
     // classifications and is classified by the folded shape walk instead.
     const registerDir =
       target?.kind === "register"
         ? target.harnessDir
-        : (aliasedRegisterDir(targetPath, landed) ??
-          caseFoldedRegisterRoot(targetPath) ??
-          (landed !== targetPath ? caseFoldedRegisterRoot(landed) : null));
+        : (landedTarget?.kind === "register"
+            ? landedTarget.harnessDir
+            : (aliasedRegisterDir(targetPath, landed) ??
+              caseFoldedRegisterRoot(targetPath) ??
+              (landed !== targetPath ? caseFoldedRegisterRoot(landed) : null)));
     if (target === null && registerDir === null) continue; // not a gated coordination write — silent pass
 
     if (registerDir !== null) {

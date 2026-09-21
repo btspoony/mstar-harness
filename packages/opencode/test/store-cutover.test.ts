@@ -14,8 +14,12 @@
  *    `node:sqlite` migrations): active → `project.register.retired`, staged
  *    or missing → pre-activation (the register validator still answers, issue
  *    contract §7), unreadable → `store.authority-unavailable`.
- * 3. Status/snapshot linting is untouched and never enters the store route
- *    (no eager SQLite acquisition — the runtime probe is counted).
+ * 3. Every gated coordination document probes the authority route first
+ *    (§4.3/§5: the decision precedes any document read) and an unrelated write
+ *    never enters the route at all; on a pre-activation harness the probe
+ *    answers `files` and the document lint is unchanged. Plan S4 adds the
+ *    execution authority to that route: a retired root register or snapshot
+ *    write is refused `execution.direct-write-refused` while it is ACTIVE.
  * 4. The runtime floor comes from the ACTUAL runtime (engine
  *    `detectStoreRuntime`: the Bun global first, never Bun's emulated
  *    `process.versions.node`).
@@ -268,13 +272,23 @@ describe("opencode authority boundary — store/retired-register direct writes (
     expect(entries.some(([level]) => level === "error")).toBe(true);
   });
 
-  test("status/snapshot linting is untouched and never enters the store route", async () => {
+  test("an ungated write never enters the authority route; gated documents keep their lint", async () => {
     const fixture = makeHarnessProject();
     const reads = countStoreRoute();
     const { entries, log } = capture();
 
+    // Not a coordination document, not an authority path: the store route is
+    // never entered (the plugin's hot path pays nothing for unrelated writes).
+    writeFileSync(join(fixture.project, "notes.md"), "# notes\n");
+    expect(await validateStatusWrite(join(fixture.project, "notes.md"), { doc: "x", log })).toBeNull();
+    expect(reads()).toBe(0);
+
+    // A coordination document probes the AUTHORITY route first (§4.3/§5: the
+    // route decision precedes any document read) — on a harness with no store
+    // that probe answers `files` and the unchanged document lint still decides.
     const valid = await validateStatusWrite(fixture.statusPath, { doc: validStatus, log });
     expect(valid?.ok).toBe(true);
+    expect(reads()).toBeGreaterThan(0);
 
     const invalid = await validateStatusWrite(fixture.statusPath, {
       doc: { version: 2, updated_at: "2026-09-08", workflows: [{ id: "wf-1", type: "sprint" }] },
@@ -290,10 +304,9 @@ describe("opencode authority boundary — store/retired-register direct writes (
     expect(snapshot?.ok).toBe(false);
     expect(snapshot?.violations.length).toBeGreaterThan(0);
 
-    expect(reads()).toBe(0);
     expect(entries.some(([level]) => level === "error")).toBe(false);
 
-    // Only the register target consults the authority.
+    // The register target takes the same authority route (the issue domain).
     await validateStatusWrite(fixture.registerPath, { doc: validRegister, log });
     expect(reads()).toBeGreaterThan(0);
   });

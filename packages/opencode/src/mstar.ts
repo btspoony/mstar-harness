@@ -23,7 +23,13 @@
  * UNCONDITIONALLY (authority invariant, not the enforcement axis) —
  * `store.direct-write-refused`, `project.register.retired`,
  * `store.authority-unavailable`; a register keeps its document validator only
- * while no store / a staged store leaves it the live authority.
+ * while no store / a staged store leaves it the live authority. Plan S4 adds
+ * the EXECUTION authority's retired persistence route: a root `status.json` /
+ * `workflows/<id>/snapshot.json` write is refused
+ * `execution.direct-write-refused` while that authority is ACTIVE (fail-closed
+ * when it exists and cannot be read) — canonical and symlinked targets alike.
+ * This host has no refusal channel, so every one of those verdicts is a
+ * decision record + error log, never an OS/tool fence.
  * Never throws raw exceptions in either mode — OpenCode's plugin API
  * (`@opencode-ai/plugin` 1.4.8) `tool.execute.before` returns
  * `Promise<void>` with no refusal channel, so hard mode is surfaced as the
@@ -520,6 +526,9 @@ const STORE_AUTHORITY_NAMES: readonly string[] = STORE_AUTHORITY_FILES.map((file
 const STORE_DIRECT_WRITE_CODE = "store.direct-write-refused";
 const STORE_AUTHORITY_UNAVAILABLE_CODE = "store.authority-unavailable";
 const REGISTER_RETIRED_CODE = "project.register.retired";
+/** §4.3/§5: a write to a coordination document the EXECUTION authority
+ * retired as a persistence route (plan S4). */
+const EXECUTION_DIRECT_WRITE_CODE = "execution.direct-write-refused";
 
 /** A store whose absence positively identifies the PRE-activation state
  * (legacy register authority in force, issue contract §7): missing
@@ -542,6 +551,15 @@ type StoreApi = {
   assertStoreRuntimeSupported: (info: StoreRuntimeInfo) => void;
   /** One read envelope over the authority: resolves the active store revision. */
   readAuthority: (harnessDir: string) => Promise<number>;
+  /**
+   * §5 (plan S4) the ONE execution-source route decision, when the installed
+   * engine carries it. OPTIONAL on purpose: an engine that predates the
+   * execution authority has no route to resolve AND no harness can carry an
+   * ACTIVE execution authority, so the retired documents keep their unchanged
+   * document lint instead of a refusal class that cannot be true. An engine
+   * that HAS the authority always exports it.
+   */
+  resolveExecutionRoute?: (harnessDir: string) => Promise<"execution" | "files">;
 };
 
 let cachedStoreApi: Promise<StoreApi | null> | null = null;
@@ -563,6 +581,12 @@ export function loadStoreApi(): Promise<StoreApi | null> {
               );
               return envelope.storeRevision;
             },
+            ...(typeof mod.resolveExecutionReadRoute === "function"
+              ? {
+                  resolveExecutionRoute: (harnessDir: string) =>
+                    mod.resolveExecutionReadRoute({ harnessDir }),
+                }
+              : {}),
           } as const)
         : null,
     )
@@ -778,13 +802,67 @@ function registerRetiredRefusal(storeRevision: number, log: StatusLogger): GateR
   );
 }
 
-function authorityUnavailableRefusal(route: { code: string; message: string }, log: StatusLogger): GateResult {
+/**
+ * §4.3 the EXECUTION authority's retired coordination documents (plan S4):
+ * root `status.json` and `workflows/<id>/snapshot.json` are no longer a
+ * persistence route while that authority is ACTIVE, so persisting them would
+ * create a second authority — refused regardless of the compass enforcement
+ * flag and regardless of whether the bytes would validate.
+ *
+ * This host's channel is honest about what it is: `tool.execute.before`
+ * returns void here (no refusal channel), so this result is a DECISION plus an
+ * error-log record, never an OS/tool fence. `authorityRefusal` states exactly
+ * that; nothing in this path may claim the write was stopped.
+ */
+function executionDirectWriteRefusal(targetPath: string, log: StatusLogger): GateResult {
+  return authorityRefusal(
+    EXECUTION_DIRECT_WRITE_CODE,
+    `${targetPath} is retired as a persistence route while the control harness's execution authority is ACTIVE — ` +
+      "the root status and the workflow snapshots live in the execution store ({HARNESS_DIR}/store.db, owned by " +
+      "the runtime). Use the execution DB route (the coordination verbs), not a file writer. This write is refused",
+    log,
+  );
+}
+
+function authorityUnavailableRefusal(
+  route: { code: string; message: string },
+  log: StatusLogger,
+  authority = "the issue authority",
+  write = "register write",
+): GateResult {
   return authorityRefusal(
     STORE_AUTHORITY_UNAVAILABLE_CODE,
-    `the issue authority could not be read ([${route.code}] ${route.message}) — the register write is refused ` +
+    `${authority} could not be read ([${route.code}] ${route.message}) — the ${write} is refused ` +
       "rather than applied against an unreadable authority; no older-runtime or JSON fallback exists",
     log,
   );
+}
+
+/**
+ * §5 (plan S4) what the control harness's EXECUTION authority says about a
+ * coordination-document write in this host's dialect. `resolveExecutionReadRoute`
+ * (through the lazy store holder) is the ONE place a consumer decides between
+ * the DB authority and the file route; a store that EXISTS and cannot be read
+ * is `unavailable` (fail-closed, never a fall-through to the file route) and a
+ * harness with no store keeps the file route (§2.1: absence is not an
+ * authority verdict). An installed engine without the route export is the
+ * pre-execution engine: there is no authority to classify, so the documents
+ * keep their unchanged document lint.
+ */
+type ExecutionWriteRoute =
+  | { kind: "files" }
+  | { kind: "active" }
+  | { kind: "unavailable"; code: string; message: string };
+
+async function readExecutionWriteRoute(harnessDir: string): Promise<ExecutionWriteRoute> {
+  const api = await storeApiLoader.load();
+  const resolve = api?.resolveExecutionRoute;
+  if (resolve === undefined) return { kind: "files" };
+  try {
+    return (await resolve(harnessDir)) === "execution" ? { kind: "active" } : { kind: "files" };
+  } catch (error) {
+    return { kind: "unavailable", ...refusalOf(error) };
+  }
 }
 
 /**
@@ -801,44 +879,47 @@ function authorityUnavailableRefusal(route: { code: string; message: string }, l
  * `projects/<id>/residuals.json` (the v1 root `residual_findings` surface
  * is gone — the residual write gate moved to the register path).
  *
- * Authority paths (G4b) are decided before the document path and are NOT
- * governed by the enforcement flag (an authority invariant, not document
- * validity — the ZCode/omp write gates refuse the same two classes
+ * Authority paths (G4b + plan S4) are decided before the document path and
+ * are NOT governed by the enforcement flag (an authority invariant, not
+ * document validity — the ZCode/omp write gates refuse the same classes
  * unconditionally): a `{HARNESS_DIR}/store.db` (`-wal`/`-shm`) write is
- * refused outright, and a project register is routed through the DB-aware
- * authority check — refused as `project.register.retired` while the issue
- * store is the active findings authority, refused as
- * `store.authority-unavailable` when that authority cannot be read at all,
- * and shape-validated only while no store / a staged store leaves the
- * register the live authority (issue contract §7). Both refusal classes are
- * decided on the path a target really LANDS on (S-G4b-03): a symlink alias
- * that resolves to a harness-root `store.db` or to a project register is
- * refused and routed exactly like the file itself, while everything else
- * keeps the caller's path and behaviour. The runtime floor is read
- * from the ACTUAL runtime (engine `detectStoreRuntime` — the Bun global
+ * refused outright, a root `status.json` / `workflows/<id>/snapshot.json`
+ * write is refused while the control harness's EXECUTION authority is ACTIVE
+ * (`execution.direct-write-refused` — the retired persistence route), and a
+ * project register is routed through the DB-aware authority check — refused as
+ * `project.register.retired` while the issue store is the active findings
+ * authority, refused as `store.authority-unavailable` when that authority
+ * cannot be read at all, and shape-validated only while no store / a staged
+ * store leaves the register the live authority (issue contract §7). These
+ * refusal classes are decided on the path a target really LANDS on
+ * (S-G4b-03): a symlink alias that resolves to a harness-root `store.db` or to
+ * a project register is refused and routed exactly like the file itself, while
+ * everything else keeps the caller's path and behaviour. The runtime floor is
+ * read from the ACTUAL runtime (engine `detectStoreRuntime` — the Bun global
  * first, never Bun's emulated `process.versions.node`) and asserted
  * in-process before the store is touched.
  *
  * Enforcement (roadmap §8.5 C4/D2, Slice 5):
  * - **Warn mode (default)** — flag absent: violations are surfaced as `warn`
- * through the plugin log channel; `hardBlocked` is false.
+ *   through the plugin log channel; `hardBlocked` is false.
  * - **Hard mode** — the write context carries `Enforcement: hard` via
- * `opts.enforcement`, or (when omitted) the repo's iteration compass
- * frontmatter declares `enforcement: hard` (engine
- * `status.resolveCompassEnforcement`): violations are surfaced as `error`
- * lines with a skill-text pointer and the returned GateResult carries
- * `hardBlocked: true` — a refusal-capable caller MUST refuse the write
- * (this hook itself cannot abort the tool; see the blocking-channel note).
+ *   `opts.enforcement`, or (when omitted) the repo's iteration compass
+ *   frontmatter declares `enforcement: hard` (engine
+ *   `status.resolveCompassEnforcement`): violations are surfaced as `error`
+ *   lines with a skill-text pointer and the returned GateResult carries
+ *   `hardBlocked: true` — a refusal-capable caller MUST refuse the write.
  * Never throws a raw exception: hard mode is the structured result +
  * error log channel.
  *
  * Blocking channel note (documented behavior): OpenCode's plugin API
- * (`@opencode-ai/plugin` 1.4.8) `tool.execute.before` returns `Promise<void>`
- * — there is no error/refusal return channel on this host. The plugin
- * therefore surfaces hard mode as error-level log lines (captured into the
- * OpenCode server log) + the structured `hardBlocked` result; host bindings
- * with a refusal channel (pi/dsh when their APIs land) must refuse the write
- * when `hardBlocked === true`.
+ * (`@opencode-ai/plugin` 1.4.8) `tool.execute.before` returns
+ * `Promise<void>` — there is no error/refusal return channel on this host.
+ * The plugin therefore surfaces hard mode — the authority classes included —
+ * as error-level log lines (captured into the OpenCode server log) + the
+ * structured `hardBlocked` result; host bindings with a refusal channel
+ * (pi/dsh when their APIs land) must refuse the write when
+ * `hardBlocked === true`. This host does NOT enforce: an authority refusal
+ * here is a decision record, never an OS/tool fence.
  *
  * Returns the engine gate result when the target is a canonical harness
  * coordination document and something could be validated; `null` otherwise
@@ -865,22 +946,52 @@ export async function validateStatusWrite(
  // authority-target marker probe (stale engine -> null -> default-layout
  // names, the pre-F1 behavior).
     classifyDirResolvers = await dirResolversLoader.load();
- // G4b authority paths first: the store database is never writable by hand,
- // and a register target is decided by the DB-aware authority route rather
- // than by its document shape (both refuse unconditionally).
+// G4b authority paths first: the store database is never writable by hand,
+// and a register target is decided by the DB-aware authority route rather
+// than by its document shape (both refuse unconditionally).
     if (storeTarget !== null) return storeDirectWriteRefusal(storeTarget, log);
     const classified = harnessDocKindOfTarget(resolved);
+    // §4.3/§5 (plan S4) the EXECUTION authority's retired documents come
+    // next: root status and workflow snapshots are refused while that
+    // authority is ACTIVE, and refused fail-closed when it exists and cannot
+    // be read. The classification covers the caller's own path AND the path
+    // the write really lands on, so a symlink alias of a retired document is
+    // refused like the document itself (the old protected artifact paths keep
+    // their canonical target checks even though the new authority refuses
+    // writing them). This is an authority invariant, not the compass axis.
+    const landedAlias = landed === resolved ? null : harnessDocKindOfTarget(landed);
+    const executionDir =
+      classified !== null && classified.kind !== "register"
+        ? classified.harnessDir
+        : landedAlias !== null && landedAlias.kind !== "register"
+          ? landedAlias.harnessDir
+          : null;
+    if (executionDir !== null) {
+      const executionRoute = await readExecutionWriteRoute(executionDir);
+      if (executionRoute.kind === "active") return executionDirectWriteRefusal(resolved, log);
+      if (executionRoute.kind === "unavailable") {
+        return authorityUnavailableRefusal(
+          executionRoute,
+          log,
+          "the harness's execution authority",
+          "coordination-document write",
+        );
+      }
+    }
     // A project register is an authority document too — reached through an
-    // alias it takes the same route (status/snapshot aliases are untouched).
-    // A case-variant register basename (qc2-F-004) bypasses both exact-case
-    // classifications and is classified by the folded shape walk instead, so
-    // the warn-only audit trail fires for it too (dsh/omp/ZCode parity).
+    // alias it takes the same route (status/snapshot aliases are handled
+    // above). A case-variant register basename (qc2-F-004) bypasses both
+    // exact-case classifications and is classified by the folded shape walk
+    // instead, so the warn-only audit trail fires for it too (dsh/omp/ZCode
+    // parity).
     const registerDir =
       classified?.kind === "register"
         ? classified.harnessDir
-        : (aliasedRegisterDir(resolved, landed) ??
-          caseFoldedRegisterRoot(resolved) ??
-          (landed !== resolved ? caseFoldedRegisterRoot(landed) : null));
+        : (landedAlias?.kind === "register"
+            ? landedAlias.harnessDir
+            : (aliasedRegisterDir(resolved, landed) ??
+              caseFoldedRegisterRoot(resolved) ??
+              (landed !== resolved ? caseFoldedRegisterRoot(landed) : null)));
     const target = classified ?? (registerDir === null ? null : { harnessDir: registerDir, kind: "register" as const });
     if (!target) return null;
 
@@ -889,8 +1000,8 @@ export async function validateStatusWrite(
       const route = await readAuthorityRoute(registerDir);
       if (route.kind === "retired") return registerRetiredRefusal(route.storeRevision, log);
       if (route.kind === "unavailable") return authorityUnavailableRefusal(route, log);
- // `legacy` (no store / staged store): pre-activation, the register is
- // still the findings authority, so its own validator decides below.
+// `legacy` (no store / staged store): pre-activation, the register is
+// still the findings authority, so its own validator decides below.
     }
 
     if (opts.doc !== undefined) {

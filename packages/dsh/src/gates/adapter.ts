@@ -42,6 +42,7 @@ import { catalogRegistrationRefusal, resolveActiveWorkflow } from './workflow-se
 import type { SessionHint } from './workflow-selection.ts'
 import {
   dispatchGateCore,
+  executionAuthorityRefusal,
   leaseGateViolations,
   assignmentTextFromFields,
   isAssignmentShaped,
@@ -131,10 +132,14 @@ export interface DshHostAdapterOptions {
  *   parsers read exactly these labels) and gated through the same text path.
  *   Enforcement is applied like the listener (opencode parity): the
  *   returned GateResult carries `hardBlocked` so a refusal-capable host can
- *   refuse the dispatch.
+ *   refuse the dispatch. On an ACTIVE/unreadable execution authority the
+ *   registration selection's legacy file route is never read: the hook
+ *   refuses with the engine's own code first.
  * - `beforeMerge(lease)` — thin wrapper over the engine
  *   `validateIntegrationMergeLease` (reserve/validate the integration merge
- *   lease; the reservation WRITE into status.json is a P3 seam).
+ *   lease; the reservation WRITE into status.json is a P3 seam) plus the
+ *   no-steal comparison against the ACTIVE snapshot's recorded lease — a
+ *   legacy-file read the execution authority is asked about first.
  */
 export class DshHostAdapter extends Service implements HostAdapter {
   /** Engine host identity (`HostId` union). */
@@ -375,11 +380,18 @@ export class DshHostAdapter extends Service implements HostAdapter {
   /**
    * `HostAdapter.beforeDispatch` — the dispatch gate validation path (see
    * the class doc). Accepts the raw Assignment text (full fidelity: the
-   * `Enforcement` header flag participates in enforcement resolution) or the
+   * `Enforcement` header field participates in enforcement resolution) or the
    * parsed `AssignmentFields` (engine-typed hook input; normalized to the
    * engine's header grammar before gating). Returns the enforced GateResult
    * — `hardBlocked` mirrors the `tools/pre-execute` deny decision under the
    * same enforcement resolution.
+   *
+   * R-1 (§5/§4.3): the catalog-registration selection is the LEGACY file route,
+   * so the hook consults the execution authority before the root register is
+   * read — on an ACTIVE authority it refuses (`hardBlocked`,
+   * `execution.consumer-not-ready`) instead of asking the journal about a
+   * lifecycle only retired bytes name, and an authority that exists and cannot
+   * be read refuses fail-closed. No pre-activation path is affected.
    * @param assignment - raw Assignment text or parsed header fields.
    */
   async beforeDispatch(assignment: AssignmentFields | string): Promise<GateResult> {
@@ -405,6 +417,29 @@ export class DshHostAdapter extends Service implements HostAdapter {
     // lifecycle's registration is gated by the `tools/pre-execute` listener
     // alone (dsh always composes it; S-G4a-02).
     if (harnessDir !== null) {
+      // R-1 (§5/§4.3): the selection below is the LEGACY file route (the root
+      // register's `workflows[]`). While the execution authority is ACTIVE that
+      // register is retired — the DB registry is the active set — so consult the
+      // authority BEFORE the read: no registration verdict is derived from a
+      // file-named lifecycle, and an authority that exists and cannot be read
+      // refuses fail-closed. The refusal is UNCONDITIONAL, exactly like the
+      // registration veto it pre-empts (it is not the soft/hard axis).
+      const authority = executionAuthorityRefusal(harnessDir)
+      if (authority !== null) {
+        return {
+          ok: false,
+          hardBlocked: true,
+          violations: [{
+            ok: false,
+            severity: 'high',
+            code: authority.code,
+            message:
+              `${authority.message} — the catalog-registration gate refuses instead of selecting this workspace's ` +
+              'active lifecycle from the retired root register',
+            fix: 'dispatch against the execution DB route (or restore the authority): a retired root register cannot name the lifecycle this hook gates',
+          }],
+        }
+      }
       const selection = resolveActiveWorkflow(harnessDir)
       if (selection.kind === 'active') {
         const refusal = await catalogRegistrationRefusal(harnessDir, selection.workflowId)
@@ -442,6 +477,14 @@ export class DshHostAdapter extends Service implements HostAdapter {
    * snapshot, or a snapshot WITHOUT an `integration_merge_lease`
    * (unclaimed) all skip the snapshot read — the passed-lease shape gate
    * stands alone.
+   *
+   * R-1 (§5/§4.3): that snapshot read is the LEGACY file route, so the hook
+   * consults the execution authority BEFORE it. On an ACTIVE authority the
+   * snapshot is retired — its lease is not the active reservation — so the
+   * refusal (`execution.consumer-not-ready`) joins the violations instead of a
+   * lease verdict derived from those bytes; an authority that exists and cannot
+   * be read refuses fail-closed. A harness with no store keeps the snapshot
+   * read unchanged (§2.1: absence is not an authority verdict).
    * @param lease - the `metadata.integration_merge_lease` object being
    * reserved/validated.
    */
@@ -449,6 +492,25 @@ export class DshHostAdapter extends Service implements HostAdapter {
     const violations = [...validateIntegrationMergeLease(lease).violations]
     const harnessDir = this.resolver.forWorkspace(undefined)
     if (harnessDir !== null) {
+      // R-1 (§5/§4.3): the snapshot read below is the LEGACY file route — while
+      // the execution authority is ACTIVE that snapshot is retired, so its
+      // `integration_merge_lease` is not the active reservation. Consult the
+      // authority BEFORE the read: the hook refuses with the engine's own code
+      // instead of validating (or admitting) a lease against retired bytes, and
+      // refuses fail-closed when the authority exists and cannot be read.
+      const authority = executionAuthorityRefusal(harnessDir)
+      if (authority !== null) {
+        violations.push({
+          ok: false,
+          severity: 'high',
+          code: authority.code,
+          message:
+            `${authority.message} — the merge hook refuses instead of validating the integration merge lease ` +
+            'against the retired workflow snapshot',
+          fix: 'reserve/verify the integration merge lease through the execution DB route (or restore the authority): a retired snapshot cannot confirm the active merge',
+        })
+        return { ok: false, violations }
+      }
       const selection = resolveActiveWorkflow(harnessDir)
       if (selection.kind === 'active') {
         const snapshotPath = join(harnessDir, selection.dir, WORKFLOW_SNAPSHOT_FILE)
