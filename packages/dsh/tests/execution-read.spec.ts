@@ -29,6 +29,7 @@ import {
 import type { ExecutionCaller, ExecutionContext, IntegrationMergeLease } from '@mstar-harness/engine'
 import type { ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 import { buildCatalogPayloadWithStore } from '../src/gates/catalog.ts'
+import { ENGINE_STATUS_CONTEXT_NAME } from '../src/gates/system-prompt.ts'
 import { EXECUTION_DIRECT_WRITE_CODE, storeAuthorityRefusals } from '../src/gates/store-authority.ts'
 import { activeRowsOf, readExecutionWorkflowSource } from '../src/gates/workflow-selection.ts'
 import { bootApp, seedHarness, v2Root, v2SnapshotWithPlans, v2WorkflowEntry, type BootResult } from './harness.ts'
@@ -514,6 +515,28 @@ describe('execution-dsh-read — the DSh source reads the authority, never the r
     const unreadableMerge = await app.ctx.dshHostAdapter.beforeMerge(reserved)
     expect(unreadableMerge.ok).toBe(false)
     expect(unreadableMerge.violations.map((violation) => violation.code)).toEqual(['store.corrupt'])
+  })
+
+  it('the shipped context provider digest refuses the retired file answer on an ACTIVE authority', async () => {
+    const { app, harnessDir } = await appWithRoot('execution-provider')
+    await seedExecutionAuthority(harnessDir, [{ id: 'wf-db', planId: 'plan-db', planStatus: 'InProgress' }])
+    await seedRetiredRegister(harnessDir, 'wf-file-stale', 'plan-file')
+
+    // The provider is the SYNCHRONOUS consumer: it rebuilds through
+    // `buildCatalogPayload(ctx, harnessDir)` with no store facts. PRE-fix the
+    // synchronous builder's default route was the file resolver, so the digest
+    // rendered the leftover `status.json` lifecycle as the authority's:
+    // `workflow wf-file-stale (plan) running | plans: plan-file(InProgress)`.
+    // The synchronous authority guard makes the selection a structured
+    // refusal instead — the digest is the version watermark ALONE.
+    const assembly = await app.ctx.systemPrompt.assemble()
+    const context = assembly.contexts.find((c) => c.name === ENGINE_STATUS_CONTEXT_NAME)
+    expect(context).toBeDefined()
+    const text = context!.text
+    expect(text.startsWith('mstar engine status: v')).toBe(true)
+    expect(text.split('\n')).toHaveLength(1)
+    expect(text).not.toContain('wf-file-stale')
+    expect(text).not.toContain('plan-file')
   })
 
   it('supports the pre-activation file route unchanged (no store, register write keeps its validator)', async () => {

@@ -525,9 +525,20 @@ async function gateStatusWrite(eventInput: unknown): Promise<{ block: true; reas
     // when the authority exists and cannot be read. It is an authority
     // invariant, not the document-validity axis the hard/soft compass flag
     // governs (same shape as the store-bytes and retired-register refusals).
-    // The register keeps its own issue-domain route below.
-    if (direct !== null && direct.kind !== "register") {
-      const executionRoute = await readExecutionWriteRoute(direct.harnessDir);
+    // The classification covers the caller's own path AND the path the write
+    // really lands on (S-G4b-03): a symlink alias of a retired status.json /
+    // workflow snapshot is refused like the document itself — §4.3's canonical
+    // target check for the old protected artifact paths. The register keeps its
+    // own issue-domain route below.
+    const landedTarget = landed === resolved ? null : harnessDocKindOfTarget(landed);
+    const executionTarget =
+      direct !== null && direct.kind !== "register"
+        ? direct
+        : landedTarget !== null && landedTarget.kind !== "register"
+          ? landedTarget
+          : null;
+    if (executionTarget !== null) {
+      const executionRoute = await readExecutionWriteRoute(executionTarget.harnessDir);
       if (executionRoute.kind === "active") return executionDirectWriteRefusal(resolved);
       if (executionRoute.kind === "unavailable") {
         return authorityUnavailableRefusal(

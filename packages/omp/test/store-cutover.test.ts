@@ -640,6 +640,34 @@ describe("omp write gate — an ACTIVE execution-authority target refuses (S3)",
     }
   });
 
+  test("a symlink alias of a retired coordination document is refused like the document itself", async () => {
+    const fixture = makeHarness("execution-alias", "soft");
+    await seedActiveExecutionStore(fixture.harness, fixture.status);
+    const handler = loadHandler();
+    const aliases = join(fixture.root, "aliases");
+    mkdirSync(aliases, { recursive: true });
+
+    // A different basename OUTSIDE the harness tree whose realpath lands on the
+    // retired root register: the textual path is not a harness document, so
+    // only the landed classification can see it (§4.3 canonical target check).
+    const statusAlias = join(aliases, "carry-over.json");
+    symlinkSync(fixture.status, statusAlias);
+    const status = await runWrite(handler, statusAlias, VALID_STATUS);
+    expect(status?.block).toBe(true);
+    expect(status?.reason).toContain("execution.direct-write-refused");
+    expect(status?.reason).not.toContain("status.invalid-json");
+
+    // The same for a workflow snapshot reached through an alias.
+    const snapshotPath = SNAPSHOT_TARGET(fixture.harness);
+    mkdirSync(join(snapshotPath, ".."), { recursive: true });
+    writeFileSync(snapshotPath, JSON.stringify({ schema_version: 1 }));
+    const snapshotAlias = join(aliases, "phase.json");
+    symlinkSync(snapshotPath, snapshotAlias);
+    const snapshot = await runWrite(handler, snapshotAlias, JSON.stringify({ schema_version: 1 }));
+    expect(snapshot?.block).toBe(true);
+    expect(snapshot?.reason).toContain("execution.direct-write-refused");
+  });
+
   test("the protected authority paths stay blocked in the same active workspace", async () => {
     const fixture = makeHarness("execution-protected", "soft");
     await seedActiveExecutionStore(fixture.harness, fixture.status);

@@ -39,6 +39,7 @@ import { existsSync, readFileSync, readdirSync, realpathSync, type Dirent } from
 import { basename, isAbsolute, join, relative, sep } from 'node:path'
 import { type Context } from '@deepseek-ai/cordis'
 import {
+  assertExecutionFileReadAllowed,
   evaluatePhaseGate,
   listCatalog,
   parseCompassFrontmatter,
@@ -74,7 +75,7 @@ import type {
 } from '../types.ts'
 import { STATUS_FILE, CATALOG_STATE_JOIN_LIMIT, asRecord, joinCapped, agentIdOf, sessionCwdOf, sessionHeaderIdOf, sessionHintOf, HarnessResolver, iterationViolationView, iterationGateView } from './_shared.ts'
 import { readAgentFlow, AGENT_FLOW_DEFAULT_LIMIT } from './agent-flow.ts'
-import { catalogRegistrationRefusal, readExecutionWorkflowSource, resolveReadWorkflow, type SessionHint } from './workflow-selection.ts'
+import { catalogRegistrationRefusal, readExecutionWorkflowSource, refusalOf, resolveReadWorkflow, type SessionHint } from './workflow-selection.ts'
 import type { ExecutionWorkflowSourceRead } from './workflow-selection.ts'
 import { readWorkflowSessionBinding, writeEngineStatusSnapshot } from '../engine-status-store.ts'
 /** Logger label for the engine-status catalog (dsh logger naming: `<scope>/<subject>`). */
@@ -133,6 +134,32 @@ function engineStatusSource(): MstarEngineStatusSource {
 }
 
 /**
+ * The SYNCHRONOUS build's route decision (§5, plan S4) — the counterpart of
+ * the async pre-read's {@link readExecutionWorkflowSource} for the builders
+ * that cannot await it (the `mstar:engine-status` context provider and direct
+ * tool/test calls). It calls the engine's own synchronous legacy-reader guard
+ * (`assertExecutionFileReadAllowed` — the same primitive the dsh gate seams
+ * use, never a re-implementation), so an ACTIVE execution authority makes the
+ * selection a structured REFUSAL instead of an `active` selection assembled
+ * from the retired `status.json` / snapshot bytes, and an authority that
+ * exists and cannot be read refuses fail-closed. A harness with no store file
+ * at all keeps the unchanged file route (§2.1: absence is not an authority
+ * verdict), exactly as the read adapter discriminates.
+ * @param harnessDir - the resolved `{HARNESS_DIR}` (never null: the caller
+ *   returns before this on a null dir).
+ * @param hint - the carrying session's effective selection hint.
+ */
+function syncAuthoritySelection(harnessDir: string, hint?: SessionHint): WorkflowSelectionView {
+  try {
+    assertExecutionFileReadAllowed({ harnessDir })
+  } catch (error) {
+    const refusal = refusalOf(error)
+    return { kind: 'error', code: refusal.code, message: refusal.message }
+  }
+  return resolveReadWorkflow(harnessDir, hint)
+}
+
+/**
  * The payload the ONE unified engine-status catalog row renders from (the
  * watermark + iteration gate + workspace-state digest). Every field is
  * boot/workspace-resolved — the unified mstar version is a
@@ -154,7 +181,9 @@ function engineStatusSource(): MstarEngineStatusSource {
  *   synchronous callers (the `mstar:engine-status` context provider and
  *   direct tool/test calls): the state then discloses that the authority was
  *   not read rather than showing an empty rollup as if it were a finding of
- *   "none open".
+ *   "none open", and the route decision falls to the synchronous authority
+ *   guard ({@link syncAuthoritySelection}) — never a file-derived selection
+ *   while the execution authority is ACTIVE.
  */
 function engineStatusPayload(harnessDir: string | null, hint?: SessionHint, facts?: StoreFacts): MstarEngineStatusPayload {
   // ONE read-path resolution per build (D4): the state section AND the
@@ -164,15 +193,24 @@ function engineStatusPayload(harnessDir: string | null, hint?: SessionHint, fact
   // ACTIVE execution authority, its own refusal when the authority exists and
   // cannot be read), the unchanged file resolver otherwise.
   const authority = facts?.authority
+  // Route decision, in order: the store-backed pre-read's OWN verdict when it
+  // ran (`active` with the materialized state, its structured `error`, or the
+  // fail-closed `unavailable`); the SYNCHRONOUS guard when no pre-read ran (the
+  // synchronous builders cannot await the route — the engine's synchronous
+  // legacy-reader guard decides instead: an ACTIVE or unreadable authority
+  // REFUSES, while a harness with no store file keeps the unchanged file
+  // route); and the file resolver for the pre-read's own `files` verdict.
   const resolved = harnessDir === null
     ? undefined
-    : authority?.kind === 'active'
-      ? ({ kind: 'active', workflowId: authority.workflowId, dir: authority.dir } as const)
-      : authority?.kind === 'error'
-        ? authority.selection
-        : authority?.kind === 'unavailable'
-          ? ({ kind: 'error', code: authority.code, message: authority.message } as const)
-          : resolveReadWorkflow(harnessDir, hint)
+    : authority === undefined
+      ? syncAuthoritySelection(harnessDir, hint)
+      : authority.kind === 'active'
+        ? ({ kind: 'active', workflowId: authority.workflowId, dir: authority.dir } as const)
+        : authority.kind === 'error'
+          ? authority.selection
+          : authority.kind === 'unavailable'
+            ? ({ kind: 'error', code: authority.code, message: authority.message } as const)
+            : resolveReadWorkflow(harnessDir, hint)
   // The materialized lifecycle the route selected (an ACTIVE execution
   // authority hands its own state over): the sections below never re-read a
   // retired document to find out what the selection was about.
@@ -830,8 +868,10 @@ interface StoreFacts {
    * build: the execution authority's own active-set answer (`active` with the
    * selected lifecycle's materialized state, `error`, `unavailable`) or
    * `files` when the pre-activation file route still answers. Absent only on
-   * the synchronous build (no pre-read ran) — that build discloses the
-   * unread authority instead of presenting a file-derived selection as the
+   * the synchronous build (no pre-read ran) — that build decides through the
+   * engine's synchronous legacy-reader guard
+   * ({@link syncAuthoritySelection}), so it refuses on an ACTIVE/unreadable
+   * authority instead of presenting a file-derived selection as the
    * authority's.
    */
   readonly authority?: ExecutionWorkflowSourceRead
