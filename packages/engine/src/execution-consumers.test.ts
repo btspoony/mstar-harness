@@ -30,14 +30,19 @@
  * - `-refuses-an-unusable-store-`: a missing store, a non-active authority, a
  *   corrupt store and a store held past the bounded wait are each an explicit
  *   refusal — never an empty success and never a file fallback.
+ * - `execution-cross-domain-reads-*`: on a store whose accepted registration is
+ *   already committed, an authority that becomes unavailable refuses EVERY
+ *   authoritative read and never serves the retired file route's leftover bytes
+ *   or a projection derived from them.
  */
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { registerCatalogEntity } from "./catalog.js";
 import { readExecutionAuthority } from "./execution-read.js";
+import { commitExecutionRegistration } from "./execution-registration.js";
 import {
   createExecutionWorkflow,
   initializeExecutionAuthority,
@@ -51,7 +56,7 @@ import {
 import * as engineIndex from "./index.js";
 import { backupStore } from "./store-activation.js";
 import { initializeStore, type StoreContext } from "./store-db.js";
-import { readExecutionSource, resolveExecutionReadRoute } from "./store-read.js";
+import { queryDashboard, readExecutionSource, resolveExecutionReadRoute, withStoreRead } from "./store-read.js";
 import { WORKFLOW_SNAPSHOT_FILE, type WorkflowSnapshot } from "./workflow.js";
 import type { WorkflowEntry } from "./status.js";
 
@@ -66,6 +71,9 @@ const WORKFLOW_B = "wf-consumers-b";
 const PLAN_A1 = "20260920-consumers-a1";
 const PLAN_A2 = "20260920-consumers-a2";
 const PLAN_B1 = "20260920-consumers-b1";
+/** The cross-domain group's own accepted lifecycle (S6). */
+const CROSS_WORKFLOW = "wf-consumers-cross-domain";
+const CROSS_PLAN = "20260920-consumers-cross-domain";
 
 /* ------------------------------------------------------------------------ *
  * Fixtures
@@ -383,5 +391,121 @@ describe("execution-authority-read — one exact read of the committed authority
       if (busyTimeout === undefined) delete process.env.MSTAR_STORE_BUSY_TIMEOUT_MS;
       else process.env.MSTAR_STORE_BUSY_TIMEOUT_MS = busyTimeout;
     }
+  });
+});
+
+/* ------------------------------------------------------------------------ *
+ * Cross-domain closure (S6)
+ * ------------------------------------------------------------------------ */
+
+/**
+ * One store whose registration was ACCEPTED through the DB route: an ACTIVE
+ * authority holding `CROSS_WORKFLOW`'s lifecycle and its catalog entity,
+ * committed by `commitExecutionRegistration` in one transaction.
+ */
+async function registeredStore(label: string): Promise<StoreContext> {
+  const context = controlRoot(label);
+  const handle = await initializeStore(context);
+  handle.close();
+  const initialized = await initializeExecutionAuthority(context);
+  await commitExecutionRegistration(
+    { harnessDir: context.harnessDir, caller: callerOf(CROSS_WORKFLOW) },
+    {
+      operationId: `register-${CROSS_WORKFLOW}`,
+      actor: "execution-consumers.test",
+      expectedCatalogRevision: 0,
+      workflow: {
+        kind: "plan",
+        workflowId: CROSS_WORKFLOW,
+        options: {
+          harnessDir: context.harnessDir,
+          plan: { id: CROSS_PLAN, title: "Cross-domain accepted plan", file: `plans/${CROSS_PLAN}.md` },
+          deliveryKind: "development",
+          branchSource: `feature/${CROSS_WORKFLOW}`,
+          branchTarget: "main",
+          project: "_default",
+          startedAt: TS,
+        },
+      },
+      delta: {
+        entities: [
+          {
+            kind: "plan",
+            id: CROSS_PLAN,
+            title: "Cross-domain accepted plan",
+            rootKind: "plans",
+            relativePath: `plans/${CROSS_PLAN}.md`,
+          },
+        ],
+        binding: { catalogKind: "plan", catalogId: CROSS_PLAN },
+      },
+      expected: initialized.token,
+    },
+  );
+  return context;
+}
+
+/** The retired file route's bytes for the accepted workflow (§2.1 leftovers). */
+function plantRetiredFileRoute(context: StoreContext): string {
+  const workflowDir = join(context.harnessDir, "workflows", CROSS_WORKFLOW);
+  mkdirSync(workflowDir, { recursive: true });
+  writeFileSync(
+    join(context.harnessDir, "status.json"),
+    `${JSON.stringify({ version: 2, updated_at: "2000-01-01", workflows: [] })}\n`,
+  );
+  const snapshotPath = join(workflowDir, WORKFLOW_SNAPSHOT_FILE);
+  writeFileSync(
+    snapshotPath,
+    `${JSON.stringify({
+      schema_version: 1,
+      id: CROSS_WORKFLOW,
+      type: "plan",
+      status: "completed",
+      started_at: TS,
+      updated_at: TS,
+      plans: [{ id: "plan-from-the-file", title: "file", file: "plans/file.md", status: "Done" }],
+    })}\n`,
+  );
+  return snapshotPath;
+}
+
+describe("execution-cross-domain — an unavailable authority refuses every read", () => {
+  test("execution-cross-domain-reads-never-answer-from-old-json-or-projections", async () => {
+    const context = await registeredStore("cross-domain-unavailable");
+    const snapshotPath = plantRetiredFileRoute(context);
+
+    // The ACCEPTED registration is what the authority answers with: its own
+    // Todo plan, not the file's Done one, and the DB route is the route.
+    const baseline = await readExecutionAuthority(context, { workflowId: CROSS_WORKFLOW, planId: CROSS_PLAN });
+    // The address is exact, so the adapter answers the PLAN view; name the
+    // narrowed union member once instead of casting at the field read.
+    const baselineView = baseline.data as ExecutionPlanView;
+    expect(baselineView.plan.status).toBe("Todo");
+    expect(await resolveExecutionReadRoute(context)).toBe("execution");
+
+    // The active DB becomes unavailable: the store's bytes can no longer be
+    // read as a database. The accepted registration exists only in that store.
+    corruptStore(context);
+
+    // EVERY authoritative read refuses, at each address and at each entry
+    // point: the adapter, the route probe, the routed source read and the
+    // dashboard projection boundary behind which the retired file route hides.
+    expect(await refusalOf(() => readExecutionAuthority(context))).toEqual({ code: "store.corrupt" });
+    expect(await refusalOf(() => readExecutionAuthority(context, { workflowId: CROSS_WORKFLOW }))).toEqual({
+      code: "store.corrupt",
+    });
+    expect(await refusalOf(() => readExecutionAuthority(context, { workflowId: CROSS_WORKFLOW, planId: CROSS_PLAN }))).toEqual({
+      code: "store.corrupt",
+    });
+    expect(await refusalOf(() => resolveExecutionReadRoute(context))).toEqual({ code: "store.corrupt" });
+    expect(await refusalOf(() => readExecutionSource(context, { workflowId: CROSS_WORKFLOW }))).toEqual({
+      code: "store.corrupt",
+    });
+    expect(await refusalOf(() => withStoreRead(context, queryDashboard("workflows")))).toEqual({ code: "store.corrupt" });
+
+    // …and the leftover bytes are exactly where they were: no read promoted
+    // them and no refusal rewrote them.
+    expect(readFileSync(snapshotPath, "utf8")).toContain("plan-from-the-file");
+    expect(readFileSync(join(context.harnessDir, "status.json"), "utf8")).toContain('"workflows":[]');
   });
 });

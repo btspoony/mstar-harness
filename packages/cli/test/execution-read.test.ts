@@ -460,3 +460,68 @@ describe("execution-cli-read — the CLI answers execution-source reads by route
     expect(issues.storeRevision).toBeGreaterThan(0);
   });
 });
+
+/* ------------------------------------------------------------------------ *
+ * Cross-domain closure (S6): an unavailable authority refuses every read
+ * ------------------------------------------------------------------------ */
+
+describe("execution-cross-domain", () => {
+  test("execution-cross-domain-cli-reads-refuse-an-unavailable-authority", async () => {
+    const fixture = await activeFixture("cross-domain-cli");
+    plantLeftoverSnapshot(fixture);
+    const sessionPath = plantLeftoverSession(fixture);
+
+    // The accepted authority answers while it is readable: the DB row, not the
+    // file's Done plan and not its lease.
+    const baseline = runCli(["plan", "show", "--workflow", WORKFLOW_ID, "--plan", PLAN_ID, "--json"], fixture);
+    expect(baseline.exitCode).toBe(0);
+    expect((jsonOf(baseline).plan as Record<string, unknown>).status).toBe("Todo");
+
+    // The active DB becomes unavailable. Every consumer of the authority now
+    // refuses: none of them may fall back to the leftover root/snapshot/session
+    // bytes, and none may serve a projection derived from them.
+    corruptStore(fixture);
+
+    const show = runCli(["plan", "show", "--workflow", WORKFLOW_ID, "--plan", PLAN_ID, "--json"], fixture);
+    expect(show.exitCode).toBe(1);
+    expect(jsonOf(show).code).toBe("store.corrupt");
+    expect(show.stdout).not.toContain("plan-from-the-file");
+
+    // The retired file form is refused on the same unreadable store too: the
+    // leftover session file is never promoted to an authority answer.
+    const fileForm = runCli(["plan", "show", "--session", sessionPath, "--json"], fixture);
+    expect(fileForm.exitCode).toBe(1);
+    expect(jsonOf(fileForm).code).toBe("store.corrupt");
+
+    const status = runCli(["status", "validate"], fixture);
+    expect(status.exitCode).toBe(1);
+    expect(status.stderr).toContain("store.corrupt");
+    expect(status.stdout).not.toContain("OK");
+
+    const lease = runCli(["lease", "verify", "--workflow", WORKFLOW_ID, "--plan", PLAN_ID], fixture);
+    expect(lease.exitCode).toBe(1);
+    expect(lease.stderr).toContain("store.corrupt");
+
+    const merge = runCli(["lease", "verify-integration", "--workflow", WORKFLOW_ID], fixture);
+    expect(merge.exitCode).toBe(1);
+    expect(merge.stderr).toContain("store.corrupt");
+
+    const gate = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--compass", writeCompass(fixture)], fixture);
+    expect(gate.exitCode).toBe(1);
+    expect(gate.stderr).toContain("store.corrupt");
+
+    // The dashboard's projection boundary is not an authority on an unreadable
+    // store either -- for the execution view or any other.
+    const projected = await readDashboardView({ context: fixture.context, view: "workflows" }).catch((error: unknown) => error);
+    expect(
+      projected !== null && typeof projected === "object" && "code" in projected ? projected.code : undefined,
+    ).toBe("store.corrupt");
+    const issues = await readDashboardView({ context: fixture.context, view: "issues" }).catch((error: unknown) => error);
+    expect(issues !== null && typeof issues === "object" && "code" in issues ? issues.code : undefined).toBe(
+      "store.corrupt",
+    );
+
+    // The retired bytes are untouched: never promoted, never rewritten.
+    expect(readFileSync(sessionPath, "utf8")).toContain("leftover-session");
+  });
+});

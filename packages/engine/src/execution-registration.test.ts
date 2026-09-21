@@ -29,6 +29,9 @@
  *   migration route.
  * - `execution-catalog-pin-*`: a current catalog edit cannot mutate a prepared
  *   execution input, and an authorized eligible `prepare` selects the new input.
+ * - `execution-cross-domain-*`: registration accepted → catalog metadata moves →
+ *   the authoritative read stays pinned → the accepted receipt and token still
+ *   select that data after a source-level reopen.
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -45,6 +48,7 @@ import {
 import { executionInputHash } from "./coordination.js";
 import { prepareExecutionPlan } from "./execution-coordination.js";
 import { previewExecutionMigration } from "./execution-migrate.js";
+import { readExecutionAuthority } from "./execution-read.js";
 import { commitExecutionRegistration } from "./execution-registration.js";
 import {
   bindExecutionSession,
@@ -53,7 +57,9 @@ import {
   readExecutionState,
   type ExecutionCaller,
   type ExecutionContext,
+  type ExecutionPlanView,
   type ExecutionSessionRef,
+  type ExecutionState,
   type ExecutionToken,
 } from "./execution-store.js";
 import * as engineIndex from "./index.js";
@@ -961,6 +967,126 @@ describe("execution-catalog-pin", () => {
     expect(pin.store_id).toBe(fixture.storeId);
     expect(pin.entity_revision).toBe(2);
     expect(pin.document_hash).toBe(sealed!.input_hash);
+  });
+});
+
+/* ------------------------------------------------------------------------ *
+ * Cross-domain closure (S6)
+ * ------------------------------------------------------------------------ */
+
+/**
+ * The whole cross-domain chain on ONE store: a registration is accepted, the
+ * current catalog metadata moves, the authoritative read stays pinned to the
+ * accepted selection, and the accepted data is still selected from the
+ * committed rows after a source-level reopen. The fail-closed half of the same
+ * scenario (the authority becoming unavailable) is carried by
+ * `execution-consumers.test.ts` / `execution-read.test.ts`, which own the read
+ * adapter and the CLI consumers.
+ */
+describe("execution-cross-domain", () => {
+  test("execution-cross-domain-accepted-data-stays-pinned-and-selected-after-reopen", async () => {
+    const fixture = await activeFixture("cross-domain-accepted");
+    const receipt = await registerPlanWorkflow(fixture, "op-cross-domain-register");
+    expect(receipt).toEqual({
+      operationId: "op-cross-domain-register",
+      workflowId: WORKFLOW_ID,
+      catalogRevision: 1,
+      recovered: false,
+    });
+
+    // §7 the accepted prepare seals the frozen input and its catalog pin at the
+    // revision the registration published.
+    const [workflow] = (await readExecutionState(fixture.context)).data.workflows;
+    const coordinator: ExecutionSessionRef = (
+      await bindExecutionSession(
+        { ...fixture.context, caller: fixture.caller },
+        {
+          workflowId: WORKFLOW_ID,
+          planId: null,
+          role: "coordinator",
+          expected: workflow!.workflowToken,
+          operationId: "op-cross-domain-bind",
+        },
+      )
+    ).data;
+    const { assignmentPath } = writeAssignmentDocuments(fixture.harnessRoot, PLAN_ID, `feature/${PLAN_ID}`);
+    const planToken = (await readExecutionPlan({ ...fixture.context, caller: fixture.caller }, coordinator, PLAN_ID)).token;
+    const prepared = await prepareExecutionPlan(
+      { ...fixture.context, caller: fixture.caller },
+      {
+        operationId: "op-cross-domain-prepare",
+        session: coordinator,
+        expected: planToken,
+        planId: PLAN_ID,
+        operation: { kind: "prepare", assignmentPath },
+      },
+    );
+    expect(prepared.data.frozenInput?.entity_revision).toBe(1);
+
+    const sealed = await sealedInput(fixture.context, PLAN_ID);
+    const binding = await bindingOf(fixture.context, WORKFLOW_ID);
+
+    // The current catalog metadata moves on the SAME accepted store: the
+    // entity's own revision and the store's catalog revision advance.
+    const edited = await updateCatalogEntity(
+      fixture.context,
+      { kind: "plan", id: PLAN_ID },
+      { title: "Renamed after the accepted prepare" },
+      1,
+      { operationId: "op-cross-domain-catalog-edit", actor: "project-manager" },
+    );
+    expect(edited.revision).toBe(2);
+    expect((await getCatalog(fixture.context, { kind: "plan", id: PLAN_ID })).entity.title).toBe(
+      "Renamed after the accepted prepare",
+    );
+
+    // The authoritative read is PINNED: it reports the accepted selection (the
+    // catalog revision the pin was sealed at), and neither the sealed input nor
+    // the committed binding moved. A current catalog edit is not a rebind.
+    const pinned = await readExecutionAuthority(fixture.context, { workflowId: WORKFLOW_ID, planId: PLAN_ID });
+    // The address is exact, so the adapter answers the PLAN view; name the
+    // narrowed union member once instead of casting at every field read.
+    const pinnedView = pinned.data as ExecutionPlanView;
+    expect(pinnedView.frozenInput?.entity_revision).toBe(1);
+    expect(pinnedView.frozenInput?.document_hash).toBe(sealed!.input_hash);
+    expect(await sealedInput(fixture.context, PLAN_ID)).toEqual(sealed);
+    expect(await bindingOf(fixture.context, WORKFLOW_ID)).toEqual(binding);
+
+    const token = (await readExecutionAuthority(fixture.context)).token;
+    expect(String(token).startsWith("exec-v1:root:")).toBe(true);
+    const beforeReopen = await footprint(fixture.context);
+
+    // A source-level reopen: a fresh handle on the same store bytes, so nothing
+    // the reads answer can come from process memory — the committed receipt and
+    // the token are re-read from their own rows.
+    const reopened = await openStore(fixture.context, "read");
+    let receiptRow: { result_json?: unknown } | undefined;
+    try {
+      receiptRow = reopened.db
+        .prepare("select result_json from execution_operations where operation_id = ?")
+        .get("op-cross-domain-register") as { result_json?: unknown } | undefined;
+    } finally {
+      reopened.close();
+    }
+    expect(JSON.parse(String(receiptRow!.result_json)).data).toEqual(receipt);
+
+    // The exact retry still replays the RECORDED receipt and writes nothing…
+    expect(await registerPlanWorkflow(fixture, "op-cross-domain-register")).toEqual(receipt);
+    expect(await footprint(fixture.context)).toEqual(beforeReopen);
+
+    // …and the token still selects the accepted data, byte for byte: the
+    // registry entry, its plan, and the pinned frozen input.
+    const after = await readExecutionAuthority(fixture.context);
+    expect(after.token).toBe(token);
+    expect(after.storeId).toBe(fixture.storeId);
+    // Both selections name their narrowed union member once (the address is
+    // exact); no field is read through an unchecked inline cast.
+    const scoped = (await readExecutionAuthority(fixture.context, { workflowId: WORKFLOW_ID })).data as ExecutionState;
+    expect(scoped.workflows.map((entry) => entry.state.id)).toEqual([WORKFLOW_ID]);
+    expect(scoped.workflows[0]!.plans.map((row) => row.plan.id)).toEqual([PLAN_ID]);
+    const reopenedView = (await readExecutionAuthority(fixture.context, { workflowId: WORKFLOW_ID, planId: PLAN_ID }))
+      .data as ExecutionPlanView;
+    expect(reopenedView.frozenInput?.entity_revision).toBe(1);
   });
 });
 
