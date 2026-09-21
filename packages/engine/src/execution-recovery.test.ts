@@ -72,7 +72,7 @@ import {
   currentAuthorityHandle,
   type BackupReceipt,
 } from "./store-activation.js";
-import { initializeStore, storeDbPath, type StoreContext } from "./store-db.js";
+import { initializeStore, openStore, storeDbPath, type StoreContext } from "./store-db.js";
 import type { WorkflowSnapshot } from "./workflow.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-execution-recovery-"));
@@ -675,72 +675,92 @@ describe("execution-restore", () => {
   test("execution-restore-receipt-identifies-a-crash-around-the-replacement", async () => {
     const world = await recoveryWorld("restore-crash");
     const point = await recoveryPoint(world, "crash-point");
-    await mutateEveryDomain(world, "crash");
-    const preview = await previewExecutionRestore(world.context, point.backupPath);
-    const liveBefore = sha256OfFile(world.dbPath);
-    const liveFootprint = footprint(world.dbPath);
+    // Hold a store connection open for the whole case. SQLite folds and deletes
+    // a WAL only when the LAST connection closes, so while this one is open
+    // every commit `mutateEveryDomain` makes stays as an un-checkpointed frame
+    // in the live `-wal` instead of being folded away by whichever earlier
+    // handle happened to close last. That makes the precondition this case
+    // needs — the store PROVABLY has pending WAL frames when `liveBefore` is
+    // taken, so quiescing it must rewrite the database bytes — a fact of the
+    // fixture rather than a side effect of when the runtime finalizes its own
+    // handles. Without it the live bytes can already be current at `liveBefore`
+    // and the byte assertion below would measure cleanup timing, not protocol.
+    const held = await openStore(world.context, "write");
+    try {
+      await mutateEveryDomain(world, "crash");
+      const preview = await previewExecutionRestore(world.context, point.backupPath);
+      const liveBefore = sha256OfFile(world.dbPath);
+      const liveFootprint = footprint(world.dbPath);
+      // The frames are really there to be folded: a non-empty WAL sidecar
+      // beside the database is what the checkpoint below has to consume, so a
+      // fixture that lost its pending frames fails HERE instead of quietly
+      // making the byte assertion below vacuous.
+      expect(existsSync(`${world.dbPath}-wal`) ? statSync(`${world.dbPath}-wal`).size : 0).toBeGreaterThan(0);
 
-    // A crash AFTER the receipt is written but BEFORE the rename: the original
-    // is still authoritative, and the receipt proves the restore never landed.
-    const beforeFailure = await errorOf(async () => {
-      process.env.MSTAR_STORE_TEST_RUNNER = "1";
-      process.env.MSTAR_STORE_FAIL_EXECUTION_RESTORE = "before-replacement";
-      try {
-        return await restoreExecutionBackup(world.context, {
-          preview,
-          acceptLossDigest: preview.lossDigest,
-          operator: OPERATOR,
-          authorization: AUTHORIZATION,
-        });
-      } finally {
-        delete process.env.MSTAR_STORE_FAIL_EXECUTION_RESTORE;
-        delete process.env.MSTAR_STORE_TEST_RUNNER;
-      }
-    });
-    expect(beforeFailure.message).toContain("before-replacement");
-    // The store's STATE is untouched; its bytes may not be, because the restore
-    // checkpoints the live WAL as part of quiescing it, which is not a loss.
-    expect(footprint(world.dbPath)).toEqual(liveFootprint);
-    const afterFirst = recoveryRecords(world);
-    expect(afterFirst).toHaveLength(1);
-    const pending = afterFirst[0]!;
-    expect(pending.phase).toBe("replacing");
-    expect(pending.restoredCopySha256).not.toBe(pending.liveStoreSha256);
-    // …so an operator reading only the receipt can decide: the live file is the
-    // ORIGINAL, not the prepared copy.
-    expect(sha256OfFile(world.dbPath)).toBe(pending.liveStoreSha256);
-    expect(sha256OfFile(world.dbPath)).not.toBe(liveBefore);
+      // A crash AFTER the receipt is written but BEFORE the rename: the original
+      // is still authoritative, and the receipt proves the restore never landed.
+      const beforeFailure = await errorOf(async () => {
+        process.env.MSTAR_STORE_TEST_RUNNER = "1";
+        process.env.MSTAR_STORE_FAIL_EXECUTION_RESTORE = "before-replacement";
+        try {
+          return await restoreExecutionBackup(world.context, {
+            preview,
+            acceptLossDigest: preview.lossDigest,
+            operator: OPERATOR,
+            authorization: AUTHORIZATION,
+          });
+        } finally {
+          delete process.env.MSTAR_STORE_FAIL_EXECUTION_RESTORE;
+          delete process.env.MSTAR_STORE_TEST_RUNNER;
+        }
+      });
+      expect(beforeFailure.message).toContain("before-replacement");
+      // The store's STATE is untouched; its bytes are not, because the restore
+      // checkpoints the live WAL as part of quiescing it, which is not a loss.
+      expect(footprint(world.dbPath)).toEqual(liveFootprint);
+      const afterFirst = recoveryRecords(world);
+      expect(afterFirst).toHaveLength(1);
+      const pending = afterFirst[0]!;
+      expect(pending.phase).toBe("replacing");
+      expect(pending.restoredCopySha256).not.toBe(pending.liveStoreSha256);
+      // …so an operator reading only the receipt can decide: the live file is the
+      // ORIGINAL, not the prepared copy.
+      expect(sha256OfFile(world.dbPath)).toBe(pending.liveStoreSha256);
+      expect(sha256OfFile(world.dbPath)).not.toBe(liveBefore);
 
-    // A crash AFTER the rename: the live store IS the prepared copy, and the
-    // same receipt says so; verification resumes against the installed store.
-    const afterFailure = await errorOf(async () => {
-      process.env.MSTAR_STORE_TEST_RUNNER = "1";
-      process.env.MSTAR_STORE_FAIL_EXECUTION_RESTORE = "after-replacement";
-      try {
-        return await restoreExecutionBackup(world.context, {
-          preview,
-          acceptLossDigest: preview.lossDigest,
-          operator: OPERATOR,
-          authorization: AUTHORIZATION,
-        });
-      } finally {
-        delete process.env.MSTAR_STORE_FAIL_EXECUTION_RESTORE;
-        delete process.env.MSTAR_STORE_TEST_RUNNER;
-      }
-    });
-    expect(afterFailure.message).toContain("after-replacement");
-    const installed = recoveryRecords(world)[1]!;
-    expect(installed.phase).toBe("replacing");
-    // The receipt says the PREPARED COPY is what is installed now.
-    expect(sha256OfFile(world.dbPath)).toBe(installed.restoredCopySha256);
-    expect(installed.restoredCopySha256).not.toBe(installed.liveStoreSha256);
-    // The installed store IS the selected recovery point's state, at the epoch
-    // the receipt names — verification resumes, it does not restart.
-    const resumed = footprint(world.dbPath);
-    expect(resumed.epoch).toBe(installed.newEpoch);
-    expect(resumed.issues).toBe(0);
-    expect(resumed.workflows).toBe(1);
-    await expect(readExecutionState(world.context)).resolves.toMatchObject({ epoch: installed.newEpoch });
+      // A crash AFTER the rename: the live store IS the prepared copy, and the
+      // same receipt says so; verification resumes against the installed store.
+      const afterFailure = await errorOf(async () => {
+        process.env.MSTAR_STORE_TEST_RUNNER = "1";
+        process.env.MSTAR_STORE_FAIL_EXECUTION_RESTORE = "after-replacement";
+        try {
+          return await restoreExecutionBackup(world.context, {
+            preview,
+            acceptLossDigest: preview.lossDigest,
+            operator: OPERATOR,
+            authorization: AUTHORIZATION,
+          });
+        } finally {
+          delete process.env.MSTAR_STORE_FAIL_EXECUTION_RESTORE;
+          delete process.env.MSTAR_STORE_TEST_RUNNER;
+        }
+      });
+      expect(afterFailure.message).toContain("after-replacement");
+      const installed = recoveryRecords(world)[1]!;
+      expect(installed.phase).toBe("replacing");
+      // The receipt says the PREPARED COPY is what is installed now.
+      expect(sha256OfFile(world.dbPath)).toBe(installed.restoredCopySha256);
+      expect(installed.restoredCopySha256).not.toBe(installed.liveStoreSha256);
+      // The installed store IS the selected recovery point's state, at the epoch
+      // the receipt names — verification resumes, it does not restart.
+      const resumed = footprint(world.dbPath);
+      expect(resumed.epoch).toBe(installed.newEpoch);
+      expect(resumed.issues).toBe(0);
+      expect(resumed.workflows).toBe(1);
+      await expect(readExecutionState(world.context)).resolves.toMatchObject({ epoch: installed.newEpoch });
+    } finally {
+      held.close();
+    }
   });
 
   test("execution-restore-refuses-a-sidecar-that-appears-in-the-replacement-window", async () => {
