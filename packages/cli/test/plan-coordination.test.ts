@@ -2213,12 +2213,13 @@ describe("Prepare workflow amendment", () => {
     const fixture = makePrepareFixture();
     const view = jsonOf(runCli(showPrepareArgs(fixture), fixture.root));
     const before = readText(fixture.snapshotPath);
-    const appendPlan = join(fixture.planDir, `${PREPARE_APPEND}.md`);
-    // The append's plan markdown turns unreadable after the engine's own
-    // existence check, so the failure is not a coordination refusal: it exits
-    // through the unexpected-error path, which must still name the family the
-    // caller ran (and must not have written anything).
-    chmodSync(appendPlan, 0o000);
+    const snapshotDir = dirname(fixture.snapshotPath);
+    // The snapshot directory loses write permission after the read, so the
+    // write-lock mkdir next to snapshot.json throws a raw FS error (EACCES)
+    // rather than a typed coordination / plan-path refusal. That is still
+    // the unexpected-error path, which must name the family the caller ran
+    // and must not have written anything.
+    chmodSync(snapshotDir, 0o555);
     try {
       const failed = runCli(
         amendPrepareArgs(fixture, { snapshot: String(view.snapshot_version), compass: String(view.compass_version) }),
@@ -2232,7 +2233,7 @@ describe("Prepare workflow amendment", () => {
       expect(payload.code).toBe("workflow.internal-error");
       expect(readText(fixture.snapshotPath)).toBe(before);
     } finally {
-      chmodSync(appendPlan, 0o644);
+      chmodSync(snapshotDir, 0o755);
     }
   }, 30000);
 
