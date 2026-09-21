@@ -8,7 +8,7 @@ What lives elsewhere: field schemas, snapshot shape and lifecycle semantics belo
 
 - `--session <absolute-json>` names an **engine-generated envelope**. It is never a caller-declared identity: the engine re-checks it against the document inside the write lock, so an envelope issued for another role, workflow or plan refuses instead of acting.
 - There is no force flag, no holder or role argument, no takeover, and no lease-release verb. Ownership changes only through the accept / return / complete transitions.
-- A plan session is bound to one plan; a coordinator session serves one workflow and is the only session allowed to amend, register, record evidence or close it. Coordinator bootstrap is trusted-local and limited to one per workflow.
+- A plan session is bound to one plan; a coordinator session serves one workflow and is the only session allowed to amend, register, record evidence or close it. Coordinator bootstrap is limited to one per workflow and requires an **explicitly acquired** identity: the engine never generates a coordinator id, a plain local operator states `--session-id`, and a managed host bootstraps through its own host-owned entry rather than through the shell (→ the active host reference under `mstar-host`).
 - Two address forms reach the same prepared row: the pinned Assignment path, or the workflow + plan pair, which reads the row's registered Assignment path. A second fresh claim of the same row refuses with `coordination.duplicate-holder`, naming the live holder.
 - A resume is read-only. It reports the current context; it never reacquires a released lease and never restarts execution.
 - The bind verb is the only verb without a token: it reads, checks and claims atomically against current ownership.
@@ -18,7 +18,7 @@ What lives elsewhere: field schemas, snapshot shape and lifecycle semantics belo
 | Session | Verbs |
 |---|---|
 | plan session | `mstar plan show`, `mstar plan progress`, `mstar plan issue-add`, `mstar plan issue-close`, `mstar plan handoff` |
-| coordinator session | `mstar plan prepare`, `mstar plan accept`, `mstar plan return`, `mstar plan integration-start`, `mstar plan integration-accept`, `mstar plan complete`, `mstar plan reconcile`, `mstar plan repair-delivery-source`, `mstar workflow show-prepare`, `mstar workflow amend-prepare`, `mstar workflow evidence` |
+| coordinator session | `mstar plan prepare`, `mstar plan accept`, `mstar plan return`, `mstar plan integration-start`, `mstar plan integration-accept`, `mstar plan complete`, `mstar plan reconcile`, `mstar plan repair-delivery-source`, `mstar workflow show-prepare`, `mstar workflow amend-prepare`, `mstar workflow recover-coordinator`, `mstar workflow evidence` |
 | either (bootstrap / read / claim) | `mstar plan bind` |
 
 A plan session mutates only its own row and the issues that row's plan captures or closes; the retired register bucket is never a write target. It never prepares itself: registration of the reviewed Assignment is the coordinator's act, and it is what releases the row's dependencies.
@@ -53,6 +53,9 @@ All plan and workflow refusals are mutation-free: the authoritative bytes are un
 | `coordination.scope-mismatch` | the request reaches outside the session's scope |
 | `coordination.workflow-not-found` | no snapshot for that workflow id under the resolved root |
 | `coordination.not-prepared` | the workflow has no coordinator binding yet |
+| `coordination.identity-missing` / `coordination.identity-mismatch` | a coordinator bootstrap without an explicitly acquired id (or a non-id value), or an id that does not address the workflow / role / plan scope |
+| `coordination.identity-recovery.*` | the JSON Prepare coordinator recovery refused: `not-prepare`, `invalid-request`, `execution-started` (a row already owns execution), `foreign-owner`, `stale`, `unauthorized`, `operation-conflict` |
+| `execution.direct-write-refused` | an **active execution authority**: the JSON recovery and the file route never run against it — the existing DB recovery verb owns that repair |
 | `coordination.duplicate-holder` | a second fresh claim of an already-held row, or of an already-bound coordinator |
 | `coordination.handoff-mismatch` | the handoff flag names something other than the row's live handoff |
 | `coordination.invalid-transition` | the proposed document fails validation for the requested transition |
@@ -89,8 +92,9 @@ The handoff is a **byte-level pin**, not just a pointer: the digest of every rep
 Walkthrough with synthetic ids — a plan session drives its own row, the coordinator drives the lifecycle, and each token is read from the state the previous step left:
 
 ```sh
-# coordinator: bootstrap once per workflow, in the main worktree
-mstar plan bind --coordinator --workflow wf-demo --json
+# coordinator: bootstrap once per workflow, in the main worktree, with an explicitly acquired id
+# (a managed host calls its host-owned entry instead; `plan bind --coordinator` through the shell is redirected there)
+mstar plan bind --coordinator --workflow wf-demo --session-id <coordinator-id> --json
 
 # coordinator: register the reviewed Assignment (revision 0 = not yet coordinated)
 mstar plan prepare --session <coordinator-session.json> --plan plan-a \
@@ -126,6 +130,8 @@ The amendment family is the only lawful way to register an approved scope expans
 - The read verb is read-only: no lock, no write. It returns both byte versions — the snapshot's and the reviewed compass Markdown's — plus an admission view. An inadmissible lifecycle state is reported as data (`allowed: false` with one reason line per blocker), not as an error, so a workflow can be inspected before deciding.
 - The amend verb requires **both** byte versions, even on the first amendment. They are byte versions, never row revisions; the bare hex form is also accepted.
 - The patch names the main worktree branch and the rows to append, and may record the integration checkout and the plan parallelism. Appended rows are constructed by the engine — a patch never carries runtime row fields. Every existing row and unknown field survives by value; nothing is created, switched, fetched or cleaned.
+- It may also **correct the plan pointer of existing rows**: `correctPlanFiles` takes entries of exactly `{id, expectedFile, file}` and is the only way to repair a malformed stored pointer without hand-editing the snapshot. `appendPlans` stays present — a correction-only call passes an empty append array. A correction moves only the addressed row's `file` (plus the ordinary `updated_at`); metadata, frozen catalog pins, other rows and the review documents are untouched.
+- **One pointer contract.** An appended or corrected `file` must resolve to that plan's canonical configured `{PLAN_DIR}/<plan-id>.md` with an unambiguous matching declared `plan_id`, under the same resolver registration uses. A canonical absolute path or a normalized **harness-relative** path is accepted; the repository-relative `.mstar/plans/<id>.md` spelling is refused before anything is written (it is a declared input form, not a fallback search base), and the canonical **absolute** pointer is what registration emits. A correction must additionally prove the pointer it replaces: `expectedFile` must equal the row's current `file` byte-for-byte **and** identify that same plan — either a form the resolver accepts or the exact repository-relative spelling derived from this control root's configured plan directory. Foreign absolute paths, same-basename guesses, unrelated directory prefixes, copied documents with a matching header and a no-op pointer all refuse.
 - Refusals are specific and mutation-free: a stale token, a workflow that is not in Prepare or whose root entry is not running, evidence that execution has already started, a duplicate or malformed appended plan, an unknown or no-op patch key, a plan set or integration branch the reviewed compass does not declare, or a supplied integration checkout that fails validation. Auth and scope refusals reuse the shared codes above.
 - Stop condition: a stale token is recovered by reading again and reviewing the new bytes, then amending with the fresh tokens. There is no force, replace, init or fallback flag, and no replacement-document path.
 
@@ -144,6 +150,25 @@ mstar workflow amend-prepare --session <coordinator-session.json> \
 
 A read that reports `allowed: false` is an answer, not a failure: fix the blocker (or abandon the amendment) before spending the tokens. A refusal from the amend step leaves every document byte-identical, so the next attempt starts from a new read.
 
+## Prepare coordinator recovery
+
+`mstar workflow recover-coordinator` replaces the recorded coordinator binding of one Prepare workflow with an explicitly acquired session — the state a cancelled or unreachable owner leaves behind. It is **not** an alias for the active-store session recovery: that one needs a full execution token and a stop attestation, while this one is file/JSON, Prepare-only, and narrows the effect to the top-level binding plus one audit record — no prepared-plan takeover, no lease transfer, no raw session rewrite and no force flag.
+
+- Flags: `--prior-session <absolute-json>` (the envelope the workflow records now — the CLI route names it explicitly, because it is also what supplies the workflow address) · `--session-id <id>` (the replacement, never generated) · `--expect-snapshot` / `--expect-compass` (both byte versions from `workflow show-prepare`) · `--operation-id` (the replay key) · `--reason` · `--authorization-ref` · `--stopped <session-id…>` (must name the recorded coordinator). A relative `--prior-session`, a malformed version token, a missing field or an empty stop assertion is a usage error (exit `2`) before any engine I/O.
+- Guards, all inside the snapshot write lock: the prior envelope must still authenticate the **exact** recorded coordinator; the new identity must address this workflow's coordinator seat; the workflow must be a named, registered, running Prepare with a committed registration; every row must pass the original whole-workflow no-execution admission; both byte versions must be current; the stop assertion must name that holder. An **active execution authority** refuses and names the existing DB recovery instead of running this writer.
+- Effect: the binding replaced, one immutable `coordination.identity_recoveries` audit record appended, `updated_at` refreshed. Rows, branch anchors, evidence and sibling workflows stay byte-identical; the prior envelope's bytes remain as history and stop authorizing because the binding moved.
+- Replay: the same operation id with the same request against the current binding returns the recorded receipt (`replay: true`) without version churn; a changed request, a stale token or a superseded binding refuses. A failure between the envelope write and the snapshot commit is reported as a failure — never a success receipt — and reclaims only the exact envelope that operation created.
+- The JSON projection carries the workflow id, the old/new **public** session ids, the operation id, the replay flag and both byte versions only. It never returns envelope bytes, an envelope path or any credential: an envelope path is coordinator-owned transport, not a public diagnostic.
+
+```sh
+# coordinator: read both byte versions, then replace a binding its prior owner cannot authenticate
+mstar workflow show-prepare --session <coordinator-session.json> --json
+mstar workflow recover-coordinator --prior-session <recorded-coordinator-session.json> \
+  --session-id <explicitly-acquired-id> --operation-id op-2026-09-21-1 --reason "<why the prior owner cannot authenticate>" \
+  --authorization-ref "<operator authorization>" --stopped <recorded-session-id> \
+  --expect-snapshot sha256:<hex> --expect-compass sha256:<hex> --json
+```
+
 ## Standalone plan registration and delivery evidence
 
 - Registration is create-only: it writes the workflow snapshot and the root register entry under one lock, recording the owned plan row, the project, the declared delivery kind and the branch anchors. The delivery kind is **declared, never inferred**, and each kind requires its own evidence declaration at registration. Re-running after a crash between the two writes recovers: existing snapshot bytes are kept and only the root entry is written.
@@ -154,7 +179,7 @@ A read that reports `allowed: false` is an answer, not a failure: fix the blocke
 
 ## Iteration workflow registration
 
-An iteration does not go through `mstar workflow register`. It registers through `mstar iteration register` — the same create-only, one-lock contract and the same crash recovery (existing snapshot bytes kept, only the missing root entry written on re-run) — with a compass ref, the three branch anchors and Todo plan rows in place of a delivery kind; no delivery kind or evidence declaration applies to it, and plan-row metadata is derived by the producer rather than supplied. Lifecycle semantics: `mstar-artifacts`; flag set: the command help.
+An iteration does not go through `mstar workflow register`. It registers through `mstar iteration register` — the same create-only, one-lock contract and the same crash recovery (existing snapshot bytes kept, only the missing root entry written on re-run) — with a compass ref, the three branch anchors and Todo plan rows in place of a delivery kind; no delivery kind or evidence declaration applies to it, and plan-row metadata is derived by the producer rather than supplied. Each row's plan pointer goes through the one registered-plan resolver and what gets stored is the **canonical absolute** `{PLAN_DIR}/<plan-id>.md`, never a copy of the caller's spelling: a canonical absolute or normalized harness-relative input is accepted, and the repository-relative `.mstar/plans/<id>.md` spelling is refused — before the first journal row, the snapshot or any root write. Lifecycle semantics: `mstar-artifacts`; flag set: the command help.
 
 ## Exit codes
 

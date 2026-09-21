@@ -50,6 +50,8 @@ Git-derived checks derive the main worktree, the branch and clean-state facts fr
 ## 4. Identity: the session envelope
 
 - The envelope is **engine-generated**. It is obtained from the bind verb, addressed by absolute path, and re-checked against its document inside the write lock — the caller's word about who it is counts for nothing.
+- A coordinator identity is **explicitly acquired**, never generated: a plain local operator states `--session-id`, a managed host bootstraps through its own host-owned entry (→ the active host reference under `mstar-host`) instead of a shell call, and the engine adopts the id it is given. The inherited session-id environment variable is a declared input form for a **plan/assignment** bind only — it never authorizes a coordinator bootstrap. A missing or mismatched one refuses (`coordination.identity-missing` / `coordination.identity-mismatch`); no bind mints an id as a fallback.
+- An abandoned or unreachable coordinator owner is repaired only through the guarded Prepare recovery (`references/plan-and-workflow.md` § Prepare coordinator recovery): it needs the prior envelope's address, both byte versions, the operator's reason and authorization reference, and a stop assertion naming the recorded holder. The active-store route keeps its own separate recovery under a full execution token. Hand-editing a session file or a coordination document is never a path.
 - There is no force flag, no takeover, no holder or role input, and no lease-release verb. A resume is read-only: it reports context and never reacquires ownership.
 - One coordinator per workflow; a second bootstrap of the same workflow refuses.
 - The envelope is a write credential, not just a parameter. It stays with the coordinator or PM session. Handing one to a leaf executor — or restating a revision token in a leaf's assignment — breaks the scoped boundary even when the resulting command would have succeeded.
@@ -74,7 +76,7 @@ Establish the rungs top-down. Each fails closed, so a lower rung is never silent
 | root | path resolution, then an explicit root where discovery is ambiguous | exit `1` with the probe guidance, or worse: a successful command against the wrong root |
 | residency | run from the control checkout, or from the recorded integration checkout for integration steps | a gate refusal describing an unexpected checkout or branch |
 | cwd | neutral for Git-derived checks | a check whose verdict disagrees with the recorded snapshot |
-| identity | bind the session and pass its absolute envelope | a refusal naming the required role or the missing session |
+| identity | acquire it explicitly (`--session-id`, or the host-owned entry on a managed host) and pass the bound session's absolute envelope | a refusal naming the required role or the missing identity (`coordination.identity-missing`, `coordination.identity-mismatch`, or the required-envelope refusal) |
 | tokens | read the value the consuming command expects, immediately before it | a refusal for a missing or stale token |
 | mutation | only then run the write | — |
 
