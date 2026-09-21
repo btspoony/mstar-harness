@@ -699,7 +699,10 @@ describe("dshAdapter.runInstallDoctor", () => {
   });
 });
 
-describe("CLI init --target dsh (fake dsh on PATH)", () => {
+// Each case spawns `bun run src/index.ts`, which is a cold TypeScript start
+// plus the adapter's own subprocess work; the default 5s budget is close
+// enough to the CI runner's cost that a single slow start fails the suite.
+describe("CLI init --target dsh (fake dsh on PATH)", { timeout: 30_000 }, () => {
   const fakePathEnv = (fake: FakeDsh): { PATH: string } => ({
     PATH: `${fake.binDir}${process.platform === "win32" ? ";" : ":"}${process.env.PATH ?? ""}`,
   });
