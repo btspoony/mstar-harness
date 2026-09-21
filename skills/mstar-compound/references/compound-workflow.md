@@ -124,6 +124,8 @@ After writing, validate the YAML frontmatter:
   - review choreography：谁在哪轮确认 → 平实事实；finding id 留在 review bundle（其 sanctioned genre）
   - reviewer-addressed justification（向评审自辩的措辞）
   - control-flow narration（过程/控制流叙述）
+  - date stamps in prose：durable 正文陈述现状与结论（「the route governs reads」），不写撰写/观察日期（「Read side (2026-09-21)」）；时间信息属于 frontmatter 的 `date` / `last_updated`（schema 字段），不在正文重复
+  - machine-local paths：不写绝对路径或机器专属布局（`/Users/<name>/...`、checkout 外的主机目录）；引用仓库内目标用 repo-relative 路径，harness 目标用 `{HARNESS_DIR}` / `{KNOWLEDGE_DIR}` 等符号（`mstar-conventions`）
   - hedges without markers → 既有 `simplify:` / `temporary` 标记约定（`mstar-coding-behavior`；引用不重复）
   - authoring-language slips：双语对之外的 zh/en 混杂
 - **Keep 规则（mstar-sanctioned）**：review bundle / QC report 内的 R# 与 finding id（durable 文档引用 QC 证据的 sanctioned pattern 是经 review bundle 路径引用：finding id 留在 bundle 内，durable 文档只引用 bundle 路径本身）；issue 引用；带 provenance 词的 measured bounds；runtime old/new 生命周期态；Alternatives-considered genre 节；HEAD 持久工件中的 iteration/plan id
