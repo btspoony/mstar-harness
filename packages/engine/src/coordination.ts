@@ -113,6 +113,7 @@ import {
 import { findingsCleanupGate, _DEFAULT_PROJECT } from "./project.js";
 import { assertCatalogExecutionCommitted } from "./catalog-registration.js";
 import { CatalogError } from "./catalog.js";
+import { PlanPathError, planDeclaredHeaders, resolveRegisteredPlanFile, type RegisteredPlanFile } from "./plan-path.js";
 import { parseCompassFrontmatterText } from "./iteration.js";
 import { rowPlanIds, validatePlanRow, validateStatusV2, type PlanRow, type StatusV2Doc } from "./status.js";
 import { getArtifactStore, resolveArtifactPath, type ArtifactRef, type ArtifactStore } from "./store.js";
@@ -5258,73 +5259,6 @@ function prepareAdmission(harnessRoot: string, workflowId: string, snapshot: Wor
 }
 
 /**
- * The plan-markdown labels the amendment actually consults. Every other
- * `Label: value` line is plan-body content, and a real multi-task plan repeats
- * those per task (`**Files:**`, `**Interfaces:**`, `**Task budget:**`) with a
- * different value each time — so a repeated label outside this set is not a
- * declaration conflict.
- */
-const PLAN_CONSULTED_HEADERS: Record<string, true> = {
-  plan_id: true,
-  "main worktree branch": true,
-  "working branch": true,
-};
-
-/**
- * The consulted headers one plan markdown declares, keyed by lowercased label —
- * the idiom `parseAssignmentFile` uses for Assignment headers, widened to the
- * forms real plan documents actually use: the colon inside the bold
- * (`**plan_id:** value`, the dominant form in `{PLAN_DIR}`) and the colon
- * after it (`**Main worktree branch**: value`). A plain `Label: value` line is
- * accepted too. Fenced code is skipped so a quoted example is never read as a
- * declaration, and a consulted label twice with different values refuses
- * instead of silently picking one.
- */
-function planHeadersOf(planPath: string, planId: string): Map<string, string> {
-  const headers = new Map<string, string>();
-  // The fence is tracked by its marker character and run length: it is closed
-  // only by a run of the same character at least as long, so a `~~~` example is
-  // never read as a declaration and a shorter backtick run inside a longer
-  // fence cannot close it early.
-  let marker: string | undefined;
-  let markerLength = 0;
-  for (const raw of readFileSync(planPath, "utf8").split(/\r?\n/)) {
-    const line = raw.trim();
-    const fence = /^(`{3,}|~{3,})/.exec(line);
-    if (fence !== null) {
-      const run = fence[1]!;
-      if (marker === undefined) {
-        marker = run.charAt(0);
-        markerLength = run.length;
-      } else if (run.charAt(0) === marker && run.length >= markerLength) {
-        marker = undefined;
-      }
-      continue;
-    }
-    if (marker !== undefined) continue;
-    // `**Label:** value` / `**Label**: value` / `Label: value`: the label may
-    // not contain `:` or `*` (those are the markup), and the value starts at
-    // the first non-space character after the closing markup and colon.
-    const match = /^\*{0,2}([^:*]+?)\*{0,2}:\*{0,2}\s*(\S.*)$/.exec(line);
-    if (match === null) continue;
-    const label = match[1]!.trim();
-    const key = label.toLowerCase();
-    if (PLAN_CONSULTED_HEADERS[key] !== true) continue;
-    const value = match[2]!.trim();
-    const prior = headers.get(key);
-    if (prior !== undefined && prior !== value) {
-      throw prepareAmendmentRefusal(
-        "invalid-plan",
-        `plan ${planId} markdown declares conflicting "${label}" headers (${prior} vs ${value})`,
-        { plan_id: planId, header: label },
-      );
-    }
-    headers.set(key, value);
-  }
-  return headers;
-}
-
-/**
  * One plan metadata reference: absolute, inside the harness root (canonical,
  * so a symlink out of it is an escape), and an existing file. `iteration_compass`
  * is additionally required to BE this workflow's compass — the caller checks
@@ -5421,44 +5355,29 @@ function readPlanAppend(
     throw prepareAmendmentRefusal("invalid-plan", `plan ${id} requires a non-empty title`, { plan_id: id, actual: title ?? null });
   }
   const declaredFile = value.file;
-  if (!isNonEmptyString(declaredFile) || !isAbsolute(declaredFile)) {
-    throw prepareAmendmentRefusal(
-      "invalid-plan",
-      `plan ${id} file must be the absolute plan path \u2014 got ${JSON.stringify(declaredFile ?? null)}`,
-      { plan_id: id, actual: declaredFile ?? null },
-    );
+  // The PlanRow `file` convention belongs to the ONE registered-plan path
+  // resolver (prerequisite contract §4): it accepts the canonical absolute or
+  // the normalized harness-relative pointer, and owns the canonical-target and
+  // declared-`plan_id` checks — so the Prepare append cannot drift from
+  // registration and readiness. The refusal vocabulary and code stay
+  // `invalid-plan`; the resolver's typed path detail is attached rather than
+  // weakening a predicate. No second absolute-path key is introduced (spec §
+  // Admission step 4).
+  let resolved: RegisteredPlanFile;
+  try {
+    resolved = resolveRegisteredPlanFile({ harnessRoot: context.harnessRoot, planId: id, file: declaredFile as string });
+  } catch (error) {
+    if (error instanceof PlanPathError) {
+      throw prepareAmendmentRefusal("invalid-plan", error.message, {
+        plan_id: id,
+        path_code: error.code,
+        ...error.details,
+      });
+    }
+    throw error;
   }
-  // The PlanRow `file` convention, resolved by the plan resolver: the row's own
-  // plan file is `{PLAN_DIR}/<plan-id>.md`. This is the only path field — the
-  // patch introduces no second absolute-path key (spec § Admission step 4).
-  const planPath = canonicalTarget(declaredFile);
-  const planDir = canonicalizeNearestExisting(resolvePlanDir(context.harnessRoot));
-  if (dirname(planPath) !== planDir || basename(planPath) !== `${id}.md`) {
-    throw prepareAmendmentRefusal(
-      "invalid-plan",
-      `plan ${id} file ${planPath} is not ${join(planDir, `${id}.md`)}`,
-      { plan_id: id, expected: join(planDir, `${id}.md`), actual: planPath },
-    );
-  }
-  if (!existsSync(planPath) || !statSync(planPath).isFile()) {
-    throw prepareAmendmentRefusal("invalid-plan", `plan ${id} markdown not found: ${planPath}`, { plan_id: id, path: planPath });
-  }
-  const headers = planHeadersOf(planPath, id);
-  const declaredPlanId = headers.get("plan_id");
-  if (declaredPlanId === undefined) {
-    throw prepareAmendmentRefusal(
-      "invalid-plan",
-      `plan ${id} markdown ${planPath} declares no plan_id header \u2014 the row cannot be traced to its reviewed plan`,
-      { plan_id: id, path: planPath },
-    );
-  }
-  if (declaredPlanId !== id) {
-    throw prepareAmendmentRefusal(
-      "invalid-plan",
-      `plan append id ${id} does not match the plan markdown header plan_id ${declaredPlanId} (${planPath})`,
-      { plan_id: id, expected: id, actual: declaredPlanId, path: planPath },
-    );
-  }
+  const planPath = resolved.planPath;
+  const headers = planDeclaredHeaders(planPath);
 
   const metadata = value.metadata;
   if (!isPlainObject(metadata)) {

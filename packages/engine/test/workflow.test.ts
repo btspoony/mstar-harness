@@ -29,9 +29,9 @@
  *   snapshot), no harness-root pollution; `WORKFLOW_SNAPSHOT_FILE = "snapshot.json"`.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { GateResult } from "../src/core.js";
 import {
   closeWorkflow,
@@ -49,6 +49,7 @@ import {
   type RegisterPlanWorkflowOptions,
 } from "../src/workflow.js";
 import { evaluatePostMergeClose } from "../src/iteration.js";
+import { PlanPathError } from "../src/plan-path.js";
 import { artifactVersion, CoordinationError } from "../src/coordination-write.js";
 import { getCatalog, listCatalog } from "../src/catalog.js";
 import {
@@ -1650,16 +1651,32 @@ describe("registerPlanWorkflow — generic registration producer (seam S1)", () 
 
 describe("registerIterationWorkflow — iteration registration producer", () => {
   const id = "20260918-iteration-register-fixture";
+  const ROW_IDS = ["20260918-iteration-register-cli", "20260918-iteration-register-cli-2"] as const;
   const roots: string[] = [];
   afterEach(() => {
     setArtifactStore(undefined);
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
+  /**
+   * Write one registered plan markdown under the default `{PLAN_DIR}` and
+   * return its canonical absolute path — the pointer the §4 resolver admits and
+   * the producer persists. Every fixture harness owns its own plan files: the
+   * registration path resolves and reads them, so a pointer without a real
+   * matching declaration is refused.
+   */
+  function planFile(root: string, planId: string, dir = "plans"): string {
+    const file = join(root, dir, `${planId}.md`);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, `# Plan ${planId}\n\n**plan_id:** ${planId}\n`);
+    return realpathSync(file);
+  }
+
   function harness(): { root: string; statusPath: string; dir: string; snapshotPath: string } {
     const root = tmpRoot("iteration-register-");
     roots.push(root);
     setArtifactStore(createFsStore(root));
+    for (const planId of ROW_IDS) planFile(root, planId);
     return { root, statusPath: join(root, "status.json"), dir: join(root, "workflows", id), snapshotPath: join(root, "workflows", id, WORKFLOW_SNAPSHOT_FILE) };
   }
 
@@ -1669,8 +1686,8 @@ describe("registerIterationWorkflow — iteration registration producer", () => 
       compassRef: "iterations/20260918-fixture/delivery-compass.md",
       branch: { base: "main", integration: "feature/20260918-iteration-fixture", target: "main" },
       rows: [
-        { id: "20260918-iteration-register-cli", title: "Engine producer", file: "plans/one.md" },
-        { id: "20260918-iteration-register-cli-2", title: "CLI verb", file: "plans/two.md" },
+        { id: ROW_IDS[0], title: "Engine producer", file: `plans/${ROW_IDS[0]}.md` },
+        { id: ROW_IDS[1], title: "CLI verb", file: `plans/${ROW_IDS[1]}.md` },
       ],
       project: "engine",
       startedAt: "2026-09-18T00:00:00.000Z",
@@ -1710,7 +1727,7 @@ describe("registerIterationWorkflow — iteration registration producer", () => 
       {
         id: "20260918-iteration-register-cli",
         title: "Engine producer",
-        file: "plans/one.md",
+        file: planFile(root, "20260918-iteration-register-cli"),
         status: "Todo",
         metadata: {
           iteration_refs: ["iterations/20260918-fixture/delivery-compass.md"],
@@ -1721,7 +1738,7 @@ describe("registerIterationWorkflow — iteration registration producer", () => 
       {
         id: "20260918-iteration-register-cli-2",
         title: "CLI verb",
-        file: "plans/two.md",
+        file: planFile(root, "20260918-iteration-register-cli-2"),
         status: "Todo",
         metadata: {
           iteration_refs: ["iterations/20260918-fixture/delivery-compass.md"],
@@ -2010,6 +2027,114 @@ describe("registerIterationWorkflow — iteration registration producer", () => 
     expect(existsSync(join(root, "workflows"))).toBe(false);
     expect(existsSync(join(root, "escape"))).toBe(false);
   });
+
+  // §4 registered-plan path contract on the iteration producer: the snapshot
+  // persists the canonical absolute pointer, and the old repository-relative
+  // spelling (or a foreign/absent declaration) refuses BEFORE any write.
+  test("prerequisite path: a valid pointer registers as the canonical absolute plan file", async () => {
+    const { root, snapshotPath } = harness();
+    const result = await registerIterationWorkflow(id, options(root));
+    expect(result.recovered).toBe(false);
+
+    const snapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as { plans: Array<{ file: string }> };
+    expect(snapshot.plans.map((row) => row.file)).toEqual([planFile(root, ROW_IDS[0]), planFile(root, ROW_IDS[1])]);
+    // Canonical absolute, resolved through the configured root — never the
+    // caller's `plans/<id>.md` spelling.
+    expect(snapshot.plans.every((row) => row.file.startsWith(realpathSync(root)))).toBe(true);
+  });
+
+  test("prerequisite path: the repository-relative .mstar/plans spelling refuses with no root or snapshot write", async () => {
+    const { root, statusPath, snapshotPath } = harness();
+    const rows = [
+      { id: ROW_IDS[0], title: "Engine producer", file: `.mstar/plans/${ROW_IDS[0]}.md` },
+      { id: ROW_IDS[1], title: "CLI verb", file: `plans/${ROW_IDS[1]}.md` },
+    ];
+    const refusal = await registerIterationWorkflow(id, options(root, { rows })).catch((error: unknown) => error);
+    expect(refusal).toBeInstanceOf(PlanPathError);
+    expect((refusal as PlanPathError).code).toBe("plan-path.invalid-pointer");
+    expect(existsSync(statusPath)).toBe(false);
+    expect(existsSync(snapshotPath)).toBe(false);
+    expect(existsSync(join(root, "workflows"))).toBe(false);
+  });
+
+  test("prerequisite path: a .mstarc-declared plan root resolves from its own base", async () => {
+    const root = tmpRoot("iteration-register-mstarc-");
+    roots.push(root);
+    setArtifactStore(createFsStore(root));
+    writeFileSync(join(root, ".mstarc"), "[config]\nplan_dir=planning\n");
+    const planPath = planFile(root, ROW_IDS[0], "planning");
+
+    const result = await registerIterationWorkflow(
+      id,
+      options(root, { rows: [{ id: ROW_IDS[0], title: "Engine producer", file: `planning/${ROW_IDS[0]}.md` }] }),
+    );
+    expect(result.recovered).toBe(false);
+    const snapshot = JSON.parse(readFileSync(result.snapshotPath, "utf8")) as { plans: Array<{ file: string }> };
+    expect(snapshot.plans).toEqual([
+      expect.objectContaining({ id: ROW_IDS[0], file: planPath }),
+    ]);
+    expect(realpathSync(dirname(planPath))).toBe(realpathSync(join(root, "planning")));
+
+    // The default-root spelling is NOT the configured root: it refuses.
+    const other = tmpRoot("iteration-register-mstarc-default-");
+    roots.push(other);
+    setArtifactStore(createFsStore(other));
+    writeFileSync(join(other, ".mstarc"), "[config]\nplan_dir=planning\n");
+    planFile(other, ROW_IDS[0], "planning");
+    const refusal = await registerIterationWorkflow(
+      id,
+      options(other, { rows: [{ id: ROW_IDS[0], title: "Engine producer", file: `plans/${ROW_IDS[0]}.md` }] }),
+    ).catch((error: unknown) => error);
+    expect(refusal).toBeInstanceOf(PlanPathError);
+    expect(existsSync(join(other, "workflows"))).toBe(false);
+  });
+
+  test("prerequisite path: an external plan root is admitted only as an absolute pointer", async () => {
+    const root = tmpRoot("iteration-register-external-");
+    const external = tmpRoot("iteration-register-external-plans-");
+    roots.push(root, external);
+    setArtifactStore(createFsStore(root));
+    writeFileSync(join(root, ".mstarc"), `[config]\nplan_dir=${external}\n`);
+    const planPath = planFile(external, ROW_IDS[0], "");
+
+    // A harness-relative spelling cannot reach an external configured root.
+    const refusal = await registerIterationWorkflow(
+      id,
+      options(root, { rows: [{ id: ROW_IDS[0], title: "Engine producer", file: `${ROW_IDS[0]}.md` }] }),
+    ).catch((error: unknown) => error);
+    expect(refusal).toBeInstanceOf(PlanPathError);
+    expect(existsSync(join(root, "workflows"))).toBe(false);
+
+    // The same file addressed absolutely is the declared input form.
+    const result = await registerIterationWorkflow(
+      id,
+      options(root, { rows: [{ id: ROW_IDS[0], title: "Engine producer", file: planPath }] }),
+    );
+    expect(result.recovered).toBe(false);
+    const snapshot = JSON.parse(readFileSync(result.snapshotPath, "utf8")) as { plans: Array<{ file: string }> };
+    expect(snapshot.plans[0]!.file).toBe(planPath);
+  });
+
+  test("prerequisite path: a missing or mismatched declaration refuses before any write", async () => {
+    const { root, snapshotPath } = harness();
+    // A same-basename file in an unrelated directory: not this plan's file.
+    const foreign = tmpRoot("iteration-register-foreign-");
+    roots.push(foreign);
+    const foreignPlan = planFile(foreign, ROW_IDS[0]);
+    const missing = await registerIterationWorkflow(
+      id,
+      options(root, { rows: [{ id: ROW_IDS[0], title: "Engine producer", file: foreignPlan }] }),
+    ).catch((error: unknown) => error);
+    expect(missing).toBeInstanceOf(PlanPathError);
+
+    // A declaration naming a different plan refuses as an identity mismatch.
+    writeFileSync(join(root, "plans", `${ROW_IDS[0]}.md`), "# Plan\n\n**plan_id:** some-other-plan\n");
+    const mismatched = await registerIterationWorkflow(id, options(root)).catch((error: unknown) => error);
+    expect(mismatched).toBeInstanceOf(PlanPathError);
+    expect((mismatched as PlanPathError).code).toBe("plan-path.identity-mismatch");
+    expect(existsSync(snapshotPath)).toBe(false);
+    expect(existsSync(join(root, "workflows"))).toBe(false);
+  });
 });
 
 describe("standalone-completion-shape", () => {
@@ -2221,6 +2346,9 @@ describe("catalog registration — the journal joins this producer to the catalo
   test("catalog registration — the iteration registers with its committed catalog binding", async () => {
     const { root, context } = await workspace("catalog-registration-iteration-");
     const id = "20260918-iteration-register-catalog";
+    const rowId = "20260918-iteration-register-cli";
+    mkdirSync(join(root, "plans"), { recursive: true });
+    writeFileSync(join(root, "plans", `${rowId}.md`), `# Plan ${rowId}\n\n**plan_id:** ${rowId}\n`);
     const request: CatalogExecutionRequest = {
       operationId: "op-iteration-workflow-suite",
       actor: "project-manager",
@@ -2232,7 +2360,7 @@ describe("catalog registration — the journal joins this producer to the catalo
           harnessDir: root,
           compassRef: "iterations/20260918-fixture/delivery-compass.md",
           branch: { base: "main", integration: "feature/20260918-iteration-fixture", target: "main" },
-          rows: [{ id: "20260918-iteration-register-cli", title: "Engine producer", file: "plans/one.md" }],
+          rows: [{ id: rowId, title: "Engine producer", file: `plans/${rowId}.md` }],
           project: "engine",
           startedAt: "2026-09-18T00:00:00.000Z",
         },

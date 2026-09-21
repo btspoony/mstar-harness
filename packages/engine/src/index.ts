@@ -69,6 +69,12 @@ export {
   scaffoldHarness,
   validateGitignore,
 } from "./path.js";
+// The one registered-plan path contract (prerequisite contract §4): iteration
+// registration, the catalog registration preflight, the Prepare append and the
+// readiness readers import THIS resolver instead of restating the
+// `{PLAN_DIR}/<plan-id>.md` convention — one parser, one refusal type.
+export type { PlanPathRefusalCode, RegisteredPlanFile, RegisteredPlanFileInput } from "./plan-path.js";
+export { PlanPathError, planDeclaredHeaders, resolveRegisteredPlanFile } from "./plan-path.js";
 export type {
   PlanRow,
   ResidualEntry,
