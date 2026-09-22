@@ -26,11 +26,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  bindExecutionSession,
+  createExecutionWorkflow,
   encodeExecutionSessionRef,
   ExecutionError,
+  initializeExecutionAuthority,
+  initializeStore,
+  registerCatalogEntity,
   serializeExecutionValue,
+  type ExecutionCaller,
+  type ExecutionContext,
   type ExecutionIdentity,
   type ExecutionSessionRef,
+  type ExecutionToken,
 } from "@mstar-harness/engine";
 import {
   EXECUTION_IDENTITY_ENV,
@@ -57,6 +65,7 @@ const reference: ExecutionSessionRef = {
   planId: null,
 };
 const planScope = { workflowId: "wf-opencode", role: "plan-pm" as const, planId: "plan-opencode" };
+const TS = "2026-09-21T00:00:00.000Z";
 const nativeIdentity: ExecutionIdentity = { source: "host", sessionId: reference.sessionId, ...scope };
 
 /** The checkout's own CLI entry — the real syntax this consumer must speak. */
@@ -104,6 +113,79 @@ function makeCliLauncher(project: string): string {
   );
   chmodSync(launcher, 0o755);
   return launcher;
+}
+
+/**
+ * A REAL ACTIVE execution authority with a plan-pm session bound to the native
+ * session id, and the canonical wire for that binding — the state a
+ * session-authorized read needs to succeed, so the fixture can witness a real
+ * success instead of a log-wording-only assertion.
+ */
+async function seedBoundPlanSession(
+  harness: string,
+  nativeSessionId: string,
+): Promise<{ wire: string; planId: string; workflowId: string }> {
+  const handle = await initializeStore({ harnessDir: harness });
+  handle.close();
+  const initialized = await initializeExecutionAuthority({ harnessDir: harness });
+  await registerCatalogEntity(
+    { harnessDir: harness },
+    {
+      kind: "plan",
+      id: planScope.planId,
+      title: `${planScope.planId} title`,
+      rootKind: "plans",
+      relativePath: `plans/${planScope.planId}.md`,
+    },
+    { operationId: `register-${planScope.planId}`, actor: "execution-session.test" },
+  );
+  const coordinatorCaller: ExecutionCaller = {
+    sessionId: "fixture-coordinator",
+    role: "coordinator",
+    workflowId: planScope.workflowId,
+    planId: null,
+  };
+  const created = await createExecutionWorkflow(
+    { harnessDir: harness, caller: coordinatorCaller } satisfies ExecutionContext,
+    {
+      entry: { id: planScope.workflowId, type: "plan", started_at: TS, dir: `workflows/${planScope.workflowId}` },
+      snapshot: {
+        schema_version: 1,
+        id: planScope.workflowId,
+        type: "plan",
+        status: "running",
+        started_at: TS,
+        updated_at: TS,
+        plans: [
+          {
+            id: planScope.planId,
+            title: `${planScope.planId} title`,
+            file: `plans/${planScope.planId}.md`,
+            status: "Todo",
+          },
+        ],
+        delivery_kind: "development",
+        branch: { source: `feature/${planScope.workflowId}`, target: "main" },
+      } as never,
+      expected: initialized.token,
+      operationId: `create-${planScope.workflowId}`,
+    },
+  );
+  const planToken = created.data.workflows[0]?.planTokens[planScope.planId] as ExecutionToken;
+  const bound = await bindExecutionSession(
+    {
+      harnessDir: harness,
+      caller: { sessionId: nativeSessionId, role: "plan-pm", workflowId: planScope.workflowId, planId: planScope.planId },
+    } satisfies ExecutionContext,
+    {
+      workflowId: planScope.workflowId,
+      planId: planScope.planId,
+      role: "plan-pm",
+      expected: planToken,
+      operationId: `bind-${planScope.planId}`,
+    },
+  );
+  return { wire: encodeExecutionSessionRef(bound.data), planId: planScope.planId, workflowId: planScope.workflowId };
 }
 
 /** Collect everything the plugin logs while a fixture runs. */
@@ -305,10 +387,15 @@ describe("OpenCode shared-CLI transport (real CLI syntax)", () => {
     }
   });
 
-  test("a reference observed in this session's own CLI traffic makes the next gated write session-authorized", async () => {
-    const { project, statusPath } = makeHarnessProject();
+  test("a reference observed in this session's own CLI traffic makes the next gated write session-authorized, and the read really succeeds", async () => {
+    const { project, harness, statusPath } = makeHarnessProject();
+    // The execution initializer refuses a harness that still carries a live
+    // execution source: seed the authority first, then restore the retired
+    // register — exactly the on-disk state a real cutover leaves behind.
+    rmSync(statusPath, { force: true });
+    const seeded = await seedBoundPlanSession(harness, reference.sessionId);
+    writeFileSync(statusPath, JSON.stringify({ version: 2, updated_at: "2026-09-08", workflows: [] }, null, 2));
     const planPmIdentity: ExecutionIdentity = { source: "host", sessionId: reference.sessionId, ...planScope };
-    const wire = encodeExecutionSessionRef({ ...reference, role: "plan-pm", planId: planScope.planId });
     process.env[OPENCODE_EXECUTION_CLI_ENV] = makeCliLauncher(project);
     process.env[EXECUTION_IDENTITY_ENV] = serializeExecutionValue(planPmIdentity);
 
@@ -317,7 +404,7 @@ describe("OpenCode shared-CLI transport (real CLI syntax)", () => {
       const lines = await withCapturedLogs(async () => {
         // 1) The session's own bash call carries the reference it was issued.
         await hooks["tool.execute.before"]!({ tool: "bash", sessionID: reference.sessionId, callID: "c1" }, {
-          args: { command: `mstar plan show --session-ref ${wire} --json` },
+          args: { command: `mstar plan show --session-ref ${seeded.wire} --json` },
         });
         // 2) A gated write now consults the session-authorized read.
         await hooks["tool.execute.before"]!({ tool: "write", sessionID: reference.sessionId, callID: "c2" }, {
@@ -327,9 +414,28 @@ describe("OpenCode shared-CLI transport (real CLI syntax)", () => {
           },
         });
       });
+
       const consultation = lines.find((line) => line.includes("plan show")) ?? "";
       expect(consultation).toContain("--session-ref");
       expect(consultation).toContain("session-authorized read");
+      // The hook logs success ONLY for a zero-exit child: this is the witness
+      // that the session-authorized branch really ran and really succeeded.
+      expect(consultation).not.toContain("refused or failed");
+      expect(consultation).toContain(" ok — ");
+
+      // The same argv, run directly, returns the CLI's own success envelope —
+      // the subprocess fact behind that log line.
+      const bound = openCodeAssociation({ sessionID: reference.sessionId }, {
+        [EXECUTION_IDENTITY_ENV]: serializeExecutionValue(planPmIdentity),
+      });
+      if (bound.kind !== "bound") throw new Error("fixture: the association must be bound");
+      const direct = runOpenCodeExecutionCli(openCodeConsultPlan(bound, harness).argv, bound.identity, {
+        command: makeCliLauncher(project),
+        cwd: project,
+      });
+      expect(direct.status).toBe(0);
+      expect(direct.envelope?.route).toBe("execution");
+      expect(direct.envelope?.ok).toBe(true);
     } finally {
       delete process.env[EXECUTION_IDENTITY_ENV];
     }
